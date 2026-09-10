@@ -90,6 +90,18 @@ export interface StreamRunMetrics {
   outputTokens: number;
   costUsd: number;
   durationMs: number;
+  /** Model reported by the SDK result message (`modelUsage` keys), when present. */
+  model?: string;
+}
+
+/**
+ * Model name from an SDK result message. The SDK reports per-model usage as
+ * `modelUsage: Record<model, usage>`; a single-model run has one key.
+ */
+function extractModel(msg: { modelUsage?: unknown }): string | undefined {
+  const usage = msg.modelUsage;
+  if (!usage || typeof usage !== 'object') return undefined;
+  return Object.keys(usage)[0];
 }
 
 /**
@@ -413,6 +425,7 @@ function handleResult(
         outputTokens: tokens.output,
         costUsd: totalCost,
         durationMs,
+        model: extractModel(msg),
       },
       sessionId: sid,
     };
@@ -484,6 +497,7 @@ interface RunAccumulator {
   costUsd: number;
   inputTokens: number;
   outputTokens: number;
+  model?: string;
 }
 
 type SDKUsage =
@@ -510,6 +524,7 @@ function processRunMessage(
     errors?: string[];
     total_cost_usd?: number;
     usage?: SDKUsage;
+    modelUsage?: unknown;
   },
   acc: RunAccumulator,
   startTime: number,
@@ -524,6 +539,7 @@ function processRunMessage(
   if (message.subtype === 'success') {
     acc.content = message.result ?? '';
     acc.costUsd = message.total_cost_usd ?? 0;
+    acc.model = extractModel(message);
     const tokens = extractTokens(message.usage);
     acc.inputTokens = tokens.input;
     acc.outputTokens = tokens.output;
@@ -816,7 +832,13 @@ export class ClaudeCodeClient implements IAgentClient {
       runId: crypto.randomUUID(),
       sessionId: acc.sessionId,
       status: 'completed',
-      metrics: { inputTokens: acc.inputTokens, outputTokens: acc.outputTokens, durationMs },
+      metrics: {
+        inputTokens: acc.inputTokens,
+        outputTokens: acc.outputTokens,
+        durationMs,
+        costUsd: acc.costUsd,
+        model: acc.model,
+      },
     };
   }
 

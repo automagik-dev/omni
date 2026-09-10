@@ -224,5 +224,23 @@ postgresDescribe('custom event journal fidelity (#966, real PostgreSQL)', () => 
       const listed = await service.list({ eventType: ['custom.globtest-966' as EventType], limit: 50 });
       expect(listed.items).toHaveLength(0);
     });
+
+    test('excludeEventType drops matching globs; exclusion wins over inclusion (#1078)', async () => {
+      const listed = await service.list({
+        eventType: ['custom.globtest-966.*' as EventType],
+        excludeEventType: ['custom.globtest-966.beta', 'custom.other-966.*'],
+        limit: 50,
+      });
+      const ids = listed.items.map((e) => e.id);
+      expect(ids).toContain(alphaId);
+      expect(ids).not.toContain(betaId);
+      expect(ids).not.toContain(outsiderId);
+
+      const excludeOnly = await service.list({ excludeEventType: ['custom.globtest-966.*'], limit: 200 });
+      const excludeOnlyIds = excludeOnly.items.map((e) => e.id);
+      expect(excludeOnlyIds).not.toContain(alphaId);
+      expect(excludeOnlyIds).not.toContain(betaId);
+      expect(excludeOnlyIds).toContain(outsiderId);
+    });
   });
 });

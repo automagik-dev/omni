@@ -90,7 +90,7 @@ describe('AgentRunnerService.runOrStream', () => {
     const runner = new AgentRunnerService(fakeDb);
     const runResult: AgentRunResult = {
       parts: ['sync-response'],
-      metadata: { runId: 'run-sync', sessionId: 'chat-1', status: 'completed' },
+      metadata: { runId: 'run-sync', sessionId: 'chat-1', status: 'completed', providerId: 'prov-1' },
     };
     const runMock = mock(async () => runResult);
     const streamMock = mock(async function* () {

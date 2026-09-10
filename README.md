@@ -417,6 +417,7 @@ omni events list --type "message.*" --since 2h  # event history (trailing-* glob
 omni events trace <event-id>                    # causation chain
 omni events wait --type "custom.x.*" --timeout 60  # block until a matching event
 omni events schema register <type> --file s.json   # register a payload schema
+omni events schema validate <type> --file p.json   # dry-run a payload, no event emitted
 omni events consumers create <name> --type "custom.x.*"  # durable cursor
 omni events follow --consumer <name>            # durable tail
 omni events replay --start --since 2024-01-01   # replay events

@@ -3278,6 +3278,8 @@ export const durableConsumers = pgTable(
     name: varchar('name', { length: 100 }).notNull(),
     /** Type filter: exact event type, or trailing-* prefix glob (#966 contract). */
     eventType: varchar('event_type', { length: 255 }).notNull(),
+    /** Type globs to drop (same syntax as eventType); exclusion wins over inclusion (#1078). */
+    excludeTypes: jsonb('exclude_types').$type<string[]>(),
     /** Payload conditions — the SAME matcher as `events wait --filter` / automation triggers. */
     filters: jsonb('filters').$type<AutomationCondition[]>(),
     /**

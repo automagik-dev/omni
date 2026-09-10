@@ -33,12 +33,21 @@
  * pin a pooled connection for the duration (the G4 leg-2 trap).
  */
 
-import type { AgentCallContext, AgentRunResult, CallAgentActionConfig } from '@omni/core';
-import { PUBLISH_NOT_DECLARED, SCHEMA_NOT_REGISTERED, checkPublishAllowed, createLogger, generateId } from '@omni/core';
+import type { AgentCallContext, AgentRunResult, CallAgentActionConfig, ProviderMetrics } from '@omni/core';
+import {
+  PUBLISH_NOT_DECLARED,
+  SCHEMA_NOT_REGISTERED,
+  agentUsageFromResult,
+  checkPublishAllowed,
+  createLogger,
+  generateId,
+} from '@omni/core';
 import type { Database, EventType } from '@omni/db';
 import { agents, omniEvents, processedEvents } from '@omni/db';
 import { eq } from 'drizzle-orm';
 import type { Services } from '../services';
+import type { AgentRunResult as RunnerResult } from '../services/agent-runner';
+import { stampAgentUsage } from '../services/agent-usage';
 import { releaseIdleTimeoutClaim } from '../services/follow-up-lifecycle';
 import { scopedHandle } from '../tenancy/tenant-scope';
 import { runTenantWorkDb } from '../tenancy/worker-tenant-context';
@@ -113,6 +122,30 @@ async function runChatlessCallAgent(
     messages: ctx.messages,
     timeoutSeconds: cfg.timeoutMs ? Math.ceil(cfg.timeoutMs / 1000) : undefined,
   });
+  return toCallAgentResult(db, ctx, result, trustedTenantId);
+}
+
+/**
+ * Shape a runner result for the automation engine and stamp its cost/usage on
+ * the triggering event's journal row (#1064) — the same ledger the dispatcher
+ * writes, so `call_agent` runs cost the same query as routed dispatches.
+ */
+function toCallAgentResult(
+  db: Database,
+  ctx: AgentCallContext,
+  result: RunnerResult,
+  trustedTenantId: string | null,
+): AgentRunResult {
+  const usage = agentUsageFromResult({
+    providerId: result.metadata.providerId,
+    runId: result.metadata.runId,
+    cost: toCost(result.metadata.metrics),
+  });
+  if (usage) {
+    runTenantWorkDb(db, trustedTenantId, () =>
+      stampAgentUsage(db, ctx.event?.id, { usage, latencyMs: result.metadata.metrics?.durationMs }),
+    ).catch((error) => log.warn('call_agent: usage stamp scope failed', { error: String(error) }));
+  }
   return {
     parts: result.parts,
     fullResponse: result.parts.join('\n'),
@@ -120,8 +153,20 @@ async function runChatlessCallAgent(
       runId: result.metadata.runId,
       sessionId: result.metadata.sessionId,
       status: result.metadata.status,
+      ...(usage ? { usage } : {}),
     },
   };
+}
+
+function toCost(metrics: ProviderMetrics | undefined) {
+  return metrics
+    ? {
+        inputTokens: metrics.inputTokens,
+        outputTokens: metrics.outputTokens,
+        costUsd: metrics.costUsd,
+        model: metrics.model,
+      }
+    : undefined;
 }
 
 /**
@@ -385,15 +430,7 @@ export function buildAutomationEngineDeps(
         chatType: 'dm',
         messages: ctx.messages,
       });
-      return {
-        parts: result.parts,
-        fullResponse: result.parts.join('\n'),
-        metadata: {
-          runId: result.metadata.runId,
-          sessionId: result.metadata.sessionId,
-          status: result.metadata.status,
-        },
-      };
+      return toCallAgentResult(db, ctx, result, trustedTenantId);
     },
 
     // Consumer-side stale-event gate — see engine.handleEvent comment.

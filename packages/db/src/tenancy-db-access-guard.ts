@@ -59,9 +59,9 @@
  * test run.
  */
 
-import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { relative } from 'node:path';
 import { RLS_EXCLUSIONS, RLS_TENANT_TABLES, type RlsExclusion } from './tenancy-rls';
+import { readSources } from './tenancy-scan-sources';
 
 export type DbAccessClass =
   | 'tenant-boundary'
@@ -87,8 +87,6 @@ export interface RegisteredDbAccess extends DbAccessSite {
   readonly justification?: string;
 }
 
-const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', '.turbo', '__tests__', 'coverage']);
-
 /**
  * Contract modules that mention table names and query verbs as DATA rather than
  * as queries: the ownership spec, the generated-SQL builders, and this guard's
@@ -109,37 +107,6 @@ const SKIP_FILES = new Set([
   'packages/db/scripts/check-writer-coverage.ts',
   'packages/db/scripts/check-db-access.ts',
 ]);
-
-function isTestFile(path: string): boolean {
-  return path.includes('/__tests__/') || /\.(test|spec)\.ts$/.test(path);
-}
-
-/**
- * Sibling suites create and delete scratch sources inside the scanned tree
- * while this scan runs (the egress guard's `__g5_egress_scratch__` under the
- * parallel test runner), so any path listed by the walk may be gone by the
- * time it is stat'ed or read. A vanished path has no call sites: skip it.
- * Every other error still throws.
- */
-function isEnoent(error: unknown): boolean {
-  return (error as NodeJS.ErrnoException).code === 'ENOENT';
-}
-
-function walk(dir: string, out: string[]): void {
-  for (const entry of readdirSync(dir)) {
-    if (SKIP_DIRS.has(entry)) continue;
-    const full = join(dir, entry);
-    let isDirectory: boolean;
-    try {
-      isDirectory = statSync(full).isDirectory();
-    } catch (error) {
-      if (isEnoent(error)) continue;
-      throw error;
-    }
-    if (isDirectory) walk(full, out);
-    else if (full.endsWith('.ts') && !isTestFile(full)) out.push(full);
-  }
-}
 
 /** Drizzle export name -> SQL table, for every RLS-covered table. */
 function drizzleNameFor(table: string): string {
@@ -203,8 +170,7 @@ function stripComments(source: string): string {
  * site do not churn the registry.
  */
 export function scanDbAccessSites(packagesDir: string, repoRoot: string): DbAccessSite[] {
-  const files: string[] = [];
-  walk(packagesDir, files);
+  const files = readSources(packagesDir);
 
   const drizzleNames = [...RLS_DRIZZLE_TO_TABLE.keys()];
   const builder = new RegExp(`\\.(?:from|insert|update|delete)\\(\\s*(${drizzleNames.join('|')})\\s*[),]`, 'g');
@@ -218,16 +184,9 @@ export function scanDbAccessSites(packagesDir: string, repoRoot: string): DbAcce
   );
 
   const sites = new Map<string, DbAccessSite>();
-  for (const file of files) {
+  for (const { file, source: raw } of files) {
     const rel = relative(repoRoot, file);
     if (SKIP_FILES.has(rel)) continue;
-    let raw: string;
-    try {
-      raw = readFileSync(file, 'utf-8');
-    } catch (error) {
-      if (isEnoent(error)) continue;
-      throw error;
-    }
     const source = stripComments(raw);
 
     for (const match of source.matchAll(builder)) {
@@ -1017,6 +976,16 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     // worker tenant scope. Consumer-only callers.
     file: 'packages/api/src/plugins/event-persistence.ts',
     table: 'persons',
+    class: 'tenant-boundary',
+  },
+  {
+    // #1064: the agent-usage stamp (cost/tokens/model onto the triggering
+    // event's journal row). Runs through `scopedHandle(db)` inside the
+    // caller's worker tenant scope — `runDispatchDb` from the dispatcher,
+    // `runTenantWorkDb` from the call_agent action — the same ADR-0008 seam
+    // as the message-persistence back-link below. Consumer-only callers.
+    file: 'packages/api/src/services/agent-usage.ts',
+    table: 'omni_events',
     class: 'tenant-boundary',
   },
   {

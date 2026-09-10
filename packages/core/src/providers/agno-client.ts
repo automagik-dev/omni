@@ -302,6 +302,7 @@ export class AgnoClient implements IAgentClient {
       session_id: string;
       content: string;
       status: 'COMPLETED' | 'FAILED';
+      model?: string;
       metrics?: {
         input_tokens?: number;
         output_tokens?: number;
@@ -319,6 +320,7 @@ export class AgnoClient implements IAgentClient {
             inputTokens: data.metrics.input_tokens ?? 0,
             outputTokens: data.metrics.output_tokens ?? 0,
             durationMs: data.metrics.duration ?? 0,
+            model: data.model,
           }
         : undefined,
     };

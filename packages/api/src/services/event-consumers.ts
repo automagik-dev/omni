@@ -26,9 +26,9 @@ import { ConflictError, NotFoundError, ValidationError, evaluateConditions } fro
 import type { EventBus } from '@omni/core';
 import type { AutomationCondition, Database, DurableConsumer, OmniEvent } from '@omni/db';
 import { durableConsumers, omniEvents } from '@omni/db';
-import { and, asc, eq, gt, like, lte, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, lte, sql } from 'drizzle-orm';
 import { scopedHandle } from '../tenancy/tenant-scope';
-import { escapeLikePattern } from './events';
+import { eventTypeFilterClause } from './events';
 
 /** Where a new consumer's cursor starts: the journal head (default) or 0 (full replay). */
 export type ConsumerStartFrom = 'now' | 'beginning';
@@ -36,6 +36,8 @@ export type ConsumerStartFrom = 'now' | 'beginning';
 export interface CreateConsumerInput {
   name: string;
   eventType: string;
+  /** Type globs to drop (same syntax as eventType); exclusion wins (#1078). */
+  excludeTypes?: string[];
   filters?: AutomationCondition[];
   /** 'now' (default, matches `events wait`) or 'beginning' (projection/backfill replay). */
   startFrom?: ConsumerStartFrom;
@@ -146,7 +148,13 @@ export class EventConsumerService {
 
     const [created] = await this.db
       .insert(durableConsumers)
-      .values({ name: input.name, eventType: input.eventType, filters: input.filters ?? null, cursor })
+      .values({
+        name: input.name,
+        eventType: input.eventType,
+        excludeTypes: input.excludeTypes?.length ? input.excludeTypes : null,
+        filters: input.filters ?? null,
+        cursor,
+      })
       .onConflictDoNothing({ target: durableConsumers.name })
       .returning();
     if (!created) {
@@ -242,12 +250,10 @@ export class EventConsumerService {
   /**
    * One ascending journal page after the consumer's cursor, pre-filtered by
    * the type filter in SQL (exact match, or trailing-* prefix glob — the
-   * EventService.list / #966 contract; keep the two in sync).
+   * EventService.list / #966 contract) minus the exclude globs (#1078).
    */
   private async scanPage(consumer: DurableConsumer, limit: number): Promise<OmniEvent[]> {
-    const typeClause = consumer.eventType.endsWith('*')
-      ? like(omniEvents.eventType, `${escapeLikePattern(consumer.eventType.slice(0, -1))}%`)
-      : eq(omniEvents.eventType, consumer.eventType as OmniEvent['eventType']);
+    const typeClause = eventTypeFilterClause([consumer.eventType], consumer.excludeTypes ?? undefined);
 
     return this.db
       .select()

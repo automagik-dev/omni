@@ -11,7 +11,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { NotFoundError } from '@omni/core';
 import type { Database, NewOmniEvent } from '@omni/db';
-import { omniEvents } from '@omni/db';
+import { chats, durableConsumers, eventSchemas, omniEvents } from '@omni/db';
 import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { createServices } from '../services';
@@ -264,6 +264,53 @@ describeWithDb('Events Service', () => {
     });
   });
 
+  describe('getTypes() (#1075)', () => {
+    test('inventories observed types with volume, schema status and subscribers', async () => {
+      const typeA = 'custom.webhook.types-a' as NewOmniEvent['eventType'];
+      const typeB = 'custom.webhook.types-b' as NewOmniEvent['eventType'];
+      const old = new Date(Date.now() - 48 * 60 * 60 * 1000);
+      await insertTestEvent(createTestEvent({ eventType: typeA }));
+      await insertTestEvent(createTestEvent({ eventType: typeA }));
+      await insertTestEvent(createTestEvent({ eventType: typeA, receivedAt: old }));
+      await insertTestEvent(createTestEvent({ eventType: typeB }));
+      const [schema] = await db
+        .insert(eventSchemas)
+        .values({ eventType: typeA, version: 3, schema: { type: 'object' } })
+        .returning();
+      const [consumer] = await db
+        .insert(durableConsumers)
+        .values({ name: `types-test-${Date.now()}`, eventType: 'custom.webhook.types-*' })
+        .returning();
+
+      try {
+        const all = await services.events.getTypes({ automations: [{ name: 'auto-a', triggerEventType: typeA }] });
+        const a = all.find((r) => r.eventType === typeA);
+        const b = all.find((r) => r.eventType === typeB);
+        expect(a).toMatchObject({
+          count: 3,
+          schemaVersion: 3,
+          schemaEnabled: true,
+          consumers: [consumer?.name],
+          automations: ['auto-a'],
+        });
+        expect(b).toMatchObject({
+          count: 1,
+          schemaVersion: null,
+          schemaEnabled: null,
+          consumers: [consumer?.name],
+          automations: [],
+        });
+        expect(new Date(a?.lastSeen ?? 0).getTime()).toBeGreaterThan(old.getTime());
+
+        const recent = await services.events.getTypes({ since: new Date(Date.now() - 60 * 60 * 1000) });
+        expect(recent.find((r) => r.eventType === typeA)?.count).toBe(2);
+      } finally {
+        if (schema) await db.delete(eventSchemas).where(eq(eventSchemas.id, schema.id));
+        if (consumer) await db.delete(durableConsumers).where(eq(durableConsumers.id, consumer.id));
+      }
+    });
+  });
+
   describe('getAnalytics()', () => {
     test('returns analytics structure', async () => {
       const analytics = await services.events.getAnalytics({});
@@ -352,6 +399,40 @@ describeWithDb('Events API Routes', () => {
   }
 
   describe('GET /events', () => {
+    test('filters by chatId (chat UUID) and returns no rows from other chats (#1055)', async () => {
+      const [wanted] = await db
+        .insert(chats)
+        .values({ externalId: `chat-a-${Date.now()}`, chatType: 'group', channel: 'discord' })
+        .returning();
+      const [other] = await db
+        .insert(chats)
+        .values({ externalId: `chat-b-${Date.now()}`, chatType: 'dm', channel: 'discord' })
+        .returning();
+      if (!wanted || !other) throw new Error('chat fixtures not inserted');
+      try {
+        await insertTestEvent(createTestEvent({ chatUuid: wanted.id, textContent: 'wanted-1' }));
+        await insertTestEvent(createTestEvent({ chatUuid: wanted.id, textContent: 'wanted-2' }));
+        await insertTestEvent(createTestEvent({ chatUuid: other.id, textContent: 'other' }));
+        await insertTestEvent(createTestEvent({ chatUuid: null, textContent: 'orphan' }));
+
+        const res = await app.request(`/events?chatId=${wanted.id}&limit=50`);
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as { items: Array<{ chatUuid: string | null }> };
+        expect(body.items.length).toBe(2);
+        for (const event of body.items) {
+          expect(event.chatUuid).toBe(wanted.id);
+        }
+
+        const none = await app.request('/events?chatId=00000000-0000-4000-8000-000000000000&limit=50');
+        expect(((await none.json()) as { items: unknown[] }).items).toEqual([]);
+      } finally {
+        for (const id of insertedEventIds) await db.delete(omniEvents).where(eq(omniEvents.id, id));
+        insertedEventIds = [];
+        await db.delete(chats).where(eq(chats.id, wanted.id));
+        await db.delete(chats).where(eq(chats.id, other.id));
+      }
+    });
+
     test('returns events list', async () => {
       const res = await app.request('/events?limit=10');
       expect(res.status).toBe(200);

@@ -930,6 +930,19 @@
       "uiStatus": "operable"
     },
     {
+      "key": "GET /events/types",
+      "method": "GET",
+      "route": "/events/types",
+      "resource": "events",
+      "scope": "events:read",
+      "inOpenApi": true,
+      "inScopeMap": true,
+      "mutating": false,
+      "destructive": false,
+      "realtime": false,
+      "uiStatus": "operable"
+    },
+    {
       "key": "GET /follow-up/agents/:id",
       "method": "GET",
       "route": "/follow-up/agents/:id",

@@ -905,16 +905,21 @@ export class ChatService {
   /**
    * Find or create a participant
    */
-  async findOrCreateParticipant(
-    chatId: string,
-    platformUserId: string,
-    defaults: Partial<NewChatParticipant> = {},
-  ): Promise<{ participant: ChatParticipant; created: boolean }> {
+  async findParticipant(chatId: string, platformUserId: string): Promise<ChatParticipant | undefined> {
     const [existing] = await this.db
       .select()
       .from(chatParticipants)
       .where(and(eq(chatParticipants.chatId, chatId), eq(chatParticipants.platformUserId, platformUserId)))
       .limit(1);
+    return existing;
+  }
+
+  async findOrCreateParticipant(
+    chatId: string,
+    platformUserId: string,
+    defaults: Partial<NewChatParticipant> = {},
+  ): Promise<{ participant: ChatParticipant; created: boolean }> {
+    const existing = await this.findParticipant(chatId, platformUserId);
 
     if (existing) {
       // Update identity links if provided and missing on existing record

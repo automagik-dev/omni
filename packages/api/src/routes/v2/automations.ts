@@ -5,6 +5,7 @@
 import { zValidator } from '@hono/zod-validator';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import type { AutomationTestEvent } from '../../services/automations';
 import type { AppVariables } from '../../types';
 
 const automationsRoutes = new Hono<{ Variables: AppVariables }>();
@@ -151,13 +152,40 @@ const listQuerySchema = z.object({
   enabled: z.coerce.boolean().optional(),
 });
 
-// Test automation schema
-const testAutomationSchema = z.object({
-  event: z.object({
-    type: z.string().min(1).describe('Event type'),
-    payload: z.record(z.string(), z.unknown()).describe('Event payload'),
-  }),
-});
+// Test/execute automation schema: a hand-written event OR a journaled event id (#1073)
+const testAutomationSchema = z
+  .object({
+    event: z
+      .object({
+        type: z.string().min(1).describe('Event type'),
+        payload: z.record(z.string(), z.unknown()).describe('Event payload'),
+      })
+      .optional(),
+    eventId: z.string().uuid().optional().describe('Id of a journaled omni_events row to run against'),
+  })
+  .refine((b) => (b.event ? 1 : 0) + (b.eventId ? 1 : 0) === 1, {
+    message: 'Provide exactly one of "event" or "eventId"',
+  });
+
+/**
+ * Resolve the test/execute body to an event: the inline mock, or the REAL
+ * journaled row (#1073) shaped the way the engine would have seen it —
+ * `rawPayload` as payload, the envelope `metadata` alongside.
+ */
+async function resolveTestEvent(
+  services: AppVariables['services'],
+  body: z.infer<typeof testAutomationSchema>,
+): Promise<AutomationTestEvent> {
+  if (body.event) return body.event;
+  const row = await services.events.getById(body.eventId as string);
+  return {
+    id: row.id,
+    type: row.eventType,
+    payload: row.rawPayload ?? {},
+    metadata: row.metadata ?? undefined,
+    timestamp: row.receivedAt.getTime(),
+  };
+}
 
 // Logs query schema
 const logsQuerySchema = z.object({
@@ -296,8 +324,8 @@ automationsRoutes.post('/:id/disable', async (c) => {
  */
 automationsRoutes.post('/:id/test', zValidator('json', testAutomationSchema), async (c) => {
   const id = c.req.param('id');
-  const { event } = c.req.valid('json');
   const services = c.get('services');
+  const event = await resolveTestEvent(services, c.req.valid('json'));
 
   const result = await services.automations.test(id, event);
 
@@ -309,8 +337,8 @@ automationsRoutes.post('/:id/test', zValidator('json', testAutomationSchema), as
  */
 automationsRoutes.post('/:id/execute', zValidator('json', testAutomationSchema), async (c) => {
   const id = c.req.param('id');
-  const { event } = c.req.valid('json');
   const services = c.get('services');
+  const event = await resolveTestEvent(services, c.req.valid('json'));
 
   const result = await services.automations.execute(id, event);
 

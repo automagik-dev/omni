@@ -219,6 +219,11 @@ export const TriggerEventSchema = z.object({
   eventType: z.string().min(1).openapi({ description: 'Event type (must start with custom.)' }),
   payload: z.record(z.string(), z.unknown()).openapi({ description: 'Event payload' }),
   correlationId: z.string().optional().openapi({ description: 'Correlation ID' }),
+  causationId: z
+    .string()
+    .uuid()
+    .optional()
+    .openapi({ description: 'Parent event ID; stamps causationId so the emission is parented in the causality tree' }),
   instanceId: z.string().uuid().optional().openapi({ description: 'Instance ID for context' }),
 });
 

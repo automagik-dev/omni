@@ -53,10 +53,15 @@ const listQuerySchema = z.object({
     .transform((v) => v?.split(',') as z.infer<typeof ChannelTypeSchema>[] | undefined),
   instanceId: z.string().uuid().optional(),
   personId: z.string().uuid().optional(),
+  chatId: z.string().uuid().optional(),
   eventType: z
     .string()
     .optional()
     .transform((v) => v?.split(',') as z.infer<typeof EventTypeSchema>[] | undefined),
+  excludeEventType: z
+    .string()
+    .optional()
+    .transform((v) => v?.split(',')),
   contentType: z
     .string()
     .optional()
@@ -155,6 +160,17 @@ eventsRoutes.get('/analytics', zValidator('query', analyticsQuerySchema), async 
   });
 
   return c.json(analytics);
+});
+
+/**
+ * GET /events/types - Inventory of observed event types (#1075)
+ */
+eventsRoutes.get('/types', zValidator('query', z.object({ since: optionalDateParam('since') })), async (c) => {
+  const { since } = c.req.valid('query');
+  const services = c.get('services');
+  const automations = await services.automations.list({ enabled: true });
+  const items = await services.events.getTypes({ since, automations });
+  return c.json({ items, meta: { since: since?.toISOString() ?? null } });
 });
 
 /**

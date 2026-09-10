@@ -16,15 +16,18 @@ import { eventsRoutes } from '../events';
 type ListCall = { query: Record<string, unknown> };
 type AnalyticsCall = { input: Record<string, unknown> };
 type TimelineCall = { personId: string; input: Record<string, unknown> };
+type TypesCall = { input: Record<string, unknown> };
 
 function mountEventsRoutes(captures: {
   list?: ListCall[];
   analytics?: AnalyticsCall[];
   timeline?: TimelineCall[];
+  types?: TypesCall[];
 }): Hono<{ Variables: AppVariables }> {
   const app = new Hono<{ Variables: AppVariables }>();
   app.use('*', async (c, next) => {
     c.set('services', {
+      automations: { list: mock(async () => []) },
       events: {
         list: mock(async (query: Record<string, unknown>) => {
           captures.list?.push({ query });
@@ -33,6 +36,10 @@ function mountEventsRoutes(captures: {
         getAnalytics: mock(async (input: Record<string, unknown>) => {
           captures.analytics?.push({ input });
           return { totals: {}, breakdown: [] };
+        }),
+        getTypes: mock(async (input: Record<string, unknown>) => {
+          captures.types?.push({ input });
+          return [];
         }),
         getTimeline: mock(async (personId: string, input: Record<string, unknown>) => {
           captures.timeline?.push({ personId, input });
@@ -138,5 +145,24 @@ describe('GET /events/timeline/:personId — date validation (#487)', () => {
     expect(timeline).toHaveLength(1);
     expect(timeline[0]?.input.since).toBeInstanceOf(Date);
     expect(timeline[0]?.input.until).toBeInstanceOf(Date);
+  });
+});
+
+describe('GET /events/types — date validation (#1075)', () => {
+  test('returns 400 when `since` is garbage', async () => {
+    const types: TypesCall[] = [];
+    const app = mountEventsRoutes({ types });
+    const res = await app.request('/events/types?since=not-a-date-at-all');
+    expect(res.status).toBe(400);
+    expect(types).toHaveLength(0);
+  });
+
+  test('returns 200 with items/meta and passes a Date instance for valid ISO 8601', async () => {
+    const types: TypesCall[] = [];
+    const app = mountEventsRoutes({ types });
+    const res = await app.request('/events/types?since=2024-01-01T00:00:00.000Z');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ items: [], meta: { since: '2024-01-01T00:00:00.000Z' } });
+    expect(types[0]?.input.since).toBeInstanceOf(Date);
   });
 });

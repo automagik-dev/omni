@@ -232,6 +232,25 @@ postgresDescribe('event schema registry gates (real PostgreSQL)', () => {
     expect((await dlqRows()).length).toBe(3);
   });
 
+  test('dry run (#1076): same errors as the gate, no DLQ row, nothing published', async () => {
+    const dlqBefore = (await dlqRows()).length;
+    const journalBefore = journal.length;
+
+    const bad = await eventSchemas.validatePayload('custom.github.push', { ref: 7 });
+    expect(bad.valid).toBe(false);
+    expect(bad.errors.length).toBeGreaterThan(0);
+    expect(bad.version).toBe(1);
+
+    const good = await eventSchemas.validatePayload('custom.github.push', { ref: 'refs/heads/main', commits: [] });
+    expect(good.valid).toBe(true);
+    expect(good.errors).toEqual([]);
+
+    await expect(eventSchemas.validatePayload('custom.not.registered', {})).rejects.toThrow(/not found/i);
+
+    expect((await dlqRows()).length).toBe(dlqBefore);
+    expect(journal.length).toBe(journalBefore);
+  });
+
   test('evolution: an additive-optional revision is accepted and bumps the version', async () => {
     const v2 = {
       ...PUSH_SCHEMA_V1,

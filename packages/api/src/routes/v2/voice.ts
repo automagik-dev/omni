@@ -14,6 +14,7 @@ import { zValidator } from '@hono/zod-validator';
 import { isVoiceCapable } from '@omni/channel-sdk';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { safeErrorMessage } from '../../middleware/error';
 import type { AppVariables } from '../../types';
 
 export const voiceRoutes = new Hono<{ Variables: AppVariables }>();
@@ -77,7 +78,7 @@ voiceRoutes.post('/join', zValidator('json', joinSchema), async (c) => {
       201,
     );
   } catch (err) {
-    return c.json({ error: { code: 'VOICE_JOIN_FAILED', message: String(err) } }, 500);
+    return c.json({ error: { code: 'VOICE_JOIN_FAILED', message: safeErrorMessage(err) } }, 500);
   }
 });
 
@@ -99,7 +100,7 @@ voiceRoutes.post('/leave', zValidator('json', leaveSchema), async (c) => {
 
     return c.json({ success: true });
   } catch (err) {
-    return c.json({ error: { code: 'VOICE_LEAVE_FAILED', message: String(err) } }, 500);
+    return c.json({ error: { code: 'VOICE_LEAVE_FAILED', message: safeErrorMessage(err) } }, 500);
   }
 });
 

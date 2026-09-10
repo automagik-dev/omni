@@ -4,13 +4,48 @@
 
 import { NotFoundError } from '@omni/core';
 import type { Database } from '@omni/db';
-import { type ChannelType, type ContentType, type EventType, type OmniEvent, omniEvents } from '@omni/db';
-import { and, desc, eq, gte, ilike, inArray, like, lte, or, sql } from 'drizzle-orm';
+import {
+  type ChannelType,
+  type ContentType,
+  type EventType,
+  type OmniEvent,
+  durableConsumers,
+  eventSchemas,
+  omniEvents,
+} from '@omni/db';
+import { type SQL, and, desc, eq, gte, ilike, inArray, like, lte, not, or, sql } from 'drizzle-orm';
 import { scopedHandle } from '../tenancy/tenant-scope';
 
 /** Escape LIKE wildcards so a glob prefix matches literally (backslash is postgres's default escape char). */
-export function escapeLikePattern(value: string): string {
+function escapeLikePattern(value: string): string {
   return value.replace(/([\\%_])/g, '\\$1');
+}
+
+/**
+ * SQL clause for "event_type matches ANY of these globs" (#966 contract, shared
+ * by EventService.list and the durable-consumer scan — #1078): a trailing-*
+ * entry is a prefix glob (`custom.*`), everything else is exact-match; the
+ * entries are ORed. Returns undefined for an empty list. The CLI-side sieve
+ * (`matchesEventTypeFilter` in packages/cli) implements the same contract.
+ */
+export function eventTypeGlobClause(globs: readonly string[]): SQL | undefined {
+  const exact = globs.filter((t) => !t.endsWith('*'));
+  const prefixes = globs.filter((t) => t.endsWith('*')).map((t) => t.slice(0, -1));
+  const clauses = [
+    ...(exact.length ? [inArray(omniEvents.eventType, exact as OmniEvent['eventType'][])] : []),
+    ...prefixes.map((p) => like(omniEvents.eventType, `${escapeLikePattern(p)}%`)),
+  ];
+  return clauses.length === 1 ? clauses[0] : or(...clauses);
+}
+
+/**
+ * Include/exclude type filters as ONE clause; exclusion wins over inclusion
+ * (`--type custom.* --exclude custom.chat.*` = every custom event except chat).
+ */
+export function eventTypeFilterClause(include?: readonly string[], exclude?: readonly string[]): SQL | undefined {
+  const inc = include?.length ? eventTypeGlobClause(include) : undefined;
+  const exc = exclude?.length ? eventTypeGlobClause(exclude) : undefined;
+  return and(inc, exc ? not(exc) : undefined);
 }
 
 export interface ListEventsOptions {
@@ -18,7 +53,11 @@ export interface ListEventsOptions {
   instanceId?: string;
   instanceIds?: string[];
   personId?: string;
+  /** Chat UUID (omni_events.chat_uuid), not the platform chat id. */
+  chatId?: string;
   eventType?: EventType[];
+  /** Type globs to drop, same syntax as eventType; exclusion wins (#1078). */
+  excludeEventType?: string[];
   contentType?: ContentType[];
   direction?: 'inbound' | 'outbound';
   since?: Date;
@@ -57,12 +96,33 @@ export interface EventAnalytics {
   successRate: number;
   avgProcessingTimeMs: number | null;
   avgAgentTimeMs: number | null;
+  /** Sum of `metadata.agentUsage.costUsd` over the range (#1064). */
+  totalCostUsd: number;
   messageTypes: Record<string, number>;
   errorStages: Record<string, number>;
   instances: Record<string, number>;
   byChannel: Record<string, number>;
   byDirection: { inbound: number; outbound: number };
   timeline?: Array<{ bucket: string; count: number }>;
+}
+
+/** One row of the `GET /events/types` inventory (#1075). */
+export interface EventTypeInventoryRow {
+  eventType: string;
+  count: number;
+  lastSeen: string;
+  /** Registered schema version, or null when no `event_schemas` row exists. */
+  schemaVersion: number | null;
+  schemaEnabled: boolean | null;
+  /** Durable consumer names whose type filter (exact or trailing-* glob) matches. */
+  consumers: string[];
+  /** Enabled automations whose trigger is this exact type. */
+  automations: string[];
+}
+
+/** Durable-consumer type filter match: exact, or trailing-* prefix glob (#966 contract). */
+function consumerTypeMatches(filter: string, eventType: string): boolean {
+  return filter.endsWith('*') ? eventType.startsWith(filter.slice(0, -1)) : filter === eventType;
 }
 
 export class EventService {
@@ -93,7 +153,9 @@ export class EventService {
       channel,
       instanceId,
       personId,
+      chatId,
       eventType,
+      excludeEventType,
       contentType,
       direction,
       since,
@@ -119,20 +181,13 @@ export class EventService {
       conditions.push(eq(omniEvents.personId, personId));
     }
 
-    if (eventType?.length) {
-      // #966: a trailing-* entry is a prefix glob (`custom.*` matches every
-      // custom event); everything else stays exact-match. A mixed list ORs
-      // the two together. The CLI-side sieve (matchesEventTypeFilter in
-      // packages/cli) implements the same contract — keep them in sync.
-      const exact = eventType.filter((t) => !t.endsWith('*'));
-      const prefixes = eventType.filter((t) => t.endsWith('*')).map((t) => t.slice(0, -1));
-      const typeClauses = [
-        ...(exact.length ? [inArray(omniEvents.eventType, exact)] : []),
-        ...prefixes.map((p) => like(omniEvents.eventType, `${escapeLikePattern(p)}%`)),
-      ];
-      const combined = typeClauses.length === 1 ? typeClauses[0] : or(...typeClauses);
-      if (combined) conditions.push(combined);
+    if (chatId) {
+      // #1055: filter on the chats FK, not the raw platform chatId column.
+      conditions.push(eq(omniEvents.chatUuid, chatId));
     }
+
+    const typeClause = eventTypeFilterClause(eventType, excludeEventType);
+    if (typeClause) conditions.push(typeClause);
 
     if (contentType?.length) {
       conditions.push(inArray(omniEvents.contentType, contentType));
@@ -341,6 +396,8 @@ export class EventService {
         failed: sql<number>`count(*) filter (where ${omniEvents.status} = 'failed')::int`,
         avgProcessingTime: sql<number>`avg(${omniEvents.processingTimeMs})::int`,
         avgAgentTime: sql<number>`avg(${omniEvents.agentLatencyMs})::int`,
+        // #1064: cost stamped by the agent dispatcher in metadata.agentUsage
+        totalCostUsd: sql<number>`coalesce(sum((${omniEvents.metadata}->'agentUsage'->>'costUsd')::numeric), 0)::float`,
       })
       .from(omniEvents)
       .where(whereClause);
@@ -429,6 +486,7 @@ export class EventService {
       successRate: total > 0 ? (successful / total) * 100 : 0,
       avgProcessingTimeMs: counts?.avgProcessingTime ?? null,
       avgAgentTimeMs: counts?.avgAgentTime ?? null,
+      totalCostUsd: counts?.totalCostUsd ?? 0,
       messageTypes: Object.fromEntries(
         contentTypeCounts
           .filter((c): c is typeof c & { contentType: NonNullable<typeof c.contentType> } => c.contentType != null)
@@ -455,5 +513,48 @@ export class EventService {
       },
       timeline,
     };
+  }
+
+  /**
+   * Inventory of observed event types (#1075): volume + last seen in the
+   * window (one indexed GROUP BY over `omni_events_type_idx`), joined in
+   * memory with the schema registry and the subscribers (durable consumers,
+   * plus the enabled automations the caller passes in — the route reads them
+   * through AutomationService so this service adds no `automations` db site).
+   */
+  async getTypes(
+    options: { since?: Date; automations?: Array<{ name: string; triggerEventType: string }> } = {},
+  ): Promise<EventTypeInventoryRow[]> {
+    const autos = options.automations ?? [];
+    const [observed, schemas, consumers] = await Promise.all([
+      this.db
+        .select({
+          eventType: omniEvents.eventType,
+          count: sql<number>`count(*)::int`,
+          lastSeen: sql<string>`max(${omniEvents.receivedAt})::text`,
+        })
+        .from(omniEvents)
+        .where(options.since ? gte(omniEvents.receivedAt, options.since) : undefined)
+        .groupBy(omniEvents.eventType)
+        .orderBy(desc(sql`count(*)`)),
+      this.db
+        .select({ eventType: eventSchemas.eventType, version: eventSchemas.version, enabled: eventSchemas.enabled })
+        .from(eventSchemas),
+      this.db.select({ name: durableConsumers.name, eventType: durableConsumers.eventType }).from(durableConsumers),
+    ]);
+
+    const schemaByType = new Map(schemas.map((s) => [s.eventType, s]));
+    return observed.map((row) => {
+      const schema = schemaByType.get(row.eventType);
+      return {
+        eventType: row.eventType,
+        count: row.count,
+        lastSeen: new Date(row.lastSeen).toISOString(),
+        schemaVersion: schema?.version ?? null,
+        schemaEnabled: schema?.enabled ?? null,
+        consumers: consumers.filter((c) => consumerTypeMatches(c.eventType, row.eventType)).map((c) => c.name),
+        automations: autos.filter((a) => a.triggerEventType === row.eventType).map((a) => a.name),
+      };
+    });
   }
 }
