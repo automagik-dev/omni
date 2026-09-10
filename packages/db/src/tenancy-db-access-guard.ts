@@ -1020,6 +1020,15 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     class: 'tenant-boundary',
   },
   {
+    // #1035: the message.received consumer back-links the journal row's
+    // chatUuid/personId after chat resolution. The update runs inside
+    // `runConsumerInTenantContext` through `scopedHandle(db)` — the same
+    // ADR-0008 worker-scope seam as the event-persistence.ts siblings above.
+    file: 'packages/api/src/plugins/message-persistence.ts',
+    table: 'omni_events',
+    class: 'tenant-boundary',
+  },
+  {
     file: 'packages/api/src/plugins/instance-monitor.ts',
     table: 'instances',
     class: 'tenant-boundary',

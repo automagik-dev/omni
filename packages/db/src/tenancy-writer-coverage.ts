@@ -165,6 +165,8 @@ export const REGISTERED_WRITERS: readonly RegisteredWriter[] = [
   { file: 'packages/api/src/plugins/event-listeners.ts', table: 'chats', coverage: 'db-derived' },
   { file: 'packages/api/src/plugins/event-listeners.ts', table: 'instances', coverage: 'trusted-root' },
   { file: 'packages/api/src/plugins/event-persistence.ts', table: 'omni_events', coverage: 'db-derived' },
+  // #1035: message.received consumer back-links the journal row (chatUuid/personId) once the chat is resolved.
+  { file: 'packages/api/src/plugins/message-persistence.ts', table: 'omni_events', coverage: 'db-derived' },
   { file: 'packages/api/src/plugins/instance-monitor.ts', table: 'instances', coverage: 'trusted-root' },
   { file: 'packages/api/src/plugins/media-processor.ts', table: 'media_content', coverage: 'db-derived' },
   { file: 'packages/api/src/plugins/media-processor.ts', table: 'messages', coverage: 'db-derived' },
