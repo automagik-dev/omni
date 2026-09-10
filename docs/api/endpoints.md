@@ -1,7 +1,7 @@
 ---
 title: "API Endpoints Reference"
 created: 2025-01-29
-updated: 2026-09-08
+updated: 2026-09-10
 tags: [api, endpoints, reference]
 status: current
 ---
@@ -422,11 +422,23 @@ Source: `packages/api/src/routes/v2/events.ts`
 
 ```yaml
 GET    /api/v2/events                         # List events
-  Query: channel[], instanceId?, personId?, eventType[], contentType[],
-         direction?, since?, until?, search?, limit?, cursor?
+  Query: channel[], instanceId?, personId?, chatId?, eventType[], excludeEventType[],
+         contentType[], direction?, since?, until?, search?, limit?, cursor?
+  Note: eventType/excludeEventType are comma-separated; trailing-* prefix globs.
+        Exclusion wins over inclusion (`custom.*` minus `custom.chat.*`).
 
 GET    /api/v2/events/analytics               # Get analytics summary
-  Query: since?, until?, instanceId?, allTime?
+  Query: since?, until?, instanceId?, granularity? (hourly|daily), allTime?
+  Response: { ..., totalCostUsd, messageTypes, errorStages, instances, byChannel, byDirection, timeline? }
+  Note: totalCostUsd = sum of `metadata.agentUsage.costUsd` over events in range
+        (stamped on the event that woke an agent — see event-system.md).
+
+GET    /api/v2/events/types                   # Inventory of observed event types
+  Query: since?
+  Response: { items[{ eventType, count, lastSeen, schemaVersion, schemaEnabled,
+                      consumers[], automations[] }], meta: { since } }
+  Note: schemaVersion/schemaEnabled are null for unregistered types; consumers =
+        durable consumer names, automations = enabled automations triggered by the type.
 
 GET    /api/v2/events/timeline/:personId      # Person timeline
   Query: channels[]?, since?, until?, limit?, cursor?
@@ -490,7 +502,10 @@ JetStream consumers. `lag` = journal head − cursor.
 GET    /api/v2/events/consumers               # List consumers (filter, cursor, live lag)
 
 POST   /api/v2/events/consumers               # Register a consumer
-  Note: Initial cursor 'now' = journal head (default), 'beginning' = full replay
+  Body: { name, eventType, excludeTypes[]? (max 20), filters[]?, from? }
+  Note: Initial cursor 'now' = journal head (default), 'beginning' = full replay.
+        excludeTypes use the same glob syntax as eventType and win over it;
+        the stored value is echoed back as `excludeTypes` (null = none).
 
 GET    /api/v2/events/consumers/:name         # Get consumer + cursor position + lag
 
@@ -713,8 +728,17 @@ DELETE /api/v2/automations/:id                # Delete automation
 
 POST   /api/v2/automations/:id/enable         # Enable automation
 POST   /api/v2/automations/:id/disable        # Disable automation
-POST   /api/v2/automations/:id/test           # Test with mock event
-POST   /api/v2/automations/:id/execute        # Execute with real event
+POST   /api/v2/automations/:id/test           # Dry run: verdicts, no side effects
+  Body: { event?: { type, payload }, eventId? }   (exactly one)
+  Response: { matched, triggerMatched, conditionsMatched, conditionLogic,
+              conditions[{ field, operator, expected, actual, resolved, matched }],
+              actions[{ type, wouldExecute, config }] }
+  Note: eventId loads a REAL omni_events row — rawPayload as payload, envelope
+        metadata merged for conditions. Nothing executes, no execution log.
+        `resolved: false` = the condition's dot path found nothing.
+
+POST   /api/v2/automations/:id/execute        # Execute (actually runs the actions)
+  Body: { event?: { type, payload }, eventId? }   (exactly one)
 
 GET    /api/v2/automation-logs                 # Get automation execution logs
   Query: automationId?, limit?
@@ -785,7 +809,9 @@ POST   /api/v2/webhooks/:source/heartbeat     # Connector liveness heartbeat (au
 
 ```yaml
 POST   /api/v2/events/trigger                 # Trigger a custom event
-  Body: { eventType (custom.*), payload, correlationId?, instanceId? }
+  Body: { eventType (custom.*), payload, correlationId?, causationId?, instanceId? }
+  Note: causationId (uuid of an existing event) parents the emission in the
+        causality tree (GET /events/:id/trace) instead of creating a new root.
 ```
 
 ---

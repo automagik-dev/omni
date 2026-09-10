@@ -193,11 +193,28 @@ omni automations create \
   --name "GitHub push notifier" \
   --trigger custom.github.push \
   --action send_message \
-  --config '{
+  --action-config '{
     "instanceId": "<instance uuid>",
     "chatId": "<chat id>",
     "message": "push to {{payload.repository.full_name}} ({{payload.ref}}) by {{payload.sender.login}}"
   }'
+```
+
+`--action` / `--action-config` repeat for an ordered multi-action automation,
+and `{{payload_json}}` / `{{event_json}}` render the whole payload or event as
+compact JSON — handy for forwarding the delivery to an agent or another hook:
+
+```bash
+omni automations create \
+  --name "GitHub push notifier + agent" \
+  --trigger custom.github.push \
+  --action send_message \
+  --action-config '{"instanceId":"<instance uuid>","chatId":"<chat id>","message":"push by {{payload.sender.login}}"}' \
+  --action call_agent --agent-id <agent id> \
+  --action-config '{"promptOverride":"Summarize this GitHub push: {{payload_json}}"}'
+
+# Dry-run against a real delivery before enabling (verdicts, no side effects):
+omni automations test <automation id> --event <event id>
 ```
 
 Because redelivery dedup happens **before** publish, a GitHub redelivery can
