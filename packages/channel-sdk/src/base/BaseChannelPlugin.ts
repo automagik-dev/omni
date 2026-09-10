@@ -30,6 +30,7 @@ import type {
 } from '../helpers/events';
 import type { ChannelCapabilities } from '../types/capabilities';
 import type {
+  ClaimedEventType,
   GlobalConfig,
   IngressClaim,
   Logger,
@@ -394,31 +395,67 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
     // before publishing. The kind is part of the key because a platform can
     // reuse a message id for a different fact (a WhatsApp deletion carries
     // the deleted message's id). A duplicate claim skips the publish.
-    if (this.ingressClaim) {
-      const idempotencyKey = `${this.id}:${instanceId}:${payload.externalId}:${payload.content.type}`;
-      const eventId = await this.ingressClaim.claim({
-        idempotencyKey,
-        instanceId,
-        channelType: this.id,
-        externalId: payload.externalId,
-      });
-      if (eventId === null) {
-        this.logger.info('Skipping duplicate inbound message (idempotency key already journaled)', {
-          instanceId,
-          idempotencyKey,
-        });
-        return generateCorrelationId('evt');
-      }
-      options.publishEventId = eventId;
-      try {
-        return await this.publishEventInternal('message.received', payload, instanceId, options);
-      } catch (error) {
-        await this.ingressClaim.release(eventId).catch(() => {});
-        throw error;
-      }
-    }
+    return this.publishClaimed('message.received', payload, instanceId, {
+      idempotencyKey: `${this.id}:${instanceId}:${payload.externalId}:${payload.content.type}`,
+      externalId: payload.externalId,
+      options,
+    });
+  }
 
-    return this.publishEventInternal('message.received', payload, instanceId, options);
+  /**
+   * Claim an ingress idempotency key, then publish under the claimed journal
+   * row id so the persistence consumer upserts into that row. A duplicate
+   * claim skips the publish; a failed publish releases the claim so the retry
+   * is not treated as a duplicate. Without a claim provider (fail-open, or
+   * host without db) the event publishes undeduped.
+   */
+  private async publishClaimed<K extends ClaimedEventType>(
+    type: K,
+    payload: EventPayloadMap[K],
+    instanceId: string,
+    params: { idempotencyKey: string; externalId: string; options?: PublishEventInternalOptions },
+  ): Promise<string> {
+    const { idempotencyKey, externalId, options = {} } = params;
+    if (!this.ingressClaim) {
+      return this.publishEventInternal(type, payload, instanceId, options);
+    }
+    const eventId = await this.ingressClaim.claim({
+      idempotencyKey,
+      instanceId,
+      channelType: this.id,
+      externalId,
+      eventType: type,
+    });
+    if (eventId === null) {
+      this.logger.info(`Skipping duplicate inbound ${type} (idempotency key already journaled)`, {
+        instanceId,
+        idempotencyKey,
+      });
+      return generateCorrelationId('evt');
+    }
+    try {
+      return await this.publishEventInternal(type, payload, instanceId, { ...options, publishEventId: eventId });
+    } catch (error) {
+      await this.ingressClaim.release(eventId).catch(() => {});
+      throw error;
+    }
+  }
+
+  /**
+   * Reaction idempotency key (#1096): `{channel}:{instance}:{reactionId}:{kind}:{emoji}`.
+   * The reaction's own platform id (rawPayload.externalId) is used when the
+   * channel has one (WhatsApp); otherwise `{messageId}:{from}` stands in, so a
+   * double-fired handler or a second observing instance cannot journal the
+   * same reaction twice.
+   */
+  private reactionClaimParams(
+    kind: 'reaction.received' | 'reaction.removed',
+    instanceId: string,
+    payload: { messageId: string; from: string; emoji: string; rawPayload?: Record<string, unknown> },
+  ): { idempotencyKey: string; externalId: string } {
+    const raw = payload.rawPayload?.externalId;
+    const externalId = typeof raw === 'string' && raw.length > 0 ? raw : `${payload.messageId}:${payload.from}`;
+    return { idempotencyKey: `${this.id}:${instanceId}:${externalId}:${kind}:${payload.emoji}`, externalId };
   }
 
   /**
@@ -468,7 +505,12 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
    */
   protected async emitReactionReceived(params: EmitReactionReceivedParams): Promise<void> {
     const { instanceId, ...payload } = params;
-    await this.publishEventInternal('reaction.received', payload, instanceId);
+    await this.publishClaimed(
+      'reaction.received',
+      payload,
+      instanceId,
+      this.reactionClaimParams('reaction.received', instanceId, payload),
+    );
   }
 
   /**
@@ -476,7 +518,12 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
    */
   protected async emitReactionRemoved(params: EmitReactionRemovedParams): Promise<void> {
     const { instanceId, ...payload } = params;
-    await this.publishEventInternal('reaction.removed', payload, instanceId);
+    await this.publishClaimed(
+      'reaction.removed',
+      payload,
+      instanceId,
+      this.reactionClaimParams('reaction.removed', instanceId, payload),
+    );
   }
 
   /**
