@@ -38,6 +38,7 @@ import { consumerOffsets } from '@omni/db';
 import { sql } from 'drizzle-orm';
 import { type Context, Hono } from 'hono';
 import packageJson from '../../package.json';
+import { safeErrorMessage } from '../middleware/error';
 import { arePluginsDegraded, getPluginsDegradedReason } from '../plugin-state';
 import type { AppVariables, HealthCheck, HealthResponse } from '../types';
 
@@ -64,7 +65,7 @@ export const getHealth = async (c: Context<{ Variables: AppVariables }>) => {
     dbCheck = {
       status: 'error',
       latency: Date.now() - dbStart,
-      error: error instanceof Error ? error.message : 'Unknown error',
+      error: safeErrorMessage(error),
     };
   }
 

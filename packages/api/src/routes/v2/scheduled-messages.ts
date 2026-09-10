@@ -18,6 +18,7 @@ import type { ChannelType } from '@omni/core';
 import { ERROR_CODES, OmniError } from '@omni/core';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { safeErrorMessage } from '../../middleware/error';
 import { ScheduledMessageService, createPluginResolver } from '../../services/scheduled-messages';
 import type { AppVariables } from '../../types';
 
@@ -80,7 +81,7 @@ scheduledMessagesRoutes.post('/', zValidator('json', scheduleSchema), async (c) 
     if (error instanceof OmniError) throw error;
     throw new OmniError({
       code: ERROR_CODES.UNKNOWN,
-      message: error instanceof Error ? error.message : String(error),
+      message: safeErrorMessage(error, String(error)),
       recoverable: false,
       cause: error instanceof Error ? error : undefined,
     });

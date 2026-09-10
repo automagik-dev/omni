@@ -9,6 +9,7 @@
 import { zValidator } from '@hono/zod-validator';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { describeDbError } from '../../middleware/error';
 import { optionalDateParam, requiredDateParam } from '../../schemas/date-query';
 import { ApiKeyService } from '../../services/api-keys';
 import type { AppVariables } from '../../types';
@@ -78,6 +79,7 @@ eventOpsRoutes.post('/replay', zValidator('json', replayOptionsSchema), async (c
     const session = await services.eventOps.startReplay(options);
     return c.json({ data: session }, 202);
   } catch (err) {
+    if (describeDbError(err)) throw err; // let the error boundary map it (#1069)
     return c.json({ error: String(err) }, 400);
   }
 });
