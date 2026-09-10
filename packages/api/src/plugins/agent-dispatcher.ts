@@ -1169,6 +1169,9 @@ async function extractMediaFiles(
 // Media Preprocessing for Agents
 // ============================================================================
 
+/** message.received content types that never dispatch an agent (#336, #1041) */
+const NON_DISPATCHABLE_CONTENT_TYPES = new Set(['reaction', 'delete', 'unknown']);
+
 /** Emoji icons for each media content type */
 const MEDIA_ICONS: Record<string, string> = {
   audio: '\u{1F3B5}',
@@ -5653,10 +5656,14 @@ async function shouldProcessMessage(
   // triggerReactions config. Without this skip, a reaction dispatches the
   // agent as if it were a text message regardless of that config (and
   // double-dispatches when reaction.received IS configured).
-  if (payload.content?.type === 'reaction') {
-    log.debug('Skipping reaction dual-emit on message path (reaction.received owns dispatch)', {
+  //
+  // 'delete' and 'unknown' are likewise journal-only signals, not user speech
+  // (#1041): dispatching them hands the agent a placeholder to answer.
+  if (payload.content?.type && NON_DISPATCHABLE_CONTENT_TYPES.has(payload.content.type)) {
+    log.debug('Skipping non-conversational content type on message path', {
       instanceId: metadata.instanceId,
       chatId: payload.chatId,
+      contentType: payload.content.type,
     });
     return null;
   }

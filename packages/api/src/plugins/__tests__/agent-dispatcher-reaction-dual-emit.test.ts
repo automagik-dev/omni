@@ -121,6 +121,26 @@ describe('shouldProcessMessage vs reaction dual-emits', () => {
     expect(instance).toBeNull();
   });
 
+  for (const type of ['delete', 'unknown'] as const) {
+    test(`content.type='${type}' never dispatches (journal-only signal, #1041)`, async () => {
+      const h = harness({ triggerEvents: ['message.received'] });
+
+      const instance = await __test__.shouldProcessMessage(
+        h.agentRunner,
+        h.accessService,
+        h.chatsService,
+        h.messagesService,
+        h.routeResolver,
+        fakeDb(),
+        payloadOf({ type }),
+        METADATA,
+        undefined,
+      );
+
+      expect(instance).toBeNull();
+    });
+  }
+
   test('a plain text message still dispatches (guard is reaction-specific)', async () => {
     const h = harness({ triggerEvents: ['message.received'] });
 
