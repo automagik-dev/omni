@@ -292,6 +292,8 @@ omni events analytics                     # Aggregated analytics
 # Live tail (poll-based)
 omni events stream --type "message.*"      # Live tail
 omni events stream --ndjson --poll-ms 500  # NDJSON output, custom poll interval
+omni events stream -v                      # + sender, fromMe marker, contentType columns
+omni events stream --ids                   # raw uuid8 ids instead of instance/chat names
 
 # One-shot blocking wait (exits non-zero on timeout)
 omni events wait --type message.received --filter instanceId=<id> --timeout 60

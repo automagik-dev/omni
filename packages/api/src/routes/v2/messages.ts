@@ -28,7 +28,8 @@
  * - POST /messages/send/sticker  - Send sticker
  * - POST /messages/send/contact  - Send contact card
  * - POST /messages/send/location - Send location
- * - POST /messages/send/handoff  - Send handoff message (Gupshup only)
+ * - POST /messages/send/handoff  - Send handoff message (asc-flow)
+ * - POST /messages/send/close-contact - Close contact (asc-flow)
  *
  * @see unified-messages wish
  */
@@ -1813,9 +1814,9 @@ messagesRoutes.post('/send/location', zValidator('json', sendLocationSchema), as
 });
 
 /**
- * POST /messages/send/handoff - Send handoff message (Gupshup only)
+ * POST /messages/send/handoff - Send handoff message (asc-flow)
  *
- * Sends msg_type: HANDOFF to Gupshup, sets agentPaused: true on the chat,
+ * Sends msg_type: HANDOFF via the asc-flow channel, sets agentPaused: true on the chat,
  * and disarms any active follow-up sequence via the existing event chain.
  */
 messagesRoutes.post('/send/handoff', zValidator('json', sendHandoffSchema), async (c) => {

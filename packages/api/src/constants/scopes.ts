@@ -33,6 +33,7 @@ export const SCOPE_MAP: Record<string, string> = {
   'PATCH /access/rules/:id': 'access:write',
   'DELETE /access/rules/:id': 'access:write',
   'POST /access/check': 'access:read',
+  'GET /access': 'access:read',
 
   // --- agent-routes (mounted at root: /instances/:instanceId/routes/...) ---
   'GET /instances/:instanceId/routes': 'routes:read',
@@ -61,7 +62,7 @@ export const SCOPE_MAP: Record<string, string> = {
   'PATCH /agents/:id': 'agents:write',
   'DELETE /agents/:id': 'agents:write',
   'GET /agents/:id/identities': 'agents:read',
-  'POST /agents/:id/identities': 'agents:write',
+  'POST /agents/:id/identities/link': 'agents:write',
   'GET /agents/:id/manifest': 'agents:read',
   'PUT /agents/:id/manifest': 'agents:write',
   'GET /agents/:id/tasks': 'agents:read',
@@ -95,6 +96,9 @@ export const SCOPE_MAP: Record<string, string> = {
   'GET /chats': 'chats:read',
   'POST /chats': 'chats:write',
   'GET /chats/:id': 'chats:read',
+  'PATCH /chats/:id/participants/:platformUserId/role': 'chats:write',
+  'POST /chats/:id/reopen-contact': 'chats:write',
+  'POST /chats/clear-session': 'chats:write',
   'PATCH /chats/:id': 'chats:write',
   'DELETE /chats/:id': 'chats:write',
   'POST /chats/:id/archive': 'chats:write',
@@ -110,7 +114,6 @@ export const SCOPE_MAP: Record<string, string> = {
   'GET /chats/:id/participants': 'chats:read',
   'POST /chats/:id/participants': 'chats:write',
   'DELETE /chats/:id/participants/:platformUserId': 'chats:write',
-  'PATCH /chats/:id/participants/:platformUserId': 'chats:write',
   'GET /chats/:id/messages': 'chats:read',
   'GET /chats/by-external': 'chats:read',
   'POST /chats/:id/read': 'chats:write',
@@ -159,6 +162,11 @@ export const SCOPE_MAP: Record<string, string> = {
   'GET /events/schemas': 'events:read',
   'GET /events/schemas/:eventType': 'events:read',
   'POST /events/schemas': 'events:write',
+  'GET /events/consumers/:name': 'events:read',
+  'POST /events/consumers': 'events:write',
+  'DELETE /events/consumers/:name': 'events:write',
+  'POST /events/consumers/:name/pull': 'events:write',
+  'POST /events/consumers/:name/ack': 'events:write',
 
   // --- events ---
   'GET /events': 'events:read',
@@ -223,6 +231,16 @@ export const SCOPE_MAP: Record<string, string> = {
   'POST /instances/:id/groups/:groupJid/invite/revoke': 'instances:write',
   'POST /instances/:id/groups/join': 'instances:write',
   'PUT /instances/:id/groups/:groupJid/picture': 'instances:write',
+  'PUT /instances/:id/groups/:groupJid/subject': 'instances:write',
+  'POST /instances/:id/groups/:groupJid/subject': 'instances:write',
+  'PUT /instances/:id/groups/:groupJid/description': 'instances:write',
+  'POST /instances/:id/groups/:groupJid/description': 'instances:write',
+  'POST /instances/:id/groups/:groupJid/settings': 'instances:write',
+  'PATCH /instances/:id/groups/:groupJid': 'instances:write',
+  'POST /instances/:id/groups/:groupJid/participants': 'instances:write',
+  'PATCH /instances/:id/groups/:groupJid/participants': 'instances:write',
+  'POST /instances/:id/groups/:groupJid/participants/:action': 'instances:write',
+  'POST /instances/:id/groups/:groupJid/leave': 'instances:write',
   'GET /instances/:id/privacy': 'instances:read',
   'POST /instances/:id/calls/reject': 'instances:write',
   'POST /instances/:id/resync': 'instances:write',
@@ -259,6 +277,7 @@ export const SCOPE_MAP: Record<string, string> = {
   'POST /media/imagine': 'media:write',
   'POST /media/vision': 'media:read',
   'POST /media/film': 'media:write',
+  'POST /media/music': 'media:write',
   'GET /media/:instanceId/*': 'media:read',
 
   // --- messages ---
@@ -267,6 +286,7 @@ export const SCOPE_MAP: Record<string, string> = {
   'POST /messages/media/download': 'messages:read',
   'POST /messages': 'messages:write',
   'GET /messages/:id': 'messages:read',
+  'GET /messages/:id/permalink': 'messages:read',
   'PATCH /messages/:id': 'messages:write',
   'DELETE /messages/:id': 'messages:write',
   'POST /messages/:id/edit': 'messages:write',
@@ -283,6 +303,8 @@ export const SCOPE_MAP: Record<string, string> = {
   'POST /messages/send/sticker': 'messages:send',
   'POST /messages/send/contact': 'messages:send',
   'POST /messages/send/location': 'messages:send',
+  'POST /messages/send/handoff': 'messages:send',
+  'POST /messages/send/close-contact': 'messages:send',
   'GET /messages/tts/voices': 'messages:read',
   'POST /messages/send/tts': 'messages:send',
   'POST /messages/send/forward': 'messages:send',
@@ -295,6 +317,16 @@ export const SCOPE_MAP: Record<string, string> = {
   'POST /messages/delete-channel': 'messages:send',
   'POST /messages/:id/star': 'messages:write',
   'DELETE /messages/:id/star': 'messages:write',
+
+  // --- scheduled-messages (#889) ---
+  'GET /scheduled-messages': 'messages:read',
+  'GET /scheduled-messages/:id': 'messages:read',
+  'POST /scheduled-messages': 'messages:send',
+  'DELETE /scheduled-messages/:id': 'messages:send',
+
+  // --- slack (#889) ---
+  'GET /slack/search': 'messages:read',
+  'POST /slack/dm/open': 'messages:send',
 
   // --- metrics ---
   'GET /metrics': 'metrics:read',
@@ -399,5 +431,6 @@ export const SCOPE_MAP: Record<string, string> = {
   'PATCH /webhook-sources/:id': 'webhooks:write',
   'DELETE /webhook-sources/:id': 'webhooks:write',
   'POST /webhooks/:source': 'webhooks:write',
+  'POST /webhooks/:source/heartbeat': 'webhooks:write',
   'POST /events/trigger': 'events:write',
 };

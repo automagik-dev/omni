@@ -1841,9 +1841,9 @@
       "uiStatus": "operable"
     },
     {
-      "key": "PATCH /chats/:id/participants/:platformUserId",
+      "key": "PATCH /chats/:id/participants/:platformUserId/role",
       "method": "PATCH",
-      "route": "/chats/:id/participants/:platformUserId",
+      "route": "/chats/:id/participants/:platformUserId/role",
       "resource": "chats",
       "scope": "chats:write",
       "inOpenApi": false,
@@ -2101,9 +2101,9 @@
       "uiStatus": "ux-complete"
     },
     {
-      "key": "POST /agents/:id/identities",
+      "key": "POST /agents/:id/identities/link",
       "method": "POST",
-      "route": "/agents/:id/identities",
+      "route": "/agents/:id/identities/link",
       "resource": "agents",
       "scope": "agents:write",
       "inOpenApi": false,
