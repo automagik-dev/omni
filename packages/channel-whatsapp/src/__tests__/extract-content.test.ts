@@ -302,6 +302,43 @@ describe('extractContent — bot-interactive messages (omni#902)', () => {
     expect(content?.text).toBe('Sem mídia\n[Ok]');
   });
 
+  it('unwraps the Baileys editedMessage envelope into an edit with its new text (#1061)', () => {
+    const content = extractContent(
+      wrap({
+        editedMessage: {
+          message: {
+            protocolMessage: {
+              key: { id: 'ORIG123', remoteJid: '5511999998888@s.whatsapp.net', fromMe: false },
+              type: 14,
+              editedMessage: { conversation: 'corrected text' },
+            },
+          },
+        },
+      }),
+    );
+    expect(content?.type).toBe('edit');
+    expect(content?.targetMessageId).toBe('ORIG123');
+    expect(content?.editedText).toBe('corrected text');
+  });
+
+  it('edited media caption is carried as the edit text (#1061)', () => {
+    const content = extractContent(
+      wrap({
+        editedMessage: {
+          message: {
+            protocolMessage: {
+              key: { id: 'ORIG456' },
+              type: 14,
+              editedMessage: { imageMessage: { caption: 'new caption' } },
+            },
+          },
+        },
+      }),
+    );
+    expect(content?.type).toBe('edit');
+    expect(content?.editedText).toBe('new caption');
+  });
+
   it('unknown payloads carry no placeholder text (#1041)', () => {
     const content = extractContent(wrap({ secretEncryptedMessage: { encIv: 'x' } }));
     expect(content?.type).toBe('unknown');
