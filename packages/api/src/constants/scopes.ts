@@ -283,6 +283,8 @@ export const SCOPE_MAP: Record<string, string> = {
   'POST /messages/send/sticker': 'messages:send',
   'POST /messages/send/contact': 'messages:send',
   'POST /messages/send/location': 'messages:send',
+  'POST /messages/send/handoff': 'messages:send',
+  'POST /messages/send/close-contact': 'messages:send',
   'GET /messages/tts/voices': 'messages:read',
   'POST /messages/send/tts': 'messages:send',
   'POST /messages/send/forward': 'messages:send',
