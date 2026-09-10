@@ -608,7 +608,7 @@ export class WebhookService {
   async trigger(
     eventType: CustomEventType,
     payload: Record<string, unknown>,
-    metadata?: { correlationId?: string; instanceId?: string },
+    metadata?: { correlationId?: string; causationId?: string; instanceId?: string },
   ): Promise<{ eventId: string; published: boolean }> {
     // Provisional id for the schema gate's dead-letter reference and the
     // no-bus fallback; the publish path returns the PUBLISHED event's id (#956).
@@ -626,6 +626,9 @@ export class WebhookService {
       // never matched the journal).
       const result = await this.eventBus.publishGeneric(eventType, payload, {
         correlationId: metadata?.correlationId,
+        // Parent event for agent/CLI emissions mid-flow (#1072) — the journal
+        // consumer persists it as causation_id, exactly like emit_event.
+        causationId: metadata?.causationId,
         instanceId: metadata?.instanceId,
         source: 'manual-trigger',
       });
