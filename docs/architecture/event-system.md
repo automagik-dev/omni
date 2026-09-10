@@ -881,6 +881,17 @@ reaction performs — however deep inside a channel plugin — is stamped withou
 threading parameters through every signature. Precedence: **explicit metadata
 wins, then the ambient context, then self-reference** (roots).
 
+Emissions made **outside** a reaction (a script, a CI step, a human) have no
+ambient context and would become roots. `POST /api/v2/events/trigger` accepts
+an explicit `causationId`, and `omni webhooks trigger --causation-id
+<event-id>` sets it, so a mid-flow emission stays attached to the event it
+answers:
+
+```bash
+omni webhooks trigger --type custom.deploy.finished \
+  --payload '{"sha":"abc123"}' --causation-id <event-id>
+```
+
 Tracing surfaces:
 
 - `GET /api/v2/events/:id/trace` — walks ancestors up to the root and
@@ -923,7 +934,8 @@ from outside.
 
 A durable consumer is a **Postgres-registered name with a cursor over the
 journal** — a row in `durable_consumers`: `name` (unique), an `event_type`
-filter (trailing-`*` prefix glob), `filters` jsonb (payload conditions), and
+filter (trailing-`*` prefix glob), `exclude_types` jsonb (globs dropped from
+the stream, null = none), `filters` jsonb (payload conditions), and
 a `cursor` bigint over `journal_seq`. These are **not NATS JetStream
 durables** — NATS offsets live in `consumer_offsets`, a different table used
 for gap detection.
@@ -951,6 +963,12 @@ syntax (`>` and mid-token `*` are not supported). The glob works in
 `events list`, `events stream`, `events wait`, and durable-consumer filters.
 It is **not** supported in automation triggers (exact type match) or agent
 event manifests (exact types only).
+
+The same syntax drives **exclusion**: `--exclude <glob>` (repeatable) on
+`events stream` / `events wait` / `events consumers create`, `excludeEventType`
+on `GET /events`, and `excludeTypes` on consumer registration. Exclusion wins
+over inclusion, so `--type "custom.*" --exclude "custom.chat.*"` keeps
+application events without the housekeeping noise.
 
 ## Webhook Event Sources (External Ingress)
 
@@ -1004,6 +1022,33 @@ with a deterministic idempotency key derived from
 `(event, automation, actionIndex)`, so retries and redeliveries of the same
 run skip already-journaled emissions. This is a journal-level claim, not a
 database outbox table.
+
+## Agent Usage & Cost
+
+When a routed dispatch or an automation `call_agent` action completes, the
+provider's usage is stamped on the journal row of the **event that woke the
+agent** — no dedicated columns:
+
+- `omni_events.metadata.agentUsage` = `{ providerId, runId, costUsd?,
+  tokensIn?, tokensOut?, model? }` (`AgentUsageSchema` in `@omni/core`).
+  Providers expose different surfaces: claude-code reports cost and model,
+  Agno reports tokens and model, webhook/A2A/AG-UI report nothing — then
+  nothing is stamped rather than a row of zeros.
+- `omni_events.agent_latency_ms` = provider round-trip.
+
+Cost per event type, agent, or chat is a plain aggregation over the JSONB
+path, grouped by whatever the row already carries:
+
+```sql
+SELECT event_type, sum((metadata->'agentUsage'->>'costUsd')::numeric) AS cost_usd
+FROM omni_events
+WHERE metadata ? 'agentUsage'
+GROUP BY event_type;
+```
+
+`GET /api/v2/events/analytics` returns the window's sum as `totalCostUsd`;
+`omni events analytics` prints it. Streaming and turn-based dispatch are not
+stamped (no provider result to read).
 
 ## Event Payload Storage
 
