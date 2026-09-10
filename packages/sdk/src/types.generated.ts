@@ -10581,6 +10581,7 @@ export interface operations {
                 channel?: string;
                 instanceId?: string;
                 personId?: string;
+                chatId?: string;
                 eventType?: string;
                 contentType?: string;
                 direction?: "inbound" | "outbound";

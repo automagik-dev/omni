@@ -1638,6 +1638,8 @@ export class DiscordPlugin extends BaseChannelPlugin {
         deletedMessageId: messageId,
         deletedAt: Date.now(),
         deletedByMe: fromMe,
+        // #1062: persistence journals rawPayload.isFromMe=true echoes as outbound.
+        isFromMe: fromMe,
       },
     });
 

@@ -19,7 +19,13 @@
  * BEFORE INSERT derivation trigger, so no column is added here.
  */
 
-import type { EventBus, MessageReceivedPayload, MessageSentPayload, OmniEvent } from '@omni/core';
+import type {
+  EventBus,
+  MessageReceivedPayload,
+  MessageSentPayload,
+  OmniEvent,
+  ReactionReceivedPayload,
+} from '@omni/core';
 import { JOURNEY_STAGES, createLogger, getJourneyTracker, isValidUuid } from '@omni/core';
 import type { Database, NewOmniEvent } from '@omni/db';
 import { type ChannelType, type ContentType, channelTypes, chats, contentTypes, omniEvents, persons } from '@omni/db';
@@ -460,6 +466,54 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
       },
       { ...CONSUMER_OPTIONS, durable: 'event-persistence-failed' },
     );
+
+    // Subscribe to reaction.received / reaction.removed (#1059). Reactions
+    // live on the REACTION stream, not MESSAGE, so none of the subscribers
+    // above ever saw them; once #1045 stopped dual-emitting them as
+    // message.received they vanished from the journal entirely. Each gets its
+    // own row (a reaction is a fact, not a mutation of the target row):
+    // externalId is the target message id so --message filters still match.
+    for (const type of ['reaction.received', 'reaction.removed'] as const) {
+      await eventBus.subscribe(
+        type,
+        async (event) => {
+          const payload = event.payload as ReactionReceivedPayload;
+          const metadata = event.metadata;
+          try {
+            await runConsumerInTenantContext(db, event, async () => {
+              const sdb = scopedHandle(db);
+              const chatLink = await resolveChatLink(sdb, metadata.instanceId, payload.chatId);
+              const personId = await resolvePersonId(sdb, metadata.personId);
+              const newEvent: NewOmniEvent = {
+                ...eventIdInsert(event.id),
+                externalId: payload.messageId,
+                channel: mapChannelType(metadata.channelType),
+                instanceId: metadata.instanceId,
+                personId,
+                eventType: type,
+                chatId: payload.chatId,
+                contentType: 'reaction',
+                textContent: sanitizeText(payload.emoji),
+                // #1034 convention: own-account reactions (from the phone) are outbound
+                direction: payload.rawPayload?.isFromMe === true ? 'outbound' : 'inbound',
+                status: 'completed',
+                receivedAt: new Date(event.timestamp),
+                rawPayload: deepSanitize({ ...payload, rawPayload: payload.rawPayload ?? null }),
+                metadata: { correlationId: metadata.correlationId, from: payload.from, emoji: payload.emoji },
+                causationId: metadata.causationId ?? null,
+                conversationId: null,
+                ...chatLink,
+              };
+              await sdb.insert(omniEvents).values(newEvent).onConflictDoNothing({ target: omniEvents.id });
+            });
+            log.debug(`Persisted ${type}`, { messageId: payload.messageId, emoji: payload.emoji });
+          } catch (error) {
+            log.error(`Failed to persist ${type}`, { messageId: payload.messageId, error: String(error) });
+          }
+        },
+        { ...CONSUMER_OPTIONS, durable: `event-persistence-${type.replace('.', '-')}` },
+      );
+    }
 
     // Subscribe to ALL custom events (#957). Webhook ingress roots and
     // automation emit_event hops live on the CUSTOM stream but were never
