@@ -60,7 +60,7 @@ describe('WhatsApp self-edit echo on messages.upsert', () => {
     const h = harness();
     h.ev.emit('messages.upsert', selfEditUpsert('ORIG-SELF-1', 'texto corrigido'));
     await flush();
-    expect(h.handleEdited).toHaveBeenCalledWith('inst-1', 'ORIG-SELF-1', GROUP, 'texto corrigido', true);
+    expect(h.handleEdited).toHaveBeenCalledWith('inst-1', 'ORIG-SELF-1', GROUP, 'texto corrigido', true, ME);
   });
 
   it('does not emit twice when the same edit also arrives on messages.update', async () => {
@@ -84,7 +84,7 @@ describe('WhatsApp self-edit echo on messages.upsert', () => {
     h.ev.emit('messages.upsert', selfEditUpsert('ORIG-SELF-3', 'segunda correção'));
     await flush();
     expect(h.handleEdited).toHaveBeenCalledTimes(2);
-    expect(h.handleEdited).toHaveBeenLastCalledWith('inst-1', 'ORIG-SELF-3', GROUP, 'segunda correção', true);
+    expect(h.handleEdited).toHaveBeenLastCalledWith('inst-1', 'ORIG-SELF-3', GROUP, 'segunda correção', true, ME);
   });
 
   it('an upsert edit without new text still defers to messages.update', async () => {

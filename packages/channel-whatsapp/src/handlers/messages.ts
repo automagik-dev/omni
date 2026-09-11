@@ -14,7 +14,7 @@ import { createDownloadGuard, createInboundDedupeCache, createMediaBackend, sani
 import type { DedupeCache, MediaStorageBackend } from '@omni/channel-sdk';
 import { createLogger } from '@omni/core';
 import type { ContentType } from '@omni/core/types';
-import { normalizeMessageContent } from 'baileys';
+import { normalizeMessageContent, proto as protoNs } from 'baileys';
 import type { MessageUpsertType, WAMessage, WAMessageKey, WASocket, proto } from 'baileys';
 import { fromJid, isLidJid, isUserJid, resolveCanonicalJid, resolveToPhoneJidLegacy } from '../jid';
 import type { WhatsAppPlugin } from '../plugin';
@@ -27,9 +27,13 @@ import {
   getWhatsAppMediaDownloadMaxBytes,
 } from '../utils/download';
 import { getDocumentMessage, getMessageContextInfo } from '../utils/message';
+import { decryptMsgSecret, getMessageSecret, rememberMessageSecret } from '../utils/msg-secret';
 import { getMediaSize } from './media';
 
 const log = createLogger('whatsapp:messages');
+
+/** Runtime protobuf codec (the `proto` type import is types-only). */
+const protoMessage = protoNs.Message;
 
 /** Fallback dedupe cache — used when no per-instance cache is provided */
 const fallbackDedupeCache = createInboundDedupeCache();
@@ -87,10 +91,27 @@ interface ExtractedContent {
   // Edit-specific fields
   editedText?: string;
   editedMessageId?: string;
+  /** msgSecret envelope of an encrypted edit (#1061) — decrypted in handleSpecialMessage. */
+  encryptedEdit?: { encIv: Uint8Array; encPayload: Uint8Array };
 }
 
 type MessageContent = proto.IMessage;
 type ContentExtractor = (message: MessageContent) => ExtractedContent | null;
+
+/**
+ * The plaintext inside an encrypted edit is a full `proto.Message` whose
+ * `protocolMessage.editedMessage` holds the new content — the same shape the old
+ * plaintext path carried, just wrapped and encrypted (#1061).
+ */
+function decodeEditPlaintext(plaintext: Buffer): MessageContent | undefined {
+  try {
+    const decoded = protoMessage.decode(plaintext) as unknown as MessageContent;
+    return decoded?.protocolMessage?.editedMessage ?? undefined;
+  } catch (error) {
+    log.debug('Failed to decode decrypted edit payload', { error: String(error) });
+    return undefined;
+  }
+}
 
 /** New text of an edit: body of a text message, or the caption of a media message. */
 function extractEditedText(edited: MessageContent | null | undefined): string | undefined {
@@ -401,6 +422,25 @@ const contentExtractors: Array<{ check: (m: MessageContent) => boolean; extract:
           : undefined,
       },
     }),
+  },
+  // Secret-encrypted message — WhatsApp's msgSecret envelope. Edits moved here from
+  // the plaintext protocol message (#1061): the new text is encrypted under the
+  // ORIGINAL message's secret, so this extractor only surfaces the envelope and the
+  // target; decryption happens in `handleSpecialMessage`, which can reach the secret.
+  {
+    check: (m) => !!m.secretEncryptedMessage,
+    extract: (m) => {
+      const sec = m.secretEncryptedMessage;
+      // SecretEncType: 1 = EVENT_EDIT, 2 = MESSAGE_EDIT
+      const encType = sec?.secretEncType as number | string | undefined;
+      const isMessageEdit = encType === 2 || encType === 'MESSAGE_EDIT';
+      if (!isMessageEdit || !sec?.encPayload || !sec?.encIv) return null;
+      return {
+        type: 'edit' as ContentType,
+        targetMessageId: sec.targetMessageKey?.id ?? undefined,
+        encryptedEdit: { encIv: sec.encIv, encPayload: sec.encPayload },
+      };
+    },
   },
   // Protocol message - handles internal WhatsApp protocol events
   // Types: 0=REVOKE, 3=EPHEMERAL_SETTING, 4=EPHEMERAL_SYNC, 5=HISTORY_SYNC,
@@ -814,6 +854,46 @@ export async function tryDownloadMedia(
 }
 
 /**
+ * Encrypted edit (#1061): WhatsApp ships the new text under the ORIGINAL message's
+ * secret. Decrypt with the secret we stored for that message; a miss (secret never
+ * seen, process restart, unknown scheme) degrades to the previous behaviour — the
+ * edit stays unreadable and nothing throws.
+ */
+async function handleEncryptedEdit(
+  plugin: WhatsAppPlugin,
+  instanceId: string,
+  content: ExtractedContent,
+  chatId: string,
+  msg: WAMessage,
+): Promise<void> {
+  const targetMessageId = content.targetMessageId as string;
+  const stored = getMessageSecret(targetMessageId);
+  if (!stored) {
+    log.debug('Encrypted edit with no stored secret for the original message', { instanceId, targetMessageId });
+    return;
+  }
+  const modificationSenderJid = msg.key.participant || msg.key.remoteJid || stored.senderJid;
+  const plaintext = decryptMsgSecret({
+    encIv: content.encryptedEdit?.encIv as Uint8Array,
+    encPayload: content.encryptedEdit?.encPayload as Uint8Array,
+    originalMessageSecret: stored.secret,
+    originalMessageId: targetMessageId,
+    originalSenderJid: stored.senderJid,
+    modificationSenderJid,
+  });
+  const editedText = plaintext ? extractEditedText(decodeEditPlaintext(plaintext)) : undefined;
+  if (!editedText || !rememberEdit(targetMessageId, editedText)) return;
+  await plugin.handleMessageEdited(
+    instanceId,
+    targetMessageId,
+    chatId,
+    editedText,
+    isFromMe(msg),
+    modificationSenderJid,
+  );
+}
+
+/**
  * Handle special message types (reactions, edits, deletes).
  * Returns true if the message was handled and should not be processed further.
  */
@@ -840,16 +920,19 @@ async function handleSpecialMessage(
   }
 
   if (content.type === 'edit') {
-    // Edits normally arrive on `messages.update`, which hands us the original key plus
-    // the normalized new content. But an edit made on ANOTHER device of this same
-    // account syncs as a protocol message on `messages.upsert` and never produces an
-    // update event — swallowing it there lost the edit entirely (#1061).
-    //
-    // So: emit whenever the upsert already carries the new text. `messages.update` may
-    // still fire for the same edit (third-party edits reach us both ways), and
-    // `rememberEdit` keeps the second one from double-journaling it.
+    if (content.encryptedEdit && content.targetMessageId) {
+      await handleEncryptedEdit(plugin, instanceId, content, chatId, msg);
+      return true;
+    }
     if (content.editedText && content.targetMessageId && rememberEdit(content.targetMessageId, content.editedText)) {
-      await plugin.handleMessageEdited(instanceId, content.targetMessageId, chatId, content.editedText, isFromMe(msg));
+      await plugin.handleMessageEdited(
+        instanceId,
+        content.targetMessageId,
+        chatId,
+        content.editedText,
+        isFromMe(msg),
+        msg.key.participant || msg.key.remoteJid || undefined,
+      );
       return true;
     }
     log.debug('Edit protocol message seen on upsert without new text; awaiting messages.update', {
@@ -1011,6 +1094,14 @@ async function processMessage(
   // DEBUG: Log full raw payload for development
   if (process.env.DEBUG_PAYLOADS === 'true') {
     log.debug('Raw payload', { msgId: msg.key.id, payload: msg });
+  }
+
+  // An edit arrives encrypted under the ORIGINAL message's secret and never repeats
+  // it, so remember the secret of every message as it lands (#1061). Cheap, bounded,
+  // and the only way a later edit becomes readable without a durable secret store.
+  const inboundSecret = msg.message?.messageContextInfo?.messageSecret;
+  if (inboundSecret && msg.key.id) {
+    rememberMessageSecret(msg.key.id, inboundSecret, msg.key.participant || msg.key.remoteJid || '');
   }
 
   const content = extractContent(msg);
