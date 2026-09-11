@@ -4592,6 +4592,8 @@ export interface components {
              * @description Instance ID for context
              */
             instanceId?: string;
+            /** @description Producer-supplied ingress key (#1109). Unique per instance (else per tenant), not global. A key already journaled publishes nothing and returns the ORIGINAL event id with duplicate: true. Omit for undeduped publishing. */
+            idempotencyKey?: string;
         };
         WebhookReceiveResponse: {
             /**
@@ -13195,6 +13197,8 @@ export interface operations {
                      * @description Instance ID for context
                      */
                     instanceId?: string;
+                    /** @description Producer-supplied ingress key (#1109). Unique per instance (else per tenant), not global. A key already journaled publishes nothing and returns the ORIGINAL event id with duplicate: true. Omit for undeduped publishing. */
+                    idempotencyKey?: string;
                 };
             };
         };

@@ -23,9 +23,9 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { EventBus } from '@omni/core';
+import type { CustomEventType, EventBus } from '@omni/core';
 import { executeActions } from '@omni/core';
-import { type Database, createDbHandle, omniEvents, webhookSources } from '@omni/db';
+import { type Database, type NewOmniEvent, createDbHandle, omniEvents, webhookSources } from '@omni/db';
 import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { eq } from 'drizzle-orm';
 import { buildAutomationEngineDeps } from '../../plugins/automation-actions';
@@ -60,6 +60,35 @@ function urlFor(base: string, database: string): string {
 interface PublishedEvent {
   type: string;
   payload: Record<string, unknown>;
+}
+
+/**
+ * A recording bus that ALSO does what the `custom.>` persistence consumer does
+ * with a published event: insert its journal row, `onConflictDoNothing` on id.
+ * Row counts asserted against it therefore mean what they mean in production —
+ * a claimed publish fills its own claim row, an unclaimed one adds a new row.
+ */
+function journalingBus(events: PublishedEvent[], db: Database): EventBus {
+  return {
+    publishGeneric: async (type: string, payload: Record<string, unknown>, metadata?: Record<string, unknown>) => {
+      const id = (metadata?.publishEventId as string | undefined) ?? crypto.randomUUID();
+      events.push({ type, payload });
+      await db
+        .insert(omniEvents)
+        .values({
+          id,
+          channel: 'internal',
+          eventType: type as NewOmniEvent['eventType'],
+          direction: 'internal',
+          status: 'completed',
+          receivedAt: new Date(),
+          rawPayload: payload,
+          metadata: { source: 'manual-trigger' },
+        })
+        .onConflictDoNothing({ target: omniEvents.id });
+      return { id, type, timestamp: Date.now(), payload, metadata };
+    },
+  } as unknown as EventBus;
 }
 
 /** An EventBus fake that records generic publishes (all this path uses). */
@@ -179,6 +208,46 @@ postgresDescribe('webhook ingress idempotency (real PostgreSQL)', () => {
     const retry = await service.receive('gh-flaky', payload, {}, { rawBody });
     expect(retry.duplicate).toBeUndefined();
     expect(published).toHaveLength(1);
+  });
+
+  test('manual trigger replayed with the same key → one journal row, same event id, hit reported (#1109)', async () => {
+    const before = await eventCount();
+    const published: PublishedEvent[] = [];
+    const service = new WebhookService(db, journalingBus(published, db));
+    const eventType = 'custom.connector.window' as CustomEventType;
+    const payload = { window: '2026-09-11', items: 3 };
+
+    const first = await service.trigger(eventType, payload, { idempotencyKey: 'window-2026-09-11' });
+    const second = await service.trigger(eventType, payload, { idempotencyKey: 'window-2026-09-11' });
+
+    expect(first.duplicate).toBe(false);
+    expect(second.duplicate).toBe(true); // the hit is visible to the caller
+    expect(second.published).toBe(false);
+    expect(second.eventId).toBe(first.eventId); // ...and the retry still gets a usable id
+
+    expect(published).toHaveLength(1);
+    expect(await eventCount()).toBe(before + 1);
+
+    const rows = await db.select().from(omniEvents).where(eq(omniEvents.id, first.eventId));
+    expect(rows).toHaveLength(1);
+    // Scoped like channel ingress (per instance, else per tenant) — never the bare key.
+    expect(rows[0]?.idempotencyKey).toBe('manual:global:window-2026-09-11');
+  });
+
+  test('manual trigger with NO key → identical payloads still journal twice (#1109)', async () => {
+    const before = await eventCount();
+    const published: PublishedEvent[] = [];
+    const service = new WebhookService(db, journalingBus(published, db));
+    const eventType = 'custom.connector.window' as CustomEventType;
+    const payload = { window: '2026-09-11', items: 3 };
+
+    const first = await service.trigger(eventType, payload);
+    const second = await service.trigger(eventType, payload);
+
+    expect(first.eventId).not.toBe(second.eventId);
+    expect(second.duplicate).toBeUndefined();
+    expect(published).toHaveLength(2);
+    expect(await eventCount()).toBe(before + 2);
   });
 
   test('re-running an automation over the same event → no duplicate emission (derived key)', async () => {
