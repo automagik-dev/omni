@@ -2,7 +2,8 @@
  * Automation Engine
  *
  * Orchestrates event handling with:
- * - Per-instance queues with bounded concurrency
+ * - Per-instance queues with bounded concurrency, or a queue private to one
+ *   automation when it sets its own concurrency controls (#1108)
  * - Message debouncing per conversation
  * - Condition evaluation
  * - Action execution
@@ -23,16 +24,29 @@ import {
   type DebouncedMessage,
   buildConversationKey,
 } from './debounce';
-import { type TemplateContext, createTemplateContext } from './templates';
+import { type TemplateContext, createTemplateContext, substituteTemplate } from './templates';
 import type { ActionExecutionResult, Automation, AutomationLogStatus, DebounceConfig, NewAutomationLog } from './types';
 
 const logger = createLogger('automations:engine');
 
 /**
- * Per-instance queue for bounded concurrency
+ * A queue with bounded concurrency.
+ *
+ * The key is the instance id by default — one queue per instance, as it has
+ * always been. An automation that sets `maxConcurrency`/`concurrencyKey`
+ * (#1108) gets its own queue instead, keyed `${instanceId}:${automationId}`
+ * and optionally suffixed with its rendered partition.
  */
 interface InstanceQueue {
-  instanceId: string;
+  key: string;
+  /**
+   * Drop this queue from the map once it goes idle. True for the #1108
+   * per-automation queues: a `concurrencyKey` is rendered from payload
+   * content, so the map would otherwise grow one entry per chat/account and
+   * never shrink. Instance queues are bounded by the instance count and stay,
+   * as they always have.
+   */
+  evictWhenIdle: boolean;
   activeCount: number;
   maxConcurrency: number;
   pending: Array<{
@@ -94,11 +108,12 @@ export interface EngineConfig {
  */
 export class QueueFullError extends Error {
   constructor(
-    public readonly instanceId: string,
+    /** Queue key: the instance id, or `${instanceId}:${automationId}[:partition]` (#1108). */
+    public readonly queueKey: string,
     public readonly queueDepth: number,
     public readonly maxDepth: number,
   ) {
-    super(`Queue full for instance ${instanceId}: ${queueDepth}/${maxDepth} pending`);
+    super(`Queue full for ${queueKey}: ${queueDepth}/${maxDepth} pending`);
     this.name = 'QueueFullError';
   }
 }
@@ -108,7 +123,7 @@ export class QueueFullError extends Error {
  */
 export class AutomationEngine {
   private subscriptions = new Map<string, Subscription>();
-  private instanceQueues = new Map<string, InstanceQueue>();
+  private queues = new Map<string, InstanceQueue>();
   private debounceManagers = new Map<string, DebounceManager>(); // automationId -> manager
   private automations: Automation[] = [];
   private eventBus: EventBus | null = null;
@@ -631,7 +646,31 @@ export class AutomationEngine {
   }
 
   /**
-   * Queue an execution with per-instance concurrency control
+   * Which queue this run belongs to (#1108).
+   *
+   * Both concurrency fields absent = the instance id, today's shared
+   * per-instance queue. Either one set moves the run onto a queue private to
+   * the automation, optionally partitioned by `concurrencyKey` rendered over
+   * this event's payload — so `{{payload.from.id}}` serializes per chat while
+   * leaving unrelated chats parallel.
+   *
+   * A template that renders empty (missing field, unresolved path) falls back
+   * to the automation-wide queue rather than minting a `...:` bucket: merging
+   * into ONE queue is the conservative direction for a feature whose whole
+   * point is serialization.
+   */
+  private resolveQueueKey(automation: Automation, context: TemplateContext, instanceId: string): string {
+    if (automation.maxConcurrency == null && automation.concurrencyKey == null) return instanceId;
+
+    const base = `${instanceId}:${automation.id}`;
+    if (!automation.concurrencyKey) return base;
+
+    const partition = substituteTemplate(automation.concurrencyKey, context).trim();
+    return partition ? `${base}:${partition}` : base;
+  }
+
+  /**
+   * Queue an execution with bounded concurrency
    */
   private async queueExecution(
     automation: Automation,
@@ -639,18 +678,24 @@ export class AutomationEngine {
     context: TemplateContext,
     instanceId: string,
   ): Promise<ExecutionResult> {
-    // Get or create queue for this instance
-    let queue = this.instanceQueues.get(instanceId);
-    if (!queue) {
-      const maxConcurrency = this.config.instanceConcurrencyOverrides?.[instanceId] ?? this.config.defaultConcurrency;
-      queue = {
-        instanceId,
-        activeCount: 0,
-        maxConcurrency,
-        pending: [],
-      };
-      this.instanceQueues.set(instanceId, queue);
-    }
+    const key = this.resolveQueueKey(automation, context, instanceId);
+    // An automation's own limit wins over the instance's. Re-read on every run
+    // so an update that reaches the engine through `reload` is not shadowed by
+    // a queue minted under the previous limit.
+    const maxConcurrency =
+      automation.maxConcurrency ??
+      this.config.instanceConcurrencyOverrides?.[instanceId] ??
+      this.config.defaultConcurrency;
+
+    const queue = this.queues.get(key) ?? {
+      key,
+      evictWhenIdle: key !== instanceId,
+      activeCount: 0,
+      maxConcurrency,
+      pending: [],
+    };
+    queue.maxConcurrency = maxConcurrency;
+    this.queues.set(key, queue);
 
     // If under capacity, execute immediately
     if (queue.activeCount < queue.maxConcurrency) {
@@ -661,11 +706,11 @@ export class AutomationEngine {
     const maxQueueDepth = this.config.maxQueueDepth ?? 100;
     if (queue.pending.length >= maxQueueDepth) {
       logger.warn('Queue full, applying backpressure', {
-        instanceId,
+        queueKey: key,
         queueDepth: queue.pending.length,
         maxDepth: maxQueueDepth,
       });
-      throw new QueueFullError(instanceId, queue.pending.length, maxQueueDepth);
+      throw new QueueFullError(key, queue.pending.length, maxQueueDepth);
     }
 
     // Otherwise, queue it
@@ -680,7 +725,7 @@ export class AutomationEngine {
       });
       logger.debug('Execution queued', {
         automationId: automation.id,
-        instanceId,
+        queueKey: key,
         queueLength: queueRef.pending.length,
       });
     });
@@ -851,6 +896,13 @@ export class AutomationEngine {
           next.resolve(result);
         }
       }
+
+      // Idle per-automation queue: drop it so a payload-derived partition key
+      // cannot grow the map without bound (#1108). The identity check keeps a
+      // queue that was re-created for the same key while this frame unwound.
+      if (queue.evictWhenIdle && queue.activeCount === 0 && queue.pending.length === 0) {
+        if (this.queues.get(queue.key) === queue) this.queues.delete(queue.key);
+      }
     }
   }
 
@@ -885,11 +937,15 @@ export class AutomationEngine {
   }
 
   /**
-   * Get queue metrics
+   * Get queue metrics.
+   *
+   * `instanceId` carries the QUEUE KEY: the instance id for the default
+   * per-instance queues, or `${instanceId}:${automationId}[:partition]` for an
+   * automation running on its own queue (#1108).
    */
   getMetrics(): { instanceQueues: Array<{ instanceId: string; activeCount: number; pendingCount: number }> } {
-    const instanceQueues = Array.from(this.instanceQueues.values()).map((q) => ({
-      instanceId: q.instanceId,
+    const instanceQueues = Array.from(this.queues.values()).map((q) => ({
+      instanceId: q.key,
       activeCount: q.activeCount,
       pendingCount: q.pending.length,
     }));

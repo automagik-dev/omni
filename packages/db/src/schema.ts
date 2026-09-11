@@ -3136,6 +3136,25 @@ export const automations = pgTable(
     transactionalEmissions: boolean('transactional_emissions').notNull().default(false),
 
     /**
+     * Per-automation concurrency limit (issue #1108). NULL = today's
+     * behaviour: the run is queued per INSTANCE with the engine's default
+     * limit. Set = the run gets a queue private to this automation with this
+     * limit; `1` is strict single-flight, which is what a read-before-write
+     * handler (webhook / call_agent mutating shared state) needs to avoid a
+     * lost update between two events describing the same fact.
+     */
+    maxConcurrency: integer('max_concurrency'),
+
+    /**
+     * Optional template over the event payload (same engine as conditions and
+     * action configs) partitioning the per-automation queue — e.g.
+     * `{{payload.from.id}}` serializes per chat instead of globally. NULL =
+     * one queue for the whole automation. Only consulted once this row opts
+     * into per-automation queueing.
+     */
+    concurrencyKey: text('concurrency_key'),
+
+    /**
      * G4b manifest-compilation provenance (RFC #925, issue #986): set when
      * this automation was COMPILED from `agents.event_manifest` by the
      * manifest compiler; NULL = hand-made. Managed rows reject manual

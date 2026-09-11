@@ -75,6 +75,15 @@ describe('buildDefinition (update)', () => {
     expect(buildDefinition({})).toEqual({});
   });
 
+  test('carries the concurrency flags, and omits them when unset (#1108)', () => {
+    expect(buildDefinition({ maxConcurrency: 1, concurrencyKey: '{{payload.from.id}}' })).toEqual({
+      maxConcurrency: 1,
+      concurrencyKey: '{{payload.from.id}}',
+    });
+    // Absent flags must not appear in the PATCH — the row keeps per-instance queueing.
+    expect(buildDefinition({ name: 'n' })).toEqual({ name: 'n' });
+  });
+
   test('carries trigger, conditions, logic and actions', () => {
     expect(
       buildDefinition({
