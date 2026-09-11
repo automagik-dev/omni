@@ -63,6 +63,10 @@ interface DefinitionOptions extends ActionOptions {
   // Transactional publication (G5, #988): true from --transactional-emissions,
   // undefined when the flag is not given (server default false applies).
   transactionalEmissions?: boolean;
+  // Per-automation concurrency (#1108): undefined when the flag is not given,
+  // so the field is omitted and the row keeps per-instance queueing.
+  maxConcurrency?: number;
+  concurrencyKey?: string;
 }
 
 interface CreateOptions extends DefinitionOptions {
@@ -173,6 +177,8 @@ function buildDefinition(options: DefinitionOptions): Partial<CreateAutomationBo
   if (logic !== undefined) body.conditionLogic = logic;
   if (options.priority !== undefined) body.priority = options.priority;
   if (options.transactionalEmissions !== undefined) body.transactionalEmissions = options.transactionalEmissions;
+  if (options.maxConcurrency !== undefined) body.maxConcurrency = options.maxConcurrency;
+  if (options.concurrencyKey !== undefined) body.concurrencyKey = options.concurrencyKey;
 
   return body;
 }
@@ -309,6 +315,17 @@ export function createAutomationsCommand(): Command {
       "Buffer the run's emit_event publishes and flush them in order only when every action succeeded; " +
         'a failed run publishes zero (#988). Defaults to off (immediate publishing)',
     )
+    .option(
+      '--max-concurrency <n>',
+      'Run at most N of THIS automation at a time on its own queue; 1 = strict single-flight, ' +
+        'which a read-before-write action needs (#1108). Default: queued per instance with the engine default',
+      (v) => Number.parseInt(v, 10),
+    )
+    .option(
+      '--concurrency-key <template>',
+      'Template over the event payload partitioning that queue, e.g. "{{payload.from.id}}" to serialize ' +
+        'per chat instead of globally (#1108)',
+    )
     // call_agent specific options
     .option('--agent-id <id>', 'Agent ID (for the first call_agent action)')
     .option('--provider-id <id>', 'Provider ID (for the first call_agent action)')
@@ -351,6 +368,15 @@ export function createAutomationsCommand(): Command {
         'a failed run publishes zero (#988)',
     )
     .option('--no-transactional-emissions', 'Return the automation to immediate mid-sequence publishing')
+    .option(
+      '--max-concurrency <n>',
+      'Run at most N of THIS automation at a time on its own queue; 1 = strict single-flight (#1108)',
+      (v) => Number.parseInt(v, 10),
+    )
+    .option(
+      '--concurrency-key <template>',
+      'Template over the event payload partitioning that queue, e.g. "{{payload.from.id}}" (#1108)',
+    )
     .option('--agent-id <id>', 'Agent ID (for the first call_agent action)')
     .option('--provider-id <id>', 'Provider ID (for the first call_agent action)')
     .option('--response-as <var>', 'Store agent response as variable (for the first call_agent action)')

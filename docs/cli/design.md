@@ -496,6 +496,7 @@ omni webhooks get <id>                     # Get details
 omni webhooks delete <id>                 # Delete
 omni webhooks trigger --type custom.x --payload '{...}'  # Manual event emission
 omni webhooks trigger --type custom.x --payload '{...}' --causation-id <event-id>  # Parented mid-flow emission
+omni webhooks trigger --type custom.x --payload '{...}' --idempotency-key <key>    # Replay-safe emission (dedupes)
 omni webhooks heartbeat <source>          # Connector liveness ping
 
 # Create with signature verification
@@ -535,6 +536,7 @@ Create flags:
 | `--instance <id>` | Instance context |
 | `--correlation-id <id>` | Group the emission with an existing flow |
 | `--causation-id <event-id>` | Parent event id; the emission lands under that event in `omni events trace` instead of becoming a root |
+| `--idempotency-key <key>` | Producer's ingress key, scoped per instance (else per tenant). A key already journaled publishes nothing and returns the original event id, flagged `duplicate`; omit for undeduped emission |
 
 > Recipes: [[../runbooks/github-webhook-source|GitHub webhook source]],
 > [[../runbooks/clickup-webhook-source|ClickUp webhook source]].

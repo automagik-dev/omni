@@ -225,6 +225,10 @@ export const TriggerEventSchema = z.object({
     .optional()
     .openapi({ description: 'Parent event ID; stamps causationId so the emission is parented in the causality tree' }),
   instanceId: z.string().uuid().optional().openapi({ description: 'Instance ID for context' }),
+  idempotencyKey: z.string().min(1).max(255).optional().openapi({
+    description:
+      'Producer-supplied ingress key (#1109). Unique per instance (else per tenant), not global. A key already journaled publishes nothing and returns the ORIGINAL event id with duplicate: true. Omit for undeduped publishing.',
+  }),
 });
 
 // Webhook receive response

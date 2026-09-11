@@ -94,6 +94,13 @@ const DebounceSchema = z.object({
   baseDelayMs: z.number().int().optional(),
   maxWaitMs: z.number().int().optional(),
   extendOnEvents: z.array(z.string()).optional(),
+  key: z
+    .string()
+    .optional()
+    .describe(
+      'Template over the event payload naming the debounce window (#1110), e.g. "{{payload.pull_request.id}}"; ' +
+        'absent = grouped by conversation (instance + sender). Not allowed with mode "presence"',
+    ),
 });
 
 // Automation schema
@@ -113,6 +120,23 @@ export const AutomationSchema = z.object({
       "Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order " +
       'only when every action succeeded; a failed run publishes zero',
   }),
+  maxConcurrency: z
+    .number()
+    .int()
+    .nullable()
+    .openapi({
+      description:
+        'Per-automation concurrency limit (#1108). null = queued per instance with the engine default; ' +
+        'set = a queue private to this automation, 1 being strict single-flight',
+    }),
+  concurrencyKey: z
+    .string()
+    .nullable()
+    .openapi({
+      description:
+        'Template over the event payload partitioning this automation’s queue (#1108), e.g. ' +
+        '"{{payload.from.id}}" to serialize per chat; null = one queue for the whole automation',
+    }),
   managedByAgentId: z
     .string()
     .uuid()
@@ -147,6 +171,27 @@ export const CreateAutomationSchema = z.object({
       description:
         "Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order " +
         'only when every action succeeded; a failed run publishes zero. Default false = immediate publishing',
+    }),
+  maxConcurrency: z
+    .number()
+    .int()
+    .min(1)
+    .nullable()
+    .optional()
+    .openapi({
+      description:
+        'Per-automation concurrency limit (#1108). Omit/null = today’s per-instance queueing with the engine ' +
+        'default; 1 = strict single-flight, which is what a read-before-write action needs',
+    }),
+  concurrencyKey: z
+    .string()
+    .min(1)
+    .nullable()
+    .optional()
+    .openapi({
+      description:
+        'Template over the event payload partitioning this automation’s queue (#1108), e.g. ' +
+        '"{{payload.from.id}}" to serialize per chat; omit/null = one queue for the whole automation',
     }),
 });
 
@@ -219,7 +264,11 @@ export const AutomationMetricsSchema = z.object({
   instanceQueues: z
     .array(
       z.object({
-        instanceId: z.string().openapi({ description: 'Instance ID' }),
+        instanceId: z.string().openapi({
+          description:
+            'Queue key: the instance ID, or "<instanceId>:<automationId>[:<partition>]" for an automation ' +
+            'running on its own queue (#1108)',
+        }),
         activeCount: z.number().int().openapi({ description: 'Active jobs' }),
         pendingCount: z.number().int().openapi({ description: 'Pending jobs' }),
       }),

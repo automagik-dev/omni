@@ -60,7 +60,9 @@ export function stampsEqual(a: DebounceEnvelopeStamp | null, b: DebounceEnvelope
 }
 
 /**
- * Key for grouping messages: instanceId + personId
+ * Key a window groups by. `${instanceId}:${personId}` by default, or
+ * `${instanceId}:${renderedTemplate}` when the automation sets `debounce.key`
+ * (#1110) — the manager only ever compares it, never parses it.
  */
 export type ConversationKey = string;
 
@@ -87,10 +89,18 @@ interface DebounceWindow {
   firstMessageAt: number;
   lastActivityAt: number;
   timer: ReturnType<typeof setTimeout> | null;
-  from: {
-    id: string;
-    name?: string;
-  };
+  /**
+   * Sender of the LAST message in the window — undefined for a custom-keyed
+   * window (#1110), whose events need not be chat messages at all. Held on the
+   * window rather than parsed back out of the key, which only a conversation
+   * key could ever support.
+   */
+  from:
+    | {
+        id: string;
+        name?: string;
+      }
+    | undefined;
   instanceId: string;
   /** Envelope world of every message in this window — see DebounceEnvelopeStamp. */
   stamp: DebounceEnvelopeStamp | null;
@@ -102,7 +112,8 @@ interface DebounceWindow {
 export type DebounceCallback = (
   key: ConversationKey,
   messages: DebouncedMessage[],
-  from: { id: string; name?: string },
+  /** Sender of the last event in the window; undefined when it had none. */
+  from: { id: string; name?: string } | undefined,
   instanceId: string,
   /** The window's envelope stamp; `null` when the window is legacy. */
   stamp: DebounceEnvelopeStamp | null,
@@ -132,7 +143,7 @@ export class DebounceManager {
   addMessage(
     key: ConversationKey,
     message: DebouncedMessage,
-    from: { id: string; name?: string },
+    from: { id: string; name?: string } | undefined,
     instanceId: string,
     stamp: DebounceEnvelopeStamp | null = null,
   ): void {
@@ -167,8 +178,13 @@ export class DebounceManager {
       this.windows.set(key, window);
     }
 
-    // Add message
+    // Add message. `from`/`instanceId` track the LAST event (#1110): a custom
+    // key is not parseable back into them, and for a conversation key both are
+    // components of the key itself, so following the last event changes
+    // nothing there beyond picking up a fresher display name.
     window.messages.push(message);
+    window.from = from;
+    window.instanceId = instanceId;
     window.lastActivityAt = Date.now();
 
     // Reset timer

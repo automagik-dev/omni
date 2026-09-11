@@ -6,7 +6,7 @@
  * omni webhooks create --name <name> [--description <desc>]
  * omni webhooks update <id> [--name <name>] [--enabled]
  * omni webhooks delete <id>
- * omni webhooks trigger --type <event-type> --payload <json> [--instance <id>]
+ * omni webhooks trigger --type <event-type> --payload <json> [--instance <id>] [--idempotency-key <key>]
  *
  * The signature secret can come from argv (`--signature-secret`, visible in
  * shell history and `ps`), an environment variable (`--signature-secret-env`),
@@ -559,6 +559,10 @@ export function createWebhooksCommand(): Command {
     .option('--instance <id>', 'Instance ID')
     .option('--correlation-id <id>', 'Correlation ID')
     .option('--causation-id <event-id>', 'Parent event ID (keeps the causality tree for mid-flow emissions, #1072)')
+    .option(
+      '--idempotency-key <key>',
+      'Ingress key (#1109): re-triggering with a key already journaled publishes nothing and returns the original event ID',
+    )
     .action(
       async (options: {
         type: string;
@@ -566,6 +570,7 @@ export function createWebhooksCommand(): Command {
         instance?: string;
         correlationId?: string;
         causationId?: string;
+        idempotencyKey?: string;
       }) => {
         const client = getClient();
 
@@ -584,11 +589,16 @@ export function createWebhooksCommand(): Command {
             instanceId: options.instance,
             correlationId: options.correlationId,
             causationId: options.causationId,
+            idempotencyKey: options.idempotencyKey,
           });
 
-          output.success(`Event triggered: ${result.eventId}`, {
+          // A dedup hit is not a publish — say so, and hand back the id of the
+          // event that already carries this key (#1109).
+          const headline = result.duplicate ? 'Event already published (idempotency key seen)' : 'Event triggered';
+          output.success(`${headline}: ${result.eventId}`, {
             eventId: result.eventId,
             eventType: result.eventType,
+            duplicate: result.duplicate,
           });
         } catch (err) {
           const message = err instanceof Error ? err.message : 'Unknown error';

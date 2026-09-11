@@ -892,6 +892,23 @@ omni webhooks trigger --type custom.deploy.finished \
   --payload '{"sha":"abc123"}' --causation-id <event-id>
 ```
 
+A custom event can also carry the **producer's own ingress key** so a cron
+retry, an overlapping run, or a backfill does not publish the same fact twice
+— the dedup channel and webhook ingress already get, instead of a ledger kept
+outside the journal by every connector:
+
+```bash
+omni webhooks trigger --type custom.deploy.finished \
+  --payload '{"sha":"abc123"}' --idempotency-key deploy:abc123
+```
+
+The key is claimed the same way channel ingress claims its own — the journal
+row IS the claim, so `omni_events.idempotency_key` is the authority — and it
+is namespaced per instance (else per tenant), so two connectors emitting a
+naive key like a bare timestamp cannot collide. A key already journaled
+publishes nothing and answers with the ORIGINAL event id and
+`{"duplicate": true}`; omitting the key publishes undeduped, as before.
+
 Tracing surfaces:
 
 - `GET /api/v2/events/:id/trace` — walks ancestors up to the root and

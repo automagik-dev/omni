@@ -3279,13 +3279,15 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     chatId: string,
     newText: string,
     fromMe = false,
+    /** Who edited — without it `editHistory[].by` records the chat instead of the author. */
+    senderJid?: string,
   ): Promise<void> {
     // Emit as a special message.received event with type 'edit'
     await this.emitMessageReceived({
       instanceId,
       externalId: `${externalId}-edit-${Date.now()}`,
       chatId,
-      from: chatId,
+      from: senderJid || chatId,
       content: {
         type: 'edit',
         text: newText,

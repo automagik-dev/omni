@@ -3094,11 +3094,23 @@ export type AutomationAction =
 /**
  * Debounce configuration for message grouping.
  */
-export type DebounceConfig =
+export type DebounceConfig = (
   | { mode: 'none' }
   | { mode: 'fixed'; delayMs: number }
   | { mode: 'range'; minMs: number; maxMs: number }
-  | { mode: 'presence'; baseDelayMs: number; maxWaitMs?: number; extendOnEvents: string[] };
+  | { mode: 'presence'; baseDelayMs: number; maxWaitMs?: number; extendOnEvents: string[] }
+) & {
+  /**
+   * What the window groups by (#1110) — a template over the event payload.
+   * Absent = the conversation `${instanceId}:${personId}` (every existing row,
+   * unchanged); set = the rendered string namespaced by instance, so a
+   * non-chat event can coalesce on the fact it describes. Lives inside the
+   * existing `debounce` jsonb, so there is no column and no migration.
+   * Rejected at validation together with `mode: 'presence'`.
+   */
+  // no-migration-needed: a new field INSIDE the existing `debounce` jsonb column (#1110). No DDL: the column, its type and every stored row are unchanged, and a row without the field means what it always meant (group by conversation).
+  key?: string;
+};
 
 /**
  * Automation rules - "When event X with conditions Y, execute actions Z."
@@ -3134,6 +3146,25 @@ export const automations = pgTable(
      * Default false = today's immediate mid-sequence publishing.
      */
     transactionalEmissions: boolean('transactional_emissions').notNull().default(false),
+
+    /**
+     * Per-automation concurrency limit (issue #1108). NULL = today's
+     * behaviour: the run is queued per INSTANCE with the engine's default
+     * limit. Set = the run gets a queue private to this automation with this
+     * limit; `1` is strict single-flight, which is what a read-before-write
+     * handler (webhook / call_agent mutating shared state) needs to avoid a
+     * lost update between two events describing the same fact.
+     */
+    maxConcurrency: integer('max_concurrency'),
+
+    /**
+     * Optional template over the event payload (same engine as conditions and
+     * action configs) partitioning the per-automation queue — e.g.
+     * `{{payload.from.id}}` serializes per chat instead of globally. NULL =
+     * one queue for the whole automation. Only consulted once this row opts
+     * into per-automation queueing.
+     */
+    concurrencyKey: text('concurrency_key'),
 
     /**
      * G4b manifest-compilation provenance (RFC #925, issue #986): set when

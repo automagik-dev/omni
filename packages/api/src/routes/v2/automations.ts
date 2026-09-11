@@ -101,25 +101,47 @@ const actionSchema = z.discriminatedUnion('type', [
   callAgentActionSchema,
 ]);
 
+// What the debounce window groups by (#1110): a template over the event
+// payload. Omitted = the conversation, which is what every pre-#1110 row means.
+const debounceKeySchema = z
+  .string()
+  .min(1)
+  .optional()
+  .describe(
+    'Template over the event payload naming the debounce window (#1110), e.g. "{{payload.pull_request.id}}"; ' +
+      'omit to group by conversation (instance + sender) as before. Not allowed with mode "presence"',
+  );
+
 // Debounce config schema
-const debounceSchema = z.discriminatedUnion('mode', [
-  z.object({ mode: z.literal('none') }),
-  z.object({
-    mode: z.literal('fixed'),
-    delayMs: z.number().int().min(100).max(300000).describe('Fixed delay in milliseconds'),
-  }),
-  z.object({
-    mode: z.literal('range'),
-    minMs: z.number().int().min(100).describe('Minimum delay'),
-    maxMs: z.number().int().max(300000).describe('Maximum delay'),
-  }),
-  z.object({
-    mode: z.literal('presence'),
-    baseDelayMs: z.number().int().min(100).describe('Base delay'),
-    maxWaitMs: z.number().int().max(300000).optional().describe('Maximum total wait'),
-    extendOnEvents: z.array(z.string()).describe('Events that extend the timer'),
-  }),
-]);
+const debounceSchema = z
+  .discriminatedUnion('mode', [
+    z.object({ mode: z.literal('none'), key: debounceKeySchema }),
+    z.object({
+      mode: z.literal('fixed'),
+      delayMs: z.number().int().min(100).max(300000).describe('Fixed delay in milliseconds'),
+      key: debounceKeySchema,
+    }),
+    z.object({
+      mode: z.literal('range'),
+      minMs: z.number().int().min(100).describe('Minimum delay'),
+      maxMs: z.number().int().max(300000).describe('Maximum delay'),
+      key: debounceKeySchema,
+    }),
+    z.object({
+      mode: z.literal('presence'),
+      baseDelayMs: z.number().int().min(100).describe('Base delay'),
+      maxWaitMs: z.number().int().max(300000).optional().describe('Maximum total wait'),
+      extendOnEvents: z.array(z.string()).describe('Events that extend the timer'),
+      key: debounceKeySchema,
+    }),
+  ])
+  // Rejected rather than silently ignored (#1110): `extendOnEvents` extends a
+  // window on a contact typing or recording, which says nothing about a window
+  // keyed on something that is not a conversation.
+  .refine((debounce) => !(debounce.mode === 'presence' && debounce.key), {
+    message: 'debounce.key cannot be combined with mode "presence": presence extension only applies to conversations',
+    path: ['key'],
+  });
 
 // Create automation schema
 const createAutomationSchema = z.object({
@@ -141,6 +163,25 @@ const createAutomationSchema = z.object({
     .describe(
       "Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order " +
         'only when every action succeeded; a failed run publishes zero. Default false = immediate publishing',
+    ),
+  maxConcurrency: z
+    .number()
+    .int()
+    .min(1)
+    .nullable()
+    .optional()
+    .describe(
+      'Per-automation concurrency limit (#1108). Omit/null = today’s per-instance queueing with the engine ' +
+        'default; 1 = strict single-flight, which is what a read-before-write action needs',
+    ),
+  concurrencyKey: z
+    .string()
+    .min(1)
+    .nullable()
+    .optional()
+    .describe(
+      'Template over the event payload partitioning this automation’s queue (#1108), e.g. ' +
+        '"{{payload.from.id}}" to serialize per chat; omit/null = one queue for the whole automation',
     ),
 });
 

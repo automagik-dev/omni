@@ -23,6 +23,7 @@ import type {
 import { generateId } from '@omni/core';
 import type { Database } from '@omni/db';
 import {
+  type NewOmniEvent,
   type NewWebhookSource,
   type WebhookEventTypeMapping,
   type WebhookSource,
@@ -68,6 +69,37 @@ export interface WebhookHeartbeatResult {
   /** Status BEFORE this heartbeat — the sweeper owns transitions, so a stalled source recovers on its next tick. */
   livenessStatus: WebhookSource['livenessStatus'];
   expectedIntervalSeconds: number | null;
+}
+
+export interface TriggerEventMetadata {
+  correlationId?: string;
+  causationId?: string;
+  instanceId?: string;
+  /**
+   * Producer-supplied ingress key (#1109). Present and unseen ⇒ publish;
+   * present and already journaled ⇒ no second publish and the ORIGINAL id
+   * comes back; absent ⇒ pre-#1109 behaviour, undeduped.
+   */
+  idempotencyKey?: string;
+}
+
+export interface TriggerEventResult {
+  /** The PUBLISHED event's id — on a dedup hit, the id of the event that was already journaled. */
+  eventId: string;
+  published: boolean;
+  /** True when the key was already journaled: nothing was published this call (#1109). */
+  duplicate?: boolean;
+}
+
+/**
+ * Namespace a manual trigger's key (#1109) the way channel ingress namespaces
+ * its own (`{channel}:{instance}:{externalId}:{kind}`): uniqueness is per
+ * instance, else per tenant, never global. Two connectors emitting a naive key
+ * (a bare timestamp) under different instances therefore cannot collide, while
+ * the same producer retrying the same fact still lands on the same key.
+ */
+function scopeTriggerKey(key: string, instanceId: string | undefined, tenantId: string | null): string {
+  return `manual:${instanceId ?? tenantId ?? 'global'}:${key}`;
 }
 
 /** Constant-time string comparison; a length mismatch short-circuits, which leaks only the length. */
@@ -401,23 +433,19 @@ export class WebhookService {
       headers,
     });
 
-    const claimed = await this.db
-      .insert(omniEvents)
-      .values({
-        id: eventId,
-        channel: 'internal',
-        eventType,
-        direction: 'inbound',
-        status: 'received',
-        rawPayload: payload,
-        idempotencyKey,
-        receivedAt: new Date(),
-        metadata: { correlationId: eventId, source: 'webhook', fullEventType: eventType, webhookSource: sourceName },
-      })
-      .onConflictDoNothing({ target: omniEvents.idempotencyKey })
-      .returning({ id: omniEvents.id });
+    const claim = await this.claimJournalRow({
+      id: eventId,
+      channel: 'internal',
+      eventType,
+      direction: 'inbound',
+      status: 'received',
+      rawPayload: payload,
+      idempotencyKey,
+      receivedAt: new Date(),
+      metadata: { correlationId: eventId, source: 'webhook', fullEventType: eventType, webhookSource: sourceName },
+    });
 
-    if (claimed.length === 0) {
+    if (claim.duplicate) {
       await this.db
         .update(webhookSources)
         .set({
@@ -426,18 +454,12 @@ export class WebhookService {
         })
         .where(eq(webhookSources.id, source.id));
 
-      const [original] = await this.db
-        .select({ id: omniEvents.id })
-        .from(omniEvents)
-        .where(eq(omniEvents.idempotencyKey, idempotencyKey))
-        .limit(1);
-
       log.info('Webhook redelivery acked without a second event', { sourceName, idempotencyKey });
 
       return {
         received: true,
         duplicate: true,
-        eventId: original?.id ?? eventId,
+        eventId: claim.eventId,
         source: sourceName,
         eventType,
       };
@@ -495,6 +517,36 @@ export class WebhookService {
       source: sourceName,
       eventType,
     };
+  }
+
+  /**
+   * Claim an ingress idempotency key by INSERTING the journal row (#958): the
+   * `omni_events.idempotency_key` unique index — not application logic — is the
+   * dedup authority. A conflict means the fact is already journaled; the
+   * ORIGINAL row's id comes back so a retrying producer still gets a usable id.
+   * The caller publishes UNDER the returned id, and releases the row if that
+   * publish fails.
+   */
+  private async claimJournalRow(
+    row: NewOmniEvent & { id: string; idempotencyKey: string },
+  ): Promise<{ eventId: string; duplicate: boolean }> {
+    const claimed = await this.db
+      .insert(omniEvents)
+      .values(row)
+      .onConflictDoNothing({ target: omniEvents.idempotencyKey })
+      .returning({ id: omniEvents.id });
+
+    if (claimed.length > 0) {
+      return { eventId: row.id, duplicate: false };
+    }
+
+    const [original] = await this.db
+      .select({ id: omniEvents.id })
+      .from(omniEvents)
+      .where(eq(omniEvents.idempotencyKey, row.idempotencyKey))
+      .limit(1);
+
+    return { eventId: original?.id ?? row.id, duplicate: true };
   }
 
   /**
@@ -601,13 +653,20 @@ export class WebhookService {
   }
 
   /**
-   * Manually trigger a custom event
+   * Manually trigger a custom event.
+   *
+   * With an `idempotencyKey` (#1109) the publish rides the SAME ingress-claim
+   * path as webhook ingress (`receive`) and channel ingress: the key is
+   * claimed as the journal row and the unique index does the deduping. A key
+   * already journaled publishes nothing and returns the original event's id,
+   * so a connector replaying a window gets a usable id instead of a second
+   * fact. Without a key the behaviour is unchanged — undeduped, as before.
    */
   async trigger(
     eventType: CustomEventType,
     payload: Record<string, unknown>,
-    metadata?: { correlationId?: string; causationId?: string; instanceId?: string },
-  ): Promise<{ eventId: string; published: boolean }> {
+    metadata?: TriggerEventMetadata,
+  ): Promise<TriggerEventResult> {
     // Provisional id for the schema gate's dead-letter reference and the
     // no-bus fallback; the publish path returns the PUBLISHED event's id (#956).
     const provisionalId = metadata?.correlationId ?? generateId();
@@ -616,25 +675,98 @@ export class WebhookService {
     // every publish path into the journal (issue #959).
     await this.enforceRegisteredSchema(eventType, payload, provisionalId, 'manual trigger');
 
-    if (this.eventBus) {
-      // A caller-supplied correlationId CONTINUES an existing flow; with none
-      // supplied the bus self-references (root event, fresh correlation).
-      // Either way the returned id is the published event's own id, not the
-      // correlation (#956 — the two used to be conflated, so the caller's id
-      // never matched the journal).
-      const result = await this.eventBus.publishGeneric(eventType, payload, {
-        correlationId: metadata?.correlationId,
-        // Parent event for agent/CLI emissions mid-flow (#1072) — the journal
-        // consumer persists it as causation_id, exactly like emit_event.
-        causationId: metadata?.causationId,
-        instanceId: metadata?.instanceId,
-        source: 'manual-trigger',
-      });
-
-      return { eventId: result.id, published: true };
+    const bus = this.eventBus;
+    if (!bus) {
+      return { eventId: provisionalId, published: false };
     }
 
-    return { eventId: provisionalId, published: false };
+    const key = metadata?.idempotencyKey;
+    if (key) {
+      return this.triggerClaimed(bus, eventType, payload, metadata ?? {}, key);
+    }
+
+    // A caller-supplied correlationId CONTINUES an existing flow; with none
+    // supplied the bus self-references (root event, fresh correlation).
+    // Either way the returned id is the published event's own id, not the
+    // correlation (#956 — the two used to be conflated, so the caller's id
+    // never matched the journal).
+    const result = await bus.publishGeneric(eventType, payload, {
+      correlationId: metadata?.correlationId,
+      // Parent event for agent/CLI emissions mid-flow (#1072) — the journal
+      // consumer persists it as causation_id, exactly like emit_event.
+      causationId: metadata?.causationId,
+      instanceId: metadata?.instanceId,
+      source: 'manual-trigger',
+    });
+
+    return { eventId: result.id, published: true };
+  }
+
+  /**
+   * Keyed manual trigger (#1109) — the `receive()` shape exactly: claim the
+   * key as the journal row, publish UNDER that row's id so row and event share
+   * one identity, and release the claim when the publish fails so the retry is
+   * not acked as a duplicate of an event that never reached the bus.
+   */
+  private async triggerClaimed(
+    bus: EventBus,
+    eventType: CustomEventType,
+    payload: Record<string, unknown>,
+    metadata: TriggerEventMetadata,
+    key: string,
+  ): Promise<TriggerEventResult> {
+    const idempotencyKey = scopeTriggerKey(key, metadata.instanceId, this.tenantId);
+    const eventId = generateId();
+
+    const claim = await this.claimJournalRow({
+      id: eventId,
+      channel: 'internal',
+      eventType,
+      // What the `custom.>` consumer would have written for this event, so a
+      // keyed trigger and an unkeyed one are indistinguishable in the journal.
+      direction: 'internal',
+      status: 'completed',
+      rawPayload: payload,
+      idempotencyKey,
+      causationId: metadata.causationId ?? null,
+      receivedAt: new Date(),
+      metadata: {
+        correlationId: metadata.correlationId ?? eventId,
+        source: 'manual-trigger',
+        fullEventType: eventType,
+        idempotencyKey,
+      },
+    });
+
+    if (claim.duplicate) {
+      log.info('Manual trigger deduped: idempotency key already journaled', { eventType, idempotencyKey });
+      return { eventId: claim.eventId, published: false, duplicate: true };
+    }
+
+    try {
+      await bus.publishGeneric(eventType, payload, {
+        correlationId: metadata.correlationId,
+        causationId: metadata.causationId,
+        instanceId: metadata.instanceId,
+        publishEventId: eventId,
+        source: 'manual-trigger',
+      });
+    } catch (error) {
+      await this.db
+        .delete(omniEvents)
+        .where(eq(omniEvents.id, eventId))
+        .catch((releaseError: unknown) => {
+          log.error('Failed to release trigger idempotency claim after publish failure', {
+            eventType,
+            eventId,
+            idempotencyKey,
+            error: String(releaseError),
+          });
+        });
+      throw error;
+    }
+
+    return { eventId, published: true, duplicate: false };
   }
 
   /**

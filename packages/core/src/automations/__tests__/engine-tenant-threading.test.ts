@@ -264,6 +264,45 @@ describe('automation engine threads the envelope tenant (G5, ADR-0008)', () => {
     }
   });
 
+  test('debounce: a CUSTOM-keyed window carries the stamp the same way (#1110)', async () => {
+    // Generalizing the grouping key must not generalize away the envelope:
+    // the events have NO sender at all, so nothing about this window is a
+    // conversation, and the flush still has to land in the producer's world.
+    const h = await startEngine([
+      automation({
+        actions: [SEND_ACTION],
+        debounce: { mode: 'fixed', delayMs: 5, key: '{{payload.pull_request.id}}' } as Automation['debounce'],
+      }),
+    ]);
+    try {
+      await h.fire(event({ envelopeVersion: 1, tenantId: TENANT_A }, { from: undefined, pull_request: { id: 7 } }));
+      await h.fire(event({ envelopeVersion: 1, tenantId: TENANT_A }, { from: undefined, pull_request: { id: 7 } }));
+      await new Promise((r) => setTimeout(r, 40));
+
+      expect(h.sendCalls.length).toBe(1); // one window, keyed on the PR
+      expect(h.sendCalls[0]?.trustedTenantId).toBe(TENANT_A);
+    } finally {
+      await h.engine.stop();
+    }
+  });
+
+  test('debounce: a legacy CUSTOM-keyed window flushes with null — no stamp is invented (#1110)', async () => {
+    const h = await startEngine([
+      automation({
+        actions: [SEND_ACTION],
+        debounce: { mode: 'fixed', delayMs: 5, key: '{{payload.pull_request.id}}' } as Automation['debounce'],
+      }),
+    ]);
+    try {
+      await h.fire(event({}, { from: undefined, pull_request: { id: 7 } }));
+      await new Promise((r) => setTimeout(r, 40));
+      expect(h.sendCalls.length).toBe(1);
+      expect(h.sendCalls[0]?.trustedTenantId).toBe(null);
+    } finally {
+      await h.engine.stop();
+    }
+  });
+
   test('webhook action: the egress broker context binds the trusted tenant (legacy stays unbound)', async () => {
     const seenTenants: string[] = [];
     setEgressPolicyResolver((context) => {
