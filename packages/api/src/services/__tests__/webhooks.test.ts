@@ -856,6 +856,59 @@ describe('WebhookService', () => {
 
       expect(mockEventBus._publishedEvents[0]?.metadata.source).toBe('manual-trigger');
     });
+
+    test('a replayed idempotency key publishes nothing and reports the hit (#1109)', async () => {
+      const eventType = 'custom.connector.window' as CustomEventType;
+      const payload = { window: '2026-09-11' };
+
+      const first = await service.trigger(eventType, payload, { idempotencyKey: 'w-1' });
+      const second = await service.trigger(eventType, payload, { idempotencyKey: 'w-1' });
+
+      expect(first.duplicate).toBe(false);
+      expect(first.published).toBe(true);
+      // The retrying caller is told it was a hit, not a fresh publish.
+      expect(second.duplicate).toBe(true);
+      expect(second.published).toBe(false);
+      expect(mockEventBus.publishGeneric).toHaveBeenCalledTimes(1);
+    });
+
+    test('the claimed key is scoped per instance, not global (#1109)', async () => {
+      const eventType = 'custom.connector.window' as CustomEventType;
+      const instanceId = crypto.randomUUID();
+
+      await service.trigger(eventType, {}, { idempotencyKey: 'w-1' });
+      await service.trigger(eventType, {}, { idempotencyKey: 'w-1', instanceId });
+
+      // Same naive key from two producers ⇒ two distinct claims, two publishes.
+      expect([...mockDb._journaledKeys.keys()]).toEqual(['manual:global:w-1', `manual:${instanceId}:w-1`]);
+      expect(mockEventBus.publishGeneric).toHaveBeenCalledTimes(2);
+    });
+
+    test('without a key, an identical payload publishes again (#1109)', async () => {
+      const eventType = 'custom.connector.window' as CustomEventType;
+      const payload = { window: '2026-09-11' };
+
+      const first = await service.trigger(eventType, payload);
+      const second = await service.trigger(eventType, payload);
+
+      expect(second.eventId).not.toBe(first.eventId);
+      expect(second.duplicate).toBeUndefined();
+      expect(mockEventBus.publishGeneric).toHaveBeenCalledTimes(2);
+      // No key ⇒ no claim row: the publish path is byte-identical to pre-#1109.
+      expect(mockDb._journaledKeys.size).toBe(0);
+    });
+
+    test('a failed publish releases the claim so the retry is not a duplicate (#1109)', async () => {
+      const eventType = 'custom.connector.window' as CustomEventType;
+      const failingBus = { publishGeneric: () => Promise.reject(new Error('bus down')) } as unknown as EventBus;
+      const serviceWithFailingBus = new WebhookService(mockDb, failingBus);
+
+      await expect(serviceWithFailingBus.trigger(eventType, {}, { idempotencyKey: 'w-1' })).rejects.toThrow('bus down');
+
+      // The claim row is deleted, so the retry is a first publish and not an
+      // ack of an event that never reached the bus.
+      expect(mockDb._calls.delete).toHaveLength(1);
+    });
   });
 });
 

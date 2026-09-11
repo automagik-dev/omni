@@ -843,6 +843,12 @@ export interface TriggerEventBody {
   /** Parent event id — stamps `causationId` so `events trace` parents this emission (#1072). */
   causationId?: string;
   instanceId?: string;
+  /**
+   * Producer-supplied ingress key (#1109), scoped per instance (else per
+   * tenant). A key already journaled publishes nothing and returns the
+   * ORIGINAL event id with `duplicate: true`; omitting it publishes undeduped.
+   */
+  idempotencyKey?: string;
 }
 
 /**
@@ -3294,9 +3300,10 @@ export function createOmniClient(config: OmniClientConfig) {
       },
 
       /**
-       * Trigger a custom event
+       * Trigger a custom event. With `idempotencyKey`, a replayed key comes
+       * back as `duplicate: true` carrying the original event id (#1109).
        */
-      async trigger(body: TriggerEventBody): Promise<{ eventId: string; eventType: string }> {
+      async trigger(body: TriggerEventBody): Promise<{ eventId: string; eventType: string; duplicate?: boolean }> {
         const { data, error, response } = await client.POST('/events/trigger', { body });
         throwIfError(response, error);
         return data ?? { eventId: '', eventType: body.eventType };

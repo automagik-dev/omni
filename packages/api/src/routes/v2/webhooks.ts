@@ -175,13 +175,19 @@ const triggerEventSchema = z.object({
   correlationId: z.string().optional().describe('Optional correlation ID'),
   causationId: z.string().uuid().optional().describe('Optional parent event ID (causality tree, #1072)'),
   instanceId: z.string().uuid().optional().describe('Optional instance ID for context'),
+  idempotencyKey: z
+    .string()
+    .min(1)
+    .max(255)
+    .optional()
+    .describe('Optional producer-supplied ingress key; a key already journaled returns the original event (#1109)'),
 });
 
 /**
  * POST /events/trigger - Manually trigger a custom event
  */
 webhooksRoutes.post('/events/trigger', zValidator('json', triggerEventSchema), async (c) => {
-  const { eventType, payload, correlationId, causationId, instanceId } = c.req.valid('json');
+  const { eventType, payload, correlationId, causationId, instanceId, idempotencyKey } = c.req.valid('json');
   const services = c.get('services');
   const apiKey = c.get('apiKey');
 
@@ -194,6 +200,7 @@ webhooksRoutes.post('/events/trigger', zValidator('json', triggerEventSchema), a
     correlationId,
     causationId,
     instanceId,
+    idempotencyKey,
   });
 
   return c.json(result, 201);
