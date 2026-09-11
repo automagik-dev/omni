@@ -104,6 +104,24 @@ function extractEditedText(edited: MessageContent | null | undefined): string | 
   );
 }
 
+/**
+ * One edit can reach us twice — as a protocol message on `messages.upsert` (how an
+ * edit from another device of this account syncs) and as `messages.update` (how a
+ * third-party edit arrives). Whoever gets there first emits; the twin is dropped.
+ *
+ * Keyed by `${targetMessageId}:${newText}` so a genuine second edit of the same
+ * message still passes. Bounded so a long-lived socket cannot grow it without end.
+ */
+const SEEN_EDITS = new Set<string>();
+const SEEN_EDITS_MAX = 500;
+function rememberEdit(targetMessageId: string, newText: string): boolean {
+  const key = `${targetMessageId}:${newText}`;
+  if (SEEN_EDITS.has(key)) return false;
+  if (SEEN_EDITS.size >= SEEN_EDITS_MAX) SEEN_EDITS.delete(SEEN_EDITS.values().next().value as string);
+  SEEN_EDITS.add(key);
+  return true;
+}
+
 /** Join non-empty, trimmed parts with newlines; undefined when nothing survives. */
 function joinLines(...parts: Array<string | null | undefined>): string | undefined {
   const text = parts.filter((p): p is string => typeof p === 'string' && p.trim().length > 0).join('\n');
@@ -822,10 +840,19 @@ async function handleSpecialMessage(
   }
 
   if (content.type === 'edit') {
-    // Edits are emitted from `messages.update`, where Baileys hands us the original
-    // key and the normalized new content regardless of envelope shape (#1061).
-    // Swallow the raw protocol message here so it is neither journaled nor double-emitted.
-    log.debug('Edit protocol message seen on upsert; awaiting messages.update', {
+    // Edits normally arrive on `messages.update`, which hands us the original key plus
+    // the normalized new content. But an edit made on ANOTHER device of this same
+    // account syncs as a protocol message on `messages.upsert` and never produces an
+    // update event — swallowing it there lost the edit entirely (#1061).
+    //
+    // So: emit whenever the upsert already carries the new text. `messages.update` may
+    // still fire for the same edit (third-party edits reach us both ways), and
+    // `rememberEdit` keeps the second one from double-journaling it.
+    if (content.editedText && content.targetMessageId && rememberEdit(content.targetMessageId, content.editedText)) {
+      await plugin.handleMessageEdited(instanceId, content.targetMessageId, chatId, content.editedText, isFromMe(msg));
+      return true;
+    }
+    log.debug('Edit protocol message seen on upsert without new text; awaiting messages.update', {
       instanceId,
       targetMessageId: content.targetMessageId,
     });
@@ -1182,7 +1209,7 @@ export function setupMessageHandlers(
       // `{ editedMessage: { message: <new content> } }` keyed by the ORIGINAL message id,
       // after normalizing whatever envelope the edit arrived in (#1061).
       const newText = extractEditedText(normalizeMessageContent(update.update.message));
-      if (newText) {
+      if (newText && rememberEdit(update.key.id || '', newText)) {
         const { chatId } = resolveChatId(plugin, instanceId, { key: update.key } as WAMessage);
         await plugin.handleMessageEdited(instanceId, update.key.id || '', chatId, newText, update.key.fromMe || false);
       }
