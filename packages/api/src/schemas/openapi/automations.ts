@@ -94,6 +94,13 @@ const DebounceSchema = z.object({
   baseDelayMs: z.number().int().optional(),
   maxWaitMs: z.number().int().optional(),
   extendOnEvents: z.array(z.string()).optional(),
+  key: z
+    .string()
+    .optional()
+    .describe(
+      'Template over the event payload naming the debounce window (#1110), e.g. "{{payload.pull_request.id}}"; ' +
+        'absent = grouped by conversation (instance + sender). Not allowed with mode "presence"',
+    ),
 });
 
 // Automation schema

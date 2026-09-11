@@ -98,7 +98,12 @@ export interface TemplateContext {
       text?: string;
       timestamp: number;
     }>;
-    from: {
+    /**
+     * Sender of the last event in the window. Absent for a custom-keyed
+     * window (#1110), whose events need not be chat messages — `{{from}}` and
+     * `{{from.*}}` then render empty, as they do for any unresolved path.
+     */
+    from?: {
       id: string;
       name?: string;
     };
