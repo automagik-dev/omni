@@ -142,6 +142,25 @@ const createAutomationSchema = z.object({
       "Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order " +
         'only when every action succeeded; a failed run publishes zero. Default false = immediate publishing',
     ),
+  maxConcurrency: z
+    .number()
+    .int()
+    .min(1)
+    .nullable()
+    .optional()
+    .describe(
+      'Per-automation concurrency limit (#1108). Omit/null = today’s per-instance queueing with the engine ' +
+        'default; 1 = strict single-flight, which is what a read-before-write action needs',
+    ),
+  concurrencyKey: z
+    .string()
+    .min(1)
+    .nullable()
+    .optional()
+    .describe(
+      'Template over the event payload partitioning this automation’s queue (#1108), e.g. ' +
+        '"{{payload.from.id}}" to serialize per chat; omit/null = one queue for the whole automation',
+    ),
 });
 
 // Update automation schema

@@ -204,6 +204,20 @@ export interface Automation {
    */
   transactionalEmissions?: boolean;
   /**
+   * Per-automation concurrency limit (#1108). Absent/null = today's
+   * behaviour: the run is queued per INSTANCE with the engine's default
+   * limit. Set = a queue private to this automation with this limit; `1` is
+   * strict single-flight, which is what a read-before-write action needs so
+   * two events for the same fact cannot both read the pre-write snapshot.
+   */
+  maxConcurrency?: number | null;
+  /**
+   * Optional template over the event payload partitioning the per-automation
+   * queue (#1108) — e.g. `{{payload.from.id}}` serializes per chat rather
+   * than globally. Absent/null = one queue for the whole automation.
+   */
+  concurrencyKey?: string | null;
+  /**
    * Agent whose event manifest governs this automation (RFC #925 G4).
    * Stamped by the G4b compiler (#986) when the row is compiled from a
    * manifest's `accepts` entries; null/absent = hand-authored. Two consumers:

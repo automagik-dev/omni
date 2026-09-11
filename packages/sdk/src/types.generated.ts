@@ -1708,6 +1708,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/events/schemas/{eventType}/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Validate a payload against a registered event schema (dry run)
+         * @description Check a payload against the registered schema with the same validator and error strings as the webhook ingress and emit_event gates, without publishing an event or writing anything (no dead letter). Returns 200 whether the payload is valid or not; read the `valid` flag and `errors`.
+         */
+        post: operations["validateEventPayload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/events/consumers": {
         parameters: {
             query?: never;
@@ -5591,6 +5611,22 @@ export interface components {
             /** @description Whether the validation gate is active (default true) */
             enabled?: boolean;
         };
+        ValidateEventPayloadRequest: {
+            /** @description The event payload to validate (any JSON value) */
+            payload?: unknown;
+        };
+        EventPayloadValidation: {
+            /** @description Event type the payload was checked against */
+            eventType: string;
+            /** @description Schema revision used */
+            version: number;
+            /** @description Whether the gate is active for this type (a disabled schema is still checked) */
+            enabled: boolean;
+            /** @description True when the payload satisfies the schema */
+            valid: boolean;
+            /** @description Violations as `instancePath: message`, identical to the ingress gate; empty when valid */
+            errors: string[];
+        };
         DurableConsumer: {
             /**
              * Format: uuid
@@ -5792,6 +5828,10 @@ export interface components {
             priority: number;
             /** @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero */
             transactionalEmissions: boolean;
+            /** @description Per-automation concurrency limit (#1108). null = queued per instance with the engine default; set = a queue private to this automation, 1 being strict single-flight */
+            maxConcurrency: number | null;
+            /** @description Template over the event payload partitioning this automation’s queue (#1108), e.g. "{{payload.from.id}}" to serialize per chat; null = one queue for the whole automation */
+            concurrencyKey: string | null;
             /**
              * Format: uuid
              * @description Set when this automation was compiled from an agent event manifest (RFC #925 G4b, #986); null = hand-made. Managed automations reject manual mutation — edit the owning agent’s manifest instead
@@ -5934,6 +5974,10 @@ export interface components {
              * @default false
              */
             transactionalEmissions: boolean;
+            /** @description Per-automation concurrency limit (#1108). Omit/null = today’s per-instance queueing with the engine default; 1 = strict single-flight, which is what a read-before-write action needs */
+            maxConcurrency?: number | null;
+            /** @description Template over the event payload partitioning this automation’s queue (#1108), e.g. "{{payload.from.id}}" to serialize per chat; omit/null = one queue for the whole automation */
+            concurrencyKey?: string | null;
         };
         AutomationLog: {
             /**
@@ -6022,7 +6066,7 @@ export interface components {
             running: boolean;
             /** @description Instance queue stats */
             instanceQueues?: {
-                /** @description Instance ID */
+                /** @description Queue key: the instance ID, or "<instanceId>:<automationId>[:<partition>]" for an automation running on its own queue (#1108) */
                 instanceId: string;
                 /** @description Active jobs */
                 activeCount: number;
@@ -17158,6 +17202,69 @@ export interface operations {
             };
         };
     };
+    validateEventPayload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                eventType: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description The event payload to validate (any JSON value) */
+                    payload?: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Validation verdict */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /** @description Event type the payload was checked against */
+                            eventType: string;
+                            /** @description Schema revision used */
+                            version: number;
+                            /** @description Whether the gate is active for this type (a disabled schema is still checked) */
+                            enabled: boolean;
+                            /** @description True when the payload satisfies the schema */
+                            valid: boolean;
+                            /** @description Violations as `instancePath: message`, identical to the ingress gate; empty when valid */
+                            errors: string[];
+                        };
+                    };
+                };
+            };
+            /** @description No schema registered for this type */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
     listEventConsumers: {
         parameters: {
             query?: never;
@@ -17803,6 +17910,10 @@ export interface operations {
                             priority: number;
                             /** @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero */
                             transactionalEmissions: boolean;
+                            /** @description Per-automation concurrency limit (#1108). null = queued per instance with the engine default; set = a queue private to this automation, 1 being strict single-flight */
+                            maxConcurrency: number | null;
+                            /** @description Template over the event payload partitioning this automation’s queue (#1108), e.g. "{{payload.from.id}}" to serialize per chat; null = one queue for the whole automation */
+                            concurrencyKey: string | null;
                             /**
                              * Format: uuid
                              * @description Set when this automation was compiled from an agent event manifest (RFC #925 G4b, #986); null = hand-made. Managed automations reject manual mutation — edit the owning agent’s manifest instead
@@ -17959,6 +18070,10 @@ export interface operations {
                      * @default false
                      */
                     transactionalEmissions?: boolean;
+                    /** @description Per-automation concurrency limit (#1108). Omit/null = today’s per-instance queueing with the engine default; 1 = strict single-flight, which is what a read-before-write action needs */
+                    maxConcurrency?: number | null;
+                    /** @description Template over the event payload partitioning this automation’s queue (#1108), e.g. "{{payload.from.id}}" to serialize per chat; omit/null = one queue for the whole automation */
+                    concurrencyKey?: string | null;
                 };
             };
         };
@@ -18091,6 +18206,10 @@ export interface operations {
                             priority: number;
                             /** @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero */
                             transactionalEmissions: boolean;
+                            /** @description Per-automation concurrency limit (#1108). null = queued per instance with the engine default; set = a queue private to this automation, 1 being strict single-flight */
+                            maxConcurrency: number | null;
+                            /** @description Template over the event payload partitioning this automation’s queue (#1108), e.g. "{{payload.from.id}}" to serialize per chat; null = one queue for the whole automation */
+                            concurrencyKey: string | null;
                             /**
                              * Format: uuid
                              * @description Set when this automation was compiled from an agent event manifest (RFC #925 G4b, #986); null = hand-made. Managed automations reject manual mutation — edit the owning agent’s manifest instead
@@ -18272,6 +18391,10 @@ export interface operations {
                             priority: number;
                             /** @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero */
                             transactionalEmissions: boolean;
+                            /** @description Per-automation concurrency limit (#1108). null = queued per instance with the engine default; set = a queue private to this automation, 1 being strict single-flight */
+                            maxConcurrency: number | null;
+                            /** @description Template over the event payload partitioning this automation’s queue (#1108), e.g. "{{payload.from.id}}" to serialize per chat; null = one queue for the whole automation */
+                            concurrencyKey: string | null;
                             /**
                              * Format: uuid
                              * @description Set when this automation was compiled from an agent event manifest (RFC #925 G4b, #986); null = hand-made. Managed automations reject manual mutation — edit the owning agent’s manifest instead
@@ -18499,6 +18622,10 @@ export interface operations {
                      * @default false
                      */
                     transactionalEmissions?: boolean;
+                    /** @description Per-automation concurrency limit (#1108). Omit/null = today’s per-instance queueing with the engine default; 1 = strict single-flight, which is what a read-before-write action needs */
+                    maxConcurrency?: number | null;
+                    /** @description Template over the event payload partitioning this automation’s queue (#1108), e.g. "{{payload.from.id}}" to serialize per chat; omit/null = one queue for the whole automation */
+                    concurrencyKey?: string | null;
                 };
             };
         };
@@ -18631,6 +18758,10 @@ export interface operations {
                             priority: number;
                             /** @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero */
                             transactionalEmissions: boolean;
+                            /** @description Per-automation concurrency limit (#1108). null = queued per instance with the engine default; set = a queue private to this automation, 1 being strict single-flight */
+                            maxConcurrency: number | null;
+                            /** @description Template over the event payload partitioning this automation’s queue (#1108), e.g. "{{payload.from.id}}" to serialize per chat; null = one queue for the whole automation */
+                            concurrencyKey: string | null;
                             /**
                              * Format: uuid
                              * @description Set when this automation was compiled from an agent event manifest (RFC #925 G4b, #986); null = hand-made. Managed automations reject manual mutation — edit the owning agent’s manifest instead
@@ -18812,6 +18943,10 @@ export interface operations {
                             priority: number;
                             /** @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero */
                             transactionalEmissions: boolean;
+                            /** @description Per-automation concurrency limit (#1108). null = queued per instance with the engine default; set = a queue private to this automation, 1 being strict single-flight */
+                            maxConcurrency: number | null;
+                            /** @description Template over the event payload partitioning this automation’s queue (#1108), e.g. "{{payload.from.id}}" to serialize per chat; null = one queue for the whole automation */
+                            concurrencyKey: string | null;
                             /**
                              * Format: uuid
                              * @description Set when this automation was compiled from an agent event manifest (RFC #925 G4b, #986); null = hand-made. Managed automations reject manual mutation — edit the owning agent’s manifest instead
@@ -18993,6 +19128,10 @@ export interface operations {
                             priority: number;
                             /** @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero */
                             transactionalEmissions: boolean;
+                            /** @description Per-automation concurrency limit (#1108). null = queued per instance with the engine default; set = a queue private to this automation, 1 being strict single-flight */
+                            maxConcurrency: number | null;
+                            /** @description Template over the event payload partitioning this automation’s queue (#1108), e.g. "{{payload.from.id}}" to serialize per chat; null = one queue for the whole automation */
+                            concurrencyKey: string | null;
                             /**
                              * Format: uuid
                              * @description Set when this automation was compiled from an agent event manifest (RFC #925 G4b, #986); null = hand-made. Managed automations reject manual mutation — edit the owning agent’s manifest instead
@@ -19356,7 +19495,7 @@ export interface operations {
                         running: boolean;
                         /** @description Instance queue stats */
                         instanceQueues?: {
-                            /** @description Instance ID */
+                            /** @description Queue key: the instance ID, or "<instanceId>:<automationId>[:<partition>]" for an automation running on its own queue (#1108) */
                             instanceId: string;
                             /** @description Active jobs */
                             activeCount: number;

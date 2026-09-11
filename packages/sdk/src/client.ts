@@ -690,6 +690,18 @@ export interface CreateAutomationBody {
    * failed run publishes zero. Default false = immediate publishing.
    */
   transactionalEmissions?: boolean;
+  /**
+   * Per-automation concurrency limit (#1108). Omit/null = today's
+   * per-instance queueing with the engine default; 1 = strict single-flight,
+   * which is what a read-before-write action needs.
+   */
+  maxConcurrency?: number | null;
+  /**
+   * Template over the event payload partitioning this automation's queue
+   * (#1108), e.g. `{{payload.from.id}}` to serialize per chat. Omit/null =
+   * one queue for the whole automation.
+   */
+  concurrencyKey?: string | null;
 }
 
 /**
