@@ -5823,6 +5823,8 @@ export interface components {
                 baseDelayMs?: number;
                 maxWaitMs?: number;
                 extendOnEvents?: string[];
+                /** @description Template over the event payload naming the debounce window (#1110), e.g. "{{payload.pull_request.id}}"; absent = grouped by conversation (instance + sender). Not allowed with mode "presence" */
+                key?: string;
             } | null;
             /** @description Whether enabled */
             enabled: boolean;
@@ -5960,6 +5962,8 @@ export interface components {
                 baseDelayMs?: number;
                 maxWaitMs?: number;
                 extendOnEvents?: string[];
+                /** @description Template over the event payload naming the debounce window (#1110), e.g. "{{payload.pull_request.id}}"; absent = grouped by conversation (instance + sender). Not allowed with mode "presence" */
+                key?: string;
             };
             /**
              * @description Whether enabled
@@ -17907,6 +17911,8 @@ export interface operations {
                                 baseDelayMs?: number;
                                 maxWaitMs?: number;
                                 extendOnEvents?: string[];
+                                /** @description Template over the event payload naming the debounce window (#1110), e.g. "{{payload.pull_request.id}}"; absent = grouped by conversation (instance + sender). Not allowed with mode "presence" */
+                                key?: string;
                             } | null;
                             /** @description Whether enabled */
                             enabled: boolean;
@@ -18058,6 +18064,8 @@ export interface operations {
                         baseDelayMs?: number;
                         maxWaitMs?: number;
                         extendOnEvents?: string[];
+                        /** @description Template over the event payload naming the debounce window (#1110), e.g. "{{payload.pull_request.id}}"; absent = grouped by conversation (instance + sender). Not allowed with mode "presence" */
+                        key?: string;
                     };
                     /**
                      * @description Whether enabled
@@ -18203,6 +18211,8 @@ export interface operations {
                                 baseDelayMs?: number;
                                 maxWaitMs?: number;
                                 extendOnEvents?: string[];
+                                /** @description Template over the event payload naming the debounce window (#1110), e.g. "{{payload.pull_request.id}}"; absent = grouped by conversation (instance + sender). Not allowed with mode "presence" */
+                                key?: string;
                             } | null;
                             /** @description Whether enabled */
                             enabled: boolean;
@@ -18388,6 +18398,8 @@ export interface operations {
                                 baseDelayMs?: number;
                                 maxWaitMs?: number;
                                 extendOnEvents?: string[];
+                                /** @description Template over the event payload naming the debounce window (#1110), e.g. "{{payload.pull_request.id}}"; absent = grouped by conversation (instance + sender). Not allowed with mode "presence" */
+                                key?: string;
                             } | null;
                             /** @description Whether enabled */
                             enabled: boolean;
@@ -18610,6 +18622,8 @@ export interface operations {
                         baseDelayMs?: number;
                         maxWaitMs?: number;
                         extendOnEvents?: string[];
+                        /** @description Template over the event payload naming the debounce window (#1110), e.g. "{{payload.pull_request.id}}"; absent = grouped by conversation (instance + sender). Not allowed with mode "presence" */
+                        key?: string;
                     };
                     /**
                      * @description Whether enabled
@@ -18755,6 +18769,8 @@ export interface operations {
                                 baseDelayMs?: number;
                                 maxWaitMs?: number;
                                 extendOnEvents?: string[];
+                                /** @description Template over the event payload naming the debounce window (#1110), e.g. "{{payload.pull_request.id}}"; absent = grouped by conversation (instance + sender). Not allowed with mode "presence" */
+                                key?: string;
                             } | null;
                             /** @description Whether enabled */
                             enabled: boolean;
@@ -18940,6 +18956,8 @@ export interface operations {
                                 baseDelayMs?: number;
                                 maxWaitMs?: number;
                                 extendOnEvents?: string[];
+                                /** @description Template over the event payload naming the debounce window (#1110), e.g. "{{payload.pull_request.id}}"; absent = grouped by conversation (instance + sender). Not allowed with mode "presence" */
+                                key?: string;
                             } | null;
                             /** @description Whether enabled */
                             enabled: boolean;
@@ -19125,6 +19143,8 @@ export interface operations {
                                 baseDelayMs?: number;
                                 maxWaitMs?: number;
                                 extendOnEvents?: string[];
+                                /** @description Template over the event payload naming the debounce window (#1110), e.g. "{{payload.pull_request.id}}"; absent = grouped by conversation (instance + sender). Not allowed with mode "presence" */
+                                key?: string;
                             } | null;
                             /** @description Whether enabled */
                             enabled: boolean;

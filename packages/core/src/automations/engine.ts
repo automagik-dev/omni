@@ -504,6 +504,46 @@ export class AutomationEngine {
   }
 
   /**
+   * Which window this event joins (#1110); `null` = there is nothing to group
+   * by, so the caller processes the event immediately.
+   *
+   * No `debounce.key` = the conversation `${instanceId}:${personId}`, and a
+   * payload with no sender has always fallen through to the immediate path —
+   * byte-identical to the behaviour every existing row has today.
+   *
+   * `debounce.key` set = the template rendered over this event's payload,
+   * namespaced by the instance so two instances cannot share a window (two
+   * automations already cannot: each owns its own manager). That lets ANY
+   * event type coalesce on the fact it describes rather than on a chat.
+   *
+   * A template that renders EMPTY also returns `null` rather than minting an
+   * `${instanceId}:` bucket. Coalescing keeps only the last payload of a
+   * window, so merging events with no shared fact would silently drop them;
+   * for a feature whose failure mode is data loss, not grouping is the
+   * conservative direction (#1108's concurrencyKey merges instead, because
+   * over-serializing loses nothing).
+   */
+  private resolveDebounceKey(automation: Automation, event: OmniEvent, instanceId: string): ConversationKey | null {
+    const payload = event.payload as Record<string, unknown>;
+    const template = automation.debounce?.key;
+
+    if (!template) {
+      const from = payload.from as { id?: string } | undefined;
+      return from?.id ? buildConversationKey(instanceId, from.id) : null;
+    }
+
+    const rendered = substituteTemplate(template, createTemplateContext(payload)).trim();
+    if (!rendered) {
+      logger.debug('Debounce key template rendered empty — processing immediately', {
+        automationId: automation.id,
+        eventId: event.id,
+      });
+      return null;
+    }
+    return `${instanceId}:${rendered}`;
+  }
+
+  /**
    * Handle an event with debouncing
    */
   private async handleDebounced(automation: Automation, event: OmniEvent): Promise<void> {
@@ -517,15 +557,17 @@ export class AutomationEngine {
     const payload = event.payload as Record<string, unknown>;
     const instanceId = event.metadata.instanceId ?? 'global';
 
-    // Extract person/sender ID from payload
+    // Sender rides along for the template context; it is only the GROUPING key
+    // when the automation has no `debounce.key` of its own (#1110).
     const from = payload.from as { id: string; name?: string } | undefined;
-    if (!from?.id) {
-      // No sender info, can't debounce per-conversation
+
+    const key = this.resolveDebounceKey(automation, event, instanceId);
+    if (!key) {
+      // Nothing to group by — process immediately, as a payload without a
+      // sender always has.
       await this.handleImmediate(automation, event);
       return;
     }
-
-    const key = buildConversationKey(instanceId, from.id);
 
     // Check if this is a presence event (for presence-based debounce)
     if (event.type.startsWith('presence.')) {
@@ -587,7 +629,9 @@ export class AutomationEngine {
     const callback = async (
       key: ConversationKey,
       messages: DebouncedMessage[],
-      from: { id: string; name?: string },
+      // From the LAST event in the window, not parsed back out of the key — a
+      // custom key (#1110) carries neither a sender nor an instance.
+      from: { id: string; name?: string } | undefined,
       instanceId: string,
       stamp: DebounceEnvelopeStamp | null,
     ) => {

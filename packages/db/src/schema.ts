@@ -3094,11 +3094,23 @@ export type AutomationAction =
 /**
  * Debounce configuration for message grouping.
  */
-export type DebounceConfig =
+export type DebounceConfig = (
   | { mode: 'none' }
   | { mode: 'fixed'; delayMs: number }
   | { mode: 'range'; minMs: number; maxMs: number }
-  | { mode: 'presence'; baseDelayMs: number; maxWaitMs?: number; extendOnEvents: string[] };
+  | { mode: 'presence'; baseDelayMs: number; maxWaitMs?: number; extendOnEvents: string[] }
+) & {
+  /**
+   * What the window groups by (#1110) — a template over the event payload.
+   * Absent = the conversation `${instanceId}:${personId}` (every existing row,
+   * unchanged); set = the rendered string namespaced by instance, so a
+   * non-chat event can coalesce on the fact it describes. Lives inside the
+   * existing `debounce` jsonb, so there is no column and no migration.
+   * Rejected at validation together with `mode: 'presence'`.
+   */
+  // no-migration-needed: a new field INSIDE the existing `debounce` jsonb column (#1110). No DDL: the column, its type and every stored row are unchanged, and a row without the field means what it always meant (group by conversation).
+  key?: string;
+};
 
 /**
  * Automation rules - "When event X with conditions Y, execute actions Z."

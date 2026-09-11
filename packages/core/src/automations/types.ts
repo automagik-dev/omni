@@ -160,11 +160,28 @@ export type AutomationAction =
 /**
  * Debounce configuration for message grouping.
  */
-export type DebounceConfig =
+export type DebounceConfig = (
   | { mode: 'none' }
   | { mode: 'fixed'; delayMs: number }
   | { mode: 'range'; minMs: number; maxMs: number }
-  | { mode: 'presence'; baseDelayMs: number; maxWaitMs?: number; extendOnEvents: string[] };
+  | { mode: 'presence'; baseDelayMs: number; maxWaitMs?: number; extendOnEvents: string[] }
+) & {
+  /**
+   * What the window groups by (#1110) — a template over the event payload,
+   * rendered with the same engine as conditions and action configs, e.g.
+   * `{{payload.pull_request.id}}`.
+   *
+   * Absent = the conversation `${instanceId}:${personId}`, which is all this
+   * primitive could ever group by before, so every existing row is unchanged.
+   * Set = the rendered string namespaced by instance, which lets ANY event
+   * type coalesce on the fact it describes, not on a chat.
+   *
+   * Rejected at validation with `mode: 'presence'`: `extendOnEvents` extends a
+   * window on a contact's typing/recording, which has no meaning once the
+   * window is not a conversation.
+   */
+  key?: string;
+};
 
 /**
  * Action execution result.
