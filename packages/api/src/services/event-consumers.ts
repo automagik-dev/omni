@@ -49,6 +49,8 @@ export interface ConsumerWithLag extends DurableConsumer {
   head: number;
   /** head - cursor, floored at 0. Counts ALL journal rows past the cursor, not only matching ones. */
   lag: number;
+  /** No type-matching journal row past the cursor — nothing left to scan (lag may still be > 0). */
+  caughtUp: boolean;
 }
 
 export interface PullOptions {
@@ -71,6 +73,11 @@ export interface PullResult {
   head: number;
   /** True when the scan filled the page — more rows are already waiting. */
   hasMore: boolean;
+  /**
+   * True when a full scan window matched nothing (#1128). The stored cursor
+   * was already advanced past those rows, so the next pull scans new ground.
+   */
+  scanExhausted: boolean;
 }
 
 const PULL_POLL_INTERVAL_MS = 500;
@@ -126,7 +133,7 @@ export class EventConsumerService {
       this.db.select().from(durableConsumers).orderBy(asc(durableConsumers.name)),
       this.head(),
     ]);
-    return rows.map((row) => ({ ...row, head, lag: computeLag(head, row.cursor) }));
+    return Promise.all(rows.map((row) => this.withLag(row, head)));
   }
 
   async getByName(name: string): Promise<DurableConsumer> {
@@ -138,8 +145,12 @@ export class EventConsumerService {
   /** getByName plus live head/lag — the `inspect` surface. */
   async inspect(name: string): Promise<ConsumerWithLag> {
     const row = await this.getByName(name);
-    const head = await this.head();
-    return { ...row, head, lag: computeLag(head, row.cursor) };
+    return this.withLag(row, await this.head());
+  }
+
+  private async withLag(row: DurableConsumer, head: number): Promise<ConsumerWithLag> {
+    const caughtUp = row.cursor >= head || (await this.scanPage(row, 1)).length === 0;
+    return { ...row, head, lag: computeLag(head, row.cursor), caughtUp };
   }
 
   async create(input: CreateConsumerInput): Promise<ConsumerWithLag> {
@@ -176,7 +187,7 @@ export class EventConsumerService {
       });
     }
 
-    return { ...created, head, lag: computeLag(head, created.cursor) };
+    return this.withLag(created, head);
   }
 
   async delete(name: string): Promise<void> {
@@ -195,8 +206,13 @@ export class EventConsumerService {
 
   /**
    * Page journal events strictly after the stored cursor. Does NOT advance
-   * the cursor — that is `ack`'s job (at-least-once: a client that crashes
-   * mid-page re-pulls the same page).
+   * the cursor past delivered rows — that is `ack`'s job (at-least-once: a
+   * client that crashes mid-page re-pulls the same page).
+   *
+   * Exception (#1128): a page that scanned rows but matched NONE delivers
+   * nothing, so the cursor is advanced past it here. Otherwise a client that
+   * never acks an empty page (peek, or acking only delivered items) re-scans
+   * the same window forever once non-matching rows exceed `limit`.
    */
   async pull(name: string, options: PullOptions = {}): Promise<PullResult> {
     const limit = Math.min(Math.max(options.limit ?? 100, 1), PULL_MAX_LIMIT);
@@ -212,13 +228,23 @@ export class EventConsumerService {
 
     const items = scanned.filter((row) => matchesConsumerPayload(row, consumer.filters));
     const last = scanned[scanned.length - 1];
+    const cursor = last ? Number(last.journalSeq) : consumer.cursor;
+    if (items.length === 0 && cursor > consumer.cursor) {
+      // Monotonic (lte guard): a concurrent ack further ahead wins.
+      await this.db
+        .update(durableConsumers)
+        .set({ cursor, updatedAt: new Date() })
+        .where(and(eq(durableConsumers.name, name), lte(durableConsumers.cursor, cursor)));
+    }
     const head = await this.head();
+    const hasMore = scanned.length === limit;
     return {
       consumer: consumer.name,
       items,
-      cursor: last ? Number(last.journalSeq) : consumer.cursor,
+      cursor,
       head,
-      hasMore: scanned.length === limit,
+      hasMore,
+      scanExhausted: hasMore && items.length === 0,
     };
   }
 
@@ -243,8 +269,7 @@ export class EventConsumerService {
       );
     }
 
-    const head = await this.head();
-    return { ...updated, head, lag: computeLag(head, updated.cursor) };
+    return this.withLag(updated, await this.head());
   }
 
   /**

@@ -274,6 +274,31 @@ postgresDescribe('durable event consumers (#989, real PostgreSQL)', () => {
       expect(after.cursor).toBe(page.cursor);
     });
 
+    test('more non-matching rows than the scan window never wedge the cursor (#1128)', async () => {
+      await service.create({
+        name: 'wedge',
+        eventType: 'custom.dc1128.*',
+        filters: [{ field: 'chat', operator: 'eq', value: 'target' }],
+        startFrom: 'beginning',
+      });
+      const start = (await service.getByName('wedge')).cursor;
+      for (let i = 0; i < 7; i++) await journal('custom.dc1128.noise', { chat: 'other' });
+      const hit = await journal('custom.dc1128.msg', { chat: 'target' });
+
+      // Peek-style pulls (never acking) with a window of 3 must still reach the match.
+      const empty = await service.pull('wedge', { limit: 3 });
+      expect(empty.items).toEqual([]);
+      expect(empty.scanExhausted).toBe(true);
+      expect((await service.getByName('wedge')).cursor).toBeGreaterThan(start);
+
+      let delivered: string[] = [];
+      for (let i = 0; i < 5 && delivered.length === 0; i++) {
+        delivered = (await service.pull('wedge', { limit: 3 })).items.map((e) => e.id);
+      }
+      expect(delivered).toEqual([hit]);
+      expect((await service.inspect('wedge')).caughtUp).toBe(false); // delivered but not acked
+    });
+
     test('nested-path conditions match (dot notation, same as events wait --filter)', async () => {
       await service.create({
         name: 'nested',
