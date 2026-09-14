@@ -136,6 +136,8 @@ function applyMiscFields(body: Record<string, unknown>, opts: Record<string, unk
   setVal(body, 'discordBotToken', opts.discordToken);
   setVal(body, 'slackBotToken', opts.slackBotToken);
   setVal(body, 'slackAppToken', opts.slackAppToken);
+  setVal(body, 'slackUserToken', opts.slackUserToken);
+  setVal(body, 'slackAuthMode', opts.slackAuthMode);
   setVal(body, 'gupshupCallbackUrl', opts.gupshupCallbackUrl);
   setVal(body, 'gupshupAuthToken', opts.gupshupAuthToken);
   setVal(body, 'gupshupEventId', opts.gupshupEventId);
@@ -389,6 +391,8 @@ export function createInstancesCommand(): Command {
     .option('--discord-token <token>', 'Discord bot token')
     .option('--slack-bot-token <token>', 'Slack bot token')
     .option('--slack-app-token <token>', 'Slack app token')
+    .option('--slack-user-token <token>', 'Slack user token (xoxp-...), required for --slack-auth-mode user')
+    .option('--slack-auth-mode <mode>', 'Slack identity for outbound actions: bot (default) or user')
     // Gupshup
     .option('--gupshup-callback-url <url>', 'Gupshup Custom Integration callback URL')
     .option('--gupshup-auth-token <token>', 'Gupshup Custom Integration auth token')
@@ -1051,6 +1055,8 @@ export function createInstancesCommand(): Command {
     .option('--discord-token <token>', 'Discord bot token (use "null" to clear)')
     .option('--slack-bot-token <token>', 'Slack bot token (use "null" to clear)')
     .option('--slack-app-token <token>', 'Slack app token (use "null" to clear)')
+    .option('--slack-user-token <token>', 'Slack user token xoxp-... (use "null" to clear)')
+    .option('--slack-auth-mode <mode>', 'Slack identity: bot or user (use "null" to clear)')
     .option('--twilio-account-sid <sid>', 'Twilio Account SID (use "null" to clear)')
     .option('--twilio-auth-token <token>', 'Twilio Auth Token (use "null" to clear)')
     .option('--twilio-from <address>', 'Twilio WhatsApp sender address (use "null" to clear)')

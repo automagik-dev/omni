@@ -165,13 +165,38 @@ function applySlackMetadata(
   if (metadata.dmAllowlist) options.dmAllowlist = metadata.dmAllowlist;
 }
 
+/** Apply Slack tokens, auth mode and profileMetadata config */
+function applySlackOptions(
+  options: Record<string, unknown>,
+  instance: {
+    slackBotToken?: string | null;
+    slackUserToken?: string | null;
+    slackAuthMode?: string | null;
+    slackAppToken?: string | null;
+    slackSigningSecret?: string | null;
+    profileMetadata?: Record<string, unknown> | null;
+  },
+): void {
+  if (instance.slackBotToken) options.botToken = instance.slackBotToken;
+  // Forward user-mode identity (#1120). Dropping these made the plugin default
+  // to authMode 'bot', bypassing its "user mode needs a userToken" guard, so a
+  // user-mode instance reconnected on boot silently acting as the bot.
+  if (instance.slackUserToken) options.userToken = instance.slackUserToken;
+  if (instance.slackAuthMode) options.authMode = instance.slackAuthMode;
+  if (instance.slackAppToken) options.appToken = instance.slackAppToken;
+  if (instance.slackSigningSecret) options.signingSecret = instance.slackSigningSecret;
+  applySlackMetadata(options, instance.profileMetadata);
+}
+
 /** Build channel-specific connection options from instance DB fields */
-function buildInstanceConnectOptions(instance: {
+export function buildInstanceConnectOptions(instance: {
   channel: string;
   telegramBotToken?: string | null;
   telegramReactionLevel?: string | null;
   discordBotToken?: string | null;
   slackBotToken?: string | null;
+  slackUserToken?: string | null;
+  slackAuthMode?: string | null;
   slackAppToken?: string | null;
   slackSigningSecret?: string | null;
   profileMetadata?: Record<string, unknown> | null;
@@ -216,12 +241,7 @@ function buildInstanceConnectOptions(instance: {
   if (instance.telegramBotToken) options.token = instance.telegramBotToken;
   if (instance.channel === 'telegram') options.telegramReactionLevel = instance.telegramReactionLevel;
   if (instance.discordBotToken) options.token = instance.discordBotToken;
-  if (instance.channel === 'slack') {
-    if (instance.slackBotToken) options.botToken = instance.slackBotToken;
-    if (instance.slackAppToken) options.appToken = instance.slackAppToken;
-    if (instance.slackSigningSecret) options.signingSecret = instance.slackSigningSecret;
-    applySlackMetadata(options, instance.profileMetadata);
-  }
+  if (instance.channel === 'slack') applySlackOptions(options, instance);
   if (instance.channel === 'gupshup') {
     applyGupshupOptions(options, instance);
   }
@@ -385,6 +405,8 @@ async function connectInstance(
     guildConfigOverrides?: Record<string, unknown> | null;
     discordPresence?: Record<string, unknown> | null;
     slackBotToken?: string | null;
+    slackUserToken?: string | null;
+    slackAuthMode?: string | null;
     slackAppToken?: string | null;
     slackSigningSecret?: string | null;
     profileMetadata?: Record<string, unknown> | null;
@@ -833,6 +855,8 @@ export class InstanceMonitor {
     guildConfigOverrides?: Record<string, unknown> | null;
     discordPresence?: Record<string, unknown> | null;
     slackBotToken?: string | null;
+    slackUserToken?: string | null;
+    slackAuthMode?: string | null;
     slackAppToken?: string | null;
     slackSigningSecret?: string | null;
     profileMetadata?: Record<string, unknown> | null;
