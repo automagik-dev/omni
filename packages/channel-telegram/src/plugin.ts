@@ -250,6 +250,11 @@ export class TelegramPlugin extends BaseChannelPlugin {
   /** Per-instance inbound dedup caches */
   private dedupeCaches = new Map<string, DedupeCache>();
 
+  /** Telegram `message_id` is only unique per chat, so idempotency keys carry the chat (#1149). */
+  protected override ingressKeyId(chatId: string, id: string): string {
+    return `${chatId}:${id}`;
+  }
+
   /** Active typing refresh intervals keyed by `${instanceId}:${chatId}` */
   private typingIntervals = new Map<
     string,
