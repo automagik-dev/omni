@@ -465,7 +465,12 @@ export class AutomationEngine {
     const instanceId = event.metadata.instanceId ?? 'global';
 
     // Find matching automations
-    const matchingAutomations = this.automations.filter((a) => a.triggerEventType === eventType);
+    // Events older than an automation's enabledAt accumulated while it was
+    // disabled; the shared durable consumer still delivers them on re-enable,
+    // so drop them here instead of acting retroactively (#1147).
+    const matchingAutomations = this.automations.filter(
+      (a) => a.triggerEventType === eventType && !(a.enabledAt && event.timestamp < new Date(a.enabledAt).getTime()),
+    );
 
     if (matchingAutomations.length === 0) {
       return;

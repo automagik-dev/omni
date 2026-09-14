@@ -383,8 +383,18 @@ export function registerAutomationSchemas(registry: OpenAPIRegistry): void {
     operationId: 'enableAutomation',
     tags: ['Automations'],
     summary: 'Enable automation',
-    description: 'Enable an automation.',
-    request: { params: z.object({ id: z.string().uuid().openapi({ description: 'Automation UUID' }) }) },
+    description:
+      'Enable an automation. Resumes from now: events published while it was disabled are skipped. Pass replaySince to act on events since that moment instead.',
+    request: {
+      params: z.object({ id: z.string().uuid().openapi({ description: 'Automation UUID' }) }),
+      query: z.object({
+        replaySince: z
+          .string()
+          .datetime()
+          .optional()
+          .openapi({ description: 'Opt-in replay: act on trigger events published since this ISO timestamp' }),
+      }),
+    },
     responses: {
       200: {
         description: 'Enabled',
