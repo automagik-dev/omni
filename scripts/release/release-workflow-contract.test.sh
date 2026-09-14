@@ -637,6 +637,10 @@ for gate in (
     if gate not in ci:
         errors.append(f"protected CI does not invoke {gate}")
 require(ci, r"actionlint[^\n]*\.github/workflows/\*\.yml", "protected CI does not actionlint every workflow")
+# Tool downloads flake with 403/504 and must retry instead of blocking releases (#1140).
+for line in ci.splitlines():
+    if re.search(r"\bcurl\b.*(?:releases/download|get\.helm\.sh|autopg/main/install\.sh)", line) and "--retry 5 --retry-all-errors" not in line:
+        errors.append(f"protected CI tool download does not retry: {line.strip()}")
 
 # The promotion pin gate: a stale candidate pin must fail ON the promotion PR
 # (base main), not after the merge — image-publish.yml only runs on push to
