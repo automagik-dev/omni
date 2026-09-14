@@ -1855,7 +1855,10 @@ const syncRequestSchema = z.object({
   type: z
     .enum(['profile', 'messages', 'contacts', 'groups', 'all'])
     .describe('Type of sync: profile, messages, contacts, groups, or all'),
-  depth: z.enum(['7d', '30d', '90d', '1y', 'all']).optional().describe('Sync depth for message history'),
+  depth: z
+    .enum(['7d', '30d', '90d', '1y', 'all'])
+    .optional()
+    .describe('Sync depth for message history (default: all when chatJids is set, otherwise 7d)'),
   channelId: z.string().optional().describe('Discord channel ID for channel-specific sync'),
   downloadMedia: z.boolean().optional().describe('Download and store media files'),
   chatJids: z
@@ -2089,7 +2092,7 @@ instancesRoutes.post('/:id/sync', instanceAccess, zValidator('json', syncRequest
     channelType: instance.channel,
     type,
     config: {
-      depth: depth ?? '7d',
+      depth: resolveSyncDepth(depth, chatJids),
       channelId,
       downloadMedia: downloadMedia ?? instance.downloadMediaOnSync,
       ...(chatJids?.length ? { chatJids } : {}),
@@ -2103,6 +2106,7 @@ instancesRoutes.post('/:id/sync', instanceAccess, zValidator('json', syncRequest
         instanceId: id,
         type,
         status: job.status,
+        depth: job.config.depth,
         config: job.config,
         message: 'Sync job created',
       },
@@ -2110,6 +2114,17 @@ instancesRoutes.post('/:id/sync', instanceAccess, zValidator('json', syncRequest
     201,
   );
 });
+
+/**
+ * Default sync depth (#1125): a chat-scoped (anchored) backfill scrolls the whole
+ * chat back (`all`); an instance-wide sync stays capped at `7d`.
+ */
+export function resolveSyncDepth(
+  depth: '7d' | '30d' | '90d' | '1y' | 'all' | undefined,
+  chatJids: string[] | undefined,
+): '7d' | '30d' | '90d' | '1y' | 'all' {
+  return depth ?? (chatJids?.length ? 'all' : '7d');
+}
 
 /**
  * GET /instances/:id/sync/:jobId - Get sync job status
@@ -3730,6 +3745,7 @@ instancesRoutes.post('/:id/resync', instanceAccess, zValidator('json', resyncSch
       config: {
         since: sinceDate.toISOString(),
         until: untilDate.toISOString(),
+        downloadMedia: instance.downloadMediaOnSync,
         ...(chatJids?.length ? { chatJids } : {}),
       },
     });

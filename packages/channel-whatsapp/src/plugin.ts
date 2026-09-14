@@ -108,6 +108,8 @@ export interface WhatsAppFetchHistoryOptions extends FetchHistoryOptions {
   count?: number;
   /** Anchor points for specific chats - if provided, actively fetches older messages */
   anchors?: MessageAnchor[];
+  /** Download media for history messages (job `downloadMedia`, already resolved against instance `downloadMediaOnSync`). Only an explicit `false` skips. */
+  downloadMedia?: boolean;
 }
 
 /**
@@ -290,6 +292,8 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       onMessage?: (message: HistorySyncMessage) => void;
       onComplete?: (totalFetched: number) => void;
       totalFetched: number;
+      downloadMedia?: boolean;
+      skippedBeforeSince?: number;
     }
   >();
 
@@ -2400,6 +2404,8 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       },
       onComplete: options.onProgress ? () => options.onProgress?.(messages.length, 100) : undefined,
       totalFetched: 0,
+      downloadMedia: options.downloadMedia,
+      skippedBeforeSince: 0,
     };
 
     this.historySyncCallbacks.set(instanceId, syncState);
@@ -3961,9 +3967,19 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     // Process each message in the history
     // Process in parallel for better performance, but limit concurrency
     const BATCH_SIZE = 50;
+    const skippedBefore = syncState?.skippedBeforeSince ?? 0;
     for (let i = 0; i < messages.length; i += BATCH_SIZE) {
       const batch = messages.slice(i, i + BATCH_SIZE);
       await Promise.all(batch.map((msg) => this.processHistoryMessage(instanceId, msg, syncState)));
+    }
+    const skippedBeforeSince = (syncState?.skippedBeforeSince ?? 0) - skippedBefore;
+    if (skippedBeforeSince > 0) {
+      this.logger.info('Skipped history messages before since (widen --depth to include them)', {
+        instanceId,
+        skippedBeforeSince,
+        batchSize: messages.length,
+        since: syncState?.since?.toISOString(),
+      });
     }
 
     // Report progress and completion
@@ -3988,10 +4004,11 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   private isHistoryMessageWithinSyncRange(
     msg: WAMessage,
     timestamp: Date,
-    syncState: { since?: Date; until?: Date } | undefined,
+    syncState: { since?: Date; until?: Date; skippedBeforeSince?: number } | undefined,
     instanceId: string,
   ): boolean {
     if (syncState?.since && timestamp < syncState.since) {
+      syncState.skippedBeforeSince = (syncState.skippedBeforeSince ?? 0) + 1;
       this.logger.debug('Skipping history message - before since', {
         instanceId,
         messageId: msg.key?.id,
@@ -4054,8 +4071,12 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       return;
     }
 
-    // Download media if present (same as realtime messages)
-    const mediaResult = await tryDownloadMedia(msg, instanceId, msg.key.id, this.config.apiBaseUrl);
+    // Download media only when the sync job allows it (#1127). When skipped, content keeps
+    // type/mimeType metadata so the row is still marked as media for later backfill.
+    const mediaResult =
+      syncState?.downloadMedia === false
+        ? null
+        : await tryDownloadMedia(msg, instanceId, msg.key.id, this.config.apiBaseUrl);
     if (mediaResult) {
       content.mediaUrl = mediaResult.mediaUrl;
       content.localPath = mediaResult.mediaLocalPath;
