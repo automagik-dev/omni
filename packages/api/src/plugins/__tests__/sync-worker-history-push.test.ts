@@ -39,6 +39,7 @@ function createMockServices(activeJob: { id: string; type: string } | null = { i
       start: mock(async () => {}),
       complete: mock(async () => {}),
       fail: mock(async () => {}),
+      cancel: mock(async () => {}),
       getActiveForInstance: mock(async () => (activeJob ? [activeJob] : [])),
       updateProgress: mock(async () => {}),
     },
@@ -170,5 +171,47 @@ describe('setupHistoryPushTracker — sync.progress.> handler', () => {
     });
 
     expect(services.syncJobs.updateProgress).not.toHaveBeenCalled();
+  });
+});
+
+describe('setupHistoryPushTracker — instance.connected handler (#1123)', () => {
+  async function setup(activeJob: { id: string; type: string } | null) {
+    let connectedHandler: ProgressHandler | null = null;
+    const eventBus = {
+      subscribe: mock(async (type: string, cb: ProgressHandler) => {
+        if (type === 'instance.connected') connectedHandler = cb;
+        return { unsubscribe: mock(async () => {}) };
+      }),
+      subscribePattern: mock(async () => ({ unsubscribe: mock(async () => {}) })),
+    };
+    const services = createMockServices(activeJob);
+    await setupHistoryPushTracker(eventBus as unknown as EventBus, services as any);
+    const trigger = (payload: Record<string, unknown>) =>
+      (connectedHandler as unknown as (e: { payload: Record<string, unknown>; metadata: object }) => Promise<void>)({
+        payload,
+        metadata: {},
+      });
+    return { services, trigger };
+  }
+
+  test('plain reconnect (no isNewLogin) does not open a history-push job', async () => {
+    const { services, trigger } = await setup(null);
+    await trigger({ instanceId: 'inst-1', channelType: 'whatsapp-baileys' });
+    expect(services.syncJobs.create).not.toHaveBeenCalled();
+    expect(services.syncJobs.start).not.toHaveBeenCalled();
+  });
+
+  test('first connect after pairing opens a job', async () => {
+    const { services, trigger } = await setup(null);
+    await trigger({ instanceId: 'inst-1', channelType: 'whatsapp-baileys', isNewLogin: true });
+    expect(services.syncJobs.create).toHaveBeenCalledTimes(1);
+    expect(services.syncJobs.start).toHaveBeenCalledWith('job-hp', null);
+  });
+
+  test('new pairing cancels a leftover history-push job before opening a fresh one', async () => {
+    const { services, trigger } = await setup({ id: 'stale-hp', type: 'history-push' });
+    await trigger({ instanceId: 'inst-1', channelType: 'whatsapp-baileys', isNewLogin: true });
+    expect(services.syncJobs.cancel).toHaveBeenCalledWith('stale-hp', null);
+    expect(services.syncJobs.create).toHaveBeenCalledTimes(1);
   });
 });

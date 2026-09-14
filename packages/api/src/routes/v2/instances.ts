@@ -5,7 +5,7 @@
 import { zValidator } from '@hono/zod-validator';
 import type { ChannelPlugin, ChannelRegistry, GroupParticipantUpdateResult } from '@omni/channel-sdk';
 import { AccessModeSchema, ChannelTypeSchema, NotFoundError, createLogger } from '@omni/core';
-import type { GupshupHandoffOptions, SyncJobType } from '@omni/db';
+import type { GupshupHandoffOptions } from '@omni/db';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { accessCache } from '../../cache/cache-keys';
@@ -475,6 +475,12 @@ const SENSITIVE_INSTANCE_FIELDS = [
   'ascFlowChave',
 ] as const;
 
+/** Mask a secret for display: keep a short prefix (e.g. `xoxp-`) and the last 4 chars */
+function maskSecret(secret: string): string {
+  if (secret.length <= 12) return '****';
+  return `${secret.slice(0, 5)}****${secret.slice(-4)}`;
+}
+
 /** Strip secret tokens from an instance before returning it in API responses */
 function sanitizeInstance<T extends Record<string, unknown>>(
   instance: T,
@@ -482,6 +488,12 @@ function sanitizeInstance<T extends Record<string, unknown>>(
   const sanitized = { ...instance };
   for (const field of SENSITIVE_INSTANCE_FIELDS) {
     delete sanitized[field];
+  }
+  // Surface WHETHER a Slack user token is set (masked), so `authMode: user`
+  // without one is visible instead of silently acting as the bot (#1120).
+  const userToken = instance.slackUserToken;
+  if (typeof userToken === 'string' && userToken.length > 0) {
+    (sanitized as Record<string, unknown>).slackUserToken = maskSecret(userToken);
   }
   return sanitized;
 }
@@ -1976,7 +1988,7 @@ instancesRoutes.put(
 
 /** Validate chatJids + history-push guard for message sync. Returns error tuple [message, status] or null. */
 async function validateMessageSyncPreconditions(
-  services: { syncJobs: { hasActiveJob: (id: string, type: SyncJobType) => Promise<boolean> } },
+  services: { syncJobs: { isHistoryPushBlocking: (id: string) => Promise<boolean> } },
   instanceId: string,
   channel: string,
   type: string,
@@ -1989,7 +2001,7 @@ async function validateMessageSyncPreconditions(
     };
   }
   const requiresMessageHistory = type === 'messages' || type === 'all' || Boolean(chatJids?.length);
-  if (requiresMessageHistory && (await services.syncJobs.hasActiveJob(instanceId, 'history-push'))) {
+  if (requiresMessageHistory && (await services.syncJobs.isHistoryPushBlocking(instanceId))) {
     return {
       error: {
         code: 'SYNC_IN_PROGRESS',
@@ -2146,6 +2158,30 @@ instancesRoutes.get('/:id/sync/:jobId', instanceAccess, async (c) => {
       startedAt: job.startedAt,
       completedAt: job.completedAt,
     },
+  });
+});
+
+/**
+ * POST /instances/:id/sync/:jobId/cancel - Cancel a pending/running sync job
+ */
+instancesRoutes.post('/:id/sync/:jobId/cancel', instanceAccess, async (c) => {
+  const id = c.req.param('id');
+  const jobId = c.req.param('jobId');
+  const services = c.get('services');
+
+  await services.instances.getById(id);
+
+  const job = await services.syncJobs.getById(jobId);
+  if (job.instanceId !== id) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Sync job not found' } }, 404);
+  }
+  if (job.status !== 'pending' && job.status !== 'running') {
+    return c.json({ error: { code: 'INVALID_STATE', message: `Sync job is already ${job.status}` } }, 409);
+  }
+
+  const cancelled = await services.syncJobs.cancel(jobId);
+  return c.json({
+    data: { jobId: cancelled.id, instanceId: cancelled.instanceId, type: cancelled.type, status: cancelled.status },
   });
 });
 

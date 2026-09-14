@@ -59,6 +59,7 @@ const CLI_COMMANDS: Record<string, string> = {
   'instances.startSync': 'instances sync',
   'instances.listSyncs': 'instances syncs',
   'instances.getSyncStatus': 'instances syncs',
+  'instances.cancelSync': 'instances syncs cancel',
   'instances.listContacts': 'instances contacts',
   'instances.listGroups': 'instances groups',
   'instances.listGroupMembers': 'instances group-members',

@@ -30,7 +30,7 @@
  */
 
 import type { EventMetadata } from '../events/types';
-import { getNestedValue } from './conditions';
+import { getNestedValue, getPayloadValue } from './conditions';
 
 /**
  * Envelope of the event that triggered the automation (issue #956).
@@ -213,7 +213,8 @@ function resolveTemplatePath(path: string, context: TemplateContext): unknown {
   }
 
   // Handle payload access
-  if (root === 'payload') return rest ? getNestedValue(context.payload, rest) : context.payload;
+  // A channel event's platform fields live under `payload.rawPayload` (#1115).
+  if (root === 'payload') return rest ? getPayloadValue(context.payload, rest) : context.payload;
 
   // Handle env access
   if (root === 'env') return rest ? context.env[rest] : undefined;
@@ -224,7 +225,7 @@ function resolveTemplatePath(path: string, context: TemplateContext): unknown {
   }
 
   // Fallback: try to find in payload directly
-  return getNestedValue(context.payload, trimmed);
+  return getPayloadValue(context.payload, trimmed);
 }
 
 /**
@@ -249,9 +250,22 @@ function formatValue(value: unknown): string {
  * substituteTemplate('Hello {{payload.name}}!', context)
  * // Returns: 'Hello John!'
  */
-export function substituteTemplate(template: string, context: TemplateContext): string {
-  return template.replace(TEMPLATE_REGEX, (_match, path) => {
+/**
+ * Called with each `{{path}}` that resolved to nothing. An unresolved path
+ * still renders `''` (an empty value is safer than a literal placeholder in a
+ * sent message), so callers that must tell "missing" from "empty" — the dry
+ * run (#1115) — collect them here.
+ */
+export type UnresolvedPathHandler = (path: string) => void;
+
+export function substituteTemplate(
+  template: string,
+  context: TemplateContext,
+  onUnresolved?: UnresolvedPathHandler,
+): string {
+  return template.replace(TEMPLATE_REGEX, (_match, path: string) => {
     const value = resolveTemplatePath(path, context);
+    if (value === undefined) onUnresolved?.(path.trim());
     return formatValue(value);
   });
 }
@@ -260,21 +274,25 @@ export function substituteTemplate(template: string, context: TemplateContext): 
  * Substitute templates in an object (recursively)
  * Returns a new object with all string values substituted
  */
-export function substituteTemplateObject<T extends Record<string, unknown>>(obj: T, context: TemplateContext): T {
+export function substituteTemplateObject<T extends Record<string, unknown>>(
+  obj: T,
+  context: TemplateContext,
+  onUnresolved?: UnresolvedPathHandler,
+): T {
   const result: Record<string, unknown> = {};
 
   for (const [key, value] of Object.entries(obj)) {
     if (typeof value === 'string') {
-      result[key] = substituteTemplate(value, context);
+      result[key] = substituteTemplate(value, context, onUnresolved);
     } else if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
-      result[key] = substituteTemplateObject(value as Record<string, unknown>, context);
+      result[key] = substituteTemplateObject(value as Record<string, unknown>, context, onUnresolved);
     } else if (Array.isArray(value)) {
       result[key] = value.map((item) => {
         if (typeof item === 'string') {
-          return substituteTemplate(item, context);
+          return substituteTemplate(item, context, onUnresolved);
         }
         if (typeof item === 'object' && item !== null) {
-          return substituteTemplateObject(item as Record<string, unknown>, context);
+          return substituteTemplateObject(item as Record<string, unknown>, context, onUnresolved);
         }
         return item;
       });

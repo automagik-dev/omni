@@ -11,7 +11,7 @@ import type { ChannelRegistry, FetchHistoryOptions, HistorySyncMessage } from '@
 import type { EventBus, OmniEvent } from '@omni/core';
 import { classifyEnvelope, createLogger } from '@omni/core';
 import type { ChannelType } from '@omni/core/types';
-import type { Database, SyncJobConfig, SyncJobProgress, SyncJobType } from '@omni/db';
+import type { Database, JobStatus, SyncJobConfig, SyncJobProgress, SyncJobType } from '@omni/db';
 import { omniGroups } from '@omni/db';
 import { and, eq, sql } from 'drizzle-orm';
 import type { Services } from '../services';
@@ -22,6 +22,11 @@ import { runConsumerInTenantContext } from '../tenancy/worker-tenant-context';
 import { validateContactPhone } from '../utils/phone';
 
 const log = createLogger('sync-worker');
+
+const TERMINAL_JOB_STATUSES: readonly JobStatus[] = ['completed', 'failed', 'cancelled'];
+
+/** Ack wait for sync.started: longer than any realistic sync job run (#1124) */
+export const SYNC_WORKER_ACK_WAIT_MS = 6 * 60 * 60 * 1000;
 
 /**
  * Sync started event payload
@@ -187,6 +192,14 @@ export async function setupSyncWorker(
         const jobTenantId = trustedSyncTenant(event);
 
         try {
+          // Idempotency guard (#1124): a redelivered event for a finished job
+          // must not flip it back to running and redo the work.
+          const existing = await services.syncJobs.getById(jobId, jobTenantId).catch(() => null);
+          if (existing && TERMINAL_JOB_STATUSES.includes(existing.status)) {
+            log.info('Skipping sync job already in terminal state', { jobId, status: existing.status });
+            return;
+          }
+
           // Start the job
           await services.syncJobs.start(jobId, jobTenantId);
 
@@ -245,6 +258,10 @@ export async function setupSyncWorker(
         durable: 'sync-worker',
         queue: 'sync-workers',
         startFrom: 'new',
+        // Message syncs run minutes to hours; the 30s default redelivered
+        // mid-run and re-ran whole jobs (#1124). The terminal-status guard
+        // above is the guarantee, this avoids the churn.
+        ackWaitMs: SYNC_WORKER_ACK_WAIT_MS,
       },
     );
 
@@ -523,7 +540,7 @@ async function processMessageSync(
   const fetchOptions: WhatsAppSyncOptions = {
     since,
     until: new Date(),
-    count: 100, // Messages per chat (recursive fetching will get more)
+    count: 50, // WhatsApp caps on-demand replies at 50 (recursive fetching gets more)
     downloadMedia: config.downloadMedia,
     anchors: anchors.length > 0 ? anchors : undefined,
     onProgress: async (count: number, progress?: number) => {
@@ -1186,7 +1203,11 @@ export async function setupHistoryPushTracker(eventBus: EventBus, services: Serv
     await eventBus.subscribe(
       'instance.connected',
       async (event) => {
-        const { instanceId, channelType } = event.payload;
+        const { instanceId, channelType, isNewLogin } = event.payload;
+
+        // WhatsApp only pushes history right after a fresh pairing; a plain
+        // reconnect pushes nothing and the job would run forever (#1123).
+        if (!isNewLogin) return;
 
         // The `instance.connected` envelope's trusted tenant (G5, ADR-0008).
         // Since the ownership registry seeds channel-plugin publishes, a
@@ -1195,14 +1216,11 @@ export async function setupHistoryPushTracker(eventBus: EventBus, services: Serv
         const jobTenantId = trustedSyncTenant(event);
 
         try {
-          // Reuse an already-running history-push job for this instance instead of
-          // creating a duplicate on every reconnect.
-          if (await services.syncJobs.hasActiveJob(instanceId, 'history-push', jobTenantId)) {
-            historyPushLog.debug('Active history-push job already exists — skipping create', {
-              instanceId,
-              channel: channelType,
-            });
-            return;
+          // A new pairing supersedes any leftover history-push job, so the
+          // genuine push's progress can't land on a stale row.
+          const activeJobs = await services.syncJobs.getActiveForInstance(instanceId, jobTenantId);
+          for (const stale of activeJobs.filter((j) => j.type === 'history-push')) {
+            await services.syncJobs.cancel(stale.id, jobTenantId);
           }
 
           // Create a running history-push sync job

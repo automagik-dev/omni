@@ -23,9 +23,13 @@ function parseErrorObject(error: object, status?: number): OmniApiError | null {
       return new OmniApiError(rawError, 'API_ERROR', undefined, status);
     }
     if (rawError && typeof rawError === 'object') {
-      const apiError = rawError as ApiErrorDetails;
+      const apiError = rawError as ApiErrorDetails & { issues?: Array<{ path?: unknown[]; message?: string }> };
+      // Raw ZodError from zValidator: { issues: [{ path, message }] }, no message
+      const issuesMessage = Array.isArray(apiError.issues)
+        ? apiError.issues.map((i) => `${(i.path ?? []).join('.')}: ${i.message}`).join('; ')
+        : undefined;
       return new OmniApiError(
-        apiError.message ?? `API error (status ${status ?? 'unknown'})`,
+        apiError.message ?? issuesMessage ?? `API error (status ${status ?? 'unknown'})`,
         apiError.code ?? 'API_ERROR',
         apiError.details as Record<string, unknown>,
         status,
