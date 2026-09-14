@@ -54,6 +54,32 @@ export async function resolveInstanceId(input: string): Promise<string> {
   output.error(`No instance found matching "${input}"`);
 }
 
+async function assertChatInInstance(input: string, instanceId: string): Promise<void> {
+  const client = getClient();
+  let chat: { id: string; instanceId: string } | null = null;
+  try {
+    chat = (await client.chats.get(input)) as { id: string; instanceId: string } | null;
+  } catch {
+    // Treat exceptions the same as a missing chat below.
+  }
+  if (!chat) {
+    output.error(`No chat found matching "${input}"`);
+  }
+  if (chat.instanceId !== instanceId) {
+    output.error(`Chat ${input.slice(0, 8)} belongs to instance ${chat.instanceId}, not ${instanceId}`);
+  }
+}
+
+async function resolveChatByExternalId(input: string, instanceId?: string): Promise<string | undefined> {
+  const result = await getClient().chats.list({ limit: 100, instanceId, search: input });
+  const matches = result.items.filter((c) => c.externalId === input);
+  if (matches.length > 1) {
+    const names = matches.map((c) => `  ${c.id.slice(0, 8)}  ${c.name || '(unnamed)'}`).join('\n');
+    output.error(`Ambiguous external ID "${input}" matches ${matches.length} chats (pass --instance):\n${names}`);
+  }
+  return matches[0]?.id;
+}
+
 /**
  * Resolve a chat identifier to a UUID.
  *
@@ -62,30 +88,22 @@ export async function resolveInstanceId(input: string): Promise<string> {
  *   2. UUID prefix match (minimum 2 hex chars)
  *   3. Exact name match (case-insensitive)
  *   4. Name substring match (case-insensitive)
+ *   (inputs containing "@" first try an exact external id / JID match)
  *
  * Exits with error if no match or ambiguous.
  */
 export async function resolveChatId(input: string, instanceId?: string): Promise<string> {
   if (UUID_RE.test(input)) {
-    if (instanceId) {
-      const client = getClient();
-      let chat: { id: string; instanceId: string } | null = null;
-      try {
-        chat = (await client.chats.get(input)) as { id: string; instanceId: string } | null;
-      } catch {
-        // Treat exceptions the same as a missing chat below.
-      }
-      if (!chat) {
-        output.error(`No chat found matching "${input}"`);
-      }
-      if (chat.instanceId !== instanceId) {
-        output.error(`Chat ${input.slice(0, 8)} belongs to instance ${chat.instanceId}, not ${instanceId}`);
-      }
-    }
+    if (instanceId) await assertChatInInstance(input, instanceId);
     return input;
   }
 
+  // External id (e.g. WhatsApp JID) — what journaled events carry as chatId (#1119)
+  const byExternal = input.includes('@') ? await resolveChatByExternalId(input, instanceId) : undefined;
+  if (byExternal) return byExternal;
+
   const client = getClient();
+
   const result = await client.chats.list({ limit: 100, instanceId });
   const chats = result.items;
 
@@ -275,6 +293,7 @@ export async function resolveKeyId(input: string): Promise<string> {
  *   2. UUID prefix match (minimum 2 hex chars)
  *   3. Exact name match (case-insensitive)
  *   4. Name substring match (case-insensitive)
+ *   (inputs containing "@" first try an exact external id / JID match)
  *
  * Exits with error if no match or ambiguous.
  */
@@ -349,6 +368,7 @@ export async function resolveBatchJobId(input: string): Promise<string> {
  *   2. UUID prefix match (minimum 2 hex chars)
  *   3. Exact name match (case-insensitive)
  *   4. Name substring match (case-insensitive)
+ *   (inputs containing "@" first try an exact external id / JID match)
  *
  * Exits with error if no match or ambiguous.
  */
@@ -392,6 +412,7 @@ export async function resolveProviderId(input: string): Promise<string> {
  *   2. UUID prefix match (minimum 2 hex chars)
  *   3. Exact name match (case-insensitive)
  *   4. Name substring match (case-insensitive)
+ *   (inputs containing "@" first try an exact external id / JID match)
  *
  * Exits with error if no match or ambiguous.
  */
@@ -435,6 +456,7 @@ export async function resolveAgentId(input: string): Promise<string> {
  *   2. UUID prefix match (minimum 2 hex chars)
  *   3. Exact name match (case-insensitive)
  *   4. Name substring match (case-insensitive)
+ *   (inputs containing "@" first try an exact external id / JID match)
  *
  * Exits with error if no match or ambiguous.
  */

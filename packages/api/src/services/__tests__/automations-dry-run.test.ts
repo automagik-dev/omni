@@ -76,6 +76,7 @@ describe('AutomationService.test() dry run (#1073)', () => {
       type: 'log',
       wouldExecute: true,
       config: { level: 'info', message: `PR Add dry run via ${EVENT_ID}` },
+      unresolved: [],
     });
     expect(result.actions[1]?.config).toEqual({ eventType: 'custom.pr', payloadTemplate: { title: 'Add dry run' } });
 
@@ -116,5 +117,32 @@ describe('AutomationService.test() dry run (#1073)', () => {
     });
     expect(result).toMatchObject({ matched: true, conditionLogic: 'or', eventId: null });
     expect(result.conditions.map((c) => c.matched)).toEqual([true, false]);
+  });
+
+  test('channel event (#1115/#1116): platform fields under rawPayload resolve; missing template paths are listed', async () => {
+    const { service } = harness(
+      automation({
+        triggerEventType: 'message.received',
+        triggerConditions: [
+          { field: 'rawChatId', operator: 'eq', value: '120363@g.us' },
+          { field: 'key.fromMe', operator: 'eq', value: false },
+        ],
+        actions: [
+          { type: 'log', config: { level: 'info', message: '{{payload.message.conversation}}|{{payload.nope}}' } },
+        ],
+      }),
+    );
+    const result = await service.test(AUTOMATION_ID, {
+      type: 'message.received',
+      payload: {
+        chatId: '120363@g.us',
+        rawPayload: { rawChatId: '120363@g.us', key: { fromMe: false }, message: { conversation: 'hi' } },
+      },
+    });
+    expect(result.matched).toBe(true);
+    expect(result.actions[0]).toMatchObject({
+      config: { level: 'info', message: 'hi|' },
+      unresolved: ['payload.nope'],
+    });
   });
 });

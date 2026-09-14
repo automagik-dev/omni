@@ -3,22 +3,22 @@
  */
 
 import type { OpenAPIRegistry } from '@asteasolutions/zod-to-openapi';
+import { CONDITION_OPERATORS } from '@omni/core';
+import { strictConfig } from '../../lib/strict-config';
 import { z } from '../../lib/zod-openapi';
 import { ErrorSchema, PaginationMetaSchema, SuccessSchema } from './common';
 
 // Condition schema
 const ConditionSchema = z.object({
   field: z.string().min(1).openapi({ description: 'Dot notation field path' }),
-  operator: z
-    .enum(['eq', 'neq', 'gt', 'lt', 'gte', 'lte', 'contains', 'not_contains', 'exists', 'not_exists', 'regex'])
-    .openapi({ description: 'Operator' }),
+  operator: z.enum(CONDITION_OPERATORS).openapi({ description: 'Operator' }),
   value: z.unknown().optional().openapi({ description: 'Value to compare' }),
 });
 
 // Action schemas
 const WebhookActionSchema = z.object({
   type: z.literal('webhook'),
-  config: z.object({
+  config: strictConfig({
     url: z.string().min(1).openapi({ description: 'Webhook URL' }),
     method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']).default('POST'),
     headers: z.record(z.string(), z.string()).optional(),
@@ -35,7 +35,7 @@ const WebhookActionSchema = z.object({
 
 const SendMessageActionSchema = z.object({
   type: z.literal('send_message'),
-  config: z.object({
+  config: strictConfig({
     instanceId: z.string().optional(),
     to: z.string().optional(),
     contentTemplate: z.string().min(1),
@@ -44,7 +44,7 @@ const SendMessageActionSchema = z.object({
 
 const EmitEventActionSchema = z.object({
   type: z.literal('emit_event'),
-  config: z.object({
+  config: strictConfig({
     eventType: z.string().min(1),
     payloadTemplate: z.record(z.string(), z.unknown()).optional(),
   }),
@@ -52,7 +52,7 @@ const EmitEventActionSchema = z.object({
 
 const LogActionSchema = z.object({
   type: z.literal('log'),
-  config: z.object({
+  config: strictConfig({
     level: z.enum(['debug', 'info', 'warn', 'error']),
     message: z.string().min(1),
   }),
@@ -60,7 +60,7 @@ const LogActionSchema = z.object({
 
 const CallAgentActionSchema = z.object({
   type: z.literal('call_agent'),
-  config: z.object({
+  config: strictConfig({
     providerId: z.string().optional().openapi({ description: 'Provider ID (template: {{instance.agentProviderId}})' }),
     agentId: z.string().min(1).openapi({ description: 'Agent ID (required or template)' }),
     agentType: z.enum(['agent', 'team', 'workflow']).optional().openapi({ description: 'Agent type' }),
@@ -251,6 +251,9 @@ export const AutomationTestResultSchema = z.object({
         type: z.string(),
         wouldExecute: z.boolean(),
         config: z.record(z.string(), z.unknown()).openapi({ description: 'Action config with templates rendered' }),
+        unresolved: z
+          .array(z.string())
+          .openapi({ description: "Template paths that resolved to nothing and rendered '' (#1115)" }),
       }),
     )
     .openapi({ description: 'Rendered actions — never executed' }),

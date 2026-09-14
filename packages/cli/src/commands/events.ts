@@ -971,6 +971,8 @@ interface ConsumerData {
   cursor: number;
   head: number;
   lag: number;
+  /** No type-matching row past the cursor (#1128). Absent on older servers. */
+  caughtUp?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -982,6 +984,8 @@ interface ConsumerPullPage {
   cursor: number;
   head: number;
   hasMore: boolean;
+  /** A full scan window matched nothing; the server advanced the cursor past it (#1128). */
+  scanExhausted?: boolean;
 }
 
 /**
@@ -1006,6 +1010,12 @@ export async function consumersApiRequest<T>(path: string, init: { method?: stri
   return (await resp.json()) as T;
 }
 
+/** caught-up = nothing left to scan; behind = matching-type rows still waiting past the cursor. */
+function consumerState(row: ConsumerData): string {
+  if (row.caughtUp === undefined) return row.lag === 0 ? 'caught-up' : '-';
+  return row.caughtUp ? 'caught-up' : 'behind';
+}
+
 export function summarizeConsumerRow(row: ConsumerData): Record<string, unknown> {
   return {
     name: row.name,
@@ -1016,6 +1026,7 @@ export function summarizeConsumerRow(row: ConsumerData): Record<string, unknown>
       : '-',
     cursor: row.cursor,
     lag: row.lag,
+    state: consumerState(row),
     updatedAt: row.updatedAt,
   };
 }
@@ -1101,6 +1112,12 @@ export async function followConsumer(params: FollowParams): Promise<void> {
 
     const page = await pullWithRetry(params);
     await emitFollowPage(params, page.items, emit);
+    if (page.scanExhausted) {
+      // Distinguish "scanned a full window, no match" from "caught up" (#1128).
+      process.stderr.write(
+        `… scanned ${params.limit} rows without a match; cursor → ${page.cursor} (head ${page.head})\n`,
+      );
+    }
 
     if (!params.ack) {
       await output.flushStdout();
@@ -1185,6 +1202,7 @@ function createConsumersCommand(): Command {
 
   consumers
     .command('ls')
+    .alias('list')
     .description('List durable consumers with their cursor and lag')
     .action(async () => {
       try {

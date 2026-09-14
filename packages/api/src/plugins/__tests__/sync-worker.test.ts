@@ -11,7 +11,7 @@
 
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { EventBus } from '@omni/core';
-import { setupSyncWorker } from '../sync-worker';
+import { SYNC_WORKER_ACK_WAIT_MS, setupSyncWorker } from '../sync-worker';
 
 // ---------------------------------------------------------------------------
 // Mock Factories
@@ -38,6 +38,7 @@ function createMockEventBus() {
 function createMockServices() {
   return {
     syncJobs: {
+      getById: mock(async (_id: string, _tenant?: string | null) => ({ id: 'job-1', status: 'pending' as string })),
       start: mock(async () => {}),
       complete: mock(async () => {}),
       fail: mock(async (_id: string, _error: string) => {}),
@@ -104,8 +105,25 @@ describe('setupSyncWorker', () => {
       durable: 'sync-worker',
       queue: 'sync-workers',
       startFrom: 'new',
+      ackWaitMs: SYNC_WORKER_ACK_WAIT_MS,
     });
+    expect(opts.ackWaitMs).toBeGreaterThan(60 * 60 * 1000);
   });
+
+  // -- Idempotency (#1124) ----------------------------------------------------
+
+  for (const status of ['completed', 'failed', 'cancelled']) {
+    test(`redelivered event for a ${status} job does not re-run it`, async () => {
+      services.syncJobs.getById.mockResolvedValue({ id: 'job-r', status });
+      await setupSyncWorker(eventBus as unknown as EventBus, services as any, registry as any);
+      await eventBus._triggerSync({ jobId: 'job-r', instanceId: 'inst-1', type: 'messages', config: {} });
+
+      expect(services.syncJobs.start).not.toHaveBeenCalled();
+      expect(services.syncJobs.complete).not.toHaveBeenCalled();
+      expect(services.syncJobs.fail).not.toHaveBeenCalled();
+      expect(services.instances.getById).not.toHaveBeenCalled();
+    });
+  }
 
   // -- Job lifecycle ---------------------------------------------------------
 

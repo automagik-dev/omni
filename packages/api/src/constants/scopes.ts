@@ -215,6 +215,7 @@ export const SCOPE_MAP: Record<string, string> = {
   'PUT /instances/:id/profile/name': 'instances:write',
   'POST /instances/:id/sync': 'instances:write',
   'GET /instances/:id/sync/:jobId': 'instances:read',
+  'POST /instances/:id/sync/:jobId/cancel': 'instances:write',
   'GET /instances/:id/sync': 'instances:read',
   'GET /instances/:id/users/:userId/profile': 'instances:read',
   'GET /instances/:id/contacts': 'instances:read',

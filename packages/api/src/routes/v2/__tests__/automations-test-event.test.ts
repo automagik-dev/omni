@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, mock, test } from 'bun:test';
-import { NotFoundError } from '@omni/core';
+import { CONDITION_OPERATORS, NotFoundError } from '@omni/core';
 import type { Automation, Database } from '@omni/db';
 import { Hono } from 'hono';
 import { errorHandler } from '../../../middleware/error';
@@ -110,5 +110,23 @@ describe('POST /automations/:id/test with eventId (#1073)', () => {
     const body = (await res.json()) as { matched: boolean; conditions: Array<{ actual: unknown }> };
     expect(body.matched).toBe(false);
     expect(body.conditions[0]?.actual).toBe('closed');
+  });
+});
+
+describe('POST /automations condition operator validation (#1119)', () => {
+  test('invalid operator returns VALIDATION_ERROR listing CONDITION_OPERATORS', async () => {
+    const { app } = buildApp();
+    const res = await post(app, '/automations', {
+      name: 'x',
+      triggerEventType: 'message.received',
+      triggerConditions: [{ field: 'chatId', operator: 'equals', value: 'x' }],
+      actions: [{ type: 'log', config: { level: 'info', message: 'hi' } }],
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+    expect(body.error.message).toContain(
+      `triggerConditions.0.operator: Invalid operator. Expected one of: ${CONDITION_OPERATORS.join(', ')}`,
+    );
   });
 });

@@ -307,6 +307,9 @@ export interface InstanceConnectedMetadata {
 
   /** Owner identifier (phone, email, username) */
   ownerIdentifier?: string;
+
+  /** True only on the first connect after a fresh pairing */
+  isNewLogin?: boolean;
 }
 
 /**

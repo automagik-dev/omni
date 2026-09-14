@@ -819,8 +819,9 @@ export async function tryDownloadMedia(
     }
 
     // Build the stable storage key matching MediaStorageService layout.
-    const now = new Date();
-    const yearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    // File under the message's own month so backfilled media doesn't land in today's folder (#1127).
+    const messageDate = new Date(getPlatformTimestamp(msg));
+    const yearMonth = `${messageDate.getFullYear()}-${String(messageDate.getMonth() + 1).padStart(2, '0')}`;
     const ext = getExtension(mediaInfo.mimeType);
     // Sanitize externalId to prevent path traversal: strip directory components
     // and replace any non-alphanumeric characters (WhatsApp IDs are hex/alphanum).
@@ -848,9 +849,32 @@ export async function tryDownloadMedia(
       size: result.size,
     };
   } catch (error) {
-    log.warn('Media download failed, continuing without media', { externalId, error: String(error) });
+    logMediaDownloadFailure(externalId, error);
     return null;
   }
+}
+
+const MEDIA_FAILURE_LOG_WINDOW_MS = 60_000;
+const mediaFailureLog = { windowStart: 0, suppressed: 0 };
+
+/**
+ * Aggregate media download failures: one warn per window, carrying the count
+ * suppressed since the previous one. History backfills with expired CDN links
+ * otherwise emit hundreds of identical warnings (#1127).
+ */
+export function logMediaDownloadFailure(externalId: string, error: unknown, now = Date.now()): boolean {
+  if (now - mediaFailureLog.windowStart < MEDIA_FAILURE_LOG_WINDOW_MS) {
+    mediaFailureLog.suppressed++;
+    return false;
+  }
+  log.warn('Media download failed, continuing without media', {
+    externalId,
+    error: String(error),
+    suppressedSinceLastLog: mediaFailureLog.suppressed,
+  });
+  mediaFailureLog.windowStart = now;
+  mediaFailureLog.suppressed = 0;
+  return true;
 }
 
 /**

@@ -48,6 +48,9 @@ export interface SyncJobWithStats extends SyncJob {
   progressPercent?: number;
 }
 
+/** A history-push job with no progress for this long is considered done (#1123) */
+export const HISTORY_PUSH_STALE_MS = 10 * 60 * 1000;
+
 export class SyncJobService {
   /**
    * The handle every query in this service uses.
@@ -388,6 +391,30 @@ export class SyncJobService {
           and(eq(syncJobs.instanceId, instanceId), inArray(syncJobs.status, ['pending', 'running'] as JobStatus[])),
         ),
     );
+  }
+
+  /**
+   * Whether an active history-push job should block manual message syncs.
+   *
+   * WhatsApp only pushes history after a fresh pairing, so a history-push job
+   * with no progress for HISTORY_PUSH_STALE_MS never will (#1123). Such jobs
+   * are auto-completed here; only recent or progressing jobs block.
+   */
+  async isHistoryPushBlocking(instanceId: string, trustedTenantId?: string | null): Promise<boolean> {
+    const active = (await this.getActiveForInstance(instanceId, trustedTenantId)).filter(
+      (j) => j.type === 'history-push',
+    );
+    let blocking = false;
+    for (const job of active) {
+      const progress = job.progress as SyncJobProgress | null;
+      const lastActivity = new Date(progress?.lastProgressAt ?? job.startedAt ?? job.createdAt).getTime();
+      if (Date.now() - lastActivity < HISTORY_PUSH_STALE_MS) {
+        blocking = true;
+      } else {
+        await this.complete(job.id, trustedTenantId);
+      }
+    }
+    return blocking;
   }
 
   /**

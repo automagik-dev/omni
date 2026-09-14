@@ -2,9 +2,11 @@
  * Automations routes - automation rule management
  */
 
-import { zValidator } from '@hono/zod-validator';
-import { Hono } from 'hono';
+import { type Hook, zValidator } from '@hono/zod-validator';
+import { CONDITION_OPERATORS } from '@omni/core';
+import { type Env, Hono } from 'hono';
 import { z } from 'zod';
+import { strictConfig } from '../../lib/strict-config';
 import type { AutomationTestEvent } from '../../services/automations';
 import type { AppVariables } from '../../types';
 
@@ -14,6 +16,13 @@ const automationsRoutes = new Hono<{ Variables: AppVariables }>();
 // Schemas
 // ============================================================================
 
+/** Surface Zod issue messages (path: message) so clients can print them (#1119). */
+const validationHook: Hook<unknown, Env, string> = (result, c) => {
+  if (result.success) return;
+  const message = result.error.issues.map((i) => `${i.path.join('.') || 'body'}: ${i.message}`).join('; ');
+  return c.json({ error: { code: 'VALIDATION_ERROR', message, issues: result.error.issues } }, 400);
+};
+
 // Condition schema
 const conditionSchema = z.object({
   field: z
@@ -21,7 +30,9 @@ const conditionSchema = z.object({
     .min(1)
     .describe('Dot notation path into the event payload (e.g., content.type, pull_request.merged)'),
   operator: z
-    .enum(['eq', 'neq', 'gt', 'lt', 'gte', 'lte', 'contains', 'not_contains', 'exists', 'not_exists', 'regex'])
+    .enum(CONDITION_OPERATORS, {
+      errorMap: () => ({ message: `Invalid operator. Expected one of: ${CONDITION_OPERATORS.join(', ')}` }),
+    })
     .describe('Comparison operator'),
   value: z.unknown().optional().describe('Value to compare against'),
 });
@@ -29,7 +40,7 @@ const conditionSchema = z.object({
 // Webhook action schema
 const webhookActionSchema = z.object({
   type: z.literal('webhook'),
-  config: z.object({
+  config: strictConfig({
     url: z.string().min(1).describe('Webhook URL (supports {{templates}})'),
     method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']).default('POST'),
     headers: z.record(z.string(), z.string()).optional().describe('HTTP headers'),
@@ -47,7 +58,7 @@ const webhookActionSchema = z.object({
 // Send message action schema
 const sendMessageActionSchema = z.object({
   type: z.literal('send_message'),
-  config: z.object({
+  config: strictConfig({
     instanceId: z.string().optional().describe('Instance ID (template)'),
     to: z.string().optional().describe('Recipient (template)'),
     contentTemplate: z.string().min(1).describe('Message content template'),
@@ -57,7 +68,7 @@ const sendMessageActionSchema = z.object({
 // Emit event action schema
 const emitEventActionSchema = z.object({
   type: z.literal('emit_event'),
-  config: z.object({
+  config: strictConfig({
     eventType: z.string().min(1).describe('Event type to emit'),
     payloadTemplate: z.record(z.string(), z.unknown()).optional().describe('Event payload template'),
   }),
@@ -66,7 +77,7 @@ const emitEventActionSchema = z.object({
 // Log action schema
 const logActionSchema = z.object({
   type: z.literal('log'),
-  config: z.object({
+  config: strictConfig({
     level: z.enum(['debug', 'info', 'warn', 'error']).describe('Log level'),
     message: z.string().min(1).describe('Log message (supports templates)'),
   }),
@@ -75,7 +86,7 @@ const logActionSchema = z.object({
 // Call agent action schema - just calls agent and returns response for chaining
 const callAgentActionSchema = z.object({
   type: z.literal('call_agent'),
-  config: z.object({
+  config: strictConfig({
     providerId: z.string().optional().describe('Provider ID (template: {{instance.agentProviderId}})'),
     agentId: z.string().min(1).describe('Agent ID (required or template)'),
     agentType: z.enum(['agent', 'team', 'workflow']).optional().describe('Agent type'),
@@ -210,8 +221,10 @@ const testAutomationSchema = z
 
 /**
  * Resolve the test/execute body to an event: the inline mock, or the REAL
- * journaled row (#1073) shaped the way the engine would have seen it —
- * `rawPayload` as payload, the envelope `metadata` alongside.
+ * journaled row (#1073) shaped the way the engine saw it on the bus (#1116).
+ * A webhook (`internal`) event's payload IS its rawPayload; a channel event's
+ * bus payload is canonical (`chatId`, `from`, `content`, ...) with the
+ * platform payload nested under `rawPayload` — rebuilt here from the columns.
  */
 async function resolveTestEvent(
   services: AppVariables['services'],
@@ -222,7 +235,18 @@ async function resolveTestEvent(
   return {
     id: row.id,
     type: row.eventType,
-    payload: row.rawPayload ?? {},
+    payload:
+      row.channel === 'internal'
+        ? (row.rawPayload ?? {})
+        : Object.fromEntries(
+            Object.entries({
+              externalId: row.externalId,
+              chatId: row.chatId,
+              from: row.metadata?.from,
+              content: row.contentType ? { type: row.contentType, text: row.textContent ?? undefined } : undefined,
+              rawPayload: row.rawPayload,
+            }).filter(([, v]) => v != null),
+          ),
     metadata: row.metadata ?? undefined,
     timestamp: row.receivedAt.getTime(),
   };
@@ -302,7 +326,7 @@ automationsRoutes.get('/:id', async (c) => {
 /**
  * POST /automations - Create automation
  */
-automationsRoutes.post('/', zValidator('json', createAutomationSchema), async (c) => {
+automationsRoutes.post('/', zValidator('json', createAutomationSchema, validationHook), async (c) => {
   const data = c.req.valid('json');
   const services = c.get('services');
 
@@ -314,7 +338,7 @@ automationsRoutes.post('/', zValidator('json', createAutomationSchema), async (c
 /**
  * PATCH /automations/:id - Update automation
  */
-automationsRoutes.patch('/:id', zValidator('json', updateAutomationSchema), async (c) => {
+automationsRoutes.patch('/:id', zValidator('json', updateAutomationSchema, validationHook), async (c) => {
   const id = c.req.param('id');
   const data = c.req.valid('json');
   const services = c.get('services');

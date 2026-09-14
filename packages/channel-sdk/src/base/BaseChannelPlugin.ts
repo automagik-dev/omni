@@ -578,6 +578,7 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
         profileName: metadata?.profileName,
         profilePicUrl: metadata?.profilePicUrl,
         ownerIdentifier: metadata?.ownerIdentifier,
+        ...(metadata?.isNewLogin ? { isNewLogin: true } : {}),
       },
       instanceId,
     );

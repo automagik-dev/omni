@@ -180,3 +180,19 @@ describe('resolveChatId', () => {
     expect(mockListChats).toHaveBeenCalledWith({ limit: 100, instanceId: 'instance-b' });
   });
 });
+
+describe('resolveChatId external id (#1119)', () => {
+  beforeEach(() => mockListChats.mockReset());
+
+  test('resolves a WhatsApp JID to the chat uuid', async () => {
+    const jid = '120363001234567890@g.us';
+    mockListChats.mockResolvedValue({
+      items: [
+        { id: '33333333-3333-4333-8333-333333333333', name: 'Group', externalId: jid },
+        { id: '44444444-4444-4444-8444-444444444444', name: 'Other', externalId: `9${jid}` },
+      ],
+    });
+    expect(await resolveChatId(jid)).toBe('33333333-3333-4333-8333-333333333333');
+    expect(mockListChats).toHaveBeenCalledWith({ limit: 100, instanceId: undefined, search: jid });
+  });
+});

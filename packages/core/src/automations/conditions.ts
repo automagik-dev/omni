@@ -19,6 +19,35 @@ const MAX_REGEX_PATTERN_LENGTH = 500;
 const DANGEROUS_REGEX_PATTERN = /(\+|\*|\?|\{[0-9,]+\})\)?(\+|\*|\?|\{[0-9,]+\})/;
 
 /**
+ * The object an automation's conditions are evaluated against (#1115, #1116).
+ *
+ * ONE helper for the live engine and every dry run, so a green `test` implies
+ * a live match. Layers, later wins: envelope metadata, then the channel's raw
+ * platform payload, then the canonical payload. Channel plugins publish their
+ * platform fields (`rawChatId`, `key.fromMe`, `message.conversation`, ...)
+ * nested under `payload.rawPayload`; custom webhook events publish them at the
+ * top level. Flattening `rawPayload` lets the same condition resolve for both.
+ */
+export function buildConditionContext(
+  payload: Record<string, unknown>,
+  metadata?: Record<string, unknown> | object,
+): Record<string, unknown> {
+  const raw = payload.rawPayload;
+  const rawFields = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  return { ...(metadata ?? {}), ...rawFields, ...payload };
+}
+
+/**
+ * Resolve a dot path against an event payload, falling back to the channel's
+ * raw payload (`payload.rawPayload`) — the template-side twin of
+ * `buildConditionContext`.
+ */
+export function getPayloadValue(payload: Record<string, unknown>, path: string): unknown {
+  const value = getNestedValue(payload, path);
+  return value === undefined ? getNestedValue(payload.rawPayload, path) : value;
+}
+
+/**
  * Get a value from an object using dot notation path
  * Supports array indexing: 'items.0.name'
  */
