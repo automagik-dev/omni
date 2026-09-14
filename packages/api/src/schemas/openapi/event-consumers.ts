@@ -38,6 +38,9 @@ export const DurableConsumerSchema = z.object({
   cursor: z.number().int().openapi({ description: 'Last acked journal_seq; delivery resumes strictly after it' }),
   head: z.number().int().openapi({ description: 'Highest journal_seq currently in the journal' }),
   lag: z.number().int().openapi({ description: 'head - cursor (all journal rows past the cursor, not only matches)' }),
+  caughtUp: z
+    .boolean()
+    .openapi({ description: 'No type-matching journal row past the cursor (lag may still count other types)' }),
   createdAt: z.string().datetime().openapi({ description: 'Creation timestamp' }),
   updatedAt: z.string().datetime().openapi({ description: 'Last cursor/registry update timestamp' }),
 });
@@ -103,6 +106,9 @@ const PullResultSchema = z.object({
   }),
   head: z.number().int().openapi({ description: 'Journal head at pull time' }),
   hasMore: z.boolean().openapi({ description: 'True when the scan filled the page — more rows are already waiting' }),
+  scanExhausted: z.boolean().openapi({
+    description: 'A full scan window matched nothing; the stored cursor was advanced past it (#1128)',
+  }),
 });
 
 export function registerEventConsumerSchemas(registry: OpenAPIRegistry): void {

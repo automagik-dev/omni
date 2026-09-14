@@ -651,6 +651,40 @@ export function registerInstanceSchemas(registry: OpenAPIRegistry): void {
 
   registry.registerPath({
     method: 'post',
+    path: '/instances/{id}/sync/{jobId}/cancel',
+    operationId: 'cancelInstanceSync',
+    tags: ['Instances'],
+    summary: 'Cancel sync job',
+    description: 'Cancel a pending or running sync job (e.g. a stuck history-push job blocking manual message syncs).',
+    request: {
+      params: z.object({
+        id: z.string().uuid().openapi({ description: 'Instance UUID' }),
+        jobId: z.string().uuid().openapi({ description: 'Sync job UUID' }),
+      }),
+    },
+    responses: {
+      200: {
+        description: 'Sync job cancelled',
+        content: {
+          'application/json': {
+            schema: z.object({
+              data: z.object({
+                jobId: z.string().uuid(),
+                instanceId: z.string().uuid(),
+                type: z.string(),
+                status: z.literal('cancelled'),
+              }),
+            }),
+          },
+        },
+      },
+      404: { description: 'Instance or sync job not found', content: { 'application/json': { schema: ErrorSchema } } },
+      409: { description: 'Sync job already finished', content: { 'application/json': { schema: ErrorSchema } } },
+    },
+  });
+
+  registry.registerPath({
+    method: 'post',
     path: '/instances/{id}/logout',
     operationId: 'logoutInstance',
     tags: ['Instances'],

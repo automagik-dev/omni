@@ -200,6 +200,7 @@ describe('omni events consumers + follow', () => {
         filters: '-',
         cursor: 0,
         lag: 0,
+        state: 'caught-up',
         updatedAt: created.data.updatedAt,
       },
     ]);

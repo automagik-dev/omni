@@ -15,6 +15,7 @@ import {
   type EventMetadata,
   NotFoundError,
   ValidationError,
+  buildConditionContext,
   createAutomationEngine,
   createTemplateContext,
   evaluateConditionsWithDetails,
@@ -64,7 +65,8 @@ export interface AutomationTestResult {
     matched: boolean;
   }>;
   /** Actions with their templates rendered against the event — never executed. */
-  actions: Array<{ type: string; wouldExecute: boolean; config: Record<string, unknown> }>;
+  /** `unresolved` = template paths that found nothing and rendered `''` (#1115). */
+  actions: Array<{ type: string; wouldExecute: boolean; config: Record<string, unknown>; unresolved: string[] }>;
   eventId: string | null;
   dryRun: true;
 }
@@ -352,7 +354,7 @@ export class AutomationService {
 
     const conditionResult = evaluateConditionsWithDetails(
       automation.triggerConditions as Parameters<typeof evaluateConditionsWithDetails>[0],
-      { ...(event.metadata ?? {}), ...event.payload },
+      buildConditionContext(event.payload, event.metadata),
       conditionLogic,
     );
     const matched = triggerMatched && conditionResult.matched;
@@ -382,11 +384,13 @@ export class AutomationService {
         resolved: c.actualValue !== undefined,
         matched: c.matched,
       })),
-      actions: (automation.actions as AutomationAction[]).map((a) => ({
-        type: a.type,
-        wouldExecute: matched,
-        config: substituteTemplateObject((a.config ?? {}) as unknown as Record<string, unknown>, context),
-      })),
+      actions: (automation.actions as AutomationAction[]).map((a) => {
+        const unresolved = new Set<string>();
+        const config = substituteTemplateObject((a.config ?? {}) as unknown as Record<string, unknown>, context, (p) =>
+          unresolved.add(p),
+        );
+        return { type: a.type, wouldExecute: matched, config, unresolved: [...unresolved] };
+      }),
       eventId: event.id ?? null,
       dryRun: true,
     };
