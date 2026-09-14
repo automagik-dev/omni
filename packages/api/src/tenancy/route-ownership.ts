@@ -821,6 +821,8 @@ const TRUST_ROUTES: readonly RouteKey[] = [
  * endpoint is an ownership question, and it is this gate's to answer.
  */
 const OBSERVABILITY_ROUTES: readonly RouteKey[] = [
+  'GET /api/v2/audit',
+  'GET /api/v2/audit/:id',
   'GET /api/v2/logs/recent',
   'GET /api/v2/logs/stream',
   'GET /api/v2/metrics',

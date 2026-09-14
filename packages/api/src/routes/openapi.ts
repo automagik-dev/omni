@@ -25,6 +25,7 @@ import { registerAccessSchemas } from '../schemas/openapi/access';
 import { registerRouteSchemas } from '../schemas/openapi/agent-routes';
 // Import schema registrations to populate the registry
 import { registerAgentSchemas } from '../schemas/openapi/agents';
+import { registerAuditSchemas } from '../schemas/openapi/audit';
 import { CREDENTIAL_EXPOSURE_FIELDS, registerAuthSchemas } from '../schemas/openapi/auth';
 import { registerAutomationSchemas } from '../schemas/openapi/automations';
 import { registerChannelHarnessSchemas } from '../schemas/openapi/channel-harness';
@@ -54,6 +55,7 @@ import { registerWhatsappFlowsSchemas } from '../schemas/openapi/whatsapp-flows'
 // Register all schemas
 registerAgentSchemas(registry);
 registerCommonSchemas(registry);
+registerAuditSchemas(registry);
 registerAuthSchemas(registry);
 registerHealthSchemas(registry);
 registerInstanceSchemas(registry);
