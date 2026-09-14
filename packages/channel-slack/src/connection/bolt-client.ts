@@ -27,6 +27,13 @@ const HTTP_MAX_BODY_BYTES = 1024 * 1024;
 const SOCKET_OPEN_TIMEOUT_MS = 10_000;
 
 /**
+ * Liveness watchdog (#1151): an open WebSocket that has carried no frame
+ * (Slack server ping or event) for this long is a zombie. Slack pings every
+ * few seconds, so minutes of silence cannot be an idle workspace.
+ */
+const SOCKET_STALE_AFTER_MS = 5 * 60_000;
+
+/**
  * The SocketModeClient managed by Bolt's SocketModeReceiver. Derived from the
  * receiver type so `@slack/socket-mode` does not become a direct dependency.
  */
@@ -88,6 +95,8 @@ export interface BoltConnection {
   actingUserId?: string;
   botToken: string;
   botUserId?: string;
+  /** This app's bot id (auth.test `bot_id`) — stamped on everything we post (#1151). */
+  botId?: string;
   botName?: string;
   teamId?: string;
   teamName?: string;
@@ -120,6 +129,10 @@ export interface BoltConnection {
    * stop is not reported as a lost socket.
    */
   onSocketStateChange?: (state: SocketConnectionState) => void;
+  /** Last time the socket carried any frame — ping or event (#1151 watchdog). */
+  lastSocketActivityAt?: number;
+  /** Silence after which an open socket counts as dead (default 5 min). */
+  socketStaleAfterMs?: number;
   /** Bound for the post-start WebSocket verification (default 10s). */
   socketConnectTimeoutMs?: number;
 }
@@ -218,8 +231,18 @@ export function watchSocketLifecycle(connection: BoltConnection, logger: Logger)
     connection.onSocketStateChange?.(state);
   };
 
+  const touch = (): void => {
+    connection.lastSocketActivityAt = Date.now();
+  };
+  socketClient.on('ws_message', touch);
   socketClient.on('connected', () => {
     logger.info('Slack Socket Mode WebSocket connected');
+    touch();
+    // Server ping frames never reach the client emitter; listen on the raw ws
+    // (recreated on every reconnect) so a quiet-but-alive socket stays fresh.
+    const raw = (socketClient.websocket as unknown as { websocket?: { on?: (e: string, fn: () => void) => void } })
+      ?.websocket;
+    raw?.on?.('ping', touch);
     transition('connected');
   });
   socketClient.on('reconnecting', () => {
@@ -438,6 +461,7 @@ async function resolveIdentities(connection: BoltConnection, logger: Logger): Pr
   try {
     const authResult = await connection.app.client.auth.test();
     connection.botUserId = authResult.user_id ?? undefined;
+    connection.botId = (authResult.bot_id as string | undefined) ?? undefined;
     connection.botName = authResult.user ?? undefined;
     connection.teamId = authResult.team_id ?? undefined;
     connection.teamName = authResult.team ?? undefined;
@@ -527,8 +551,19 @@ export function isSocketOpen(connection: BoltConnection): boolean {
   const socketClient = connection.socketClient;
   if (!socketClient) return false;
   const websocket = socketClient.websocket;
-  if (websocket) return websocket.isActive();
+  if (websocket) return websocket.isActive() && !isSocketStale(connection);
   return connection.socketState === 'connected';
+}
+
+/**
+ * Liveness watchdog (#1151). A socket can stay 'open' while Slack stops
+ * delivering anything; readyState never notices. Reporting it as not open
+ * routes it through the existing getStatus → instance-monitor rebuild path.
+ */
+export function isSocketStale(connection: BoltConnection, now = Date.now()): boolean {
+  const last = connection.lastSocketActivityAt;
+  if (last === undefined) return false;
+  return now - last > (connection.socketStaleAfterMs ?? SOCKET_STALE_AFTER_MS);
 }
 
 /**
