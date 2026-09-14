@@ -104,6 +104,9 @@ export function extractMessageMeta(event: Record<string, unknown>): SlackMessage
 /**
  * Check if a message should be skipped (bot, subtype, own message).
  *
+ * `ownBotId` is this instance's app bot id (auth.test `bot_id`); messages the
+ * plugin posts carry it, so they never loop back as inbound.
+ *
  * `selfUserIds` is every identity this instance posts AS. In bot mode that is
  * just the bot user; in user mode (#889) it also includes the authorizing
  * human, and that second entry is not optional:
@@ -115,10 +118,18 @@ export function extractMessageMeta(event: Record<string, unknown>): SlackMessage
  * agent treat its own principal's typing as inbound and answer their
  * counterpart on their behalf. Verified live against Slack.
  */
-export function shouldSkipMessage(msg: Record<string, unknown>, selfUserIds: Array<string | undefined>): boolean {
-  if (msg.subtype === 'bot_message' || msg.bot_id) return true;
+export function shouldSkipMessage(
+  msg: Record<string, unknown>,
+  selfUserIds: Array<string | undefined>,
+  ownBotId?: string,
+): boolean {
   if (msg.subtype === 'message_changed' || msg.subtype === 'message_deleted') return true;
   const userId = msg.user as string | undefined;
+  // A human posting through ANY Slack app with their user token arrives with
+  // `user` AND `bot_id` (#1151) — only a bot with no human behind it, or this
+  // instance's own app, is skipped.
+  if (msg.subtype === 'bot_message' && !userId) return true;
+  if (msg.bot_id && (!userId || msg.bot_id === ownBotId)) return true;
   if (!userId) return true;
   if (selfUserIds.some((id) => id && id === userId)) return true;
   return false;
@@ -342,25 +353,39 @@ export function setupMessageHandlers(
   reliability?: ReliabilityOptions,
   /** Authorizing human's user id when authMode is 'user' (#889). */
   actingUserId?: string | undefined | (() => string | undefined),
-): void {
+  /** This instance's own app bot id (auth.test `bot_id`), for self-filtering (#1151). */
+  ownBotId?: () => string | undefined,
+): (message: Record<string, unknown>) => Promise<void> {
   const resolveBotUserId = () => (typeof botUserId === 'function' ? botUserId() : botUserId);
   const resolveActingUserId = () => (typeof actingUserId === 'function' ? actingUserId() : actingUserId);
 
   // Handle all messages (channels, groups, DMs, mpim)
-  app.message(async ({ message }) => {
-    const msg = message as unknown as Record<string, unknown>;
-    if (shouldSkipMessage(msg, [resolveBotUserId(), resolveActingUserId()])) return;
+  const handle = async (msg: Record<string, unknown>): Promise<void> => {
+    if (shouldSkipMessage(msg, [resolveBotUserId(), resolveActingUserId()], ownBotId?.())) {
+      logger.debug('Message skipped: bot/self/edit', {
+        instanceId,
+        channelId: msg.channel,
+        ts: msg.ts,
+        subtype: msg.subtype,
+        botId: msg.bot_id,
+        userId: msg.user,
+      });
+      return;
+    }
 
     const userId = msg.user as string;
     const meta = extractMessageMeta(msg);
     if (await enforceDmPolicy(meta, userId, dmPolicyConfig, instanceId, callbacks, logger)) return;
 
     await processMessage(instanceId, msg, resolveBotUserId(), callbacks, logger, reliability, filterConfig);
-  });
+  };
+  app.message(async ({ message }) => handle(message as unknown as Record<string, unknown>));
 
   // NOTE: app_mention is NOT handled separately — app.message() already captures
   // messages that mention the bot, and the agent-dispatcher detects mentions via
   // the mentionsBot flag. Handling both would cause duplicate message.received events.
 
   logger.info('Message handlers registered', { instanceId });
+  // Returned so reconnect backfill (#1151) feeds fetched messages through the same path.
+  return handle;
 }

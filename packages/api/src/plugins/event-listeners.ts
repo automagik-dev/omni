@@ -157,13 +157,13 @@ export async function setupMessageListener(eventBus: EventBus): Promise<void> {
   try {
     await eventBus.subscribe('message.received', async (event) => {
       const { externalId, chatId, from, content, rawPayload } = event.payload;
-      const _instanceId = event.metadata.instanceId;
-      messageLog.info('Received', { from, chatId, externalId });
-      messageLog.debug('Payload', { content: JSON.stringify(content) });
+      const { instanceId, channelType } = event.metadata;
+      messageLog.info('Received', { instanceId, channel: channelType, from, chatId, externalId });
+      messageLog.debug('Payload', { instanceId, content: JSON.stringify(content) });
 
       // DEBUG: Show full raw Baileys payload
       if (process.env.DEBUG_PAYLOADS === 'true' && rawPayload) {
-        messageLog.debug('Raw payload', { rawPayload });
+        messageLog.debug('Raw payload', { instanceId, rawPayload });
       }
     });
     messageLog.info('Listening for message.received events');
