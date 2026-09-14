@@ -122,6 +122,7 @@ function harness(tenantStatus: 'active' | 'suspended') {
   const services = {
     authPlane: { db: authPlaneDb },
     syncJobs: {
+      getById: mock(async () => ({ status: 'pending' })),
       start: mock(async () => {}),
       complete: mock(async () => {
         jobOutcomes.push('complete');

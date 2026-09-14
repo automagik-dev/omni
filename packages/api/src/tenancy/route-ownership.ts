@@ -699,6 +699,7 @@ const TENANT_SCOPED_ROUTES: readonly RouteKey[] = [
   'POST /api/v2/instances/:id/restart',
   'POST /api/v2/instances/:id/resync',
   'POST /api/v2/instances/:id/sync',
+  'POST /api/v2/instances/:id/sync/:jobId/cancel',
   'POST /api/v2/instances/:id/sync/profile',
   'POST /api/v2/instances/:id/whatsapp-business/connect',
   'POST /api/v2/instances/:id/whatsapp-business/oauth/exchange',

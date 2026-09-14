@@ -46,6 +46,7 @@ function harness() {
 
   const services = {
     syncJobs: {
+      getById: mock(async () => ({ status: 'pending' })),
       start: mock(async () => {}),
       complete: mock(async () => {}),
       fail: mock(async () => {}),

@@ -2732,7 +2732,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * Handle successful connection
    * @internal
    */
-  async handleConnected(instanceId: string, sock: WASocket): Promise<void> {
+  async handleConnected(instanceId: string, sock: WASocket, isNewLogin = false): Promise<void> {
     this.passkeyStates.delete(instanceId);
     // Get profile info
     let profileName: string | undefined;
@@ -2771,6 +2771,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       profileName,
       profilePicUrl,
       ownerIdentifier,
+      isNewLogin,
     });
 
     // Prefetch group metadata in background — populates cachedGroupMetadata

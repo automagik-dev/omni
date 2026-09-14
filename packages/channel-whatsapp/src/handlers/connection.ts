@@ -67,6 +67,8 @@ const activeQrCodes = new Map<string, { code: string; displayedAt: number }>();
 
 /** Instances whose current socket has moved from QR/code into passkey authentication. */
 const passkeyInstances = new Set<string>();
+/** Instances whose last pairing flagged isNewLogin, consumed by the next connection open */
+const newLoginInstances = new Set<string>();
 
 /**
  * Track connection timeouts per instance
@@ -277,6 +279,7 @@ async function handleConnectionClose(
     qrCycleAttempts.delete(instanceId);
     authenticatedInstances.delete(instanceId);
     passkeyInstances.delete(instanceId);
+    newLoginInstances.delete(instanceId);
     cancelPendingReconnect(instanceId);
     await plugin.handleDisconnected(instanceId, 'Logged out from WhatsApp', false);
     return;
@@ -363,8 +366,9 @@ async function handleConnectionOpen(plugin: WhatsAppPlugin, instanceId: string, 
   // Mark as authenticated - now we CAN auto-reconnect if disconnected later
   authenticatedInstances.add(instanceId);
 
-  log.info('Connection opened', { instanceId });
-  await plugin.handleConnected(instanceId, sock);
+  const isNewLogin = newLoginInstances.delete(instanceId);
+  log.info('Connection opened', { instanceId, isNewLogin });
+  await plugin.handleConnected(instanceId, sock, isNewLogin);
 }
 
 /**
@@ -385,7 +389,11 @@ export function setupConnectionHandlers(
   config: ReconnectConfig = DEFAULT_RECONNECT_CONFIG,
 ): void {
   sock.ev.on('connection.update', async (update: Partial<ConnectionState>) => {
-    const { connection, lastDisconnect, passkey, qr } = update;
+    const { connection, lastDisconnect, passkey, qr, isNewLogin } = update;
+
+    // Baileys flags isNewLogin right after pairing, then closes with
+    // restartRequired; the `open` arrives on the NEXT socket, so remember it.
+    if (isNewLogin) newLoginInstances.add(instanceId);
 
     if (passkey) {
       passkeyInstances.add(instanceId);
@@ -446,6 +454,7 @@ export function resetConnectionState(instanceId: string): void {
   qrCycleAttempts.delete(instanceId);
   activeQrCodes.delete(instanceId);
   passkeyInstances.delete(instanceId);
+  newLoginInstances.delete(instanceId);
   authenticatedInstances.delete(instanceId);
   clearConnectionTimeout(instanceId);
   cancelPendingReconnect(instanceId);
