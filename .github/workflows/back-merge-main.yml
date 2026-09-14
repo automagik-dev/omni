@@ -1,0 +1,78 @@
+# =============================================================================
+# Back-merge main into dev after a promotion (#1141).
+# =============================================================================
+# Every dev → main promotion lands as a merge commit that exists only on main.
+# This workflow merges that commit back into dev so dev always contains main
+# and the next promotion PR is never born BEHIND. It is a no-op when main is
+# already an ancestor of dev.
+#
+# The merge must be tree-neutral for the release pins: it refuses to push if
+# it would change packages/cli/package.json or anything under .well-known/.
+#
+# Same machine credential, bot identity, and `version-dev` concurrency group
+# as pin-candidate.yml. It only ever pushes refs/heads/dev.
+# =============================================================================
+name: Back-merge main into dev
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: version-dev
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  back-merge:
+    name: Back-merge main into dev
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Require protected version writer credential
+        env:
+          VERSION_WRITER_TOKEN: ${{ secrets.VERSION_BUMP_PAT }}
+        run: |
+          [[ -n "${VERSION_WRITER_TOKEN}" ]] || {
+            echo "::error::VERSION_BUMP_PAT is required so the back-merge push to dev triggers its CI"
+            exit 1
+          }
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: dev
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Merge main into dev and push
+        env:
+          VERSION_WRITER_TOKEN: ${{ secrets.VERSION_BUMP_PAT }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main dev
+          git reset --hard origin/dev
+          if git merge-base --is-ancestor origin/main HEAD; then
+            echo "main is already an ancestor of dev; nothing to back-merge"
+            exit 0
+          fi
+          version=$(git show origin/main:packages/cli/package.json | jq -r .version)
+          [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "::error::main packages/cli/package.json has no canonical version"
+            exit 1
+          }
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git merge --no-ff --no-edit origin/main \
+            -m "chore(merge): back-merge main into dev after v${version} promotion"
+          if ! git diff --quiet origin/dev HEAD -- packages/cli/package.json .well-known/; then
+            echo "::error::back-merge would change packages/cli/package.json or .well-known/; resolve by hand"
+            exit 1
+          fi
+          git -c http.https://github.com/.extraheader= \
+            push "https://x-access-token:${VERSION_WRITER_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "HEAD:refs/heads/dev"
+          echo "### Back-merged main (v${version}) into dev" >> "${GITHUB_STEP_SUMMARY}"
