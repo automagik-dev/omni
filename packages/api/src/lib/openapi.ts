@@ -70,6 +70,7 @@ export const apiTags = [
   { name: 'Persons', description: 'Identity management' },
   { name: 'Access', description: 'Access control rules' },
   { name: 'Settings', description: 'Global settings' },
+  { name: 'Audit', description: 'Config-mutation audit log' },
   { name: 'Providers', description: 'Agent providers' },
   { name: 'Webhooks', description: 'External webhook management' },
   { name: 'Dead Letters', description: 'Failed event management' },

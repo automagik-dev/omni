@@ -10,10 +10,12 @@
 
 import chalk, { Chalk, type ChalkInstance } from 'chalk';
 import { Command, Option } from 'commander';
+import { installActorHeader } from './client.js';
 import { createA2ACommand } from './commands/a2a.js';
 import { createAccessCommand } from './commands/access.js';
 import { createRoutesCommand } from './commands/agent-routes.js';
 import { createAgentsCommand } from './commands/agents.js';
+import { createAuditCommand } from './commands/audit.js';
 import { createAuthCommand } from './commands/auth.js';
 import { createAutomationsCommand } from './commands/automations.js';
 import { createBatchCommand } from './commands/batch.js';
@@ -353,6 +355,12 @@ const COMMANDS: CommandDef[] = [
     category: 'standard',
     helpGroup: 'Management',
     helpDescription: 'Agent routing configuration',
+  },
+  {
+    create: createAuditCommand,
+    category: 'core',
+    helpGroup: 'Management',
+    helpDescription: 'Config-mutation audit log',
   },
   {
     create: createKeysCommand,
@@ -738,6 +746,9 @@ program.configureOutput({
 // after `bun add -g`, which closes the race for good. Best-effort,
 // never throws. See manifest-pin.ts for the full rationale.
 selfHealManifestPin();
+
+// X-Omni-Actor from OMNI_ACTOR on every Omni API call (config audit, #1152).
+installActorHeader();
 
 // Parse and execute
 const argv = process.argv.slice(2);

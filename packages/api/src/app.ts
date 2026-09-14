@@ -68,6 +68,7 @@ function validateA2AInstance(instance: Instance | null): A2AInstanceValidationEr
 
 import { authMiddleware, requireAnyScope, requireInstanceAccess } from './middleware/auth';
 import { defaultBodyLimitMiddleware } from './middleware/body-limit';
+import { configAuditMiddleware } from './middleware/config-audit';
 import { genieSignatureMiddleware } from './middleware/genie-signature';
 import { outputRedactorMiddleware } from './middleware/output-redactor';
 import { requireSignedInstanceMiddleware } from './middleware/require-signed-instance';
@@ -551,6 +552,8 @@ export function createApp(
   // legacy path below behaves exactly as it did pre-G4.
   protectedApp.use('*', tenancyMiddleware);
   protectedApp.use('*', authMiddleware);
+  // Config-mutation audit (#1152). Right after auth so denied attempts are recorded too.
+  protectedApp.use('*', configAuditMiddleware);
   // Genie host signature verification (omni-host-fingerprint-trust group 4).
   // Runs BEFORE scope-enforcer so `signedBy`/`signedByScopes` are populated
   // on the context when scope-enforcer reads them for the per-host scope
