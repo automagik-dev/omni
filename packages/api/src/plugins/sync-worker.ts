@@ -335,6 +335,7 @@ type WAnchor = {
 /** WhatsApp-specific sync options (extends canonical FetchHistoryOptions with WA-specific fields). */
 type WhatsAppSyncOptions = FetchHistoryOptions & {
   count?: number;
+  downloadMedia?: boolean;
   anchors?: WAnchor[];
 };
 
@@ -482,6 +483,7 @@ async function processMessageSync(
     jobId,
     instanceId,
     channelType,
+    depth: config.depth,
     since: since?.toISOString(),
   });
 
@@ -522,6 +524,7 @@ async function processMessageSync(
     since,
     until: new Date(),
     count: 100, // Messages per chat (recursive fetching will get more)
+    downloadMedia: config.downloadMedia,
     anchors: anchors.length > 0 ? anchors : undefined,
     onProgress: async (count: number, progress?: number) => {
       if (inflightRevoked) return; // no durable side effects after the flip

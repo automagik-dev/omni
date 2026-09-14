@@ -868,7 +868,7 @@ export function createInstancesCommand(): Command {
     .command('sync <id>')
     .description('Start a sync operation')
     .requiredOption('--type <type>', `Sync type (${VALID_SYNC_TYPES.join(', ')})`)
-    .option('--depth <depth>', 'Sync depth (7d, 30d, 90d, 1y, all)')
+    .option('--depth <depth>', 'Sync depth (7d, 30d, 90d, 1y, all; default: all with --chat, otherwise 7d)')
     .option('--download-media', 'Download media files')
     .option('--chat <jid>', 'Specific chat JID for per-chat active sync (WhatsApp only)')
     .action(
@@ -903,6 +903,7 @@ export function createInstancesCommand(): Command {
             jobId: result.jobId,
             type: result.type,
             status: result.status,
+            depth: result.config?.depth,
             mode: syncMode,
           });
         } catch (err) {
