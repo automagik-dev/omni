@@ -7,20 +7,71 @@ repository.
 
 ## The one true promotion path
 
+Every merged PR to `dev` produces a promotable candidate with no dispatch
+(#1142). `version.yml` makes its usual dev bump (`chore(version): bump to X`),
+and that push fires `.github/workflows/release-candidate.yml`, which in one run:
+
+1. **cut** — calls `version.yml` with `candidate=true` (commit
+   `chore(version): cut candidate Y`, tag `vY`, no npm `next`, no dev
+   prerelease);
+2. **mint** — dispatches `image-build.yml` at `refs/tags/vY` and watches it to
+   success (it stays a dispatch; see "Candidate minting" for why);
+3. **pin** — calls `pin-candidate.yml`, which commits the public channel pins
+   to `dev`.
+
+Then open the `dev` → `main` promotion PR; that is the only manual step. The
+pipeline ignores every other push to `dev` — including its own cut and pin
+commits, so it never loops — and runs under
+`concurrency: release-candidate` with `cancel-in-progress: true`, so a burst of
+merges leaves one surviving candidate for the last tip. The same run can be
+started by hand for the current `dev` tip:
+
+```bash
+gh workflow run release-candidate.yml --ref dev
+```
+
+The individual steps remain dispatchable for manual use:
+
 ```bash
 gh workflow run version.yml --ref dev -f candidate=true          # cuts v<version> on dev
 gh workflow run image-build.yml --ref refs/tags/v<version> -f version=<version>
-# image-build.yml mints, publishes, writes its receipt, and dispatches
-# pin-candidate.yml, which commits the public channel pins to dev.
-# Then open the dev → main promotion PR. Nothing is pasted by hand.
+gh workflow run pin-candidate.yml --ref dev -f version=<version>  # image-build.yml also dispatches this
 ```
 
 Nothing else mints. A merged-PR bump (or a `version.yml` dispatch without
 `candidate=true`) publishes a dev prerelease at its tag, and that tag can never
 become stable: `image-build.yml` refuses it in its first step with the
 `candidate=true` hint. Any merge to `dev` after the mint bumps the version
-past the candidate, so the Promotion Pin Gate goes red again with the same
-hint: cut and mint again, then refresh the promotion PR.
+past the candidate, so the Promotion Pin Gate goes red until the pipeline run
+for that merge pins the new candidate; then refresh the promotion PR.
+
+### Recovering a failed orchestrated release
+
+Find the mint run: the `release-candidate.yml` run's summary links it, or
+`gh run list --workflow image-build.yml --branch v<version>`.
+
+- **cut failed** (nothing tagged or tag pushed without a mint): rerun the
+  whole pipeline, `gh workflow run release-candidate.yml --ref dev`. A
+  stranded tag with no alias is harmless; the next cut takes the next number.
+- **mint failed**: `gh run rerun <mint run id> --failed`. Never dispatch a new
+  mint for the same version: `build-push` refuses it once the `vX` alias
+  exists. When the rerun succeeds, its `finalize` dispatches `pin-candidate.yml`
+  itself; or run `gh workflow run pin-candidate.yml --ref dev -f
+  version=<version>`. Do not rerun the `release-candidate.yml` run: its mint
+  job would dispatch a second mint, which is refused.
+- **pin failed**: `gh workflow run pin-candidate.yml --ref dev -f
+  version=<version>`. If it reports that `dev` moved past the candidate, a
+  newer merge already started a newer pipeline run; let that one finish.
+
+Why rerunning `release.yml` (or the stable `version.yml` publish) alone is
+refused with `orchestrator verification failed: caller run is not in_progress`:
+both re-verify their `orchestrator_run_id` with `verify-orchestrator-run.py`,
+which requires that run to be `image-build.yml`, dispatched, bound to the tag
+SHA, and **still `in_progress`**. A standalone rerun of a child starts after
+the mint run completed, so the binding fails by design — otherwise any
+completed mint could authorize a later stable publication. Rerunning the
+mint's failed jobs puts the same run id back to `in_progress` and re-dispatches
+the children under it, which is why that is the only recovery.
 
 ## Immutable candidate
 

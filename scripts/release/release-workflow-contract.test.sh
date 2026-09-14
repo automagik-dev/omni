@@ -718,6 +718,56 @@ else:
     if pin_permissions != expected_pin_permissions:
         errors.append(f"candidate pin job permissions are {pin_permissions}, expected exactly {expected_pin_permissions}")
 
+    require(pin_candidate, r"^  workflow_call:\n    inputs:\n      version:\n[\s\S]{0,200}    secrets:\n      VERSION_BUMP_PAT:\n        required: true\n", "candidate pin cannot be called in-run by release-candidate.yml with an explicit writer secret")
+
+# release-candidate.yml (#1142): cut -> mint -> pin in one run, orchestration
+# only. The cut and pin are local reusable calls; the mint stays a dispatch of
+# image-build.yml because the stable publishers verify that exact dispatched
+# run (path, event, in_progress) and build-push binds the tag ref.
+release_candidate = workflows.get("release-candidate.yml")
+if release_candidate is None:
+    errors.append("one-shot candidate pipeline release-candidate.yml is missing")
+else:
+    require(release_candidate, r"^on:\n  push:\n    branches: \[dev\]\n  workflow_dispatch:\n\n", "candidate pipeline is not triggered by exactly a dev push and workflow_dispatch")
+    require(release_candidate, r"^concurrency:\n  group: >-\n    \$\{\{ [^\n]*'release-candidate' \|\| format\('release-candidate-ignored-\{0\}', github\.run_id\) \}\}\n  cancel-in-progress: true\n", "candidate pipeline does not collapse eligible runs into one cancel-in-progress release-candidate group while isolating ignored pushes")
+    require(release_candidate, r"^permissions:\s*\{\s*\}\s*$", "candidate pipeline does not clear top-level token permissions")
+    # Loop guard: only the auto-bump subject fires; the candidate cut and the
+    # pin commit under different subjects, so the pipeline never re-triggers.
+    guard = "startsWith(github.event.head_commit.message, 'chore(version): bump to ')"
+    if release_candidate.count(guard) != 2:
+        errors.append("candidate pipeline concurrency group and cut job do not share the auto-bump subject guard")
+    require(release_candidate, r"head_commit\.author\.email == 'github-actions\[bot\]@users\.noreply\.github\.com'", "candidate pipeline does not require the auto-bump author")
+    require(version_workflow, r'git commit -m "chore\(version\): cut candidate \$\{VERSION\}"', "a candidate cut commits the auto-bump subject and would re-trigger the candidate pipeline")
+    forbid("\n".join(line for line in release_candidate.splitlines() if not line.lstrip().startswith("#")), r"chore\(version\): cut candidate|chore\(release\): pin candidate", "candidate pipeline fires on its own candidate cut or pin commit")
+    rc_jobs = job_blocks(release_candidate)
+    if list(rc_jobs) != ["cut", "mint", "pin"]:
+        errors.append(f"candidate pipeline job set changed: {list(rc_jobs)}")
+    cut_job = "\n".join(rc_jobs.get("cut", []))
+    require(cut_job, r"^    uses: \./\.github/workflows/version\.yml\n", "candidate pipeline does not call version.yml for the cut")
+    require(cut_job, r"^    with:\n      candidate: true\n", "candidate pipeline cut is not a candidate=true cut")
+    mint_job = "\n".join(rc_jobs.get("mint", []))
+    require(mint_job, r"^    needs: cut\n", "candidate pipeline mint does not follow the cut")
+    require(mint_job, r"gh workflow run image-build\.yml \\\n\s+--repo \"\$\{GITHUB_REPOSITORY\}\" \\\n\s+--ref \"refs/tags/\$\{tag\}\" \\\n\s+--field version=\"\$\{VERSION\}\"", "candidate pipeline does not dispatch image-build.yml at the exact candidate tag")
+    require(mint_job, r"gh run watch \"\$\{run_id\}\" --repo \"\$\{GITHUB_REPOSITORY\}\" --exit-status", "candidate pipeline does not wait for the mint to succeed")
+    pin_job = "\n".join(rc_jobs.get("pin", []))
+    require(pin_job, r"^    needs: mint\n", "candidate pipeline pin does not follow the mint")
+    require(pin_job, r"^    uses: \./\.github/workflows/pin-candidate\.yml\n", "candidate pipeline does not call pin-candidate.yml")
+    forbid(release_candidate, r"uses:\s*\./\.github/workflows/image-build\.yml", "candidate pipeline calls image-build.yml, which breaks the dispatched-orchestrator binding")
+    for pattern, message in (
+        (r"secrets:\s*inherit", "candidate pipeline inherits repository secrets"),
+        (r"docker/build-push-action|imagetools\s+create", "candidate pipeline builds or retags an image itself"),
+        (r"\bgit\s+(?:push|tag)\b", "candidate pipeline moves a Git ref itself"),
+        (r"\bgh\s+release\b|\bnpm\s+(?:publish|dist-tag)\b", "candidate pipeline publishes itself"),
+        (r"refs/heads/main|ref:\s*main\b", "candidate pipeline touches main"),
+    ):
+        forbid(release_candidate, pattern, message)
+    expected_mint = {"actions": "write"}
+    if permissions_at(rc_jobs.get("mint", []), 4) != expected_mint:
+        errors.append(f"candidate pipeline mint permissions are {permissions_at(rc_jobs.get('mint', []), 4)}, expected exactly {expected_mint}")
+    if permissions_at(rc_jobs.get("pin", []), 4) != {"contents": "read", "packages": "read", "attestations": "read"}:
+        errors.append("candidate pipeline pin permissions are not exactly read-only")
+require(version_workflow, r"^  workflow_call:\n    inputs:\n      candidate:\n[\s\S]{0,300}    secrets:\n      VERSION_BUMP_PAT:\n        required: true\n[\s\S]{0,200}    outputs:\n      version:\n", "the version workflow cannot be called for an in-run candidate cut that emits its version")
+require(version_workflow, r"\(github\.event_name == 'push' && inputs\.candidate == true\)", "the version writer admits a called push that is not a candidate cut")
 back_merge = workflows.get("back-merge-main.yml")
 if back_merge is None:
     errors.append("back-merge-main.yml is missing")

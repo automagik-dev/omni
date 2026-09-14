@@ -1,7 +1,8 @@
 # =============================================================================
 # Pin a minted release candidate's public channel metadata on dev.
 # =============================================================================
-# Replaces the hand-paste ritual (#1057). image-build.yml dispatches this once
+# Replaces the hand-paste ritual (#1057). release-candidate.yml calls this, and
+# image-build.yml dispatches it, once
 # its stable publication finished (or an operator dispatches it for a candidate
 # that already minted). It re-verifies the candidate from public state alone —
 # the immutable v<version> tag, the attested registry alias, and the public
@@ -32,6 +33,16 @@ on:
         description: 'Exact minted candidate version without the v prefix'
         required: true
         type: string
+  # release-candidate.yml calls the pin in-run after its mint succeeds (#1142).
+  workflow_call:
+    inputs:
+      version:
+        description: 'Exact minted candidate version without the v prefix'
+        required: true
+        type: string
+    secrets:
+      VERSION_BUMP_PAT:
+        required: true
 
 concurrency:
   group: version-dev
