@@ -19,6 +19,7 @@
  * omni instances logout <id>
  * omni instances sync <id> --type <type> [--chat <jid>]
  * omni instances syncs <id> [job-id]
+ * omni instances syncs cancel <id> <job-id>
  */
 
 import type { Channel, WhatsAppPasskeyCredential } from '@omni/sdk';
@@ -913,34 +914,52 @@ export function createInstancesCommand(): Command {
     );
 
   // omni instances syncs <id> [job-id]
+  // omni instances syncs cancel <id> <job-id>
   instances
-    .command('syncs <id> [jobId]')
-    .description('List sync jobs or get job status')
+    .command('syncs <id> [jobId] [cancelJobId]')
+    .description('List sync jobs, get job status, or cancel a job (syncs cancel <id> <jobId>)')
     .option('--status <status>', 'Filter by status')
     .option('--limit <n>', 'Limit results', Number.parseInt)
-    .action(async (rawId: string, jobId?: string, options?: { status?: string; limit?: number }) => {
-      const client = getClient();
+    .action(
+      async (rawId: string, jobId?: string, cancelJobId?: string, options?: { status?: string; limit?: number }) => {
+        const client = getClient();
 
-      try {
-        const id = await resolveInstanceId(rawId);
-        if (jobId) {
-          // Get specific job status
-          const job = await client.instances.getSyncStatus(id, jobId);
-          output.data(job);
-        } else {
-          // List all jobs
-          const result = await client.instances.listSyncs(id, {
-            status: options?.status,
-            limit: options?.limit,
-          });
-
-          output.list(result.items, { emptyMessage: 'No sync jobs found.' });
+        if (rawId === 'cancel') {
+          if (!jobId || !cancelJobId) {
+            output.error('Usage: omni instances syncs cancel <id> <jobId>', undefined, 2);
+            return;
+          }
+          try {
+            const result = await client.instances.cancelSync(await resolveInstanceId(jobId), cancelJobId);
+            output.success(`Sync job ${result.jobId} cancelled`, result);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : 'Unknown error';
+            output.error(`Failed to cancel sync: ${message}`, undefined, 3);
+          }
+          return;
         }
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unknown error';
-        output.error(`Failed to get sync info: ${message}`, undefined, 3);
-      }
-    });
+
+        try {
+          const id = await resolveInstanceId(rawId);
+          if (jobId) {
+            // Get specific job status
+            const job = await client.instances.getSyncStatus(id, jobId);
+            output.data(job);
+          } else {
+            // List all jobs
+            const result = await client.instances.listSyncs(id, {
+              status: options?.status,
+              limit: options?.limit,
+            });
+
+            output.list(result.items, { emptyMessage: 'No sync jobs found.' });
+          }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Unknown error';
+          output.error(`Failed to get sync info: ${message}`, undefined, 3);
+        }
+      },
+    );
 
   // Helper: update profile name via API (calls WhatsApp directly)
   async function updateProfileName(instanceId: string, name: string): Promise<void> {

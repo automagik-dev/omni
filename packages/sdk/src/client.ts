@@ -1829,6 +1829,20 @@ export function createOmniClient(config: OmniClientConfig) {
       },
 
       /**
+       * Cancel a pending or running sync job
+       */
+      async cancelSync(
+        id: string,
+        jobId: string,
+      ): Promise<Pick<SyncJobStatus, 'jobId' | 'instanceId' | 'type' | 'status'>> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/instances/${id}/sync/${jobId}/cancel`, { method: 'POST' });
+        const json = (await resp.json()) as { data?: Pick<SyncJobStatus, 'jobId' | 'instanceId' | 'type' | 'status'> };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        if (!json?.data) throw new OmniApiError('Sync job not found', 'NOT_FOUND', undefined, 404);
+        return json.data;
+      },
+
+      /**
        * List contacts for an instance
        */
       async listContacts(

@@ -446,6 +446,8 @@ export interface InstanceConnectedPayload {
   profileName?: string;
   profilePicUrl?: string;
   ownerIdentifier?: string;
+  /** True only on the first connect after a fresh pairing (Baileys `isNewLogin`) */
+  isNewLogin?: boolean;
 }
 
 export interface InstanceDisconnectedPayload {
