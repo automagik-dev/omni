@@ -175,6 +175,13 @@ const createAutomationSchema = z.object({
       "Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order " +
         'only when every action succeeded; a failed run publishes zero. Default false = immediate publishing',
     ),
+  allowInstanceSenders: z
+    .boolean()
+    .default(false)
+    .describe(
+      'Loop guard opt-in (#1148): by default events sent by one of the tenant’s own instances ' +
+        '(payload.senderInstanceId) are skipped. True = act on them anyway',
+    ),
   maxConcurrency: z
     .number()
     .int()

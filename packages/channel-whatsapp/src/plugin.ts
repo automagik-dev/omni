@@ -21,6 +21,7 @@ import type {
   SendResult,
   StreamSender,
 } from '@omni/channel-sdk';
+import { resolveInstanceOwnerTenantId } from '@omni/core';
 import type { ChannelType, ContentType } from '@omni/core/types';
 import type {
   GroupMetadata,
@@ -533,6 +534,28 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    */
   getLidMappingCache(instanceId: string): Map<string, string> {
     return this.lidMappingCache.get(instanceId) ?? new Map();
+  }
+
+  /**
+   * Observer-independent authorship (#1148): which same-tenant instance's own
+   * account sent this message. `key.fromMe` only answers for the observing
+   * instance; a bot's message seen by a sibling instance in the same group is
+   * fromMe:false there. Matches the sender (phone or LID, resolved through the
+   * observer's LID cache) against every connected socket's own identity.
+   */
+  resolveSenderInstanceId(instanceId: string, from: string, isFromMe: boolean): string | undefined {
+    if (isFromMe) return instanceId;
+    const bare = (jid: string | undefined) => jid?.replace(/:.*$/, '').replace(/@.*$/, '') || undefined;
+    const lidCache = this.getLidMappingCache(instanceId);
+    const fromJid = from.includes('@') ? from : undefined;
+    const candidates = new Set([bare(from), bare(fromJid && lidCache.get(fromJid))].filter(Boolean));
+    const tenantId = resolveInstanceOwnerTenantId(instanceId);
+    for (const [otherId, sock] of this.sockets) {
+      const user = sock.user as { id?: string; lid?: string } | undefined;
+      if (!user || resolveInstanceOwnerTenantId(otherId) !== tenantId) continue;
+      if (candidates.has(bare(user.id)) || candidates.has(bare(user.lid))) return otherId;
+    }
+    return undefined;
   }
 
   /**
@@ -3176,6 +3199,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         mimeType: content.mimeType,
       },
       replyToId,
+      senderInstanceId: this.resolveSenderInstanceId(instanceId, from, isFromMe),
       rawPayload: extendedPayload,
       timings,
     });

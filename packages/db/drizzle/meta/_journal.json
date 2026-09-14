@@ -477,6 +477,13 @@
       "when": 1786700000000,
       "tag": "0067_automation_concurrency",
       "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1786800000000,
+      "tag": "0068_automation_allow_instance_senders",
+      "breakpoints": true
     }
   ]
 }

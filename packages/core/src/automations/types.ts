@@ -244,6 +244,12 @@ export interface Automation {
    * on managed rows (edit the manifest instead).
    */
   managedByAgentId?: string | null;
+  /**
+   * Loop guard opt-in (#1148). By default the engine drops events whose
+   * `payload.senderInstanceId` is set — a message one of the tenant's own
+   * instances sent — so an automation cannot answer itself. True = run anyway.
+   */
+  allowInstanceSenders?: boolean;
   createdAt: Date;
   updatedAt: Date;
 }

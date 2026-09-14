@@ -42,6 +42,7 @@ function createMockAutomation(overrides: Partial<Automation> = {}): Automation {
     enabled: true,
     priority: 0,
     transactionalEmissions: false,
+    allowInstanceSenders: false,
     maxConcurrency: null,
     concurrencyKey: null,
     managedByAgentId: null,
