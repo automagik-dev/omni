@@ -104,7 +104,7 @@ jobs:
             --ref "refs/tags/${tag}" \
             --field version="${VERSION}"
           run_id=""
-          for attempt in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             run_id=$(jq -r --argjson before "${before}" \
               '[.[] | .databaseId] - [$before[] | .databaseId] | map(tostring) | join(" ")' \
               <<<"$(list_runs)")
@@ -115,9 +115,11 @@ jobs:
             echo "::error::could not resolve exactly one new image-build.yml run for ${tag} (got: '${run_id}')"
             exit 1
           }
-          echo "### Minting candidate ${tag}" >> "${GITHUB_STEP_SUMMARY}"
-          echo "- mint run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${run_id}" >> "${GITHUB_STEP_SUMMARY}"
-          echo "- if it fails: gh run rerun ${run_id} --failed, then gh workflow run pin-candidate.yml --ref dev -f version=${VERSION}" >> "${GITHUB_STEP_SUMMARY}"
+          {
+            echo "### Minting candidate ${tag}"
+            echo "- mint run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+            echo "- if it fails: gh run rerun ${run_id} --failed, then gh workflow run pin-candidate.yml --ref dev -f version=${VERSION}"
+          } >> "${GITHUB_STEP_SUMMARY}"
           gh run watch "${run_id}" --repo "${GITHUB_REPOSITORY}" --exit-status
 
   pin:
