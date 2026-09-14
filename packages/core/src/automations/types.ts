@@ -235,6 +235,12 @@ export interface Automation {
    */
   concurrencyKey?: string | null;
   /**
+   * Replay floor (#1147): trigger events older than this are dropped. Stamped
+   * on disabled→enabled so the durable consumer's backlog is not replayed.
+   * Absent/null = no floor.
+   */
+  enabledAt?: Date | string | null;
+  /**
    * Agent whose event manifest governs this automation (RFC #925 G4).
    * Stamped by the G4b compiler (#986) when the row is compiled from a
    * manifest's `accepts` entries; null/absent = hand-authored. Two consumers:

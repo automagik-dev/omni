@@ -3034,9 +3034,9 @@ export function createOmniClient(config: OmniClientConfig) {
       /**
        * Enable an automation
        */
-      async enable(id: string): Promise<Automation> {
+      async enable(id: string, options: { replaySince?: string } = {}): Promise<Automation> {
         const { data, error, response } = await client.POST('/automations/{id}/enable', {
-          params: { path: { id } },
+          params: { path: { id }, query: options.replaySince ? { replaySince: options.replaySince } : undefined },
         });
         throwIfError(response, error);
         if (!data?.data)

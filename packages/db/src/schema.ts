@@ -3173,6 +3173,14 @@ export const automations = pgTable(
     concurrencyKey: text('concurrency_key'),
 
     /**
+     * Replay floor (issue #1147): trigger events with a timestamp older than
+     * this are dropped by the engine. Stamped to now() on a disabled→enabled
+     * transition so the shared durable consumer's backlog is not replayed;
+     * `enable --replay-since` sets it earlier on purpose. NULL = no floor.
+     */
+    enabledAt: timestamp('enabled_at', { withTimezone: true }),
+
+    /**
      * G4b manifest-compilation provenance (RFC #925, issue #986): set when
      * this automation was COMPILED from `agents.event_manifest` by the
      * manifest compiler; NULL = hand-made. Managed rows reject manual

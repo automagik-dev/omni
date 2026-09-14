@@ -256,10 +256,14 @@ export class AutomationService {
    */
   async update(id: string, data: Partial<NewAutomation>): Promise<Automation> {
     this.assertNoProvenance(data);
-    this.assertNotManaged(await this.getById(id));
+    const existing = await this.getById(id);
+    this.assertNotManaged(existing);
+    // disabled→enabled resumes from now, not from the backlog (#1147).
+    const enabledAt =
+      data.enabled === true && !existing.enabled && data.enabledAt === undefined ? new Date() : data.enabledAt;
     const [updated] = await this.db
       .update(automations)
-      .set({ ...data, updatedAt: new Date() })
+      .set({ ...data, enabledAt, updatedAt: new Date() })
       .where(eq(automations.id, id))
       .returning();
 
@@ -330,8 +334,10 @@ export class AutomationService {
   /**
    * Enable an automation
    */
-  async enable(id: string): Promise<Automation> {
-    return this.update(id, { enabled: true });
+  async enable(id: string, options: { replaySince?: Date } = {}): Promise<Automation> {
+    // replaySince opts into acting on events published since that moment;
+    // otherwise update() stamps enabledAt=now on a disabled→enabled flip.
+    return this.update(id, { enabled: true, ...(options.replaySince ? { enabledAt: options.replaySince } : {}) });
   }
 
   /**
