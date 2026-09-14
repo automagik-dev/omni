@@ -396,10 +396,20 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
     // reuse a message id for a different fact (a WhatsApp deletion carries
     // the deleted message's id). A duplicate claim skips the publish.
     return this.publishClaimed('message.received', payload, instanceId, {
-      idempotencyKey: `${this.id}:${instanceId}:${payload.externalId}:${payload.content.type}`,
+      idempotencyKey: `${this.id}:${instanceId}:${this.ingressKeyId(payload.chatId, payload.externalId)}:${payload.content.type}`,
       externalId: payload.externalId,
       options,
     });
+  }
+
+  /**
+   * Platform id used inside idempotency keys. Defaults to the id itself, which
+   * is enough where ids are globally unique (WhatsApp, Slack ts+channel,
+   * Discord snowflakes). Channels whose ids are only unique per chat
+   * (Telegram `message_id`) override this to prefix the chat.
+   */
+  protected ingressKeyId(_chatId: string, id: string): string {
+    return id;
   }
 
   /**
@@ -451,11 +461,12 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
   private reactionClaimParams(
     kind: 'reaction.received' | 'reaction.removed',
     instanceId: string,
-    payload: { messageId: string; from: string; emoji: string; rawPayload?: Record<string, unknown> },
+    payload: { messageId: string; chatId: string; from: string; emoji: string; rawPayload?: Record<string, unknown> },
   ): { idempotencyKey: string; externalId: string } {
     const raw = payload.rawPayload?.externalId;
     const externalId = typeof raw === 'string' && raw.length > 0 ? raw : `${payload.messageId}:${payload.from}`;
-    return { idempotencyKey: `${this.id}:${instanceId}:${externalId}:${kind}:${payload.emoji}`, externalId };
+    const keyId = this.ingressKeyId(payload.chatId, externalId);
+    return { idempotencyKey: `${this.id}:${instanceId}:${keyId}:${kind}:${payload.emoji}`, externalId };
   }
 
   /**
@@ -463,7 +474,16 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
    */
   protected async emitMessageSent(params: EmitMessageSentParams): Promise<void> {
     const { instanceId, ...payload } = params;
-    await this.publishEventInternal('message.sent', payload, instanceId);
+    if (!payload.externalId) {
+      await this.publishEventInternal('message.sent', payload, instanceId);
+      return;
+    }
+    // Same claim as ingress (#1149): a re-emitted send of the same platform
+    // message journals once.
+    await this.publishClaimed('message.sent', payload, instanceId, {
+      idempotencyKey: `${this.id}:${instanceId}:${this.ingressKeyId(payload.chatId, payload.externalId)}:message.sent`,
+      externalId: payload.externalId,
+    });
   }
 
   /**

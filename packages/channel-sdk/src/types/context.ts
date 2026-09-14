@@ -92,7 +92,7 @@ export interface PluginDatabase {
  * publish is skipped, so a double-fired channel handler or a platform
  * redelivery cannot fan the same message out twice.
  */
-export type ClaimedEventType = 'message.received' | 'reaction.received' | 'reaction.removed';
+export type ClaimedEventType = 'message.received' | 'message.sent' | 'reaction.received' | 'reaction.removed';
 
 export interface IngressClaim {
   /** Returns the claimed event id, or null when the key is already journaled. */

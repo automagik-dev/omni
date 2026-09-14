@@ -58,7 +58,7 @@ function createIngressClaim(db: Database): IngressClaim {
               : 'discord',
             instanceId,
             eventType,
-            direction: 'inbound',
+            direction: eventType === 'message.sent' ? 'outbound' : 'inbound',
             status: 'received',
             idempotencyKey,
             receivedAt: new Date(),
