@@ -1185,6 +1185,7 @@ function createConsumersCommand(): Command {
 
   consumers
     .command('ls')
+    .alias('list')
     .description('List durable consumers with their cursor and lag')
     .action(async () => {
       try {

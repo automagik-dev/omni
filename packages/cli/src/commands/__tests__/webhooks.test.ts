@@ -12,13 +12,19 @@
  */
 
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { __testables } from '../webhooks';
 
-const { resolveSignatureSecret, assertPairedSignatureOnCreate, resolveEventTypeMapping, buildUpdateSourcePatch } =
-  __testables;
+const {
+  INGRESS_PATH,
+  ingressUrl,
+  resolveSignatureSecret,
+  assertPairedSignatureOnCreate,
+  resolveEventTypeMapping,
+  buildUpdateSourcePatch,
+} = __testables;
 
 const ENV_VAR = 'OMNI_TEST_WEBHOOK_SECRET';
 
@@ -199,5 +205,21 @@ describe('assertPairedSignatureOnCreate', () => {
     expect(() => assertPairedSignatureOnCreate(undefined, 'long-enough-secret')).toThrow(
       'requires --signature-algorithm and --signature-header',
     );
+  });
+});
+
+describe('ingressUrl (#1118)', () => {
+  test('printed path matches the actual public ingress route in the API', () => {
+    const app = readFileSync(join(import.meta.dir, '../../../../api/src/app.ts'), 'utf-8');
+    expect(app).toContain(`app.post('${INGRESS_PATH}:source'`);
+    expect(ingressUrl('circleback', undefined)).toBe('/api/v2/webhooks/ingress/circleback');
+  });
+
+  test('absolute when a public API URL is configured; path-only for loopback', () => {
+    expect(ingressUrl('github', 'https://omni.example.com/')).toBe(
+      'https://omni.example.com/api/v2/webhooks/ingress/github',
+    );
+    expect(ingressUrl('github', 'http://localhost:8882')).toBe('/api/v2/webhooks/ingress/github');
+    expect(ingressUrl('github', 'http://127.0.0.1:8882')).toBe('/api/v2/webhooks/ingress/github');
   });
 });

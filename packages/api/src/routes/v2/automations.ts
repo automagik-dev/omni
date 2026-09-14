@@ -2,8 +2,9 @@
  * Automations routes - automation rule management
  */
 
-import { zValidator } from '@hono/zod-validator';
-import { Hono } from 'hono';
+import { type Hook, zValidator } from '@hono/zod-validator';
+import { CONDITION_OPERATORS } from '@omni/core';
+import { type Env, Hono } from 'hono';
 import { z } from 'zod';
 import type { AutomationTestEvent } from '../../services/automations';
 import type { AppVariables } from '../../types';
@@ -14,6 +15,13 @@ const automationsRoutes = new Hono<{ Variables: AppVariables }>();
 // Schemas
 // ============================================================================
 
+/** Surface Zod issue messages (path: message) so clients can print them (#1119). */
+const validationHook: Hook<unknown, Env, string> = (result, c) => {
+  if (result.success) return;
+  const message = result.error.issues.map((i) => `${i.path.join('.') || 'body'}: ${i.message}`).join('; ');
+  return c.json({ error: { code: 'VALIDATION_ERROR', message, issues: result.error.issues } }, 400);
+};
+
 // Condition schema
 const conditionSchema = z.object({
   field: z
@@ -21,7 +29,9 @@ const conditionSchema = z.object({
     .min(1)
     .describe('Dot notation path into the event payload (e.g., content.type, pull_request.merged)'),
   operator: z
-    .enum(['eq', 'neq', 'gt', 'lt', 'gte', 'lte', 'contains', 'not_contains', 'exists', 'not_exists', 'regex'])
+    .enum(CONDITION_OPERATORS, {
+      errorMap: () => ({ message: `Invalid operator. Expected one of: ${CONDITION_OPERATORS.join(', ')}` }),
+    })
     .describe('Comparison operator'),
   value: z.unknown().optional().describe('Value to compare against'),
 });
@@ -302,7 +312,7 @@ automationsRoutes.get('/:id', async (c) => {
 /**
  * POST /automations - Create automation
  */
-automationsRoutes.post('/', zValidator('json', createAutomationSchema), async (c) => {
+automationsRoutes.post('/', zValidator('json', createAutomationSchema, validationHook), async (c) => {
   const data = c.req.valid('json');
   const services = c.get('services');
 
@@ -314,7 +324,7 @@ automationsRoutes.post('/', zValidator('json', createAutomationSchema), async (c
 /**
  * PATCH /automations/:id - Update automation
  */
-automationsRoutes.patch('/:id', zValidator('json', updateAutomationSchema), async (c) => {
+automationsRoutes.patch('/:id', zValidator('json', updateAutomationSchema, validationHook), async (c) => {
   const id = c.req.param('id');
   const data = c.req.valid('json');
   const services = c.get('services');

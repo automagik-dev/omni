@@ -3,15 +3,14 @@
  */
 
 import type { OpenAPIRegistry } from '@asteasolutions/zod-to-openapi';
+import { CONDITION_OPERATORS } from '@omni/core';
 import { z } from '../../lib/zod-openapi';
 import { ErrorSchema, PaginationMetaSchema, SuccessSchema } from './common';
 
 // Condition schema
 const ConditionSchema = z.object({
   field: z.string().min(1).openapi({ description: 'Dot notation field path' }),
-  operator: z
-    .enum(['eq', 'neq', 'gt', 'lt', 'gte', 'lte', 'contains', 'not_contains', 'exists', 'not_exists', 'regex'])
-    .openapi({ description: 'Operator' }),
+  operator: z.enum(CONDITION_OPERATORS).openapi({ description: 'Operator' }),
   value: z.unknown().optional().openapi({ description: 'Value to compare' }),
 });
 
