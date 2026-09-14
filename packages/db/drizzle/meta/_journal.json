@@ -484,6 +484,13 @@
       "when": 1786800000000,
       "tag": "0068_automation_enabled_at",
       "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1786900000000,
+      "tag": "0069_automation_allow_instance_senders",
+      "breakpoints": true
     }
   ]
 }

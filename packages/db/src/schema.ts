@@ -3148,6 +3148,12 @@ export const automations = pgTable(
     transactionalEmissions: boolean('transactional_emissions').notNull().default(false),
 
     /**
+     * Loop guard opt-in (issue #1148): false = the engine skips events whose
+     * sender is one of the tenant's own instances (`senderInstanceId`).
+     */
+    allowInstanceSenders: boolean('allow_instance_senders').notNull().default(false),
+
+    /**
      * Per-automation concurrency limit (issue #1108). NULL = today's
      * behaviour: the run is queued per INSTANCE with the engine's default
      * limit. Set = the run gets a queue private to this automation with this

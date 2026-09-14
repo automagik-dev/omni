@@ -39,6 +39,7 @@ function managedAutomation(): Automation {
     enabled: true,
     priority: 0,
     transactionalEmissions: false,
+    allowInstanceSenders: false,
     managedByAgentId: OWNER_AGENT_ID,
     createdAt: new Date(),
     updatedAt: new Date(),

@@ -35,6 +35,7 @@ function automation(overrides: Partial<Automation> = {}): Automation {
     enabled: true,
     priority: 0,
     transactionalEmissions: false,
+    allowInstanceSenders: false,
     managedByAgentId: null,
     createdAt: new Date(),
     updatedAt: new Date(),
