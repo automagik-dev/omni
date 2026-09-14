@@ -7,6 +7,25 @@ on:
   pull_request:
     types: [closed]
     branches: [dev]
+  # release-candidate.yml calls the candidate cut in-run (#1142). Under a call
+  # github.event_name is the caller's (push or workflow_dispatch), so
+  # auto-version admits a push only with candidate=true.
+  workflow_call:
+    inputs:
+      candidate:
+        description: 'Cut a stable candidate tag (the only value release-candidate.yml passes is true)'
+        type: boolean
+        default: false
+    secrets:
+      VERSION_BUMP_PAT:
+        required: true
+      # Read only by publish-stable, which never runs under a call.
+      NPM_TOKEN:
+        required: false
+    outputs:
+      version:
+        description: 'The version cut and tagged on dev'
+        value: ${{ jobs.auto-version.outputs.version }}
   workflow_dispatch:
     inputs:
       candidate:
@@ -75,6 +94,7 @@ jobs:
       # The commit "Commit and tag" pushed to dev; the dev-image job below
       # builds exactly this commit.
       bump_sha: ${{ steps.bump.outputs.bump_sha }}
+      version: ${{ steps.version.outputs.version }}
     permissions:
       contents: write
       # OIDC token issuance for npm Trusted Publishing — pairs with the
@@ -85,6 +105,7 @@ jobs:
       actions: write
     if: >-
       (github.event_name == 'workflow_dispatch' && inputs.stable_publish_only != true) ||
+      (github.event_name == 'push' && inputs.candidate == true) ||
       (github.event_name == 'pull_request' &&
        github.event.pull_request.merged == true &&
        github.event.pull_request.base.ref == 'dev' &&
@@ -185,6 +206,7 @@ jobs:
         id: bump
         env:
           # The branch and tag pushes deliberately use different credentials.
+          CANDIDATE: ${{ inputs.candidate }}
           GITHUB_TOKEN: ${{ github.token }}
           PUSH_REF: ${{ steps.context.outputs.push_ref }}
           VERSION: ${{ steps.version.outputs.version }}
@@ -202,7 +224,13 @@ jobs:
           else
             # No [skip ci]: the reviewed dev branch must receive ordinary CI
             # on every version bump.
-            git commit -m "chore(version): bump to ${VERSION}"
+            # A candidate cut gets its own subject so release-candidate.yml,
+            # which triggers on the `bump to` subject, never re-fires on it.
+            if [[ "${CANDIDATE}" == "true" ]]; then
+              git commit -m "chore(version): cut candidate ${VERSION}"
+            else
+              git commit -m "chore(version): bump to ${VERSION}"
+            fi
           fi
 
           git tag "v${VERSION}"

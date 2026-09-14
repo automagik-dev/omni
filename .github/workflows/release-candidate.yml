@@ -1,0 +1,134 @@
+# =============================================================================
+# One-shot release candidate: cut -> mint -> pin in a single run (#1142).
+# =============================================================================
+# Replaces the three hand-dispatched steps (version.yml candidate=true, then
+# image-build.yml at the tag, then pin-candidate.yml). This file is
+# orchestration only: every immutability, attestation, prerelease-refusal and
+# tag-binding check stays in the workflows it drives, unchanged.
+#
+#   cut   workflow_call into version.yml with candidate=true: bumps dev and
+#         pushes v<version> without npm `next` or a dev prerelease.
+#   mint  DISPATCHES image-build.yml at refs/tags/v<version> and watches it.
+#         It cannot be a workflow_call: release.yml and version.yml
+#         publish-stable re-verify the orchestrator with
+#         verify-orchestrator-run.py (run path image-build.yml, event
+#         workflow_dispatch, status in_progress, head SHA = the tag), and
+#         build-push binds GITHUB_REF to the exact tag. Under a call those would
+#         be this workflow, a push, and refs/heads/dev.
+#   pin   workflow_call into pin-candidate.yml once the mint succeeded.
+#
+# Trigger: the auto-bump push version.yml makes after every merged PR
+# (`chore(version): bump to <version>` by github-actions[bot]). Everything
+# else pushed to dev is ignored, including this run's own writes: the candidate
+# cut commits `chore(version): cut candidate <version>` and the pin commits
+# `chore(release): pin candidate v<version>`. Ignored pushes run in their own
+# per-run concurrency group so they never cancel the live candidate.
+#
+# A burst of merges collapses into one candidate for the last tip:
+# cancel-in-progress cancels the older run. A mint it was watching keeps
+# running to completion (a started mint must finish); its pin then refuses
+# because dev moved past it, and the newer run mints the newer tip.
+#
+# Recovery: see docs/deployment/public-launch-readiness.md
+# "Recovering a failed orchestrated release".
+# =============================================================================
+name: Release Candidate
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+concurrency:
+  group: >-
+    ${{ (github.event_name == 'workflow_dispatch' || (startsWith(github.event.head_commit.message, 'chore(version): bump to ') && github.event.head_commit.author.email == 'github-actions[bot]@users.noreply.github.com')) && 'release-candidate' || format('release-candidate-ignored-{0}', github.run_id) }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  cut:
+    name: Cut candidate tag
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (startsWith(github.event.head_commit.message, 'chore(version): bump to ') &&
+       github.event.head_commit.author.email == 'github-actions[bot]@users.noreply.github.com')
+    uses: ./.github/workflows/version.yml
+    # The ceiling of every job version.yml declares (auto-version, dev-image,
+    # publish-stable); with candidate=true only auto-version runs.
+    permissions:
+      contents: write
+      id-token: write
+      actions: write
+      packages: write
+      attestations: write
+    with:
+      candidate: true
+    secrets:
+      VERSION_BUMP_PAT: ${{ secrets.VERSION_BUMP_PAT }}
+
+  mint:
+    name: Mint candidate
+    needs: cut
+    runs-on: ubuntu-latest
+    # The mint waits on the `release` environment reviewers, then a cold
+    # two-platform build and the stable release + npm publication.
+    timeout-minutes: 360
+    permissions:
+      actions: write # gh workflow run image-build.yml
+    outputs:
+      version: ${{ needs.cut.outputs.version }}
+    steps:
+      - name: Dispatch image-build.yml at the candidate tag and watch it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.cut.outputs.version }}
+        run: |
+          set -euo pipefail
+          [[ "${VERSION}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
+            echo "::error::cut did not emit a canonical version (got '${VERSION}')"
+            exit 1
+          }
+          tag="v${VERSION}"
+          # `gh workflow run` prints no run id: snapshot, dispatch, then take
+          # exactly one new dispatch run on the tag (same approach as
+          # image-build.yml's finalize).
+          list_runs() {
+            gh run list --repo "${GITHUB_REPOSITORY}" \
+              --workflow image-build.yml --branch "${tag}" --event workflow_dispatch \
+              --limit 50 --json databaseId
+          }
+          before=$(list_runs)
+          gh workflow run image-build.yml \
+            --repo "${GITHUB_REPOSITORY}" \
+            --ref "refs/tags/${tag}" \
+            --field version="${VERSION}"
+          run_id=""
+          for attempt in $(seq 1 30); do
+            run_id=$(jq -r --argjson before "${before}" \
+              '[.[] | .databaseId] - [$before[] | .databaseId] | map(tostring) | join(" ")' \
+              <<<"$(list_runs)")
+            [[ -z "${run_id}" ]] || break
+            sleep 10
+          done
+          [[ "${run_id}" =~ ^[0-9]+$ ]] || {
+            echo "::error::could not resolve exactly one new image-build.yml run for ${tag} (got: '${run_id}')"
+            exit 1
+          }
+          echo "### Minting candidate ${tag}" >> "${GITHUB_STEP_SUMMARY}"
+          echo "- mint run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${run_id}" >> "${GITHUB_STEP_SUMMARY}"
+          echo "- if it fails: gh run rerun ${run_id} --failed, then gh workflow run pin-candidate.yml --ref dev -f version=${VERSION}" >> "${GITHUB_STEP_SUMMARY}"
+          gh run watch "${run_id}" --repo "${GITHUB_REPOSITORY}" --exit-status
+
+  pin:
+    name: Pin candidate on dev
+    needs: mint
+    uses: ./.github/workflows/pin-candidate.yml
+    permissions:
+      contents: read
+      packages: read
+      attestations: read
+    with:
+      version: ${{ needs.mint.outputs.version }}
+    secrets:
+      VERSION_BUMP_PAT: ${{ secrets.VERSION_BUMP_PAT }}
