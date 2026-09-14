@@ -18,8 +18,19 @@ import type { WebhookEventTypeMappingBody, WebhookSignatureConfigBody } from '@o
 import { Command } from 'commander';
 import { z } from 'zod';
 import { getClient } from '../client.js';
+import { loadConfig } from '../config.js';
 import * as output from '../output.js';
 import { resolveWebhookId } from '../resolve.js';
+
+/** Public, signature-verified receive route (packages/api/src/app.ts) — what third parties POST to (#1118). */
+const INGRESS_PATH = '/api/v2/webhooks/ingress/';
+
+/** Ingress receive URL for a source: absolute when a non-loopback API URL is configured, else the path. */
+function ingressUrl(name: string, apiUrl = loadConfig().apiUrl): string {
+  const path = `${INGRESS_PATH}${encodeURIComponent(name)}`;
+  if (!apiUrl || /^https?:\/\/(localhost|127\.|\[?::1\]?)/i.test(apiUrl)) return path;
+  return `${apiUrl.replace(/\/+$/, '')}${path}`;
+}
 
 const SIGNATURE_ALGORITHMS = ['hmac-sha256', 'hmac-sha1', 'token-match'] as const;
 
@@ -337,6 +348,7 @@ export function createWebhooksCommand(): Command {
           // Liveness (#961): '-' = unsupervised (no declared cadence).
           health: w.livenessStatus ?? '-',
           cadence: w.expectedIntervalSeconds != null ? `${w.expectedIntervalSeconds}s` : '-',
+          url: ingressUrl(w.name),
           createdAt: w.createdAt,
         }));
 
@@ -357,7 +369,7 @@ export function createWebhooksCommand(): Command {
 
       try {
         const source = await client.webhooks.getSource(resolvedId);
-        output.data(source);
+        output.data({ ...source, url: ingressUrl(source.name) });
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to get webhook source: ${message}`);
@@ -456,11 +468,13 @@ export function createWebhooksCommand(): Command {
           const details: Record<string, unknown> = {
             id: source.id,
             name: source.name,
-            // Both receivers key on the source NAME, not the id
-            url: `POST /api/v2/webhooks/${source.name}`,
+            // Receivers key on the source NAME, not the id. Third parties use the
+            // signature-verified ingress; the API-key route is for internal callers.
+            url: `POST ${ingressUrl(source.name)}`,
+            internalUrl: `POST /api/v2/webhooks/${source.name} (requires x-api-key)`,
           };
-          if (signatureConfig) {
-            details.publicUrl = `POST /api/v2/webhooks/ingress/${source.name}`;
+          if (!signatureConfig) {
+            details.note = 'Ingress rejects deliveries until a signature config + secret is set (webhooks update)';
           }
           output.success(`Webhook source created: ${source.id}`, details);
         } catch (err) {
@@ -633,6 +647,8 @@ export function createWebhooksCommand(): Command {
 
 /** Test-only surface — not part of the CLI contract. */
 export const __testables = {
+  INGRESS_PATH,
+  ingressUrl,
   resolveSignatureSecret,
   buildSignatureConfig,
   assertPairedSignatureOnCreate,

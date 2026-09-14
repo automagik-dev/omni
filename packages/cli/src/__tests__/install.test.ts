@@ -97,7 +97,8 @@ describe('buildAgentHandoffBlock', () => {
 // ---------------------------------------------------------------------------
 
 describe('detectReinstall — data dir signal', () => {
-  const FIXTURE_ROOT = join(tmpdir(), 'omni-install-test-datadir');
+  // Per-process path: concurrent runs from sibling worktrees must not rm each other's fixture.
+  const FIXTURE_ROOT = join(tmpdir(), `omni-install-test-datadir-${process.pid}`);
 
   beforeEach(() => {
     rmSync(FIXTURE_ROOT, { recursive: true, force: true });
