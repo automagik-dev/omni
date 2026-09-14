@@ -68,6 +68,24 @@ describe('OmniApiError', () => {
     expect(error.status).toBe(404);
   });
 
+  test('surfaces raw zValidator issues as the message (#1117)', () => {
+    const error = OmniApiError.from(
+      {
+        success: false,
+        error: {
+          name: 'ZodError',
+          issues: [
+            { path: ['actions', 0, 'config'], message: 'Unknown config key(s): payload. Valid keys: eventType' },
+          ],
+        },
+      },
+      400,
+    );
+
+    expect(error.message).toBe('actions.0.config: Unknown config key(s): payload. Valid keys: eventType');
+    expect(error.status).toBe(400);
+  });
+
   test('creates from Error object', () => {
     const error = OmniApiError.from(new Error('Network error'), 500);
 
