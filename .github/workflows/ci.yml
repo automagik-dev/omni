@@ -68,6 +68,18 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Cache helm v3.16.4 linux-amd64
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/release-contract-tools/helm/helm-v3.16.4-linux-amd64.tar.gz
+          key: tool-helm-v3.16.4-linux-amd64
+
+      - name: Cache actionlint v1.7.7 linux-amd64
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/release-contract-tools/actionlint/actionlint_1.7.7_linux_amd64.tar.gz
+          key: tool-actionlint-v1.7.7-linux-amd64
+
       - name: Release, read-only promotion, and Helm contract gate
         shell: bash
         run: |
@@ -76,12 +88,12 @@ jobs:
           mkdir -p "${tools}/helm" "${tools}/actionlint"
 
           helm_archive="${tools}/helm/helm-v3.16.4-linux-amd64.tar.gz"
-          curl -fsSLo "${helm_archive}" https://get.helm.sh/helm-v3.16.4-linux-amd64.tar.gz
+          [[ -f "${helm_archive}" ]] || curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 --connect-timeout 10 -o "${helm_archive}" https://get.helm.sh/helm-v3.16.4-linux-amd64.tar.gz
           printf '%s  %s\n' fc307327959aa38ed8f9f7e66d45492bb022a66c3e5da6063958254b9767d179 "${helm_archive}" | sha256sum -c -
           tar -xzf "${helm_archive}" -C "${tools}/helm"
 
           actionlint_archive="${tools}/actionlint/actionlint_1.7.7_linux_amd64.tar.gz"
-          curl -fsSLo "${actionlint_archive}" https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz
+          [[ -f "${actionlint_archive}" ]] || curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 --connect-timeout 10 -o "${actionlint_archive}" https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz
           printf '%s  %s\n' 023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757 "${actionlint_archive}" | sha256sum -c -
           tar -xzf "${actionlint_archive}" -C "${tools}/actionlint" actionlint
 
@@ -213,6 +225,15 @@ jobs:
         run: ./scripts/ensure-nats.sh
 
       - name: Install cosign
+        id: cosign-install
+        # github.com/releases flakes (403/504) must not block releases (#1140).
+        continue-on-error: true
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+        with:
+          cosign-release: 'v2.4.1'
+
+      - name: Retry install cosign
+        if: steps.cosign-install.outcome == 'failure'
         uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
         with:
           cosign-release: 'v2.4.1'
@@ -231,7 +252,14 @@ jobs:
           AUTOPG_VERSION: v3.0.7
         run: |
           bun add -g pm2
-          curl -fsSL https://raw.githubusercontent.com/automagik-dev/autopg/main/install.sh | bash
+          # The installer fetches autopg from github.com/releases; retry the whole
+          # install on transient 403/504s (#1140).
+          set -o pipefail
+          for attempt in 1 2 3; do
+            curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 --connect-timeout 10 https://raw.githubusercontent.com/automagik-dev/autopg/main/install.sh | bash && break
+            [[ "$attempt" == 3 ]] && exit 1
+            sleep 10
+          done
 
       - name: Start NATS
         run: ./bin/nats-server -js -p 4222 &
@@ -513,6 +541,15 @@ jobs:
         run: ./scripts/ensure-nats.sh
 
       - name: Install cosign
+        id: cosign-install
+        # github.com/releases flakes (403/504) must not block releases (#1140).
+        continue-on-error: true
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+        with:
+          cosign-release: 'v2.4.1'
+
+      - name: Retry install cosign
+        if: steps.cosign-install.outcome == 'failure'
         uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
         with:
           cosign-release: 'v2.4.1'
@@ -531,7 +568,14 @@ jobs:
           AUTOPG_VERSION: v3.0.7
         run: |
           bun add -g pm2
-          curl -fsSL https://raw.githubusercontent.com/automagik-dev/autopg/main/install.sh | bash
+          # The installer fetches autopg from github.com/releases; retry the whole
+          # install on transient 403/504s (#1140).
+          set -o pipefail
+          for attempt in 1 2 3; do
+            curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 --connect-timeout 10 https://raw.githubusercontent.com/automagik-dev/autopg/main/install.sh | bash && break
+            [[ "$attempt" == 3 ]] && exit 1
+            sleep 10
+          done
 
       - name: Start NATS
         run: ./bin/nats-server -js -p 4222 &

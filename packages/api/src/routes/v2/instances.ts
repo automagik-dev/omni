@@ -470,6 +470,7 @@ const SENSITIVE_INSTANCE_FIELDS = [
   'gupshupAuthToken',
   'webhookVerifyToken',
   'twilioAuthToken',
+  'metaAccessToken',
   'hermesPassword',
   'ascToken',
   'ascFlowChave',

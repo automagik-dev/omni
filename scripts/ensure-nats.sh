@@ -51,7 +51,7 @@ echo "Downloading from: $DOWNLOAD_URL"
 TEMP_DIR=$(mktemp -d)
 trap "rm -rf $TEMP_DIR" EXIT
 
-curl -fsSL "$DOWNLOAD_URL" -o "$TEMP_DIR/nats-server.tar.gz"
+curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 --connect-timeout 10 "$DOWNLOAD_URL" -o "$TEMP_DIR/nats-server.tar.gz"
 tar -xzf "$TEMP_DIR/nats-server.tar.gz" -C "$TEMP_DIR"
 
 # Find and move the binary
