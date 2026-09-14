@@ -273,6 +273,13 @@ export interface MessageReceivedPayload {
     isVoiceNote?: boolean;
   };
   replyToId?: string;
+  /**
+   * Observer-independent authorship (#1148): the id of the Omni instance in
+   * the SAME tenant whose own account sent this message, or absent when the
+   * sender is not one of our instances. Unlike `rawPayload.key.fromMe`, which
+   * is per-observer, every instance that journals the message agrees on it.
+   */
+  senderInstanceId?: string;
   rawPayload?: Record<string, unknown>;
 }
 

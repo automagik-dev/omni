@@ -8,6 +8,7 @@ import { ApiKeyService } from '../services/api-keys';
 import { currentTenantScope, runDetachedFromTenantScope } from '../tenancy/tenant-scope';
 import { runTenantWorkDb } from '../tenancy/worker-tenant-context';
 import type { ApiKeyData, AppVariables } from '../types';
+import { clientIp } from './config-audit';
 
 /**
  * Authentication middleware
@@ -57,7 +58,7 @@ export const authMiddleware = createMiddleware<{ Variables: AppVariables }>(asyn
   }
 
   // Capture request metadata for audit
-  const ip = c.req.header('x-forwarded-for') || c.req.header('x-real-ip') || 'unknown';
+  const ip = clientIp(c);
   const userAgent = c.req.header('user-agent');
   const startTime = Date.now();
 

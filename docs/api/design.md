@@ -103,6 +103,11 @@ interface ApiKey {
 **Audit Logging:**
 Every API key usage is logged with timestamp, endpoint, IP address, user agent, and response status. See `GET /api/v2/keys/:id/audit`.
 
+**Config audit (who changed what):**
+Every POST/PATCH/PUT/DELETE on instances, agents, providers, routes, automations, API keys and settings writes a `config_audit_logs` row: API key name, the optional `X-Omni-Actor` header (the CLI sends it from `OMNI_ACTOR`, e.g. `claude-session:<id>` or `cli:alice`), request id, client IP (`X-Forwarded-For` → `X-Real-IP` → socket), user agent, target, and before/after of changed fields. Secret-bearing fields are stored only as `sha256:<12 hex>` fingerprints, so the same token on two instances shows the same fingerprint. Read it with `GET /api/v2/audit` (scope `audit:read`) or `omni audit list --target <id> --actor <x>` / `omni audit show <id>`.
+
+Retention and noise: reads are never written to `config_audit_logs` — polling GETs stay in `api_key_audit_logs`. Keep config audit long (~180 days) and expire `api_key_audit_logs` short.
+
 ### Tenancy posture
 
 `POST /api/v2/auth/validate` returns, for every authenticated caller, the server's tenancy posture (`multitenancyEnabled`, `controlPlaneMounted`, `dbEnforcement`) alongside the credential's class, tenant, role, and scopes. The CLI surfaces this in `omni status` and `omni multitenancy status`.

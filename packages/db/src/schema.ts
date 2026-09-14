@@ -3148,6 +3148,12 @@ export const automations = pgTable(
     transactionalEmissions: boolean('transactional_emissions').notNull().default(false),
 
     /**
+     * Loop guard opt-in (issue #1148): false = the engine skips events whose
+     * sender is one of the tenant's own instances (`senderInstanceId`).
+     */
+    allowInstanceSenders: boolean('allow_instance_senders').notNull().default(false),
+
+    /**
      * Per-automation concurrency limit (issue #1108). NULL = today's
      * behaviour: the run is queued per INSTANCE with the engine's default
      * limit. Set = the run gets a queue private to this automation with this
@@ -3165,6 +3171,14 @@ export const automations = pgTable(
      * into per-automation queueing.
      */
     concurrencyKey: text('concurrency_key'),
+
+    /**
+     * Replay floor (issue #1147): trigger events with a timestamp older than
+     * this are dropped by the engine. Stamped to now() on a disabled→enabled
+     * transition so the shared durable consumer's backlog is not replayed;
+     * `enable --replay-since` sets it earlier on purpose. NULL = no floor.
+     */
+    enabledAt: timestamp('enabled_at', { withTimezone: true }),
 
     /**
      * G4b manifest-compilation provenance (RFC #925, issue #986): set when
@@ -4754,3 +4768,49 @@ export const tenantMigrationLedgerHistory = pgTable(
 );
 export type TenantMigrationLedgerHistoryRow = typeof tenantMigrationLedgerHistory.$inferSelect;
 export type NewTenantMigrationLedgerHistoryRow = typeof tenantMigrationLedgerHistory.$inferInsert;
+
+// ============================================================================
+// CONFIG AUDIT LOGS (issue #1152)
+// ============================================================================
+
+/**
+ * One row per mutating call (POST/PATCH/PUT/DELETE) on a config resource:
+ * who (key name + X-Omni-Actor), from where, and which fields changed.
+ * Secret-bearing values are stored only as `sha256:<prefix>` fingerprints, so
+ * token reuse across resources is detectable without persisting the secret.
+ *
+ * Noise/retention: reads are never written here (polling GETs stay in
+ * api_key_audit_logs); keep this table long (~180d) and expire
+ * api_key_audit_logs short.
+ */
+export const configAuditLogs = pgTable(
+  'config_audit_logs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    /** No FK: audit must outlive the key. */
+    apiKeyId: varchar('api_key_id', { length: 100 }),
+    apiKeyName: varchar('api_key_name', { length: 255 }),
+    /** Caller-supplied X-Omni-Actor (e.g. `cli:alice`, `claude-session:<id>`). */
+    actor: varchar('actor', { length: 255 }),
+    requestId: varchar('request_id', { length: 100 }),
+    ipAddress: varchar('ip_address', { length: 64 }),
+    userAgent: text('user_agent'),
+    method: varchar('method', { length: 10 }).notNull(),
+    path: varchar('path', { length: 500 }).notNull(),
+    statusCode: integer('status_code').notNull(),
+    action: varchar('action', { length: 100 }).notNull(),
+    targetType: varchar('target_type', { length: 50 }).notNull(),
+    targetId: varchar('target_id', { length: 255 }),
+    changedFields: text('changed_fields').array().notNull().default(sql`'{}'::text[]`),
+    /** `{ field: { before, after } }` with secrets fingerprinted. */
+    changes: jsonb('changes').$type<Record<string, { before: unknown; after: unknown }>>().notNull().default({}),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    targetIdx: index('config_audit_logs_target_idx').on(table.targetType, table.targetId),
+    actorIdx: index('config_audit_logs_actor_idx').on(table.actor),
+    createdAtIdx: index('config_audit_logs_created_at_idx').on(table.createdAt),
+  }),
+);
+export type ConfigAuditLog = typeof configAuditLogs.$inferSelect;
+export type NewConfigAuditLog = typeof configAuditLogs.$inferInsert;

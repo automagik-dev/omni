@@ -46,7 +46,7 @@ import type { CommandPayload } from './handlers/commands';
 import { setupCommandHandlers } from './handlers/commands';
 import { downloadSlackFile, extractFileInfo, getContentTypeFromMime } from './handlers/files';
 import { setupInteractionHandlers } from './handlers/interactions';
-import { type SlackDebouncedArgs, setupMessageHandlers } from './handlers/messages';
+import { type SlackDebouncedArgs, setupMessageHandlers, shouldSkipMessage } from './handlers/messages';
 import { setupPinHandlers } from './handlers/pins';
 import { setupReactionHandlers } from './handlers/reactions';
 import { type SlackStatusMethod, clearTypingStatus, setSlackThreadStatus } from './handlers/typing';
@@ -202,6 +202,16 @@ export class SlackPlugin extends BaseChannelPlugin {
   private activeNativeStreams = new Map<string, Set<NativeStreamSender>>();
 
   /**
+   * Newest Slack ts seen per conversation, for reconnect backfill (#1151).
+   * Map<instanceId, Map<channelId | `${channelId}:${threadTs}`, ts>>. Survives
+   * a connection rebuild (that is the point); cleared on disconnect.
+   */
+  private lastSeenTs = new Map<string, Map<string, string>>();
+
+  /** Per-instance inbound message handler, reused to feed backfilled messages. */
+  private inboundHandlers = new Map<string, (msg: Record<string, unknown>) => Promise<void>>();
+
+  /**
    * Plugin-specific initialization
    */
   protected override async onInitialize(_context: PluginContext): Promise<void> {
@@ -341,6 +351,7 @@ export class SlackPlugin extends BaseChannelPlugin {
       // Runtime detection (#941): from here on, a socket dying drives a real
       // status transition instead of leaving a stale cached 'connected'.
       this.watchSocketState(instanceId, config, connection);
+      void this.backfillMissedMessages(instanceId, connection);
 
       this.logger.info('Slack instance connected', {
         instanceId,
@@ -376,6 +387,8 @@ export class SlackPlugin extends BaseChannelPlugin {
     await destroyBoltConnection(connection, this.logger);
     this.connections.delete(instanceId);
     this.slackConfigs.delete(instanceId);
+    this.lastSeenTs.delete(instanceId);
+    this.inboundHandlers.delete(instanceId);
 
     // Clear cached user names, active threads, and pending ack reactions for this instance
     for (const key of this.userNameCache.keys()) {
@@ -457,6 +470,7 @@ export class SlackPlugin extends BaseChannelPlugin {
 
       if (state === 'connected') {
         this.logger.info('Slack Socket Mode connection restored', { instanceId });
+        void this.backfillMissedMessages(instanceId, connection);
         setStatus({
           state: 'connected',
           since: new Date(),
@@ -1177,7 +1191,7 @@ export class SlackPlugin extends BaseChannelPlugin {
       });
 
       for (const msg of (response.messages ?? []) as Record<string, unknown>[]) {
-        const result = await this.buildHistorySyncMessage(msg, channelId, botUserId, botToken);
+        const result = await this.buildHistorySyncMessage(msg, channelId, botUserId, botToken, connection.botId);
         if (result) messages.push(result);
         if (messages.length >= maxMessages) break;
       }
@@ -1217,9 +1231,11 @@ export class SlackPlugin extends BaseChannelPlugin {
     channelId: string,
     botUserId: string | undefined,
     botToken: string,
+    ownBotId?: string,
   ): Promise<HistorySyncMessage | null> {
     const userId = msg.user as string | undefined;
-    if (msg.bot_id || (botUserId && userId === botUserId) || !userId) return null;
+    // Same rule as live inbound (#1151): a human posting via an app keeps `user` + `bot_id`.
+    if (!userId || shouldSkipMessage(msg, [botUserId], ownBotId)) return null;
 
     const ts = msg.ts as string;
     const text = (msg.text as string | undefined) ?? '';
@@ -1402,6 +1418,96 @@ export class SlackPlugin extends BaseChannelPlugin {
     });
   }
 
+  /** Remember the newest ts per channel and per thread for reconnect backfill (#1151). */
+  private recordSeen(instanceId: string, msg: Record<string, unknown>): void {
+    const channelId = msg.channel as string | undefined;
+    const ts = msg.ts as string | undefined;
+    if (!channelId || !ts) return;
+    let seen = this.lastSeenTs.get(instanceId);
+    if (!seen) {
+      seen = new Map();
+      this.lastSeenTs.set(instanceId, seen);
+    }
+    const threadTs = msg.thread_ts as string | undefined;
+    const keys = threadTs && threadTs !== ts ? [channelId, `${channelId}:${threadTs}`] : [channelId];
+    for (const key of keys) {
+      const prev = seen.get(key);
+      if (!prev || Number.parseFloat(ts) > Number.parseFloat(prev)) seen.set(key, ts);
+    }
+  }
+
+  /**
+   * Recover events Slack never delivered (#1151). The API-side replay only
+   * re-dispatches rows already in the DB, so anything lost by a zombie socket
+   * is unrecoverable there. On reconnect, pull conversations.history (and
+   * replies for active threads) newer than the last ts seen per conversation
+   * and feed them through the normal inbound handler.
+   *
+   * ponytail: last-seen ts is in-memory — a process restart starts fresh; persist it if restarts become the gap.
+   */
+  async backfillMissedMessages(instanceId: string, connection: BoltConnection): Promise<number> {
+    const seen = this.lastSeenTs.get(instanceId);
+    const handle = this.inboundHandlers.get(instanceId);
+    if (!seen?.size || !handle) return 0;
+
+    const missed = new Map<string, Record<string, unknown>>();
+    const collect = (channelId: string, oldest: string, msgs: unknown[] | undefined): void => {
+      for (const raw of (msgs ?? []) as Record<string, unknown>[]) {
+        const ts = raw.ts as string | undefined;
+        if (!ts || Number.parseFloat(ts) <= Number.parseFloat(oldest)) continue;
+        // History payloads omit channel/channel_type; D-prefixed ids are 1:1 DMs.
+        missed.set(`${channelId}:${ts}`, {
+          ...raw,
+          channel: channelId,
+          channel_type: raw.channel_type ?? (channelId.startsWith('D') ? 'im' : undefined),
+        });
+      }
+    };
+
+    for (const [key, oldest] of [...seen]) {
+      const [channelId, threadTs] = key.split(':') as [string, string | undefined];
+      try {
+        if (threadTs) {
+          const res = await connection.actingClient.conversations.replies({ channel: channelId, ts: threadTs, oldest });
+          collect(channelId, oldest, res.messages);
+          continue;
+        }
+        const res = await connection.actingClient.conversations.history({ channel: channelId, oldest, limit: 200 });
+        collect(channelId, oldest, res.messages);
+        for (const parent of (res.messages ?? []) as Record<string, unknown>[]) {
+          const latestReply = parent.latest_reply as string | undefined;
+          if (!latestReply || Number.parseFloat(latestReply) <= Number.parseFloat(oldest)) continue;
+          const replies = await connection.actingClient.conversations.replies({
+            channel: channelId,
+            ts: parent.ts as string,
+            oldest,
+          });
+          collect(channelId, oldest, replies.messages);
+        }
+      } catch (err) {
+        this.logger.warn('Slack backfill fetch failed', { instanceId, channelId, threadTs, error: String(err) });
+      }
+    }
+
+    const ordered = [...missed.values()].sort(
+      (a, b) => Number.parseFloat(a.ts as string) - Number.parseFloat(b.ts as string),
+    );
+    for (const msg of ordered) {
+      this.recordSeen(instanceId, msg);
+      try {
+        await handle(msg);
+      } catch (err) {
+        this.logger.warn('Slack backfill dispatch failed', { instanceId, ts: msg.ts, error: String(err) });
+      }
+    }
+    this.logger.info('Slack reconnect backfill complete', {
+      instanceId,
+      conversations: seen.size,
+      recovered: ordered.length,
+    });
+    return ordered.length;
+  }
+
   /**
    * Track the last active thread for a (instanceId, channelId) pair.
    * Used by sendTyping to call assistant.threads.setStatus on the right thread.
@@ -1563,8 +1669,14 @@ export class SlackPlugin extends BaseChannelPlugin {
     config: SlackConfig,
     reliability?: { dedupeCache: DedupeCache; debounceManager: DebounceManager },
   ): void {
+    // Record the newest ts per conversation BEFORE any filtering, so a
+    // reconnect backfill (#1151) resumes exactly where delivery stopped.
+    connection.app.message(async ({ message }) => {
+      this.recordSeen(instanceId, message as unknown as Record<string, unknown>);
+    });
+
     // Message handlers — pass getter so botUserId resolves after start()
-    setupMessageHandlers(
+    const handleInbound = setupMessageHandlers(
       connection.app,
       instanceId,
       () => connection.botUserId,
@@ -1651,7 +1763,9 @@ export class SlackPlugin extends BaseChannelPlugin {
       // Authorizing human in user mode (#889) — resolved after start(), so a
       // getter rather than a value.
       () => connection.actingUserId,
+      () => connection.botId,
     );
+    this.inboundHandlers.set(instanceId, handleInbound);
 
     // Reaction handlers — pass getter so botUserId resolves after start()
     setupReactionHandlers(

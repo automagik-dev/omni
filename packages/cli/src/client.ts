@@ -120,3 +120,25 @@ function signRequestIfHandshook(baseUrl: string) {
   const bound = ctx;
   return (method: string, path: string, body: string) => bound.signRequest(method, path, body);
 }
+
+/**
+ * Tag every request to the configured Omni server with `X-Omni-Actor` from
+ * `OMNI_ACTOR` (e.g. `claude-session:<id>`, `cli:alice`) so the config audit
+ * log (#1152) can tell agents and humans apart. Wraps global fetch because many
+ * commands call the API directly instead of through the SDK; requests to any
+ * other host are left untouched.
+ */
+export function installActorHeader(): void {
+  const actor = process.env.OMNI_ACTOR?.trim();
+  if (!actor) return;
+  const original = globalThis.fetch;
+  const wrapped = (input: string | URL | Request, init?: RequestInit) => {
+    const url = input instanceof Request ? input.url : String(input);
+    const base = (loadConfig().apiUrl ?? DEFAULT_API_URL).replace(/\/$/, '');
+    if (!url.startsWith(base)) return original(input, init);
+    const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+    headers.set('x-omni-actor', actor);
+    return original(input, { ...init, headers });
+  };
+  globalThis.fetch = Object.assign(wrapped, original);
+}

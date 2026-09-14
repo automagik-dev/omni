@@ -7,7 +7,7 @@
  * omni automations create --file <definition.json> [flag overrides]
  * omni automations update <id> [--name] [--trigger] [--condition] [--action ...] [--file <json>]
  * omni automations delete <id>
- * omni automations enable <id>
+ * omni automations enable <id> [--replay-since <ts>]
  * omni automations disable <id>
  * omni automations test <id> --event <json>
  * omni automations execute <id> --event <json>
@@ -428,13 +428,20 @@ export function createAutomationsCommand(): Command {
   // omni automations enable <id>
   automations
     .command('enable <id>')
-    .description('Enable an automation')
-    .action(async (id: string) => {
+    .description(
+      'Enable an automation. Resumes from now: events that arrived while it was disabled are NOT acted on, unless --replay-since is given.',
+    )
+    .option('--replay-since <timestamp>', 'Opt-in replay: also act on trigger events since this ISO timestamp')
+    .action(async (id: string, options: { replaySince?: string }) => {
       const client = getClient();
 
       try {
+        const replaySince = options.replaySince ? new Date(options.replaySince) : undefined;
+        if (replaySince && Number.isNaN(replaySince.getTime())) {
+          throw new Error(`Invalid --replay-since timestamp: ${options.replaySince}`);
+        }
         const automationId = await resolveAutomationId(id);
-        const automation = await client.automations.enable(automationId);
+        const automation = await client.automations.enable(automationId, { replaySince: replaySince?.toISOString() });
         output.success(`Automation enabled: ${automation.name}`);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
@@ -445,7 +452,9 @@ export function createAutomationsCommand(): Command {
   // omni automations disable <id>
   automations
     .command('disable <id>')
-    .description('Disable an automation')
+    .description(
+      'Disable (pause) an automation. Events arriving while disabled are skipped for good; re-enabling resumes from that moment (see enable --replay-since).',
+    )
     .action(async (id: string) => {
       const client = getClient();
 

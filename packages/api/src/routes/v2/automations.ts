@@ -175,6 +175,13 @@ const createAutomationSchema = z.object({
       "Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order " +
         'only when every action succeeded; a failed run publishes zero. Default false = immediate publishing',
     ),
+  allowInstanceSenders: z
+    .boolean()
+    .default(false)
+    .describe(
+      'Loop guard opt-in (#1148): by default events sent by one of the tenant’s own instances ' +
+        '(payload.senderInstanceId) are skipped. True = act on them anyway',
+    ),
   maxConcurrency: z
     .number()
     .int()
@@ -363,11 +370,16 @@ automationsRoutes.delete('/:id', async (c) => {
 /**
  * POST /automations/:id/enable - Enable automation
  */
-automationsRoutes.post('/:id/enable', async (c) => {
+const enableQuerySchema = z.object({
+  replaySince: z.string().datetime().optional(),
+});
+
+automationsRoutes.post('/:id/enable', zValidator('query', enableQuerySchema), async (c) => {
   const id = c.req.param('id');
   const services = c.get('services');
+  const { replaySince } = c.req.valid('query');
 
-  const automation = await services.automations.enable(id);
+  const automation = await services.automations.enable(id, replaySince ? { replaySince: new Date(replaySince) } : {});
 
   return c.json({ data: automation });
 });

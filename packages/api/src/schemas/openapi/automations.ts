@@ -120,6 +120,9 @@ export const AutomationSchema = z.object({
       "Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order " +
       'only when every action succeeded; a failed run publishes zero',
   }),
+  allowInstanceSenders: z.boolean().openapi({
+    description: 'Loop guard opt-in (#1148): act on events sent by one of the tenant’s own instances',
+  }),
   maxConcurrency: z
     .number()
     .int()
@@ -171,6 +174,14 @@ export const CreateAutomationSchema = z.object({
       description:
         "Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order " +
         'only when every action succeeded; a failed run publishes zero. Default false = immediate publishing',
+    }),
+  allowInstanceSenders: z
+    .boolean()
+    .default(false)
+    .openapi({
+      description:
+        'Loop guard opt-in (#1148): by default events sent by one of the tenant’s own instances ' +
+        '(payload.senderInstanceId) are skipped. True = act on them anyway',
     }),
   maxConcurrency: z
     .number()
@@ -383,8 +394,18 @@ export function registerAutomationSchemas(registry: OpenAPIRegistry): void {
     operationId: 'enableAutomation',
     tags: ['Automations'],
     summary: 'Enable automation',
-    description: 'Enable an automation.',
-    request: { params: z.object({ id: z.string().uuid().openapi({ description: 'Automation UUID' }) }) },
+    description:
+      'Enable an automation. Resumes from now: events published while it was disabled are skipped. Pass replaySince to act on events since that moment instead.',
+    request: {
+      params: z.object({ id: z.string().uuid().openapi({ description: 'Automation UUID' }) }),
+      query: z.object({
+        replaySince: z
+          .string()
+          .datetime()
+          .optional()
+          .openapi({ description: 'Opt-in replay: act on trigger events published since this ISO timestamp' }),
+      }),
+    },
     responses: {
       200: {
         description: 'Enabled',

@@ -251,8 +251,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
             const chatLink = await resolveChatLink(sdb, metadata.instanceId, payload.chatId);
             const replyToEventId = await resolveReplyToEventId(sdb, metadata.instanceId, payload.replyToId);
 
-            const newEvent: NewOmniEvent = {
-              ...eventIdInsert(event.id),
+            const columns: Omit<NewOmniEvent, 'id'> = {
               externalId: payload.externalId,
               channel: mapChannelType(metadata.channelType),
               instanceId: metadata.instanceId,
@@ -283,7 +282,11 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
               ...chatLink,
             };
 
-            await sdb.insert(omniEvents).values(newEvent).onConflictDoNothing({ target: omniEvents.id });
+            // Upsert on id (#1149): fill the claimed skeleton row, same as message.received.
+            await sdb
+              .insert(omniEvents)
+              .values({ ...eventIdInsert(event.id), ...columns })
+              .onConflictDoUpdate({ target: omniEvents.id, set: columns });
           });
           log.debug('Persisted message.sent', {
             externalId: payload.externalId,

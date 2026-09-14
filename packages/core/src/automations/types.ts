@@ -235,6 +235,12 @@ export interface Automation {
    */
   concurrencyKey?: string | null;
   /**
+   * Replay floor (#1147): trigger events older than this are dropped. Stamped
+   * on disabled→enabled so the durable consumer's backlog is not replayed.
+   * Absent/null = no floor.
+   */
+  enabledAt?: Date | string | null;
+  /**
    * Agent whose event manifest governs this automation (RFC #925 G4).
    * Stamped by the G4b compiler (#986) when the row is compiled from a
    * manifest's `accepts` entries; null/absent = hand-authored. Two consumers:
@@ -244,6 +250,12 @@ export interface Automation {
    * on managed rows (edit the manifest instead).
    */
   managedByAgentId?: string | null;
+  /**
+   * Loop guard opt-in (#1148). By default the engine drops events whose
+   * `payload.senderInstanceId` is set — a message one of the tenant's own
+   * instances sent — so an automation cannot answer itself. True = run anyway.
+   */
+  allowInstanceSenders?: boolean;
   createdAt: Date;
   updatedAt: Date;
 }

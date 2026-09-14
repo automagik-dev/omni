@@ -352,6 +352,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/instances/{id}/sync/{jobId}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel sync job
+         * @description Cancel a pending or running sync job (e.g. a stuck history-push job blocking manual message syncs).
+         */
+        post: operations["cancelInstanceSync"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/instances/{id}/logout": {
         parameters: {
             query?: never;
@@ -1899,7 +1919,7 @@ export interface paths {
         put?: never;
         /**
          * Enable automation
-         * @description Enable an automation.
+         * @description Enable an automation. Resumes from now: events published while it was disabled are skipped. Pass replaySince to act on events since that moment instead.
          */
         post: operations["enableAutomation"];
         delete?: never;
@@ -5659,6 +5679,8 @@ export interface components {
             head: number;
             /** @description head - cursor (all journal rows past the cursor, not only matches) */
             lag: number;
+            /** @description No type-matching journal row past the cursor (lag may still count other types) */
+            caughtUp: boolean;
             /**
              * Format: date-time
              * @description Creation timestamp
@@ -5708,6 +5730,8 @@ export interface components {
             head: number;
             /** @description True when the scan filled the page — more rows are already waiting */
             hasMore: boolean;
+            /** @description A full scan window matched nothing; the stored cursor was advanced past it (#1128) */
+            scanExhausted: boolean;
         };
         Automation: {
             /**
@@ -6061,6 +6085,8 @@ export interface components {
                 config: {
                     [key: string]: unknown;
                 };
+                /** @description Template paths that resolved to nothing and rendered '' (#1115) */
+                unresolved: string[];
             }[];
             /** Format: uuid */
             eventId: string | null;
@@ -9079,6 +9105,81 @@ export interface operations {
             };
             /** @description Instance not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    cancelInstanceSync: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                jobId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Sync job cancelled */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /** Format: uuid */
+                            jobId: string;
+                            /** Format: uuid */
+                            instanceId: string;
+                            type: string;
+                            /** @enum {string} */
+                            status: "cancelled";
+                        };
+                    };
+                };
+            };
+            /** @description Instance or sync job not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Sync job already finished */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -17319,6 +17420,8 @@ export interface operations {
                             head: number;
                             /** @description head - cursor (all journal rows past the cursor, not only matches) */
                             lag: number;
+                            /** @description No type-matching journal row past the cursor (lag may still count other types) */
+                            caughtUp: boolean;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -17409,6 +17512,8 @@ export interface operations {
                             head: number;
                             /** @description head - cursor (all journal rows past the cursor, not only matches) */
                             lag: number;
+                            /** @description No type-matching journal row past the cursor (lag may still count other types) */
+                            caughtUp: boolean;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -17494,6 +17599,8 @@ export interface operations {
                             head: number;
                             /** @description head - cursor (all journal rows past the cursor, not only matches) */
                             lag: number;
+                            /** @description No type-matching journal row past the cursor (lag may still count other types) */
+                            caughtUp: boolean;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -17609,6 +17716,8 @@ export interface operations {
                         head: number;
                         /** @description True when the scan filled the page — more rows are already waiting */
                         hasMore: boolean;
+                        /** @description A full scan window matched nothing; the stored cursor was advanced past it (#1128) */
+                        scanExhausted: boolean;
                     };
                 };
             };
@@ -17690,6 +17799,8 @@ export interface operations {
                             head: number;
                             /** @description head - cursor (all journal rows past the cursor, not only matches) */
                             lag: number;
+                            /** @description No type-matching journal row past the cursor (lag may still count other types) */
+                            caughtUp: boolean;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -18826,7 +18937,9 @@ export interface operations {
     };
     enableAutomation: {
         parameters: {
-            query?: never;
+            query?: {
+                replaySince?: string;
+            };
             header?: never;
             path: {
                 id: string;
@@ -19261,6 +19374,8 @@ export interface operations {
                             config: {
                                 [key: string]: unknown;
                             };
+                            /** @description Template paths that resolved to nothing and rendered '' (#1115) */
+                            unresolved: string[];
                         }[];
                         /** Format: uuid */
                         eventId: string | null;

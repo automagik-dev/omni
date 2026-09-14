@@ -12,6 +12,7 @@ import { routesRoutes } from './agent-routes';
 import { agentStateRoutes } from './agent-state';
 import { agentTasksRoutes } from './agent-tasks';
 import { agentsRoutes } from './agents';
+import { auditRoutes } from './audit';
 import { authRoutes } from './auth';
 import { automationsRoutes } from './automations';
 import { batchJobsRoutes } from './batch-jobs';
@@ -55,6 +56,7 @@ v2Routes.route('/a2a', a2aRoutes);
 v2Routes.route('/agents', agentsRoutes);
 v2Routes.route('/agent-state', agentStateRoutes);
 v2Routes.route('/agent-tasks', agentTasksRoutes); // Agent task history (omni-m7m)
+v2Routes.route('/audit', auditRoutes); // Config-mutation audit log (#1152)
 v2Routes.route('/auth', authRoutes);
 v2Routes.route('/instances', instancesRoutes);
 v2Routes.route('/logs', logsRoutes);

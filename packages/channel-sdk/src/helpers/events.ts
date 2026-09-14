@@ -52,6 +52,9 @@ export interface EmitMessageReceivedParams {
   /** ID of message this is replying to */
   replyToId?: string;
 
+  /** Same-tenant Omni instance whose own account sent this message (#1148) */
+  senderInstanceId?: string;
+
   /** Raw payload from the platform (for debugging) */
   rawPayload?: Record<string, unknown>;
 
