@@ -714,6 +714,31 @@ else:
     if pin_permissions != expected_pin_permissions:
         errors.append(f"candidate pin job permissions are {pin_permissions}, expected exactly {expected_pin_permissions}")
 
+back_merge = workflows.get("back-merge-main.yml")
+if back_merge is None:
+    errors.append("back-merge-main.yml is missing")
+else:
+    require(back_merge, r"^on:\n  push:\n    branches: \[main\]\n\n", "back-merge must trigger only on push to main")
+    require(back_merge, r"if: github\.ref == 'refs/heads/main'", "back-merge job does not refuse non-main refs")
+    require(back_merge, r"git merge-base --is-ancestor origin/main HEAD", "back-merge is not a no-op when main is already in dev")
+    require(back_merge, r'-m "chore\(merge\): back-merge main into dev after v\$\{version\} promotion"', "back-merge commit message is not the conventional chore(merge) message")
+    require(back_merge, r"git diff --quiet origin/dev HEAD -- packages/cli/package\.json \.well-known/", "back-merge does not refuse to change the version or .well-known pins")
+    pushes = re.findall(r'"HEAD:(refs/[^"]+)"', back_merge)
+    if pushes != ["refs/heads/dev"]:
+        errors.append(f"back-merge pushes {pushes}, expected exactly ['refs/heads/dev']")
+    for pattern, message in (
+        (r"workflow_dispatch|pull_request|schedule|workflow_run", "back-merge has a non-push trigger"),
+        (r"refs/heads/main\"|HEAD:main", "back-merge can push main"),
+        (r"\bgit\s+(?:tag|push\s+--force|push\s+-f)\b|--force", "back-merge can tag or force-push"),
+        (r"git add|git commit", "back-merge makes non-merge commits"),
+        (r"(?:packages|actions|attestations|id-token|contents):\s*write", "back-merge grants a mutating token permission"),
+        (r"persist-credentials:\s*true", "back-merge persists checkout credentials"),
+    ):
+        forbid(back_merge, pattern, message)
+    back_merge_permissions = effective_job_permissions(back_merge)
+    if back_merge_permissions != {"back-merge": {"contents": "read"}}:
+        errors.append(f"back-merge job permissions are {back_merge_permissions}, expected exactly contents: read")
+
 if errors:
     for error in errors:
         print(f"FAIL: {error}", file=sys.stderr)

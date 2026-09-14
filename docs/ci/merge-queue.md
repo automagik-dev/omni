@@ -100,9 +100,17 @@ checks — verified 2026-09-08):
      convention).
    - Defaults are fine for the rest; "Only merge non-failing pull requests"
      stays on.
-3. **Leave `main` untouched.** Promotion PRs are human-merged against `main`'s
-   existing strict required checks; a queue there adds nothing and would
-   insert queue-made merge commits into the carry-exact promotion path.
+3. **No queue on `main`.** Promotion PRs are human-merged against `main`'s
+   required checks; a queue there adds nothing and would insert queue-made
+   merge commits into the carry-exact promotion path.
+   **`main` does not require strict up-to-date branches (#1141).** Each
+   promotion merge commit exists only on `main`, so with strict on, the next
+   promotion PR was always born `BEHIND` and needed a hand back-merge whose
+   tree was byte-identical. Strictness added no verification: the promotion
+   PR's CI already runs on its merge commit, and the Promotion Pin Gate binds
+   the candidate SHA. `.github/workflows/back-merge-main.yml` now merges
+   `main` back into `dev` on every push to `main` (no-op when already an
+   ancestor; refuses to change `packages/cli/package.json` or `.well-known/`).
 
 ## Interactions with the existing flow (checked)
 
