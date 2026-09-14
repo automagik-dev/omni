@@ -491,6 +491,7 @@ export class AutomationEngine {
 
     try {
       for (const automation of sortedAutomations) {
+        if (this.isInstanceSenderLoop(automation, event)) continue;
         // Check if this automation has debounce
         if (automation.debounce && automation.debounce.mode !== 'none') {
           await this.handleDebounced(automation, event);
@@ -506,6 +507,23 @@ export class AutomationEngine {
       if (gate.claimToken) await this.releaseIdleTimeoutClaim(gate.claimToken, event);
       throw err;
     }
+  }
+
+  /**
+   * Loop guard (#1148): an event authored by one of the tenant's own instances
+   * (`payload.senderInstanceId`, stamped observer-independently at publish) is
+   * not acted on unless the automation opts in. Checked before debounce so a
+   * bot message never joins, and never flushes, a window.
+   */
+  private isInstanceSenderLoop(automation: Automation, event: OmniEvent): boolean {
+    const senderInstanceId = (event.payload as { senderInstanceId?: unknown }).senderInstanceId;
+    if (typeof senderInstanceId !== 'string' || !senderInstanceId || automation.allowInstanceSenders) return false;
+    logger.debug('Skipping event sent by a same-tenant instance', {
+      automationId: automation.id,
+      eventId: event.id,
+      senderInstanceId,
+    });
+    return true;
   }
 
   /**
