@@ -397,7 +397,9 @@ jobs:
       github.event_name == 'workflow_dispatch' &&
       inputs.stable_publish_only == true
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # reconcile-npm-stable.sh polls registry convergence for ~15 minutes
+    # (twice: packument, then tarball); the job must outlive that window.
+    timeout-minutes: 40
     permissions:
       contents: read
       id-token: write
