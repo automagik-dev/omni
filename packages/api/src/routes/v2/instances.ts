@@ -475,6 +475,12 @@ const SENSITIVE_INSTANCE_FIELDS = [
   'ascFlowChave',
 ] as const;
 
+/** Mask a secret for display: keep a short prefix (e.g. `xoxp-`) and the last 4 chars */
+function maskSecret(secret: string): string {
+  if (secret.length <= 12) return '****';
+  return `${secret.slice(0, 5)}****${secret.slice(-4)}`;
+}
+
 /** Strip secret tokens from an instance before returning it in API responses */
 function sanitizeInstance<T extends Record<string, unknown>>(
   instance: T,
@@ -482,6 +488,12 @@ function sanitizeInstance<T extends Record<string, unknown>>(
   const sanitized = { ...instance };
   for (const field of SENSITIVE_INSTANCE_FIELDS) {
     delete sanitized[field];
+  }
+  // Surface WHETHER a Slack user token is set (masked), so `authMode: user`
+  // without one is visible instead of silently acting as the bot (#1120).
+  const userToken = instance.slackUserToken;
+  if (typeof userToken === 'string' && userToken.length > 0) {
+    (sanitized as Record<string, unknown>).slackUserToken = maskSecret(userToken);
   }
   return sanitized;
 }
