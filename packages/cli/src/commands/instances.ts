@@ -190,6 +190,83 @@ function applyStalledFields(body: Record<string, unknown>, opts: Record<string, 
   }
 }
 
+/** Body fields that carry secrets — never echo them back unmasked (#1139) */
+const SECRET_BODY_FIELDS = [
+  'token',
+  'telegramBotToken',
+  'discordBotToken',
+  'slackBotToken',
+  'slackAppToken',
+  'slackUserToken',
+  'slackSigningSecret',
+  'gupshupAuthToken',
+  'webhookVerifyToken',
+  'twilioAuthToken',
+  'metaAccessToken',
+  'ascToken',
+  'hermesPassword',
+] as const;
+
+/** Mask a secret for display, matching the API's `get` shape (`xoxp-****9bdc`) */
+function maskSecret(secret: string): string {
+  if (secret.length <= 12) return '****';
+  return `${secret.slice(0, 5)}****${secret.slice(-4)}`;
+}
+
+/** Copy of a request/response body safe to print: secret strings masked, `null` clears kept */
+function maskSecretFields(body: Record<string, unknown>): Record<string, unknown> {
+  const masked = { ...body };
+  for (const field of SECRET_BODY_FIELDS) {
+    const value = masked[field];
+    if (typeof value === 'string' && value.length > 0) masked[field] = maskSecret(value);
+  }
+  return masked;
+}
+
+/** Read all of stdin as UTF-8 (raw; the caller strips the trailing newline). */
+async function readStdinText(): Promise<string> {
+  if (process.stdin.isTTY) {
+    throw new Error('--slack-user-token-stdin requires piped stdin (e.g. `printf %s "$TOKEN" | omni instances ...`)');
+  }
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks).toString('utf-8');
+}
+
+/**
+ * Resolve the Slack user token from exactly one of --slack-user-token,
+ * --slack-user-token-env, --slack-user-token-stdin (same convention as
+ * `webhooks --signature-secret-*`). Undefined when none is given.
+ */
+async function resolveSlackUserToken(
+  opts: Record<string, unknown>,
+  readStdin: () => Promise<string> = readStdinText,
+): Promise<string | undefined> {
+  const sources = [
+    opts.slackUserToken !== undefined,
+    opts.slackUserTokenEnv !== undefined,
+    opts.slackUserTokenStdin === true,
+  ].filter(Boolean).length;
+  if (sources === 0) return undefined;
+  if (sources > 1) {
+    throw new Error('Use only one of --slack-user-token, --slack-user-token-env, --slack-user-token-stdin');
+  }
+  if (opts.slackUserTokenEnv !== undefined) {
+    const name = opts.slackUserTokenEnv as string;
+    const value = name ? process.env[name] : undefined;
+    if (!value) throw new Error(`environment variable ${name} is not set or empty`);
+    return value;
+  }
+  if (opts.slackUserTokenStdin) {
+    const value = (await readStdin()).replace(/\r?\n$/, '');
+    if (!value) throw new Error('no Slack user token received on stdin');
+    return value;
+  }
+  return opts.slackUserToken as string;
+}
+
 /** Build instance body from all CLI options */
 function buildInstanceBody(opts: Record<string, unknown>): Record<string, unknown> {
   const body: Record<string, unknown> = {};
@@ -393,6 +470,8 @@ export function createInstancesCommand(): Command {
     .option('--slack-bot-token <token>', 'Slack bot token')
     .option('--slack-app-token <token>', 'Slack app token')
     .option('--slack-user-token <token>', 'Slack user token (xoxp-...), required for --slack-auth-mode user')
+    .option('--slack-user-token-env <VAR>', 'Read the Slack user token from environment variable VAR')
+    .option('--slack-user-token-stdin', 'Read the Slack user token from stdin')
     .option('--slack-auth-mode <mode>', 'Slack identity for outbound actions: bot (default) or user')
     // Gupshup
     .option('--gupshup-callback-url <url>', 'Gupshup Custom Integration callback URL')
@@ -441,7 +520,7 @@ export function createInstancesCommand(): Command {
       }
 
       try {
-        const body = buildInstanceBody(options);
+        const body = buildInstanceBody({ ...options, slackUserToken: await resolveSlackUserToken(options) });
         body.name = options.name;
         body.channel = channel;
         setBool(body, 'isDefault', options.isDefault);
@@ -1076,6 +1155,8 @@ export function createInstancesCommand(): Command {
     .option('--slack-bot-token <token>', 'Slack bot token (use "null" to clear)')
     .option('--slack-app-token <token>', 'Slack app token (use "null" to clear)')
     .option('--slack-user-token <token>', 'Slack user token xoxp-... (use "null" to clear)')
+    .option('--slack-user-token-env <VAR>', 'Read the Slack user token from environment variable VAR')
+    .option('--slack-user-token-stdin', 'Read the Slack user token from stdin')
     .option('--slack-auth-mode <mode>', 'Slack identity: bot or user (use "null" to clear)')
     .option('--twilio-account-sid <sid>', 'Twilio Account SID (use "null" to clear)')
     .option('--twilio-auth-token <token>', 'Twilio Auth Token (use "null" to clear)')
@@ -1127,14 +1208,14 @@ export function createInstancesCommand(): Command {
         }
 
         // Build update body using shared helpers
-        const body = buildInstanceBody(options);
+        const body = buildInstanceBody({ ...options, slackUserToken: await resolveSlackUserToken(options) });
         setVal(body, 'name', options.name);
         setBool(body, 'isDefault', options.isDefault);
 
         // Send update if there are fields to update
         if (Object.keys(body).length > 0) {
           await client.instances.update(id, body);
-          output.success(`Instance updated: ${id}`, body);
+          output.success(`Instance updated: ${id}`, maskSecretFields(body));
 
           // Deprecation nudge — when an operator binds an instance to a
           // genie-backed agent via `--agent-provider <id>`, they're
@@ -1658,3 +1739,5 @@ export function createInstancesCommand(): Command {
 
   return instances;
 }
+
+export const __testables = { maskSecret, maskSecretFields, resolveSlackUserToken };

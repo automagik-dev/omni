@@ -637,6 +637,10 @@ for gate in (
     if gate not in ci:
         errors.append(f"protected CI does not invoke {gate}")
 require(ci, r"actionlint[^\n]*\.github/workflows/\*\.yml", "protected CI does not actionlint every workflow")
+# Tool downloads flake with 403/504 and must retry instead of blocking releases (#1140).
+for line in ci.splitlines():
+    if re.search(r"\bcurl\b.*(?:releases/download|get\.helm\.sh|autopg/main/install\.sh)", line) and "--retry 5 --retry-all-errors" not in line:
+        errors.append(f"protected CI tool download does not retry: {line.strip()}")
 
 # The promotion pin gate: a stale candidate pin must fail ON the promotion PR
 # (base main), not after the merge — image-publish.yml only runs on push to
@@ -764,6 +768,30 @@ else:
         errors.append("candidate pipeline pin permissions are not exactly read-only")
 require(version_workflow, r"^  workflow_call:\n    inputs:\n      candidate:\n[\s\S]{0,300}    secrets:\n      VERSION_BUMP_PAT:\n        required: true\n[\s\S]{0,200}    outputs:\n      version:\n", "the version workflow cannot be called for an in-run candidate cut that emits its version")
 require(version_workflow, r"\(github\.event_name == 'push' && inputs\.candidate == true\)", "the version writer admits a called push that is not a candidate cut")
+back_merge = workflows.get("back-merge-main.yml")
+if back_merge is None:
+    errors.append("back-merge-main.yml is missing")
+else:
+    require(back_merge, r"^on:\n  push:\n    branches: \[main\]\n\n", "back-merge must trigger only on push to main")
+    require(back_merge, r"if: github\.ref == 'refs/heads/main'", "back-merge job does not refuse non-main refs")
+    require(back_merge, r"git merge-base --is-ancestor origin/main HEAD", "back-merge is not a no-op when main is already in dev")
+    require(back_merge, r'-m "chore\(merge\): back-merge main into dev after v\$\{version\} promotion"', "back-merge commit message is not the conventional chore(merge) message")
+    require(back_merge, r"git diff --quiet origin/dev HEAD -- packages/cli/package\.json \.well-known/", "back-merge does not refuse to change the version or .well-known pins")
+    pushes = re.findall(r'"HEAD:(refs/[^"]+)"', back_merge)
+    if pushes != ["refs/heads/dev"]:
+        errors.append(f"back-merge pushes {pushes}, expected exactly ['refs/heads/dev']")
+    for pattern, message in (
+        (r"workflow_dispatch|pull_request|schedule|workflow_run", "back-merge has a non-push trigger"),
+        (r"refs/heads/main\"|HEAD:main", "back-merge can push main"),
+        (r"\bgit\s+(?:tag|push\s+--force|push\s+-f)\b|--force", "back-merge can tag or force-push"),
+        (r"git add|git commit", "back-merge makes non-merge commits"),
+        (r"(?:packages|actions|attestations|id-token|contents):\s*write", "back-merge grants a mutating token permission"),
+        (r"persist-credentials:\s*true", "back-merge persists checkout credentials"),
+    ):
+        forbid(back_merge, pattern, message)
+    back_merge_permissions = effective_job_permissions(back_merge)
+    if back_merge_permissions != {"back-merge": {"contents": "read"}}:
+        errors.append(f"back-merge job permissions are {back_merge_permissions}, expected exactly contents: read")
 
 if errors:
     for error in errors:
