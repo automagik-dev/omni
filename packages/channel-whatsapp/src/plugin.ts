@@ -180,7 +180,7 @@ export interface FetchGroupsResult {
 export interface WhatsAppConnectionOptions {
   /** Baileys logger level (default: 'warn') */
   logLevel?: SocketConfig['logLevel'];
-  /** Browser identification (default: ['Omni', 'Chrome', '120.0.0']) */
+  /** Browser identification (default depends on syncFullHistory, see SocketConfig.browser) */
   browser?: [string, string, string];
   /** Mobile mode (default: false) */
   mobile?: boolean;
@@ -190,8 +190,10 @@ export interface WhatsAppConnectionOptions {
   defaultQueryTimeoutMs?: number;
   /** Keep alive interval in ms (default: 25000) */
   keepAliveIntervalMs?: number;
-  /** Sync full message history (default: true) */
+  /** Sync full message history (default: false) */
   syncFullHistory?: boolean;
+  /** Advertise group history support on pairing (default: follows syncFullHistory) */
+  supportGroupHistory?: boolean;
   /** Generate high quality link previews (default: true) */
   generateHighQualityLinkPreview?: boolean;
   /** Mark online when connecting (default: true) */

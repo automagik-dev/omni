@@ -23,7 +23,11 @@ export interface SocketConfig {
   logLevel?: 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal' | 'silent';
 
   // === Connection Options ===
-  /** Browser identification [name, browser, version] (default: ['Omni', 'Chrome', '120.0.0']) */
+  /**
+   * Browser identification [os, browser, version]. Default: Browsers.macOS('Desktop') when
+   * syncFullHistory is on (Baileys' recommendation for full history; shows as "Mac OS" in the
+   * phone's Linked Devices list), otherwise Browsers.ubuntu('Chrome'). See #1126.
+   */
   browser?: [string, string, string];
   /** Mobile flag for web multi-device (default: false) */
   mobile?: boolean;
@@ -35,8 +39,13 @@ export interface SocketConfig {
   keepAliveIntervalMs?: number;
 
   // === Sync Options ===
-  /** Sync full message history on connect (default: true) */
+  /** Sync full message history on connect (default: false) */
   syncFullHistory?: boolean;
+  /**
+   * Advertise group history support in the companion registration payload
+   * (vendored Baileys patch). Default: follows syncFullHistory. Only affects pairing. See #1126.
+   */
+  supportGroupHistory?: boolean;
   /** Generate high quality link previews (default: true) */
   generateHighQualityLinkPreview?: boolean;
   /** Mark messages as online when sending read receipts (default: true) */
@@ -75,10 +84,9 @@ export interface SocketConfig {
  */
 export const DEFAULT_SOCKET_CONFIG: Omit<
   Required<SocketConfig>,
-  'auth' | 'cachedGroupMetadata' | 'shouldIgnoreJid' | 'getMessage'
+  'auth' | 'cachedGroupMetadata' | 'shouldIgnoreJid' | 'getMessage' | 'browser' | 'supportGroupHistory'
 > = {
   logLevel: 'warn',
-  browser: Browsers.ubuntu('Chrome'),
   mobile: false,
   connectTimeoutMs: 20_000,
   // Baileys default (60s). Previously reduced to 15s to cap mutex hold time (#70),
@@ -89,6 +97,20 @@ export const DEFAULT_SOCKET_CONFIG: Omit<
   generateHighQualityLinkPreview: true,
   markOnlineOnConnect: true,
 };
+
+/**
+ * Resolve the history-sync pairing identity (#1126): unless set per instance, full-history
+ * instances pair as a macOS Desktop client with group history, others keep the Ubuntu/Chrome web identity.
+ */
+export function resolveHistoryIdentity(
+  config: Pick<SocketConfig, 'browser' | 'supportGroupHistory' | 'syncFullHistory'>,
+): { browser: [string, string, string]; supportGroupHistory: boolean } {
+  const fullHistory = config.syncFullHistory ?? DEFAULT_SOCKET_CONFIG.syncFullHistory;
+  return {
+    browser: config.browser ?? (fullHistory ? Browsers.macOS('Desktop') : Browsers.ubuntu('Chrome')),
+    supportGroupHistory: config.supportGroupHistory ?? fullHistory,
+  };
+}
 
 /**
  * Create a Pino logger for Baileys with newsletter noise filtered out
@@ -145,6 +167,7 @@ export async function createSocket(config: SocketConfig): Promise<WASocket> {
   // Merge with defaults - user config takes precedence
   const mergedConfig = { ...DEFAULT_SOCKET_CONFIG, ...config };
   const logger = createLogger(mergedConfig.logLevel);
+  const { browser, supportGroupHistory } = resolveHistoryIdentity(mergedConfig);
 
   // Get latest Baileys version for compatibility
   const { version } = await fetchLatestBaileysVersion();
@@ -174,7 +197,8 @@ export async function createSocket(config: SocketConfig): Promise<WASocket> {
     // All options below are configurable per-instance
     // Note: printQRInTerminal is deprecated in Baileys v7 - we handle QR via connection.update event
     mobile: mergedConfig.mobile,
-    browser: mergedConfig.browser,
+    browser,
+    supportGroupHistory,
     generateHighQualityLinkPreview: mergedConfig.generateHighQualityLinkPreview,
     syncFullHistory: mergedConfig.syncFullHistory,
     // Baileys ad5ea81 changed the default to filter out FULL syncs.
