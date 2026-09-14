@@ -16,7 +16,7 @@ import type { EventType, GenericEventPayload, OmniEvent } from '../events/types'
 import { generateId } from '../ids';
 import { createLogger } from '../logger';
 import { type ActionDependencies, executeActions } from './actions';
-import { describeUnmatchedConditions, evaluateConditionsWithDetails } from './conditions';
+import { buildConditionContext, describeUnmatchedConditions, evaluateConditionsWithDetails } from './conditions';
 import {
   type ConversationKey,
   type DebounceEnvelopeStamp,
@@ -820,13 +820,9 @@ export class AutomationEngine {
 
       // Evaluate conditions — merge metadata so conditions can reference
       // fields like instanceId, channelType, correlationId etc.
-      const conditionPayload = {
-        ...(event.metadata as unknown as Record<string, unknown>),
-        ...(event.payload as Record<string, unknown>),
-      };
       const conditionResult = evaluateConditionsWithDetails(
         automation.triggerConditions as Parameters<typeof evaluateConditionsWithDetails>[0],
-        conditionPayload,
+        buildConditionContext(event.payload as Record<string, unknown>, event.metadata),
         automation.conditionLogic ?? 'and',
       );
 
@@ -1002,17 +998,17 @@ export class AutomationEngine {
    */
   async testAutomation(
     automation: Automation,
-    event: { type: string; payload: Record<string, unknown> },
+    event: { type: string; payload: Record<string, unknown>; metadata?: Record<string, unknown> },
   ): Promise<{
     matched: boolean;
     conditions: Array<{ field: string; operator: string; matched: boolean }>;
     actions: Array<{ type: string; wouldExecute: boolean }>;
     dryRun: true;
   }> {
-    // Evaluate conditions
+    // Same condition context as the live path (#1116)
     const conditionResult = evaluateConditionsWithDetails(
       automation.triggerConditions as Parameters<typeof evaluateConditionsWithDetails>[0],
-      event.payload,
+      buildConditionContext(event.payload, event.metadata),
       automation.conditionLogic ?? 'and',
     );
 

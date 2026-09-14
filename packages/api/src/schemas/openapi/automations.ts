@@ -251,6 +251,9 @@ export const AutomationTestResultSchema = z.object({
         type: z.string(),
         wouldExecute: z.boolean(),
         config: z.record(z.string(), z.unknown()).openapi({ description: 'Action config with templates rendered' }),
+        unresolved: z
+          .array(z.string())
+          .openapi({ description: "Template paths that resolved to nothing and rendered '' (#1115)" }),
       }),
     )
     .openapi({ description: 'Rendered actions — never executed' }),

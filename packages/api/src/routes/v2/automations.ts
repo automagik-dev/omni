@@ -210,8 +210,10 @@ const testAutomationSchema = z
 
 /**
  * Resolve the test/execute body to an event: the inline mock, or the REAL
- * journaled row (#1073) shaped the way the engine would have seen it —
- * `rawPayload` as payload, the envelope `metadata` alongside.
+ * journaled row (#1073) shaped the way the engine saw it on the bus (#1116).
+ * A webhook (`internal`) event's payload IS its rawPayload; a channel event's
+ * bus payload is canonical (`chatId`, `from`, `content`, ...) with the
+ * platform payload nested under `rawPayload` — rebuilt here from the columns.
  */
 async function resolveTestEvent(
   services: AppVariables['services'],
@@ -222,7 +224,18 @@ async function resolveTestEvent(
   return {
     id: row.id,
     type: row.eventType,
-    payload: row.rawPayload ?? {},
+    payload:
+      row.channel === 'internal'
+        ? (row.rawPayload ?? {})
+        : Object.fromEntries(
+            Object.entries({
+              externalId: row.externalId,
+              chatId: row.chatId,
+              from: row.metadata?.from,
+              content: row.contentType ? { type: row.contentType, text: row.textContent ?? undefined } : undefined,
+              rawPayload: row.rawPayload,
+            }).filter(([, v]) => v != null),
+          ),
     metadata: row.metadata ?? undefined,
     timestamp: row.receivedAt.getTime(),
   };
