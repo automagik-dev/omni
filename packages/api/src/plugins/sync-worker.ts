@@ -521,7 +521,7 @@ async function processMessageSync(
   const fetchOptions: WhatsAppSyncOptions = {
     since,
     until: new Date(),
-    count: 100, // Messages per chat (recursive fetching will get more)
+    count: 50, // WhatsApp caps on-demand replies at 50 (recursive fetching gets more)
     anchors: anchors.length > 0 ? anchors : undefined,
     onProgress: async (count: number, progress?: number) => {
       if (inflightRevoked) return; // no durable side effects after the flip
