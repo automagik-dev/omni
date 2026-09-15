@@ -86,7 +86,7 @@ Field by field:
 | Field | Why |
 |---|---|
 | `signatureConfig` | GitHub signs every delivery with `X-Hub-Signature-256: sha256=<hex hmac>` — HMAC-SHA256 of the **raw body bytes** under the shared secret. Omni verifies over the raw body before anything is published; the secret is write-only (never returned by the API). |
-| `idempotencyKeyTemplate` | `X-GitHub-Delivery` is GitHub's per-delivery GUID and is **stable across redeliveries**. The template resolves to e.g. `github:72d3162e-cc78-11e3-81ab-4c9367dc0958`; the unique index on `omni_events.idempotency_key` is the dedup authority. Note the header placeholder is lowercase: `{headers.x-github-delivery}`. If the header were ever missing, derivation falls back to `github:{sha256(body)}`. |
+| `idempotencyKeyTemplate` | `X-GitHub-Delivery` is GitHub's per-delivery GUID and is **stable across redeliveries**. The template resolves to e.g. `github:72d3162e-cc78-11e3-81ab-4c9367dc0958`, stored prefixed with the event type (`custom.github.push:github:72d3…`, #1178); the unique index on `omni_events.idempotency_key` is the dedup authority. Note the header placeholder is lowercase: `{headers.x-github-delivery}`. If the header were ever missing, derivation falls back to `github:{sha256(body)}`. |
 | `eventTypeMapping` | Reads `X-GitHub-Event` and emits `custom.github.{event}`: `push` → `custom.github.push`, `pull_request` → `custom.github.pull_request`, `issues` → `custom.github.issues`, `release` → `custom.github.release`. Deliveries without the header fall back to `custom.webhook.github`. |
 | `expectedIntervalSeconds` | Declared liveness cadence (#961): "≥1 event **or heartbeat** per 24 h". See step 4. |
 

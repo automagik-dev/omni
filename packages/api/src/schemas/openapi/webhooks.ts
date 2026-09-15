@@ -90,6 +90,9 @@ export const WebhookSourceSchema = z.object({
     .boolean()
     .openapi({ description: 'Whether a signature secret is stored (secret is write-only)' }),
   idempotencyKeyTemplate: z.string().openapi({ description: 'Idempotency key derivation template' }),
+  idempotencyAcrossEventTypes: z.boolean().openapi({
+    description: 'Whether custom-template idempotency keys are shared across event types (opt-in collapsing)',
+  }),
   totalDuplicates: z.number().int().openapi({ description: 'Redeliveries acked without creating a second event' }),
   strictSchemas: z.boolean().openapi({
     description:
@@ -150,6 +153,15 @@ export const CreateWebhookSourceSchema = z.object({
         'without a signatureConfig (given in the same request, or already stored on update); null clears it.',
     }),
   idempotencyKeyTemplate: IdempotencyKeyTemplateSchema.optional(),
+  idempotencyAcrossEventTypes: z
+    .boolean()
+    .optional()
+    .openapi({
+      description:
+        'By default a custom idempotency key is prefixed with the resolved event type, so ' +
+        'different event types for the same entity never collide. Set true to collapse keys across ' +
+        'event types (a second type for the same rendered key is acked as a duplicate). Defaults to false.',
+    }),
   strictSchemas: z
     .boolean()
     .optional()

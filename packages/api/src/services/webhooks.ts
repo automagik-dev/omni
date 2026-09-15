@@ -431,6 +431,8 @@ export class WebhookService {
       rawBody: rawBody ?? JSON.stringify(payload),
       payload,
       headers,
+      eventType,
+      acrossEventTypes: source.idempotencyAcrossEventTypes,
     });
 
     const claim = await this.claimJournalRow({
