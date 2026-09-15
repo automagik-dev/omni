@@ -180,10 +180,12 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
   async getStatus(instanceId: string): Promise<ConnectionStatus> {
     const status = this.instances.getStatus(instanceId);
     if (!status) {
+      // Not loaded by this plugin (inactive, or never connected since boot).
+      // Callers resolve the id against the DB first, so unknown ids 404 upstream (#1169).
       return {
         state: 'disconnected',
         since: new Date(),
-        message: 'Instance not found',
+        message: 'Instance inactive (not connected)',
       };
     }
     return status;

@@ -2745,12 +2745,7 @@ export function createOmniClient(config: OmniClientConfig) {
         });
         if (!resp.ok) {
           const errorData = await resp.json().catch(() => ({}));
-          throw new OmniApiError(
-            (errorData as { error?: string }).error ?? resp.statusText,
-            'CREATE_FAILED',
-            undefined,
-            resp.status,
-          );
+          throw OmniApiError.from(errorData, resp.status);
         }
         const data = (await resp.json()) as { data: Provider };
         return data.data;
@@ -2767,12 +2762,7 @@ export function createOmniClient(config: OmniClientConfig) {
         });
         if (!resp.ok) {
           const errorData = await resp.json().catch(() => ({}));
-          throw new OmniApiError(
-            (errorData as { error?: string }).error ?? resp.statusText,
-            'UPDATE_FAILED',
-            undefined,
-            resp.status,
-          );
+          throw OmniApiError.from(errorData, resp.status);
         }
         const data = (await resp.json()) as { data: Provider };
         return data.data;

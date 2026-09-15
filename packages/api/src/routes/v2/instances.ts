@@ -301,6 +301,9 @@ const createInstanceSchema = z.object({
     ),
 });
 
+const AGENT_PROVIDER_READ_ONLY_MESSAGE =
+  'agentProviderId is read-only on instances (derived from the assigned agent). Use `omni agents update <agentId> --agent-provider <providerId>`.';
+
 // Update instance schema - allow null to clear values (only for nullable DB fields)
 // NOTE: .partial() on fields with .default() still fires the default for omitted keys,
 // so we must explicitly override fields that have defaults to strip the default value.
@@ -317,6 +320,12 @@ const updateInstanceSchema = createInstanceSchema.partial().extend({
   profileMetadata: z.record(z.unknown()).nullable().optional(),
   // Nullable fields in DB - can be set to null
   agentId: z.string().uuid().nullable().optional(),
+  // #1168: instances have no provider column — the provider lives on the agent.
+  // Reject instead of silently stripping so callers don't believe it saved.
+  agentProviderId: z
+    .unknown()
+    .refine((v) => v === undefined, { message: AGENT_PROVIDER_READ_ONLY_MESSAGE })
+    .optional(),
   agentErrorMessages: z.array(z.string()).nullable().optional(),
   agentReplyFilter: agentReplyFilterSchema.nullable().optional(),
   triggerEvents: z.array(z.string()).nullable().optional(),
@@ -475,6 +484,25 @@ const SENSITIVE_INSTANCE_FIELDS = [
   'ascToken',
   'ascFlowChave',
 ] as const;
+
+/**
+ * Populate the read-only `agentProviderId` from the instance's agent (#1168).
+ * Instances link to a provider only through `agentId -> agents.agentProviderId`.
+ */
+async function withAgentProviderId<T extends { agentId?: string | null }>(
+  services: Services,
+  instance: T,
+): Promise<T & { agentProviderId: string | null }> {
+  let agentProviderId: string | null = null;
+  if (instance.agentId) {
+    try {
+      agentProviderId = (await services.agents.getById(instance.agentId)).agentProviderId ?? null;
+    } catch {
+      // Agent missing/deleted — leave null
+    }
+  }
+  return { ...instance, agentProviderId };
+}
 
 /** Mask a secret for display: keep a short prefix (e.g. `xoxp-`) and the last 4 chars */
 function maskSecret(secret: string): string {
@@ -858,7 +886,9 @@ instancesRoutes.get('/', zValidator('query', listQuerySchema), async (c) => {
 
   // Filter by API key's allowed instanceIds
   const filtered = apiKey ? filterByInstanceAccess(result.items, (item) => item.id, apiKey) : result.items;
-  const items = filtered.map(sanitizeInstance);
+  const items = await Promise.all(
+    filtered.map(async (item) => sanitizeInstance(await withAgentProviderId(services, item))),
+  );
 
   return c.json({
     items,
@@ -932,7 +962,7 @@ instancesRoutes.get('/:id', instanceAccess, async (c) => {
 
   const instance = await services.instances.getById(id);
 
-  return c.json({ data: sanitizeInstance(instance) });
+  return c.json({ data: sanitizeInstance(await withAgentProviderId(services, instance)) });
 });
 
 /**
@@ -1081,7 +1111,7 @@ instancesRoutes.patch('/:id', instanceAccess, zValidator('json', updateInstanceS
     );
   }
 
-  return c.json({ data: sanitizeInstance(instance) });
+  return c.json({ data: sanitizeInstance(await withAgentProviderId(services, instance)) });
 });
 
 /**
