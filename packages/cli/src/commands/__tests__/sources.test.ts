@@ -6,19 +6,25 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { PRESETS, type ProviderApi, StepFailure, addSource } from '../sources';
+import { PRESETS, type ProviderApi, StepFailure, addSource, adoptionWarnings } from '../sources';
 
 const github = PRESETS.github;
 
 function mockDeps(
-  opts: { existing?: boolean; failSchemas?: boolean; hooks?: Array<{ id: number; config: { url: string } }> } = {},
+  opts: {
+    existing?: boolean | string;
+    failSchemas?: boolean;
+    hooks?: Array<{ id: number; config: { url: string } }>;
+  } = {},
 ) {
   const calls: Array<{ op: string; args: unknown[] }> = [];
   const providerCalls: Array<{ method: string; path: string; body?: unknown }> = [];
   const client = {
     listSources: async () => {
       calls.push({ op: 'listSources', args: [] });
-      return opts.existing ? [{ id: 'src-existing', name: 'github' }] : [];
+      if (!opts.existing) return [];
+      const description = typeof opts.existing === 'string' ? `${github.description} — target: ${opts.existing}` : null;
+      return [{ id: 'src-existing', name: 'github', description }];
     },
     createSource: async (body: unknown) => {
       calls.push({ op: 'createSource', args: [body] });
@@ -102,13 +108,58 @@ describe('addSource', () => {
         { id: 8, config: { url: hookUrl } },
       ],
     });
-    const result = await addSource({ ...base, events: ['push'], providerWebhook: true, ...deps });
+    const result = await addSource({
+      ...base,
+      events: ['push'],
+      providerWebhook: true,
+      rotateSecret: true,
+      ...deps,
+    });
 
     expect(result.created).toBe(false);
+    expect(result.secretApplied).toBe(true);
     expect(result.sourceId).toBe('src-existing');
     expect(result.providerHookId).toBe('8');
     expect(deps.calls.map((c) => c.op)).not.toContain('createSource');
     expect(deps.providerCalls[1]).toMatchObject({ method: 'PATCH', path: '/repos/octo/repo/hooks/8' });
+  });
+
+  test('existing source keeps its secret without --rotate-secret', async () => {
+    const deps = mockDeps({ existing: 'octo/repo' });
+    const result = await addSource({ ...base, events: ['push'], providerWebhook: false, ...deps });
+    expect(result).toMatchObject({ created: false, secretApplied: false, previousTarget: 'octo/repo' });
+    const writes = deps.calls.filter((c) => c.op === 'updateSource').map((c) => c.args[1] as object);
+    for (const body of writes) expect(body).not.toHaveProperty('signatureSecret');
+  });
+
+  test('existing source without --rotate-secret refuses to sync the provider hook with an unknown secret', async () => {
+    const deps = mockDeps({ existing: true });
+    await expect(addSource({ ...base, events: ['push'], providerWebhook: true, ...deps })).rejects.toThrow(
+      'keeps its current secret',
+    );
+    expect(deps.calls.map((c) => c.op)).toEqual(['listSources']);
+  });
+
+  test('existing source bound to a different repo is a conflict, not an update', async () => {
+    const deps = mockDeps({ existing: 'octo/other' });
+    await expect(
+      addSource({ ...base, events: ['push'], providerWebhook: false, rotateSecret: true, ...deps }),
+    ).rejects.toThrow('already bound to octo/other; refusing to rebind it to octo/repo');
+    expect(deps.calls.map((c) => c.op)).toEqual(['listSources']);
+    expect(deps.providerCalls).toEqual([]);
+  });
+
+  test('adoption warnings name the source, previous binding, changes and divergence recovery', () => {
+    const adopted = { sourceId: 'src-existing', created: false, previousTarget: 'octo/old' };
+    expect(adoptionWarnings('github', 'octo/repo', true, { ...adopted, created: true, secretApplied: true })).toEqual([
+      expect.stringContaining('shown once'),
+    ]);
+    const [kept] = adoptionWarnings('github', 'octo/repo', false, { ...adopted, secretApplied: false });
+    expect(kept).toContain("Adopted EXISTING source 'github' (src-existing), previously bound to octo/old");
+    expect(kept).toContain('secret unchanged');
+    const rotated = adoptionWarnings('github', 'octo/repo', false, { ...adopted, secretApplied: true });
+    expect(rotated[0]).toContain('secret ROTATED');
+    expect(rotated[1]).toContain('Recover: set the webhook secret on octo/repo');
   });
 
   test('--no-provider-webhook skips step 5 and never touches the provider', async () => {

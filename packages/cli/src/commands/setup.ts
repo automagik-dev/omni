@@ -10,7 +10,7 @@
  *   2. Build provider config per `--schema` (per-schema adapter)
  *   3. Find-or-create provider (idempotent by name+schema)
  *   4. Find-or-create agent (idempotent by name+providerId)
- *   5. Update instance — agentId, agentProviderId, agentReplyFilter, triggerMode
+ *   5. Update instance — agentId, agentReplyFilter, triggerMode
  *   6. Run connectivity test via providers.checkHealth
  *   7. Print summary
  *
@@ -237,21 +237,18 @@ async function runSetupAgent(options: SetupAgentOptions): Promise<void> {
     conditions: { onDm: true, onMention: true, onReply: true, onNameMatch: false },
   };
 
-  // 6. Update instance — bind agent + provider + reply filter + trigger mode
+  // 6. Update instance — bind agent + reply filter + trigger mode
   output.info('Updating instance agent assignment...');
   try {
     await client.instances.update(instanceId, {
       agentId,
-      agentProviderId: providerId,
       agentReplyFilter,
       triggerMode,
     } as Record<string, unknown>);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     output.warn(`Could not update instance agent assignment: ${message}`);
-    output.info(
-      `Set manually: omni instances update ${instanceId} --agent-id ${agentId} --agent-provider-id ${providerId}`,
-    );
+    output.info(`Set manually: omni instances update ${instanceId} --agent-fk-id ${agentId}`);
     return;
   }
 

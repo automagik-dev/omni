@@ -588,6 +588,13 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
       durable: 'event-persistence-connector',
       startFrom: 'new',
     });
+    // #1163: dead-letter announcements were published but never journaled, so
+    // `omni events list --type system.dead_letter` stayed empty while the DLQ grew.
+    await eventBus.subscribePattern('system.dead_letter', (event) => journalInternalEvent(db, event), {
+      ...CONSUMER_OPTIONS,
+      durable: 'event-persistence-dead-letter',
+      startFrom: 'new',
+    });
 
     log.info('Event persistence initialized - listening for message events');
   } catch (error) {
@@ -597,8 +604,8 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
 }
 
 /**
- * Journal a bus event that carries no channel-side fact (custom.> and
- * system.connector.>) as a minimal `omni_events` row: identity, causality,
+ * Journal a bus event that carries no channel-side fact (custom.>,
+ * system.connector.>, system.dead_letter) as a minimal `omni_events` row: identity, causality,
  * payload. Shared by the pattern subscribers in `setupEventPersistence`.
  */
 async function journalInternalEvent(db: Database, event: OmniEvent): Promise<void> {

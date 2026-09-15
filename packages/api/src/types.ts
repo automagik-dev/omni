@@ -111,6 +111,7 @@ export interface HealthResponse {
     database: HealthCheck;
     nats: HealthCheck;
     plugins?: HealthCheck;
+    deadLetters?: HealthCheck;
   };
   // Instance inventory is deliberately absent — /health is unauthenticated and
   // counts/per-channel breakdowns are tenant inventory (wish:

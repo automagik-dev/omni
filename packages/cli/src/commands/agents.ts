@@ -54,10 +54,11 @@ interface UpdateAgentBody {
 
 interface CreateAgentOptions {
   name: string;
-  provider: string;
+  provider?: string;
   model?: string;
   type?: string;
   agentProvider?: string;
+  providerId?: string;
   providerAgentId?: string;
   configPath?: string;
   metadata?: string;
@@ -96,6 +97,12 @@ function composeCreateMetadata(raw: string | undefined, providerAgentId?: string
   return parsed;
 }
 
+/** `--provider` (type enum) and `--agent-provider` (config UUID) are different fields; name both so users don't guess. */
+function missingCreateIdentifiersError(options: Pick<CreateAgentOptions, 'provider' | 'agentProvider'>): string | null {
+  if (options.provider) return null;
+  return `Missing --provider. agents create takes two identifiers: --provider <${VALID_PROVIDERS.join('|')}> (provider type, required) and --agent-provider <uuid> (agentProviderId from 'omni providers list'${options.agentProvider ? `, got ${options.agentProvider}` : ''}).`;
+}
+
 /**
  * Validate enums for create and return a typed body. Calls output.error on invalid input.
  */
@@ -111,6 +118,9 @@ function buildCreateAgentBody(options: CreateAgentOptions): {
   isInternal: boolean;
   isActive: boolean;
 } {
+  const missing = missingCreateIdentifiersError(options);
+  if (missing) output.error(missing);
+
   if (!VALID_PROVIDERS.includes(options.provider as AgentProvider)) {
     output.error(`Invalid provider: ${options.provider}. Valid: ${VALID_PROVIDERS.join(', ')}`);
   }
@@ -306,6 +316,7 @@ function buildTypeRows(agents: GraphAgentInput[], eventType: string): TypeGraphR
 
 /** Exported for unit tests only. */
 export const __testables = {
+  missingCreateIdentifiersError,
   detectManifestFormat,
   parseManifestSource,
   validateManifestDocument,
@@ -386,10 +397,11 @@ export function createAgentsCommand(): Command {
     .command('create')
     .description('Create a new agent')
     .requiredOption('--name <name>', 'Agent name')
-    .requiredOption('--provider <provider>', `AI provider (${VALID_PROVIDERS.join(', ')})`)
+    .option('--provider <provider>', `AI provider type (required: ${VALID_PROVIDERS.join(', ')})`)
     .option('--model <model>', 'Model identifier (e.g. claude-sonnet-4-6)')
     .option('--type <type>', `Agent type (${VALID_TYPES.join(', ')})`, 'assistant')
-    .option('--agent-provider <agentProviderId>', 'Link to an agent provider configuration')
+    .option('--agent-provider <agentProviderId>', 'Agent provider UUID (agentProviderId, see omni providers list)')
+    .option('--provider-id <agentProviderId>', 'Alias for --agent-provider')
     .option(
       '--provider-agent-id <id>',
       'Provider-internal agent identifier (e.g. agno agent name). Stored at metadata.providerAgentId; used by the dispatcher to resolve agentInternalId.',
@@ -400,7 +412,7 @@ export function createAgentsCommand(): Command {
       'Additional metadata as JSON string. Merged into metadata; --provider-agent-id takes precedence if both provide providerAgentId.',
     )
     .action(async (options: CreateAgentOptions) => {
-      const body = buildCreateAgentBody(options);
+      const body = buildCreateAgentBody({ ...options, agentProvider: options.agentProvider ?? options.providerId });
 
       try {
         const client = getClient();

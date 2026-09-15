@@ -412,7 +412,8 @@ export function registerWebhookSchemas(registry: OpenAPIRegistry): void {
     operationId: 'triggerEvent',
     tags: ['Webhooks'],
     summary: 'Trigger custom event',
-    description: 'Manually trigger a custom event.',
+    description:
+      'Manually trigger a custom event. The effective payload ceiling is the NATS `max_payload` (1 MB by default), not OMNI_API_BODY_LIMIT_MB; larger events are rejected with 413. For large bodies, store the body elsewhere (e.g. object storage) and publish a reference to it.',
     request: { body: { content: { 'application/json': { schema: TriggerEventSchema } } } },
     responses: {
       201: {
@@ -420,6 +421,10 @@ export function registerWebhookSchemas(registry: OpenAPIRegistry): void {
         content: { 'application/json': { schema: WebhookReceiveResponseSchema } },
       },
       400: { description: 'Validation error', content: { 'application/json': { schema: ErrorSchema } } },
+      413: {
+        description: 'Event payload exceeds NATS max_payload',
+        content: { 'application/json': { schema: ErrorSchema } },
+      },
     },
   });
 }

@@ -272,3 +272,13 @@ liveness supervision all execute on the pre-existing ingress
 (`packages/api/src/services/webhooks.ts`, untouched by #983). The
 end-to-end proof is
 `packages/api/src/__tests__/webhook-github-source-postgres.test.ts`.
+
+## Payload size limit (issue #1166)
+
+Every delivery becomes one event on NATS, so the effective ceiling is the NATS
+server's `max_payload` (1 MB by default) — not `OMNI_API_BODY_LIMIT_MB`, which
+only bounds the HTTP body (and stays high for media uploads). An oversized
+delivery is rejected with `413 PAYLOAD_TOO_LARGE`, e.g.
+`event payload is 4.0 MB; maximum is 1 MB (NATS max_payload)`. For sources that
+legitimately send large bodies, store the body (e.g. object storage) and
+publish an event carrying a reference to it.

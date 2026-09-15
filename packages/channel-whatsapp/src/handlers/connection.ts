@@ -318,7 +318,8 @@ async function handleConnectionClose(
     log.info('Auth handshake, waiting for credentials to save', { instanceId });
     reconnectAttempts.set(instanceId, 1);
 
-    setTimeout(async () => {
+    const authTimer = setTimeout(async () => {
+      pendingReconnectTimers.delete(instanceId);
       log.info('Reconnecting to complete authentication', { instanceId });
       try {
         await onReconnect();
@@ -330,6 +331,7 @@ async function handleConnectionClose(
         );
       }
     }, 2000);
+    pendingReconnectTimers.set(instanceId, authTimer);
     return;
   }
 
