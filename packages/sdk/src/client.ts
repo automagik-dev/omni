@@ -799,6 +799,8 @@ export interface CreateWebhookSourceBody {
    * not semantic identity.
    */
   idempotencyKeyTemplate?: string;
+  /** Share custom-template idempotency keys across event types (#1178). Defaults to false. */
+  idempotencyAcrossEventTypes?: boolean;
   /**
    * Strict schema mode (issue #1000, RFC #925 G1 policy switch): when true, a
    * delivery resolving to an event type with no enabled registered schema is
@@ -1086,6 +1088,8 @@ export interface SendEmbedBody {
 export interface ConnectInstanceBody {
   token?: string;
   forceNewQr?: boolean;
+  /** Override the shared-Slack-app-token refusal (#1185) */
+  force?: boolean;
   twilioAccountSid?: string;
   twilioAuthToken?: string;
   twilioFrom?: string;

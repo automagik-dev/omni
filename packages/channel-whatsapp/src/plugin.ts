@@ -15,6 +15,7 @@ import type {
   GroupParticipantUpdateResult,
   GroupSetting,
   HistorySyncMessage,
+  InboundSubStageTimings,
   InstanceConfig,
   OutgoingMessage,
   PluginContext,
@@ -3092,6 +3093,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     rawMessage: WAMessage,
     isFromMe: boolean,
     platformTimestamp?: number,
+    subStages?: InboundSubStageTimings,
   ): Promise<void> {
     // Note: We process fromMe messages to capture messages sent from the phone
     // (synced via WhatsApp multi-device). Messages sent via API emit message.sent separately.
@@ -3193,7 +3195,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     this.enrichPayloadWithChatName(extendedPayload, instanceId, chatId);
 
     // Journey timing: capture T0 (platform) and T1 (plugin received)
-    const timings = platformTimestamp ? this.captureInboundTimings(platformTimestamp) : undefined;
+    const timings = platformTimestamp ? this.captureInboundTimings(platformTimestamp, subStages) : undefined;
 
     const correlationId = await this.emitMessageReceived({
       instanceId,

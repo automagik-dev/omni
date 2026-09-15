@@ -111,6 +111,41 @@ describe('deriveIdempotencyKey', () => {
     expect(key.length).toBeLessThan(120);
     expect(deriveIdempotencyKey(input)).toBe(key);
   });
+
+  describe('event-type scoping (#1178)', () => {
+    const order = (kind: string, id: string) => ({
+      ...base,
+      template: 'mysource:{payload.order_id}',
+      sourceName: 'mysource',
+      rawBody: JSON.stringify({ kind, order_id: id }),
+      payload: { kind, order_id: id } as Record<string, unknown>,
+      eventType: `custom.mysource.${kind}`,
+    });
+
+    test('custom template keys are prefixed with the event type, so types never collide', () => {
+      expect(deriveIdempotencyKey(order('order-paid', 'A1'))).toBe('custom.mysource.order-paid:mysource:A1');
+      expect(deriveIdempotencyKey(order('order-shipped', 'A1'))).toBe('custom.mysource.order-shipped:mysource:A1');
+    });
+
+    test('acrossEventTypes opts in to one key space', () => {
+      const paid = deriveIdempotencyKey({ ...order('order-paid', 'A1'), acrossEventTypes: true });
+      const shipped = deriveIdempotencyKey({ ...order('order-shipped', 'A1'), acrossEventTypes: true });
+      expect(paid).toBe('mysource:A1');
+      expect(shipped).toBe(paid);
+    });
+
+    test('default template is unchanged by the event type', () => {
+      const input = { ...order('order-paid', 'A1'), template: DEFAULT_IDEMPOTENCY_KEY_TEMPLATE };
+      expect(deriveIdempotencyKey(input)).toBe(`mysource:${sha256(input.rawBody)}`);
+    });
+
+    test('unresolvable field still falls back to the body hash — no collapse', () => {
+      const a = { ...order('order-paid', 'A1'), template: 'mysource:{payload.missing}' };
+      const b = { ...order('order-paid', 'B9'), template: 'mysource:{payload.missing}', acrossEventTypes: true };
+      expect(deriveIdempotencyKey(a)).toBe(`mysource:${sha256(a.rawBody)}`);
+      expect(deriveIdempotencyKey(a)).not.toBe(deriveIdempotencyKey(b));
+    });
+  });
 });
 
 describe('isValidIdempotencyKeyTemplate', () => {

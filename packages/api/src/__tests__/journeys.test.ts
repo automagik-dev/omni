@@ -108,6 +108,26 @@ describe('Journeys API', () => {
       expect(body.stages.channelProcessing.avg).toBe(55);
     });
 
+    test('counts completion per path and reports per-path Total Inbound with n', async () => {
+      const tracker = getJourneyTracker();
+      for (const id of ['a', 'b']) {
+        tracker.recordCheckpoint(id, 'T0', 'platformReceivedAt', 1000);
+        tracker.recordCheckpoint(id, 'T4', 'dbStoredAt', 1100);
+      }
+      tracker.recordCheckpoint('agent', 'T0', 'platformReceivedAt', 1000);
+      tracker.recordCheckpoint('agent', 'T4', 'dbStoredAt', 1100);
+      tracker.recordCheckpoint('agent', 'T5', 'agentNotifiedAt', 1500);
+      tracker.recordCheckpoint('active', 'T0', 'platformReceivedAt', 1000);
+
+      const body = await json(await app.request('/journeys/summary'));
+      expect(body.totalTracked).toBe(4);
+      expect(body.completedJourneys).toBe(3);
+      expect(body.activeJourneys).toBe(1);
+      expect(body.completedByPath).toEqual({ noAgent: 2, agent: 1 });
+      expect(body.stages.totalInboundNoAgent).toMatchObject({ count: 2, p50: 100 });
+      expect(body.stages.totalInbound).toMatchObject({ count: 1, p50: 500 });
+    });
+
     test('supports relative since parameter (e.g., 1h)', async () => {
       const tracker = getJourneyTracker();
       const now = Date.now();

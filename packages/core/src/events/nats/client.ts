@@ -514,6 +514,9 @@ export class NatsEventBus implements EventBus {
       handler,
       maxRetries: options.maxRetries,
       retryDelayMs: options.retryDelayMs,
+      // Was dropped here, so every subscription ran at the wrapper default of
+      // 1 regardless of what the caller asked for (#1181).
+      concurrency: options.concurrency,
       onDeadLetter: async (event, error, retryCount) => {
         // Publish to system.dead_letter
         await this.publishGeneric(

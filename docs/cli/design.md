@@ -47,6 +47,24 @@ Valid config keys: `apiUrl`, `apiKey`, `defaultInstance`, `format` (`human`|`jso
 namespace `server.port`, `server.databaseUrl`, `server.dataDir`, `server.logLevel`,
 `server.nodeEnv`. There is no `baseUrl` key and no `OMNI_BASE_URL` variable.
 
+### JSON output envelope
+
+`--json` (or `OMNI_FORMAT=json`) means **exactly one JSON document on stdout**:
+the bare data, with no wrapper. Status lines (`success`, `info`, `warning`,
+`tip`) go to stderr; errors go to stderr as `{"success":false,"error":...}`
+with a non-zero exit. A command that returns no data emits `{"message": "..."}`.
+Streaming commands (`events stream`, `events follow`) are the exception: NDJSON,
+one event per line.
+
+| Surface | Shape | Example |
+|---|---|---|
+| CLI `--json`, list | bare array | `omni events list --json \| jq '.[0].id'` |
+| CLI `--json`, record | bare object | `omni webhooks trigger ... --json \| jq .eventId` |
+| API `GET` list | `{ "items": [...], "meta": {...} }` | `curl .../api/v2/events \| jq '.items[0].id'` |
+| API single record | `{ "data": {...} }` | `curl .../api/v2/instances/<id> \| jq .data.id` |
+
+The API envelope is unchanged (the SDK and UI depend on it); the CLI unwraps it.
+
 ### Multiple servers
 
 The CLI keeps a named registry of Omni servers (managed only via `omni server`,

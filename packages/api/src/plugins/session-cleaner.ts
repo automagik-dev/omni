@@ -432,7 +432,7 @@ export async function setupSessionCleaner(eventBus: EventBus, services: Services
       // last-ack position wins); for a recreated durable it prevents
       // arbitrary-time replay of an old side-effect event. See #411.
       startFrom: 'new',
-      concurrency: 5,
+      concurrency: 1, // effective value before #1181 forwarded it; raise deliberately
     });
 
     log.info('Session cleaner initialized');

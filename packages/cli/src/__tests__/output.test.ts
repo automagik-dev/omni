@@ -269,3 +269,70 @@ await flushStdout();
     }
   }, 30_000);
 });
+
+/**
+ * CLI JSON envelope (#1177): in JSON mode every command emits exactly ONE
+ * parseable document on stdout — the bare data. Every `--json` command routes
+ * through these helpers, so pinning the helper contract pins every command.
+ */
+describe('JSON mode emits a single bare-data document (#1177)', () => {
+  function runJson(body: string): Promise<{ stdout: string; stderr: string }> {
+    const tempDir = mkdtempSync(join(tmpdir(), 'omni-1177-'));
+    const scriptPath = join(tempDir, 'emit.ts');
+    const importPath = join(import.meta.dir, '..', 'output.ts')
+      .replace(/\\/g, '/')
+      .replace(/'/g, "\\'");
+    writeFileSync(scriptPath, `import * as output from '${importPath}';\n${body}\n`);
+    return new Promise((resolve, reject) => {
+      const child = spawn('bun', [scriptPath], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, OMNI_FORMAT: 'json' },
+      });
+      const out: Buffer[] = [];
+      const err: Buffer[] = [];
+      child.stdout.on('data', (chunk: Buffer) => out.push(chunk));
+      child.stderr.on('data', (chunk: Buffer) => err.push(chunk));
+      child.on('close', () => {
+        rmSync(tempDir, { recursive: true, force: true });
+        resolve({ stdout: Buffer.concat(out).toString('utf-8'), stderr: Buffer.concat(err).toString('utf-8') });
+      });
+      child.on('error', reject);
+    });
+  }
+
+  const cases: Array<[string, string, unknown]> = [
+    [
+      'automations test (success status + result)',
+      "output.success('matched'); output.data({ matched: true, conditionsMatched: false });",
+      { matched: true, conditionsMatched: false },
+    ],
+    [
+      'automations test (info status + result)',
+      "output.info('no match'); output.data({ matched: false });",
+      { matched: false },
+    ],
+    [
+      'success with data unwraps {success,message,data}',
+      "output.success('Event triggered', { eventId: 'e1' });",
+      { eventId: 'e1' },
+    ],
+    [
+      'success then data: data wins',
+      "output.success('Created', { id: 'a' }); output.data({ id: 'a', full: true });",
+      { id: 'a', full: true },
+    ],
+    ['message-only success', "output.success('Automation enabled');", { message: 'Automation enabled' }],
+    ['data then message-only success keeps data', "output.data([1]); output.success('done');", [1]],
+    ['list', "output.warn('careful'); output.list([{ a: 1 }]);", [{ a: 1 }]],
+    ['empty list', "output.list([], { emptyMessage: 'none' });", []],
+    ['keyValue calls merge into one object', "output.keyValue('a', 1); output.keyValue('b', 2);", { a: 1, b: 2 }],
+    ['process.exit before flush still emits', 'output.data({ x: 1 }); process.exit(0);', { x: 1 }],
+  ];
+
+  for (const [name, body, expected] of cases) {
+    test(name, async () => {
+      const { stdout } = await runJson(`${body}\nawait output.flushStdout();`);
+      expect(JSON.parse(stdout)).toEqual(expected);
+    });
+  }
+});

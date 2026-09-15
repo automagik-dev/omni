@@ -13,6 +13,9 @@ const JourneyCheckpointSchema = z.object({
 
 const JourneyLatenciesSchema = z.object({
   channelProcessing: z.number().optional().openapi({ description: 'T1 - T0 (ms)' }),
+  platformDelivery: z.number().optional().openapi({ description: 'T0a - T0 (ms)' }),
+  mediaDownload: z.number().optional().openapi({ description: 'T0b - T0a (ms)' }),
+  inboundEnrichment: z.number().optional().openapi({ description: 'T1 - T0b (ms)' }),
   eventPublish: z.number().optional().openapi({ description: 'T2 - T1 (ms)' }),
   natsDelivery: z.number().optional().openapi({ description: 'T3 - T2 (ms)' }),
   dbWrite: z.number().optional().openapi({ description: 'T4 - T3 (ms)' }),
@@ -50,6 +53,9 @@ const JourneySummarySchema = z.object({
   totalTracked: z.number().int().openapi({ description: 'Total tracked journeys' }),
   completedJourneys: z.number().int().openapi({ description: 'Completed journeys' }),
   activeJourneys: z.number().int().openapi({ description: 'Currently active journeys' }),
+  completedByPath: z
+    .object({ noAgent: z.number().int(), agent: z.number().int() })
+    .openapi({ description: 'Completed journeys by terminal path: no agent (T4) vs agent dispatch (T5)' }),
   stages: z.record(z.string(), PercentileStatsSchema).openapi({ description: 'Percentile stats per latency stage' }),
   since: z.number().openapi({ description: 'Filter timestamp (0 = all time)' }),
 });

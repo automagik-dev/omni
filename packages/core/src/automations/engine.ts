@@ -30,6 +30,13 @@ import type { ActionExecutionResult, Automation, AutomationLogStatus, DebounceCo
 const logger = createLogger('automations:engine');
 
 /**
+ * Deliveries per trigger subscription handled at once (#1181). Per-queue
+ * `maxConcurrency` bounds execution below this; anything above waits in the
+ * engine queue (up to `maxQueueDepth`) with its NATS message unacked.
+ */
+const TRIGGER_DELIVERY_WINDOW = 50;
+
+/**
  * A queue with bounded concurrency.
  *
  * The key is the instance id by default — one queue per instance, as it has
@@ -53,6 +60,7 @@ interface InstanceQueue {
     automation: Automation;
     event: OmniEvent;
     context: TemplateContext;
+    enqueuedAt: number;
     resolve: (result: ExecutionResult) => void;
   }>;
 }
@@ -298,6 +306,11 @@ export class AutomationEngine {
       },
       {
         durable,
+        // The bus default is 1: each delivery was awaited to completion before
+        // the next was pulled, so executions on a trigger ran strictly serially
+        // and `maxConcurrency` never had a second run to bound (#1181). Ack
+        // still happens after the run finishes; this is the in-flight window.
+        concurrency: TRIGGER_DELIVERY_WINDOW,
         queue: 'automation-engine',
         startFrom: 'new',
         maxRetries: 3,
@@ -788,6 +801,7 @@ export class AutomationEngine {
         automation,
         event,
         context,
+        enqueuedAt: Date.now(),
         resolve,
       });
       logger.debug('Execution queued', {
@@ -806,6 +820,7 @@ export class AutomationEngine {
     event: OmniEvent,
     context: TemplateContext,
     queue: InstanceQueue,
+    queueWaitMs = 0,
   ): Promise<ExecutionResult> {
     const start = Date.now();
     queue.activeCount++;
@@ -837,7 +852,7 @@ export class AutomationEngine {
           error: `refused quarantine-class envelope (${classification.reason})`,
           executionTimeMs: Date.now() - start,
         };
-        await this.logExecution(result, null);
+        await this.logExecution(result, null, queue, queueWaitMs);
         return result;
       }
 
@@ -863,7 +878,7 @@ export class AutomationEngine {
           executionTimeMs: Date.now() - start,
         };
 
-        await this.logExecution(result, trustedTenantId);
+        await this.logExecution(result, trustedTenantId, queue, queueWaitMs);
         return result;
       }
 
@@ -885,7 +900,7 @@ export class AutomationEngine {
           error: 'duplicate delivery: execution already claimed for this event',
           executionTimeMs: Date.now() - start,
         };
-        await this.logExecution(result, trustedTenantId);
+        await this.logExecution(result, trustedTenantId, queue, queueWaitMs);
         return result;
       }
 
@@ -930,7 +945,7 @@ export class AutomationEngine {
         executionTimeMs: Date.now() - start,
       };
 
-      await this.logExecution(result, trustedTenantId);
+      await this.logExecution(result, trustedTenantId, queue, queueWaitMs);
       return result;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -946,7 +961,7 @@ export class AutomationEngine {
         executionTimeMs: Date.now() - start,
       };
 
-      await this.logExecution(result, trustedTenantId);
+      await this.logExecution(result, trustedTenantId, queue, queueWaitMs);
       return result;
     } finally {
       queue.activeCount--;
@@ -954,9 +969,11 @@ export class AutomationEngine {
       // Process next in queue if any
       if (queue.pending.length > 0) {
         const next = queue.pending.shift();
+        // Not awaited: this run's delivery must not stay unacked while the
+        // queue drains behind it.
         if (next) {
-          const result = await this.executeAutomation(next.automation, next.event, next.context, queue);
-          next.resolve(result);
+          const waitMs = Date.now() - next.enqueuedAt;
+          void this.executeAutomation(next.automation, next.event, next.context, queue, waitMs).then(next.resolve);
         }
       }
 
@@ -972,7 +989,12 @@ export class AutomationEngine {
   /**
    * Log execution result
    */
-  private async logExecution(result: ExecutionResult, trustedTenantId: string | null = null): Promise<void> {
+  private async logExecution(
+    result: ExecutionResult,
+    trustedTenantId: string | null = null,
+    queue?: InstanceQueue,
+    queueWaitMs = 0,
+  ): Promise<void> {
     if (this.logger) {
       await this.logger(
         {
@@ -996,6 +1018,12 @@ export class AutomationEngine {
       conditionsMatched: result.conditionsMatched,
       actionsCount: result.actionsExecuted.length,
       executionTimeMs: result.executionTimeMs,
+      // Backlog visibility (#1181): time spent waiting for a slot, and the
+      // queue's shape when this run finished.
+      queueWaitMs,
+      queueKey: queue?.key,
+      inFlight: queue?.activeCount,
+      queued: queue?.pending.length,
     });
   }
 

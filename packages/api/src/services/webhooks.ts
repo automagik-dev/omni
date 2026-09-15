@@ -431,6 +431,8 @@ export class WebhookService {
       rawBody: rawBody ?? JSON.stringify(payload),
       payload,
       headers,
+      eventType,
+      acrossEventTypes: source.idempotencyAcrossEventTypes,
     });
 
     const claim = await this.claimJournalRow({
@@ -665,8 +667,9 @@ export class WebhookService {
   async trigger(
     eventType: CustomEventType,
     payload: Record<string, unknown>,
-    metadata?: TriggerEventMetadata,
+    rawMetadata?: TriggerEventMetadata,
   ): Promise<TriggerEventResult> {
+    const metadata = await this.inheritParentCorrelation(rawMetadata);
     // Provisional id for the schema gate's dead-letter reference and the
     // no-bus fallback; the publish path returns the PUBLISHED event's id (#956).
     const provisionalId = metadata?.correlationId ?? generateId();
@@ -700,6 +703,22 @@ export class WebhookService {
     });
 
     return { eventId: result.id, published: true };
+  }
+
+  /**
+   * A child event continues its parent's flow (#1184): with a causationId and
+   * no explicit correlationId, inherit the parent's correlationId. A root event
+   * (or an unknown parent) keeps minting its own.
+   */
+  private async inheritParentCorrelation(metadata?: TriggerEventMetadata): Promise<TriggerEventMetadata | undefined> {
+    if (!metadata?.causationId || metadata.correlationId) return metadata;
+    const [parent] = await this.db
+      .select({ metadata: omniEvents.metadata })
+      .from(omniEvents)
+      .where(eq(omniEvents.id, metadata.causationId))
+      .limit(1);
+    const correlationId = (parent?.metadata as { correlationId?: string } | null)?.correlationId;
+    return correlationId ? { ...metadata, correlationId } : metadata;
   }
 
   /**
