@@ -130,6 +130,12 @@ export interface CallAgentActionConfig {
   /** Store agent response as variable for chaining (e.g., "agentResponse") */
   responseAs?: string;
   /**
+   * Await the agent run (default true). When false the action returns as soon
+   * as the run is dispatched with its `runId`, and the outcome is published as
+   * `system.agent.run_completed`. Incompatible with `responseAs`.
+   */
+  waitForResponse?: boolean;
+  /**
    * Per-invocation synthetic prompt template that replaces the default
    * user-input prompt for this `call_agent` call only.
    *

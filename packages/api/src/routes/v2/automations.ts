@@ -94,6 +94,13 @@ const callAgentActionSchema = z.object({
     prefixSenderName: z.boolean().optional().describe('Prefix messages with sender name'),
     timeoutMs: z.number().int().optional().describe('Timeout in milliseconds'),
     responseAs: z.string().optional().describe('Store agent response as variable for chaining'),
+    waitForResponse: z
+      .boolean()
+      .optional()
+      .describe(
+        'Await the agent run (default true). False = return the runId once dispatched; the outcome is ' +
+          'published as system.agent.run_completed (#1176). Incompatible with responseAs',
+      ),
     promptOverride: z
       .string()
       .optional()
@@ -164,7 +171,22 @@ const createAutomationSchema = z.object({
     .enum(['and', 'or'])
     .default('and')
     .describe('Condition logic: "and" (all must match) or "or" (any must match)'),
-  actions: z.array(actionSchema).min(1).describe('Actions to execute (in sequence)'),
+  actions: z
+    .array(actionSchema)
+    .min(1)
+    .superRefine((actions, ctx) => {
+      actions.forEach((action, i) => {
+        if (action.type === 'call_agent' && action.config.waitForResponse === false && action.config.responseAs) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [i, 'config', 'responseAs'],
+            message:
+              'call_agent responseAs cannot be combined with waitForResponse: false — there is no response to bind',
+          });
+        }
+      });
+    })
+    .describe('Actions to execute (in sequence)'),
   debounce: debounceSchema.optional().describe('Message debounce configuration'),
   enabled: z.boolean().default(true).describe('Whether automation is enabled'),
   priority: z.number().int().default(0).describe('Priority (higher runs first)'),

@@ -334,7 +334,10 @@ export function createAutomationsCommand(): Command {
     // call_agent specific options
     .option('--agent-id <id>', 'Agent ID (for the first call_agent action)')
     .option('--provider-id <id>', 'Provider ID (for the first call_agent action)')
-    .option('--response-as <var>', 'Store agent response as variable (for the first call_agent action)')
+    .option(
+      '--response-as <var>',
+      'Store agent response as variable (for the first call_agent action; not with waitForResponse:false)',
+    )
     .action(async (options: CreateOptions) => {
       const client = getClient();
 
@@ -384,7 +387,10 @@ export function createAutomationsCommand(): Command {
     )
     .option('--agent-id <id>', 'Agent ID (for the first call_agent action)')
     .option('--provider-id <id>', 'Provider ID (for the first call_agent action)')
-    .option('--response-as <var>', 'Store agent response as variable (for the first call_agent action)')
+    .option(
+      '--response-as <var>',
+      'Store agent response as variable (for the first call_agent action; not with waitForResponse:false)',
+    )
     // Commander negatable pair (#988, mirrors --strict-schemas from #1000):
     // true from --transactional-emissions, false from
     // --no-transactional-emissions, undefined when neither flag is given —

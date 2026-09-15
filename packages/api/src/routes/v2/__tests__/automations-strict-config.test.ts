@@ -59,3 +59,20 @@ describe('POST /automations action config strictness (#1117)', () => {
     });
   }
 });
+
+describe('call_agent waitForResponse (#1176)', () => {
+  test('waitForResponse: false is accepted', async () => {
+    expect((await create({ type: 'call_agent', config: { agentId: 'a1', waitForResponse: false } })).status).toBe(201);
+  });
+
+  test('responseAs with waitForResponse: false is rejected', async () => {
+    const res = await create({
+      type: 'call_agent',
+      config: { agentId: 'a1', waitForResponse: false, responseAs: 'r' },
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { issues: Array<{ message: string; path: Array<string | number> }> } };
+    expect(body.error.issues[0]?.path).toEqual(['actions', 0, 'config', 'responseAs']);
+    expect(body.error.issues[0]?.message).toContain('no response to bind');
+  });
+});

@@ -3106,6 +3106,8 @@ export interface CallAgentActionConfig {
   timeoutMs?: number;
   /** Store agent response as variable for chaining (e.g., "agentResponse") */
   responseAs?: string;
+  /** Await the agent run (default true); false = fire-and-forget, outcome on system.agent.run_completed */
+  waitForResponse?: boolean; // no-migration-needed: jsonb config type only
 }
 
 /**

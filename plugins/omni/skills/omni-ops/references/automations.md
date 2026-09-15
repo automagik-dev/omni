@@ -26,6 +26,8 @@ omni automations execute <id> --event '{"type":"message.received","payload":{"te
 omni automations logs <id> --limit 50 --json
 ```
 
+`call_agent` config `waitForResponse` (default `true`) mirrors `webhook`'s: set `false` to return the `runId` as soon as the run is dispatched; the outcome lands later as a `system.agent.run_completed` event (`automationId`, `executionId`, `runId`, `status`, `response`/`error`). `responseAs` is rejected with `waitForResponse: false`.
+
 `test` evaluates with a mock event and no side effects; `execute` runs the real actions — treat it like production traffic.
 
 ## Patterns
