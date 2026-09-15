@@ -23,6 +23,7 @@ import { Command } from 'commander';
 import { getClient } from '../client.js';
 import { loadConfig } from '../config.js';
 import * as output from '../output.js';
+import { resolveWebhookId } from '../resolve.js';
 import { schemaApiRequest } from './events.js';
 import githubIssues from './sources/github/custom.github.issues.json' with { type: 'json' };
 import githubPullRequest from './sources/github/custom.github.pull_request.json' with { type: 'json' };
@@ -373,5 +374,87 @@ export function createSourcesCommand(): Command {
       },
     );
 
+  sources
+    .command('add-poll <name>')
+    .description(
+      'Create a supervised pull connector: omni runs --command every --interval seconds and ingests each JSON stdout line (command must live inside the API host OMNI_POLL_COMMAND_DIR)',
+    )
+    .requiredOption('--command <path>', 'Executable to run (no shell, no arguments)')
+    .requiredOption('--interval <seconds>', 'Seconds between runs (min 10); failures back off exponentially')
+    .requiredOption('--emit-type <type>', 'Event type for each stdout line (custom.*)')
+    .option('--dedup-key <template>', "Idempotency key template, e.g. '{payload.message_id}'")
+    .option('--expected-interval <seconds>', 'Liveness window (default: 2x --interval)')
+    .option('--env <KEY=VALUE...>', 'Environment variables for the command (repeatable)')
+    .option('--description <desc>', 'Description')
+    .action(
+      async (
+        name: string,
+        options: {
+          command: string;
+          interval: string;
+          emitType: string;
+          dedupKey?: string;
+          expectedInterval?: string;
+          env?: string[];
+          description?: string;
+        },
+      ) => {
+        const intervalSeconds = Number(options.interval);
+        const env = Object.fromEntries(
+          (options.env ?? []).map((pair) => [pair.slice(0, pair.indexOf('=')), pair.slice(pair.indexOf('=') + 1)]),
+        );
+        try {
+          const result = await webhookSourcesApiRequest<{ data: { id: string; pollConfig: unknown } }>('', {
+            method: 'POST',
+            body: JSON.stringify({
+              name,
+              description: options.description ?? `Poll connector: ${options.command}`,
+              enabled: true,
+              expectedIntervalSeconds: options.expectedInterval
+                ? Number(options.expectedInterval)
+                : intervalSeconds * 2,
+              pollConfig: {
+                command: options.command,
+                intervalSeconds,
+                emitType: options.emitType,
+                ...(options.dedupKey && { dedupKeyTemplate: options.dedupKey }),
+                ...(options.env && { env }),
+              },
+            }),
+          });
+          output.success(`Poll source created: ${result.data.id}`, { name, ...result.data });
+        } catch (err) {
+          output.error(`Failed to add poll source: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      },
+    );
+
+  sources
+    .command('run-now <name>')
+    .description('Run a poll source command immediately and show the result')
+    .action(async (name: string) => {
+      try {
+        const id = await resolveWebhookId(name);
+        const result = await webhookSourcesApiRequest<{ data: { pollConfig: unknown } }>(`/${id}/run-now`, {
+          method: 'POST',
+        });
+        output.data(result.data.pollConfig);
+      } catch (err) {
+        output.error(`Failed to run poll source: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    });
+
   return sources;
+}
+
+/** Raw CLI→API call for the poll fields the generated SDK does not cover yet (`consumersApiRequest` precedent). */
+async function webhookSourcesApiRequest<T>(path: string, init: { method?: string; body?: string } = {}): Promise<T> {
+  const config = loadConfig();
+  const resp = await fetch(`${config.apiUrl ?? 'http://localhost:8882'}/api/v2/webhook-sources${path}`, {
+    method: init.method ?? 'GET',
+    body: init.body,
+    headers: { 'content-type': 'application/json', 'x-api-key': config.apiKey ?? '' },
+  });
+  if (!resp.ok) throw new Error(`API returned ${resp.status}: ${await resp.text()}`);
+  return (await resp.json()) as T;
 }

@@ -343,6 +343,17 @@ export function setupScheduler(services: Services, channelRegistry?: ChannelRegi
     },
   });
 
+  // Poll connectors — every 30 seconds (#1186). Each source keeps its own
+  // interval/backoff in poll_config; the tick only bounds scheduling latency.
+  scheduler.register({
+    name: 'poll-connectors',
+    cron: '*/30 * * * * *',
+    runOnStart: false,
+    handler: async () => {
+      await services.webhooks.runDuePolls();
+    },
+  });
+
   // Connector liveness sweeper — every 30 seconds (#961).
   //
   // Supervises the connector CONTRACT (are events/heartbeats arriving as

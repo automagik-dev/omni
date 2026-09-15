@@ -43,6 +43,7 @@ function makeSource(overrides: Partial<WebhookSource> = {}): WebhookSource {
     stalledAt: null,
     windowSemantics: null,
     mutationPolicy: null,
+    pollConfig: null,
     createdAt: new Date(),
     updatedAt: new Date(),
     ...overrides,

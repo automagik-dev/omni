@@ -36,6 +36,7 @@ function createMockSource(overrides: Partial<WebhookSource> = {}): WebhookSource
     stalledAt: null,
     windowSemantics: null,
     mutationPolicy: null,
+    pollConfig: null,
     createdAt: new Date(),
     updatedAt: new Date(),
     ...overrides,
@@ -129,6 +130,7 @@ function createMockDatabase(initialSources: WebhookSource[] = []) {
           stalledAt: null,
           windowSemantics: data.windowSemantics ?? null,
           mutationPolicy: data.mutationPolicy ?? null,
+          pollConfig: null,
           createdAt: new Date(),
           updatedAt: new Date(),
         };
@@ -1154,6 +1156,56 @@ describe('Connector lifecycle contract (#961)', () => {
       expect(updated.livenessStatus).toBeNull();
       expect(updated.livenessArmedAt).toBeNull();
       expect(updated.stalledAt).toBeNull();
+    });
+  });
+
+  describe('runPollNow (#1186)', () => {
+    test('ingests stdout lines through the keyed trigger, dedupes via the template, heartbeats', async () => {
+      const { chmodSync, mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+      const dir = mkdtempSync(join(tmpdir(), 'poll-run-now-'));
+      const saved = process.env.OMNI_POLL_COMMAND_DIR;
+      process.env.OMNI_POLL_COMMAND_DIR = dir;
+      try {
+        const command = join(dir, 'fetch.sh');
+        writeFileSync(
+          command,
+          `#!/bin/sh\necho '{"message_id":"m1"}'\necho '{"message_id":"m1"}'\necho '{"message_id":"m2"}'\n`,
+        );
+        chmodSync(command, 0o755);
+        const db = createMockDatabase([
+          createMockSource({
+            pollConfig: {
+              command,
+              intervalSeconds: 900,
+              emitType: 'custom.purchase.email',
+              dedupKeyTemplate: '{payload.message_id}',
+            },
+          }),
+        ]);
+        const bus = createMockEventBus();
+        const service = new WebhookService(db, bus);
+
+        const first = await service.runPollNow('test-id-123');
+        expect(bus._publishedEvents.map((e) => e.payload)).toEqual([{ message_id: 'm1' }, { message_id: 'm2' }]);
+        expect(first.pollConfig?.lastRun).toMatchObject({ exitCode: 0, eventsEmitted: 2 });
+        expect(db._calls.update.some((u) => 'lastHeartbeatAt' in (u as object))).toBe(true);
+
+        // A second run replays the same window: dedup absorbs it.
+        const second = await service.runPollNow('test-id-123');
+        expect(bus._publishedEvents).toHaveLength(2);
+        expect(second.pollConfig?.lastRun?.eventsEmitted).toBe(0);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+        if (saved === undefined) Reflect.deleteProperty(process.env, 'OMNI_POLL_COMMAND_DIR');
+        else process.env.OMNI_POLL_COMMAND_DIR = saved;
+      }
+    });
+
+    test('refuses a push-only source', async () => {
+      const service = new WebhookService(createMockDatabase([createMockSource()]), createMockEventBus());
+      await expect(service.runPollNow('test-id-123')).rejects.toThrow(/not a poll source/);
     });
   });
 });

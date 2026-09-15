@@ -438,6 +438,7 @@ export const SCOPE_MAP: Record<string, string> = {
   'POST /webhook-sources': 'webhooks:write',
   'PATCH /webhook-sources/:id': 'webhooks:write',
   'DELETE /webhook-sources/:id': 'webhooks:write',
+  'POST /webhook-sources/:id/run-now': 'webhooks:write',
   'POST /webhooks/:source': 'webhooks:write',
   'POST /webhooks/:source/heartbeat': 'webhooks:write',
   'POST /events/trigger': 'events:write',
