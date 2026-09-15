@@ -72,7 +72,8 @@ export interface JourneyLatencies {
   natsDelivery?: number; // T3 - T2
   dbWrite?: number; // T4 - T3
   agentNotification?: number; // T5 - T4
-  totalInbound?: number; // T5 - T0
+  totalInbound?: number; // T5 - T0 (agent path)
+  totalInboundNoAgent?: number; // T4 - T0 (no-agent path: journey never reached T5)
   agentRoundTrip?: number; // T7 - T5
   apiProcessing?: number; // T8 - T7
   outboundEventPublish?: number; // T9 - T8
@@ -108,6 +109,8 @@ export interface JourneySummary {
   totalTracked: number;
   completedJourneys: number;
   activeJourneys: number;
+  /** Completed journeys split by terminal path: no agent (T4) vs agent dispatch (T5) */
+  completedByPath: { noAgent: number; agent: number };
   stages: Partial<Record<keyof JourneyLatencies, PercentileStats>>;
   since: number;
 }
@@ -220,10 +223,7 @@ export class JourneyTracker {
     // Recalculate latencies
     this.calculateLatencies(entry.journey);
 
-    // Mark as complete if T11 or T5 (if no outbound expected yet)
-    if (stage === 'T11') {
-      entry.journey.completedAt = timestamp;
-    }
+    entry.journey.completedAt = inboundCompletedAt(entry.journey);
 
     // Mirror checkpoint as an OTel span event on the active span when
     // tracing is initialized. No-op when @opentelemetry/api is not loaded
@@ -246,11 +246,14 @@ export class JourneyTracker {
     const since = options?.since ?? 0;
     const allJourneys = this.getJourneysSince(since);
     const stages = aggregateLatencies(allJourneys);
+    const completed = allJourneys.filter((j) => j.completedAt != null);
+    const agent = completed.filter((j) => j.checkpoints.some((cp) => cp.stage === 'T5')).length;
 
     return {
       totalTracked: allJourneys.length,
-      completedJourneys: allJourneys.filter((j) => j.completedAt != null).length,
+      completedJourneys: completed.length,
       activeJourneys: allJourneys.filter((j) => j.completedAt == null).length,
+      completedByPath: { noAgent: completed.length - agent, agent },
       stages,
       since,
     };
@@ -306,6 +309,12 @@ export class JourneyTracker {
       }
     }
 
+    // No agent dispatch: the inbound path terminates at the DB write (T4)
+    const t4 = stageMap.get('T4');
+    if (!stageMap.has('T5') && stageMap.get('T0') != null && t4 != null) {
+      latencies.totalInboundNoAgent = t4 - (stageMap.get('T0') as number);
+    }
+
     // Special: omniProcessing = (T5 - T0) + (T11 - T7), excluding agent time
     const t0 = stageMap.get('T0');
     const t5 = stageMap.get('T5');
@@ -357,6 +366,19 @@ export class JourneyTracker {
       this.cleanupTimer.unref();
     }
   }
+}
+
+/**
+ * A journey completes at the terminal stage of its path: T5 when it was
+ * dispatched to an agent, otherwise T4 (DB write). Dispatch is read from the
+ * journey itself (a T5 checkpoint), so a message still sitting in the agent
+ * debounce window reads as complete at T4 until its T5 lands. A reply
+ * delivered (T11) extends completion to the end of the round-trip.
+ * ponytail: no dispatch-intent marker exists; add one if that window matters.
+ */
+function inboundCompletedAt(journey: Journey): number | undefined {
+  const byStage = (stage: string) => journey.checkpoints.find((cp) => cp.stage === stage)?.timestamp;
+  return byStage('T11') ?? byStage('T5') ?? byStage('T4');
 }
 
 /** Collect and aggregate latency values across journeys */

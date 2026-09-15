@@ -50,6 +50,9 @@ const JourneySummarySchema = z.object({
   totalTracked: z.number().int().openapi({ description: 'Total tracked journeys' }),
   completedJourneys: z.number().int().openapi({ description: 'Completed journeys' }),
   activeJourneys: z.number().int().openapi({ description: 'Currently active journeys' }),
+  completedByPath: z
+    .object({ noAgent: z.number().int(), agent: z.number().int() })
+    .openapi({ description: 'Completed journeys by terminal path: no agent (T4) vs agent dispatch (T5)' }),
   stages: z.record(z.string(), PercentileStatsSchema).openapi({ description: 'Percentile stats per latency stage' }),
   since: z.number().openapi({ description: 'Filter timestamp (0 = all time)' }),
 });
