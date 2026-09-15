@@ -62,6 +62,8 @@ export class DeadLetterService {
     return scopedHandle(this.pool);
   }
 
+  private warnedNoBus = false;
+
   constructor(
     private readonly pool: Database,
     private eventBus: EventBus | null,
@@ -230,6 +232,12 @@ export class DeadLetterService {
   /** Announce a new DLQ row on the bus; failures are logged, never thrown. */
   private async publishSystemEvent(result: DeadLetterEntry): Promise<void> {
     if (!this.eventBus) {
+      if (!this.warnedNoBus) {
+        this.warnedNoBus = true;
+        log.warn('No event bus: dead letter announcements disabled — no system.dead_letter will be published', {
+          deadLetterId: result.id,
+        });
+      }
       return;
     }
     try {

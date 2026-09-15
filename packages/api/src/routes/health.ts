@@ -34,8 +34,8 @@
  */
 
 import { createLogger } from '@omni/core';
-import { consumerOffsets } from '@omni/db';
-import { sql } from 'drizzle-orm';
+import { consumerOffsets, deadLetterEvents } from '@omni/db';
+import { eq, sql } from 'drizzle-orm';
 import { type Context, Hono } from 'hono';
 import packageJson from '../../package.json';
 import { safeErrorMessage } from '../middleware/error';
@@ -93,8 +93,11 @@ export const getHealth = async (c: Context<{ Variables: AppVariables }>) => {
     ? { status: 'error', error: getPluginsDegradedReason() ?? 'Plugin initialization failed' }
     : { status: 'ok' };
 
+  const deadLettersCheck = await checkDeadLetters(db);
+
   // Determine overall status
-  const hasErrors = dbCheck.status === 'error' || natsCheck.status === 'error' || pluginsFailed;
+  const hasErrors =
+    dbCheck.status === 'error' || natsCheck.status === 'error' || pluginsFailed || deadLettersCheck.status === 'error';
   const status: HealthResponse['status'] = hasErrors ? 'degraded' : 'healthy';
 
   const response: HealthResponse = {
@@ -106,11 +109,46 @@ export const getHealth = async (c: Context<{ Variables: AppVariables }>) => {
       database: dbCheck,
       nats: natsCheck,
       plugins: pluginsCheck,
+      deadLetters: deadLettersCheck,
     },
   };
 
   return c.json(response, status === 'healthy' ? 200 : 503);
 };
+
+/** #1163: a DLQ this deep or this old is an operator problem, not a transient. */
+export const DEAD_LETTER_PENDING_THRESHOLD = 50;
+export const DEAD_LETTER_MAX_AGE_SECONDS = 24 * 60 * 60;
+
+/**
+ * DLQ depth (#1163): pending rows used to accumulate with every surface green.
+ * A failed query is not reported here — the database check already covers it.
+ */
+async function checkDeadLetters(db: AppVariables['db']): Promise<HealthCheck> {
+  try {
+    const [row] = await db
+      .select({
+        pending: sql<number>`count(*)::int`,
+        oldest: sql<string | null>`min(${deadLetterEvents.createdAt})`,
+      })
+      .from(deadLetterEvents)
+      .where(eq(deadLetterEvents.status, 'pending'));
+    const pending = typeof row?.pending === 'number' ? row.pending : 0;
+    const oldestMs = row?.oldest ? new Date(row.oldest).getTime() : Number.NaN;
+    const oldestPendingAgeSeconds = Number.isNaN(oldestMs) ? null : Math.floor((Date.now() - oldestMs) / 1000);
+    const details = { pending, oldestPendingAgeSeconds };
+    if (pending >= DEAD_LETTER_PENDING_THRESHOLD) {
+      return { status: 'error', details, error: `${pending} pending dead letters` };
+    }
+    if (oldestPendingAgeSeconds !== null && oldestPendingAgeSeconds >= DEAD_LETTER_MAX_AGE_SECONDS) {
+      return { status: 'error', details, error: `oldest pending dead letter is ${oldestPendingAgeSeconds}s old` };
+    }
+    return { status: 'ok', details };
+  } catch (error) {
+    healthLog.warn('Dead letter health query failed', { error: String(error) });
+    return { status: 'ok', details: { available: false } };
+  }
+}
 
 healthRoutes.get('/health', getHealth);
 
