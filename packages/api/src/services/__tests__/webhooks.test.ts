@@ -830,6 +830,43 @@ describe('WebhookService', () => {
       expect(mockEventBus._publishedEvents[0]?.metadata.causationId).toBe(causationId);
     });
 
+    test('inherits the parent correlationId when only causationId is given (#1184)', async () => {
+      mockDb.select = mock(() => ({
+        from: mock(() => ({
+          where: mock(() => ({ limit: mock(() => Promise.resolve([{ metadata: { correlationId: 'flow-root' } }])) })),
+        })),
+      })) as unknown as typeof mockDb.select;
+
+      await service.trigger('custom.chain.mid' as CustomEventType, {}, { causationId: crypto.randomUUID() });
+
+      expect(mockEventBus._publishedEvents[0]?.metadata.correlationId).toBe('flow-root');
+    });
+
+    test('an explicit correlationId wins over the parent (#1184)', async () => {
+      mockDb.select = mock(() => {
+        throw new Error('parent lookup must not run');
+      }) as unknown as typeof mockDb.select;
+
+      await service.trigger(
+        'custom.chain.mid' as CustomEventType,
+        {},
+        { causationId: crypto.randomUUID(), correlationId: 'explicit' },
+      );
+
+      expect(mockEventBus._publishedEvents[0]?.metadata.correlationId).toBe('explicit');
+    });
+
+    test('a root event mints its own correlationId (#1184)', async () => {
+      mockDb.select = mock(() => {
+        throw new Error('parent lookup must not run');
+      }) as unknown as typeof mockDb.select;
+
+      await service.trigger('custom.chain.root' as CustomEventType, {});
+
+      // No correlation handed to the bus → it self-references (root, #956).
+      expect(mockEventBus._publishedEvents[0]?.metadata.correlationId).toBeUndefined();
+    });
+
     test('passes instance ID to event metadata', async () => {
       const eventType = 'custom.instance.event' as CustomEventType;
       const instanceId = 'wa-123';
