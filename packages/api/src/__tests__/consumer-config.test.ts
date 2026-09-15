@@ -125,7 +125,12 @@ describe('Consumer startFrom Configuration', () => {
     // stream retention as journal rows that can never carry a causation
     // parent.
     // The connector liveness (#1063) and dead-letter (#1163) journal consumers follow the same rule.
-    const forwardOnly = ['event-persistence-custom', 'event-persistence-connector', 'event-persistence-dead-letter'];
+    const forwardOnly = [
+      'event-persistence-custom',
+      'event-persistence-connector',
+      'event-persistence-dead-letter',
+      'event-persistence-agent-run-completed',
+    ];
     for (const context of forwardOnly) {
       const entry = values.find((v) => v.context === context);
       expect(entry).toBeDefined();

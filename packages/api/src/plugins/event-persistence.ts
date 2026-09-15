@@ -595,6 +595,13 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
       durable: 'event-persistence-dead-letter',
       startFrom: 'new',
     });
+    // #1176: fire-and-forget call_agent outcomes — journaled so a detached run's
+    // result is visible to `omni events list --type system.agent.run_completed`.
+    await eventBus.subscribePattern('system.agent.run_completed', (event) => journalInternalEvent(db, event), {
+      ...CONSUMER_OPTIONS,
+      durable: 'event-persistence-agent-run-completed',
+      startFrom: 'new',
+    });
 
     log.info('Event persistence initialized - listening for message events');
   } catch (error) {
