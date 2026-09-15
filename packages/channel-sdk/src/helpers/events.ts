@@ -67,6 +67,9 @@ export interface EmitMessageReceivedParams {
    * (e.g. external bots) can skip replaying old messages on restart.
    */
   isHistorySync?: boolean;
+
+  /** Called instead of publishing when the ingress claim finds this message already journaled. */
+  onDuplicate?: () => void;
 }
 
 /**
