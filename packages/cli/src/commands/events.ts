@@ -132,6 +132,7 @@ interface AnalyticsData {
   avgProcessingTimeMs: number | null;
   avgAgentTimeMs: number | null;
   totalCostUsd?: number;
+  costByEventType?: Record<string, number>;
   messageTypes: Record<string, number>;
   errorStages: Record<string, number>;
   instances: Record<string, number>;
@@ -192,6 +193,7 @@ function displayAnalytics(data: AnalyticsData): void {
       avgProcessingMs: data.avgProcessingTimeMs,
       avgAgentMs: data.avgAgentTimeMs,
       totalCostUsd: data.totalCostUsd ?? 0,
+      costByEventType: data.costByEventType ?? {},
       messageTypes: data.messageTypes,
       instances: data.instances,
       errorStages: data.errorStages,
@@ -212,6 +214,7 @@ function displayAnalytics(data: AnalyticsData): void {
     displayRecordBreakdown('Message Types', data.messageTypes, 'type');
     displayRecordBreakdown('Per Instance', data.instances, 'instanceId');
     displayRecordBreakdown('Error Stages', data.errorStages, 'stage');
+    displayRecordBreakdown('Cost by Event Type (USD)', data.costByEventType ?? {}, 'eventType');
   }
 }
 

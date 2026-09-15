@@ -98,6 +98,8 @@ export interface EventAnalytics {
   avgAgentTimeMs: number | null;
   /** Sum of `metadata.agentUsage.costUsd` over the range (#1064). */
   totalCostUsd: number;
+  /** Agent cost (USD) per event type, over events with a stamped cost (#1183). */
+  costByEventType: Record<string, number>;
   messageTypes: Record<string, number>;
   errorStages: Record<string, number>;
   instances: Record<string, number>;
@@ -404,6 +406,14 @@ export class EventService {
 
     const counts = countResults[0];
 
+    // #1183: which flow is expensive — cost grouped by event type
+    const costExpr = sql<number>`sum((${omniEvents.metadata}->'agentUsage'->>'costUsd')::numeric)::float`;
+    const costByEventType = await this.db
+      .select({ eventType: omniEvents.eventType, costUsd: costExpr })
+      .from(omniEvents)
+      .where(and(whereClause, sql`${omniEvents.metadata}->'agentUsage'->>'costUsd' is not null`))
+      .groupBy(omniEvents.eventType);
+
     // Get counts by content type
     const contentTypeCounts = await this.db
       .select({
@@ -487,6 +497,7 @@ export class EventService {
       avgProcessingTimeMs: counts?.avgProcessingTime ?? null,
       avgAgentTimeMs: counts?.avgAgentTime ?? null,
       totalCostUsd: counts?.totalCostUsd ?? 0,
+      costByEventType: Object.fromEntries(costByEventType.map((c) => [c.eventType, c.costUsd])),
       messageTypes: Object.fromEntries(
         contentTypeCounts
           .filter((c): c is typeof c & { contentType: NonNullable<typeof c.contentType> } => c.contentType != null)

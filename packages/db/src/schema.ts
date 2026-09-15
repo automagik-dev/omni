@@ -3455,6 +3455,8 @@ export const triggerLogs = pgTable(
     inputTokens: integer('input_tokens'),
     /** Output tokens used (if available from provider) */
     outputTokens: integer('output_tokens'),
+    /** Run cost in USD (if reported by provider) — #1183 */
+    costUsd: numeric('cost_usd', { precision: 15, scale: 6 }),
     /** Error message if dispatch failed */
     error: text('error'),
     /** Additional metadata */
