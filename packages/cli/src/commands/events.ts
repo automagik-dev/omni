@@ -970,6 +970,8 @@ interface ConsumerData {
   excludeTypes?: string[] | null;
   filters: AutomationCondition[] | null;
   cursor: number;
+  /** Competing consumers (#1188). Absent on older servers. */
+  shared?: boolean;
   head: number;
   lag: number;
   /** No type-matching row past the cursor (#1128). Absent on older servers. */
@@ -987,6 +989,8 @@ interface ConsumerPullPage {
   hasMore: boolean;
   /** A full scan window matched nothing; the server advanced the cursor past it (#1128). */
   scanExhausted?: boolean;
+  /** Shared consumers: ack this lease (not the cursor) once the page is handled (#1188). */
+  leaseId?: string;
 }
 
 /**
@@ -1125,7 +1129,13 @@ export async function followConsumer(params: FollowParams): Promise<void> {
       return; // peek mode: one page, cursor untouched
     }
 
-    if (page.cursor > acked) {
+    if (page.leaseId) {
+      // Shared consumer: release this puller's lease; the server moves the shared cursor.
+      await consumersApiRequest(`/${encodeURIComponent(params.consumer)}/ack`, {
+        method: 'POST',
+        body: JSON.stringify({ leaseId: page.leaseId }),
+      });
+    } else if (page.cursor > acked) {
       // Ack the SCANNED cursor: it also skips rows the payload conditions
       // rejected, so a sparse filter never re-scans. An ack equal to the
       // stored cursor is an idempotent no-op server-side (first iteration).
@@ -1161,6 +1171,28 @@ function createConsumersCommand(): Command {
   consumers
     .command('create <name>')
     .description('Register a durable consumer')
+    .addHelpText(
+      'after',
+      `
+Fan-out (default) vs shared (--shared):
+  Each consumer NAME owns one cursor. Two names on the same type BOTH see
+  every event — right for observers (monitor, archiver, metrics).
+  By default, starting a second worker on the SAME name does not split the
+  work: both pull the same pages, so events get handled twice. Don't scale
+  workers that way.
+
+  To scale workers, pick one:
+    --shared    competing consumers: N processes following this one name
+                split the stream. Each pull leases a page to one process;
+                ack releases it; an unacked page is redelivered after the
+                lease expires (at-least-once — make handlers idempotent on id).
+    one consumer, parallelize inside your process: a single follower that
+                fans each page out to a local worker pool, then acks.
+
+Examples:
+  omni events consumers create audit-log --type 'custom.*'
+  omni events consumers create my-workers --type custom.x --shared`,
+    )
     .requiredOption('--type <type>', 'Event type filter (trailing * = prefix glob, e.g. custom.github.*)')
     .option(
       '--exclude <glob>',
@@ -1175,8 +1207,12 @@ function createConsumersCommand(): Command {
       [] as string[],
     )
     .option('--from-beginning', 'Start the cursor at 0 (replay the full journal) instead of the current head')
+    .option('--shared', 'Competing consumers: followers of this name split events instead of each seeing all')
     .action(
-      async (name: string, options: { type: string; exclude: string[]; filter: string[]; fromBeginning?: boolean }) => {
+      async (
+        name: string,
+        options: { type: string; exclude: string[]; filter: string[]; fromBeginning?: boolean; shared?: boolean },
+      ) => {
         try {
           const filters = parseWaitFilters(WaitOptionsSchema.shape.filter.parse(options.filter));
           const result = await consumersApiRequest<{ data: ConsumerData }>('', {
@@ -1187,12 +1223,14 @@ function createConsumersCommand(): Command {
               excludeTypes: options.exclude.length ? options.exclude : undefined,
               filters: filters.length ? filters : undefined,
               startFrom: options.fromBeginning ? 'beginning' : undefined,
+              shared: options.shared || undefined,
             }),
           });
           output.success(`Consumer registered: ${result.data.name} (cursor ${result.data.cursor})`, {
             name: result.data.name,
             eventType: result.data.eventType,
             cursor: result.data.cursor,
+            shared: result.data.shared ?? false,
             lag: result.data.lag,
           });
         } catch (err) {

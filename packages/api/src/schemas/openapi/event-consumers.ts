@@ -36,6 +36,9 @@ export const DurableConsumerSchema = z.object({
     .openapi({ description: 'Type globs dropped from the stream (exclusion wins over eventType), or null' }),
   filters: z.array(ConsumerConditionSchema).nullable().openapi({ description: 'Payload conditions (AND), or null' }),
   cursor: z.number().int().openapi({ description: 'Last acked journal_seq; delivery resumes strictly after it' }),
+  shared: z.boolean().openapi({
+    description: 'true = competing consumers (pullers on this name split the stream); false = own cursor (fan-out)',
+  }),
   head: z.number().int().openapi({ description: 'Highest journal_seq currently in the journal' }),
   lag: z.number().int().openapi({ description: 'head - cursor (all journal rows past the cursor, not only matches)' }),
   caughtUp: z
@@ -71,6 +74,15 @@ export const CreateConsumerSchema = z.object({
     .enum(['now', 'beginning'])
     .optional()
     .openapi({ description: "Initial cursor: 'now' = journal head (default), 'beginning' = full replay" }),
+  shared: z
+    .boolean()
+    .optional()
+    .openapi({
+      description:
+        'Competing consumers (#1188). false (default) = fan-out: every consumer name has its own cursor and sees every ' +
+        'event. true = N pullers on THIS name split the stream: each pull leases a page to one puller, ack(leaseId) ' +
+        'releases it, an unacked lease is redelivered after leaseMs (at-least-once).',
+    }),
 });
 
 export const PullConsumerQuerySchema = z.object({
@@ -88,13 +100,27 @@ export const PullConsumerQuerySchema = z.object({
     .max(30000)
     .optional()
     .openapi({ description: 'Long-poll: wait up to this long when no rows are available (default 0)' }),
+  leaseMs: z.coerce
+    .number()
+    .int()
+    .min(1000)
+    .max(3_600_000)
+    .optional()
+    .openapi({ description: 'Shared consumers: lease duration before the page is redelivered (default 60000)' }),
 });
 
-export const AckConsumerSchema = z.object({
-  cursor: z.coerce.number().int().min(0).openapi({
-    description: 'The journal_seq to advance to (a pull result\'s "cursor"). Monotonic: equal = no-op, lower = 400',
-  }),
-});
+export const AckConsumerSchema = z
+  .object({
+    cursor: z.coerce.number().int().min(0).optional().openapi({
+      description: 'The journal_seq to advance to (a pull result\'s "cursor"). Monotonic: equal = no-op, lower = 400',
+    }),
+    leaseId: z.string().uuid().optional().openapi({
+      description: "Shared consumers: the pull result's leaseId (required instead of cursor)",
+    }),
+  })
+  .refine((body) => body.cursor !== undefined || body.leaseId !== undefined, {
+    message: 'cursor or leaseId is required',
+  });
 
 const PullResultSchema = z.object({
   consumer: z.string().openapi({ description: 'Consumer name' }),
@@ -108,6 +134,9 @@ const PullResultSchema = z.object({
   hasMore: z.boolean().openapi({ description: 'True when the scan filled the page — more rows are already waiting' }),
   scanExhausted: z.boolean().openapi({
     description: 'A full scan window matched nothing; the stored cursor was advanced past it (#1128)',
+  }),
+  leaseId: z.string().optional().openapi({
+    description: 'Shared consumers only: ack this lease once the items are handled (absent when nothing delivered)',
   }),
 });
 
