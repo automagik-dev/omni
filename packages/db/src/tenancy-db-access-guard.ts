@@ -989,6 +989,12 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     class: 'tenant-boundary',
   },
   {
+    // #1183: call_agent trigger_logs row (tokens/cost), same seam as above.
+    file: 'packages/api/src/services/agent-usage.ts',
+    table: 'trigger_logs',
+    class: 'tenant-boundary',
+  },
+  {
     // #1035: the message.received consumer back-links the journal row's
     // chatUuid/personId after chat resolution. The update runs inside
     // `runConsumerInTenantContext` through `scopedHandle(db)` — the same

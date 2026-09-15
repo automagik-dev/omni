@@ -7,6 +7,7 @@
  * - System events: Internal operations (system.*)
  */
 
+import type { AgentUsage } from '../schemas/agent-usage';
 import type { ChannelType, ContentType } from '../types/channel';
 
 /**
@@ -1196,5 +1197,7 @@ export interface AgentRunCompletedPayload {
   status: string;
   providerRunId?: string;
   response?: string;
+  /** Tokens/cost the provider reported (#1183); absent when unknown. */
+  usage?: AgentUsage;
   error?: string;
 }

@@ -950,6 +950,7 @@ async function executeCallAgentAction(
         response: result.fullResponse,
         runId: result.metadata.runId,
         sessionId: result.metadata.sessionId,
+        ...(result.metadata.usage ? { usage: result.metadata.usage } : {}),
       },
       error: result.metadata.status === 'failed' ? 'Agent call failed' : undefined,
     };
@@ -987,6 +988,7 @@ function dispatchCallAgent(
         status: result.metadata.status,
         providerRunId: result.metadata.runId,
         response: result.fullResponse,
+        ...(result.metadata.usage ? { usage: result.metadata.usage } : {}),
         error: result.metadata.status === 'failed' ? 'Agent call failed' : undefined,
       }),
     (error) => publish({ status: 'failed', error: error instanceof Error ? error.message : 'Unknown error' }),

@@ -77,4 +77,31 @@ describe('call_agent waitForResponse (#1176)', () => {
       error: undefined,
     });
   });
+
+  const withUsage: AgentRunResult = {
+    ...done,
+    metadata: {
+      ...done.metadata,
+      usage: { providerId: 'prov', runId: 'p1', costUsd: 0.15, tokensIn: 10, tokensOut: 5 },
+    },
+  };
+
+  test('awaited result carries usage alongside runId (#1183)', async () => {
+    const result = await executeAction({ type: 'call_agent', config: { agentId: 'a1' } }, context, {
+      eventBus: null,
+      callAgent: mock(async () => withUsage),
+    });
+    expect((result.result as { usage: unknown }).usage).toEqual(withUsage.metadata.usage);
+  });
+
+  test('fire-and-forget puts usage on run_completed (#1183)', async () => {
+    const publishGeneric = mock(async () => ({ id: 'e', sequence: 1 }));
+    await executeAction({ type: 'call_agent', config: { agentId: 'a1', waitForResponse: false } }, context, {
+      eventBus: { publishGeneric } as unknown as EventBus,
+      callAgent: mock(async () => withUsage),
+    });
+    await Bun.sleep(0);
+    const payload = (publishGeneric.mock.calls[0] as unknown[])[1] as { usage: unknown };
+    expect(payload.usage).toEqual(withUsage.metadata.usage);
+  });
 });
