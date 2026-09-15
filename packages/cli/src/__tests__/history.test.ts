@@ -278,9 +278,8 @@ describe('history command', () => {
     const cmd = createHistoryCommand();
     await cmd.parseAsync(['node', 'history']);
 
-    expect(mockInfo).toHaveBeenCalledTimes(1);
-    expect(mockInfo).toHaveBeenCalledWith('No messages found.');
-    expect(mockList).not.toHaveBeenCalled();
+    expect(mockList).toHaveBeenCalledTimes(1);
+    expect(mockList).toHaveBeenCalledWith([], { emptyMessage: 'No messages found.' });
   });
 
   test('handles API errors gracefully', async () => {

@@ -4,6 +4,7 @@
  * Human-friendly and JSON output modes with color support.
  */
 
+import { writeSync } from 'node:fs';
 import chalk from 'chalk';
 import { getOutputFormat } from './config.js';
 
@@ -29,6 +30,34 @@ function writeStdoutLine(text: string): void {
   pendingStdoutWrites.add(promise);
   promise.finally(() => pendingStdoutWrites.delete(promise));
 }
+
+/**
+ * CLI JSON envelope (#1177): in JSON mode stdout carries exactly ONE document,
+ * the bare data (array for lists, object for records). `success`/`info`/`warn`
+ * never add a second document: status text goes to stderr, and a message-only
+ * `success` becomes `{"message": ...}` only when the command emitted no data.
+ * Documents are held here and written once by `flushStdout` (or at exit).
+ * Streaming commands (`events stream/follow`) use `raw` and emit NDJSON.
+ */
+let jsonDoc: { value: unknown; status: boolean } | undefined;
+
+function setJsonDoc(value: unknown, status = false): void {
+  if (status && jsonDoc) return;
+  jsonDoc = { value, status };
+}
+
+function takeJsonDoc(): string | undefined {
+  if (!jsonDoc) return undefined;
+  const text = JSON.stringify(jsonDoc.value, null, 2);
+  jsonDoc = undefined;
+  return text;
+}
+
+// Fallback for commands that call process.exit() before the final flush.
+process.on('exit', () => {
+  const text = takeJsonDoc();
+  if (text !== undefined) writeSync(1, `${text}\n`);
+});
 
 /** Global color control */
 let colorsEnabled = true;
@@ -65,7 +94,10 @@ export function success(message: string, data?: unknown): void {
   const format = getCurrentFormat();
 
   if (format === 'json') {
-    writeStdoutLine(JSON.stringify({ success: true, message, data }, null, 2));
+    // biome-ignore lint/suspicious/noConsole: CLI output
+    console.error(JSON.stringify({ success: message }));
+    if (data === undefined) setJsonDoc({ message }, true);
+    else setJsonDoc(data);
   } else {
     writeStdoutLine(`${c().green('✓')} ${message}`);
     if (data !== undefined) {
@@ -145,7 +177,7 @@ export function data(value: unknown): void {
   const format = getCurrentFormat();
 
   if (format === 'json') {
-    writeStdoutLine(JSON.stringify(value, null, 2));
+    setJsonDoc(value);
   } else {
     if (Array.isArray(value)) {
       printTable(value);
@@ -170,7 +202,7 @@ export function list<T>(items: T[], options?: { emptyMessage?: string; rawData?:
   const format = getCurrentFormat();
 
   if (format === 'json') {
-    writeStdoutLine(JSON.stringify(options?.rawData ?? items, null, 2));
+    setJsonDoc(options?.rawData ?? items);
     return;
   }
 
@@ -271,7 +303,8 @@ export function keyValue(key: string, value: unknown): void {
   const format = getCurrentFormat();
 
   if (format === 'json') {
-    writeStdoutLine(JSON.stringify({ [key]: value }, null, 2));
+    const prev = jsonDoc && !jsonDoc.status && isPlainObject(jsonDoc.value) ? jsonDoc.value : {};
+    setJsonDoc({ ...prev, [key]: value });
   } else {
     writeStdoutLine(`${c().cyan(key)}: ${formatValue(value)}`);
   }
@@ -312,10 +345,16 @@ export function raw(text: string): void {
  * module (e.g., direct `process.stdout.write` calls) a final chance to drain.
  */
 export async function flushStdout(): Promise<void> {
+  const doc = takeJsonDoc();
+  if (doc !== undefined) writeStdoutLine(doc);
   while (pendingStdoutWrites.size > 0) {
     await Promise.all([...pendingStdoutWrites]);
   }
   await new Promise<void>((resolve) => {
     process.stdout.write('', () => resolve());
   });
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

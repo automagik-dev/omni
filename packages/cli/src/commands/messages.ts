@@ -277,7 +277,7 @@ export function createMessagesCommand(): Command {
           const searchResults = await fetchSearchResults(params);
 
           if (searchResults.length === 0) {
-            output.info('No messages found matching your search.');
+            output.list([], { emptyMessage: 'No messages found matching your search.' });
             return;
           }
 
