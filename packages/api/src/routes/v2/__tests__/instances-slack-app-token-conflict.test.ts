@@ -1,0 +1,119 @@
+/**
+ * #1185: two active Slack instances on one app token silently split Socket
+ * Mode events. create / update / connect must refuse unless `force: true`.
+ */
+
+import { describe, expect, mock, test } from 'bun:test';
+import { Hono } from 'hono';
+import type { AppVariables } from '../../../types';
+import { instancesRoutes } from '../instances';
+
+const SELF_ID = '33333333-3333-4333-8333-333333333333';
+const OTHER_ID = '44444444-4444-4444-8444-444444444444';
+const TOKEN = 'xapp-1-shared-secret';
+
+function mount(others: Record<string, unknown>[]) {
+  const app = new Hono<{ Variables: AppVariables }>();
+  const self = {
+    id: SELF_ID,
+    name: 'self',
+    channel: 'slack',
+    isActive: true,
+    slackAppToken: TOKEN,
+    slackBotToken: 'xoxb',
+  };
+  const calls = { create: 0, update: 0, connect: 0 };
+
+  app.use('*', async (c, next) => {
+    c.set('services', {
+      instances: {
+        // listActive only returns active rows, mirroring the real service.
+        listActive: mock(async () => [self, ...others].filter((i) => i.isActive)),
+        getById: mock(async () => self),
+        create: mock(async (data: Record<string, unknown>) => {
+          calls.create++;
+          return { ...data, id: SELF_ID };
+        }),
+        update: mock(async (_id: string, data: Record<string, unknown>) => {
+          calls.update++;
+          return { ...self, ...data };
+        }),
+        updateStatus: mock(async () => self),
+      },
+    } as never);
+    c.set('channelRegistry', {
+      get: () => ({
+        id: 'slack',
+        capabilities: {},
+        connect: mock(async () => {
+          calls.connect++;
+        }),
+        getStatus: mock(async () => ({ state: 'connected' })),
+      }),
+    } as never);
+    c.set('apiKey', { id: 't', name: 't', scopes: ['*'], instanceIds: null, expiresAt: null } as never);
+    await next();
+  });
+  app.route('/instances', instancesRoutes);
+  return { app, calls };
+}
+
+const json = (body: unknown) => ({
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(body),
+});
+const other = (overrides: Record<string, unknown> = {}) => ({
+  id: OTHER_ID,
+  name: 'fde-evaluator',
+  channel: 'slack',
+  isActive: true,
+  slackAppToken: TOKEN,
+  ...overrides,
+});
+
+describe('shared Slack app token (#1185)', () => {
+  test('connect refuses a duplicate, naming the other instance, without leaking the token', async () => {
+    const { app, calls } = mount([other()]);
+    const res = await app.request(`/instances/${SELF_ID}/connect`, json({}));
+    expect(res.status).toBe(409);
+    const text = await res.text();
+    expect(text).toContain('fde-evaluator');
+    expect(text).toContain('Slack delivers each event to only one connection per app');
+    expect(text).not.toContain(TOKEN);
+    expect(calls.connect).toBe(0);
+  });
+
+  test('create and update refuse a duplicate', async () => {
+    const { app, calls } = mount([other()]);
+    const created = await app.request('/instances', json({ name: 'dup', channel: 'slack', slackAppToken: TOKEN }));
+    expect(created.status).toBe(409);
+    const updated = await app.request(`/instances/${SELF_ID}`, { ...json({ slackAppToken: TOKEN }), method: 'PATCH' });
+    expect(updated.status).toBe(409);
+    expect(calls.create + calls.update).toBe(0);
+  });
+
+  test('force: true overrides', async () => {
+    const { app, calls } = mount([other()]);
+    const res = await app.request(`/instances/${SELF_ID}/connect`, json({ force: true }));
+    expect(res.status).toBe(200);
+    const updated = await app.request(`/instances/${SELF_ID}`, {
+      ...json({ slackAppToken: TOKEN, force: true }),
+      method: 'PATCH',
+    });
+    expect(updated.status).toBe(200);
+    expect(calls.connect).toBe(1);
+  });
+
+  test('inactive duplicate is ignored', async () => {
+    const { app } = mount([other({ isActive: false })]);
+    const res = await app.request(`/instances/${SELF_ID}/connect`, json({}));
+    expect(res.status).toBe(200);
+  });
+
+  test('different tokens are fine', async () => {
+    const { app } = mount([other({ slackAppToken: 'xapp-1-different' })]);
+    const res = await app.request(`/instances/${SELF_ID}/connect`, json({}));
+    expect(res.status).toBe(200);
+  });
+});
