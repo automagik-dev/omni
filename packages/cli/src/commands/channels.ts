@@ -6,6 +6,7 @@
  * omni channels list      - Show available channel types + instance counts
  * omni channels add <type> [--token <token>] [--name <name>] - Add a new channel instance
  * omni channels status    - Overview of all channels and connection states
+ * omni channels capabilities - Event vocabulary + guarantees per loaded channel
  */
 
 import * as readline from 'node:readline';
@@ -58,6 +59,32 @@ function buildStatusItems(
     active: inst.isActive ? 'yes' : 'no',
     profile: inst.profileName ?? '-',
   }));
+}
+
+type CapabilityFlag = boolean | 'unknown';
+interface ChannelCapabilityRow {
+  id: string;
+  emits: string[] | null;
+  edits: CapabilityFlag;
+  deletes: CapabilityFlag;
+  idempotency: CapabilityFlag;
+}
+
+const flag = (v: CapabilityFlag) => (v === 'unknown' ? '?' : v ? 'yes' : 'no');
+
+/** One matrix row; `?` wherever the plugin declares nothing. */
+export function capabilityRow(ch: ChannelCapabilityRow) {
+  const emits = (prefix: string) =>
+    ch.emits === null ? '?' : ch.emits.some((t) => t.startsWith(prefix)) ? 'yes' : 'no';
+  return {
+    channel: ch.id,
+    'message.received': emits('message.received'),
+    'message.sent': emits('message.sent'),
+    'reaction.*': emits('reaction.'),
+    edit: flag(ch.edits),
+    delete: flag(ch.deletes),
+    idempotency: flag(ch.idempotency),
+  };
 }
 
 export function createChannelsCommand(): Command {
@@ -113,6 +140,22 @@ export function createChannelsCommand(): Command {
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         output.error(`Failed to list channels: ${message}`);
+      }
+    });
+
+  // ============================================================================
+  // omni channels capabilities
+  // ============================================================================
+  channels
+    .command('capabilities')
+    .description('Event vocabulary and guarantees per loaded channel (declared by code, see #1187)')
+    .action(async () => {
+      try {
+        const { items } = (await apiCall('channels/capabilities')) as { items: ChannelCapabilityRow[] };
+        output.list(items.map(capabilityRow), { emptyMessage: 'No channels loaded.', rawData: items });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        output.error(`Failed to load channel capabilities: ${message}`);
       }
     });
 

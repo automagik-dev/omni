@@ -38,4 +38,18 @@ export const GUPSHUP_CAPABILITIES: ChannelCapabilities = {
     { mimeType: 'application/*', maxSize: 100 * 1024 * 1024 },
     { mimeType: 'image/webp', maxSize: 100 * 1024 * 1024 },
   ],
+  events: {
+    emits: [
+      'instance.connected',
+      'instance.disconnected',
+      'message.delivered',
+      'message.failed',
+      'message.read',
+      'message.received',
+      'message.sent',
+    ],
+    edits: false,
+    deletes: false,
+    idempotency: true,
+  },
 };

@@ -41,4 +41,18 @@ export const TWILIO_WHATSAPP_CAPABILITIES: ChannelCapabilities = {
     { mimeType: 'video/*', maxSize: FIVE_HUNDRED_KB },
     { mimeType: 'application/*', maxSize: FIVE_HUNDRED_KB },
   ],
+  events: {
+    emits: [
+      'instance.connected',
+      'instance.disconnected',
+      'message.delivered',
+      'message.failed',
+      'message.read',
+      'message.received',
+      'message.sent',
+    ],
+    edits: false,
+    deletes: false,
+    idempotency: true,
+  },
 };

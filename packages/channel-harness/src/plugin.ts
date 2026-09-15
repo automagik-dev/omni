@@ -48,6 +48,12 @@ const HARNESS_CAPABILITIES: ChannelCapabilities = {
   canSendSelectMenu: true,
   canReplyToMessage: true,
   supportedMediaTypes: [{ mimeType: '*/*' }],
+  events: {
+    emits: ['message.failed', 'message.received', 'message.sent'],
+    edits: false,
+    deletes: false,
+    idempotency: true,
+  },
 };
 
 const MEDIA_CONTENT_TYPES = new Set(['image', 'audio', 'video', 'document', 'sticker']);
