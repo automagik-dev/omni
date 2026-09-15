@@ -134,7 +134,7 @@ async function handleList(client: OmniClient, options: ListOptions): Promise<voi
   });
 
   if (result.items.length === 0) {
-    output.info('No batch jobs found.');
+    output.list([], { emptyMessage: 'No batch jobs found.' });
     return;
   }
 
