@@ -20,7 +20,12 @@ export const InstanceSchema = z.object({
   profilePicUrl: z.string().nullable().openapi({ description: 'Profile picture URL' }),
   ownerIdentifier: z.string().nullable().openapi({ description: 'Owner identifier' }),
   agentId: z.string().uuid().nullable().optional().openapi({ description: 'Agent UUID (agents table)' }),
-  agentProviderId: z.string().uuid().nullable().optional().openapi({ description: 'Provider ID (agent provider)' }),
+  agentProviderId: z
+    .string()
+    .uuid()
+    .nullable()
+    .optional()
+    .openapi({ description: 'Provider ID of the assigned agent (read-only; set via the agent)' }),
   agentTimeout: z.number().openapi({ description: 'Agent timeout in seconds' }),
   agentErrorMessages: z.array(z.string()).nullable().optional().openapi({
     description:
