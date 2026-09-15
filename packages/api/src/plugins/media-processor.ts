@@ -819,7 +819,7 @@ export async function setupMediaProcessor(eventBus: EventBus, db: Database, serv
       maxRetries: 2,
       retryDelayMs: 1000,
       startFrom: 'first',
-      concurrency: 5, // Process up to 5 media files in parallel
+      concurrency: 1, // effective value before #1181 forwarded it; raise deliberately
     },
   );
 

@@ -317,8 +317,9 @@ export function createAutomationsCommand(): Command {
     )
     .option(
       '--max-concurrency <n>',
-      'Run at most N of THIS automation at a time on its own queue; 1 = strict single-flight, ' +
-        'which a read-before-write action needs (#1108). Default: queued per instance with the engine default',
+      'Cap concurrent runs of THIS automation (own queue, up to 50 deliveries per trigger in flight); ' +
+        '1 = strict single-flight, which a read-before-write action needs (#1108). ' +
+        'Default: shares the per-instance queue, engine default 5',
       (v) => Number.parseInt(v, 10),
     )
     .option(
@@ -370,7 +371,7 @@ export function createAutomationsCommand(): Command {
     .option('--no-transactional-emissions', 'Return the automation to immediate mid-sequence publishing')
     .option(
       '--max-concurrency <n>',
-      'Run at most N of THIS automation at a time on its own queue; 1 = strict single-flight (#1108)',
+      'Cap concurrent runs of THIS automation on its own queue; 1 = strict single-flight (#1108)',
       (v) => Number.parseInt(v, 10),
     )
     .option(
