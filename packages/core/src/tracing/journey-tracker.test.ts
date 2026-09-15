@@ -127,6 +127,28 @@ describe('JourneyTracker', () => {
       tracker.recordCheckpoint('corr-1', 'T11', 'platformDeliveredAt', 3243);
       expect(tracker.getJourney('corr-1')?.completedAt).toBe(3243);
     });
+
+    test('no-agent path completes at T4 (DB write)', () => {
+      tracker.recordCheckpoint('corr-1', 'T0', 'platformReceivedAt', 1000);
+      tracker.recordCheckpoint('corr-1', 'T3', 'eventConsumedAt', 1100);
+      expect(tracker.getJourney('corr-1')?.completedAt).toBeUndefined();
+
+      tracker.recordCheckpoint('corr-1', 'T4', 'dbStoredAt', 1200);
+      const journey = tracker.getJourney('corr-1');
+      expect(journey?.completedAt).toBe(1200);
+      expect(journey?.latencies.totalInboundNoAgent).toBe(200);
+      expect(journey?.latencies.totalInbound).toBeUndefined();
+    });
+
+    test('agent path completes at T5 (agent notified)', () => {
+      tracker.recordCheckpoint('corr-1', 'T0', 'platformReceivedAt', 1000);
+      tracker.recordCheckpoint('corr-1', 'T4', 'dbStoredAt', 1200);
+      tracker.recordCheckpoint('corr-1', 'T5', 'agentNotifiedAt', 1300);
+      const journey = tracker.getJourney('corr-1');
+      expect(journey?.completedAt).toBe(1300);
+      expect(journey?.latencies.totalInbound).toBe(300);
+      expect(journey?.latencies.totalInboundNoAgent).toBeUndefined();
+    });
   });
 
   describe('sampling', () => {

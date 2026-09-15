@@ -3,6 +3,7 @@
  */
 
 export { BaseChannelPlugin } from './BaseChannelPlugin';
+export type { InboundSubStageTimings } from './BaseChannelPlugin';
 export { ChannelRegistry, channelRegistry } from './ChannelRegistry';
 export type { RegistryEntry } from './ChannelRegistry';
 export { HealthChecker, aggregateHealthChecks, createHealthCheck } from './HealthChecker';

@@ -2856,6 +2856,12 @@ export const webhookSources = pgTable(
      * a provider-identity template (e.g. `github:{headers.x-github-delivery}`).
      */
     idempotencyKeyTemplate: text('idempotency_key_template').notNull().default('{source}:{sha256(body)}'),
+    /**
+     * Opt-in cross-type collapsing (#1178). Default false: a custom template's
+     * key is scoped by the resolved event type so distinct transitions of the
+     * same entity never dedupe each other.
+     */
+    idempotencyAcrossEventTypes: boolean('idempotency_across_event_types').notNull().default(false),
 
     // Semantic event-type extraction (issue #959). Null = legacy collapsed
     // `custom.webhook.{source}` type for every delivery.

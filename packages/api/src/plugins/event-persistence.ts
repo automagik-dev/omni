@@ -150,7 +150,7 @@ const CONSUMER_OPTIONS = {
   maxRetries: 3,
   retryDelayMs: 1000,
   startFrom: 'first' as const,
-  concurrency: 10,
+  concurrency: 1, // effective value before #1181 forwarded it; raise deliberately
 };
 
 /**

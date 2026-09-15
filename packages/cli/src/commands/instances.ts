@@ -511,6 +511,7 @@ export function createInstancesCommand(): Command {
     )
     // Default
     .option('--is-default', 'Set as default instance for channel')
+    .option('--force', 'Proceed even if another active Slack instance uses the same app token')
     .action(async (options: Record<string, unknown>) => {
       const channel = options.channel as string;
       if (!VALID_CHANNELS.includes(channel as Channel)) {
@@ -522,6 +523,7 @@ export function createInstancesCommand(): Command {
         body.name = options.name;
         body.channel = channel;
         setBool(body, 'isDefault', options.isDefault);
+        setBool(body, 'force', options.force);
 
         const response = (await apiCall('instances', 'POST', body)) as {
           data?: {
@@ -779,6 +781,7 @@ export function createInstancesCommand(): Command {
     .command('connect <id>')
     .description('Connect an instance')
     .option('--force-new-qr', 'Force generation of new QR code')
+    .option('--force', 'Proceed even if another active Slack instance uses the same app token')
     .option('--token <token>', 'Discord bot token (for Discord instances)')
     .option('--twilio-account-sid <sid>', 'Twilio Account SID')
     .option('--twilio-auth-token <token>', 'Twilio Auth Token')
@@ -801,6 +804,7 @@ export function createInstancesCommand(): Command {
         rawId: string,
         options: {
           forceNewQr?: boolean;
+          force?: boolean;
           token?: string;
           twilioAccountSid?: string;
           twilioAuthToken?: string;
@@ -871,6 +875,7 @@ export function createInstancesCommand(): Command {
 
           const result = await client.instances.connect(id, {
             forceNewQr: options.forceNewQr,
+            force: options.force,
             token: options.token,
             twilioAccountSid: options.twilioAccountSid,
             twilioAuthToken: options.twilioAuthToken,
@@ -1196,6 +1201,7 @@ export function createInstancesCommand(): Command {
       '--no-allow-first-party',
       'Drop inbound messages whose sender matches another active instance owner (default, loop-protection).',
     )
+    .option('--force', 'Proceed even if another active Slack instance uses the same app token')
     .action(async (rawId: string, options: Record<string, unknown>) => {
       const client = getClient();
 
@@ -1217,6 +1223,7 @@ export function createInstancesCommand(): Command {
         const body = buildInstanceBody({ ...options, slackUserToken: await resolveSlackUserToken(options) });
         setVal(body, 'name', options.name);
         setBool(body, 'isDefault', options.isDefault);
+        setBool(body, 'force', options.force);
 
         // Send update if there are fields to update
         if (Object.keys(body).length > 0) {

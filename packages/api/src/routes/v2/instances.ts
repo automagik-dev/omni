@@ -223,6 +223,10 @@ const createInstanceSchema = z.object({
     .optional()
     .nullable()
     .describe('cod_servico handed to /transferirHumano (the handoff queue) — service mode only'),
+  force: z
+    .boolean()
+    .optional()
+    .describe('Override the shared-Slack-app-token refusal (Socket Mode would split events between instances)'),
   readReceipts: z
     .enum(['on', 'off', 'exclude-self'])
     .default('on')
@@ -966,11 +970,46 @@ instancesRoutes.get('/:id', instanceAccess, async (c) => {
 });
 
 /**
+ * #1185: Socket Mode load-balances an app's events across every connection of
+ * that app, so two active Slack instances on one app token each silently get a
+ * fraction of the traffic. Tokens are compared as sha256 digests in memory and
+ * never logged or returned.
+ */
+const sha256 = (value: string) => new Bun.CryptoHasher('sha256').update(value).digest('hex');
+
+async function findSlackAppTokenConflict(
+  services: Services,
+  appToken: string | null | undefined,
+  selfId?: string,
+): Promise<{ id: string; name: string } | null> {
+  if (!appToken) return null;
+  const digest = sha256(appToken);
+  const active = await services.instances.listActive();
+  const other = active.find(
+    (i) => i.id !== selfId && i.channel === 'slack' && i.slackAppToken && sha256(i.slackAppToken) === digest,
+  );
+  return other ? { id: other.id, name: other.name } : null;
+}
+
+function slackAppTokenConflictBody(other: { id: string; name: string }) {
+  return {
+    error: {
+      code: 'SLACK_APP_TOKEN_IN_USE',
+      message: `Slack app token is already used by active instance "${other.name}" (${other.id}). Slack delivers each event to only one connection per app; both instances will receive a fraction of the traffic. Pass force: true (--force) to proceed anyway.`,
+      details: { instanceId: other.id, instanceName: other.name },
+    },
+  };
+}
+
+/**
  * POST /instances - Create new instance
  */
 instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) => {
-  const data = c.req.valid('json');
+  const { force, ...data } = c.req.valid('json');
   const services = c.get('services');
+
+  const conflict = force ? null : await findSlackAppTokenConflict(services, data.slackAppToken);
+  if (conflict) return c.json(slackAppTokenConflictBody(conflict), 409);
   const channelRegistry = c.get('channelRegistry');
 
   // omni#443: Auto-set reply filter when agent is assigned but no filter is set.
@@ -1057,8 +1096,15 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
  */
 instancesRoutes.patch('/:id', instanceAccess, zValidator('json', updateInstanceSchema), async (c) => {
   const id = c.req.param('id');
-  const data = c.req.valid('json');
+  const { force, ...data } = c.req.valid('json');
   const services = c.get('services');
+
+  if (!force && data.slackAppToken) {
+    const current = await services.instances.getById(id);
+    const conflict =
+      current.channel === 'slack' ? await findSlackAppTokenConflict(services, data.slackAppToken, id) : null;
+    if (conflict) return c.json(slackAppTokenConflictBody(conflict), 409);
+  }
 
   // Detect agent assignment changes for auto-key provisioning + auto reply-filter (omni#443)
   let oldAgentId: string | null | undefined;
@@ -1490,6 +1536,10 @@ const connectInstanceSchema = z.object({
       "Handoff destination: 'flow' (default, poll body → Genesys node) or 'service' (/transferirHumano → ASC queue)",
     ),
   ascFlowHandoffServico: z.number().int().optional().describe('cod_servico handed to /transferirHumano (service mode)'),
+  force: z
+    .boolean()
+    .optional()
+    .describe('Override the shared-Slack-app-token refusal (Socket Mode would split events between instances)'),
   whatsapp: z
     .object({
       syncFullHistory: z.boolean().optional().describe('Sync full message history on connect (default: true)'),
@@ -1661,6 +1711,12 @@ instancesRoutes.post(
     const channelRegistry = c.get('channelRegistry');
 
     const instance = await services.instances.getById(id);
+
+    const conflict =
+      body.force || instance.channel !== 'slack'
+        ? null
+        : await findSlackAppTokenConflict(services, body.slackAppToken ?? instance.slackAppToken, id);
+    if (conflict) return c.json(slackAppTokenConflictBody(conflict), 409);
 
     const connectionOptions = buildConnectConnectionOptions(instance, body, forceNewQr);
 

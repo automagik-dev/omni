@@ -192,6 +192,7 @@ interface UpdateSourceOptions extends SignatureSecretOptions {
   // Strict schema mode (#1000): commander negatable pair — true from
   // --strict-schemas, false from --no-strict-schemas, undefined = untouched.
   strictSchemas?: boolean;
+  idempotencyAcrossEventTypes?: boolean;
   // Semantic event-type extraction (#1011): set vs clear vs untouched,
   // following the --clear-signature / --clear-cadence precedent.
   eventTypeMapping?: string;
@@ -211,6 +212,7 @@ interface UpdateSourcePatch {
   signatureSecret?: string;
   idempotencyKeyTemplate?: string;
   strictSchemas?: boolean;
+  idempotencyAcrossEventTypes?: boolean;
   eventTypeMapping?: WebhookEventTypeMappingBody | null;
   expectedIntervalSeconds?: number | null;
   windowSemantics?: (typeof WINDOW_SEMANTICS)[number];
@@ -224,6 +226,8 @@ async function buildUpdateSourcePatch(options: UpdateSourceOptions): Promise<Upd
   if (options.description) updates.description = options.description;
   if (options.idempotencyKeyTemplate) updates.idempotencyKeyTemplate = options.idempotencyKeyTemplate;
   if (options.strictSchemas !== undefined) updates.strictSchemas = options.strictSchemas;
+  if (options.idempotencyAcrossEventTypes !== undefined)
+    updates.idempotencyAcrossEventTypes = options.idempotencyAcrossEventTypes;
   if (options.clearEventTypeMapping && options.eventTypeMapping !== undefined) {
     throw new Error('Use only one of --event-type-mapping and --clear-event-type-mapping');
   }
@@ -399,6 +403,10 @@ export function createWebhooksCommand(): Command {
         "{headers.<name>}, {payload.<dot.path>}. Defaults to '{source}:{sha256(body)}'",
     )
     .option(
+      '--idempotency-across-event-types',
+      'Share custom idempotency keys across event types (#1178). By default keys are prefixed with the event type',
+    )
+    .option(
       '--strict-schemas',
       'Refuse deliveries whose event type has no enabled registered schema (dead-lettered as ' +
         'schema_not_registered, #1000). Recommended for new sources. Defaults to off',
@@ -429,6 +437,7 @@ export function createWebhooksCommand(): Command {
         signatureSecretStdin?: boolean;
         idempotencyKeyTemplate?: string;
         strictSchemas?: boolean;
+        idempotencyAcrossEventTypes?: boolean;
         eventTypeMapping?: string;
         expectedInterval?: string;
         windowSemantics?: string;
@@ -459,6 +468,7 @@ export function createWebhooksCommand(): Command {
             signatureSecret,
             idempotencyKeyTemplate: options.idempotencyKeyTemplate,
             strictSchemas: options.strictSchemas,
+            idempotencyAcrossEventTypes: options.idempotencyAcrossEventTypes,
             eventTypeMapping: resolveEventTypeMapping(options.eventTypeMapping),
             expectedIntervalSeconds: parseExpectedInterval(options.expectedInterval),
             windowSemantics: parseWindowSemantics(options.windowSemantics),
@@ -509,6 +519,11 @@ export function createWebhooksCommand(): Command {
       'Delivery-identity key template for redelivery dedup (#958). Placeholders: {source}, {sha256(body)}, ' +
         '{headers.<name>}, {payload.<dot.path>}',
     )
+    .option(
+      '--idempotency-across-event-types',
+      'Share custom idempotency keys across event types (#1178). By default keys are prefixed with the event type',
+    )
+    .option('--no-idempotency-across-event-types', 'Scope custom idempotency keys by event type again (default)')
     .option(
       '--strict-schemas',
       'Refuse deliveries whose event type has no enabled registered schema (dead-lettered as ' +
