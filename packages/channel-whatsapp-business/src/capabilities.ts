@@ -63,4 +63,23 @@ export const WHATSAPP_BUSINESS_CAPABILITIES: ChannelCapabilities = {
     },
     { mimeType: 'text/plain', maxSize: 100 * 1024 * 1024 },
   ],
+  events: {
+    emits: [
+      'channel.alert',
+      'flow.data_exchange',
+      'instance.connected',
+      'instance.disconnected',
+      'message.delivered',
+      'message.failed',
+      'message.read',
+      'message.received',
+      'message.sent',
+      'reaction.received',
+      'reaction.removed',
+      'template.status_changed',
+    ],
+    edits: false,
+    deletes: false,
+    idempotency: true,
+  },
 };

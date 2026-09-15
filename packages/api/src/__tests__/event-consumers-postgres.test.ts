@@ -158,6 +158,54 @@ postgresDescribe('durable event consumers (#989, real PostgreSQL)', () => {
     });
   });
 
+  describe('shared (competing) consumers (#1188)', () => {
+    const ids: string[] = [];
+
+    beforeAll(async () => {
+      await service.create({ name: 'workers', eventType: 'custom.dc1188.*', startFrom: 'beginning', shared: true });
+      await service.create({ name: 'observer-1', eventType: 'custom.dc1188.*', startFrom: 'beginning' });
+      await service.create({ name: 'observer-2', eventType: 'custom.dc1188.*', startFrom: 'beginning' });
+      for (let i = 0; i < 6; i++) ids.push(await journal(`custom.dc1188.ev${i}`, { i }));
+    });
+
+    test('two concurrent pullers on a shared consumer get each event exactly once', async () => {
+      const other = new EventConsumerService(db, null);
+      const delivered: string[] = [];
+      for (;;) {
+        const pages = await Promise.all([service.pull('workers', { limit: 2 }), other.pull('workers', { limit: 2 })]);
+        if (pages.every((p) => p.items.length === 0)) break;
+        for (const page of pages) {
+          delivered.push(...page.items.map((e) => e.id));
+          if (page.leaseId) await service.ack('workers', 0, page.leaseId);
+        }
+      }
+      expect([...delivered].sort()).toEqual([...ids].sort());
+      expect((await service.getByName('workers')).cursor).toBeGreaterThan(0);
+    });
+
+    test('an expired lease is redelivered; a cursor ack is refused', async () => {
+      const id = await journal('custom.dc1188.late');
+      const first = await service.pull('workers', { limit: 10, leaseMs: 1000 });
+      expect(first.items.map((e) => e.id)).toEqual([id]);
+      expect((await service.pull('workers', { limit: 10 })).items).toEqual([]);
+      await new Promise((r) => setTimeout(r, 1100));
+      const again = await service.pull('workers', { limit: 10 });
+      expect(again.items.map((e) => e.id)).toEqual([id]);
+      await expect(service.ack('workers', again.cursor)).rejects.toThrow(/shared/);
+      if (!first.leaseId || !again.leaseId) throw new Error('leaseId missing');
+      await expect(service.ack('workers', 0, first.leaseId)).rejects.toThrow(/expired/);
+      await service.ack('workers', 0, again.leaseId);
+    });
+
+    test('fan-out default is unchanged: every name sees every event', async () => {
+      const one = await service.pull('observer-1', { limit: 50 });
+      const two = await service.pull('observer-2', { limit: 50 });
+      expect(one.items.map((e) => e.id).slice(0, 6)).toEqual(ids);
+      expect(two.items.map((e) => e.id).slice(0, 6)).toEqual(ids);
+      expect(one.leaseId).toBeUndefined();
+    });
+  });
+
   describe('register → pull → ack → resume', () => {
     const ids: string[] = [];
 

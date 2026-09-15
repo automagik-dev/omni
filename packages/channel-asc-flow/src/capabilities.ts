@@ -59,4 +59,10 @@ export const ASC_FLOW_CAPABILITIES: ChannelCapabilities = {
     { mimeType: 'video/*', maxSize: 16 * 1024 * 1024 },
     { mimeType: 'application/*', maxSize: 16 * 1024 * 1024 },
   ],
+  events: {
+    emits: ['instance.connected', 'instance.disconnected', 'message.failed', 'message.received', 'message.sent'],
+    edits: false,
+    deletes: false,
+    idempotency: true,
+  },
 };

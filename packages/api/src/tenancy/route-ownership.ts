@@ -500,6 +500,7 @@ const TENANT_SCOPED_ROUTES: readonly RouteKey[] = [
   'GET /api/v2/batch-jobs',
   'GET /api/v2/batch-jobs/:id',
   'GET /api/v2/batch-jobs/:id/status',
+  'GET /api/v2/channels/capabilities',
   'GET /api/v2/channels/harness/:instanceId/transcript',
   'GET /api/v2/chats',
   'GET /api/v2/chats/:id',

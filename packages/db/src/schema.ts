@@ -3342,6 +3342,21 @@ export type NewConsumerOffset = typeof consumerOffsets.$inferInsert;
  * tenant's journal rows. Per-tenant consumer ownership joins additively in
  * the G6+ ownership pass.
  */
+/** One leased page of a shared consumer: journal rows in (from, to]. */
+export interface ConsumerLease {
+  id: string;
+  from: number;
+  to: number;
+  /** Epoch ms; past it the page is redelivered to the next puller. */
+  expiresAt: number;
+}
+
+export interface SharedLeaseState {
+  /** Highest journal_seq handed out to any puller. */
+  claimed: number;
+  leases: ConsumerLease[];
+}
+
 export const durableConsumers = pgTable(
   'durable_consumers',
   {
@@ -3359,6 +3374,14 @@ export const durableConsumers = pgTable(
      * it; acks are monotonic (a lower ack is refused, an equal ack no-ops).
      */
     cursor: bigint('cursor', { mode: 'number' }).notNull().default(0),
+    /**
+     * Competing consumers (#1188): false = one cursor per name (fan-out
+     * across names); true = N pullers on this name split the stream via
+     * leased pages (`lease_state`), each page handed to one puller at a time.
+     */
+    shared: boolean('shared').notNull().default(false),
+    /** Shared consumers only: claimed watermark + outstanding page leases. */
+    leaseState: jsonb('lease_state').$type<SharedLeaseState>(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

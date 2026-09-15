@@ -201,6 +201,7 @@ export const SCOPE_MAP: Record<string, string> = {
   // --- instances ---
   'GET /instances': 'instances:read',
   'GET /instances/supported-channels': 'instances:read',
+  'GET /channels/capabilities': 'instances:read',
   'GET /instances/:id': 'instances:read',
   'POST /instances': 'instances:write',
   'PATCH /instances/:id': 'instances:write',
