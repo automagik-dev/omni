@@ -20,6 +20,7 @@ import { getOutputFormat, loadConfig } from '../config.js';
 import * as output from '../output.js';
 import { areColorsEnabled } from '../output.js';
 import { resolveChatId, resolveInstanceId } from '../resolve.js';
+import { createEventsSampleCommand } from './events-sample.js';
 
 /** Replay command options */
 interface ReplayOptions {
@@ -1253,6 +1254,9 @@ export function createEventsCommand(): Command {
 
   // omni events consumers create|ls|inspect|rm (issue #989)
   events.addCommand(createConsumersCommand());
+
+  // omni events sample <eventType> (issue #1182)
+  events.addCommand(createEventsSampleCommand());
 
   // omni events list
   events
