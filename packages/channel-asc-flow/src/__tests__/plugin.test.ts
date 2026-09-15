@@ -642,13 +642,15 @@ describe('outbound turn', () => {
         expect(body).not.toHaveProperty('handoffSubject');
       });
 
-      it('reads handoffFields.assunto, and top-level metadata wins', async () => {
+      it('reads handoffFields.assunto', async () => {
         await boot();
         await send(farewell, { isHandoff: true, handoffFields: { fila_vq: 'VQ_X', assunto: 'do route' } });
         const body = ready('42');
         expect(body?.resposta).toBe('do route');
         expect(body).not.toHaveProperty('assunto');
+      });
 
+      it('lets top-level metadata win over handoffFields.assunto', async () => {
         await boot();
         await send(farewell, {
           isHandoff: true,
@@ -658,7 +660,7 @@ describe('outbound turn', () => {
         expect(ready('42')?.resposta).toBe('do metadata');
       });
 
-      it('collapses whitespace, transliterates to latin-1 and caps at 255', async () => {
+      it('collapses whitespace and transliterates to latin-1', async () => {
         await boot();
         await send(farewell, {
           isHandoff: true,
@@ -666,7 +668,9 @@ describe('outbound turn', () => {
           handoffSubject: '  Exame\n\n  “urgente” — hoje…  ',
         });
         expect(ready('42')?.resposta).toBe('Exame "urgente" - hoje...');
+      });
 
+      it('caps the subject at 255 chars', async () => {
         await boot();
         await send(farewell, { isHandoff: true, handoffQueue: 'VQ_X', handoffSubject: 'a'.repeat(300) });
         expect(ready('42')?.resposta).toBe('a'.repeat(255));
