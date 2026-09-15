@@ -621,6 +621,81 @@ describe('outbound turn', () => {
       expect(of('/transferirHumano')).toHaveLength(0);
       expect(ready('42')).toMatchObject({ hand_off: 'sim', fila_vq: 'VQ_X' });
     });
+
+    // The Genesys node reads `session.subject = {#resposta}`; nothing renders
+    // `resposta` to the person on the handoff branch.
+    describe('handoff subject', () => {
+      const farewell = { type: 'text', text: 'Vou te transferir.' };
+
+      it('answers resposta with the subject, leaving bolhas and the pushed farewell alone', async () => {
+        await boot();
+        await send(farewell, { isHandoff: true, handoffQueue: 'VQ_X', handoffSubject: 'Remarcar consulta' });
+
+        expect(entregue()).toBe('Vou te transferir.');
+        const body = ready('42');
+        expect(body).toMatchObject({
+          hand_off: 'sim',
+          resposta: 'Remarcar consulta',
+          bolhas: ['Vou te transferir.'],
+        });
+        expect(body).not.toHaveProperty('assunto');
+        expect(body).not.toHaveProperty('handoffSubject');
+      });
+
+      it('reads handoffFields.assunto, and top-level metadata wins', async () => {
+        await boot();
+        await send(farewell, { isHandoff: true, handoffFields: { fila_vq: 'VQ_X', assunto: 'do route' } });
+        const body = ready('42');
+        expect(body?.resposta).toBe('do route');
+        expect(body).not.toHaveProperty('assunto');
+
+        await boot();
+        await send(farewell, {
+          isHandoff: true,
+          handoffSubject: 'do metadata',
+          handoffFields: { fila_vq: 'VQ_X', assunto: 'do route' },
+        });
+        expect(ready('42')?.resposta).toBe('do metadata');
+      });
+
+      it('collapses whitespace, transliterates to latin-1 and caps at 255', async () => {
+        await boot();
+        await send(farewell, {
+          isHandoff: true,
+          handoffQueue: 'VQ_X',
+          handoffSubject: '  Exame\n\n  “urgente” — hoje…  ',
+        });
+        expect(ready('42')?.resposta).toBe('Exame "urgente" - hoje...');
+
+        await boot();
+        await send(farewell, { isHandoff: true, handoffQueue: 'VQ_X', handoffSubject: 'a'.repeat(300) });
+        expect(ready('42')?.resposta).toBe('a'.repeat(255));
+      });
+
+      it('keeps resposta as today when the subject is empty or whitespace-only', async () => {
+        await boot();
+        await send(farewell, { isHandoff: true, handoffQueue: 'VQ_X', handoffSubject: '  \n ' });
+        expect(ready('42')?.resposta).toBe('');
+      });
+
+      it('is ignored on a turn that does not hand off', async () => {
+        await boot();
+        await send(farewell, { handoffQueue: 'VQ_X', handoffSubject: 'Remarcar consulta' });
+        expect(ready('42')).toMatchObject({ hand_off: 'nao', resposta: '' });
+      });
+
+      it('is ignored on a refused handoff', async () => {
+        await boot();
+        await send(farewell, { isHandoff: true, handoffQueue: 'fila com espaço', handoffSubject: 'Remarcar consulta' });
+        expect(ready('42')).toMatchObject({ hand_off: 'nao', resposta: '' });
+      });
+
+      it('is ignored in service mode', async () => {
+        await boot({}, SERVICE);
+        await send(farewell, { isHandoff: true, handoffQueue: 'VQ_X', handoffSubject: 'Remarcar consulta' });
+        expect(ready('42')).toMatchObject({ hand_off: 'sim', resposta: '' });
+      });
+    });
   });
 
   it('refuses an empty turn instead of sending a blank bubble', async () => {

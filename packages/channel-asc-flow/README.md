@@ -326,6 +326,7 @@ in `service` mode `sendMessage` also wraps the call itself:
 | `fila_vq` | both | `^[A-Za-z0-9_.-]{1,32}$` when present | `service`: field omitted, `warn` logged. `flow`: **handoff refused**, `error` logged, `hand_off:"nao"` |
 | `fila_vq` **absent** | both | allowed | nothing — see below |
 | `motivo_transf_vq` | both | whitespace collapsed, trimmed, ≤255 chars | omitted when empty |
+| subject (`metadata.handoffSubject` / `handoffFields.assunto`) | `flow` only | whitespace collapsed, trimmed, transliterated to latin-1 (`encodeAscEmoji`), ≤255 chars; answered in `resposta` on the handoff turn (the Genesys node reads `session.subject = {#resposta}`). Never its own key in the poll body | empty: `resposta` unchanged. Ignored on a refused handoff and in `service` mode |
 | `POST /transferirHumano` | `service` only | must succeed | `warn` logged, turn answers with `hand_off:"nao"` |
 
 In `flow` mode `fila_vq` is the **routing key** — there is no ASC queue holding
