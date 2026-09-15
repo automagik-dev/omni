@@ -120,7 +120,7 @@ export function createLogsCommand(): Command {
         // parses it (see packages/cli/src/index.ts), so we detect it via the
         // runtime output format rather than a subcommand-level option.
         if (output.getCurrentFormat() === 'json') {
-          output.raw(JSON.stringify(result.items, null, 2));
+          output.data(result.items);
           await output.flushStdout();
           return;
         }

@@ -132,14 +132,13 @@ export function createHistoryCommand(): Command {
         })) as unknown as MessageRow[];
 
         if (messages.length === 0) {
-          return output.info('No messages found.');
+          return output.list([], { emptyMessage: 'No messages found.' });
         }
 
         const format = output.getCurrentFormat();
 
         if (format === 'json') {
-          // biome-ignore lint/suspicious/noConsole: CLI output
-          console.log(JSON.stringify(messages, null, 2));
+          output.data(messages);
           return;
         }
 

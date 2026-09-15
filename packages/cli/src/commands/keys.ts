@@ -306,7 +306,7 @@ async function handleList(client: OmniClient, options: ListOptions): Promise<voi
   });
 
   if (result.items.length === 0) {
-    output.info('No API keys found.');
+    output.list([], { emptyMessage: 'No API keys found.' });
     return;
   }
 
