@@ -10,6 +10,7 @@ import {
   webhookSignatureAlgorithms,
 } from '@omni/db';
 import { DEFAULT_IDEMPOTENCY_KEY_TEMPLATE, isValidIdempotencyKeyTemplate } from '../../lib/ingress-idempotency';
+import { PollConfigInputSchema } from '../../lib/poll-connector';
 import { z } from '../../lib/zod-openapi';
 import { ErrorSchema, SuccessSchema } from './common';
 
@@ -178,6 +179,14 @@ export const CreateWebhookSourceSchema = z.object({
       description:
         'Semantic event-type extraction (e.g. header X-GitHub-Event: push emits custom.{source}.push). ' +
         'Null or absent keeps the legacy collapsed custom.webhook.{source} type for every delivery.',
+    }),
+  pollConfig: PollConfigInputSchema.nullable()
+    .optional()
+    .openapi({
+      description:
+        'Supervised pull connector (#1186): run `command` (must live inside OMNI_POLL_COMMAND_DIR) every ' +
+        'intervalSeconds; each JSON stdout line becomes an emitType event deduped by dedupKeyTemplate. ' +
+        'Null makes the source push-only again.',
     }),
   enabled: z.boolean().default(true).openapi({ description: 'Whether enabled' }),
   // Connector lifecycle contract (#961)

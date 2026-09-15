@@ -26,12 +26,14 @@ import {
   type NewOmniEvent,
   type NewWebhookSource,
   type WebhookEventTypeMapping,
+  type WebhookPollConfig,
   type WebhookSource,
   omniEvents,
   webhookSources,
 } from '@omni/db';
 import { and, eq, isNotNull, sql } from 'drizzle-orm';
 import { deriveIdempotencyKey, resolvePayloadPath } from '../lib/ingress-idempotency';
+import { executePoll, isPollDue, resolveAllowedCommand } from '../lib/poll-connector';
 import { openCredentialField, sealCredentialField } from '../tenancy/sealed-credentials';
 import { currentTenantScope, scopedHandle } from '../tenancy/tenant-scope';
 import type { DeadLetterService } from './dead-letters';
@@ -152,6 +154,16 @@ export function resolveWebhookEventType(
   return token ? (`custom.${sourceName}.${token}` as CustomEventType) : fallback;
 }
 
+/** Validate a new/replaced poll config against the allowlist and schedule its first run now (#1186). */
+function armPollConfig(config: WebhookPollConfig): WebhookPollConfig {
+  resolveAllowedCommand(config.command);
+  const { command, intervalSeconds, emitType, dedupKeyTemplate, env } = config;
+  return { command, intervalSeconds, emitType, dedupKeyTemplate, env, nextRunAt: new Date().toISOString() };
+}
+
+/** Poll runs in flight in this process — one run at a time per source. */
+const pollsInFlight = new Set<string>();
+
 export class WebhookService {
   /**
    * The handle every query in this service uses.
@@ -230,6 +242,9 @@ export class WebhookService {
     let values = data.signatureSecret
       ? { ...data, signatureSecret: sealCredentialField(this.tenantId, data.signatureSecret) }
       : data;
+    if (values.pollConfig) {
+      values = { ...values, pollConfig: armPollConfig(values.pollConfig) };
+    }
     // Declaring a cadence arms liveness supervision with a full fresh window.
     if (values.expectedIntervalSeconds != null) {
       values = { ...values, livenessArmedAt: new Date(), livenessStatus: 'healthy' };
@@ -275,6 +290,9 @@ export class WebhookService {
     }
 
     await this.applyLivenessArming(id, data, patch);
+    if (data.pollConfig) {
+      patch.pollConfig = armPollConfig(data.pollConfig);
+    }
 
     const [updated] = await this.db
       .update(webhookSources)
@@ -814,6 +832,81 @@ export class WebhookService {
       livenessStatus: source.livenessStatus,
       expectedIntervalSeconds: source.expectedIntervalSeconds,
     };
+  }
+
+  /**
+   * One poll-connector tick (#1186) — called by the scheduler. Runs every
+   * enabled source whose poll is due, sequentially.
+   * ponytail: in-process in-flight guard only; add a guarded claim on
+   * `nextRunAt` if the API ever runs as more than one replica.
+   */
+  async runDuePolls(now = new Date()): Promise<number> {
+    const rows = await this.db
+      .select()
+      .from(webhookSources)
+      .where(and(eq(webhookSources.enabled, true), isNotNull(webhookSources.pollConfig)));
+    let ran = 0;
+    for (const row of rows) {
+      if (row.pollConfig && isPollDue(row.pollConfig, now) && !pollsInFlight.has(row.id)) {
+        await this.runPoll(row);
+        ran++;
+      }
+    }
+    return ran;
+  }
+
+  /** Manual run (`omni sources run-now`): runs immediately regardless of schedule/backoff. */
+  async runPollNow(id: string): Promise<WebhookSource> {
+    const source = await this.getById(id);
+    if (!source.pollConfig) {
+      throw new ValidationError(`Webhook source '${source.name}' is not a poll source`);
+    }
+    if (pollsInFlight.has(source.id)) {
+      throw new OmniError({
+        code: ERROR_CODES.CONFLICT,
+        message: `Poll for '${source.name}' is already running`,
+        context: { sourceName: source.name },
+      });
+    }
+    return this.runPoll(source);
+  }
+
+  /**
+   * Execute one poll: every stdout line rides the SAME keyed-trigger ingress as
+   * `omni webhooks trigger` (schema gate + #1109 claim), with the key derived
+   * from the source's dedup template (#958/#1178 grammar). A clean run
+   * heartbeats the source so `expectedIntervalSeconds` liveness just works.
+   */
+  private async runPoll(source: WebhookSource): Promise<WebhookSource> {
+    const config = source.pollConfig as WebhookPollConfig;
+    pollsInFlight.add(source.id);
+    try {
+      const next = await executePoll(config, async (payload, rawLine) => {
+        const idempotencyKey = deriveIdempotencyKey({
+          template: config.dedupKeyTemplate,
+          sourceName: source.name,
+          rawBody: rawLine,
+          payload,
+          headers: {},
+          eventType: config.emitType,
+          acrossEventTypes: source.idempotencyAcrossEventTypes,
+        });
+        const result = await this.trigger(config.emitType as CustomEventType, payload, { idempotencyKey });
+        return result.published && !result.duplicate;
+      });
+      if (next.lastRun?.exitCode === 0 && !next.lastRun.error) {
+        await this.heartbeat(source.name);
+      }
+      const [updated] = await this.db
+        .update(webhookSources)
+        .set({ pollConfig: next })
+        .where(eq(webhookSources.id, source.id))
+        .returning();
+      log.info('Poll connector run finished', { sourceName: source.name, ...next.lastRun, stdoutTail: undefined });
+      return updated ?? { ...source, pollConfig: next };
+    } finally {
+      pollsInFlight.delete(source.id);
+    }
   }
 
   /**

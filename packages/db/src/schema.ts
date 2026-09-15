@@ -2773,6 +2773,24 @@ export interface WebhookSignatureConfig {
 }
 
 /**
+ * Supervised pull connector (issue #1186). A source carrying this config is
+ * polled by the API: `command` runs every `intervalSeconds` (backing off
+ * exponentially on non-zero exit), and each JSON stdout line becomes an
+ * `emitType` event deduped by `dedupKeyTemplate`. `nextRunAt`,
+ * `consecutiveFailures` and `lastRun` are scheduler state.
+ */
+export interface WebhookPollConfig {
+  command: string;
+  intervalSeconds: number;
+  emitType: string;
+  dedupKeyTemplate: string;
+  env?: Record<string, string>;
+  nextRunAt?: string;
+  consecutiveFailures?: number;
+  lastRun?: { at: string; exitCode: number | null; stdoutTail: string; eventsEmitted: number; error?: string };
+}
+
+/**
  * Connector liveness state (issue #961). Only `healthy` and `stalled` exist —
  * a source without a declared cadence has NULL here (unsupervised). The
  * liveness sweeper is the ONLY writer of transitions; guarded updates
@@ -2875,6 +2893,9 @@ export const webhookSources = pgTable(
      * existing sources keep the opt-in pass-through until opted in.
      */
     strictSchemas: boolean('strict_schemas').notNull().default(false),
+
+    /** Supervised pull connector config + scheduler state (#1186). NULL = push-only source. */
+    pollConfig: jsonb('poll_config').$type<WebhookPollConfig>(),
 
     // State
     enabled: boolean('enabled').notNull().default(true),

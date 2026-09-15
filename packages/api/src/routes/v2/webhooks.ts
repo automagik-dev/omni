@@ -28,7 +28,11 @@ function sanitizeSource(source: WebhookSource): Omit<WebhookSource, 'signatureSe
   hasSignatureSecret: boolean;
 } {
   const { signatureSecret, ...rest } = source;
-  return { ...rest, hasSignatureSecret: Boolean(signatureSecret) };
+  // Poll env values may be credentials: expose only the variable names.
+  const pollConfig = rest.pollConfig?.env
+    ? { ...rest.pollConfig, env: Object.fromEntries(Object.keys(rest.pollConfig.env).map((k) => [k, '***'])) }
+    : rest.pollConfig;
+  return { ...rest, pollConfig, hasSignatureSecret: Boolean(signatureSecret) };
 }
 
 // Update webhook source schema
@@ -85,6 +89,14 @@ webhooksRoutes.patch('/webhook-sources/:id', zValidator('json', updateWebhookSou
 
   const source = await services.webhooks.update(id, data);
 
+  return c.json({ data: sanitizeSource(source) });
+});
+
+/**
+ * POST /webhook-sources/:id/run-now - Run a poll source's command immediately (#1186)
+ */
+webhooksRoutes.post('/webhook-sources/:id/run-now', async (c) => {
+  const source = await c.get('services').webhooks.runPollNow(c.req.param('id'));
   return c.json({ data: sanitizeSource(source) });
 });
 
