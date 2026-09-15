@@ -6356,7 +6356,7 @@ export async function setupAgentDispatcher(
         // ignored (last-ack position wins); for a recreated durable it
         // prevents arbitrary-time replay of an old event.
         startFrom: 'new',
-        concurrency: 5,
+        concurrency: 1, // effective value before #1181 forwarded it; raise deliberately
       },
     );
 
@@ -6423,7 +6423,7 @@ export async function setupAgentDispatcher(
         retryDelayMs: 1000,
         // 'new' (was 'last') — see #411 startFrom rationale.
         startFrom: 'new',
-        concurrency: 5,
+        concurrency: 1, // effective value before #1181 forwarded it; raise deliberately
       },
     );
 
@@ -6489,7 +6489,7 @@ export async function setupAgentDispatcher(
         retryDelayMs: 1000,
         // 'new' (was 'last') — see #411 startFrom rationale.
         startFrom: 'new',
-        concurrency: 5,
+        concurrency: 1, // effective value before #1181 forwarded it; raise deliberately
       },
     );
 
@@ -6544,7 +6544,7 @@ export async function setupAgentDispatcher(
         maxRetries: 1,
         // 'new' (was 'last') — see #411 startFrom rationale.
         startFrom: 'new',
-        concurrency: 10,
+        concurrency: 1, // effective value before #1181 forwarded it; raise deliberately
       },
     );
 

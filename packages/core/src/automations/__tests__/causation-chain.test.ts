@@ -137,6 +137,22 @@ describe('causation chain: webhook → emit_event → send (#957 acceptance)', (
     expect(hopEvent.metadata.correlationId).toBe(rootEvent.metadata.correlationId);
   });
 
+  test('emit_event carries a mid-flow trigger correlation, not its own id (#1184)', async () => {
+    await engine.start(bus, [
+      makeAutomation({
+        id: 'auto-emit',
+        triggerEventType: 'custom.flow.mid',
+        actions: [{ type: 'emit_event', config: { eventType: 'custom.flow.next' } }],
+      }),
+    ]);
+
+    await bus.publishGeneric('custom.flow.mid', {}, { correlationId: 'flow-1', causationId: 'root-1' });
+    await bus.idle();
+
+    const next = bus.journal.find((e) => e.type === 'custom.flow.next');
+    expect(next?.metadata.correlationId).toBe('flow-1');
+  });
+
   test('debounced execution stamps the LAST REAL event as parent, never the synthetic flush id', async () => {
     const debounced = makeAutomation({
       id: 'auto-debounced-causation',

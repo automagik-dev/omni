@@ -15,6 +15,7 @@ import type {
   GroupParticipantUpdateResult,
   GroupSetting,
   HistorySyncMessage,
+  InboundSubStageTimings,
   InstanceConfig,
   OutgoingMessage,
   PluginContext,
@@ -1098,13 +1099,23 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * @param instanceId - Instance to disconnect
    */
   async disconnect(instanceId: string): Promise<void> {
+    // Reset all connection tracking state (attempt counter + pending reconnect timer)
+    // even when no socket is live — a reconnect loop deletes the socket between attempts (#1169)
+    resetConnectionState(instanceId);
+
+    const config = this.instances.get(instanceId)?.config;
+    if (config) {
+      await this.updateInstanceStatus(instanceId, config, {
+        state: 'disconnected',
+        since: new Date(),
+        message: 'User requested disconnect',
+      });
+    }
+
     const sock = this.sockets.get(instanceId);
     if (!sock) {
       return;
     }
-
-    // Reset all connection tracking state (don't auto-reconnect after manual disconnect)
-    resetConnectionState(instanceId);
 
     // Remove event listeners before closing to prevent ghost reconnects
     sock.ev.removeAllListeners('connection.update');
@@ -3082,6 +3093,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     rawMessage: WAMessage,
     isFromMe: boolean,
     platformTimestamp?: number,
+    subStages?: InboundSubStageTimings,
   ): Promise<void> {
     // Note: We process fromMe messages to capture messages sent from the phone
     // (synced via WhatsApp multi-device). Messages sent via API emit message.sent separately.
@@ -3183,7 +3195,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     this.enrichPayloadWithChatName(extendedPayload, instanceId, chatId);
 
     // Journey timing: capture T0 (platform) and T1 (plugin received)
-    const timings = platformTimestamp ? this.captureInboundTimings(platformTimestamp) : undefined;
+    const timings = platformTimestamp ? this.captureInboundTimings(platformTimestamp, subStages) : undefined;
 
     const correlationId = await this.emitMessageReceived({
       instanceId,

@@ -102,4 +102,21 @@ export const SLACK_CAPABILITIES: ChannelCapabilities = {
   maxButtonsPerRow: 5,
   maxRowsPerMessage: 50, // Slack allows up to 50 blocks per message
   maxSelectOptions: 100,
+  events: {
+    emits: [
+      'agent.run.cancel_requested',
+      'instance.connected',
+      'instance.disconnected',
+      'message.failed',
+      'message.pinned',
+      'message.received',
+      'message.sent',
+      'message.unpinned',
+      'reaction.received',
+      'reaction.removed',
+    ],
+    edits: false,
+    deletes: false,
+    idempotency: true,
+  },
 };

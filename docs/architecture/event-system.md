@@ -968,6 +968,8 @@ Semantics:
 Surfaces:
 
 - REST: `/api/v2/events/consumers[...]`
+- Fan-out by default (each name = one cursor); `shared: true` / `--shared` makes
+  a name a competing-consumer queue (leased pages, at-least-once) — see the runbook.
 - CLI: `omni events consumers create|ls|inspect|rm`,
   `omni events follow --consumer <name>` (tail + ack as you go), and the
   one-shot `omni events wait` (ephemeral, no registration).

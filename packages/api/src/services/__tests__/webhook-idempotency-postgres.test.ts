@@ -194,6 +194,52 @@ postgresDescribe('webhook ingress idempotency (real PostgreSQL)', () => {
     expect(published).toHaveLength(2);
   });
 
+  test('entity-keyed custom template keeps different event types distinct (#1178)', async () => {
+    const published: PublishedEvent[] = [];
+    const service = new WebhookService(db, recordingBus(published));
+    await service.create({
+      name: 'mysource',
+      idempotencyKeyTemplate: 'mysource:{payload.order_id}',
+      eventTypeMapping: { source: 'body', path: 'kind' },
+    });
+    const send = (body: Record<string, unknown>) =>
+      service.receive('mysource', body, {}, { rawBody: JSON.stringify(body) });
+
+    const paid = await send({ kind: 'order.paid', order_id: 'A1' });
+    const shipped = await send({ kind: 'order.shipped', order_id: 'A1' });
+    const paid2 = await send({ kind: 'order.paid', order_id: 'A2' });
+    const redelivered = await send({ kind: 'order.shipped', order_id: 'A1' });
+
+    expect(paid.duplicate).toBeUndefined();
+    expect(shipped.duplicate).toBeUndefined(); // previously dropped as a duplicate
+    expect(paid2.duplicate).toBeUndefined();
+    expect(redelivered.duplicate).toBe(true); // same type + entity still dedupes
+    expect(published.map((e) => e.type)).toEqual([paid.eventType, shipped.eventType, paid2.eventType]);
+
+    const rows = await db.select().from(omniEvents).where(eq(omniEvents.id, shipped.eventId));
+    expect(rows[0]?.idempotencyKey).toBe(`${shipped.eventType}:mysource:A1`);
+  });
+
+  test('idempotencyAcrossEventTypes opts in to cross-type collapsing (#1178)', async () => {
+    const published: PublishedEvent[] = [];
+    const service = new WebhookService(db, recordingBus(published));
+    await service.create({
+      name: 'mysource-collapse',
+      idempotencyKeyTemplate: 'mysource-collapse:{payload.order_id}',
+      idempotencyAcrossEventTypes: true,
+      eventTypeMapping: { source: 'body', path: 'kind' },
+    });
+    const send = (body: Record<string, unknown>) =>
+      service.receive('mysource-collapse', body, {}, { rawBody: JSON.stringify(body) });
+
+    const paid = await send({ kind: 'order.paid', order_id: 'A1' });
+    const shipped = await send({ kind: 'order.shipped', order_id: 'A1' });
+
+    expect(paid.duplicate).toBeUndefined();
+    expect(shipped.duplicate).toBe(true);
+    expect(published).toHaveLength(1);
+  });
+
   test('a failed publish releases the claim so the provider retry creates the event', async () => {
     const failNext = { count: 1 };
     const published: PublishedEvent[] = [];

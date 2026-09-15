@@ -346,11 +346,16 @@ function buildReadyBody(turn: {
   delivered: boolean;
   lastBubble: string;
   bubbles: string[];
-  handoff: HandoffPlan['fields'] | null;
+  handoff: HandoffPlan | null;
+  mode: AscFlowHandoffMode;
 }): AscFlowTurnReady {
+  // On a flow-mode handoff turn nothing renders `{#resposta}` to the person
+  // (`dec_handoff` routes straight to the Genesys node), so the slot carries
+  // the session subject instead: `session.subject = {#resposta}`.
+  const subject = turn.handoff && turn.mode === 'flow' ? turn.handoff.subject : '';
   return {
     pronto: 1,
-    resposta: turn.delivered ? '' : turn.lastBubble || OUTBOUND_MEDIA_FALLBACK_TEXT,
+    resposta: subject || (turn.delivered ? '' : turn.lastBubble || OUTBOUND_MEDIA_FALLBACK_TEXT),
     hand_off: turn.handoff ? 'sim' : 'nao',
     bolhas: turn.bubbles,
     // The handoff fields are ALWAYS present, empty when the turn does not hand
@@ -362,7 +367,7 @@ function buildReadyBody(turn: {
     // body carried neither. A stable shape costs two empty strings.
     fila_vq: '',
     motivo_transf_vq: '',
-    ...(turn.handoff ?? {}),
+    ...(turn.handoff?.fields ?? {}),
   };
 }
 
@@ -569,7 +574,7 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       this.resolveTurn(
         state,
         to,
-        buildReadyBody({ delivered, lastBubble, bubbles, handoff }),
+        buildReadyBody({ delivered, lastBubble, bubbles, handoff, mode: state.config.ascFlowHandoffMode }),
         answering,
         correlationId,
       );
@@ -714,10 +719,10 @@ export class AscFlowPlugin extends BaseChannelPlugin {
     cod: number,
     meta: Record<string, unknown>,
     farewell: string,
-  ): Promise<HandoffPlan['fields'] | null> {
+  ): Promise<HandoffPlan | null> {
     const plan = planHandoff(state.config.ascFlowHandoffMode, meta, state.config.ascFlowHandoffServico, this.logger);
     if (!plan) return null;
-    if (!plan.transfer) return plan.fields;
+    if (!plan.transfer) return plan;
 
     if (farewell.trim()) {
       try {
@@ -743,7 +748,7 @@ export class AscFlowPlugin extends BaseChannelPlugin {
         cod_prioridade: plan.transfer.codPrioridade,
         msgTransferencia: false,
       });
-      return plan.fields;
+      return plan;
     } catch (err) {
       this.logger.warn('[asc-flow] transferirHumano refused; turn answers without handoff', {
         instanceId,

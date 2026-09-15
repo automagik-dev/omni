@@ -80,6 +80,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List config-mutation audit entries
+         * @description One entry per POST/PATCH/PUT/DELETE on instances, agents, providers, routes, automations, API keys and settings. Reads are never recorded. Scope: `audit:read`.
+         */
+        get: operations["listConfigAudit"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/audit/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get one config-mutation audit entry
+         * @description Scope: `audit:read`.
+         */
+        get: operations["getConfigAudit"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/validate": {
         parameters: {
             query?: never;
@@ -1115,7 +1155,7 @@ export interface paths {
         put?: never;
         /**
          * Trigger custom event
-         * @description Manually trigger a custom event.
+         * @description Manually trigger a custom event. The effective payload ceiling is the NATS `max_payload` (1 MB by default), not OMNI_API_BODY_LIMIT_MB; larger events are rejected with 413. For large bodies, store the body elsewhere (e.g. object storage) and publish a reference to it.
          */
         post: operations["triggerEvent"];
         delete?: never;
@@ -1678,6 +1718,26 @@ export interface paths {
          * @description Manually trigger scheduled operations.
          */
         post: operations["runScheduledOps"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/channels/capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Channel capability matrix
+         * @description Event types and guarantees (edits, deletes, idempotency) each loaded channel plugin declares. Declarations are verified against the channel code by a static test.
+         */
+        get: operations["listChannelCapabilities"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3031,6 +3091,38 @@ export interface components {
             /** @description Optional success message */
             message?: string;
         };
+        ConfigAuditLog: {
+            /** Format: uuid */
+            id: string;
+            /** @description Acting API key id */
+            apiKeyId: string | null;
+            /** @description Acting API key name */
+            apiKeyName: string | null;
+            /** @description X-Omni-Actor header, e.g. cli:alice or claude-session:<id> */
+            actor: string | null;
+            requestId: string | null;
+            /** @description Client IP (X-Forwarded-For / X-Real-IP / socket) */
+            ipAddress: string | null;
+            userAgent: string | null;
+            method: string;
+            path: string;
+            statusCode: number;
+            /** @description e.g. instance.create, instance.update, instance.connect */
+            action: string;
+            /** @description instance | agent | provider | route | automation | api_key | setting */
+            targetType: string;
+            targetId: string | null;
+            changedFields: string[];
+            /** @description Before/after per changed field. Secret-bearing values appear only as sha256:<prefix> fingerprints. */
+            changes: {
+                [key: string]: {
+                    before?: unknown;
+                    after?: unknown;
+                };
+            };
+            /** Format: date-time */
+            createdAt: string;
+        };
         AuthValidateResponse: {
             data: {
                 /** @description Whether the API key is valid */
@@ -3218,7 +3310,7 @@ export interface components {
             agentId?: string | null;
             /**
              * Format: uuid
-             * @description Provider ID (agent provider)
+             * @description Provider ID of the assigned agent (read-only; set via the agent)
              */
             agentProviderId?: string | null;
             /** @description Agent timeout in seconds */
@@ -3922,6 +4014,10 @@ export interface components {
             avgAgentTimeMs: number | null;
             /** @description Sum of agent run cost (USD) stamped on events in range */
             totalCostUsd: number;
+            /** @description Agent run cost (USD) grouped by event type, for events with a stamped cost */
+            costByEventType: {
+                [key: string]: number;
+            };
             /** @description Count by content type */
             messageTypes: {
                 [key: string]: number;
@@ -4472,6 +4568,8 @@ export interface components {
             hasSignatureSecret: boolean;
             /** @description Idempotency key derivation template */
             idempotencyKeyTemplate: string;
+            /** @description Whether custom-template idempotency keys are shared across event types (opt-in collapsing) */
+            idempotencyAcrossEventTypes: boolean;
             /** @description Redeliveries acked without creating a second event */
             totalDuplicates: number;
             /** @description Strict schema mode: deliveries resolving to an event type with no enabled registered schema are refused and dead-lettered with reason schema_not_registered */
@@ -4555,6 +4653,8 @@ export interface components {
             signatureSecret?: string | null;
             /** @description How the delivery-identity idempotency key is derived for this source. Placeholders: {source}, {sha256(body)}, {headers.<name>}, {payload.<dot.path>}. A delivery whose key is already journaled is acked (200, duplicate: true) without creating a second event. Defaults to "{source}:{sha256(body)}". This dedupes provider REDELIVERY, not semantic identity. */
             idempotencyKeyTemplate?: string;
+            /** @description By default a custom idempotency key is prefixed with the resolved event type, so different event types for the same entity never collide. Set true to collapse keys across event types (a second type for the same rendered key is acked as a duplicate). Defaults to false. */
+            idempotencyAcrossEventTypes?: boolean;
             /** @description Strict schema mode (RFC #925 G1 policy switch): when true, a delivery resolving to an event type with no enabled registered schema is refused and dead-lettered with reason schema_not_registered (manual retry only) instead of passing through. Defaults to false (opt-in pass-through). Recommended true for NEW sources — they have no legacy emitters to grandfather. */
             strictSchemas?: boolean;
             /** @description Semantic event-type extraction (e.g. header X-GitHub-Event: push emits custom.{source}.push). Null or absent keeps the legacy collapsed custom.webhook.{source} type for every delivery. */
@@ -4575,6 +4675,17 @@ export interface components {
                 /** @description Dot-path to the event name in the payload (e.g. "event"); numeric segments index arrays. 1-200 characters */
                 path: string;
             } | unknown;
+            /** @description Supervised pull connector (#1186): run `command` (must live inside OMNI_POLL_COMMAND_DIR) every intervalSeconds; each JSON stdout line becomes an emitType event deduped by dedupKeyTemplate. Null makes the source push-only again. */
+            pollConfig?: {
+                command: string;
+                intervalSeconds: number;
+                emitType: string;
+                /** @default {source}:{sha256(body)} */
+                dedupKeyTemplate: string;
+                env?: {
+                    [key: string]: string;
+                };
+            } | null;
             /**
              * @description Whether enabled
              * @default true
@@ -5592,6 +5703,20 @@ export interface components {
                 deleted: number;
             };
         };
+        ChannelCapabilities: {
+            /** @description Channel type (e.g. whatsapp-baileys) */
+            id: string;
+            /** @description Human-readable channel name */
+            name: string;
+            /** @description Core event types the channel publishes; null when the plugin declares none */
+            emits: string[] | null;
+            /** @description true/false as established from the channel's code; 'unknown' when undeclared */
+            edits: boolean | "unknown";
+            /** @description true/false as established from the channel's code; 'unknown' when undeclared */
+            deletes: boolean | "unknown";
+            /** @description true/false as established from the channel's code; 'unknown' when undeclared */
+            idempotency: boolean | "unknown";
+        };
         EventSchema: {
             /**
              * Format: uuid
@@ -5675,6 +5800,8 @@ export interface components {
             }[] | null;
             /** @description Last acked journal_seq; delivery resumes strictly after it */
             cursor: number;
+            /** @description true = competing consumers (pullers on this name split the stream); false = own cursor (fan-out) */
+            shared: boolean;
             /** @description Highest journal_seq currently in the journal */
             head: number;
             /** @description head - cursor (all journal rows past the cursor, not only matches) */
@@ -5716,6 +5843,8 @@ export interface components {
              * @enum {string}
              */
             startFrom?: "now" | "beginning";
+            /** @description Competing consumers (#1188). false (default) = fan-out: every consumer name has its own cursor and sees every event. true = N pullers on THIS name split the stream: each pull leases a page to one puller, ack(leaseId) releases it, an unacked lease is redelivered after leaseMs (at-least-once). */
+            shared?: boolean;
         };
         ConsumerPullResult: {
             /** @description Consumer name */
@@ -5732,6 +5861,8 @@ export interface components {
             hasMore: boolean;
             /** @description A full scan window matched nothing; the stored cursor was advanced past it (#1128) */
             scanExhausted: boolean;
+            /** @description Shared consumers only: ack this lease once the items are handled (absent when nothing delivered) */
+            leaseId?: string;
         };
         Automation: {
             /**
@@ -5835,6 +5966,8 @@ export interface components {
                     timeoutMs?: number;
                     /** @description Store agent response as variable for chaining (e.g., "agentResponse") */
                     responseAs?: string;
+                    /** @description Await the agent run (default true). False = return the runId once dispatched; outcome published as system.agent.run_completed. Incompatible with responseAs */
+                    waitForResponse?: boolean;
                 };
             })[];
             /** @description Debounce config */
@@ -5856,6 +5989,8 @@ export interface components {
             priority: number;
             /** @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero */
             transactionalEmissions: boolean;
+            /** @description Loop guard opt-in (#1148): act on events sent by one of the tenant’s own instances */
+            allowInstanceSenders: boolean;
             /** @description Per-automation concurrency limit (#1108). null = queued per instance with the engine default; set = a queue private to this automation, 1 being strict single-flight */
             maxConcurrency: number | null;
             /** @description Template over the event payload partitioning this automation’s queue (#1108), e.g. "{{payload.from.id}}" to serialize per chat; null = one queue for the whole automation */
@@ -5974,6 +6109,8 @@ export interface components {
                     timeoutMs?: number;
                     /** @description Store agent response as variable for chaining (e.g., "agentResponse") */
                     responseAs?: string;
+                    /** @description Await the agent run (default true). False = return the runId once dispatched; outcome published as system.agent.run_completed. Incompatible with responseAs */
+                    waitForResponse?: boolean;
                 };
             })[];
             /** @description Debounce config */
@@ -6004,6 +6141,11 @@ export interface components {
              * @default false
              */
             transactionalEmissions: boolean;
+            /**
+             * @description Loop guard opt-in (#1148): by default events sent by one of the tenant’s own instances (payload.senderInstanceId) are skipped. True = act on them anyway
+             * @default false
+             */
+            allowInstanceSenders: boolean;
             /** @description Per-automation concurrency limit (#1108). Omit/null = today’s per-instance queueing with the engine default; 1 = strict single-flight, which is what a read-before-write action needs */
             maxConcurrency?: number | null;
             /** @description Template over the event payload partitioning this automation’s queue (#1108), e.g. "{{payload.from.id}}" to serialize per chat; omit/null = one queue for the whole automation */
@@ -6255,6 +6397,12 @@ export interface components {
             latencies: {
                 /** @description T1 - T0 (ms) */
                 channelProcessing?: number;
+                /** @description T0a - T0 (ms) */
+                platformDelivery?: number;
+                /** @description T0b - T0a (ms) */
+                mediaDownload?: number;
+                /** @description T1 - T0b (ms) */
+                inboundEnrichment?: number;
                 /** @description T2 - T1 (ms) */
                 eventPublish?: number;
                 /** @description T3 - T2 (ms) */
@@ -6290,6 +6438,11 @@ export interface components {
             completedJourneys: number;
             /** @description Currently active journeys */
             activeJourneys: number;
+            /** @description Completed journeys by terminal path: no agent (T4) vs agent dispatch (T5) */
+            completedByPath: {
+                noAgent: number;
+                agent: number;
+            };
             /** @description Percentile stats per latency stage */
             stages: {
                 [key: string]: {
@@ -7715,6 +7868,167 @@ export interface operations {
             };
         };
     };
+    listConfigAudit: {
+        parameters: {
+            query?: {
+                targetType?: string;
+                target?: string;
+                actor?: string;
+                since?: string;
+                limit?: number;
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Audit entries, newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: {
+                            /** Format: uuid */
+                            id: string;
+                            /** @description Acting API key id */
+                            apiKeyId: string | null;
+                            /** @description Acting API key name */
+                            apiKeyName: string | null;
+                            /** @description X-Omni-Actor header, e.g. cli:alice or claude-session:<id> */
+                            actor: string | null;
+                            requestId: string | null;
+                            /** @description Client IP (X-Forwarded-For / X-Real-IP / socket) */
+                            ipAddress: string | null;
+                            userAgent: string | null;
+                            method: string;
+                            path: string;
+                            statusCode: number;
+                            /** @description e.g. instance.create, instance.update, instance.connect */
+                            action: string;
+                            /** @description instance | agent | provider | route | automation | api_key | setting */
+                            targetType: string;
+                            targetId: string | null;
+                            changedFields: string[];
+                            /** @description Before/after per changed field. Secret-bearing values appear only as sha256:<prefix> fingerprints. */
+                            changes: {
+                                [key: string]: {
+                                    before?: unknown;
+                                    after?: unknown;
+                                };
+                            };
+                            /** Format: date-time */
+                            createdAt: string;
+                        }[];
+                        meta: {
+                            hasMore: boolean;
+                            cursor: string | null;
+                        };
+                    };
+                };
+            };
+            /** @description Invalid query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    getConfigAudit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Audit entry */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /** Format: uuid */
+                            id: string;
+                            /** @description Acting API key id */
+                            apiKeyId: string | null;
+                            /** @description Acting API key name */
+                            apiKeyName: string | null;
+                            /** @description X-Omni-Actor header, e.g. cli:alice or claude-session:<id> */
+                            actor: string | null;
+                            requestId: string | null;
+                            /** @description Client IP (X-Forwarded-For / X-Real-IP / socket) */
+                            ipAddress: string | null;
+                            userAgent: string | null;
+                            method: string;
+                            path: string;
+                            statusCode: number;
+                            /** @description e.g. instance.create, instance.update, instance.connect */
+                            action: string;
+                            /** @description instance | agent | provider | route | automation | api_key | setting */
+                            targetType: string;
+                            targetId: string | null;
+                            changedFields: string[];
+                            /** @description Before/after per changed field. Secret-bearing values appear only as sha256:<prefix> fingerprints. */
+                            changes: {
+                                [key: string]: {
+                                    before?: unknown;
+                                    after?: unknown;
+                                };
+                            };
+                            /** Format: date-time */
+                            createdAt: string;
+                        };
+                    };
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
     validateApiKey: {
         parameters: {
             query?: never;
@@ -8054,7 +8368,7 @@ export interface operations {
                             agentId?: string | null;
                             /**
                              * Format: uuid
-                             * @description Provider ID (agent provider)
+                             * @description Provider ID of the assigned agent (read-only; set via the agent)
                              */
                             agentProviderId?: string | null;
                             /** @description Agent timeout in seconds */
@@ -8248,7 +8562,7 @@ export interface operations {
                             agentId?: string | null;
                             /**
                              * Format: uuid
-                             * @description Provider ID (agent provider)
+                             * @description Provider ID of the assigned agent (read-only; set via the agent)
                              */
                             agentProviderId?: string | null;
                             /** @description Agent timeout in seconds */
@@ -8382,7 +8696,7 @@ export interface operations {
                             agentId?: string | null;
                             /**
                              * Format: uuid
-                             * @description Provider ID (agent provider)
+                             * @description Provider ID of the assigned agent (read-only; set via the agent)
                              */
                             agentProviderId?: string | null;
                             /** @description Agent timeout in seconds */
@@ -8641,7 +8955,7 @@ export interface operations {
                             agentId?: string | null;
                             /**
                              * Format: uuid
-                             * @description Provider ID (agent provider)
+                             * @description Provider ID of the assigned agent (read-only; set via the agent)
                              */
                             agentProviderId?: string | null;
                             /** @description Agent timeout in seconds */
@@ -10955,6 +11269,10 @@ export interface operations {
                         avgAgentTimeMs: number | null;
                         /** @description Sum of agent run cost (USD) stamped on events in range */
                         totalCostUsd: number;
+                        /** @description Agent run cost (USD) grouped by event type, for events with a stamped cost */
+                        costByEventType: {
+                            [key: string]: number;
+                        };
                         /** @description Count by content type */
                         messageTypes: {
                             [key: string]: number;
@@ -12356,6 +12674,8 @@ export interface operations {
                             hasSignatureSecret: boolean;
                             /** @description Idempotency key derivation template */
                             idempotencyKeyTemplate: string;
+                            /** @description Whether custom-template idempotency keys are shared across event types (opt-in collapsing) */
+                            idempotencyAcrossEventTypes: boolean;
                             /** @description Redeliveries acked without creating a second event */
                             totalDuplicates: number;
                             /** @description Strict schema mode: deliveries resolving to an event type with no enabled registered schema are refused and dead-lettered with reason schema_not_registered */
@@ -12453,6 +12773,8 @@ export interface operations {
                     signatureSecret?: string | null;
                     /** @description How the delivery-identity idempotency key is derived for this source. Placeholders: {source}, {sha256(body)}, {headers.<name>}, {payload.<dot.path>}. A delivery whose key is already journaled is acked (200, duplicate: true) without creating a second event. Defaults to "{source}:{sha256(body)}". This dedupes provider REDELIVERY, not semantic identity. */
                     idempotencyKeyTemplate?: string;
+                    /** @description By default a custom idempotency key is prefixed with the resolved event type, so different event types for the same entity never collide. Set true to collapse keys across event types (a second type for the same rendered key is acked as a duplicate). Defaults to false. */
+                    idempotencyAcrossEventTypes?: boolean;
                     /** @description Strict schema mode (RFC #925 G1 policy switch): when true, a delivery resolving to an event type with no enabled registered schema is refused and dead-lettered with reason schema_not_registered (manual retry only) instead of passing through. Defaults to false (opt-in pass-through). Recommended true for NEW sources — they have no legacy emitters to grandfather. */
                     strictSchemas?: boolean;
                     /** @description Semantic event-type extraction (e.g. header X-GitHub-Event: push emits custom.{source}.push). Null or absent keeps the legacy collapsed custom.webhook.{source} type for every delivery. */
@@ -12473,6 +12795,17 @@ export interface operations {
                         /** @description Dot-path to the event name in the payload (e.g. "event"); numeric segments index arrays. 1-200 characters */
                         path: string;
                     } | unknown;
+                    /** @description Supervised pull connector (#1186): run `command` (must live inside OMNI_POLL_COMMAND_DIR) every intervalSeconds; each JSON stdout line becomes an emitType event deduped by dedupKeyTemplate. Null makes the source push-only again. */
+                    pollConfig?: {
+                        command: string;
+                        intervalSeconds: number;
+                        emitType: string;
+                        /** @default {source}:{sha256(body)} */
+                        dedupKeyTemplate?: string;
+                        env?: {
+                            [key: string]: string;
+                        };
+                    } | null;
                     /**
                      * @description Whether enabled
                      * @default true
@@ -12549,6 +12882,8 @@ export interface operations {
                             hasSignatureSecret: boolean;
                             /** @description Idempotency key derivation template */
                             idempotencyKeyTemplate: string;
+                            /** @description Whether custom-template idempotency keys are shared across event types (opt-in collapsing) */
+                            idempotencyAcrossEventTypes: boolean;
                             /** @description Redeliveries acked without creating a second event */
                             totalDuplicates: number;
                             /** @description Strict schema mode: deliveries resolving to an event type with no enabled registered schema are refused and dead-lettered with reason schema_not_registered */
@@ -12699,6 +13034,8 @@ export interface operations {
                             hasSignatureSecret: boolean;
                             /** @description Idempotency key derivation template */
                             idempotencyKeyTemplate: string;
+                            /** @description Whether custom-template idempotency keys are shared across event types (opt-in collapsing) */
+                            idempotencyAcrossEventTypes: boolean;
                             /** @description Redeliveries acked without creating a second event */
                             totalDuplicates: number;
                             /** @description Strict schema mode: deliveries resolving to an event type with no enabled registered schema are refused and dead-lettered with reason schema_not_registered */
@@ -12867,6 +13204,8 @@ export interface operations {
                     signatureSecret?: string | null;
                     /** @description How the delivery-identity idempotency key is derived for this source. Placeholders: {source}, {sha256(body)}, {headers.<name>}, {payload.<dot.path>}. A delivery whose key is already journaled is acked (200, duplicate: true) without creating a second event. Defaults to "{source}:{sha256(body)}". This dedupes provider REDELIVERY, not semantic identity. */
                     idempotencyKeyTemplate?: string;
+                    /** @description By default a custom idempotency key is prefixed with the resolved event type, so different event types for the same entity never collide. Set true to collapse keys across event types (a second type for the same rendered key is acked as a duplicate). Defaults to false. */
+                    idempotencyAcrossEventTypes?: boolean;
                     /** @description Strict schema mode (RFC #925 G1 policy switch): when true, a delivery resolving to an event type with no enabled registered schema is refused and dead-lettered with reason schema_not_registered (manual retry only) instead of passing through. Defaults to false (opt-in pass-through). Recommended true for NEW sources — they have no legacy emitters to grandfather. */
                     strictSchemas?: boolean;
                     /** @description Semantic event-type extraction (e.g. header X-GitHub-Event: push emits custom.{source}.push). Null or absent keeps the legacy collapsed custom.webhook.{source} type for every delivery. */
@@ -12887,6 +13226,17 @@ export interface operations {
                         /** @description Dot-path to the event name in the payload (e.g. "event"); numeric segments index arrays. 1-200 characters */
                         path: string;
                     } | unknown;
+                    /** @description Supervised pull connector (#1186): run `command` (must live inside OMNI_POLL_COMMAND_DIR) every intervalSeconds; each JSON stdout line becomes an emitType event deduped by dedupKeyTemplate. Null makes the source push-only again. */
+                    pollConfig?: {
+                        command: string;
+                        intervalSeconds: number;
+                        emitType: string;
+                        /** @default {source}:{sha256(body)} */
+                        dedupKeyTemplate?: string;
+                        env?: {
+                            [key: string]: string;
+                        };
+                    } | null;
                     /**
                      * @description Whether enabled
                      * @default true
@@ -12963,6 +13313,8 @@ export interface operations {
                             hasSignatureSecret: boolean;
                             /** @description Idempotency key derivation template */
                             idempotencyKeyTemplate: string;
+                            /** @description Whether custom-template idempotency keys are shared across event types (opt-in collapsing) */
+                            idempotencyAcrossEventTypes: boolean;
                             /** @description Redeliveries acked without creating a second event */
                             totalDuplicates: number;
                             /** @description Strict schema mode: deliveries resolving to an event type with no enabled registered schema are refused and dead-lettered with reason schema_not_registered */
@@ -13331,6 +13683,27 @@ export interface operations {
             };
             /** @description Validation error */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Event payload exceeds NATS max_payload */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -17079,6 +17452,41 @@ export interface operations {
             };
         };
     };
+    listChannelCapabilities: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Capability matrix */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: {
+                            /** @description Channel type (e.g. whatsapp-baileys) */
+                            id: string;
+                            /** @description Human-readable channel name */
+                            name: string;
+                            /** @description Core event types the channel publishes; null when the plugin declares none */
+                            emits: string[] | null;
+                            /** @description true/false as established from the channel's code; 'unknown' when undeclared */
+                            edits: boolean | "unknown";
+                            /** @description true/false as established from the channel's code; 'unknown' when undeclared */
+                            deletes: boolean | "unknown";
+                            /** @description true/false as established from the channel's code; 'unknown' when undeclared */
+                            idempotency: boolean | "unknown";
+                        }[];
+                    };
+                };
+            };
+        };
+    };
     listEventSchemas: {
         parameters: {
             query?: {
@@ -17416,6 +17824,8 @@ export interface operations {
                             }[] | null;
                             /** @description Last acked journal_seq; delivery resumes strictly after it */
                             cursor: number;
+                            /** @description true = competing consumers (pullers on this name split the stream); false = own cursor (fan-out) */
+                            shared: boolean;
                             /** @description Highest journal_seq currently in the journal */
                             head: number;
                             /** @description head - cursor (all journal rows past the cursor, not only matches) */
@@ -17471,6 +17881,8 @@ export interface operations {
                      * @enum {string}
                      */
                     startFrom?: "now" | "beginning";
+                    /** @description Competing consumers (#1188). false (default) = fan-out: every consumer name has its own cursor and sees every event. true = N pullers on THIS name split the stream: each pull leases a page to one puller, ack(leaseId) releases it, an unacked lease is redelivered after leaseMs (at-least-once). */
+                    shared?: boolean;
                 };
             };
         };
@@ -17508,6 +17920,8 @@ export interface operations {
                             }[] | null;
                             /** @description Last acked journal_seq; delivery resumes strictly after it */
                             cursor: number;
+                            /** @description true = competing consumers (pullers on this name split the stream); false = own cursor (fan-out) */
+                            shared: boolean;
                             /** @description Highest journal_seq currently in the journal */
                             head: number;
                             /** @description head - cursor (all journal rows past the cursor, not only matches) */
@@ -17595,6 +18009,8 @@ export interface operations {
                             }[] | null;
                             /** @description Last acked journal_seq; delivery resumes strictly after it */
                             cursor: number;
+                            /** @description true = competing consumers (pullers on this name split the stream); false = own cursor (fan-out) */
+                            shared: boolean;
                             /** @description Highest journal_seq currently in the journal */
                             head: number;
                             /** @description head - cursor (all journal rows past the cursor, not only matches) */
@@ -17688,6 +18104,7 @@ export interface operations {
             query?: {
                 limit?: number;
                 waitMs?: number | null;
+                leaseMs?: number;
             };
             header?: never;
             path: {
@@ -17718,6 +18135,8 @@ export interface operations {
                         hasMore: boolean;
                         /** @description A full scan window matched nothing; the stored cursor was advanced past it (#1128) */
                         scanExhausted: boolean;
+                        /** @description Shared consumers only: ack this lease once the items are handled (absent when nothing delivered) */
+                        leaseId?: string;
                     };
                 };
             };
@@ -17757,7 +18176,12 @@ export interface operations {
             content: {
                 "application/json": {
                     /** @description The journal_seq to advance to (a pull result's "cursor"). Monotonic: equal = no-op, lower = 400 */
-                    cursor: number | null;
+                    cursor?: number | null;
+                    /**
+                     * Format: uuid
+                     * @description Shared consumers: the pull result's leaseId (required instead of cursor)
+                     */
+                    leaseId?: string;
                 };
             };
         };
@@ -17795,6 +18219,8 @@ export interface operations {
                             }[] | null;
                             /** @description Last acked journal_seq; delivery resumes strictly after it */
                             cursor: number;
+                            /** @description true = competing consumers (pullers on this name split the stream); false = own cursor (fan-out) */
+                            shared: boolean;
                             /** @description Highest journal_seq currently in the journal */
                             head: number;
                             /** @description head - cursor (all journal rows past the cursor, not only matches) */
@@ -18010,6 +18436,8 @@ export interface operations {
                                     timeoutMs?: number;
                                     /** @description Store agent response as variable for chaining (e.g., "agentResponse") */
                                     responseAs?: string;
+                                    /** @description Await the agent run (default true). False = return the runId once dispatched; outcome published as system.agent.run_completed. Incompatible with responseAs */
+                                    waitForResponse?: boolean;
                                 };
                             })[];
                             /** @description Debounce config */
@@ -18031,6 +18459,8 @@ export interface operations {
                             priority: number;
                             /** @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero */
                             transactionalEmissions: boolean;
+                            /** @description Loop guard opt-in (#1148): act on events sent by one of the tenant’s own instances */
+                            allowInstanceSenders: boolean;
                             /** @description Per-automation concurrency limit (#1108). null = queued per instance with the engine default; set = a queue private to this automation, 1 being strict single-flight */
                             maxConcurrency: number | null;
                             /** @description Template over the event payload partitioning this automation’s queue (#1108), e.g. "{{payload.from.id}}" to serialize per chat; null = one queue for the whole automation */
@@ -18163,6 +18593,8 @@ export interface operations {
                             timeoutMs?: number;
                             /** @description Store agent response as variable for chaining (e.g., "agentResponse") */
                             responseAs?: string;
+                            /** @description Await the agent run (default true). False = return the runId once dispatched; outcome published as system.agent.run_completed. Incompatible with responseAs */
+                            waitForResponse?: boolean;
                         };
                     })[];
                     /** @description Debounce config */
@@ -18193,6 +18625,11 @@ export interface operations {
                      * @default false
                      */
                     transactionalEmissions?: boolean;
+                    /**
+                     * @description Loop guard opt-in (#1148): by default events sent by one of the tenant’s own instances (payload.senderInstanceId) are skipped. True = act on them anyway
+                     * @default false
+                     */
+                    allowInstanceSenders?: boolean;
                     /** @description Per-automation concurrency limit (#1108). Omit/null = today’s per-instance queueing with the engine default; 1 = strict single-flight, which is what a read-before-write action needs */
                     maxConcurrency?: number | null;
                     /** @description Template over the event payload partitioning this automation’s queue (#1108), e.g. "{{payload.from.id}}" to serialize per chat; omit/null = one queue for the whole automation */
@@ -18310,6 +18747,8 @@ export interface operations {
                                     timeoutMs?: number;
                                     /** @description Store agent response as variable for chaining (e.g., "agentResponse") */
                                     responseAs?: string;
+                                    /** @description Await the agent run (default true). False = return the runId once dispatched; outcome published as system.agent.run_completed. Incompatible with responseAs */
+                                    waitForResponse?: boolean;
                                 };
                             })[];
                             /** @description Debounce config */
@@ -18331,6 +18770,8 @@ export interface operations {
                             priority: number;
                             /** @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero */
                             transactionalEmissions: boolean;
+                            /** @description Loop guard opt-in (#1148): act on events sent by one of the tenant’s own instances */
+                            allowInstanceSenders: boolean;
                             /** @description Per-automation concurrency limit (#1108). null = queued per instance with the engine default; set = a queue private to this automation, 1 being strict single-flight */
                             maxConcurrency: number | null;
                             /** @description Template over the event payload partitioning this automation’s queue (#1108), e.g. "{{payload.from.id}}" to serialize per chat; null = one queue for the whole automation */
@@ -18497,6 +18938,8 @@ export interface operations {
                                     timeoutMs?: number;
                                     /** @description Store agent response as variable for chaining (e.g., "agentResponse") */
                                     responseAs?: string;
+                                    /** @description Await the agent run (default true). False = return the runId once dispatched; outcome published as system.agent.run_completed. Incompatible with responseAs */
+                                    waitForResponse?: boolean;
                                 };
                             })[];
                             /** @description Debounce config */
@@ -18518,6 +18961,8 @@ export interface operations {
                             priority: number;
                             /** @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero */
                             transactionalEmissions: boolean;
+                            /** @description Loop guard opt-in (#1148): act on events sent by one of the tenant’s own instances */
+                            allowInstanceSenders: boolean;
                             /** @description Per-automation concurrency limit (#1108). null = queued per instance with the engine default; set = a queue private to this automation, 1 being strict single-flight */
                             maxConcurrency: number | null;
                             /** @description Template over the event payload partitioning this automation’s queue (#1108), e.g. "{{payload.from.id}}" to serialize per chat; null = one queue for the whole automation */
@@ -18721,6 +19166,8 @@ export interface operations {
                             timeoutMs?: number;
                             /** @description Store agent response as variable for chaining (e.g., "agentResponse") */
                             responseAs?: string;
+                            /** @description Await the agent run (default true). False = return the runId once dispatched; outcome published as system.agent.run_completed. Incompatible with responseAs */
+                            waitForResponse?: boolean;
                         };
                     })[];
                     /** @description Debounce config */
@@ -18751,6 +19198,11 @@ export interface operations {
                      * @default false
                      */
                     transactionalEmissions?: boolean;
+                    /**
+                     * @description Loop guard opt-in (#1148): by default events sent by one of the tenant’s own instances (payload.senderInstanceId) are skipped. True = act on them anyway
+                     * @default false
+                     */
+                    allowInstanceSenders?: boolean;
                     /** @description Per-automation concurrency limit (#1108). Omit/null = today’s per-instance queueing with the engine default; 1 = strict single-flight, which is what a read-before-write action needs */
                     maxConcurrency?: number | null;
                     /** @description Template over the event payload partitioning this automation’s queue (#1108), e.g. "{{payload.from.id}}" to serialize per chat; omit/null = one queue for the whole automation */
@@ -18868,6 +19320,8 @@ export interface operations {
                                     timeoutMs?: number;
                                     /** @description Store agent response as variable for chaining (e.g., "agentResponse") */
                                     responseAs?: string;
+                                    /** @description Await the agent run (default true). False = return the runId once dispatched; outcome published as system.agent.run_completed. Incompatible with responseAs */
+                                    waitForResponse?: boolean;
                                 };
                             })[];
                             /** @description Debounce config */
@@ -18889,6 +19343,8 @@ export interface operations {
                             priority: number;
                             /** @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero */
                             transactionalEmissions: boolean;
+                            /** @description Loop guard opt-in (#1148): act on events sent by one of the tenant’s own instances */
+                            allowInstanceSenders: boolean;
                             /** @description Per-automation concurrency limit (#1108). null = queued per instance with the engine default; set = a queue private to this automation, 1 being strict single-flight */
                             maxConcurrency: number | null;
                             /** @description Template over the event payload partitioning this automation’s queue (#1108), e.g. "{{payload.from.id}}" to serialize per chat; null = one queue for the whole automation */
@@ -19057,6 +19513,8 @@ export interface operations {
                                     timeoutMs?: number;
                                     /** @description Store agent response as variable for chaining (e.g., "agentResponse") */
                                     responseAs?: string;
+                                    /** @description Await the agent run (default true). False = return the runId once dispatched; outcome published as system.agent.run_completed. Incompatible with responseAs */
+                                    waitForResponse?: boolean;
                                 };
                             })[];
                             /** @description Debounce config */
@@ -19078,6 +19536,8 @@ export interface operations {
                             priority: number;
                             /** @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero */
                             transactionalEmissions: boolean;
+                            /** @description Loop guard opt-in (#1148): act on events sent by one of the tenant’s own instances */
+                            allowInstanceSenders: boolean;
                             /** @description Per-automation concurrency limit (#1108). null = queued per instance with the engine default; set = a queue private to this automation, 1 being strict single-flight */
                             maxConcurrency: number | null;
                             /** @description Template over the event payload partitioning this automation’s queue (#1108), e.g. "{{payload.from.id}}" to serialize per chat; null = one queue for the whole automation */
@@ -19244,6 +19704,8 @@ export interface operations {
                                     timeoutMs?: number;
                                     /** @description Store agent response as variable for chaining (e.g., "agentResponse") */
                                     responseAs?: string;
+                                    /** @description Await the agent run (default true). False = return the runId once dispatched; outcome published as system.agent.run_completed. Incompatible with responseAs */
+                                    waitForResponse?: boolean;
                                 };
                             })[];
                             /** @description Debounce config */
@@ -19265,6 +19727,8 @@ export interface operations {
                             priority: number;
                             /** @description Transactional publication (G5, #988): buffer the run's emit_event publishes and flush them in order only when every action succeeded; a failed run publishes zero */
                             transactionalEmissions: boolean;
+                            /** @description Loop guard opt-in (#1148): act on events sent by one of the tenant’s own instances */
+                            allowInstanceSenders: boolean;
                             /** @description Per-automation concurrency limit (#1108). null = queued per instance with the engine default; set = a queue private to this automation, 1 being strict single-flight */
                             maxConcurrency: number | null;
                             /** @description Template over the event payload partitioning this automation’s queue (#1108), e.g. "{{payload.from.id}}" to serialize per chat; null = one queue for the whole automation */
@@ -19992,6 +20456,11 @@ export interface operations {
                         completedJourneys: number;
                         /** @description Currently active journeys */
                         activeJourneys: number;
+                        /** @description Completed journeys by terminal path: no agent (T4) vs agent dispatch (T5) */
+                        completedByPath: {
+                            noAgent: number;
+                            agent: number;
+                        };
                         /** @description Percentile stats per latency stage */
                         stages: {
                             [key: string]: {
@@ -20056,6 +20525,12 @@ export interface operations {
                         latencies: {
                             /** @description T1 - T0 (ms) */
                             channelProcessing?: number;
+                            /** @description T0a - T0 (ms) */
+                            platformDelivery?: number;
+                            /** @description T0b - T0a (ms) */
+                            mediaDownload?: number;
+                            /** @description T1 - T0b (ms) */
+                            inboundEnrichment?: number;
                             /** @description T2 - T1 (ms) */
                             eventPublish?: number;
                             /** @description T3 - T2 (ms) */

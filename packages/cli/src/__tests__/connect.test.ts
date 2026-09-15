@@ -3,7 +3,7 @@
  *
  * Verifies that `omni connect`:
  *   - Invokes `genie dir ls <name> --json` (not the old non-existent `genie dir get`)
- *   - Sets agentId (FK) on instance update (not just agentProviderId)
+ *   - Sets agentId (FK) on instance update; provider lives on the agent (#1168)
  *   - Sets agentReplyFilter on instance update
  *   - Includes --mode and --reply-filter options
  */
@@ -34,16 +34,14 @@ describe('connect command — genie dir discovery', () => {
 });
 
 describe('connect command — instance update fields', () => {
-  test('sets agentId FK on instance (not just agentProviderId)', async () => {
+  test('sets agentId FK on instance and never agentProviderId (#1168)', async () => {
     const source = await Bun.file(CONNECT_SRC).text();
 
     // The update call must include agentId as a distinct field
     expect(source).toContain('agentId,');
-    // Must also include agentProviderId
-    expect(source).toContain('agentProviderId: providerId');
-    // Both must be in the same update call
     expect(source).toMatch(/instances\.update\(instanceId,\s*\{[^}]*agentId/);
-    expect(source).toMatch(/instances\.update\(instanceId,\s*\{[^}]*agentProviderId/);
+    // The API rejects agentProviderId on instances — it belongs to the agent
+    expect(source).not.toMatch(/instances\.update\(instanceId,\s*\{[^}]*agentProviderId/);
   });
 
   test('sets agentReplyFilter on instance update', async () => {

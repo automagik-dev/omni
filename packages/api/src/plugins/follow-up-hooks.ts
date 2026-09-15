@@ -114,7 +114,7 @@ export async function setupFollowUpHooks(eventBus: EventBus, services: Services,
         maxRetries: 2,
         retryDelayMs: 500,
         startFrom: 'new',
-        concurrency: 5,
+        concurrency: 1, // effective value before #1181 forwarded it; raise deliberately
       },
     );
 
@@ -158,7 +158,7 @@ export async function setupFollowUpHooks(eventBus: EventBus, services: Services,
         maxRetries: 2,
         retryDelayMs: 500,
         startFrom: 'new',
-        concurrency: 5,
+        concurrency: 1, // effective value before #1181 forwarded it; raise deliberately
       },
     );
 

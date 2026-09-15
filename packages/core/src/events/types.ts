@@ -7,6 +7,7 @@
  * - System events: Internal operations (system.*)
  */
 
+import type { AgentUsage } from '../schemas/agent-usage';
 import type { ChannelType, ContentType } from '../types/channel';
 
 /**
@@ -133,6 +134,7 @@ export type CustomEventType = `custom.${string}`;
  *   system.dead_letter
  *   system.replay.started
  *   system.health.degraded
+ *   system.agent.run_completed (payload: AgentRunCompletedPayload)
  */
 export type SystemEventType = `system.${string}`;
 
@@ -1182,3 +1184,20 @@ export type TypedOmniEvent<T extends CoreEventType> = OmniEvent<T, EventPayloadM
  * Generic payload for custom/system events (validated at runtime via registry)
  */
 export type GenericEventPayload = Record<string, unknown>;
+
+/**
+ * Payload of `system.agent.run_completed` (#1176): the outcome of a call_agent
+ * action dispatched with `waitForResponse: false`. `runId` matches the action
+ * result; `executionId` is the triggering event id.
+ */
+export interface AgentRunCompletedPayload {
+  automationId: string | null;
+  executionId: string | null;
+  runId: string;
+  status: string;
+  providerRunId?: string;
+  response?: string;
+  /** Tokens/cost the provider reported (#1183); absent when unknown. */
+  usage?: AgentUsage;
+  error?: string;
+}

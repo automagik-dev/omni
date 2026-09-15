@@ -908,6 +908,7 @@ async function executeCallAgentAction(
   context: TemplateContext,
   deps: ActionDependencies,
   trustedTenantId?: string | null,
+  provenance?: EmitProvenance,
 ): Promise<{ success: boolean; result?: unknown; error?: string }> {
   if (!deps.callAgent) {
     return { success: false, error: 'callAgent dependency not provided' };
@@ -928,6 +929,10 @@ async function executeCallAgentAction(
     agentId: config.agentId,
   });
 
+  if (config.waitForResponse === false) {
+    return dispatchCallAgent(deps.callAgent(agentContext, config, trustedTenantId), deps, provenance);
+  }
+
   try {
     // `agentContext` is payload-derived; the trusted tenant travels as its own
     // argument so the trust boundary stays visible at the callback signature.
@@ -945,6 +950,7 @@ async function executeCallAgentAction(
         response: result.fullResponse,
         runId: result.metadata.runId,
         sessionId: result.metadata.sessionId,
+        ...(result.metadata.usage ? { usage: result.metadata.usage } : {}),
       },
       error: result.metadata.status === 'failed' ? 'Agent call failed' : undefined,
     };
@@ -953,6 +959,41 @@ async function executeCallAgentAction(
     logger.error('Call agent action failed', { error: errorMessage });
     return { success: false, error: errorMessage };
   }
+}
+
+/**
+ * Fire-and-forget call_agent (#1176), the call_agent twin of webhook's
+ * `waitForResponse: false`: return the minted runId now, publish the outcome
+ * as `system.agent.run_completed` when the run settles. `executionId` is the
+ * triggering event id — (event, automation) is the execution's identity (#1031).
+ */
+function dispatchCallAgent(
+  run: Promise<AgentRunResult>,
+  deps: ActionDependencies,
+  provenance: EmitProvenance | undefined,
+): { success: boolean; result: { runId: string; accepted: true } } {
+  const runId = generateId();
+  const base = {
+    automationId: provenance?.automationId ?? null,
+    executionId: provenance?.parentEventId ?? null,
+    runId,
+  };
+  const publish = (payload: Record<string, unknown>) =>
+    deps.eventBus
+      ?.publishGeneric('system.agent.run_completed', { ...base, ...payload })
+      .catch((error) => logger.error('Failed to publish system.agent.run_completed', { runId, error: String(error) }));
+  run.then(
+    (result) =>
+      publish({
+        status: result.metadata.status,
+        providerRunId: result.metadata.runId,
+        response: result.fullResponse,
+        ...(result.metadata.usage ? { usage: result.metadata.usage } : {}),
+        error: result.metadata.status === 'failed' ? 'Agent call failed' : undefined,
+      }),
+    (error) => publish({ status: 'failed', error: error instanceof Error ? error.message : 'Unknown error' }),
+  );
+  return { success: true, result: { runId, accepted: true } };
 }
 
 /**
@@ -988,7 +1029,7 @@ export async function executeAction(
       result = await executeLogAction(action.config, context, deps);
       break;
     case 'call_agent':
-      result = await executeCallAgentAction(action.config, context, deps, trustedTenantId);
+      result = await executeCallAgentAction(action.config, context, deps, trustedTenantId, provenance);
       break;
     default:
       // TypeScript should catch this, but just in case

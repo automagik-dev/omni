@@ -498,6 +498,34 @@
       "when": 1787000000000,
       "tag": "0070_config_audit_logs",
       "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1787100000000,
+      "tag": "0071_webhook_idempotency_across_event_types",
+      "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1787200000000,
+      "tag": "0072_shared_durable_consumers",
+      "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1787300000000,
+      "tag": "0073_webhook_poll_config",
+      "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1787400000000,
+      "tag": "0074_trigger_logs_cost",
+      "breakpoints": true
     }
   ]
 }

@@ -1128,6 +1128,7 @@ async function processMessage(
     rememberMessageSecret(msg.key.id, inboundSecret, msg.key.participant || msg.key.remoteJid || '');
   }
 
+  const ingestedAt = Date.now();
   const content = extractContent(msg);
   if (!content) return;
 
@@ -1163,6 +1164,7 @@ async function processMessage(
     content.mediaLocalPath = mediaResult.mediaLocalPath;
     content.mimeType = mediaResult.mimeType;
   }
+  const mediaReadyAt = Date.now();
 
   // Annotate LID identity info for downstream persistence
   annotateLidResolution(msg, rawChatId);
@@ -1192,6 +1194,7 @@ async function processMessage(
     msg,
     isFromMe(msg),
     platformTimestamp,
+    { ingestedAt, mediaReadyAt },
   );
 }
 

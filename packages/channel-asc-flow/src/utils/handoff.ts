@@ -17,6 +17,7 @@
  */
 
 import type { Logger } from '@omni/core';
+import { encodeAscEmoji } from './emoji';
 
 /**
  * The queue code the Genesys component reads. No domain exists yet (the
@@ -64,6 +65,12 @@ export interface HandoffPlan {
    * made at all.
    */
   transfer: { codServico: number; codPrioridade: 0 | 1 } | null;
+  /**
+   * The session subject the human agent sees. NOT a flow variable: in `flow`
+   * mode it rides `resposta`, which only the Genesys node reads on a handoff
+   * turn (`session.subject = {#resposta}`). Empty when none was sent.
+   */
+  subject: string;
   /** The Genesys userdata fields, present only when they validated. */
   fields: {
     fila_vq?: string;
@@ -138,7 +145,13 @@ export function planHandoff(
   const fields = buildGenesysFields(read, logger, mode);
   if (fields === null) return null;
 
-  if (mode === 'flow') return { transfer: null, fields };
+  const rawSubject = read('handoffSubject', 'assunto');
+  const subject =
+    typeof rawSubject === 'string'
+      ? encodeAscEmoji(rawSubject.replace(/\s+/g, ' ').trim()).slice(0, MOTIVO_MAX_LENGTH)
+      : '';
+
+  if (mode === 'flow') return { transfer: null, fields, subject };
 
   const rawServico = read('handoffServico', 'cod_servico') ?? fallbackServico;
   const codServico = toPositiveInt(rawServico);
@@ -157,7 +170,7 @@ export function planHandoff(
     logger.debug('[asc-flow] cod_prioridade out of domain, defaulting to 0', { received: rawPrioridade });
   }
 
-  return { transfer: { codServico, codPrioridade }, fields };
+  return { transfer: { codServico, codPrioridade }, fields, subject };
 }
 
 /**

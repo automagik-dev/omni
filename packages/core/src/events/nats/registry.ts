@@ -291,6 +291,21 @@ export const SystemEventSchemas = {
     }),
     { description: 'A stalled connector signalled again (event, heartbeat, or re-declared cadence)' },
   ),
+
+  // Outcome of a fire-and-forget call_agent action (#1176, waitForResponse: false).
+  agentRunCompleted: createEventSchema(
+    'system.agent.run_completed',
+    z.object({
+      automationId: z.string().nullable(),
+      executionId: z.string().nullable(),
+      runId: z.string(),
+      status: z.string(),
+      providerRunId: z.string().optional(),
+      response: z.string().optional(),
+      error: z.string().optional(),
+    }),
+    { description: 'A fire-and-forget call_agent run settled (completed or failed)' },
+  ),
 };
 
 /**

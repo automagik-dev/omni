@@ -70,9 +70,9 @@ eventConsumersRoutes.delete('/events/consumers/:name', async (c) => {
  */
 eventConsumersRoutes.post('/events/consumers/:name/pull', zValidator('query', PullConsumerQuerySchema), async (c) => {
   const name = c.req.param('name');
-  const { limit, waitMs } = c.req.valid('query');
+  const { limit, waitMs, leaseMs } = c.req.valid('query');
   const services = c.get('services');
-  const result = await services.eventConsumers.pull(name, { limit, waitMs });
+  const result = await services.eventConsumers.pull(name, { limit, waitMs, leaseMs });
   return c.json(result);
 });
 
@@ -81,9 +81,9 @@ eventConsumersRoutes.post('/events/consumers/:name/pull', zValidator('query', Pu
  */
 eventConsumersRoutes.post('/events/consumers/:name/ack', zValidator('json', AckConsumerSchema), async (c) => {
   const name = c.req.param('name');
-  const { cursor } = c.req.valid('json');
+  const { cursor, leaseId } = c.req.valid('json');
   const services = c.get('services');
-  const data = await services.eventConsumers.ack(name, cursor);
+  const data = await services.eventConsumers.ack(name, cursor ?? 0, leaseId);
   return c.json({ data });
 });
 

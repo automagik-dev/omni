@@ -783,7 +783,28 @@ POST   /api/v2/webhook-sources                # Create webhook source
 PATCH  /api/v2/webhook-sources/:id            # Update source (same fields as create)
 
 DELETE /api/v2/webhook-sources/:id            # Delete source
+
+POST   /api/v2/webhook-sources/:id/run-now    # Run a poll source's command now (#1186)
 ```
+
+### Poll Sources (supervised pull connectors, #1186)
+
+A source with `pollConfig: { command, intervalSeconds, emitType, dedupKeyTemplate?, env? }`
+is polled by the API every `intervalSeconds` (doubling on non-zero exit, capped
+at 24h). Each JSON-object stdout line of a clean run becomes an `emitType`
+event through the keyed `/events/trigger` path (schema gate + dedup via
+`dedupKeyTemplate`), and a clean run heartbeats the source. The last run
+(`at`, `exitCode`, `stdoutTail`, `eventsEmitted`, `error`) and `nextRunAt` are
+returned in `pollConfig`; `env` values are masked.
+
+**Security:** the command must resolve (symlinks followed) inside
+`OMNI_POLL_COMMAND_DIR` on the API host. Unset = poll sources are disabled and
+refused. The command runs without a shell or arguments, with only `PATH` from
+the API process plus the source's `env`.
+
+CLI: `omni sources add-poll <name> --command <path> --interval <s> --emit-type <type> --dedup-key <template>`
+(arms `--expected-interval`, default 2x interval), `omni sources run-now <name>`,
+`omni webhooks get <name>` for visibility.
 
 ### Inbound Webhooks
 

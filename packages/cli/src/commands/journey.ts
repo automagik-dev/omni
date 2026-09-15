@@ -28,11 +28,15 @@ const STAGE_LABELS: Record<string, string> = {
 /** Latency display names */
 const LATENCY_LABELS: Record<string, string> = {
   channelProcessing: 'Channel Processing (T0→T1)',
+  platformDelivery: '  Platform Delivery (T0→T0a)',
+  mediaDownload: '  Media Download (T0a→T0b)',
+  inboundEnrichment: '  Enrichment (T0b→T1)',
   eventPublish: 'Event Publish (T1→T2)',
   natsDelivery: 'NATS Delivery (T2→T3)',
   dbWrite: 'DB Write (T3→T4)',
   agentNotification: 'Agent Notification (T4→T5)',
-  totalInbound: 'Total Inbound (T0→T5)',
+  totalInboundNoAgent: 'Total Inbound, no agent (T0→T4)',
+  totalInbound: 'Total Inbound, agent (T0→T5)',
   agentRoundTrip: 'Agent Round-Trip (T5→T7)',
   apiProcessing: 'API Processing (T7→T8)',
   outboundEventPublish: 'Outbound Publish (T8→T9)',
@@ -57,6 +61,7 @@ interface SummaryResponse {
   totalTracked: number;
   completedJourneys: number;
   activeJourneys: number;
+  completedByPath?: { noAgent: number; agent: number };
   stages: Record<
     string,
     { count: number; avg: number; min: number; max: number; p50: number; p95: number; p99: number }
@@ -234,6 +239,7 @@ const SUMMARY_STAGE_ORDER = [
   'natsDelivery',
   'dbWrite',
   'agentNotification',
+  'totalInboundNoAgent',
   'totalInbound',
   'agentRoundTrip',
   'apiProcessing',
@@ -249,7 +255,7 @@ const SUMMARY_STAGE_ORDER = [
 function printSummaryStageTable(stages: SummaryResponse['stages']): void {
   // biome-ignore lint/suspicious/noConsole: CLI output
   console.log(
-    `\n  ${chalk.bold('Stage'.padEnd(34))} ${chalk.bold('Avg'.padStart(7))} ${chalk.bold('P50'.padStart(7))} ${chalk.bold('P95'.padStart(7))} ${chalk.bold('P99'.padStart(7))} ${chalk.bold('Count'.padStart(6))}`,
+    `\n  ${chalk.bold('Stage'.padEnd(34))} ${chalk.bold('Avg'.padStart(7))} ${chalk.bold('P50'.padStart(7))} ${chalk.bold('P95'.padStart(7))} ${chalk.bold('P99'.padStart(7))} ${chalk.bold('n'.padStart(6))}`,
   );
   // biome-ignore lint/suspicious/noConsole: CLI output
   console.log(chalk.dim(SUMMARY_SEPARATOR));
@@ -298,6 +304,14 @@ async function showSummary(since?: string): Promise<void> {
     console.log(
       `  Tracked: ${chalk.bold(String(summary.totalTracked))}  Completed: ${chalk.green(String(summary.completedJourneys))}  Active: ${chalk.yellow(String(summary.activeJourneys))}`,
     );
+    if (summary.completedByPath) {
+      // biome-ignore lint/suspicious/noConsole: CLI output
+      console.log(
+        chalk.dim(
+          `  Completed by path: no agent ${summary.completedByPath.noAgent}  agent ${summary.completedByPath.agent}`,
+        ),
+      );
+    }
 
     if (Object.keys(summary.stages).length === 0) {
       // biome-ignore lint/suspicious/noConsole: CLI output
@@ -319,7 +333,9 @@ export function createJourneyCommand(): Command {
 
   journey
     .command('show <correlationId>')
-    .description('Display journey timeline with timing bars')
+    .description(
+      'Display journey timeline with timing bars (channel messages only; view custom-event chains with `omni events trace`)',
+    )
     .action(async (correlationId: string) => {
       await showJourney(correlationId);
     });

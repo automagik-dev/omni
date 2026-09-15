@@ -21,6 +21,12 @@ const log = createLogger('channel:internal');
 const INTERNAL_CAPABILITIES: ChannelCapabilities = {
   ...DEFAULT_CAPABILITIES,
   canSendText: true,
+  events: {
+    emits: ['message.received'],
+    edits: false,
+    deletes: false,
+    idempotency: true,
+  },
 };
 
 export class InternalChannelPlugin extends BaseChannelPlugin {

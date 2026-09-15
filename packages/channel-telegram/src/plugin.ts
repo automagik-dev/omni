@@ -16,6 +16,7 @@ import type {
   DedupeCache,
   FetchHistoryOptions,
   FetchHistoryResult,
+  InboundSubStageTimings,
   InstanceConfig,
   OutgoingMessage,
   PluginContext,
@@ -750,10 +751,11 @@ export class TelegramPlugin extends BaseChannelPlugin {
     replyToId: string | undefined,
     rawPayload: Record<string, unknown>,
     platformTimestamp?: number,
+    subStages?: InboundSubStageTimings,
   ): Promise<void> {
     // Journey timing: capture T0 (platform) and T1 (plugin received)
     // Telegram timestamps arrive pre-normalized to ms from the handler
-    const timings = platformTimestamp ? this.captureInboundTimings(platformTimestamp) : undefined;
+    const timings = platformTimestamp ? this.captureInboundTimings(platformTimestamp, subStages) : undefined;
 
     const senderName = typeof rawPayload.displayName === 'string' ? rawPayload.displayName : undefined;
     const chatName = typeof rawPayload.chatName === 'string' ? rawPayload.chatName : undefined;

@@ -35,6 +35,7 @@ import { getClient } from '../client.js';
 import * as output from '../output.js';
 import { getCurrentFormat } from '../output.js';
 import { resolveAutomationId } from '../resolve.js';
+import { createAutomationsScaffoldCommand } from './automations-scaffold.js';
 
 // ============================================================================
 // HELPERS
@@ -241,6 +242,9 @@ export const __testables = { buildActions, buildDefinition, buildCreateBody, rea
 export function createAutomationsCommand(): Command {
   const automations = new Command('automations').description('Manage automations');
 
+  // omni automations scaffold <eventType> (issue #1182)
+  automations.addCommand(createAutomationsScaffoldCommand());
+
   // omni automations list
   automations
     .command('list')
@@ -317,8 +321,9 @@ export function createAutomationsCommand(): Command {
     )
     .option(
       '--max-concurrency <n>',
-      'Run at most N of THIS automation at a time on its own queue; 1 = strict single-flight, ' +
-        'which a read-before-write action needs (#1108). Default: queued per instance with the engine default',
+      'Cap concurrent runs of THIS automation (own queue, up to 50 deliveries per trigger in flight); ' +
+        '1 = strict single-flight, which a read-before-write action needs (#1108). ' +
+        'Default: shares the per-instance queue, engine default 5',
       (v) => Number.parseInt(v, 10),
     )
     .option(
@@ -329,7 +334,10 @@ export function createAutomationsCommand(): Command {
     // call_agent specific options
     .option('--agent-id <id>', 'Agent ID (for the first call_agent action)')
     .option('--provider-id <id>', 'Provider ID (for the first call_agent action)')
-    .option('--response-as <var>', 'Store agent response as variable (for the first call_agent action)')
+    .option(
+      '--response-as <var>',
+      'Store agent response as variable (for the first call_agent action; not with waitForResponse:false)',
+    )
     .action(async (options: CreateOptions) => {
       const client = getClient();
 
@@ -370,7 +378,7 @@ export function createAutomationsCommand(): Command {
     .option('--no-transactional-emissions', 'Return the automation to immediate mid-sequence publishing')
     .option(
       '--max-concurrency <n>',
-      'Run at most N of THIS automation at a time on its own queue; 1 = strict single-flight (#1108)',
+      'Cap concurrent runs of THIS automation on its own queue; 1 = strict single-flight (#1108)',
       (v) => Number.parseInt(v, 10),
     )
     .option(
@@ -379,7 +387,10 @@ export function createAutomationsCommand(): Command {
     )
     .option('--agent-id <id>', 'Agent ID (for the first call_agent action)')
     .option('--provider-id <id>', 'Provider ID (for the first call_agent action)')
-    .option('--response-as <var>', 'Store agent response as variable (for the first call_agent action)')
+    .option(
+      '--response-as <var>',
+      'Store agent response as variable (for the first call_agent action; not with waitForResponse:false)',
+    )
     // Commander negatable pair (#988, mirrors --strict-schemas from #1000):
     // true from --transactional-emissions, false from
     // --no-transactional-emissions, undefined when neither flag is given —

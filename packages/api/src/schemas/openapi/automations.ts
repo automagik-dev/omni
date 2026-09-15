@@ -74,6 +74,10 @@ const CallAgentActionSchema = z.object({
       .string()
       .optional()
       .openapi({ description: 'Store agent response as variable for chaining (e.g., "agentResponse")' }),
+    waitForResponse: z.boolean().optional().openapi({
+      description:
+        'Await the agent run (default true). False = return the runId once dispatched; outcome published as system.agent.run_completed. Incompatible with responseAs',
+    }),
   }),
 });
 

@@ -286,7 +286,7 @@ async function handleLs(options: LsOptions): Promise<void> {
   const items = applyFilters(result.items ?? [], options);
 
   if (items.length === 0) {
-    output.info('No media items found.');
+    output.list([], { emptyMessage: 'No media items found.' });
     return;
   }
 

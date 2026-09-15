@@ -57,12 +57,13 @@ function sanitizeErrorContext(context: Record<string, unknown> | undefined): Rec
 /**
  * Map error codes to HTTP status codes
  */
-const ERROR_STATUS_MAP: Record<string, 400 | 401 | 403 | 404 | 409 | 429 | 500 | 502 | 503 | 504> = {
+const ERROR_STATUS_MAP: Record<string, 400 | 401 | 403 | 404 | 409 | 413 | 429 | 500 | 502 | 503 | 504> = {
   [ERROR_CODES.VALIDATION]: 400,
   [ERROR_CODES.UNAUTHORIZED]: 401,
   [ERROR_CODES.FORBIDDEN]: 403,
   [ERROR_CODES.NOT_FOUND]: 404,
   [ERROR_CODES.CONFLICT]: 409,
+  [ERROR_CODES.PAYLOAD_TOO_LARGE]: 413,
   [ERROR_CODES.CHANNEL_NOT_CONNECTED]: 503,
   [ERROR_CODES.CHANNEL_CONNECTION_FAILED]: 503,
   [ERROR_CODES.CHANNEL_SEND_FAILED]: 502,
