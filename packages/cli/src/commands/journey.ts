@@ -333,7 +333,9 @@ export function createJourneyCommand(): Command {
 
   journey
     .command('show <correlationId>')
-    .description('Display journey timeline with timing bars')
+    .description(
+      'Display journey timeline with timing bars (channel messages only; view custom-event chains with `omni events trace`)',
+    )
     .action(async (correlationId: string) => {
       await showJourney(correlationId);
     });
