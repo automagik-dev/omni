@@ -30,6 +30,7 @@ function makeSource(overrides: Partial<WebhookSource> = {}): WebhookSource {
     idempotencyKeyTemplate: '{source}:{sha256(body)}',
     eventTypeMapping: null,
     strictSchemas: false,
+    idempotencyAcrossEventTypes: false,
     enabled: true,
     lastReceivedAt: null,
     totalReceived: 0,
