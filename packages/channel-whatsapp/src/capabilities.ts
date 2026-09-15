@@ -57,4 +57,25 @@ export const WHATSAPP_CAPABILITIES: ChannelCapabilities = {
 
   // Maximum file size (documents)
   maxFileSize: 100 * 1024 * 1024, // 100MB
+  events: {
+    emits: [
+      'instance.connected',
+      'instance.disconnected',
+      'instance.qr_code',
+      'media.received',
+      'message.delivered',
+      'message.failed',
+      'message.read',
+      'message.received',
+      'message.sent',
+      'presence.offline',
+      'presence.online',
+      'presence.typing',
+      'reaction.received',
+      'reaction.removed',
+    ],
+    edits: true,
+    deletes: true,
+    idempotency: true,
+  },
 };

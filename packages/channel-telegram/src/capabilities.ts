@@ -76,4 +76,21 @@ export const TELEGRAM_CAPABILITIES: ChannelCapabilities = {
   ],
 
   maxFileSize: 50 * 1024 * 1024, // 50MB
+  events: {
+    emits: [
+      'instance.connected',
+      'instance.disconnected',
+      'message.button_click',
+      'message.failed',
+      'message.poll',
+      'message.poll_vote',
+      'message.received',
+      'message.sent',
+      'reaction.received',
+      'reaction.removed',
+    ],
+    edits: false,
+    deletes: false,
+    idempotency: true,
+  },
 };

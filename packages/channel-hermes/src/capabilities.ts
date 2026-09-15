@@ -66,4 +66,20 @@ export const HERMES_CAPABILITIES: ChannelCapabilities = {
     },
     { mimeType: 'text/plain', maxSize: 100 * 1024 * 1024 },
   ],
+  events: {
+    emits: [
+      'instance.connected',
+      'instance.disconnected',
+      'message.delivered',
+      'message.failed',
+      'message.read',
+      'message.received',
+      'message.sent',
+      'reaction.received',
+      'reaction.removed',
+    ],
+    edits: false,
+    deletes: false,
+    idempotency: true,
+  },
 };
