@@ -164,7 +164,10 @@ export class SlackPlugin extends BaseChannelPlugin {
   /** Plugin-specific config per instance */
   private slackConfigs = new Map<string, SlackConfig>();
 
-  /** Cached user display names per instance: Map<`${instanceId}:${userId}`, displayName | null> (null = failed lookup) */
+  /**
+   * Cached display names per instance (null = failed lookup):
+   * `${instanceId}:${userId}` for users, `${instanceId}:channel:${channelId}` for channel names (#1162).
+   */
   private userNameCache = new Map<string, string | null>();
 
   /** Per-instance inbound dedup caches (created on connect, disposed on disconnect) */
@@ -1106,6 +1109,33 @@ export class SlackPlugin extends BaseChannelPlugin {
   }
 
   /**
+   * Resolve a channel's name via conversations.info, cached like user names (#1162).
+   * channel_rename overwrites the cache entry, so the next message refreshes the chat row.
+   */
+  private async resolveChannelName(instanceId: string, channelId: string): Promise<string | undefined> {
+    const cacheKey = `${instanceId}:channel:${channelId}`;
+    if (this.userNameCache.has(cacheKey)) {
+      return this.userNameCache.get(cacheKey) ?? undefined;
+    }
+
+    let name: string | undefined;
+    try {
+      const result = await this.getConnection(instanceId).actingClient.conversations.info({ channel: channelId });
+      name = (result.channel as { name?: string } | undefined)?.name || undefined;
+    } catch (error) {
+      this.logger.warn('Failed to fetch channel info', { channelId, error: String(error) });
+    }
+    this.userNameCache.set(cacheKey, name ?? null);
+    return name;
+  }
+
+  /** channel_rename: overwrite the cached channel name so the next message refreshes the chat row (#1162). */
+  private handleChannelRename(instanceId: string, event: unknown): void {
+    const channel = (event as { channel?: { id?: string; name?: string } }).channel;
+    if (channel?.id && channel.name) this.userNameCache.set(`${instanceId}:channel:${channel.id}`, channel.name);
+  }
+
+  /**
    * Resolve thread_ts based on replyToMode config
    *
    * - 'off': Only thread if already in a thread context (threadId set)
@@ -1605,6 +1635,7 @@ export class SlackPlugin extends BaseChannelPlugin {
   private async buildEnrichedPayload(
     instanceId: string,
     from: string,
+    chatId: string,
     rawPayload: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
     const displayName = await this.resolveUserDisplayName(instanceId, from);
@@ -1618,8 +1649,8 @@ export class SlackPlugin extends BaseChannelPlugin {
 
     // Only a 1:1 has a single counterpart whose name can stand in for the
     // conversation name. For an mpim it would name the chat after whichever
-    // member happened to speak.
-    const chatName = isOneToOne ? displayName : undefined;
+    // member happened to speak. Channels carry their own name (#1162).
+    const chatName = isOneToOne ? displayName : !isDm ? await this.resolveChannelName(instanceId, chatId) : undefined;
 
     return {
       ...rawPayload,
@@ -1646,7 +1677,7 @@ export class SlackPlugin extends BaseChannelPlugin {
       this.addAckReaction(instanceId, args.chatId, args.externalId, connection, config);
     }
 
-    const enrichedPayload = await this.buildEnrichedPayload(instanceId, args.from, args.rawPayload);
+    const enrichedPayload = await this.buildEnrichedPayload(instanceId, args.from, args.chatId, args.rawPayload);
 
     await this.handleMessageReceived(
       instanceId,
@@ -1704,7 +1735,7 @@ export class SlackPlugin extends BaseChannelPlugin {
           this.addAckReaction(instanceId, chatId, externalId, connection, config);
 
           // Enrich rawPayload with cross-channel identity contract
-          const enrichedPayload = await this.buildEnrichedPayload(instanceId, from, rawPayload);
+          const enrichedPayload = await this.buildEnrichedPayload(instanceId, from, chatId, rawPayload);
 
           const files = enrichedPayload.files as unknown[] | undefined;
           if (files && files.length > 0) {
@@ -1796,6 +1827,9 @@ export class SlackPlugin extends BaseChannelPlugin {
       },
       this.logger,
     );
+
+    // channel_rename (#1162) — refresh the cached name; the next message persists it.
+    connection.app.event('channel_rename', async ({ event }) => this.handleChannelRename(instanceId, event));
 
     // Agent session handlers — native stop button (#914)
     setupAgentSessionHandlers(
