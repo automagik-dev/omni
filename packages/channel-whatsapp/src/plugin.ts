@@ -1099,13 +1099,23 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * @param instanceId - Instance to disconnect
    */
   async disconnect(instanceId: string): Promise<void> {
+    // Reset all connection tracking state (attempt counter + pending reconnect timer)
+    // even when no socket is live — a reconnect loop deletes the socket between attempts (#1169)
+    resetConnectionState(instanceId);
+
+    const config = this.instances.get(instanceId)?.config;
+    if (config) {
+      await this.updateInstanceStatus(instanceId, config, {
+        state: 'disconnected',
+        since: new Date(),
+        message: 'User requested disconnect',
+      });
+    }
+
     const sock = this.sockets.get(instanceId);
     if (!sock) {
       return;
     }
-
-    // Reset all connection tracking state (don't auto-reconnect after manual disconnect)
-    resetConnectionState(instanceId);
 
     // Remove event listeners before closing to prevent ghost reconnects
     sock.ev.removeAllListeners('connection.update');
