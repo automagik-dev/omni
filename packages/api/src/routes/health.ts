@@ -93,8 +93,11 @@ export const getHealth = async (c: Context<{ Variables: AppVariables }>) => {
     ? { status: 'error', error: getPluginsDegradedReason() ?? 'Plugin initialization failed' }
     : { status: 'ok' };
 
+  const deadLettersCheck = await checkDeadLetters(c.get('services'));
+
   // Determine overall status
-  const hasErrors = dbCheck.status === 'error' || natsCheck.status === 'error' || pluginsFailed;
+  const hasErrors =
+    dbCheck.status === 'error' || natsCheck.status === 'error' || pluginsFailed || deadLettersCheck.status === 'error';
   const status: HealthResponse['status'] = hasErrors ? 'degraded' : 'healthy';
 
   const response: HealthResponse = {
@@ -106,11 +109,42 @@ export const getHealth = async (c: Context<{ Variables: AppVariables }>) => {
       database: dbCheck,
       nats: natsCheck,
       plugins: pluginsCheck,
+      deadLetters: deadLettersCheck,
     },
   };
 
   return c.json(response, status === 'healthy' ? 200 : 503);
 };
+
+/** #1163: a DLQ this deep or this old is an operator problem, not a transient. */
+export const DEAD_LETTER_PENDING_THRESHOLD = 50;
+export const DEAD_LETTER_MAX_AGE_SECONDS = 24 * 60 * 60;
+
+/**
+ * DLQ depth (#1163): pending rows used to accumulate with every surface green.
+ * Read through DeadLetterService (the registered access site), not the raw db.
+ * A failed query is not reported here — the database check already covers it.
+ */
+async function checkDeadLetters(services: AppVariables['services'] | undefined): Promise<HealthCheck> {
+  if (!services) return { status: 'ok', details: { available: false } };
+  try {
+    const { pending, oldestPendingAt } = await services.deadLetters.getPendingSummary();
+    const oldestPendingAgeSeconds = oldestPendingAt
+      ? Math.floor((Date.now() - oldestPendingAt.getTime()) / 1000)
+      : null;
+    const details = { pending, oldestPendingAgeSeconds };
+    if (pending >= DEAD_LETTER_PENDING_THRESHOLD) {
+      return { status: 'error', details, error: `${pending} pending dead letters` };
+    }
+    if (oldestPendingAgeSeconds !== null && oldestPendingAgeSeconds >= DEAD_LETTER_MAX_AGE_SECONDS) {
+      return { status: 'error', details, error: `oldest pending dead letter is ${oldestPendingAgeSeconds}s old` };
+    }
+    return { status: 'ok', details };
+  } catch (error) {
+    healthLog.warn('Dead letter health query failed', { error: String(error) });
+    return { status: 'ok', details: { available: false } };
+  }
+}
 
 healthRoutes.get('/health', getHealth);
 

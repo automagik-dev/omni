@@ -28,7 +28,6 @@ import qrcode from 'qrcode-terminal';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
 import { resolveInstanceId } from '../resolve.js';
-import { maybeNudgeForGenieBackedAgent } from '../utils/genie-wiring-nudge.js';
 
 const VALID_CHANNELS: Channel[] = [
   'whatsapp-baileys',
@@ -394,7 +393,6 @@ export function createInstancesCommand(): Command {
       '--agent-fk-id <uuid>',
       'Agent FK UUID (references agents table, use "null" to clear). When set without --reply-filter-mode, reply filter defaults to {mode:"all", onDm:true} so messages are dispatched instead of silently dropped (omni#443).',
     )
-    .option('--agent-provider <id>', 'Agent provider ID')
     .option('--agent <id>', 'Agent ID')
     .option('--agent-type <type>', 'Agent type: agent, team, or workflow')
     .option('--agent-timeout <seconds>', 'Agent timeout in seconds', (v) => Number.parseInt(v, 10))
@@ -1073,7 +1071,10 @@ export function createInstancesCommand(): Command {
       '--agent-fk-id <uuid>',
       'Agent FK UUID (references agents table, use "null" to clear). When assigning an agent on an instance with no reply filter, the filter defaults to {mode:"all", onDm:true} so messages are dispatched instead of silently dropped (omni#443).',
     )
-    .option('--agent-provider <id>', 'Agent provider ID (use "null" to clear)')
+    .option(
+      '--agent-provider <id>',
+      'Removed: set the provider on the agent (omni agents update <agentId> --agent-provider)',
+    )
     .option('--agent <id>', 'Agent ID (use "null" to clear)')
     .option('--agent-type <type>', 'Agent type: agent, team, or workflow')
     .option('--agent-timeout <seconds>', 'Agent timeout in seconds', (v) => Number.parseInt(v, 10))
@@ -1198,6 +1199,11 @@ export function createInstancesCommand(): Command {
     .action(async (rawId: string, options: Record<string, unknown>) => {
       const client = getClient();
 
+      if (options.agentProvider !== undefined) {
+        output.error(
+          'instances update no longer accepts --agent-provider: the provider belongs to the agent. Use `omni agents update <agentId> --agent-provider <providerId>`.',
+        );
+      }
       try {
         const id = await resolveInstanceId(rawId);
 
@@ -1216,17 +1222,6 @@ export function createInstancesCommand(): Command {
         if (Object.keys(body).length > 0) {
           await client.instances.update(id, body);
           output.success(`Instance updated: ${id}`, maskSecretFields(body));
-
-          // Deprecation nudge — when an operator binds an instance to a
-          // genie-backed agent via `--agent-provider <id>`, they're
-          // recreating step 3 of the legacy 5-command wiring chain.
-          // `omni connect <instance> <agent>` does the same thing in one
-          // step (and creates the provider if it doesn't exist yet).
-          // Best-effort lookup; nudge is stderr-only.
-          const agentProviderId = options.agentProvider as string | undefined;
-          if (agentProviderId && agentProviderId !== 'null') {
-            await maybeNudgeForGenieBackedAgent(client, agentProviderId);
-          }
         } else if (!options.profileName) {
           output.error('No update options provided. Use --help to see all available options.');
         }

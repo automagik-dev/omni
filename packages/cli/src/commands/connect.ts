@@ -5,7 +5,7 @@
  *   1. Discovers agent via `genie dir ls <agent-name> --json`
  *   2. Creates/updates Omni provider with schema `nats-genie`
  *   3. Creates Omni agent record linked to provider
- *   4. Updates instance with agentId (FK), agentProviderId, agentReplyFilter, and triggerMode
+ *   4. Updates instance with agentId (FK), agentReplyFilter, and triggerMode
  */
 
 import { execFileSync } from 'node:child_process';
@@ -92,20 +92,17 @@ export function createConnectCommand(): Command {
       const replyFilterMode = options.replyFilter;
       const agentReplyFilter = { mode: replyFilterMode, conditions: {} };
 
-      // 7. Update instance — set agentId FK, agentProviderId, replyFilter, and triggerMode
+      // 7. Update instance — set agentId FK, replyFilter, and triggerMode
       output.info('Updating instance agent assignment...');
       try {
         await client.instances.update(instanceId, {
           agentId,
-          agentProviderId: providerId,
           agentReplyFilter,
           triggerMode,
         } as Record<string, unknown>);
       } catch {
         output.warn('Could not update instance agent assignment automatically.');
-        output.info(
-          `Set manually: omni instances update ${instanceId} --agent-id ${agentId} --agent-provider-id ${providerId}`,
-        );
+        output.info(`Set manually: omni instances update ${instanceId} --agent-fk-id ${agentId}`);
         return;
       }
 

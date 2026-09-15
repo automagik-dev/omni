@@ -79,6 +79,7 @@ export const __testables = {
   mapAgnoAgentRow,
   mapAgnoTeamRow,
   mapAgnoWorkflowRow,
+  buildSchemaConfig,
 };
 
 // Single source of truth: derive VALID_SCHEMAS from @omni/core (DEC-12)
@@ -433,7 +434,7 @@ export function createProvidersCommand(): Command {
     .requiredOption('--base-url <url>', 'API base URL (ws:// or wss:// for openclaw)')
     .option('--api-key <key>', 'API key (optional for claude-code if using env ANTHROPIC_API_KEY)')
     .option('--description <desc>', 'Provider description')
-    .option('--timeout <seconds>', 'Default timeout in seconds', Number.parseInt, 60)
+    .option('--timeout <seconds>', 'Default timeout in seconds', (v) => Number.parseInt(v, 10), 60)
     .option('--stream', 'Enable streaming by default')
     // OpenClaw options
     .option('--default-agent-id <agentId>', 'Default agent ID (required for openclaw)')

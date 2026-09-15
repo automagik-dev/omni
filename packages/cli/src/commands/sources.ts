@@ -156,6 +156,10 @@ export interface AddSourceInput {
   /** Provider event names; must be a subset of preset.schemas. */
   events: string[];
   secret: string;
+  /** True when the secret came from the user (--secret-env), not generated. */
+  secretProvided?: boolean;
+  /** Replace an existing source's secret. Without it an adopted source keeps its secret. */
+  rotateSecret?: boolean;
   /** Omni base URL reachable from the provider. */
   publicUrl: string;
   providerWebhook: boolean;
@@ -167,6 +171,10 @@ export interface AddSourceInput {
 export interface AddSourceResult {
   sourceId: string;
   created: boolean;
+  /** Whether `secret` was written to omni (always on create; on adopt only with rotateSecret). */
+  secretApplied: boolean;
+  /** For an adopted source: the target it was bound to before this run (null = not recorded). */
+  previousTarget?: string | null;
   webhookUrl: string;
   providerHookId?: string;
   completed: string[];
@@ -182,6 +190,36 @@ export class StepFailure extends Error {
   }
 }
 
+const TARGET_MARKER = ' — target: ';
+
+/** Target recorded in a source description by a previous `sources add`, or null. */
+export function recordedTarget(description: string | null | undefined): string | null {
+  const i = description?.lastIndexOf(TARGET_MARKER) ?? -1;
+  return description && i >= 0 ? description.slice(i + TARGET_MARKER.length) : null;
+}
+
+/** Post-run notices: secret-shown-once, plus prominent adoption/divergence warnings for a pre-existing source. */
+export function adoptionWarnings(
+  name: string,
+  target: string,
+  providerWebhook: boolean,
+  result: Pick<AddSourceResult, 'sourceId' | 'created' | 'secretApplied' | 'previousTarget'>,
+): string[] {
+  const shown = 'The secret is shown once; store it now (re-run with --secret-env VAR to reuse it).';
+  if (result.created) return [shown];
+  const lines = [
+    `Adopted EXISTING source '${name}' (${result.sourceId}), previously bound to ${result.previousTarget ?? '(not recorded)'}. ` +
+      `Changed: target → ${target}, signature config, idempotency, event-type mapping, schemas; ` +
+      `secret ${result.secretApplied ? 'ROTATED' : 'unchanged'}.`,
+  ];
+  if (result.secretApplied && !providerWebhook) {
+    lines.push(
+      `Secret rotated with --no-provider-webhook: the provider still signs with the old secret and deliveries will fail 401. Recover: set the webhook secret on ${target} to the new value, or re-run without --no-provider-webhook.`,
+    );
+  }
+  return result.secretApplied ? [...lines, shown] : lines;
+}
+
 export const STEPS = ['source', 'idempotency', 'event-type-mapping', 'schemas', 'provider-webhook'] as const;
 
 export async function addSource(input: AddSourceInput): Promise<AddSourceResult> {
@@ -190,6 +228,20 @@ export async function addSource(input: AddSourceInput): Promise<AddSourceResult>
   if (unknown.length > 0) {
     throw new Error(
       `unknown ${preset.name} events: ${unknown.join(', ')} (known: ${Object.keys(preset.schemas).join(', ')})`,
+    );
+  }
+  const existing = (await client.listSources()).find((s) => s.name === preset.name);
+  const previousTarget = existing ? recordedTarget(existing.description) : undefined;
+  if (previousTarget && previousTarget !== input.target) {
+    throw new Error(
+      `source '${preset.name}' (${existing?.id}) is already bound to ${previousTarget}; refusing to rebind it to ${input.target}. ` +
+        `One ${preset.name} source serves one target — remove or rename the existing source first.`,
+    );
+  }
+  const secretApplied = !existing || Boolean(input.rotateSecret);
+  if (!secretApplied && input.providerWebhook && !input.secretProvided) {
+    throw new Error(
+      `source '${preset.name}' already exists and keeps its current secret, which omni cannot reveal. Pass --secret-env VAR holding that secret, --rotate-secret to replace it, or --no-provider-webhook.`,
     );
   }
   const webhookUrl = `${input.publicUrl.replace(/\/+$/, '')}/api/v2/webhooks/ingress/${preset.name}`;
@@ -204,13 +256,12 @@ export async function addSource(input: AddSourceInput): Promise<AddSourceResult>
     }
   };
 
-  // 1. source (find-or-create by name; signature config + secret)
+  // 1. source (find-or-create by name; signature config; secret only on create or --rotate-secret)
   const source = await run(STEPS[0], async () => {
-    const existing = (await client.listSources()).find((s) => s.name === preset.name);
     const body = {
-      description: preset.description,
+      description: `${preset.description}${TARGET_MARKER}${input.target}`,
       signatureConfig: preset.signatureConfig,
-      signatureSecret: input.secret,
+      ...(secretApplied ? { signatureSecret: input.secret } : {}),
       expectedIntervalSeconds: preset.expectedIntervalSeconds,
     };
     if (existing) return { id: (await client.updateSource(existing.id, body)).id, created: false };
@@ -238,7 +289,15 @@ export async function addSource(input: AddSourceInput): Promise<AddSourceResult>
       }),
     );
   }
-  return { sourceId: source.id, created: source.created, webhookUrl, providerHookId, completed };
+  return {
+    sourceId: source.id,
+    created: source.created,
+    secretApplied,
+    previousTarget,
+    webhookUrl,
+    providerHookId,
+    completed,
+  };
 }
 
 // ============================================================================
@@ -255,24 +314,33 @@ export function createSourcesCommand(): Command {
     .option('--events <list>', 'Comma-separated provider events (default: every bundled schema)')
     .option('--public-url <url>', 'Omni URL reachable from the provider (default: configured apiUrl)')
     .option('--secret-env <VAR>', 'Reuse the webhook secret from environment variable VAR instead of generating one')
+    .option('--rotate-secret', 'Replace the secret of an existing source (default: keep it)')
     .option('--no-provider-webhook', 'Skip creating the webhook on the provider side')
     .action(
       async (
         provider: string,
-        options: { repo: string; events?: string; publicUrl?: string; secretEnv?: string; providerWebhook: boolean },
+        options: {
+          repo: string;
+          events?: string;
+          publicUrl?: string;
+          secretEnv?: string;
+          rotateSecret?: boolean;
+          providerWebhook: boolean;
+        },
       ) => {
         const preset = PRESETS[provider];
         if (!preset) output.error(`Unknown provider '${provider}'. Presets: ${Object.keys(PRESETS).join(', ')}`);
         const client = getClient();
         try {
-          const secret =
-            (await resolveSignatureSecret({ signatureSecretEnv: options.secretEnv })) ??
-            randomBytes(32).toString('hex');
+          const provided = await resolveSignatureSecret({ signatureSecretEnv: options.secretEnv });
+          const secret = provided ?? randomBytes(32).toString('hex');
           const result = await addSource({
             preset,
             target: options.repo,
             events: options.events ? options.events.split(',').map((e) => e.trim()) : Object.keys(preset.schemas),
             secret,
+            secretProvided: provided !== undefined,
+            rotateSecret: options.rotateSecret,
             publicUrl: options.publicUrl ?? loadConfig().apiUrl ?? 'http://localhost:8882',
             providerWebhook: options.providerWebhook,
             client: client.webhooks,
@@ -280,15 +348,17 @@ export function createSourcesCommand(): Command {
               schemaApiRequest('', { method: 'POST', body: JSON.stringify({ eventType, schema, description }) }),
             providerApi: resolveGithubApi,
           });
+          const warnings = adoptionWarnings(preset.name, options.repo, options.providerWebhook, result);
           output.success(`Source ${result.created ? 'created' : 'updated'}: ${result.sourceId}`, {
             id: result.sourceId,
             name: preset.name,
-            secret,
+            target: options.repo,
+            ...(result.secretApplied && { secret }),
             webhookUrl: result.webhookUrl,
             providerHookId: result.providerHookId ?? '(skipped)',
             steps: result.completed.join(', '),
           });
-          output.warn('The secret is shown once; store it now (re-run with --secret-env VAR to reuse it).');
+          for (const line of warnings) output.warn(line);
         } catch (err) {
           if (err instanceof StepFailure) {
             const remaining = STEPS.filter((s) => !err.completed.includes(s));
