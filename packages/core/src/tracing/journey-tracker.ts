@@ -41,6 +41,9 @@ function emitCheckpointSpanEvent(stage: string, name: string, correlationId: str
 export const JOURNEY_STAGES = {
   // Inbound flow
   T0: 'platformReceivedAt',
+  // T0→T1 sub-stages (#1179), emitted only by plugins that wire them
+  T0a: 'pluginIngestedAt',
+  T0b: 'mediaReadyAt',
   T1: 'pluginReceivedAt',
   T2: 'eventPublishedAt',
   T3: 'eventConsumedAt',
@@ -68,6 +71,9 @@ export interface JourneyCheckpoint {
 /** Calculated latencies between stages */
 export interface JourneyLatencies {
   channelProcessing?: number; // T1 - T0
+  platformDelivery?: number; // T0a - T0 (sender clock → plugin handler)
+  mediaDownload?: number; // T0b - T0a
+  inboundEnrichment?: number; // T1 - T0b (contact/quote/chat resolution)
   eventPublish?: number; // T2 - T1
   natsDelivery?: number; // T3 - T2
   dbWrite?: number; // T4 - T3
@@ -136,6 +142,9 @@ const LATENCY_PAIRS: Array<{
   to: string;
 }> = [
   { key: 'channelProcessing', from: 'T0', to: 'T1' },
+  { key: 'platformDelivery', from: 'T0', to: 'T0a' },
+  { key: 'mediaDownload', from: 'T0a', to: 'T0b' },
+  { key: 'inboundEnrichment', from: 'T0b', to: 'T1' },
   { key: 'eventPublish', from: 'T1', to: 'T2' },
   { key: 'natsDelivery', from: 'T2', to: 'T3' },
   { key: 'dbWrite', from: 'T3', to: 'T4' },
