@@ -464,6 +464,19 @@ export class DeadLetterService {
     return result?.count ?? 0;
   }
 
+  /** Pending depth and oldest pending row, for the /health DLQ check (#1163). */
+  async getPendingSummary(): Promise<{ pending: number; oldestPendingAt: Date | null }> {
+    const [result] = await this.db
+      .select({
+        pending: sql<number>`count(*)::int`,
+        oldest: sql<string | null>`min(${deadLetterEvents.createdAt})`,
+      })
+      .from(deadLetterEvents)
+      .where(eq(deadLetterEvents.status, 'pending'));
+
+    return { pending: result?.pending ?? 0, oldestPendingAt: result?.oldest ? new Date(result.oldest) : null };
+  }
+
   /**
    * Get dead letter statistics
    */

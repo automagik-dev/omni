@@ -34,8 +34,8 @@
  */
 
 import { createLogger } from '@omni/core';
-import { consumerOffsets, deadLetterEvents } from '@omni/db';
-import { eq, sql } from 'drizzle-orm';
+import { consumerOffsets } from '@omni/db';
+import { sql } from 'drizzle-orm';
 import { type Context, Hono } from 'hono';
 import packageJson from '../../package.json';
 import { safeErrorMessage } from '../middleware/error';
@@ -93,7 +93,7 @@ export const getHealth = async (c: Context<{ Variables: AppVariables }>) => {
     ? { status: 'error', error: getPluginsDegradedReason() ?? 'Plugin initialization failed' }
     : { status: 'ok' };
 
-  const deadLettersCheck = await checkDeadLetters(db);
+  const deadLettersCheck = await checkDeadLetters(c.get('services'));
 
   // Determine overall status
   const hasErrors =
@@ -122,20 +122,16 @@ export const DEAD_LETTER_MAX_AGE_SECONDS = 24 * 60 * 60;
 
 /**
  * DLQ depth (#1163): pending rows used to accumulate with every surface green.
+ * Read through DeadLetterService (the registered access site), not the raw db.
  * A failed query is not reported here — the database check already covers it.
  */
-async function checkDeadLetters(db: AppVariables['db']): Promise<HealthCheck> {
+async function checkDeadLetters(services: AppVariables['services'] | undefined): Promise<HealthCheck> {
+  if (!services) return { status: 'ok', details: { available: false } };
   try {
-    const [row] = await db
-      .select({
-        pending: sql<number>`count(*)::int`,
-        oldest: sql<string | null>`min(${deadLetterEvents.createdAt})`,
-      })
-      .from(deadLetterEvents)
-      .where(eq(deadLetterEvents.status, 'pending'));
-    const pending = typeof row?.pending === 'number' ? row.pending : 0;
-    const oldestMs = row?.oldest ? new Date(row.oldest).getTime() : Number.NaN;
-    const oldestPendingAgeSeconds = Number.isNaN(oldestMs) ? null : Math.floor((Date.now() - oldestMs) / 1000);
+    const { pending, oldestPendingAt } = await services.deadLetters.getPendingSummary();
+    const oldestPendingAgeSeconds = oldestPendingAt
+      ? Math.floor((Date.now() - oldestPendingAt.getTime()) / 1000)
+      : null;
     const details = { pending, oldestPendingAgeSeconds };
     if (pending >= DEAD_LETTER_PENDING_THRESHOLD) {
       return { status: 'error', details, error: `${pending} pending dead letters` };

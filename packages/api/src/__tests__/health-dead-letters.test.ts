@@ -9,15 +9,21 @@ import { DEAD_LETTER_MAX_AGE_SECONDS, DEAD_LETTER_PENDING_THRESHOLD, getHealth }
 import type { AppVariables, HealthResponse } from '../types';
 
 function appWith(row: { pending: number; oldest: string | null }) {
-  const db = {
-    execute: async () => [],
-    select: () => ({ from: () => ({ where: async () => [row] }) }),
-  } as unknown as AppVariables['db'];
+  const db = { execute: async () => [] } as unknown as AppVariables['db'];
+  const services = {
+    deadLetters: {
+      getPendingSummary: async () => ({
+        pending: row.pending,
+        oldestPendingAt: row.oldest ? new Date(row.oldest) : null,
+      }),
+    },
+  } as unknown as AppVariables['services'];
   const app = new Hono<{ Variables: AppVariables }>();
   app.use('*', async (c, next) => {
     c.set('db', db);
     c.set('eventBus', null);
     c.set('channelRegistry', null);
+    c.set('services', services);
     await next();
   });
   app.get('/health', getHealth);
