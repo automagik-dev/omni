@@ -35,6 +35,7 @@ import { getClient } from '../client.js';
 import * as output from '../output.js';
 import { getCurrentFormat } from '../output.js';
 import { resolveAutomationId } from '../resolve.js';
+import { createAutomationsScaffoldCommand } from './automations-scaffold.js';
 
 // ============================================================================
 // HELPERS
@@ -240,6 +241,9 @@ export const __testables = { buildActions, buildDefinition, buildCreateBody, rea
 
 export function createAutomationsCommand(): Command {
   const automations = new Command('automations').description('Manage automations');
+
+  // omni automations scaffold <eventType> (issue #1182)
+  automations.addCommand(createAutomationsScaffoldCommand());
 
   // omni automations list
   automations
