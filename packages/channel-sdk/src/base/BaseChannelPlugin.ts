@@ -385,7 +385,7 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
    * });
    */
   protected async emitMessageReceived(params: EmitMessageReceivedParams): Promise<string> {
-    const { instanceId, timings, isHistorySync, ...payload } = params;
+    const { instanceId, timings, isHistorySync, onDuplicate, ...payload } = params;
     const options: PublishEventInternalOptions = {
       timings,
       ingestMode: isHistorySync ? 'history-sync' : 'realtime',
@@ -399,6 +399,7 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
       idempotencyKey: `${this.id}:${instanceId}:${this.ingressKeyId(payload.chatId, payload.externalId)}:${payload.content.type}`,
       externalId: payload.externalId,
       options,
+      onDuplicate,
     });
   }
 
@@ -423,9 +424,14 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
     type: K,
     payload: EventPayloadMap[K],
     instanceId: string,
-    params: { idempotencyKey: string; externalId: string; options?: PublishEventInternalOptions },
+    params: {
+      idempotencyKey: string;
+      externalId: string;
+      options?: PublishEventInternalOptions;
+      onDuplicate?: () => void;
+    },
   ): Promise<string> {
-    const { idempotencyKey, externalId, options = {} } = params;
+    const { idempotencyKey, externalId, options = {}, onDuplicate } = params;
     if (!this.ingressClaim) {
       return this.publishEventInternal(type, payload, instanceId, options);
     }
@@ -441,6 +447,7 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
         instanceId,
         idempotencyKey,
       });
+      onDuplicate?.();
       return generateCorrelationId('evt');
     }
     try {

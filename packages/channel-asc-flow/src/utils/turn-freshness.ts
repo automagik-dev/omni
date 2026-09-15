@@ -31,15 +31,21 @@ import type { AscFlowClient } from '../client';
 import { decodeAscEmoji } from './emoji';
 
 interface AscAtendimentoMessage {
+  id_mensagem?: string | number;
   descricao_msg?: string | null;
   boleano_entrante?: string | number;
 }
 
+interface LatestInbound {
+  id: string | null;
+  text: string;
+}
+
 /**
- * The text of the newest INBOUND message the platform holds for this
- * atendimento, or `null` when it cannot be read.
+ * The newest INBOUND text message the platform holds for this atendimento, or
+ * `null` when it cannot be read.
  */
-async function latestInboundText(client: AscFlowClient, codAtendimento: string): Promise<string | null> {
+async function latestInbound(client: AscFlowClient, codAtendimento: string): Promise<LatestInbound | null> {
   const { status, body } = await client.get('/atendimento', { codigo_atendimento: codAtendimento });
   if (status !== 200 || typeof body !== 'object' || body === null) return null;
 
@@ -52,7 +58,7 @@ async function latestInboundText(client: AscFlowClient, codAtendimento: string):
   for (const raw of [...(list as AscAtendimentoMessage[])].reverse()) {
     if (String(raw.boleano_entrante ?? '') !== '1') continue;
     const text = decodeAscEmoji(String(raw.descricao_msg ?? '').trim());
-    if (text) return text;
+    if (text) return { id: raw.id_mensagem == null ? null : String(raw.id_mensagem), text };
   }
   return null;
 }
@@ -69,13 +75,14 @@ export async function isStaleFlowReplay(params: {
   instanceId: string;
   codAtendimento: string;
   text: string;
+  messageId?: string;
   logger: Logger;
 }): Promise<boolean> {
-  const { client, instanceId, codAtendimento, text, logger } = params;
+  const { client, instanceId, codAtendimento, text, messageId, logger } = params;
 
-  let latest: string | null;
+  let latest: LatestInbound | null;
   try {
-    latest = await latestInboundText(client, codAtendimento);
+    latest = await latestInbound(client, codAtendimento);
   } catch (err) {
     logger.warn('[asc-flow] could not read the atendimento to date this turn — processing it', {
       instanceId,
@@ -86,7 +93,14 @@ export async function isStaleFlowReplay(params: {
   }
 
   if (latest === null) return false;
-  if (latest === text.trim()) return false;
+  // #1159: the id is the discriminator when both sides carry one. Text cannot
+  // tell an opening "oi" from a later "oi"; the re-send carries the OPENING
+  // messageId (it follows the frozen {#MENSAGEM}), not the latest one.
+  if (messageId && latest.id) {
+    if (latest.id === messageId) return false;
+  } else if (latest.text === text.trim()) {
+    return false;
+  }
 
   logger.info('[asc-flow] flow restarted with a stale input variable — dropping the replay', {
     instanceId,
