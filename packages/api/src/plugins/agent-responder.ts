@@ -681,7 +681,7 @@ export async function setupAgentResponder(eventBus: EventBus, services: Services
         // recreated durable, which is catastrophic for a side-effect handler.
         // See #411.
         startFrom: 'new',
-        concurrency: 5,
+        concurrency: 1, // effective value before #1181 forwarded it; raise deliberately
       },
     );
 
@@ -717,7 +717,7 @@ export async function setupAgentResponder(eventBus: EventBus, services: Services
         maxRetries: 1,
         // 'new' (was 'last') — see #411 startFrom rationale.
         startFrom: 'new',
-        concurrency: 10,
+        concurrency: 1, // effective value before #1181 forwarded it; raise deliberately
       },
     );
 
