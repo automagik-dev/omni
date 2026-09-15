@@ -1088,6 +1088,8 @@ export interface SendEmbedBody {
 export interface ConnectInstanceBody {
   token?: string;
   forceNewQr?: boolean;
+  /** Override the shared-Slack-app-token refusal (#1185) */
+  force?: boolean;
   twilioAccountSid?: string;
   twilioAuthToken?: string;
   twilioFrom?: string;
