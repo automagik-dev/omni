@@ -1096,9 +1096,9 @@ export class AscFlowPlugin extends BaseChannelPlugin {
    * own conversation identity, and the only handle every outbound endpoint
    * accepts. The phone, when the flow supplies it, is the sender identity.
    */
-  async handleInboundTurn(instanceId: string, turn: ParsedAscFlowTurn): Promise<void> {
+  async handleInboundTurn(instanceId: string, turn: ParsedAscFlowTurn): Promise<boolean> {
     const sanitized = sanitizeMessage(turn.text, this.logger, { instanceId, messageId: turn.messageId });
-    if (!sanitized.ok) return;
+    if (!sanitized.ok) return false;
 
     // Open the in-flight window BEFORE anything awaits: the flow re-POSTs every
     // ~2s while it waits, and those re-POSTs must find the mark already set.
@@ -1140,7 +1140,11 @@ export class AscFlowPlugin extends BaseChannelPlugin {
         : null;
 
     const timings = this.captureInboundTimings(Date.now());
+    let duplicate = false;
     const correlationId = await this.emitMessageReceived({
+      onDuplicate: () => {
+        duplicate = true;
+      },
       instanceId,
       externalId,
       chatId: turn.codAtendimento,
@@ -1178,9 +1182,40 @@ export class AscFlowPlugin extends BaseChannelPlugin {
     // A slow publish can be overtaken by the beneficiary's next message, and
     // labelling THAT turn with this trace would defeat the correlation.
     const stamped = this.ascFlowInstances.get(instanceId)?.inFlight.get(turn.codAtendimento);
+
+    // #1159: this externalId was already journaled for this cod — the flow
+    // restarted and re-sent a stale input carrying the opening messageId, hours
+    // after its 60s dedupe entry expired. Nothing was published, so no answer
+    // is coming: close the window instead of holding the webhook for one.
+    if (duplicate) {
+      this.dropRepublishedTurn(instanceId, turn);
+      return false;
+    }
+
     if (stamped && stamped.text === turn.text && !stamped.correlationId) stamped.correlationId = correlationId;
 
     if (timings) this.captureT2(correlationId, timings);
+    return true;
+  }
+
+  /** Close the turn window a refused re-publish opened — no answer will fill it. */
+  private dropRepublishedTurn(instanceId: string, turn: ParsedAscFlowTurn): void {
+    const inFlight = this.ascFlowInstances.get(instanceId)?.inFlight;
+    const stamped = inFlight?.get(turn.codAtendimento);
+    if (stamped && stamped.text === turn.text && !stamped.correlationId) inFlight?.delete(turn.codAtendimento);
+    this.logger.info('[asc-flow] messageId already published for this atendimento — dropping the re-send', {
+      instanceId,
+      codAtendimento: turn.codAtendimento,
+    });
+  }
+
+  /**
+   * Platform message ids are only trusted per atendimento, so the ingress
+   * idempotency key is scoped by the cod — the same (chat, externalId) pair
+   * the persisted messages are keyed on.
+   */
+  protected override ingressKeyId(chatId: string, id: string): string {
+    return `${chatId}:${id}`;
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -1331,6 +1366,7 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       instanceId,
       codAtendimento: turn.codAtendimento,
       text: turn.text,
+      messageId: turn.messageId,
       logger: this.logger,
     });
   }

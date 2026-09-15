@@ -7,7 +7,7 @@
  * REPLACE one — so they are pinned together.
  */
 
-import { afterEach, describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it, spyOn } from 'bun:test';
 
 import { AscFlowPlugin } from '../plugin';
 import { encodeAscEmoji } from '../utils/emoji';
@@ -602,5 +602,91 @@ describe('a re-send whose fields agree', () => {
     await post('42', '2');
 
     expect(calls.filter((c) => c.path === '/atendimento')).toHaveLength(0);
+  });
+});
+
+/**
+ * #1159: a stale re-send whose texts ALL agree — chatInput "oi" (stale
+ * {#entrada}), message "oi" (frozen {#MENSAGEM}), latest inbound "oi" — and
+ * whose messageId is the atendimento's OPENING id, hours after it was answered.
+ */
+describe('a stale re-send carrying the opening messageId (#1159)', () => {
+  const atendimento = () =>
+    jsonResponse({
+      mensagens: [
+        { id_mensagem: 'M1', boleano_entrante: '1', descricao_msg: 'oi' },
+        { id_mensagem: 'O1', boleano_entrante: '0', descricao_msg: 'olá' },
+        { id_mensagem: 'M2', boleano_entrante: '1', descricao_msg: 'oi' },
+      ],
+    });
+
+  async function start(context = createContext(new MockEventBus())): Promise<void> {
+    const stub = stubPlatform({ '/atendimento': atendimento });
+    calls = stub.calls;
+    restore = stub.restore;
+    eventBus = context.eventBus as MockEventBus;
+    plugin = new AscFlowPlugin();
+    await plugin.initialize(context);
+    await connectPlugin(plugin);
+  }
+
+  const post = (messageId: string) =>
+    plugin.handleWebhook(
+      new Request(`http://localhost/api/v2/channels/asc-flow/${instanceId}/webhook`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ codAtendimento: '42', chatInput: 'oi', message: 'oi', messageId }),
+      }),
+    );
+
+  async function turno(messageId: string): Promise<void> {
+    await post(messageId);
+    await send('olá');
+    poll('oi');
+  }
+
+  it('drops it when the platform latest inbound id is newer, even with equal texts', async () => {
+    await start();
+    await turno('M1');
+    await turno('M2');
+    expect(received()).toHaveLength(2); // the genuine repeat "oi" (M2) is kept
+
+    // Hours later: the 60s messageId dedupe entry for M1 has long expired.
+    const later = Date.now() + 3 * 60 * 60 * 1000;
+    const clock = spyOn(Date, 'now').mockReturnValue(later);
+    try {
+      await post('M1');
+    } finally {
+      clock.mockRestore();
+    }
+
+    expect(received()).toHaveLength(2);
+  });
+
+  it('refuses to republish a journaled (cod, messageId) after a restart', async () => {
+    const journaled = new Set<string>();
+    const context = createContext(new MockEventBus());
+    context.ingressClaim = {
+      claim: async ({ idempotencyKey }) => {
+        if (journaled.has(idempotencyKey)) return null;
+        journaled.add(idempotencyKey);
+        return crypto.randomUUID();
+      },
+      release: async () => {},
+    };
+    await start(context);
+    await turno('M1');
+    expect(received()).toHaveLength(1);
+
+    // Restart: every in-memory guard (dedupe cache, lastAnswered, seenCods) is gone.
+    await plugin.destroy();
+    restore();
+    await start(context);
+
+    const res = await post('M1');
+
+    expect(received()).toHaveLength(1);
+    expect(((await res.json()) as { pronto?: number }).pronto).toBe(0);
+    expect(journaled.has(`asc-flow:${instanceId}:42:M1:text`)).toBe(true);
   });
 });

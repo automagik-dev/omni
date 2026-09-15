@@ -268,7 +268,9 @@ export async function handleAscFlowWebhookRequest(
     return pending();
   }
 
-  await plugin.handleInboundTurn(instanceId, turn);
+  if (!(await plugin.handleInboundTurn(instanceId, turn))) {
+    return pending();
+  }
 
   // HOLD the request until the agent answers, instead of returning `pronto:0`
   // and trusting the node to poll again.
