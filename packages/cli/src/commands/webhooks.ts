@@ -472,6 +472,8 @@ export function createWebhooksCommand(): Command {
             // signature-verified ingress; the API-key route is for internal callers.
             url: `POST ${ingressUrl(source.name)}`,
             internalUrl: `POST /api/v2/webhooks/${source.name} (requires x-api-key)`,
+            payloadLimit:
+              'Event payloads are capped by NATS max_payload (1 MB default); larger deliveries get 413. Store large bodies and publish a reference.',
           };
           if (!signatureConfig) {
             details.note = 'Ingress rejects deliveries until a signature config + secret is set (webhooks update)';
