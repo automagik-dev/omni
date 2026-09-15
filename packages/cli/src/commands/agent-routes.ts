@@ -278,7 +278,7 @@ export function createRoutesCommand(): Command {
     .option('--gate-prompt <prompt>', 'Response gate prompt')
     .option('--reply-filter-mode <mode>', 'Reply filter: all or filtered')
     .option('--label <label>', 'Human-readable label for this route')
-    .option('--priority <number>', 'Priority (higher = higher priority)', Number.parseInt, 0)
+    .option('--priority <number>', 'Priority (higher = higher priority)', (v) => Number.parseInt(v, 10), 0)
     .option('--inactive', 'Create route as inactive')
     .action(createAgentRouteAction);
 
