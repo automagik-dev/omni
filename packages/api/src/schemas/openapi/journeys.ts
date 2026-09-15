@@ -13,6 +13,9 @@ const JourneyCheckpointSchema = z.object({
 
 const JourneyLatenciesSchema = z.object({
   channelProcessing: z.number().optional().openapi({ description: 'T1 - T0 (ms)' }),
+  platformDelivery: z.number().optional().openapi({ description: 'T0a - T0 (ms)' }),
+  mediaDownload: z.number().optional().openapi({ description: 'T0b - T0a (ms)' }),
+  inboundEnrichment: z.number().optional().openapi({ description: 'T1 - T0b (ms)' }),
   eventPublish: z.number().optional().openapi({ description: 'T2 - T1 (ms)' }),
   natsDelivery: z.number().optional().openapi({ description: 'T3 - T2 (ms)' }),
   dbWrite: z.number().optional().openapi({ description: 'T4 - T3 (ms)' }),

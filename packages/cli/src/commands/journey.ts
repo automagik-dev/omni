@@ -28,6 +28,9 @@ const STAGE_LABELS: Record<string, string> = {
 /** Latency display names */
 const LATENCY_LABELS: Record<string, string> = {
   channelProcessing: 'Channel Processing (T0→T1)',
+  platformDelivery: '  Platform Delivery (T0→T0a)',
+  mediaDownload: '  Media Download (T0a→T0b)',
+  inboundEnrichment: '  Enrichment (T0b→T1)',
   eventPublish: 'Event Publish (T1→T2)',
   natsDelivery: 'NATS Delivery (T2→T3)',
   dbWrite: 'DB Write (T3→T4)',
