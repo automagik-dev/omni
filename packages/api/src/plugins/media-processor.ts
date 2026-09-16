@@ -819,7 +819,7 @@ export async function setupMediaProcessor(eventBus: EventBus, db: Database, serv
       maxRetries: 2,
       retryDelayMs: 1000,
       startFrom: 'first',
-      concurrency: 1, // effective value before #1181 forwarded it; raise deliberately
+      concurrency: 5, // #1200: per-message work, independent across deliveries
     },
   );
 

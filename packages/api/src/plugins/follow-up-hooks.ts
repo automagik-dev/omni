@@ -114,7 +114,7 @@ export async function setupFollowUpHooks(eventBus: EventBus, services: Services,
         maxRetries: 2,
         retryDelayMs: 500,
         startFrom: 'new',
-        concurrency: 1, // effective value before #1181 forwarded it; raise deliberately
+        concurrency: 1, // serial (#1200): sent/received order decides which follow-up timer is armed or cancelled
       },
     );
 
@@ -158,7 +158,7 @@ export async function setupFollowUpHooks(eventBus: EventBus, services: Services,
         maxRetries: 2,
         retryDelayMs: 500,
         startFrom: 'new',
-        concurrency: 1, // effective value before #1181 forwarded it; raise deliberately
+        concurrency: 1, // serial (#1200): sent/received order decides which follow-up timer is armed or cancelled
       },
     );
 

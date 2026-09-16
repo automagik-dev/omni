@@ -150,7 +150,7 @@ const CONSUMER_OPTIONS = {
   maxRetries: 3,
   retryDelayMs: 1000,
   startFrom: 'first' as const,
-  concurrency: 1, // effective value before #1181 forwarded it; raise deliberately
+  concurrency: 10, // #1200: journal writes upsert by event id, so order-insensitive
 };
 
 /**
