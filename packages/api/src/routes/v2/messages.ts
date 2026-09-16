@@ -770,7 +770,14 @@ const sendCloseContactSchema = z.object({
   instanceId: z.string().uuid().describe('Instance ID — close-contact native send is Gupshup-only in v1'),
   chatId: z.string().min(1).describe('Chat DB UUID to mark as closed'),
   to: z.string().min(1).describe('Recipient phone or platform ID'),
-  text: z.string().min(1).describe('Farewell message shown to the lead'),
+  text: z
+    .string()
+    .optional()
+    .describe(
+      'Farewell message shown to the contact. Omit (or send an empty string) to classify/close without a farewell: ' +
+        'channels declaring `canCloseContactWithoutText` still receive the native close event with an empty text ' +
+        '(the channel flow must not deliver an empty message); other channels skip the channel send.',
+    ),
   outcome: z
     .enum(['won', 'lost', 'redirected_sac', 'unqualified', 'no_response', 'other'])
     .describe('Drives terminal/cooldown/escalation logic and BI/audit trail'),
@@ -1993,6 +2000,25 @@ async function computeCloseContactTerminalState(
 }
 
 /**
+ * Decide what the close-contact route sends to the channel.
+ *
+ * Whitespace-only text is treated as "no farewell" — no channel delivers it.
+ * A close without farewell only reaches channels whose native close event can
+ * travel without text (`canCloseContactWithoutText`); elsewhere it would go
+ * out as an empty text message, so the channel send is skipped.
+ */
+function planCloseContactSend(
+  text: string | undefined,
+  capabilities: { canCloseContact?: boolean; canCloseContactWithoutText?: boolean } | undefined,
+): { hasNativeClose: boolean; sendNativeClose: boolean; farewellText: string; withoutFarewell: boolean } {
+  const hasNativeClose = capabilities?.canCloseContact === true;
+  const farewellText = text?.trim() ? text : '';
+  const withoutFarewell = farewellText === '';
+  const sendNativeClose = hasNativeClose && (!withoutFarewell || capabilities?.canCloseContactWithoutText === true);
+  return { hasNativeClose, sendNativeClose, farewellText, withoutFarewell };
+}
+
+/**
  * POST /messages/send/close-contact - Terminal close
  *
  * Counterpart to /send/handoff: handoff pauses for a human; close terminates
@@ -2001,7 +2027,10 @@ async function computeCloseContactTerminalState(
  *   1. Sends a native CLOSING payload on channels that declare
  *      `canCloseContact: true` (Gupshup in v1). Other channels still run
  *      the channel-agnostic side effects below — agents can self-close on
- *      any channel.
+ *      any channel. The payload carries the outcome, reason and closeFields.
+ *      Without `text` (close without farewell) the native event is sent with
+ *      an empty text only where `canCloseContactWithoutText: true`; the audit
+ *      row stores `text = ''` and the remaining steps are unchanged.
  *   2. Inserts a row into close_contact_logs FIRST (the table is the
  *      source of truth for the escalation history query).
  *   3. Computes the terminal state from outcome + recent history:
@@ -2048,15 +2077,18 @@ messagesRoutes.post('/send/close-contact', zValidator('json', sendCloseContactSc
   }
 
   const resolvedTo = await resolveRecipient(data.to, instance.channel, services);
-  const hasNativeClose = plugin.capabilities?.canCloseContact === true;
   const outcome = data.outcome as CloseContactOutcome;
+  const { hasNativeClose, sendNativeClose, farewellText, withoutFarewell } = planCloseContactSend(
+    data.text,
+    plugin.capabilities,
+  );
 
   // ── 1. Native channel send (Gupshup CLOSING msg_type) ────────────────────
   let channelSendResult: Awaited<ReturnType<typeof plugin.sendMessage>> | null = null;
-  if (hasNativeClose) {
+  if (sendNativeClose) {
     const outgoingMessage: OutgoingMessage = {
       to: resolvedTo,
-      content: { type: 'text', text: data.text } as OutgoingContent,
+      content: { type: 'text', text: farewellText } as OutgoingContent,
       metadata: {
         isCloseContact: true,
         closeReason: data.reason,
@@ -2080,7 +2112,7 @@ messagesRoutes.post('/send/close-contact', zValidator('json', sendCloseContactSc
       chatUuid: data.chatId,
       chatId: resolvedTo,
       toPhone: resolvedTo,
-      text: data.text,
+      text: farewellText,
       outcome,
       reason: data.reason ?? null,
       closeFields: data.closeFields ?? null,
@@ -2091,6 +2123,8 @@ messagesRoutes.post('/send/close-contact', zValidator('json', sendCloseContactSc
       metadata: {
         instanceChannel: instance.channel,
         channelCloseSupported: hasNativeClose,
+        channelCloseSent: sendNativeClose,
+        withoutFarewell,
       },
     })
     .returning();

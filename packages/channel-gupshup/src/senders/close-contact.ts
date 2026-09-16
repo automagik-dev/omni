@@ -24,6 +24,11 @@ import type { GupshupSendResponse } from '../types';
 /** Wire literal that Gupshup's Journey routes on. Partner contract — do not change without re-confirming. */
 export const GUPSHUP_CLOSE_MSG_TYPE = 'CLOSING' as const;
 
+/**
+ * Send the CLOSING event. An empty `text` means classify/close without a
+ * farewell: `message_text` goes out as `''` and the channel flow must not
+ * deliver an empty message to the customer.
+ */
 export async function sendCloseContact(
   client: GupshupClient,
   to: string,

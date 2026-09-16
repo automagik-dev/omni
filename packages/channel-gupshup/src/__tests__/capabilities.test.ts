@@ -18,6 +18,8 @@ describe('GUPSHUP_CAPABILITIES', () => {
     it('canReceiveDeliveryReceipts', () => expect(GUPSHUP_CAPABILITIES.canReceiveDeliveryReceipts).toBe(true));
     it('canHandleDMs', () => expect(GUPSHUP_CAPABILITIES.canHandleDMs).toBe(true));
     it('canReplyToMessage', () => expect(GUPSHUP_CAPABILITIES.canReplyToMessage).toBe(true));
+    it('canCloseContact', () => expect(GUPSHUP_CAPABILITIES.canCloseContact).toBe(true));
+    it('canCloseContactWithoutText', () => expect(GUPSHUP_CAPABILITIES.canCloseContactWithoutText).toBe(true));
   });
 
   describe('unsupported features (false)', () => {

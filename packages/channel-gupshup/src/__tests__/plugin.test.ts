@@ -251,3 +251,86 @@ describe('GupshupPlugin — handoff options', () => {
     }
   });
 });
+
+describe('GupshupPlugin — close-contact', () => {
+  async function connectedPlugin(published: string[]): Promise<GupshupPlugin> {
+    const publish = mock(async (type: string) => {
+      published.push(type);
+    });
+    const plugin = new GupshupPlugin();
+    await plugin.initialize({
+      eventBus: { publish } as unknown as EventBus,
+      logger: makeLogger(),
+      storage: {} as never,
+      config: {} as never,
+      db: {} as never,
+    });
+    await plugin.connect('inst-1', {
+      instanceId: 'inst-1',
+      credentials: {
+        gupshupCallbackUrl: 'https://callbacks.gupshup.io/custom/abc123',
+        gupshupAuthToken: 'Bearer test-auth-token',
+      },
+    });
+    return plugin;
+  }
+
+  function captureBodies(): { bodies: Record<string, unknown>[]; restore: () => void } {
+    const bodies: Record<string, unknown>[] = [];
+    const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation((async (_url: unknown, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return makeOkResponse({ status: 'ok', messageId: 'close-msg-id' });
+    }) as unknown as typeof fetch);
+    return { bodies, restore: () => fetchSpy.mockRestore() };
+  }
+
+  it('posts CLOSING with the close classification and records the farewell as sent', async () => {
+    const { bodies, restore } = captureBodies();
+    const published: string[] = [];
+    try {
+      const plugin = await connectedPlugin(published);
+      const result = await plugin.sendMessage('inst-1', {
+        to: '15550001111',
+        content: { type: 'text', text: 'Goodbye' },
+        metadata: {
+          isCloseContact: true,
+          closeReason: 'sale completed',
+          closeOutcome: 'won',
+          closeFields: { plan: 'basic' },
+        },
+      });
+
+      expect(result.success).toBe(true);
+      const closing = bodies.find((b) => b.msg_type === 'CLOSING');
+      expect(closing?.message_text).toBe('Goodbye');
+      expect(closing?.close_reason).toBe('sale completed');
+      expect(closing?.close_outcome).toBe('won');
+      expect(closing?.close_fields).toEqual({ plan: 'basic' });
+      expect(published).toContain('message.sent');
+    } finally {
+      restore();
+    }
+  });
+
+  it('posts CLOSING with empty message_text and emits no message.sent when there is no farewell', async () => {
+    const { bodies, restore } = captureBodies();
+    const published: string[] = [];
+    try {
+      const plugin = await connectedPlugin(published);
+      const result = await plugin.sendMessage('inst-1', {
+        to: '15550001111',
+        content: { type: 'text', text: '' },
+        metadata: { isCloseContact: true, closeOutcome: 'no_response' },
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.messageId).toBe('close-msg-id');
+      const closing = bodies.find((b) => b.msg_type === 'CLOSING');
+      expect(closing?.message_text).toBe('');
+      expect(closing?.close_outcome).toBe('no_response');
+      expect(published).not.toContain('message.sent');
+    } finally {
+      restore();
+    }
+  });
+});

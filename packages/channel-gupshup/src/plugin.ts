@@ -38,6 +38,11 @@ import type { GupshupConfig, GupshupSendResponse } from './types';
 import { GupshupError, GupshupErrorCode, isRetryable } from './utils/errors';
 import { toGupshupPhone } from './utils/identity';
 
+/** True for a close-contact event that carries no customer-facing text. */
+function isCloseWithoutText(message: OutgoingMessage): boolean {
+  return message.metadata?.isCloseContact === true && !message.content.text;
+}
+
 /** Dispatch outgoing content to the appropriate Gupshup sender */
 async function dispatchContent(
   client: GupshupClient,
@@ -257,6 +262,13 @@ export class GupshupPlugin extends BaseChannelPlugin {
 
       // Journey timing: T11 (platformDeliveredAt) after API responds
       if (correlationId) this.captureT11(correlationId);
+
+      // A close-contact without farewell text carries only the close event:
+      // nothing reaches the customer, so no outbound message is recorded
+      // (it would persist as an empty message in the conversation).
+      if (isCloseWithoutText(message)) {
+        return { success: true, messageId, timestamp: Date.now() };
+      }
 
       await this.emitMessageSent({
         instanceId,

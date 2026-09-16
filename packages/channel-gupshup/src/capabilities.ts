@@ -21,6 +21,7 @@ export const GUPSHUP_CAPABILITIES: ChannelCapabilities = {
   canForwardMessage: false,
   canHandoff: true,
   canCloseContact: true,
+  canCloseContactWithoutText: true,
   canSendContact: false,
   canSendLocation: true,
   canSendSticker: true,
