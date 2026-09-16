@@ -167,4 +167,46 @@ describeWithDb('media processor persistence', () => {
     expect(storedMedia?.content).toBe(result.content);
     expect(storedMedia?.processingType).toBe('transcription');
   });
+  test('concurrent persists for distinct messages produce the same rows as serial (#1200)', async () => {
+    const created = await Promise.all(Array.from({ length: 5 }, () => createAudioMessage()));
+    const ids = created.map((c) => c.messageId);
+    const snapshot = async () => {
+      const media = await db
+        .select({ mediaId: mediaContent.mediaId, content: mediaContent.content, type: mediaContent.processingType })
+        .from(mediaContent)
+        .where(inArray(mediaContent.mediaId, ids));
+      const msgs = await db
+        .select({ id: messages.id, transcription: messages.transcription })
+        .from(messages)
+        .where(inArray(messages.id, ids));
+      return {
+        media: media.sort((a, b) => String(a.mediaId).localeCompare(String(b.mediaId))),
+        msgs: msgs.sort((a, b) => a.id.localeCompare(b.id)),
+      };
+    };
+
+    for (const id of ids) {
+      await __test__.persistProcessingResult(testContext(), id, null, transcriptionResult(`t-${id}`), 'audio');
+    }
+    const serial = await snapshot();
+    await db.delete(mediaContent).where(inArray(mediaContent.mediaId, ids));
+    await db.update(messages).set({ transcription: null }).where(inArray(messages.id, ids));
+
+    let inFlight = 0;
+    let peak = 0;
+    await Promise.all(
+      ids.map(async (id) => {
+        peak = Math.max(peak, ++inFlight);
+        try {
+          await __test__.persistProcessingResult(testContext(), id, null, transcriptionResult(`t-${id}`), 'audio');
+        } finally {
+          inFlight--;
+        }
+      }),
+    );
+
+    expect(peak).toBe(ids.length);
+    expect(serial.media).toHaveLength(ids.length);
+    expect(await snapshot()).toEqual(serial);
+  });
 });

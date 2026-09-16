@@ -808,4 +808,67 @@ describeWithDb('Event Persistence Handler', () => {
       expect(persisted?.externalId).toBeNull();
     });
   });
+  describe('concurrency (#1200)', () => {
+    function receivedEvent(n: number) {
+      return {
+        id: randomUUID(),
+        type: 'message.received',
+        timestamp: 1_700_000_000_000 + n,
+        payload: {
+          externalId: `ext-conc-${n}`,
+          chatId: 'chat-conc',
+          from: 'user-conc',
+          content: { type: 'text', text: `msg ${n}` },
+          replyToId: null,
+        },
+        metadata: { correlationId: `corr-conc-${n}`, instanceId: null, channelType: 'discord' },
+      };
+    }
+
+    async function journal() {
+      const rows = await db.select().from(omniEvents).where(sql`${omniEvents.externalId} LIKE 'ext-conc-%'`);
+      return rows
+        .map(({ id, externalId, eventType, textContent, status }) => ({
+          id,
+          externalId,
+          eventType,
+          textContent,
+          status,
+        }))
+        .sort((a, b) => a.id.localeCompare(b.id));
+    }
+
+    test('declares concurrency > 1 and concurrent deliveries journal the same rows as serial', async () => {
+      await setupEventPersistence(mockEventBus, db);
+      const options = (mockEventBus.subscribe as ReturnType<typeof mock>).mock.calls.map((c) => c[2]);
+      expect(options.every((o) => (o as { concurrency: number }).concurrency === 10)).toBe(true);
+
+      const [handler] = subscriptions.get('message.received') ?? [];
+      if (!handler) throw new Error('message.received handler not registered');
+      // Every event delivered twice (redelivery), in shuffled order.
+      const events = Array.from({ length: 10 }, (_, n) => receivedEvent(n));
+      const deliveries = [...events, ...[...events].reverse()];
+
+      for (const event of deliveries) await handler(event);
+      const serial = await journal();
+      await db.delete(omniEvents).where(sql`${omniEvents.externalId} LIKE 'ext-conc-%'`);
+
+      let inFlight = 0;
+      let peak = 0;
+      await Promise.all(
+        deliveries.map(async (event) => {
+          peak = Math.max(peak, ++inFlight);
+          try {
+            await handler(event);
+          } finally {
+            inFlight--;
+          }
+        }),
+      );
+
+      expect(peak).toBe(deliveries.length);
+      expect(serial).toHaveLength(events.length);
+      expect(await journal()).toEqual(serial);
+    });
+  });
 });
