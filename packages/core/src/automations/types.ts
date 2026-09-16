@@ -278,6 +278,8 @@ export interface AutomationLog {
   actionsExecuted: ActionExecutionResult[] | null;
   error: string | null;
   executionTimeMs: number | null;
+  /** Time waited for a concurrency slot; 0 = ran immediately, null = not recorded (#1206). */
+  queueWaitMs: number | null;
   createdAt: Date;
 }
 
@@ -292,4 +294,5 @@ export interface NewAutomationLog {
   actionsExecuted?: ActionExecutionResult[];
   error?: string;
   executionTimeMs?: number;
+  queueWaitMs?: number;
 }

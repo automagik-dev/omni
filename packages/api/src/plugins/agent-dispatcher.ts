@@ -6356,7 +6356,7 @@ export async function setupAgentDispatcher(
         // ignored (last-ack position wins); for a recreated durable it
         // prevents arbitrary-time replay of an old event.
         startFrom: 'new',
-        concurrency: 1, // effective value before #1181 forwarded it; raise deliberately
+        concurrency: 1, // serial (#1200): per-chat debounce/turn state assumes messages arrive in chat order
       },
     );
 
@@ -6423,7 +6423,7 @@ export async function setupAgentDispatcher(
         retryDelayMs: 1000,
         // 'new' (was 'last') — see #411 startFrom rationale.
         startFrom: 'new',
-        concurrency: 1, // effective value before #1181 forwarded it; raise deliberately
+        concurrency: 1, // serial (#1200): reaction trigger add/remove must apply in order
       },
     );
 
@@ -6489,7 +6489,7 @@ export async function setupAgentDispatcher(
         retryDelayMs: 1000,
         // 'new' (was 'last') — see #411 startFrom rationale.
         startFrom: 'new',
-        concurrency: 1, // effective value before #1181 forwarded it; raise deliberately
+        concurrency: 1, // serial (#1200): reaction trigger add/remove must apply in order
       },
     );
 
@@ -6544,7 +6544,7 @@ export async function setupAgentDispatcher(
         maxRetries: 1,
         // 'new' (was 'last') — see #411 startFrom rationale.
         startFrom: 'new',
-        concurrency: 1, // effective value before #1181 forwarded it; raise deliberately
+        concurrency: 1, // serial (#1200): typing start/stop must apply in order to extend debounce correctly
       },
     );
 

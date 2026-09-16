@@ -3282,6 +3282,8 @@ export const automationLogs = pgTable(
 
     // Performance
     executionTimeMs: integer('execution_time_ms'),
+    /** Time the run waited for a concurrency slot (#1206); 0 = ran immediately. */
+    queueWaitMs: integer('queue_wait_ms'),
 
     // Timestamps
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

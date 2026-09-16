@@ -1253,7 +1253,7 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
         maxRetries: 3,
         retryDelayMs: 1000,
         startFrom: 'first',
-        concurrency: 1, // effective value before #1181 forwarded it; raise deliberately
+        concurrency: 1, // serial (#1200): a message row must exist before edits/deletes/receipts for it apply
       },
     );
 
@@ -1371,7 +1371,7 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
         maxRetries: 3,
         retryDelayMs: 1000,
         startFrom: 'first',
-        concurrency: 1, // effective value before #1181 forwarded it; raise deliberately
+        concurrency: 1, // serial (#1200): sent-message row must exist before its edits/receipts apply
       },
     );
 
@@ -1424,7 +1424,7 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
         maxRetries: 2,
         retryDelayMs: 500,
         startFrom: 'first',
-        concurrency: 1, // effective value before #1181 forwarded it; raise deliberately
+        concurrency: 1, // serial (#1200): delivered must not overwrite a later read status
       },
     );
 
@@ -1476,7 +1476,7 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
         maxRetries: 2,
         retryDelayMs: 500,
         startFrom: 'first',
-        concurrency: 1, // effective value before #1181 forwarded it; raise deliberately
+        concurrency: 1, // serial (#1200): read must land after sent/delivered for the same message
       },
     );
 
@@ -1487,7 +1487,7 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
       maxRetries: 2,
       retryDelayMs: 500,
       startFrom: 'first',
-      concurrency: 1, // effective value before #1181 forwarded it; raise deliberately
+      concurrency: 1, // serial (#1200): pin/unpin of one message must apply in order
     });
 
     await eventBus.subscribe('message.unpinned', (event) => handleMessagePinState(services, event, false), {
@@ -1496,7 +1496,7 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
       maxRetries: 2,
       retryDelayMs: 500,
       startFrom: 'first',
-      concurrency: 1, // effective value before #1181 forwarded it; raise deliberately
+      concurrency: 1, // serial (#1200): pin/unpin of one message must apply in order
     });
 
     // Subscribe to reaction.received / reaction.removed — per-message reactions (#1033)
@@ -1506,7 +1506,7 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
       maxRetries: 2,
       retryDelayMs: 500,
       startFrom: 'first',
-      concurrency: 1, // effective value before #1181 forwarded it; raise deliberately
+      concurrency: 1, // serial (#1200): reaction add/remove of one emoji must apply in order
     });
 
     await eventBus.subscribe('reaction.removed', (event) => handleReactionState(services, event, false), {
@@ -1515,7 +1515,7 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
       maxRetries: 2,
       retryDelayMs: 500,
       startFrom: 'first',
-      concurrency: 1, // effective value before #1181 forwarded it; raise deliberately
+      concurrency: 1, // serial (#1200): reaction add/remove of one emoji must apply in order
     });
 
     // Subscribe to instance.connected for post-reconnect backfill detection
@@ -1608,7 +1608,7 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
         maxRetries: 2,
         retryDelayMs: 1000,
         startFrom: 'first',
-        concurrency: 1, // effective value before #1181 forwarded it; raise deliberately
+        concurrency: 1, // serial (#1200): concurrent reconnects of one instance could start duplicate backfill jobs
       },
     );
 

@@ -30,6 +30,7 @@
       "ignore": ["src/plugins/agent-responder.ts"]
     },
     "packages/core": {
+      "entry": ["src/**/__tests__/fixtures/*.ts"],
       "project": ["src/**/*.ts"]
     },
     "packages/channel-sdk": {
