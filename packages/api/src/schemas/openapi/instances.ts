@@ -18,6 +18,11 @@ export const InstanceSchema = z.object({
   isDefault: z.boolean().openapi({ description: 'Whether this is the default instance for channel' }),
   profileName: z.string().nullable().openapi({ description: 'Connected profile name' }),
   profilePicUrl: z.string().nullable().openapi({ description: 'Profile picture URL' }),
+  historyIdentity: z.enum(['desktop', 'web']).openapi({
+    description:
+      "WhatsApp (Baileys) pairing identity: 'desktop' (macOS Desktop + group history) or 'web' (Ubuntu/Chrome)",
+  }),
+  syncFullHistory: z.boolean().openapi({ description: 'WhatsApp (Baileys): request full history on connect' }),
   ownerIdentifier: z.string().nullable().openapi({ description: 'Owner identifier' }),
   agentId: z.string().uuid().nullable().optional().openapi({ description: 'Agent UUID (agents table)' }),
   agentProviderId: z
@@ -118,6 +123,14 @@ export const CreateInstanceSchema = z.object({
   agentStreamMode: z.boolean().default(false).openapi({ description: 'Enable streaming responses' }),
   isDefault: z.boolean().default(false).openapi({ description: 'Set as default instance for channel' }),
   token: z.string().optional().openapi({ description: 'Bot token for Discord instances' }),
+  historyIdentity: z.enum(['desktop', 'web']).default('desktop').openapi({
+    description:
+      "WhatsApp (Baileys) pairing identity (default: desktop). 'desktop' = macOS Desktop + group history, shows as \"Mac OS\" in Linked Devices; 'web' = Ubuntu/Chrome. Applies on next pairing",
+  }),
+  syncFullHistory: z
+    .boolean()
+    .default(false)
+    .openapi({ description: 'WhatsApp (Baileys): request full message history on connect (default: false)' }),
   gupshupHandoffOptions: GupshupHandoffOptionsSchema.nullable()
     .optional()
     .openapi({

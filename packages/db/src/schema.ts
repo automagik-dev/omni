@@ -999,6 +999,15 @@ export const instances = pgTable(
     /** Mark the instance as "online" when connecting to WhatsApp (default: true) */
     markOnlineOnConnect: boolean('mark_online_on_connect').notNull().default(true),
 
+    // ---- WhatsApp History Sync (#1211) ----
+    /** Pairing identity: 'desktop' = macOS Desktop + group history, 'web' = Ubuntu/Chrome */
+    historyIdentity: varchar('history_identity', { length: 10 })
+      .notNull()
+      .default('desktop')
+      .$type<'desktop' | 'web'>(),
+    /** Ask WhatsApp for full history on connect (default: false, see #70) */
+    syncFullHistory: boolean('sync_full_history').notNull().default(false),
+
     // ---- Group History Context ----
     /** Number of recent messages to fetch for group context (0 = disabled, max 200) */
     groupHistorySize: integer('group_history_size').notNull().default(50),
