@@ -526,6 +526,13 @@
       "when": 1787400000000,
       "tag": "0074_trigger_logs_cost",
       "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "7",
+      "when": 1787500000000,
+      "tag": "0075_automation_logs_queue_wait",
+      "breakpoints": true
     }
   ]
 }
