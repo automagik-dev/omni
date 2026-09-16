@@ -26,6 +26,66 @@ export const MessageResponseSchema = z.object({
   }),
 });
 
+// Handoff request — shared with the route validator (routes/v2/messages.ts)
+export const sendHandoffSchema = z.object({
+  instanceId: z.string().uuid().describe('Gupshup instance ID'),
+  chatId: z.string().min(1).describe('Chat ID to pause agent on'),
+  to: z.string().min(1).describe('Recipient phone number'),
+  text: z.string().min(1).describe('Message text shown to end user'),
+  dadosLead: z.string().optional().describe('Free-text lead data summary for the human attendant'),
+  motivoHandoff: z
+    .string()
+    .optional()
+    .describe('Handoff trigger and notes (e.g. "Gatilho: sinalizou close ||| Obs: ...")'),
+  extraInfo: z.string().optional().describe('Free-text briefing (legacy — prefer dadosLead)'),
+  handoffFields: z
+    .record(z.unknown())
+    .optional()
+    .describe('Structured fields for Gupshup flow variables (e.g. nome, cidade, temperatura_lead)'),
+});
+
+// Close-contact schema — terminal close primitive parallel to handoff.
+// Hard outcomes (won/lost) flip `chats.settings.closed=true` permanently.
+// Soft outcomes set `closeUntil` and reopen passively in the dispatcher.
+// Auto-escalation via close_contact_logs history bounds the loop.
+export const sendCloseContactSchema = z.object({
+  instanceId: z.string().uuid().describe('Instance ID — close-contact native send is Gupshup-only in v1'),
+  chatId: z.string().min(1).describe('Chat DB UUID to mark as closed'),
+  to: z.string().min(1).describe('Recipient phone or platform ID'),
+  text: z
+    .string()
+    .optional()
+    .describe(
+      'Farewell message shown to the contact. Omit (or send an empty string) to classify/close without a farewell: ' +
+        'channels declaring `canCloseContactWithoutText` still receive the native close event with an empty text ' +
+        '(the channel flow must not deliver an empty message); other channels skip the channel send.',
+    ),
+  outcome: z
+    .enum(['won', 'lost', 'redirected_sac', 'unqualified', 'no_response', 'other'])
+    .describe('Drives terminal/cooldown/escalation logic and BI/audit trail'),
+  reason: z.string().optional().describe('Free-text rationale persisted in close_contact_logs'),
+  closeFields: z
+    .record(z.unknown())
+    .optional()
+    .describe('Structured BI/CRM payload — forwarded to Gupshup native send when supported'),
+});
+
+const HandoffResponseSchema = z.object({
+  messageId: z.string().nullable().openapi({ description: 'Channel message ID (null when no native send happened)' }),
+  status: z.enum(['sent', 'paused']).openapi({ description: "'sent' with a native handoff, 'paused' otherwise" }),
+  timestamp: z.number().openapi({ description: 'Epoch ms' }),
+});
+
+const CloseContactResponseSchema = z.object({
+  messageId: z.string().nullable().openapi({ description: 'Channel message ID (null when no native send happened)' }),
+  status: z.literal('closed'),
+  terminal: z.boolean().openapi({ description: 'Hard terminal close (chat stays closed)' }),
+  closeUntil: z.string().datetime().nullable().openapi({ description: 'Soft-close cooldown end (null when terminal)' }),
+  escalated: z.boolean().openapi({ description: 'Soft close auto-promoted to terminal by repetition' }),
+  outcome: sendCloseContactSchema.shape.outcome,
+  timestamp: z.number().openapi({ description: 'Epoch ms' }),
+});
+
 // Send text request
 export const SendTextSchema = z.object({
   instanceId: z.string().uuid().openapi({ description: 'Instance ID to send from' }),
@@ -501,6 +561,48 @@ export function registerMessageSchemas(registry: OpenAPIRegistry): void {
       },
       400: { description: 'Validation error', content: { 'application/json': { schema: ErrorSchema } } },
       404: { description: 'Instance not found', content: { 'application/json': { schema: ErrorSchema } } },
+    },
+  });
+
+  registry.register('SendHandoffRequest', sendHandoffSchema);
+  registry.register('SendCloseContactRequest', sendCloseContactSchema);
+
+  registry.registerPath({
+    method: 'post',
+    path: '/messages/send/handoff',
+    operationId: 'sendHandoff',
+    tags: ['Messages'],
+    summary: 'Hand a chat off to a human',
+    description:
+      'Sets agentPaused on the chat, disarms any active follow-up sequence and, on channels declaring canHandoff (Gupshup), sends a native HANDOFF message. Other channels only pause (status "paused").',
+    request: { body: { content: { 'application/json': { schema: sendHandoffSchema } } } },
+    responses: {
+      201: {
+        description: 'Handoff applied',
+        content: { 'application/json': { schema: z.object({ data: HandoffResponseSchema }) } },
+      },
+      400: { description: 'Validation error', content: { 'application/json': { schema: ErrorSchema } } },
+      404: { description: 'Instance or chat not found', content: { 'application/json': { schema: ErrorSchema } } },
+    },
+  });
+
+  registry.registerPath({
+    method: 'post',
+    path: '/messages/send/close-contact',
+    operationId: 'sendCloseContact',
+    tags: ['Messages'],
+    summary: 'Close a contact',
+    description:
+      'Terminal close: logs the close in close_contact_logs, pauses the agent, sets closed (won/lost, or escalated after repeated soft closes) or a closeUntil cooldown (other outcomes, tunable per instance via closeContactConfig), and disarms follow-ups. ' +
+      'Channels declaring canCloseContact send a native close with `text`. `text` is optional: without it the contact is classified/closed with no farewell — channels also declaring canCloseContactWithoutText still receive the native close event with empty text; other channels skip the channel send and only apply the side effects.',
+    request: { body: { content: { 'application/json': { schema: sendCloseContactSchema } } } },
+    responses: {
+      201: {
+        description: 'Contact closed',
+        content: { 'application/json': { schema: z.object({ data: CloseContactResponseSchema }) } },
+      },
+      400: { description: 'Validation error', content: { 'application/json': { schema: ErrorSchema } } },
+      404: { description: 'Instance or chat not found', content: { 'application/json': { schema: ErrorSchema } } },
     },
   });
 }

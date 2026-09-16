@@ -51,6 +51,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { sentryEnabled } from '../../lib/sentry-scrub';
 import { optionalDateParam } from '../../schemas/date-query';
+import { sendCloseContactSchema, sendHandoffSchema } from '../../schemas/openapi/messages';
 import type { Services } from '../../services';
 import { ApiKeyService } from '../../services/api-keys';
 import { type MediaFetchOptions, MediaStorageService } from '../../services/media-storage';
@@ -743,49 +744,6 @@ const sendLocationSchema = z.object({
   name: z.string().optional().describe('Location name'),
   address: z.string().optional().describe('Address'),
   sentBy: sentByField,
-});
-
-const sendHandoffSchema = z.object({
-  instanceId: z.string().uuid().describe('Gupshup instance ID'),
-  chatId: z.string().min(1).describe('Chat ID to pause agent on'),
-  to: z.string().min(1).describe('Recipient phone number'),
-  text: z.string().min(1).describe('Message text shown to end user'),
-  dadosLead: z.string().optional().describe('Free-text lead data summary for the human attendant'),
-  motivoHandoff: z
-    .string()
-    .optional()
-    .describe('Handoff trigger and notes (e.g. "Gatilho: sinalizou close ||| Obs: ...")'),
-  extraInfo: z.string().optional().describe('Free-text briefing (legacy — prefer dadosLead)'),
-  handoffFields: z
-    .record(z.unknown())
-    .optional()
-    .describe('Structured fields for Gupshup flow variables (e.g. nome, cidade, temperatura_lead)'),
-});
-
-// Close-contact schema — terminal close primitive parallel to handoff.
-// Hard outcomes (won/lost) flip `chats.settings.closed=true` permanently.
-// Soft outcomes set `closeUntil` and reopen passively in the dispatcher.
-// Auto-escalation via close_contact_logs history bounds the loop.
-const sendCloseContactSchema = z.object({
-  instanceId: z.string().uuid().describe('Instance ID — close-contact native send is Gupshup-only in v1'),
-  chatId: z.string().min(1).describe('Chat DB UUID to mark as closed'),
-  to: z.string().min(1).describe('Recipient phone or platform ID'),
-  text: z
-    .string()
-    .optional()
-    .describe(
-      'Farewell message shown to the contact. Omit (or send an empty string) to classify/close without a farewell: ' +
-        'channels declaring `canCloseContactWithoutText` still receive the native close event with an empty text ' +
-        '(the channel flow must not deliver an empty message); other channels skip the channel send.',
-    ),
-  outcome: z
-    .enum(['won', 'lost', 'redirected_sac', 'unqualified', 'no_response', 'other'])
-    .describe('Drives terminal/cooldown/escalation logic and BI/audit trail'),
-  reason: z.string().optional().describe('Free-text rationale persisted in close_contact_logs'),
-  closeFields: z
-    .record(z.unknown())
-    .optional()
-    .describe('Structured BI/CRM payload — forwarded to Gupshup native send when supported'),
 });
 
 // ============================================================================
