@@ -109,6 +109,35 @@ export const GupshupHandoffOptionsSchema = z
   .strict();
 
 /**
+ * Close-contact cooldown/escalation overrides (instances.close_contact_config).
+ * One definition shared by the POST/PATCH validators and the OpenAPI document.
+ * Resolved per key by `resolveCloseContactConfig`; `null` disables a mechanism.
+ */
+const closeContactOutcomeOverride = z
+  .object({
+    cooldownMs: z.number().int().nonnegative().nullable().optional().openapi({
+      description: 'Soft-close cooldown in ms (null = no cooldown)',
+    }),
+    escalationThreshold: z.number().int().positive().nullable().optional().openapi({
+      description: 'Closes with the same outcome within the window that promote to terminal (null = never)',
+    }),
+    escalationWindowMs: z.number().int().positive().nullable().optional().openapi({
+      description: 'Window in ms in which repeated closes are counted',
+    }),
+  })
+  .strict();
+export const CloseContactConfigSchema = z
+  .object({
+    won: closeContactOutcomeOverride.optional(),
+    lost: closeContactOutcomeOverride.optional(),
+    redirected_sac: closeContactOutcomeOverride.optional(),
+    unqualified: closeContactOutcomeOverride.optional(),
+    no_response: closeContactOutcomeOverride.optional(),
+    other: closeContactOutcomeOverride.optional(),
+  })
+  .strict();
+
+/**
  * Create instance request schema
  */
 export const CreateInstanceSchema = z.object({
@@ -144,6 +173,13 @@ export const CreateInstanceSchema = z.object({
           { apiKey: 'Handled By', value: 'assistant' },
         ],
       },
+    }),
+  closeContactConfig: CloseContactConfigSchema.nullable()
+    .optional()
+    .openapi({
+      description:
+        'Per-outcome overrides for POST /messages/send/close-contact cooldown and escalation. Omitted outcomes/keys use the defaults; null clears it',
+      example: { no_response: { escalationThreshold: null } },
     }),
 });
 

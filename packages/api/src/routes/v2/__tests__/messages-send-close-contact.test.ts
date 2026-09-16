@@ -19,6 +19,10 @@ const CHAT_ID = '55555555-5555-4555-8555-555555555555';
 
 interface MountOptions {
   capabilities?: Record<string, boolean>;
+  /** instances.close_contact_config on the fake instance row. */
+  closeContactConfig?: Record<string, unknown> | null;
+  /** Closes with the same outcome already inside the escalation window. */
+  recentCloseCount?: number;
 }
 
 function mountCloseContactRoute(options: MountOptions = {}) {
@@ -32,11 +36,23 @@ function mountCloseContactRoute(options: MountOptions = {}) {
   const disarm = mock(async (_input: unknown) => undefined);
   const publish = mock(async (_type: string, _payload: unknown, _metadata: unknown) => undefined);
 
+  const escalationUpdates: Record<string, unknown>[] = [];
   const db = {
     insert: () => ({
       values: (values: Record<string, unknown>) => {
         auditValues.push(values);
         return { returning: async () => [{ id: 'audit-row-1' }] };
+      },
+    }),
+    select: () => ({
+      from: () => ({
+        where: async () => [{ count: options.recentCloseCount ?? 0 }],
+      }),
+    }),
+    update: () => ({
+      set: (values: Record<string, unknown>) => {
+        escalationUpdates.push(values);
+        return { where: async () => undefined };
       },
     }),
   };
@@ -45,7 +61,12 @@ function mountCloseContactRoute(options: MountOptions = {}) {
   app.use('*', async (c, next) => {
     c.set('services', {
       instances: {
-        getById: mock(async (id: string) => ({ id, channel: 'gupshup', agentId: null })),
+        getById: mock(async (id: string) => ({
+          id,
+          channel: 'gupshup',
+          agentId: null,
+          closeContactConfig: options.closeContactConfig ?? null,
+        })),
       },
       persons: {
         getIdentityForChannel: mock(async () => null),
@@ -76,7 +97,7 @@ function mountCloseContactRoute(options: MountOptions = {}) {
     await next();
   });
   app.route('/messages', messagesRoutes);
-  return { app, sendMessage, auditValues, chatUpdates, disarm, publish };
+  return { app, sendMessage, auditValues, chatUpdates, disarm, publish, escalationUpdates };
 }
 
 async function postCloseContact(app: Hono<{ Variables: AppVariables }>, body: Record<string, unknown>) {
@@ -172,5 +193,67 @@ describe('POST /messages/send/close-contact — farewell text', () => {
 
     expect(res.status).toBe(201);
     expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('POST /messages/send/close-contact — per-instance closeContactConfig', () => {
+  test('without override: repeated no_response closes escalate to terminal (defaults)', async () => {
+    const { app, chatUpdates, escalationUpdates } = mountCloseContactRoute({ recentCloseCount: 3 });
+
+    const res = await postCloseContact(app, { outcome: 'no_response' });
+
+    expect(res.status).toBe(201);
+    const json = (await res.json()) as { data: Record<string, unknown> };
+    expect(json.data.terminal).toBe(true);
+    expect(json.data.escalated).toBe(true);
+    expect(json.data.closeUntil).toBeNull();
+    expect(chatUpdates[0]?.settings).toMatchObject({ closed: true });
+    expect(escalationUpdates).toEqual([{ escalated: true }]);
+  });
+
+  test('without override: below the threshold stays a soft close with the default cooldown', async () => {
+    const { app } = mountCloseContactRoute({ recentCloseCount: 1 });
+    const before = Date.now();
+
+    const res = await postCloseContact(app, { outcome: 'no_response' });
+
+    const json = (await res.json()) as { data: Record<string, unknown> };
+    expect(json.data.terminal).toBe(false);
+    const closeUntil = Date.parse(String(json.data.closeUntil));
+    expect(closeUntil - before).toBeGreaterThanOrEqual(48 * 60 * 60 * 1000 - 1000);
+    expect(closeUntil - before).toBeLessThanOrEqual(48 * 60 * 60 * 1000 + 5000);
+  });
+
+  test('override escalationThreshold: null never promotes to terminal', async () => {
+    const { app, chatUpdates, escalationUpdates } = mountCloseContactRoute({
+      recentCloseCount: 50,
+      closeContactConfig: { no_response: { escalationThreshold: null } },
+    });
+
+    const res = await postCloseContact(app, { outcome: 'no_response' });
+
+    expect(res.status).toBe(201);
+    const json = (await res.json()) as { data: Record<string, unknown> };
+    expect(json.data.terminal).toBe(false);
+    expect(json.data.escalated).toBe(false);
+    expect(json.data.closeUntil).not.toBeNull();
+    expect(chatUpdates[0]?.settings).toMatchObject({ closed: false });
+    expect(escalationUpdates).toHaveLength(0);
+  });
+
+  test('override applies per key: a custom cooldown keeps the default escalation', async () => {
+    const { app } = mountCloseContactRoute({
+      recentCloseCount: 1,
+      closeContactConfig: { no_response: { cooldownMs: 60_000 } },
+    });
+    const before = Date.now();
+
+    const res = await postCloseContact(app, { outcome: 'no_response' });
+
+    const json = (await res.json()) as { data: Record<string, unknown> };
+    expect(json.data.terminal).toBe(false);
+    const closeUntil = Date.parse(String(json.data.closeUntil));
+    expect(closeUntil - before).toBeGreaterThanOrEqual(59_000);
+    expect(closeUntil - before).toBeLessThanOrEqual(65_000);
   });
 });

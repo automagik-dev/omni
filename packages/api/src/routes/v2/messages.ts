@@ -1948,10 +1948,8 @@ messagesRoutes.post('/send/handoff', zValidator('json', sendHandoffSchema), asyn
 /**
  * Compute the terminal state for a close-contact event.
  *
- * v1 uses hardcoded defaults from `_close-contact-config.ts`. The
- * `resolveCloseContactConfig` helper already accepts an overrides bag, so
- * a future per-instance column can wire through without touching this
- * site — flagged as a tunable post-launch follow-up in design.md §8.
+ * Config comes from the defaults in `_close-contact-config.ts`, overridden
+ * per outcome/key by the instance's `closeContactConfig` column.
  *
  * Behaviour:
  *   - won/lost  → terminal:true, no cooldown.
@@ -1965,8 +1963,9 @@ async function computeCloseContactTerminalState(
   chatUuid: string,
   outcome: CloseContactOutcome,
   auditRowId: string | null,
+  instanceOverrides: { closeContactConfig?: unknown } | null,
 ): Promise<{ terminal: boolean; escalated: boolean; closeUntil: Date | null }> {
-  const cfg = resolveCloseContactConfig(outcome, null);
+  const cfg = resolveCloseContactConfig(outcome, instanceOverrides);
   if (isHardTerminalOutcome(outcome)) {
     return { terminal: true, escalated: false, closeUntil: null };
   }
@@ -2135,6 +2134,7 @@ messagesRoutes.post('/send/close-contact', zValidator('json', sendCloseContactSc
     data.chatId,
     outcome,
     auditRow?.id ?? null,
+    instance,
   );
 
   // ── 4. Update chat settings — emits chat.closed via chats service ────────
