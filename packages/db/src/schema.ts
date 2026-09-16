@@ -2773,6 +2773,24 @@ export interface WebhookSignatureConfig {
 }
 
 /**
+ * Supervised pull connector (issue #1186). A source carrying this config is
+ * polled by the API: `command` runs every `intervalSeconds` (backing off
+ * exponentially on non-zero exit), and each JSON stdout line becomes an
+ * `emitType` event deduped by `dedupKeyTemplate`. `nextRunAt`,
+ * `consecutiveFailures` and `lastRun` are scheduler state.
+ */
+export interface WebhookPollConfig {
+  command: string;
+  intervalSeconds: number;
+  emitType: string;
+  dedupKeyTemplate: string;
+  env?: Record<string, string>;
+  nextRunAt?: string;
+  consecutiveFailures?: number;
+  lastRun?: { at: string; exitCode: number | null; stdoutTail: string; eventsEmitted: number; error?: string };
+}
+
+/**
  * Connector liveness state (issue #961). Only `healthy` and `stalled` exist —
  * a source without a declared cadence has NULL here (unsupervised). The
  * liveness sweeper is the ONLY writer of transitions; guarded updates
@@ -2856,6 +2874,12 @@ export const webhookSources = pgTable(
      * a provider-identity template (e.g. `github:{headers.x-github-delivery}`).
      */
     idempotencyKeyTemplate: text('idempotency_key_template').notNull().default('{source}:{sha256(body)}'),
+    /**
+     * Opt-in cross-type collapsing (#1178). Default false: a custom template's
+     * key is scoped by the resolved event type so distinct transitions of the
+     * same entity never dedupe each other.
+     */
+    idempotencyAcrossEventTypes: boolean('idempotency_across_event_types').notNull().default(false),
 
     // Semantic event-type extraction (issue #959). Null = legacy collapsed
     // `custom.webhook.{source}` type for every delivery.
@@ -2869,6 +2893,9 @@ export const webhookSources = pgTable(
      * existing sources keep the opt-in pass-through until opted in.
      */
     strictSchemas: boolean('strict_schemas').notNull().default(false),
+
+    /** Supervised pull connector config + scheduler state (#1186). NULL = push-only source. */
+    pollConfig: jsonb('poll_config').$type<WebhookPollConfig>(),
 
     // State
     enabled: boolean('enabled').notNull().default(true),
@@ -3079,6 +3106,8 @@ export interface CallAgentActionConfig {
   timeoutMs?: number;
   /** Store agent response as variable for chaining (e.g., "agentResponse") */
   responseAs?: string;
+  /** Await the agent run (default true); false = fire-and-forget, outcome on system.agent.run_completed */
+  waitForResponse?: boolean; // no-migration-needed: jsonb config type only
 }
 
 /**
@@ -3315,6 +3344,21 @@ export type NewConsumerOffset = typeof consumerOffsets.$inferInsert;
  * tenant's journal rows. Per-tenant consumer ownership joins additively in
  * the G6+ ownership pass.
  */
+/** One leased page of a shared consumer: journal rows in (from, to]. */
+export interface ConsumerLease {
+  id: string;
+  from: number;
+  to: number;
+  /** Epoch ms; past it the page is redelivered to the next puller. */
+  expiresAt: number;
+}
+
+export interface SharedLeaseState {
+  /** Highest journal_seq handed out to any puller. */
+  claimed: number;
+  leases: ConsumerLease[];
+}
+
 export const durableConsumers = pgTable(
   'durable_consumers',
   {
@@ -3332,6 +3376,14 @@ export const durableConsumers = pgTable(
      * it; acks are monotonic (a lower ack is refused, an equal ack no-ops).
      */
     cursor: bigint('cursor', { mode: 'number' }).notNull().default(0),
+    /**
+     * Competing consumers (#1188): false = one cursor per name (fan-out
+     * across names); true = N pullers on this name split the stream via
+     * leased pages (`lease_state`), each page handed to one puller at a time.
+     */
+    shared: boolean('shared').notNull().default(false),
+    /** Shared consumers only: claimed watermark + outstanding page leases. */
+    leaseState: jsonb('lease_state').$type<SharedLeaseState>(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -3403,6 +3455,8 @@ export const triggerLogs = pgTable(
     inputTokens: integer('input_tokens'),
     /** Output tokens used (if available from provider) */
     outputTokens: integer('output_tokens'),
+    /** Run cost in USD (if reported by provider) — #1183 */
+    costUsd: numeric('cost_usd', { precision: 15, scale: 6 }),
     /** Error message if dispatch failed */
     error: text('error'),
     /** Additional metadata */

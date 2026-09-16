@@ -23,6 +23,12 @@ import { A2ATaskStore } from './task-store';
 const A2A_CAPABILITIES: ChannelCapabilities = {
   ...DEFAULT_CAPABILITIES,
   canSendText: true,
+  events: {
+    emits: ['instance.connected', 'instance.disconnected', 'message.received'],
+    edits: false,
+    deletes: false,
+    idempotency: false,
+  },
 };
 
 export class A2AChannelPlugin extends BaseChannelPlugin {

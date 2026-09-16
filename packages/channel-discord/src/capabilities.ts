@@ -83,4 +83,20 @@ export const DISCORD_CAPABILITIES: ChannelCapabilities = {
   maxButtonsPerRow: 5,
   maxRowsPerMessage: 5,
   maxSelectOptions: 25,
+  events: {
+    emits: [
+      'instance.connected',
+      'instance.disconnected',
+      'message.failed',
+      'message.received',
+      'message.sent',
+      'reaction.received',
+      'reaction.removed',
+      'voice.user_joined_channel',
+      'voice.user_left_channel',
+    ],
+    edits: true,
+    deletes: true,
+    idempotency: true,
+  },
 };

@@ -101,7 +101,7 @@ Field by field:
 | Field | Why |
 |---|---|
 | `signatureConfig` | ClickUp signs every delivery with `X-Signature: <hex hmac>` — HMAC-SHA256 of the **raw body bytes** under the webhook's generated secret. No prefix (GitHub's `sha256=` has no ClickUp equivalent), so `prefix` is simply omitted. The secret is write-only (never returned by the API). |
-| `idempotencyKeyTemplate` | ClickUp does **not** send a top-level delivery id (the RFC's proposed `clickup:{event_id}` referenced a field that does not exist). The stable per-event identity is `history_items[0].id`, reached with a numeric array segment. The template resolves to e.g. `clickup:2800763136717140857`; the unique index on `omni_events.idempotency_key` is the dedup authority. `taskDeleted` carries no `history_items`, so those deliveries fall back to `clickup:{sha256(body)}` — still correct, since a retry resends the same bytes (the fallback logs a warning per delivery; acceptable at taskDeleted volumes). |
+| `idempotencyKeyTemplate` | ClickUp does **not** send a top-level delivery id (the RFC's proposed `clickup:{event_id}` referenced a field that does not exist). The stable per-event identity is `history_items[0].id`, reached with a numeric array segment. The template resolves to e.g. `clickup:2800763136717140857`, stored prefixed with the event type (`custom.clickup.taskstatusupdated:clickup:2800…`, #1178); the unique index on `omni_events.idempotency_key` is the dedup authority. `taskDeleted` carries no `history_items`, so those deliveries fall back to `clickup:{sha256(body)}` — still correct, since a retry resends the same bytes (the fallback logs a warning per delivery; acceptable at taskDeleted volumes). |
 | `eventTypeMapping` | Reads the body's `event` field and emits `custom.clickup.{event}` after token normalization (lowercase): `taskStatusUpdated` → `custom.clickup.taskstatusupdated`, `taskCreated` → `custom.clickup.taskcreated`, `taskUpdated` → `custom.clickup.taskupdated`, `taskDeleted` → `custom.clickup.taskdeleted`. Deliveries without a usable `event` field fall back to `custom.webhook.clickup`. |
 | `expectedIntervalSeconds` | Declared liveness cadence (#961): "≥1 event **or heartbeat** per 24 h". See step 5. |
 
@@ -285,3 +285,13 @@ gate (#959), redelivery dedup (#958) and liveness supervision (#961) all
 executed unmodified. Everything in THIS runbook is configuration; the
 end-to-end proof is
 `packages/api/src/__tests__/webhook-clickup-source-postgres.test.ts`.
+
+## Payload size limit (issue #1166)
+
+Every delivery becomes one event on NATS, so the effective ceiling is the NATS
+server's `max_payload` (1 MB by default) — not `OMNI_API_BODY_LIMIT_MB`, which
+only bounds the HTTP body (and stays high for media uploads). An oversized
+delivery is rejected with `413 PAYLOAD_TOO_LARGE`, e.g.
+`event payload is 4.0 MB; maximum is 1 MB (NATS max_payload)`. For sources that
+legitimately send large bodies, store the body (e.g. object storage) and
+publish an event carrying a reference to it.

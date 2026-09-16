@@ -200,7 +200,8 @@ describe('automation-actions callbacks scope their db reads (G5, ADR-0008)', () 
     expect(h.scopes.length).toBe(2);
     // The DIRECT agents lookup must land on the scope's TRANSACTION, not the pool.
     expect(h.agentReadHandles).toEqual(['tx']);
-    expect(h.stamped).toEqual([TENANT_A, TENANT_A, TENANT_A]); // one short tx per read block
+    // one short tx per read block, plus the trigger_logs write (#1183)
+    expect(h.stamped).toEqual([TENANT_A, TENANT_A, TENANT_A, TENANT_A]);
     expect(result.metadata.status).toBe('completed');
   });
 

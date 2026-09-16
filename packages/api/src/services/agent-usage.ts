@@ -10,7 +10,7 @@
 
 import { AGENT_USAGE_METADATA_KEY, type AgentUsage, createLogger, isValidUuid } from '@omni/core';
 import type { Database } from '@omni/db';
-import { omniEvents } from '@omni/db';
+import { omniEvents, triggerLogs } from '@omni/db';
 import { eq, sql } from 'drizzle-orm';
 import { scopedHandle } from '../tenancy/tenant-scope';
 
@@ -44,5 +44,50 @@ export async function stampAgentUsage(
       .where(eq(omniEvents.id, eventId));
   } catch (error) {
     log.warn('Failed to stamp agent usage on journal row', { eventId, error: String(error) });
+  }
+}
+
+export interface AutomationTriggerLog {
+  instanceId: string;
+  providerId?: string;
+  eventId?: string;
+  eventType?: string;
+  chatId: string;
+  senderId?: string;
+  channelType?: string;
+  durationMs?: number;
+  usage?: AgentUsage | null;
+  error?: string;
+}
+
+/**
+ * Record a `call_agent` automation run in `trigger_logs` with the tokens and
+ * cost the provider reported (#1183). Unknown usage stays NULL. Best-effort.
+ */
+export async function recordAutomationTriggerLog(db: Database, entry: AutomationTriggerLog): Promise<void> {
+  try {
+    const { usage } = entry;
+    await scopedHandle(db)
+      .insert(triggerLogs)
+      .values({
+        instanceId: entry.instanceId,
+        providerId: entry.providerId && isValidUuid(entry.providerId) ? entry.providerId : null,
+        eventType: entry.eventType ?? 'unknown',
+        eventId: entry.eventId ?? 'unknown',
+        triggerType: 'automation',
+        channelType: entry.channelType,
+        chatId: entry.chatId,
+        senderId: entry.senderId,
+        mode: 'round-trip',
+        respondedAt: entry.error ? null : new Date(),
+        responded: !entry.error,
+        durationMs: entry.durationMs !== undefined ? Math.round(entry.durationMs) : null,
+        inputTokens: usage?.tokensIn ?? null,
+        outputTokens: usage?.tokensOut ?? null,
+        costUsd: usage?.costUsd !== undefined ? String(usage.costUsd) : null,
+        error: entry.error,
+      });
+  } catch (error) {
+    log.warn('Failed to record automation trigger log', { instanceId: entry.instanceId, error: String(error) });
   }
 }

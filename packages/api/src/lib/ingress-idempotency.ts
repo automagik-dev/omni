@@ -34,6 +34,14 @@
  * and the derivation FALLS BACK to the body-hash default. Falling back keeps
  * dedup correct-by-content instead of either dropping the delivery or
  * colliding every keyless delivery on one literal string.
+ *
+ * EVENT-TYPE SCOPING (#1178): a custom template keyed by entity id
+ * (`mysource:{payload.order_id}`) would collapse `order-paid:A1` and
+ * `order-shipped:A1` into one "duplicate", silently dropping a state
+ * transition. A resolved custom key is therefore prefixed with the resolved
+ * event type (`<eventType>:<rendered>`) unless the source opts in to
+ * cross-type collapsing (`idempotencyAcrossEventTypes`). The default template
+ * and the unresolved fallback are unchanged — body hashes already differ.
  */
 
 import { createHash } from 'node:crypto';
@@ -92,6 +100,10 @@ export interface DeriveIdempotencyKeyInput {
   payload: Record<string, unknown>;
   /** Request headers, lowercase keys (for `{headers.*}`). */
   headers: Record<string, string>;
+  /** Resolved event type; prefixes custom-template keys (#1178). */
+  eventType?: string;
+  /** Source opted in to one key space across event types (#1178). */
+  acrossEventTypes?: boolean;
 }
 
 /**
@@ -99,7 +111,7 @@ export interface DeriveIdempotencyKeyInput {
  * request always derives the same key, and the result is never empty.
  */
 export function deriveIdempotencyKey(input: DeriveIdempotencyKeyInput): string {
-  const { template, sourceName, rawBody, payload, headers } = input;
+  const { template, sourceName, rawBody, payload, headers, eventType, acrossEventTypes } = input;
 
   let unresolved: string | null = null;
   const resolved = template.replace(PLACEHOLDER_RE, (whole, rawExpr: string) => {
@@ -126,10 +138,14 @@ export function deriveIdempotencyKey(input: DeriveIdempotencyKeyInput): string {
     return `${sourceName}:${sha256Hex(rawBody)}`;
   }
 
-  if (resolved.length > MAX_KEY_LENGTH) {
-    return `${sourceName}:overflow:${sha256Hex(resolved)}`;
+  const scoped =
+    eventType && !acrossEventTypes && template !== DEFAULT_IDEMPOTENCY_KEY_TEMPLATE
+      ? `${eventType}:${resolved}`
+      : resolved;
+  if (scoped.length > MAX_KEY_LENGTH) {
+    return `${sourceName}:overflow:${sha256Hex(scoped)}`;
   }
-  return resolved;
+  return scoped;
 }
 
 /**

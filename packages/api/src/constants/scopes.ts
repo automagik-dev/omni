@@ -201,6 +201,7 @@ export const SCOPE_MAP: Record<string, string> = {
   // --- instances ---
   'GET /instances': 'instances:read',
   'GET /instances/supported-channels': 'instances:read',
+  'GET /channels/capabilities': 'instances:read',
   'GET /instances/:id': 'instances:read',
   'POST /instances': 'instances:write',
   'PATCH /instances/:id': 'instances:write',
@@ -437,6 +438,7 @@ export const SCOPE_MAP: Record<string, string> = {
   'POST /webhook-sources': 'webhooks:write',
   'PATCH /webhook-sources/:id': 'webhooks:write',
   'DELETE /webhook-sources/:id': 'webhooks:write',
+  'POST /webhook-sources/:id/run-now': 'webhooks:write',
   'POST /webhooks/:source': 'webhooks:write',
   'POST /webhooks/:source/heartbeat': 'webhooks:write',
   'POST /events/trigger': 'events:write',

@@ -223,6 +223,10 @@ const createInstanceSchema = z.object({
     .optional()
     .nullable()
     .describe('cod_servico handed to /transferirHumano (the handoff queue) — service mode only'),
+  force: z
+    .boolean()
+    .optional()
+    .describe('Override the shared-Slack-app-token refusal (Socket Mode would split events between instances)'),
   readReceipts: z
     .enum(['on', 'off', 'exclude-self'])
     .default('on')
@@ -301,6 +305,9 @@ const createInstanceSchema = z.object({
     ),
 });
 
+const AGENT_PROVIDER_READ_ONLY_MESSAGE =
+  'agentProviderId is read-only on instances (derived from the assigned agent). Use `omni agents update <agentId> --agent-provider <providerId>`.';
+
 // Update instance schema - allow null to clear values (only for nullable DB fields)
 // NOTE: .partial() on fields with .default() still fires the default for omitted keys,
 // so we must explicitly override fields that have defaults to strip the default value.
@@ -317,6 +324,12 @@ const updateInstanceSchema = createInstanceSchema.partial().extend({
   profileMetadata: z.record(z.unknown()).nullable().optional(),
   // Nullable fields in DB - can be set to null
   agentId: z.string().uuid().nullable().optional(),
+  // #1168: instances have no provider column — the provider lives on the agent.
+  // Reject instead of silently stripping so callers don't believe it saved.
+  agentProviderId: z
+    .unknown()
+    .refine((v) => v === undefined, { message: AGENT_PROVIDER_READ_ONLY_MESSAGE })
+    .optional(),
   agentErrorMessages: z.array(z.string()).nullable().optional(),
   agentReplyFilter: agentReplyFilterSchema.nullable().optional(),
   triggerEvents: z.array(z.string()).nullable().optional(),
@@ -475,6 +488,25 @@ const SENSITIVE_INSTANCE_FIELDS = [
   'ascToken',
   'ascFlowChave',
 ] as const;
+
+/**
+ * Populate the read-only `agentProviderId` from the instance's agent (#1168).
+ * Instances link to a provider only through `agentId -> agents.agentProviderId`.
+ */
+async function withAgentProviderId<T extends { agentId?: string | null }>(
+  services: Services,
+  instance: T,
+): Promise<T & { agentProviderId: string | null }> {
+  let agentProviderId: string | null = null;
+  if (instance.agentId) {
+    try {
+      agentProviderId = (await services.agents.getById(instance.agentId)).agentProviderId ?? null;
+    } catch {
+      // Agent missing/deleted — leave null
+    }
+  }
+  return { ...instance, agentProviderId };
+}
 
 /** Mask a secret for display: keep a short prefix (e.g. `xoxp-`) and the last 4 chars */
 function maskSecret(secret: string): string {
@@ -858,7 +890,9 @@ instancesRoutes.get('/', zValidator('query', listQuerySchema), async (c) => {
 
   // Filter by API key's allowed instanceIds
   const filtered = apiKey ? filterByInstanceAccess(result.items, (item) => item.id, apiKey) : result.items;
-  const items = filtered.map(sanitizeInstance);
+  const items = await Promise.all(
+    filtered.map(async (item) => sanitizeInstance(await withAgentProviderId(services, item))),
+  );
 
   return c.json({
     items,
@@ -932,15 +966,50 @@ instancesRoutes.get('/:id', instanceAccess, async (c) => {
 
   const instance = await services.instances.getById(id);
 
-  return c.json({ data: sanitizeInstance(instance) });
+  return c.json({ data: sanitizeInstance(await withAgentProviderId(services, instance)) });
 });
+
+/**
+ * #1185: Socket Mode load-balances an app's events across every connection of
+ * that app, so two active Slack instances on one app token each silently get a
+ * fraction of the traffic. Tokens are compared as sha256 digests in memory and
+ * never logged or returned.
+ */
+const sha256 = (value: string) => new Bun.CryptoHasher('sha256').update(value).digest('hex');
+
+async function findSlackAppTokenConflict(
+  services: Services,
+  appToken: string | null | undefined,
+  selfId?: string,
+): Promise<{ id: string; name: string } | null> {
+  if (!appToken) return null;
+  const digest = sha256(appToken);
+  const active = await services.instances.listActive();
+  const other = active.find(
+    (i) => i.id !== selfId && i.channel === 'slack' && i.slackAppToken && sha256(i.slackAppToken) === digest,
+  );
+  return other ? { id: other.id, name: other.name } : null;
+}
+
+function slackAppTokenConflictBody(other: { id: string; name: string }) {
+  return {
+    error: {
+      code: 'SLACK_APP_TOKEN_IN_USE',
+      message: `Slack app token is already used by active instance "${other.name}" (${other.id}). Slack delivers each event to only one connection per app; both instances will receive a fraction of the traffic. Pass force: true (--force) to proceed anyway.`,
+      details: { instanceId: other.id, instanceName: other.name },
+    },
+  };
+}
 
 /**
  * POST /instances - Create new instance
  */
 instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) => {
-  const data = c.req.valid('json');
+  const { force, ...data } = c.req.valid('json');
   const services = c.get('services');
+
+  const conflict = force ? null : await findSlackAppTokenConflict(services, data.slackAppToken);
+  if (conflict) return c.json(slackAppTokenConflictBody(conflict), 409);
   const channelRegistry = c.get('channelRegistry');
 
   // omni#443: Auto-set reply filter when agent is assigned but no filter is set.
@@ -1027,8 +1096,15 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
  */
 instancesRoutes.patch('/:id', instanceAccess, zValidator('json', updateInstanceSchema), async (c) => {
   const id = c.req.param('id');
-  const data = c.req.valid('json');
+  const { force, ...data } = c.req.valid('json');
   const services = c.get('services');
+
+  if (!force && data.slackAppToken) {
+    const current = await services.instances.getById(id);
+    const conflict =
+      current.channel === 'slack' ? await findSlackAppTokenConflict(services, data.slackAppToken, id) : null;
+    if (conflict) return c.json(slackAppTokenConflictBody(conflict), 409);
+  }
 
   // Detect agent assignment changes for auto-key provisioning + auto reply-filter (omni#443)
   let oldAgentId: string | null | undefined;
@@ -1081,7 +1157,7 @@ instancesRoutes.patch('/:id', instanceAccess, zValidator('json', updateInstanceS
     );
   }
 
-  return c.json({ data: sanitizeInstance(instance) });
+  return c.json({ data: sanitizeInstance(await withAgentProviderId(services, instance)) });
 });
 
 /**
@@ -1460,6 +1536,10 @@ const connectInstanceSchema = z.object({
       "Handoff destination: 'flow' (default, poll body → Genesys node) or 'service' (/transferirHumano → ASC queue)",
     ),
   ascFlowHandoffServico: z.number().int().optional().describe('cod_servico handed to /transferirHumano (service mode)'),
+  force: z
+    .boolean()
+    .optional()
+    .describe('Override the shared-Slack-app-token refusal (Socket Mode would split events between instances)'),
   whatsapp: z
     .object({
       syncFullHistory: z.boolean().optional().describe('Sync full message history on connect (default: true)'),
@@ -1631,6 +1711,12 @@ instancesRoutes.post(
     const channelRegistry = c.get('channelRegistry');
 
     const instance = await services.instances.getById(id);
+
+    const conflict =
+      body.force || instance.channel !== 'slack'
+        ? null
+        : await findSlackAppTokenConflict(services, body.slackAppToken ?? instance.slackAppToken, id);
+    if (conflict) return c.json(slackAppTokenConflictBody(conflict), 409);
 
     const connectionOptions = buildConnectConnectionOptions(instance, body, forceNewQr);
 

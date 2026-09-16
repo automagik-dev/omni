@@ -27,7 +27,14 @@
  */
 
 // Main client
-export { NatsEventBus, createEventBus, connectEventBus } from './client';
+export {
+  NatsEventBus,
+  createEventBus,
+  connectEventBus,
+  DEFAULT_NATS_MAX_PAYLOAD,
+  assertEventPayloadSize,
+  toPayloadTooLargeError,
+} from './client';
 
 // Stream configuration
 export { STREAM_NAMES, STREAM_CONFIGS, ensureStreams, getStreamForEventType, getStreamInfo } from './streams';

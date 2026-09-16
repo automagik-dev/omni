@@ -1253,7 +1253,7 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
         maxRetries: 3,
         retryDelayMs: 1000,
         startFrom: 'first',
-        concurrency: 10, // Process up to 10 messages in parallel
+        concurrency: 1, // effective value before #1181 forwarded it; raise deliberately
       },
     );
 
@@ -1371,7 +1371,7 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
         maxRetries: 3,
         retryDelayMs: 1000,
         startFrom: 'first',
-        concurrency: 10,
+        concurrency: 1, // effective value before #1181 forwarded it; raise deliberately
       },
     );
 
@@ -1424,7 +1424,7 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
         maxRetries: 2,
         retryDelayMs: 500,
         startFrom: 'first',
-        concurrency: 10,
+        concurrency: 1, // effective value before #1181 forwarded it; raise deliberately
       },
     );
 
@@ -1476,7 +1476,7 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
         maxRetries: 2,
         retryDelayMs: 500,
         startFrom: 'first',
-        concurrency: 10,
+        concurrency: 1, // effective value before #1181 forwarded it; raise deliberately
       },
     );
 
@@ -1487,7 +1487,7 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
       maxRetries: 2,
       retryDelayMs: 500,
       startFrom: 'first',
-      concurrency: 10,
+      concurrency: 1, // effective value before #1181 forwarded it; raise deliberately
     });
 
     await eventBus.subscribe('message.unpinned', (event) => handleMessagePinState(services, event, false), {
@@ -1496,7 +1496,7 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
       maxRetries: 2,
       retryDelayMs: 500,
       startFrom: 'first',
-      concurrency: 10,
+      concurrency: 1, // effective value before #1181 forwarded it; raise deliberately
     });
 
     // Subscribe to reaction.received / reaction.removed — per-message reactions (#1033)
@@ -1506,7 +1506,7 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
       maxRetries: 2,
       retryDelayMs: 500,
       startFrom: 'first',
-      concurrency: 10,
+      concurrency: 1, // effective value before #1181 forwarded it; raise deliberately
     });
 
     await eventBus.subscribe('reaction.removed', (event) => handleReactionState(services, event, false), {
@@ -1515,7 +1515,7 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
       maxRetries: 2,
       retryDelayMs: 500,
       startFrom: 'first',
-      concurrency: 10,
+      concurrency: 1, // effective value before #1181 forwarded it; raise deliberately
     });
 
     // Subscribe to instance.connected for post-reconnect backfill detection
@@ -1608,7 +1608,7 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
         maxRetries: 2,
         retryDelayMs: 1000,
         startFrom: 'first',
-        concurrency: 5,
+        concurrency: 1, // effective value before #1181 forwarded it; raise deliberately
       },
     );
 

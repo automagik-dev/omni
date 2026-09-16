@@ -23,6 +23,7 @@ function createMockSource(overrides: Partial<WebhookSource> = {}): WebhookSource
     idempotencyKeyTemplate: '{source}:{sha256(body)}',
     eventTypeMapping: null,
     strictSchemas: false,
+    idempotencyAcrossEventTypes: false,
     enabled: true,
     lastReceivedAt: null,
     totalReceived: 0,
@@ -35,6 +36,7 @@ function createMockSource(overrides: Partial<WebhookSource> = {}): WebhookSource
     stalledAt: null,
     windowSemantics: null,
     mutationPolicy: null,
+    pollConfig: null,
     createdAt: new Date(),
     updatedAt: new Date(),
     ...overrides,
@@ -115,6 +117,7 @@ function createMockDatabase(initialSources: WebhookSource[] = []) {
           idempotencyKeyTemplate: data.idempotencyKeyTemplate ?? '{source}:{sha256(body)}',
           eventTypeMapping: data.eventTypeMapping ?? null,
           strictSchemas: data.strictSchemas ?? false,
+          idempotencyAcrossEventTypes: Boolean(data.idempotencyAcrossEventTypes),
           enabled: data.enabled ?? true,
           lastReceivedAt: null,
           totalReceived: 0,
@@ -127,6 +130,7 @@ function createMockDatabase(initialSources: WebhookSource[] = []) {
           stalledAt: null,
           windowSemantics: data.windowSemantics ?? null,
           mutationPolicy: data.mutationPolicy ?? null,
+          pollConfig: null,
           createdAt: new Date(),
           updatedAt: new Date(),
         };
@@ -830,6 +834,43 @@ describe('WebhookService', () => {
       expect(mockEventBus._publishedEvents[0]?.metadata.causationId).toBe(causationId);
     });
 
+    test('inherits the parent correlationId when only causationId is given (#1184)', async () => {
+      mockDb.select = mock(() => ({
+        from: mock(() => ({
+          where: mock(() => ({ limit: mock(() => Promise.resolve([{ metadata: { correlationId: 'flow-root' } }])) })),
+        })),
+      })) as unknown as typeof mockDb.select;
+
+      await service.trigger('custom.chain.mid' as CustomEventType, {}, { causationId: crypto.randomUUID() });
+
+      expect(mockEventBus._publishedEvents[0]?.metadata.correlationId).toBe('flow-root');
+    });
+
+    test('an explicit correlationId wins over the parent (#1184)', async () => {
+      mockDb.select = mock(() => {
+        throw new Error('parent lookup must not run');
+      }) as unknown as typeof mockDb.select;
+
+      await service.trigger(
+        'custom.chain.mid' as CustomEventType,
+        {},
+        { causationId: crypto.randomUUID(), correlationId: 'explicit' },
+      );
+
+      expect(mockEventBus._publishedEvents[0]?.metadata.correlationId).toBe('explicit');
+    });
+
+    test('a root event mints its own correlationId (#1184)', async () => {
+      mockDb.select = mock(() => {
+        throw new Error('parent lookup must not run');
+      }) as unknown as typeof mockDb.select;
+
+      await service.trigger('custom.chain.root' as CustomEventType, {});
+
+      // No correlation handed to the bus → it self-references (root, #956).
+      expect(mockEventBus._publishedEvents[0]?.metadata.correlationId).toBeUndefined();
+    });
+
     test('passes instance ID to event metadata', async () => {
       const eventType = 'custom.instance.event' as CustomEventType;
       const instanceId = 'wa-123';
@@ -1115,6 +1156,56 @@ describe('Connector lifecycle contract (#961)', () => {
       expect(updated.livenessStatus).toBeNull();
       expect(updated.livenessArmedAt).toBeNull();
       expect(updated.stalledAt).toBeNull();
+    });
+  });
+
+  describe('runPollNow (#1186)', () => {
+    test('ingests stdout lines through the keyed trigger, dedupes via the template, heartbeats', async () => {
+      const { chmodSync, mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+      const dir = mkdtempSync(join(tmpdir(), 'poll-run-now-'));
+      const saved = process.env.OMNI_POLL_COMMAND_DIR;
+      process.env.OMNI_POLL_COMMAND_DIR = dir;
+      try {
+        const command = join(dir, 'fetch.sh');
+        writeFileSync(
+          command,
+          `#!/bin/sh\necho '{"message_id":"m1"}'\necho '{"message_id":"m1"}'\necho '{"message_id":"m2"}'\n`,
+        );
+        chmodSync(command, 0o755);
+        const db = createMockDatabase([
+          createMockSource({
+            pollConfig: {
+              command,
+              intervalSeconds: 900,
+              emitType: 'custom.purchase.email',
+              dedupKeyTemplate: '{payload.message_id}',
+            },
+          }),
+        ]);
+        const bus = createMockEventBus();
+        const service = new WebhookService(db, bus);
+
+        const first = await service.runPollNow('test-id-123');
+        expect(bus._publishedEvents.map((e) => e.payload)).toEqual([{ message_id: 'm1' }, { message_id: 'm2' }]);
+        expect(first.pollConfig?.lastRun).toMatchObject({ exitCode: 0, eventsEmitted: 2 });
+        expect(db._calls.update.some((u) => 'lastHeartbeatAt' in (u as object))).toBe(true);
+
+        // A second run replays the same window: dedup absorbs it.
+        const second = await service.runPollNow('test-id-123');
+        expect(bus._publishedEvents).toHaveLength(2);
+        expect(second.pollConfig?.lastRun?.eventsEmitted).toBe(0);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+        if (saved === undefined) Reflect.deleteProperty(process.env, 'OMNI_POLL_COMMAND_DIR');
+        else process.env.OMNI_POLL_COMMAND_DIR = saved;
+      }
+    });
+
+    test('refuses a push-only source', async () => {
+      const service = new WebhookService(createMockDatabase([createMockSource()]), createMockEventBus());
+      await expect(service.runPollNow('test-id-123')).rejects.toThrow(/not a poll source/);
     });
   });
 });

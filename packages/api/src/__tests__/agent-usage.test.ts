@@ -7,9 +7,9 @@
 import { afterAll, beforeAll, expect, it } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import type { Database } from '@omni/db';
-import { omniEvents } from '@omni/db';
+import { instances, omniEvents, triggerLogs } from '@omni/db';
 import { eq, sql } from 'drizzle-orm';
-import { stampAgentUsage } from '../services/agent-usage';
+import { recordAutomationTriggerLog, stampAgentUsage } from '../services/agent-usage';
 import { EventService } from '../services/events';
 import { describeWithDb, getTestDb } from './db-helper';
 
@@ -82,5 +82,30 @@ describeWithDb('stampAgentUsage', () => {
 
     const analytics = await new EventService(db).getAnalytics({});
     expect(analytics.totalCostUsd).toBeGreaterThanOrEqual(0.25);
+    // #1183: broken down by event type
+    expect(analytics.costByEventType['message.received']).toBeGreaterThanOrEqual(0.25);
+  });
+
+  it('writes a trigger_logs row with tokens and cost (#1183)', async () => {
+    const [inst] = await db
+      .insert(instances)
+      .values({ name: `test-usage-${Date.now()}`, channel: 'whatsapp-baileys' as const })
+      .returning();
+    if (!inst) throw new Error('no instance');
+    try {
+      await recordAutomationTriggerLog(db, {
+        instanceId: inst.id,
+        eventId: 'evt-x',
+        eventType: 'message.received',
+        chatId: 'chat-usage',
+        durationMs: 6212,
+        usage: USAGE,
+      });
+      const [log] = await db.select().from(triggerLogs).where(eq(triggerLogs.instanceId, inst.id));
+      expect(log).toMatchObject({ inputTokens: 10, outputTokens: 20, triggerType: 'automation', durationMs: 6212 });
+      expect(Number(log?.costUsd)).toBeCloseTo(0.25, 6);
+    } finally {
+      await db.delete(instances).where(eq(instances.id, inst.id));
+    }
   });
 });

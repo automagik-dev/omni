@@ -60,6 +60,38 @@ The globs are stored on the consumer (`excludeTypes`, shown by `ls` /
 `inspect`), so every follower of that name sees the same sieve. The same flag
 exists on `events stream` and `events wait`.
 
+## Fan-out vs shared (competing consumers)
+
+> **Two workers on the same consumer name do NOT split the work by default.**
+> A consumer name is one cursor; separate names each see every event.
+
+| Mode | Create | Who sees an event | Use for |
+|------|--------|-------------------|---------|
+| Fan-out (default) | `consumers create audit --type 'custom.*'` | every consumer **name**, once each | observers: monitors, archivers, metrics sinks |
+| Shared | `consumers create my-workers --type custom.x --shared` | exactly one of the N processes following that name (redelivered if it never acks) | workers: agent runs, media downloads, anything expensive or with side effects |
+
+Scaling a fan-out worker by starting a second copy — on the same name or a
+new one — **doubles the work instead of halving it**, and corrupts anything
+the handler writes. Two ways to scale:
+
+1. **`--shared`** — start N `omni events follow --consumer my-workers`
+   processes (or N API pullers). Each pull *leases* the next page to that
+   puller alone; `ack` with the returned `leaseId` releases it. A page whose
+   lease expires unacked (`leaseMs`, default 60s — crashed or slow worker)
+   is redelivered to the next puller: **at-least-once**, so make handlers
+   idempotent on `id`. For per-message ack, pull with `limit=1`. The shared
+   cursor only advances past the oldest outstanding lease, so a restart
+   never skips an unacked page.
+2. **One consumer, parallelize inside your process** — a single follower
+   that hands each page's items to a local worker pool, waits, then acks.
+   Simplest when one host is enough; ordering and progress stay in one place.
+
+API: `POST /events/consumers` with `"shared": true`; pull returns `leaseId`;
+`POST .../ack` with `{"leaseId": "..."}` (a cursor ack on a shared consumer
+is refused with 400). Leases live on the consumer row (`lease_state`,
+compare-and-set), so pullers on different API replicas coordinate through
+PostgreSQL — no extra broker.
+
 ## The model
 
 - **Cursor** = last acked `omni_events.journal_seq`, a monotonic journal
@@ -101,8 +133,6 @@ forecloses it; nothing here builds it.
 
 ## Deliberately not built
 
-- **Consumer groups / competing consumers** — one cursor per name; run one
-  follower per consumer.
 - **Fan-out coordination or per-consumer NATS durables** — the journal read
   path already serves replay and resume; NATS stays transport-only.
 - **Push delivery / webhooks on match** — that is automations' job.

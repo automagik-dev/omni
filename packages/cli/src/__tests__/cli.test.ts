@@ -426,8 +426,8 @@ describe('CLI Integration Tests', () => {
 
       assertSuccess(result, 'instances create');
       const parsed = JSON.parse(result.stdout);
-      expect(parsed.data?.id || parsed.id).toBeDefined();
-      testInstanceId = parsed.data?.id || parsed.id;
+      expect(parsed.id).toBeDefined();
+      testInstanceId = parsed.id;
     });
 
     test('instances get returns instance details', async () => {
@@ -473,7 +473,7 @@ describe('CLI Integration Tests', () => {
       assertSuccess(result, 'instances update --gupshup-handoff-options');
       // The body the CLI built carries the object, not the raw string...
       const parsed = JSON.parse(result.stdout);
-      expect(parsed.data.gupshupHandoffOptions).toEqual(handoffOptions);
+      expect(parsed.gupshupHandoffOptions).toEqual(handoffOptions);
 
       // ...and that is what reached the API's PATCH /instances/:id.
       const stored = await fetch(`${MOCK_URL}/api/v2/instances/${testInstanceId}`, {
@@ -492,7 +492,7 @@ describe('CLI Integration Tests', () => {
 
       assertSuccess(result, 'instances update --gupshup-handoff-options null');
       const parsed = JSON.parse(result.stdout);
-      expect(parsed.data).toHaveProperty('gupshupHandoffOptions', null);
+      expect(parsed).toHaveProperty('gupshupHandoffOptions', null);
 
       const stored = await fetch(`${MOCK_URL}/api/v2/instances/${testInstanceId}`, {
         headers: { 'x-api-key': MOCK_API_KEY },
@@ -651,7 +651,6 @@ describe('CLI Integration Tests', () => {
 
     test('agents create seeds an agent via direct API call', async () => {
       // Seed via raw fetch so we don't depend on the CLI's JSON output shape
-      // (agents create currently emits success+data, which is two JSON blocks).
       const resp = await fetch(`${MOCK_URL}/api/v2/agents`, {
         method: 'POST',
         headers: {
@@ -673,8 +672,6 @@ describe('CLI Integration Tests', () => {
     });
 
     test('agents create exposes --provider-agent-id, --config-path, --metadata (#372)', async () => {
-      // Locate the JSON data block from the two-block output (success + data).
-      // We parse the tail JSON object, which is the agent payload.
       const result = await runCli(
         [
           'agents',
@@ -694,13 +691,8 @@ describe('CLI Integration Tests', () => {
       );
       assertSuccess(result, 'agents create with new flags');
 
-      const blocks = result.stdout
-        .split(/\n(?=\{)/)
-        .map((s) => s.trim())
-        .filter(Boolean);
-      const last = blocks[blocks.length - 1] ?? '';
-      const parsed = JSON.parse(last);
-      const agent = parsed.data ?? parsed;
+      // --json is exactly one bare document (#1177)
+      const agent = JSON.parse(result.stdout);
 
       expect(agent.configPath).toBe('/tmp/eugenia.yaml');
       expect(agent.metadata).toEqual({
@@ -768,12 +760,7 @@ describe('CLI Integration Tests', () => {
       );
       assertSuccess(result, 'agents create flag overrides metadata');
 
-      const blocks = result.stdout
-        .split(/\n(?=\{)/)
-        .map((s) => s.trim())
-        .filter(Boolean);
-      const parsed = JSON.parse(blocks[blocks.length - 1] ?? '{}');
-      const agent = parsed.data ?? parsed;
+      const agent = JSON.parse(result.stdout);
 
       expect(agent.metadata).toEqual({ providerAgentId: 'from-flag', keep: true });
 
@@ -794,7 +781,7 @@ describe('CLI Integration Tests', () => {
 
       assertSuccess(result, 'agents update --model');
       const parsed = JSON.parse(result.stdout);
-      const agent = parsed.data ?? parsed;
+      const agent = parsed;
       expect(agent.id).toBe(testAgentId);
       expect(agent.model).toBe('claude-opus-4-6');
     });
@@ -809,7 +796,7 @@ describe('CLI Integration Tests', () => {
 
       assertSuccess(result, 'agents update --name --model');
       const parsed = JSON.parse(result.stdout);
-      const agent = parsed.data ?? parsed;
+      const agent = parsed;
       expect(agent.name).toBe('renamed-agent');
       expect(agent.model).toBe('claude-sonnet-4-6');
     });
@@ -823,7 +810,7 @@ describe('CLI Integration Tests', () => {
 
       assertSuccess(result, 'agents update --inactive');
       const parsed = JSON.parse(result.stdout);
-      const agent = parsed.data ?? parsed;
+      const agent = parsed;
       expect(agent.isActive).toBe(false);
     });
 
@@ -895,7 +882,7 @@ describe('CLI Integration Tests', () => {
 
       assertSuccess(result, 'agents update --config-path');
       const parsed = JSON.parse(result.stdout);
-      const agent = parsed.data ?? parsed;
+      const agent = parsed;
       expect(agent.configPath).toBe('/tmp/agent-config.yaml');
     });
 
@@ -917,7 +904,7 @@ describe('CLI Integration Tests', () => {
 
       assertSuccess(result, 'agents update --metadata merge');
       const parsed = JSON.parse(result.stdout);
-      const agent = parsed.data ?? parsed;
+      const agent = parsed;
       expect(agent.metadata).toEqual({
         keepMe: 'original', // preserved
         tier: 'premium', // overwritten
@@ -950,7 +937,7 @@ describe('CLI Integration Tests', () => {
 
       assertSuccess(result, 'agents update provider-agent-id precedence');
       const parsed = JSON.parse(result.stdout);
-      const agent = parsed.data ?? parsed;
+      const agent = parsed;
       expect(agent.metadata).toEqual({
         keep: 'yes', // preserved from existing
         providerAgentId: 'from-flag', // flag wins
@@ -973,7 +960,7 @@ describe('CLI Integration Tests', () => {
 
       assertSuccess(result, 'agents update --provider-agent-id only');
       const parsed = JSON.parse(result.stdout);
-      const agent = parsed.data ?? parsed;
+      const agent = parsed;
       expect(agent.metadata).toEqual({
         team: 'sales',
         region: 'BR',

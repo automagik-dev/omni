@@ -46,6 +46,15 @@ function parseErrorObject(error: object, status?: number): OmniApiError | null {
   return null;
 }
 
+/** Readable text for a non-string error value (Zod issue list, `{ message }`, etc.) */
+function describeErrorValue(value: unknown, status?: number): string {
+  if (value && typeof value === 'object') {
+    const parsed = parseErrorObject({ error: value }, status);
+    if (parsed) return parsed.message;
+  }
+  return value == null ? `API error (status ${status ?? 'unknown'})` : String(value);
+}
+
 /**
  * Error thrown when an API request fails
  */
@@ -55,7 +64,8 @@ export class OmniApiError extends Error {
   readonly status?: number;
 
   constructor(message: string, code: string, details?: Record<string, unknown>, status?: number) {
-    super(message);
+    // Callers sometimes forward a raw `{ error }` body field; never let an object become "[object Object]".
+    super(typeof message === 'string' ? message : describeErrorValue(message, status));
     this.name = 'OmniApiError';
     this.code = code;
     this.details = details;

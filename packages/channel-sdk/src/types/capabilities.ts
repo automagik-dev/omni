@@ -5,6 +5,7 @@
  * to adapt behavior based on channel limitations.
  */
 
+import type { CoreEventType } from '@omni/core';
 /**
  * Capabilities that a channel can declare support for
  */
@@ -208,6 +209,28 @@ export interface ChannelCapabilities {
 
   /** Maximum options in a select menu */
   maxSelectOptions?: number;
+
+  /**
+   * Event vocabulary the channel publishes (issue #1187). Surfaced by
+   * `GET /api/v2/channels/capabilities`; kept honest by
+   * `channel-sdk/src/__tests__/event-capabilities.test.ts`, which fails when a
+   * package publishes a type it does not declare. Absent = unknown.
+   */
+  events?: ChannelEventCapabilities;
+}
+
+/** `'unknown'` when not established from code — never guess `true`. */
+export type CapabilityFlag = boolean | 'unknown';
+
+export interface ChannelEventCapabilities {
+  /** Core event types this channel publishes (custom.* excluded). */
+  emits: readonly CoreEventType[];
+  /** Emits `message.received` with `content.type: 'edit'`. */
+  edits: CapabilityFlag;
+  /** Emits `message.received` with `content.type: 'delete'`. */
+  deletes: CapabilityFlag;
+  /** Every message/reaction publish carries an ingress `idempotencyKey`. */
+  idempotency: CapabilityFlag;
 }
 
 /**

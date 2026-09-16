@@ -47,7 +47,7 @@ import { agents, omniEvents, processedEvents } from '@omni/db';
 import { eq } from 'drizzle-orm';
 import type { Services } from '../services';
 import type { AgentRunResult as RunnerResult } from '../services/agent-runner';
-import { stampAgentUsage } from '../services/agent-usage';
+import { recordAutomationTriggerLog, stampAgentUsage } from '../services/agent-usage';
 import { releaseIdleTimeoutClaim } from '../services/follow-up-lifecycle';
 import { scopedHandle } from '../tenancy/tenant-scope';
 import { runTenantWorkDb } from '../tenancy/worker-tenant-context';
@@ -135,6 +135,7 @@ function toCallAgentResult(
   ctx: AgentCallContext,
   result: RunnerResult,
   trustedTenantId: string | null,
+  instance?: { id: string; channel?: string | null },
 ): AgentRunResult {
   const usage = agentUsageFromResult({
     providerId: result.metadata.providerId,
@@ -145,6 +146,23 @@ function toCallAgentResult(
     runTenantWorkDb(db, trustedTenantId, () =>
       stampAgentUsage(db, ctx.event?.id, { usage, latencyMs: result.metadata.metrics?.durationMs }),
     ).catch((error) => log.warn('call_agent: usage stamp scope failed', { error: String(error) }));
+  }
+  // trigger_logs.instance_id is NOT NULL — chatless runs have no instance row.
+  if (instance) {
+    runTenantWorkDb(db, trustedTenantId, () =>
+      recordAutomationTriggerLog(db, {
+        instanceId: instance.id,
+        providerId: result.metadata.providerId,
+        eventId: ctx.event?.id,
+        eventType: ctx.event?.type,
+        chatId: ctx.chatId,
+        senderId: ctx.senderId,
+        channelType: instance.channel ?? undefined,
+        durationMs: result.metadata.metrics?.durationMs,
+        usage,
+        error: result.metadata.status === 'failed' ? 'Agent call failed' : undefined,
+      }),
+    ).catch((error) => log.warn('call_agent: trigger log scope failed', { error: String(error) }));
   }
   return {
     parts: result.parts,
@@ -430,7 +448,7 @@ export function buildAutomationEngineDeps(
         chatType: 'dm',
         messages: ctx.messages,
       });
-      return toCallAgentResult(db, ctx, result, trustedTenantId);
+      return toCallAgentResult(db, ctx, result, trustedTenantId, instance);
     },
 
     // Consumer-side stale-event gate — see engine.handleEvent comment.

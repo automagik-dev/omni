@@ -10,6 +10,7 @@ import {
   webhookSignatureAlgorithms,
 } from '@omni/db';
 import { DEFAULT_IDEMPOTENCY_KEY_TEMPLATE, isValidIdempotencyKeyTemplate } from '../../lib/ingress-idempotency';
+import { PollConfigInputSchema } from '../../lib/poll-connector';
 import { z } from '../../lib/zod-openapi';
 import { ErrorSchema, SuccessSchema } from './common';
 
@@ -90,6 +91,9 @@ export const WebhookSourceSchema = z.object({
     .boolean()
     .openapi({ description: 'Whether a signature secret is stored (secret is write-only)' }),
   idempotencyKeyTemplate: z.string().openapi({ description: 'Idempotency key derivation template' }),
+  idempotencyAcrossEventTypes: z.boolean().openapi({
+    description: 'Whether custom-template idempotency keys are shared across event types (opt-in collapsing)',
+  }),
   totalDuplicates: z.number().int().openapi({ description: 'Redeliveries acked without creating a second event' }),
   strictSchemas: z.boolean().openapi({
     description:
@@ -150,6 +154,15 @@ export const CreateWebhookSourceSchema = z.object({
         'without a signatureConfig (given in the same request, or already stored on update); null clears it.',
     }),
   idempotencyKeyTemplate: IdempotencyKeyTemplateSchema.optional(),
+  idempotencyAcrossEventTypes: z
+    .boolean()
+    .optional()
+    .openapi({
+      description:
+        'By default a custom idempotency key is prefixed with the resolved event type, so ' +
+        'different event types for the same entity never collide. Set true to collapse keys across ' +
+        'event types (a second type for the same rendered key is acked as a duplicate). Defaults to false.',
+    }),
   strictSchemas: z
     .boolean()
     .optional()
@@ -166,6 +179,14 @@ export const CreateWebhookSourceSchema = z.object({
       description:
         'Semantic event-type extraction (e.g. header X-GitHub-Event: push emits custom.{source}.push). ' +
         'Null or absent keeps the legacy collapsed custom.webhook.{source} type for every delivery.',
+    }),
+  pollConfig: PollConfigInputSchema.nullable()
+    .optional()
+    .openapi({
+      description:
+        'Supervised pull connector (#1186): run `command` (must live inside OMNI_POLL_COMMAND_DIR) every ' +
+        'intervalSeconds; each JSON stdout line becomes an emitType event deduped by dedupKeyTemplate. ' +
+        'Null makes the source push-only again.',
     }),
   enabled: z.boolean().default(true).openapi({ description: 'Whether enabled' }),
   // Connector lifecycle contract (#961)
@@ -412,7 +433,8 @@ export function registerWebhookSchemas(registry: OpenAPIRegistry): void {
     operationId: 'triggerEvent',
     tags: ['Webhooks'],
     summary: 'Trigger custom event',
-    description: 'Manually trigger a custom event.',
+    description:
+      'Manually trigger a custom event. The effective payload ceiling is the NATS `max_payload` (1 MB by default), not OMNI_API_BODY_LIMIT_MB; larger events are rejected with 413. For large bodies, store the body elsewhere (e.g. object storage) and publish a reference to it.',
     request: { body: { content: { 'application/json': { schema: TriggerEventSchema } } } },
     responses: {
       201: {
@@ -420,6 +442,10 @@ export function registerWebhookSchemas(registry: OpenAPIRegistry): void {
         content: { 'application/json': { schema: WebhookReceiveResponseSchema } },
       },
       400: { description: 'Validation error', content: { 'application/json': { schema: ErrorSchema } } },
+      413: {
+        description: 'Event payload exceeds NATS max_payload',
+        content: { 'application/json': { schema: ErrorSchema } },
+      },
     },
   });
 }

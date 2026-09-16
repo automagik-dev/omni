@@ -23,6 +23,7 @@ import { Command } from 'commander';
 import { getClient } from '../client.js';
 import { loadConfig } from '../config.js';
 import * as output from '../output.js';
+import { resolveWebhookId } from '../resolve.js';
 import { schemaApiRequest } from './events.js';
 import githubIssues from './sources/github/custom.github.issues.json' with { type: 'json' };
 import githubPullRequest from './sources/github/custom.github.pull_request.json' with { type: 'json' };
@@ -156,6 +157,10 @@ export interface AddSourceInput {
   /** Provider event names; must be a subset of preset.schemas. */
   events: string[];
   secret: string;
+  /** True when the secret came from the user (--secret-env), not generated. */
+  secretProvided?: boolean;
+  /** Replace an existing source's secret. Without it an adopted source keeps its secret. */
+  rotateSecret?: boolean;
   /** Omni base URL reachable from the provider. */
   publicUrl: string;
   providerWebhook: boolean;
@@ -167,6 +172,10 @@ export interface AddSourceInput {
 export interface AddSourceResult {
   sourceId: string;
   created: boolean;
+  /** Whether `secret` was written to omni (always on create; on adopt only with rotateSecret). */
+  secretApplied: boolean;
+  /** For an adopted source: the target it was bound to before this run (null = not recorded). */
+  previousTarget?: string | null;
   webhookUrl: string;
   providerHookId?: string;
   completed: string[];
@@ -182,6 +191,36 @@ export class StepFailure extends Error {
   }
 }
 
+const TARGET_MARKER = ' — target: ';
+
+/** Target recorded in a source description by a previous `sources add`, or null. */
+export function recordedTarget(description: string | null | undefined): string | null {
+  const i = description?.lastIndexOf(TARGET_MARKER) ?? -1;
+  return description && i >= 0 ? description.slice(i + TARGET_MARKER.length) : null;
+}
+
+/** Post-run notices: secret-shown-once, plus prominent adoption/divergence warnings for a pre-existing source. */
+export function adoptionWarnings(
+  name: string,
+  target: string,
+  providerWebhook: boolean,
+  result: Pick<AddSourceResult, 'sourceId' | 'created' | 'secretApplied' | 'previousTarget'>,
+): string[] {
+  const shown = 'The secret is shown once; store it now (re-run with --secret-env VAR to reuse it).';
+  if (result.created) return [shown];
+  const lines = [
+    `Adopted EXISTING source '${name}' (${result.sourceId}), previously bound to ${result.previousTarget ?? '(not recorded)'}. ` +
+      `Changed: target → ${target}, signature config, idempotency, event-type mapping, schemas; ` +
+      `secret ${result.secretApplied ? 'ROTATED' : 'unchanged'}.`,
+  ];
+  if (result.secretApplied && !providerWebhook) {
+    lines.push(
+      `Secret rotated with --no-provider-webhook: the provider still signs with the old secret and deliveries will fail 401. Recover: set the webhook secret on ${target} to the new value, or re-run without --no-provider-webhook.`,
+    );
+  }
+  return result.secretApplied ? [...lines, shown] : lines;
+}
+
 export const STEPS = ['source', 'idempotency', 'event-type-mapping', 'schemas', 'provider-webhook'] as const;
 
 export async function addSource(input: AddSourceInput): Promise<AddSourceResult> {
@@ -190,6 +229,20 @@ export async function addSource(input: AddSourceInput): Promise<AddSourceResult>
   if (unknown.length > 0) {
     throw new Error(
       `unknown ${preset.name} events: ${unknown.join(', ')} (known: ${Object.keys(preset.schemas).join(', ')})`,
+    );
+  }
+  const existing = (await client.listSources()).find((s) => s.name === preset.name);
+  const previousTarget = existing ? recordedTarget(existing.description) : undefined;
+  if (previousTarget && previousTarget !== input.target) {
+    throw new Error(
+      `source '${preset.name}' (${existing?.id}) is already bound to ${previousTarget}; refusing to rebind it to ${input.target}. ` +
+        `One ${preset.name} source serves one target — remove or rename the existing source first.`,
+    );
+  }
+  const secretApplied = !existing || Boolean(input.rotateSecret);
+  if (!secretApplied && input.providerWebhook && !input.secretProvided) {
+    throw new Error(
+      `source '${preset.name}' already exists and keeps its current secret, which omni cannot reveal. Pass --secret-env VAR holding that secret, --rotate-secret to replace it, or --no-provider-webhook.`,
     );
   }
   const webhookUrl = `${input.publicUrl.replace(/\/+$/, '')}/api/v2/webhooks/ingress/${preset.name}`;
@@ -204,13 +257,12 @@ export async function addSource(input: AddSourceInput): Promise<AddSourceResult>
     }
   };
 
-  // 1. source (find-or-create by name; signature config + secret)
+  // 1. source (find-or-create by name; signature config; secret only on create or --rotate-secret)
   const source = await run(STEPS[0], async () => {
-    const existing = (await client.listSources()).find((s) => s.name === preset.name);
     const body = {
-      description: preset.description,
+      description: `${preset.description}${TARGET_MARKER}${input.target}`,
       signatureConfig: preset.signatureConfig,
-      signatureSecret: input.secret,
+      ...(secretApplied ? { signatureSecret: input.secret } : {}),
       expectedIntervalSeconds: preset.expectedIntervalSeconds,
     };
     if (existing) return { id: (await client.updateSource(existing.id, body)).id, created: false };
@@ -238,7 +290,15 @@ export async function addSource(input: AddSourceInput): Promise<AddSourceResult>
       }),
     );
   }
-  return { sourceId: source.id, created: source.created, webhookUrl, providerHookId, completed };
+  return {
+    sourceId: source.id,
+    created: source.created,
+    secretApplied,
+    previousTarget,
+    webhookUrl,
+    providerHookId,
+    completed,
+  };
 }
 
 // ============================================================================
@@ -255,24 +315,33 @@ export function createSourcesCommand(): Command {
     .option('--events <list>', 'Comma-separated provider events (default: every bundled schema)')
     .option('--public-url <url>', 'Omni URL reachable from the provider (default: configured apiUrl)')
     .option('--secret-env <VAR>', 'Reuse the webhook secret from environment variable VAR instead of generating one')
+    .option('--rotate-secret', 'Replace the secret of an existing source (default: keep it)')
     .option('--no-provider-webhook', 'Skip creating the webhook on the provider side')
     .action(
       async (
         provider: string,
-        options: { repo: string; events?: string; publicUrl?: string; secretEnv?: string; providerWebhook: boolean },
+        options: {
+          repo: string;
+          events?: string;
+          publicUrl?: string;
+          secretEnv?: string;
+          rotateSecret?: boolean;
+          providerWebhook: boolean;
+        },
       ) => {
         const preset = PRESETS[provider];
         if (!preset) output.error(`Unknown provider '${provider}'. Presets: ${Object.keys(PRESETS).join(', ')}`);
         const client = getClient();
         try {
-          const secret =
-            (await resolveSignatureSecret({ signatureSecretEnv: options.secretEnv })) ??
-            randomBytes(32).toString('hex');
+          const provided = await resolveSignatureSecret({ signatureSecretEnv: options.secretEnv });
+          const secret = provided ?? randomBytes(32).toString('hex');
           const result = await addSource({
             preset,
             target: options.repo,
             events: options.events ? options.events.split(',').map((e) => e.trim()) : Object.keys(preset.schemas),
             secret,
+            secretProvided: provided !== undefined,
+            rotateSecret: options.rotateSecret,
             publicUrl: options.publicUrl ?? loadConfig().apiUrl ?? 'http://localhost:8882',
             providerWebhook: options.providerWebhook,
             client: client.webhooks,
@@ -280,15 +349,17 @@ export function createSourcesCommand(): Command {
               schemaApiRequest('', { method: 'POST', body: JSON.stringify({ eventType, schema, description }) }),
             providerApi: resolveGithubApi,
           });
+          const warnings = adoptionWarnings(preset.name, options.repo, options.providerWebhook, result);
           output.success(`Source ${result.created ? 'created' : 'updated'}: ${result.sourceId}`, {
             id: result.sourceId,
             name: preset.name,
-            secret,
+            target: options.repo,
+            ...(result.secretApplied && { secret }),
             webhookUrl: result.webhookUrl,
             providerHookId: result.providerHookId ?? '(skipped)',
             steps: result.completed.join(', '),
           });
-          output.warn('The secret is shown once; store it now (re-run with --secret-env VAR to reuse it).');
+          for (const line of warnings) output.warn(line);
         } catch (err) {
           if (err instanceof StepFailure) {
             const remaining = STEPS.filter((s) => !err.completed.includes(s));
@@ -303,5 +374,87 @@ export function createSourcesCommand(): Command {
       },
     );
 
+  sources
+    .command('add-poll <name>')
+    .description(
+      'Create a supervised pull connector: omni runs --command every --interval seconds and ingests each JSON stdout line (command must live inside the API host OMNI_POLL_COMMAND_DIR)',
+    )
+    .requiredOption('--command <path>', 'Executable to run (no shell, no arguments)')
+    .requiredOption('--interval <seconds>', 'Seconds between runs (min 10); failures back off exponentially')
+    .requiredOption('--emit-type <type>', 'Event type for each stdout line (custom.*)')
+    .option('--dedup-key <template>', "Idempotency key template, e.g. '{payload.message_id}'")
+    .option('--expected-interval <seconds>', 'Liveness window (default: 2x --interval)')
+    .option('--env <KEY=VALUE...>', 'Environment variables for the command (repeatable)')
+    .option('--description <desc>', 'Description')
+    .action(
+      async (
+        name: string,
+        options: {
+          command: string;
+          interval: string;
+          emitType: string;
+          dedupKey?: string;
+          expectedInterval?: string;
+          env?: string[];
+          description?: string;
+        },
+      ) => {
+        const intervalSeconds = Number(options.interval);
+        const env = Object.fromEntries(
+          (options.env ?? []).map((pair) => [pair.slice(0, pair.indexOf('=')), pair.slice(pair.indexOf('=') + 1)]),
+        );
+        try {
+          const result = await webhookSourcesApiRequest<{ data: { id: string; pollConfig: unknown } }>('', {
+            method: 'POST',
+            body: JSON.stringify({
+              name,
+              description: options.description ?? `Poll connector: ${options.command}`,
+              enabled: true,
+              expectedIntervalSeconds: options.expectedInterval
+                ? Number(options.expectedInterval)
+                : intervalSeconds * 2,
+              pollConfig: {
+                command: options.command,
+                intervalSeconds,
+                emitType: options.emitType,
+                ...(options.dedupKey && { dedupKeyTemplate: options.dedupKey }),
+                ...(options.env && { env }),
+              },
+            }),
+          });
+          output.success(`Poll source created: ${result.data.id}`, { name, ...result.data });
+        } catch (err) {
+          output.error(`Failed to add poll source: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      },
+    );
+
+  sources
+    .command('run-now <name>')
+    .description('Run a poll source command immediately and show the result')
+    .action(async (name: string) => {
+      try {
+        const id = await resolveWebhookId(name);
+        const result = await webhookSourcesApiRequest<{ data: { pollConfig: unknown } }>(`/${id}/run-now`, {
+          method: 'POST',
+        });
+        output.data(result.data.pollConfig);
+      } catch (err) {
+        output.error(`Failed to run poll source: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    });
+
   return sources;
+}
+
+/** Raw CLI→API call for the poll fields the generated SDK does not cover yet (`consumersApiRequest` precedent). */
+async function webhookSourcesApiRequest<T>(path: string, init: { method?: string; body?: string } = {}): Promise<T> {
+  const config = loadConfig();
+  const resp = await fetch(`${config.apiUrl ?? 'http://localhost:8882'}/api/v2/webhook-sources${path}`, {
+    method: init.method ?? 'GET',
+    body: init.body,
+    headers: { 'content-type': 'application/json', 'x-api-key': config.apiKey ?? '' },
+  });
+  if (!resp.ok) throw new Error(`API returned ${resp.status}: ${await resp.text()}`);
+  return (await resp.json()) as T;
 }

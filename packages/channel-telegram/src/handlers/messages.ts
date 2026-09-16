@@ -159,12 +159,14 @@ async function processInboundMessage(
   });
 
   const platformTimestamp = msg.date * 1000;
+  const ingestedAt = Date.now();
 
   // --- Reaction levels: set ack reaction before processing ---
   const reactionConfig = getReactionConfig(plugin, instanceId);
   const didSetAck = await applyAckReaction(bot, chatId, msg.message_id, instanceId, reactionConfig);
 
   const local = await downloadIfMedia({ bot, instanceId, externalId, content });
+  const mediaReadyAt = Date.now();
 
   // --- Reaction levels: remove ack reaction in finally so it always runs ---
   try {
@@ -201,6 +203,7 @@ async function processInboundMessage(
         threadId: msg.is_topic_message === true ? String(msg.message_thread_id) : undefined,
       },
       platformTimestamp,
+      { ingestedAt, mediaReadyAt },
     );
   } finally {
     // Always remove the ack reaction — even if processing throws

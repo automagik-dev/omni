@@ -22,6 +22,7 @@ import {
   connect,
   headers as natsHeaders,
 } from 'nats';
+import { ERROR_CODES, OmniError } from '../../errors';
 import { createLogger } from '../../logger';
 import { createOmniEvent } from '../factory';
 
@@ -112,6 +113,35 @@ interface InternalConfig {
     delayMs: number;
     maxDelayMs: number;
   };
+}
+
+/** NATS server default `max_payload` (1 MB), used when the connection has not reported one. */
+export const DEFAULT_NATS_MAX_PAYLOAD = 1024 * 1024;
+
+function formatMegabytes(bytes: number): string {
+  const mb = bytes / (1024 * 1024);
+  return Number.isInteger(mb) ? `${mb} MB` : `${mb.toFixed(1)} MB`;
+}
+
+function payloadTooLarge(size: number, maxPayload: number, cause?: Error): OmniError {
+  return new OmniError({
+    code: ERROR_CODES.PAYLOAD_TOO_LARGE,
+    message: `event payload is ${(size / (1024 * 1024)).toFixed(1)} MB; maximum is ${formatMegabytes(maxPayload)} (NATS max_payload)`,
+    context: { size, maxPayload },
+    cause,
+    recoverable: false,
+  });
+}
+
+/** Throws PAYLOAD_TOO_LARGE when an encoded event exceeds the NATS max_payload. */
+export function assertEventPayloadSize(size: number, maxPayload: number): void {
+  if (size > maxPayload) throw payloadTooLarge(size, maxPayload);
+}
+
+/** Maps a NatsError MAX_PAYLOAD_EXCEEDED to PAYLOAD_TOO_LARGE; returns null for any other error. */
+export function toPayloadTooLargeError(error: unknown, size: number, maxPayload: number): OmniError | null {
+  if (!(error instanceof Error) || (error as { code?: unknown }).code !== 'MAX_PAYLOAD_EXCEEDED') return null;
+  return payloadTooLarge(size, maxPayload, error);
 }
 
 /**
@@ -265,8 +295,16 @@ export class NatsEventBus implements EventBus {
     // OTel SDK is not initialized.
     const js = this.requireJetStream();
     const data = this.sc.encode(JSON.stringify(event));
+    const maxPayload = this.nc?.info?.max_payload ?? DEFAULT_NATS_MAX_PAYLOAD;
+    assertEventPayloadSize(data.length, maxPayload);
     const headers = buildTraceHeaders();
-    const ack = headers ? await js.publish(subject, data, { headers }) : await js.publish(subject, data);
+    let ack: Awaited<ReturnType<JetStreamClient['publish']>>;
+    try {
+      ack = headers ? await js.publish(subject, data, { headers }) : await js.publish(subject, data);
+    } catch (error) {
+      // Headers count against max_payload too, so the pre-check can pass and the server still refuse.
+      throw toPayloadTooLargeError(error, data.length, maxPayload) ?? error;
+    }
 
     return {
       id: eventId,
@@ -476,6 +514,9 @@ export class NatsEventBus implements EventBus {
       handler,
       maxRetries: options.maxRetries,
       retryDelayMs: options.retryDelayMs,
+      // Was dropped here, so every subscription ran at the wrapper default of
+      // 1 regardless of what the caller asked for (#1181).
+      concurrency: options.concurrency,
       onDeadLetter: async (event, error, retryCount) => {
         // Publish to system.dead_letter
         await this.publishGeneric(

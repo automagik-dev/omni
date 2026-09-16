@@ -64,6 +64,9 @@ export const EventAnalyticsSchema = z.object({
   avgProcessingTimeMs: z.number().nullable().openapi({ description: 'Average processing time (ms)' }),
   avgAgentTimeMs: z.number().nullable().openapi({ description: 'Average agent time (ms)' }),
   totalCostUsd: z.number().openapi({ description: 'Sum of agent run cost (USD) stamped on events in range' }),
+  costByEventType: z
+    .record(z.string(), z.number())
+    .openapi({ description: 'Agent run cost (USD) grouped by event type, for events with a stamped cost' }),
   messageTypes: z.record(z.string(), z.number()).openapi({ description: 'Count by content type' }),
   errorStages: z.record(z.string(), z.number()).openapi({ description: 'Count by error stage' }),
   instances: z.record(z.string(), z.number()).openapi({ description: 'Count by instance' }),

@@ -43,7 +43,7 @@ import { join } from 'node:path';
 import type { EventBus } from '@omni/core';
 import { type Database, createDbHandle, deadLetterEvents, omniEvents, webhookSources } from '@omni/db';
 import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
-import { eq } from 'drizzle-orm';
+import { eq, like } from 'drizzle-orm';
 import { createApp } from '../app';
 import { EventSchemaService } from '../services/event-schemas';
 import { WebhookService } from '../services/webhooks';
@@ -194,8 +194,13 @@ postgresDescribe('ClickUp source recipe end-to-end (#984, real PostgreSQL)', () 
     return { status: res.status, json: (await res.json()) as ReceiveResponse, body };
   }
 
+  // Suffix match: a resolved custom-template key is scoped by event type
+  // (`<eventType>:<rendered>`, #1178); the body-hash fallback is not.
   async function journalRowsForKey(key: string) {
-    return db.select().from(omniEvents).where(eq(omniEvents.idempotencyKey, key));
+    return db
+      .select()
+      .from(omniEvents)
+      .where(like(omniEvents.idempotencyKey, `%${key}`));
   }
 
   beforeAll(async () => {

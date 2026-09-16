@@ -41,6 +41,14 @@ import type {
 import type { ConnectionStatus, InstanceConfig } from '../types/instance';
 import type { OutgoingMessage, SendResult } from '../types/messaging';
 import type { ChannelPlugin, HealthCheck, HealthStatus } from '../types/plugin';
+
+/** Optional T0→T1 sub-stage timestamps (Unix ms) captured before publish (#1179). */
+export interface InboundSubStageTimings {
+  /** T0a: the plugin's handler first saw the platform message */
+  ingestedAt?: number;
+  /** T0b: inline media download finished (or was skipped) */
+  mediaReadyAt?: number;
+}
 import { aggregateHealthChecks } from './HealthChecker';
 import { InstanceManager } from './InstanceManager';
 
@@ -180,10 +188,12 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
   async getStatus(instanceId: string): Promise<ConnectionStatus> {
     const status = this.instances.getStatus(instanceId);
     if (!status) {
+      // Not loaded by this plugin (inactive, or never connected since boot).
+      // Callers resolve the id against the DB first, so unknown ids 404 upstream (#1169).
       return {
         state: 'disconnected',
         since: new Date(),
-        message: 'Instance not found',
+        message: 'Instance inactive (not connected)',
       };
     }
     return status;
@@ -278,18 +288,23 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
   }
 
   /**
-   * Build a timings map with T0 and T1 checkpoints for inbound messages.
+   * Build a timings map with T0 and T1 (plus optional T0a/T0b sub-stages, #1179) checkpoints for inbound messages.
    * Checks sampling rate -- returns undefined if this message should not be tracked.
    *
    * @param platformTimestamp - Normalized T0 timestamp (Unix ms)
    * @returns Timings map with platformReceivedAt and pluginReceivedAt, or undefined if not sampled
    */
-  protected captureInboundTimings(platformTimestamp: number): Record<string, number> | undefined {
+  protected captureInboundTimings(
+    platformTimestamp: number,
+    subStages?: InboundSubStageTimings,
+  ): Record<string, number> | undefined {
     const tracker = getJourneyTracker();
     if (!tracker.shouldSample()) return undefined;
 
     return {
       [JOURNEY_STAGES.T0]: platformTimestamp,
+      ...(subStages?.ingestedAt != null ? { [JOURNEY_STAGES.T0a]: subStages.ingestedAt } : {}),
+      ...(subStages?.mediaReadyAt != null ? { [JOURNEY_STAGES.T0b]: subStages.mediaReadyAt } : {}),
       [JOURNEY_STAGES.T1]: Date.now(),
     };
   }
@@ -306,6 +321,10 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
     const t0 = timings[JOURNEY_STAGES.T0];
     const t1 = timings[JOURNEY_STAGES.T1];
     if (t0 != null) tracker.recordCheckpoint(correlationId, 'T0', JOURNEY_STAGES.T0, t0);
+    for (const stage of ['T0a', 'T0b'] as const) {
+      const ts = timings[JOURNEY_STAGES[stage]];
+      if (ts != null) tracker.recordCheckpoint(correlationId, stage, JOURNEY_STAGES[stage], ts);
+    }
     if (t1 != null) tracker.recordCheckpoint(correlationId, 'T1', JOURNEY_STAGES.T1, t1);
     tracker.recordCheckpoint(correlationId, 'T2', JOURNEY_STAGES.T2, t2);
   }
