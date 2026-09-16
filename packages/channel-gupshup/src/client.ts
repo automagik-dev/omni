@@ -8,6 +8,13 @@
 import type { GupshupOutboundMessage, GupshupSendResponse } from './types';
 import { GupshupError, GupshupErrorCode } from './utils/errors';
 
+/** Copy close-contact classification keys; callers must only pass CLOSING messages. */
+function addCloseFields(payload: Record<string, unknown>, msg: GupshupOutboundMessage): void {
+  if (msg.close_reason) payload.close_reason = msg.close_reason;
+  if (msg.close_outcome) payload.close_outcome = msg.close_outcome;
+  if (msg.close_fields) payload.close_fields = msg.close_fields;
+}
+
 export class GupshupClient {
   constructor(
     private readonly callbackUrl: string,
@@ -40,9 +47,7 @@ export class GupshupClient {
     if (msg.customer_fields && msg.customer_fields.length > 0) payload.customerFields = msg.customer_fields;
     // Close-contact classification (CLOSING only). Forwarded so the Journey can
     // record why and how the conversation ended; omitted when not provided.
-    if (msg.close_reason) payload.close_reason = msg.close_reason;
-    if (msg.close_outcome) payload.close_outcome = msg.close_outcome;
-    if (msg.close_fields) payload.close_fields = msg.close_fields;
+    if (msg.type === 'CLOSING') addCloseFields(payload, msg);
 
     // POST to callback URL
     const res = await fetch(this.callbackUrl, {
