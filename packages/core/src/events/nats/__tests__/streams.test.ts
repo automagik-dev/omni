@@ -67,6 +67,7 @@ describe('streams', () => {
       expect(getStreamForEventType('instance.connected')).toBe('INSTANCE');
       expect(getStreamForEventType('instance.disconnected')).toBe('INSTANCE');
       expect(getStreamForEventType('instance.qr_code')).toBe('INSTANCE');
+      expect(getStreamForEventType('instance.updated')).toBe('INSTANCE');
     });
 
     test('routes identity events to IDENTITY stream', () => {

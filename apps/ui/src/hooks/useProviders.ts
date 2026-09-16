@@ -1,3 +1,4 @@
+import { queryKeys } from '@/lib/query';
 import { getClient } from '@/lib/sdk';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
@@ -100,5 +101,20 @@ export function useDeleteProvider() {
 export function useCheckProviderHealth() {
   return useMutation({
     mutationFn: (id: string) => getClient().providers.checkHealth(id),
+  });
+}
+
+/**
+ * Hook for updating an agent (e.g. its provider — instances derive agentProviderId from the agent)
+ */
+export function useUpdateAgent() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Parameters<ReturnType<typeof getClient>['agents']['update']>[1] }) =>
+      getClient().agents.update(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.instances });
+    },
   });
 }

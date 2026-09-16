@@ -555,7 +555,50 @@ jobs:
           echo "CANDIDATE_DIGEST=${DIGEST}"
           echo "RELEASE_PUBLISHED_AT=${published_at}"
 
+      # Idempotent re-run (#1209): verify an already published stable package
+      # here with the same reconciler the publish job runs, in --verify-only
+      # mode (this job has no id-token and no npm credential, so it cannot
+      # publish). Exact bytes, signatures, and provenance verified -> skip the
+      # dispatch. Anything else still needing a mutation (exit 3) or a transient
+      # registry failure (exit 75) falls through to the dispatched publisher.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install dependencies for stable npm verification
+        run: bun install --frozen-lockfile
+
+      - name: Build stable CLI for npm verification
+        run: bunx turbo run build --filter=@automagik/omni
+
+      - name: Setup Node 24 for npm verification
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Verify an existing stable npm package
+        id: npm-existing
+        env:
+          HUSKY: "0"
+        run: |
+          set -uo pipefail
+          set +e # the runner shell starts with -e; the exit code is the verdict
+          scripts/release/reconcile-npm-stable.sh \
+            --expected "${VERSION}" \
+            --package-dir "${GITHUB_WORKSPACE}/packages/cli" \
+            --verify-only
+          status=$?
+          case "${status}" in
+            0) echo "verified=true" >> "$GITHUB_OUTPUT"
+               echo "@automagik/omni@${VERSION} is already published and verified; skipping the stable npm dispatch" ;;
+            3|75) echo "verified=false" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::existing @automagik/omni@${VERSION} failed verification (exit ${status})"
+               exit 1 ;;
+          esac
+
       - name: Publish stable npm
+        if: steps.npm-existing.outputs.verified != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -564,27 +607,43 @@ jobs:
           # shellcheck disable=SC1091
           source "${RUNNER_TEMP}/dispatch-helpers.sh"
 
-          # Always dispatch the hardened npm reconciler — even when version and
-          # latest already look correct — so existing package bytes, registry
-          # signatures, and available provenance attestations are reverified.
           # Dispatched at the tag (not main) so the copy of version.yml that
           # runs carries the same signer/orchestrator identity as this file.
-          npm_before=$(list_runs version.yml)
-          gh workflow run version.yml \
-            --repo "${GITHUB_REPOSITORY}" \
-            --ref "refs/tags/v${VERSION}" \
-            --field stable_publish_only=true \
-            --field expected_version="${VERSION}" \
-            --field expected_sha="${SOURCE_SHA}" \
-            --field expected_digest="${DIGEST}" \
-            --field orchestrator_run_id="${GITHUB_RUN_ID}" \
-            --field orchestrator_control_sha="${GITHUB_SHA}"
-          npm_run_id=$(resolve_new_run version.yml "${npm_before}") || {
-            echo "::error::dispatched stable npm run for ${tag} did not appear"
-            exit 1
-          }
-          require_single_run "${npm_run_id}" version.yml
-          gh run watch "${npm_run_id}" --repo "${GITHUB_REPOSITORY}" --exit-status
+          # A run that failed ONLY on a transient registry 404/5xx (the
+          # reconciler's exit 75 `npm_registry_transient` marker) is
+          # re-dispatched, up to 3 attempts with backoff; any other failure
+          # fails the mint.
+          for attempt in 1 2 3; do
+            npm_before=$(list_runs version.yml)
+            gh workflow run version.yml \
+              --repo "${GITHUB_REPOSITORY}" \
+              --ref "refs/tags/v${VERSION}" \
+              --field stable_publish_only=true \
+              --field expected_version="${VERSION}" \
+              --field expected_sha="${SOURCE_SHA}" \
+              --field expected_digest="${DIGEST}" \
+              --field orchestrator_run_id="${GITHUB_RUN_ID}" \
+              --field orchestrator_control_sha="${GITHUB_SHA}"
+            npm_run_id=$(resolve_new_run version.yml "${npm_before}") || {
+              echo "::error::dispatched stable npm run for ${tag} did not appear"
+              exit 1
+            }
+            require_single_run "${npm_run_id}" version.yml
+            if gh run watch "${npm_run_id}" --repo "${GITHUB_REPOSITORY}" --exit-status; then
+              exit 0
+            fi
+            gh run view "${npm_run_id}" --repo "${GITHUB_REPOSITORY}" --log-failed \
+              > "${RUNNER_TEMP}/npm-run-${npm_run_id}.log" || true
+            grep -q 'npm_registry_transient' "${RUNNER_TEMP}/npm-run-${npm_run_id}.log" || {
+              echo "::error::stable npm run ${npm_run_id} failed for a non-registry reason; not retrying"
+              exit 1
+            }
+            [[ "${attempt}" -lt 3 ]] || break
+            echo "::warning::stable npm run ${npm_run_id} hit a transient registry failure (attempt ${attempt}/3); retrying"
+            sleep $((attempt * 120))
+          done
+          echo "::error::stable npm publication for ${tag} still failed on the registry after 3 attempts"
+          exit 1
 
       - name: Re-check version alias after release finalization
         run: |

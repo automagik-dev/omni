@@ -39,4 +39,11 @@ describe("'omni messages close-contact'", () => {
     const requiredFlags = cmd.options.filter((o) => o.required).map((o) => o.long);
     expect(requiredFlags).toEqual(expect.arrayContaining(['--instance', '--chat', '--to', '--text', '--outcome']));
   });
+
+  test('--instance, --chat, --to, --outcome are mandatory; --text is optional (close without farewell)', () => {
+    const cmd = findSubcommand('close-contact');
+    const mandatoryFlags = cmd.options.filter((o) => o.mandatory).map((o) => o.long);
+    expect(mandatoryFlags).toEqual(expect.arrayContaining(['--instance', '--chat', '--to', '--outcome']));
+    expect(mandatoryFlags).not.toContain('--text');
+  });
 });

@@ -97,6 +97,10 @@ PY
     ;;
   "install --ignore-scripts --no-audit")
     [[ -z "${NPM_RECOVERY_TOKEN:-}" && -z "${NODE_AUTH_TOKEN:-}" ]] || exit 97
+    if [[ "${MOCK_INSTALL_404:-false}" == "true" ]]; then
+      echo 'npm error code E404' >&2
+      exit 1
+    fi
     ;;
   publish*)
     [[ -z "${NPM_RECOVERY_TOKEN:-}" && -z "${NODE_AUTH_TOKEN:-}" ]] || exit 94
@@ -256,5 +260,31 @@ if MOCK_NO_ATTESTATIONS=true NPM_RECOVERY_TOKEN=token run_case "${repair_no_prov
   >"${work}/repair-no-provenance.out" 2>"${work}/repair-no-provenance.err"; then
   fail "latest repair bypassed verified SLSA provenance"
 fi
+
+verify_exact="${work}/verify-exact"
+mkdir -p "${verify_exact}"
+printf '2.260830.2\n' > "${verify_exact}/published"
+printf '2.260830.2\n' > "${verify_exact}/latest"
+out="$(run_case "${verify_exact}" --verify-only)"
+grep -q '^npm_action=none$' <<<"${out}" || fail "verify-only did not accept an exact existing package"
+
+verify_missing="${work}/verify-missing"
+set +e
+run_case "${verify_missing}" --verify-only >"${work}/verify-missing.out" 2>&1
+status=$?
+set -e
+[[ "${status}" -eq 3 ]] || fail "verify-only on a missing package exited ${status}, expected 3"
+[[ ! -e "${verify_missing}/mutations" ]] || fail "verify-only mutated npm"
+
+transient_install="${work}/transient-install"
+mkdir -p "${transient_install}"
+printf '2.260830.2\n' > "${transient_install}/published"
+printf '2.260830.2\n' > "${transient_install}/latest"
+set +e
+MOCK_INSTALL_404=true run_case "${transient_install}" >"${work}/transient.out" 2>"${work}/transient.err"
+status=$?
+set -e
+[[ "${status}" -eq 75 ]] || fail "registry 404 during the signature audit install exited ${status}, expected 75"
+grep -q 'npm_registry_transient' "${work}/transient.err" || fail "transient registry failure has no retry marker"
 
 printf 'PASS: token-isolated npm publish, latest repair, and exact signed artifact readback contract\n'

@@ -4,14 +4,39 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
 import { useUpdateInstance } from '@/hooks/useInstances';
-import { useCheckProviderHealth, useProviderAgents, useProviders } from '@/hooks/useProviders';
+import { useCheckProviderHealth, useProviders, useUpdateAgent } from '@/hooks/useProviders';
 import { cn } from '@/lib/utils';
 import type { Instance } from '@omni/sdk';
-import { Bot, Check, RefreshCw, Zap } from 'lucide-react';
+import { Bot, Check, RefreshCw } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 interface AgentConfigFormProps {
   instance: Instance;
+}
+
+interface AgentConfigValues {
+  providerId: string | null;
+  agentTimeout: number;
+  streamMode: boolean;
+}
+
+/**
+ * Persist the form. The provider lives on the agent (#1168), so a provider change goes
+ * through agents.update; the instance payload carries only instance update schema fields.
+ */
+export async function saveAgentConfig(
+  instance: Instance,
+  values: AgentConfigValues,
+  updateAgent: (args: { id: string; data: { agentProviderId: string } }) => Promise<unknown>,
+  updateInstance: (args: { id: string; data: Record<string, unknown> }) => Promise<unknown>,
+) {
+  if (instance.agentId && values.providerId && values.providerId !== (instance.agentProviderId ?? null)) {
+    await updateAgent({ id: instance.agentId, data: { agentProviderId: values.providerId } });
+  }
+  await updateInstance({
+    id: instance.id,
+    data: { agentTimeout: values.agentTimeout, agentStreamMode: values.streamMode },
+  });
 }
 
 /**
@@ -19,49 +44,37 @@ interface AgentConfigFormProps {
  */
 export function AgentConfigForm({ instance }: AgentConfigFormProps) {
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(instance.agentProviderId ?? null);
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(instance.agentId ?? null);
   const [agentTimeout, setAgentTimeout] = useState(instance.agentTimeout ?? 600);
   const [streamMode, setStreamMode] = useState(instance.agentStreamMode ?? false);
   const [isDirty, setIsDirty] = useState(false);
 
   const { data: providers, isLoading: providersLoading } = useProviders();
-  const { data: agents, isLoading: agentsLoading } = useProviderAgents(selectedProviderId ?? undefined);
   const updateInstance = useUpdateInstance();
+  const updateAgent = useUpdateAgent();
   const checkHealth = useCheckProviderHealth();
 
   // Track if form has changes
   useEffect(() => {
     const hasChanges =
       selectedProviderId !== (instance.agentProviderId ?? null) ||
-      selectedAgentId !== (instance.agentId ?? null) ||
       agentTimeout !== (instance.agentTimeout ?? 600) ||
       streamMode !== (instance.agentStreamMode ?? false);
     setIsDirty(hasChanges);
-  }, [selectedProviderId, selectedAgentId, agentTimeout, streamMode, instance]);
-
-  const handleProviderChange = (providerId: string | null) => {
-    setSelectedProviderId(providerId);
-    setSelectedAgentId(null); // Reset agent when provider changes
-  };
+  }, [selectedProviderId, agentTimeout, streamMode, instance]);
 
   const handleSave = async () => {
-    await updateInstance.mutateAsync({
-      id: instance.id,
-      data: {
-        agentProviderId: selectedProviderId,
-        agentId: selectedAgentId,
-        agentTimeout,
-        agentStreamMode: streamMode,
-      },
-    });
+    await saveAgentConfig(
+      instance,
+      { providerId: selectedProviderId, agentTimeout, streamMode },
+      updateAgent.mutateAsync,
+      updateInstance.mutateAsync,
+    );
     setIsDirty(false);
   };
 
   const handleTestHealth = (providerId: string) => {
     checkHealth.mutate(providerId);
   };
-
-  const selectedProvider = providers?.find((p) => p.id === selectedProviderId);
 
   return (
     <div className="space-y-6">
@@ -75,7 +88,15 @@ export function AgentConfigForm({ instance }: AgentConfigFormProps) {
           <CardDescription>Select the AI provider that will handle incoming messages for this instance</CardDescription>
         </CardHeader>
         <CardContent>
-          {providersLoading ? (
+          {!instance.agentId ? (
+            <div className="rounded-lg border border-dashed p-6 text-center">
+              <Bot className="mx-auto h-8 w-8 text-muted-foreground" />
+              <p className="mt-2 font-medium">No agent assigned</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Assign an agent to this instance first — the provider is configured on the agent
+              </p>
+            </div>
+          ) : providersLoading ? (
             <div className="flex items-center justify-center py-8">
               <Spinner />
             </div>
@@ -92,33 +113,12 @@ export function AgentConfigForm({ instance }: AgentConfigFormProps) {
             </div>
           ) : (
             <div className="space-y-2">
-              {/* None option */}
-              <button
-                type="button"
-                onClick={() => handleProviderChange(null)}
-                className={cn(
-                  'flex w-full items-center gap-3 rounded-lg border p-3 text-left transition-colors',
-                  selectedProviderId === null
-                    ? 'border-primary bg-primary/5'
-                    : 'hover:border-muted-foreground/50 hover:bg-accent',
-                )}
-              >
-                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-muted">
-                  <Bot className="h-5 w-5 text-muted-foreground" />
-                </div>
-                <div className="flex-1">
-                  <p className="font-medium">No Agent</p>
-                  <p className="text-sm text-muted-foreground">Messages will not be processed automatically</p>
-                </div>
-                {selectedProviderId === null && <Check className="h-5 w-5 text-primary" />}
-              </button>
-
               {/* Provider options */}
               {providers.map((provider) => (
                 <button
                   key={provider.id}
                   type="button"
-                  onClick={() => handleProviderChange(provider.id)}
+                  onClick={() => setSelectedProviderId(provider.id)}
                   className={cn(
                     'flex w-full items-center gap-3 rounded-lg border p-3 text-left transition-colors',
                     selectedProviderId === provider.id
@@ -165,59 +165,8 @@ export function AgentConfigForm({ instance }: AgentConfigFormProps) {
         </CardContent>
       </Card>
 
-      {/* Agent Selection (for Agno providers) */}
-      {selectedProvider?.schema === 'agno' && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Zap className="h-5 w-5" />
-              Agent Selection
-            </CardTitle>
-            <CardDescription>Select which agent, team, or workflow should handle messages</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {agentsLoading ? (
-              <div className="flex items-center justify-center py-8">
-                <Spinner />
-              </div>
-            ) : !agents || agents.length === 0 ? (
-              <div className="rounded-lg border border-dashed p-6 text-center">
-                <p className="text-sm text-muted-foreground">No agents found for this provider</p>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {agents.map((agent) => {
-                  const agentId = agent.id ?? agent.agent_id;
-                  return (
-                    <button
-                      key={agentId}
-                      type="button"
-                      onClick={() => agentId && setSelectedAgentId(agentId)}
-                      className={cn(
-                        'flex w-full items-center gap-3 rounded-lg border p-3 text-left transition-colors',
-                        selectedAgentId === agentId
-                          ? 'border-primary bg-primary/5'
-                          : 'hover:border-muted-foreground/50 hover:bg-accent',
-                      )}
-                    >
-                      <div className="flex-1">
-                        <p className="font-medium">{agent.name}</p>
-                        {agent.description && (
-                          <p className="text-sm text-muted-foreground line-clamp-1">{agent.description}</p>
-                        )}
-                      </div>
-                      {selectedAgentId === agentId && <Check className="h-5 w-5 text-primary" />}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
       {/* Advanced Settings */}
-      {selectedProviderId && (
+      {instance.agentId && (
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Advanced Settings</CardTitle>
@@ -269,8 +218,8 @@ export function AgentConfigForm({ instance }: AgentConfigFormProps) {
       {/* Save Button */}
       {isDirty && (
         <div className="flex justify-end">
-          <Button onClick={handleSave} disabled={updateInstance.isPending}>
-            {updateInstance.isPending ? (
+          <Button onClick={handleSave} disabled={updateInstance.isPending || updateAgent.isPending}>
+            {updateInstance.isPending || updateAgent.isPending ? (
               <>
                 <Spinner size="sm" className="mr-2" />
                 Saving...

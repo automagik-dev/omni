@@ -5,8 +5,8 @@
  * for soft outcomes and (b) the escalation count threshold + window when
  * deciding whether to auto-promote a soft close to hard terminal.
  *
- * Per-instance overrides live on `instance.settings.closeContactConfig`
- * (free-form jsonb today; future migration may schema this).
+ * Per-instance overrides live on the `instances.close_contact_config` jsonb
+ * column (`instance.closeContactConfig`), validated by the instances API.
  *
  * Numbers are operational guesses validated against the cliente-atual-SAC
  * regression scenario; expect to tune post-launch with real data. See
@@ -49,7 +49,7 @@ export const DEFAULT_CLOSE_CONTACT_CONFIG: CloseContactConfig = {
   // cooldown stays so the proactive Haiku follow-up keeps disarmed in the
   // immediate window, but the soft close never auto-promotes. Operators can
   // still close manually with `won`/`lost`, and per-instance overrides via
-  // `instance.settings.closeContactConfig` remain available.
+  // `instance.closeContactConfig` remain available.
   redirected_sac: { cooldownMs: 24 * HOUR, escalationThreshold: null, escalationWindowMs: null },
   unqualified: { cooldownMs: 7 * DAY, escalationThreshold: 3, escalationWindowMs: 30 * DAY },
   no_response: { cooldownMs: 48 * HOUR, escalationThreshold: 3, escalationWindowMs: 30 * DAY },
@@ -61,8 +61,9 @@ export const DEFAULT_CLOSE_CONTACT_CONFIG: CloseContactConfig = {
  * to `DEFAULT_CLOSE_CONTACT_CONFIG` per-key when the instance override is
  * missing or partial. Unknown override keys are ignored.
  *
- * The override shape is intentionally permissive (jsonb on instance.settings)
- * so ops can hot-tune via PATCH /instances/:id/settings without a migration.
+ * `instance` is anything carrying a `closeContactConfig` key — normally the
+ * instance row. Ops tune it via PATCH /instances/:id (`closeContactConfig`);
+ * the next close reads it, no restart needed.
  */
 export function resolveCloseContactConfig(
   outcome: CloseContactOutcome,

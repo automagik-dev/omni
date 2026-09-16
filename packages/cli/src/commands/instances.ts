@@ -23,7 +23,7 @@
  */
 
 import type { Channel, WhatsAppPasskeyCredential } from '@omni/sdk';
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import qrcode from 'qrcode-terminal';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
@@ -130,6 +130,8 @@ function applyMiscFields(body: Record<string, unknown>, opts: Record<string, unk
   setVal(body, 'ttsVoiceId', opts.ttsVoice);
   setVal(body, 'ttsModelId', opts.ttsModel);
   setVal(body, 'readReceipts', opts.readReceipts);
+  setVal(body, 'historyIdentity', opts.historyIdentity);
+  setBool(body, 'syncFullHistory', opts.syncFullHistory);
   setVal(body, 'accessMode', opts.accessMode);
   setVal(body, 'token', opts.token);
   setVal(body, 'telegramBotToken', opts.telegramToken);
@@ -267,7 +269,7 @@ async function resolveSlackUserToken(
 }
 
 /** Build instance body from all CLI options */
-function buildInstanceBody(opts: Record<string, unknown>): Record<string, unknown> {
+export function buildInstanceBody(opts: Record<string, unknown>): Record<string, unknown> {
   const body: Record<string, unknown> = {};
   applyAgentFields(body, opts);
   applyReplyFilter(body, opts);
@@ -450,6 +452,14 @@ export function createInstancesCommand(): Command {
     .option('--tts-voice <id>', 'ElevenLabs voice ID')
     .option('--tts-model <id>', 'ElevenLabs model ID')
     .option('--read-receipts <mode>', 'Read receipts mode: on, off, or exclude-self')
+    .addOption(
+      new Option(
+        '--history-identity <identity>',
+        'WhatsApp pairing identity: desktop (macOS Desktop + group history, fuller sync) or web (Ubuntu/Chrome). Applies on next pairing (default: desktop)',
+      ).choices(['desktop', 'web']),
+    )
+    .option('--sync-full-history', 'WhatsApp: request full message history on connect (default: off)')
+    .option('--no-sync-full-history', 'WhatsApp: do not request full message history on connect')
     // Access control
     .option('--access-mode <mode>', 'Access mode: disabled, blocklist, or allowlist')
     // Reaction ack
@@ -1143,6 +1153,14 @@ export function createInstancesCommand(): Command {
     .option('--tts-voice <id>', 'ElevenLabs voice ID (use "null" to clear)')
     .option('--tts-model <id>', 'ElevenLabs model ID (use "null" to clear)')
     .option('--read-receipts <mode>', 'Read receipts mode: on, off, or exclude-self')
+    .addOption(
+      new Option(
+        '--history-identity <identity>',
+        'WhatsApp pairing identity: desktop (macOS Desktop + group history, fuller sync) or web (Ubuntu/Chrome). Applies on next pairing (default: desktop)',
+      ).choices(['desktop', 'web']),
+    )
+    .option('--sync-full-history', 'WhatsApp: request full message history on connect (default: off)')
+    .option('--no-sync-full-history', 'WhatsApp: do not request full message history on connect')
     // Access control
     .option('--access-mode <mode>', 'Access mode: disabled, blocklist, or allowlist')
     // Reaction ack
