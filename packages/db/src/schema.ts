@@ -112,6 +112,20 @@ export interface GupshupHandoffOptions {
 }
 
 /**
+ * Per-instance overrides for the close-contact cooldown/escalation config.
+ * Values are milliseconds / counts; `null` disables that mechanism for the
+ * outcome (e.g. `escalationThreshold: null` never auto-promotes to terminal).
+ */
+export interface CloseContactOutcomeConfigOverride {
+  cooldownMs?: number | null;
+  escalationThreshold?: number | null;
+  escalationWindowMs?: number | null;
+}
+export type CloseContactConfigOverrides = Partial<
+  Record<'won' | 'lost' | 'redirected_sac' | 'unqualified' | 'no_response' | 'other', CloseContactOutcomeConfigOverride>
+>;
+
+/**
  * Session strategy for agent memory
  * - per_user: Same session across all chats for this user (user continuity)
  * - per_chat: All users in a chat share the session (group memory)
@@ -1037,6 +1051,14 @@ export const instances = pgTable(
     // ---- Idle-chat follow-up config (instance scope, beats agent scope) ----
     /** @see issue #404 */
     followUpConfig: jsonb('follow_up_config').$type<FollowUpSequenceConfig>(),
+
+    // ---- Close-contact cooldown/escalation overrides (per outcome) ----
+    /**
+     * Partial overrides of the close-contact defaults, keyed by outcome.
+     * Missing outcomes/keys fall back to the defaults in
+     * `packages/api/src/routes/v2/_close-contact-config.ts`.
+     */
+    closeContactConfig: jsonb('close_contact_config').$type<CloseContactConfigOverrides>(),
 
     // ---- Bridge Tmux Session (per-instance override for genie NATS provider) ----
     /**

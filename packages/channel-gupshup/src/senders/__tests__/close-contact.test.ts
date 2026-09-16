@@ -54,6 +54,14 @@ describe('sendCloseContact', () => {
     expect(captured[0]?.message.close_fields).toEqual({ plan_interest: 'NP-AHO', value_brl: 487.3 });
   });
 
+  test('accepts an empty text for a close without farewell', async () => {
+    const { client, captured } = makeFakeClient();
+    await sendCloseContact(client, '15550001111', '', undefined, 'no_response');
+    expect(captured[0]?.message.type).toBe('CLOSING');
+    expect(captured[0]?.message.text).toBe('');
+    expect(captured[0]?.message.close_outcome).toBe('no_response');
+  });
+
   test('omits optional fields when not provided', async () => {
     const { client, captured } = makeFakeClient();
     await sendCloseContact(client, '5511987654321', 'Bye!');

@@ -158,6 +158,64 @@ describe('GupshupClient — validateCredentials', () => {
   });
 });
 
+describe('GupshupClient — send CLOSING close fields', () => {
+  function postedBody(fetchSpy: ReturnType<typeof spyOn>): Record<string, unknown> {
+    const init = fetchSpy.mock.calls[0]?.[1] as RequestInit | undefined;
+    return JSON.parse(String(init?.body)) as Record<string, unknown>;
+  }
+
+  it('forwards close_reason, close_outcome and close_fields on CLOSING', async () => {
+    const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation((async () =>
+      makeOkResponse({ status: 'ok' })) as unknown as typeof fetch);
+    const client = makeClient();
+
+    await client.send('15550001111', {
+      type: 'CLOSING',
+      text: 'Goodbye',
+      close_reason: 'customer already served elsewhere',
+      close_outcome: 'redirected_sac',
+      close_fields: { plan: 'basic', value: 99.9 },
+    });
+
+    const body = postedBody(fetchSpy);
+    expect(body.msg_type).toBe('CLOSING');
+    expect(body.message_text).toBe('Goodbye');
+    expect(body.close_reason).toBe('customer already served elsewhere');
+    expect(body.close_outcome).toBe('redirected_sac');
+    expect(body.close_fields).toEqual({ plan: 'basic', value: 99.9 });
+    fetchSpy.mockRestore();
+  });
+
+  it('sends an empty message_text for a close without farewell', async () => {
+    const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation((async () =>
+      makeOkResponse({ status: 'ok' })) as unknown as typeof fetch);
+    const client = makeClient();
+
+    await client.send('15550001111', { type: 'CLOSING', text: '', close_outcome: 'no_response' });
+
+    const body = postedBody(fetchSpy);
+    expect(body.message_text).toBe('');
+    expect(body.close_outcome).toBe('no_response');
+    expect(body).not.toHaveProperty('close_reason');
+    expect(body).not.toHaveProperty('close_fields');
+    fetchSpy.mockRestore();
+  });
+
+  it('does not add close keys to a regular TEXT message', async () => {
+    const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation((async () =>
+      makeOkResponse({ status: 'ok' })) as unknown as typeof fetch);
+    const client = makeClient();
+
+    await client.send('15550001111', { type: 'TEXT', text: 'Hello!' });
+
+    const body = postedBody(fetchSpy);
+    expect(body).not.toHaveProperty('close_reason');
+    expect(body).not.toHaveProperty('close_outcome');
+    expect(body).not.toHaveProperty('close_fields');
+    fetchSpy.mockRestore();
+  });
+});
+
 describe('GupshupClient — send HANDOFF customerFields', () => {
   function postedBody(fetchSpy: ReturnType<typeof spyOn>): Record<string, unknown> {
     const init = fetchSpy.mock.calls[0]?.[1] as RequestInit | undefined;

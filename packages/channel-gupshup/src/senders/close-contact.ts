@@ -3,9 +3,11 @@
  *
  * Counterpart to `sendHandoff`: handoff pauses for a human attendant; close
  * terminates the conversation. The Gupshup-side Journey routes on the literal
- * `msg_type: 'CLOSING'` to an empty terminal node — no chat-fields update,
- * no template fire, no handoff queue. The customer's next inbound re-enters
- * the Welcome Journey (confirmed with Gupshup partner 2026-04-29).
+ * `msg_type: 'CLOSING'`; no handoff queue is involved. The payload also
+ * carries `close_reason`, `close_outcome` and `close_fields` when provided,
+ * so the Journey can record the classification of the close (what it does
+ * with them is up to the Journey configuration). The customer's next inbound
+ * re-enters the Welcome Journey.
  *
  * Naming note: the Omni-side concept is "close contact" (route, table, event,
  * function names all use that). The wire literal Gupshup expects is the
@@ -22,6 +24,11 @@ import type { GupshupSendResponse } from '../types';
 /** Wire literal that Gupshup's Journey routes on. Partner contract — do not change without re-confirming. */
 export const GUPSHUP_CLOSE_MSG_TYPE = 'CLOSING' as const;
 
+/**
+ * Send the CLOSING event. An empty `text` means classify/close without a
+ * farewell: `message_text` goes out as `''` and the channel flow must not
+ * deliver an empty message to the customer.
+ */
 export async function sendCloseContact(
   client: GupshupClient,
   to: string,

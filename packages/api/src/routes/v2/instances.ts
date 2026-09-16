@@ -15,7 +15,7 @@ import { applyWhatsAppBusinessConnectionOptions } from '../../lib/whatsapp-busin
 import { filterByInstanceAccess, requireInstanceAccess } from '../../middleware/auth';
 import { invalidateProviderCacheForInstance } from '../../plugins/agent-dispatcher';
 import { getQrCode } from '../../plugins/qr-store';
-import { GupshupHandoffOptionsSchema } from '../../schemas/openapi/instances';
+import { CloseContactConfigSchema, GupshupHandoffOptionsSchema } from '../../schemas/openapi/instances';
 import type { Services } from '../../services';
 import { PairingRequestConsumedError, PairingRequestExpiredError } from '../../services/access';
 import { AgentReplayService } from '../../services/agent-replay';
@@ -179,6 +179,9 @@ const createInstanceSchema = z.object({
   gupshupHandoffOptions: GupshupHandoffOptionsSchema.optional()
     .nullable()
     .describe('Gupshup HANDOFF routing defaults and customerFields template'),
+  closeContactConfig: CloseContactConfigSchema.optional()
+    .nullable()
+    .describe('Per-outcome close-contact cooldown/escalation overrides (null = defaults)'),
   webhookVerifyToken: z.string().optional().nullable().describe('Gupshup webhook verify token'),
   twilioAccountSid: z.string().optional().nullable().describe('Twilio Account SID'),
   twilioAuthToken: z.string().optional().nullable().describe('Twilio Auth Token'),
@@ -355,6 +358,7 @@ const updateInstanceSchema = createInstanceSchema
     gupshupAuthToken: z.string().nullable().optional(),
     gupshupEventId: z.string().nullable().optional(),
     gupshupHandoffOptions: GupshupHandoffOptionsSchema.nullable().optional(),
+    closeContactConfig: CloseContactConfigSchema.nullable().optional(),
     webhookVerifyToken: z.string().nullable().optional(),
     twilioAccountSid: z.string().nullable().optional(),
     twilioAuthToken: z.string().nullable().optional(),

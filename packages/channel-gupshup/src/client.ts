@@ -38,6 +38,11 @@ export class GupshupClient {
     if (msg.motivo_handoff) payload.motivo_handoff = msg.motivo_handoff;
     if (msg.handoff_fields) payload.handoff_fields = msg.handoff_fields;
     if (msg.customer_fields && msg.customer_fields.length > 0) payload.customerFields = msg.customer_fields;
+    // Close-contact classification (CLOSING only). Forwarded so the Journey can
+    // record why and how the conversation ended; omitted when not provided.
+    if (msg.close_reason) payload.close_reason = msg.close_reason;
+    if (msg.close_outcome) payload.close_outcome = msg.close_outcome;
+    if (msg.close_fields) payload.close_fields = msg.close_fields;
 
     // POST to callback URL
     const res = await fetch(this.callbackUrl, {
