@@ -1005,6 +1005,7 @@ export class AutomationEngine {
           actionsExecuted: result.actionsExecuted,
           error: result.error,
           executionTimeMs: result.executionTimeMs,
+          queueWaitMs,
         },
         trustedTenantId,
       );

@@ -220,6 +220,11 @@ export const AutomationLogSchema = z.object({
   error: z.string().nullable().openapi({ description: 'Error message' }),
   executedAt: z.string().datetime().openapi({ description: 'Execution timestamp' }),
   durationMs: z.number().int().openapi({ description: 'Duration (ms)' }),
+  queueWaitMs: z
+    .number()
+    .int()
+    .nullable()
+    .openapi({ description: 'Time waited for a concurrency slot (ms); 0 = ran immediately, null = not recorded' }),
 });
 
 // Test automation request
