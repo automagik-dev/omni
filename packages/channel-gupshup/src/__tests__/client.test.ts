@@ -201,6 +201,26 @@ describe('GupshupClient — send CLOSING close fields', () => {
     fetchSpy.mockRestore();
   });
 
+  it('drops close keys set on a non-CLOSING message', async () => {
+    const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation((async () =>
+      makeOkResponse({ status: 'ok' })) as unknown as typeof fetch);
+    const client = makeClient();
+
+    await client.send('15550001111', {
+      type: 'TEXT',
+      text: 'Hello!',
+      close_reason: 'r',
+      close_outcome: 'o',
+      close_fields: { a: 1 },
+    });
+
+    const body = postedBody(fetchSpy);
+    expect(body).not.toHaveProperty('close_reason');
+    expect(body).not.toHaveProperty('close_outcome');
+    expect(body).not.toHaveProperty('close_fields');
+    fetchSpy.mockRestore();
+  });
+
   it('does not add close keys to a regular TEXT message', async () => {
     const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation((async () =>
       makeOkResponse({ status: 'ok' })) as unknown as typeof fetch);
