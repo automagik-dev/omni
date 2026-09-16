@@ -40,6 +40,7 @@ export const CORE_EVENT_TYPES = [
   'instance.connected',
   'instance.disconnected',
   'instance.qr_code',
+  'instance.updated',
   // Access control
   'access.allowed',
   'access.denied',
@@ -464,6 +465,13 @@ export interface InstanceDisconnectedPayload {
   channelType: ChannelType;
   reason?: string;
   willReconnect: boolean;
+}
+
+/** Instance config row changed via InstanceService.update. Key names only — never values. */
+export interface InstanceUpdatedPayload {
+  instanceId: string;
+  channelType: ChannelType;
+  changedKeys: string[];
 }
 
 export interface InstanceQrCodePayload {
@@ -1120,6 +1128,7 @@ export interface EventPayloadMap {
   'instance.connected': InstanceConnectedPayload;
   'instance.disconnected': InstanceDisconnectedPayload;
   'instance.qr_code': InstanceQrCodePayload;
+  'instance.updated': InstanceUpdatedPayload;
   'access.allowed': AccessAllowedPayload;
   'access.denied': AccessDeniedPayload;
   'access.pairing_requested': AccessPairingRequestedPayload;
