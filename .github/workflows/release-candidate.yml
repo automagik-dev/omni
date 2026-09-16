@@ -29,6 +29,14 @@
 # running to completion (a started mint must finish); its pin then refuses
 # because dev moved past it, and the newer run mints the newer tip.
 #
+# Idempotent mint (#1209): `gh run rerun <this run> --failed` is a real
+# recovery. When ghcr.io/<owner>/omni-api:v<version> already exists, the mint
+# verifies its attestation against the tag's source SHA with image-build.yml as
+# signer (a mismatch fails loudly), dispatches nothing, and instead resumes the
+# existing image-build.yml run for the tag: a succeeded run is accepted, a
+# running one is watched, a failed one gets `gh run rerun --failed` (the same
+# run id the stable publishers re-verify as in_progress).
+#
 # Recovery: see docs/deployment/public-launch-readiness.md
 # "Recovering a failed orchestrated release".
 # =============================================================================
@@ -75,13 +83,23 @@ jobs:
     # two-platform build and the stable release + npm publication.
     timeout-minutes: 360
     permissions:
-      actions: write # gh workflow run image-build.yml
+      actions: write # gh workflow run / gh run rerun image-build.yml
+      packages: read # inspect an existing candidate alias
+      attestations: read # verify its provenance before resuming
     outputs:
       version: ${{ needs.cut.outputs.version }}
     steps:
+      - name: Log in to GHCR to inspect an existing candidate alias
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
       - name: Dispatch image-build.yml at the candidate tag and watch it
         env:
           GH_TOKEN: ${{ github.token }}
+          IMAGE: ghcr.io/${{ github.repository_owner }}/omni-api
           VERSION: ${{ needs.cut.outputs.version }}
         run: |
           set -euo pipefail
@@ -90,6 +108,45 @@ jobs:
             exit 1
           }
           tag="v${VERSION}"
+          tag_sha=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${tag}" --jq .sha)
+          [[ "${tag_sha}" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "::error::could not resolve ${tag} to a commit"
+            exit 1
+          }
+
+          if docker buildx imagetools inspect "${IMAGE}:${tag}" >/dev/null 2>"${RUNNER_TEMP}/inspect.err"; then
+            # Same provenance binding finalize and the stable publishers enforce.
+            gh attestation verify "oci://${IMAGE}:${tag}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --source-digest "${tag_sha}" \
+              --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/image-build.yml" || {
+              echo "::error::${IMAGE}:${tag} already exists but is not attested by image-build.yml for ${tag_sha}; refusing to continue"
+              exit 1
+            }
+            existing=$(gh run list --repo "${GITHUB_REPOSITORY}" \
+              --workflow image-build.yml --branch "${tag}" --event workflow_dispatch \
+              --limit 50 --json databaseId,headSha,status,conclusion \
+              | jq -c --arg sha "${tag_sha}" '[.[] | select(.headSha == $sha)][0] // empty')
+            run_id=$(jq -r '.databaseId // empty' <<<"${existing}")
+            [[ "${run_id}" =~ ^[0-9]+$ ]] || {
+              echo "::error::${IMAGE}:${tag} exists but no image-build.yml run for ${tag_sha} was found to resume"
+              exit 1
+            }
+            state=$(jq -r '"\(.status)/\(.conclusion)"' <<<"${existing}")
+            echo "${IMAGE}:${tag} already exists with a valid attestation for ${tag_sha}; skipping the image-build.yml dispatch and resuming run ${run_id} (${state})"
+            case "${state}" in
+              completed/success) exit 0 ;;
+              completed/*) gh run rerun "${run_id}" --repo "${GITHUB_REPOSITORY}" --failed && sleep 15 ;;
+            esac
+            gh run watch "${run_id}" --repo "${GITHUB_REPOSITORY}" --exit-status
+            exit 0
+          fi
+          grep -qiE 'not found|manifest unknown' "${RUNNER_TEMP}/inspect.err" || {
+            cat "${RUNNER_TEMP}/inspect.err" >&2
+            echo "::error::registry inspection of ${IMAGE}:${tag} failed without a not-found response; refusing to guess"
+            exit 1
+          }
+
           # `gh workflow run` prints no run id: snapshot, dispatch, then take
           # exactly one new dispatch run on the tag (same approach as
           # image-build.yml's finalize).

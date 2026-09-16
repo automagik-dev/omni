@@ -2,17 +2,28 @@
 set -euo pipefail
 
 usage() {
-  printf 'Usage: reconcile-npm-stable.sh --expected VERSION --package-dir PATH\n' >&2
+  printf 'Usage: reconcile-npm-stable.sh --expected VERSION --package-dir PATH [--verify-only]\n' >&2
   exit 2
 }
 fail() { printf 'npm stable reconciliation failed: %s\n' "$*" >&2; exit 1; }
+# Exit codes: 0 reconciled and verified; 1 unsafe or unverifiable state;
+# 3 --verify-only and the registry still needs a mutation (nothing was written);
+# 75 transient registry failure (404/5xx fetching a tarball, 5xx on publish).
+# image-build.yml finalize re-dispatches the publish only on the 75 marker.
+transient() {
+  printf '::warning::npm_registry_transient: %s\n' "$*" >&2
+  exit 75
+}
+is_transient() { grep -Eq 'E404|E5[0-9][0-9]|(404|5[0-9][0-9]) (Not Found|Internal Server Error|Bad Gateway|Service Unavailable|Gateway Timeout)' "$1"; }
 
 expected=""
 package_dir=""
+verify_only=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --expected) expected="${2:-}"; shift 2 ;;
     --package-dir) package_dir="${2:-}"; shift 2 ;;
+    --verify-only) verify_only=true; shift ;;
     *) usage ;;
   esac
 done
@@ -88,20 +99,31 @@ read_latest() {
 error_file="${RUNNER_TEMP:-/tmp}/npm-view-${$}.err"
 latest_error_file="${RUNNER_TEMP:-/tmp}/npm-latest-${$}.err"
 state_error_file="${RUNNER_TEMP:-/tmp}/npm-state-${$}.err"
+publish_error_file="${RUNNER_TEMP:-/tmp}/npm-publish-${$}.err"
+install_error_file="${RUNNER_TEMP:-/tmp}/npm-install-${$}.err"
 dist_file="${RUNNER_TEMP:-/tmp}/npm-dist-${$}.json"
 keys_file="${RUNNER_TEMP:-/tmp}/npm-keys-${$}.json"
 packument_file="${RUNNER_TEMP:-/tmp}/npm-packument-${$}.json"
-trap 'rm -f "${error_file}" "${latest_error_file}" "${state_error_file}" "${dist_file}" "${keys_file}" "${packument_file}"; rm -rf "${pack_dir}" "${audit_dir}"' EXIT
+trap 'rm -f "${error_file}" "${latest_error_file}" "${state_error_file}" "${publish_error_file}" "${install_error_file}" "${dist_file}" "${keys_file}" "${packument_file}"; rm -rf "${pack_dir}" "${audit_dir}"' EXIT
 published="$(read_published "${error_file}")"
 latest="$(read_latest "${latest_error_file}")"
 state="$("${state_helper}" --expected "${expected}" --published "${published}" --latest "${latest}")"
 action="${state#npm_action=}"
+if [[ "${verify_only}" == "true" && "${action}" != "none" ]]; then
+  printf 'npm_action=%s\n' "${action}"
+  exit 3
+fi
 
 case "${action}" in
   none)
     ;;
   publish)
-    npm publish "${tarball}" --access public --tag latest
+    if ! npm publish "${tarball}" --access public --tag latest 2>"${publish_error_file}"; then
+      cat "${publish_error_file}" >&2
+      # Only a 5xx is retryable: a publish 404 is also npm's auth/scope refusal.
+      grep -Eq 'E5[0-9][0-9]' "${publish_error_file}" && transient "npm publish hit a registry 5xx"
+      fail "npm publish failed"
+    fi
     ;;
   repair_latest)
     [[ -n "${recovery_token}" ]] || \
@@ -161,9 +183,16 @@ curl -fsSL --connect-timeout 10 --max-time 60 --retry 3 --retry-connrefused \
 jq -n --arg version "${expected}" \
   '{name:"omni-signature-audit",version:"0.0.0",private:true,dependencies:{"@automagik/omni":$version}}' \
   > "${audit_dir}/package.json"
+# This consumer-shaped install resolves the published semver ranges fresh (a
+# published package ships no lockfile, so bun.lock cannot govern it); a
+# just-released dependency tarball can 404 until the registry replicates it.
+if ! (cd "${audit_dir}" && npm install --ignore-scripts --no-audit --no-fund >/dev/null 2>"${install_error_file}"); then
+  cat "${install_error_file}" >&2
+  is_transient "${install_error_file}" && transient "signature audit install hit a registry 404/5xx"
+  fail "signature audit install failed"
+fi
 (
   cd "${audit_dir}"
-  npm install --ignore-scripts --no-audit --no-fund >/dev/null
   npm audit signatures --json --include-attestations > "${audit_dir}/audit.json"
 )
 python3 - "${audit_dir}/audit.json" "${expected}" <<'PY'
