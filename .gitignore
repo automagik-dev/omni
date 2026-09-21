@@ -37,8 +37,8 @@ bin/nats-server
 coverage/
 
 # Worktrees (forge isolation + bd)
-.worktrees/
-.claude/worktrees/
+/.worktrees/
+/.claude/worktrees/
 
 # Repository-local coding environment
 .dev/
