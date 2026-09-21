@@ -294,8 +294,7 @@ function createHttpBoltApp(options: SlackConnectionOptions, logger: Logger): Bol
   });
 
   // Wrap the receiver's requestListener with a body-limit guard
-  const baseListener = receiver.requestListener;
-  const httpHandler = buildBodyLimitHandler(baseListener, HTTP_MAX_BODY_BYTES, logger);
+  const httpHandler = withBodyLimit(receiver.requestListener, logger);
 
   return {
     app,
@@ -306,6 +305,20 @@ function createHttpBoltApp(options: SlackConnectionOptions, logger: Logger): Bol
     httpPort: options.httpPort,
     httpHandler,
   };
+}
+
+/**
+ * Wrap a Slack HTTP request listener with the 1 MB body-limit guard.
+ *
+ * Shared by both HTTP transports — the per-instance app above and the pooled
+ * receiver in app-receiver.ts. An oversized body has to be refused with 413
+ * before Bolt buffers it, whichever of the two is serving the request.
+ */
+export function withBodyLimit(
+  listener: (req: IncomingMessage, res: ServerResponse) => void,
+  logger: Logger,
+): (req: IncomingMessage, res: ServerResponse) => void {
+  return buildBodyLimitHandler(listener, HTTP_MAX_BODY_BYTES, logger);
 }
 
 /**
@@ -613,17 +626,6 @@ export function isSocketStale(connection: BoltConnection, now = Date.now()): boo
   const last = connection.lastSocketActivityAt;
   if (last === undefined) return false;
   return now - last > (connection.socketStaleAfterMs ?? SOCKET_STALE_AFTER_MS);
-}
-
-/**
- * Create and start a Bolt.js App with Socket Mode (legacy convenience wrapper).
- *
- * NOTE: Prefer using createBoltApp() + register handlers + startBoltConnection()
- * to ensure handlers are registered before Socket Mode starts receiving events.
- */
-export async function createBoltConnection(options: SlackConnectionOptions, logger: Logger): Promise<BoltConnection> {
-  const connection = createBoltApp(options, logger);
-  return startBoltConnection(connection, logger);
 }
 
 /**

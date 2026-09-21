@@ -26,6 +26,10 @@ mock.module('@slack/bolt', () => {
     error(_handler: (err: Error) => Promise<void>) {
       // no-op
     }
+    // The pooled receiver registers a no-op listener per revocation event.
+    event(_name: string, _listener: unknown) {
+      // no-op
+    }
   }
 
   // HTTPReceiver mock that provides a requestListener
@@ -54,8 +58,9 @@ mock.module('@slack/bolt', () => {
   };
 });
 
-// Import AFTER mock.module so the mock is active
+// Import AFTER mock.module so the mocks are active
 const { createBoltApp } = await import('../connection/bolt-client');
+const { SlackAppReceiver } = await import('../connection/app-receiver');
 
 // ─────────────────────────────────────────────────────────────
 // Test helpers
@@ -209,5 +214,67 @@ describe('BoltConnection structure', () => {
     expect(conn.client).toBeDefined();
     expect(conn.botToken).toBe('xoxb-fake');
     expect(conn.httpHandler).toBeDefined();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Shared receiver — same HTTP body-limit guard as the per-instance app
+// ─────────────────────────────────────────────────────────────
+
+describe('SlackAppReceiver — HTTP mode body-limit guard', () => {
+  function makeHttpReceiver() {
+    return new SlackAppReceiver(
+      { botToken: 'xoxb-fake', mode: 'http', signingSecret: 'test-secret' },
+      () => {},
+      noopLogger as never,
+    );
+  }
+
+  it('exposes an httpHandler in HTTP mode', () => {
+    expect(typeof makeHttpReceiver().httpHandler).toBe('function');
+  });
+
+  it('rejects requests with Content-Length > 1 MB', () => {
+    const receiver = makeHttpReceiver();
+    const req = makeMockReq({ headers: { 'content-length': String(1024 * 1024 + 1) } });
+    const state = { statusCode: 0, body: '' };
+    const res = {
+      writeHead: (code: number) => {
+        state.statusCode = code;
+      },
+      end: (data: string) => {
+        state.body = data;
+      },
+    } as unknown as ServerResponse;
+
+    receiver.httpHandler?.(req, res);
+
+    expect(state.statusCode).toBe(413);
+    expect(state.body).toContain('Too Large');
+  });
+
+  it('does not reject requests with Content-Length exactly 1 MB', () => {
+    const receiver = makeHttpReceiver();
+    const req = makeMockReq({ headers: { 'content-length': String(1024 * 1024) } });
+    let rejected = false;
+    const res = {
+      writeHead: (code: number) => {
+        if (code === 413) rejected = true;
+      },
+      end: noop,
+    } as unknown as ServerResponse;
+
+    receiver.httpHandler?.(req, res);
+
+    expect(rejected).toBe(false);
+  });
+
+  it('has no httpHandler in Socket Mode — there is no request to guard', () => {
+    const receiver = new SlackAppReceiver(
+      { botToken: 'xoxb-fake', appToken: 'xapp-fake', mode: 'socket' },
+      () => {},
+      noopLogger as never,
+    );
+    expect(receiver.httpHandler).toBeUndefined();
   });
 });

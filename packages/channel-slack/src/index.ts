@@ -90,9 +90,6 @@ export { extractFileInfo, downloadSlackFile, getContentTypeFromMime } from './ha
 // Config
 export { resolveStreamMode, resolveStreamThrottle } from './config/stream-mode';
 
-// Connection
-export { createBoltConnection, destroyBoltConnection, checkBoltHealth } from './connection/bolt-client';
-
 // Types
 export type {
   SlackConfig,
@@ -115,7 +112,6 @@ export type {
   SlackErrorCodeType,
 } from './types';
 
-export type { BoltConnection } from './connection/bolt-client';
 export type { DmPolicyConfig } from './dm-policy';
 export type { StreamSenderOptions } from './senders/stream';
 export type { TextSendOptions } from './senders/text';
