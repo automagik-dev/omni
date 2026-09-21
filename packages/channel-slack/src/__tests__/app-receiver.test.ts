@@ -30,6 +30,8 @@ interface FakeAppRecord {
   options: Record<string, unknown>;
   authorize: FakeAuthorize | undefined;
   events: Map<string, FakeListener[]>;
+  messageCalls: number;
+  actionCalls: number;
   startCalls: unknown[][];
   stopCalls: number;
 }
@@ -56,6 +58,8 @@ mock.module('@slack/bolt', () => {
         options,
         authorize: typeof authorize === 'function' ? (authorize as FakeAuthorize) : undefined,
         events: new Map(),
+        messageCalls: 0,
+        actionCalls: 0,
         startCalls: [],
         stopCalls: 0,
       };
@@ -69,6 +73,14 @@ mock.module('@slack/bolt', () => {
     event(name: string, ...listeners: FakeListener[]): void {
       const existing = this.record.events.get(name) ?? [];
       this.record.events.set(name, [...existing, ...listeners]);
+    }
+
+    message(..._listeners: unknown[]): void {
+      this.record.messageCalls += 1;
+    }
+
+    action(_constraints: unknown, ..._listeners: unknown[]): void {
+      this.record.actionCalls += 1;
     }
 
     async start(...args: unknown[]): Promise<void> {
@@ -106,6 +118,7 @@ mock.module('@slack/bolt', () => {
 // Import AFTER mock.module so the receiver binds to the fake Bolt.
 const { SlackAppReceiver, receiverKeyFor } = await import('../connection/app-receiver');
 type SlackAttachment = import('../connection/app-receiver').SlackAttachment;
+type RegisterHandlers = import('../connection/app-receiver').RegisterHandlers;
 
 // ─────────────────────────────────────────────────────────────
 // Fixtures
@@ -150,15 +163,19 @@ function makeAttachment(
   };
 }
 
-function makeReceiver(opts: SlackConnectionOptions = SOCKET_OPTS): {
+function makeReceiver(
+  opts: SlackConnectionOptions = SOCKET_OPTS,
+  registerHandlers: RegisterHandlers = () => undefined,
+): {
   receiver: InstanceType<typeof SlackAppReceiver>;
   registerCalls: number;
 } {
   const counter = { registerCalls: 0 };
   const receiver = new SlackAppReceiver(
     opts,
-    () => {
+    (app, owner) => {
       counter.registerCalls += 1;
+      registerHandlers(app, owner);
     },
     noopLogger,
   );
@@ -199,15 +216,23 @@ afterEach(() => {
 
 describe('SlackAppReceiver', () => {
   it('two attachments on one key share one App, built with authorize and never token', () => {
-    const { receiver, registerCalls } = makeReceiver();
+    // The plugin's hook registers its listeners on the App it is handed.
+    const { receiver, registerCalls } = makeReceiver(SOCKET_OPTS, (app, owner) => {
+      expect(owner).toBeInstanceOf(SlackAppReceiver);
+      app.message(async () => undefined);
+      app.action('button_click', async () => undefined);
+    });
     expect(constructedApps).toHaveLength(1);
 
     receiver.attach(makeAttachment('inst-a', 'T1', 'xoxb-a', 1));
     receiver.attach(makeAttachment('inst-b', 'T1', 'xoxb-b', 2));
 
-    // Still exactly one App; handlers were registered once, at creation.
+    // Still exactly one App; handlers were registered once, at creation,
+    // never per attachment.
     expect(constructedApps).toHaveLength(1);
     expect(registerCalls).toBe(1);
+    expect(lastApp().messageCalls).toBe(1);
+    expect(lastApp().actionCalls).toBe(1);
     expect(receiver.attachments.size).toBe(2);
     expect([...receiver.attachments.keys()]).toEqual(['inst-a', 'inst-b']);
 
@@ -336,6 +361,10 @@ describe('SlackAppReceiver', () => {
 
     const t2 = await receiver.targetsFor({ team_id: 'T2' });
     expect(t2.map((a) => a.instanceId)).toEqual(['inst-c']);
+
+    // Without an envelope team_id the inner event's team is the fallback.
+    const viaEvent = await receiver.targetsFor({ event: { type: 'message', team: 'T1' } });
+    expect(viaEvent.map((a) => a.instanceId)).toEqual(['inst-a', 'inst-b']);
 
     // No authorization check: an unknown or missing team_id is an empty list, never a throw.
     await expect(receiver.targetsFor({ team_id: 'T9' })).resolves.toEqual([]);

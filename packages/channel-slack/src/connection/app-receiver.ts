@@ -78,10 +78,13 @@ export interface SlackAttachment {
  * The shape of an inbound Slack event body as far as the receiver reads it.
  * Bolt's own body types differ per event family; the receiver only keys on
  * the workspace id, so anything carrying (or lacking) `team_id` is accepted.
+ * The envelope's `team_id` is authoritative; the inner event's `team` is
+ * the fallback Slack uses for shared-channel and Slack Connect deliveries.
  */
 export interface SlackEventBody {
   team_id?: string;
   api_app_id?: string;
+  event?: { team?: string; [key: string]: unknown };
   [key: string]: unknown;
 }
 
@@ -280,12 +283,13 @@ export class SlackAppReceiver {
   }
 
   /**
-   * Every attachment of the event's workspace, in attach order. No
+   * Every attachment of the event's workspace, in attach order. The team is
+   * the envelope's `team_id`, falling back to the inner event's `team`. No
    * authorization, token or scope check happens here — an unknown or
-   * missing `team_id` yields an empty list, never a throw.
+   * missing team yields an empty list, never a throw.
    */
   async targetsFor(body: SlackEventBody): Promise<SlackAttachment[]> {
-    const teamId = body.team_id;
+    const teamId = body.team_id ?? body.event?.team;
     if (!teamId) return [];
     const targets: SlackAttachment[] = [];
     for (const attachment of this.attachmentMap.values()) {
