@@ -56,6 +56,10 @@ export interface ProcessorConfig {
   audioGlossary?: string[];
   /** Google Gemini API key (vision, document OCR) */
   geminiApiKey?: string;
+  /** Preferred Gemini model for image/video description and document OCR (falls back to GEMINI_MODEL) */
+  geminiVisionModel?: string;
+  /** Preferred OpenAI vision model for the image-description fallback (falls back to OPENAI_VISION_MODEL) */
+  openaiVisionModel?: string;
   /** Default language for transcription (default: 'pt') */
   defaultLanguage?: string;
   /** Maximum file size in MB (default: 25) */

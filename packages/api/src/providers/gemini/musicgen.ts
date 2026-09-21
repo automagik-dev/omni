@@ -5,7 +5,7 @@ import type { IMusicGenProvider, MusicGenOptions, MusicGenResult } from '../type
 import { getGeminiClient, resolveGeminiApiKey } from './client';
 
 const log = createLogger('gemini-musicgen');
-const DEFAULT_PRO_MODEL = 'lyria-3-pro-preview';
+const DEFAULT_PRO_MODEL = 'lyria-3.5';
 const DEFAULT_CLIP_MODEL = 'lyria-3-clip-preview';
 
 export interface GeminiMusicGenSettingsReader {

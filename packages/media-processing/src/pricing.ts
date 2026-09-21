@@ -59,6 +59,12 @@ export const PRICING_REGISTRY: Record<string, PricingRate> = {
     unit: 'per_minute',
     inputRate: 0.006, // $0.006 per minute transcription lane
   },
+  'openai_whisper:gpt-transcribe': {
+    model: 'gpt-transcribe',
+    provider: 'openai',
+    unit: 'per_minute',
+    inputRate: 0.006, // $0.006 per minute transcription lane
+  },
 
   // ============================================================================
   // OPENAI VISION (Image Description - Fallback)
@@ -77,10 +83,24 @@ export const PRICING_REGISTRY: Record<string, PricingRate> = {
     inputRate: 2.5, // $2.50 per 1M input tokens
     outputRate: 10.0, // $10.00 per 1M output tokens
   },
+  'openai_vision:gpt-5.6-luna': {
+    model: 'gpt-5.6-luna',
+    provider: 'openai',
+    unit: 'per_million_tokens',
+    inputRate: 0.2, // $0.20 per 1M input tokens
+    outputRate: 1.2, // $1.20 per 1M output tokens
+  },
 
   // ============================================================================
   // GEMINI VISION (Image Description - Primary)
   // ============================================================================
+  'gemini_vision:gemini-3.5-flash-lite': {
+    model: 'gemini-3.5-flash-lite',
+    provider: 'google',
+    unit: 'per_million_tokens',
+    inputRate: 0.15, // $0.15 per 1M input tokens
+    outputRate: 0.6, // $0.60 per 1M output tokens
+  },
   'gemini_vision:gemini-3-flash-preview': {
     model: 'gemini-3-flash-preview',
     provider: 'google',
@@ -92,6 +112,13 @@ export const PRICING_REGISTRY: Record<string, PricingRate> = {
   // ============================================================================
   // GEMINI VIDEO (Video Description)
   // ============================================================================
+  'gemini_video:gemini-3.5-flash-lite': {
+    model: 'gemini-3.5-flash-lite',
+    provider: 'google',
+    unit: 'per_million_tokens',
+    inputRate: 0.15, // $0.15 per 1M input tokens (video frames + audio)
+    outputRate: 0.6, // $0.60 per 1M output tokens
+  },
   'gemini_video:gemini-3-flash-preview': {
     model: 'gemini-3-flash-preview',
     provider: 'google',

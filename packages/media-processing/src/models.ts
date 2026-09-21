@@ -10,14 +10,18 @@
 // ============================================================================
 
 /** Primary model for image description, video analysis, and document OCR */
-export const GEMINI_MODEL = 'gemini-3-flash-preview';
+export const GEMINI_MODEL = 'gemini-3.5-flash-lite';
 
 // ============================================================================
 // OpenAI
 // ============================================================================
 
-/** Fallback model for image description (when Gemini unavailable) */
-export const OPENAI_VISION_MODEL = 'gpt-4o-mini';
+/**
+ * Fallback model for image description (when Gemini unavailable).
+ * gpt-5.6-luna is a reasoning model with comparatively high input/output rates,
+ * so image description on this lane costs more than the previous gpt-4o-mini.
+ */
+export const OPENAI_VISION_MODEL = 'gpt-5.6-luna';
 
 /**
  * Chat-lane fallback for audio transcription. Never the primary: chat models
@@ -27,13 +31,13 @@ export const OPENAI_VISION_MODEL = 'gpt-4o-mini';
 export const OPENAI_AUDIO_CHAT_MODEL = 'gpt-audio-mini';
 
 /** Primary OpenAI transcription model (purpose-built STT endpoint) */
-export const OPENAI_TRANSCRIBE_MODEL = 'gpt-4o-transcribe';
+export const OPENAI_TRANSCRIBE_MODEL = 'gpt-transcribe';
 
 /** Backward-compatible alias for OpenAI transcription fallback */
 export const OPENAI_WHISPER_MODEL = OPENAI_TRANSCRIBE_MODEL;
 
 /** Gemini direct-audio fallback model */
-export const GEMINI_AUDIO_MODEL = 'gemini-3.1-flash-lite';
+export const GEMINI_AUDIO_MODEL = 'gemini-3.5-flash-lite';
 
 // ============================================================================
 // Groq

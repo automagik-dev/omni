@@ -159,7 +159,9 @@ const createInstanceSchema = z.object({
     .string()
     .nullable()
     .default(null)
-    .describe('Model for response gate (default: gemini-3-flash-preview)'),
+    .describe(
+      'Model for response gate (default: gate.gemini.model / gemini-3.5-flash-lite). Must match the provider selected by the gate.provider setting.',
+    ),
   agentGatePrompt: z.string().nullable().default(null).describe('Custom prompt for response gate (null = use default)'),
   telegramBotToken: z.string().optional().nullable().describe('Telegram bot token (persisted for reconnection)'),
   discordBotToken: z.string().optional().nullable().describe('Discord bot token (persisted for reconnection)'),

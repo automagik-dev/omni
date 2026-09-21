@@ -92,11 +92,11 @@ describe('processors', () => {
         expect(result.success).toBe(true);
         expect(result.content).toBe('real transcript');
         expect(result.provider).toBe('openai');
-        expect(result.model).toBe('gpt-4o-transcribe');
+        expect(result.model).toBe('gpt-transcribe');
         expect(calls.map((call) => call.url)).toEqual(['https://api.openai.com/v1/audio/transcriptions']);
         // audioModel gpt-audio-mini is chat-only and would 400 here; the
         // transcriptions attempt must use the dedicated STT model instead.
-        expect((calls[0]?.init?.body as FormData).get('model')).toBe('gpt-4o-transcribe');
+        expect((calls[0]?.init?.body as FormData).get('model')).toBe('gpt-transcribe');
       } finally {
         await rm(audioPath, { force: true });
       }
@@ -257,7 +257,7 @@ describe('processors', () => {
 
         expect(result.success).toBe(true);
         expect(result.provider).toBe('openai');
-        expect(result.model).toBe('gpt-4o-transcribe');
+        expect(result.model).toBe('gpt-transcribe');
         expect(calls[1]?.url).toBe('https://api.openai.com/v1/audio/transcriptions');
       } finally {
         await rm(audioPath, { force: true });
@@ -289,10 +289,10 @@ describe('processors', () => {
 
         expect(result.success).toBe(true);
         expect(result.provider).toBe('gemini');
-        expect(result.model).toBe('gemini-3.1-flash-lite');
+        expect(result.model).toBe('gemini-3.5-flash-lite');
         expect(result.content).toBe('gemini transcript');
         expect(calls).toHaveLength(1);
-        expect(calls[0]?.url).toContain('gemini-3.1-flash-lite');
+        expect(calls[0]?.url).toContain('gemini-3.5-flash-lite');
         expect(calls[0]?.url).not.toContain('gpt-audio-mini');
       } finally {
         await rm(audioPath, { force: true });
