@@ -146,12 +146,17 @@ export class TTSService {
   async synthesize(text: string, options?: TTSOptions): Promise<TTSResult> {
     const apiKey = await this.getApiKey();
 
-    const defaultVoice = await this.settings.getString(
+    // `process.env.X = undefined` sets the literal string "undefined", so an absent
+    // voice arrives as that string. Treat it as unset, otherwise the request goes to
+    // `/text-to-speech/undefined` instead of the default voice.
+    const configuredVoice = await this.settings.getString(
       'elevenlabs.default_voice',
       'ELEVENLABS_DEFAULT_VOICE',
       'JBFqnCBsd6RMkjVDRZzb',
     );
-    const defaultModel = await this.settings.getString('elevenlabs.default_model', undefined, 'eleven_v3');
+    const defaultVoice = !configuredVoice || configuredVoice === 'undefined' ? undefined : configuredVoice;
+    const configuredModel = await this.settings.getString('elevenlabs.default_model', undefined, 'eleven_v3');
+    const defaultModel = !configuredModel || configuredModel === 'undefined' ? undefined : configuredModel;
 
     const voiceId = options?.voiceId || defaultVoice || 'JBFqnCBsd6RMkjVDRZzb';
     const modelId = options?.modelId || defaultModel || 'eleven_v3';

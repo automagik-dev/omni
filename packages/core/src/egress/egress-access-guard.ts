@@ -384,10 +384,13 @@ export const REGISTERED_EGRESS: readonly RegisteredEgress[] = [
     justification: 'Hard-coded ElevenLabs API base constants. Not tenant-influenceable.',
   },
   {
-    file: 'packages/api/src/plugins/agent-dispatcher.ts',
+    file: 'packages/api/src/services/response-gate.ts',
     class: 'platform-vendor',
-    sites: 1,
-    justification: 'Hard-coded Google generativelanguage endpoint for a Gemini gate check. Not tenant-influenceable.',
+    sites: 2,
+    justification:
+      'Hard-coded vendor endpoints for the response gate: Google generativelanguage (Gemini) and the OpenAI ' +
+      'chat completions base URL. The OpenAI base URL comes from the platform-level `gate.openai.base_url` ' +
+      'setting, which is operator-set, not tenant input.',
   },
   {
     file: 'packages/channel-twilio-whatsapp/src/client.ts',

@@ -32,7 +32,9 @@ describe('TTSService', () => {
   describe('synthesize', () => {
     test('throws when ELEVENLABS_API_KEY is not set', async () => {
       const originalKey = process.env.ELEVENLABS_API_KEY;
-      process.env.ELEVENLABS_API_KEY = undefined;
+      // An empty value stands for "unset": the code under test reads this env var itself and
+      // treats a falsy value as absent (assigning undefined would leave the string "undefined").
+      process.env.ELEVENLABS_API_KEY = '';
 
       const service = new TTSService(createMockSettings());
 
@@ -41,6 +43,8 @@ describe('TTSService', () => {
       } finally {
         if (originalKey) {
           process.env.ELEVENLABS_API_KEY = originalKey;
+        } else {
+          process.env.ELEVENLABS_API_KEY = '';
         }
       }
     });
@@ -127,7 +131,7 @@ describe('TTSService', () => {
       const originalKey = process.env.ELEVENLABS_API_KEY;
       const originalVoice = process.env.ELEVENLABS_DEFAULT_VOICE;
       process.env.ELEVENLABS_API_KEY = 'test-key';
-      process.env.ELEVENLABS_DEFAULT_VOICE = undefined;
+      process.env.ELEVENLABS_DEFAULT_VOICE = '';
 
       let capturedUrl = '';
       let capturedBody: Record<string, unknown> = {};
