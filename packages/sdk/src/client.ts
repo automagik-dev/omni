@@ -4621,6 +4621,33 @@ export function createOmniClient(config: OmniClientConfig) {
         if (!resp.ok) throw OmniApiError.from(json, resp.status);
         return json?.data ?? [];
       },
+      /** Deployment Slack app status: configured?, missing setting keys, redirect + manifest URLs. */
+      async appStatus(): Promise<components['schemas']['SlackAppStatus']> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/slack/app`);
+        const json = (await resp.json()) as components['schemas']['SlackAppStatus'];
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        return json;
+      },
+      /** Start a one-click OAuth install; open `authorizeUrl` in a browser, then poll `oauthResult(nonce)`. */
+      async oauthStart(
+        body: components['schemas']['SlackOAuthStartBody'],
+      ): Promise<components['schemas']['SlackOAuthStart']> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/slack/oauth/start`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const json = (await resp.json()) as components['schemas']['SlackOAuthStart'];
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        return json;
+      },
+      /** Single-use outcome of an install: `pending` until the callback lands, then `done` or `error` once. */
+      async oauthResult(nonce: string): Promise<components['schemas']['SlackOAuthResult']> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/slack/oauth/result/${encodeURIComponent(nonce)}`);
+        const json = (await resp.json()) as components['schemas']['SlackOAuthResult'];
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        return json;
+      },
     },
 
     followUp: {

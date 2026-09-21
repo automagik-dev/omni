@@ -85,6 +85,7 @@ import { getHealth, healthRoutes } from './routes/health';
 import { openapiRoutes } from './routes/openapi';
 import { v2Routes } from './routes/v2';
 import { platformTenantRoutes } from './routes/v2/platform-tenants';
+import { slackOAuthCallback } from './routes/v2/slack';
 import type { Services } from './services';
 import { resolveA2AAgentCard } from './services/a2a-discovery';
 import { isMultitenancyEnabled } from './tenancy/feature-flag';
@@ -531,6 +532,16 @@ export function createApp(
       throw error;
     }
   });
+
+  // Slack OAuth redirect target (wish: slack-personal-oauth). Auth-exempt
+  // because Slack's redirect carries no Omni credential; rate-limited by IP
+  // like the generic ingress above. The handler verifies the HMAC-signed
+  // state, consumes the server-side pending record BEFORE any Slack call, and
+  // takes the tenant from that record alone — never from the query string,
+  // headers or body. Its responses carry only a redirect with `?slack=<nonce>`
+  // (or a fixed page for the CLI entry). Declared `public-by-contract` in
+  // tenancy/route-ownership.ts. Must be mounted before protectedApp.
+  app.get('/api/v2/slack/oauth/callback', webhookIngressRateLimitMiddleware, slackOAuthCallback);
 
   // ── Multitenancy control plane — feature-flagged, OFF by default ────────────
   // Mounted ONLY when OMNI_MULTITENANCY_ENABLED === "true". When off, this

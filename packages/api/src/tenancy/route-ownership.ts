@@ -270,6 +270,20 @@ const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
       'webhookVerifyToken (and echo it from the flow node) on any instance carrying tenant data.',
   },
   {
+    route: 'GET /api/v2/slack/oauth/callback',
+    class: 'public-by-contract',
+    justification:
+      'Slack OAuth v2 redirect target (wish: slack-personal-oauth). Auth-exempt because the browser arrives from ' +
+      'Slack carrying no Omni credential; rate-limited by IP. Authenticity is the HMAC-signed single-use state ' +
+      '(nonce + HMAC-SHA256 under a key derived from the Slack client secret) that names a server-side pending ' +
+      'record written by the authenticated POST /api/v2/slack/oauth/start. The tenant comes from that server-side ' +
+      'pending record ONLY — never from the query string, headers or body — and the record is consumed before any ' +
+      'Slack call, so a replayed, forged, expired or unknown state performs no network call and creates no row. ' +
+      'The surface exposes only a 302 redirect to an allowlisted returnTo whose query string is exactly ' +
+      '?slack=<nonce>, or a fixed HTML page for the CLI entry: no instance id, name, tenant id, token, team id or ' +
+      'connection state; the outcome is read through the authenticated GET /api/v2/slack/oauth/result/:nonce.',
+  },
+  {
     route: 'POST /api/v2/channels/twilio-whatsapp/:instanceId/webhook',
     class: 'public-by-contract',
     justification:
@@ -594,6 +608,8 @@ const TENANT_SCOPED_ROUTES: readonly RouteKey[] = [
   'GET /api/v2/settings',
   'GET /api/v2/settings/:key',
   'GET /api/v2/settings/:key/history',
+  'GET /api/v2/slack/app',
+  'GET /api/v2/slack/oauth/result/:nonce',
   'GET /api/v2/slack/search',
   'GET /api/v2/turns',
   'GET /api/v2/turns/:id',
@@ -752,6 +768,7 @@ const TENANT_SCOPED_ROUTES: readonly RouteKey[] = [
   'POST /api/v2/providers/:id/health',
   'POST /api/v2/scheduled-messages',
   'POST /api/v2/slack/dm/open',
+  'POST /api/v2/slack/oauth/start',
   'POST /api/v2/turns/:id/close',
   'POST /api/v2/turns/close',
   'POST /api/v2/turns/close-all',
