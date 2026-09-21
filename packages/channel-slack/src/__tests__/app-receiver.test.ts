@@ -342,3 +342,80 @@ describe('SlackAppReceiver', () => {
     await expect(receiver.targetsFor({})).resolves.toEqual([]);
   });
 });
+
+// ─────────────────────────────────────────────────────────────
+// bolt-client helpers the receiver's callers rely on
+// ─────────────────────────────────────────────────────────────
+
+// Same post-mock import: bolt-client binds `@slack/bolt` at module load.
+const { buildActingClients, resolveWorkspaceIdentity } = await import('../connection/bolt-client');
+
+/** A `WebClient`-shaped stand-in whose `auth.test` answers with `result`. */
+function fakeBotClient(result: () => Promise<Record<string, unknown>>): WebClient {
+  return { auth: { test: result } } as unknown as WebClient;
+}
+
+describe('buildActingClients', () => {
+  it('acts as the bot in bot mode and as the human in user mode', () => {
+    const botClient = new WebClient('xoxb-bot');
+
+    const bot = buildActingClients({ botToken: 'xoxb-bot', appToken: 'xapp-1' }, botClient);
+    expect(bot.actingClient).toBe(botClient);
+    expect(bot.userClient).toBeUndefined();
+
+    const user = buildActingClients(
+      { botToken: 'xoxb-bot', appToken: 'xapp-1', authMode: 'user', userToken: 'xoxp-human' },
+      botClient,
+    );
+    expect(user.userClient).toBeDefined();
+    expect(user.userClient?.token).toBe('xoxp-human');
+    expect(user.actingClient).toBe(user.userClient as WebClient);
+    expect(user.actingClient).not.toBe(botClient);
+  });
+
+  it('refuses user mode without a user token', () => {
+    const botClient = new WebClient('xoxb-bot');
+    expect(() => buildActingClients({ botToken: 'xoxb-bot', appToken: 'xapp-1', authMode: 'user' }, botClient)).toThrow(
+      SlackError,
+    );
+  });
+});
+
+describe('resolveWorkspaceIdentity', () => {
+  it('returns the full identity from auth.test', async () => {
+    const botClient = fakeBotClient(async () => ({
+      ok: true,
+      user_id: 'U_BOT',
+      bot_id: 'B_BOT',
+      user: 'omni',
+      team_id: 'T1',
+    }));
+
+    await expect(resolveWorkspaceIdentity(botClient)).resolves.toEqual({
+      teamId: 'T1',
+      botId: 'B_BOT',
+      botUserId: 'U_BOT',
+      botName: 'omni',
+    });
+  });
+
+  it('rejects an incomplete identity, naming the missing fields', async () => {
+    const botClient = fakeBotClient(async () => ({ ok: true, user_id: 'U_BOT', team_id: 'T1' }));
+
+    const error = await resolveWorkspaceIdentity(botClient).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(SlackError);
+    expect((error as SlackError).channelCode).toBe(SlackErrorCode.CONNECTION_FAILED);
+    expect((error as SlackError).message).toContain('bot_id, user');
+  });
+
+  it('wraps a failed auth.test call as CONNECTION_FAILED', async () => {
+    const botClient = fakeBotClient(async () => {
+      throw new Error('socket hang up');
+    });
+
+    const error = await resolveWorkspaceIdentity(botClient).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(SlackError);
+    expect((error as SlackError).channelCode).toBe(SlackErrorCode.CONNECTION_FAILED);
+    expect((error as SlackError).message).toContain('socket hang up');
+  });
+});
