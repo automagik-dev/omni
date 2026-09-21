@@ -304,6 +304,9 @@ const CLI_COMMANDS: Record<string, string> = {
   'scheduledMessages.cancel': 'schedule cancel',
   'slack.openDm': 'slack dm',
   'slack.search': 'slack search',
+  'slack.appStatus': 'slack app status',
+  'slack.oauthStart': 'slack connect',
+  'slack.oauthResult': 'slack connect',
 
   // ============================================================================
   // PLATFORM CONTROL PLANE (tenants + memberships — issue #981)
