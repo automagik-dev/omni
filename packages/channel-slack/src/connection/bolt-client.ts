@@ -53,7 +53,7 @@ export type SocketConnectionState = 'pending' | 'connected' | 'reconnecting' | '
  * `client` rather than replacing it — the socket and any bot-only scope still
  * need the bot token.
  */
-function buildActingClients(
+export function buildActingClients(
   options: SlackConnectionOptions,
   botClient: WebClient,
 ): { actingClient: WebClient; userClient?: WebClient } {
@@ -492,6 +492,55 @@ async function resolveIdentities(connection: BoltConnection, logger: Logger): Pr
 }
 
 /**
+ * Resolve a workspace's bot identity from a bot-token `WebClient`.
+ *
+ * The shared receiver (app-receiver.ts) builds its Bolt `App` with `authorize`
+ * and no `token`, so `app.client` carries no token and the
+ * `connection.app.client.auth.test()` path above cannot serve it. Callers that
+ * hold a workspace bot client resolve identity here instead. Unlike
+ * {@link resolveIdentities}, a partial answer is an error: every field is
+ * required by `authorize` (botId, botUserId), by the attachment map (teamId)
+ * and by the connected-event metadata (botName).
+ */
+export async function resolveWorkspaceIdentity(
+  botClient: WebClient,
+): Promise<{ teamId: string; botId: string; botUserId: string; botName: string }> {
+  let authResult: Awaited<ReturnType<WebClient['auth']['test']>>;
+  try {
+    authResult = await botClient.auth.test();
+  } catch (error) {
+    if (error instanceof SlackError) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    throw new SlackError(
+      SlackErrorCode.CONNECTION_FAILED,
+      `auth.test failed while resolving workspace identity: ${message}`,
+    );
+  }
+
+  const botUserId = authResult.user_id;
+  const botId = authResult.bot_id as string | undefined;
+  const botName = authResult.user;
+  const teamId = authResult.team_id;
+
+  const missing = [
+    ['user_id', botUserId],
+    ['bot_id', botId],
+    ['user', botName],
+    ['team_id', teamId],
+  ]
+    .filter(([, value]) => !value)
+    .map(([field]) => field);
+  if (!botUserId || !botId || !botName || !teamId) {
+    throw new SlackError(
+      SlackErrorCode.CONNECTION_FAILED,
+      `auth.test returned an incomplete workspace identity (missing: ${missing.join(', ')})`,
+    );
+  }
+
+  return { teamId, botId, botUserId, botName };
+}
+
+/**
  * Wait (bounded) until the Socket Mode WebSocket is actually open.
  *
  * Resolves immediately when the socket is already open; otherwise waits for
@@ -500,7 +549,7 @@ async function resolveIdentities(connection: BoltConnection, logger: Logger): Pr
  * CONNECTION_FAILED so the caller marks the instance 'error' — the state the
  * instance monitor knows how to recover — instead of a lying 'connected'.
  */
-async function waitForSocketOpen(connection: BoltConnection): Promise<void> {
+export async function waitForSocketOpen(connection: BoltConnection): Promise<void> {
   const socketClient = connection.socketClient;
   if (!socketClient) {
     throw new SlackError(
