@@ -993,23 +993,45 @@ instancesRoutes.get('/:id', instanceAccess, async (c) => {
 
 /**
  * #1185: Socket Mode load-balances an app's events across every connection of
- * that app, so two active Slack instances on one app token each silently get a
+ * that app, so two active Slack instances on one app token each silently got a
  * fraction of the traffic. Tokens are compared as sha256 digests in memory and
  * never logged or returned.
+ *
+ * slack-personal-oauth narrowed this: instances behind one app token now SHARE
+ * one socket, and many members of a workspace connecting personally (user mode)
+ * is the point of the feature. What is still singular is the BOT identity of a
+ * workspace — two bot-mode instances on one app and one workspace would both
+ * answer as the same bot user, acking and dispatching every event twice. So the
+ * refusal applies only when both sides are bot-mode on the same digest AND
+ * their workspaces are the same or not yet known.
  */
 const sha256 = (value: string) => new Bun.CryptoHasher('sha256').update(value).digest('hex');
 
-async function findSlackAppTokenConflict(
+/** A Slack instance is bot-mode unless it explicitly says user mode. */
+const isBotMode = (authMode: string | null | undefined): boolean => authMode !== 'user';
+
+async function findSlackBotModeConflict(
   services: Services,
-  appToken: string | null | undefined,
+  candidate: {
+    appToken: string | null | undefined;
+    teamId: string | null | undefined;
+    authMode: string | null | undefined;
+  },
   selfId?: string,
 ): Promise<{ id: string; name: string } | null> {
-  if (!appToken) return null;
-  const digest = sha256(appToken);
+  if (!candidate.appToken || !isBotMode(candidate.authMode)) return null;
+  const digest = sha256(candidate.appToken);
   const active = await services.instances.listActive();
-  const other = active.find(
-    (i) => i.id !== selfId && i.channel === 'slack' && i.slackAppToken && sha256(i.slackAppToken) === digest,
-  );
+  const other = active.find((i) => {
+    if (i.id === selfId || i.channel !== 'slack') return false;
+    if (!i.slackAppToken || sha256(i.slackAppToken) !== digest) return false;
+    if (!isBotMode(i.slackAuthMode)) return false;
+    // Distinct KNOWN workspaces are two separate bot identities and fine; an
+    // unknown workspace on either side cannot be cleared, so it is refused (the
+    // `force` escape below is the way through).
+    if (!candidate.teamId || !i.slackTeamId) return true;
+    return candidate.teamId === i.slackTeamId;
+  });
   return other ? { id: other.id, name: other.name } : null;
 }
 
@@ -1017,7 +1039,7 @@ function slackAppTokenConflictBody(other: { id: string; name: string }) {
   return {
     error: {
       code: 'SLACK_APP_TOKEN_IN_USE',
-      message: `Slack app token is already used by active instance "${other.name}" (${other.id}). Slack delivers each event to only one connection per app; both instances will receive a fraction of the traffic. Pass force: true (--force) to proceed anyway.`,
+      message: `Slack app token is already used by active bot-mode instance "${other.name}" (${other.id}) in this workspace. A workspace has one bot identity, so both instances would answer as the same bot and handle every event twice; connect as a user (slackAuthMode: "user") instead, or pass force: true (--force) to proceed anyway.`,
       details: { instanceId: other.id, instanceName: other.name },
     },
   };
@@ -1030,7 +1052,15 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
   const { force, ...data } = c.req.valid('json');
   const services = c.get('services');
 
-  const conflict = force ? null : await findSlackAppTokenConflict(services, data.slackAppToken);
+  // A create carries no workspace yet (the team id is learned on first
+  // connect), so an unknown team on this side is expected here.
+  const conflict = force
+    ? null
+    : await findSlackBotModeConflict(services, {
+        appToken: data.slackAppToken,
+        teamId: null,
+        authMode: data.slackAuthMode,
+      });
   if (conflict) return c.json(slackAppTokenConflictBody(conflict), 409);
   const channelRegistry = c.get('channelRegistry');
 
@@ -1124,7 +1154,17 @@ instancesRoutes.patch('/:id', instanceAccess, zValidator('json', updateInstanceS
   if (!force && data.slackAppToken) {
     const current = await services.instances.getById(id);
     const conflict =
-      current.channel === 'slack' ? await findSlackAppTokenConflict(services, data.slackAppToken, id) : null;
+      current.channel === 'slack'
+        ? await findSlackBotModeConflict(
+            services,
+            {
+              appToken: data.slackAppToken,
+              teamId: current.slackTeamId,
+              authMode: data.slackAuthMode ?? current.slackAuthMode,
+            },
+            id,
+          )
+        : null;
     if (conflict) return c.json(slackAppTokenConflictBody(conflict), 409);
   }
 
@@ -1749,7 +1789,15 @@ instancesRoutes.post(
     const conflict =
       body.force || instance.channel !== 'slack'
         ? null
-        : await findSlackAppTokenConflict(services, body.slackAppToken ?? instance.slackAppToken, id);
+        : await findSlackBotModeConflict(
+            services,
+            {
+              appToken: body.slackAppToken ?? instance.slackAppToken,
+              teamId: instance.slackTeamId,
+              authMode: body.slackAuthMode ?? instance.slackAuthMode,
+            },
+            id,
+          );
     if (conflict) return c.json(slackAppTokenConflictBody(conflict), 409);
 
     const connectionOptions = buildConnectConnectionOptions(instance, body, forceNewQr);

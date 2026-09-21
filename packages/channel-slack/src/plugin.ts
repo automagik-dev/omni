@@ -32,21 +32,21 @@ import { DebounceManager } from '@omni/core';
 import type { ChannelType, ContentType } from '@omni/core/types';
 import type { App } from '@slack/bolt';
 import type { WebClient } from '@slack/web-api';
+import { z } from 'zod';
 
 import { SLACK_CAPABILITIES } from './capabilities';
 import { resolveStreamMode, resolveStreamThrottle } from './config/stream-mode';
-import type { SlackAttachment, SlackEventBody } from './connection/app-receiver';
+import type { SlackAttachment, SlackAuthorization, SlackEventBody, SlackRevocation } from './connection/app-receiver';
 import { SlackAppReceiver, receiverKeyFor } from './connection/app-receiver';
 import type { SocketConnectionState } from './connection/bolt-client';
 import { buildActingClients, resolveWorkspaceIdentity } from './connection/bolt-client';
-import { setupAgentSessionHandlers } from './handlers/agent-sessions';
+import type { AgentSessionStoppedArgs } from './handlers/agent-sessions';
 import type { CommandPayload } from './handlers/commands';
 import { setupCommandHandlers } from './handlers/commands';
 import { downloadSlackFile, extractFileInfo, getContentTypeFromMime } from './handlers/files';
 import { setupInteractionHandlers } from './handlers/interactions';
 import { type SlackDebouncedArgs, setupMessageHandlers, shouldSkipMessage } from './handlers/messages';
 import { setupPinHandlers } from './handlers/pins';
-import { setupReactionHandlers } from './handlers/reactions';
 import { type SlackStatusMethod, clearTypingStatus, forgetStatusMemo, setSlackThreadStatus } from './handlers/typing';
 import { uploadFile, uploadFileFromUrl } from './senders/media';
 import { type NativeStreamSender, createNativeStreamSender } from './senders/native-stream';
@@ -74,19 +74,51 @@ const downloadGuard = createDownloadGuard();
 type SlackPresenceType = 'typing' | 'recording' | 'paused';
 
 /**
- * Lift the field the receiver routes on out of one of Bolt's per-event body
+ * Lift the fields the receiver routes on out of one of Bolt's per-event body
  * types.
  *
  * Bolt's bodies are interfaces with no index signature, so none of them
- * structurally satisfies {@link SlackEventBody}; copying the routing field
- * across is what keeps this cast-free. `team_id` is the authoritative one —
- * Bolt types it as required on every event envelope, and the inner-event
- * fallback {@link SlackAppReceiver.targetsFor} also accepts is not typed on
- * the event unions Bolt hands these listeners.
+ * structurally satisfies {@link SlackEventBody}; copying the routing fields
+ * across is what keeps this cast-free. `team_id` is the authoritative
+ * workspace — Bolt types it as required on every event envelope, and the
+ * inner-event fallback {@link SlackAppReceiver.targetsFor} also accepts is not
+ * typed on the event unions Bolt hands these listeners. `authorizations` and
+ * `event_context` are what narrows delivery when a workspace has more than one
+ * instance: without them here the receiver would have nothing to narrow by.
  */
-function routingEnvelope(body: { team_id?: string }): SlackEventBody {
-  return { team_id: body.team_id };
+function routingEnvelope(body: {
+  team_id?: string;
+  authorizations?: SlackAuthorization[];
+  event_context?: string;
+}): SlackEventBody {
+  return { team_id: body.team_id, authorizations: body.authorizations, event_context: body.event_context };
 }
+
+/**
+ * The fields the reaction listeners read from `reaction_added` /
+ * `reaction_removed`. Bolt's own event types are assignable to this; declaring
+ * the narrow shape keeps the listener body cast-free.
+ */
+interface SlackReactionEvent {
+  user?: string;
+  reaction?: string;
+  item?: { channel?: string; ts?: string };
+}
+
+/**
+ * External boundary: the `agent_session_stopped` payload as Slack sends it
+ * (#914). Bolt has no type for the event, so the fields are validated here;
+ * `channel` is the only one the handler cannot do without.
+ */
+const AgentSessionStoppedEventSchema = z
+  .object({
+    channel: z.string().min(1),
+    thread_ts: z.string().optional(),
+    user: z.string().optional(),
+    event_ts: z.string().optional(),
+    streaming_message_ts: z.array(z.string()).optional(),
+  })
+  .passthrough();
 
 type SlackPresenceStatusResult = {
   delivered: boolean;
@@ -1935,9 +1967,10 @@ export class SlackPlugin extends BaseChannelPlugin {
    *
    * This is the receiver's `registerHandlers` hook, not a per-instance setup.
    * The `App` is shared, so nothing here closes over one instance: the message
-   * and channel_rename listeners resolve the attachments of the event's
-   * workspace through `receiver.targetsFor(body)`, and the rest go through
-   * {@link fanoutTargets}.
+   * message, reaction, channel_rename and agent-session listeners resolve the
+   * attachments Slack authorized for the event through
+   * `receiver.targetsFor(body)`; only the envelope-less ones (pins,
+   * interactions, commands) go through {@link fanoutTargets}.
    *
    * `config` is the SlackConfig of whichever instance first needed this
    * receiver. Only the slash-command NAMES are read from it, and those are a
@@ -1946,6 +1979,10 @@ export class SlackPlugin extends BaseChannelPlugin {
    * debounce) lives on the attachment instead.
    */
   private setupHandlers(app: App, receiver: SlackAppReceiver, config: SlackConfig): void {
+    // Revocation. The receiver decides WHICH attachments a revoked token or an
+    // uninstall costs; the transition and the detach are the plugin's.
+    receiver.onRevocation = (revocation) => this.handleRevocation(revocation);
+
     // Inbound messages. Each attachment of the event's workspace sees it
     // through its OWN handler, built at connect() by registerInboundHandler.
     app.message(async ({ message, body }) => {
@@ -1960,22 +1997,15 @@ export class SlackPlugin extends BaseChannelPlugin {
       }
     });
 
-    // Reaction handlers — the bot user id is only shared when every attachment
-    // agrees on one; the per-target check below is what actually self-filters.
-    setupReactionHandlers(
-      app,
-      receiver.key,
-      () => this.sharedBotUserId(receiver),
-      {
-        onReaction: async (_instId, messageId, chatId, userId, emoji, action) => {
-          for (const target of this.fanoutTargets(receiver)) {
-            if (userId === target.botUserId || userId === target.actingUserId) continue;
-            await this.handleReactionReceived(target.instanceId, messageId, chatId, userId, emoji, action);
-          }
-        },
-      },
-      this.logger,
-    );
+    // Reactions. Registered here rather than through handlers/reactions.ts
+    // because those listeners are handed no event envelope, and the envelope is
+    // what says WHICH attachments the reaction is visible to.
+    app.event('reaction_added', async ({ event, body }) => {
+      await this.dispatchReaction(receiver, routingEnvelope(body), event, 'add');
+    });
+    app.event('reaction_removed', async ({ event, body }) => {
+      await this.dispatchReaction(receiver, routingEnvelope(body), event, 'remove');
+    });
 
     // Pin handlers (#889) — the manifest subscribes to pin_added/pin_removed;
     // these turn them into message.pinned/unpinned so core records the state.
@@ -2003,19 +2033,13 @@ export class SlackPlugin extends BaseChannelPlugin {
       }
     });
 
-    // Agent session handlers — native stop button (#914)
-    setupAgentSessionHandlers(
-      app,
-      receiver.key,
-      {
-        onSessionStopped: async (_instId, args) => {
-          for (const target of this.fanoutTargets(receiver)) {
-            await this.handleAgentSessionStopped(target.instanceId, target, args);
-          }
-        },
-      },
-      this.logger,
-    );
+    // Native stop button (#914). Registered here, and not through
+    // handlers/agent-sessions.ts, for the same reason as the reactions above: a
+    // stop press belongs to ONE member's session, so the targets have to come
+    // from the event envelope rather than from every attachment.
+    app.event('agent_session_stopped', async ({ event, body }) => {
+      await this.dispatchAgentSessionStopped(receiver, routingEnvelope(body), event);
+    });
 
     // Interaction handlers — handleInteraction is instance-agnostic.
     setupInteractionHandlers(
@@ -2050,28 +2074,122 @@ export class SlackPlugin extends BaseChannelPlugin {
   }
 
   /**
-   * Attachments a shared listener applies to.
+   * Attachments a shared listener applies to when the event carries no
+   * envelope to narrow by.
    *
-   * The message and channel_rename listeners read the event envelope and so
-   * resolve their targets through `receiver.targetsFor(body)`. The reaction,
-   * pin, interaction, command and agent-session modules hand their callback a
-   * fixed instance id and no envelope, so there is no workspace to key on
-   * there; until per-event fan-out with visibility filtering lands, those
-   * apply to every attachment of the receiver — which, on the
-   * single-attachment fast path, is the one instance that used to own the App.
+   * Every listener that DOES see an envelope — messages, channel_rename,
+   * reactions, the agent-session stop — resolves its targets through
+   * `receiver.targetsFor(body)` instead, which delivers only to the
+   * attachments Slack authorized. The pin, interaction and command modules hand
+   * their callback a fixed instance id and no envelope, so there is no
+   * workspace to key on there; those still apply to every attachment of the
+   * receiver — which, on the single-attachment fast path, is the one instance
+   * that used to own the App.
    */
   private fanoutTargets(receiver: SlackAppReceiver): SlackAttachment[] {
     return [...receiver.attachments.values()];
   }
 
-  /** The bot user id every attachment of a receiver shares, or undefined when they differ. */
-  private sharedBotUserId(receiver: SlackAppReceiver): string | undefined {
-    let shared: string | undefined;
-    for (const attachment of receiver.attachments.values()) {
-      if (shared && shared !== attachment.botUserId) return undefined;
-      shared = attachment.botUserId;
+  /**
+   * Deliver one reaction event to each attachment it is authorized for, once.
+   *
+   * The per-target self-filter is what keeps a member's own reaction from
+   * coming back to their own instance as inbound: in user mode the acting human
+   * posts as themselves, so their user id — not just the bot's — is a self id.
+   */
+  private async dispatchReaction(
+    receiver: SlackAppReceiver,
+    envelope: SlackEventBody,
+    event: SlackReactionEvent,
+    action: 'add' | 'remove',
+  ): Promise<void> {
+    const userId = event.user;
+    const channelId = event.item?.channel;
+    const messageTs = event.item?.ts;
+    if (!userId || !channelId || !messageTs) return;
+    const emoji = event.reaction ?? '';
+
+    for (const target of await receiver.targetsFor(envelope)) {
+      if (userId === target.botUserId || userId === target.actingUserId) continue;
+      this.logger.debug('Reaction received', {
+        instanceId: target.instanceId,
+        channelId,
+        messageTs,
+        emoji,
+        userId,
+        action,
+      });
+      await this.handleReactionReceived(target.instanceId, messageTs, channelId, userId, emoji, action);
     }
-    return shared;
+  }
+
+  /** Cancel the in-flight run of each attachment the stop press is authorized for, once. */
+  private async dispatchAgentSessionStopped(
+    receiver: SlackAppReceiver,
+    envelope: SlackEventBody,
+    event: unknown,
+  ): Promise<void> {
+    const parsed = AgentSessionStoppedEventSchema.safeParse(event);
+    if (!parsed.success) {
+      // A stop with no channel cannot be routed to any run; anything else
+      // malformed is worth a warning rather than a silent drop.
+      const channelHint = (event as { channel?: unknown } | null | undefined)?.channel;
+      if (typeof channelHint === 'string' && channelHint.length > 0) {
+        this.logger.warn('Ignoring malformed agent_session_stopped event', {
+          receiver: receiver.key,
+          channelId: channelHint,
+          issues: parsed.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`),
+        });
+      }
+      return;
+    }
+
+    const args: AgentSessionStoppedArgs = {
+      channelId: parsed.data.channel,
+      threadTs: parsed.data.thread_ts,
+      userId: parsed.data.user,
+      eventTs: parsed.data.event_ts,
+      streamingMessageTs: parsed.data.streaming_message_ts ?? [],
+    };
+
+    for (const target of await receiver.targetsFor(envelope)) {
+      this.logger.info('Agent session stopped by user', { instanceId: target.instanceId, ...args });
+      await this.handleAgentSessionStopped(target.instanceId, target, args);
+    }
+  }
+
+  /**
+   * Slack revoked a workspace's access: transition every affected instance to
+   * `disconnected` carrying the reason, then detach it.
+   *
+   * The transition goes through the same `updateInstanceStatus` +
+   * `instance.disconnected` pair every other Slack disconnect uses, so the
+   * instance monitor and the API see a revocation exactly as they see any other
+   * disconnect — with `token_revoked` / `app_uninstalled` as the reason.
+   */
+  private async handleRevocation(revocation: SlackRevocation): Promise<void> {
+    for (const attachment of revocation.attachments) {
+      const instanceId = attachment.instanceId;
+      this.logger.warn('Slack access revoked — disconnecting instance', {
+        instanceId,
+        teamId: revocation.teamId,
+        reason: revocation.reason,
+      });
+
+      const config = this.instanceConfigs.get(instanceId);
+      if (config) {
+        await this.updateInstanceStatus(instanceId, config, {
+          state: 'disconnected',
+          since: new Date(),
+          message: revocation.reason,
+        });
+      }
+
+      await this.detachInstance(instanceId);
+      this.inboundHandlers.delete(instanceId);
+      this.disposeInstanceCaches(instanceId);
+      await this.emitInstanceDisconnected(instanceId, revocation.reason);
+    }
   }
 
   /**
