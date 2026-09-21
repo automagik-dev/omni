@@ -23,6 +23,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { DedupeCache, Logger } from '@omni/channel-sdk';
 import type { DebounceManager } from '@omni/core';
 import {
@@ -44,6 +45,7 @@ import {
   isSocketStale,
   waitForSocketOpen,
   watchSocketLifecycle,
+  withBodyLimit,
 } from './bolt-client';
 
 /** Default port for Bolt's built-in HTTP receiver, as in startBoltConnection. */
@@ -67,6 +69,17 @@ export interface SlackAttachment {
   botUserId: string;
   botId: string;
   botToken: string;
+  /** Bot's display name (auth.test `user`), reported as the instance profile name. */
+  botName?: string;
+  /**
+   * Workspace display name (auth.test `team`), reported in the instance
+   * profile. Left unset by the plugin's connect path: the receiver resolves
+   * identity through resolveWorkspaceIdentity, whose contract is the four
+   * fields `authorize` and the attachment map need, and `team` is not one of
+   * them — a workspace name is worth neither a second auth.test nor widening
+   * that contract.
+   */
+  teamName?: string;
   config: SlackConfig;
   dedupeCache: DedupeCache;
   debouncer: DebounceManager;
@@ -78,12 +91,14 @@ export interface SlackAttachment {
  * The shape of an inbound Slack event body as far as the receiver reads it.
  * Bolt's own body types differ per event family; the receiver only keys on
  * the workspace id, so anything carrying (or lacking) `team_id` is accepted.
- * The envelope's `team_id` is authoritative; the inner event's `team` is
+ * The envelope's `team_id` is authoritative; `team.id` is how interaction and
+ * slash-command payloads spell the same thing, and the inner event's `team` is
  * the fallback Slack uses for shared-channel and Slack Connect deliveries.
  */
 export interface SlackEventBody {
   team_id?: string;
   api_app_id?: string;
+  team?: { id?: string; [key: string]: unknown };
   event?: { team?: string; [key: string]: unknown };
   [key: string]: unknown;
 }
@@ -149,13 +164,23 @@ const noopListener = async (): Promise<void> => undefined;
 export class SlackAppReceiver {
   readonly key: string;
 
+  /** Transport this receiver runs on; the socket watchdog only applies to 'socket'. */
+  readonly mode: 'socket' | 'http';
+  /**
+   * HTTP request handler for HTTP mode, wrapped with the 1 MB body-limit guard
+   * (kept for external-server integration, as on BoltConnection). Undefined in
+   * Socket Mode.
+   */
+  readonly httpHandler?: (req: IncomingMessage, res: ServerResponse) => void;
+
   private readonly app: App;
   private readonly logger: Logger;
-  private readonly mode: 'socket' | 'http';
   private readonly httpPort: number;
   private readonly retryConfig: NonNullable<WebClientOptions['retryConfig']>;
   private readonly attachmentMap = new Map<string, SlackAttachment>();
   private readonly botClients = new Map<string, WebClient>();
+  /** Bot-token clients keyed by the token itself, so the identity probe and the attach share one. */
+  private readonly clientsByToken = new Map<string, WebClient>();
   /**
    * Watchdog state, `BoltConnection`-shaped so bolt-client's socket-health
    * helpers drive it unchanged. `client`/`actingClient` are Bolt's tokenless
@@ -172,8 +197,9 @@ export class SlackAppReceiver {
     this.httpPort = opts.httpPort ?? DEFAULT_HTTP_PORT;
     this.retryConfig = buildRetryConfig(opts);
 
-    const { app, socketClient } = this.buildApp(opts);
+    const { app, socketClient, httpHandler } = this.buildApp(opts);
     this.app = app;
+    this.httpHandler = httpHandler;
     this.connection = {
       app,
       client: app.client,
@@ -214,6 +240,23 @@ export class SlackAppReceiver {
   }
 
   /**
+   * Client for a bot token whose workspace id is not known yet.
+   *
+   * The `App` is built with `authorize` and carries no token, so a connecting
+   * instance has no token-bearing client to run its identity probe through
+   * before `auth.test` tells it which team it is in. The receiver mints one
+   * per bot token here and `attach` reuses the very same object, so after the
+   * attach `botClientFor(teamId)` hands back this client.
+   */
+  clientForBotToken(botToken: string): WebClient {
+    const existing = this.clientsByToken.get(botToken);
+    if (existing) return existing;
+    const client = new WebClient(botToken, { retryConfig: this.retryConfig });
+    this.clientsByToken.set(botToken, client);
+    return client;
+  }
+
+  /**
    * Hook for Socket Mode lifecycle transitions, as on BoltConnection: the
    * plugin assigns it after a verified start; `stop()` clears it so a
    * deliberate stop is not reported as a lost socket.
@@ -240,7 +283,11 @@ export class SlackAppReceiver {
     // Delete first so Map insertion order reflects attach recency.
     this.attachmentMap.delete(attachment.instanceId);
     this.attachmentMap.set(attachment.instanceId, attachment);
-    this.botClients.set(attachment.teamId, new WebClient(attachment.botToken, { retryConfig: this.retryConfig }));
+    // The team's bot client follows the SAME recency rule `authorize` uses.
+    // Setting it unconditionally would let an attach that is older by
+    // `attachedAt` replace a newer workspace token (Group 2 review, MEDIUM #1).
+    const newest = this.latestAttachmentFor(attachment.teamId) ?? attachment;
+    this.botClients.set(newest.teamId, this.clientForBotToken(newest.botToken));
     this.logger.debug('Instance attached to Slack receiver', {
       receiver: this.key,
       instanceId: attachment.instanceId,
@@ -260,10 +307,7 @@ export class SlackAppReceiver {
 
     const remainingForTeam = this.latestAttachmentFor(removed.teamId);
     if (remainingForTeam) {
-      this.botClients.set(
-        remainingForTeam.teamId,
-        new WebClient(remainingForTeam.botToken, { retryConfig: this.retryConfig }),
-      );
+      this.botClients.set(remainingForTeam.teamId, this.clientForBotToken(remainingForTeam.botToken));
     } else {
       this.botClients.delete(removed.teamId);
     }
@@ -289,7 +333,7 @@ export class SlackAppReceiver {
    * missing team yields an empty list, never a throw.
    */
   async targetsFor(body: SlackEventBody): Promise<SlackAttachment[]> {
-    const teamId = body.team_id ?? body.event?.team;
+    const teamId = body.team_id ?? body.team?.id ?? body.event?.team;
     if (!teamId) return [];
     const targets: SlackAttachment[] = [];
     for (const attachment of this.attachmentMap.values()) {
@@ -361,6 +405,7 @@ export class SlackAppReceiver {
 
     this.attachmentMap.clear();
     this.botClients.clear();
+    this.clientsByToken.clear();
   }
 
   /**
@@ -401,7 +446,11 @@ export class SlackAppReceiver {
    * `authorize` and never `token`: Bolt treats them as exclusive, and a
    * `token` would pin the receiver to one workspace.
    */
-  private buildApp(opts: SlackConnectionOptions): { app: App; socketClient?: BoltConnection['socketClient'] } {
+  private buildApp(opts: SlackConnectionOptions): {
+    app: App;
+    socketClient?: BoltConnection['socketClient'];
+    httpHandler?: (req: IncomingMessage, res: ServerResponse) => void;
+  } {
     const authorize = (source: AuthorizeSourceData<boolean>): Promise<AuthorizeResult> => this.authorize(source);
     const clientOptions: AppOptions['clientOptions'] = { retryConfig: this.retryConfig };
 
@@ -411,7 +460,9 @@ export class SlackAppReceiver {
       }
       const receiver = new HTTPReceiver({ signingSecret: opts.signingSecret });
       const app = new App({ authorize, clientOptions, receiver });
-      return { app };
+      // Same 1 MB guard the per-instance HTTP app applies (Group 2 review,
+      // MEDIUM #2): an oversized body is refused with 413 before Bolt buffers it.
+      return { app, httpHandler: withBodyLimit(receiver.requestListener, this.logger) };
     }
 
     if (!opts.appToken) {

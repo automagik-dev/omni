@@ -20,6 +20,7 @@
 
 import type { Logger } from '@omni/channel-sdk';
 import type { WebClient } from '@slack/web-api';
+import type { SlackAttachment } from '../connection/app-receiver';
 
 const TYPING_STATUS = 'is typing...';
 const CLEAR_STATUS = '';
@@ -52,19 +53,43 @@ const AGENT_API_UNAVAILABLE_ERRORS = new Set([
 ]);
 
 /**
- * Clients where `agents.sessions.setStatus` has failed with an
+ * Callers where `agents.sessions.setStatus` has failed with an
  * availability error — skip straight to the legacy API for these.
  *
- * The memo is keyed on the WebClient object itself and never cleared, so it
- * sticks for the lifetime of that client — i.e. until the instance
- * reconnects and a fresh client is built (a WeakSet lets the old one be
- * collected). That is acceptable because every memoized error is a property
- * of the app/token, not of the moment: an unknown method, a disabled
- * feature, a missing scope, or the wrong token type only change when the
- * Slack app is re-installed or re-authorized, which produces a new client
- * anyway. Re-probing per call would just cost a failing round-trip each time.
+ * The memo is keyed on the caller's `attachment` when there is one and on the
+ * WebClient object otherwise, and is never cleared by itself, so it sticks for
+ * the lifetime of that object — i.e. until the instance detaches and a fresh
+ * attachment (with fresh acting clients) is built. Under the shared receiver
+ * several instances hand the same bot client around, so keying on the client
+ * alone would let one workspace's missing scope mute another's; the attachment
+ * is the narrower identity. A WeakSet lets the old entry be collected, and
+ * {@link forgetStatusMemo} drops it eagerly on detach.
+ *
+ * Keying this way is safe because every memoized error is a property of the
+ * app/token, not of the moment: an unknown method, a disabled feature, a
+ * missing scope, or the wrong token type only change when the Slack app is
+ * re-installed or re-authorized, which produces a new attachment anyway.
+ * Re-probing per call would just cost a failing round-trip each time.
  */
 const agentApiUnavailable = new WeakSet<object>();
+
+/**
+ * The object the availability memo is keyed on: the attachment when the caller
+ * has one, the client otherwise (the shape the standalone helpers still take).
+ */
+function memoKeyFor(params: { client: WebClient; attachment?: SlackAttachment }): object {
+  return params.attachment ?? params.client;
+}
+
+/**
+ * Drop a detached attachment's memoized Agent-API availability.
+ *
+ * The plugin calls this when an instance detaches: the next attach gets a
+ * clean probe rather than inheriting a verdict about a token it no longer uses.
+ */
+export function forgetStatusMemo(target: object): void {
+  agentApiUnavailable.delete(target);
+}
 
 /** Extract the Slack platform error code (e.g. 'unknown_method') if present. */
 function slackErrorCode(err: unknown): string | undefined {
@@ -94,8 +119,15 @@ export async function setSlackThreadStatus(params: {
   loadingMessages?: string[];
   logger: Logger;
   instanceId?: string;
+  /**
+   * The attachment acting here, when the caller has one. Only narrows what the
+   * Agent-API availability memo is keyed on; the call itself still goes through
+   * `client`, so callers without an attachment behave exactly as before.
+   */
+  attachment?: SlackAttachment;
 }): Promise<SlackStatusResult> {
   const { client, channelId, threadTs, status, loadingMessages, logger, instanceId } = params;
+  const memoKey = memoKeyFor(params);
 
   // Thread-only guard — logged so a silent no-status situation is diagnosable (#914)
   if (!threadTs) {
@@ -119,7 +151,7 @@ export async function setSlackThreadStatus(params: {
   };
 
   // ── Agent Sessions API (preferred) ──
-  if (typeof client.apiCall === 'function' && !agentApiUnavailable.has(client)) {
+  if (typeof client.apiCall === 'function' && !agentApiUnavailable.has(memoKey)) {
     try {
       await client.apiCall('agents.sessions.setStatus', {
         channel_id: channelId,
@@ -135,7 +167,7 @@ export async function setSlackThreadStatus(params: {
       // errors that can never succeed again memoize the client off this path.
       const code = slackErrorCode(err);
       if (code && AGENT_API_UNAVAILABLE_ERRORS.has(code)) {
-        agentApiUnavailable.add(client);
+        agentApiUnavailable.add(memoKey);
         logger.info('agents.sessions.setStatus unavailable, falling back to assistant.threads.setStatus', {
           instanceId,
           channelId,
@@ -186,6 +218,7 @@ export async function setTypingStatus(params: {
   threadTs?: string;
   logger: Logger;
   instanceId?: string;
+  attachment?: SlackAttachment;
 }): Promise<SlackStatusResult> {
   return setSlackThreadStatus({ ...params, status: TYPING_STATUS });
 }
@@ -199,6 +232,7 @@ export async function clearTypingStatus(params: {
   threadTs?: string;
   logger: Logger;
   instanceId?: string;
+  attachment?: SlackAttachment;
 }): Promise<SlackStatusResult> {
   return setSlackThreadStatus({ ...params, status: CLEAR_STATUS });
 }
