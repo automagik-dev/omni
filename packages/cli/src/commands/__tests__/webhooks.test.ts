@@ -212,7 +212,11 @@ describe('ingressUrl (#1118)', () => {
   test('printed path matches the actual public ingress route in the API', () => {
     const app = readFileSync(join(import.meta.dir, '../../../../api/src/app.ts'), 'utf-8');
     expect(app).toContain(`app.post('${INGRESS_PATH}:source'`);
-    expect(ingressUrl('circleback', undefined)).toBe('/api/v2/webhooks/ingress/circleback');
+    // Pass the loopback URL explicitly: the `undefined` default resolves
+    // `loadConfig().apiUrl`, i.e. the developer's real ~/.omni/config.json,
+    // which turns this assertion red on any host whose CLI points at a
+    // remote deployment while CI (no config file) stays green.
+    expect(ingressUrl('circleback', 'http://localhost:8882')).toBe('/api/v2/webhooks/ingress/circleback');
   });
 
   test('absolute when a public API URL is configured; path-only for loopback', () => {
