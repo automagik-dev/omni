@@ -35,6 +35,46 @@ export const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1';
 
 export type GateProvider = 'gemini' | 'openai';
 
+/**
+ * Resolve the gate model from the LIVE catalog, falling back to the constant.
+ *
+ * The gate is the platform's most latency- and cost-sensitive LLM call, so it is
+ * the worst place to pin a model name: it needs the cheapest adequate tier of the
+ * current generation, and it needs it to keep working after that generation is
+ * superseded. The catalog is asked first, and any failure — no key, network,
+ * unrecognised payload, or a role the catalog cannot honestly resolve — silently
+ * falls back to {@link DEFAULT_GATE_MODEL_GEMINI} / {@link DEFAULT_GATE_MODEL_OPENAI},
+ * which is the same value the shipped default already carries.
+ *
+ * Precedence is instance override → operator setting → catalog → constant, so an
+ * explicit choice always wins over discovery and discovery only ever fills a gap.
+ */
+async function resolveGateModelFromCatalog(
+  provider: GateProvider,
+  settings: GateSettingsReader,
+): Promise<{ model: string; source: 'catalog' | 'constant' }> {
+  const fallback = provider === 'openai' ? DEFAULT_GATE_MODEL_OPENAI : DEFAULT_GATE_MODEL_GEMINI;
+  try {
+    const { fetchGeminiCatalog, fetchOpenAiCatalog } = await import('./model-catalog');
+    const { resolveModel } = await import('./model-resolver');
+
+    const key =
+      provider === 'openai'
+        ? await settings.getSecret('openai.api_key', 'OPENAI_API_KEY')
+        : await settings.getSecret('gemini.api_key', 'GEMINI_API_KEY');
+    if (!key) return { model: fallback, source: 'constant' };
+
+    const catalog = provider === 'openai' ? await fetchOpenAiCatalog(key) : await fetchGeminiCatalog(key);
+    const resolved = resolveModel(catalog, provider, 'chat-fast');
+    if (!resolved) return { model: fallback, source: 'constant' };
+
+    return { model: resolved.model, source: 'catalog' };
+  } catch {
+    // Discovery is an optimisation; it must never break the gate.
+    return { model: fallback, source: 'constant' };
+  }
+}
+
 /** Minimal settings surface the gate needs. */
 export type GateSettingsReader = {
   getSecret: (key: string, envKey?: string) => Promise<string | undefined>;
@@ -55,10 +95,16 @@ export async function resolveGateProvider(settings: GateSettingsReader): Promise
 }
 
 /**
- * Resolve the gate model: instance override → `gate.<provider>.model` setting → code default.
+ * Resolve the gate model: instance override → operator setting → live catalog →
+ * code default.
  *
- * The instance override is provider-agnostic: a Gemini model name left on an instance while
- * `gate.provider=openai` is sent to OpenAI, fails, and fails open (the gate then always responds).
+ * Discovery sits BELOW the operator's explicit choice and ABOVE the constant, so
+ * an explicit `gate.<provider>.model` is never overridden while an unset one
+ * benefits from the current generation without a code change.
+ *
+ * The instance override stays provider-agnostic: a Gemini model name left on an
+ * instance while `gate.provider=openai` is sent to OpenAI, fails, and fails open
+ * (the gate then always responds).
  */
 export async function resolveGateModel(
   provider: GateProvider,
@@ -66,10 +112,15 @@ export async function resolveGateModel(
   settings: GateSettingsReader,
 ): Promise<string> {
   if (instanceModel) return instanceModel;
-  if (provider === 'openai') {
-    return (await settings.getString('gate.openai.model', 'GATE_OPENAI_MODEL')) ?? DEFAULT_GATE_MODEL_OPENAI;
-  }
-  return (await settings.getString('gate.gemini.model', 'GATE_GEMINI_MODEL')) ?? DEFAULT_GATE_MODEL_GEMINI;
+
+  const configured =
+    provider === 'openai'
+      ? await settings.getString('gate.openai.model', 'GATE_OPENAI_MODEL')
+      : await settings.getString('gate.gemini.model', 'GATE_GEMINI_MODEL');
+  if (configured) return configured;
+
+  const discovered = await resolveGateModelFromCatalog(provider, settings);
+  return discovered.model;
 }
 
 /**

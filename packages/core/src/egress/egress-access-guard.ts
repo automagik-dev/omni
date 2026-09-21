@@ -230,6 +230,18 @@ export const REGISTERED_EGRESS: readonly RegisteredEgress[] = [
   // tenant webhook action — was converted to `brokeredFetch` in this change and
   // therefore has NO raw egress site; it is intentionally ABSENT here.
 
+  // --- platform-vendor: compile-time-fixed vendor hosts ---------------------
+  {
+    file: 'packages/api/src/services/model-catalog.ts',
+    class: 'platform-vendor',
+    sites: 1,
+    justification:
+      'Model-catalog reads of fixed vendor endpoints (`generativelanguage.googleapis.com/v1beta/models` and ' +
+      '`api.openai.com/v1/models`). No tenant input reaches the URL: the hosts are compile-time constants and only ' +
+      'the credential varies. Both readers share one transport, so this is a single scanned site; a base-URL override ' +
+      'feature would make it tenant-controlled debt instead.',
+  },
+
   // --- pending-egress-broker: tenant-controlled debt (capped) --------------
   {
     file: 'packages/core/src/providers/webhook-provider.ts',
