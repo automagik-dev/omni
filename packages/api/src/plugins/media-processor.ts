@@ -23,7 +23,10 @@ import type { Database } from '@omni/db';
 import { mediaContent, messages, omniEvents } from '@omni/db';
 import {
   GEMINI_AUDIO_MODEL,
+  GEMINI_MODEL,
   type MediaProcessingService,
+  OPENAI_TRANSCRIBE_MODEL,
+  OPENAI_VISION_MODEL,
   createMediaProcessingService,
   getMediaHealthTracker,
   setGlobalCircuitBreakerStateChangeCallback,
@@ -743,18 +746,22 @@ export async function setupMediaProcessor(eventBus: EventBus, db: Database, serv
     imagePrompt,
     videoPrompt,
     documentPrompt,
+    geminiVisionModel,
+    openaiVisionModel,
   ] = await Promise.all([
     services.settings.getSecret('groq.api_key', 'GROQ_API_KEY'),
     services.settings.getSecret('openai.api_key', 'OPENAI_API_KEY'),
     services.settings.getSecret('gemini.api_key', 'GEMINI_API_KEY'),
     services.settings.getString('media.default_language', 'DEFAULT_LANGUAGE', 'pt'),
     services.settings.getString('stt.provider', 'STT_PROVIDER', 'openai'),
-    services.settings.getString('stt.openai.model', 'OPENAI_STT_MODEL', 'gpt-4o-transcribe'),
+    services.settings.getString('stt.openai.model', 'OPENAI_STT_MODEL', OPENAI_TRANSCRIBE_MODEL),
     services.settings.getString('stt.gemini.model', 'GEMINI_STT_MODEL', GEMINI_AUDIO_MODEL),
     services.settings.getString('prompt.audio_transcription'),
     services.settings.getString('prompt.image_description'),
     services.settings.getString('prompt.video_description'),
     services.settings.getString('prompt.document_ocr'),
+    services.settings.getString('media.gemini.model', 'GEMINI_MEDIA_MODEL', GEMINI_MODEL),
+    services.settings.getString('media.openai.vision_model', 'OPENAI_VISION_MODEL', OPENAI_VISION_MODEL),
   ]);
 
   const mediaService = createMediaProcessingService({
@@ -763,8 +770,10 @@ export async function setupMediaProcessor(eventBus: EventBus, db: Database, serv
     geminiApiKey,
     defaultLanguage,
     audioProvider: audioProvider ?? 'openai',
-    audioModel: audioModel ?? 'gpt-4o-transcribe',
+    audioModel: audioModel ?? OPENAI_TRANSCRIBE_MODEL,
     geminiAudioModel: geminiAudioModel ?? GEMINI_AUDIO_MODEL,
+    geminiVisionModel: geminiVisionModel ?? GEMINI_MODEL,
+    openaiVisionModel: openaiVisionModel ?? OPENAI_VISION_MODEL,
     audioPrompt: audioPrompt ?? undefined,
   });
   const mediaStorage = new MediaStorageService(db);

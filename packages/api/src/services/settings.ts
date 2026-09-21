@@ -105,6 +105,14 @@ const DEFAULT_SETTINGS: Array<{
     defaultValue: 'deepseek-v4-flash',
   },
   {
+    key: 'vision.model',
+    category: 'vision',
+    valueType: 'string',
+    isSecret: false,
+    description: 'Default Gemini vision model for `omni see` (default: gemini-3.5-flash-lite)',
+    defaultValue: 'gemini-3.5-flash-lite',
+  },
+  {
     key: 'deepseek.anthropic_url',
     category: 'media',
     valueType: 'string',
@@ -119,6 +127,23 @@ const DEFAULT_SETTINGS: Array<{
     isSecret: false,
     description: 'Default language for media processing',
     defaultValue: 'pt',
+  },
+  {
+    key: 'media.gemini.model',
+    category: 'media',
+    valueType: 'string',
+    isSecret: false,
+    description:
+      'Gemini model for inbound image description, video analysis and document OCR (default: gemini-3.5-flash-lite)',
+    defaultValue: 'gemini-3.5-flash-lite',
+  },
+  {
+    key: 'media.openai.vision_model',
+    category: 'media',
+    valueType: 'string',
+    isSecret: false,
+    description: 'OpenAI vision model used when the Gemini vision lane is unavailable (default: gpt-5.6-luna)',
+    defaultValue: 'gpt-5.6-luna',
   },
   // Prompt overrides (null = use code default from @omni/media-processing)
   {
@@ -155,6 +180,39 @@ const DEFAULT_SETTINGS: Array<{
     valueType: 'string',
     isSecret: false,
     description: 'Override prompt for response gate (null = code default)',
+  },
+  // Response gate (LLM pre-filter): provider selection + per-provider default model
+  {
+    key: 'gate.provider',
+    category: 'providers',
+    valueType: 'string',
+    isSecret: false,
+    description: 'Response gate provider: "gemini" (default) or "openai".',
+    defaultValue: 'gemini',
+  },
+  {
+    key: 'gate.gemini.model',
+    category: 'providers',
+    valueType: 'string',
+    isSecret: false,
+    description: 'Default Gemini model for the response gate.',
+    defaultValue: 'gemini-3.5-flash-lite',
+  },
+  {
+    key: 'gate.openai.model',
+    category: 'providers',
+    valueType: 'string',
+    isSecret: false,
+    description: 'Default OpenAI model for the response gate.',
+    defaultValue: 'gpt-5.6-luna',
+  },
+  {
+    key: 'gate.openai.base_url',
+    category: 'providers',
+    valueType: 'string',
+    isSecret: false,
+    description:
+      'OpenAI-compatible base URL for the response gate (default: https://api.openai.com/v1). Set it to route the gate through a gateway.',
   },
   // Provider defaults — which provider to use for each capability
   {
@@ -236,8 +294,8 @@ const DEFAULT_SETTINGS: Array<{
     valueType: 'string',
     isSecret: false,
     description:
-      'Default OpenAI STT model. Primary: gpt-4o-transcribe (dedicated STT); gpt-audio-* models use the chat lane, whose output is validated with a transcriptions-endpoint fallback.',
-    defaultValue: 'gpt-4o-transcribe',
+      'Default OpenAI STT model. Primary: gpt-transcribe (dedicated STT); gpt-audio-* models use the chat lane, whose output is validated with a transcriptions-endpoint fallback.',
+    defaultValue: 'gpt-transcribe',
   },
   {
     key: 'stt.gemini.model',
@@ -245,7 +303,7 @@ const DEFAULT_SETTINGS: Array<{
     valueType: 'string',
     isSecret: false,
     description: 'Default Gemini direct-audio STT model.',
-    defaultValue: 'gemini-3.1-flash-lite',
+    defaultValue: 'gemini-3.5-flash-lite',
   },
   {
     key: 'videogen.gemini.model',

@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs';
 import { type GenerativeModel, GoogleGenerativeAI } from '@google/generative-ai';
 import OpenAI from 'openai';
 
-import { GEMINI_MODEL, OPENAI_VISION_MODEL } from '../models';
+import { GEMINI_MODEL as DEFAULT_GEMINI_MEDIA, OPENAI_VISION_MODEL as DEFAULT_OPENAI_VISION } from '../models';
 import { calculateCost } from '../pricing';
 import { IMAGE_DESCRIPTION_PROMPT } from '../prompts';
 import type { ProcessOptions, ProcessingResult } from '../types';
@@ -53,13 +53,23 @@ export class ImageProcessor extends BaseProcessor {
   private geminiModel: GenerativeModel | null = null;
   private openaiClient: OpenAI | null = null;
 
+  /** Gemini model for image description: config override -> centralized default */
+  private get geminiModelId(): string {
+    return this.config.geminiVisionModel ?? DEFAULT_GEMINI_MEDIA;
+  }
+
+  /** OpenAI vision model for the fallback lane: config override -> centralized default */
+  private get openaiVisionModelId(): string {
+    return this.config.openaiVisionModel ?? DEFAULT_OPENAI_VISION;
+  }
+
   /**
    * Get lazy-initialized Gemini model
    */
   private getGeminiModel(): GenerativeModel | null {
     if (!this.geminiModel && this.config.geminiApiKey) {
       this.geminiClient = new GoogleGenerativeAI(this.config.geminiApiKey);
-      this.geminiModel = this.geminiClient.getGenerativeModel({ model: GEMINI_MODEL });
+      this.geminiModel = this.geminiClient.getGenerativeModel({ model: this.geminiModelId });
       this.log.info('Gemini model initialized');
     }
     return this.geminiModel;
@@ -127,7 +137,7 @@ export class ImageProcessor extends BaseProcessor {
   private async describeWithGemini(imageData: Buffer, mimeType: string, prompt: string): Promise<ProcessingResult> {
     const model = this.getGeminiModel();
     if (!model) {
-      return this.createFailedResult('Gemini not configured (missing API key)', 'google', GEMINI_MODEL);
+      return this.createFailedResult('Gemini not configured (missing API key)', 'google', this.geminiModelId);
     }
 
     const timeouts = getMediaTimeouts();
@@ -179,7 +189,7 @@ export class ImageProcessor extends BaseProcessor {
 
       const { text, inputTokens, outputTokens } = callResult;
 
-      const costCents = calculateCost('gemini_vision', GEMINI_MODEL, {
+      const costCents = calculateCost('gemini_vision', this.geminiModelId, {
         inputTokens,
         outputTokens,
       });
@@ -190,7 +200,7 @@ export class ImageProcessor extends BaseProcessor {
         contentFormat: 'text',
         processingType: 'description',
         provider: 'google',
-        model: GEMINI_MODEL,
+        model: this.geminiModelId,
         processingTimeMs: 0,
         inputTokens,
         outputTokens,
@@ -200,7 +210,7 @@ export class ImageProcessor extends BaseProcessor {
       const errorMsg = error instanceof Error ? error.message : String(error);
       const isCircuit = this.isCircuitOpen(error);
       this.log.error('Gemini description error', { error: errorMsg, circuitOpen: isCircuit });
-      return this.createFailedResult(errorMsg, 'google', GEMINI_MODEL);
+      return this.createFailedResult(errorMsg, 'google', this.geminiModelId);
     }
   }
 
@@ -210,7 +220,11 @@ export class ImageProcessor extends BaseProcessor {
   private async describeWithOpenAI(imageData: Buffer, mimeType: string, prompt: string): Promise<ProcessingResult> {
     const client = this.getOpenAIClient();
     if (!client) {
-      return this.createFailedResult('OpenAI client not configured (missing API key)', 'openai', OPENAI_VISION_MODEL);
+      return this.createFailedResult(
+        'OpenAI client not configured (missing API key)',
+        'openai',
+        this.openaiVisionModelId,
+      );
     }
 
     const timeouts = getMediaTimeouts();
@@ -223,7 +237,7 @@ export class ImageProcessor extends BaseProcessor {
           const dataUrl = `data:${mimeType};base64,${base64Data}`;
 
           const response = await client.chat.completions.create({
-            model: OPENAI_VISION_MODEL,
+            model: this.openaiVisionModelId,
             messages: [
               {
                 role: 'user',
@@ -251,7 +265,7 @@ export class ImageProcessor extends BaseProcessor {
         { timeoutMs: timeouts.imageTimeoutMs },
       );
 
-      const costCents = calculateCost('openai_vision', OPENAI_VISION_MODEL, {
+      const costCents = calculateCost('openai_vision', this.openaiVisionModelId, {
         inputTokens,
         outputTokens,
       });
@@ -262,7 +276,7 @@ export class ImageProcessor extends BaseProcessor {
         contentFormat: 'text',
         processingType: 'description',
         provider: 'openai',
-        model: OPENAI_VISION_MODEL,
+        model: this.openaiVisionModelId,
         processingTimeMs: 0,
         inputTokens,
         outputTokens,
@@ -271,7 +285,7 @@ export class ImageProcessor extends BaseProcessor {
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       this.log.error('OpenAI description error', { error: errorMsg });
-      return this.createFailedResult(errorMsg, 'openai', OPENAI_VISION_MODEL);
+      return this.createFailedResult(errorMsg, 'openai', this.openaiVisionModelId);
     }
   }
 
