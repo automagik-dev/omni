@@ -606,3 +606,13 @@ packages/api/src/routes/v2/__tests__/slack-oauth-e2e.test.ts            (new)
 - **Findings:** 0 CRITICAL / 0 HIGH / 2 MEDIUM / 3 LOW. F2 (MEDIUM): the (team, user) lookup lists up to 1000 Slack rows and filters in JS; trigger for `findBySlackIdentity` on InstanceService when Group 5 lands. F3 (LOW): service-level connect-failure log not passed through `redactSlackTokens`, regex misses `xapp-`. F4 (LOW): the 100-entry issued-handle cap can evict an in-flight callback under a burst (design-accepted fail-closed). F5 (LOW): contract wording about SDK path literals (server-relative paths by convention).
 - **Ruling recorded:** `@omni/api` declares `@omni/channel-slack` as a workspace dependency (plan file set omitted `packages/api/package.json`; precedent channel-whatsapp-business / channel-harness).
 - Full report: session scratchpad `g4-review.md`; author report `g4-report.md`. Group executed by hand after wish workflow run `wf_b8e249a2-415` refused at admission (route `plan`, auth/secret/permission surfaces).
+
+### Group 2 execution review — branch head `980929b6` (2026-09-21T21:35:12Z)
+
+- **Verdict:** SHIP
+- **Reviewer:** review-agent/claude (reviewer-g2, Opus); blind plan written before opening the diff (`g2-review-plan.md`)
+- **Target:** `980929b6` on `wish/slack-personal-oauth-g2` vs base `96e8b1ce`; diff exactly the three declared files, 928 insertions
+- **Criteria:** all 11 frozen contract criteria met (every Bolt App built with `authorize`, no `token`; SHA-256 receiver key without the plaintext secret; handlers registered once; revocation events as no-ops; `targetsFor` team fallback adds no authorization check)
+- **Validation (reviewer's own runs):** typecheck exit 0; app-receiver test 10 pass; channel-slack 317 pass across 24 files, no existing test file touched; biome clean; knip exit 0; no `any`, no suppression, no skip. Coordinator gate `bun run check` on `980929b6`: 26/26 tasks, 0 failures.
+- **Findings:** 0 CRITICAL / 0 HIGH / 3 MEDIUM / 4 LOW. MEDIUM carried to Group 3: (1) `attach` overwrites the per-team bot client unconditionally while `authorize` picks by `attachedAt`, so out-of-order attaches disagree; (2) the HTTP path lacks the 1 MB body-limit guard and `httpHandler` the existing connection code has; (3) the last detach stops the App but notifies no registry.
+- Full report: session scratchpad `g2-review.md`. Group built by wish workflow run `wf_d17f6910-2c7` (reviews SHIP twice); its gate failed on the knip and `.env` host traps fixed in `7184b155` and `9cbf1402`; runs `wf_b3e1bf30-7e5` (stopped) and `wf_7680df4c-b2d` (refused: existing unreviewed branch) did not change the code beyond commit `975afcef`.
