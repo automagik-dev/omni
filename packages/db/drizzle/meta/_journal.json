@@ -547,6 +547,13 @@
       "when": 1787700000000,
       "tag": "0077_instances_close_contact_config",
       "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "7",
+      "when": 1787800000000,
+      "tag": "0078_instances_slack_oauth_identity",
+      "breakpoints": true
     }
   ]
 }

@@ -344,6 +344,11 @@ export interface SlackManifest {
     }>;
   };
   oauth_config: {
+    /**
+     * OAuth redirect URLs for the one-click install (slack-personal-oauth).
+     * HTTPS only, max 1000; absent for apps without an install flow.
+     */
+    redirect_urls?: string[];
     scopes: {
       bot: string[];
       /** User-token scopes, requested only for authMode 'user' (#889). */

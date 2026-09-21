@@ -35,6 +35,15 @@ export const REQUIRED_BOT_SCOPES = [
 ] as const;
 
 /**
+ * Events Slack sends when the app loses its tokens (slack-personal-oauth):
+ * a user or admin revokes the app's tokens, or the app is uninstalled from
+ * the workspace. Bolt skips `authorize` for both, so their listeners receive
+ * no token and key on `body.team_id` + `event.tokens` instead of on an
+ * attachment; the affected instances transition to `disconnected`.
+ */
+export const REVOCATION_EVENTS = ['tokens_revoked', 'app_uninstalled'] as const;
+
+/**
  * All bot events to subscribe to
  */
 export const BOT_EVENTS = [
@@ -54,6 +63,7 @@ export const BOT_EVENTS = [
   // stop button; subscribing is also what makes Slack SHOW that button while a
   // session is in `processing`.
   'agent_session_stopped',
+  ...REVOCATION_EVENTS,
 ] as const;
 
 /**
@@ -65,7 +75,7 @@ export const BOT_EVENTS = [
  * `im:write` opens DMs (conversations.open). Note the USER scope for opening
  * a channel is `channels:write`, not the bot's `channels:manage`.
  */
-const USER_SCOPES = [
+export const USER_SCOPES = [
   'channels:history',
   'channels:read',
   'chat:write',
@@ -97,7 +107,7 @@ const USER_SCOPES = [
  *
  * @see https://docs.slack.dev/apis/events-api/
  */
-const USER_EVENTS = [
+export const USER_EVENTS = [
   'message.channels',
   'message.groups',
   'message.im',
@@ -148,6 +158,13 @@ export function buildSlackManifest(options?: {
   agentDescription?: string;
   /** Suggested prompts shown at the top of the agent's Messages tab. */
   suggestedPrompts?: Array<{ title: string; message: string }>;
+  /**
+   * OAuth redirect URLs (`oauth_config.redirect_urls`) for the one-click
+   * install flow (slack-personal-oauth). Slack requires HTTPS and caps the
+   * list at 1000. Omitted from the manifest when empty, so an app without an
+   * install flow gets the same manifest as before.
+   */
+  redirectUrls?: string[];
 }): SlackManifest {
   const {
     appName = 'Omni Bot',
@@ -159,6 +176,7 @@ export function buildSlackManifest(options?: {
     agentView = true,
     agentDescription,
     suggestedPrompts,
+    redirectUrls = [],
   } = options ?? {};
 
   return {
@@ -193,6 +211,7 @@ export function buildSlackManifest(options?: {
           : undefined,
     },
     oauth_config: {
+      ...(redirectUrls.length > 0 ? { redirect_urls: [...redirectUrls] } : {}),
       scopes: {
         bot: [...REQUIRED_BOT_SCOPES],
         ...(includeUserScopes ? { user: [...USER_SCOPES] } : {}),
@@ -208,5 +227,19 @@ export function buildSlackManifest(options?: {
       },
       socket_mode_enabled: true,
     },
+  };
+}
+
+/**
+ * The `scope` / `user_scope` query parameters of the OAuth v2 authorize URL
+ * (slack-personal-oauth): the same bot and user scope sets the manifest
+ * declares, comma-joined as Slack expects. Both are requested on every
+ * authorize so a workspace's bot install and a member's user install come
+ * from one click each.
+ */
+export function slackAuthorizeScopes(): { scope: string; user_scope: string } {
+  return {
+    scope: REQUIRED_BOT_SCOPES.join(','),
+    user_scope: USER_SCOPES.join(','),
   };
 }
