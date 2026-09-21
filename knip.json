@@ -22,7 +22,8 @@
         "scripts/test-pgboss.ts",
         "scripts/perf/**"
       ],
-      "ignoreDependencies": ["@openapitools/openapi-generator-cli", "@embedded-postgres/linux-x64"]
+      "ignoreDependencies": ["@openapitools/openapi-generator-cli", "@embedded-postgres/linux-x64"],
+      "ignoreBinaries": ["make"]
     },
     "packages/api": {
       "entry": ["src/schemas/openapi/*.ts"],
