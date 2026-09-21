@@ -17,7 +17,7 @@ export const DEFAULT_GATE_MODEL_GEMINI = 'gemini-3.5-flash-lite';
 export const DEFAULT_GATE_MODEL_OPENAI = 'gpt-5.6-luna';
 
 /** Hard ceiling for a single gate call. */
-export const GATE_TIMEOUT_MS = 3_000;
+const GATE_TIMEOUT_MS = 3_000;
 
 /**
  * Completion budget for a one-word answer. Reasoning models spend a variable part of
