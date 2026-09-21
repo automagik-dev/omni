@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | APPROVED |
+| **Status** | IN_PROGRESS |
 | **Slug** | `slack-personal-oauth` |
 | **Date** | 2026-09-21 |
 | **Author** | Felipe Rosa |
