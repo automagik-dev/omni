@@ -595,3 +595,14 @@ docs/channels/slack.md
 docs/api/endpoints.md
 packages/api/src/routes/v2/__tests__/slack-oauth-e2e.test.ts            (new)
 ```
+
+### Group 4 execution review — commit `c274c3e4` (2026-09-21T21:24:48Z)
+
+- **Verdict:** SHIP
+- **Reviewer:** review-agent/claude (reviewer-g4, Fable 5.1); blind criteria written 21:12:59Z before any changed file was opened
+- **Target:** `c274c3e4` on `wish/slack-personal-oauth-g4` (parent `e28e2379`); commands run on HEAD `61fdb0c7`
+- **Criteria:** all 15 frozen contract criteria traced to code and to a test; 14 met outright. AC15 (file set) was graded MEDIUM because the reviewer diffed against `e3bb2c2e` instead of the true parent `e28e2379`, which showed dev's gitignore fix `7184b155` reversed; the effective diff against the integration tip carries no `.gitignore` change, so the coordinator records AC15 as met.
+- **Validation (reviewer's own runs, all exit 0):** slack-oauth 38 pass; lib/__tests__ 145 pass; ownership gate 22; privacy 10; generate:sdk no diff; typecheck (turbo replay + fresh tsc in api and sdk); lint clean; knip exit 0 at HEAD; routes/v2 466 pass / 7 pre-existing MinIO skips; sdk 52 pass.
+- **Findings:** 0 CRITICAL / 0 HIGH / 2 MEDIUM / 3 LOW. F2 (MEDIUM): the (team, user) lookup lists up to 1000 Slack rows and filters in JS; trigger for `findBySlackIdentity` on InstanceService when Group 5 lands. F3 (LOW): service-level connect-failure log not passed through `redactSlackTokens`, regex misses `xapp-`. F4 (LOW): the 100-entry issued-handle cap can evict an in-flight callback under a burst (design-accepted fail-closed). F5 (LOW): contract wording about SDK path literals (server-relative paths by convention).
+- **Ruling recorded:** `@omni/api` declares `@omni/channel-slack` as a workspace dependency (plan file set omitted `packages/api/package.json`; precedent channel-whatsapp-business / channel-harness).
+- Full report: session scratchpad `g4-review.md`; author report `g4-report.md`. Group executed by hand after wish workflow run `wf_b8e249a2-415` refused at admission (route `plan`, auth/secret/permission surfaces).
