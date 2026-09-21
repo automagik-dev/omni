@@ -11,7 +11,8 @@ text changes (single-attachment fast path, narrowed #1185 guard, public-by-contr
 callback with server-side tenant record and nonce-only redirect, DEFAULT_SETTINGS
 registration, Bolt authorize/token exclusivity, state lifetime = store TTL,
 redirect_urls verified). Round 2 (2026-09-21T18:52Z, digest 1f74a12e…): SHIP, 0 blocking / 0 major /
-4 minor / 1 low. Evidence stamped in DESIGN.md. Non-blocking notes carried into
+4 minor / 1 low. Evidence stamped in DESIGN.md. Wish written 2026-09-21 and plan-reviewed APPROVED
+(round 2): .genie/wishes/slack-personal-oauth/WISH.md. Non-blocking notes carried into
 wish planning (reviewer's proposed resolutions, accepted as written):
 - API-level bot-guard rule: same token digest, both bot-mode, team ids equal or
   unknown; persist `slack_team_id` on first connect of manual instances; the
