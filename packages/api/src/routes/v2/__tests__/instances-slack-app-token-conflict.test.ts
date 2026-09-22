@@ -35,7 +35,7 @@ function mount(others: Record<string, unknown>[], selfOverrides: Record<string, 
     slackTeamId: TEAM,
     ...selfOverrides,
   };
-  const calls = { create: 0, update: 0, connect: 0 };
+  const calls = { create: 0, update: 0, connect: 0, connectOptions: [] as Record<string, unknown>[] };
 
   app.use('*', async (c, next) => {
     c.set('services', {
@@ -58,8 +58,9 @@ function mount(others: Record<string, unknown>[], selfOverrides: Record<string, 
       get: () => ({
         id: 'slack',
         capabilities: {},
-        connect: mock(async () => {
+        connect: mock(async (_instanceId: string, config: { options?: Record<string, unknown> }) => {
           calls.connect++;
+          calls.connectOptions.push(config.options ?? {});
         }),
         getStatus: mock(async () => ({ state: 'connected' })),
       }),
@@ -161,6 +162,30 @@ describe('shared Slack app token, bot identity (#1185 / slack-personal-oauth)', 
     });
     expect(updated.status).toBe(200);
     expect(calls.connect).toBe(1);
+  });
+
+  test('force: true reaches the plugin as the `force` connect override, and is absent without it', async () => {
+    // The 409 skip alone left the plugin's own SLACK_BOT_INSTANCE_EXISTS guard
+    // armed, so the documented override died at this seam.
+    const forced = mount([other()]);
+    const res = await forced.app.request(`/instances/${SELF_ID}/connect`, json({ force: true }));
+    expect(res.status).toBe(200);
+    expect(forced.calls.connectOptions[0]?.force).toBe(true);
+
+    // Same route, no override: the plugin must not see a force key at all.
+    const plain = mount([]);
+    const clean = await plain.app.request(`/instances/${SELF_ID}/connect`, json({}));
+    expect(clean.status).toBe(200);
+    expect(plain.calls.connectOptions[0]).not.toHaveProperty('force');
+
+    // create + connect carries the override the same way.
+    const created = mount([other()]);
+    const createdRes = await created.app.request(
+      '/instances',
+      json({ name: 'dup', channel: 'slack', slackAppToken: TOKEN, force: true }),
+    );
+    expect(createdRes.status).toBe(201);
+    expect(created.calls.connectOptions[0]?.force).toBe(true);
   });
 
   test('inactive duplicate is ignored', async () => {

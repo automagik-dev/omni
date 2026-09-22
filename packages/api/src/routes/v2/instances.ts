@@ -630,6 +630,13 @@ type InstanceConnectionOptionsInput = {
   slackAuthMode?: string | null;
   slackAppToken?: string | null;
   slackSigningSecret?: string | null;
+  /**
+   * Slack connect override (`force: true` / `--force`). Forwarded to the plugin
+   * as the top-level `force` option its `readConnectOverrides` reads, so the
+   * receiver reuses an existing app-level attachment instead of throwing
+   * SLACK_BOT_INSTANCE_EXISTS. The API's own 409 skip is separate.
+   */
+  slackForce?: boolean;
   profileMetadata?: Record<string, unknown> | null;
   whatsapp?: { syncFullHistory?: boolean };
   gupshupCallbackUrl?: string | null;
@@ -683,6 +690,7 @@ function applySlackConnectionOptions(options: Record<string, unknown>, input: In
   if (input.slackAuthMode) options.authMode = input.slackAuthMode;
   if (input.slackAppToken) options.appToken = input.slackAppToken;
   if (input.slackSigningSecret) options.signingSecret = input.slackSigningSecret;
+  if (input.slackForce) options.force = true;
 }
 
 function applyGupshupConnectionOptions(
@@ -1098,6 +1106,7 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
     slackAuthMode: instance.slackAuthMode,
     slackAppToken: instance.slackAppToken,
     slackSigningSecret: instance.slackSigningSecret,
+    slackForce: force,
     profileMetadata: instance.profileMetadata,
     gupshupCallbackUrl: instance.gupshupCallbackUrl,
     gupshupAuthToken: instance.gupshupAuthToken,
@@ -1651,6 +1660,7 @@ function buildConnectConnectionOptions(
     slackAuthMode: body.slackAuthMode ?? instance.slackAuthMode,
     slackAppToken: body.slackAppToken ?? instance.slackAppToken,
     slackSigningSecret: body.slackSigningSecret ?? instance.slackSigningSecret,
+    slackForce: body.force,
     profileMetadata: instance.profileMetadata,
     whatsapp: body.whatsapp,
     gupshupCallbackUrl: instance.gupshupCallbackUrl,

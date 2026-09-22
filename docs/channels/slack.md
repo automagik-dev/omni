@@ -14,7 +14,11 @@ a new app.
 | Who | Step | How often |
 |---|---|---|
 | Operator | `omni slack app setup` | **Once per deployment** — register the deployment's Slack app |
-| Member | `omni slack connect`, or the **Connect Slack** button on the dashboard | **Every time** — once per person, and again whenever they re-authorize |
+| Member | `omni slack connect` | **Every time** — once per person, and again whenever they re-authorize |
+
+`omni slack connect` is the member path available today. The dashboard's
+**Connect Slack** button ships with the khal-ui update that follows this
+change; until then, connect from the CLI.
 
 `omni slack app status` reports whether the app is configured, which settings
 are still missing, and the redirect and manifest links.
