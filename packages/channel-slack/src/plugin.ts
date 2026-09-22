@@ -67,6 +67,7 @@ import type {
   SlackInteractionPayload,
 } from './types';
 import { SlackError, SlackErrorCode } from './types';
+import { resolveSlackEmojiName } from './utils/emoji';
 
 /** Download size guard — 50MB default; applied to inbound file metadata before dispatching */
 const downloadGuard = createDownloadGuard();
@@ -1534,14 +1535,6 @@ export class SlackPlugin extends BaseChannelPlugin {
   // Thread History & Reactions (per_thread collaboration sessions)
   // ─────────────────────────────────────────────────────────────
 
-  /** Map unicode emoji to Slack reaction names */
-  private static readonly EMOJI_TO_SLACK: Record<string, string> = {
-    '👀': 'eyes',
-    '🎧': 'headphones',
-    '✅': 'white_check_mark',
-    '❌': 'x',
-  };
-
   /**
    * Fetch message history for a Slack thread (conversations.replies).
    * Supports per_thread collaboration session lazy init.
@@ -1684,8 +1677,8 @@ export class SlackPlugin extends BaseChannelPlugin {
    */
   async react(instanceId: string, chatId: string, messageId: string, emoji: string): Promise<void> {
     const attachment = this.getAttachment(instanceId);
-    const slackName = SlackPlugin.EMOJI_TO_SLACK[emoji] ?? emoji.replace(/^:|:$/g, '');
     try {
+      const slackName = resolveSlackEmojiName(emoji);
       await attachment.actingClient.reactions.add({ channel: chatId, timestamp: messageId, name: slackName });
     } catch (err) {
       this.logger.warn('react: failed to add reaction', { chatId, messageId, emoji, error: String(err) });
@@ -1697,8 +1690,8 @@ export class SlackPlugin extends BaseChannelPlugin {
    */
   async unreact(instanceId: string, chatId: string, messageId: string, emoji: string): Promise<void> {
     const attachment = this.getAttachment(instanceId);
-    const slackName = SlackPlugin.EMOJI_TO_SLACK[emoji] ?? emoji.replace(/^:|:$/g, '');
     try {
+      const slackName = resolveSlackEmojiName(emoji);
       await attachment.actingClient.reactions.remove({ channel: chatId, timestamp: messageId, name: slackName });
     } catch (err) {
       this.logger.warn('unreact: failed to remove reaction', { chatId, messageId, emoji, error: String(err) });
