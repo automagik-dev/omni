@@ -102,9 +102,10 @@ mock.module(Bun.resolveSync('@slack/web-api', CHANNEL_SLACK_DIR), () => {
   /**
    * `auth.test` is the only call this fake answers: it has no `users`, so the
    * connect path's `users.info` name lookup falls back to the `auth.test`
-   * username. A user token answers
-   * as the human named in it (`xoxp-ana` → `U_ANA`), so the two personal
-   * installs resolve to DISTINCT acting users; anything else answers as the
+   * username. A user token answers as the human named in it (`xoxp-ana` →
+   * `U_ANA`) in workspace `T_SHARED`, as a real user token's `auth.test` does,
+   * so the two personal installs resolve to DISTINCT acting users and — having
+   * no bot — take their workspace from it; anything else answers as the
    * workspace bot of `T_SHARED`.
    */
   class FakeWebClient {
@@ -117,7 +118,7 @@ mock.module(Bun.resolveSync('@slack/web-api', CHANNEL_SLACK_DIR), () => {
         test: async () => {
           if (this.token?.startsWith('xoxp-')) {
             const name = this.token.slice('xoxp-'.length);
-            return { ok: true, user_id: `U_${name.toUpperCase()}`, user: name };
+            return { ok: true, user_id: `U_${name.toUpperCase()}`, user: name, team_id: TEAM_ID, team: 'Acme' };
           }
           return { ok: true, user_id: 'U0BOT', bot_id: 'B0BOT', user: 'omni', team_id: TEAM_ID, team: 'Acme' };
         },
@@ -142,7 +143,6 @@ const CLIENT_SECRET = 'client-secret-under-test';
 const SIGNING_SECRET = 'signing-secret-under-test';
 const APP_TOKEN = 'xapp-1-app-level-token';
 const PUBLIC_URL = 'https://omni.example.com';
-const BOT_TOKEN = 'xoxb-workspace-bot-token';
 const TEAM_ID = 'T_SHARED';
 
 /** The two members of the one workspace this file is about. */
@@ -170,15 +170,14 @@ interface FakeRow extends Record<string, unknown> {
 let rowCounter = 0;
 const nextId = (): string => `bbbbbbbb-bbbb-4bbb-8bbb-${String(++rowCounter).padStart(12, '0')}`;
 
-/** Slack's `oauth.v2.access` answer for the member whose code was exchanged. */
+/**
+ * Slack's `oauth.v2.access` answer for the member whose code was exchanged: a
+ * user-mode authorize requests no bot scope, so the grant carries no bot token.
+ */
 function accessResponse(member: (typeof MEMBERS)[keyof typeof MEMBERS]) {
   return {
     ok: true,
     app_id: 'A0123456789',
-    access_token: BOT_TOKEN,
-    token_type: 'bot',
-    scope: 'chat:write,users:read',
-    bot_user_id: 'U0BOT',
     team: { id: TEAM_ID, name: 'Acme' },
     enterprise: null,
     is_enterprise_install: false,
@@ -193,7 +192,7 @@ function accessResponse(member: (typeof MEMBERS)[keyof typeof MEMBERS]) {
 type PluginInstance = InstanceType<typeof SlackPlugin>;
 
 interface PluginInternals {
-  attachments: Map<string, { instanceId: string; teamId: string }>;
+  attachments: Map<string, { instanceId: string; teamId: string; botToken?: string }>;
   receivers: Map<string, unknown>;
 }
 
@@ -411,6 +410,8 @@ describe('Slack one-click OAuth, end to end', () => {
       expect(row.slackConnectionMethod).toBe('oauth');
       expect(row.slackTeamId).toBe(TEAM_ID);
       expect(row.slackAppToken).toBe(APP_TOKEN);
+      // No bot: each member runs on their own token alone.
+      expect(row.slackBotToken).toBeNull();
     }
 
     // ── One workspace, one app token, ONE Bolt App for both members ───────
@@ -418,6 +419,10 @@ describe('Slack one-click OAuth, end to end', () => {
     expect(constructedApps[0]?.started).toBe(1);
     expect(harness.internals.receivers.size).toBe(1);
     expect([...harness.internals.attachments.keys()].sort()).toEqual([anaRow?.id, benRow?.id].sort() as string[]);
+    for (const attachment of harness.internals.attachments.values()) {
+      expect(attachment.teamId).toBe(TEAM_ID);
+      expect(attachment.botToken).toBeUndefined();
+    }
 
     const connected = harness.published.filter((event) => event.type === 'instance.connected');
     expect(connected.map((event) => event.payload.instanceId).sort()).toEqual(
@@ -462,7 +467,6 @@ describe('Slack one-click OAuth, end to end', () => {
     expect(scanned).toContain('slack=');
 
     const secrets: Record<string, string> = {
-      'bot token': BOT_TOKEN,
       'app-level token': APP_TOKEN,
       'client secret': CLIENT_SECRET,
       'signing secret': SIGNING_SECRET,

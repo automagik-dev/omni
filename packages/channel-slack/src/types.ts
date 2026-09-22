@@ -146,12 +146,15 @@ export interface RetryConfig {
  * Slack connection options passed to Bolt.js
  */
 export interface SlackConnectionOptions {
-  botToken: string;
+  /**
+   * Bot token (`xoxb`). Required unless authMode is 'user': a user-mode
+   * instance installed through one-click OAuth has no bot and runs on the
+   * user token alone, with the app-level token opening the socket.
+   */
+  botToken?: string;
   /**
    * User token (`xoxp`). Required when authMode is 'user' — outbound calls go
-   * out as the authorizing human. The bot token is still required alongside
-   * it: Bolt authenticates the socket with it, and it is the fallback for
-   * calls the user token has no scope for.
+   * out as the authorizing human. A bot token alongside it is optional.
    */
   userToken?: string;
   /** Identity used for outbound actions (default: 'bot'). */

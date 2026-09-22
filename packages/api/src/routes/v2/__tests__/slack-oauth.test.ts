@@ -52,7 +52,21 @@ const ALL_SETTINGS: Record<string, string> = {
 const ALL_KEYS = Object.values(SLACK_APP_SETTINGS).map((s) => s.key);
 const ALL_ENVS = Object.values(SLACK_APP_SETTINGS).map((s) => s.env);
 
+/** Slack's answer to a user-mode authorize: the person's token and no bot, since no bot scope was asked for. */
 function accessResponse(overrides: Record<string, unknown> = {}) {
+  return {
+    ok: true,
+    app_id: 'A0123456789',
+    team: { id: 'T0123456789', name: 'Acme' },
+    enterprise: null,
+    is_enterprise_install: false,
+    authed_user: { id: 'U0123456789', scope: 'search:read', access_token: USER_TOKEN, token_type: 'user' },
+    ...overrides,
+  };
+}
+
+/** Slack's answer to a bot-mode authorize: the workspace bot token, and no user token. */
+function botAccessResponse(overrides: Record<string, unknown> = {}) {
   return {
     ok: true,
     app_id: 'A0123456789',
@@ -63,7 +77,7 @@ function accessResponse(overrides: Record<string, unknown> = {}) {
     team: { id: 'T0123456789', name: 'Acme' },
     enterprise: null,
     is_enterprise_install: false,
-    authed_user: { id: 'U0123456789', scope: 'search:read', access_token: USER_TOKEN, token_type: 'user' },
+    authed_user: { id: 'U0123456789' },
     ...overrides,
   };
 }
@@ -151,12 +165,16 @@ function makeHarness(opts: HarnessOptions = {}) {
     }),
   };
 
+  /** Slack grants what the authorize asked for, so the default answer follows the last flow's mode. */
+  let requestedMode: 'user' | 'bot' = 'user';
+  const defaultGrant = () => (requestedMode === 'bot' ? botAccessResponse() : accessResponse());
+
   const fetchCalls: { url: string; init?: RequestInit }[] = [];
   const fetchStub = mock(async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     fetchCalls.push({ url, init });
     if (url.startsWith('https://slack.com/api/oauth.v2.access')) {
-      return Response.json(opts.slackResponses?.access ? opts.slackResponses.access() : accessResponse());
+      return Response.json(opts.slackResponses?.access ? opts.slackResponses.access() : defaultGrant());
     }
     if (url.startsWith('https://slack.com/api/users.info')) {
       return Response.json(
@@ -212,6 +230,7 @@ function makeHarness(opts: HarnessOptions = {}) {
   }
 
   async function start(body: Record<string, unknown> = { entry: 'ui', returnTo: '/instances' }) {
+    requestedMode = body.mode === 'bot' ? 'bot' : 'user';
     const { res, text } = await request('/slack/oauth/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -416,7 +435,7 @@ describe('POST /slack/oauth/start', () => {
     ]);
   });
 
-  test('with settings from the env fallback returns an authorize URL with scope, user_scope, redirect_uri and a signed state', async () => {
+  test('with settings from the env fallback returns a user-mode authorize URL with user_scope and no bot scope, redirect_uri and a signed state', async () => {
     for (const s of Object.values(SLACK_APP_SETTINGS)) process.env[s.env] = ALL_SETTINGS[s.key];
     const h = harness({ settings: {} });
     const { res, body } = await h.start();
@@ -425,7 +444,8 @@ describe('POST /slack/oauth/start', () => {
     const url = new URL(body.authorizeUrl);
     expect(url.origin + url.pathname).toBe('https://slack.com/oauth/v2/authorize');
     expect(url.searchParams.get('client_id')).toBe(CLIENT_ID);
-    expect(url.searchParams.get('scope')).toContain('chat:write');
+    // No bot scope: a personal install must not add the app's bot user to the workspace.
+    expect(url.searchParams.has('scope')).toBe(false);
     expect(url.searchParams.get('user_scope')).toContain('search:read');
     expect(url.searchParams.get('redirect_uri')).toBe(REDIRECT_URL);
     expect(verifyState(url.searchParams.get('state') ?? '', CLIENT_SECRET)).toBe(body.nonce);
@@ -433,10 +453,12 @@ describe('POST /slack/oauth/start', () => {
     expect(Date.parse(body.expiresAt)).toBeGreaterThan(Date.now());
   });
 
-  test('bot mode requests no user_scope', async () => {
+  test('bot mode requests the bot scopes and no user_scope', async () => {
     const h = harness();
     const { body } = await h.start({ entry: 'cli', mode: 'bot' });
-    expect(new URL(body.authorizeUrl).searchParams.has('user_scope')).toBe(false);
+    const url = new URL(body.authorizeUrl);
+    expect(url.searchParams.get('scope')).toContain('chat:write');
+    expect(url.searchParams.has('user_scope')).toBe(false);
   });
 
   test('rejects a returnTo outside the allowlist and an invalid entry', async () => {
@@ -455,7 +477,7 @@ describe('POST /slack/oauth/start', () => {
 // ---------------------------------------------------------------------------
 
 describe('GET /api/v2/slack/oauth/callback', () => {
-  test('happy path: creates and connects the instance and redirects with exactly slack=<nonce>', async () => {
+  test('happy path: a user-only grant creates and connects a bot-less instance and redirects with exactly slack=<nonce>', async () => {
     const h = harness();
     const { body, cb } = await install(h);
 
@@ -473,6 +495,8 @@ describe('GET /api/v2/slack/oauth/callback', () => {
     expect(form.get('code')).toBe('code-123');
     expect(form.get('redirect_uri')).toBe(REDIRECT_URL);
     expect(form.get('client_id')).toBe(CLIENT_ID);
+    // The name lookup runs on the person's own token: there is no other.
+    expect(new Headers(h.fetchCalls[1]?.init?.headers).get('authorization')).toBe(`Bearer ${USER_TOKEN}`);
 
     expect(h.calls).toEqual({ create: 1, update: 0, connect: 1, transactions: 0 });
     const row = h.rows[0];
@@ -483,23 +507,24 @@ describe('GET /api/v2/slack/oauth/callback', () => {
       slackUserId: 'U0123456789',
       slackAuthMode: 'user',
       slackConnectionMethod: 'oauth',
-      slackBotToken: BOT_TOKEN,
+      slackBotToken: null,
       slackUserToken: USER_TOKEN,
       slackAppToken: APP_TOKEN,
       slackSigningSecret: SIGNING_SECRET,
       isActive: true,
     });
 
-    // The same options POST /instances/:id/connect hands the plugin.
+    // The same options POST /instances/:id/connect hands the plugin — with no
+    // bot token among them.
     expect(h.connectOptions[0]).toMatchObject({
-      token: BOT_TOKEN,
-      botToken: BOT_TOKEN,
       userToken: USER_TOKEN,
       authMode: 'user',
       appToken: APP_TOKEN,
       signingSecret: SIGNING_SECRET,
       forceNewQr: false,
     });
+    expect(h.connectOptions[0]).not.toHaveProperty('token');
+    expect(h.connectOptions[0]).not.toHaveProperty('botToken');
 
     // The outcome is read once through the authenticated result endpoint.
     const first = await h.result(body.nonce);
@@ -625,12 +650,53 @@ describe('GET /api/v2/slack/oauth/callback', () => {
   });
 
   test('a user-mode grant without a user token is an error, not a bot instance', async () => {
-    const h = harness({
-      slackResponses: { access: () => accessResponse({ authed_user: { id: 'U0123456789' } }) },
-    });
+    // A bot token and no user token: the flow asked for the person, so no instance.
+    const h = harness({ slackResponses: { access: () => botAccessResponse() } });
     const { body } = await install(h);
     expect(h.rows).toEqual([]);
     expect((await h.result(body.nonce)).body).toMatchObject({ status: 'error', code: 'SLACK_USER_TOKEN_MISSING' });
+  });
+
+  test('a bot token Slack returns to a user-mode flow is neither stored nor connected', async () => {
+    const h = harness({
+      slackResponses: {
+        access: () => accessResponse({ access_token: BOT_TOKEN, token_type: 'bot', bot_user_id: 'UBOT0000001' }),
+      },
+    });
+    const { body } = await install(h);
+
+    expect((await h.result(body.nonce)).body).toEqual({ status: 'done', instanceId: h.rows[0]?.id });
+    expect(h.rows[0]).toMatchObject({ slackAuthMode: 'user', slackBotToken: null, slackUserToken: USER_TOKEN });
+    expect(h.connectOptions[0]).not.toHaveProperty('token');
+    expect(h.connectOptions[0]).not.toHaveProperty('botToken');
+    expect(new Headers(h.fetchCalls[1]?.init?.headers).get('authorization')).toBe(`Bearer ${USER_TOKEN}`);
+  });
+
+  test('a bot-mode grant without a bot token fails the exchange and saves no row', async () => {
+    const h = harness({ slackResponses: { access: () => botAccessResponse({ access_token: undefined }) } });
+    const { body } = await install(h, { entry: 'cli', mode: 'bot' });
+
+    expect(h.rows).toEqual([]);
+    expect(h.calls.connect).toBe(0);
+    expect((await h.result(body.nonce)).body).toMatchObject({
+      status: 'error',
+      code: 'SLACK_OAUTH_EXCHANGE_FAILED',
+      message: 'Slack returned no workspace bot token',
+    });
+  });
+
+  test('re-authorizing a personal instance drops the bot token an earlier install stored', async () => {
+    const h = harness();
+    await install(h);
+    // What a personal install saved before it stopped requesting bot scopes.
+    Object.assign(h.rows[0] ?? {}, { slackBotToken: 'xoxb-earlier-install' });
+
+    await install(h);
+
+    expect(h.rows).toHaveLength(1);
+    expect(h.calls.update).toBe(1);
+    expect(h.rows[0]).toMatchObject({ slackBotToken: null, slackUserToken: USER_TOKEN });
+    expect(h.connectOptions[1]).not.toHaveProperty('botToken');
   });
 
   test('a second callback for the same (team, user) updates the same row and connects again', async () => {
@@ -672,9 +738,11 @@ describe('GET /api/v2/slack/oauth/callback', () => {
       slackAuthMode: 'bot',
       slackTeamId: 'T0123456789',
       slackUserId: null,
+      slackBotToken: BOT_TOKEN,
       slackUserToken: null,
       slackConnectionMethod: 'oauth',
     });
+    expect(h.connectOptions[0]).toMatchObject({ token: BOT_TOKEN, botToken: BOT_TOKEN, authMode: 'bot' });
     expect(h.connectOptions[0]).not.toHaveProperty('userToken');
     // No users.info in bot mode: the name comes from the workspace.
     expect(h.fetchCalls.map((f) => new URL(f.url).pathname)).toEqual(['/api/oauth.v2.access']);

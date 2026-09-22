@@ -50,6 +50,7 @@ import { and, eq, gte, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { sentryEnabled } from '../../lib/sentry-scrub';
+import { selectSlackDownloadToken } from '../../plugins/media-processor';
 import { optionalDateParam } from '../../schemas/date-query';
 import { sendCloseContactSchema, sendHandoffSchema } from '../../schemas/openapi/messages';
 import type { Services } from '../../services';
@@ -873,12 +874,16 @@ async function resolveMessageFromRef(
   return found;
 }
 
-function buildMediaDownloadFetchOptions(instance: Record<string, unknown>): MediaFetchOptions | undefined {
+function buildMediaDownloadFetchOptions(
+  instance: Record<string, unknown>,
+  mediaUrl: string,
+): MediaFetchOptions | undefined {
   if (instance.channel !== 'slack') return undefined;
-  const slackBotToken = typeof instance.slackBotToken === 'string' ? instance.slackBotToken : undefined;
-  if (!slackBotToken) return undefined;
+  // The stored mediaUrl is tenant-controlled: the token goes only to Slack's hosts.
+  const token = selectSlackDownloadToken(instance, mediaUrl);
+  if (!token) return undefined;
   return {
-    headers: { Authorization: `Bearer ${slackBotToken}` },
+    headers: { Authorization: `Bearer ${token}` },
     preserveAuthRedirectHostSuffixes: ['slack.com'],
   };
 }
@@ -957,7 +962,7 @@ messagesRoutes.post('/media/download', zValidator('json', messageRefSchema), asy
         mediaUrl,
         message.mediaMimeType ?? undefined,
         message.platformTimestamp ?? undefined,
-        buildMediaDownloadFetchOptions(instance as Record<string, unknown>),
+        buildMediaDownloadFetchOptions(instance as Record<string, unknown>, mediaUrl),
         // `mediaUrl` came off a stored message, i.e. a tenant-controlled
         // payload, so this download is tenant-controlled egress: pass the
         // REQUEST's tenant so the `OMNI_MEDIA_URL_GUARD=off` escape hatch is
@@ -3296,5 +3301,8 @@ messagesRoutes.delete('/:id/star', zValidator('json', starMessageSchema), async 
     data: { messageId, starred: false },
   });
 });
+
+/** Test-only access to how the on-demand media download authenticates. */
+export const __test__ = { buildMediaDownloadFetchOptions };
 
 export { messagesRoutes };

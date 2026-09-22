@@ -480,6 +480,32 @@ function slackError(code: string, message: string): string {
   return `${code}: ${message}`;
 }
 
+type SlackGrantTokens =
+  | { ok: true; botToken?: string; userToken?: string }
+  | { ok: false; code: string; message: string };
+
+/**
+ * The tokens a grant contributes, by the mode the flow asked for. Bot mode
+ * needs the workspace bot token. User mode needs the person's token and takes
+ * nothing else: its authorize requested no bot scope, and a bot token Slack
+ * returns anyway is dropped, so a personal install never stores a bot.
+ */
+function grantTokens(mode: SlackOAuthMode, access: SlackOAuthAccess): SlackGrantTokens {
+  if (mode === 'bot') {
+    return access.access_token
+      ? { ok: true, botToken: access.access_token }
+      : { ok: false, code: 'SLACK_OAUTH_EXCHANGE_FAILED', message: 'Slack returned no workspace bot token' };
+  }
+  const userToken = access.authed_user.access_token;
+  return userToken
+    ? { ok: true, userToken }
+    : {
+        ok: false,
+        code: 'SLACK_USER_TOKEN_MISSING',
+        message: 'Slack granted no user token; the user scopes were not authorized',
+      };
+}
+
 /** Exchange the code, then upsert + connect under the pending record's tenant. */
 async function completeSlackInstall(
   deps: CallbackDeps,
@@ -510,20 +536,17 @@ async function completeSlackInstall(
     );
   }
   const teamId = access.team?.id;
-  if (!teamId || !access.access_token) {
-    return errorOutcome(tenantId, 'SLACK_OAUTH_EXCHANGE_FAILED', 'Slack returned no workspace bot token');
+  if (!teamId) {
+    return errorOutcome(tenantId, 'SLACK_OAUTH_EXCHANGE_FAILED', 'Slack returned no workspace id');
   }
-  const userToken = access.authed_user.access_token;
-  if (pending.mode === 'user' && !userToken) {
-    return errorOutcome(
-      tenantId,
-      'SLACK_USER_TOKEN_MISSING',
-      'Slack granted no user token; the user scopes were not authorized',
-    );
-  }
+  const tokens = grantTokens(pending.mode, access);
+  if (!tokens.ok) return errorOutcome(tenantId, tokens.code, tokens.message);
 
-  const displayName =
-    pending.mode === 'user' ? await fetchSlackUserDisplayName(access.access_token, access.authed_user.id) : undefined;
+  // User mode names the instance after the person, looked up with their own
+  // token — the only token that mode holds.
+  const displayName = tokens.userToken
+    ? await fetchSlackUserDisplayName(tokens.userToken, access.authed_user.id)
+    : undefined;
 
   const input: UpsertSlackOAuthInstanceInput = {
     mode: pending.mode,
@@ -531,8 +554,8 @@ async function completeSlackInstall(
     teamName: access.team?.name,
     userId: access.authed_user.id,
     displayName,
-    botToken: access.access_token,
-    userToken,
+    botToken: tokens.botToken,
+    userToken: tokens.userToken,
     appToken: credentials.appToken,
     signingSecret: credentials.signingSecret,
   };

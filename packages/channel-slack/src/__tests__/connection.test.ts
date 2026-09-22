@@ -22,6 +22,9 @@ import { SlackError, SlackErrorCode } from '../types';
 type Listener = (args: Record<string, unknown>) => Promise<void>;
 const messageListeners: Listener[] = [];
 
+/** The token of every WebClient built, so a test can prove no bot client was minted. */
+const webClientTokens: (string | undefined)[] = [];
+
 mock.module('@slack/bolt', () => {
   class MockApp {
     client = { auth: { test: async () => ({ ok: true }) } };
@@ -61,6 +64,7 @@ mock.module('@slack/web-api', () => {
     users?: { info: (args: { user: string }) => Promise<Record<string, unknown>> };
     constructor(token?: string, _opts?: Record<string, unknown>) {
       this.token = token;
+      webClientTokens.push(token);
       // 'xoxp-display' is the one human whose Slack profile carries a display
       // name that differs from the username, so the name the instance presents
       // must come from users.info. No other fake has `users`, so every other
@@ -78,11 +82,13 @@ mock.module('@slack/web-api', () => {
         // installs of one workspace get DISTINCT acting users: 'xoxp-ana' is
         // U_ANA, 'xoxp-human' is U_HUMAN. 'xoxp-nouser' is the token whose
         // auth.test comes back WITHOUT a user_id — the user-mode failure case.
+        // 'xoxp-carla@T_SHARED' also names its workspace, as a real user
+        // token's auth.test does; a bot-less connect has no other source.
         test: async () => {
           if (this.token?.startsWith('xoxp-nouser')) return { ok: true };
           if (this.token?.startsWith('xoxp-')) {
-            const name = this.token.slice('xoxp-'.length);
-            return { ok: true, user_id: `U_${name.toUpperCase()}`, user: name };
+            const [name = '', teamId] = this.token.slice('xoxp-'.length).split('@');
+            return { ok: true, user_id: `U_${name.toUpperCase()}`, user: name, ...(teamId ? { team_id: teamId } : {}) };
           }
           return {
             ok: true,
@@ -375,7 +381,7 @@ const noopLogger = { debug: noop, info: noop, warn: noop, error: noop, child: ()
 /** Plugin internals these tests seed or inspect. */
 interface SharedInternals {
   receivers: Map<string, { isRunning: boolean; attachments: ReadonlyMap<string, unknown> }>;
-  attachments: Map<string, { attachedAt: number; actingUserId?: string; teamId: string }>;
+  attachments: Map<string, { attachedAt: number; actingUserId?: string; teamId: string; botToken?: string }>;
   inboundHandlers: Map<string, (msg: Record<string, unknown>) => Promise<void>>;
 }
 
@@ -592,5 +598,81 @@ describe('SlackPlugin.connect — user mode acting-user invariant (#889)', () =>
     expect(internals.attachments.has('inst-user')).toBe(false);
     expect(internals.receivers.size).toBe(0);
     expect((await plugin.getStatus('inst-user')).state).toBe('error');
+  });
+
+  it('refuses a user token from another workspace than the bot token', async () => {
+    const { plugin, internals } = await makeSharedPlugin();
+
+    // The bot token answers for T_SHARED; this person's token for T_OTHER.
+    const err = await plugin.connect('inst-dora', userConfig('inst-dora', 'xoxp-dora@T_OTHER')).then(
+      () => null,
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(SlackError);
+    expect((err as SlackError).channelCode).toBe(SlackErrorCode.CONNECTION_FAILED);
+    expect((err as SlackError).message).toContain('T_OTHER');
+    expect(internals.attachments.has('inst-dora')).toBe(false);
+    expect(internals.receivers.size).toBe(0);
+  });
+});
+
+describe('SlackPlugin.connect — bot-less user mode (one-click OAuth)', () => {
+  /** What a one-click user-mode install hands the plugin: no bot token at all. */
+  function botlessConfig(instanceId: string, userToken: string): InstanceConfig {
+    return {
+      instanceId,
+      credentials: {},
+      options: { appToken: APP_TOKEN, authMode: 'user', userToken },
+    };
+  }
+
+  it('connects on the user token alone, builds no xoxb client and takes the workspace from auth.test', async () => {
+    const { plugin, internals } = await makeSharedPlugin();
+    webClientTokens.length = 0;
+
+    await plugin.connect('inst-carla', botlessConfig('inst-carla', 'xoxp-carla@T_SHARED'));
+
+    const attachment = internals.attachments.get('inst-carla');
+    expect(attachment).toMatchObject({ teamId: 'T_SHARED', actingUserId: 'U_CARLA' });
+    expect(attachment?.botToken).toBeUndefined();
+    expect(webClientTokens).toContain('xoxp-carla@T_SHARED');
+    expect(webClientTokens.filter((token) => token?.startsWith('xoxb-'))).toEqual([]);
+    expect((await plugin.getStatus('inst-carla')).state).toBe('connected');
+    expect(await plugin.getProfile('inst-carla')).toMatchObject({ name: 'carla', ownerIdentifier: 'U_CARLA' });
+
+    // Its workspace's events reach it when Slack authorizes them for its human.
+    const reached = recordInbound(internals, ['inst-carla']);
+    await deliverTeamMessage('T_SHARED', ['U_CARLA']);
+    expect(reached).toEqual(['inst-carla']);
+  });
+
+  it('refuses to connect when the user token names no workspace', async () => {
+    const { plugin, internals } = await makeSharedPlugin();
+
+    const err = await plugin.connect('inst-carla', botlessConfig('inst-carla', 'xoxp-carla')).then(
+      () => null,
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(SlackError);
+    expect((err as SlackError).channelCode).toBe(SlackErrorCode.CONNECTION_FAILED);
+    expect((err as SlackError).message).toContain('team_id');
+    expect(internals.attachments.has('inst-carla')).toBe(false);
+    expect(internals.receivers.size).toBe(0);
+  });
+
+  it('still refuses a bot-mode connect without a bot token', async () => {
+    const { plugin } = await makeSharedPlugin();
+
+    const err = await plugin
+      .connect('inst-bot', { instanceId: 'inst-bot', credentials: {}, options: { appToken: APP_TOKEN } })
+      .then(
+        () => null,
+        (e: unknown) => e,
+      );
+
+    expect(err).toBeInstanceOf(SlackError);
+    expect((err as SlackError).channelCode).toBe(SlackErrorCode.INVALID_TOKEN);
   });
 });

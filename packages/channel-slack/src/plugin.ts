@@ -141,7 +141,7 @@ function resolveSlackTokens(
   rawOptions: Record<string, unknown>,
   rawCredentials: Record<string, unknown>,
 ): {
-  botToken: string;
+  botToken?: string;
   userToken?: string;
   authMode: SlackAuthMode;
   appToken?: string;
@@ -159,10 +159,11 @@ function resolveSlackTokens(
   const signingSecret = slackConfig.signingSecret ?? (rawCredentials.signingSecret as string | undefined);
   const mode: SlackConnectionMode = slackConfig.mode ?? 'socket';
 
-  // The bot token stays mandatory even in user mode: Bolt authenticates the
-  // socket with it, and it is the fallback for calls the user token lacks
-  // scope for. User mode changes who ACTS, not who connects.
-  if (!botToken) {
+  // Only user mode may run without a bot token. The receiver's socket is
+  // opened by the app-level token (or the signing secret in HTTP mode), and a
+  // user-mode instance installed through one-click OAuth has no bot at all —
+  // it acts, sends and reads with the person's token alone.
+  if (!botToken && authMode !== 'user') {
     throw new SlackError(SlackErrorCode.INVALID_TOKEN, 'botToken (xoxb-...) is required');
   }
   if (authMode === 'user' && !userToken) {
@@ -212,6 +213,29 @@ function readConnectOverrides(rawOptions: Record<string, unknown>): SlackConnect
 }
 
 /**
+ * The workspace an attachment belongs to: the bot's when there is a bot, the
+ * person's otherwise (a bot-less one-click install). Events are routed by this
+ * id, so an attachment without one — or whose two tokens name different
+ * workspaces — is refused rather than attached to the wrong team.
+ */
+function resolveAttachmentTeamId(botTeamId: string | undefined, userTeamId: string | undefined): string {
+  if (botTeamId && userTeamId && botTeamId !== userTeamId) {
+    throw new SlackError(
+      SlackErrorCode.CONNECTION_FAILED,
+      `The bot token belongs to workspace ${botTeamId} but the user token to ${userTeamId}; both must come from the same workspace`,
+    );
+  }
+  const teamId = botTeamId ?? userTeamId;
+  if (!teamId) {
+    throw new SlackError(
+      SlackErrorCode.CONNECTION_FAILED,
+      'auth.test returned no team_id for the user token; cannot tell which workspace this instance belongs to',
+    );
+  }
+  return teamId;
+}
+
+/**
  * The attachment fields that decide WHO an instance says it is — the narrow
  * input {@link resolvePresentedIdentity} needs, so callers (and tests) never
  * have to build a whole {@link SlackAttachment} to ask the question.
@@ -221,10 +245,14 @@ export type SlackIdentitySource = Pick<
   'authMode' | 'actingUserId' | 'actingUserName' | 'botUserId' | 'botName'
 >;
 
-/** The identity an instance presents: what status, events and profile report. */
+/**
+ * The identity an instance presents: what status, events and profile report.
+ * `ownerIdentifier` is absent only for an attachment with neither an acting
+ * human nor a bot, which the connect path never builds.
+ */
 export interface SlackPresentedIdentity {
   profileName?: string;
-  ownerIdentifier: string;
+  ownerIdentifier?: string;
 }
 
 /**
@@ -239,7 +267,8 @@ export interface SlackPresentedIdentity {
  * keeps the bot identity exactly as before.
  *
  * The bot identity is not lost in user mode — `getProfile` still exposes it
- * through `platformMetadata` for operators.
+ * through `platformMetadata` for operators, when the instance has a bot at all
+ * (a one-click OAuth install in user mode has none).
  */
 export function resolvePresentedIdentity(attachment: SlackIdentitySource): SlackPresentedIdentity {
   if (attachment.authMode === 'user' && attachment.actingUserId) {
@@ -592,9 +621,10 @@ export class SlackPlugin extends BaseChannelPlugin {
     // the receiver's own bot client instead; before the attach the team id is
     // still unknown, so the client is taken by bot token, and the attach
     // reuses that very object — afterwards `receiver.botClientFor(teamId)` is
-    // this same client.
-    const botClient = receiver.clientForBotToken(options.botToken);
-    const identity = await resolveWorkspaceIdentity(botClient);
+    // this same client. A bot-less user-mode instance mints no bot client at
+    // all: its identity, workspace included, comes from the user token.
+    const botClient = options.botToken ? receiver.clientForBotToken(options.botToken) : undefined;
+    const identity = botClient ? await resolveWorkspaceIdentity(botClient) : undefined;
     const { actingClient, userClient } = buildActingClients(options, botClient);
 
     // User mode (#889) MUST NOT attach or start without a resolved acting-user
@@ -603,8 +633,9 @@ export class SlackPlugin extends BaseChannelPlugin {
     // answers the operator's OWN messages. Fail fast rather than attach broken.
     let actingUserId: string | undefined;
     let actingUserName: string | undefined;
+    let actingTeamId: string | undefined;
     if (userClient) {
-      ({ actingUserId, actingUserName } = await this.resolveActingUserId(userClient));
+      ({ actingUserId, actingUserName, teamId: actingTeamId } = await this.resolveActingUserId(userClient));
       if (!actingUserId) {
         throw new SlackError(
           SlackErrorCode.CONNECTION_FAILED,
@@ -615,16 +646,16 @@ export class SlackPlugin extends BaseChannelPlugin {
 
     return {
       instanceId,
-      teamId: identity.teamId,
+      teamId: resolveAttachmentTeamId(identity?.teamId, actingTeamId),
       authMode: options.authMode ?? 'bot',
       actingClient,
       userClient,
       actingUserId,
       actingUserName,
-      botUserId: identity.botUserId,
-      botId: identity.botId,
-      botToken: options.botToken,
-      botName: identity.botName,
+      botUserId: identity?.botUserId,
+      botId: identity?.botId,
+      botToken: botClient ? options.botToken : undefined,
+      botName: identity?.botName,
       config,
       dedupeCache: caches.dedupeCache,
       debouncer: caches.debouncer,
@@ -648,13 +679,13 @@ export class SlackPlugin extends BaseChannelPlugin {
   /**
    * Resolve the authorizing human's identity from the user token (#889).
    *
-   * `auth.test` carries the id and the username; the name the instance
-   * presents is the profile's display name when Slack has one
+   * `auth.test` carries the id, the username and the workspace; the name the
+   * instance presents is the profile's display name when Slack has one
    * ({@link resolveActingUserName}), with the username as the fallback.
    */
   private async resolveActingUserId(
     userClient: WebClient,
-  ): Promise<{ actingUserId?: string; actingUserName?: string }> {
+  ): Promise<{ actingUserId?: string; actingUserName?: string; teamId?: string }> {
     try {
       const auth = await userClient.auth.test();
       const actingUserId = auth.user_id ?? undefined;
@@ -663,7 +694,7 @@ export class SlackPlugin extends BaseChannelPlugin {
         ? await resolveActingUserName(userClient, actingUserId, username, this.logger)
         : username;
       this.logger.info('Acting user identity resolved', { actingUserId, actingUser: actingUserName });
-      return { actingUserId, actingUserName };
+      return { actingUserId, actingUserName, teamId: auth.team_id ?? undefined };
     } catch (error) {
       this.logger.warn('Failed to resolve the acting user identity from the user token', {
         error: String(error),
@@ -1557,15 +1588,19 @@ export class SlackPlugin extends BaseChannelPlugin {
     // but this used to look only at slackConfigs.botToken. An instance
     // configured through credentials therefore returned an empty history with
     // nothing but a warning — a silent hole in per_thread context, not an
-    // error anyone would notice. attachment.botToken is whatever was resolved,
+    // error anyone would notice. The attachment holds whatever was resolved,
     // so it is populated either way.
-    const botToken = attachment.botToken;
+    //
+    // Files download as the API's media download does (selectSlackDownloadToken):
+    // as the person in user mode — the bot need not be in the channel, and a
+    // one-click install has no bot at all — and as the bot otherwise.
+    const downloadToken = (attachment.authMode === 'user' && attachment.userClient?.token) || attachment.botToken;
 
     const limit = options.limit ?? 200;
     // Always fetch fresh history — the thread-starter cache uses a long TTL (6h)
     // designed for thread root resolution, not full conversation history. Using it
     // here would return stale data missing newer replies.
-    const messages = await this.paginateThreadHistory(attachment, channelId, threadTs, botUserId, botToken, limit);
+    const messages = await this.paginateThreadHistory(attachment, channelId, threadTs, botUserId, downloadToken, limit);
 
     return { totalFetched: messages.length, messages };
   }
@@ -1576,7 +1611,7 @@ export class SlackPlugin extends BaseChannelPlugin {
     channelId: string,
     threadTs: string,
     botUserId: string | undefined,
-    botToken: string,
+    downloadToken: string | undefined,
     maxMessages: number,
   ): Promise<HistorySyncMessage[]> {
     const messages: HistorySyncMessage[] = [];
@@ -1591,7 +1626,7 @@ export class SlackPlugin extends BaseChannelPlugin {
       });
 
       for (const msg of (response.messages ?? []) as Record<string, unknown>[]) {
-        const result = await this.buildHistorySyncMessage(msg, channelId, botUserId, botToken, attachment.botId);
+        const result = await this.buildHistorySyncMessage(msg, channelId, botUserId, downloadToken, attachment.botId);
         if (result) messages.push(result);
         if (messages.length >= maxMessages) break;
       }
@@ -1605,16 +1640,16 @@ export class SlackPlugin extends BaseChannelPlugin {
   /** Download a Slack private file to a temp path and return its MIME type + local path. */
   private async downloadSlackMediaToTemp(
     file: Record<string, unknown>,
-    botToken: string,
+    downloadToken: string | undefined,
     ts: string,
   ): Promise<{ mimeType: string; localPath: string | undefined }> {
     const mimeType = (file.mimetype as string) ?? 'application/octet-stream';
     const urlPrivate = (file.url_private_download as string | undefined) ?? (file.url_private as string | undefined);
 
-    if (!urlPrivate) return { mimeType, localPath: undefined };
+    if (!urlPrivate || !downloadToken) return { mimeType, localPath: undefined };
 
     try {
-      const { buffer } = await downloadSlackFile(urlPrivate, botToken, this.logger);
+      const { buffer } = await downloadSlackFile(urlPrivate, downloadToken, this.logger);
       const ext = (mimeType.split('/')[1]?.split(';')[0] ?? 'bin').replace(/[^a-z0-9]/gi, '');
       const tmpPath = join(tmpdir(), `omni-slack-hist-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`);
       await writeFile(tmpPath, buffer);
@@ -1630,7 +1665,7 @@ export class SlackPlugin extends BaseChannelPlugin {
     msg: Record<string, unknown>,
     channelId: string,
     botUserId: string | undefined,
-    botToken: string,
+    downloadToken: string | undefined,
     ownBotId?: string,
   ): Promise<HistorySyncMessage | null> {
     const userId = msg.user as string | undefined;
@@ -1645,7 +1680,7 @@ export class SlackPlugin extends BaseChannelPlugin {
     if (files && files.length > 0) {
       const { mimeType, localPath } = await this.downloadSlackMediaToTemp(
         files[0] as Record<string, unknown>,
-        botToken,
+        downloadToken,
         ts,
       );
       return {

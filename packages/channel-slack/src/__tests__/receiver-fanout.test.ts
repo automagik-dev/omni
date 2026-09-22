@@ -271,6 +271,16 @@ function makeAttachment(instanceId: string, overrides: Partial<SlackAttachment> 
 const userAttachment = (instanceId: string, actingUserId: string): SlackAttachment =>
   makeAttachment(instanceId, { authMode: 'user', actingUserId });
 
+/** A one-click personal install: user mode on the person's own token, with no bot at all. */
+const botlessAttachment = (instanceId: string, actingUserId: string): SlackAttachment =>
+  makeAttachment(instanceId, {
+    authMode: 'user',
+    actingUserId,
+    botToken: undefined,
+    botUserId: undefined,
+    botId: undefined,
+  });
+
 interface AuthorizationsProbe {
   /** Every `event_context` the receiver looked up, in order. */
   calls: string[];
@@ -364,6 +374,53 @@ describe('shared-receiver fan-out', () => {
 
     expect(spy.calls).toHaveLength(1);
     expect(probe.calls).toEqual([]);
+  });
+
+  it('a lone bot-less attachment receives only events its own human is authorized for', async () => {
+    const { internals, receiver, app } = await makePlugin();
+    const probe = installAuthorizationsProbe(receiver, async () => [
+      { team_id: TEAM, user_id: BOT_USER, is_bot: true },
+    ]);
+
+    const ana = botlessAttachment('inst-ana', HUMAN_A);
+    receiver.attach(ana);
+    const spy = inboundSpy();
+    internals.inboundHandlers.set(ana.instanceId, spy.handler);
+
+    // The app's bot from an earlier install is still in the workspace: another
+    // member's DM to that bot is authorized for the bot alone, never for Ana.
+    await app.messageListeners[0]?.({
+      message: {
+        type: 'message',
+        channel: 'D_BOT',
+        channel_type: 'im',
+        user: 'U_OUTSIDER',
+        ts: '1000.0101',
+        text: 'for the bot only',
+      },
+      body: envelope('EC-bot-dm', [{ team_id: TEAM, user_id: BOT_USER, is_bot: true }]),
+    });
+    expect(spy.calls).toHaveLength(0);
+    expect(probe.calls).toEqual(['EC-bot-dm']);
+
+    // An event both see: the envelope names the bot, the lookup names Ana too.
+    probe.answer = async () => [
+      { team_id: TEAM, user_id: BOT_USER, is_bot: true },
+      { team_id: TEAM, user_id: HUMAN_A, is_bot: false },
+    ];
+    await app.messageListeners[0]?.({
+      message: channelMessage('U_OUTSIDER', '1000.0102'),
+      body: envelope('EC-shared', [{ team_id: TEAM, user_id: BOT_USER, is_bot: true }]),
+    });
+    expect(spy.calls).toHaveLength(1);
+
+    // An envelope that already names Ana needs no lookup at all.
+    await app.messageListeners[0]?.({
+      message: channelMessage('U_OUTSIDER', '1000.0103'),
+      body: envelope('EC-own', [{ team_id: TEAM, user_id: HUMAN_A, is_bot: false }]),
+    });
+    expect(spy.calls).toHaveLength(2);
+    expect(probe.calls).toEqual(['EC-bot-dm', 'EC-shared']);
   });
 
   it('two user-mode attachments: a channel event authorizing both reaches each handler once, on one lookup', async () => {
