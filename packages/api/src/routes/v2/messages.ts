@@ -874,9 +874,13 @@ async function resolveMessageFromRef(
   return found;
 }
 
-function buildMediaDownloadFetchOptions(instance: Record<string, unknown>): MediaFetchOptions | undefined {
+function buildMediaDownloadFetchOptions(
+  instance: Record<string, unknown>,
+  mediaUrl: string,
+): MediaFetchOptions | undefined {
   if (instance.channel !== 'slack') return undefined;
-  const token = selectSlackDownloadToken(instance);
+  // The stored mediaUrl is tenant-controlled: the token goes only to Slack's hosts.
+  const token = selectSlackDownloadToken(instance, mediaUrl);
   if (!token) return undefined;
   return {
     headers: { Authorization: `Bearer ${token}` },
@@ -958,7 +962,7 @@ messagesRoutes.post('/media/download', zValidator('json', messageRefSchema), asy
         mediaUrl,
         message.mediaMimeType ?? undefined,
         message.platformTimestamp ?? undefined,
-        buildMediaDownloadFetchOptions(instance as Record<string, unknown>),
+        buildMediaDownloadFetchOptions(instance as Record<string, unknown>, mediaUrl),
         // `mediaUrl` came off a stored message, i.e. a tenant-controlled
         // payload, so this download is tenant-controlled egress: pass the
         // REQUEST's tenant so the `OMNI_MEDIA_URL_GUARD=off` escape hatch is

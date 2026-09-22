@@ -15,6 +15,9 @@ import { type MediaProcessorContext, __test__ } from '../media-processor';
 
 const { buildFetchOptions } = __test__;
 
+/** An inbound Slack `url_private_download`, the URL these rows download. */
+const SLACK_FILE_URL = 'https://files.slack.com/files-pri/T0123-F0123/download/photo.png';
+
 /** A ctx whose only reachable dependency is the instance lookup. */
 function ctxReturning(instance: Record<string, unknown>): MediaProcessorContext {
   return {
@@ -31,6 +34,7 @@ describe('buildFetchOptions — Slack download token selection', () => {
     const options = await buildFetchOptions(
       ctxReturning({ slackAuthMode: 'user', slackUserToken: 'xoxp-test', slackBotToken: 'xoxb-test' }),
       'instance-1',
+      SLACK_FILE_URL,
       'slack',
     );
     expect(authorizationOf(options)).toBe('Bearer xoxp-test');
@@ -40,6 +44,7 @@ describe('buildFetchOptions — Slack download token selection', () => {
     const options = await buildFetchOptions(
       ctxReturning({ slackAuthMode: 'user', slackUserToken: 'xoxp-test', slackBotToken: null }),
       'instance-1',
+      SLACK_FILE_URL,
       'slack',
     );
     expect(authorizationOf(options)).toBe('Bearer xoxp-test');
@@ -49,6 +54,7 @@ describe('buildFetchOptions — Slack download token selection', () => {
     const options = await buildFetchOptions(
       ctxReturning({ slackAuthMode: 'user', slackUserToken: null, slackBotToken: 'xoxb-test' }),
       'instance-1',
+      SLACK_FILE_URL,
       'slack',
     );
     expect(authorizationOf(options)).toBe('Bearer xoxb-test');
@@ -58,6 +64,7 @@ describe('buildFetchOptions — Slack download token selection', () => {
     const options = await buildFetchOptions(
       ctxReturning({ slackAuthMode: 'user', slackUserToken: '', slackBotToken: 'xoxb-test' }),
       'instance-1',
+      SLACK_FILE_URL,
       'slack',
     );
     expect(authorizationOf(options)).toBe('Bearer xoxb-test');
@@ -67,18 +74,29 @@ describe('buildFetchOptions — Slack download token selection', () => {
     const options = await buildFetchOptions(
       ctxReturning({ slackAuthMode: 'bot', slackUserToken: 'xoxp-test', slackBotToken: 'xoxb-test' }),
       'instance-1',
+      SLACK_FILE_URL,
       'slack',
     );
     expect(authorizationOf(options)).toBe('Bearer xoxb-test');
   });
 
   test('an absent auth mode is untouched — still the bot token', async () => {
-    const options = await buildFetchOptions(ctxReturning({ slackBotToken: 'xoxb-test' }), 'instance-1', 'slack');
+    const options = await buildFetchOptions(
+      ctxReturning({ slackBotToken: 'xoxb-test' }),
+      'instance-1',
+      SLACK_FILE_URL,
+      'slack',
+    );
     expect(authorizationOf(options)).toBe('Bearer xoxb-test');
   });
 
   test('a row with no token at all downloads unauthenticated, as before', async () => {
-    const options = await buildFetchOptions(ctxReturning({ slackAuthMode: 'user' }), 'instance-1', 'slack');
+    const options = await buildFetchOptions(
+      ctxReturning({ slackAuthMode: 'user' }),
+      'instance-1',
+      SLACK_FILE_URL,
+      'slack',
+    );
     expect(options).toBeUndefined();
   });
 
@@ -86,9 +104,29 @@ describe('buildFetchOptions — Slack download token selection', () => {
     const options = await buildFetchOptions(
       ctxReturning({ slackAuthMode: 'user', slackUserToken: 'xoxp-test', slackBotToken: 'xoxb-test' }),
       'instance-1',
+      SLACK_FILE_URL,
       'whatsapp-baileys',
     );
     expect(options).toBeUndefined();
+  });
+
+  test('a URL off the slack.com hosts never gets either token', async () => {
+    const userRow = ctxReturning({ slackAuthMode: 'user', slackUserToken: 'xoxp-test', slackBotToken: 'xoxb-test' });
+    const botRow = ctxReturning({ slackAuthMode: 'bot', slackBotToken: 'xoxb-test' });
+    const offSlack = [
+      'https://slack.com.evil.test/files-pri/photo.png',
+      'https://evilslack.com/files-pri/photo.png',
+      'https://evil.test/photo.png',
+      'https://slack.com@evil.test/photo.png',
+      'http://files.slack.com/files-pri/photo.png',
+      'not a url',
+    ];
+    for (const mediaUrl of offSlack) {
+      expect(await buildFetchOptions(userRow, 'instance-1', mediaUrl, 'slack')).toBeUndefined();
+      expect(await buildFetchOptions(botRow, 'instance-1', mediaUrl, 'slack')).toBeUndefined();
+    }
+    const apex = await buildFetchOptions(botRow, 'instance-1', 'https://slack.com/files-pri/photo.png', 'slack');
+    expect(authorizationOf(apex)).toBe('Bearer xoxb-test');
   });
 
   test('a failed instance lookup falls back to an unauthenticated download', async () => {
@@ -101,6 +139,6 @@ describe('buildFetchOptions — Slack download token selection', () => {
         },
       },
     } as unknown as MediaProcessorContext;
-    expect(await buildFetchOptions(ctx, 'instance-1', 'slack')).toBeUndefined();
+    expect(await buildFetchOptions(ctx, 'instance-1', SLACK_FILE_URL, 'slack')).toBeUndefined();
   });
 });

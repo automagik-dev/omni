@@ -218,6 +218,26 @@ describe('downloadSlackFile', () => {
     expect(result.mimeType).toBe('text/plain; charset=utf-8');
     expect(result.buffer.toString('utf8')).toContain('<html>');
   });
+
+  it('never sends the token to a host outside slack.com, not even on the first request', async () => {
+    const calls: Array<{ url: string; authorization: string | null }> = [];
+    globalThis.fetch = mock(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      calls.push({ url: String(input), authorization: new Headers(init?.headers).get('authorization') });
+      return new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+        status: 200,
+        headers: { 'content-type': 'image/png', 'content-length': '4' },
+      });
+    }) as unknown as typeof fetch;
+
+    await downloadSlackFile(
+      'https://slack.com.evil.test/photo.png',
+      'xoxp-test-token',
+      noopLogger as never,
+      'image/png',
+    );
+
+    expect(calls).toEqual([{ url: 'https://slack.com.evil.test/photo.png', authorization: null }]);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────
