@@ -60,6 +60,16 @@ describe('buildSlackManifest — user scopes', () => {
     expect(manifest.oauth_config.scopes.user).toContain('files:write');
   });
 
+  it('requests files:read so user-mode inbound file downloads work (url_private)', () => {
+    // An inbound attachment is fetched from files.slack.com with an
+    // Authorization header. In user mode the bot user need not be a member of
+    // the channel the file was posted in, so the bot token 403s and the xoxp
+    // token does the download — which it cannot do without files:read.
+    const manifest = buildSlackManifest({ includeUserScopes: true });
+    expect(manifest.oauth_config.scopes.user).toContain('files:read');
+    expect(slackAuthorizeScopes().user_scope.split(',')).toContain('files:read');
+  });
+
   it('requests im:write so DMs can be opened, and subscribes to user events', () => {
     const manifest = buildSlackManifest({ includeUserScopes: true });
     expect(manifest.oauth_config.scopes.user).toContain('im:write');
