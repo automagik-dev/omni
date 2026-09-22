@@ -127,6 +127,17 @@ export interface ChannelCapabilities {
    */
   canCloseContact?: boolean;
 
+  /**
+   * Whether the channel's native close protocol can carry a close event with
+   * no customer-facing text (classify/close without a farewell). When
+   * `POST /messages/send/close-contact` is called without `text`, only
+   * channels declaring this receive the native close event; on every other
+   * channel the route skips the channel send (an empty text message would
+   * otherwise be pushed to the provider) and still runs the channel-agnostic
+   * side effects.
+   */
+  canCloseContactWithoutText?: boolean;
+
   // ─────────────────────────────────────────────────────────────
   // Scheduling, permalinks and pinning (issue #889)
   // ─────────────────────────────────────────────────────────────

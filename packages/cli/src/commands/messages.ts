@@ -522,7 +522,7 @@ export function createMessagesCommand(): Command {
     .requiredOption('--instance <id>', 'Instance ID')
     .requiredOption('--chat <chatId>', 'Chat DB UUID to close')
     .requiredOption('--to <recipient>', 'Recipient phone or platform ID')
-    .requiredOption('--text <text>', 'Farewell message shown to the lead')
+    .option('--text <text>', 'Farewell message shown to the contact (omit to close without a farewell)')
     .requiredOption('--outcome <outcome>', 'Outcome: won | lost | redirected_sac | unqualified | no_response | other')
     .option('--reason <reason>', 'Free-text rationale persisted in close_contact_logs')
     .option('--close-fields <jsonOrPath>', 'Structured BI/CRM payload — inline JSON or path to a JSON file')
@@ -537,7 +537,7 @@ interface CloseContactOptions {
   instance: string;
   chat: string;
   to: string;
-  text: string;
+  text?: string;
   outcome: string;
   reason?: string;
   closeFields?: string;
@@ -598,9 +598,9 @@ async function buildCloseContactBody(options: CloseContactOptions): Promise<Reco
     instanceId,
     chatId: resolvedChatId,
     to: options.to,
-    text: options.text,
     outcome: options.outcome,
   };
+  if (options.text) body.text = options.text;
   if (options.reason) body.reason = options.reason;
   if (closeFields) body.closeFields = closeFields;
   return body;

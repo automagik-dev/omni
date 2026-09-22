@@ -16,7 +16,7 @@
 import { readFileSync } from 'node:fs';
 import { type GenerativeModel, GoogleGenerativeAI } from '@google/generative-ai';
 
-import { GEMINI_MODEL } from '../models';
+import { GEMINI_MODEL as DEFAULT_GEMINI_MEDIA } from '../models';
 import { calculateCost } from '../pricing';
 import { DOCUMENT_OCR_PROMPT } from '../prompts';
 import type { ProcessOptions, ProcessingResult } from '../types';
@@ -51,13 +51,18 @@ export class DocumentProcessor extends BaseProcessor {
   private geminiClient: GoogleGenerativeAI | null = null;
   private geminiModel: GenerativeModel | null = null;
 
+  /** Gemini model for OCR: config override -> centralized default */
+  private get geminiModelId(): string {
+    return this.config.geminiVisionModel ?? DEFAULT_GEMINI_MEDIA;
+  }
+
   /**
    * Get lazy-initialized Gemini model for OCR fallback
    */
   private getGeminiModel(): GenerativeModel | null {
     if (!this.geminiModel && this.config.geminiApiKey) {
       this.geminiClient = new GoogleGenerativeAI(this.config.geminiApiKey);
-      this.geminiModel = this.geminiClient.getGenerativeModel({ model: GEMINI_MODEL });
+      this.geminiModel = this.geminiClient.getGenerativeModel({ model: this.geminiModelId });
       this.log.info('Gemini model initialized for document OCR');
     }
     return this.geminiModel;
@@ -600,7 +605,7 @@ export class DocumentProcessor extends BaseProcessor {
         { timeoutMs: timeouts.documentTimeoutMs },
       );
 
-      const costCents = calculateCost('gemini_vision', GEMINI_MODEL, {
+      const costCents = calculateCost('gemini_vision', this.geminiModelId, {
         inputTokens,
         outputTokens,
       });
@@ -611,7 +616,7 @@ export class DocumentProcessor extends BaseProcessor {
         contentFormat: 'markdown',
         processingType: 'extraction',
         provider: 'google',
-        model: GEMINI_MODEL,
+        model: this.geminiModelId,
         processingTimeMs: 0,
         inputTokens,
         outputTokens,
@@ -620,7 +625,7 @@ export class DocumentProcessor extends BaseProcessor {
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       this.log.error('Gemini OCR failed', { error: errorMsg });
-      return this.createFailedResult(errorMsg, 'google', GEMINI_MODEL);
+      return this.createFailedResult(errorMsg, 'google', this.geminiModelId);
     }
   }
 

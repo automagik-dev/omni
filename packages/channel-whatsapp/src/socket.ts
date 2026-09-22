@@ -14,6 +14,8 @@ import pino from 'pino';
  * Socket configuration options
  * All options except 'auth' have sensible defaults and can be overridden per-instance
  */
+export type HistoryIdentity = 'desktop' | 'web';
+
 export interface SocketConfig {
   /** Authentication state from storage (required) */
   auth: AuthenticationState;
@@ -23,11 +25,7 @@ export interface SocketConfig {
   logLevel?: 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal' | 'silent';
 
   // === Connection Options ===
-  /**
-   * Browser identification [os, browser, version]. Default: Browsers.macOS('Desktop') when
-   * syncFullHistory is on (Baileys' recommendation for full history; shows as "Mac OS" in the
-   * phone's Linked Devices list), otherwise Browsers.ubuntu('Chrome'). See #1126.
-   */
+  /** Browser identification [os, browser, version]. Default: derived from historyIdentity. */
   browser?: [string, string, string];
   /** Mobile flag for web multi-device (default: false) */
   mobile?: boolean;
@@ -42,8 +40,14 @@ export interface SocketConfig {
   /** Sync full message history on connect (default: false) */
   syncFullHistory?: boolean;
   /**
+   * Pairing identity for history sync (#1126, #1211). 'desktop' (default) = Browsers.macOS('Desktop')
+   * + supportGroupHistory (shows as "Mac OS" in Linked Devices); 'web' = Browsers.ubuntu('Chrome').
+   * Independent of syncFullHistory.
+   */
+  historyIdentity?: HistoryIdentity;
+  /**
    * Advertise group history support in the companion registration payload
-   * (vendored Baileys patch). Default: follows syncFullHistory. Only affects pairing. See #1126.
+   * (vendored Baileys patch). Default: derived from historyIdentity. Only affects pairing.
    */
   supportGroupHistory?: boolean;
   /** Generate high quality link previews (default: true) */
@@ -84,7 +88,13 @@ export interface SocketConfig {
  */
 export const DEFAULT_SOCKET_CONFIG: Omit<
   Required<SocketConfig>,
-  'auth' | 'cachedGroupMetadata' | 'shouldIgnoreJid' | 'getMessage' | 'browser' | 'supportGroupHistory'
+  | 'auth'
+  | 'cachedGroupMetadata'
+  | 'shouldIgnoreJid'
+  | 'getMessage'
+  | 'browser'
+  | 'supportGroupHistory'
+  | 'historyIdentity'
 > = {
   logLevel: 'warn',
   mobile: false,
@@ -99,16 +109,16 @@ export const DEFAULT_SOCKET_CONFIG: Omit<
 };
 
 /**
- * Resolve the history-sync pairing identity (#1126): unless set per instance, full-history
- * instances pair as a macOS Desktop client with group history, others keep the Ubuntu/Chrome web identity.
+ * Resolve the history-sync pairing identity (#1126, #1211) from historyIdentity (default 'desktop').
+ * Explicit browser/supportGroupHistory still win. Deliberately not tied to syncFullHistory.
  */
 export function resolveHistoryIdentity(
-  config: Pick<SocketConfig, 'browser' | 'supportGroupHistory' | 'syncFullHistory'>,
+  config: Pick<SocketConfig, 'browser' | 'supportGroupHistory' | 'historyIdentity'>,
 ): { browser: [string, string, string]; supportGroupHistory: boolean } {
-  const fullHistory = config.syncFullHistory ?? DEFAULT_SOCKET_CONFIG.syncFullHistory;
+  const desktop = (config.historyIdentity ?? 'desktop') === 'desktop';
   return {
-    browser: config.browser ?? (fullHistory ? Browsers.macOS('Desktop') : Browsers.ubuntu('Chrome')),
-    supportGroupHistory: config.supportGroupHistory ?? fullHistory,
+    browser: config.browser ?? (desktop ? Browsers.macOS('Desktop') : Browsers.ubuntu('Chrome')),
+    supportGroupHistory: config.supportGroupHistory ?? desktop,
   };
 }
 

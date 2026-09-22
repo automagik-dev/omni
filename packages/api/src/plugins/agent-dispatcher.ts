@@ -94,6 +94,7 @@ import { resolveKhalSessionId } from '../services/agent-session-identity';
 import { stampAgentUsage } from '../services/agent-usage';
 import type { MediaStorageService } from '../services/media-storage';
 import { buildWhatsAppMessageContext, extractPhoneFromJid } from '../services/message-context';
+import { resolveGateModel, resolveGateProvider, runGateCall } from '../services/response-gate';
 import type { ResolvedRoute } from '../services/route-resolver';
 import { publishTurnOpen } from '../services/turn-events';
 import { currentTenantScope, scopedHandle } from '../tenancy/tenant-scope';
@@ -5977,9 +5978,6 @@ export type DispatcherCleanup = () => Promise<void>;
 
 import { RESPONSE_GATE_PROMPT } from '@omni/media-processing';
 
-const DEFAULT_GATE_MODEL = 'gemini-3-flash-preview';
-const GATE_TIMEOUT_MS = 3_000;
-
 type SettingsReader = {
   getSecret: (key: string, envKey?: string) => Promise<string | undefined>;
   getString: (key: string, envFallback?: string, defaultValue?: string) => Promise<string | undefined>;
@@ -6009,7 +6007,8 @@ async function shouldRespondViaGate(
   if (!inst.agentGateEnabled) return true;
 
   const agentName = instance.name ?? 'assistant';
-  const model = (inst.agentGateModel as string | null) ?? DEFAULT_GATE_MODEL;
+  const provider = await resolveGateProvider(settings);
+  const model = await resolveGateModel(provider, inst.agentGateModel as string | null, settings);
   const basePrompt = await resolveGatePrompt(inst.agentGatePrompt as string | null, settings);
 
   const messagesText = messages
@@ -6028,61 +6027,35 @@ async function shouldRespondViaGate(
   const startMs = Date.now();
 
   try {
-    const apiKey = await settings.getSecret('gemini.api_key', 'GEMINI_API_KEY');
-    if (!apiKey) {
-      log.warn('Gate: no Gemini API key, fail-open', { traceId });
-      return true;
-    }
+    const result = await runGateCall(provider, prompt, model, settings);
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), GATE_TIMEOUT_MS);
-
-    try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { maxOutputTokens: 10, temperature: 0 },
-        }),
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeout);
-
-      if (!res.ok) {
-        log.warn('Gate: API error, fail-open', { traceId, status: res.status, durationMs: Date.now() - startMs });
-        return true;
-      }
-
-      const data = (await res.json()) as {
-        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-      };
-      const answer = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim().toLowerCase() ?? '';
-      const shouldRespond = !answer.startsWith('skip');
-
-      log.info('Gate decision', {
+    if (!result.ok) {
+      log.warn('Gate: call failed, fail-open', {
         traceId,
-        decision: shouldRespond ? 'respond' : 'skip',
-        rawAnswer: answer,
+        provider,
         model,
-        chatType,
-        messageCount: messages.length,
+        reason: result.reason,
+        status: result.status,
+        error: result.error,
         durationMs: Date.now() - startMs,
       });
-
-      return shouldRespond;
-    } catch (fetchError) {
-      clearTimeout(timeout);
-      const errName = (fetchError as Error).name;
-      if (errName === 'AbortError') {
-        log.warn('Gate: timeout, fail-open', { traceId, durationMs: Date.now() - startMs });
-      } else {
-        log.warn('Gate: fetch error, fail-open', { traceId, error: String(fetchError) });
-      }
       return true;
     }
+
+    const shouldRespond = !result.answer.startsWith('skip');
+
+    log.info('Gate decision', {
+      traceId,
+      decision: shouldRespond ? 'respond' : 'skip',
+      rawAnswer: result.answer,
+      provider,
+      model,
+      chatType,
+      messageCount: messages.length,
+      durationMs: Date.now() - startMs,
+    });
+
+    return shouldRespond;
   } catch (error) {
     log.warn('Gate: unexpected error, fail-open', { traceId, error: String(error) });
     return true;

@@ -732,6 +732,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/messages/send/handoff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Hand a chat off to a human
+         * @description Sets agentPaused on the chat, disarms any active follow-up sequence and, on channels declaring canHandoff (Gupshup), sends a native HANDOFF message. Other channels only pause (status "paused").
+         */
+        post: operations["sendHandoff"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/messages/send/close-contact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Close a contact
+         * @description Terminal close: logs the close in close_contact_logs, pauses the agent, sets closed (won/lost, or escalated after repeated soft closes) or a closeUntil cooldown (other outcomes, tunable per instance via closeContactConfig), and disarms follow-ups. Channels declaring canCloseContact send a native close with `text`. `text` is optional: without it the contact is classified/closed with no farewell — channels also declaring canCloseContactWithoutText still receive the native close event with empty text; other channels skip the channel send and only apply the side effects.
+         */
+        post: operations["sendCloseContact"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/events": {
         parameters: {
             query?: never;
@@ -3301,6 +3341,13 @@ export interface components {
             profileName: string | null;
             /** @description Profile picture URL */
             profilePicUrl: string | null;
+            /**
+             * @description WhatsApp (Baileys) pairing identity: 'desktop' (macOS Desktop + group history) or 'web' (Ubuntu/Chrome)
+             * @enum {string}
+             */
+            historyIdentity: "desktop" | "web";
+            /** @description WhatsApp (Baileys): request full history on connect */
+            syncFullHistory: boolean;
             /** @description Owner identifier */
             ownerIdentifier: string | null;
             /**
@@ -3319,6 +3366,138 @@ export interface components {
             agentErrorMessages?: string[] | null;
             /** @description Whether streaming is enabled */
             agentStreamMode: boolean;
+            /** @description Gupshup HANDOFF routing options */
+            gupshupHandoffOptions?: {
+                /**
+                 * @description Routing fields merged under whatever the emitter sent; explicit handoff fields always win, so system-initiated handoffs (dispatch error, silence watchdog) still land in a queue
+                 * @example {
+                 *       "queue": "SALES"
+                 *     }
+                 */
+                defaultFields?: {
+                    [key: string]: string;
+                };
+                /** @description Prefix rules layered over defaultFields; the first matching rule wins */
+                fieldsByPhonePrefix?: {
+                    /**
+                     * @description Digit-only phone prefixes (country code first, no +)
+                     * @example [
+                     *       "5511",
+                     *       "5521"
+                     *     ]
+                     */
+                    prefixes: string[];
+                    /**
+                     * @description Routing fields applied when the customer phone starts with one of the prefixes
+                     * @example {
+                     *       "queue": "SALES-SOUTHEAST"
+                     *     }
+                     */
+                    fields: {
+                        [key: string]: string;
+                    };
+                }[];
+                /**
+                 * @description Ordered template for the Custom Integration customerFields array. Entries whose source resolves empty are dropped; the array is only sent when non-empty
+                 * @example [
+                 *       {
+                 *         "apiKey": "Queue",
+                 *         "from": "queue"
+                 *       },
+                 *       {
+                 *         "apiKey": "Handled By",
+                 *         "value": "assistant"
+                 *       }
+                 *     ]
+                 */
+                customerFields?: {
+                    /** @description customerFields apiKey your Gupshup Journey reads */
+                    apiKey: string;
+                    /** @description Literal value to send; mutually exclusive with `from` */
+                    value?: string;
+                    /** @description Resolved handoff field to copy the value from; mutually exclusive with `value` */
+                    from?: string;
+                }[];
+            } | null;
+            /** @description Per-outcome close-contact cooldown/escalation overrides (null = defaults) */
+            closeContactConfig?: {
+                won?: {
+                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                    cooldownMs?: number | null;
+                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                    escalationThreshold?: number | null;
+                    /** @description Window in ms in which repeated closes are counted */
+                    escalationWindowMs?: number | null;
+                };
+                lost?: {
+                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                    cooldownMs?: number | null;
+                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                    escalationThreshold?: number | null;
+                    /** @description Window in ms in which repeated closes are counted */
+                    escalationWindowMs?: number | null;
+                };
+                redirected_sac?: {
+                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                    cooldownMs?: number | null;
+                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                    escalationThreshold?: number | null;
+                    /** @description Window in ms in which repeated closes are counted */
+                    escalationWindowMs?: number | null;
+                };
+                unqualified?: {
+                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                    cooldownMs?: number | null;
+                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                    escalationThreshold?: number | null;
+                    /** @description Window in ms in which repeated closes are counted */
+                    escalationWindowMs?: number | null;
+                };
+                no_response?: {
+                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                    cooldownMs?: number | null;
+                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                    escalationThreshold?: number | null;
+                    /** @description Window in ms in which repeated closes are counted */
+                    escalationWindowMs?: number | null;
+                };
+                other?: {
+                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                    cooldownMs?: number | null;
+                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                    escalationThreshold?: number | null;
+                    /** @description Window in ms in which repeated closes are counted */
+                    escalationWindowMs?: number | null;
+                };
+            } | null;
+            /** @description Instance-scope follow-up sequence config */
+            followUpConfig?: {
+                /** @description Master switch — false turns off follow-ups at this scope. */
+                enabled: boolean;
+                schedule: {
+                    /** @enum {string} */
+                    kind: "fixed";
+                    /** @description Minutes between successive follow-ups, in order. */
+                    intervalsMinutes: number[];
+                } | {
+                    /** @enum {string} */
+                    kind: "exponential";
+                    /** @description First interval (minutes). */
+                    initialMinutes: number;
+                    /** @description Multiplier applied each iteration. */
+                    factor: number;
+                    /** @description Upper bound on any single interval. */
+                    maxMinutes: number;
+                };
+                /** @description Hard cap on follow-ups fired per sequence. */
+                maxFollowUps: number;
+                /** @description Template rendered into the synthetic prompt sent to the agent. */
+                promptTemplate: string;
+                /** @description On WhatsApp BSP/Cloud, disarm when last inbound is > 24h old. */
+                stopOutsideMessagingWindow: boolean;
+                /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
+                showTypingIndicator: boolean;
+            } | null;
             /**
              * Format: date-time
              * @description Creation timestamp
@@ -3362,6 +3541,17 @@ export interface components {
             isDefault: boolean;
             /** @description Bot token for Discord instances */
             token?: string;
+            /**
+             * @description WhatsApp (Baileys) pairing identity (default: desktop). 'desktop' = macOS Desktop + group history, shows as "Mac OS" in Linked Devices; 'web' = Ubuntu/Chrome. Applies on next pairing
+             * @default desktop
+             * @enum {string}
+             */
+            historyIdentity: "desktop" | "web";
+            /**
+             * @description WhatsApp (Baileys): request full message history on connect (default: false)
+             * @default false
+             */
+            syncFullHistory: boolean;
             /**
              * @description Gupshup HANDOFF routing defaults and customerFields template (gupshup instances only). Read by the plugin at connect: restart the instance after changing it. null clears it
              * @example {
@@ -3442,6 +3632,64 @@ export interface components {
                     /** @description Resolved handoff field to copy the value from; mutually exclusive with `value` */
                     from?: string;
                 }[];
+            } | null;
+            /**
+             * @description Per-outcome overrides for POST /messages/send/close-contact cooldown and escalation. Omitted outcomes/keys use the defaults; null clears it
+             * @example {
+             *       "no_response": {
+             *         "escalationThreshold": null
+             *       }
+             *     }
+             */
+            closeContactConfig?: {
+                won?: {
+                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                    cooldownMs?: number | null;
+                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                    escalationThreshold?: number | null;
+                    /** @description Window in ms in which repeated closes are counted */
+                    escalationWindowMs?: number | null;
+                };
+                lost?: {
+                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                    cooldownMs?: number | null;
+                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                    escalationThreshold?: number | null;
+                    /** @description Window in ms in which repeated closes are counted */
+                    escalationWindowMs?: number | null;
+                };
+                redirected_sac?: {
+                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                    cooldownMs?: number | null;
+                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                    escalationThreshold?: number | null;
+                    /** @description Window in ms in which repeated closes are counted */
+                    escalationWindowMs?: number | null;
+                };
+                unqualified?: {
+                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                    cooldownMs?: number | null;
+                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                    escalationThreshold?: number | null;
+                    /** @description Window in ms in which repeated closes are counted */
+                    escalationWindowMs?: number | null;
+                };
+                no_response?: {
+                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                    cooldownMs?: number | null;
+                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                    escalationThreshold?: number | null;
+                    /** @description Window in ms in which repeated closes are counted */
+                    escalationWindowMs?: number | null;
+                };
+                other?: {
+                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                    cooldownMs?: number | null;
+                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                    escalationThreshold?: number | null;
+                    /** @description Window in ms in which repeated closes are counted */
+                    escalationWindowMs?: number | null;
+                };
             } | null;
         };
         InstanceStatus: {
@@ -3918,6 +4166,53 @@ export interface components {
             instanceId?: string;
             /** @description Number of messages marked (batch only) */
             messageCount?: number;
+        };
+        SendHandoffRequest: {
+            /**
+             * Format: uuid
+             * @description Gupshup instance ID
+             */
+            instanceId: string;
+            /** @description Chat ID to pause agent on */
+            chatId: string;
+            /** @description Recipient phone number */
+            to: string;
+            /** @description Message text shown to end user */
+            text: string;
+            /** @description Free-text lead data summary for the human attendant */
+            dadosLead?: string;
+            /** @description Handoff trigger and notes (e.g. "Gatilho: sinalizou close ||| Obs: ...") */
+            motivoHandoff?: string;
+            /** @description Free-text briefing (legacy — prefer dadosLead) */
+            extraInfo?: string;
+            /** @description Structured fields for Gupshup flow variables (e.g. nome, cidade, temperatura_lead) */
+            handoffFields?: {
+                [key: string]: unknown;
+            };
+        };
+        SendCloseContactRequest: {
+            /**
+             * Format: uuid
+             * @description Instance ID — close-contact native send is Gupshup-only in v1
+             */
+            instanceId: string;
+            /** @description Chat DB UUID to mark as closed */
+            chatId: string;
+            /** @description Recipient phone or platform ID */
+            to: string;
+            /** @description Farewell message shown to the contact. Omit (or send an empty string) to classify/close without a farewell: channels declaring `canCloseContactWithoutText` still receive the native close event with an empty text (the channel flow must not deliver an empty message); other channels skip the channel send. */
+            text?: string;
+            /**
+             * @description Drives terminal/cooldown/escalation logic and BI/audit trail
+             * @enum {string}
+             */
+            outcome: "won" | "lost" | "redirected_sac" | "unqualified" | "no_response" | "other";
+            /** @description Free-text rationale persisted in close_contact_logs */
+            reason?: string;
+            /** @description Structured BI/CRM payload — forwarded to Gupshup native send when supported */
+            closeFields?: {
+                [key: string]: unknown;
+            };
         };
         Event: {
             /**
@@ -6183,6 +6478,8 @@ export interface components {
             executedAt: string;
             /** @description Duration (ms) */
             durationMs: number;
+            /** @description Time waited for a concurrency slot (ms); 0 = ran immediately, null = not recorded */
+            queueWaitMs: number | null;
         };
         TestAutomationRequest: {
             /** @description Hand-written event. Exactly one of event / eventId is required */
@@ -8359,6 +8656,13 @@ export interface operations {
                             profileName: string | null;
                             /** @description Profile picture URL */
                             profilePicUrl: string | null;
+                            /**
+                             * @description WhatsApp (Baileys) pairing identity: 'desktop' (macOS Desktop + group history) or 'web' (Ubuntu/Chrome)
+                             * @enum {string}
+                             */
+                            historyIdentity: "desktop" | "web";
+                            /** @description WhatsApp (Baileys): request full history on connect */
+                            syncFullHistory: boolean;
                             /** @description Owner identifier */
                             ownerIdentifier: string | null;
                             /**
@@ -8377,6 +8681,138 @@ export interface operations {
                             agentErrorMessages?: string[] | null;
                             /** @description Whether streaming is enabled */
                             agentStreamMode: boolean;
+                            /** @description Gupshup HANDOFF routing options */
+                            gupshupHandoffOptions?: {
+                                /**
+                                 * @description Routing fields merged under whatever the emitter sent; explicit handoff fields always win, so system-initiated handoffs (dispatch error, silence watchdog) still land in a queue
+                                 * @example {
+                                 *       "queue": "SALES"
+                                 *     }
+                                 */
+                                defaultFields?: {
+                                    [key: string]: string;
+                                };
+                                /** @description Prefix rules layered over defaultFields; the first matching rule wins */
+                                fieldsByPhonePrefix?: {
+                                    /**
+                                     * @description Digit-only phone prefixes (country code first, no +)
+                                     * @example [
+                                     *       "5511",
+                                     *       "5521"
+                                     *     ]
+                                     */
+                                    prefixes: string[];
+                                    /**
+                                     * @description Routing fields applied when the customer phone starts with one of the prefixes
+                                     * @example {
+                                     *       "queue": "SALES-SOUTHEAST"
+                                     *     }
+                                     */
+                                    fields: {
+                                        [key: string]: string;
+                                    };
+                                }[];
+                                /**
+                                 * @description Ordered template for the Custom Integration customerFields array. Entries whose source resolves empty are dropped; the array is only sent when non-empty
+                                 * @example [
+                                 *       {
+                                 *         "apiKey": "Queue",
+                                 *         "from": "queue"
+                                 *       },
+                                 *       {
+                                 *         "apiKey": "Handled By",
+                                 *         "value": "assistant"
+                                 *       }
+                                 *     ]
+                                 */
+                                customerFields?: {
+                                    /** @description customerFields apiKey your Gupshup Journey reads */
+                                    apiKey: string;
+                                    /** @description Literal value to send; mutually exclusive with `from` */
+                                    value?: string;
+                                    /** @description Resolved handoff field to copy the value from; mutually exclusive with `value` */
+                                    from?: string;
+                                }[];
+                            } | null;
+                            /** @description Per-outcome close-contact cooldown/escalation overrides (null = defaults) */
+                            closeContactConfig?: {
+                                won?: {
+                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                                    cooldownMs?: number | null;
+                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                                    escalationThreshold?: number | null;
+                                    /** @description Window in ms in which repeated closes are counted */
+                                    escalationWindowMs?: number | null;
+                                };
+                                lost?: {
+                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                                    cooldownMs?: number | null;
+                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                                    escalationThreshold?: number | null;
+                                    /** @description Window in ms in which repeated closes are counted */
+                                    escalationWindowMs?: number | null;
+                                };
+                                redirected_sac?: {
+                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                                    cooldownMs?: number | null;
+                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                                    escalationThreshold?: number | null;
+                                    /** @description Window in ms in which repeated closes are counted */
+                                    escalationWindowMs?: number | null;
+                                };
+                                unqualified?: {
+                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                                    cooldownMs?: number | null;
+                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                                    escalationThreshold?: number | null;
+                                    /** @description Window in ms in which repeated closes are counted */
+                                    escalationWindowMs?: number | null;
+                                };
+                                no_response?: {
+                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                                    cooldownMs?: number | null;
+                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                                    escalationThreshold?: number | null;
+                                    /** @description Window in ms in which repeated closes are counted */
+                                    escalationWindowMs?: number | null;
+                                };
+                                other?: {
+                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                                    cooldownMs?: number | null;
+                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                                    escalationThreshold?: number | null;
+                                    /** @description Window in ms in which repeated closes are counted */
+                                    escalationWindowMs?: number | null;
+                                };
+                            } | null;
+                            /** @description Instance-scope follow-up sequence config */
+                            followUpConfig?: {
+                                /** @description Master switch — false turns off follow-ups at this scope. */
+                                enabled: boolean;
+                                schedule: {
+                                    /** @enum {string} */
+                                    kind: "fixed";
+                                    /** @description Minutes between successive follow-ups, in order. */
+                                    intervalsMinutes: number[];
+                                } | {
+                                    /** @enum {string} */
+                                    kind: "exponential";
+                                    /** @description First interval (minutes). */
+                                    initialMinutes: number;
+                                    /** @description Multiplier applied each iteration. */
+                                    factor: number;
+                                    /** @description Upper bound on any single interval. */
+                                    maxMinutes: number;
+                                };
+                                /** @description Hard cap on follow-ups fired per sequence. */
+                                maxFollowUps: number;
+                                /** @description Template rendered into the synthetic prompt sent to the agent. */
+                                promptTemplate: string;
+                                /** @description On WhatsApp BSP/Cloud, disarm when last inbound is > 24h old. */
+                                stopOutsideMessagingWindow: boolean;
+                                /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
+                                showTypingIndicator: boolean;
+                            } | null;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -8440,6 +8876,17 @@ export interface operations {
                     isDefault?: boolean;
                     /** @description Bot token for Discord instances */
                     token?: string;
+                    /**
+                     * @description WhatsApp (Baileys) pairing identity (default: desktop). 'desktop' = macOS Desktop + group history, shows as "Mac OS" in Linked Devices; 'web' = Ubuntu/Chrome. Applies on next pairing
+                     * @default desktop
+                     * @enum {string}
+                     */
+                    historyIdentity?: "desktop" | "web";
+                    /**
+                     * @description WhatsApp (Baileys): request full message history on connect (default: false)
+                     * @default false
+                     */
+                    syncFullHistory?: boolean;
                     /**
                      * @description Gupshup HANDOFF routing defaults and customerFields template (gupshup instances only). Read by the plugin at connect: restart the instance after changing it. null clears it
                      * @example {
@@ -8521,6 +8968,64 @@ export interface operations {
                             from?: string;
                         }[];
                     } | null;
+                    /**
+                     * @description Per-outcome overrides for POST /messages/send/close-contact cooldown and escalation. Omitted outcomes/keys use the defaults; null clears it
+                     * @example {
+                     *       "no_response": {
+                     *         "escalationThreshold": null
+                     *       }
+                     *     }
+                     */
+                    closeContactConfig?: {
+                        won?: {
+                            /** @description Soft-close cooldown in ms (null = no cooldown) */
+                            cooldownMs?: number | null;
+                            /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                            escalationThreshold?: number | null;
+                            /** @description Window in ms in which repeated closes are counted */
+                            escalationWindowMs?: number | null;
+                        };
+                        lost?: {
+                            /** @description Soft-close cooldown in ms (null = no cooldown) */
+                            cooldownMs?: number | null;
+                            /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                            escalationThreshold?: number | null;
+                            /** @description Window in ms in which repeated closes are counted */
+                            escalationWindowMs?: number | null;
+                        };
+                        redirected_sac?: {
+                            /** @description Soft-close cooldown in ms (null = no cooldown) */
+                            cooldownMs?: number | null;
+                            /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                            escalationThreshold?: number | null;
+                            /** @description Window in ms in which repeated closes are counted */
+                            escalationWindowMs?: number | null;
+                        };
+                        unqualified?: {
+                            /** @description Soft-close cooldown in ms (null = no cooldown) */
+                            cooldownMs?: number | null;
+                            /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                            escalationThreshold?: number | null;
+                            /** @description Window in ms in which repeated closes are counted */
+                            escalationWindowMs?: number | null;
+                        };
+                        no_response?: {
+                            /** @description Soft-close cooldown in ms (null = no cooldown) */
+                            cooldownMs?: number | null;
+                            /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                            escalationThreshold?: number | null;
+                            /** @description Window in ms in which repeated closes are counted */
+                            escalationWindowMs?: number | null;
+                        };
+                        other?: {
+                            /** @description Soft-close cooldown in ms (null = no cooldown) */
+                            cooldownMs?: number | null;
+                            /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                            escalationThreshold?: number | null;
+                            /** @description Window in ms in which repeated closes are counted */
+                            escalationWindowMs?: number | null;
+                        };
+                    } | null;
                 };
             };
         };
@@ -8553,6 +9058,13 @@ export interface operations {
                             profileName: string | null;
                             /** @description Profile picture URL */
                             profilePicUrl: string | null;
+                            /**
+                             * @description WhatsApp (Baileys) pairing identity: 'desktop' (macOS Desktop + group history) or 'web' (Ubuntu/Chrome)
+                             * @enum {string}
+                             */
+                            historyIdentity: "desktop" | "web";
+                            /** @description WhatsApp (Baileys): request full history on connect */
+                            syncFullHistory: boolean;
                             /** @description Owner identifier */
                             ownerIdentifier: string | null;
                             /**
@@ -8571,6 +9083,138 @@ export interface operations {
                             agentErrorMessages?: string[] | null;
                             /** @description Whether streaming is enabled */
                             agentStreamMode: boolean;
+                            /** @description Gupshup HANDOFF routing options */
+                            gupshupHandoffOptions?: {
+                                /**
+                                 * @description Routing fields merged under whatever the emitter sent; explicit handoff fields always win, so system-initiated handoffs (dispatch error, silence watchdog) still land in a queue
+                                 * @example {
+                                 *       "queue": "SALES"
+                                 *     }
+                                 */
+                                defaultFields?: {
+                                    [key: string]: string;
+                                };
+                                /** @description Prefix rules layered over defaultFields; the first matching rule wins */
+                                fieldsByPhonePrefix?: {
+                                    /**
+                                     * @description Digit-only phone prefixes (country code first, no +)
+                                     * @example [
+                                     *       "5511",
+                                     *       "5521"
+                                     *     ]
+                                     */
+                                    prefixes: string[];
+                                    /**
+                                     * @description Routing fields applied when the customer phone starts with one of the prefixes
+                                     * @example {
+                                     *       "queue": "SALES-SOUTHEAST"
+                                     *     }
+                                     */
+                                    fields: {
+                                        [key: string]: string;
+                                    };
+                                }[];
+                                /**
+                                 * @description Ordered template for the Custom Integration customerFields array. Entries whose source resolves empty are dropped; the array is only sent when non-empty
+                                 * @example [
+                                 *       {
+                                 *         "apiKey": "Queue",
+                                 *         "from": "queue"
+                                 *       },
+                                 *       {
+                                 *         "apiKey": "Handled By",
+                                 *         "value": "assistant"
+                                 *       }
+                                 *     ]
+                                 */
+                                customerFields?: {
+                                    /** @description customerFields apiKey your Gupshup Journey reads */
+                                    apiKey: string;
+                                    /** @description Literal value to send; mutually exclusive with `from` */
+                                    value?: string;
+                                    /** @description Resolved handoff field to copy the value from; mutually exclusive with `value` */
+                                    from?: string;
+                                }[];
+                            } | null;
+                            /** @description Per-outcome close-contact cooldown/escalation overrides (null = defaults) */
+                            closeContactConfig?: {
+                                won?: {
+                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                                    cooldownMs?: number | null;
+                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                                    escalationThreshold?: number | null;
+                                    /** @description Window in ms in which repeated closes are counted */
+                                    escalationWindowMs?: number | null;
+                                };
+                                lost?: {
+                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                                    cooldownMs?: number | null;
+                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                                    escalationThreshold?: number | null;
+                                    /** @description Window in ms in which repeated closes are counted */
+                                    escalationWindowMs?: number | null;
+                                };
+                                redirected_sac?: {
+                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                                    cooldownMs?: number | null;
+                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                                    escalationThreshold?: number | null;
+                                    /** @description Window in ms in which repeated closes are counted */
+                                    escalationWindowMs?: number | null;
+                                };
+                                unqualified?: {
+                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                                    cooldownMs?: number | null;
+                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                                    escalationThreshold?: number | null;
+                                    /** @description Window in ms in which repeated closes are counted */
+                                    escalationWindowMs?: number | null;
+                                };
+                                no_response?: {
+                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                                    cooldownMs?: number | null;
+                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                                    escalationThreshold?: number | null;
+                                    /** @description Window in ms in which repeated closes are counted */
+                                    escalationWindowMs?: number | null;
+                                };
+                                other?: {
+                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                                    cooldownMs?: number | null;
+                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                                    escalationThreshold?: number | null;
+                                    /** @description Window in ms in which repeated closes are counted */
+                                    escalationWindowMs?: number | null;
+                                };
+                            } | null;
+                            /** @description Instance-scope follow-up sequence config */
+                            followUpConfig?: {
+                                /** @description Master switch — false turns off follow-ups at this scope. */
+                                enabled: boolean;
+                                schedule: {
+                                    /** @enum {string} */
+                                    kind: "fixed";
+                                    /** @description Minutes between successive follow-ups, in order. */
+                                    intervalsMinutes: number[];
+                                } | {
+                                    /** @enum {string} */
+                                    kind: "exponential";
+                                    /** @description First interval (minutes). */
+                                    initialMinutes: number;
+                                    /** @description Multiplier applied each iteration. */
+                                    factor: number;
+                                    /** @description Upper bound on any single interval. */
+                                    maxMinutes: number;
+                                };
+                                /** @description Hard cap on follow-ups fired per sequence. */
+                                maxFollowUps: number;
+                                /** @description Template rendered into the synthetic prompt sent to the agent. */
+                                promptTemplate: string;
+                                /** @description On WhatsApp BSP/Cloud, disarm when last inbound is > 24h old. */
+                                stopOutsideMessagingWindow: boolean;
+                                /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
+                                showTypingIndicator: boolean;
+                            } | null;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -8687,6 +9331,13 @@ export interface operations {
                             profileName: string | null;
                             /** @description Profile picture URL */
                             profilePicUrl: string | null;
+                            /**
+                             * @description WhatsApp (Baileys) pairing identity: 'desktop' (macOS Desktop + group history) or 'web' (Ubuntu/Chrome)
+                             * @enum {string}
+                             */
+                            historyIdentity: "desktop" | "web";
+                            /** @description WhatsApp (Baileys): request full history on connect */
+                            syncFullHistory: boolean;
                             /** @description Owner identifier */
                             ownerIdentifier: string | null;
                             /**
@@ -8705,6 +9356,138 @@ export interface operations {
                             agentErrorMessages?: string[] | null;
                             /** @description Whether streaming is enabled */
                             agentStreamMode: boolean;
+                            /** @description Gupshup HANDOFF routing options */
+                            gupshupHandoffOptions?: {
+                                /**
+                                 * @description Routing fields merged under whatever the emitter sent; explicit handoff fields always win, so system-initiated handoffs (dispatch error, silence watchdog) still land in a queue
+                                 * @example {
+                                 *       "queue": "SALES"
+                                 *     }
+                                 */
+                                defaultFields?: {
+                                    [key: string]: string;
+                                };
+                                /** @description Prefix rules layered over defaultFields; the first matching rule wins */
+                                fieldsByPhonePrefix?: {
+                                    /**
+                                     * @description Digit-only phone prefixes (country code first, no +)
+                                     * @example [
+                                     *       "5511",
+                                     *       "5521"
+                                     *     ]
+                                     */
+                                    prefixes: string[];
+                                    /**
+                                     * @description Routing fields applied when the customer phone starts with one of the prefixes
+                                     * @example {
+                                     *       "queue": "SALES-SOUTHEAST"
+                                     *     }
+                                     */
+                                    fields: {
+                                        [key: string]: string;
+                                    };
+                                }[];
+                                /**
+                                 * @description Ordered template for the Custom Integration customerFields array. Entries whose source resolves empty are dropped; the array is only sent when non-empty
+                                 * @example [
+                                 *       {
+                                 *         "apiKey": "Queue",
+                                 *         "from": "queue"
+                                 *       },
+                                 *       {
+                                 *         "apiKey": "Handled By",
+                                 *         "value": "assistant"
+                                 *       }
+                                 *     ]
+                                 */
+                                customerFields?: {
+                                    /** @description customerFields apiKey your Gupshup Journey reads */
+                                    apiKey: string;
+                                    /** @description Literal value to send; mutually exclusive with `from` */
+                                    value?: string;
+                                    /** @description Resolved handoff field to copy the value from; mutually exclusive with `value` */
+                                    from?: string;
+                                }[];
+                            } | null;
+                            /** @description Per-outcome close-contact cooldown/escalation overrides (null = defaults) */
+                            closeContactConfig?: {
+                                won?: {
+                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                                    cooldownMs?: number | null;
+                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                                    escalationThreshold?: number | null;
+                                    /** @description Window in ms in which repeated closes are counted */
+                                    escalationWindowMs?: number | null;
+                                };
+                                lost?: {
+                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                                    cooldownMs?: number | null;
+                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                                    escalationThreshold?: number | null;
+                                    /** @description Window in ms in which repeated closes are counted */
+                                    escalationWindowMs?: number | null;
+                                };
+                                redirected_sac?: {
+                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                                    cooldownMs?: number | null;
+                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                                    escalationThreshold?: number | null;
+                                    /** @description Window in ms in which repeated closes are counted */
+                                    escalationWindowMs?: number | null;
+                                };
+                                unqualified?: {
+                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                                    cooldownMs?: number | null;
+                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                                    escalationThreshold?: number | null;
+                                    /** @description Window in ms in which repeated closes are counted */
+                                    escalationWindowMs?: number | null;
+                                };
+                                no_response?: {
+                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                                    cooldownMs?: number | null;
+                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                                    escalationThreshold?: number | null;
+                                    /** @description Window in ms in which repeated closes are counted */
+                                    escalationWindowMs?: number | null;
+                                };
+                                other?: {
+                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                                    cooldownMs?: number | null;
+                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                                    escalationThreshold?: number | null;
+                                    /** @description Window in ms in which repeated closes are counted */
+                                    escalationWindowMs?: number | null;
+                                };
+                            } | null;
+                            /** @description Instance-scope follow-up sequence config */
+                            followUpConfig?: {
+                                /** @description Master switch — false turns off follow-ups at this scope. */
+                                enabled: boolean;
+                                schedule: {
+                                    /** @enum {string} */
+                                    kind: "fixed";
+                                    /** @description Minutes between successive follow-ups, in order. */
+                                    intervalsMinutes: number[];
+                                } | {
+                                    /** @enum {string} */
+                                    kind: "exponential";
+                                    /** @description First interval (minutes). */
+                                    initialMinutes: number;
+                                    /** @description Multiplier applied each iteration. */
+                                    factor: number;
+                                    /** @description Upper bound on any single interval. */
+                                    maxMinutes: number;
+                                };
+                                /** @description Hard cap on follow-ups fired per sequence. */
+                                maxFollowUps: number;
+                                /** @description Template rendered into the synthetic prompt sent to the agent. */
+                                promptTemplate: string;
+                                /** @description On WhatsApp BSP/Cloud, disarm when last inbound is > 24h old. */
+                                stopOutsideMessagingWindow: boolean;
+                                /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
+                                showTypingIndicator: boolean;
+                            } | null;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -8834,6 +9617,17 @@ export interface operations {
                     /** @description Bot token for Discord instances */
                     token?: string;
                     /**
+                     * @description WhatsApp (Baileys) pairing identity (default: desktop). 'desktop' = macOS Desktop + group history, shows as "Mac OS" in Linked Devices; 'web' = Ubuntu/Chrome. Applies on next pairing
+                     * @default desktop
+                     * @enum {string}
+                     */
+                    historyIdentity?: "desktop" | "web";
+                    /**
+                     * @description WhatsApp (Baileys): request full message history on connect (default: false)
+                     * @default false
+                     */
+                    syncFullHistory?: boolean;
+                    /**
                      * @description Gupshup HANDOFF routing defaults and customerFields template (gupshup instances only). Read by the plugin at connect: restart the instance after changing it. null clears it
                      * @example {
                      *       "defaultFields": {
@@ -8914,6 +9708,64 @@ export interface operations {
                             from?: string;
                         }[];
                     } | null;
+                    /**
+                     * @description Per-outcome overrides for POST /messages/send/close-contact cooldown and escalation. Omitted outcomes/keys use the defaults; null clears it
+                     * @example {
+                     *       "no_response": {
+                     *         "escalationThreshold": null
+                     *       }
+                     *     }
+                     */
+                    closeContactConfig?: {
+                        won?: {
+                            /** @description Soft-close cooldown in ms (null = no cooldown) */
+                            cooldownMs?: number | null;
+                            /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                            escalationThreshold?: number | null;
+                            /** @description Window in ms in which repeated closes are counted */
+                            escalationWindowMs?: number | null;
+                        };
+                        lost?: {
+                            /** @description Soft-close cooldown in ms (null = no cooldown) */
+                            cooldownMs?: number | null;
+                            /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                            escalationThreshold?: number | null;
+                            /** @description Window in ms in which repeated closes are counted */
+                            escalationWindowMs?: number | null;
+                        };
+                        redirected_sac?: {
+                            /** @description Soft-close cooldown in ms (null = no cooldown) */
+                            cooldownMs?: number | null;
+                            /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                            escalationThreshold?: number | null;
+                            /** @description Window in ms in which repeated closes are counted */
+                            escalationWindowMs?: number | null;
+                        };
+                        unqualified?: {
+                            /** @description Soft-close cooldown in ms (null = no cooldown) */
+                            cooldownMs?: number | null;
+                            /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                            escalationThreshold?: number | null;
+                            /** @description Window in ms in which repeated closes are counted */
+                            escalationWindowMs?: number | null;
+                        };
+                        no_response?: {
+                            /** @description Soft-close cooldown in ms (null = no cooldown) */
+                            cooldownMs?: number | null;
+                            /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                            escalationThreshold?: number | null;
+                            /** @description Window in ms in which repeated closes are counted */
+                            escalationWindowMs?: number | null;
+                        };
+                        other?: {
+                            /** @description Soft-close cooldown in ms (null = no cooldown) */
+                            cooldownMs?: number | null;
+                            /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                            escalationThreshold?: number | null;
+                            /** @description Window in ms in which repeated closes are counted */
+                            escalationWindowMs?: number | null;
+                        };
+                    } | null;
                 };
             };
         };
@@ -8946,6 +9798,13 @@ export interface operations {
                             profileName: string | null;
                             /** @description Profile picture URL */
                             profilePicUrl: string | null;
+                            /**
+                             * @description WhatsApp (Baileys) pairing identity: 'desktop' (macOS Desktop + group history) or 'web' (Ubuntu/Chrome)
+                             * @enum {string}
+                             */
+                            historyIdentity: "desktop" | "web";
+                            /** @description WhatsApp (Baileys): request full history on connect */
+                            syncFullHistory: boolean;
                             /** @description Owner identifier */
                             ownerIdentifier: string | null;
                             /**
@@ -8964,6 +9823,138 @@ export interface operations {
                             agentErrorMessages?: string[] | null;
                             /** @description Whether streaming is enabled */
                             agentStreamMode: boolean;
+                            /** @description Gupshup HANDOFF routing options */
+                            gupshupHandoffOptions?: {
+                                /**
+                                 * @description Routing fields merged under whatever the emitter sent; explicit handoff fields always win, so system-initiated handoffs (dispatch error, silence watchdog) still land in a queue
+                                 * @example {
+                                 *       "queue": "SALES"
+                                 *     }
+                                 */
+                                defaultFields?: {
+                                    [key: string]: string;
+                                };
+                                /** @description Prefix rules layered over defaultFields; the first matching rule wins */
+                                fieldsByPhonePrefix?: {
+                                    /**
+                                     * @description Digit-only phone prefixes (country code first, no +)
+                                     * @example [
+                                     *       "5511",
+                                     *       "5521"
+                                     *     ]
+                                     */
+                                    prefixes: string[];
+                                    /**
+                                     * @description Routing fields applied when the customer phone starts with one of the prefixes
+                                     * @example {
+                                     *       "queue": "SALES-SOUTHEAST"
+                                     *     }
+                                     */
+                                    fields: {
+                                        [key: string]: string;
+                                    };
+                                }[];
+                                /**
+                                 * @description Ordered template for the Custom Integration customerFields array. Entries whose source resolves empty are dropped; the array is only sent when non-empty
+                                 * @example [
+                                 *       {
+                                 *         "apiKey": "Queue",
+                                 *         "from": "queue"
+                                 *       },
+                                 *       {
+                                 *         "apiKey": "Handled By",
+                                 *         "value": "assistant"
+                                 *       }
+                                 *     ]
+                                 */
+                                customerFields?: {
+                                    /** @description customerFields apiKey your Gupshup Journey reads */
+                                    apiKey: string;
+                                    /** @description Literal value to send; mutually exclusive with `from` */
+                                    value?: string;
+                                    /** @description Resolved handoff field to copy the value from; mutually exclusive with `value` */
+                                    from?: string;
+                                }[];
+                            } | null;
+                            /** @description Per-outcome close-contact cooldown/escalation overrides (null = defaults) */
+                            closeContactConfig?: {
+                                won?: {
+                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                                    cooldownMs?: number | null;
+                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                                    escalationThreshold?: number | null;
+                                    /** @description Window in ms in which repeated closes are counted */
+                                    escalationWindowMs?: number | null;
+                                };
+                                lost?: {
+                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                                    cooldownMs?: number | null;
+                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                                    escalationThreshold?: number | null;
+                                    /** @description Window in ms in which repeated closes are counted */
+                                    escalationWindowMs?: number | null;
+                                };
+                                redirected_sac?: {
+                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                                    cooldownMs?: number | null;
+                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                                    escalationThreshold?: number | null;
+                                    /** @description Window in ms in which repeated closes are counted */
+                                    escalationWindowMs?: number | null;
+                                };
+                                unqualified?: {
+                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                                    cooldownMs?: number | null;
+                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                                    escalationThreshold?: number | null;
+                                    /** @description Window in ms in which repeated closes are counted */
+                                    escalationWindowMs?: number | null;
+                                };
+                                no_response?: {
+                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                                    cooldownMs?: number | null;
+                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                                    escalationThreshold?: number | null;
+                                    /** @description Window in ms in which repeated closes are counted */
+                                    escalationWindowMs?: number | null;
+                                };
+                                other?: {
+                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                                    cooldownMs?: number | null;
+                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                                    escalationThreshold?: number | null;
+                                    /** @description Window in ms in which repeated closes are counted */
+                                    escalationWindowMs?: number | null;
+                                };
+                            } | null;
+                            /** @description Instance-scope follow-up sequence config */
+                            followUpConfig?: {
+                                /** @description Master switch — false turns off follow-ups at this scope. */
+                                enabled: boolean;
+                                schedule: {
+                                    /** @enum {string} */
+                                    kind: "fixed";
+                                    /** @description Minutes between successive follow-ups, in order. */
+                                    intervalsMinutes: number[];
+                                } | {
+                                    /** @enum {string} */
+                                    kind: "exponential";
+                                    /** @description First interval (minutes). */
+                                    initialMinutes: number;
+                                    /** @description Multiplier applied each iteration. */
+                                    factor: number;
+                                    /** @description Upper bound on any single interval. */
+                                    maxMinutes: number;
+                                };
+                                /** @description Hard cap on follow-ups fired per sequence. */
+                                maxFollowUps: number;
+                                /** @description Template rendered into the synthetic prompt sent to the agent. */
+                                promptTemplate: string;
+                                /** @description On WhatsApp BSP/Cloud, disarm when last inbound is > 24h old. */
+                                stopOutsideMessagingWindow: boolean;
+                                /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
+                                showTypingIndicator: boolean;
+                            } | null;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -11107,6 +12098,218 @@ export interface operations {
                 };
             };
             /** @description Instance not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    sendHandoff: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /**
+                     * Format: uuid
+                     * @description Gupshup instance ID
+                     */
+                    instanceId: string;
+                    /** @description Chat ID to pause agent on */
+                    chatId: string;
+                    /** @description Recipient phone number */
+                    to: string;
+                    /** @description Message text shown to end user */
+                    text: string;
+                    /** @description Free-text lead data summary for the human attendant */
+                    dadosLead?: string;
+                    /** @description Handoff trigger and notes (e.g. "Gatilho: sinalizou close ||| Obs: ...") */
+                    motivoHandoff?: string;
+                    /** @description Free-text briefing (legacy — prefer dadosLead) */
+                    extraInfo?: string;
+                    /** @description Structured fields for Gupshup flow variables (e.g. nome, cidade, temperatura_lead) */
+                    handoffFields?: {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+        responses: {
+            /** @description Handoff applied */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /** @description Channel message ID (null when no native send happened) */
+                            messageId: string | null;
+                            /**
+                             * @description 'sent' with a native handoff, 'paused' otherwise
+                             * @enum {string}
+                             */
+                            status: "sent" | "paused";
+                            /** @description Epoch ms */
+                            timestamp: number;
+                        };
+                    };
+                };
+            };
+            /** @description Validation error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Instance or chat not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    sendCloseContact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /**
+                     * Format: uuid
+                     * @description Instance ID — close-contact native send is Gupshup-only in v1
+                     */
+                    instanceId: string;
+                    /** @description Chat DB UUID to mark as closed */
+                    chatId: string;
+                    /** @description Recipient phone or platform ID */
+                    to: string;
+                    /** @description Farewell message shown to the contact. Omit (or send an empty string) to classify/close without a farewell: channels declaring `canCloseContactWithoutText` still receive the native close event with an empty text (the channel flow must not deliver an empty message); other channels skip the channel send. */
+                    text?: string;
+                    /**
+                     * @description Drives terminal/cooldown/escalation logic and BI/audit trail
+                     * @enum {string}
+                     */
+                    outcome: "won" | "lost" | "redirected_sac" | "unqualified" | "no_response" | "other";
+                    /** @description Free-text rationale persisted in close_contact_logs */
+                    reason?: string;
+                    /** @description Structured BI/CRM payload — forwarded to Gupshup native send when supported */
+                    closeFields?: {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+        responses: {
+            /** @description Contact closed */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /** @description Channel message ID (null when no native send happened) */
+                            messageId: string | null;
+                            /** @enum {string} */
+                            status: "closed";
+                            /** @description Hard terminal close (chat stays closed) */
+                            terminal: boolean;
+                            /**
+                             * Format: date-time
+                             * @description Soft-close cooldown end (null when terminal)
+                             */
+                            closeUntil: string | null;
+                            /** @description Soft close auto-promoted to terminal by repetition */
+                            escalated: boolean;
+                            /**
+                             * @description Drives terminal/cooldown/escalation logic and BI/audit trail
+                             * @enum {string}
+                             */
+                            outcome: "won" | "lost" | "redirected_sac" | "unqualified" | "no_response" | "other";
+                            /** @description Epoch ms */
+                            timestamp: number;
+                        };
+                    };
+                };
+            };
+            /** @description Validation error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Instance or chat not found */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -20000,6 +21203,8 @@ export interface operations {
                             executedAt: string;
                             /** @description Duration (ms) */
                             durationMs: number;
+                            /** @description Time waited for a concurrency slot (ms); 0 = ran immediately, null = not recorded */
+                            queueWaitMs: number | null;
                         }[];
                         meta: {
                             /** @description Whether there are more items */
@@ -20066,6 +21271,8 @@ export interface operations {
                             executedAt: string;
                             /** @description Duration (ms) */
                             durationMs: number;
+                            /** @description Time waited for a concurrency slot (ms); 0 = ran immediately, null = not recorded */
+                            queueWaitMs: number | null;
                         }[];
                         meta: {
                             /** @description Whether there are more items */

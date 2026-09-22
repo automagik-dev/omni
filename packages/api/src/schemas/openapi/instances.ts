@@ -6,35 +6,7 @@ import type { OpenAPIRegistry } from '@asteasolutions/zod-to-openapi';
 import { ChannelTypeSchema } from '@omni/core';
 import { z } from '../../lib/zod-openapi';
 import { ErrorSchema, PaginationMetaSchema, SuccessSchema } from './common';
-
-/**
- * Instance response schema
- */
-export const InstanceSchema = z.object({
-  id: z.string().uuid().openapi({ description: 'Instance UUID' }),
-  name: z.string().openapi({ description: 'Instance name' }),
-  channel: ChannelTypeSchema.openapi({ description: 'Channel type' }),
-  isActive: z.boolean().openapi({ description: 'Whether instance is active' }),
-  isDefault: z.boolean().openapi({ description: 'Whether this is the default instance for channel' }),
-  profileName: z.string().nullable().openapi({ description: 'Connected profile name' }),
-  profilePicUrl: z.string().nullable().openapi({ description: 'Profile picture URL' }),
-  ownerIdentifier: z.string().nullable().openapi({ description: 'Owner identifier' }),
-  agentId: z.string().uuid().nullable().optional().openapi({ description: 'Agent UUID (agents table)' }),
-  agentProviderId: z
-    .string()
-    .uuid()
-    .nullable()
-    .optional()
-    .openapi({ description: 'Provider ID of the assigned agent (read-only; set via the agent)' }),
-  agentTimeout: z.number().openapi({ description: 'Agent timeout in seconds' }),
-  agentErrorMessages: z.array(z.string()).nullable().optional().openapi({
-    description:
-      'Customer-facing replies sent when agent dispatch fails; one is picked at random per failure (null/empty = env/default fallback)',
-  }),
-  agentStreamMode: z.boolean().openapi({ description: 'Whether streaming is enabled' }),
-  createdAt: z.string().datetime().openapi({ description: 'Creation timestamp' }),
-  updatedAt: z.string().datetime().openapi({ description: 'Last update timestamp' }),
-});
+import { FollowUpSequenceConfigOpenApiSchema } from './follow-up';
 
 /**
  * Gupshup HANDOFF options (instances.gupshup_handoff_options). This is the ONE
@@ -104,6 +76,78 @@ export const GupshupHandoffOptionsSchema = z
   .strict();
 
 /**
+ * Close-contact cooldown/escalation overrides (instances.close_contact_config).
+ * One definition shared by the POST/PATCH validators and the OpenAPI document.
+ * Resolved per key by `resolveCloseContactConfig`; `null` disables a mechanism.
+ */
+const closeContactOutcomeOverride = z
+  .object({
+    cooldownMs: z.number().int().nonnegative().nullable().optional().openapi({
+      description: 'Soft-close cooldown in ms (null = no cooldown)',
+    }),
+    escalationThreshold: z.number().int().positive().nullable().optional().openapi({
+      description: 'Closes with the same outcome within the window that promote to terminal (null = never)',
+    }),
+    escalationWindowMs: z.number().int().positive().nullable().optional().openapi({
+      description: 'Window in ms in which repeated closes are counted',
+    }),
+  })
+  .strict();
+export const CloseContactConfigSchema = z
+  .object({
+    won: closeContactOutcomeOverride.optional(),
+    lost: closeContactOutcomeOverride.optional(),
+    redirected_sac: closeContactOutcomeOverride.optional(),
+    unqualified: closeContactOutcomeOverride.optional(),
+    no_response: closeContactOutcomeOverride.optional(),
+    other: closeContactOutcomeOverride.optional(),
+  })
+  .strict();
+
+/**
+ * Instance response schema
+ */
+export const InstanceSchema = z.object({
+  id: z.string().uuid().openapi({ description: 'Instance UUID' }),
+  name: z.string().openapi({ description: 'Instance name' }),
+  channel: ChannelTypeSchema.openapi({ description: 'Channel type' }),
+  isActive: z.boolean().openapi({ description: 'Whether instance is active' }),
+  isDefault: z.boolean().openapi({ description: 'Whether this is the default instance for channel' }),
+  profileName: z.string().nullable().openapi({ description: 'Connected profile name' }),
+  profilePicUrl: z.string().nullable().openapi({ description: 'Profile picture URL' }),
+  historyIdentity: z.enum(['desktop', 'web']).openapi({
+    description:
+      "WhatsApp (Baileys) pairing identity: 'desktop' (macOS Desktop + group history) or 'web' (Ubuntu/Chrome)",
+  }),
+  syncFullHistory: z.boolean().openapi({ description: 'WhatsApp (Baileys): request full history on connect' }),
+  ownerIdentifier: z.string().nullable().openapi({ description: 'Owner identifier' }),
+  agentId: z.string().uuid().nullable().optional().openapi({ description: 'Agent UUID (agents table)' }),
+  agentProviderId: z
+    .string()
+    .uuid()
+    .nullable()
+    .optional()
+    .openapi({ description: 'Provider ID of the assigned agent (read-only; set via the agent)' }),
+  agentTimeout: z.number().openapi({ description: 'Agent timeout in seconds' }),
+  agentErrorMessages: z.array(z.string()).nullable().optional().openapi({
+    description:
+      'Customer-facing replies sent when agent dispatch fails; one is picked at random per failure (null/empty = env/default fallback)',
+  }),
+  agentStreamMode: z.boolean().openapi({ description: 'Whether streaming is enabled' }),
+  gupshupHandoffOptions: GupshupHandoffOptionsSchema.nullable()
+    .optional()
+    .openapi({ description: 'Gupshup HANDOFF routing options' }),
+  closeContactConfig: CloseContactConfigSchema.nullable()
+    .optional()
+    .openapi({ description: 'Per-outcome close-contact cooldown/escalation overrides (null = defaults)' }),
+  followUpConfig: FollowUpSequenceConfigOpenApiSchema.nullable()
+    .optional()
+    .openapi({ description: 'Instance-scope follow-up sequence config' }),
+  createdAt: z.string().datetime().openapi({ description: 'Creation timestamp' }),
+  updatedAt: z.string().datetime().openapi({ description: 'Last update timestamp' }),
+});
+
+/**
  * Create instance request schema
  */
 export const CreateInstanceSchema = z.object({
@@ -118,6 +162,14 @@ export const CreateInstanceSchema = z.object({
   agentStreamMode: z.boolean().default(false).openapi({ description: 'Enable streaming responses' }),
   isDefault: z.boolean().default(false).openapi({ description: 'Set as default instance for channel' }),
   token: z.string().optional().openapi({ description: 'Bot token for Discord instances' }),
+  historyIdentity: z.enum(['desktop', 'web']).default('desktop').openapi({
+    description:
+      "WhatsApp (Baileys) pairing identity (default: desktop). 'desktop' = macOS Desktop + group history, shows as \"Mac OS\" in Linked Devices; 'web' = Ubuntu/Chrome. Applies on next pairing",
+  }),
+  syncFullHistory: z
+    .boolean()
+    .default(false)
+    .openapi({ description: 'WhatsApp (Baileys): request full message history on connect (default: false)' }),
   gupshupHandoffOptions: GupshupHandoffOptionsSchema.nullable()
     .optional()
     .openapi({
@@ -131,6 +183,13 @@ export const CreateInstanceSchema = z.object({
           { apiKey: 'Handled By', value: 'assistant' },
         ],
       },
+    }),
+  closeContactConfig: CloseContactConfigSchema.nullable()
+    .optional()
+    .openapi({
+      description:
+        'Per-outcome overrides for POST /messages/send/close-contact cooldown and escalation. Omitted outcomes/keys use the defaults; null clears it',
+      example: { no_response: { escalationThreshold: null } },
     }),
 });
 

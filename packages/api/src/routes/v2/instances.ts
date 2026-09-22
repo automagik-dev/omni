@@ -15,7 +15,7 @@ import { applyWhatsAppBusinessConnectionOptions } from '../../lib/whatsapp-busin
 import { filterByInstanceAccess, requireInstanceAccess } from '../../middleware/auth';
 import { invalidateProviderCacheForInstance } from '../../plugins/agent-dispatcher';
 import { getQrCode } from '../../plugins/qr-store';
-import { GupshupHandoffOptionsSchema } from '../../schemas/openapi/instances';
+import { CloseContactConfigSchema, GupshupHandoffOptionsSchema } from '../../schemas/openapi/instances';
 import type { Services } from '../../services';
 import { PairingRequestConsumedError, PairingRequestExpiredError } from '../../services/access';
 import { AgentReplayService } from '../../services/agent-replay';
@@ -159,7 +159,9 @@ const createInstanceSchema = z.object({
     .string()
     .nullable()
     .default(null)
-    .describe('Model for response gate (default: gemini-3-flash-preview)'),
+    .describe(
+      'Model for response gate (default: gate.gemini.model / gemini-3.5-flash-lite). Must match the provider selected by the gate.provider setting.',
+    ),
   agentGatePrompt: z.string().nullable().default(null).describe('Custom prompt for response gate (null = use default)'),
   telegramBotToken: z.string().optional().nullable().describe('Telegram bot token (persisted for reconnection)'),
   discordBotToken: z.string().optional().nullable().describe('Discord bot token (persisted for reconnection)'),
@@ -179,6 +181,9 @@ const createInstanceSchema = z.object({
   gupshupHandoffOptions: GupshupHandoffOptionsSchema.optional()
     .nullable()
     .describe('Gupshup HANDOFF routing defaults and customerFields template'),
+  closeContactConfig: CloseContactConfigSchema.optional()
+    .nullable()
+    .describe('Per-outcome close-contact cooldown/escalation overrides (null = defaults)'),
   webhookVerifyToken: z.string().optional().nullable().describe('Gupshup webhook verify token'),
   twilioAccountSid: z.string().optional().nullable().describe('Twilio Account SID'),
   twilioAuthToken: z.string().optional().nullable().describe('Twilio Auth Token'),
@@ -246,6 +251,16 @@ const createInstanceSchema = z.object({
     .describe(
       'Mark the instance as online when connecting to WhatsApp (default: true). Set to false to preserve phone push notifications.',
     ),
+  historyIdentity: z
+    .enum(['desktop', 'web'])
+    .default('desktop')
+    .describe(
+      "WhatsApp (Baileys) pairing identity (default: desktop). 'desktop' = macOS Desktop + group history (fuller initial sync, shows as \"Mac OS\" in Linked Devices); 'web' = Ubuntu/Chrome. Applies on next pairing.",
+    ),
+  syncFullHistory: z
+    .boolean()
+    .default(false)
+    .describe('WhatsApp (Baileys): request full message history on connect (default: false)'),
   reactionAck: z
     .enum(['on', 'off'])
     .default('off')
@@ -312,69 +327,76 @@ const AGENT_PROVIDER_READ_ONLY_MESSAGE =
 // NOTE: .partial() on fields with .default() still fires the default for omitted keys,
 // so we must explicitly override fields that have defaults to strip the default value.
 // Without this, a PATCH that omits e.g. readReceipts would reset it to 'on'.
-const updateInstanceSchema = createInstanceSchema.partial().extend({
-  /**
-   * Channel-specific connection config (#889).
-   *
-   * Was absent from this schema, so a PATCH carrying it returned 200 and
-   * silently dropped it — zod strips unknown keys. That made Slack's
-   * `mode: 'http'` unreachable through the API: the connect route only knows
-   * appToken/signingSecret, and the plugin reads mode/httpPort from here.
-   */
-  profileMetadata: z.record(z.unknown()).nullable().optional(),
-  // Nullable fields in DB - can be set to null
-  agentId: z.string().uuid().nullable().optional(),
-  // #1168: instances have no provider column — the provider lives on the agent.
-  // Reject instead of silently stripping so callers don't believe it saved.
-  agentProviderId: z
-    .unknown()
-    .refine((v) => v === undefined, { message: AGENT_PROVIDER_READ_ONLY_MESSAGE })
-    .optional(),
-  agentErrorMessages: z.array(z.string()).nullable().optional(),
-  agentReplyFilter: agentReplyFilterSchema.nullable().optional(),
-  triggerEvents: z.array(z.string()).nullable().optional(),
-  telegramBotToken: z.string().nullable().optional(),
-  discordBotToken: z.string().nullable().optional(),
-  slackBotToken: z.string().nullable().optional(),
-  slackUserToken: z.string().nullable().optional(),
-  slackAuthMode: z.enum(['bot', 'user']).nullable().optional(),
-  slackAppToken: z.string().nullable().optional(),
-  gupshupCallbackUrl: z.string().nullable().optional(),
-  gupshupAuthToken: z.string().nullable().optional(),
-  gupshupEventId: z.string().nullable().optional(),
-  gupshupHandoffOptions: GupshupHandoffOptionsSchema.nullable().optional(),
-  webhookVerifyToken: z.string().nullable().optional(),
-  twilioAccountSid: z.string().nullable().optional(),
-  twilioAuthToken: z.string().nullable().optional(),
-  twilioFrom: z.string().nullable().optional(),
-  twilioMessagingServiceSid: z.string().nullable().optional(),
-  twilioStatusCallbackUrl: z.string().nullable().optional(),
-  twilioWebhookUrl: z.string().nullable().optional(),
-  // NOT NULL fields in DB - cannot be set to null
-  // agentType, agentTimeout, agentStreamMode, agentSessionStrategy, agentPrefixSenderName,
-  // triggerMode, messageDebounce* all have NOT NULL constraints
+const updateInstanceSchema = createInstanceSchema
+  .partial()
+  .extend({
+    /**
+     * Channel-specific connection config (#889).
+     *
+     * Was absent from this schema, so a PATCH carrying it returned 200 and
+     * silently dropped it — zod strips unknown keys. That made Slack's
+     * `mode: 'http'` unreachable through the API: the connect route only knows
+     * appToken/signingSecret, and the plugin reads mode/httpPort from here.
+     */
+    profileMetadata: z.record(z.unknown()).nullable().optional(),
+    // Nullable fields in DB - can be set to null
+    agentId: z.string().uuid().nullable().optional(),
+    // #1168: instances have no provider column — the provider lives on the agent.
+    // Reject instead of silently stripping so callers don't believe it saved.
+    agentProviderId: z
+      .unknown()
+      .refine((v) => v === undefined, { message: AGENT_PROVIDER_READ_ONLY_MESSAGE })
+      .optional(),
+    agentErrorMessages: z.array(z.string()).nullable().optional(),
+    agentReplyFilter: agentReplyFilterSchema.nullable().optional(),
+    triggerEvents: z.array(z.string()).nullable().optional(),
+    telegramBotToken: z.string().nullable().optional(),
+    discordBotToken: z.string().nullable().optional(),
+    slackBotToken: z.string().nullable().optional(),
+    slackUserToken: z.string().nullable().optional(),
+    slackAuthMode: z.enum(['bot', 'user']).nullable().optional(),
+    slackAppToken: z.string().nullable().optional(),
+    gupshupCallbackUrl: z.string().nullable().optional(),
+    gupshupAuthToken: z.string().nullable().optional(),
+    gupshupEventId: z.string().nullable().optional(),
+    gupshupHandoffOptions: GupshupHandoffOptionsSchema.nullable().optional(),
+    closeContactConfig: CloseContactConfigSchema.nullable().optional(),
+    webhookVerifyToken: z.string().nullable().optional(),
+    twilioAccountSid: z.string().nullable().optional(),
+    twilioAuthToken: z.string().nullable().optional(),
+    twilioFrom: z.string().nullable().optional(),
+    twilioMessagingServiceSid: z.string().nullable().optional(),
+    twilioStatusCallbackUrl: z.string().nullable().optional(),
+    twilioWebhookUrl: z.string().nullable().optional(),
+    // NOT NULL fields in DB - cannot be set to null
+    // agentType, agentTimeout, agentStreamMode, agentSessionStrategy, agentPrefixSenderName,
+    // triggerMode, messageDebounce* all have NOT NULL constraints
 
-  // Override fields with .default() to strip the default — omitted keys must stay undefined
-  // so PATCH only updates what is explicitly sent (not reset to defaults)
-  readReceipts: z.enum(['on', 'off', 'exclude-self']).optional(),
-  markOnlineOnConnect: z.boolean().optional(),
-  groupHistorySize: z.number().int().min(0).max(200).optional(),
-  reactionAck: z.enum(['on', 'off']).optional(),
-  reactionAckEmoji: z.record(z.string()).nullable().optional(),
-  ackTimeoutMs: z.number().int().min(0).max(120_000).optional(),
-  agentStalledTimeoutMs: z.number().int().min(0).optional(),
-  // Split-delay fields are NOT NULL in DB — override to strip defaults so a
-  // PATCH that omits them doesn't reset the stored values on the row.
-  messageSplitDelayMode: z.enum(['disabled', 'fixed', 'randomized']).optional(),
-  messageSplitDelayFixedMs: z.number().int().min(0).optional(),
-  messageSplitDelayMinMs: z.number().int().min(0).optional(),
-  messageSplitDelayMaxMs: z.number().int().min(0).optional(),
-  twilioValidateSignature: z.boolean().optional(),
-  // Strip the .default(false) from the create-time schema so a PATCH that
-  // omits this key doesn't silently flip the stored value back to false.
-  requireGenieSignature: z.boolean().optional(),
-  allowFirstParty: z.boolean().optional(),
-});
+    // Override fields with .default() to strip the default — omitted keys must stay undefined
+    // so PATCH only updates what is explicitly sent (not reset to defaults)
+    readReceipts: z.enum(['on', 'off', 'exclude-self']).optional(),
+    markOnlineOnConnect: z.boolean().optional(),
+    historyIdentity: z.enum(['desktop', 'web']).optional(),
+    syncFullHistory: z.boolean().optional(),
+    groupHistorySize: z.number().int().min(0).max(200).optional(),
+    reactionAck: z.enum(['on', 'off']).optional(),
+    reactionAckEmoji: z.record(z.string()).nullable().optional(),
+    ackTimeoutMs: z.number().int().min(0).max(120_000).optional(),
+    agentStalledTimeoutMs: z.number().int().min(0).optional(),
+    // Split-delay fields are NOT NULL in DB — override to strip defaults so a
+    // PATCH that omits them doesn't reset the stored values on the row.
+    messageSplitDelayMode: z.enum(['disabled', 'fixed', 'randomized']).optional(),
+    messageSplitDelayFixedMs: z.number().int().min(0).optional(),
+    messageSplitDelayMinMs: z.number().int().min(0).optional(),
+    messageSplitDelayMaxMs: z.number().int().min(0).optional(),
+    twilioValidateSignature: z.boolean().optional(),
+    // Strip the .default(false) from the create-time schema so a PATCH that
+    // omits this key doesn't silently flip the stored value back to false.
+    requireGenieSignature: z.boolean().optional(),
+    allowFirstParty: z.boolean().optional(),
+  })
+  // #1211: reject unknown fields (400 naming the key) instead of silently stripping them.
+  .strict();
 
 /**
  * Default reply filter applied when an agent is assigned without an explicit filter.
@@ -1542,7 +1564,10 @@ const connectInstanceSchema = z.object({
     .describe('Override the shared-Slack-app-token refusal (Socket Mode would split events between instances)'),
   whatsapp: z
     .object({
-      syncFullHistory: z.boolean().optional().describe('Sync full message history on connect (default: true)'),
+      syncFullHistory: z
+        .boolean()
+        .optional()
+        .describe('Sync full message history on this connect (default: the persisted instance setting)'),
     })
     .optional()
     .describe('WhatsApp-specific connection options'),
@@ -1636,12 +1661,21 @@ function hydrateConnectionOptionsForInstance(
     options.presence = instance.discordPresence;
   }
 
-  if (instance.channel === 'whatsapp-baileys' && instance.markOnlineOnConnect != null) {
-    options.whatsapp = {
-      ...(options.whatsapp as Record<string, unknown> | undefined),
-      markOnlineOnConnect: instance.markOnlineOnConnect,
-    };
-  }
+  applyWhatsAppBaileysOptions(options, instance);
+}
+
+/** Persisted Baileys socket settings; a connect body's `whatsapp` still overrides them. */
+function applyWhatsAppBaileysOptions(
+  options: Record<string, unknown>,
+  instance: Pick<InstanceRecord, 'channel' | 'markOnlineOnConnect' | 'historyIdentity' | 'syncFullHistory'>,
+): void {
+  if (instance.channel !== 'whatsapp-baileys') return;
+  options.whatsapp = {
+    historyIdentity: instance.historyIdentity,
+    syncFullHistory: instance.syncFullHistory,
+    markOnlineOnConnect: instance.markOnlineOnConnect,
+    ...(options.whatsapp as Record<string, unknown> | undefined),
+  };
 }
 
 function buildConnectPersistUpdates(instance: InstanceRecord, body: ConnectInstanceBody): Record<string, unknown> {
@@ -1866,13 +1900,8 @@ instancesRoutes.post('/:id/restart', instanceAccess, async (c) => {
     if (instance.channel === 'harness') {
       applyHarnessConnectionOptions(restartOptions, instance.profileMetadata);
     }
-    // Pass markOnlineOnConnect for WhatsApp restart (GH #310)
-    if (instance.channel === 'whatsapp-baileys' && instance.markOnlineOnConnect != null) {
-      restartOptions.whatsapp = {
-        ...(restartOptions.whatsapp as Record<string, unknown> | undefined),
-        markOnlineOnConnect: instance.markOnlineOnConnect,
-      };
-    }
+    // Persisted WhatsApp socket settings on restart (GH #310, #1211)
+    applyWhatsAppBaileysOptions(restartOptions, instance);
     await plugin.connect(id, { instanceId: id, credentials: {}, options: restartOptions });
   } catch (error) {
     return c.json(

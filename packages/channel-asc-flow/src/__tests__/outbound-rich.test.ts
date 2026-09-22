@@ -248,11 +248,12 @@ describe('outbound interactive through /sendMsgInterativaAvancado', () => {
         { text: 'amanhã 07/09 · 19:00', description: 'HAP Conjunto Ceará · Dra. Renata' },
         ...options(3),
       ],
-      list: { sectionTitle: 'Horários' },
+      list: { sectionTitle: 'Horários', buttonLabel: 'Escolher horário' },
     });
 
     const params = interativa()?.msg_interativa_parametros as Record<string, unknown>;
     expect(params.tipo).toBe('1');
+    expect((params.list as { texto_botao: string }).texto_botao).toBe('Escolher horário');
     const secao = (params.list as { secao: Array<{ texto: string; linhas: unknown[] }> }).secao[0];
     expect(secao?.texto).toBe('Horários');
     expect(secao?.linhas).toHaveLength(5);

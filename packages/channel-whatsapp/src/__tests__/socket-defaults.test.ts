@@ -17,21 +17,28 @@ describe('DEFAULT_SOCKET_CONFIG (#70)', () => {
   });
 });
 
-describe('resolveHistoryIdentity (#1126)', () => {
-  it('keeps the web identity without group history by default', () => {
-    expect(resolveHistoryIdentity({})).toEqual({ browser: Browsers.ubuntu('Chrome'), supportGroupHistory: false });
+describe('resolveHistoryIdentity (#1126, #1211)', () => {
+  it('defaults to the macOS Desktop identity with group history', () => {
+    expect(resolveHistoryIdentity({})).toEqual({ browser: Browsers.macOS('Desktop'), supportGroupHistory: true });
   });
 
-  it('pairs as macOS Desktop with group history when syncFullHistory is on', () => {
-    expect(resolveHistoryIdentity({ syncFullHistory: true })).toEqual({
+  it("'desktop' pairs as macOS Desktop with group history", () => {
+    expect(resolveHistoryIdentity({ historyIdentity: 'desktop' })).toEqual({
       browser: Browsers.macOS('Desktop'),
       supportGroupHistory: true,
     });
   });
 
+  it("'web' keeps the Ubuntu/Chrome identity without group history", () => {
+    expect(resolveHistoryIdentity({ historyIdentity: 'web' })).toEqual({
+      browser: Browsers.ubuntu('Chrome'),
+      supportGroupHistory: false,
+    });
+  });
+
   it('honours per-instance overrides', () => {
     const browser: [string, string, string] = ['Omni', 'Chrome', '1.0'];
-    expect(resolveHistoryIdentity({ syncFullHistory: true, browser, supportGroupHistory: false })).toEqual({
+    expect(resolveHistoryIdentity({ historyIdentity: 'desktop', browser, supportGroupHistory: false })).toEqual({
       browser,
       supportGroupHistory: false,
     });

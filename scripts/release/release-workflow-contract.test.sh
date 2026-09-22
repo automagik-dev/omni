@@ -175,6 +175,10 @@ else:
     require(image_build, r"gh attestation verify\s+\"oci://\$\{IMAGE\}@\$\{DIGEST\}\"[\s\S]{0,300}--signer-workflow\s+\"\$\{GITHUB_REPOSITORY\}/\.github/workflows/image-build\.yml\"", "candidate minting does not independently verify its own OCI provenance identity")
     require(image_build, r"verify-tag-ruleset\.py", "candidate minting does not require the active immutable v* tag ruleset")
     require(image_build, r"gh workflow run release\.yml[\s\S]{0,400}--field channel=stable[\s\S]{0,300}--field orchestrator_run_id=\"\$\{GITHUB_RUN_ID\}\"", "candidate minting does not orchestrate the stable release against its own run")
+    require(image_build, r"id: npm-existing[\s\S]{0,300}reconcile-npm-stable\.sh[\s\S]{0,200}--verify-only[\s\S]{0,400}3\|75\) echo \"verified=false\"", "candidate minting does not verify an existing stable npm package before dispatching")
+    require(image_build, r"- name: Publish stable npm\n\s+if: steps\.npm-existing\.outputs\.verified != 'true'", "candidate minting does not skip the npm dispatch for a verified existing package")
+    require(image_build, r"for attempt in 1 2 3; do[\s\S]{0,2000}grep -q 'npm_registry_transient'[\s\S]{0,400}sleep \$\(\(attempt \* 120\)\)", "candidate minting does not retry the npm dispatch only on transient registry failures")
+    require((root / "scripts/release/reconcile-npm-stable.sh").read_text(encoding="utf-8"), r"npm_registry_transient[\s\S]{0,40}exit 75", "npm reconciler has no transient registry exit code")
     require(image_build, r"gh workflow run version\.yml[\s\S]{0,200}--ref \"refs/tags/v\$\{VERSION\}\"[\s\S]{0,100}--field stable_publish_only=true", "candidate minting does not orchestrate the stable npm publish at the candidate tag")
     require(image_build, r"gh run list[\s\S]{0,200}--event workflow_dispatch", "candidate minting resolves dispatched runs from gh workflow run stdout instead of the run list")
     forbid(image_build, r"\brelease_url=\$\(gh workflow run|\bnpm_url=\$\(gh workflow run", "candidate minting still parses gh workflow run stdout as a run id")
@@ -761,7 +765,12 @@ else:
         (r"refs/heads/main|ref:\s*main\b", "candidate pipeline touches main"),
     ):
         forbid(release_candidate, pattern, message)
-    expected_mint = {"actions": "write"}
+    # Idempotent mint (#1209): an existing alias is attestation-verified and
+    # its run resumed instead of re-dispatching a refused mint.
+    require(mint_job, r"if docker buildx imagetools inspect \"\$\{IMAGE\}:\$\{tag\}\"[\s\S]{0,300}gh attestation verify \"oci://\$\{IMAGE\}:\$\{tag\}\"[\s\S]{0,200}--source-digest \"\$\{tag_sha\}\"[\s\S]{0,100}--signer-workflow \"\$\{GITHUB_REPOSITORY\}/\.github/workflows/image-build\.yml\"[\s\S]{0,300}refusing to continue", "candidate pipeline mint does not verify an existing alias's attestation before skipping the dispatch")
+    require(mint_job, r"completed/success\) exit 0 ;;\n\s+completed/\*\) gh run rerun \"\$\{run_id\}\" --repo \"\$\{GITHUB_REPOSITORY\}\" --failed", "candidate pipeline mint does not resume the existing image-build.yml run on rerun")
+    require(mint_job, r"grep -qiE 'not found\|manifest unknown'[\s\S]{0,300}refusing to guess", "candidate pipeline mint does not fail closed on registry inspection errors")
+    expected_mint = {"actions": "write", "packages": "read", "attestations": "read"}
     if permissions_at(rc_jobs.get("mint", []), 4) != expected_mint:
         errors.append(f"candidate pipeline mint permissions are {permissions_at(rc_jobs.get('mint', []), 4)}, expected exactly {expected_mint}")
     if permissions_at(rc_jobs.get("pin", []), 4) != {"contents": "read", "packages": "read", "attestations": "read"}:

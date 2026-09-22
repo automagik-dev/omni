@@ -16,7 +16,7 @@ import { basename, join } from 'node:path';
 import { promisify } from 'node:util';
 import { type GenerativeModel, GoogleGenerativeAI } from '@google/generative-ai';
 
-import { GEMINI_MODEL } from '../models';
+import { GEMINI_MODEL as DEFAULT_GEMINI_MEDIA } from '../models';
 import { calculateCost } from '../pricing';
 import { VIDEO_DESCRIPTION_PROMPT } from '../prompts';
 import type { ProcessOptions, ProcessingResult } from '../types';
@@ -47,13 +47,18 @@ export class VideoProcessor extends BaseProcessor {
   private geminiClient: GoogleGenerativeAI | null = null;
   private geminiModel: GenerativeModel | null = null;
 
+  /** Gemini model for video description: config override -> centralized default */
+  private get geminiModelId(): string {
+    return this.config.geminiVisionModel ?? DEFAULT_GEMINI_MEDIA;
+  }
+
   /**
    * Get lazy-initialized Gemini model for video
    */
   private getGeminiModel(): GenerativeModel | null {
     if (!this.geminiModel && this.config.geminiApiKey) {
       this.geminiClient = new GoogleGenerativeAI(this.config.geminiApiKey);
-      this.geminiModel = this.geminiClient.getGenerativeModel({ model: GEMINI_MODEL });
+      this.geminiModel = this.geminiClient.getGenerativeModel({ model: this.geminiModelId });
       this.log.info('Gemini model initialized for video');
     }
     return this.geminiModel;
@@ -109,7 +114,7 @@ export class VideoProcessor extends BaseProcessor {
   private async describeWithGemini(videoData: Buffer, mimeType: string, prompt: string): Promise<ProcessingResult> {
     const model = this.getGeminiModel();
     if (!model) {
-      return this.createFailedResult('Gemini not configured (missing API key)', 'google', GEMINI_MODEL);
+      return this.createFailedResult('Gemini not configured (missing API key)', 'google', this.geminiModelId);
     }
 
     const timeouts = getMediaTimeouts();
@@ -140,7 +145,7 @@ export class VideoProcessor extends BaseProcessor {
         { timeoutMs: timeouts.videoTimeoutMs },
       );
 
-      const costCents = calculateCost('gemini_video', GEMINI_MODEL, {
+      const costCents = calculateCost('gemini_video', this.geminiModelId, {
         inputTokens,
         outputTokens,
       });
@@ -151,7 +156,7 @@ export class VideoProcessor extends BaseProcessor {
         contentFormat: 'text',
         processingType: 'description',
         provider: 'google',
-        model: GEMINI_MODEL,
+        model: this.geminiModelId,
         processingTimeMs: 0,
         inputTokens,
         outputTokens,
@@ -161,7 +166,7 @@ export class VideoProcessor extends BaseProcessor {
       const errorMsg = error instanceof Error ? error.message : String(error);
       const isCircuit = this.isCircuitOpen(error);
       this.log.error('Gemini video description error', { error: errorMsg, circuitOpen: isCircuit });
-      return this.createFailedResult(errorMsg, 'google', GEMINI_MODEL);
+      return this.createFailedResult(errorMsg, 'google', this.geminiModelId);
     }
   }
 

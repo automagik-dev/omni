@@ -29,7 +29,7 @@ export const GEMINI_MODELS = {
   /** Vision — image/video understanding */
   VISION: 'gemini-3.1-flash-lite',
   /** STT — speech-to-text */
-  STT: 'gemini-3.1-flash-lite',
+  STT: 'gemini-3.5-flash-lite',
 } as const;
 
 // ---------------------------------------------------------------------------

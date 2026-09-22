@@ -1,6 +1,6 @@
 {
   "name": "omni-v2",
-  "version": "2.260916.3",
+  "version": "2.260922.2",
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
@@ -10,6 +10,7 @@
     "build": "turbo build",
     "typecheck": "turbo typecheck --concurrency=4",
     "lint": "biome check .",
+    "check": "bun run typecheck && bun run lint && bunx knip && make verify-migrations && make verify-versions && LOG_LEVEL=silent bun run test",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
     "test": "turbo test --concurrency=4 --continue",

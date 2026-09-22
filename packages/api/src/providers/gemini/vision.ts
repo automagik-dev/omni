@@ -23,7 +23,7 @@ const log = createLogger('gemini-vision');
  * image + video understanding. Override via `vision.model` setting
  * or `GEMINI_VISION_MODEL` env var when Google rotates the preview tag.
  */
-const DEFAULT_VISION_MODEL = 'gemini-3.1-flash-lite-preview';
+const DEFAULT_VISION_MODEL = 'gemini-3.5-flash-lite';
 
 /** Default guided prompt when no custom prompt is provided */
 const DEFAULT_PROMPT =

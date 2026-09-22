@@ -112,6 +112,20 @@ export interface GupshupHandoffOptions {
 }
 
 /**
+ * Per-instance overrides for the close-contact cooldown/escalation config.
+ * Values are milliseconds / counts; `null` disables that mechanism for the
+ * outcome (e.g. `escalationThreshold: null` never auto-promotes to terminal).
+ */
+export interface CloseContactOutcomeConfigOverride {
+  cooldownMs?: number | null;
+  escalationThreshold?: number | null;
+  escalationWindowMs?: number | null;
+}
+export type CloseContactConfigOverrides = Partial<
+  Record<'won' | 'lost' | 'redirected_sac' | 'unqualified' | 'no_response' | 'other', CloseContactOutcomeConfigOverride>
+>;
+
+/**
  * Session strategy for agent memory
  * - per_user: Same session across all chats for this user (user continuity)
  * - per_chat: All users in a chat share the session (group memory)
@@ -999,6 +1013,15 @@ export const instances = pgTable(
     /** Mark the instance as "online" when connecting to WhatsApp (default: true) */
     markOnlineOnConnect: boolean('mark_online_on_connect').notNull().default(true),
 
+    // ---- WhatsApp History Sync (#1211) ----
+    /** Pairing identity: 'desktop' = macOS Desktop + group history, 'web' = Ubuntu/Chrome */
+    historyIdentity: varchar('history_identity', { length: 10 })
+      .notNull()
+      .default('desktop')
+      .$type<'desktop' | 'web'>(),
+    /** Ask WhatsApp for full history on connect (default: false, see #70) */
+    syncFullHistory: boolean('sync_full_history').notNull().default(false),
+
     // ---- Group History Context ----
     /** Number of recent messages to fetch for group context (0 = disabled, max 200) */
     groupHistorySize: integer('group_history_size').notNull().default(50),
@@ -1028,6 +1051,14 @@ export const instances = pgTable(
     // ---- Idle-chat follow-up config (instance scope, beats agent scope) ----
     /** @see issue #404 */
     followUpConfig: jsonb('follow_up_config').$type<FollowUpSequenceConfig>(),
+
+    // ---- Close-contact cooldown/escalation overrides (per outcome) ----
+    /**
+     * Partial overrides of the close-contact defaults, keyed by outcome.
+     * Missing outcomes/keys fall back to the defaults in
+     * `packages/api/src/routes/v2/_close-contact-config.ts`.
+     */
+    closeContactConfig: jsonb('close_contact_config').$type<CloseContactConfigOverrides>(),
 
     // ---- Bridge Tmux Session (per-instance override for genie NATS provider) ----
     /**

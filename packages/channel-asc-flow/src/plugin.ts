@@ -294,8 +294,9 @@ function collectTurnParts(message: OutgoingMessage, turn: AscFlowTurnState | und
 }
 
 /** The list presentation hints `buildUra` accepts, when the caller set any. */
-function listOptionsOf(content: OutgoingMessage['content']): InteractiveListOptions {
+function listOptionsOf(content: OutgoingMessage['content']): InteractiveListOptions & { buttonLabel?: string } {
   return {
+    ...(content.list?.buttonLabel !== undefined ? { buttonLabel: content.list.buttonLabel } : {}),
     ...(content.list?.sectionTitle !== undefined ? { sectionTitle: content.list.sectionTitle } : {}),
     ...(content.list?.forceList !== undefined ? { forceList: content.list.forceList } : {}),
   };

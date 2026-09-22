@@ -40,7 +40,7 @@
  */
 
 import type { EventBus } from '@omni/core';
-import { NotFoundError } from '@omni/core';
+import { NotFoundError, createLogger } from '@omni/core';
 import type { Database } from '@omni/db';
 import { type ChannelType, type Instance, type NewInstance, instances } from '@omni/db';
 import { and, eq, inArray, sql } from 'drizzle-orm';
@@ -48,6 +48,8 @@ import { invalidateProviderCacheForInstance } from '../plugins/agent-dispatcher'
 import { forgetInstanceOwner, rememberInstanceOwners } from '../tenancy/instance-owner-registry';
 import { credentialSealingEngages, openCredentialField, sealCredentialField } from '../tenancy/sealed-credentials';
 import { currentTenantScope, runAfterTenantCommit, scopedHandle } from '../tenancy/tenant-scope';
+
+const log = createLogger('instance-service');
 
 export interface ListInstancesOptions {
   channel?: ChannelType[];
@@ -384,6 +386,19 @@ export class InstanceService {
     }
 
     rememberInstanceOwners([updated]);
+
+    // omni#1220: after commit so a rolled-back update never publishes. Key
+    // names only — values may carry credentials.
+    const eventBus = this.eventBus;
+    if (eventBus) {
+      const changedKeys = Object.keys(data).filter((key) => data[key as keyof typeof data] !== undefined);
+      runAfterTenantCommit(() => {
+        eventBus
+          .publish('instance.updated', { instanceId: id, channelType: updated.channel, changedKeys })
+          .catch((error) => log.warn('Failed to publish instance.updated', { instanceId: id, error: String(error) }));
+      });
+    }
+
     return openInstanceCredentials(updated);
   }
 
