@@ -26,7 +26,7 @@ import { buildSlackManifest } from '@omni/channel-slack';
 import { createLogger } from '@omni/core';
 import type { Instance, NewInstance } from '@omni/db';
 import { SLACK_APP_SETTINGS, SLACK_OAUTH_CALLBACK_PATH } from '../constants/slack-app';
-import type { SlackOAuthMode } from '../lib/slack-oauth';
+import { type SlackOAuthMode, redactSlackTokens } from '../lib/slack-oauth';
 import type { InstanceService } from './instances';
 import type { SettingsService } from './settings';
 
@@ -39,7 +39,7 @@ const log = createLogger('api:slack-oauth');
 /** The `GET /slack/app` shape: nothing secret, nothing tenant-specific. */
 export interface SlackAppConfig {
   configured: boolean;
-  /** Settings keys that are unset (or, for `server.public_url`, not a URL). */
+  /** Settings keys that are unset (or, for `server.public_url`, not an HTTPS URL). */
   missing: string[];
   redirectUrl: string | null;
   manifestUrl: string | null;
@@ -64,13 +64,21 @@ export type SlackAppResolution =
 
 type SettingsReader = Pick<SettingsService, 'getSecret' | 'getString'>;
 
-/** Public URL is usable when it parses; `redirectUrl` keeps any path prefix it carries. */
+/**
+ * Public URL is usable when it parses AND is HTTPS; `redirectUrl` keeps any
+ * path prefix it carries.
+ *
+ * Slack refuses a non-HTTPS `redirect_uri`, so an `http://` origin can never
+ * complete an install: reporting it as configured would hand the operator a
+ * manifest link and an authorize URL that Slack rejects at the exchange
+ * (`bad_redirect_uri`). It is reported as an unset `server.public_url` instead.
+ */
 function parsePublicUrl(raw: string | undefined): { publicUrl: string; publicOrigin: string } | null {
   if (!raw) return null;
   const trimmed = raw.trim().replace(/\/+$/, '');
   try {
     const url = new URL(trimmed);
-    if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
+    if (url.protocol !== 'https:') return null;
     return { publicUrl: trimmed, publicOrigin: url.origin };
   } catch {
     return null;
@@ -348,7 +356,9 @@ export async function upsertSlackOAuthInstance(
   try {
     await plugin.connect(row.id, { instanceId: row.id, credentials: {}, options: buildConnectOptions(input, row) });
   } catch (error) {
-    const connectError = error instanceof Error ? error.message : 'Unknown error';
+    // Redacted at the log site with the same rule the parked outcome uses: a
+    // plugin error can quote the token it was handed.
+    const connectError = redactSlackTokens(error instanceof Error ? error.message : 'Unknown error');
     log.error('Slack OAuth instance failed to connect', { instanceId: row.id, error: connectError });
     return { instanceId: row.id, created, connectError };
   }

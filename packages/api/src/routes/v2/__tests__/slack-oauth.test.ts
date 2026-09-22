@@ -14,6 +14,7 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, setSystemTime, test } from 'bun:test';
 import { configureLogging } from '@omni/core';
+import type { Database } from '@omni/db';
 import { Hono } from 'hono';
 import { SLACK_APP_SETTINGS } from '../../../constants/slack-app';
 import { signState, verifyState } from '../../../lib/slack-oauth';
@@ -21,6 +22,7 @@ import { errorHandler } from '../../../middleware/error';
 import { webhookIngressRateLimitMiddleware } from '../../../middleware/rate-limit';
 import { isAllowedReturnTo } from '../../../services/slack-oauth';
 import type { TenantAuthContext } from '../../../tenancy/auth-context';
+import { currentTenantScope, runInTenantScope } from '../../../tenancy/tenant-scope';
 import { buildWorkerTenantContext } from '../../../tenancy/worker-tenant-context';
 import type { AppVariables } from '../../../types';
 import { slackOAuthCallback, slackRoutes } from '../slack';
@@ -77,6 +79,14 @@ interface FakeRow extends Record<string, unknown> {
 interface HarnessOptions {
   settings?: Record<string, string | undefined>;
   tenant?: TenantAuthContext;
+  /**
+   * Tenant the three Slack SECRETS are sealed under, as a tenant-scoped
+   * `PUT /settings` seals them: `getSecret` then answers only inside that
+   * tenant's scope and reads as unset everywhere else (fail closed), which is
+   * exactly what `openCredentialField(null, sealed)` does in production. The
+   * two identifiers stay in the clear, as their registry entries say.
+   */
+  sealedUnder?: string;
   slackResponses?: { access?: () => unknown; usersInfo?: () => unknown };
   connect?: () => Promise<void>;
   createThrows?: (attempt: number) => Error | undefined;
@@ -87,9 +97,12 @@ const nextId = () => `aaaaaaaa-aaaa-4aaa-8aaa-${String(++rowCounter).padStart(12
 
 function makeHarness(opts: HarnessOptions = {}) {
   const settingsValues = opts.settings ?? ALL_SETTINGS;
+  const sealOpens = () => opts.sealedUnder === undefined || currentTenantScope()?.tenantId === opts.sealedUnder;
   const settings = {
     getString: mock(async (key: string, env?: string) => settingsValues[key] ?? (env ? process.env[env] : undefined)),
-    getSecret: mock(async (key: string, env?: string) => settingsValues[key] ?? (env ? process.env[env] : undefined)),
+    getSecret: mock(async (key: string, env?: string) =>
+      sealOpens() ? (settingsValues[key] ?? (env ? process.env[env] : undefined)) : undefined,
+    ),
   };
 
   const rows: FakeRow[] = [];
@@ -356,6 +369,21 @@ describe('GET /slack/app', () => {
     const h = harness({ settings: {} });
     const { text } = await h.request('/slack/app');
     expect(JSON.parse(text)).toEqual({ configured: false, missing: ALL_KEYS, redirectUrl: null, manifestUrl: null });
+  });
+
+  test('reports an http public URL as unset, because Slack refuses a non-HTTPS redirect', async () => {
+    const h = harness({ settings: { ...ALL_SETTINGS, [SLACK_APP_SETTINGS.publicUrl.key]: 'http://localhost:8882' } });
+    const { text } = await h.request('/slack/app');
+    const body = JSON.parse(text);
+
+    expect(body.configured).toBe(false);
+    expect(body.missing).toEqual([SLACK_APP_SETTINGS.publicUrl.key]);
+    expect(body.redirectUrl).toBeNull();
+    expect(body.manifestUrl).toBeNull();
+
+    // And the install cannot start against a URI Slack would reject.
+    const { res } = await h.start();
+    expect(res.status).toBe(409);
   });
 
   test('offers the manifest link as soon as the public URL is set', async () => {
@@ -733,6 +761,20 @@ describe('GET /api/v2/slack/oauth/callback', () => {
     expect(cb.res.status).toBe(400);
     expect(h.fetchCalls).toEqual([]);
   });
+
+  test('the unconfigured page is the expired-link page: the browser learns nothing about the deployment', async () => {
+    const configured = harness();
+    const started = await configured.start();
+    const [nonce, sig] = configured.stateOf(started.body.authorizeUrl).split('.') as [string, string];
+    // Same nonce, broken signature: a configured deployment answers invalid_state.
+    const invalidState = await configured.callback({ code: 'c', state: `${nonce}.${sig.slice(0, -2)}00` });
+
+    const unconfigured = harness({ settings: {} });
+    const notConfigured = await unconfigured.callback({ code: 'c', state: `${nonce}.${sig}` });
+
+    expect(notConfigured.res.status).toBe(invalidState.res.status);
+    expect(notConfigured.text).toBe(invalidState.text);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -740,12 +782,14 @@ describe('GET /api/v2/slack/oauth/callback', () => {
 // ---------------------------------------------------------------------------
 
 describe('tenant context', () => {
-  test('a tenant-class start makes the callback run the upsert inside runInTenantScope', async () => {
+  test('a tenant-class start makes the callback read the app keys and run the upsert inside runInTenantScope', async () => {
     const h = harness({ tenant: buildWorkerTenantContext(TENANT_A) });
     const { body, cb } = await install(h);
 
     expect(cb.res.status).toBe(302);
-    expect(h.calls).toEqual({ create: 1, update: 0, connect: 1, transactions: 1 });
+    // Two tenant-stamped transactions: the settings read that opens the
+    // deployment keys as the flow's tenant, then the upsert.
+    expect(h.calls).toEqual({ create: 1, update: 0, connect: 1, transactions: 2 });
     expect((await h.result(body.nonce)).body).toEqual({ status: 'done', instanceId: h.rows[0]?.id });
   });
 
@@ -753,6 +797,58 @@ describe('tenant context', () => {
     const h = harness();
     await install(h);
     expect(h.calls.transactions).toBe(0);
+  });
+
+  test('opens deployment keys sealed under the tenant that configured them', async () => {
+    const tenant = buildWorkerTenantContext(TENANT_A);
+    const h = harness({ tenant, sealedUnder: TENANT_A });
+    const db = h.db as unknown as Database;
+
+    // `POST /oauth/start` runs inside the tenancy edge's scope in production;
+    // this harness has no such middleware, so the scope is opened around it.
+    const started = await runInTenantScope(db, tenant, () => h.start());
+    expect(started.res.status).toBe(200);
+
+    // The callback carries NO credential and so no scope of its own. Without
+    // the pending record's tenant it would read the sealed secrets as unset —
+    // no client secret to verify the state with, and the fixed
+    // "expired link" page instead of an install.
+    const cb = await h.callback({ code: 'code-123', state: h.stateOf(started.body.authorizeUrl) });
+    expect(cb.res.status).toBe(302);
+    expect(h.rows).toHaveLength(1);
+    expect(h.rows[0]?.slackSigningSecret).toBe(SIGNING_SECRET);
+    expect((await h.result(started.body.nonce)).body).toEqual({ status: 'done', instanceId: h.rows[0]?.id });
+
+    // Three tenant-stamped transactions: the start above, the callback's own
+    // scoped settings read, and the upsert it runs in the same tenant.
+    expect(h.calls.transactions).toBe(3);
+  });
+
+  test('a tenant that cannot open the sealed keys cannot start a flow either', async () => {
+    const h = harness({ tenant: buildWorkerTenantContext(TENANT_B), sealedUnder: TENANT_A });
+    const started = await runInTenantScope(h.db as unknown as Database, buildWorkerTenantContext(TENANT_B), () =>
+      h.start(),
+    );
+
+    expect(started.res.status).toBe(409);
+    const error = (started.body as unknown as { error: { code: string; details: { missing: string[] } } }).error;
+    expect(error.code).toBe('SLACK_APP_NOT_CONFIGURED');
+    expect(error.details.missing).toEqual([
+      SLACK_APP_SETTINGS.clientSecret.key,
+      SLACK_APP_SETTINGS.signingSecret.key,
+      SLACK_APP_SETTINGS.appToken.key,
+    ]);
+  });
+
+  test('a legacy outcome is readable only by a caller with no tenant context', async () => {
+    const legacy = harness();
+    const { body } = await install(legacy);
+
+    // Same process-local store; a tenant credential knowing the nonce is not
+    // the deployment, so the outcome stays parked for the legacy caller.
+    const scoped = harness({ tenant: buildWorkerTenantContext(TENANT_A) });
+    expect((await scoped.result(body.nonce)).body).toEqual({ status: 'pending' });
+    expect((await legacy.result(body.nonce)).body.status).toBe('done');
   });
 
   test('another tenant cannot read the outcome, and the owner still can', async () => {

@@ -142,6 +142,42 @@ describe('shared Slack app token, bot identity (#1185 / slack-personal-oauth)', 
     expect(calls.create + calls.update).toBe(0);
   });
 
+  test('a mode-only PATCH onto a token that already carries the workspace bot is refused', async () => {
+    // The conflict is keyed on the PAIR (token, bot mode), so flipping the mode
+    // creates it just as moving the token would. The token is not in the body:
+    // the guard must read it from the row.
+    const { app, calls } = mount([other()], { slackAuthMode: 'user', slackUserId: 'U_ANA' });
+    const res = await app.request(`/instances/${SELF_ID}`, { ...json({ slackAuthMode: 'bot' }), method: 'PATCH' });
+
+    expect(res.status).toBe(409);
+    const text = await res.text();
+    expect(text).toContain('SLACK_APP_TOKEN_IN_USE');
+    expect(text).toContain('fde-evaluator');
+    expect(text).not.toContain(TOKEN);
+    // Refused at the moment the impossible state was asked for, not stored and
+    // then refused for ever by the connect path.
+    expect(calls.update).toBe(0);
+  });
+
+  test('force: true still lets a mode-only PATCH through', async () => {
+    const { app, calls } = mount([other()], { slackAuthMode: 'user', slackUserId: 'U_ANA' });
+    const res = await app.request(`/instances/${SELF_ID}`, {
+      ...json({ slackAuthMode: 'bot', force: true }),
+      method: 'PATCH',
+    });
+
+    expect(res.status).toBe(200);
+    expect(calls.update).toBe(1);
+  });
+
+  test('a mode-only PATCH that stays user-mode is accepted against the workspace bot', async () => {
+    const { app, calls } = mount([other()], { slackAuthMode: 'user', slackUserId: 'U_ANA' });
+    const res = await app.request(`/instances/${SELF_ID}`, { ...json({ slackAuthMode: 'user' }), method: 'PATCH' });
+
+    expect(res.status).toBe(200);
+    expect(calls.update).toBe(1);
+  });
+
   test('create as a user-mode instance is accepted even against a bot-mode row on the same token', async () => {
     const { app, calls } = mount([other()]);
     const created = await app.request(

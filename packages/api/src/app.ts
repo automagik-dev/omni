@@ -75,6 +75,7 @@ import { requireSignedInstanceMiddleware } from './middleware/require-signed-ins
 import { scopeEnforcerMiddleware } from './middleware/scope-enforcer';
 import { tenancyMiddleware } from './middleware/tenancy';
 
+import { SLACK_OAUTH_CALLBACK_PATH } from './constants/slack-app';
 import { createContextMiddleware } from './middleware/context';
 import { errorHandler } from './middleware/error';
 import { rateLimitMiddleware, webhookIngressRateLimitMiddleware } from './middleware/rate-limit';
@@ -91,6 +92,30 @@ import { resolveA2AAgentCard } from './services/a2a-discovery';
 import { isMultitenancyEnabled } from './tenancy/feature-flag';
 import type { AppVariables } from './types';
 import { parseJsonObjectBody } from './utils/json-body';
+
+/**
+ * GET/HEAD paths that are NOT raced against the request timeout.
+ *
+ * The Slack OAuth callback is a GET that writes: it exchanges the code with
+ * Slack, upserts the instance and connects the plugin. Racing it against the
+ * 30 s budget would answer the browser with 408 while the install carries on
+ * to completion in the background — the worst of both, since the member reads
+ * a failure for an install that actually happened.
+ */
+const TIMEOUT_EXEMPT_PATHS: readonly string[] = [SLACK_OAUTH_CALLBACK_PATH];
+
+/**
+ * Whether this request is raced against the request timeout.
+ *
+ * `Promise.race` is only safe for reads: abandoning a read result is harmless,
+ * while for a write the handler keeps running after the timeout, orphaning
+ * mutexes and corrupting state (see #72 / #70). So only GET/HEAD is timed out
+ * — minus the enumerated GETs that write.
+ */
+export function shouldTimeoutRequest(method: string, path: string): boolean {
+  if (method !== 'GET' && method !== 'HEAD') return false;
+  return !TIMEOUT_EXEMPT_PATHS.includes(path);
+}
 
 /**
  * Create app result with app and services
@@ -117,11 +142,8 @@ export function createApp(
   app.use('*', timing());
 
   // Request safety: timeout and body size limits
-  // Promise.race timeout is only safe for reads (GETs) — abandoning a read
-  // result is harmless. For writes, the handler keeps running after timeout,
-  // orphaning mutexes and corrupting state (see #72 / #70).
   app.use('*', async (c, next) => {
-    if (c.req.method !== 'GET' && c.req.method !== 'HEAD') return next();
+    if (!shouldTimeoutRequest(c.req.method, c.req.path)) return next();
     return defaultTimeoutMiddleware(c, next);
   });
   app.use('*', defaultBodyLimitMiddleware);
