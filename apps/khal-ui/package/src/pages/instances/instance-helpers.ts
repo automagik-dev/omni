@@ -123,3 +123,39 @@ export function deriveSendReceiveProof(
 export function isQrImage(qr: string | null | undefined): boolean {
   return typeof qr === 'string' && qr.startsWith('data:image');
 }
+
+// ── Slack one-click install (wish: slack-personal-oauth) ──────────────────────
+
+/** The only query parameter the Slack OAuth callback appends to `returnTo`. */
+export const SLACK_RETURN_PARAM = 'slack';
+
+/** The nonce shape `GET /slack/oauth/result/:nonce` accepts; anything else is junk. */
+const SLACK_NONCE_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
+
+/**
+ * Read the single-use install nonce the Slack callback handed back as
+ * `?slack=<nonce>`.
+ *
+ * Takes the query string as a value — the caller reads the browser location, so
+ * this stays DOM-free and testable — and returns null for an empty search, a
+ * search with no `slack` parameter, or a value the API's nonce route would
+ * reject anyway. `URLSearchParams` tolerates the leading `?`.
+ */
+export function readSlackReturnNonce(search: string): string | null {
+  if (search === '') return null;
+  const nonce = new URLSearchParams(search).get(SLACK_RETURN_PARAM);
+  if (nonce === null) return null;
+  return SLACK_NONCE_PATTERN.test(nonce) ? nonce : null;
+}
+
+/**
+ * Hover/accessible text for a disabled Connect Slack control: names every
+ * settings key the deployment still has to fill in, so the operator knows what
+ * to set instead of just that something is missing. Key names only — no
+ * credential value ever reaches the browser.
+ */
+export function slackMissingKeysText(missing: readonly string[]): string {
+  if (missing.length === 0) return 'Slack app is not configured.';
+  const noun = missing.length === 1 ? 'setting' : 'settings';
+  return `Slack app is not configured — missing ${noun}: ${missing.join(', ')}.`;
+}

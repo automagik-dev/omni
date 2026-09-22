@@ -9,6 +9,8 @@ import {
   isQrImage,
   isWhatsApp,
   normalizeConnState,
+  readSlackReturnNonce,
+  slackMissingKeysText,
 } from './instance-helpers';
 
 describe('production guard', () => {
@@ -75,6 +77,45 @@ describe('qr payload', () => {
     expect(isQrImage('data:image/png;base64,AAAA')).toBe(true);
     expect(isQrImage('2@abc,def')).toBe(false);
     expect(isQrImage(null)).toBe(false);
+  });
+});
+
+describe('readSlackReturnNonce', () => {
+  test('reads the nonce the Slack callback appended', () => {
+    expect(readSlackReturnNonce('?slack=Abc123_-xyz')).toBe('Abc123_-xyz');
+    expect(readSlackReturnNonce('slack=Abc123_-xyz')).toBe('Abc123_-xyz');
+    expect(readSlackReturnNonce('?tab=events&slack=Abc123_-xyz')).toBe('Abc123_-xyz');
+  });
+  test('returns null for an unrelated query', () => {
+    expect(readSlackReturnNonce('?tab=events')).toBeNull();
+    expect(readSlackReturnNonce('?slackish=Abc123_-xyz')).toBeNull();
+  });
+  test('returns null for an empty search', () => {
+    expect(readSlackReturnNonce('')).toBeNull();
+  });
+  test('rejects a value the nonce route would refuse', () => {
+    expect(readSlackReturnNonce('?slack=')).toBeNull();
+    expect(readSlackReturnNonce('?slack=short')).toBeNull();
+    expect(readSlackReturnNonce('?slack=has%20a%20space')).toBeNull();
+    expect(readSlackReturnNonce(`?slack=${'a'.repeat(129)}`)).toBeNull();
+  });
+});
+
+describe('slackMissingKeysText', () => {
+  test('names the single missing key', () => {
+    expect(slackMissingKeysText(['server.public_url'])).toBe(
+      'Slack app is not configured — missing setting: server.public_url.',
+    );
+  });
+  test('names every missing key', () => {
+    const text = slackMissingKeysText(['slack.app.client_id', 'slack.app.client_secret', 'server.public_url']);
+    expect(text).toBe(
+      'Slack app is not configured — missing settings: slack.app.client_id, slack.app.client_secret, server.public_url.',
+    );
+    expect(text).toContain('slack.app.client_secret');
+  });
+  test('stays readable when the API reports nothing missing', () => {
+    expect(slackMissingKeysText([])).toBe('Slack app is not configured.');
   });
 });
 

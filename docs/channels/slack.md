@@ -16,9 +16,8 @@ a new app.
 | Operator | `omni slack app setup` | **Once per deployment** — register the deployment's Slack app |
 | Member | `omni slack connect` | **Every time** — once per person, and again whenever they re-authorize |
 
-`omni slack connect` is the member path available today. The dashboard's
-**Connect Slack** button ships with the khal-ui update that follows this
-change; until then, connect from the CLI.
+Members have two equivalent paths: `omni slack connect` from a terminal, or the
+dashboard's **Connect Slack** button on the Instances page.
 
 `omni slack app status` reports whether the app is configured, which settings
 are still missing, and the redirect and manifest links.
@@ -48,8 +47,12 @@ command-line flag).
 ### Connecting a member (every time)
 
 `omni slack connect` calls `POST /api/v2/slack/oauth/start`, opens the
-returned Slack authorize URL, and waits for the callback; the dashboard button
-will do the same thing once the khal-ui update ships and returns the person to the page they started from. The
+returned Slack authorize URL, and waits for the callback; the dashboard's
+**Connect Slack** button does the same thing and returns the person to the page
+they started from. The button sends that page's own address as the return
+address, so **the dashboard must be served from the `server.public_url`
+origin** — from anywhere else the API refuses the return address and the page
+shows that error instead of starting the install. The
 default mode is `user` — the member's own `xoxp` token, so the instance acts
 as them — and `--mode bot` installs the workspace bot instead. The instance is
 created (or re-authorized, if that person already installed) and connected for
