@@ -76,8 +76,15 @@ mock.module('../../output.js', () => ({
 }));
 
 const { __testables, createSlackCommand } = await import('../slack');
-const { handleAppSetup, handleAppStatus, handleConnect, maskSecret, SETTING_KEYS, DEFAULT_TIMEOUT_SECONDS } =
-  __testables;
+const {
+  dmSendHint,
+  handleAppSetup,
+  handleAppStatus,
+  handleConnect,
+  maskSecret,
+  SETTING_KEYS,
+  DEFAULT_TIMEOUT_SECONDS,
+} = __testables;
 
 beforeEach(() => {
   outputCalls.length = 0;
@@ -622,6 +629,12 @@ describe('createSlackCommand wiring', () => {
         expect(flag).not.toContain('<');
       }
     }
+  });
+
+  test('the dm hint is a flag-based send invocation, not the old positional form', () => {
+    const hint = dmSendHint('felipe-slack', 'D05J8JA79QA');
+    expect(hint).toBe('Send with: omni send --instance felipe-slack --to D05J8JA79QA --text "..."');
+    expect(hint).not.toContain('send text ');
   });
 
   test('connect declares --mode, --no-open and --timeout', () => {
