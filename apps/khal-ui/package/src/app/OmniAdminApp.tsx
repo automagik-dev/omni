@@ -15,6 +15,7 @@
  */
 import { useState } from 'react';
 import { RouterProvider, createMemoryRouter } from 'react-router-dom';
+import { readSlackReturnNonce } from '../pages/instances/instance-helpers';
 import { OmniClientProvider } from './providers/OmniClientProvider';
 import { QueryProvider } from './providers/QueryProvider';
 import { ScopeProvider } from './providers/ScopeProvider';
@@ -27,8 +28,26 @@ export interface OmniAdminAppProps {
   initialPath?: string;
 }
 
+/**
+ * Where this mount should start.
+ *
+ * Normally the host's `initialPath`. The one exception is the Slack install
+ * return leg: the callback sends the browser back to the shell URL carrying
+ * `?slack=<nonce>`, and only the instances page knows how to resolve that
+ * nonce, report the outcome and refresh the list. The nonce is single-use and
+ * expires in five minutes, so if this mount opened on some other route the
+ * outcome would simply never be surfaced. Reading the browser query to choose
+ * the starting route is the same thing the dev harness does through
+ * `meta.initialPath`; it neither navigates nor rewrites the URL bar, and the
+ * instances page still owns the nonce.
+ */
+function startingPath(initialPath: string): string {
+  if (typeof window === 'undefined') return initialPath;
+  return readSlackReturnNonce(window.location.search) === null ? initialPath : '/instances';
+}
+
 export function OmniAdminApp({ bffBase = '/omni', initialPath = '/' }: OmniAdminAppProps) {
-  const [router] = useState(() => createMemoryRouter(routes, { initialEntries: [initialPath] }));
+  const [router] = useState(() => createMemoryRouter(routes, { initialEntries: [startingPath(initialPath)] }));
 
   return (
     <OmniClientProvider bffBase={bffBase}>

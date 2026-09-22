@@ -97,12 +97,21 @@ export function SettingsPage() {
   const put = useOmniMutation({
     mutationFn: (vars: { key: string; value: unknown; reason: string }) =>
       ext.settings.put(vars.key, vars.value, vars.reason),
-    invalidate: [['settings', 'list']],
+    // The Slack app card reads ['slack', 'app'] with a 30 s staleTime, so a write
+    // that fills the last missing key has to drop that entry as well or the card
+    // keeps reporting the deployment unconfigured right above the proof it landed.
+    invalidate: [
+      ['settings', 'list'],
+      ['slack', 'app'],
+    ],
     readBack: (_d, vars) => ext.settings.get(vars.key),
   });
   const remove = useOmniMutation({
     mutationFn: (key: string) => ext.settings.remove(key),
-    invalidate: [['settings', 'list']],
+    invalidate: [
+      ['settings', 'list'],
+      ['slack', 'app'],
+    ],
   });
 
   const groups = useMemo(() => {
@@ -123,12 +132,14 @@ export function SettingsPage() {
    * The single way into the editor below — a table row click and the Slack app
    * card both land here, so the secret masking and the empty-value guard have
    * exactly one implementation. A secret starts blank; a key with no row yet
-   * (never written, default only) starts blank too.
+   * (never written, default only) starts blank too, and so does a row whose
+   * value is null — `displayValue` renders that as an em dash for the table, and
+   * seeding the editor with it would let an operator save "—" as the value.
    */
   const selectKey = (key: string) => {
     const row = (list.data?.items ?? []).find((s) => s.key === key);
     setSelectedKey(key);
-    setEditValue(row && !row.isSecret ? displayValue(row) : '');
+    setEditValue(row && !row.isSecret && row.value !== null && row.value !== undefined ? displayValue(row) : '');
     setRestoreValue('');
     put.reset();
   };

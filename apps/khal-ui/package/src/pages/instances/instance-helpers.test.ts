@@ -11,6 +11,7 @@ import {
   normalizeConnState,
   readSlackReturnNonce,
   slackMissingKeysText,
+  stripSlackReturnParam,
 } from './instance-helpers';
 
 describe('production guard', () => {
@@ -136,5 +137,34 @@ describe('minimalPatch', () => {
   test('sends a changed credential', () => {
     const body = minimalPatch({ discordBotToken: 'new-token' }, current, ['discordBotToken']);
     expect(body).toEqual({ discordBotToken: 'new-token' });
+  });
+});
+
+describe('stripSlackReturnParam', () => {
+  test('removes the slack parameter and nothing else', () => {
+    expect(stripSlackReturnParam('?slack=Abc123_-xyz')).toBe('');
+    expect(stripSlackReturnParam('?a=1&slack=Abc123_-xyz')).toBe('?a=1');
+    expect(stripSlackReturnParam('?slack=Abc123_-xyz&a=1')).toBe('?a=1');
+    expect(stripSlackReturnParam('?a=1&slack=Abc123_-xyz&b=2')).toBe('?a=1&b=2');
+  });
+
+  test('leaves the neighbours byte-identical, which URLSearchParams would not', () => {
+    // A space stays percent-encoded, a valueless flag gains no '=', and a
+    // repeated key keeps both values in order.
+    expect(stripSlackReturnParam('?a=b%20c&slack=Abc123_-xyz')).toBe('?a=b%20c');
+    expect(stripSlackReturnParam('?flag&slack=Abc123_-xyz')).toBe('?flag');
+    expect(stripSlackReturnParam('?a=1&a=2&slack=Abc123_-xyz')).toBe('?a=1&a=2');
+    expect(stripSlackReturnParam('?redirect=%2Fa%2Fb&slack=Abc123_-xyz')).toBe('?redirect=%2Fa%2Fb');
+  });
+
+  test('is a no-op when there is no slack parameter', () => {
+    expect(stripSlackReturnParam('')).toBe('');
+    expect(stripSlackReturnParam('?a=1')).toBe('?a=1');
+    expect(stripSlackReturnParam('a=1')).toBe('?a=1');
+  });
+
+  test('does not strip a parameter that merely starts with the same letters', () => {
+    expect(stripSlackReturnParam('?slackbot=1&slack=Abc123_-xyz')).toBe('?slackbot=1');
+    expect(stripSlackReturnParam('?slack_team=T1')).toBe('?slack_team=T1');
   });
 });
