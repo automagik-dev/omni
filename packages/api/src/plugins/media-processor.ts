@@ -183,9 +183,31 @@ interface MediaResolution {
 }
 
 /**
+ * Pick the Slack token that can actually READ an inbound `url_private` file.
+ *
+ * In `authMode: 'user'` the workspace is joined as the authorizing human and
+ * the bot user need not be a member of the channel the file was shared in —
+ * files.slack.com then answers the bot token with a 403. The xoxp user token
+ * (which carries `files:read`) is the one that can read it, so user-mode rows
+ * download as the user.
+ *
+ * Every other row keeps today's behaviour exactly: bot mode, an absent auth
+ * mode, and user mode with no stored user token all download as the bot.
+ */
+function selectSlackDownloadToken(instance: Record<string, unknown>): string | undefined {
+  const slackAuthMode = instance.slackAuthMode as string | undefined;
+  const slackUserToken = instance.slackUserToken as string | undefined;
+  if (slackAuthMode === 'user' && typeof slackUserToken === 'string' && slackUserToken.length > 0) {
+    return slackUserToken;
+  }
+  return instance.slackBotToken as string | undefined;
+}
+
+/**
  * Build fetch options for authenticated media downloads.
- * Slack private URLs require a bot-token Authorization header — we look it up
- * from the instances table so credentials never enter the event payload or DB.
+ * Slack private URLs require a token Authorization header — we look the
+ * instance row up from the instances table so credentials never enter the
+ * event payload or the message row.
  */
 async function buildFetchOptions(
   ctx: MediaProcessorContext,
@@ -196,9 +218,9 @@ async function buildFetchOptions(
   if (channelType !== 'slack') return undefined;
   try {
     const instance = await runMediaDb(ctx, trustedTenantId, () => ctx.services.instances.getById(instanceId));
-    const slackBotToken = (instance as Record<string, unknown>).slackBotToken as string | undefined;
-    if (slackBotToken) {
-      return { headers: { Authorization: `Bearer ${slackBotToken}` } };
+    const token = selectSlackDownloadToken(instance as Record<string, unknown>);
+    if (token) {
+      return { headers: { Authorization: `Bearer ${token}` } };
     }
   } catch {
     // If instance lookup fails, attempt unauthenticated download anyway
@@ -867,6 +889,7 @@ export async function setupMediaProcessor(eventBus: EventBus, db: Database, serv
 }
 
 export const __test__ = {
+  buildFetchOptions,
   persistProcessingResult,
   resolveSafeMediaContentEventId,
   processMessageMedia,

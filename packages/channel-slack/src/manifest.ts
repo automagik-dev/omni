@@ -74,11 +74,17 @@ export const BOT_EVENTS = [
  *
  * `im:write` opens DMs (conversations.open). Note the USER scope for opening
  * a channel is `channels:write`, not the bot's `channels:manage`.
+ *
+ * `files:read` is what lets the xoxp token fetch an inbound `url_private`
+ * attachment. In user mode the bot user need not be a member of the channel
+ * the file was shared in, so the bot token gets a 403 and the user token is
+ * the only one that can read it.
  */
 export const USER_SCOPES = [
   'channels:history',
   'channels:read',
   'chat:write',
+  'files:read',
   'files:write',
   'groups:history',
   'groups:read',

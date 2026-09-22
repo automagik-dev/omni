@@ -2470,13 +2470,15 @@ export class SlackPlugin extends BaseChannelPlugin {
   /**
    * Emit inbound Slack file attachments.
    *
-   * Slack `url_private*` links require bot-token auth.  Rather than downloading
-   * the entire file here (which would copy large files entirely into heap memory
+   * Slack `url_private*` links require token auth.  Rather than downloading the
+   * entire file here (which would copy large files entirely into heap memory
    * before base64-encoding them into a data: URI), we pass the private URL as
-   * `mediaUrl` and include `_slackAuth.botToken` in `rawPayload`.  The
-   * media-processor plugin reads that field and forwards it as an Authorization
-   * header when it calls `storeFromUrl`, so the download happens exactly once
-   * and never needs to be base64-encoded.
+   * `mediaUrl` and no credential at all.  The media-processor plugin looks the
+   * instance row up by `instanceId` in the instances table and forwards its
+   * Slack token as an Authorization header when it calls `storeFromUrl` — the
+   * user token in `authMode: 'user'`, the bot token otherwise — so the download
+   * happens exactly once, never needs to be base64-encoded, and no credential
+   * ever rides in the event payload.
    */
   private async handleInboundFiles(
     instanceId: string,

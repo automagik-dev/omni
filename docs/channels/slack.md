@@ -69,6 +69,21 @@ Several members of one workspace share a single Bolt receiver and a single
 app-level token. Each event is delivered only to the instances Slack
 authorized it for, so one member's DMs never reach another member's instance.
 
+#### Already connected? Re-authorize once for inbound files
+
+User mode now requests the `files:read` user scope, because an inbound file is
+downloaded from `files.slack.com` with the **user** token when the instance runs
+in `authMode: 'user'` — the workspace bot need not be a member of the channel a
+file was shared in, and answers that download with a `403`.
+
+A token minted before this change does not carry the new scope. **Every member
+who connected earlier must run `omni slack connect` once more** (or press
+**Connect Slack** again) to re-authorize; the re-connect swaps their `xoxp`
+token for one that includes `files:read`. Until they do, their instance keeps
+receiving the message but the attachment download keeps failing with `403`.
+Nothing else about the instance changes, and bot-mode instances are unaffected
+— the bot token already had `files:read`.
+
 ### When access is revoked
 
 Slack tells Omni about revocation, and the blast radius depends on which event
