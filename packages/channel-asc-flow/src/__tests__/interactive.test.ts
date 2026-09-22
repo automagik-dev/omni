@@ -80,6 +80,17 @@ describe('buildInteractive', () => {
     expect((p?.list as { texto_botao: string }).texto_botao).toBeTruthy();
   });
 
+  it('forwards a custom list button label', () => {
+    const p = params('Escolha:', options(4), { buttonLabel: 'Escolher horário' });
+    expect((p?.list as { texto_botao: string }).texto_botao).toBe('Escolher horário');
+  });
+
+  it('falls back to the default list button label when none is set or it exceeds 20 chars', () => {
+    expect((params('Escolha:', options(4))?.list as { texto_botao: string }).texto_botao).toBe('Opções');
+    const long = params('Escolha:', options(4), { buttonLabel: 'Escolher o melhor horário' });
+    expect((long?.list as { texto_botao: string }).texto_botao).toBe('Opções');
+  });
+
   it('renders a list when the caller asks for one with few options', () => {
     // Unlike the URA it replaces, a list DOES render here — so `forceList` is
     // honoured rather than overridden.
