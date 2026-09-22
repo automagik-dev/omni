@@ -49,7 +49,7 @@ command-line flag).
 
 `omni slack connect` calls `POST /api/v2/slack/oauth/start`, opens the
 returned Slack authorize URL, and waits for the callback; the dashboard button
-does the same thing and returns the person to the page they started from. The
+will do the same thing once the khal-ui update ships and returns the person to the page they started from. The
 default mode is `user` — the member's own `xoxp` token, so the instance acts
 as them — and `--mode bot` installs the workspace bot instead. The instance is
 created (or re-authorized, if that person already installed) and connected for
