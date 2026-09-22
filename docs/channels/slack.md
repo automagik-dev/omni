@@ -83,10 +83,22 @@ mentions the person counts as a mention of the instance.
   commands and the native stop button (`agent_session_stopped`) are delivered
   to a bot, and a personal install has none. Install with `--mode bot` when a
   workspace needs them.
+- **Other members' clicks never arrive.** A button click, menu choice or
+  modal submission reaches a bot-less instance only when its own person made
+  it.
+- **Two members' agents can answer each other.** An instance with a bot skips
+  every post made through its own app, which it recognizes by the app's bot
+  id. A bot-less instance has no bot id, so it does not skip a post another
+  member's instance makes through the same app: when two members' agents both
+  auto-reply in one conversation, they can reply to each other.
 - **A bot from an earlier install stays.** Before this change a personal
   install also installed the app's bot. That bot user remains in the workspace
   until the app is removed from it — re-authorizing does not remove it — and
   an event only that bot can see is never delivered to a bot-less instance.
+  While that bot remains, Slack may name only the bot on an event the person
+  can see too, and a bot-less instance that is the workspace's only one then
+  asks Slack who else can see it. That lookup needs the `authorizations:read`
+  scope on the app-level token; without it, such events do not arrive.
 - **Members who connected earlier re-authorize once.** Their instances were
   saved with the workspace bot token and keep running on it. Running
   `omni slack connect` once more (or pressing **Connect Slack**) drops the
@@ -180,7 +192,10 @@ February 2027**; new Slack apps can only use `agent_view`, and the switch from
 2. A **Slack app** created at <https://api.slack.com/apps> — use
    **"From an app manifest"** with the manifest generated below.
 3. For Socket Mode (default): an **app-level token** (`xapp-...`) with
-   `connections:write`.
+   `connections:write` and `authorizations:read`. The second lets Omni ask
+   Slack which instances may see an event, which it needs when a workspace
+   has several instances, or a bot-less personal instance alongside a bot
+   from an earlier install.
 4. A **bot token** (`xoxb-...`) issued on install — optional in user-token mode.
 5. Optional: a **user token** (`xoxp-...`) if you want user-token mode —
    required for message search (see below).
@@ -271,7 +286,8 @@ mode, the signing secret) is what connects, and every action goes out with
 the user token. Without a bot token the instance runs on the user token alone
 and misses the bot-only events listed under
 [Personal installs add no bot](#personal-installs-add-no-bot); with one, it
-also receives the bot's events. User mode is required for `search.messages`
+also receives the bot's events while it is the workspace's only instance on
+the app. User mode is required for `search.messages`
 (the `search:read` scope only exists as a user scope).
 
 ### 3. Verify
