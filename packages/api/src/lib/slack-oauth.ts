@@ -29,6 +29,30 @@ const SLACK_USERS_INFO_URL = 'https://slack.com/api/users.info';
 const STATE_KEY_INFO = 'slack-oauth-state';
 const STATE_KEY_BYTES = 32;
 
+/**
+ * Wall-clock budget for each Slack Web API call the callback makes.
+ *
+ * Both calls run in the public callback AFTER the pending record was consumed,
+ * so a Slack that never answers would leave the member with no outcome to read
+ * and no record to retry against — and that callback is deliberately exempt
+ * from the GET timeout race, so nothing else bounds it. Ten seconds each keeps
+ * the whole callback (two calls, the upsert, the plugin connect) inside what a
+ * browser will wait for.
+ */
+export const SLACK_FETCH_TIMEOUT_MS = 10_000;
+
+/**
+ * Strip Slack token shapes out of arbitrary text — a bot/user token
+ * (`xoxb-`, `xoxp-`, `xoxa-`, …) or an app-level token (`xapp-`).
+ *
+ * Belt and braces for anything derived from a Slack error or an exception
+ * message: no such text may reach a log line, an outcome message or a response
+ * body carrying a live token (wish success criterion 9).
+ */
+export function redactSlackTokens(text: string): string {
+  return text.replace(/(?:xox[a-z]|xapp)-[A-Za-z0-9-]+/g, '[redacted]');
+}
+
 export type SlackOAuthMode = 'user' | 'bot';
 
 // ---------------------------------------------------------------------------
@@ -66,6 +90,22 @@ export function verifyState(state: string, clientSecret: string): string | null 
   const expected = Buffer.from(hmacNonce(nonce, clientSecret), 'hex');
   if (presented.length !== expected.length) return null;
   return timingSafeEqual(presented, expected) ? nonce : null;
+}
+
+/**
+ * The nonce a `state` names, WITHOUT verifying its signature — `null` when the
+ * state is not even shaped like one.
+ *
+ * The only legitimate use is looking up the server-side pending record whose
+ * tenant context is needed to READ the app's own client secret (the key this
+ * state is signed with): the signature cannot be checked before that key is in
+ * hand. Every security decision still waits for `verifyState`, which runs
+ * before the record is consumed and before any Slack call. Treat the result as
+ * attacker-chosen: it is a store handle to look up, never an identity.
+ */
+export function readStateNonce(state: string): string | null {
+  const match = STATE_PATTERN.exec(state);
+  return match ? (match[1] as string) : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -153,7 +193,11 @@ export interface SlackOAuthExchangeInput {
   redirectUri: string;
 }
 
-/** POST oauth.v2.access and return the Zod-validated success payload. */
+/**
+ * POST oauth.v2.access and return the Zod-validated success payload. A timeout
+ * (or any other transport failure) aborts the call and surfaces as
+ * `request_failed`, exactly as a refused connection already did.
+ */
 export async function exchangeSlackOAuthCode(input: SlackOAuthExchangeInput): Promise<SlackOAuthAccess> {
   const body = new URLSearchParams({
     client_id: input.clientId,
@@ -167,6 +211,7 @@ export async function exchangeSlackOAuthCode(input: SlackOAuthExchangeInput): Pr
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body,
+      signal: AbortSignal.timeout(SLACK_FETCH_TIMEOUT_MS),
     });
     payload = await res.json();
   } catch {
@@ -198,14 +243,18 @@ const SlackUsersInfoResponseSchema = z.discriminatedUnion('ok', [
 /**
  * The person's display name for the instance name, or `undefined` when Slack
  * cannot tell us (the caller falls back to the user id). Never throws: a
- * naming lookup must not fail an install that already holds valid tokens.
+ * naming lookup must not fail an install that already holds valid tokens, so a
+ * timeout is `undefined` like every other unusable answer.
  */
 export async function fetchSlackUserDisplayName(token: string, userId: string): Promise<string | undefined> {
   let payload: unknown;
   try {
     const url = new URL(SLACK_USERS_INFO_URL);
     url.searchParams.set('user', userId);
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(SLACK_FETCH_TIMEOUT_MS),
+    });
     payload = await res.json();
   } catch {
     return undefined;

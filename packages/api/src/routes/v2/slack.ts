@@ -32,6 +32,8 @@ import {
   buildSlackAuthorizeUrl,
   exchangeSlackOAuthCode,
   fetchSlackUserDisplayName,
+  readStateNonce,
+  redactSlackTokens,
   signState,
   verifyState,
 } from '../../lib/slack-oauth';
@@ -39,6 +41,7 @@ import type { Services } from '../../services';
 import { ApiKeyService } from '../../services/api-keys';
 import {
   type SlackAppCredentials,
+  type SlackAppResolution,
   type UpsertSlackOAuthInstanceInput,
   type UpsertSlackOAuthInstanceResult,
   isAllowedReturnTo,
@@ -248,11 +251,6 @@ const oauthStore = createSingleUseStore<SlackOAuthRecord>({
   prefix: OAUTH_NONCE_PREFIX,
 });
 
-/** Belt and braces: no Slack token shape ever reaches an outcome message. */
-function redactSlackTokens(text: string): string {
-  return text.replace(/xox[a-z]-[A-Za-z0-9-]+/g, '[redacted]');
-}
-
 function errorOutcome(tenantId: string | null, code: string, message: string): SlackOAuthOutcome {
   return { kind: 'outcome', tenantId, status: 'error', code, message: redactSlackTokens(message) };
 }
@@ -348,10 +346,18 @@ slackRoutes.post('/oauth/start', zValidator('json', oauthStartSchema), async (c)
 
 const nonceParamSchema = z.object({ nonce: z.string().regex(NONCE_PARAM_PATTERN) });
 
-/** A tenant credential may read only outcomes of flows its own tenant started. */
+/**
+ * Who may read a parked outcome.
+ *
+ * A tenant credential may read only outcomes of flows its own tenant started.
+ * A flow started without any tenant context (legacy, unscoped) belongs to the
+ * deployment, so only a caller that itself carries no tenant context may read
+ * it — a tenant credential holding a leaked nonce must not.
+ */
 function tenantMayRead(record: SlackOAuthRecord, caller: TenantAuthContext | undefined): boolean {
   const owner = record.kind === 'pending' ? (record.tenantContext?.tenantId ?? null) : record.tenantId;
-  return owner === null || caller === undefined || owner === caller.tenantId;
+  if (owner === null) return caller === undefined;
+  return caller === undefined || owner === caller.tenantId;
 }
 
 slackRoutes.get('/oauth/result/:nonce', zValidator('param', nonceParamSchema), async (c) => {
@@ -382,9 +388,16 @@ const callbackQuerySchema = z.object({
 
 type CallbackFailure = 'invalid_request' | 'not_configured' | 'invalid_state' | 'invalid_return';
 
+/**
+ * What the browser is told. `not_configured` and `invalid_state` deliberately
+ * share one sentence: a page that named the deployment fact would let anyone
+ * holding the callback URL learn whether a Slack app is configured here, and
+ * the person in front of the browser can do nothing different either way.
+ * The real reason is logged instead, where the operator reads it.
+ */
 const CALLBACK_FAILURE_TEXT: Record<CallbackFailure, string> = {
   invalid_request: 'This Slack sign-in link is incomplete.',
-  not_configured: 'This deployment has no Slack app configured.',
+  not_configured: 'This Slack sign-in link has expired or was already used. Start again from Omni.',
   invalid_state: 'This Slack sign-in link has expired or was already used. Start again from Omni.',
   invalid_return: 'The return address for this sign-in is not allowed.',
 };
@@ -401,7 +414,60 @@ function callbackPage(title: string, body: string): string {
 
 function callbackFailure(c: Context<{ Variables: AppVariables }>, reason: CallbackFailure): Response {
   c.header('Cache-Control', 'no-store');
+  oauthLog.warn('Slack OAuth callback refused', { reason });
   return c.html(callbackPage('Slack sign-in failed', CALLBACK_FAILURE_TEXT[reason]), 400);
+}
+
+/**
+ * The tenant context the `start` behind this nonce recorded, WITHOUT consuming
+ * the record: it is taken and parked straight back under the same handle (the
+ * store's own transition path, as the result endpoint uses). `null` when the
+ * nonce names nothing, or names a flow started without a tenant context.
+ *
+ * Re-arming the store TTL is harmless here — a pending record carries its own
+ * `expiresAt`, which the callback checks after it consumes the record.
+ */
+function peekPendingTenant(nonce: string): TenantAuthContext | null {
+  const record = oauthStore.take(nonce);
+  if (!record) return null;
+  oauthStore.transition(nonce, record);
+  return record.kind === 'pending' ? record.tenantContext : null;
+}
+
+/**
+ * Read the deployment's Slack app settings for a callback — as the tenant that
+ * wrote them.
+ *
+ * The five keys are deployment-wide, but `PUT /settings` seals a secret under
+ * the writing tenant's scope, and an unopenable sealed value reads back as
+ * absent (fail closed). The public callback carries no credential and so no
+ * scope of its own, so without this the keys a tenant-scoped operator
+ * configured would be invisible here and every install would land on the
+ * failure page while `GET /slack/app` still reported `configured: true`.
+ *
+ * The scope comes from the pending record the state names — never from the
+ * request — which is the same rule the install itself follows. A flow started
+ * without a tenant context (legacy, unscoped) is read unscoped, exactly as
+ * before. `null` means the scope itself was refused: fail closed, and say so
+ * in the log rather than quietly reading the deployment fallback.
+ */
+async function resolveSlackAppForCallback(
+  c: Context<{ Variables: AppVariables }>,
+  state: string,
+): Promise<SlackAppResolution | null> {
+  const settings = c.get('services').settings;
+  const nonce = readStateNonce(state);
+  const tenantContext = nonce ? peekPendingTenant(nonce) : null;
+  if (!tenantContext) return resolveSlackApp(settings);
+  try {
+    return await runInTenantScope(c.get('db'), tenantContext, () => resolveSlackApp(settings));
+  } catch (error) {
+    oauthLog.error('Slack app settings unreadable in the flow tenant scope', {
+      tenantId: tenantContext.tenantId,
+      error: redactSlackTokens(error instanceof Error ? error.message : 'Unknown error'),
+    });
+    return null;
+  }
 }
 
 interface CallbackDeps {
@@ -513,17 +579,19 @@ function finishCallback(
  * `protectedApp` behind `webhookIngressRateLimitMiddleware`; declared
  * `public-by-contract` in `tenancy/route-ownership.ts`.
  *
- * Order matters: verify the HMAC, take the pending record, and only THEN talk
- * to Slack — a replayed, forged, expired or unknown state never causes a
- * network call or a row.
+ * Order matters: read the app keys in the flow's own tenant scope (the only
+ * step that needs the nonce the state names before its signature is checked),
+ * verify the HMAC, take the pending record, and only THEN talk to Slack — a
+ * replayed, forged, expired or unknown state never causes a network call or a
+ * row.
  */
 export async function slackOAuthCallback(c: Context<{ Variables: AppVariables }>): Promise<Response> {
   const query = callbackQuerySchema.safeParse(c.req.query());
   if (!query.success || !query.data.state) return callbackFailure(c, 'invalid_request');
 
   const services = c.get('services');
-  const app = await resolveSlackApp(services.settings);
-  if (!app.ok) return callbackFailure(c, 'not_configured');
+  const app = await resolveSlackAppForCallback(c, query.data.state);
+  if (!app?.ok) return callbackFailure(c, 'not_configured');
 
   const nonce = verifyState(query.data.state, app.credentials.clientSecret);
   if (!nonce) return callbackFailure(c, 'invalid_state');

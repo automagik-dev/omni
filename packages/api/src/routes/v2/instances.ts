@@ -1160,14 +1160,20 @@ instancesRoutes.patch('/:id', instanceAccess, zValidator('json', updateInstanceS
   const { force, ...data } = c.req.valid('json');
   const services = c.get('services');
 
-  if (!force && data.slackAppToken) {
+  // The conflict is keyed on the PAIR (app token, bot mode), so either field
+  // can create it: switching an existing row to bot mode on a token another
+  // bot-mode instance already holds is exactly as much of a collision as
+  // moving that token onto the row. Guarding only on the token would store a
+  // row the connect path then refuses for ever, instead of answering 409 the
+  // moment the impossible state was asked for.
+  if (!force && (data.slackAppToken || data.slackAuthMode)) {
     const current = await services.instances.getById(id);
     const conflict =
       current.channel === 'slack'
         ? await findSlackBotModeConflict(
             services,
             {
-              appToken: data.slackAppToken,
+              appToken: data.slackAppToken ?? current.slackAppToken,
               teamId: current.slackTeamId,
               authMode: data.slackAuthMode ?? current.slackAuthMode,
             },

@@ -10,49 +10,58 @@
  *
  * `slack_user_id` is written ONCE — on a row that has none. Re-pointing an
  * existing instance at whoever connected last would silently hand one member's
- * conversations to another, so an already-set value is never overwritten.
+ * conversations to another, so an already-set value is never overwritten. The
+ * rule lives in the UPDATE predicate rather than in a preceding read: every API
+ * process runs its own unqueued consumer for this event, so two handlers can
+ * read `NULL` at the same time and the later write would win.
+ *
+ * The fake handle therefore records the table and the rendered predicate of
+ * every write, and refuses to answer a `select` at all — a return to
+ * read-then-write fails here rather than passing on a proxy that answers
+ * anything. (The handler's detached agent-replay read lands on the same
+ * refusal; it is fire-and-forget, so it is logged and dropped.)
  */
 
 import { describe, expect, test } from 'bun:test';
 import type { EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
+import { instances } from '@omni/db';
+import { type SQL, and, eq, getTableName, isNull } from 'drizzle-orm';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import { setupConnectionListener } from '../event-listeners';
 
+const dialect = new PgDialect();
+
+interface RenderedQuery {
+  sql: string;
+  params: unknown[];
+}
+
 interface Recorded {
-  op: 'select' | 'update';
-  patch?: Record<string, unknown>;
+  table: string;
+  patch: Record<string, unknown>;
+  where: RenderedQuery;
 }
 
-/**
- * Chainable Drizzle stand-in: every builder method returns itself and awaiting
- * it resolves to `rows`.
- */
-function chain<T>(rows: T): T {
-  const self: unknown = new Proxy(
-    {},
-    {
-      get(_t, prop) {
-        if (prop === 'then') {
-          return (onOk: (v: T) => unknown, onErr?: (e: unknown) => unknown) => Promise.resolve(rows).then(onOk, onErr);
-        }
-        return () => self;
-      },
-    },
-  );
-  return self as T;
+/** The predicate as SQL text + parameters, so a test can compare shapes. */
+function render(predicate: SQL | undefined): RenderedQuery {
+  if (!predicate) return { sql: '<no predicate>', params: [] };
+  const query = dialect.sqlToQuery(predicate);
+  return { sql: query.sql, params: query.params };
 }
 
-function makeDb(recorded: Recorded[], existingRow: Record<string, unknown>): Database {
+function makeDb(recorded: Recorded[]): Database {
   const handle = {
     select: () => {
-      recorded.push({ op: 'select' });
-      return chain([existingRow]);
+      throw new Error('unexpected select: the Slack identity write must not read the row first');
     },
-    update: () => ({
-      set: (patch: Record<string, unknown>) => {
-        recorded.push({ op: 'update', patch });
-        return chain([]);
-      },
+    update: (table: typeof instances) => ({
+      set: (patch: Record<string, unknown>) => ({
+        where: async (predicate: SQL | undefined) => {
+          recorded.push({ table: getTableName(table), patch, where: render(predicate) });
+          return [];
+        },
+      }),
     }),
     execute: async () => [],
   };
@@ -63,10 +72,7 @@ function makeDb(recorded: Recorded[], existingRow: Record<string, unknown>): Dat
   return db as unknown as Database;
 }
 
-async function fireConnected(
-  payload: Record<string, unknown>,
-  existingRow: Record<string, unknown> = { slackUserId: null },
-): Promise<Recorded[]> {
+async function fireConnected(payload: Record<string, unknown>): Promise<Recorded[]> {
   const recorded: Recorded[] = [];
   const handlers = new Map<string, (event: unknown) => Promise<void>>();
   const bus = {
@@ -78,7 +84,7 @@ async function fireConnected(
     publish: async () => ({ id: 'evt-1' }),
   } as unknown as EventBus;
 
-  await setupConnectionListener(bus, makeDb(recorded, existingRow));
+  await setupConnectionListener(bus, makeDb(recorded));
   const handler = handlers.get('instance.connected');
   if (!handler) throw new Error('no instance.connected handler registered');
   await handler({
@@ -88,46 +94,66 @@ async function fireConnected(
   return recorded;
 }
 
-const patchOf = (recorded: Recorded[]): Record<string, unknown> => {
-  const write = recorded.find((entry) => entry.op === 'update');
-  if (!write?.patch) throw new Error(`no update recorded; saw ${JSON.stringify(recorded)}`);
-  return write.patch;
+/** The connection-state write: the one keyed on the instance id alone. */
+const connectionWrite = (recorded: Recorded[]): Recorded => {
+  const write = recorded[0];
+  if (!write) throw new Error('no update recorded');
+  return write;
 };
+
+const BY_ID = render(eq(instances.id, 'inst-1'));
+const BY_ID_AND_UNCLAIMED = render(and(eq(instances.id, 'inst-1'), isNull(instances.slackUserId)));
 
 describe('instance.connected → Slack identity columns', () => {
   test('writes slack_team_id from the payload, alongside the usual connection fields', async () => {
     const recorded = await fireConnected({ teamId: 'T_WORKSPACE', profileName: 'omni' });
 
-    const patch = patchOf(recorded);
-    expect(patch.slackTeamId).toBe('T_WORKSPACE');
-    expect(patch.isActive).toBe(true);
-    expect(patch.profileName).toBe('omni');
-    // No acting user in the payload ⇒ no user id written.
-    expect(patch.slackUserId).toBeUndefined();
+    expect(recorded).toHaveLength(1);
+    const write = connectionWrite(recorded);
+    expect(write.table).toBe('instances');
+    expect(write.where).toEqual(BY_ID);
+    expect(write.patch.slackTeamId).toBe('T_WORKSPACE');
+    expect(write.patch.isActive).toBe(true);
+    expect(write.patch.profileName).toBe('omni');
+    // No acting user in the payload ⇒ no user id written, by any statement.
+    expect(write.patch.slackUserId).toBeUndefined();
   });
 
-  test('writes slack_user_id when the row has none', async () => {
-    const recorded = await fireConnected({ teamId: 'T_WORKSPACE', actingUserId: 'U_ANA' }, { slackUserId: null });
+  test('claims slack_user_id in a second, conditional UPDATE keyed on IS NULL', async () => {
+    const recorded = await fireConnected({ teamId: 'T_WORKSPACE', actingUserId: 'U_ANA' });
 
-    const patch = patchOf(recorded);
-    expect(patch.slackTeamId).toBe('T_WORKSPACE');
-    expect(patch.slackUserId).toBe('U_ANA');
+    expect(recorded).toHaveLength(2);
+
+    // The connection-state patch carries the workspace but never the identity.
+    const connection = connectionWrite(recorded);
+    expect(connection.where).toEqual(BY_ID);
+    expect(connection.patch.slackTeamId).toBe('T_WORKSPACE');
+    expect(connection.patch.slackUserId).toBeUndefined();
+
+    // The identity write is its own statement, guarded by the predicate: a row
+    // that already names someone is left alone by the database, not by a
+    // preceding read this handler did.
+    const identity = recorded[1];
+    expect(identity?.table).toBe('instances');
+    expect(identity?.patch).toEqual({ slackUserId: 'U_ANA' });
+    expect(identity?.where).toEqual(BY_ID_AND_UNCLAIMED);
+    expect(identity?.where.sql).toContain('"slack_user_id" is null');
+    expect(identity?.where.params).toEqual(['inst-1']);
   });
 
-  test('never overwrites an existing slack_user_id', async () => {
-    const recorded = await fireConnected({ teamId: 'T_WORKSPACE', actingUserId: 'U_BEN' }, { slackUserId: 'U_ANA' });
-
-    const patch = patchOf(recorded);
-    expect(patch.slackTeamId).toBe('T_WORKSPACE');
-    expect(patch.slackUserId).toBeUndefined();
+  test('a payload without an acting user issues no identity write at all', async () => {
+    const recorded = await fireConnected({ teamId: 'T_WORKSPACE' });
+    expect(recorded).toHaveLength(1);
+    expect(connectionWrite(recorded).where).toEqual(BY_ID);
   });
 
   test('a payload without a workspace leaves both identity columns untouched', async () => {
     const recorded = await fireConnected({ profileName: 'telegram-bot' });
 
-    const patch = patchOf(recorded);
-    expect(patch.slackTeamId).toBeUndefined();
-    expect(patch.slackUserId).toBeUndefined();
-    expect(patch.isActive).toBe(true);
+    expect(recorded).toHaveLength(1);
+    const write = connectionWrite(recorded);
+    expect(write.patch.slackTeamId).toBeUndefined();
+    expect(write.patch.slackUserId).toBeUndefined();
+    expect(write.patch.isActive).toBe(true);
   });
 });

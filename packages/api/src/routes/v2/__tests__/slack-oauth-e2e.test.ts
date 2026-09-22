@@ -28,7 +28,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, mock, test } from 'bu
 import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
 import type { PluginContext } from '@omni/channel-sdk';
-import { configureLogging } from '@omni/core';
+import { configureLogging, createLogger } from '@omni/core';
 import { Hono } from 'hono';
 import { SLACK_APP_SETTINGS } from '../../../constants/slack-app';
 import { errorHandler } from '../../../middleware/error';
@@ -229,8 +229,11 @@ async function makeHarness() {
     },
   };
 
-  const noop = (): void => undefined;
-  const logger = { debug: noop, info: noop, warn: noop, error: noop, child: () => logger };
+  // The REAL logger at debug, so the plugin's own lines are produced and land
+  // in `captured` through the stdout/stderr tap below. A no-op logger would
+  // make the "no token in any log line" assertion vacuous for the one place
+  // that actually holds the tokens.
+  const logger = createLogger('channel-slack');
 
   const plugin: PluginInstance = new SlackPlugin();
   await plugin.initialize({
@@ -279,11 +282,35 @@ async function makeHarness() {
     throw new Error(`unexpected fetch: ${url}`);
   };
 
+  /**
+   * Run `body` with every stdout/stderr write appended to `captured` — that is
+   * where the logger writes, so this is what makes the plugin's own log lines
+   * part of the leak scan.
+   */
+  async function capturingLogs<T>(body: () => Promise<T>): Promise<T> {
+    const originalOut = process.stdout.write.bind(process.stdout);
+    const originalErr = process.stderr.write.bind(process.stderr);
+    const tap =
+      (original: (chunk: string | Uint8Array) => boolean) =>
+      (chunk: string | Uint8Array): boolean => {
+        captured.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
+        return original(chunk);
+      };
+    process.stdout.write = tap(originalOut) as typeof process.stdout.write;
+    process.stderr.write = tap(originalErr) as typeof process.stderr.write;
+    try {
+      return await body();
+    } finally {
+      process.stdout.write = originalOut as typeof process.stdout.write;
+      process.stderr.write = originalErr as typeof process.stderr.write;
+    }
+  }
+
   async function request(path: string, init?: RequestInit): Promise<{ res: Response; text: string }> {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = fetchStub as unknown as typeof fetch;
     try {
-      const res = await app.request(path, init);
+      const res = await capturingLogs(async () => app.request(path, init));
       const text = await res.text();
       captured.push(text);
       const location = res.headers.get('location');
@@ -322,13 +349,15 @@ async function makeHarness() {
 
   const internals = plugin as unknown as PluginInternals;
 
-  return { plugin, internals, install, rows, published, captured };
+  return { plugin, internals, install, rows, published, captured, capturingLogs };
 }
 
 const savedEnv: Record<string, string | undefined> = {};
 
 beforeAll(() => {
-  configureLogging({ level: 'silent' });
+  // Debug + json: the install is driven with the plugin logging for real, so
+  // the token scan at the end has something to scan.
+  configureLogging({ level: 'debug', format: 'json' });
   for (const env of SETTING_ENVS) {
     savedEnv[env] = process.env[env];
     delete process.env[env];
@@ -336,6 +365,7 @@ beforeAll(() => {
 });
 
 afterAll(() => {
+  configureLogging({ level: 'silent' });
   for (const env of SETTING_ENVS) {
     if (savedEnv[env] === undefined) delete process.env[env];
     else process.env[env] = savedEnv[env];
@@ -396,15 +426,14 @@ describe('Slack one-click OAuth, end to end', () => {
       MEMBERS.ben.userId,
     ]);
 
-    // ── Success criterion 9: no token shape in anything a browser saw ─────
-    for (const text of harness.captured) expect(text).not.toContain('xox');
-
     // ── One member's token is revoked: only that instance goes down ───────
     const revocation = constructedApps[0]?.events.get('tokens_revoked')?.[0];
     expect(revocation).toBeDefined();
-    await revocation?.({
-      body: { team_id: TEAM_ID },
-      event: { type: 'tokens_revoked', tokens: { oauth: [MEMBERS.ana.userId] } },
+    await harness.capturingLogs(async () => {
+      await revocation?.({
+        body: { team_id: TEAM_ID },
+        event: { type: 'tokens_revoked', tokens: { oauth: [MEMBERS.ana.userId] } },
+      });
     });
 
     const disconnected = harness.published.filter((event) => event.type === 'instance.disconnected');
@@ -417,6 +446,35 @@ describe('Slack one-click OAuth, end to end', () => {
     expect((await harness.plugin.getStatus(benRow?.id as string)).state).toBe('connected');
     expect((await harness.plugin.getStatus(anaRow?.id as string)).state).toBe('disconnected');
 
-    await harness.plugin.disconnect(benRow?.id as string);
+    await harness.capturingLogs(async () => {
+      await harness.plugin.disconnect(benRow?.id as string);
+    });
+
+    // ── Success criterion 9: no secret in any response body, redirect target
+    // or LOG LINE — the plugin logged at debug for the whole install above.
+    //
+    // Positive control first: the scan saw the real plugin's own lines, so an
+    // empty leak list means "checked", not "nothing captured".
+    const scanned = harness.captured.join('\n');
+    expect(scanned).toContain('"module":"channel-slack"');
+    expect(scanned).toContain('slack=');
+
+    const secrets: Record<string, string> = {
+      'bot token': BOT_TOKEN,
+      'app-level token': APP_TOKEN,
+      'client secret': CLIENT_SECRET,
+      'signing secret': SIGNING_SECRET,
+      "ana's user token": MEMBERS.ana.userToken,
+      "ben's user token": MEMBERS.ben.userToken,
+    };
+    for (const [name, secret] of Object.entries(secrets)) {
+      const leaked = harness.captured.filter((text) => text.includes(secret));
+      expect(leaked, `${name} leaked`).toEqual([]);
+    }
+    // Token shapes and sealed-credential envelopes, whether or not they match
+    // a fixture: nothing of this shape may appear at all.
+    for (const shape of ['xox', 'xapp', 'SC:v1:']) {
+      expect(harness.captured.filter((text) => text.includes(shape))).toEqual([]);
+    }
   });
 });

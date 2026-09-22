@@ -8,7 +8,7 @@
 import { type EventBus, createLogger } from '@omni/core';
 import type { Database } from '@omni/db';
 import { chatIdMappings, chats, instances } from '@omni/db';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { sentryEnabled } from '../lib/sentry-scrub';
 import { AgentReplayService } from '../services/agent-replay';
 import { runDetachedFromTenantScope, scopedHandle } from '../tenancy/tenant-scope';
@@ -62,18 +62,22 @@ export async function setupConnectionListener(eventBus: EventBus, db?: Database)
             // re-authorization upserts by (team, user) — so the workspace is
             // persisted on every connect that reports one.
             if (teamId) patch.slackTeamId = teamId;
-            // The acting user, in contrast, is written ONCE: the row's own
-            // identity must not be repointed at whoever connected last.
-            if (actingUserId) {
-              const existing = await handle
-                .select({ slackUserId: instances.slackUserId })
-                .from(instances)
-                .where(eq(instances.id, instanceId))
-                .limit(1);
-              if (!existing[0]?.slackUserId) patch.slackUserId = actingUserId;
-            }
 
             await handle.update(instances).set(patch).where(eq(instances.id, instanceId));
+
+            // The acting user, in contrast, is written ONCE: the row's own
+            // identity must not be repointed at whoever connected last. The
+            // write-once rule lives in the predicate, not in a preceding read:
+            // every API process runs its own unqueued `instance.connected`
+            // consumer, so two handlers can read NULL concurrently and the
+            // later write would win. `WHERE slack_user_id IS NULL` makes the
+            // second write a no-op instead.
+            if (actingUserId) {
+              await handle
+                .update(instances)
+                .set({ slackUserId: actingUserId })
+                .where(and(eq(instances.id, instanceId), isNull(instances.slackUserId)));
+            }
           });
         } catch (dbError) {
           instanceLog.error('Failed to update database', { instanceId, error: String(dbError) });
