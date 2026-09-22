@@ -180,11 +180,16 @@ jobs:
           # run can never seed an entry a `dev` run reads. Under the
           # version.yml call the run's ref is the merged PR's `refs/pull/N/
           # merge`, so that run reads entries written by manual dispatches on
-          # `dev` and its own write is only reusable by that closed PR; a miss
-          # costs a cold build, nothing else. A manual dispatch on `dev`
-          # warms the entry every later call reads.
+          # `dev`; a miss costs a cold build, nothing else. That call does not
+          # export: its write was only ever reusable by the closed PR, and
+          # since 2026-09-09 GitHub grants a closed PR's run no writable cache
+          # scope at all ("token has no writable scopes"), so the export
+          # failed every merged-PR build after the image was already built.
+          # In a called workflow `github.event_name` is the caller's event, so
+          # `pull_request` is exactly that merged-PR call. A manual dispatch
+          # on `dev` still exports and warms the entry every later call reads.
           cache-from: type=gha,scope=omni-api-dev
-          cache-to: type=gha,scope=omni-api-dev,mode=max
+          cache-to: ${{ github.event_name != 'pull_request' && 'type=gha,scope=omni-api-dev,mode=max' || '' }}
           provenance: true
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
