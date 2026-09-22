@@ -58,6 +58,13 @@ as them — and `--mode bot` installs the workspace bot instead. The instance is
 created (or re-authorized, if that person already installed) and connected for
 you; no token is ever shown, pasted, or written down.
 
+The pending install lives in the API process that started it, for five minutes,
+and is consumed the first time the callback reads it. So the API must run as a
+single process, or route `/api/v2/slack/oauth/*` with sticky sessions: a
+callback that lands on a process which never issued that install is refused as
+an unknown install — nothing unsafe happens, the person simply has to click
+**Connect Slack** again.
+
 Several members of one workspace share a single Bolt receiver and a single
 app-level token. Each event is delivered only to the instances Slack
 authorized it for, so one member's DMs never reach another member's instance.
