@@ -49,6 +49,7 @@ export const channelTypes = [
   'asc',
   'asc-flow',
   'twilio-whatsapp',
+  'zenvia', // no-migration-needed: channel columns are varchar(50), not a pg enum — a new literal needs no DDL
   'internal',
   'harness', // no-migration-needed: channel columns are varchar(50), not a pg enum — a new literal needs no DDL
 ] as const;
@@ -852,6 +853,20 @@ export const instances = pgTable(
     ascToken: text('asc_token'),
     /** WABA phone number (digits-only E.164) — the `originador` header. */
     ascOriginador: varchar('asc_originador', { length: 32 }),
+
+    // ---- Zenvia Configuration ----
+    // Per-instance credentials for the Zenvia API v2 (WhatsApp BSP).
+    // zenviaApiToken is sealed at rest (SEALED_CREDENTIAL_COLUMNS in the
+    // instances service). The optional webhook verify token reuses the shared
+    // webhook_verify_token column above (Gupshup precedent).
+    /** API token — the `X-API-TOKEN` header. */
+    zenviaApiToken: text('zenvia_api_token'),
+    /** Sender registered at Zenvia (the WhatsApp number) — `from` on every send. */
+    zenviaSenderId: varchar('zenvia_sender_id', { length: 64 }),
+    /** Solution a handoff routes the conversation to: conversion | zenvia_chat | nlu. Null = handoff refused. */
+    zenviaHandoffSolution: varchar('zenvia_handoff_solution', { length: 32 }).$type<
+      'conversion' | 'zenvia_chat' | 'nlu'
+    >(),
 
     // ---- ASC platform Flow Configuration ----
     // Per-instance credentials for the ASC platform REST API (/rest/v2), the

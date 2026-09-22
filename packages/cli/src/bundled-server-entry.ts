@@ -18,6 +18,7 @@ import slackPlugin from '@omni/channel-slack';
 import telegramPlugin from '@omni/channel-telegram';
 import whatsappPlugin from '@omni/channel-whatsapp';
 import whatsappBusinessPlugin from '@omni/channel-whatsapp-business';
+import zenviaPlugin from '@omni/channel-zenvia';
 
 // Pre-register all bundled channel plugins
 // Type assertion needed: channel plugins implement ChannelPlugin but
@@ -32,6 +33,7 @@ for (const plugin of [
   hermesPlugin,
   ascPlugin,
   ascFlowPlugin,
+  zenviaPlugin,
   harnessPlugin,
 ] as ChannelPlugin[]) {
   channelRegistry.register(plugin);

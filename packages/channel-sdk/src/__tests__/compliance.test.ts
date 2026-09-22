@@ -63,6 +63,7 @@ import {
   ErrorCode as WhatsAppErrorCode,
   WhatsAppPlugin,
 } from '../../../channel-whatsapp/src/index';
+import { ZENVIA_CAPABILITIES, ZenviaApiError, ZenviaErrorCode, ZenviaPlugin } from '../../../channel-zenvia/src/index';
 
 interface ChannelDescriptor {
   name: string;
@@ -155,6 +156,16 @@ const channels: ChannelDescriptor[] = [
     pluginSourcePath: channelPath('asc', 'plugin.ts'),
     handlerSourcePaths: [channelPath('asc', 'handlers', 'webhook.ts')],
     errorSourcePath: channelPath('asc', 'utils', 'errors.ts'),
+  },
+  {
+    name: 'zenvia',
+    packageName: '@omni/channel-zenvia',
+    pluginClass: ZenviaPlugin as unknown as typeof BaseChannelPlugin,
+    errorClass: ZenviaApiError,
+    capabilities: ZENVIA_CAPABILITIES,
+    pluginSourcePath: channelPath('zenvia', 'plugin.ts'),
+    handlerSourcePaths: [channelPath('zenvia', 'handlers', 'webhook.ts')],
+    errorSourcePath: channelPath('zenvia', 'utils', 'errors.ts'),
   },
   {
     name: 'hermes',
@@ -254,6 +265,7 @@ const errorConstructorArgs: Record<string, unknown[]> = {
   'whatsapp-business': [MetaErrorCode.INVALID_REQUEST, 'compliance test'],
   hermes: [HermesErrorCode.INVALID_REQUEST, 'compliance test'],
   asc: [AscErrorCode.INVALID_REQUEST, 'compliance test'],
+  zenvia: [ZenviaErrorCode.INVALID_REQUEST, 'compliance test'],
 };
 
 // Group 1: Infrastructure
@@ -271,6 +283,7 @@ describe('SDK compliance test infrastructure', () => {
       'twilio-whatsapp',
       'whatsapp',
       'whatsapp-business',
+      'zenvia',
     ]);
   });
 

@@ -14,6 +14,7 @@ export const CHANNEL_TYPES = [
   'asc',
   'asc-flow',
   'twilio-whatsapp',
+  'zenvia',
   'internal',
   'harness',
 ] as const;

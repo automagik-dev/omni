@@ -52,6 +52,7 @@ describe('channelHasMessagingWindow', () => {
     expect(channelHasMessagingWindow('whatsapp-business')).toBe(true);
     expect(channelHasMessagingWindow('hermes')).toBe(true);
     expect(channelHasMessagingWindow('asc')).toBe(true);
+    expect(channelHasMessagingWindow('zenvia')).toBe(true);
     expect(channelHasMessagingWindow('twilio-whatsapp')).toBe(true);
     expect(channelHasMessagingWindow('whatsapp-baileys')).toBe(false);
     expect(channelHasMessagingWindow('discord')).toBe(false);
@@ -75,6 +76,8 @@ describe('channelSupportsTypingIndicator', () => {
     ['hermes', false],
     // asc: typing via sendTypingIndicator (newest inbound wamid), like whatsapp-business.
     ['asc', true],
+    // zenvia: the API exposes no typing/presence endpoint.
+    ['zenvia', false],
     ['twilio-whatsapp', true],
     ['discord', true],
     ['telegram', true],

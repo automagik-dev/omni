@@ -98,6 +98,7 @@ export type Channel =
   | 'hermes'
   | 'asc'
   | 'asc-flow'
+  | 'zenvia'
   | 'internal'
   | 'harness';
 

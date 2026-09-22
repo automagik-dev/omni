@@ -41,6 +41,7 @@ const VALID_CHANNELS: Channel[] = [
   'hermes',
   'asc',
   'asc-flow',
+  'zenvia',
   'harness',
 ];
 const VALID_SYNC_TYPES = ['profile', 'messages', 'contacts', 'groups', 'all'] as const;
@@ -206,6 +207,7 @@ const SECRET_BODY_FIELDS = [
   'metaAccessToken',
   'ascToken',
   'hermesPassword',
+  'zenviaApiToken',
 ] as const;
 
 /** Mask a secret for display, matching the API's `get` shape (`xoxp-****9bdc`) */
