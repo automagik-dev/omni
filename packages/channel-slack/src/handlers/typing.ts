@@ -11,6 +11,10 @@
  * Requires a Slack thread timestamp; for top-level channel messages, use the
  * source message timestamp as the thread timestamp.
  *
+ * Both methods require a bot token, so an `authMode: 'user'` attachment skips
+ * them entirely rather than attempting a call that can only ever come back
+ * `not_allowed_token_type` (#889).
+ *
  * Requires Slack Web API scope `chat:write`.
  * Failures are swallowed gracefully — status never blocks message processing.
  *
@@ -127,6 +131,24 @@ export async function setSlackThreadStatus(params: {
   attachment?: SlackAttachment;
 }): Promise<SlackStatusResult> {
   const { client, channelId, threadTs, status, loadingMessages, logger, instanceId } = params;
+
+  // ── User-mode guard (#889) ──
+  // Both status surfaces are bot-token-only: `agents.sessions.setStatus` and
+  // the legacy `assistant.threads.setStatus` reject a user (`xoxp`) token with
+  // `not_allowed_token_type`. In `authMode: 'user'` the acting client IS that
+  // user token, so every reply used to burn two doomed round-trips and log an
+  // info + a warn. There is nothing to attempt here — bail before any Slack
+  // call, at debug, because this is expected in user mode rather than a fault.
+  if (params.attachment?.authMode === 'user') {
+    logger.debug('setSlackThreadStatus: skipped, thread status APIs require a bot token', {
+      instanceId,
+      channelId,
+      reason: 'user_mode',
+      clearing: status.length === 0,
+    });
+    return { delivered: false };
+  }
+
   const memoKey = memoKeyFor(params);
 
   // Thread-only guard — logged so a silent no-status situation is diagnosable (#914)

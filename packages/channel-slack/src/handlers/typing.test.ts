@@ -5,6 +5,7 @@
 
 import { describe, expect, it, mock } from 'bun:test';
 import type { Logger } from '@omni/channel-sdk';
+import type { SlackAttachment } from '../connection/app-receiver';
 import { clearTypingStatus, setSlackThreadStatus, setTypingStatus } from './typing';
 
 // ─────────────────────────────────────────────────────────────
@@ -94,6 +95,34 @@ describe('setSlackThreadStatus', () => {
     const debugCalls = (logger.debug as ReturnType<typeof mock>).mock.calls;
     expect(debugCalls.length).toBeGreaterThan(0);
     expect(debugCalls[0]?.[1]).toMatchObject({ reason: 'no_thread_ts' });
+  });
+
+  it('skips both status APIs entirely when the attachment is in user mode', async () => {
+    const { client, apiCalls } = makeAgentApiClient();
+    const logger = makeLogger();
+
+    const result = await setSlackThreadStatus({
+      client: client as never,
+      channelId: 'C12345',
+      threadTs: '1234567890.001',
+      status: 'is typing...',
+      logger,
+      instanceId: 'felipe-slack',
+      attachment: { authMode: 'user', actingUserId: 'U05J8EZQ1S7' } as unknown as SlackAttachment,
+    });
+
+    // Both surfaces are bot-token-only: attempting either with the user token
+    // could only produce not_allowed_token_type, so nothing goes out (#889).
+    expect(result.delivered).toBe(false);
+    expect(apiCalls.length).toBe(0);
+
+    // Expected in user mode — one debug line, never a warn or an error per message.
+    expect((logger.warn as ReturnType<typeof mock>).mock.calls.length).toBe(0);
+    expect((logger.error as ReturnType<typeof mock>).mock.calls.length).toBe(0);
+
+    const debugCalls = (logger.debug as ReturnType<typeof mock>).mock.calls;
+    expect(debugCalls.length).toBe(1);
+    expect(debugCalls[0]?.[1]).toMatchObject({ reason: 'user_mode', instanceId: 'felipe-slack' });
   });
 
   it('prefers agents.sessions.setStatus, mapping a non-empty status to processing', async () => {
