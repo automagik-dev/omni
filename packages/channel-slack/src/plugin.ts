@@ -188,6 +188,28 @@ function resolveSlackTokens(
 }
 
 /**
+ * Connect-time overrides — decisions the CALLER makes for one connect, as
+ * opposed to the persisted {@link SlackConfig} the instance carries.
+ */
+interface SlackConnectOverrides {
+  /**
+   * Attach a second bot-mode instance of a workspace anyway.
+   *
+   * `POST /instances/:id/connect` refuses that install with
+   * `409 SLACK_APP_TOKEN_IN_USE` and tells the operator to "pass force: true
+   * (--force) to proceed anyway". That escape only means anything if it
+   * reaches {@link SlackAppReceiver.attach}, whose own guard would otherwise
+   * refuse the very attach the API just waved through.
+   */
+  force?: boolean;
+}
+
+/** Read the connect-time overrides out of the raw options bag, typed. */
+function readConnectOverrides(rawOptions: Record<string, unknown>): SlackConnectOverrides {
+  return { force: rawOptions.force === true };
+}
+
+/**
  * Slack Channel Plugin
  *
  * Extends BaseChannelPlugin to provide Slack messaging via Bolt.js Socket Mode.
@@ -365,6 +387,7 @@ export class SlackPlugin extends BaseChannelPlugin {
     const rawOptions = (config.options ?? {}) as Record<string, unknown>;
     const rawCredentials = (config.credentials ?? {}) as Record<string, unknown>;
     const slackConfig = rawOptions as SlackConfig;
+    const overrides = readConnectOverrides(rawOptions);
 
     // Create per-instance reliability caches
     const debounceDelayMs = (slackConfig as Record<string, unknown>).debounceDelayMs as number | undefined;
@@ -422,7 +445,9 @@ export class SlackPlugin extends BaseChannelPlugin {
       // message listener calls for every event of this workspace.
       this.registerInboundHandler(attachment);
 
-      receiver.attach(attachment);
+      // The caller's `force` reaches the receiver's bot-mode guard here: the
+      // API's 409 advertises the override, so the override has to arrive.
+      receiver.attach(attachment, { force: overrides.force });
       this.attachments.set(instanceId, attachment);
 
       // Phase 4: start, but only if nothing started this receiver already — a

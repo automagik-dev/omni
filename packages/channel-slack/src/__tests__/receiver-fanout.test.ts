@@ -16,10 +16,11 @@
 
 import { afterEach, describe, expect, it, mock } from 'bun:test';
 import { EventEmitter } from 'node:events';
-import type { DedupeCache, Logger, PluginContext } from '@omni/channel-sdk';
+import type { DedupeCache, InstanceConfig, Logger, PluginContext } from '@omni/channel-sdk';
 import { createInboundDedupeCache } from '@omni/channel-sdk';
 import { DebounceManager } from '@omni/core';
 import type { WebClient } from '@slack/web-api';
+import { SlackError, SlackErrorCode } from '../types';
 
 // ─────────────────────────────────────────────────────────────
 // Fake @slack/bolt
@@ -125,7 +126,12 @@ interface PluginInternals {
   attachments: Map<string, SlackAttachment>;
 }
 
-async function makePlugin(): Promise<{ internals: PluginInternals; receiver: SlackAppReceiver; app: FakeAppRecord }> {
+async function makePlugin(): Promise<{
+  plugin: InstanceType<typeof SlackPlugin>;
+  internals: PluginInternals;
+  receiver: SlackAppReceiver;
+  app: FakeAppRecord;
+}> {
   const plugin = new SlackPlugin();
   await plugin.initialize({
     eventBus: { publish: async () => {}, subscribe: () => {} },
@@ -138,7 +144,38 @@ async function makePlugin(): Promise<{ internals: PluginInternals; receiver: Sla
   const { receiver } = internals.obtainReceiver({ botToken: 'xoxb-bot', appToken: 'xapp-shared' }, config);
   const app = constructedApps.at(-1);
   if (!app) throw new Error('no fake App constructed');
-  return { internals, receiver, app };
+  return { plugin, internals, receiver, app };
+}
+
+/**
+ * Plant the client the receiver hands out for a bot token.
+ *
+ * `connect()` resolves the workspace identity through `clientForBotToken`,
+ * which would otherwise mint a real `WebClient` and call `auth.test` over the
+ * network. Seeding the cache keeps the REAL connect path — attach guard and
+ * all — entirely offline, and `attach` then reuses this very object.
+ */
+function plantBotClient(receiver: SlackAppReceiver, botToken: string): void {
+  const client = {
+    auth: {
+      test: async () => ({ ok: true, team_id: TEAM, user_id: BOT_USER, bot_id: 'B_APP', user: 'omni' }),
+    },
+  } as unknown as WebClient;
+  (receiver as unknown as { clientsByToken: Map<string, WebClient> }).clientsByToken.set(botToken, client);
+}
+
+/** The `InstanceConfig` a bot-mode connect of the shared workspace arrives with. */
+function botConnectConfig(instanceId: string, force?: boolean): InstanceConfig {
+  return {
+    instanceId,
+    credentials: {},
+    options: {
+      botToken: 'xoxb-bot',
+      appToken: 'xapp-shared',
+      authMode: 'bot',
+      ...(force === undefined ? {} : { force }),
+    },
+  } as unknown as InstanceConfig;
 }
 
 function makeAttachment(instanceId: string, overrides: Partial<SlackAttachment> = {}): SlackAttachment {
@@ -353,6 +390,29 @@ describe('shared-receiver fan-out', () => {
     await handlerFor(ben)(ownMessage);
 
     expect(dispatched).toEqual(['inst-ana']);
+  });
+
+  it('a second bot-mode connect of the workspace is refused without force and accepted with it', async () => {
+    // Driven through the PLUGIN, not through `receiver.attach`: the point of
+    // this case is that the API's documented `force` escape survives the trip
+    // from the connect options down to the receiver's attach-time guard.
+    const { plugin, receiver } = await makePlugin();
+    plantBotClient(receiver, 'xoxb-bot');
+
+    await plugin.connect('inst-bot-1', botConnectConfig('inst-bot-1'));
+    expect(receiver.attachments.has('inst-bot-1')).toBe(true);
+
+    const refusal = await plugin.connect('inst-bot-2', botConnectConfig('inst-bot-2')).catch((e: unknown) => e);
+    expect(refusal).toBeInstanceOf(SlackError);
+    expect((refusal as SlackError).channelCode).toBe(SlackErrorCode.BOT_INSTANCE_EXISTS);
+    expect(receiver.attachments.has('inst-bot-2')).toBe(false);
+
+    await plugin.connect('inst-bot-2', botConnectConfig('inst-bot-2', true));
+    expect(receiver.attachments.has('inst-bot-2')).toBe(true);
+    expect(receiver.attachments.has('inst-bot-1')).toBe(true);
+
+    await plugin.disconnect('inst-bot-1');
+    await plugin.disconnect('inst-bot-2');
   });
 
   it('falls back to the envelope authorization when authorizations:read is missing, logging once', async () => {
