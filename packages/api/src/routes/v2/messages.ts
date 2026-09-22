@@ -698,9 +698,18 @@ function sentByResponseFields(
   return sentBy === 'agent' ? { senderAgentId: senderAgentId ?? null } : {};
 }
 
+/**
+ * Voice notes have to satisfy two families of channel plugins at once:
+ * WhatsApp reads `metadata.audioBuffer` first (priority audioBuffer > base64 >
+ * URL, see channel-whatsapp/src/senders/builders.ts), while Slack, Discord and
+ * Telegram only ever look at `metadata.base64`. Dropping `base64` here made a
+ * `voiceNote: true` send fail on Slack with 'Media URL or base64 required', so
+ * the voice-note branch now carries BOTH shapes — WhatsApp still picks the
+ * buffer, every other channel picks the string.
+ */
 function buildSendMediaMetadata(data: z.infer<typeof sendMediaSchema>): Record<string, unknown> {
   if (data.type === 'audio' && data.voiceNote === true && data.base64) {
-    return { audioBuffer: Buffer.from(data.base64, 'base64'), ptt: true };
+    return { base64: data.base64, audioBuffer: Buffer.from(data.base64, 'base64'), ptt: true };
   }
   return { base64: data.base64, ptt: data.voiceNote };
 }
@@ -2269,7 +2278,10 @@ messagesRoutes.post('/send/tts', zValidator('json', sendTtsSchema), async (c) =>
       mimeType: ttsResult.mimeType,
     } as OutgoingContent,
     metadata: {
+      // Same dual shape as buildSendMediaMetadata: buffer for WhatsApp,
+      // base64 string for Slack/Discord/Telegram.
       audioBuffer: ttsResult.buffer,
+      base64: ttsResult.buffer.toString('base64'),
       ptt: true,
       ...(senderAgentId ? { senderAgentId } : {}),
     },

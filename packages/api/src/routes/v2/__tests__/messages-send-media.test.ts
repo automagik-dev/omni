@@ -68,7 +68,7 @@ describe('POST /messages/send/media', () => {
     });
   });
 
-  test('forwards WhatsApp voice-note audio as audioBuffer instead of base64', async () => {
+  test('carries voice-note audio as BOTH base64 and audioBuffer so every channel can read it', async () => {
     const sendMessage = mock(async (_instanceId: string, _message: unknown) => ({
       success: true,
       messageId: 'VOICE-MSG-ID',
@@ -103,7 +103,10 @@ describe('POST /messages/send/media', () => {
         ptt: true,
       },
     });
-    expect(message.metadata?.base64).toBeUndefined();
+    // Slack/Discord/Telegram plugins only read `metadata.base64`; dropping it
+    // made voice notes fail there with 'Media URL or base64 required'.
+    expect(message.metadata?.base64).toBe(audio.toString('base64'));
+    // WhatsApp still gets the buffer it prefers (audioBuffer > base64 > URL).
     expect(Buffer.isBuffer(message.metadata?.audioBuffer)).toBe(true);
     expect((message.metadata?.audioBuffer as Buffer).equals(audio)).toBe(true);
   });
