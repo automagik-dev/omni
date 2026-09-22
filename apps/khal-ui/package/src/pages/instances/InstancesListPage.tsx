@@ -19,7 +19,7 @@ import { T } from '../../components/tokens';
 import '../../components/runtime-styles';
 import { CreateInstanceDialog } from './CreateInstanceDialog';
 import { SlackConnectButton } from './SlackConnectButton';
-import { SLACK_RETURN_PARAM, channelLabel, isProductionInstance, readSlackReturnNonce } from './instance-helpers';
+import { channelLabel, isProductionInstance, readSlackReturnNonce, stripSlackReturnParam } from './instance-helpers';
 
 /** Inline outcome surface — this app shows evidence in the page instead of toasts. */
 interface PageNotice {
@@ -42,10 +42,10 @@ function slackReturnNotice(result: SlackOAuthResult): PageNotice {
  */
 function clearSlackReturnParam(): void {
   if (typeof window === 'undefined') return;
-  const url = new URL(window.location.href);
-  if (!url.searchParams.has(SLACK_RETURN_PARAM)) return;
-  url.searchParams.delete(SLACK_RETURN_PARAM);
-  window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
+  const { pathname, search, hash } = window.location;
+  const stripped = stripSlackReturnParam(search);
+  if (stripped === search) return;
+  window.history.replaceState(window.history.state, '', `${pathname}${stripped}${hash}`);
 }
 
 export function InstancesListPage() {

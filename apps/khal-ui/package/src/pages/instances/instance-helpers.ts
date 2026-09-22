@@ -149,6 +149,24 @@ export function readSlackReturnNonce(search: string): string | null {
 }
 
 /**
+ * The same query string with the `slack` parameter removed and everything else
+ * byte-identical.
+ *
+ * Deliberately textual rather than `URLSearchParams`: re-serializing through
+ * that API rewrites the neighbours it is not supposed to touch — a space
+ * becomes `+`, a valueless `?flag` gains `=`. The browser URL here belongs to
+ * the host shell, so its other parameters are left exactly as they arrived.
+ */
+export function stripSlackReturnParam(search: string): string {
+  const query = search.startsWith('?') ? search.slice(1) : search;
+  if (query === '') return '';
+  const kept = query
+    .split('&')
+    .filter((part) => part !== SLACK_RETURN_PARAM && !part.startsWith(`${SLACK_RETURN_PARAM}=`));
+  return kept.length === 0 ? '' : `?${kept.join('&')}`;
+}
+
+/**
  * Hover/accessible text for a disabled Connect Slack control: names every
  * settings key the deployment still has to fill in, so the operator knows what
  * to set instead of just that something is missing. Key names only — no
