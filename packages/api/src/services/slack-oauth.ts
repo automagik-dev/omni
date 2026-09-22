@@ -189,8 +189,8 @@ export interface UpsertSlackOAuthInstanceInput {
   userId: string;
   /** Resolved display name; falls back to the user id in the instance name. */
   displayName?: string;
-  /** Workspace bot token (xoxb-…). */
-  botToken: string;
+  /** Workspace bot token (xoxb-…); required in bot mode, ignored in user mode, which installs no bot. */
+  botToken?: string;
   /** Personal token (xoxp-…); required in user mode, ignored in bot mode. */
   userToken?: string;
   appToken: string;
@@ -256,9 +256,13 @@ function isUniqueViolation(error: unknown): boolean {
   return /duplicate key|unique constraint/i.test(message);
 }
 
+/**
+ * Each mode writes only its own token and clears the other, so re-authorizing
+ * a personal instance also drops a bot token an earlier install left on it.
+ */
 function credentialColumns(input: UpsertSlackOAuthInstanceInput): Partial<NewInstance> {
   return {
-    slackBotToken: input.botToken,
+    slackBotToken: input.mode === 'bot' ? (input.botToken ?? null) : null,
     slackUserToken: input.mode === 'user' ? (input.userToken ?? null) : null,
     slackAuthMode: input.mode,
     slackAppToken: input.appToken,
@@ -309,14 +313,17 @@ function applyProfileMetadata(
 
 /**
  * The options `POST /instances/:id/connect` hands the plugin for a Slack
- * instance: `token` + `botToken` (both, as the route sets them), `userToken`
- * in user mode, `authMode`, `appToken`, `signingSecret`, plus the per-instance
- * connection settings from `profileMetadata`.
+ * instance: `token` + `botToken` (both, as the route sets them) in bot mode,
+ * `userToken` in user mode, `authMode`, `appToken`, `signingSecret`, plus the
+ * per-instance connection settings from `profileMetadata`.
  */
 function buildConnectOptions(input: UpsertSlackOAuthInstanceInput, row: Instance): Record<string, unknown> {
-  const options: Record<string, unknown> = { forceNewQr: false, token: input.botToken };
+  const options: Record<string, unknown> = { forceNewQr: false };
   applyProfileMetadata(options, row.profileMetadata as Record<string, unknown> | null | undefined);
-  options.botToken = input.botToken;
+  if (input.mode === 'bot' && input.botToken) {
+    options.token = input.botToken;
+    options.botToken = input.botToken;
+  }
   if (input.mode === 'user' && input.userToken) options.userToken = input.userToken;
   options.authMode = input.mode;
   options.appToken = input.appToken;

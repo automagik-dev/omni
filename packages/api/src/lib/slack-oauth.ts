@@ -120,17 +120,18 @@ export interface SlackAuthorizeUrlInput {
 }
 
 /**
- * `https://slack.com/oauth/v2/authorize?...` with the bot scopes the manifest
- * declares and, in user mode, the user scopes too. Bot scopes are requested on
- * every authorize because the plugin, socket auth and agent-view status all
- * need the workspace bot token (design D7).
+ * `https://slack.com/oauth/v2/authorize?...` asking for one install: the bot
+ * scopes the manifest declares (`scope`) in bot mode, the user scopes
+ * (`user_scope`) in user mode. A user-mode authorize requests no bot scope, so
+ * it adds no bot user to the workspace — the instance runs on the person's own
+ * token, and the deployment's app-level token opens the socket.
  */
 export function buildSlackAuthorizeUrl(input: SlackAuthorizeUrlInput): string {
   const scopes = slackAuthorizeScopes();
   const url = new URL(SLACK_AUTHORIZE_URL);
   url.searchParams.set('client_id', input.clientId);
-  url.searchParams.set('scope', scopes.scope);
   if (input.mode === 'user') url.searchParams.set('user_scope', scopes.user_scope);
+  else url.searchParams.set('scope', scopes.scope);
   url.searchParams.set('redirect_uri', input.redirectUri);
   url.searchParams.set('state', input.state);
   return url.toString();
@@ -144,8 +145,9 @@ const SlackIdNameSchema = z.object({ id: z.string().min(1), name: z.string().opt
 
 /**
  * Successful `oauth.v2.access` response. `access_token` is the workspace bot
- * token (xoxb-…); `authed_user.access_token` is the person's user token
- * (xoxp-…) and is present only when `user_scope` was requested and granted.
+ * token (xoxb-…) and is present only when bot scopes were requested;
+ * `authed_user.access_token` is the person's user token (xoxp-…) and is
+ * present only when `user_scope` was requested and granted.
  */
 export const SlackOAuthAccessSchema = z.object({
   ok: z.literal(true),
