@@ -13,6 +13,7 @@
 import type { Logger } from '@omni/channel-sdk';
 import type { WebClient } from '@slack/web-api';
 import { SlackError, SlackErrorCode } from './types';
+import { resolveSlackEmojiName } from './utils/emoji';
 
 /**
  * Add a reaction to a message
@@ -24,8 +25,8 @@ export async function addReaction(
   emoji: string,
   logger: Logger,
 ): Promise<void> {
-  // Remove colons if present (e.g., :thumbsup: → thumbsup)
-  const name = emoji.replace(/^:|:$/g, '');
+  // Accepts :thumbsup:, thumbsup or 👍 — Slack only takes the shortname
+  const name = resolveSlackEmojiName(emoji);
   try {
     await client.reactions.add({
       channel: channelId,
@@ -48,7 +49,7 @@ export async function removeReaction(
   emoji: string,
   logger: Logger,
 ): Promise<void> {
-  const name = emoji.replace(/^:|:$/g, '');
+  const name = resolveSlackEmojiName(emoji);
   try {
     await client.reactions.remove({
       channel: channelId,
