@@ -193,8 +193,12 @@ interface MediaResolution {
  *
  * Every other row keeps today's behaviour exactly: bot mode, an absent auth
  * mode, and user mode with no stored user token all download as the bot.
+ *
+ * Shared with the on-demand download route (`POST /messages/media/download`),
+ * so both download paths authenticate a row the same way — including a
+ * user-mode row from a one-click install, which has no bot token at all.
  */
-function selectSlackDownloadToken(instance: Record<string, unknown>): string | undefined {
+export function selectSlackDownloadToken(instance: Record<string, unknown>): string | undefined {
   const slackAuthMode = instance.slackAuthMode as string | undefined;
   const slackUserToken = instance.slackUserToken as string | undefined;
   if (slackAuthMode === 'user' && typeof slackUserToken === 'string' && slackUserToken.length > 0) {

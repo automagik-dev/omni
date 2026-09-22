@@ -36,6 +36,15 @@ describe('buildFetchOptions — Slack download token selection', () => {
     expect(authorizationOf(options)).toBe('Bearer xoxp-test');
   });
 
+  test('a bot-less user-mode row from a one-click install downloads as the user', async () => {
+    const options = await buildFetchOptions(
+      ctxReturning({ slackAuthMode: 'user', slackUserToken: 'xoxp-test', slackBotToken: null }),
+      'instance-1',
+      'slack',
+    );
+    expect(authorizationOf(options)).toBe('Bearer xoxp-test');
+  });
+
   test('user mode with no stored user token keeps the bot token', async () => {
     const options = await buildFetchOptions(
       ctxReturning({ slackAuthMode: 'user', slackUserToken: null, slackBotToken: 'xoxb-test' }),

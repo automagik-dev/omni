@@ -50,6 +50,7 @@ import { and, eq, gte, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { sentryEnabled } from '../../lib/sentry-scrub';
+import { selectSlackDownloadToken } from '../../plugins/media-processor';
 import { optionalDateParam } from '../../schemas/date-query';
 import { sendCloseContactSchema, sendHandoffSchema } from '../../schemas/openapi/messages';
 import type { Services } from '../../services';
@@ -875,10 +876,10 @@ async function resolveMessageFromRef(
 
 function buildMediaDownloadFetchOptions(instance: Record<string, unknown>): MediaFetchOptions | undefined {
   if (instance.channel !== 'slack') return undefined;
-  const slackBotToken = typeof instance.slackBotToken === 'string' ? instance.slackBotToken : undefined;
-  if (!slackBotToken) return undefined;
+  const token = selectSlackDownloadToken(instance);
+  if (!token) return undefined;
   return {
-    headers: { Authorization: `Bearer ${slackBotToken}` },
+    headers: { Authorization: `Bearer ${token}` },
     preserveAuthRedirectHostSuffixes: ['slack.com'],
   };
 }
@@ -3296,5 +3297,8 @@ messagesRoutes.delete('/:id/star', zValidator('json', starMessageSchema), async 
     data: { messageId, starred: false },
   });
 });
+
+/** Test-only access to how the on-demand media download authenticates. */
+export const __test__ = { buildMediaDownloadFetchOptions };
 
 export { messagesRoutes };
