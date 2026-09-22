@@ -643,3 +643,11 @@ packages/api/src/routes/v2/__tests__/slack-oauth-e2e.test.ts            (new)
 - **Validation (reviewer's own runs, all green):** receiver-fanout 5; channel-slack 341; app-token-conflict 10; slack-identity 4; api/plugins 432; api/routes/v2 471; lint, knip, typecheck exit 0; no skip/only/todo, no `any`. Coordinator gate `bun run check` on `a3b0a40a`: 26/26 tasks, 0 failures.
 - **Findings:** 0 CRITICAL / 0 HIGH / 3 MEDIUM / 3 LOW. MEDIUM (1) the API route's `force` escape never reaches the attach guard (plugin.ts passes no force), so the 409 message suggests an override that then fails with `SLACK_BOT_INSTANCE_EXISTS` — carried to Group 8; (2) a non-scope `authorizations.list` failure logs once per event and caches nothing; (3) the 60 s expiry and eviction sweep are untested (TTL is a named constant, growth bounded).
 - Full report: session scratchpad `g5-review.md`.
+
+### Group 8 execution review — PR #1232 (workflow run `wf_91d5d5b8-e78`, 2026-09-22)
+
+- **Verdict:** SHIP (workflow reviewer, Opus run; 0 blocking findings, nothing outside the declared set)
+- **Gate:** `bun run check` — pass (26/26 turbo tasks; 3,219 tests across 324 files, 0 failures); the real-PostgreSQL gate of `make check-all` is not runnable on this host and is covered by CI on the final pull request
+- **Contract:** `docs/channels/slack.md` opens with "One-click setup (OAuth)" (operator once, member every time, manifest link contents, HTTPS/tunnel note, revocation behavior, narrowed `SLACK_APP_TOKEN_IN_USE` semantics) above the retained manual path; `docs/api/endpoints.md` documents the four OAuth routes; `slack-oauth-e2e.test.ts` drives start → callback → result → connected for two members of one workspace and shows `tokens_revoked` disconnecting exactly one; the Group 5 `force` gap is closed by threading the connect-time force option into the receiver's attach guard with a test.
+- **Read-back:** the run ended `blocked` only because `packages/channel-slack/src/connection/app-receiver.ts`, declared and marked cuttable, ended untouched (the repair is proved from `plugin.ts` and the new test). Coordinator ruling: accepted as delivered. 5 files, 660 insertions; PR checks pass.
+- Full result: session task output `w6ip4di1d`; per-agent journal `wf_91d5d5b8-e78`.
