@@ -84,7 +84,16 @@ old "one app token, one instance" refusal has been narrowed:
 - That refusal is overridable: pass `force: true` (`--force`) to
   `POST /api/v2/instances/:id/connect` when the second install is deliberately
   **replacing** the first — a reinstalled bot token under a new instance id.
-  Without `force` the connect fails with `SLACK_BOT_INSTANCE_EXISTS`.
+
+Without `force` the connect is refused twice over, and the API layer answers
+first:
+
+1. `409 SLACK_APP_TOKEN_IN_USE` — the route's own check
+   (`findSlackBotModeConflict`) runs before the plugin is reached, so this is
+   the code a caller actually sees. It is what `POST /connect` returns.
+2. `SLACK_BOT_INSTANCE_EXISTS` — the Slack receiver's guard, the second layer
+   behind it. It is reachable only when the route's check does not fire (for
+   example an attachment the route's active-instance scan cannot see).
 
 The manual, pasted-token path below still works and is still supported — use
 it when you maintain the Slack app by hand, run without a public HTTPS URL, or

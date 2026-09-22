@@ -45,9 +45,21 @@ const SETTING_KEYS = {
   publicUrl: 'server.public_url',
 } as const;
 
-/** Poll cadence and ceiling for `slack connect` (2 s, 5 min — see the wish). */
+/**
+ * Poll cadence and ceiling for `slack connect`.
+ *
+ * The default wait sits deliberately BELOW the API's pending-record TTL
+ * (`OAUTH_TTL_MS`, 300 s in `routes/v2/slack.ts`): at exactly 300 s the record
+ * the poll is reading has already expired, so the last poll could only ever
+ * report a dead nonce. Waiting 240 s leaves the record alive for the whole
+ * poll window, and a timeout therefore means "the person did not approve in
+ * time", not "the CLI outlived its own record".
+ *
+ * There is no resume path — no command accepts a nonce, and the record is
+ * single-use — so the timeout message tells the operator to start over.
+ */
 const POLL_INTERVAL_MS = 2_000;
-const DEFAULT_TIMEOUT_SECONDS = 300;
+const DEFAULT_TIMEOUT_SECONDS = 240;
 
 type SlackAppStatus = Awaited<ReturnType<OmniClient['slack']['appStatus']>>;
 type SlackOAuthResult = Awaited<ReturnType<OmniClient['slack']['oauthResult']>>;
@@ -445,7 +457,7 @@ async function handleConnect(
 
   if (!result) {
     output.error(
-      `Timed out after ${timeoutSeconds}s waiting for Slack. Finish the approval, then read the same install with nonce ${started.nonce}`,
+      `Timed out after ${timeoutSeconds}s waiting for Slack. The pending install (nonce ${started.nonce}) is single-use and cannot be resumed — start over with: omni slack connect`,
       undefined,
       EXIT_API,
     );

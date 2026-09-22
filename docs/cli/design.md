@@ -124,7 +124,7 @@ except `debug` commands; `omni --all` reveals those too.
 | `providers` | AI/LLM provider configuration |
 | `automations` | Event-driven workflows |
 | `follow-up` | Idle-chat follow-up config (agents/instances/chats) |
-| `slack` | Slack-only: open a DM by user id, search messages |
+| `slack` | Slack-only: register the deployment app, one-click connect, open a DM by user id, search messages |
 | `connect` | Connect an instance to a genie agent via NATS |
 | `setup` | Compound setup (agent → provider → instance, any schema) |
 | `routes` | Agent routing configuration |
@@ -598,6 +598,50 @@ Slack-only helpers.
 omni slack dm <instance> <userId>          # Resolve/open DM channel for a user (U…)
 omni slack search <instance> <query>       # Search messages (requires user-token authMode)
 ```
+
+### Deployment app and one-click connect
+
+One Slack app serves every workspace. `app setup` registers it once per
+deployment; `connect` then installs it for a person (or for the workspace bot)
+without anyone pasting a token.
+
+```bash
+omni slack app setup                       # Register the deployment app: manifest link, then the five settings
+omni slack app status                      # Is the app configured? Missing keys, redirect URL, manifest link
+omni slack connect                         # Install for the current person (opens Slack, waits for the callback)
+```
+
+Secrets are never accepted as flag values — a value on the command line lands
+in the shell history and in `ps`. `app setup` reads each of the three secrets
+from piped stdin (`--client-secret-stdin`, `--signing-secret-stdin`,
+`--app-token-stdin`, one line each in that order) or from an interactive
+prompt on stderr, and masks them on output.
+
+```bash
+# Fully non-interactive registration
+printf '%s\n%s\n%s\n' "$CLIENT_SECRET" "$SIGNING_SECRET" "$APP_TOKEN" | \
+  omni slack app setup --non-interactive \
+    --public-url https://omni.example.com --client-id 123.456 \
+    --client-secret-stdin --signing-secret-stdin --app-token-stdin
+```
+
+| Option | Command | Description |
+|--------|---------|-------------|
+| `--public-url <url>` | `app setup` | Public base URL of this deployment (https://…) |
+| `--client-id <id>` | `app setup` | Slack app client id |
+| `--client-secret-stdin` | `app setup` | Read the client secret from stdin (one line) |
+| `--signing-secret-stdin` | `app setup` | Read the signing secret from stdin (one line) |
+| `--app-token-stdin` | `app setup` | Read the app-level token from stdin (one line) |
+| `--non-interactive` | `app setup` | Never prompt: every value must arrive by flag or stdin |
+| `--mode <mode>` | `connect` | Authorize as the person (`user`, default) or as the workspace bot (`bot`) |
+| `--no-open` | `connect` | Do not try to open a browser; just print the URL |
+| `--timeout <seconds>` | `connect` | Seconds to wait for the callback (default 240) |
+
+`connect` prints the authorize URL and the install nonce, then polls until the
+callback lands. The pending install is single-use and expires after 5 minutes,
+so a timeout is not resumable — run `omni slack connect` again.
+
+Exit codes across the group: `0` success, `2` usage, `3` API failure.
 
 ## Journey
 

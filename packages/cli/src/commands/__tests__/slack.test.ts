@@ -6,10 +6,14 @@
  *   - `setup --non-interactive` with every value supplied writes exactly the
  *     five settings keys through `client.settings.set`, and the status it
  *     prints afterwards carries `configured: true`
+ *   - the printed `manifestUrl` is the api.slack.com app-creation link, and its
+ *     `manifest_json` decodes to a manifest carrying the deployment's redirect
+ *     URL (C1)
  *   - `connect` prints an `https://slack.com/oauth/v2/authorize…` URL, polls
  *     `oauthResult` until `done`, and returns exit code 0 with the instance id
  *   - an `{ status: 'error' }` outcome exits non-zero (3)
- *   - a timeout exits non-zero (3) and names the nonce so the operator can retry
+ *   - a timeout exits non-zero (3) and tells the operator to start over — there
+ *     is no resume path, and the default wait stays under the record's TTL
  *   - a usage failure exits 2, and an API failure exits 3
  *   - no secret value ever reaches stdout, stderr or an output call
  *
@@ -72,7 +76,8 @@ mock.module('../../output.js', () => ({
 }));
 
 const { __testables, createSlackCommand } = await import('../slack');
-const { handleAppSetup, handleAppStatus, handleConnect, maskSecret, SETTING_KEYS } = __testables;
+const { handleAppSetup, handleAppStatus, handleConnect, maskSecret, SETTING_KEYS, DEFAULT_TIMEOUT_SECONDS } =
+  __testables;
 
 beforeEach(() => {
   outputCalls.length = 0;
@@ -134,11 +139,30 @@ const UNCONFIGURED: AppStatusShape = {
   manifestUrl: null,
 };
 
+const REDIRECT_URL = 'https://omni.example.com/api/v2/slack/oauth/callback';
+
+/**
+ * A faithful stand-in for what `GET /slack/app` returns: the api.slack.com
+ * app-creation URL carrying the whole manifest, URL-encoded, in
+ * `manifest_json`. Built here rather than hard-coded so the assertion below
+ * decodes a real manifest and can prove the redirect URL survived the trip.
+ * The shape mirrors `buildSlackManifestUrl` in the API's slack-oauth service.
+ */
+const MANIFEST = {
+  display_information: { name: 'Omni' },
+  oauth_config: { redirect_urls: [REDIRECT_URL] },
+} as const;
+
+const MANIFEST_URL = `https://api.slack.com/apps?${new URLSearchParams({
+  new_app: '1',
+  manifest_json: JSON.stringify(MANIFEST),
+}).toString()}`;
+
 const CONFIGURED: AppStatusShape = {
   configured: true,
   missing: [],
-  redirectUrl: 'https://omni.example.com/api/v2/slack/oauth/callback',
-  manifestUrl: 'https://api.slack.com/apps?new_app=1&manifest_json=%7B%7D',
+  redirectUrl: REDIRECT_URL,
+  manifestUrl: MANIFEST_URL,
 };
 
 interface SetupFake {
@@ -286,6 +310,46 @@ describe('slack app setup', () => {
       fn: 'keyValue',
       args: ['redirectUrl', CONFIGURED.redirectUrl],
     });
+  });
+
+  test('status prints the manifest link, and its manifest_json decodes to the manifest carrying the redirect URL', async () => {
+    const fake = makeSetupClient({ statuses: [CONFIGURED] });
+
+    await handleAppStatus(fake.client);
+
+    // C1: the link is printed, verbatim, as its own key/value.
+    const printedManifest = outputCalls.find((c) => c.fn === 'keyValue' && c.args[0] === 'manifestUrl')?.args[1];
+    expect(printedManifest).toBe(MANIFEST_URL);
+    expect(printed()).toContain('api.slack.com/apps');
+
+    // …and it is a usable app-creation link: the encoded manifest decodes and
+    // carries the deployment's own OAuth redirect URL, which is the whole
+    // reason to hand an operator this link.
+    const parsed = new URL(String(printedManifest));
+    expect(parsed.origin).toBe('https://api.slack.com');
+    expect(parsed.searchParams.get('new_app')).toBe('1');
+    const manifestJson = parsed.searchParams.get('manifest_json');
+    expect(manifestJson).not.toBeNull();
+    expect(JSON.parse(String(manifestJson))).toEqual(MANIFEST);
+    expect(JSON.parse(String(manifestJson)).oauth_config.redirect_urls).toContain(REDIRECT_URL);
+  });
+
+  test('setup prints the manifest link up front when the app is already configured', async () => {
+    const fake = makeSetupClient({ statuses: [CONFIGURED, CONFIGURED] });
+
+    await handleAppSetup(
+      fake.client,
+      { publicUrl: PUBLIC_URL, clientId: CLIENT_ID, nonInteractive: true, ...ALL_SECRETS_STDIN },
+      stdinPorts(SECRET_LINES),
+    );
+
+    // Printed BEFORE any value is collected — that is the point of the link.
+    const manifestCalls = outputCalls.filter((c) => c.fn === 'keyValue' && c.args[0] === 'manifestUrl');
+    expect(manifestCalls.length).toBeGreaterThanOrEqual(2);
+    expect(manifestCalls[0]?.args[1]).toBe(MANIFEST_URL);
+    const firstWrite = outputCalls.findIndex((c) => c.fn === 'success');
+    const firstManifest = outputCalls.findIndex((c) => c.fn === 'keyValue' && c.args[0] === 'manifestUrl');
+    expect(firstManifest).toBeLessThan(firstWrite);
   });
 
   test('--non-interactive without --public-url is a usage failure: exit 2, nothing written', async () => {
@@ -445,7 +509,7 @@ describe('slack connect', () => {
     expect(printed()).toContain('access_denied');
   });
 
-  test('a timeout exits non-zero (3) and prints the nonce for retry', async () => {
+  test('a timeout exits non-zero (3) and tells the operator to start over, not to resume', async () => {
     const fake = makeConnectClient({ results: [{ status: 'pending' }] });
     const { ports } = makeConnectPorts();
 
@@ -454,9 +518,24 @@ describe('slack connect', () => {
 
     expect(code).toBe(3);
     const timedOut = outputCalls.find((c) => c.fn === 'error');
-    expect(String(timedOut?.args[0])).toContain(NONCE);
-    expect(String(timedOut?.args[0])).toContain('Timed out');
+    const message = String(timedOut?.args[0]);
+    expect(message).toContain('Timed out');
+    expect(message).toContain(NONCE);
+    // M6: the message must not promise a resume path. No command accepts a
+    // nonce and the pending record is single-use, so the only truthful
+    // instruction is to run the command again.
+    expect(message).toContain('omni slack connect');
+    expect(message).toContain('cannot be resumed');
+    expect(message).not.toContain('read the same install');
     expect(fake.resultNonces.length).toBeGreaterThan(1);
+  });
+
+  test('the default wait stays below the API pending-record TTL of 300 s', async () => {
+    // M6: at 300 s the record the poll reads has already expired, so the last
+    // poll could only ever report a dead nonce. The default must leave the
+    // record alive for the whole window.
+    expect(DEFAULT_TIMEOUT_SECONDS).toBeLessThan(300);
+    expect(DEFAULT_TIMEOUT_SECONDS).toBe(240);
   });
 
   test('an unusable --mode is a usage failure: exit 2, before any API call', async () => {

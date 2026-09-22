@@ -12,7 +12,16 @@
 --   instances.slack_user_id           authorizing user id (U…); null for
 --                                     bot-mode instances (keyed by team only)
 --   instances.slack_connection_method 'manual' | 'oauth'; NULL reads as 'manual'
---   instances_slack_identity_idx      lookup index for the upsert
+--   instances_slack_identity_idx      composite index on (team, user) for the
+--                                     identity finder a follow-up adds. It
+--                                     serves NO query today: the callback's
+--                                     upsert still scans `instances.list`,
+--                                     which is capped at 1,000 Slack rows and
+--                                     is the documented trigger for a
+--                                     `findBySlackIdentity` service finder.
+--                                     The index ships here so that finder, and
+--                                     the uniqueness work tracked alongside
+--                                     it, need no second migration.
 --
 -- All nullable; existing rows are untouched. Not a credential column.
 --
