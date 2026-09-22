@@ -5,7 +5,17 @@
 import { describe, expect, it, mock } from 'bun:test';
 import type { Logger } from '@omni/channel-sdk';
 import type { App } from '@slack/bolt';
+import type { SlackRoutingFields } from '../connection/app-receiver';
 import { setupPinHandlers } from './pins';
+
+/** The workspace envelope Slack wraps a pin event in. */
+const TEAM = 'T_WORK';
+const envelope: SlackRoutingFields = {
+  team_id: TEAM,
+  event_context: 'EC-pin',
+  event_id: 'Ev-pin-1',
+  authorizations: [{ team_id: TEAM, user_id: 'U123ABC456', is_bot: false }],
+};
 
 function makeLogger(): Logger {
   return {
@@ -17,11 +27,13 @@ function makeLogger(): Logger {
   } as unknown as Logger;
 }
 
+type PinListener = (args: { event: unknown; body: SlackRoutingFields }) => Promise<void>;
+
 /** Minimal Bolt app double that records event registrations. */
 function makeApp() {
-  const listeners = new Map<string, (args: { event: unknown }) => Promise<void>>();
+  const listeners = new Map<string, PinListener>();
   const app = {
-    event: mock((name: string, listener: (args: { event: unknown }) => Promise<void>) => {
+    event: mock((name: string, listener: PinListener) => {
       listeners.set(name, listener);
     }),
   };
@@ -29,7 +41,8 @@ function makeApp() {
 }
 
 type PinCall = {
-  instanceId: string;
+  /** The workspace envelope the handler threaded through, which is what routes the pin. */
+  envelope: SlackRoutingFields;
   messageId: string;
   chatId: string;
   userId: string | undefined;
@@ -41,10 +54,10 @@ function setup() {
   const calls: PinCall[] = [];
   setupPinHandlers(
     app,
-    'inst-1',
+    'socket:receiver-key',
     {
-      onPin: async (instanceId, messageId, chatId, userId, action) => {
-        calls.push({ instanceId, messageId, chatId, userId, action });
+      onPin: async (env, messageId, chatId, userId, action) => {
+        calls.push({ envelope: env, messageId, chatId, userId, action });
       },
     },
     makeLogger(),
@@ -64,6 +77,7 @@ describe('setupPinHandlers', () => {
     const { listeners, calls } = setup();
 
     await listeners.get('pin_added')?.({
+      body: envelope,
       event: {
         type: 'pin_added',
         user: 'U123ABC456',
@@ -79,7 +93,7 @@ describe('setupPinHandlers', () => {
 
     expect(calls).toEqual([
       {
-        instanceId: 'inst-1',
+        envelope,
         messageId: '1725700000.000100',
         chatId: 'C0123ABC456',
         userId: 'U123ABC456',
@@ -92,6 +106,7 @@ describe('setupPinHandlers', () => {
     const { listeners, calls } = setup();
 
     await listeners.get('pin_removed')?.({
+      body: envelope,
       event: {
         type: 'pin_removed',
         user: 'U123ABC456',
@@ -110,6 +125,7 @@ describe('setupPinHandlers', () => {
     const { listeners, calls } = setup();
 
     await listeners.get('pin_added')?.({
+      body: envelope,
       event: {
         type: 'pin_added',
         user: 'U123ABC456',
@@ -125,6 +141,7 @@ describe('setupPinHandlers', () => {
     const { listeners, calls } = setup();
 
     await listeners.get('pin_added')?.({
+      body: envelope,
       event: {
         type: 'pin_added',
         user: 'U123ABC456',
@@ -140,6 +157,7 @@ describe('setupPinHandlers', () => {
     const { listeners, calls } = setup();
 
     await listeners.get('pin_added')?.({
+      body: envelope,
       event: {
         type: 'pin_added',
         user: 'U123ABC456',

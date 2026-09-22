@@ -118,6 +118,7 @@ mock.module('@slack/bolt', () => {
 // Import AFTER mock.module so the receiver binds to the fake Bolt.
 const { SlackAppReceiver, receiverKeyFor } = await import('../connection/app-receiver');
 type SlackAttachment = import('../connection/app-receiver').SlackAttachment;
+type SlackAuthorization = import('../connection/app-receiver').SlackAuthorization;
 type RegisterHandlers = import('../connection/app-receiver').RegisterHandlers;
 
 // ─────────────────────────────────────────────────────────────
@@ -196,6 +197,74 @@ function lastApp(): FakeAppRecord {
 function authorizeOf(record: FakeAppRecord): FakeAuthorize {
   if (!record.authorize) throw new Error('fake App captured no authorize');
   return record.authorize;
+}
+
+/** One answer page of `apps.event.authorizations.list`. */
+interface AuthorizationsPage {
+  authorizations: SlackAuthorization[];
+  nextCursor?: string;
+}
+
+/** The arguments one lookup call carried. */
+interface AuthorizationsCall {
+  event_context: string;
+  cursor?: string;
+  limit?: number;
+}
+
+/**
+ * Replace the receiver's app-level client with a paginating fake.
+ *
+ * The real one carries the `xapp-…` token, the only token the method accepts,
+ * so swapping it is what keeps these tests off the network while still
+ * exercising the receiver's own cursor walk, bound and caching.
+ */
+function installAuthorizationsPages(
+  receiver: InstanceType<typeof SlackAppReceiver>,
+  pages: AuthorizationsPage[],
+): AuthorizationsCall[] {
+  const calls: AuthorizationsCall[] = [];
+  const client = {
+    apps: {
+      event: {
+        authorizations: {
+          list: async (args: AuthorizationsCall) => {
+            calls.push(args);
+            const page = pages[calls.length - 1] ?? { authorizations: [] };
+            return {
+              authorizations: page.authorizations,
+              response_metadata: { next_cursor: page.nextCursor ?? '' },
+            };
+          },
+        },
+      },
+    },
+  };
+  (receiver as unknown as { appLevelClient: unknown }).appLevelClient = client;
+  return calls;
+}
+
+/** Capture what the receiver logged, replacing the logger it was built with. */
+function captureLogs(receiver: InstanceType<typeof SlackAppReceiver>): {
+  level: string;
+  message: string;
+  context: Record<string, unknown>;
+}[] {
+  const lines: { level: string; message: string; context: Record<string, unknown> }[] = [];
+  const record =
+    (level: string) =>
+    (message: string, context?: Record<string, unknown>): void => {
+      lines.push({ level, message, context: context ?? {} });
+    };
+  const logger = {
+    debug: record('debug'),
+    info: record('info'),
+    warn: record('warn'),
+    error: record('error'),
+    child: () => logger,
+  } as unknown as Logger;
+  (receiver as unknown as { logger: Logger }).logger = logger;
+  return lines;
 }
 
 const source = (teamId: string): AuthorizeSourceData<boolean> => ({
@@ -502,5 +571,136 @@ describe('resolveWorkspaceIdentity', () => {
     expect(error).toBeInstanceOf(SlackError);
     expect((error as SlackError).channelCode).toBe(SlackErrorCode.CONNECTION_FAILED);
     expect((error as SlackError).message).toContain('socket hang up');
+  });
+});
+
+describe('SlackAppReceiver authorizations pagination', () => {
+  it('follows the cursor across pages, so an install past the first page is still a target', async () => {
+    const { receiver } = makeReceiver();
+    const calls = installAuthorizationsPages(receiver, [
+      { authorizations: [{ team_id: 'T1', user_id: 'U_ANA', is_bot: false }], nextCursor: 'page-2' },
+      { authorizations: [{ team_id: 'T1', user_id: 'U_BEN', is_bot: false }] },
+    ]);
+
+    receiver.attach(makeAttachment('inst-ana', 'T1', 'xoxb-a', 1, { authMode: 'user', actingUserId: 'U_ANA' }));
+    receiver.attach(makeAttachment('inst-ben', 'T1', 'xoxb-b', 2, { authMode: 'user', actingUserId: 'U_BEN' }));
+
+    const targets = await receiver.targetsFor({ team_id: 'T1', event_context: 'EC-paged', authorizations: [] });
+
+    // Ben is only on the SECOND page: one-page-deep reading starved him.
+    expect(targets.map((a) => a.instanceId)).toEqual(['inst-ana', 'inst-ben']);
+    expect(calls).toEqual([
+      { event_context: 'EC-paged', limit: 100 },
+      { event_context: 'EC-paged', limit: 100, cursor: 'page-2' },
+    ]);
+  });
+
+  it('stops at the page bound, warns, and narrows to what it did read', async () => {
+    const { receiver } = makeReceiver();
+    // Every page answers with another cursor: the walk has to end somewhere.
+    const calls = installAuthorizationsPages(
+      receiver,
+      Array.from({ length: 9 }, (_, index) => ({
+        authorizations: [{ team_id: 'T1', user_id: `U_${index}`, is_bot: false }],
+        nextCursor: `page-${index + 2}`,
+      })),
+    );
+    const logs = captureLogs(receiver);
+
+    receiver.attach(makeAttachment('inst-ana', 'T1', 'xoxb-a', 1, { authMode: 'user', actingUserId: 'U_ANA' }));
+    receiver.attach(makeAttachment('inst-ben', 'T1', 'xoxb-b', 2, { authMode: 'user', actingUserId: 'U_BEN' }));
+
+    const targets = await receiver.targetsFor({ team_id: 'T1', event_context: 'EC-endless', authorizations: [] });
+
+    expect(calls).toHaveLength(5);
+    expect(targets).toEqual([]);
+    expect(logs.filter((line) => line.level === 'warn' && line.message.includes('more pages'))).toHaveLength(1);
+  });
+});
+
+describe('SlackAppReceiver.targetsForActor', () => {
+  it('narrows an envelope-less event to the acting human own install', async () => {
+    const { receiver } = makeReceiver();
+    installAuthorizationsPages(receiver, []);
+    receiver.attach(makeAttachment('inst-ana', 'T1', 'xoxb-a', 1, { authMode: 'user', actingUserId: 'U_ANA' }));
+    receiver.attach(makeAttachment('inst-ben', 'T1', 'xoxb-b', 2, { authMode: 'user', actingUserId: 'U_BEN' }));
+    receiver.attach(makeAttachment('inst-other', 'T2', 'xoxb-c', 3));
+
+    await expect(receiver.targetsForActor('T1', 'U_BEN')).resolves.toMatchObject([{ instanceId: 'inst-ben' }]);
+
+    // Another workspace of the same app is never a target.
+    await expect(receiver.targetsForActor('T2', 'U_BEN')).resolves.toMatchObject([{ instanceId: 'inst-other' }]);
+
+    // A workspace with no attachment, and no workspace at all, are empty.
+    await expect(receiver.targetsForActor('T9', 'U_ANA')).resolves.toEqual([]);
+    await expect(receiver.targetsForActor(undefined, 'U_ANA')).resolves.toEqual([]);
+  });
+
+  it('falls back to the workspace bot install, and to nobody when every install is personal', async () => {
+    const { receiver } = makeReceiver();
+    installAuthorizationsPages(receiver, []);
+    receiver.attach(makeAttachment('inst-bot', 'T1', 'xoxb-bot', 1));
+    receiver.attach(makeAttachment('inst-ana', 'T1', 'xoxb-a', 2, { authMode: 'user', actingUserId: 'U_ANA' }));
+
+    // A member with no install of their own: the bot install owns the action.
+    await expect(receiver.targetsForActor('T1', 'U_CARLA')).resolves.toMatchObject([{ instanceId: 'inst-bot' }]);
+
+    // With the bot gone every install is personal, and none is the actor's.
+    receiver.detach('inst-bot');
+    receiver.attach(makeAttachment('inst-ben', 'T1', 'xoxb-b', 3, { authMode: 'user', actingUserId: 'U_BEN' }));
+    await expect(receiver.targetsForActor('T1', 'U_CARLA')).resolves.toEqual([]);
+
+    // One attachment for the workspace owns everything that workspace sends.
+    receiver.detach('inst-ben');
+    await expect(receiver.targetsForActor('T1', 'U_CARLA')).resolves.toMatchObject([{ instanceId: 'inst-ana' }]);
+  });
+});
+
+describe('SlackAppReceiver client and log hygiene', () => {
+  it('prunes the token-keyed client once no attachment references that token', () => {
+    const { receiver } = makeReceiver();
+    const clientsByToken = (receiver as unknown as { clientsByToken: Map<string, WebClient> }).clientsByToken;
+
+    receiver.attach(makeAttachment('inst-a', 'T1', 'xoxb-a', 1));
+    receiver.attach(makeAttachment('inst-b', 'T2', 'xoxb-b', 2));
+    // A reinstall of T1 under a new instance id, with a new bot token.
+    receiver.attach(makeAttachment('inst-a2', 'T1', 'xoxb-a2', 3), { force: true });
+    expect([...clientsByToken.keys()]).toEqual(['xoxb-a', 'xoxb-b', 'xoxb-a2']);
+
+    // The superseded install detaches: its historical token goes with it.
+    expect(receiver.detach('inst-a')).toBe(true);
+    expect([...clientsByToken.keys()]).toEqual(['xoxb-b', 'xoxb-a2']);
+
+    // A token two attachments share survives the first detach.
+    receiver.attach(makeAttachment('inst-b2', 'T3', 'xoxb-b', 4));
+    expect(receiver.detach('inst-b')).toBe(true);
+    expect([...clientsByToken.keys()]).toEqual(['xoxb-b', 'xoxb-a2']);
+  });
+
+  it('says which narrowing it can do when there is no app-level token to look authorizations up with', async () => {
+    const { receiver } = makeReceiver({
+      botToken: 'xoxb-http',
+      mode: 'http',
+      signingSecret: 'sekrit',
+      httpPort: 3007,
+    });
+    const logs = captureLogs(receiver);
+
+    receiver.attach(makeAttachment('inst-ana', 'T1', 'xoxb-a', 1, { authMode: 'user', actingUserId: 'U_ANA' }));
+    receiver.attach(makeAttachment('inst-ben', 'T1', 'xoxb-b', 2, { authMode: 'user', actingUserId: 'U_BEN' }));
+
+    const targets = await receiver.targetsFor({
+      team_id: 'T1',
+      event_context: 'EC-http',
+      authorizations: [{ team_id: 'T1', user_id: 'U_ANA', is_bot: false }],
+    });
+
+    // HTTP mode has no app-level token, so the envelope's single entry is the
+    // whole answer — and the log has to say so rather than claim a lookup.
+    expect(targets.map((a) => a.instanceId)).toEqual(['inst-ana']);
+    const narrowing = logs.filter((line) => line.message.startsWith('Slack workspace has several instances'));
+    expect(narrowing).toHaveLength(1);
+    expect(narrowing[0]?.message).toContain('the single authorization the event envelope carries');
+    expect(narrowing[0]?.context).toMatchObject({ mode: 'http', authorizationsLookup: false, teamId: 'T1' });
   });
 });

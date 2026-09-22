@@ -31,6 +31,12 @@ type FakeListener = (args: Record<string, unknown>) => Promise<void>;
 interface FakeAppRecord {
   events: Map<string, FakeListener[]>;
   messageListeners: FakeListener[];
+  /** Slash-command listeners per command name. */
+  commands: Map<string, FakeListener[]>;
+  /** Block-action listeners, in registration order. */
+  actions: FakeListener[];
+  /** Modal submit/close listeners, in registration order. */
+  views: FakeListener[];
 }
 
 const constructedApps: FakeAppRecord[] = [];
@@ -41,7 +47,7 @@ mock.module('@slack/bolt', () => {
     readonly record: FakeAppRecord;
 
     constructor(_options: Record<string, unknown>) {
-      this.record = { events: new Map(), messageListeners: [] };
+      this.record = { events: new Map(), messageListeners: [], commands: new Map(), actions: [], views: [] };
       constructedApps.push(this.record);
     }
 
@@ -57,13 +63,21 @@ mock.module('@slack/bolt', () => {
       this.record.messageListeners.push(...listeners);
     }
 
-    // Interactions, modals and slash commands resolve no targets from an event
-    // envelope, so their registrations are accepted and not recorded.
-    action(_constraints: unknown, ..._listeners: unknown[]): void {}
+    // Interactions, modals and slash commands carry no event envelope, so they
+    // are routed by workspace and actor instead — recorded here so the tests
+    // can drive them exactly as Bolt would.
+    action(_constraints: unknown, ...listeners: FakeListener[]): void {
+      this.record.actions.push(...listeners);
+    }
 
-    view(_constraints: unknown, ..._listeners: unknown[]): void {}
+    view(_constraints: unknown, ...listeners: FakeListener[]): void {
+      this.record.views.push(...listeners);
+    }
 
-    command(_name: unknown, ..._listeners: unknown[]): void {}
+    command(name: unknown, ...listeners: FakeListener[]): void {
+      const key = String(name);
+      this.record.commands.set(key, [...(this.record.commands.get(key) ?? []), ...listeners]);
+    }
 
     shortcut(_constraints: unknown, ..._listeners: unknown[]): void {}
 
@@ -103,6 +117,7 @@ const noop = (): void => undefined;
 const noopLogger: Logger = { debug: noop, info: noop, warn: noop, error: noop, child: () => noopLogger };
 
 const TEAM = 'T_WORK';
+const OTHER_TEAM = 'T_ELSE';
 const BOT_USER = 'U_BOT';
 const HUMAN_A = 'U_ANA';
 const HUMAN_B = 'U_BEN';
@@ -124,28 +139,81 @@ interface PluginInternals {
   ): { key: string; receiver: SlackAppReceiver };
   inboundHandlers: Map<string, (msg: Record<string, unknown>) => Promise<void>>;
   attachments: Map<string, SlackAttachment>;
+  logger: Logger;
 }
 
-async function makePlugin(): Promise<{
+/** One event the plugin published, as the tests read the fan-out off it. */
+interface PublishedEvent {
+  type: string;
+  payload: Record<string, unknown>;
+  /** The envelope the base plugin carries the instance id in. */
+  metadata: Record<string, unknown>;
+}
+
+/** Log lines the plugin wrote, so a routing refusal can be asserted on. */
+interface LoggedLine {
+  level: 'debug' | 'info' | 'warn' | 'error';
+  message: string;
+  context: Record<string, unknown>;
+}
+
+async function makePlugin(configOverrides: Record<string, unknown> = {}): Promise<{
   plugin: InstanceType<typeof SlackPlugin>;
   internals: PluginInternals;
   receiver: SlackAppReceiver;
   app: FakeAppRecord;
+  published: PublishedEvent[];
+  logged: LoggedLine[];
 }> {
+  const published: PublishedEvent[] = [];
+  const logged: LoggedLine[] = [];
+  const capture =
+    (level: LoggedLine['level']) =>
+    (message: string, context?: Record<string, unknown>): void => {
+      logged.push({ level, message, context: context ?? {} });
+    };
+  const logger: Logger = {
+    debug: capture('debug'),
+    info: capture('info'),
+    warn: capture('warn'),
+    error: capture('error'),
+    child: () => logger,
+  };
+
   const plugin = new SlackPlugin();
   await plugin.initialize({
-    eventBus: { publish: async () => {}, subscribe: () => {} },
+    eventBus: {
+      publish: async (type: string, payload: Record<string, unknown>, metadata?: Record<string, unknown>) => {
+        published.push({ type, payload, metadata: metadata ?? {} });
+        return 'evt-1';
+      },
+      subscribe: () => {},
+    },
     storage: {},
-    logger: noopLogger,
+    logger,
     config: {},
     db: {},
   } as unknown as PluginContext);
   const internals = plugin as unknown as PluginInternals;
-  const { receiver } = internals.obtainReceiver({ botToken: 'xoxb-bot', appToken: 'xapp-shared' }, config);
+  const { receiver } = internals.obtainReceiver({ botToken: 'xoxb-bot', appToken: 'xapp-shared' }, {
+    ...config,
+    ...configOverrides,
+  } as SlackConfig);
   const app = constructedApps.at(-1);
   if (!app) throw new Error('no fake App constructed');
-  return { plugin, internals, receiver, app };
+  return { plugin, internals, receiver, app, published, logged };
 }
+
+/**
+ * Instance ids one kind of published event named, in publish order.
+ *
+ * The base plugin strips `instanceId` out of the payload and into the publish
+ * metadata for most events, so both places are read.
+ */
+const instancesOf = (published: PublishedEvent[], type: string): unknown[] =>
+  published
+    .filter((event) => event.type === type)
+    .map((event) => event.payload.instanceId ?? event.metadata.instanceId);
 
 /**
  * Plant the client the receiver hands out for a bot token.
@@ -275,20 +343,23 @@ afterEach(() => {
 // ─────────────────────────────────────────────────────────────
 
 describe('shared-receiver fan-out', () => {
-  it('a single attachment gets a bot-only event with no authorization lookup at all', async () => {
+  it('a single user-mode attachment gets its event with no authorization lookup at all', async () => {
     const { internals, receiver, app } = await makePlugin();
     const probe = installAuthorizationsProbe(receiver, async () => {
       throw new Error('the one-attachment path must not look authorizations up');
     });
 
-    const only = makeAttachment('inst-bot');
+    // A personal install is the fixture the criterion names: one member of a
+    // workspace, behind the deployment's app-level token, alone on its
+    // receiver. Nothing is narrowed, so nothing is looked up.
+    const only = userAttachment('inst-ana', HUMAN_A);
     receiver.attach(only);
     const spy = inboundSpy();
     internals.inboundHandlers.set(only.instanceId, spy.handler);
 
     await app.messageListeners[0]?.({
-      message: channelMessage(HUMAN_A, '1000.0001'),
-      body: envelope('EC-solo', [{ team_id: TEAM, user_id: BOT_USER, is_bot: true }]),
+      message: channelMessage('U_OUTSIDER', '1000.0001'),
+      body: envelope('EC-solo', [{ team_id: TEAM, user_id: HUMAN_A, is_bot: false }]),
     });
 
     expect(spy.calls).toHaveLength(1);
@@ -453,5 +524,246 @@ describe('shared-receiver fan-out', () => {
     expect(benSpy.calls).toHaveLength(0);
     expect(probe.calls).toEqual(['EC-noscope-1']);
     expect(warnings.filter((message) => message.includes('authorizations:read'))).toHaveLength(1);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Slash commands, pins and interactions (Group 5 review, HIGH #1)
+// ─────────────────────────────────────────────────────────────
+
+/** Drive the slash-command listener the plugin registered, as Bolt would. */
+async function fireCommand(
+  app: FakeAppRecord,
+  command: Record<string, unknown>,
+): Promise<{ acks: number; responses: Record<string, unknown>[] }> {
+  const listeners = app.commands.get('/omni') ?? [];
+  if (listeners.length === 0) throw new Error('no slash-command listener registered');
+  const state = { acks: 0, responses: [] as Record<string, unknown>[] };
+  for (const listener of listeners) {
+    await listener({
+      command,
+      ack: async () => {
+        state.acks += 1;
+      },
+      respond: async (response: Record<string, unknown>) => {
+        state.responses.push(response);
+      },
+    });
+  }
+  return state;
+}
+
+/** The slash command Slack posts, with the workspace and the human who typed it. */
+const slashCommand = (teamId: string, userId: string, text = 'status') => ({
+  command: '/omni',
+  text,
+  user_id: userId,
+  team_id: teamId,
+  channel_id: 'C_TEAM',
+  trigger_id: `trigger-${userId}`,
+  response_url: 'https://hooks.slack.test/commands/1',
+});
+
+/** A bot-mode attachment of a SECOND workspace on the same Slack app. */
+const otherWorkspaceBot = (instanceId: string): SlackAttachment =>
+  makeAttachment(instanceId, { teamId: OTHER_TEAM, botUserId: 'U_BOT2', botToken: 'xoxb-other' });
+
+describe('slash-command routing', () => {
+  it('reaches only the issuing member, and never another workspace', async () => {
+    const { internals, receiver, app, published } = await makePlugin({ slashCommands: ['/omni'] });
+    installAuthorizationsProbe(receiver, async () => {
+      throw new Error('a slash command carries no event_context to look up');
+    });
+
+    const ana = userAttachment('inst-ana', HUMAN_A);
+    const ben = userAttachment('inst-ben', HUMAN_B);
+    const elsewhere = otherWorkspaceBot('inst-other');
+    for (const attachment of [ana, ben, elsewhere]) {
+      receiver.attach(attachment);
+      internals.attachments.set(attachment.instanceId, attachment);
+    }
+
+    const { acks } = await fireCommand(app, slashCommand(TEAM, HUMAN_A));
+
+    // Ana typed it, so only Ana's instance sees the text — Ben's personal
+    // install and the other workspace's bot see nothing.
+    expect(instancesOf(published, 'message.received')).toEqual(['inst-ana']);
+    expect(acks).toBe(1);
+
+    // The other workspace's own command reaches only the other workspace.
+    await fireCommand(app, slashCommand(OTHER_TEAM, 'U_STRANGER'));
+    expect(instancesOf(published, 'message.received')).toEqual(['inst-ana', 'inst-other']);
+  });
+
+  it('falls back to the workspace bot when the issuer has no install, and refuses when nobody owns it', async () => {
+    const { internals, receiver, app, published, logged } = await makePlugin({ slashCommands: ['/omni'] });
+    const bot = makeAttachment('inst-bot');
+    const ana = userAttachment('inst-ana', HUMAN_A);
+    for (const attachment of [bot, ana]) {
+      receiver.attach(attachment);
+      internals.attachments.set(attachment.instanceId, attachment);
+    }
+    installAuthorizationsProbe(receiver, async () => {
+      throw new Error('a slash command carries no event_context to look up');
+    });
+
+    // A third member with no install of their own: the workspace's bot install
+    // is the one unambiguous owner of the command.
+    await fireCommand(app, slashCommand(TEAM, 'U_CARLA'));
+    expect(instancesOf(published, 'message.received')).toEqual(['inst-bot']);
+
+    // With the bot gone, every install is personal and none of them is the
+    // issuer's: the command is refused rather than fanned out.
+    receiver.detach('inst-bot');
+    const ben = userAttachment('inst-ben', HUMAN_B);
+    receiver.attach(ben);
+    internals.attachments.set(ben.instanceId, ben);
+    await fireCommand(app, slashCommand(TEAM, 'U_CARLA'));
+
+    expect(instancesOf(published, 'message.received')).toEqual(['inst-bot']);
+    expect(
+      logged.filter((line) => line.level === 'warn' && line.message.includes('matched no authorized Slack instance')),
+    ).toHaveLength(1);
+  });
+
+  it('delivers to the single attachment of a workspace whoever typed it', async () => {
+    const { internals, receiver, app, published } = await makePlugin({ slashCommands: ['/omni'] });
+    const ana = userAttachment('inst-ana', HUMAN_A);
+    receiver.attach(ana);
+    internals.attachments.set(ana.instanceId, ana);
+
+    // The single-attachment fast path is unchanged: one install for the
+    // workspace owns everything that workspace sends.
+    await fireCommand(app, slashCommand(TEAM, 'U_CARLA'));
+    expect(instancesOf(published, 'message.received')).toEqual(['inst-ana']);
+  });
+});
+
+describe('pin routing', () => {
+  it("reaches only the authorized member of the pin's workspace", async () => {
+    const { internals, receiver, app, published } = await makePlugin();
+    const probe = installAuthorizationsProbe(receiver, async () => [
+      { team_id: TEAM, user_id: HUMAN_A, is_bot: false },
+    ]);
+
+    const ana = userAttachment('inst-ana', HUMAN_A);
+    const ben = userAttachment('inst-ben', HUMAN_B);
+    const elsewhere = otherWorkspaceBot('inst-other');
+    for (const attachment of [ana, ben, elsewhere]) {
+      receiver.attach(attachment);
+      internals.attachments.set(attachment.instanceId, attachment);
+    }
+
+    const pinEvent = {
+      type: 'pin_added',
+      user: HUMAN_A,
+      channel_id: 'C_PRIVATE',
+      item: { type: 'message', channel: 'C_PRIVATE', message: { ts: '1000.0100', text: 'pinned' } },
+      event_ts: '1000.0101',
+    };
+    await app.events.get('pin_added')?.[0]?.({
+      event: pinEvent,
+      body: {
+        team_id: TEAM,
+        event_context: 'EC-pin',
+        event_id: 'Ev-pin-1',
+        authorizations: [{ team_id: TEAM, user_id: HUMAN_A, is_bot: false }],
+      },
+    });
+
+    // A pin in a channel only Ana is in is Ana's state change alone; Ben's
+    // instance and the other workspace never hear about it.
+    expect(instancesOf(published, 'message.pinned')).toEqual(['inst-ana']);
+    expect(probe.calls).toEqual(['EC-pin']);
+
+    // An unpin in the OTHER workspace stays in the other workspace.
+    await app.events.get('pin_removed')?.[0]?.({
+      event: { ...pinEvent, type: 'pin_removed' },
+      body: { team_id: OTHER_TEAM, event_context: 'EC-pin-other', event_id: 'Ev-pin-2' },
+    });
+    expect(instancesOf(published, 'message.unpinned')).toEqual(['inst-other']);
+  });
+});
+
+describe('interaction routing', () => {
+  it('reaches only the member who clicked, and never another workspace', async () => {
+    const { internals, receiver, app, logged } = await makePlugin();
+    installAuthorizationsProbe(receiver, async () => {
+      throw new Error('an interaction carries no event_context to look up');
+    });
+
+    const ana = userAttachment('inst-ana', HUMAN_A);
+    const ben = userAttachment('inst-ben', HUMAN_B);
+    const elsewhere = otherWorkspaceBot('inst-other');
+    for (const attachment of [ana, ben, elsewhere]) {
+      receiver.attach(attachment);
+      internals.attachments.set(attachment.instanceId, attachment);
+    }
+
+    const handled = (): unknown[] =>
+      logged.filter((line) => line.message === 'Interaction handled').map((line) => line.context.instanceId);
+
+    await app.actions[0]?.({
+      action: { action_id: 'omni:approve', type: 'button', value: 'yes' },
+      ack: async () => undefined,
+      body: { team: { id: TEAM }, user: { id: HUMAN_B }, channel: { id: 'C_TEAM' }, message: { ts: '1000.0200' } },
+    });
+    expect(handled()).toEqual(['inst-ben']);
+
+    // A modal submitted in the other workspace is the other workspace's.
+    await app.views[0]?.({
+      ack: async () => undefined,
+      view: { callback_id: 'omni:form', private_metadata: '', state: { values: {} } },
+      body: { team: { id: OTHER_TEAM }, user: { id: 'U_STRANGER' } },
+    });
+    expect(handled()).toEqual(['inst-ben', 'inst-other']);
+  });
+});
+
+describe('redelivery of an event Slack retried', () => {
+  it('processes a repeated reaction once per instance', async () => {
+    const { internals, receiver, app, published } = await makePlugin();
+    const only = userAttachment('inst-ana', HUMAN_A);
+    receiver.attach(only);
+    internals.attachments.set(only.instanceId, only);
+
+    const event = {
+      type: 'reaction_added',
+      user: 'U_OUTSIDER',
+      reaction: 'eyes',
+      item: { type: 'message', channel: 'C_TEAM', ts: '1000.0300' },
+    };
+    const body = { team_id: TEAM, event_context: 'EC-react', event_id: 'Ev-react-1' };
+    const listener = app.events.get('reaction_added')?.[0];
+
+    // Bolt acks only after every listener resolves, so a slow event is
+    // redelivered with the SAME event_id. The second delivery is dropped.
+    await listener?.({ event, body });
+    await listener?.({ event, body });
+
+    expect(instancesOf(published, 'reaction.received')).toEqual(['inst-ana']);
+
+    // A genuinely different reaction on the same message still lands.
+    await listener?.({
+      event: { ...event, reaction: 'tada' },
+      body: { team_id: TEAM, event_context: 'EC-react', event_id: 'Ev-react-2' },
+    });
+    expect(instancesOf(published, 'reaction.received')).toEqual(['inst-ana', 'inst-ana']);
+  });
+
+  it('cancels a run once when the stop press is delivered twice', async () => {
+    const { internals, receiver, app, published } = await makePlugin();
+    const only = userAttachment('inst-ana', HUMAN_A);
+    receiver.attach(only);
+    internals.attachments.set(only.instanceId, only);
+
+    const event = { type: 'agent_session_stopped', channel: 'C_TEAM', user: HUMAN_A, event_ts: '1000.0400' };
+    const body = { team_id: TEAM, event_context: 'EC-stop', event_id: 'Ev-stop-1' };
+    const listener = app.events.get('agent_session_stopped')?.[0];
+
+    await listener?.({ event, body });
+    await listener?.({ event, body });
+
+    expect(instancesOf(published, 'agent.run.cancel_requested')).toEqual(['inst-ana']);
   });
 });

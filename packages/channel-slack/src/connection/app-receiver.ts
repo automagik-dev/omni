@@ -64,6 +64,21 @@ const DEFAULT_HTTP_PORT = 3001;
 const AUTHORIZATIONS_CACHE_TTL_MS = 60_000;
 
 /**
+ * How many pages of `apps.event.authorizations.list` one event is worth.
+ *
+ * The method is cursor-paginated and answers 100 installations per page by
+ * default, so five pages cover 500 installs of one workspace behind one app.
+ * The bound exists because the lookup sits in front of event delivery: a
+ * pathological workspace must cost a known number of calls, not an unbounded
+ * walk. Hitting it is logged and the pages already fetched are used, which
+ * narrows delivery rather than widening it.
+ */
+const MAX_AUTHORIZATIONS_PAGES = 5;
+
+/** Installations per page; Slack's own default, stated so the bound above is arithmetic. */
+const AUTHORIZATIONS_PAGE_SIZE = 100;
+
+/**
  * One instance attached to a receiver. Everything a handler needs to act on
  * behalf of that instance; the receiver holds one per instance id.
  */
@@ -121,7 +136,28 @@ export interface SlackEventBody {
   authorizations?: SlackAuthorization[];
   /** Opaque handle Slack mints per event, and the key of the authorizations lookup. */
   event_context?: string;
+  /**
+   * Slack's per-delivery event id. Stable across the redeliveries Slack sends
+   * when an ack is late, which is what makes it a dedupe key.
+   */
+  event_id?: string;
   [key: string]: unknown;
+}
+
+/**
+ * The fields of an event envelope that decide routing, in a shape Bolt's own
+ * `EnvelopedEvent<…>` is assignable to.
+ *
+ * {@link SlackEventBody} cannot type a Bolt listener parameter: it describes
+ * the inner `event` as an index-signature record, and Bolt's concrete event
+ * interfaces are not assignable to that. This is the subset every routing
+ * caller actually reads; the plugin widens it to `SlackEventBody`.
+ */
+export interface SlackRoutingFields {
+  team_id?: string;
+  authorizations?: SlackAuthorization[];
+  event_context?: string;
+  event_id?: string;
 }
 
 /**
@@ -476,6 +512,20 @@ export class SlackAppReceiver {
       this.botClients.delete(removed.teamId);
     }
 
+    // Drop the token-keyed client once nothing references that token, so a
+    // receiver that outlives many reinstalls does not keep one WebClient per
+    // historical bot token for its whole lifetime (Group 5 review, LOW #5).
+    // A token an in-flight connect has only probed with is re-minted by its
+    // attach; only the object identity is lost, never a live client.
+    let tokenStillUsed = false;
+    for (const attachment of this.attachmentMap.values()) {
+      if (attachment.botToken === removed.botToken) {
+        tokenStillUsed = true;
+        break;
+      }
+    }
+    if (!tokenStillUsed) this.clientsByToken.delete(removed.botToken);
+
     this.logger.debug('Instance detached from Slack receiver', {
       receiver: this.key,
       instanceId,
@@ -513,22 +563,92 @@ export class SlackAppReceiver {
     const teamId = body.team_id ?? body.team?.id ?? body.event?.team;
     if (!teamId) return [];
 
+    const teamAttachments = this.teamAttachmentsFor(teamId);
+    if (teamAttachments.length <= 1) return teamAttachments;
+
+    this.announceNarrowing(teamId, teamAttachments.length);
+
+    return selectAuthorizedTargets(teamAttachments, await this.authorizationsFor(body));
+  }
+
+  /**
+   * The attachments of an interactive event that carries no event envelope:
+   * a slash command, a block action, a modal submission.
+   *
+   * Slack sends these with `team_id`/`team.id` and the acting human's
+   * `user_id`, and with neither `event_context` nor `authorizations`, so
+   * {@link targetsFor} has nothing to look up. The acting human IS the
+   * authorization here: their own install is the single target when it is
+   * attached, which is what keeps one member's slash command out of another
+   * member's instance. With no install of their own the event falls back to
+   * the same narrowing every other listener uses, against a synthesized
+   * authorization set — so a workspace whose only install is the bot still
+   * sees its commands, and a workspace of personal installs alone delivers to
+   * nobody rather than to everybody.
+   *
+   * The single-attachment fast path of {@link targetsFor} is preserved: one
+   * attachment for the workspace is the target whoever acted.
+   */
+  async targetsForActor(teamId: string | undefined, actorUserId: string | undefined): Promise<SlackAttachment[]> {
+    if (!teamId) return [];
+
+    const teamAttachments = this.teamAttachmentsFor(teamId);
+    if (teamAttachments.length <= 1) return teamAttachments;
+
+    const own = actorUserId
+      ? teamAttachments.find((attachment) => attachment.authMode === 'user' && attachment.actingUserId === actorUserId)
+      : undefined;
+    if (own) {
+      this.announceNarrowing(teamId, teamAttachments.length);
+      return [own];
+    }
+
+    return this.targetsFor({
+      team_id: teamId,
+      authorizations: [
+        ...(actorUserId ? [{ team_id: teamId, user_id: actorUserId, is_bot: false }] : []),
+        { team_id: teamId, is_bot: true },
+      ],
+    });
+  }
+
+  /** Attachments installed in one workspace, in attach order. */
+  private teamAttachmentsFor(teamId: string): SlackAttachment[] {
     const teamAttachments: SlackAttachment[] = [];
     for (const attachment of this.attachmentMap.values()) {
       if (attachment.teamId === teamId) teamAttachments.push(attachment);
     }
-    if (teamAttachments.length <= 1) return teamAttachments;
+    return teamAttachments;
+  }
 
-    if (!this.narrowedTeams.has(teamId)) {
-      this.narrowedTeams.add(teamId);
-      this.logger.info('Slack workspace has several instances — delivery is narrowed to the authorized ones', {
+  /**
+   * Say once per workspace that delivery is being narrowed — and say WHICH
+   * narrowing this receiver can actually do.
+   *
+   * With an app-level token the narrowing is Slack's own answer. Without one
+   * (HTTP mode) or without `authorizations:read`, the only authorization on
+   * hand is the single entry Slack puts in the envelope, so delivery narrows
+   * to that entry and the other installs of the workspace see nothing. That is
+   * a materially different guarantee and the log has to name it, or an
+   * operator reads "narrowed to the authorized ones" and believes a lookup
+   * happened (Group 5 review, LOW #3).
+   */
+  private announceNarrowing(teamId: string, attachments: number): void {
+    if (this.narrowedTeams.has(teamId)) return;
+    this.narrowedTeams.add(teamId);
+    const canLookUp = this.appLevelClient !== undefined && !this.authorizationsScopeMissing;
+    this.logger.info(
+      canLookUp
+        ? 'Slack workspace has several instances — delivery is narrowed to the authorized ones'
+        : 'Slack workspace has several instances and this receiver cannot look event authorizations up — delivery is narrowed to the single authorization the event envelope carries',
+      {
         receiver: this.key,
         teamId,
-        attachments: teamAttachments.length,
-      });
-    }
-
-    return selectAuthorizedTargets(teamAttachments, await this.authorizationsFor(body));
+        attachments,
+        mode: this.mode,
+        authorizationsLookup: canLookUp,
+      },
+    );
   }
 
   /**
@@ -660,8 +780,28 @@ export class SlackAppReceiver {
     if (cached && cached.expiresAt > now) return cached.entries;
 
     try {
-      const result = await client.apps.event.authorizations.list({ event_context: eventContext });
-      const entries = mergeAuthorizations(envelope, result.authorizations ?? []);
+      const listed: SlackAuthorization[] = [];
+      let cursor: string | undefined;
+      let pages = 0;
+      do {
+        const result = await client.apps.event.authorizations.list({
+          event_context: eventContext,
+          limit: AUTHORIZATIONS_PAGE_SIZE,
+          ...(cursor ? { cursor } : {}),
+        });
+        listed.push(...(result.authorizations ?? []));
+        const nextCursor = result.response_metadata?.next_cursor;
+        cursor = nextCursor ? nextCursor : undefined;
+        pages += 1;
+      } while (cursor && pages < MAX_AUTHORIZATIONS_PAGES);
+      if (cursor) {
+        this.logger.warn('apps.event.authorizations.list has more pages than one event is allowed to walk', {
+          receiver: this.key,
+          pages,
+          authorizations: listed.length,
+        });
+      }
+      const entries = mergeAuthorizations(envelope, listed);
       for (const [key, value] of this.authorizationsCache) {
         if (value.expiresAt <= now) this.authorizationsCache.delete(key);
       }

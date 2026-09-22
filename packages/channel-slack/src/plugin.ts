@@ -36,12 +36,12 @@ import { z } from 'zod';
 
 import { SLACK_CAPABILITIES } from './capabilities';
 import { resolveStreamMode, resolveStreamThrottle } from './config/stream-mode';
-import type { SlackAttachment, SlackAuthorization, SlackEventBody, SlackRevocation } from './connection/app-receiver';
+import type { SlackAttachment, SlackEventBody, SlackRevocation, SlackRoutingFields } from './connection/app-receiver';
 import { SlackAppReceiver, receiverKeyFor } from './connection/app-receiver';
 import type { SocketConnectionState } from './connection/bolt-client';
 import { buildActingClients, resolveWorkspaceIdentity } from './connection/bolt-client';
 import type { AgentSessionStoppedArgs } from './handlers/agent-sessions';
-import type { CommandPayload } from './handlers/commands';
+import type { CommandPayload, SlackCommandEvent } from './handlers/commands';
 import { setupCommandHandlers } from './handlers/commands';
 import { downloadSlackFile, extractFileInfo, getContentTypeFromMime } from './handlers/files';
 import { setupInteractionHandlers } from './handlers/interactions';
@@ -86,12 +86,13 @@ type SlackPresenceType = 'typing' | 'recording' | 'paused';
  * `event_context` are what narrows delivery when a workspace has more than one
  * instance: without them here the receiver would have nothing to narrow by.
  */
-function routingEnvelope(body: {
-  team_id?: string;
-  authorizations?: SlackAuthorization[];
-  event_context?: string;
-}): SlackEventBody {
-  return { team_id: body.team_id, authorizations: body.authorizations, event_context: body.event_context };
+function routingEnvelope(body: SlackRoutingFields): SlackEventBody {
+  return {
+    team_id: body.team_id,
+    authorizations: body.authorizations,
+    event_context: body.event_context,
+    event_id: body.event_id,
+  };
 }
 
 /**
@@ -617,6 +618,22 @@ export class SlackPlugin extends BaseChannelPlugin {
     if (!this.attachments.has(instanceId)) return;
 
     await this.detachInstance(instanceId);
+    this.releaseInstanceState(instanceId);
+
+    await this.emitInstanceDisconnected(instanceId, 'User requested disconnect');
+  }
+
+  /**
+   * Forget everything this plugin holds for one instance.
+   *
+   * Every path that takes an instance out of service runs this, not just
+   * `disconnect()`: a revoked or uninstalled install stops being connected
+   * just as definitively, and leaving its display-name cache, active threads,
+   * status timers, streams and ack reactions behind leaked them for the
+   * process's lifetime (Group 5 review, LOW #4). Detaching from the receiver
+   * is the caller's job, because the reason it reports differs.
+   */
+  private releaseInstanceState(instanceId: string): void {
     this.slackConfigs.delete(instanceId);
     this.instanceConfigs.delete(instanceId);
     this.lastSeenTs.delete(instanceId);
@@ -643,8 +660,6 @@ export class SlackPlugin extends BaseChannelPlugin {
 
     // Flush pending debounce windows and dispose reliability caches
     this.disposeInstanceCaches(instanceId);
-
-    await this.emitInstanceDisconnected(instanceId, 'User requested disconnect');
   }
 
   /**
@@ -1991,11 +2006,14 @@ export class SlackPlugin extends BaseChannelPlugin {
    * Register every Bolt listener of a receiver — once, at its construction.
    *
    * This is the receiver's `registerHandlers` hook, not a per-instance setup.
-   * The `App` is shared, so nothing here closes over one instance: the message
-   * message, reaction, channel_rename and agent-session listeners resolve the
-   * attachments Slack authorized for the event through
-   * `receiver.targetsFor(body)`; only the envelope-less ones (pins,
-   * interactions, commands) go through {@link fanoutTargets}.
+   * The `App` is shared, so nothing here closes over one instance: the
+   * message, reaction, pin, channel_rename and agent-session listeners resolve
+   * the attachments Slack authorized for the event through
+   * `receiver.targetsFor(body)`, and the two payloads that carry no event
+   * envelope — slash commands and interactions — go through
+   * `receiver.targetsForActor(teamId, userId)`, which narrows to the acting
+   * human's own install. NOTHING is delivered to every attachment of the
+   * receiver (Group 5 review, HIGH #1).
    *
    * `config` is the SlackConfig of whichever instance first needed this
    * receiver. Only the slash-command NAMES are read from it, and those are a
@@ -2038,8 +2056,8 @@ export class SlackPlugin extends BaseChannelPlugin {
       app,
       receiver.key,
       {
-        onPin: async (_instId, messageId, chatId, userId, action) => {
-          for (const target of this.fanoutTargets(receiver)) {
+        onPin: async (envelope, messageId, chatId, userId, action) => {
+          for (const target of await receiver.targetsFor(routingEnvelope(envelope))) {
             if (action === 'pin') {
               await this.emitMessagePinned({ instanceId: target.instanceId, messageId, chatId, from: userId });
             } else {
@@ -2071,8 +2089,10 @@ export class SlackPlugin extends BaseChannelPlugin {
       app,
       receiver.key,
       {
-        onInteraction: async (_instId, payload) => {
-          await this.handleInteraction(payload);
+        onInteraction: async (_receiverKey, payload) => {
+          for (const target of await receiver.targetsForActor(payload.teamId, payload.userId)) {
+            await this.handleInteraction({ ...payload, instanceId: target.instanceId });
+          }
         },
       },
       this.logger,
@@ -2086,9 +2106,23 @@ export class SlackPlugin extends BaseChannelPlugin {
         receiver.key,
         commands,
         {
-          onCommand: async (payload) => {
-            for (const target of this.fanoutTargets(receiver)) {
-              await this.handleCommand({ ...payload, instanceId: target.instanceId });
+          onCommand: async (command: SlackCommandEvent) => {
+            const targets = await receiver.targetsForActor(command.teamId, command.userId);
+            if (targets.length === 0) {
+              // A command typed by a member with no install of their own, in a
+              // workspace whose installs are all personal: there is no
+              // unambiguous instance to run it, and running it on all of them
+              // is the leak this narrowing exists to stop.
+              this.logger.warn('Slash command matched no authorized Slack instance — ignored', {
+                receiver: receiver.key,
+                teamId: command.teamId,
+                userId: command.userId,
+                command: command.command,
+              });
+              return undefined;
+            }
+            for (const target of targets) {
+              await this.handleCommand({ ...command, instanceId: target.instanceId });
             }
             return undefined;
           },
@@ -2099,20 +2133,21 @@ export class SlackPlugin extends BaseChannelPlugin {
   }
 
   /**
-   * Attachments a shared listener applies to when the event carries no
-   * envelope to narrow by.
+   * Whether this delivery of a Slack event has already been processed for an
+   * instance.
    *
-   * Every listener that DOES see an envelope — messages, channel_rename,
-   * reactions, the agent-session stop — resolves its targets through
-   * `receiver.targetsFor(body)` instead, which delivers only to the
-   * attachments Slack authorized. The pin, interaction and command modules hand
-   * their callback a fixed instance id and no envelope, so there is no
-   * workspace to key on there; those still apply to every attachment of the
-   * receiver — which, on the single-attachment fast path, is the one instance
-   * that used to own the App.
+   * Bolt acks an event only after every listener has resolved, and the
+   * authorizations lookup in front of delivery can spend seconds inside that
+   * window, so Slack's retry can hand the same event over twice (Group 5
+   * review, MEDIUM #5). Inbound messages already survive that on the
+   * per-instance `channelId:ts` cache; reactions and the agent-session stop
+   * had nothing, and both are state changes worth exactly once. The key is
+   * Slack's own `event_id` when it sent one, and the event context plus the
+   * event's own coordinates when it did not.
    */
-  private fanoutTargets(receiver: SlackAppReceiver): SlackAttachment[] {
-    return [...receiver.attachments.values()];
+  private isRedelivery(target: SlackAttachment, envelope: SlackEventBody, kind: string, coordinates: string): boolean {
+    const identity = envelope.event_id ?? `${envelope.event_context ?? ''}:${coordinates}`;
+    return target.dedupeCache.isDuplicate(target.instanceId, `${kind}:${identity}`, 'slack', this.logger);
   }
 
   /**
@@ -2136,6 +2171,9 @@ export class SlackPlugin extends BaseChannelPlugin {
 
     for (const target of await receiver.targetsFor(envelope)) {
       if (userId === target.botUserId || userId === target.actingUserId) continue;
+      if (this.isRedelivery(target, envelope, `reaction:${action}`, `${channelId}:${messageTs}:${userId}:${emoji}`)) {
+        continue;
+      }
       this.logger.debug('Reaction received', {
         instanceId: target.instanceId,
         channelId,
@@ -2178,6 +2216,16 @@ export class SlackPlugin extends BaseChannelPlugin {
     };
 
     for (const target of await receiver.targetsFor(envelope)) {
+      if (
+        this.isRedelivery(
+          target,
+          envelope,
+          'agent_session_stopped',
+          `${args.channelId}:${args.threadTs ?? ''}:${args.eventTs ?? ''}`,
+        )
+      ) {
+        continue;
+      }
       this.logger.info('Agent session stopped by user', { instanceId: target.instanceId, ...args });
       await this.handleAgentSessionStopped(target.instanceId, target, args);
     }
@@ -2211,8 +2259,7 @@ export class SlackPlugin extends BaseChannelPlugin {
       }
 
       await this.detachInstance(instanceId);
-      this.inboundHandlers.delete(instanceId);
-      this.disposeInstanceCaches(instanceId);
+      this.releaseInstanceState(instanceId);
       await this.emitInstanceDisconnected(instanceId, revocation.reason);
     }
   }
@@ -2570,6 +2617,8 @@ export class SlackPlugin extends BaseChannelPlugin {
    */
   private async handleInteraction(payload: SlackInteractionPayload): Promise<void> {
     this.logger.debug('Interaction handled', {
+      instanceId: payload.instanceId,
+      teamId: payload.teamId,
       type: payload.type,
       actionId: payload.actionId,
       userId: payload.userId,
