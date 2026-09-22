@@ -211,6 +211,49 @@ function readConnectOverrides(rawOptions: Record<string, unknown>): SlackConnect
 }
 
 /**
+ * The attachment fields that decide WHO an instance says it is — the narrow
+ * input {@link resolvePresentedIdentity} needs, so callers (and tests) never
+ * have to build a whole {@link SlackAttachment} to ask the question.
+ */
+export type SlackIdentitySource = Pick<
+  SlackAttachment,
+  'authMode' | 'actingUserId' | 'actingUserName' | 'botUserId' | 'botName'
+>;
+
+/** The identity an instance presents: what status, events and profile report. */
+export interface SlackPresentedIdentity {
+  profileName?: string;
+  ownerIdentifier: string;
+}
+
+/**
+ * The identity a Slack instance presents to the platform.
+ *
+ * In `authMode: 'user'` the instance acts AS the authorizing human — it sends
+ * with their token, appears in Slack under their name, and self-filters on
+ * their user id — so reporting the workspace bot as profileName/ownerIdentifier
+ * made `instances status` and `instance.connected` describe an actor that is
+ * never the one speaking. User mode therefore presents the acting human; every
+ * other mode (and a user-mode attachment whose acting identity is missing)
+ * keeps the bot identity exactly as before.
+ *
+ * The bot identity is not lost in user mode — `getProfile` still exposes it
+ * through `platformMetadata` for operators.
+ */
+export function resolvePresentedIdentity(attachment: SlackIdentitySource): SlackPresentedIdentity {
+  if (attachment.authMode === 'user' && attachment.actingUserId) {
+    return {
+      // No name resolved → the acting user id, which is still the human. Never
+      // the bot name: that is the confusion this helper exists to remove.
+      profileName: attachment.actingUserName ?? attachment.actingUserId,
+      ownerIdentifier: attachment.actingUserId,
+    };
+  }
+
+  return { profileName: attachment.botName, ownerIdentifier: attachment.botUserId };
+}
+
+/**
  * Slack Channel Plugin
  *
  * Extends BaseChannelPlugin to provide Slack messaging via Bolt.js Socket Mode.
@@ -457,18 +500,21 @@ export class SlackPlugin extends BaseChannelPlugin {
         await receiver.start();
       }
 
+      // User mode presents the authorizing human, bot mode the bot (#889).
+      const presented = resolvePresentedIdentity(attachment);
+
       await this.updateInstanceStatus(instanceId, config, {
         state: 'connected',
         since: new Date(),
         metadata: {
-          profileName: attachment.botName,
-          ownerIdentifier: attachment.botUserId,
+          profileName: presented.profileName,
+          ownerIdentifier: presented.ownerIdentifier,
         },
       });
 
       await this.emitInstanceConnected(instanceId, {
-        profileName: attachment.botName,
-        ownerIdentifier: attachment.botUserId,
+        profileName: presented.profileName,
+        ownerIdentifier: presented.ownerIdentifier,
         teamId: attachment.teamId,
         // Only user mode acts as a human; in bot mode there is no such id.
         actingUserId: attachment.authMode === 'user' ? attachment.actingUserId : undefined,
@@ -555,8 +601,9 @@ export class SlackPlugin extends BaseChannelPlugin {
     // undefined the check in shouldSkipMessage silently no-ops and the agent
     // answers the operator's OWN messages. Fail fast rather than attach broken.
     let actingUserId: string | undefined;
+    let actingUserName: string | undefined;
     if (userClient) {
-      actingUserId = await this.resolveActingUserId(userClient);
+      ({ actingUserId, actingUserName } = await this.resolveActingUserId(userClient));
       if (!actingUserId) {
         throw new SlackError(
           SlackErrorCode.CONNECTION_FAILED,
@@ -572,6 +619,7 @@ export class SlackPlugin extends BaseChannelPlugin {
       actingClient,
       userClient,
       actingUserId,
+      actingUserName,
       botUserId: identity.botUserId,
       botId: identity.botId,
       botToken: options.botToken,
@@ -596,18 +644,26 @@ export class SlackPlugin extends BaseChannelPlugin {
     return this.lastAttachedAt;
   }
 
-  /** Resolve the authorizing human's user id from the user token (#889). */
-  private async resolveActingUserId(userClient: WebClient): Promise<string | undefined> {
+  /**
+   * Resolve the authorizing human's identity from the user token (#889).
+   *
+   * One `auth.test` carries both the id and the display name, so the name the
+   * instance presents costs no extra Slack call.
+   */
+  private async resolveActingUserId(
+    userClient: WebClient,
+  ): Promise<{ actingUserId?: string; actingUserName?: string }> {
     try {
       const auth = await userClient.auth.test();
       const actingUserId = auth.user_id ?? undefined;
-      this.logger.info('Acting user identity resolved', { actingUserId, actingUser: auth.user });
-      return actingUserId;
+      const actingUserName = auth.user ?? undefined;
+      this.logger.info('Acting user identity resolved', { actingUserId, actingUser: actingUserName });
+      return { actingUserId, actingUserName };
     } catch (error) {
       this.logger.warn('Failed to resolve the acting user identity from the user token', {
         error: String(error),
       });
-      return undefined;
+      return {};
     }
   }
 
@@ -781,12 +837,13 @@ export class SlackPlugin extends BaseChannelPlugin {
     if (state === 'connected') {
       this.logger.info('Slack Socket Mode connection restored', { instanceId });
       void this.backfillMissedMessages(instanceId, attachment);
+      const presented = resolvePresentedIdentity(attachment);
       setStatus({
         state: 'connected',
         since: new Date(),
         metadata: {
-          profileName: attachment.botName,
-          ownerIdentifier: attachment.botUserId,
+          profileName: presented.profileName,
+          ownerIdentifier: presented.ownerIdentifier,
         },
       });
       return;
@@ -1324,7 +1381,8 @@ export class SlackPlugin extends BaseChannelPlugin {
   }
 
   /**
-   * Get bot profile
+   * Get the instance profile — the acting human in user mode, the bot
+   * otherwise; the bot identity stays in `platformMetadata` either way.
    */
   async getProfile(instanceId: string): Promise<{
     name?: string;
@@ -1334,14 +1392,20 @@ export class SlackPlugin extends BaseChannelPlugin {
     platformMetadata: Record<string, unknown>;
   }> {
     const attachment = this.getAttachment(instanceId);
+    const presented = resolvePresentedIdentity(attachment);
 
     return {
-      name: attachment.botName,
+      name: presented.profileName,
       avatarUrl: undefined,
       bio: undefined,
-      ownerIdentifier: attachment.botUserId,
+      ownerIdentifier: presented.ownerIdentifier,
       platformMetadata: {
+        // The bot identity stays visible to operators even when user mode
+        // presents the human — this is where you look up which app is installed.
         botUserId: attachment.botUserId,
+        botName: attachment.botName,
+        authMode: attachment.authMode,
+        actingUserId: attachment.actingUserId,
         teamId: attachment.teamId,
         teamName: attachment.teamName,
       },
