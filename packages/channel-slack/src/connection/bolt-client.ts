@@ -49,15 +49,20 @@ export type SocketConnectionState = 'pending' | 'connected' | 'reconnecting' | '
  * Build the client used for outbound ACTIONS.
  *
  * In user mode this is a `xoxp` client so posts/edits/reactions land as the
- * authorizing human; in bot mode it is Bolt's own client. Returned alongside
- * `client` rather than replacing it — the socket and any bot-only scope still
- * need the bot token.
+ * authorizing human, whether or not a bot client exists — a one-click OAuth
+ * install has none. In bot mode it is the bot client, which bot mode cannot
+ * run without.
  */
 export function buildActingClients(
   options: SlackConnectionOptions,
-  botClient: WebClient,
+  botClient?: WebClient,
 ): { actingClient: WebClient; userClient?: WebClient } {
-  if (options.authMode !== 'user') return { actingClient: botClient };
+  if (options.authMode !== 'user') {
+    if (!botClient) {
+      throw new SlackError(SlackErrorCode.INVALID_TOKEN, "botToken (xoxb-...) is required unless authMode is 'user'");
+    }
+    return { actingClient: botClient };
+  }
   if (!options.userToken) {
     throw new SlackError(SlackErrorCode.CONNECTION_FAILED, "userToken is required when authMode is 'user'");
   }
@@ -137,6 +142,9 @@ export interface BoltConnection {
   socketConnectTimeoutMs?: number;
 }
 
+/** Connection options of a per-instance App, which always carries a bot token. */
+type BotConnectionOptions = SlackConnectionOptions & { botToken: string };
+
 /**
  * Create a Bolt.js App configured for Socket Mode (but NOT started yet).
  *
@@ -149,18 +157,24 @@ export interface BoltConnection {
  * The returned BoltConnection.httpHandler is also available for external-server integration.
  */
 export function createBoltApp(options: SlackConnectionOptions, logger: Logger): BoltConnection {
+  // A per-instance App authenticates with its `token`, so it needs a bot
+  // token; a bot-less user-mode instance runs behind the shared receiver only.
+  const botToken = options.botToken;
+  if (!botToken) {
+    throw new SlackError(SlackErrorCode.INVALID_TOKEN, 'botToken (xoxb-...) is required for a per-instance Bolt app');
+  }
   const mode = options.mode ?? 'socket';
 
   if (mode === 'http') {
-    return createHttpBoltApp(options, logger);
+    return createHttpBoltApp({ ...options, botToken }, logger);
   }
-  return createSocketBoltApp(options, logger);
+  return createSocketBoltApp({ ...options, botToken }, logger);
 }
 
 /**
  * Create a Bolt.js App in Socket Mode
  */
-function createSocketBoltApp(options: SlackConnectionOptions, logger: Logger): BoltConnection {
+function createSocketBoltApp(options: BotConnectionOptions, logger: Logger): BoltConnection {
   logger.info('Creating Bolt.js app with Socket Mode (not started yet)');
 
   if (!options.appToken) {
@@ -264,7 +278,7 @@ export function watchSocketLifecycle(connection: BoltConnection, logger: Logger)
  * The receiver handles Slack signing secret verification automatically.
  * The returned BoltConnection.httpHandler wraps the receiver with a 1 MB body-limit guard.
  */
-function createHttpBoltApp(options: SlackConnectionOptions, logger: Logger): BoltConnection {
+function createHttpBoltApp(options: BotConnectionOptions, logger: Logger): BoltConnection {
   if (!options.signingSecret) {
     throw new SlackError(SlackErrorCode.CONNECTION_FAILED, 'signingSecret is required for HTTP mode');
   }

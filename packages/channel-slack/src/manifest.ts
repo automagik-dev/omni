@@ -239,9 +239,9 @@ export function buildSlackManifest(options?: {
 /**
  * The `scope` / `user_scope` query parameters of the OAuth v2 authorize URL
  * (slack-personal-oauth): the same bot and user scope sets the manifest
- * declares, comma-joined as Slack expects. Both are requested on every
- * authorize so a workspace's bot install and a member's user install come
- * from one click each.
+ * declares, comma-joined as Slack expects. An authorize requests one of them:
+ * `scope` for a workspace's bot install, `user_scope` for a member's own
+ * install — which, with no bot scope requested, adds no bot to the workspace.
  */
 export function slackAuthorizeScopes(): { scope: string; user_scope: string } {
   return {

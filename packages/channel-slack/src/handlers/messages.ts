@@ -393,7 +393,10 @@ export function setupMessageHandlers(
     const meta = extractMessageMeta(msg);
     if (await enforceDmPolicy(meta, userId, dmPolicyConfig, instanceId, callbacks, logger)) return;
 
-    await processMessage(instanceId, msg, resolveBotUserId(), callbacks, logger, reliability, filterConfig);
+    // A mention addresses the instance through its bot; a bot-less user-mode
+    // instance has none, so mentioning the person it acts as is the mention.
+    const mentionUserId = resolveBotUserId() ?? resolveActingUserId();
+    await processMessage(instanceId, msg, mentionUserId, callbacks, logger, reliability, filterConfig);
   };
   // Registered only when this instance owns an app; behind the shared receiver
   // the one listener is the receiver's, and it calls `handle` directly.

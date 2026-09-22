@@ -164,6 +164,25 @@ function makeAttachment(
   };
 }
 
+/** A one-click personal install: user mode on the person's own token, and no bot at all. */
+function botlessAttachment(
+  instanceId: string,
+  teamId: string,
+  actingUserId: string,
+  attachedAt: number,
+): SlackAttachment {
+  const userClient = new WebClient(`xoxp-${instanceId}`);
+  return makeAttachment(instanceId, teamId, 'unused', attachedAt, {
+    authMode: 'user',
+    actingClient: userClient,
+    userClient,
+    actingUserId,
+    botToken: undefined,
+    botUserId: undefined,
+    botId: undefined,
+  });
+}
+
 function makeReceiver(
   opts: SlackConnectionOptions = SOCKET_OPTS,
   registerHandlers: RegisterHandlers = () => undefined,
@@ -389,6 +408,40 @@ describe('SlackAppReceiver', () => {
     expect((refused as SlackError).channelCode).toBe(SlackErrorCode.NOT_CONNECTED);
   });
 
+  it('authorize answers a bot-less workspace with its person, and a mixed one with its bot', async () => {
+    const { receiver } = makeReceiver();
+    const authorize = authorizeOf(lastApp());
+    const clientsByToken = (receiver as unknown as { clientsByToken: Map<string, WebClient> }).clientsByToken;
+
+    // Personal installs only: there is no bot identity to answer with.
+    receiver.attach(botlessAttachment('inst-ana', 'T1', 'U_ANA', 1));
+    await expect(authorize(source('T1'))).resolves.toEqual({
+      teamId: 'T1',
+      userId: 'U_ANA',
+      userToken: 'xoxp-inst-ana',
+    });
+    expect(receiver.botClientFor('T1')).toBeUndefined();
+    expect(clientsByToken.size).toBe(0);
+
+    // A workspace that also has a bot answers with the bot, even when the
+    // bot-less attach is the newer one.
+    receiver.attach(makeAttachment('inst-bot', 'T2', 'xoxb-bot', 2));
+    receiver.attach(botlessAttachment('inst-ben', 'T2', 'U_BEN', 3));
+    await expect(authorize(source('T2'))).resolves.toEqual({
+      botToken: 'xoxb-bot',
+      botId: 'B_inst-bot',
+      botUserId: 'U_inst-bot',
+      teamId: 'T2',
+    });
+    expect(receiver.botClientFor('T2')?.token).toBe('xoxb-bot');
+
+    // Once the bot detaches, its client goes with it and the person answers.
+    expect(receiver.detach('inst-bot')).toBe(true);
+    await expect(authorize(source('T2'))).resolves.toMatchObject({ userId: 'U_BEN', userToken: 'xoxp-inst-ben' });
+    expect(receiver.botClientFor('T2')).toBeUndefined();
+    expect(clientsByToken.size).toBe(0);
+  });
+
   it('detaching the last attachment stops the receiver', async () => {
     const { receiver } = makeReceiver();
     const app = lastApp();
@@ -533,6 +586,21 @@ describe('buildActingClients', () => {
       SlackError,
     );
   });
+
+  it('acts as the human with no bot client at all, and refuses bot mode without one', () => {
+    const user = buildActingClients({ appToken: 'xapp-1', authMode: 'user', userToken: 'xoxp-human' });
+    expect(user.userClient?.token).toBe('xoxp-human');
+    expect(user.actingClient).toBe(user.userClient as WebClient);
+
+    let refused: unknown;
+    try {
+      buildActingClients({ appToken: 'xapp-1' });
+    } catch (error) {
+      refused = error;
+    }
+    expect(refused).toBeInstanceOf(SlackError);
+    expect((refused as SlackError).channelCode).toBe(SlackErrorCode.INVALID_TOKEN);
+  });
 });
 
 describe('resolveWorkspaceIdentity', () => {
@@ -653,6 +721,17 @@ describe('SlackAppReceiver.targetsForActor', () => {
     // One attachment for the workspace owns everything that workspace sends.
     receiver.detach('inst-ben');
     await expect(receiver.targetsForActor('T1', 'U_CARLA')).resolves.toMatchObject([{ instanceId: 'inst-ana' }]);
+  });
+
+  it('gives a lone bot-less install only what its own human did', async () => {
+    const { receiver } = makeReceiver();
+    installAuthorizationsPages(receiver, []);
+    receiver.attach(botlessAttachment('inst-ana', 'T1', 'U_ANA', 1));
+
+    // Another member's command or click is not this person's to answer.
+    await expect(receiver.targetsForActor('T1', 'U_CARLA')).resolves.toEqual([]);
+    await expect(receiver.targetsForActor('T1', undefined)).resolves.toEqual([]);
+    await expect(receiver.targetsForActor('T1', 'U_ANA')).resolves.toMatchObject([{ instanceId: 'inst-ana' }]);
   });
 });
 

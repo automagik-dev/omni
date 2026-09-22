@@ -292,6 +292,35 @@ describe('tokens_revoked', () => {
     expect(disconnects(published).map((payload) => payload.instanceId)).toEqual([bot.instanceId]);
   });
 
+  it('detaches a bot-less personal install on its user token, never on a bot token', async () => {
+    const { plugin, internals, receiver, app, published } = await makeHarness();
+    const ana = install(
+      internals,
+      receiver,
+      makeAttachment('inst-ana', {
+        authMode: 'user',
+        actingUserId: HUMAN_A,
+        botToken: undefined,
+        botUserId: undefined,
+        botId: undefined,
+      }),
+    );
+
+    // The workspace's bot from an earlier install loses its token: not Ana's.
+    await fire(app, 'tokens_revoked', { type: 'tokens_revoked', tokens: { bot: [BOT_USER] } });
+    expect(receiver.attachments.has(ana.instanceId)).toBe(true);
+    expect(disconnects(published)).toEqual([]);
+
+    await fire(app, 'tokens_revoked', { type: 'tokens_revoked', tokens: { oauth: [HUMAN_A] } });
+
+    expect(receiver.attachments.has(ana.instanceId)).toBe(false);
+    expect(internals.attachments.has(ana.instanceId)).toBe(false);
+    expect((await plugin.getStatus(ana.instanceId)).message).toBe('token_revoked');
+    expect(disconnects(published)).toEqual([
+      { instanceId: ana.instanceId, channelType: 'slack', reason: 'token_revoked', willReconnect: false },
+    ]);
+  });
+
   it('leaves every attachment alone when the revocation is for another workspace', async () => {
     const { internals, receiver, app, published } = await makeHarness();
     install(internals, receiver, makeAttachment('inst-ana', { authMode: 'user', actingUserId: HUMAN_A }));
