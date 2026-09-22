@@ -14,6 +14,7 @@ import { useOmniClient } from '../../app/providers/OmniClientProvider';
 import { type ColumnDef, ConfirmDialog, DataTable, MutationResult, PageShell, ResourceDetail } from '../../components';
 import { T } from '../../components/tokens';
 import { useOmniMutation, useOmniQuery } from '../../hooks/useOmniQuery';
+import { SlackAppCard } from './SlackAppCard';
 import { coerceValue, displayValue, groupOf, isSecretWipe } from './settings-helpers';
 import { CardSection, DataRowList, errMsg, fmtTime } from './shared';
 
@@ -81,6 +82,7 @@ export function SettingsPage() {
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const list = useOmniQuery(['settings', 'list'], () => ext.settings.list());
+  const slackApp = useOmniQuery(['slack', 'app'], () => ext.slack.appStatus(), { staleTime: 30_000 });
   const detail = useOmniQuery(['settings', selectedKey], () => ext.settings.get(selectedKey ?? ''), {
     enabled: Boolean(selectedKey),
   });
@@ -116,6 +118,20 @@ export function SettingsPage() {
 
   const selected = detail.data?.data;
   const restoreWipe = selected ? isSecretWipe(selected, restoreValue) : false;
+
+  /**
+   * The single way into the editor below — a table row click and the Slack app
+   * card both land here, so the secret masking and the empty-value guard have
+   * exactly one implementation. A secret starts blank; a key with no row yet
+   * (never written, default only) starts blank too.
+   */
+  const selectKey = (key: string) => {
+    const row = (list.data?.items ?? []).find((s) => s.key === key);
+    setSelectedKey(key);
+    setEditValue(row && !row.isSecret ? displayValue(row) : '');
+    setRestoreValue('');
+    put.reset();
+  };
 
   const settingColumns: ColumnDef<SettingRow>[] = [
     {
@@ -157,18 +173,20 @@ export function SettingsPage() {
         </Note>
       )}
 
+      <SlackAppCard
+        status={slackApp.data}
+        loading={slackApp.isLoading}
+        error={errMsg(slackApp.error)}
+        onSelectKey={selectKey}
+      />
+
       {groups.map(([group, settings]) => (
         <CardSection key={group} title={group}>
           <DataTable
             columns={settingColumns}
             rows={settings}
             getRowKey={(s) => s.key}
-            onRowClick={(s) => {
-              setSelectedKey(s.key);
-              setEditValue(s.isSecret ? '' : displayValue(s));
-              setRestoreValue('');
-              put.reset();
-            }}
+            onRowClick={(s) => selectKey(s.key)}
           />
         </CardSection>
       ))}
