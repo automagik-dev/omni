@@ -134,6 +134,17 @@ describe('resolveActingUserName', () => {
     expect(await resolveActingUserName(client, HUMAN, 'felipe')).toBe('Felipe Rosa');
   });
 
+  it('falls back to the account real name when both profile names are blank', async () => {
+    const { client } = userClient(() =>
+      Promise.resolve({
+        ok: true,
+        user: { id: HUMAN, name: 'felipe', real_name: 'Felipe Account', profile: { display_name: '', real_name: ' ' } },
+      }),
+    );
+
+    expect(await resolveActingUserName(client, HUMAN, 'felipe')).toBe('Felipe Account');
+  });
+
   it('keeps the username when the profile carries no name', async () => {
     const { client } = userClient(() =>
       Promise.resolve({ ok: true, user: { id: HUMAN, name: 'felipe', profile: {} } }),

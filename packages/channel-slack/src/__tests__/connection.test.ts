@@ -569,7 +569,7 @@ describe('SlackPlugin.connect — user mode acting-user invariant (#889)', () =>
     expect(profile.ownerIdentifier).toBe('U_DISPLAY');
   });
 
-  it('presents the auth.test username when no profile name resolves', async () => {
+  it('presents the auth.test username when the client has no profile lookup', async () => {
     const { plugin } = await makeSharedPlugin();
 
     await plugin.connect('inst-user', userConfig('inst-user', 'xoxp-human'));
