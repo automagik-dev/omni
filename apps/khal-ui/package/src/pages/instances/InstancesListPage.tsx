@@ -9,19 +9,72 @@
  */
 import { Avatar, Button, EmptyState, Note, PillBadge, SectionCard, Spinner, StatusDot } from '@khal-os/ui';
 import type { Instance } from '@omni/sdk';
-import { type KeyboardEvent as ReactKeyboardEvent, useState } from 'react';
+import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import type { SlackOAuthResult } from '../../api/ext';
+import { useOmniClient } from '../../app/providers/OmniClientProvider';
 import { useScope } from '../../app/providers/ScopeProvider';
 import { PageShell } from '../../components/PageShell';
 import { T } from '../../components/tokens';
 import '../../components/runtime-styles';
 import { CreateInstanceDialog } from './CreateInstanceDialog';
-import { channelLabel, isProductionInstance } from './instance-helpers';
+import { SlackConnectButton } from './SlackConnectButton';
+import { channelLabel, isProductionInstance, readSlackReturnNonce, stripSlackReturnParam } from './instance-helpers';
+
+/** Inline outcome surface — this app shows evidence in the page instead of toasts. */
+interface PageNotice {
+  type: 'success' | 'warning' | 'error';
+  text: string;
+}
+
+function slackReturnNotice(result: SlackOAuthResult): PageNotice {
+  if (result.status === 'done') return { type: 'success', text: `Slack connected — instance ${result.instanceId}.` };
+  if (result.status === 'error')
+    return { type: 'error', text: `Slack install failed (${result.code}): ${result.message}` };
+  return { type: 'warning', text: 'This Slack install is still finishing, or its result was already read.' };
+}
+
+/**
+ * Drop only `?slack=<nonce>` from the browser URL so a reload cannot replay a
+ * consumed install. The path, the other parameters and the hash are left alone,
+ * and the pack's memory router is never navigated — the nonce only ever lived in
+ * the browser location, which `useLocation()` cannot see.
+ */
+function clearSlackReturnParam(): void {
+  if (typeof window === 'undefined') return;
+  const { pathname, search, hash } = window.location;
+  const stripped = stripSlackReturnParam(search);
+  if (stripped === search) return;
+  window.history.replaceState(window.history.state, '', `${pathname}${stripped}${hash}`);
+}
 
 export function InstancesListPage() {
   const scope = useScope();
+  const { ext } = useOmniClient();
   const navigate = useNavigate();
   const [creating, setCreating] = useState(false);
+  const [notice, setNotice] = useState<PageNotice | null>(null);
+  const slackReturnHandled = useRef(false);
+
+  // Return leg of the Slack install: the callback redirected the browser back to
+  // this page with `?slack=<nonce>`. Read it once, strip it before resolving (a
+  // result is single-use), then report the outcome and refresh the list.
+  useEffect(() => {
+    if (slackReturnHandled.current || typeof window === 'undefined') return;
+    const nonce = readSlackReturnNonce(window.location.search);
+    if (nonce === null) return;
+    slackReturnHandled.current = true;
+    clearSlackReturnParam();
+    void (async () => {
+      try {
+        setNotice(slackReturnNotice(await ext.slack.oauthResult(nonce)));
+      } catch (err) {
+        const text = err instanceof Error ? err.message : 'Could not read the Slack install result.';
+        setNotice({ type: 'error', text });
+      }
+      scope.refreshInstances();
+    })();
+  }, [ext, scope]);
 
   const instances = scope.instances;
 
@@ -35,12 +88,15 @@ export function InstancesListPage() {
           <Button size="small" variant="secondary" onClick={() => scope.refreshInstances()}>
             Refresh
           </Button>
+          <SlackConnectButton onError={(text) => setNotice(text === null ? null : { type: 'error', text })} />
           <Button size="small" variant="default" onClick={() => setCreating(true)}>
             New instance
           </Button>
         </div>
       }
     >
+      {notice && <Note type={notice.type}>{notice.text}</Note>}
+
       {scope.instancesError && <Note type="error">{scope.instancesError.message}</Note>}
 
       {scope.instancesLoading && instances.length === 0 ? (

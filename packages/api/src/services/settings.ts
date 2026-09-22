@@ -377,6 +377,49 @@ const DEFAULT_SETTINGS: Array<{
     description: 'Default Gemini Lyria clip model.',
     defaultValue: 'lyria-3-clip-preview',
   },
+  // Deployment Slack app (slack-personal-oauth): one Slack app per Omni
+  // install drives the one-click OAuth flow. The three secrets are sealed at
+  // rest and masked by GET /settings BECAUSE they are declared secret here —
+  // the PUT body has no say (see isSecretSetting). Env fallbacks are read via
+  // SLACK_APP_SETTINGS in constants/slack-app.ts.
+  {
+    key: 'slack.app.client_id',
+    category: 'slack',
+    valueType: 'string',
+    isSecret: false,
+    description: 'Slack app Client ID for the one-click OAuth install (env: SLACK_CLIENT_ID).',
+  },
+  {
+    key: 'slack.app.client_secret',
+    category: 'slack',
+    valueType: 'secret',
+    isSecret: true,
+    description: 'Slack app Client Secret for the OAuth code exchange (env: SLACK_CLIENT_SECRET).',
+  },
+  {
+    key: 'slack.app.signing_secret',
+    category: 'slack',
+    valueType: 'secret',
+    isSecret: true,
+    description: 'Slack app Signing Secret for verifying inbound Slack requests (env: SLACK_SIGNING_SECRET).',
+  },
+  {
+    key: 'slack.app.app_token',
+    category: 'slack',
+    valueType: 'secret',
+    isSecret: true,
+    description:
+      'Slack app-level token (xapp-…) for Socket Mode; needs connections:write and authorizations:read (env: SLACK_APP_TOKEN).',
+  },
+  // General server setting, not a Slack one: the externally reachable origin
+  // of this deployment, used to derive OAuth redirect URLs.
+  {
+    key: 'server.public_url',
+    category: 'server',
+    valueType: 'string',
+    isSecret: false,
+    description: 'Public HTTPS origin of this Omni deployment, e.g. https://omni.example.com (env: OMNI_PUBLIC_URL).',
+  },
 ];
 
 export interface SettingWithHistory extends GlobalSetting {

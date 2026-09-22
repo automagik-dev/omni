@@ -775,6 +775,17 @@ export const instances = pgTable(
     slackAuthMode: varchar('slack_auth_mode', { length: 10 }),
     slackAppToken: text('slack_app_token'),
     slackSigningSecret: text('slack_signing_secret'),
+    /**
+     * Slack workspace (T…) and authorizing user (U…) this instance was
+     * provisioned for (slack-personal-oauth). Written by the OAuth callback;
+     * the `instance.connected` listener fills the team id for pasted-token
+     * instances. Re-authorizing upserts by (team, user); bot-mode instances
+     * are keyed by team only.
+     */
+    slackTeamId: varchar('slack_team_id', { length: 32 }),
+    slackUserId: varchar('slack_user_id', { length: 32 }),
+    /** 'manual' (pasted tokens; null reads as manual) or 'oauth' (one-click install). */
+    slackConnectionMethod: varchar('slack_connection_method', { length: 16 }),
 
     // ---- Telegram Configuration ----
     telegramBotToken: text('telegram_bot_token'),
@@ -1125,6 +1136,7 @@ export const instances = pgTable(
     isDefaultIdx: index('instances_is_default_idx').on(table.isDefault),
     agentIdIdx: index('instances_agent_id_idx').on(table.agentId),
     metaPhoneNumberIdx: index('instances_meta_phone_number_idx').on(table.metaPhoneNumberId),
+    slackIdentityIdx: index('instances_slack_identity_idx').on(table.slackTeamId, table.slackUserId),
     chainModeCheck: check('instances_chain_mode_check', sql`${table.chainMode} IN ('off', 'forward', 'bidirectional')`),
   }),
 );

@@ -625,6 +625,10 @@ export abstract class BaseChannelPlugin implements ChannelPlugin {
         profilePicUrl: metadata?.profilePicUrl,
         ownerIdentifier: metadata?.ownerIdentifier,
         ...(metadata?.isNewLogin ? { isNewLogin: true } : {}),
+        // Forwarded explicitly: this payload is built field by field, so a
+        // metadata field not listed here never reaches the event.
+        ...(metadata?.teamId ? { teamId: metadata.teamId } : {}),
+        ...(metadata?.actingUserId ? { actingUserId: metadata.actingUserId } : {}),
       },
       instanceId,
     );

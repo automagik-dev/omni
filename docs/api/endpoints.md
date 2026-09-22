@@ -1,7 +1,7 @@
 ---
 title: "API Endpoints Reference"
 created: 2025-01-29
-updated: 2026-09-10
+updated: 2026-09-21
 tags: [api, endpoints, reference]
 status: current
 ---
@@ -27,7 +27,7 @@ All v2 routes are defined in `packages/api/src/routes/v2/` and mounted in `index
 | `logs` | `/logs` | System log streaming |
 | `messages` | `/messages` | Message CRUD, send operations, TTS, presence |
 | `scheduled-messages` | `/scheduled-messages` | Deferred sends (platform-native or local sweeper) |
-| `slack` | `/slack` | Slack-only: DM open + full-text message search |
+| `slack` | `/slack` | Slack-only: DM open, full-text message search, one-click OAuth install (the callback is mounted separately in `app.ts`) |
 | `event-schemas` | `/` (routes at `/events/schemas`) | Event schema registry (draft-07 JSON Schema, validated at publish gates) |
 | `event-consumers` | `/` (routes at `/events/consumers`) | Durable pull consumers with Postgres journal cursors |
 | `events` | `/events` | Event queries, analytics, timeline, causality traces |
@@ -341,6 +341,71 @@ GET    /api/v2/scheduled-messages             # List pending scheduled messages
 GET    /api/v2/scheduled-messages/:id         # Get scheduled message
 
 DELETE /api/v2/scheduled-messages/:id         # Cancel a pending scheduled message
+```
+
+---
+
+## Slack
+
+Source: `packages/api/src/routes/v2/slack.ts`
+
+Slack-only surfaces: the two instance helpers (#889) and the one-click OAuth
+install. Guide: [[../channels/slack|Slack Channel]].
+
+```yaml
+POST   /api/v2/slack/dm/open                  # Resolve (or open) the DM channel with a user
+  Body: { instanceId (uuid), userId }         # userId is a Slack U… id
+  Response: { success: true, data: { userId, channelId } }
+
+GET    /api/v2/slack/search                   # Full-text message search (user auth mode only)
+  Query: instanceId (uuid), query, count? (1-100, default 20), page? (default 1)
+  Response: { data: [...], meta: { count, page, scope: "authorizing-user" } }
+```
+
+### One-click OAuth install
+
+One Slack app per deployment; every member installs themselves through it.
+`GET /app` reports whether that app is configured, `POST /oauth/start` issues
+the authorize URL, Slack returns the browser to the **auth-exempt** callback,
+and `GET /oauth/result/:nonce` hands the waiting caller the outcome exactly
+once. No token ever appears in a response body or a redirect target.
+
+```yaml
+GET    /api/v2/slack/app                      # Deployment Slack app status
+  Response: { configured, missing, redirectUrl, manifestUrl }
+  # configured: boolean — every one of the five settings resolved
+  # missing: string[] — the settings keys still unset (e.g. "slack.app.client_id")
+  # redirectUrl: string|null — server.public_url + /api/v2/slack/oauth/callback
+  # manifestUrl: string|null — https://api.slack.com/apps?new_app=1&manifest_json=…
+  #   (built from redirectUrl plus the user scopes; needs only server.public_url)
+
+POST   /api/v2/slack/oauth/start              # Begin an install; issues a signed state
+  Body: { mode?: "user"|"bot" (default "user"), entry: "ui"|"cli", returnTo? }
+  # returnTo: a path, or an absolute URL on server.public_url; no query or fragment
+  Response: { authorizeUrl, nonce, expiresAt }
+  # authorizeUrl: https://slack.com/oauth/v2/authorize?… — send the browser here
+  # nonce: the handle GET /oauth/result/:nonce is polled with
+  # expiresAt: ISO-8601; the flow is valid for 5 minutes
+  Errors: 409 SLACK_APP_NOT_CONFIGURED (details.missing), 400 VALIDATION (bad returnTo)
+
+GET    /api/v2/slack/oauth/callback           # Slack's redirect target — NOT JSON
+  Query: { code?, state?, error? }
+  # The odd one out: auth-exempt (public by contract, rate-limited) and mounted
+  # directly in packages/api/src/app.ts, NOT on slackRoutes — Slack sends the
+  # browser here with no API credential. Nothing in the query, headers or body
+  # selects a tenant; the signed state names a server-side record that does.
+  Response (entry "cli"): an HTML page — 200 on success, 400 on failure
+  Response (entry "ui"):  302 to <returnTo>?slack=<nonce>   (returnTo defaults to "/")
+  # A failure in "ui" entry is also an HTML 400 page; the outcome itself is
+  # read from /oauth/result/:nonce, never from this response.
+
+GET    /api/v2/slack/oauth/result/:nonce      # Single-use outcome of an install
+  Response: { status: "pending" }
+       or   { status: "done", instanceId }
+       or   { status: "error", code, message }
+  # "pending" until the callback has run (and for a nonce that is unknown,
+  # expired, already consumed, or owned by another tenant). A terminal
+  # outcome is returned exactly once and then gone.
 ```
 
 ---

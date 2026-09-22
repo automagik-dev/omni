@@ -10,7 +10,8 @@ const noop = () => {};
 const noopLogger = { debug: noop, info: noop, warn: noop, error: noop, child: () => noopLogger };
 
 type Internals = {
-  connections: Map<string, unknown>;
+  /** The plugin keys outbound work on attachments now — one per connected instance. */
+  attachments: Map<string, unknown>;
   buildEnrichedPayload(
     i: string,
     from: string,
@@ -32,7 +33,8 @@ async function setup() {
   const conversationsInfo = mock(async () => ({ ok: true, channel: { id: 'C1', name: 'khal-apps' } }));
   const usersInfo = mock(async () => ({ ok: true, user: { name: 'ana', profile: { display_name: 'Ana' } } }));
   const internals = plugin as unknown as Internals;
-  internals.connections.set('inst', {
+  internals.attachments.set('inst', {
+    instanceId: 'inst',
     actingClient: { conversations: { info: conversationsInfo }, users: { info: usersInfo } },
   });
   return { internals, conversationsInfo };

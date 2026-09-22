@@ -4,6 +4,111 @@
 > messaging experience (`agent_view` + Agent Sessions API), native streaming,
 > reactions, pins, slash commands, and an optional user-token mode.
 
+## One-click setup (OAuth)
+
+The fastest way onto Slack. One Slack app serves the whole deployment: the
+**operator registers it once**, and after that **every member connects
+themselves**, as often as they like — a re-connect is a re-authorization, not
+a new app.
+
+| Who | Step | How often |
+|---|---|---|
+| Operator | `omni slack app setup` | **Once per deployment** — register the deployment's Slack app |
+| Member | `omni slack connect` | **Every time** — once per person, and again whenever they re-authorize |
+
+Members have two equivalent paths: `omni slack connect` from a terminal, or the
+dashboard's **Connect Slack** button on the Instances page.
+
+`omni slack app status` reports whether the app is configured, which settings
+are still missing, and the redirect and manifest links.
+
+### The manifest link (operator, once)
+
+`omni slack app setup` reads `GET /api/v2/slack/app` and prints a
+`manifestUrl`. The API builds that link itself: it takes the callback
+**redirect URL** (`server.public_url` + `/api/v2/slack/oauth/callback`),
+generates the app manifest around it — every bot scope, every event
+subscription, and the **user scopes** the personal (`xoxp`) mode needs — and
+returns it URL-encoded as an
+`https://api.slack.com/apps?new_app=1&manifest_json=…` link. The operator
+opens that link and Slack offers to create the app with the manifest already
+filled in; nothing is pasted by hand. Setup then collects the app's client id,
+client secret, signing secret and app-level token and writes them to settings
+(the three secrets are read from a pipe or an interactive prompt, never from a
+command-line flag).
+
+> **The redirect URL must be HTTPS**, and it must appear in the app's
+> `oauth_config.redirect_urls` — Slack refuses the exchange otherwise, which
+> is exactly why the manifest link carries it. **A locally running API
+> therefore needs an HTTPS tunnel**: point `server.public_url` at the tunnel's
+> public `https://…` origin (not `http://localhost:…`) before running setup,
+> and re-run setup if that origin changes.
+
+### Connecting a member (every time)
+
+`omni slack connect` calls `POST /api/v2/slack/oauth/start`, opens the
+returned Slack authorize URL, and waits for the callback; the dashboard's
+**Connect Slack** button does the same thing and returns the person to the page
+they started from. The button sends that page's own address as the return
+address, so **the dashboard must be served from the `server.public_url`
+origin** — from anywhere else the API refuses the return address and the page
+shows that error instead of starting the install. The
+default mode is `user` — the member's own `xoxp` token, so the instance acts
+as them — and `--mode bot` installs the workspace bot instead. The instance is
+created (or re-authorized, if that person already installed) and connected for
+you; no token is ever shown, pasted, or written down.
+
+The pending install lives in the API process that started it, for five minutes,
+and is consumed the first time the callback reads it. So the API must run as a
+single process, or route `/api/v2/slack/oauth/*` with sticky sessions: a
+callback that lands on a process which never issued that install is refused as
+an unknown install — nothing unsafe happens, the person simply has to click
+**Connect Slack** again.
+
+Several members of one workspace share a single Bolt receiver and a single
+app-level token. Each event is delivered only to the instances Slack
+authorized it for, so one member's DMs never reach another member's instance.
+
+### When access is revoked
+
+Slack tells Omni about revocation, and the blast radius depends on which event
+arrives:
+
+| Slack event | What Omni disconnects |
+|---|---|
+| `tokens_revoked` | **Only the one instance** whose token was revoked (the member who revoked it, or the bot if it was the bot token), with reason `token_revoked`. Every other member of that workspace stays connected. |
+| `app_uninstalled` | **Every instance of that workspace** — the app itself is gone, so no token of it is valid any more. |
+
+### `SLACK_APP_TOKEN_IN_USE`, and what it does *not* mean
+
+Sharing one app-level token across instances is the normal case now, so the
+old "one app token, one instance" refusal has been narrowed:
+
+- **Two (or more) user-mode installs on one app token are accepted.** That is
+  the whole point of the one-click flow — every member of a workspace behind
+  the same deployment app.
+- **Only a second *bot-mode* install for the same workspace is refused**, with
+  `409 SLACK_APP_TOKEN_IN_USE`. A workspace has exactly one bot identity, so
+  two bot-mode instances would answer as the same bot and handle every event
+  twice.
+- That refusal is overridable: pass `force: true` (`--force`) to
+  `POST /api/v2/instances/:id/connect` when the second install is deliberately
+  **replacing** the first — a reinstalled bot token under a new instance id.
+
+Without `force` the connect is refused twice over, and the API layer answers
+first:
+
+1. `409 SLACK_APP_TOKEN_IN_USE` — the route's own check
+   (`findSlackBotModeConflict`) runs before the plugin is reached, so this is
+   the code a caller actually sees. It is what `POST /connect` returns.
+2. `SLACK_BOT_INSTANCE_EXISTS` — the Slack receiver's guard, the second layer
+   behind it. It is reachable only when the route's check does not fire (for
+   example an attachment the route's active-instance scan cannot see).
+
+The manual, pasted-token path below still works and is still supported — use
+it when you maintain the Slack app by hand, run without a public HTTPS URL, or
+want an instance whose tokens you supply yourself.
+
 ## Agent messaging experience (#914)
 
 Slack apps built as AI agents declare `agent_view` in their manifest. The

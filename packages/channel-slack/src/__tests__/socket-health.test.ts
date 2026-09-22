@@ -17,11 +17,13 @@
 import { describe, expect, it } from 'bun:test';
 import { EventEmitter } from 'node:events';
 import type { ConnectionStatus, InstanceConfig, PluginContext } from '@omni/channel-sdk';
+import type { SlackAppReceiver, SlackAttachment } from '../connection/app-receiver';
 import type { BoltConnection, SlackSocketClient, SocketConnectionState } from '../connection/bolt-client';
 import {
   checkBoltHealth,
   destroyBoltConnection,
   isSocketOpen,
+  isSocketStale,
   startBoltConnection,
   watchSocketLifecycle,
 } from '../connection/bolt-client';
@@ -96,9 +98,86 @@ function makePluginContext(): PluginContext {
 
 /** Typed access to the plugin internals the tests must seed/inspect. */
 interface PluginInternals {
-  connections: Map<string, BoltConnection>;
-  watchSocketState(instanceId: string, config: InstanceConfig, connection: BoltConnection): void;
+  attachments: Map<string, SlackAttachment>;
+  receivers: Map<string, SlackAppReceiver>;
+  watchSocketState(instanceId: string, config: InstanceConfig, receiver: SlackAppReceiver): void;
   updateInstanceStatus(instanceId: string, config: InstanceConfig, status: ConnectionStatus): Promise<void>;
+}
+
+/** What a receiver stand-in records, so attach/detach ORDER is assertable. */
+interface FakeReceiver {
+  receiver: SlackAppReceiver;
+  calls: string[];
+  stopped: () => number;
+}
+
+/**
+ * A stand-in for SlackAppReceiver driven by the same fake BoltConnection the
+ * bolt-client tests use, so the socket-health behaviour under test is the real
+ * one — no Slack, no Bolt App, and no socket to open.
+ */
+function makeReceiver(conn: BoltConnection, key = 'socket:test'): FakeReceiver {
+  const calls: string[] = [];
+  let stops = 0;
+  const attachments = new Map<string, SlackAttachment>();
+  const fake = {
+    key,
+    mode: conn.mode ?? 'socket',
+    attachments,
+    isRunning: true,
+    socketHealth: () => ({ open: isSocketOpen(conn), stale: isSocketStale(conn), state: conn.socketState }),
+    set onSocketStateChange(handler: ((state: SocketConnectionState) => void) | undefined) {
+      conn.onSocketStateChange = handler;
+    },
+    clientForBotToken: () => ({}),
+    attach: (attachment: SlackAttachment) => {
+      calls.push(`attach:${attachment.instanceId}`);
+      attachments.delete(attachment.instanceId);
+      attachments.set(attachment.instanceId, attachment);
+    },
+    detach: (instanceId: string) => {
+      calls.push(`detach:${instanceId}`);
+      return attachments.delete(instanceId);
+    },
+    start: async () => {
+      calls.push('start');
+    },
+    stop: async () => {
+      stops++;
+      calls.push('stop');
+      conn.onSocketStateChange = undefined;
+      attachments.clear();
+    },
+  };
+  return { receiver: fake as unknown as SlackAppReceiver, calls, stopped: () => stops };
+}
+
+/** A minimally populated attachment — the plugin only reads identities here. */
+function makeAttachment(instanceId: string, overrides: Partial<SlackAttachment> = {}): SlackAttachment {
+  return {
+    instanceId,
+    teamId: 'T1',
+    authMode: 'bot',
+    actingClient: {} as unknown as SlackAttachment['actingClient'],
+    botUserId: 'U0BOT',
+    botId: 'B0BOT',
+    botToken: 'xoxb-fake',
+    botName: 'bot',
+    config: {},
+    dedupeCache: {} as unknown as SlackAttachment['dedupeCache'],
+    debouncer: {} as unknown as SlackAttachment['debouncer'],
+    attachedAt: 1,
+    ...overrides,
+  };
+}
+
+/** Seed the plugin exactly as a successful connect() leaves it. */
+function seedAttachment(internals: PluginInternals, fake: FakeReceiver, instanceId: string): SlackAttachment {
+  const attachment = makeAttachment(instanceId);
+  fake.receiver.attach(attachment);
+  internals.attachments.set(instanceId, attachment);
+  internals.receivers.set(fake.receiver.key, fake.receiver);
+  return attachment;
 }
 
 async function makePlugin(): Promise<{ plugin: SlackPlugin; internals: PluginInternals }> {
@@ -268,8 +347,9 @@ describe('SlackPlugin.getStatus — reports the real socket, not the cache (#941
     const { plugin, internals } = await makePlugin();
     const socket = makeSocketClient(false);
     const { conn } = makeConnection({ socketClient: socket.client });
+    const fake = makeReceiver(conn);
 
-    internals.connections.set(INSTANCE, conn);
+    seedAttachment(internals, fake, INSTANCE);
     await internals.updateInstanceStatus(INSTANCE, CONFIG, { state: 'connected', since: new Date() });
 
     const status = await plugin.getStatus(INSTANCE);
@@ -282,8 +362,9 @@ describe('SlackPlugin.getStatus — reports the real socket, not the cache (#941
     const { plugin, internals } = await makePlugin();
     const socket = makeSocketClient(true);
     const { conn } = makeConnection({ socketClient: socket.client });
+    const fake = makeReceiver(conn);
 
-    internals.connections.set(INSTANCE, conn);
+    seedAttachment(internals, fake, INSTANCE);
     await internals.updateInstanceStatus(INSTANCE, CONFIG, { state: 'connected', since: new Date() });
 
     const status = await plugin.getStatus(INSTANCE);
@@ -308,17 +389,18 @@ describe('SlackPlugin — socket dying post-start transitions instance status (#
     plugin: SlackPlugin;
     internals: PluginInternals;
     socket: FakeSocketClient;
-    conn: BoltConnection;
+    fake: FakeReceiver;
   }> {
     const { plugin, internals } = await makePlugin();
     const socket = makeSocketClient(true);
     const { conn } = makeConnection({ socketClient: socket.client });
     watchSocketLifecycle(conn, noopLogger as never);
+    const fake = makeReceiver(conn);
 
-    internals.connections.set(INSTANCE, conn);
+    seedAttachment(internals, fake, INSTANCE);
     await internals.updateInstanceStatus(INSTANCE, CONFIG, { state: 'connected', since: new Date() });
-    internals.watchSocketState(INSTANCE, CONFIG, conn);
-    return { plugin, internals, socket, conn };
+    internals.watchSocketState(INSTANCE, CONFIG, fake.receiver);
+    return { plugin, internals, socket, fake };
   }
 
   it('disconnected → status error (retryable), reconnecting → status reconnecting', async () => {
@@ -347,51 +429,90 @@ describe('SlackPlugin — socket dying post-start transitions instance status (#
     expect((await plugin.getStatus(INSTANCE)).state).toBe('connected');
   });
 
-  it('transitions from a replaced (stale) connection are ignored', async () => {
-    const { plugin, internals, socket } = await wire();
+  it('transitions from a replaced (stale) attachment are ignored', async () => {
+    const { plugin, internals, socket, fake } = await wire();
 
-    // Instance was rebuilt: the map now holds a NEW healthy connection
+    // Instance was rebuilt: the plugin now holds a NEW healthy receiver and a
+    // NEW attachment, so the old receiver's transitions belong to nobody.
+    internals.receivers.delete(fake.receiver.key);
     const fresh = makeConnection({ socketClient: makeSocketClient(true).client }).conn;
-    internals.connections.set(INSTANCE, fresh);
+    seedAttachment(internals, makeReceiver(fresh, 'socket:rebuilt'), INSTANCE);
 
-    socket.emitter.emit('disconnected'); // old connection's event
+    socket.emitter.emit('disconnected'); // old receiver's event
     expect((await plugin.getStatus(INSTANCE)).state).toBe('connected');
+  });
+
+  it('one socket transition reaches every instance attached to that receiver', async () => {
+    const { plugin, internals, socket, fake } = await wire();
+    const OTHER = 'inst-941-b';
+    const otherConfig: InstanceConfig = { instanceId: OTHER, credentials: {}, options: {} };
+
+    const attachment = makeAttachment(OTHER);
+    fake.receiver.attach(attachment);
+    internals.attachments.set(OTHER, attachment);
+    await internals.updateInstanceStatus(OTHER, otherConfig, { state: 'connected', since: new Date() });
+    internals.watchSocketState(OTHER, otherConfig, fake.receiver);
+
+    socket.setActive(false);
+    socket.emitter.emit('disconnected');
+
+    expect((await plugin.getStatus(INSTANCE)).state).toBe('error');
+    expect((await plugin.getStatus(OTHER)).state).toBe('error');
   });
 });
 
 // ─────────────────────────────────────────────────────────────
-// 6. Plugin — connect() on a deaf instance rebuilds
+// 6. Plugin — connect() on an attached instance detaches first
 // ─────────────────────────────────────────────────────────────
 
-describe('SlackPlugin.connect — deaf instance rebuilds instead of "already connected" (#941)', () => {
-  it('returns early (no teardown) when the existing connection is genuinely healthy', async () => {
+describe('SlackPlugin.connect — an attached instance is detached and rebuilt, never short-circuited', () => {
+  it('detaches before re-attaching even when the socket is genuinely healthy', async () => {
     const { plugin, internals } = await makePlugin();
-    const socket = makeSocketClient(true);
-    const { conn, counts } = makeConnection({ socketClient: socket.client });
-    internals.connections.set(INSTANCE, conn);
+    const socket = makeSocketClient(true); // healthy — there is no "already connected" shortcut any more
+    const { conn } = makeConnection({ socketClient: socket.client });
+    const fake = makeReceiver(conn);
+    seedAttachment(internals, fake, INSTANCE);
 
-    await plugin.connect(INSTANCE, CONFIG);
-
-    expect(counts.stop).toBe(0);
-    expect(internals.connections.get(INSTANCE)).toBe(conn);
-  });
-
-  it('tears the deaf connection down and attempts a rebuild', async () => {
-    const { plugin, internals } = await makePlugin();
-    const socket = makeSocketClient(false); // socket dead, auth.test still ok
-    const { conn, counts } = makeConnection({ socketClient: socket.client });
-    internals.connections.set(INSTANCE, conn);
-
-    // Empty config makes the rebuild fail fast at token resolution — the
-    // point is that connect() gets PAST the 'already connected' dead-end.
+    // Empty config makes the rebuild fail fast at token resolution — the point
+    // is that connect() DETACHED first instead of answering 'already connected'.
     const err = await plugin.connect(INSTANCE, CONFIG).then(
       () => null,
       (e: unknown) => e,
     );
 
-    expect(counts.stop).toBe(1); // stale connection destroyed
-    expect(internals.connections.get(INSTANCE)).toBeUndefined();
+    expect(fake.calls).toEqual([`attach:${INSTANCE}`, `detach:${INSTANCE}`, 'stop']);
+    expect(internals.attachments.get(INSTANCE)).toBeUndefined();
     expect(err).toBeInstanceOf(SlackError);
     expect((await plugin.getStatus(INSTANCE)).state).toBe('error');
+  });
+
+  it('tears the deaf attachment down and attempts a rebuild', async () => {
+    const { plugin, internals } = await makePlugin();
+    const socket = makeSocketClient(false); // socket dead, auth.test still ok
+    const { conn } = makeConnection({ socketClient: socket.client });
+    const fake = makeReceiver(conn);
+    seedAttachment(internals, fake, INSTANCE);
+
+    const err = await plugin.connect(INSTANCE, CONFIG).then(
+      () => null,
+      (e: unknown) => e,
+    );
+
+    expect(fake.stopped()).toBe(1); // last attachment gone → receiver stopped
+    expect(internals.attachments.get(INSTANCE)).toBeUndefined();
+    expect(err).toBeInstanceOf(SlackError);
+    expect((await plugin.getStatus(INSTANCE)).state).toBe('error');
+  });
+
+  it('drops the stopped receiver from the map so no later connect can be handed it', async () => {
+    const { plugin, internals } = await makePlugin();
+    const { conn } = makeConnection({ socketClient: makeSocketClient(true).client });
+    const fake = makeReceiver(conn);
+    seedAttachment(internals, fake, INSTANCE);
+
+    await plugin.connect(INSTANCE, CONFIG).catch(() => undefined);
+
+    expect(fake.stopped()).toBe(1);
+    expect(internals.receivers.get(fake.receiver.key)).toBeUndefined();
   });
 });

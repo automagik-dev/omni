@@ -244,6 +244,8 @@ export interface SlackInteractionPayload {
   actionId: string;
   /** User who triggered the action */
   userId: string;
+  /** Workspace the interaction happened in; what routes it on a shared receiver */
+  teamId?: string;
   /** Channel ID (if applicable) */
   channelId?: string;
   /** Thread TS (if applicable) */
@@ -344,6 +346,11 @@ export interface SlackManifest {
     }>;
   };
   oauth_config: {
+    /**
+     * OAuth redirect URLs for the one-click install (slack-personal-oauth).
+     * HTTPS only, max 1000; absent for apps without an install flow.
+     */
+    redirect_urls?: string[];
     scopes: {
       bot: string[];
       /** User-token scopes, requested only for authMode 'user' (#889). */
@@ -379,6 +386,14 @@ export const SlackErrorCode = {
   COMMAND_FAILED: 'SLACK_COMMAND_FAILED',
   DM_REJECTED: 'SLACK_DM_REJECTED',
   CONNECTION_FAILED: 'SLACK_CONNECTION_FAILED',
+  /**
+   * A second bot-mode instance was attached to the same Slack app and the same
+   * workspace (slack-personal-oauth). Both would answer for the SAME bot user,
+   * so every event of that workspace would be acked and dispatched twice.
+   * Personal (user-mode) installs are unlimited; only the bot identity is
+   * singular per workspace.
+   */
+  BOT_INSTANCE_EXISTS: 'SLACK_BOT_INSTANCE_EXISTS',
 } as const;
 
 export type SlackErrorCodeType = (typeof SlackErrorCode)[keyof typeof SlackErrorCode];
@@ -397,6 +412,7 @@ const SLACK_CORE_CODE_MAP: Record<SlackErrorCodeType, CoreErrorCode> = {
   [SlackErrorCode.COMMAND_FAILED]: ERROR_CODES.UNKNOWN,
   [SlackErrorCode.DM_REJECTED]: ERROR_CODES.FORBIDDEN,
   [SlackErrorCode.CONNECTION_FAILED]: ERROR_CODES.CHANNEL_CONNECTION_FAILED,
+  [SlackErrorCode.BOT_INSTANCE_EXISTS]: ERROR_CODES.CONFLICT,
 };
 
 /**

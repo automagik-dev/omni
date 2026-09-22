@@ -14,6 +14,7 @@ import { useOmniClient } from '../../app/providers/OmniClientProvider';
 import { type ColumnDef, ConfirmDialog, DataTable, MutationResult, PageShell, ResourceDetail } from '../../components';
 import { T } from '../../components/tokens';
 import { useOmniMutation, useOmniQuery } from '../../hooks/useOmniQuery';
+import { SlackAppCard } from './SlackAppCard';
 import { coerceValue, displayValue, groupOf, isSecretWipe } from './settings-helpers';
 import { CardSection, DataRowList, errMsg, fmtTime } from './shared';
 
@@ -81,6 +82,7 @@ export function SettingsPage() {
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const list = useOmniQuery(['settings', 'list'], () => ext.settings.list());
+  const slackApp = useOmniQuery(['slack', 'app'], () => ext.slack.appStatus(), { staleTime: 30_000 });
   const detail = useOmniQuery(['settings', selectedKey], () => ext.settings.get(selectedKey ?? ''), {
     enabled: Boolean(selectedKey),
   });
@@ -95,12 +97,21 @@ export function SettingsPage() {
   const put = useOmniMutation({
     mutationFn: (vars: { key: string; value: unknown; reason: string }) =>
       ext.settings.put(vars.key, vars.value, vars.reason),
-    invalidate: [['settings', 'list']],
+    // The Slack app card reads ['slack', 'app'] with a 30 s staleTime, so a write
+    // that fills the last missing key has to drop that entry as well or the card
+    // keeps reporting the deployment unconfigured right above the proof it landed.
+    invalidate: [
+      ['settings', 'list'],
+      ['slack', 'app'],
+    ],
     readBack: (_d, vars) => ext.settings.get(vars.key),
   });
   const remove = useOmniMutation({
     mutationFn: (key: string) => ext.settings.remove(key),
-    invalidate: [['settings', 'list']],
+    invalidate: [
+      ['settings', 'list'],
+      ['slack', 'app'],
+    ],
   });
 
   const groups = useMemo(() => {
@@ -116,6 +127,22 @@ export function SettingsPage() {
 
   const selected = detail.data?.data;
   const restoreWipe = selected ? isSecretWipe(selected, restoreValue) : false;
+
+  /**
+   * The single way into the editor below — a table row click and the Slack app
+   * card both land here, so the secret masking and the empty-value guard have
+   * exactly one implementation. A secret starts blank; a key with no row yet
+   * (never written, default only) starts blank too, and so does a row whose
+   * value is null — `displayValue` renders that as an em dash for the table, and
+   * seeding the editor with it would let an operator save "—" as the value.
+   */
+  const selectKey = (key: string) => {
+    const row = (list.data?.items ?? []).find((s) => s.key === key);
+    setSelectedKey(key);
+    setEditValue(row && !row.isSecret && row.value !== null && row.value !== undefined ? displayValue(row) : '');
+    setRestoreValue('');
+    put.reset();
+  };
 
   const settingColumns: ColumnDef<SettingRow>[] = [
     {
@@ -157,18 +184,20 @@ export function SettingsPage() {
         </Note>
       )}
 
+      <SlackAppCard
+        status={slackApp.data}
+        loading={slackApp.isLoading}
+        error={errMsg(slackApp.error)}
+        onSelectKey={selectKey}
+      />
+
       {groups.map(([group, settings]) => (
         <CardSection key={group} title={group}>
           <DataTable
             columns={settingColumns}
             rows={settings}
             getRowKey={(s) => s.key}
-            onRowClick={(s) => {
-              setSelectedKey(s.key);
-              setEditValue(s.isSecret ? '' : displayValue(s));
-              setRestoreValue('');
-              put.reset();
-            }}
+            onRowClick={(s) => selectKey(s.key)}
           />
         </CardSection>
       ))}

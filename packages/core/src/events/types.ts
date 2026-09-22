@@ -458,6 +458,14 @@ export interface InstanceConnectedPayload {
   ownerIdentifier?: string;
   /** True only on the first connect after a fresh pairing (Baileys `isNewLogin`) */
   isNewLogin?: boolean;
+  /**
+   * Workspace id on the platform (Slack team id `T…`). The API listener
+   * persists it on the instance so an OAuth re-authorization can upsert by
+   * (team, user) (slack-personal-oauth).
+   */
+  teamId?: string;
+  /** Platform user id the instance acts as (Slack `U…` in user mode). */
+  actingUserId?: string;
 }
 
 export interface InstanceDisconnectedPayload {
