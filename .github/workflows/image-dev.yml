@@ -83,9 +83,10 @@ jobs:
     env:
       IMAGE: ghcr.io/${{ github.repository_owner }}/omni-api
     steps:
-      # Always the `dev` branch, never the calling ref: under the version.yml
-      # call on a merged pull_request the caller's github.ref is the PR merge
-      # ref and github.sha its merge commit, neither of which is on `dev`.
+      # Always the `dev` branch, never the calling ref or sha: under the
+      # version.yml call the commit to build is the version bump pushed after
+      # the triggering event, so it is newer than the caller's github.sha, and
+      # a manual dispatch can start from any branch.
       # Full history so the ancestry guard below can see every dev commit.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -177,17 +178,16 @@ jobs:
           # stages that the runtime stage only copies from. GitHub isolates
           # the cache per ref (a run reads its own ref's entries plus the base
           # and default branches', and writes only its own), so a PR or fork
-          # run can never seed an entry a `dev` run reads. Under the
-          # version.yml call the run's ref is the merged PR's `refs/pull/N/
-          # merge`, so that run reads entries written by manual dispatches on
-          # `dev`; a miss costs a cold build, nothing else. That call does not
-          # export: its write was only ever reusable by the closed PR, and
-          # since 2026-09-09 GitHub grants a closed PR's run no writable cache
-          # scope at all ("token has no writable scopes"), so the export
-          # failed every merged-PR build after the image was already built.
-          # In a called workflow `github.event_name` is the caller's event, so
-          # `pull_request` is exactly that merged-PR call. A manual dispatch
-          # on `dev` still exports and warms the entry every later call reads.
+          # run can never seed an entry a `dev` run reads. The version.yml call
+          # on a merged PR runs with `dev` as its ref, so its export used to be
+          # what kept this cache warm: the only index entry was written by one
+          # on 2026-09-08. Since 2026-09-09 GitHub gives that run no writable
+          # cache scope ("token has no writable scopes"), and the refused
+          # export failed the whole build after the image was built, so that
+          # call only reads now. In a called workflow `github.event_name` is
+          # the caller's event, so `pull_request` is exactly that call. A
+          # manual dispatch on `dev` still exports; until one runs, merged-PR
+          # builds get few cache hits and run mostly cold.
           cache-from: type=gha,scope=omni-api-dev
           cache-to: ${{ github.event_name != 'pull_request' && 'type=gha,scope=omni-api-dev,mode=max' || '' }}
           provenance: true
