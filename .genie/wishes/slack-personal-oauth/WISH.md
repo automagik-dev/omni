@@ -633,3 +633,13 @@ packages/api/src/routes/v2/__tests__/slack-oauth-e2e.test.ts            (new)
 - **Read-back:** the run ended `blocked` only because three declared test files (`bolt-client-user-mode`, `auth-mode-connect`, `inbound-dedup`) needed no change: they pass unchanged against the new plugin under the full gate, which satisfies "ported with equal assertions". Coordinator ruling: accepted as delivered. PR #1230 against `wish/slack-personal-oauth`, 10 files, 1,227 insertions; GitGuardian pass.
 - **Carried forward:** Group 2 MEDIUM #2 (HTTP body-limit guard and `httpHandler` on the receiver's HTTP branch) was cuttable in this contract; Group 5 or Group 8 verifies whether the HTTP transport path still enforces the 1 MB limit.
 - Full result: session task output `wwqiz53qp`; per-agent journal `wf_026cb518-d0f`.
+
+### Group 5 execution review — branch head `a3b0a40a` (2026-09-21T23:59:04Z)
+
+- **Verdict:** SHIP
+- **Reviewer:** review-agent/claude (reviewer-g5, Opus); blind plan written before opening the diff (`g5-review-plan.md`)
+- **Target:** `a3b0a40a` on `wish/slack-personal-oauth-g5` vs base `dda5460c` (commits `00035e94` by workflow run `wf_b735b847-4fd`, `a3b0a40a` by the coordinator's fixer); 11 files, 1,620 insertions
+- **Criteria:** all 15 frozen contract criteria met, each traced to a code line and a falsifying test; the oracle is red at base. Ruling: `connection.test.ts` added to the owned set (its receiver-sharing cases encoded the old two-bot-mode contract); ported with every assertion kept.
+- **Validation (reviewer's own runs, all green):** receiver-fanout 5; channel-slack 341; app-token-conflict 10; slack-identity 4; api/plugins 432; api/routes/v2 471; lint, knip, typecheck exit 0; no skip/only/todo, no `any`. Coordinator gate `bun run check` on `a3b0a40a`: 26/26 tasks, 0 failures.
+- **Findings:** 0 CRITICAL / 0 HIGH / 3 MEDIUM / 3 LOW. MEDIUM (1) the API route's `force` escape never reaches the attach guard (plugin.ts passes no force), so the 409 message suggests an override that then fails with `SLACK_BOT_INSTANCE_EXISTS` — carried to Group 8; (2) a non-scope `authorizations.list` failure logs once per event and caches nothing; (3) the 60 s expiry and eviction sweep are untested (TTL is a named constant, growth bounded).
+- Full report: session scratchpad `g5-review.md`.
