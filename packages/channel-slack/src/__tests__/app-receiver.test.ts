@@ -408,18 +408,18 @@ describe('SlackAppReceiver', () => {
     expect((refused as SlackError).channelCode).toBe(SlackErrorCode.NOT_CONNECTED);
   });
 
-  it('authorize answers a bot-less workspace with its person, and a mixed one with its bot', async () => {
+  it('authorize answers a bot-less workspace with its team alone, and a mixed one with its bot', async () => {
     const { receiver } = makeReceiver();
     const authorize = authorizeOf(lastApp());
     const clientsByToken = (receiver as unknown as { clientsByToken: Map<string, WebClient> }).clientsByToken;
 
-    // Personal installs only: there is no bot identity to answer with.
+    // Personal installs only: no bot identity to answer with, and no person's
+    // token may back the client Bolt hands the listeners of anyone's event.
     receiver.attach(botlessAttachment('inst-ana', 'T1', 'U_ANA', 1));
-    await expect(authorize(source('T1'))).resolves.toEqual({
-      teamId: 'T1',
-      userId: 'U_ANA',
-      userToken: 'xoxp-inst-ana',
-    });
+    const botless = await authorize(source('T1'));
+    expect(botless).toEqual({ teamId: 'T1' });
+    expect(botless.userToken).toBeUndefined();
+    expect(botless.botToken).toBeUndefined();
     expect(receiver.botClientFor('T1')).toBeUndefined();
     expect(clientsByToken.size).toBe(0);
 
@@ -435,9 +435,9 @@ describe('SlackAppReceiver', () => {
     });
     expect(receiver.botClientFor('T2')?.token).toBe('xoxb-bot');
 
-    // Once the bot detaches, its client goes with it and the person answers.
+    // Once the bot detaches, its client goes with it and the team answers alone.
     expect(receiver.detach('inst-bot')).toBe(true);
-    await expect(authorize(source('T2'))).resolves.toMatchObject({ userId: 'U_BEN', userToken: 'xoxp-inst-ben' });
+    await expect(authorize(source('T2'))).resolves.toEqual({ teamId: 'T2' });
     expect(receiver.botClientFor('T2')).toBeUndefined();
     expect(clientsByToken.size).toBe(0);
   });

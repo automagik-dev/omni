@@ -13,7 +13,7 @@
  * receiver serve several workspaces. `authorize` answers with the bot token
  * of the most recently attached instance of the event's team, so a
  * reinstalled bot token wins — or, when every instance of the team is a
- * bot-less personal install, with a user token. Handlers are registered
+ * bot-less personal install, with the team id alone. Handlers are registered
  * once, at creation, through the `registerHandlers` hook; `targetsFor(body)`
  * answers with the attachments Slack authorized THIS event for — see its own
  * doc comment.
@@ -196,15 +196,6 @@ type BotAttachment = SlackAttachment & { botToken: string };
 
 function hasBotToken(attachment: SlackAttachment): attachment is BotAttachment {
   return Boolean(attachment.botToken);
-}
-
-/** The attachment that attached last: greatest `attachedAt`, ties to the later in order. */
-function newestAttachment<T extends SlackAttachment>(attachments: readonly T[]): T | undefined {
-  let latest: T | undefined;
-  for (const attachment of attachments) {
-    if (!latest || attachment.attachedAt >= latest.attachedAt) latest = attachment;
-  }
-  return latest;
 }
 
 /** Why Slack stopped authorizing a workspace: a revoked token, or an uninstall. */
@@ -772,36 +763,37 @@ export class SlackAppReceiver {
    * Bolt's per-event authorization: the bot identity of the event's
    * workspace, taken from the most recently attached instance of that team
    * that carries a bot token. A workspace whose attachments are all bot-less
-   * answers with the newest one's user token instead, which is all Bolt needs
-   * to run its listeners. A team with no attachment is refused — Bolt then
-   * drops the event.
+   * answers with its team id alone: Bolt then hands its listeners a tokenless
+   * client, so no one person's token ever backs the context of another
+   * member's event — the plugin acts through each attachment's own clients.
+   * A team with no attachment is refused — Bolt then drops the event.
    */
   private async authorize(source: AuthorizeSourceData<boolean>): Promise<AuthorizeResult> {
     const teamId = source.teamId;
-    const bot = teamId ? this.latestBotAttachmentFor(teamId) : undefined;
-    if (bot) {
-      return { botToken: bot.botToken, botId: bot.botId, botUserId: bot.botUserId, teamId: bot.teamId };
-    }
-    const person = teamId ? this.latestAttachmentFor(teamId) : undefined;
-    const userToken = person?.userClient?.token;
-    if (!person || !userToken) {
+    if (!teamId || this.teamAttachmentsFor(teamId).length === 0) {
       throw new SlackError(
         SlackErrorCode.NOT_CONNECTED,
         `No Slack instance attached for team ${teamId ?? '(none)'} on receiver ${this.key}`,
         true,
       );
     }
-    return { teamId: person.teamId, userId: person.actingUserId, userToken };
+    const bot = this.latestBotAttachmentFor(teamId);
+    if (!bot) return { teamId };
+    return { botToken: bot.botToken, botId: bot.botId, botUserId: bot.botUserId, teamId: bot.teamId };
   }
 
-  /** The attachment of a team that attached last (by attachedAt, then attach order). */
-  private latestAttachmentFor(teamId: string): SlackAttachment | undefined {
-    return newestAttachment(this.teamAttachmentsFor(teamId));
-  }
-
-  /** The newest attachment of a team that carries a bot token: the bot `authorize` and the bot client follow. */
+  /**
+   * The attachment of a team that attached last (by attachedAt, then attach
+   * order) among those carrying a bot token: the bot `authorize` answers with
+   * and the team's bot client follows.
+   */
   private latestBotAttachmentFor(teamId: string): BotAttachment | undefined {
-    return newestAttachment(this.teamAttachmentsFor(teamId).filter(hasBotToken));
+    let latest: BotAttachment | undefined;
+    for (const attachment of this.attachmentMap.values()) {
+      if (attachment.teamId !== teamId || !hasBotToken(attachment)) continue;
+      if (!latest || attachment.attachedAt >= latest.attachedAt) latest = attachment;
+    }
+    return latest;
   }
 
   /**
