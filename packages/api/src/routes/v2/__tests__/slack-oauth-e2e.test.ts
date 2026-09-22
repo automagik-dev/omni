@@ -100,7 +100,9 @@ mock.module(Bun.resolveSync('@slack/bolt', CHANNEL_SLACK_DIR), () => {
 
 mock.module(Bun.resolveSync('@slack/web-api', CHANNEL_SLACK_DIR), () => {
   /**
-   * `auth.test` is the only call the connect path makes. A user token answers
+   * `auth.test` is the only call this fake answers: it has no `users`, so the
+   * connect path's `users.info` name lookup falls back to the `auth.test`
+   * username. A user token answers
    * as the human named in it (`xoxp-ana` → `U_ANA`), so the two personal
    * installs resolve to DISTINCT acting users; anything else answers as the
    * workspace bot of `T_SHARED`.

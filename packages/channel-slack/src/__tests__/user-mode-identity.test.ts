@@ -123,6 +123,17 @@ describe('resolveActingUserName', () => {
     expect(await resolveActingUserName(client, HUMAN, 'felipe')).toBe('Felipe Rosa da Silva');
   });
 
+  it('skips blank names and trims the one it presents', async () => {
+    const { client } = userClient(() =>
+      Promise.resolve({
+        ok: true,
+        user: { id: HUMAN, name: 'felipe', profile: { display_name: '   ', real_name: '  Felipe Rosa  ' } },
+      }),
+    );
+
+    expect(await resolveActingUserName(client, HUMAN, 'felipe')).toBe('Felipe Rosa');
+  });
+
   it('keeps the username when the profile carries no name', async () => {
     const { client } = userClient(() =>
       Promise.resolve({ ok: true, user: { id: HUMAN, name: 'felipe', profile: {} } }),

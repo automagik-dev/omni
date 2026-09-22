@@ -58,8 +58,21 @@ mock.module('@slack/web-api', () => {
   class MockWebClient {
     token: string | undefined;
     auth: { test: () => Promise<Record<string, unknown>> };
+    users?: { info: (args: { user: string }) => Promise<Record<string, unknown>> };
     constructor(token?: string, _opts?: Record<string, unknown>) {
       this.token = token;
+      // 'xoxp-display' is the one human whose Slack profile carries a display
+      // name that differs from the username, so the name the instance presents
+      // must come from users.info. No other fake has `users`, so every other
+      // connect falls back to the auth.test username.
+      if (token?.startsWith('xoxp-display')) {
+        this.users = {
+          info: async ({ user }) => ({
+            ok: true,
+            user: { id: user, name: 'display', profile: { display_name: 'Display Person', real_name: 'Display Real' } },
+          }),
+        };
+      }
       this.auth = {
         // A user token answers as the human named in it, so two personal
         // installs of one workspace get DISTINCT acting users: 'xoxp-ana' is
@@ -544,6 +557,24 @@ describe('SlackPlugin.connect — user mode acting-user invariant (#889)', () =>
 
     expect(internals.attachments.get('inst-user')?.actingUserId).toBe('U_HUMAN');
     expect(internals.receivers.size).toBe(1);
+  });
+
+  it('presents the profile display name rather than the auth.test username', async () => {
+    const { plugin } = await makeSharedPlugin();
+
+    await plugin.connect('inst-user', userConfig('inst-user', 'xoxp-display'));
+
+    const profile = await plugin.getProfile('inst-user');
+    expect(profile.name).toBe('Display Person');
+    expect(profile.ownerIdentifier).toBe('U_DISPLAY');
+  });
+
+  it('presents the auth.test username when no profile name resolves', async () => {
+    const { plugin } = await makeSharedPlugin();
+
+    await plugin.connect('inst-user', userConfig('inst-user', 'xoxp-human'));
+
+    expect((await plugin.getProfile('inst-user')).name).toBe('human');
   });
 
   it('refuses to attach or start when the acting user id cannot be resolved', async () => {

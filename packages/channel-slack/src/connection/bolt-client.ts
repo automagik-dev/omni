@@ -557,10 +557,13 @@ export async function resolveWorkspaceIdentity(
  * The name Slack shows for the authorizing human in user mode (#889).
  *
  * `auth.test` returns the account's username (`user`), which is not the name
- * people see in Slack. `users.info` carries the profile's display name and,
- * when that is empty, the real name; the user token's `users:read` scope
- * covers the call. The username stays the fallback when the lookup fails or
- * both profile names are empty, so a nicer name can never block a connect.
+ * people see in Slack. `users.info` carries it: the first non-blank of the
+ * profile display name, the profile real name and the account real name,
+ * trimmed, which is the same precedence the OAuth callback uses for the
+ * instance it creates (api/src/lib/slack-oauth.ts). The user token's
+ * `users:read` scope covers the call. The username stays the fallback when
+ * the lookup fails or every name is blank, so a nicer name can never block a
+ * connect.
  */
 export async function resolveActingUserName(
   userClient: Pick<WebClient, 'users'>,
@@ -569,9 +572,9 @@ export async function resolveActingUserName(
   logger?: Pick<Logger, 'debug'>,
 ): Promise<string | undefined> {
   try {
-    const result = await userClient.users.info({ user: actingUserId });
-    const profile = result.user?.profile;
-    return profile?.display_name || profile?.real_name || username;
+    const { user } = await userClient.users.info({ user: actingUserId });
+    const candidates = [user?.profile?.display_name, user?.profile?.real_name, user?.real_name];
+    return candidates.find((name) => typeof name === 'string' && name.trim().length > 0)?.trim() ?? username;
   } catch (error) {
     logger?.debug('users.info failed for the acting user; presenting the auth.test username', {
       error: String(error),

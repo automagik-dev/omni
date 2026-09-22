@@ -94,10 +94,11 @@ export interface SlackAttachment {
   /** Slack user id of the authorizing human in user mode. */
   actingUserId?: string;
   /**
-   * The authorizing human's display name in user mode (auth.test `user`, the
-   * same response `actingUserId` comes from — never a second API call).
-   * Reported as the instance profile name so a user-mode instance presents as
-   * the person who authorized it rather than as the workspace bot.
+   * The authorizing human's name in user mode: the profile display name (then
+   * real name) from `users.info`, falling back to the `auth.test` username
+   * (see `resolveActingUserName`). Reported as the instance profile name so a
+   * user-mode instance presents as the person who authorized it rather than as
+   * the workspace bot.
    */
   actingUserName?: string;
   botUserId: string;
