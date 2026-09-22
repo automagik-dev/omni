@@ -167,4 +167,18 @@ describe('stripSlackReturnParam', () => {
     expect(stripSlackReturnParam('?slackbot=1&slack=Abc123_-xyz')).toBe('?slackbot=1');
     expect(stripSlackReturnParam('?slack_team=T1')).toBe('?slack_team=T1');
   });
+
+  test('strips exactly what readSlackReturnNonce reads, including a percent-encoded key', () => {
+    // The reader parses with URLSearchParams, which decodes the key, so the
+    // stripper has to agree or the parameter is read forever and never cleared.
+    const encoded = '?%73lack=Abc123_-xyz';
+    expect(readSlackReturnNonce(encoded)).toBe('Abc123_-xyz');
+    expect(stripSlackReturnParam(encoded)).toBe('');
+    expect(stripSlackReturnParam('?a=1&%73lack=Abc123_-xyz')).toBe('?a=1');
+  });
+
+  test('leaves a malformed escape in a neighbour alone instead of throwing', () => {
+    expect(stripSlackReturnParam('?a%zz=1&slack=Abc123_-xyz')).toBe('?a%zz=1');
+    expect(stripSlackReturnParam('?q=a%26slack%3DAbc123_-xyz')).toBe('?q=a%26slack%3DAbc123_-xyz');
+  });
 });

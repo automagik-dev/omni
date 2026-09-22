@@ -160,9 +160,12 @@ export function readSlackReturnNonce(search: string): string | null {
 export function stripSlackReturnParam(search: string): string {
   const query = search.startsWith('?') ? search.slice(1) : search;
   if (query === '') return '';
-  const kept = query
-    .split('&')
-    .filter((part) => part !== SLACK_RETURN_PARAM && !part.startsWith(`${SLACK_RETURN_PARAM}=`));
+  // Each part is parsed in isolation, so the surviving parts stay byte-identical
+  // while the key is matched the same way `readSlackReturnNonce` matches it —
+  // percent-decoded. Matching the key textually instead would read `?%73lack=…`
+  // as the nonce and then fail to clear it. `URLSearchParams` is lenient, so a
+  // malformed escape in a neighbour cannot throw here.
+  const kept = query.split('&').filter((part) => !new URLSearchParams(part).has(SLACK_RETURN_PARAM));
   return kept.length === 0 ? '' : `?${kept.join('&')}`;
 }
 
