@@ -36,6 +36,14 @@ const TIPO_LISTA = 1;
 const TIPO_BOTOES = 2;
 /** Label on the button that opens the list, when the caller sets none. */
 const LIST_BUTTON_LABEL = 'Opções';
+/** Meta's limit for the list button text; a longer label falls back to the default. */
+const MAX_LIST_BUTTON_LABEL = 20;
+
+/** The caller's list button label when it fits Meta's limit, else the default. */
+function listButtonLabelOf(label: string | undefined): string {
+  const trimmed = label?.trim();
+  return trimmed && trimmed.length <= MAX_LIST_BUTTON_LABEL ? trimmed : LIST_BUTTON_LABEL;
+}
 
 /**
  * Identity key for a title — accents, case and repeated spaces folded away, so
@@ -107,7 +115,7 @@ export function splitBubbles(text: string): string[] {
 export function buildInteractive(
   body: string,
   buttons: InteractiveButton[] | undefined,
-  listOptions: InteractiveListOptions = {},
+  listOptions: InteractiveListOptions & { buttonLabel?: string } = {},
 ): Record<string, unknown> | null {
   const trimmed = body.trim();
   if (!trimmed || trimmed.length > MAX_BODY_TEXT) return null;
@@ -115,7 +123,8 @@ export function buildInteractive(
   const replyButtons = (buttons ?? []).filter((b) => !b.url && b.text?.trim());
   if (replyButtons.length === 0 || replyButtons.length > MAX_OPTIONS) return null;
 
-  const plan = planInteractive(trimmed, replyButtons, LIST_BUTTON_LABEL, listOptions);
+  const buttonLabel = listButtonLabelOf(listOptions.buttonLabel);
+  const plan = planInteractive(trimmed, replyButtons, buttonLabel, listOptions);
   if (!plan.interactive || plan.droppedRows > 0) return null;
 
   const type = plan.interactive.type;
@@ -142,7 +151,7 @@ export function buildInteractive(
     tipo: TIPO_LISTA,
     mensagem: trimmed,
     list: {
-      texto_botao: (action?.button as string) || LIST_BUTTON_LABEL,
+      texto_botao: (action?.button as string) || buttonLabel,
       secao: [
         {
           texto: sections[0]?.title ?? '',
