@@ -11,6 +11,14 @@ import * as output from './output.js';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
+ * Slack conversation id: a public/private channel (C…), a DM (D…) or a
+ * multi-party DM (G…). These are platform ids the way a WhatsApp JID is —
+ * `omni slack dm` hands one back, the API send path accepts one directly,
+ * and a stored chat carries it as `externalId`.
+ */
+const SLACK_CONVERSATION_RE = /^[CDG][A-Z0-9]{8,}$/;
+
+/**
  * Resolve an instance identifier to a UUID.
  *
  * Matches in order:
@@ -88,7 +96,8 @@ async function resolveChatByExternalId(input: string, instanceId?: string): Prom
  *   2. UUID prefix match (minimum 2 hex chars)
  *   3. Exact name match (case-insensitive)
  *   4. Name substring match (case-insensitive)
- *   (inputs containing "@" first try an exact external id / JID match)
+ *   (inputs containing "@", and Slack conversation ids, first try an exact
+ *    external id / JID match)
  *
  * Exits with error if no match or ambiguous.
  */
@@ -98,8 +107,10 @@ export async function resolveChatId(input: string, instanceId?: string): Promise
     return input;
   }
 
-  // External id (e.g. WhatsApp JID) — what journaled events carry as chatId (#1119)
-  const byExternal = input.includes('@') ? await resolveChatByExternalId(input, instanceId) : undefined;
+  // External id (WhatsApp JID, Slack conversation id) — what journaled events
+  // carry as chatId (#1119). A miss falls through to the prefix/name matching.
+  const looksExternal = input.includes('@') || SLACK_CONVERSATION_RE.test(input);
+  const byExternal = looksExternal ? await resolveChatByExternalId(input, instanceId) : undefined;
   if (byExternal) return byExternal;
 
   const client = getClient();
@@ -136,8 +147,9 @@ export async function resolveChatId(input: string, instanceId?: string): Promise
 /**
  * Resolve a recipient identifier for the send command.
  *
- * If the input looks like a phone number (starts with '+' or all digits) or a JID
- * (contains '@'), it is passed through as-is — these are external identifiers.
+ * If the input looks like a phone number (starts with '+' or all digits), a JID
+ * (contains '@') or a Slack conversation id (C…/D…/G…), it is passed through
+ * as-is — these are external identifiers the API's send path accepts directly.
  *
  * Otherwise, resolves as a chat identifier (full UUID, UUID prefix, name).
  * Exits with error if resolution fails.
@@ -151,6 +163,9 @@ export async function resolveRecipient(input: string, instanceId?: string): Prom
 
   // JID or external ID — pass through
   if (input.includes('@')) return input;
+
+  // Slack conversation id (channel, DM, group DM) — pass through
+  if (SLACK_CONVERSATION_RE.test(input)) return input;
 
   // Try to resolve as a chat identifier (short ID or name)
   return resolveChatId(input, instanceId);

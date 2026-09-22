@@ -505,6 +505,11 @@ function createSlackAppCommand(): Command {
   return app;
 }
 
+/** The follow-up `omni send` invocation printed after `omni slack dm` resolves a channel. */
+function dmSendHint(instance: string, channelId: string): string {
+  return `Send with: omni send --instance ${instance} --to ${channelId} --text "..."`;
+}
+
 export function createSlackCommand(): Command {
   const cmd = new Command('slack').description(
     'Slack-only operations: connect a workspace, open a DM, search messages (#889)',
@@ -518,7 +523,7 @@ export function createSlackCommand(): Command {
         const instanceId = await resolveInstanceId(instance);
         const { channelId } = await getClient().slack.openDm(instanceId, userId);
         output.success(`DM channel with ${userId}: ${channelId}`);
-        output.info(`Send with: omni send text ${instance} ${channelId} "..."`);
+        output.info(dmSendHint(instance, channelId));
       } catch (err) {
         output.error(`Failed to open DM: ${err instanceof Error ? err.message : 'Unknown error'}`, undefined, 3);
       }
@@ -574,6 +579,7 @@ export function createSlackCommand(): Command {
 }
 
 export const __testables = {
+  dmSendHint,
   handleAppSetup,
   handleAppStatus,
   handleConnect,
