@@ -599,6 +599,22 @@ describe('SlackPlugin.connect — user mode acting-user invariant (#889)', () =>
     expect(internals.receivers.size).toBe(0);
     expect((await plugin.getStatus('inst-user')).state).toBe('error');
   });
+
+  it('refuses a user token from another workspace than the bot token', async () => {
+    const { plugin, internals } = await makeSharedPlugin();
+
+    // The bot token answers for T_SHARED; this person's token for T_OTHER.
+    const err = await plugin.connect('inst-dora', userConfig('inst-dora', 'xoxp-dora@T_OTHER')).then(
+      () => null,
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(SlackError);
+    expect((err as SlackError).channelCode).toBe(SlackErrorCode.CONNECTION_FAILED);
+    expect((err as SlackError).message).toContain('T_OTHER');
+    expect(internals.attachments.has('inst-dora')).toBe(false);
+    expect(internals.receivers.size).toBe(0);
+  });
 });
 
 describe('SlackPlugin.connect — bot-less user mode (one-click OAuth)', () => {
