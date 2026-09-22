@@ -177,7 +177,7 @@ jobs:
           # that in full. `mode=max` exports the intermediate deps/builder
           # stages that the runtime stage only copies from. GitHub isolates
           # the cache per ref (a run reads its own ref's entries plus the base
-          # and default branches', and writes only its own), so a PR or fork
+          # and default branches', and writes only its own), so an open-PR or fork
           # run can never seed an entry a `dev` run reads. The version.yml call
           # on a merged PR runs with `dev` as its ref, so its export used to be
           # what kept this cache warm: the only index entry was written by one
