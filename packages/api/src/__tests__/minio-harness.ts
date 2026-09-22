@@ -52,6 +52,22 @@ const ACCESS_KEY = 'minioadmin';
 const SECRET_KEY = 'minioadmin';
 const REGION = 'us-east-1';
 
+/**
+ * MinIO host ports are drawn from 20000-32767, entirely below Linux's default
+ * ephemeral range (32768-60999). Drawing from 20000-39999 let an outbound
+ * connection's source port already hold the chosen port, so `docker run -p`
+ * failed with "address already in use" (0.0.0.0:34102 in the Remote Media job
+ * on 2026-09-22). The random pick still keeps parallel sessions and a locally
+ * running MinIO apart.
+ */
+const MINIO_HOST_PORT_MIN = 20000;
+const MINIO_HOST_PORT_MAX = 32767;
+
+/** A random host port in [MINIO_HOST_PORT_MIN, MINIO_HOST_PORT_MAX] for a MinIO container. */
+export function pickMinioHostPort(random: () => number): number {
+  return MINIO_HOST_PORT_MIN + Math.floor(random() * (MINIO_HOST_PORT_MAX - MINIO_HOST_PORT_MIN + 1));
+}
+
 function dockerAvailable(): boolean {
   try {
     return Bun.spawnSync(['docker', 'info']).exitCode === 0;
@@ -281,7 +297,7 @@ function probeFetchCommand(execPath: string, port: number): string[] {
  * real cause, so a green-but-skipped run is never mistaken for full coverage.
  */
 function probeDockerPortPublishing(dependencies: DockerPublishProbeDependencies): boolean {
-  const port = 20000 + Math.floor(dependencies.random() * 20000);
+  const port = pickMinioHostPort(() => dependencies.random());
   const run = dependencies.runSync(minioRunCommand(port, dependencies.sessionId));
   if (run.exitCode !== 0) {
     dependencies.warn(
@@ -675,8 +691,7 @@ export function createSharedMinioHarness(dependencies: SharedMinioHarnessDepende
 
     ensureImagePulled();
 
-    // Random high port avoids collisions with a locally running MinIO.
-    const port = 20000 + Math.floor(dependencies.random() * 20000);
+    const port = pickMinioHostPort(() => dependencies.random());
     lifecycle.beginLaunch();
     let proc: SyncCommandResult;
     try {
