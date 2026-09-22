@@ -9,6 +9,7 @@
  */
 
 import { describe, expect, it } from 'bun:test';
+import { resolveActingUserName } from '../connection/bolt-client';
 import { type SlackIdentitySource, resolvePresentedIdentity } from '../plugin';
 
 const BOT: Pick<SlackIdentitySource, 'botUserId' | 'botName'> = {
@@ -72,5 +73,67 @@ describe('resolvePresentedIdentity', () => {
     });
 
     expect(presented).toEqual({ profileName: undefined, ownerIdentifier: 'U0C3SF1QGLU' });
+  });
+});
+
+describe('resolveActingUserName', () => {
+  const HUMAN = 'U05J8EZQ1S7';
+
+  /** A user client whose users.info answers with `respond` and records its arguments. */
+  function userClient(respond: () => Promise<unknown>): {
+    client: Parameters<typeof resolveActingUserName>[0];
+    calls: unknown[];
+  } {
+    const calls: unknown[] = [];
+    const client = {
+      users: {
+        info: (args: unknown) => {
+          calls.push(args);
+          return respond();
+        },
+      },
+    } as unknown as Parameters<typeof resolveActingUserName>[0];
+    return { client, calls };
+  }
+
+  it('presents the profile display name, not the auth.test username', async () => {
+    const { client, calls } = userClient(() =>
+      Promise.resolve({
+        ok: true,
+        user: {
+          id: HUMAN,
+          name: 'felipe',
+          profile: { display_name: 'Felipe Rosa', real_name: 'Felipe Rosa da Silva' },
+        },
+      }),
+    );
+
+    expect(await resolveActingUserName(client, HUMAN, 'felipe')).toBe('Felipe Rosa');
+    expect(calls).toEqual([{ user: HUMAN }]);
+  });
+
+  it('falls back to the real name when the display name is empty', async () => {
+    const { client } = userClient(() =>
+      Promise.resolve({
+        ok: true,
+        user: { id: HUMAN, name: 'felipe', profile: { display_name: '', real_name: 'Felipe Rosa da Silva' } },
+      }),
+    );
+
+    expect(await resolveActingUserName(client, HUMAN, 'felipe')).toBe('Felipe Rosa da Silva');
+  });
+
+  it('keeps the username when the profile carries no name', async () => {
+    const { client } = userClient(() =>
+      Promise.resolve({ ok: true, user: { id: HUMAN, name: 'felipe', profile: {} } }),
+    );
+
+    expect(await resolveActingUserName(client, HUMAN, 'felipe')).toBe('felipe');
+  });
+
+  it('keeps the username when users.info fails', async () => {
+    const { client } = userClient(() => Promise.reject(new Error('missing_scope')));
+
+    expect(await resolveActingUserName(client, HUMAN, 'felipe')).toBe('felipe');
   });
 });

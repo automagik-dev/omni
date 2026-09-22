@@ -39,7 +39,7 @@ import { resolveStreamMode, resolveStreamThrottle } from './config/stream-mode';
 import type { SlackAttachment, SlackEventBody, SlackRevocation, SlackRoutingFields } from './connection/app-receiver';
 import { SlackAppReceiver, receiverKeyFor } from './connection/app-receiver';
 import type { SocketConnectionState } from './connection/bolt-client';
-import { buildActingClients, resolveWorkspaceIdentity } from './connection/bolt-client';
+import { buildActingClients, resolveActingUserName, resolveWorkspaceIdentity } from './connection/bolt-client';
 import type { AgentSessionStoppedArgs } from './handlers/agent-sessions';
 import type { CommandPayload, SlackCommandEvent } from './handlers/commands';
 import { setupCommandHandlers } from './handlers/commands';
@@ -648,8 +648,9 @@ export class SlackPlugin extends BaseChannelPlugin {
   /**
    * Resolve the authorizing human's identity from the user token (#889).
    *
-   * One `auth.test` carries both the id and the display name, so the name the
-   * instance presents costs no extra Slack call.
+   * `auth.test` carries the id and the username; the name the instance
+   * presents is the profile's display name when Slack has one
+   * ({@link resolveActingUserName}), with the username as the fallback.
    */
   private async resolveActingUserId(
     userClient: WebClient,
@@ -657,7 +658,10 @@ export class SlackPlugin extends BaseChannelPlugin {
     try {
       const auth = await userClient.auth.test();
       const actingUserId = auth.user_id ?? undefined;
-      const actingUserName = auth.user ?? undefined;
+      const username = auth.user ?? undefined;
+      const actingUserName = actingUserId
+        ? await resolveActingUserName(userClient, actingUserId, username, this.logger)
+        : username;
       this.logger.info('Acting user identity resolved', { actingUserId, actingUser: actingUserName });
       return { actingUserId, actingUserName };
     } catch (error) {

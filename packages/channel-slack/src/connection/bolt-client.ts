@@ -554,6 +554,33 @@ export async function resolveWorkspaceIdentity(
 }
 
 /**
+ * The name Slack shows for the authorizing human in user mode (#889).
+ *
+ * `auth.test` returns the account's username (`user`), which is not the name
+ * people see in Slack. `users.info` carries the profile's display name and,
+ * when that is empty, the real name; the user token's `users:read` scope
+ * covers the call. The username stays the fallback when the lookup fails or
+ * both profile names are empty, so a nicer name can never block a connect.
+ */
+export async function resolveActingUserName(
+  userClient: Pick<WebClient, 'users'>,
+  actingUserId: string,
+  username: string | undefined,
+  logger?: Pick<Logger, 'debug'>,
+): Promise<string | undefined> {
+  try {
+    const result = await userClient.users.info({ user: actingUserId });
+    const profile = result.user?.profile;
+    return profile?.display_name || profile?.real_name || username;
+  } catch (error) {
+    logger?.debug('users.info failed for the acting user; presenting the auth.test username', {
+      error: String(error),
+    });
+    return username;
+  }
+}
+
+/**
  * Wait (bounded) until the Socket Mode WebSocket is actually open.
  *
  * Resolves immediately when the socket is already open; otherwise waits for
