@@ -111,6 +111,62 @@ interface PluginInternals {
   ): { key: string; receiver: SlackAppReceiver };
   attachments: Map<string, SlackAttachment>;
   instanceConfigs: Map<string, InstanceConfig>;
+  /** The per-instance state a revocation has to release, as `disconnect()` does. */
+  slackConfigs: Map<string, SlackConfig>;
+  inboundHandlers: Map<string, (msg: Record<string, unknown>) => Promise<void>>;
+  lastSeenTs: Map<string, Map<string, string>>;
+  userNameCache: Map<string, string | null>;
+  activeThreads: Map<string, string>;
+  presenceStatusTimers: Map<string, ReturnType<typeof setTimeout>>;
+  pendingAckReactions: Map<string, string>;
+  dedupeCaches: Map<string, DedupeCache>;
+  debouncers: Map<string, DebounceManager>;
+}
+
+/**
+ * Fill every per-instance map the plugin keeps, the way a live instance fills
+ * them: a resolved display name, an active thread, a status timer, an ack
+ * reaction, a last-seen ts, an inbound handler and the reliability caches.
+ */
+function seedInstanceState(internals: PluginInternals, attachment: SlackAttachment): void {
+  const instanceId = attachment.instanceId;
+  internals.slackConfigs.set(instanceId, attachment.config);
+  internals.inboundHandlers.set(instanceId, async () => undefined);
+  internals.lastSeenTs.set(instanceId, new Map([['C_TEAM', '1000.0001']]));
+  internals.userNameCache.set(`${instanceId}:U_SOMEONE`, 'Someone');
+  internals.activeThreads.set(`${instanceId}:C_TEAM`, '1000.0001');
+  internals.presenceStatusTimers.set(
+    `${instanceId}:C_TEAM:1000.0001`,
+    setTimeout(() => undefined, 60_000),
+  );
+  internals.pendingAckReactions.set(`${instanceId}:C_TEAM:1000.0001`, 'eyes');
+  internals.dedupeCaches.set(instanceId, attachment.dedupeCache);
+  internals.debouncers.set(instanceId, attachment.debouncer);
+}
+
+/** Every per-instance map key still mentioning an instance. */
+function stateKeysFor(internals: PluginInternals, instanceId: string): string[] {
+  const keys: string[] = [];
+  const prefixed = [
+    internals.userNameCache,
+    internals.activeThreads,
+    internals.presenceStatusTimers,
+    internals.pendingAckReactions,
+  ];
+  for (const map of prefixed) {
+    for (const key of map.keys()) if (key.startsWith(`${instanceId}:`)) keys.push(key);
+  }
+  const keyed = [
+    internals.slackConfigs,
+    internals.inboundHandlers,
+    internals.lastSeenTs,
+    internals.dedupeCaches,
+    internals.debouncers,
+  ];
+  for (const map of keyed) {
+    if (map.has(instanceId)) keys.push(instanceId);
+  }
+  return keys;
 }
 
 async function makeHarness(): Promise<{
@@ -278,5 +334,27 @@ describe('app_uninstalled', () => {
     expect((await plugin.getStatus(bot.instanceId)).message).toBe('app_uninstalled');
     expect((await plugin.getStatus(ana.instanceId)).message).toBe('app_uninstalled');
     expect(disconnects(published).map((payload) => payload.reason)).toEqual(['app_uninstalled', 'app_uninstalled']);
+  });
+});
+
+describe('per-instance cleanup', () => {
+  it('releases the revoked instance state exactly as a disconnect does, and only its own', async () => {
+    const { plugin, internals, receiver, app } = await makeHarness();
+    const ana = install(internals, receiver, makeAttachment('inst-ana', { authMode: 'user', actingUserId: HUMAN_A }));
+    const ben = install(internals, receiver, makeAttachment('inst-ben', { authMode: 'user', actingUserId: HUMAN_B }));
+    seedInstanceState(internals, ana);
+    seedInstanceState(internals, ben);
+    expect(stateKeysFor(internals, ben.instanceId).length).toBeGreaterThan(0);
+
+    await fire(app, 'tokens_revoked', { type: 'tokens_revoked', tokens: { oauth: [HUMAN_B] } });
+
+    // A revoked install is out of service as definitively as a disconnected
+    // one: nothing of Ben's is left behind, and nothing of Ana's is touched.
+    expect(stateKeysFor(internals, ben.instanceId)).toEqual([]);
+    expect(stateKeysFor(internals, ana.instanceId).length).toBeGreaterThan(0);
+
+    // The same release runs on an ordinary disconnect.
+    await plugin.disconnect(ana.instanceId);
+    expect(stateKeysFor(internals, ana.instanceId)).toEqual([]);
   });
 });

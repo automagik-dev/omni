@@ -244,6 +244,8 @@ export interface SlackInteractionPayload {
   actionId: string;
   /** User who triggered the action */
   userId: string;
+  /** Workspace the interaction happened in; what routes it on a shared receiver */
+  teamId?: string;
   /** Channel ID (if applicable) */
   channelId?: string;
   /** Thread TS (if applicable) */
