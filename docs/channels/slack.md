@@ -69,6 +69,29 @@ Several members of one workspace share a single Bolt receiver and a single
 app-level token. Each event is delivered only to the instances Slack
 authorized it for, so one member's DMs never reach another member's instance.
 
+#### Personal installs add no bot
+
+A `user`-mode install asks Slack for the member's user scopes only, so it
+**adds no bot user to the workspace**: the instance holds just that person's
+`xoxp` token, and the deployment's app-level token opens the socket. The
+person's token covers receiving what they can see, sending, reacting,
+uploading and downloading files, thread history and search; a message that
+mentions the person counts as a mention of the instance.
+
+- **Bot-only events are not available.** `app_mention`, pins
+  (`pin_added`/`pin_removed`), channel renames, member joins and leaves, slash
+  commands and the native stop button (`agent_session_stopped`) are delivered
+  to a bot, and a personal install has none. Install with `--mode bot` when a
+  workspace needs them.
+- **A bot from an earlier install stays.** Before this change a personal
+  install also installed the app's bot. That bot user remains in the workspace
+  until the app is removed from it — re-authorizing does not remove it — and
+  an event only that bot can see is never delivered to a bot-less instance.
+- **Members who connected earlier re-authorize once.** Their instances were
+  saved with the workspace bot token and keep running on it. Running
+  `omni slack connect` once more (or pressing **Connect Slack**) drops the
+  stored bot token and moves the instance to the person's token alone.
+
 #### Already connected? Re-authorize once for inbound files
 
 User mode now requests the `files:read` user scope, because an inbound file is
@@ -158,7 +181,7 @@ February 2027**; new Slack apps can only use `agent_view`, and the switch from
    **"From an app manifest"** with the manifest generated below.
 3. For Socket Mode (default): an **app-level token** (`xapp-...`) with
    `connections:write`.
-4. A **bot token** (`xoxb-...`) issued on install.
+4. A **bot token** (`xoxb-...`) issued on install — optional in user-token mode.
 5. Optional: a **user token** (`xoxp-...`) if you want user-token mode —
    required for message search (see below).
 
@@ -235,7 +258,7 @@ instance act as a user instead of (only) a bot:
 {
   "channel": "slack",
   "config": {
-    "botToken": "xoxb-...",   // still required — Bolt authenticates with it
+    "botToken": "xoxb-...",   // optional in user mode
     "appToken": "xapp-...",
     "authMode": "user",
     "userToken": "xoxp-..."   // prefix-validated; an xoxb here is rejected
@@ -243,10 +266,13 @@ instance act as a user instead of (only) a bot:
 }
 ```
 
-The **bot token stays mandatory** in user mode: it authenticates the Socket
-Mode connection and is the fallback for scopes the user token lacks. User mode
-is required for `search.messages` (the `search:read` scope only exists as a
-user scope).
+The **bot token is optional** in user mode: the app-level token (or, in HTTP
+mode, the signing secret) is what connects, and every action goes out with
+the user token. Without a bot token the instance runs on the user token alone
+and misses the bot-only events listed under
+[Personal installs add no bot](#personal-installs-add-no-bot); with one, it
+also receives the bot's events. User mode is required for `search.messages`
+(the `search:read` scope only exists as a user scope).
 
 ### 3. Verify
 
