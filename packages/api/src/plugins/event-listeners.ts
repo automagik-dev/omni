@@ -34,7 +34,8 @@ export async function setupConnectionListener(eventBus: EventBus, db?: Database)
 
   try {
     await eventBus.subscribe('instance.connected', async (event) => {
-      const { instanceId, channelType, profileName, profilePicUrl, ownerIdentifier } = event.payload;
+      const { instanceId, channelType, profileName, profilePicUrl, ownerIdentifier, teamId, actingUserId } =
+        event.payload;
 
       // Clear QR code
       clearQrCode(instanceId);
@@ -47,16 +48,32 @@ export async function setupConnectionListener(eventBus: EventBus, db?: Database)
       if (db) {
         try {
           await runConsumerInTenantContext(db, event, async () => {
-            await scopedHandle(db)
-              .update(instances)
-              .set({
-                isActive: true,
-                ownerIdentifier: ownerIdentifier || null,
-                profileName: profileName || null,
-                profilePicUrl: profilePicUrl || null,
-                updatedAt: new Date(),
-              })
-              .where(eq(instances.id, instanceId));
+            const handle = scopedHandle(db);
+            const patch: Partial<typeof instances.$inferInsert> = {
+              isActive: true,
+              ownerIdentifier: ownerIdentifier || null,
+              profileName: profileName || null,
+              profilePicUrl: profilePicUrl || null,
+              updatedAt: new Date(),
+            };
+
+            // Slack workspace identity (slack-personal-oauth): a manually
+            // created instance has no team id until it connects, and an OAuth
+            // re-authorization upserts by (team, user) — so the workspace is
+            // persisted on every connect that reports one.
+            if (teamId) patch.slackTeamId = teamId;
+            // The acting user, in contrast, is written ONCE: the row's own
+            // identity must not be repointed at whoever connected last.
+            if (actingUserId) {
+              const existing = await handle
+                .select({ slackUserId: instances.slackUserId })
+                .from(instances)
+                .where(eq(instances.id, instanceId))
+                .limit(1);
+              if (!existing[0]?.slackUserId) patch.slackUserId = actingUserId;
+            }
+
+            await handle.update(instances).set(patch).where(eq(instances.id, instanceId));
           });
         } catch (dbError) {
           instanceLog.error('Failed to update database', { instanceId, error: String(dbError) });

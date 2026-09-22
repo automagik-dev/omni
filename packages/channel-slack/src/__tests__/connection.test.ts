@@ -61,11 +61,16 @@ mock.module('@slack/web-api', () => {
     constructor(token?: string, _opts?: Record<string, unknown>) {
       this.token = token;
       this.auth = {
-        // A user token answers as the human; 'xoxp-nouser' is the token whose
+        // A user token answers as the human named in it, so two personal
+        // installs of one workspace get DISTINCT acting users: 'xoxp-ana' is
+        // U_ANA, 'xoxp-human' is U_HUMAN. 'xoxp-nouser' is the token whose
         // auth.test comes back WITHOUT a user_id — the user-mode failure case.
         test: async () => {
           if (this.token?.startsWith('xoxp-nouser')) return { ok: true };
-          if (this.token?.startsWith('xoxp-')) return { ok: true, user_id: 'U_HUMAN', user: 'human' };
+          if (this.token?.startsWith('xoxp-')) {
+            const name = this.token.slice('xoxp-'.length);
+            return { ok: true, user_id: `U_${name.toUpperCase()}`, user: name };
+          }
           return {
             ok: true,
             user_id: 'U0BOT',
@@ -363,11 +368,29 @@ interface SharedInternals {
 
 const APP_TOKEN = 'xapp-shared';
 
+const ANA = 'U_ANA';
+const BEN = 'U_BEN';
+
 function configFor(instanceId: string, appToken = APP_TOKEN): InstanceConfig {
   return {
     instanceId,
     credentials: {},
     options: { botToken: 'xoxb-shared', appToken },
+  };
+}
+
+/**
+ * A personal (user-mode) install of the shared workspace.
+ *
+ * Two instances of ONE workspace behind one Slack app are personal installs:
+ * a second BOT-mode instance of the same workspace is refused at attach time
+ * (see app-receiver.test.ts), because both would answer for the same bot user.
+ */
+function userConfigFor(instanceId: string, userToken: string, appToken = APP_TOKEN): InstanceConfig {
+  return {
+    instanceId,
+    credentials: {},
+    options: { botToken: 'xoxb-shared', appToken, authMode: 'user', userToken },
   };
 }
 
@@ -398,12 +421,24 @@ function recordInbound(internals: SharedInternals, instanceIds: string[]): strin
   return reached;
 }
 
-/** Deliver one workspace message through every listener the receiver registered. */
-async function deliverTeamMessage(teamId = 'T_SHARED'): Promise<void> {
+/**
+ * Deliver one workspace message through every listener the receiver registered.
+ *
+ * Delivery on a shared workspace is narrowed to the attachments Slack
+ * authorized, so the envelope carries an authorization per acting user (and
+ * `is_bot` for the bot install). With no `event_context` the receiver takes the
+ * envelope as the whole answer and looks nothing up.
+ */
+async function deliverTeamMessage(teamId = 'T_SHARED', authorizedUserIds: string[] = [ANA, BEN]): Promise<void> {
+  const authorizations = authorizedUserIds.map((userId) => ({
+    team_id: teamId,
+    user_id: userId,
+    is_bot: userId === 'U0BOT',
+  }));
   for (const listener of messageListeners) {
     await listener({
       message: { channel: 'C1', ts: '1700000000.000100', user: 'U_HUMAN', text: 'hi' },
-      body: { team_id: teamId },
+      body: { team_id: teamId, authorizations },
     });
   }
 }
@@ -412,14 +447,16 @@ describe('SlackPlugin — instances behind one Slack app share one receiver', ()
   it('two instances on one app token share a single receiver, and one team event reaches both', async () => {
     const { plugin, internals } = await makeSharedPlugin();
 
-    await plugin.connect('inst-a', configFor('inst-a'));
-    await plugin.connect('inst-b', configFor('inst-b'));
+    await plugin.connect('inst-a', userConfigFor('inst-a', 'xoxp-ana'));
+    await plugin.connect('inst-b', userConfigFor('inst-b', 'xoxp-ben'));
 
     // One Slack app ⇒ one receiver ⇒ one socket, with both instances attached.
     expect(internals.receivers.size).toBe(1);
     expect(messageListeners).toHaveLength(1);
     const receiver = [...internals.receivers.values()][0];
     expect(receiver?.attachments.size).toBe(2);
+    expect(internals.attachments.get('inst-a')?.actingUserId).toBe(ANA);
+    expect(internals.attachments.get('inst-b')?.actingUserId).toBe(BEN);
 
     const reached = recordInbound(internals, ['inst-a', 'inst-b']);
     await deliverTeamMessage();
@@ -438,8 +475,8 @@ describe('SlackPlugin — instances behind one Slack app share one receiver', ()
   it('disconnecting one of two attached instances leaves the socket open for the other', async () => {
     const { plugin, internals } = await makeSharedPlugin();
 
-    await plugin.connect('inst-a', configFor('inst-a'));
-    await plugin.connect('inst-b', configFor('inst-b'));
+    await plugin.connect('inst-a', userConfigFor('inst-a', 'xoxp-ana'));
+    await plugin.connect('inst-b', userConfigFor('inst-b', 'xoxp-ben'));
 
     await plugin.disconnect('inst-a');
 
@@ -458,8 +495,8 @@ describe('SlackPlugin — instances behind one Slack app share one receiver', ()
   it('the last disconnect stops the receiver and drops it from the map', async () => {
     const { plugin, internals } = await makeSharedPlugin();
 
-    await plugin.connect('inst-a', configFor('inst-a'));
-    await plugin.connect('inst-b', configFor('inst-b'));
+    await plugin.connect('inst-a', userConfigFor('inst-a', 'xoxp-ana'));
+    await plugin.connect('inst-b', userConfigFor('inst-b', 'xoxp-ben'));
 
     await plugin.disconnect('inst-a');
     await plugin.disconnect('inst-b');
@@ -471,11 +508,11 @@ describe('SlackPlugin — instances behind one Slack app share one receiver', ()
   it('reconnecting an attached instance detaches it first and re-attaches it newer', async () => {
     const { plugin, internals } = await makeSharedPlugin();
 
-    await plugin.connect('inst-a', configFor('inst-a'));
-    await plugin.connect('inst-b', configFor('inst-b'));
+    await plugin.connect('inst-a', userConfigFor('inst-a', 'xoxp-ana'));
+    await plugin.connect('inst-b', userConfigFor('inst-b', 'xoxp-ben'));
     const firstAttachedAt = internals.attachments.get('inst-a')?.attachedAt ?? 0;
 
-    await plugin.connect('inst-a', configFor('inst-a'));
+    await plugin.connect('inst-a', userConfigFor('inst-a', 'xoxp-ana'));
 
     // Detached before the re-attach: still exactly one attachment for inst-a,
     // on the same still-running receiver, and strictly newer than before.

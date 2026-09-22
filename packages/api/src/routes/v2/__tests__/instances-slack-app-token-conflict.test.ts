@@ -1,6 +1,14 @@
 /**
- * #1185: two active Slack instances on one app token silently split Socket
- * Mode events. create / update / connect must refuse unless `force: true`.
+ * #1185, narrowed by slack-personal-oauth: instances behind one Slack app token
+ * now SHARE one Socket Mode connection, and many members of a workspace
+ * connecting personally (user mode) is the point of the feature — so one app
+ * token is no longer a conflict by itself.
+ *
+ * What stays singular is the BOT identity of a workspace: two bot-mode
+ * instances on one app token and one workspace would both answer as the same
+ * bot user and handle every event twice. create / update / connect refuse only
+ * that pair, keep the `SLACK_APP_TOKEN_IN_USE` code and the `force` escape, and
+ * never echo the token.
  */
 
 import { describe, expect, mock, test } from 'bun:test';
@@ -11,8 +19,10 @@ import { instancesRoutes } from '../instances';
 const SELF_ID = '33333333-3333-4333-8333-333333333333';
 const OTHER_ID = '44444444-4444-4444-8444-444444444444';
 const TOKEN = 'xapp-1-shared-secret';
+const TEAM = 'T_WORKSPACE';
+const OTHER_TEAM = 'T_ELSEWHERE';
 
-function mount(others: Record<string, unknown>[]) {
+function mount(others: Record<string, unknown>[], selfOverrides: Record<string, unknown> = {}) {
   const app = new Hono<{ Variables: AppVariables }>();
   const self = {
     id: SELF_ID,
@@ -21,6 +31,9 @@ function mount(others: Record<string, unknown>[]) {
     isActive: true,
     slackAppToken: TOKEN,
     slackBotToken: 'xoxb',
+    slackAuthMode: 'bot',
+    slackTeamId: TEAM,
+    ...selfOverrides,
   };
   const calls = { create: 0, update: 0, connect: 0 };
 
@@ -69,28 +82,73 @@ const other = (overrides: Record<string, unknown> = {}) => ({
   channel: 'slack',
   isActive: true,
   slackAppToken: TOKEN,
+  slackAuthMode: 'bot',
+  slackTeamId: TEAM,
   ...overrides,
 });
 
-describe('shared Slack app token (#1185)', () => {
-  test('connect refuses a duplicate, naming the other instance, without leaking the token', async () => {
+describe('shared Slack app token, bot identity (#1185 / slack-personal-oauth)', () => {
+  test('a second bot-mode instance in the same workspace is refused, naming it, without leaking the token', async () => {
     const { app, calls } = mount([other()]);
     const res = await app.request(`/instances/${SELF_ID}/connect`, json({}));
     expect(res.status).toBe(409);
     const text = await res.text();
+    expect(text).toContain('SLACK_APP_TOKEN_IN_USE');
     expect(text).toContain('fde-evaluator');
-    expect(text).toContain('Slack delivers each event to only one connection per app');
+    expect(text).toContain('one bot identity');
     expect(text).not.toContain(TOKEN);
     expect(calls.connect).toBe(0);
   });
 
-  test('create and update refuse a duplicate', async () => {
+  test('two user-mode instances on one app token are accepted', async () => {
+    const { app, calls } = mount([other({ slackAuthMode: 'user', slackUserId: 'U_BEN' })], {
+      slackAuthMode: 'user',
+      slackUserId: 'U_ANA',
+    });
+
+    const connected = await app.request(`/instances/${SELF_ID}/connect`, json({}));
+    expect(connected.status).toBe(200);
+    expect(calls.connect).toBe(1);
+
+    const created = await app.request(
+      '/instances',
+      json({ name: 'ana', channel: 'slack', slackAppToken: TOKEN, slackAuthMode: 'user' }),
+    );
+    expect(created.status).toBe(201);
+    expect(calls.create).toBe(1);
+  });
+
+  test('a user-mode instance joining a workspace that already has the bot is accepted', async () => {
+    const { app, calls } = mount([other()], { slackAuthMode: 'user', slackUserId: 'U_ANA' });
+    const res = await app.request(`/instances/${SELF_ID}/connect`, json({}));
+    expect(res.status).toBe(200);
+    expect(calls.connect).toBe(1);
+  });
+
+  test('two bot-mode instances in DISTINCT known workspaces are accepted', async () => {
+    const { app, calls } = mount([other({ slackTeamId: OTHER_TEAM })]);
+    const res = await app.request(`/instances/${SELF_ID}/connect`, json({}));
+    expect(res.status).toBe(200);
+    expect(calls.connect).toBe(1);
+  });
+
+  test('create and update refuse a second bot-mode instance (workspace not known yet at create)', async () => {
     const { app, calls } = mount([other()]);
     const created = await app.request('/instances', json({ name: 'dup', channel: 'slack', slackAppToken: TOKEN }));
     expect(created.status).toBe(409);
     const updated = await app.request(`/instances/${SELF_ID}`, { ...json({ slackAppToken: TOKEN }), method: 'PATCH' });
     expect(updated.status).toBe(409);
     expect(calls.create + calls.update).toBe(0);
+  });
+
+  test('create as a user-mode instance is accepted even against a bot-mode row on the same token', async () => {
+    const { app, calls } = mount([other()]);
+    const created = await app.request(
+      '/instances',
+      json({ name: 'personal', channel: 'slack', slackAppToken: TOKEN, slackAuthMode: 'user' }),
+    );
+    expect(created.status).toBe(201);
+    expect(calls.create).toBe(1);
   });
 
   test('force: true overrides', async () => {
@@ -115,5 +173,11 @@ describe('shared Slack app token (#1185)', () => {
     const { app } = mount([other({ slackAppToken: 'xapp-1-different' })]);
     const res = await app.request(`/instances/${SELF_ID}/connect`, json({}));
     expect(res.status).toBe(200);
+  });
+
+  test('an unknown workspace on either side is still refused, since it cannot be cleared', async () => {
+    const { app } = mount([other({ slackTeamId: null })]);
+    const res = await app.request(`/instances/${SELF_ID}/connect`, json({}));
+    expect(res.status).toBe(409);
   });
 });

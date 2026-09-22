@@ -225,7 +225,9 @@ describe('SlackAppReceiver', () => {
     expect(constructedApps).toHaveLength(1);
 
     receiver.attach(makeAttachment('inst-a', 'T1', 'xoxb-a', 1));
-    receiver.attach(makeAttachment('inst-b', 'T1', 'xoxb-b', 2));
+    // A workspace has one bot identity, so the second instance of T1 is a
+    // personal (user-mode) install — the shape this receiver exists for.
+    receiver.attach(makeAttachment('inst-b', 'T1', 'xoxb-b', 2, { authMode: 'user', actingUserId: 'U_HUMAN' }));
 
     // Still exactly one App; handlers were registered once, at creation,
     // never per attachment.
@@ -242,7 +244,7 @@ describe('SlackAppReceiver', () => {
     expect(options.socketMode).toBe(true);
     expect(socketReceiverOptions).toEqual([{ appToken: 'xapp-shared-app-token' }]);
 
-    // Revocation events are registered as no-op listeners in this group.
+    // Both revocation events have a listener, registered once for the receiver.
     expect(events.get('tokens_revoked')).toHaveLength(1);
     expect(events.get('app_uninstalled')).toHaveLength(1);
 
@@ -291,8 +293,11 @@ describe('SlackAppReceiver', () => {
       teamId: 'T1',
     });
 
-    // A later attach for the same team supersedes the earlier one.
-    receiver.attach(makeAttachment('inst-b', 'T1', 'xoxb-b', 2));
+    // A later attach for the same team supersedes the earlier one. A second
+    // BOT-mode attach for a workspace is refused unless it says it is
+    // deliberately replacing the first — a reinstalled bot token.
+    expect(() => receiver.attach(makeAttachment('inst-b', 'T1', 'xoxb-b', 2))).toThrow(SlackError);
+    receiver.attach(makeAttachment('inst-b', 'T1', 'xoxb-b', 2), { force: true });
     receiver.attach(makeAttachment('inst-c', 'T2', 'xoxb-c', 3));
     await expect(authorize(source('T1'))).resolves.toMatchObject({ botToken: 'xoxb-b', botUserId: 'U_inst-b' });
     await expect(authorize(source('T2'))).resolves.toMatchObject({ botToken: 'xoxb-c' });
@@ -349,26 +354,77 @@ describe('SlackAppReceiver', () => {
     expect(app.stopCalls).toBe(1);
   });
 
-  it('targetsFor returns all attachments of the team', async () => {
+  it('targetsFor narrows a shared workspace to the authorized attachments', async () => {
     const { receiver } = makeReceiver();
     receiver.attach(makeAttachment('inst-a', 'T1', 'xoxb-a', 1));
     receiver.attach(makeAttachment('inst-b', 'T1', 'xoxb-b', 2, { authMode: 'user', actingUserId: 'U_HUMAN' }));
     receiver.attach(makeAttachment('inst-c', 'T2', 'xoxb-c', 3));
 
-    const t1 = await receiver.targetsFor({ team_id: 'T1', event: { type: 'message' } });
-    expect(t1.map((a) => a.instanceId)).toEqual(['inst-a', 'inst-b']);
-    expect(t1[1]?.actingUserId).toBe('U_HUMAN');
+    // T1 has two attachments, so the envelope's authorizations decide. No
+    // `event_context` here, so nothing is looked up over the API either.
+    const both = await receiver.targetsFor({
+      team_id: 'T1',
+      event: { type: 'message' },
+      authorizations: [
+        { team_id: 'T1', user_id: 'U_inst-a', is_bot: true },
+        { team_id: 'T1', user_id: 'U_HUMAN', is_bot: false },
+      ],
+    });
+    expect(both.map((a) => a.instanceId)).toEqual(['inst-a', 'inst-b']);
 
+    const humanOnly = await receiver.targetsFor({
+      team_id: 'T1',
+      authorizations: [{ team_id: 'T1', user_id: 'U_HUMAN', is_bot: false }],
+    });
+    expect(humanOnly.map((a) => a.instanceId)).toEqual(['inst-b']);
+    expect(humanOnly[0]?.actingUserId).toBe('U_HUMAN');
+
+    const botOnly = await receiver.targetsFor({
+      team_id: 'T1',
+      authorizations: [{ team_id: 'T1', user_id: 'U_inst-a', is_bot: true }],
+    });
+    expect(botOnly.map((a) => a.instanceId)).toEqual(['inst-a']);
+
+    // A workspace with ONE attachment is delivered to unchecked — no
+    // authorizations envelope needed, and none consulted.
     const t2 = await receiver.targetsFor({ team_id: 'T2' });
     expect(t2.map((a) => a.instanceId)).toEqual(['inst-c']);
 
     // Without an envelope team_id the inner event's team is the fallback.
-    const viaEvent = await receiver.targetsFor({ event: { type: 'message', team: 'T1' } });
-    expect(viaEvent.map((a) => a.instanceId)).toEqual(['inst-a', 'inst-b']);
+    const viaEvent = await receiver.targetsFor({ event: { type: 'message', team: 'T2' } });
+    expect(viaEvent.map((a) => a.instanceId)).toEqual(['inst-c']);
 
-    // No authorization check: an unknown or missing team_id is an empty list, never a throw.
+    // An unknown or missing team_id is an empty list, never a throw.
     await expect(receiver.targetsFor({ team_id: 'T9' })).resolves.toEqual([]);
     await expect(receiver.targetsFor({})).resolves.toEqual([]);
+  });
+
+  it('refuses a second bot-mode attachment for a workspace, never a user-mode one', () => {
+    const { receiver } = makeReceiver();
+    receiver.attach(makeAttachment('inst-a', 'T1', 'xoxb-a', 1));
+
+    let refused: unknown;
+    try {
+      receiver.attach(makeAttachment('inst-dup', 'T1', 'xoxb-dup', 2));
+    } catch (error) {
+      refused = error;
+    }
+    expect(refused).toBeInstanceOf(SlackError);
+    expect((refused as SlackError).channelCode).toBe(SlackErrorCode.BOT_INSTANCE_EXISTS);
+    expect(receiver.attachments.has('inst-dup')).toBe(false);
+
+    // Personal installs of the same workspace are unlimited.
+    receiver.attach(makeAttachment('inst-u1', 'T1', 'xoxb-a', 3, { authMode: 'user', actingUserId: 'U_ONE' }));
+    receiver.attach(makeAttachment('inst-u2', 'T1', 'xoxb-a', 4, { authMode: 'user', actingUserId: 'U_TWO' }));
+    expect([...receiver.attachments.keys()]).toEqual(['inst-a', 'inst-u1', 'inst-u2']);
+
+    // Another workspace's bot is a different bot identity.
+    receiver.attach(makeAttachment('inst-b', 'T2', 'xoxb-b', 5));
+    expect(receiver.attachments.has('inst-b')).toBe(true);
+
+    // Re-attaching the SAME instance (a reconnect) is not a second bot.
+    receiver.attach(makeAttachment('inst-a', 'T1', 'xoxb-a2', 6));
+    expect(receiver.botClientFor('T1')?.token).toBe('xoxb-a2');
   });
 });
 

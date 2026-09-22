@@ -384,6 +384,14 @@ export const SlackErrorCode = {
   COMMAND_FAILED: 'SLACK_COMMAND_FAILED',
   DM_REJECTED: 'SLACK_DM_REJECTED',
   CONNECTION_FAILED: 'SLACK_CONNECTION_FAILED',
+  /**
+   * A second bot-mode instance was attached to the same Slack app and the same
+   * workspace (slack-personal-oauth). Both would answer for the SAME bot user,
+   * so every event of that workspace would be acked and dispatched twice.
+   * Personal (user-mode) installs are unlimited; only the bot identity is
+   * singular per workspace.
+   */
+  BOT_INSTANCE_EXISTS: 'SLACK_BOT_INSTANCE_EXISTS',
 } as const;
 
 export type SlackErrorCodeType = (typeof SlackErrorCode)[keyof typeof SlackErrorCode];
@@ -402,6 +410,7 @@ const SLACK_CORE_CODE_MAP: Record<SlackErrorCodeType, CoreErrorCode> = {
   [SlackErrorCode.COMMAND_FAILED]: ERROR_CODES.UNKNOWN,
   [SlackErrorCode.DM_REJECTED]: ERROR_CODES.FORBIDDEN,
   [SlackErrorCode.CONNECTION_FAILED]: ERROR_CODES.CHANNEL_CONNECTION_FAILED,
+  [SlackErrorCode.BOT_INSTANCE_EXISTS]: ERROR_CODES.CONFLICT,
 };
 
 /**
