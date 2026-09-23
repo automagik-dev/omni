@@ -384,6 +384,26 @@ export function createApp(
   app.post('/api/v2/channels/asc/:instanceId/webhook', handleAscWebhook);
   app.get('/api/v2/channels/asc/:instanceId/webhook', handleAscWebhook);
 
+  // Public Zenvia webhook endpoint — auth-exempt, fed by Zenvia subscriptions.
+  // Zenvia signs nothing: authenticity rests on the per-instance path
+  // (unguessable instance UUID) plus the verify token the subscription echoes
+  // as a fixed `x-webhook-token` header, enforced by the plugin when configured.
+  // Must be mounted before protectedApp so Zenvia's servers can reach it.
+  app.post('/api/v2/channels/zenvia/:instanceId/webhook', async (c) => {
+    const channelRegistry = c.get('channelRegistry');
+
+    if (!channelRegistry) {
+      return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+    }
+
+    const plugin = channelRegistry.get('zenvia');
+    if (!plugin?.handleWebhook) {
+      return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: 'Zenvia plugin not loaded' } }, 503);
+    }
+
+    return plugin.handleWebhook(c.req.raw);
+  });
+
   // Public WhatsApp Business API (Meta) webhook endpoint — auth-exempt, signed by Meta with HMAC-SHA256.
   // Unlike Gupshup/Twilio, the URL is GLOBAL (no :instanceId in path): instance resolution
   // happens inside the plugin via `metadata.phone_number_id` from the payload.

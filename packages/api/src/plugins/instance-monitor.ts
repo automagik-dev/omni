@@ -231,6 +231,9 @@ export function buildInstanceConnectOptions(instance: {
   ascBaseUrl?: string | null;
   ascToken?: string | null;
   ascOriginador?: string | null;
+  zenviaApiToken?: string | null;
+  zenviaSenderId?: string | null;
+  zenviaHandoffSolution?: string | null;
   ascFlowBaseUrl?: string | null;
   ascFlowLogin?: string | null;
   ascFlowChave?: string | null;
@@ -256,6 +259,9 @@ export function buildInstanceConnectOptions(instance: {
   }
   if (instance.channel === 'asc') {
     applyAscOptions(options, instance);
+  }
+  if (instance.channel === 'zenvia') {
+    applyZenviaOptions(options, instance);
   }
   if (instance.channel === 'asc-flow') {
     applyAscFlowOptions(options, instance);
@@ -343,6 +349,27 @@ function applyAscOptions(
   if (instance.ascBaseUrl) options.ascBaseUrl = instance.ascBaseUrl;
   if (instance.ascToken) options.ascToken = instance.ascToken;
   if (instance.ascOriginador) options.ascOriginador = instance.ascOriginador;
+  if (instance.webhookVerifyToken) options.webhookVerifyToken = instance.webhookVerifyToken;
+}
+
+/**
+ * zenvia reconnect credentials — the plugin's `connect()` reads these from
+ * `config.options` (same keys as `config.credentials` in the manual connect
+ * route). Persisted on `instances` by the create/connect/PATCH routes. The
+ * webhook verify token reuses the shared webhookVerifyToken column.
+ */
+function applyZenviaOptions(
+  options: Record<string, unknown>,
+  instance: {
+    zenviaApiToken?: string | null;
+    zenviaSenderId?: string | null;
+    zenviaHandoffSolution?: string | null;
+    webhookVerifyToken?: string | null;
+  },
+): void {
+  if (instance.zenviaApiToken) options.zenviaApiToken = instance.zenviaApiToken;
+  if (instance.zenviaSenderId) options.zenviaSenderId = instance.zenviaSenderId;
+  if (instance.zenviaHandoffSolution) options.zenviaHandoffSolution = instance.zenviaHandoffSolution;
   if (instance.webhookVerifyToken) options.webhookVerifyToken = instance.webhookVerifyToken;
 }
 

@@ -28,6 +28,7 @@ const VALID_CHANNELS: Channel[] = [
   'hermes',
   'asc',
   'asc-flow',
+  'zenvia',
   'harness',
 ];
 

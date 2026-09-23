@@ -89,6 +89,7 @@
     "@omni/channel-telegram": "workspace:*",
     "@omni/channel-whatsapp": "workspace:*",
     "@omni/channel-whatsapp-business": "workspace:*",
+    "@omni/channel-zenvia": "workspace:*",
     "@omni/core": "workspace:*",
     "@omni/sdk": "workspace:*",
     "@types/node": "^22.10.3",

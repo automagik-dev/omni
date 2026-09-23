@@ -315,6 +315,17 @@ const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
       'fixed 200 acks with no row data.',
   },
   {
+    route: 'POST /api/v2/channels/zenvia/:instanceId/webhook',
+    class: 'public-by-contract',
+    justification:
+      "Zenvia subscription callback. Auth-exempt for Zenvia's servers, which sign nothing — the Zenvia API " +
+      'offers no HMAC mechanism, only fixed headers on the subscription. Authenticity rests on the per-instance ' +
+      'path (an unguessable instance UUID, the Gupshup precedent) plus the webhook verify token the subscription ' +
+      'sends as `x-webhook-token`, which the handler requires (constant-time compare) whenever it is configured ' +
+      'on the instance. The tenant comes from the server-side instance record addressed by the path, never from ' +
+      'a body or header claim. Responses are fixed 200 acks with no row data.',
+  },
+  {
     route: 'GET /api/v2/channels/asc/:instanceId/webhook',
     class: 'public-by-contract',
     justification:
