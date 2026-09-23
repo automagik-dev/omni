@@ -343,6 +343,11 @@ export function setupScheduler(services: Services, channelRegistry?: ChannelRegi
     },
   });
 
+  // Once per boot: flag poll sources as disabled without an allowlist, or re-arm them (#1239/#1240).
+  services.webhooks.reconcilePollAllowlist().catch((err) => {
+    log.error('Poll allowlist reconciliation failed', { error: err instanceof Error ? err.message : String(err) });
+  });
+
   // Poll connectors — every 30 seconds (#1186). Each source keeps its own
   // interval/backoff in poll_config; the tick only bounds scheduling latency.
   scheduler.register({

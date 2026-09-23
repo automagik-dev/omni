@@ -33,7 +33,7 @@ import {
 } from '@omni/db';
 import { and, eq, isNotNull, sql } from 'drizzle-orm';
 import { deriveIdempotencyKey, resolvePayloadPath } from '../lib/ingress-idempotency';
-import { executePoll, isPollDue, resolveAllowedCommand } from '../lib/poll-connector';
+import { executePoll, isPollAllowlistConfigured, isPollDue, resolveAllowedCommand } from '../lib/poll-connector';
 import { openCredentialField, sealCredentialField } from '../tenancy/sealed-credentials';
 import { currentTenantScope, scopedHandle } from '../tenancy/tenant-scope';
 import type { DeadLetterService } from './dead-letters';
@@ -157,8 +157,16 @@ export function resolveWebhookEventType(
 /** Validate a new/replaced poll config against the allowlist and schedule its first run now (#1186). */
 function armPollConfig(config: WebhookPollConfig): WebhookPollConfig {
   resolveAllowedCommand(config.command);
-  const { command, intervalSeconds, emitType, dedupKeyTemplate, env } = config;
-  return { command, intervalSeconds, emitType, dedupKeyTemplate, env, nextRunAt: new Date().toISOString() };
+  const { command, intervalSeconds, emitType, dedupKeyTemplate, env, maxBackoffSeconds } = config;
+  return {
+    command,
+    intervalSeconds,
+    emitType,
+    dedupKeyTemplate,
+    env,
+    maxBackoffSeconds,
+    nextRunAt: new Date().toISOString(),
+  };
 }
 
 /** Poll runs in flight in this process — one run at a time per source. */
@@ -872,6 +880,55 @@ export class WebhookService {
     return ran;
   }
 
+  /**
+   * Startup reconciliation of poll sources against the host allowlist (#1239/#1240).
+   * Allowlist missing: log at error and mark every enabled poll source
+   * `livenessStatus: 'disabled'` so status shows it instead of a slow stall.
+   * Allowlist valid: re-arm — clear failures, run now, lift `disabled`.
+   */
+  async reconcilePollAllowlist(now = new Date()): Promise<void> {
+    const rows = await this.db
+      .select()
+      .from(webhookSources)
+      .where(and(eq(webhookSources.enabled, true), isNotNull(webhookSources.pollConfig)));
+    if (rows.length === 0) return;
+
+    if (!isPollAllowlistConfigured()) {
+      log.error(
+        'Poll connectors disabled: OMNI_POLL_COMMAND_DIR is unset or missing, enabled poll sources will not run',
+        {
+          sources: rows.map((row) => row.name),
+        },
+      );
+      for (const row of rows) {
+        await this.db
+          .update(webhookSources)
+          .set({ livenessStatus: 'disabled', stalledAt: null, updatedAt: now })
+          .where(eq(webhookSources.id, row.id));
+      }
+      return;
+    }
+
+    for (const row of rows) {
+      const wasDisabled = row.livenessStatus === 'disabled';
+      await this.db
+        .update(webhookSources)
+        .set({
+          pollConfig: {
+            ...(row.pollConfig as WebhookPollConfig),
+            consecutiveFailures: 0,
+            nextRunAt: now.toISOString(),
+          },
+          ...(wasDisabled && {
+            livenessStatus: row.expectedIntervalSeconds !== null ? 'healthy' : null,
+            livenessArmedAt: now,
+          }),
+          updatedAt: now,
+        })
+        .where(eq(webhookSources.id, row.id));
+    }
+  }
+
   /** Manual run (`omni sources run-now`): runs immediately regardless of schedule/backoff. */
   async runPollNow(id: string): Promise<WebhookSource> {
     const source = await this.getById(id);
@@ -971,7 +1028,7 @@ export class WebhookService {
         const res = await this.db
           .update(webhookSources)
           .set({ livenessStatus: 'stalled', stalledAt: at, updatedAt: at })
-          .where(and(eq(webhookSources.id, id), sql`${webhookSources.livenessStatus} IS DISTINCT FROM 'stalled'`))
+          .where(and(eq(webhookSources.id, id), sql`COALESCE(${webhookSources.livenessStatus}, 'healthy') = 'healthy'`))
           .returning({ id: webhookSources.id });
         return res.length > 0;
       },
