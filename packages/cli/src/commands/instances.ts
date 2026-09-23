@@ -60,7 +60,8 @@ function setBool(body: Record<string, unknown>, key: string, val: unknown): void
 /** Extract agent routing fields from CLI options into body */
 function applyAgentFields(body: Record<string, unknown>, opts: Record<string, unknown>): void {
   // agentFkId (--agent-fk-id) is now the primary way to set the agent (maps to agentId in DB)
-  setVal(body, 'agentId', opts.agentFkId);
+  // --agent is the documented alias; it used to be parsed and dropped (#1248)
+  setVal(body, 'agentId', opts.agentFkId ?? opts.agent);
   if (opts.agentTimeout !== undefined) body.agentTimeout = opts.agentTimeout;
   if (Array.isArray(opts.agentErrorMessage)) {
     const messages = opts.agentErrorMessage as string[];
@@ -92,6 +93,24 @@ function applyReplyFilter(body: Record<string, unknown>, opts: Record<string, un
     cond.namePatterns = (opts.replyNamePatterns as string).split(',').map((s) => s.trim());
   }
   body.agentReplyFilter = { mode: opts.replyFilterMode, conditions: cond };
+}
+
+/** The API's omni#443 default: what an agent-bearing instance replies to when no filter is set. */
+const DEFAULT_AGENT_REPLY_FILTER = { mode: 'all', conditions: { onDm: true } };
+
+/**
+ * --clear-reply-filter on an instance that keeps its agent must not store null
+ * (reply-to-everything, #1248): swap in the documented default instead.
+ * Returns true when it did, so the caller can say so.
+ */
+export async function defaultClearedReplyFilter(
+  body: Record<string, unknown>,
+  currentAgentId: () => Promise<string | null | undefined>,
+): Promise<boolean> {
+  if (body.agentReplyFilter !== null || body.agentId === null) return false;
+  if (!(body.agentId ?? (await currentAgentId()))) return false;
+  body.agentReplyFilter = DEFAULT_AGENT_REPLY_FILTER;
+  return true;
 }
 
 /** Extract message formatting fields from CLI options into body */
@@ -1122,7 +1141,10 @@ export function createInstancesCommand(): Command {
     .option('--reply-on-name', 'Reply when bot name appears in text')
     .option('--no-reply-on-name', 'Ignore name matches')
     .option('--reply-name-patterns <patterns>', 'Custom name patterns (comma-separated)')
-    .option('--clear-reply-filter', 'Remove reply filter (set to null)')
+    .option(
+      '--clear-reply-filter',
+      'Remove reply filter (set to null). On an instance that keeps its agent, resets to the default {mode:"all", onDm:true} instead',
+    )
     // Message formatting
     .option('--enable-auto-split', 'Split responses on double newlines')
     .option('--no-enable-auto-split', 'Disable auto-split')
@@ -1242,6 +1264,11 @@ export function createInstancesCommand(): Command {
         setVal(body, 'name', options.name);
         setBool(body, 'isDefault', options.isDefault);
         setBool(body, 'force', options.force);
+        if (await defaultClearedReplyFilter(body, async () => (await client.instances.get(id)).agentId)) {
+          output.warn(
+            'Instance has an agent: --clear-reply-filter stored the default reply filter {mode:"all", onDm:true}, which replies to every message. To stop replies use --agent null or --reply-filter-mode filtered.',
+          );
+        }
 
         // Send update if there are fields to update
         if (Object.keys(body).length > 0) {
