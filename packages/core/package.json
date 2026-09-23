@@ -34,7 +34,8 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "bun test"
+    "test": "bun test --path-ignore-patterns='**/egress-access-guard.test.ts'",
+    "test:guards": "bun test src/egress/__tests__/egress-access-guard.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.62",
