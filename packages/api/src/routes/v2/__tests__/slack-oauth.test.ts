@@ -106,6 +106,16 @@ interface HarnessOptions {
   createThrows?: (attempt: number) => Error | undefined;
 }
 
+/** The fake of `InstanceService.findBySlackIdentity`: OAuth rows only, NULL user = bot identity. */
+function findIdentity(rows: FakeRow[], teamId: string, userId: string | null): FakeRow | undefined {
+  return rows.find(
+    (r) =>
+      r.slackConnectionMethod === 'oauth' &&
+      r.slackTeamId === teamId &&
+      (userId === null ? r.slackUserId == null : r.slackUserId === userId),
+  );
+}
+
 let rowCounter = 0;
 const nextId = () => `aaaaaaaa-aaaa-4aaa-8aaa-${String(++rowCounter).padStart(12, '0')}`;
 
@@ -125,14 +135,13 @@ function makeHarness(opts: HarnessOptions = {}) {
   let createAttempts = 0;
 
   const instances = {
-    list: mock(async (options: { channel?: string[] } = {}) => ({
-      items: rows.filter((r) => !options.channel || options.channel.includes(r.channel)),
-      hasMore: false,
-    })),
-    create: mock(async (data: Record<string, unknown>) => {
+    findBySlackIdentity: mock(async (teamId: string, userId: string | null) => findIdentity(rows, teamId, userId)),
+    // ON CONFLICT DO NOTHING on the identity index: null when the identity is taken.
+    createSlackOAuth: mock(async (data: Record<string, unknown>) => {
       createAttempts += 1;
       const failure = opts.createThrows?.(createAttempts);
       if (failure) throw failure;
+      if (findIdentity(rows, data.slackTeamId as string, (data.slackUserId as string | null) ?? null)) return null;
       calls.create += 1;
       const row = { profileMetadata: null, isActive: true, ...data, id: nextId() } as FakeRow;
       rows.push(row);
