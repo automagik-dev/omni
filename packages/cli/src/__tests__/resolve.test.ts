@@ -53,7 +53,7 @@ mock.module('../client.js', () => ({
 }));
 
 // Import after mocks are set up
-const { resolveChatId, resolveMessageId } = await import('../resolve.js');
+const { resolveChatId, resolveMessageId, resolveRecipient } = await import('../resolve.js');
 
 describe('resolveMessageId', () => {
   beforeEach(() => {
@@ -194,5 +194,48 @@ describe('resolveChatId external id (#1119)', () => {
     });
     expect(await resolveChatId(jid)).toBe('33333333-3333-4333-8333-333333333333');
     expect(mockListChats).toHaveBeenCalledWith({ limit: 100, instanceId: undefined, search: jid });
+  });
+
+  test('resolves a Slack conversation id to the chat uuid', async () => {
+    const slackId = 'D05J8JA79QA';
+    mockListChats.mockResolvedValue({
+      items: [
+        { id: '55555555-5555-4555-8555-555555555555', name: 'Felipe', externalId: slackId },
+        { id: '66666666-6666-4666-8666-666666666666', name: 'Other', externalId: 'C05J8JA79QA' },
+      ],
+    });
+    expect(await resolveChatId(slackId)).toBe('55555555-5555-4555-8555-555555555555');
+    expect(mockListChats).toHaveBeenCalledWith({ limit: 100, instanceId: undefined, search: slackId });
+  });
+
+  test('an unknown Slack conversation id still ends at the no-chat error', async () => {
+    mockListChats.mockResolvedValue({ items: [] });
+    await expect(resolveChatId('D0NOTHERE99')).rejects.toThrow('No chat found matching "D0NOTHERE99"');
+    // External-id lookup, then the name/prefix search — the fall-through is intact.
+    expect(mockListChats).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('resolveRecipient', () => {
+  beforeEach(() => mockListChats.mockReset());
+
+  test('passes a Slack conversation id through untouched', async () => {
+    expect(await resolveRecipient('D05J8JA79QA')).toBe('D05J8JA79QA');
+    expect(await resolveRecipient('C05J8EZQ1S7', 'instance-b')).toBe('C05J8EZQ1S7');
+    expect(mockListChats).not.toHaveBeenCalled();
+  });
+
+  test('keeps the uuid, phone and JID pass-throughs', async () => {
+    const uuid = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+    expect(await resolveRecipient(uuid)).toBe(uuid);
+    expect(await resolveRecipient('+5511999999999')).toBe('+5511999999999');
+    expect(await resolveRecipient('5511999999999@s.whatsapp.net')).toBe('5511999999999@s.whatsapp.net');
+    expect(mockListChats).not.toHaveBeenCalled();
+  });
+
+  test('a non-platform name still goes through the chat search', async () => {
+    mockListChats.mockResolvedValue({ items: [{ id: '77777777-7777-4777-8777-777777777777', name: 'Felipe' }] });
+    expect(await resolveRecipient('felipe')).toBe('77777777-7777-4777-8777-777777777777');
+    expect(mockListChats).toHaveBeenCalledWith({ limit: 100, instanceId: undefined });
   });
 });

@@ -439,6 +439,16 @@ export const REGISTERED_EGRESS: readonly RegisteredEgress[] = [
       'AWS STS AssumeRoleWithWebIdentity token exchange to the fixed STS endpoint. Platform infra credential exchange.',
   },
 
+  {
+    file: 'packages/api/src/lib/slack-oauth.ts',
+    class: 'platform-vendor',
+    sites: 2,
+    justification:
+      'Compile-time slack.com host: the OAuth v2 code exchange (oauth.v2.access) and the users.info lookup ' +
+      'behind the one-click install callback. Both URLs are module constants, the body is server-built from ' +
+      'the verified state and the app credentials, and the tenant cannot influence the destination.',
+  },
+
   // --- infra: not egress ----------------------------------------------------
   {
     file: 'packages/api/src/index.ts',

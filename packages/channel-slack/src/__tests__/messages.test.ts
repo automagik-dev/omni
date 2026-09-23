@@ -40,6 +40,7 @@ async function callHandler(
   filterConfig: ChannelFilterConfig | undefined,
   msg: Record<string, unknown>,
   botUserId?: string,
+  actingUserId?: string,
 ): Promise<{ received: boolean; rawPayload?: Record<string, unknown> }> {
   let captured: { rawPayload?: Record<string, unknown> } = {};
   let handlerFn: ((ctx: { message: unknown }) => Promise<void>) | undefined;
@@ -54,7 +55,17 @@ async function callHandler(
     handlerFn = fn;
   });
 
-  setupMessageHandlers(app, 'instance-1', botUserId, callbacks, { policy: 'open' }, noopLogger as never, filterConfig);
+  setupMessageHandlers(
+    app,
+    'instance-1',
+    botUserId,
+    callbacks,
+    { policy: 'open' },
+    noopLogger as never,
+    filterConfig,
+    undefined,
+    actingUserId,
+  );
 
   if (!handlerFn) throw new Error('handler not registered');
   await handlerFn({ message: msg });
@@ -188,6 +199,35 @@ describe('per-channel requireMention', () => {
       BOT_ID,
     );
     expect(result.received).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Mentions of a bot-less user-mode instance
+// ─────────────────────────────────────────────────────────────
+
+describe('mentions without a bot', () => {
+  const PERSON = 'U_PERSON';
+
+  it('a mention of the person the instance acts as is a mention of the instance', async () => {
+    const result = await callHandler(
+      { channels: { C123: { requireMention: true } } },
+      makeMsg({ channel: 'C123', text: `<@${PERSON}> can you look at this?`, user: 'U999' }),
+      undefined,
+      PERSON,
+    );
+    expect(result.received).toBe(true);
+    expect(result.rawPayload?.isMentioningInstance).toBe(true);
+  });
+
+  it('with a bot, mentions still key on the bot alone', async () => {
+    const result = await callHandler(
+      undefined,
+      makeMsg({ channel: 'C123', text: `<@${PERSON}> can you look at this?`, user: 'U999' }),
+      'UBOT123',
+      PERSON,
+    );
+    expect(result.rawPayload?.isMentioningInstance).toBe(false);
   });
 });
 

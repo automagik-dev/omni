@@ -123,3 +123,60 @@ export function deriveSendReceiveProof(
 export function isQrImage(qr: string | null | undefined): boolean {
   return typeof qr === 'string' && qr.startsWith('data:image');
 }
+
+// ── Slack one-click install (wish: slack-personal-oauth) ──────────────────────
+
+/** The only query parameter the Slack OAuth callback appends to `returnTo`. */
+export const SLACK_RETURN_PARAM = 'slack';
+
+/** The nonce shape `GET /slack/oauth/result/:nonce` accepts; anything else is junk. */
+const SLACK_NONCE_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
+
+/**
+ * Read the single-use install nonce the Slack callback handed back as
+ * `?slack=<nonce>`.
+ *
+ * Takes the query string as a value — the caller reads the browser location, so
+ * this stays DOM-free and testable — and returns null for an empty search, a
+ * search with no `slack` parameter, or a value the API's nonce route would
+ * reject anyway. `URLSearchParams` tolerates the leading `?`.
+ */
+export function readSlackReturnNonce(search: string): string | null {
+  if (search === '') return null;
+  const nonce = new URLSearchParams(search).get(SLACK_RETURN_PARAM);
+  if (nonce === null) return null;
+  return SLACK_NONCE_PATTERN.test(nonce) ? nonce : null;
+}
+
+/**
+ * The same query string with the `slack` parameter removed and everything else
+ * byte-identical.
+ *
+ * Deliberately textual rather than `URLSearchParams`: re-serializing through
+ * that API rewrites the neighbours it is not supposed to touch — a space
+ * becomes `+`, a valueless `?flag` gains `=`. The browser URL here belongs to
+ * the host shell, so its other parameters are left exactly as they arrived.
+ */
+export function stripSlackReturnParam(search: string): string {
+  const query = search.startsWith('?') ? search.slice(1) : search;
+  if (query === '') return '';
+  // Each part is parsed in isolation, so the surviving parts stay byte-identical
+  // while the key is matched the same way `readSlackReturnNonce` matches it —
+  // percent-decoded. Matching the key textually instead would read `?%73lack=…`
+  // as the nonce and then fail to clear it. `URLSearchParams` is lenient, so a
+  // malformed escape in a neighbour cannot throw here.
+  const kept = query.split('&').filter((part) => !new URLSearchParams(part).has(SLACK_RETURN_PARAM));
+  return kept.length === 0 ? '' : `?${kept.join('&')}`;
+}
+
+/**
+ * Hover/accessible text for a disabled Connect Slack control: names every
+ * settings key the deployment still has to fill in, so the operator knows what
+ * to set instead of just that something is missing. Key names only — no
+ * credential value ever reaches the browser.
+ */
+export function slackMissingKeysText(missing: readonly string[]): string {
+  if (missing.length === 0) return 'Slack app is not configured.';
+  const noun = missing.length === 1 ? 'setting' : 'settings';
+  return `Slack app is not configured — missing ${noun}: ${missing.join(', ')}.`;
+}

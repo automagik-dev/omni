@@ -4,7 +4,15 @@
 
 import { describe, expect, it } from 'bun:test';
 import { extractMessageMeta, shouldSkipMessage } from '../handlers/messages';
-import { buildSlackManifest } from '../manifest';
+import {
+  BOT_EVENTS,
+  REQUIRED_BOT_SCOPES,
+  REVOCATION_EVENTS,
+  USER_EVENTS,
+  USER_SCOPES,
+  buildSlackManifest,
+  slackAuthorizeScopes,
+} from '../manifest';
 
 describe('extractMessageMeta — DM classification', () => {
   const base = { channel: 'C1', ts: '1.1', user: 'U1' };
@@ -52,6 +60,16 @@ describe('buildSlackManifest — user scopes', () => {
     expect(manifest.oauth_config.scopes.user).toContain('files:write');
   });
 
+  it('requests files:read so user-mode inbound file downloads work (url_private)', () => {
+    // An inbound attachment is fetched from files.slack.com with an
+    // Authorization header. In user mode the bot user need not be a member of
+    // the channel the file was posted in, so the bot token 403s and the xoxp
+    // token does the download — which it cannot do without files:read.
+    const manifest = buildSlackManifest({ includeUserScopes: true });
+    expect(manifest.oauth_config.scopes.user).toContain('files:read');
+    expect(slackAuthorizeScopes().user_scope.split(',')).toContain('files:read');
+  });
+
   it('requests im:write so DMs can be opened, and subscribes to user events', () => {
     const manifest = buildSlackManifest({ includeUserScopes: true });
     expect(manifest.oauth_config.scopes.user).toContain('im:write');
@@ -63,6 +81,39 @@ describe('buildSlackManifest — user scopes', () => {
     // The transport is unchanged in user mode; only the vantage point moves.
     const manifest = buildSlackManifest({ includeUserScopes: true });
     expect(manifest.settings.socket_mode_enabled).toBe(true);
+  });
+});
+
+describe('buildSlackManifest — one-click OAuth install (slack-personal-oauth)', () => {
+  const CALLBACK = 'https://omni.example.com/api/v2/slack/oauth/callback';
+
+  it('emits redirect_urls, user scopes and the revocation events for the deployment app', () => {
+    const manifest = buildSlackManifest({ redirectUrls: [CALLBACK], includeUserScopes: true });
+    expect(manifest.oauth_config.redirect_urls).toEqual([CALLBACK]);
+    expect(manifest.oauth_config.scopes.user).toEqual([...USER_SCOPES]);
+    expect(manifest.settings.event_subscriptions.user_events).toEqual([...USER_EVENTS]);
+    expect(manifest.settings.event_subscriptions.bot_events).toContain('tokens_revoked');
+    expect(manifest.settings.event_subscriptions.bot_events).toContain('app_uninstalled');
+  });
+
+  it('omits redirect_urls when none are given — the manual-app manifest is unchanged', () => {
+    expect(buildSlackManifest().oauth_config.redirect_urls).toBeUndefined();
+    expect(buildSlackManifest({ redirectUrls: [] }).oauth_config.redirect_urls).toBeUndefined();
+  });
+
+  it('subscribes to both revocation events as bot events', () => {
+    expect(REVOCATION_EVENTS).toEqual(['tokens_revoked', 'app_uninstalled']);
+    for (const event of REVOCATION_EVENTS) {
+      expect(BOT_EVENTS).toContain(event);
+    }
+  });
+
+  it('slackAuthorizeScopes() comma-joins the bot and user scope sets for the authorize URL', () => {
+    const { scope, user_scope } = slackAuthorizeScopes();
+    expect(scope.split(',')).toEqual([...REQUIRED_BOT_SCOPES]);
+    expect(user_scope.split(',')).toEqual([...USER_SCOPES]);
+    expect(scope).not.toContain(' ');
+    expect(user_scope).toContain('search:read');
   });
 });
 

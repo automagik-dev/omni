@@ -49,15 +49,20 @@ export type SocketConnectionState = 'pending' | 'connected' | 'reconnecting' | '
  * Build the client used for outbound ACTIONS.
  *
  * In user mode this is a `xoxp` client so posts/edits/reactions land as the
- * authorizing human; in bot mode it is Bolt's own client. Returned alongside
- * `client` rather than replacing it — the socket and any bot-only scope still
- * need the bot token.
+ * authorizing human, whether or not a bot client exists — a one-click OAuth
+ * install has none. In bot mode it is the bot client, which bot mode cannot
+ * run without.
  */
-function buildActingClients(
+export function buildActingClients(
   options: SlackConnectionOptions,
-  botClient: WebClient,
+  botClient?: WebClient,
 ): { actingClient: WebClient; userClient?: WebClient } {
-  if (options.authMode !== 'user') return { actingClient: botClient };
+  if (options.authMode !== 'user') {
+    if (!botClient) {
+      throw new SlackError(SlackErrorCode.INVALID_TOKEN, "botToken (xoxb-...) is required unless authMode is 'user'");
+    }
+    return { actingClient: botClient };
+  }
   if (!options.userToken) {
     throw new SlackError(SlackErrorCode.CONNECTION_FAILED, "userToken is required when authMode is 'user'");
   }
@@ -137,6 +142,9 @@ export interface BoltConnection {
   socketConnectTimeoutMs?: number;
 }
 
+/** Connection options of a per-instance App, which always carries a bot token. */
+type BotConnectionOptions = SlackConnectionOptions & { botToken: string };
+
 /**
  * Create a Bolt.js App configured for Socket Mode (but NOT started yet).
  *
@@ -149,18 +157,24 @@ export interface BoltConnection {
  * The returned BoltConnection.httpHandler is also available for external-server integration.
  */
 export function createBoltApp(options: SlackConnectionOptions, logger: Logger): BoltConnection {
+  // A per-instance App authenticates with its `token`, so it needs a bot
+  // token; a bot-less user-mode instance runs behind the shared receiver only.
+  const botToken = options.botToken;
+  if (!botToken) {
+    throw new SlackError(SlackErrorCode.INVALID_TOKEN, 'botToken (xoxb-...) is required for a per-instance Bolt app');
+  }
   const mode = options.mode ?? 'socket';
 
   if (mode === 'http') {
-    return createHttpBoltApp(options, logger);
+    return createHttpBoltApp({ ...options, botToken }, logger);
   }
-  return createSocketBoltApp(options, logger);
+  return createSocketBoltApp({ ...options, botToken }, logger);
 }
 
 /**
  * Create a Bolt.js App in Socket Mode
  */
-function createSocketBoltApp(options: SlackConnectionOptions, logger: Logger): BoltConnection {
+function createSocketBoltApp(options: BotConnectionOptions, logger: Logger): BoltConnection {
   logger.info('Creating Bolt.js app with Socket Mode (not started yet)');
 
   if (!options.appToken) {
@@ -264,7 +278,7 @@ export function watchSocketLifecycle(connection: BoltConnection, logger: Logger)
  * The receiver handles Slack signing secret verification automatically.
  * The returned BoltConnection.httpHandler wraps the receiver with a 1 MB body-limit guard.
  */
-function createHttpBoltApp(options: SlackConnectionOptions, logger: Logger): BoltConnection {
+function createHttpBoltApp(options: BotConnectionOptions, logger: Logger): BoltConnection {
   if (!options.signingSecret) {
     throw new SlackError(SlackErrorCode.CONNECTION_FAILED, 'signingSecret is required for HTTP mode');
   }
@@ -294,8 +308,7 @@ function createHttpBoltApp(options: SlackConnectionOptions, logger: Logger): Bol
   });
 
   // Wrap the receiver's requestListener with a body-limit guard
-  const baseListener = receiver.requestListener;
-  const httpHandler = buildBodyLimitHandler(baseListener, HTTP_MAX_BODY_BYTES, logger);
+  const httpHandler = withBodyLimit(receiver.requestListener, logger);
 
   return {
     app,
@@ -306,6 +319,20 @@ function createHttpBoltApp(options: SlackConnectionOptions, logger: Logger): Bol
     httpPort: options.httpPort,
     httpHandler,
   };
+}
+
+/**
+ * Wrap a Slack HTTP request listener with the 1 MB body-limit guard.
+ *
+ * Shared by both HTTP transports — the per-instance app above and the pooled
+ * receiver in app-receiver.ts. An oversized body has to be refused with 413
+ * before Bolt buffers it, whichever of the two is serving the request.
+ */
+export function withBodyLimit(
+  listener: (req: IncomingMessage, res: ServerResponse) => void,
+  logger: Logger,
+): (req: IncomingMessage, res: ServerResponse) => void {
+  return buildBodyLimitHandler(listener, HTTP_MAX_BODY_BYTES, logger);
 }
 
 /**
@@ -492,6 +519,85 @@ async function resolveIdentities(connection: BoltConnection, logger: Logger): Pr
 }
 
 /**
+ * Resolve a workspace's bot identity from a bot-token `WebClient`.
+ *
+ * The shared receiver (app-receiver.ts) builds its Bolt `App` with `authorize`
+ * and no `token`, so `app.client` carries no token and the
+ * `connection.app.client.auth.test()` path above cannot serve it. Callers that
+ * hold a workspace bot client resolve identity here instead. Unlike
+ * {@link resolveIdentities}, a partial answer is an error: every field is
+ * required by `authorize` (botId, botUserId), by the attachment map (teamId)
+ * and by the connected-event metadata (botName).
+ */
+export async function resolveWorkspaceIdentity(
+  botClient: WebClient,
+): Promise<{ teamId: string; botId: string; botUserId: string; botName: string }> {
+  let authResult: Awaited<ReturnType<WebClient['auth']['test']>>;
+  try {
+    authResult = await botClient.auth.test();
+  } catch (error) {
+    if (error instanceof SlackError) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    throw new SlackError(
+      SlackErrorCode.CONNECTION_FAILED,
+      `auth.test failed while resolving workspace identity: ${message}`,
+    );
+  }
+
+  const botUserId = authResult.user_id;
+  const botId = authResult.bot_id as string | undefined;
+  const botName = authResult.user;
+  const teamId = authResult.team_id;
+
+  const missing = [
+    ['user_id', botUserId],
+    ['bot_id', botId],
+    ['user', botName],
+    ['team_id', teamId],
+  ]
+    .filter(([, value]) => !value)
+    .map(([field]) => field);
+  if (!botUserId || !botId || !botName || !teamId) {
+    throw new SlackError(
+      SlackErrorCode.CONNECTION_FAILED,
+      `auth.test returned an incomplete workspace identity (missing: ${missing.join(', ')})`,
+    );
+  }
+
+  return { teamId, botId, botUserId, botName };
+}
+
+/**
+ * The name Slack shows for the authorizing human in user mode (#889).
+ *
+ * `auth.test` returns the account's username (`user`), which is not the name
+ * people see in Slack. `users.info` carries it: the first non-blank of the
+ * profile display name, the profile real name and the account real name,
+ * trimmed, which is the same precedence the OAuth callback uses for the
+ * instance it creates (api/src/lib/slack-oauth.ts). The user token's
+ * `users:read` scope covers the call. The username stays the fallback when
+ * the lookup fails or every name is blank, so a nicer name can never block a
+ * connect.
+ */
+export async function resolveActingUserName(
+  userClient: Pick<WebClient, 'users'>,
+  actingUserId: string,
+  username: string | undefined,
+  logger?: Pick<Logger, 'debug'>,
+): Promise<string | undefined> {
+  try {
+    const { user } = await userClient.users.info({ user: actingUserId });
+    const candidates = [user?.profile?.display_name, user?.profile?.real_name, user?.real_name];
+    return candidates.find((name) => typeof name === 'string' && name.trim().length > 0)?.trim() ?? username;
+  } catch (error) {
+    logger?.debug('users.info failed for the acting user; presenting the auth.test username', {
+      error: String(error),
+    });
+    return username;
+  }
+}
+
+/**
  * Wait (bounded) until the Socket Mode WebSocket is actually open.
  *
  * Resolves immediately when the socket is already open; otherwise waits for
@@ -500,7 +606,7 @@ async function resolveIdentities(connection: BoltConnection, logger: Logger): Pr
  * CONNECTION_FAILED so the caller marks the instance 'error' — the state the
  * instance monitor knows how to recover — instead of a lying 'connected'.
  */
-async function waitForSocketOpen(connection: BoltConnection): Promise<void> {
+export async function waitForSocketOpen(connection: BoltConnection): Promise<void> {
   const socketClient = connection.socketClient;
   if (!socketClient) {
     throw new SlackError(
@@ -564,17 +670,6 @@ export function isSocketStale(connection: BoltConnection, now = Date.now()): boo
   const last = connection.lastSocketActivityAt;
   if (last === undefined) return false;
   return now - last > (connection.socketStaleAfterMs ?? SOCKET_STALE_AFTER_MS);
-}
-
-/**
- * Create and start a Bolt.js App with Socket Mode (legacy convenience wrapper).
- *
- * NOTE: Prefer using createBoltApp() + register handlers + startBoltConnection()
- * to ensure handlers are registered before Socket Mode starts receiving events.
- */
-export async function createBoltConnection(options: SlackConnectionOptions, logger: Logger): Promise<BoltConnection> {
-  const connection = createBoltApp(options, logger);
-  return startBoltConnection(connection, logger);
 }
 
 /**

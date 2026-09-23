@@ -905,6 +905,49 @@ export interface MediaResult {
   [key: string]: unknown;
 }
 
+// ── Deployment Slack app + personal OAuth install ─────────────────────────────
+
+/**
+ * `GET /slack/app` — whether this deployment has a Slack app registered.
+ * `missing` names the settings keys still unset (key names only, never values);
+ * `redirectUrl` and `manifestUrl` are null until `server.public_url` is set.
+ */
+export interface SlackAppStatus {
+  configured: boolean;
+  missing: string[];
+  redirectUrl: string | null;
+  manifestUrl: string | null;
+}
+
+/**
+ * `POST /slack/oauth/start` body. `entry` says who is waiting: `ui` redirects
+ * the browser back to `returnTo`, `cli` lands on a fixed page. `returnTo` must
+ * be a path, or a URL on `server.public_url`, and carry no query or fragment —
+ * the callback appends `?slack=<nonce>` itself.
+ */
+export interface SlackOAuthStartBody {
+  mode?: 'user' | 'bot';
+  entry: 'ui' | 'cli';
+  returnTo?: string;
+}
+
+/** `POST /slack/oauth/start` — the Slack authorize URL plus its single-use nonce. */
+export interface SlackOAuthStart {
+  authorizeUrl: string;
+  nonce: string;
+  expiresAt: string;
+}
+
+/**
+ * `GET /slack/oauth/result/:nonce` — the outcome of one install, reported once.
+ * `pending` also covers an unknown or already-consumed nonce, so a caller can
+ * never tell the two apart (and must not retry a `done` read).
+ */
+export type SlackOAuthResult =
+  | { status: 'pending' }
+  | { status: 'done'; instanceId: string }
+  | { status: 'error'; code: string; message: string };
+
 // ── Fetch helper ──────────────────────────────────────────────────────────────
 
 function buildQuery(params?: Record<string, string | number | boolean | undefined>): string {
@@ -1497,6 +1540,19 @@ export function omniExt(base = '/omni') {
     /** Cross-instance route resolver metrics (global cache stats). */
     routes: {
       metrics: () => get<{ data?: RouteCacheMetrics }>('/routes/metrics'),
+    },
+    /**
+     * Deployment Slack app status + the personal (one-click) OAuth install.
+     * Every call goes through the same BFF mount — Slack itself is only ever
+     * reached by the browser following the authorize URL the API returns, and
+     * the app's three secrets stay server-side (they read back masked).
+     */
+    slack: {
+      appStatus: () => get<SlackAppStatus>('/slack/app'),
+      /** LIVE: issues a single-use nonce and the Slack authorize URL to send the browser to. */
+      oauthStart: (body: SlackOAuthStartBody) => post<SlackOAuthStart>('/slack/oauth/start', body),
+      /** Single-use: a `done`/`error` outcome is reported exactly once, then reads as `pending`. */
+      oauthResult: (nonce: string) => get<SlackOAuthResult>(`/slack/oauth/result/${enc(nonce)}`),
     },
     turns: {
       list: (params?: ListTurnsParams) => get<{ data?: TurnListResponse }>(`/turns${buildQuery(params)}`),

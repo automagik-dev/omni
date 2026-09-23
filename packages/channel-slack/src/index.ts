@@ -25,7 +25,15 @@ export { SLACK_CAPABILITIES } from './capabilities';
 export { SlackError, SlackErrorCode } from './types';
 
 // Manifest
-export { buildSlackManifest, REQUIRED_BOT_SCOPES, BOT_EVENTS } from './manifest';
+export {
+  buildSlackManifest,
+  slackAuthorizeScopes,
+  REQUIRED_BOT_SCOPES,
+  BOT_EVENTS,
+  USER_SCOPES,
+  USER_EVENTS,
+  REVOCATION_EVENTS,
+} from './manifest';
 
 // DM Policy
 export { shouldAcceptDm } from './dm-policy';
@@ -82,9 +90,6 @@ export { extractFileInfo, downloadSlackFile, getContentTypeFromMime } from './ha
 // Config
 export { resolveStreamMode, resolveStreamThrottle } from './config/stream-mode';
 
-// Connection
-export { createBoltConnection, destroyBoltConnection, checkBoltHealth } from './connection/bolt-client';
-
 // Types
 export type {
   SlackConfig,
@@ -107,7 +112,6 @@ export type {
   SlackErrorCodeType,
 } from './types';
 
-export type { BoltConnection } from './connection/bolt-client';
 export type { DmPolicyConfig } from './dm-policy';
 export type { StreamSenderOptions } from './senders/stream';
 export type { TextSendOptions } from './senders/text';

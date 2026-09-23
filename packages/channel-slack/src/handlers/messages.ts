@@ -17,6 +17,7 @@ import { buildConversationKey } from '@omni/core';
 import type { DebounceManager } from '@omni/core';
 import type { App } from '@slack/bolt';
 import { resolveChannelConfig } from '../config/channel-config';
+import type { SlackAttachment } from '../connection/app-receiver';
 import { type DmPolicyConfig, shouldAcceptDm } from '../dm-policy';
 import type { SlackChannelConfig, SlackMessageMeta } from '../types';
 
@@ -340,11 +341,22 @@ async function processMessage(
 }
 
 /**
- * Set up inbound message handlers on a Bolt.js app
+ * Build the inbound message handler for one instance, and register it on a
+ * Bolt.js app when there is an app of its own to register on.
+ *
+ * `app` is undefined behind the shared receiver (app-receiver.ts): the Bolt
+ * listener there is registered once for the whole receiver and fans each
+ * event out to the attachments of the event's workspace, so registering a
+ * second listener per instance would deliver every message twice. The handler
+ * is returned either way — it is also what reconnect backfill (#1151) feeds.
+ *
+ * `target` is the instance the handler acts for. An attachment supplies its
+ * own id and its identities, so the three identity arguments below may be
+ * omitted; a bare instance id keeps the pre-receiver call shape.
  */
 export function setupMessageHandlers(
-  app: App,
-  instanceId: string,
+  app: App | undefined,
+  target: string | SlackAttachment,
   botUserId: string | undefined | (() => string | undefined),
   callbacks: MessageHandlerCallbacks,
   dmPolicyConfig: DmPolicyConfig,
@@ -356,12 +368,16 @@ export function setupMessageHandlers(
   /** This instance's own app bot id (auth.test `bot_id`), for self-filtering (#1151). */
   ownBotId?: () => string | undefined,
 ): (message: Record<string, unknown>) => Promise<void> {
-  const resolveBotUserId = () => (typeof botUserId === 'function' ? botUserId() : botUserId);
-  const resolveActingUserId = () => (typeof actingUserId === 'function' ? actingUserId() : actingUserId);
+  const attachment = typeof target === 'string' ? undefined : target;
+  const instanceId = typeof target === 'string' ? target : target.instanceId;
+  const resolveBotUserId = () => (typeof botUserId === 'function' ? botUserId() : botUserId) ?? attachment?.botUserId;
+  const resolveActingUserId = () =>
+    (typeof actingUserId === 'function' ? actingUserId() : actingUserId) ?? attachment?.actingUserId;
+  const resolveOwnBotId = () => ownBotId?.() ?? attachment?.botId;
 
   // Handle all messages (channels, groups, DMs, mpim)
   const handle = async (msg: Record<string, unknown>): Promise<void> => {
-    if (shouldSkipMessage(msg, [resolveBotUserId(), resolveActingUserId()], ownBotId?.())) {
+    if (shouldSkipMessage(msg, [resolveBotUserId(), resolveActingUserId()], resolveOwnBotId())) {
       logger.debug('Message skipped: bot/self/edit', {
         instanceId,
         channelId: msg.channel,
@@ -377,9 +393,16 @@ export function setupMessageHandlers(
     const meta = extractMessageMeta(msg);
     if (await enforceDmPolicy(meta, userId, dmPolicyConfig, instanceId, callbacks, logger)) return;
 
-    await processMessage(instanceId, msg, resolveBotUserId(), callbacks, logger, reliability, filterConfig);
+    // A mention addresses the instance through its bot; a bot-less user-mode
+    // instance has none, so mentioning the person it acts as is the mention.
+    const mentionUserId = resolveBotUserId() ?? resolveActingUserId();
+    await processMessage(instanceId, msg, mentionUserId, callbacks, logger, reliability, filterConfig);
   };
-  app.message(async ({ message }) => handle(message as unknown as Record<string, unknown>));
+  // Registered only when this instance owns an app; behind the shared receiver
+  // the one listener is the receiver's, and it calls `handle` directly.
+  if (app) {
+    app.message(async ({ message }) => handle(message as unknown as Record<string, unknown>));
+  }
 
   // NOTE: app_mention is NOT handled separately — app.message() already captures
   // messages that mention the bot, and the agent-dispatcher detects mentions via

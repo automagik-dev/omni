@@ -30,26 +30,24 @@ import type {
 } from '@omni/channel-sdk';
 import { DebounceManager } from '@omni/core';
 import type { ChannelType, ContentType } from '@omni/core/types';
+import type { App } from '@slack/bolt';
+import type { WebClient } from '@slack/web-api';
+import { z } from 'zod';
 
 import { SLACK_CAPABILITIES } from './capabilities';
 import { resolveStreamMode, resolveStreamThrottle } from './config/stream-mode';
-import type { BoltConnection } from './connection/bolt-client';
-import {
-  checkBoltHealth,
-  createBoltApp,
-  destroyBoltConnection,
-  isSocketOpen,
-  startBoltConnection,
-} from './connection/bolt-client';
-import { setupAgentSessionHandlers } from './handlers/agent-sessions';
-import type { CommandPayload } from './handlers/commands';
+import type { SlackAttachment, SlackEventBody, SlackRevocation, SlackRoutingFields } from './connection/app-receiver';
+import { SlackAppReceiver, receiverKeyFor } from './connection/app-receiver';
+import type { SocketConnectionState } from './connection/bolt-client';
+import { buildActingClients, resolveActingUserName, resolveWorkspaceIdentity } from './connection/bolt-client';
+import type { AgentSessionStoppedArgs } from './handlers/agent-sessions';
+import type { CommandPayload, SlackCommandEvent } from './handlers/commands';
 import { setupCommandHandlers } from './handlers/commands';
 import { downloadSlackFile, extractFileInfo, getContentTypeFromMime } from './handlers/files';
 import { setupInteractionHandlers } from './handlers/interactions';
 import { type SlackDebouncedArgs, setupMessageHandlers, shouldSkipMessage } from './handlers/messages';
 import { setupPinHandlers } from './handlers/pins';
-import { setupReactionHandlers } from './handlers/reactions';
-import { type SlackStatusMethod, clearTypingStatus, setSlackThreadStatus } from './handlers/typing';
+import { type SlackStatusMethod, clearTypingStatus, forgetStatusMemo, setSlackThreadStatus } from './handlers/typing';
 import { uploadFile, uploadFileFromUrl } from './senders/media';
 import { type NativeStreamSender, createNativeStreamSender } from './senders/native-stream';
 import { createSlackStreamSender } from './senders/stream';
@@ -60,13 +58,69 @@ import {
   scheduleTextMessage,
   sendTextMessage,
 } from './senders/text';
-import type { ReplyToMode, SlackAuthMode, SlackConfig, SlackConnectionMode, SlackInteractionPayload } from './types';
+import type {
+  ReplyToMode,
+  SlackAuthMode,
+  SlackConfig,
+  SlackConnectionMode,
+  SlackConnectionOptions,
+  SlackInteractionPayload,
+} from './types';
 import { SlackError, SlackErrorCode } from './types';
+import { resolveSlackEmojiName } from './utils/emoji';
 
 /** Download size guard — 50MB default; applied to inbound file metadata before dispatching */
 const downloadGuard = createDownloadGuard();
 
 type SlackPresenceType = 'typing' | 'recording' | 'paused';
+
+/**
+ * Lift the fields the receiver routes on out of one of Bolt's per-event body
+ * types.
+ *
+ * Bolt's bodies are interfaces with no index signature, so none of them
+ * structurally satisfies {@link SlackEventBody}; copying the routing fields
+ * across is what keeps this cast-free. `team_id` is the authoritative
+ * workspace — Bolt types it as required on every event envelope, and the
+ * inner-event fallback {@link SlackAppReceiver.targetsFor} also accepts is not
+ * typed on the event unions Bolt hands these listeners. `authorizations` and
+ * `event_context` are what narrows delivery when a workspace has more than one
+ * instance: without them here the receiver would have nothing to narrow by.
+ */
+function routingEnvelope(body: SlackRoutingFields): SlackEventBody {
+  return {
+    team_id: body.team_id,
+    authorizations: body.authorizations,
+    event_context: body.event_context,
+    event_id: body.event_id,
+  };
+}
+
+/**
+ * The fields the reaction listeners read from `reaction_added` /
+ * `reaction_removed`. Bolt's own event types are assignable to this; declaring
+ * the narrow shape keeps the listener body cast-free.
+ */
+interface SlackReactionEvent {
+  user?: string;
+  reaction?: string;
+  item?: { channel?: string; ts?: string };
+}
+
+/**
+ * External boundary: the `agent_session_stopped` payload as Slack sends it
+ * (#914). Bolt has no type for the event, so the fields are validated here;
+ * `channel` is the only one the handler cannot do without.
+ */
+const AgentSessionStoppedEventSchema = z
+  .object({
+    channel: z.string().min(1),
+    thread_ts: z.string().optional(),
+    user: z.string().optional(),
+    event_ts: z.string().optional(),
+    streaming_message_ts: z.array(z.string()).optional(),
+  })
+  .passthrough();
 
 type SlackPresenceStatusResult = {
   delivered: boolean;
@@ -87,7 +141,7 @@ function resolveSlackTokens(
   rawOptions: Record<string, unknown>,
   rawCredentials: Record<string, unknown>,
 ): {
-  botToken: string;
+  botToken?: string;
   userToken?: string;
   authMode: SlackAuthMode;
   appToken?: string;
@@ -105,10 +159,11 @@ function resolveSlackTokens(
   const signingSecret = slackConfig.signingSecret ?? (rawCredentials.signingSecret as string | undefined);
   const mode: SlackConnectionMode = slackConfig.mode ?? 'socket';
 
-  // The bot token stays mandatory even in user mode: Bolt authenticates the
-  // socket with it, and it is the fallback for calls the user token lacks
-  // scope for. User mode changes who ACTS, not who connects.
-  if (!botToken) {
+  // Only user mode may run without a bot token. The receiver's socket is
+  // opened by the app-level token (or the signing secret in HTTP mode), and a
+  // user-mode instance installed through one-click OAuth has no bot at all —
+  // it acts, sends and reads with the person's token alone.
+  if (!botToken && authMode !== 'user') {
     throw new SlackError(SlackErrorCode.INVALID_TOKEN, 'botToken (xoxb-...) is required');
   }
   if (authMode === 'user' && !userToken) {
@@ -136,6 +191,99 @@ function resolveSlackTokens(
 }
 
 /**
+ * Connect-time overrides — decisions the CALLER makes for one connect, as
+ * opposed to the persisted {@link SlackConfig} the instance carries.
+ */
+interface SlackConnectOverrides {
+  /**
+   * Attach a second bot-mode instance of a workspace anyway.
+   *
+   * `POST /instances/:id/connect` refuses that install with
+   * `409 SLACK_APP_TOKEN_IN_USE` and tells the operator to "pass force: true
+   * (--force) to proceed anyway". That escape only means anything if it
+   * reaches {@link SlackAppReceiver.attach}, whose own guard would otherwise
+   * refuse the very attach the API just waved through.
+   */
+  force?: boolean;
+}
+
+/** Read the connect-time overrides out of the raw options bag, typed. */
+function readConnectOverrides(rawOptions: Record<string, unknown>): SlackConnectOverrides {
+  return { force: rawOptions.force === true };
+}
+
+/**
+ * The workspace an attachment belongs to: the bot's when there is a bot, the
+ * person's otherwise (a bot-less one-click install). Events are routed by this
+ * id, so an attachment without one — or whose two tokens name different
+ * workspaces — is refused rather than attached to the wrong team.
+ */
+function resolveAttachmentTeamId(botTeamId: string | undefined, userTeamId: string | undefined): string {
+  if (botTeamId && userTeamId && botTeamId !== userTeamId) {
+    throw new SlackError(
+      SlackErrorCode.CONNECTION_FAILED,
+      `The bot token belongs to workspace ${botTeamId} but the user token to ${userTeamId}; both must come from the same workspace`,
+    );
+  }
+  const teamId = botTeamId ?? userTeamId;
+  if (!teamId) {
+    throw new SlackError(
+      SlackErrorCode.CONNECTION_FAILED,
+      'auth.test returned no team_id for the user token; cannot tell which workspace this instance belongs to',
+    );
+  }
+  return teamId;
+}
+
+/**
+ * The attachment fields that decide WHO an instance says it is — the narrow
+ * input {@link resolvePresentedIdentity} needs, so callers (and tests) never
+ * have to build a whole {@link SlackAttachment} to ask the question.
+ */
+export type SlackIdentitySource = Pick<
+  SlackAttachment,
+  'authMode' | 'actingUserId' | 'actingUserName' | 'botUserId' | 'botName'
+>;
+
+/**
+ * The identity an instance presents: what status, events and profile report.
+ * `ownerIdentifier` is absent only for an attachment with neither an acting
+ * human nor a bot, which the connect path never builds.
+ */
+export interface SlackPresentedIdentity {
+  profileName?: string;
+  ownerIdentifier?: string;
+}
+
+/**
+ * The identity a Slack instance presents to the platform.
+ *
+ * In `authMode: 'user'` the instance acts AS the authorizing human — it sends
+ * with their token, appears in Slack under their name, and self-filters on
+ * their user id — so reporting the workspace bot as profileName/ownerIdentifier
+ * made `instances status` and `instance.connected` describe an actor that is
+ * never the one speaking. User mode therefore presents the acting human; every
+ * other mode (and a user-mode attachment whose acting identity is missing)
+ * keeps the bot identity exactly as before.
+ *
+ * The bot identity is not lost in user mode — `getProfile` still exposes it
+ * through `platformMetadata` for operators, when the instance has a bot at all
+ * (a one-click OAuth install in user mode has none).
+ */
+export function resolvePresentedIdentity(attachment: SlackIdentitySource): SlackPresentedIdentity {
+  if (attachment.authMode === 'user' && attachment.actingUserId) {
+    return {
+      // No name resolved → the acting user id, which is still the human. Never
+      // the bot name: that is the confusion this helper exists to remove.
+      profileName: attachment.actingUserName ?? attachment.actingUserId,
+      ownerIdentifier: attachment.actingUserId,
+    };
+  }
+
+  return { profileName: attachment.botName, ownerIdentifier: attachment.botUserId };
+}
+
+/**
  * Slack Channel Plugin
  *
  * Extends BaseChannelPlugin to provide Slack messaging via Bolt.js Socket Mode.
@@ -158,11 +306,37 @@ export class SlackPlugin extends BaseChannelPlugin {
   readonly version = '1.0.0';
   readonly capabilities: ChannelCapabilities = SLACK_CAPABILITIES;
 
-  /** Active Bolt.js connections per instance */
-  private connections = new Map<string, BoltConnection>();
+  /**
+   * Attached instances, keyed by instance id.
+   *
+   * An attachment is everything this plugin needs to act for one instance —
+   * its acting clients, identities, config and reliability caches. It replaces
+   * the per-instance Bolt `App` the plugin used to own: the `App` now belongs
+   * to the receiver below, and several instances share one.
+   */
+  private attachments = new Map<string, SlackAttachment>();
+
+  /**
+   * Shared Bolt receivers, keyed by {@link receiverKeyFor}.
+   *
+   * One receiver per Slack app — per app-level token in Socket Mode, per
+   * signing secret and port in HTTP mode. Slack load-balances an app's events
+   * across its Socket Mode connections, so two instances behind one app token
+   * MUST share one socket or each would see only part of the traffic.
+   */
+  private receivers = new Map<string, SlackAppReceiver>();
 
   /** Plugin-specific config per instance */
   private slackConfigs = new Map<string, SlackConfig>();
+
+  /**
+   * InstanceConfig per attached instance, so a socket transition on a shared
+   * receiver can be mirrored into EVERY attached instance's status (#941).
+   */
+  private instanceConfigs = new Map<string, InstanceConfig>();
+
+  /** Highest attach stamp handed out so far; see {@link nextAttachedAt}. */
+  private lastAttachedAt = 0;
 
   /**
    * Cached display names per instance (null = failed lookup):
@@ -225,12 +399,14 @@ export class SlackPlugin extends BaseChannelPlugin {
    * Plugin-specific cleanup
    */
   protected override async onDestroy(): Promise<void> {
-    for (const [instanceId, connection] of this.connections) {
-      this.logger.info('Destroying Slack connection', { instanceId });
-      await destroyBoltConnection(connection, this.logger);
+    for (const [key, receiver] of this.receivers) {
+      this.logger.info('Stopping Slack receiver', { receiver: key, attachments: receiver.attachments.size });
+      await receiver.stop();
     }
-    this.connections.clear();
+    this.receivers.clear();
+    this.attachments.clear();
     this.slackConfigs.clear();
+    this.instanceConfigs.clear();
     this.userNameCache.clear();
 
     for (const debouncer of this.debouncers.values()) {
@@ -257,21 +433,23 @@ export class SlackPlugin extends BaseChannelPlugin {
   }
 
   /**
-   * Connect a Slack instance
+   * Connect a Slack instance.
+   *
+   * Instances behind the SAME Slack app share one {@link SlackAppReceiver} —
+   * one Bolt `App`, one socket. So connect() resolves tokens, takes (or, on a
+   * miss, creates) the receiver for those options, verifies the workspace
+   * identity through the receiver's own bot client, attaches, and starts the
+   * receiver only when nothing has started it yet.
    */
   async connect(instanceId: string, config: InstanceConfig): Promise<void> {
-    const existing = this.connections.get(instanceId);
-    if (existing) {
-      const isHealthy = await checkBoltHealth(existing);
-      if (isHealthy) {
-        this.logger.warn('Instance already connected', { instanceId });
-        return;
-      }
-      // The health check is socket-aware (#941): a deaf Socket Mode instance
-      // lands here and is torn down and rebuilt instead of 'already connected'.
-      this.logger.warn('Existing connection failed health check — rebuilding', { instanceId });
-      await destroyBoltConnection(existing, this.logger);
-      this.connections.delete(instanceId);
+    // A reconnect ALWAYS detaches first (design decision 10). The socket is
+    // the receiver's, not this instance's, so "already connected" can no
+    // longer be decided from one instance's health check — the attachment and
+    // its acting clients are rebuilt instead, and the receiver stays up for
+    // whatever else is attached to it.
+    if (this.attachments.has(instanceId)) {
+      this.logger.warn('Instance already attached — detaching before reconnect', { instanceId });
+      await this.detachInstance(instanceId);
       this.disposeInstanceCaches(instanceId);
     }
 
@@ -283,6 +461,7 @@ export class SlackPlugin extends BaseChannelPlugin {
     const rawOptions = (config.options ?? {}) as Record<string, unknown>;
     const rawCredentials = (config.credentials ?? {}) as Record<string, unknown>;
     const slackConfig = rawOptions as SlackConfig;
+    const overrides = readConnectOverrides(rawOptions);
 
     // Create per-instance reliability caches
     const debounceDelayMs = (slackConfig as Record<string, unknown>).debounceDelayMs as number | undefined;
@@ -294,10 +473,11 @@ export class SlackPlugin extends BaseChannelPlugin {
     const threadCache = createThreadStarterCache<HistorySyncMessage[]>();
     this.threadCaches.set(instanceId, threadCache);
 
-    let connection: BoltConnection | undefined;
+    let receiverKey: string | undefined;
     try {
       const resolved = resolveSlackTokens(slackConfig, rawOptions, rawCredentials);
       this.slackConfigs.set(instanceId, slackConfig);
+      this.instanceConfigs.set(instanceId, config);
 
       // Runtime guard: warn early if both allowlist and blocklist are set.
       // The allowlist takes precedence in isChannelBlocked(), so the blocklist
@@ -309,63 +489,87 @@ export class SlackPlugin extends BaseChannelPlugin {
         );
       }
 
-      // Phase 1: Create the Bolt.js app (NOT started yet)
-      connection = createBoltApp(
-        {
-          botToken: resolved.botToken,
-          userToken: resolved.userToken,
-          authMode: resolved.authMode,
-          appToken: resolved.appToken,
-          signingSecret: resolved.signingSecret,
-          retryConfig: slackConfig.retryConfig,
-          mode: resolved.mode,
-          httpPort: slackConfig.httpPort,
-        },
-        this.logger,
-      );
+      const options: SlackConnectionOptions = {
+        botToken: resolved.botToken,
+        userToken: resolved.userToken,
+        authMode: resolved.authMode,
+        appToken: resolved.appToken,
+        signingSecret: resolved.signingSecret,
+        retryConfig: slackConfig.retryConfig,
+        mode: resolved.mode,
+        httpPort: slackConfig.httpPort,
+      };
 
-      // Phase 2: Register all event handlers BEFORE starting
-      // This is critical — Bolt.js Socket Mode starts receiving events
-      // immediately after start(), so handlers must be in place first.
-      this.setupHandlers(instanceId, connection, slackConfig, {
+      // Phase 1: take the receiver for these options. Its constructor is where
+      // every Bolt listener is registered — Socket Mode drops events that
+      // arrive before their listener exists, so that has to happen before any
+      // start, and exactly once for the whole receiver.
+      const taken = this.obtainReceiver(options, slackConfig);
+      receiverKey = taken.key;
+      const receiver = taken.receiver;
+
+      // Phase 2: identity, acting clients and the user-mode invariant. Nothing
+      // is attached and nothing is started until all three hold.
+      const attachment = await this.buildAttachment(instanceId, receiver, options, slackConfig, {
         dedupeCache,
-        debounceManager: debouncer,
+        debouncer,
       });
 
-      // Phase 3: Start Socket Mode connection (now handlers are ready)
-      await startBoltConnection(connection, this.logger);
+      // Phase 3: this instance's inbound handler, which the receiver's shared
+      // message listener calls for every event of this workspace.
+      this.registerInboundHandler(attachment);
 
-      this.connections.set(instanceId, connection);
+      // The caller's `force` reaches the receiver's bot-mode guard here: the
+      // API's 409 advertises the override, so the override has to arrive.
+      receiver.attach(attachment, { force: overrides.force });
+      this.attachments.set(instanceId, attachment);
+
+      // Phase 4: start, but only if nothing started this receiver already — a
+      // second instance on the same app token joins the open socket.
+      if (!receiver.isRunning) {
+        await receiver.start();
+      }
+
+      // User mode presents the authorizing human, bot mode the bot (#889).
+      const presented = resolvePresentedIdentity(attachment);
 
       await this.updateInstanceStatus(instanceId, config, {
         state: 'connected',
         since: new Date(),
         metadata: {
-          profileName: connection.botName,
-          ownerIdentifier: connection.botUserId,
+          profileName: presented.profileName,
+          ownerIdentifier: presented.ownerIdentifier,
         },
       });
 
       await this.emitInstanceConnected(instanceId, {
-        profileName: connection.botName,
-        ownerIdentifier: connection.botUserId,
+        profileName: presented.profileName,
+        ownerIdentifier: presented.ownerIdentifier,
+        teamId: attachment.teamId,
+        // Only user mode acts as a human; in bot mode there is no such id.
+        actingUserId: attachment.authMode === 'user' ? attachment.actingUserId : undefined,
       });
 
       // Runtime detection (#941): from here on, a socket dying drives a real
       // status transition instead of leaving a stale cached 'connected'.
-      this.watchSocketState(instanceId, config, connection);
-      void this.backfillMissedMessages(instanceId, connection);
+      this.watchSocketState(instanceId, config, receiver);
+      void this.backfillMissedMessages(instanceId, attachment);
 
       this.logger.info('Slack instance connected', {
         instanceId,
-        botName: connection.botName,
-        teamName: connection.teamName,
+        receiver: receiverKey,
+        botName: attachment.botName,
+        teamId: attachment.teamId,
+        attachments: receiver.attachments.size,
       });
     } catch (error) {
-      if (connection) {
-        await destroyBoltConnection(connection, this.logger).catch(() => {});
-      }
-      // Dispose reliability caches that were created before the failed connection
+      // Undo a partial attach, and stop + forget a receiver this connect
+      // created and left with nothing attached — a stopped receiver must never
+      // be handed back out by a later connect.
+      await this.detachInstance(instanceId);
+      if (receiverKey) await this.pruneReceiver(receiverKey);
+      this.inboundHandlers.delete(instanceId);
+      // Dispose reliability caches that were created before the failed connect
       this.disposeInstanceCaches(instanceId);
       await this.updateInstanceStatus(instanceId, config, {
         state: 'error',
@@ -381,15 +585,149 @@ export class SlackPlugin extends BaseChannelPlugin {
   }
 
   /**
+   * The receiver for these connection options, constructed only on a miss.
+   *
+   * `registerHandlers` runs inside the constructor, so `setupHandlers` is
+   * called once per receiver rather than once per instance.
+   */
+  private obtainReceiver(
+    options: SlackConnectionOptions,
+    config: SlackConfig,
+  ): { key: string; receiver: SlackAppReceiver } {
+    const key = receiverKeyFor(options);
+    const existing = this.receivers.get(key);
+    if (existing) return { key, receiver: existing };
+
+    const receiver = new SlackAppReceiver(options, (app, own) => this.setupHandlers(app, own, config), this.logger);
+    this.receivers.set(key, receiver);
+    return { key, receiver };
+  }
+
+  /**
+   * Resolve identity and acting clients, and build this instance's attachment.
+   *
+   * Nothing here attaches or starts anything: a failure leaves the receiver
+   * exactly as it was.
+   */
+  private async buildAttachment(
+    instanceId: string,
+    receiver: SlackAppReceiver,
+    options: SlackConnectionOptions,
+    config: SlackConfig,
+    caches: { dedupeCache: DedupeCache; debouncer: DebounceManager },
+  ): Promise<SlackAttachment> {
+    // The receiver's `App` is built with `authorize` and carries NO token, so
+    // there is no app client to run auth.test through. Identity goes through
+    // the receiver's own bot client instead; before the attach the team id is
+    // still unknown, so the client is taken by bot token, and the attach
+    // reuses that very object — afterwards `receiver.botClientFor(teamId)` is
+    // this same client. A bot-less user-mode instance mints no bot client at
+    // all: its identity, workspace included, comes from the user token.
+    const botClient = options.botToken ? receiver.clientForBotToken(options.botToken) : undefined;
+    const identity = botClient ? await resolveWorkspaceIdentity(botClient) : undefined;
+    const { actingClient, userClient } = buildActingClients(options, botClient);
+
+    // User mode (#889) MUST NOT attach or start without a resolved acting-user
+    // id. Self-filtering compares the human's own typing against it; when it is
+    // undefined the check in shouldSkipMessage silently no-ops and the agent
+    // answers the operator's OWN messages. Fail fast rather than attach broken.
+    let actingUserId: string | undefined;
+    let actingUserName: string | undefined;
+    let actingTeamId: string | undefined;
+    if (userClient) {
+      ({ actingUserId, actingUserName, teamId: actingTeamId } = await this.resolveActingUserId(userClient));
+      if (!actingUserId) {
+        throw new SlackError(
+          SlackErrorCode.CONNECTION_FAILED,
+          'User mode requires a resolved acting user id, but it could not be determined from the user token. Refusing to connect.',
+        );
+      }
+    }
+
+    return {
+      instanceId,
+      teamId: resolveAttachmentTeamId(identity?.teamId, actingTeamId),
+      authMode: options.authMode ?? 'bot',
+      actingClient,
+      userClient,
+      actingUserId,
+      actingUserName,
+      botUserId: identity?.botUserId,
+      botId: identity?.botId,
+      botToken: botClient ? options.botToken : undefined,
+      botName: identity?.botName,
+      config,
+      dedupeCache: caches.dedupeCache,
+      debouncer: caches.debouncer,
+      attachedAt: this.nextAttachedAt(),
+    };
+  }
+
+  /**
+   * A strictly increasing attach stamp.
+   *
+   * The receiver answers `authorize`, and keys a workspace's bot client, with
+   * the attachment of the GREATEST `attachedAt`. Two attaches inside one
+   * millisecond would tie on a bare `Date.now()`, so the counter never repeats
+   * a value and a re-attach always outranks the attach it replaced.
+   */
+  private nextAttachedAt(): number {
+    this.lastAttachedAt = Math.max(Date.now(), this.lastAttachedAt + 1);
+    return this.lastAttachedAt;
+  }
+
+  /**
+   * Resolve the authorizing human's identity from the user token (#889).
+   *
+   * `auth.test` carries the id, the username and the workspace; the name the
+   * instance presents is the profile's display name when Slack has one
+   * ({@link resolveActingUserName}), with the username as the fallback.
+   */
+  private async resolveActingUserId(
+    userClient: WebClient,
+  ): Promise<{ actingUserId?: string; actingUserName?: string; teamId?: string }> {
+    try {
+      const auth = await userClient.auth.test();
+      const actingUserId = auth.user_id ?? undefined;
+      const username = auth.user ?? undefined;
+      const actingUserName = actingUserId
+        ? await resolveActingUserName(userClient, actingUserId, username, this.logger)
+        : username;
+      this.logger.info('Acting user identity resolved', { actingUserId, actingUser: actingUserName });
+      return { actingUserId, actingUserName, teamId: auth.team_id ?? undefined };
+    } catch (error) {
+      this.logger.warn('Failed to resolve the acting user identity from the user token', {
+        error: String(error),
+      });
+      return {};
+    }
+  }
+
+  /**
    * Disconnect a Slack instance
    */
   async disconnect(instanceId: string): Promise<void> {
-    const connection = this.connections.get(instanceId);
-    if (!connection) return;
+    if (!this.attachments.has(instanceId)) return;
 
-    await destroyBoltConnection(connection, this.logger);
-    this.connections.delete(instanceId);
+    await this.detachInstance(instanceId);
+    this.releaseInstanceState(instanceId);
+
+    await this.emitInstanceDisconnected(instanceId, 'User requested disconnect');
+  }
+
+  /**
+   * Forget everything this plugin holds for one instance.
+   *
+   * Every path that takes an instance out of service runs this, not just
+   * `disconnect()`: a revoked or uninstalled install stops being connected
+   * just as definitively, and leaving its display-name cache, active threads,
+   * status timers, streams and ack reactions behind leaked them for the
+   * process's lifetime (Group 5 review, LOW #4). Detaching from the receiver
+   * is the caller's job, because the reason it reports differs.
+   */
+  private releaseInstanceState(instanceId: string): void {
     this.slackConfigs.delete(instanceId);
+    this.instanceConfigs.delete(instanceId);
     this.lastSeenTs.delete(instanceId);
     this.inboundHandlers.delete(instanceId);
 
@@ -414,8 +752,51 @@ export class SlackPlugin extends BaseChannelPlugin {
 
     // Flush pending debounce windows and dispose reliability caches
     this.disposeInstanceCaches(instanceId);
+  }
 
-    await this.emitInstanceDisconnected(instanceId, 'User requested disconnect');
+  /**
+   * Detach one instance from its receiver.
+   *
+   * The receiver survives as long as anything else is attached to it; only the
+   * last detach takes the socket down. Safe to call for an instance that is
+   * not attached.
+   */
+  private async detachInstance(instanceId: string): Promise<void> {
+    const attachment = this.attachments.get(instanceId);
+    this.attachments.delete(instanceId);
+    // The Agent-API availability memo is keyed on the attachment, so dropping
+    // it here means the next attach probes with a clean slate.
+    if (attachment) forgetStatusMemo(attachment);
+
+    for (const [key, receiver] of this.receivers) {
+      if (!receiver.attachments.has(instanceId)) continue;
+      receiver.detach(instanceId);
+      await this.pruneReceiver(key);
+      return;
+    }
+  }
+
+  /**
+   * Stop and forget a receiver with nothing attached.
+   *
+   * The receiver stops its own `App` on the last detach, so leaving the key in
+   * the map would let a later connect be handed a receiver whose `App` is
+   * already stopped. Calling this on a receiver that still has attachments is
+   * a no-op.
+   */
+  private async pruneReceiver(key: string): Promise<void> {
+    const receiver = this.receivers.get(key);
+    if (!receiver || receiver.attachments.size > 0) return;
+    this.receivers.delete(key);
+    await receiver.stop();
+  }
+
+  /** The receiver an instance is attached to, if any. */
+  private receiverOf(instanceId: string): SlackAppReceiver | undefined {
+    for (const receiver of this.receivers.values()) {
+      if (receiver.attachments.has(instanceId)) return receiver;
+    }
+    return undefined;
   }
 
   /**
@@ -424,16 +805,16 @@ export class SlackPlugin extends BaseChannelPlugin {
    * BaseChannelPlugin caches the last written status, and 'connected' used to
    * be written once at connect() and never revisited — a deaf socket reported
    * connected forever and the instance monitor had nothing to act on. When the
-   * cache says connected but the Socket Mode WebSocket is not open, report a
-   * retryable error instead; needsReconnect() in the instance monitor treats
-   * that as a signal to rebuild the instance automatically.
+   * cache says connected but the receiver's Socket Mode WebSocket is not open,
+   * report a retryable error instead; needsReconnect() in the instance monitor
+   * treats that as a signal to rebuild the instance automatically.
    */
   override async getStatus(instanceId: string): Promise<ConnectionStatus> {
     const status = await super.getStatus(instanceId);
     if (status.state !== 'connected') return status;
 
-    const connection = this.connections.get(instanceId);
-    if (!connection || isSocketOpen(connection)) return status;
+    const receiver = this.receiverOf(instanceId);
+    if (!receiver || receiver.socketHealth().open) return status;
 
     return {
       state: 'error',
@@ -450,14 +831,36 @@ export class SlackPlugin extends BaseChannelPlugin {
   /**
    * Mirror Socket Mode lifecycle transitions into instance status (#941).
    *
-   * Each transition maps to a state the instance monitor already knows how to
-   * act on: 'error' → schedule reconnect; a fresh 'reconnecting' → leave
-   * Bolt's own retry loop alone (going stale hands it to the monitor); a
-   * recovered socket → back to 'connected'.
+   * The socket belongs to the receiver, so the hook is per receiver and fans
+   * out to every instance attached to it. Each transition maps to a state the
+   * instance monitor already knows how to act on: 'error' → schedule
+   * reconnect; a fresh 'reconnecting' → leave Bolt's own retry loop alone
+   * (going stale hands it to the monitor); a recovered socket → 'connected'.
    */
-  private watchSocketState(instanceId: string, config: InstanceConfig, connection: BoltConnection): void {
-    if (connection.mode !== 'socket') return;
+  private watchSocketState(instanceId: string, config: InstanceConfig, receiver: SlackAppReceiver): void {
+    this.instanceConfigs.set(instanceId, config);
+    if (receiver.mode !== 'socket') return;
+    receiver.onSocketStateChange = (state) => this.applySocketState(receiver, state);
+  }
 
+  /** Apply one socket transition to every instance attached to that receiver. */
+  private applySocketState(receiver: SlackAppReceiver, state: SocketConnectionState): void {
+    for (const attachment of receiver.attachments.values()) {
+      const instanceId = attachment.instanceId;
+      // A rebuilt instance leaves the old attachment's transitions behind.
+      if (this.attachments.get(instanceId) !== attachment) continue;
+      const config = this.instanceConfigs.get(instanceId);
+      if (!config) continue;
+      this.applySocketStateTo(instanceId, config, attachment, state);
+    }
+  }
+
+  private applySocketStateTo(
+    instanceId: string,
+    config: InstanceConfig,
+    attachment: SlackAttachment,
+    state: SocketConnectionState,
+  ): void {
     const setStatus = (status: ConnectionStatus): void => {
       this.updateInstanceStatus(instanceId, config, status).catch((err) => {
         this.logger.warn('Failed to update instance status from socket transition', {
@@ -467,50 +870,46 @@ export class SlackPlugin extends BaseChannelPlugin {
       });
     };
 
-    connection.onSocketStateChange = (state) => {
-      // A rebuilt instance leaves the old connection's transitions behind.
-      if (this.connections.get(instanceId) !== connection) return;
+    if (state === 'connected') {
+      this.logger.info('Slack Socket Mode connection restored', { instanceId });
+      void this.backfillMissedMessages(instanceId, attachment);
+      const presented = resolvePresentedIdentity(attachment);
+      setStatus({
+        state: 'connected',
+        since: new Date(),
+        metadata: {
+          profileName: presented.profileName,
+          ownerIdentifier: presented.ownerIdentifier,
+        },
+      });
+      return;
+    }
 
-      if (state === 'connected') {
-        this.logger.info('Slack Socket Mode connection restored', { instanceId });
-        void this.backfillMissedMessages(instanceId, connection);
-        setStatus({
-          state: 'connected',
-          since: new Date(),
-          metadata: {
-            profileName: connection.botName,
-            ownerIdentifier: connection.botUserId,
-          },
-        });
-        return;
-      }
+    if (state === 'reconnecting') {
+      this.logger.warn('Slack Socket Mode reconnecting', { instanceId });
+      setStatus({ state: 'reconnecting', since: new Date() });
+      return;
+    }
 
-      if (state === 'reconnecting') {
-        this.logger.warn('Slack Socket Mode reconnecting', { instanceId });
-        setStatus({ state: 'reconnecting', since: new Date() });
-        return;
-      }
-
-      if (state === 'disconnected') {
-        this.logger.error('Slack Socket Mode connection lost', { instanceId });
-        setStatus({
-          state: 'error',
-          since: new Date(),
-          error: {
-            code: SlackErrorCode.CONNECTION_FAILED,
-            message: 'Socket Mode WebSocket disconnected',
-            retryable: true,
-          },
-        });
-      }
-    };
+    if (state === 'disconnected') {
+      this.logger.error('Slack Socket Mode connection lost', { instanceId });
+      setStatus({
+        state: 'error',
+        since: new Date(),
+        error: {
+          code: SlackErrorCode.CONNECTION_FAILED,
+          message: 'Socket Mode WebSocket disconnected',
+          retryable: true,
+        },
+      });
+    }
   }
 
   /**
    * Send a message through Slack
    */
   async sendMessage(instanceId: string, message: OutgoingMessage): Promise<SendResult> {
-    const connection = this.getConnection(instanceId);
+    const attachment = this.getAttachment(instanceId);
     const slackConfig = this.slackConfigs.get(instanceId) ?? {};
     const channelId = message.to;
 
@@ -518,15 +917,15 @@ export class SlackPlugin extends BaseChannelPlugin {
       const correlationId = message.metadata?.correlationId as string | undefined;
       if (correlationId) this.captureT10(correlationId);
 
-      const messageId = await this.dispatchMessageByType(connection, channelId, message, slackConfig);
+      const messageId = await this.dispatchMessageByType(attachment, channelId, message, slackConfig);
 
       if (correlationId) this.captureT11(correlationId);
 
       // Clear typing indicator after reply is delivered
-      await this.clearActiveTyping(instanceId, channelId, connection, message.replyTo ?? message.threadId);
+      await this.clearActiveTyping(instanceId, channelId, attachment, message.replyTo ?? message.threadId);
 
       // Remove ack reaction if configured
-      this.removeAckReaction(instanceId, channelId, connection, message.replyTo, message.threadId);
+      this.removeAckReaction(instanceId, channelId, attachment, message.replyTo, message.threadId);
 
       await this.emitMessageSent({
         instanceId,
@@ -547,10 +946,10 @@ export class SlackPlugin extends BaseChannelPlugin {
       const retryable = error instanceof SlackError ? error.recoverable : false;
 
       // Clear typing indicator on error too
-      await this.clearActiveTyping(instanceId, channelId, connection, message.replyTo ?? message.threadId);
+      await this.clearActiveTyping(instanceId, channelId, attachment, message.replyTo ?? message.threadId);
 
       // Remove ack reaction on error too (best effort)
-      this.removeAckReaction(instanceId, channelId, connection, message.replyTo, message.threadId);
+      this.removeAckReaction(instanceId, channelId, attachment, message.replyTo, message.threadId);
 
       await this.emitMessageFailed({
         instanceId,
@@ -580,7 +979,7 @@ export class SlackPlugin extends BaseChannelPlugin {
     _chatType?: 'dm' | 'group' | 'channel',
     options?: { formatMode?: 'convert' | 'passthrough' },
   ): StreamSender {
-    const connection = this.getConnection(instanceId);
+    const attachment = this.getAttachment(instanceId);
     const slackConfig = this.slackConfigs.get(instanceId) ?? {};
     const replyToMode = slackConfig.replyToMode ?? 'all';
     const threadTs = this.resolveThreadTs(replyToMode, replyToMessageId, undefined);
@@ -593,7 +992,7 @@ export class SlackPlugin extends BaseChannelPlugin {
     let base: StreamSender;
     if (streamMode === 'native') {
       native = createNativeStreamSender({
-        client: connection.actingClient,
+        client: attachment.actingClient,
         channelId: chatId,
         threadTs,
         throttleMs,
@@ -607,7 +1006,7 @@ export class SlackPlugin extends BaseChannelPlugin {
       this.trackNativeStream(streamKey, native);
     } else {
       base = createSlackStreamSender({
-        client: connection.actingClient,
+        client: attachment.actingClient,
         channelId: chatId,
         threadTs,
         streamMode,
@@ -625,8 +1024,8 @@ export class SlackPlugin extends BaseChannelPlugin {
     // bypass sendMessage entirely — reactions accumulate indefinitely without this.
     const cleanup = () => {
       if (native) this.untrackNativeStream(streamKey, native);
-      this.removeAckReaction(instanceId, chatId, connection, replyToMessageId, threadTs);
-      this.clearActiveTyping(instanceId, chatId, connection, threadTs).catch(() => {});
+      this.removeAckReaction(instanceId, chatId, attachment, replyToMessageId, threadTs);
+      this.clearActiveTyping(instanceId, chatId, attachment, threadTs).catch(() => {});
     };
 
     return {
@@ -720,8 +1119,8 @@ export class SlackPlugin extends BaseChannelPlugin {
     // channel's default (#914 review).
     const nominalMethod: SlackStatusMethod = 'agents.sessions.setStatus';
 
-    const connection = this.connections.get(instanceId);
-    if (!connection) return { delivered: false, method: nominalMethod, reason: 'not_connected' };
+    const attachment = this.attachments.get(instanceId);
+    if (!attachment) return { delivered: false, method: nominalMethod, reason: 'not_connected' };
 
     const threadTs = options?.threadId ?? this.activeThreads.get(`${instanceId}:${chatId}`);
     if (!threadTs) {
@@ -743,14 +1142,16 @@ export class SlackPlugin extends BaseChannelPlugin {
     const statusResult =
       status === ''
         ? await clearTypingStatus({
-            client: connection.actingClient,
+            client: attachment.actingClient,
+            attachment,
             channelId: chatId,
             threadTs,
             logger: this.logger,
             instanceId,
           })
         : await setSlackThreadStatus({
-            client: connection.actingClient,
+            client: attachment.actingClient,
+            attachment,
             channelId: chatId,
             threadTs,
             status,
@@ -778,7 +1179,8 @@ export class SlackPlugin extends BaseChannelPlugin {
         if (this.presenceStatusTimers.get(timerKey) !== timer) return;
         this.presenceStatusTimers.delete(timerKey);
         clearTypingStatus({
-          client: connection.actingClient,
+          client: attachment.actingClient,
+          attachment,
           channelId: chatId,
           threadTs,
           logger: this.logger,
@@ -828,16 +1230,16 @@ export class SlackPlugin extends BaseChannelPlugin {
    * Edit a message
    */
   async editMessage(instanceId: string, channelId: string, messageTs: string, newText: string): Promise<void> {
-    const connection = this.getConnection(instanceId);
-    await editSlackMessage(connection.actingClient, channelId, messageTs, newText, 'convert', this.logger);
+    const attachment = this.getAttachment(instanceId);
+    await editSlackMessage(attachment.actingClient, channelId, messageTs, newText, 'convert', this.logger);
   }
 
   /**
    * Delete a message
    */
   async deleteMessage(instanceId: string, channelId: string, messageTs: string): Promise<void> {
-    const connection = this.getConnection(instanceId);
-    await deleteSlackMessage(connection.actingClient, channelId, messageTs, this.logger);
+    const attachment = this.getAttachment(instanceId);
+    await deleteSlackMessage(attachment.actingClient, channelId, messageTs, this.logger);
   }
 
   /**
@@ -848,7 +1250,7 @@ export class SlackPlugin extends BaseChannelPlugin {
    * file upload, so media has to be uploaded at send time by the local path.
    */
   async scheduleMessage(instanceId: string, message: OutgoingMessage, sendAt: Date): Promise<string> {
-    const connection = this.getConnection(instanceId);
+    const attachment = this.getAttachment(instanceId);
     const config = this.slackConfigs.get(instanceId);
 
     if (message.content.type !== 'text' || !message.content.text) {
@@ -861,7 +1263,7 @@ export class SlackPlugin extends BaseChannelPlugin {
     const threadTs = this.resolveThreadTs(config?.replyToMode ?? 'all', message.replyTo, message.threadId);
 
     return scheduleTextMessage(
-      connection.actingClient,
+      attachment.actingClient,
       {
         channelId: message.to,
         text: message.content.text,
@@ -892,10 +1294,10 @@ export class SlackPlugin extends BaseChannelPlugin {
    * @returns The DM channel id (`D…`)
    */
   async openDirectMessage(instanceId: string, userId: string): Promise<string> {
-    const connection = this.getConnection(instanceId);
+    const attachment = this.getAttachment(instanceId);
 
     try {
-      const result = await connection.actingClient.conversations.open({ users: userId });
+      const result = await attachment.actingClient.conversations.open({ users: userId });
       const channelId = (result.channel as { id?: string } | undefined)?.id;
       if (!channelId) {
         throw new SlackError(SlackErrorCode.SEND_FAILED, `conversations.open returned no channel for user ${userId}`);
@@ -924,10 +1326,10 @@ export class SlackPlugin extends BaseChannelPlugin {
     query: string,
     options: { count?: number; page?: number } = {},
   ): Promise<Array<{ channelId?: string; ts?: string; text?: string; permalink?: string; username?: string }>> {
-    const connection = this.getConnection(instanceId);
+    const attachment = this.getAttachment(instanceId);
     const config = this.slackConfigs.get(instanceId);
 
-    if (config?.authMode !== 'user' || !connection.userClient) {
+    if (config?.authMode !== 'user' || !attachment.userClient) {
       throw new SlackError(
         SlackErrorCode.SEND_FAILED,
         "search.messages needs a user token (search:read); this instance runs in 'bot' auth mode",
@@ -935,7 +1337,7 @@ export class SlackPlugin extends BaseChannelPlugin {
     }
 
     try {
-      const result = await connection.userClient.search.messages({
+      const result = await attachment.userClient.search.messages({
         query,
         count: options.count ?? 20,
         page: options.page ?? 1,
@@ -966,8 +1368,8 @@ export class SlackPlugin extends BaseChannelPlugin {
 
   /** Cancel a natively scheduled message (#889). */
   async cancelScheduledMessage(instanceId: string, channelId: string, scheduledId: string): Promise<void> {
-    const connection = this.getConnection(instanceId);
-    await cancelScheduledSlackMessage(connection.actingClient, channelId, scheduledId, this.logger);
+    const attachment = this.getAttachment(instanceId);
+    await cancelScheduledSlackMessage(attachment.actingClient, channelId, scheduledId, this.logger);
   }
 
   /**
@@ -979,9 +1381,9 @@ export class SlackPlugin extends BaseChannelPlugin {
    * blockquote, it does not fail the send.
    */
   async getPermalink(instanceId: string, channelId: string, messageTs: string): Promise<string | null> {
-    const connection = this.getConnection(instanceId);
+    const attachment = this.getAttachment(instanceId);
     try {
-      const result = await connection.actingClient.chat.getPermalink({
+      const result = await attachment.actingClient.chat.getPermalink({
         channel: channelId,
         message_ts: messageTs,
       });
@@ -1000,22 +1402,23 @@ export class SlackPlugin extends BaseChannelPlugin {
    * Add a reaction to a message
    */
   async addReaction(instanceId: string, channelId: string, messageTs: string, emoji: string): Promise<void> {
-    const connection = this.getConnection(instanceId);
+    const attachment = this.getAttachment(instanceId);
     const { addReaction } = await import('./tools');
-    await addReaction(connection.actingClient, channelId, messageTs, emoji, this.logger);
+    await addReaction(attachment.actingClient, channelId, messageTs, emoji, this.logger);
   }
 
   /**
    * Remove a reaction from a message
    */
   async removeReaction(instanceId: string, channelId: string, messageTs: string, emoji: string): Promise<void> {
-    const connection = this.getConnection(instanceId);
+    const attachment = this.getAttachment(instanceId);
     const { removeReaction } = await import('./tools');
-    await removeReaction(connection.actingClient, channelId, messageTs, emoji, this.logger);
+    await removeReaction(attachment.actingClient, channelId, messageTs, emoji, this.logger);
   }
 
   /**
-   * Get bot profile
+   * Get the instance profile — the acting human in user mode, the bot
+   * otherwise; the bot identity stays in `platformMetadata` either way.
    */
   async getProfile(instanceId: string): Promise<{
     name?: string;
@@ -1024,17 +1427,23 @@ export class SlackPlugin extends BaseChannelPlugin {
     ownerIdentifier?: string;
     platformMetadata: Record<string, unknown>;
   }> {
-    const connection = this.getConnection(instanceId);
+    const attachment = this.getAttachment(instanceId);
+    const presented = resolvePresentedIdentity(attachment);
 
     return {
-      name: connection.botName,
+      name: presented.profileName,
       avatarUrl: undefined,
       bio: undefined,
-      ownerIdentifier: connection.botUserId,
+      ownerIdentifier: presented.ownerIdentifier,
       platformMetadata: {
-        botUserId: connection.botUserId,
-        teamId: connection.teamId,
-        teamName: connection.teamName,
+        // The bot identity stays visible to operators even when user mode
+        // presents the human — this is where you look up which app is installed.
+        botUserId: attachment.botUserId,
+        botName: attachment.botName,
+        authMode: attachment.authMode,
+        actingUserId: attachment.actingUserId,
+        teamId: attachment.teamId,
+        teamName: attachment.teamName,
       },
     };
   }
@@ -1052,10 +1461,10 @@ export class SlackPlugin extends BaseChannelPlugin {
     phone?: string;
     platformData?: Record<string, unknown>;
   }> {
-    const connection = this.getConnection(instanceId);
+    const attachment = this.getAttachment(instanceId);
 
     try {
-      const result = await connection.actingClient.users.info({ user: userId });
+      const result = await attachment.actingClient.users.info({ user: userId });
       const user = result.user as Record<string, unknown> | undefined;
       if (!user) return {};
 
@@ -1120,7 +1529,7 @@ export class SlackPlugin extends BaseChannelPlugin {
 
     let name: string | undefined;
     try {
-      const result = await this.getConnection(instanceId).actingClient.conversations.info({ channel: channelId });
+      const result = await this.getAttachment(instanceId).actingClient.conversations.info({ channel: channelId });
       name = (result.channel as { name?: string } | undefined)?.name || undefined;
     } catch (error) {
       this.logger.warn('Failed to fetch channel info', { channelId, error: String(error) });
@@ -1161,59 +1570,55 @@ export class SlackPlugin extends BaseChannelPlugin {
   // Thread History & Reactions (per_thread collaboration sessions)
   // ─────────────────────────────────────────────────────────────
 
-  /** Map unicode emoji to Slack reaction names */
-  private static readonly EMOJI_TO_SLACK: Record<string, string> = {
-    '👀': 'eyes',
-    '🎧': 'headphones',
-    '✅': 'white_check_mark',
-    '❌': 'x',
-  };
-
   /**
    * Fetch message history for a Slack thread (conversations.replies).
    * Supports per_thread collaboration session lazy init.
    */
   async fetchHistory(instanceId: string, options: FetchHistoryOptions): Promise<FetchHistoryResult> {
-    const connection = this.getConnection(instanceId);
+    const attachment = this.getAttachment(instanceId);
     const channelId = options.channelId ?? options.threadId;
     const threadTs = options.threadId;
 
     if (!channelId || !threadTs) return { totalFetched: 0, messages: [] };
 
-    const botUserId = connection.botUserId;
+    const botUserId = attachment.botUserId;
     // Read the token off the CONNECTION, not slackConfigs (#889).
     //
     // resolveSlackTokens accepts the token from config OR from `credentials`,
     // but this used to look only at slackConfigs.botToken. An instance
     // configured through credentials therefore returned an empty history with
     // nothing but a warning — a silent hole in per_thread context, not an
-    // error anyone would notice. connection.botToken is whatever was resolved,
+    // error anyone would notice. The attachment holds whatever was resolved,
     // so it is populated either way.
-    const botToken = connection.botToken;
+    //
+    // Files download as the API's media download does (selectSlackDownloadToken):
+    // as the person in user mode — the bot need not be in the channel, and a
+    // one-click install has no bot at all — and as the bot otherwise.
+    const downloadToken = (attachment.authMode === 'user' && attachment.userClient?.token) || attachment.botToken;
 
     const limit = options.limit ?? 200;
     // Always fetch fresh history — the thread-starter cache uses a long TTL (6h)
     // designed for thread root resolution, not full conversation history. Using it
     // here would return stale data missing newer replies.
-    const messages = await this.paginateThreadHistory(connection, channelId, threadTs, botUserId, botToken, limit);
+    const messages = await this.paginateThreadHistory(attachment, channelId, threadTs, botUserId, downloadToken, limit);
 
     return { totalFetched: messages.length, messages };
   }
 
   /** Paginate through conversations.replies and collect HistorySyncMessages. */
   private async paginateThreadHistory(
-    connection: BoltConnection,
+    attachment: SlackAttachment,
     channelId: string,
     threadTs: string,
     botUserId: string | undefined,
-    botToken: string,
+    downloadToken: string | undefined,
     maxMessages: number,
   ): Promise<HistorySyncMessage[]> {
     const messages: HistorySyncMessage[] = [];
     let cursor: string | undefined;
 
     do {
-      const response = await connection.actingClient.conversations.replies({
+      const response = await attachment.actingClient.conversations.replies({
         channel: channelId,
         ts: threadTs,
         limit: Math.min(200, maxMessages - messages.length),
@@ -1221,7 +1626,7 @@ export class SlackPlugin extends BaseChannelPlugin {
       });
 
       for (const msg of (response.messages ?? []) as Record<string, unknown>[]) {
-        const result = await this.buildHistorySyncMessage(msg, channelId, botUserId, botToken, connection.botId);
+        const result = await this.buildHistorySyncMessage(msg, channelId, botUserId, downloadToken, attachment.botId);
         if (result) messages.push(result);
         if (messages.length >= maxMessages) break;
       }
@@ -1235,16 +1640,16 @@ export class SlackPlugin extends BaseChannelPlugin {
   /** Download a Slack private file to a temp path and return its MIME type + local path. */
   private async downloadSlackMediaToTemp(
     file: Record<string, unknown>,
-    botToken: string,
+    downloadToken: string | undefined,
     ts: string,
   ): Promise<{ mimeType: string; localPath: string | undefined }> {
     const mimeType = (file.mimetype as string) ?? 'application/octet-stream';
     const urlPrivate = (file.url_private_download as string | undefined) ?? (file.url_private as string | undefined);
 
-    if (!urlPrivate) return { mimeType, localPath: undefined };
+    if (!urlPrivate || !downloadToken) return { mimeType, localPath: undefined };
 
     try {
-      const { buffer } = await downloadSlackFile(urlPrivate, botToken, this.logger);
+      const { buffer } = await downloadSlackFile(urlPrivate, downloadToken, this.logger);
       const ext = (mimeType.split('/')[1]?.split(';')[0] ?? 'bin').replace(/[^a-z0-9]/gi, '');
       const tmpPath = join(tmpdir(), `omni-slack-hist-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`);
       await writeFile(tmpPath, buffer);
@@ -1260,7 +1665,7 @@ export class SlackPlugin extends BaseChannelPlugin {
     msg: Record<string, unknown>,
     channelId: string,
     botUserId: string | undefined,
-    botToken: string,
+    downloadToken: string | undefined,
     ownBotId?: string,
   ): Promise<HistorySyncMessage | null> {
     const userId = msg.user as string | undefined;
@@ -1275,7 +1680,7 @@ export class SlackPlugin extends BaseChannelPlugin {
     if (files && files.length > 0) {
       const { mimeType, localPath } = await this.downloadSlackMediaToTemp(
         files[0] as Record<string, unknown>,
-        botToken,
+        downloadToken,
         ts,
       );
       return {
@@ -1310,10 +1715,10 @@ export class SlackPlugin extends BaseChannelPlugin {
    * Add a reaction emoji to a Slack message (per_thread media processing feedback).
    */
   async react(instanceId: string, chatId: string, messageId: string, emoji: string): Promise<void> {
-    const connection = this.getConnection(instanceId);
-    const slackName = SlackPlugin.EMOJI_TO_SLACK[emoji] ?? emoji.replace(/^:|:$/g, '');
+    const attachment = this.getAttachment(instanceId);
     try {
-      await connection.actingClient.reactions.add({ channel: chatId, timestamp: messageId, name: slackName });
+      const slackName = resolveSlackEmojiName(emoji);
+      await attachment.actingClient.reactions.add({ channel: chatId, timestamp: messageId, name: slackName });
     } catch (err) {
       this.logger.warn('react: failed to add reaction', { chatId, messageId, emoji, error: String(err) });
     }
@@ -1323,10 +1728,10 @@ export class SlackPlugin extends BaseChannelPlugin {
    * Remove a reaction emoji from a Slack message.
    */
   async unreact(instanceId: string, chatId: string, messageId: string, emoji: string): Promise<void> {
-    const connection = this.getConnection(instanceId);
-    const slackName = SlackPlugin.EMOJI_TO_SLACK[emoji] ?? emoji.replace(/^:|:$/g, '');
+    const attachment = this.getAttachment(instanceId);
     try {
-      await connection.actingClient.reactions.remove({ channel: chatId, timestamp: messageId, name: slackName });
+      const slackName = resolveSlackEmojiName(emoji);
+      await attachment.actingClient.reactions.remove({ channel: chatId, timestamp: messageId, name: slackName });
     } catch (err) {
       this.logger.warn('unreact: failed to remove reaction', { chatId, messageId, emoji, error: String(err) });
     }
@@ -1340,7 +1745,7 @@ export class SlackPlugin extends BaseChannelPlugin {
     instanceId: string,
     channelId: string,
     messageTs: string,
-    connection: BoltConnection,
+    attachment: SlackAttachment,
     config: SlackConfig,
   ): void {
     const ackEmoji = config.ackReaction;
@@ -1350,7 +1755,7 @@ export class SlackPlugin extends BaseChannelPlugin {
     if (!emojiName) return;
 
     // Fire-and-forget
-    connection.actingClient.reactions
+    attachment.actingClient.reactions
       .add({ channel: channelId, timestamp: messageTs, name: emojiName })
       .catch((err) => {
         this.logger.warn('ack reaction: failed to add', { channelId, messageTs, emoji: emojiName, error: String(err) });
@@ -1373,7 +1778,7 @@ export class SlackPlugin extends BaseChannelPlugin {
   private removeAckReaction(
     instanceId: string,
     channelId: string,
-    connection: BoltConnection,
+    attachment: SlackAttachment,
     replyTo: string | undefined,
     threadId: string | undefined,
   ): void {
@@ -1385,7 +1790,7 @@ export class SlackPlugin extends BaseChannelPlugin {
       if (!emojiName) continue;
 
       this.pendingAckReactions.delete(key);
-      connection.actingClient.reactions.remove({ channel: channelId, timestamp: ts, name: emojiName }).catch((err) => {
+      attachment.actingClient.reactions.remove({ channel: channelId, timestamp: ts, name: emojiName }).catch((err) => {
         this.logger.warn('ack reaction: failed to remove', { channelId, ts, emoji: emojiName, error: String(err) });
       });
       break; // Only remove once
@@ -1401,7 +1806,7 @@ export class SlackPlugin extends BaseChannelPlugin {
    */
   private async handleAgentSessionStopped(
     instanceId: string,
-    connection: BoltConnection,
+    attachment: SlackAttachment,
     args: { channelId: string; threadTs?: string; userId?: string; streamingMessageTs?: string[]; eventTs?: string },
   ): Promise<void> {
     // Slack event_ts is "seconds.micro"; the dispatcher compares this against
@@ -1440,7 +1845,8 @@ export class SlackPlugin extends BaseChannelPlugin {
     }
 
     await clearTypingStatus({
-      client: connection.actingClient,
+      client: attachment.actingClient,
+      attachment,
       channelId: args.channelId,
       threadTs: args.threadTs ?? this.activeThreads.get(`${instanceId}:${args.channelId}`),
       logger: this.logger,
@@ -1475,7 +1881,7 @@ export class SlackPlugin extends BaseChannelPlugin {
    *
    * ponytail: last-seen ts is in-memory — a process restart starts fresh; persist it if restarts become the gap.
    */
-  async backfillMissedMessages(instanceId: string, connection: BoltConnection): Promise<number> {
+  async backfillMissedMessages(instanceId: string, source: Pick<SlackAttachment, 'actingClient'>): Promise<number> {
     const seen = this.lastSeenTs.get(instanceId);
     const handle = this.inboundHandlers.get(instanceId);
     if (!seen?.size || !handle) return 0;
@@ -1498,16 +1904,16 @@ export class SlackPlugin extends BaseChannelPlugin {
       const [channelId, threadTs] = key.split(':') as [string, string | undefined];
       try {
         if (threadTs) {
-          const res = await connection.actingClient.conversations.replies({ channel: channelId, ts: threadTs, oldest });
+          const res = await source.actingClient.conversations.replies({ channel: channelId, ts: threadTs, oldest });
           collect(channelId, oldest, res.messages);
           continue;
         }
-        const res = await connection.actingClient.conversations.history({ channel: channelId, oldest, limit: 200 });
+        const res = await source.actingClient.conversations.history({ channel: channelId, oldest, limit: 200 });
         collect(channelId, oldest, res.messages);
         for (const parent of (res.messages ?? []) as Record<string, unknown>[]) {
           const latestReply = parent.latest_reply as string | undefined;
           if (!latestReply || Number.parseFloat(latestReply) <= Number.parseFloat(oldest)) continue;
-          const replies = await connection.actingClient.conversations.replies({
+          const replies = await source.actingClient.conversations.replies({
             channel: channelId,
             ts: parent.ts as string,
             oldest,
@@ -1557,14 +1963,15 @@ export class SlackPlugin extends BaseChannelPlugin {
   private async clearActiveTyping(
     instanceId: string,
     channelId: string,
-    connection: BoltConnection,
+    attachment: SlackAttachment,
     threadTs: string | undefined,
   ): Promise<void> {
     const resolvedThread = threadTs ?? this.activeThreads.get(`${instanceId}:${channelId}`);
     if (!resolvedThread) return;
 
     await clearTypingStatus({
-      client: connection.actingClient,
+      client: attachment.actingClient,
+      attachment,
       channelId,
       threadTs: resolvedThread,
       logger: this.logger,
@@ -1573,14 +1980,14 @@ export class SlackPlugin extends BaseChannelPlugin {
   }
 
   /**
-   * Get the Bolt connection for an instance
+   * Get the attachment for an instance — everything outbound acts through.
    */
-  private getConnection(instanceId: string): BoltConnection {
-    const connection = this.connections.get(instanceId);
-    if (!connection) {
+  private getAttachment(instanceId: string): SlackAttachment {
+    const attachment = this.attachments.get(instanceId);
+    if (!attachment) {
       throw new SlackError(SlackErrorCode.NOT_CONNECTED, `Instance ${instanceId} not connected`);
     }
-    return connection;
+    return attachment;
   }
 
   /**
@@ -1671,10 +2078,10 @@ export class SlackPlugin extends BaseChannelPlugin {
     const threadTs = args.rawPayload.threadTs as string | undefined;
     this.trackActiveThread(instanceId, args.chatId, threadTs ?? args.externalId);
 
-    const connection = this.connections.get(instanceId);
+    const attachment = this.attachments.get(instanceId);
     const config = this.slackConfigs.get(instanceId);
-    if (connection && config) {
-      this.addAckReaction(instanceId, args.chatId, args.externalId, connection, config);
+    if (attachment && config) {
+      this.addAckReaction(instanceId, args.chatId, args.externalId, attachment, config);
     }
 
     const enrichedPayload = await this.buildEnrichedPayload(instanceId, args.from, args.chatId, args.rawPayload);
@@ -1692,37 +2099,287 @@ export class SlackPlugin extends BaseChannelPlugin {
   }
 
   /**
-   * Set up all event handlers for an instance
+   * Register every Bolt listener of a receiver — once, at its construction.
+   *
+   * This is the receiver's `registerHandlers` hook, not a per-instance setup.
+   * The `App` is shared, so nothing here closes over one instance: the
+   * message, reaction, pin, channel_rename and agent-session listeners resolve
+   * the attachments Slack authorized for the event through
+   * `receiver.targetsFor(body)`, and the two payloads that carry no event
+   * envelope — slash commands and interactions — go through
+   * `receiver.targetsForActor(teamId, userId)`, which narrows to the acting
+   * human's own install. NOTHING is delivered to every attachment of the
+   * receiver (Group 5 review, HIGH #1).
+   *
+   * `config` is the SlackConfig of whichever instance first needed this
+   * receiver. Only the slash-command NAMES are read from it, and those are a
+   * property of the Slack app itself, which is exactly what a receiver is.
+   * Everything per-instance (DM policy, channel filters, identities, dedupe,
+   * debounce) lives on the attachment instead.
    */
-  private setupHandlers(
-    instanceId: string,
-    connection: BoltConnection,
-    config: SlackConfig,
-    reliability?: { dedupeCache: DedupeCache; debounceManager: DebounceManager },
-  ): void {
-    // Record the newest ts per conversation BEFORE any filtering, so a
-    // reconnect backfill (#1151) resumes exactly where delivery stopped.
-    connection.app.message(async ({ message }) => {
-      this.recordSeen(instanceId, message as unknown as Record<string, unknown>);
+  private setupHandlers(app: App, receiver: SlackAppReceiver, config: SlackConfig): void {
+    // Revocation. The receiver decides WHICH attachments a revoked token or an
+    // uninstall costs; the transition and the detach are the plugin's.
+    receiver.onRevocation = (revocation) => this.handleRevocation(revocation);
+
+    // Inbound messages. Each attachment of the event's workspace sees it
+    // through its OWN handler, built at connect() by registerInboundHandler.
+    app.message(async ({ message, body }) => {
+      // Copied into a plain record rather than cast: Bolt's message union is a
+      // set of interfaces, none of which carries an index signature.
+      const raw: Record<string, unknown> = { ...message };
+      for (const target of await receiver.targetsFor(routingEnvelope(body))) {
+        // Record the newest ts per conversation BEFORE any filtering, so a
+        // reconnect backfill (#1151) resumes exactly where delivery stopped.
+        this.recordSeen(target.instanceId, raw);
+        await this.inboundHandlers.get(target.instanceId)?.(raw);
+      }
     });
 
-    // Message handlers — pass getter so botUserId resolves after start()
-    const handleInbound = setupMessageHandlers(
-      connection.app,
-      instanceId,
-      () => connection.botUserId,
+    // Reactions. Registered here rather than through handlers/reactions.ts
+    // because those listeners are handed no event envelope, and the envelope is
+    // what says WHICH attachments the reaction is visible to.
+    app.event('reaction_added', async ({ event, body }) => {
+      await this.dispatchReaction(receiver, routingEnvelope(body), event, 'add');
+    });
+    app.event('reaction_removed', async ({ event, body }) => {
+      await this.dispatchReaction(receiver, routingEnvelope(body), event, 'remove');
+    });
+
+    // Pin handlers (#889) — the manifest subscribes to pin_added/pin_removed;
+    // these turn them into message.pinned/unpinned so core records the state.
+    setupPinHandlers(
+      app,
+      receiver.key,
       {
-        onMessage: async (
-          _instId,
-          externalId,
-          chatId,
-          from,
-          content,
-          replyToId,
-          rawPayload,
-          platformTimestamp,
-          _meta,
-        ) => {
+        onPin: async (envelope, messageId, chatId, userId, action) => {
+          for (const target of await receiver.targetsFor(routingEnvelope(envelope))) {
+            if (action === 'pin') {
+              await this.emitMessagePinned({ instanceId: target.instanceId, messageId, chatId, from: userId });
+            } else {
+              await this.emitMessageUnpinned({ instanceId: target.instanceId, messageId, chatId, from: userId });
+            }
+          }
+        },
+      },
+      this.logger,
+    );
+
+    // channel_rename (#1162) — refresh the cached name; the next message persists it.
+    app.event('channel_rename', async ({ event, body }) => {
+      for (const target of await receiver.targetsFor(routingEnvelope(body))) {
+        this.handleChannelRename(target.instanceId, event);
+      }
+    });
+
+    // Native stop button (#914). Registered here, and not through
+    // handlers/agent-sessions.ts, for the same reason as the reactions above: a
+    // stop press belongs to ONE member's session, so the targets have to come
+    // from the event envelope rather than from every attachment.
+    app.event('agent_session_stopped', async ({ event, body }) => {
+      await this.dispatchAgentSessionStopped(receiver, routingEnvelope(body), event);
+    });
+
+    // Interaction handlers — handleInteraction is instance-agnostic.
+    setupInteractionHandlers(
+      app,
+      receiver.key,
+      {
+        onInteraction: async (_receiverKey, payload) => {
+          for (const target of await receiver.targetsForActor(payload.teamId, payload.userId)) {
+            await this.handleInteraction({ ...payload, instanceId: target.instanceId });
+          }
+        },
+      },
+      this.logger,
+    );
+
+    // Command handlers (if any commands are configured)
+    const commands = (config as Record<string, unknown>).slashCommands as string[] | undefined;
+    if (commands && commands.length > 0) {
+      setupCommandHandlers(
+        app,
+        receiver.key,
+        commands,
+        {
+          onCommand: async (command: SlackCommandEvent) => {
+            const targets = await receiver.targetsForActor(command.teamId, command.userId);
+            if (targets.length === 0) {
+              // A command typed by a member with no install of their own, in a
+              // workspace whose installs are all personal: there is no
+              // unambiguous instance to run it, and running it on all of them
+              // is the leak this narrowing exists to stop.
+              this.logger.warn('Slash command matched no authorized Slack instance — ignored', {
+                receiver: receiver.key,
+                teamId: command.teamId,
+                userId: command.userId,
+                command: command.command,
+              });
+              return undefined;
+            }
+            for (const target of targets) {
+              await this.handleCommand({ ...command, instanceId: target.instanceId });
+            }
+            return undefined;
+          },
+        },
+        this.logger,
+      );
+    }
+  }
+
+  /**
+   * Whether this delivery of a Slack event has already been processed for an
+   * instance.
+   *
+   * Bolt acks an event only after every listener has resolved, and the
+   * authorizations lookup in front of delivery can spend seconds inside that
+   * window, so Slack's retry can hand the same event over twice (Group 5
+   * review, MEDIUM #5). Inbound messages already survive that on the
+   * per-instance `channelId:ts` cache; reactions and the agent-session stop
+   * had nothing, and both are state changes worth exactly once. The key is
+   * Slack's own `event_id` when it sent one, and the event context plus the
+   * event's own coordinates when it did not.
+   */
+  private isRedelivery(target: SlackAttachment, envelope: SlackEventBody, kind: string, coordinates: string): boolean {
+    const identity = envelope.event_id ?? `${envelope.event_context ?? ''}:${coordinates}`;
+    return target.dedupeCache.isDuplicate(target.instanceId, `${kind}:${identity}`, 'slack', this.logger);
+  }
+
+  /**
+   * Deliver one reaction event to each attachment it is authorized for, once.
+   *
+   * The per-target self-filter is what keeps a member's own reaction from
+   * coming back to their own instance as inbound: in user mode the acting human
+   * posts as themselves, so their user id — not just the bot's — is a self id.
+   */
+  private async dispatchReaction(
+    receiver: SlackAppReceiver,
+    envelope: SlackEventBody,
+    event: SlackReactionEvent,
+    action: 'add' | 'remove',
+  ): Promise<void> {
+    const userId = event.user;
+    const channelId = event.item?.channel;
+    const messageTs = event.item?.ts;
+    if (!userId || !channelId || !messageTs) return;
+    const emoji = event.reaction ?? '';
+
+    for (const target of await receiver.targetsFor(envelope)) {
+      if (userId === target.botUserId || userId === target.actingUserId) continue;
+      if (this.isRedelivery(target, envelope, `reaction:${action}`, `${channelId}:${messageTs}:${userId}:${emoji}`)) {
+        continue;
+      }
+      this.logger.debug('Reaction received', {
+        instanceId: target.instanceId,
+        channelId,
+        messageTs,
+        emoji,
+        userId,
+        action,
+      });
+      await this.handleReactionReceived(target.instanceId, messageTs, channelId, userId, emoji, action);
+    }
+  }
+
+  /** Cancel the in-flight run of each attachment the stop press is authorized for, once. */
+  private async dispatchAgentSessionStopped(
+    receiver: SlackAppReceiver,
+    envelope: SlackEventBody,
+    event: unknown,
+  ): Promise<void> {
+    const parsed = AgentSessionStoppedEventSchema.safeParse(event);
+    if (!parsed.success) {
+      // A stop with no channel cannot be routed to any run; anything else
+      // malformed is worth a warning rather than a silent drop.
+      const channelHint = (event as { channel?: unknown } | null | undefined)?.channel;
+      if (typeof channelHint === 'string' && channelHint.length > 0) {
+        this.logger.warn('Ignoring malformed agent_session_stopped event', {
+          receiver: receiver.key,
+          channelId: channelHint,
+          issues: parsed.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`),
+        });
+      }
+      return;
+    }
+
+    const args: AgentSessionStoppedArgs = {
+      channelId: parsed.data.channel,
+      threadTs: parsed.data.thread_ts,
+      userId: parsed.data.user,
+      eventTs: parsed.data.event_ts,
+      streamingMessageTs: parsed.data.streaming_message_ts ?? [],
+    };
+
+    for (const target of await receiver.targetsFor(envelope)) {
+      if (
+        this.isRedelivery(
+          target,
+          envelope,
+          'agent_session_stopped',
+          `${args.channelId}:${args.threadTs ?? ''}:${args.eventTs ?? ''}`,
+        )
+      ) {
+        continue;
+      }
+      this.logger.info('Agent session stopped by user', { instanceId: target.instanceId, ...args });
+      await this.handleAgentSessionStopped(target.instanceId, target, args);
+    }
+  }
+
+  /**
+   * Slack revoked a workspace's access: transition every affected instance to
+   * `disconnected` carrying the reason, then detach it.
+   *
+   * The transition goes through the same `updateInstanceStatus` +
+   * `instance.disconnected` pair every other Slack disconnect uses, so the
+   * instance monitor and the API see a revocation exactly as they see any other
+   * disconnect — with `token_revoked` / `app_uninstalled` as the reason.
+   */
+  private async handleRevocation(revocation: SlackRevocation): Promise<void> {
+    for (const attachment of revocation.attachments) {
+      const instanceId = attachment.instanceId;
+      this.logger.warn('Slack access revoked — disconnecting instance', {
+        instanceId,
+        teamId: revocation.teamId,
+        reason: revocation.reason,
+      });
+
+      const config = this.instanceConfigs.get(instanceId);
+      if (config) {
+        await this.updateInstanceStatus(instanceId, config, {
+          state: 'disconnected',
+          since: new Date(),
+          message: revocation.reason,
+        });
+      }
+
+      await this.detachInstance(instanceId);
+      this.releaseInstanceState(instanceId);
+      await this.emitInstanceDisconnected(instanceId, revocation.reason);
+    }
+  }
+
+  /**
+   * Build one instance's inbound message handler and keep it for the
+   * receiver's shared message listener — and for reconnect backfill (#1151) —
+   * to call.
+   *
+   * No Bolt listener is registered here: the receiver owns the single
+   * registration, so a second one per instance would deliver every message
+   * twice. The attachment supplies the identities (bot user, acting user, bot
+   * id) that used to be read off the connection through getters.
+   */
+  private registerInboundHandler(attachment: SlackAttachment): void {
+    const instanceId = attachment.instanceId;
+    const config = attachment.config;
+
+    const handleInbound = setupMessageHandlers(
+      undefined,
+      attachment,
+      undefined,
+      {
+        onMessage: async (_instId, externalId, chatId, from, content, replyToId, rawPayload, platformTimestamp) => {
           // Track active thread for typing indicator resolution.
           // For threaded messages, use threadTs. For top-level messages, use
           // the message's own externalId — the bot's reply will create a thread
@@ -1732,7 +2389,7 @@ export class SlackPlugin extends BaseChannelPlugin {
           this.trackActiveThread(instanceId, chatId, threadTs ?? externalId);
 
           // Add ack reaction on message receipt (fire-and-forget)
-          this.addAckReaction(instanceId, chatId, externalId, connection, config);
+          this.addAckReaction(instanceId, chatId, externalId, attachment, config);
 
           // Enrich rawPayload with cross-channel identity contract
           const enrichedPayload = await this.buildEnrichedPayload(instanceId, from, chatId, rawPayload);
@@ -1766,7 +2423,7 @@ export class SlackPlugin extends BaseChannelPlugin {
         onDmRejected: async (_instId, channelId, _userId, message) => {
           try {
             await sendTextMessage(
-              connection.actingClient,
+              attachment.actingClient,
               {
                 channelId,
                 text: message,
@@ -1790,108 +2447,30 @@ export class SlackPlugin extends BaseChannelPlugin {
         channelBlocklist: config.channelBlocklist,
         channels: config.channels,
       },
-      reliability,
-      // Authorizing human in user mode (#889) — resolved after start(), so a
-      // getter rather than a value.
-      () => connection.actingUserId,
-      () => connection.botId,
+      { dedupeCache: attachment.dedupeCache, debounceManager: attachment.debouncer },
     );
     this.inboundHandlers.set(instanceId, handleInbound);
-
-    // Reaction handlers — pass getter so botUserId resolves after start()
-    setupReactionHandlers(
-      connection.app,
-      instanceId,
-      () => connection.botUserId,
-      {
-        onReaction: async (instId, messageId, chatId, userId, emoji, action) => {
-          await this.handleReactionReceived(instId, messageId, chatId, userId, emoji, action);
-        },
-      },
-      this.logger,
-    );
-
-    // Pin handlers (#889) — the manifest subscribes to pin_added/pin_removed;
-    // these turn them into message.pinned/unpinned so core records the state.
-    setupPinHandlers(
-      connection.app,
-      instanceId,
-      {
-        onPin: async (instId, messageId, chatId, userId, action) => {
-          if (action === 'pin') {
-            await this.emitMessagePinned({ instanceId: instId, messageId, chatId, from: userId });
-          } else {
-            await this.emitMessageUnpinned({ instanceId: instId, messageId, chatId, from: userId });
-          }
-        },
-      },
-      this.logger,
-    );
-
-    // channel_rename (#1162) — refresh the cached name; the next message persists it.
-    connection.app.event('channel_rename', async ({ event }) => this.handleChannelRename(instanceId, event));
-
-    // Agent session handlers — native stop button (#914)
-    setupAgentSessionHandlers(
-      connection.app,
-      instanceId,
-      {
-        onSessionStopped: async (instId, args) => {
-          await this.handleAgentSessionStopped(instId, connection, args);
-        },
-      },
-      this.logger,
-    );
-
-    // Interaction handlers
-    setupInteractionHandlers(
-      connection.app,
-      instanceId,
-      {
-        onInteraction: async (_instId, payload) => {
-          await this.handleInteraction(payload);
-        },
-      },
-      this.logger,
-    );
-
-    // Command handlers (if any commands are configured)
-    const commands = (config as Record<string, unknown>).slashCommands as string[] | undefined;
-    if (commands && commands.length > 0) {
-      setupCommandHandlers(
-        connection.app,
-        instanceId,
-        commands,
-        {
-          onCommand: async (payload) => {
-            await this.handleCommand(payload);
-            return undefined;
-          },
-        },
-        this.logger,
-      );
-    }
   }
 
   /**
    * Dispatch outgoing message by content type
    */
   private async dispatchMessageByType(
-    connection: BoltConnection,
+    attachment: SlackAttachment,
     channelId: string,
     message: OutgoingMessage,
     config: SlackConfig,
   ): Promise<string> {
     switch (message.content.type) {
       case 'text':
-        return this.sendTextContent(connection, channelId, message, config);
+        return this.sendTextContent(attachment, channelId, message, config);
       case 'image':
       case 'audio':
       case 'video':
       case 'document':
-        return this.sendMediaContent(connection, channelId, message, config);
+        return this.sendMediaContent(attachment, channelId, message, config);
       case 'reaction':
-        return this.sendReactionContent(connection, channelId, message);
+        return this.sendReactionContent(attachment, channelId, message);
       default:
         throw new SlackError(SlackErrorCode.SEND_FAILED, `Unsupported content type: ${message.content.type}`);
     }
@@ -1899,7 +2478,7 @@ export class SlackPlugin extends BaseChannelPlugin {
 
   /** Send text content */
   private async sendTextContent(
-    connection: BoltConnection,
+    attachment: SlackAttachment,
     channelId: string,
     message: OutgoingMessage,
     config: SlackConfig,
@@ -1909,7 +2488,7 @@ export class SlackPlugin extends BaseChannelPlugin {
     const threadTs = this.resolveThreadTs(replyToMode, message.replyTo, message.threadId);
 
     return sendTextMessage(
-      connection.actingClient,
+      attachment.actingClient,
       {
         channelId,
         text: message.content.text ?? '',
@@ -1927,7 +2506,7 @@ export class SlackPlugin extends BaseChannelPlugin {
 
   /** Send media content (image, audio, video, document) */
   private async sendMediaContent(
-    connection: BoltConnection,
+    attachment: SlackAttachment,
     channelId: string,
     message: OutgoingMessage,
     config: SlackConfig,
@@ -1939,7 +2518,7 @@ export class SlackPlugin extends BaseChannelPlugin {
       const buffer = Buffer.from(message.metadata.base64 as string, 'base64');
       const filename = message.content.filename || `file-${Date.now()}`;
       return uploadFile(
-        connection.actingClient,
+        attachment.actingClient,
         {
           channelId,
           content: buffer,
@@ -1956,7 +2535,7 @@ export class SlackPlugin extends BaseChannelPlugin {
     }
 
     return uploadFileFromUrl(
-      connection.actingClient,
+      attachment.actingClient,
       {
         channelId,
         url: message.content.mediaUrl,
@@ -1970,7 +2549,7 @@ export class SlackPlugin extends BaseChannelPlugin {
 
   /** Send reaction to a message */
   private async sendReactionContent(
-    connection: BoltConnection,
+    attachment: SlackAttachment,
     channelId: string,
     message: OutgoingMessage,
   ): Promise<string> {
@@ -1980,20 +2559,22 @@ export class SlackPlugin extends BaseChannelPlugin {
       throw new SlackError(SlackErrorCode.SEND_FAILED, 'Reaction requires emoji and target message');
     }
     const { addReaction } = await import('./tools');
-    await addReaction(connection.actingClient, channelId, targetTs, emoji, this.logger);
+    await addReaction(attachment.actingClient, channelId, targetTs, emoji, this.logger);
     return targetTs;
   }
 
   /**
    * Emit inbound Slack file attachments.
    *
-   * Slack `url_private*` links require bot-token auth.  Rather than downloading
-   * the entire file here (which would copy large files entirely into heap memory
+   * Slack `url_private*` links require token auth.  Rather than downloading the
+   * entire file here (which would copy large files entirely into heap memory
    * before base64-encoding them into a data: URI), we pass the private URL as
-   * `mediaUrl` and include `_slackAuth.botToken` in `rawPayload`.  The
-   * media-processor plugin reads that field and forwards it as an Authorization
-   * header when it calls `storeFromUrl`, so the download happens exactly once
-   * and never needs to be base64-encoded.
+   * `mediaUrl` and no credential at all.  The media-processor plugin looks the
+   * instance row up by `instanceId` in the instances table and forwards its
+   * Slack token as an Authorization header when it calls `storeFromUrl` — the
+   * user token in `authMode: 'user'`, the bot token otherwise — so the download
+   * happens exactly once, never needs to be base64-encoded, and no credential
+   * ever rides in the event payload.
    */
   private async handleInboundFiles(
     instanceId: string,
@@ -2134,6 +2715,8 @@ export class SlackPlugin extends BaseChannelPlugin {
    */
   private async handleInteraction(payload: SlackInteractionPayload): Promise<void> {
     this.logger.debug('Interaction handled', {
+      instanceId: payload.instanceId,
+      teamId: payload.teamId,
       type: payload.type,
       actionId: payload.actionId,
       userId: payload.userId,

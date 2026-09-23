@@ -12,10 +12,19 @@
 
 import type { Logger } from '@omni/channel-sdk';
 import type { App } from '@slack/bolt';
+import type { SlackRoutingFields } from '../connection/app-receiver';
 
 export interface PinHandlerCallbacks {
+  /**
+   * `envelope` is the event body Slack wrapped the pin in — the workspace id
+   * and the authorizations that say which installs of that workspace may see
+   * it. The callback resolves its own targets from it; a pin is visible only
+   * in the conversations its channel is in, so fanning it out to every
+   * attachment of the receiver would announce a private pin to every other
+   * member (Group 5 review, HIGH #1).
+   */
   onPin: (
-    instanceId: string,
+    envelope: SlackRoutingFields,
     messageId: string,
     chatId: string,
     userId: string | undefined,
@@ -26,10 +35,10 @@ export interface PinHandlerCallbacks {
 /**
  * Set up pin handlers on a Bolt.js app
  */
-export function setupPinHandlers(app: App, instanceId: string, callbacks: PinHandlerCallbacks, logger: Logger): void {
+export function setupPinHandlers(app: App, receiverKey: string, callbacks: PinHandlerCallbacks, logger: Logger): void {
   const handlePinEvent =
     (action: 'pin' | 'unpin') =>
-    async ({ event }: { event: unknown }) => {
+    async ({ event, body }: { event: unknown; body: SlackRoutingFields }) => {
       const evt = event as Record<string, unknown>;
       const item = evt.item as Record<string, unknown> | undefined;
       // Files and file comments can be pinned too; only messages have a row.
@@ -41,13 +50,19 @@ export function setupPinHandlers(app: App, instanceId: string, callbacks: PinHan
       if (!channelId || !messageTs) return;
 
       const userId = evt.user as string | undefined;
-      logger.debug(action === 'pin' ? 'Pin added' : 'Pin removed', { instanceId, channelId, messageTs, userId });
+      logger.debug(action === 'pin' ? 'Pin added' : 'Pin removed', {
+        receiver: receiverKey,
+        teamId: body.team_id,
+        channelId,
+        messageTs,
+        userId,
+      });
 
-      await callbacks.onPin(instanceId, messageTs, channelId, userId, action);
+      await callbacks.onPin(body, messageTs, channelId, userId, action);
     };
 
   app.event('pin_added', handlePinEvent('pin'));
   app.event('pin_removed', handlePinEvent('unpin'));
 
-  logger.info('Pin handlers registered', { instanceId });
+  logger.info('Pin handlers registered', { receiver: receiverKey });
 }

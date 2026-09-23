@@ -22,31 +22,34 @@
  * useless within seconds of the user finishing onboarding. There's also
  * a hard size cap (LRU eviction) so a runaway client can't OOM the API.
  *
+ * Implementation
+ * --------------
+ *
+ * The map itself lives in `single-use-store.ts` (wish: slack-personal-oauth
+ * generalized it so the Slack OAuth pending record and outcome share the same
+ * single-use, TTL-bound, capped semantics). This module keeps the surface the
+ * WhatsApp routes call — `put(accessToken, ttlMs?)` / `take(handle)` — and
+ * the `eshandle_` prefix unchanged.
+ *
  * Multi-replica deployments
  * -------------------------
  *
  * This is **process-local**. The exchange and connect calls MUST land on
  * the same replica. Omni's standard PM2 single-process deployment is
- * fine; if/when API replicas land, swap this for Redis with the same
- * surface (`put` / `take` / `evictExpired`).
+ * fine; if/when API replicas land, swap the store for Redis with the same
+ * surface.
  *
  * Tokens are NEVER logged or serialized — only the handle UUID appears
  * in trace logs.
  */
 
-import { randomUUID } from 'node:crypto';
-
-interface CacheEntry {
-  /** Long-lived Meta access token. NEVER log or include in errors. */
-  accessToken: string;
-  /** Unix ms when this entry expires. */
-  expiresAt: number;
-}
+import { createSingleUseStore } from './single-use-store';
 
 const DEFAULT_TTL_MS = 5 * 60 * 1000;
 const MAX_ENTRIES = 100;
 
-const store = new Map<string, CacheEntry>();
+/** Long-lived Meta access tokens. NEVER log or include the values in errors. */
+const store = createSingleUseStore<string>({ ttlMs: DEFAULT_TTL_MS, maxEntries: MAX_ENTRIES, prefix: 'eshandle_' });
 
 /**
  * Store an access token and return an opaque handle the caller can hand
@@ -55,17 +58,7 @@ const store = new Map<string, CacheEntry>();
  */
 export function put(accessToken: string, ttlMs: number = DEFAULT_TTL_MS): string {
   if (!accessToken) throw new Error('oauth-token-cache: accessToken is required');
-
-  // Cheap LRU: when at cap, evict the oldest entry by insertion order.
-  // (Map iteration is insertion-ordered in JS.)
-  if (store.size >= MAX_ENTRIES) {
-    const oldest = store.keys().next().value;
-    if (oldest) store.delete(oldest);
-  }
-
-  const handle = `eshandle_${randomUUID()}`;
-  store.set(handle, { accessToken, expiresAt: Date.now() + ttlMs });
-  return handle;
+  return store.put(accessToken, ttlMs);
 }
 
 /**
@@ -73,9 +66,5 @@ export function put(accessToken: string, ttlMs: number = DEFAULT_TTL_MS): string
  * Returns `undefined` if the handle is unknown or expired.
  */
 export function take(handle: string): string | undefined {
-  const entry = store.get(handle);
-  if (!entry) return undefined;
-  store.delete(handle);
-  if (entry.expiresAt < Date.now()) return undefined;
-  return entry.accessToken;
+  return store.take(handle);
 }

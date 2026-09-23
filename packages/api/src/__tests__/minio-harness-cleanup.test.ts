@@ -6,6 +6,7 @@ import {
   type SharedMinioHarnessDependencies,
   createDockerPublishProbe,
   createSharedMinioHarness,
+  pickMinioHostPort,
   reapStaleContainers,
 } from './minio-harness';
 
@@ -251,7 +252,7 @@ describe('shared MinIO harness cleanup', () => {
         '--tmpfs',
         '/data:rw,noexec,nosuid,size=256m',
         '-p',
-        '30000:9000',
+        '26384:9000',
         '-e',
         'MINIO_ROOT_USER=minioadmin',
         '-e',
@@ -287,7 +288,7 @@ describe('shared MinIO harness cleanup', () => {
 
     // A later MinIO suite file in the same process must get a FRESH container,
     // not a cached handle to the stopped one.
-    await expect(fake.getSharedMinio()).resolves.toMatchObject({ endpoint: 'http://127.0.0.1:30000' });
+    await expect(fake.getSharedMinio()).resolves.toMatchObject({ endpoint: 'http://127.0.0.1:26384' });
     expect(fake.docker.operations('run')).toHaveLength(2);
     // The image pull verdict is remembered across the per-file restart.
     expect(fake.docker.operations('pull')).toHaveLength(1);
@@ -330,7 +331,7 @@ describe('shared MinIO harness cleanup', () => {
     expect(fake.docker.operations('stop')).toEqual([['docker', 'stop', '--time', '10', 'container-failed']]);
 
     fake.setReady(true);
-    await expect(fake.getSharedMinio()).resolves.toMatchObject({ endpoint: 'http://127.0.0.1:30000' });
+    await expect(fake.getSharedMinio()).resolves.toMatchObject({ endpoint: 'http://127.0.0.1:26384' });
     expect(fake.docker.operations('run')).toHaveLength(2);
 
     fake.process.emit('exit');
@@ -480,7 +481,7 @@ describe('shared MinIO harness cleanup', () => {
       return { ok: true };
     };
 
-    await expect(fake.getSharedMinio()).resolves.toMatchObject({ endpoint: 'http://127.0.0.1:30000' });
+    await expect(fake.getSharedMinio()).resolves.toMatchObject({ endpoint: 'http://127.0.0.1:26384' });
     expect(attempts).toBe(2);
   });
 
@@ -593,7 +594,7 @@ describe('Docker port-publishability probe', () => {
         '--tmpfs',
         '/data:rw,noexec,nosuid,size=256m',
         '-p',
-        '30000:9000',
+        '26384:9000',
         '-e',
         'MINIO_ROOT_USER=minioadmin',
         '-e',
@@ -605,7 +606,7 @@ describe('Docker port-publishability probe', () => {
     ]);
     const fetchCommand = fake.calls.find((command) => command[0] === FAKE_BUN);
     expect(fetchCommand?.[1]).toBe('--eval');
-    expect(fetchCommand?.[2]).toContain('http://127.0.0.1:30000/minio/health/ready');
+    expect(fetchCommand?.[2]).toContain('http://127.0.0.1:26384/minio/health/ready');
     expect(fake.operations('rm')).toEqual([['docker', 'rm', '-f', 'probe-container']]);
   });
 
@@ -627,7 +628,7 @@ describe('Docker port-publishability probe', () => {
     expect(fake.fetchAttempts()).toBe(4);
     expect(fake.warns).toHaveLength(1);
     expect(fake.warns[0]).toContain('Docker is running but cannot publish container ports');
-    expect(fake.warns[0]).toContain('127.0.0.1:30000');
+    expect(fake.warns[0]).toContain('127.0.0.1:26384');
     expect(fake.warns[0]).toContain('MINIO_INTEGRATION=1');
     expect(fake.operations('rm')).toEqual([['docker', 'rm', '-f', 'probe-container']]);
   });
@@ -781,5 +782,13 @@ describe('stale MinIO container reaper', () => {
     reapStaleContainers(fake.dependencies);
 
     expect(fake.docker.operations('rm')).toHaveLength(0);
+  });
+});
+
+describe('pickMinioHostPort', () => {
+  test('draws host ports from 20000-32767, below the Linux ephemeral range', () => {
+    expect(pickMinioHostPort(() => 0)).toBe(20000);
+    expect(pickMinioHostPort(() => 0.5)).toBe(26384);
+    expect(pickMinioHostPort(() => 0.999999999)).toBe(32767);
   });
 });

@@ -2748,6 +2748,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/slack/app": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Slack app configuration status
+         * @description Whether the deployment-wide Slack app is configured, which settings are missing, and the redirect and manifest URLs an operator needs to create it. Scope: `instances:read`.
+         */
+        get: operations["getSlackAppStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/slack/oauth/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start a Slack OAuth install
+         * @description Issues a signed state bound to a server-side pending record that carries this request’s tenant, and returns the Slack authorize URL to open. Scope: `instances:write`.
+         */
+        post: operations["startSlackOAuth"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/slack/oauth/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Slack OAuth redirect target (public)
+         * @description Slack redirects the browser here after authorization. Unauthenticated by contract and rate-limited by IP: the state is HMAC-verified, the pending record is consumed before any Slack call, the tenant comes from that record only, and the response never carries an instance id, name, tenant or connection state.
+         */
+        get: operations["slackOAuthCallback"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/slack/oauth/result/{nonce}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read a Slack OAuth install outcome
+         * @description Single-use outcome for the nonce POST /slack/oauth/start returned. `done` carries the instance id; `error` carries a code such as SLACK_ACCESS_DENIED or SLACK_ENTERPRISE_INSTALL_UNSUPPORTED. Scope: `instances:read`.
+         */
+        get: operations["getSlackOAuthResult"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/platform/tenants": {
         parameters: {
             query?: never;
@@ -4891,7 +4971,7 @@ export interface components {
              * @description Liveness state; null = unsupervised. Transitions emit system.connector.* events
              * @enum {string|null}
              */
-            livenessStatus: "healthy" | "stalled" | null;
+            livenessStatus: "healthy" | "stalled" | "disabled" | null;
             /**
              * Format: date-time
              * @description When the cadence was (re)declared
@@ -4980,6 +5060,7 @@ export interface components {
                 env?: {
                     [key: string]: string;
                 };
+                maxBackoffSeconds?: number;
             } | null;
             /**
              * @description Whether enabled
@@ -5051,7 +5132,7 @@ export interface components {
              * @description Status before this heartbeat (a stalled source recovers on the next sweep tick)
              * @enum {string|null}
              */
-            livenessStatus: "healthy" | "stalled" | null;
+            livenessStatus: "healthy" | "stalled" | "disabled" | null;
             /** @description Declared cadence, if any */
             expectedIntervalSeconds: number | null;
         };
@@ -7057,6 +7138,56 @@ export interface components {
             option: number | string;
             /** @description Outbound seq to tap; defaults to the latest rendered outbound with a component */
             messageSeq?: number;
+        };
+        SlackAppStatus: {
+            /** @description True when every Slack app setting resolves (settings or env) */
+            configured: boolean;
+            /** @description Settings keys still unset, e.g. slack.app.client_id, server.public_url */
+            missing: string[];
+            /** @description server.public_url + /api/v2/slack/oauth/callback; null until the public URL is set */
+            redirectUrl: string | null;
+            /** @description Pre-filled https://api.slack.com/apps?new_app=1&manifest_json=… link; null until the public URL is set */
+            manifestUrl: string | null;
+        };
+        SlackOAuthStartBody: {
+            /**
+             * @description Act as the authorizing person ('user', default) or as the workspace bot
+             * @enum {string}
+             */
+            mode?: "user" | "bot";
+            /**
+             * @description Who is waiting: the dashboard (callback redirects to returnTo) or a terminal (callback renders a page)
+             * @enum {string}
+             */
+            entry: "ui" | "cli";
+            /** @description Where the dashboard resumes after Slack: a path beginning with "/" or a URL on server.public_url, without query or fragment */
+            returnTo?: string;
+        };
+        SlackOAuthStart: {
+            /** @description https://slack.com/oauth/v2/authorize?… to open in a browser */
+            authorizeUrl: string;
+            /** @description Handle for GET /slack/oauth/result/{nonce}; also the callback redirect query */
+            nonce: string;
+            /**
+             * Format: date-time
+             * @description When the pending install expires
+             */
+            expiresAt: string;
+        };
+        /** @description Single-use: `done` and `error` are returned once; afterwards (and for unknown nonces) `pending` */
+        SlackOAuthResult: {
+            /** @enum {string} */
+            status: "pending";
+        } | {
+            /** @enum {string} */
+            status: "done";
+            /** Format: uuid */
+            instanceId: string;
+        } | {
+            /** @enum {string} */
+            status: "error";
+            code: string;
+            message: string;
         };
         PlatformTenant: {
             /**
@@ -13905,7 +14036,7 @@ export interface operations {
                              * @description Liveness state; null = unsupervised. Transitions emit system.connector.* events
                              * @enum {string|null}
                              */
-                            livenessStatus: "healthy" | "stalled" | null;
+                            livenessStatus: "healthy" | "stalled" | "disabled" | null;
                             /**
                              * Format: date-time
                              * @description When the cadence was (re)declared
@@ -14008,6 +14139,7 @@ export interface operations {
                         env?: {
                             [key: string]: string;
                         };
+                        maxBackoffSeconds?: number;
                     } | null;
                     /**
                      * @description Whether enabled
@@ -14113,7 +14245,7 @@ export interface operations {
                              * @description Liveness state; null = unsupervised. Transitions emit system.connector.* events
                              * @enum {string|null}
                              */
-                            livenessStatus: "healthy" | "stalled" | null;
+                            livenessStatus: "healthy" | "stalled" | "disabled" | null;
                             /**
                              * Format: date-time
                              * @description When the cadence was (re)declared
@@ -14265,7 +14397,7 @@ export interface operations {
                              * @description Liveness state; null = unsupervised. Transitions emit system.connector.* events
                              * @enum {string|null}
                              */
-                            livenessStatus: "healthy" | "stalled" | null;
+                            livenessStatus: "healthy" | "stalled" | "disabled" | null;
                             /**
                              * Format: date-time
                              * @description When the cadence was (re)declared
@@ -14439,6 +14571,7 @@ export interface operations {
                         env?: {
                             [key: string]: string;
                         };
+                        maxBackoffSeconds?: number;
                     } | null;
                     /**
                      * @description Whether enabled
@@ -14544,7 +14677,7 @@ export interface operations {
                              * @description Liveness state; null = unsupervised. Transitions emit system.connector.* events
                              * @enum {string|null}
                              */
-                            livenessStatus: "healthy" | "stalled" | null;
+                            livenessStatus: "healthy" | "stalled" | "disabled" | null;
                             /**
                              * Format: date-time
                              * @description When the cadence was (re)declared
@@ -14697,7 +14830,7 @@ export interface operations {
                          * @description Status before this heartbeat (a stalled source recovers on the next sweep tick)
                          * @enum {string|null}
                          */
-                        livenessStatus: "healthy" | "stalled" | null;
+                        livenessStatus: "healthy" | "stalled" | "disabled" | null;
                         /** @description Declared cadence, if any */
                         expectedIntervalSeconds: number | null;
                     };
@@ -24204,6 +24337,173 @@ export interface operations {
                 };
             };
             /** @description Not a harness instance */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    getSlackAppStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Slack app status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SlackAppStatus"];
+                };
+            };
+        };
+    };
+    startSlackOAuth: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["SlackOAuthStartBody"];
+            };
+        };
+        responses: {
+            /** @description Authorize URL and result nonce */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SlackOAuthStart"];
+                };
+            };
+            /** @description Invalid body or returnTo */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Slack app not configured; `details.missing` names every unset setting key */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /** @enum {string} */
+                            code: "SLACK_APP_NOT_CONFIGURED";
+                            message: string;
+                            details: {
+                                missing: string[];
+                            };
+                        };
+                    };
+                };
+            };
+        };
+    };
+    slackOAuthCallback: {
+        parameters: {
+            query: {
+                code?: string;
+                state: string;
+                error?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description CLI entry: fixed "return to your terminal" page */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+            /** @description Dashboard entry: redirect to returnTo with the query string exactly `?slack=<nonce>` */
+            302: {
+                headers: {
+                    Location: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing, tampered, expired, replayed or unknown state; disallowed returnTo. Fixed page, no Slack call */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+        };
+    };
+    getSlackOAuthResult: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                nonce: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Outcome */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SlackOAuthResult"];
+                };
+            };
+            /** @description Malformed nonce */
             400: {
                 headers: {
                     [name: string]: unknown;

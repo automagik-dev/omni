@@ -50,6 +50,7 @@ import { and, eq, gte, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { sentryEnabled } from '../../lib/sentry-scrub';
+import { selectSlackDownloadToken } from '../../plugins/media-processor';
 import { optionalDateParam } from '../../schemas/date-query';
 import { sendCloseContactSchema, sendHandoffSchema } from '../../schemas/openapi/messages';
 import type { Services } from '../../services';
@@ -698,9 +699,18 @@ function sentByResponseFields(
   return sentBy === 'agent' ? { senderAgentId: senderAgentId ?? null } : {};
 }
 
+/**
+ * Voice notes have to satisfy two families of channel plugins at once:
+ * WhatsApp reads `metadata.audioBuffer` first (priority audioBuffer > base64 >
+ * URL, see channel-whatsapp/src/senders/builders.ts), while Slack, Discord and
+ * Telegram only ever look at `metadata.base64`. Dropping `base64` here made a
+ * `voiceNote: true` send fail on Slack with 'Media URL or base64 required', so
+ * the voice-note branch now carries BOTH shapes — WhatsApp still picks the
+ * buffer, every other channel picks the string.
+ */
 function buildSendMediaMetadata(data: z.infer<typeof sendMediaSchema>): Record<string, unknown> {
   if (data.type === 'audio' && data.voiceNote === true && data.base64) {
-    return { audioBuffer: Buffer.from(data.base64, 'base64'), ptt: true };
+    return { base64: data.base64, audioBuffer: Buffer.from(data.base64, 'base64'), ptt: true };
   }
   return { base64: data.base64, ptt: data.voiceNote };
 }
@@ -864,12 +874,16 @@ async function resolveMessageFromRef(
   return found;
 }
 
-function buildMediaDownloadFetchOptions(instance: Record<string, unknown>): MediaFetchOptions | undefined {
+function buildMediaDownloadFetchOptions(
+  instance: Record<string, unknown>,
+  mediaUrl: string,
+): MediaFetchOptions | undefined {
   if (instance.channel !== 'slack') return undefined;
-  const slackBotToken = typeof instance.slackBotToken === 'string' ? instance.slackBotToken : undefined;
-  if (!slackBotToken) return undefined;
+  // The stored mediaUrl is tenant-controlled: the token goes only to Slack's hosts.
+  const token = selectSlackDownloadToken(instance, mediaUrl);
+  if (!token) return undefined;
   return {
-    headers: { Authorization: `Bearer ${slackBotToken}` },
+    headers: { Authorization: `Bearer ${token}` },
     preserveAuthRedirectHostSuffixes: ['slack.com'],
   };
 }
@@ -948,7 +962,7 @@ messagesRoutes.post('/media/download', zValidator('json', messageRefSchema), asy
         mediaUrl,
         message.mediaMimeType ?? undefined,
         message.platformTimestamp ?? undefined,
-        buildMediaDownloadFetchOptions(instance as Record<string, unknown>),
+        buildMediaDownloadFetchOptions(instance as Record<string, unknown>, mediaUrl),
         // `mediaUrl` came off a stored message, i.e. a tenant-controlled
         // payload, so this download is tenant-controlled egress: pass the
         // REQUEST's tenant so the `OMNI_MEDIA_URL_GUARD=off` escape hatch is
@@ -2269,7 +2283,10 @@ messagesRoutes.post('/send/tts', zValidator('json', sendTtsSchema), async (c) =>
       mimeType: ttsResult.mimeType,
     } as OutgoingContent,
     metadata: {
+      // Same dual shape as buildSendMediaMetadata: buffer for WhatsApp,
+      // base64 string for Slack/Discord/Telegram.
       audioBuffer: ttsResult.buffer,
+      base64: ttsResult.buffer.toString('base64'),
       ptt: true,
       ...(senderAgentId ? { senderAgentId } : {}),
     },
@@ -3284,5 +3301,8 @@ messagesRoutes.delete('/:id/star', zValidator('json', starMessageSchema), async 
     data: { messageId, starred: false },
   });
 });
+
+/** Test-only access to how the on-demand media download authenticates. */
+export const __test__ = { buildMediaDownloadFetchOptions };
 
 export { messagesRoutes };

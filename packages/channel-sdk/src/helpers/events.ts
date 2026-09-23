@@ -316,6 +316,12 @@ export interface InstanceConnectedMetadata {
 
   /** True only on the first connect after a fresh pairing */
   isNewLogin?: boolean;
+
+  /** Workspace id on the platform (Slack team id `T…`) */
+  teamId?: string;
+
+  /** Platform user id the instance acts as (Slack `U…` in user mode) */
+  actingUserId?: string;
 }
 
 /**

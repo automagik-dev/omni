@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | APPROVED |
+| **Status** | IN_PROGRESS |
 | **Slug** | `slack-personal-oauth` |
 | **Date** | 2026-09-21 |
 | **Author** | Felipe Rosa |
@@ -510,6 +510,226 @@ _The read-only reviewer returns evidence; the invoking orchestrator appends a ti
 
 ---
 
+### Integrated PR review — round 3 (CodeRabbit inline + independent review on PR #1233)
+
+**Reviewers:** CodeRabbit (8 actionable inline comments) and an independent round-3 review
+(H1, M1–M13, L1–L9) on PR #1233.
+**Verdict:** FIX-FIRST, closed by three parallel repair clusters and Group 7's delivery.
+**Fixed at:** integration branch `wish/slack-personal-oauth`, commits 62314c8d (docs + CLI),
+d8324dbc (Slack plugin), c38cf2f9 (API), plus Group 7.
+
+**Slack plugin cluster — d8324dbc** (H1 / CodeRabbit 4067680541, M4, M5, L3, L4, L5, L7).
+The whole-receiver fan-out helper is deleted: a workspace with several personal installs was
+delivering every slash command, interaction and pin to all of them, so one person's command
+reached another person's install. Pins now route by the event envelope and commands and
+interactions through `targetsForActor`, which prefers the issuing user's own install and
+otherwise narrows through the same authorizations path; a command no install owns is warned and
+dropped. The authorizations lookup follows Slack's cursor, bounded at five pages with a warning
+at the bound. Reaction and `agent_session_stopped` events get per-instance dedupe on Slack's
+`event_id` through channel-sdk's existing bounded `createInboundDedupeCache` (500 entries, 60 s
+TTL, periodic eviction), disposed by the shared release path. Accepted limitation: Bolt 4.7.2
+types `ack` as undefined for every event except `function_executed`, so ack-before-lookup stays
+expressible only for commands and interactions, where it already held.
+Coordinator verification: `fanoutTargets` is absent from the package, the dedupe reuses shared
+bounded infrastructure rather than a new map, the diff adds no `.skip`/`.only`/`any`/suppression,
+and `bun test packages/channel-slack` is 356 pass / 0 fail.
+
+**API cluster — c38cf2f9** (CodeRabbit 4067680496, 4067680498, 4067680508, 4067680512,
+4067680524, plus M3, L1, L2, L6, M9/M10, M11).
+`PUT /settings` seals a secret under the writing tenant's scope and an unopenable value reads
+back as absent, so a tenant-scoped operator's Slack keys were invisible to the public callback:
+every install landed on the failure page while `GET /slack/app` still reported
+`configured: true`. The callback now resolves those five keys inside the scope the pending
+record names, never the request's, and a refused scope fails closed with a log line.
+Ruling: reading the record's tenant now precedes HMAC verification, because the client secret
+the state is signed with cannot be read until the tenant is known — why: there is no earlier
+point at which the scope is knowable; cost if wrong: someone already holding a live nonce can
+re-arm that record's store TTL without a valid signature. Bounded by design — the peek is a
+`take` plus an immediate `transition` back, `verifyState` still gates consumption and every
+Slack call, and `routes/v2/slack.ts:607` still rejects a record past its own `expiresAt`, so the
+flow deadline cannot be extended.
+The write-once Slack identity moved into the SQL predicate (`WHERE slack_user_id IS NULL`)
+instead of a preceding select, because every API process runs its own unqueued
+`instance.connected` consumer and two handlers could both read NULL. Both Slack fetches carry a
+10 s `AbortSignal.timeout`. The callback's exemption from the global request timeout goes through
+one exported predicate. A mode-only `PATCH` no longer bypasses the app-token conflict check.
+Public URLs must be `https`. Redaction covers `xapp-` and runs at the `connectError` log site,
+and the end-to-end test taps real logger output for every token, secret and shape with a
+positive control. The two 400 failure pages are byte-identical while the log keeps the reason.
+Coordinator verification: routes/v2 483 pass / 7 pre-existing pg skips / 0 fail; lib 152 pass /
+0 fail; egress access guard run directly, 13 pass / 0 fail.
+
+**Docs and CLI cluster — 62314c8d** (M6, M7, M8, M12, L8).
+`omni slack connect` waited exactly the API's 300 s pending-record TTL, so its final poll could
+only ever read an expired nonce; the default drops to 240 s and the timeout message no longer
+offers to resume a single-use install. The channel doc lists the two refusal codes in the order
+a caller meets them (the route's `409 SLACK_APP_TOKEN_IN_USE` first, the receiver's
+`SLACK_BOT_INSTANCE_EXISTS` behind it). The CLI design doc gains the three commands, the
+stdin-only secret contract, a non-interactive example, the option table and the exit codes. The
+manifest-link test decodes a real manifest and asserts the printed URL. Migration 0078's header
+states that its index serves no query yet and exists for the identity finder a follow-up adds;
+the diff touches comment lines only.
+Coordinator verification: `make verify-migrations` is green after the commit (38 pass,
+"Migration contract OK vs origin/dev — 1 new migration, journal consistent"), and the CLI Slack
+suite is 22 pass / 0 fail.
+
+**M13 — accounting correction (the finding was right).** The claim that every ported test passes
+with its original assertions was false for `packages/channel-slack/src/__tests__/socket-health.test.ts`.
+Recorded here as the deliberate contract change it is, per Decision 10:
+- Before, on `dev`: `it('returns early (no teardown) when the existing connection is genuinely
+  healthy')` asserted `expect(counts.stop).toBe(0)` and that the connection object was retained.
+- After, on this branch: `describe('SlackPlugin.connect — an attached instance is detached and
+  rebuilt, never short-circuited')` → `it('detaches before re-attaching even when the socket is
+  genuinely healthy')`, asserting the `attach`/`detach`/`stop` sequence, with the instance left
+  in `error` when the rebuild fails. There is no "already connected" shortcut any more.
+The inversion is intended; only the ported-test checklist was wrong to imply otherwise.
+
+**L9 — superseded.** The ledger line asked for was "Group 7 blocked (private registry 401)".
+The registry access was resolved and Group 7 is delivered in this round, so the ledger records
+its delivery instead of a blocked line.
+
+**Carried as follow-ups, not fixed here.**
+- **M1 — turbo caches the repository-wide egress guard on core's inputs only** → issue #1234.
+  Pre-existing infrastructure, unrelated to this wish's diff; it is why the guard is now run
+  directly whenever a raw `fetch` moves.
+- **M2 / CodeRabbit 4067680537 — the Slack-identity upsert is not atomic** → issue #1235,
+  together with the indexed `findBySlackIdentity` lookup, because both want the same index.
+  Deliberately not fixed here: the fix is a partial unique index, `migrateDb()` runs every
+  migration on API startup, and `CREATE UNIQUE INDEX IF NOT EXISTS` against a database that
+  already holds two rows for one identity fails on boot on every replica. That needs a
+  duplicate-row policy decision, which belongs to the wish owner, not to this PR.
+  Meanwhile the worst case is two instance rows for one Slack identity, each with validly sealed
+  tokens, resolvable by deleting one; no leak, no cross-tenant read.
+- **CodeRabbit 4067680520 — shared persistence for the pending OAuth store: declined by design.**
+  The record lives 5 minutes, the callback takes it before any Slack call, and a callback landing
+  on a process that never issued the nonce answers the fixed failure page without calling Slack,
+  so it already fails closed. A shared store would mean either durable storage for 5-minute auth
+  material or a Redis dependency the stack does not carry. The requirement is deployment
+  guidance, now stated in `docs/channels/slack.md`, and the store sits behind the generic
+  `createSingleUseStore` seam if that changes.
+
+**Full gate after the three merges:** `bun run check` → 26/26 tasks successful; `@omni/api:test`
+2539 pass / 698 pre-existing pg skips / 0 fail; egress access guard run directly, 13 pass / 0 fail.
+
+### Group 7: UI (khal-ui) — delivered after the admission run refused it
+
+**Admission run `wf_1289a387-d39` returned `refused`, route `brainstorm`, and it was right.**
+The blind judge found that `OmniAdminApp.tsx:30-31` builds `createMemoryRouter(routes, { initialEntries: [initialPath] })`
+once per mount and documents that the pack must not hijack the browser URL bar, so
+`useLocation().search` can never carry the `?slack=<nonce>` the callback appends: deliverable 3
+had no implementable source, and the choice of mechanism also decides what `returnTo` the button
+may send. Two riders came with it — "shows a toast" contradicts `MutationResult.tsx:3-8`, which
+records this app replacing toasts with evidence panels, and the wish's propless `SlackAppCard`
+contradicts `SettingsPage.tsx:76-81`, where the editor and its `isSecretWipe` guard live in
+page-local state reached only from `onRowClick`.
+
+**Three coordinator rulings settled it** (full text in the session scratchpad, `g7-rulings.md`):
+1. The button sends `returnTo = window.location.origin + window.location.pathname`, and the page
+   reads the nonce from `window.location.search`, clearing only that parameter through
+   `history.replaceState` and never navigating the memory router. Rejected alternative: having the
+   KHAL shell read `?slack=` and pass it in as a `MainView` prop, which is architecturally purer
+   but needs a change to `@khal-os/*`, a private package outside this repository, so it would have
+   shipped a dead return leg. Precedent for reading the browser location inside this app:
+   `apps/khal-ui/dev/src/main.tsx:13-18` and `RouteErrorBoundary.tsx:65`.
+   Cost if wrong: a dashboard not served on the `server.public_url` origin gets a 400 naming the
+   rule instead of a working install — which is why `docs/channels/slack.md` now states the
+   requirement.
+2. The outcome renders inline (`Note`), not as a toast.
+3. `SlackAppCard` takes `onSelectKey(key)` and `SettingsPage` wires it to the same
+   `setSelectedKey`/`setEditValue`/`put.reset()` path `onRowClick` uses, because a propless card
+   could only reach the editor by duplicating it and its secret guard.
+
+**Environment prerequisite found while measuring the baseline.** `apps/khal-ui` consumes
+`@omni/sdk` through a `file:` dependency that bun **copies** at install time, so the order must be
+root install → `cd packages/sdk && bun run build` → `cd apps/khal-ui && bun install`. Out of order
+the group's oracle reports 62 typecheck errors and 2 test failures, all phantom. In order the
+pre-change baseline is **144 pass / 0 fail** and exactly **two** pre-existing typecheck errors at
+`src/pages/home/OverviewPage.tsx:77,78` (the generated health payload type carries no `instances`;
+the wish's SDK diff is +324/-0, so they are dev's). The group is scored on the delta.
+
+**Delivery `4d030aa3`** — the eight declared paths, nothing else: the `slack` namespace on the
+`omniExt(base)` literal; `SlackConnectButton.tsx`; the return leg and the button's render site in
+`InstancesListPage.tsx`; `readSlackReturnNonce` and the missing-keys text as pure helpers with
+tests; `SlackAppCard.tsx` and its `SettingsPage.tsx` render site; the two `docs/channels/slack.md`
+tense sentences plus the same-origin requirement.
+
+**Review round 1 (reviewer-g7, Opus, 2026-09-22T02:11:25Z, commit `4d030aa3`): FIX-FIRST** —
+0 HIGH, 3 MEDIUM, 1 LOW. All eleven acceptance criteria passed as amended by the rulings; the
+findings were behavioral gaps the criteria did not cover.
+1. MEDIUM — `SettingsPage.tsx:100,105`: both mutations invalidated only `[['settings','list']]`,
+   while the card's status query is `['slack','app']` with a 30 s `staleTime`, so filling the last
+   missing key left the card reporting the deployment unconfigured directly above the evidence the
+   write landed, with Connect still disabled. The exact loop the card was added to serve.
+2. MEDIUM — `SettingsPage.tsx:131` with `settings-helpers.ts:30`: the editor pre-filled with
+   `displayValue`, which renders a null value as `—`. `slack.app.client_id` and
+   `server.public_url` seed as null and non-secret, `isSecretWipe` guards secrets only, so an
+   operator could save `—` as the client id and the deployment would read `configured: true` with
+   a garbage value, failing only later as a Slack error page.
+3. MEDIUM — the return leg is only on the instances page, but `returnTo` is the shell's URL, so
+   the pack could mount on another route and never surface an install that had already succeeded
+   server-side. Recorded by the reviewer as an accepted residual of Ruling 1, not a contract
+   deviation.
+4. LOW — `clearSlackReturnParam` stripped through `URLSearchParams` and re-serialized the
+   neighbouring parameters the shell owns (`b%20c` → `b+c`, `?flag` → `?flag=`).
+
+**Repair `b3f897b2` (round 1 of 2 in the budget), all four closed or narrowed:** both mutations
+now invalidate `['slack','app']`; the editor starts blank for a null or undefined value; the
+memory router starts on `/instances` when the browser query carries a return nonce, which neither
+navigates nor rewrites the URL bar; and a new pure `stripSlackReturnParam(search)` removes only
+that parameter and leaves the rest byte-identical, with tests for the encoding cases and for a
+parameter that merely shares the prefix (`slackbot=1`, `slack_team=T1`). `instance-helpers.ts`
+still has zero imports and touches no browser global. Finding 3's residual — a shell that never
+mounts the pack at all — is unreachable inside this repository and stays the follow-up Ruling 1
+already names.
+Ruling: the repair added `apps/khal-ui/package/src/app/OmniAdminApp.tsx` to the group's file set,
+one function choosing the starting route — why: without it the shipped return leg can silently do
+nothing in the KHAL shell, which is the deployment this group targets; cost if wrong: a mount that
+carries a return nonce opens on the instances route instead of the host's `initialPath`.
+
+**Validation (coordinator-measured, in the group's worktree):**
+- `cd apps/khal-ui/package && bun test` → **155 pass / 0 fail**, 17 files (baseline 144; +7 from
+  delivery, +4 from the repair).
+- `bun run typecheck` → exactly the two pre-existing `OverviewPage.tsx` errors, none added.
+- `bunx biome check --error-on-warnings apps/khal-ui/package/src docs` from the **worktree root**
+  → clean, 172 files. Note for re-runs: from inside the package it reports spurious errors,
+  because that invocation misses the root `biome.json` override for `apps/khal-ui/**`.
+- `bunx knip` from the worktree root → exit 0.
+- Repository gate after the merge: `bun run check` → 26/26 tasks successful.
+`apps/khal-ui` sits outside the root workspaces and outside `make test`, so the group oracle above
+is the authority for it; `bun run check` does not cover it.
+
+**Review round 2 (reviewer-g7 round 2, Opus, 2026-09-22T02:23:42Z, commit `b3f897b2`): SHIP** —
+all four round-1 findings closed, nothing above LOW remaining. The reviewer verified the
+invalidation against the real `@tanstack/query-core` rather than from documentation (an active
+observer on `['slack','app']` with the 30 s `staleTime` refetched after a single
+`invalidateQueries`), executed the old and new editor guard side by side over ten row shapes to
+confirm an empty string, `0` and `false` still pre-fill, confirmed `/instances` is a real route
+pinned by an existing route test, and measured the stripper against seventeen adversarial query
+strings. It also confirmed the concurrency the route override newly makes likely is safe: two pack
+windows both start on `/instances`, but `slackReturnHandled` and the strip both run synchronously
+before the await, so only one resolves the nonce.
+
+Three new LOW items came out of that round. One was repaired in `7129850e`: the reviewer
+constructed the input the new tests accepted — `?%73lack=<nonce>`, whose key `URLSearchParams`
+decodes but a textual match does not — so the nonce was read yet never cleared, which made every
+later mount report a succeeded install as still finishing and pinned the starting-route override to
+that URL indefinitely. The filter now parses each part in isolation, matching the reader's
+decoding while keeping surviving parts byte-identical, with tests for the encoded key, a malformed
+escape in a neighbour and an encoded separator inside a value. The other two are accepted and
+recorded rather than fixed: the route override applies to every concurrent pack mount and not only
+the one that resolves the nonce (route-only consequence, no duplicate resolution), and the pack root
+now imports from a page directory, which is a layering nit in a file the manifest above now lists.
+
+Also recorded from that round, because it changes what a green gate means: `knip.json` lists
+fifteen workspaces and `apps/khal-ui` is not among them, nor is it in the root `package.json`
+workspaces. Knip's clean exit is true but carries **no signal** about any Group 7 file, so the
+group's own typecheck, tests and root-run biome are the whole oracle.
+
+Final Group 7 validation: `apps/khal-ui/package` **157 pass / 0 fail** (144 baseline, +7 delivery,
++4 first repair, +2 encoding fix), the same two pre-existing typecheck errors and no others, biome
+clean over 172 files from the worktree root.
+
+
 ## Files to Create/Modify
 
 ```
@@ -583,6 +803,7 @@ packages/cli/src/commands/__tests__/slack.test.ts                       (new)
 
 # Group 7 (khal-ui)
 apps/khal-ui/package/src/api/ext.ts
+apps/khal-ui/package/src/app/OmniAdminApp.tsx                            (added by ruling, Group 7 repair)
 apps/khal-ui/package/src/pages/instances/SlackConnectButton.tsx         (new)
 apps/khal-ui/package/src/pages/instances/InstancesListPage.tsx
 apps/khal-ui/package/src/pages/instances/instance-helpers.ts
@@ -595,3 +816,67 @@ docs/channels/slack.md
 docs/api/endpoints.md
 packages/api/src/routes/v2/__tests__/slack-oauth-e2e.test.ts            (new)
 ```
+
+### Group 4 execution review — commit `c274c3e4` (2026-09-21T21:24:48Z)
+
+- **Verdict:** SHIP
+- **Reviewer:** review-agent/claude (reviewer-g4, Fable 5.1); blind criteria written 21:12:59Z before any changed file was opened
+- **Target:** `c274c3e4` on `wish/slack-personal-oauth-g4` (parent `e28e2379`); commands run on HEAD `61fdb0c7`
+- **Criteria:** all 15 frozen contract criteria traced to code and to a test; 14 met outright. AC15 (file set) was graded MEDIUM because the reviewer diffed against `e3bb2c2e` instead of the true parent `e28e2379`, which showed dev's gitignore fix `7184b155` reversed; the effective diff against the integration tip carries no `.gitignore` change, so the coordinator records AC15 as met.
+- **Validation (reviewer's own runs, all exit 0):** slack-oauth 38 pass; lib/__tests__ 145 pass; ownership gate 22; privacy 10; generate:sdk no diff; typecheck (turbo replay + fresh tsc in api and sdk); lint clean; knip exit 0 at HEAD; routes/v2 466 pass / 7 pre-existing MinIO skips; sdk 52 pass.
+- **Findings:** 0 CRITICAL / 0 HIGH / 2 MEDIUM / 3 LOW. F2 (MEDIUM): the (team, user) lookup lists up to 1000 Slack rows and filters in JS; trigger for `findBySlackIdentity` on InstanceService when Group 5 lands. F3 (LOW): service-level connect-failure log not passed through `redactSlackTokens`, regex misses `xapp-`. F4 (LOW): the 100-entry issued-handle cap can evict an in-flight callback under a burst (design-accepted fail-closed). F5 (LOW): contract wording about SDK path literals (server-relative paths by convention).
+- **Ruling recorded:** `@omni/api` declares `@omni/channel-slack` as a workspace dependency (plan file set omitted `packages/api/package.json`; precedent channel-whatsapp-business / channel-harness).
+- Full report: session scratchpad `g4-review.md`; author report `g4-report.md`. Group executed by hand after wish workflow run `wf_b8e249a2-415` refused at admission (route `plan`, auth/secret/permission surfaces).
+
+### Group 2 execution review — branch head `980929b6` (2026-09-21T21:35:12Z)
+
+- **Verdict:** SHIP
+- **Reviewer:** review-agent/claude (reviewer-g2, Opus); blind plan written before opening the diff (`g2-review-plan.md`)
+- **Target:** `980929b6` on `wish/slack-personal-oauth-g2` vs base `96e8b1ce`; diff exactly the three declared files, 928 insertions
+- **Criteria:** all 11 frozen contract criteria met (every Bolt App built with `authorize`, no `token`; SHA-256 receiver key without the plaintext secret; handlers registered once; revocation events as no-ops; `targetsFor` team fallback adds no authorization check)
+- **Validation (reviewer's own runs):** typecheck exit 0; app-receiver test 10 pass; channel-slack 317 pass across 24 files, no existing test file touched; biome clean; knip exit 0; no `any`, no suppression, no skip. Coordinator gate `bun run check` on `980929b6`: 26/26 tasks, 0 failures.
+- **Findings:** 0 CRITICAL / 0 HIGH / 3 MEDIUM / 4 LOW. MEDIUM carried to Group 3: (1) `attach` overwrites the per-team bot client unconditionally while `authorize` picks by `attachedAt`, so out-of-order attaches disagree; (2) the HTTP path lacks the 1 MB body-limit guard and `httpHandler` the existing connection code has; (3) the last detach stops the App but notifies no registry.
+- Full report: session scratchpad `g2-review.md`. Group built by wish workflow run `wf_d17f6910-2c7` (reviews SHIP twice); its gate failed on the knip and `.env` host traps fixed in `7184b155` and `9cbf1402`; runs `wf_b3e1bf30-7e5` (stopped) and `wf_7680df4c-b2d` (refused: existing unreviewed branch) did not change the code beyond commit `975afcef`.
+
+### Group 6 execution review — commit `ecb1533a` (workflow run `wf_1ac9b711-675`, 2026-09-21)
+
+- **Verdict:** SHIP (workflow reviewer, Opus run; 0 blocking findings) on the executor commit `59c06913`, whose tree is identical to the squashed `ecb1533a`
+- **Gate:** `bun run check` — pass (CLI package 804 tests, 0 failures); read-back measured 2 files, 1,062 insertions
+- **Contract:** `omni slack app setup|status` and `omni slack connect` in `packages/cli/src/commands/slack.ts` against the Group 4 SDK surface; handlers take the client and every side effect as injectable parameters and are re-exported through `__testables`; secrets only via `-stdin` flags or a stderr prompt and never echoed; exit codes 0 / 2 / 3; `packages/cli/src/commands/__tests__/slack.test.ts` covers the five frozen cases with a fake client and no real wait or launch
+- **Read-back:** the run ended `blocked` only because the GitGuardian check flagged a high-entropy test sentinel (`xapp-1-…`) on the first commit; the coordinator squashed the branch into one sentinel-free commit (`ecb1533a`, same tree as `cc09fc0a` after the sentinel change) and pushed with `--force-with-lease`; GitGuardian passes on that head. PR #1229 against `wish/slack-personal-oauth`.
+- Full result: session task output `wsrqqcfgh`; per-agent journal `wf_1ac9b711-675`.
+
+### Group 3 execution review — commit `ba08978c` (workflow run `wf_026cb518-d0f`, 2026-09-21)
+
+- **Verdict:** SHIP (workflow reviewer, Opus run; 0 blocking findings, nothing outside the declared set)
+- **Gate:** `bun run check` — pass (26/26 turbo tasks; 3,209 tests across 322 files, 0 failures)
+- **Contract:** `plugin.ts` runs every instance through `attachments` + `receivers` (one `SlackAppReceiver` per receiver key), connect gets-or-creates the receiver, resolves identity through `resolveWorkspaceIdentity(receiver.botClientFor(teamId))`, keeps the user-mode fail-fast, detaches first on reconnect (Decision 10) and attaches with a monotonic `attachedAt`; disconnect stops and drops the receiver on its last attachment; `setupHandlers` is the receiver's `registerHandlers` hook resolving targets via `targetsFor`; handlers take a `SlackAttachment`; the four dead `BoltConnection` exports are dropped from `index.ts`; `channel-name.test.ts` added to the owned set by coordinator ruling (its setup seeded the private map).
+- **Read-back:** the run ended `blocked` only because three declared test files (`bolt-client-user-mode`, `auth-mode-connect`, `inbound-dedup`) needed no change: they pass unchanged against the new plugin under the full gate, which satisfies "ported with equal assertions". Coordinator ruling: accepted as delivered. PR #1230 against `wish/slack-personal-oauth`, 10 files, 1,227 insertions; GitGuardian pass.
+- **Carried forward:** Group 2 MEDIUM #2 (HTTP body-limit guard and `httpHandler` on the receiver's HTTP branch) was cuttable in this contract; Group 5 or Group 8 verifies whether the HTTP transport path still enforces the 1 MB limit.
+- Full result: session task output `wwqiz53qp`; per-agent journal `wf_026cb518-d0f`.
+
+### Group 5 execution review — branch head `a3b0a40a` (2026-09-21T23:59:04Z)
+
+- **Verdict:** SHIP
+- **Reviewer:** review-agent/claude (reviewer-g5, Opus); blind plan written before opening the diff (`g5-review-plan.md`)
+- **Target:** `a3b0a40a` on `wish/slack-personal-oauth-g5` vs base `dda5460c` (commits `00035e94` by workflow run `wf_b735b847-4fd`, `a3b0a40a` by the coordinator's fixer); 11 files, 1,620 insertions
+- **Criteria:** all 15 frozen contract criteria met, each traced to a code line and a falsifying test; the oracle is red at base. Ruling: `connection.test.ts` added to the owned set (its receiver-sharing cases encoded the old two-bot-mode contract); ported with every assertion kept.
+- **Validation (reviewer's own runs, all green):** receiver-fanout 5; channel-slack 341; app-token-conflict 10; slack-identity 4; api/plugins 432; api/routes/v2 471; lint, knip, typecheck exit 0; no skip/only/todo, no `any`. Coordinator gate `bun run check` on `a3b0a40a`: 26/26 tasks, 0 failures.
+- **Findings:** 0 CRITICAL / 0 HIGH / 3 MEDIUM / 3 LOW. MEDIUM (1) the API route's `force` escape never reaches the attach guard (plugin.ts passes no force), so the 409 message suggests an override that then fails with `SLACK_BOT_INSTANCE_EXISTS` — carried to Group 8; (2) a non-scope `authorizations.list` failure logs once per event and caches nothing; (3) the 60 s expiry and eviction sweep are untested (TTL is a named constant, growth bounded).
+- Full report: session scratchpad `g5-review.md`.
+
+### Group 8 execution review — PR #1232 (workflow run `wf_91d5d5b8-e78`, 2026-09-22)
+
+- **Verdict:** SHIP (workflow reviewer, Opus run; 0 blocking findings, nothing outside the declared set)
+- **Gate:** `bun run check` — pass (26/26 turbo tasks; 3,219 tests across 324 files, 0 failures); the real-PostgreSQL gate of `make check-all` is not runnable on this host and is covered by CI on the final pull request
+- **Contract:** `docs/channels/slack.md` opens with "One-click setup (OAuth)" (operator once, member every time, manifest link contents, HTTPS/tunnel note, revocation behavior, narrowed `SLACK_APP_TOKEN_IN_USE` semantics) above the retained manual path; `docs/api/endpoints.md` documents the four OAuth routes; `slack-oauth-e2e.test.ts` drives start → callback → result → connected for two members of one workspace and shows `tokens_revoked` disconnecting exactly one; the Group 5 `force` gap is closed by threading the connect-time force option into the receiver's attach guard with a test.
+- **Read-back:** the run ended `blocked` only because `packages/channel-slack/src/connection/app-receiver.ts`, declared and marked cuttable, ended untouched (the repair is proved from `plugin.ts` and the new test). Coordinator ruling: accepted as delivered. 5 files, 660 insertions; PR checks pass.
+- Full result: session task output `w6ip4di1d`; per-agent journal `wf_91d5d5b8-e78`.
+
+### Integrated PR review — PR #1233 `wish/slack-personal-oauth` → `dev`
+
+- **Round 1 (2026-09-22T00:34:08Z, head `30244b85`):** FIX-FIRST — review-agent/claude (reviewer-pr, Opus); 0 CRITICAL / 2 HIGH / 4 MEDIUM / 1 LOW. HIGH-1: `packages/api/src/lib/slack-oauth.ts` (two raw `fetch` sites) absent from `REGISTERED_EGRESS`, so core's egress-access guard fails on a fresh run while every worktree gate had replayed core's tests from the turbo cache. HIGH-2: the connect routes waived their own 409 on `force` but never forwarded it into the plugin options, so the receiver's bot-mode guard could not be overridden. Group 1 passed its first full independent review (all five acceptance criteria; migration 0078 and journal entry conform; LOW: the disposable-database double-apply is CI's).
+- **Repairs (attempt 1/2):** `5bcd485c` fix(core): platform-vendor registry entry for the Slack OAuth exchange (sites 2); `f98d007d` fix(api): typed `slackForce` input flowing into the Slack options block on both connect routes, seam test asserting the plugin receives `force` only when sent, docs dating the dashboard button.
+- **Round 2 (2026-09-22T00:44:52Z, head `f98d007d`):** SHIP — 0 CRITICAL / 0 HIGH / 3 MEDIUM / 1 LOW. Fresh full check with the cache bypassed: 26/26 tasks executed, api 2,522 pass / 698 skip / 0 fail, core 1,103 pass; egress guard 13/13. LOW (docs tense) closed in the following commit. Open MEDIUM follow-ups: turbo's `@omni/core#test` inputs exclude the roots the egress guard scans (pre-existing); `InstanceService.findBySlackIdentity` for the 1000-row lookup; the untested 60 s authorizations cache TTL. Note: `packages/core/src/egress/egress-access-guard.ts` is outside the wish manifest, justified as the direct HIGH-1 correction.
+- **CI on PR #1233 (head `f98d007d`):** quality gate, PostgreSQL isolation gate, remote-media integration, smoke test, commit messages, GitGuardian, Socket and Snyk all pass.
+- Full report: session scratchpad `pr-review.md` (rounds 1 and 2), blind plan `pr-review-plan.md`, fix report `pr-fix-report.md`.

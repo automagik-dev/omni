@@ -37,6 +37,7 @@ import type { Services } from '../services';
 import { MediaStorageService } from '../services/media-storage';
 import { currentTenantScope, scopedHandle } from '../tenancy/tenant-scope';
 import { runConsumerInTenantContext, runInWorkerTenantScope } from '../tenancy/worker-tenant-context';
+import { hostMatchesSuffix } from '../utils/safe-media-fetch';
 import { getPlugin } from './loader';
 
 const log = createLogger('media-processor');
@@ -182,23 +183,66 @@ interface MediaResolution {
   filePath: string;
 }
 
+/** Whether a media URL is an HTTPS URL on `slack.com` or one of its subdomains. */
+function isSlackFileUrl(mediaUrl: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(mediaUrl);
+  } catch {
+    return false;
+  }
+  return url.protocol === 'https:' && hostMatchesSuffix(url.hostname, 'slack.com');
+}
+
+/**
+ * Pick the Slack token that can actually READ an inbound `url_private` file.
+ *
+ * In `authMode: 'user'` the workspace is joined as the authorizing human and
+ * the bot user need not be a member of the channel the file was shared in —
+ * files.slack.com then answers the bot token with a 403. The xoxp user token
+ * (which carries `files:read`) is the one that can read it, so user-mode rows
+ * download as the user.
+ *
+ * Every other row keeps today's behaviour exactly: bot mode, an absent auth
+ * mode, and user mode with no stored user token all download as the bot.
+ *
+ * Shared with the on-demand download route (`POST /messages/media/download`),
+ * so both download paths authenticate a row the same way — including a
+ * user-mode row from a one-click install, which has no bot token at all.
+ *
+ * No token at all for a URL outside Slack's own hosts: a media URL can come
+ * from a stored or replayed payload naming any host, and the first request of
+ * a download carries the Authorization header to wherever it points.
+ */
+export function selectSlackDownloadToken(instance: Record<string, unknown>, mediaUrl: string): string | undefined {
+  if (!isSlackFileUrl(mediaUrl)) return undefined;
+  const slackAuthMode = instance.slackAuthMode as string | undefined;
+  const slackUserToken = instance.slackUserToken as string | undefined;
+  if (slackAuthMode === 'user' && typeof slackUserToken === 'string' && slackUserToken.length > 0) {
+    return slackUserToken;
+  }
+  return instance.slackBotToken as string | undefined;
+}
+
 /**
  * Build fetch options for authenticated media downloads.
- * Slack private URLs require a bot-token Authorization header — we look it up
- * from the instances table so credentials never enter the event payload or DB.
+ * Slack private URLs require a token Authorization header — we look the
+ * instance row up from the instances table so credentials never enter the
+ * event payload or the message row.
  */
 async function buildFetchOptions(
   ctx: MediaProcessorContext,
   instanceId: string,
+  mediaUrl: string,
   channelType?: ChannelType,
   trustedTenantId?: string,
 ): Promise<RequestInit | undefined> {
   if (channelType !== 'slack') return undefined;
   try {
     const instance = await runMediaDb(ctx, trustedTenantId, () => ctx.services.instances.getById(instanceId));
-    const slackBotToken = (instance as Record<string, unknown>).slackBotToken as string | undefined;
-    if (slackBotToken) {
-      return { headers: { Authorization: `Bearer ${slackBotToken}` } };
+    const token = selectSlackDownloadToken(instance as Record<string, unknown>, mediaUrl);
+    if (token) {
+      return { headers: { Authorization: `Bearer ${token}` } };
     }
   } catch {
     // If instance lookup fails, attempt unauthenticated download anyway
@@ -220,7 +264,7 @@ async function downloadMediaFromUrl(
   channelType?: ChannelType,
   trustedTenantId?: string,
 ): Promise<string | null> {
-  const fetchOptions = await buildFetchOptions(ctx, instanceId, channelType, trustedTenantId);
+  const fetchOptions = await buildFetchOptions(ctx, instanceId, mediaUrl, channelType, trustedTenantId);
   try {
     const result = await ctx.mediaStorage.storeFromUrl(
       instanceId,
@@ -867,6 +911,7 @@ export async function setupMediaProcessor(eventBus: EventBus, db: Database, serv
 }
 
 export const __test__ = {
+  buildFetchOptions,
   persistProcessingResult,
   resolveSafeMediaContentEventId,
   processMessageMedia,

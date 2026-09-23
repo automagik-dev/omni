@@ -4,6 +4,161 @@
 > messaging experience (`agent_view` + Agent Sessions API), native streaming,
 > reactions, pins, slash commands, and an optional user-token mode.
 
+## One-click setup (OAuth)
+
+The fastest way onto Slack. One Slack app serves the whole deployment: the
+**operator registers it once**, and after that **every member connects
+themselves**, as often as they like — a re-connect is a re-authorization, not
+a new app.
+
+| Who | Step | How often |
+|---|---|---|
+| Operator | `omni slack app setup` | **Once per deployment** — register the deployment's Slack app |
+| Member | `omni slack connect` | **Every time** — once per person, and again whenever they re-authorize |
+
+Members have two equivalent paths: `omni slack connect` from a terminal, or the
+dashboard's **Connect Slack** button on the Instances page.
+
+`omni slack app status` reports whether the app is configured, which settings
+are still missing, and the redirect and manifest links.
+
+### The manifest link (operator, once)
+
+`omni slack app setup` reads `GET /api/v2/slack/app` and prints a
+`manifestUrl`. The API builds that link itself: it takes the callback
+**redirect URL** (`server.public_url` + `/api/v2/slack/oauth/callback`),
+generates the app manifest around it — every bot scope, every event
+subscription, and the **user scopes** the personal (`xoxp`) mode needs — and
+returns it URL-encoded as an
+`https://api.slack.com/apps?new_app=1&manifest_json=…` link. The operator
+opens that link and Slack offers to create the app with the manifest already
+filled in; nothing is pasted by hand. Setup then collects the app's client id,
+client secret, signing secret and app-level token and writes them to settings
+(the three secrets are read from a pipe or an interactive prompt, never from a
+command-line flag).
+
+> **The redirect URL must be HTTPS**, and it must appear in the app's
+> `oauth_config.redirect_urls` — Slack refuses the exchange otherwise, which
+> is exactly why the manifest link carries it. **A locally running API
+> therefore needs an HTTPS tunnel**: point `server.public_url` at the tunnel's
+> public `https://…` origin (not `http://localhost:…`) before running setup,
+> and re-run setup if that origin changes.
+
+### Connecting a member (every time)
+
+`omni slack connect` calls `POST /api/v2/slack/oauth/start`, opens the
+returned Slack authorize URL, and waits for the callback; the dashboard's
+**Connect Slack** button does the same thing and returns the person to the page
+they started from. The button sends that page's own address as the return
+address, so **the dashboard must be served from the `server.public_url`
+origin** — from anywhere else the API refuses the return address and the page
+shows that error instead of starting the install. The
+default mode is `user` — the member's own `xoxp` token, so the instance acts
+as them — and `--mode bot` installs the workspace bot instead. The instance is
+created (or re-authorized, if that person already installed) and connected for
+you; no token is ever shown, pasted, or written down.
+
+The pending install lives in the API process that started it, for five minutes,
+and is consumed the first time the callback reads it. So the API must run as a
+single process, or route `/api/v2/slack/oauth/*` with sticky sessions: a
+callback that lands on a process which never issued that install is refused as
+an unknown install — nothing unsafe happens, the person simply has to click
+**Connect Slack** again.
+
+Several members of one workspace share a single Bolt receiver and a single
+app-level token. Each event is delivered only to the instances Slack
+authorized it for, so one member's DMs never reach another member's instance.
+
+#### Personal installs add no bot
+
+A `user`-mode install asks Slack for the member's user scopes only, so it
+**adds no bot user to the workspace**: the instance holds just that person's
+`xoxp` token, and the deployment's app-level token opens the socket. The
+person's token covers receiving what they can see, sending, reacting,
+uploading and downloading files, thread history and search; a message that
+mentions the person counts as a mention of the instance.
+
+- **Bot-only events are not available.** `app_mention`, pins
+  (`pin_added`/`pin_removed`), channel renames, member joins and leaves, slash
+  commands and the native stop button (`agent_session_stopped`) are delivered
+  to a bot, and a personal install has none. Install with `--mode bot` when a
+  workspace needs them.
+- **Other members' clicks never arrive.** A button click, menu choice or
+  modal submission reaches a bot-less instance only when its own person made
+  it.
+- **Two members' agents can answer each other.** An instance with a bot skips
+  every post made through its own app, which it recognizes by the app's bot
+  id. A bot-less instance has no bot id, so it does not skip a post another
+  member's instance makes through the same app: when two members' agents both
+  auto-reply in one conversation, they can reply to each other.
+- **A bot from an earlier install stays.** Before this change a personal
+  install also installed the app's bot. That bot user remains in the workspace
+  until the app is removed from it — re-authorizing does not remove it — and
+  an event only that bot can see is never delivered to a bot-less instance.
+  While that bot remains, Slack may name only the bot on an event the person
+  can see too, and a bot-less instance that is the workspace's only one then
+  asks Slack who else can see it. That lookup needs the `authorizations:read`
+  scope on the app-level token; without it, such events do not arrive.
+- **Members who connected earlier re-authorize once.** Their instances were
+  saved with the workspace bot token and keep running on it. Running
+  `omni slack connect` once more (or pressing **Connect Slack**) drops the
+  stored bot token and moves the instance to the person's token alone.
+
+#### Already connected? Re-authorize once for inbound files
+
+User mode now requests the `files:read` user scope, because an inbound file is
+downloaded from `files.slack.com` with the **user** token when the instance runs
+in `authMode: 'user'` — the workspace bot need not be a member of the channel a
+file was shared in, and answers that download with a `403`.
+
+A token minted before this change does not carry the new scope. **Every member
+who connected earlier must run `omni slack connect` once more** (or press
+**Connect Slack** again) to re-authorize; the re-connect swaps their `xoxp`
+token for one that includes `files:read`. Until they do, their instance keeps
+receiving the message but the attachment download keeps failing with `403`.
+Nothing else about the instance changes, and bot-mode instances are unaffected
+— the bot token already had `files:read`.
+
+### When access is revoked
+
+Slack tells Omni about revocation, and the blast radius depends on which event
+arrives:
+
+| Slack event | What Omni disconnects |
+|---|---|
+| `tokens_revoked` | **Only the one instance** whose token was revoked (the member who revoked it, or the bot if it was the bot token), with reason `token_revoked`. Every other member of that workspace stays connected. |
+| `app_uninstalled` | **Every instance of that workspace** — the app itself is gone, so no token of it is valid any more. |
+
+### `SLACK_APP_TOKEN_IN_USE`, and what it does *not* mean
+
+Sharing one app-level token across instances is the normal case now, so the
+old "one app token, one instance" refusal has been narrowed:
+
+- **Two (or more) user-mode installs on one app token are accepted.** That is
+  the whole point of the one-click flow — every member of a workspace behind
+  the same deployment app.
+- **Only a second *bot-mode* install for the same workspace is refused**, with
+  `409 SLACK_APP_TOKEN_IN_USE`. A workspace has exactly one bot identity, so
+  two bot-mode instances would answer as the same bot and handle every event
+  twice.
+- That refusal is overridable: pass `force: true` (`--force`) to
+  `POST /api/v2/instances/:id/connect` when the second install is deliberately
+  **replacing** the first — a reinstalled bot token under a new instance id.
+
+Without `force` the connect is refused twice over, and the API layer answers
+first:
+
+1. `409 SLACK_APP_TOKEN_IN_USE` — the route's own check
+   (`findSlackBotModeConflict`) runs before the plugin is reached, so this is
+   the code a caller actually sees. It is what `POST /connect` returns.
+2. `SLACK_BOT_INSTANCE_EXISTS` — the Slack receiver's guard, the second layer
+   behind it. It is reachable only when the route's check does not fire (for
+   example an attachment the route's active-instance scan cannot see).
+
+The manual, pasted-token path below still works and is still supported — use
+it when you maintain the Slack app by hand, run without a public HTTPS URL, or
+want an instance whose tokens you supply yourself.
+
 ## Agent messaging experience (#914)
 
 Slack apps built as AI agents declare `agent_view` in their manifest. The
@@ -37,8 +192,11 @@ February 2027**; new Slack apps can only use `agent_view`, and the switch from
 2. A **Slack app** created at <https://api.slack.com/apps> — use
    **"From an app manifest"** with the manifest generated below.
 3. For Socket Mode (default): an **app-level token** (`xapp-...`) with
-   `connections:write`.
-4. A **bot token** (`xoxb-...`) issued on install.
+   `connections:write` and `authorizations:read`. The second lets Omni ask
+   Slack which instances may see an event, which it needs when a workspace
+   has several instances, or a bot-less personal instance alongside a bot
+   from an earlier install.
+4. A **bot token** (`xoxb-...`) issued on install — optional in user-token mode.
 5. Optional: a **user token** (`xoxp-...`) if you want user-token mode —
    required for message search (see below).
 
@@ -115,7 +273,7 @@ instance act as a user instead of (only) a bot:
 {
   "channel": "slack",
   "config": {
-    "botToken": "xoxb-...",   // still required — Bolt authenticates with it
+    "botToken": "xoxb-...",   // optional in user mode
     "appToken": "xapp-...",
     "authMode": "user",
     "userToken": "xoxp-..."   // prefix-validated; an xoxb here is rejected
@@ -123,10 +281,14 @@ instance act as a user instead of (only) a bot:
 }
 ```
 
-The **bot token stays mandatory** in user mode: it authenticates the Socket
-Mode connection and is the fallback for scopes the user token lacks. User mode
-is required for `search.messages` (the `search:read` scope only exists as a
-user scope).
+The **bot token is optional** in user mode: the app-level token (or, in HTTP
+mode, the signing secret) is what connects, and every action goes out with
+the user token. Without a bot token the instance runs on the user token alone
+and misses the bot-only events listed under
+[Personal installs add no bot](#personal-installs-add-no-bot); with one, it
+also receives the bot's events while it is the workspace's only instance on
+the app. User mode is required for `search.messages`
+(the `search:read` scope only exists as a user scope).
 
 ### 3. Verify
 

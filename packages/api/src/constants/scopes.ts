@@ -335,6 +335,10 @@ export const SCOPE_MAP: Record<string, string> = {
   // --- slack (#889) ---
   'GET /slack/search': 'messages:read',
   'POST /slack/dm/open': 'messages:send',
+  // --- slack one-click OAuth install (wish: slack-personal-oauth) ---
+  'GET /slack/app': 'instances:read',
+  'POST /slack/oauth/start': 'instances:write',
+  'GET /slack/oauth/result/:nonce': 'instances:read',
 
   // --- metrics ---
   'GET /metrics': 'metrics:read',
