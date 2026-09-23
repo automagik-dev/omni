@@ -6,6 +6,7 @@
 
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import { createHmac } from 'node:crypto';
+import { tmpdir } from 'node:os';
 import type { CustomEventType, EventBus } from '@omni/core';
 import type { Database, NewWebhookSource, WebhookSource } from '@omni/db';
 import { WebhookService } from '../webhooks';
@@ -1206,6 +1207,57 @@ describe('Connector lifecycle contract (#961)', () => {
     test('refuses a push-only source', async () => {
       const service = new WebhookService(createMockDatabase([createMockSource()]), createMockEventBus());
       await expect(service.runPollNow('test-id-123')).rejects.toThrow(/not a poll source/);
+    });
+  });
+
+  describe('reconcilePollAllowlist (#1239/#1240)', () => {
+    const pollConfig = {
+      command: '/x/fetch.sh',
+      intervalSeconds: 300,
+      emitType: 'custom.meetings.item',
+      dedupKeyTemplate: '{payload.id}',
+      consecutiveFailures: 11,
+      nextRunAt: '2026-09-30T00:00:00.000Z',
+    };
+    function stubDb(rows: WebhookSource[]) {
+      const updates: Array<Partial<WebhookSource>> = [];
+      const db = {
+        select: () => ({ from: () => ({ where: () => Promise.resolve(rows) }) }),
+        update: () => ({
+          set: (data: Partial<WebhookSource>) => ({ where: () => Promise.resolve(updates.push(data)) }),
+        }),
+      };
+      return { db: db as unknown as Database, updates };
+    }
+    async function withAllowDir(value: string, fn: () => Promise<void>) {
+      const saved = process.env.OMNI_POLL_COMMAND_DIR;
+      process.env.OMNI_POLL_COMMAND_DIR = value;
+      try {
+        await fn();
+      } finally {
+        if (saved === undefined) Reflect.deleteProperty(process.env, 'OMNI_POLL_COMMAND_DIR');
+        else process.env.OMNI_POLL_COMMAND_DIR = saved;
+      }
+    }
+
+    test('without an allowlist, enabled poll sources are marked disabled', async () => {
+      const { db, updates } = stubDb([createMockSource({ pollConfig, livenessStatus: 'stalled' })]);
+      await withAllowDir('', () => new WebhookService(db, createMockEventBus()).reconcilePollAllowlist());
+      expect(updates).toHaveLength(1);
+      expect(updates[0]).toMatchObject({ livenessStatus: 'disabled', stalledAt: null });
+    });
+
+    test('with a valid allowlist, failures reset, the run is due now, and disabled is lifted', async () => {
+      const now = new Date('2026-09-23T10:00:00.000Z');
+      const { db, updates } = stubDb([
+        createMockSource({ pollConfig, livenessStatus: 'disabled', expectedIntervalSeconds: 600 }),
+      ]);
+      await withAllowDir(tmpdir(), () => new WebhookService(db, createMockEventBus()).reconcilePollAllowlist(now));
+      expect(updates[0]).toMatchObject({
+        pollConfig: { consecutiveFailures: 0, nextRunAt: now.toISOString() },
+        livenessStatus: 'healthy',
+        livenessArmedAt: now,
+      });
     });
   });
 });

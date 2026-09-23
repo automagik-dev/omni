@@ -2828,6 +2828,8 @@ export interface WebhookPollConfig {
   emitType: string;
   dedupKeyTemplate: string;
   env?: Record<string, string>;
+  /** Backoff ceiling in seconds (default 1h, #1240). */
+  maxBackoffSeconds?: number; // no-migration-needed: jsonb field, type-only
   nextRunAt?: string;
   consecutiveFailures?: number;
   lastRun?: { at: string; exitCode: number | null; stdoutTail: string; eventsEmitted: number; error?: string };
@@ -2840,7 +2842,8 @@ export interface WebhookPollConfig {
  * (`WHERE liveness_status = <previous>`) make each transition — and therefore
  * each `system.connector.stalled`/`recovered` event — happen exactly once.
  */
-export const connectorLivenessStatuses = ['healthy', 'stalled'] as const;
+// `disabled` (#1239): a poll source while OMNI_POLL_COMMAND_DIR is unset — set/cleared on API startup.
+export const connectorLivenessStatuses = ['healthy', 'stalled', 'disabled'] as const; // no-migration-needed: varchar column
 export type ConnectorLivenessStatus = (typeof connectorLivenessStatuses)[number];
 
 /**

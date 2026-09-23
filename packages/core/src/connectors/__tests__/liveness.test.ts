@@ -96,6 +96,42 @@ describe('latestConnectorSignal', () => {
   });
 });
 
+describe('sweepConnectorLiveness — transition logging and disabled sources (#1239/#1241)', () => {
+  test('stall logs warn once with name and silentForSeconds; recovery logs info', async () => {
+    const warns: Array<[string, unknown]> = [];
+    const infos: Array<[string, unknown]> = [];
+    const logger = {
+      ...silentLogger,
+      warn: (msg: string, ctx?: unknown) => warns.push([msg, ctx]),
+      info: (msg: string, ctx?: unknown) => infos.push([msg, ctx]),
+    };
+    const { deps, repo } = makeDeps([makeRow({ lastReceivedAt: at(5) })], { logger });
+
+    await sweepConnectorLiveness({ ...deps, now: () => at(120) });
+    await sweepConnectorLiveness({ ...deps, now: () => at(300) });
+    expect(warns).toEqual([['connector stalled', { sourceName: 'gmail-purchases', silentForSeconds: 115 }]]);
+
+    const stalled = repo.rows[0];
+    if (stalled) stalled.lastHeartbeatAt = at(310);
+    await sweepConnectorLiveness({ ...deps, now: () => at(320) });
+    expect(
+      infos.some(
+        ([msg, ctx]) =>
+          msg === 'connector recovered' && (ctx as { sourceName: string }).sourceName === 'gmail-purchases',
+      ),
+    ).toBe(true);
+    expect(warns).toHaveLength(1);
+  });
+
+  test('a disabled (poll allowlist unset) source never stalls', async () => {
+    const { deps, repo, published } = makeDeps([makeRow({ livenessStatus: 'disabled' })]);
+    const stats = await sweepConnectorLiveness({ ...deps, now: () => at(10_000) });
+    expect(stats.stalled).toBe(0);
+    expect(published).toHaveLength(0);
+    expect(repo.rows[0]?.livenessStatus).toBe('disabled');
+  });
+});
+
 describe('sweepConnectorLiveness — stall detection', () => {
   test('a source within its window is untouched', async () => {
     const { deps, repo, published } = makeDeps([makeRow({ lastReceivedAt: at(30) })]);
