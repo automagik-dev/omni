@@ -388,3 +388,22 @@ describe('WhatsAppStreamSender (edit mode — group chat)', () => {
     expect(editKey.participant).toBe(BOT_JID);
   });
 });
+
+describe('WhatsAppStreamSender onSent (#1248 echo tracking)', () => {
+  test('reports every new message id, never edits', async () => {
+    for (const editMode of [false, true]) {
+      const mockSocket = createMockSocket();
+      const ids: string[] = [];
+      const sender = new WhatsAppStreamSender(() => mockSocket.sock, '5511999999999@s.whatsapp.net', undefined, 'dm', {
+        editMode,
+        throttleMs: 0,
+        onSent: (id) => ids.push(id),
+      });
+      await sender.onContentDelta({ phase: 'content', content: 'PONG' });
+      await sender.onFinal({ phase: 'final', content: 'PONG\n\nagain' });
+      const newMessages = mockSocket.sent.filter((m) => !m.content.edit).length;
+      expect(newMessages).toBeGreaterThan(0);
+      expect(ids).toHaveLength(newMessages);
+    }
+  });
+});

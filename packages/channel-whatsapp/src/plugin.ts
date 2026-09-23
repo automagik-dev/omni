@@ -1820,6 +1820,8 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       formatMode: options?.formatMode,
       editMode: (streamOpts.streamEditMode as boolean) ?? false,
       throttleMs: (streamOpts.streamThrottleMs as number) ?? undefined,
+      // Streamed replies bypass sendMessage(); without this their echo dispatches the agent again (#1248)
+      onSent: (messageId) => this.trackSentMessageId(instanceId, messageId),
     });
   }
 
