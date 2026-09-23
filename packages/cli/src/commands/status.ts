@@ -12,6 +12,7 @@ import { credentialStatusFields, serverPostureFields } from '../lib/credential-s
 import * as output from '../output.js';
 import { capturePm2, isPm2Available } from '../pm2.js';
 import { CLI_VERSION_HEADER, SERVER_VERSION_HEADER, VERSION, formatStatusVersionHint } from '../version.js';
+import { formatSourceHealthAlerts, sourceHealthAlerts } from './webhooks.js';
 
 // ============================================================================
 // PM2 PROCESS TYPES & HELPERS
@@ -141,6 +142,19 @@ async function validateAuthKey(statusInfo: Record<string, unknown>, client: Omni
   }
 }
 
+/** Surface stalled and poll-disabled sources (#1239/#1241); silent when the key can't list them. */
+async function checkSourceHealth(statusInfo: Record<string, unknown>, client: OmniClient): Promise<void> {
+  try {
+    const alerts = sourceHealthAlerts(await client.webhooks.listSources({ enabled: true }));
+    if (alerts.stalled.length > 0) statusInfo.stalledSources = alerts.stalled;
+    if (alerts.pollDisabled.length > 0) statusInfo.pollDisabledSources = alerts.pollDisabled;
+    const banner = formatSourceHealthAlerts(alerts);
+    if (banner) output.warn(banner);
+  } catch {
+    // No webhook scope or older server — status stays as it was.
+  }
+}
+
 /** Collect all status info: config, health, auth, processes */
 async function collectStatusInfo(): Promise<{
   statusInfo: Record<string, unknown>;
@@ -165,6 +179,7 @@ async function collectStatusInfo(): Promise<{
     const client = getOptionalClient();
     if (client) {
       await validateAuthKey(statusInfo, client);
+      await checkSourceHealth(statusInfo, client);
     }
   }
 

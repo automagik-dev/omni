@@ -4971,7 +4971,7 @@ export interface components {
              * @description Liveness state; null = unsupervised. Transitions emit system.connector.* events
              * @enum {string|null}
              */
-            livenessStatus: "healthy" | "stalled" | null;
+            livenessStatus: "healthy" | "stalled" | "disabled" | null;
             /**
              * Format: date-time
              * @description When the cadence was (re)declared
@@ -5060,6 +5060,7 @@ export interface components {
                 env?: {
                     [key: string]: string;
                 };
+                maxBackoffSeconds?: number;
             } | null;
             /**
              * @description Whether enabled
@@ -5131,7 +5132,7 @@ export interface components {
              * @description Status before this heartbeat (a stalled source recovers on the next sweep tick)
              * @enum {string|null}
              */
-            livenessStatus: "healthy" | "stalled" | null;
+            livenessStatus: "healthy" | "stalled" | "disabled" | null;
             /** @description Declared cadence, if any */
             expectedIntervalSeconds: number | null;
         };
@@ -14035,7 +14036,7 @@ export interface operations {
                              * @description Liveness state; null = unsupervised. Transitions emit system.connector.* events
                              * @enum {string|null}
                              */
-                            livenessStatus: "healthy" | "stalled" | null;
+                            livenessStatus: "healthy" | "stalled" | "disabled" | null;
                             /**
                              * Format: date-time
                              * @description When the cadence was (re)declared
@@ -14138,6 +14139,7 @@ export interface operations {
                         env?: {
                             [key: string]: string;
                         };
+                        maxBackoffSeconds?: number;
                     } | null;
                     /**
                      * @description Whether enabled
@@ -14243,7 +14245,7 @@ export interface operations {
                              * @description Liveness state; null = unsupervised. Transitions emit system.connector.* events
                              * @enum {string|null}
                              */
-                            livenessStatus: "healthy" | "stalled" | null;
+                            livenessStatus: "healthy" | "stalled" | "disabled" | null;
                             /**
                              * Format: date-time
                              * @description When the cadence was (re)declared
@@ -14395,7 +14397,7 @@ export interface operations {
                              * @description Liveness state; null = unsupervised. Transitions emit system.connector.* events
                              * @enum {string|null}
                              */
-                            livenessStatus: "healthy" | "stalled" | null;
+                            livenessStatus: "healthy" | "stalled" | "disabled" | null;
                             /**
                              * Format: date-time
                              * @description When the cadence was (re)declared
@@ -14569,6 +14571,7 @@ export interface operations {
                         env?: {
                             [key: string]: string;
                         };
+                        maxBackoffSeconds?: number;
                     } | null;
                     /**
                      * @description Whether enabled
@@ -14674,7 +14677,7 @@ export interface operations {
                              * @description Liveness state; null = unsupervised. Transitions emit system.connector.* events
                              * @enum {string|null}
                              */
-                            livenessStatus: "healthy" | "stalled" | null;
+                            livenessStatus: "healthy" | "stalled" | "disabled" | null;
                             /**
                              * Format: date-time
                              * @description When the cadence was (re)declared
@@ -14827,7 +14830,7 @@ export interface operations {
                          * @description Status before this heartbeat (a stalled source recovers on the next sweep tick)
                          * @enum {string|null}
                          */
-                        livenessStatus: "healthy" | "stalled" | null;
+                        livenessStatus: "healthy" | "stalled" | "disabled" | null;
                         /** @description Declared cadence, if any */
                         expectedIntervalSeconds: number | null;
                     };
