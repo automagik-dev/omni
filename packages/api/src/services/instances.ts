@@ -43,7 +43,7 @@ import type { EventBus } from '@omni/core';
 import { NotFoundError, createLogger } from '@omni/core';
 import type { Database } from '@omni/db';
 import { type ChannelType, type Instance, type NewInstance, instances } from '@omni/db';
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { invalidateProviderCacheForInstance } from '../plugins/agent-dispatcher';
 import { forgetInstanceOwner, rememberInstanceOwners } from '../tenancy/instance-owner-registry';
 import { credentialSealingEngages, openCredentialField, sealCredentialField } from '../tenancy/sealed-credentials';
@@ -322,21 +322,73 @@ export class InstanceService {
   }
 
   /**
+   * The Slack OAuth instance holding an identity — (team, user) in user mode,
+   * the team alone in bot mode (`userId` null). An indexed lookup on the #1235
+   * partial unique indexes; manual pasted-token rows are never returned.
+   */
+  async findBySlackIdentity(teamId: string, userId: string | null): Promise<Instance | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(instances)
+      .where(
+        and(
+          eq(instances.slackConnectionMethod, 'oauth'),
+          eq(instances.slackTeamId, teamId),
+          userId === null ? isNull(instances.slackUserId) : eq(instances.slackUserId, userId),
+        ),
+      )
+      .limit(1);
+    if (!row) return undefined;
+    rememberInstanceOwners([row]);
+    return openInstanceCredentials(row);
+  }
+
+  /**
    * Create a new instance
    */
   async create(data: NewInstance): Promise<Instance> {
+    const created = await this.insert(data, false);
+    if (!created) {
+      throw new Error('Failed to create instance');
+    }
+    return created;
+  }
+
+  /**
+   * Create a Slack OAuth instance unless another row already holds its
+   * identity: `ON CONFLICT DO NOTHING` on the matching #1235 unique index.
+   * Returns null on that conflict, so a caller that lost the race re-finds
+   * the winner and updates it rather than inserting a second row.
+   */
+  async createSlackOAuth(data: NewInstance): Promise<Instance | null> {
+    return this.insert({ ...data, slackConnectionMethod: 'oauth' }, true);
+  }
+
+  private async insert(data: NewInstance, slackIdentityConflict: boolean): Promise<Instance | null> {
     // The row's tenant is whatever the insert persists. `NewInstance` omits
     // `tenantId`, so in production that is NULL and nothing seals; the cast
     // mirrors the ownership-carrying shape the G3 root writer produces.
     const rowTenant = (data as { tenantId?: string | null }).tenantId ?? null;
 
-    const [created] = await this.db
-      .insert(instances)
-      .values(sealInstanceCredentials(this.sealTenantFor(rowTenant), data))
-      .returning();
+    const query = this.db.insert(instances).values(sealInstanceCredentials(this.sealTenantFor(rowTenant), data));
+    if (slackIdentityConflict) {
+      // Target and predicate must match the index exactly for Postgres to infer it.
+      query.onConflictDoNothing(
+        data.slackUserId == null
+          ? {
+              target: instances.slackTeamId,
+              where: sql`${instances.slackConnectionMethod} = 'oauth' AND ${instances.slackUserId} IS NULL`,
+            }
+          : {
+              target: [instances.slackTeamId, instances.slackUserId],
+              where: sql`${instances.slackConnectionMethod} = 'oauth' AND ${instances.slackUserId} IS NOT NULL`,
+            },
+      );
+    }
+    const [created] = await query.returning();
 
     if (!created) {
-      throw new Error('Failed to create instance');
+      return null;
     }
 
     // Teach the ownership registry BEFORE the publish below: this is the first
