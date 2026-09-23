@@ -22,7 +22,8 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit && bun run scripts/check-tz-naive.ts",
-    "test": "bun test",
+    "test": "bun test --path-ignore-patterns='**/tenancy-db-access-guard.test.ts' --path-ignore-patterns='**/tenancy-writer-coverage.test.ts'",
+    "test:guards": "bun test src/tenancy-db-access-guard.test.ts src/tenancy-writer-coverage.test.ts",
     "lint:tz": "bun run scripts/check-tz-naive.ts",
     "db:push": "drizzle-kit push",
     "db:generate": "drizzle-kit generate",

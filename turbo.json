@@ -20,6 +20,12 @@
       "env": ["CI", "NODE_ENV", "MINIO_INTEGRATION", "DATABASE_URL", "TEST_DATABASE_URL", "ENABLE_DB_TESTS", "OMNI_*"],
       "outputs": []
     },
+    "test:guards": {
+      "dependsOn": ["^build", "^topo"],
+      "env": ["CI", "NODE_ENV", "MINIO_INTEGRATION", "DATABASE_URL", "TEST_DATABASE_URL", "ENABLE_DB_TESTS", "OMNI_*"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/packages/**/*.ts"],
+      "outputs": []
+    },
     "dev": {
       "cache": false,
       "persistent": true
