@@ -1,6 +1,6 @@
 {
   "name": "@omni/db",
-  "version": "2.260923.3",
+  "version": "2.260923.4",
   "type": "module",
   "exports": {
     ".": {
