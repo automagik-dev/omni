@@ -112,8 +112,8 @@ Always HTTP `200`, always JSON. Three states, keyed by `codAtendimento`:
 | the agent answered | `{"pronto":1,"resposta":"…","hand_off":"nao","bolhas":["…"]}` |
 | nobody answered the turn within 60s | `{"pronto":1,"resposta":"","hand_off":"nao","bolhas":[]}` |
 
-The `pronto:1` body may also carry `fila_vq` / `motivo_transf_vq` (handoff
-only). Interactive options never ride the body — they leave through their own
+The `pronto:1` body may also carry `fila_vq` / `motivo_transf_vq` /
+`codigo_operadora_vq` (handoff only). Interactive options never ride the body — they leave through their own
 endpoint, and repeating them here would build a second menu. Reading
 the answer **clears the turn**: the same text on the next call is a new turn.
 
@@ -326,6 +326,7 @@ in `service` mode `sendMessage` also wraps the call itself:
 | `fila_vq` | both | `^[A-Za-z0-9_.-]{1,32}$` when present | `service`: field omitted, `warn` logged. `flow`: **handoff refused**, `error` logged, `hand_off:"nao"` |
 | `fila_vq` **absent** | both | allowed | nothing — see below |
 | `motivo_transf_vq` | both | whitespace collapsed, trimmed, ≤255 chars | omitted when empty |
+| `codigo_operadora_vq` (→ `u_codigoOperadora`) | both | `^\d{1,3}$`; always present on a handoff turn | forwarded as `""`, `warn` logged; handoff **not** refused |
 | subject (`metadata.handoffSubject` / `handoffFields.assunto`) | `flow` only | whitespace collapsed, trimmed, transliterated to latin-1 (`encodeAscEmoji`), ≤255 chars; answered in `resposta` on the handoff turn (the Genesys node reads `session.subject = {#resposta}`). Never its own key in the poll body | empty: `resposta` unchanged. Ignored on a refused handoff and in `service` mode |
 | `POST /transferirHumano` | `service` only | must succeed | `warn` logged, turn answers with `hand_off:"nao"` |
 
