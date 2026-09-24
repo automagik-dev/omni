@@ -111,6 +111,8 @@ export interface AscFlowTurnReady {
   vinculo_vq?: string;
   plano_vq?: string;
   filial_vq?: string;
+  /** Operator code → `u_codigoOperadora`. Always present on a handoff turn, `""` when unknown. */
+  codigo_operadora_vq?: string;
 }
 
 /** The body every call gets while the agent is still running. */

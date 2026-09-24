@@ -1,6 +1,6 @@
 {
   "name": "@omni/channel-slack",
-  "version": "2.260923.3",
+  "version": "2.260924.2",
   "description": "Slack channel plugin for Omni using Bolt.js with Socket Mode",
   "type": "module",
   "main": "src/index.ts",
