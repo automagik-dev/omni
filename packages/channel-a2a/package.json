@@ -1,6 +1,6 @@
 {
   "name": "@omni/channel-a2a",
-  "version": "2.260923.7",
+  "version": "2.260924.1",
   "description": "A2A protocol server channel for Omni",
   "type": "module",
   "main": "src/index.ts",

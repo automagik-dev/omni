@@ -1,6 +1,6 @@
 {
   "name": "@omni/channel-asc",
-  "version": "2.260923.7",
+  "version": "2.260924.1",
   "description": "ASC Brazil (ASCWhats GW) WhatsApp BSP channel plugin for Omni — Cloud-API-mirror outbound + Meta-format webhook inbound",
   "type": "module",
   "main": "src/index.ts",
