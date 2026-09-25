@@ -76,6 +76,12 @@ export interface ChannelCapabilities {
   /** Can send action buttons */
   canSendButtons?: boolean;
 
+  /**
+   * Can send a WhatsApp Flow (a multi-screen form) — `content.type = 'flow'`
+   * with the descriptor in `metadata.flow` (see `WhatsAppFlowSendSchema`).
+   */
+  canSendFlow?: boolean;
+
   /** Can send select menus / dropdowns */
   canSendSelectMenu?: boolean;
 
@@ -280,6 +286,7 @@ export const DEFAULT_CAPABILITIES: ChannelCapabilities = {
   canSendEmbed: false,
   canSendPoll: false,
   canSendButtons: false,
+  canSendFlow: false,
   canSendSelectMenu: false,
   canShowModal: false,
   canUseSlashCommands: false,

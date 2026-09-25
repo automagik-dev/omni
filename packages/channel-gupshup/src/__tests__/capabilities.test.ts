@@ -10,6 +10,8 @@ import { GUPSHUP_CAPABILITIES } from '../capabilities';
 
 describe('GUPSHUP_CAPABILITIES', () => {
   describe('supported features (true)', () => {
+    it('canSendButtons (Journey Reply/List nodes)', () => expect(GUPSHUP_CAPABILITIES.canSendButtons).toBe(true));
+    it('canSendFlow (Journey WhatsApp Flow node)', () => expect(GUPSHUP_CAPABILITIES.canSendFlow).toBe(true));
     it('canSendText', () => expect(GUPSHUP_CAPABILITIES.canSendText).toBe(true));
     it('canSendMedia', () => expect(GUPSHUP_CAPABILITIES.canSendMedia).toBe(true));
     it('canSendLocation', () => expect(GUPSHUP_CAPABILITIES.canSendLocation).toBe(true));
@@ -26,7 +28,6 @@ describe('GUPSHUP_CAPABILITIES', () => {
     it('canSendReaction', () => expect(GUPSHUP_CAPABILITIES.canSendReaction).toBe(false));
     it('canSendTyping', () => expect(GUPSHUP_CAPABILITIES.canSendTyping).toBe(false));
     it('canSendContact', () => expect(GUPSHUP_CAPABILITIES.canSendContact).toBe(false));
-    it('canSendButtons', () => expect(GUPSHUP_CAPABILITIES.canSendButtons).toBe(false));
     it('canHandleGroups', () => expect(GUPSHUP_CAPABILITIES.canHandleGroups).toBe(false));
     it('canStreamResponse', () => expect(GUPSHUP_CAPABILITIES.canStreamResponse).toBe(false));
     it('canEditMessage', () => expect(GUPSHUP_CAPABILITIES.canEditMessage).toBe(false));
