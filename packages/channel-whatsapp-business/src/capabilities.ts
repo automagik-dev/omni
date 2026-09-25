@@ -30,6 +30,7 @@ export const WHATSAPP_BUSINESS_CAPABILITIES: ChannelCapabilities = {
   canSendLocation: true,
   canSendSticker: true,
   canSendButtons: true,
+  canSendFlow: true,
   canHandleGroups: false,
   canHandleBroadcast: false,
   canHandleDMs: true,

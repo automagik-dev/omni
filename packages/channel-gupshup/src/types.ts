@@ -19,7 +19,19 @@ export interface GupshupConfig {
 
 // Outbound message shape (internal)
 export interface GupshupOutboundMessage {
-  type: 'TEXT' | 'IMAGE' | 'AUDIO' | 'VIDEO' | 'DOCUMENT' | 'STICKER' | 'LOCATION' | 'HANDOFF' | 'CLOSING';
+  type:
+    | 'TEXT'
+    | 'IMAGE'
+    | 'AUDIO'
+    | 'VIDEO'
+    | 'DOCUMENT'
+    | 'STICKER'
+    | 'LOCATION'
+    | 'HANDOFF'
+    | 'CLOSING'
+    | 'BUTTONS'
+    | 'LIST'
+    | 'FLOW';
   text?: string;
   url?: string;
   caption?: string;
@@ -39,6 +51,44 @@ export interface GupshupOutboundMessage {
   close_reason?: string;
   close_outcome?: string;
   close_fields?: Record<string, unknown>;
+  /** Reply buttons — present only on type === 'BUTTONS' (≤3, title ≤20 chars). */
+  buttons?: GupshupReplyButton[];
+  /** List message — present only on type === 'LIST' (≤10 rows). */
+  list?: GupshupListMessage;
+  /** WhatsApp Flow descriptor — present only on type === 'FLOW'. */
+  flow?: GupshupFlowMessage;
+}
+
+export interface GupshupReplyButton {
+  /** Echoed back when the contact taps it; defaults to the title. */
+  id: string;
+  title: string;
+}
+
+export interface GupshupListMessage {
+  /** Label of the button that opens the list (≤20 chars). */
+  button: string;
+  section_title?: string;
+  rows: Array<{ id: string; title: string; description?: string }>;
+}
+
+export interface GupshupFlowMessage {
+  /** Meta flow id (the Journey's WhatsApp Flow node needs the id, not the name). */
+  id: string;
+  /** Label of the button that opens the flow. */
+  cta: string;
+  /** Correlates the submission back to this send. */
+  token: string;
+  /** 'navigate' (static flow) or 'data_exchange' (endpoint-backed). */
+  action: 'navigate' | 'data_exchange';
+  /** First screen — navigate only. */
+  screen?: string;
+  /** Initial data for the first screen — navigate only. */
+  data?: Record<string, unknown>;
+  header?: string;
+  footer?: string;
+  /** Send the unpublished (draft) version — for testing. */
+  draft?: boolean;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -81,6 +131,8 @@ export interface GupshupNativeMessageObj {
     id?: string;
     source?: string;
     context?: Record<string, unknown>;
+    /** WhatsApp Flow submission (normalized from the Flow Journey's API node). */
+    flowResponse?: { flowToken: string; flowId?: string; answers: Record<string, unknown> };
   };
 }
 

@@ -15,6 +15,20 @@ function addCloseFields(payload: Record<string, unknown>, msg: GupshupOutboundMe
   if (msg.close_fields) payload.close_fields = msg.close_fields;
 }
 
+/** Reply buttons / list / flow — each maps to its own Journey node. */
+function addInteractiveFields(payload: Record<string, unknown>, msg: GupshupOutboundMessage): void {
+  if (msg.type === 'BUTTONS' && msg.buttons) payload.buttons = msg.buttons;
+  if (msg.type === 'LIST' && msg.list) payload.list = msg.list;
+  if (msg.type === 'FLOW' && msg.flow) payload.flow = msg.flow;
+}
+
+function addLocationFields(payload: Record<string, unknown>, msg: GupshupOutboundMessage): void {
+  payload.latitude = String(msg.latitude);
+  payload.longitude = String(msg.longitude);
+  if (msg.name) payload.name = msg.name;
+  if (msg.address) payload.address = msg.address;
+}
+
 export class GupshupClient {
   constructor(
     private readonly callbackUrl: string,
@@ -35,12 +49,7 @@ export class GupshupClient {
     if (msg.url) payload.media_url = msg.url;
     if (msg.caption) payload.caption = msg.caption;
     if (msg.filename) payload.filename = msg.filename;
-    if (msg.type === 'LOCATION') {
-      payload.latitude = String(msg.latitude);
-      payload.longitude = String(msg.longitude);
-      if (msg.name) payload.name = msg.name;
-      if (msg.address) payload.address = msg.address;
-    }
+    if (msg.type === 'LOCATION') addLocationFields(payload, msg);
     if (msg.dados_lead) payload.dados_lead = msg.dados_lead;
     if (msg.motivo_handoff) payload.motivo_handoff = msg.motivo_handoff;
     if (msg.handoff_fields) payload.handoff_fields = msg.handoff_fields;
@@ -48,6 +57,7 @@ export class GupshupClient {
     // Close-contact classification (CLOSING only). Forwarded so the Journey can
     // record why and how the conversation ended; omitted when not provided.
     if (msg.type === 'CLOSING') addCloseFields(payload, msg);
+    addInteractiveFields(payload, msg);
 
     // POST to callback URL
     const res = await fetch(this.callbackUrl, {

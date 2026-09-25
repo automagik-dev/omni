@@ -1054,3 +1054,86 @@ describe('Gupshup cross-id duplicate suppression', () => {
     expect(received.map((m) => m.externalId)).toEqual(['wamid.REARM_ONE', 'wamid.REARM_TWO']);
   });
 });
+
+// ─────────────────────────────────────────────────────────────
+// WhatsApp Flow submission (Flow Journey → API node → this webhook)
+// ─────────────────────────────────────────────────────────────
+
+describe('handleGupshupWebhook — flow_response', () => {
+  const flowBody = (response: unknown, token = 'omni.tok-1') => ({
+    event_type: 'flow_response',
+    sender: { id: '5500000000002', name: 'Test' },
+    flow: { token, id: '1234567890', response },
+    timestamp: 1790000000,
+  });
+
+  it('becomes a text inbound with readable answers and the structured payload', async () => {
+    const { plugin, logs, received } = makeHandlerHarness();
+    const response = await handleGupshupWebhook(
+      makeWebhookRequest(flowBody({ city: 'Springfield', ages: ['34', '32'], returning: 'no', flow_token: 'x' })),
+      plugin,
+      'inst-gs-handler',
+      undefined,
+      createInboundDedupeCache(),
+    );
+
+    expect(response.status).toBe(200);
+    expect(received).toHaveLength(1);
+    expect(received[0]?.from).toBe('5500000000002');
+    expect(received[0]?.content).toEqual({
+      type: 'text',
+      text: '[Form submitted]\ncity: Springfield\nages: 34, 32\nreturning: no',
+    });
+    const raw = (received[0]?.rawPayload?.messageobj as { raw?: { flowResponse?: unknown } }).raw;
+    expect(raw?.flowResponse).toEqual({
+      flowToken: 'omni.tok-1',
+      flowId: '1234567890',
+      answers: { city: 'Springfield', ages: ['34', '32'], returning: 'no', flow_token: 'x' },
+    });
+    // A known message event — no format-drift WARN.
+    expect(logs.filter((l) => l.level === 'warn' && l.message.includes('unknown event_type'))).toHaveLength(0);
+  });
+
+  it('accepts the answers serialized as a JSON string (Bot Studio variable)', async () => {
+    const { plugin, received } = makeHandlerHarness();
+    await handleGupshupWebhook(
+      makeWebhookRequest(flowBody(JSON.stringify({ city: 'Springfield' }))),
+      plugin,
+      'inst-gs-handler',
+      undefined,
+      createInboundDedupeCache(),
+    );
+
+    expect(received[0]?.content.text).toBe('[Form submitted]\ncity: Springfield');
+  });
+
+  it('a Journey retry of the same submission is deduplicated', async () => {
+    const { plugin, received } = makeHandlerHarness();
+    const cache = createInboundDedupeCache();
+    for (let i = 0; i < 2; i++) {
+      await handleGupshupWebhook(
+        makeWebhookRequest(flowBody({ city: 'Springfield' })),
+        plugin,
+        'inst-gs-handler',
+        undefined,
+        cache,
+      );
+    }
+
+    expect(received).toHaveLength(1);
+  });
+
+  it('answers that are not a JSON object are dropped, still acked', async () => {
+    const { plugin, received } = makeHandlerHarness();
+    const response = await handleGupshupWebhook(
+      makeWebhookRequest(flowBody('not json')),
+      plugin,
+      'inst-gs-handler',
+      undefined,
+      createInboundDedupeCache(),
+    );
+
+    expect(response.status).toBe(200);
+    expect(received).toHaveLength(0);
+  });
+});
