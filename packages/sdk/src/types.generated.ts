@@ -4263,6 +4263,8 @@ export interface components {
             dadosLead?: string;
             /** @description Handoff trigger and notes (e.g. "Gatilho: sinalizou close ||| Obs: ...") */
             motivoHandoff?: string;
+            /** @description Optional audit tag from the calling agent: a short code for how it normalized motivoHandoff before sending; null = no normalization was needed. Stored in handoff_logs.metadata only, never forwarded to the channel. */
+            motivoDesvio?: string | null;
             /** @description Free-text briefing (legacy — prefer dadosLead) */
             extraInfo?: string;
             /** @description Structured fields for Gupshup flow variables (e.g. nome, cidade, temperatura_lead) */
@@ -12276,6 +12278,8 @@ export interface operations {
                     dadosLead?: string;
                     /** @description Handoff trigger and notes (e.g. "Gatilho: sinalizou close ||| Obs: ...") */
                     motivoHandoff?: string;
+                    /** @description Optional audit tag from the calling agent: a short code for how it normalized motivoHandoff before sending; null = no normalization was needed. Stored in handoff_logs.metadata only, never forwarded to the channel. */
+                    motivoDesvio?: string | null;
                     /** @description Free-text briefing (legacy — prefer dadosLead) */
                     extraInfo?: string;
                     /** @description Structured fields for Gupshup flow variables (e.g. nome, cidade, temperatura_lead) */
