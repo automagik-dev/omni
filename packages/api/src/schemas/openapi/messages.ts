@@ -37,6 +37,14 @@ export const sendHandoffSchema = z.object({
     .string()
     .optional()
     .describe('Handoff trigger and notes (e.g. "Gatilho: sinalizou close ||| Obs: ...")'),
+  motivoDesvio: z
+    .string()
+    .max(40)
+    .nullable()
+    .optional()
+    .describe(
+      'Optional audit tag from the calling agent: a short code for how it normalized motivoHandoff before sending; null = no normalization was needed. Stored in handoff_logs.metadata only, never forwarded to the channel.',
+    ),
   extraInfo: z.string().optional().describe('Free-text briefing (legacy — prefer dadosLead)'),
   handoffFields: z
     .record(z.unknown())
