@@ -238,7 +238,7 @@ await flushStdout();
         const child = spawn('bun', [scriptPath], {
           stdio: ['ignore', 'pipe', 'inherit'],
           // Force human format + no colors so we count raw bytes deterministically.
-          env: { ...process.env, OMNI_FORMAT: 'human', NO_COLOR: '1' },
+          env: { ...process.env, OMNI_FORMAT: 'human', NO_COLOR: '1', FORCE_COLOR: undefined },
         });
 
         // Same slow-reader scenario: pause, let the kernel pipe fill, then drain.
