@@ -20,6 +20,8 @@ import { afterEach, describe, expect, it, mock } from 'bun:test';
 // every test file ordered after this one (the messages-route mock-bleed).
 import * as omniCoreReal from '@omni/core';
 import { instances } from '@omni/db';
+import type { SQL } from 'drizzle-orm';
+import { PgDialect } from 'drizzle-orm/pg-core';
 
 // ---------------------------------------------------------------------------
 // We need to test internal classes and functions that are NOT exported.
@@ -2523,6 +2525,38 @@ describe('agent-dispatcher', () => {
     it('dispatches the message when allowFirstParty is true (opt-out)', async () => {
       const agentRunner = await fireFirstPartyMessage(true);
       expect(agentRunner.getSenderName.mock.calls.length).toBe(1);
+    });
+
+    // #1267: the owner list is scoped to OTHER active instances on the SAME
+    // channel (and same Slack workspace when known). A Slack user id must never
+    // be compared against WhatsApp/Telegram/Discord owners.
+    it('scopes the active-owner lookup to the same channel/workspace and excludes the current instance', async () => {
+      __test__.resetActiveOwnerIdentifiersCache();
+      let captured: unknown;
+      const db = {
+        select: () => ({
+          from: () => ({
+            where: (cond: unknown) => {
+              captured = cond;
+              return Promise.resolve([{ ownerIdentifier: 'U-OTHER' }]);
+            },
+          }),
+        }),
+      } as unknown as import('@omni/db').Database;
+
+      const ids = await __test__.listActiveOwnerIdentifiers(db, {
+        id: 'inst-1',
+        channel: 'slack',
+        slackTeamId: 'T123',
+      });
+      expect(ids).toEqual(['U-OTHER']);
+
+      const { sql, params } = new PgDialect().sqlToQuery(captured as SQL);
+      expect(sql).toContain('"is_active" = ');
+      expect(sql).toContain('"channel" = ');
+      expect(sql).toContain('"id" <> ');
+      expect(sql).toContain('"slack_team_id" = ');
+      expect(params).toEqual([true, 'slack', 'inst-1', 'T123']);
     });
   });
 });
