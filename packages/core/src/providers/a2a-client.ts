@@ -359,7 +359,8 @@ export class A2AClient implements IAgentClient {
       }
 
       const taskResult = result.result as Record<string, unknown> | undefined;
-      const task = taskResult?.task as Record<string, unknown> | undefined;
+      // GetTask returns the Task directly at result.result; only SendMessage wraps it in `.task`.
+      const task = (taskResult?.task ?? taskResult) as Record<string, unknown> | undefined;
       const status = task?.status as Record<string, unknown> | undefined;
       const state = status?.state as string | undefined;
 
