@@ -13,7 +13,7 @@
  *     into an instance row keyed by (workspace, user) — workspace alone in bot
  *     mode — and connect it through the channel registry with the same options
  *     `POST /instances/:id/connect` builds. Tokens are written ONLY through
- *     `services.instances.create` / `.update`, which is where credential
+ *     `services.instances.createSlackOAuth` / `.update`, which is where credential
  *     sealing lives; this module never issues an insert or update of its own.
  *
  * Nothing here reads the Hono context or the request: the callback route
@@ -198,7 +198,7 @@ export interface UpsertSlackOAuthInstanceInput {
 }
 
 export interface UpsertSlackOAuthInstanceDeps {
-  instances: Pick<InstanceService, 'list' | 'create' | 'update'>;
+  instances: Pick<InstanceService, 'findBySlackIdentity' | 'createSlackOAuth' | 'update'>;
   channelRegistry: ChannelRegistry | null | undefined;
 }
 
@@ -209,34 +209,15 @@ export interface UpsertSlackOAuthInstanceResult {
   connectError?: string;
 }
 
-/**
- * How many Slack rows one lookup scans. The instance service has no finder by
- * Slack identity and its cursor pagination orders by `created_at` while paging
- * by random UUID, so a multi-page scan could skip rows; one page with a wide
- * limit is the sound option inside this group's file set. Trigger for a
- * dedicated `findBySlackIdentity` on the service: a deployment whose Slack
- * instance count approaches this number (the warning below fires first).
- */
-const SLACK_LOOKUP_LIMIT = 1000;
 const NAME_MAX = 200;
 const NAME_SUFFIX_ATTEMPTS = 20;
 
-function matchesIdentity(row: Instance, input: UpsertSlackOAuthInstanceInput): boolean {
-  if (row.channel !== 'slack' || row.slackTeamId !== input.teamId) return false;
-  if (input.mode === 'user') return row.slackUserId === input.userId && row.slackAuthMode === 'user';
-  // Bot mode: the workspace's bot identity, so the row carries no user id.
-  return row.slackUserId == null && (row.slackAuthMode ?? 'bot') === 'bot';
-}
-
-async function findExisting(
+/** The identity the #1235 unique indexes key on: the user in user mode, none (workspace bot) in bot mode. */
+function findExisting(
   instances: UpsertSlackOAuthInstanceDeps['instances'],
   input: UpsertSlackOAuthInstanceInput,
 ): Promise<Instance | undefined> {
-  const page = await instances.list({ channel: ['slack'], limit: SLACK_LOOKUP_LIMIT });
-  if (page.hasMore) {
-    log.warn('Slack OAuth identity lookup truncated; add a service finder', { limit: SLACK_LOOKUP_LIMIT });
-  }
-  return page.items.find((row) => matchesIdentity(row, input));
+  return instances.findBySlackIdentity(input.teamId, input.mode === 'user' ? input.userId : null);
 }
 
 function baseName(input: UpsertSlackOAuthInstanceInput): string {
@@ -274,16 +255,17 @@ function credentialColumns(input: UpsertSlackOAuthInstanceInput): Partial<NewIns
   };
 }
 
+/** Null when a concurrent callback created the identity's row first. */
 async function createWithUniqueName(
   instances: UpsertSlackOAuthInstanceDeps['instances'],
   input: UpsertSlackOAuthInstanceInput,
-): Promise<Instance> {
+): Promise<Instance | null> {
   const base = baseName(input);
   let lastError: unknown;
   for (let attempt = 1; attempt <= NAME_SUFFIX_ATTEMPTS; attempt++) {
     const name = attempt === 1 ? base : `${base} ${attempt}`;
     try {
-      return await instances.create({
+      return await instances.createSlackOAuth({
         name,
         channel: 'slack',
         profileName: input.mode === 'user' ? (input.displayName ?? null) : (input.teamName ?? null),
@@ -347,12 +329,16 @@ export async function upsertSlackOAuthInstance(
   input: UpsertSlackOAuthInstanceInput,
 ): Promise<UpsertSlackOAuthInstanceResult> {
   const plugin = resolvePlugin(deps.channelRegistry);
+  // Insert is ON CONFLICT DO NOTHING on the identity index, so a callback that
+  // loses a race to a concurrent one gets null and updates the winner's row.
   const existing = await findExisting(deps.instances, input);
-
-  const row = existing
-    ? await deps.instances.update(existing.id, credentialColumns(input))
-    : await createWithUniqueName(deps.instances, input);
-  const created = !existing;
+  let row = existing ? null : await createWithUniqueName(deps.instances, input);
+  const created = row !== null;
+  if (!row) {
+    const current = existing ?? (await findExisting(deps.instances, input));
+    if (!current) throw new Error('slack-oauth: identity conflict but no row found');
+    row = await deps.instances.update(current.id, credentialColumns(input));
+  }
 
   log.info(created ? 'Slack OAuth instance created' : 'Slack OAuth instance re-authorized', {
     instanceId: row.id,

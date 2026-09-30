@@ -1137,6 +1137,15 @@ export const instances = pgTable(
     agentIdIdx: index('instances_agent_id_idx').on(table.agentId),
     metaPhoneNumberIdx: index('instances_meta_phone_number_idx').on(table.metaPhoneNumberId),
     slackIdentityIdx: index('instances_slack_identity_idx').on(table.slackTeamId, table.slackUserId),
+    // #1235: one OAuth instance per Slack identity — (team, user) in user mode,
+    // team alone in bot mode. Manual pasted-token rows are excluded: the
+    // connect listener fills their identity columns, and they may repeat.
+    slackOAuthUserUq: uniqueIndex('instances_slack_oauth_user_uq')
+      .on(table.slackTeamId, table.slackUserId)
+      .where(sql`${table.slackConnectionMethod} = 'oauth' AND ${table.slackUserId} IS NOT NULL`),
+    slackOAuthBotUq: uniqueIndex('instances_slack_oauth_bot_uq')
+      .on(table.slackTeamId)
+      .where(sql`${table.slackConnectionMethod} = 'oauth' AND ${table.slackUserId} IS NULL`),
     chainModeCheck: check('instances_chain_mode_check', sql`${table.chainMode} IN ('off', 'forward', 'bidirectional')`),
   }),
 );

@@ -89,7 +89,7 @@ echo "▶ pre-push: full test suite (turbo-cached)"
 # app logger unless the pusher asked for logs (#967). LOG_LEVEL is not part
 # of the turbo test hash — tests must not depend on the ambient threshold.
 export LOG_LEVEL="${LOG_LEVEL:-silent}"
-if ! bunx turbo test --concurrency=4 --continue --output-logs=new-only; then
+if ! bunx turbo test test:guards --concurrency=4 --continue --output-logs=new-only; then
   echo ""
   echo "✗ tests failed."
   echo "  → Re-run just the red package: bunx turbo test --filter=<pkg>"

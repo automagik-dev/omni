@@ -201,6 +201,16 @@ interface PublishedEvent {
   payload: Record<string, unknown>;
 }
 
+/** The fake of `InstanceService.findBySlackIdentity`: OAuth rows only, NULL user = bot identity. */
+function findIdentity(rows: FakeRow[], teamId: string, userId: string | null): FakeRow | undefined {
+  return rows.find(
+    (r) =>
+      r.slackConnectionMethod === 'oauth' &&
+      r.slackTeamId === teamId &&
+      (userId === null ? r.slackUserId == null : r.slackUserId === userId),
+  );
+}
+
 async function makeHarness() {
   const rows: FakeRow[] = [];
   const published: PublishedEvent[] = [];
@@ -213,11 +223,9 @@ async function makeHarness() {
   };
 
   const instances = {
-    list: async (options: { channel?: string[] } = {}) => ({
-      items: rows.filter((row) => !options.channel || options.channel.includes(row.channel)),
-      hasMore: false,
-    }),
-    create: async (data: Record<string, unknown>) => {
+    findBySlackIdentity: async (teamId: string, userId: string | null) => findIdentity(rows, teamId, userId),
+    createSlackOAuth: async (data: Record<string, unknown>) => {
+      if (findIdentity(rows, data.slackTeamId as string, (data.slackUserId as string | null) ?? null)) return null;
       const row = { profileMetadata: null, ...data, id: nextId() } as FakeRow;
       rows.push(row);
       return row;

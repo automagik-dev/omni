@@ -311,6 +311,51 @@ describe('outbound turn', () => {
     expect(body?.cpf_vq).toBe('');
   });
 
+  it('forwards codigo_operadora_vq into the Genesys userdata', async () => {
+    // One ASC channel serves several operators; Genesys composes the queue
+    // from a fixed prefix plus this code (`u_codigoOperadora`).
+    await boot();
+    await send(
+      { type: 'text', text: 'Vou te transferir.' },
+      { isHandoff: true, handoffFields: { fila_vq: 'VQ_AGENDAMENTO', codigo_operadora_vq: '12' } },
+    );
+
+    expect(ready('42')).toMatchObject({ hand_off: 'sim', codigo_operadora_vq: '12' });
+  });
+
+  it('forwards an empty codigo_operadora_vq rather than omitting it', async () => {
+    // Same all-or-nothing `store` as the identity fields: absent and empty both
+    // arrive as `""`, so the flow's mapping is never skipped.
+    await boot();
+    await send(
+      { type: 'text', text: 'Vou te transferir.' },
+      { isHandoff: true, handoffFields: { fila_vq: 'VQ_AGENDAMENTO', codigo_operadora_vq: '' } },
+    );
+    expect(ready('42')?.codigo_operadora_vq).toBe('');
+
+    await openTurn(plugin);
+    await send({ type: 'text', text: 'Vou te transferir.' }, { isHandoff: true, handoffQueue: 'VQ_AGENDAMENTO' });
+    expect(ready('42')?.codigo_operadora_vq).toBe('');
+  });
+
+  it('sanitizes an out-of-shape codigo_operadora_vq to "" without refusing the handoff', async () => {
+    // A malformed value in a routing field is worse than an empty one, but the
+    // field is optional for routing — unlike `fila_vq`, it never refuses.
+    await boot();
+    await send(
+      { type: 'text', text: 'Vou te transferir.' },
+      { isHandoff: true, handoffFields: { fila_vq: 'VQ_AGENDAMENTO', codigo_operadora_vq: '1234' } },
+    );
+    expect(ready('42')).toMatchObject({ hand_off: 'sim', fila_vq: 'VQ_AGENDAMENTO', codigo_operadora_vq: '' });
+
+    await openTurn(plugin);
+    await send(
+      { type: 'text', text: 'Vou te transferir.' },
+      { isHandoff: true, handoffFields: { fila_vq: 'VQ_AGENDAMENTO', codigo_operadora_vq: 'AB' } },
+    );
+    expect(ready('42')).toMatchObject({ hand_off: 'sim', codigo_operadora_vq: '' });
+  });
+
   // `POST /messages/send/handoff` sets `agentPaused: true` unless the send says
   // otherwise. In `flow` mode that pause is the deadlock: the beneficiary only
   // leaves the bot at the `genesys_mobile_service` node, so the agent must keep
@@ -505,6 +550,7 @@ describe('outbound turn', () => {
         hand_off: 'sim',
         fila_vq: 'VQ_AGENDAMENTO',
         motivo_transf_vq: 'fora do escopo',
+        codigo_operadora_vq: '',
       });
     });
 
@@ -562,6 +608,7 @@ describe('outbound turn', () => {
         bolhas: ['Vou te transferir.'],
         fila_vq: 'VQ_AGENDAMENTO',
         motivo_transf_vq: 'fora do escopo',
+        codigo_operadora_vq: '',
       });
     });
 

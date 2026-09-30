@@ -1901,6 +1901,8 @@ messagesRoutes.post('/send/handoff', zValidator('json', sendHandoffSchema), asyn
         instanceChannel: instance.channel,
         channelHandoffSupported: hasNativeHandoff,
         ...(data.motivoHandoff ? { motivoHandoff: data.motivoHandoff } : {}),
+        // null is meaningful (label came ready from the model), so keep it; only an absent key is skipped
+        ...(data.motivoDesvio !== undefined ? { motivoDesvio: data.motivoDesvio } : {}),
       },
     })
     .catch((err: unknown) => log.warn('Failed to persist handoff log', { error: String(err) }));
