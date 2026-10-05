@@ -18,6 +18,8 @@ import slackPlugin from '@omni/channel-slack';
 import telegramPlugin from '@omni/channel-telegram';
 import whatsappPlugin from '@omni/channel-whatsapp';
 import whatsappBusinessPlugin from '@omni/channel-whatsapp-business';
+import zapiOmniPlugin from '@omni/channel-zapi-omni';
+import zapiWebPlugin from '@omni/channel-zapi-web';
 
 // Pre-register all bundled channel plugins
 // Type assertion needed: channel plugins implement ChannelPlugin but
@@ -27,6 +29,8 @@ for (const plugin of [
   discordPlugin,
   whatsappPlugin,
   whatsappBusinessPlugin,
+  zapiWebPlugin,
+  zapiOmniPlugin,
   slackPlugin,
   gupshupPlugin,
   hermesPlugin,

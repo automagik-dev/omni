@@ -85,21 +85,14 @@ export interface ChatParticipant {
   updatedAt: string;
 }
 
-// Channel type enum
-export type Channel =
-  | 'whatsapp-baileys'
-  | 'whatsapp-business'
-  | 'discord'
-  | 'slack'
-  | 'telegram'
-  | 'a2a'
-  | 'gupshup'
-  | 'twilio-whatsapp'
-  | 'hermes'
-  | 'asc'
-  | 'asc-flow'
-  | 'internal'
-  | 'harness';
+/** Credentials are write-only; instance responses never expose this configuration. */
+export type ZapiConfig = NonNullable<components['schemas']['CreateInstanceRequest']['zapiConfig']>;
+
+// Channel identifiers are generated from the server schema.
+export type Channel = components['schemas']['Instance']['channel'];
+
+/** Instance responses omit write-only provider credentials. */
+export type UpdateInstanceBody = Partial<Instance> & { zapiConfig?: ZapiConfig | null };
 
 // Paginated response helper
 export interface PaginatedResponse<T> {
@@ -301,6 +294,7 @@ export interface CreateInstanceBody {
   channel: Channel;
   agentProviderId?: string;
   agentId?: string;
+  zapiConfig?: ZapiConfig;
   twilioAccountSid?: string;
   twilioAuthToken?: string;
   twilioFrom?: string;
@@ -321,6 +315,8 @@ export type SentBy = 'agent' | 'user';
 /**
  * Body for sending a message
  */
+export type SendTemplateBody = components['schemas']['SendTemplateRequest'];
+
 export interface SendMessageBody {
   instanceId: string;
   to: string;
@@ -1090,6 +1086,7 @@ export interface ConnectInstanceBody {
   forceNewQr?: boolean;
   /** Override the shared-Slack-app-token refusal (#1185) */
   force?: boolean;
+  zapiConfig?: ZapiConfig;
   twilioAccountSid?: string;
   twilioAuthToken?: string;
   twilioFrom?: string;
@@ -1659,7 +1656,7 @@ export function createOmniClient(config: OmniClientConfig) {
       /**
        * Update an instance
        */
-      async update(id: string, body: Partial<Instance>): Promise<void> {
+      async update(id: string, body: UpdateInstanceBody): Promise<void> {
         const { error, response } = await client.PATCH('/instances/{id}', {
           params: { path: { id } },
           body: body as Record<string, never>,
@@ -2178,6 +2175,20 @@ export function createOmniClient(config: OmniClientConfig) {
         const json = (await resp.json()) as { data?: { messageId: string; status: string } };
         if (!resp.ok) throw OmniApiError.from(json, resp.status);
         return json?.data ?? { messageId: '', status: 'sent' };
+      },
+
+      /** Send an approved template through an official WhatsApp channel. */
+      async sendTemplate(body: SendTemplateBody): Promise<{ messageId: string; status: string }> {
+        const resp = await apiFetch(`${baseUrl}/api/v2/messages/send/template`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const json = (await resp.json()) as { data?: { messageId: string; status: string } };
+        if (!resp.ok) throw OmniApiError.from(json, resp.status);
+        if (!json.data)
+          throw new OmniApiError('Invalid template send response', 'INVALID_RESPONSE', undefined, resp.status);
+        return json.data;
       },
 
       /**

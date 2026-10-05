@@ -49,6 +49,8 @@ export const channelTypes = [
   'asc',
   'asc-flow',
   'twilio-whatsapp',
+  'zapi-web',
+  'zapi-omni',
   'internal',
   'harness', // no-migration-needed: channel columns are varchar(50), not a pg enum — a new literal needs no DDL
 ] as const;
@@ -803,6 +805,8 @@ export const instances = pgTable(
     // ---- Twilio WhatsApp Configuration ----
     twilioAccountSid: varchar('twilio_account_sid', { length: 34 }),
     twilioAuthToken: text('twilio_auth_token'),
+    // Secrets follow existing channel credential storage; never returned by API.
+    zapiConfig: jsonb('zapi_config').$type<import('@omni/core').ZapiConfig>(),
     twilioFrom: varchar('twilio_from', { length: 64 }),
     twilioMessagingServiceSid: varchar('twilio_messaging_service_sid', { length: 34 }),
     twilioStatusCallbackUrl: text('twilio_status_callback_url'),

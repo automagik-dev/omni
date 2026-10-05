@@ -561,6 +561,13 @@
       "when": 1787900000000,
       "tag": "0079_instances_slack_identity_unique",
       "breakpoints": true
+    },
+    {
+      "idx": 80,
+      "version": "7",
+      "when": 1788000000000,
+      "tag": "0080_instances_zapi_config",
+      "breakpoints": true
     }
   ]
 }

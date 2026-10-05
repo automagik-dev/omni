@@ -26,7 +26,11 @@ const helperTypes = new Map(
 );
 
 function scanPackage(pkg: string) {
-  const code = sources(join(packagesRoot, pkg, 'src')).join('\n');
+  let code = sources(join(packagesRoot, pkg, 'src')).join('\n');
+  // Include workspace transport parents; inherited emit helpers are part of the contract.
+  for (const match of code.matchAll(/from ['"]@omni\/(channel-[\w-]+)['"]/g)) {
+    if (match[1] !== 'channel-sdk') code += `\n${sources(join(packagesRoot, match[1]!, 'src')).join('\n')}`;
+  }
   const emitted = new Set<string>();
   for (const [helper, type] of helperTypes) if (new RegExp(`\\b${helper}\\(`).test(code)) emitted.add(type);
   for (const m of code.matchAll(/(?:\.publish\(\s*|type: )'([a-z_]+\.[a-z_.]+)'/g)) emitted.add(m[1] as string);

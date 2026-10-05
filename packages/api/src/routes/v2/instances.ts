@@ -4,7 +4,14 @@
 
 import { zValidator } from '@hono/zod-validator';
 import type { ChannelPlugin, ChannelRegistry, GroupParticipantUpdateResult } from '@omni/channel-sdk';
-import { AccessModeSchema, ChannelTypeSchema, NotFoundError, createLogger } from '@omni/core';
+import {
+  AccessModeSchema,
+  ChannelTypeSchema,
+  NotFoundError,
+  type ZapiConfig,
+  ZapiConfigSchema,
+  createLogger,
+} from '@omni/core';
 import type { GupshupHandoffOptions } from '@omni/db';
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -58,6 +65,7 @@ const agentReplyFilterSchema = z.object({
 
 // Create instance schema
 const createInstanceSchema = z.object({
+  zapiConfig: ZapiConfigSchema.optional().nullable(),
   name: z.string().min(1).max(255).describe('Unique name for the instance'),
   channel: ChannelTypeSchema.describe('Channel type (e.g., whatsapp-baileys, discord)'),
   agentId: z.string().uuid().nullable().optional().describe('Agent UUID referencing agents table'),
@@ -362,6 +370,7 @@ const updateInstanceSchema = createInstanceSchema
     gupshupHandoffOptions: GupshupHandoffOptionsSchema.nullable().optional(),
     closeContactConfig: CloseContactConfigSchema.nullable().optional(),
     webhookVerifyToken: z.string().nullable().optional(),
+    zapiConfig: ZapiConfigSchema.nullable().optional(),
     twilioAccountSid: z.string().nullable().optional(),
     twilioAuthToken: z.string().nullable().optional(),
     twilioFrom: z.string().nullable().optional(),
@@ -496,6 +505,7 @@ function persistedTokenForChannel(instance: {
 
 /** Sensitive fields that must never be returned in API responses */
 const SENSITIVE_INSTANCE_FIELDS = [
+  'zapiConfig',
   'telegramBotToken',
   'discordBotToken',
   'slackBotToken',
@@ -622,6 +632,7 @@ function channelTokenField(channel: string): string | undefined {
 }
 
 type InstanceConnectionOptionsInput = {
+  zapiConfig?: ZapiConfig | null;
   channel: string;
   forceNewQr: boolean;
   token?: string;
@@ -791,6 +802,10 @@ function applyChannelSpecificConnectionOptions(
   input: InstanceConnectionOptionsInput,
 ): void {
   switch (input.channel) {
+    case 'zapi-web':
+    case 'zapi-omni':
+      options.zapiConfig = input.zapiConfig;
+      return;
     case 'telegram':
       applyTelegramConnectionOptions(options, input);
       return;
@@ -969,6 +984,8 @@ instancesRoutes.get('/supported-channels', async (c) => {
       description: 'WhatsApp via Twilio Programmable Messaging',
       loaded: false as const,
     },
+    { id: 'zapi-web' as const, name: 'Z-API Web', description: 'Z-API unofficial WhatsApp', loaded: false as const },
+    { id: 'zapi-omni' as const, name: 'Z-API Omni', description: 'Z-API official WhatsApp', loaded: false as const },
     { id: 'discord' as const, name: 'Discord', description: 'Discord bot integration', loaded: false as const },
     { id: 'slack' as const, name: 'Slack', description: 'Slack bot integration', loaded: false as const },
     { id: 'telegram' as const, name: 'Telegram', description: 'Telegram bot integration', loaded: false as const },
@@ -1053,12 +1070,37 @@ function slackAppTokenConflictBody(other: { id: string; name: string }) {
   };
 }
 
+/** Keep channel/config combinations valid before persisting or connecting. */
+export function validZapiBinding(channel: string, config: ZapiConfig | null | undefined): boolean {
+  if (channel === 'zapi-web') return config?.driver === 'web';
+  if (channel === 'zapi-omni') return config?.driver === 'omni';
+  return config == null;
+}
+async function validZapiUpdate(
+  services: Services,
+  id: string,
+  config: ZapiConfig | null | undefined,
+): Promise<boolean> {
+  if (config === undefined) return true;
+  return validZapiBinding((await services.instances.getById(id)).channel, config);
+}
+function persistedZapiConfig(instance: InstanceRecord, body: ConnectInstanceBody) {
+  return body.zapiConfig ?? instance.zapiConfig;
+}
+function isZapiChannel(channel: string): boolean {
+  return channel === 'zapi-web' || channel === 'zapi-omni';
+}
+const zapiBindingError = {
+  error: { code: 'INVALID_ZAPI_CONFIG', message: 'Supply Z-API credentials matching the instance channel' },
+};
+
 /**
  * POST /instances - Create new instance
  */
 instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) => {
   const { force, ...data } = c.req.valid('json');
   const services = c.get('services');
+  if (!validZapiBinding(data.channel, data.zapiConfig)) return c.json(zapiBindingError, 400);
 
   // A create carries no workspace yet (the team id is learned on first
   // connect), so an unknown team on this side is expected here.
@@ -1107,6 +1149,7 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
     slackAppToken: instance.slackAppToken,
     slackSigningSecret: instance.slackSigningSecret,
     slackForce: force,
+    zapiConfig: instance.zapiConfig,
     profileMetadata: instance.profileMetadata,
     gupshupCallbackUrl: instance.gupshupCallbackUrl,
     gupshupAuthToken: instance.gupshupAuthToken,
@@ -1159,6 +1202,8 @@ instancesRoutes.patch('/:id', instanceAccess, zValidator('json', updateInstanceS
   const id = c.req.param('id');
   const { force, ...data } = c.req.valid('json');
   const services = c.get('services');
+
+  if (!(await validZapiUpdate(services, id, data.zapiConfig))) return c.json(zapiBindingError, 400);
 
   // The conflict is keyed on the PAIR (app token, bot mode), so either field
   // can create it: switching an existing row to bot mode on a token another
@@ -1580,6 +1625,7 @@ instancesRoutes.post('/:id/passkey/confirm', instanceAccess, async (c) => {
 
 // Connect instance schema
 const connectInstanceSchema = z.object({
+  zapiConfig: ZapiConfigSchema.optional(),
   token: z.string().optional().describe('Bot token for Discord/Telegram instances'),
   slackBotToken: z.string().optional().describe('Slack bot token (xoxb-...)'),
   slackUserToken: z.string().optional().describe('Slack user token (xoxp-...), for authMode user'),
@@ -1667,6 +1713,7 @@ function buildConnectConnectionOptions(
     slackAppToken: body.slackAppToken ?? instance.slackAppToken,
     slackSigningSecret: body.slackSigningSecret ?? instance.slackSigningSecret,
     slackForce: body.force,
+    zapiConfig: persistedZapiConfig(instance, body),
     profileMetadata: instance.profileMetadata,
     whatsapp: body.whatsapp,
     gupshupCallbackUrl: instance.gupshupCallbackUrl,
@@ -1740,6 +1787,9 @@ function buildConnectPersistUpdates(instance: InstanceRecord, body: ConnectInsta
     ...buildTokenPersistUpdates(instance.channel, body),
   };
 
+  if (isZapiChannel(instance.channel)) {
+    return { ...updates, zapiConfig: persistedZapiConfig(instance, body) };
+  }
   if (instance.channel === 'twilio-whatsapp') {
     return {
       ...updates,
@@ -1801,6 +1851,7 @@ instancesRoutes.post(
     const channelRegistry = c.get('channelRegistry');
 
     const instance = await services.instances.getById(id);
+    if (!validZapiBinding(instance.channel, persistedZapiConfig(instance, body))) return c.json(zapiBindingError, 400);
 
     const conflict =
       body.force || instance.channel !== 'slack'
@@ -1941,6 +1992,7 @@ instancesRoutes.post('/:id/restart', instanceAccess, async (c) => {
       restartOptions.twilioWebhookUrl = instance.twilioWebhookUrl;
       restartOptions.twilioValidateSignature = instance.twilioValidateSignature;
     }
+    if (isZapiChannel(instance.channel)) restartOptions.zapiConfig = instance.zapiConfig;
     if (instance.channel === 'hermes') {
       applyHermesConnectionOptions(restartOptions, instance);
     }

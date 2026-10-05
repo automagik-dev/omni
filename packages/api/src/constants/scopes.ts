@@ -306,6 +306,7 @@ export const SCOPE_MAP: Record<string, string> = {
   'PATCH /messages/:id/video-description': 'messages:write',
   'PATCH /messages/:id/document-extraction': 'messages:write',
   'POST /messages/send': 'messages:send',
+  'POST /messages/send/template': 'messages:send',
   'POST /messages/send/media': 'messages:send',
   'POST /messages/send/reaction': 'messages:send',
   'POST /messages/send/sticker': 'messages:send',

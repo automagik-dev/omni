@@ -3,6 +3,7 @@
  */
 
 import type { OpenAPIRegistry } from '@asteasolutions/zod-to-openapi';
+import { OutboundTemplateSchema } from '@omni/core';
 import { z } from '../../lib/zod-openapi';
 import { ErrorSchema, SuccessSchema } from './common';
 
@@ -10,6 +11,13 @@ import { ErrorSchema, SuccessSchema } from './common';
 const SentByField = z.enum(['agent', 'user']).optional().openapi({
   description:
     "Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.",
+});
+
+export const SendTemplateSchema = z.object({
+  instanceId: z.string().uuid(),
+  to: z.string().min(1),
+  template: OutboundTemplateSchema,
+  sentBy: SentByField,
 });
 
 // Message response schema
@@ -310,6 +318,7 @@ export const TtsResponseSchema = z.object({
 export function registerMessageSchemas(registry: OpenAPIRegistry): void {
   registry.register('MessageResponse', MessageResponseSchema);
   registry.register('SendTextRequest', SendTextSchema);
+  registry.register('SendTemplateRequest', SendTemplateSchema);
   registry.register('TTSVoice', TTSVoiceSchema);
   registry.register('SendTtsRequest', SendTtsSchema);
   registry.register('TtsResponse', TtsResponseSchema);
@@ -340,6 +349,22 @@ export function registerMessageSchemas(registry: OpenAPIRegistry): void {
       },
       400: { description: 'Validation error', content: { 'application/json': { schema: ErrorSchema } } },
       404: { description: 'Instance not found', content: { 'application/json': { schema: ErrorSchema } } },
+    },
+  });
+
+  registry.registerPath({
+    method: 'post',
+    path: '/messages/send/template',
+    operationId: 'sendTemplateMessage',
+    tags: ['Messages'],
+    summary: 'Send an approved WhatsApp template',
+    request: { body: { content: { 'application/json': { schema: SendTemplateSchema } } } },
+    responses: {
+      201: {
+        description: 'Template accepted',
+        content: { 'application/json': { schema: z.object({ data: MessageResponseSchema }) } },
+      },
+      400: { description: 'Invalid or unsupported template', content: { 'application/json': { schema: ErrorSchema } } },
     },
   });
 

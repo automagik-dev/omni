@@ -512,6 +512,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/messages/send/template": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Send an approved WhatsApp template */
+        post: operations["sendTemplateMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/messages/send/media": {
         parameters: {
             query?: never;
@@ -3412,7 +3429,7 @@ export interface components {
              * @description Channel type
              * @enum {string}
              */
-            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
+            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "zapi-web" | "zapi-omni" | "internal" | "harness";
             /** @description Whether instance is active */
             isActive: boolean;
             /** @description Whether this is the default instance for channel */
@@ -3596,7 +3613,7 @@ export interface components {
              * @description Channel type
              * @enum {string}
              */
-            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
+            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "zapi-web" | "zapi-omni" | "internal" | "harness";
             /**
              * Format: uuid
              * @description Agent UUID (agents table)
@@ -3621,6 +3638,21 @@ export interface components {
             isDefault: boolean;
             /** @description Bot token for Discord instances */
             token?: string;
+            /** @description Write-only Z-API credentials matching the channel driver */
+            zapiConfig?: {
+                /** @enum {string} */
+                driver: "web";
+                instanceId: string;
+                instanceToken: string;
+                clientToken: string;
+                webhookToken: string;
+            } | {
+                /** @enum {string} */
+                driver: "omni";
+                channelId: string;
+                secretKey: string;
+                signingSecret: string;
+            };
             /**
              * @description WhatsApp (Baileys) pairing identity (default: desktop). 'desktop' = macOS Desktop + group history, shows as "Mac OS" in Linked Devices; 'web' = Ubuntu/Chrome. Applies on next pairing
              * @default desktop
@@ -3824,6 +3856,21 @@ export interface components {
         ConnectInstanceRequest: {
             /** @description Bot token for Discord instances */
             token?: string;
+            /** @description Write-only Z-API credentials matching the channel driver */
+            zapiConfig?: {
+                /** @enum {string} */
+                driver: "web";
+                instanceId: string;
+                instanceToken: string;
+                clientToken: string;
+                webhookToken: string;
+            } | {
+                /** @enum {string} */
+                driver: "omni";
+                channelId: string;
+                secretKey: string;
+                signingSecret: string;
+            };
             /** @description Force new QR code for WhatsApp */
             forceNewQr?: boolean;
         };
@@ -3843,7 +3890,7 @@ export interface components {
              * @description Channel type ID
              * @enum {string}
              */
-            id: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
+            id: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "zapi-web" | "zapi-omni" | "internal" | "harness";
             /** @description Human-readable channel name */
             name: string;
             /** @description Plugin version */
@@ -3973,6 +4020,36 @@ export interface components {
             };
             /** @description Ask the user to share their location (WhatsApp Cloud: native "Send location" button under the text) */
             requestLocation?: boolean;
+            /**
+             * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
+             * @enum {string}
+             */
+            sentBy?: "agent" | "user";
+        };
+        SendTemplateRequest: {
+            /** Format: uuid */
+            instanceId: string;
+            to: string;
+            template: {
+                name: string;
+                /** @default pt_BR */
+                language: string;
+                bodyParameters?: string[];
+                headerMedia?: {
+                    /** @enum {string} */
+                    type: "image" | "video" | "document";
+                    /** Format: uri */
+                    link: string;
+                    filename?: string;
+                };
+                buttonParameters?: {
+                    /** @enum {string} */
+                    sub_type: "quick_reply" | "url" | "copy_code";
+                    index: number;
+                    payload?: string;
+                    text?: string;
+                }[];
+            };
             /**
              * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
              * @enum {string}
@@ -8780,7 +8857,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
+                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "zapi-web" | "zapi-omni" | "internal" | "harness";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -8984,7 +9061,7 @@ export interface operations {
                      * @description Channel type
                      * @enum {string}
                      */
-                    channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
+                    channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "zapi-web" | "zapi-omni" | "internal" | "harness";
                     /**
                      * Format: uuid
                      * @description Agent UUID (agents table)
@@ -9009,6 +9086,21 @@ export interface operations {
                     isDefault?: boolean;
                     /** @description Bot token for Discord instances */
                     token?: string;
+                    /** @description Write-only Z-API credentials matching the channel driver */
+                    zapiConfig?: {
+                        /** @enum {string} */
+                        driver: "web";
+                        instanceId: string;
+                        instanceToken: string;
+                        clientToken: string;
+                        webhookToken: string;
+                    } | {
+                        /** @enum {string} */
+                        driver: "omni";
+                        channelId: string;
+                        secretKey: string;
+                        signingSecret: string;
+                    };
                     /**
                      * @description WhatsApp (Baileys) pairing identity (default: desktop). 'desktop' = macOS Desktop + group history, shows as "Mac OS" in Linked Devices; 'web' = Ubuntu/Chrome. Applies on next pairing
                      * @default desktop
@@ -9182,7 +9274,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
+                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "zapi-web" | "zapi-omni" | "internal" | "harness";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -9406,7 +9498,7 @@ export interface operations {
                              * @description Channel type ID
                              * @enum {string}
                              */
-                            id: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
+                            id: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "zapi-web" | "zapi-omni" | "internal" | "harness";
                             /** @description Human-readable channel name */
                             name: string;
                             /** @description Plugin version */
@@ -9455,7 +9547,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
+                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "zapi-web" | "zapi-omni" | "internal" | "harness";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -9724,7 +9816,7 @@ export interface operations {
                      * @description Channel type
                      * @enum {string}
                      */
-                    channel?: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
+                    channel?: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "zapi-web" | "zapi-omni" | "internal" | "harness";
                     /**
                      * Format: uuid
                      * @description Agent UUID (agents table)
@@ -9749,6 +9841,21 @@ export interface operations {
                     isDefault?: boolean;
                     /** @description Bot token for Discord instances */
                     token?: string;
+                    /** @description Write-only Z-API credentials matching the channel driver */
+                    zapiConfig?: {
+                        /** @enum {string} */
+                        driver: "web";
+                        instanceId: string;
+                        instanceToken: string;
+                        clientToken: string;
+                        webhookToken: string;
+                    } | {
+                        /** @enum {string} */
+                        driver: "omni";
+                        channelId: string;
+                        secretKey: string;
+                        signingSecret: string;
+                    };
                     /**
                      * @description WhatsApp (Baileys) pairing identity (default: desktop). 'desktop' = macOS Desktop + group history, shows as "Mac OS" in Linked Devices; 'web' = Ubuntu/Chrome. Applies on next pairing
                      * @default desktop
@@ -9922,7 +10029,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
+                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "zapi-web" | "zapi-omni" | "internal" | "harness";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -10367,6 +10474,21 @@ export interface operations {
                 "application/json": {
                     /** @description Bot token for Discord instances */
                     token?: string;
+                    /** @description Write-only Z-API credentials matching the channel driver */
+                    zapiConfig?: {
+                        /** @enum {string} */
+                        driver: "web";
+                        instanceId: string;
+                        instanceToken: string;
+                        clientToken: string;
+                        webhookToken: string;
+                    } | {
+                        /** @enum {string} */
+                        driver: "omni";
+                        channelId: string;
+                        secretKey: string;
+                        signingSecret: string;
+                    };
                     /** @description Force new QR code for WhatsApp */
                     forceNewQr?: boolean;
                 };
@@ -11130,6 +11252,103 @@ export interface operations {
             };
             /** @description Instance not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    sendTemplateMessage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** Format: uuid */
+                    instanceId: string;
+                    to: string;
+                    template: {
+                        name: string;
+                        /** @default pt_BR */
+                        language?: string;
+                        bodyParameters?: string[];
+                        headerMedia?: {
+                            /** @enum {string} */
+                            type: "image" | "video" | "document";
+                            /** Format: uri */
+                            link: string;
+                            filename?: string;
+                        };
+                        buttonParameters?: {
+                            /** @enum {string} */
+                            sub_type: "quick_reply" | "url" | "copy_code";
+                            index: number;
+                            payload?: string;
+                            text?: string;
+                        }[];
+                    };
+                    /**
+                     * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
+                     * @enum {string}
+                     */
+                    sentBy?: "agent" | "user";
+                };
+            };
+        };
+        responses: {
+            /** @description Template accepted */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /** @description Internal message ID */
+                            messageId: string;
+                            /** @description External platform message ID */
+                            externalMessageId: string;
+                            /** @description Message status */
+                            status: string;
+                            /**
+                             * Format: uuid
+                             * @description Instance UUID
+                             */
+                            instanceId?: string;
+                            /** @description Recipient */
+                            to?: string;
+                            /** @description Media type if applicable */
+                            mediaType?: string;
+                            /**
+                             * Format: uuid
+                             * @description Present when the request set sentBy: 'agent' — the agent the send was attributed to, or null when the instance has no configured agent (attribution did not happen)
+                             */
+                            senderAgentId?: string | null;
+                        };
+                    };
+                };
+            };
+            /** @description Invalid or unsupported template */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

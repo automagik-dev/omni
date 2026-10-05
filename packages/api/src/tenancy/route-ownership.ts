@@ -284,6 +284,18 @@ const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
       'connection state; the outcome is read through the authenticated GET /api/v2/slack/oauth/result/:nonce.',
   },
   {
+    route: 'POST /api/v2/channels/zapi-web/:instanceId/webhook',
+    class: 'public-by-contract',
+    justification:
+      'Vendor callback authenticated by server-held independent webhook token; registered instance supplies tenant, never payload claims. Returns acknowledgement only, withholding credentials and conversation data.',
+  },
+  {
+    route: 'POST /api/v2/channels/zapi-omni/:instanceId/webhook',
+    class: 'public-by-contract',
+    justification:
+      'Vendor callback verified by timestamped HMAC over delivery key and decompressed bytes; registered instance supplies tenant. Returns acknowledgement only, withholding credentials and conversation data.',
+  },
+  {
     route: 'POST /api/v2/channels/twilio-whatsapp/:instanceId/webhook',
     class: 'public-by-contract',
     justification:
@@ -760,6 +772,7 @@ const TENANT_SCOPED_ROUTES: readonly RouteKey[] = [
   'POST /api/v2/messages/send/presence',
   'POST /api/v2/messages/send/reaction',
   'POST /api/v2/messages/send/sticker',
+  'POST /api/v2/messages/send/template',
   'POST /api/v2/messages/send/tts',
   'POST /api/v2/persons/link',
   'POST /api/v2/persons/merge',

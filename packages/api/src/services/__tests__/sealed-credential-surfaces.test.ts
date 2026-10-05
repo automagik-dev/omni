@@ -100,6 +100,43 @@ function makeInstancesDb() {
 }
 
 describe('(g) instances.* channel tokens', () => {
+  test('nested Z-API credentials are sealed for their tenant without mutating input', async () => {
+    setTenantSecretMasterKey(MASTER_KEY);
+    const { db, rows } = makeInstancesDb();
+    const svc = new InstanceService(db, null);
+    const config = {
+      driver: 'web' as const,
+      instanceId: 'vendor',
+      instanceToken: 'instance-token-12345',
+      clientToken: 'client-token-12345',
+      webhookToken: 'webhook-token-12345678901234567890',
+    };
+    const created = await inTenantScope(db, TENANT_A, () =>
+      svc.create({ name: 'z', channel: 'zapi-web', tenantId: TENANT_A, zapiConfig: config } as never),
+    );
+    const stored = rows[0]?.zapiConfig as Record<string, unknown>;
+    for (const key of ['instanceToken', 'clientToken', 'webhookToken'] as const) {
+      expect(isSealedCredentialField(stored[key])).toBe(true);
+      expect(JSON.stringify(rows[0])).not.toContain(config[key]);
+    }
+    expect(stored.instanceId).toBe('vendor');
+    expect(created.zapiConfig).toEqual(config);
+    expect(config.instanceToken).toBe('instance-token-12345');
+    expect((await inTenantScope(db, TENANT_A, () => svc.getById('inst-1'))).zapiConfig).toEqual(config);
+    const rotated = {
+      driver: 'omni' as const,
+      channelId: 'official',
+      secretKey: 'official-secret-12345',
+      signingSecret: 'signing-secret-12345',
+    };
+    await inTenantScope(db, TENANT_A, () => svc.update('inst-1', { zapiConfig: rotated } as never));
+    expect(isSealedCredentialField((rows[0]?.zapiConfig as Record<string, unknown>).secretKey)).toBe(true);
+    expect((await inTenantScope(db, TENANT_A, () => svc.getById('inst-1'))).zapiConfig).toEqual(rotated);
+    rows[0]!.tenantId = TENANT_B;
+    const wrong = await inTenantScope(db, TENANT_B, () => svc.getById('inst-1'));
+    expect(wrong.zapiConfig?.driver === 'omni' && wrong.zapiConfig.secretKey).toBeNull();
+  });
+
   test('flag-off (no scope, no key): the token is stored as plaintext, byte-identical', async () => {
     const { db, rows } = makeInstancesDb();
     const svc = new InstanceService(db, null);

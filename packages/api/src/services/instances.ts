@@ -99,11 +99,19 @@ function sealInstanceCredentials<T extends Record<string, unknown>>(tenantId: st
     if (typeof value !== 'string') continue;
     out[column] = sealCredentialField(tenantId, value);
   }
+  if (out.zapiConfig && typeof out.zapiConfig === 'object') {
+    const config = { ...(out.zapiConfig as Record<string, unknown>) };
+    for (const key of ['instanceToken', 'clientToken', 'webhookToken', 'secretKey', 'signingSecret']) {
+      if (typeof config[key] === 'string') config[key] = sealCredentialField(tenantId, config[key] as string);
+    }
+    out.zapiConfig = config;
+  }
   return out as T;
 }
 
 /** Does `data` actually carry a credential column a seal could reshape? */
 function hasSealableCredential(data: Record<string, unknown>): boolean {
+  if (data.zapiConfig && typeof data.zapiConfig === 'object') return true;
   return SEALED_CREDENTIAL_COLUMNS.some((column) => {
     const value = data[column];
     return typeof value === 'string' && value !== '';
@@ -126,6 +134,15 @@ function openInstanceCredentials<T extends { tenantId?: string | null }>(row: T)
     if (opened === stored) continue;
     if (!copy) copy = { ...row };
     copy[column] = opened;
+  }
+  const rawConfig = (row as Record<string, unknown>).zapiConfig;
+  if (rawConfig && typeof rawConfig === 'object') {
+    const config = { ...(rawConfig as Record<string, unknown>) };
+    for (const key of ['instanceToken', 'clientToken', 'webhookToken', 'secretKey', 'signingSecret']) {
+      if (typeof config[key] === 'string') config[key] = openCredentialField(tenantId, config[key] as string);
+    }
+    copy ??= { ...row };
+    copy.zapiConfig = config;
   }
   return (copy ?? row) as T;
 }

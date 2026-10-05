@@ -52,7 +52,7 @@ import { z } from 'zod';
 import { sentryEnabled } from '../../lib/sentry-scrub';
 import { selectSlackDownloadToken } from '../../plugins/media-processor';
 import { optionalDateParam } from '../../schemas/date-query';
-import { sendCloseContactSchema, sendHandoffSchema } from '../../schemas/openapi/messages';
+import { SendTemplateSchema, sendCloseContactSchema, sendHandoffSchema } from '../../schemas/openapi/messages';
 import type { Services } from '../../services';
 import { ApiKeyService } from '../../services/api-keys';
 import { type MediaFetchOptions, MediaStorageService } from '../../services/media-storage';
@@ -241,6 +241,7 @@ async function resolveRecipient(to: string, channelType: string, services: Servi
  * Plugin capability keys
  */
 type PluginCapability =
+  | 'canSendTemplate'
   | 'canSendText'
   | 'canSendMedia'
   | 'canSendReaction'
@@ -359,6 +360,7 @@ async function getPluginForInstance(
   if (requiredCapability && !plugin.capabilities[requiredCapability]) {
     const capabilityNames: Record<PluginCapability, string> = {
       canSendText: 'sending text messages',
+      canSendTemplate: 'sending approved templates',
       canSendMedia: 'sending media',
       canSendReaction: 'sending reactions',
       canSendPoll: 'sending polls',
@@ -1291,6 +1293,41 @@ messagesRoutes.post('/send', async (c) => {
         externalMessageId: result.messageId,
         status: 'sent',
         instanceId: instance.id,
+        to,
+        timestamp: result.timestamp,
+        ...sentByResponseFields(sentBy, senderAgentId),
+      },
+    },
+    201,
+  );
+});
+
+/** Send approved templates through the same plugin contract as other messages. */
+messagesRoutes.post('/send/template', zValidator('json', SendTemplateSchema), async (c) => {
+  const { instanceId, to, template, sentBy } = c.req.valid('json');
+  checkInstanceAccess(c.get('apiKey'), instanceId);
+  const services = c.get('services');
+  const { instance, plugin } = await getPluginForInstance(
+    services,
+    c.get('channelRegistry'),
+    instanceId,
+    'canSendTemplate',
+  );
+  const resolvedTo = await resolveRecipient(to, instance.channel, services);
+  const senderAgentId = resolveSentByAgentId(sentBy, instance);
+  const result = await plugin.sendMessage(instanceId, {
+    to: resolvedTo,
+    content: { type: 'template' },
+    metadata: { template, senderAgentId, correlationId: c.req.header('x-correlation-id') },
+  });
+  handleSendResult(result, { channelType: instance.channel, instanceId, operation: 'send template' });
+  return c.json(
+    {
+      data: {
+        messageId: result.messageId,
+        externalMessageId: result.messageId,
+        status: 'sent',
+        instanceId,
         to,
         timestamp: result.timestamp,
         ...sentByResponseFields(sentBy, senderAgentId),
