@@ -186,3 +186,30 @@ Fontes oficiais consultadas em 2026-10-05:
 - [Assinatura de webhooks](https://developer.omni.z-api.io/webhooks/signature)
 - [Exemplos de recebimento Web](https://developer.z-api.io/webhooks/on-message-received-examples)
 - [Repositório upstream Omni](https://github.com/automagik-dev/omni)
+
+
+## Collection pública do Postman
+
+Referência adicional: [Z-API Collection](https://www.postman.com/docs-z-api/z-api-s-public-workspace/collection/gwri249/z-api-collection).
+Consulta parcial pelo navegador em 2026-10-05, sem autenticação e sem executar
+requests. A página inicial apresentou `Collection not found`, mas foi possível
+abrir os exemplos individuais pela árvore da collection.
+
+Os exemplos consultados confirmam os contratos já usados pelo adapter Web:
+
+| Operação | Contrato observado | Implementação |
+| --- | --- | --- |
+| Texto | `POST /instances/{instanceId}/token/{token}/send-text`, header `Client-Token`, body `phone` e `message`; resposta com `messageId` e `zaapId` | `ZapiClient.send` |
+| Leitura | `POST /instances/{instanceId}/token/{token}/read-message`, mesmo header, body `phone` e `messageId`; resposta `value: true` | `ZapiWebPlugin.markAsRead` |
+
+A árvore também lista encaminhamento, fixar/desafixar mensagens, PTV, carrosséis,
+produtos, pedidos, registro de dispositivo, comunidades e administração de grupos.
+Esses recursos ainda não estão implementados nesta branch. O adapter cobre o
+contrato comum descrito na matriz acima; não equivale à cobertura integral da
+collection. `delayMessage`, `delayTyping` e edição de texto de saída por
+`editMessageId`, documentados no exemplo de texto, também não são expostos pelo
+adapter. Receber callbacks de edição não implica poder editar mensagens de saída.
+
+A collection consultada utiliza o contrato Web de instâncias e tokens. Ela não
+valida o contrato Oficial Z-API Omni, que possui documentação e autenticação
+separadas. Nenhuma comparação completa dos payloads da collection foi realizada.
