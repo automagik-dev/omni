@@ -123,8 +123,7 @@ idempotentes por seus consumidores. Uma conexão desconectada localmente retorna
 ## Envio
 
 Texto, mídia, contatos, localização e reações usam os endpoints existentes do Omni.
-Mídia exige URL pública HTTPS; este adapter não faz upload de base64/localPath para
-a Z-API. O QR em base64 é mostrado como imagem pela UI. Desafios de passkey devem
+Mídia Web aceita URL pública HTTPS ou base64 com MIME compatível, até 16 MB. O gateway conserva a cópia enviada no armazenamento de mídia para exibição no painel; o journal referencia o arquivo sem carregar os bytes. O driver oficial continua exigindo URL HTTPS. O QR em base64 é mostrado como imagem pela UI. Desafios de passkey devem
 ser concluídos no fornecedor nesta versão. Disconnect remove a conexão local e
 não encerra a sessão remota.
 

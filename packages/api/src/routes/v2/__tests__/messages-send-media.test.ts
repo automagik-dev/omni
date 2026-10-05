@@ -1,14 +1,21 @@
-import { describe, expect, mock, test } from 'bun:test';
+import { afterAll, describe, expect, mock, test } from 'bun:test';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Hono } from 'hono';
 import type { AppVariables } from '../../../types';
-import { messagesRoutes } from '../messages';
+import { decodeZapiUpload, messagesRoutes } from '../messages';
 
-function mountMessagesRoutes(sendMessage: ReturnType<typeof mock>): Hono<{ Variables: AppVariables }> {
+function mountMessagesRoutes(
+  sendMessage: ReturnType<typeof mock>,
+  channel = 'whatsapp-baileys',
+): Hono<{ Variables: AppVariables }> {
   const app = new Hono<{ Variables: AppVariables }>();
   app.use('*', async (c, next) => {
+    c.set('db', {} as never);
     c.set('services', {
       instances: {
-        getById: mock(async (id: string) => ({ id, channel: 'whatsapp-baileys' })),
+        getById: mock(async (id: string) => ({ id, channel })),
       },
     } as never);
     c.set('channelRegistry', {
@@ -112,4 +119,39 @@ describe('POST /messages/send/media', () => {
     expect(Buffer.isBuffer(message.metadata?.audioBuffer)).toBe(true);
     expect((message.metadata?.audioBuffer as Buffer).equals(audio)).toBe(true);
   });
+});
+
+const mediaDirectory = mkdtempSync(join(tmpdir(), 'omni-zapi-upload-'));
+const previousMediaPath = process.env.MEDIA_STORAGE_PATH;
+afterAll(() => {
+  rmSync(mediaDirectory, { recursive: true, force: true });
+  if (previousMediaPath === undefined) Reflect.deleteProperty(process.env, 'MEDIA_STORAGE_PATH');
+  else process.env.MEDIA_STORAGE_PATH = previousMediaPath;
+});
+test('Z-API upload stores bytes and forwards the persistent reference before sending', async () => {
+  process.env.MEDIA_STORAGE_PATH = mediaDirectory;
+  const bytes = Buffer.from('uploaded-image');
+  const sendMessage = mock(async (_id: string, message: { content: { localPath: string } }) => {
+    expect(readFileSync(join(mediaDirectory, message.content.localPath))).toEqual(bytes);
+    return { success: true, messageId: 'stored-image', timestamp: 123 };
+  });
+  const app = mountMessagesRoutes(sendMessage, 'zapi-web');
+  const response = await app.request('/messages/send/media', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      instanceId: '11111111-1111-4111-8111-111111111111',
+      to: '5511999999999',
+      type: 'image',
+      base64: bytes.toString('base64'),
+      mimeType: 'image/png',
+    }),
+  });
+  expect(response.status).toBe(201);
+  expect(sendMessage).toHaveBeenCalledTimes(1);
+});
+test('Z-API upload rejects invalid/noncanonical encoding and oversized media', () => {
+  for (const encoded of ['', 'invalid!', 'Zh==', Buffer.alloc(16 * 1024 * 1024 + 1).toString('base64')]) {
+    expect(() => decodeZapiUpload(encoded)).toThrow('Invalid media encoding or size');
+  }
 });

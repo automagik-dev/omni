@@ -34,6 +34,7 @@
  * @see unified-messages wish
  */
 
+import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { extname, join } from 'node:path';
 
@@ -718,6 +719,24 @@ function buildSendMediaMetadata(data: z.infer<typeof sendMediaSchema>): Record<s
   return { base64: data.base64, ptt: data.voiceNote };
 }
 
+export function decodeZapiUpload(encoded: string): Buffer {
+  const parsed = z
+    .string()
+    .min(4)
+    .max(22_369_624)
+    .regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/)
+    .safeParse(encoded);
+  const bytes = parsed.success ? Buffer.from(parsed.data, 'base64') : Buffer.alloc(0);
+  if (!bytes.length || bytes.length > 16 * 1024 * 1024 || bytes.toString('base64') !== encoded) {
+    throw new OmniError({
+      code: ERROR_CODES.VALIDATION_ERROR,
+      message: 'Invalid media encoding or size',
+      recoverable: false,
+    });
+  }
+  return bytes;
+}
+
 // Send reaction schema
 const sendReactionSchema = z.object({
   instanceId: z.string().uuid().describe('Instance ID'),
@@ -924,7 +943,7 @@ messagesRoutes.post('/media/download', zValidator('json', messageRefSchema), asy
   checkInstanceAccess(apiKey, instanceId);
 
   // 3. Validate message has media
-  if (!message.hasMedia || !message.mediaUrl) {
+  if (!message.hasMedia || (!message.mediaUrl && !message.mediaLocalPath)) {
     return c.json(
       {
         error: {
@@ -957,6 +976,9 @@ messagesRoutes.post('/media/download', zValidator('json', messageRefSchema), asy
   }
 
   // 5. Download from remote if not cached
+  if (!cached && !mediaUrl) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Cached media is unavailable' } }, 404);
+  }
   if (!cached) {
     try {
       const result = await mediaStorage.storeFromUrl(
@@ -1412,6 +1434,21 @@ messagesRoutes.post('/send/media', zValidator('json', sendMediaSchema), async (c
     } as OutgoingContent,
     metadata: { ...buildSendMediaMetadata(data), ...(senderAgentId ? { senderAgentId } : {}) },
   };
+
+  // Z-API base64 is uploaded to the vendor, but the outbound message must also
+  // retain a local media reference: the self echo is deduplicated after send.
+  if (instance.channel === 'zapi-web' && data.base64) {
+    const bytes = decodeZapiUpload(data.base64);
+    const stored = await getMediaStorageForDownload(c.get('db')).storeFromBuffer(
+      instance.id,
+      randomUUID(),
+      bytes,
+      mediaMimeType,
+      new Date(),
+      currentTenantScope()?.tenantId ?? undefined,
+    );
+    outgoingMessage.content.localPath = stored.localPath;
+  }
 
   // T8: API processed the send request
   if (correlationId && tracker.isTracking(correlationId)) {
