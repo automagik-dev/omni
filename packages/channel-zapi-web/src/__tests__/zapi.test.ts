@@ -351,7 +351,11 @@ describe('Z-API complete messaging journey', () => {
     await plugin.connect('local', { instanceId: 'local', credentials: {}, options: { zapiConfig: web } });
     expect((await plugin.getStatus('local')).state).toBe('qr');
     expect(h.published.some((e) => e.type === 'instance.qr_code')).toBe(true);
-    fetchMock.mockImplementation(async () => ok({ success: true }));
+    fetchMock.mockImplementation(async () => new Response(null, { status: 204 }));
+    const beforeRead = fetchMock.mock.calls.length;
+    await plugin.markAsRead('local', '5511999999999', ['one'], undefined, 'off');
+    await plugin.markAsRead('local', '5511999999999', ['one'], undefined, 'exclude-self');
+    expect(fetchMock.mock.calls.length).toBe(beforeRead);
     await plugin.markAsRead('local', '5511999999999', ['one', 'two']);
     expect(
       fetchMock.mock.calls

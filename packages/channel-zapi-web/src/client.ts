@@ -67,6 +67,7 @@ export class ZapiClient {
     }
     if (!res.ok)
       throw new ZapiError(`ZAPI_HTTP_${res.status}`, `Z-API returned HTTP ${res.status}`, res.status === 429);
+    if (res.status === 204) return null;
     try {
       return await res.json();
     } catch {

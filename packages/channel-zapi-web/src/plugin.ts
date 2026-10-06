@@ -20,7 +20,7 @@ export class ZapiWebPlugin extends BaseChannelPlugin {
   readonly capabilities = zapiCapabilities(false);
   protected readonly connections = new Map<
     string,
-    { client: ZapiClient; config: InstanceConfig; vendor: ZapiConfig }
+    { client: ZapiClient; config: InstanceConfig; vendor: ZapiConfig; ownerIdentifier?: string }
   >();
   protected expectedDriver(): 'web' | 'omni' {
     return 'web';
@@ -35,8 +35,24 @@ export class ZapiWebPlugin extends BaseChannelPlugin {
       state: connected ? 'connected' : 'connecting',
       since: new Date(),
     });
-    if (connected) await this.emitInstanceConnected(instanceId);
-    else if (vendor.driver === 'web') await this.getQrCode(instanceId);
+    if (connected) {
+      const profile = vendor.driver === 'web' ? await client.request('device').catch(() => null) : null;
+      const parsed = z
+        .object({ phone: z.string().optional(), name: z.string().optional(), imgUrl: z.string().optional() })
+        .safeParse(profile);
+      const connection = this.connections.get(instanceId);
+      if (parsed.success && connection) connection.ownerIdentifier = parsed.data.phone;
+      await this.emitInstanceConnected(
+        instanceId,
+        parsed.success
+          ? {
+              ownerIdentifier: parsed.data.phone,
+              profileName: parsed.data.name,
+              profilePicUrl: parsed.data.imgUrl,
+            }
+          : undefined,
+      );
+    } else if (vendor.driver === 'web') await this.getQrCode(instanceId);
   }
   /** Unload the local binding; never log out or delete the vendor session implicitly. */
   async disconnect(instanceId: string): Promise<void> {
@@ -103,9 +119,21 @@ export class ZapiWebPlugin extends BaseChannelPlugin {
       };
     }
   }
-  async markAsRead(instanceId: string, chatId: string, messageIds: string[]): Promise<void> {
+  async markAsRead(
+    instanceId: string,
+    chatId: string,
+    messageIds: string[],
+    _messageData?: unknown[],
+    readReceiptMode: 'on' | 'off' | 'exclude-self' = 'on',
+  ): Promise<void> {
+    if (readReceiptMode === 'off') return;
     const c = this.connections.get(instanceId);
     if (!c || c.vendor.driver !== 'web') throw new ZapiError('ZAPI_UNSUPPORTED', 'Read command supported only by Web');
+    if (
+      readReceiptMode === 'exclude-self' &&
+      (!c.ownerIdentifier || recipient(chatId) === recipient(c.ownerIdentifier))
+    )
+      return;
     if (messageIds.includes('all')) throw new ZapiError('ZAPI_UNSUPPORTED', 'Explicit message IDs are required');
     for (const messageId of messageIds)
       await c.client.request('read-message', 'POST', { phone: recipient(chatId), messageId });
