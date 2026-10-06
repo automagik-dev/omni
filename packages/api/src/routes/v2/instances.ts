@@ -255,7 +255,7 @@ const createInstanceSchema = z.object({
     .enum(['desktop', 'web'])
     .default('desktop')
     .describe(
-      "WhatsApp (Baileys) pairing identity (default: desktop). 'desktop' = Windows Desktop + group history (fuller initial sync, shows as \"Windows\" in Linked Devices); 'web' = Ubuntu/Chrome. Applies on next pairing.",
+      "WhatsApp (Baileys) pairing identity (default: desktop). 'desktop' = macOS Desktop + group history (fuller initial sync, shows as \"Mac OS\" in Linked Devices); 'web' = Ubuntu/Chrome. Applies on next pairing.",
     ),
   syncFullHistory: z
     .boolean()

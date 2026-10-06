@@ -18,13 +18,13 @@ describe('DEFAULT_SOCKET_CONFIG (#70)', () => {
 });
 
 describe('resolveHistoryIdentity (#1126, #1211)', () => {
-  it('defaults to the Windows Desktop identity with group history', () => {
-    expect(resolveHistoryIdentity({})).toEqual({ browser: Browsers.windows('Desktop'), supportGroupHistory: true });
+  it('defaults to the macOS Desktop identity with group history', () => {
+    expect(resolveHistoryIdentity({})).toEqual({ browser: Browsers.macOS('Desktop'), supportGroupHistory: true });
   });
 
-  it("'desktop' pairs as Windows Desktop with group history", () => {
+  it("'desktop' pairs as macOS Desktop with group history", () => {
     expect(resolveHistoryIdentity({ historyIdentity: 'desktop' })).toEqual({
-      browser: Browsers.windows('Desktop'),
+      browser: Browsers.macOS('Desktop'),
       supportGroupHistory: true,
     });
   });
@@ -45,24 +45,33 @@ describe('resolveHistoryIdentity (#1126, #1211)', () => {
   });
 });
 
-describe('desktop identity web sub-platform (Baileys#2741)', () => {
-  // Since ~2026-06-30 WhatsApp answers WIN32 and DARWIN with a 428 before QR and loops existing
-  // sessions. getWebInfo only sends the Desktop sub-platform with syncFullHistory on.
-  const webSubPlatform = (browser: [string, string, string]) =>
+describe('desktop identity login payload (Baileys#2677)', () => {
+  // Since ~2026-06-30 WhatsApp answers platform WEB + DARWIN with a 428 before QR and loops existing
+  // sessions. The vendored build sends MACOS + DARWIN for Mac OS Desktop, whatever syncFullHistory is.
+  const login = (browser: [string, string, string], syncFullHistory: boolean) =>
     generateLoginNode('5511999999999:1@s.whatsapp.net', {
       browser,
-      syncFullHistory: true,
+      syncFullHistory,
       version: [2, 3000, 1],
       countryCode: 'US',
-    } as unknown as Parameters<typeof generateLoginNode>[1]).webInfo?.webSubPlatform;
+    } as unknown as Parameters<typeof generateLoginNode>[1]);
 
-  it('advertises WIN_HYBRID for the default desktop identity (vendored patch)', () => {
-    const { browser } = resolveHistoryIdentity({});
-    expect(webSubPlatform(browser)).toBe(proto.ClientPayload.WebInfo.WebSubPlatform.WIN_HYBRID);
+  for (const syncFullHistory of [true, false]) {
+    it(`default desktop identity logs in as MACOS + DARWIN (syncFullHistory=${syncFullHistory})`, () => {
+      const payload = login(resolveHistoryIdentity({}).browser, syncFullHistory);
+      expect(payload.userAgent?.platform).toBe(proto.ClientPayload.UserAgent.Platform.MACOS);
+      expect(payload.webInfo?.webSubPlatform).toBe(proto.ClientPayload.WebInfo.WebSubPlatform.DARWIN);
+    });
+  }
+
+  it('web identity stays WEB + WEB_BROWSER', () => {
+    const payload = login(resolveHistoryIdentity({ historyIdentity: 'web' }).browser, true);
+    expect(payload.userAgent?.platform).toBe(proto.ClientPayload.UserAgent.Platform.WEB);
+    expect(payload.webInfo?.webSubPlatform).toBe(proto.ClientPayload.WebInfo.WebSubPlatform.WEB_BROWSER);
   });
 
-  it('keeps the web identity on WEB_BROWSER', () => {
-    const { browser } = resolveHistoryIdentity({ historyIdentity: 'web' });
-    expect(webSubPlatform(browser)).toBe(proto.ClientPayload.WebInfo.WebSubPlatform.WEB_BROWSER);
+  it('Windows Desktop advertises WIN_HYBRID, never the retired WIN32 (upstream #2741)', () => {
+    const payload = login(Browsers.windows('Desktop'), true);
+    expect(payload.webInfo?.webSubPlatform).toBe(proto.ClientPayload.WebInfo.WebSubPlatform.WIN_HYBRID);
   });
 });

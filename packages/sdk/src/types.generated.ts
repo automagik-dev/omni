@@ -3422,7 +3422,7 @@ export interface components {
             /** @description Profile picture URL */
             profilePicUrl: string | null;
             /**
-             * @description WhatsApp (Baileys) pairing identity: 'desktop' (Windows Desktop + group history) or 'web' (Ubuntu/Chrome)
+             * @description WhatsApp (Baileys) pairing identity: 'desktop' (macOS Desktop + group history) or 'web' (Ubuntu/Chrome)
              * @enum {string}
              */
             historyIdentity: "desktop" | "web";
@@ -3622,7 +3622,7 @@ export interface components {
             /** @description Bot token for Discord instances */
             token?: string;
             /**
-             * @description WhatsApp (Baileys) pairing identity (default: desktop). 'desktop' = Windows Desktop + group history, shows as "Windows" in Linked Devices; 'web' = Ubuntu/Chrome. Applies on next pairing
+             * @description WhatsApp (Baileys) pairing identity (default: desktop). 'desktop' = macOS Desktop + group history, shows as "Mac OS" in Linked Devices; 'web' = Ubuntu/Chrome. Applies on next pairing
              * @default desktop
              * @enum {string}
              */
@@ -8790,7 +8790,7 @@ export interface operations {
                             /** @description Profile picture URL */
                             profilePicUrl: string | null;
                             /**
-                             * @description WhatsApp (Baileys) pairing identity: 'desktop' (Windows Desktop + group history) or 'web' (Ubuntu/Chrome)
+                             * @description WhatsApp (Baileys) pairing identity: 'desktop' (macOS Desktop + group history) or 'web' (Ubuntu/Chrome)
                              * @enum {string}
                              */
                             historyIdentity: "desktop" | "web";
@@ -9010,7 +9010,7 @@ export interface operations {
                     /** @description Bot token for Discord instances */
                     token?: string;
                     /**
-                     * @description WhatsApp (Baileys) pairing identity (default: desktop). 'desktop' = Windows Desktop + group history, shows as "Windows" in Linked Devices; 'web' = Ubuntu/Chrome. Applies on next pairing
+                     * @description WhatsApp (Baileys) pairing identity (default: desktop). 'desktop' = macOS Desktop + group history, shows as "Mac OS" in Linked Devices; 'web' = Ubuntu/Chrome. Applies on next pairing
                      * @default desktop
                      * @enum {string}
                      */
@@ -9192,7 +9192,7 @@ export interface operations {
                             /** @description Profile picture URL */
                             profilePicUrl: string | null;
                             /**
-                             * @description WhatsApp (Baileys) pairing identity: 'desktop' (Windows Desktop + group history) or 'web' (Ubuntu/Chrome)
+                             * @description WhatsApp (Baileys) pairing identity: 'desktop' (macOS Desktop + group history) or 'web' (Ubuntu/Chrome)
                              * @enum {string}
                              */
                             historyIdentity: "desktop" | "web";
@@ -9465,7 +9465,7 @@ export interface operations {
                             /** @description Profile picture URL */
                             profilePicUrl: string | null;
                             /**
-                             * @description WhatsApp (Baileys) pairing identity: 'desktop' (Windows Desktop + group history) or 'web' (Ubuntu/Chrome)
+                             * @description WhatsApp (Baileys) pairing identity: 'desktop' (macOS Desktop + group history) or 'web' (Ubuntu/Chrome)
                              * @enum {string}
                              */
                             historyIdentity: "desktop" | "web";
@@ -9750,7 +9750,7 @@ export interface operations {
                     /** @description Bot token for Discord instances */
                     token?: string;
                     /**
-                     * @description WhatsApp (Baileys) pairing identity (default: desktop). 'desktop' = Windows Desktop + group history, shows as "Windows" in Linked Devices; 'web' = Ubuntu/Chrome. Applies on next pairing
+                     * @description WhatsApp (Baileys) pairing identity (default: desktop). 'desktop' = macOS Desktop + group history, shows as "Mac OS" in Linked Devices; 'web' = Ubuntu/Chrome. Applies on next pairing
                      * @default desktop
                      * @enum {string}
                      */
@@ -9932,7 +9932,7 @@ export interface operations {
                             /** @description Profile picture URL */
                             profilePicUrl: string | null;
                             /**
-                             * @description WhatsApp (Baileys) pairing identity: 'desktop' (Windows Desktop + group history) or 'web' (Ubuntu/Chrome)
+                             * @description WhatsApp (Baileys) pairing identity: 'desktop' (macOS Desktop + group history) or 'web' (Ubuntu/Chrome)
                              * @enum {string}
                              */
                             historyIdentity: "desktop" | "web";

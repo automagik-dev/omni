@@ -474,7 +474,7 @@ export function createInstancesCommand(): Command {
     .addOption(
       new Option(
         '--history-identity <identity>',
-        'WhatsApp pairing identity: desktop (Windows Desktop + group history, fuller sync) or web (Ubuntu/Chrome). Applies on next pairing (default: desktop)',
+        'WhatsApp pairing identity: desktop (macOS Desktop + group history, fuller sync) or web (Ubuntu/Chrome). Applies on next pairing (default: desktop)',
       ).choices(['desktop', 'web']),
     )
     .option('--sync-full-history', 'WhatsApp: request full message history on connect (default: off)')
@@ -1178,7 +1178,7 @@ export function createInstancesCommand(): Command {
     .addOption(
       new Option(
         '--history-identity <identity>',
-        'WhatsApp pairing identity: desktop (Windows Desktop + group history, fuller sync) or web (Ubuntu/Chrome). Applies on next pairing (default: desktop)',
+        'WhatsApp pairing identity: desktop (macOS Desktop + group history, fuller sync) or web (Ubuntu/Chrome). Applies on next pairing (default: desktop)',
       ).choices(['desktop', 'web']),
     )
     .option('--sync-full-history', 'WhatsApp: request full message history on connect (default: off)')

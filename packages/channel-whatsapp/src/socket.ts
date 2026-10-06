@@ -40,8 +40,8 @@ export interface SocketConfig {
   /** Sync full message history on connect (default: false) */
   syncFullHistory?: boolean;
   /**
-   * Pairing identity for history sync (#1126, #1211). 'desktop' (default) = Browsers.windows('Desktop')
-   * + supportGroupHistory (shows as "Windows" in Linked Devices); 'web' = Browsers.ubuntu('Chrome').
+   * Pairing identity for history sync (#1126, #1211). 'desktop' (default) = Browsers.macOS('Desktop')
+   * + supportGroupHistory (shows as "Mac OS" in Linked Devices); 'web' = Browsers.ubuntu('Chrome').
    * Independent of syncFullHistory.
    */
   historyIdentity?: HistoryIdentity;
@@ -117,7 +117,7 @@ export function resolveHistoryIdentity(
 ): { browser: [string, string, string]; supportGroupHistory: boolean } {
   const desktop = (config.historyIdentity ?? 'desktop') === 'desktop';
   return {
-    browser: config.browser ?? (desktop ? Browsers.windows('Desktop') : Browsers.ubuntu('Chrome')),
+    browser: config.browser ?? (desktop ? Browsers.macOS('Desktop') : Browsers.ubuntu('Chrome')),
     supportGroupHistory: config.supportGroupHistory ?? desktop,
   };
 }
