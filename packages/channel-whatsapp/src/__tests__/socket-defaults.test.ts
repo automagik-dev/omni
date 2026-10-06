@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it } from 'bun:test';
-import { Browsers } from 'baileys';
+import { Browsers, generateLoginNode, proto } from 'baileys';
 import { DEFAULT_SOCKET_CONFIG, resolveHistoryIdentity } from '../socket';
 
 describe('DEFAULT_SOCKET_CONFIG (#70)', () => {
@@ -42,5 +42,36 @@ describe('resolveHistoryIdentity (#1126, #1211)', () => {
       browser,
       supportGroupHistory: false,
     });
+  });
+});
+
+describe('desktop identity login payload (Baileys#2677)', () => {
+  // Since ~2026-06-30 WhatsApp answers platform WEB + DARWIN with a 428 before QR and loops existing
+  // sessions. The vendored build sends MACOS + DARWIN for Mac OS Desktop, whatever syncFullHistory is.
+  const login = (browser: [string, string, string], syncFullHistory: boolean) =>
+    generateLoginNode('5511999999999:1@s.whatsapp.net', {
+      browser,
+      syncFullHistory,
+      version: [2, 3000, 1],
+      countryCode: 'US',
+    } as unknown as Parameters<typeof generateLoginNode>[1]);
+
+  for (const syncFullHistory of [true, false]) {
+    it(`default desktop identity logs in as MACOS + DARWIN (syncFullHistory=${syncFullHistory})`, () => {
+      const payload = login(resolveHistoryIdentity({}).browser, syncFullHistory);
+      expect(payload.userAgent?.platform).toBe(proto.ClientPayload.UserAgent.Platform.MACOS);
+      expect(payload.webInfo?.webSubPlatform).toBe(proto.ClientPayload.WebInfo.WebSubPlatform.DARWIN);
+    });
+  }
+
+  it('web identity stays WEB + WEB_BROWSER', () => {
+    const payload = login(resolveHistoryIdentity({ historyIdentity: 'web' }).browser, true);
+    expect(payload.userAgent?.platform).toBe(proto.ClientPayload.UserAgent.Platform.WEB);
+    expect(payload.webInfo?.webSubPlatform).toBe(proto.ClientPayload.WebInfo.WebSubPlatform.WEB_BROWSER);
+  });
+
+  it('Windows Desktop advertises WIN_HYBRID, never the retired WIN32 (upstream #2741)', () => {
+    const payload = login(Browsers.windows('Desktop'), true);
+    expect(payload.webInfo?.webSubPlatform).toBe(proto.ClientPayload.WebInfo.WebSubPlatform.WIN_HYBRID);
   });
 });
