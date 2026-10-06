@@ -1025,7 +1025,7 @@ export const instances = pgTable(
     markOnlineOnConnect: boolean('mark_online_on_connect').notNull().default(true),
 
     // ---- WhatsApp History Sync (#1211) ----
-    /** Pairing identity: 'desktop' = macOS Desktop + group history, 'web' = Ubuntu/Chrome */
+    /** Pairing identity: 'desktop' = Windows Desktop + group history, 'web' = Ubuntu/Chrome */ // no-migration-needed: doc comment only
     historyIdentity: varchar('history_identity', { length: 10 })
       .notNull()
       .default('desktop')

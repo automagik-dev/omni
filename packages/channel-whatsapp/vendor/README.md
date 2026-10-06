@@ -2,16 +2,17 @@
 
 `baileys-v7.0.0-rc14.tgz` is built from the upstream `7.0.0-rc14` npm release and kept at the same package version so the local-file dependency remains reproducible.
 
-Omni carries four focused changes in this artifact:
+Omni carries five focused changes in this artifact:
 
 - support for WhatsApp's passkey companion-pairing ceremony (`passkey_prologue_request` / `crsc_continuation`);
 - removal of WebSocket events that Bun does not implement;
 - transient pre-key failures use the existing retry path without error-level log noise;
 - `generateRegistrationNode` reads `supportGroupHistory` from the socket config instead of hardcoding `false` (#1126).
+- the Windows Desktop web sub-platform is `WIN_HYBRID` instead of the retired Electron `WIN32`, backported from upstream `0af23862` (WhiskeySockets/Baileys#2741). Since ~2026-06-30 WhatsApp closes the socket with 428 before QR, and loops existing sessions, when a client advertises `WIN32` or `DARWIN`; drop this patch once a release ships it.
 
 The passkey implementation validates the WhatsApp relying party, never logs the WebAuthn assertion or derived keys, and exposes the ceremony through typed socket methods and `connection.update` states.
 
-SHA-256: `e363f7146d83897241eaf10432fbdeafbbf7cb2845a592c93bf3fc8386e72a82`
+SHA-256: `9d6eb1e1845294bfbfa3021f42829511275a49c3a28ed2afc802d8543bd956ad`
 
 ## Refreshing the vendored copy
 

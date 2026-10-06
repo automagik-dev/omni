@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it } from 'bun:test';
-import { Browsers } from 'baileys';
+import { Browsers, generateLoginNode, proto } from 'baileys';
 import { DEFAULT_SOCKET_CONFIG, resolveHistoryIdentity } from '../socket';
 
 describe('DEFAULT_SOCKET_CONFIG (#70)', () => {
@@ -18,13 +18,13 @@ describe('DEFAULT_SOCKET_CONFIG (#70)', () => {
 });
 
 describe('resolveHistoryIdentity (#1126, #1211)', () => {
-  it('defaults to the macOS Desktop identity with group history', () => {
-    expect(resolveHistoryIdentity({})).toEqual({ browser: Browsers.macOS('Desktop'), supportGroupHistory: true });
+  it('defaults to the Windows Desktop identity with group history', () => {
+    expect(resolveHistoryIdentity({})).toEqual({ browser: Browsers.windows('Desktop'), supportGroupHistory: true });
   });
 
-  it("'desktop' pairs as macOS Desktop with group history", () => {
+  it("'desktop' pairs as Windows Desktop with group history", () => {
     expect(resolveHistoryIdentity({ historyIdentity: 'desktop' })).toEqual({
-      browser: Browsers.macOS('Desktop'),
+      browser: Browsers.windows('Desktop'),
       supportGroupHistory: true,
     });
   });
@@ -42,5 +42,27 @@ describe('resolveHistoryIdentity (#1126, #1211)', () => {
       browser,
       supportGroupHistory: false,
     });
+  });
+});
+
+describe('desktop identity web sub-platform (Baileys#2741)', () => {
+  // Since ~2026-06-30 WhatsApp answers WIN32 and DARWIN with a 428 before QR and loops existing
+  // sessions. getWebInfo only sends the Desktop sub-platform with syncFullHistory on.
+  const webSubPlatform = (browser: [string, string, string]) =>
+    generateLoginNode('5511999999999:1@s.whatsapp.net', {
+      browser,
+      syncFullHistory: true,
+      version: [2, 3000, 1],
+      countryCode: 'US',
+    } as unknown as Parameters<typeof generateLoginNode>[1]).webInfo?.webSubPlatform;
+
+  it('advertises WIN_HYBRID for the default desktop identity (vendored patch)', () => {
+    const { browser } = resolveHistoryIdentity({});
+    expect(webSubPlatform(browser)).toBe(proto.ClientPayload.WebInfo.WebSubPlatform.WIN_HYBRID);
+  });
+
+  it('keeps the web identity on WEB_BROWSER', () => {
+    const { browser } = resolveHistoryIdentity({ historyIdentity: 'web' });
+    expect(webSubPlatform(browser)).toBe(proto.ClientPayload.WebInfo.WebSubPlatform.WEB_BROWSER);
   });
 });
