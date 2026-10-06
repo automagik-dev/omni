@@ -729,7 +729,7 @@ export function decodeZapiUpload(encoded: string): Buffer {
   const bytes = parsed.success ? Buffer.from(parsed.data, 'base64') : Buffer.alloc(0);
   if (!bytes.length || bytes.length > 16 * 1024 * 1024 || bytes.toString('base64') !== encoded) {
     throw new OmniError({
-      code: ERROR_CODES.VALIDATION_ERROR,
+      code: ERROR_CODES.VALIDATION,
       message: 'Invalid media encoding or size',
       recoverable: false,
     });
