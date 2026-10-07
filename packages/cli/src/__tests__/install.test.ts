@@ -202,10 +202,10 @@ describe('omni install — managed NATS bind address', () => {
     expect(installNatsScriptArgs()).toEqual(['-js', '-sd', '/tmp/data/nats', '-a', '10.0.0.5']);
   });
 
-  test('install.ts builds the nats args through the shared helpers, not inline', () => {
+  test('install.ts recreates omni-nats through the shared launcher, not inline', () => {
     const src = readFileSync(new URL('../commands/install.ts', import.meta.url).pathname, 'utf-8');
     expect(src).toContain('resolveManagedNatsHost(loadServerConfig())');
-    expect(src).toContain('buildNatsServerArgs({ natsDataDir, host: natsHost })');
+    expect(src).toContain('startManagedNats({ dataDir: cfg.dataDir, host: natsHost })');
     expect(src).not.toContain("'-js'");
   });
 });
