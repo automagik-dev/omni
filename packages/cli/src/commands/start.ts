@@ -106,7 +106,7 @@ async function runStart(): Promise<void> {
     const natsCode = await startManagedNats({ dataDir: serverConfig.dataDir, host: natsHost });
     if (natsCode !== 0) {
       output.warn(
-        `${PM2_PROCESSES.nats} failed to start (pm2 exit code ${natsCode}) — check 'pm2 logs ${PM2_PROCESSES.nats}'`,
+        `${PM2_PROCESSES.nats} failed to start (pm2 exit code ${natsCode}) — check ${NATS_BINARY_PATH} or run 'omni install'`,
       );
     }
   } else {

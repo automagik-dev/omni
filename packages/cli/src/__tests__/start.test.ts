@@ -271,6 +271,10 @@ describe('omni start — managed NATS bind address', () => {
             calls.push(args);
             return 0;
           },
+          quietPm2: async (args) => {
+            calls.push(args);
+            return 1; // pm2 delete on a missing process
+          },
         },
       );
       expect(code).toBe(0);

@@ -228,7 +228,7 @@ describe('recreateManagedNatsForUpdate (omni update)', () => {
     try {
       const code = await recreateManagedNatsForUpdate(
         { dataDir, natsHost: '127.0.0.1' },
-        { runPm2: pm2.runPm2, binaryExists: () => true },
+        { runPm2: pm2.runPm2, quietPm2: pm2.runPm2, binaryExists: () => true },
       );
       expect(code).toBe(0);
       expect(pm2.calls[0]).toEqual(['delete', PM2_PROCESSES.nats]);
@@ -248,7 +248,7 @@ describe('recreateManagedNatsForUpdate (omni update)', () => {
     const pm2 = fakePm2();
     const code = await recreateManagedNatsForUpdate(
       { dataDir: '/tmp/unused', natsHost: '127.0.0.1' },
-      { runPm2: pm2.runPm2, binaryExists: () => false },
+      { runPm2: pm2.runPm2, quietPm2: pm2.runPm2, binaryExists: () => false },
     );
     expect(code).toBeNull();
     expect(pm2.calls).toHaveLength(0);
@@ -258,7 +258,7 @@ describe('recreateManagedNatsForUpdate (omni update)', () => {
     const pm2 = fakePm2();
     const code = await recreateManagedNatsForUpdate(
       { dataDir: '/tmp/unused', natsHost: 'bad host' },
-      { runPm2: pm2.runPm2, binaryExists: () => true },
+      { runPm2: pm2.runPm2, quietPm2: pm2.runPm2, binaryExists: () => true },
     );
     expect(code).toBeNull();
     expect(pm2.calls).toHaveLength(0);

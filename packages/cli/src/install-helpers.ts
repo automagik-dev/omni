@@ -91,6 +91,16 @@ export function resolveManagedNatsHost(serverConfig: Pick<ServerConfig, 'natsHos
   }
 }
 
+/** pm2 runners: `runPm2` streams output to the terminal, `quietPm2` captures it. */
+export type ManagedNatsPm2 = {
+  runPm2: (args: string[]) => Promise<number>;
+  quietPm2: (args: string[]) => Promise<number>;
+};
+
+async function quietPm2(args: string[]): Promise<number> {
+  return (await capturePm2(...args)).code;
+}
+
 /**
  * (Re)create the PM2 `omni-nats` process so it runs with the current bind
  * address. `pm2 start` on an existing name, and `pm2 restart`, reuse the
@@ -101,11 +111,12 @@ export function resolveManagedNatsHost(serverConfig: Pick<ServerConfig, 'natsHos
  */
 export async function startManagedNats(
   opts: { dataDir: string; host: string; binaryPath?: string },
-  deps: { runPm2: typeof runPm2 } = { runPm2 },
+  deps: ManagedNatsPm2 = { runPm2, quietPm2 },
 ): Promise<number> {
   const natsDataDir = join(opts.dataDir, 'nats');
   mkdirSync(natsDataDir, { recursive: true });
-  await deps.runPm2(['delete', PM2_PROCESSES.nats]);
+  // Quiet: on a fresh host there is nothing to delete and pm2 prints an error.
+  await deps.quietPm2(['delete', PM2_PROCESSES.nats]);
   return deps.runPm2(
     buildPm2StartArgs({
       kind: 'nats',
@@ -124,8 +135,10 @@ export async function startManagedNats(
  */
 export async function recreateManagedNatsForUpdate(
   serverConfig: Pick<ServerConfig, 'dataDir' | 'natsHost'>,
-  deps: { runPm2: typeof runPm2; binaryExists: () => boolean } = {
-    runPm2,
+  deps: ManagedNatsPm2 & { binaryExists: () => boolean } = {
+    // Quiet like the pm2 restart it replaces — output would break update's spinner.
+    runPm2: quietPm2,
+    quietPm2,
     binaryExists: () => existsSync(NATS_BINARY_PATH),
   },
 ): Promise<number | null> {
@@ -138,7 +151,7 @@ export async function recreateManagedNatsForUpdate(
     output.warn(`${reason}\n  Restarting ${PM2_PROCESSES.nats} with its previous arguments.`);
     return null;
   }
-  return startManagedNats({ dataDir: serverConfig.dataDir, host }, { runPm2: deps.runPm2 });
+  return startManagedNats({ dataDir: serverConfig.dataDir, host }, deps);
 }
 
 // ----------------------------------------------------------------------------
