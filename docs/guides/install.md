@@ -81,16 +81,17 @@ The managed NATS server (`omni-nats`, PM2 or systemd) listens on `127.0.0.1` by 
 Change it only when other hosts must connect to this NATS (for example remote workers, or API and NATS on separate machines):
 
 ```bash
-omni config set server.natsHost 0.0.0.0   # or a specific LAN / private-network IP
+omni config set server.natsHost 0.0.0.0   # or :: for IPv6 too
 omni stop && omni start                   # or: omni install
 ```
 
 When NATS is reachable from other hosts, protect it: enable NATS authentication/TLS or keep it on a private network.
 
 - `server.natsHost` is where the managed server **listens**; `NATS_URL` is where clients **connect**. They are independent — after exposing NATS, remote clients set `NATS_URL=nats://<this-host>:4222`.
-- Accepted values: an IPv4 or IPv6 address (`0.0.0.0`, `::`, `10.0.0.5`) or a hostname. `omni config unset server.natsHost` returns to `127.0.0.1`.
-- `omni restart` reuses the arguments PM2 recorded when the process was created, so a new bind address only takes effect after `omni stop && omni start` or `omni install`. A systemd unit is rewritten by `sudo omni install --systemd`.
-- **Existing installs:** `omni update`, `omni restart` and `omni doctor --fix` restart the existing `omni-nats` process with its old arguments, so an install created before this setting existed keeps listening on all interfaces until you run `omni stop && omni start` (or `omni install`) once.
+- Use a wildcard (`0.0.0.0` or `::`) with the CLI-managed install. The local `omni-api` always connects to `nats://localhost:4222`, so binding a single non-loopback address (e.g. `10.0.0.5`) would stop it from reaching NATS.
+- Accepted values: an IPv4 or IPv6 address or a hostname. `omni config unset server.natsHost` returns to `127.0.0.1`.
+- `omni start`, `omni install` and `omni update` recreate `omni-nats`, so they apply the current value. `omni restart` and `omni doctor --fix` reuse the arguments PM2 recorded when the process was created. A systemd unit is rewritten by `sudo omni install --systemd`.
+- **Existing installs:** an install created before this setting keeps its old listener until `omni-nats` is recreated — `omni update`, `omni start` (after `omni stop`) or `omni install` does that; `omni restart` alone does not.
 - A source checkout (`ecosystem.config.cjs`) uses the `NATS_HOST` environment variable instead, with the same default.
 
 ## Setup (Interactive)
