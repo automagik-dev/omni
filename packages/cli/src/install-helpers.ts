@@ -8,8 +8,9 @@
 import { existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { getConfigPath, loadConfig } from './config.js';
+import { type ServerConfig, getConfigPath, loadConfig } from './config.js';
 import { NATS_BINARY_PATH } from './nats-install.js';
+import { resolveNatsHost } from './nats-server-args.js';
 import * as output from './output.js';
 import { PM2_PROCESSES, capturePm2, runPm2 } from './pm2.js';
 
@@ -70,6 +71,23 @@ function detectHasDataDir(dataDirOverride?: string): boolean {
     return readdirSync(dataDir).filter((e) => e !== '.DS_Store').length > 0;
   } catch {
     return false;
+  }
+}
+
+// ----------------------------------------------------------------------------
+// Managed NATS bind address
+// ----------------------------------------------------------------------------
+
+/**
+ * Bind address for the managed nats-server, exiting with an actionable CLI
+ * error when the stored `server.natsHost` is invalid. Shared by `omni start`
+ * and `omni install` so both fail the same way before launching anything.
+ */
+export function resolveManagedNatsHost(serverConfig: Pick<ServerConfig, 'natsHost'>): string {
+  try {
+    return resolveNatsHost(serverConfig);
+  } catch (err) {
+    return output.error(err instanceof Error ? err.message : String(err));
   }
 }
 

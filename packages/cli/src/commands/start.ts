@@ -10,7 +10,9 @@ import { join } from 'node:path';
 import { Command } from 'commander';
 import { loadLocalRuntimeConfig, loadServerConfig } from '../config.js';
 import { getHealthCheckUrl, waitForHealth } from '../health.js';
+import { resolveManagedNatsHost } from '../install-helpers.js';
 import { EMBEDDED_PGSERVE_DATA_DIR, readDataDirMajor } from '../lib/embedded-canonical-migration.js';
+import { buildNatsServerArgs } from '../nats-server-args.js';
 import * as output from '../output.js';
 import { PM2_PROCESSES, buildPm2StartArgs, getPm2LogDir, isPm2Available, pm2NotFoundError, runPm2 } from '../pm2.js';
 import { buildRuntimeEnv } from '../runtime-env.js';
@@ -73,6 +75,10 @@ async function runStart(): Promise<void> {
     );
   }
 
+  // Resolve the NATS bind address before launching anything, so an invalid
+  // hand-edited server.natsHost fails fast instead of after omni-api is up.
+  const natsHost = resolveManagedNatsHost(serverConfig);
+
   // Ensure hardened log directory exists before pm2 spawns.
   mkdirSync(getPm2LogDir(), { recursive: true });
 
@@ -97,14 +103,14 @@ async function runStart(): Promise<void> {
   // 4. Start omni-nats if binary exists
   const natsPath = join(homedir(), '.omni', 'nats-server');
   if (existsSync(natsPath)) {
-    output.info(`Starting ${PM2_PROCESSES.nats}...`);
+    output.info(`Starting ${PM2_PROCESSES.nats} (bind address ${natsHost})...`);
     const natsDataDir = join(serverConfig.dataDir, 'nats');
     mkdirSync(natsDataDir, { recursive: true });
     const natsArgs = buildPm2StartArgs({
       kind: 'nats',
       script: natsPath,
       name: PM2_PROCESSES.nats,
-      scriptArgs: ['-js', '-sd', natsDataDir],
+      scriptArgs: buildNatsServerArgs({ natsDataDir, host: natsHost }),
     });
     const natsCode = await runPm2(natsArgs);
     if (natsCode !== 0) {

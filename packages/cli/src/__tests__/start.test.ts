@@ -12,8 +12,11 @@
  */
 
 import { describe, expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { resolveManagedNatsHost } from '../install-helpers.js';
+import { buildNatsServerArgs } from '../nats-server-args.js';
 import {
   PM2_HARDENED_DEFAULTS,
   PM2_PROCESSES,
@@ -229,5 +232,38 @@ describe('buildPm2StartArgs — shared-flag invariant', () => {
       if (i === 1) continue;
       expect(a[i]).toBe(b[i]);
     }
+  });
+});
+
+describe('omni start — managed NATS bind address', () => {
+  // runStart() spawns pm2, so assert the exact composition it performs:
+  // resolveManagedNatsHost(serverConfig) -> buildNatsServerArgs -> buildPm2StartArgs.
+  function natsScriptArgs(serverConfig: { natsHost?: string }): string[] {
+    const natsArgs = buildPm2StartArgs({
+      kind: 'nats',
+      script: '/tmp/nats-server',
+      name: PM2_PROCESSES.nats,
+      scriptArgs: buildNatsServerArgs({
+        natsDataDir: '/tmp/data/nats',
+        host: resolveManagedNatsHost(serverConfig),
+      }),
+    });
+    return natsArgs.slice(natsArgs.indexOf('--') + 1);
+  }
+
+  test('passes -a 127.0.0.1 by default (config without natsHost)', () => {
+    expect(natsScriptArgs({})).toEqual(['-js', '-sd', '/tmp/data/nats', '-a', '127.0.0.1']);
+  });
+
+  test('passes the configured server.natsHost', () => {
+    expect(natsScriptArgs({ natsHost: '0.0.0.0' })).toEqual(['-js', '-sd', '/tmp/data/nats', '-a', '0.0.0.0']);
+    expect(natsScriptArgs({ natsHost: '::' })).toEqual(['-js', '-sd', '/tmp/data/nats', '-a', '::']);
+  });
+
+  test('start.ts builds the nats args through the shared helpers, not inline', () => {
+    const src = readFileSync(new URL('../commands/start.ts', import.meta.url).pathname, 'utf-8');
+    expect(src).toContain('resolveManagedNatsHost(serverConfig)');
+    expect(src).toContain('buildNatsServerArgs({ natsDataDir, host: natsHost })');
+    expect(src).not.toContain("'-js'");
   });
 });
