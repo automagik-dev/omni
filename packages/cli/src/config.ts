@@ -34,8 +34,8 @@ export interface ServerConfig {
   /**
    * Bind address of the CLI-managed nats-server (`-a`), used by `omni start`,
    * `omni install` and the `--systemd` unit. Absent on older configs → the
-   * loopback default from `nats-server-args.ts`. `0.0.0.0` (or a LAN address)
-   * exposes NATS to the network; clients still connect via `NATS_URL`.
+   * loopback default from `nats-server-args.ts`. `0.0.0.0` / `::` exposes NATS
+   * to the network; omni-api keeps connecting via `NATS_URL` (localhost).
    */
   natsHost?: string;
 }
@@ -160,7 +160,7 @@ export const CONFIG_KEYS: Record<ConfigKey, { description: string; values?: stri
     values: ['production', 'development'],
   },
   'server.natsHost': {
-    description: `Bind address of the managed NATS server (default: ${DEFAULT_NATS_HOST}; 0.0.0.0 exposes NATS to the network; apply with omni stop && omni start)`,
+    description: `Bind address of the managed NATS server (default: ${DEFAULT_NATS_HOST}; 0.0.0.0 or :: exposes NATS to the network; applied by omni start/install/update)`,
   },
 };
 
