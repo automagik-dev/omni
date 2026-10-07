@@ -90,6 +90,7 @@ When NATS is reachable from other hosts, protect it: enable NATS authentication/
 - `server.natsHost` is where the managed server **listens**; `NATS_URL` is where clients **connect**. They are independent — after exposing NATS, remote clients set `NATS_URL=nats://<this-host>:4222`.
 - Accepted values: an IPv4 or IPv6 address (`0.0.0.0`, `::`, `10.0.0.5`) or a hostname. `omni config unset server.natsHost` returns to `127.0.0.1`.
 - `omni restart` reuses the arguments PM2 recorded when the process was created, so a new bind address only takes effect after `omni stop && omni start` or `omni install`. A systemd unit is rewritten by `sudo omni install --systemd`.
+- **Existing installs:** `omni update`, `omni restart` and `omni doctor --fix` restart the existing `omni-nats` process with its old arguments, so an install created before this setting existed keeps listening on all interfaces until you run `omni stop && omni start` (or `omni install`) once.
 - A source checkout (`ecosystem.config.cjs`) uses the `NATS_HOST` environment variable instead, with the same default.
 
 ## Setup (Interactive)

@@ -517,7 +517,7 @@ Namespaces include: `messages`, `chats`, `instances`, `persons`, `events`, `acce
 
 Set `*_MANAGED=false` for external services. Full list: `.env.example`.
 
-Managed NATS listens on loopback only. Set `NATS_HOST` / `server.natsHost` to `0.0.0.0` or a LAN IP only when other hosts must connect, and protect it (NATS auth/TLS or a private network). Apply with `omni stop && omni start` — `omni restart` keeps the previous arguments. See [docs/guides/install.md](docs/guides/install.md#nats-bind-address).
+Managed NATS processes created by this version listen on loopback only (existing installs: run `omni stop && omni start` once after updating). Set `NATS_HOST` / `server.natsHost` to `0.0.0.0` or a LAN IP only when other hosts must connect, and protect it (NATS auth/TLS or a private network). Apply with `omni stop && omni start` — `omni restart` keeps the previous arguments. See [docs/guides/install.md](docs/guides/install.md#nats-bind-address).
 
 | Service | PM2 Name (installer / source checkout) | Port |
 |---------|----------------------------------------|------|
@@ -551,7 +551,7 @@ make sdk-generate  # Regenerate SDKs from OpenAPI
 
 Set `*_MANAGED=false` for external services. Full list in `.env.example`.
 
-Managed NATS listens on loopback only. Set `NATS_HOST` / `server.natsHost` to `0.0.0.0` or a LAN IP only when other hosts must connect, and protect it (NATS auth/TLS or a private network). Apply with `omni stop && omni start` — `omni restart` keeps the previous arguments. See [docs/guides/install.md](docs/guides/install.md#nats-bind-address).
+Managed NATS processes created by this version listen on loopback only (existing installs: run `omni stop && omni start` once after updating). Set `NATS_HOST` / `server.natsHost` to `0.0.0.0` or a LAN IP only when other hosts must connect, and protect it (NATS auth/TLS or a private network). Apply with `omni stop && omni start` — `omni restart` keeps the previous arguments. See [docs/guides/install.md](docs/guides/install.md#nats-bind-address).
 
 | Service | PM2 Name (installer / source checkout) | Port |
 |---------|----------------------------------------|------|
