@@ -13,6 +13,7 @@ import type { ChannelCapabilities } from '@omni/channel-sdk';
 export const WHATSAPP_BUSINESS_CAPABILITIES: ChannelCapabilities = {
   ...DEFAULT_CAPABILITIES,
   canSendText: true,
+  canSendTemplate: true,
   canSendMedia: true,
   canSendReaction: true,
   // Typing rides on read receipts: Meta shows it by marking the newest inbound

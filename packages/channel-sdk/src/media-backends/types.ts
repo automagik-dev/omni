@@ -104,6 +104,9 @@ export interface MediaStorageBackend {
    */
   read(key: string): Promise<Buffer>;
 
+  /** Delete a server-generated reference after a definitively rejected upload. */
+  delete?(key: string): Promise<void>;
+
   /**
    * Stat a previously stored `key` without reading its bytes. Returns `null`
    * when the object does not exist; throws on transient/config failures

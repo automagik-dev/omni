@@ -88,6 +88,10 @@ export class LocalMediaBackend implements MediaStorageBackend {
     return { reference: key, size, mimeType };
   }
 
+  async delete(key: string): Promise<void> {
+    await rm(this.getSafePath(key), { force: true });
+  }
+
   async read(key: string): Promise<Buffer> {
     return readFile(this.getSafePath(key));
   }

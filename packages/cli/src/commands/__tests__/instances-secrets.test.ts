@@ -62,3 +62,18 @@ describe('resolveSlackUserToken', () => {
     await expect(resolveSlackUserToken({ slackUserTokenStdin: true }, async () => '\n')).rejects.toThrow('stdin');
   });
 });
+
+test('nested gateway credentials are completely redacted without mutating the input', () => {
+  for (const config of [
+    { driver: 'web', instanceToken: XOXP, clientToken: XOXP, webhookToken: XOXP },
+    { driver: 'omni', secretKey: XOXP, signingSecret: XOXP },
+  ]) {
+    const body = { zapiConfig: config, evolutionConfig: { apiKey: XOXP, webhookToken: XOXP } };
+    expect(maskSecretFields(body)).toEqual({ zapiConfig: '[redacted]', evolutionConfig: '[redacted]' });
+    expect(JSON.stringify(body)).toContain(XOXP);
+  }
+  expect(maskSecretFields({ zapiConfig: null, evolutionConfig: null })).toEqual({
+    zapiConfig: null,
+    evolutionConfig: null,
+  });
+});

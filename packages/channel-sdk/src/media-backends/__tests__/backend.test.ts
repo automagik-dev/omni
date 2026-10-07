@@ -195,3 +195,21 @@ describe('isMediaNotFoundError', () => {
     expect(isMediaNotFoundError('NoSuchKey')).toBe(false);
   });
 });
+
+it('local rejected-upload deletion is idempotent and cannot escape the storage root', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'omni-rejected-upload-'));
+  try {
+    const backend = new LocalMediaBackend(directory);
+    await backend.store({
+      key: 'instance/upload.bin',
+      buffer: Buffer.from('upload'),
+      mimeType: 'application/octet-stream',
+    });
+    await backend.delete('instance/upload.bin');
+    expect(await backend.stat('instance/upload.bin')).toBeNull();
+    await backend.delete('instance/upload.bin');
+    await expect(backend.delete('../escape')).rejects.toThrow(/storage root/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

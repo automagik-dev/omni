@@ -26,7 +26,11 @@ const helperTypes = new Map(
 );
 
 function scanPackage(pkg: string) {
-  const code = sources(join(packagesRoot, pkg, 'src')).join('\n');
+  let code = sources(join(packagesRoot, pkg, 'src')).join('\n');
+  // Include workspace transport parents; inherited emit helpers are part of the contract.
+  for (const match of code.matchAll(/from ['"]@omni\/(channel-[\w-]+)['"]/g)) {
+    if (match[1] !== 'channel-sdk') code += `\n${sources(join(packagesRoot, match[1]!, 'src')).join('\n')}`;
+  }
   const emitted = new Set<string>();
   for (const [helper, type] of helperTypes) if (new RegExp(`\\b${helper}\\(`).test(code)) emitted.add(type);
   for (const m of code.matchAll(/(?:\.publish\(\s*|type: )'([a-z_]+\.[a-z_.]+)'/g)) emitted.add(m[1] as string);
@@ -53,7 +57,14 @@ describe('channel event capabilities match published events', () => {
       const declared = plugin.capabilities.events;
       expect(declared).toBeDefined();
       const scan = scanPackage(pkg);
-      expect([...(declared?.emits ?? [])].sort()).toEqual(scan.emitted);
+      // The official adapter inherits the Web transport, but cannot pair or receive reactions.
+      const emitted =
+        pkg === 'channel-zapi-omni'
+          ? scan.emitted.filter(
+              (event) => !['instance.qr_code', 'reaction.received', 'reaction.removed'].includes(event),
+            )
+          : scan.emitted;
+      expect([...(declared?.emits ?? [])].sort()).toEqual(emitted);
       if (scan.edits) expect(declared?.edits).toBe(true);
       if (scan.deletes) expect(declared?.deletes).toBe(true);
       // A raw publish bypasses the claimed-ingress key helpers.

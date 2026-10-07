@@ -35,6 +35,7 @@ import {
   ErrorCode as DiscordErrorCode,
   DiscordPlugin,
 } from '../../../channel-discord/src/index';
+import { EvolutionError, EvolutionPlugin, evolutionCapabilities } from '../../../channel-evolution-api/src/index';
 // Use relative imports to avoid circular workspace dependencies
 // (channel packages depend on channel-sdk; adding them as devDeps creates a turbo cycle)
 import { HERMES_CAPABILITIES, HermesApiError, HermesErrorCode, HermesPlugin } from '../../../channel-hermes/src/index';
@@ -63,6 +64,8 @@ import {
   ErrorCode as WhatsAppErrorCode,
   WhatsAppPlugin,
 } from '../../../channel-whatsapp/src/index';
+import { ZapiOmniPlugin } from '../../../channel-zapi-omni/src/index';
+import { ZapiError, ZapiWebPlugin, zapiCapabilities } from '../../../channel-zapi-web/src/index';
 
 interface ChannelDescriptor {
   name: string;
@@ -73,6 +76,9 @@ interface ChannelDescriptor {
   pluginSourcePath: string;
   handlerSourcePaths: string[];
   errorSourcePath: string;
+  /** URL-only transports leave byte downloads to the guarded media pipeline. */
+  urlOnlyMedia?: boolean;
+  claimedIngress?: boolean;
 }
 
 const packagesRoot = resolve(dirname(import.meta.dir), '..', '..');
@@ -82,6 +88,31 @@ function channelPath(channel: string, ...segments: string[]): string {
 }
 
 const channels: ChannelDescriptor[] = [
+  {
+    name: 'evolution-api',
+    packageName: '@omni/channel-evolution-api',
+    pluginClass: EvolutionPlugin as unknown as typeof BaseChannelPlugin,
+    errorClass: EvolutionError,
+    capabilities: evolutionCapabilities,
+    pluginSourcePath: channelPath('evolution-api', 'plugin.ts'),
+    handlerSourcePaths: [channelPath('evolution-api', 'webhook.ts')],
+    errorSourcePath: channelPath('evolution-api', 'client.ts'),
+    urlOnlyMedia: true,
+    claimedIngress: true,
+  },
+  ...(['zapi-web', 'zapi-omni'] as const).map((name) => ({
+    name,
+    packageName: `@omni/channel-${name}`,
+    pluginClass: (name === 'zapi-web' ? ZapiWebPlugin : ZapiOmniPlugin) as unknown as typeof BaseChannelPlugin,
+    errorClass: ZapiError,
+    capabilities: zapiCapabilities(name === 'zapi-omni'),
+    // Omni official inherits the common transport implementation.
+    pluginSourcePath: channelPath('zapi-web', 'plugin.ts'),
+    handlerSourcePaths: [channelPath('zapi-web', 'webhook.ts')],
+    errorSourcePath: channelPath('zapi-web', 'client.ts'),
+    urlOnlyMedia: true,
+    claimedIngress: true,
+  })),
   {
     name: 'asc-flow',
     packageName: '@omni/channel-asc-flow',
@@ -245,6 +276,9 @@ const REQUIRED_BOOLEAN_FIELDS: (keyof ChannelCapabilities)[] = [
 ];
 
 const errorConstructorArgs: Record<string, unknown[]> = {
+  'evolution-api': ['EVOLUTION_HTTP_500', 'compliance test'],
+  'zapi-web': ['ZAPI_HTTP_500', 'compliance test'],
+  'zapi-omni': ['ZAPI_HTTP_500', 'compliance test'],
   'asc-flow': [AscFlowErrorCode.INVALID_REQUEST, 'compliance test'],
   whatsapp: [WhatsAppErrorCode.SEND_FAILED, 'compliance test'],
   telegram: [TelegramErrorCode.SEND_FAILED, 'compliance test'],
@@ -259,18 +293,21 @@ const errorConstructorArgs: Record<string, unknown[]> = {
 // Group 1: Infrastructure
 
 describe('SDK compliance test infrastructure', () => {
-  it('has descriptors for all 10 channels', () => {
+  it('has descriptors for supported transport channels', () => {
     const names = channels.map((c) => c.name).sort();
     expect(names).toEqual([
       'asc',
       'asc-flow',
       'discord',
+      'evolution-api',
       'hermes',
       'slack',
       'telegram',
       'twilio-whatsapp',
       'whatsapp',
       'whatsapp-business',
+      'zapi-omni',
+      'zapi-web',
     ]);
   });
 
@@ -345,13 +382,18 @@ for (const channel of channels) {
     describe('reliability utilities', () => {
       it('uses createInboundDedupeCache for deduplication', () => {
         const allPaths = [channel.pluginSourcePath, ...channel.handlerSourcePaths];
-        expect(anySourceContainsCall(allPaths, 'createInboundDedupeCache')).toBe(true);
+        if (channel.claimedIngress) {
+          // The shared helper claims the durable journal key before publishing.
+          const base = readSource(resolve(packagesRoot, 'channel-sdk/src/base/BaseChannelPlugin.ts'));
+          expect(sourceContainsCall(base, 'this.publishClaimed')).toBe(true);
+          expect(anySourceContainsCall(allPaths, 'this.emitMessageReceived')).toBe(true);
+        } else expect(anySourceContainsCall(allPaths, 'createInboundDedupeCache')).toBe(true);
       });
 
       it('uses createDownloadGuard for media downloads', () => {
         // Text-only channels never download inbound bytes, so there is nothing
         // to guard.
-        if (channel.capabilities.supportedMediaTypes.length === 0) return;
+        if (channel.capabilities.supportedMediaTypes.length === 0 || channel.urlOnlyMedia) return;
         const allPaths = [channel.pluginSourcePath, ...channel.handlerSourcePaths];
         expect(anySourceContainsCall(allPaths, 'createDownloadGuard')).toBe(true);
       });

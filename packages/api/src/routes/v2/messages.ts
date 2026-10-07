@@ -34,6 +34,7 @@
  * @see unified-messages wish
  */
 
+import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { extname, join } from 'node:path';
 
@@ -52,7 +53,7 @@ import { z } from 'zod';
 import { sentryEnabled } from '../../lib/sentry-scrub';
 import { selectSlackDownloadToken } from '../../plugins/media-processor';
 import { optionalDateParam } from '../../schemas/date-query';
-import { sendCloseContactSchema, sendHandoffSchema } from '../../schemas/openapi/messages';
+import { SendTemplateSchema, sendCloseContactSchema, sendHandoffSchema } from '../../schemas/openapi/messages';
 import type { Services } from '../../services';
 import { ApiKeyService } from '../../services/api-keys';
 import { type MediaFetchOptions, MediaStorageService } from '../../services/media-storage';
@@ -241,6 +242,7 @@ async function resolveRecipient(to: string, channelType: string, services: Servi
  * Plugin capability keys
  */
 type PluginCapability =
+  | 'canSendTemplate'
   | 'canSendText'
   | 'canSendMedia'
   | 'canSendReaction'
@@ -359,6 +361,7 @@ async function getPluginForInstance(
   if (requiredCapability && !plugin.capabilities[requiredCapability]) {
     const capabilityNames: Record<PluginCapability, string> = {
       canSendText: 'sending text messages',
+      canSendTemplate: 'sending approved templates',
       canSendMedia: 'sending media',
       canSendReaction: 'sending reactions',
       canSendPoll: 'sending polls',
@@ -643,6 +646,7 @@ const sendMediaSchema = z.object({
   instanceId: z.string().uuid().describe('Instance ID to send from'),
   to: z.string().min(1).describe('Recipient'),
   type: z.enum(['image', 'audio', 'video', 'document']).describe('Media type'),
+  replyTo: z.string().optional().describe('Message ID to reply to'),
   url: z.string().url().optional().describe('Media URL'),
   base64: z.string().optional().describe('Base64 encoded media'),
   filename: z.string().optional().describe('Filename for documents'),
@@ -713,6 +717,24 @@ function buildSendMediaMetadata(data: z.infer<typeof sendMediaSchema>): Record<s
     return { base64: data.base64, audioBuffer: Buffer.from(data.base64, 'base64'), ptt: true };
   }
   return { base64: data.base64, ptt: data.voiceNote };
+}
+
+export function decodeZapiUpload(encoded: string): Buffer {
+  const parsed = z
+    .string()
+    .min(4)
+    .max(22_369_624)
+    .regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/)
+    .safeParse(encoded);
+  const bytes = parsed.success ? Buffer.from(parsed.data, 'base64') : Buffer.alloc(0);
+  if (!bytes.length || bytes.length > 16 * 1024 * 1024 || bytes.toString('base64') !== encoded) {
+    throw new OmniError({
+      code: ERROR_CODES.VALIDATION,
+      message: 'Invalid media encoding or size',
+      recoverable: false,
+    });
+  }
+  return bytes;
 }
 
 // Send reaction schema
@@ -820,14 +842,31 @@ const messageRefSchema = z.union([
   z.object({ instanceId: z.string().uuid(), chatExternalId: z.string().min(1), externalId: z.string().min(1) }),
 ]);
 
-// Lazy singleton for MediaStorageService (same pattern as media.ts)
-let _mediaStorageForDownload: MediaStorageService | null = null;
+// Reuse storage only for the database handle with which it was constructed.
+const mediaStorageByDatabase = new WeakMap<Database, MediaStorageService>();
 
 function getMediaStorageForDownload(db: Database): MediaStorageService {
-  if (!_mediaStorageForDownload) {
-    _mediaStorageForDownload = new MediaStorageService(db);
+  let storage = mediaStorageByDatabase.get(db);
+  if (!storage) {
+    storage = new MediaStorageService(db);
+    mediaStorageByDatabase.set(db, storage);
   }
-  return _mediaStorageForDownload;
+  return storage;
+}
+
+/** Keep uncertain sends available for reconciliation; remove definitively rejected uploads. */
+async function discardRejectedUpload(
+  db: Database,
+  message: OutgoingMessage,
+  result: { error?: string; errorCode?: string },
+): Promise<void> {
+  const reference = message.content.localPath;
+  if (!reference || (result.errorCode ?? result.error) === 'ZAPI_DELIVERY_UNKNOWN') return;
+  try {
+    await getMediaStorageForDownload(db).discardUpload(reference);
+  } catch {
+    mediaDownloadLog.warn('Failed to remove rejected upload');
+  }
 }
 
 /**
@@ -921,12 +960,12 @@ messagesRoutes.post('/media/download', zValidator('json', messageRefSchema), asy
   checkInstanceAccess(apiKey, instanceId);
 
   // 3. Validate message has media
-  if (!message.hasMedia || !message.mediaUrl) {
+  if (!message.hasMedia || (!message.mediaUrl && !message.mediaLocalPath)) {
     return c.json(
       {
         error: {
           code: 'NO_MEDIA',
-          message: 'Message has no media or no mediaUrl',
+          message: 'Message has no media URL or cached path',
         },
       },
       400,
@@ -934,7 +973,7 @@ messagesRoutes.post('/media/download', zValidator('json', messageRefSchema), asy
   }
 
   const mediaStorage = getMediaStorageForDownload(db);
-  const mediaUrl = message.mediaUrl as string; // validated non-null above
+  const mediaUrl = message.mediaUrl;
   let mediaLocalPath = message.mediaLocalPath as string | null;
   let cached = false;
 
@@ -955,6 +994,7 @@ messagesRoutes.post('/media/download', zValidator('json', messageRefSchema), asy
 
   // 5. Download from remote if not cached
   if (!cached) {
+    if (!mediaUrl) return c.json({ error: { code: 'NOT_FOUND', message: 'Cached media is unavailable' } }, 404);
     try {
       const result = await mediaStorage.storeFromUrl(
         instanceId,
@@ -1300,6 +1340,50 @@ messagesRoutes.post('/send', async (c) => {
   );
 });
 
+/** Send approved templates through the same plugin contract as other messages. */
+messagesRoutes.post('/send/template', zValidator('json', SendTemplateSchema), async (c) => {
+  const { instanceId, to, template, sentBy } = c.req.valid('json');
+  checkInstanceAccess(c.get('apiKey'), instanceId);
+  const correlationId = c.req.header('x-correlation-id');
+  const tracker = getJourneyTracker();
+  if (correlationId && tracker.isTracking(correlationId))
+    tracker.recordCheckpoint(correlationId, 'T7', JOURNEY_STAGES.T7);
+  const services = c.get('services');
+  const { instance, plugin } = await getPluginForInstance(
+    services,
+    c.get('channelRegistry'),
+    instanceId,
+    'canSendTemplate',
+  );
+  const resolvedTo = await resolveRecipient(to, instance.channel, services);
+  const senderAgentId = resolveSentByAgentId(sentBy, instance);
+  if (correlationId && tracker.isTracking(correlationId))
+    tracker.recordCheckpoint(correlationId, 'T8', JOURNEY_STAGES.T8);
+  const result = await plugin.sendMessage(instanceId, {
+    to: resolvedTo,
+    content: { type: 'template' },
+    metadata: { template, senderAgentId, correlationId },
+  });
+  handleSendResult(result, { channelType: instance.channel, instanceId, operation: 'send template' });
+  if (sentryEnabled()) Sentry.metrics.count('messages.sent', 1, { attributes: { channel_type: instance.channel } });
+  if (correlationId && tracker.isTracking(correlationId))
+    tracker.recordCheckpoint(correlationId, 'T9', JOURNEY_STAGES.T9);
+  return c.json(
+    {
+      data: {
+        messageId: result.messageId,
+        externalMessageId: result.messageId,
+        status: 'sent',
+        instanceId,
+        to,
+        timestamp: result.timestamp,
+        ...sentByResponseFields(sentBy, senderAgentId),
+      },
+    },
+    201,
+  );
+});
+
 /**
  * POST /messages/send/media - Send media message
  */
@@ -1364,6 +1448,7 @@ messagesRoutes.post('/send/media', zValidator('json', sendMediaSchema), async (c
   const outgoingMessage: OutgoingMessage = {
     to: resolvedTo,
     threadId: data.threadId,
+    replyTo: data.replyTo,
     content: {
       type: data.type,
       mediaUrl: data.url,
@@ -1374,6 +1459,21 @@ messagesRoutes.post('/send/media', zValidator('json', sendMediaSchema), async (c
     metadata: { ...buildSendMediaMetadata(data), ...(senderAgentId ? { senderAgentId } : {}) },
   };
 
+  // Z-API base64 is uploaded to the vendor, but the outbound message must also
+  // retain a local media reference: the self echo is deduplicated after send.
+  if (instance.channel === 'zapi-web' && data.base64) {
+    const bytes = decodeZapiUpload(data.base64);
+    const stored = await getMediaStorageForDownload(c.get('db')).storeFromBuffer(
+      instance.id,
+      randomUUID(),
+      bytes,
+      mediaMimeType,
+      new Date(),
+      currentTenantScope()?.tenantId ?? undefined,
+    );
+    outgoingMessage.content.localPath = stored.localPath;
+  }
+
   // T8: API processed the send request
   if (correlationId && tracker.isTracking(correlationId)) {
     tracker.recordCheckpoint(correlationId, 'T8', JOURNEY_STAGES.T8);
@@ -1383,6 +1483,7 @@ messagesRoutes.post('/send/media', zValidator('json', sendMediaSchema), async (c
   const result = await plugin.sendMessage(data.instanceId, outgoingMessage);
 
   if (!result.success) {
+    await discardRejectedUpload(c.get('db'), outgoingMessage, result);
     throw new OmniError({
       code: ERROR_CODES.CHANNEL_SEND_FAILED,
       message: result.error ?? 'Failed to send media',

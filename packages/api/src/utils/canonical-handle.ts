@@ -41,6 +41,9 @@ import { isValidE164Phone } from './phone';
 const WHATSAPP_FAMILY_CHANNELS: ReadonlySet<ChannelType> = new Set<ChannelType>([
   'whatsapp-baileys',
   'whatsapp-business',
+  'zapi-omni',
+  'evolution-api',
+  'zapi-web',
   'twilio-whatsapp',
   'gupshup',
   'hermes',

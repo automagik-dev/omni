@@ -481,6 +481,12 @@ export class MediaStorageService {
    * in remote mode to obtain bytes for transcription/vision, since the stored
    * reference is an S3 key rather than a readable local path.
    */
+  /** Remove a server-generated upload that the provider definitively rejected. */
+  async discardUpload(reference: string): Promise<void> {
+    if (!this.backend.delete) throw new Error('Media backend does not support deleting uploads');
+    await this.backend.delete(reference);
+  }
+
   async read(reference: string): Promise<Buffer> {
     return this.backend.read(reference);
   }

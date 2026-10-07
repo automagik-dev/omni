@@ -77,6 +77,7 @@
   },
   "devDependencies": {
     "@omni/api": "workspace:*",
+    "@omni/channel-evolution-api": "workspace:*",
     "@omni/channel-a2a": "workspace:*",
     "@omni/channel-asc": "workspace:*",
     "@omni/channel-asc-flow": "workspace:*",
@@ -93,6 +94,8 @@
     "@omni/sdk": "workspace:*",
     "@types/node": "^22.10.3",
     "@types/qrcode-terminal": "^0.12.2",
-    "typescript": "^5.7.3"
+    "typescript": "^5.7.3",
+    "@omni/channel-zapi-web": "workspace:*",
+    "@omni/channel-zapi-omni": "workspace:*"
   }
 }

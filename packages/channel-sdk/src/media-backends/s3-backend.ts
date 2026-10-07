@@ -253,6 +253,11 @@ export class S3MediaBackend implements MediaStorageBackend {
     }
   }
 
+  async delete(key: string): Promise<void> {
+    const { client } = await this.resolveClients();
+    await client.file(key).delete();
+  }
+
   async read(key: string): Promise<Buffer> {
     const { client } = await this.resolveClients();
     const bytes = await client.file(key).arrayBuffer();

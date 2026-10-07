@@ -4,13 +4,23 @@
 
 import { zValidator } from '@hono/zod-validator';
 import type { ChannelPlugin, ChannelRegistry, GroupParticipantUpdateResult } from '@omni/channel-sdk';
-import { AccessModeSchema, ChannelTypeSchema, NotFoundError, createLogger } from '@omni/core';
+import {
+  AccessModeSchema,
+  ChannelTypeSchema,
+  type EvolutionConfig,
+  EvolutionConfigSchema,
+  NotFoundError,
+  type ZapiConfig,
+  ZapiConfigSchema,
+  createLogger,
+} from '@omni/core';
 import type { GupshupHandoffOptions } from '@omni/db';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { accessCache } from '../../cache/cache-keys';
 import { DEFAULT_TURN_SCOPES } from '../../constants/scopes';
 import { agentKeyName } from '../../lib/agent-key-name';
+import { connectAndPersist } from '../../lib/persisted-gateway-connection';
 import { applyWhatsAppBusinessConnectionOptions } from '../../lib/whatsapp-business-connection';
 import { filterByInstanceAccess, requireInstanceAccess } from '../../middleware/auth';
 import { invalidateProviderCacheForInstance } from '../../plugins/agent-dispatcher';
@@ -58,6 +68,8 @@ const agentReplyFilterSchema = z.object({
 
 // Create instance schema
 const createInstanceSchema = z.object({
+  evolutionConfig: EvolutionConfigSchema.optional().nullable(),
+  zapiConfig: ZapiConfigSchema.optional().nullable(),
   name: z.string().min(1).max(255).describe('Unique name for the instance'),
   channel: ChannelTypeSchema.describe('Channel type (e.g., whatsapp-baileys, discord)'),
   agentId: z.string().uuid().nullable().optional().describe('Agent UUID referencing agents table'),
@@ -362,6 +374,8 @@ const updateInstanceSchema = createInstanceSchema
     gupshupHandoffOptions: GupshupHandoffOptionsSchema.nullable().optional(),
     closeContactConfig: CloseContactConfigSchema.nullable().optional(),
     webhookVerifyToken: z.string().nullable().optional(),
+    evolutionConfig: EvolutionConfigSchema.nullable().optional(),
+    zapiConfig: ZapiConfigSchema.nullable().optional(),
     twilioAccountSid: z.string().nullable().optional(),
     twilioAuthToken: z.string().nullable().optional(),
     twilioFrom: z.string().nullable().optional(),
@@ -496,6 +510,8 @@ function persistedTokenForChannel(instance: {
 
 /** Sensitive fields that must never be returned in API responses */
 const SENSITIVE_INSTANCE_FIELDS = [
+  'evolutionConfig',
+  'zapiConfig',
   'telegramBotToken',
   'discordBotToken',
   'slackBotToken',
@@ -622,6 +638,8 @@ function channelTokenField(channel: string): string | undefined {
 }
 
 type InstanceConnectionOptionsInput = {
+  evolutionConfig?: EvolutionConfig | null;
+  zapiConfig?: ZapiConfig | null;
   channel: string;
   forceNewQr: boolean;
   token?: string;
@@ -791,6 +809,13 @@ function applyChannelSpecificConnectionOptions(
   input: InstanceConnectionOptionsInput,
 ): void {
   switch (input.channel) {
+    case 'evolution-api':
+      options.evolutionConfig = input.evolutionConfig;
+      break;
+    case 'zapi-web':
+    case 'zapi-omni':
+      options.zapiConfig = input.zapiConfig;
+      return;
     case 'telegram':
       applyTelegramConnectionOptions(options, input);
       return;
@@ -969,6 +994,14 @@ instancesRoutes.get('/supported-channels', async (c) => {
       description: 'WhatsApp via Twilio Programmable Messaging',
       loaded: false as const,
     },
+    {
+      id: 'evolution-api' as const,
+      name: 'Evolution API',
+      description: 'Evolution API WhatsApp gateway',
+      loaded: false as const,
+    },
+    { id: 'zapi-web' as const, name: 'Z-API Web', description: 'Z-API unofficial WhatsApp', loaded: false as const },
+    { id: 'zapi-omni' as const, name: 'Z-API Omni', description: 'Z-API official WhatsApp', loaded: false as const },
     { id: 'discord' as const, name: 'Discord', description: 'Discord bot integration', loaded: false as const },
     { id: 'slack' as const, name: 'Slack', description: 'Slack bot integration', loaded: false as const },
     { id: 'telegram' as const, name: 'Telegram', description: 'Telegram bot integration', loaded: false as const },
@@ -1053,12 +1086,63 @@ function slackAppTokenConflictBody(other: { id: string; name: string }) {
   };
 }
 
+/** Keep channel/config combinations valid before persisting or connecting. */
+function validZapiBinding(channel: string, config: ZapiConfig | null | undefined): boolean {
+  if (channel === 'zapi-web') return config?.driver === 'web';
+  if (channel === 'zapi-omni') return config?.driver === 'omni';
+  return config == null;
+}
+async function validZapiUpdate(
+  services: Services,
+  id: string,
+  config: ZapiConfig | null | undefined,
+): Promise<boolean> {
+  if (config === undefined) return true;
+  return validZapiBinding((await services.instances.getById(id)).channel, config);
+}
+function validEvolutionBinding(channel: string, config: EvolutionConfig | null | undefined): boolean {
+  return channel === 'evolution-api' ? config != null : config == null;
+}
+const evolutionBindingError = {
+  error: {
+    code: 'INVALID_EVOLUTION_CONFIG',
+    message: 'Supply Evolution credentials only for an Evolution API instance',
+  },
+};
+async function invalidProviderUpdate(
+  services: Services,
+  id: string,
+  data: { evolutionConfig?: EvolutionConfig | null; zapiConfig?: ZapiConfig | null },
+) {
+  if (
+    data.evolutionConfig !== undefined &&
+    !validEvolutionBinding((await services.instances.getById(id)).channel, data.evolutionConfig)
+  )
+    return evolutionBindingError;
+  if (!(await validZapiUpdate(services, id, data.zapiConfig))) return zapiBindingError;
+  return null;
+}
+function persistedEvolutionConfig(instance: InstanceRecord, body: ConnectInstanceBody) {
+  return body.evolutionConfig ?? instance.evolutionConfig;
+}
+function persistedZapiConfig(instance: InstanceRecord, body: ConnectInstanceBody) {
+  return body.zapiConfig ?? instance.zapiConfig;
+}
+function isZapiChannel(channel: string): boolean {
+  return channel === 'zapi-web' || channel === 'zapi-omni';
+}
+const zapiBindingError = {
+  error: { code: 'INVALID_ZAPI_CONFIG', message: 'Supply Z-API credentials matching the instance channel' },
+};
+
 /**
  * POST /instances - Create new instance
  */
 instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) => {
   const { force, ...data } = c.req.valid('json');
   const services = c.get('services');
+  if (!validEvolutionBinding(data.channel, data.evolutionConfig)) return c.json(evolutionBindingError, 400);
+  if (!validZapiBinding(data.channel, data.zapiConfig)) return c.json(zapiBindingError, 400);
 
   // A create carries no workspace yet (the team id is learned on first
   // connect), so an unknown team on this side is expected here.
@@ -1107,6 +1191,8 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
     slackAppToken: instance.slackAppToken,
     slackSigningSecret: instance.slackSigningSecret,
     slackForce: force,
+    evolutionConfig: instance.evolutionConfig,
+    zapiConfig: instance.zapiConfig,
     profileMetadata: instance.profileMetadata,
     gupshupCallbackUrl: instance.gupshupCallbackUrl,
     gupshupAuthToken: instance.gupshupAuthToken,
@@ -1159,6 +1245,9 @@ instancesRoutes.patch('/:id', instanceAccess, zValidator('json', updateInstanceS
   const id = c.req.param('id');
   const { force, ...data } = c.req.valid('json');
   const services = c.get('services');
+
+  const providerError = await invalidProviderUpdate(services, id, data);
+  if (providerError) return c.json(providerError, 400);
 
   // The conflict is keyed on the PAIR (app token, bot mode), so either field
   // can create it: switching an existing row to bot mode on a token another
@@ -1394,7 +1483,11 @@ instancesRoutes.get('/:id/qr', instanceAccess, async (c) => {
 
   const instance = await services.instances.getById(id);
 
-  if (!instance.channel.startsWith('whatsapp')) {
+  if (
+    !instance.channel.startsWith('whatsapp') &&
+    instance.channel !== 'zapi-web' &&
+    instance.channel !== 'evolution-api'
+  ) {
     return c.json(
       { error: { code: 'INVALID_OPERATION', message: 'QR code only available for WhatsApp instances' } },
       400,
@@ -1580,6 +1673,8 @@ instancesRoutes.post('/:id/passkey/confirm', instanceAccess, async (c) => {
 
 // Connect instance schema
 const connectInstanceSchema = z.object({
+  evolutionConfig: EvolutionConfigSchema.optional(),
+  zapiConfig: ZapiConfigSchema.optional(),
   token: z.string().optional().describe('Bot token for Discord/Telegram instances'),
   slackBotToken: z.string().optional().describe('Slack bot token (xoxb-...)'),
   slackUserToken: z.string().optional().describe('Slack user token (xoxp-...), for authMode user'),
@@ -1667,6 +1762,8 @@ function buildConnectConnectionOptions(
     slackAppToken: body.slackAppToken ?? instance.slackAppToken,
     slackSigningSecret: body.slackSigningSecret ?? instance.slackSigningSecret,
     slackForce: body.force,
+    evolutionConfig: persistedEvolutionConfig(instance, body),
+    zapiConfig: persistedZapiConfig(instance, body),
     profileMetadata: instance.profileMetadata,
     whatsapp: body.whatsapp,
     gupshupCallbackUrl: instance.gupshupCallbackUrl,
@@ -1740,6 +1837,11 @@ function buildConnectPersistUpdates(instance: InstanceRecord, body: ConnectInsta
     ...buildTokenPersistUpdates(instance.channel, body),
   };
 
+  if (instance.channel === 'evolution-api')
+    return { ...updates, evolutionConfig: persistedEvolutionConfig(instance, body) };
+  if (isZapiChannel(instance.channel)) {
+    return { ...updates, zapiConfig: persistedZapiConfig(instance, body) };
+  }
   if (instance.channel === 'twilio-whatsapp') {
     return {
       ...updates,
@@ -1801,6 +1903,9 @@ instancesRoutes.post(
     const channelRegistry = c.get('channelRegistry');
 
     const instance = await services.instances.getById(id);
+    if (!validEvolutionBinding(instance.channel, persistedEvolutionConfig(instance, body)))
+      return c.json(evolutionBindingError, 400);
+    if (!validZapiBinding(instance.channel, persistedZapiConfig(instance, body))) return c.json(zapiBindingError, 400);
 
     const conflict =
       body.force || instance.channel !== 'slack'
@@ -1832,22 +1937,31 @@ instancesRoutes.post(
     }
 
     hydrateConnectionOptionsForInstance(plugin, instance, connectionOptions);
-
-    const errorMessage = await connectInstanceWithPlugin(plugin, id, connectionOptions);
-    if (errorMessage) {
+    const gateway = instance.channel === 'evolution-api' || isZapiChannel(instance.channel);
+    let activationInstance = instance;
+    const activationOptions = gateway
+      ? async () => {
+          // A queued request may have read the row before a previous credential rotation.
+          activationInstance = await services.instances.getById(id);
+          if (activationInstance.channel !== instance.channel)
+            throw new Error('Instance channel changed while connecting');
+          return buildConnectConnectionOptions(activationInstance, body, forceNewQr);
+        }
+      : connectionOptions;
+    const attempt = await connectAndPersist(
+      plugin,
+      id,
+      activationOptions,
+      () => services.instances.update(id, buildConnectPersistUpdates(activationInstance, body)),
+      gateway,
+    );
+    if ('errorMessage' in attempt) {
       return c.json(
-        {
-          error: {
-            code: 'CONNECTION_FAILED',
-            message: `Failed to connect: ${errorMessage}`,
-          },
-        },
+        { error: { code: 'CONNECTION_FAILED', message: `Failed to connect: ${attempt.errorMessage}` } },
         500,
       );
     }
-
-    // Update database - persist tokens if new ones were provided
-    const updated = await services.instances.update(id, buildConnectPersistUpdates(instance, body));
+    const updated = attempt.updated;
 
     return c.json({
       data: {
@@ -1941,6 +2055,8 @@ instancesRoutes.post('/:id/restart', instanceAccess, async (c) => {
       restartOptions.twilioWebhookUrl = instance.twilioWebhookUrl;
       restartOptions.twilioValidateSignature = instance.twilioValidateSignature;
     }
+    if (instance.channel === 'evolution-api') restartOptions.evolutionConfig = instance.evolutionConfig;
+    if (isZapiChannel(instance.channel)) restartOptions.zapiConfig = instance.zapiConfig;
     if (instance.channel === 'hermes') {
       applyHermesConnectionOptions(restartOptions, instance);
     }

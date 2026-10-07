@@ -73,6 +73,9 @@ export interface ChannelCapabilities {
   /** Can create polls */
   canSendPoll?: boolean;
 
+  /** Can send an approved template via metadata.template. */
+  canSendTemplate?: boolean;
+
   /** Can send action buttons */
   canSendButtons?: boolean;
 
@@ -279,6 +282,7 @@ export const DEFAULT_CAPABILITIES: ChannelCapabilities = {
   // Rich content (disabled by default)
   canSendEmbed: false,
   canSendPoll: false,
+  canSendTemplate: false,
   canSendButtons: false,
   canSendSelectMenu: false,
   canShowModal: false,

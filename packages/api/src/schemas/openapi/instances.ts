@@ -3,7 +3,7 @@
  */
 
 import type { OpenAPIRegistry } from '@asteasolutions/zod-to-openapi';
-import { ChannelTypeSchema } from '@omni/core';
+import { ChannelTypeSchema, EvolutionConfigSchema, ZapiConfigSchema } from '@omni/core';
 import { z } from '../../lib/zod-openapi';
 import { ErrorSchema, PaginationMetaSchema, SuccessSchema } from './common';
 import { FollowUpSequenceConfigOpenApiSchema } from './follow-up';
@@ -162,6 +162,12 @@ export const CreateInstanceSchema = z.object({
   agentStreamMode: z.boolean().default(false).openapi({ description: 'Enable streaming responses' }),
   isDefault: z.boolean().default(false).openapi({ description: 'Set as default instance for channel' }),
   token: z.string().optional().openapi({ description: 'Bot token for Discord instances' }),
+  evolutionConfig: EvolutionConfigSchema.optional().openapi({
+    description: 'Write-only Evolution API connection credentials',
+  }),
+  zapiConfig: ZapiConfigSchema.optional().openapi({
+    description: 'Write-only Z-API credentials matching the channel driver',
+  }),
   historyIdentity: z.enum(['desktop', 'web']).default('desktop').openapi({
     description:
       "WhatsApp (Baileys) pairing identity (default: desktop). 'desktop' = macOS Desktop + group history, shows as \"Mac OS\" in Linked Devices; 'web' = Ubuntu/Chrome. Applies on next pairing",
@@ -238,6 +244,12 @@ export const PairingCodeSchema = z.object({
  */
 export const ConnectInstanceSchema = z.object({
   token: z.string().optional().openapi({ description: 'Bot token for Discord instances' }),
+  evolutionConfig: EvolutionConfigSchema.optional().openapi({
+    description: 'Write-only Evolution API connection credentials',
+  }),
+  zapiConfig: ZapiConfigSchema.optional().openapi({
+    description: 'Write-only Z-API credentials matching the channel driver',
+  }),
   forceNewQr: z.boolean().optional().openapi({ description: 'Force new QR code for WhatsApp' }),
 });
 

@@ -1,0 +1,47 @@
+import { type ChannelCapabilities, DEFAULT_CAPABILITIES } from '@omni/channel-sdk';
+export function zapiCapabilities(official: boolean): ChannelCapabilities {
+  return {
+    ...DEFAULT_CAPABILITIES,
+    canSendText: true,
+    canSendTemplate: official,
+    canSendMedia: true,
+    canSendSticker: true,
+    canReplyToMessage: !official,
+    canSendReaction: !official,
+    canSendContact: true,
+    canSendLocation: true,
+    canHandleGroups: !official,
+    canHandleDMs: true,
+    canSendButtons: true,
+    maxButtonsPerRow: official ? 3 : undefined,
+    maxRowsPerMessage: official ? 1 : undefined,
+    canSendSelectMenu: !official,
+    canReceiveReadReceipts: true,
+    canReceiveDeliveryReceipts: true,
+    hasMessagingWindow: official,
+    messagingWindowMs: official ? 86_400_000 : undefined,
+    maxMessageLength: 4096,
+    supportedMediaTypes: [
+      { mimeType: 'image/*' },
+      { mimeType: 'audio/*' },
+      { mimeType: 'video/*' },
+      ...(!official ? [{ mimeType: 'application/*' }] : []),
+    ],
+    events: {
+      emits: [
+        'instance.connected',
+        'instance.disconnected',
+        ...(!official ? ['instance.qr_code' as const] : []),
+        'message.received',
+        'message.sent',
+        'message.delivered',
+        'message.read',
+        'message.failed',
+        ...(!official ? ['reaction.received' as const, 'reaction.removed' as const] : []),
+      ],
+      edits: !official,
+      deletes: false,
+      idempotency: true,
+    },
+  };
+}

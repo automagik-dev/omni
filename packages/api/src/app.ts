@@ -487,6 +487,23 @@ export function createApp(
     return app.fetch(new Request(url.toString(), c.req.raw), c.env);
   });
 
+  app.post('/api/v2/channels/evolution-api/:instanceId/webhook', async (c) => {
+    const plugin = c.get('channelRegistry')?.get('evolution-api');
+    if (!plugin?.handleWebhook) return c.json({ error: { code: 'PLUGIN_NOT_FOUND' } }, 503);
+    return plugin.handleWebhook(c.req.raw);
+  });
+
+  app.post('/api/v2/channels/zapi-web/:instanceId/webhook', async (c) => {
+    const plugin = c.get('channelRegistry')?.get('zapi-web');
+    if (!plugin?.handleWebhook) return c.json({ error: { code: 'PLUGIN_NOT_FOUND' } }, 503);
+    return plugin.handleWebhook(c.req.raw);
+  });
+  app.post('/api/v2/channels/zapi-omni/:instanceId/webhook', async (c) => {
+    const plugin = c.get('channelRegistry')?.get('zapi-omni');
+    if (!plugin?.handleWebhook) return c.json({ error: { code: 'PLUGIN_NOT_FOUND' } }, 503);
+    return plugin.handleWebhook(c.req.raw);
+  });
+
   // Public Twilio WhatsApp webhook endpoint - auth-exempt, verified by X-Twilio-Signature in the plugin.
   // Must be mounted before protectedApp so Twilio's servers (no x-api-key) can reach it.
   app.post('/api/v2/channels/twilio-whatsapp/:instanceId/webhook', async (c) => {

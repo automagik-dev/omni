@@ -30,6 +30,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { setTenantSecretMasterKey } from '@omni/core';
 import type { Database } from '@omni/db';
 import { settingChangeHistory } from '@omni/db';
+import { buildInstanceConnectOptions } from '../../plugins/instance-monitor';
 import { isSealedCredentialField } from '../../tenancy/sealed-credentials';
 import { runInTenantScope } from '../../tenancy/tenant-scope';
 import { buildWorkerTenantContext } from '../../tenancy/worker-tenant-context';
@@ -100,6 +101,70 @@ function makeInstancesDb() {
 }
 
 describe('(g) instances.* channel tokens', () => {
+  test('Evolution keys seal under persisted tenant, rotate and fail closed under another tenant', async () => {
+    setTenantSecretMasterKey(MASTER_KEY);
+    const { db, rows } = makeInstancesDb();
+    const svc = new InstanceService(db, null);
+    const config = {
+      baseUrl: 'https://evolution.example.com',
+      instanceName: 'vendor',
+      apiKey: 'api-key-123456789012345',
+      webhookToken: 'webhook-token-1234567890123456789012345',
+    };
+    const created = await inTenantScope(db, TENANT_A, () =>
+      svc.create({ name: 'e', channel: 'evolution-api', tenantId: TENANT_A, evolutionConfig: config } as never),
+    );
+    const stored = rows[0]?.evolutionConfig as Record<string, unknown>;
+    expect(isSealedCredentialField(stored.apiKey)).toBe(true);
+    expect(isSealedCredentialField(stored.webhookToken)).toBe(true);
+    expect(JSON.stringify(rows[0])).not.toContain(config.apiKey);
+    expect(created.evolutionConfig).toEqual(config);
+    expect(buildInstanceConnectOptions(rows[0] as never).evolutionConfig).toEqual(config);
+    const rotated = { ...config, apiKey: 'rotated-api-key-1234567890' };
+    await inTenantScope(db, TENANT_A, () => svc.update('inst-1', { evolutionConfig: rotated } as never));
+    expect((await inTenantScope(db, TENANT_A, () => svc.getById('inst-1'))).evolutionConfig).toEqual(rotated);
+    rows[0]!.tenantId = TENANT_B;
+    expect((await inTenantScope(db, TENANT_B, () => svc.getById('inst-1'))).evolutionConfig?.apiKey).toBeNull();
+  });
+
+  test('nested Z-API credentials are sealed for their tenant without mutating input', async () => {
+    setTenantSecretMasterKey(MASTER_KEY);
+    const { db, rows } = makeInstancesDb();
+    const svc = new InstanceService(db, null);
+    const config = {
+      driver: 'web' as const,
+      instanceId: 'vendor',
+      instanceToken: 'instance-token-12345',
+      clientToken: 'client-token-12345',
+      webhookToken: 'webhook-token-12345678901234567890',
+    };
+    const created = await inTenantScope(db, TENANT_A, () =>
+      svc.create({ name: 'z', channel: 'zapi-web', tenantId: TENANT_A, zapiConfig: config } as never),
+    );
+    const stored = rows[0]?.zapiConfig as Record<string, unknown>;
+    for (const key of ['instanceToken', 'clientToken', 'webhookToken'] as const) {
+      expect(isSealedCredentialField(stored[key])).toBe(true);
+      expect(JSON.stringify(rows[0])).not.toContain(config[key]);
+    }
+    expect(stored.instanceId).toBe('vendor');
+    expect(created.zapiConfig).toEqual(config);
+    expect(buildInstanceConnectOptions(rows[0] as never).zapiConfig).toEqual(config);
+    expect(config.instanceToken).toBe('instance-token-12345');
+    expect((await inTenantScope(db, TENANT_A, () => svc.getById('inst-1'))).zapiConfig).toEqual(config);
+    const rotated = {
+      driver: 'omni' as const,
+      channelId: 'official',
+      secretKey: 'official-secret-12345',
+      signingSecret: 'signing-secret-12345',
+    };
+    await inTenantScope(db, TENANT_A, () => svc.update('inst-1', { zapiConfig: rotated } as never));
+    expect(isSealedCredentialField((rows[0]?.zapiConfig as Record<string, unknown>).secretKey)).toBe(true);
+    expect((await inTenantScope(db, TENANT_A, () => svc.getById('inst-1'))).zapiConfig).toEqual(rotated);
+    rows[0]!.tenantId = TENANT_B;
+    const wrong = await inTenantScope(db, TENANT_B, () => svc.getById('inst-1'));
+    expect(wrong.zapiConfig?.driver === 'omni' && wrong.zapiConfig.secretKey).toBeNull();
+  });
+
   test('flag-off (no scope, no key): the token is stored as plaintext, byte-identical', async () => {
     const { db, rows } = makeInstancesDb();
     const svc = new InstanceService(db, null);

@@ -43,6 +43,7 @@ import { instances } from '@omni/db';
 import { eq } from 'drizzle-orm';
 
 import { applyWhatsAppBusinessConnectionOptions } from '../lib/whatsapp-business-connection';
+import { openInstanceCredentials } from '../services/instances';
 import { lookupInstanceOwner, rememberInstanceOwners } from '../tenancy/instance-owner-registry';
 import { runForEachActiveTenantRow } from '../tenancy/periodic-tenant-work';
 import { scopedHandle } from '../tenancy/tenant-scope';
@@ -189,7 +190,10 @@ function applySlackOptions(
 }
 
 /** Build channel-specific connection options from instance DB fields */
-export function buildInstanceConnectOptions(instance: {
+export function buildInstanceConnectOptions(storedInstance: {
+  tenantId?: string | null;
+  evolutionConfig?: import('@omni/core').EvolutionConfig | null;
+  zapiConfig?: import('@omni/core').ZapiConfig | null;
   channel: string;
   telegramBotToken?: string | null;
   telegramReactionLevel?: string | null;
@@ -237,6 +241,7 @@ export function buildInstanceConnectOptions(instance: {
   ascFlowHandoffMode?: string | null;
   ascFlowHandoffServico?: number | null;
 }): Record<string, unknown> {
+  const instance = openInstanceCredentials(storedInstance);
   const options: Record<string, unknown> = {};
   if (instance.telegramBotToken) options.token = instance.telegramBotToken;
   if (instance.channel === 'telegram') options.telegramReactionLevel = instance.telegramReactionLevel;
@@ -245,6 +250,8 @@ export function buildInstanceConnectOptions(instance: {
   if (instance.channel === 'gupshup') {
     applyGupshupOptions(options, instance);
   }
+  if (instance.channel === 'evolution-api') options.evolutionConfig = instance.evolutionConfig;
+  if (instance.channel === 'zapi-web' || instance.channel === 'zapi-omni') options.zapiConfig = instance.zapiConfig;
   if (instance.channel === 'twilio-whatsapp') {
     applyTwilioWhatsAppOptions(options, instance);
   }

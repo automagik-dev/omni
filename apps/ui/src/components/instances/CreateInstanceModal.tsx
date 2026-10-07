@@ -12,7 +12,7 @@ import {
   usePairInstance,
 } from '@/hooks/useInstances';
 import { cn } from '@/lib/utils';
-import type { Channel, Instance } from '@omni/sdk';
+import type { Channel, EvolutionConfig, Instance, ZapiConfig } from '@omni/sdk';
 import { ArrowLeft, ArrowRight, Check, Phone, QrCode, X } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { useEffect, useState } from 'react';
@@ -67,6 +67,27 @@ const CHANNEL_OPTIONS: {
     color: 'bg-green-600',
   },
   {
+    value: 'evolution-api',
+    label: 'Evolution API',
+    description: 'Connect an existing Evolution API WhatsApp instance.',
+    icon: WhatsAppIcon,
+    color: 'bg-green-500',
+  },
+  {
+    value: 'zapi-web',
+    label: 'Z-API Web',
+    description: 'Connect an existing Z-API instance using credentials and QR code.',
+    icon: WhatsAppIcon,
+    color: 'bg-green-500',
+  },
+  {
+    value: 'zapi-omni',
+    label: 'Z-API Official',
+    description: 'Connect a Meta WhatsApp channel already provisioned in Z-API Omni.',
+    icon: WhatsAppIcon,
+    color: 'bg-green-600',
+  },
+  {
     value: 'twilio-whatsapp',
     label: 'Twilio WhatsApp',
     description: 'WhatsApp via Twilio Programmable Messaging. Configure credentials via CLI/API.',
@@ -92,6 +113,8 @@ export function CreateInstanceModal({ open, onClose, onSuccess }: CreateInstance
   const [createdInstance, setCreatedInstance] = useState<Instance | null>(null);
   const [connectionMethod, setConnectionMethod] = useState<'qr' | 'pairing'>('qr');
   const [phoneNumber, setPhoneNumber] = useState('');
+  const [evolutionFields, setEvolutionFields] = useState<Record<string, string>>({});
+  const [zapiFields, setZapiFields] = useState<Record<string, string>>({});
 
   const createInstance = useCreateInstance();
   const connectInstance = useConnectInstance();
@@ -102,10 +125,30 @@ export function CreateInstanceModal({ open, onClose, onSuccess }: CreateInstance
   if (!open) return null;
 
   const handleChannelSelect = (selectedChannel: Channel) => {
+    setZapiFields({});
+    setEvolutionFields({});
     setChannel(selectedChannel);
     setStep('details');
   };
 
+  const isZapi = channel === 'zapi-web' || channel === 'zapi-omni';
+  const zapiKeys =
+    channel === 'zapi-web'
+      ? ['instanceId', 'instanceToken', 'clientToken', 'webhookToken']
+      : ['channelId', 'secretKey', 'signingSecret'];
+  const isEvolution = channel === 'evolution-api';
+  const evolutionReady =
+    !isEvolution ||
+    (Boolean(evolutionFields.baseUrl?.startsWith('https://')) &&
+      Boolean(evolutionFields.instanceName) &&
+      (evolutionFields.apiKey?.length ?? 0) >= 16 &&
+      (evolutionFields.webhookToken?.length ?? 0) >= 32);
+  const credentialsReady =
+    evolutionReady &&
+    (!isZapi ||
+      zapiKeys.every(
+        (key) => (zapiFields[key]?.length ?? 0) >= (key === 'webhookToken' ? 32 : key.endsWith('Id') ? 1 : 16),
+      ));
   const handleCreate = async () => {
     if (!name.trim()) return;
 
@@ -113,6 +156,10 @@ export function CreateInstanceModal({ open, onClose, onSuccess }: CreateInstance
       const instance = await createInstance.mutateAsync({
         name: name.trim(),
         channel,
+        ...(isEvolution ? { evolutionConfig: evolutionFields as EvolutionConfig } : {}),
+        ...(isZapi
+          ? { zapiConfig: { ...zapiFields, driver: channel === 'zapi-web' ? 'web' : 'omni' } as ZapiConfig }
+          : {}),
       });
       setCreatedInstance(instance);
 
@@ -120,7 +167,7 @@ export function CreateInstanceModal({ open, onClose, onSuccess }: CreateInstance
         // WhatsApp Cloud goes through its own OAuth / manual wizard — do NOT
         // auto-call connect (that's reserved for Baileys, which starts a socket).
         setStep('connect');
-      } else if (channel.startsWith('whatsapp')) {
+      } else if (channel.startsWith('whatsapp') || channel === 'zapi-web' || isEvolution) {
         setStep('connect');
         // Auto-start Baileys connection
         await connectInstance.mutateAsync({ id: instance.id });
@@ -161,6 +208,8 @@ export function CreateInstanceModal({ open, onClose, onSuccess }: CreateInstance
     setCreatedInstance(null);
     setConnectionMethod('qr');
     setPhoneNumber('');
+    setZapiFields({});
+    setEvolutionFields({});
     onClose();
   };
 
@@ -238,6 +287,58 @@ export function CreateInstanceModal({ open, onClose, onSuccess }: CreateInstance
                 <p className="text-xs text-muted-foreground">A friendly name to identify this connection</p>
               </div>
 
+              {isEvolution && (
+                <div className="space-y-3">
+                  {(['baseUrl', 'instanceName', 'apiKey', 'webhookToken'] as const).map((key) => (
+                    <div key={key} className="space-y-1">
+                      <label htmlFor={`evolution-${key}`} className="text-sm font-medium">
+                        {
+                          {
+                            baseUrl: 'Server URL',
+                            instanceName: 'Instance name',
+                            apiKey: 'API key',
+                            webhookToken: 'Webhook token',
+                          }[key]
+                        }
+                      </label>
+                      <Input
+                        id={`evolution-${key}`}
+                        type={key === 'apiKey' || key === 'webhookToken' ? 'password' : 'text'}
+                        autoComplete="off"
+                        value={evolutionFields[key] ?? ''}
+                        onChange={(e) => setEvolutionFields((fields) => ({ ...fields, [key]: e.target.value }))}
+                      />
+                    </div>
+                  ))}
+                  <p className="text-xs text-muted-foreground">
+                    Use an approved Evolution server and an existing instance. Configure its webhook with the
+                    independent token above.
+                  </p>
+                </div>
+              )}
+              {isZapi && (
+                <div className="space-y-3">
+                  {zapiKeys.map((key) => (
+                    <div key={key} className="space-y-1">
+                      <label htmlFor={`zapi-${key}`} className="text-sm font-medium">
+                        {key}
+                      </label>
+                      <Input
+                        id={`zapi-${key}`}
+                        type={key.endsWith('Id') ? 'text' : 'password'}
+                        autoComplete="off"
+                        value={zapiFields[key] ?? ''}
+                        onChange={(e) => setZapiFields((fields) => ({ ...fields, [key]: e.target.value }))}
+                      />
+                    </div>
+                  ))}
+                  <p className="text-xs text-muted-foreground">
+                    {channel === 'zapi-web'
+                      ? 'Use a random webhook token with at least 32 characters and configure the callback URL in Z-API.'
+                      : 'Enable webhook signing in Z-API Omni and supply its signing secret.'}
+                  </p>
+                </div>
+              )}
               {/* Channel-specific config could go here */}
               {channel === 'discord' && (
                 <div className="space-y-2">
@@ -260,7 +361,7 @@ export function CreateInstanceModal({ open, onClose, onSuccess }: CreateInstance
                   <ArrowLeft className="mr-2 h-4 w-4" />
                   Back
                 </Button>
-                <Button onClick={handleCreate} disabled={createInstance.isPending || !name.trim()}>
+                <Button onClick={handleCreate} disabled={createInstance.isPending || !name.trim() || !credentialsReady}>
                   {createInstance.isPending ? (
                     <>
                       <Spinner size="sm" className="mr-2" />
@@ -321,30 +422,32 @@ export function CreateInstanceModal({ open, onClose, onSuccess }: CreateInstance
                 // Connection options
                 <>
                   {/* Method toggle */}
-                  <div className="flex gap-2 rounded-lg border p-1">
-                    <button
-                      type="button"
-                      onClick={() => setConnectionMethod('qr')}
-                      className={cn(
-                        'flex flex-1 items-center justify-center gap-2 rounded-md px-3 py-2 text-sm transition-colors',
-                        connectionMethod === 'qr' ? 'bg-primary text-primary-foreground' : 'hover:bg-accent',
-                      )}
-                    >
-                      <QrCode className="h-4 w-4" />
-                      QR Code
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setConnectionMethod('pairing')}
-                      className={cn(
-                        'flex flex-1 items-center justify-center gap-2 rounded-md px-3 py-2 text-sm transition-colors',
-                        connectionMethod === 'pairing' ? 'bg-primary text-primary-foreground' : 'hover:bg-accent',
-                      )}
-                    >
-                      <Phone className="h-4 w-4" />
-                      Pairing Code
-                    </button>
-                  </div>
+                  {channel !== 'zapi-web' && !isEvolution && (
+                    <div className="flex gap-2 rounded-lg border p-1">
+                      <button
+                        type="button"
+                        onClick={() => setConnectionMethod('qr')}
+                        className={cn(
+                          'flex flex-1 items-center justify-center gap-2 rounded-md px-3 py-2 text-sm transition-colors',
+                          connectionMethod === 'qr' ? 'bg-primary text-primary-foreground' : 'hover:bg-accent',
+                        )}
+                      >
+                        <QrCode className="h-4 w-4" />
+                        QR Code
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConnectionMethod('pairing')}
+                        className={cn(
+                          'flex flex-1 items-center justify-center gap-2 rounded-md px-3 py-2 text-sm transition-colors',
+                          connectionMethod === 'pairing' ? 'bg-primary text-primary-foreground' : 'hover:bg-accent',
+                        )}
+                      >
+                        <Phone className="h-4 w-4" />
+                        Pairing Code
+                      </button>
+                    </div>
+                  )}
 
                   {connectionMethod === 'qr' ? (
                     // QR Code method
@@ -352,7 +455,11 @@ export function CreateInstanceModal({ open, onClose, onSuccess }: CreateInstance
                       {status?.state === 'qr' && qr?.qr ? (
                         <div className="flex flex-col items-center space-y-4">
                           <div className="rounded-lg bg-white p-4">
-                            <QRCodeSVG value={qr.qr} size={224} level="M" />
+                            {qr.qr.startsWith('data:image/png;base64,') ? (
+                              <img src={qr.qr} width={224} height={224} alt="WhatsApp pairing QR code" />
+                            ) : (
+                              <QRCodeSVG value={qr.qr} size={224} level="M" />
+                            )}
                           </div>
                           <div className="text-center">
                             <p className="text-sm font-medium">Scan with WhatsApp</p>

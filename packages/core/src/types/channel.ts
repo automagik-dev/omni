@@ -14,6 +14,9 @@ export const CHANNEL_TYPES = [
   'asc',
   'asc-flow',
   'twilio-whatsapp',
+  'evolution-api',
+  'zapi-web',
+  'zapi-omni',
   'internal',
   'harness',
 ] as const;

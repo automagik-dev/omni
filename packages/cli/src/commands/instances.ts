@@ -22,6 +22,8 @@
  * omni instances syncs cancel <id> <job-id>
  */
 
+import { readFileSync } from 'node:fs';
+import { EvolutionConfigSchema, ZapiConfigSchema } from '@omni/core';
 import type { Channel, WhatsAppPasskeyCredential } from '@omni/sdk';
 import { Command, Option } from 'commander';
 import qrcode from 'qrcode-terminal';
@@ -38,6 +40,9 @@ const VALID_CHANNELS: Channel[] = [
   'a2a',
   'gupshup',
   'twilio-whatsapp',
+  'evolution-api',
+  'zapi-web',
+  'zapi-omni',
   'hermes',
   'asc',
   'asc-flow',
@@ -144,6 +149,39 @@ function applyGateFields(body: Record<string, unknown>, opts: Record<string, unk
   setVal(body, 'agentGatePrompt', opts.agentGatePrompt);
 }
 
+/** Load credentials from a file so they need not appear in shell history. */
+export function readZapiConfig(path: string) {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(path, 'utf8'));
+  } catch {
+    throw new Error('Cannot read Z-API configuration JSON file');
+  }
+  const parsed = ZapiConfigSchema.safeParse(raw);
+  if (!parsed.success) throw new Error('Invalid Z-API configuration: check driver and required credential fields');
+  return parsed.data;
+}
+
+function readEvolutionConfig(path: string) {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(path, 'utf8'));
+  } catch {
+    throw new Error('Cannot read Evolution configuration JSON file');
+  }
+  const parsed = EvolutionConfigSchema.safeParse(raw);
+  if (!parsed.success) throw new Error('Invalid Evolution configuration: check origin and required credential fields');
+  return parsed.data;
+}
+
+function readOptionalEvolutionConfig(path?: string) {
+  return path ? readEvolutionConfig(path) : undefined;
+}
+
+function readOptionalZapiConfig(path?: string) {
+  return path ? readZapiConfig(path) : undefined;
+}
+
 /** Extract TTS, access, token, trigger fields from CLI options into body */
 function applyMiscFields(body: Record<string, unknown>, opts: Record<string, unknown>): void {
   setVal(body, 'ttsVoiceId', opts.ttsVoice);
@@ -153,6 +191,9 @@ function applyMiscFields(body: Record<string, unknown>, opts: Record<string, unk
   setBool(body, 'syncFullHistory', opts.syncFullHistory);
   setVal(body, 'accessMode', opts.accessMode);
   setVal(body, 'token', opts.token);
+  if (typeof opts.evolutionConfigFile === 'string')
+    body.evolutionConfig = readEvolutionConfig(opts.evolutionConfigFile);
+  if (typeof opts.zapiConfigFile === 'string') body.zapiConfig = readZapiConfig(opts.zapiConfigFile);
   setVal(body, 'telegramBotToken', opts.telegramToken);
   setVal(body, 'discordBotToken', opts.discordToken);
   setVal(body, 'slackBotToken', opts.slackBotToken);
@@ -239,6 +280,9 @@ function maskSecretFields(body: Record<string, unknown>): Record<string, unknown
   for (const field of SECRET_BODY_FIELDS) {
     const value = masked[field];
     if (typeof value === 'string' && value.length > 0) masked[field] = maskSecret(value);
+  }
+  for (const field of ['zapiConfig', 'evolutionConfig']) {
+    if (masked[field] != null) masked[field] = '[redacted]';
   }
   return masked;
 }
@@ -491,6 +535,8 @@ export function createInstancesCommand(): Command {
       (v) => Number.parseInt(v, 10),
     )
     // Channel tokens
+    .option('--evolution-config-file <path>', 'Evolution API credentials JSON file')
+    .option('--zapi-config-file <path>', 'Z-API credentials JSON file (web or omni driver)')
     .option('--token <token>', 'Generic bot token (auto-resolves to channel-specific field)')
     .option('--telegram-token <token>', 'Telegram bot token')
     .option('--discord-token <token>', 'Discord bot token')
@@ -811,6 +857,8 @@ export function createInstancesCommand(): Command {
     .description('Connect an instance')
     .option('--force-new-qr', 'Force generation of new QR code')
     .option('--force', 'Proceed even if another active Slack instance uses the same app token')
+    .option('--evolution-config-file <path>', 'Evolution API credentials JSON file')
+    .option('--zapi-config-file <path>', 'Z-API credentials JSON file (web or omni driver)')
     .option('--token <token>', 'Discord bot token (for Discord instances)')
     .option('--twilio-account-sid <sid>', 'Twilio Account SID')
     .option('--twilio-auth-token <token>', 'Twilio Auth Token')
@@ -835,6 +883,8 @@ export function createInstancesCommand(): Command {
           forceNewQr?: boolean;
           force?: boolean;
           token?: string;
+          evolutionConfigFile?: string;
+          zapiConfigFile?: string;
           twilioAccountSid?: string;
           twilioAuthToken?: string;
           twilioFrom?: string;
@@ -906,6 +956,8 @@ export function createInstancesCommand(): Command {
             forceNewQr: options.forceNewQr,
             force: options.force,
             token: options.token,
+            evolutionConfig: readOptionalEvolutionConfig(options.evolutionConfigFile),
+            zapiConfig: readOptionalZapiConfig(options.zapiConfigFile),
             twilioAccountSid: options.twilioAccountSid,
             twilioAuthToken: options.twilioAuthToken,
             twilioFrom: options.twilioFrom,
@@ -1195,6 +1247,8 @@ export function createInstancesCommand(): Command {
       (v) => Number.parseInt(v, 10),
     )
     // Channel tokens
+    .option('--evolution-config-file <path>', 'Evolution API credentials JSON file')
+    .option('--zapi-config-file <path>', 'Z-API credentials JSON file (web or omni driver)')
     .option('--token <token>', 'Generic bot token (auto-resolves to channel-specific field)')
     .option('--telegram-token <token>', 'Telegram bot token (use "null" to clear)')
     .option('--discord-token <token>', 'Discord bot token (use "null" to clear)')
