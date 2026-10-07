@@ -34,7 +34,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   fetchMock.mockRestore();
-  if (oldOrigins === undefined) process.env.OMNI_EVOLUTION_ALLOWED_ORIGINS = undefined;
+  if (oldOrigins === undefined) Reflect.deleteProperty(process.env, 'OMNI_EVOLUTION_ALLOWED_ORIGINS');
   else process.env.OMNI_EVOLUTION_ALLOWED_ORIGINS = oldOrigins;
 });
 
@@ -292,4 +292,36 @@ describe('Evolution webhook lifecycle', () => {
     expect((await h.plugin.getStatus('local')).state).toBe('disconnected');
     await h.plugin.destroy();
   });
+});
+
+test('GET failures can retry while POST 5xx and invalid accepted responses remain unknown', async () => {
+  const client = new EvolutionClient(config);
+  fetchMock.mockImplementation(async () => new Response('error', { status: 503 }));
+  await expect(client.request('instance/connectionState')).rejects.toMatchObject({ retryable: true });
+  await expect(client.send({ to: '5511999999999', content: { type: 'text', text: 'Hello' } })).rejects.toMatchObject({
+    channelCode: 'EVOLUTION_DELIVERY_UNKNOWN',
+    retryable: false,
+  });
+  for (const response of [
+    new Response('invalid'),
+    Response.json({ key: { id: 'accepted', remoteJid: 'unsupported@broadcast', fromMe: true } }),
+  ]) {
+    fetchMock.mockImplementation(async () => response);
+    await expect(client.send({ to: '5511999999999', content: { type: 'text', text: 'Hello' } })).rejects.toMatchObject({
+      channelCode: 'EVOLUTION_DELIVERY_UNKNOWN',
+      retryable: false,
+    });
+  }
+});
+test('malformed batch siblings cannot discard valid messages or bypass instance binding', () => {
+  const invalid: number[] = [];
+  expect(
+    normalizeEvolution(
+      { ...inbound, data: [{ ...inbound.data, key: { ...inbound.data.key, remoteJid: 'bad' } }, inbound.data] },
+      'vendor',
+      (index) => invalid.push(index),
+    ),
+  ).toHaveLength(1);
+  expect(invalid).toEqual([0]);
+  expect(() => normalizeEvolution({ ...inbound, instance: 'other', data: [inbound.data] }, 'vendor')).toThrow();
 });

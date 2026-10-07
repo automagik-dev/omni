@@ -57,7 +57,14 @@ describe('channel event capabilities match published events', () => {
       const declared = plugin.capabilities.events;
       expect(declared).toBeDefined();
       const scan = scanPackage(pkg);
-      expect([...(declared?.emits ?? [])].sort()).toEqual(scan.emitted);
+      // The official adapter inherits the Web transport, but cannot pair or receive reactions.
+      const emitted =
+        pkg === 'channel-zapi-omni'
+          ? scan.emitted.filter(
+              (event) => !['instance.qr_code', 'reaction.received', 'reaction.removed'].includes(event),
+            )
+          : scan.emitted;
+      expect([...(declared?.emits ?? [])].sort()).toEqual(emitted);
       if (scan.edits) expect(declared?.edits).toBe(true);
       if (scan.deletes) expect(declared?.deletes).toBe(true);
       // A raw publish bypasses the claimed-ingress key helpers.

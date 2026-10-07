@@ -30,6 +30,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { setTenantSecretMasterKey } from '@omni/core';
 import type { Database } from '@omni/db';
 import { settingChangeHistory } from '@omni/db';
+import { buildInstanceConnectOptions } from '../../plugins/instance-monitor';
 import { isSealedCredentialField } from '../../tenancy/sealed-credentials';
 import { runInTenantScope } from '../../tenancy/tenant-scope';
 import { buildWorkerTenantContext } from '../../tenancy/worker-tenant-context';
@@ -118,6 +119,7 @@ describe('(g) instances.* channel tokens', () => {
     expect(isSealedCredentialField(stored.webhookToken)).toBe(true);
     expect(JSON.stringify(rows[0])).not.toContain(config.apiKey);
     expect(created.evolutionConfig).toEqual(config);
+    expect(buildInstanceConnectOptions(rows[0] as never).evolutionConfig).toEqual(config);
     const rotated = { ...config, apiKey: 'rotated-api-key-1234567890' };
     await inTenantScope(db, TENANT_A, () => svc.update('inst-1', { evolutionConfig: rotated } as never));
     expect((await inTenantScope(db, TENANT_A, () => svc.getById('inst-1'))).evolutionConfig).toEqual(rotated);
@@ -146,6 +148,7 @@ describe('(g) instances.* channel tokens', () => {
     }
     expect(stored.instanceId).toBe('vendor');
     expect(created.zapiConfig).toEqual(config);
+    expect(buildInstanceConnectOptions(rows[0] as never).zapiConfig).toEqual(config);
     expect(config.instanceToken).toBe('instance-token-12345');
     expect((await inTenantScope(db, TENANT_A, () => svc.getById('inst-1'))).zapiConfig).toEqual(config);
     const rotated = {

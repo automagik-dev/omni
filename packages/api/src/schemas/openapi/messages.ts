@@ -364,7 +364,11 @@ export function registerMessageSchemas(registry: OpenAPIRegistry): void {
         description: 'Template accepted',
         content: { 'application/json': { schema: z.object({ data: MessageResponseSchema }) } },
       },
-      400: { description: 'Invalid or unsupported template', content: { 'application/json': { schema: ErrorSchema } } },
+      400: {
+        description: 'Invalid template or channel does not support templates',
+        content: { 'application/json': { schema: ErrorSchema } },
+      },
+      404: { description: 'Instance not found', content: { 'application/json': { schema: ErrorSchema } } },
     },
   });
 

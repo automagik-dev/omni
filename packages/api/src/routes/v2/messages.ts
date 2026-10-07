@@ -842,14 +842,31 @@ const messageRefSchema = z.union([
   z.object({ instanceId: z.string().uuid(), chatExternalId: z.string().min(1), externalId: z.string().min(1) }),
 ]);
 
-// Lazy singleton for MediaStorageService (same pattern as media.ts)
-let _mediaStorageForDownload: MediaStorageService | null = null;
+// Reuse storage only for the database handle with which it was constructed.
+const mediaStorageByDatabase = new WeakMap<Database, MediaStorageService>();
 
 function getMediaStorageForDownload(db: Database): MediaStorageService {
-  if (!_mediaStorageForDownload) {
-    _mediaStorageForDownload = new MediaStorageService(db);
+  let storage = mediaStorageByDatabase.get(db);
+  if (!storage) {
+    storage = new MediaStorageService(db);
+    mediaStorageByDatabase.set(db, storage);
   }
-  return _mediaStorageForDownload;
+  return storage;
+}
+
+/** Keep uncertain sends available for reconciliation; remove definitively rejected uploads. */
+async function discardRejectedUpload(
+  db: Database,
+  message: OutgoingMessage,
+  result: { error?: string; errorCode?: string },
+): Promise<void> {
+  const reference = message.content.localPath;
+  if (!reference || (result.errorCode ?? result.error) === 'ZAPI_DELIVERY_UNKNOWN') return;
+  try {
+    await getMediaStorageForDownload(db).discardUpload(reference);
+  } catch {
+    mediaDownloadLog.warn('Failed to remove rejected upload');
+  }
 }
 
 /**
@@ -948,7 +965,7 @@ messagesRoutes.post('/media/download', zValidator('json', messageRefSchema), asy
       {
         error: {
           code: 'NO_MEDIA',
-          message: 'Message has no media or no mediaUrl',
+          message: 'Message has no media URL or cached path',
         },
       },
       400,
@@ -956,7 +973,7 @@ messagesRoutes.post('/media/download', zValidator('json', messageRefSchema), asy
   }
 
   const mediaStorage = getMediaStorageForDownload(db);
-  const mediaUrl = message.mediaUrl as string; // validated non-null above
+  const mediaUrl = message.mediaUrl;
   let mediaLocalPath = message.mediaLocalPath as string | null;
   let cached = false;
 
@@ -976,10 +993,8 @@ messagesRoutes.post('/media/download', zValidator('json', messageRefSchema), asy
   }
 
   // 5. Download from remote if not cached
-  if (!cached && !mediaUrl) {
-    return c.json({ error: { code: 'NOT_FOUND', message: 'Cached media is unavailable' } }, 404);
-  }
   if (!cached) {
+    if (!mediaUrl) return c.json({ error: { code: 'NOT_FOUND', message: 'Cached media is unavailable' } }, 404);
     try {
       const result = await mediaStorage.storeFromUrl(
         instanceId,
@@ -1329,6 +1344,10 @@ messagesRoutes.post('/send', async (c) => {
 messagesRoutes.post('/send/template', zValidator('json', SendTemplateSchema), async (c) => {
   const { instanceId, to, template, sentBy } = c.req.valid('json');
   checkInstanceAccess(c.get('apiKey'), instanceId);
+  const correlationId = c.req.header('x-correlation-id');
+  const tracker = getJourneyTracker();
+  if (correlationId && tracker.isTracking(correlationId))
+    tracker.recordCheckpoint(correlationId, 'T7', JOURNEY_STAGES.T7);
   const services = c.get('services');
   const { instance, plugin } = await getPluginForInstance(
     services,
@@ -1338,12 +1357,17 @@ messagesRoutes.post('/send/template', zValidator('json', SendTemplateSchema), as
   );
   const resolvedTo = await resolveRecipient(to, instance.channel, services);
   const senderAgentId = resolveSentByAgentId(sentBy, instance);
+  if (correlationId && tracker.isTracking(correlationId))
+    tracker.recordCheckpoint(correlationId, 'T8', JOURNEY_STAGES.T8);
   const result = await plugin.sendMessage(instanceId, {
     to: resolvedTo,
     content: { type: 'template' },
-    metadata: { template, senderAgentId, correlationId: c.req.header('x-correlation-id') },
+    metadata: { template, senderAgentId, correlationId },
   });
   handleSendResult(result, { channelType: instance.channel, instanceId, operation: 'send template' });
+  if (sentryEnabled()) Sentry.metrics.count('messages.sent', 1, { attributes: { channel_type: instance.channel } });
+  if (correlationId && tracker.isTracking(correlationId))
+    tracker.recordCheckpoint(correlationId, 'T9', JOURNEY_STAGES.T9);
   return c.json(
     {
       data: {
@@ -1459,6 +1483,7 @@ messagesRoutes.post('/send/media', zValidator('json', sendMediaSchema), async (c
   const result = await plugin.sendMessage(data.instanceId, outgoingMessage);
 
   if (!result.success) {
+    await discardRejectedUpload(c.get('db'), outgoingMessage, result);
     throw new OmniError({
       code: ERROR_CODES.CHANNEL_SEND_FAILED,
       message: result.error ?? 'Failed to send media',

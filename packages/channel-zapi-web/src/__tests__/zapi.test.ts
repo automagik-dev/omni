@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { createHmac } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
 import type { PluginContext } from '@omni/channel-sdk';
+import { zapiCapabilities } from '../capabilities';
 import { ZapiClient, recipient } from '../client';
 import { ZapiWebPlugin } from '../plugin';
 import { readBody, verifyOmniSignature } from '../signature';
@@ -431,4 +432,65 @@ test('vendor group IDs round-trip through a canonical group chat and retain part
   });
   await new ZapiClient(web).send({ to: '120363019502650977@g.us', content: { type: 'text', text: 'Group reply' } });
   expect(JSON.parse(fetchMock.mock.calls[0][1].body).phone).toBe('120363019502650977-group');
+});
+
+test('owner reads do not acknowledge outbound recipient reads', () => {
+  expect(
+    normalizeWeb(
+      {
+        instanceId: web.instanceId,
+        type: 'MessageStatusCallback',
+        phone: '5511999999999',
+        ids: ['inbound'],
+        status: 'READ_BY_ME',
+      },
+      web.instanceId,
+    ),
+  ).toEqual([]);
+});
+test('GET failures retry and invalid accepted responses remain unknown', async () => {
+  const client = new ZapiClient(web);
+  fetchMock.mockImplementation(async () => new Response('error', { status: 503 }));
+  await expect(client.status()).rejects.toMatchObject({ retryable: true });
+  fetchMock.mockImplementation(async () => {
+    throw new Error('network');
+  });
+  await expect(client.status()).rejects.toMatchObject({ retryable: true });
+  fetchMock.mockImplementation(async () => Response.json({ unexpected: true }));
+  await expect(client.send({ to: '5511999999999', content: { type: 'text', text: 'Hello' } })).rejects.toMatchObject({
+    channelCode: 'ZAPI_DELIVERY_UNKNOWN',
+    retryable: false,
+  });
+});
+
+test('delayed connection callbacks cannot overwrite newer state and header auth takes precedence', async () => {
+  fetchMock.mockImplementation(async () => ok({ connected: true }));
+  const h = harness();
+  const plugin = new ZapiWebPlugin();
+  await plugin.initialize(h.context);
+  await plugin.connect('local', { instanceId: 'local', credentials: {}, options: { zapiConfig: web } });
+  const send = (type: string, momment?: number) =>
+    plugin.handleWebhook(
+      new Request('https://example.com/api/v2/channels/zapi-web/local/webhook?token=obsolete', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${web.webhookToken}` },
+        body: JSON.stringify({ instanceId: web.instanceId, type, momment }),
+      }),
+    );
+  expect((await send('ConnectedCallback', 2000)).status).toBe(200);
+  expect((await send('DisconnectedCallback', 1000)).status).toBe(200);
+  expect((await plugin.getStatus('local')).state).toBe('connected');
+  expect((await send('DisconnectedCallback')).status).toBe(200);
+  expect((await plugin.getStatus('local')).state).toBe('connected');
+  expect((await send('DisconnectedCallback', 3000)).status).toBe(200);
+  expect((await plugin.getStatus('local')).state).toBe('disconnected');
+  await plugin.destroy();
+});
+test('official capabilities exclude Web pairing and reactions and enforce button limits', () => {
+  const caps = zapiCapabilities(true);
+  expect(caps.canSendReaction).toBe(false);
+  expect(caps.maxButtonsPerRow).toBe(3);
+  expect(caps.maxRowsPerMessage).toBe(1);
+  for (const event of ['instance.qr_code', 'reaction.received', 'reaction.removed'])
+    expect(caps.events?.emits).not.toContain(event);
 });

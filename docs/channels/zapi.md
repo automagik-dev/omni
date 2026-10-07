@@ -164,7 +164,7 @@ gzip, redelivery, isolamento de instância, QR, reações, callbacks, persistên
 rotação e ocultação de segredos. Os testes de contrato, tenancy e egress do Omni
 incluem os novos canais. SDK é regenerado offline a partir do OpenAPI.
 
-Verificação local: 512 testes passaram em 14 suites; tipos de core, DB, API,
+Verificação local: suites selecionadas passaram; tipos de core, DB, API,
 plugins, SDK, CLI e UI passaram; lint dos arquivos alterados, contrato de migration
 e versões passaram. Builds do SDK e do servidor empacotado passaram.
 
@@ -206,3 +206,5 @@ adapter. Receber callbacks de edição não implica poder editar mensagens de sa
 A collection consultada utiliza o contrato Web de instâncias e tokens. Ela não
 valida o contrato Oficial Z-API Omni, que possui documentação e autenticação
 separadas. Nenhuma comparação completa dos payloads da collection foi realizada.
+
+Webhook tokens in query strings are supported for vendor compatibility. Configure ingress/access logs to omit or redact query strings. Prefer the Authorization: Bearer header when the sender supports it; never log full webhook URLs.

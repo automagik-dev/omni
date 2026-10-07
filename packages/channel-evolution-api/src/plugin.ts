@@ -87,13 +87,15 @@ export class EvolutionPlugin extends BaseChannelPlugin {
       });
       return { success: true, messageId: response.messageId, timestamp: Date.now() };
     } catch (error) {
+      const code = accepted
+        ? 'EVOLUTION_DELIVERY_UNKNOWN'
+        : error instanceof EvolutionError
+          ? error.channelCode
+          : 'EVOLUTION_INVALID_CONTENT';
       return {
         success: false,
-        error: accepted
-          ? 'EVOLUTION_DELIVERY_UNKNOWN'
-          : error instanceof EvolutionError
-            ? error.channelCode
-            : 'EVOLUTION_INVALID_CONTENT',
+        errorCode: code,
+        error: code,
         retryable: !accepted && error instanceof EvolutionError && error.retryable,
         timestamp: Date.now(),
       };
@@ -115,7 +117,9 @@ export class EvolutionPlugin extends BaseChannelPlugin {
     }
     let events: EvolutionEvent[];
     try {
-      events = normalizeEvolution(JSON.parse(body.toString('utf8')), c.client.config.instanceName);
+      events = normalizeEvolution(JSON.parse(body.toString('utf8')), c.client.config.instanceName, (index) => {
+        this.logger.warn('Skipping invalid Evolution webhook batch item', { instanceId, index });
+      });
     } catch {
       return new Response('Invalid payload or instance mismatch', { status: 400 });
     }

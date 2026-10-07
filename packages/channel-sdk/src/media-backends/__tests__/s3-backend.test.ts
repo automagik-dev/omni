@@ -69,3 +69,25 @@ describe('S3MediaBackend public presign endpoint', () => {
     expect(url).toContain('X-Amz-Signature=');
   });
 });
+
+it('deletes a rejected upload through the internal storage client without network access', async () => {
+  const OriginalS3Client = Bun.S3Client;
+  const deleted: Array<{ endpoint: string; key: string }> = [];
+  (Bun as unknown as { S3Client: unknown }).S3Client = class {
+    constructor(private options: { endpoint: string }) {}
+    file(key: string) {
+      return {
+        delete: async () => {
+          deleted.push({ endpoint: this.options.endpoint, key });
+        },
+      };
+    }
+  };
+  try {
+    const backend = new S3MediaBackend({ ...BASE_CONFIG, publicEndpoint: PUBLIC_ENDPOINT });
+    await backend.delete('instance/rejected.png');
+    expect(deleted).toEqual([{ endpoint: INTERNAL_ENDPOINT, key: 'instance/rejected.png' }]);
+  } finally {
+    (Bun as unknown as { S3Client: typeof OriginalS3Client }).S3Client = OriginalS3Client;
+  }
+});

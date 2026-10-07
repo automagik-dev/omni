@@ -181,15 +181,40 @@ function normalizeReceipts(payloadData: unknown, timestamp: number): EvolutionEv
     return status ? [{ type: 'receipt', id: data.keyId, chatId: canonicalJid(data.remoteJid), status, timestamp }] : [];
   });
 }
-export function normalizeEvolution(raw: unknown, instanceName: string): EvolutionEvent[] {
+/** Reject bad envelopes; isolate malformed items inside a bound provider batch. */
+function normalizeBatch(
+  data: unknown,
+  normalize: (item: unknown) => EvolutionEvent[],
+  onInvalid: (index: number) => void,
+): EvolutionEvent[] {
+  if (!Array.isArray(data)) return normalize(data);
+  return data.flatMap((item, index) => {
+    try {
+      return normalize(item);
+    } catch {
+      onInvalid(index);
+      return [];
+    }
+  });
+}
+export function normalizeEvolution(
+  raw: unknown,
+  instanceName: string,
+  onInvalid: (index: number) => void = () => {},
+): EvolutionEvent[] {
   const payload = envelope.parse(raw);
   if (payload.instance !== instanceName) throw new Error('Evolution instance mismatch');
   const event = payload.event.replace(/[.-]/g, '_').toUpperCase();
   if (event === 'CONNECTION_UPDATE') return normalizeConnection(payload.data, instanceName);
   if (event === 'QRCODE_UPDATED') return normalizeQr(payload.data, instanceName);
-  if (event === 'MESSAGES_UPSERT' || event === 'SEND_MESSAGE') return normalizeMessages(payload.data);
+  if (event === 'MESSAGES_UPSERT' || event === 'SEND_MESSAGE')
+    return normalizeBatch(payload.data, normalizeMessages, onInvalid);
   if (event === 'MESSAGES_UPDATE')
-    return normalizeReceipts(payload.data, payload.date_time ? Date.parse(payload.date_time) : Date.now());
+    return normalizeBatch(
+      payload.data,
+      (item) => normalizeReceipts(item, payload.date_time ? Date.parse(payload.date_time) : Date.now()),
+      onInvalid,
+    );
   // History is deliberately not replayed as realtime ingress.
   return [];
 }

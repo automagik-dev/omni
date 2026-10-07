@@ -51,20 +51,26 @@ export class EvolutionClient {
       });
     } catch {
       throw new EvolutionError(
-        'EVOLUTION_DELIVERY_UNKNOWN',
-        'Evolution network outcome unknown; reconcile before retry',
+        method === 'GET' ? 'EVOLUTION_NETWORK_ERROR' : 'EVOLUTION_DELIVERY_UNKNOWN',
+        'Evolution network outcome unknown; reconcile writes before retry',
+        method === 'GET',
       );
     }
-    if (!response.ok)
+    if (!response.ok) {
+      const uncertainWrite = method !== 'GET' && response.status >= 500;
       throw new EvolutionError(
-        `EVOLUTION_HTTP_${response.status}`,
+        uncertainWrite ? 'EVOLUTION_DELIVERY_UNKNOWN' : `EVOLUTION_HTTP_${response.status}`,
         `Evolution returned HTTP ${response.status}`,
-        response.status === 429,
+        response.status === 429 || (method === 'GET' && response.status >= 500),
       );
+    }
     try {
       return await response.json();
     } catch {
-      throw new EvolutionError('EVOLUTION_INVALID_RESPONSE', 'Evolution returned invalid JSON');
+      throw new EvolutionError(
+        method === 'GET' ? 'EVOLUTION_INVALID_RESPONSE' : 'EVOLUTION_DELIVERY_UNKNOWN',
+        'Evolution returned invalid JSON',
+      );
     }
   }
   async status(): Promise<'open' | 'close' | 'connecting'> {
@@ -151,6 +157,10 @@ export class EvolutionClient {
     if (!parsed.success)
       throw new EvolutionError('EVOLUTION_DELIVERY_UNKNOWN', 'Evolution send response cannot be reconciled');
     // Evolution may resolve a LID to a phone JID; retain its authoritative routing key.
-    return { messageId: parsed.data.key.id, chatId: canonicalJid(parsed.data.key.remoteJid) };
+    try {
+      return { messageId: parsed.data.key.id, chatId: canonicalJid(parsed.data.key.remoteJid) };
+    } catch {
+      throw new EvolutionError('EVOLUTION_DELIVERY_UNKNOWN', 'Evolution accepted an unrecognized routing key');
+    }
   }
 }

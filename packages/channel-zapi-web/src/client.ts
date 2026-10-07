@@ -62,16 +62,28 @@ export class ZapiClient {
         body: payload === undefined ? undefined : JSON.stringify(payload),
       });
     } catch {
-      // A POST may already have been accepted: upstream MUST NOT retry blindly.
-      throw new ZapiError('ZAPI_DELIVERY_UNKNOWN', 'Z-API network outcome unknown; reconcile before retry');
+      throw new ZapiError(
+        method === 'GET' ? 'ZAPI_NETWORK_ERROR' : 'ZAPI_DELIVERY_UNKNOWN',
+        'Z-API network outcome unknown; reconcile writes before retry',
+        method === 'GET',
+      );
     }
-    if (!res.ok)
-      throw new ZapiError(`ZAPI_HTTP_${res.status}`, `Z-API returned HTTP ${res.status}`, res.status === 429);
+    if (!res.ok) {
+      const uncertainWrite = method !== 'GET' && res.status >= 500;
+      throw new ZapiError(
+        uncertainWrite ? 'ZAPI_DELIVERY_UNKNOWN' : `ZAPI_HTTP_${res.status}`,
+        `Z-API returned HTTP ${res.status}`,
+        res.status === 429 || (method === 'GET' && res.status >= 500),
+      );
+    }
     if (res.status === 204) return null;
     try {
       return await res.json();
     } catch {
-      throw new ZapiError('ZAPI_INVALID_RESPONSE', 'Z-API returned invalid JSON');
+      throw new ZapiError(
+        method === 'GET' ? 'ZAPI_INVALID_RESPONSE' : 'ZAPI_DELIVERY_UNKNOWN',
+        'Z-API returned invalid JSON',
+      );
     }
   }
   async status(): Promise<boolean> {
@@ -88,7 +100,7 @@ export class ZapiClient {
     const c = this.config;
     if (c.driver === 'omni') {
       if (message.replyTo) throw new ZapiError('ZAPI_UNSUPPORTED', 'Official reply wire format is not documented');
-      return responseSchema.parse(
+      return parseSendResponse(
         await this.request(`v1/channels/${encodeURIComponent(c.channelId)}/messages`, 'POST', {
           recipient: { identifier: recipient(message.to, true) },
           content: officialContent(message),
@@ -96,7 +108,7 @@ export class ZapiClient {
       );
     }
     const request = webRequest(message);
-    return responseSchema.parse(
+    return parseSendResponse(
       await this.request(request.path, 'POST', { phone: recipient(message.to), ...request.body }),
     );
   }
@@ -278,4 +290,11 @@ function officialTemplate(raw: unknown): Record<string, unknown> {
       ],
     });
   return { name: template.name, language: { code: template.language, policy: 'deterministic' }, components };
+}
+
+/** A response validation failure after POST does not prove the send failed. */
+function parseSendResponse(raw: unknown): { messageId: string; zaapId?: string } {
+  const parsed = responseSchema.safeParse(raw);
+  if (!parsed.success) throw new ZapiError('ZAPI_DELIVERY_UNKNOWN', 'Z-API send response cannot be reconciled');
+  return parsed.data;
 }

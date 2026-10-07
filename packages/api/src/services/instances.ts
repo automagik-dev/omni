@@ -132,7 +132,7 @@ function hasSealableCredential(data: Record<string, unknown>): boolean {
  * key configured) yields `null` for that column — fail-closed, never the
  * ciphertext envelope. See `sealed-credentials.ts` for why null and not a throw.
  */
-function openInstanceCredentials<T extends { tenantId?: string | null }>(row: T): T {
+export function openInstanceCredentials<T extends { tenantId?: string | null }>(row: T): T {
   const tenantId = row.tenantId ?? null;
   let copy: Record<string, unknown> | null = null;
   for (const column of SEALED_CREDENTIAL_COLUMNS) {

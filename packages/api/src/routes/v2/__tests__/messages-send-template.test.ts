@@ -1,10 +1,6 @@
 /**
- * POST /messages/send — `buttons` passthrough.
- *
- * The send-text endpoint accepts an optional `buttons` array and must thread
- * it into `OutgoingMessage.content.buttons` untouched, where each channel
- * plugin maps it natively (WhatsApp Cloud interactive, Telegram inline
- * keyboard). Also covers schema rejection for malformed button entries.
+ * POST /messages/send/template forwards the canonical template descriptor and
+ * attribution to the plugin and rejects malformed descriptors before sending.
  */
 
 import { describe, expect, mock, test } from 'bun:test';

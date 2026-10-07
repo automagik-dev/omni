@@ -81,7 +81,7 @@ export type NormalizedEvent =
       emoji: string;
       raw: Record<string, unknown>;
     }
-  | { type: 'connected' | 'disconnected'; owner?: string }
+  | { type: 'connected' | 'disconnected'; owner?: string; timestamp?: number }
   | {
       type: 'received' | 'sent';
       id: string;
@@ -97,15 +97,15 @@ export type NormalizedEvent =
 
 function statusEvent(status: string, id: string, chatId: string, timestamp: number): NormalizedEvent | null {
   if (['RECEIVED', 'DELIVERED'].includes(status)) return { type: 'delivered', id, chatId, timestamp };
-  if (['READ', 'READ_BY_ME'].includes(status)) return { type: 'read', id, chatId, timestamp };
+  if (status === 'READ') return { type: 'read', id, chatId, timestamp };
   if (['FAILED', 'ERROR'].includes(status)) return { type: 'failed', id, chatId, timestamp };
   return null;
 }
 export function normalizeWeb(raw: unknown, expectedId: string): NormalizedEvent[] {
   const p = webSchema.parse(raw);
   if (p.instanceId !== expectedId) throw new Error('Instance mismatch');
-  if (p.type === 'ConnectedCallback') return [{ type: 'connected', owner: p.phone }];
-  if (p.type === 'DisconnectedCallback') return [{ type: 'disconnected' }];
+  if (p.type === 'ConnectedCallback') return [{ type: 'connected', owner: p.phone, timestamp: p.momment }];
+  if (p.type === 'DisconnectedCallback') return [{ type: 'disconnected', timestamp: p.momment }];
   if (p.type === 'MessageStatusCallback') {
     const chatId = p.phone ? canonicalChatId(p.phone) : undefined;
     if (!chatId || !p.ids || !p.status) throw new Error('Incomplete status');

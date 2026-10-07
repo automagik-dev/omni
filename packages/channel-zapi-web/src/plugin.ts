@@ -20,8 +20,15 @@ export class ZapiWebPlugin extends BaseChannelPlugin {
   readonly capabilities = zapiCapabilities(false);
   protected readonly connections = new Map<
     string,
-    { client: ZapiClient; config: InstanceConfig; vendor: ZapiConfig; ownerIdentifier?: string }
+    {
+      client: ZapiClient;
+      config: InstanceConfig;
+      vendor: ZapiConfig;
+      ownerIdentifier?: string;
+      lastStateTimestamp?: number;
+    }
   >();
+  private readonly ingressQueues = new Map<string, Promise<void>>();
   protected expectedDriver(): 'web' | 'omni' {
     return 'web';
   }
@@ -114,6 +121,7 @@ export class ZapiWebPlugin extends BaseChannelPlugin {
       return {
         success: false,
         error: code,
+        errorCode: code,
         retryable: !accepted && error instanceof ZapiError && error.retryable,
         timestamp: Date.now(),
       };
@@ -149,7 +157,7 @@ export class ZapiWebPlugin extends BaseChannelPlugin {
     if (
       c.driver === 'web' &&
       !equalSecret(
-        url.searchParams.get('token') ?? request.headers.get('authorization')?.replace(/^Bearer /, '') ?? null,
+        request.headers.get('authorization')?.replace(/^Bearer /, '') ?? url.searchParams.get('token') ?? null,
         c.webhookToken,
       )
     )
@@ -170,7 +178,18 @@ export class ZapiWebPlugin extends BaseChannelPlugin {
       return new Response('Invalid payload or connection mismatch', { status: 400 });
     }
     try {
-      for (const event of events) await this.ingest(instanceId, event);
+      const previous = this.ingressQueues.get(instanceId) ?? Promise.resolve();
+      const pending = previous
+        .catch(() => {})
+        .then(async () => {
+          for (const event of events) await this.ingest(instanceId, event);
+        });
+      this.ingressQueues.set(instanceId, pending);
+      try {
+        await pending;
+      } finally {
+        if (this.ingressQueues.get(instanceId) === pending) this.ingressQueues.delete(instanceId);
+      }
     } catch {
       return new Response('Event persistence unavailable', { status: 503 });
     }
@@ -180,9 +199,18 @@ export class ZapiWebPlugin extends BaseChannelPlugin {
     if (e.type === 'connected' || e.type === 'disconnected') {
       const connection = this.connections.get(instanceId);
       if (!connection) return;
+      if (
+        e.timestamp !== undefined &&
+        connection.lastStateTimestamp !== undefined &&
+        e.timestamp <= connection.lastStateTimestamp
+      )
+        return;
+      // Untimestamped callbacks must agree with the current provider state.
+      if (e.timestamp === undefined && (await connection.client.status()) !== (e.type === 'connected')) return;
       await this.updateInstanceStatus(instanceId, connection.config, { state: e.type, since: new Date() });
       if (e.type === 'connected') await this.emitInstanceConnected(instanceId, { ownerIdentifier: e.owner });
       else await this.emitInstanceDisconnected(instanceId, 'Vendor disconnected');
+      if (e.timestamp !== undefined) connection.lastStateTimestamp = e.timestamp;
     } else if (e.type === 'reaction') {
       await this.ingestReaction(instanceId, e);
     } else if (e.type === 'received') {

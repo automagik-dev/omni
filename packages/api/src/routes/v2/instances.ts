@@ -20,6 +20,7 @@ import { z } from 'zod';
 import { accessCache } from '../../cache/cache-keys';
 import { DEFAULT_TURN_SCOPES } from '../../constants/scopes';
 import { agentKeyName } from '../../lib/agent-key-name';
+import { connectAndPersist } from '../../lib/persisted-gateway-connection';
 import { applyWhatsAppBusinessConnectionOptions } from '../../lib/whatsapp-business-connection';
 import { filterByInstanceAccess, requireInstanceAccess } from '../../middleware/auth';
 import { invalidateProviderCacheForInstance } from '../../plugins/agent-dispatcher';
@@ -1936,22 +1937,20 @@ instancesRoutes.post(
     }
 
     hydrateConnectionOptionsForInstance(plugin, instance, connectionOptions);
-
-    const errorMessage = await connectInstanceWithPlugin(plugin, id, connectionOptions);
-    if (errorMessage) {
+    const attempt = await connectAndPersist(
+      plugin,
+      id,
+      connectionOptions,
+      () => services.instances.update(id, buildConnectPersistUpdates(instance, body)),
+      instance.channel === 'evolution-api' || isZapiChannel(instance.channel),
+    );
+    if ('errorMessage' in attempt) {
       return c.json(
-        {
-          error: {
-            code: 'CONNECTION_FAILED',
-            message: `Failed to connect: ${errorMessage}`,
-          },
-        },
+        { error: { code: 'CONNECTION_FAILED', message: `Failed to connect: ${attempt.errorMessage}` } },
         500,
       );
     }
-
-    // Update database - persist tokens if new ones were provided
-    const updated = await services.instances.update(id, buildConnectPersistUpdates(instance, body));
+    const updated = attempt.updated;
 
     return c.json({
       data: {

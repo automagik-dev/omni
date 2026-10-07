@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, mock, test } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Hono } from 'hono';
@@ -153,5 +153,31 @@ test('Z-API upload stores bytes and forwards the persistent reference before sen
 test('Z-API upload rejects invalid/noncanonical encoding and oversized media', () => {
   for (const encoded of ['', 'invalid!', 'Zh==', Buffer.alloc(16 * 1024 * 1024 + 1).toString('base64')]) {
     expect(() => decodeZapiUpload(encoded)).toThrow('Invalid media encoding or size');
+  }
+});
+
+test('rejected Z-API uploads are removed while unknown sends retain reconciliation bytes', async () => {
+  process.env.MEDIA_STORAGE_PATH = mediaDirectory;
+  for (const code of ['ZAPI_HTTP_400', 'ZAPI_DELIVERY_UNKNOWN']) {
+    let reference = '';
+    const sendMessage = mock(async (_id: string, message: { content: { localPath: string } }) => {
+      reference = message.content.localPath;
+      return { success: false, error: code, errorCode: code, retryable: false, timestamp: 123 };
+    });
+    const app = mountMessagesRoutes(sendMessage, 'zapi-web');
+    const response = await app.request('/messages/send/media', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        instanceId: '11111111-1111-4111-8111-111111111111',
+        to: '5511999999999',
+        type: 'image',
+        base64: Buffer.from('bytes').toString('base64'),
+        mimeType: 'image/png',
+      }),
+    });
+    expect(response.status).toBe(500);
+    expect(reference).not.toBe('');
+    expect(existsSync(join(mediaDirectory, reference))).toBe(code === 'ZAPI_DELIVERY_UNKNOWN');
   }
 });

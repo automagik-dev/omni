@@ -281,6 +281,9 @@ function maskSecretFields(body: Record<string, unknown>): Record<string, unknown
     const value = masked[field];
     if (typeof value === 'string' && value.length > 0) masked[field] = maskSecret(value);
   }
+  for (const field of ['zapiConfig', 'evolutionConfig']) {
+    if (masked[field] != null) masked[field] = '[redacted]';
+  }
   return masked;
 }
 
