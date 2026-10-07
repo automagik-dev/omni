@@ -90,7 +90,8 @@ A reply appearing in the chat = the full pipeline works.
 
 | Symptom | Check / fix |
 |---------|-------------|
-| Bridge won't start, connection refused | `pm2 list` → `pm2 restart omni-nats`; `pm2 logs omni-nats`. Never started? `~/.omni/nats-server -js -sd ~/.omni/data/nats` |
+| Bridge won't start, connection refused | `pm2 list` → `pm2 restart omni-nats`; `pm2 logs omni-nats`. Never started? `omni start` (manual: `~/.omni/nats-server -js -sd ~/.omni/data/nats -a 127.0.0.1`) |
+| Another host can't reach NATS (4222) | Managed NATS listens on `127.0.0.1` by default. Only if remote access is needed: `omni config set server.natsHost 0.0.0.0` (protect NATS with auth/TLS or a private network), then `omni stop && omni start` (`omni restart` keeps old args); remote clients set `NATS_URL=nats://<host>:4222` |
 | API 500s / degraded mode | `pm2 restart omni-api`; `pm2 logs omni-api`; `omni status`; check DB URL in `~/.omni/server-config.json` |
 | `omni connect` fails: "Failed to discover agent" | `genie dir ls` — if missing: `genie dir add <name> --dir /path/to/agent` |
 | Messages arrive, agent never replies | `genie serve status` (bridge up?); `genie events list --since 5m` + `genie events errors`; agent must end every turn with `omni done`; filter mismatch: `omni instances get <id> --json \| jq .agentReplyFilter` |
