@@ -252,7 +252,7 @@ omni-prod routes list --instance <id>
 | `NATS_URL` | NATS server connection URL | `nats://localhost:4222` |
 | `NATS_MANAGED` | Let PM2 manage NATS server | `true` |
 | `NATS_PORT` | NATS server listen port | `4222` |
-| `NATS_HOST` | NATS server bind address (PM2-managed). Use `0.0.0.0` or a LAN IP only if other hosts must connect, and protect NATS then (auth/TLS or private network). Clients still connect via `NATS_URL` | `127.0.0.1` |
+| `NATS_HOST` | NATS server bind address (PM2-managed). Use `0.0.0.0` or a LAN IP only if other hosts must connect, and protect NATS then (auth/TLS or private network). Clients connect via `NATS_URL` — with a single LAN IP, point `NATS_URL` at it | `127.0.0.1` |
 | `API_PORT` | Omni API listen port | `8882` |
 | `API_HOST` | Omni API bind address | `0.0.0.0` |
 | `API_MANAGED` | Let PM2 manage API server | `true` |
