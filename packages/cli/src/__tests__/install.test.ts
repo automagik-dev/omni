@@ -19,10 +19,14 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildAgentHandoffBlock, createInstallCommand } from '../commands/install.js';
+import { loadServerConfig, setConfigValue } from '../config.js';
+import { resolveManagedNatsHost } from '../install-helpers.js';
+import { buildNatsServerArgs } from '../nats-server-args.js';
+import { PM2_PROCESSES, buildPm2StartArgs } from '../pm2.js';
 
 // ---------------------------------------------------------------------------
 // Agent handoff banner — literal-substring contract
@@ -147,6 +151,61 @@ describe('detectReinstall — data dir signal', () => {
     const { detectReinstall } = await import('../install-helpers.js');
     const res = await detectReinstall(FIXTURE_ROOT);
     expect(res.hasDataDir).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Managed NATS bind address (PM2 path)
+// ---------------------------------------------------------------------------
+
+describe('omni install — managed NATS bind address', () => {
+  // startServices() spawns pm2, so assert the exact expression it evaluates —
+  // resolveManagedNatsHost(loadServerConfig()) — against a sandboxed config,
+  // then the args it hands pm2.
+  const CONFIG_DIR_ENV = 'OMNI_CONFIG_DIR';
+  let sandbox: string | undefined;
+  let savedConfigDir: string | undefined;
+
+  beforeEach(() => {
+    savedConfigDir = process.env[CONFIG_DIR_ENV];
+    sandbox = mkdtempSync(join(tmpdir(), 'omni-install-nats-host-'));
+    process.env[CONFIG_DIR_ENV] = sandbox;
+  });
+
+  afterEach(() => {
+    if (sandbox) rmSync(sandbox, { recursive: true, force: true });
+    sandbox = undefined;
+    if (savedConfigDir === undefined) delete process.env[CONFIG_DIR_ENV];
+    else process.env[CONFIG_DIR_ENV] = savedConfigDir;
+  });
+
+  function installNatsScriptArgs(): string[] {
+    const natsArgs = buildPm2StartArgs({
+      kind: 'nats',
+      script: '/tmp/nats-server',
+      name: PM2_PROCESSES.nats,
+      scriptArgs: buildNatsServerArgs({
+        natsDataDir: '/tmp/data/nats',
+        host: resolveManagedNatsHost(loadServerConfig()),
+      }),
+    });
+    return natsArgs.slice(natsArgs.indexOf('--') + 1);
+  }
+
+  test('fresh install (no config) binds omni-nats to 127.0.0.1', () => {
+    expect(installNatsScriptArgs()).toEqual(['-js', '-sd', '/tmp/data/nats', '-a', '127.0.0.1']);
+  });
+
+  test('reinstall honours a configured server.natsHost', () => {
+    setConfigValue('server.natsHost', '10.0.0.5');
+    expect(installNatsScriptArgs()).toEqual(['-js', '-sd', '/tmp/data/nats', '-a', '10.0.0.5']);
+  });
+
+  test('install.ts builds the nats args through the shared helpers, not inline', () => {
+    const src = readFileSync(new URL('../commands/install.ts', import.meta.url).pathname, 'utf-8');
+    expect(src).toContain('resolveManagedNatsHost(loadServerConfig())');
+    expect(src).toContain('buildNatsServerArgs({ natsDataDir, host: natsHost })');
+    expect(src).not.toContain("'-js'");
   });
 });
 

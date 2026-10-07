@@ -31,9 +31,10 @@ import {
   saveServerConfig,
 } from '../config.js';
 import { DEFAULT_API_PORT, HEALTH_TIMEOUT_MS, waitForHealth } from '../health.js';
-import { detectReinstall, installPm2Logrotate, writeSystemdUnit } from '../install-helpers.js';
+import { detectReinstall, installPm2Logrotate, resolveManagedNatsHost, writeSystemdUnit } from '../install-helpers.js';
 import { resolveCanonicalPgservePreference } from '../lib/canonical-pgserve.js';
 import { NATS_BINARY_PATH, ensureNats } from '../nats-install.js';
+import { buildNatsServerArgs } from '../nats-server-args.js';
 import * as output from '../output.js';
 import { PM2_PROCESSES, buildPm2StartArgs, getPm2LogDir, isPm2Available, runPm2 } from '../pm2.js';
 import { buildEmbeddedDatabaseUrl, buildRuntimeEnv } from '../runtime-env.js';
@@ -188,6 +189,7 @@ async function startServices(
   forceSystemd: boolean,
   useCanonicalPgserve: boolean,
 ): Promise<boolean> {
+  const natsHost = resolveManagedNatsHost(loadServerConfig()); // server.natsHost or 127.0.0.1
   if (forceSystemd) {
     writeSystemdUnit(cfg.dataDir);
     return false;
@@ -230,14 +232,14 @@ async function startServices(
   apiSpinner.succeed(`${PM2_PROCESSES.api} started`);
 
   if (existsSync(NATS_BINARY_PATH)) {
-    const natsSpinner = ora(`Starting ${PM2_PROCESSES.nats}...`).start();
+    const natsSpinner = ora(`Starting ${PM2_PROCESSES.nats} (bind address ${natsHost})...`).start();
     const natsDataDir = join(cfg.dataDir, 'nats');
     mkdirSync(natsDataDir, { recursive: true });
     const natsArgs = buildPm2StartArgs({
       kind: 'nats',
       script: NATS_BINARY_PATH,
       name: PM2_PROCESSES.nats,
-      scriptArgs: ['-js', '-sd', natsDataDir],
+      scriptArgs: buildNatsServerArgs({ natsDataDir, host: natsHost }),
     });
     const natsCode = await runPm2(natsArgs);
     if (natsCode !== 0) natsSpinner.warn(`${PM2_PROCESSES.nats} failed to start — check NATS binary`);
