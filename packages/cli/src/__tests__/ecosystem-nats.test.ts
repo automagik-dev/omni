@@ -84,6 +84,11 @@ describe('ecosystem.config.cjs — omni-v2-nats', () => {
     expect(() => natsArgs({ NATS_HOST: '$(id)' })).toThrow(/Invalid NATS_HOST/);
   });
 
+  test('a NATS_HOST that looks like a flag is rejected', () => {
+    expect(() => natsArgs({ NATS_HOST: '-DV' })).toThrow(/Invalid NATS_HOST/);
+    expect(() => natsArgs({ NATS_HOST: '--help' })).toThrow(/Invalid NATS_HOST/);
+  });
+
   test('no NATS app when NATS_MANAGED is not true', () => {
     expect(loadEcosystem({}).some((a) => a.name === 'omni-v2-nats')).toBe(false);
   });
