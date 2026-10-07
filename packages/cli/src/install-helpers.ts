@@ -5,14 +5,14 @@
  * layer. Each helper is independently testable.
  */
 
-import { existsSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerConfig, getConfigPath, loadConfig } from './config.js';
 import { NATS_BINARY_PATH } from './nats-install.js';
 import { buildNatsServerArgs, resolveNatsHost } from './nats-server-args.js';
 import * as output from './output.js';
-import { PM2_PROCESSES, capturePm2, runPm2 } from './pm2.js';
+import { PM2_PROCESSES, buildPm2StartArgs, capturePm2, runPm2 } from './pm2.js';
 
 const DEFAULT_DATA_DIR = join(homedir(), '.omni', 'data');
 
@@ -89,6 +89,31 @@ export function resolveManagedNatsHost(serverConfig: Pick<ServerConfig, 'natsHos
   } catch (err) {
     return output.error(err instanceof Error ? err.message : String(err));
   }
+}
+
+/**
+ * (Re)create the PM2 `omni-nats` process so it runs with the current bind
+ * address. `pm2 start` on an existing name, and `pm2 restart`, reuse the
+ * arguments recorded when the process was created — so an install made before
+ * `server.natsHost` existed would keep its old listener. Deleting first makes
+ * every caller (start, install, update) apply `-a <host>`. Returns pm2's exit
+ * code for the start.
+ */
+export async function startManagedNats(
+  opts: { dataDir: string; host: string; binaryPath?: string },
+  deps: { runPm2: typeof runPm2 } = { runPm2 },
+): Promise<number> {
+  const natsDataDir = join(opts.dataDir, 'nats');
+  mkdirSync(natsDataDir, { recursive: true });
+  await deps.runPm2(['delete', PM2_PROCESSES.nats]);
+  return deps.runPm2(
+    buildPm2StartArgs({
+      kind: 'nats',
+      script: opts.binaryPath ?? NATS_BINARY_PATH,
+      name: PM2_PROCESSES.nats,
+      scriptArgs: buildNatsServerArgs({ natsDataDir, host: opts.host }),
+    }),
+  );
 }
 
 // ----------------------------------------------------------------------------

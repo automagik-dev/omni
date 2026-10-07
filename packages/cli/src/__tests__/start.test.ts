@@ -12,10 +12,10 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { resolveManagedNatsHost } from '../install-helpers.js';
+import { resolveManagedNatsHost, startManagedNats } from '../install-helpers.js';
 import { buildNatsServerArgs } from '../nats-server-args.js';
 import {
   PM2_HARDENED_DEFAULTS,
@@ -260,10 +260,38 @@ describe('omni start — managed NATS bind address', () => {
     expect(natsScriptArgs({ natsHost: '::' })).toEqual(['-js', '-sd', '/tmp/data/nats', '-a', '::']);
   });
 
-  test('start.ts builds the nats args through the shared helpers, not inline', () => {
+  test('startManagedNats deletes the old omni-nats, then starts it with -a <host>', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'omni-start-nats-'));
+    const calls: string[][] = [];
+    try {
+      const code = await startManagedNats(
+        { dataDir, host: '127.0.0.1', binaryPath: '/tmp/nats-server' },
+        {
+          runPm2: async (args) => {
+            calls.push(args);
+            return 0;
+          },
+        },
+      );
+      expect(code).toBe(0);
+      expect(calls[0]).toEqual(['delete', PM2_PROCESSES.nats]);
+      expect(calls[1]?.[0]).toBe('start');
+      expect(calls[1]?.slice(calls[1].indexOf('--') + 1)).toEqual([
+        '-js',
+        '-sd',
+        join(dataDir, 'nats'),
+        '-a',
+        '127.0.0.1',
+      ]);
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test('start.ts recreates omni-nats through the shared launcher, not inline', () => {
     const src = readFileSync(new URL('../commands/start.ts', import.meta.url).pathname, 'utf-8');
     expect(src).toContain('resolveManagedNatsHost(serverConfig)');
-    expect(src).toContain('buildNatsServerArgs({ natsDataDir, host: natsHost })');
+    expect(src).toContain('startManagedNats({ dataDir: serverConfig.dataDir, host: natsHost })');
     expect(src).not.toContain("'-js'");
   });
 });
