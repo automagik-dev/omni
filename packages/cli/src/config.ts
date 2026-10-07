@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
+import { DEFAULT_NATS_HOST, NatsHostSchema } from './nats-server-args.js';
 
 /** Command visibility categories */
 export type CommandCategory = 'core' | 'standard' | 'advanced' | 'debug';
@@ -52,7 +53,8 @@ export type ConfigKey =
   | 'server.databaseUrl'
   | 'server.dataDir'
   | 'server.logLevel'
-  | 'server.nodeEnv';
+  | 'server.nodeEnv'
+  | 'server.natsHost';
 
 /**
  * A single named REMOTE target (an Omni API server the CLI talks to).
@@ -125,6 +127,7 @@ export const DEFAULT_SERVER_CONFIG: ServerConfig = {
   dataDir: join(homedir(), '.omni', 'data'),
   logLevel: 'info',
   nodeEnv: 'production',
+  natsHost: DEFAULT_NATS_HOST,
 };
 
 /** Valid config keys with descriptions */
@@ -155,6 +158,9 @@ export const CONFIG_KEYS: Record<ConfigKey, { description: string; values?: stri
   'server.nodeEnv': {
     description: 'Node environment',
     values: ['production', 'development'],
+  },
+  'server.natsHost': {
+    description: `Bind address of the managed NATS server (default: ${DEFAULT_NATS_HOST}; 0.0.0.0 exposes NATS to the network; apply with omni stop && omni start)`,
   },
 };
 
@@ -542,6 +548,14 @@ function setServerField(config: Config, field: keyof ServerConfig, value: string
       throw new Error(`Invalid port value: ${value}. Must be a number between 1 and 65535.`);
     }
     config.server.port = numValue;
+  } else if (field === 'natsHost') {
+    const parsed = NatsHostSchema.safeParse(value);
+    if (!parsed.success) {
+      throw new Error(
+        `Invalid natsHost value ${JSON.stringify(value)}: ${parsed.error.issues[0]?.message ?? 'is invalid'}.`,
+      );
+    }
+    config.server.natsHost = parsed.data;
   } else {
     (config.server as Record<string, unknown>)[field] = value;
   }

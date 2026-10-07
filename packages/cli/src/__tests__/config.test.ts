@@ -25,6 +25,7 @@ import {
   deleteConfigValue,
   describeActiveServer,
   getConfigPath,
+  getConfigValue,
   isServersConfigKey,
   isValidConfigKey,
   loadConfig,
@@ -235,6 +236,52 @@ describe('Server Config Keys', () => {
     expect(isValidConfigKey('server.dataDir')).toBe(true);
     expect(isValidConfigKey('server.logLevel')).toBe(true);
     expect(isValidConfigKey('server.nodeEnv')).toBe(true);
+  });
+});
+
+describe('server.natsHost', () => {
+  withSandbox();
+
+  test('is a documented config key that mentions the loopback default', () => {
+    expect(isValidConfigKey('server.natsHost')).toBe(true);
+    expect(CONFIG_KEYS['server.natsHost'].description).toContain('127.0.0.1');
+    expect(CONFIG_KEYS['server.natsHost'].values).toBeUndefined();
+  });
+
+  test('defaults to 127.0.0.1 when unset', () => {
+    expect(DEFAULT_SERVER_CONFIG.natsHost).toBe('127.0.0.1');
+    expect(getConfigValue('server.natsHost')).toBe('127.0.0.1');
+    expect(loadServerConfig().natsHost).toBe('127.0.0.1');
+  });
+
+  test('older configs without the field still resolve to the default', () => {
+    writeRawConfig({ server: { port: 9000 } });
+    expect(getConfigValue('server.natsHost')).toBe('127.0.0.1');
+    expect(loadServerConfig().natsHost).toBe('127.0.0.1');
+  });
+
+  test('set/get round trip for IPv4, wildcard, IPv6 and hostname', () => {
+    for (const host of ['10.0.0.5', '0.0.0.0', '::', 'nats.internal']) {
+      setConfigValue('server.natsHost', host);
+      expect(getConfigValue('server.natsHost')).toBe(host);
+      expect(loadServerConfig().natsHost).toBe(host);
+    }
+    const raw = readRawConfigFile() as { server?: { natsHost?: string } };
+    expect(raw.server?.natsHost).toBe('nats.internal');
+  });
+
+  test('rejects invalid values and leaves the stored value untouched', () => {
+    setConfigValue('server.natsHost', '0.0.0.0');
+    for (const bad of ['', ' ', '127.0.0.1 -p 1', '$(id)', '"::"', '999.1.1.1', '-js']) {
+      expect(() => setConfigValue('server.natsHost', bad)).toThrow(/Invalid natsHost value/);
+    }
+    expect(getConfigValue('server.natsHost')).toBe('0.0.0.0');
+  });
+
+  test('unset reverts to the default', () => {
+    setConfigValue('server.natsHost', '0.0.0.0');
+    deleteConfigValue('server.natsHost');
+    expect(getConfigValue('server.natsHost')).toBe('127.0.0.1');
   });
 });
 
