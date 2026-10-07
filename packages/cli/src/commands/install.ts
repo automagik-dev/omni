@@ -191,7 +191,7 @@ async function startServices(
 ): Promise<boolean> {
   const natsHost = resolveManagedNatsHost(loadServerConfig()); // server.natsHost or 127.0.0.1
   if (forceSystemd) {
-    writeSystemdUnit(cfg.dataDir);
+    writeSystemdUnit(cfg.dataDir, natsHost);
     return false;
   }
 

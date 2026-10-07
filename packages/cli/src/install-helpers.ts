@@ -10,7 +10,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { type ServerConfig, getConfigPath, loadConfig } from './config.js';
 import { NATS_BINARY_PATH } from './nats-install.js';
-import { resolveNatsHost } from './nats-server-args.js';
+import { buildNatsServerArgs, resolveNatsHost } from './nats-server-args.js';
 import * as output from './output.js';
 import { PM2_PROCESSES, capturePm2, runPm2 } from './pm2.js';
 
@@ -139,8 +139,48 @@ function logrotateAlreadyConfigured(confOutput: string): boolean {
 // systemd unit writer (retained, no longer prompted for)
 // ----------------------------------------------------------------------------
 
+/**
+ * Quote one `ExecStart=` argument for systemd: wrap in double quotes, escape
+ * `\\` and `"`, and double `%` (unit specifiers) and `$` (environment
+ * expansion) so the value reaches the process verbatim.
+ */
+function quoteSystemdArg(arg: string): string {
+  if (/[\r\n]/.test(arg))
+    throw new Error(`systemd ExecStart argument must not contain a newline: ${JSON.stringify(arg)}`);
+  const escaped = arg
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/%/g, '%%')
+    .replace(/\$/g, () => '$$');
+  return `"${escaped}"`;
+}
+
+/**
+ * Content of the `omni-nats.service` unit: the managed nats-server with the
+ * same arguments as the PM2 paths (`-js -sd <dataDir>/nats -a <natsHost>`),
+ * every argument quoted.
+ */
+export function buildSystemdNatsUnit(dataDir: string, natsHost: string): string {
+  const execStart = [NATS_BINARY_PATH, ...buildNatsServerArgs({ natsDataDir: join(dataDir, 'nats'), host: natsHost })]
+    .map(quoteSystemdArg)
+    .join(' ');
+  return `[Unit]
+Description=Omni NATS Server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=${execStart}
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+`;
+}
+
 /** Write systemd unit files for omni-api and omni-nats under `/etc/systemd/system/`. */
-export function writeSystemdUnit(dataDir: string): void {
+export function writeSystemdUnit(dataDir: string, natsHost: string): void {
   const apiUnit = `[Unit]
 Description=Omni API Server
 After=network.target omni-nats.service
@@ -157,19 +197,7 @@ PIDFile=${homedir()}/.pm2/pm2.pid
 [Install]
 WantedBy=multi-user.target
 `;
-  const natsUnit = `[Unit]
-Description=Omni NATS Server
-After=network.target
-
-[Service]
-Type=simple
-ExecStart="${NATS_BINARY_PATH}" -js -sd "${join(dataDir, 'nats')}"
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-`;
+  const natsUnit = buildSystemdNatsUnit(dataDir, natsHost);
   try {
     writeFileSync('/etc/systemd/system/omni-nats.service', natsUnit, { mode: 0o644 });
     writeFileSync('/etc/systemd/system/omni-api.service', apiUnit, { mode: 0o644 });

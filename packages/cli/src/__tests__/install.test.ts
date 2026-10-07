@@ -24,7 +24,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildAgentHandoffBlock, createInstallCommand } from '../commands/install.js';
 import { loadServerConfig, setConfigValue } from '../config.js';
-import { resolveManagedNatsHost } from '../install-helpers.js';
+import { buildSystemdNatsUnit, resolveManagedNatsHost } from '../install-helpers.js';
+import { NATS_BINARY_PATH } from '../nats-install.js';
 import { buildNatsServerArgs } from '../nats-server-args.js';
 import { PM2_PROCESSES, buildPm2StartArgs } from '../pm2.js';
 
@@ -206,6 +207,52 @@ describe('omni install — managed NATS bind address', () => {
     expect(src).toContain('resolveManagedNatsHost(loadServerConfig())');
     expect(src).toContain('buildNatsServerArgs({ natsDataDir, host: natsHost })');
     expect(src).not.toContain("'-js'");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// systemd unit (--systemd)
+// ---------------------------------------------------------------------------
+
+describe('buildSystemdNatsUnit', () => {
+  function execStart(unit: string): string {
+    const line = unit.split('\n').find((l) => l.startsWith('ExecStart='));
+    if (!line) throw new Error('unit has no ExecStart= line');
+    return line;
+  }
+
+  test('default bind address: quoted -js -sd <dataDir>/nats -a 127.0.0.1', () => {
+    expect(execStart(buildSystemdNatsUnit('/var/lib/omni', '127.0.0.1'))).toBe(
+      `ExecStart="${NATS_BINARY_PATH}" "-js" "-sd" "/var/lib/omni/nats" "-a" "127.0.0.1"`,
+    );
+  });
+
+  test('custom bind address is passed after -a', () => {
+    expect(execStart(buildSystemdNatsUnit('/var/lib/omni', '0.0.0.0'))).toEndWith('"-a" "0.0.0.0"');
+    expect(execStart(buildSystemdNatsUnit('/var/lib/omni', '::'))).toEndWith('"-a" "::"');
+  });
+
+  test('keeps the rest of the unit unchanged', () => {
+    const unit = buildSystemdNatsUnit('/var/lib/omni', '127.0.0.1');
+    expect(unit).toContain('Description=Omni NATS Server');
+    expect(unit).toContain('Type=simple');
+    expect(unit).toContain('Restart=on-failure');
+    expect(unit).toContain('WantedBy=multi-user.target');
+  });
+
+  test('escapes systemd specifiers, env expansion, quotes and backslashes in the data dir', () => {
+    expect(execStart(buildSystemdNatsUnit('/srv/100%$HOME"x\\y', '127.0.0.1'))).toContain(
+      '"-sd" "/srv/100%%$$HOME\\"x\\\\y/nats"',
+    );
+  });
+
+  test('rejects an invalid bind address instead of writing it into ExecStart', () => {
+    expect(() => buildSystemdNatsUnit('/var/lib/omni', '127.0.0.1"\nExecStartPre=/bin/id')).toThrow();
+    expect(() => buildSystemdNatsUnit('/var/lib/omni', '$HOST')).toThrow();
+  });
+
+  test('rejects a data dir containing a newline', () => {
+    expect(() => buildSystemdNatsUnit('/var/lib/omni\nExecStartPre=/bin/id', '127.0.0.1')).toThrow(/newline/);
   });
 });
 
