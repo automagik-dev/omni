@@ -54,6 +54,7 @@ PGSERVE_DATA=/opt/omni/production/.pgserve-data
 NATS_URL=nats://localhost:4222
 NATS_MANAGED=true
 NATS_PORT=4222
+NATS_HOST=127.0.0.1
 
 # API
 API_PORT=8882
@@ -75,6 +76,7 @@ PGSERVE_DATA=/opt/omni/staging/.pgserve-data
 NATS_URL=nats://localhost:4223
 NATS_MANAGED=true
 NATS_PORT=4223
+NATS_HOST=127.0.0.1
 
 # API
 API_PORT=8883
@@ -110,7 +112,7 @@ module.exports = {
       name: 'omni-prod-nats',
       cwd: '/opt/omni/production',
       script: '/opt/omni/production/bin/nats-server',
-      args: '-js -p 4222',
+      args: '-js -p 4222 -a 127.0.0.1',
       env: { HOME: '/opt/omni/production' },
       max_memory_restart: '256M',
     },
@@ -136,7 +138,7 @@ module.exports = {
       name: 'omni-staging-nats',
       cwd: '/opt/omni/staging',
       script: '/opt/omni/staging/bin/nats-server',
-      args: '-js -p 4223',
+      args: '-js -p 4223 -a 127.0.0.1',
       env: { HOME: '/opt/omni/staging' },
       max_memory_restart: '256M',
     },
@@ -250,6 +252,7 @@ omni-prod routes list --instance <id>
 | `NATS_URL` | NATS server connection URL | `nats://localhost:4222` |
 | `NATS_MANAGED` | Let PM2 manage NATS server | `true` |
 | `NATS_PORT` | NATS server listen port | `4222` |
+| `NATS_HOST` | NATS server bind address (PM2-managed). Use `0.0.0.0` or a LAN IP only if other hosts must connect, and protect NATS then (auth/TLS or private network). Clients still connect via `NATS_URL` | `127.0.0.1` |
 | `API_PORT` | Omni API listen port | `8882` |
 | `API_HOST` | Omni API bind address | `0.0.0.0` |
 | `API_MANAGED` | Let PM2 manage API server | `true` |
@@ -283,6 +286,8 @@ Each instance must use unique ports for `PGSERVE_PORT`, `NATS_PORT`, and `API_PO
 # Check for port conflicts before starting
 lsof -i :8432 -i :8433 -i :4222 -i :4223 -i :8882 -i :8883
 ```
+
+Instances can share the NATS bind address (`127.0.0.1`); only the ports must differ. After changing a NATS port or bind address, delete and start the NATS process again (`pm2 delete <name>`, then `pm2 start ecosystem.config.cjs`) — `pm2 restart` reuses the previous arguments.
 
 ### Disk Space
 
