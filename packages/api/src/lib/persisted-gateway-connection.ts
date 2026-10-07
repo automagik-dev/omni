@@ -6,16 +6,18 @@ const activations = new Map<string, Promise<unknown>>();
 export async function connectAndPersist<T>(
   plugin: ChannelPlugin,
   instanceId: string,
-  options: Record<string, unknown>,
+  options: Record<string, unknown> | (() => Promise<Record<string, unknown>>),
   persist: () => Promise<T>,
   gateway: boolean,
 ): Promise<{ updated: T } | { errorMessage: string }> {
   const work = async (): Promise<{ updated: T } | { errorMessage: string }> => {
     // A failed write leaves the previous binding untouched. Failed activation
     // detaches locally; the durable configuration remains available for recovery.
+    // Resolve persisted defaults inside the queue, after earlier rotations finish.
+    const resolvedOptions = typeof options === 'function' ? await options() : options;
     const persisted = gateway ? await persist() : undefined;
     try {
-      await plugin.connect(instanceId, { instanceId, credentials: {}, options });
+      await plugin.connect(instanceId, { instanceId, credentials: {}, options: resolvedOptions });
     } catch (error) {
       if (gateway) await plugin.disconnect(instanceId);
       return { errorMessage: error instanceof Error ? error.message : 'Unknown error' };

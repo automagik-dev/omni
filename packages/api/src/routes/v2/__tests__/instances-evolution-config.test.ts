@@ -16,10 +16,14 @@ interface Captured {
 }
 
 /** No services or database are started; verify route-to-plugin wiring. */
-function mount(captured: Captured, instanceOverrides: Record<string, unknown> = {}) {
+function mount(
+  captured: Captured,
+  instanceOverrides: Record<string, unknown> = {},
+  beforeUpdate: () => Promise<void> = async () => {},
+) {
   const app = new Hono<{ Variables: AppVariables }>();
 
-  const instance = {
+  let instance = {
     id: INSTANCE_ID,
     name: 'evolution-test',
     channel: 'evolution-api',
@@ -36,8 +40,10 @@ function mount(captured: Captured, instanceOverrides: Record<string, unknown> = 
           return { ...instance, ...data };
         }),
         update: mock(async (_id: string, data: Record<string, unknown>) => {
+          await beforeUpdate();
           captured.updated = data;
-          return { ...instance, ...data };
+          instance = { ...instance, ...data };
+          return instance;
         }),
         updateStatus: mock(async () => instance),
       },
@@ -108,7 +114,7 @@ describe('Evolution instance configuration', () => {
     expect(captured.updated?.evolutionConfig).toEqual(rotated);
     expect(captured.connectOptions?.evolutionConfig).toEqual(rotated);
     expect((await app.request(`/${INSTANCE_ID}/restart`, json('POST'))).status).toBe(200);
-    expect(captured.connectOptions?.evolutionConfig).toEqual(CONFIG);
+    expect(captured.connectOptions?.evolutionConfig).toEqual(rotated);
   });
   test('PATCH cannot remove mandatory config or assign it to other channels', async () => {
     const captured: Captured = {};
@@ -125,4 +131,33 @@ describe('Evolution instance configuration', () => {
     ).toBe(400);
     expect(captured.updated).toBeUndefined();
   });
+});
+
+test('a queued connect without credentials cannot restore the configuration read before a rotation', async () => {
+  const captured: Captured = {};
+  let entered = () => {};
+  let release = () => {};
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let writes = 0;
+  const app = mount(captured, {}, async () => {
+    if (++writes === 1) {
+      entered();
+      await blocked;
+    }
+  });
+  const rotated = { ...CONFIG, apiKey: 'rotated-api-key-1234567890' };
+  const rotation = app.request(`/${INSTANCE_ID}/connect`, json('POST', { evolutionConfig: rotated }));
+  await started;
+  const reconnect = app.request(`/${INSTANCE_ID}/connect`, json('POST', {}));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  release();
+  const responses = await Promise.all([rotation, reconnect]);
+  expect(responses.map((response) => response.status)).toEqual([200, 200]);
+  expect(captured.updated?.evolutionConfig).toEqual(rotated);
+  expect(captured.connectOptions?.evolutionConfig).toEqual(rotated);
 });

@@ -8,7 +8,7 @@ The findings were checked against the actual send, webhook, credential and stora
 - `READ_BY_ME` does not acknowledge an outbound recipient read.
 - Z-API connection callbacks are serialized per instance. Timestamped callbacks cannot regress state; untimestamped callbacks must agree with the current provider state.
 - Startup and queued reconnect open credentials using the persisted row tenant, through the existing credential codec.
-- Gateway connect/rotation persists before activation and serializes same-instance rotations in the current API process. Failed persistence never activates new credentials; failed activation detaches locally and retains the durable configuration for recovery. Operators still need one lifecycle owner per instance when running multiple API replicas.
+- Gateway connect/rotation persists before activation and serializes same-instance rotations in the current API process. Queued connects reread their persisted defaults inside that queue, so a request without new credentials cannot restore a configuration read before an earlier rotation. Failed persistence never activates new credentials; failed activation detaches locally and retains the durable configuration for recovery. Operators still need one lifecycle owner per instance when running multiple API replicas.
 - Rejected Z-API uploads are discarded through local/S3 storage backends. Unknown accepted sends retain their bytes for reconciliation. Storage services are cached per database handle, avoiding an earlier request's captured database/root in tests.
 - Official Z-API capabilities exclude Web pairing/reactions and declare the three-button limit.
 - Template sending records journey checkpoints and sent metrics; OpenAPI includes instance-not-found and capability errors.

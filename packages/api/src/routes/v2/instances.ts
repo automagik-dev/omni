@@ -1937,12 +1937,23 @@ instancesRoutes.post(
     }
 
     hydrateConnectionOptionsForInstance(plugin, instance, connectionOptions);
+    const gateway = instance.channel === 'evolution-api' || isZapiChannel(instance.channel);
+    let activationInstance = instance;
+    const activationOptions = gateway
+      ? async () => {
+          // A queued request may have read the row before a previous credential rotation.
+          activationInstance = await services.instances.getById(id);
+          if (activationInstance.channel !== instance.channel)
+            throw new Error('Instance channel changed while connecting');
+          return buildConnectConnectionOptions(activationInstance, body, forceNewQr);
+        }
+      : connectionOptions;
     const attempt = await connectAndPersist(
       plugin,
       id,
-      connectionOptions,
-      () => services.instances.update(id, buildConnectPersistUpdates(instance, body)),
-      instance.channel === 'evolution-api' || isZapiChannel(instance.channel),
+      activationOptions,
+      () => services.instances.update(id, buildConnectPersistUpdates(activationInstance, body)),
+      gateway,
     );
     if ('errorMessage' in attempt) {
       return c.json(
