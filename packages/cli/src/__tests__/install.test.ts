@@ -24,7 +24,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildAgentHandoffBlock, createInstallCommand } from '../commands/install.js';
 import { loadServerConfig, setConfigValue } from '../config.js';
-import { buildSystemdNatsUnit, resolveManagedNatsHost } from '../install-helpers.js';
+import { buildSystemdNatsUnit, recreateManagedNatsForUpdate, resolveManagedNatsHost } from '../install-helpers.js';
 import { NATS_BINARY_PATH } from '../nats-install.js';
 import { buildNatsServerArgs } from '../nats-server-args.js';
 import { PM2_PROCESSES, buildPm2StartArgs } from '../pm2.js';
@@ -207,6 +207,61 @@ describe('omni install — managed NATS bind address', () => {
     expect(src).toContain('resolveManagedNatsHost(loadServerConfig())');
     expect(src).toContain('startManagedNats({ dataDir: cfg.dataDir, host: natsHost })');
     expect(src).not.toContain("'-js'");
+  });
+});
+
+describe('recreateManagedNatsForUpdate (omni update)', () => {
+  function fakePm2(code = 0) {
+    const calls: string[][] = [];
+    return {
+      calls,
+      runPm2: async (args: string[]) => {
+        calls.push(args);
+        return code;
+      },
+    };
+  }
+
+  test('recreates omni-nats with the configured bind address instead of pm2 restart', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'omni-update-nats-'));
+    const pm2 = fakePm2();
+    try {
+      const code = await recreateManagedNatsForUpdate(
+        { dataDir, natsHost: '127.0.0.1' },
+        { runPm2: pm2.runPm2, binaryExists: () => true },
+      );
+      expect(code).toBe(0);
+      expect(pm2.calls[0]).toEqual(['delete', PM2_PROCESSES.nats]);
+      expect(pm2.calls[1]?.slice(pm2.calls[1].indexOf('--') + 1)).toEqual([
+        '-js',
+        '-sd',
+        join(dataDir, 'nats'),
+        '-a',
+        '127.0.0.1',
+      ]);
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test('returns null (caller restarts as before) when the managed binary is missing', async () => {
+    const pm2 = fakePm2();
+    const code = await recreateManagedNatsForUpdate(
+      { dataDir: '/tmp/unused', natsHost: '127.0.0.1' },
+      { runPm2: pm2.runPm2, binaryExists: () => false },
+    );
+    expect(code).toBeNull();
+    expect(pm2.calls).toHaveLength(0);
+  });
+
+  test('returns null without touching pm2 when the stored server.natsHost is invalid', async () => {
+    const pm2 = fakePm2();
+    const code = await recreateManagedNatsForUpdate(
+      { dataDir: '/tmp/unused', natsHost: 'bad host' },
+      { runPm2: pm2.runPm2, binaryExists: () => true },
+    );
+    expect(code).toBeNull();
+    expect(pm2.calls).toHaveLength(0);
   });
 });
 

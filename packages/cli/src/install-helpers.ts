@@ -116,6 +116,31 @@ export async function startManagedNats(
   );
 }
 
+/**
+ * `omni update` path: recreate omni-nats with the current bind address instead
+ * of `pm2 restart`, which would keep the arguments of an older install. Returns
+ * null when it cannot recreate (no managed binary, or an invalid stored
+ * `server.natsHost`) so the caller falls back to a plain restart.
+ */
+export async function recreateManagedNatsForUpdate(
+  serverConfig: Pick<ServerConfig, 'dataDir' | 'natsHost'>,
+  deps: { runPm2: typeof runPm2; binaryExists: () => boolean } = {
+    runPm2,
+    binaryExists: () => existsSync(NATS_BINARY_PATH),
+  },
+): Promise<number | null> {
+  if (!deps.binaryExists()) return null;
+  let host: string;
+  try {
+    host = resolveNatsHost(serverConfig);
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    output.warn(`${reason}\n  Restarting ${PM2_PROCESSES.nats} with its previous arguments.`);
+    return null;
+  }
+  return startManagedNats({ dataDir: serverConfig.dataDir, host }, { runPm2: deps.runPm2 });
+}
+
 // ----------------------------------------------------------------------------
 // pm2-logrotate installation
 // ----------------------------------------------------------------------------
