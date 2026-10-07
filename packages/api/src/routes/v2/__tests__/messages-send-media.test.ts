@@ -49,6 +49,7 @@ describe('POST /messages/send/media', () => {
         base64: Buffer.from('image-bytes').toString('base64'),
         filename: 'photo.png',
         caption: 'caption test',
+        replyTo: 'quoted-message',
       }),
     });
 
@@ -56,6 +57,7 @@ describe('POST /messages/send/media', () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
       to: '5511999999999@s.whatsapp.net',
+      replyTo: 'quoted-message',
       content: {
         type: 'image',
         caption: 'caption test',

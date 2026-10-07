@@ -84,6 +84,25 @@ describe('Z-API transport contract', () => {
       messageId: 'prior',
     });
   });
+  test('Web base64 image becomes a vendor data URI', async () => {
+    await new ZapiClient(web).send({
+      to: '5511999999999',
+      content: { type: 'image', mimeType: 'image/png', caption: 'image' },
+      metadata: { base64: 'aGVsbG8=' },
+    });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).image).toBe('data:image/png;base64,aGVsbG8=');
+  });
+  test('invalid base64 and MIME mismatch never reach the vendor', async () => {
+    for (const [base64, mimeType] of [
+      ['invalid!', 'image/png'],
+      ['aGVsbG8=', 'audio/mp3'],
+    ]) {
+      await expect(
+        new ZapiClient(web).send({ to: '5511999999999', content: { type: 'image', mimeType }, metadata: { base64 } }),
+      ).rejects.toThrow();
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
   test('Web lists follow vendor payload', async () => {
     await new ZapiClient(web).send({
       to: '5511999999999',

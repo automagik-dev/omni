@@ -165,8 +165,30 @@ function webText(message: OutgoingMessage): WebRequest {
     body: { ...body, buttonList: { buttons: c.buttons.map((b) => ({ id: b.data, label: b.text })) } },
   };
 }
-function webMedia(c: OutgoingContent): WebRequest {
-  const body: Record<string, unknown> = { [c.type]: mediaUrlSchema.parse(c.mediaUrl) };
+function webMedia(message: OutgoingMessage): WebRequest {
+  const c = message.content;
+  let media: string;
+  if (c.mediaUrl) media = mediaUrlSchema.parse(c.mediaUrl);
+  else {
+    const encoded = z
+      .string()
+      .min(4)
+      .max(22_369_624)
+      .regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/)
+      .parse(message.metadata?.base64);
+    const bytes = Buffer.from(encoded, 'base64');
+    if (!bytes.length || bytes.length > 16 * 1024 * 1024 || bytes.toString('base64') !== encoded)
+      throw new ZapiError('ZAPI_INVALID_CONTENT', 'Media must be valid base64, at most 16 MiB');
+    const mime = z
+      .string()
+      .regex(/^[a-z0-9.+-]+\/[a-z0-9.+-]+$/i)
+      .parse(c.mimeType);
+    const expected = c.type === 'document' ? 'application/' : c.type === 'sticker' ? 'image/' : `${c.type}/`;
+    if (!mime.startsWith(expected))
+      throw new ZapiError('ZAPI_INVALID_CONTENT', 'Media MIME does not match content type');
+    media = `data:${mime};base64,${encoded}`;
+  }
+  const body: Record<string, unknown> = { [c.type]: media };
   let path = `send-${c.type}`;
   if (c.type === 'document') {
     const extension = c.filename?.split('.').pop();
@@ -190,7 +212,7 @@ function webRequest(message: OutgoingMessage): WebRequest {
     case 'video':
     case 'sticker':
     case 'document':
-      request = webMedia(c);
+      request = webMedia(message);
       break;
     case 'location': {
       const location = locationSchema.parse(c.location);

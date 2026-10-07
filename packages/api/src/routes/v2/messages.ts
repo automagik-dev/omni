@@ -645,6 +645,7 @@ const sendMediaSchema = z.object({
   instanceId: z.string().uuid().describe('Instance ID to send from'),
   to: z.string().min(1).describe('Recipient'),
   type: z.enum(['image', 'audio', 'video', 'document']).describe('Media type'),
+  replyTo: z.string().optional().describe('Message ID to reply to'),
   url: z.string().url().optional().describe('Media URL'),
   base64: z.string().optional().describe('Base64 encoded media'),
   filename: z.string().optional().describe('Filename for documents'),
@@ -1401,6 +1402,7 @@ messagesRoutes.post('/send/media', zValidator('json', sendMediaSchema), async (c
   const outgoingMessage: OutgoingMessage = {
     to: resolvedTo,
     threadId: data.threadId,
+    replyTo: data.replyTo,
     content: {
       type: data.type,
       mediaUrl: data.url,
