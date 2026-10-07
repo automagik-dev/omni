@@ -30,6 +30,13 @@ export interface ServerConfig {
    * embedded mode continues. Operators migrate via `omni doctor --fix`.
    */
   useCanonicalPgserve?: boolean;
+  /**
+   * Bind address of the CLI-managed nats-server (`-a`), used by `omni start`,
+   * `omni install` and the `--systemd` unit. Absent on older configs → the
+   * loopback default from `nats-server-args.ts`. `0.0.0.0` (or a LAN address)
+   * exposes NATS to the network; clients still connect via `NATS_URL`.
+   */
+  natsHost?: string;
 }
 
 /** Valid config keys (top-level and dot-notation server.* keys) */
