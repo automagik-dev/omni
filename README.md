@@ -511,10 +511,13 @@ Namespaces include: `messages`, `chats`, `instances`, `persons`, `events`, `acce
 |----------|---------|-------------|
 | `API_PORT` | `8882` | API server port |
 | `DATABASE_URL` | `postgresql://...localhost:8432/omni` | PostgreSQL |
-| `NATS_URL` | `nats://localhost:4222` | NATS connection |
+| `NATS_URL` | `nats://localhost:4222` | Where clients connect to NATS |
+| `NATS_HOST` | `127.0.0.1` | Address the source-checkout PM2 NATS listens on (installer: `omni config set server.natsHost`) |
 | `OMNI_API_KEY` | *(auto)* | Override primary key |
 
 Set `*_MANAGED=false` for external services. Full list: `.env.example`.
+
+Managed NATS listens on loopback only. Set `NATS_HOST` / `server.natsHost` to `0.0.0.0` or a LAN IP only when other hosts must connect, and protect it (NATS auth/TLS or a private network). Apply with `omni stop && omni start` — `omni restart` keeps the previous arguments. See [docs/guides/install.md](docs/guides/install.md#nats-bind-address).
 
 | Service | PM2 Name (installer / source checkout) | Port |
 |---------|----------------------------------------|------|
@@ -542,10 +545,13 @@ make sdk-generate  # Regenerate SDKs from OpenAPI
 |----------|---------|-------------|
 | `API_PORT` | `8882` | API server port |
 | `DATABASE_URL` | `postgresql://user:password@localhost:8432/omni` | PostgreSQL connection |
-| `NATS_URL` | `nats://localhost:4222` | NATS connection |
+| `NATS_URL` | `nats://localhost:4222` | Where clients connect to NATS |
+| `NATS_HOST` | `127.0.0.1` | Address the source-checkout PM2 NATS listens on (installer: `omni config set server.natsHost`) |
 | `OMNI_API_KEY` | auto-generated | Override primary API key |
 
 Set `*_MANAGED=false` for external services. Full list in `.env.example`.
+
+Managed NATS listens on loopback only. Set `NATS_HOST` / `server.natsHost` to `0.0.0.0` or a LAN IP only when other hosts must connect, and protect it (NATS auth/TLS or a private network). Apply with `omni stop && omni start` — `omni restart` keeps the previous arguments. See [docs/guides/install.md](docs/guides/install.md#nats-bind-address).
 
 | Service | PM2 Name (installer / source checkout) | Port |
 |---------|----------------------------------------|------|
