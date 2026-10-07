@@ -15,7 +15,6 @@
   "dependencies": {
     "@omni/channel-sdk": "workspace:*",
     "@omni/core": "workspace:*",
-    "zod": "^3.25.76",
     "@omni/channel-zapi-web": "workspace:*"
   },
   "devDependencies": {

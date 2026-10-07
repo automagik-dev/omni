@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
 
-export const MAX_BODY_BYTES = 2 * 1024 * 1024;
+const MAX_BODY_BYTES = 2 * 1024 * 1024;
 export async function readBody(request: Request): Promise<Buffer> {
   const reader = request.body?.getReader();
   if (!reader) return Buffer.alloc(0);

@@ -1086,7 +1086,7 @@ function slackAppTokenConflictBody(other: { id: string; name: string }) {
 }
 
 /** Keep channel/config combinations valid before persisting or connecting. */
-export function validZapiBinding(channel: string, config: ZapiConfig | null | undefined): boolean {
+function validZapiBinding(channel: string, config: ZapiConfig | null | undefined): boolean {
   if (channel === 'zapi-web') return config?.driver === 'web';
   if (channel === 'zapi-omni') return config?.driver === 'omni';
   return config == null;

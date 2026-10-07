@@ -52,9 +52,7 @@
     "hono": "^4.6.17",
     "lru-cache": "^11.2.6",
     "nats": "^2.29.3",
-    "zod": "^3.24.1",
-    "@omni/channel-zapi-web": "workspace:*",
-    "@omni/channel-zapi-omni": "workspace:*"
+    "zod": "^3.24.1"
   },
   "devDependencies": {
     "@omni/channel-a2a": "workspace:*",
