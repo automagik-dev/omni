@@ -44,6 +44,7 @@ export type {
   HealthResponse,
   PaginationMeta,
   Channel,
+  EvolutionConfig,
   ZapiConfig,
   PaginatedResponse,
   ListInstancesParams,

@@ -1,6 +1,6 @@
 {
   "name": "@omni/channel-zapi-omni",
-  "version": "2.260930.4",
+  "version": "2.261006.2",
   "type": "module",
   "license": "Apache-2.0",
   "main": "src/index.ts",

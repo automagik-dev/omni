@@ -35,6 +35,7 @@ import {
   ErrorCode as DiscordErrorCode,
   DiscordPlugin,
 } from '../../../channel-discord/src/index';
+import { EvolutionError, EvolutionPlugin, evolutionCapabilities } from '../../../channel-evolution-api/src/index';
 // Use relative imports to avoid circular workspace dependencies
 // (channel packages depend on channel-sdk; adding them as devDeps creates a turbo cycle)
 import { HERMES_CAPABILITIES, HermesApiError, HermesErrorCode, HermesPlugin } from '../../../channel-hermes/src/index';
@@ -87,6 +88,18 @@ function channelPath(channel: string, ...segments: string[]): string {
 }
 
 const channels: ChannelDescriptor[] = [
+  {
+    name: 'evolution-api',
+    packageName: '@omni/channel-evolution-api',
+    pluginClass: EvolutionPlugin as unknown as typeof BaseChannelPlugin,
+    errorClass: EvolutionError,
+    capabilities: evolutionCapabilities,
+    pluginSourcePath: channelPath('evolution-api', 'plugin.ts'),
+    handlerSourcePaths: [channelPath('evolution-api', 'webhook.ts')],
+    errorSourcePath: channelPath('evolution-api', 'client.ts'),
+    urlOnlyMedia: true,
+    claimedIngress: true,
+  },
   ...(['zapi-web', 'zapi-omni'] as const).map((name) => ({
     name,
     packageName: `@omni/channel-${name}`,
@@ -263,6 +276,7 @@ const REQUIRED_BOOLEAN_FIELDS: (keyof ChannelCapabilities)[] = [
 ];
 
 const errorConstructorArgs: Record<string, unknown[]> = {
+  'evolution-api': ['EVOLUTION_HTTP_500', 'compliance test'],
   'zapi-web': ['ZAPI_HTTP_500', 'compliance test'],
   'zapi-omni': ['ZAPI_HTTP_500', 'compliance test'],
   'asc-flow': [AscFlowErrorCode.INVALID_REQUEST, 'compliance test'],
@@ -285,6 +299,7 @@ describe('SDK compliance test infrastructure', () => {
       'asc',
       'asc-flow',
       'discord',
+      'evolution-api',
       'hermes',
       'slack',
       'telegram',

@@ -284,6 +284,12 @@ const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
       'connection state; the outcome is read through the authenticated GET /api/v2/slack/oauth/result/:nonce.',
   },
   {
+    route: 'POST /api/v2/channels/evolution-api/:instanceId/webhook',
+    class: 'public-by-contract',
+    justification:
+      'Vendor callback authenticated with independent instance-held x-webhook-token; server binding supplies tenant, payload instance must match. Acknowledgement only; provider API key is never persisted from the callback.',
+  },
+  {
     route: 'POST /api/v2/channels/zapi-web/:instanceId/webhook',
     class: 'public-by-contract',
     justification:

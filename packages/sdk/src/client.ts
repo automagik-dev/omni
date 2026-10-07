@@ -86,13 +86,17 @@ export interface ChatParticipant {
 }
 
 /** Credentials are write-only; instance responses never expose this configuration. */
+export type EvolutionConfig = NonNullable<components['schemas']['CreateInstanceRequest']['evolutionConfig']>;
 export type ZapiConfig = NonNullable<components['schemas']['CreateInstanceRequest']['zapiConfig']>;
 
 // Channel identifiers are generated from the server schema.
 export type Channel = components['schemas']['Instance']['channel'];
 
 /** Instance responses omit write-only provider credentials. */
-export type UpdateInstanceBody = Partial<Instance> & { zapiConfig?: ZapiConfig | null };
+export type UpdateInstanceBody = Partial<Instance> & {
+  zapiConfig?: ZapiConfig | null;
+  evolutionConfig?: EvolutionConfig | null;
+};
 
 // Paginated response helper
 export interface PaginatedResponse<T> {
@@ -294,6 +298,7 @@ export interface CreateInstanceBody {
   channel: Channel;
   agentProviderId?: string;
   agentId?: string;
+  evolutionConfig?: EvolutionConfig;
   zapiConfig?: ZapiConfig;
   twilioAccountSid?: string;
   twilioAuthToken?: string;
@@ -1086,6 +1091,7 @@ export interface ConnectInstanceBody {
   forceNewQr?: boolean;
   /** Override the shared-Slack-app-token refusal (#1185) */
   force?: boolean;
+  evolutionConfig?: EvolutionConfig;
   zapiConfig?: ZapiConfig;
   twilioAccountSid?: string;
   twilioAuthToken?: string;

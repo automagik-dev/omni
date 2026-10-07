@@ -81,6 +81,7 @@ const EGRESS_SCAN_ROOTS = [
   'packages/channel-telegram/src',
   'packages/channel-gupshup/src',
   'packages/channel-twilio-whatsapp/src',
+  'packages/channel-evolution-api/src',
   'packages/channel-zapi-web/src',
   'packages/channel-zapi-omni/src',
   'packages/channel-whatsapp/src',
@@ -405,6 +406,13 @@ export const REGISTERED_EGRESS: readonly RegisteredEgress[] = [
       'Hard-coded vendor endpoints for the response gate: Google generativelanguage (Gemini) and the OpenAI ' +
       'chat completions base URL. The OpenAI base URL comes from the platform-level `gate.openai.base_url` ' +
       'setting, which is operator-set, not tenant input.',
+  },
+  {
+    file: 'packages/channel-evolution-api/src/client.ts',
+    class: 'platform-vendor',
+    sites: 1,
+    justification:
+      'HTTPS origins require exact platform-operator allowlisting in OMNI_EVOLUTION_ALLOWED_ORIGINS; credentials cannot be redirected, paths encode the instance name.',
   },
   {
     file: 'packages/channel-zapi-web/src/client.ts',

@@ -99,6 +99,13 @@ function sealInstanceCredentials<T extends Record<string, unknown>>(tenantId: st
     if (typeof value !== 'string') continue;
     out[column] = sealCredentialField(tenantId, value);
   }
+  if (out.evolutionConfig && typeof out.evolutionConfig === 'object') {
+    const config = { ...(out.evolutionConfig as Record<string, unknown>) };
+    for (const key of ['apiKey', 'webhookToken']) {
+      if (typeof config[key] === 'string') config[key] = sealCredentialField(tenantId, config[key] as string);
+    }
+    out.evolutionConfig = config;
+  }
   if (out.zapiConfig && typeof out.zapiConfig === 'object') {
     const config = { ...(out.zapiConfig as Record<string, unknown>) };
     for (const key of ['instanceToken', 'clientToken', 'webhookToken', 'secretKey', 'signingSecret']) {
@@ -111,6 +118,7 @@ function sealInstanceCredentials<T extends Record<string, unknown>>(tenantId: st
 
 /** Does `data` actually carry a credential column a seal could reshape? */
 function hasSealableCredential(data: Record<string, unknown>): boolean {
+  if (data.evolutionConfig && typeof data.evolutionConfig === 'object') return true;
   if (data.zapiConfig && typeof data.zapiConfig === 'object') return true;
   return SEALED_CREDENTIAL_COLUMNS.some((column) => {
     const value = data[column];
@@ -144,7 +152,19 @@ function openInstanceCredentials<T extends { tenantId?: string | null }>(row: T)
     copy ??= { ...row };
     copy.zapiConfig = config;
   }
-  return (copy ?? row) as T;
+  return openEvolutionCredentials(tenantId, (copy ?? row) as Record<string, unknown>) as T;
+}
+
+function openEvolutionCredentials(tenantId: string | null, row: Record<string, unknown>): Record<string, unknown> {
+  const rawEvolutionConfig = row.evolutionConfig;
+  if (rawEvolutionConfig && typeof rawEvolutionConfig === 'object') {
+    const config = { ...(rawEvolutionConfig as Record<string, unknown>) };
+    for (const key of ['apiKey', 'webhookToken']) {
+      if (typeof config[key] === 'string') config[key] = openCredentialField(tenantId, config[key] as string);
+    }
+    return { ...row, evolutionConfig: config };
+  }
+  return row;
 }
 
 /** Open a batch of loaded rows. Identity when nothing in the batch is sealed. */

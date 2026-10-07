@@ -11,6 +11,7 @@ import { type ChannelPlugin, channelRegistry } from '@omni/channel-sdk';
 import ascPlugin from '@omni/channel-asc';
 import ascFlowPlugin from '@omni/channel-asc-flow';
 import discordPlugin from '@omni/channel-discord';
+import evolutionPlugin from '@omni/channel-evolution-api';
 import gupshupPlugin from '@omni/channel-gupshup';
 import harnessPlugin from '@omni/channel-harness';
 import hermesPlugin from '@omni/channel-hermes';
@@ -29,6 +30,7 @@ for (const plugin of [
   discordPlugin,
   whatsappPlugin,
   whatsappBusinessPlugin,
+  evolutionPlugin,
   zapiWebPlugin,
   zapiOmniPlugin,
   slackPlugin,

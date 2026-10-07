@@ -16,7 +16,7 @@ import { type NormalizedContent, type NormalizedEvent, normalizeOmni, normalizeW
 export class ZapiWebPlugin extends BaseChannelPlugin {
   readonly id: ChannelType = 'zapi-web';
   readonly name: string = 'Z-API Web';
-  readonly version = '2.260930.4';
+  readonly version = '2.261006.2';
   readonly capabilities = zapiCapabilities(false);
   protected readonly connections = new Map<
     string,

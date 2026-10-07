@@ -190,6 +190,7 @@ function applySlackOptions(
 
 /** Build channel-specific connection options from instance DB fields */
 export function buildInstanceConnectOptions(instance: {
+  evolutionConfig?: import('@omni/core').EvolutionConfig | null;
   zapiConfig?: import('@omni/core').ZapiConfig | null;
   channel: string;
   telegramBotToken?: string | null;
@@ -246,6 +247,7 @@ export function buildInstanceConnectOptions(instance: {
   if (instance.channel === 'gupshup') {
     applyGupshupOptions(options, instance);
   }
+  if (instance.channel === 'evolution-api') options.evolutionConfig = instance.evolutionConfig;
   if (instance.channel === 'zapi-web' || instance.channel === 'zapi-omni') options.zapiConfig = instance.zapiConfig;
   if (instance.channel === 'twilio-whatsapp') {
     applyTwilioWhatsAppOptions(options, instance);

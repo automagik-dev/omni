@@ -1,8 +1,4 @@
-# Z-API no Omni — integração local para Kelvin
-
-Branch: `codex/z-api-channels`, baseada no `dev` upstream em
-`02c9f49a73941b7733d29bbaf739fd556ea4233a`. Esta implementação não cria um fork remoto,
-não publica PR e não altera o runtime do Kelvin.
+# Z-API adapters for Omni
 
 ## Contrato único, duas conexões
 
@@ -11,7 +7,7 @@ não publica PR e não altera o runtime do Kelvin.
   Z-API Omni é o fornecedor; Omni/automagik é este gateway. São produtos distintos.
 
 Ambos implementam `ChannelPlugin`, recebem `OutgoingMessage` e publicam os eventos
-normalizados do gateway. Kelvin poderá consumir a mesma API e o mesmo journal,
+normalizados do gateway. Clientes usam a mesma API e o mesmo journal,
 alterando somente a instância selecionada. O código compartilhado fica em
 `@omni/channel-zapi-web`; o plugin oficial especializa o driver e as capacidades.
 
@@ -46,8 +42,8 @@ Pela UI, selecionar Z-API Web ou Z-API Official em Create Instance e preencher o
 campos. Pela CLI, carregar um arquivo JSON fora do repositório:
 
 ```sh
-omni instances create --name kelvin-zapi --channel zapi-web --zapi-config-file /caminho/seguro/zapi-web.json
-omni instances connect kelvin-zapi
+omni instances create --name example-zapi --channel zapi-web --zapi-config-file /caminho/seguro/zapi-web.json
+omni instances connect example-zapi
 ```
 
 Formato Web (valores ilustrativos; substituir):
@@ -173,11 +169,9 @@ plugins, SDK, CLI e UI passaram; lint dos arquivos alterados, contrato de migrat
 e versões passaram. Builds do SDK e do servidor empacotado passaram.
 
 Não foi aplicada migration a um banco nem feita chamada autenticada ao fornecedor.
-Antes de ativar para o Kelvin: homologar com instância e canal de teste, confirmar
-payloads reais e recursos habilitados na conta, parear Web, testar recebimento,
-resposta, delivery/read, templates e reinício. Depois integrar o cliente HTTP/eventos
-do Kelvin a este gateway e habilitar por cliente; o Maglink continua no legado até
-sua migração explícita.
+Antes de ativar: homologar com instância e canal de teste, confirmar
+payloads reais e recursos habilitados na conta, parear Web e testar recebimento,
+resposta, delivery/read, templates e reinício.
 
 Fontes oficiais consultadas em 2026-10-05:
 - [Z-API Web — índice de endpoints](https://developer.z-api.io/llms.txt)

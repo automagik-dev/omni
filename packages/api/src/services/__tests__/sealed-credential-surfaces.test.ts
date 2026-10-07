@@ -100,6 +100,31 @@ function makeInstancesDb() {
 }
 
 describe('(g) instances.* channel tokens', () => {
+  test('Evolution keys seal under persisted tenant, rotate and fail closed under another tenant', async () => {
+    setTenantSecretMasterKey(MASTER_KEY);
+    const { db, rows } = makeInstancesDb();
+    const svc = new InstanceService(db, null);
+    const config = {
+      baseUrl: 'https://evolution.example.com',
+      instanceName: 'vendor',
+      apiKey: 'api-key-123456789012345',
+      webhookToken: 'webhook-token-1234567890123456789012345',
+    };
+    const created = await inTenantScope(db, TENANT_A, () =>
+      svc.create({ name: 'e', channel: 'evolution-api', tenantId: TENANT_A, evolutionConfig: config } as never),
+    );
+    const stored = rows[0]?.evolutionConfig as Record<string, unknown>;
+    expect(isSealedCredentialField(stored.apiKey)).toBe(true);
+    expect(isSealedCredentialField(stored.webhookToken)).toBe(true);
+    expect(JSON.stringify(rows[0])).not.toContain(config.apiKey);
+    expect(created.evolutionConfig).toEqual(config);
+    const rotated = { ...config, apiKey: 'rotated-api-key-1234567890' };
+    await inTenantScope(db, TENANT_A, () => svc.update('inst-1', { evolutionConfig: rotated } as never));
+    expect((await inTenantScope(db, TENANT_A, () => svc.getById('inst-1'))).evolutionConfig).toEqual(rotated);
+    rows[0]!.tenantId = TENANT_B;
+    expect((await inTenantScope(db, TENANT_B, () => svc.getById('inst-1'))).evolutionConfig?.apiKey).toBeNull();
+  });
+
   test('nested Z-API credentials are sealed for their tenant without mutating input', async () => {
     setTenantSecretMasterKey(MASTER_KEY);
     const { db, rows } = makeInstancesDb();

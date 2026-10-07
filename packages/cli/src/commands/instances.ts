@@ -23,7 +23,7 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { ZapiConfigSchema } from '@omni/core';
+import { EvolutionConfigSchema, ZapiConfigSchema } from '@omni/core';
 import type { Channel, WhatsAppPasskeyCredential } from '@omni/sdk';
 import { Command, Option } from 'commander';
 import qrcode from 'qrcode-terminal';
@@ -40,6 +40,7 @@ const VALID_CHANNELS: Channel[] = [
   'a2a',
   'gupshup',
   'twilio-whatsapp',
+  'evolution-api',
   'zapi-web',
   'zapi-omni',
   'hermes',
@@ -161,6 +162,22 @@ export function readZapiConfig(path: string) {
   return parsed.data;
 }
 
+function readEvolutionConfig(path: string) {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(path, 'utf8'));
+  } catch {
+    throw new Error('Cannot read Evolution configuration JSON file');
+  }
+  const parsed = EvolutionConfigSchema.safeParse(raw);
+  if (!parsed.success) throw new Error('Invalid Evolution configuration: check origin and required credential fields');
+  return parsed.data;
+}
+
+function readOptionalEvolutionConfig(path?: string) {
+  return path ? readEvolutionConfig(path) : undefined;
+}
+
 function readOptionalZapiConfig(path?: string) {
   return path ? readZapiConfig(path) : undefined;
 }
@@ -174,6 +191,8 @@ function applyMiscFields(body: Record<string, unknown>, opts: Record<string, unk
   setBool(body, 'syncFullHistory', opts.syncFullHistory);
   setVal(body, 'accessMode', opts.accessMode);
   setVal(body, 'token', opts.token);
+  if (typeof opts.evolutionConfigFile === 'string')
+    body.evolutionConfig = readEvolutionConfig(opts.evolutionConfigFile);
   if (typeof opts.zapiConfigFile === 'string') body.zapiConfig = readZapiConfig(opts.zapiConfigFile);
   setVal(body, 'telegramBotToken', opts.telegramToken);
   setVal(body, 'discordBotToken', opts.discordToken);
@@ -513,6 +532,7 @@ export function createInstancesCommand(): Command {
       (v) => Number.parseInt(v, 10),
     )
     // Channel tokens
+    .option('--evolution-config-file <path>', 'Evolution API credentials JSON file')
     .option('--zapi-config-file <path>', 'Z-API credentials JSON file (web or omni driver)')
     .option('--token <token>', 'Generic bot token (auto-resolves to channel-specific field)')
     .option('--telegram-token <token>', 'Telegram bot token')
@@ -834,6 +854,7 @@ export function createInstancesCommand(): Command {
     .description('Connect an instance')
     .option('--force-new-qr', 'Force generation of new QR code')
     .option('--force', 'Proceed even if another active Slack instance uses the same app token')
+    .option('--evolution-config-file <path>', 'Evolution API credentials JSON file')
     .option('--zapi-config-file <path>', 'Z-API credentials JSON file (web or omni driver)')
     .option('--token <token>', 'Discord bot token (for Discord instances)')
     .option('--twilio-account-sid <sid>', 'Twilio Account SID')
@@ -859,6 +880,7 @@ export function createInstancesCommand(): Command {
           forceNewQr?: boolean;
           force?: boolean;
           token?: string;
+          evolutionConfigFile?: string;
           zapiConfigFile?: string;
           twilioAccountSid?: string;
           twilioAuthToken?: string;
@@ -931,6 +953,7 @@ export function createInstancesCommand(): Command {
             forceNewQr: options.forceNewQr,
             force: options.force,
             token: options.token,
+            evolutionConfig: readOptionalEvolutionConfig(options.evolutionConfigFile),
             zapiConfig: readOptionalZapiConfig(options.zapiConfigFile),
             twilioAccountSid: options.twilioAccountSid,
             twilioAuthToken: options.twilioAuthToken,
@@ -1221,6 +1244,7 @@ export function createInstancesCommand(): Command {
       (v) => Number.parseInt(v, 10),
     )
     // Channel tokens
+    .option('--evolution-config-file <path>', 'Evolution API credentials JSON file')
     .option('--zapi-config-file <path>', 'Z-API credentials JSON file (web or omni driver)')
     .option('--token <token>', 'Generic bot token (auto-resolves to channel-specific field)')
     .option('--telegram-token <token>', 'Telegram bot token (use "null" to clear)')

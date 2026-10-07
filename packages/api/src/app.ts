@@ -487,6 +487,12 @@ export function createApp(
     return app.fetch(new Request(url.toString(), c.req.raw), c.env);
   });
 
+  app.post('/api/v2/channels/evolution-api/:instanceId/webhook', async (c) => {
+    const plugin = c.get('channelRegistry')?.get('evolution-api');
+    if (!plugin?.handleWebhook) return c.json({ error: { code: 'PLUGIN_NOT_FOUND' } }, 503);
+    return plugin.handleWebhook(c.req.raw);
+  });
+
   app.post('/api/v2/channels/zapi-web/:instanceId/webhook', async (c) => {
     const plugin = c.get('channelRegistry')?.get('zapi-web');
     if (!plugin?.handleWebhook) return c.json({ error: { code: 'PLUGIN_NOT_FOUND' } }, 503);

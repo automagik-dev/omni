@@ -49,6 +49,7 @@ export const channelTypes = [
   'asc',
   'asc-flow',
   'twilio-whatsapp',
+  'evolution-api',
   'zapi-web',
   'zapi-omni',
   'internal',
@@ -806,6 +807,7 @@ export const instances = pgTable(
     twilioAccountSid: varchar('twilio_account_sid', { length: 34 }),
     twilioAuthToken: text('twilio_auth_token'),
     // Secrets follow existing channel credential storage; never returned by API.
+    evolutionConfig: jsonb('evolution_config').$type<import('@omni/core').EvolutionConfig>(),
     zapiConfig: jsonb('zapi_config').$type<import('@omni/core').ZapiConfig>(),
     twilioFrom: varchar('twilio_from', { length: 64 }),
     twilioMessagingServiceSid: varchar('twilio_messaging_service_sid', { length: 34 }),

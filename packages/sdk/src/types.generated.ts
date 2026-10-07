@@ -3429,7 +3429,7 @@ export interface components {
              * @description Channel type
              * @enum {string}
              */
-            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "zapi-web" | "zapi-omni" | "internal" | "harness";
+            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "evolution-api" | "zapi-web" | "zapi-omni" | "internal" | "harness";
             /** @description Whether instance is active */
             isActive: boolean;
             /** @description Whether this is the default instance for channel */
@@ -3613,7 +3613,7 @@ export interface components {
              * @description Channel type
              * @enum {string}
              */
-            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "zapi-web" | "zapi-omni" | "internal" | "harness";
+            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "evolution-api" | "zapi-web" | "zapi-omni" | "internal" | "harness";
             /**
              * Format: uuid
              * @description Agent UUID (agents table)
@@ -3638,6 +3638,14 @@ export interface components {
             isDefault: boolean;
             /** @description Bot token for Discord instances */
             token?: string;
+            /** @description Write-only Evolution API connection credentials */
+            evolutionConfig?: {
+                /** Format: uri */
+                baseUrl: string;
+                instanceName: string;
+                apiKey: string;
+                webhookToken: string;
+            };
             /** @description Write-only Z-API credentials matching the channel driver */
             zapiConfig?: {
                 /** @enum {string} */
@@ -3856,6 +3864,14 @@ export interface components {
         ConnectInstanceRequest: {
             /** @description Bot token for Discord instances */
             token?: string;
+            /** @description Write-only Evolution API connection credentials */
+            evolutionConfig?: {
+                /** Format: uri */
+                baseUrl: string;
+                instanceName: string;
+                apiKey: string;
+                webhookToken: string;
+            };
             /** @description Write-only Z-API credentials matching the channel driver */
             zapiConfig?: {
                 /** @enum {string} */
@@ -3890,7 +3906,7 @@ export interface components {
              * @description Channel type ID
              * @enum {string}
              */
-            id: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "zapi-web" | "zapi-omni" | "internal" | "harness";
+            id: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "evolution-api" | "zapi-web" | "zapi-omni" | "internal" | "harness";
             /** @description Human-readable channel name */
             name: string;
             /** @description Plugin version */
@@ -8857,7 +8873,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "zapi-web" | "zapi-omni" | "internal" | "harness";
+                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "evolution-api" | "zapi-web" | "zapi-omni" | "internal" | "harness";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -9061,7 +9077,7 @@ export interface operations {
                      * @description Channel type
                      * @enum {string}
                      */
-                    channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "zapi-web" | "zapi-omni" | "internal" | "harness";
+                    channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "evolution-api" | "zapi-web" | "zapi-omni" | "internal" | "harness";
                     /**
                      * Format: uuid
                      * @description Agent UUID (agents table)
@@ -9086,6 +9102,14 @@ export interface operations {
                     isDefault?: boolean;
                     /** @description Bot token for Discord instances */
                     token?: string;
+                    /** @description Write-only Evolution API connection credentials */
+                    evolutionConfig?: {
+                        /** Format: uri */
+                        baseUrl: string;
+                        instanceName: string;
+                        apiKey: string;
+                        webhookToken: string;
+                    };
                     /** @description Write-only Z-API credentials matching the channel driver */
                     zapiConfig?: {
                         /** @enum {string} */
@@ -9274,7 +9298,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "zapi-web" | "zapi-omni" | "internal" | "harness";
+                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "evolution-api" | "zapi-web" | "zapi-omni" | "internal" | "harness";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -9498,7 +9522,7 @@ export interface operations {
                              * @description Channel type ID
                              * @enum {string}
                              */
-                            id: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "zapi-web" | "zapi-omni" | "internal" | "harness";
+                            id: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "evolution-api" | "zapi-web" | "zapi-omni" | "internal" | "harness";
                             /** @description Human-readable channel name */
                             name: string;
                             /** @description Plugin version */
@@ -9547,7 +9571,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "zapi-web" | "zapi-omni" | "internal" | "harness";
+                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "evolution-api" | "zapi-web" | "zapi-omni" | "internal" | "harness";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -9816,7 +9840,7 @@ export interface operations {
                      * @description Channel type
                      * @enum {string}
                      */
-                    channel?: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "zapi-web" | "zapi-omni" | "internal" | "harness";
+                    channel?: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "evolution-api" | "zapi-web" | "zapi-omni" | "internal" | "harness";
                     /**
                      * Format: uuid
                      * @description Agent UUID (agents table)
@@ -9841,6 +9865,14 @@ export interface operations {
                     isDefault?: boolean;
                     /** @description Bot token for Discord instances */
                     token?: string;
+                    /** @description Write-only Evolution API connection credentials */
+                    evolutionConfig?: {
+                        /** Format: uri */
+                        baseUrl: string;
+                        instanceName: string;
+                        apiKey: string;
+                        webhookToken: string;
+                    };
                     /** @description Write-only Z-API credentials matching the channel driver */
                     zapiConfig?: {
                         /** @enum {string} */
@@ -10029,7 +10061,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "zapi-web" | "zapi-omni" | "internal" | "harness";
+                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "evolution-api" | "zapi-web" | "zapi-omni" | "internal" | "harness";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -10474,6 +10506,14 @@ export interface operations {
                 "application/json": {
                     /** @description Bot token for Discord instances */
                     token?: string;
+                    /** @description Write-only Evolution API connection credentials */
+                    evolutionConfig?: {
+                        /** Format: uri */
+                        baseUrl: string;
+                        instanceName: string;
+                        apiKey: string;
+                        webhookToken: string;
+                    };
                     /** @description Write-only Z-API credentials matching the channel driver */
                     zapiConfig?: {
                         /** @enum {string} */
