@@ -140,7 +140,8 @@ export async function readSelfMessages(
   const rows = await db
     .select({ event: omniEvents, source: messages.source })
     .from(omniEvents)
-    .leftJoin(messages, eq(messages.originalEventId, omniEvents.id))
+    .innerJoin(chats, and(eq(chats.instanceId, omniEvents.instanceId), eq(chats.externalId, omniEvents.chatId)))
+    .innerJoin(messages, and(eq(messages.chatId, chats.id), eq(messages.externalId, omniEvents.externalId)))
     .where(
       and(
         eq(omniEvents.instanceId, instanceId),
@@ -149,6 +150,8 @@ export async function readSelfMessages(
         eq(omniEvents.contentType, 'text'),
         eq(messages.source, 'realtime'),
         eq(messages.isFromMe, true),
+        isNull(chats.deletedAt),
+        isNull(messages.deletedAt),
         isNotNull(omniEvents.externalId),
         gte(omniEvents.receivedAt, new Date(input.after)),
         lte(omniEvents.receivedAt, new Date(input.before)),
@@ -161,7 +164,8 @@ export async function readSelfMessages(
   const older = await db
     .select({ id: omniEvents.id })
     .from(omniEvents)
-    .leftJoin(messages, eq(messages.originalEventId, omniEvents.id))
+    .innerJoin(chats, and(eq(chats.instanceId, omniEvents.instanceId), eq(chats.externalId, omniEvents.chatId)))
+    .innerJoin(messages, and(eq(messages.chatId, chats.id), eq(messages.externalId, omniEvents.externalId)))
     .where(
       and(
         eq(omniEvents.instanceId, instanceId),
@@ -170,6 +174,8 @@ export async function readSelfMessages(
         eq(omniEvents.contentType, 'text'),
         eq(messages.source, 'realtime'),
         eq(messages.isFromMe, true),
+        isNull(chats.deletedAt),
+        isNull(messages.deletedAt),
         isNotNull(omniEvents.externalId),
         gte(omniEvents.receivedAt, new Date(input.connectionStartedAt)),
         lt(omniEvents.receivedAt, new Date(input.after)),
@@ -198,7 +204,7 @@ export async function readOwnedChats(db: Database, plugin: SelfPlugin, instanceI
   const rows = await db
     .select({ id: chats.id, name: chats.name })
     .from(chats)
-    .where(and(eq(chats.instanceId, instanceId), cursor ? gt(chats.id, cursor) : undefined))
+    .where(and(eq(chats.instanceId, instanceId), isNull(chats.deletedAt), cursor ? gt(chats.id, cursor) : undefined))
     .orderBy(asc(chats.id))
     .limit(26);
   verifySelf(plugin, instanceId, { expectedOwner: identity.ownerIdentifier, expectedGeneration: identity.generation });
@@ -245,6 +251,7 @@ export async function readOwnedHistory(
       and(
         eq(chats.id, input.chatId),
         eq(chats.instanceId, instanceId),
+        isNull(chats.deletedAt),
         isNull(messages.deletedAt),
         gte(messages.platformTimestamp, new Date(input.after)),
         lte(messages.platformTimestamp, new Date(input.before)),
@@ -256,7 +263,7 @@ export async function readOwnedHistory(
   const [chat] = await db
     .select({ id: chats.id })
     .from(chats)
-    .where(and(eq(chats.id, input.chatId), eq(chats.instanceId, instanceId)))
+    .where(and(eq(chats.id, input.chatId), eq(chats.instanceId, instanceId), isNull(chats.deletedAt)))
     .limit(1);
   if (!chat) throw new Error('Selected chat unavailable');
   verifySelf(plugin, instanceId, input);

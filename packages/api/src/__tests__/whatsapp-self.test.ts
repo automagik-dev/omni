@@ -1,14 +1,17 @@
+import { Database as SQLite } from 'bun:sqlite';
 import { describe, expect, mock, spyOn, test } from 'bun:test';
 import type { EventBus, OmniEvent as NativeEvent } from '@omni/core';
 import type { Database, OmniEvent } from '@omni/db';
+import { chats, messages, omniEvents } from '@omni/db';
 import { proto } from 'baileys';
 import type { WASocket } from 'baileys';
-import type { SQL } from 'drizzle-orm';
-import { PgDialect } from 'drizzle-orm/pg-core';
+import { type SQL, getTableColumns, getTableName, sql } from 'drizzle-orm';
+import { type PgColumn, PgDialect, type PgTable } from 'drizzle-orm/pg-core';
 import { Hono } from 'hono';
 import { scopeEnforcerMiddleware } from '../middleware/scope-enforcer';
 import { setupEventPersistence } from '../plugins/event-persistence';
 import { setupMessagePersistence } from '../plugins/message-persistence';
+import { openApiSpec } from '../routes/openapi';
 import { instancesRoutes } from '../routes/v2/instances';
 import { messagesRoutes } from '../routes/v2/messages';
 import { SelfHistorySchema, SelfMessagesSchema, SendSelfSchema } from '../schemas/openapi/instances';
@@ -17,6 +20,8 @@ import {
   type SelfPlugin,
   boundHistory,
   projectSelfEvent,
+  readOwnedChats,
+  readOwnedHistory,
   readSelfMessages,
   readSelfReceipt,
   verifySelf,
@@ -156,6 +161,9 @@ describe('closed native self API', () => {
       leftJoin() {
         return this;
       },
+      innerJoin() {
+        return this;
+      },
       from() {
         return this;
       },
@@ -225,6 +233,9 @@ test('rolling inbox proof tolerates transport delay at seven days and blocks sta
         return this;
       },
       leftJoin() {
+        return this;
+      },
+      innerJoin() {
         return this;
       },
       orderBy() {
@@ -587,6 +598,9 @@ test('native protobuf timestamps before original authentication or after sampled
       leftJoin() {
         return this;
       },
+      innerJoin() {
+        return this;
+      },
       where() {
         return this;
       },
@@ -610,5 +624,314 @@ test('native protobuf timestamps before original authentication or after sampled
     expect(page.items.every((row) => row.receivedAt === endpoint)).toBe(true);
   } finally {
     clock.mockRestore();
+  }
+});
+
+/** Runs the service's real Drizzle joins/predicates against disposable, fictional rows. */
+function persistedSelfFixture() {
+  const sqlite = new SQLite(':memory:');
+  const events = new Map<string, OmniEvent>();
+  const dialect = new PgDialect();
+  const scalar = (value: unknown) =>
+    value instanceof Date ? value.toISOString() : typeof value === 'boolean' ? Number(value) : (value ?? null);
+  for (const table of [chats, messages, omniEvents]) {
+    const columns = Object.values(getTableColumns(table)).map((column) => `"${column.name}"`);
+    sqlite.exec(`create table "${getTableName(table)}" (${columns.join(', ')})`);
+  }
+  function insert(table: PgTable, row: Record<string, unknown>) {
+    const columns = getTableColumns(table);
+    const fields = Object.entries(row).filter(([key, value]) => columns[key] && value !== undefined);
+    const names = fields.map(([key]) => `"${columns[key]?.name}"`).join(', ');
+    const values = fields.map(([, value]) =>
+      scalar(value !== null && typeof value === 'object' && !(value instanceof Date) ? JSON.stringify(value) : value),
+    );
+    sqlite
+      .query(`insert into "${getTableName(table)}" (${names}) values (${fields.map(() => '?').join(', ')})`)
+      .run(...(values as (string | number | null)[]));
+    if (table === omniEvents) events.set(String(row.id), row as unknown as OmniEvent);
+  }
+  const db = {
+    select(selection?: Record<string, PgColumn | PgTable>) {
+      let table: PgTable;
+      let predicate: SQL;
+      let order: SQL[] = [];
+      const joins: SQL[] = [];
+      return {
+        from(value: PgTable) {
+          table = value;
+          return this;
+        },
+        innerJoin(value: PgTable, condition: SQL) {
+          joins.push(sql`inner join ${value} on ${condition}`);
+          return this;
+        },
+        leftJoin(value: PgTable, condition: SQL) {
+          joins.push(sql`left join ${value} on ${condition}`);
+          return this;
+        },
+        where(value: SQL) {
+          predicate = value;
+          return this;
+        },
+        orderBy(...value: SQL[]) {
+          order = value;
+          return this;
+        },
+        async limit(limit: number) {
+          const fields = Object.entries(selection ?? getTableColumns(table));
+          const projected = fields.map(
+            ([key, value]) => sql`${value === omniEvents ? omniEvents.id : value} as ${sql.identifier(key)}`,
+          );
+          const query = dialect.sqlToQuery(
+            sql`select ${sql.join(projected, sql`, `)} from ${table} ${sql.join(joins, sql` `)} where ${predicate} ${order.length ? sql`order by ${sql.join(order, sql`, `)}` : sql``} limit ${limit}`,
+          );
+          const rows = sqlite
+            .query(query.sql)
+            .all(...(query.params.map(scalar) as (string | number | null)[])) as Record<string, unknown>[];
+          return rows.map((row) =>
+            Object.fromEntries(
+              fields.map(([key, column]) => [
+                key,
+                column === omniEvents
+                  ? events.get(String(row[key]))
+                  : column instanceof Object && 'dataType' in column && column.dataType === 'date' && row[key]
+                    ? new Date(String(row[key]))
+                    : row[key],
+              ]),
+            ),
+          );
+        },
+      };
+    },
+    insert(table: PgTable) {
+      return {
+        values(row: Record<string, unknown>) {
+          return {
+            async onConflictDoUpdate() {
+              insert(table, row);
+            },
+          };
+        },
+      };
+    },
+    update() {
+      return {
+        set() {
+          return { async where() {} };
+        },
+      };
+    },
+  } as unknown as Database;
+  return { db, sqlite, insert };
+}
+
+test('actual received consumers join persisted chat/message identity without originalEventId and retain all inbox fences', async () => {
+  const fixture = persistedSelfFixture();
+  const handlers = new Map<string, ((event: NativeEvent) => Promise<void>)[]>();
+  const bus = {
+    async subscribe(type: string, handler: (event: NativeEvent) => Promise<void>) {
+      handlers.set(type, [...(handlers.get(type) ?? []), handler]);
+    },
+    async subscribePattern() {},
+  } as unknown as EventBus;
+  const endpoint = Math.floor(Date.now() / 1000) * 1000;
+  const marker = new Date(endpoint - 8 * 86400000).toISOString();
+  const lower = new Date(endpoint - 7 * 86400000).toISOString();
+  const input = {
+    ...expected,
+    connectionStartedAt: marker,
+    after: lower,
+    before: new Date(endpoint).toISOString(),
+    excludeExternalIds: [] as string[],
+  };
+  const plugin = { getSelfIdentity: () => ({ ...identity, connectedAt: input.before }) } as unknown as SelfPlugin;
+  const chat = {
+    id: OTHER,
+    instanceId: ID,
+    externalId: OWNER,
+    canonicalId: OWNER,
+    name: 'Fictional self',
+    deletedAt: null,
+  };
+  let unified: Record<string, unknown> = {};
+  fixture.insert(chats, chat);
+  const services = {
+    db: fixture.db,
+    consumerOffsets: {
+      async getOffset() {
+        return null;
+      },
+    },
+    persons: {
+      async findOrCreateIdentity() {
+        return { identity: { id: GEN }, person: { id: GEN }, isNew: false };
+      },
+    },
+    instances: { async updateLastMessageAt() {} },
+    chats: {
+      async findOrCreate() {
+        return { chat, created: false };
+      },
+      async findOrCreateParticipant() {
+        return { participant: { displayName: 'Fictional human' } };
+      },
+      async recordParticipantActivity() {},
+      async updateLastMessage() {},
+    },
+    messages: {
+      async findOrCreate(chatId: string, externalId: string, values: Record<string, unknown>) {
+        unified = { ...values, id: GEN, chatId, externalId, deletedAt: null };
+        fixture.insert(messages, unified);
+        return { message: { id: GEN }, created: false };
+      },
+    },
+  } as unknown as Services;
+  try {
+    await setupMessagePersistence(bus, services);
+    await setupEventPersistence(bus, fixture.db);
+    const callbacks = handlers.get('message.received') ?? [];
+    expect(callbacks).toHaveLength(2);
+    const rawPayload = JSON.parse(
+      JSON.stringify({
+        ...proto.WebMessageInfo.fromObject({
+          key: { fromMe: true, remoteJid: OWNER, id: 'actual-human' },
+          message: { conversation: 'Fictional phone-authored note' },
+          messageTimestamp: endpoint / 1000,
+        }),
+        isFromMe: true,
+      }),
+    );
+    const nativeEvent = {
+      id: ID,
+      type: 'message.received',
+      timestamp: endpoint,
+      payload: {
+        chatId: OWNER,
+        externalId: 'actual-human',
+        from: OWNER.split('@')[0],
+        content: { type: 'text', text: 'Fictional phone-authored note' },
+        rawPayload,
+      },
+      metadata: { instanceId: ID, channelType: 'whatsapp-baileys' },
+    } as NativeEvent;
+    for (const callback of callbacks) await callback(nativeEvent);
+    expect(unified).not.toHaveProperty('originalEventId');
+    expect(fixture.sqlite.query('select original_event_id from messages').get()).toEqual({ original_event_id: null });
+    const inbox = () => readSelfMessages(fixture.db, plugin, ID, input);
+    expect(await inbox()).toMatchObject({ items: [{ externalId: 'actual-human', authority: true }], hasOlder: false });
+    const reset = () => {
+      fixture.sqlite.exec('delete from messages; delete from omni_events; delete from chats');
+      fixture.insert(chats, chat);
+    };
+    const eventRow = {
+      id: ID,
+      instanceId: ID,
+      externalId: 'actual-human',
+      chatId: OWNER,
+      eventType: 'message.received',
+      contentType: 'text',
+      textContent: 'Fictional phone-authored note',
+      receivedAt: new Date(endpoint),
+      metadata: { from: OWNER.split('@')[0] },
+      rawPayload,
+    };
+    for (const [chatChange, messageChange, eventChange] of [
+      [{ instanceId: GEN }, {}, {}],
+      [{ externalId: 'foreign@s.whatsapp.net' }, {}, {}],
+      [{ deletedAt: new Date(endpoint) }, {}, {}],
+      [{}, { chatId: GEN }, {}],
+      [{}, { externalId: 'different-id' }, {}],
+      [{}, { source: 'sync' }, {}],
+      [{}, { isFromMe: false }, {}],
+      [{}, { deletedAt: new Date(endpoint) }, {}],
+      [{}, {}, { instanceId: GEN }],
+      [{}, {}, { chatId: 'foreign@s.whatsapp.net' }],
+      [{}, {}, { eventType: 'message.sent' }],
+      [{}, {}, { contentType: 'image' }],
+      [{}, {}, { receivedAt: new Date(endpoint + 1) }],
+      [{}, {}, { receivedAt: new Date(Date.parse(marker) - 1) }],
+    ]) {
+      reset();
+      fixture.sqlite.exec('delete from chats');
+      fixture.insert(chats, { ...chat, ...chatChange });
+      fixture.insert(messages, { ...unified, ...messageChange });
+      fixture.insert(omniEvents, { ...eventRow, ...eventChange });
+      expect(await inbox()).toEqual({ items: [], hasMore: false, hasOlder: false });
+      if (!('receivedAt' in (eventChange ?? {}))) {
+        fixture.sqlite
+          .query('update omni_events set received_at = ?')
+          .run(new Date(Date.parse(lower) - 1).toISOString());
+        expect(await inbox()).toEqual({ items: [], hasMore: false, hasOlder: false });
+      }
+    }
+    reset();
+    const add = (externalId: string, receivedAt = new Date(endpoint)) => {
+      fixture.insert(messages, { ...unified, externalId });
+      fixture.insert(omniEvents, { ...eventRow, id: externalId, externalId, receivedAt });
+    };
+    add('first');
+    input.excludeExternalIds = ['first'];
+    add('late-equal-time');
+    expect((await inbox()).items.map((row) => row.externalId)).toEqual(['late-equal-time']);
+    add('older-unseen', new Date(Date.parse(lower) - 1));
+    expect((await inbox()).hasOlder).toBe(true);
+    input.excludeExternalIds.push('older-unseen');
+    expect((await inbox()).hasOlder).toBe(false);
+    for (let index = 0; index < 51; index++) add(`bounded-${index}`);
+    const bounded = await inbox();
+    expect(bounded.items).toHaveLength(50);
+    expect(bounded.hasMore).toBe(true);
+  } finally {
+    fixture.sqlite.close();
+  }
+});
+
+test('deleted chats are unavailable to selection/history and generated cursor remains a strict UUID query', async () => {
+  const fixture = persistedSelfFixture();
+  const plugin = { getSelfIdentity: () => identity } as unknown as SelfPlugin;
+  try {
+    fixture.insert(chats, {
+      id: ID,
+      instanceId: ID,
+      externalId: OWNER,
+      name: 'Fictional deleted',
+      deletedAt: new Date(),
+    });
+    fixture.insert(chats, {
+      id: OTHER,
+      instanceId: ID,
+      externalId: 'foreign-chat',
+      name: 'Fictional retained',
+      deletedAt: null,
+    });
+    fixture.insert(messages, {
+      id: GEN,
+      chatId: ID,
+      externalId: 'deleted-chat-text',
+      textContent: 'Fictional deleted text',
+      platformTimestamp: new Date(before),
+      isFromMe: true,
+      deletedAt: null,
+    });
+    expect(await readOwnedChats(fixture.db, plugin, ID)).toEqual({
+      items: [{ id: OTHER, name: 'Fictional retained' }],
+      meta: { hasMore: false, cursor: null },
+    });
+    expect((await readOwnedChats(fixture.db, plugin, ID, OTHER)).items).toEqual([]);
+    await expect(readOwnedHistory(fixture.db, plugin, ID, { ...expected, chatId: ID, after, before })).rejects.toThrow(
+      'Selected chat unavailable',
+    );
+    expect(
+      (await readOwnedHistory(fixture.db, plugin, ID, { ...expected, chatId: OTHER, after, before })).items,
+    ).toEqual([]);
+    const parameters = openApiSpec.paths?.['/instances/{id}/self/chats']?.get?.parameters ?? [];
+    expect(parameters).toContainEqual({
+      name: 'cursor',
+      in: 'query',
+      required: false,
+      schema: { type: 'string', format: 'uuid' },
+    });
+  } finally {
+    fixture.sqlite.close();
   }
 });

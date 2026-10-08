@@ -372,6 +372,7 @@ export function registerInstanceSchemas(registry: OpenAPIRegistry): void {
       tags: ['WhatsApp self'],
       request: {
         ...(path.includes('{id}') ? { params: pathId } : {}),
+        ...(method === 'get' && path === '/instances/{id}/self/chats' ? { query: SelfChatsSchema } : {}),
         ...(method === 'post' ? { body: { content: { 'application/json': { schema } } } } : {}),
       },
       responses: {
