@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from 'bun:test';
+import { describe, expect, mock, spyOn, test } from 'bun:test';
 import type { EventBus, OmniEvent as NativeEvent } from '@omni/core';
 import type { Database, OmniEvent } from '@omni/db';
 import type { SQL } from 'drizzle-orm';
@@ -27,7 +27,12 @@ const ID = '00000000-0000-4000-8000-000000000001';
 const OTHER = '00000000-0000-4000-8000-000000000002';
 const GEN = '00000000-0000-4000-8000-000000000003';
 const OWNER = '5511999998888@s.whatsapp.net';
-const identity = { ownerIdentifier: OWNER, generation: GEN, selfJid: OWNER };
+const identity = {
+  ownerIdentifier: OWNER,
+  generation: GEN,
+  selfJid: OWNER,
+  connectedAt: new Date(Date.now() - 60000).toISOString(),
+};
 const expected = { expectedOwner: OWNER, expectedGeneration: GEN };
 const before = new Date().toISOString();
 const after = new Date(Date.now() - 60000).toISOString();
@@ -72,11 +77,18 @@ describe('closed native self API', () => {
   });
   test('strict bounded producer and history window schemas', () => {
     expect(
-      SelfMessagesSchema.safeParse({ ...expected, after, before, excludeExternalIds: ['same', 'same'] }).success,
+      SelfMessagesSchema.safeParse({
+        ...expected,
+        connectionStartedAt: after,
+        after,
+        before,
+        excludeExternalIds: ['same', 'same'],
+      }).success,
     ).toBe(false);
     expect(
       SelfMessagesSchema.safeParse({
         ...expected,
+        connectionStartedAt: after,
         after,
         before,
         excludeExternalIds: Array.from({ length: 1001 }, (_, i) => `${i}`),
@@ -139,6 +151,7 @@ describe('closed native self API', () => {
   test('SQL durable exclusions precede bounded limit and no timestamp-only cursor', async () => {
     let query!: SQL;
     let limit = 0;
+    const queries: { sql: SQL; limit: number }[] = [];
     const builder = {
       leftJoin() {
         return this;
@@ -155,6 +168,7 @@ describe('closed native self API', () => {
       },
       async limit(value: number) {
         limit = value;
+        queries.push({ sql: query, limit: value });
         return [];
       },
     };
@@ -163,23 +177,131 @@ describe('closed native self API', () => {
     expect(
       await readSelfMessages(db, plugin, ID, {
         ...expected,
+        connectionStartedAt: after,
         after,
         before,
         excludeExternalIds: ['outbox-before-http', 'processed-at-same-time'],
       }),
-    ).toEqual({ items: [], hasMore: false });
+    ).toEqual({ items: [], hasMore: false, hasOlder: false });
     const sql = new PgDialect().sqlToQuery(query);
     expect(sql.sql).toContain('not in');
     expect(sql.params).toContain('outbox-before-http');
-    expect(limit).toBe(51);
+    expect(limit).toBe(1);
+    expect(queries.map((row) => row.limit)).toEqual([51, 1]);
+    const olderQuery = queries[1];
+    if (!olderQuery) throw new Error('Missing older-unseen query');
+    const older = new PgDialect().sqlToQuery(olderQuery.sql);
+    expect(older.sql).toContain('"received_at" <');
+    expect(older.params).toContain(OWNER);
+    expect(older.params).toContain('realtime');
     const calls = mock(() => identity);
     const changed = { ...plugin, getSelfIdentity: calls } as SelfPlugin;
     calls.mockImplementationOnce(() => identity).mockImplementationOnce(() => ({ ...identity, generation: OTHER }));
     await expect(
-      readSelfMessages(db, changed, ID, { ...expected, after, before, excludeExternalIds: [] }),
+      readSelfMessages(db, changed, ID, {
+        ...expected,
+        connectionStartedAt: after,
+        after,
+        before,
+        excludeExternalIds: [],
+      }),
     ).rejects.toThrow();
     expect(() => verifySelf(plugin, ID, { ...expected, expectedOwner: '5511888887777@s.whatsapp.net' })).toThrow();
   });
+});
+
+test('rolling inbox proof tolerates transport delay at seven days and blocks stale/nonanchored endpoints', async () => {
+  const endpoint = new Date(Date.now() - 1).toISOString();
+  const sampledNow = Date.parse(endpoint) + 1;
+  const clock = spyOn(Date, 'now').mockReturnValue(sampledNow);
+  try {
+    const marker = new Date(Date.parse(endpoint) - 8 * 86400000).toISOString();
+    const lower = new Date(Date.parse(endpoint) - 7 * 86400000).toISOString();
+    let older = false;
+    const queries: { sql: SQL; limit: number }[] = [];
+    let query!: SQL;
+    const builder = {
+      from() {
+        return this;
+      },
+      leftJoin() {
+        return this;
+      },
+      orderBy() {
+        return this;
+      },
+      where(value: SQL) {
+        query = value;
+        return this;
+      },
+      async limit(n: number) {
+        queries.push({ sql: query, limit: n });
+        return n === 1 && older ? [{ id: ID }] : [];
+      },
+    };
+    const db = { select: () => builder } as unknown as Database;
+    const plugin = { getSelfIdentity: () => identity } as unknown as SelfPlugin;
+    const input = {
+      ...expected,
+      connectionStartedAt: marker,
+      after: lower,
+      before: endpoint,
+      excludeExternalIds: ['known'],
+    };
+    expect(SelfMessagesSchema.safeParse(input).success).toBe(true);
+    expect(await readSelfMessages(db, plugin, ID, input)).toEqual({ items: [], hasMore: false, hasOlder: false });
+    older = true;
+    expect((await readSelfMessages(db, plugin, ID, input)).hasOlder).toBe(true);
+    expect(queries.map((row) => row.limit)).toEqual([51, 1, 51, 1]);
+    const olderQuery = queries[1];
+    if (!olderQuery) throw new Error('Missing older-unseen query');
+    const plan = new PgDialect().sqlToQuery(olderQuery.sql);
+    expect(plan.sql).toContain('"received_at" <');
+    expect(plan.params).toContain('known');
+    for (const milliseconds of [-60001, 60001]) {
+      const stale = new Date(Date.now() + milliseconds).toISOString();
+      await expect(
+        readSelfMessages(db, plugin, ID, {
+          ...input,
+          before: stale,
+          after: new Date(Date.parse(stale) - 7 * 86400000).toISOString(),
+        }),
+      ).rejects.toThrow();
+    }
+    for (const milliseconds of [-60000, 60000]) {
+      const accepted = new Date(sampledNow + milliseconds).toISOString();
+      expect(
+        (
+          await readSelfMessages(db, plugin, ID, {
+            ...input,
+            before: accepted,
+            after: new Date(Date.parse(accepted) - 7 * 86400000).toISOString(),
+          })
+        ).hasOlder,
+      ).toBe(true);
+    }
+    expect(SelfMessagesSchema.safeParse({ ...input, after: marker }).success).toBe(false);
+    expect(SelfMessagesSchema.safeParse({ ...input, connectionStartedAt: endpoint }).success).toBe(false);
+    const calls = mock(() => identity);
+    calls.mockImplementationOnce(() => identity).mockImplementationOnce(() => ({ ...identity, generation: OTHER }));
+    await expect(
+      readSelfMessages(db, { ...plugin, getSelfIdentity: calls } as SelfPlugin, ID, input),
+    ).rejects.toThrow();
+  } finally {
+    clock.mockRestore();
+  }
+});
+
+test('missing or invalid authenticated epoch is rejected by the strict native identity boundary', () => {
+  const { connectedAt: _epoch, ...missing } = identity;
+  const plugin = { getSelfIdentity: () => missing } as unknown as SelfPlugin;
+  expect(() => verifySelf(plugin, ID)).toThrow();
+  expect(() =>
+    verifySelf(
+      { getSelfIdentity: () => ({ ...identity, connectedAt: 'not-authenticated-time' }) } as unknown as SelfPlugin,
+      ID,
+    ),
+  ).toThrow();
 });
 
 test('exact self receipt excludes foreign recipients and null does not send or prove absence', async () => {
@@ -362,7 +484,7 @@ test('actual native self send and message.sent consumers produce a readable real
   await setupMessagePersistence(bus, services);
   await setupEventPersistence(bus, db);
   const native = (await import(new URL('../../../channel-whatsapp/src/plugin.ts', import.meta.url).href)) as {
-    WhatsAppPlugin: new () => SelfPlugin;
+    WhatsAppPlugin: new () => SelfPlugin & { handleConnected(id: string, socket: WASocket): Promise<void> };
   };
   const plugin = new native.WhatsAppPlugin();
   const fields = plugin as unknown as {
@@ -370,6 +492,8 @@ test('actual native self send and message.sent consumers produce a readable real
     instances: { getStatus(id: string): { state: string } };
     waitForRateLimitBackoff(id: string): Promise<{ reset(): void }>;
     emitMessageSent(payload: unknown): Promise<void>;
+    emitInstanceConnected(id: string, payload: unknown): Promise<void>;
+    prefetchGroupMetadata(id: string, socket: WASocket): Promise<void>;
   };
   const sock = {
     user: { id: OWNER },
@@ -380,6 +504,9 @@ test('actual native self send and message.sent consumers produce a readable real
   fields.sockets.set(ID, sock);
   fields.instances.getStatus = () => ({ state: 'connected' });
   fields.waitForRateLimitBackoff = async () => ({ reset() {} });
+  fields.emitInstanceConnected = async () => {};
+  fields.prefetchGroupMetadata = async () => {};
+  await plugin.handleConnected(ID, sock);
   fields.emitMessageSent = async (payload) => {
     const event = {
       id: GEN,
@@ -422,4 +549,66 @@ test('actual native self send and message.sent consumers produce a readable real
   unified = { ...unified, isFromMe: false };
   expect(await readSelfReceipt(db, plugin as SelfPlugin, ID, input)).toBeNull();
   await expect(readSelfReceipt(db, plugin as SelfPlugin, ID, { ...input, expectedGeneration: GEN })).rejects.toThrow();
+});
+
+test('native protobuf timestamps before original authentication or after sampled endpoint never grant ingress authority', async () => {
+  const endpoint = new Date(Math.floor(Date.now() / 1000) * 1000).toISOString();
+  const marker = new Date(Date.parse(endpoint) - 60000).toISOString();
+  const clock = spyOn(Date, 'now').mockReturnValue(Date.parse(endpoint));
+  try {
+    const timestamps = [Date.parse(marker) - 1000, Date.parse(endpoint) + 1000, Date.parse(marker) + 5000];
+    const rows = timestamps.map((at, index) => ({
+      event: {
+        id: ID,
+        externalId: `authored_${index}`,
+        chatId: OWNER,
+        eventType: 'message.received',
+        contentType: 'text',
+        textContent: 'Fictional attributed note',
+        receivedAt: new Date(endpoint),
+        metadata: { from: OWNER.split('@')[0] },
+        rawPayload: JSON.parse(
+          JSON.stringify({
+            ...proto.WebMessageInfo.fromObject({
+              key: { fromMe: true, remoteJid: OWNER },
+              message: { conversation: 'Fictional attributed note' },
+              messageTimestamp: at / 1000,
+            }),
+            isFromMe: true,
+          }),
+        ),
+      } as unknown as OmniEvent,
+      source: 'realtime',
+    }));
+    const builder = {
+      from() {
+        return this;
+      },
+      leftJoin() {
+        return this;
+      },
+      where() {
+        return this;
+      },
+      orderBy() {
+        return this;
+      },
+      async limit(value: number) {
+        return value === 51 ? rows : [];
+      },
+    };
+    const plugin = { getSelfIdentity: () => ({ ...identity, connectedAt: marker }) } as unknown as SelfPlugin;
+    const page = await readSelfMessages({ select: () => builder } as unknown as Database, plugin, ID, {
+      ...expected,
+      connectionStartedAt: marker,
+      after: marker,
+      before: endpoint,
+      excludeExternalIds: [],
+    });
+    expect(page.items.map((row) => row.authority)).toEqual([false, false, true]);
+    expect(page.items.map((row) => row.at)).toEqual(timestamps.map((at) => new Date(at).toISOString()));
+    expect(page.items.every((row) => row.receivedAt === endpoint)).toBe(true);
+  } finally {
+    clock.mockRestore();
+  }
 });

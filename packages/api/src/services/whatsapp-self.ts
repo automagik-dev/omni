@@ -1,7 +1,7 @@
 import type { ChannelPlugin } from '@omni/channel-sdk';
 import type { Database } from '@omni/db';
 import { chats, messages, omniEvents } from '@omni/db';
-import { and, asc, desc, eq, gt, gte, isNotNull, isNull, lte, notInArray } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, isNotNull, isNull, lt, lte, notInArray } from 'drizzle-orm';
 import type { z } from 'zod';
 import {
   type SelfHistorySchema,
@@ -44,8 +44,19 @@ export function verifySelf(
     throw new Error('Self identity changed');
   return value;
 }
-function freshWindow(input: { after: string; before: string }) {
-  if (Date.parse(input.after) < Date.now() - 7 * 86400000 || Date.parse(input.before) > Date.now() + 60000)
+function freshInboxWindow(input: z.infer<typeof SelfMessagesSchema>) {
+  const now = Date.now();
+  const before = Date.parse(input.before);
+  const after = Date.parse(input.after);
+  const connectionStartedAt = Date.parse(input.connectionStartedAt);
+  if (
+    before < now - 60000 ||
+    before > now + 60000 ||
+    connectionStartedAt > after ||
+    after > before ||
+    before - after > 7 * 86400000 ||
+    after !== Math.max(connectionStartedAt, before - 7 * 86400000)
+  )
     throw new Error('Read window expired');
 }
 /** Decode only the numeric or serialized protobuf Long used by native Baileys. */
@@ -123,7 +134,7 @@ export async function readSelfMessages(
   input: z.infer<typeof SelfMessagesSchema>,
 ) {
   const identity = verifySelf(plugin, instanceId, input);
-  freshWindow(input);
+  freshInboxWindow(input);
   // Always rescan the admitted window, excluding durable known IDs in SQL BEFORE LIMIT.
   // No timestamp cursor: equal-time messages and late commits remain eligible.
   const rows = await db
@@ -146,10 +157,40 @@ export async function readSelfMessages(
     )
     .orderBy(asc(omniEvents.receivedAt), asc(omniEvents.id))
     .limit(51);
+  // Boolean backlog proof only: no older historical text crosses this boundary.
+  const older = await db
+    .select({ id: omniEvents.id })
+    .from(omniEvents)
+    .leftJoin(messages, eq(messages.originalEventId, omniEvents.id))
+    .where(
+      and(
+        eq(omniEvents.instanceId, instanceId),
+        eq(omniEvents.chatId, identity.selfJid),
+        eq(omniEvents.eventType, 'message.received'),
+        eq(omniEvents.contentType, 'text'),
+        eq(messages.source, 'realtime'),
+        eq(messages.isFromMe, true),
+        isNotNull(omniEvents.externalId),
+        gte(omniEvents.receivedAt, new Date(input.connectionStartedAt)),
+        lt(omniEvents.receivedAt, new Date(input.after)),
+        input.excludeExternalIds.length ? notInArray(omniEvents.externalId, input.excludeExternalIds) : undefined,
+      ),
+    )
+    .limit(1);
   verifySelf(plugin, instanceId, input);
   return {
-    items: rows.slice(0, 50).map((row) => projectSelfEvent(row.event, identity.selfJid, row.source)),
+    items: rows.slice(0, 50).map((row) => {
+      const projected = projectSelfEvent(row.event, identity.selfJid, row.source);
+      // Delayed delivery does not make pre-connection authorship fresh authority.
+      projected.authority =
+        projected.authority &&
+        projected.at !== null &&
+        Date.parse(projected.at) >= Date.parse(input.connectionStartedAt) &&
+        Date.parse(projected.at) <= Date.parse(input.before);
+      return projected;
+    }),
     hasMore: rows.length > 50,
+    hasOlder: older.length > 0,
   };
 }
 export async function readOwnedChats(db: Database, plugin: SelfPlugin, instanceId: string, cursor?: string) {

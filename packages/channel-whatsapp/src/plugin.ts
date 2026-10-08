@@ -296,6 +296,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   /** Active socket connections per instance */
   private sockets = new Map<string, WASocket>();
   private selfGenerations = new WeakMap<WASocket, string>();
+  private selfConnectedAt = new WeakMap<WASocket, string>();
 
   /** Ephemeral passkey ceremonies requested by WhatsApp during pairing. */
   private passkeyStates = new Map<string, WhatsAppPasskeyState>();
@@ -1562,18 +1563,21 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
   }
 
   /** Live authenticated identity only; persisted instance owner fields grant nothing. */
-  getSelfIdentity(instanceId: string): { ownerIdentifier: string; generation: string; selfJid: string } {
+  getSelfIdentity(instanceId: string): {
+    ownerIdentifier: string;
+    generation: string;
+    selfJid: string;
+    connectedAt: string;
+  } {
     const sock = this.getSocket(instanceId);
     if (this.instances.getStatus(instanceId)?.state !== 'connected') {
       throw new WhatsAppError(ErrorCode.NOT_CONNECTED, 'WhatsApp is disconnected');
     }
     const ownerIdentifier = ownPhoneJid(sock.user?.id);
-    let generation = this.selfGenerations.get(sock);
-    if (!generation) {
-      generation = randomUUID();
-      this.selfGenerations.set(sock, generation);
-    }
-    return { ownerIdentifier, generation, selfJid: ownerIdentifier };
+    const generation = this.selfGenerations.get(sock);
+    const connectedAt = this.selfConnectedAt.get(sock);
+    if (!generation || !connectedAt) throw new Error('Authenticated connection epoch unavailable');
+    return { ownerIdentifier, generation, selfJid: ownerIdentifier, connectedAt };
   }
 
   /** This capability has no caller-selected recipient or generic-send fallback. */
@@ -2855,6 +2859,15 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * @internal
    */
   async handleConnected(instanceId: string, sock: WASocket, isNewLogin = false): Promise<void> {
+    // This epoch belongs to the authenticated native event and exact socket,
+    // before profile/event persistence awaits or a later API observer.
+    try {
+      ownPhoneJid(sock.user?.id);
+      if (!this.selfConnectedAt.has(sock)) this.selfConnectedAt.set(sock, new Date().toISOString());
+      if (!this.selfGenerations.has(sock)) this.selfGenerations.set(sock, randomUUID());
+    } catch {
+      /* Unqualified self identity grants no capability; ordinary connection handling continues. */
+    }
     this.passkeyStates.delete(instanceId);
     // Get profile info
     let profileName: string | undefined;

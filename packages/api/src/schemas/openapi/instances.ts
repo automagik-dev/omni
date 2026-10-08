@@ -306,7 +306,12 @@ export const SupportedChannelSchema = z.object({
  */
 const ownJid = z.string().regex(/^\d{5,20}@s\.whatsapp\.net$/);
 export const SelfIdentitySchema = z
-  .object({ ownerIdentifier: ownJid, generation: z.string().uuid(), selfJid: ownJid })
+  .object({
+    ownerIdentifier: ownJid,
+    generation: z.string().uuid(),
+    selfJid: ownJid,
+    connectedAt: z.string().datetime(),
+  })
   .strict();
 const selfWindow = {
   expectedOwner: ownJid,
@@ -319,13 +324,20 @@ const validWindow = (v: { after: string; before: string }) =>
 export const SelfMessagesSchema = z
   .object({
     ...selfWindow,
+    connectionStartedAt: z.string().datetime(),
     excludeExternalIds: z
       .array(z.string().min(1).max(255))
       .max(1000)
       .refine((v) => new Set(v).size === v.length),
   })
   .strict()
-  .refine(validWindow, 'At most seven days');
+  .refine(validWindow, 'At most seven days')
+  .refine(
+    (v) =>
+      Date.parse(v.connectionStartedAt) <= Date.parse(v.after) &&
+      Date.parse(v.after) === Math.max(Date.parse(v.connectionStartedAt), Date.parse(v.before) - 7 * 86400000),
+    'Anchored self inbox window',
+  );
 export const SelfHistorySchema = z
   .object({ ...selfWindow, chatId: z.string().uuid() })
   .strict()
