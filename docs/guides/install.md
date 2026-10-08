@@ -38,7 +38,7 @@ This runs the full wizard with defaults:
 - Database: embedded PostgreSQL via pgserve at `~/.omni/data/pgserve`
 - Process manager: PM2
 - API key: auto-generated (printed once — capture it)
-- NATS: downloaded to `~/.omni/nats-server` if missing
+- NATS: downloaded to `~/.omni/nats-server` if missing; listens on `127.0.0.1:4222` (loopback only — see [NATS Bind Address](#nats-bind-address))
 
 **Expected output pattern:**
 ```
@@ -73,6 +73,26 @@ Writes `/etc/systemd/system/omni-api.service` and `/etc/systemd/system/omni-nats
 ```bash
 sudo systemctl enable --now omni-api omni-nats
 ```
+
+### NATS Bind Address
+
+The managed NATS server (`omni-nats`, PM2 or systemd) listens on `127.0.0.1` by default. On a single host that is all Omni needs: `omni-api` reaches NATS over `localhost`, and nothing else has to connect to port 4222.
+
+Change it only when other hosts must connect to this NATS (for example remote workers, or API and NATS on separate machines):
+
+```bash
+omni config set server.natsHost 0.0.0.0   # or :: for IPv6 too
+omni stop && omni start                   # or: omni install
+```
+
+When NATS is reachable from other hosts, protect it: enable NATS authentication/TLS or keep it on a private network.
+
+- `server.natsHost` is where the managed server **listens**; `NATS_URL` is where clients **connect**. They are independent — after exposing NATS, remote clients set `NATS_URL=nats://<this-host>:4222`.
+- Use a wildcard (`0.0.0.0` or `::`) with the CLI-managed install. The local `omni-api` always connects to `nats://localhost:4222`, so binding a single non-loopback address (e.g. `10.0.0.5`) would stop it from reaching NATS.
+- Accepted values: an IPv4 or IPv6 address or a hostname. `omni config unset server.natsHost` returns to `127.0.0.1`.
+- `omni start`, `omni install` and `omni update` (from this version on) recreate `omni-nats`, so they apply the current value. `omni restart` and `omni doctor --fix` reuse the arguments PM2 recorded when the process was created. A systemd unit is rewritten by `sudo omni install --systemd`.
+- **Upgrading an existing install:** the first `omni update` into this version still runs the previous CLI's restart, so `omni-nats` keeps listening on all interfaces. Run `omni stop && omni start` once after that update (or `omni install`). Later updates recreate it automatically.
+- A source checkout (`ecosystem.config.cjs`) uses the `NATS_HOST` environment variable instead, with the same default.
 
 ## Setup (Interactive)
 

@@ -5,13 +5,14 @@
  * layer. Each helper is independently testable.
  */
 
-import { existsSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { getConfigPath, loadConfig } from './config.js';
+import { type ServerConfig, getConfigPath, loadConfig } from './config.js';
 import { NATS_BINARY_PATH } from './nats-install.js';
+import { buildNatsServerArgs, resolveNatsHost } from './nats-server-args.js';
 import * as output from './output.js';
-import { PM2_PROCESSES, capturePm2, runPm2 } from './pm2.js';
+import { PM2_PROCESSES, buildPm2StartArgs, capturePm2, runPm2 } from './pm2.js';
 
 const DEFAULT_DATA_DIR = join(homedir(), '.omni', 'data');
 
@@ -74,6 +75,86 @@ function detectHasDataDir(dataDirOverride?: string): boolean {
 }
 
 // ----------------------------------------------------------------------------
+// Managed NATS bind address
+// ----------------------------------------------------------------------------
+
+/**
+ * Bind address for the managed nats-server, exiting with an actionable CLI
+ * error when the stored `server.natsHost` is invalid. Shared by `omni start`
+ * and `omni install` so both fail the same way before launching anything.
+ */
+export function resolveManagedNatsHost(serverConfig: Pick<ServerConfig, 'natsHost'>): string {
+  try {
+    return resolveNatsHost(serverConfig);
+  } catch (err) {
+    return output.error(err instanceof Error ? err.message : String(err));
+  }
+}
+
+/** pm2 runners: `runPm2` streams output to the terminal, `quietPm2` captures it. */
+export type ManagedNatsPm2 = {
+  runPm2: (args: string[]) => Promise<number>;
+  quietPm2: (args: string[]) => Promise<number>;
+};
+
+async function quietPm2(args: string[]): Promise<number> {
+  return (await capturePm2(...args)).code;
+}
+
+/**
+ * (Re)create the PM2 `omni-nats` process so it runs with the current bind
+ * address. `pm2 start` on an existing name, and `pm2 restart`, reuse the
+ * arguments recorded when the process was created — so an install made before
+ * `server.natsHost` existed would keep its old listener. Deleting first makes
+ * every caller (start, install, update) apply `-a <host>`. Returns pm2's exit
+ * code for the start.
+ */
+export async function startManagedNats(
+  opts: { dataDir: string; host: string; binaryPath?: string },
+  deps: ManagedNatsPm2 = { runPm2, quietPm2 },
+): Promise<number> {
+  const natsDataDir = join(opts.dataDir, 'nats');
+  mkdirSync(natsDataDir, { recursive: true });
+  // Quiet: on a fresh host there is nothing to delete and pm2 prints an error.
+  await deps.quietPm2(['delete', PM2_PROCESSES.nats]);
+  return deps.runPm2(
+    buildPm2StartArgs({
+      kind: 'nats',
+      script: opts.binaryPath ?? NATS_BINARY_PATH,
+      name: PM2_PROCESSES.nats,
+      scriptArgs: buildNatsServerArgs({ natsDataDir, host: opts.host }),
+    }),
+  );
+}
+
+/**
+ * `omni update` path: recreate omni-nats with the current bind address instead
+ * of `pm2 restart`, which would keep the arguments of an older install. Returns
+ * null when it cannot recreate (no managed binary, or an invalid stored
+ * `server.natsHost`) so the caller falls back to a plain restart.
+ */
+export async function recreateManagedNatsForUpdate(
+  serverConfig: Pick<ServerConfig, 'dataDir' | 'natsHost'>,
+  deps: ManagedNatsPm2 & { binaryExists: () => boolean } = {
+    // Quiet like the pm2 restart it replaces — output would break update's spinner.
+    runPm2: quietPm2,
+    quietPm2,
+    binaryExists: () => existsSync(NATS_BINARY_PATH),
+  },
+): Promise<number | null> {
+  if (!deps.binaryExists()) return null;
+  let host: string;
+  try {
+    host = resolveNatsHost(serverConfig);
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    output.warn(`${reason}\n  Restarting ${PM2_PROCESSES.nats} with its previous arguments.`);
+    return null;
+  }
+  return startManagedNats({ dataDir: serverConfig.dataDir, host }, deps);
+}
+
+// ----------------------------------------------------------------------------
 // pm2-logrotate installation
 // ----------------------------------------------------------------------------
 
@@ -121,8 +202,48 @@ function logrotateAlreadyConfigured(confOutput: string): boolean {
 // systemd unit writer (retained, no longer prompted for)
 // ----------------------------------------------------------------------------
 
+/**
+ * Quote one `ExecStart=` argument for systemd: wrap in double quotes, escape
+ * `\\` and `"`, and double `%` (unit specifiers) and `$` (environment
+ * expansion) so the value reaches the process verbatim.
+ */
+function quoteSystemdArg(arg: string): string {
+  if (/[\r\n]/.test(arg))
+    throw new Error(`systemd ExecStart argument must not contain a newline: ${JSON.stringify(arg)}`);
+  const escaped = arg
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/%/g, '%%')
+    .replace(/\$/g, () => '$$');
+  return `"${escaped}"`;
+}
+
+/**
+ * Content of the `omni-nats.service` unit: the managed nats-server with the
+ * same arguments as the PM2 paths (`-js -sd <dataDir>/nats -a <natsHost>`),
+ * every argument quoted.
+ */
+export function buildSystemdNatsUnit(dataDir: string, natsHost: string): string {
+  const execStart = [NATS_BINARY_PATH, ...buildNatsServerArgs({ natsDataDir: join(dataDir, 'nats'), host: natsHost })]
+    .map(quoteSystemdArg)
+    .join(' ');
+  return `[Unit]
+Description=Omni NATS Server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=${execStart}
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+`;
+}
+
 /** Write systemd unit files for omni-api and omni-nats under `/etc/systemd/system/`. */
-export function writeSystemdUnit(dataDir: string): void {
+export function writeSystemdUnit(dataDir: string, natsHost: string): void {
   const apiUnit = `[Unit]
 Description=Omni API Server
 After=network.target omni-nats.service
@@ -139,19 +260,7 @@ PIDFile=${homedir()}/.pm2/pm2.pid
 [Install]
 WantedBy=multi-user.target
 `;
-  const natsUnit = `[Unit]
-Description=Omni NATS Server
-After=network.target
-
-[Service]
-Type=simple
-ExecStart="${NATS_BINARY_PATH}" -js -sd "${join(dataDir, 'nats')}"
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-`;
+  const natsUnit = buildSystemdNatsUnit(dataDir, natsHost);
   try {
     writeFileSync('/etc/systemd/system/omni-nats.service', natsUnit, { mode: 0o644 });
     writeFileSync('/etc/systemd/system/omni-api.service', apiUnit, { mode: 0o644 });
