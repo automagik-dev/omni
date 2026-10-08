@@ -1,11 +1,11 @@
 import { describe, expect, mock, spyOn, test } from 'bun:test';
 import type { EventBus, OmniEvent as NativeEvent } from '@omni/core';
 import type { Database, OmniEvent } from '@omni/db';
+import { proto } from 'baileys';
+import type { WASocket } from 'baileys';
 import type { SQL } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { Hono } from 'hono';
-import { proto } from '../../../channel-whatsapp/node_modules/baileys/lib/index.js';
-import type { WASocket } from '../../../channel-whatsapp/node_modules/baileys/lib/index.js';
 import { scopeEnforcerMiddleware } from '../middleware/scope-enforcer';
 import { setupEventPersistence } from '../plugins/event-persistence';
 import { setupMessagePersistence } from '../plugins/message-persistence';
