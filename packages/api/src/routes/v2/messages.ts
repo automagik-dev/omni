@@ -52,10 +52,12 @@ import { z } from 'zod';
 import { sentryEnabled } from '../../lib/sentry-scrub';
 import { selectSlackDownloadToken } from '../../plugins/media-processor';
 import { optionalDateParam } from '../../schemas/date-query';
+import { SendSelfSchema } from '../../schemas/openapi/instances';
 import { sendCloseContactSchema, sendHandoffSchema } from '../../schemas/openapi/messages';
 import type { Services } from '../../services';
 import { ApiKeyService } from '../../services/api-keys';
 import { type MediaFetchOptions, MediaStorageService } from '../../services/media-storage';
+import { selfPlugin, verifySelf } from '../../services/whatsapp-self';
 import { currentTenantScope } from '../../tenancy/tenant-scope';
 import type { ApiKeyData, AppVariables } from '../../types';
 import { isHardTerminalOutcome, resolveCloseContactConfig } from './_close-contact-config';
@@ -1178,6 +1180,21 @@ messagesRoutes.patch(
 /**
  * POST /messages/send - Send text message
  */
+messagesRoutes.post('/send-self', zValidator('json', SendSelfSchema), async (c) => {
+  const { instanceId, ...input } = c.req.valid('json');
+  checkInstanceAccess(c.get('apiKey'), instanceId);
+  try {
+    const instance = await c.get('services').instances.getById(instanceId);
+    const plugin = selfPlugin(c.get('channelRegistry')?.get(instance.channel));
+    verifySelf(plugin, instanceId, input);
+    const text = sanitizeOutboundText(input.text);
+    if (!text.trim()) return c.json({ error: { code: 'SELF_TEXT_REQUIRED' } }, 400);
+    return c.json({ data: await plugin.sendSelf(instanceId, { ...input, text }) }, 201);
+  } catch {
+    return c.json({ error: { code: 'SELF_SEND_UNCONFIRMED' } }, 409);
+  }
+});
+
 messagesRoutes.post('/send', async (c) => {
   // Parse raw body first to detect media fields before schema validation strips them
   let rawBody: Record<string, unknown>;

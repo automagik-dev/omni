@@ -304,7 +304,83 @@ export const SupportedChannelSchema = z.object({
 /**
  * Register instance schemas and paths with the given registry
  */
+const ownJid = z.string().regex(/^\d{5,20}@s\.whatsapp\.net$/);
+export const SelfIdentitySchema = z
+  .object({
+    ownerIdentifier: ownJid,
+    generation: z.string().uuid(),
+    selfJid: ownJid,
+    connectedAt: z.string().datetime(),
+  })
+  .strict();
+const selfWindow = {
+  expectedOwner: ownJid,
+  expectedGeneration: z.string().uuid(),
+  after: z.string().datetime(),
+  before: z.string().datetime(),
+};
+const validWindow = (v: { after: string; before: string }) =>
+  Date.parse(v.before) >= Date.parse(v.after) && Date.parse(v.before) - Date.parse(v.after) <= 7 * 86400000;
+export const SelfMessagesSchema = z
+  .object({
+    ...selfWindow,
+    connectionStartedAt: z.string().datetime(),
+    excludeExternalIds: z
+      .array(z.string().min(1).max(255))
+      .max(1000)
+      .refine((v) => new Set(v).size === v.length),
+  })
+  .strict()
+  .refine(validWindow, 'At most seven days')
+  .refine(
+    (v) =>
+      Date.parse(v.connectionStartedAt) <= Date.parse(v.after) &&
+      Date.parse(v.after) === Math.max(Date.parse(v.connectionStartedAt), Date.parse(v.before) - 7 * 86400000),
+    'Anchored self inbox window',
+  );
+export const SelfHistorySchema = z
+  .object({ ...selfWindow, chatId: z.string().uuid() })
+  .strict()
+  .refine(validWindow, 'At most seven days');
+export const SelfChatsSchema = z.object({ cursor: z.string().uuid().optional() }).strict();
+export const SelfReceiptSchema = z
+  .object({ expectedOwner: ownJid, expectedGeneration: z.string().uuid(), externalId: z.string().min(1).max(255) })
+  .strict();
+export const SendSelfSchema = z
+  .object({
+    instanceId: z.string().uuid(),
+    expectedOwner: ownJid,
+    expectedGeneration: z.string().uuid(),
+    operationKey: z.string().regex(/^[A-Za-z0-9_-]{1,100}$/),
+    text: z.string().min(1).max(8000),
+  })
+  .strict();
+
 export function registerInstanceSchemas(registry: OpenAPIRegistry): void {
+  const pathId = z.object({ id: z.string().uuid() });
+  for (const [method, path, schema] of [
+    ['get', '/instances/{id}/self', SelfIdentitySchema],
+    ['post', '/instances/{id}/self/messages', SelfMessagesSchema],
+    ['post', '/instances/{id}/self/history', SelfHistorySchema],
+    ['post', '/instances/{id}/self/receipt', SelfReceiptSchema],
+    ['get', '/instances/{id}/self/chats', SelfChatsSchema],
+    ['post', '/messages/send-self', SendSelfSchema],
+  ] as const)
+    registry.registerPath({
+      method,
+      path,
+      tags: ['WhatsApp self'],
+      request: {
+        ...(path.includes('{id}') ? { params: pathId } : {}),
+        ...(method === 'get' && path === '/instances/{id}/self/chats' ? { query: SelfChatsSchema } : {}),
+        ...(method === 'post' ? { body: { content: { 'application/json': { schema } } } } : {}),
+      },
+      responses: {
+        200: { description: 'Verified bounded self capability' },
+        201: { description: 'Native self send accepted' },
+        409: { description: 'Identity changed or unverified' },
+      },
+    });
   registry.register('Instance', InstanceSchema);
   registry.register('CreateInstanceRequest', CreateInstanceSchema);
   registry.register('InstanceStatus', InstanceStatusSchema);

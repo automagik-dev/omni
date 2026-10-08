@@ -1129,6 +1129,12 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     table: 'handoff_logs',
     class: 'tenant-boundary',
   },
+  // These helpers are called only by protected self routes with c.get('db').
+  // The tenancy edge rebinds that handle to the request's stamped transaction;
+  // scoped instance lookup precedes every native identity or socket access.
+  { file: 'packages/api/src/services/whatsapp-self.ts', table: 'chats', class: 'tenant-boundary' },
+  { file: 'packages/api/src/services/whatsapp-self.ts', table: 'messages', class: 'tenant-boundary' },
+  { file: 'packages/api/src/services/whatsapp-self.ts', table: 'omni_events', class: 'tenant-boundary' },
   {
     file: 'packages/api/src/routes/v2/messages.ts',
     table: 'close_contact_logs',
