@@ -1,3 +1,4 @@
+import { createHash, randomUUID } from 'node:crypto';
 /**
  * WhatsApp Channel Plugin using Baileys
  *
@@ -66,6 +67,21 @@ import { type RateLimitManager, createRateLimitManager, isRateLimitError } from 
 
 // Re-export for external consumers that previously imported from this module
 export type { FetchHistoryResult, HistorySyncMessage };
+
+export function selfPlatformMessageId(instanceId: string, owner: string, operationKey: string): string {
+  return `3EB0${createHash('sha256')
+    .update(JSON.stringify([instanceId, owner, operationKey]))
+    .digest('hex')
+    .slice(0, 32)
+    .toUpperCase()}`;
+}
+
+export function ownPhoneJid(value: unknown): string {
+  if (typeof value !== 'string' || !/^\d{5,20}(?::\d+)?@s\.whatsapp\.net$/.test(value)) {
+    throw new WhatsAppError(ErrorCode.NOT_CONNECTED, 'Verified own phone identity required');
+  }
+  return value.replace(/:\d+@/, '@');
+}
 
 export function isTransientConnectionClosedError(error: unknown): boolean {
   if (!error) return false;
@@ -279,6 +295,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
   /** Active socket connections per instance */
   private sockets = new Map<string, WASocket>();
+  private selfGenerations = new WeakMap<WASocket, string>();
 
   /** Ephemeral passkey ceremonies requested by WhatsApp during pairing. */
   private passkeyStates = new Map<string, WhatsAppPasskeyState>();
@@ -1542,6 +1559,65 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       senderAgentId: originalMessage.metadata?.senderAgentId as string | undefined,
       systemNotice: originalMessage.metadata?.systemNotice as boolean | undefined,
     };
+  }
+
+  /** Live authenticated identity only; persisted instance owner fields grant nothing. */
+  getSelfIdentity(instanceId: string): { ownerIdentifier: string; generation: string; selfJid: string } {
+    const sock = this.getSocket(instanceId);
+    if (this.instances.getStatus(instanceId)?.state !== 'connected') {
+      throw new WhatsAppError(ErrorCode.NOT_CONNECTED, 'WhatsApp is disconnected');
+    }
+    const ownerIdentifier = ownPhoneJid(sock.user?.id);
+    let generation = this.selfGenerations.get(sock);
+    if (!generation) {
+      generation = randomUUID();
+      this.selfGenerations.set(sock, generation);
+    }
+    return { ownerIdentifier, generation, selfJid: ownerIdentifier };
+  }
+
+  /** This capability has no caller-selected recipient or generic-send fallback. */
+  async sendSelf(
+    instanceId: string,
+    input: { expectedOwner: string; expectedGeneration: string; operationKey: string; text: string },
+  ) {
+    if (
+      Object.keys(input).some(
+        (key) => !['expectedOwner', 'expectedGeneration', 'operationKey', 'text'].includes(key),
+      ) ||
+      !/^[A-Za-z0-9_-]{1,100}$/.test(input.operationKey) ||
+      typeof input.text !== 'string' ||
+      !input.text.trim() ||
+      input.text.length > 8000
+    )
+      throw new Error('Invalid self message');
+    const sock = this.getSocket(instanceId);
+    const admitted = this.getSelfIdentity(instanceId);
+    if (admitted.ownerIdentifier !== input.expectedOwner || admitted.generation !== input.expectedGeneration)
+      throw new Error('Self identity changed');
+    const externalId = selfPlatformMessageId(instanceId, admitted.ownerIdentifier, input.operationKey);
+    const limiter = await this.waitForRateLimitBackoff(instanceId);
+    const message: OutgoingMessage = {
+      to: admitted.selfJid,
+      content: { type: 'text', text: input.text },
+      metadata: { correlationId: input.operationKey },
+    };
+    // Pre-register the known durable operation's native ID before an early echo can arrive.
+    this.trackSentMessageId(instanceId, externalId);
+    const current = this.getSelfIdentity(instanceId);
+    if (
+      this.sockets.get(instanceId) !== sock ||
+      current.ownerIdentifier !== admitted.ownerIdentifier ||
+      current.generation !== admitted.generation
+    )
+      throw new Error('Self identity changed');
+    // No await between the synchronous identity fence and this platform invocation.
+    const result = await sock.sendMessage(admitted.selfJid, { text: input.text }, { messageId: externalId });
+    if (result?.key?.id !== externalId) throw new Error('Self send outcome is uncertain');
+    if (result.message) this.trackRecentSentMessage(instanceId, externalId, result.message);
+    await this.emitMessageSent(this.buildSentEventPayload(instanceId, externalId, admitted.selfJid, message, message));
+    limiter.reset();
+    return { externalId, ownerIdentifier: admitted.ownerIdentifier, generation: admitted.generation };
   }
 
   async sendMessage(instanceId: string, message: OutgoingMessage): Promise<SendResult> {

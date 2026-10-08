@@ -22,6 +22,12 @@ export const DEFAULT_TURN_SCOPES = ['messages:send', 'turns:close', 'tts:synthes
  * The middleware normalizes the actual request path to match these patterns.
  */
 export const SCOPE_MAP: Record<string, string> = {
+  'GET /instances/:id/self': 'instances:read',
+  'GET /instances/:id/self/chats': 'messages:selected:read',
+  'POST /instances/:id/self/messages': 'messages:self:read',
+  'POST /instances/:id/self/receipt': 'messages:self:read',
+  'POST /instances/:id/self/history': 'messages:selected:read',
+  'POST /messages/send-self': 'messages:self:send',
   // --- config audit (#1152) ---
   'GET /audit': 'audit:read',
   'GET /audit/:id': 'audit:read',

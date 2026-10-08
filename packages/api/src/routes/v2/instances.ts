@@ -15,10 +15,25 @@ import { applyWhatsAppBusinessConnectionOptions } from '../../lib/whatsapp-busin
 import { filterByInstanceAccess, requireInstanceAccess } from '../../middleware/auth';
 import { invalidateProviderCacheForInstance } from '../../plugins/agent-dispatcher';
 import { getQrCode } from '../../plugins/qr-store';
-import { CloseContactConfigSchema, GupshupHandoffOptionsSchema } from '../../schemas/openapi/instances';
+import {
+  CloseContactConfigSchema,
+  GupshupHandoffOptionsSchema,
+  SelfChatsSchema,
+  SelfHistorySchema,
+  SelfMessagesSchema,
+  SelfReceiptSchema,
+} from '../../schemas/openapi/instances';
 import type { Services } from '../../services';
 import { PairingRequestConsumedError, PairingRequestExpiredError } from '../../services/access';
 import { AgentReplayService } from '../../services/agent-replay';
+import {
+  readOwnedChats,
+  readOwnedHistory,
+  readSelfMessages,
+  readSelfReceipt,
+  selfPlugin,
+  verifySelf,
+} from '../../services/whatsapp-self';
 import type { AppVariables } from '../../types';
 
 const log = createLogger('api:instances');
@@ -1346,6 +1361,52 @@ instancesRoutes.delete('/:id', instanceAccess, async (c) => {
 /**
  * GET /instances/:id/status - Get instance connection status
  */
+instancesRoutes.get('/:id/self', instanceAccess, async (c) => {
+  try {
+    const instance = await c.get('services').instances.getById(c.req.param('id'));
+    const plugin = selfPlugin(c.get('channelRegistry')?.get(instance.channel));
+    return c.json({ data: verifySelf(plugin, instance.id) });
+  } catch {
+    return c.json({ error: { code: 'SELF_UNAVAILABLE' } }, 409);
+  }
+});
+instancesRoutes.get('/:id/self/chats', instanceAccess, zValidator('query', SelfChatsSchema), async (c) => {
+  try {
+    const instance = await c.get('services').instances.getById(c.req.param('id'));
+    const plugin = selfPlugin(c.get('channelRegistry')?.get(instance.channel));
+    return c.json(await readOwnedChats(c.get('db'), plugin, instance.id, c.req.valid('query').cursor));
+  } catch {
+    return c.json({ error: { code: 'SELF_READ_UNAVAILABLE' } }, 409);
+  }
+});
+instancesRoutes.post('/:id/self/messages', instanceAccess, zValidator('json', SelfMessagesSchema), async (c) => {
+  try {
+    const instance = await c.get('services').instances.getById(c.req.param('id'));
+    const plugin = selfPlugin(c.get('channelRegistry')?.get(instance.channel));
+    return c.json(await readSelfMessages(c.get('db'), plugin, instance.id, c.req.valid('json')));
+  } catch {
+    return c.json({ error: { code: 'SELF_READ_UNAVAILABLE' } }, 409);
+  }
+});
+instancesRoutes.post('/:id/self/receipt', instanceAccess, zValidator('json', SelfReceiptSchema), async (c) => {
+  try {
+    const instance = await c.get('services').instances.getById(c.req.param('id'));
+    const plugin = selfPlugin(c.get('channelRegistry')?.get(instance.channel));
+    return c.json({ data: await readSelfReceipt(c.get('db'), plugin, instance.id, c.req.valid('json')) });
+  } catch {
+    return c.json({ error: { code: 'SELF_READ_UNAVAILABLE' } }, 409);
+  }
+});
+instancesRoutes.post('/:id/self/history', instanceAccess, zValidator('json', SelfHistorySchema), async (c) => {
+  try {
+    const instance = await c.get('services').instances.getById(c.req.param('id'));
+    const plugin = selfPlugin(c.get('channelRegistry')?.get(instance.channel));
+    return c.json(await readOwnedHistory(c.get('db'), plugin, instance.id, c.req.valid('json')));
+  } catch {
+    return c.json({ error: { code: 'SELF_READ_UNAVAILABLE' } }, 409);
+  }
+});
+
 instancesRoutes.get('/:id/status', instanceAccess, async (c) => {
   const id = c.req.param('id');
   const services = c.get('services');
