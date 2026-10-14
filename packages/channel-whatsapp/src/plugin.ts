@@ -126,7 +126,7 @@ export interface WhatsAppFetchHistoryOptions extends FetchHistoryOptions {
   count?: number;
   /** Anchor points for specific chats - if provided, actively fetches older messages */
   anchors?: MessageAnchor[];
-  /** Download media for history messages (job `downloadMedia`, already resolved against instance `downloadMediaOnSync`). Only an explicit `false` skips. */
+  /** Download media for history messages (job `downloadMedia`, already resolved against instance `downloadMediaOnSync`). Unset falls back to the instance's connect option (#1280). */
   downloadMedia?: boolean;
 }
 
@@ -4160,6 +4160,18 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     return true;
   }
 
+  /**
+   * Whether a history message's media is downloaded. An explicit sync job
+   * decides with its `downloadMedia` (already resolved against the instance by
+   * the API, #1127). The history WhatsApp pushes on its own right after pairing
+   * has no job: there the instance's `downloadMediaOnSync` (passed in the
+   * connect options) decides, defaulting to off like the column (#1280).
+   */
+  private shouldDownloadHistoryMedia(instanceId: string, syncState: { downloadMedia?: boolean } | undefined): boolean {
+    if (syncState?.downloadMedia !== undefined) return syncState.downloadMedia;
+    return this.instances.get(instanceId)?.config.options?.downloadMediaOnSync === true;
+  }
+
   private async processHistoryMessage(
     instanceId: string,
     msg: WAMessage,
@@ -4202,10 +4214,9 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
     // Download media only when the sync job allows it (#1127). When skipped, content keeps
     // type/mimeType metadata so the row is still marked as media for later backfill.
-    const mediaResult =
-      syncState?.downloadMedia === false
-        ? null
-        : await tryDownloadMedia(msg, instanceId, msg.key.id, this.config.apiBaseUrl);
+    const mediaResult = this.shouldDownloadHistoryMedia(instanceId, syncState)
+      ? await tryDownloadMedia(msg, instanceId, msg.key.id, this.config.apiBaseUrl)
+      : null;
     if (mediaResult) {
       content.mediaUrl = mediaResult.mediaUrl;
       content.localPath = mediaResult.mediaLocalPath;
