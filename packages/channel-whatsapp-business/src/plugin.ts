@@ -36,6 +36,7 @@ import { FlowResolverRegistry } from './flows/resolver';
 import { handleFlowDataRequest } from './handlers/flow-data';
 import { handleMetaWebhook } from './handlers/webhook';
 import {
+  type MetaMediaSource,
   type SendTemplateButton,
   type SendTemplateHeaderMedia,
   sendContact,
@@ -473,6 +474,46 @@ export class WhatsAppBusinessPlugin extends BaseChannelPlugin {
     }
   }
 
+  // ─────────────────────────────────────────────────────────────
+  // Read receipts (implements ChannelPlugin.markChatAsRead / markAsRead)
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Mark a chat read (#1278). Meta marks a message read by its wamid, and
+   * reading the newest one marks every earlier message of the conversation
+   * read too, so this sends one read for the newest remembered inbound wamid
+   * (the same memory `sendTyping` uses). No remembered wamid (nothing received
+   * since the plugin started) → no-op. Meta failures are thrown: the caller
+   * asked for this explicitly.
+   */
+  async markChatAsRead(instanceId: string, chatId: string): Promise<void> {
+    const state = this.requireInstanceState(instanceId, 'markChatAsRead');
+    const wamid = state.lastInboundWamid.get(toMetaPhone(chatId));
+    if (!wamid) {
+      this.logger.debug('[whatsapp-business] markChatAsRead skipped — no inbound wamid remembered for chat', {
+        instanceId,
+        chatId,
+      });
+      return;
+    }
+    await state.client.markAsRead(wamid);
+  }
+
+  /**
+   * Mark specific inbound messages read by wamid. `['all']` (the API's
+   * whole-chat marker) behaves like {@link markChatAsRead}.
+   */
+  async markAsRead(instanceId: string, chatId: string, messageIds: string[]): Promise<void> {
+    if (messageIds.includes('all')) {
+      await this.markChatAsRead(instanceId, chatId);
+      return;
+    }
+    const state = this.requireInstanceState(instanceId, 'markAsRead');
+    for (const wamid of messageIds) {
+      await state.client.markAsRead(wamid);
+    }
+  }
+
   /**
    * Remember the newest inbound wamid for a chat so `sendTyping` can reference
    * it. Bounded FIFO per instance: beyond `MAX_TYPING_WAMID_CHATS` chats the
@@ -884,6 +925,25 @@ export class WhatsAppBusinessPlugin extends BaseChannelPlugin {
 type OutboundDispatchResult = { ok: true; response: MetaSendResponse } | { ok: false; error: string };
 
 /**
+ * Where the media of an outgoing message comes from (#1278): a public URL is
+ * sent as `link`; file bytes (`metadata.base64`, as the API's send-media
+ * route and every other channel use) are uploaded first and sent by `id`.
+ * Returns null when the message carries neither.
+ */
+async function resolveMediaSource(
+  client: MetaWhatsAppClient,
+  message: OutgoingMessage,
+): Promise<MetaMediaSource | null> {
+  const { content, metadata } = message;
+  if (content.mediaUrl) return content.mediaUrl;
+
+  const base64 = metadata?.base64;
+  if (typeof base64 !== 'string' || base64.length === 0) return null;
+  const mimeType = content.mimeType ?? 'application/octet-stream';
+  return client.uploadMedia(Buffer.from(base64, 'base64'), mimeType, content.filename);
+}
+
+/**
  * Route an outgoing message to the matching sender by `content.type`.
  *
  * Returns `{ ok: false }` for unsupported types or missing template metadata —
@@ -902,12 +962,16 @@ async function dispatchOutbound(
     return { ok: true, response: await dispatchOutboundText(client, message, logger) };
   }
   if (META_MEDIA_TYPES.has(content.type)) {
+    const source = await resolveMediaSource(client, message);
+    if (!source) {
+      return { ok: false, error: 'Media requires a public URL or file bytes (base64)' };
+    }
     return {
       ok: true,
       response: await sendMedia(
         client,
         to,
-        content.mediaUrl ?? '',
+        source,
         content.mimeType,
         content.caption ?? content.text,
         content.filename,
