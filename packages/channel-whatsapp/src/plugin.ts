@@ -41,6 +41,7 @@ import { getWhatsAppOutboundTimingConfig, getWhatsAppRateLimitConfig } from './e
 import { setupAllEventHandlers } from './handlers/all-events';
 import {
   cancelPendingReconnect,
+  markPairingCodePending,
   resetConnectionState,
   seedAuthenticated,
   setupConnectionHandlers,
@@ -1214,6 +1215,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
     try {
       const code = await sock.requestPairingCode(normalized);
+      markPairingCodePending(instanceId);
       this.logger.info('Pairing code requested', { instanceId, phoneNumber: `${normalized.slice(0, 4)}****` });
       return code;
     } catch (error) {
