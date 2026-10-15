@@ -310,7 +310,7 @@ function buildMessageStatus(status: string | undefined, externalId: string, to: 
   return { status: parsedStatus.data, externalId, to, reason: reason || undefined };
 }
 
-export function extractGupshupMessageStatus(parsed: unknown): GupshupMessageStatus | null {
+function extractGupshupMessageStatus(parsed: unknown): GupshupMessageStatus | null {
   const hv = HvMessageEventSchema.safeParse(parsed);
   if (hv.success) {
     const { messageobj, metadata, sender } = hv.data;
