@@ -113,6 +113,18 @@ export class MetaWhatsAppClient {
     return this.post<MetaSendResponse>(`/${this.phoneNumberId}/messages`, message);
   }
 
+  /**
+   * POST /{phone_number_id}/media — upload file bytes for an outbound message.
+   * Returns the media id to send as `{ id }` instead of a public `link`.
+   */
+  async uploadMedia(bytes: Uint8Array, mimeType: string, filename = 'file'): Promise<{ id: string }> {
+    const form = new FormData();
+    form.append('messaging_product', 'whatsapp');
+    form.append('type', mimeType);
+    form.append('file', new Blob([bytes], { type: mimeType }), filename);
+    return this.postForm(`/${this.phoneNumberId}/media`, form);
+  }
+
   /** Convenience for marking an inbound message as read. */
   async markAsRead(messageId: string): Promise<void> {
     await this.post(`/${this.phoneNumberId}/messages`, {
