@@ -9,15 +9,17 @@
  * entries (see packages/api/src/constants/scopes.ts).
  *
  * Flow management (list/create/publish/preview) hits Graph API directly via
- * `MetaWhatsAppClient`; the send route goes through the channel plugin's
- * `sendMessage` dispatch (`content.type='flow'` + `metadata.flow` descriptor)
- * so retry/observability stay consistent with other outbound sends.
+ * `MetaWhatsAppClient` and needs a whatsapp-business instance; the send route
+ * goes through the instance's own channel plugin (`content.type='flow'` +
+ * `metadata.flow` descriptor) for any channel declaring `canSendFlow`, so
+ * retry/observability stay consistent with other outbound sends.
  */
 
 import { zValidator } from '@hono/zod-validator';
 import { MetaWhatsAppClient, buildFlowToken, generateFlowKeyPair } from '@omni/channel-whatsapp-business';
 import { createLogger } from '@omni/core';
 import { WhatsAppFlowSendSchema, validateFlowJson } from '@omni/core/schemas';
+import type { ChannelType } from '@omni/core/types';
 import { whatsappFlowKeys } from '@omni/db';
 import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
@@ -512,12 +514,18 @@ whatsappFlowsRoutes.post(
     const channelRegistry = c.get('channelRegistry');
 
     const instance = await services.instances.getById(instanceId);
-    const guard = ensureWhatsAppBusiness(instance);
-    if (!guard.ok) return c.json(guard.payload, 400);
-
-    const plugin = channelRegistry?.get('whatsapp-business');
+    // Any channel that declares `canSendFlow` can send — the flow itself is
+    // authored on Meta (by us via the routes above, or by a BSP that hosts the
+    // WABA, e.g. Gupshup's Bot Studio). Management routes stay Cloud-API only.
+    const plugin = channelRegistry?.get(instance.channel as ChannelType);
     if (!plugin) {
-      return c.json(jsonError('whatsapp-business plugin not registered', 'PLUGIN_NOT_FOUND'), 500);
+      return c.json(jsonError(`${instance.channel} plugin not registered`, 'PLUGIN_NOT_FOUND'), 500);
+    }
+    if (!plugin.capabilities.canSendFlow) {
+      return c.json(
+        jsonError(`Instance channel "${instance.channel}" cannot send WhatsApp Flows`, 'WRONG_CHANNEL'),
+        400,
+      );
     }
 
     // Generate the correlation token here so it can be returned to the caller
