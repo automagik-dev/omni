@@ -253,6 +253,102 @@ const KNOWN_NON_MESSAGE_EVENT_TYPES = new Set<string>([
   'account_event',
 ]);
 
+const IdSchema = z.union([z.string(), z.number()]).transform((v) => String(v).trim());
+
+const HvMessageEventSchema = z.object({
+  event_type: z.literal('message_event'),
+  sender: IdSchema.optional(),
+  messageobj: z
+    .object({
+      id: IdSchema.optional(),
+      gsId: IdSchema.optional(),
+      from: IdSchema.optional(),
+      status: z.string().optional(),
+    })
+    .passthrough()
+    .optional(),
+  metadata: z
+    .object({
+      status: z.string().optional(),
+      gsId: IdSchema.optional(),
+      messageId: IdSchema.optional(),
+      reason: z.string().optional(),
+    })
+    .passthrough()
+    .optional(),
+});
+
+const NativeMessageEventSchema = z.object({
+  type: z.literal('message-event'),
+  payload: z
+    .object({
+      id: IdSchema.optional(),
+      gsId: IdSchema.optional(),
+      type: z.string(),
+      destination: IdSchema.optional(),
+      payload: z.object({ reason: z.string().optional() }).passthrough().optional(),
+    })
+    .passthrough(),
+});
+
+const MessageStatusSchema = z.enum(['delivered', 'read', 'failed']);
+
+export interface GupshupMessageStatus {
+  status: z.infer<typeof MessageStatusSchema>;
+  externalId: string;
+  to: string;
+  reason?: string;
+}
+
+function firstFilled(...values: Array<string | undefined>): string {
+  return values.find((v) => typeof v === 'string' && v.length > 0) ?? '';
+}
+
+function buildMessageStatus(status: string | undefined, externalId: string, to: string, reason?: string) {
+  const parsedStatus = MessageStatusSchema.safeParse((status ?? '').trim().toLowerCase());
+  if (!parsedStatus.success || !externalId || !to) return null;
+  return { status: parsedStatus.data, externalId, to, reason: reason || undefined };
+}
+
+function extractGupshupMessageStatus(parsed: unknown): GupshupMessageStatus | null {
+  const hv = HvMessageEventSchema.safeParse(parsed);
+  if (hv.success) {
+    const { messageobj, metadata, sender } = hv.data;
+    return buildMessageStatus(
+      firstFilled(metadata?.status, messageobj?.status),
+      firstFilled(metadata?.gsId, metadata?.messageId, messageobj?.gsId, messageobj?.id),
+      firstFilled(sender, messageobj?.from),
+      metadata?.reason,
+    );
+  }
+  const native = NativeMessageEventSchema.safeParse(parsed);
+  if (native.success) {
+    const { payload } = native.data;
+    return buildMessageStatus(
+      payload.type,
+      firstFilled(payload.id, payload.gsId),
+      firstFilled(payload.destination),
+      payload.payload?.reason,
+    );
+  }
+  return null;
+}
+
+async function dispatchMessageStatus(
+  plugin: GupshupPlugin,
+  instanceId: string,
+  messageStatus: GupshupMessageStatus,
+): Promise<void> {
+  const params = { instanceId, externalId: messageStatus.externalId, to: messageStatus.to };
+  if (messageStatus.status === 'delivered') {
+    await plugin.handleMessageDelivered(params);
+  } else if (messageStatus.status === 'read') {
+    await plugin.handleMessageRead(params);
+  } else {
+    await plugin.handleMessageFailed({ ...params, reason: messageStatus.reason });
+  }
+}
+
 // ─────────────────────────────────────────────────────────────
 // Payload extraction — handles multiple Gupshup envelope formats
 // ─────────────────────────────────────────────────────────────
@@ -384,6 +480,26 @@ export async function handleGupshupWebhook(
       instanceId,
       event_type: 'unparsed',
       handled: 'dropped_unrecognized_shape',
+    });
+    return new Response('OK', { status: 200 });
+  }
+
+  const messageStatus = extractGupshupMessageStatus(parsed);
+  if (messageStatus) {
+    try {
+      await dispatchMessageStatus(plugin, instanceId, messageStatus);
+    } catch (error) {
+      logger.warn('[gupshup] message status dispatch failed', {
+        instanceId,
+        status: messageStatus.status,
+        externalId: messageStatus.externalId,
+        error: String(error),
+      });
+    }
+    recordGupshupWebhookReceived(logger, {
+      instanceId,
+      event_type: 'message_event',
+      handled: 'processed_status',
     });
     return new Response('OK', { status: 200 });
   }

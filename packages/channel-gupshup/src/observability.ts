@@ -23,6 +23,7 @@ import type { Logger } from '@omni/core';
 
 export type GupshupWebhookHandled =
   | 'processed'
+  | 'processed_status'
   | 'dropped_known_non_message'
   | 'dropped_unknown_fail_open'
   | 'dropped_unrecognized_shape'
