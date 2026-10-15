@@ -26,7 +26,7 @@ import {
   getExtension,
   getWhatsAppMediaDownloadMaxBytes,
 } from '../utils/download';
-import { getDocumentMessage, getMessageContextInfo } from '../utils/message';
+import { getDocumentMessage, getMessageContextInfo, unwrapEnvelopes, withUnwrappedContent } from '../utils/message';
 import { decryptMsgSecret, getMessageSecret, rememberMessageSecret } from '../utils/msg-secret';
 import { getMediaSize } from './media';
 
@@ -596,39 +596,9 @@ function extractUnknownContent(message: MessageContent): ExtractedContent | null
 
 /**
  * Extract content from a Baileys message using handler map
- * Falls back to 'unknown' type for unrecognized messages to ensure nothing is lost
+ * Falls back to 'unknown' type for unrecognized messages to ensure nothing is lost.
+ * Envelopes are unwrapped first (`unwrapEnvelopes`, shared with media download).
  */
-/**
- * FutureProofMessage envelopes WhatsApp wraps real content in. Mirrors Baileys'
- * `normalizeMessageContent` list plus `deviceSentMessage` (own-device sync).
- * Envelopes nest in any order (e.g. own edit from the phone:
- * deviceSentMessage → editedMessage → protocolMessage), so unwrap iteratively
- * instead of special-casing each wrapper (#1061).
- */
-const ENVELOPE_KEYS = [
-  'deviceSentMessage',
-  'ephemeralMessage',
-  'viewOnceMessage',
-  'viewOnceMessageV2',
-  'viewOnceMessageV2Extension',
-  'editedMessage',
-  'documentWithCaptionMessage',
-  'associatedChildMessage',
-  'groupStatusMessage',
-  'groupStatusMessageV2',
-] as const;
-
-function unwrapEnvelopes(message: MessageContent): MessageContent {
-  let current = message;
-  for (let depth = 0; depth < 5; depth++) {
-    const record = current as Record<string, { message?: MessageContent | null } | null | undefined>;
-    const key = ENVELOPE_KEYS.find((k) => record[k]?.message);
-    if (!key) break;
-    current = record[key]?.message as MessageContent;
-  }
-  return current;
-}
-
 export function extractContent(msg: WAMessage): ExtractedContent | null {
   if (!msg.message) return null;
   const message = unwrapEnvelopes(msg.message);
@@ -805,7 +775,10 @@ export async function tryDownloadMedia(
   apiBaseUrl?: string,
   backend: MediaStorageBackend = getMediaBackend(),
 ): Promise<{ mediaUrl: string; mediaLocalPath: string; mimeType: string; size: number } | null> {
-  const mediaInfo = detectMediaType(msg);
+  // Media inside envelopes (HD photo, disappearing chat, own device) is
+  // detected and downloaded from the unwrapped content (#1280).
+  const media = withUnwrappedContent(msg);
+  const mediaInfo = detectMediaType(media);
   if (!mediaInfo) return null;
 
   try {
@@ -813,7 +786,7 @@ export async function tryDownloadMedia(
     // WhatsApp proto fileLength is server-declared and available without
     // fetching the payload, preventing the full buffer from being allocated
     // for oversized media.
-    const declaredSize = getMediaSize(msg);
+    const declaredSize = getMediaSize(media);
     if (declaredSize !== undefined) {
       downloadGuard.checkSize(declaredSize, log, { instanceId, channel: 'whatsapp' });
     }
@@ -832,10 +805,10 @@ export async function tryDownloadMedia(
     const result =
       backend.mode === 'remote'
         ? await streamMediaWithRetry(() =>
-            downloadMediaToBackend(msg, backend, relativePath, downloadGuard.maxSizeBytes),
+            downloadMediaToBackend(media, backend, relativePath, downloadGuard.maxSizeBytes),
           )
         : await streamMediaWithRetry(() =>
-            downloadMediaToFile(msg, join(MEDIA_BASE_PATH, relativePath), downloadGuard.maxSizeBytes),
+            downloadMediaToFile(media, join(MEDIA_BASE_PATH, relativePath), downloadGuard.maxSizeBytes),
           );
     if (!result) return null;
 

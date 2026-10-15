@@ -1784,9 +1784,14 @@ function hydrateConnectionOptionsForInstance(
 /** Persisted Baileys socket settings; a connect body's `whatsapp` still overrides them. */
 function applyWhatsAppBaileysOptions(
   options: Record<string, unknown>,
-  instance: Pick<InstanceRecord, 'channel' | 'markOnlineOnConnect' | 'historyIdentity' | 'syncFullHistory'>,
+  instance: Pick<
+    InstanceRecord,
+    'channel' | 'markOnlineOnConnect' | 'historyIdentity' | 'syncFullHistory' | 'downloadMediaOnSync'
+  >,
 ): void {
   if (instance.channel !== 'whatsapp-baileys') return;
+  // Decides media download for the history WhatsApp pushes after pairing (#1280).
+  options.downloadMediaOnSync = instance.downloadMediaOnSync;
   options.whatsapp = {
     historyIdentity: instance.historyIdentity,
     syncFullHistory: instance.syncFullHistory,
