@@ -319,6 +319,37 @@ describeWithDb('Unified Messages', () => {
       expect(read.deliveryStatus).toBe('read');
     });
 
+    test('marks a sent message failed, but never downgrades delivered/read (#1277)', async () => {
+      const { chat } = await chatService.findOrCreate(testInstanceId, 'test-msg-failed@g.us', {
+        chatType: 'group',
+        channel: 'whatsapp-baileys',
+      });
+      const create = (externalId: string) =>
+        messageService.create({
+          chatId: chat.id,
+          externalId,
+          source: 'realtime',
+          messageType: 'text',
+          textContent: 'Will it arrive?',
+          platformTimestamp: new Date(),
+          isFromMe: true,
+        });
+
+      const sent = await create('BAE5FAILED001');
+      const failed = await messageService.markDeliveryFailed(sent.id);
+      expect(failed?.deliveryStatus).toBe('failed');
+
+      const delivered = await create('BAE5FAILED002');
+      await messageService.updateDeliveryStatus(delivered.id, 'delivered');
+      expect(await messageService.markDeliveryFailed(delivered.id)).toBeNull();
+      expect((await messageService.getById(delivered.id)).deliveryStatus).toBe('delivered');
+
+      const read = await create('BAE5FAILED003');
+      await messageService.updateDeliveryStatus(read.id, 'read');
+      expect(await messageService.markDeliveryFailed(read.id)).toBeNull();
+      expect((await messageService.getById(read.id)).deliveryStatus).toBe('read');
+    });
+
     test('should get chat messages', async () => {
       const { chat } = await chatService.findOrCreate(testInstanceId, 'test-msg-list@g.us', {
         chatType: 'group',
