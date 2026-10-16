@@ -30,6 +30,7 @@ import { Command } from 'commander';
 import ora from 'ora';
 import { type Config, loadConfig, loadLocalRuntimeConfig, loadServerConfig, saveConfig } from '../config.js';
 import { getHealthCheckUrl } from '../health.js';
+import { recreateManagedNatsForUpdate } from '../install-helpers.js';
 import { type CleanupReport, cleanupLegacyArtifacts } from '../legacy-cleanup.js';
 import * as output from '../output.js';
 import { PM2_PROCESSES } from '../pm2.js';
@@ -214,8 +215,11 @@ async function installLatest(channel: UpdateChannel): Promise<boolean> {
  * `~/.omni/config.json` (via `buildRuntimeEnv`). We do NOT inherit the
  * calling shell's DATABASE_URL / OMNI_API_KEY — that's the exact leakage
  * that caused the 2026-04-06 cross-DB incident.
+ *
+ * Warnings are pushed to `warnings` instead of printed, so the caller can show
+ * them after its spinner stops.
  */
-async function restartPm2Services(processNames: Pm2ProcessName[]): Promise<boolean> {
+async function restartPm2Services(processNames: Pm2ProcessName[], warnings: string[]): Promise<boolean> {
   const serverConfig = loadServerConfig();
   // LOCAL entry, never the active server — see runtime-env.ts rule 5.
   const cliConfig = loadLocalRuntimeConfig();
@@ -223,6 +227,15 @@ async function restartPm2Services(processNames: Pm2ProcessName[]): Promise<boole
 
   let allSucceeded = true;
   for (const name of processNames) {
+    // omni-nats is recreated, not restarted, so server.natsHost applies to
+    // installs whose process predates it (pm2 restart keeps the old args).
+    if (name === PM2_PROCESSES.nats) {
+      const natsCode = await recreateManagedNatsForUpdate(serverConfig, { warn: (message) => warnings.push(message) });
+      if (natsCode !== null) {
+        if (natsCode !== 0) allSucceeded = false;
+        continue;
+      }
+    }
     const proc = Bun.spawn({
       cmd: ['pm2', 'restart', name],
       stdout: 'pipe',
@@ -657,8 +670,10 @@ async function restartServicesAndVerify(
   diagnostics.restart.attempted = true;
   diagnostics.restart.services = [...servicesToRestart];
   const restartSpinner = ora('Restarting services...').start();
-  const restartSucceeded = await restartPm2Services(servicesToRestart);
+  const restartWarnings: string[] = [];
+  const restartSucceeded = await restartPm2Services(servicesToRestart, restartWarnings);
   restartSpinner.stop();
+  for (const warning of restartWarnings) output.warn(warning);
   diagnostics.restart.succeeded = restartSucceeded;
 
   if (!restartSucceeded) {

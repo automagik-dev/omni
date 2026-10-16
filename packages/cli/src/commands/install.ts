@@ -31,11 +31,17 @@ import {
   saveServerConfig,
 } from '../config.js';
 import { DEFAULT_API_PORT, HEALTH_TIMEOUT_MS, waitForHealth } from '../health.js';
-import { detectReinstall, installPm2Logrotate, writeSystemdUnit } from '../install-helpers.js';
+import {
+  detectReinstall,
+  installPm2Logrotate,
+  resolveManagedNatsHost,
+  startManagedNats,
+  writeSystemdUnit,
+} from '../install-helpers.js';
 import { resolveCanonicalPgservePreference } from '../lib/canonical-pgserve.js';
 import { NATS_BINARY_PATH, ensureNats } from '../nats-install.js';
 import * as output from '../output.js';
-import { PM2_PROCESSES, buildPm2StartArgs, getPm2LogDir, isPm2Available, runPm2 } from '../pm2.js';
+import { PM2_PROCESSES, buildPm2StartArgs, capturePm2, getPm2LogDir, isPm2Available, runPm2 } from '../pm2.js';
 import { buildEmbeddedDatabaseUrl, buildRuntimeEnv } from '../runtime-env.js';
 import { getServerBundlePath, getServerLauncherPath } from '../server-bundle.js';
 import { generateApiKey, maskApiKey } from '../utils/keys.js';
@@ -188,8 +194,9 @@ async function startServices(
   forceSystemd: boolean,
   useCanonicalPgserve: boolean,
 ): Promise<boolean> {
+  const natsHost = resolveManagedNatsHost(loadServerConfig()); // server.natsHost or 127.0.0.1
   if (forceSystemd) {
-    writeSystemdUnit(cfg.dataDir);
+    writeSystemdUnit(cfg.dataDir, natsHost);
     return false;
   }
 
@@ -212,8 +219,8 @@ async function startServices(
   const runtimeEnv = buildInstallRuntimeEnv(cfg, forceCleanup, useCanonicalPgserve);
 
   // Delete existing processes so the new hardened flags take effect (reinstall path).
+  // omni-nats is deleted by startManagedNats below, right before it is recreated.
   await runPm2(['delete', PM2_PROCESSES.api]);
-  await runPm2(['delete', PM2_PROCESSES.nats]);
 
   const apiSpinner = ora(`Starting ${PM2_PROCESSES.api} on port ${cfg.port}...`).start();
   const apiArgs = buildPm2StartArgs({
@@ -230,19 +237,13 @@ async function startServices(
   apiSpinner.succeed(`${PM2_PROCESSES.api} started`);
 
   if (existsSync(NATS_BINARY_PATH)) {
-    const natsSpinner = ora(`Starting ${PM2_PROCESSES.nats}...`).start();
-    const natsDataDir = join(cfg.dataDir, 'nats');
-    mkdirSync(natsDataDir, { recursive: true });
-    const natsArgs = buildPm2StartArgs({
-      kind: 'nats',
-      script: NATS_BINARY_PATH,
-      name: PM2_PROCESSES.nats,
-      scriptArgs: ['-js', '-sd', natsDataDir],
-    });
-    const natsCode = await runPm2(natsArgs);
+    const natsSpinner = ora(`Starting ${PM2_PROCESSES.nats} (bind address ${natsHost})...`).start();
+    const natsCode = await startManagedNats({ dataDir: cfg.dataDir, host: natsHost });
     if (natsCode !== 0) natsSpinner.warn(`${PM2_PROCESSES.nats} failed to start — check NATS binary`);
     else natsSpinner.succeed(`${PM2_PROCESSES.nats} started`);
   } else {
+    // Nothing to recreate it with; drop a stale entry pointing at the missing binary.
+    await capturePm2('delete', PM2_PROCESSES.nats);
     output.warn(`NATS binary not found at ${NATS_BINARY_PATH} — skipping`);
   }
   return true;

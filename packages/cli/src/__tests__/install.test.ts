@@ -19,10 +19,20 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildAgentHandoffBlock, createInstallCommand } from '../commands/install.js';
+import { loadServerConfig, setConfigValue } from '../config.js';
+import {
+  buildSystemdNatsUnit,
+  natsBindDriftWarning,
+  recreateManagedNatsForUpdate,
+  resolveManagedNatsHost,
+} from '../install-helpers.js';
+import { NATS_BINARY_PATH } from '../nats-install.js';
+import { buildNatsServerArgs } from '../nats-server-args.js';
+import { PM2_PROCESSES, buildPm2StartArgs } from '../pm2.js';
 
 // ---------------------------------------------------------------------------
 // Agent handoff banner — literal-substring contract
@@ -147,6 +157,208 @@ describe('detectReinstall — data dir signal', () => {
     const { detectReinstall } = await import('../install-helpers.js');
     const res = await detectReinstall(FIXTURE_ROOT);
     expect(res.hasDataDir).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Managed NATS bind address (PM2 path)
+// ---------------------------------------------------------------------------
+
+describe('omni install — managed NATS bind address', () => {
+  // startServices() spawns pm2, so assert the exact expression it evaluates —
+  // resolveManagedNatsHost(loadServerConfig()) — against a sandboxed config,
+  // then the args it hands pm2.
+  const CONFIG_DIR_ENV = 'OMNI_CONFIG_DIR';
+  let sandbox: string | undefined;
+  let savedConfigDir: string | undefined;
+
+  beforeEach(() => {
+    savedConfigDir = process.env[CONFIG_DIR_ENV];
+    sandbox = mkdtempSync(join(tmpdir(), 'omni-install-nats-host-'));
+    process.env[CONFIG_DIR_ENV] = sandbox;
+  });
+
+  afterEach(() => {
+    if (sandbox) rmSync(sandbox, { recursive: true, force: true });
+    sandbox = undefined;
+    if (savedConfigDir === undefined) delete process.env[CONFIG_DIR_ENV];
+    else process.env[CONFIG_DIR_ENV] = savedConfigDir;
+  });
+
+  function installNatsScriptArgs(): string[] {
+    const natsArgs = buildPm2StartArgs({
+      kind: 'nats',
+      script: '/tmp/nats-server',
+      name: PM2_PROCESSES.nats,
+      scriptArgs: buildNatsServerArgs({
+        natsDataDir: '/tmp/data/nats',
+        host: resolveManagedNatsHost(loadServerConfig()),
+      }),
+    });
+    return natsArgs.slice(natsArgs.indexOf('--') + 1);
+  }
+
+  test('fresh install (no config) binds omni-nats to 127.0.0.1', () => {
+    expect(installNatsScriptArgs()).toEqual(['-js', '-sd', '/tmp/data/nats', '-a', '127.0.0.1']);
+  });
+
+  test('reinstall honours a configured server.natsHost', () => {
+    setConfigValue('server.natsHost', '10.0.0.5');
+    expect(installNatsScriptArgs()).toEqual(['-js', '-sd', '/tmp/data/nats', '-a', '10.0.0.5']);
+  });
+
+  test('install.ts recreates omni-nats through the shared launcher, not inline', () => {
+    const src = readFileSync(new URL('../commands/install.ts', import.meta.url).pathname, 'utf-8');
+    expect(src).toContain('resolveManagedNatsHost(loadServerConfig())');
+    expect(src).toContain('startManagedNats({ dataDir: cfg.dataDir, host: natsHost })');
+    expect(src).not.toContain("'-js'");
+    // startManagedNats already deletes omni-nats quietly; a second, noisy delete is redundant.
+    expect(src).not.toContain("runPm2(['delete', PM2_PROCESSES.nats])");
+  });
+});
+
+describe('recreateManagedNatsForUpdate (omni update)', () => {
+  function fakePm2(code = 0) {
+    const calls: string[][] = [];
+    return {
+      calls,
+      runPm2: async (args: string[]) => {
+        calls.push(args);
+        return code;
+      },
+    };
+  }
+
+  test('recreates omni-nats with the configured bind address instead of pm2 restart', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'omni-update-nats-'));
+    const pm2 = fakePm2();
+    try {
+      const code = await recreateManagedNatsForUpdate(
+        { dataDir, natsHost: '127.0.0.1' },
+        { runPm2: pm2.runPm2, quietPm2: pm2.runPm2, binaryExists: () => true },
+      );
+      expect(code).toBe(0);
+      expect(pm2.calls[0]).toEqual(['delete', PM2_PROCESSES.nats]);
+      expect(pm2.calls[1]?.slice(pm2.calls[1].indexOf('--') + 1)).toEqual([
+        '-js',
+        '-sd',
+        join(dataDir, 'nats'),
+        '-a',
+        '127.0.0.1',
+      ]);
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test('returns null (caller restarts as before) when the managed binary is missing', async () => {
+    const pm2 = fakePm2();
+    const code = await recreateManagedNatsForUpdate(
+      { dataDir: '/tmp/unused', natsHost: '127.0.0.1' },
+      { runPm2: pm2.runPm2, quietPm2: pm2.runPm2, binaryExists: () => false },
+    );
+    expect(code).toBeNull();
+    expect(pm2.calls).toHaveLength(0);
+  });
+
+  test('returns null without touching pm2 when the stored server.natsHost is invalid', async () => {
+    const pm2 = fakePm2();
+    const warnings: string[] = [];
+    const code = await recreateManagedNatsForUpdate(
+      { dataDir: '/tmp/unused', natsHost: 'bad host' },
+      { runPm2: pm2.runPm2, quietPm2: pm2.runPm2, binaryExists: () => true, warn: (m) => warnings.push(m) },
+    );
+    expect(code).toBeNull();
+    expect(pm2.calls).toHaveLength(0);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('previous arguments');
+  });
+
+  test('omni update collects restart warnings and prints them after the spinner stops', () => {
+    const src = readFileSync(new URL('../commands/update.ts', import.meta.url).pathname, 'utf-8');
+    expect(src).toContain('warn: (message) => warnings.push(message)');
+    const stop = src.indexOf('restartSpinner.stop();');
+    expect(stop).toBeGreaterThan(-1);
+    expect(src.indexOf('for (const warning of restartWarnings) output.warn(warning);')).toBeGreaterThan(stop);
+  });
+});
+
+describe('natsBindDriftWarning (omni restart / doctor)', () => {
+  const ARGS = ['-js', '-sd', '/tmp/data/nats'];
+
+  test('null when omni-nats runs with the configured address', () => {
+    expect(natsBindDriftWarning([...ARGS, '-a', '127.0.0.1'], {})).toBeNull();
+    expect(natsBindDriftWarning([...ARGS, '--addr', '10.0.0.5'], { natsHost: '10.0.0.5' })).toBeNull();
+  });
+
+  test('a process without -a listens on all interfaces', () => {
+    expect(natsBindDriftWarning(ARGS, { natsHost: '0.0.0.0' })).toBeNull();
+    const warning = natsBindDriftWarning(ARGS, {});
+    expect(warning).toContain('listens on 0.0.0.0, but server.natsHost is 127.0.0.1');
+    expect(warning).toContain('omni stop && omni start');
+  });
+
+  test('warns when the configured address changed after the process was created', () => {
+    expect(natsBindDriftWarning([...ARGS, '-a', '127.0.0.1'], { natsHost: '0.0.0.0' })).toContain(
+      'listens on 127.0.0.1, but server.natsHost is 0.0.0.0',
+    );
+  });
+
+  test('null when the running args are unknown or the stored host is invalid', () => {
+    expect(natsBindDriftWarning(undefined, {})).toBeNull();
+    expect(natsBindDriftWarning(ARGS, { natsHost: 'bad host' })).toBeNull();
+  });
+
+  test('omni restart warns instead of recreating omni-nats', () => {
+    const src = readFileSync(new URL('../commands/restart.ts', import.meta.url).pathname, 'utf-8');
+    expect(src).toContain("runPm2(['restart', PM2_PROCESSES.api, PM2_PROCESSES.nats], env)");
+    expect(src).toContain('natsBindDriftWarning(await getRunningNatsArgs(), serverConfig)');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// systemd unit (--systemd)
+// ---------------------------------------------------------------------------
+
+describe('buildSystemdNatsUnit', () => {
+  function execStart(unit: string): string {
+    const line = unit.split('\n').find((l) => l.startsWith('ExecStart='));
+    if (!line) throw new Error('unit has no ExecStart= line');
+    return line;
+  }
+
+  test('default bind address: quoted -js -sd <dataDir>/nats -a 127.0.0.1', () => {
+    expect(execStart(buildSystemdNatsUnit('/var/lib/omni', '127.0.0.1'))).toBe(
+      `ExecStart="${NATS_BINARY_PATH}" "-js" "-sd" "/var/lib/omni/nats" "-a" "127.0.0.1"`,
+    );
+  });
+
+  test('custom bind address is passed after -a', () => {
+    expect(execStart(buildSystemdNatsUnit('/var/lib/omni', '0.0.0.0'))).toEndWith('"-a" "0.0.0.0"');
+    expect(execStart(buildSystemdNatsUnit('/var/lib/omni', '::'))).toEndWith('"-a" "::"');
+  });
+
+  test('keeps the rest of the unit unchanged', () => {
+    const unit = buildSystemdNatsUnit('/var/lib/omni', '127.0.0.1');
+    expect(unit).toContain('Description=Omni NATS Server');
+    expect(unit).toContain('Type=simple');
+    expect(unit).toContain('Restart=on-failure');
+    expect(unit).toContain('WantedBy=multi-user.target');
+  });
+
+  test('escapes systemd specifiers, env expansion, quotes and backslashes in the data dir', () => {
+    expect(execStart(buildSystemdNatsUnit('/srv/100%$HOME"x\\y', '127.0.0.1'))).toContain(
+      '"-sd" "/srv/100%%$$HOME\\"x\\\\y/nats"',
+    );
+  });
+
+  test('rejects an invalid bind address instead of writing it into ExecStart', () => {
+    expect(() => buildSystemdNatsUnit('/var/lib/omni', '127.0.0.1"\nExecStartPre=/bin/id')).toThrow();
+    expect(() => buildSystemdNatsUnit('/var/lib/omni', '$HOST')).toThrow();
+  });
+
+  test('rejects a data dir containing a newline', () => {
+    expect(() => buildSystemdNatsUnit('/var/lib/omni\nExecStartPre=/bin/id', '127.0.0.1')).toThrow(/newline/);
   });
 });
 

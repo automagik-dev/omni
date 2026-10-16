@@ -56,6 +56,8 @@ interface HarnessState {
   apiPid: number | undefined;
   /** omni-nats pm2 child PID. Used by port-canonical-owner. */
   natsPid: number | undefined;
+  /** omni-nats script args as pm2 recorded them. Used by nats-bind-address. */
+  natsArgs?: string[];
   /**
    * Map of port → owning PID (or null when nothing listens). Stubs the
    * `ss -tlnp` lookup. Healthy default has each canonical port owned by
@@ -291,6 +293,7 @@ function mkDeps(state: HarnessState): DoctorDeps {
             status: state.natsStatus,
             env: {},
             max_restarts: state.natsMaxRestarts,
+            args: state.natsArgs,
           },
         },
       ];
@@ -384,7 +387,7 @@ describe('runDoctor — read-only mode', () => {
 
     const report = await runDoctor({ fix: false }, deps);
 
-    expect(report.checks).toHaveLength(13);
+    expect(report.checks).toHaveLength(14);
     const ids = report.checks.map((c) => c.id);
     expect(ids).toEqual([
       'pm2-env-drift',
@@ -400,11 +403,12 @@ describe('runDoctor — read-only mode', () => {
       'pgserve-canonical',
       'port-canonical-owner',
       'embedded-data-orphaned',
+      'nats-bind-address',
     ]);
     for (const check of report.checks) {
       expect(check.level).toBe('OK');
     }
-    expect(report.summary).toEqual({ ok: 13, warn: 0, fail: 0 });
+    expect(report.summary).toEqual({ ok: 14, warn: 0, fail: 0 });
     expect(report.fixesApplied).toEqual([]);
   });
 
@@ -1359,5 +1363,35 @@ describe('runDoctor — pm2-status --fix dispatches port reconciliation', () => 
     // The pm2-status fix entry mentions the reclaim outcome.
     const fix = report.fixesApplied.find((f) => f.includes('reclaimed') || f.includes('restarted omni-nats'));
     expect(fix).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// nats-bind-address: warn (never fix) when omni-nats runs on an old address
+// ---------------------------------------------------------------------------
+
+describe('runDoctor — nats-bind-address', () => {
+  const NATS_ARGS = ['-js', '-sd', '/tmp/data/nats'];
+
+  test('OK when omni-nats runs with the configured address', async () => {
+    const state = mkHarness({ natsArgs: [...NATS_ARGS, '-a', '127.0.0.1'] });
+    const report = await runDoctor({ fix: false }, mkDeps(state));
+    expect(report.checks.find((c) => c.id === 'nats-bind-address')?.level).toBe('OK');
+  });
+
+  test('WARN when omni-nats predates the bind address (no -a, all interfaces)', async () => {
+    const state = mkHarness({ natsArgs: NATS_ARGS });
+    const report = await runDoctor({ fix: false }, mkDeps(state));
+    const check = report.checks.find((c) => c.id === 'nats-bind-address');
+    expect(check?.level).toBe('WARN');
+    expect(check?.detail).toContain('listens on 0.0.0.0');
+    expect(check?.detail).toContain('omni stop && omni start');
+  });
+
+  test("--fix leaves omni-nats alone — applying the address is the user's call", async () => {
+    const state = mkHarness({ natsArgs: [...NATS_ARGS, '-a', '0.0.0.0'] });
+    const report = await runDoctor({ fix: true }, mkDeps(state));
+    expect(report.checks.find((c) => c.id === 'nats-bind-address')?.level).toBe('WARN');
+    expect(state.pm2Calls.filter((c) => c.args.includes('omni-nats'))).toEqual([]);
   });
 });

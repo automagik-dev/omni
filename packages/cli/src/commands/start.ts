@@ -5,12 +5,13 @@
  */
 
 import { existsSync, mkdirSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { Command } from 'commander';
 import { loadLocalRuntimeConfig, loadServerConfig } from '../config.js';
 import { getHealthCheckUrl, waitForHealth } from '../health.js';
+import { resolveManagedNatsHost, startManagedNats } from '../install-helpers.js';
 import { EMBEDDED_PGSERVE_DATA_DIR, readDataDirMajor } from '../lib/embedded-canonical-migration.js';
+import { NATS_BINARY_PATH } from '../nats-install.js';
 import * as output from '../output.js';
 import { PM2_PROCESSES, buildPm2StartArgs, getPm2LogDir, isPm2Available, pm2NotFoundError, runPm2 } from '../pm2.js';
 import { buildRuntimeEnv } from '../runtime-env.js';
@@ -73,6 +74,10 @@ async function runStart(): Promise<void> {
     );
   }
 
+  // Resolve the NATS bind address before launching anything, so an invalid
+  // hand-edited server.natsHost fails fast instead of after omni-api is up.
+  const natsHost = resolveManagedNatsHost(serverConfig);
+
   // Ensure hardened log directory exists before pm2 spawns.
   mkdirSync(getPm2LogDir(), { recursive: true });
 
@@ -94,24 +99,18 @@ async function runStart(): Promise<void> {
     return;
   }
 
-  // 4. Start omni-nats if binary exists
-  const natsPath = join(homedir(), '.omni', 'nats-server');
-  if (existsSync(natsPath)) {
-    output.info(`Starting ${PM2_PROCESSES.nats}...`);
-    const natsDataDir = join(serverConfig.dataDir, 'nats');
-    mkdirSync(natsDataDir, { recursive: true });
-    const natsArgs = buildPm2StartArgs({
-      kind: 'nats',
-      script: natsPath,
-      name: PM2_PROCESSES.nats,
-      scriptArgs: ['-js', '-sd', natsDataDir],
-    });
-    const natsCode = await runPm2(natsArgs);
+  // 4. (Re)create omni-nats if the binary exists — recreated, not restarted,
+  // so the current server.natsHost applies even to an older process.
+  if (existsSync(NATS_BINARY_PATH)) {
+    output.info(`Starting ${PM2_PROCESSES.nats} (bind address ${natsHost})...`);
+    const natsCode = await startManagedNats({ dataDir: serverConfig.dataDir, host: natsHost });
     if (natsCode !== 0) {
-      output.warn(`${PM2_PROCESSES.nats} failed to start — run 'omni install' to download NATS first`);
+      output.warn(
+        `${PM2_PROCESSES.nats} failed to start (pm2 exit code ${natsCode}) — check ${NATS_BINARY_PATH} or run 'omni install'`,
+      );
     }
   } else {
-    output.warn(`NATS binary not found at ${natsPath} — skipping. Run 'omni install' to set it up.`);
+    output.warn(`NATS binary not found at ${NATS_BINARY_PATH} — skipping. Run 'omni install' to set it up.`);
   }
 
   // 5. Wait for health check

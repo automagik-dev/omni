@@ -172,7 +172,7 @@ describe('history command', () => {
     clearEnvKey('OMNI_CHAT');
     clearEnvKey('OMNI_MESSAGE');
     if (savedHome !== undefined) process.env.OMNI_CONFIG_DIR = savedHome;
-    else process.env.OMNI_CONFIG_DIR = undefined;
+    else clearEnvKey('OMNI_CONFIG_DIR');
   });
 
   test('fetches messages with default limit of 10', async () => {
