@@ -10,12 +10,15 @@
 import { describe, expect, test } from 'bun:test';
 import type { SharedLeaseState } from '@omni/db';
 import {
+  DEFAULT_CONSUMER_SETTLE_MS,
   claimLease,
   computeLag,
   matchesConsumerPayload,
   planSharedPull,
   releaseLease,
+  resolveConsumerSettleMs,
   resolveInitialCursor,
+  truncateAtUnready,
 } from '../event-consumers';
 
 describe('matchesConsumerPayload', () => {
@@ -126,5 +129,59 @@ describe('shared consumer leases (#1188)', () => {
     expect(retry.rows).toEqual([1, 2, 3]);
     expect(releaseLease(retry.state, 'crashed')).toBeNull();
     expect(releaseLease(retry.state, 'retry')?.cursor).toBe(3);
+  });
+});
+
+describe('truncateAtUnready (opt-in journal readiness gate)', () => {
+  const NOW = 1_000_000;
+  const SETTLE = 5_000;
+  const row = (seq: number, journalReady: boolean, ageMs = 0) => ({
+    journalSeq: seq,
+    journalReady,
+    receivedAt: new Date(NOW - ageMs),
+  });
+  const seqs = (page: Array<{ journalSeq: number }>) => page.map((r) => r.journalSeq);
+
+  test('cuts the page just before the first young not-ready row', () => {
+    const page = [row(1, true), row(2, true), row(3, false, 100), row(4, true), row(5, false, 100)];
+    expect(seqs(truncateAtUnready(page, true, SETTLE, NOW))).toEqual([1, 2]);
+  });
+
+  test('a not-ready row older than the settle window counts as ready', () => {
+    const page = [row(1, true), row(2, false, SETTLE + 1), row(3, true), row(4, false, SETTLE)];
+    expect(seqs(truncateAtUnready(page, true, SETTLE, NOW))).toEqual([1, 2, 3, 4]);
+    expect(seqs(truncateAtUnready([row(1, false, SETTLE - 1)], true, SETTLE, NOW))).toEqual([]);
+  });
+
+  test('truncates to empty when the first row is held', () => {
+    const page = [row(7, false, 10), row(8, true)];
+    expect(truncateAtUnready(page, true, SETTLE, NOW)).toEqual([]);
+  });
+
+  test("returns the page unchanged when waitForReady is false (today's behaviour)", () => {
+    const page = [row(1, true), row(2, false, 0), row(3, true)];
+    const out = truncateAtUnready(page, false, SETTLE, NOW);
+    expect(out).toBe(page);
+    expect(seqs(out)).toEqual([1, 2, 3]);
+  });
+
+  test('an all-ready page is unchanged with the gate on', () => {
+    const page = [row(1, true), row(2, true)];
+    expect(truncateAtUnready(page, true, SETTLE, NOW)).toEqual(page);
+  });
+});
+
+describe('resolveConsumerSettleMs', () => {
+  test('defaults to 5000 ms when unset, blank or invalid', () => {
+    expect(DEFAULT_CONSUMER_SETTLE_MS).toBe(5_000);
+    expect(resolveConsumerSettleMs(undefined)).toBe(5_000);
+    expect(resolveConsumerSettleMs('')).toBe(5_000);
+    expect(resolveConsumerSettleMs('soon')).toBe(5_000);
+    expect(resolveConsumerSettleMs('-1')).toBe(5_000);
+  });
+
+  test('honours a numeric EVENT_CONSUMER_SETTLE_MS', () => {
+    expect(resolveConsumerSettleMs('250')).toBe(250);
+    expect(resolveConsumerSettleMs('0')).toBe(0);
   });
 });
