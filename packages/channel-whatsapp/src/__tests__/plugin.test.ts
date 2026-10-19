@@ -2,10 +2,12 @@
  * Tests for WhatsApp plugin
  */
 
-import { describe, expect, it, mock } from 'bun:test';
+import { afterEach, describe, expect, it, jest, mock } from 'bun:test';
+import type { OutgoingMessage } from '@omni/channel-sdk';
 import { WHATSAPP_CAPABILITIES } from '../capabilities';
+import { setupMessageHandlers } from '../handlers/messages';
 import { WhatsAppPlugin } from '../plugin';
-import { WhatsAppError } from '../utils/errors';
+import { ErrorCode, WhatsAppError } from '../utils/errors';
 
 describe('WhatsAppPlugin', () => {
   describe('metadata', () => {
@@ -339,6 +341,101 @@ describe('WhatsAppPlugin', () => {
       });
     });
 
+    it('resolves a rejecting reaction send to the structured failure result instead of throwing', async () => {
+      await withHumanDelayDisabled(async () => {
+        const plugin = new WhatsAppPlugin();
+        const sendMessage = mock(() => Promise.reject(new WhatsAppError(ErrorCode.SEND_FAILED, 'reaction rejected')));
+        const publish = mock(async (_type: string, _payload: unknown) => {});
+        const mockSocket = { sendMessage, user: { id: '5511999999999@s.whatsapp.net' } };
+        (plugin as any).sockets = new Map([[INSTANCE_ID, mockSocket]]);
+        (plugin as any).eventBus = { publish };
+        (plugin as any).logger = { info: mock(), debug: mock(), warn: mock(), error: mock() };
+
+        const pending = plugin.sendMessage(INSTANCE_ID, {
+          to: GROUP_JID,
+          content: { type: 'reaction', targetMessageId: MESSAGE_ID, emoji: '👍' },
+          metadata: { fromMe: false, targetParticipant: PARTICIPANT },
+        } as any);
+
+        await expect(pending).resolves.toMatchObject({
+          success: false,
+          error: 'reaction rejected',
+          errorCode: ErrorCode.SEND_FAILED,
+          retryable: false,
+        });
+        expect(sendMessage).toHaveBeenCalledTimes(1);
+        expect(publish.mock.calls.map((call) => call[0])).toContain('message.failed');
+      });
+    });
+
+    it('returns the normal success result for a successful reaction send', async () => {
+      await withHumanDelayDisabled(async () => {
+        const plugin = new WhatsAppPlugin();
+        const sendMessage = mock(() => Promise.resolve({ key: { id: 'REACTION-OK-ID' } }));
+        const mockSocket = { sendMessage, user: { id: '5511999999999@s.whatsapp.net' } };
+        (plugin as any).sockets = new Map([[INSTANCE_ID, mockSocket]]);
+        (plugin as any).logger = { info: mock(), debug: mock(), warn: mock(), error: mock() };
+
+        const result = await plugin.sendMessage(INSTANCE_ID, {
+          to: GROUP_JID,
+          content: { type: 'reaction', targetMessageId: MESSAGE_ID, emoji: '👍' },
+          metadata: { fromMe: false, targetParticipant: PARTICIPANT },
+        } as any);
+
+        expect(result.success).toBe(true);
+        expect(result.errorCode).toBeUndefined();
+        expect(typeof result.timestamp).toBe('number');
+        expect(sendMessage).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    async function quotedKeyFor(metadata: Record<string, unknown>) {
+      let quoted: unknown;
+      await withHumanDelayDisabled(async () => {
+        const plugin = new WhatsAppPlugin();
+        const sendMessage = mock((_jid: string, _content: unknown, _options?: { quoted?: unknown }) =>
+          Promise.resolve({ key: { id: 'SENT-ID' }, message: {} }),
+        );
+        const mockSocket = {
+          sendMessage,
+          sendPresenceUpdate: mock(async () => {}),
+          user: { id: '5511999999999@s.whatsapp.net' },
+        };
+        (plugin as any).sockets = new Map([[INSTANCE_ID, mockSocket]]);
+        (plugin as any).eventBus = { publish: mock(async () => {}) };
+        (plugin as any).logger = { info: mock(), debug: mock(), warn: mock(), error: mock() };
+
+        const result = await plugin.sendMessage(INSTANCE_ID, {
+          to: GROUP_JID,
+          content: { type: 'text', text: 'reply' },
+          replyTo: 'QUOTED-ID',
+          metadata,
+        } as any);
+        expect(result.success).toBe(true);
+        quoted = sendMessage.mock.calls[0]?.[2]?.quoted;
+      });
+      return quoted as { key?: Record<string, unknown> };
+    }
+
+    it('no new input: the no-row fallback quoted key stays fromMe=false without participant', async () => {
+      const quoted = await quotedKeyFor({});
+      expect(quoted.key).toEqual({ id: 'QUOTED-ID', remoteJid: GROUP_JID, fromMe: false });
+    });
+
+    it('replyToKey fromMe and participant reach the fallback quoted key when the row is missing', async () => {
+      const quoted = await quotedKeyFor({ replyToFromMe: true, replyToParticipant: PARTICIPANT });
+      expect(quoted.key).toEqual({ id: 'QUOTED-ID', remoteJid: GROUP_JID, fromMe: true, participant: PARTICIPANT });
+    });
+
+    it('no new input: a stored rawPayload is still quoted as-is', async () => {
+      const rawPayload = {
+        key: { id: 'QUOTED-ID', remoteJid: GROUP_JID, fromMe: false },
+        message: { conversation: 'x' },
+      };
+      const quoted = await quotedKeyFor({ replyToFromMe: false, replyToRawPayload: rawPayload });
+      expect(quoted).toBe(rawPayload);
+    });
+
     it('emits caption and media metadata for sent media messages', async () => {
       await withHumanDelayDisabled(async () => {
         const plugin = new WhatsAppPlugin();
@@ -396,6 +493,395 @@ describe('WhatsAppPlugin', () => {
           senderAgentId: undefined,
         });
       });
+    });
+  });
+
+  describe('outbound pacing', () => {
+    const INSTANCE_ID = 'pacing-instance';
+    const DM_JID = '5511888888888@s.whatsapp.net';
+
+    type PacingInternals = {
+      sockets: Map<string, unknown>;
+      eventBus: { publish: (type: string, payload: unknown) => Promise<void> };
+      logger: Record<string, unknown>;
+      humanDelay: (instanceId: string) => Promise<void>;
+      simulateTyping: (instanceId: string, jid: string, text: string) => Promise<void>;
+    };
+
+    function createPacingPlugin() {
+      const plugin = new WhatsAppPlugin();
+      const internals = plugin as unknown as PacingInternals;
+      const sendMessage = mock(async () => ({ key: { id: 'PACED-MSG-ID' }, message: { conversation: 'x' } }));
+      internals.sockets = new Map([
+        [
+          INSTANCE_ID,
+          { sendMessage, sendPresenceUpdate: mock(async () => {}), user: { id: '5511999999999@s.whatsapp.net' } },
+        ],
+      ]);
+      internals.eventBus = { publish: mock(async () => {}) };
+      internals.logger = { info: mock(), debug: mock(), warn: mock(), error: mock() };
+      const humanDelay = mock(async (_instanceId: string) => {});
+      const simulateTyping = mock(async (_instanceId: string, _jid: string, _text: string) => {});
+      internals.humanDelay = humanDelay;
+      internals.simulateTyping = simulateTyping;
+      return { plugin, sendMessage, humanDelay, simulateTyping };
+    }
+
+    const textMessage = (metadata?: Record<string, unknown>): OutgoingMessage => ({
+      to: DM_JID,
+      content: { type: 'text', text: 'hello there' },
+      ...(metadata ? { metadata } : {}),
+    });
+
+    const mediaMessage = (metadata: Record<string, unknown> = {}): OutgoingMessage => ({
+      to: DM_JID,
+      content: { type: 'image', caption: 'caption test', filename: 'test.png', mimeType: 'image/png' },
+      metadata: { base64: Buffer.from('image-bytes').toString('base64'), ...metadata },
+    });
+
+    const reactionMessage = (metadata?: Record<string, unknown>): OutgoingMessage => ({
+      to: DM_JID,
+      content: { type: 'reaction', targetMessageId: '3EB0REACTTARGET', emoji: '👍' },
+      ...(metadata ? { metadata } : {}),
+    });
+
+    it('no pacing metadata: text still runs humanDelay then simulateTyping (unchanged)', async () => {
+      const { plugin, sendMessage, humanDelay, simulateTyping } = createPacingPlugin();
+
+      const result = await plugin.sendMessage(INSTANCE_ID, textMessage());
+
+      expect(result.success).toBe(true);
+      expect(humanDelay).toHaveBeenCalledTimes(1);
+      expect(humanDelay.mock.calls[0]).toEqual([INSTANCE_ID]);
+      expect(simulateTyping).toHaveBeenCalledTimes(1);
+      expect(simulateTyping.mock.calls[0]).toEqual([INSTANCE_ID, DM_JID, 'hello there']);
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it("explicit 'humanized' behaves like no metadata", async () => {
+      const { plugin, humanDelay, simulateTyping } = createPacingPlugin();
+
+      await plugin.sendMessage(INSTANCE_ID, textMessage({ outboundPacing: 'humanized' }));
+
+      expect(humanDelay).toHaveBeenCalledTimes(1);
+      expect(simulateTyping).toHaveBeenCalledTimes(1);
+    });
+
+    it('immediate: text skips both humanDelay and simulateTyping but still sends', async () => {
+      const { plugin, sendMessage, humanDelay, simulateTyping } = createPacingPlugin();
+
+      const result = await plugin.sendMessage(INSTANCE_ID, textMessage({ outboundPacing: 'immediate' }));
+
+      expect(result.success).toBe(true);
+      expect(humanDelay).not.toHaveBeenCalled();
+      expect(simulateTyping).not.toHaveBeenCalled();
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it('no pacing metadata: media still runs humanDelay and simulateTyping (caption)', async () => {
+      const { plugin, humanDelay, simulateTyping } = createPacingPlugin();
+
+      await plugin.sendMessage(INSTANCE_ID, mediaMessage());
+
+      expect(humanDelay).toHaveBeenCalledTimes(1);
+      expect(simulateTyping).toHaveBeenCalledTimes(1);
+      expect(simulateTyping.mock.calls[0]).toEqual([INSTANCE_ID, DM_JID, 'caption test']);
+    });
+
+    it('immediate: media skips both humanDelay and simulateTyping but still sends', async () => {
+      const { plugin, sendMessage, humanDelay, simulateTyping } = createPacingPlugin();
+
+      const result = await plugin.sendMessage(INSTANCE_ID, mediaMessage({ outboundPacing: 'immediate' }));
+
+      expect(result.success).toBe(true);
+      expect(humanDelay).not.toHaveBeenCalled();
+      expect(simulateTyping).not.toHaveBeenCalled();
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it('no pacing metadata: reaction still runs humanDelay', async () => {
+      const { plugin, humanDelay } = createPacingPlugin();
+
+      const result = await plugin.sendMessage(INSTANCE_ID, reactionMessage());
+
+      expect(result.success).toBe(true);
+      expect(humanDelay).toHaveBeenCalledTimes(1);
+    });
+
+    it('immediate: reaction skips humanDelay but still sends', async () => {
+      const { plugin, sendMessage, humanDelay, simulateTyping } = createPacingPlugin();
+
+      const result = await plugin.sendMessage(INSTANCE_ID, reactionMessage({ outboundPacing: 'immediate' }));
+
+      expect(result.success).toBe(true);
+      expect(humanDelay).not.toHaveBeenCalled();
+      expect(simulateTyping).not.toHaveBeenCalled();
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+    });
+
+    describe('an immediate send still counts as the last action for humanDelay', () => {
+      const ENV_KEYS = ['WHATSAPP_HUMAN_DELAY_MIN_MS', 'WHATSAPP_HUMAN_DELAY_MAX_MS'] as const;
+      const savedEnv = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
+
+      afterEach(() => {
+        jest.useRealTimers();
+        for (const k of ENV_KEYS) {
+          if (savedEnv[k] === undefined) Reflect.deleteProperty(process.env, k);
+          else process.env[k] = savedEnv[k];
+        }
+      });
+
+      /** Real humanDelay (fixed 1000ms window) on a fake clock; records the clock at each socket send. */
+      function createSpacingPlugin() {
+        process.env.WHATSAPP_HUMAN_DELAY_MIN_MS = '1000';
+        process.env.WHATSAPP_HUMAN_DELAY_MAX_MS = '1000';
+        jest.useFakeTimers();
+        const plugin = new WhatsAppPlugin();
+        const internals = plugin as unknown as PacingInternals;
+        const sentAt: number[] = [];
+        const sendMessage = mock(async () => {
+          sentAt.push(Date.now());
+          return { key: { id: `SPACED-${sentAt.length}` }, message: { conversation: 'x' } };
+        });
+        internals.sockets = new Map([
+          [
+            INSTANCE_ID,
+            { sendMessage, sendPresenceUpdate: mock(async () => {}), user: { id: '5511999999999@s.whatsapp.net' } },
+          ],
+        ]);
+        internals.eventBus = { publish: mock(async () => {}) };
+        internals.logger = { info: mock(), debug: mock(), warn: mock(), error: mock() };
+        return { plugin, sentAt };
+      }
+
+      /** Drive the fake clock in 100ms steps until the send settles. */
+      async function settle<T>(promise: Promise<T>): Promise<T> {
+        let done = false;
+        const tracked = promise.finally(() => {
+          done = true;
+        });
+        for (let i = 0; i < 50 && !done; i++) {
+          for (let j = 0; j < 20; j++) await Promise.resolve();
+          if (!done) jest.advanceTimersByTime(100);
+        }
+        return tracked;
+      }
+
+      // Image without caption: preprocessOutgoing runs no typing simulation and no dynamic import.
+      const imageNoCaption = (metadata: Record<string, unknown> = {}): OutgoingMessage => {
+        const m = mediaMessage(metadata);
+        return { ...m, content: { ...m.content, caption: undefined } };
+      };
+
+      it('immediate send, then humanized send: the humanized one waits the humanDelay window', async () => {
+        const { plugin, sentAt } = createSpacingPlugin();
+
+        await settle(plugin.sendMessage(INSTANCE_ID, imageNoCaption({ outboundPacing: 'immediate' })));
+        await settle(plugin.sendMessage(INSTANCE_ID, imageNoCaption()));
+
+        expect(sentAt).toHaveLength(2);
+        expect((sentAt[1] ?? 0) - (sentAt[0] ?? 0)).toBeGreaterThanOrEqual(1000);
+      });
+
+      it('immediate reaction, then humanized send: the humanized one waits the humanDelay window', async () => {
+        const { plugin, sentAt } = createSpacingPlugin();
+
+        await settle(plugin.sendMessage(INSTANCE_ID, reactionMessage({ outboundPacing: 'immediate' })));
+        await settle(plugin.sendMessage(INSTANCE_ID, imageNoCaption()));
+
+        expect(sentAt).toHaveLength(2);
+        expect((sentAt[1] ?? 0) - (sentAt[0] ?? 0)).toBeGreaterThanOrEqual(1000);
+      });
+    });
+  });
+
+  describe('inbound quotes and reaction targets (opt-in inboundReplyContext)', () => {
+    const INSTANCE_ID = 'inbound-instance';
+    const CHAT = '5511888888888@s.whatsapp.net';
+    const OTHER = '5511888888888@s.whatsapp.net';
+
+    function createPluginWithEventBus({ inboundReplyContext = true }: { inboundReplyContext?: boolean } = {}) {
+      const plugin = new WhatsAppPlugin();
+      if (inboundReplyContext) (plugin as any).inboundReplyContextInstances.add(INSTANCE_ID);
+      const publish = mock(async (_type: string, _payload: unknown) => {});
+      (plugin as any).sockets = new Map([[INSTANCE_ID, { user: { id: '5511999999999:3@s.whatsapp.net' } }]]);
+      (plugin as any).eventBus = { publish };
+      (plugin as any).logger = { info: mock(), debug: mock(), warn: mock(), error: mock() };
+      return { plugin, publish };
+    }
+
+    function published(publish: ReturnType<typeof mock>, type: string): Record<string, unknown> {
+      const call = publish.mock.calls.find(([t]) => t === type);
+      expect(call).toBeDefined();
+      return call?.[1] as Record<string, unknown>;
+    }
+
+    const QUOTED_REPLY = {
+      key: { id: 'REPLY-1', remoteJid: CHAT, fromMe: false },
+      message: {
+        extendedTextMessage: {
+          text: 'reply',
+          contextInfo: { stanzaId: 'QUOTED-1', participant: OTHER, quotedMessage: { conversation: 'original' } },
+        },
+      },
+    };
+
+    async function receiveQuotedReply(plugin: WhatsAppPlugin) {
+      await plugin.handleMessageReceived(
+        INSTANCE_ID,
+        'REPLY-1',
+        CHAT,
+        '5511888888888',
+        { type: 'text', text: 'reply' },
+        'QUOTED-1',
+        QUOTED_REPLY as any,
+        false,
+      );
+    }
+
+    function expectTodayQuoteFields(payload: Record<string, unknown>) {
+      expect(payload.replyToId).toBe('QUOTED-1');
+      expect((payload.rawPayload as Record<string, unknown>).quotedMessage).toEqual({
+        stanzaId: 'QUOTED-1',
+        participant: OTHER,
+        type: 'text',
+        conversation: 'original',
+        pushName: undefined,
+      });
+    }
+
+    it('flag off (default): an inbound reply has today replyToId and rawPayload.quotedMessage and no replyTo key', async () => {
+      const { plugin, publish } = createPluginWithEventBus({ inboundReplyContext: false });
+
+      await receiveQuotedReply(plugin);
+
+      const payload = published(publish, 'message.received');
+      expectTodayQuoteFields(payload);
+      expect('replyTo' in payload).toBe(false);
+    });
+
+    it('flag on: an inbound reply also carries the typed replyTo', async () => {
+      const { plugin, publish } = createPluginWithEventBus();
+
+      await receiveQuotedReply(plugin);
+
+      const payload = published(publish, 'message.received');
+      expectTodayQuoteFields(payload);
+      expect(payload.replyTo).toEqual({
+        externalId: 'QUOTED-1',
+        chatId: CHAT,
+        participant: OTHER,
+        fromMe: false,
+        type: 'text',
+        text: 'original',
+      });
+    });
+
+    it('flag off: the payload equals the flag-on payload minus replyTo', async () => {
+      const off = createPluginWithEventBus({ inboundReplyContext: false });
+      const on = createPluginWithEventBus();
+      await receiveQuotedReply(off.plugin);
+      await receiveQuotedReply(on.plugin);
+
+      const { replyTo: _typed, ...onWithoutReplyTo } = published(on.publish, 'message.received');
+      const offPayload = published(off.publish, 'message.received');
+      expect(Object.keys(offPayload).sort()).toEqual(Object.keys(onWithoutReplyTo).sort());
+      expect(offPayload.replyToId).toBe(onWithoutReplyTo.replyToId);
+      expect(offPayload.rawPayload).toEqual(onWithoutReplyTo.rawPayload);
+    });
+
+    it('flag off: a reaction through the socket handler emits no target key', async () => {
+      const { plugin, publish } = createPluginWithEventBus({ inboundReplyContext: false });
+      const listeners = new Map<string, (arg: unknown) => Promise<void>>();
+      const sock = {
+        ev: { on: (event: string, listener: (arg: unknown) => Promise<void>) => listeners.set(event, listener) },
+        presenceSubscribe: mock(async () => {}),
+        user: { id: '5511999999999:3@s.whatsapp.net' },
+      };
+      setupMessageHandlers(sock as any, plugin, INSTANCE_ID);
+
+      await listeners.get('messages.reaction')?.([
+        {
+          key: { id: 'MSG-1', remoteJid: CHAT, fromMe: true },
+          reaction: { key: { id: 'R-1', remoteJid: CHAT, fromMe: false }, text: '👍' },
+        },
+      ]);
+      await listeners.get('messages.reaction')?.([
+        {
+          key: { id: 'MSG-1', remoteJid: CHAT, fromMe: true },
+          reaction: { key: { id: 'R-2', remoteJid: CHAT, fromMe: false }, text: '' },
+        },
+      ]);
+
+      const received = published(publish, 'reaction.received');
+      const removed = published(publish, 'reaction.removed');
+      expect('target' in received).toBe(false);
+      expect('target' in removed).toBe(false);
+      expect(received).toEqual({
+        messageId: 'MSG-1',
+        chatId: CHAT,
+        from: '5511888888888',
+        emoji: '👍',
+        rawPayload: { externalId: 'R-1', isFromMe: false },
+      });
+    });
+
+    it('no new input: a message without a quote has no replyTo key', async () => {
+      const { plugin, publish } = createPluginWithEventBus();
+      const msg = { key: { id: 'PLAIN-1', remoteJid: CHAT, fromMe: false }, message: { conversation: 'hi' } };
+
+      await plugin.handleMessageReceived(
+        INSTANCE_ID,
+        'PLAIN-1',
+        CHAT,
+        '5511888888888',
+        { type: 'text', text: 'hi' },
+        undefined,
+        msg as any,
+        false,
+      );
+
+      const payload = published(publish, 'message.received');
+      expect(payload).not.toHaveProperty('replyTo');
+      expect(payload.replyToId).toBeUndefined();
+      expect(payload.rawPayload).not.toHaveProperty('quotedMessage');
+    });
+
+    it('no new input: reaction events without a target carry no target key', async () => {
+      const { plugin, publish } = createPluginWithEventBus();
+
+      await plugin.handleReactionReceived(INSTANCE_ID, 'R-1', CHAT, '5511888888888', '👍', 'MSG-1', false);
+      await plugin.handleReactionReceived(INSTANCE_ID, 'R-2', CHAT, '5511888888888', '', 'MSG-1', false);
+
+      expect(published(publish, 'reaction.received')).toEqual({
+        messageId: 'MSG-1',
+        chatId: CHAT,
+        from: '5511888888888',
+        emoji: '👍',
+        rawPayload: { externalId: 'R-1', isFromMe: false },
+      });
+      expect(published(publish, 'reaction.removed')).toEqual({
+        messageId: 'MSG-1',
+        chatId: CHAT,
+        from: '5511888888888',
+        emoji: '',
+        rawPayload: { externalId: 'R-2', isFromMe: false },
+      });
+    });
+
+    it('reaction.received and reaction.removed carry the supplied target', async () => {
+      const { plugin, publish } = createPluginWithEventBus();
+      const target = { fromMe: true, participant: '100000000000001@lid' };
+
+      await plugin.handleReactionReceived(INSTANCE_ID, 'R-1', CHAT, '5511888888888', '✅', 'MSG-1', false, target);
+      await plugin.handleReactionReceived(INSTANCE_ID, 'R-2', CHAT, '5511888888888', '', 'MSG-1', false, {
+        fromMe: false,
+      });
+
+      const received = published(publish, 'reaction.received');
+      expect(received.target).toEqual(target);
+      expect(received.rawPayload).toEqual({ externalId: 'R-1', isFromMe: false });
+      expect(published(publish, 'reaction.removed').target).toEqual({ fromMe: false });
     });
   });
 });

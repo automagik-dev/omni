@@ -48,6 +48,13 @@ const log = createLogger('media-processor');
 const PROCESSABLE_MEDIA_TYPES = new Set(['audio', 'image', 'document', 'video']);
 
 /**
+ * Media types that are only downloaded and stored, never sent to AI processing.
+ * Applies to deferred media only (`content.mediaId`): this processor is the one
+ * place those bytes are materialized, and the platform handle expires (#1304).
+ */
+const DOWNLOAD_ONLY_MEDIA_TYPES = new Set(['sticker']);
+
+/**
  * Map processing type + content type to message column name
  */
 function getContentFieldForType(
@@ -89,6 +96,14 @@ function inferProcessingType(contentType?: string): 'transcription' | 'descripti
 function shouldProcess(contentType: string | undefined): boolean {
   if (!contentType) return false;
   return PROCESSABLE_MEDIA_TYPES.has(contentType);
+}
+
+/**
+ * Check if content is deferred media that should only be downloaded
+ */
+function shouldDownloadOnly(content: MessageReceivedPayload['content']): boolean {
+  if (!content.type || !content.mediaId) return false;
+  return DOWNLOAD_ONLY_MEDIA_TYPES.has(content.type);
 }
 
 function isUuid(value: string | undefined): value is string {
@@ -138,6 +153,8 @@ function getMimeType(content: MessageReceivedPayload['content']): string | undef
       return 'audio/ogg';
     case 'image':
       return 'image/jpeg';
+    case 'sticker':
+      return 'image/webp';
     case 'video':
       return 'video/mp4';
     case 'document':
@@ -565,6 +582,82 @@ function getPromptOverride(ctx: MediaProcessorContext, contentType: string | und
 }
 
 /**
+ * Per-instance cache of the audioTranscription mode only (no credentials), so
+ * the default 'auto' path costs about one instance read per instance per TTL
+ * instead of one per audio message. A changed setting applies within the TTL.
+ *
+ * The last mode successfully read is also kept past its TTL, so a lookup that
+ * throws later never flips a known 'off' instance back to transcription.
+ */
+const AUDIO_TRANSCRIPTION_MODE_TTL_MS = 30_000;
+type AudioTranscriptionMode = 'auto' | 'off';
+const audioTranscriptionModeCache = new Map<string, { mode: AudioTranscriptionMode; expiresAt: number }>();
+const lastKnownAudioTranscriptionMode = new Map<string, AudioTranscriptionMode>();
+
+/**
+ * Read the instance's audio transcription switch. Anything other than an
+ * explicit 'off' — a missing service, a missing instance, an unset or unknown
+ * value — answers 'auto', so the default path is today's. A lookup that throws
+ * answers the last mode read for the instance (a known 'off' stays off) and
+ * 'auto' only when the mode was never read.
+ * The legacy `process_audio` column is deliberately not consulted: nothing ever
+ * honoured it, so lines carrying `false` there keep being transcribed.
+ */
+async function readAudioTranscriptionMode(
+  ctx: MediaProcessorContext,
+  instanceId: string,
+  trustedTenantId: string | undefined,
+): Promise<AudioTranscriptionMode> {
+  const cacheKey = `${trustedTenantId ?? ''}:${instanceId}`;
+  const cached = audioTranscriptionModeCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.mode;
+  try {
+    const instancesService = ctx.services?.instances;
+    if (!instancesService) return 'auto';
+    const instance = await runMediaDb(ctx, trustedTenantId, () => instancesService.getById(instanceId));
+    const mode: AudioTranscriptionMode = instance?.audioTranscription === 'off' ? 'off' : 'auto';
+    audioTranscriptionModeCache.set(cacheKey, { mode, expiresAt: Date.now() + AUDIO_TRANSCRIPTION_MODE_TTL_MS });
+    lastKnownAudioTranscriptionMode.set(cacheKey, mode);
+    return mode;
+  } catch (error) {
+    const lastKnown = lastKnownAudioTranscriptionMode.get(cacheKey);
+    log.debug('Audio transcription mode lookup failed, using the last known mode', {
+      instanceId,
+      mode: lastKnown ?? 'auto',
+      lastKnown: lastKnown !== undefined,
+      error: String(error),
+    });
+    return lastKnown ?? 'auto';
+  }
+}
+
+/**
+ * Report a deliberately skipped transcription (audioTranscription 'off') with
+ * the same completion event a finished item emits, so a dispatcher waiting on
+ * the message is released at once. Not a failure: no media.processing.failed,
+ * no `error` field and no `[error` marker on the message row.
+ */
+async function publishTranscriptionSkipped(
+  ctx: MediaProcessorContext,
+  messageId: string,
+  metadata: { instanceId: string; eventId?: string; channelType?: ChannelType },
+): Promise<void> {
+  log.info('Audio transcription off for instance, skipping STT', { messageId, instanceId: metadata.instanceId });
+  await ctx.eventBus.publish(
+    'media.processed',
+    {
+      eventId: metadata.eventId ?? messageId,
+      mediaId: messageId,
+      processingType: 'transcription',
+      content: '',
+      skipped: true,
+      reason: 'transcription_off',
+    },
+    { instanceId: metadata.instanceId, channelType: metadata.channelType },
+  );
+}
+
+/**
  * Process media for a received message
  */
 async function processMessageMedia(
@@ -601,6 +694,15 @@ async function processMessageMedia(
     trustedTenantId,
   );
   if (!media) return;
+
+  // Opt-in per-instance switch (instances.audio_transcription): with 'off' the
+  // audio stays stored (resolved above) but never reaches an STT provider.
+  // Every other value — including every instance that never set it — keeps
+  // today's path below.
+  if (content.type === 'audio' && (await readAudioTranscriptionMode(ctx, instanceId, trustedTenantId)) === 'off') {
+    await publishTranscriptionSkipped(ctx, media.messageId, metadata);
+    return;
+  }
 
   // Obtain a readable local path for the bytes. In remote mode this fetches the
   // S3 object into a temp file; in local mode it resolves the on-disk path.
@@ -700,6 +802,34 @@ async function processMessageMedia(
 }
 
 /**
+ * Download and store deferred media without processing it. A failure is only
+ * logged: nothing awaits this media, so no failure event or error marker.
+ */
+async function storeDownloadOnlyMedia(
+  ctx: MediaProcessorContext,
+  payload: MessageReceivedPayload,
+  metadata: { instanceId: string; channelType?: ChannelType },
+  envelope: Pick<OmniEvent, 'metadata'>,
+): Promise<void> {
+  const { content, externalId } = payload;
+  const mimeType = getMimeType(content) ?? 'application/octet-stream';
+  try {
+    await resolveMediaPath(
+      ctx,
+      metadata.instanceId,
+      payload.chatId,
+      externalId,
+      content,
+      mimeType,
+      metadata.channelType,
+      envelopeTenantId(envelope),
+    );
+  } catch (error) {
+    log.error('Failed to store media', { externalId, contentType: content.type, error: String(error) });
+  }
+}
+
+/**
  * Publish failure events when media processing crashes unexpectedly.
  * Ensures the dispatcher doesn't wait forever for a completion that will never come.
  */
@@ -774,6 +904,46 @@ async function resolveMediaIdForCrash(
 }
 
 /**
+ * Handle one message.received event: process its media, publishing failure
+ * events if processing crashes.
+ */
+async function handleMessageReceived(ctx: MediaProcessorContext, event: OmniEvent): Promise<void> {
+  const payload = event.payload as MessageReceivedPayload;
+  const metadata = event.metadata;
+
+  if (!metadata.instanceId) return;
+  if (shouldDownloadOnly(payload.content)) {
+    await storeDownloadOnlyMedia(
+      ctx,
+      payload,
+      { instanceId: metadata.instanceId, channelType: metadata.channelType },
+      event,
+    );
+    return;
+  }
+  if (!shouldProcess(payload.content.type)) return;
+
+  try {
+    await processMessageMedia(
+      ctx,
+      payload,
+      {
+        instanceId: metadata.instanceId,
+        eventId: event.id,
+        channelType: metadata.channelType,
+      },
+      event,
+    );
+  } catch (error) {
+    log.error('Failed to process media', {
+      externalId: payload.externalId,
+      error: String(error),
+    });
+    await publishMediaCrashEvents(ctx, event.id, payload, metadata, error, envelopeTenantId(event));
+  }
+}
+
+/**
  * Set up media processing - subscribes to message.received events
  */
 export async function setupMediaProcessor(eventBus: EventBus, db: Database, services: Services): Promise<void> {
@@ -838,43 +1008,14 @@ export async function setupMediaProcessor(eventBus: EventBus, db: Database, serv
   };
 
   // Subscribe to message.received with durable consumer
-  await eventBus.subscribe(
-    'message.received',
-    async (event) => {
-      const payload = event.payload as MessageReceivedPayload;
-      const metadata = event.metadata;
-
-      if (!metadata.instanceId) return;
-      if (!shouldProcess(payload.content.type)) return;
-
-      try {
-        await processMessageMedia(
-          ctx,
-          payload,
-          {
-            instanceId: metadata.instanceId,
-            eventId: event.id,
-            channelType: metadata.channelType,
-          },
-          event,
-        );
-      } catch (error) {
-        log.error('Failed to process media', {
-          externalId: payload.externalId,
-          error: String(error),
-        });
-        await publishMediaCrashEvents(ctx, event.id, payload, metadata, error, envelopeTenantId(event));
-      }
-    },
-    {
-      durable: 'media-processor',
-      queue: 'media-processor',
-      maxRetries: 2,
-      retryDelayMs: 1000,
-      startFrom: 'first',
-      concurrency: 5, // #1200: per-message work, independent across deliveries
-    },
-  );
+  await eventBus.subscribe('message.received', (event) => handleMessageReceived(ctx, event), {
+    durable: 'media-processor',
+    queue: 'media-processor',
+    maxRetries: 2,
+    retryDelayMs: 1000,
+    startFrom: 'first',
+    concurrency: 5, // #1200: per-message work, independent across deliveries
+  });
 
   // Set up circuit breaker state change logging
   setGlobalCircuitBreakerStateChangeCallback((name, from, to) => {
@@ -911,7 +1052,12 @@ export async function setupMediaProcessor(eventBus: EventBus, db: Database, serv
 }
 
 export const __test__ = {
+  handleMessageReceived,
   buildFetchOptions,
+  resetAudioTranscriptionModeCache: () => {
+    audioTranscriptionModeCache.clear();
+    lastKnownAudioTranscriptionMode.clear();
+  },
   persistProcessingResult,
   resolveSafeMediaContentEventId,
   processMessageMedia,

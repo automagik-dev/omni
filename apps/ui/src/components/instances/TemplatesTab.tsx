@@ -14,6 +14,13 @@
  */
 
 import { TemplateBuilder } from '@/components/templates/TemplateBuilder';
+import {
+  type TemplateCategory,
+  type TemplateRow,
+  type TemplateStatus,
+  type TemplatesListResponse,
+  createdTemplateToast,
+} from '@/components/templates/template-payload';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -24,30 +31,6 @@ import { apiFetch } from '@/lib/sdk';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
-
-// ---------------------------------------------------------------------------
-// Local types — these mirror the row shape returned by GET /whatsapp-templates.
-// Once the SDK regenerates, swap for `WhatsappTemplate` from @omni/sdk.
-// ---------------------------------------------------------------------------
-
-type TemplateStatus = 'APPROVED' | 'PENDING' | 'REJECTED' | 'PAUSED' | 'DELETED';
-type TemplateCategory = 'MARKETING' | 'UTILITY' | 'AUTHENTICATION';
-
-interface TemplateRow {
-  id: string;
-  metaId?: string | null;
-  name: string;
-  language: string;
-  category: TemplateCategory;
-  status: TemplateStatus;
-  qualityScore?: string | null;
-  rejectionReason?: string | null;
-}
-
-interface TemplatesResponse {
-  templates: TemplateRow[];
-  count: number;
-}
 
 // ---------------------------------------------------------------------------
 // Hooks (local since SDK doesn't have these yet)
@@ -72,7 +55,7 @@ function useTemplatesList(instanceId: string, filters: TemplateFilters, sync = f
       // TODO: switch to omni.templates.list(instanceId, filters) after make sdk-generate
       const res = await apiFetch(`/instances/${instanceId}/whatsapp-templates${qs ? `?${qs}` : ''}`);
       if (!res.ok) throw new Error(`List templates failed: ${res.status}`);
-      return (await res.json()) as TemplatesResponse;
+      return (await res.json()) as TemplatesListResponse;
     },
   });
 }
@@ -119,7 +102,7 @@ export function TemplatesTab({ instanceId }: TemplatesTabProps) {
   const { data, isLoading, error, refetch } = useTemplatesList(instanceId, filters);
   const deleteMutation = useDeleteTemplate(instanceId);
 
-  const templates = useMemo(() => data?.templates ?? [], [data]);
+  const templates = useMemo(() => data?.items ?? [], [data]);
 
   const handleSync = async () => {
     setSyncing(true);
@@ -282,7 +265,7 @@ export function TemplatesTab({ instanceId }: TemplatesTabProps) {
             </table>
           </div>
         )}
-        {data && <p className="text-xs text-muted-foreground">{data.count} template(s)</p>}
+        {data && <p className="text-xs text-muted-foreground">{data.meta.count} template(s)</p>}
       </CardContent>
 
       {/* Builder dialog */}
@@ -294,10 +277,11 @@ export function TemplatesTab({ instanceId }: TemplatesTabProps) {
           </DialogHeader>
           <TemplateBuilder
             instanceId={instanceId}
-            onCreated={() => {
+            onCreated={(template) => {
               setShowBuilder(false);
               queryClient.invalidateQueries({ queryKey: ['whatsapp-templates', instanceId] });
-              toast.success('Template submitted for review');
+              const { kind, message } = createdTemplateToast(template);
+              toast[kind](message);
             }}
             onCancel={() => setShowBuilder(false)}
           />
