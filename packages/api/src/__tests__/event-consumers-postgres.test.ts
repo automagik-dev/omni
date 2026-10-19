@@ -33,9 +33,12 @@ import {
   applyTenantRlsEnforcement,
   createDbHandle,
   durableConsumers,
+  instances,
   omniEvents,
 } from '@omni/db';
 import { driverRejection, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { eq } from 'drizzle-orm';
+import { createPluginContext } from '../plugins/context';
 import { setupEventPersistence } from '../plugins/event-persistence';
 import { EventConsumerService } from '../services/event-consumers';
 import { runInWorkerTenantScope } from '../tenancy/worker-tenant-context';
@@ -101,6 +104,22 @@ async function captureCustomHandler(db: Database): Promise<CustomEventHandler> {
   await setupEventPersistence(mockBus, db);
   const handler = subscriptions.get('custom.>');
   if (!handler) throw new Error('custom.> subscriber was not registered');
+  return handler;
+}
+
+/** Capture the real `message.received` persistence fill (the upsert that completes a claimed row). */
+async function captureMessageReceivedHandler(db: Database): Promise<CustomEventHandler> {
+  const subscriptions = new Map<string, CustomEventHandler>();
+  const mockBus = {
+    subscribe: async (eventType: string, handler: CustomEventHandler) => {
+      subscriptions.set(eventType, handler);
+    },
+    subscribePattern: async () => {},
+  } as unknown as EventBus;
+
+  await setupEventPersistence(mockBus, db);
+  const handler = subscriptions.get('message.received');
+  if (!handler) throw new Error('message.received subscriber was not registered');
   return handler;
 }
 
@@ -396,6 +415,176 @@ postgresDescribe('durable event consumers (#989, real PostgreSQL)', () => {
       for (const item of items) {
         expect(item.lag).toBe(Math.max(0, item.head - item.cursor));
       }
+    });
+  });
+
+  describe('opt-in journal readiness gate (waitForReady)', () => {
+    let instanceId: string;
+    let fillHandler: CustomEventHandler;
+    let ingress: NonNullable<ReturnType<typeof createPluginContext>['ingressClaim']>;
+
+    beforeAll(async () => {
+      const [instance] = await db
+        .insert(instances)
+        .values({ name: `inst-journal-ready-${randomUUID()}`, channel: 'whatsapp-baileys' })
+        .returning();
+      if (!instance) throw new Error('instance seed failed');
+      instanceId = instance.id;
+      fillHandler = await captureMessageReceivedHandler(db);
+      const claimer = createPluginContext({ pluginId: 'whatsapp-baileys', eventBus: {} as EventBus, db }).ingressClaim;
+      if (!claimer) throw new Error('ingressClaim missing from plugin context');
+      ingress = claimer;
+    });
+
+    /** A real ingress claim: commits the hollow skeleton row (journal_ready = false). */
+    async function claim(tag: string): Promise<{ id: string; seq: number }> {
+      const id = await ingress.claim({
+        idempotencyKey: `whatsapp-baileys:${instanceId}:jr-${tag}-${randomUUID()}`,
+        instanceId,
+        channelType: 'whatsapp-baileys',
+        externalId: `jr-${tag}`,
+      });
+      if (!id) throw new Error('claim was deduped');
+      const [row] = await db.select().from(omniEvents).where(eq(omniEvents.id, id));
+      if (!row) throw new Error('claim did not commit a row (fail-open path)');
+      expect(row.journalReady).toBe(false);
+      expect(row.rawPayload).toBeNull();
+      return { id, seq: Number(row.journalSeq) };
+    }
+
+    /** The real message.received persistence fill under the claimed id. */
+    async function fill(id: string, tag: string): Promise<void> {
+      await fillHandler({
+        id,
+        type: 'message.received',
+        timestamp: Date.now(),
+        payload: {
+          externalId: `jr-${tag}`,
+          chatId: 'jr-chat@s.whatsapp.net',
+          from: 'jr-sender@s.whatsapp.net',
+          content: { type: 'text', text: `hello ${tag}` },
+          rawPayload: { kind: 'jr', tag },
+        },
+        metadata: { correlationId: id, instanceId, channelType: 'whatsapp-baileys' },
+      });
+      const [row] = await db.select().from(omniEvents).where(eq(omniEvents.id, id));
+      expect(row?.journalReady).toBe(true);
+    }
+
+    test('(a) no flag: a pull between claim and fill returns the hollow row and moves the cursor exactly as today', async () => {
+      const plain = await service.create({ name: 'jr-nogate', eventType: 'message.received' });
+      const filtered = await service.create({
+        name: 'jr-nogate-filtered',
+        eventType: 'message.received',
+        filters: [{ field: 'kind', operator: 'eq', value: 'jr' }],
+      });
+      expect(plain.waitForReady).toBe(false);
+      expect((await service.getByName('jr-nogate-filtered')).waitForReady).toBe(false);
+      const { id, seq } = await claim('a');
+
+      // Unfiltered: the hollow skeleton row is delivered; the returned cursor covers it, the stored cursor waits for ack.
+      const page = await service.pull('jr-nogate', { limit: 10 });
+      expect(page.items.map((e) => e.id)).toEqual([id]);
+      expect(page.items[0]?.rawPayload).toBeNull();
+      expect(page.items[0]?.journalReady).toBe(false);
+      expect(page.cursor).toBe(seq);
+      expect((await service.getByName('jr-nogate')).cursor).toBe(plain.cursor);
+
+      // Filtered: the hollow row fails the payload filter and the cursor is advanced past it (#1128), as today.
+      const dropped = await service.pull('jr-nogate-filtered', { limit: 10 });
+      expect(dropped.items).toEqual([]);
+      expect(dropped.cursor).toBe(seq);
+      expect((await service.getByName('jr-nogate-filtered')).cursor).toBe(seq);
+      expect(filtered.cursor).toBeLessThan(seq);
+      await fill(id, 'a');
+    });
+
+    test('(b) waitForReady=true: a claimed row is held, the cursor stays before it, and the filled row is delivered', async () => {
+      const gated = await service.create({ name: 'jr-gate', eventType: 'message.received', waitForReady: true });
+      await service.create({
+        name: 'jr-gate-filtered',
+        eventType: 'message.received',
+        filters: [{ field: 'kind', operator: 'eq', value: 'jr' }],
+        waitForReady: true,
+      });
+      expect(gated.waitForReady).toBe(true);
+      expect((await service.inspect('jr-gate')).waitForReady).toBe(true);
+      const { id, seq } = await claim('b');
+
+      const held = await service.pull('jr-gate', { limit: 10 });
+      expect(held.items).toEqual([]);
+      expect(held.cursor).toBe(gated.cursor);
+      expect(held.cursor).toBeLessThan(seq);
+      expect((await service.getByName('jr-gate')).cursor).toBe(gated.cursor);
+      const heldFiltered = await service.pull('jr-gate-filtered', { limit: 10 });
+      expect(heldFiltered.items).toEqual([]);
+      expect((await service.getByName('jr-gate-filtered')).cursor).toBeLessThan(seq);
+
+      await fill(id, 'b');
+
+      const page = await service.pull('jr-gate', { limit: 10 });
+      expect(page.items.map((e) => e.id)).toEqual([id]);
+      expect(page.items[0]?.journalReady).toBe(true);
+      expect(page.items[0]?.rawPayload).toEqual({ kind: 'jr', tag: 'b' });
+      expect(page.items[0]?.textContent).toBe('hello b');
+      expect(page.cursor).toBe(seq);
+      const filteredPage = await service.pull('jr-gate-filtered', { limit: 10 });
+      expect(filteredPage.items.map((e) => e.id)).toEqual([id]);
+    });
+
+    test('(c) waitForReady=true: a not-ready row older than the settle window is delivered', async () => {
+      await service.create({ name: 'jr-gate-stale', eventType: 'message.received', waitForReady: true });
+      const { id, seq } = await claim('c');
+      await db
+        .update(omniEvents)
+        .set({ receivedAt: new Date(Date.now() - 60_000) })
+        .where(eq(omniEvents.id, id));
+
+      const page = await service.pull('jr-gate-stale', { limit: 10 });
+      expect(page.items.map((e) => e.id)).toEqual([id]);
+      expect(page.items[0]?.journalReady).toBe(false);
+      expect(page.cursor).toBe(seq);
+    });
+
+    test('(d) waitForReady=true: a long-poll whose page is truncated to empty keeps waiting', async () => {
+      const gated = await service.create({ name: 'jr-gate-wait', eventType: 'message.received', waitForReady: true });
+      await claim('d');
+
+      const started = Date.now();
+      const page = await service.pull('jr-gate-wait', { limit: 10, waitMs: 1200 });
+      expect(Date.now() - started).toBeGreaterThanOrEqual(1000);
+      expect(page.items).toEqual([]);
+      expect(page.cursor).toBe(gated.cursor);
+      expect((await service.getByName('jr-gate-wait')).cursor).toBe(gated.cursor);
+    });
+
+    test('(e) shared + waitForReady=true: no fresh lease spans a held row; the filled row is leased', async () => {
+      const shared = await service.create({
+        name: 'jr-gate-shared',
+        eventType: 'message.received',
+        shared: true,
+        waitForReady: true,
+      });
+      const { id, seq } = await claim('e');
+
+      const held = await service.pull('jr-gate-shared', { limit: 10 });
+      expect(held.items).toEqual([]);
+      expect(held.leaseId).toBeUndefined();
+      expect(held.cursor).toBe(shared.cursor);
+      const state = (await service.getByName('jr-gate-shared')).leaseState;
+      expect(state?.claimed).toBe(shared.cursor);
+      expect(state?.claimed).toBeLessThan(seq);
+      expect(state?.leases).toEqual([]);
+
+      await fill(id, 'e');
+
+      const page = await service.pull('jr-gate-shared', { limit: 10 });
+      expect(page.items.map((e) => e.id)).toEqual([id]);
+      expect(page.items[0]?.journalReady).toBe(true);
+      expect(page.cursor).toBe(seq);
+      if (!page.leaseId) throw new Error('leaseId missing');
+      const acked = await service.ack('jr-gate-shared', 0, page.leaseId);
+      expect(acked.cursor).toBe(seq);
     });
   });
 

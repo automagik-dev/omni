@@ -561,6 +561,7 @@ async function sendTextMessage(
   senderAgentId?: string,
   systemNotice?: boolean,
   part?: { index: number; count: number },
+  outboundPacing?: 'humanized' | 'immediate' | null,
 ): Promise<void> {
   const plugin = await getPlugin(channel);
   if (!plugin) throw new Error(`Channel plugin not found: ${channel}`);
@@ -579,6 +580,8 @@ async function sendTextMessage(
       senderAgentId,
       systemNotice,
       ...(part ? { partIndex: part.index, partCount: part.count } : {}),
+      // Instance-level pacing; only 'immediate' adds a key (humanized keeps today's shape).
+      ...(outboundPacing === 'immediate' ? { outboundPacing } : {}),
     },
   });
 }
@@ -1603,6 +1606,7 @@ async function sendResponseParts(
   replyTo?: string,
   correlationId?: string,
   senderAgentId?: string,
+  outboundPacing?: 'humanized' | 'immediate' | null,
 ): Promise<void> {
   const messageLimit = getMessageLimit(channel);
   const chunked: string[] = [];
@@ -1637,6 +1641,7 @@ async function sendResponseParts(
       // asc-flow needs to know where the reply ENDS, because its transport
       // carries a single answer per polled turn.
       { index, count: allChunks.length },
+      outboundPacing,
     );
     const isLastChunk = index === allChunks.length - 1;
     if (!isLastChunk) {
@@ -3320,6 +3325,7 @@ async function dispatchViaProvider(
               replyTo,
               correlationId,
               senderAgentId,
+              instance.outboundPacing,
             ),
         );
 
@@ -3518,6 +3524,7 @@ async function dispatchViaLegacy(
         replyTo,
         correlationId,
         senderAgentId,
+        instance.outboundPacing,
       ),
   );
 
@@ -5216,6 +5223,9 @@ async function processReactionTrigger(
           getSplitDelayConfig(instance),
           _fmtMode,
           payload.messageId,
+          undefined,
+          undefined,
+          instance.outboundPacing,
         );
       }
 
@@ -5284,6 +5294,9 @@ async function processReactionTrigger(
         getSplitDelayConfig(instance),
         _fmtMode,
         payload.messageId,
+        undefined,
+        undefined,
+        instance.outboundPacing,
       );
     }
 
