@@ -206,6 +206,8 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
               agentId: metadata.agentId ?? null,
               causationId: metadata.causationId ?? null,
               conversationId: null,
+              // The fill completes a claimed skeleton row (opt-in consumer readiness gate).
+              journalReady: true,
               ...chatLink,
             };
 
@@ -279,6 +281,8 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
               agentId: metadata.agentId ?? null,
               causationId: metadata.causationId ?? null,
               conversationId: null,
+              // The fill completes a claimed skeleton row (opt-in consumer readiness gate).
+              journalReady: true,
               ...chatLink,
             };
 
@@ -536,6 +540,8 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
                 metadata: { correlationId: metadata.correlationId, from: payload.from, emoji: payload.emoji },
                 causationId: metadata.causationId ?? null,
                 conversationId: null,
+                // The fill completes a claimed skeleton row (opt-in consumer readiness gate).
+                journalReady: true,
                 ...chatLink,
               };
               // Upsert on id (#1096): the channel ingress claim inserted a skeletal

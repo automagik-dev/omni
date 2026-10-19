@@ -11,6 +11,16 @@ export interface WhatsAppOutboundTimingConfig {
   typingDefaultMs: number;
 }
 
+/** Server-held presence (POST /messages/send/presence hold=true). */
+export interface WhatsAppPresenceHoldConfig {
+  /** How often a held presence is re-sent (WHATSAPP_PRESENCE_REFRESH_MS). */
+  refreshMs: number;
+  /** Default max lifetime of a hold when the request gives none (WHATSAPP_PRESENCE_MAX_LIFETIME_MS). */
+  maxLifetimeMs: number;
+  /** Max concurrent holds per instance (WHATSAPP_PRESENCE_MAX_HOLDS_PER_INSTANCE). */
+  maxHoldsPerInstance: number;
+}
+
 export interface WhatsAppRateLimitEnvConfig {
   initialBackoffMs: number;
   maxBackoffMs: number;
@@ -27,6 +37,18 @@ export const DEFAULT_WHATSAPP_OUTBOUND_TIMING: WhatsAppOutboundTimingConfig = {
   typingDelayMaxMs: 4000,
   typingDefaultMs: 3000,
 };
+
+export const DEFAULT_WHATSAPP_PRESENCE_HOLD: WhatsAppPresenceHoldConfig = {
+  refreshMs: 10_000,
+  maxLifetimeMs: 60_000,
+  maxHoldsPerInstance: 50,
+};
+
+/** Hard cap on any hold's lifetime, whatever the env or the request asks for. */
+export const WHATSAPP_PRESENCE_HOLD_LIFETIME_CAP_MS = 300_000;
+
+/** Floor of WHATSAPP_PRESENCE_REFRESH_MS: a faster refresh is presence spam. */
+export const WHATSAPP_PRESENCE_REFRESH_MIN_MS = 3000;
 
 export const DEFAULT_WHATSAPP_RATE_LIMIT: WhatsAppRateLimitEnvConfig = {
   initialBackoffMs: 1000,
@@ -106,6 +128,33 @@ export function getWhatsAppOutboundTimingConfig(env: EnvMap = process.env): What
       'WHATSAPP_TYPING_DEFAULT_MS',
       DEFAULT_WHATSAPP_OUTBOUND_TIMING.typingDefaultMs,
     ),
+  };
+}
+
+/**
+ * A zero refresh would spin, a zero lifetime would end every hold at once and a
+ * zero hold cap would refuse every hold, so 0 falls back to the default just
+ * like an invalid value does. A refresh below WHATSAPP_PRESENCE_REFRESH_MIN_MS
+ * is raised to it.
+ */
+export function getWhatsAppPresenceHoldConfig(env: EnvMap = process.env): WhatsAppPresenceHoldConfig {
+  const rawRefreshMs =
+    readNonNegativeIntEnv(env, 'WHATSAPP_PRESENCE_REFRESH_MS', DEFAULT_WHATSAPP_PRESENCE_HOLD.refreshMs) ||
+    DEFAULT_WHATSAPP_PRESENCE_HOLD.refreshMs;
+  const maxLifetimeMs =
+    readNonNegativeIntEnv(env, 'WHATSAPP_PRESENCE_MAX_LIFETIME_MS', DEFAULT_WHATSAPP_PRESENCE_HOLD.maxLifetimeMs) ||
+    DEFAULT_WHATSAPP_PRESENCE_HOLD.maxLifetimeMs;
+  const maxHoldsPerInstance =
+    readNonNegativeIntEnv(
+      env,
+      'WHATSAPP_PRESENCE_MAX_HOLDS_PER_INSTANCE',
+      DEFAULT_WHATSAPP_PRESENCE_HOLD.maxHoldsPerInstance,
+    ) || DEFAULT_WHATSAPP_PRESENCE_HOLD.maxHoldsPerInstance;
+
+  return {
+    refreshMs: Math.max(rawRefreshMs, WHATSAPP_PRESENCE_REFRESH_MIN_MS),
+    maxLifetimeMs: Math.min(maxLifetimeMs, WHATSAPP_PRESENCE_HOLD_LIFETIME_CAP_MS),
+    maxHoldsPerInstance,
   };
 }
 

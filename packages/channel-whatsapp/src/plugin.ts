@@ -23,7 +23,7 @@ import type {
   SendResult,
   StreamSender,
 } from '@omni/channel-sdk';
-import { resolveInstanceOwnerTenantId } from '@omni/core';
+import { ERROR_CODES, OmniError, resolveInstanceOwnerTenantId } from '@omni/core';
 import type { ChannelType, ContentType } from '@omni/core/types';
 import type {
   GroupMetadata,
@@ -37,7 +37,12 @@ import type {
 
 import { clearAuthState, createStorageAuthState } from './auth';
 import { WHATSAPP_CAPABILITIES } from './capabilities';
-import { getWhatsAppOutboundTimingConfig, getWhatsAppRateLimitConfig } from './env';
+import {
+  WHATSAPP_PRESENCE_HOLD_LIFETIME_CAP_MS,
+  getWhatsAppOutboundTimingConfig,
+  getWhatsAppPresenceHoldConfig,
+  getWhatsAppRateLimitConfig,
+} from './env';
 import { setupAllEventHandlers } from './handlers/all-events';
 import {
   cancelPendingReconnect,
@@ -287,6 +292,21 @@ function getOrCreate<K, V>(outer: Map<K, Map<string, V>>, key: K): Map<string, V
   return inner;
 }
 
+/**
+ * One server-held presence. The object itself is the hold's identity: an
+ * in-flight holdPresence call compares it against the registry entry to learn
+ * whether its hold is still the live one.
+ */
+type PresenceHold = {
+  /** Re-send timer; set only once the first presence frame went out. */
+  refresh?: ReturnType<typeof setInterval>;
+  lifetime: ReturnType<typeof setTimeout>;
+  /** The Baileys state this hold keeps showing. */
+  presence: 'composing' | 'recording';
+  /** Why the hold left the registry: 'replaced' by a newer hold on the chat, or 'ended' (paused/send/reaction/expiry/disconnect). */
+  endedBy: 'replaced' | 'ended' | null;
+};
+
 export class WhatsAppPlugin extends BaseChannelPlugin {
   readonly id: ChannelType = 'whatsapp-baileys';
   readonly name = 'WhatsApp (Baileys)';
@@ -339,6 +359,21 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
   /** Last outgoing action timestamp per instance — for humanized delay */
   private lastActionTime = new Map<string, number>();
+
+  /**
+   * Server-held presences (opt-in, POST /messages/send/presence hold=true),
+   * keyed by `${instanceId}:${jid}` where jid is the resolveSendTarget
+   * (LID-first) target — the same JID sendMessage uses for that chat, so a
+   * send to the held chat finds and ends its hold.
+   */
+  private presenceHolds = new Map<string, PresenceHold>();
+
+  /**
+   * Pending legacy sendTyping auto-pause timers, keyed by
+   * `${instanceId}:${toJid(chatId)}`. Only read when a hold starts on that chat
+   * (a legacy pause firing later would otherwise kill the hold).
+   */
+  private legacyTypingPauses = new Map<string, Set<ReturnType<typeof setTimeout>>>();
 
   /**
    * Cache of message IDs sent by this bot (per instance).
@@ -1167,6 +1202,9 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     this.publishedLidMappings.delete(instanceId);
     this.publishedContactNames.delete(instanceId);
     this.lastActionTime.delete(instanceId);
+    for (const key of [...this.presenceHolds.keys()]) {
+      if (key.startsWith(`${instanceId}:`)) this.clearPresenceHold(key);
+    }
     this.historyPushFetchCount.delete(instanceId);
     // Dispose and remove per-instance dedup cache
     this.dedupeCaches.get(instanceId)?.dispose();
@@ -1357,12 +1395,19 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     jid: string,
     message: OutgoingMessage,
   ): Promise<OutgoingMessage> {
-    await this.humanDelay(instanceId);
+    // Opt-in immediate pacing skips ONLY the humanized delay and the typing
+    // simulation; everything below still runs.
+    if (message.metadata?.outboundPacing !== 'immediate') {
+      await this.humanDelay(instanceId);
 
-    // Simulate typing for text/caption messages
-    const textContent = message.content.text || message.content.caption || '';
-    if (textContent.length > 0) {
-      await this.simulateTyping(instanceId, jid, textContent);
+      // Simulate typing for text/caption messages
+      const textContent = message.content.text || message.content.caption || '';
+      if (textContent.length > 0) {
+        await this.simulateTyping(instanceId, jid, textContent);
+      }
+    } else {
+      // Still the instance's latest action: a humanized send that follows is spaced by humanDelay.
+      this.lastActionTime.set(instanceId, Date.now());
     }
 
     // Handle audio conversion for voice notes (PTT)
@@ -1652,6 +1697,9 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         await this.prewarmGroupCaches(instanceId, sock, jid);
       }
 
+      // A server-held presence on this chat ends as the frame goes out.
+      await this.releasePresenceHoldForSend(instanceId, sock, jid);
+
       // Journey timing: T10 before platform call, T11 after
       const correlationId = message.metadata?.correlationId as string | undefined;
       correlationId && this.captureT10(correlationId);
@@ -1682,6 +1730,9 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         timestamp: Date.now(),
       };
     } catch (error) {
+      // A failed send (preprocessing included) still ends a server-held presence on the chat.
+      await this.releasePresenceHoldForSend(instanceId, sock, jid);
+
       // ── Rate limit detection ──
       if (isRateLimitError(error)) {
         rateLimiter.handleRateLimit(error, 0);
@@ -1722,6 +1773,11 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     jid: string,
     message: OutgoingMessage,
   ): Promise<SendResult> {
+    // Any reaction attempt to the chat ends a server-held presence on it — a
+    // reaction rejected below included, so the hold never keeps refreshing.
+    // No-op when no hold is active.
+    await this.releasePresenceHoldForSend(instanceId, sock, jid);
+
     const { targetMessageId, emoji } = message.content;
 
     if (!targetMessageId) {
@@ -1752,8 +1808,13 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     const targetParticipant =
       typeof message.metadata?.targetParticipant === 'string' ? message.metadata.targetParticipant : undefined;
 
-    // Minimal delay for reactions (shorter than full humanDelay)
-    await this.humanDelay(instanceId);
+    // Minimal delay for reactions (shorter than full humanDelay); skipped under immediate pacing
+    if (message.metadata?.outboundPacing !== 'immediate') {
+      await this.humanDelay(instanceId);
+    } else {
+      // Still the instance's latest action: a humanized send that follows is spaced by humanDelay.
+      this.lastActionTime.set(instanceId, Date.now());
+    }
 
     this.logger.debug('Sending reaction', {
       jid,
@@ -1916,14 +1977,230 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     // Send composing presence
     await sock.sendPresenceUpdate('composing', jid);
 
-    // Auto-pause after duration
-    setTimeout(async () => {
+    // Auto-pause after duration. The timer is recorded per chat only so that a
+    // hold starting on this chat can cancel it (see holdPresence).
+    const pauseKey = `${instanceId}:${jid}`;
+    const pause = setTimeout(async () => {
+      this.forgetLegacyTypingPause(pauseKey, pause);
       try {
         await sock.sendPresenceUpdate('paused', jid);
       } catch {
         // Ignore errors when pausing typing
       }
     }, resolvedDuration);
+    const pending = this.legacyTypingPauses.get(pauseKey) ?? new Set<ReturnType<typeof setTimeout>>();
+    pending.add(pause);
+    this.legacyTypingPauses.set(pauseKey, pending);
+  }
+
+  private forgetLegacyTypingPause(key: string, timer: ReturnType<typeof setTimeout>): void {
+    const pending = this.legacyTypingPauses.get(key);
+    if (!pending) return;
+    pending.delete(timer);
+    if (pending.size === 0) this.legacyTypingPauses.delete(key);
+  }
+
+  /**
+   * Start, replace or stop a server-held presence (opt-in via
+   * POST /messages/send/presence hold=true).
+   *
+   * - 'typing' holds Baileys 'composing', 'recording' holds 'recording'; the
+   *   state is re-sent every WHATSAPP_PRESENCE_REFRESH_MS until a send or a
+   *   reaction to the chat, a 'paused' call, the max lifetime or an instance
+   *   disconnect. Reaching the max lifetime also sends 'paused' (best-effort).
+   * - 'paused' stops any hold on the chat and sends 'paused'.
+   * - maxLifetimeMs omitted or 0 = WHATSAPP_PRESENCE_MAX_LIFETIME_MS; any value
+   *   is capped at 300000.
+   * - At most WHATSAPP_PRESENCE_MAX_HOLDS_PER_INSTANCE chats per instance hold
+   *   at once; a hold on a new chat beyond that is CHANNEL_RATE_LIMITED.
+   *   Replacing the hold of an already held chat is always allowed.
+   *
+   * Concurrency: the hold is registered before its first frame is awaited, so
+   * the later of two calls on one chat wins and the earlier one never starts
+   * a refresh. A hold ended during that await (paused, send, reaction, expiry,
+   * disconnect) re-sends 'paused' so the chat ends paused whatever order the
+   * frames went out in, and reports expiresAt null.
+   *
+   * Target: the hold uses resolveSendTarget (LID-first), the same JID
+   * sendMessage resolves for the chat. Legacy sendTyping records its pending
+   * pause under toJid(chatId), so a hold start cancels that record.
+   */
+  async holdPresence(
+    instanceId: string,
+    chatId: string,
+    type: 'typing' | 'recording' | 'paused',
+    maxLifetimeMs?: number,
+  ): Promise<{ expiresAt: number | null; lifetimeMs: number }> {
+    const sock = this.getSocket(instanceId);
+    const jid = await this.resolveSendTarget(sock, instanceId, chatId);
+    const key = `${instanceId}:${jid}`;
+
+    if (type === 'paused') {
+      this.clearPresenceHold(key);
+      await sock.sendPresenceUpdate('paused', jid);
+      return { expiresAt: null, lifetimeMs: 0 };
+    }
+
+    const config = getWhatsAppPresenceHoldConfig();
+    this.assertPresenceHoldCapacity(instanceId, key, config.maxHoldsPerInstance);
+    this.clearPresenceHold(key, 'replaced');
+    this.cancelLegacyTypingPauses(`${instanceId}:${toJid(chatId)}`);
+    this.cancelLegacyTypingPauses(key);
+
+    const lifetimeMs = Math.min(
+      maxLifetimeMs && maxLifetimeMs > 0 ? maxLifetimeMs : config.maxLifetimeMs,
+      WHATSAPP_PRESENCE_HOLD_LIFETIME_CAP_MS,
+    );
+    const presence = type === 'recording' ? 'recording' : 'composing';
+    const hold = this.registerPresenceHold(instanceId, jid, key, lifetimeMs, presence);
+    const expiresAt = Date.now() + lifetimeMs;
+
+    try {
+      await sock.sendPresenceUpdate(presence, jid);
+    } catch (error) {
+      if (this.presenceHolds.get(key) === hold) this.clearPresenceHold(key);
+      throw error;
+    }
+
+    if (this.presenceHolds.get(key) !== hold) {
+      await this.settleSupersededPresenceHold(hold, key, sock, jid);
+      return { expiresAt: null, lifetimeMs: 0 };
+    }
+
+    hold.refresh = this.startPresenceRefresh(instanceId, key, hold, presence, jid, config.refreshMs);
+    return { expiresAt, lifetimeMs };
+  }
+
+  /** Refuse a hold on a NEW chat once the instance holds the configured maximum. */
+  private assertPresenceHoldCapacity(instanceId: string, key: string, maxHolds: number): void {
+    if (this.presenceHolds.has(key)) return;
+    const prefix = `${instanceId}:`;
+    let held = 0;
+    for (const heldKey of this.presenceHolds.keys()) {
+      if (heldKey.startsWith(prefix)) held++;
+    }
+    if (held < maxHolds) return;
+    throw new OmniError({
+      code: ERROR_CODES.CHANNEL_RATE_LIMITED,
+      message: `Instance ${instanceId} already holds presence in ${held} chats (WHATSAPP_PRESENCE_MAX_HOLDS_PER_INSTANCE=${maxHolds}); stop one with type 'paused' before holding another chat`,
+      context: { instanceId, maxHoldsPerInstance: maxHolds },
+      recoverable: true,
+    });
+  }
+
+  /**
+   * Put a fresh hold, with its lifetime timer, in the registry. When the
+   * lifetime runs out on the still-live hold, the hold ends and 'paused' is
+   * sent (best-effort) so the chat does not keep showing the indicator. A hold
+   * already replaced or ended has had its timer cleared, and the identity check
+   * keeps a stray fire from pausing a newer hold.
+   */
+  private registerPresenceHold(
+    instanceId: string,
+    jid: string,
+    key: string,
+    lifetimeMs: number,
+    presence: 'composing' | 'recording',
+  ): PresenceHold {
+    const hold: PresenceHold = {
+      presence,
+      lifetime: setTimeout(() => {
+        if (this.presenceHolds.get(key) !== hold) return;
+        this.clearPresenceHold(key);
+        this.sendExpiryPause(instanceId, jid);
+      }, lifetimeMs),
+      endedBy: null,
+    };
+    this.presenceHolds.set(key, hold);
+    return hold;
+  }
+
+  /** Best-effort 'paused' for an expired hold, on the socket current at fire time (a reconnect replaces it). */
+  private sendExpiryPause(instanceId: string, jid: string): void {
+    const current = this.sockets.get(instanceId);
+    if (!current) return;
+    try {
+      current.sendPresenceUpdate('paused', jid).catch(() => {
+        // Best-effort: the indicator also times out on the recipient side
+      });
+    } catch {
+      // Best-effort: a socket that throws synchronously must not escape the timer
+    }
+  }
+
+  /**
+   * A hold left the registry while its first frame was in flight, so that
+   * frame may have gone out after whatever superseded it. Re-assert the chat's
+   * current state (best-effort): the live hold's presence when a newer hold
+   * owns the chat, otherwise 'paused' (the stop's own 'paused' may have gone
+   * out before our frame).
+   */
+  private async settleSupersededPresenceHold(
+    hold: PresenceHold,
+    key: string,
+    sock: WASocket,
+    jid: string,
+  ): Promise<void> {
+    const live = this.presenceHolds.get(key);
+    if (!live && hold.endedBy === 'replaced') return;
+    try {
+      await sock.sendPresenceUpdate(live ? live.presence : 'paused', jid);
+    } catch {
+      // Best-effort: the chat's indicator also times out on the recipient side
+    }
+  }
+
+  private startPresenceRefresh(
+    instanceId: string,
+    key: string,
+    hold: PresenceHold,
+    presence: 'composing' | 'recording',
+    jid: string,
+    refreshMs: number,
+  ): ReturnType<typeof setInterval> {
+    const refresh = setInterval(() => {
+      if (this.presenceHolds.get(key) !== hold) {
+        clearInterval(refresh);
+        return;
+      }
+      // Look the socket up at fire time: a reconnect replaces it.
+      const current = this.sockets.get(instanceId);
+      if (!current) {
+        this.clearPresenceHold(key);
+        return;
+      }
+      current.sendPresenceUpdate(presence, jid).catch(() => {
+        // Best-effort refresh
+      });
+    }, refreshMs);
+    return refresh;
+  }
+
+  private cancelLegacyTypingPauses(key: string): void {
+    const pending = this.legacyTypingPauses.get(key);
+    if (!pending) return;
+    for (const timer of pending) clearTimeout(timer);
+    this.legacyTypingPauses.delete(key);
+  }
+
+  private clearPresenceHold(key: string, endedBy: 'replaced' | 'ended' = 'ended'): boolean {
+    const hold = this.presenceHolds.get(key);
+    if (!hold) return false;
+    hold.endedBy = endedBy;
+    if (hold.refresh) clearInterval(hold.refresh);
+    clearTimeout(hold.lifetime);
+    this.presenceHolds.delete(key);
+    return true;
+  }
+
+  /** End a hold on the send target and send 'paused' — only when a hold was active. */
+  private async releasePresenceHoldForSend(instanceId: string, sock: WASocket, jid: string): Promise<void> {
+    if (!this.clearPresenceHold(`${instanceId}:${jid}`)) return;
+    try {
+      await sock.sendPresenceUpdate('paused', jid);
+    } catch {
+      // Non-critical — the send itself clears the indicator on the recipient side
+    }
   }
 
   /**
