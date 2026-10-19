@@ -1,4 +1,4 @@
-// DS Bot: a team of long-lived Bots on top of ordinary dsh root Sessions.
+// Omni: a team of long-lived Bots on top of ordinary dsh root Sessions.
 // Every Bot is one root Session; the roster, rooms, and the bot-to-bot exchange log live
 // in one JSON file under DSH_HOME so they survive restarts without new Session event types.
 import { join } from 'node:path'
@@ -57,8 +57,8 @@ export function createRuntime(ctx, config = {}) {
     home,
     statePath: join(home, 'state.json'),
     defaults: {
-      mainName: config.mainName ?? 'Chief',
-      mainRole: config.mainRole ?? 'Chief of Staff',
+      mainName: config.mainName ?? 'Omni',
+      mainRole: config.mainRole ?? 'Channel orchestrator',
     },
   }
   for (const module of MODULES) module.install(rt)

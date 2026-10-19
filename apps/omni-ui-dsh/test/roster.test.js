@@ -253,7 +253,7 @@ test('a new team starts with a DeepSeek-blue whale as its Main Bot', async (t) =
   const team = (await call('state', {})).value
   assert.equal(team.mainBotIds.length, 1)
   const main = team.bots.find(bot => bot.id === team.mainBotId)
-  assert.equal(main.name, 'Chief')
+  assert.equal(main.name, 'Omni')
   assert.equal(main.color, 'deepseek')
   assert.deepEqual(main.avatar, { shape: 'whale' })
 
@@ -273,7 +273,7 @@ const OLD_TEAM = {
   mainBotIds: ['m1', 'w2'],
   revision: 4,
   bots: {
-    m1: { id: 'm1', sessionId: 'm1', name: 'Chief', role: 'Chief of Staff', lab: 'deepseek', instructions: '', createdAt: 1, color: 'red' },
+    m1: { id: 'm1', sessionId: 'm1', name: 'Omni', role: 'Channel orchestrator', lab: 'deepseek', instructions: '', createdAt: 1, color: 'red' },
     w2: { id: 'w2', sessionId: 'w2', name: 'Writer', role: '写作', lab: 'kimi', instructions: '', createdAt: 2 },
   },
   rooms: {},
@@ -311,7 +311,7 @@ test('another Bot takes the Main Bot place in one step', async (t) => {
   assert.equal(team.mainBotId, writer.id)
   // The whale stays with the Bot it was given to.
   assert.deepEqual(team.bots.find(bot => bot.id === chief).avatar, { shape: 'whale' })
-  // The old Main Bot can now be deleted, and no new Chief is made in its place.
+  // The old Main Bot can now be deleted, and no new Omni is made in its place.
   assert.equal((await call('delete-bot', { id: chief })).ok, true)
   const after = (await call('state', {})).value
   assert.deepEqual(after.mainBotIds, [writer.id])
@@ -368,7 +368,7 @@ const TEAM_WITH_PART = {
   mainBotIds: ['m1'],
   revision: 2,
   bots: {
-    m1: { id: 'm1', sessionId: 'm1', name: 'Chief', role: 'Chief of Staff', instructions: '', createdAt: 1 },
+    m1: { id: 'm1', sessionId: 'm1', name: 'Omni', role: 'Channel orchestrator', instructions: '', createdAt: 1 },
     w1: { id: 'w1', sessionId: 'w2', name: 'Writer', role: '', instructions: '', createdAt: 2, segments: [{ sessionId: 'w1', endedAt: 3 }] },
   },
   rooms: {},
@@ -399,22 +399,22 @@ test('an archive failure on delete is warned instead of passing silently', async
   assert.equal(warnings.filter(text => text.includes('not archived')).length, 1)
 })
 
-test('a hidden Bot made Main Bot shows again, and a replaced Chief drops its held greeting', async (t) => {
+test('a hidden Bot made Main Bot shows again, and a replaced Omni drops its held greeting', async (t) => {
   const { call, stop, sent } = start(undefined, { models: ['deepseek-v4-flash'] })
   t.after(stop)
   const chief = (await call('state', {})).value.mainBotId
   const writer = (await call('create-bot', { name: 'Writer' })).value
   await call('set-flags', { id: writer.id, hidden: true })
   await settle()
-  // Only Chief's messages count: Writer's own greeting can go out late on a busy machine.
-  const toChief = () => sent.filter(item => item.sessionId === chief).length
-  const greeted = toChief()
+  // Only Omni's messages count: Writer's own greeting can go out late on a busy machine.
+  const toOmni = () => sent.filter(item => item.sessionId === chief).length
+  const greeted = toOmni()
   const team = (await call('set-main', { id: writer.id, main: true, replace: chief })).value
   assert.equal(team.bots.find(bot => bot.id === writer.id).hidden, undefined)
   assert.equal(team.bots.find(bot => bot.id === chief).waiting, undefined)
   await call('update-bot', { id: chief, model: 'deepseek/deepseek-v4-flash' })
   await settle()
-  assert.equal(toChief(), greeted)
+  assert.equal(toOmni(), greeted)
 })
 
 const takeover = (home, team) => {
@@ -423,14 +423,14 @@ const takeover = (home, team) => {
 }
 
 test('a host that loses its lock to another dsh refuses changes instead of making a phantom Bot', async (t) => {
-  const { call, stop, home, ctx } = start({ version: 1, mainBotIds: ['chief'], bots: { chief: { id: 'chief', name: 'Chief' } } })
+  const { call, stop, home, ctx } = start({ version: 1, mainBotIds: ['chief'], bots: { chief: { id: 'chief', name: 'Omni' } } })
   t.after(stop)
   assert.equal((await call('state', {})).value.readOnly, null)
   let created = 0
   const create = ctx.sessionController.create
   ctx.sessionController.create = async (...args) => { created += 1; return create(...args) }
   // Another live dsh takes the lock and writes its own team.
-  takeover(home, { version: 1, revision: 9, mainBotIds: ['chief'], bots: { chief: { id: 'chief', name: 'Chief' }, other: { id: 'other', name: 'FromB' } } })
+  takeover(home, { version: 1, revision: 9, mainBotIds: ['chief'], bots: { chief: { id: 'chief', name: 'Omni' }, other: { id: 'other', name: 'FromB' } } })
   const answer = await call('create-bot', { name: 'Phantom' })
   assert.equal(answer.ok, false)
   assert.equal(answer.error.code, 'bot/read-only')
@@ -463,7 +463,7 @@ test('a delete whose save fails still stops the Sessions, and the next save writ
 })
 
 test('a rolled-back Bot does not come back with a save queued before the rollback', async (t) => {
-  const { call, stop, home } = start({ version: 1, mainBotIds: ['chief'], bots: { chief: { id: 'chief', name: 'Chief' } } })
+  const { call, stop, home } = start({ version: 1, mainBotIds: ['chief'], bots: { chief: { id: 'chief', name: 'Omni' } } })
   t.after(async () => {
     fsp.rename = rename
     syncBuiltinESMExports()
@@ -500,11 +500,11 @@ test('a rolled-back Bot does not come back with a save queued before the rollbac
   // be what drops Phantom, so wait for that save itself.
   const names = () => Object.values(JSON.parse(readFileSync(statePath, 'utf8')).bots).map(bot => bot.name).sort()
   await until(() => !names().includes('Phantom'))
-  assert.deepEqual(names(), ['Chief', 'Kept', 'Warm'])
+  assert.deepEqual(names(), ['Kept', 'Omni', 'Warm'])
 })
 
 test('a write that fails at save time archives the Session it made', async (t) => {
-  const { call, stop, home, ctx } = start({ version: 1, mainBotIds: ['chief'], bots: { chief: { id: 'chief', name: 'Chief' } } })
+  const { call, stop, home, ctx } = start({ version: 1, mainBotIds: ['chief'], bots: { chief: { id: 'chief', name: 'Omni' } } })
   t.after(stop)
   await call('state', {})
   const created = []
@@ -535,7 +535,7 @@ test('a Bot cannot be named or renamed like the user; one named so before keeps 
     version: 1,
     mainBotIds: ['a'],
     bots: {
-      a: { id: 'a', name: 'Chief', role: '', instructions: '', sessionId: 'a', createdAt: 1 },
+      a: { id: 'a', name: 'Omni', role: '', instructions: '', sessionId: 'a', createdAt: 1 },
       u: { id: 'u', name: 'User', role: '', instructions: '', sessionId: 'u', createdAt: 2 },
     },
     rooms: {},

@@ -16,7 +16,7 @@ const team = () => ({
   version: 1,
   mainBotIds: ['chief'],
   bots: {
-    chief: { id: 'chief', sessionId: 'chief', name: 'Chief', capabilities: [], createdAt: 1 },
+    chief: { id: 'chief', sessionId: 'chief', name: 'Omni', capabilities: [], createdAt: 1 },
     worker: { id: 'worker', sessionId: 'worker', name: 'Worker', capabilities: [], createdAt: 2 },
     helper: { id: 'helper', sessionId: 'helper', name: 'Helper', capabilities: [], createdAt: 3 },
   },
@@ -173,7 +173,7 @@ test('capability tool descriptions and attach results explain approval', async t
     { name: 'blocked' },
     { agent: { id: 'worker' } },
   )
-  assert.ok(attached.endsWith(' The user must allow blocked in DS Bot settings before it can work.'))
+  assert.ok(attached.endsWith(' The user must allow blocked in Omni settings before it can work.'))
 })
 
 test('read-only secret reload does not requeue capability reconciliation', async t => {
@@ -381,8 +381,8 @@ test('mounts agent-only MCP and skills, remounts changed config, resolves scoped
   await rt.capabilitySave({ name: 'team', kind: 'pack', items: ['echo', 'guide'] }, { botId: 'chief' })
   await rt.changeCapabilityAttachment('attach', { name: 'team' }, 'chief')
   await rt.changeCapabilityAttachment('attach', { name: 'team', bot: 'Worker' }, 'chief')
-  await assert.rejects(rt.changeCapabilityAttachment('attach', { name: 'team', bot: 'Chief' }, 'worker'), /Main Bot/)
-  await assert.rejects(rt.changeCapabilityAttachment('detach', { name: 'team', bot: 'Chief' }, 'worker'), /Main Bot/)
+  await assert.rejects(rt.changeCapabilityAttachment('attach', { name: 'team', bot: 'Omni' }, 'worker'), /Main Bot/)
+  await assert.rejects(rt.changeCapabilityAttachment('detach', { name: 'team', bot: 'Omni' }, 'worker'), /Main Bot/)
   await rt.capabilitySave(mcp('blocked'), { botId: 'worker' })
   await rt.changeCapabilityAttachment('attach', { name: 'blocked' }, 'worker')
   const chief = testAgent('chief', mounts, skills)

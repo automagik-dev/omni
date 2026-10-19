@@ -140,7 +140,7 @@ test('a linked checkout, an unversioned git install, or a disabled check never a
     const view = await rt.updateCheck()
     assert.equal(view.available, false)
     assert.deepEqual(fetched, [])
-    assert.throws(() => rt.updateStart(), /No DS Bot update/)
+    assert.throws(() => rt.updateStart(), /No Omni update/)
   }
   const { rt, fetched } = start({ source: `${PKG.name}@^${PKG.version}`, config: { updateCheck: false } })
   assert.equal((await rt.updateCheck({ fresh: true })).available, false)
@@ -190,7 +190,7 @@ test('a check that finds nothing clears the version a check before it found', as
   const linked = await rt.updateCheck({ fresh: true })
   assert.equal(linked.available, false)
   assert.equal(linked.latest, null)
-  assert.throws(() => rt.updateStart(), /No DS Bot update/)
+  assert.throws(() => rt.updateStart(), /No Omni update/)
   // Back on the registry with no copy answering: the offer stays cleared.
   delete answers[latest]
   setSource(`^${PKG.version}`)

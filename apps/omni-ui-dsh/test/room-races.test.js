@@ -13,7 +13,7 @@ const TEAM = {
   mainBotIds: ['a'],
   workspaceId: 'w1',
   bots: {
-    a: { id: 'a', name: 'Chief', role: 'Boss', sessionId: 'a', createdAt: 1 },
+    a: { id: 'a', name: 'Omni', role: 'Boss', sessionId: 'a', createdAt: 1 },
     b: { id: 'b', name: 'Writer', role: 'Write', sessionId: 'b', createdAt: 2 },
     c: { id: 'c', name: 'Coder', role: 'Code', sessionId: 'c', createdAt: 3 },
     d: { id: 'd', name: 'Tester', role: 'Test', sessionId: 'd', createdAt: 4 },

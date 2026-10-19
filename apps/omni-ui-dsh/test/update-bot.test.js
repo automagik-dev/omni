@@ -12,7 +12,7 @@ const TEAM = {
   revision: 1,
   whaleStored: true,
   bots: {
-    m1: { id: 'm1', sessionId: 'm1', name: 'Chief', role: 'Chief of Staff', model: 'deepseek/v4', instructions: '', createdAt: 1 },
+    m1: { id: 'm1', sessionId: 'm1', name: 'Omni', role: 'Channel orchestrator', model: 'deepseek/v4', instructions: '', createdAt: 1 },
     b2: { id: 'b2', sessionId: 'b2', name: 'Writer', role: '写作', model: 'deepseek/v4', instructions: '', createdAt: 2 },
     b3: { id: 'b3', sessionId: 'b3', name: 'Coder', role: '代码', instructions: '', createdAt: 3 },
   },
@@ -71,8 +71,8 @@ test('a Bot changes itself by leaving out bot, or by naming itself', async (t) =
 test('a Bot cannot change another Bot; a Main Bot can', async (t) => {
   const { tool, state, stop } = start()
   t.after(stop)
-  assert.match(await tool('update_bot', { bot: 'Chief', role: 'boss' }, 'b2'), /^Only a Main Bot can change another Bot/)
-  assert.equal(state().bots.m1.role, 'Chief of Staff')
+  assert.match(await tool('update_bot', { bot: 'Omni', role: 'boss' }, 'b2'), /^Only a Main Bot can change another Bot/)
+  assert.equal(state().bots.m1.role, 'Channel orchestrator')
   assert.equal(await tool('update_bot', { bot: 'Writer', role: '主笔' }, 'm1'), 'Updated Writer.')
   assert.equal(state().bots.b2.role, '主笔')
   assert.match(await tool('update_bot', { bot: 'Nobody' }, 'm1'), /^No Bot named Nobody/)

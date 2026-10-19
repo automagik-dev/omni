@@ -70,7 +70,7 @@ const TEAM = {
   mainBotIds: ['m1'],
   revision: 1,
   bots: {
-    m1: { id: 'm1', sessionId: 'm1', name: 'Chief', role: 'Chief of Staff', lab: 'deepseek', instructions: '', createdAt: 1 },
+    m1: { id: 'm1', sessionId: 'm1', name: 'Omni', role: 'Channel orchestrator', lab: 'deepseek', instructions: '', createdAt: 1 },
     b2: { id: 'b2', sessionId: 'b2', name: 'Writer', role: '写作', lab: 'kimi', instructions: '', createdAt: 2 },
     c3: { id: 'c3', sessionId: 'c3', name: 'Coder', role: '代码', lab: 'deepseek', instructions: '', createdAt: 3 },
   },
@@ -182,7 +182,7 @@ test('a card saves a key the Bot never sees, and the shell gets it', async (t) =
   const live = bench.contributors.filter(entry => entry.live)
   assert.equal(live.length, 1)
   assert.deepEqual(Object.keys(live[0].variables), ['DSH_SECRET_DEMO_TOKEN'])
-  assert.equal(live[0].variables.DSH_SECRET_DEMO_TOKEN.description, 'DS Bot secret DEMO_TOKEN: 测试')
+  assert.equal(live[0].variables.DSH_SECRET_DEMO_TOKEN.description, 'Omni secret DEMO_TOKEN: 测试')
 
   // Asking again only names the variable.
   const again = await bench.tool('request_secret', { name: 'DEMO_TOKEN', purpose: 'x' }, 'b2')

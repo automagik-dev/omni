@@ -7,12 +7,12 @@ import { apply } from '../index.js'
 import { fakeContext } from './fake-ctx.js'
 import { stripWrittenCalls, writesToolCall } from '../src/host/turns.js'
 
-// Chief in its own chat 'a'; Writer, the admin of group 'r1', speaks there from 'gb'.
+// Omni in its own chat 'a'; Writer, the admin of group 'r1', speaks there from 'gb'.
 const seed = () => ({
   version: 1,
   mainBotIds: ['a'],
   bots: {
-    a: { id: 'a', name: 'Chief', role: 'Boss', sessionId: 'a', createdAt: 1 },
+    a: { id: 'a', name: 'Omni', role: 'Boss', sessionId: 'a', createdAt: 1 },
     b: { id: 'b', name: 'Writer', role: 'Write', sessionId: 'b', createdAt: 2 },
   },
   rooms: { r1: { id: 'r1', name: 'Ops', members: ['a', 'b'], mode: 'admin', admin: 'b', named: true, sessions: { b: 'gb' }, log: [], seq: 0, seen: {} } },
@@ -24,7 +24,7 @@ const seed = () => ({
   revision: 0,
 })
 
-// One DS Bot host on `home`; a second start on the same home is a restart.
+// One Omni host on `home`; a second start on the same home is a restart.
 // Hosts by home: a home is removed only after its hosts stopped and their writes landed.
 const started = new Map()
 
@@ -146,7 +146,7 @@ test('a request cut off by a restart goes on under the same exchange; own-chat w
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const home = freshHome(t)
   const first = await start(home)
-  run(first, 'b', 1, { content: [{ type: 'text', text: '[Message from Chief]\nDraft the plan' }], source: { kind: 'bot', form: 'relay', role: 'request', exchangeId: 'x1', senderName: 'Chief', senderSessionId: 'a', hop: 0 } })
+  run(first, 'b', 1, { content: [{ type: 'text', text: '[Message from Omni]\nDraft the plan' }], source: { kind: 'bot', form: 'relay', role: 'request', exchangeId: 'x1', senderName: 'Omni', senderSessionId: 'a', hop: 0 } })
   run(first, 'a', 1, { content: [{ type: 'text', text: 'hello' }], source: { kind: 'user' } })
   await settle(() => inflight(home).b?.trigger !== undefined && inflight(home).a !== undefined)
   await first.stop()
@@ -156,7 +156,7 @@ test('a request cut off by a restart goes on under the same exchange; own-chat w
   await settle(() => second.agentOf('b').calls.length === 1 && second.agentOf('a').calls.length === 1)
   const request = second.agentOf('b').calls[0]
   assert.deepEqual([request.source.role, request.source.exchangeId, request.source.senderSessionId, request.source.resumed], ['request', 'x1', 'a', true])
-  assert.match(text(request), /^\[Message from Chief · DeepSeek Harness restarted while you were working on it\]/)
+  assert.match(text(request), /^\[Message from Omni · DeepSeek Harness restarted while you were working on it\]/)
   const own = second.agentOf('a').calls[0]
   assert.deepEqual([own.source.role, own.source.resumed], ['resume', true])
   assert.match(text(own), /^\[DeepSeek Harness restarted while you were working\]/)
@@ -164,16 +164,16 @@ test('a request cut off by a restart goes on under the same exchange; own-chat w
   assert.equal(state.exchanges.length, 0)
 })
 
-test('when only DS Bot restarts, a turn still running or finished meanwhile is not picked up', async (t) => {
+test('when only Omni restarts, a turn still running or finished meanwhile is not picked up', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const home = freshHome(t)
   const first = await start(home)
-  run(first, 'b', 1, { content: [{ type: 'text', text: '[Message from Chief]\nDraft the plan' }], source: { kind: 'bot', form: 'relay', role: 'request', exchangeId: 'x1', senderName: 'Chief', senderSessionId: 'a', hop: 0 } })
+  run(first, 'b', 1, { content: [{ type: 'text', text: '[Message from Omni]\nDraft the plan' }], source: { kind: 'bot', form: 'relay', role: 'request', exchangeId: 'x1', senderName: 'Omni', senderSessionId: 'a', hop: 0 } })
   run(first, 'a', 1, { content: [{ type: 'text', text: 'hello' }], source: { kind: 'user' } })
   await settle(() => inflight(home).b?.trigger !== undefined && inflight(home).a !== undefined)
   await first.stop()
 
-  // DSH went on: Writer is still at work, and Chief's turn ends before the pick-up.
+  // DSH went on: Writer is still at work, and Omni's turn ends before the pick-up.
   const second = await start(home)
   second.agentOf('b').status = 'running'
   second.emit('a', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
@@ -228,7 +228,7 @@ test('a message a shutdown cancelled is sent again once; one still waiting, take
   await send('Read the notes')
   await send('Never mind')
   const [plan, numbers, notesMessage, withdrawn] = first.agentOf('b').calls
-  // Taken up by a turn, or withdrawn while DS Bot runs (the user stopped the Bot).
+  // Taken up by a turn, or withdrawn while Omni runs (the user stopped the Bot).
   first.emit('b', 'user/message', { content: notesMessage.content, source: notesMessage.source })
   for (const listener of first.ctx.listeners.get('agent/inbox/discarded')) listener({ message: withdrawn })
   await settle(() => (notes(home).queued.b ?? []).length === 2)

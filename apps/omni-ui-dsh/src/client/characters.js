@@ -1,7 +1,7 @@
 import { INKS, GRADIENTS, isHex, inkFill } from './inks.js'
 
 // -------------------------------------------------------------------------
-// Characters: DS Bot's own avatars, small 3D models seen from a
+// Characters: Omni's own avatars, small 3D models seen from a
 // three-quarter view and flattened into layers in a 100-unit box: the body, decals in
 // fixed colors, a shade on the side away from the light, and a highlight facing it.
 // The eyes [cx, cy, width, height, tilt] are cut out of every layer, so they show

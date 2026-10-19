@@ -34,7 +34,7 @@ const PAGE = `<!doctype html><html lang="en"><head><title>Sample</title>
 <details><summary>More</summary>HIDDEN-DETAILS</details>
 <p><img alt="A dot"> <img src="x.png"> after.</p>
 <div role="heading" aria-level="3">Aria heading</div>
-<div id="host">LIGHT-UNSLOTTED<span slot="name">Chief</span></div>
+<div id="host">LIGHT-UNSLOTTED<span slot="name">Omni</span></div>
 <label for="user">User</label><input id="user" value="writer@example.com">
 <input id="pw" type="password" value="SECRET-PASSWORD" aria-label="Password">
 <input autocomplete="cc-number" value="SECRET-CARD" placeholder="Card">
@@ -101,7 +101,7 @@ test('the reader turns the visible page into Markdown with marked links and cont
   has('More[#3]')
   has('[image: A dot] after.')
   has('### Aria heading')
-  has('### Bot: Chief\n\nFallback\n\nMessage[#4]')
+  has('### Bot: Omni\n\nFallback\n\nMessage[#4]')
   has('[iframe: Inner (about:blank)]\nLevel one inner link[#13]')
   has('Level three\n\n[iframe (nested too deep, not read): about:blank]')
   has('[iframe (cross-origin, not readable): https://other.example/embed]')

@@ -18,7 +18,7 @@ test('a Bot with no look of its own never gets the whale, gray, brown, or black'
 const roster = (bots, mainBotIds) => indexRoster({ bots, rooms: [], mainBotIds, mainBotId: mainBotIds[0] ?? null })
 
 test('the whale is only a stored look: the browser gives no Bot a look by its place in the team', () => {
-  const chief = { id: 'chief', name: 'Chief', createdAt: 1, color: 'deepseek', avatar: { shape: 'whale' } }
+  const chief = { id: 'chief', name: 'Omni', createdAt: 1, color: 'deepseek', avatar: { shape: 'whale' } }
   const writer = { id: 'writer', name: 'Writer', createdAt: 2 }
   assert.deepEqual(lookOf(roster([writer, chief], ['chief']).byId.chief), { ...MAIN_LOOK, image: undefined })
   // The first Main Bot left, with no stored look, keeps the look its id gives it.

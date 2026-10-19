@@ -7,7 +7,7 @@ import { mentionSpans, nameProblem, referenceSpans, speakerOf } from '../src/sha
 import { mentionsIn } from '../src/host/groups.js'
 import { linkMentions, MENTION_ORIGIN } from '../src/client/text.js'
 
-const bots = [{ id: 'a', name: '新 Bot' }, { id: 'b', name: '新 Bot 2' }, { id: 'c', name: 'Chief' }, { id: 'k', name: 'K' }]
+const bots = [{ id: 'a', name: '新 Bot' }, { id: 'b', name: '新 Bot 2' }, { id: 'c', name: 'Omni' }, { id: 'k', name: 'K' }]
 
 // The user's bubble is drawn by a module that needs the DSH platform; only its pure part runs here.
 const bundle = await build({
@@ -31,33 +31,33 @@ const called = text => mentionSpans(text, bots).map(span => (span.all ? '@all' :
 
 test('a name may hold spaces, and the longest name wins', () => {
   assert.deepEqual(called('@新 Bot 提权'), ['新 Bot'])
-  assert.deepEqual(called('@新 Bot 2 和 @新 Bot，还有@chief'), ['新 Bot 2', '新 Bot', 'Chief'])
+  assert.deepEqual(called('@新 Bot 2 和 @新 Bot，还有@omni'), ['新 Bot 2', '新 Bot', 'Omni'])
   assert.deepEqual(called('@Kate 不是 K，@K你好'), ['K'])
   assert.deepEqual(called('@everyone @所有人'), ['@all', '@all'])
 })
 
 test('addresses, code and links never call', () => {
   assert.deepEqual(called('mail a@K.com'), [])
-  assert.deepEqual(called('run `@Chief` now'), [])
-  assert.deepEqual(called('```\n@Chief\n```\n@K'), ['K'])
-  assert.deepEqual(called('[@Chief](https://example.com) @K'), ['K'])
-  assert.deepEqual(called('[read @Chief](https://example.com "docs") @K'), ['K'])
-  assert.deepEqual(called("[read @Chief](https://example.com 'docs')"), [])
-  assert.deepEqual(called('https://medium.com/@Chief'), [])
+  assert.deepEqual(called('run `@Omni` now'), [])
+  assert.deepEqual(called('```\n@Omni\n```\n@K'), ['K'])
+  assert.deepEqual(called('[@Omni](https://example.com) @K'), ['K'])
+  assert.deepEqual(called('[read @Omni](https://example.com "docs") @K'), ['K'])
+  assert.deepEqual(called("[read @Omni](https://example.com 'docs')"), [])
+  assert.deepEqual(called('https://medium.com/@Omni'), [])
 })
 
 test('a file or folder reference that starts with a Bot name is not a call', () => {
-  assert.deepEqual(called('看 @Chief.md 和 @chief/notes.md、@Chief\\a.txt'), [])
-  assert.deepEqual(called('@Chief. @K。@Chief...'), ['Chief', 'K', 'Chief'])
+  assert.deepEqual(called('看 @Omni.md 和 @omni/notes.md、@Omni\\a.txt'), [])
+  assert.deepEqual(called('@Omni. @K。@Omni...'), ['Omni', 'K', 'Omni'])
 })
 
 test('a referenced conversation\'s "@label" is a reference, once per label', () => {
   assert.deepEqual(plain(referenceSpans('see @K notes and @K', ['K notes'])), [{ start: 4, end: 12, label: 'K notes' }])
-  assert.deepEqual(mentionSpans('Read @Chief, then @Chief please', bots, { references: ['Chief'] }).map(span => span.start), [18])
+  assert.deepEqual(mentionSpans('Read @Omni, then @Omni please', bots, { references: ['Omni'] }).map(span => span.start), [17])
 })
 
 test('the group host and the bubbles call the same Bots', () => {
-  const texts = ['@新 Bot 提权', '@新 Bot 2 来一下', 'a@K.com @K', '`@Chief` @新 Bot', '@Chief，@K。', '@Chief.md @K', '[see @K](https://x.dev "t") @Chief']
+  const texts = ['@新 Bot 提权', '@新 Bot 2 来一下', 'a@K.com @K', '`@Omni` @新 Bot', '@Omni，@K。', '@Omni.md @K', '[see @K](https://x.dev "t") @Omni']
   for (const text of texts) {
     const host = mentionsIn(text, bots).found.map(bot => bot.id)
     const linked = [...linkMentions(text, bots, undefined).matchAll(new RegExp(`\\]\\(${MENTION_ORIGIN}([^)]+)\\)`, 'g'))].map(match => match[1])

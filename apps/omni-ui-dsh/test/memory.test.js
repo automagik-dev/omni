@@ -12,8 +12,8 @@ import { latestMemoryChange, summaryBlocks } from '../src/client/text.js'
 import { fakeContext } from './fake-ctx.js'
 
 test('entries carry their metadata at the end of the line, as Agent Memory Repo writes it', () => {
-  assert.deepEqual(splitMeta('Prefers tea [source: part 2 #14; by: Chief; added: 2026-10-09]'), {
-    text: 'Prefers tea', meta: { source: 'part 2 #14', by: 'Chief', added: '2026-10-09' },
+  assert.deepEqual(splitMeta('Prefers tea [source: part 2 #14; by: Omni; added: 2026-10-09]'), {
+    text: 'Prefers tea', meta: { source: 'part 2 #14', by: 'Omni', added: '2026-10-09' },
   })
   // Brackets that are not metadata stay in the text.
   assert.deepEqual(splitMeta('Uses [[travel]] notes [draft]'), { text: 'Uses [[travel]] notes [draft]', meta: {} })
@@ -91,7 +91,7 @@ const TEAM = {
   revision: 1,
   whaleStored: true,
   bots: {
-    m1: { id: 'm1', sessionId: 'm1', name: 'Chief', role: 'Chief of Staff', model: 'deepseek/v4', instructions: '', createdAt: 1 },
+    m1: { id: 'm1', sessionId: 'm1', name: 'Omni', role: 'Channel orchestrator', model: 'deepseek/v4', instructions: '', createdAt: 1 },
     b2: { id: 'b2', sessionId: 'b2', name: 'Writer', role: '写作', model: 'deepseek/v4', instructions: '', createdAt: 2 },
     b3: { id: 'b3', sessionId: 'b3', name: 'Coder', role: '代码', instructions: '', createdAt: 3 },
     b4: { id: 'b4', sessionId: 'b4', name: 'Temp', role: '临时', instructions: '', createdAt: 4 },
@@ -241,8 +241,8 @@ test('Main Bots and group admins write the team memory; only Main Bots touch ano
   assert.match(await tool('remember', { text: 'Ship on Friday', scope: 'team' }, 'g3'), /^Saved to the team memory/)
   assert.match(read('team', 'MEMORY.md'), /- Ship on Friday \[source: group "Launch" \d{2}-\d{2} \d{2}:\d{2}; by: Coder; added: /)
   assert.match(await tool('remember', { text: 'Writes in Chinese', scope: 'Writer' }, 'm1'), /^Saved to Writer's memory/)
-  assert.match(read('bots', 'b2', 'MEMORY.md'), /- Writes in Chinese \[source: part 1 #10; by: Chief; added: /)
-  assert.match(await tool('remember', { text: 'Bossy', scope: 'Chief' }, 'b2'), /^Only a Main Bot can change another Bot's memory/)
+  assert.match(read('bots', 'b2', 'MEMORY.md'), /- Writes in Chinese \[source: part 1 #10; by: Omni; added: /)
+  assert.match(await tool('remember', { text: 'Bossy', scope: 'Omni' }, 'b2'), /^Only a Main Bot can change another Bot's memory/)
   assert.match(await tool('recall', { scope: 'Writer' }, 'b3'), /^Only a Main Bot can read another Bot's memory/)
   assert.match(await tool('recall', { scope: 'Nobody' }, 'b3'), /^No Bot named Nobody/)
   assert.match(await tool('recall', { query: 'friday' }, 'b2'), /\[team · MEMORY\.md\] Ship on Friday/)
@@ -600,7 +600,7 @@ test('when a turn ends, the memory review keeps what the user said, through the 
   // Nothing new, or nothing from the user: no model call, and the place moves on.
   ctx.emit('agent/status', { agent: { id: 'b2' }, status: 'idle' })
   await reviewed(call)
-  history.b2.push({ event: { seq: 22, type: 'user/message', data: { source: { kind: 'bot' }, content: [{ type: 'text', text: '[Message from Chief] Status?' }] } } })
+  history.b2.push({ event: { seq: 22, type: 'user/message', data: { source: { kind: 'bot' }, content: [{ type: 'text', text: '[Message from Omni] Status?' }] } } })
   ctx.emit('agent/status', { agent: { id: 'b2' }, status: 'idle' })
   await reviewed(call)
   assert.equal(requests.length, 1)

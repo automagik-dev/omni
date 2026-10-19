@@ -35,7 +35,7 @@ function nodes(tree, match) {
 
 function dock(models, { model, ready = true } = {}) {
   const picked = []
-  const bot = { id: 'chief', name: 'Chief', model }
+  const bot = { id: 'chief', name: 'Omni', model }
   const roster = { ready, byId: { chief: bot }, models, defaultModel: models[0]?.ref }
   const tree = ModelChoiceDock({
     sessionId: bot.id, useRoster: select => select(roster),

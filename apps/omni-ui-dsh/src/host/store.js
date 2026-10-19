@@ -50,7 +50,7 @@ export function install(rt) {
     }
   }
   const readOnly = () => {
-    if (stuck !== undefined) return `The Bot team file ${statePath} could not be read (${stuck}). DS Bot does not change it; fix or move the file and reload.`
+    if (stuck !== undefined) return `The Bot team file ${statePath} could not be read (${stuck}). Omni does not change it; fix or move the file and reload.`
     if (holder === undefined) return undefined
     const where = holder.pid ? `pid ${holder.pid}${holder.host ? ` on ${holder.host}` : ''}` : 'unknown process'
     return `The Bot team in ${home} is open in another dsh (Web or Desktop, ${where}). This window shows the team but cannot change it; close the other one and reload.`
@@ -90,7 +90,7 @@ export function install(rt) {
       stuck = undefined
       return parsed
     }
-    stuck = 'saved by a newer DS Bot; update DS Bot'
+    stuck = 'saved by a newer Omni; update Omni'
     return undefined
   }
 

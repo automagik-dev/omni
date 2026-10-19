@@ -108,7 +108,7 @@ export function checkpointCount(messages) {
 }
 
 export const CHECKPOINT_PROMPT = [
-  'You are now writing a checkpoint of this conversation. This request comes from DS Bot, not from the user: do not answer or continue the messages above.',
+  'You are now writing a checkpoint of this conversation. This request comes from Omni, not from the user: do not answer or continue the messages above.',
   'The messages above are about to be replaced by your checkpoint. What the user and other Bots sent you travels along word for word, so do not copy it; the full record also stays saved, and read_own_chat searches it. Write a summary that lets you carry on the work as if nothing had been cut:',
   '',
   '- Where the work stands: what is done, and what is under way and how far it got.',

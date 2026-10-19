@@ -56,7 +56,7 @@ export function surfaceGroups(install, { onError } = {}) {
 
 // The priority that puts an entry below every other entry of its cell (lowest
 // renders). Another plugin that shadows the same cell at the same priority would
-// make the registration throw; in a Bot surface the cell is DS Bot's.
+// make the registration throw; in a Bot surface the cell is Omni's.
 export function freePriority(entries, { priority, key, id }) {
   if (priority === undefined) return undefined
   const taken = entries

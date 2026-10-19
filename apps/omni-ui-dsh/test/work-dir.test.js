@@ -14,7 +14,7 @@ const TEAM = {
   mainBotIds: ['a'],
   workspaceId: 'w1',
   bots: {
-    a: { id: 'a', name: 'Chief', role: 'Boss', sessionId: 'a', createdAt: 1 },
+    a: { id: 'a', name: 'Omni', role: 'Boss', sessionId: 'a', createdAt: 1 },
     b: { id: 'b', name: 'Writer', role: 'Write', sessionId: 'b', createdAt: 2 },
   },
   rooms: { r1: { id: 'r1', name: 'Ops', members: ['a', 'b'], mode: 'admin', admin: 'b', named: true, sessions: { b: 'gb' } } },
@@ -64,7 +64,7 @@ async function start({ services = {}, workspaces = [], llm, team: saved = TEAM }
     }
     return agents.get(sessionId)
   }
-  const registry = new Map([['w1', { id: 'w1', path: team, title: 'DS Bot' }], ...workspaces.map(workspace => [workspace.id, workspace])])
+  const registry = new Map([['w1', { id: 'w1', path: team, title: 'Omni' }], ...workspaces.map(workspace => [workspace.id, workspace])])
   Object.assign(ctx, {
     llm: llm ?? { listProviders: () => [], listModels: async () => [], resolveModelInfo: async () => ({}) },
     workspaceRegistry: {

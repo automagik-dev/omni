@@ -113,7 +113,7 @@ test('the client channel answers from the saved state', async (t) => {
     mainBotId: 'm1',
     revision: 4,
     bots: {
-      m1: { id: 'm1', name: 'Chief', role: 'Chief of Staff', lab: 'deepseek', appliedModel: 'ollama/deepseek-v4.1-flash', instructions: '', createdAt: 1 },
+      m1: { id: 'm1', name: 'Omni', role: 'Channel orchestrator', lab: 'deepseek', appliedModel: 'ollama/deepseek-v4.1-flash', instructions: '', createdAt: 1 },
       b2: { id: 'b2', name: 'Writer', role: '写作', lab: 'kimi', instructions: 'Kimi-style long reads', createdAt: 2 },
     },
     rooms: {},
@@ -152,7 +152,7 @@ const TEAM = {
   mainBotId: 'm1',
   revision: 1,
   bots: {
-    m1: { id: 'm1', sessionId: 'm1', name: 'Chief', role: 'Chief of Staff', lab: 'deepseek', instructions: '', createdAt: 1 },
+    m1: { id: 'm1', sessionId: 'm1', name: 'Omni', role: 'Channel orchestrator', lab: 'deepseek', instructions: '', createdAt: 1 },
     b2: { id: 'b2', sessionId: 'b2', name: 'Writer', role: '写作', instructions: '', createdAt: 2 },
   },
   rooms: {},

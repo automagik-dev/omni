@@ -7,7 +7,7 @@ import { createRuntime } from '../index.js'
 import { fakeContext } from './fake-ctx.js'
 
 // Some routes (OpenCode Go among them) turn down every model request that names no
-// Session. DS Bot's own requests name the Session they serve, and the hooks that act
+// Session. Omni's own requests name the Session they serve, and the hooks that act
 // on a Session's own rounds still leave them alone.
 
 const TEAM = {
@@ -16,7 +16,7 @@ const TEAM = {
   revision: 1,
   whaleStored: true,
   bots: {
-    m1: { id: 'm1', sessionId: 'm1', name: 'Chief', role: 'Chief of Staff', model: 'deepseek/v4', instructions: '', createdAt: 1 },
+    m1: { id: 'm1', sessionId: 'm1', name: 'Omni', role: 'Channel orchestrator', model: 'deepseek/v4', instructions: '', createdAt: 1 },
     b2: { id: 'b2', sessionId: 'b2', name: 'Writer', role: 'Writing', model: 'deepseek/v4', instructions: '', createdAt: 2 },
     b3: { id: 'b3', sessionId: 'b3', name: 'Coder', role: 'Code', model: 'deepseek/v4', instructions: '', createdAt: 3 },
   },
@@ -149,7 +149,7 @@ test('an image in a group is read for the group, and the group still relays its 
   assert.equal(bench.requests.length, 1)
 })
 
-test('the Session hooks pass DS Bot\'s own requests through, and still act on a Session\'s own rounds', async (t) => {
+test('the Session hooks pass Omni\'s own requests through, and still act on a Session\'s own rounds', async (t) => {
   const { rt, hook, stop } = start()
   t.after(stop)
   await rt.load()

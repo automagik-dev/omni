@@ -3,6 +3,7 @@ window.__ModuleLoader__.load({
   id: 'ds-bot',
   factory: (require) => {
 const module = { exports: {} }
+"use strict";
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -154,7 +155,7 @@ var ZH = {
   "Sign in to DeepSeek": "登录 DeepSeek 账号",
   "Enter a DeepSeek API key": "填入 DeepSeek API key",
   "Open settings to set up a custom model": "打开设置配置自定义模型",
-  "DS Bot": "DS Bot",
+  "Omni": "Omni",
   // Header
   "Message {name}": "给 {name} 发消息",
   Message: "发消息",
@@ -379,7 +380,7 @@ var ZH = {
   "No group chats yet.": "还没有群聊。",
   "A group chat lets several Bots work on one thing with you.": "在群聊里，几个 Bot 和你一起做一件事。",
   "Back to group chats": "返回群聊列表",
-  "DS Bot settings": "DS Bot 设置",
+  "Omni settings": "Omni 设置",
   "Settings pages": "设置页面",
   "Models, providers, and the rest of DeepSeek Harness": "模型、服务商和 DeepSeek Harness 的其他设置",
   "Harness settings": "Harness 设置",
@@ -409,13 +410,13 @@ var ZH = {
   "{n} h": "{n} 小时",
   "{n} d": "{n} 天",
   // Plugin updates
-  "DS Bot {version} is available": "DS Bot {version} 可以更新",
-  "Updating DS Bot…": "正在更新 DS Bot…",
-  "DS Bot {version} is installed. Restart DSH to use it.": "DS Bot {version} 已安装，重启 DSH 后生效",
-  "DS Bot update": "DS Bot 更新",
-  "DS Bot {version}": "DS Bot {version}",
+  "Omni {version} is available": "Omni {version} 可以更新",
+  "Updating Omni…": "正在更新 Omni…",
+  "Omni {version} is installed. Restart DSH to use it.": "Omni {version} 已安装，重启 DSH 后生效",
+  "Omni update": "Omni 更新",
+  "Omni {version}": "Omni {version}",
   "Update installed": "更新已安装",
-  "Restart DSH to start using DS Bot {version}.": "重启 DSH 后开始使用 DS Bot {version}。",
+  "Restart DSH to start using Omni {version}.": "重启 DSH 后开始使用 Omni {version}。",
   "You have {version}.": "当前版本 {version}。",
   "The update did not finish: {reason}": "更新没有完成：{reason}",
   "What's new": "更新说明",
@@ -425,7 +426,7 @@ var ZH = {
   "DSH update": "DSH 更新",
   "DSH {version}": "DSH {version}",
   "Restart DSH to start using DSH {version}.": "重启 DSH 后开始使用 DSH {version}。",
-  "Update DS Bot {version} first.": "先更新 DS Bot {version}。",
+  "Update Omni {version} first.": "先更新 Omni {version}。",
   "Open updates": "打开更新",
   // Command palette
   Messages: "消息",
@@ -759,11 +760,11 @@ var ZH = {
   "Compared with the {count} days before": "与再往前 {count} 天相比",
   "{share}% of all usage from {span}": "占 {span} 全部用量的 {share}%",
   // About
-  "About DS Bot": "关于 DS Bot",
+  "About Omni": "关于 Omni",
   "Version {version}": "版本 {version}",
-  "Star DS Bot on GitHub": "在 GitHub 上给 DS Bot 点 Star",
+  "Star Omni on GitHub": "在 GitHub 上给 Omni 点 Star",
   "{count} stars": "{count} 个 Star",
-  "If DS Bot helps you, a star on GitHub helps more people find it.": "如果 DS Bot 对你有用，欢迎在 GitHub 上点个 Star，让更多人看到它。",
+  "If Omni helps you, a star on GitHub helps more people find it.": "如果 Omni 对你有用，欢迎在 GitHub 上点个 Star，让更多人看到它。",
   Updates: "更新",
   "Check for updates": "检查更新",
   "Checking…": "正在检查…",
@@ -788,7 +789,7 @@ var ZH = {
   Show: "查看",
   Hide: "收起",
   "GitHub issue": "GitHub issue",
-  "Opens a new issue in the DS Bot repository with all of this filled in. Nothing is sent until you submit it there.": "在 DS Bot 仓库新建一个 issue，并填好以上内容。你在 GitHub 上提交之前，什么都不会发出。",
+  "Opens a new issue in the Omni repository with all of this filled in. Nothing is sent until you submit it there.": "在 Omni 仓库新建一个 issue，并填好以上内容。你在 GitHub 上提交之前，什么都不会发出。",
   "Report on GitHub": "在 GitHub 上报告",
   "Copied the diagnostics.": "已复制诊断信息。",
   "Could not copy. Select the text below and copy it.": "无法复制。请选中下面的文字手动复制。",
@@ -800,7 +801,7 @@ var ZH = {
   "Recent errors": "最近的错误",
   "Recent errors · {count}": "最近的错误 · {count}",
   "No errors recorded.": "没有错误记录。",
-  "Failed model calls and DS Bot problems show here, newest first.": "模型调用失败和 DS Bot 的问题会显示在这里，最新的在前。",
+  "Failed model calls and Omni problems show here, newest first.": "模型调用失败和 Omni 的问题会显示在这里，最新的在前。",
   "Model call": "模型调用",
   "This window": "这个窗口",
   "Error log": "错误日志",
@@ -1061,8 +1062,8 @@ function failureLabel(code, message) {
 }
 var URL_LIMIT = 7e3;
 var WHAT_MAX = 2e3;
-var PASTE_NOTE = "DS Bot copied the diagnostics to the clipboard. Paste them here.";
-var REST_NOTE = "The recent errors do not fit in the link. DS Bot copied the diagnostics to the clipboard: paste them below this line.";
+var PASTE_NOTE = "Omni copied the diagnostics to the clipboard. Paste them here.";
+var REST_NOTE = "The recent errors do not fit in the link. Omni copied the diagnostics to the clipboard: paste them below this line.";
 function issueUrl(base, { what = "", diagnostics }) {
   const text = what.trim().slice(0, WHAT_MAX);
   const title = text.split("\n")[0].slice(0, 80);
@@ -5327,10 +5328,10 @@ function UpdateButton({ useUpdate, actions }) {
     setDshError("");
     void actions.installDshUpdate().catch((failure) => setDshError(hostText(failure?.message ?? String(failure))));
   };
-  const label = phase === "installing" ? t("Updating DS Bot…") : dshPhase === "installing" ? t("Updating DSH…") : phase === "installed" ? t("DS Bot {version} is installed. Restart DSH to use it.", { version: update.installed ?? update.latest }) : dshPhase === "installed" ? t("Restart DSH to start using DSH {version}.", { version: dsh.installed ?? dsh.verified }) : update?.available ? t("DS Bot {version} is available", { version: update.latest }) : t("DSH {version} is available", { version: dsh?.verified });
+  const label = phase === "installing" ? t("Updating Omni…") : dshPhase === "installing" ? t("Updating DSH…") : phase === "installed" ? t("Omni {version} is installed. Restart DSH to use it.", { version: update.installed ?? update.latest }) : dshPhase === "installed" ? t("Restart DSH to start using DSH {version}.", { version: dsh.installed ?? dsh.verified }) : update?.available ? t("Omni {version} is available", { version: update.latest }) : t("DSH {version} is available", { version: dsh?.verified });
   const message = error || (phase === "failed" ? update.error : "");
   const dshMessage = dshError || (dshPhase === "failed" ? dsh?.error : "");
-  const dshText = dshPhase === "installed" ? t("Restart DSH to start using DSH {version}.", { version: dsh.installed ?? dsh.verified }) : dsh?.available === false && dsh?.blockedBy ? t("Update DS Bot {version} first.", { version: dsh.blockedBy }) : t("You have {version}.", { version: dsh?.current });
+  const dshText = dshPhase === "installed" ? t("Restart DSH to start using DSH {version}.", { version: dsh.installed ?? dsh.verified }) : dsh?.available === false && dsh?.blockedBy ? t("Update Omni {version} first.", { version: dsh.blockedBy }) : t("You have {version}.", { version: dsh?.current });
   return (0, import_react9.createElement)(
     import_react9.Fragment,
     null,
@@ -5347,12 +5348,12 @@ function UpdateButton({ useUpdate, actions }) {
     }, (0, import_react9.createElement)(CloudDownloadIcon, { done: phase === "installed" }), phase === "failed" || dshPhase === "failed" ? (0, import_react9.createElement)("span", { className: "bt-update-dot", "aria-hidden": true }) : null),
     open && box ? (0, import_react_dom3.createPortal)((0, import_react9.createElement)(
       "div",
-      { className: "bt-update-pop", role: "dialog", "aria-label": update?.available || phase !== "idle" ? t("DS Bot update") : t("DSH update"), style: box },
+      { className: "bt-update-pop", role: "dialog", "aria-label": update?.available || phase !== "idle" ? t("Omni update") : t("DSH update"), style: box },
       update?.available || phase !== "idle" ? (0, import_react9.createElement)(
         import_react9.Fragment,
         null,
-        (0, import_react9.createElement)("div", { className: "bt-update-title" }, phase === "installed" ? t("Update installed") : t("DS Bot {version}", { version: update.latest })),
-        (0, import_react9.createElement)("div", { className: "bt-update-text" }, phase === "installed" ? t("Restart DSH to start using DS Bot {version}.", { version: update.installed ?? update.latest }) : t("You have {version}.", { version: update.current })),
+        (0, import_react9.createElement)("div", { className: "bt-update-title" }, phase === "installed" ? t("Update installed") : t("Omni {version}", { version: update.latest })),
+        (0, import_react9.createElement)("div", { className: "bt-update-text" }, phase === "installed" ? t("Restart DSH to start using Omni {version}.", { version: update.installed ?? update.latest }) : t("You have {version}.", { version: update.current })),
         message ? (0, import_react9.createElement)("div", { className: "bt-update-error", role: "alert" }, t("The update did not finish: {reason}", { reason: message })) : null,
         (0, import_react9.createElement)(
           "div",
@@ -5622,9 +5623,9 @@ function BotReturn({ wide, useSurface, actions }) {
   if (mode !== "agent") return null;
   return (0, import_react9.createElement)(
     "button",
-    { type: "button", className: "bt-return", "aria-label": t("DS Bot"), title: t("DS Bot"), onClick: () => actions.setSurface("bot") },
+    { type: "button", className: "bt-return", "aria-label": t("Omni"), title: t("Omni"), onClick: () => actions.setSurface("bot") },
     (0, import_react9.createElement)(BotMark, { look: MAIN_LOOK, size: 20 }),
-    wide ? (0, import_react9.createElement)("span", { className: "bt-return-name" }, t("DS Bot")) : null
+    wide ? (0, import_react9.createElement)("span", { className: "bt-return-name" }, t("Omni")) : null
   );
 }
 var RETURN_CSS = `
@@ -5641,7 +5642,7 @@ function BrandMark({ size = 24 }) {
   return (0, import_react9.createElement)("span", { className: "bt-brand-whale" }, (0, import_react9.createElement)(BotMark, { look: MAIN_LOOK, size }));
 }
 function BrandName() {
-  return (0, import_react9.createElement)("span", { style: { fontWeight: 600, fontSize: 14 } }, "DS Bot");
+  return (0, import_react9.createElement)("span", { style: { fontWeight: 600, fontSize: 14 } }, "Omni");
 }
 var SIDEBAR_CSS = `
 .bt-side-top .bt-brand{cursor:default;padding-left:6px}
@@ -5657,7 +5658,7 @@ var SIDEBAR_CSS = `
 [class*="_footArea"]:has(.bt-foot-account)>[class*="_settingsArea"]{grid-column:3}
 [class*="_footArea"]:has(.bt-foot-account)>[class*="_settingsArea"] button[class*="_trigger"] [class*="_label"]{display:none!important}
 
-/* The update cloud springs in when a newer DS Bot shows up; its arrow drops in a
+/* The update cloud springs in when a newer Omni shows up; its arrow drops in a
    loop while the install runs. */
 .bt-round.bt-update{position:relative;color:var(--bt-accent,#4D6BFE);animation:bt-update-in ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing}}
 .bt-round.bt-update svg{width:17px;height:17px}
@@ -10534,7 +10535,7 @@ function entrySummary(entry) {
   if (entry.source === "turn") return failureLabel(entry.code, entry.text);
   return entry.text;
 }
-var SOURCES = { turn: "Model call", host: "DS Bot", api: "DS Bot", browser: "This window" };
+var SOURCES = { turn: "Model call", host: "Omni", api: "Omni", browser: "This window" };
 function issueWindow() {
   if (window.dshDesktop !== void 0) return { go: (url) => {
     window.open(url, "_blank");
@@ -10617,7 +10618,7 @@ function FeedbackPage({ actions, run, Section, Row: Row3 }) {
       preview ? (0, import_react28.createElement)("div", { className: "bt-set-row bt-fb-preview" }, (0, import_react28.createElement)("pre", { tabIndex: 0, "aria-label": t("Diagnostics") }, report?.markdown || t("Loading…"))) : null,
       (0, import_react28.createElement)(
         Row3,
-        { label: t("GitHub issue"), hint: t("Opens a new issue in the DS Bot repository with all of this filled in. Nothing is sent until you submit it there.") },
+        { label: t("GitHub issue"), hint: t("Opens a new issue in the Omni repository with all of this filled in. Nothing is sent until you submit it there.") },
         (0, import_react28.createElement)("button", { type: "button", className: "bt-fb-primary", onClick: openIssue }, t("Report on GitHub"))
       )
     ),
@@ -10630,7 +10631,7 @@ function FeedbackPage({ actions, run, Section, Row: Row3 }) {
     (0, import_react28.createElement)(
       Section,
       { key: "errors", title: report ? t("Recent errors · {count}", { count: total }) : t("Recent errors") },
-      shown.length === 0 ? (0, import_react28.createElement)(Row3, { label: t("No errors recorded."), hint: t("Failed model calls and DS Bot problems show here, newest first.") }) : shown.map((entry, index) => (0, import_react28.createElement)(
+      shown.length === 0 ? (0, import_react28.createElement)(Row3, { label: t("No errors recorded."), hint: t("Failed model calls and Omni problems show here, newest first.") }) : shown.map((entry, index) => (0, import_react28.createElement)(
         "div",
         { key: `${entry.time}-${index}`, className: "bt-set-row bt-fb-entry", title: entry.text },
         (0, import_react28.createElement)("span", { className: "bt-fb-dot", "data-level": entry.level, "aria-hidden": true }),
@@ -10638,7 +10639,7 @@ function FeedbackPage({ actions, run, Section, Row: Row3 }) {
           "div",
           { className: "bt-set-copy" },
           (0, import_react28.createElement)("span", { className: "bt-fb-text" }, entrySummary(entry)),
-          (0, import_react28.createElement)("span", { className: "bt-set-hint" }, [whenText(entry.time), entry.bot, entry.where, t(SOURCES[entry.source] ?? "DS Bot")].filter(Boolean).join(" · "))
+          (0, import_react28.createElement)("span", { className: "bt-set-hint" }, [whenText(entry.time), entry.bot, entry.where, t(SOURCES[entry.source] ?? "Omni")].filter(Boolean).join(" · "))
         ),
         entry.code ? (0, import_react28.createElement)("span", { className: "bt-tag bt-fb-code" }, entry.status ? `${entry.code} ${entry.status}` : entry.code) : null
       )),
@@ -10709,10 +10710,10 @@ var import_react29 = require("react");
 var CHEER_MS = 1800;
 var starCount = (count) => new Intl.NumberFormat(dateLocale(), { notation: "compact", maximumFractionDigits: 1 }).format(count);
 function botHint(update) {
-  if (update.phase === "installing") return t("Updating DS Bot…");
-  if (update.phase === "installed") return t("Restart DSH to start using DS Bot {version}.", { version: update.installed ?? update.latest });
+  if (update.phase === "installing") return t("Updating Omni…");
+  if (update.phase === "installed") return t("Restart DSH to start using Omni {version}.", { version: update.installed ?? update.latest });
   if (update.phase === "failed") return t("The update did not finish: {reason}", { reason: hostText(update.error ?? "") });
-  if (update.available) return t("DS Bot {version} is available", { version: update.latest });
+  if (update.available) return t("Omni {version} is available", { version: update.latest });
   if (update.enabled === false) return t("Update checks are off.");
   if (update.source === "path") return t("Installed from a local folder; update it there.");
   if (!update.checkedAt) return null;
@@ -10724,7 +10725,7 @@ function dshHint(dsh, shown) {
   if (dsh.phase === "installing") return t("Updating DSH…");
   if (dsh.phase === "installed") return t("Restart DSH to start using DSH {version}.", { version: dsh.installed ?? dsh.verified });
   if (dsh.phase === "failed") return t("The update did not finish: {reason}", { reason: hostText(dsh.error ?? "") });
-  if (dsh.available === false && dsh.blockedBy) return t("Update DS Bot {version} first.", { version: dsh.blockedBy });
+  if (dsh.available === false && dsh.blockedBy) return t("Update Omni {version} first.", { version: dsh.blockedBy });
   if (shown) return t("DSH {version} is available", { version: dsh.verified });
   return t("Version {version}", { version: dsh.current });
 }
@@ -10784,7 +10785,7 @@ function AboutPage({ useUpdate, actions, run, Section, Row: Row3 }) {
       (0, import_react29.createElement)(
         "div",
         { className: "bt-about-copy" },
-        (0, import_react29.createElement)("span", { className: "bt-about-name" }, "DS Bot"),
+        (0, import_react29.createElement)("span", { className: "bt-about-name" }, "Omni"),
         update.current ? (0, import_react29.createElement)("span", { className: "bt-about-version" }, t("Version {version}", { version: update.current })) : null
       ),
       repo ? (0, import_react29.createElement)(
@@ -10794,18 +10795,18 @@ function AboutPage({ useUpdate, actions, run, Section, Row: Row3 }) {
           href: repo,
           target: "_blank",
           rel: "noopener noreferrer",
-          title: t("Star DS Bot on GitHub"),
-          "aria-label": stars === null ? t("Star DS Bot on GitHub") : `${t("Star DS Bot on GitHub")} · ${t("{count} stars", { count: stars })}`
+          title: t("Star Omni on GitHub"),
+          "aria-label": stars === null ? t("Star Omni on GitHub") : `${t("Star Omni on GitHub")} · ${t("{count} stars", { count: stars })}`
         },
         (0, import_react29.createElement)("span", { className: "bt-star-main" }, (0, import_react29.createElement)("span", { className: "bt-star-icon" }, (0, import_react29.createElement)(StarLineIcon)), "Star"),
         stars === null ? null : (0, import_react29.createElement)("span", { className: "bt-star-count" }, starCount(stars))
       ) : null
     ),
-    repo ? (0, import_react29.createElement)("p", { key: "ask", className: "bt-about-ask" }, t("If DS Bot helps you, a star on GitHub helps more people find it.")) : null,
+    repo ? (0, import_react29.createElement)("p", { key: "ask", className: "bt-about-ask" }, t("If Omni helps you, a star on GitHub helps more people find it.")) : null,
     (0, import_react29.createElement)(
       Section,
       { key: "updates", title: t("Updates") },
-      (0, import_react29.createElement)(Row3, { label: "DS Bot", hint: botHint(update) }, botControl, update.available && update.notesUrl ? (0, import_react29.createElement)("a", linkProps(update.notesUrl), t("What's new")) : null),
+      (0, import_react29.createElement)(Row3, { label: "Omni", hint: botHint(update) }, botControl, update.available && update.notesUrl ? (0, import_react29.createElement)("a", linkProps(update.notesUrl), t("What's new")) : null),
       dsh?.current ? (0, import_react29.createElement)(Row3, { label: "DeepSeek Harness", hint: dshHint(dsh, dshShown) }, dshControl) : null
     ),
     (0, import_react29.createElement)(
@@ -10848,7 +10849,7 @@ body:not([data-bt-motion=quiet]) .bt-about-mark:hover .bt-mark[data-live][data-s
 // src/client/settings.js
 var import_react30 = require("react");
 var capitalize2 = (word) => word[0].toUpperCase() + word.slice(1);
-var SETTINGS_PAGES = [["general", "General"], ["bots", "Bots"], ["groups", "Group chats"], ["connectors", "Connectors"], ["capabilities", "Capabilities"], ["schedules", "Scheduled tasks"], ["usage", "Usage"], ["secrets", "Secrets"], ["feedback", "Feedback"], ["about", "About DS Bot"]];
+var SETTINGS_PAGES = [["general", "General"], ["bots", "Bots"], ["groups", "Group chats"], ["connectors", "Connectors"], ["capabilities", "Capabilities"], ["schedules", "Scheduled tasks"], ["usage", "Usage"], ["secrets", "Secrets"], ["feedback", "Feedback"], ["about", "About Omni"]];
 var PAGE_ICONS = { ...SETTINGS_ICONS, connectors: ConnectorIcon, capabilities: PlugIcon, schedules: ClockIcon, secrets: KeyIcon, feedback: FeedbackIcon, about: InfoIcon };
 function SetSection({ title, children }) {
   return (0, import_react30.createElement)("section", { className: "bt-set-section" }, (0, import_react30.createElement)("h3", null, title), (0, import_react30.createElement)("div", { className: "bt-set-card" }, children));
@@ -11076,7 +11077,7 @@ function SettingsDialog({ page, id, roster, actions, useUpdate, leaving = false 
     (0, import_react30.createElement)("div", { className: "bt-scrim", onMouseDown: close }),
     (0, import_react30.createElement)(
       "div",
-      { className: "bt-settings", role: "dialog", "aria-modal": true, "aria-label": t("DS Bot settings") },
+      { className: "bt-settings", role: "dialog", "aria-modal": true, "aria-label": t("Omni settings") },
       (0, import_react30.createElement)(
         "nav",
         { ref: nav.box, className: "bt-settings-nav", "aria-label": t("Settings pages") },

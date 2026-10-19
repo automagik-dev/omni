@@ -136,7 +136,7 @@ test('a new group Session waits for capabilities before its first member prompt'
 
   const first = await turnFor(sent)
   assert.equal(first.sessionId, sessionId)
-  await answer(first.sessionId, first.message.source.exchangeId, 'Chief ready.', 1)
+  await answer(first.sessionId, first.message.source.exchangeId, 'Omni ready.', 1)
   const second = await turnFor(sent, first)
   assert.ok(second)
   await answer(second.sessionId, second.message.source.exchangeId, 'Writer ready.', 2)
@@ -175,7 +175,7 @@ test('a message the composer queues mid-round joins the round and leaves the Ses
 
   await answer(second.sessionId, second.message.source.exchangeId, 'Ping back!', 2)
   const result = JSON.parse(await running)
-  assert.deepEqual(result.replies.map(reply => reply.name ?? 'User'), ['Chief', 'User', 'Writer'])
+  assert.deepEqual(result.replies.map(reply => reply.name ?? 'User'), ['Omni', 'User', 'Writer'])
   // Taken out of the queue, the message opens no second round after this one.
   assert.deepEqual(inboxOf(room.id).nextTurn, [])
 })
@@ -200,7 +200,7 @@ test('a plain message steered mid-round is answered by everyone, admin first, in
   assert.match(third.message.content[0].text, /steer this way/)
   await answer(third.sessionId, third.message.source.exchangeId, 'two', 3)
   const result = JSON.parse(await running)
-  assert.deepEqual(result.replies.map(reply => reply.name ?? 'User'), ['Chief', 'User', 'Chief', 'Writer'])
+  assert.deepEqual(result.replies.map(reply => reply.name ?? 'User'), ['Omni', 'User', 'Omni', 'Writer'])
   assert.deepEqual(inboxOf(room.id).nextStep, [])
 })
 
@@ -212,7 +212,7 @@ test('a message sent during the last speaker\'s turn is still answered in the ro
   await emit(room.id, userMessage('Kick it off'))
   const running = relay(room.id, 'relay')
   const first = await turnFor(sent)
-  await answer(first.sessionId, first.message.source.exchangeId, 'Chief first', 1)
+  await answer(first.sessionId, first.message.source.exchangeId, 'Omni first', 1)
   const second = await turnFor(sent, first)
 
   // The last member is already answering when the message lands.
@@ -227,7 +227,7 @@ test('a message sent during the last speaker\'s turn is still answered in the ro
   assert.ok(fourth, 'and so does the Writer')
   await answer(fourth.sessionId, fourth.message.source.exchangeId, 'Me too', 4)
   const result = JSON.parse(await running)
-  assert.deepEqual(result.replies.map(reply => reply.name ?? 'User'), ['Chief', 'Writer', 'User', 'Chief', 'Writer'])
+  assert.deepEqual(result.replies.map(reply => reply.name ?? 'User'), ['Omni', 'Writer', 'User', 'Omni', 'Writer'])
 })
 
 test('in admin mode a plain mid-round message goes to the admin', async (t) => {
@@ -250,7 +250,7 @@ test('in admin mode a plain mid-round message goes to the admin', async (t) => {
   assert.match(third.message.content[0].text, /what do you think\?/)
   await answer(third.sessionId, third.message.source.exchangeId, 'Admin here', 3)
   const result = JSON.parse(await running)
-  assert.deepEqual(result.replies.map(reply => reply.name ?? 'User'), ['Chief', 'Writer', 'User', 'Chief'])
+  assert.deepEqual(result.replies.map(reply => reply.name ?? 'User'), ['Omni', 'Writer', 'User', 'Omni'])
 })
 
 test('a message with an image or a chat reference waits for its own round, and so does what follows it', async (t) => {
@@ -269,7 +269,7 @@ test('a message with an image or a chat reference waits for its own round, and s
   assert.doesNotMatch(second.message.content[0].text, /see this|after the image|about @/)
   await answer(second.sessionId, second.message.source.exchangeId, 'two', 2)
   const result = JSON.parse(await running)
-  assert.deepEqual(result.replies.map(reply => reply.name ?? 'User'), ['Chief', 'Writer'])
+  assert.deepEqual(result.replies.map(reply => reply.name ?? 'User'), ['Omni', 'Writer'])
   assert.equal(inboxOf(room.id).nextTurn.length, 2)
   assert.equal(inboxOf(room.id).nextStep.length, 1)
 })
@@ -285,7 +285,7 @@ test('the greeting round leaves a waiting message for its own round', async (t) 
   await compose(room.id, 'hello there')
   await answer(first.sessionId, first.message.source.exchangeId, 'Welcome!', 1)
   const result = JSON.parse(await running)
-  assert.deepEqual(result.replies.map(reply => reply.name ?? 'User'), ['Chief'])
+  assert.deepEqual(result.replies.map(reply => reply.name ?? 'User'), ['Omni'])
   assert.equal(inboxOf(room.id).nextTurn.length, 1)
 })
 
@@ -319,7 +319,7 @@ test('a message sent between rounds still opens a full round', async (t) => {
   assert.ok(second)
   await answer(second.sessionId, second.message.source.exchangeId, 'Hello!', 2)
   const result = JSON.parse(await running)
-  assert.deepEqual(result.replies.map(reply => reply.name ?? 'User'), ['Chief', 'Writer'])
+  assert.deepEqual(result.replies.map(reply => reply.name ?? 'User'), ['Omni', 'Writer'])
 })
 
 // 公开#163: a member's group Session whose stored log is corrupt could not be resumed;
@@ -334,7 +334,7 @@ test('a member whose group Session cannot be opened shows a failure, and its nex
   await emit(room.id, userMessage('Report in'))
   let running = relay(room.id, 'r1')
   const first = await turnFor(sent)
-  await answer(first.sessionId, first.message.source.exchangeId, 'Chief here.', 1)
+  await answer(first.sessionId, first.message.source.exchangeId, 'Omni here.', 1)
   const second = await turnFor(sent, first)
   await answer(second.sessionId, second.message.source.exchangeId, 'Writer here.', 2)
   await running
@@ -354,8 +354,8 @@ test('a member whose group Session cannot be opened shows a failure, and its nex
   await answer(writerTurn.sessionId, writerTurn.message.source.exchangeId, 'Still here.', 3)
   const result = JSON.parse(await running)
   const failed = result.replies.filter(reply => reply.kind === 'failed')
-  assert.deepEqual(failed.map(reply => [reply.name, reply.code]), [['Chief', 'SESSION_RESET']])
-  assert.equal(result.passed.includes('Chief'), false)
+  assert.deepEqual(failed.map(reply => [reply.name, reply.code]), [['Omni', 'SESSION_RESET']])
+  assert.equal(result.passed.includes('Omni'), false)
   assert.equal(rt.roomOf(room.id).sessions[chief], undefined)
 
   sent.length = 0
@@ -367,7 +367,7 @@ test('a member whose group Session cannot be opened shows a failure, and its nex
   await answer(fresh.sessionId, fresh.message.source.exchangeId, 'Back.', 1)
   const again = await turnFor(sent, fresh)
   await answer(again.sessionId, again.message.source.exchangeId, 'Here.', 4)
-  assert.deepEqual(JSON.parse(await running).replies.map(reply => reply.name ?? 'User'), ['Chief', 'Writer'])
+  assert.deepEqual(JSON.parse(await running).replies.map(reply => reply.name ?? 'User'), ['Omni', 'Writer'])
 })
 
 test('a delivery that fails for another reason shows a failure and keeps the Session', async (t) => {
@@ -378,7 +378,7 @@ test('a delivery that fails for another reason shows a failure and keeps the Ses
   await emit(room.id, userMessage('Report in'))
   let running = relay(room.id, 'r1')
   const first = await turnFor(sent)
-  await answer(first.sessionId, first.message.source.exchangeId, 'Chief here.', 1)
+  await answer(first.sessionId, first.message.source.exchangeId, 'Omni here.', 1)
   const second = await turnFor(sent, first)
   await answer(second.sessionId, second.message.source.exchangeId, 'Writer here.', 2)
   await running
@@ -394,7 +394,7 @@ test('a delivery that fails for another reason shows a failure and keeps the Ses
   const writerTurn = await turnFor(sent)
   await answer(writerTurn.sessionId, writerTurn.message.source.exchangeId, 'Still here.', 3)
   const result = JSON.parse(await running)
-  assert.deepEqual(result.replies.filter(reply => reply.kind === 'failed').map(reply => [reply.name, reply.code]), [['Chief', 'SESSION']])
+  assert.deepEqual(result.replies.filter(reply => reply.kind === 'failed').map(reply => [reply.name, reply.code]), [['Omni', 'SESSION']])
   assert.equal(rt.roomOf(room.id).sessions[chief], first.sessionId)
 })
 
@@ -448,7 +448,7 @@ test('a member turn that fails before it takes the call fails that member in the
   assert.ok(second, 'the next member speaks without waiting for the reply timeout')
   await answer(second.sessionId, second.message.source.exchangeId, 'Writer here.', 1)
   const result = JSON.parse(await running)
-  assert.deepEqual(result.replies.map(reply => [reply.kind ?? 'reply', reply.name]), [['failed', 'Chief'], ['reply', 'Writer']])
+  assert.deepEqual(result.replies.map(reply => [reply.kind ?? 'reply', reply.name]), [['failed', 'Omni'], ['reply', 'Writer']])
 })
 
 // A member deleted while its group Session is made sits the round out; the Session it was
@@ -475,13 +475,13 @@ test('a member deleted while its group Session is made is left out, and the Sess
     await gate
     return result
   }
-  await answer(first.sessionId, first.message.source.exchangeId, 'Chief here.', 1)
+  await answer(first.sessionId, first.message.source.exchangeId, 'Omni here.', 1)
   const sessionId = await making
   assert.equal((await call('delete-bot', { id: writer })).ok, true)
   release()
 
   const result = JSON.parse(await running)
-  assert.deepEqual(result.replies.map(reply => [reply.kind ?? 'reply', reply.name]), [['reply', 'Chief']])
+  assert.deepEqual(result.replies.map(reply => [reply.kind ?? 'reply', reply.name]), [['reply', 'Omni']])
   assert.ok(archived.includes(sessionId))
   assert.equal(rt.state.rooms[room.id].sessions?.[writer], undefined)
 })
@@ -607,7 +607,7 @@ test('a long post goes to the group as a file, and reaches the member with its p
   assert.match(posted, /^Posted in "R1"/)
   const post = sent.find(entry => entry.sessionId === room.id && entry.message.source.role === 'post')
   const file = post.message.content.find(block => block.type === 'file')?.attachment
-  assert.equal(file?.name, 'Post from Chief.txt')
+  assert.equal(file?.name, 'Post from Omni.txt')
   assert.equal(post.message.source.length, long.length)
   assert.equal(new TextDecoder().decode(store.files.get(file.attachmentId)), long)
 
@@ -617,8 +617,8 @@ test('a long post goes to the group as a file, and reaches the member with its p
   const turn = await turnFor(sent)
   assert.deepEqual(turn.message.content.filter(block => block.type === 'file').map(block => block.attachment), [file])
   const prompt = turn.message.content[0].text
-  assert.ok(prompt.includes(`Chief: [A long message: ${long.length} characters.`))
-  assert.ok(prompt.includes(`[File "Post from Chief.txt" (${file.bytes} bytes) attached]`))
+  assert.ok(prompt.includes(`Omni: [A long message: ${long.length} characters.`))
+  assert.ok(prompt.includes(`[File "Post from Omni.txt" (${file.bytes} bytes) attached]`))
   assert.ok(prompt.length < 6000, `the prompt has ${prompt.length} characters`)
   await answer(turn.sessionId, turn.message.source.exchangeId, 'Read it.', 1)
   await running

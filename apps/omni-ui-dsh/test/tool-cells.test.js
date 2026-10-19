@@ -72,7 +72,7 @@ const find = (node, match) => {
 const count = (haystack, needle) => haystack.split(needle).length - 1
 
 const writer = { id: 'writer', name: 'Writer', color: 'blue' }
-const chief = { id: 'chief', name: 'Chief', color: 'green' }
+const chief = { id: 'chief', name: 'Omni', color: 'green' }
 const room = { id: 'room', name: 'Ops', members: ['writer', 'chief'], admin: 'chief' }
 const team = (over = {}) => ({
   bots: [writer, chief], byId: { writer, chief }, rooms: [room], roomsById: { room }, exchangeTurns: {},
@@ -118,11 +118,11 @@ const BRANCHES = [
   ['delete_group', { content: 'Deleted "Ops".' }, /Deleted group/],
   ['post_to_group', { content: 'Posted in "Ops".' }, /Posted in.*Ops/],
   ['ask_user', {}, /Which draft\?.*Short/],
-  ['request_secret', { args: { name: 'DEMO_TOKEN' } }, /Chief needs a key.*DEMO_TOKEN/],
+  ['request_secret', { args: { name: 'DEMO_TOKEN' } }, /Omni needs a key.*DEMO_TOKEN/],
   ['ask_user_question', { args: { questions: [{ question: 'Ship it?', options: [{ label: 'Yes' }] }] }, content: { answers: [{ selected: ['Yes'] }] } }, /Ship it\?.*Yes/],
   ['read_group_chat', { args: { group: 'Ops' } }, /Read.*Ops/],
-  ['remember', { args: { scope: 'Chief' }, content: 'Saved to Chief memory.' }, /Memory updated/],
-  ['forget', { args: { scope: 'Chief' }, content: 'Removed from Chief memory.' }, /Memory updated/],
+  ['remember', { args: { scope: 'Omni' }, content: 'Saved to Omni memory.' }, /Memory updated/],
+  ['forget', { args: { scope: 'Omni' }, content: 'Removed from Omni memory.' }, /Memory updated/],
 ]
 const rosterFor = callId => team({ questions: { chief: question(callId) }, secretRequests: { chief: [request(callId)] } })
 
@@ -145,7 +145,7 @@ test('a program draws every known sub-call in dispatch order and each call once'
   const root = program([message, call('run_code', 'program:ptc:4', { subCalls: [relay, secret, message] }), relay, call('bash', 'program:ptc:5')])
   assert.deepEqual(JSON.parse(JSON.stringify(callTree(root).map(entry => entry.callId))), ['program', 'program:ptc:1', 'program:ptc:4', 'program:ptc:2', 'program:ptc:3', 'program:ptc:5'])
   const out = shown(root, { roster: team({ secretRequests: { chief: [request('program:ptc:3')] } }) })
-  assert.match(out, /Messaged.*Writer.*Group reply\..*Chief needs a key/)
+  assert.match(out, /Messaged.*Writer.*Group reply\..*Omni needs a key/)
   assert.equal(count(out, 'Messaged'), 1)
   assert.equal(count(out, 'Group reply.'), 1)
   assert.equal(count(out, 'needs a key'), 1)
@@ -163,7 +163,7 @@ test('cards and replies still show when the program\'s own call head left the lo
   const roster = team({ questions: { chief: question('program:ptc:3') }, secretRequests: { chief: [request('program:ptc:1')] } })
   const relay = call('group_relay', 'program:ptc:2', { content: { replies: [{ botId: 'writer', text: 'Group reply.' }] } })
   const root = { ...program([call('request_secret', 'program:ptc:1', { args: { name: 'DEMO_TOKEN' } }), relay, call('ask_user', 'program:ptc:3')]), name: '', call: null }
-  assert.match(shown(root, { roster }), /Chief needs a key.*Group reply\..*Which draft\?/)
+  assert.match(shown(root, { roster }), /Omni needs a key.*Group reply\..*Which draft\?/)
 })
 
 test('each sub-call shows its own state, not its program\'s', () => {
@@ -189,7 +189,7 @@ test('a hidden Bot-to-Bot turn draws none of its sub-calls', () => {
   const roster = team({ exchangeTurns: { chief: [1] }, secretRequests: { chief: [request('program:ptc:1')] } })
   const root = program([call('request_secret', 'program:ptc:1', { args: { name: 'DEMO_TOKEN' } }), call('message_bot', 'program:ptc:2', { args: { to: 'Writer' } })])
   assert.equal(shown(root, { roster }), '')
-  assert.match(shown(root, { roster, turn: 2 }), /Chief needs a key.*Messaged/)
+  assert.match(shown(root, { roster, turn: 2 }), /Omni needs a key.*Messaged/)
 })
 
 test('a message line opens the exchange of the chat\'s Bot, from any part', () => {
@@ -276,14 +276,14 @@ test('a card whose call is not drawn waits in the dock; a drawn one shows only a
   const store = cardStore()
   const roster = team({ questions: { chief: question('program:ptc:1') }, secretRequests: { chief: [request('program:ptc:2')] } })
   const root = program([call('ask_user', 'program:ptc:1'), call('request_secret', 'program:ptc:2', { args: { name: 'DEMO_TOKEN' } })])
-  assert.match(docks(store, roster), /Which draft\?.*Chief needs a key/)
+  assert.match(docks(store, roster), /Which draft\?.*Omni needs a key/)
   const { out, unmount } = draw(root, store, { roster })
   const inline = text(out)
   assert.equal(docks(store, roster), '')
   assert.equal(count(inline, 'Which draft?'), 1)
   assert.equal(count(inline, 'needs a key'), 1)
   unmount()
-  assert.match(docks(store, roster), /Which draft\?.*Chief needs a key/)
+  assert.match(docks(store, roster), /Which draft\?.*Omni needs a key/)
 })
 
 test('the docks hold a card back while the history loads, and keep cards without a call', () => {
@@ -291,9 +291,9 @@ test('the docks hold a card back while the history loads, and keep cards without
   const roster = team({ questions: { chief: question('program:ptc:1') }, secretRequests: { chief: [request('program:ptc:2')] } })
   assert.equal(docks(store, roster, { openState: 'loading' }), '')
   assert.equal(docks(store, roster, { openState: 'cold' }), '')
-  assert.match(docks(store, roster, { openState: 'error' }), /Which draft\?.*Chief needs a key/)
+  assert.match(docks(store, roster, { openState: 'error' }), /Which draft\?.*Omni needs a key/)
   const free = team({ questions: { chief: question(undefined) }, secretRequests: { chief: [request(undefined)] } })
-  assert.match(docks(store, free, { openState: 'loading' }), /Which draft\?.*Chief needs a key/)
+  assert.match(docks(store, free, { openState: 'loading' }), /Which draft\?.*Omni needs a key/)
 })
 
 test('a card from an earlier part waits in the dock even when a call here has the same id', () => {
@@ -302,7 +302,7 @@ test('a card from an earlier part waits in the dock even when a call here has th
   const roster = team({ bots: [writer, current], byId: { writer, chief: current, 'chief-2': current }, secretRequests: { chief: [request('call-1', { sessionId: 'chief' })] } })
   const { out, unmount } = draw(call('request_secret', 'call-1', { args: { name: 'DEMO_TOKEN' } }), store, { roster, sessionId: 'chief-2' })
   assert.doesNotMatch(text(out), /needs a key/)
-  assert.match(docks(store, roster, { sessionId: 'chief-2' }), /Chief needs a key/)
+  assert.match(docks(store, roster, { sessionId: 'chief-2' }), /Omni needs a key/)
   unmount()
 })
 
@@ -311,16 +311,16 @@ test('a secret in a hidden turn shows in the dock instead of nowhere', () => {
   const roster = team({ exchangeTurns: { chief: [1] }, secretRequests: { chief: [request('program:ptc:1')] } })
   const { out, unmount } = draw(program([call('request_secret', 'program:ptc:1', { args: { name: 'DEMO_TOKEN' } })]), store, { roster })
   assert.equal(text(out), '')
-  assert.match(docks(store, roster), /Chief needs a key/)
+  assert.match(docks(store, roster), /Omni needs a key/)
   unmount()
 })
 
 // #38: a PTC group round's replies vanished once the round ended.
 test('a PTC group relay shows its replies from the sub-call, live and after reload', async () => {
-  const replies = [{ botId: 'writer', text: 'Hello from Writer.' }, { botId: 'chief', text: 'Hello from Chief.' }]
+  const replies = [{ botId: 'writer', text: 'Hello from Writer.' }, { botId: 'chief', text: 'Hello from Omni.' }]
   const finished = program([call('group_relay', 'call-1-1:ptc:1', { content: { replies } })])
   const reloaded = shown(finished, { sessionId: 'room' })
-  assert.match(reloaded, /Writer.*Hello from Writer\..*Chief.*Admin.*Hello from Chief\./)
+  assert.match(reloaded, /Writer.*Hello from Writer\..*Omni.*Admin.*Hello from Omni\./)
   const headless = { ...finished, name: '', call: null }
   assert.equal(shown(headless, { sessionId: 'room' }), reloaded)
 
@@ -352,13 +352,13 @@ test('PTC secret and question cards show at their sub-calls and act on their own
   assert.deepEqual(JSON.parse(JSON.stringify(answers)), [['chief', 'question', { selected: ['Short'], custom: '' }]])
 
   const secret = show(program([call('request_secret', 'call-2-1:ptc:1', { args: { name: 'DEMO_TOKEN' }, running: true })], { running: true }), { roster, actions })
-  assert.match(text(secret), /Chief needs a key/)
+  assert.match(text(secret), /Omni needs a key/)
   await find(secret, node => node.props['aria-label'] === 'Cancel the request').props.onClick()
   assert.deepEqual(canceled, ['request'])
 
   const settled = team({ secretRequests: { chief: [request('call-2-1:ptc:1', { status: 'canceled' })] } })
   const after = shown(program([call('request_secret', 'call-2-1:ptc:1', { args: { name: 'DEMO_TOKEN' } })]), { roster: settled })
-  assert.match(after, /Chief asked for DEMO_TOKEN.*Canceled/)
+  assert.match(after, /Omni asked for DEMO_TOKEN.*Canceled/)
   assert.doesNotMatch(after, /Paste or type the key/)
   assert.doesNotMatch(shown(program([call('ask_user', 'call-0-1:ptc:1')]), { roster }), /Which draft\?/)
   assert.equal(shown(program([call('ask_user', 'call-1-2:ptc:1')]), { roster: team() }), '')

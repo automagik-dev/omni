@@ -6,7 +6,7 @@ import { fakeContext } from './fake-ctx.js'
 function start() {
   const ctx = fakeContext()
   const bots = new Map([
-    ['main', { name: 'Chief' }],
+    ['main', { name: 'Omni' }],
     ['worker', { name: 'Dev', instructions: 'Check files.' }],
   ])
   install({

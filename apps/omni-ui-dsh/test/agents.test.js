@@ -81,14 +81,14 @@ const TEAM = {
   version: 1,
   mainBotIds: ['m1'],
   revision: 2,
-  bots: { m1: { id: 'm1', sessionId: 'm1', name: 'Chief', role: 'Chief of Staff', instructions: '', createdAt: 1 } },
+  bots: { m1: { id: 'm1', sessionId: 'm1', name: 'Omni', role: 'Channel orchestrator', instructions: '', createdAt: 1 } },
   rooms: {},
   exchanges: [],
   exchangeTurns: {},
   questions: {},
 }
 
-test('add-agent creates one record with a first Session in the DS Bot workspace', async (t) => {
+test('add-agent creates one record with a first Session in the Omni workspace', async (t) => {
   const { call, stop, created } = start(TEAM)
   t.after(stop)
   await call('state', {})

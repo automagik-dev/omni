@@ -124,7 +124,7 @@ export function createBrowserChannel({ now = Date.now, waitMs = WAIT_MS, staleMs
 
   function dispose() {
     for (const client of clients.values()) client.end?.()
-    for (const id of [...pending.keys()]) settle(id, { error: 'DS Bot stopped before the page was read.' })
+    for (const id of [...pending.keys()]) settle(id, { error: 'Omni stopped before the page was read.' })
     clients.clear()
   }
 

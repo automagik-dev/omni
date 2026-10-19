@@ -12,7 +12,7 @@ const team = () => ({
   version: 1,
   mainBotIds: ['chief'],
   bots: {
-    chief: { id: 'chief', sessionId: 'chief', name: 'Chief', role: 'Lead', instructions: '', createdAt: 1 },
+    chief: { id: 'chief', sessionId: 'chief', name: 'Omni', role: 'Lead', instructions: '', createdAt: 1 },
     writer: { id: 'writer', sessionId: 'writer', name: 'Writer', role: 'Write', instructions: '', createdAt: 2 },
   },
   rooms: { room: { id: 'room', name: 'Desk', members: ['chief', 'writer'], sessions: { writer: 'room-writer' }, admin: 'chief', mode: 'everyone' } },
@@ -195,7 +195,7 @@ test('a goal started in a Bot chat or a group is blocked; one elsewhere runs', a
   await until(() => goals.blocked.length === 3)
   await new Promise(resolve => setTimeout(resolve, 20))
   assert.deepEqual(goals.blocked.map(entry => entry.sessionId), ['writer', 'room', 'room-writer'])
-  for (const entry of goals.blocked) assert.deepEqual([entry.code, entry.message], ['not-supported', 'DS Bot does not run goals. Ask the Bot in a message instead.'])
+  for (const entry of goals.blocked) assert.deepEqual([entry.code, entry.message], ['not-supported', 'Omni does not run goals. Ask the Bot in a message instead.'])
   assert.equal(goals.current.get('plain').phase, 'active')
 })
 

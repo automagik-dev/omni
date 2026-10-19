@@ -32,7 +32,7 @@ function page(window) {
       throw new Error(`no platform module ${name}`)
     },
   })
-  const actions = { diagnostics: async () => ({ markdown: '| DS Bot | 0.1.6 |', issuesUrl: ISSUES, entries: [], total: 0 }) }
+  const actions = { diagnostics: async () => ({ markdown: '| Omni | 0.1.6 |', issuesUrl: ISSUES, entries: [], total: 0 }) }
   let pending
   const run = (promise) => { pending = promise; return promise }
   const tree = module.exports.FeedbackPage({ actions, run, Section: 'section', Row: 'row' })

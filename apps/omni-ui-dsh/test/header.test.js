@@ -24,7 +24,7 @@ runInNewContext(bundle.outputFiles[0].text, {
 })
 const { HeaderPill } = module.exports
 
-const roster = { byId: { a: { id: 'a', name: 'Chief', sessionId: 'a' } }, roomsById: {}, bots: [], exchangeTurns: {}, questions: {} }
+const roster = { byId: { a: { id: 'a', name: 'Omni', sessionId: 'a' } }, roomsById: {}, bots: [], exchangeTurns: {}, questions: {} }
 const hook = value => select => select(value)
 const header = actions => HeaderPill({
   sessionId: 'a',

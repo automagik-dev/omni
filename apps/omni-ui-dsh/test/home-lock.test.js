@@ -103,7 +103,7 @@ const TEAM = {
   version: 1,
   mainBotIds: ['m1'],
   revision: 7,
-  bots: { m1: { id: 'm1', sessionId: 'm1', name: 'Chief', role: 'Chief of Staff', lab: 'deepseek', instructions: '', createdAt: 1 } },
+  bots: { m1: { id: 'm1', sessionId: 'm1', name: 'Omni', role: 'Channel orchestrator', lab: 'deepseek', instructions: '', createdAt: 1 } },
   rooms: {},
   exchanges: [],
   exchangeTurns: {},
@@ -133,7 +133,7 @@ test('while another dsh holds the team, the channel reads it, refuses changes, t
   const call = start(t, home)
 
   const view = (await call('state', {})).value
-  assert.deepEqual(view.bots.map(bot => bot.name), ['Chief'])
+  assert.deepEqual(view.bots.map(bot => bot.name), ['Omni'])
   assert.match(view.readOnly, new RegExp(`open in another dsh \\(Web or Desktop, pid ${process.ppid} on `))
   const refused = await call('set-prefs', { theme: 'dark' })
   assert.equal(refused.error.code, 'bot/read-only')

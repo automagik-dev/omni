@@ -83,12 +83,12 @@ test('长任务 writes text on every step when the step size is left out', async
 test('a Bot message hands work on with 转告 and takes its time with 慢慢做', async (t) => {
   const url = await startMock(t)
   const tools = ['list_bots', 'message_bot']
-  const handed = await call(url, [{ role: 'user', content: '[Message from Chief]\n转告 Coder: 慢慢做 1' }], tools)
+  const handed = await call(url, [{ role: 'user', content: '[Message from Omni]\n转告 Coder: 慢慢做 1' }], tools)
   assert.deepEqual(handed.tools.map(used => used.name), ['message_bot'])
   const started = Date.now()
   const slow = await call(url, [{ role: 'user', content: '[Message from Writer]\n慢慢做 1' }], tools)
   assert.ok(Date.now() - started >= 1000)
   assert.equal(slow.text, '给 Writer 的回复：做完了，用了 1 秒。')
-  const back = await call(url, [{ role: 'user', content: '[Reply from Coder · for the work Chief asked you for; your answer goes to Chief once everything you handed on is back]\n做完了' }], tools)
-  assert.deepEqual([back.text, back.tools], ['Coder 交回了，我把结果交给 Chief。', []])
+  const back = await call(url, [{ role: 'user', content: '[Reply from Coder · for the work Omni asked you for; your answer goes to Omni once everything you handed on is back]\n做完了' }], tools)
+  assert.deepEqual([back.text, back.tools], ['Coder 交回了，我把结果交给 Omni。', []])
 })
