@@ -561,6 +561,48 @@
       "when": 1787900000000,
       "tag": "0079_instances_slack_identity_unique",
       "breakpoints": true
+    },
+    {
+      "idx": 80,
+      "version": "7",
+      "when": 1788000000000,
+      "tag": "0080_event_journal_ready",
+      "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "7",
+      "when": 1788100000000,
+      "tag": "0081_instances_outbound_pacing",
+      "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "7",
+      "when": 1788200000000,
+      "tag": "0082_durable_consumers_instance_scope",
+      "breakpoints": true
+    },
+    {
+      "idx": 83,
+      "version": "7",
+      "when": 1788300000000,
+      "tag": "0083_event_access_decision",
+      "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "7",
+      "when": 1788400000000,
+      "tag": "0084_instances_audio_transcription",
+      "breakpoints": true
+    },
+    {
+      "idx": 85,
+      "version": "7",
+      "when": 1788500000000,
+      "tag": "0085_instances_inbound_reply_context",
+      "breakpoints": true
     }
   ]
 }

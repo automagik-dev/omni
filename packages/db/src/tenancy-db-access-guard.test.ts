@@ -332,6 +332,7 @@ describe('db-access guard', () => {
       // (`runDispatchDb` / `runTenantWorkDb`), the message-persistence
       // back-link shape. Consumer-only callers.
       'packages/api/src/services/agent-usage.ts',
+      'packages/api/src/services/whatsapp-self.ts',
     ]);
     for (const entry of boundary) {
       expect(entry.file.startsWith('packages/api/src/tenancy/') || converted.has(entry.file)).toBe(true);

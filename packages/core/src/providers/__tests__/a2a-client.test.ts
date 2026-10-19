@@ -97,6 +97,35 @@ describe('A2AClient', () => {
       expect(result.status).toBe('completed');
     });
 
+    it('polls GetTask (flat result, no .task wrapper) until terminal state', async () => {
+      const submitted = {
+        jsonrpc: '2.0',
+        id: 'omni-1',
+        result: { task: { id: 'task-9', contextId: 'ctx-9', status: { state: 'TASK_STATE_SUBMITTED' } } },
+      };
+      const getTask = {
+        jsonrpc: '2.0',
+        id: 'omni-2',
+        result: {
+          id: 'task-9',
+          contextId: 'ctx-9',
+          status: { state: 'TASK_STATE_COMPLETED' },
+          artifacts: [{ artifactId: 'a1', parts: [{ text: 'Polled answer' }] }],
+        },
+      };
+      const json = (body: unknown) =>
+        new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      mockImpl.mockResolvedValueOnce(json(submitted)).mockResolvedValueOnce(json(getTask));
+
+      const client = new A2AClient(CONFIG);
+      const result = await client.run({ message: 'Hi', userId: 'u-1', agentId: 'test-agent' });
+
+      expect(mockImpl).toHaveBeenCalledTimes(2);
+      expect(result.content).toBe('Polled answer');
+      expect(result.runId).toBe('task-9');
+      expect(result.status).toBe('completed');
+    });
+
     it('returns failed status when task state is failed', async () => {
       const rpcResponse = {
         jsonrpc: '2.0',

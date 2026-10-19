@@ -5,6 +5,7 @@
  * checkProcessedColumn, and the 10-minute promise leak circuit breaker.
  */
 import { afterEach, describe, expect, it, mock } from 'bun:test';
+import type { MediaProcessedPayload } from '@omni/core';
 import { __test__ } from '../agent-dispatcher';
 
 const {
@@ -264,6 +265,36 @@ describe('awaitMediaProcessing', () => {
 
     const result = await promise;
     expect(result).toEqual(MEDIA_WAIT_NULL);
+  });
+
+  it('releases the wait immediately on a skipped completion (audioTranscription off)', async () => {
+    const msgId = 'msg-uuid-skipped';
+    const services = mockServices({
+      message: { id: msgId, transcription: null, mediaLocalPath: null },
+    });
+
+    const start = Date.now();
+    const promise = awaitMediaProcessing(services, 'inst-1', 'chat-ext-1', 'ext-msg-1', 'audio');
+
+    await new Promise((r) => setTimeout(r, 10));
+    expect(mediaCompletions.has(msgId)).toBe(true);
+
+    // The payload media-processor publishes when transcription is off, handed to
+    // the waiter exactly as the media.processed subscriber does ({ content, error }).
+    const skipped: MediaProcessedPayload = {
+      eventId: 'evt-skipped',
+      mediaId: msgId,
+      processingType: 'transcription',
+      content: '',
+      skipped: true,
+      reason: 'transcription_off',
+    };
+    mediaCompletions.get(msgId)!.resolve({ content: skipped.content, error: skipped.error });
+
+    const result = await promise;
+    expect(result).toEqual(MEDIA_WAIT_NULL);
+    // Released by the event, not by the 30s MEDIA_WAIT_TIMEOUT_MS fallback.
+    expect(Date.now() - start).toBeLessThan(1_000);
   });
 });
 

@@ -1114,6 +1114,54 @@ async function handleMessagePinState(
 }
 
 /**
+ * Handle message.failed — the channel reported that an outbound message did
+ * not reach the recipient (#1277). Marks it `failed` unless the platform has
+ * already reported it delivered/read, and points `latestEventId` at this
+ * event, whose payload keeps the error and error code.
+ *
+ * A failure without `externalId` (the send never got a platform id) has no
+ * stored message to update. Non-critical like delivered/read: errors are
+ * logged, not re-thrown.
+ */
+export async function handleMessageFailed(services: Services, event: TypedOmniEvent<'message.failed'>): Promise<void> {
+  const payload = event.payload;
+  const metadata = event.metadata;
+  if (!metadata.instanceId || !payload.externalId) return;
+  if (isInternalWhatsAppJid(payload.chatId)) return;
+  const instanceId = metadata.instanceId;
+  const externalId = payload.externalId;
+
+  try {
+    // Lookup + status update are one work item: one worker transaction.
+    await runConsumerInTenantContext(services.db, event, async () => {
+      const chat = await services.chats.findByExternalIdSmart(instanceId, payload.chatId);
+      if (!chat) {
+        log.debug('Chat not found for message.failed', { chatId: payload.chatId });
+        return;
+      }
+
+      const message = await services.messages.getByExternalId(chat.id, externalId);
+      if (!message) {
+        log.debug('Message not found for message.failed', { externalId });
+        return;
+      }
+
+      const updated = await services.messages.markDeliveryFailed(
+        message.id,
+        isValidUuid(event.id) ? event.id : undefined,
+      );
+      log.debug('Updated message delivery status', {
+        messageId: message.id,
+        status: updated ? 'failed' : `kept ${message.deliveryStatus}`,
+        errorCode: payload.errorCode,
+      });
+    });
+  } catch (error) {
+    log.error('Failed to mark message as failed', { externalId, error: String(error) });
+  }
+}
+
+/**
  * Handle reaction.received / reaction.removed — attach the reaction to the
  * target message's `reactions` column (#1033). Reactions are NOT messages and
  * never arrive as message.received; this is the only persistence path for them.
@@ -1132,12 +1180,14 @@ export async function handleReactionState(
     await runConsumerInTenantContext(services.db, event, async () => {
       const chat = await services.chats.findByExternalIdSmart(instanceId, payload.chatId);
       const message = chat ? await services.messages.getByExternalId(chat.id, payload.messageId) : null;
-      if (!message) {
+      if (!chat || !message) {
         log.debug('Target message not found for reaction', { chatId: payload.chatId, messageId: payload.messageId });
         return;
       }
 
       if (added) {
+        // The chat's channel decides the semantics: on WhatsApp a new emoji
+        // replaces the user's previous reaction on the message.
         await services.messages.addReaction(
           message.id,
           {
@@ -1147,6 +1197,7 @@ export async function handleReactionState(
             customEmojiId: payload.isCustomEmoji ? payload.emoji : undefined,
           },
           event.id,
+          chat.channel,
         );
       } else {
         await services.messages.removeReaction(message.id, payload.from, payload.emoji, event.id);
@@ -1479,6 +1530,16 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
         concurrency: 1, // serial (#1200): read must land after sent/delivered for the same message
       },
     );
+
+    // Subscribe to message.failed - mark the outbound message as failed (#1277)
+    await eventBus.subscribe('message.failed', (event) => handleMessageFailed(services, event), {
+      durable: 'message-persistence-failed',
+      queue: 'message-persistence',
+      maxRetries: 2,
+      retryDelayMs: 500,
+      startFrom: 'first',
+      concurrency: 1, // serial (#1200), like delivered/read
+    });
 
     // Subscribe to message.pinned / message.unpinned — per-message pin state (#889)
     await eventBus.subscribe('message.pinned', (event) => handleMessagePinState(services, event, true), {

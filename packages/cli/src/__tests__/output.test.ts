@@ -102,7 +102,8 @@ await flushStdout();
     return new Promise((resolve, reject) => {
       const child = spawn('bun', [scriptPath], {
         stdio: ['ignore', 'pipe', 'pipe'],
-        env: { ...process.env, OMNI_FORMAT: format },
+        // FORCE_COLOR makes Bun wrap console.error in ANSI codes, breaking the JSON assertion.
+        env: { ...process.env, OMNI_FORMAT: format, FORCE_COLOR: undefined, NO_COLOR: '1' },
       });
       const stdoutChunks: Buffer[] = [];
       const stderrChunks: Buffer[] = [];
@@ -237,7 +238,7 @@ await flushStdout();
         const child = spawn('bun', [scriptPath], {
           stdio: ['ignore', 'pipe', 'inherit'],
           // Force human format + no colors so we count raw bytes deterministically.
-          env: { ...process.env, OMNI_FORMAT: 'human', NO_COLOR: '1' },
+          env: { ...process.env, OMNI_FORMAT: 'human', NO_COLOR: '1', FORCE_COLOR: undefined },
         });
 
         // Same slow-reader scenario: pause, let the kernel pipe fill, then drain.

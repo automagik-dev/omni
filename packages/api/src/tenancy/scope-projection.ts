@@ -118,6 +118,8 @@ export const LEGACY_SCOPE_UNIVERSE: readonly string[] = Object.freeze([...new Se
  * `null` is a build failure via the test, not a runtime fallback.
  */
 export function classifyLegacyScope(scope: string): ScopeTier | null {
+  if (scope === 'messages:self:read' || scope === 'messages:selected:read') return 'read';
+  if (scope === 'messages:self:send') return 'write';
   const verb = scope.split(':')[1];
   if (verb === undefined) return null;
   return TIER_BY_VERB[verb] ?? null;

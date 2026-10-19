@@ -203,15 +203,29 @@ postgresDescribe('two-tenant agent-dispatcher containment (real PostgreSQL)', ()
   test('the self-send-guard enumeration and its cache are tenant-keyed', async () => {
     dispatcherTest.resetActiveOwnerIdentifiersCache();
 
+    // The list is "OTHER active instances on the same channel" (#1267), so
+    // probe from a third, unrelated instance id on the same channel.
+    const probe = {
+      id: '55555555-5555-4555-8555-5555555555ac',
+      channel: 'whatsapp-baileys' as const,
+      slackTeamId: null,
+    };
     // A sees only its own owner identifiers…
-    expect(await dispatcherTest.listActiveOwnerIdentifiers(runtimeDb, TENANT_A)).toEqual(['owner-a']);
+    expect(await dispatcherTest.listActiveOwnerIdentifiers(runtimeDb, probe, TENANT_A)).toEqual(['owner-a']);
     // …and B, asking IMMEDIATELY afterwards (inside any cache TTL), must not be
     // served A's cached list — the cache key includes the tenant. With the old
     // global cache this returns ['owner-a'] and the guard would treat A's
     // instance as B's own (cross-tenant identifier leak + wrong gating).
-    expect(await dispatcherTest.listActiveOwnerIdentifiers(runtimeDb, TENANT_B)).toEqual(['owner-b']);
+    expect(await dispatcherTest.listActiveOwnerIdentifiers(runtimeDb, probe, TENANT_B)).toEqual(['owner-b']);
     // Repeat A from cache: still A's list.
-    expect(await dispatcherTest.listActiveOwnerIdentifiers(runtimeDb, TENANT_A)).toEqual(['owner-a']);
+    expect(await dispatcherTest.listActiveOwnerIdentifiers(runtimeDb, probe, TENANT_A)).toEqual(['owner-a']);
+    // Same channel, but the instance itself is excluded; another channel sees nothing.
+    expect(await dispatcherTest.listActiveOwnerIdentifiers(runtimeDb, { ...probe, id: INSTANCE_A }, TENANT_A)).toEqual(
+      [],
+    );
+    expect(
+      await dispatcherTest.listActiveOwnerIdentifiers(runtimeDb, { ...probe, channel: 'slack' as const }, TENANT_A),
+    ).toEqual([]);
   });
 
   test('route resolution is tenant-scoped and its negative cache is tenant-keyed', async () => {

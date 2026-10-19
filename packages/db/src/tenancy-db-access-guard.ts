@@ -979,6 +979,17 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     class: 'tenant-boundary',
   },
   {
+    // Opt-in ingest access journal (0083, OMNI_JOURNAL_ACCESS_DECISION=true
+    // only): the instance access-mode lookup for an inbound message/reaction
+    // issues on `scopedHandle(db)` inside `runTenantWorkDb(db,
+    // trustedEnvelopeTenant(event), ...)` — the same worker tenant scope as the
+    // sibling entries, opened outside `runConsumerInTenantContext` on purpose so
+    // a failed evaluation cannot abort the fill. Consumer-only callers.
+    file: 'packages/api/src/plugins/event-persistence.ts',
+    table: 'instances',
+    class: 'tenant-boundary',
+  },
+  {
     // #1064: the agent-usage stamp (cost/tokens/model onto the triggering
     // event's journal row). Runs through `scopedHandle(db)` inside the
     // caller's worker tenant scope — `runDispatchDb` from the dispatcher,
@@ -1129,6 +1140,12 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     table: 'handoff_logs',
     class: 'tenant-boundary',
   },
+  // These helpers are called only by protected self routes with c.get('db').
+  // The tenancy edge rebinds that handle to the request's stamped transaction;
+  // scoped instance lookup precedes every native identity or socket access.
+  { file: 'packages/api/src/services/whatsapp-self.ts', table: 'chats', class: 'tenant-boundary' },
+  { file: 'packages/api/src/services/whatsapp-self.ts', table: 'messages', class: 'tenant-boundary' },
+  { file: 'packages/api/src/services/whatsapp-self.ts', table: 'omni_events', class: 'tenant-boundary' },
   {
     file: 'packages/api/src/routes/v2/messages.ts',
     table: 'close_contact_logs',
@@ -1464,6 +1481,14 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     // (null tenant) reads ambient byte-identically.
     file: 'packages/api/src/services/event-ops.ts',
     table: 'omni_events',
+    class: 'tenant-boundary',
+  },
+  {
+    // Scoped durable consumers: create resolves the requested instance ids
+    // through the service's `scopedHandle`, so a tenant-scoped request only
+    // resolves its own tenant's instances; legacy paths read ambient.
+    file: 'packages/api/src/services/event-consumers.ts',
+    table: 'instances',
     class: 'tenant-boundary',
   },
   {

@@ -76,12 +76,13 @@ import type { ChannelType, Instance } from '@omni/db';
 import { createMediaProcessingService } from '@omni/media-processing';
 import { SpanStatusCode, trace } from '@opentelemetry/api';
 import * as Sentry from '@sentry/bun';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, ne } from 'drizzle-orm';
 import { z } from 'zod';
 import { agentKeyNameCandidates } from '../lib/agent-key-name';
 import { withIdempotency } from '../lib/idempotency';
 import { sentryEnabled } from '../lib/sentry-scrub';
 import type { Services } from '../services';
+import { accessFallbackCandidates, runAccessFallbackChain } from '../services/access';
 import {
   type MessageContext,
   type SplitDelayConfig,
@@ -561,6 +562,7 @@ async function sendTextMessage(
   senderAgentId?: string,
   systemNotice?: boolean,
   part?: { index: number; count: number },
+  outboundPacing?: 'humanized' | 'immediate' | null,
 ): Promise<void> {
   const plugin = await getPlugin(channel);
   if (!plugin) throw new Error(`Channel plugin not found: ${channel}`);
@@ -579,6 +581,8 @@ async function sendTextMessage(
       senderAgentId,
       systemNotice,
       ...(part ? { partIndex: part.index, partCount: part.count } : {}),
+      // Instance-level pacing; only 'immediate' adds a key (humanized keeps today's shape).
+      ...(outboundPacing === 'immediate' ? { outboundPacing } : {}),
     },
   });
 }
@@ -1220,6 +1224,22 @@ const mediaCompletions = new Map<
 const mediaResultCache = new Map<string, { content: string; error?: string }>();
 
 /**
+ * The media processor writes `[error: media processing failed — <reason>]` into the
+ * content column (transcription, imageDescription, ...) when AI processing fails.
+ */
+function isMediaErrorMarker(value: unknown): boolean {
+  return typeof value === 'string' && value.startsWith('[error');
+}
+
+/**
+ * Processed media text fit for the agent: null when the column is empty or holds
+ * the processor's error marker (#1305), so callers fall back to their placeholder.
+ */
+function processedMediaText(value: string | null | undefined): string | null {
+  return value && !isMediaErrorMarker(value) ? value : null;
+}
+
+/**
  * Check a single poll result: returns result if ready, 'pending' if still waiting, or null on error.
  */
 function checkProcessedColumn(
@@ -1229,7 +1249,7 @@ function checkProcessedColumn(
   if (!msg) return 'pending';
   const processed = msg[column];
   if (processed == null) return 'pending';
-  if (typeof processed === 'string' && processed.startsWith('[error')) return 'error';
+  if (isMediaErrorMarker(processed)) return 'error';
   if (processed) {
     // Use mediaLocalPath (the actual downloaded file path) instead of mediaUrl (the platform file ID)
     const localPath = msg.mediaLocalPath ? resolve(join(MEDIA_BASE_PATH, msg.mediaLocalPath as string)) : null;
@@ -1436,16 +1456,22 @@ function getMessageContentText(msg: {
   documentExtraction: string | null;
 }): string | null {
   switch (msg.messageType) {
-    case 'audio':
-      return msg.transcription ? `${MEDIA_ICONS.audio}: ${msg.transcription}` : (msg.textContent ?? '[audio]');
-    case 'image':
-      return msg.imageDescription ? `${MEDIA_ICONS.image}: ${msg.imageDescription}` : (msg.textContent ?? '[image]');
-    case 'video':
-      return msg.videoDescription ? `${MEDIA_ICONS.video}: ${msg.videoDescription}` : (msg.textContent ?? '[video]');
-    case 'document':
-      return msg.documentExtraction
-        ? `${MEDIA_ICONS.document}: ${msg.documentExtraction}`
-        : (msg.textContent ?? '[document]');
+    case 'audio': {
+      const transcription = processedMediaText(msg.transcription);
+      return transcription ? `${MEDIA_ICONS.audio}: ${transcription}` : (msg.textContent ?? '[audio]');
+    }
+    case 'image': {
+      const description = processedMediaText(msg.imageDescription);
+      return description ? `${MEDIA_ICONS.image}: ${description}` : (msg.textContent ?? '[image]');
+    }
+    case 'video': {
+      const description = processedMediaText(msg.videoDescription);
+      return description ? `${MEDIA_ICONS.video}: ${description}` : (msg.textContent ?? '[video]');
+    }
+    case 'document': {
+      const extraction = processedMediaText(msg.documentExtraction);
+      return extraction ? `${MEDIA_ICONS.document}: ${extraction}` : (msg.textContent ?? '[document]');
+    }
     default:
       return msg.textContent;
   }
@@ -1581,6 +1607,7 @@ async function sendResponseParts(
   replyTo?: string,
   correlationId?: string,
   senderAgentId?: string,
+  outboundPacing?: 'humanized' | 'immediate' | null,
 ): Promise<void> {
   const messageLimit = getMessageLimit(channel);
   const chunked: string[] = [];
@@ -1615,6 +1642,7 @@ async function sendResponseParts(
       // asc-flow needs to know where the reply ENDS, because its transport
       // carries a single answer per polled turn.
       { index, count: allChunks.length },
+      outboundPacing,
     );
     const isLastChunk = index === allChunks.length - 1;
     if (!isLastChunk) {
@@ -2671,22 +2699,26 @@ function formatMediaContent(msg: {
     }[msg.messageType] || '📎';
 
   const mediaInfo: string[] = [mediaEmoji];
+  const transcription = processedMediaText(msg.transcription);
+  const imageDescription = processedMediaText(msg.imageDescription);
+  const videoDescription = processedMediaText(msg.videoDescription);
+  const documentExtraction = processedMediaText(msg.documentExtraction);
 
   // Add transcription for audio/voice
-  if (msg.transcription) {
-    mediaInfo.push(`"${msg.transcription}"`);
+  if (transcription) {
+    mediaInfo.push(`"${transcription}"`);
   }
   // Add description for images
-  else if (msg.imageDescription) {
-    mediaInfo.push(msg.imageDescription);
+  else if (imageDescription) {
+    mediaInfo.push(imageDescription);
   }
   // Add description for videos
-  else if (msg.videoDescription) {
-    mediaInfo.push(msg.videoDescription);
+  else if (videoDescription) {
+    mediaInfo.push(videoDescription);
   }
   // Add extraction for documents
-  else if (msg.documentExtraction) {
-    mediaInfo.push(msg.documentExtraction.substring(0, 200)); // truncate long extractions
+  else if (documentExtraction) {
+    mediaInfo.push(documentExtraction.substring(0, 200)); // truncate long extractions
   }
 
   // If there's a caption, add it
@@ -3294,6 +3326,7 @@ async function dispatchViaProvider(
               replyTo,
               correlationId,
               senderAgentId,
+              instance.outboundPacing,
             ),
         );
 
@@ -3492,6 +3525,7 @@ async function dispatchViaLegacy(
         replyTo,
         correlationId,
         senderAgentId,
+        instance.outboundPacing,
       ),
   );
 
@@ -4180,11 +4214,7 @@ async function applyCloseContactGate(
   trustedTenantId?: string,
 ): Promise<'skip' | 'reopened' | 'pass'> {
   if (chatSettings?.closed === true) {
-    log.debug('Chat closed (terminal), skipping dispatch', {
-      instanceId,
-      chatId,
-      outcome: chatSettings.closeOutcome ?? null,
-    });
+    logDrop('chat closed (terminal)', { chatId }, instanceId, { outcome: chatSettings.closeOutcome ?? null });
     return 'skip';
   }
   if (!chatSettings?.closeUntil) return 'pass';
@@ -4279,7 +4309,7 @@ async function processAgentResponse(
     dispatchTenantId,
   );
   if (!personId) {
-    log.warn('Could not resolve person ID, skipping agent', { instanceId: instance.id, chatId, senderId });
+    logDrop('could not resolve person ID', firstMessage.payload, instance.id);
     ackHandle.remove();
     return;
   }
@@ -4311,7 +4341,7 @@ async function processAgentResponse(
   // genuine handoff pause (not a close-contact terminal/cooldown).
   const isAgentPaused = chatSettings?.agentPaused === true && gateResult !== 'reopened';
   if (isAgentPaused) {
-    log.debug('Agent paused (handoff active), skipping dispatch', { instanceId: instance.id, chatId });
+    logDrop('agent paused (handoff active)', firstMessage.payload, instance.id);
     ackHandle.remove();
     return;
   }
@@ -4323,9 +4353,7 @@ async function processAgentResponse(
       extractPlatformTimestamp(firstMessage.payload.rawPayload, Date.now()) ?? new Date()
     ).getTime();
     if (msgTimestamp < resumedAt) {
-      log.debug('Dropping pre-resume message (arrived during handoff window)', {
-        instanceId: instance.id,
-        chatId,
+      logDrop('pre-resume message (arrived during handoff window)', firstMessage.payload, instance.id, {
         msgTimestamp: new Date(msgTimestamp).toISOString(),
         resumedAt: chatSettings.agentResumedAt,
       });
@@ -5196,6 +5224,9 @@ async function processReactionTrigger(
           getSplitDelayConfig(instance),
           _fmtMode,
           payload.messageId,
+          undefined,
+          undefined,
+          instance.outboundPacing,
         );
       }
 
@@ -5264,6 +5295,9 @@ async function processReactionTrigger(
         getSplitDelayConfig(instance),
         _fmtMode,
         payload.messageId,
+        undefined,
+        undefined,
+        instance.outboundPacing,
       );
     }
 
@@ -5550,55 +5584,57 @@ export function isFirstPartyInstanceSender(
 }
 
 const ACTIVE_OWNER_IDENTIFIER_CACHE_TTL_MS = 10_000;
-let cachedActiveOwnerIdentifiers: Array<string | null> | null = null;
-let cachedActiveOwnerIdentifiersAt = 0;
 /**
- * Tenant-keyed variant of the owner-identifier cache (G5, ADR-0008; WISH
- * "cache keys include tenant identity"). A GLOBAL cache here would serve
- * tenant A's identifiers to tenant B inside the TTL — a cross-tenant
- * identifier leak AND wrong self-send gating. Bounded by the number of active
- * tenants in the process, entries overwritten on expiry.
+ * Cache keyed by tenant + instance (G5, ADR-0008; WISH "cache keys include
+ * tenant identity"). A GLOBAL cache here would serve tenant A's identifiers to
+ * tenant B inside the TTL — a cross-tenant identifier leak AND wrong self-send
+ * gating. Bounded by the number of active instances in the process, entries
+ * overwritten on expiry.
  */
-const tenantCachedActiveOwnerIdentifiers = new Map<string, { ids: Array<string | null>; at: number }>();
+const cachedActiveOwnerIdentifiers = new Map<string, { ids: Array<string | null>; at: number }>();
 
-/** @internal test hook — clears both worlds' caches. */
+/** @internal test hook — clears the cache. */
 function resetActiveOwnerIdentifiersCache(): void {
-  cachedActiveOwnerIdentifiers = null;
-  cachedActiveOwnerIdentifiersAt = 0;
-  tenantCachedActiveOwnerIdentifiers.clear();
+  cachedActiveOwnerIdentifiers.clear();
 }
 
-async function listActiveOwnerIdentifiers(db: Database, trustedTenantId?: string): Promise<Array<string | null>> {
+type OwnerScope = Pick<Instance, 'id' | 'channel' | 'slackTeamId'>;
+
+/**
+ * Owners of OTHER active instances on the SAME channel (and same Slack
+ * workspace when known). #1267: the old unscoped list compared a Slack user id
+ * against WhatsApp/Telegram/Discord owners and dropped humans talking to any
+ * other instance they happened to own. Identifiers are never compared across
+ * channels, and the current instance is excluded at the query.
+ */
+async function listActiveOwnerIdentifiers(
+  db: Database,
+  instance: OwnerScope,
+  trustedTenantId?: string,
+): Promise<Array<string | null>> {
   const now = Date.now();
+  const cacheKey = `${trustedTenantId ?? ''}:${instance.id}:${instance.channel}:${instance.slackTeamId ?? ''}`;
+  const cached = cachedActiveOwnerIdentifiers.get(cacheKey);
+  if (cached && now - cached.at < ACTIVE_OWNER_IDENTIFIER_CACHE_TTL_MS) return cached.ids;
+
+  const where = and(
+    eq(instances.isActive, true),
+    eq(instances.channel, instance.channel),
+    ne(instances.id, instance.id),
+    instance.slackTeamId ? eq(instances.slackTeamId, instance.slackTeamId) : undefined,
+  );
 
   // Tenant world (G5): the enumeration runs inside a short worker scope, so it
   // sees — and the self-send guard therefore considers — only the tenant's own
   // instances. Cross-tenant "self"-sends are two independent parties, not a
   // loop, so per-tenant is the CORRECT guard semantics under multitenancy.
-  if (trustedTenantId !== undefined) {
-    const cached = tenantCachedActiveOwnerIdentifiers.get(trustedTenantId);
-    if (cached && now - cached.at < ACTIVE_OWNER_IDENTIFIER_CACHE_TTL_MS) return cached.ids;
-    const rows = await runInWorkerTenantScope(db, trustedTenantId, () =>
-      scopedHandle(db)
-        .select({ ownerIdentifier: instances.ownerIdentifier })
-        .from(instances)
-        .where(eq(instances.isActive, true)),
-    );
-    if (!Array.isArray(rows)) return [];
-    const ids = rows.map((row) => row.ownerIdentifier);
-    tenantCachedActiveOwnerIdentifiers.set(trustedTenantId, { ids, at: now });
-    return ids;
-  }
-
-  // Legacy world: byte-identical pre-G5 path, global cache and ambient read.
-  if (cachedActiveOwnerIdentifiers && now - cachedActiveOwnerIdentifiersAt < ACTIVE_OWNER_IDENTIFIER_CACHE_TTL_MS) {
-    return cachedActiveOwnerIdentifiers;
-  }
-
-  const rows = await db
-    .select({ ownerIdentifier: instances.ownerIdentifier })
-    .from(instances)
-    .where(eq(instances.isActive, true));
+  // Legacy world: ambient read on the pool.
+  const rows =
+    trustedTenantId !== undefined
+      ? await runInWorkerTenantScope(db, trustedTenantId, () =>
+          scopedHandle(db).select({ ownerIdentifier: instances.ownerIdentifier }).from(instances).where(where),
+        )
+      : await db.select({ ownerIdentifier: instances.ownerIdentifier }).from(instances).where(where);
 
   // Unit tests often provide partial chain mocks for Database. Production Drizzle
   // returns an array here; if a mock/non-standard adapter does not, fail open so
@@ -5606,9 +5642,30 @@ async function listActiveOwnerIdentifiers(db: Database, trustedTenantId?: string
   // skipped for that call.
   if (!Array.isArray(rows)) return [];
 
-  cachedActiveOwnerIdentifiers = rows.map((row) => row.ownerIdentifier);
-  cachedActiveOwnerIdentifiersAt = now;
-  return cachedActiveOwnerIdentifiers;
+  const ids = rows.map((row) => row.ownerIdentifier);
+  cachedActiveOwnerIdentifiers.set(cacheKey, { ids, at: now });
+  return ids;
+}
+
+/**
+ * #1267: every dispatcher/handler drop is a warn with the same shape so an
+ * operator can grep one line instead of forensics — instanceId, chatId,
+ * sender, externalId and the reason.
+ */
+function logDrop(
+  reason: string,
+  payload: { from?: string; chatId?: string; externalId?: string },
+  instanceId: string | undefined,
+  extra: Record<string, unknown> = {},
+): void {
+  log.warn(`Dropping inbound: ${reason}`, {
+    instanceId,
+    chatId: payload.chatId,
+    sender: payload.from,
+    externalId: payload.externalId,
+    reason,
+    ...extra,
+  });
 }
 
 /**
@@ -5640,10 +5697,7 @@ async function isAgentOutboundEcho(
     return messagesService.getByExternalId(chat.id, payload.externalId);
   });
   if (!priorMessage?.senderAgentId) return false;
-  log.info('Skipping own outbound echo (agent-authored message received back)', {
-    instanceId,
-    chatId: payload.chatId,
-    externalId: payload.externalId,
+  logDrop('own outbound echo (agent-authored message received back)', payload, instanceId, {
     senderAgentId: priorMessage.senderAgentId,
   });
   return true;
@@ -5661,11 +5715,11 @@ async function shouldProcessMessage(
   trustedTenantId?: string,
 ): Promise<Instance | null> {
   if (!metadata.instanceId) {
-    log.debug('No instanceId in metadata', { from: payload.from, chatId: payload.chatId });
+    logDrop('no instanceId in metadata', payload, undefined);
     return null;
   }
   if (payload.from === metadata.platformIdentityId) {
-    log.debug('Message from self, skipping', { instanceId: metadata.instanceId, from: payload.from });
+    logDrop('message from self', payload, metadata.instanceId);
     return null;
   }
 
@@ -5683,27 +5737,20 @@ async function shouldProcessMessage(
   // 'delete' and 'unknown' are likewise journal-only signals, not user speech
   // (#1041): dispatching them hands the agent a placeholder to answer.
   if (payload.content?.type && NON_DISPATCHABLE_CONTENT_TYPES.has(payload.content.type)) {
-    log.debug('Skipping non-conversational content type on message path', {
-      instanceId: metadata.instanceId,
-      chatId: payload.chatId,
-      contentType: payload.content.type,
-    });
+    logDrop('non-conversational content type', payload, metadata.instanceId, { contentType: payload.content.type });
     return null;
   }
 
   // Skip trash emoji messages - handled by session-cleaner plugin
   if (isTrashEmojiOnly(payload.content?.text)) {
-    log.debug('Skipping trash emoji message (session-cleaner handles this)', {
-      instanceId: metadata.instanceId,
-      chatId: payload.chatId,
-    });
+    logDrop('trash emoji message (session-cleaner handles this)', payload, metadata.instanceId);
     return null;
   }
 
   // Never trigger the agent for newsletter/broadcast chats regardless of reply filter mode
   const chatId = payload.chatId ?? '';
   if (isBroadcastOrNewsletter(chatId)) {
-    log.debug('Skipping newsletter/broadcast message', { instanceId: metadata.instanceId, chatId });
+    logDrop('newsletter/broadcast chat', payload, metadata.instanceId);
     return null;
   }
 
@@ -5724,13 +5771,13 @@ async function shouldProcessMessage(
   // "assistant" instance can reply to messages from their own personal number
   // (another instance's owner). The separate "message from self" self-skip
   // above is unaffected — an instance still never replies to its own outbound.
-  const activeOwnerIdentifiers = await listActiveOwnerIdentifiers(db, trustedTenantId);
+  const activeOwnerIdentifiers = await listActiveOwnerIdentifiers(db, instance, trustedTenantId);
   if (
     !instance.allowFirstParty &&
     isFirstPartyInstanceSender(payload, instance.ownerIdentifier, activeOwnerIdentifiers)
   ) {
-    log.info('Skipping first-party cross-instance message', {
-      instanceId: instance.id,
+    logDrop('first-party cross-instance sender (set allowFirstParty to opt out)', payload, instance.id, {
+      channel: instance.channel,
     });
     return null;
   }
@@ -5740,10 +5787,7 @@ async function shouldProcessMessage(
   // NATS redelivery resurrecting stale conversations after reconnect/restart.
   const staleness = isInboundTooStale(payload.rawPayload, instance.inboundMaxAgeMinutes);
   if (staleness.stale) {
-    log.warn('Dropping stale inbound message', {
-      instanceId: instance.id,
-      chatId: payload.chatId,
-      externalId: payload.externalId,
+    logDrop('stale inbound message', payload, instance.id, {
       ageMs: staleness.ageMs,
       maxAgeMs: staleness.maxAgeMs,
       maxAgeMinutes: instance.inboundMaxAgeMinutes,
@@ -5814,12 +5858,7 @@ async function shouldProcessMessage(
   }
 
   if (!shouldAgentReply(effectiveReplyFilter, messageContext)) {
-    log.info('Message did not pass reply filter', {
-      instanceId: instance.id,
-      chatId: payload.chatId,
-      messageContext,
-      filter: effectiveReplyFilter,
-    });
+    logDrop('did not pass reply filter', payload, instance.id, { messageContext, filter: effectiveReplyFilter });
     return null;
   }
 
@@ -5843,58 +5882,46 @@ async function shouldProcessMessage(
 async function checkAccessWithFallback(
   accessService: Services['access'],
   instance: Instance,
-  payload: { from: string; chatId: string; rawPayload?: unknown },
+  payload: { from: string; chatId: string; externalId?: string; rawPayload?: unknown },
   channel: ChannelType,
   trustedTenantId?: string,
 ): Promise<boolean> {
-  const rawPayload = payload.rawPayload as Record<string, unknown> | undefined;
-  const rawKey = rawPayload?.key as Record<string, unknown> | undefined;
-  const rawParticipantAlt = (rawKey?.participantAlt as string)?.replace(/@.*$/, '');
-  // Validate participantAlt looks like a real phone number (Baileys LID fallback)
-  const participantAlt = rawParticipantAlt && /^\d{7,15}$/.test(rawParticipantAlt) ? rawParticipantAlt : undefined;
-  // resolvedSenderPhone is annotated by channel-whatsapp when it resolves a LID sender to phone
-  // via participantAlt, remoteJidAlt, or the in-memory LID mapping cache.
-  const rawResolvedPhone = rawPayload?.resolvedSenderPhone as string | undefined;
-  const resolvedSenderPhone = rawResolvedPhone && /^\d{7,15}$/.test(rawResolvedPhone) ? rawResolvedPhone : undefined;
-  const primaryId = payload.from ?? '';
+  // Candidates: the primary id, then participantAlt (Baileys LID fallback) and
+  // resolvedSenderPhone (annotated by channel-whatsapp when it resolves a LID
+  // sender to phone via participantAlt, remoteJidAlt, or the in-memory LID
+  // mapping cache) — each only when phone-shaped. The attempt chain is shared
+  // with the opt-in ingest journal (`runAccessFallbackChain`, services/access).
+  const candidates = accessFallbackCandidates(payload);
+  const { primaryId, participantAlt } = candidates;
 
   // G5 (ADR-0008): the ALLOW/DENY decision is evaluated against rules read in
   // the MESSAGE's world. `trustedTenantId` is the envelope-derived tenant
   // (`trustedDispatchTenant`), threaded rather than wrapped because the service
   // publishes `access.allowed`/`access.denied` between blocks.
-  let accessResult = await accessService.checkAccess(instance, primaryId, channel, trustedTenantId);
-  if (!accessResult.allowed && participantAlt && participantAlt !== primaryId) {
-    log.warn('Access fallback to participantAlt', {
-      instanceId: instance.id,
-      primaryId,
-      participantAlt,
-      chatId: payload.chatId,
-    });
-    accessResult = await accessService.checkAccess(instance, participantAlt, channel, trustedTenantId);
-  }
-  if (
-    !accessResult.allowed &&
-    resolvedSenderPhone &&
-    resolvedSenderPhone !== primaryId &&
-    resolvedSenderPhone !== participantAlt
-  ) {
-    log.debug('Access fallback to resolvedSenderPhone (LID→phone)', {
-      instanceId: instance.id,
-      primaryId,
-      resolvedSenderPhone,
-      chatId: payload.chatId,
-    });
-    accessResult = await accessService.checkAccess(instance, resolvedSenderPhone, channel, trustedTenantId);
-  }
+  const accessResult = await runAccessFallbackChain(
+    candidates,
+    (platformUserId) => accessService.checkAccess(instance, platformUserId, channel, trustedTenantId),
+    (attempt, platformUserId) => {
+      if (attempt === 'participantAlt') {
+        log.warn('Access fallback to participantAlt', {
+          instanceId: instance.id,
+          primaryId,
+          participantAlt: platformUserId,
+          chatId: payload.chatId,
+        });
+      } else {
+        log.debug('Access fallback to resolvedSenderPhone (LID→phone)', {
+          instanceId: instance.id,
+          primaryId,
+          resolvedSenderPhone: platformUserId,
+          chatId: payload.chatId,
+        });
+      }
+    },
+  );
   if (accessResult.allowed) return false;
 
-  log.info('Access denied', {
-    instanceId: instance.id,
-    chatId: payload.chatId,
-    from: payload.from,
-    participantAlt,
-    reason: accessResult.reason,
-  });
+  logDrop(`access denied: ${accessResult.reason}`, payload, instance.id, { participantAlt });
 
   // Trigger pairing flow for unknown senders in allowlist mode (no explicit rule matched).
   // Fire-and-forget: pairing request creation must not block message processing.
@@ -5944,7 +5971,7 @@ async function shouldProcessReaction(
   if (!instanceTriggersOnEvent(instance, eventType)) return null;
 
   if (!isReactionTrigger(instance, payload.emoji)) {
-    log.debug('Reaction emoji not in trigger list', { instanceId: instance.id, emoji: payload.emoji });
+    logDrop('reaction emoji not in trigger list', payload, instance.id, { emoji: payload.emoji });
     return null;
   }
 
@@ -5955,11 +5982,7 @@ async function shouldProcessReaction(
   if (accessDenied) return null;
 
   if (reactionDedup.isDuplicate(payload.messageId, payload.emoji, payload.from)) {
-    log.debug('Duplicate reaction, skipping', {
-      instanceId: instance.id,
-      messageId: payload.messageId,
-      emoji: payload.emoji,
-    });
+    logDrop('duplicate reaction', payload, instance.id, { messageId: payload.messageId, emoji: payload.emoji });
     return null;
   }
 

@@ -104,6 +104,17 @@ export const CloseContactConfigSchema = z
   })
   .strict();
 
+// Outbound pacing (mirrors createInstanceSchema in routes/v2/instances.ts)
+const OUTBOUND_PACING_DESCRIPTION =
+  "Outbound pacing (WhatsApp Baileys): 'humanized' keeps the anti-ban delay and typing simulation before each send; 'immediate' skips both. Send requests may ask for 'humanized' with `pacing`; asking for 'immediate' needs outboundPacingOverride on a humanized instance";
+const OUTBOUND_PACING_OVERRIDE_DESCRIPTION =
+  "Let send requests choose `pacing: 'immediate'` on a humanized instance. Default false: such requests are refused with 403. Setting it to true needs a full-access ('*') key; any other key gets 403";
+
+const PacingOverrideForbiddenResponse = {
+  description: "Setting outboundPacingOverride to true requires a full-access ('*') API key",
+  content: { 'application/json': { schema: ErrorSchema } },
+};
+
 /**
  * Instance response schema
  */
@@ -120,6 +131,16 @@ export const InstanceSchema = z.object({
       "WhatsApp (Baileys) pairing identity: 'desktop' (macOS Desktop + group history) or 'web' (Ubuntu/Chrome)",
   }),
   syncFullHistory: z.boolean().openapi({ description: 'WhatsApp (Baileys): request full history on connect' }),
+  outboundPacing: z.enum(['humanized', 'immediate']).optional().openapi({ description: OUTBOUND_PACING_DESCRIPTION }),
+  outboundPacingOverride: z.boolean().optional().openapi({ description: OUTBOUND_PACING_OVERRIDE_DESCRIPTION }),
+  audioTranscription: z.enum(['auto', 'off']).openapi({
+    description:
+      "Server-side transcription of inbound audio: 'auto' (transcribed as always) or 'off' (stored but never sent to STT)",
+  }),
+  inboundReplyContext: z.boolean().openapi({
+    description:
+      'WhatsApp (Baileys): typed replyTo on message.received and target on reaction.received/removed (false = events unchanged)',
+  }),
   ownerIdentifier: z.string().nullable().openapi({ description: 'Owner identifier' }),
   agentId: z.string().uuid().nullable().optional().openapi({ description: 'Agent UUID (agents table)' }),
   agentProviderId: z
@@ -170,6 +191,19 @@ export const CreateInstanceSchema = z.object({
     .boolean()
     .default(false)
     .openapi({ description: 'WhatsApp (Baileys): request full message history on connect (default: false)' }),
+  outboundPacing: z
+    .enum(['humanized', 'immediate'])
+    .default('humanized')
+    .openapi({ description: OUTBOUND_PACING_DESCRIPTION }),
+  outboundPacingOverride: z.boolean().default(false).openapi({ description: OUTBOUND_PACING_OVERRIDE_DESCRIPTION }),
+  audioTranscription: z.enum(['auto', 'off']).default('auto').openapi({
+    description:
+      "Server-side transcription of inbound audio (default: auto). 'auto' = transcribed as always; 'off' = stored but never sent to STT, and a skipped media.processed is emitted instead",
+  }),
+  inboundReplyContext: z.boolean().default(false).openapi({
+    description:
+      'WhatsApp (Baileys): add the typed replyTo to message.received and target to reaction.received/removed (default: false = events unchanged). Read at connect: restart the instance after changing it',
+  }),
   gupshupHandoffOptions: GupshupHandoffOptionsSchema.nullable()
     .optional()
     .openapi({
@@ -304,7 +338,83 @@ export const SupportedChannelSchema = z.object({
 /**
  * Register instance schemas and paths with the given registry
  */
+const ownJid = z.string().regex(/^\d{5,20}@s\.whatsapp\.net$/);
+export const SelfIdentitySchema = z
+  .object({
+    ownerIdentifier: ownJid,
+    generation: z.string().uuid(),
+    selfJid: ownJid,
+    connectedAt: z.string().datetime(),
+  })
+  .strict();
+const selfWindow = {
+  expectedOwner: ownJid,
+  expectedGeneration: z.string().uuid(),
+  after: z.string().datetime(),
+  before: z.string().datetime(),
+};
+const validWindow = (v: { after: string; before: string }) =>
+  Date.parse(v.before) >= Date.parse(v.after) && Date.parse(v.before) - Date.parse(v.after) <= 7 * 86400000;
+export const SelfMessagesSchema = z
+  .object({
+    ...selfWindow,
+    connectionStartedAt: z.string().datetime(),
+    excludeExternalIds: z
+      .array(z.string().min(1).max(255))
+      .max(1000)
+      .refine((v) => new Set(v).size === v.length),
+  })
+  .strict()
+  .refine(validWindow, 'At most seven days')
+  .refine(
+    (v) =>
+      Date.parse(v.connectionStartedAt) <= Date.parse(v.after) &&
+      Date.parse(v.after) === Math.max(Date.parse(v.connectionStartedAt), Date.parse(v.before) - 7 * 86400000),
+    'Anchored self inbox window',
+  );
+export const SelfHistorySchema = z
+  .object({ ...selfWindow, chatId: z.string().uuid() })
+  .strict()
+  .refine(validWindow, 'At most seven days');
+export const SelfChatsSchema = z.object({ cursor: z.string().uuid().optional() }).strict();
+export const SelfReceiptSchema = z
+  .object({ expectedOwner: ownJid, expectedGeneration: z.string().uuid(), externalId: z.string().min(1).max(255) })
+  .strict();
+export const SendSelfSchema = z
+  .object({
+    instanceId: z.string().uuid(),
+    expectedOwner: ownJid,
+    expectedGeneration: z.string().uuid(),
+    operationKey: z.string().regex(/^[A-Za-z0-9_-]{1,100}$/),
+    text: z.string().min(1).max(8000),
+  })
+  .strict();
+
 export function registerInstanceSchemas(registry: OpenAPIRegistry): void {
+  const pathId = z.object({ id: z.string().uuid() });
+  for (const [method, path, schema] of [
+    ['get', '/instances/{id}/self', SelfIdentitySchema],
+    ['post', '/instances/{id}/self/messages', SelfMessagesSchema],
+    ['post', '/instances/{id}/self/history', SelfHistorySchema],
+    ['post', '/instances/{id}/self/receipt', SelfReceiptSchema],
+    ['get', '/instances/{id}/self/chats', SelfChatsSchema],
+    ['post', '/messages/send-self', SendSelfSchema],
+  ] as const)
+    registry.registerPath({
+      method,
+      path,
+      tags: ['WhatsApp self'],
+      request: {
+        ...(path.includes('{id}') ? { params: pathId } : {}),
+        ...(method === 'get' && path === '/instances/{id}/self/chats' ? { query: SelfChatsSchema } : {}),
+        ...(method === 'post' ? { body: { content: { 'application/json': { schema } } } } : {}),
+      },
+      responses: {
+        200: { description: 'Verified bounded self capability' },
+        201: { description: 'Native self send accepted' },
+        409: { description: 'Identity changed or unverified' },
+      },
+    });
   registry.register('Instance', InstanceSchema);
   registry.register('CreateInstanceRequest', CreateInstanceSchema);
   registry.register('InstanceStatus', InstanceStatusSchema);
@@ -423,6 +533,7 @@ export function registerInstanceSchemas(registry: OpenAPIRegistry): void {
           },
         },
       },
+      403: PacingOverrideForbiddenResponse,
       400: {
         description: 'Validation error',
         content: {
@@ -458,6 +569,7 @@ export function registerInstanceSchemas(registry: OpenAPIRegistry): void {
           },
         },
       },
+      403: PacingOverrideForbiddenResponse,
       404: {
         description: 'Instance not found',
         content: {
