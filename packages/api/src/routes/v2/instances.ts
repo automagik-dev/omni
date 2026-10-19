@@ -1848,10 +1848,17 @@ function applyWhatsAppBaileysOptions(
   options: Record<string, unknown>,
   instance: Pick<
     InstanceRecord,
-    'channel' | 'markOnlineOnConnect' | 'historyIdentity' | 'syncFullHistory' | 'inboundReplyContext'
+    | 'channel'
+    | 'markOnlineOnConnect'
+    | 'historyIdentity'
+    | 'syncFullHistory'
+    | 'downloadMediaOnSync'
+    | 'inboundReplyContext'
   >,
 ): void {
   if (instance.channel !== 'whatsapp-baileys') return;
+  // Decides media download for the history WhatsApp pushes after pairing (#1280).
+  options.downloadMediaOnSync = instance.downloadMediaOnSync;
   applyInboundReplyContextOption(options, instance);
   options.whatsapp = {
     historyIdentity: instance.historyIdentity,

@@ -35,7 +35,7 @@ import type {
   proto,
 } from 'baileys';
 
-import { clearAuthState, createStorageAuthState } from './auth';
+import { clearAuthState, createReadOnlyAuthState, createStorageAuthState } from './auth';
 import { WHATSAPP_CAPABILITIES } from './capabilities';
 import {
   WHATSAPP_PRESENCE_HOLD_LIFETIME_CAP_MS,
@@ -46,6 +46,7 @@ import {
 import { setupAllEventHandlers } from './handlers/all-events';
 import {
   cancelPendingReconnect,
+  markPairingCodePending,
   resetConnectionState,
   seedAuthenticated,
   setupConnectionHandlers,
@@ -61,7 +62,7 @@ import { buildMessageContent } from './senders/builders';
 import { computeWaid } from './senders/contact';
 import { removeReaction, sendReaction } from './senders/reaction';
 import { WhatsAppStreamSender } from './senders/stream';
-import { DEFAULT_SOCKET_CONFIG, type SocketConfig, closeSocket, createSocket } from './socket';
+import { DEFAULT_SOCKET_CONFIG, type SocketConfig, closeSocket, createSocket, logoutStoredSession } from './socket';
 import { DecryptFailureTracker } from './utils/decrypt-failure-tracker';
 import { ErrorCode, WhatsAppError, mapBaileysError } from './utils/errors';
 import {
@@ -136,7 +137,7 @@ export interface WhatsAppFetchHistoryOptions extends FetchHistoryOptions {
   count?: number;
   /** Anchor points for specific chats - if provided, actively fetches older messages */
   anchors?: MessageAnchor[];
-  /** Download media for history messages (job `downloadMedia`, already resolved against instance `downloadMediaOnSync`). Only an explicit `false` skips. */
+  /** Download media for history messages (job `downloadMedia`, already resolved against instance `downloadMediaOnSync`). Unset falls back to the instance's connect option (#1280). */
   downloadMedia?: boolean;
 }
 
@@ -1176,6 +1177,17 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * @param instanceId - Instance to disconnect
    */
   async disconnect(instanceId: string): Promise<void> {
+    await this.closeInstance(instanceId, false);
+  }
+
+  /**
+   * Tear down an instance's runtime connection.
+   *
+   * @param unlink - Send Baileys' logout first, so WhatsApp removes the linked
+   *   device. Without it the session survives for reconnect.
+   * @returns true when the live socket logged out (the device is unlinked)
+   */
+  private async closeInstance(instanceId: string, unlink: boolean): Promise<boolean> {
     // Reset all connection tracking state (attempt counter + pending reconnect timer)
     // even when no socket is live — a reconnect loop deletes the socket between attempts (#1169)
     resetConnectionState(instanceId);
@@ -1191,20 +1203,20 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
     const sock = this.sockets.get(instanceId);
     if (!sock) {
-      return;
+      return false;
     }
 
     // Remove event listeners before closing to prevent ghost reconnects
     sock.ev.removeAllListeners('connection.update');
 
-    // Close socket WITHOUT logging out (preserves session for reconnect)
-    await closeSocket(sock, false);
+    const unlinked = await closeSocket(sock, unlink);
     this.sockets.delete(instanceId);
 
     this.clearInstanceCaches(instanceId);
 
     // Emit disconnected event
     await this.emitInstanceDisconnected(instanceId, 'User requested disconnect');
+    return unlinked;
   }
 
   /** Clear all per-instance caches to prevent memory leaks on reconnect cycles */
@@ -1244,13 +1256,40 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * @param instanceId - Instance to logout
    */
   async logout(instanceId: string): Promise<void> {
-    // Disconnect first
-    await this.disconnect(instanceId);
+    // Unlink the device on WhatsApp's side, not only locally (#1275). With no
+    // live socket (DELETE disconnects first) or a socket that could not send
+    // the logout, connect once with the stored auth to do it.
+    // The unlink is best-effort: unreadable stored creds must not keep the
+    // local auth (and the next logout/delete attempt) stuck.
+    let unlinked = false;
+    try {
+      unlinked = (await this.closeInstance(instanceId, true)) || (await this.unlinkStoredSession(instanceId));
+    } catch (error) {
+      this.logger.warn('Device unlink failed; clearing local auth anyway', { instanceId, error: String(error) });
+    } finally {
+      await clearAuthState(this.storage, instanceId);
+    }
 
-    // Clear stored auth state
-    await clearAuthState(this.storage, instanceId);
+    this.logger.info('Instance logged out and auth cleared', { instanceId, unlinked });
+  }
 
-    this.logger.info('Instance logged out and auth cleared', { instanceId });
+  /**
+   * Log out a paired session that has no usable live socket.
+   *
+   * @returns true when WhatsApp no longer lists the device (or never had one)
+   */
+  private async unlinkStoredSession(instanceId: string): Promise<boolean> {
+    const auth = await createReadOnlyAuthState(this.storage, instanceId);
+    if (!auth) return true;
+
+    const outcome = await logoutStoredSession({ ...this.pluginConfig, auth });
+    if (outcome === 'unreachable') {
+      this.logger.warn('Could not reach WhatsApp to unlink the device; it may stay listed on the phone', {
+        instanceId,
+      });
+      return false;
+    }
+    return true;
   }
 
   /**
@@ -1275,6 +1314,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
     try {
       const code = await sock.requestPairingCode(normalized);
+      markPairingCodePending(instanceId);
       this.logger.info('Pairing code requested', { instanceId, phoneNumber: `${normalized.slice(0, 4)}****` });
       return code;
     } catch (error) {
@@ -4490,6 +4530,18 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     return true;
   }
 
+  /**
+   * Whether a history message's media is downloaded. An explicit sync job
+   * decides with its `downloadMedia` (already resolved against the instance by
+   * the API, #1127). The history WhatsApp pushes on its own right after pairing
+   * has no job: there the instance's `downloadMediaOnSync` (passed in the
+   * connect options) decides, defaulting to off like the column (#1280).
+   */
+  private shouldDownloadHistoryMedia(instanceId: string, syncState: { downloadMedia?: boolean } | undefined): boolean {
+    if (syncState?.downloadMedia !== undefined) return syncState.downloadMedia;
+    return this.instances.get(instanceId)?.config.options?.downloadMediaOnSync === true;
+  }
+
   private async processHistoryMessage(
     instanceId: string,
     msg: WAMessage,
@@ -4532,10 +4584,9 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
     // Download media only when the sync job allows it (#1127). When skipped, content keeps
     // type/mimeType metadata so the row is still marked as media for later backfill.
-    const mediaResult =
-      syncState?.downloadMedia === false
-        ? null
-        : await tryDownloadMedia(msg, instanceId, msg.key.id, this.config.apiBaseUrl);
+    const mediaResult = this.shouldDownloadHistoryMedia(instanceId, syncState)
+      ? await tryDownloadMedia(msg, instanceId, msg.key.id, this.config.apiBaseUrl)
+      : null;
     if (mediaResult) {
       content.mediaUrl = mediaResult.mediaUrl;
       content.localPath = mediaResult.mediaLocalPath;

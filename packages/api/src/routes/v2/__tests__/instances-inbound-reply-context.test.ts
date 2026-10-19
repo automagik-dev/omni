@@ -105,8 +105,12 @@ describe('applyInboundReplyContextOption', () => {
   });
 
   test('boot reconnect options carry the flag only when it is on', () => {
-    expect(buildInstanceConnectOptions({ channel: 'whatsapp-baileys', inboundReplyContext: false })).toEqual({});
+    // downloadMediaOnSync (#1280) is always set on Baileys reconnects; inboundReplyContext only when on.
+    expect(buildInstanceConnectOptions({ channel: 'whatsapp-baileys', inboundReplyContext: false })).toEqual({
+      downloadMediaOnSync: false,
+    });
     expect(buildInstanceConnectOptions({ channel: 'whatsapp-baileys', inboundReplyContext: true })).toEqual({
+      downloadMediaOnSync: false,
       inboundReplyContext: true,
     });
   });

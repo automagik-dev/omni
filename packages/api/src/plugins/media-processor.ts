@@ -48,6 +48,13 @@ const log = createLogger('media-processor');
 const PROCESSABLE_MEDIA_TYPES = new Set(['audio', 'image', 'document', 'video']);
 
 /**
+ * Media types that are only downloaded and stored, never sent to AI processing.
+ * Applies to deferred media only (`content.mediaId`): this processor is the one
+ * place those bytes are materialized, and the platform handle expires (#1304).
+ */
+const DOWNLOAD_ONLY_MEDIA_TYPES = new Set(['sticker']);
+
+/**
  * Map processing type + content type to message column name
  */
 function getContentFieldForType(
@@ -89,6 +96,14 @@ function inferProcessingType(contentType?: string): 'transcription' | 'descripti
 function shouldProcess(contentType: string | undefined): boolean {
   if (!contentType) return false;
   return PROCESSABLE_MEDIA_TYPES.has(contentType);
+}
+
+/**
+ * Check if content is deferred media that should only be downloaded
+ */
+function shouldDownloadOnly(content: MessageReceivedPayload['content']): boolean {
+  if (!content.type || !content.mediaId) return false;
+  return DOWNLOAD_ONLY_MEDIA_TYPES.has(content.type);
 }
 
 function isUuid(value: string | undefined): value is string {
@@ -138,6 +153,8 @@ function getMimeType(content: MessageReceivedPayload['content']): string | undef
       return 'audio/ogg';
     case 'image':
       return 'image/jpeg';
+    case 'sticker':
+      return 'image/webp';
     case 'video':
       return 'video/mp4';
     case 'document':
@@ -785,6 +802,34 @@ async function processMessageMedia(
 }
 
 /**
+ * Download and store deferred media without processing it. A failure is only
+ * logged: nothing awaits this media, so no failure event or error marker.
+ */
+async function storeDownloadOnlyMedia(
+  ctx: MediaProcessorContext,
+  payload: MessageReceivedPayload,
+  metadata: { instanceId: string; channelType?: ChannelType },
+  envelope: Pick<OmniEvent, 'metadata'>,
+): Promise<void> {
+  const { content, externalId } = payload;
+  const mimeType = getMimeType(content) ?? 'application/octet-stream';
+  try {
+    await resolveMediaPath(
+      ctx,
+      metadata.instanceId,
+      payload.chatId,
+      externalId,
+      content,
+      mimeType,
+      metadata.channelType,
+      envelopeTenantId(envelope),
+    );
+  } catch (error) {
+    log.error('Failed to store media', { externalId, contentType: content.type, error: String(error) });
+  }
+}
+
+/**
  * Publish failure events when media processing crashes unexpectedly.
  * Ensures the dispatcher doesn't wait forever for a completion that will never come.
  */
@@ -859,6 +904,46 @@ async function resolveMediaIdForCrash(
 }
 
 /**
+ * Handle one message.received event: process its media, publishing failure
+ * events if processing crashes.
+ */
+async function handleMessageReceived(ctx: MediaProcessorContext, event: OmniEvent): Promise<void> {
+  const payload = event.payload as MessageReceivedPayload;
+  const metadata = event.metadata;
+
+  if (!metadata.instanceId) return;
+  if (shouldDownloadOnly(payload.content)) {
+    await storeDownloadOnlyMedia(
+      ctx,
+      payload,
+      { instanceId: metadata.instanceId, channelType: metadata.channelType },
+      event,
+    );
+    return;
+  }
+  if (!shouldProcess(payload.content.type)) return;
+
+  try {
+    await processMessageMedia(
+      ctx,
+      payload,
+      {
+        instanceId: metadata.instanceId,
+        eventId: event.id,
+        channelType: metadata.channelType,
+      },
+      event,
+    );
+  } catch (error) {
+    log.error('Failed to process media', {
+      externalId: payload.externalId,
+      error: String(error),
+    });
+    await publishMediaCrashEvents(ctx, event.id, payload, metadata, error, envelopeTenantId(event));
+  }
+}
+
+/**
  * Set up media processing - subscribes to message.received events
  */
 export async function setupMediaProcessor(eventBus: EventBus, db: Database, services: Services): Promise<void> {
@@ -923,43 +1008,14 @@ export async function setupMediaProcessor(eventBus: EventBus, db: Database, serv
   };
 
   // Subscribe to message.received with durable consumer
-  await eventBus.subscribe(
-    'message.received',
-    async (event) => {
-      const payload = event.payload as MessageReceivedPayload;
-      const metadata = event.metadata;
-
-      if (!metadata.instanceId) return;
-      if (!shouldProcess(payload.content.type)) return;
-
-      try {
-        await processMessageMedia(
-          ctx,
-          payload,
-          {
-            instanceId: metadata.instanceId,
-            eventId: event.id,
-            channelType: metadata.channelType,
-          },
-          event,
-        );
-      } catch (error) {
-        log.error('Failed to process media', {
-          externalId: payload.externalId,
-          error: String(error),
-        });
-        await publishMediaCrashEvents(ctx, event.id, payload, metadata, error, envelopeTenantId(event));
-      }
-    },
-    {
-      durable: 'media-processor',
-      queue: 'media-processor',
-      maxRetries: 2,
-      retryDelayMs: 1000,
-      startFrom: 'first',
-      concurrency: 5, // #1200: per-message work, independent across deliveries
-    },
-  );
+  await eventBus.subscribe('message.received', (event) => handleMessageReceived(ctx, event), {
+    durable: 'media-processor',
+    queue: 'media-processor',
+    maxRetries: 2,
+    retryDelayMs: 1000,
+    startFrom: 'first',
+    concurrency: 5, // #1200: per-message work, independent across deliveries
+  });
 
   // Set up circuit breaker state change logging
   setGlobalCircuitBreakerStateChangeCallback((name, from, to) => {
@@ -996,6 +1052,7 @@ export async function setupMediaProcessor(eventBus: EventBus, db: Database, serv
 }
 
 export const __test__ = {
+  handleMessageReceived,
   buildFetchOptions,
   resetAudioTranscriptionModeCache: () => {
     audioTranscriptionModeCache.clear();
