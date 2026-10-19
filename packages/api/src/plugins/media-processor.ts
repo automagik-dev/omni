@@ -565,6 +565,82 @@ function getPromptOverride(ctx: MediaProcessorContext, contentType: string | und
 }
 
 /**
+ * Per-instance cache of the audioTranscription mode only (no credentials), so
+ * the default 'auto' path costs about one instance read per instance per TTL
+ * instead of one per audio message. A changed setting applies within the TTL.
+ *
+ * The last mode successfully read is also kept past its TTL, so a lookup that
+ * throws later never flips a known 'off' instance back to transcription.
+ */
+const AUDIO_TRANSCRIPTION_MODE_TTL_MS = 30_000;
+type AudioTranscriptionMode = 'auto' | 'off';
+const audioTranscriptionModeCache = new Map<string, { mode: AudioTranscriptionMode; expiresAt: number }>();
+const lastKnownAudioTranscriptionMode = new Map<string, AudioTranscriptionMode>();
+
+/**
+ * Read the instance's audio transcription switch. Anything other than an
+ * explicit 'off' — a missing service, a missing instance, an unset or unknown
+ * value — answers 'auto', so the default path is today's. A lookup that throws
+ * answers the last mode read for the instance (a known 'off' stays off) and
+ * 'auto' only when the mode was never read.
+ * The legacy `process_audio` column is deliberately not consulted: nothing ever
+ * honoured it, so lines carrying `false` there keep being transcribed.
+ */
+async function readAudioTranscriptionMode(
+  ctx: MediaProcessorContext,
+  instanceId: string,
+  trustedTenantId: string | undefined,
+): Promise<AudioTranscriptionMode> {
+  const cacheKey = `${trustedTenantId ?? ''}:${instanceId}`;
+  const cached = audioTranscriptionModeCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.mode;
+  try {
+    const instancesService = ctx.services?.instances;
+    if (!instancesService) return 'auto';
+    const instance = await runMediaDb(ctx, trustedTenantId, () => instancesService.getById(instanceId));
+    const mode: AudioTranscriptionMode = instance?.audioTranscription === 'off' ? 'off' : 'auto';
+    audioTranscriptionModeCache.set(cacheKey, { mode, expiresAt: Date.now() + AUDIO_TRANSCRIPTION_MODE_TTL_MS });
+    lastKnownAudioTranscriptionMode.set(cacheKey, mode);
+    return mode;
+  } catch (error) {
+    const lastKnown = lastKnownAudioTranscriptionMode.get(cacheKey);
+    log.debug('Audio transcription mode lookup failed, using the last known mode', {
+      instanceId,
+      mode: lastKnown ?? 'auto',
+      lastKnown: lastKnown !== undefined,
+      error: String(error),
+    });
+    return lastKnown ?? 'auto';
+  }
+}
+
+/**
+ * Report a deliberately skipped transcription (audioTranscription 'off') with
+ * the same completion event a finished item emits, so a dispatcher waiting on
+ * the message is released at once. Not a failure: no media.processing.failed,
+ * no `error` field and no `[error` marker on the message row.
+ */
+async function publishTranscriptionSkipped(
+  ctx: MediaProcessorContext,
+  messageId: string,
+  metadata: { instanceId: string; eventId?: string; channelType?: ChannelType },
+): Promise<void> {
+  log.info('Audio transcription off for instance, skipping STT', { messageId, instanceId: metadata.instanceId });
+  await ctx.eventBus.publish(
+    'media.processed',
+    {
+      eventId: metadata.eventId ?? messageId,
+      mediaId: messageId,
+      processingType: 'transcription',
+      content: '',
+      skipped: true,
+      reason: 'transcription_off',
+    },
+    { instanceId: metadata.instanceId, channelType: metadata.channelType },
+  );
+}
+
+/**
  * Process media for a received message
  */
 async function processMessageMedia(
@@ -601,6 +677,15 @@ async function processMessageMedia(
     trustedTenantId,
   );
   if (!media) return;
+
+  // Opt-in per-instance switch (instances.audio_transcription): with 'off' the
+  // audio stays stored (resolved above) but never reaches an STT provider.
+  // Every other value — including every instance that never set it — keeps
+  // today's path below.
+  if (content.type === 'audio' && (await readAudioTranscriptionMode(ctx, instanceId, trustedTenantId)) === 'off') {
+    await publishTranscriptionSkipped(ctx, media.messageId, metadata);
+    return;
+  }
 
   // Obtain a readable local path for the bytes. In remote mode this fetches the
   // S3 object into a temp file; in local mode it resolves the on-disk path.
@@ -912,6 +997,10 @@ export async function setupMediaProcessor(eventBus: EventBus, db: Database, serv
 
 export const __test__ = {
   buildFetchOptions,
+  resetAudioTranscriptionModeCache: () => {
+    audioTranscriptionModeCache.clear();
+    lastKnownAudioTranscriptionMode.clear();
+  },
   persistProcessingResult,
   resolveSafeMediaContentEventId,
   processMessageMedia,

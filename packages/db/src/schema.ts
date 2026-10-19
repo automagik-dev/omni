@@ -1021,6 +1021,17 @@ export const instances = pgTable(
     processVideo: boolean('process_video').notNull().default(true),
     processDocuments: boolean('process_documents').notNull().default(true),
 
+    // ---- Audio Transcription ----
+    /**
+     * Opt-in switch for server-side transcription of inbound audio: 'auto'
+     * (default, today's behaviour) or 'off' (audio is stored but never sent to
+     * STT). Read by the media processor; process_audio above stays unread.
+     */
+    audioTranscription: varchar('audio_transcription', { length: 10 })
+      .notNull()
+      .default('auto')
+      .$type<'auto' | 'off'>(),
+
     // ---- Agent Media Preprocessing ----
     /** Wait for media processing (transcription/vision) before dispatching to agent */
     agentWaitForMedia: boolean('agent_wait_for_media').notNull().default(true),
@@ -1048,6 +1059,13 @@ export const instances = pgTable(
       .$type<'desktop' | 'web'>(),
     /** Ask WhatsApp for full history on connect (default: false, see #70) */
     syncFullHistory: boolean('sync_full_history').notNull().default(false),
+
+    // ---- WhatsApp Inbound Reply Context (#1297) ----
+    /**
+     * Opt-in: WhatsApp (Baileys) adds the typed `replyTo` to message.received and
+     * `target` to reaction.received/removed. Off = events exactly as before. Read at connect.
+     */
+    inboundReplyContext: boolean('inbound_reply_context').notNull().default(false),
 
     // ---- Group History Context ----
     /** Number of recent messages to fetch for group context (0 = disabled, max 200) */
@@ -1826,6 +1844,9 @@ export const messages = pgTable(
  *
  * @see v1: message_traces (enhanced to full events)
  */
+/** Ingest-time access verdict journaled on omni_events.access_decision (opt-in). */
+export type EventAccessDecision = 'disabled' | 'allowed' | 'denied';
+
 export const omniEvents = pgTable(
   'omni_events',
   {
@@ -1910,6 +1931,15 @@ export const omniEvents = pgTable(
      * event that was never persisted or was pruned.
      */
     causationId: uuid('causation_id'),
+    /**
+     * Access verdict frozen at ingest: 'disabled' | 'allowed' | 'denied'.
+     * Written only when OMNI_JOURNAL_ACCESS_DECISION=true, and only for
+     * inbound (not-from-me) message.received / reaction.* rows. NULL for every
+     * other row and for every row journaled with the flag off — opt-in,
+     * additive, no backfill (0083). Durable consumers created with
+     * `access: 'allowed' | 'denied'` filter on it.
+     */
+    accessDecision: varchar('access_decision', { length: 10 }).$type<EventAccessDecision>(),
     /**
      * Monotonic journal position (#989, RFC #925 G7). Assigned by a sequence
      * at insert; the durable-consumer cursor is "last acked journal_seq" and
@@ -3440,6 +3470,9 @@ export interface SharedLeaseState {
   leases: ConsumerLease[];
 }
 
+/** Which journal rows a durable consumer sees by their ingest access verdict. */
+export type ConsumerAccessFilter = 'all' | 'allowed' | 'denied';
+
 export const durableConsumers = pgTable(
   'durable_consumers',
   {
@@ -3472,6 +3505,23 @@ export const durableConsumers = pgTable(
     waitForReady: boolean('wait_for_ready').notNull().default(false),
     /** Shared consumers only: claimed watermark + outstanding page leases. */
     leaseState: jsonb('lease_state').$type<SharedLeaseState>(),
+    /**
+     * Opt-in instance scoping (0082). false (default) = today's global
+     * consumer: every key with events:* may read and move it, and it pages
+     * every instance's rows. true = pull only pages rows whose instance_id is
+     * in `instance_ids`, and only the owner key (or an instance-unrestricted
+     * key) may see, pull, ack or delete it.
+     */
+    scoped: boolean('scoped').notNull().default(false),
+    /** Scoped consumers only: instance UUIDs this consumer may page. Null when unscoped. */
+    instanceIds: jsonb('instance_ids').$type<string[]>(),
+    /** Scoped consumers only: the api_keys.id that registered it. Null when unscoped. No FK (see 0082). */
+    ownerKeyId: uuid('owner_key_id'),
+    /**
+     * Access filter over omni_events.access_decision (0083): 'all' (default,
+     * no predicate — every existing consumer) | 'allowed' | 'denied'.
+     */
+    accessFilter: varchar('access_filter', { length: 10 }).notNull().default('all').$type<ConsumerAccessFilter>(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

@@ -11,6 +11,7 @@ import type { EventBus } from '@omni/core';
 import { NotFoundError } from '@omni/core';
 import type { Database } from '@omni/db';
 import {
+  type ChannelType,
   type DeliveryStatus,
   type EditHistoryEntry,
   type Message,
@@ -157,6 +158,39 @@ function buildMessagePreview(options: CreateMessageOptions): string {
   // message row, so an unsanitized preview would fail the insert just as an
   // unsanitized `textContent` would.
   return sanitizeMessageText(preview.substring(0, 500));
+}
+
+/**
+ * Channels where a user holds at most one reaction per message: a new emoji
+ * from the same user replaces the previous one (WhatsApp semantics). Every
+ * other channel lets a user stack several reactions on one message.
+ */
+const SINGLE_REACTION_PER_USER_CHANNELS: ReadonlySet<ChannelType> = new Set<ChannelType>([
+  'whatsapp-baileys',
+  'whatsapp-business',
+]);
+
+/**
+ * Drop `platformUserId`'s reactions whose emoji differs from `emoji`, and
+ * decrement their counts (deleting a key that reaches zero).
+ */
+function dropOtherEmojisOfUser(
+  reactions: ReactionInfo[],
+  counts: Record<string, number>,
+  platformUserId: string,
+  emoji: string,
+): { kept: ReactionInfo[]; counts: Record<string, number>; dropped: number } {
+  const kept = reactions.filter((r) => !(r.platformUserId === platformUserId && r.emoji !== emoji));
+  const newCounts = { ...counts };
+  for (const removed of reactions.filter((r) => !kept.includes(r))) {
+    const count = (newCounts[removed.emoji] ?? 0) - 1;
+    if (count > 0) {
+      newCounts[removed.emoji] = count;
+    } else {
+      delete newCounts[removed.emoji];
+    }
+  }
+  return { kept, counts: newCounts, dropped: reactions.length - kept.length };
 }
 
 export class MessageService {
@@ -698,9 +732,19 @@ export class MessageService {
   // =========================================================================
 
   /**
-   * Add a reaction to a message
+   * Add a reaction to a message.
+   *
+   * On a WhatsApp channel (`whatsapp-baileys`, `whatsapp-business`) a user holds
+   * one reaction per message, so the user's other emojis are dropped in the same
+   * write that adds the new one. Every other channel (or no channel) keeps
+   * stacking reactions per user.
    */
-  async addReaction(id: string, reaction: Omit<ReactionInfo, 'at'>, latestEventId?: string): Promise<Message> {
+  async addReaction(
+    id: string,
+    reaction: Omit<ReactionInfo, 'at'>,
+    latestEventId?: string,
+    channel?: ChannelType,
+  ): Promise<Message> {
     const message = await this.getById(id);
 
     const reactionEntry: ReactionInfo = {
@@ -709,24 +753,36 @@ export class MessageService {
     };
 
     // Get current reactions or initialize
-    const currentReactions = (message.reactions as ReactionInfo[]) ?? [];
+    const storedReactions = (message.reactions as ReactionInfo[]) ?? [];
+    const storedCounts = (message.reactionCounts as Record<string, number>) ?? {};
+
+    // One reaction per user per message: the user's other emojis go away.
+    const replacesPrevious = channel !== undefined && SINGLE_REACTION_PER_USER_CHANNELS.has(channel);
+    const {
+      kept: currentReactions,
+      counts: currentCounts,
+      dropped,
+    } = replacesPrevious
+      ? dropOtherEmojisOfUser(storedReactions, storedCounts, reaction.platformUserId, reaction.emoji)
+      : { kept: storedReactions, counts: storedCounts, dropped: 0 };
 
     // Check if this user already has this reaction
     const existingIndex = currentReactions.findIndex(
       (r) => r.platformUserId === reaction.platformUserId && r.emoji === reaction.emoji,
     );
 
-    if (existingIndex >= 0) {
+    if (existingIndex >= 0 && dropped === 0) {
       // Already exists, no change needed
       return message;
     }
 
-    const newReactions = [...currentReactions, reactionEntry];
+    const newReactions = existingIndex >= 0 ? currentReactions : [...currentReactions, reactionEntry];
 
     // Update reaction counts
-    const currentCounts = (message.reactionCounts as Record<string, number>) ?? {};
     const newCounts = { ...currentCounts };
-    newCounts[reaction.emoji] = (newCounts[reaction.emoji] ?? 0) + 1;
+    if (existingIndex < 0) {
+      newCounts[reaction.emoji] = (newCounts[reaction.emoji] ?? 0) + 1;
+    }
 
     const [updated] = await this.db
       .update(messages)
