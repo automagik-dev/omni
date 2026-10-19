@@ -50,7 +50,12 @@ import {
   seedAuthenticated,
   setupConnectionHandlers,
 } from './handlers/connection';
-import { extractQuotedContext, setupMessageHandlers, tryDownloadMedia } from './handlers/messages';
+import {
+  extractInboundReplyTo,
+  extractQuotedContext,
+  setupMessageHandlers,
+  tryDownloadMedia,
+} from './handlers/messages';
 import { fromJid, isGroupJid, isLidJid, isUserJid, toGroupJid, toJid } from './jid';
 import { buildMessageContent } from './senders/builders';
 import { computeWaid } from './senders/contact';
@@ -544,6 +549,8 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
   /** Per-instance LID-first enabled flag (DEC-8 rollback). Default: true. */
   private lidFirstEnabledMap = new Map<string, boolean>();
+  /** Instances that opted in to typed inbound reply context (connect option `inboundReplyContext`). */
+  private inboundReplyContextInstances = new Set<string>();
 
   /**
    * LID → phone JID mapping cache per instance.
@@ -639,6 +646,14 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    */
   isLidFirstEnabled(instanceId: string): boolean {
     return this.lidFirstEnabledMap.get(instanceId) ?? true;
+  }
+
+  /**
+   * Whether inbound events carry the typed `replyTo` (message.received) and
+   * `target` (reaction.received/removed). Off unless the instance opted in.
+   */
+  isInboundReplyContextEnabled(instanceId: string): boolean {
+    return this.inboundReplyContextInstances.has(instanceId);
   }
 
   /**
@@ -1059,6 +1074,13 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     // Store per-instance LID-first flag (DEC-8 rollback)
     this.lidFirstEnabledMap.set(instanceId, instanceOptions.lidFirstEnabled ?? true);
 
+    // Opt-in typed inbound reply context (instances.inbound_reply_context)
+    if (config.options?.inboundReplyContext === true) {
+      this.inboundReplyContextInstances.add(instanceId);
+    } else {
+      this.inboundReplyContextInstances.delete(instanceId);
+    }
+
     const socketOptions: Partial<SocketConfig> = {
       // Plugin-level defaults
       ...this.pluginConfig,
@@ -1198,6 +1220,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     this.rateLimitManagers.delete(instanceId);
     this.decryptTrackers.delete(instanceId);
     this.lidFirstEnabledMap.delete(instanceId);
+    this.inboundReplyContextInstances.delete(instanceId);
     this.lidMappingCache.delete(instanceId);
     this.publishedLidMappings.delete(instanceId);
     this.publishedContactNames.delete(instanceId);
@@ -1375,16 +1398,37 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
       hasText: !!replyToText,
     });
 
-    // If we have the full rawPayload, use it directly (this is a WAMessage)
-    if (replyToRawPayload) return { quoted: replyToRawPayload };
+    // A stored inbound WAMessage is quoted as-is. Omni's own sent rows store
+    // {externalId, isFromMe, to} with no key/message, which Baileys cannot quote.
+    if (this.isQuotableRawPayload(replyToRawPayload)) return { quoted: replyToRawPayload };
 
-    // Fallback: construct quoted object with text content for preview
+    // Fallback: construct quoted object with text content for preview. The
+    // participant comes from the stored row's key when it carries one (a stored
+    // row always wins), else from the caller's replyToKey hint (no stored row).
+    const storedKey = replyToRawPayload?.key as Record<string, unknown> | undefined;
+    const hintedParticipant =
+      typeof message.metadata?.replyToParticipant === 'string' ? message.metadata.replyToParticipant : undefined;
+    const participant = typeof storedKey?.participant === 'string' ? storedKey.participant : hintedParticipant;
     return {
       quoted: {
-        key: { id: message.replyTo, remoteJid: jid, fromMe: replyToFromMe },
+        key: {
+          id: message.replyTo,
+          remoteJid: jid,
+          fromMe: replyToFromMe,
+          ...(participant !== undefined ? { participant } : {}),
+        },
         message: replyToText ? { conversation: replyToText } : {},
       },
     };
+  }
+
+  /** A raw payload Baileys can quote directly: an object `key` with an `id`, plus an object `message`. */
+  private isQuotableRawPayload(payload: Record<string, unknown> | undefined): boolean {
+    if (!payload) return false;
+    const { key, message } = payload;
+    if (typeof key !== 'object' || key === null) return false;
+    if (typeof (key as Record<string, unknown>).id !== 'string') return false;
+    return typeof message === 'object' && message !== null;
   }
 
   /**
@@ -1677,7 +1721,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     try {
       // ── Reaction dispatch (separate path — not a normal message) ──
       if (message.content.type === 'reaction') {
-        return this.dispatchReaction(instanceId, sock, jid, message);
+        return await this.dispatchReaction(instanceId, sock, jid, message);
       }
 
       const processedMessage = await this.preprocessOutgoing(instanceId, jid, message);
@@ -3567,6 +3611,11 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     // Journey timing: capture T0 (platform) and T1 (plugin received)
     const timings = platformTimestamp ? this.captureInboundTimings(platformTimestamp, subStages) : undefined;
 
+    // Typed, additive quote of the replied-to message (opt-in; absent when not a reply)
+    const typedReplyTo = this.isInboundReplyContextEnabled(instanceId)
+      ? extractInboundReplyTo(this, instanceId, chatId, rawMessage)
+      : undefined;
+
     const correlationId = await this.emitMessageReceived({
       instanceId,
       externalId,
@@ -3581,6 +3630,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         mimeType: content.mimeType,
       },
       replyToId,
+      ...(typedReplyTo ? { replyTo: typedReplyTo } : {}),
       senderInstanceId: this.resolveSenderInstanceId(instanceId, from, isFromMe),
       rawPayload: extendedPayload,
       timings,
@@ -3604,6 +3654,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     emoji: string,
     targetMessageId: string,
     isFromMe: boolean,
+    target?: { fromMe: boolean; participant?: string },
   ): Promise<void> {
     // Note: We process fromMe reactions to capture reactions made from the phone
     // In WhatsApp, empty emoji string = reaction removed
@@ -3616,6 +3667,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         from,
         emoji,
         rawPayload: { externalId, isFromMe },
+        ...(target ? { target } : {}),
       });
     } else {
       await this.emitReactionRemoved({
@@ -3625,6 +3677,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
         from,
         emoji: '', // WhatsApp doesn't tell us which emoji was removed
         rawPayload: { externalId, isFromMe },
+        ...(target ? { target } : {}),
       });
     }
   }
