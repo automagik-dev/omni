@@ -1132,12 +1132,14 @@ export async function handleReactionState(
     await runConsumerInTenantContext(services.db, event, async () => {
       const chat = await services.chats.findByExternalIdSmart(instanceId, payload.chatId);
       const message = chat ? await services.messages.getByExternalId(chat.id, payload.messageId) : null;
-      if (!message) {
+      if (!chat || !message) {
         log.debug('Target message not found for reaction', { chatId: payload.chatId, messageId: payload.messageId });
         return;
       }
 
       if (added) {
+        // The chat's channel decides the semantics: on WhatsApp a new emoji
+        // replaces the user's previous reaction on the message.
         await services.messages.addReaction(
           message.id,
           {
@@ -1147,6 +1149,7 @@ export async function handleReactionState(
             customEmojiId: payload.isCustomEmoji ? payload.emoji : undefined,
           },
           event.id,
+          chat.channel,
         );
       } else {
         await services.messages.removeReaction(message.id, payload.from, payload.emoji, event.id);

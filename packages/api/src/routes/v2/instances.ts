@@ -11,6 +11,7 @@ import { z } from 'zod';
 import { accessCache } from '../../cache/cache-keys';
 import { DEFAULT_TURN_SCOPES } from '../../constants/scopes';
 import { agentKeyName } from '../../lib/agent-key-name';
+import { applyInboundReplyContextOption } from '../../lib/inbound-reply-context';
 import { readSignedHostScopeContext } from '../../lib/signed-host-scope-context';
 import { applyWhatsAppBusinessConnectionOptions } from '../../lib/whatsapp-business-connection';
 import { filterByInstanceAccess, requireInstanceAccess } from '../../middleware/auth';
@@ -114,6 +115,12 @@ const createInstanceSchema = z.object({
   ttsVoiceId: z.string().optional().nullable().describe('Default ElevenLabs voice ID for this instance'),
   ttsModelId: z.string().optional().nullable().describe('Default ElevenLabs model for this instance'),
   accessMode: AccessModeSchema.optional().describe('Access control mode: disabled, blocklist, or allowlist'),
+  audioTranscription: z
+    .enum(['auto', 'off'])
+    .default('auto')
+    .describe(
+      "Server-side transcription of inbound audio: 'auto' (default, transcribed as always) or 'off' (stored but never sent to STT; a skipped media.processed is emitted instead)",
+    ),
   agentWaitForMedia: z.boolean().default(true).describe('Wait for media processing before dispatching to agent'),
   agentSendMediaPath: z.boolean().default(true).describe('Include file path in formatted media text sent to agent'),
   agentSendMediaPathTypes: z
@@ -289,6 +296,12 @@ const createInstanceSchema = z.object({
     .boolean()
     .default(false)
     .describe('WhatsApp (Baileys): request full message history on connect (default: false)'),
+  inboundReplyContext: z
+    .boolean()
+    .default(false)
+    .describe(
+      'WhatsApp (Baileys): add the typed replyTo to message.received and target to reaction.received/removed (default: false = events unchanged). Read at connect: restart the instance after changing it',
+    ),
   reactionAck: z
     .enum(['on', 'off'])
     .default('off')
@@ -403,9 +416,11 @@ const updateInstanceSchema = createInstanceSchema
     // Override fields with .default() to strip the default — omitted keys must stay undefined
     // so PATCH only updates what is explicitly sent (not reset to defaults)
     readReceipts: z.enum(['on', 'off', 'exclude-self']).optional(),
+    audioTranscription: z.enum(['auto', 'off']).optional(),
     markOnlineOnConnect: z.boolean().optional(),
     historyIdentity: z.enum(['desktop', 'web']).optional(),
     syncFullHistory: z.boolean().optional(),
+    inboundReplyContext: z.boolean().optional(),
     groupHistorySize: z.number().int().min(0).max(200).optional(),
     reactionAck: z.enum(['on', 'off']).optional(),
     reactionAckEmoji: z.record(z.string()).nullable().optional(),
@@ -1206,6 +1221,7 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
     );
   }
 
+  applyInboundReplyContextOption(connectionOptions, instance);
   await triggerCreateConnection(channelRegistry, data.channel, instance.id, connectionOptions);
 
   return c.json({ data: sanitizeInstance(instance) }, 201);
@@ -1830,9 +1846,13 @@ function hydrateConnectionOptionsForInstance(
 /** Persisted Baileys socket settings; a connect body's `whatsapp` still overrides them. */
 function applyWhatsAppBaileysOptions(
   options: Record<string, unknown>,
-  instance: Pick<InstanceRecord, 'channel' | 'markOnlineOnConnect' | 'historyIdentity' | 'syncFullHistory'>,
+  instance: Pick<
+    InstanceRecord,
+    'channel' | 'markOnlineOnConnect' | 'historyIdentity' | 'syncFullHistory' | 'inboundReplyContext'
+  >,
 ): void {
   if (instance.channel !== 'whatsapp-baileys') return;
+  applyInboundReplyContextOption(options, instance);
   options.whatsapp = {
     historyIdentity: instance.historyIdentity,
     syncFullHistory: instance.syncFullHistory,
