@@ -35,7 +35,7 @@ import type {
   proto,
 } from 'baileys';
 
-import { clearAuthState, createStorageAuthState } from './auth';
+import { clearAuthState, createReadOnlyAuthState, createStorageAuthState } from './auth';
 import { WHATSAPP_CAPABILITIES } from './capabilities';
 import {
   WHATSAPP_PRESENCE_HOLD_LIFETIME_CAP_MS,
@@ -62,7 +62,7 @@ import { buildMessageContent } from './senders/builders';
 import { computeWaid } from './senders/contact';
 import { removeReaction, sendReaction } from './senders/reaction';
 import { WhatsAppStreamSender } from './senders/stream';
-import { DEFAULT_SOCKET_CONFIG, type SocketConfig, closeSocket, createSocket } from './socket';
+import { DEFAULT_SOCKET_CONFIG, type SocketConfig, closeSocket, createSocket, logoutStoredSession } from './socket';
 import { DecryptFailureTracker } from './utils/decrypt-failure-tracker';
 import { ErrorCode, WhatsAppError, mapBaileysError } from './utils/errors';
 import {
@@ -1177,6 +1177,17 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * @param instanceId - Instance to disconnect
    */
   async disconnect(instanceId: string): Promise<void> {
+    await this.closeInstance(instanceId, false);
+  }
+
+  /**
+   * Tear down an instance's runtime connection.
+   *
+   * @param unlink - Send Baileys' logout first, so WhatsApp removes the linked
+   *   device. Without it the session survives for reconnect.
+   * @returns true when the live socket logged out (the device is unlinked)
+   */
+  private async closeInstance(instanceId: string, unlink: boolean): Promise<boolean> {
     // Reset all connection tracking state (attempt counter + pending reconnect timer)
     // even when no socket is live — a reconnect loop deletes the socket between attempts (#1169)
     resetConnectionState(instanceId);
@@ -1192,20 +1203,20 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
 
     const sock = this.sockets.get(instanceId);
     if (!sock) {
-      return;
+      return false;
     }
 
     // Remove event listeners before closing to prevent ghost reconnects
     sock.ev.removeAllListeners('connection.update');
 
-    // Close socket WITHOUT logging out (preserves session for reconnect)
-    await closeSocket(sock, false);
+    const unlinked = await closeSocket(sock, unlink);
     this.sockets.delete(instanceId);
 
     this.clearInstanceCaches(instanceId);
 
     // Emit disconnected event
     await this.emitInstanceDisconnected(instanceId, 'User requested disconnect');
+    return unlinked;
   }
 
   /** Clear all per-instance caches to prevent memory leaks on reconnect cycles */
@@ -1245,13 +1256,40 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * @param instanceId - Instance to logout
    */
   async logout(instanceId: string): Promise<void> {
-    // Disconnect first
-    await this.disconnect(instanceId);
+    // Unlink the device on WhatsApp's side, not only locally (#1275). With no
+    // live socket (DELETE disconnects first) or a socket that could not send
+    // the logout, connect once with the stored auth to do it.
+    // The unlink is best-effort: unreadable stored creds must not keep the
+    // local auth (and the next logout/delete attempt) stuck.
+    let unlinked = false;
+    try {
+      unlinked = (await this.closeInstance(instanceId, true)) || (await this.unlinkStoredSession(instanceId));
+    } catch (error) {
+      this.logger.warn('Device unlink failed; clearing local auth anyway', { instanceId, error: String(error) });
+    } finally {
+      await clearAuthState(this.storage, instanceId);
+    }
 
-    // Clear stored auth state
-    await clearAuthState(this.storage, instanceId);
+    this.logger.info('Instance logged out and auth cleared', { instanceId, unlinked });
+  }
 
-    this.logger.info('Instance logged out and auth cleared', { instanceId });
+  /**
+   * Log out a paired session that has no usable live socket.
+   *
+   * @returns true when WhatsApp no longer lists the device (or never had one)
+   */
+  private async unlinkStoredSession(instanceId: string): Promise<boolean> {
+    const auth = await createReadOnlyAuthState(this.storage, instanceId);
+    if (!auth) return true;
+
+    const outcome = await logoutStoredSession({ ...this.pluginConfig, auth });
+    if (outcome === 'unreachable') {
+      this.logger.warn('Could not reach WhatsApp to unlink the device; it may stay listed on the phone', {
+        instanceId,
+      });
+      return false;
+    }
+    return true;
   }
 
   /**

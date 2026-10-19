@@ -5,8 +5,9 @@
  * Handles socket configuration, lifecycle, and common operations.
  */
 
+import type { Boom } from '@hapi/boom';
 import type { AuthenticationState, GroupMetadata, WAMessageKey, WASocket, proto } from 'baileys';
-import { Browsers, fetchLatestBaileysVersion, default as makeWASocket } from 'baileys';
+import { Browsers, DisconnectReason, fetchLatestBaileysVersion, default as makeWASocket } from 'baileys';
 import NodeCache from 'node-cache';
 import pino from 'pino';
 
@@ -232,17 +233,69 @@ export async function createSocket(config: SocketConfig): Promise<WASocket> {
  *
  * @param sock - WASocket to close
  * @param logout - Whether to logout before closing
+ * @returns true when the logout was sent (the device is unlinked on WhatsApp's side)
  */
-export async function closeSocket(sock: WASocket, logout = false): Promise<void> {
+export async function closeSocket(sock: WASocket, logout = false): Promise<boolean> {
+  let loggedOut = false;
   if (logout) {
     try {
       await sock.logout();
+      loggedOut = true;
     } catch {
       // Ignore logout errors - socket might already be closed
     }
   }
 
   sock.end(undefined);
+  return loggedOut;
+}
+
+export type StoredSessionLogout = 'unlinked' | 'already-logged-out' | 'unreachable';
+
+/** How long an explicit logout waits for a stored session to connect. */
+const STORED_SESSION_LOGOUT_TIMEOUT_MS = 20_000;
+
+/**
+ * Unlink a paired device that has no live socket (#1275).
+ *
+ * Connects once with the stored auth, sends Baileys' logout as soon as the
+ * connection opens, and closes. Nothing else is wired to the socket: it lives
+ * only long enough to tell WhatsApp to remove the linked device.
+ *
+ * @param config - Socket configuration; `auth` should not persist key writes
+ * @param timeoutMs - How long to wait for the connection to open
+ */
+export async function logoutStoredSession(
+  config: SocketConfig,
+  timeoutMs = STORED_SESSION_LOGOUT_TIMEOUT_MS,
+): Promise<StoredSessionLogout> {
+  let sock: WASocket | undefined;
+  try {
+    sock = await createSocket({ ...config, markOnlineOnConnect: false });
+    const opened = sock;
+    const connection = await new Promise<'open' | 'logged-out' | 'closed'>((resolve) => {
+      const timer = setTimeout(() => resolve('closed'), timeoutMs);
+      opened.ev.on('connection.update', ({ connection: state, lastDisconnect }) => {
+        if (state === 'open') {
+          clearTimeout(timer);
+          resolve('open');
+        } else if (state === 'close') {
+          clearTimeout(timer);
+          const statusCode = (lastDisconnect?.error as Boom | undefined)?.output?.statusCode;
+          resolve(statusCode === DisconnectReason.loggedOut ? 'logged-out' : 'closed');
+        }
+      });
+    });
+    if (connection === 'logged-out') return 'already-logged-out';
+    if (connection === 'closed') return 'unreachable';
+    await opened.logout();
+    return 'unlinked';
+  } catch {
+    return 'unreachable';
+  } finally {
+    sock?.ev.removeAllListeners('connection.update');
+    sock?.end(undefined);
+  }
 }
 
 /**
