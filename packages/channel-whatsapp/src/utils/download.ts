@@ -186,6 +186,23 @@ export async function downloadMediaToBuffer(msg: WAMessage): Promise<{ buffer: B
 }
 
 /**
+ * Open the Baileys media stream with an `'error'` listener already attached.
+ *
+ * The stream is live as soon as it is returned: a small media can arrive in
+ * full, and fail decryption (`ERR_OSSL_BAD_DECRYPT` from the decipher's
+ * `final()`), while the consumer is still awaiting I/O (`mkdir`, S3 client
+ * resolution). An `'error'` with no listener is an uncaught exception that
+ * kills the whole process (#1274). The listener only prevents that: the
+ * consumer still sees the errored stream and rejects, so the caller's
+ * try/catch handles it.
+ */
+async function openMediaStream(msg: WAMessage): Promise<NodeJS.ReadableStream> {
+  const stream = await downloadMediaMessage(msg, 'stream', {});
+  stream.on('error', () => {});
+  return stream;
+}
+
+/**
  * Stream media from Baileys directly to disk while counting bytes. This avoids
  * allocating giant WhatsApp videos/documents in the Bun heap just to persist
  * them before provider-side normalization.
@@ -198,7 +215,7 @@ export async function downloadMediaToFile(
   const mediaInfo = detectMediaType(msg);
   if (!mediaInfo) return null;
 
-  const stream = await downloadMediaMessage(msg, 'stream', {});
+  const stream = await openMediaStream(msg);
   const size = await writeMediaStreamToFile(stream, outputPath, maxSizeBytes);
   if (size === 0) return null;
   return { mimeType: mediaInfo.mimeType, size };
@@ -221,7 +238,7 @@ export async function downloadMediaToBackend(
   const mediaInfo = detectMediaType(msg);
   if (!mediaInfo) return null;
 
-  const stream = await downloadMediaMessage(msg, 'stream', {});
+  const stream = await openMediaStream(msg);
   const result = await backend.storeStream({ key, stream, mimeType: mediaInfo.mimeType, maxSizeBytes });
   if (result.size === 0) return null;
   return { mimeType: mediaInfo.mimeType, size: result.size };

@@ -12,6 +12,18 @@ const SentByField = z.enum(['agent', 'user']).optional().openapi({
     "Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.",
 });
 
+// Per-request outbound pacing (mirrors pacingField in routes/v2/messages.ts)
+const PacingField = z.enum(['humanized', 'immediate']).optional().openapi({
+  description:
+    "Outbound pacing for this send (WhatsApp Baileys): 'immediate' skips the humanized anti-ban delay and typing simulation; 'humanized' keeps them. Default: the instance's outboundPacing. 'immediate' on a humanized instance needs the instance's outboundPacingOverride (otherwise 403)",
+});
+
+const PacingForbiddenResponse = {
+  description:
+    "pacing 'immediate' refused: the instance's outboundPacing is 'humanized' and outboundPacingOverride is not set",
+  content: { 'application/json': { schema: ErrorSchema } },
+};
+
 // Message response schema
 export const MessageResponseSchema = z.object({
   messageId: z.string().openapi({ description: 'Internal message ID' }),
@@ -135,6 +147,7 @@ export const SendTextSchema = z.object({
     description: 'Ask the user to share their location (WhatsApp Cloud: native "Send location" button under the text)',
   }),
   sentBy: SentByField,
+  pacing: PacingField,
 });
 
 // Send media request
@@ -148,6 +161,7 @@ export const SendMediaSchema = z.object({
   caption: z.string().optional().openapi({ description: 'Caption for media' }),
   voiceNote: z.boolean().optional().openapi({ description: 'Send audio as voice note' }),
   sentBy: SentByField,
+  pacing: PacingField,
 });
 
 // Send reaction request
@@ -156,6 +170,7 @@ export const SendReactionSchema = z.object({
   to: z.string().min(1).openapi({ description: 'Chat ID' }),
   messageId: z.string().min(1).openapi({ description: 'Message ID to react to' }),
   emoji: z.string().min(1).openapi({ description: 'Emoji to react with' }),
+  pacing: PacingField,
 });
 
 // Send sticker request
@@ -218,6 +233,14 @@ export const SendPresenceSchema = z.object({
     .max(30000)
     .optional()
     .openapi({ description: 'Duration in ms before auto-pause; omit for channel default, 0 = until paused' }),
+  hold: z.boolean().default(false).openapi({
+    description:
+      "Server-held presence (WhatsApp, opt-in): Omni re-sends typing/recording until a send or reaction to this chat, an explicit 'paused' hold, the max lifetime (holdMaxMs) or a disconnect. `duration` is ignored under hold",
+  }),
+  holdMaxMs: z.number().int().min(0).max(300000).optional().openapi({
+    description:
+      'Max lifetime in ms of a server-held presence (hold=true only); omit or 0 = server default (WHATSAPP_PRESENCE_MAX_LIFETIME_MS)',
+  }),
 });
 
 // Presence response
@@ -225,10 +248,23 @@ export const PresenceResponseSchema = z.object({
   instanceId: z.string().uuid().openapi({ description: 'Instance ID' }),
   chatId: z.string().openapi({ description: 'Chat ID where presence was sent' }),
   type: z.string().openapi({ description: 'Presence type sent' }),
-  duration: z.number().openapi({ description: 'Duration in ms' }),
+  duration: z.number().openapi({
+    description: 'Duration in ms; with hold=true, the lifetime of the server-held presence',
+  }),
   threadId: z.string().optional().openapi({ description: 'Thread timestamp/id used by the presence renderer' }),
   delivered: z.boolean().optional().openapi({ description: 'Whether the channel reported the status as delivered' }),
-  method: z.string().optional().openapi({ description: 'Channel-specific presence method used' }),
+  method: z.string().optional().openapi({
+    description: "Channel-specific presence method used ('presence_hold' for a server-held presence, hold=true)",
+  }),
+  hold: z
+    .object({
+      expiresAt: z.string().datetime().nullable().openapi({
+        description:
+          "When the server-held presence ends at the latest (ISO 8601); null when no hold is running (type 'paused', or the hold was ended or replaced before its first frame went out)",
+      }),
+    })
+    .optional()
+    .openapi({ description: "Present only when the request set hold=true (method 'presence_hold')" }),
   reason: z.string().optional().openapi({ description: 'Reason when the channel no-opped or failed best-effort' }),
   status: z.string().optional().openapi({ description: 'Channel-specific status text sent' }),
   loadingMessages: z
@@ -282,14 +318,12 @@ export const SendTtsSchema = z.object({
   modelId: z.string().optional().openapi({ description: 'ElevenLabs model (default: eleven_v3)' }),
   stability: z.number().min(0).max(1).optional().openapi({ description: 'Voice stability (0-1)' }),
   similarityBoost: z.number().min(0).max(1).optional().openapi({ description: 'Similarity boost (0-1)' }),
-  presenceDelay: z
-    .number()
-    .int()
-    .min(0)
-    .max(30000)
-    .optional()
-    .openapi({ description: 'Recording presence duration in ms' }),
+  presenceDelay: z.number().int().min(0).max(30000).optional().openapi({
+    description:
+      "Custom recording presence duration in ms (default: match audio duration, or 0 when pacing is 'immediate')",
+  }),
   sentBy: SentByField,
+  pacing: PacingField,
 });
 
 // TTS response
@@ -339,6 +373,7 @@ export function registerMessageSchemas(registry: OpenAPIRegistry): void {
         content: { 'application/json': { schema: z.object({ data: MessageResponseSchema }) } },
       },
       400: { description: 'Validation error', content: { 'application/json': { schema: ErrorSchema } } },
+      403: PacingForbiddenResponse,
       404: { description: 'Instance not found', content: { 'application/json': { schema: ErrorSchema } } },
     },
   });
@@ -357,6 +392,7 @@ export function registerMessageSchemas(registry: OpenAPIRegistry): void {
         content: { 'application/json': { schema: z.object({ data: MessageResponseSchema }) } },
       },
       400: { description: 'Validation error', content: { 'application/json': { schema: ErrorSchema } } },
+      403: PacingForbiddenResponse,
       404: { description: 'Instance not found', content: { 'application/json': { schema: ErrorSchema } } },
     },
   });
@@ -372,6 +408,7 @@ export function registerMessageSchemas(registry: OpenAPIRegistry): void {
     responses: {
       200: { description: 'Reaction sent', content: { 'application/json': { schema: SuccessSchema } } },
       400: { description: 'Validation error', content: { 'application/json': { schema: ErrorSchema } } },
+      403: PacingForbiddenResponse,
       404: { description: 'Instance not found', content: { 'application/json': { schema: ErrorSchema } } },
     },
   });
@@ -568,6 +605,7 @@ export function registerMessageSchemas(registry: OpenAPIRegistry): void {
         content: { 'application/json': { schema: z.object({ data: TtsResponseSchema }) } },
       },
       400: { description: 'Validation error', content: { 'application/json': { schema: ErrorSchema } } },
+      403: PacingForbiddenResponse,
       404: { description: 'Instance not found', content: { 'application/json': { schema: ErrorSchema } } },
     },
   });
