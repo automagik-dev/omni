@@ -985,6 +985,7 @@ type OutboundDispatchResult =
 async function resolveMediaSource(
   client: MetaWhatsAppClient,
   message: OutgoingMessage,
+  mimeType: string | undefined,
 ): Promise<MetaMediaSource | null> {
   const { content, metadata } = message;
   if (content.mediaUrl) return content.mediaUrl;
@@ -993,8 +994,7 @@ async function resolveMediaSource(
   if (typeof base64 !== 'string' || base64.length === 0) return null;
   const bytes = Buffer.from(base64, 'base64');
   if (bytes.length === 0) return null;
-  const mimeType = content.mimeType ?? 'application/octet-stream';
-  return client.uploadMedia(bytes, mimeType, content.filename);
+  return client.uploadMedia(bytes, mimeType ?? 'application/octet-stream', content.filename);
 }
 
 /**
@@ -1061,22 +1061,17 @@ async function dispatchOutboundMedia(
   message: OutgoingMessage,
 ): Promise<OutboundDispatchResult> {
   const { content, to, replyTo } = message;
-  const source = await resolveMediaSource(client, message);
+  // The sticker route sends no MIME type; WhatsApp stickers are WebP, and the
+  // MIME type is what makes Meta treat the media as a sticker, not a document.
+  const mimeType = content.mimeType ?? (content.type === 'sticker' ? 'image/webp' : undefined);
+  const source = await resolveMediaSource(client, message, mimeType);
   if (!source) {
     return { ok: false, error: 'Media requires a public URL or non-empty file bytes (base64)' };
   }
   return {
     ok: true,
     uploadedMediaId: typeof source === 'string' ? undefined : source.id,
-    response: await sendMedia(
-      client,
-      to,
-      source,
-      content.mimeType,
-      content.caption ?? content.text,
-      content.filename,
-      replyTo,
-    ),
+    response: await sendMedia(client, to, source, mimeType, content.caption ?? content.text, content.filename, replyTo),
   };
 }
 

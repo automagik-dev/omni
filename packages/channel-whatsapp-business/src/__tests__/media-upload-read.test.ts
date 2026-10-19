@@ -262,6 +262,22 @@ describe('WhatsAppBusinessPlugin media from file bytes (#1278)', () => {
     expect(sent.rawPayload).toEqual({ mediaSource: 'meta-upload', metaMediaId: 'media-doc' });
   });
 
+  test('a base64 sticker without a MIME type is uploaded and sent as a WebP sticker', async () => {
+    fetchSpy.mockResolvedValueOnce(okResponse({ id: 'media-stk' })).mockResolvedValueOnce(sentResponse());
+
+    await plugin.sendMessage(instanceId, {
+      to: CUSTOMER,
+      content: { type: 'sticker' },
+      metadata: { base64: Buffer.from('RIFF....WEBP').toString('base64') },
+    });
+
+    const form = (fetchSpy.mock.calls[0] as [string, RequestInit])[1].body as FormData;
+    expect(form.get('type')).toBe('image/webp');
+    const sent = JSON.parse((fetchSpy.mock.calls[1] as [string, RequestInit])[1].body as string);
+    expect(sent.type).toBe('sticker');
+    expect(sent.sticker).toEqual({ id: 'media-stk' });
+  });
+
   test('message.sent of a URL send carries the URL and no upload reference', async () => {
     fetchSpy.mockResolvedValueOnce(sentResponse());
 
