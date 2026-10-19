@@ -12,7 +12,7 @@ import { pipeline } from 'node:stream/promises';
 import { DownloadTooLargeError, type MediaStorageBackend } from '@omni/channel-sdk';
 import type { WAMessage } from 'baileys';
 import { downloadMediaMessage } from 'baileys';
-import { getDocumentMessage } from './message';
+import { getDocumentMessage, unwrapEnvelopes } from './message';
 
 const DEFAULT_WHATSAPP_MEDIA_MAX_DOWNLOAD_BYTES = 2 * 1024 * 1024 * 1024; // 2GiB: WhatsApp document-scale media ceiling
 
@@ -54,10 +54,12 @@ export interface DetectedMedia {
 }
 
 /**
- * Detect media type from a Baileys message
+ * Detect media type from a Baileys message, looking inside envelopes
+ * (`associatedChildMessage`, `ephemeralMessage`, `deviceSentMessage`, …) the
+ * same way `extractContent` does (#1280).
  */
 export function detectMediaType(msg: WAMessage): DetectedMedia | null {
-  const message = msg.message;
+  const message = msg.message ? unwrapEnvelopes(msg.message) : null;
   if (!message) return null;
 
   if (message.imageMessage) {

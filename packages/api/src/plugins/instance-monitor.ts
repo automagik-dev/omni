@@ -237,9 +237,12 @@ export function buildInstanceConnectOptions(instance: {
   ascFlowChave?: string | null;
   ascFlowHandoffMode?: string | null;
   ascFlowHandoffServico?: number | null;
+  downloadMediaOnSync?: boolean | null;
   inboundReplyContext?: boolean | null;
 }): Record<string, unknown> {
   const options: Record<string, unknown> = {};
+  // A reconnect can receive more pushed history; same media rule as connect (#1280).
+  if (instance.channel === 'whatsapp-baileys') options.downloadMediaOnSync = instance.downloadMediaOnSync === true;
   if (instance.telegramBotToken) options.token = instance.telegramBotToken;
   if (instance.channel === 'telegram') options.telegramReactionLevel = instance.telegramReactionLevel;
   if (instance.discordBotToken) options.token = instance.discordBotToken;
