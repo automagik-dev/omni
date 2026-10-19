@@ -2677,7 +2677,9 @@ messagesRoutes.post('/:id/read', zValidator('json', markMessageReadSchema), asyn
   }
 
   // Pass message data so the plugin can build channel-specific keys (e.g., group participant)
-  const messageData = [{ externalId: message.externalId, rawPayload: message.rawPayload ?? null }];
+  const messageData = [
+    { externalId: message.externalId, rawPayload: message.rawPayload ?? null, isFromMe: message.isFromMe },
+  ];
 
   // Respect per-instance read receipt mode
   const readReceiptMode = (instance.readReceipts ?? 'on') as 'on' | 'off' | 'exclude-self';
@@ -2688,7 +2690,7 @@ messagesRoutes.post('/:id/read', zValidator('json', markMessageReadSchema), asyn
         instanceId: string,
         chatId: string,
         messageIds: string[],
-        messageData?: Array<{ externalId: string; rawPayload?: Record<string, unknown> | null }>,
+        messageData?: Array<{ externalId: string; rawPayload?: Record<string, unknown> | null; isFromMe?: boolean }>,
         readReceiptMode?: 'on' | 'off' | 'exclude-self',
       ) => Promise<void>;
     }
@@ -2756,10 +2758,16 @@ messagesRoutes.post('/read', zValidator('json', markBatchReadSchema), async (c) 
     const chat = await services.chats.findByExternalIdSmart(instanceId, externalChatId);
     if (chat) internalChatId = chat.id;
   }
-  let messageData: Array<{ externalId: string; rawPayload?: Record<string, unknown> | null }> | undefined;
+  let messageData:
+    | Array<{ externalId: string; rawPayload?: Record<string, unknown> | null; isFromMe?: boolean }>
+    | undefined;
   if (internalChatId) {
     const msgs = await services.messages.getByExternalIds(internalChatId, messageIds);
-    messageData = msgs.map((m) => ({ externalId: m.externalId, rawPayload: m.rawPayload ?? null }));
+    messageData = msgs.map((m) => ({
+      externalId: m.externalId,
+      rawPayload: m.rawPayload ?? null,
+      isFromMe: m.isFromMe,
+    }));
   }
 
   // Respect per-instance read receipt mode
@@ -2771,7 +2779,7 @@ messagesRoutes.post('/read', zValidator('json', markBatchReadSchema), async (c) 
         instanceId: string,
         chatId: string,
         messageIds: string[],
-        messageData?: Array<{ externalId: string; rawPayload?: Record<string, unknown> | null }>,
+        messageData?: Array<{ externalId: string; rawPayload?: Record<string, unknown> | null; isFromMe?: boolean }>,
         readReceiptMode?: 'on' | 'off' | 'exclude-self',
       ) => Promise<void>;
     }

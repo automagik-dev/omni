@@ -8,11 +8,13 @@
  *      sends the returned `{ id }`.
  *   2. `chats read` threw CAPABILITY_NOT_SUPPORTED: the plugin exposed neither
  *      `markChatAsRead` nor `markAsRead`. Both now mark the newest remembered
- *      inbound wamid (or the given wamids) read.
+ *      inbound wamid (or the given wamids) read, honour `readReceipts: 'off'`,
+ *      skip messages Omni sent and report Meta failures as CHANNEL_SEND_FAILED.
  */
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import type { Logger, PluginContext, PluginStorage } from '@omni/channel-sdk';
+import { ERROR_CODES, OmniError } from '@omni/core';
 import type { EventBus, PublishResult, Subscription } from '@omni/core/events';
 import type { MetaInboundMessage } from '@omni/core/schemas';
 import { WhatsAppBusinessPlugin } from '../plugin';
@@ -285,12 +287,43 @@ describe('WhatsAppBusinessPlugin read receipts (#1278)', () => {
     expect([readBody(0).message_id, readBody(1).message_id]).toEqual(['wamid.a', 'wamid.b']);
   });
 
-  test('a Meta failure is reported, not swallowed', async () => {
+  test('markAsRead skips messages Omni sent: Meta only accepts reads of received ones', async () => {
+    fetchSpy.mockImplementation(async () => okResponse({ success: true }));
+
+    await plugin.markAsRead(
+      instanceId,
+      CUSTOMER,
+      ['wamid.in', 'wamid.out'],
+      [
+        { externalId: 'wamid.in', isFromMe: false },
+        { externalId: 'wamid.out', isFromMe: true },
+      ],
+    );
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(readBody(0).message_id).toBe('wamid.in');
+  });
+
+  test("readReceiptMode 'off' sends no read receipt", async () => {
+    await receiveInbound(plugin, inboundText('wamid.quiet'));
+
+    await plugin.markChatAsRead(instanceId, CUSTOMER, 'off');
+    await plugin.markAsRead(instanceId, CUSTOMER, ['all'], undefined, 'off');
+    await plugin.markAsRead(instanceId, CUSTOMER, ['wamid.quiet'], undefined, 'off');
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  test('a Meta failure is reported as CHANNEL_SEND_FAILED, not swallowed', async () => {
     await receiveInbound(plugin, inboundText('wamid.fail'));
     fetchSpy.mockResolvedValueOnce(
       new Response(JSON.stringify({ error: { code: 100, message: 'Invalid parameter' } }), { status: 400 }),
     );
 
-    await expect(plugin.markChatAsRead(instanceId, CUSTOMER)).rejects.toThrow('Invalid parameter');
+    const error = await plugin.markChatAsRead(instanceId, CUSTOMER).catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(OmniError);
+    expect((error as OmniError).code).toBe(ERROR_CODES.CHANNEL_SEND_FAILED);
+    expect((error as OmniError).message).toContain('Invalid parameter');
   });
 });

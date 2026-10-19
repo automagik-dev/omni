@@ -24,7 +24,7 @@ import type {
   SendResult,
 } from '@omni/channel-sdk';
 import type { Logger } from '@omni/core';
-import { markdownToWhatsApp } from '@omni/core';
+import { ERROR_CODES, OmniError, markdownToWhatsApp } from '@omni/core';
 import type { EventPayloadMap } from '@omni/core/events';
 import { WhatsAppFlowSendSchema } from '@omni/core/schemas';
 import type { MetaInboundMessage, MetaTemplateStatusUpdate, MetaWebhookStatusEntry } from '@omni/core/schemas';
@@ -483,34 +483,71 @@ export class WhatsAppBusinessPlugin extends BaseChannelPlugin {
    * reading the newest one marks every earlier message of the conversation
    * read too, so this sends one read for the newest remembered inbound wamid
    * (the same memory `sendTyping` uses). No remembered wamid (nothing received
-   * since the plugin started) → no-op. Meta failures are thrown: the caller
-   * asked for this explicitly.
+   * since the plugin started) → no-op. `readReceiptMode: 'off'` sends nothing,
+   * like the other WhatsApp channels. Meta failures are thrown as
+   * CHANNEL_SEND_FAILED: the caller asked for this explicitly.
    */
-  async markChatAsRead(instanceId: string, chatId: string): Promise<void> {
+  async markChatAsRead(
+    instanceId: string,
+    chatId: string,
+    readReceiptMode?: 'on' | 'off' | 'exclude-self',
+  ): Promise<void> {
+    if (readReceiptMode === 'off') return;
     const state = this.requireInstanceState(instanceId, 'markChatAsRead');
     const wamid = state.lastInboundWamid.get(toMetaPhone(chatId));
     if (!wamid) {
-      this.logger.debug('[whatsapp-business] markChatAsRead skipped — no inbound wamid remembered for chat', {
+      this.logger.info('[whatsapp-business] markChatAsRead skipped — no inbound wamid remembered for chat', {
         instanceId,
         chatId,
       });
       return;
     }
-    await state.client.markAsRead(wamid);
+    await this.sendReadReceipt(state.client, instanceId, wamid);
   }
 
   /**
    * Mark specific inbound messages read by wamid. `['all']` (the API's
-   * whole-chat marker) behaves like {@link markChatAsRead}.
+   * whole-chat marker) behaves like {@link markChatAsRead}. Messages Omni sent
+   * (`isFromMe` in `messageData`) are skipped: Meta only accepts reads of
+   * messages the business received.
    */
-  async markAsRead(instanceId: string, chatId: string, messageIds: string[]): Promise<void> {
+  async markAsRead(
+    instanceId: string,
+    chatId: string,
+    messageIds: string[],
+    messageData?: Array<{ externalId: string; isFromMe?: boolean }>,
+    readReceiptMode?: 'on' | 'off' | 'exclude-self',
+  ): Promise<void> {
+    if (readReceiptMode === 'off') return;
     if (messageIds.includes('all')) {
-      await this.markChatAsRead(instanceId, chatId);
+      await this.markChatAsRead(instanceId, chatId, readReceiptMode);
       return;
     }
     const state = this.requireInstanceState(instanceId, 'markAsRead');
+    const sentByUs = new Set((messageData ?? []).filter((m) => m.isFromMe).map((m) => m.externalId));
     for (const wamid of messageIds) {
-      await state.client.markAsRead(wamid);
+      if (sentByUs.has(wamid)) continue;
+      await this.sendReadReceipt(state.client, instanceId, wamid);
+    }
+  }
+
+  /**
+   * Send one read receipt. A Graph API failure becomes CHANNEL_SEND_FAILED
+   * (502): `MetaApiError` carries a `META_*` code the API cannot map, which
+   * would surface as a generic 500.
+   */
+  private async sendReadReceipt(client: MetaWhatsAppClient, instanceId: string, wamid: string): Promise<void> {
+    try {
+      await client.markAsRead(wamid);
+    } catch (err) {
+      if (!(err instanceof MetaApiError)) throw err;
+      throw new OmniError({
+        code: ERROR_CODES.CHANNEL_SEND_FAILED,
+        message: `Meta rejected the read receipt: ${err.message}`,
+        context: { channelType: 'whatsapp-business', instanceId, metaCode: err.code },
+        recoverable: err.retryable,
+        cause: err,
+      });
     }
   }
 
