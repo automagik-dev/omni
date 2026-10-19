@@ -25,7 +25,7 @@ function createMockPlugin(
       instanceId: string,
       chatId: string,
       messageIds: string[],
-      messageData?: Array<{ externalId: string; rawPayload?: Record<string, unknown> | null }>,
+      messageData?: Array<{ externalId: string; rawPayload?: Record<string, unknown> | null; isFromMe?: boolean }>,
       readReceiptMode?: 'on' | 'off' | 'exclude-self',
     ) => Promise<void>;
     markChatAsRead: (
@@ -236,12 +236,18 @@ describeWithDb('Read Receipt Endpoints', () => {
       expect(body.data.externalMessageId).toBe(testMessage.externalId);
       expect(markAsReadMock).toHaveBeenCalledTimes(1);
       // Plugin receives messageData with rawPayload so it can extract channel-specific keys,
-      // plus readReceiptMode ('on' is the default for new instances)
+      // isFromMe so it can skip its own messages, plus readReceiptMode ('on' is the default)
       expect(markAsReadMock).toHaveBeenCalledWith(
         testInstance.id,
         testChat.externalId,
         [testMessage.externalId],
-        [{ externalId: testMessage.externalId, rawPayload: { key: { participant: '5511999999999@s.whatsapp.net' } } }],
+        [
+          {
+            externalId: testMessage.externalId,
+            rawPayload: { key: { participant: '5511999999999@s.whatsapp.net' } },
+            isFromMe: false,
+          },
+        ],
         'on',
       );
     });
@@ -357,10 +363,15 @@ describeWithDb('Read Receipt Endpoints', () => {
       expect(callArgs[0]).toBe(testInstance.id);
       expect(callArgs[1]).toBe(testChat.externalId);
       expect(callArgs[2]).toEqual([testMessage.externalId]);
-      const messageData = callArgs[3] as Array<{ externalId: string; rawPayload: Record<string, unknown> }>;
+      const messageData = callArgs[3] as Array<{
+        externalId: string;
+        rawPayload: Record<string, unknown>;
+        isFromMe?: boolean;
+      }>;
       expect(messageData).toHaveLength(1);
       expect(messageData[0]?.externalId).toBe(testMessage.externalId);
       expect(messageData[0]?.rawPayload).toEqual({ key: { participant: '5511999999999@s.whatsapp.net' } });
+      expect(messageData[0]?.isFromMe).toBe(false);
       // readReceiptMode is the 5th argument
       expect(callArgs[4]).toBe('on');
     });
@@ -497,6 +508,7 @@ describeWithDb('Read Receipt Endpoints', () => {
         {
           externalId: testDmMessage.externalId,
           rawPayload: { key: { remoteJid: '5511888888888@s.whatsapp.net', fromMe: false } },
+          isFromMe: false,
         },
       ]);
       expect(callArgs[4]).toBe('on');

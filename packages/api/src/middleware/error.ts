@@ -59,6 +59,8 @@ function sanitizeErrorContext(context: Record<string, unknown> | undefined): Rec
  */
 const ERROR_STATUS_MAP: Record<string, 400 | 401 | 403 | 404 | 409 | 413 | 429 | 500 | 502 | 503 | 504> = {
   [ERROR_CODES.VALIDATION]: 400,
+  // The channel cannot do this (plugin lacks the operation) — not a server fault (#1278).
+  [ERROR_CODES.CAPABILITY_NOT_SUPPORTED]: 400,
   [ERROR_CODES.UNAUTHORIZED]: 401,
   [ERROR_CODES.FORBIDDEN]: 403,
   [ERROR_CODES.NOT_FOUND]: 404,
