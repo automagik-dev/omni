@@ -23,7 +23,7 @@ import {
   chats,
   messages,
 } from '@omni/db';
-import { and, count, desc, eq, gte, ilike, inArray, lte, or, sql } from 'drizzle-orm';
+import { and, count, desc, eq, gte, ilike, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import { scopedHandle } from '../tenancy/tenant-scope';
 
 import { sanitizeText } from '../utils/utf8';
@@ -869,6 +869,35 @@ export class MessageService {
     }
 
     return updated;
+  }
+
+  /**
+   * Mark an outbound message as failed (#1277).
+   *
+   * Only a message still `pending` / `sent` (or without a status) becomes
+   * `failed`: a late or replayed failure never hides a `delivered` / `read`
+   * the platform already reported. `latestEventId` points at the
+   * `message.failed` event, which carries the error and error code.
+   *
+   * @returns the updated message, or null when its status was already past `sent`
+   */
+  async markDeliveryFailed(id: string, latestEventId?: string): Promise<Message | null> {
+    const [updated] = await this.db
+      .update(messages)
+      .set({
+        deliveryStatus: 'failed',
+        latestEventId,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(messages.id, id),
+          or(inArray(messages.deliveryStatus, ['pending', 'sent']), isNull(messages.deliveryStatus)),
+        ),
+      )
+      .returning();
+
+    return updated ?? null;
   }
 
   /**
