@@ -496,7 +496,7 @@ export class WhatsAppBusinessPlugin extends BaseChannelPlugin {
   ): Promise<void> {
     if (readReceiptMode === 'off') return;
     const state = this.requireInstanceState(instanceId, 'markChatAsRead');
-    const wamid = state.lastInboundWamid.get(toMetaPhone(chatId));
+    const wamid = state.lastInboundWamid.get(toWaId(chatId));
     if (!wamid) {
       this.logger.info('[whatsapp-business] markChatAsRead skipped — no inbound wamid remembered for chat', {
         instanceId,
