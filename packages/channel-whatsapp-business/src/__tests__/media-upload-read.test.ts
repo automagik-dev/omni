@@ -140,11 +140,15 @@ const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 describe('WhatsAppBusinessPlugin media from file bytes (#1278)', () => {
   let plugin: WhatsAppBusinessPlugin;
+  let eventBus: MockEventBus;
   let fetchSpy: ReturnType<typeof spyOn>;
+
+  const sentEvent = () => eventBus.published.find((e) => e.type === 'message.sent')?.payload as Record<string, unknown>;
 
   beforeEach(async () => {
     plugin = new WhatsAppBusinessPlugin();
-    await plugin.initialize(createContext(new MockEventBus()));
+    eventBus = new MockEventBus();
+    await plugin.initialize(createContext(eventBus));
     fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValueOnce(okResponse({ id: PHONE_NUMBER_ID }));
     await plugin.connect(instanceId, {
       instanceId,
@@ -222,8 +226,53 @@ describe('WhatsAppBusinessPlugin media from file bytes (#1278)', () => {
     });
 
     expect(result.success).toBe(false);
-    expect(result.error).toContain('public URL or file bytes');
+    expect(result.error).toContain('public URL or non-empty file bytes');
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  test('rejects base64 that decodes to no bytes, without uploading an empty file', async () => {
+    const result = await plugin.sendMessage(instanceId, {
+      to: CUSTOMER,
+      content: { type: 'image', mimeType: 'image/png' },
+      metadata: { base64: '!!!!' },
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('non-empty file bytes');
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  test('message.sent keeps the media details and the uploaded media id of a base64 send', async () => {
+    fetchSpy.mockResolvedValueOnce(okResponse({ id: 'media-doc' })).mockResolvedValueOnce(sentResponse());
+
+    await plugin.sendMessage(instanceId, {
+      to: CUSTOMER,
+      content: { type: 'document', mimeType: 'application/pdf', filename: 'boleto.pdf', caption: 'Seu boleto' },
+      metadata: { base64: Buffer.from('%PDF-1.4').toString('base64') },
+    });
+
+    const sent = sentEvent();
+    expect(sent.content).toMatchObject({
+      type: 'document',
+      text: 'Seu boleto',
+      caption: 'Seu boleto',
+      mimeType: 'application/pdf',
+      filename: 'boleto.pdf',
+    });
+    expect(sent.rawPayload).toEqual({ mediaSource: 'meta-upload', metaMediaId: 'media-doc' });
+  });
+
+  test('message.sent of a URL send carries the URL and no upload reference', async () => {
+    fetchSpy.mockResolvedValueOnce(sentResponse());
+
+    await plugin.sendMessage(instanceId, {
+      to: CUSTOMER,
+      content: { type: 'image', mimeType: 'image/jpeg', mediaUrl: 'https://cdn.example.com/a.jpg' },
+    });
+
+    const sent = sentEvent();
+    expect(sent.content).toMatchObject({ mediaUrl: 'https://cdn.example.com/a.jpg', mimeType: 'image/jpeg' });
+    expect(sent.rawPayload).toBeUndefined();
   });
 });
 
