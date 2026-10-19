@@ -404,6 +404,27 @@ async function getReplyContext(
 }
 
 /**
+ * Reply context for a send that quotes `replyTo`. `replyToKey` is a caller hint
+ * used ONLY when no stored row was found (persistence lag): it fills the
+ * fallback quoted key's fromMe/participant. A stored row always wins.
+ */
+async function resolveReplyMetadata(
+  services: Services,
+  instanceId: string,
+  chatExternalId: string,
+  replyToId: string,
+  replyToKey: ReplyToKey | undefined,
+): Promise<Record<string, unknown>> {
+  const replyContext = await getReplyContext(services, instanceId, chatExternalId, replyToId);
+  if (!replyToKey || 'replyToFromMe' in replyContext) return replyContext;
+  return {
+    ...replyContext,
+    replyToFromMe: replyToKey.fromMe,
+    ...(replyToKey.participant ? { replyToParticipant: replyToKey.participant } : {}),
+  };
+}
+
+/**
  * Check if an API key has access to a specific instance.
  * Throws FORBIDDEN error if access is denied.
  */
@@ -637,6 +658,15 @@ function resolveOutboundPacing(
 function outboundPacingMetadata(pacing: OutboundPacing): { outboundPacing?: 'immediate' } {
   return pacing === 'immediate' ? { outboundPacing: 'immediate' } : {};
 }
+// Quoted-key hint for a reply whose target row is not stored yet (persistence lag)
+const replyToKeySchema = z.object({
+  fromMe: z.boolean().describe('Whether the quoted message was sent by this instance'),
+  participant: z.string().optional().describe('Sender JID of the quoted message (groups)'),
+});
+type ReplyToKey = z.infer<typeof replyToKeySchema>;
+const replyToKeyField = replyToKeySchema
+  .optional()
+  .describe('Quoted key used only when replyTo is set and the replied-to message is not stored');
 
 // Send text message schema
 const sendTextSchema = z.object({
@@ -680,6 +710,7 @@ const sendTextSchema = z.object({
     .describe('Ask the user to share their location (WhatsApp Cloud: native "Send location" button under the text)'),
   sentBy: sentByField,
   pacing: pacingField,
+  replyToKey: replyToKeyField,
 });
 
 // Send media schema
@@ -699,6 +730,8 @@ const sendMediaSchema = z.object({
   threadId: z.string().optional().describe('Thread/topic ID (e.g. Telegram forum topic)'),
   sentBy: sentByField,
   pacing: pacingField,
+  replyTo: z.string().optional().describe('Message ID to reply to'),
+  replyToKey: replyToKeyField,
 });
 
 function normalizeSendMediaMimeType(data: z.infer<typeof sendMediaSchema>): string {
@@ -761,13 +794,67 @@ function buildSendMediaMetadata(data: z.infer<typeof sendMediaSchema>): Record<s
 }
 
 // Send reaction schema
-const sendReactionSchema = z.object({
+const sendReactionObjectSchema = z.object({
   instanceId: z.string().uuid().describe('Instance ID'),
   to: z.string().min(1).describe('Chat ID'),
   messageId: z.string().min(1).describe('Message ID to react to'),
   emoji: z.string().min(1).describe('Emoji to react with'),
   pacing: pacingField,
+  remove: z
+    .boolean()
+    .optional()
+    .describe('Remove this instance reaction from the message; emoji may then be omitted and is ignored'),
+  targetKey: z
+    .object({
+      fromMe: z.boolean().describe('Whether the target message was sent by this instance'),
+      participant: z.string().optional().describe('Sender JID of the target message (groups)'),
+    })
+    .optional()
+    .describe('Overrides the target key fromMe/participant otherwise read from the stored message'),
 });
+
+/** Stands in for `emoji` on a `remove: true` request; the route never sends it. */
+const REACTION_REMOVAL_PLACEHOLDER = 'remove';
+
+/**
+ * `remove: true` is the only way to remove a reaction: it fills `emoji` with a
+ * placeholder before validation, so the emoji may be omitted or hold anything.
+ * Every other body is validated exactly as before (`emoji: ''` stays a 400).
+ */
+const sendReactionSchema = z.preprocess(
+  (input) =>
+    typeof input === 'object' && input !== null && (input as { remove?: unknown }).remove === true
+      ? { ...input, emoji: REACTION_REMOVAL_PLACEHOLDER }
+      : input,
+  sendReactionObjectSchema,
+);
+
+/**
+ * Channels whose outbound reaction sender treats an empty emoji as removal:
+ * Baileys (channel-whatsapp/src/senders/reaction.ts), Meta Cloud
+ * (channel-whatsapp-business/src/senders/reaction.ts) and Hermes
+ * (channel-hermes/src/senders/reaction.ts). Discord and Slack reject an empty
+ * emoji and Telegram silently ignores it, so `remove: true` is refused there.
+ * A route-local list rather than a capability flag: plugin capabilities are
+ * serialized as-is by GET /instances/supported-channels.
+ */
+const REACTION_REMOVAL_CHANNELS: ReadonlySet<string> = new Set(['whatsapp-baileys', 'whatsapp-business', 'hermes']);
+
+/**
+ * Caller-supplied target key replaces whatever resolveReactionTarget derived
+ * (stored row or plugin default) for fromMe and targetParticipant.
+ */
+function applyReactionTargetKey(
+  metadata: Record<string, unknown>,
+  targetKey: { fromMe: boolean; participant?: string },
+): Record<string, unknown> {
+  const { targetParticipant: _replaced, ...rest } = metadata;
+  return {
+    ...rest,
+    fromMe: targetKey.fromMe,
+    ...(targetKey.participant ? { targetParticipant: targetKey.participant } : {}),
+  };
+}
 
 // Send sticker schema
 const sendStickerSchema = z.object({
@@ -1277,7 +1364,8 @@ messagesRoutes.post('/send', async (c) => {
     return c.json({ error: { code: 'VALIDATION_ERROR', issues: parsed.error.issues } }, 400);
   }
 
-  const { instanceId, to, replyTo, threadId, mentions, buttons, list, requestLocation, sentBy, pacing } = parsed.data;
+  const { instanceId, to, replyTo, threadId, mentions, buttons, list, requestLocation, sentBy, pacing, replyToKey } =
+    parsed.data;
   // Strip internal routing headers and agent directives before sending (GH #300)
   const text = sanitizeOutboundText(parsed.data.text);
   if (!text) {
@@ -1303,7 +1391,7 @@ messagesRoutes.post('/send', async (c) => {
   const resolvedTo = await resolveRecipient(to, instance.channel, services);
 
   // Get reply context if replying
-  const replyContext = replyTo ? await getReplyContext(services, instanceId, resolvedTo, replyTo) : {};
+  const replyContext = replyTo ? await resolveReplyMetadata(services, instanceId, resolvedTo, replyTo, replyToKey) : {};
 
   const senderAgentId = resolveSentByAgentId(sentBy, instance);
 
@@ -1425,6 +1513,11 @@ messagesRoutes.post('/send/media', zValidator('json', sendMediaSchema), async (c
 
   const senderAgentId = resolveSentByAgentId(data.sentBy, instance);
 
+  // Get reply context if replying (same path as the text send)
+  const replyContext = data.replyTo
+    ? await resolveReplyMetadata(services, data.instanceId, resolvedTo, data.replyTo, data.replyToKey)
+    : undefined;
+
   // Build outgoing message
   const outgoingMessage: OutgoingMessage = {
     to: resolvedTo,
@@ -1436,9 +1529,11 @@ messagesRoutes.post('/send/media', zValidator('json', sendMediaSchema), async (c
       filename: data.filename,
       mimeType: mediaMimeType,
     } as OutgoingContent,
+    ...(data.replyTo ? { replyTo: data.replyTo } : {}),
     metadata: {
       ...buildSendMediaMetadata(data),
       ...(senderAgentId ? { senderAgentId } : {}),
+      ...replyContext,
       ...outboundPacingMetadata(effectivePacing),
     },
   };
@@ -1497,7 +1592,7 @@ messagesRoutes.post('/send/media', zValidator('json', sendMediaSchema), async (c
  * POST /messages/send/reaction - Send reaction
  */
 messagesRoutes.post('/send/reaction', zValidator('json', sendReactionSchema), async (c) => {
-  const { instanceId, to, messageId, emoji, pacing } = c.req.valid('json');
+  const { instanceId, to, messageId, emoji, pacing, remove, targetKey } = c.req.valid('json');
   const services = c.get('services');
   const channelRegistry = c.get('channelRegistry');
   checkInstanceAccess(c.get('apiKey'), instanceId);
@@ -1536,6 +1631,15 @@ messagesRoutes.post('/send/reaction', zValidator('json', sendReactionSchema), as
 
   const effectivePacing = resolveOutboundPacing(pacing, instance);
 
+  if (remove === true && !REACTION_REMOVAL_CHANNELS.has(instance.channel)) {
+    throw new OmniError({
+      code: ERROR_CODES.CAPABILITY_NOT_SUPPORTED,
+      message: `Channel ${instance.channel} does not support removing reactions`,
+      context: { channelType: instance.channel },
+      recoverable: false,
+    });
+  }
+
   // Resolve recipient (handles person ID to platform ID resolution)
   // Note: For reactions, 'to' is typically a chat ID, but we support person ID resolution too
   const resolvedTo = await resolveRecipient(to, instance.channel, services);
@@ -1553,14 +1657,18 @@ messagesRoutes.post('/send/reaction', zValidator('json', sendReactionSchema), as
 
   // Build outgoing message for reaction. When the target is unknown, omit
   // metadata so the plugin applies its own fallback (defaults to true for Baileys).
+  // `remove: true` sends an empty emoji, which these channels' senders treat as removal.
   const outgoingMessage: OutgoingMessage = {
     to: resolvedTo,
     content: {
       type: 'reaction',
-      emoji,
+      emoji: remove === true ? '' : emoji,
       targetMessageId,
     } as OutgoingContent,
-    metadata: effectivePacing === 'immediate' ? { ...reactionMetadata, outboundPacing: 'immediate' } : reactionMetadata,
+    metadata: {
+      ...(targetKey ? applyReactionTargetKey(reactionMetadata, targetKey) : reactionMetadata),
+      ...outboundPacingMetadata(effectivePacing),
+    },
   };
 
   // Send via channel plugin
@@ -2300,6 +2408,8 @@ const sendTtsSchema = z.object({
     ),
   sentBy: sentByField,
   pacing: pacingField,
+  replyTo: z.string().optional().describe('Message ID to reply to'),
+  replyToKey: replyToKeyField,
 });
 
 /**
@@ -2355,6 +2465,11 @@ messagesRoutes.post('/send/tts', zValidator('json', sendTtsSchema), async (c) =>
 
   const senderAgentId = resolveSentByAgentId(data.sentBy, instance);
 
+  // Get reply context if replying (same path as the text send)
+  const replyContext = data.replyTo
+    ? await resolveReplyMetadata(services, data.instanceId, resolvedTo, data.replyTo, data.replyToKey)
+    : undefined;
+
   // Build outgoing voice note message
   const outgoingMessage: OutgoingMessage = {
     to: resolvedTo,
@@ -2362,6 +2477,7 @@ messagesRoutes.post('/send/tts', zValidator('json', sendTtsSchema), async (c) =>
       type: 'audio',
       mimeType: ttsResult.mimeType,
     } as OutgoingContent,
+    ...(data.replyTo ? { replyTo: data.replyTo } : {}),
     metadata: {
       // Same dual shape as buildSendMediaMetadata: buffer for WhatsApp,
       // base64 string for Slack/Discord/Telegram.
@@ -2370,6 +2486,7 @@ messagesRoutes.post('/send/tts', zValidator('json', sendTtsSchema), async (c) =>
       ptt: true,
       ...(senderAgentId ? { senderAgentId } : {}),
       ...outboundPacingMetadata(pacing),
+      ...replyContext,
     },
   };
 

@@ -8,7 +8,7 @@
 import { describe, expect, mock, test } from 'bun:test';
 import type { CacheProvider, EventBus } from '@omni/core';
 import type { AccessMode, AccessRule, Database } from '@omni/db';
-import { AccessService } from '../access';
+import { AccessService, type CheckAccessResult, accessFallbackCandidates, runAccessFallbackChain } from '../access';
 
 // ============================================================================
 // Helpers
@@ -527,5 +527,148 @@ describe('AccessService', () => {
       const disabled = await service.checkAccess(createInstance('disabled'), 'u', 'w');
       expect(disabled.mode).toBe('disabled');
     });
+  });
+});
+
+// ============================================================================
+// Pure evaluation (opt-in ingest access journal, 0083)
+// ============================================================================
+
+describe('AccessService.evaluateAccess', () => {
+  const cases: { name: string; mode: AccessMode; rules: AccessRule[]; user: string }[] = [
+    { name: 'blocklist, no rule', mode: 'blocklist', rules: [], user: 'u1' },
+    {
+      name: 'blocklist, deny rule',
+      mode: 'blocklist',
+      rules: [createRule({ ruleType: 'deny', platformUserId: 'u1' })],
+      user: 'u1',
+    },
+    { name: 'allowlist, no rule', mode: 'allowlist', rules: [], user: 'u1' },
+    {
+      name: 'allowlist, allow rule',
+      mode: 'allowlist',
+      rules: [createRule({ ruleType: 'allow', platformUserId: 'u1' })],
+      user: 'u1',
+    },
+    {
+      name: 'allowlist, phone pattern',
+      mode: 'allowlist',
+      rules: [createRule({ ruleType: 'allow', phonePattern: '+55*' })],
+      user: '5511999000001',
+    },
+  ];
+
+  test('evaluateAccess returns the same decision as checkAccess and publishes no access event', async () => {
+    for (const c of cases) {
+      // Separate services and caches: a shared cache would let evaluateAccess
+      // read checkAccess's cached result and prove nothing.
+      const checkBus = createMockEventBus();
+      const checked = await new AccessService(createMockDb(c.rules), checkBus, createMockCache()).checkAccess(
+        createInstance(c.mode),
+        c.user,
+        'whatsapp',
+      );
+
+      const evalBus = createMockEventBus();
+      const evalCache = createMockCache();
+      const evaluated = await new AccessService(createMockDb(c.rules), evalBus, evalCache).evaluateAccess(
+        createInstance(c.mode),
+        c.user,
+        'whatsapp',
+      );
+
+      expect({ case: c.name, ...evaluated }).toEqual({ case: c.name, ...checked });
+      expect(evalBus.publish).not.toHaveBeenCalled();
+      expect(evalCache.set).not.toHaveBeenCalled();
+    }
+  });
+
+  test('disabled mode short-circuits without a DB read', async () => {
+    const db = createMockDb([createRule({ ruleType: 'deny', platformUserId: 'u1' })]);
+    const result = await new AccessService(db, null).evaluateAccess(createInstance('disabled'), 'u1', 'whatsapp');
+    expect(result).toEqual({ allowed: true, reason: 'Access control disabled', mode: 'disabled' });
+    expect(db.select).not.toHaveBeenCalled();
+  });
+
+  test('reads the checkAccess cache entry (same key) and never writes it', async () => {
+    const cache = createMockCache();
+    const db = createMockDb([]);
+    const checker = new AccessService(db, null, cache);
+    const cached = await checker.checkAccess(createInstance('allowlist'), 'u1', 'whatsapp');
+    expect(cache.set).toHaveBeenCalledTimes(1);
+
+    const evaluator = new AccessService(
+      createMockDb([createRule({ ruleType: 'allow', platformUserId: 'u1' })]),
+      null,
+      cache,
+    );
+    const evaluated = await evaluator.evaluateAccess(createInstance('allowlist'), 'u1', 'whatsapp');
+    expect(evaluated).toEqual(cached);
+    expect(cache.set).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('runAccessFallbackChain', () => {
+  const denied: CheckAccessResult = { allowed: false, reason: 'no', mode: 'allowlist' };
+  const allowed: CheckAccessResult = { allowed: true, reason: 'yes', mode: 'allowlist' };
+
+  test('tries primary, then participantAlt, then resolvedSenderPhone, in order', async () => {
+    const calls: string[] = [];
+    const fallbacks: string[] = [];
+    const result = await runAccessFallbackChain(
+      { primaryId: 'lid-1', participantAlt: '5511999000001', resolvedSenderPhone: '5511999000002' },
+      async (id) => {
+        calls.push(id);
+        return denied;
+      },
+      (attempt, id) => fallbacks.push(`${attempt}:${id}`),
+    );
+    expect(calls).toEqual(['lid-1', '5511999000001', '5511999000002']);
+    expect(fallbacks).toEqual(['participantAlt:5511999000001', 'resolvedSenderPhone:5511999000002']);
+    expect(result).toBe(denied);
+  });
+
+  test('stops at the first allowed attempt', async () => {
+    const calls: string[] = [];
+    const result = await runAccessFallbackChain(
+      { primaryId: 'lid-1', participantAlt: '5511999000001', resolvedSenderPhone: '5511999000002' },
+      async (id) => {
+        calls.push(id);
+        return id === '5511999000001' ? allowed : denied;
+      },
+    );
+    expect(calls).toEqual(['lid-1', '5511999000001']);
+    expect(result).toBe(allowed);
+
+    const primaryOnly: string[] = [];
+    await runAccessFallbackChain({ primaryId: 'p', participantAlt: '5511999000001' }, async (id) => {
+      primaryOnly.push(id);
+      return allowed;
+    });
+    expect(primaryOnly).toEqual(['p']);
+  });
+
+  test('skips fallbacks that repeat an earlier id', async () => {
+    const calls: string[] = [];
+    await runAccessFallbackChain(
+      { primaryId: '5511999000001', participantAlt: '5511999000001', resolvedSenderPhone: '5511999000001' },
+      async (id) => {
+        calls.push(id);
+        return denied;
+      },
+    );
+    expect(calls).toEqual(['5511999000001']);
+  });
+
+  test('accessFallbackCandidates keeps only phone-shaped fallbacks', () => {
+    expect(
+      accessFallbackCandidates({
+        from: '100000001',
+        rawPayload: { key: { participantAlt: '5511999000001@s.whatsapp.net' }, resolvedSenderPhone: '5511999000002' },
+      }),
+    ).toEqual({ primaryId: '100000001', participantAlt: '5511999000001', resolvedSenderPhone: '5511999000002' });
+    expect(
+      accessFallbackCandidates({ rawPayload: { key: { participantAlt: 'abc@lid' }, resolvedSenderPhone: '12' } }),
+    ).toEqual({ primaryId: '', participantAlt: undefined, resolvedSenderPhone: undefined });
   });
 });

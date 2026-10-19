@@ -15,6 +15,14 @@
  */
 
 import { type PreviewButton, TemplatePreview } from '@/components/templates/TemplatePreview';
+import {
+  type HeaderMode,
+  type TemplateButtonDraft,
+  type TemplateRow,
+  buildTemplateComponents,
+  extractVariables,
+  variablesError,
+} from '@/components/templates/template-payload';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
@@ -44,18 +52,9 @@ const LANGUAGES = [
   { code: 'de', label: 'German' },
 ];
 
-// Header format selector — IMAGE-only for now (the simplest media path); the
-// wish allows VIDEO/DOCUMENT/LOCATION but those require an extra upload-handle
-// step we keep out of v1.
-type HeaderMode = 'NONE' | 'TEXT' | 'IMAGE';
-
-interface TemplateButtonDraft {
-  type: 'QUICK_REPLY' | 'URL' | 'PHONE_NUMBER' | 'COPY_CODE';
-  text: string;
-  url?: string;
-  phone_number?: string;
-  example?: string;
-}
+// Header format selector (`HeaderMode`) — IMAGE-only for now (the simplest
+// media path); the wish allows VIDEO/DOCUMENT/LOCATION but those require an
+// extra upload-handle step we keep out of v1.
 
 // ---------------------------------------------------------------------------
 // Props
@@ -63,7 +62,8 @@ interface TemplateButtonDraft {
 
 export interface TemplateBuilderProps {
   instanceId: string;
-  onCreated: () => void;
+  /** Called with the created row; its `status` is what Meta answered. */
+  onCreated: (template: TemplateRow) => void;
   onCancel: () => void;
 }
 
@@ -76,9 +76,11 @@ export function TemplateBuilder({ instanceId, onCreated, onCancel }: TemplateBui
 
   const [headerMode, setHeaderMode] = useState<HeaderMode>('NONE');
   const [headerText, setHeaderText] = useState('');
+  const [headerSample, setHeaderSample] = useState('');
   const [headerImageHandle, setHeaderImageHandle] = useState('');
 
   const [body, setBody] = useState('');
+  const [bodySamples, setBodySamples] = useState<Record<number, string>>({});
   const [footer, setFooter] = useState('');
   const [buttons, setButtons] = useState<TemplateButtonDraft[]>([]);
 
@@ -101,6 +103,15 @@ export function TemplateBuilder({ instanceId, onCreated, onCancel }: TemplateBui
     return null;
   }, [body]);
 
+  // Meta rejects variables without sample values (INVALID_FORMAT, #1276).
+  const bodyVariables = useMemo(() => extractVariables(body), [body]);
+  const bodyVariablesError = useMemo(() => variablesError(body, bodySamples), [body, bodySamples]);
+  const headerHasVariable = headerMode === 'TEXT' && extractVariables(headerText).length > 0;
+  const headerVariablesError = useMemo(
+    () => (headerMode === 'TEXT' ? variablesError(headerText, { 1: headerSample }, 1) : null),
+    [headerMode, headerSample, headerText],
+  );
+
   const buttonErrors = useMemo<(string | null)[]>(() => {
     return buttons.map((btn) => {
       if (!btn.text && btn.type !== 'COPY_CODE') return 'Button text is required';
@@ -110,7 +121,8 @@ export function TemplateBuilder({ instanceId, onCreated, onCancel }: TemplateBui
     });
   }, [buttons]);
 
-  const isValid = !nameError && !bodyError && buttonErrors.every((e) => !e);
+  const isValid =
+    !nameError && !bodyError && !bodyVariablesError && !headerVariablesError && buttonErrors.every((e) => !e);
 
   // -------------------------------------------------------------------------
   // Mutators
@@ -142,28 +154,20 @@ export function TemplateBuilder({ instanceId, onCreated, onCancel }: TemplateBui
   // Build payload + submit
   // -------------------------------------------------------------------------
 
-  const buildComponents = useCallback(() => {
-    type Component =
-      | { type: 'HEADER'; format: 'TEXT' | 'IMAGE'; text?: string; example?: { header_handle?: string[] } }
-      | { type: 'BODY'; text: string }
-      | { type: 'FOOTER'; text: string }
-      | { type: 'BUTTONS'; buttons: TemplateButtonDraft[] };
-
-    const components: Component[] = [];
-    if (headerMode === 'TEXT' && headerText) {
-      components.push({ type: 'HEADER', format: 'TEXT', text: headerText });
-    } else if (headerMode === 'IMAGE' && headerImageHandle) {
-      components.push({
-        type: 'HEADER',
-        format: 'IMAGE',
-        example: { header_handle: [headerImageHandle] },
-      });
-    }
-    components.push({ type: 'BODY', text: body });
-    if (footer) components.push({ type: 'FOOTER', text: footer });
-    if (buttons.length > 0) components.push({ type: 'BUTTONS', buttons });
-    return components;
-  }, [body, buttons, footer, headerImageHandle, headerMode, headerText]);
+  const buildComponents = useCallback(
+    () =>
+      buildTemplateComponents({
+        headerMode,
+        headerText,
+        headerSample,
+        headerImageHandle,
+        body,
+        bodySamples,
+        footer,
+        buttons,
+      }),
+    [body, bodySamples, buttons, footer, headerImageHandle, headerMode, headerSample, headerText],
+  );
 
   const handleSubmit = useCallback(async () => {
     if (!isValid || submitting) return;
@@ -184,7 +188,8 @@ export function TemplateBuilder({ instanceId, onCreated, onCancel }: TemplateBui
         const text = await res.text();
         throw new Error(text || `Create failed: ${res.status}`);
       }
-      onCreated();
+      const { data } = (await res.json()) as { data: TemplateRow };
+      onCreated(data);
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : 'Failed to create template.');
     } finally {
@@ -300,6 +305,15 @@ export function TemplateBuilder({ instanceId, onCreated, onCancel }: TemplateBui
               <p className="text-right text-xs text-muted-foreground">
                 {headerText.length}/{MAX_HEADER_CHARS}
               </p>
+              {headerHasVariable && (
+                <Input
+                  aria-label="Sample for header {{1}}"
+                  value={headerSample}
+                  onChange={(e) => setHeaderSample(e.target.value)}
+                  placeholder="Sample for {{1}}"
+                />
+              )}
+              {headerVariablesError && <p className="text-xs text-destructive">{headerVariablesError}</p>}
             </div>
           )}
 
@@ -339,6 +353,25 @@ export function TemplateBuilder({ instanceId, onCreated, onCancel }: TemplateBui
               {body.length}/{MAX_BODY_CHARS}
             </span>
           </div>
+          {bodyVariables.length > 0 && (
+            <div className="space-y-2 rounded-md border bg-card/40 p-3">
+              <p className="text-xs text-muted-foreground">
+                Sample values Meta reviews in place of each variable (required).
+              </p>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {bodyVariables.map((n) => (
+                  <Input
+                    key={n}
+                    aria-label={`Sample for {{${n}}}`}
+                    value={bodySamples[n] ?? ''}
+                    onChange={(e) => setBodySamples((prev) => ({ ...prev, [n]: e.target.value }))}
+                    placeholder={`Sample for {{${n}}}`}
+                  />
+                ))}
+              </div>
+              {bodyVariablesError && <p className="text-xs text-destructive">{bodyVariablesError}</p>}
+            </div>
+          )}
         </div>
 
         {/* Footer */}
