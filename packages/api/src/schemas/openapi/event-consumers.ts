@@ -39,6 +39,11 @@ export const DurableConsumerSchema = z.object({
   shared: z.boolean().openapi({
     description: 'true = competing consumers (pullers on this name split the stream); false = own cursor (fan-out)',
   }),
+  waitForReady: z.boolean().openapi({
+    description:
+      'true = opt-in journal readiness gate: claimed-but-unfilled rows are held (not delivered, cursor not moved ' +
+      "past them) until filled or older than the settle window; false = today's behaviour",
+  }),
   head: z.number().int().openapi({ description: 'Highest journal_seq currently in the journal' }),
   lag: z.number().int().openapi({ description: 'head - cursor (all journal rows past the cursor, not only matches)' }),
   caughtUp: z
@@ -82,6 +87,15 @@ export const CreateConsumerSchema = z.object({
         'Competing consumers (#1188). false (default) = fan-out: every consumer name has its own cursor and sees every ' +
         'event. true = N pullers on THIS name split the stream: each pull leases a page to one puller, ack(leaseId) ' +
         'releases it, an unacked lease is redelivered after leaseMs (at-least-once).',
+    }),
+  waitForReady: z
+    .boolean()
+    .optional()
+    .openapi({
+      description:
+        "Opt-in journal readiness gate. false (default) = today's behaviour: a row claimed at ingress but not yet " +
+        'filled is delivered as it is. true = pull and shared claims stop before such a row (journalReady false) ' +
+        'until it is filled or older than the settle window (EVENT_CONSUMER_SETTLE_MS, default 5000 ms).',
     }),
 });
 

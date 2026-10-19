@@ -104,6 +104,17 @@ export const CloseContactConfigSchema = z
   })
   .strict();
 
+// Outbound pacing (mirrors createInstanceSchema in routes/v2/instances.ts)
+const OUTBOUND_PACING_DESCRIPTION =
+  "Outbound pacing (WhatsApp Baileys): 'humanized' keeps the anti-ban delay and typing simulation before each send; 'immediate' skips both. Send requests may ask for 'humanized' with `pacing`; asking for 'immediate' needs outboundPacingOverride on a humanized instance";
+const OUTBOUND_PACING_OVERRIDE_DESCRIPTION =
+  "Let send requests choose `pacing: 'immediate'` on a humanized instance. Default false: such requests are refused with 403. Setting it to true needs a full-access ('*') key; any other key gets 403";
+
+const PacingOverrideForbiddenResponse = {
+  description: "Setting outboundPacingOverride to true requires a full-access ('*') API key",
+  content: { 'application/json': { schema: ErrorSchema } },
+};
+
 /**
  * Instance response schema
  */
@@ -120,6 +131,8 @@ export const InstanceSchema = z.object({
       "WhatsApp (Baileys) pairing identity: 'desktop' (macOS Desktop + group history) or 'web' (Ubuntu/Chrome)",
   }),
   syncFullHistory: z.boolean().openapi({ description: 'WhatsApp (Baileys): request full history on connect' }),
+  outboundPacing: z.enum(['humanized', 'immediate']).optional().openapi({ description: OUTBOUND_PACING_DESCRIPTION }),
+  outboundPacingOverride: z.boolean().optional().openapi({ description: OUTBOUND_PACING_OVERRIDE_DESCRIPTION }),
   ownerIdentifier: z.string().nullable().openapi({ description: 'Owner identifier' }),
   agentId: z.string().uuid().nullable().optional().openapi({ description: 'Agent UUID (agents table)' }),
   agentProviderId: z
@@ -170,6 +183,11 @@ export const CreateInstanceSchema = z.object({
     .boolean()
     .default(false)
     .openapi({ description: 'WhatsApp (Baileys): request full message history on connect (default: false)' }),
+  outboundPacing: z
+    .enum(['humanized', 'immediate'])
+    .default('humanized')
+    .openapi({ description: OUTBOUND_PACING_DESCRIPTION }),
+  outboundPacingOverride: z.boolean().default(false).openapi({ description: OUTBOUND_PACING_OVERRIDE_DESCRIPTION }),
   gupshupHandoffOptions: GupshupHandoffOptionsSchema.nullable()
     .optional()
     .openapi({
@@ -499,6 +517,7 @@ export function registerInstanceSchemas(registry: OpenAPIRegistry): void {
           },
         },
       },
+      403: PacingOverrideForbiddenResponse,
       400: {
         description: 'Validation error',
         content: {
@@ -534,6 +553,7 @@ export function registerInstanceSchemas(registry: OpenAPIRegistry): void {
           },
         },
       },
+      403: PacingOverrideForbiddenResponse,
       404: {
         description: 'Instance not found',
         content: {
