@@ -9,9 +9,9 @@ import { createSource } from './sources.js'
 const THEME_KEYS = ['bg', 'sidebar', 'bubble', 'card', 'text', 'user', 'userText', 'accent']
 const THEMES = {
   deepseek: {
-    label: 'DeepSeek',
-    light: { bg: '#fcfcfc', sidebar: '#f7f7f7', bubble: '#eeeeee', card: '#ffffff', text: '#141414', user: '#070707', userText: '#fcfcfc', accent: '#4d6bfe' },
-    dark: { bg: '#141414', sidebar: '#1b1b1b', bubble: '#262626', card: '#1f1f1f', text: '#f2f2f2', user: '#f2f2f2', userText: '#141414', accent: '#5b7bff' },
+    label: 'Deep ocean',
+    light: { bg: '#f3fbfa', sidebar: '#e8f6f3', bubble: '#dcefea', card: '#ffffff', text: '#0c2630', user: '#0b3d45', userText: '#f3fbfa', accent: '#0f9d8f' },
+    dark: { bg: '#0a1820', sidebar: '#0e212b', bubble: '#163342', card: '#112a36', text: '#e4f4f2', user: '#2dd4bf', userText: '#0a1820', accent: '#2dd4bf' },
   },
   mono: {
     label: 'Mono',
