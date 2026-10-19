@@ -691,6 +691,94 @@ export function extractQuotedContext(msg: WAMessage): QuotedContext | undefined 
   };
 }
 
+/** Message types whose `contextInfo` can carry a quote (stanzaId + quotedMessage). */
+const QUOTE_CARRIER_KEYS = [
+  'extendedTextMessage',
+  'imageMessage',
+  'videoMessage',
+  'documentMessage',
+  'audioMessage',
+  'stickerMessage',
+  'ptvMessage',
+  'locationMessage',
+  'contactMessage',
+  'pollCreationMessage',
+  'pollCreationMessageV2',
+  'pollCreationMessageV3',
+  'pollCreationMessageV5',
+] as const;
+
+/** Typed quote of the message an inbound message replies to (additive to replyToId). */
+export interface InboundReplyTo {
+  externalId: string;
+  chatId: string;
+  participant?: string;
+  fromMe: boolean;
+  type: string;
+  isVoiceNote?: boolean;
+  text?: string;
+}
+
+function findQuoteContextInfo(message: MessageContent): proto.IContextInfo | undefined {
+  const record = message as Record<string, { contextInfo?: proto.IContextInfo | null } | null | undefined>;
+  for (const key of QUOTE_CARRIER_KEYS) {
+    const contextInfo = record[key]?.contextInfo;
+    if (contextInfo?.stanzaId) return contextInfo;
+  }
+  return undefined;
+}
+
+/**
+ * Build the typed `replyTo` of an inbound message: unwraps ephemeral/viewOnce/
+ * document-with-caption envelopes, then reads contextInfo from every quote
+ * carrier. `fromMe` is true only when the quoted participant is proven to be
+ * this instance's own account (phone JID or LID). Undefined when not a reply.
+ */
+export function extractInboundReplyTo(
+  plugin: Pick<WhatsAppPlugin, 'resolveSenderInstanceId'>,
+  instanceId: string,
+  chatId: string,
+  msg: WAMessage,
+): InboundReplyTo | undefined {
+  if (!msg.message) return undefined;
+  const contextInfo = findQuoteContextInfo(unwrapEnvelopes(msg.message));
+  if (!contextInfo?.stanzaId) return undefined;
+
+  const participant = contextInfo.participant || undefined;
+  const quoted = contextInfo.quotedMessage ? unwrapEnvelopes(contextInfo.quotedMessage) : undefined;
+  const content = quoted ? extractContent({ key: msg.key, message: quoted } as WAMessage) : null;
+  const text = content?.text || content?.caption || undefined;
+  return {
+    externalId: contextInfo.stanzaId,
+    chatId: contextInfo.remoteJid || chatId,
+    ...(participant ? { participant } : {}),
+    fromMe: participant ? plugin.resolveSenderInstanceId(instanceId, participant, false) === instanceId : false,
+    type: content?.type ?? 'unknown',
+    ...(quoted?.audioMessage ? { isVoiceNote: quoted.audioMessage.ptt === true } : {}),
+    ...(text ? { text } : {}),
+  };
+}
+
+/**
+ * Describe the reacted-to message relative to THIS line. Baileys' cleanMessage
+ * (normaliseKey) already rewrites a contact's reactionMessage.key to this
+ * line's perspective, and a reaction by this line is in it already, so in DMs
+ * key.fromMe is used as-is. In groups the target participant is resolved
+ * against this line's own ids (phone JID or LID).
+ */
+function buildReactionTarget(
+  plugin: Pick<WhatsAppPlugin, 'resolveSenderInstanceId'>,
+  instanceId: string,
+  key: WAMessageKey | null | undefined,
+): { fromMe: boolean; participant?: string } | undefined {
+  if (!key) return undefined;
+  const participant = key.participant || undefined;
+  if (participant) {
+    return { fromMe: plugin.resolveSenderInstanceId(instanceId, participant, false) === instanceId, participant };
+  }
+  return { fromMe: key.fromMe === true };
+}
+
 // Note: replaceMentionsWithNames removed - mention replacement now handled in
 // agent-dispatcher with database lookup for better reliability across API restarts
 
@@ -939,6 +1027,13 @@ async function handleSpecialMessage(
       content.emoji || '',
       content.targetMessageId || '',
       isFromMe(msg),
+      plugin.isInboundReplyContextEnabled(instanceId)
+        ? buildReactionTarget(
+            plugin,
+            instanceId,
+            msg.message ? unwrapEnvelopes(msg.message).reactionMessage?.key : undefined,
+          )
+        : undefined,
     );
     return true;
   }
@@ -1359,6 +1454,7 @@ export function setupMessageHandlers(
         reaction.text || '',
         messageId,
         reaction.key?.fromMe || false,
+        plugin.isInboundReplyContextEnabled(instanceId) ? buildReactionTarget(plugin, instanceId, key) : undefined,
       );
     }
   });

@@ -66,6 +66,62 @@ export class PairingRequestConsumedError extends Error {
   }
 }
 
+/** A phone-shaped platform id: 7 to 15 digits, no suffix. */
+const PHONE_SHAPED_ID = /^\d{7,15}$/;
+
+/** The sender ids the access fallback chain tries, in order. */
+export interface AccessFallbackCandidates {
+  /** The event's `from` (`''` when absent). */
+  primaryId: string;
+  /** Baileys LID addressing: `rawPayload.key.participantAlt` without its @suffix, when phone-shaped. */
+  participantAlt?: string;
+  /** channel-whatsapp's LID→phone resolution: `rawPayload.resolvedSenderPhone`, when phone-shaped. */
+  resolvedSenderPhone?: string;
+}
+
+/** Extract the fallback-chain candidates from an inbound message/reaction payload. */
+export function accessFallbackCandidates(payload: { from?: string; rawPayload?: unknown }): AccessFallbackCandidates {
+  const rawPayload = payload.rawPayload as Record<string, unknown> | undefined;
+  const rawKey = rawPayload?.key as Record<string, unknown> | undefined;
+  const rawParticipantAlt = (rawKey?.participantAlt as string)?.replace(/@.*$/, '');
+  const participantAlt = rawParticipantAlt && PHONE_SHAPED_ID.test(rawParticipantAlt) ? rawParticipantAlt : undefined;
+  const rawResolvedPhone = rawPayload?.resolvedSenderPhone as string | undefined;
+  const resolvedSenderPhone = rawResolvedPhone && PHONE_SHAPED_ID.test(rawResolvedPhone) ? rawResolvedPhone : undefined;
+  return { primaryId: payload.from ?? '', participantAlt, resolvedSenderPhone };
+}
+
+/**
+ * Run the access attempt chain against an injected check: the primary id
+ * first, then a phone-shaped participantAlt that differs from it, then a
+ * phone-shaped resolvedSenderPhone that differs from both. It moves to the
+ * next attempt only while the decision is denied. `onFallback` fires before
+ * each fallback attempt (the dispatcher logs there). The helper itself has no
+ * side effects — whether the check publishes is the caller's choice
+ * (`checkAccess` for the dispatcher, `evaluateAccess` for the ingest journal).
+ */
+export async function runAccessFallbackChain(
+  candidates: AccessFallbackCandidates,
+  check: (platformUserId: string) => Promise<CheckAccessResult>,
+  onFallback?: (attempt: 'participantAlt' | 'resolvedSenderPhone', platformUserId: string) => void,
+): Promise<CheckAccessResult> {
+  const { primaryId, participantAlt, resolvedSenderPhone } = candidates;
+  let result = await check(primaryId);
+  if (!result.allowed && participantAlt && participantAlt !== primaryId) {
+    onFallback?.('participantAlt', participantAlt);
+    result = await check(participantAlt);
+  }
+  if (
+    !result.allowed &&
+    resolvedSenderPhone &&
+    resolvedSenderPhone !== primaryId &&
+    resolvedSenderPhone !== participantAlt
+  ) {
+    onFallback?.('resolvedSenderPhone', resolvedSenderPhone);
+    result = await check(resolvedSenderPhone);
+  }
+  return result;
+}
+
 export class AccessService {
   /**
    * The handle every query in this service uses.
@@ -222,6 +278,36 @@ export class AccessService {
     await this.publishResult(instanceId, platformUserId, result);
 
     return result;
+  }
+
+  /**
+   * Pure access evaluation: the same decision `checkAccess` makes, with no
+   * side effects. Same disabled short-circuit, same cache key READ, same rule
+   * read (`runTenantWorkDb` + `evaluateMode`), but it never writes the cache
+   * and never publishes `access.allowed` / `access.denied`.
+   *
+   * Used by the opt-in ingest journal (OMNI_JOURNAL_ACCESS_DECISION): event
+   * persistence records the verdict on `omni_events.access_decision` and must
+   * not emit a second access event for a message the dispatcher also checks.
+   */
+  async evaluateAccess(
+    instance: { id: string; accessMode: AccessMode },
+    platformUserId: string,
+    _channel: string,
+    trustedTenantId?: string | null,
+  ): Promise<CheckAccessResult> {
+    const { id: instanceId, accessMode } = instance;
+
+    if (accessMode === 'disabled') {
+      return { allowed: true, reason: 'Access control disabled', mode: 'disabled' };
+    }
+
+    const cached = await this.cache?.get<CheckAccessResult>(CacheKeys.accessCheck(instanceId, platformUserId));
+    if (cached) return cached;
+
+    const rules = await runTenantWorkDb(this.pool, trustedTenantId, () => this.getApplicableRules(instanceId));
+    const matchingRule = rules.find((rule) => this.ruleMatches(rule, platformUserId));
+    return this.evaluateMode(accessMode, matchingRule);
   }
 
   // ==========================================================================

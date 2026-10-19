@@ -264,6 +264,14 @@ export async function uploadHeaderMedia(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
+ * Meta returns `rejected_reason: "NONE"` for templates that were not rejected;
+ * store that as no reason so the UI does not show "NONE" as one (#1276).
+ */
+function metaRejectionReason(reason: string | undefined): string | null {
+  return reason && reason !== 'NONE' ? reason : null;
+}
+
+/**
  * Reconciles local `whatsapp_templates` rows with the live Graph API state.
  *
  * Algorithm:
@@ -314,7 +322,7 @@ export async function syncTemplatesToDb(
             category: tmpl.category,
             status: tmpl.status,
             components: (tmpl.components ?? null) as WhatsAppTemplateComponent[] | null,
-            rejectionReason: tmpl.rejected_reason ?? null,
+            rejectionReason: metaRejectionReason(tmpl.rejected_reason),
             qualityScore: tmpl.quality_score?.score ?? null,
             updatedAt: now,
           })
@@ -330,7 +338,7 @@ export async function syncTemplatesToDb(
           category: tmpl.category,
           status: tmpl.status,
           components: (tmpl.components ?? null) as WhatsAppTemplateComponent[] | null,
-          rejectionReason: tmpl.rejected_reason ?? null,
+          rejectionReason: metaRejectionReason(tmpl.rejected_reason),
           qualityScore: tmpl.quality_score?.score ?? null,
         };
         await tx.insert(whatsappTemplates).values(insertRow);
