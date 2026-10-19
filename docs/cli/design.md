@@ -45,7 +45,7 @@ export OMNI_FORMAT=json
 Valid config keys: `apiUrl`, `apiKey`, `defaultInstance`, `format` (`human`|`json`),
 `showCommands`, `telemetry`, `updateChannel` (`latest`|`next`), and the local-runtime
 namespace `server.port`, `server.databaseUrl`, `server.dataDir`, `server.logLevel`,
-`server.nodeEnv`. There is no `baseUrl` key and no `OMNI_BASE_URL` variable.
+`server.nodeEnv`, `server.natsHost` (managed NATS bind address, default `127.0.0.1`). There is no `baseUrl` key and no `OMNI_BASE_URL` variable.
 
 ### JSON output envelope
 

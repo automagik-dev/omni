@@ -58,7 +58,7 @@ import {
   saveServerConfig,
 } from '../config.js';
 import { getHealthCheckUrl } from '../health.js';
-import { PM2_LOGROTATE_SETTINGS } from '../install-helpers.js';
+import { PM2_LOGROTATE_SETTINGS, natsBindDriftWarning } from '../install-helpers.js';
 import {
   type EmbeddedDumpResult,
   dumpEmbeddedDb,
@@ -100,7 +100,8 @@ export type CheckId =
   | 'cli-signing-key-for-locked-instances'
   | 'pgserve-canonical'
   | 'port-canonical-owner'
-  | 'embedded-data-orphaned';
+  | 'embedded-data-orphaned'
+  | 'nats-bind-address';
 
 export interface CheckResult {
   id: CheckId;
@@ -1241,6 +1242,19 @@ function checkPgserveCanonical(deps: DoctorDeps): CheckResult {
   };
 }
 
+/**
+ * WARN when omni-nats listens on a different address than `server.natsHost`.
+ * No fix handler on purpose: pm2 restart keeps the old address, and whether to
+ * recreate omni-nats (`omni stop && omni start`) is the user's call.
+ */
+async function checkNatsBindAddress(deps: DoctorDeps): Promise<CheckResult> {
+  const processes = await deps.getPm2Processes();
+  const nats = processes?.find((p) => p.name === PM2_PROCESSES.nats);
+  const drift = natsBindDriftWarning(nats?.pm2_env?.args, deps.loadState().serverConfig);
+  if (drift) return { id: 'nats-bind-address', level: 'WARN', detail: drift };
+  return { id: 'nats-bind-address', level: 'OK', detail: 'omni-nats bind address matches server.natsHost' };
+}
+
 // ============================================================================
 // MAIN
 // ============================================================================
@@ -1261,6 +1275,7 @@ async function runAllChecks(deps: DoctorDeps): Promise<CheckResult[]> {
     checkPgserveCanonical(deps),
     await checkPortCanonicalOwner(deps),
     await checkEmbeddedDataOrphaned(deps),
+    await checkNatsBindAddress(deps),
   ];
 }
 
