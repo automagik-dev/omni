@@ -50,7 +50,7 @@ import {
 } from './senders';
 import type { MetaSendResponse, WhatsAppBusinessConfig } from './types';
 import { MetaApiError, MetaErrorCode } from './utils/errors';
-import { toMetaPhone } from './utils/identity';
+import { toWaId } from './utils/identity';
 
 const META_MEDIA_TYPES: ReadonlySet<string> = new Set(['image', 'audio', 'video', 'document', 'sticker']);
 
@@ -286,14 +286,16 @@ export class WhatsAppBusinessPlugin extends BaseChannelPlugin {
       const messageId = response.messages?.[0]?.id;
       if (!messageId) {
         const err = 'Meta did not return a message id on successful send (malformed response)';
-        await this.emitMessageFailed({ instanceId, chatId: to, error: err, retryable: false });
+        await this.emitMessageFailed({ instanceId, chatId: toWaId(to), error: err, retryable: false });
         return { success: false, error: err, retryable: false, timestamp: Date.now() };
       }
 
       await this.emitMessageSent({
         instanceId,
         externalId: messageId,
-        chatId: to,
+        // Key the chat by the wa_id Meta resolved the recipient to — the same
+        // id inbound `from` and status `recipient_id` carry (#1279).
+        chatId: response.contacts?.[0]?.wa_id ?? toWaId(to),
         to,
         content: {
           type: content.type,
@@ -311,7 +313,7 @@ export class WhatsAppBusinessPlugin extends BaseChannelPlugin {
       const errorMessage = err instanceof Error ? err.message : String(err);
       const retryable = isMeta ? err.retryable : false;
 
-      await this.emitMessageFailed({ instanceId, chatId: to, error: errorMessage, retryable });
+      await this.emitMessageFailed({ instanceId, chatId: toWaId(to), error: errorMessage, retryable });
 
       return {
         success: false,
@@ -453,7 +455,7 @@ export class WhatsAppBusinessPlugin extends BaseChannelPlugin {
     const state = this.waInstances.get(instanceId);
     if (!state) return; // Contract: typing is best-effort; never throw from here.
 
-    const wamid = state.lastInboundWamid.get(toMetaPhone(chatId));
+    const wamid = state.lastInboundWamid.get(toWaId(chatId));
     if (!wamid) {
       this.logger.debug('[whatsapp-business] sendTyping skipped — no inbound wamid remembered for chat', {
         instanceId,
@@ -482,7 +484,7 @@ export class WhatsAppBusinessPlugin extends BaseChannelPlugin {
   private rememberInboundWamid(instanceId: string, from: string, wamid: string): void {
     const state = this.waInstances.get(instanceId);
     if (!state) return;
-    const chatKey = toMetaPhone(from);
+    const chatKey = toWaId(from);
     state.lastInboundWamid.delete(chatKey);
     state.lastInboundWamid.set(chatKey, wamid);
     if (state.lastInboundWamid.size > MAX_TYPING_WAMID_CHATS) {
