@@ -170,6 +170,23 @@ describe('WhatsAppPlugin.logout unlinks the device (#1275)', () => {
     expect(created[0]?.logout).not.toHaveBeenCalled();
     expect(await storage.keys(`auth:${ID}:`)).toEqual([]);
   });
+
+  it('still clears the stored auth when the stored creds cannot be read', async () => {
+    const storage = pairedStorage();
+    const readCreds = storage.get.bind(storage);
+    storage.get = async <T>(key: string): Promise<T | null> => {
+      if (key === CREDS_KEY) throw new Error('corrupt creds');
+      return readCreds<T>(key);
+    };
+    const { plugin, logger } = makePlugin(storage);
+    const created = socketThatReports({ connection: 'open' });
+
+    await plugin.logout(ID);
+
+    expect(created).toHaveLength(0);
+    expect(logger.warn).toHaveBeenCalled();
+    expect(await storage.keys(`auth:${ID}:`)).toEqual([]);
+  });
 });
 
 describe('logoutStoredSession', () => {

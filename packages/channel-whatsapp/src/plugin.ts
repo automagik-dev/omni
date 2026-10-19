@@ -1258,10 +1258,16 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
     // Unlink the device on WhatsApp's side, not only locally (#1275). With no
     // live socket (DELETE disconnects first) or a socket that could not send
     // the logout, connect once with the stored auth to do it.
-    const unlinked = (await this.closeInstance(instanceId, true)) || (await this.unlinkStoredSession(instanceId));
-
-    // Clear stored auth state
-    await clearAuthState(this.storage, instanceId);
+    // The unlink is best-effort: unreadable stored creds must not keep the
+    // local auth (and the next logout/delete attempt) stuck.
+    let unlinked = false;
+    try {
+      unlinked = (await this.closeInstance(instanceId, true)) || (await this.unlinkStoredSession(instanceId));
+    } catch (error) {
+      this.logger.warn('Device unlink failed; clearing local auth anyway', { instanceId, error: String(error) });
+    } finally {
+      await clearAuthState(this.storage, instanceId);
+    }
 
     this.logger.info('Instance logged out and auth cleared', { instanceId, unlinked });
   }
