@@ -1,6 +1,6 @@
 import { createElement as h, Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { FishLogo } from '@deepseek-ai/dsh-client-ui-primitives'
+import { OctopusLogo } from './logo.js'
 import { isMainOf } from './sources.js'
 import { currentPart, previewOf, relativeShort } from './text.js'
 import { PlusIcon, SearchIcon, SidebarIcon, GaugeIcon, PlugIcon, ClockIcon, GearIcon, PinMarkIcon, ConnectorIcon, SwitchIcon, CloudDownloadIcon } from './icons.js'
@@ -204,7 +204,7 @@ function AgentRow({ agent, actions, useSessions, useSessionStatus, useUi, wide, 
       'data-agent-id': agent.id, title: wide ? undefined : 'DSH Agent', onClick: () => actions.openAgent(agent.id),
       onContextMenu: (event) => { event.preventDefault(); actions.openMenu({ kind: 'agent', id: agent.id, x: event.clientX, y: event.clientY }) },
     },
-    h('span', { className: `bt-agent-ava${running ? ' bt-run' : ''}` }, h(FishLogo, { size: 22 })),
+    h('span', { className: `bt-agent-ava${running ? ' bt-run' : ''}` }, h(OctopusLogo, { size: 22 })),
     wide ? h('span', { className: 'bt-row-body' },
       h('span', { className: 'bt-row-name' }, 'DSH Agent'),
       preview ? h('span', { className: 'bt-row-preview' }, preview) : null) : null,

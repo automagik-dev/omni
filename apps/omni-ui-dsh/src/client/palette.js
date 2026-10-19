@@ -1,5 +1,5 @@
 import { createElement as h, Fragment, useEffect, useState } from 'react'
-import { FishLogo } from '@deepseek-ai/dsh-client-ui-primitives'
+import { OctopusLogo } from './logo.js'
 import { isMainOf } from './sources.js'
 import { currentPart, stripHeader } from './text.js'
 import { PlusIcon, SearchIcon, PeopleIcon, CloseIcon, GearIcon } from './icons.js'
@@ -62,7 +62,7 @@ export function CommandPalette({ start, token, roster, actions, useSessions }) {
   ]
   if (people.length) sections.push([t('Bots'), people])
   const agents = (roster.agents ?? []).filter(() => matchesName('DSH Agent')).map(agent => ({
-    key: agent.id, avatar: h('span', { className: 'bt-palette-agent' }, h(FishLogo, { size: 18 })), title: 'DSH Agent',
+    key: agent.id, avatar: h('span', { className: 'bt-palette-agent' }, h(OctopusLogo, { size: 18 })), title: 'DSH Agent',
     subtitle: t('Plain dsh session'),
     run: () => actions.openAgent(agent.id),
   }))

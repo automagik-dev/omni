@@ -247,7 +247,7 @@ test('the state reports a changed model list without a new revision', async (t) 
   assert.equal((await call('state', { since: first.revision, models: 'stale' })).value.unchanged, undefined)
 })
 
-test('a new team starts with a DeepSeek-blue whale as its Main Bot', async (t) => {
+test('a new team starts with a DeepSeek-blue octopus as its Main Bot', async (t) => {
   const { call, stop } = start()
   t.after(stop)
   const team = (await call('state', {})).value
@@ -255,7 +255,7 @@ test('a new team starts with a DeepSeek-blue whale as its Main Bot', async (t) =
   const main = team.bots.find(bot => bot.id === team.mainBotId)
   assert.equal(main.name, 'Omni')
   assert.equal(main.color, 'deepseek')
-  assert.deepEqual(main.avatar, { shape: 'whale' })
+  assert.deepEqual(main.avatar, { shape: 'octopus' })
 
   // Other Bots keep no stored look, so the client picks one from the id.
   const writer = (await call('create-bot', { name: 'Writer', role: '写作' })).value
@@ -282,18 +282,18 @@ const OLD_TEAM = {
   questions: {},
 }
 
-test('a team from before the whale was stored gets it once, on its first Main Bot only', async (t) => {
+test('a team from before the octopus was stored gets it once, on its first Main Bot only', async (t) => {
   const { call, stop, home } = start(OLD_TEAM)
   t.after(stop)
   const bots = async () => Object.fromEntries((await call('state', {})).value.bots.map(bot => [bot.id, bot]))
   let team = await bots()
-  // A color the user picked stays; the missing shape becomes the whale.
+  // A color the user picked stays; the missing shape becomes the octopus.
   assert.equal(team.m1.color, 'red')
-  assert.deepEqual(team.m1.avatar, { shape: 'whale' })
+  assert.deepEqual(team.m1.avatar, { shape: 'octopus' })
   assert.equal(team.w2.avatar, undefined)
   assert.equal(JSON.parse(readFileSync(join(home, 'state.json'), 'utf8')).whaleStored, true)
 
-  // The whale is now an ordinary look: it does not pass on when its Bot is deleted.
+  // The octopus is now an ordinary look: it does not pass on when its Bot is deleted.
   assert.equal((await call('set-main', { id: 'm1', main: false })).ok, true)
   assert.equal((await call('delete-bot', { id: 'm1' })).ok, true)
   team = await bots()
@@ -309,8 +309,8 @@ test('another Bot takes the Main Bot place in one step', async (t) => {
   const team = (await call('set-main', { id: writer.id, main: true, replace: chief })).value
   assert.deepEqual(team.mainBotIds, [writer.id])
   assert.equal(team.mainBotId, writer.id)
-  // The whale stays with the Bot it was given to.
-  assert.deepEqual(team.bots.find(bot => bot.id === chief).avatar, { shape: 'whale' })
+  // The octopus stays with the Bot it was given to.
+  assert.deepEqual(team.bots.find(bot => bot.id === chief).avatar, { shape: 'octopus' })
   // The old Main Bot can now be deleted, and no new Omni is made in its place.
   assert.equal((await call('delete-bot', { id: chief })).ok, true)
   const after = (await call('state', {})).value
@@ -638,4 +638,23 @@ test('a create that fails lets its name go', async (t) => {
   assert.equal((await call('create-bot', { name: 'Coder' })).ok, false)
   ctx.sessionController.create = create
   assert.equal((await call('create-bot', { name: 'Coder' })).ok, true)
+})
+
+test('a Main Bot still wearing the whale becomes the octopus once, and the change is kept', async (t) => {
+  const WHALE_TEAM = {
+    ...OLD_TEAM,
+    whaleStored: true,
+    bots: { ...OLD_TEAM.bots, m1: { ...OLD_TEAM.bots.m1, color: 'deepseek', avatar: { shape: 'whale' } } },
+  }
+  const { call, stop, home } = start(WHALE_TEAM)
+  t.after(stop)
+  const bots = async () => Object.fromEntries((await call('state', {})).value.bots.map(bot => [bot.id, bot]))
+  assert.deepEqual((await bots()).m1.avatar, { shape: 'octopus' })
+  const saved = JSON.parse(readFileSync(join(home, 'state.json'), 'utf8'))
+  assert.equal(saved.octopusStored, true)
+  assert.deepEqual(saved.bots.m1.avatar, { shape: 'octopus' })
+
+  // The migration ran once: a look the user picks afterwards is never overwritten on the next load.
+  assert.equal((await call('update-bot', { id: 'm1', avatar: { shape: 'moon' } })).ok, true)
+  assert.equal(JSON.parse(readFileSync(join(home, 'state.json'), 'utf8')).bots.m1.avatar.shape, 'moon')
 })

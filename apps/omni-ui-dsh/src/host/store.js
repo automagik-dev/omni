@@ -142,11 +142,20 @@ export function install(rt) {
     if (state.whaleStored !== true) {
       const first = Object.values(state.bots).reduce((best, bot) => (best === undefined || (bot.createdAt ?? 0) < (best.createdAt ?? 0) ? bot : best), undefined)
       if (first !== undefined && state.mainBotIds.includes(first.id)) {
-        if (!first.avatar?.shape && !first.avatar?.image) first.avatar = { ...first.avatar, shape: 'whale' }
+        if (!first.avatar?.shape && !first.avatar?.image) first.avatar = { ...first.avatar, shape: 'octopus' }
         if (!first.color) first.color = 'deepseek'
       }
       state.whaleStored = true
       if (first !== undefined) migrated = true
+    }
+    // The Main Bot's mark moved from the whale to the octopus. Once, every Main Bot still wearing the whale changes to it.
+    if (state.octopusStored !== true) {
+      for (const id of state.mainBotIds) {
+        const bot = state.bots[id]
+        if (bot?.avatar?.shape === 'whale') bot.avatar = { ...bot.avatar, shape: 'octopus' }
+      }
+      state.octopusStored = true
+      migrated = true
     }
     if (Object.hasOwn(LEGACY_THEMES, state.prefs.theme ?? '')) {
       state.prefs.theme = LEGACY_THEMES[state.prefs.theme]
