@@ -5,6 +5,17 @@
  * digits-only already. Outbound senders strip `+` and any non-digits.
  */
 
+import { computeWaid } from '@omni/core';
+
+/**
+ * Chat key for a phone: digits only, Brazilian ninth digit normalized the
+ * way WhatsApp ids are (#1279). Inbound `from` is already in this form, so an
+ * outbound chat keyed with it is the same chat the reply lands in.
+ */
+export function toWaId(input: string): string {
+  return computeWaid(toMetaPhone(input));
+}
+
 /**
  * Normalize an arbitrary phone string to Meta wire format (digits only).
  *
@@ -26,7 +37,8 @@ export function toMetaPhone(input: string): string {
 /**
  * Format a Meta phone (digits-only) back to canonical E.164 with leading `+`.
  *
- * Used when emitting events that the rest of Omni expects in E.164 form.
+ * Not used for event chat ids: those stay digits-only (`toWaId` / inbound
+ * `from`), so outbound and inbound land in the same chat.
  */
 export function toE164(metaPhone: string): string {
   const digits = metaPhone.replace(/\D/g, '');

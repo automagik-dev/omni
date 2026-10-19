@@ -86,6 +86,7 @@ import { buildAutomationEngineDeps } from './plugins/automation-actions';
 import { setupScheduler, stopScheduler } from './scheduler';
 import { closeAgentHeartbeat, initAgentHeartbeat } from './services/agent-heartbeat';
 import { ApiKeyService } from './services/api-keys';
+import { closeAllConsumerStreams } from './services/event-consumer-stream';
 import { closeTurnEvents, getTurnEventsConnection, initTurnEvents } from './services/turn-events';
 import { TurnMonitor } from './services/turn-monitor';
 import { resolveAuthPlaneConnection } from './tenancy/auth-plane-connection';
@@ -503,6 +504,11 @@ function setupShutdownHandlers(server: ReturnType<typeof Bun.serve>, earlyShutdo
         globalStreamSweeper.stop();
         globalStreamSweeper = null;
       }
+
+      // Open consumer SSE streams scan the DB: end them (each sends `reconnect`)
+      // before the pool closes. A no-op when none are open.
+      shutdownLog.info('Closing event consumer streams');
+      await closeAllConsumerStreams();
 
       if (globalDispatcherCleanup) {
         shutdownLog.info('Stopping agent dispatcher');
