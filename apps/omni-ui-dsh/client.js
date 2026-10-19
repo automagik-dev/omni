@@ -1223,8 +1223,8 @@ function bodyOf(def, paint, flat = false) {
     return "";
   }
 }
-var eyeMarkup = ([cx, cy, w, h37, tilt]) => `<g transform="translate(${cx} ${cy}) rotate(${tilt})"><rect class="bt-eye" x="${-w / 2}" y="${-h37 / 2}" width="${w}" height="${h37}" rx="${w / 2}"/></g>`;
-var happyEyeMarkup = ([cx, cy, w, h37, tilt]) => `<g transform="translate(${cx} ${cy}) rotate(${tilt})"><path class="bt-eye-happy" opacity="0" d="M${-w * 0.62} ${h37 * 0.14}Q0 ${-h37 * 0.42} ${w * 0.62} ${h37 * 0.14}" fill="none" stroke="#000" stroke-width="${w * 0.5}" stroke-linecap="round"/></g>`;
+var eyeMarkup = ([cx, cy, w, h38, tilt]) => `<g transform="translate(${cx} ${cy}) rotate(${tilt})"><rect class="bt-eye" x="${-w / 2}" y="${-h38 / 2}" width="${w}" height="${h38}" rx="${w / 2}"/></g>`;
+var happyEyeMarkup = ([cx, cy, w, h38, tilt]) => `<g transform="translate(${cx} ${cy}) rotate(${tilt})"><path class="bt-eye-happy" opacity="0" d="M${-w * 0.62} ${h38 * 0.14}Q0 ${-h38 * 0.42} ${w * 0.62} ${h38 * 0.14}" fill="none" stroke="#000" stroke-width="${w * 0.5}" stroke-linecap="round"/></g>`;
 var maskBox = (size) => `maskUnits="userSpaceOnUse" x="${-size}" y="${-size}" width="${size * 3}" height="${size * 3}"`;
 var holes = (def, eyes) => `<rect x="${-def.size}" y="${-def.size}" width="${def.size * 3}" height="${def.size * 3}" fill="#fff"/>${eyes}`;
 var MASK_ID = "%MASK%";
@@ -1262,20 +1262,20 @@ var DEFAULT_MASK = maskOf(FALLBACK_SHAPE);
 // src/client/sources.js
 function createSource(initial) {
   let value = initial;
-  const listeners2 = /* @__PURE__ */ new Set();
+  const listeners3 = /* @__PURE__ */ new Set();
   return {
     getSnapshot: () => value,
     subscribe: (listener) => {
-      listeners2.add(listener);
+      listeners3.add(listener);
       return () => {
-        listeners2.delete(listener);
+        listeners3.delete(listener);
       };
     },
     set(next) {
       const resolved = typeof next === "function" ? next(value) : next;
       if (resolved === value) return;
       value = resolved;
-      for (const listener of [...listeners2]) listener();
+      for (const listener of [...listeners3]) listener();
     }
   };
 }
@@ -1301,14 +1301,14 @@ function isAgentSession(roster, cache, sessionId) {
   if (roster.ready) return roster.agentOf[sessionId] !== void 0;
   return cache.has(sessionId);
 }
-function countCards(state, sessionId, callIds, delta) {
-  const own = { ...state[sessionId] };
+function countCards(state2, sessionId, callIds, delta) {
+  const own = { ...state2[sessionId] };
   for (const callId of callIds) {
     const count = (own[callId] ?? 0) + delta;
     if (count > 0) own[callId] = count;
     else delete own[callId];
   }
-  return { ...state, [sessionId]: own };
+  return { ...state2, [sessionId]: own };
 }
 
 // src/client/themes.js
@@ -1551,7 +1551,7 @@ function isHiddenTurn(roster, sessionId, turn) {
   return (roster.exchangeTurns[sessionId] ?? []).includes(turn);
 }
 var toolName = (root) => root.name || root.call?.name;
-var historyLoading = (snapshot) => snapshot?.openState === "cold" || snapshot?.openState === "loading";
+var historyLoading = (snapshot2) => snapshot2?.openState === "cold" || snapshot2?.openState === "loading";
 function toolArgs(root) {
   if (typeof root.args?.text === "function") {
     return { text: (key) => root.args.text(key) ?? void 0, value: (key) => typeof root.args.value === "function" ? root.args.value(key) : void 0 };
@@ -1685,12 +1685,12 @@ function liveSprings(apply2) {
     const dt = Math.min(0.5, Math.max(1e-3, (now - last) / 1e3));
     last = now;
     const steps = Math.ceil(dt * 240);
-    const h37 = dt / steps;
+    const h38 = dt / steps;
     let moving = false;
     for (const value of values.values()) {
       for (let index = 0; index < steps; index += 1) {
-        value.v += (-value.k * (value.x - value.to) - value.c * value.v) * h37;
-        value.x += value.v * h37;
+        value.v += (-value.k * (value.x - value.to) - value.c * value.v) * h38;
+        value.x += value.v * h38;
       }
       if (Math.abs(value.x - value.to) < 0.05 && Math.abs(value.v) < 1) {
         value.x = value.to;
@@ -1763,16 +1763,16 @@ function useGlide(key, { axis = "x", selector = CHOSEN, lead = SPRING_LEAD, trai
     container.dataset.glide = "";
   };
   (0, import_react.useLayoutEffect)(() => {
-    const state = own.current;
+    const state2 = own.current;
     const node = box.current;
-    if (node === state.node && key === state.key) return;
-    const fresh = node !== state.node;
-    state.key = key;
+    if (node === state2.node && key === state2.key) return;
+    const fresh = node !== state2.node;
+    state2.key = key;
     if (fresh) {
-      state.observer?.disconnect();
-      state.node = node;
-      state.observer = node && typeof ResizeObserver === "function" ? new ResizeObserver(() => place(true)) : null;
-      state.observer?.observe(node);
+      state2.observer?.disconnect();
+      state2.node = node;
+      state2.observer = node && typeof ResizeObserver === "function" ? new ResizeObserver(() => place(true)) : null;
+      state2.observer?.observe(node);
     }
     place(fresh);
   });
@@ -1817,23 +1817,23 @@ function useMorph(box, key) {
   const last = (0, import_react.useRef)({ key, height: null, node: null, observer: null });
   (0, import_react.useLayoutEffect)(() => {
     const node = box.current;
-    const state = last.current;
-    if (node !== state.node) {
-      state.observer?.disconnect();
-      Object.assign(state, { key, height: null, node, observer: null });
+    const state2 = last.current;
+    if (node !== state2.node) {
+      state2.observer?.disconnect();
+      Object.assign(state2, { key, height: null, node, observer: null });
       if (!node || typeof ResizeObserver !== "function") return;
-      state.observer = new ResizeObserver(([entry]) => {
-        if (node.dataset.morph === void 0) state.height = entry.borderBoxSize?.[0]?.blockSize ?? node.offsetHeight;
+      state2.observer = new ResizeObserver(([entry]) => {
+        if (node.dataset.morph === void 0) state2.height = entry.borderBoxSize?.[0]?.blockSize ?? node.offsetHeight;
       });
-      state.observer.observe(node);
+      state2.observer.observe(node);
       return;
     }
-    if (!node || key === state.key) return;
+    if (!node || key === state2.key) return;
     const running = node.getAnimations().filter((animation2) => animation2.id === "bt-morph");
-    const from = running.length ? node.offsetHeight : state.height;
+    const from = running.length ? node.offsetHeight : state2.height;
     for (const animation2 of running) animation2.cancel();
     const to = node.offsetHeight;
-    Object.assign(state, { key, height: to });
+    Object.assign(state2, { key, height: to });
     if (from === null || Math.abs(from - to) < 1 || reducedMotion()) return;
     node.dataset.morph = "";
     const animation = node.animate([{ height: `${from}px` }, { height: `${to}px` }], { duration: SPRING_SHAPE.duration, easing: SPRING_SHAPE.easing, id: "bt-morph" });
@@ -2958,7 +2958,7 @@ function useGaze(ref, enabled) {
   }, [enabled]);
 }
 var FIDGETS = ["hop", "sway", "stretch", "look"];
-function BotMark({ bot, look: given, size = 36, state = "idle", live = false, gaze = false, pokeable = false, label }) {
+function BotMark({ bot, look: given, size = 36, state: state2 = "idle", live = false, gaze = false, pokeable = false, label }) {
   const look = given ?? lookOf(bot);
   const ref = (0, import_react2.useRef)(null);
   const maskId = (0, import_react2.useRef)("");
@@ -2969,7 +2969,7 @@ function BotMark({ bot, look: given, size = 36, state = "idle", live = false, ga
     ref,
     className: poked ? "bt-mark bt-mark-poke" : "bt-mark",
     "data-shape": look.image ? "image" : shapeId(look.shape),
-    "data-state": STATES.includes(state) ? state : "idle",
+    "data-state": STATES.includes(state2) ? state2 : "idle",
     "data-live": live ? "" : void 0,
     "data-fidget": live ? FIDGETS[fnv1a(`${bot?.id ?? ""}:fidget`) % FIDGETS.length] : void 0,
     "data-gaze": gaze ? "" : void 0,
@@ -3004,13 +3004,13 @@ function MainStar() {
     (0, import_react2.createElement)("path", { d: "M10 2.4l2.29 5.04 5.51.63-4.09 3.74 1.11 5.42L10 14.5l-4.82 2.73 1.11-5.42L2.2 8.07l5.51-.63z" })
   );
 }
-function useSettled(state) {
-  const prev = (0, import_react2.useRef)(state);
+function useSettled(state2) {
+  const prev = (0, import_react2.useRef)(state2);
   const [settled, setSettled] = (0, import_react2.useState)(false);
   (0, import_react2.useEffect)(() => {
     const was = prev.current;
-    prev.current = state;
-    if (state !== "idle") {
+    prev.current = state2;
+    if (state2 !== "idle") {
       setSettled(false);
       return void 0;
     }
@@ -3018,17 +3018,17 @@ function useSettled(state) {
     setSettled(true);
     const timer = setTimeout(() => setSettled(false), 1800);
     return () => clearTimeout(timer);
-  }, [state]);
+  }, [state2]);
   return settled;
 }
-function BotAvatar({ bot, size, state = "idle", main, admin, badge = true, live = true, gaze = false, pokeable = false }) {
-  const settled = useSettled(state);
+function BotAvatar({ bot, size, state: state2 = "idle", main, admin, badge = true, live = true, gaze = false, pokeable = false }) {
+  const settled = useSettled(state2);
   if (bot === void 0) return (0, import_react2.createElement)(BotMark, { size });
-  const badgeKind = !badge ? null : state === "alert" ? "alert" : state !== "idle" && state !== "waiting" ? "working" : admin ? "admin" : main ? "main" : null;
+  const badgeKind = !badge ? null : state2 === "alert" ? "alert" : state2 !== "idle" && state2 !== "waiting" ? "working" : admin ? "admin" : main ? "main" : null;
   return (0, import_react2.createElement)(
     "span",
     { className: "bt-mark", style: { width: size, height: size, "--bt-size": `${size}px` } },
-    (0, import_react2.createElement)(BotMark, { bot, size, state: settled ? "done" : state, live, gaze, pokeable }),
+    (0, import_react2.createElement)(BotMark, { bot, size, state: settled ? "done" : state2, live, gaze, pokeable }),
     badgeKind === "working" ? (0, import_react2.createElement)("span", { className: "bt-badge bt-badge-working", "aria-label": t("Working"), role: "img" }) : null,
     badgeKind === "alert" ? (0, import_react2.createElement)("span", { className: "bt-badge bt-badge-alert", "aria-label": t("Waiting for your answer"), role: "img" }, "?") : null,
     badgeKind === "admin" ? (0, import_react2.createElement)("span", { className: "bt-badge bt-badge-admin", "aria-label": t("Admin"), role: "img" }, (0, import_react2.createElement)(StarIcon)) : null,
@@ -3410,7 +3410,7 @@ function PendingQuestion({ sessionId, question, actions, inline }) {
 }
 function QuestionDock({ sessionId, useRoster, useCards, useSession, actions }) {
   const question = useRoster((value) => value.questions?.[sessionId]);
-  const drawn = useCards?.((state) => state[sessionId]?.[question?.callId] > 0) === true;
+  const drawn = useCards?.((state2) => state2[sessionId]?.[question?.callId] > 0) === true;
   const loading = useSession?.(historyLoading) === true;
   if (question === void 0 || question.callId && (drawn || loading)) return null;
   return (0, import_react5.createElement)(PendingQuestion, { sessionId, question, actions, inline: false });
@@ -3608,7 +3608,7 @@ function SecretToolCell({ sessionId, callId, name, done, content, roster, action
 }
 function SecretDock({ sessionId, useRoster, useCards, useSession, actions }) {
   const roster = useRoster((value) => value);
-  const shown = useCards?.((state) => state[sessionId]) ?? NONE;
+  const shown = useCards?.((state2) => state2[sessionId]) ?? NONE;
   const loading = useSession?.(historyLoading) === true;
   const bot = roster.byId[sessionId];
   if (!bot || currentPart(bot) !== sessionId) return null;
@@ -3928,7 +3928,7 @@ function Bubbles({ texts: texts2, roster, selfId, actions, streaming, sessionId,
     event.stopPropagation();
     actions.openSession(target);
   };
-  const reactions = useUi ? useUi((state) => msgKey ? state.reactions?.[msgKey] ?? null : null) : null;
+  const reactions = useUi ? useUi((state2) => msgKey ? state2.reactions?.[msgKey] ?? null : null) : null;
   return (0, import_react8.createElement)(
     "div",
     { className: "bt-astack", "data-lead": lead ? "" : void 0, onClickCapture: onClick },
@@ -4321,15 +4321,15 @@ function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnClock, us
     const outline = list.projectionsBySession?.[sessionId]?.values?.turnOutline ?? list.byId[sessionId]?.projectionValues?.turnOutline;
     return Array.isArray(outline) ? outline.map((entry) => entry.turn).join(",") : "";
   });
-  const peers = useTurnClock((state) => {
+  const peers = useTurnClock((state2) => {
     if (!relayed) return "";
-    const turns = state[sessionId] ?? {};
+    const turns = state2[sessionId] ?? {};
     return Object.keys(turns).filter((key) => turns[key].peer !== void 0).map((key) => `${key}:${turns[key].peer}`).join(",");
   });
-  const visit = useUi((state) => state.visits?.[sessionId]);
+  const visit = useUi((state2) => state2.visits?.[sessionId]);
   const hiddenTurns = roster.exchangeTurns[sessionId];
-  const unreadOpening = useTurnClock((state) => {
-    const first = openingTurn(state[sessionId], order, hiddenTurns);
+  const unreadOpening = useTurnClock((state2) => {
+    const first = openingTurn(state2[sessionId], order, hiddenTurns);
     return first?.turn === turn && unseenSince(visit, first.start) ? clockLabel(first.start) : "";
   });
   const body = triggerBody();
@@ -4403,9 +4403,9 @@ function TurnProcessCell({ node, sessionId, turnProcess, useRoster, useUi, useTu
   (0, import_react8.useEffect)(() => {
     actions.noteTurnTime(sessionId, turn, "first", start);
   }, [sessionId, turn, start]);
-  const visit = useUi((state) => state.visits?.[sessionId]);
-  const fresh = useTurnClock((state) => {
-    const own = state[sessionId]?.[turn];
+  const visit = useUi((state2) => state2.visits?.[sessionId]);
+  const fresh = useTurnClock((state2) => {
+    const own = state2[sessionId]?.[turn];
     return !hidden && typeof visit?.seen === "number" && own?.first !== void 0 && own.first <= visit.seen && own.end !== void 0 && own.end > visit.seen && own.end <= visit.entered;
   });
   return fresh ? (0, import_react8.createElement)(NewDivider) : null;
@@ -4448,14 +4448,14 @@ function TurnTailCell({ turn: location2, sessionId, useTurnClock, useUi, actions
   (0, import_react8.useEffect)(() => {
     actions.noteTurnTime(sessionId, turn, "end", time);
   }, [sessionId, turn, time]);
-  const label = useTurnClock((state) => {
-    const start = nextTurnStart(state[sessionId] ?? {}, turn);
+  const label = useTurnClock((state2) => {
+    const start = nextTurnStart(state2[sessionId] ?? {}, turn);
     return start !== void 0 && start - time >= SEPARATOR_GAP_MS ? clockLabel(start) : "";
   });
-  const visit = useUi((state) => state.visits?.[sessionId]);
-  const fresh = useTurnClock((state) => {
+  const visit = useUi((state2) => state2.visits?.[sessionId]);
+  const fresh = useTurnClock((state2) => {
     if (typeof visit?.seen !== "number" || time > visit.seen) return false;
-    const start = nextTurnStart(state[sessionId] ?? {}, turn);
+    const start = nextTurnStart(state2[sessionId] ?? {}, turn);
     return start !== void 0 && start > visit.seen && start <= visit.entered;
   });
   if (!label && !fresh) return null;
@@ -4852,8 +4852,8 @@ function useRowEntrances(replacing) {
 function ActivityIndicator({ sessionId, useRoster, useSessionStatus, useLive, useSession, actions }) {
   const roster = useRoster((value) => value);
   const running = useSessionStatus((map) => map.get(sessionId)?.running === true);
-  const liveKey = useLive((state) => JSON.stringify(state[sessionId] ?? {}));
-  const pendingInput = useSession((snapshot) => Math.max(0, ...(snapshot?.pendingSubmissions ?? []).filter((sub) => sub.placement !== "queued").map((sub) => sub.time)));
+  const liveKey = useLive((state2) => JSON.stringify(state2[sessionId] ?? {}));
+  const pendingInput = useSession((snapshot2) => Math.max(0, ...(snapshot2?.pendingSubmissions ?? []).filter((sub) => sub.placement !== "queued").map((sub) => sub.time)));
   const bot = roster.byId[sessionId];
   const room2 = roster.roomsById[sessionId];
   const entries2 = (0, import_react9.useMemo)(() => Object.values(JSON.parse(liveKey)), [liveKey]);
@@ -4982,10 +4982,10 @@ function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessio
   const doing = useActivity((map) => map[id]);
   const groups = workKeys(useGroupWork(useWork, (rooms) => Object.entries(rooms).flatMap(([roomId, entries2]) => entries2.filter((entry) => entry.botId === id).map((entry) => ({ id: roomId, ...doingOf(entry) })))));
   const away = !running && groups.length > 0;
-  const state = botState(running || away, doing, alert);
+  const state2 = botState(running || away, doing, alert);
   const awayLine = away ? workLine(roster.roomsById[groups[0].id]?.name ?? t("a group chat"), groups[0], groups.length - 1) : null;
   const waits = workKeys(useWork ? useWork((work) => JSON.stringify(work.waiting?.[id] ?? null)) : "null");
-  const waitsFor = state === "waiting" ? waitingFor(roster, waits) : "";
+  const waitsFor = state2 === "waiting" ? waitingFor(roster, waits) : "";
   if (bot.hidden && !active && !main) return null;
   const onContextMenu = (event) => {
     event.preventDefault();
@@ -5006,7 +5006,7 @@ function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessio
         onClick: () => actions.openSession(id),
         onContextMenu
       },
-      (0, import_react10.createElement)(BotAvatar, { bot, size: 60, state, main: true }),
+      (0, import_react10.createElement)(BotAvatar, { bot, size: 60, state: state2, main: true }),
       (0, import_react10.createElement)("span", { className: "bt-tile-name" }, bot.name),
       bot.role ? (0, import_react10.createElement)("span", { className: "bt-chip" }, bot.role) : null
     ));
@@ -5023,7 +5023,7 @@ function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessio
       onClick: () => actions.openSession(id),
       onContextMenu
     },
-    (0, import_react10.createElement)(BotAvatar, { bot, size: 36, state, main }),
+    (0, import_react10.createElement)(BotAvatar, { bot, size: 36, state: state2, main }),
     pinned && !wide ? (0, import_react10.createElement)(PinMark) : null,
     wide ? (0, import_react10.createElement)(
       "span",
@@ -5753,9 +5753,9 @@ function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSe
     return Array.isArray(outline) ? outline.slice(0, 8).map((entry) => entry.turn).join(",") : "";
   });
   const hiddenTurns = roster.exchangeTurns?.[sessionId];
-  const visit = useUi((state) => state.visits?.[sessionId]);
-  const opening = useTurnClock((state) => {
-    const first = openingTurn(state[sessionId], firstTurns, hiddenTurns);
+  const visit = useUi((state2) => state2.visits?.[sessionId]);
+  const opening = useTurnClock((state2) => {
+    const first = openingTurn(state2[sessionId], firstTurns, hiddenTurns);
     return first && !unseenSince(visit, first.start) ? clockLabel(first.start) : "";
   });
   (0, import_react11.useEffect)(() => {
@@ -5768,7 +5768,7 @@ function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSe
   const doing = useActivity((map) => map[owner]);
   const bot = roster.byId[sessionId];
   const room2 = roster.roomsById[sessionId];
-  const detailsOpen = useUi((state) => state.details === sessionId);
+  const detailsOpen = useUi((state2) => state2.details === sessionId);
   const name = bot?.name ?? room2?.name ?? "";
   const useNews = useMemoryNews ?? noNews;
   const memoryIds = bot ? [bot.id] : room2?.members ?? [];
@@ -5870,11 +5870,11 @@ function NewMessagePills({ sessionId, useSessions, useUi, useTurnClock }) {
     const outline = list.projectionsBySession?.[sessionId]?.values?.turnOutline ?? list.byId[sessionId]?.projectionValues?.turnOutline;
     return Array.isArray(outline) ? outline.reduce((count, entry) => count + (entry.response ? 1 : 0), 0) : 0;
   });
-  const visit = useUi((state) => state.visits?.[sessionId]);
-  const unread = useTurnClock((state) => {
+  const visit = useUi((state2) => state2.visits?.[sessionId]);
+  const unread = useTurnClock((state2) => {
     if (typeof visit?.seen !== "number") return 0;
     let count = 0;
-    for (const entry of Object.values(state[sessionId] ?? {})) {
+    for (const entry of Object.values(state2[sessionId] ?? {})) {
       if (entry.first !== void 0 && entry.first > visit.seen && entry.first <= visit.entered) count += 1;
     }
     return count;
@@ -5887,7 +5887,7 @@ function NewMessagePills({ sessionId, useSessions, useUi, useTurnClock }) {
     setRelease({ base: unpinned ? replies : null, dismissed: false });
   }, [unpinned]);
   (0, import_react11.useEffect)(() => {
-    if (view?.divider === "in-view") setAbove((state) => state.seen ? state : { ...state, seen: true });
+    if (view?.divider === "in-view") setAbove((state2) => state2.seen ? state2 : { ...state2, seen: true });
   }, [view?.divider]);
   const fresh = release.base === null ? 0 : replies - release.base;
   const showDown = unpinned && fresh > 0 && !release.dismissed;
@@ -5930,8 +5930,8 @@ function NewMessagePills({ sessionId, useSessions, useUi, useTurnClock }) {
     (0, import_react11.createElement)(
       import_react11.Fragment,
       null,
-      showUp ? pill("up", unread, { left: view.center, top: view.top }, toDivider, () => setAbove((state) => ({ ...state, dismissed: true }))) : null,
-      showDown ? pill("down", fresh, { left: view.center, bottom: view.bottom }, toLatest, () => setRelease((state) => ({ ...state, dismissed: true }))) : null
+      showUp ? pill("up", unread, { left: view.center, top: view.top }, toDivider, () => setAbove((state2) => ({ ...state2, dismissed: true }))) : null,
+      showDown ? pill("down", fresh, { left: view.center, bottom: view.bottom }, toLatest, () => setRelease((state2) => ({ ...state2, dismissed: true }))) : null
     ),
     document.body
   );
@@ -6001,7 +6001,7 @@ function ComposerVoice({ sessionId, inputActions, actions, useUi }) {
   const dictation = useDictation((text, final) => {
     if (final && inputActions) inputActions.insertText(text, inputActions.captureInsertion());
   });
-  const quote = useUi((state) => state.quote?.sessionId === sessionId ? state.quote : null);
+  const quote = useUi((state2) => state2.quote?.sessionId === sessionId ? state2.quote : null);
   (0, import_react12.useEffect)(() => {
     if (!quote || !inputActions) return;
     actions.clearQuote(quote.token);
@@ -6839,7 +6839,7 @@ function setupChoices(actions) {
   ].filter(Boolean);
 }
 function DeepSeekSignIn({ useUi, actions }) {
-  const open = useUi((state) => state.signIn);
+  const open = useUi((state2) => state2.signIn);
   const entry = open ? actions.signInEntry?.() : null;
   if (!entry) return null;
   return (0, import_react15.createElement)(SignInHost, { key: open, entry, actions });
@@ -9033,15 +9033,15 @@ function VoiceMode({ sessionId, roster, actions, useSessions, useSessionStatus }
         const level2 = capture.level();
         smooth = smooth * 0.8 + level2 * 0.2;
         setServiceLevel(Math.round(smooth * 100) / 100);
-        const state = detect(level2, now);
-        if (state === "done" || state === "speech" && now - began >= limit) {
+        const state2 = detect(level2, now);
+        if (state2 === "done" || state2 === "speech" && now - began >= limit) {
           const current = capture;
           capture = null;
           setServiceLevel(0);
           void finish(current);
           return;
         }
-        if (state === "waiting" && now - began >= limit) {
+        if (state2 === "waiting" && now - began >= limit) {
           setCycle((value) => value + 1);
           return;
         }
@@ -10662,7 +10662,7 @@ function FeedbackPage({ actions, run, Section, Row: Row3 }) {
 }
 var TOAST_MS = 6e3;
 function ErrorToast({ useUi, actions }) {
-  const toast = useUi((state) => state.toast);
+  const toast = useUi((state2) => state2.toast);
   const [leaving, setLeaving] = (0, import_react29.useState)(false);
   (0, import_react29.useEffect)(() => {
     if (!toast) return void 0;
@@ -11385,11 +11385,11 @@ function dockModel(sessionId, roster, work) {
     doing: `${t("in {name}", { name: first.room.name })} · ${workPhrase(first.doing)}…${groups.length > 1 ? ` +${groups.length - 1}` : ""}`
   };
 }
-function Face({ bot, ask, state }) {
+function Face({ bot, ask, state: state2 }) {
   return (0, import_react33.createElement)(
     "span",
     { className: "bt-mw-face", "data-ask": ask || void 0 },
-    (0, import_react33.createElement)(BotMark, { bot, size: 20, state: ask ? "alert" : state })
+    (0, import_react33.createElement)(BotMark, { bot, size: 20, state: ask ? "alert" : state2 })
   );
 }
 function useFitWidth(inner, key) {
@@ -11583,7 +11583,7 @@ function PermissionRow({ bot, roster, actions, run }) {
   );
 }
 function BrowserCards({ bot, sessionId, roster, actions, useBrowserTabs, useBrowserPages }) {
-  const state = useBrowserTabs((map) => map[bot.id] ?? EMPTY_TABS);
+  const state2 = useBrowserTabs((map) => map[bot.id] ?? EMPTY_TABS);
   const pages = useBrowserPages((map) => map);
   (0, import_react34.useEffect)(() => {
     actions.browserEnsure?.(bot.id);
@@ -11591,7 +11591,7 @@ function BrowserCards({ bot, sessionId, roster, actions, useBrowserTabs, useBrow
   if (roster.browser !== true || !actions.browserShow) {
     return (0, import_react34.createElement)("div", { className: "bt-muted" }, t("The browser is in the DSH Desktop app."));
   }
-  if (state.ids.length === 0) {
+  if (state2.ids.length === 0) {
     return (0, import_react34.createElement)(
       "div",
       { className: "bt-browser-empty-mark" },
@@ -11604,12 +11604,12 @@ function BrowserCards({ bot, sessionId, roster, actions, useBrowserTabs, useBrow
   return (0, import_react34.createElement)(
     "div",
     { className: "bt-bcards" },
-    state.ids.map((tabId, index) => {
+    state2.ids.map((tabId, index) => {
       const page = pages[tabId] ?? {};
       const label = page.title || shortUrl(page.url) || t("New tab");
       return (0, import_react34.createElement)(
         "div",
-        { key: tabId, className: "bt-bcard", "data-active": state.active === tabId || void 0, style: { animationDelay: `${index * 30}ms` } },
+        { key: tabId, className: "bt-bcard", "data-active": state2.active === tabId || void 0, style: { animationDelay: `${index * 30}ms` } },
         (0, import_react34.createElement)(
           "button",
           { type: "button", className: "bt-bcard-shot", "aria-label": t("Open {title}", { title: label }), title: page.url, onClick: () => actions.browserPick(sessionId, tabId) },
@@ -11638,7 +11638,7 @@ function BrowserCards({ bot, sessionId, roster, actions, useBrowserTabs, useBrow
         )
       );
     }),
-    (0, import_react34.createElement)("button", { type: "button", className: "bt-bcard-new", style: { animationDelay: `${state.ids.length * 30}ms` }, onClick: () => actions.browserNewTab(sessionId) }, (0, import_react34.createElement)(PlusIcon), t("New tab"))
+    (0, import_react34.createElement)("button", { type: "button", className: "bt-bcard-new", style: { animationDelay: `${state2.ids.length * 30}ms` }, onClick: () => actions.browserNewTab(sessionId) }, (0, import_react34.createElement)(PlusIcon), t("New tab"))
   );
 }
 function About({ text, title = "About" }) {
@@ -12991,19 +12991,19 @@ function createBotBrowsers({ bridge, createSource: createSource2, storage = glob
   let disposed = false;
   let serial = 0;
   const savedTab = (botId, tabId) => saved[botId]?.tabs?.find((entry) => entry.id === tabId);
-  const publish2 = (tabId, patch) => pages.set((state) => {
+  const publish2 = (tabId, patch) => pages.set((state2) => {
     const botId = owner.get(tabId);
-    return { ...state, [tabId]: { ...EMPTY, ...savedTab(botId, tabId), ...state[tabId], ...patch } };
+    return { ...state2, [tabId]: { ...EMPTY, ...savedTab(botId, tabId), ...state2[tabId], ...patch } };
   });
   const save = (botId, entry) => {
     saved = store.update((stored) => setEntry(stored, botId, entry), saved);
   };
   const persist = (botId) => {
-    const state = tabs.getSnapshot()[botId];
-    const snapshot = pages.getSnapshot();
-    save(botId, state && {
-      tabs: state.ids.map((id) => ({ id, url: snapshot[id]?.url ?? "", title: snapshot[id]?.title ?? "" })),
-      active: state.active
+    const state2 = tabs.getSnapshot()[botId];
+    const snapshot2 = pages.getSnapshot();
+    save(botId, state2 && {
+      tabs: state2.ids.map((id) => ({ id, url: snapshot2[id]?.url ?? "", title: snapshot2[id]?.title ?? "" })),
+      active: state2.active
     });
   };
   const ensureTabs = (botId) => {
@@ -13012,7 +13012,7 @@ function createBotBrowsers({ bridge, createSource: createSource2, storage = glob
     const ids = entries2.map((entry) => entry.id);
     const active = ids.includes(saved[botId]?.active) ? saved[botId].active : ids.at(-1) ?? null;
     for (const entry of entries2) owner.set(entry.id, botId);
-    tabs.set((state) => ({ ...state, [botId]: { ids, active } }));
+    tabs.set((state2) => ({ ...state2, [botId]: { ids, active } }));
     for (const entry of entries2) publish2(entry.id, { url: entry.url ?? "", title: entry.title ?? "", live: false });
   };
   const ensureLayer = () => {
@@ -13162,9 +13162,9 @@ function createBotBrowsers({ bridge, createSource: createSource2, storage = glob
     ensureTabs(botId);
     const tabId = `t${Date.now().toString(36)}-${++serial}`;
     owner.set(tabId, botId);
-    tabs.set((state) => {
-      const own = state[botId] ?? { ids: [], active: null };
-      return { ...state, [botId]: { ids: [...own.ids, tabId], active: tabId } };
+    tabs.set((state2) => {
+      const own = state2[botId] ?? { ids: [], active: null };
+      return { ...state2, [botId]: { ids: [...own.ids, tabId], active: tabId } };
     });
     publish2(tabId, { url: "", title: "", live: false });
     if (typeof url === "string" && url !== "") void navigate(tabId, url);
@@ -13172,36 +13172,36 @@ function createBotBrowsers({ bridge, createSource: createSource2, storage = glob
     return tabId;
   }
   async function closeTab(botId, tabId) {
-    const state = tabs.getSnapshot()[botId];
-    if (state === void 0 || !state.ids.includes(tabId)) return;
+    const state2 = tabs.getSnapshot()[botId];
+    if (state2 === void 0 || !state2.ids.includes(tabId)) return;
     await opening.get(tabId)?.catch(() => {
     });
     if (shown === tabId) await show(null);
     await release(tabId);
-    tabs.set((snapshot) => {
-      const current = snapshot[botId];
-      if (current === void 0 || !current.ids.includes(tabId)) return snapshot;
+    tabs.set((snapshot2) => {
+      const current = snapshot2[botId];
+      if (current === void 0 || !current.ids.includes(tabId)) return snapshot2;
       const at = current.ids.indexOf(tabId);
       const ids = current.ids.filter((id) => id !== tabId);
       const active = current.active === tabId ? ids[Math.min(at, ids.length - 1)] ?? null : current.active;
-      const next = { ...snapshot };
+      const next = { ...snapshot2 };
       if (ids.length === 0) delete next[botId];
       else next[botId] = { ids, active };
       return next;
     });
     owner.delete(tabId);
-    pages.set((snapshot) => {
-      if (snapshot[tabId] === void 0) return snapshot;
-      const { [tabId]: _, ...rest } = snapshot;
+    pages.set((snapshot2) => {
+      if (snapshot2[tabId] === void 0) return snapshot2;
+      const { [tabId]: _, ...rest } = snapshot2;
       return rest;
     });
     persist(botId);
   }
   function activate(botId, tabId) {
     ensureTabs(botId);
-    const state = tabs.getSnapshot()[botId];
-    if (state === void 0 || !state.ids.includes(tabId) || state.active === tabId) return;
-    tabs.set((snapshot) => ({ ...snapshot, [botId]: { ...state, active: tabId } }));
+    const state2 = tabs.getSnapshot()[botId];
+    if (state2 === void 0 || !state2.ids.includes(tabId) || state2.active === tabId) return;
+    tabs.set((snapshot2) => ({ ...snapshot2, [botId]: { ...state2, active: tabId } }));
     persist(botId);
   }
   const activeTab = (botId) => tabs.getSnapshot()[botId]?.active ?? null;
@@ -13249,15 +13249,15 @@ function createBotBrowsers({ bridge, createSource: createSource2, storage = glob
       if (shown === tabId) await show(null);
       await release(tabId);
       owner.delete(tabId);
-      pages.set((snapshot) => {
-        if (snapshot[tabId] === void 0) return snapshot;
-        const { [tabId]: _, ...rest } = snapshot;
+      pages.set((snapshot2) => {
+        if (snapshot2[tabId] === void 0) return snapshot2;
+        const { [tabId]: _, ...rest } = snapshot2;
         return rest;
       });
     }
-    tabs.set((snapshot) => {
-      if (snapshot[botId] === void 0) return snapshot;
-      const { [botId]: _, ...rest } = snapshot;
+    tabs.set((snapshot2) => {
+      if (snapshot2[botId] === void 0) return snapshot2;
+      const { [botId]: _, ...rest } = snapshot2;
       return rest;
     });
     save(botId, void 0);
@@ -13287,11 +13287,11 @@ function createBotBrowsers({ bridge, createSource: createSource2, storage = glob
     /** Pages a read can reach: each Bot's active tab, live and showing a document. */
     openPages() {
       const open2 = {};
-      const snapshot = pages.getSnapshot();
-      for (const [botId, state] of Object.entries(tabs.getSnapshot())) {
-        const tabId = state.active;
+      const snapshot2 = pages.getSnapshot();
+      for (const [botId, state2] of Object.entries(tabs.getSnapshot())) {
+        const tabId = state2.active;
         const entry = tabId ? views.get(tabId) : void 0;
-        const page = tabId ? snapshot[tabId] : void 0;
+        const page = tabId ? snapshot2[tabId] : void 0;
         if (entry?.ready && page?.url) open2[botId] = { url: page.url, title: page.title };
       }
       return open2;
@@ -13560,6 +13560,399 @@ var USER_MESSAGE_CSS = `
 .bt-umsg:hover .bt-utools,.bt-umsg:focus-within .bt-utools{opacity:1;visibility:visible}
 `;
 
+// src/client/channels.js
+var import_react38 = require("react");
+var CHANNELS = {
+  whatsapp: { label: "WhatsApp", tile: "#25D366", glyph: "M12 3a9 9 0 0 0-7.8 13.5L3 21l4.6-1.2A9 9 0 1 0 12 3z", blurb: "Personal and business numbers, with media and voice notes." },
+  slack: { label: "Slack", tile: "#4A154B", glyph: "M9 3 7 21M17 3l-2 18M4 9h16M3 15h16", blurb: "Workspace channels and direct messages for your team.", stroke: true },
+  telegram: { label: "Telegram", tile: "#229ED9", glyph: "M21 4 3 11l6 2 2 7 3-4 5 4z", blurb: "Bots and groups, with inline buttons and files." },
+  discord: { label: "Discord", tile: "#5865F2", glyph: "M7 7c3-1.5 7-1.5 10 0l1.5 9c-2.5 2-5 2.5-6.5 2.5L11 17c-1.5 0-4-.5-6.5-2.5z", blurb: "Servers and threads for communities." },
+  email: { label: "Email", tile: "#64748B", glyph: "M3 6h18v12H3zM3 7l9 6 9-6", blurb: "Inbox threads, replies and attachments.", stroke: true },
+  web: { label: "Web chat", tile: "#0F9D8F", glyph: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18", blurb: "A chat widget for your site, answered by Omni.", stroke: true }
+};
+var SAMPLE_CHANNELS = [
+  { id: "wa-sofia", type: "whatsapp", name: "Sofia", detail: "+55 11 9 xxxx-2291", status: "connected", unread: 2 },
+  { id: "wa-personal", type: "whatsapp", name: "Personal", detail: "+55 21 9 xxxx-7810", status: "connected", unread: 0 },
+  { id: "slack-ns", type: "slack", name: "Namastex", detail: "#support, #sales", status: "connected", unread: 5 },
+  { id: "tg-bot", type: "telegram", name: "Omni bot", detail: "@omni_helper_bot", status: "attention", unread: 0 }
+];
+var SAMPLE_CHATS = {
+  "wa-sofia": [
+    { id: "c1", name: "Marina Lopes", preview: "Pode me mandar o orçamento de novo?", time: "09:42", unread: 2, initials: "ML" },
+    { id: "c2", name: "Cliente Alpha", preview: "Recebido, obrigado!", time: "Ontem", unread: 0, initials: "CA" },
+    { id: "c3", name: "Grupo Obras", preview: "Rafael: fotos no drive", time: "Seg", unread: 0, initials: "GO" }
+  ],
+  "wa-personal": [{ id: "c4", name: "Família", preview: "Almoço domingo?", time: "08:10", unread: 0, initials: "FA" }],
+  "slack-ns": [
+    { id: "c5", name: "#support", preview: "Ticket 482 respondido pelo Omni", time: "10:05", unread: 5, initials: "#S" },
+    { id: "c6", name: "Rafael Costa", preview: "Subo o deploy depois do almoço", time: "09:20", unread: 0, initials: "RC" }
+  ],
+  "tg-bot": [{ id: "c7", name: "@grupo_beta", preview: "Bot aguardando reconexão", time: "Ter", unread: 0, initials: "GB" }]
+};
+var SAMPLE_MESSAGES = {
+  c1: [
+    { from: "them", text: "Oi! Vi o anúncio. Quanto fica o plano anual?", time: "09:30" },
+    { from: "me", text: "Oi Marina! O plano anual sai por R$ 1.190 com a instalação inclusa.", time: "09:31", by: "Omni" },
+    { from: "them", text: "Pode me mandar o orçamento de novo? Perdi o arquivo.", time: "09:42" }
+  ],
+  c5: [
+    { from: "them", text: "Ticket 482: o link de pagamento não abre no celular", time: "09:58" },
+    { from: "me", text: "Já reenviei o link com a versão atualizada. Confirme se abriu.", time: "10:04", by: "Omni" }
+  ]
+};
+var state = { open: false, view: "chats", channel: "wa-sofia", chat: "c1" };
+var listeners2 = /* @__PURE__ */ new Set();
+var setStore = (patch) => {
+  state = { ...state, ...patch };
+  listeners2.forEach((listener) => listener());
+};
+var subscribe = (listener) => {
+  listeners2.add(listener);
+  return () => listeners2.delete(listener);
+};
+var snapshot = () => state;
+var useOmni = () => (0, import_react38.useSyncExternalStore)(subscribe, snapshot, snapshot);
+function ChannelGlyph({ type, size = 22 }) {
+  const channel = CHANNELS[type];
+  const stroke = channel.stroke;
+  return (0, import_react38.createElement)(
+    "svg",
+    { width: size, height: size, viewBox: "0 0 24 24", "aria-hidden": true, focusable: "false", className: "oc-glyph" },
+    (0, import_react38.createElement)("path", stroke ? { d: channel.glyph, fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" } : { d: channel.glyph, fill: "currentColor" })
+  );
+}
+function OctopusMark({ size = 22 }) {
+  return (0, import_react38.createElement)(
+    "svg",
+    { width: size, height: size, viewBox: "0 0 100 100", "aria-hidden": true, focusable: "false" },
+    (0, import_react38.createElement)("path", { d: "M50 6C75 6 87 24 87 46C87 60 82 68 80 72C84 82 84 92 80 96C76 98 72 92 70 84C68 92 66 98 61 96C57 94 56 84 54 78C52 80 48 80 46 78C44 84 43 94 39 96C34 98 32 92 30 84C28 92 24 98 20 96C16 92 16 82 20 72C18 68 13 60 13 46C13 24 25 6 50 6Z", fill: "currentColor" })
+  );
+}
+function Tile({ type, size = 40 }) {
+  return (0, import_react38.createElement)("span", { className: "oc-tile", style: { width: size, height: size, background: CHANNELS[type].tile } }, (0, import_react38.createElement)(ChannelGlyph, { type, size: Math.round(size * 0.55) }));
+}
+function ChannelsButton() {
+  const omni = useOmni();
+  const unread = SAMPLE_CHANNELS.reduce((sum, channel) => sum + channel.unread, 0);
+  return (0, import_react38.createElement)(
+    "button",
+    {
+      type: "button",
+      className: "oc-open",
+      onClick: () => setStore({ open: !omni.open }),
+      "aria-label": "Channels",
+      title: "Channels"
+    },
+    (0, import_react38.createElement)("span", { className: "oc-open-glyph" }, (0, import_react38.createElement)(OctopusMark, { size: 16 })),
+    (0, import_react38.createElement)("span", null, "Channels"),
+    unread > 0 ? (0, import_react38.createElement)("span", { className: "oc-badge" }, String(unread)) : null
+  );
+}
+function Rail({ omni }) {
+  return (0, import_react38.createElement)(
+    "nav",
+    { className: "oc-rail", "aria-label": "Channels" },
+    (0, import_react38.createElement)("button", {
+      type: "button",
+      className: `oc-rail-home${omni.view === "chats" && omni.channel === null ? " oc-on" : ""}`,
+      onClick: () => setStore({ view: "chats", channel: null }),
+      "aria-label": "All chats",
+      title: "All chats"
+    }, (0, import_react38.createElement)(OctopusMark, { size: 26 })),
+    (0, import_react38.createElement)("span", { className: "oc-rail-divider" }),
+    ...SAMPLE_CHANNELS.map((channel) => (0, import_react38.createElement)(
+      "button",
+      {
+        key: channel.id,
+        type: "button",
+        className: `oc-rail-item${omni.channel === channel.id && omni.view === "chats" ? " oc-on" : ""}`,
+        onClick: () => setStore({ view: "chats", channel: channel.id, chat: SAMPLE_CHATS[channel.id]?.[0]?.id ?? null }),
+        "aria-label": `${CHANNELS[channel.type].label} ${channel.name}${channel.unread ? `, ${channel.unread} unread` : ""}`,
+        title: `${CHANNELS[channel.type].label} · ${channel.name}`
+      },
+      (0, import_react38.createElement)(Tile, { type: channel.type, size: 44 }),
+      channel.unread > 0 ? (0, import_react38.createElement)("span", { className: "oc-rail-badge" }, String(channel.unread)) : null,
+      (0, import_react38.createElement)("span", { className: `oc-status oc-status-${channel.status}`, "aria-hidden": true })
+    )),
+    (0, import_react38.createElement)("button", {
+      type: "button",
+      className: `oc-rail-add${omni.view === "connect" ? " oc-on" : ""}`,
+      onClick: () => setStore({ view: "connect" }),
+      "aria-label": "Connect a channel",
+      title: "Connect a channel"
+    }, "+")
+  );
+}
+function ChatList({ omni }) {
+  const channel = SAMPLE_CHANNELS.find((item) => item.id === omni.channel);
+  const chats = channel ? SAMPLE_CHATS[channel.id] ?? [] : Object.values(SAMPLE_CHATS).flat();
+  const title = channel ? channel.name : "All chats";
+  const subtitle = channel ? `${CHANNELS[channel.type].label} · ${channel.detail}` : `${SAMPLE_CHANNELS.length} channels`;
+  return (0, import_react38.createElement)(
+    "section",
+    { className: "oc-list", "aria-label": "Conversations" },
+    (0, import_react38.createElement)(
+      "header",
+      { className: "oc-list-head" },
+      (0, import_react38.createElement)("div", null, (0, import_react38.createElement)("h2", null, title), (0, import_react38.createElement)("p", null, subtitle)),
+      channel ? (0, import_react38.createElement)("span", { className: `oc-pill oc-pill-${channel.status}` }, channel.status === "connected" ? "Connected" : "Needs attention") : null
+    ),
+    (0, import_react38.createElement)("label", { className: "oc-search" }, (0, import_react38.createElement)("span", { "aria-hidden": true }, "⌕"), (0, import_react38.createElement)("input", { placeholder: "Search chats", "aria-label": "Search chats" })),
+    (0, import_react38.createElement)(
+      "ul",
+      { className: "oc-chats" },
+      ...chats.map((chat) => (0, import_react38.createElement)(
+        "li",
+        { key: chat.id },
+        (0, import_react38.createElement)(
+          "button",
+          {
+            type: "button",
+            className: `oc-chat${omni.chat === chat.id ? " oc-on" : ""}`,
+            onClick: () => setStore({ chat: chat.id, view: "chats" })
+          },
+          (0, import_react38.createElement)("span", { className: "oc-avatar" }, chat.initials),
+          (0, import_react38.createElement)(
+            "span",
+            { className: "oc-chat-body" },
+            (0, import_react38.createElement)("span", { className: "oc-chat-top" }, (0, import_react38.createElement)("strong", null, chat.name), (0, import_react38.createElement)("time", null, chat.time)),
+            (0, import_react38.createElement)(
+              "span",
+              { className: "oc-chat-bottom" },
+              (0, import_react38.createElement)("span", { className: "oc-preview" }, chat.preview),
+              chat.unread > 0 ? (0, import_react38.createElement)("span", { className: "oc-count" }, String(chat.unread)) : null
+            )
+          )
+        )
+      )),
+      chats.length === 0 ? (0, import_react38.createElement)("li", { className: "oc-empty" }, "No chats yet on this channel.") : null
+    )
+  );
+}
+function Conversation({ omni }) {
+  const channel = SAMPLE_CHANNELS.find((item) => item.id === omni.channel) ?? SAMPLE_CHANNELS[0];
+  const chat = (SAMPLE_CHATS[channel.id] ?? []).find((item) => item.id === omni.chat) ?? SAMPLE_CHATS[channel.id]?.[0];
+  if (!chat) return (0, import_react38.createElement)("section", { className: "oc-thread oc-thread-empty" }, (0, import_react38.createElement)("p", null, "Pick a chat to see the conversation."));
+  const messages = SAMPLE_MESSAGES[chat.id] ?? [{ from: "them", text: chat.preview, time: chat.time }];
+  return (0, import_react38.createElement)(
+    "section",
+    { className: "oc-thread", "aria-label": `Conversation with ${chat.name}` },
+    (0, import_react38.createElement)(
+      "header",
+      { className: "oc-thread-head" },
+      (0, import_react38.createElement)("span", { className: "oc-avatar oc-avatar-lg" }, chat.initials),
+      (0, import_react38.createElement)("div", null, (0, import_react38.createElement)("strong", null, chat.name), (0, import_react38.createElement)("p", null, (0, import_react38.createElement)("span", { className: "oc-via" }, (0, import_react38.createElement)(Tile, { type: channel.type, size: 16 })), ` ${CHANNELS[channel.type].label} · ${channel.name}`))
+    ),
+    (0, import_react38.createElement)(
+      "div",
+      { className: "oc-messages" },
+      (0, import_react38.createElement)("div", { className: "oc-day" }, "Today"),
+      ...messages.map((message, index) => (0, import_react38.createElement)(
+        "div",
+        { key: index, className: `oc-msg oc-msg-${message.from}` },
+        (0, import_react38.createElement)("p", null, message.text),
+        (0, import_react38.createElement)("span", { className: "oc-msg-meta" }, message.by ? `${message.by} · ${message.time}` : message.time)
+      ))
+    ),
+    (0, import_react38.createElement)(
+      "footer",
+      { className: "oc-composer" },
+      (0, import_react38.createElement)("input", { placeholder: `Reply on ${CHANNELS[channel.type].label}`, "aria-label": "Reply" }),
+      (0, import_react38.createElement)("button", { type: "button", className: "oc-send", "aria-label": "Send" }, "↑")
+    )
+  );
+}
+var STEPS = ["Choose", "Connect", "Done"];
+function ConnectFlow({ omni }) {
+  const [picked, setPicked] = (0, import_react38.useState)(null);
+  const [step, setStep] = (0, import_react38.useState)(0);
+  (0, import_react38.useEffect)(() => {
+    if (omni.view !== "connect") {
+      setPicked(null);
+      setStep(0);
+    }
+  }, [omni.view]);
+  if (picked === null) {
+    return (0, import_react38.createElement)(
+      "section",
+      { className: "oc-connect", "aria-label": "Connect a channel" },
+      (0, import_react38.createElement)("header", { className: "oc-connect-head" }, (0, import_react38.createElement)("h2", null, "Connect a channel"), (0, import_react38.createElement)("p", null, "Pick where people already talk to you. Omni answers in the same place, and you see every chat in one list.")),
+      (0, import_react38.createElement)("div", { className: "oc-grid" }, ...Object.keys(CHANNELS).map((type) => (0, import_react38.createElement)("button", {
+        key: type,
+        type: "button",
+        className: "oc-card",
+        onClick: () => {
+          setPicked(type);
+          setStep(0);
+        }
+      }, (0, import_react38.createElement)(Tile, { type, size: 48 }), (0, import_react38.createElement)("strong", null, CHANNELS[type].label), (0, import_react38.createElement)("span", null, CHANNELS[type].blurb), (0, import_react38.createElement)("em", null, "Connect →"))))
+    );
+  }
+  const channel = CHANNELS[picked];
+  return (0, import_react38.createElement)(
+    "section",
+    { className: "oc-connect oc-connect-flow", "aria-label": `Connect ${channel.label}` },
+    (0, import_react38.createElement)("button", { type: "button", className: "oc-back", onClick: () => setPicked(null) }, "← All channels"),
+    (0, import_react38.createElement)("ol", { className: "oc-steps", "aria-label": "Progress" }, ...STEPS.map((label, index) => (0, import_react38.createElement)("li", { key: label, className: index <= step ? "oc-step-on" : "" }, (0, import_react38.createElement)("span", null, String(index + 1)), label))),
+    (0, import_react38.createElement)(
+      "div",
+      { className: "oc-flow" },
+      (0, import_react38.createElement)(Tile, { type: picked, size: 64 }),
+      step === 0 ? (0, import_react38.createElement)(
+        import_react38.Fragment,
+        null,
+        (0, import_react38.createElement)("h2", null, `Connect ${channel.label}`),
+        (0, import_react38.createElement)("p", null, channel.blurb),
+        (0, import_react38.createElement)("ul", { className: "oc-checks" }, (0, import_react38.createElement)("li", null, "Takes about a minute"), (0, import_react38.createElement)("li", null, "You can disconnect at any time"), (0, import_react38.createElement)("li", null, "Omni only reads chats you allow")),
+        (0, import_react38.createElement)("button", { type: "button", className: "oc-primary", onClick: () => setStep(1) }, `Start with ${channel.label}`)
+      ) : step === 1 ? (0, import_react38.createElement)(
+        import_react38.Fragment,
+        null,
+        (0, import_react38.createElement)("h2", null, "Scan this code"),
+        (0, import_react38.createElement)("p", null, "Open the app on your phone, go to Linked devices, and scan the code. This is a sample code for the preview."),
+        (0, import_react38.createElement)("div", { className: "oc-qr", "aria-label": "Sample QR code" }, (0, import_react38.createElement)(SampleQr, null)),
+        (0, import_react38.createElement)("button", { type: "button", className: "oc-primary", onClick: () => setStep(2) }, "I scanned it")
+      ) : (0, import_react38.createElement)(
+        import_react38.Fragment,
+        null,
+        (0, import_react38.createElement)("h2", null, `${channel.label} is connected`),
+        (0, import_react38.createElement)("p", null, "New chats on this channel now appear in Omni. Nothing is sent to your contacts until you reply."),
+        (0, import_react38.createElement)("button", { type: "button", className: "oc-primary", onClick: () => setStore({ view: "chats", channel: null }) }, "Open my chats")
+      )
+    )
+  );
+}
+function SampleQr() {
+  const cells = [];
+  for (let y = 0; y < 13; y += 1) for (let x = 0; x < 13; x += 1) {
+    if ((x * 7 + y * 13) % 5 === 0 || x < 3 && y < 3 || x > 9 && y < 3 || x < 3 && y > 9) cells.push((0, import_react38.createElement)("rect", { key: `${x}-${y}`, x: x + 1, y: y + 1, width: 1, height: 1, rx: 0.2 }));
+  }
+  return (0, import_react38.createElement)("svg", { viewBox: "0 0 15 15", width: 184, height: 184, "aria-hidden": true }, (0, import_react38.createElement)("g", { fill: "currentColor" }, ...cells));
+}
+function ChannelsOverlay() {
+  const omni = useOmni();
+  (0, import_react38.useEffect)(() => {
+    if (!omni.open) return void 0;
+    const onKey = (event) => {
+      if (event.key === "Escape") setStore({ open: false });
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [omni.open]);
+  if (!omni.open) return null;
+  return (0, import_react38.createElement)(
+    "div",
+    { className: "oc-scrim", onClick: (event) => {
+      if (event.target === event.currentTarget) setStore({ open: false });
+    } },
+    (0, import_react38.createElement)(
+      "div",
+      { className: "oc-window", role: "dialog", "aria-modal": true, "aria-label": "Omni channels" },
+      (0, import_react38.createElement)(
+        "header",
+        { className: "oc-topbar" },
+        (0, import_react38.createElement)("span", { className: "oc-title" }, (0, import_react38.createElement)(OctopusMark, { size: 20 }), "Omni channels"),
+        (0, import_react38.createElement)("span", { className: "oc-preview-chip" }, "Preview · sample data"),
+        (0, import_react38.createElement)("button", { type: "button", className: "oc-close", onClick: () => setStore({ open: false }), "aria-label": "Close" }, "×")
+      ),
+      (0, import_react38.createElement)(
+        "div",
+        { className: "oc-body" },
+        (0, import_react38.createElement)(Rail, { omni }),
+        omni.view === "connect" ? (0, import_react38.createElement)(ConnectFlow, { omni }) : (0, import_react38.createElement)(ChatList, { omni }),
+        omni.view === "connect" ? null : (0, import_react38.createElement)(Conversation, { omni })
+      )
+    )
+  );
+}
+var CHANNELS_CSS = `
+.oc-open{display:flex;align-items:center;gap:8px;width:100%;padding:8px 10px;border:1px solid var(--bt-line,#d9e3e1);border-radius:12px;background:var(--bt-card,#fff);color:var(--bt-ink,#0c2630);font:inherit;font-size:13px;cursor:pointer}
+.oc-open:hover{background:var(--bt-hover,#eef6f4)}
+.oc-open-glyph{display:grid;place-items:center;width:24px;height:24px;border-radius:8px;background:var(--bt-accent,#0f9d8f);color:var(--bt-accent-ink,#fff)}
+.oc-badge,.oc-rail-badge,.oc-count{min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:#ef4444;color:#fff;font-size:11px;font-weight:600;display:inline-grid;place-items:center;margin-left:auto}
+.oc-scrim{position:fixed;inset:0;z-index:2000;background:rgba(6,20,26,.45);backdrop-filter:blur(3px);display:grid;place-items:center;padding:24px;animation:oc-in .18s ease-out}
+@keyframes oc-in{from{opacity:0}to{opacity:1}}
+.oc-window{width:min(1180px,100%);height:min(780px,100%);background:var(--bt-main,#f3fbfa);color:var(--bt-ink,#0c2630);border-radius:22px;box-shadow:0 30px 80px rgba(0,0,0,.35);display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--bt-line,#d9e3e1)}
+.oc-topbar{display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--bt-line,#d9e3e1);background:var(--bt-sidebar,#e8f6f3)}
+.oc-title{display:flex;align-items:center;gap:8px;font-weight:650;font-size:15px;color:var(--bt-accent,#0f9d8f)}
+.oc-preview-chip{font-size:12px;padding:3px 10px;border-radius:999px;background:var(--bt-bubble,#dcefea);color:var(--bt-ink,#0c2630);opacity:.8}
+.oc-close{margin-left:auto;width:32px;height:32px;border:0;border-radius:10px;background:transparent;color:inherit;font-size:22px;cursor:pointer}
+.oc-close:hover{background:var(--bt-hover,#eef6f4)}
+.oc-body{flex:1;display:grid;grid-template-columns:76px 300px 1fr;min-height:0}
+.oc-rail{display:flex;flex-direction:column;align-items:center;gap:10px;padding:14px 0;background:var(--bt-sidebar,#e8f6f3);border-right:1px solid var(--bt-line,#d9e3e1);overflow:auto}
+.oc-rail-home,.oc-rail-item,.oc-rail-add{position:relative;width:48px;height:48px;border:0;border-radius:16px;display:grid;place-items:center;background:var(--bt-card,#fff);color:var(--bt-accent,#0f9d8f);cursor:pointer;transition:border-radius .18s,transform .12s}
+.oc-rail-home:hover,.oc-rail-item:hover,.oc-rail-add:hover{border-radius:12px;transform:translateY(-1px)}
+.oc-rail-add{font-size:24px;color:var(--bt-ink,#0c2630);opacity:.7;border:1px dashed var(--bt-line,#d9e3e1);background:transparent}
+.oc-rail .oc-on{box-shadow:0 0 0 2px var(--bt-accent,#0f9d8f);border-radius:14px}
+.oc-rail-divider{width:28px;height:1px;background:var(--bt-line,#d9e3e1);margin:4px 0}
+.oc-rail-item .oc-tile{border-radius:inherit}
+.oc-rail-badge{position:absolute;top:-4px;right:-6px;height:18px;min-width:18px;font-size:10px}
+.oc-status{position:absolute;bottom:-2px;right:-2px;width:11px;height:11px;border-radius:50%;border:2px solid var(--bt-sidebar,#e8f6f3)}
+.oc-status-connected{background:#22c55e}.oc-status-attention{background:#f59e0b}
+.oc-tile{display:grid;place-items:center;border-radius:14px;color:#fff;flex:none}
+.oc-glyph{display:block}
+.oc-list{display:flex;flex-direction:column;border-right:1px solid var(--bt-line,#d9e3e1);min-height:0;background:var(--bt-card,#fff)}
+.oc-list-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;padding:16px 16px 8px}
+.oc-list-head h2{margin:0;font-size:17px}
+.oc-list-head p{margin:2px 0 0;font-size:12px;opacity:.65}
+.oc-pill{font-size:11px;padding:3px 8px;border-radius:999px;white-space:nowrap}
+.oc-pill-connected{background:#dcfce7;color:#166534}.oc-pill-attention{background:#fef3c7;color:#92400e}
+.oc-search{display:flex;align-items:center;gap:8px;margin:6px 12px 10px;padding:8px 10px;border-radius:12px;background:var(--bt-main,#f3fbfa);border:1px solid var(--bt-line,#d9e3e1);font-size:13px}
+.oc-search input{flex:1;border:0;background:transparent;font:inherit;color:inherit;outline:none}
+.oc-chats{list-style:none;margin:0;padding:0 8px 12px;overflow:auto;flex:1}
+.oc-chat{display:flex;gap:10px;align-items:center;width:100%;padding:10px;border:0;border-radius:14px;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}
+.oc-chat:hover{background:var(--bt-hover,#eef6f4)}
+.oc-chat.oc-on{background:var(--bt-active,#d5efea)}
+.oc-avatar{width:40px;height:40px;border-radius:50%;flex:none;display:grid;place-items:center;background:var(--bt-bubble,#dcefea);color:var(--bt-accent,#0f9d8f);font-weight:650;font-size:13px}
+.oc-avatar-lg{width:44px;height:44px}
+.oc-chat-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.oc-chat-top,.oc-chat-bottom{display:flex;align-items:center;gap:8px;min-width:0}
+.oc-chat-top strong{flex:1;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.oc-chat-top time{font-size:11px;opacity:.6}
+.oc-preview{flex:1;min-width:0;font-size:12.5px;opacity:.7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.oc-empty{padding:16px;font-size:13px;opacity:.6}
+.oc-thread{display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--bt-main,#f3fbfa)}
+.oc-thread-empty{align-items:center;justify-content:center;opacity:.6}
+.oc-thread-head{display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--bt-line,#d9e3e1);background:var(--bt-card,#fff)}
+.oc-thread-head strong{font-size:15px}
+.oc-thread-head p{margin:2px 0 0;font-size:12px;opacity:.65;display:flex;align-items:center;gap:6px}
+.oc-via .oc-tile{width:16px;height:16px;border-radius:5px}
+.oc-messages{flex:1;overflow:auto;padding:18px 24px;display:flex;flex-direction:column;gap:10px}
+.oc-day{align-self:center;font-size:11px;padding:3px 10px;border-radius:999px;background:var(--bt-bubble,#dcefea);opacity:.8;margin:4px 0}
+.oc-msg{max-width:62%;padding:9px 12px;border-radius:16px;background:var(--bt-bubble,#dcefea)}
+.oc-msg p{margin:0;font-size:14px;line-height:1.45}
+.oc-msg-meta{display:block;margin-top:4px;font-size:11px;opacity:.6}
+.oc-msg-me{align-self:flex-end;background:var(--bt-accent,#0f9d8f);color:var(--bt-accent-ink,#fff);border-bottom-right-radius:6px}
+.oc-msg-me .oc-msg-meta{color:inherit}
+.oc-msg-them{align-self:flex-start;border-bottom-left-radius:6px;background:var(--bt-card,#fff);border:1px solid var(--bt-line,#d9e3e1)}
+.oc-composer{display:flex;gap:10px;padding:12px 16px;border-top:1px solid var(--bt-line,#d9e3e1);background:var(--bt-card,#fff)}
+.oc-composer input{flex:1;padding:10px 14px;border-radius:999px;border:1px solid var(--bt-line,#d9e3e1);background:var(--bt-main,#f3fbfa);font:inherit;color:inherit;outline:none}
+.oc-send{width:40px;height:40px;border-radius:50%;border:0;background:var(--bt-accent,#0f9d8f);color:var(--bt-accent-ink,#fff);font-size:18px;cursor:pointer}
+.oc-connect{grid-column:2 / span 2;overflow:auto;padding:28px 32px;display:flex;flex-direction:column;gap:18px}
+.oc-connect-head h2{margin:0 0 6px;font-size:22px}
+.oc-connect-head p{margin:0;opacity:.7;max-width:620px;line-height:1.5}
+.oc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px}
+.oc-card{display:flex;flex-direction:column;align-items:flex-start;gap:8px;padding:18px;border-radius:18px;border:1px solid var(--bt-line,#d9e3e1);background:var(--bt-card,#fff);color:inherit;font:inherit;text-align:left;cursor:pointer;transition:transform .12s,box-shadow .12s}
+.oc-card:hover{transform:translateY(-2px);box-shadow:0 10px 26px rgba(0,0,0,.10)}
+.oc-card strong{font-size:16px}
+.oc-card > span:not(.oc-tile){font-size:13px;opacity:.7;line-height:1.4}
+.oc-card em{font-style:normal;color:var(--bt-accent,#0f9d8f);font-size:13px;margin-top:auto}
+.oc-connect-flow{align-items:stretch}
+.oc-back{align-self:flex-start;border:0;background:transparent;color:var(--bt-accent,#0f9d8f);font:inherit;cursor:pointer;padding:4px 0}
+.oc-steps{display:flex;gap:18px;list-style:none;margin:0;padding:0;font-size:13px;opacity:.6}
+.oc-steps li{display:flex;align-items:center;gap:6px}
+.oc-steps span{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;border:1px solid currentColor;font-size:11px}
+.oc-steps .oc-step-on{opacity:1;color:var(--bt-accent,#0f9d8f);font-weight:600}
+.oc-steps .oc-step-on span{background:var(--bt-accent,#0f9d8f);color:var(--bt-accent-ink,#fff);border-color:transparent}
+.oc-flow{display:flex;flex-direction:column;align-items:flex-start;gap:12px;max-width:520px;margin-top:8px}
+.oc-flow h2{margin:4px 0 0;font-size:22px}
+.oc-flow p{margin:0;line-height:1.55;opacity:.8}
+.oc-checks{margin:4px 0;padding-left:18px;line-height:1.8;opacity:.8}
+.oc-primary{margin-top:8px;padding:11px 20px;border-radius:14px;border:0;background:var(--bt-accent,#0f9d8f);color:var(--bt-accent-ink,#fff);font:inherit;font-weight:600;cursor:pointer}
+.oc-qr{padding:14px;border-radius:18px;background:#fff;color:#0c2630;border:1px solid var(--bt-line,#d9e3e1)}
+@media (max-width:820px){.oc-body{grid-template-columns:64px 1fr}.oc-thread{display:none}.oc-connect{grid-column:2}}
+`;
+
 // src/client/approval-notices.js
 function noticeApprovals({ work, roster, shownSession, openSession, since: since2 = Date.now() }) {
   const told = /* @__PURE__ */ new Set();
@@ -13619,8 +14012,8 @@ function apply(ctx) {
     return items.find((item) => item.sessionIds?.includes(sessionId))?.workspaceId;
   };
   let expected = null;
-  const setPlain = (plain) => surface.set((state) => state.plain === plain ? state : { ...state, plain });
-  const dropPanels = () => ui2.set((state) => state.details || state.renaming ? { ...state, details: null, view: "details", renaming: false, tab: null } : state);
+  const setPlain = (plain) => surface.set((state2) => state2.plain === plain ? state2 : { ...state2, plain });
+  const dropPanels = () => ui2.set((state2) => state2.details || state2.renaming ? { ...state2, details: null, view: "details", renaming: false, tab: null } : state2);
   const seenKey = (id) => roster.getSnapshot().byId?.[id]?.id ?? id;
   const leaveVisits = (ids) => {
     seenAt = seenStore.update((seen) => noteLeft(seen, ids.map(seenKey), Date.now()), seenAt);
@@ -13633,8 +14026,8 @@ function apply(ctx) {
   ctx.effect(() => {
     const onStorage = (event) => {
       if (event.storageArea !== localStorage) return;
-      if (event.key === null || event.key === unreadStore.key) ui2.set((state) => ({ ...state, unread: unreadStore.read(state.unread) }));
-      if (event.key === null || event.key === reactionStore.key) ui2.set((state) => ({ ...state, reactions: reactionStore.read(state.reactions) }));
+      if (event.key === null || event.key === unreadStore.key) ui2.set((state2) => ({ ...state2, unread: unreadStore.read(state2.unread) }));
+      if (event.key === null || event.key === reactionStore.key) ui2.set((state2) => ({ ...state2, reactions: reactionStore.read(state2.reactions) }));
       if (event.key === null || event.key === seenStore.key) seenAt = seenStore.read(seenAt);
     };
     window.addEventListener("storage", onStorage);
@@ -13654,9 +14047,9 @@ function apply(ctx) {
     if (key === memoryNewsKey) return;
     const opening = memoryNewsKey === void 0;
     memoryNewsKey = key;
-    memoryNews.set((state) => Object.fromEntries(Object.entries(next).map(([id, entry]) => [
+    memoryNews.set((state2) => Object.fromEntries(Object.entries(next).map(([id, entry]) => [
       id,
-      state[id]?.at === entry.at ? state[id] : { ...entry, seen: opening ? 0 : Date.now() }
+      state2[id]?.at === entry.at ? state2[id] : { ...entry, seen: opening ? 0 : Date.now() }
     ])));
   };
   const PREFS_KEY = STORAGE.prefs;
@@ -13668,7 +14061,7 @@ function apply(ctx) {
   }
   const writeUnread = (id, value) => {
     const unread = unreadStore.update((marks) => setUnread(marks, id, value), ui2.getSnapshot().unread);
-    ui2.set((state) => JSON.stringify(state.unread) === JSON.stringify(unread) ? state : { ...state, unread });
+    ui2.set((state2) => JSON.stringify(state2.unread) === JSON.stringify(unread) ? state2 : { ...state2, unread });
   };
   const refreshed = /* @__PURE__ */ new Set();
   let pulls = 0;
@@ -13787,16 +14180,16 @@ function apply(ctx) {
     ctx.effect(() => {
       let stopReads = null;
       const sync = () => {
-        const snapshot = roster.getSnapshot();
-        if (!snapshot.ready) return;
-        const on = snapshot.browser === true;
+        const snapshot2 = roster.getSnapshot();
+        if (!snapshot2.ready) return;
+        const on = snapshot2.browser === true;
         if (on && !stopReads) stopReads = serveBrowserReads({ browsers, post: call });
         if (!on && stopReads) {
           stopReads();
           stopReads = null;
         }
-        void browsers.retain(snapshot.bots.map((bot) => bot.id));
-        ui2.set((state) => state.details && state.view === "browser" && (!on || !snapshot.byId[state.details]) ? { ...state, view: "details" } : state);
+        void browsers.retain(snapshot2.bots.map((bot) => bot.id));
+        ui2.set((state2) => state2.details && state2.view === "browser" && (!on || !snapshot2.byId[state2.details]) ? { ...state2, view: "details" } : state2);
       };
       sync();
       const offRoster = roster.subscribe(sync);
@@ -13839,8 +14232,8 @@ function apply(ctx) {
     let key = "";
     let releaseTokens = null;
     const render = () => {
-      const snapshot = roster.getSnapshot();
-      const prefs = snapshot.ready ? snapshot.prefs ?? {} : savedPrefs;
+      const snapshot2 = roster.getSnapshot();
+      const prefs = snapshot2.ready ? snapshot2.prefs ?? {} : savedPrefs;
       const themes = allThemes();
       const id = themes[prefs.theme] ? prefs.theme : "deepseek";
       const accent = isHex(prefs.accent) ? prefs.accent : void 0;
@@ -13853,7 +14246,7 @@ function apply(ctx) {
       const release = releaseTokens;
       releaseTokens = ctx.theme.overrideTokens("ds-bot", shellTokens(themes[id]));
       if (typeof release === "function") release();
-      if (snapshot.ready) {
+      if (snapshot2.ready) {
         try {
           localStorage.setItem(PREFS_KEY, JSON.stringify({ theme: prefs.theme, accent: prefs.accent, motion: prefs.motion }));
         } catch {
@@ -13915,7 +14308,7 @@ function apply(ctx) {
     isAgentSession: (id) => isAgentSessionId(id),
     openSession: (id) => {
       if (isAgentSessionId(id)) return actions.openAgentSession(id);
-      ui2.set((state) => state.newChat || state.exchange || state.menu || state.palette ? { ...state, newChat: null, exchange: null, menu: null, palette: null } : state);
+      ui2.set((state2) => state2.newChat || state2.exchange || state2.menu || state2.palette ? { ...state2, newChat: null, exchange: null, menu: null, palette: null } : state2);
       setPlain(false);
       const target = partFor(id);
       expected = target;
@@ -13924,7 +14317,7 @@ function apply(ctx) {
     // The conversation replacements withdraw for a plain Session; set the surface
     // before the navigation so the Bot skin never flashes.
     openAgentSession: (sessionId) => {
-      ui2.set((state) => ({ ...state, newChat: null, exchange: null, menu: null, palette: null, details: null, view: "details", renaming: false, tab: null }));
+      ui2.set((state2) => ({ ...state2, newChat: null, exchange: null, menu: null, palette: null, details: null, view: "details", renaming: false, tab: null }));
       setPlain(true);
       expected = sessionId;
       ctx.uiWorkspace.openSession(sessionId);
@@ -13965,8 +14358,8 @@ function apply(ctx) {
       else if (roster.getSnapshot().mainBotId) actions.openSession(roster.getSnapshot().mainBotId);
     },
     renameAgentSession: (agentId, sessionId, title) => after(call("agent-rename", { agentId, sessionId, title })),
-    beginAgentRename: (sessionId) => ui2.set((state) => ({ ...state, renameAgent: sessionId })),
-    endAgentRename: () => ui2.set((state) => state.renameAgent ? { ...state, renameAgent: null } : state),
+    beginAgentRename: (sessionId) => ui2.set((state2) => ({ ...state2, renameAgent: sessionId })),
+    endAgentRename: () => ui2.set((state2) => state2.renameAgent ? { ...state2, renameAgent: null } : state2),
     // Removing the Agent archives every Session it owns; one of them may fill the
     // main view, and it must not stay there wearing the Bot surface afterwards.
     removeAgent: async (agentId) => {
@@ -13995,61 +14388,61 @@ function apply(ctx) {
       ctx.layout.toggleSidebar();
     },
     openNewChat: (mode) => {
-      ui2.set((state) => ({ ...state, newChat: mode, menu: null, palette: null }));
+      ui2.set((state2) => ({ ...state2, newChat: mode, menu: null, palette: null }));
     },
     openPalette: (query = "") => {
-      ui2.set((state) => ({ ...state, palette: { query, token: Date.now() }, newChat: null, menu: null }));
+      ui2.set((state2) => ({ ...state2, palette: { query, token: Date.now() }, newChat: null, menu: null }));
     },
     // The token keeps a late exit timer from closing a palette opened again since.
     closePalette: (token) => {
-      ui2.set((state) => state.palette && (token === void 0 || state.palette.token === token) ? { ...state, palette: null } : state);
+      ui2.set((state2) => state2.palette && (token === void 0 || state2.palette.token === token) ? { ...state2, palette: null } : state2);
     },
     openExchange: (a, b) => {
-      if (a && b) ui2.set((state) => ({ ...state, exchange: [a, b] }));
+      if (a && b) ui2.set((state2) => ({ ...state2, exchange: [a, b] }));
     },
     openVoice: (id) => {
-      if (id) ui2.set((state) => ({ ...state, voice: id, menu: null }));
+      if (id) ui2.set((state2) => ({ ...state2, voice: id, menu: null }));
     },
     closeVoice: () => {
-      ui2.set((state) => state.voice ? { ...state, voice: null } : state);
+      ui2.set((state2) => state2.voice ? { ...state2, voice: null } : state2);
     },
     toggleDetails: (id, force) => {
-      ui2.set((state) => {
-        const details = force || state.details !== id || state.view !== "details" ? id : null;
-        return { ...state, renaming: false, tab: null, details, view: "details" };
+      ui2.set((state2) => {
+        const details = force || state2.details !== id || state2.view !== "details" ? id : null;
+        return { ...state2, renaming: false, tab: null, details, view: "details" };
       });
     },
     // The open panel follows the main view; a subject with no browser (a group
     // chat, an outside Session) settles on the details view.
     followPanel: (id) => {
-      ui2.set((state) => {
-        if (!state.details || state.details === id) return state;
-        const view = state.view === "browser" && roster.getSnapshot().byId[id] === void 0 ? "details" : state.view;
-        return { ...state, details: id, view, renaming: false, tab: null };
+      ui2.set((state2) => {
+        if (!state2.details || state2.details === id) return state2;
+        const view = state2.view === "browser" && roster.getSnapshot().byId[id] === void 0 ? "details" : state2.view;
+        return { ...state2, details: id, view, renaming: false, tab: null };
       });
     },
     showDetails: (id, tab = null) => {
-      ui2.set((state) => ({ ...state, details: id, view: "details", renaming: false, tab }));
+      ui2.set((state2) => ({ ...state2, details: id, view: "details", renaming: false, tab }));
     },
     // Opening the conversation would move focus to its composer and blur the name field.
     renameBot: (id) => {
-      ui2.set((state) => ({ ...state, details: id, view: "details", renaming: true, tab: null }));
+      ui2.set((state2) => ({ ...state2, details: id, view: "details", renaming: true, tab: null }));
     },
     // `id` opens one Bot (page 'bots') or one group chat (page 'groups').
     openSettings: (page = "general", id = null) => {
-      ui2.set((state) => ({ ...state, settings: { page, id }, menu: null, palette: null, newChat: null }));
+      ui2.set((state2) => ({ ...state2, settings: { page, id }, menu: null, palette: null, newChat: null }));
     },
     closeSettings: () => {
-      ui2.set((state) => state.settings ? { ...state, settings: null } : state);
+      ui2.set((state2) => state2.settings ? { ...state2, settings: null } : state2);
     },
     openMemory: (botId) => {
-      ui2.set((state) => ({ ...state, memory: botId, menu: null, palette: null }));
+      ui2.set((state2) => ({ ...state2, memory: botId, menu: null, palette: null }));
     },
     closeMemory: () => {
-      ui2.set((state) => state.memory ? { ...state, memory: null } : state);
+      ui2.set((state2) => state2.memory ? { ...state2, memory: null } : state2);
     },
     openConnectors: () => {
-      ui2.set((state) => ({ ...state, settings: { page: "connectors", id: null }, menu: null, palette: null, newChat: null }));
+      ui2.set((state2) => ({ ...state2, settings: { page: "connectors", id: null }, menu: null, palette: null, newChat: null }));
     },
     // Agent mode hands the surface back to the shell; everything open on the Bot
     // surface closes first so nothing stale reopens on the way back.
@@ -14057,18 +14450,18 @@ function apply(ctx) {
       if (mode !== "bot" && mode !== "agent") return;
       if (surface.getSnapshot().mode === mode) return;
       if (mode === "agent") {
-        ui2.set((state) => ({ ...state, details: null, view: "details", settings: null, palette: null, newChat: null, menu: null, voice: null, exchange: null, memory: null, toast: null }));
+        ui2.set((state2) => ({ ...state2, details: null, view: "details", settings: null, palette: null, newChat: null, menu: null, voice: null, exchange: null, memory: null, toast: null }));
       }
       writeMode(mode);
-      surface.set((state) => ({ ...state, mode }));
+      surface.set((state2) => ({ ...state2, mode }));
       if (mode !== "bot") return;
       const home = () => {
-        const snapshot = roster.getSnapshot();
-        if (!snapshot.ready || !snapshot.mainBotId) return;
+        const snapshot2 = roster.getSnapshot();
+        if (!snapshot2.ready || !snapshot2.mainBotId) return;
         const list = ctx.sessions.list.getSnapshot();
         const main = Object.values(list.byId ?? {}).find((session) => (session?.retainedBy?.mainView ?? 0) > 0)?.id;
-        if (main !== void 0 && snapshot.byId[main] === void 0 && snapshot.roomsById[main] === void 0) {
-          actions.openSession(snapshot.mainBotId);
+        if (main !== void 0 && snapshot2.byId[main] === void 0 && snapshot2.roomsById[main] === void 0) {
+          actions.openSession(snapshot2.mainBotId);
         }
       };
       if (roster.getSnapshot().ready) home();
@@ -14084,34 +14477,34 @@ function apply(ctx) {
     beginVisit: (id) => {
       const made = roster.getSnapshot().byId[id] ?? roster.getSnapshot().roomsById[id];
       const seen = seenAt[seenKey(id)] ?? (made?.createdBy && Number.isFinite(made.createdAt) ? made.createdAt : null);
-      ui2.set((state) => ({ ...state, visits: { ...state.visits, [id]: { seen, entered: Date.now() } } }));
+      ui2.set((state2) => ({ ...state2, visits: { ...state2.visits, [id]: { seen, entered: Date.now() } } }));
     },
     endVisit: (id) => {
       leaveVisits([id]);
-      ui2.set((state) => {
-        if (!(id in (state.visits ?? {}))) return state;
-        const visits = { ...state.visits };
+      ui2.set((state2) => {
+        if (!(id in (state2.visits ?? {}))) return state2;
+        const visits = { ...state2.visits };
         delete visits[id];
-        return { ...state, visits };
+        return { ...state2, visits };
       });
     },
     toggleReaction: (key, index, emoji) => {
       const reactions = reactionStore.update((saved) => toggleReaction(saved, key, index, emoji), ui2.getSnapshot().reactions);
-      ui2.set((state) => ({ ...state, reactions }));
+      ui2.set((state2) => ({ ...state2, reactions }));
     },
-    quote: (sessionId, text) => ui2.set((state) => ({ ...state, quote: { sessionId, text, token: Date.now() } })),
-    clearQuote: (token) => ui2.set((state) => state.quote?.token === token ? { ...state, quote: null } : state),
+    quote: (sessionId, text) => ui2.set((state2) => ({ ...state2, quote: { sessionId, text, token: Date.now() } })),
+    clearQuote: (token) => ui2.set((state2) => state2.quote?.token === token ? { ...state2, quote: null } : state2),
     clearUnread: (id) => writeUnread(id, false),
     setFlags: (id, flags) => after(call("set-flags", { id, ...flags })),
     deleteRoom: (id) => after(call("delete-room", { id })),
     openMenu: (menu) => {
-      ui2.set((state) => ({ ...state, menu }));
+      ui2.set((state2) => ({ ...state2, menu }));
     },
     closeMenu: () => {
-      ui2.set((state) => state.menu ? { ...state, menu: null } : state);
+      ui2.set((state2) => state2.menu ? { ...state2, menu: null } : state2);
     },
     closeOverlay: () => {
-      ui2.set((state) => ({ ...state, newChat: null, exchange: null, details: state.newChat || state.exchange ? state.details : null }));
+      ui2.set((state2) => ({ ...state2, newChat: null, exchange: null, details: state2.newChat || state2.exchange ? state2.details : null }));
     },
     createBot: (payload) => after(call("create-bot", payload)),
     createRoom: (members, options = {}) => after(call("create-room", { members, ...options })),
@@ -14174,9 +14567,9 @@ function apply(ctx) {
     // A failed action away from any form (a menu, the palette) shows as a toast.
     reportError: (error, where = "action") => {
       noteClientError(where, error);
-      ui2.set((state) => ({ ...state, toast: { text: error?.message ?? String(error), token: Date.now() } }));
+      ui2.set((state2) => ({ ...state2, toast: { text: error?.message ?? String(error), token: Date.now() } }));
     },
-    dismissToast: (token) => ui2.set((state) => state.toast && (token === void 0 || state.toast.token === token) ? { ...state, toast: null } : state)
+    dismissToast: (token) => ui2.set((state2) => state2.toast && (token === void 0 || state2.toast.token === token) ? { ...state2, toast: null } : state2)
   };
   if (browsers) {
     Object.assign(actions, {
@@ -14186,7 +14579,7 @@ function apply(ctx) {
         if (!bot) return;
         browsers.ensureTabs(bot.id);
         if (browsers.tabs.getSnapshot()[bot.id]?.active == null) browsers.openTab(bot.id);
-        ui2.set((state) => ({ ...state, details: id, view: "browser", renaming: false, tab: null }));
+        ui2.set((state2) => ({ ...state2, details: id, view: "browser", renaming: false, tab: null }));
       },
       // '+' on the strip or the drawer's new-tab card: a blank tab in the browser view.
       browserNewTab: (id) => {
@@ -14194,7 +14587,7 @@ function apply(ctx) {
         if (!bot) return null;
         browsers.ensureTabs(bot.id);
         const tabId = browsers.openTab(bot.id);
-        ui2.set((state) => ({ ...state, details: id, view: "browser", renaming: false, tab: null }));
+        ui2.set((state2) => ({ ...state2, details: id, view: "browser", renaming: false, tab: null }));
         return tabId;
       },
       // A drawer card: its tab active, the panel on the browser view.
@@ -14202,7 +14595,7 @@ function apply(ctx) {
         const bot = roster.getSnapshot().byId[id];
         if (!bot) return;
         browsers.activate(bot.id, tabId);
-        ui2.set((state) => ({ ...state, details: id, view: "browser" }));
+        ui2.set((state2) => ({ ...state2, details: id, view: "browser" }));
       },
       browserEnsure: (botId) => browsers.ensureTabs(botId),
       browserCloseTab: (botId, tabId) => browsers.closeTab(botId, tabId),
@@ -14215,22 +14608,22 @@ function apply(ctx) {
   }
   actions.setPanelView = (view) => {
     if (view !== "details" && view !== "browser") return;
-    ui2.set((state) => state.details && state.view !== view ? { ...state, view } : state);
+    ui2.set((state2) => state2.details && state2.view !== view ? { ...state2, view } : state2);
   };
   actions.closePanel = () => {
-    ui2.set((state) => state.details ? { ...state, details: null, view: "details", renaming: false, tab: null } : state);
+    ui2.set((state2) => state2.details ? { ...state2, details: null, view: "details", renaming: false, tab: null } : state2);
   };
   actions.signInEntry = () => ctx.slots.entries?.("settings.models.sign-in")?.[0] ?? null;
   actions.canSignIn = () => Boolean(actions.signInEntry());
-  actions.signIn = () => ui2.set((state) => ({ ...state, signIn: (state.signIn ?? 0) + 1 }));
-  actions.closeSignIn = () => ui2.set((state) => ({ ...state, signIn: null }));
+  actions.signIn = () => ui2.set((state2) => ({ ...state2, signIn: (state2.signIn ?? 0) + 1 }));
+  actions.closeSignIn = () => ui2.set((state2) => ({ ...state2, signIn: null }));
   actions.accountT = () => ctx.get("locale").bind("settings.account");
   actions.speech = () => ctx.get("remote.speech") ?? void 0;
   actions.voiceSetup = () => {
     const navigation = ctx.get("pluginNavigation");
     return navigation ? () => navigation.openBundle(VOICE_BUNDLE) : null;
   };
-  actions.seatAccount = (on) => ui2.set((state) => state.accountSeated === on ? state : { ...state, accountSeated: on });
+  actions.seatAccount = (on) => ui2.set((state2) => state2.accountSeated === on ? state2 : { ...state2, accountSeated: on });
   actions.installUpdate = async () => {
     const value = await call("update-install");
     update.set((previous) => ({ ...previous, ...value }));
@@ -14254,41 +14647,41 @@ function apply(ctx) {
   actions.repoStars = () => call("repo-stars");
   actions.noteTurnTime = (sessionId, turn, key, time) => {
     if (sessionId === void 0 || !Number.isFinite(turn) || !Number.isFinite(time)) return;
-    turnClock.set((state) => {
-      const turns = state[sessionId] ?? {};
+    turnClock.set((state2) => {
+      const turns = state2[sessionId] ?? {};
       const entry = turns[turn] ?? {};
       const next = key === "first" && entry.first !== void 0 ? Math.min(entry.first, time) : time;
-      if (entry[key] === next) return state;
-      return { ...state, [sessionId]: { ...turns, [turn]: { ...entry, [key]: next } } };
+      if (entry[key] === next) return state2;
+      return { ...state2, [sessionId]: { ...turns, [turn]: { ...entry, [key]: next } } };
     });
   };
   actions.noteTurnPeer = (sessionId, turn, peerId) => {
     if (sessionId === void 0 || !Number.isFinite(turn)) return;
-    turnClock.set((state) => {
-      const turns = state[sessionId] ?? {};
+    turnClock.set((state2) => {
+      const turns = state2[sessionId] ?? {};
       const entry = turns[turn] ?? {};
-      if (entry.peer === peerId) return state;
-      return { ...state, [sessionId]: { ...turns, [turn]: { ...entry, peer: peerId } } };
+      if (entry.peer === peerId) return state2;
+      return { ...state2, [sessionId]: { ...turns, [turn]: { ...entry, peer: peerId } } };
     });
   };
   actions.noteLive = (sessionId, id, entry) => {
     if (sessionId === void 0) return;
-    live.set((state) => {
-      const own = state[sessionId] ?? {};
+    live.set((state2) => {
+      const own = state2[sessionId] ?? {};
       const prev = own[id];
-      if (entry === null ? prev === void 0 : prev !== void 0 && JSON.stringify({ ...prev, at: 0 }) === JSON.stringify({ ...entry, at: 0 })) return state;
+      if (entry === null ? prev === void 0 : prev !== void 0 && JSON.stringify({ ...prev, at: 0 }) === JSON.stringify({ ...entry, at: 0 })) return state2;
       const next = { ...own };
       if (entry === null) delete next[id];
       else next[id] = { ...entry, at: prev?.at ?? Date.now() };
-      return { ...state, [sessionId]: next };
+      return { ...state2, [sessionId]: next };
     });
   };
   actions.noteCards = (sessionId, callIds, delta) => {
-    if (sessionId !== void 0) cards.set((state) => countCards(state, sessionId, callIds, delta));
+    if (sessionId !== void 0) cards.set((state2) => countCards(state2, sessionId, callIds, delta));
   };
-  actions.clearLive = (sessionId) => live.set((state) => {
-    if (!state[sessionId]) return state;
-    const next = { ...state };
+  actions.clearLive = (sessionId) => live.set((state2) => {
+    if (!state2[sessionId]) return state2;
+    const next = { ...state2 };
     delete next[sessionId];
     return next;
   });
@@ -14307,14 +14700,14 @@ function apply(ctx) {
     const chat = ctx.uiConversation.binding(binding).target("chat");
     return { ...face(), keyedHooks: {
       turnSteps: (turn) => {
-        const snapshot = chat.getSnapshot();
-        if (snapshot === void 0) throw new Error("ds-bot: Chat target is unavailable");
-        return snapshot.nodes.turnDataSource(Number(turn), "assistant-step");
+        const snapshot2 = chat.getSnapshot();
+        if (snapshot2 === void 0) throw new Error("ds-bot: Chat target is unavailable");
+        return snapshot2.nodes.turnDataSource(Number(turn), "assistant-step");
       },
       turnContext: (turn) => {
-        const snapshot = chat.getSnapshot();
-        if (snapshot === void 0) throw new Error("ds-bot: Chat target is unavailable");
-        return snapshot.nodes.turnDataSource(Number(turn), "context");
+        const snapshot2 = chat.getSnapshot();
+        if (snapshot2 === void 0) throw new Error("ds-bot: Chat target is unavailable");
+        return snapshot2.nodes.turnDataSource(Number(turn), "context");
       }
     } };
   };
@@ -14361,6 +14754,7 @@ function apply(ctx) {
     () => installCompiledStyles(ABOUT_CSS, "about"),
     () => installCompiledStyles(MEMBER_CSS, "members"),
     () => installCompiledStyles(USER_MESSAGE_CSS, "user-messages"),
+    () => installCompiledStyles(CHANNELS_CSS, "channels"),
     browsers ? () => installCompiledStyles(BROWSER_CSS, "browser") : null,
     () => installTheme(),
     () => shadow("sidebar.workspaces", { priority: BOT_PRIORITY, inject: face }, TeamSidebar),
@@ -14368,13 +14762,15 @@ function apply(ctx) {
     () => shadow("sidebar.brand.name", { priority: BOT_PRIORITY }, BrandName),
     () => shadow("sidebar.footer.action", { id: "bot-account", order: -200, inject: face }, FooterAccount),
     () => shadow("sidebar.footer.action", { id: "bot-connect", order: -100, inject: face }, ConnectPlugins),
+    () => shadow("sidebar.footer.action", { id: "omni-channels", order: -120, inject: face }, ChannelsButton),
     () => shadow("settings.trigger", { priority: BOT_PRIORITY }, YouAvatar),
     // The whale wins the seat over a shell account plugin's own launcher (the
     // Desktop's "··· More"), which comes back in Agent mode.
     () => shadow("settings.launcher", { priority: BOT_PRIORITY, inject: face }, AccountLauncher),
     () => shadow("shell.overlay", { id: "bot", order: 50, inject: face }, Overlays),
     () => shadow("shell.overlay", { id: "bot-signin", order: 55, inject: face }, DeepSeekSignIn),
-    () => shadow("shell.overlay", { id: "bot-toast", order: 60, inject: face }, ErrorToast)
+    () => shadow("shell.overlay", { id: "bot-toast", order: 60, inject: face }, ErrorToast),
+    () => shadow("shell.overlay", { id: "omni-channels", order: 53, inject: face }, ChannelsOverlay)
   ];
   const installConversation = () => [
     () => installCompiledStyles(CONVERSATION_CSS, "conversation"),
@@ -14433,8 +14829,8 @@ function apply(ctx) {
       if (surface.getSnapshot().mode !== "bot") return;
       const agentId = before !== void 0 ? agentOfSession(before) : void 0;
       if (agentId === void 0) return;
-      const snapshot = roster.getSnapshot();
-      if (snapshot.byId[main] !== void 0 || snapshot.roomsById[main] !== void 0 || agentOfSession(main) !== void 0) return;
+      const snapshot2 = roster.getSnapshot();
+      if (snapshot2.byId[main] !== void 0 || snapshot2.roomsById[main] !== void 0 || agentOfSession(main) !== void 0) return;
       const row = list.byId[main];
       const parent = row?.parentId ?? row?.parentSessionId;
       const forkedFromAgent = parent !== void 0 && agentOfSession(parent) === agentId;

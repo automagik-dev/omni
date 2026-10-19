@@ -44,7 +44,8 @@
     "test": "node --import ./test/harness-resolve.mjs --test \"test/*.test.js\"",
     "lint": "node scripts/lint.mjs",
     "harness": "npm install --prefix dev/harness --legacy-peer-deps=false --no-package-lock --no-fund --no-audit",
-    "check": "sh dev/check.sh"
+    "check": "sh dev/check.sh",
+    "dev:client": "node scripts/watch-client.mjs"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "*",
