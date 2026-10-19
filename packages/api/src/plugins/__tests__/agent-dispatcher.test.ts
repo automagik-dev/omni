@@ -1775,7 +1775,7 @@ describe('agent-dispatcher', () => {
   // resolveQuotedMessage — quoted text truncation
   // ======================================================================
   describe('resolveQuotedMessage', () => {
-    function createQuotedMessageServices(messageContent: string) {
+    function createQuotedMessageServices(messageContent: string | null, overrides: Record<string, unknown> = {}) {
       const chatRow = { id: 'chat-db-1', externalId: 'chat-ext-1', chatType: 'dm' };
       const messageRow = {
         externalId: 'quoted-ext-1',
@@ -1789,6 +1789,7 @@ describe('agent-dispatcher', () => {
         imageDescription: null,
         videoDescription: null,
         documentExtraction: null,
+        ...overrides,
       };
 
       return {
@@ -1936,6 +1937,42 @@ describe('agent-dispatcher', () => {
       expect(result).not.toBeNull();
       expect(result).toContain('[Quoting Alice');
       expect(result).toContain('Hello world');
+    });
+
+    // #1305: the media processor writes `[error: media processing failed — …]`
+    // into the content column when AI processing fails. A quoted reply must not
+    // hand that marker to the agent as what the person said or showed.
+    it('quotes a voice note whose transcription failed as [audio], not the error marker', async () => {
+      const services = createQuotedMessageServices(null, {
+        messageType: 'audio',
+        transcription: '[error: media processing failed — Groq client not configured (missing API key)]',
+      });
+
+      const result = await resolveQuotedMessage(services, 'inst-1', 'chat-ext-1', 'quoted-ext-1');
+
+      expect(result).toContain('[audio]');
+      expect(result).not.toContain('[error');
+      expect(result).not.toContain('Groq');
+    });
+
+    it('quotes an image whose description failed by its caption, not the error marker', async () => {
+      const services = createQuotedMessageServices('look at this', {
+        messageType: 'image',
+        imageDescription: '[error: media processing failed — No vision API configured]',
+      });
+
+      const result = await resolveQuotedMessage(services, 'inst-1', 'chat-ext-1', 'quoted-ext-1');
+
+      expect(result).toContain('look at this');
+      expect(result).not.toContain('[error');
+    });
+
+    it('still quotes a successful transcription', async () => {
+      const services = createQuotedMessageServices(null, { messageType: 'audio', transcription: 'see you at noon' });
+
+      const result = await resolveQuotedMessage(services, 'inst-1', 'chat-ext-1', 'quoted-ext-1');
+
+      expect(result).toContain('see you at noon');
     });
 
     it('returns null when chat is not found', async () => {
@@ -2271,6 +2308,51 @@ describe('agent-dispatcher', () => {
       expect(result.length).toBe(2);
       expect(result[0]).toContain('oldest');
       expect(result[1]).toContain('middle');
+    });
+
+    // #1305: a failed transcription/description is stored as an error marker in
+    // the content column; chat history must treat it as missing content.
+    it('history never carries a media-processing error marker as message content', async () => {
+      const msgs = [
+        createMsgRow({ externalId: 'current', textContent: 'did you get it?' }),
+        createMsgRow({
+          externalId: 'voice',
+          messageType: 'audio',
+          hasMedia: true,
+          textContent: null,
+          transcription: '[error: media processing failed — Groq client not configured (missing API key)]',
+        }),
+        createMsgRow({
+          externalId: 'photo',
+          messageType: 'image',
+          hasMedia: true,
+          textContent: 'my receipt',
+          imageDescription: '[error: media processing failed — No vision API configured]',
+        }),
+        createMsgRow({
+          externalId: 'clip',
+          messageType: 'video',
+          hasMedia: true,
+          textContent: null,
+          videoDescription: '[error: media processing failed — No video API configured]',
+        }),
+        createMsgRow({
+          externalId: 'ok-voice',
+          messageType: 'audio',
+          hasMedia: true,
+          textContent: null,
+          transcription: 'see you at noon',
+        }),
+      ];
+      const services = createContextServices('dm', msgs);
+      const instance = createContextInstance();
+
+      const result = await buildContextMessages(services, instance, 'chat-ext-1', ['current']);
+
+      expect(result.length).toBe(4);
+      expect(result.some((r: string) => r.includes('[error'))).toBe(false);
+      expect(result.some((r: string) => r.includes('Caption: my receipt'))).toBe(true);
+      expect(result.some((r: string) => r.includes('"see you at noon"'))).toBe(true);
     });
 
     it('returns empty when chat is not found', async () => {

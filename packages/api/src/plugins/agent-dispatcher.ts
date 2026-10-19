@@ -1220,6 +1220,22 @@ const mediaCompletions = new Map<
 const mediaResultCache = new Map<string, { content: string; error?: string }>();
 
 /**
+ * The media processor writes `[error: media processing failed — <reason>]` into the
+ * content column (transcription, imageDescription, ...) when AI processing fails.
+ */
+function isMediaErrorMarker(value: unknown): boolean {
+  return typeof value === 'string' && value.startsWith('[error');
+}
+
+/**
+ * Processed media text fit for the agent: null when the column is empty or holds
+ * the processor's error marker (#1305), so callers fall back to their placeholder.
+ */
+function processedMediaText(value: string | null | undefined): string | null {
+  return value && !isMediaErrorMarker(value) ? value : null;
+}
+
+/**
  * Check a single poll result: returns result if ready, 'pending' if still waiting, or null on error.
  */
 function checkProcessedColumn(
@@ -1229,7 +1245,7 @@ function checkProcessedColumn(
   if (!msg) return 'pending';
   const processed = msg[column];
   if (processed == null) return 'pending';
-  if (typeof processed === 'string' && processed.startsWith('[error')) return 'error';
+  if (isMediaErrorMarker(processed)) return 'error';
   if (processed) {
     // Use mediaLocalPath (the actual downloaded file path) instead of mediaUrl (the platform file ID)
     const localPath = msg.mediaLocalPath ? resolve(join(MEDIA_BASE_PATH, msg.mediaLocalPath as string)) : null;
@@ -1436,16 +1452,22 @@ function getMessageContentText(msg: {
   documentExtraction: string | null;
 }): string | null {
   switch (msg.messageType) {
-    case 'audio':
-      return msg.transcription ? `${MEDIA_ICONS.audio}: ${msg.transcription}` : (msg.textContent ?? '[audio]');
-    case 'image':
-      return msg.imageDescription ? `${MEDIA_ICONS.image}: ${msg.imageDescription}` : (msg.textContent ?? '[image]');
-    case 'video':
-      return msg.videoDescription ? `${MEDIA_ICONS.video}: ${msg.videoDescription}` : (msg.textContent ?? '[video]');
-    case 'document':
-      return msg.documentExtraction
-        ? `${MEDIA_ICONS.document}: ${msg.documentExtraction}`
-        : (msg.textContent ?? '[document]');
+    case 'audio': {
+      const transcription = processedMediaText(msg.transcription);
+      return transcription ? `${MEDIA_ICONS.audio}: ${transcription}` : (msg.textContent ?? '[audio]');
+    }
+    case 'image': {
+      const description = processedMediaText(msg.imageDescription);
+      return description ? `${MEDIA_ICONS.image}: ${description}` : (msg.textContent ?? '[image]');
+    }
+    case 'video': {
+      const description = processedMediaText(msg.videoDescription);
+      return description ? `${MEDIA_ICONS.video}: ${description}` : (msg.textContent ?? '[video]');
+    }
+    case 'document': {
+      const extraction = processedMediaText(msg.documentExtraction);
+      return extraction ? `${MEDIA_ICONS.document}: ${extraction}` : (msg.textContent ?? '[document]');
+    }
     default:
       return msg.textContent;
   }
@@ -2671,22 +2693,26 @@ function formatMediaContent(msg: {
     }[msg.messageType] || '📎';
 
   const mediaInfo: string[] = [mediaEmoji];
+  const transcription = processedMediaText(msg.transcription);
+  const imageDescription = processedMediaText(msg.imageDescription);
+  const videoDescription = processedMediaText(msg.videoDescription);
+  const documentExtraction = processedMediaText(msg.documentExtraction);
 
   // Add transcription for audio/voice
-  if (msg.transcription) {
-    mediaInfo.push(`"${msg.transcription}"`);
+  if (transcription) {
+    mediaInfo.push(`"${transcription}"`);
   }
   // Add description for images
-  else if (msg.imageDescription) {
-    mediaInfo.push(msg.imageDescription);
+  else if (imageDescription) {
+    mediaInfo.push(imageDescription);
   }
   // Add description for videos
-  else if (msg.videoDescription) {
-    mediaInfo.push(msg.videoDescription);
+  else if (videoDescription) {
+    mediaInfo.push(videoDescription);
   }
   // Add extraction for documents
-  else if (msg.documentExtraction) {
-    mediaInfo.push(msg.documentExtraction.substring(0, 200)); // truncate long extractions
+  else if (documentExtraction) {
+    mediaInfo.push(documentExtraction.substring(0, 200)); // truncate long extractions
   }
 
   // If there's a caption, add it
