@@ -178,6 +178,7 @@ export const SCOPE_MAP: Record<string, string> = {
   'DELETE /events/consumers/:name': 'events:write',
   'POST /events/consumers/:name/pull': 'events:write',
   'POST /events/consumers/:name/ack': 'events:write',
+  'GET /events/consumers/:name/stream': 'events:write', // same as pull (leases/cursors are consumer state)
 
   // --- events ---
   'GET /events': 'events:read',

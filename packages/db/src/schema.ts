@@ -934,6 +934,22 @@ export const instances = pgTable(
       .notNull()
       .default('convert')
       .$type<'convert' | 'passthrough'>(),
+    /**
+     * Outbound pacing (WhatsApp Baileys): 'humanized' = anti-ban delay + typing
+     * simulation before each send (default, today's behaviour), 'immediate' =
+     * skip both. A send request's `pacing` field overrides this per message.
+     */
+    outboundPacing: varchar('outbound_pacing', { length: 20 })
+      .notNull()
+      .default('humanized')
+      .$type<'humanized' | 'immediate'>(),
+    /**
+     * Operator consent for per-request pacing: when false (default) a send
+     * request may still ask for 'humanized', but 'immediate' is refused (403)
+     * unless outboundPacing itself is 'immediate'. Only a full-access ('*')
+     * API key may set it to true (POST/PATCH /instances answer 403 otherwise).
+     */
+    outboundPacingOverride: boolean('outbound_pacing_override').notNull().default(false),
     disableUsernamePrefix: boolean('disable_username_prefix').notNull().default(false),
     processMediaOnBlocked: boolean('process_media_on_blocked').notNull().default(true),
     accessMode: varchar('access_mode', { length: 20 }).notNull().default('blocklist').$type<AccessMode>(),
@@ -1005,6 +1021,17 @@ export const instances = pgTable(
     processVideo: boolean('process_video').notNull().default(true),
     processDocuments: boolean('process_documents').notNull().default(true),
 
+    // ---- Audio Transcription ----
+    /**
+     * Opt-in switch for server-side transcription of inbound audio: 'auto'
+     * (default, today's behaviour) or 'off' (audio is stored but never sent to
+     * STT). Read by the media processor; process_audio above stays unread.
+     */
+    audioTranscription: varchar('audio_transcription', { length: 10 })
+      .notNull()
+      .default('auto')
+      .$type<'auto' | 'off'>(),
+
     // ---- Agent Media Preprocessing ----
     /** Wait for media processing (transcription/vision) before dispatching to agent */
     agentWaitForMedia: boolean('agent_wait_for_media').notNull().default(true),
@@ -1032,6 +1059,13 @@ export const instances = pgTable(
       .$type<'desktop' | 'web'>(),
     /** Ask WhatsApp for full history on connect (default: false, see #70) */
     syncFullHistory: boolean('sync_full_history').notNull().default(false),
+
+    // ---- WhatsApp Inbound Reply Context (#1297) ----
+    /**
+     * Opt-in: WhatsApp (Baileys) adds the typed `replyTo` to message.received and
+     * `target` to reaction.received/removed. Off = events exactly as before. Read at connect.
+     */
+    inboundReplyContext: boolean('inbound_reply_context').notNull().default(false),
 
     // ---- Group History Context ----
     /** Number of recent messages to fetch for group context (0 = disabled, max 200) */
@@ -1810,6 +1844,9 @@ export const messages = pgTable(
  *
  * @see v1: message_traces (enhanced to full events)
  */
+/** Ingest-time access verdict journaled on omni_events.access_decision (opt-in). */
+export type EventAccessDecision = 'disabled' | 'allowed' | 'denied';
+
 export const omniEvents = pgTable(
   'omni_events',
   {
@@ -1895,6 +1932,15 @@ export const omniEvents = pgTable(
      */
     causationId: uuid('causation_id'),
     /**
+     * Access verdict frozen at ingest: 'disabled' | 'allowed' | 'denied'.
+     * Written only when OMNI_JOURNAL_ACCESS_DECISION=true, and only for
+     * inbound (not-from-me) message.received / reaction.* rows. NULL for every
+     * other row and for every row journaled with the flag off — opt-in,
+     * additive, no backfill (0083). Durable consumers created with
+     * `access: 'allowed' | 'denied'` filter on it.
+     */
+    accessDecision: varchar('access_decision', { length: 10 }).$type<EventAccessDecision>(),
+    /**
      * Monotonic journal position (#989, RFC #925 G7). Assigned by a sequence
      * at insert; the durable-consumer cursor is "last acked journal_seq" and
      * delivery resumes strictly after it. This is the journal's total order —
@@ -1903,6 +1949,14 @@ export const omniEvents = pgTable(
      * in physical order when the column landed (they predate every consumer).
      */
     journalSeq: bigserial('journal_seq', { mode: 'number' }),
+    /**
+     * False while an ingress claim's skeleton row awaits its persistence fill
+     * (the claim commits the row, and its journal_seq, before the payload
+     * lands). The fill sets it true. Default true: every other insert, and
+     * every row that predates the column, is complete. Read only by durable
+     * consumers created with wait_for_ready (opt-in journal readiness gate).
+     */
+    journalReady: boolean('journal_ready').notNull().default(true),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     /** G2 additive tenant ownership. Nullable through the additive phase. */
     tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
@@ -3416,6 +3470,9 @@ export interface SharedLeaseState {
   leases: ConsumerLease[];
 }
 
+/** Which journal rows a durable consumer sees by their ingest access verdict. */
+export type ConsumerAccessFilter = 'all' | 'allowed' | 'denied';
+
 export const durableConsumers = pgTable(
   'durable_consumers',
   {
@@ -3439,8 +3496,32 @@ export const durableConsumers = pgTable(
      * leased pages (`lease_state`), each page handed to one puller at a time.
      */
     shared: boolean('shared').notNull().default(false),
+    /**
+     * Opt-in journal readiness gate: when true, pull and shared claims stop
+     * each page just before the first claimed-but-unfilled row
+     * (omni_events.journal_ready = false) younger than the settle window, so
+     * the cursor never moves past it. Default false = today's behaviour.
+     */
+    waitForReady: boolean('wait_for_ready').notNull().default(false),
     /** Shared consumers only: claimed watermark + outstanding page leases. */
     leaseState: jsonb('lease_state').$type<SharedLeaseState>(),
+    /**
+     * Opt-in instance scoping (0082). false (default) = today's global
+     * consumer: every key with events:* may read and move it, and it pages
+     * every instance's rows. true = pull only pages rows whose instance_id is
+     * in `instance_ids`, and only the owner key (or an instance-unrestricted
+     * key) may see, pull, ack or delete it.
+     */
+    scoped: boolean('scoped').notNull().default(false),
+    /** Scoped consumers only: instance UUIDs this consumer may page. Null when unscoped. */
+    instanceIds: jsonb('instance_ids').$type<string[]>(),
+    /** Scoped consumers only: the api_keys.id that registered it. Null when unscoped. No FK (see 0082). */
+    ownerKeyId: uuid('owner_key_id'),
+    /**
+     * Access filter over omni_events.access_decision (0083): 'all' (default,
+     * no predicate — every existing consumer) | 'allowed' | 'denied'.
+     */
+    accessFilter: varchar('access_filter', { length: 10 }).notNull().default('all').$type<ConsumerAccessFilter>(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

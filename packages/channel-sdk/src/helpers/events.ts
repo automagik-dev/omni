@@ -52,6 +52,17 @@ export interface EmitMessageReceivedParams {
   /** ID of message this is replying to */
   replyToId?: string;
 
+  /** Typed quote of the replied-to message (additive to replyToId; absent when not a reply or not opted in) */
+  replyTo?: {
+    externalId: string;
+    chatId: string;
+    participant?: string;
+    fromMe: boolean;
+    type: string;
+    isVoiceNote?: boolean;
+    text?: string;
+  };
+
   /** Same-tenant Omni instance whose own account sent this message (#1148) */
   senderInstanceId?: string;
 
@@ -230,6 +241,9 @@ export interface EmitReactionReceivedParams {
 
   /** Raw platform payload */
   rawPayload?: Record<string, unknown>;
+
+  /** The reacted-to message, relative to the receiving instance */
+  target?: { fromMe: boolean; participant?: string };
 }
 
 /**
@@ -299,6 +313,9 @@ export interface EmitReactionRemovedParams {
 
   /** Raw platform payload */
   rawPayload?: Record<string, unknown>;
+
+  /** The message the reaction was removed from, relative to the receiving instance */
+  target?: { fromMe: boolean; participant?: string };
 }
 
 /**

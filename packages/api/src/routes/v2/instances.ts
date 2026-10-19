@@ -6,11 +6,13 @@ import { zValidator } from '@hono/zod-validator';
 import type { ChannelPlugin, ChannelRegistry, GroupParticipantUpdateResult } from '@omni/channel-sdk';
 import { AccessModeSchema, ChannelTypeSchema, NotFoundError, createLogger } from '@omni/core';
 import type { GupshupHandoffOptions } from '@omni/db';
-import { Hono } from 'hono';
+import { type Context, Hono } from 'hono';
 import { z } from 'zod';
 import { accessCache } from '../../cache/cache-keys';
 import { DEFAULT_TURN_SCOPES } from '../../constants/scopes';
 import { agentKeyName } from '../../lib/agent-key-name';
+import { applyInboundReplyContextOption } from '../../lib/inbound-reply-context';
+import { readSignedHostScopeContext } from '../../lib/signed-host-scope-context';
 import { applyWhatsAppBusinessConnectionOptions } from '../../lib/whatsapp-business-connection';
 import { filterByInstanceAccess, requireInstanceAccess } from '../../middleware/auth';
 import { invalidateProviderCacheForInstance } from '../../plugins/agent-dispatcher';
@@ -96,11 +98,29 @@ const createInstanceSchema = z.object({
     .enum(['convert', 'passthrough'])
     .default('convert')
     .describe('Format conversion: convert markdown to native channel syntax, or passthrough raw text'),
+  outboundPacing: z
+    .enum(['humanized', 'immediate'])
+    .default('humanized')
+    .describe(
+      "Outbound pacing (WhatsApp Baileys): 'humanized' keeps the anti-ban delay and typing simulation before each send; 'immediate' skips both. Send requests may ask for 'humanized' with `pacing`; asking for 'immediate' needs outboundPacingOverride on a humanized instance",
+    ),
+  outboundPacingOverride: z
+    .boolean()
+    .default(false)
+    .describe(
+      "Let send requests choose `pacing: 'immediate'` on a humanized instance. Default false: such requests are refused with 403. Setting it to true needs a full-access ('*') key; any other key gets 403",
+    ),
   isDefault: z.boolean().default(false).describe('Set as default instance for channel'),
   token: z.string().optional().describe('Bot token for Discord instances (required for Discord)'),
   ttsVoiceId: z.string().optional().nullable().describe('Default ElevenLabs voice ID for this instance'),
   ttsModelId: z.string().optional().nullable().describe('Default ElevenLabs model for this instance'),
   accessMode: AccessModeSchema.optional().describe('Access control mode: disabled, blocklist, or allowlist'),
+  audioTranscription: z
+    .enum(['auto', 'off'])
+    .default('auto')
+    .describe(
+      "Server-side transcription of inbound audio: 'auto' (default, transcribed as always) or 'off' (stored but never sent to STT; a skipped media.processed is emitted instead)",
+    ),
   agentWaitForMedia: z.boolean().default(true).describe('Wait for media processing before dispatching to agent'),
   agentSendMediaPath: z.boolean().default(true).describe('Include file path in formatted media text sent to agent'),
   agentSendMediaPathTypes: z
@@ -276,6 +296,12 @@ const createInstanceSchema = z.object({
     .boolean()
     .default(false)
     .describe('WhatsApp (Baileys): request full message history on connect (default: false)'),
+  inboundReplyContext: z
+    .boolean()
+    .default(false)
+    .describe(
+      'WhatsApp (Baileys): add the typed replyTo to message.received and target to reaction.received/removed (default: false = events unchanged). Read at connect: restart the instance after changing it',
+    ),
   reactionAck: z
     .enum(['on', 'off'])
     .default('off')
@@ -390,9 +416,11 @@ const updateInstanceSchema = createInstanceSchema
     // Override fields with .default() to strip the default — omitted keys must stay undefined
     // so PATCH only updates what is explicitly sent (not reset to defaults)
     readReceipts: z.enum(['on', 'off', 'exclude-self']).optional(),
+    audioTranscription: z.enum(['auto', 'off']).optional(),
     markOnlineOnConnect: z.boolean().optional(),
     historyIdentity: z.enum(['desktop', 'web']).optional(),
     syncFullHistory: z.boolean().optional(),
+    inboundReplyContext: z.boolean().optional(),
     groupHistorySize: z.number().int().min(0).max(200).optional(),
     reactionAck: z.enum(['on', 'off']).optional(),
     reactionAckEmoji: z.record(z.string()).nullable().optional(),
@@ -409,6 +437,9 @@ const updateInstanceSchema = createInstanceSchema
     // omits this key doesn't silently flip the stored value back to false.
     requireGenieSignature: z.boolean().optional(),
     allowFirstParty: z.boolean().optional(),
+    // Strip the .default('humanized') so a PATCH that omits it never resets the stored pacing.
+    outboundPacing: z.enum(['humanized', 'immediate']).optional(),
+    outboundPacingOverride: z.boolean().optional(),
   })
   // #1211: reject unknown fields (400 naming the key) instead of silently stripping them.
   .strict();
@@ -1058,6 +1089,32 @@ async function findSlackBotModeConflict(
   return other ? { id: other.id, name: other.name } : null;
 }
 
+/**
+ * Guard: only a full-access ('*') key may turn outboundPacingOverride on —
+ * the flag lets per-request `pacing: 'immediate'` skip the humanized anti-ban
+ * pacing. Omitting it or setting false is open to any key that may write the
+ * instance. Same in-handler 403 shape as requireAdmin in turns.ts; a signed
+ * host must be full-access too, as the scope-ceiling check in keys.ts requires.
+ */
+function denyPacingOverrideForScopedKey(
+  c: Context<{ Variables: AppVariables }>,
+  outboundPacingOverride: boolean | undefined,
+): Response | null {
+  if (outboundPacingOverride !== true) return null;
+  const signedHost = readSignedHostScopeContext(c);
+  const hostAllows = signedHost.kind === 'unsigned' || (signedHost.kind === 'valid' && signedHost.scopes.includes('*'));
+  if (hostAllows && c.get('apiKey')?.scopes.includes('*')) return null;
+  return c.json(
+    {
+      error: {
+        code: 'FORBIDDEN',
+        message: 'Setting outboundPacingOverride to true requires a full-access (*) API key',
+      },
+    },
+    403,
+  );
+}
+
 function slackAppTokenConflictBody(other: { id: string; name: string }) {
   return {
     error: {
@@ -1073,6 +1130,8 @@ function slackAppTokenConflictBody(other: { id: string; name: string }) {
  */
 instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) => {
   const { force, ...data } = c.req.valid('json');
+  const pacingDenied = denyPacingOverrideForScopedKey(c, data.outboundPacingOverride);
+  if (pacingDenied) return pacingDenied;
   const services = c.get('services');
 
   // A create carries no workspace yet (the team id is learned on first
@@ -1162,6 +1221,7 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
     );
   }
 
+  applyInboundReplyContextOption(connectionOptions, instance);
   await triggerCreateConnection(channelRegistry, data.channel, instance.id, connectionOptions);
 
   return c.json({ data: sanitizeInstance(instance) }, 201);
@@ -1173,6 +1233,8 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
 instancesRoutes.patch('/:id', instanceAccess, zValidator('json', updateInstanceSchema), async (c) => {
   const id = c.req.param('id');
   const { force, ...data } = c.req.valid('json');
+  const pacingDenied = denyPacingOverrideForScopedKey(c, data.outboundPacingOverride);
+  if (pacingDenied) return pacingDenied;
   const services = c.get('services');
 
   // The conflict is keyed on the PAIR (app token, bot mode), so either field
@@ -1784,9 +1846,13 @@ function hydrateConnectionOptionsForInstance(
 /** Persisted Baileys socket settings; a connect body's `whatsapp` still overrides them. */
 function applyWhatsAppBaileysOptions(
   options: Record<string, unknown>,
-  instance: Pick<InstanceRecord, 'channel' | 'markOnlineOnConnect' | 'historyIdentity' | 'syncFullHistory'>,
+  instance: Pick<
+    InstanceRecord,
+    'channel' | 'markOnlineOnConnect' | 'historyIdentity' | 'syncFullHistory' | 'inboundReplyContext'
+  >,
 ): void {
   if (instance.channel !== 'whatsapp-baileys') return;
+  applyInboundReplyContextOption(options, instance);
   options.whatsapp = {
     historyIdentity: instance.historyIdentity,
     syncFullHistory: instance.syncFullHistory,

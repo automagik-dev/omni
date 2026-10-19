@@ -190,6 +190,19 @@ interface AscFlowInstanceState {
  */
 const IN_FLIGHT_TTL_MS = 150_000;
 
+/**
+ * How long a parked HANDOFF waits for the flow to collect it.
+ *
+ * The flow node is synchronous: when the agent misses the hold deadline the
+ * poll returns `pronto:0` and the flow only calls again on the beneficiary's
+ * NEXT message, which can be minutes away. An ordinary answer that waits that
+ * long is stale, but a handoff is not: it is the decision to put a human on the
+ * atendimento, and dropping it leaves the beneficiary reading the invite while
+ * the flow stays in the bot (production, 2026-10-15: 14 of 46 accepted
+ * handoffs never left the bot).
+ */
+const HANDOFF_PARKED_TTL_MS = 30 * 60_000;
+
 /** A text turn with no poll waiting reaches nobody — see `refuseUndeliverable`. */
 const UNDELIVERABLE_ERROR = 'no ASC flow turn is polling this cod_atendimento — a text-only send cannot be delivered';
 
@@ -798,6 +811,10 @@ export class AscFlowPlugin extends BaseChannelPlugin {
     // turn that already closed — the case identity alone cannot catch, since a
     // late send captures whatever window occupies the cod by then.
     if (entry?.correlationId && correlationId && entry.correlationId !== correlationId) {
+      if (ready.hand_off === 'sim') {
+        this.carryLateHandoff(state, cod, entry, ready, 'correlationId of a closed turn');
+        return;
+      }
       this.logger.warn('[asc-flow] discarding an answer from a different turn', {
         cod,
         reason: 'correlationId does not match the turn now in flight',
@@ -806,6 +823,10 @@ export class AscFlowPlugin extends BaseChannelPlugin {
     }
 
     if (entry && answering && entry !== answering) {
+      if (ready.hand_off === 'sim') {
+        this.carryLateHandoff(state, cod, entry, ready, 'the window now holds a newer turn');
+        return;
+      }
       this.logger.warn('[asc-flow] discarding an answer whose turn already closed', {
         cod,
         reason: 'the window now holds a newer turn — delivering this would answer the wrong message',
@@ -833,6 +854,42 @@ export class AscFlowPlugin extends BaseChannelPlugin {
     // An outbound with no inbound turn in flight (a proactive send): still park
     // it, so a poll that arrives for this cod collects it.
     state.inFlight.set(cod, { text: '', at: Date.now(), ready });
+  }
+
+  /**
+   * A late answer that HANDS OFF is never discarded: it rides the turn now in
+   * flight instead.
+   *
+   * Every other late answer is dropped, and rightly: a stale reply delivered to
+   * a newer message answers the wrong question. A handoff is different in kind.
+   * It is not a reply to one message, it is the decision to move the
+   * atendimento to a human, and it stays true whatever the beneficiary said
+   * since. Dropping it is how the flow kept the bot after the beneficiary had
+   * already read the invite (production, 2026-10-15).
+   *
+   * Same precedence as the in-turn guard in `resolveTurn`: the handoff wins, and
+   * an ordinary answer already parked for the newer turn is pushed as a bubble
+   * rather than lost.
+   */
+  private carryLateHandoff(
+    state: AscFlowInstanceState,
+    cod: string,
+    entry: AscFlowTurnState,
+    ready: AscFlowTurnReady,
+    reason: string,
+  ): void {
+    if (entry.ready?.hand_off === 'sim') {
+      // The newer turn already holds its own handoff: that one is the current
+      // decision, and an older one must not overwrite it.
+      this.logger.debug('[asc-flow] keeping the newer parked handoff over a late one', { cod, reason });
+      return;
+    }
+    if (entry.ready) {
+      this.pushDisplacedBubble(state, cod, entry.ready.resposta);
+    }
+    entry.ready = ready;
+    entry.at = Date.now();
+    this.logger.warn('[asc-flow] carrying a late handoff into the turn now in flight', { cod, reason });
   }
 
   /**
@@ -1259,7 +1316,7 @@ export class AscFlowPlugin extends BaseChannelPlugin {
 
     let expired = 0;
     for (const [cod, entry] of state.inFlight) {
-      if (now - entry.at > IN_FLIGHT_TTL_MS) {
+      if (now - entry.at > (entry.ready?.hand_off === 'sim' ? HANDOFF_PARKED_TTL_MS : IN_FLIGHT_TTL_MS)) {
         state.inFlight.delete(cod);
         expired++;
       }
@@ -1307,6 +1364,23 @@ export class AscFlowPlugin extends BaseChannelPlugin {
     const entry = state?.inFlight.get(codAtendimento);
     if (!state || !entry) return null;
 
+    // A parked HANDOFF belongs to the atendimento, not to the message: the next
+    // poll takes it whatever text it carries. With the synchronous node a missed
+    // hold leaves the flow waiting for the beneficiary's next message, so that
+    // message is the only poll left to deliver the transfer.
+    if (entry.ready?.hand_off === 'sim' && entry.text !== text) {
+      state.inFlight.delete(codAtendimento);
+      // Same bookkeeping as an ordinary take: the flow may re-send this very
+      // text, and only `lastAnswered` lets that re-send read as a replay.
+      this.rememberAnswered(state, codAtendimento, text);
+      this.logger.warn('[asc-flow] delivering a parked handoff on a newer input', {
+        instanceId,
+        codAtendimento,
+        ageMs: Date.now() - entry.at,
+      });
+      return entry.ready;
+    }
+
     // A new message: leave the entry alone. It is not consumed here and not
     // treated as a redelivery either (`isRedeliveryOfTurnInFlight` compares the
     // same way), so the turn publishes and overwrites the stale window.
@@ -1352,12 +1426,17 @@ export class AscFlowPlugin extends BaseChannelPlugin {
     }
     // Remember what this turn answered: a re-send repeats exactly this text,
     // and that is the trigger for the freshness check.
+    this.rememberAnswered(state, codAtendimento, text);
+    return entry.ready;
+  }
+
+  /** Remember what this turn answered, bounded like the in-flight map. */
+  private rememberAnswered(state: AscFlowInstanceState, codAtendimento: string, text: string): void {
     if (state.lastAnswered.size >= IN_FLIGHT_MAX_ENTRIES) {
       const oldest = state.lastAnswered.keys().next().value;
       if (oldest !== undefined) state.lastAnswered.delete(oldest);
     }
     state.lastAnswered.set(codAtendimento, text.trim());
-    return entry.ready;
   }
 
   /**

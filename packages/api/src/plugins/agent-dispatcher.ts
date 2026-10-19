@@ -82,6 +82,7 @@ import { agentKeyNameCandidates } from '../lib/agent-key-name';
 import { withIdempotency } from '../lib/idempotency';
 import { sentryEnabled } from '../lib/sentry-scrub';
 import type { Services } from '../services';
+import { accessFallbackCandidates, runAccessFallbackChain } from '../services/access';
 import {
   type MessageContext,
   type SplitDelayConfig,
@@ -561,6 +562,7 @@ async function sendTextMessage(
   senderAgentId?: string,
   systemNotice?: boolean,
   part?: { index: number; count: number },
+  outboundPacing?: 'humanized' | 'immediate' | null,
 ): Promise<void> {
   const plugin = await getPlugin(channel);
   if (!plugin) throw new Error(`Channel plugin not found: ${channel}`);
@@ -579,6 +581,8 @@ async function sendTextMessage(
       senderAgentId,
       systemNotice,
       ...(part ? { partIndex: part.index, partCount: part.count } : {}),
+      // Instance-level pacing; only 'immediate' adds a key (humanized keeps today's shape).
+      ...(outboundPacing === 'immediate' ? { outboundPacing } : {}),
     },
   });
 }
@@ -1581,6 +1585,7 @@ async function sendResponseParts(
   replyTo?: string,
   correlationId?: string,
   senderAgentId?: string,
+  outboundPacing?: 'humanized' | 'immediate' | null,
 ): Promise<void> {
   const messageLimit = getMessageLimit(channel);
   const chunked: string[] = [];
@@ -1615,6 +1620,7 @@ async function sendResponseParts(
       // asc-flow needs to know where the reply ENDS, because its transport
       // carries a single answer per polled turn.
       { index, count: allChunks.length },
+      outboundPacing,
     );
     const isLastChunk = index === allChunks.length - 1;
     if (!isLastChunk) {
@@ -3294,6 +3300,7 @@ async function dispatchViaProvider(
               replyTo,
               correlationId,
               senderAgentId,
+              instance.outboundPacing,
             ),
         );
 
@@ -3492,6 +3499,7 @@ async function dispatchViaLegacy(
         replyTo,
         correlationId,
         senderAgentId,
+        instance.outboundPacing,
       ),
   );
 
@@ -5190,6 +5198,9 @@ async function processReactionTrigger(
           getSplitDelayConfig(instance),
           _fmtMode,
           payload.messageId,
+          undefined,
+          undefined,
+          instance.outboundPacing,
         );
       }
 
@@ -5258,6 +5269,9 @@ async function processReactionTrigger(
         getSplitDelayConfig(instance),
         _fmtMode,
         payload.messageId,
+        undefined,
+        undefined,
+        instance.outboundPacing,
       );
     }
 
@@ -5846,45 +5860,39 @@ async function checkAccessWithFallback(
   channel: ChannelType,
   trustedTenantId?: string,
 ): Promise<boolean> {
-  const rawPayload = payload.rawPayload as Record<string, unknown> | undefined;
-  const rawKey = rawPayload?.key as Record<string, unknown> | undefined;
-  const rawParticipantAlt = (rawKey?.participantAlt as string)?.replace(/@.*$/, '');
-  // Validate participantAlt looks like a real phone number (Baileys LID fallback)
-  const participantAlt = rawParticipantAlt && /^\d{7,15}$/.test(rawParticipantAlt) ? rawParticipantAlt : undefined;
-  // resolvedSenderPhone is annotated by channel-whatsapp when it resolves a LID sender to phone
-  // via participantAlt, remoteJidAlt, or the in-memory LID mapping cache.
-  const rawResolvedPhone = rawPayload?.resolvedSenderPhone as string | undefined;
-  const resolvedSenderPhone = rawResolvedPhone && /^\d{7,15}$/.test(rawResolvedPhone) ? rawResolvedPhone : undefined;
-  const primaryId = payload.from ?? '';
+  // Candidates: the primary id, then participantAlt (Baileys LID fallback) and
+  // resolvedSenderPhone (annotated by channel-whatsapp when it resolves a LID
+  // sender to phone via participantAlt, remoteJidAlt, or the in-memory LID
+  // mapping cache) — each only when phone-shaped. The attempt chain is shared
+  // with the opt-in ingest journal (`runAccessFallbackChain`, services/access).
+  const candidates = accessFallbackCandidates(payload);
+  const { primaryId, participantAlt } = candidates;
 
   // G5 (ADR-0008): the ALLOW/DENY decision is evaluated against rules read in
   // the MESSAGE's world. `trustedTenantId` is the envelope-derived tenant
   // (`trustedDispatchTenant`), threaded rather than wrapped because the service
   // publishes `access.allowed`/`access.denied` between blocks.
-  let accessResult = await accessService.checkAccess(instance, primaryId, channel, trustedTenantId);
-  if (!accessResult.allowed && participantAlt && participantAlt !== primaryId) {
-    log.warn('Access fallback to participantAlt', {
-      instanceId: instance.id,
-      primaryId,
-      participantAlt,
-      chatId: payload.chatId,
-    });
-    accessResult = await accessService.checkAccess(instance, participantAlt, channel, trustedTenantId);
-  }
-  if (
-    !accessResult.allowed &&
-    resolvedSenderPhone &&
-    resolvedSenderPhone !== primaryId &&
-    resolvedSenderPhone !== participantAlt
-  ) {
-    log.debug('Access fallback to resolvedSenderPhone (LID→phone)', {
-      instanceId: instance.id,
-      primaryId,
-      resolvedSenderPhone,
-      chatId: payload.chatId,
-    });
-    accessResult = await accessService.checkAccess(instance, resolvedSenderPhone, channel, trustedTenantId);
-  }
+  const accessResult = await runAccessFallbackChain(
+    candidates,
+    (platformUserId) => accessService.checkAccess(instance, platformUserId, channel, trustedTenantId),
+    (attempt, platformUserId) => {
+      if (attempt === 'participantAlt') {
+        log.warn('Access fallback to participantAlt', {
+          instanceId: instance.id,
+          primaryId,
+          participantAlt: platformUserId,
+          chatId: payload.chatId,
+        });
+      } else {
+        log.debug('Access fallback to resolvedSenderPhone (LID→phone)', {
+          instanceId: instance.id,
+          primaryId,
+          resolvedSenderPhone: platformUserId,
+          chatId: payload.chatId,
+        });
+      }
+    },
+  );
   if (accessResult.allowed) return false;
 
   logDrop(`access denied: ${accessResult.reason}`, payload, instance.id, { participantAlt });

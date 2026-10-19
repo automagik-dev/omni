@@ -4,7 +4,7 @@
  * @see api-completeness wish
  */
 
-import { afterAll, beforeAll, expect, mock, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test';
 import { OmniError } from '@omni/core';
 import type { Database, Instance } from '@omni/db';
 import { instances } from '@omni/db';
@@ -33,6 +33,12 @@ function createMockPlugin(
       loadingMessages?: string[];
       reason?: string;
     }>;
+    holdPresence: (
+      instanceId: string,
+      chatId: string,
+      type: 'typing' | 'recording' | 'paused',
+      maxLifetimeMs?: number,
+    ) => Promise<{ expiresAt: number | null; lifetimeMs: number }>;
   }> = {},
 ) {
   return {
@@ -58,6 +64,7 @@ function createMockPlugin(
     },
     sendTyping: overrides.sendTyping ?? mock(async () => {}),
     ...(overrides.sendPresenceStatus ? { sendPresenceStatus: overrides.sendPresenceStatus } : {}),
+    ...(overrides.holdPresence ? { holdPresence: overrides.holdPresence } : {}),
   };
 }
 
@@ -393,5 +400,116 @@ describeWithDb('POST /messages/send/presence', () => {
     });
 
     expect(res.status).toBe(400);
+  });
+
+  describe('hold (server-held presence, opt-in)', () => {
+    function holdPresenceMock(lifetimeMs = 60000) {
+      return mock(
+        async (_instanceId: string, _chatId: string, _type: 'typing' | 'recording' | 'paused', _max?: number) => ({
+          expiresAt: _type === 'paused' ? null : Date.parse('2026-10-18T12:01:00.000Z'),
+          lifetimeMs: _type === 'paused' ? 0 : lifetimeMs,
+        }),
+      );
+    }
+
+    async function postPresence(app: Hono<{ Variables: AppVariables }>, body: Record<string, unknown>) {
+      return app.request('/messages/send/presence', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ instanceId: testInstance.id, to: '5511999999999@s.whatsapp.net', ...body }),
+      });
+    }
+
+    test("without hold: sendTyping keeps today's 5000 default and type mapping, holdPresence untouched", async () => {
+      const sendTypingMock = mock(async (_instanceId: string, _chatId: string, _duration?: number) => {});
+      const holdMock = holdPresenceMock();
+      const { app } = createTestApp(createMockPlugin({ sendTyping: sendTypingMock, holdPresence: holdMock }));
+
+      const typing = await postPresence(app, { type: 'typing' });
+      const recording = await postPresence(app, { type: 'recording', duration: 10000 });
+      const explicitFalse = await postPresence(app, { type: 'typing', hold: false });
+
+      expect(typing.status).toBe(200);
+      expect(recording.status).toBe(200);
+      expect(explicitFalse.status).toBe(200);
+      expect(sendTypingMock.mock.calls).toEqual([
+        [testInstance.id, '5511999999999@s.whatsapp.net', 5000],
+        [testInstance.id, '5511999999999@s.whatsapp.net', 10000],
+        [testInstance.id, '5511999999999@s.whatsapp.net', 5000],
+      ]);
+      expect(holdMock).not.toHaveBeenCalled();
+      const body = (await typing.json()) as { data: Record<string, unknown> };
+      expect('hold' in body.data).toBe(false);
+      expect(body.data.method).toBe('typing_indicator');
+    });
+
+    test('hold=true reaches holdPresence and returns hold.expiresAt', async () => {
+      const sendTypingMock = mock(async () => {});
+      const holdMock = holdPresenceMock();
+      const { app } = createTestApp(createMockPlugin({ sendTyping: sendTypingMock, holdPresence: holdMock }));
+
+      const res = await postPresence(app, { type: 'recording', hold: true });
+
+      expect(res.status).toBe(200);
+      expect(holdMock.mock.calls).toEqual([[testInstance.id, '5511999999999@s.whatsapp.net', 'recording', undefined]]);
+      expect(sendTypingMock).not.toHaveBeenCalled();
+      const body = (await res.json()) as {
+        success: boolean;
+        data: { type: string; duration: number; method: string; hold: { expiresAt: string | null } };
+      };
+      expect(body.success).toBe(true);
+      expect(body.data.type).toBe('recording');
+      expect(body.data.duration).toBe(60000);
+      expect(body.data.method).toBe('presence_hold');
+      expect(body.data.hold).toEqual({ expiresAt: '2026-10-18T12:01:00.000Z' });
+    });
+
+    test('hold=true takes its lifetime from holdMaxMs (up to 300000) and rejects above it', async () => {
+      const holdMock = holdPresenceMock(300000);
+      const { app } = createTestApp(createMockPlugin({ holdPresence: holdMock }));
+
+      const ok = await postPresence(app, { type: 'typing', hold: true, holdMaxMs: 300000 });
+      const tooLong = await postPresence(app, { type: 'typing', hold: true, holdMaxMs: 300001 });
+
+      expect(ok.status).toBe(200);
+      expect(holdMock.mock.calls[0]?.[3]).toBe(300000);
+      expect(tooLong.status).toBe(400);
+      expect(holdMock).toHaveBeenCalledTimes(1);
+    });
+
+    test('hold=true with paused stops the hold and reports expiresAt null', async () => {
+      const holdMock = holdPresenceMock();
+      const { app } = createTestApp(createMockPlugin({ holdPresence: holdMock }));
+
+      const res = await postPresence(app, { type: 'paused', hold: true });
+
+      expect(res.status).toBe(200);
+      expect(holdMock.mock.calls[0]?.[2]).toBe('paused');
+      const body = (await res.json()) as { data: { hold: { expiresAt: string | null } } };
+      expect(body.data.hold).toEqual({ expiresAt: null });
+    });
+
+    test('hold=true on a channel without holdPresence is CAPABILITY_NOT_SUPPORTED', async () => {
+      const sendTypingMock = mock(async () => {});
+      const { app } = createTestApp(createMockPlugin({ sendTyping: sendTypingMock }));
+
+      const res = await postPresence(app, { type: 'typing', hold: true });
+
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: { code: string; message: string } };
+      expect(body.error.code).toBe('CAPABILITY_NOT_SUPPORTED');
+      expect(body.error.message).toContain('server-held presence');
+      expect(sendTypingMock).not.toHaveBeenCalled();
+    });
+
+    test('hold absent on a channel without holdPresence behaves as before', async () => {
+      const sendTypingMock = mock(async () => {});
+      const { app } = createTestApp(createMockPlugin({ sendTyping: sendTypingMock }));
+
+      const res = await postPresence(app, { type: 'typing' });
+
+      expect(res.status).toBe(200);
+      expect(sendTypingMock).toHaveBeenCalledTimes(1);
+    });
   });
 });

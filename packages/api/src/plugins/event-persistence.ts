@@ -28,11 +28,21 @@ import type {
 } from '@omni/core';
 import { JOURNEY_STAGES, createLogger, getJourneyTracker, isValidUuid } from '@omni/core';
 import type { Database, NewOmniEvent } from '@omni/db';
-import { type ChannelType, type ContentType, channelTypes, chats, contentTypes, omniEvents, persons } from '@omni/db';
+import {
+  type ChannelType,
+  type ContentType,
+  channelTypes,
+  chats,
+  contentTypes,
+  instances,
+  omniEvents,
+  persons,
+} from '@omni/db';
 import { and, eq } from 'drizzle-orm';
+import { AccessService, accessFallbackCandidates, runAccessFallbackChain } from '../services/access';
 import { ChatService } from '../services/chats';
 import { scopedHandle } from '../tenancy/tenant-scope';
-import { runConsumerInTenantContext } from '../tenancy/worker-tenant-context';
+import { runConsumerInTenantContext, runTenantWorkDb, trustedEnvelopeTenant } from '../tenancy/worker-tenant-context';
 import { deepSanitize, sanitizeText } from '../utils/utf8';
 
 const log = createLogger('event-persistence');
@@ -144,6 +154,60 @@ async function resolveChatUuidById(db: Database, candidate: unknown): Promise<st
   }
 }
 
+/**
+ * Opt-in ingest access journal (0083). Read at call time, never cached at
+ * module load: with the flag unset (the default) no access lookup runs and the
+ * fill upserts carry no `accessDecision` key — byte-identical to before.
+ */
+function journalsAccessDecision(): boolean {
+  return process.env.OMNI_JOURNAL_ACCESS_DECISION === 'true';
+}
+
+type AccessDecisionColumns = Partial<Pick<NewOmniEvent, 'accessDecision'>>;
+
+/**
+ * The access verdict for an inbound message/reaction, frozen at ingest as
+ * `omni_events.access_decision`: 'disabled' when the instance runs without
+ * access control, otherwise 'allowed'/'denied' from the PURE evaluation
+ * (`AccessService.evaluateAccess` — no access event, no cache write) through
+ * the dispatcher's fallback chain (primary id, participantAlt,
+ * resolvedSenderPhone). Own-device echoes (isFromMe) and rows without an
+ * instance get no decision.
+ *
+ * Runs BEFORE (outside) `runConsumerInTenantContext`, threading the envelope
+ * tenant into its own DB blocks, so a failure here can never abort the fill's
+ * transaction: any error is logged and the column is left unset.
+ */
+async function resolveAccessDecisionColumns(
+  db: Database,
+  accessService: AccessService,
+  event: Pick<OmniEvent, 'metadata'>,
+  sender: { from?: string; rawPayload?: Record<string, unknown> },
+): Promise<AccessDecisionColumns> {
+  const instanceId = event.metadata.instanceId;
+  if (sender.rawPayload?.isFromMe === true || !instanceId) return {};
+  try {
+    const trustedTenantId = trustedEnvelopeTenant(event);
+    const [instance] = await runTenantWorkDb(db, trustedTenantId, () =>
+      scopedHandle(db)
+        .select({ id: instances.id, accessMode: instances.accessMode })
+        .from(instances)
+        .where(eq(instances.id, instanceId))
+        .limit(1),
+    );
+    if (!instance) return {};
+    if (instance.accessMode === 'disabled') return { accessDecision: 'disabled' };
+    const channel = event.metadata.channelType ?? '';
+    const result = await runAccessFallbackChain(accessFallbackCandidates(sender), (platformUserId) =>
+      accessService.evaluateAccess(instance, platformUserId, channel, trustedTenantId),
+    );
+    return { accessDecision: result.allowed ? 'allowed' : 'denied' };
+  } catch (error) {
+    log.warn('Access decision not journaled', { instanceId, error: String(error) });
+    return {};
+  }
+}
+
 /** Shared consumer options for event persistence */
 const CONSUMER_OPTIONS = {
   queue: 'event-persistence',
@@ -157,6 +221,9 @@ const CONSUMER_OPTIONS = {
  * Set up event persistence - subscribes to message events and writes to omni_events
  */
 export async function setupEventPersistence(eventBus: EventBus, db: Database): Promise<void> {
+  // Pure evaluation only (no event bus, no cache): used solely by the opt-in
+  // access journal above; constructing it touches nothing.
+  const accessService = new AccessService(db, null);
   try {
     // Subscribe to message.received
     await eventBus.subscribe(
@@ -173,6 +240,9 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
         }
 
         try {
+          const accessColumns = journalsAccessDecision()
+            ? await resolveAccessDecisionColumns(db, accessService, event, payload)
+            : {};
           await runConsumerInTenantContext(db, event, async () => {
             const sdb = scopedHandle(db);
             const chatLink = await resolveChatLink(sdb, metadata.instanceId, payload.chatId);
@@ -206,7 +276,10 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
               agentId: metadata.agentId ?? null,
               causationId: metadata.causationId ?? null,
               conversationId: null,
+              // The fill completes a claimed skeleton row (opt-in consumer readiness gate).
+              journalReady: true,
               ...chatLink,
+              ...accessColumns,
             };
 
             // Upsert on id (#1032): the channel ingress claim (`createIngressClaim`)
@@ -279,6 +352,8 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
               agentId: metadata.agentId ?? null,
               causationId: metadata.causationId ?? null,
               conversationId: null,
+              // The fill completes a claimed skeleton row (opt-in consumer readiness gate).
+              journalReady: true,
               ...chatLink,
             };
 
@@ -515,6 +590,9 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
           const payload = event.payload as ReactionReceivedPayload;
           const metadata = event.metadata;
           try {
+            const accessColumns = journalsAccessDecision()
+              ? await resolveAccessDecisionColumns(db, accessService, event, payload)
+              : {};
             await runConsumerInTenantContext(db, event, async () => {
               const sdb = scopedHandle(db);
               const chatLink = await resolveChatLink(sdb, metadata.instanceId, payload.chatId);
@@ -536,7 +614,10 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
                 metadata: { correlationId: metadata.correlationId, from: payload.from, emoji: payload.emoji },
                 causationId: metadata.causationId ?? null,
                 conversationId: null,
+                // The fill completes a claimed skeleton row (opt-in consumer readiness gate).
+                journalReady: true,
                 ...chatLink,
+                ...accessColumns,
               };
               // Upsert on id (#1096): the channel ingress claim inserted a skeletal
               // row under this id before the publish (same discipline as
