@@ -105,8 +105,11 @@ describe('applyInboundReplyContextOption', () => {
   });
 
   test('boot reconnect options carry the flag only when it is on', () => {
-    expect(buildInstanceConnectOptions({ channel: 'whatsapp-baileys', inboundReplyContext: false })).toEqual({});
-    expect(buildInstanceConnectOptions({ channel: 'whatsapp-baileys', inboundReplyContext: true })).toEqual({
+    // Other Baileys options (e.g. downloadMediaOnSync, #1280) ride along; only this flag is asserted.
+    expect(buildInstanceConnectOptions({ channel: 'whatsapp-baileys', inboundReplyContext: false })).not.toHaveProperty(
+      'inboundReplyContext',
+    );
+    expect(buildInstanceConnectOptions({ channel: 'whatsapp-baileys', inboundReplyContext: true })).toMatchObject({
       inboundReplyContext: true,
     });
   });
