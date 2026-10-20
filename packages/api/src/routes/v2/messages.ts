@@ -496,7 +496,7 @@ const MessageStatusSchema = z.enum(['active', 'edited', 'deleted', 'expired']);
 const DeliveryStatusSchema = z.enum(['pending', 'sent', 'delivered', 'read', 'failed']);
 
 // List messages query schema
-const listQuerySchema = z.object({
+export const listQuerySchema = z.object({
   chatId: z.string().uuid().optional(),
   source: z
     .string()
@@ -669,7 +669,7 @@ const replyToKeyField = replyToKeySchema
   .describe('Quoted key used only when replyTo is set and the replied-to message is not stored');
 
 // Send text message schema
-const sendTextSchema = z.object({
+export const sendTextSchema = z.object({
   instanceId: z.string().uuid().describe('Instance ID to send from'),
   to: z.string().min(1).describe('Recipient (phone number or platform ID)'),
   text: z.string().min(1).describe('Message text'),

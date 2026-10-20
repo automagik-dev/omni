@@ -399,7 +399,7 @@ export function registerMessageSchemas(registry: OpenAPIRegistry): void {
 
   registry.registerPath({
     method: 'post',
-    path: '/messages/reaction',
+    path: '/messages/send/reaction',
     operationId: 'sendReaction',
     tags: ['Messages'],
     summary: 'Send reaction',
@@ -415,7 +415,7 @@ export function registerMessageSchemas(registry: OpenAPIRegistry): void {
 
   registry.registerPath({
     method: 'post',
-    path: '/messages/sticker',
+    path: '/messages/send/sticker',
     operationId: 'sendSticker',
     tags: ['Messages'],
     summary: 'Send sticker',
@@ -433,7 +433,7 @@ export function registerMessageSchemas(registry: OpenAPIRegistry): void {
 
   registry.registerPath({
     method: 'post',
-    path: '/messages/contact',
+    path: '/messages/send/contact',
     operationId: 'sendContact',
     tags: ['Messages'],
     summary: 'Send contact card',
@@ -451,7 +451,7 @@ export function registerMessageSchemas(registry: OpenAPIRegistry): void {
 
   registry.registerPath({
     method: 'post',
-    path: '/messages/location',
+    path: '/messages/send/location',
     operationId: 'sendLocation',
     tags: ['Messages'],
     summary: 'Send location',
