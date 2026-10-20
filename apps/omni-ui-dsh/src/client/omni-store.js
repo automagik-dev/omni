@@ -243,5 +243,7 @@ export const TRIGGERS = {
 }
 
 export const runsOf = (roster, subId) => (roster?.subscriptionRuns ?? []).filter(run => subId === undefined || run.subId === subId).toSorted((a, b) => b.at - a.at)
-export const waitingRuns = roster => (roster?.subscriptionRuns ?? []).filter(run => run.status === 'waiting').length
+// A run waits for the user while its task Session has an approval open (the read-only
+// preset asks before every escalation); `waiting` is those Sessions' ids.
+export const waitingRuns = (roster, waiting = new Set()) => (roster?.subscriptionRuns ?? []).filter(run => run.status === 'working' && waiting.has(run.sessionId)).length
 

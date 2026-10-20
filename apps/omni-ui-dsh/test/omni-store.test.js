@@ -85,10 +85,11 @@ test('finishing the connect flow adds a connected channel and shows its health',
   assert.deepEqual(state.page, { view: 'channel', channelId: added.id, type: null, step: 0 })
 })
 
-test('runs come from the team view, newest first, and only waiting ones count as waiting', () => {
-  const roster = { subscriptionRuns: [{ id: 'a', subId: 's', at: 1, status: 'done' }, { id: 'b', subId: 's', at: 3, status: 'waiting' }, { id: 'c', subId: 't', at: 2, status: 'working' }] }
+test('runs come from the team view, newest first; a working run waits while its Session has an approval open', () => {
+  const roster = { subscriptionRuns: [{ id: 'a', subId: 's', at: 1, status: 'done', sessionId: 'x' }, { id: 'b', subId: 's', at: 3, status: 'working', sessionId: 'y' }, { id: 'c', subId: 't', at: 2, status: 'working', sessionId: 'z' }] }
   assert.deepEqual(runsOf(roster).map(run => run.id), ['b', 'c', 'a'])
   assert.deepEqual(runsOf(roster, 's').map(run => run.id), ['b', 'a'])
-  assert.equal(waitingRuns(roster), 1)
+  assert.equal(waitingRuns(roster, new Set(['y', 'x'])), 1, 'a finished run no longer waits')
+  assert.equal(waitingRuns(roster), 0)
   assert.equal(waitingRuns({}), 0)
 })

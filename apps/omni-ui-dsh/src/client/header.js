@@ -43,7 +43,7 @@ function MemoryNotice({ shown }) {
     h('span', { className: 'bt-pill-mem-in', ref: inner }, h('span', { className: 'bt-pill-mem-ico' }, h(MemoryIcon)), label))
 }
 
-export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSession, useActivity, useMemoryNews, useTurnClock, useUi, useLive, actions }) {
+export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSession, useActivity, useMemoryNews, useTurnClock, useUi, useLive, useWork, actions }) {
   const roster = useRoster(value => value)
   const title = useSessions(list => list.byId[sessionId]?.displayTitle ?? list.byId[sessionId]?.title ?? '')
   const firstTurns = useSessions((list) => {
@@ -69,7 +69,6 @@ export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus
   const bot = roster.byId[sessionId]
   const room = roster.roomsById[sessionId]
   const detailsOpen = useUi(state => state.details === sessionId)
-  const workOpen = useUi(state => state.details === sessionId && state.view === 'work')
   const name = bot?.name ?? room?.name ?? ''
   const useNews = useMemoryNews ?? noNews
   const memoryIds = bot ? [bot.id] : room?.members ?? []
@@ -103,7 +102,7 @@ export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus
     h(MemoryNotice, { shown: memoryNotice }),
     h('span', { className: 'bt-pill-go', 'aria-hidden': true }, h(GoArrow))),
     h('span', { className: 'bt-sr', role: 'status' }, memoryNotice ? t('Memory updated') : ''),
-    bot && bot.id === roster.eventsBotId ? h(SubscriptionsButton, { sessionId, roster, actions, open: workOpen }) : null,
+    bot && bot.id === roster.eventsBotId ? h(SubscriptionsButton, { roster, actions, useWork }) : null,
     h(NewMessagePills, { key: sessionId, sessionId, useSessions, useUi, useTurnClock }),
     h(ActivityIndicator, { key: `activity:${sessionId}`, sessionId, useRoster, useSessionStatus, useSession, useLive, actions }),
     // DSH's way into its right sidebar sits in the session header this pill replaces.

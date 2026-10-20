@@ -6,6 +6,11 @@ export const NAMESPACE = 'ds-bot'
 
 const ZH = {
   // Omni subscriptions (subscriptions.js)
+  'Reacting on the message and replying to you are not sent yet: this DSH may not send on omni. Results stay in the runs below.': '在消息上回应和回复你暂时还不会发送：这个 DSH 还不能通过 omni 发送。结果保留在下方的运行记录中。',
+  'Listening to omni.': '正在接收 omni 事件。',
+  'Connecting to omni…': '正在连接 omni…',
+  'Subscriptions belong to Tentacall, which this team does not have.': '订阅归 Tentacall 管理，而这个团队没有 Tentacall。',
+  'Open this run': '打开这次运行',
   '← Subscriptions': '← 订阅',
   'acts without asking': '不询问直接执行',
   'A deleted Bot': '已删除的 Bot',

@@ -1,12 +1,12 @@
 import { createElement as h, Fragment, useEffect, useState } from 'react'
-import { AtIcon, CloseIcon, FileIcon, KeywordIcon, MessageIcon, ShieldIcon, UnplugIcon, VoiceIcon } from './icons.js'
+import { AtIcon, FileIcon, KeywordIcon, MessageIcon, ShieldIcon, UnplugIcon, VoiceIcon } from './icons.js'
 import { OctopusLogo } from './logo.js'
 import { BotMark } from './mark.js'
 import { MAIN_LOOK } from './characters.js'
 import { t } from './i18n.js'
 import { relativeShort } from './text.js'
 import { call } from './api.js'
-import { ChatAvatar, PreviewChip, Tile, useOmni } from './channels.js'
+import { ChatAvatar, Tile, useOmni } from './channels.js'
 import { TRIGGERS, runsOf, startLive, waitingRuns } from './omni-store.js'
 
 // Tentacall's board: what it actually does, beside its chat. The user never fills a form here;
@@ -93,55 +93,66 @@ const RUN_STATUS = {
 // -------------------------------------------------------------------------
 // Tentacall's row and chat header
 
+// The task Sessions with an approval open, as a Set; picked as text so a row redraws only
+// when it changes.
+const useWaiting = useWork => new Set((useWork ? useWork(work => (work.approvals ?? []).map(entry => entry.sessionId).join(',')) : '').split(',').filter(Boolean))
+
 // On Tentacall's sidebar row: runs waiting for your approval.
-export function EventsBadge({ roster }) {
-  const waiting = waitingRuns(roster)
+export function EventsBadge({ roster, useWork }) {
+  const waiting = waitingRuns(roster, useWaiting(useWork))
   return waiting > 0 ? h('span', { className: 'os-pending', title: t('{n} waiting for you', { n: waiting }) }, String(waiting)) : null
 }
 
-// In Tentacall's chat header: shows or hides the board beside the chat.
-export function SubscriptionsButton({ sessionId, roster, actions, open }) {
+// In Tentacall's chat header: shows or hides its board in the right sidebar.
+export function SubscriptionsButton({ roster, actions, useWork }) {
   const count = (roster.subscriptions ?? []).filter(sub => sub.on).length
-  const waiting = waitingRuns(roster)
-  return h('button', { type: 'button', className: 'os-head-btn', 'aria-pressed': open, onClick: () => actions.toggleWork(sessionId) },
+  const waiting = waitingRuns(roster, useWaiting(useWork))
+  return h('button', { type: 'button', className: 'os-head-btn', onClick: () => actions.toggleBoard() },
     t('Subscriptions'), h('span', { className: 'os-head-count' }, String(count)),
     waiting > 0 ? h('span', { className: 'os-pending' }, String(waiting)) : null)
 }
 
 // -------------------------------------------------------------------------
-// The board, in the right panel's "work" view
+// The board: a tab of DSH's own right sidebar, so it sits beside Tentacall's chat like
+// Files or a terminal, keeps to that Session, and steps aside with it.
 
-export function SubscriptionsBoard({ bot, roster, actions, onDetails }) {
+export const BOARD_KIND = 'omni-subscriptions'
+export const BOARD_TAB_ID = 'ds-bot/omni-subscriptions'
+export const boardTabDefinition = () => ({ id: BOARD_TAB_ID, kind: BOARD_KIND, title: () => t('Subscriptions') })
+
+export function BoardTab({ useRoster, useWork, actions }) {
+  const roster = useRoster(value => value)
+  const waiting = useWaiting(useWork)
+  const bot = roster.byId?.[roster.eventsBotId]
+  if (!bot) return h('div', { className: 'os-board' }, h('p', { className: 'os-board-note' }, t('Subscriptions belong to Tentacall, which this team does not have.')))
+  return h(SubscriptionsBoard, { bot, roster, actions, waiting })
+}
+
+export function SubscriptionsBoard({ bot, roster, actions, waiting }) {
   const omni = useOmni()
   useEffect(() => { startLive(call) }, [])
   const subs = roster.subscriptions ?? []
   const runs = runsOf(roster)
-  const waiting = runs.filter(run => run.status === 'waiting')
   const watched = new Set(subs.filter(sub => sub.on).flatMap(sub => sub.sources.map(source => `${source.kind}:${source.id}`))).size
-  return h('div', { className: 'bt-panel-view os-board' },
-    h('div', { className: 'os-board-head' },
-      h('button', { type: 'button', className: 'os-board-who', onClick: onDetails, title: t('{name}’s profile', { name: bot.name }) }, h(BotMark, { bot, size: 26 }), h('strong', null, t('Subscriptions'))),
-      h(PreviewChip),
-      h('button', { type: 'button', className: 'bt-icon-btn', 'aria-label': t('Close panel'), title: t('Close panel'), onClick: () => actions.closePanel() }, h(CloseIcon))),
-    h('div', { className: 'os-board-body' },
-      subs.length === 0
-        ? h(Empty, { bot, live: omni.source.kind === 'live' })
-        : h(Fragment, null,
-          h('p', { className: 'os-board-note' }, subs.some(sub => sub.on)
-            ? `${watched === 1 ? t('Watching 1 chat or channel.') : t('Watching {n} chats and channels.', { n: watched })} ${t('Events start arriving once omni’s event stream is connected here.')}`
-            : t('Everything is paused.')),
-          waiting.length > 0 ? h(Fragment, null,
-            h('h3', { className: 'os-board-h' }, t('Waiting for you')),
-            waiting.map(run => h(RunCard, { key: run.id, run, sub: subs.find(sub => sub.id === run.subId), roster }))) : null,
-          h('h3', { className: 'os-board-h' }, t('Watching')),
-          subs.map(sub => h(SubCard, { key: sub.id, sub, roster, runs: runs.filter(run => run.subId === sub.id) })),
-          runs.length > waiting.length ? h(Fragment, null,
-            h('h3', { className: 'os-board-h' }, t('Activity')),
-            runs.filter(run => run.status !== 'waiting').slice(0, 12).map(run => h(RunCard, { key: run.id, run, sub: subs.find(sub => sub.id === run.subId), roster, compact: true }))) : null),
-      h('div', { className: 'os-safety' },
-        h('span', { className: 'os-safety-icon', 'aria-hidden': true }, h(ShieldIcon)),
-        h('div', null, h('strong', null, t('Messages come from other people')),
-          h('span', null, t('Anyone in a watched chat can write text that tries to steer a Bot. Work started by an event runs with no secrets and asks you before shell, file or network actions, unless you tell {name} otherwise.', { name: bot.name }))))))
+  const listening = (roster.omniEvents?.listening ?? []).length > 0
+  return h('div', { className: 'os-board' },
+    subs.length === 0
+      ? h(Empty, { bot, live: omni.source.kind === 'live' })
+      : h(Fragment, null,
+        h('div', { className: 'os-board-status' },
+          h('span', { className: 'oc-live-dot', 'data-on': listening || undefined, 'aria-hidden': true }),
+          !subs.some(sub => sub.on) ? t('Everything is paused.')
+            : `${watched === 1 ? t('Watching 1 chat or channel.') : t('Watching {n} chats and channels.', { n: watched })} ${listening ? t('Listening to omni.') : t('Connecting to omni…')}`),
+        subs.some(sub => sub.on && (sub.outputs.react || sub.outputs.replyToMe))
+          ? h('div', { className: 'os-board-note os-board-pending' }, t('Reacting on the message and replying to you are not sent yet: this DSH may not send on omni. Results stay in the runs below.'))
+          : null,
+        h('div', { className: 'os-list' }, subs.map(sub => h(SubRow, { key: sub.id, sub, roster, runs: runs.filter(run => run.subId === sub.id) }))),
+        runs.length > 0 ? h(Fragment, null,
+          h('div', { className: 'os-board-h' }, t('Runs')),
+          h('div', { className: 'os-list' }, runs.slice(0, 20).map(run => h(RunRow, { key: run.id, run, sub: subs.find(sub => sub.id === run.subId), roster, actions, asking: waiting?.has(run.sessionId) && run.status === 'working' })))) : null),
+    h('div', { className: 'os-safety' },
+      h(ShieldIcon),
+      h('span', null, t('Anyone in a watched chat can write text that tries to steer a Bot. Work started by an event runs with no secrets and asks you before shell, file or network actions, unless you tell {name} otherwise.', { name: bot.name }))))
 }
 
 function Empty({ bot, live }) {
@@ -151,14 +162,14 @@ function Empty({ bot, live }) {
     t('Voice notes in my own chat go to one ongoing session'),
   ]
   return h('div', { className: 'os-empty-board' },
-    h(BotMark, { bot, size: 64, live: true }),
+    h(BotMark, { bot, size: 48, live: true }),
     h('strong', null, t('Tell {name} what to watch', { name: bot.name })),
     h('span', null, live ? t('Say it in the chat. {name} finds the chats, asks what is missing, and the subscription shows up here.', { name: bot.name })
       : t('Omni is not connected to this DSH yet, so there is nothing to watch.')),
-    h('div', { className: 'os-examples' }, examples.map(text => h('span', { key: text, className: 'os-example' }, text))))
+    h('ul', { className: 'os-examples' }, examples.map(text => h('li', { key: text }, text))))
 }
 
-function SubCard({ sub, roster, runs }) {
+function SubRow({ sub, roster, runs }) {
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState('')
   const fresh = Date.now() - (sub.updatedAt ?? 0) < FRESH_MS
@@ -167,43 +178,44 @@ function SubCard({ sub, roster, runs }) {
     try { await call(endpoint, payload) } finally { setBusy('') }
   }
   const last = runs[0]
-  return h('div', { className: 'os-card', 'data-off': sub.on ? undefined : true, 'data-fresh': fresh || undefined },
-    h('div', { className: 'os-card-top' },
-      h(TriggerBadge, { trigger: sub.trigger, size: 34 }),
-      h('strong', null, sub.name),
-      h('button', {
-        type: 'button', role: 'switch', 'aria-checked': sub.on, className: 'os-switch', disabled: busy !== '',
-        'aria-label': sub.on ? t('Pause {name}', { name: sub.name }) : t('Resume {name}', { name: sub.name }),
-        onClick: () => run('subscription-set-on', { id: sub.id, on: !sub.on }),
-      }, h('span'))),
-    h(Sentence, { sub, roster }),
-    h('div', { className: 'os-card-foot' },
-      h('span', { className: 'os-card-meta' }, last ? t('last run {time}', { time: relativeShort(last.at) }) : t('not fired yet')),
-      sub.askFirst ? null : h('span', { className: 'os-card-meta os-card-warn' }, t('acts without asking')),
-      h('button', { type: 'button', className: 'os-link', disabled: busy !== '', onClick: () => run('subscription-test', { id: sub.id }) }, t('Test')),
-      h('button', {
-        type: 'button', className: confirming ? 'os-link os-link-danger' : 'os-link', disabled: busy !== '',
-        onBlur: () => setConfirming(false),
-        onClick: () => (confirming ? run('subscription-delete', { id: sub.id }) : setConfirming(true)),
-      }, confirming ? t('Click again to delete') : t('Delete'))))
+  return h('div', { className: 'os-row', 'data-off': sub.on ? undefined : true, 'data-fresh': fresh || undefined },
+    h(TriggerBadge, { trigger: sub.trigger, size: 28 }),
+    h('div', { className: 'os-row-body' },
+      h('div', { className: 'os-row-top' },
+        h('span', { className: 'os-row-name' }, sub.name),
+        h('button', {
+          type: 'button', role: 'switch', 'aria-checked': sub.on, className: 'os-switch', disabled: busy !== '',
+          'aria-label': sub.on ? t('Pause {name}', { name: sub.name }) : t('Resume {name}', { name: sub.name }),
+          onClick: () => run('subscription-set-on', { id: sub.id, on: !sub.on }),
+        }, h('span'))),
+      h(Sentence, { sub, roster }),
+      h('div', { className: 'os-row-foot' },
+        h('span', null, last ? t('last run {time}', { time: relativeShort(last.at) }) : t('not fired yet')),
+        sub.askFirst ? null : h('span', { className: 'os-row-warn' }, t('acts without asking')),
+        h('span', { className: 'os-row-actions' },
+          h('button', { type: 'button', className: 'os-link', disabled: busy !== '', onClick: () => run('subscription-test', { id: sub.id }) }, t('Test')),
+          h('button', {
+            type: 'button', className: confirming ? 'os-link os-link-danger' : 'os-link', disabled: busy !== '',
+            onBlur: () => setConfirming(false),
+            onClick: () => (confirming ? run('subscription-delete', { id: sub.id }) : setConfirming(true)),
+          }, confirming ? t('Click again to delete') : t('Delete'))))))
 }
 
-function RunCard({ run, sub, roster, compact = false }) {
+// A run opens its own Session: the task the worker ran for one event.
+function RunRow({ run, sub, roster, actions, asking = false }) {
   if (!sub) return null
-  const status = RUN_STATUS[run.status]
-  return h('div', { className: `os-runcard${compact ? ' os-runcard-compact' : ''}`, 'data-tone': status.tone },
-    h(WorkerMark, { worker: sub.worker, roster, size: compact ? 24 : 30 }),
-    h('div', { className: 'os-runcard-body' },
-      h('div', { className: 'os-runcard-top' },
-        h('strong', null, workerOf(sub.worker, roster).name),
-        h('span', { className: 'oc-pill', 'data-tone': status.tone === 'bad' ? 'warn' : status.tone }, h('span', { className: 'oc-pill-dot', 'aria-hidden': true }), run.test ? t('Test') : t(status.label)),
-        h('span', { className: 'os-runcard-sub' }, sub.name),
+  const status = RUN_STATUS[asking ? 'waiting' : run.status]
+  const open = run.sessionId ? () => actions.openSession(run.sessionId) : undefined
+  return h('button', { type: 'button', className: 'os-run', 'data-tone': status.tone, disabled: !open, onClick: open, title: open ? t('Open this run') : undefined },
+    h(WorkerMark, { worker: sub.worker, roster, size: 22 }),
+    h('span', { className: 'os-run-body' },
+      h('span', { className: 'os-run-top' },
+        h('span', { className: 'os-run-name' }, workerOf(sub.worker, roster).name),
+        h('span', { className: 'os-run-status' }, run.test ? `${t('Test')} · ${t(status.label)}` : t(status.label)),
         h('time', null, relativeShort(run.at))),
-      run.excerpt && !run.test ? h('div', { className: 'os-quote' }, h('span', null, run.from), ' ', run.excerpt) : null,
-      h('div', { className: 'os-summary' }, run.summary)))
+      run.excerpt && !run.test ? h('span', { className: 'os-run-quote' }, run.from ? `${run.from}: ` : '', run.excerpt) : null,
+      h('span', { className: 'os-run-text' }, run.summary)))
 }
-
-// -------------------------------------------------------------------------
 
 export const SUBSCRIPTIONS_CSS = `
 .os-trigger{display:inline-grid;place-items:center;flex:none;border-radius:30%;background:color-mix(in srgb,var(--bt-accent) 12%,var(--bt-card));box-shadow:inset 0 0 0 .5px var(--bt-line-2);line-height:1}
@@ -220,73 +232,71 @@ export const SUBSCRIPTIONS_CSS = `
 
 /* Tentacall's header button */
 .os-head-btn{display:inline-flex;align-items:center;gap:7px;height:32px;padding:0 10px 0 12px;margin-left:8px;border-radius:999px;border:.5px solid var(--bt-line-2);background:var(--bt-main);color:var(--bt-ink);font:inherit;font-size:13px;cursor:pointer;pointer-events:auto;box-shadow:0 2px 8px -1px rgba(0,0,0,.06)}
-.os-head-btn:hover,.os-head-btn[aria-pressed=true]{background:var(--bt-hover)}
+.os-head-btn:hover{background:var(--bt-hover)}
 .os-head-count{min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--bt-hover);color:var(--bt-ink-2);font-size:11px;line-height:18px;text-align:center;box-sizing:border-box}
 
-/* Board */
-.os-to-board{align-self:flex-start;margin:10px 0 0 12px;height:28px;padding:0 10px;border:0;border-radius:999px;background:var(--bt-hover);color:var(--bt-ink-2);font:inherit;font-size:12.5px;cursor:pointer}
-.os-to-board:hover{color:var(--bt-ink)}
-.os-board{display:flex;flex-direction:column;min-height:0;flex:1}
-.os-board-head{display:flex;align-items:center;gap:8px;height:52px;flex:none;padding:0 10px 0 12px;border-bottom:.5px solid var(--bt-line)}
-.os-board-who{display:inline-flex;align-items:center;gap:8px;margin-right:auto;padding:4px 8px 4px 4px;border:0;border-radius:10px;background:none;color:var(--bt-ink);font:inherit;font-size:15px;cursor:pointer}
-.os-board-who:hover{background:var(--bt-hover)}
-.os-board-who strong{font-weight:600}
-.os-board .oc-preview-chip{margin-left:0}
-.os-board-body{flex:1;min-height:0;overflow-y:auto;padding:14px 14px 20px;display:flex;flex-direction:column;gap:10px}
-.os-board-note{margin:0;font-size:12.5px;line-height:18px;color:var(--bt-ink-2)}
-.os-board-h{margin:8px 2px 0;font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--bt-ink-3)}
-.os-empty-board{display:flex;flex-direction:column;align-items:center;gap:10px;padding:28px 12px 12px;text-align:center}
-.os-empty-board>strong{font-size:17px;font-weight:600}
-.os-empty-board>span{max-width:340px;font-size:13.5px;line-height:20px;color:var(--bt-ink-2)}
-.os-examples{display:flex;flex-direction:column;gap:6px;width:100%;margin-top:6px}
-.os-example{padding:9px 12px;border-radius:14px;background:var(--bt-card);border:.5px dashed var(--bt-line-2);font-size:13px;line-height:19px;color:var(--bt-ink-2);text-align:left}
-.os-example::before{content:"“";color:var(--bt-ink-3)}
-.os-example::after{content:"”";color:var(--bt-ink-3)}
+/* Board: a plain list in the sidebar's own type and spacing */
+.os-board{height:100%;overflow-y:auto;padding:10px 8px 16px;box-sizing:border-box;display:flex;flex-direction:column;gap:6px;color:var(--bt-ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;font-size:13px}
+.os-board-status{display:flex;align-items:center;gap:8px;padding:2px 8px 6px;font-size:12px;color:var(--bt-ink-2)}
+.os-board-status .oc-live-dot{width:6px;height:6px;border-radius:50%;background:var(--bt-ink-3)}
+.os-board-status .oc-live-dot[data-on]{background:#16a34a}
+.os-board-h{margin:10px 8px 2px;font-size:11.5px;font-weight:600;color:var(--bt-ink-3)}
+.os-board-note{margin:8px;font-size:12.5px;color:var(--bt-ink-2)}
+.os-board-pending{margin:0 8px 4px;padding:7px 10px;border-radius:8px;background:var(--bt-hover);font-size:11.5px;line-height:16px;color:var(--bt-ink-2)}
+.os-list{display:flex;flex-direction:column}
+.os-row{display:flex;gap:10px;padding:10px 8px;border-radius:10px;transition:background-color .12s ease}
+.os-row+.os-row{border-top:.5px solid var(--bt-line)}
+.os-row:hover{background:var(--bt-hover)}
+.os-row[data-off]{opacity:.55}
+.os-row[data-fresh]{animation:os-fresh 2.4s cubic-bezier(.2,0,0,1)}
+@keyframes os-fresh{0%{background:color-mix(in srgb,var(--bt-accent) 22%,transparent);transform:translateY(4px)}25%{transform:none}100%{background:transparent}}
+.os-row-body{display:flex;flex-direction:column;gap:4px;flex:1;min-width:0}
+.os-row-top{display:flex;align-items:center;gap:8px;min-height:22px}
+.os-row-name{flex:1;min-width:0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.os-row-foot{display:flex;align-items:center;gap:10px;font-size:11.5px;color:var(--bt-ink-3)}
+.os-row-warn{color:#d97706}
+.os-row-actions{display:inline-flex;gap:10px;margin-left:auto;opacity:0;transition:opacity .12s ease}
+.os-row:hover .os-row-actions,.os-row:focus-within .os-row-actions{opacity:1}
+.os-empty-board{display:flex;flex-direction:column;align-items:center;gap:8px;padding:28px 12px 8px;text-align:center}
+.os-empty-board>strong{font-size:14px;font-weight:600}
+.os-empty-board>span{max-width:300px;font-size:12.5px;line-height:18px;color:var(--bt-ink-2)}
+.os-examples{list-style:none;margin:8px 0 0;padding:0;width:100%;display:flex;flex-direction:column;text-align:left}
+.os-examples li{padding:8px 10px;font-size:12.5px;line-height:18px;color:var(--bt-ink-2)}
+.os-examples li+li{border-top:.5px solid var(--bt-line)}
+.os-examples li::before{content:"“";color:var(--bt-ink-3)}
+.os-examples li::after{content:"”";color:var(--bt-ink-3)}
 
-/* Sentence */
-.os-sentence{margin:0;display:flex;flex-wrap:wrap;align-items:center;gap:6px 4px;font-size:13.5px;line-height:26px}
-.os-w{color:var(--bt-ink-3);font-weight:500}
-.os-chip{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 9px;border-radius:999px;background:var(--bt-main);border:.5px solid var(--bt-line-2);white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis}
-.os-chip-trigger{background:color-mix(in srgb,var(--bt-accent) 10%,var(--bt-card));border-color:color-mix(in srgb,var(--bt-accent) 30%,transparent)}
-.os-chip-worker{font-weight:500}
-.os-chip-soft{background:none;color:var(--bt-ink-2);border-style:dashed}
-.os-emoji{font-size:15px}
+/* Sentence: inline, quiet */
+.os-sentence{margin:0;display:flex;flex-wrap:wrap;align-items:center;gap:3px 4px;font-size:12.5px;line-height:20px;color:var(--bt-ink-2)}
+.os-w{color:var(--bt-ink-3)}
+.os-chip{display:inline-flex;align-items:center;gap:4px;max-width:100%;color:var(--bt-ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.os-chip-soft{color:var(--bt-ink-3)}
+.os-emoji{font-size:13px;font-weight:400}
 
-/* Cards */
-.os-card{display:flex;flex-direction:column;gap:10px;padding:14px;border-radius:16px;border:.5px solid var(--bt-line-2);background:var(--bt-card);color:var(--bt-ink)}
-.os-card[data-off]{opacity:.6}
-.os-card[data-fresh]{animation:os-fresh 2.4s cubic-bezier(.2,0,0,1)}
-@keyframes os-fresh{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--bt-accent) 0%,transparent);transform:translateY(6px);opacity:.4}20%{box-shadow:0 0 0 4px color-mix(in srgb,var(--bt-accent) 35%,transparent);transform:none;opacity:1}100%{box-shadow:0 0 0 0 color-mix(in srgb,var(--bt-accent) 0%,transparent)}}
-.os-card-top{display:flex;align-items:center;gap:10px}
-.os-card-top strong{flex:1;min-width:0;font-size:14.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.os-card-foot{display:flex;align-items:center;gap:12px}
-.os-card-meta{font-size:12px;color:var(--bt-ink-3)}
-.os-card-meta:first-child{margin-right:auto}
-.os-card-warn{color:#d97706}
-.os-link{border:0;background:none;padding:0;color:var(--bt-ink-2);font:inherit;font-size:12.5px;cursor:pointer}
+.os-link{border:0;background:none;padding:0;color:var(--bt-ink-2);font:inherit;font-size:11.5px;cursor:pointer}
 .os-link:hover:not(:disabled){color:var(--bt-ink);text-decoration:underline}
 .os-link:disabled{opacity:.5;cursor:default}
 .os-link-danger{color:var(--bt-danger);font-weight:600}
-.os-switch{position:relative;flex:none;width:38px;height:22px;border-radius:999px;border:0;padding:0;background:var(--bt-line-2);cursor:pointer;transition:background-color .15s ease}
-.os-switch span{position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:transform .18s cubic-bezier(.2,0,0,1)}
+.os-switch{position:relative;flex:none;width:30px;height:18px;border-radius:999px;border:0;padding:0;background:var(--bt-line-2);cursor:pointer;transition:background-color .15s ease}
+.os-switch span{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform .18s cubic-bezier(.2,0,0,1)}
 .os-switch[aria-checked=true]{background:var(--bt-accent)}
-.os-switch[aria-checked=true] span{transform:translateX(16px)}
+.os-switch[aria-checked=true] span{transform:translateX(12px)}
 .os-switch:disabled{opacity:.6}
-.os-runcard{display:flex;gap:10px;padding:12px 14px;border-radius:14px;background:var(--bt-card);border:.5px solid var(--bt-line-2)}
-.os-runcard[data-tone=warn]{border:1px solid color-mix(in srgb,#f59e0b 40%,transparent);background:color-mix(in srgb,#f59e0b 6%,var(--bt-card))}
-.os-runcard-compact{padding:9px 12px}
-.os-runcard-body{display:flex;flex-direction:column;gap:5px;flex:1;min-width:0}
-.os-runcard-top{display:flex;align-items:center;gap:7px;flex-wrap:wrap;font-size:13px}
-.os-runcard-top time{margin-left:auto;font-size:11.5px;color:var(--bt-ink-3)}
-.os-runcard-sub{font-size:12px;color:var(--bt-ink-2)}
-.os-runcard .oc-pill{height:20px;font-size:11px;padding:0 8px}
-.os-quote{padding:5px 9px;border-left:3px solid var(--bt-line-2);border-radius:4px;background:var(--bt-hover);font-size:12.5px;line-height:18px;color:var(--bt-ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.os-quote span{font-weight:600;color:var(--bt-ink)}
-.os-summary{font-size:13px;line-height:19px}
-.os-safety{display:flex;align-items:flex-start;gap:12px;margin-top:6px;padding:12px 14px;border-radius:14px;background:color-mix(in srgb,#0ea5e9 7%,var(--bt-card));border:1px solid color-mix(in srgb,#0ea5e9 25%,transparent)}
-.os-safety-icon{display:inline-grid;place-items:center;width:30px;height:30px;border-radius:10px;background:color-mix(in srgb,#0ea5e9 14%,transparent);color:#0284c7;flex:none}
-.os-safety-icon svg{width:17px;height:17px}
-.os-safety>div{display:flex;flex-direction:column;gap:2px;flex:1;font-size:12px;line-height:17px;color:var(--bt-ink-2)}
-.os-safety strong{font-size:13px;color:var(--bt-ink)}
-@media (prefers-reduced-motion:reduce){.os-card[data-fresh]{animation:none}}
+
+/* Runs */
+.os-run{display:flex;gap:9px;width:100%;padding:8px;border:0;border-radius:10px;background:none;color:var(--bt-ink);font:inherit;text-align:left;cursor:pointer}
+.os-run:hover:not(:disabled){background:var(--bt-hover)}
+.os-run:disabled{cursor:default}
+.os-run-body{display:flex;flex-direction:column;gap:2px;flex:1;min-width:0}
+.os-run-top{display:flex;align-items:center;gap:6px;font-size:12.5px}
+.os-run-name{font-weight:500}
+.os-run-top time{margin-left:auto;font-size:11px;color:var(--bt-ink-3)}
+.os-run-status{font-size:11px;font-weight:600;color:color-mix(in srgb,var(--oc-tone) 75%,var(--bt-ink))}
+.os-run[data-tone=busy] .os-run-status{animation:oc-pulse 1.4s ease-in-out infinite}
+.os-run-quote{font-size:12px;color:var(--bt-ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.os-run-text{font-size:12.5px;line-height:18px;color:var(--bt-ink-2);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+
+.os-safety{display:flex;gap:8px;margin-top:auto;padding:10px 8px 0;border-top:.5px solid var(--bt-line);font-size:11.5px;line-height:16px;color:var(--bt-ink-3)}
+.os-safety svg{flex:none;margin-top:1px}
+@media (prefers-reduced-motion:reduce){.os-row[data-fresh]{animation:none}}
 `

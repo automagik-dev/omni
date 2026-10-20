@@ -80,6 +80,7 @@ export function install(rt) {
     memoryReviews: rt.memoryReviews(),
     connectors: rt.connectorsView(),
     capabilityStatuses: rt.capabilityStatusesView(),
+    omniEvents: rt.omniEventsView?.() ?? { listening: [] },
   })
   // What a host that only reads the team may still answer.
   // Updates change the dsh profile, not the team, so a reading host may run them too.

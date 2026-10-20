@@ -44,6 +44,11 @@ module.exports = __toCommonJS(index_exports);
 var NAMESPACE = "ds-bot";
 var ZH = {
   // Omni subscriptions (subscriptions.js)
+  "Reacting on the message and replying to you are not sent yet: this DSH may not send on omni. Results stay in the runs below.": "在消息上回应和回复你暂时还不会发送：这个 DSH 还不能通过 omni 发送。结果保留在下方的运行记录中。",
+  "Listening to omni.": "正在接收 omni 事件。",
+  "Connecting to omni…": "正在连接 omni…",
+  "Subscriptions belong to Tentacall, which this team does not have.": "订阅归 Tentacall 管理，而这个团队没有 Tentacall。",
+  "Open this run": "打开这次运行",
   "← Subscriptions": "← 订阅",
   "acts without asking": "不询问直接执行",
   "A deleted Bot": "已删除的 Bot",
@@ -5427,7 +5432,7 @@ var TRIGGERS = {
   down: { label: "The channel disconnects", short: "disconnect", icon: "down" }
 };
 var runsOf = (roster, subId) => (roster?.subscriptionRuns ?? []).filter((run) => subId === void 0 || run.subId === subId).toSorted((a, b) => b.at - a.at);
-var waitingRuns = (roster) => (roster?.subscriptionRuns ?? []).filter((run) => run.status === "waiting").length;
+var waitingRuns = (roster, waiting = /* @__PURE__ */ new Set()) => (roster?.subscriptionRuns ?? []).filter((run) => run.status === "working" && waiting.has(run.sessionId)).length;
 
 // src/client/channels.js
 var import_react10 = require("react");
@@ -6238,73 +6243,67 @@ var RUN_STATUS = {
   done: { label: "Done", tone: "ok" },
   failed: { label: "Did not finish", tone: "bad" }
 };
-function EventsBadge({ roster }) {
-  const waiting = waitingRuns(roster);
+var useWaiting = (useWork) => new Set((useWork ? useWork((work) => (work.approvals ?? []).map((entry) => entry.sessionId).join(",")) : "").split(",").filter(Boolean));
+function EventsBadge({ roster, useWork }) {
+  const waiting = waitingRuns(roster, useWaiting(useWork));
   return waiting > 0 ? (0, import_react11.createElement)("span", { className: "os-pending", title: t("{n} waiting for you", { n: waiting }) }, String(waiting)) : null;
 }
-function SubscriptionsButton({ sessionId, roster, actions, open }) {
+function SubscriptionsButton({ roster, actions, useWork }) {
   const count = (roster.subscriptions ?? []).filter((sub) => sub.on).length;
-  const waiting = waitingRuns(roster);
+  const waiting = waitingRuns(roster, useWaiting(useWork));
   return (0, import_react11.createElement)(
     "button",
-    { type: "button", className: "os-head-btn", "aria-pressed": open, onClick: () => actions.toggleWork(sessionId) },
+    { type: "button", className: "os-head-btn", onClick: () => actions.toggleBoard() },
     t("Subscriptions"),
     (0, import_react11.createElement)("span", { className: "os-head-count" }, String(count)),
     waiting > 0 ? (0, import_react11.createElement)("span", { className: "os-pending" }, String(waiting)) : null
   );
 }
-function SubscriptionsBoard({ bot, roster, actions, onDetails }) {
+var BOARD_KIND = "omni-subscriptions";
+var BOARD_TAB_ID = "ds-bot/omni-subscriptions";
+var boardTabDefinition = () => ({ id: BOARD_TAB_ID, kind: BOARD_KIND, title: () => t("Subscriptions") });
+function BoardTab({ useRoster, useWork, actions }) {
+  const roster = useRoster((value) => value);
+  const waiting = useWaiting(useWork);
+  const bot = roster.byId?.[roster.eventsBotId];
+  if (!bot) return (0, import_react11.createElement)("div", { className: "os-board" }, (0, import_react11.createElement)("p", { className: "os-board-note" }, t("Subscriptions belong to Tentacall, which this team does not have.")));
+  return (0, import_react11.createElement)(SubscriptionsBoard, { bot, roster, actions, waiting });
+}
+function SubscriptionsBoard({ bot, roster, actions, waiting }) {
   const omni = useOmni();
   (0, import_react11.useEffect)(() => {
     startLive(call);
   }, []);
   const subs = roster.subscriptions ?? [];
   const runs = runsOf(roster);
-  const waiting = runs.filter((run) => run.status === "waiting");
   const watched = new Set(subs.filter((sub) => sub.on).flatMap((sub) => sub.sources.map((source) => `${source.kind}:${source.id}`))).size;
+  const listening = (roster.omniEvents?.listening ?? []).length > 0;
   return (0, import_react11.createElement)(
     "div",
-    { className: "bt-panel-view os-board" },
-    (0, import_react11.createElement)(
-      "div",
-      { className: "os-board-head" },
-      (0, import_react11.createElement)("button", { type: "button", className: "os-board-who", onClick: onDetails, title: t("{name}’s profile", { name: bot.name }) }, (0, import_react11.createElement)(BotMark, { bot, size: 26 }), (0, import_react11.createElement)("strong", null, t("Subscriptions"))),
-      (0, import_react11.createElement)(PreviewChip),
-      (0, import_react11.createElement)("button", { type: "button", className: "bt-icon-btn", "aria-label": t("Close panel"), title: t("Close panel"), onClick: () => actions.closePanel() }, (0, import_react11.createElement)(CloseIcon))
+    { className: "os-board" },
+    subs.length === 0 ? (0, import_react11.createElement)(Empty, { bot, live: omni.source.kind === "live" }) : (0, import_react11.createElement)(
+      import_react11.Fragment,
+      null,
+      (0, import_react11.createElement)(
+        "div",
+        { className: "os-board-status" },
+        (0, import_react11.createElement)("span", { className: "oc-live-dot", "data-on": listening || void 0, "aria-hidden": true }),
+        !subs.some((sub) => sub.on) ? t("Everything is paused.") : `${watched === 1 ? t("Watching 1 chat or channel.") : t("Watching {n} chats and channels.", { n: watched })} ${listening ? t("Listening to omni.") : t("Connecting to omni…")}`
+      ),
+      subs.some((sub) => sub.on && (sub.outputs.react || sub.outputs.replyToMe)) ? (0, import_react11.createElement)("div", { className: "os-board-note os-board-pending" }, t("Reacting on the message and replying to you are not sent yet: this DSH may not send on omni. Results stay in the runs below.")) : null,
+      (0, import_react11.createElement)("div", { className: "os-list" }, subs.map((sub) => (0, import_react11.createElement)(SubRow, { key: sub.id, sub, roster, runs: runs.filter((run) => run.subId === sub.id) }))),
+      runs.length > 0 ? (0, import_react11.createElement)(
+        import_react11.Fragment,
+        null,
+        (0, import_react11.createElement)("div", { className: "os-board-h" }, t("Runs")),
+        (0, import_react11.createElement)("div", { className: "os-list" }, runs.slice(0, 20).map((run) => (0, import_react11.createElement)(RunRow, { key: run.id, run, sub: subs.find((sub) => sub.id === run.subId), roster, actions, asking: waiting?.has(run.sessionId) && run.status === "working" })))
+      ) : null
     ),
     (0, import_react11.createElement)(
       "div",
-      { className: "os-board-body" },
-      subs.length === 0 ? (0, import_react11.createElement)(Empty, { bot, live: omni.source.kind === "live" }) : (0, import_react11.createElement)(
-        import_react11.Fragment,
-        null,
-        (0, import_react11.createElement)("p", { className: "os-board-note" }, subs.some((sub) => sub.on) ? `${watched === 1 ? t("Watching 1 chat or channel.") : t("Watching {n} chats and channels.", { n: watched })} ${t("Events start arriving once omni’s event stream is connected here.")}` : t("Everything is paused.")),
-        waiting.length > 0 ? (0, import_react11.createElement)(
-          import_react11.Fragment,
-          null,
-          (0, import_react11.createElement)("h3", { className: "os-board-h" }, t("Waiting for you")),
-          waiting.map((run) => (0, import_react11.createElement)(RunCard, { key: run.id, run, sub: subs.find((sub) => sub.id === run.subId), roster }))
-        ) : null,
-        (0, import_react11.createElement)("h3", { className: "os-board-h" }, t("Watching")),
-        subs.map((sub) => (0, import_react11.createElement)(SubCard, { key: sub.id, sub, roster, runs: runs.filter((run) => run.subId === sub.id) })),
-        runs.length > waiting.length ? (0, import_react11.createElement)(
-          import_react11.Fragment,
-          null,
-          (0, import_react11.createElement)("h3", { className: "os-board-h" }, t("Activity")),
-          runs.filter((run) => run.status !== "waiting").slice(0, 12).map((run) => (0, import_react11.createElement)(RunCard, { key: run.id, run, sub: subs.find((sub) => sub.id === run.subId), roster, compact: true }))
-        ) : null
-      ),
-      (0, import_react11.createElement)(
-        "div",
-        { className: "os-safety" },
-        (0, import_react11.createElement)("span", { className: "os-safety-icon", "aria-hidden": true }, (0, import_react11.createElement)(ShieldIcon)),
-        (0, import_react11.createElement)(
-          "div",
-          null,
-          (0, import_react11.createElement)("strong", null, t("Messages come from other people")),
-          (0, import_react11.createElement)("span", null, t("Anyone in a watched chat can write text that tries to steer a Bot. Work started by an event runs with no secrets and asks you before shell, file or network actions, unless you tell {name} otherwise.", { name: bot.name }))
-        )
-      )
+      { className: "os-safety" },
+      (0, import_react11.createElement)(ShieldIcon),
+      (0, import_react11.createElement)("span", null, t("Anyone in a watched chat can write text that tries to steer a Bot. Work started by an event runs with no secrets and asks you before shell, file or network actions, unless you tell {name} otherwise.", { name: bot.name }))
     )
   );
 }
@@ -6317,13 +6316,13 @@ function Empty({ bot, live }) {
   return (0, import_react11.createElement)(
     "div",
     { className: "os-empty-board" },
-    (0, import_react11.createElement)(BotMark, { bot, size: 64, live: true }),
+    (0, import_react11.createElement)(BotMark, { bot, size: 48, live: true }),
     (0, import_react11.createElement)("strong", null, t("Tell {name} what to watch", { name: bot.name })),
     (0, import_react11.createElement)("span", null, live ? t("Say it in the chat. {name} finds the chats, asks what is missing, and the subscription shows up here.", { name: bot.name }) : t("Omni is not connected to this DSH yet, so there is nothing to watch.")),
-    (0, import_react11.createElement)("div", { className: "os-examples" }, examples.map((text) => (0, import_react11.createElement)("span", { key: text, className: "os-example" }, text)))
+    (0, import_react11.createElement)("ul", { className: "os-examples" }, examples.map((text) => (0, import_react11.createElement)("li", { key: text }, text)))
   );
 }
-function SubCard({ sub, roster, runs }) {
+function SubRow({ sub, roster, runs }) {
   const [confirming, setConfirming] = (0, import_react11.useState)(false);
   const [busy, setBusy] = (0, import_react11.useState)("");
   const fresh = Date.now() - (sub.updatedAt ?? 0) < FRESH_MS;
@@ -6338,59 +6337,67 @@ function SubCard({ sub, roster, runs }) {
   const last = runs[0];
   return (0, import_react11.createElement)(
     "div",
-    { className: "os-card", "data-off": sub.on ? void 0 : true, "data-fresh": fresh || void 0 },
+    { className: "os-row", "data-off": sub.on ? void 0 : true, "data-fresh": fresh || void 0 },
+    (0, import_react11.createElement)(TriggerBadge, { trigger: sub.trigger, size: 28 }),
     (0, import_react11.createElement)(
       "div",
-      { className: "os-card-top" },
-      (0, import_react11.createElement)(TriggerBadge, { trigger: sub.trigger, size: 34 }),
-      (0, import_react11.createElement)("strong", null, sub.name),
-      (0, import_react11.createElement)("button", {
-        type: "button",
-        role: "switch",
-        "aria-checked": sub.on,
-        className: "os-switch",
-        disabled: busy !== "",
-        "aria-label": sub.on ? t("Pause {name}", { name: sub.name }) : t("Resume {name}", { name: sub.name }),
-        onClick: () => run("subscription-set-on", { id: sub.id, on: !sub.on })
-      }, (0, import_react11.createElement)("span"))
-    ),
-    (0, import_react11.createElement)(Sentence, { sub, roster }),
-    (0, import_react11.createElement)(
-      "div",
-      { className: "os-card-foot" },
-      (0, import_react11.createElement)("span", { className: "os-card-meta" }, last ? t("last run {time}", { time: relativeShort(last.at) }) : t("not fired yet")),
-      sub.askFirst ? null : (0, import_react11.createElement)("span", { className: "os-card-meta os-card-warn" }, t("acts without asking")),
-      (0, import_react11.createElement)("button", { type: "button", className: "os-link", disabled: busy !== "", onClick: () => run("subscription-test", { id: sub.id }) }, t("Test")),
-      (0, import_react11.createElement)("button", {
-        type: "button",
-        className: confirming ? "os-link os-link-danger" : "os-link",
-        disabled: busy !== "",
-        onBlur: () => setConfirming(false),
-        onClick: () => confirming ? run("subscription-delete", { id: sub.id }) : setConfirming(true)
-      }, confirming ? t("Click again to delete") : t("Delete"))
+      { className: "os-row-body" },
+      (0, import_react11.createElement)(
+        "div",
+        { className: "os-row-top" },
+        (0, import_react11.createElement)("span", { className: "os-row-name" }, sub.name),
+        (0, import_react11.createElement)("button", {
+          type: "button",
+          role: "switch",
+          "aria-checked": sub.on,
+          className: "os-switch",
+          disabled: busy !== "",
+          "aria-label": sub.on ? t("Pause {name}", { name: sub.name }) : t("Resume {name}", { name: sub.name }),
+          onClick: () => run("subscription-set-on", { id: sub.id, on: !sub.on })
+        }, (0, import_react11.createElement)("span"))
+      ),
+      (0, import_react11.createElement)(Sentence, { sub, roster }),
+      (0, import_react11.createElement)(
+        "div",
+        { className: "os-row-foot" },
+        (0, import_react11.createElement)("span", null, last ? t("last run {time}", { time: relativeShort(last.at) }) : t("not fired yet")),
+        sub.askFirst ? null : (0, import_react11.createElement)("span", { className: "os-row-warn" }, t("acts without asking")),
+        (0, import_react11.createElement)(
+          "span",
+          { className: "os-row-actions" },
+          (0, import_react11.createElement)("button", { type: "button", className: "os-link", disabled: busy !== "", onClick: () => run("subscription-test", { id: sub.id }) }, t("Test")),
+          (0, import_react11.createElement)("button", {
+            type: "button",
+            className: confirming ? "os-link os-link-danger" : "os-link",
+            disabled: busy !== "",
+            onBlur: () => setConfirming(false),
+            onClick: () => confirming ? run("subscription-delete", { id: sub.id }) : setConfirming(true)
+          }, confirming ? t("Click again to delete") : t("Delete"))
+        )
+      )
     )
   );
 }
-function RunCard({ run, sub, roster, compact: compact2 = false }) {
+function RunRow({ run, sub, roster, actions, asking = false }) {
   if (!sub) return null;
-  const status = RUN_STATUS[run.status];
+  const status = RUN_STATUS[asking ? "waiting" : run.status];
+  const open = run.sessionId ? () => actions.openSession(run.sessionId) : void 0;
   return (0, import_react11.createElement)(
-    "div",
-    { className: `os-runcard${compact2 ? " os-runcard-compact" : ""}`, "data-tone": status.tone },
-    (0, import_react11.createElement)(WorkerMark, { worker: sub.worker, roster, size: compact2 ? 24 : 30 }),
+    "button",
+    { type: "button", className: "os-run", "data-tone": status.tone, disabled: !open, onClick: open, title: open ? t("Open this run") : void 0 },
+    (0, import_react11.createElement)(WorkerMark, { worker: sub.worker, roster, size: 22 }),
     (0, import_react11.createElement)(
-      "div",
-      { className: "os-runcard-body" },
+      "span",
+      { className: "os-run-body" },
       (0, import_react11.createElement)(
-        "div",
-        { className: "os-runcard-top" },
-        (0, import_react11.createElement)("strong", null, workerOf(sub.worker, roster).name),
-        (0, import_react11.createElement)("span", { className: "oc-pill", "data-tone": status.tone === "bad" ? "warn" : status.tone }, (0, import_react11.createElement)("span", { className: "oc-pill-dot", "aria-hidden": true }), run.test ? t("Test") : t(status.label)),
-        (0, import_react11.createElement)("span", { className: "os-runcard-sub" }, sub.name),
+        "span",
+        { className: "os-run-top" },
+        (0, import_react11.createElement)("span", { className: "os-run-name" }, workerOf(sub.worker, roster).name),
+        (0, import_react11.createElement)("span", { className: "os-run-status" }, run.test ? `${t("Test")} · ${t(status.label)}` : t(status.label)),
         (0, import_react11.createElement)("time", null, relativeShort(run.at))
       ),
-      run.excerpt && !run.test ? (0, import_react11.createElement)("div", { className: "os-quote" }, (0, import_react11.createElement)("span", null, run.from), " ", run.excerpt) : null,
-      (0, import_react11.createElement)("div", { className: "os-summary" }, run.summary)
+      run.excerpt && !run.test ? (0, import_react11.createElement)("span", { className: "os-run-quote" }, run.from ? `${run.from}: ` : "", run.excerpt) : null,
+      (0, import_react11.createElement)("span", { className: "os-run-text" }, run.summary)
     )
   );
 }
@@ -6409,75 +6416,73 @@ var SUBSCRIPTIONS_CSS = `
 
 /* Tentacall's header button */
 .os-head-btn{display:inline-flex;align-items:center;gap:7px;height:32px;padding:0 10px 0 12px;margin-left:8px;border-radius:999px;border:.5px solid var(--bt-line-2);background:var(--bt-main);color:var(--bt-ink);font:inherit;font-size:13px;cursor:pointer;pointer-events:auto;box-shadow:0 2px 8px -1px rgba(0,0,0,.06)}
-.os-head-btn:hover,.os-head-btn[aria-pressed=true]{background:var(--bt-hover)}
+.os-head-btn:hover{background:var(--bt-hover)}
 .os-head-count{min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--bt-hover);color:var(--bt-ink-2);font-size:11px;line-height:18px;text-align:center;box-sizing:border-box}
 
-/* Board */
-.os-to-board{align-self:flex-start;margin:10px 0 0 12px;height:28px;padding:0 10px;border:0;border-radius:999px;background:var(--bt-hover);color:var(--bt-ink-2);font:inherit;font-size:12.5px;cursor:pointer}
-.os-to-board:hover{color:var(--bt-ink)}
-.os-board{display:flex;flex-direction:column;min-height:0;flex:1}
-.os-board-head{display:flex;align-items:center;gap:8px;height:52px;flex:none;padding:0 10px 0 12px;border-bottom:.5px solid var(--bt-line)}
-.os-board-who{display:inline-flex;align-items:center;gap:8px;margin-right:auto;padding:4px 8px 4px 4px;border:0;border-radius:10px;background:none;color:var(--bt-ink);font:inherit;font-size:15px;cursor:pointer}
-.os-board-who:hover{background:var(--bt-hover)}
-.os-board-who strong{font-weight:600}
-.os-board .oc-preview-chip{margin-left:0}
-.os-board-body{flex:1;min-height:0;overflow-y:auto;padding:14px 14px 20px;display:flex;flex-direction:column;gap:10px}
-.os-board-note{margin:0;font-size:12.5px;line-height:18px;color:var(--bt-ink-2)}
-.os-board-h{margin:8px 2px 0;font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--bt-ink-3)}
-.os-empty-board{display:flex;flex-direction:column;align-items:center;gap:10px;padding:28px 12px 12px;text-align:center}
-.os-empty-board>strong{font-size:17px;font-weight:600}
-.os-empty-board>span{max-width:340px;font-size:13.5px;line-height:20px;color:var(--bt-ink-2)}
-.os-examples{display:flex;flex-direction:column;gap:6px;width:100%;margin-top:6px}
-.os-example{padding:9px 12px;border-radius:14px;background:var(--bt-card);border:.5px dashed var(--bt-line-2);font-size:13px;line-height:19px;color:var(--bt-ink-2);text-align:left}
-.os-example::before{content:"“";color:var(--bt-ink-3)}
-.os-example::after{content:"”";color:var(--bt-ink-3)}
+/* Board: a plain list in the sidebar's own type and spacing */
+.os-board{height:100%;overflow-y:auto;padding:10px 8px 16px;box-sizing:border-box;display:flex;flex-direction:column;gap:6px;color:var(--bt-ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;font-size:13px}
+.os-board-status{display:flex;align-items:center;gap:8px;padding:2px 8px 6px;font-size:12px;color:var(--bt-ink-2)}
+.os-board-status .oc-live-dot{width:6px;height:6px;border-radius:50%;background:var(--bt-ink-3)}
+.os-board-status .oc-live-dot[data-on]{background:#16a34a}
+.os-board-h{margin:10px 8px 2px;font-size:11.5px;font-weight:600;color:var(--bt-ink-3)}
+.os-board-note{margin:8px;font-size:12.5px;color:var(--bt-ink-2)}
+.os-board-pending{margin:0 8px 4px;padding:7px 10px;border-radius:8px;background:var(--bt-hover);font-size:11.5px;line-height:16px;color:var(--bt-ink-2)}
+.os-list{display:flex;flex-direction:column}
+.os-row{display:flex;gap:10px;padding:10px 8px;border-radius:10px;transition:background-color .12s ease}
+.os-row+.os-row{border-top:.5px solid var(--bt-line)}
+.os-row:hover{background:var(--bt-hover)}
+.os-row[data-off]{opacity:.55}
+.os-row[data-fresh]{animation:os-fresh 2.4s cubic-bezier(.2,0,0,1)}
+@keyframes os-fresh{0%{background:color-mix(in srgb,var(--bt-accent) 22%,transparent);transform:translateY(4px)}25%{transform:none}100%{background:transparent}}
+.os-row-body{display:flex;flex-direction:column;gap:4px;flex:1;min-width:0}
+.os-row-top{display:flex;align-items:center;gap:8px;min-height:22px}
+.os-row-name{flex:1;min-width:0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.os-row-foot{display:flex;align-items:center;gap:10px;font-size:11.5px;color:var(--bt-ink-3)}
+.os-row-warn{color:#d97706}
+.os-row-actions{display:inline-flex;gap:10px;margin-left:auto;opacity:0;transition:opacity .12s ease}
+.os-row:hover .os-row-actions,.os-row:focus-within .os-row-actions{opacity:1}
+.os-empty-board{display:flex;flex-direction:column;align-items:center;gap:8px;padding:28px 12px 8px;text-align:center}
+.os-empty-board>strong{font-size:14px;font-weight:600}
+.os-empty-board>span{max-width:300px;font-size:12.5px;line-height:18px;color:var(--bt-ink-2)}
+.os-examples{list-style:none;margin:8px 0 0;padding:0;width:100%;display:flex;flex-direction:column;text-align:left}
+.os-examples li{padding:8px 10px;font-size:12.5px;line-height:18px;color:var(--bt-ink-2)}
+.os-examples li+li{border-top:.5px solid var(--bt-line)}
+.os-examples li::before{content:"“";color:var(--bt-ink-3)}
+.os-examples li::after{content:"”";color:var(--bt-ink-3)}
 
-/* Sentence */
-.os-sentence{margin:0;display:flex;flex-wrap:wrap;align-items:center;gap:6px 4px;font-size:13.5px;line-height:26px}
-.os-w{color:var(--bt-ink-3);font-weight:500}
-.os-chip{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 9px;border-radius:999px;background:var(--bt-main);border:.5px solid var(--bt-line-2);white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis}
-.os-chip-trigger{background:color-mix(in srgb,var(--bt-accent) 10%,var(--bt-card));border-color:color-mix(in srgb,var(--bt-accent) 30%,transparent)}
-.os-chip-worker{font-weight:500}
-.os-chip-soft{background:none;color:var(--bt-ink-2);border-style:dashed}
-.os-emoji{font-size:15px}
+/* Sentence: inline, quiet */
+.os-sentence{margin:0;display:flex;flex-wrap:wrap;align-items:center;gap:3px 4px;font-size:12.5px;line-height:20px;color:var(--bt-ink-2)}
+.os-w{color:var(--bt-ink-3)}
+.os-chip{display:inline-flex;align-items:center;gap:4px;max-width:100%;color:var(--bt-ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.os-chip-soft{color:var(--bt-ink-3)}
+.os-emoji{font-size:13px;font-weight:400}
 
-/* Cards */
-.os-card{display:flex;flex-direction:column;gap:10px;padding:14px;border-radius:16px;border:.5px solid var(--bt-line-2);background:var(--bt-card);color:var(--bt-ink)}
-.os-card[data-off]{opacity:.6}
-.os-card[data-fresh]{animation:os-fresh 2.4s cubic-bezier(.2,0,0,1)}
-@keyframes os-fresh{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--bt-accent) 0%,transparent);transform:translateY(6px);opacity:.4}20%{box-shadow:0 0 0 4px color-mix(in srgb,var(--bt-accent) 35%,transparent);transform:none;opacity:1}100%{box-shadow:0 0 0 0 color-mix(in srgb,var(--bt-accent) 0%,transparent)}}
-.os-card-top{display:flex;align-items:center;gap:10px}
-.os-card-top strong{flex:1;min-width:0;font-size:14.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.os-card-foot{display:flex;align-items:center;gap:12px}
-.os-card-meta{font-size:12px;color:var(--bt-ink-3)}
-.os-card-meta:first-child{margin-right:auto}
-.os-card-warn{color:#d97706}
-.os-link{border:0;background:none;padding:0;color:var(--bt-ink-2);font:inherit;font-size:12.5px;cursor:pointer}
+.os-link{border:0;background:none;padding:0;color:var(--bt-ink-2);font:inherit;font-size:11.5px;cursor:pointer}
 .os-link:hover:not(:disabled){color:var(--bt-ink);text-decoration:underline}
 .os-link:disabled{opacity:.5;cursor:default}
 .os-link-danger{color:var(--bt-danger);font-weight:600}
-.os-switch{position:relative;flex:none;width:38px;height:22px;border-radius:999px;border:0;padding:0;background:var(--bt-line-2);cursor:pointer;transition:background-color .15s ease}
-.os-switch span{position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:transform .18s cubic-bezier(.2,0,0,1)}
+.os-switch{position:relative;flex:none;width:30px;height:18px;border-radius:999px;border:0;padding:0;background:var(--bt-line-2);cursor:pointer;transition:background-color .15s ease}
+.os-switch span{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform .18s cubic-bezier(.2,0,0,1)}
 .os-switch[aria-checked=true]{background:var(--bt-accent)}
-.os-switch[aria-checked=true] span{transform:translateX(16px)}
+.os-switch[aria-checked=true] span{transform:translateX(12px)}
 .os-switch:disabled{opacity:.6}
-.os-runcard{display:flex;gap:10px;padding:12px 14px;border-radius:14px;background:var(--bt-card);border:.5px solid var(--bt-line-2)}
-.os-runcard[data-tone=warn]{border:1px solid color-mix(in srgb,#f59e0b 40%,transparent);background:color-mix(in srgb,#f59e0b 6%,var(--bt-card))}
-.os-runcard-compact{padding:9px 12px}
-.os-runcard-body{display:flex;flex-direction:column;gap:5px;flex:1;min-width:0}
-.os-runcard-top{display:flex;align-items:center;gap:7px;flex-wrap:wrap;font-size:13px}
-.os-runcard-top time{margin-left:auto;font-size:11.5px;color:var(--bt-ink-3)}
-.os-runcard-sub{font-size:12px;color:var(--bt-ink-2)}
-.os-runcard .oc-pill{height:20px;font-size:11px;padding:0 8px}
-.os-quote{padding:5px 9px;border-left:3px solid var(--bt-line-2);border-radius:4px;background:var(--bt-hover);font-size:12.5px;line-height:18px;color:var(--bt-ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.os-quote span{font-weight:600;color:var(--bt-ink)}
-.os-summary{font-size:13px;line-height:19px}
-.os-safety{display:flex;align-items:flex-start;gap:12px;margin-top:6px;padding:12px 14px;border-radius:14px;background:color-mix(in srgb,#0ea5e9 7%,var(--bt-card));border:1px solid color-mix(in srgb,#0ea5e9 25%,transparent)}
-.os-safety-icon{display:inline-grid;place-items:center;width:30px;height:30px;border-radius:10px;background:color-mix(in srgb,#0ea5e9 14%,transparent);color:#0284c7;flex:none}
-.os-safety-icon svg{width:17px;height:17px}
-.os-safety>div{display:flex;flex-direction:column;gap:2px;flex:1;font-size:12px;line-height:17px;color:var(--bt-ink-2)}
-.os-safety strong{font-size:13px;color:var(--bt-ink)}
-@media (prefers-reduced-motion:reduce){.os-card[data-fresh]{animation:none}}
+
+/* Runs */
+.os-run{display:flex;gap:9px;width:100%;padding:8px;border:0;border-radius:10px;background:none;color:var(--bt-ink);font:inherit;text-align:left;cursor:pointer}
+.os-run:hover:not(:disabled){background:var(--bt-hover)}
+.os-run:disabled{cursor:default}
+.os-run-body{display:flex;flex-direction:column;gap:2px;flex:1;min-width:0}
+.os-run-top{display:flex;align-items:center;gap:6px;font-size:12.5px}
+.os-run-name{font-weight:500}
+.os-run-top time{margin-left:auto;font-size:11px;color:var(--bt-ink-3)}
+.os-run-status{font-size:11px;font-weight:600;color:color-mix(in srgb,var(--oc-tone) 75%,var(--bt-ink))}
+.os-run[data-tone=busy] .os-run-status{animation:oc-pulse 1.4s ease-in-out infinite}
+.os-run-quote{font-size:12px;color:var(--bt-ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.os-run-text{font-size:12.5px;line-height:18px;color:var(--bt-ink-2);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+
+.os-safety{display:flex;gap:8px;margin-top:auto;padding:10px 8px 0;border-top:.5px solid var(--bt-line);font-size:11.5px;line-height:16px;color:var(--bt-ink-3)}
+.os-safety svg{flex:none;margin-top:1px}
+@media (prefers-reduced-motion:reduce){.os-row[data-fresh]{animation:none}}
 `;
 
 // src/client/sidebar.js
@@ -6563,7 +6568,7 @@ function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessio
       awayLine ? (0, import_react12.createElement)("span", { className: "bt-row-preview" }, awayLine) : waitsFor ? (0, import_react12.createElement)("span", { className: "bt-row-preview" }, waitsFor) : preview ? (0, import_react12.createElement)("span", { className: "bt-row-preview" }, preview) : null
     ) : null,
     // Tentacall's row also counts the subscription runs waiting for your approval.
-    wide && id === roster.eventsBotId ? (0, import_react12.createElement)(EventsBadge, { roster }) : null,
+    wide && id === roster.eventsBotId ? (0, import_react12.createElement)(EventsBadge, { roster, useWork }) : null,
     wide && unread && !active ? (0, import_react12.createElement)("span", { className: "bt-unread", "aria-hidden": true }) : null
   );
 }
@@ -7253,7 +7258,7 @@ function MemoryNotice({ shown }) {
     (0, import_react13.createElement)("span", { className: "bt-pill-mem-in", ref: inner }, (0, import_react13.createElement)("span", { className: "bt-pill-mem-ico" }, (0, import_react13.createElement)(MemoryIcon)), label)
   );
 }
-function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSession, useActivity, useMemoryNews, useTurnClock, useUi, useLive, actions }) {
+function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSession, useActivity, useMemoryNews, useTurnClock, useUi, useLive, useWork, actions }) {
   const roster = useRoster((value) => value);
   const title = useSessions((list) => list.byId[sessionId]?.displayTitle ?? list.byId[sessionId]?.title ?? "");
   const firstTurns = useSessions((list) => {
@@ -7277,7 +7282,6 @@ function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSe
   const bot = roster.byId[sessionId];
   const room2 = roster.roomsById[sessionId];
   const detailsOpen = useUi((state) => state.details === sessionId);
-  const workOpen = useUi((state) => state.details === sessionId && state.view === "work");
   const name = bot?.name ?? room2?.name ?? "";
   const useNews = useMemoryNews ?? noNews;
   const memoryIds = bot ? [bot.id] : room2?.members ?? [];
@@ -7317,7 +7321,7 @@ function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSe
       (0, import_react13.createElement)("span", { className: "bt-pill-go", "aria-hidden": true }, (0, import_react13.createElement)(GoArrow))
     ),
     (0, import_react13.createElement)("span", { className: "bt-sr", role: "status" }, memoryNotice ? t("Memory updated") : ""),
-    bot && bot.id === roster.eventsBotId ? (0, import_react13.createElement)(SubscriptionsButton, { sessionId, roster, actions, open: workOpen }) : null,
+    bot && bot.id === roster.eventsBotId ? (0, import_react13.createElement)(SubscriptionsButton, { roster, actions, useWork }) : null,
     (0, import_react13.createElement)(NewMessagePills, { key: sessionId, sessionId, useSessions, useUi, useTurnClock }),
     (0, import_react13.createElement)(ActivityIndicator, { key: `activity:${sessionId}`, sessionId, useRoster, useSessionStatus, useSession, useLive, actions }),
     // DSH's way into its right sidebar sits in the session header this pill replaces.
@@ -13712,8 +13716,7 @@ function BrowserView({ bot, tabId, leaving, landed, actions, useBrowserPages }) 
 function BotPanel({ pane, leaving, roster, actions, useSessions, useSessionStatus, useActivity, useWork, useBrowserTabs, useBrowserPages }) {
   const bot = roster.byId[pane.id];
   const canBrowse = Boolean(bot && roster.browser === true && actions.browserShow);
-  const hasWork = isEventsBot(roster, pane.id);
-  const view = pane.view === "browser" && canBrowse ? "browser" : pane.view === "work" && hasWork ? "work" : "details";
+  const view = pane.view === "browser" && canBrowse ? "browser" : "details";
   const tabState = useBrowserTabs((map) => bot ? map[bot.id] ?? EMPTY_TABS2 : EMPTY_TABS2);
   const active = tabState.active;
   const page = useBrowserPages((pages) => (active ? pages[active] : null) ?? EMPTY_PAGE);
@@ -13727,7 +13730,7 @@ function BotPanel({ pane, leaving, roster, actions, useSessions, useSessionStatu
   const [resizing, setResizing] = (0, import_react37.useState)(false);
   const instant = dragging || resizing;
   const [reading, setReading] = (0, import_react37.useState)(false);
-  const panelWidth = fitWidth(width ?? (view === "browser" ? DEFAULT_WIDTH : view === "work" ? DETAILS_MAX : DETAILS_WIDTH), widthRange(view, viewport));
+  const panelWidth = fitWidth(width ?? (view === "browser" ? DEFAULT_WIDTH : DETAILS_WIDTH), widthRange(view, viewport));
   (0, import_react37.useLayoutEffect)(() => {
     if (view === "browser" && width === null) setWidth(DEFAULT_WIDTH);
   }, [view, width]);
@@ -13912,7 +13915,7 @@ function BotPanel({ pane, leaving, roster, actions, useSessions, useSessionStatu
       ref: root,
       className: "bt-panel",
       "data-view": view,
-      "aria-label": view === "browser" && bot ? t("{name}'s browser", { name: bot.name }) : view === "work" ? t("Subscriptions") : t("Conversation details"),
+      "aria-label": view === "browser" && bot ? t("{name}'s browser", { name: bot.name }) : t("Conversation details"),
       "data-leaving": leaving || void 0,
       "aria-hidden": leaving || void 0,
       "data-settling": settling || void 0,
@@ -13928,10 +13931,9 @@ function BotPanel({ pane, leaving, roster, actions, useSessions, useSessionStatu
     // pages underneath (the chat, the guest) see no pointer.
     dragging ? (0, import_react_dom8.createPortal)((0, import_react37.createElement)("div", { className: "bt-drag-shield", "aria-hidden": true }), document.body) : null,
     hasStrip ? (0, import_react37.createElement)(PanelStrip, { bot, subject: pane.id, view, ids: tabState.ids, active, reading, onView: switchView, actions: panelActions, useBrowserPages }) : null,
-    view === "browser" && bot ? (0, import_react37.createElement)(BrowserView, { key: `browser:${active}`, bot, tabId: active, leaving, landed: landed && !settling, actions, useBrowserPages }) : view === "work" && bot ? (0, import_react37.createElement)(SubscriptionsBoard, { key: `work:${pane.id}`, bot, roster, actions, onDetails: () => switchView("details") }) : (0, import_react37.createElement)(
+    view === "browser" && bot ? (0, import_react37.createElement)(BrowserView, { key: `browser:${active}`, bot, tabId: active, leaving, landed: landed && !settling, actions, useBrowserPages }) : (0, import_react37.createElement)(
       "div",
       { key: `details:${pane.id}:${pane.renaming ? "rename" : ""}:${pane.tab ?? ""}`, className: "bt-panel-view" },
-      hasWork ? (0, import_react37.createElement)("button", { type: "button", className: "os-to-board", onClick: () => switchView("work") }, t("← Subscriptions")) : null,
       (0, import_react37.createElement)(DetailsDrawer, {
         sessionId: pane.id,
         startRenaming: pane.renaming,
@@ -14038,13 +14040,12 @@ function Overlays({ useRoster, useUi, useSessions, useSessionStatus, useActivity
   const ui2 = useUi((value) => value);
   useRegistry((value) => value);
   const current = useSessions((list) => Object.values(list.byId).find((session) => (session?.retainedBy?.mainView ?? 0) > 0)?.id ?? null);
-  const previous = (0, import_react38.useRef)(null);
-  const follow = `${current}|${roster.eventsBotId ?? ""}`;
+  const previous = (0, import_react38.useRef)(current);
   (0, import_react38.useEffect)(() => {
-    if (previous.current === follow) return;
-    previous.current = follow;
+    if (previous.current === current) return;
+    previous.current = current;
     if (current) actions.followPanel?.(current);
-  }, [follow]);
+  }, [current]);
   const open = ui2.details ? { id: ui2.details, view: ui2.view ?? "details", renaming: ui2.renaming, tab: ui2.tab } : null;
   const [kept, setKept] = (0, import_react38.useState)(open);
   (0, import_react38.useEffect)(() => {
@@ -15207,6 +15208,7 @@ function apply(ctx) {
     const live2 = {};
     if (value.connectors !== void 0 && JSON.stringify(value.connectors) !== JSON.stringify(current.connectors ?? [])) live2.connectors = value.connectors;
     if (value.capabilityStatuses !== void 0 && JSON.stringify(value.capabilityStatuses) !== JSON.stringify(current.capabilityStatuses ?? {})) live2.capabilityStatuses = value.capabilityStatuses;
+    if (value.omniEvents !== void 0 && JSON.stringify(value.omniEvents) !== JSON.stringify(current.omniEvents ?? {})) live2.omniEvents = value.omniEvents;
     if (Object.keys(live2).length > 0 && current.ready) roster.set({ ...current, ...live2 });
     if (value.unchanged || value.revision === current.revision && value.modelsKey === current.modelsKey) return;
     if (Object.keys(seenAt).length === 0) leaveVisits([...value.bots, ...value.rooms].map((entry) => entry.id));
@@ -15534,11 +15536,8 @@ function apply(ctx) {
     },
     // The open panel follows the main view; a subject with no browser (a group
     // chat, an outside Session) settles on the details view.
-    // Tentacall's board opens beside its chat; leaving for a chat without one closes it.
     followPanel: (id) => {
       ui2.set((state) => {
-        if (isEventsBot(roster.getSnapshot(), id)) return state.details === id && state.view !== "details" ? state : { ...state, details: id, view: "work", renaming: false, tab: null };
-        if (state.view === "work" && state.details && state.details !== id) return { ...state, details: null, view: "details", renaming: false, tab: null };
         if (!state.details || state.details === id) return state;
         const view = state.view === "browser" && roster.getSnapshot().byId[id] === void 0 ? "details" : state.view;
         return { ...state, details: id, view, renaming: false, tab: null };
@@ -15730,11 +15729,8 @@ function apply(ctx) {
     });
   }
   actions.setPanelView = (view) => {
-    if (view !== "details" && view !== "browser" && view !== "work") return;
+    if (view !== "details" && view !== "browser") return;
     ui2.set((state) => state.details && state.view !== view ? { ...state, view } : state);
-  };
-  actions.toggleWork = (id) => {
-    ui2.set((state) => state.details === id && state.view === "work" ? { ...state, details: null, view: "details", renaming: false, tab: null } : { ...state, details: id, view: "work", renaming: false, tab: null });
   };
   actions.closePanel = () => {
     ui2.set((state) => state.details ? { ...state, details: null, view: "details", renaming: false, tab: null } : state);
@@ -15863,6 +15859,57 @@ function apply(ctx) {
     });
     return () => fiber.dispose();
   };
+  let boardRight = null;
+  const BOARD_OPENED = "omni.board.opened";
+  const installBoard = () => {
+    const fiber = ctx.inject(["sidebarRight", "sidebarRightTabs"], (scope) => {
+      scope.effect(() => scope.sidebarRightTabs.register(boardTabDefinition()), "ds-bot: subscriptions tab type");
+      scope.effect(() => ctx.slots.inject("sidebar.right.pane.tab", () => ctx.slots.register({ name: "sidebar.right.pane.tab", key: BOARD_TAB_ID, inject: face }, BoardTab)), "ds-bot: subscriptions tab");
+      scope.effect(() => {
+        const right = scope.sidebarRight;
+        boardRight = right;
+        let opened;
+        try {
+          opened = new Set(JSON.parse(localStorage.getItem(BOARD_OPENED) ?? "[]"));
+        } catch {
+          opened = /* @__PURE__ */ new Set();
+        }
+        const check = () => {
+          const id = right.mounted.getSnapshot();
+          if (!id || opened.has(id) || !isEventsBot(roster.getSnapshot(), id)) return;
+          opened.add(id);
+          try {
+            localStorage.setItem(BOARD_OPENED, JSON.stringify([...opened]));
+          } catch {
+          }
+          queueMicrotask(() => {
+            try {
+              right.openTab(BOARD_KIND);
+            } catch (error) {
+              console.warn("[ds-bot] board", error);
+            }
+          });
+        };
+        const offs = [right.mounted.subscribe(check), roster.subscribe(check)];
+        check();
+        return () => {
+          boardRight = null;
+          for (const off of offs) off();
+        };
+      }, "ds-bot: open Tentacall board");
+    });
+    return () => fiber.dispose();
+  };
+  actions.toggleBoard = () => {
+    const right = boardRight;
+    if (!right) return;
+    try {
+      if (right.isExpanded() && right.active()?.kind === BOARD_KIND) right.toggleExpanded();
+      else right.openTab(BOARD_KIND);
+    } catch (error) {
+      actions.reportError(error, "board");
+    }
+  };
   actions.canReferenceChat = () => atMenu !== null;
   actions.referenceChat = (sessionId, span) => {
     const controller = atMenu?.controllerOf(sessionId);
@@ -15898,7 +15945,8 @@ function apply(ctx) {
     // Omni chats and the Channels page are main panels, like the shell's Plugins page:
     // they replace the conversation in the center, and opening a Bot brings it back.
     () => shadow("main", { key: CHANNELS_PANEL, inject: face }, ChannelsPage),
-    () => shadow("main", { key: CHAT_PANEL, inject: face }, ChatPage)
+    () => shadow("main", { key: CHAT_PANEL, inject: face }, ChatPage),
+    () => installBoard()
   ];
   const installConversation = () => [
     () => installCompiledStyles(CONVERSATION_CSS, "conversation"),

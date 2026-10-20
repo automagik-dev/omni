@@ -34,7 +34,7 @@ import { ABOUT_CSS } from './about.js'
 import { MEMBER_CSS, MemberDock } from './member-status.js'
 import { USER_MESSAGE_CSS, UserMessageCell, canDrawUserMessages } from './user-message.js'
 import { CHANNELS_CSS, ChannelsPage, ChatPage } from './channels.js'
-import { SUBSCRIPTIONS_CSS, isEventsBot } from './subscriptions.js'
+import { BOARD_KIND, BOARD_TAB_ID, BoardTab, SUBSCRIPTIONS_CSS, boardTabDefinition, isEventsBot } from './subscriptions.js'
 import { CHANNELS_PANEL, CHAT_PANEL } from './omni-store.js'
 import { noticeApprovals } from './approval-notices.js'
 
@@ -150,6 +150,7 @@ export function apply(ctx) {
     const live = {}
     if (value.connectors !== undefined && JSON.stringify(value.connectors) !== JSON.stringify(current.connectors ?? [])) live.connectors = value.connectors
     if (value.capabilityStatuses !== undefined && JSON.stringify(value.capabilityStatuses) !== JSON.stringify(current.capabilityStatuses ?? {})) live.capabilityStatuses = value.capabilityStatuses
+    if (value.omniEvents !== undefined && JSON.stringify(value.omniEvents) !== JSON.stringify(current.omniEvents ?? {})) live.omniEvents = value.omniEvents
     if (Object.keys(live).length > 0 && current.ready) roster.set({ ...current, ...live })
     if (value.unchanged || (value.revision === current.revision && value.modelsKey === current.modelsKey)) return
     // On a browser with no visit record yet, everything already there counts as seen.
@@ -439,11 +440,8 @@ export function apply(ctx) {
     },
     // The open panel follows the main view; a subject with no browser (a group
     // chat, an outside Session) settles on the details view.
-    // Tentacall's board opens beside its chat; leaving for a chat without one closes it.
     followPanel: (id) => {
       ui.set((state) => {
-        if (isEventsBot(roster.getSnapshot(), id)) return state.details === id && state.view !== 'details' ? state : { ...state, details: id, view: 'work', renaming: false, tab: null }
-        if (state.view === 'work' && state.details && state.details !== id) return { ...state, details: null, view: 'details', renaming: false, tab: null }
         if (!state.details || state.details === id) return state
         const view = state.view === 'browser' && roster.getSnapshot().byId[id] === undefined ? 'details' : state.view
         return { ...state, details: id, view, renaming: false, tab: null }
@@ -618,11 +616,8 @@ export function apply(ctx) {
     })
   }
   actions.setPanelView = (view) => {
-    if (view !== 'details' && view !== 'browser' && view !== 'work') return
+    if (view !== 'details' && view !== 'browser') return
     ui.set(state => (state.details && state.view !== view ? { ...state, view } : state))
-  }
-  actions.toggleWork = (id) => {
-    ui.set(state => (state.details === id && state.view === 'work' ? { ...state, details: null, view: 'details', renaming: false, tab: null } : { ...state, details: id, view: 'work', renaming: false, tab: null }))
   }
   actions.closePanel = () => { ui.set(state => (state.details ? { ...state, details: null, view: 'details', renaming: false, tab: null } : state)) }
   // Whether AccountLauncher holds the shell's settings seat; FooterAccount steps aside if so.
@@ -760,6 +755,44 @@ export function apply(ctx) {
     })
     return () => fiber.dispose()
   }
+  // Tentacall's board is a tab of DSH's right sidebar, which may load after this plugin.
+  // The first time Tentacall's chat is on screen in a browser, its board opens; after that
+  // the Session's own sidebar layout (open, closed, other tabs) is the user's.
+  let boardRight = null
+  const BOARD_OPENED = 'omni.board.opened'
+  const installBoard = () => {
+    const fiber = ctx.inject(['sidebarRight', 'sidebarRightTabs'], (scope) => {
+      scope.effect(() => scope.sidebarRightTabs.register(boardTabDefinition()), 'ds-bot: subscriptions tab type')
+      scope.effect(() => ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register({ name: 'sidebar.right.pane.tab', key: BOARD_TAB_ID, inject: face }, BoardTab)), 'ds-bot: subscriptions tab')
+      scope.effect(() => {
+        const right = scope.sidebarRight
+        boardRight = right
+        let opened
+        try { opened = new Set(JSON.parse(localStorage.getItem(BOARD_OPENED) ?? '[]')) } catch { opened = new Set() }
+        const check = () => {
+          const id = right.mounted.getSnapshot()
+          if (!id || opened.has(id) || !isEventsBot(roster.getSnapshot(), id)) return
+          opened.add(id)
+          try { localStorage.setItem(BOARD_OPENED, JSON.stringify([...opened])) } catch { /* storage unavailable */ }
+          queueMicrotask(() => { try { right.openTab(BOARD_KIND) } catch (error) { console.warn('[ds-bot] board', error) } })
+        }
+        const offs = [right.mounted.subscribe(check), roster.subscribe(check)]
+        check()
+        return () => { boardRight = null; for (const off of offs) off() }
+      }, 'ds-bot: open Tentacall board')
+    })
+    return () => fiber.dispose()
+  }
+  actions.toggleBoard = () => {
+    const right = boardRight
+    if (!right) return
+    try {
+      if (right.isExpanded() && right.active()?.kind === BOARD_KIND) right.toggleExpanded()
+      else right.openTab(BOARD_KIND)
+    } catch (error) {
+      actions.reportError(error, 'board')
+    }
+  }
   actions.canReferenceChat = () => atMenu !== null
   actions.referenceChat = (sessionId, span) => {
     const controller = atMenu?.controllerOf(sessionId)
@@ -800,6 +833,7 @@ export function apply(ctx) {
     // they replace the conversation in the center, and opening a Bot brings it back.
     () => shadow('main', { key: CHANNELS_PANEL, inject: face }, ChannelsPage),
     () => shadow('main', { key: CHAT_PANEL, inject: face }, ChatPage),
+    () => installBoard(),
   ]
   const installConversation = () => [
     () => installCompiledStyles(CONVERSATION_CSS, 'conversation'),

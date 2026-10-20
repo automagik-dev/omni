@@ -96,6 +96,21 @@ export function install(rt) {
     return response.json()
   }
 
+  // One omni API request for other host modules (omni-events.js), with this host's URL and
+  // key; `null` when omni is not set up here. The caller reads the response.
+  rt.omniRequest = async (method, path, { body, signal, headers = {} } = {}) => {
+    const url = base()
+    const apiKey = await key()
+    if (url === null || !apiKey) return null
+    return fetch(`${url}/api/v2${path}`, {
+      method,
+      headers: { 'x-api-key': apiKey, accept: 'application/json', ...(body === undefined ? {} : { 'content-type': 'application/json' }), ...headers },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      signal: signal ?? AbortSignal.timeout(TIMEOUT_MS),
+    })
+  }
+  rt.omniConfigured = async () => base() !== null && Boolean(await key())
+
   rt.omniEndpoint = async (endpoint, body) => {
     const url = base()
     const apiKey = await key()

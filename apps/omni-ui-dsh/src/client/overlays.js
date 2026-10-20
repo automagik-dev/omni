@@ -21,15 +21,12 @@ export function Overlays({ useRoster, useUi, useSessions, useSessionStatus, useA
   const current = useSessions(list => Object.values(list.byId).find(session => (session?.retainedBy?.mainView ?? 0) > 0)?.id ?? null)
   // An open panel follows the conversation in the main view. Only a change of the
   // main view moves it, so opening details for another id (Rename) is not undone.
-  // Also on the first render and once the roster knows Tentacall, so a page that opens
-  // on Tentacall's chat shows its board.
-  const previous = useRef(null)
-  const follow = `${current}|${roster.eventsBotId ?? ''}`
+  const previous = useRef(current)
   useEffect(() => {
-    if (previous.current === follow) return
-    previous.current = follow
+    if (previous.current === current) return
+    previous.current = current
     if (current) actions.followPanel?.(current)
-  }, [follow])
+  }, [current])
   const open = ui.details ? { id: ui.details, view: ui.view ?? 'details', renaming: ui.renaming, tab: ui.tab } : null
   const [kept, setKept] = useState(open)
   useEffect(() => {

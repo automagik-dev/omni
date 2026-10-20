@@ -340,6 +340,8 @@ export function install(rt) {
   const chatOwners = new Map()
   /** @type {Map<string, {botId:string, roomId:string}>} */
   const groupOwners = new Map()
+  // Single-run task Sessions a subscription started for a Bot (subscriptions.js).
+  const taskOwners = new Map()
   /** @type {Map<string, {botId:string, roomId?:string}>} */
   const pastOwners = new Map()
   const chatOf = botId => botOf(botId)?.sessionId ?? botId
@@ -347,6 +349,8 @@ export function install(rt) {
     chatOwners.clear()
     groupOwners.clear()
     pastOwners.clear()
+    taskOwners.clear()
+    for (const run of state.subscriptionRuns ?? []) if (run.sessionId && run.botId && run.task) taskOwners.set(run.sessionId, { botId: run.botId })
     for (const bot of Object.values(state.bots)) {
       for (const segment of bot.segments ?? []) pastOwners.set(segment.sessionId, { botId: bot.id })
       chatOwners.set(chatOf(bot.id), bot.id)
@@ -362,9 +366,9 @@ export function install(rt) {
   }
   // The Bot a Session speaks for: its own chat, one of its group Sessions, or an
   // earlier segment of either.
-  const selfOf = id => chatOwners.get(id) ?? groupOwners.get(id)?.botId ?? pastOwners.get(id)?.botId
+  const selfOf = id => chatOwners.get(id) ?? groupOwners.get(id)?.botId ?? taskOwners.get(id)?.botId ?? pastOwners.get(id)?.botId
   // A Session where the Bot speaks now, as opposed to an archived segment.
-  const isBotSession = id => chatOwners.has(id) || groupOwners.has(id)
+  const isBotSession = id => chatOwners.has(id) || groupOwners.has(id) || taskOwners.has(id)
   const groupSessionsOf = botId => Object.values(state.rooms).map(room => room.sessions?.[botId]).filter(Boolean)
   const dropGroupSession = (room, botId) => {
     const sessionId = room.sessions?.[botId]
@@ -405,7 +409,7 @@ export function install(rt) {
   Object.assign(rt, {
     state, load, save, refresh, readOnly,
     botOf, roomOf, isMain, chatOf, selfOf, isBotSession,
-    chatOwners, groupOwners, pastOwners,
+    chatOwners, groupOwners, pastOwners, taskOwners, indexSessions,
     groupSessionsOf, dropGroupSession, retireGroupSession, findBot, findRooms, isAdminOf,
   })
 }

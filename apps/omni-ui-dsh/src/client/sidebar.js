@@ -93,7 +93,7 @@ function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessio
       : waitsFor ? h('span', { className: 'bt-row-preview' }, waitsFor)
         : preview ? h('span', { className: 'bt-row-preview' }, preview) : null) : null,
   // Tentacall's row also counts the subscription runs waiting for your approval.
-  wide && id === roster.eventsBotId ? h(EventsBadge, { roster }) : null,
+  wide && id === roster.eventsBotId ? h(EventsBadge, { roster, useWork }) : null,
   wide && unread && !active ? h('span', { className: 'bt-unread', 'aria-hidden': true }) : null)
 }
 

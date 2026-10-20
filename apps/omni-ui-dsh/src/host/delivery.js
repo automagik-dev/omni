@@ -27,6 +27,7 @@ export function install(rt) {
     if (role === 'stopped') return `[Stopped by ${fromName}]`
     if (role === 'room') return `[Group chat "${roomName}" · ${note}]`
     if (role === 'report') return `[Group chat "${roomName}" · replies to your post${goesOn}]`
+    if (role === 'task') return `[Task · subscription "${note}" · one run: do it, then end with one or two lines on what you did]`
     if (role === 'kickoff') return '[Bot team setup]'
     if (role === 'secret') return '[Secret card]'
     if (audience === 'user') return `[Message from ${fromName} · the user sees your reply here]`

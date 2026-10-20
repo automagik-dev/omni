@@ -9,7 +9,6 @@ import { BotMark } from './mark.js'
 import { STORAGE } from './storage.js'
 import { SPRING_SHAPE, springEasing } from './motion.js'
 import { DetailsDrawer } from './details-drawer.js'
-import { isEventsBot, SubscriptionsBoard } from './subscriptions.js'
 import { t } from './i18n.js'
 
 export const PANEL_LINGER_MS = 300
@@ -286,9 +285,7 @@ function BrowserView({ bot, tabId, leaving, landed, actions, useBrowserPages }) 
 export function BotPanel({ pane, leaving, roster, actions, useSessions, useSessionStatus, useActivity, useWork, useBrowserTabs, useBrowserPages }) {
   const bot = roster.byId[pane.id]
   const canBrowse = Boolean(bot && roster.browser === true && actions.browserShow)
-  // A Bot with work of its own (Tentacall's subscriptions) shows it beside its chat.
-  const hasWork = isEventsBot(roster, pane.id)
-  const view = pane.view === 'browser' && canBrowse ? 'browser' : pane.view === 'work' && hasWork ? 'work' : 'details'
+  const view = pane.view === 'browser' && canBrowse ? 'browser' : 'details'
   const tabState = useBrowserTabs(map => (bot ? (map[bot.id] ?? EMPTY_TABS) : EMPTY_TABS))
   const active = tabState.active
   const page = useBrowserPages(pages => (active ? pages[active] : null) ?? EMPTY_PAGE)
@@ -304,7 +301,7 @@ export function BotPanel({ pane, leaving, roster, actions, useSessions, useSessi
   const instant = dragging || resizing
   const [reading, setReading] = useState(false)
 
-  const panelWidth = fitWidth(width ?? (view === 'browser' ? DEFAULT_WIDTH : view === 'work' ? DETAILS_MAX : DETAILS_WIDTH), widthRange(view, viewport))
+  const panelWidth = fitWidth(width ?? (view === 'browser' ? DEFAULT_WIDTH : DETAILS_WIDTH), widthRange(view, viewport))
   // Once the browser has shown, the Bot page keeps its width (up to DETAILS_MAX).
   useLayoutEffect(() => { if (view === 'browser' && width === null) setWidth(DEFAULT_WIDTH) }, [view, width])
   useLayoutEffect(() => { chatRoom.hold(instant) }, [instant])
@@ -474,7 +471,7 @@ export function BotPanel({ pane, leaving, roster, actions, useSessions, useSessi
 
   const hasStrip = canBrowse && tabState.ids.length > 0
   return h('aside', {
-    ref: root, className: 'bt-panel', 'data-view': view, 'aria-label': view === 'browser' && bot ? t("{name}'s browser", { name: bot.name }) : view === 'work' ? t('Subscriptions') : t('Conversation details'),
+    ref: root, className: 'bt-panel', 'data-view': view, 'aria-label': view === 'browser' && bot ? t("{name}'s browser", { name: bot.name }) : t('Conversation details'),
     'data-leaving': leaving || undefined, 'aria-hidden': leaving || undefined, 'data-settling': settling || undefined,
     'data-instant': instant || undefined, 'data-dragging': dragging || undefined, style: { '--bt-panel-w': `${panelWidth}px` },
     onAnimationEnd: (event) => { if (event.target === event.currentTarget) setLanded(true) },
@@ -486,10 +483,7 @@ export function BotPanel({ pane, leaving, roster, actions, useSessions, useSessi
     hasStrip ? h(PanelStrip, { bot, subject: pane.id, view, ids: tabState.ids, active, reading, onView: switchView, actions: panelActions, useBrowserPages }) : null,
     view === 'browser' && bot
       ? h(BrowserView, { key: `browser:${active}`, bot, tabId: active, leaving, landed: landed && !settling, actions, useBrowserPages })
-      : view === 'work' && bot
-        ? h(SubscriptionsBoard, { key: `work:${pane.id}`, bot, roster, actions, onDetails: () => switchView('details') })
-        : h('div', { key: `details:${pane.id}:${pane.renaming ? 'rename' : ''}:${pane.tab ?? ''}`, className: 'bt-panel-view' },
-          hasWork ? h('button', { type: 'button', className: 'os-to-board', onClick: () => switchView('work') }, t('← Subscriptions')) : null,
+      : h('div', { key: `details:${pane.id}:${pane.renaming ? 'rename' : ''}:${pane.tab ?? ''}`, className: 'bt-panel-view' },
           h(DetailsDrawer, {
             sessionId: pane.id, startRenaming: pane.renaming, startTab: pane.tab, hasStrip,
             roster, actions: panelActions, useSessions, useSessionStatus, useActivity, useWork, useBrowserTabs, useBrowserPages,
