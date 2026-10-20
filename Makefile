@@ -3,7 +3,7 @@
 
 .PHONY: help install dev dev-api dev-ui dev-services dev-stop build build-ui clean version \
         test test-sweep test-watch test-api test-db test-pg-gate test-pg-gate-warm pg-gate-warm-stop \
-        typecheck typecheck-ui lint lint-fix lint-ui format check check-all dead-code verify-migrations verify-versions \
+        typecheck typecheck-ui lint lint-fix lint-ui format check check-all dead-code verify-migrations verify-versions marketplace-check \
         db-push db-migrate db-studio db-reset \
         ensure-nats ensure-ffmpeg check-ffmpeg check-deps start stop restart logs status \
         restart-api restart-nats restart-pgserve logs-api \
@@ -31,6 +31,7 @@ help:
 	@echo "  make check         Run all quality checks (typecheck + lint + dead-code + migrations + test)"
 	@echo "  make check-all     Run check AND the pg-gate concurrently (fastest full validation)"
 	@echo "  make verify-migrations  Static migration contract gate (journal/immutability/lint)"
+	@echo "  make marketplace-check  Automagik marketplace index gate"
 	@echo "  make verify-versions    Version sync gate (BASE=<ref> exempts files absent on ref)"
 	@echo "  make typecheck     TypeScript type checking"
 	@echo "  make lint          Run Biome linter"
@@ -303,8 +304,13 @@ verify-versions:
 	bun test scripts/verify-versions.test.ts
 	bun scripts/verify-versions.ts $(if $(BASE),--base $(BASE),)
 
+# Automagik marketplace index: DSH's own parser, and every pinned omni commit holds its package.
+marketplace-check:
+	bun test scripts/marketplace.test.ts
+	bun scripts/marketplace.ts check
+
 # Run all quality checks
-check: typecheck lint dead-code verify-migrations verify-versions test
+check: typecheck lint dead-code verify-migrations verify-versions marketplace-check test
 	@echo ""
 	@echo "All checks passed!"
 
