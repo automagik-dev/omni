@@ -688,49 +688,116 @@ export type ApiKey = typeof apiKeys.$inferSelect;
 export type NewApiKey = typeof apiKeys.$inferInsert;
 
 // ============================================================================
-// DEVICE PAIRINGS
+// HUMAN LOGIN (Better Auth)
 // ============================================================================
+//
+// The tables Better Auth 1.7 keeps for Omni's human login (packages/api/src/login):
+// one owner, verified by a phone number connected to this Omni's WhatsApp, with
+// passkeys and device-flow codes. Columns follow Better Auth's field names exactly
+// (its adapter reads them by name); no tenant_id: login is off with multitenancy on.
 
-export const devicePairingStatuses = ['pending', 'approved', 'consumed', 'cancelled'] as const;
-export type DevicePairingStatus = (typeof devicePairingStatuses)[number];
+export const loginUsers = pgTable('login_users', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  email: text('email').notNull().unique(),
+  emailVerified: boolean('email_verified').notNull().default(false),
+  image: text('image'),
+  phoneNumber: text('phone_number').unique(),
+  phoneNumberVerified: boolean('phone_number_verified'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
 
-/**
- * A device asking for an API key by code (POST /pair/start).
- *
- * The device shows the code; its owner sends it over WhatsApp to the pairing
- * instance, which approves the row; the device's next poll mints the key and
- * consumes the row. Code and poll token are stored as SHA-256 hex only, and the
- * key is minted at that poll, so no secret is ever stored here.
- * `expires_at` bounds pending and approved rows alike.
- */
-export const devicePairings = pgTable(
-  'device_pairings',
+export const loginSessions = pgTable(
+  'login_sessions',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    deviceName: varchar('device_name', { length: 80 }).notNull(),
-    codeHash: varchar('code_hash', { length: 64 }).notNull(),
-    pollTokenHash: varchar('poll_token_hash', { length: 64 }).notNull(),
-    status: varchar('status', { length: 20 }).notNull().default('pending').$type<DevicePairingStatus>(),
-    /** The instance the code must arrive on, fixed when the pairing starts. */
-    instanceId: uuid('instance_id').notNull(),
-    clientIp: varchar('client_ip', { length: 45 }),
-    /** Platform id of the sender whose message approved the pairing. */
-    approvedBy: varchar('approved_by', { length: 255 }),
-    approvedAt: timestamp('approved_at', { withTimezone: true }),
-    /** The key minted at the consuming poll. No FK: the row outlives a deleted key. */
-    apiKeyId: uuid('api_key_id'),
-    consumedAt: timestamp('consumed_at', { withTimezone: true }),
+    id: text('id').primaryKey(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    token: text('token').notNull().unique(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
+    ipAddress: text('ip_address'),
+    userAgent: text('user_agent'),
+    userId: text('user_id')
+      .notNull()
+      .references(() => loginUsers.id, { onDelete: 'cascade' }),
+  },
+  (table) => ({ userIdx: index('login_sessions_user_id_idx').on(table.userId) }),
+);
+
+export const loginAccounts = pgTable(
+  'login_accounts',
+  {
+    id: text('id').primaryKey(),
+    accountId: text('account_id').notNull(),
+    providerId: text('provider_id').notNull(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => loginUsers.id, { onDelete: 'cascade' }),
+    accessToken: text('access_token'),
+    refreshToken: text('refresh_token'),
+    idToken: text('id_token'),
+    accessTokenExpiresAt: timestamp('access_token_expires_at', { withTimezone: true }),
+    refreshTokenExpiresAt: timestamp('refresh_token_expires_at', { withTimezone: true }),
+    scope: text('scope'),
+    password: text('password'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
+  },
+  (table) => ({ userIdx: index('login_accounts_user_id_idx').on(table.userId) }),
+);
+
+export const loginVerifications = pgTable(
+  'login_verifications',
+  {
+    id: text('id').primaryKey(),
+    identifier: text('identifier').notNull(),
+    value: text('value').notNull(),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({ identifierIdx: index('login_verifications_identifier_idx').on(table.identifier) }),
+);
+
+export const loginPasskeys = pgTable(
+  'login_passkeys',
+  {
+    id: text('id').primaryKey(),
+    name: text('name'),
+    publicKey: text('public_key').notNull(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => loginUsers.id, { onDelete: 'cascade' }),
+    credentialID: text('credential_id').notNull(),
+    counter: integer('counter').notNull(),
+    deviceType: text('device_type').notNull(),
+    backedUp: boolean('backed_up').notNull(),
+    transports: text('transports'),
+    createdAt: timestamp('created_at', { withTimezone: true }),
+    aaguid: text('aaguid'),
   },
   (table) => ({
-    codeHashIdx: index('device_pairings_code_hash_idx').on(table.codeHash),
-    statusExpiresIdx: index('device_pairings_status_expires_idx').on(table.status, table.expiresAt),
+    userIdx: index('login_passkeys_user_id_idx').on(table.userId),
+    credentialIdx: index('login_passkeys_credential_id_idx').on(table.credentialID),
   }),
 );
 
-export type DevicePairing = typeof devicePairings.$inferSelect;
-export type NewDevicePairing = typeof devicePairings.$inferInsert;
+export const loginDeviceCodes = pgTable('login_device_codes', {
+  id: text('id').primaryKey(),
+  deviceCode: text('device_code').notNull().unique(),
+  userCode: text('user_code').notNull().unique(),
+  userId: text('user_id'),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  status: text('status').notNull(),
+  lastPolledAt: timestamp('last_polled_at', { withTimezone: true }),
+  pollingInterval: integer('polling_interval'),
+  clientId: text('client_id'),
+  scope: text('scope'),
+});
+
+export type LoginUser = typeof loginUsers.$inferSelect;
+export type LoginDeviceCode = typeof loginDeviceCodes.$inferSelect;
 
 // ============================================================================
 // API KEY AUDIT LOGS

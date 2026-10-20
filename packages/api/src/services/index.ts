@@ -38,7 +38,6 @@ import { ChatService } from './chats';
 import { ConsumerOffsetService } from './consumer-offsets';
 import { ConversationService } from './conversations';
 import { DeadLetterService } from './dead-letters';
-import { DevicePairingService } from './device-pairing';
 import { EventConsumerService } from './event-consumers';
 import { EventOpsService } from './event-ops';
 import { EventSchemaService } from './event-schemas';
@@ -71,7 +70,6 @@ export interface Services {
   agentState: AgentStateService;
   agentTasks: AgentTaskService;
   apiKeys: ApiKeyService;
-  devicePairing: DevicePairingService;
   conversations: ConversationService;
   audit: AuditService;
   instances: InstanceService;
@@ -248,7 +246,6 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
     agentState: new AgentStateService(eventBus),
     agentTasks: new AgentTaskService(db, eventBus),
     apiKeys,
-    devicePairing: new DevicePairingService(db, apiKeys, eventBus),
     conversations: new ConversationService(db, eventBus),
     audit: new AuditService(db),
     instances: new InstanceService(db, eventBus),

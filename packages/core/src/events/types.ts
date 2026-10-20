@@ -46,9 +46,9 @@ export const CORE_EVENT_TYPES = [
   'access.denied',
   'access.pairing_requested',
   'access.pairing_approved',
-  // Device pairing (a device obtains an API key by code over WhatsApp)
-  'access.device_pairing_started',
-  'access.device_paired',
+  // Human login: the owner claimed the Omni; a device (desktop app, DSH plugin, CLI) was authorized
+  'access.owner_claimed',
+  'access.device_authorized',
   // Presence
   'presence.typing',
   'presence.online',
@@ -548,23 +548,20 @@ export interface AccessPairingApprovedPayload {
   ruleId: string;
 }
 
-/** A device asked for a pairing code (POST /pair/start). Never carries the code. */
-export interface AccessDevicePairingStartedPayload {
-  pairingId: string;
+/** The first verified human claimed this Omni; they are its owner from now on. */
+export interface AccessOwnerClaimedPayload {
+  userId: string;
+  /** The connected WhatsApp account whose number they verified. */
   instanceId: string;
-  deviceName: string;
-  expiresAt: number;
 }
 
-/** A pairing code arrived from an approved sender; the device's next poll gets its key. */
-export interface AccessDevicePairedPayload {
-  pairingId: string;
-  instanceId: string;
+/** A device got its Omni key after its owner approved it. Never carries the key. */
+export interface AccessDeviceAuthorizedPayload {
+  userId: string;
+  /** The device-flow client: omni-desktop, omni-dsh or omni-cli. */
+  clientId: string;
   deviceName: string;
-  /** Platform id of the sender whose message approved it. */
-  approvedBy: string;
-  /** 'owner' for the instance's own account in its self chat, 'allowlist' for a configured number. */
-  approver: 'owner' | 'allowlist';
+  apiKeyId: string;
 }
 
 /**
@@ -1189,8 +1186,8 @@ export interface EventPayloadMap {
   'access.denied': AccessDeniedPayload;
   'access.pairing_requested': AccessPairingRequestedPayload;
   'access.pairing_approved': AccessPairingApprovedPayload;
-  'access.device_pairing_started': AccessDevicePairingStartedPayload;
-  'access.device_paired': AccessDevicePairedPayload;
+  'access.owner_claimed': AccessOwnerClaimedPayload;
+  'access.device_authorized': AccessDeviceAuthorizedPayload;
   'sync.started': SyncStartedPayload;
   'sync.progress': SyncProgressPayload;
   'sync.completed': SyncCompletedPayload;

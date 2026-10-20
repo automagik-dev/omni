@@ -199,12 +199,11 @@ export const rateLimitMiddleware = createRateLimiter(RATE_LIMITS.general);
 export const webhookIngressRateLimitMiddleware = createRateLimiter(RATE_LIMITS.events, 'ratelimit:webhook-ingress');
 
 /**
- * Rate limiter for the auth-exempt device pairing routes: ten requests per IP
- * per ten minutes covers a person retrying, not a script. Polls are limited
- * separately (they are frequent by design and carry an unguessable token).
+ * Rate limiter for the auth-exempt human login routes that send or check codes
+ * and mint device keys: ten requests per IP per ten minutes covers a person
+ * retrying, not a script. Better Auth limits its own endpoints on top.
  */
-export const pairingStartRateLimitMiddleware = createRateLimiter(
+export const loginRateLimitMiddleware = createRateLimiter(
   { windowMs: 10 * 60 * 1000, maxRequests: 10 },
-  'ratelimit:pair-start',
+  'ratelimit:login',
 );
-export const pairingPollRateLimitMiddleware = createRateLimiter(RATE_LIMITS.events, 'ratelimit:pair-poll');

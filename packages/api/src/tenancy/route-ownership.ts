@@ -284,32 +284,110 @@ const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
       'connection state; the outcome is read through the authenticated GET /api/v2/slack/oauth/result/:nonce.',
   },
   {
-    route: 'POST /api/v2/pair/start',
+    route: 'ALL /api/auth/*',
     class: 'public-by-contract',
     justification:
-      'Device pairing start (wish: omni-labs-distribution). Auth-exempt because the caller is a device with no key ' +
-      'yet; answers 404 unless the operator set OMNI_PAIRING_ENABLED=true, and always 404 with multitenancy on. ' +
-      'Rate-limited per IP, with a cap on pending pairings per instance. It exposes only what the operator turned ' +
-      'pairing on to publish: a fresh random code, the phone number of the ONE configured pairing instance (where ' +
-      'the code must be sent), a wa.me link to it, an expiry and a fresh poll token; or a fixed 503 when that ' +
-      'instance cannot take codes. It reads no tenant data and names no other instance, chat or count.',
+      'Better Auth (human login, wish: omni-labs-distribution). Answers 404 unless the operator set ' +
+      'OMNI_LOGIN_ENABLED=true, and always with multitenancy on. Only an allowlist of Better Auth paths ' +
+      'answers (PUBLIC_AUTH_PATHS: the RFC 8628 device flow, passkey ceremonies, get-session, sign-out); ' +
+      'every other path is 404. A device code exposes nothing until the signed-in owner approves it; ' +
+      "passkey and session endpoints act only on the caller's own session. No tenant data, no other user, " +
+      'no instance data.',
   },
   {
-    route: 'GET /api/v2/pair/:id',
+    route: 'GET /login/claim',
     class: 'public-by-contract',
     justification:
-      'Device pairing poll. Authenticity is the 32-byte poll token issued by POST /api/v2/pair/start to the same ' +
-      'device (stored as SHA-256, compared in constant time); an unknown id and a wrong token give the same 404, ' +
-      'so it is no existence oracle. It returns the pairing status and, exactly once after an approved sender ' +
-      'sent the code over WhatsApp, a freshly minted key whose scopes come from server config and can never ' +
-      'include *, keys:* or platform:*. Nothing about the approver, instance or tenant is returned.',
+      'Static claim page for an unclaimed Omni (human login). Answers 404 unless the operator set ' +
+      'OMNI_LOGIN_ENABLED=true, and always with multitenancy on. Fixed HTML and script; it reads nothing ' +
+      'server-side. What it can do is gated by the claim token on the endpoints it calls.',
   },
   {
-    route: 'DELETE /api/v2/pair/:id',
+    route: 'GET /login/device',
     class: 'public-by-contract',
     justification:
-      'Device pairing cancel, by the device holding the poll token (same token check and same 404 as the poll). ' +
-      'Returns only whether the pairing was still pending.',
+      'Static device-approval page (human login). Answers 404 unless the operator set ' +
+      'OMNI_LOGIN_ENABLED=true, and always with multitenancy on. Fixed HTML and script naming the known ' +
+      "device clients; approving requires the owner's own Better Auth session.",
+  },
+  {
+    route: 'GET /api/v2/login/status',
+    class: 'public-by-contract',
+    justification:
+      'Human login status. Answers 404 unless the operator set OMNI_LOGIN_ENABLED=true, and always with ' +
+      "multitenancy on. Returns only whether the Omni has an owner, the owner's own WhatsApp number while " +
+      "it is connected (so a device can show a QR that opens the owner's self chat, which is the point of " +
+      'the feature), and the device-approval URL. No tenant data, counts or other instances.',
+  },
+  {
+    route: 'GET /api/v2/login/claim/accounts',
+    class: 'public-by-contract',
+    justification:
+      'Claim: the connected WhatsApp accounts a person may claim the Omni with. Answers 404 unless the ' +
+      'operator set OMNI_LOGIN_ENABLED=true, and always with multitenancy on. Only while unclaimed and only ' +
+      'with the claim token (an HMAC of the server secret printed in the boot log); otherwise the same 404. ' +
+      'Numbers are masked (+55 12 •••• 8888).',
+  },
+  {
+    route: 'POST /api/v2/login/claim/whatsapp',
+    class: 'public-by-contract',
+    justification:
+      'Claim: link a first WhatsApp account to an unclaimed Omni. Answers 404 unless the operator set ' +
+      'OMNI_LOGIN_ENABLED=true, and always with multitenancy on. Only while unclaimed and with the claim ' +
+      'token; creates one instance named owner-whatsapp and starts its QR link. Returns only that ' +
+      "instance's id.",
+  },
+  {
+    route: 'GET /api/v2/login/claim/whatsapp/:id',
+    class: 'public-by-contract',
+    justification:
+      'Claim: the linking QR (as SVG) and connected state of that instance. Answers 404 unless the operator ' +
+      'set OMNI_LOGIN_ENABLED=true, and always with multitenancy on. Only while unclaimed and with the ' +
+      'claim token; the number is masked once connected.',
+  },
+  {
+    route: 'POST /api/v2/login/claim/send-code',
+    class: 'public-by-contract',
+    justification:
+      'Claim: send a 6-digit code to the self chat of one connected WhatsApp account. Answers 404 unless ' +
+      'the operator set OMNI_LOGIN_ENABLED=true, and always with multitenancy on. Only while unclaimed, ' +
+      'with the claim token, and only to an account connected to this Omni; rate-limited per IP. Returns ' +
+      'the masked number.',
+  },
+  {
+    route: 'POST /api/v2/login/claim/verify',
+    class: 'public-by-contract',
+    justification:
+      'Claim: verify that code; its sender becomes the only owner and gets a session cookie. Answers 404 ' +
+      'unless the operator set OMNI_LOGIN_ENABLED=true, and always with multitenancy on. Only while ' +
+      'unclaimed and with the claim token; Better Auth limits attempts; a second owner can never be created ' +
+      '(sign-up closes).',
+  },
+  {
+    route: 'POST /api/v2/login/send-code',
+    class: 'public-by-contract',
+    justification:
+      "Owner sign-in: send a 6-digit code to the owner's own WhatsApp self chat. Answers 404 unless the " +
+      "operator set OMNI_LOGIN_ENABLED=true, and always with multitenancy on. The number is the owner's and " +
+      'is never taken from the request; rate-limited per IP. Returns the masked number.',
+  },
+  {
+    route: 'POST /api/v2/login/verify',
+    class: 'public-by-contract',
+    justification:
+      "Owner sign-in: verify that code and set the owner's session cookie. Answers 404 unless the operator " +
+      'set OMNI_LOGIN_ENABLED=true, and always with multitenancy on. Better Auth limits attempts; ' +
+      'rate-limited per IP; returns nothing but success.',
+  },
+  {
+    route: 'POST /api/v2/login/device-key',
+    class: 'public-by-contract',
+    justification:
+      'Device sign-in: a device trades the one-time token the RFC 8628 device flow gave it (after the owner ' +
+      'approved it) for an Omni API key. Answers 404 unless the operator set OMNI_LOGIN_ENABLED=true, and ' +
+      "always with multitenancy on. Only a Bearer token of the owner's session counts, never a cookie; the " +
+      'session ends with the exchange, so one approval mints one key. Scopes come from server config and ' +
+      'can never include *, keys:* or platform:*.',
   },
   {
     route: 'POST /api/v2/channels/twilio-whatsapp/:instanceId/webhook',

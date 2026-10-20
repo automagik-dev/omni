@@ -62,6 +62,7 @@ const pluginLog = createLogger('api:plugins');
 const shutdownLog = createLogger('api:shutdown');
 import packageJson from '../package.json';
 import { type App, createApp } from './app';
+import { type Login, announceClaim } from './login';
 import { markPluginsDegraded } from './plugin-state';
 import {
   InstanceMonitor,
@@ -83,7 +84,7 @@ import {
   setupSyncWorker,
 } from './plugins';
 import { buildAutomationEngineDeps } from './plugins/automation-actions';
-import { setupDevicePairing } from './plugins/device-pairing';
+import { setupDeviceLogin } from './plugins/device-login';
 import { setupScheduler, stopScheduler } from './scheduler';
 import { closeAgentHeartbeat, initAgentHeartbeat } from './services/agent-heartbeat';
 import { ApiKeyService } from './services/api-keys';
@@ -572,6 +573,7 @@ async function setupEventBusServices(
   eventBus: EventBus | null,
   services: ReturnType<typeof createApp>['services'],
   db: Database,
+  login: Login | null,
 ): Promise<void> {
   if (!eventBus) {
     log.warn('Skipping event bus services (no event bus)');
@@ -617,11 +619,13 @@ async function setupEventBusServices(
     log.error('Failed to set up session cleaner', { error: String(error) });
   }
 
-  // Device pairing (approves POST /pair/start codes sent over WhatsApp; off unless OMNI_PAIRING_ENABLED)
+  // Human login: devices approved by the owner over WhatsApp, and the claim link for an
+  // unclaimed Omni (off unless OMNI_LOGIN_ENABLED)
   try {
-    await setupDevicePairing(eventBus, services);
+    await setupDeviceLogin(eventBus, login);
+    if (login) await announceClaim(login);
   } catch (error) {
-    log.error('Failed to set up device pairing', { error: String(error) });
+    log.error('Failed to set up human login', { error: String(error) });
   }
 
   // Follow-up lifecycle hooks (arm on outbound agent msg, disarm on reply/handoff/archive)
@@ -913,7 +917,7 @@ async function main() {
   }
 
   // Create app and get services
-  const { app, services } = createApp(db, eventBus, globalChannelRegistry);
+  const { app, services, login } = createApp(db, eventBus, globalChannelRegistry);
   globalServicesRef = services;
 
   // G5 (ADR-0008): opt the instance monitor into the tenant fan-out now that the
@@ -955,7 +959,7 @@ async function main() {
   }
 
   // Set up event bus related services (persistence, agent responder, sync worker)
-  await setupEventBusServices(eventBus, services, db);
+  await setupEventBusServices(eventBus, services, db, login);
 
   // Setup scheduler with services and channel registry (for unread count refresh)
   log.info('Starting scheduler');

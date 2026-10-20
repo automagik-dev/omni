@@ -76,6 +76,7 @@ import { scopeEnforcerMiddleware } from './middleware/scope-enforcer';
 import { tenancyMiddleware } from './middleware/tenancy';
 
 import { SLACK_OAUTH_CALLBACK_PATH } from './constants/slack-app';
+import { type Login, createLogin } from './login';
 import { createContextMiddleware } from './middleware/context';
 import { errorHandler } from './middleware/error';
 import { rateLimitMiddleware, webhookIngressRateLimitMiddleware } from './middleware/rate-limit';
@@ -85,7 +86,7 @@ import { createWebhookAuthMiddleware } from './middleware/webhook-auth';
 import { getHealth, healthRoutes } from './routes/health';
 import { openapiRoutes } from './routes/openapi';
 import { v2Routes } from './routes/v2';
-import { pairingRoutes } from './routes/v2/pairing';
+import { loginApiRoutes, loginAuthRoutes, loginPageRoutes } from './routes/v2/login';
 import { platformTenantRoutes } from './routes/v2/platform-tenants';
 import { slackOAuthCallback } from './routes/v2/slack';
 import type { Services } from './services';
@@ -124,6 +125,7 @@ export function shouldTimeoutRequest(method: string, path: string): boolean {
 export interface CreateAppResult {
   app: Hono<{ Variables: AppVariables }>;
   services: Services;
+  login: Login | null;
 }
 
 /**
@@ -133,11 +135,15 @@ export function createApp(
   db: Database,
   eventBus: EventBus | null = null,
   channelRegistry: ChannelRegistry | null = null,
+  givenLogin?: Login | null,
 ): CreateAppResult {
   const app = new Hono<{ Variables: AppVariables }>();
 
   // Create context middleware and get services
   const { middleware: contextMiddleware, services } = createContextMiddleware(db, eventBus, channelRegistry);
+  // Human login (Better Auth); null when OMNI_LOGIN_ENABLED is off. index.ts passes the one
+  // its WhatsApp approval subscriber uses, so there is one Better Auth instance per process.
+  const login = givenLogin === undefined ? createLogin(db, services, eventBus) : givenLogin;
 
   // Global middleware
   app.use('*', timing());
@@ -566,14 +572,16 @@ export function createApp(
   // tenancy/route-ownership.ts. Must be mounted before protectedApp.
   app.get('/api/v2/slack/oauth/callback', webhookIngressRateLimitMiddleware, slackOAuthCallback);
 
-  // Device pairing (wish: omni-labs-distribution). Auth-exempt by contract: a
-  // device with no key asks for one by code, approved over WhatsApp by the
-  // pairing instance's owner. Always mounted so that, with OMNI_PAIRING_ENABLED
-  // off, the routes answer 404 themselves instead of falling through to the
-  // bearer auth below (401 would reveal the surface). Declared
-  // `public-by-contract` in tenancy/route-ownership.ts. Must be mounted before
-  // protectedApp.
-  app.route('/api/v2/pair', pairingRoutes);
+  // Human login (wish: omni-labs-distribution): Better Auth at /api/auth, Omni's
+  // claim / owner-code / device-key endpoints at /api/v2/login, and the claim and
+  // device-approval pages at /login. Auth-exempt by contract: this is how a person
+  // and their devices get in. Always mounted so that, with OMNI_LOGIN_ENABLED off,
+  // the routes answer 404 themselves instead of falling through to the bearer auth
+  // below (401 would reveal the surface). Declared `public-by-contract` in
+  // tenancy/route-ownership.ts. Must be mounted before protectedApp and the UI.
+  app.route('/api/auth', loginAuthRoutes(login));
+  app.route('/api/v2/login', loginApiRoutes(login));
+  app.route('/login', loginPageRoutes(login));
 
   // ── Multitenancy control plane — feature-flagged, OFF by default ────────────
   // Mounted ONLY when OMNI_MULTITENANCY_ENABLED === "true". When off, this
@@ -690,7 +698,7 @@ export function createApp(
     );
   });
 
-  return { app, services };
+  return { app, services, login };
 }
 
 export type App = Hono<{ Variables: AppVariables }>;
