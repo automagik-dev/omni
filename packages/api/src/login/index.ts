@@ -23,6 +23,10 @@ export interface Login {
   services: Services;
   eventBus: EventBus | null;
   whatsapp: WhatsAppAccess;
+  /** Where each device-flow request came from, by user code, for the owner's WhatsApp confirmation. */
+  deviceRequests: Map<string, { ip: string | null; at: number }>;
+  /** When codes were last sent to each number (for the per-number cooldown). */
+  codeSends: Map<string, number[]>;
 }
 
 /** Login for this app, or null when it is off (OMNI_LOGIN_ENABLED unset, multitenancy on, or misconfigured). */
@@ -40,7 +44,16 @@ export function createLogin(
     return null;
   }
   if (!config) return null;
-  return { config, auth: createLoginAuth({ db, whatsapp, config }), db, services, eventBus, whatsapp };
+  return {
+    config,
+    auth: createLoginAuth({ db, whatsapp, config }),
+    db,
+    services,
+    eventBus,
+    whatsapp,
+    deviceRequests: new Map(),
+    codeSends: new Map(),
+  };
 }
 
 /** The owner, or null while the Omni is unclaimed. */
@@ -65,4 +78,30 @@ export async function announceClaim(login: Login): Promise<void> {
   log.info(
     `This Omni has no owner yet. Claim it: ${login.config.publicUrl}/api/login/claim?token=${claimTokenOf(login.config)}`,
   );
+}
+
+const CODE_COOLDOWN_MS = 60_000;
+const CODES_PER_DAY = 10;
+const DAY_MS = 86_400_000;
+
+/**
+ * Whether a login code may go to `phone` now: 0 when it may (and the send is counted),
+ * else the seconds to wait. One code a minute and ten a day per number, whatever address
+ * asks, so nobody can flood the owner's self chat by asking from many addresses.
+ */
+export function allowCodeSend(login: Login, phone: string, now = Date.now()): number {
+  const sends = (login.codeSends.get(phone) ?? []).filter((at) => now - at < DAY_MS);
+  const last = sends.at(-1);
+  if (last !== undefined && now - last < CODE_COOLDOWN_MS) return Math.ceil((CODE_COOLDOWN_MS - (now - last)) / 1000);
+  if (sends.length >= CODES_PER_DAY) return Math.ceil((DAY_MS - (now - (sends[0] ?? now))) / 1000);
+  sends.push(now);
+  login.codeSends.set(phone, sends);
+  return 0;
+}
+
+/** Where a device request came from, kept ten minutes (a device code's life). */
+export function deviceRequestOf(login: Login, userCode: string): { ip: string | null; at: number } | null {
+  const now = Date.now();
+  for (const [code, request] of login.deviceRequests) if (now - request.at > 600_000) login.deviceRequests.delete(code);
+  return login.deviceRequests.get(userCode) ?? null;
 }

@@ -696,17 +696,22 @@ export type NewApiKey = typeof apiKeys.$inferInsert;
 // passkeys and device-flow codes. Columns follow Better Auth's field names exactly
 // (its adapter reads them by name); no tenant_id: login is off with multitenancy on.
 
-export const loginUsers = pgTable('login_users', {
-  id: text('id').primaryKey(),
-  name: text('name').notNull(),
-  email: text('email').notNull().unique(),
-  emailVerified: boolean('email_verified').notNull().default(false),
-  image: text('image'),
-  phoneNumber: text('phone_number').unique(),
-  phoneNumberVerified: boolean('phone_number_verified'),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-});
+export const loginUsers = pgTable(
+  'login_users',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    email: text('email').notNull().unique(),
+    emailVerified: boolean('email_verified').notNull().default(false),
+    image: text('image'),
+    phoneNumber: text('phone_number').unique(),
+    phoneNumberVerified: boolean('phone_number_verified'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  // One owner per Omni: at most one row, enforced by the database too.
+  () => ({ oneOwner: uniqueIndex('login_users_one_owner').on(sql`(true)`) }),
+);
 
 export const loginSessions = pgTable(
   'login_sessions',
@@ -721,6 +726,8 @@ export const loginSessions = pgTable(
     userId: text('user_id')
       .notNull()
       .references(() => loginUsers.id, { onDelete: 'cascade' }),
+    /** Set only on the session the device flow hands a device (the device-key exchange accepts nothing else). */
+    deviceClientId: text('device_client_id'),
   },
   (table) => ({ userIdx: index('login_sessions_user_id_idx').on(table.userId) }),
 );

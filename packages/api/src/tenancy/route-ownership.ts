@@ -295,6 +295,24 @@ const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
       'no instance data.',
   },
   {
+    route: 'POST /api/auth/device/code',
+    class: 'public-by-contract',
+    justification:
+      'Better Auth RFC 8628 device authorization request (human login), routed on its own for a stricter ' +
+      'per-IP limit. Answers 404 unless OMNI_LOGIN_ENABLED=true, and always with multitenancy on. Only the ' +
+      'known client ids are accepted; it returns a device code and user code that grant nothing until the ' +
+      'signed-in owner approves them, and reads no tenant data.',
+  },
+  {
+    route: 'GET /api/login/whatsapp',
+    class: 'public-by-contract',
+    justification:
+      "What a device's QR opens (human login): a redirect to the owner's own WhatsApp chat with the device's " +
+      'code typed. Answers 404 unless OMNI_LOGIN_ENABLED=true and a live, pending device request carries that ' +
+      "user code; that is the only place the owner's number is given out, and only to someone holding a code " +
+      'a device on this Omni just asked for. Rate-limited per IP.',
+  },
+  {
     route: 'GET /api/login/claim',
     class: 'public-by-contract',
     justification:

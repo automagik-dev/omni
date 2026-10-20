@@ -81,6 +81,9 @@ export interface LoginAuth {
     adapter: {
       findOne<T>(query: { model: string; where: Where }): Promise<T | null>;
       update<T>(query: { model: string; where: Where; update: Record<string, unknown> }): Promise<T | null>;
+      /** Delete and return exactly one matching row; under a race exactly one caller gets it. */
+      consumeOne<T>(query: { model: string; where: Where }): Promise<T | null>;
+      deleteMany(query: { model: string; where: (Where[number] & { operator?: 'lt' })[] }): Promise<number>;
     };
   }>;
   api: {
@@ -89,13 +92,18 @@ export interface LoginAuth {
       body: { phoneNumber: string; code: string };
       returnHeaders: true;
     }): Promise<{ headers: Headers; response: unknown }>;
-    getSession(input: { headers: Headers }): Promise<{ user: { id: string }; session: { token: string } } | null>;
-    revokeSession(input: { headers: Headers; body: { token: string } }): Promise<unknown>;
+    getSession(input: {
+      headers: Headers;
+    }): Promise<{
+      user: { id: string };
+      session: { id: string; token: string; deviceClientId?: string | null };
+    } | null>;
   };
 }
 
 export function createLoginAuth({ db, whatsapp, config }: LoginAuthDeps): LoginAuth {
   const origin = new URL(config.publicUrl).origin;
+  const trustedProxyHeader = process.env.TRUSTED_PROXY_HEADER?.trim().toLowerCase();
   const auth = betterAuth({
     appName: 'Omni',
     baseURL: config.publicUrl,
@@ -115,7 +123,18 @@ export function createLoginAuth({ db, whatsapp, config }: LoginAuthDeps): LoginA
       },
     }),
     emailAndPassword: { enabled: false },
-    rateLimit: { enabled: true, window: 60, max: 30 },
+    // Omni rate-limits /api/auth itself (routes/v2/login.ts), keyed on the client IP the way
+    // the rest of the API is (TRUSTED_PROXY_HEADER, else the socket). Better Auth's own
+    // limiter would key on whatever X-Forwarded-For a client sends.
+    rateLimit: { enabled: false },
+    advanced: {
+      ipAddress: trustedProxyHeader ? { ipAddressHeaders: [trustedProxyHeader] } : { disableIpTracking: true },
+    },
+    session: {
+      // Set only on the session the device flow hands a device (see the hook below):
+      // the one kind of session /api/v2/login/device-key accepts.
+      additionalFields: { deviceClientId: { type: 'string', required: false, input: false } },
+    },
     plugins: [
       phoneNumber({
         otpLength: 6,
@@ -151,7 +170,18 @@ export function createLoginAuth({ db, whatsapp, config }: LoginAuthDeps): LoginA
       user: {
         create: {
           // One owner: the first verified human claims the Omni, and sign-up closes after.
+          // (login_users also refuses a second row outright, against two claims at once.)
           before: async () => ((await ownerClaimed(db)) ? false : undefined),
+        },
+      },
+      session: {
+        create: {
+          // Mark the session /device/token creates with the device client it was granted to.
+          before: async (session, ctx) => {
+            if (ctx?.path !== '/device/token') return undefined;
+            const clientId = String((ctx.body as { client_id?: unknown } | undefined)?.client_id ?? '');
+            return { data: { ...session, deviceClientId: isDeviceClient(clientId) ? clientId : 'unknown' } };
+          },
         },
       },
     },

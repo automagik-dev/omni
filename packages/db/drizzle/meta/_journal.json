@@ -610,6 +610,13 @@
       "when": 1788500000002,
       "tag": "0086_human_login",
       "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "7",
+      "when": 1788500000003,
+      "tag": "0087_login_hardening",
+      "breakpoints": true
     }
   ]
 }

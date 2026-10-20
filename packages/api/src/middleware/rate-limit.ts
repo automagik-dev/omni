@@ -199,6 +199,12 @@ export const rateLimitMiddleware = createRateLimiter(RATE_LIMITS.general);
 export const webhookIngressRateLimitMiddleware = createRateLimiter(RATE_LIMITS.events, 'ratelimit:webhook-ingress');
 
 /**
+ * Rate limiter for the rest of the human login surface (Better Auth's endpoints, the
+ * WhatsApp hop): enough for a device polling every two seconds and a person on the pages.
+ */
+export const authRateLimitMiddleware = createRateLimiter({ windowMs: 60 * 1000, maxRequests: 120 }, 'ratelimit:auth');
+
+/**
  * Rate limiter for the auth-exempt human login routes that send or check codes
  * and mint device keys: ten requests per IP per ten minutes covers a person
  * retrying, not a script. Better Auth limits its own endpoints on top.

@@ -12,7 +12,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { TypedOmniEvent } from '@omni/core';
 import { type Database, apiKeys, createDbHandle } from '@omni/db';
 import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { type Login, createLogin } from '../../login';
 import { claimTokenOf } from '../../login/config';
@@ -79,6 +79,8 @@ postgresDescribe('human login (real PostgreSQL)', () => {
 
   /** A request as a browser on the Omni's own origin would send it, with the cookie jar. */
   async function call(method: string, path: string, body?: unknown, headers: Record<string, string> = {}) {
+    // Each test asks for its own code; the one-a-minute cooldown has its own test.
+    if (path.endsWith('/send-code') && !headers['x-keep-cooldown']) login.codeSends.clear();
     const cookie = [...jar].map(([name, value]) => `${name}=${value}`).join('; ');
     const response = await app.request(`${ORIGIN}${path}`, {
       method,
@@ -175,7 +177,7 @@ postgresDescribe('human login (real PostgreSQL)', () => {
   });
 
   test('an unclaimed Omni says so, and claiming needs the claim token', async () => {
-    expect((await call('GET', '/api/v2/login/status')).data).toMatchObject({ claimed: false, whatsapp: null });
+    expect((await call('GET', '/api/v2/login/status')).data).toMatchObject({ claimed: false, whatsapp: false });
     expect((await call('GET', '/api/v2/login/claim/accounts')).status).toBe(404);
     expect(
       (await call('GET', '/api/v2/login/claim/accounts', undefined, { 'x-omni-claim-token': 'wrong' })).status,
@@ -215,7 +217,9 @@ postgresDescribe('human login (real PostgreSQL)', () => {
     expect([...jar.keys()].some((name) => name.includes('session_token'))).toBe(true);
 
     const status = await call('GET', '/api/v2/login/status');
-    expect(status.data).toMatchObject({ claimed: true, whatsapp: `+${OWNER.phone}` });
+    expect(status.data).toMatchObject({ claimed: true, whatsapp: true });
+    // The owner's number is never listed on the public status.
+    expect(JSON.stringify(status.json)).not.toContain(OWNER.phone);
     // Claimed: the claim surface is gone, even with the token.
     expect((await call('GET', '/api/v2/login/claim/accounts', undefined, claim)).status).toBe(404);
     expect((await call('POST', '/api/v2/login/claim/send-code', { instanceId: OTHER.instanceId }, claim)).status).toBe(
@@ -244,7 +248,18 @@ postgresDescribe('human login (real PostgreSQL)', () => {
     expect(granted.status).toBe(200);
     const accessToken = String(granted.json.access_token);
 
-    const bearer = { authorization: `Bearer ${accessToken}`, 'x-omni-client': 'omni-desktop', cookie: '' };
+    const bearer = { authorization: `Bearer ${accessToken}`, cookie: '' };
+    // The device token is no session against Better Auth's own endpoints.
+    expect((await call('GET', '/api/auth/get-session', undefined, bearer)).json).toEqual({});
+    expect(
+      (await call('GET', '/api/auth/passkey/generate-register-options', undefined, bearer)).status,
+    ).toBeGreaterThanOrEqual(400);
+    // The owner's browser session is not a device token.
+    const browserToken = [...jar].find(([name]) => name.includes('session_token'))?.[1] ?? '';
+    expect(browserToken).not.toBe('');
+    const asBrowser = { authorization: `Bearer ${decodeURIComponent(browserToken)}`, cookie: '' };
+    expect((await call('POST', '/api/v2/login/device-key', { deviceName: 'Sneaky' }, asBrowser)).status).toBe(401);
+
     const key = await call('POST', '/api/v2/login/device-key', { deviceName: 'Test laptop' }, bearer);
     expect(key.status).toBe(200);
     const minted = key.data as { apiKey: string; keyId: string; keyExpiresAt: string | null };
@@ -254,6 +269,7 @@ postgresDescribe('human login (real PostgreSQL)', () => {
     expect(row?.scopes).toEqual(['instances:read', 'chats:read']);
     expect(row?.expiresAt).toBeNull();
     expect(row?.name).toBe('device: Test laptop');
+    expect(row?.description).toContain('the Omni desktop app');
 
     // The device token works once.
     expect((await call('POST', '/api/v2/login/device-key', { deviceName: 'Again' }, bearer)).status).toBe(401);
@@ -306,5 +322,36 @@ postgresDescribe('human login (real PostgreSQL)', () => {
     const options = await call('GET', '/api/auth/passkey/generate-register-options');
     expect(options.status).toBe(200);
     expect(options.json.rp).toMatchObject({ id: 'localhost', name: 'Omni' });
+  });
+
+  test("a device's QR opens the owner's WhatsApp only for a live request", async () => {
+    const device = await startDevice();
+    const hop = await app.request(`${ORIGIN}/api/login/whatsapp?user_code=${device.user_code}`, {
+      headers: { 'x-forwarded-for': '198.51.100.201' },
+    });
+    expect(hop.status).toBe(302);
+    const shown = `${device.user_code.slice(0, 4)}-${device.user_code.slice(4)}`;
+    expect(hop.headers.get('location')).toBe(
+      `https://wa.me/${OWNER.phone}?text=${encodeURIComponent(`Omni ${shown}`)}`,
+    );
+    const unknown = await app.request(`${ORIGIN}/api/login/whatsapp?user_code=ABCDEFGH`, {
+      headers: { 'x-forwarded-for': '198.51.100.202' },
+    });
+    expect(unknown.status).toBe(404);
+  });
+
+  test('one login code a minute per number, whoever asks', async () => {
+    expect((await call('POST', '/api/v2/login/send-code')).status).toBe(200);
+    const again = await call('POST', '/api/v2/login/send-code', undefined, { 'x-keep-cooldown': '1' });
+    expect(again.status).toBe(429);
+  });
+
+  test('the database refuses a second owner even if the application check is raced', async () => {
+    const second = async () => {
+      await db.execute(
+        sql`INSERT INTO login_users (id, name, email, created_at, updated_at) VALUES ('second', 'x', 'x@y.invalid', now(), now())`,
+      );
+    };
+    await expect(second()).rejects.toThrow();
   });
 });
