@@ -10,7 +10,7 @@ import type { OpenAPIRegistry } from '@asteasolutions/zod-to-openapi';
 import { z } from '../../lib/zod-openapi';
 import { listQuerySchema, sendTextSchema } from '../../routes/v2/messages';
 import { ErrorSchema } from './common';
-import { MessageResponseSchema } from './messages';
+import { MessageResponseSchema, PacingForbiddenResponse } from './messages';
 
 export const StoredMessageSchema = z.object({
   id: z.string().uuid().openapi({ description: 'Message UUID' }),
@@ -31,6 +31,30 @@ export const StoredMessageSchema = z.object({
 
 const notFound = { description: 'Message not found', content: { 'application/json': { schema: ErrorSchema } } };
 
+// What POST /messages/send answers, as the handler writes it.
+const SentTextSchema = MessageResponseSchema.extend({
+  timestamp: z
+    .number()
+    .optional()
+    .openapi({ description: 'Platform send time (ms since epoch), when the channel reports one' }),
+});
+const FilteredTextSchema = z.object({
+  messageId: z.literal('').openapi({ description: 'Empty: nothing was sent' }),
+  status: z.literal('filtered'),
+  instanceId: z.string().uuid(),
+  to: z.string(),
+});
+const SendRejectedSchema = z.object({
+  error: z.object({
+    code: z.string().openapi({ description: 'INVALID_JSON or VALIDATION_ERROR' }),
+    message: z.string().optional(),
+    issues: z
+      .array(z.record(z.unknown()))
+      .optional()
+      .openapi({ description: 'Validation issues, for VALIDATION_ERROR' }),
+  }),
+});
+
 export function registerMessageCoreSchemas(registry: OpenAPIRegistry): void {
   registry.register('StoredMessage', StoredMessageSchema);
 
@@ -43,15 +67,13 @@ export function registerMessageCoreSchemas(registry: OpenAPIRegistry): void {
       'Plain text only; media goes to POST /messages/send/media (a media payload here answers 422 WRONG_ENDPOINT).',
     request: { body: { content: { 'application/json': { schema: sendTextSchema } } } },
     responses: {
-      201: {
-        description: 'Sent',
-        content: { 'application/json': { schema: z.object({ data: MessageResponseSchema }) } },
-      },
+      201: { description: 'Sent', content: { 'application/json': { schema: z.object({ data: SentTextSchema }) } } },
       200: {
         description: 'Filtered by the outbound rules; nothing was sent',
-        content: { 'application/json': { schema: z.object({ data: MessageResponseSchema }) } },
+        content: { 'application/json': { schema: z.object({ data: FilteredTextSchema }) } },
       },
-      400: { description: 'Invalid body', content: { 'application/json': { schema: ErrorSchema } } },
+      400: { description: 'Invalid JSON or body', content: { 'application/json': { schema: SendRejectedSchema } } },
+      403: PacingForbiddenResponse,
       422: {
         description: 'A media payload, which belongs to /messages/send/media',
         content: { 'application/json': { schema: ErrorSchema } },

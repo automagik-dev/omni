@@ -18,7 +18,7 @@ const PacingField = z.enum(['humanized', 'immediate']).optional().openapi({
     "Outbound pacing for this send (WhatsApp Baileys): 'immediate' skips the humanized anti-ban delay and typing simulation; 'humanized' keeps them. Default: the instance's outboundPacing. 'immediate' on a humanized instance needs the instance's outboundPacingOverride (otherwise 403)",
 });
 
-const PacingForbiddenResponse = {
+export const PacingForbiddenResponse = {
   description:
     "pacing 'immediate' refused: the instance's outboundPacing is 'humanized' and outboundPacingOverride is not set",
   content: { 'application/json': { schema: ErrorSchema } },
