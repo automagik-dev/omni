@@ -7,6 +7,9 @@ import { createSource } from './sources.js'
 export const CHANNELS_PANEL = 'omni-channels'
 export const CHAT_PANEL = 'omni-chat'
 
+// A channel omni has that this view has no tile for still shows, with a plain chat mark.
+export const typeOf = type => CHANNEL_TYPES[type] ?? { label: type, tile: '#64748B', glyph: 'chat', pairing: 'token', blurb: '' }
+
 // Keyed by omni's channel ids (core/src/types/channel.ts), with how each one pairs.
 export const CHANNEL_TYPES = {
   'whatsapp-baileys': { label: 'WhatsApp', tile: '#25D366', glyph: 'whatsapp', pairing: 'qr', blurb: 'Link a phone number by scanning a code, like WhatsApp Web.' },
@@ -75,7 +78,13 @@ export const omniStore = createSource({
   chatId: null,
   // The Channels page: the overview, one channel, or the connect flow.
   page: { view: 'overview', channelId: null, type: null, step: 0 },
+  // preview: sample data, every action works locally. live: the host's omni endpoints,
+  // read-only. `source` says which, and why the preview stays when omni is not set up.
   preview: true,
+  source: { kind: 'preview' },
+  // Chats opened here, with the newest message seen, so a poll does not bring the
+  // unread count back for messages already read.
+  seen: {},
 })
 
 export const channelOf = (state, id) => state.channels.find(channel => channel.id === id)
@@ -100,16 +109,24 @@ export function healthSummary(state) {
   }
 }
 
+// Only the preview changes channels and sends; the live view reads.
+export const canWrite = state => state.preview
+
 const set = patch => omniStore.set(state => ({ ...state, ...(typeof patch === 'function' ? patch(state) : patch) }))
 const patchChannel = (id, patch) => set(state => ({ channels: state.channels.map(channel => (channel.id === id ? { ...channel, ...patch } : channel)) }))
 
 // `select` is ctx.layout.selectPanel: chats and the Channels page are DSH main panels.
-export function omniActions(select) {
+export function omniActions(select, call) {
   return {
     setFilter: filter => set({ filter }),
     openChat(chatId) {
-      set(state => ({ chatId, chats: state.chats.map(chat => (chat.id === chatId ? { ...chat, unread: 0 } : chat)) }))
+      set(state => ({
+        chatId,
+        chats: state.chats.map(chat => (chat.id === chatId ? { ...chat, unread: 0 } : chat)),
+        seen: { ...state.seen, [chatId]: chatOf(state, chatId)?.at ?? Date.now() },
+      }))
       select(CHAT_PANEL)
+      if (!omniStore.getSnapshot().preview && call) void loadMessages(call, chatId)
     },
     openChannels(view = 'overview', channelId = null) {
       set({ page: { view, channelId, type: null, step: 0 } })
@@ -118,7 +135,7 @@ export function omniActions(select) {
     showPage: page => set(state => ({ page: { ...state.page, ...page } })),
     sendText(chatId, text) {
       const body = text.trim()
-      if (body === '') return
+      if (body === '' || !canWrite(omniStore.getSnapshot())) return
       const at = Date.now()
       set(state => ({
         messages: { ...state.messages, [chatId]: [...(state.messages[chatId] ?? []), { id: `local-${at}`, from: 'you', text: body, at }] },
@@ -148,4 +165,60 @@ export function omniActions(select) {
       page: { view: 'overview', channelId: null, type: null, step: 0 },
     })),
   }
+}
+
+// -------------------------------------------------------------------------
+// Live data: the host's omni endpoints (src/host/omni.js), polled while the page is shown.
+
+const POLL_MS = 15_000
+let polling = null
+
+const markSeen = (seen, chats) => chats.map(chat => ((seen[chat.id] ?? -1) >= chat.at ? { ...chat, unread: 0 } : chat))
+
+export async function loadMessages(call, chatId) {
+  try {
+    const { messages } = await call('omni-messages', { chatId })
+    set(state => ({ messages: { ...state.messages, [chatId]: messages } }))
+  } catch (error) {
+    set(state => ({ messages: { ...state.messages, [chatId]: state.messages[chatId] ?? [] }, source: { ...state.source, error: error.message } }))
+  }
+}
+
+export async function refreshLive(call) {
+  const reply = await call('omni-overview')
+  if (!reply.configured) {
+    set(state => (state.preview ? { source: { kind: 'preview', missing: reply.missing } } : {}))
+    return
+  }
+  set(state => ({
+    // The first live answer drops every sample: their chats and messages are not omni's.
+    ...(state.preview ? { messages: {}, chatId: null, page: { view: 'overview', channelId: null, type: null, step: 0 } } : {}),
+    preview: false,
+    source: { kind: 'live', origin: reply.origin, at: Date.now() },
+    channels: reply.channels,
+    chats: markSeen(state.seen, reply.chats),
+    filter: reply.channels.some(channel => channel.id === state.filter) ? state.filter : null,
+  }))
+  const open = omniStore.getSnapshot().chatId
+  if (open) await loadMessages(call, open)
+}
+
+// Starts once per page; the returned function stops it.
+export function startLive(call, every = POLL_MS) {
+  if (polling) return polling
+  let timer = 0
+  let stopped = false
+  const tick = async () => {
+    if (typeof document === 'undefined' || !document.hidden) {
+      try {
+        await refreshLive(call)
+      } catch (error) {
+        set(state => ({ source: { ...state.source, error: error.message } }))
+      }
+    }
+    if (!stopped) timer = setTimeout(tick, every)
+  }
+  void tick()
+  polling = () => { stopped = true; clearTimeout(timer); polling = null }
+  return polling
 }

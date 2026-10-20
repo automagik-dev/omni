@@ -44,6 +44,24 @@ module.exports = __toCommonJS(index_exports);
 var NAMESPACE = "ds-bot";
 var ZH = {
   // Omni channels (channels.js)
+  "An agent is assigned to this channel in omni.": "omni 中已为此渠道分配了智能体。",
+  "Back to channels": "返回渠道",
+  "Connecting from here is switched on after you approve it; this run changed nothing in omni.": "从这里连接渠道的功能会在你批准后开启；这次操作没有改动 omni。",
+  "last seen online": "最近在线",
+  "Live · last refresh failed": "实时 · 上次刷新失败",
+  "Live · {origin} · read-only": "实时 · {origin} · 只读",
+  "Loading messages…": "正在加载消息…",
+  "No agent is assigned to this channel in omni.": "omni 中没有为此渠道分配智能体。",
+  "no messages yet": "还没有消息",
+  "Preview: add channel": "预览：添加渠道",
+  "Read from omni every 15 seconds. Sending and connecting are not switched on yet.": "每 15 秒从 omni 读取一次。发送和连接功能尚未开启。",
+  "Read-only for now: replying from here is switched on after you approve this view.": "目前只读：你批准此视图后，才会开启从这里回复。",
+  "recent chats": "最近聊天",
+  "right now": "当前",
+  "Sample data until DSH has {missing}.": "在 DSH 配置 {missing} 之前显示示例数据。",
+  "That is the whole flow": "流程就是这样",
+  "unread": "未读",
+  "Yesterday": "昨天",
   "Create the token in {app}'s settings and paste it here.": "在 {app} 的设置中创建 token，然后粘贴到这里。",
   "A {app} window opens. Approve Omni there and come back.": "会打开 {app} 窗口。在那里允许 Omni，然后回到这里。",
   "Add a channel": "添加渠道",
@@ -5048,6 +5066,7 @@ function showsDshRow(dsh, app) {
 // src/client/omni-store.js
 var CHANNELS_PANEL = "omni-channels";
 var CHAT_PANEL = "omni-chat";
+var typeOf = (type) => CHANNEL_TYPES[type] ?? { label: type, tile: "#64748B", glyph: "chat", pairing: "token", blurb: "" };
 var CHANNEL_TYPES = {
   "whatsapp-baileys": { label: "WhatsApp", tile: "#25D366", glyph: "whatsapp", pairing: "qr", blurb: "Link a phone number by scanning a code, like WhatsApp Web." },
   "whatsapp-business": { label: "WhatsApp Business", tile: "#128C7E", glyph: "whatsapp", pairing: "oauth", signIn: "Meta", blurb: "The official Business API, through your Meta account." },
@@ -5137,7 +5156,13 @@ var omniStore = createSource({
   chatId: null,
   // The Channels page: the overview, one channel, or the connect flow.
   page: { view: "overview", channelId: null, type: null, step: 0 },
-  preview: true
+  // preview: sample data, every action works locally. live: the host's omni endpoints,
+  // read-only. `source` says which, and why the preview stays when omni is not set up.
+  preview: true,
+  source: { kind: "preview" },
+  // Chats opened here, with the newest message seen, so a poll does not bring the
+  // unread count back for messages already read.
+  seen: {}
 });
 var channelOf = (state, id) => state.channels.find((channel) => channel.id === id);
 var chatOf = (state, id) => state.chats.find((chat) => chat.id === id);
@@ -5155,14 +5180,20 @@ function healthSummary(state) {
     messagesToday: state.channels.reduce((sum, channel) => sum + (channel.health?.messagesToday ?? 0), 0)
   };
 }
+var canWrite = (state) => state.preview;
 var set = (patch) => omniStore.set((state) => ({ ...state, ...typeof patch === "function" ? patch(state) : patch }));
 var patchChannel = (id, patch) => set((state) => ({ channels: state.channels.map((channel) => channel.id === id ? { ...channel, ...patch } : channel) }));
-function omniActions(select) {
+function omniActions(select, call2) {
   return {
     setFilter: (filter) => set({ filter }),
     openChat(chatId) {
-      set((state) => ({ chatId, chats: state.chats.map((chat) => chat.id === chatId ? { ...chat, unread: 0 } : chat) }));
+      set((state) => ({
+        chatId,
+        chats: state.chats.map((chat) => chat.id === chatId ? { ...chat, unread: 0 } : chat),
+        seen: { ...state.seen, [chatId]: chatOf(state, chatId)?.at ?? Date.now() }
+      }));
       select(CHAT_PANEL);
+      if (!omniStore.getSnapshot().preview && call2) void loadMessages(call2, chatId);
     },
     openChannels(view = "overview", channelId = null) {
       set({ page: { view, channelId, type: null, step: 0 } });
@@ -5171,7 +5202,7 @@ function omniActions(select) {
     showPage: (page) => set((state) => ({ page: { ...state.page, ...page } })),
     sendText(chatId, text) {
       const body = text.trim();
-      if (body === "") return;
+      if (body === "" || !canWrite(omniStore.getSnapshot())) return;
       const at = Date.now();
       set((state) => ({
         messages: { ...state.messages, [chatId]: [...state.messages[chatId] ?? [], { id: `local-${at}`, from: "you", text: body, at }] },
@@ -5209,11 +5240,62 @@ function omniActions(select) {
     }))
   };
 }
+var POLL_MS = 15e3;
+var polling = null;
+var markSeen = (seen, chats) => chats.map((chat) => (seen[chat.id] ?? -1) >= chat.at ? { ...chat, unread: 0 } : chat);
+async function loadMessages(call2, chatId) {
+  try {
+    const { messages } = await call2("omni-messages", { chatId });
+    set((state) => ({ messages: { ...state.messages, [chatId]: messages } }));
+  } catch (error) {
+    set((state) => ({ messages: { ...state.messages, [chatId]: state.messages[chatId] ?? [] }, source: { ...state.source, error: error.message } }));
+  }
+}
+async function refreshLive(call2) {
+  const reply = await call2("omni-overview");
+  if (!reply.configured) {
+    set((state) => state.preview ? { source: { kind: "preview", missing: reply.missing } } : {});
+    return;
+  }
+  set((state) => ({
+    // The first live answer drops every sample: their chats and messages are not omni's.
+    ...state.preview ? { messages: {}, chatId: null, page: { view: "overview", channelId: null, type: null, step: 0 } } : {},
+    preview: false,
+    source: { kind: "live", origin: reply.origin, at: Date.now() },
+    channels: reply.channels,
+    chats: markSeen(state.seen, reply.chats),
+    filter: reply.channels.some((channel) => channel.id === state.filter) ? state.filter : null
+  }));
+  const open = omniStore.getSnapshot().chatId;
+  if (open) await loadMessages(call2, open);
+}
+function startLive(call2, every = POLL_MS) {
+  if (polling) return polling;
+  let timer = 0;
+  let stopped = false;
+  const tick = async () => {
+    if (typeof document === "undefined" || !document.hidden) {
+      try {
+        await refreshLive(call2);
+      } catch (error) {
+        set((state) => ({ source: { ...state.source, error: error.message } }));
+      }
+    }
+    if (!stopped) timer = setTimeout(tick, every);
+  };
+  void tick();
+  polling = () => {
+    stopped = true;
+    clearTimeout(timer);
+    polling = null;
+  };
+  return polling;
+}
 
 // src/client/channels.js
 var import_react10 = require("react");
 var useOmni = () => (0, import_react10.useSyncExternalStore)(omniStore.subscribe, omniStore.getSnapshot, omniStore.getSnapshot);
-var useActions = (actions) => (0, import_react10.useMemo)(() => omniActions((id) => actions.selectPanel(id)), [actions]);
+var useActions = (actions) => (0, import_react10.useMemo)(() => omniActions((id) => actions.selectPanel(id), call), [actions]);
 var activePanel = (usePanel) => usePanel ? usePanel((info) => info?.activePanelId ?? null) : null;
 var stroke = { fill: "none", stroke: "currentColor", strokeWidth: 1.9, strokeLinecap: "round", strokeLinejoin: "round" };
 var GLYPHS = {
@@ -5226,6 +5308,7 @@ var GLYPHS = {
     (0, import_react10.createElement)("path", { key: "b", d: "M8.8 13.1 16.8 8", ...stroke })
   ],
   slack: () => [(0, import_react10.createElement)("path", { key: "a", d: "M9.5 4.5v6M14.5 13.5v6M4.5 14.5h6M13.5 9.5h6", ...stroke, strokeWidth: 2.8 })],
+  chat: () => [(0, import_react10.createElement)("path", { key: "a", d: "M5 5.5h14a1.5 1.5 0 0 1 1.5 1.5v8.5A1.5 1.5 0 0 1 19 17H10l-4.5 3.5V17H5a1.5 1.5 0 0 1-1.5-1.5V7A1.5 1.5 0 0 1 5 5.5z", ...stroke })],
   discord: () => [
     (0, import_react10.createElement)("path", { key: "a", d: "M7.6 7.2c2.9-1.2 5.9-1.2 8.8 0 1.5 2.4 2.1 5 1.9 8-1.6 1.2-3.1 1.8-4.2 2l-.8-1.5m-2.6 0-.8 1.5c-1.1-.2-2.6-.8-4.2-2-.2-3 .4-5.6 1.9-8z", ...stroke }),
     (0, import_react10.createElement)("circle", { key: "l", cx: 9.6, cy: 12.4, r: 1.3, fill: "currentColor" }),
@@ -5235,8 +5318,8 @@ var GLYPHS = {
 function Tile({ type, size = 40, ring = false }) {
   return (0, import_react10.createElement)("span", {
     className: `oc-tile${ring ? " oc-tile-ring" : ""}`,
-    style: { width: size, height: size, borderRadius: Math.round(size * 0.32), background: CHANNEL_TYPES[type].tile }
-  }, (0, import_react10.createElement)("svg", { width: Math.round(size * 0.62), height: Math.round(size * 0.62), viewBox: "0 0 24 24", "aria-hidden": true, focusable: "false" }, GLYPHS[CHANNEL_TYPES[type].glyph]()));
+    style: { width: size, height: size, borderRadius: Math.round(size * 0.32), background: typeOf(type).tile }
+  }, (0, import_react10.createElement)("svg", { width: Math.round(size * 0.62), height: Math.round(size * 0.62), viewBox: "0 0 24 24", "aria-hidden": true, focusable: "false" }, (GLYPHS[typeOf(type).glyph] ?? GLYPHS.chat)()));
 }
 var StatusDot = ({ status }) => (0, import_react10.createElement)("span", { className: "oc-dot", "data-tone": STATUS[status].tone, "aria-hidden": true });
 var StatusPill = ({ status }) => (0, import_react10.createElement)(
@@ -5257,13 +5340,31 @@ function ChatAvatar({ chat, channel, size = 36 }) {
     "span",
     { className: "oc-ava", style: { width: size, height: size, "--oc-hue": hue } },
     (0, import_react10.createElement)("span", { className: "oc-ava-face", style: { fontSize: Math.round(size * 0.34) } }, chat.initials),
+    chat.avatarUrl ? (0, import_react10.createElement)("img", { className: "oc-ava-img", src: chat.avatarUrl, alt: "", loading: "lazy", referrerPolicy: "no-referrer", onError: (event) => {
+      event.currentTarget.remove();
+    } }) : null,
     channel ? (0, import_react10.createElement)("span", { className: "oc-ava-badge" }, (0, import_react10.createElement)(Tile, { type: channel.type, size: Math.round(size * 0.4) })) : null
   );
 }
-var PreviewChip = () => (0, import_react10.createElement)("span", { className: "oc-preview-chip", title: t("Nothing here reaches a real channel yet.") }, t("Preview · sample data"));
+function PreviewChip() {
+  const source = useOmni().source;
+  if (source.kind === "live") {
+    return (0, import_react10.createElement)(
+      "span",
+      { className: "oc-preview-chip oc-live-chip", "data-error": source.error ? true : void 0, title: source.error ?? t("Read from omni every 15 seconds. Sending and connecting are not switched on yet.") },
+      (0, import_react10.createElement)("span", { className: "oc-live-dot", "aria-hidden": true }),
+      source.error ? t("Live · last refresh failed") : t("Live · {origin} · read-only", { origin: source.origin })
+    );
+  }
+  const missing = source.missing?.join(", ");
+  return (0, import_react10.createElement)("span", { className: "oc-preview-chip", title: missing ? t("Sample data until DSH has {missing}.", { missing }) : t("Nothing here reaches a real channel yet.") }, t("Preview · sample data"));
+}
 function ChatsSection({ wide, actions, usePanel }) {
   const state = useOmni();
   const omni = useActions(actions);
+  (0, import_react10.useEffect)(() => {
+    startLive(call);
+  }, []);
   const panel = activePanel(usePanel);
   const chats = visibleChats(state);
   const summary = healthSummary(state);
@@ -5317,7 +5418,7 @@ function ChatsSection({ wide, actions, usePanel }) {
       }, (0, import_react10.createElement)(OctopusLogo, { size: 16 }), unreadOf(state) > 0 ? (0, import_react10.createElement)("span", { className: "oc-filter-count" }, String(unreadOf(state))) : null),
       state.channels.map((channel) => {
         const unread = unreadOf(state, channel.id);
-        const label = `${CHANNEL_TYPES[channel.type].label} · ${channel.name}`;
+        const label = `${typeOf(channel.type).label} · ${channel.name}`;
         return (0, import_react10.createElement)(
           "button",
           {
@@ -5347,7 +5448,7 @@ function ChatsSection({ wide, actions, usePanel }) {
   );
 }
 function ChatRow({ chat, channel, active, onOpen }) {
-  const label = [chat.name, channel ? `${CHANNEL_TYPES[channel.type].label} · ${channel.name}` : "", chat.unread > 0 ? t("{n} unread", { n: chat.unread }) : ""].filter(Boolean).join(", ");
+  const label = [chat.name, channel ? `${typeOf(channel.type).label} · ${channel.name}` : "", chat.unread > 0 ? t("{n} unread", { n: chat.unread }) : ""].filter(Boolean).join(", ");
   return (0, import_react10.createElement)(
     "button",
     { type: "button", className: "bt-row oc-chat-row", "aria-label": label, "aria-current": active ? "page" : void 0, "data-chat-id": chat.id, onClick: onOpen },
@@ -5365,12 +5466,21 @@ function ChatRow({ chat, channel, active, onOpen }) {
     )
   );
 }
+var dayKey = (at) => new Date(at).toDateString();
+function dayLabel2(at) {
+  const today = /* @__PURE__ */ new Date();
+  if (dayKey(at) === today.toDateString()) return t("Today");
+  if (dayKey(at) === new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1).toDateString()) return t("Yesterday");
+  return new Date(at).toLocaleDateString([], { weekday: "long", day: "numeric", month: "long" });
+}
 function ChatPage({ actions }) {
   const state = useOmni();
   const omni = useActions(actions);
   const chat = chatOf(state, state.chatId);
   const channel = chat ? channelOf(state, chat.channelId) : void 0;
-  const messages = chat ? state.messages[chat.id] ?? [{ id: "preview", from: "them", text: chat.preview, at: chat.at }] : [];
+  const loaded = chat ? state.messages[chat.id] : void 0;
+  const loading = chat !== void 0 && loaded === void 0 && !state.preview;
+  const messages = chat ? loaded ?? (state.preview ? [{ id: "preview", from: "them", text: chat.preview, at: chat.at }] : []) : [];
   const scroller = (0, import_react10.useRef)(null);
   const [draft, setDraft] = (0, import_react10.useState)("");
   (0, import_react10.useLayoutEffect)(() => {
@@ -5383,8 +5493,9 @@ function ChatPage({ actions }) {
   if (!chat || !channel) {
     return (0, import_react10.createElement)("div", { className: "oc-page oc-chat-empty" }, (0, import_react10.createElement)(OctopusLogo, { size: 40 }), (0, import_react10.createElement)("p", null, t("Pick a chat under your Bots.")));
   }
-  const type = CHANNEL_TYPES[channel.type];
-  const live = channel.status === "connected";
+  const type = typeOf(channel.type);
+  const writable = canWrite(state);
+  const live = channel.status === "connected" && writable;
   const send = () => {
     omni.sendText(chat.id, draft);
     setDraft("");
@@ -5416,24 +5527,25 @@ function ChatPage({ actions }) {
       (0, import_react10.createElement)(
         "div",
         { className: "oc-thread-in" },
-        (0, import_react10.createElement)("div", { className: "oc-day" }, t("Today")),
+        loading ? (0, import_react10.createElement)("div", { className: "oc-day" }, (0, import_react10.createElement)("span", { className: "oc-spinner", "aria-hidden": true }), t("Loading messages…")) : null,
         messages.map((message, index) => {
           const mine = message.from !== "them";
-          const first = index === 0 || messages[index - 1].from !== message.from || messages[index - 1].author !== message.author;
-          return (0, import_react10.createElement)(
+          const newDay = index === 0 || dayKey(messages[index - 1].at) !== dayKey(message.at);
+          const first = newDay || messages[index - 1].from !== message.from || messages[index - 1].author !== message.author;
+          return (0, import_react10.createElement)(import_react10.Fragment, { key: message.id }, newDay ? (0, import_react10.createElement)("div", { className: "oc-day" }, dayLabel2(message.at)) : null, (0, import_react10.createElement)(
             "div",
-            { key: message.id, className: `oc-msg oc-msg-${message.from}${first ? " oc-msg-first" : ""}` },
+            { className: `oc-msg oc-msg-${message.from}${first ? " oc-msg-first" : ""}` },
             first && !mine && message.author ? (0, import_react10.createElement)("span", { className: "oc-msg-author" }, message.author) : null,
             first && message.from === "omni" ? (0, import_react10.createElement)("span", { className: "oc-msg-author oc-msg-omni" }, (0, import_react10.createElement)(OctopusLogo, { size: 12 }), "Omni") : null,
             (0, import_react10.createElement)("div", { className: "oc-bubble" }, message.text, (0, import_react10.createElement)("time", null, new Date(message.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })))
-          );
+          ));
         })
       )
     ),
     (0, import_react10.createElement)(
       "footer",
       { className: "oc-compose-wrap" },
-      live ? null : (0, import_react10.createElement)(
+      !writable ? (0, import_react10.createElement)("div", { className: "oc-compose-note oc-compose-info" }, t("Read-only for now: replying from here is switched on after you approve this view.")) : live ? null : (0, import_react10.createElement)(
         "button",
         { type: "button", className: "oc-compose-note", onClick: () => omni.openChannels("channel", channel.id) },
         (0, import_react10.createElement)(StatusDot, { status: channel.status }),
@@ -5493,7 +5605,7 @@ function Overview({ state, omni }) {
         (0, import_react10.createElement)("h1", null, t("Channels"), (0, import_react10.createElement)(PreviewChip)),
         (0, import_react10.createElement)("p", null, t("Connect the apps people already use to reach you. Omni answers there, and every chat shows up under your Bots."))
       ),
-      (0, import_react10.createElement)("button", { type: "button", className: "oc-primary", onClick: () => omni.showPage({ view: "connect", type: null, step: 0 }) }, (0, import_react10.createElement)(PlusIcon), t("Add channel"))
+      (0, import_react10.createElement)("button", { type: "button", className: "oc-primary", onClick: () => omni.showPage({ view: "connect", type: null, step: 0 }) }, (0, import_react10.createElement)(PlusIcon), state.preview ? t("Add channel") : t("Preview: add channel"))
     ),
     troubled.map((channel) => (0, import_react10.createElement)(
       "button",
@@ -5502,7 +5614,7 @@ function Overview({ state, omni }) {
       (0, import_react10.createElement)(
         "span",
         { className: "oc-callout-text" },
-        (0, import_react10.createElement)("strong", null, t("{name} needs attention", { name: `${CHANNEL_TYPES[channel.type].label} · ${channel.name}` })),
+        (0, import_react10.createElement)("strong", null, t("{name} needs attention", { name: `${typeOf(channel.type).label} · ${channel.name}` })),
         (0, import_react10.createElement)("span", null, channel.problem ?? t(STATUS[channel.status].label))
       ),
       (0, import_react10.createElement)("span", { className: "oc-callout-go" }, t("Fix now"), (0, import_react10.createElement)(ChevronRightIcon))
@@ -5512,8 +5624,8 @@ function Overview({ state, omni }) {
       { className: "oc-stats" },
       (0, import_react10.createElement)(Stat, { value: `${summary.connected}/${summary.total}`, label: t("connected") }),
       (0, import_react10.createElement)(Stat, { value: String(summary.attention), label: t("need attention"), tone: summary.attention > 0 ? "warn" : void 0 }),
-      (0, import_react10.createElement)(Stat, { value: String(summary.messagesToday), label: t("messages today") }),
-      (0, import_react10.createElement)(Stat, { value: median === null ? "–" : median < 60 ? t("{n} s", { n: median }) : t("{n} min", { n: Math.round(median / 60) }), label: t("typical reply") })
+      state.preview ? (0, import_react10.createElement)(Stat, { value: String(summary.messagesToday), label: t("messages today") }) : (0, import_react10.createElement)(Stat, { value: String(state.chats.length), label: t("recent chats") }),
+      state.preview ? (0, import_react10.createElement)(Stat, { value: median === null ? "–" : median < 60 ? t("{n} s", { n: median }) : t("{n} min", { n: Math.round(median / 60) }), label: t("typical reply") }) : (0, import_react10.createElement)(Stat, { value: String(unreadOf(state)), label: t("unread") })
     ),
     (0, import_react10.createElement)("h2", { className: "oc-section" }, t("Your channels")),
     state.channels.length === 0 ? (0, import_react10.createElement)("div", { className: "oc-empty" }, t("No channels yet. Add one to start.")) : (0, import_react10.createElement)("div", { className: "oc-cards" }, state.channels.map((channel) => (0, import_react10.createElement)(ChannelCard, { key: channel.id, channel, state, omni })))
@@ -5533,33 +5645,35 @@ function ChannelCard({ channel, state, omni }) {
       "span",
       { className: "oc-card-top" },
       (0, import_react10.createElement)(Tile, { type: channel.type, size: 42 }),
-      (0, import_react10.createElement)("span", { className: "oc-card-who" }, (0, import_react10.createElement)("strong", null, channel.name), (0, import_react10.createElement)("span", null, `${CHANNEL_TYPES[channel.type].label} · ${channel.detail}`)),
+      (0, import_react10.createElement)("span", { className: "oc-card-who" }, (0, import_react10.createElement)("strong", null, channel.name), (0, import_react10.createElement)("span", null, `${typeOf(channel.type).label} · ${channel.detail}`)),
       (0, import_react10.createElement)(StatusPill, { status: channel.status })
     ),
     (0, import_react10.createElement)(
       "span",
       { className: "oc-card-bottom" },
-      (0, import_react10.createElement)(Spark, { week: channel.health.week }),
+      channel.health.week ? (0, import_react10.createElement)(Spark, { week: channel.health.week }) : null,
       (0, import_react10.createElement)(
         "span",
         { className: "oc-card-facts" },
-        (0, import_react10.createElement)("span", null, t("{n} today", { n: channel.health.messagesToday })),
-        (0, import_react10.createElement)("span", null, t("last message {time}", { time: relativeShort(channel.health.lastEventAt) })),
+        channel.health.messagesToday === null ? null : (0, import_react10.createElement)("span", null, t("{n} today", { n: channel.health.messagesToday })),
+        (0, import_react10.createElement)("span", null, channel.health.lastEventAt ? t("last message {time}", { time: relativeShort(channel.health.lastEventAt) }) : t("no messages yet")),
         unread > 0 ? (0, import_react10.createElement)("span", { className: "oc-card-unread" }, t("{n} unread", { n: unread })) : null
       )
     )
   );
 }
+var replyText = (seconds) => seconds === null ? "–" : seconds < 60 ? t("{n} s", { n: seconds }) : t("{n} min", { n: Math.round(seconds / 60) });
 function ChannelDetail({ channel, state, omni }) {
   const [confirming, setConfirming] = (0, import_react10.useState)(false);
   (0, import_react10.useEffect)(() => {
     setConfirming(false);
   }, [channel.id]);
-  const type = CHANNEL_TYPES[channel.type];
+  const type = typeOf(channel.type);
+  const writable = canWrite(state);
   const { health } = channel;
   const firstChat = visibleChats({ ...state, filter: channel.id })[0];
-  const days = [6, 5, 4, 3, 2, 1, 0].map((back) => new Date(Date.now() - back * 864e5).toLocaleDateString([], { weekday: "short" }));
-  const top = Math.max(1, ...health.week);
+  const chats = state.chats.filter((chat) => chat.channelId === channel.id);
+  const troubled = channel.status === "attention" || channel.status === "connecting";
   return (0, import_react10.createElement)(
     import_react10.Fragment,
     null,
@@ -5576,7 +5690,7 @@ function ChannelDetail({ channel, state, omni }) {
       ),
       (0, import_react10.createElement)(StatusPill, { status: channel.status })
     ),
-    channel.status === "attention" || channel.status === "connecting" ? (0, import_react10.createElement)(
+    troubled ? (0, import_react10.createElement)(
       "div",
       { className: "oc-callout oc-callout-static", "data-tone": STATUS[channel.status].tone },
       (0, import_react10.createElement)(
@@ -5585,10 +5699,10 @@ function ChannelDetail({ channel, state, omni }) {
         (0, import_react10.createElement)("strong", null, channel.status === "connecting" ? t("Reconnecting…") : t("This channel stopped working")),
         (0, import_react10.createElement)("span", null, channel.status === "connecting" ? t("Omni is bringing {name} back. Messages sent meanwhile are delivered after.", { name: channel.name }) : channel.problem)
       ),
-      channel.status === "attention" && type.pairing !== "token" ? (0, import_react10.createElement)("button", { type: "button", className: "oc-primary", onClick: () => omni.reconnect(channel.id) }, t("Reconnect")) : null,
+      writable && channel.status === "attention" && type.pairing !== "token" ? (0, import_react10.createElement)("button", { type: "button", className: "oc-primary", onClick: () => omni.reconnect(channel.id) }, t("Reconnect")) : null,
       channel.status === "connecting" ? (0, import_react10.createElement)("span", { className: "oc-spinner", "aria-hidden": true }) : null
     ) : null,
-    channel.status === "attention" && type.pairing === "token" ? (0, import_react10.createElement)(TokenFix, { channel, type, omni }) : null,
+    writable && channel.status === "attention" && type.pairing === "token" ? (0, import_react10.createElement)(TokenFix, { channel, type, omni }) : null,
     (0, import_react10.createElement)(
       "div",
       { className: "oc-actions" },
@@ -5596,30 +5710,20 @@ function ChannelDetail({ channel, state, omni }) {
         omni.setFilter(channel.id);
         omni.openChat(firstChat.id);
       } }, t("Open chats")) : null,
-      channel.status === "paused" ? (0, import_react10.createElement)("button", { type: "button", className: "oc-secondary", onClick: () => omni.resume(channel.id) }, t("Resume")) : channel.status === "connected" ? (0, import_react10.createElement)("button", { type: "button", className: "oc-secondary", onClick: () => omni.pause(channel.id) }, t("Pause")) : null
+      !writable ? null : channel.status === "paused" ? (0, import_react10.createElement)("button", { type: "button", className: "oc-secondary", onClick: () => omni.resume(channel.id) }, t("Resume")) : channel.status === "connected" ? (0, import_react10.createElement)("button", { type: "button", className: "oc-secondary", onClick: () => omni.pause(channel.id) }, t("Pause")) : null
     ),
     (0, import_react10.createElement)("h2", { className: "oc-section" }, t("Health")),
     (0, import_react10.createElement)(
       "div",
       { className: "oc-stats" },
-      (0, import_react10.createElement)(Stat, { value: `${(health.uptime * 100).toFixed(health.uptime === 1 ? 0 : 1)}%`, label: t("online, last 7 days"), tone: health.uptime < 0.95 ? "warn" : void 0 }),
-      (0, import_react10.createElement)(Stat, { value: String(health.messagesToday), label: t("messages today") }),
-      (0, import_react10.createElement)(Stat, { value: health.replyMedianSec === null ? "–" : health.replyMedianSec < 60 ? t("{n} s", { n: health.replyMedianSec }) : t("{n} min", { n: Math.round(health.replyMedianSec / 60) }), label: t("typical reply") }),
-      (0, import_react10.createElement)(Stat, { value: relativeShort(health.lastEventAt), label: t("last message") })
+      health.uptime === null ? (0, import_react10.createElement)(Stat, { value: t(STATUS[channel.status].label), label: t("right now"), tone: channel.status === "connected" ? void 0 : "warn" }) : (0, import_react10.createElement)(Stat, { value: `${(health.uptime * 100).toFixed(health.uptime === 1 ? 0 : 1)}%`, label: t("online, last 7 days"), tone: health.uptime < 0.95 ? "warn" : void 0 }),
+      health.messagesToday === null ? (0, import_react10.createElement)(Stat, { value: String(chats.reduce((sum, chat) => sum + chat.unread, 0)), label: t("unread") }) : (0, import_react10.createElement)(Stat, { value: String(health.messagesToday), label: t("messages today") }),
+      health.replyMedianSec === null && health.lastSeenAt ? (0, import_react10.createElement)(Stat, { value: relativeShort(health.lastSeenAt), label: t("last seen online") }) : (0, import_react10.createElement)(Stat, { value: replyText(health.replyMedianSec), label: t("typical reply") }),
+      (0, import_react10.createElement)(Stat, { value: health.lastEventAt ? relativeShort(health.lastEventAt) : "–", label: t("last message") })
     ),
-    (0, import_react10.createElement)(
-      "div",
-      { className: "oc-chart", role: "img", "aria-label": t("Messages per day, last 7 days: {list}", { list: health.week.join(", ") }) },
-      health.week.map((value, index) => (0, import_react10.createElement)(
-        "span",
-        { key: index, className: "oc-chart-col" },
-        (0, import_react10.createElement)("span", { className: "oc-chart-n" }, value > 0 ? String(value) : ""),
-        (0, import_react10.createElement)("span", { className: "oc-chart-bar", style: { height: `${Math.max(3, value / top * 100)}%` }, "data-zero": value === 0 || void 0 }),
-        (0, import_react10.createElement)("span", { className: "oc-chart-day" }, days[index])
-      ))
-    ),
+    health.week ? (0, import_react10.createElement)(WeekChart, { week: health.week }) : null,
     (0, import_react10.createElement)("h2", { className: "oc-section" }, t("Who answers")),
-    (0, import_react10.createElement)(
+    writable ? (0, import_react10.createElement)(
       "div",
       { className: "oc-seg", role: "radiogroup", "aria-label": t("Who answers") },
       [["Omni", t("Omni answers"), t("Omni replies on its own and hands over when it should.")], ["You", t("You answer"), t("Chats wait for you. Omni only drafts.")]].map(([value, title, text]) => (0, import_react10.createElement)("button", {
@@ -5630,8 +5734,8 @@ function ChannelDetail({ channel, state, omni }) {
         className: "oc-seg-opt",
         onClick: () => omni.setAnsweredBy(channel.id, value)
       }, (0, import_react10.createElement)("strong", null, value === "Omni" ? (0, import_react10.createElement)(OctopusLogo, { size: 16 }) : null, title), (0, import_react10.createElement)("span", null, text)))
-    ),
-    (0, import_react10.createElement)(
+    ) : (0, import_react10.createElement)("div", { className: "oc-seg-opt oc-seg-static" }, channel.answeredBy === "Omni" ? (0, import_react10.createElement)(import_react10.Fragment, null, (0, import_react10.createElement)("strong", null, (0, import_react10.createElement)(OctopusLogo, { size: 16 }), t("Omni answers")), (0, import_react10.createElement)("span", null, t("An agent is assigned to this channel in omni."))) : (0, import_react10.createElement)(import_react10.Fragment, null, (0, import_react10.createElement)("strong", null, t("You answer")), (0, import_react10.createElement)("span", null, t("No agent is assigned to this channel in omni.")))),
+    writable ? (0, import_react10.createElement)(
       "div",
       { className: "oc-danger" },
       (0, import_react10.createElement)("div", null, (0, import_react10.createElement)("strong", null, t("Disconnect {name}", { name: channel.name })), (0, import_react10.createElement)("span", null, t("Omni stops reading and answering here. Its chats leave the sidebar."))),
@@ -5641,7 +5745,22 @@ function ChannelDetail({ channel, state, omni }) {
         onClick: () => confirming ? omni.remove(channel.id) : setConfirming(true),
         onBlur: () => setConfirming(false)
       }, confirming ? t("Click again to disconnect") : t("Disconnect"))
-    )
+    ) : null
+  );
+}
+function WeekChart({ week }) {
+  const days = [6, 5, 4, 3, 2, 1, 0].map((back) => new Date(Date.now() - back * 864e5).toLocaleDateString([], { weekday: "short" }));
+  const top = Math.max(1, ...week);
+  return (0, import_react10.createElement)(
+    "div",
+    { className: "oc-chart", role: "img", "aria-label": t("Messages per day, last 7 days: {list}", { list: week.join(", ") }) },
+    week.map((value, index) => (0, import_react10.createElement)(
+      "span",
+      { key: index, className: "oc-chart-col" },
+      (0, import_react10.createElement)("span", { className: "oc-chart-n" }, value > 0 ? String(value) : ""),
+      (0, import_react10.createElement)("span", { className: "oc-chart-bar", style: { height: `${Math.max(3, value / top * 100)}%` }, "data-zero": value === 0 || void 0 }),
+      (0, import_react10.createElement)("span", { className: "oc-chart-day" }, days[index])
+    ))
   );
 }
 function ConnectFlow({ state, omni }) {
@@ -5707,9 +5826,9 @@ function ConnectFlow({ state, omni }) {
       ) : step === 1 ? (0, import_react10.createElement)(Pairing, { info, token, setToken, onDone: () => omni.showPage({ step: 2 }) }) : (0, import_react10.createElement)(
         import_react10.Fragment,
         null,
-        (0, import_react10.createElement)("h1", null, t("{app} is connected", { app: info.label })),
-        (0, import_react10.createElement)("p", null, t("New chats appear under your Bots. Nothing is sent to your contacts until Omni or you reply.")),
-        (0, import_react10.createElement)("button", { type: "button", className: "oc-primary", onClick: () => omni.finishConnect(type, name.trim()) }, t("See its health"))
+        (0, import_react10.createElement)("h1", null, state.preview ? t("{app} is connected", { app: info.label }) : t("That is the whole flow")),
+        (0, import_react10.createElement)("p", null, state.preview ? t("New chats appear under your Bots. Nothing is sent to your contacts until Omni or you reply.") : t("Connecting from here is switched on after you approve it; this run changed nothing in omni.")),
+        state.preview ? (0, import_react10.createElement)("button", { type: "button", className: "oc-primary", onClick: () => omni.finishConnect(type, name.trim()) }, t("See its health")) : (0, import_react10.createElement)("button", { type: "button", className: "oc-primary", onClick: () => omni.showPage({ view: "overview", type: null, step: 0 }) }, t("Back to channels"))
       )
     )
   );
@@ -5862,6 +5981,7 @@ ${TONES}
 .oc-ava{position:relative;flex:none;display:inline-grid;place-items:center;border-radius:50%;background:hsl(var(--oc-hue) 55% 88%);color:hsl(var(--oc-hue) 45% 30%)}
 body[data-ds-dark-theme] .oc-ava{background:hsl(var(--oc-hue) 30% 26%);color:hsl(var(--oc-hue) 60% 82%)}
 .oc-ava-face{font-weight:600;letter-spacing:.01em}
+.oc-ava-img{position:absolute;inset:0;width:100%;height:100%;border-radius:50%;object-fit:cover}
 .oc-ava-badge{position:absolute;right:-4px;bottom:-4px;display:inline-flex;border-radius:32%;box-shadow:0 0 0 2px var(--bt-sidebar)}
 .oc-chat .oc-ava-badge{box-shadow:0 0 0 2px var(--bt-main)}
 
@@ -6021,6 +6141,12 @@ body[data-ds-dark-theme] .oc-ava{background:hsl(var(--oc-hue) 30% 26%);color:hsl
 .oc-field input:focus{border-color:var(--bt-accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--bt-accent) 16%,transparent)}
 .oc-howto{margin:0;padding-left:20px;font-size:14px;line-height:24px;color:var(--bt-ink-2)}
 .oc-qr{display:flex;flex-direction:column;align-items:center;gap:12px;padding:20px 20px 14px;border-radius:20px;background:#fff;color:#0c2630;border:.5px solid var(--bt-line-2);box-shadow:0 10px 30px -14px rgba(0,0,0,.25)}
+.oc-live-chip{gap:6px;border-style:solid;border-color:color-mix(in srgb,#16a34a 35%,transparent);color:color-mix(in srgb,#16a34a 70%,var(--bt-ink))}
+.oc-live-chip[data-error]{border-color:color-mix(in srgb,#f59e0b 45%,transparent);color:color-mix(in srgb,#d97706 80%,var(--bt-ink))}
+.oc-live-dot{width:6px;height:6px;border-radius:50%;background:currentColor;animation:oc-pulse 2s ease-in-out infinite}
+.oc-compose-info{cursor:default;background:var(--bt-hover);color:var(--bt-ink-2)}
+.oc-seg-static{cursor:default}
+.oc-day{display:inline-flex;align-items:center;gap:8px}
 .oc-qr-wait{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;color:var(--bt-ink-2)}
 .oc-qr .oc-qr-wait{color:#475569}
 .oc-qr-code{position:relative;display:inline-flex}
@@ -8142,7 +8268,7 @@ var FOLDER_CSS = `
 
 // src/client/schedules.js
 var import_react18 = require("react");
-var POLL_MS = 3e4;
+var POLL_MS2 = 3e4;
 var shared = null;
 var listeners = /* @__PURE__ */ new Set();
 function publish(view) {
@@ -8159,7 +8285,7 @@ function useSchedules(actions) {
       if (!stopped) publish(next);
     }).catch(() => {
     }).finally(() => {
-      if (!stopped) timer = setTimeout(load, POLL_MS);
+      if (!stopped) timer = setTimeout(load, POLL_MS2);
     });
     load();
     return () => {
@@ -8685,7 +8811,7 @@ function BotCapabilitiesCard({ bot, roster, actions, run, Card: Card2, SwitchRow
 
 // src/client/memory-panel.js
 var import_react20 = require("react");
-var POLL_MS2 = 1500;
+var POLL_MS3 = 1500;
 var MENU_EXIT_MS2 = 120;
 var counts = /* @__PURE__ */ new Map();
 var countListeners = /* @__PURE__ */ new Set();
@@ -8902,7 +9028,7 @@ function useMemoryView(botId, actions) {
       const next = await actions.memoryView(botId, flags);
       if (!alive.current || ticket !== latest.current) return;
       show(next);
-      if (next.summarizing) timer.current = setTimeout(() => void load({ summarize: flags.summarize || flags.regenerate }), POLL_MS2);
+      if (next.summarizing) timer.current = setTimeout(() => void load({ summarize: flags.summarize || flags.regenerate }), POLL_MS3);
     } catch (failure) {
       if (alive.current && ticket === latest.current) setError(failure?.message ?? String(failure));
     }
@@ -10541,7 +10667,7 @@ var RANGES = [
   { id: "12m", unit: "month", count: 12, stride: 1 }
 ];
 var hourMs = (key) => Date.UTC(Number(key.slice(0, 4)), Number(key.slice(5, 7)) - 1, Number(key.slice(8, 10)), Number(key.slice(11, 13)) || 0);
-var dayKey = (ms) => new Date(ms).toISOString().slice(0, 10);
+var dayKey2 = (ms) => new Date(ms).toISOString().slice(0, 10);
 var hourKey = (ms) => new Date(ms).toISOString().slice(0, 13).replace("T", " ");
 var mondayOf = (ms) => ms - (new Date(ms).getUTCDay() + 6) % 7 * DAY_MS;
 function spanRange(from, to) {
@@ -10559,16 +10685,16 @@ function spanBuckets(range) {
   const buckets = [];
   if (range.unit === "hour" || range.unit === "day") {
     const step = range.unit === "hour" ? HOUR_MS : DAY_MS;
-    for (let start = first; start < end; start += step) buckets.push({ start, end: start + step, key: range.unit === "hour" ? hourKey(start) : dayKey(start) });
+    for (let start = first; start < end; start += step) buckets.push({ start, end: start + step, key: range.unit === "hour" ? hourKey(start) : dayKey2(start) });
   } else if (range.unit === "week") {
     for (let monday = mondayOf(first); monday < end; monday += 7 * DAY_MS) {
-      buckets.push({ start: Math.max(monday, first), end: Math.min(monday + 7 * DAY_MS, end), key: dayKey(monday) });
+      buckets.push({ start: Math.max(monday, first), end: Math.min(monday + 7 * DAY_MS, end), key: dayKey2(monday) });
     }
   } else {
     const year = new Date(first).getUTCFullYear();
     for (let month = new Date(first).getUTCMonth(); Date.UTC(year, month, 1) < end; month += 1) {
       const start = Date.UTC(year, month, 1);
-      buckets.push({ start: Math.max(start, first), end: Math.min(Date.UTC(year, month + 1, 1), end), key: dayKey(start).slice(0, 7) });
+      buckets.push({ start: Math.max(start, first), end: Math.min(Date.UTC(year, month + 1, 1), end), key: dayKey2(start).slice(0, 7) });
     }
   }
   return buckets;
@@ -10590,7 +10716,7 @@ function bucketsOf(range, now) {
     else if (range.unit === "day") start = today - back * DAY_MS;
     else if (range.unit === "week") start = mondayOf(today) - back * 7 * DAY_MS;
     else start = Date.UTC(new Date(end).getUTCFullYear(), new Date(end).getUTCMonth() - back, 1);
-    buckets.push({ start, key: range.unit === "hour" ? hourKey(start) : range.unit === "month" ? dayKey(start).slice(0, 7) : dayKey(start) });
+    buckets.push({ start, key: range.unit === "hour" ? hourKey(start) : range.unit === "month" ? dayKey2(start).slice(0, 7) : dayKey2(start) });
   }
   return buckets;
 }
@@ -10617,7 +10743,7 @@ function summarize(view, range, keep = () => true, seriesOf = () => "all") {
     if (range.unit === "month") return hour.slice(0, 7);
     const day = hour.slice(0, 10);
     let week = weeks.get(day);
-    if (week === void 0) weeks.set(day, week = dayKey(mondayOf(hourMs(day))));
+    if (week === void 0) weeks.set(day, week = dayKey2(mondayOf(hourMs(day))));
     return week;
   };
   const current = buckets.map((bucket) => ({ ...bucket, sum: blank2(), stacks: /* @__PURE__ */ new Map() }));
@@ -10701,8 +10827,8 @@ function tickOf(range, bucket) {
 function titleOf(range, bucket) {
   if (range.unit === "hour") return `${dates({ month: "short", day: "numeric" }).format(bucket.start)} ${hourText(bucket.start)}–${hourText(bucket.start + HOUR_MS)}`;
   if (range.unit === "day") return dates({ month: "long", day: "numeric", weekday: "short" }).format(bucket.start);
-  if (range.unit === "week") return spanText(dayKey(bucket.start), dayKey((bucket.end ?? bucket.start + 7 * DAY_MS) - DAY_MS));
-  if (bucket.end && (new Date(bucket.start).getUTCDate() !== 1 || new Date(bucket.end).getUTCDate() !== 1)) return spanText(dayKey(bucket.start), dayKey(bucket.end - DAY_MS));
+  if (range.unit === "week") return spanText(dayKey2(bucket.start), dayKey2((bucket.end ?? bucket.start + 7 * DAY_MS) - DAY_MS));
+  if (bucket.end && (new Date(bucket.start).getUTCDate() !== 1 || new Date(bucket.end).getUTCDate() !== 1)) return spanText(dayKey2(bucket.start), dayKey2(bucket.end - DAY_MS));
   return dates({ year: "numeric", month: "long" }).format(bucket.start);
 }
 function useTween(value) {
@@ -11000,7 +11126,7 @@ function SpanPicker({ span, today, oldest, active, near, onPick, onClose }) {
     const cells = Array.from({ length: lead }, (_, at) => (0, import_react28.createElement)("span", { key: `b${at}` }));
     for (let day = 1; day <= length; day += 1) {
       const ms = start + (day - 1) * DAY_MS;
-      const key = dayKey(ms);
+      const key = dayKey2(ms);
       const weekday = (lead + day - 1) % 7;
       const flag = (on) => on ? "" : void 0;
       cells.push((0, import_react28.createElement)("button", {
@@ -11031,8 +11157,8 @@ function SpanPicker({ span, today, oldest, active, near, onPick, onClose }) {
     );
   };
   const shortcuts = [
-    ["month", t("This month"), dayKey(thisMonth), today],
-    ["last", t("Last month"), dayKey(addMonths(thisMonth, -1)), dayKey(thisMonth - DAY_MS)],
+    ["month", t("This month"), dayKey2(thisMonth), today],
+    ["last", t("Last month"), dayKey2(addMonths(thisMonth, -1)), dayKey2(thisMonth - DAY_MS)],
     ["year", t("This year"), `${today.slice(0, 4)}-01-01`, today]
   ];
   const count = low === null ? 0 : Math.round((hourMs(high) - hourMs(low)) / DAY_MS) + 1;
@@ -11062,7 +11188,7 @@ function Heat({ view, keep, paint, index }) {
   const [hover, setHover] = (0, import_react28.useState)(null);
   const today = hourMs(`${view.now.slice(0, 10)} 00`);
   const first = mondayOf(today) - (HEAT_WEEKS - 1) * 7 * DAY_MS;
-  const from = dayKey(first);
+  const from = dayKey2(first);
   const daily = /* @__PURE__ */ new Map();
   for (const row of view.rows) {
     const day = row[HOUR2].slice(0, 10);
@@ -11079,7 +11205,7 @@ function Heat({ view, keep, paint, index }) {
     }
     for (let day = 0; day < 7; day += 1) {
       const ms = monday + day * DAY_MS;
-      const value = daily.get(dayKey(ms)) ?? 0;
+      const value = daily.get(dayKey2(ms)) ?? 0;
       const level = value > 0 ? Math.max(1, Math.ceil(4 * Math.sqrt(value / most))) : 0;
       cells.push((0, import_react28.createElement)("span", {
         key: ms,
@@ -11111,7 +11237,7 @@ function Heat({ view, keep, paint, index }) {
         "div",
         { className: "bt-us-tip bt-us-heat-tip", style: tipSide },
         (0, import_react28.createElement)("div", { className: "bt-us-tip-title" }, dates({ month: "long", day: "numeric", weekday: "short" }).format(hover.ms)),
-        (0, import_react28.createElement)("div", { className: "bt-us-tip-total" }, t("{count} tokens", { count: full(daily.get(dayKey(hover.ms)) ?? 0) }))
+        (0, import_react28.createElement)("div", { className: "bt-us-tip-total" }, t("{count} tokens", { count: full(daily.get(dayKey2(hover.ms)) ?? 0) }))
       ) : null
     ),
     (0, import_react28.createElement)(

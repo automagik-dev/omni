@@ -3,18 +3,19 @@ import { ArrowUpIcon, ChevronLeftIcon, ChevronRightIcon, PlusIcon } from './icon
 import { OctopusLogo } from './logo.js'
 import { t } from './i18n.js'
 import { relativeShort } from './text.js'
+import { call } from './api.js'
 import {
-  CHANNEL_TYPES, CHANNELS_PANEL, CHAT_PANEL, STATUS, channelOf, chatOf, healthSummary, omniActions, omniStore, unreadOf, visibleChats,
+  CHANNEL_TYPES, CHANNELS_PANEL, CHAT_PANEL, STATUS, canWrite, channelOf, chatOf, healthSummary, omniActions, omniStore, startLive, typeOf, unreadOf, visibleChats,
 } from './omni-store.js'
 
 // Omni channels inside the Bot surface. The sidebar's Chats section sits under the Bots:
 // one icon per connected channel to filter by, then the chats themselves. A chat opens in
 // the main view like a Bot does (the CHAT_PANEL main panel); the Channels page
 // (CHANNELS_PANEL) connects new channels and shows the health of the connected ones.
-// Sample data only for now: see omni-store.js.
+// Live when the host has an omni URL and key (src/host/omni.js, read-only); sample data otherwise.
 
 const useOmni = () => useSyncExternalStore(omniStore.subscribe, omniStore.getSnapshot, omniStore.getSnapshot)
-const useActions = actions => useMemo(() => omniActions(id => actions.selectPanel(id)), [actions])
+const useActions = actions => useMemo(() => omniActions(id => actions.selectPanel(id), call), [actions])
 const activePanel = usePanel => (usePanel ? usePanel(info => info?.activePanelId ?? null) : null)
 
 // -------------------------------------------------------------------------
@@ -31,6 +32,7 @@ const GLYPHS = {
     h('path', { key: 'b', d: 'M8.8 13.1 16.8 8', ...stroke }),
   ],
   slack: () => [h('path', { key: 'a', d: 'M9.5 4.5v6M14.5 13.5v6M4.5 14.5h6M13.5 9.5h6', ...stroke, strokeWidth: 2.8 })],
+  chat: () => [h('path', { key: 'a', d: 'M5 5.5h14a1.5 1.5 0 0 1 1.5 1.5v8.5A1.5 1.5 0 0 1 19 17H10l-4.5 3.5V17H5a1.5 1.5 0 0 1-1.5-1.5V7A1.5 1.5 0 0 1 5 5.5z', ...stroke })],
   discord: () => [
     h('path', { key: 'a', d: 'M7.6 7.2c2.9-1.2 5.9-1.2 8.8 0 1.5 2.4 2.1 5 1.9 8-1.6 1.2-3.1 1.8-4.2 2l-.8-1.5m-2.6 0-.8 1.5c-1.1-.2-2.6-.8-4.2-2-.2-3 .4-5.6 1.9-8z', ...stroke }),
     h('circle', { key: 'l', cx: 9.6, cy: 12.4, r: 1.3, fill: 'currentColor' }),
@@ -41,8 +43,8 @@ const GLYPHS = {
 export function Tile({ type, size = 40, ring = false }) {
   return h('span', {
     className: `oc-tile${ring ? ' oc-tile-ring' : ''}`,
-    style: { width: size, height: size, borderRadius: Math.round(size * 0.32), background: CHANNEL_TYPES[type].tile },
-  }, h('svg', { width: Math.round(size * 0.62), height: Math.round(size * 0.62), viewBox: '0 0 24 24', 'aria-hidden': true, focusable: 'false' }, GLYPHS[CHANNEL_TYPES[type].glyph]()))
+    style: { width: size, height: size, borderRadius: Math.round(size * 0.32), background: typeOf(type).tile },
+  }, h('svg', { width: Math.round(size * 0.62), height: Math.round(size * 0.62), viewBox: '0 0 24 24', 'aria-hidden': true, focusable: 'false' }, (GLYPHS[typeOf(type).glyph] ?? GLYPHS.chat)()))
 }
 
 const StatusDot = ({ status }) => h('span', { className: 'oc-dot', 'data-tone': STATUS[status].tone, 'aria-hidden': true })
@@ -62,10 +64,19 @@ function ChatAvatar({ chat, channel, size = 36 }) {
   const hue = hueOf(chat.name)
   return h('span', { className: 'oc-ava', style: { width: size, height: size, '--oc-hue': hue } },
     h('span', { className: 'oc-ava-face', style: { fontSize: Math.round(size * 0.34) } }, chat.initials),
+    chat.avatarUrl ? h('img', { className: 'oc-ava-img', src: chat.avatarUrl, alt: '', loading: 'lazy', referrerPolicy: 'no-referrer', onError: event => { event.currentTarget.remove() } }) : null,
     channel ? h('span', { className: 'oc-ava-badge' }, h(Tile, { type: channel.type, size: Math.round(size * 0.4) })) : null)
 }
 
-const PreviewChip = () => h('span', { className: 'oc-preview-chip', title: t('Nothing here reaches a real channel yet.') }, t('Preview · sample data'))
+function PreviewChip() {
+  const source = useOmni().source
+  if (source.kind === 'live') {
+    return h('span', { className: 'oc-preview-chip oc-live-chip', 'data-error': source.error ? true : undefined, title: source.error ?? t('Read from omni every 15 seconds. Sending and connecting are not switched on yet.') },
+      h('span', { className: 'oc-live-dot', 'aria-hidden': true }), source.error ? t('Live · last refresh failed') : t('Live · {origin} · read-only', { origin: source.origin }))
+  }
+  const missing = source.missing?.join(', ')
+  return h('span', { className: 'oc-preview-chip', title: missing ? t('Sample data until DSH has {missing}.', { missing }) : t('Nothing here reaches a real channel yet.') }, t('Preview · sample data'))
+}
 
 // -------------------------------------------------------------------------
 // Sidebar: the Chats section under the Bots
@@ -73,6 +84,7 @@ const PreviewChip = () => h('span', { className: 'oc-preview-chip', title: t('No
 export function ChatsSection({ wide, actions, usePanel }) {
   const state = useOmni()
   const omni = useActions(actions)
+  useEffect(() => { startLive(call) }, [])
   const panel = activePanel(usePanel)
   const chats = visibleChats(state)
   const summary = healthSummary(state)
@@ -106,7 +118,7 @@ export function ChatsSection({ wide, actions, usePanel }) {
       }, h(OctopusLogo, { size: 16 }), unreadOf(state) > 0 ? h('span', { className: 'oc-filter-count' }, String(unreadOf(state))) : null),
       state.channels.map((channel) => {
         const unread = unreadOf(state, channel.id)
-        const label = `${CHANNEL_TYPES[channel.type].label} · ${channel.name}`
+        const label = `${typeOf(channel.type).label} · ${channel.name}`
         return h('button', {
           key: channel.id, type: 'button', className: 'oc-filter', 'aria-pressed': state.filter === channel.id,
           title: `${label} · ${t(STATUS[channel.status].label)}`,
@@ -126,7 +138,7 @@ export function ChatsSection({ wide, actions, usePanel }) {
 }
 
 function ChatRow({ chat, channel, active, onOpen }) {
-  const label = [chat.name, channel ? `${CHANNEL_TYPES[channel.type].label} · ${channel.name}` : '', chat.unread > 0 ? t('{n} unread', { n: chat.unread }) : ''].filter(Boolean).join(', ')
+  const label = [chat.name, channel ? `${typeOf(channel.type).label} · ${channel.name}` : '', chat.unread > 0 ? t('{n} unread', { n: chat.unread }) : ''].filter(Boolean).join(', ')
   return h('button', { type: 'button', className: 'bt-row oc-chat-row', 'aria-label': label, 'aria-current': active ? 'page' : undefined, 'data-chat-id': chat.id, onClick: onOpen },
     h(ChatAvatar, { chat, channel }),
     h('span', { className: 'bt-row-body' },
@@ -139,12 +151,22 @@ function ChatRow({ chat, channel, active, onOpen }) {
 // -------------------------------------------------------------------------
 // Main panel: one chat
 
+const dayKey = at => new Date(at).toDateString()
+function dayLabel(at) {
+  const today = new Date()
+  if (dayKey(at) === today.toDateString()) return t('Today')
+  if (dayKey(at) === new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1).toDateString()) return t('Yesterday')
+  return new Date(at).toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' })
+}
+
 export function ChatPage({ actions }) {
   const state = useOmni()
   const omni = useActions(actions)
   const chat = chatOf(state, state.chatId)
   const channel = chat ? channelOf(state, chat.channelId) : undefined
-  const messages = chat ? state.messages[chat.id] ?? [{ id: 'preview', from: 'them', text: chat.preview, at: chat.at }] : []
+  const loaded = chat ? state.messages[chat.id] : undefined
+  const loading = chat !== undefined && loaded === undefined && !state.preview
+  const messages = chat ? loaded ?? (state.preview ? [{ id: 'preview', from: 'them', text: chat.preview, at: chat.at }] : []) : []
   const scroller = useRef(null)
   const [draft, setDraft] = useState('')
   useLayoutEffect(() => {
@@ -155,8 +177,9 @@ export function ChatPage({ actions }) {
   if (!chat || !channel) {
     return h('div', { className: 'oc-page oc-chat-empty' }, h(OctopusLogo, { size: 40 }), h('p', null, t('Pick a chat under your Bots.')))
   }
-  const type = CHANNEL_TYPES[channel.type]
-  const live = channel.status === 'connected'
+  const type = typeOf(channel.type)
+  const writable = canWrite(state)
+  const live = channel.status === 'connected' && writable
   const send = () => { omni.sendText(chat.id, draft); setDraft('') }
   return h('div', { className: 'oc-page oc-chat' },
     h('header', { className: 'oc-chat-head' },
@@ -170,18 +193,20 @@ export function ChatPage({ actions }) {
       h(PreviewChip)),
     h('div', { ref: scroller, className: 'oc-thread', role: 'log', 'aria-label': t('Conversation with {name}', { name: chat.name }) },
       h('div', { className: 'oc-thread-in' },
-        h('div', { className: 'oc-day' }, t('Today')),
+        loading ? h('div', { className: 'oc-day' }, h('span', { className: 'oc-spinner', 'aria-hidden': true }), t('Loading messages…')) : null,
         messages.map((message, index) => {
           const mine = message.from !== 'them'
-          const first = index === 0 || messages[index - 1].from !== message.from || messages[index - 1].author !== message.author
-          return h('div', { key: message.id, className: `oc-msg oc-msg-${message.from}${first ? ' oc-msg-first' : ''}` },
+          const newDay = index === 0 || dayKey(messages[index - 1].at) !== dayKey(message.at)
+          const first = newDay || messages[index - 1].from !== message.from || messages[index - 1].author !== message.author
+          return h(Fragment, { key: message.id }, newDay ? h('div', { className: 'oc-day' }, dayLabel(message.at)) : null, h('div', { className: `oc-msg oc-msg-${message.from}${first ? ' oc-msg-first' : ''}` },
             first && !mine && message.author ? h('span', { className: 'oc-msg-author' }, message.author) : null,
             first && message.from === 'omni' ? h('span', { className: 'oc-msg-author oc-msg-omni' }, h(OctopusLogo, { size: 12 }), 'Omni') : null,
-            h('div', { className: 'oc-bubble' }, message.text, h('time', null, new Date(message.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))))
+            h('div', { className: 'oc-bubble' }, message.text, h('time', null, new Date(message.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })))))
         }))),
     h('footer', { className: 'oc-compose-wrap' },
-      live ? null : h('button', { type: 'button', className: 'oc-compose-note', onClick: () => omni.openChannels('channel', channel.id) },
-        h(StatusDot, { status: channel.status }), t('{name} is not connected. Fix it to reply.', { name: channel.name })),
+      !writable ? h('div', { className: 'oc-compose-note oc-compose-info' }, t('Read-only for now: replying from here is switched on after you approve this view.'))
+        : live ? null : h('button', { type: 'button', className: 'oc-compose-note', onClick: () => omni.openChannels('channel', channel.id) },
+          h(StatusDot, { status: channel.status }), t('{name} is not connected. Fix it to reply.', { name: channel.name })),
       h('div', { className: 'oc-compose', 'data-off': live ? undefined : true },
         h('textarea', {
           rows: 1, value: draft, disabled: !live, placeholder: t('Reply on {channel}', { channel: type.label }), 'aria-label': t('Reply'),
@@ -218,18 +243,19 @@ function Overview({ state, omni }) {
       h('div', null,
         h('h1', null, t('Channels'), h(PreviewChip)),
         h('p', null, t('Connect the apps people already use to reach you. Omni answers there, and every chat shows up under your Bots.'))),
-      h('button', { type: 'button', className: 'oc-primary', onClick: () => omni.showPage({ view: 'connect', type: null, step: 0 }) }, h(PlusIcon), t('Add channel'))),
+      h('button', { type: 'button', className: 'oc-primary', onClick: () => omni.showPage({ view: 'connect', type: null, step: 0 }) }, h(PlusIcon), state.preview ? t('Add channel') : t('Preview: add channel'))),
     troubled.map(channel => h('button', { key: channel.id, type: 'button', className: 'oc-callout', 'data-tone': STATUS[channel.status].tone, onClick: () => omni.showPage({ view: 'channel', channelId: channel.id }) },
       h(Tile, { type: channel.type, size: 36 }),
       h('span', { className: 'oc-callout-text' },
-        h('strong', null, t('{name} needs attention', { name: `${CHANNEL_TYPES[channel.type].label} · ${channel.name}` })),
+        h('strong', null, t('{name} needs attention', { name: `${typeOf(channel.type).label} · ${channel.name}` })),
         h('span', null, channel.problem ?? t(STATUS[channel.status].label))),
       h('span', { className: 'oc-callout-go' }, t('Fix now'), h(ChevronRightIcon)))),
     h('div', { className: 'oc-stats' },
       h(Stat, { value: `${summary.connected}/${summary.total}`, label: t('connected') }),
       h(Stat, { value: String(summary.attention), label: t('need attention'), tone: summary.attention > 0 ? 'warn' : undefined }),
-      h(Stat, { value: String(summary.messagesToday), label: t('messages today') }),
-      h(Stat, { value: median === null ? '–' : median < 60 ? t('{n} s', { n: median }) : t('{n} min', { n: Math.round(median / 60) }), label: t('typical reply') })),
+      state.preview ? h(Stat, { value: String(summary.messagesToday), label: t('messages today') }) : h(Stat, { value: String(state.chats.length), label: t('recent chats') }),
+      state.preview ? h(Stat, { value: median === null ? '–' : median < 60 ? t('{n} s', { n: median }) : t('{n} min', { n: Math.round(median / 60) }), label: t('typical reply') })
+        : h(Stat, { value: String(unreadOf(state)), label: t('unread') })),
     h('h2', { className: 'oc-section' }, t('Your channels')),
     state.channels.length === 0
       ? h('div', { className: 'oc-empty' }, t('No channels yet. Add one to start.'))
@@ -248,24 +274,27 @@ function ChannelCard({ channel, state, omni }) {
   return h('button', { type: 'button', className: 'oc-card', onClick: () => omni.showPage({ view: 'channel', channelId: channel.id }) },
     h('span', { className: 'oc-card-top' },
       h(Tile, { type: channel.type, size: 42 }),
-      h('span', { className: 'oc-card-who' }, h('strong', null, channel.name), h('span', null, `${CHANNEL_TYPES[channel.type].label} · ${channel.detail}`)),
+      h('span', { className: 'oc-card-who' }, h('strong', null, channel.name), h('span', null, `${typeOf(channel.type).label} · ${channel.detail}`)),
       h(StatusPill, { status: channel.status })),
     h('span', { className: 'oc-card-bottom' },
-      h(Spark, { week: channel.health.week }),
+      channel.health.week ? h(Spark, { week: channel.health.week }) : null,
       h('span', { className: 'oc-card-facts' },
-        h('span', null, t('{n} today', { n: channel.health.messagesToday })),
-        h('span', null, t('last message {time}', { time: relativeShort(channel.health.lastEventAt) })),
+        channel.health.messagesToday === null ? null : h('span', null, t('{n} today', { n: channel.health.messagesToday })),
+        h('span', null, channel.health.lastEventAt ? t('last message {time}', { time: relativeShort(channel.health.lastEventAt) }) : t('no messages yet')),
         unread > 0 ? h('span', { className: 'oc-card-unread' }, t('{n} unread', { n: unread })) : null)))
 }
+
+const replyText = seconds => (seconds === null ? '–' : seconds < 60 ? t('{n} s', { n: seconds }) : t('{n} min', { n: Math.round(seconds / 60) }))
 
 function ChannelDetail({ channel, state, omni }) {
   const [confirming, setConfirming] = useState(false)
   useEffect(() => { setConfirming(false) }, [channel.id])
-  const type = CHANNEL_TYPES[channel.type]
+  const type = typeOf(channel.type)
+  const writable = canWrite(state)
   const { health } = channel
   const firstChat = visibleChats({ ...state, filter: channel.id })[0]
-  const days = [6, 5, 4, 3, 2, 1, 0].map(back => new Date(Date.now() - back * 86_400_000).toLocaleDateString([], { weekday: 'short' }))
-  const top = Math.max(1, ...health.week)
+  const chats = state.chats.filter(chat => chat.channelId === channel.id)
+  const troubled = channel.status === 'attention' || channel.status === 'connecting'
   return h(Fragment, null,
     h('button', { type: 'button', className: 'oc-back', onClick: () => omni.showPage({ view: 'overview', channelId: null }) }, h(ChevronLeftIcon), t('Channels')),
     h('header', { className: 'oc-detail-head' },
@@ -274,44 +303,62 @@ function ChannelDetail({ channel, state, omni }) {
         h('h1', null, channel.name),
         h('p', null, `${type.label} · ${channel.detail}`)),
       h(StatusPill, { status: channel.status })),
-    channel.status === 'attention' || channel.status === 'connecting'
+    troubled
       ? h('div', { className: 'oc-callout oc-callout-static', 'data-tone': STATUS[channel.status].tone },
         h('span', { className: 'oc-callout-text' },
           h('strong', null, channel.status === 'connecting' ? t('Reconnecting…') : t('This channel stopped working')),
           h('span', null, channel.status === 'connecting' ? t('Omni is bringing {name} back. Messages sent meanwhile are delivered after.', { name: channel.name }) : channel.problem)),
-        channel.status === 'attention' && type.pairing !== 'token' ? h('button', { type: 'button', className: 'oc-primary', onClick: () => omni.reconnect(channel.id) }, t('Reconnect')) : null,
+        writable && channel.status === 'attention' && type.pairing !== 'token' ? h('button', { type: 'button', className: 'oc-primary', onClick: () => omni.reconnect(channel.id) }, t('Reconnect')) : null,
         channel.status === 'connecting' ? h('span', { className: 'oc-spinner', 'aria-hidden': true }) : null)
       : null,
-    channel.status === 'attention' && type.pairing === 'token' ? h(TokenFix, { channel, type, omni }) : null,
+    writable && channel.status === 'attention' && type.pairing === 'token' ? h(TokenFix, { channel, type, omni }) : null,
     h('div', { className: 'oc-actions' },
       firstChat ? h('button', { type: 'button', className: 'oc-secondary', onClick: () => { omni.setFilter(channel.id); omni.openChat(firstChat.id) } }, t('Open chats')) : null,
-      channel.status === 'paused'
+      !writable ? null : channel.status === 'paused'
         ? h('button', { type: 'button', className: 'oc-secondary', onClick: () => omni.resume(channel.id) }, t('Resume'))
         : channel.status === 'connected' ? h('button', { type: 'button', className: 'oc-secondary', onClick: () => omni.pause(channel.id) }, t('Pause')) : null),
     h('h2', { className: 'oc-section' }, t('Health')),
     h('div', { className: 'oc-stats' },
-      h(Stat, { value: `${(health.uptime * 100).toFixed(health.uptime === 1 ? 0 : 1)}%`, label: t('online, last 7 days'), tone: health.uptime < 0.95 ? 'warn' : undefined }),
-      h(Stat, { value: String(health.messagesToday), label: t('messages today') }),
-      h(Stat, { value: health.replyMedianSec === null ? '–' : health.replyMedianSec < 60 ? t('{n} s', { n: health.replyMedianSec }) : t('{n} min', { n: Math.round(health.replyMedianSec / 60) }), label: t('typical reply') }),
-      h(Stat, { value: relativeShort(health.lastEventAt), label: t('last message') })),
-    h('div', { className: 'oc-chart', role: 'img', 'aria-label': t('Messages per day, last 7 days: {list}', { list: health.week.join(', ') }) },
-      health.week.map((value, index) => h('span', { key: index, className: 'oc-chart-col' },
-        h('span', { className: 'oc-chart-n' }, value > 0 ? String(value) : ''),
-        h('span', { className: 'oc-chart-bar', style: { height: `${Math.max(3, (value / top) * 100)}%` }, 'data-zero': value === 0 || undefined }),
-        h('span', { className: 'oc-chart-day' }, days[index])))),
+      health.uptime === null
+        ? h(Stat, { value: t(STATUS[channel.status].label), label: t('right now'), tone: channel.status === 'connected' ? undefined : 'warn' })
+        : h(Stat, { value: `${(health.uptime * 100).toFixed(health.uptime === 1 ? 0 : 1)}%`, label: t('online, last 7 days'), tone: health.uptime < 0.95 ? 'warn' : undefined }),
+      health.messagesToday === null
+        ? h(Stat, { value: String(chats.reduce((sum, chat) => sum + chat.unread, 0)), label: t('unread') })
+        : h(Stat, { value: String(health.messagesToday), label: t('messages today') }),
+      health.replyMedianSec === null && health.lastSeenAt
+        ? h(Stat, { value: relativeShort(health.lastSeenAt), label: t('last seen online') })
+        : h(Stat, { value: replyText(health.replyMedianSec), label: t('typical reply') }),
+      h(Stat, { value: health.lastEventAt ? relativeShort(health.lastEventAt) : '–', label: t('last message') })),
+    health.week ? h(WeekChart, { week: health.week }) : null,
     h('h2', { className: 'oc-section' }, t('Who answers')),
-    h('div', { className: 'oc-seg', role: 'radiogroup', 'aria-label': t('Who answers') },
-      [['Omni', t('Omni answers'), t('Omni replies on its own and hands over when it should.')], ['You', t('You answer'), t('Chats wait for you. Omni only drafts.')]].map(([value, title, text]) => h('button', {
-        key: value, type: 'button', role: 'radio', 'aria-checked': channel.answeredBy === value, className: 'oc-seg-opt',
-        onClick: () => omni.setAnsweredBy(channel.id, value),
-      }, h('strong', null, value === 'Omni' ? h(OctopusLogo, { size: 16 }) : null, title), h('span', null, text)))),
-    h('div', { className: 'oc-danger' },
-      h('div', null, h('strong', null, t('Disconnect {name}', { name: channel.name })), h('span', null, t('Omni stops reading and answering here. Its chats leave the sidebar.'))),
-      h('button', {
-        type: 'button', className: confirming ? 'oc-danger-go oc-danger-armed' : 'oc-danger-go',
-        onClick: () => (confirming ? omni.remove(channel.id) : setConfirming(true)),
-        onBlur: () => setConfirming(false),
-      }, confirming ? t('Click again to disconnect') : t('Disconnect'))))
+    writable
+      ? h('div', { className: 'oc-seg', role: 'radiogroup', 'aria-label': t('Who answers') },
+        [['Omni', t('Omni answers'), t('Omni replies on its own and hands over when it should.')], ['You', t('You answer'), t('Chats wait for you. Omni only drafts.')]].map(([value, title, text]) => h('button', {
+          key: value, type: 'button', role: 'radio', 'aria-checked': channel.answeredBy === value, className: 'oc-seg-opt',
+          onClick: () => omni.setAnsweredBy(channel.id, value),
+        }, h('strong', null, value === 'Omni' ? h(OctopusLogo, { size: 16 }) : null, title), h('span', null, text))))
+      : h('div', { className: 'oc-seg-opt oc-seg-static' }, channel.answeredBy === 'Omni'
+        ? h(Fragment, null, h('strong', null, h(OctopusLogo, { size: 16 }), t('Omni answers')), h('span', null, t('An agent is assigned to this channel in omni.')))
+        : h(Fragment, null, h('strong', null, t('You answer')), h('span', null, t('No agent is assigned to this channel in omni.')))),
+    writable
+      ? h('div', { className: 'oc-danger' },
+        h('div', null, h('strong', null, t('Disconnect {name}', { name: channel.name })), h('span', null, t('Omni stops reading and answering here. Its chats leave the sidebar.'))),
+        h('button', {
+          type: 'button', className: confirming ? 'oc-danger-go oc-danger-armed' : 'oc-danger-go',
+          onClick: () => (confirming ? omni.remove(channel.id) : setConfirming(true)),
+          onBlur: () => setConfirming(false),
+        }, confirming ? t('Click again to disconnect') : t('Disconnect')))
+      : null)
+}
+
+function WeekChart({ week }) {
+  const days = [6, 5, 4, 3, 2, 1, 0].map(back => new Date(Date.now() - back * 86_400_000).toLocaleDateString([], { weekday: 'short' }))
+  const top = Math.max(1, ...week)
+  return h('div', { className: 'oc-chart', role: 'img', 'aria-label': t('Messages per day, last 7 days: {list}', { list: week.join(', ') }) },
+    week.map((value, index) => h('span', { key: index, className: 'oc-chart-col' },
+      h('span', { className: 'oc-chart-n' }, value > 0 ? String(value) : ''),
+      h('span', { className: 'oc-chart-bar', style: { height: `${Math.max(3, (value / top) * 100)}%` }, 'data-zero': value === 0 || undefined }),
+      h('span', { className: 'oc-chart-day' }, days[index]))))
 }
 
 // Choose a channel type, then pair it the way that channel pairs: a QR code, a token,
@@ -349,9 +396,11 @@ function ConnectFlow({ state, omni }) {
         h('button', { type: 'button', className: 'oc-primary', onClick: () => omni.showPage({ step: 1 }) }, t('Continue')))
         : step === 1 ? h(Pairing, { info, token, setToken, onDone: () => omni.showPage({ step: 2 }) })
           : h(Fragment, null,
-            h('h1', null, t('{app} is connected', { app: info.label })),
-            h('p', null, t('New chats appear under your Bots. Nothing is sent to your contacts until Omni or you reply.')),
-            h('button', { type: 'button', className: 'oc-primary', onClick: () => omni.finishConnect(type, name.trim()) }, t('See its health')))))
+            h('h1', null, state.preview ? t('{app} is connected', { app: info.label }) : t('That is the whole flow')),
+            h('p', null, state.preview ? t('New chats appear under your Bots. Nothing is sent to your contacts until Omni or you reply.') : t('Connecting from here is switched on after you approve it; this run changed nothing in omni.')),
+            state.preview
+              ? h('button', { type: 'button', className: 'oc-primary', onClick: () => omni.finishConnect(type, name.trim()) }, t('See its health'))
+              : h('button', { type: 'button', className: 'oc-primary', onClick: () => omni.showPage({ view: 'overview', type: null, step: 0 }) }, t('Back to channels')))))
 }
 
 function Pairing({ info, token, setToken, onDone }) {
@@ -463,6 +512,7 @@ ${TONES}
 .oc-ava{position:relative;flex:none;display:inline-grid;place-items:center;border-radius:50%;background:hsl(var(--oc-hue) 55% 88%);color:hsl(var(--oc-hue) 45% 30%)}
 body[data-ds-dark-theme] .oc-ava{background:hsl(var(--oc-hue) 30% 26%);color:hsl(var(--oc-hue) 60% 82%)}
 .oc-ava-face{font-weight:600;letter-spacing:.01em}
+.oc-ava-img{position:absolute;inset:0;width:100%;height:100%;border-radius:50%;object-fit:cover}
 .oc-ava-badge{position:absolute;right:-4px;bottom:-4px;display:inline-flex;border-radius:32%;box-shadow:0 0 0 2px var(--bt-sidebar)}
 .oc-chat .oc-ava-badge{box-shadow:0 0 0 2px var(--bt-main)}
 
@@ -622,6 +672,12 @@ body[data-ds-dark-theme] .oc-ava{background:hsl(var(--oc-hue) 30% 26%);color:hsl
 .oc-field input:focus{border-color:var(--bt-accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--bt-accent) 16%,transparent)}
 .oc-howto{margin:0;padding-left:20px;font-size:14px;line-height:24px;color:var(--bt-ink-2)}
 .oc-qr{display:flex;flex-direction:column;align-items:center;gap:12px;padding:20px 20px 14px;border-radius:20px;background:#fff;color:#0c2630;border:.5px solid var(--bt-line-2);box-shadow:0 10px 30px -14px rgba(0,0,0,.25)}
+.oc-live-chip{gap:6px;border-style:solid;border-color:color-mix(in srgb,#16a34a 35%,transparent);color:color-mix(in srgb,#16a34a 70%,var(--bt-ink))}
+.oc-live-chip[data-error]{border-color:color-mix(in srgb,#f59e0b 45%,transparent);color:color-mix(in srgb,#d97706 80%,var(--bt-ink))}
+.oc-live-dot{width:6px;height:6px;border-radius:50%;background:currentColor;animation:oc-pulse 2s ease-in-out infinite}
+.oc-compose-info{cursor:default;background:var(--bt-hover);color:var(--bt-ink-2)}
+.oc-seg-static{cursor:default}
+.oc-day{display:inline-flex;align-items:center;gap:8px}
 .oc-qr-wait{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;color:var(--bt-ink-2)}
 .oc-qr .oc-qr-wait{color:#475569}
 .oc-qr-code{position:relative;display:inline-flex}
