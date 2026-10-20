@@ -6,16 +6,20 @@
 //
 // Options: --port <dsh port> (3080), --gate-port <port> (3081), --profile <name> (web),
 // --allow <login,...> (tailscale mode; default: the login that owns this node),
+// --allow-device <name,...> (tagged devices, which carry no login; their tailnet machine names),
 // --log <file> (~/.dsh/logs/omni-ui-<profile>.log).
 //
 // In tailscale mode DSH still listens on loopback. `tailscale serve` terminates HTTPS on the
 // tailnet and forwards to a gate in this process, which admits a request only when the
 // Tailscale-User-Login header serve stamps on it names an allowed login. Serve overwrites that
 // header, so a client cannot claim someone else's login, and a request from a tagged device
-// carries none. Everyone else on the tailnet gets 403 before DSH sees anything, so the launch
+// carries none, so a tagged device of yours (say tag:dev-box) is admitted by its machine name
+// instead: the gate asks `tailscale whois` about the source address serve forwards (serve
+// overwrites that header too), and never by tag, which other people's devices may share.
+// Everyone else on the tailnet gets 403 before DSH sees anything, so the launch
 // token is no longer the only lock on a DSH whose agents run shell on this host.
 // Ctrl-C (or SIGTERM) stops DSH and removes the serve mapping.
-import { execFileSync, spawn } from 'node:child_process'
+import { execFile, execFileSync, spawn } from 'node:child_process'
 import { createWriteStream, mkdirSync } from 'node:fs'
 import { createServer, request } from 'node:http'
 import { connect } from 'node:net'
@@ -31,7 +35,7 @@ if (mode !== 'local' && mode !== 'tailscale') {
   console.error('usage: node dev/omni-ui.mjs local|tailscale [--port 3080] [--gate-port 3081] [--profile web] [--allow login,...] [--log file]')
   process.exit(2)
 }
-const options = { port: '3080', 'gate-port': '3081', profile: 'web', allow: '', log: '' }
+const options = { port: '3080', 'gate-port': '3081', profile: 'web', allow: '', 'allow-device': '', log: '' }
 for (let i = 0; i < rest.length; i += 2) {
   const key = rest[i]?.replace(/^--/, '')
   if (!(key in options) || rest[i + 1] === undefined) {
@@ -60,13 +64,35 @@ function tailnetSelf() {
   }
 }
 
+// The machine name of a tailnet address, asked of tailscale once a minute at most.
+const WHOIS_MS = 60_000
+const whoisCache = new Map()
+function machineOf(address) {
+  const hit = whoisCache.get(address)
+  if (hit && Date.now() - hit.at < WHOIS_MS) return hit.name
+  const name = new Promise((resolve) => {
+    execFile('tailscale', ['whois', '--json', address], { timeout: 5000 }, (error, stdout) => {
+      try { resolve(error ? null : JSON.parse(stdout).Node.Name.replace(/\..*$/, '').toLowerCase()) } catch { resolve(null) }
+    })
+  })
+  whoisCache.set(address, { at: Date.now(), name })
+  return name
+}
+
 // The gate: a plain reverse proxy to DSH that refuses every request whose tailnet login is not
-// on the allow list. WebSocket upgrades are spliced through as raw sockets after the same check.
-function startGate(allow) {
-  const admitted = req => allow.has(req.headers['tailscale-user-login'])
-  const refuse = req => say(`refused ${req.headers['tailscale-user-login'] ?? 'a request without a tailnet login'} from ${req.headers['x-forwarded-for'] ?? 'loopback'}: ${req.method} ${req.url.split('?')[0]}`)
-  const server = createServer((req, res) => {
-    if (!admitted(req)) {
+// on the allow list, unless it comes from an allowed device. WebSocket upgrades are spliced
+// through as raw sockets after the same check.
+function startGate(allow, devices) {
+  // Serve sets X-Forwarded-For to the real source; the last entry is serve's own.
+  const sourceOf = req => String(req.headers['x-forwarded-for'] ?? '').split(',').at(-1).trim()
+  const admitted = async (req) => {
+    if (allow.has(req.headers['tailscale-user-login'])) return true
+    const source = sourceOf(req)
+    return devices.size > 0 && source !== '' && devices.has(await machineOf(source))
+  }
+  const refuse = req => say(`refused ${req.headers['tailscale-user-login'] ?? 'a request without a tailnet login'} from ${sourceOf(req) || 'loopback'}: ${req.method} ${req.url.split('?')[0]}`)
+  const server = createServer(async (req, res) => {
+    if (!await admitted(req)) {
       refuse(req)
       res.writeHead(403, { 'content-type': 'text/plain' })
       res.end('This Omni UI is private to its owner.\n')
@@ -82,8 +108,8 @@ function startGate(allow) {
     })
     req.pipe(upstream)
   })
-  server.on('upgrade', (req, socket, head) => {
-    if (!admitted(req)) {
+  server.on('upgrade', async (req, socket, head) => {
+    if (!await admitted(req)) {
       refuse(req)
       socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n')
       return
@@ -130,11 +156,12 @@ if (mode === 'tailscale') {
     console.error('no allowed login: this node has no owner login (tagged node?); pass --allow <login>')
     process.exit(2)
   }
-  gate = await startGate(allow)
+  const devices = new Set(options['allow-device'].split(',').map(name => name.trim().toLowerCase()).filter(Boolean))
+  gate = await startGate(allow, devices)
   const scheme = serveOn()
   publicOrigin = `${scheme}://${self.host}:${port}`
   dshArgs.push('--trusted-host', `${self.host}:${port}`)
-  say(`tailnet: ${publicOrigin} (allowed: ${[...allow].join(', ')})`)
+  say(`tailnet: ${publicOrigin} (allowed: ${[...allow, ...[...devices].map(name => `device ${name}`)].join(', ')})`)
 } else {
   serveOff()
   say('local only: no tailnet mapping')
