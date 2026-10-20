@@ -109,18 +109,24 @@ export function launchPlan(
   return { command: join(extracted, 'squashfs-root', 'AppRun'), args: [] };
 }
 
-/** Unpack an AppImage once (it unpacks itself, no FUSE needed); a finished unpack is reused. */
+/**
+ * Unpack an AppImage once (it unpacks itself, no FUSE needed). The unpack records the
+ * AppImage's SHA-256 and is reused only for that exact file: a rebuilt or re-released
+ * AppImage under the same name is unpacked again.
+ */
 function ensureExtracted(file: string, dir: string): void {
-  if (existsSync(join(dir, '.complete'))) return;
+  const marker = join(dir, '.complete');
+  const digest = sha256Of(readFileSync(file));
+  if (existsSync(marker) && readFileSync(marker, 'utf8').trim() === digest) return;
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
   chmodSync(file, 0o755);
-  output.info('Unpacking the app (once)…');
+  output.info('Unpacking the app (once per build)…');
   const result = spawnSync(file, ['--appimage-extract'], { cwd: dir, stdio: 'ignore' });
   if (result.status !== 0 || !existsSync(join(dir, 'squashfs-root', 'AppRun'))) {
     throw new Error(`Could not unpack ${file} (exit ${result.status ?? result.signal}).`);
   }
-  writeFileSync(join(dir, '.complete'), `${file}\n`);
+  writeFileSync(marker, `${digest}\n`);
 }
 
 async function fetchJson(url: string): Promise<unknown> {
