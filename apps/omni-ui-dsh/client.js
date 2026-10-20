@@ -1386,6 +1386,45 @@ var call = async (endpoint, payload, signal) => {
   return result.value;
 };
 
+// src/client/logo.js
+var import_react = require("react");
+var MARK = "M61.6 6.7L118.4 103.6L98.6 103.6L61.6 41.8L24.6 103.6L4.4 103.6ZM137.9 55.1L188.2 145.3L84.9 145.3L94.8 127.8L158.1 127.8L127.6 72.7ZM65 93.6L75 111.9L43.7 167.8L107.7 167.8L117.7 185.5L13.6 185.5Z";
+var MARK_BOX = 192.6;
+var WORD = "M69.2 60.5C69.2 63.6 68.2 66.3 66 68.5C63.8 70.7 61.2 71.8 58 71.8C54.8 71.8 52.2 70.7 50 68.5C47.8 66.3 46.7 63.6 46.7 60.5C46.7 57.3 47.8 54.6 50 52.4C52.2 50.2 54.8 49.1 58 49.1C61.2 49.1 63.8 50.2 66 52.4C68.2 54.6 69.2 57.3 69.2 60.5ZM115.9 60C115.9 67.6 114.7 74.9 112.3 82.1C109.9 89.3 106.3 95.7 101.4 101.5C96.6 107.3 90.6 111.9 83.4 115.3C76.2 118.7 67.7 120.4 58.1 120.4C48.4 120.4 39.9 118.7 32.6 115.3C25.3 111.9 19.3 107.3 14.4 101.5C9.6 95.7 6 89.3 3.6 82.1C1.2 74.9 0 67.6 0 60C0 52.5 1.2 45.2 3.6 38.1C6 31 9.6 24.5 14.4 18.8C19.3 13.1 25.3 8.5 32.6 5.1C39.9 1.7 48.4 0 58.1 0C67.7 0 76.2 1.7 83.4 5.1C90.6 8.5 96.6 13.1 101.4 18.8C106.3 24.5 109.9 31 112.3 38.1C114.7 45.2 115.9 52.5 115.9 60ZM93.3 60.5C93.3 55.6 92.6 50.8 91 46.1C89.5 41.5 87.3 37.2 84.4 33.5C81.5 29.7 77.9 26.7 73.5 24.5C69 22.3 63.9 21.2 58.1 21.2C52.2 21.2 47 22.3 42.6 24.5C38.2 26.7 34.5 29.7 31.5 33.5C28.6 37.2 26.4 41.5 24.9 46.1C23.5 50.8 22.7 55.6 22.7 60.5C22.7 65.3 23.5 70 24.9 74.7C26.4 79.3 28.6 83.4 31.5 87.2C34.5 90.9 38.2 93.8 42.6 96C47 98.2 52.2 99.3 58.1 99.3C63.9 99.3 69 98.2 73.5 96C77.9 93.8 81.5 90.9 84.4 87.2C87.3 83.4 89.5 79.3 91 74.7C92.6 70 93.3 65.3 93.3 60.5ZM93.3 60.5M229.4 91.4L229.4 53.1L198.7 114.7C198.5 115.3 198 115.6 197.3 115.6L178.8 115.6C178 115.6 177.5 115.3 177.3 114.7L144.6 51.5L144.6 119C144.6 120 144.1 120.4 143 120.4L123.1 120.4C122.1 120.4 121.6 120 121.6 119L121.6 1.3C121.6 0.4 122.1 0 123.1 0L143.3 0C144.1 0 144.6 0.3 144.8 0.9L188 89.1L229.1 0.9C229.5 0.3 230 0 230.7 0L250.6 0C251.7 0 252.2 0.4 252.2 1.3L252.2 91.4ZM229.4 91.4M358.5 0C359.6 0 360.2 0.4 360.2 1.3L360.2 119C360.2 120 359.6 120.4 358.5 120.4L338.6 120.4C338.5 120.4 338.3 120.4 338 120.3C337.6 120.2 337.4 120.1 337.3 120L281.9 40.6L281.9 91.5L258.9 91.5L258.9 1.3C258.9 0.4 259.4 0 260.4 0L280.4 0C280.6 0 280.8 0 281.1 0.1C281.4 0.1 281.6 0.2 281.7 0.5L337.3 79.8L337.3 1.3C337.3 0.4 337.9 0 339.1 0ZM358.5 0M414.3 99.8C415.4 99.8 416 100.2 416 101.1L416 119C416 120 415.4 120.4 414.3 120.4L366.9 120.4C365.8 120.4 365.3 120 365.3 119L365.3 101.1C365.3 100.2 365.8 99.8 366.9 99.8L379.3 99.8L379.3 0L402.3 0L402.3 99.8ZM414.3 99.8";
+var WORD_BOX = [416, 120.4];
+var SHIFT = 4.3;
+var CYAN = "#00ffff";
+var MAGENTA = "#ff00ff";
+var GLITCH_MIN = 16;
+var layers = (d, glitch) => [
+  glitch ? (0, import_react.createElement)("path", { key: "c", d, fill: CYAN, transform: `translate(-${SHIFT} 0)` }) : null,
+  glitch ? (0, import_react.createElement)("path", { key: "m", d, fill: MAGENTA, transform: `translate(${SHIFT} 0)` }) : null,
+  (0, import_react.createElement)("path", { key: "top", d, fill: "currentColor" })
+];
+function OmniMark({ size = 16 }) {
+  return (0, import_react.createElement)("svg", { className: "omni-logo", width: size, height: size, viewBox: `0 0 ${MARK_BOX} ${MARK_BOX}`, "aria-hidden": true, focusable: "false" }, layers(MARK, size >= GLITCH_MIN));
+}
+function OmniWordmark({ height = 14 }) {
+  const [w, hgt] = WORD_BOX;
+  return (0, import_react.createElement)("svg", { className: "omni-logo", height, width: Math.round(height * (w + 2 * SHIFT) / hgt), viewBox: `${-SHIFT} 0 ${w + 2 * SHIFT} ${hgt}`, role: "img", "aria-label": "Omni", focusable: "false" }, layers(WORD, true));
+}
+var markSvg = (top) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${MARK_BOX} ${MARK_BOX}"><path d="${MARK}" fill="${CYAN}" transform="translate(-${SHIFT} 0)"/><path d="${MARK}" fill="${MAGENTA}" transform="translate(${SHIFT} 0)"/><path d="${MARK}" fill="${top}"/></svg>`;
+var iconHref = (top) => `data:image/svg+xml,${encodeURIComponent(markSvg(top))}`;
+function installFavicon() {
+  const links = [...document.querySelectorAll('link[rel~="icon"]')];
+  const saved = links.map((link) => [link, link.getAttribute("href")]);
+  for (const link of links) link.setAttribute("href", iconHref(/dark/.test(link.media ?? "") ? "#ffffff" : "#141414"));
+  if (links.length === 0) {
+    const link = Object.assign(document.createElement("link"), { rel: "icon", type: "image/svg+xml", href: iconHref("#141414") });
+    document.head.append(link);
+    return () => link.remove();
+  }
+  return () => {
+    for (const [link, href] of saved) if (href === null) link.removeAttribute("href");
+    else link.setAttribute("href", href);
+  };
+}
+
 // src/client/inks.js
 var INKS = {
   deepseek: ["#0F9D8F", "#2DD4BF"],
@@ -1478,12 +1517,12 @@ function lookOf(bot) {
 }
 var SHAPES = {};
 for (const [id, character] of Object.entries(CHARACTERS)) {
-  const layers = [
+  const layers2 = [
     ...(character.paints ?? []).map(([d, fill2, opacity]) => `<path d="${d}" fill="${fill2}" fill-opacity="${opacity}"/>`),
     `<path d="${character.shade}" fill="#000" fill-opacity=".14"/>`,
     `<path d="${character.light}" fill="#fff" fill-opacity=".16"/>`
   ].join("");
-  SHAPES[id] = { label: character.label ?? id[0].toUpperCase() + id.slice(1), size: 100, path: character.body, layers, eyes: character.eyes };
+  SHAPES[id] = { label: character.label ?? id[0].toUpperCase() + id.slice(1), size: 100, path: character.body, layers: layers2, eyes: character.eyes };
 }
 var hasShape = (id) => typeof id === "string" && Object.hasOwn(SHAPES, id);
 var shapeId = (id) => hasShape(id) ? id : FALLBACK_SHAPE;
@@ -1925,7 +1964,7 @@ function usageOf(list, ids) {
 }
 
 // src/client/motion.js
-var import_react = require("react");
+var import_react2 = require("react");
 var reducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
 function springEasing(stiffness, damping) {
   const w0 = Math.sqrt(stiffness);
@@ -1998,10 +2037,10 @@ function liveSprings(apply2) {
 }
 var CHOSEN = '[aria-pressed="true"],[aria-selected="true"],[aria-current="page"]';
 function useGlide(key, { axis = "x", selector = CHOSEN, lead = SPRING_LEAD, trail = SPRING_TRAIL, box: given } = {}) {
-  const ownBox = (0, import_react.useRef)(null);
+  const ownBox = (0, import_react2.useRef)(null);
   const box = given ?? ownBox;
-  const thumb = (0, import_react.useRef)(null);
-  const own = (0, import_react.useRef)(null);
+  const thumb = (0, import_react2.useRef)(null);
+  const own = (0, import_react2.useRef)(null);
   if (own.current === null) {
     own.current = {
       key: void 0,
@@ -2035,7 +2074,7 @@ function useGlide(key, { axis = "x", selector = CHOSEN, lead = SPRING_LEAD, trai
     springs.set({ start, end }, forward ? { start: trail, end: lead } : { start: lead, end: trail }, jump || hidden || before === null || reducedMotion());
     container.dataset.glide = "";
   };
-  (0, import_react.useLayoutEffect)(() => {
+  (0, import_react2.useLayoutEffect)(() => {
     const state = own.current;
     const node = box.current;
     if (node === state.node && key === state.key) return;
@@ -2049,7 +2088,7 @@ function useGlide(key, { axis = "x", selector = CHOSEN, lead = SPRING_LEAD, trai
     }
     place(fresh);
   });
-  (0, import_react.useEffect)(() => () => {
+  (0, import_react2.useEffect)(() => () => {
     own.current.observer?.disconnect();
     own.current.springs.stop();
   }, []);
@@ -2057,16 +2096,16 @@ function useGlide(key, { axis = "x", selector = CHOSEN, lead = SPRING_LEAD, trai
 }
 function Segmented({ label, value, className, children }) {
   const glide = useGlide(value);
-  return (0, import_react.createElement)(
+  return (0, import_react2.createElement)(
     "div",
     { ref: glide.box, className: className ? `bt-seg ${className}` : "bt-seg", role: "group", "aria-label": label },
-    (0, import_react.createElement)("span", { ref: glide.thumb, className: "bt-thumb", "aria-hidden": true }),
+    (0, import_react2.createElement)("span", { ref: glide.thumb, className: "bt-thumb", "aria-hidden": true }),
     children
   );
 }
 function useFlip(list, key, selector, id = (node) => node.dataset.flip) {
-  const tops = (0, import_react.useRef)(null);
-  (0, import_react.useLayoutEffect)(() => {
+  const tops = (0, import_react2.useRef)(null);
+  (0, import_react2.useLayoutEffect)(() => {
     const container = list.current;
     if (!container) return;
     const next = /* @__PURE__ */ new Map();
@@ -2087,8 +2126,8 @@ function useFlip(list, key, selector, id = (node) => node.dataset.flip) {
   }, [key]);
 }
 function useMorph(box, key) {
-  const last = (0, import_react.useRef)({ key, height: null, node: null, observer: null });
-  (0, import_react.useLayoutEffect)(() => {
+  const last = (0, import_react2.useRef)({ key, height: null, node: null, observer: null });
+  (0, import_react2.useLayoutEffect)(() => {
     const node = box.current;
     const state = last.current;
     if (node !== state.node) {
@@ -2117,11 +2156,11 @@ function useMorph(box, key) {
       if (!node.getAnimations().some((other) => other.id === "bt-morph" && other !== animation)) delete node.dataset.morph;
     };
   });
-  (0, import_react.useEffect)(() => () => last.current.observer?.disconnect(), []);
+  (0, import_react2.useEffect)(() => () => last.current.observer?.disconnect(), []);
 }
 function useLinger(value, ms) {
-  const [kept, setKept] = (0, import_react.useState)(value);
-  (0, import_react.useEffect)(() => {
+  const [kept, setKept] = (0, import_react2.useState)(value);
+  (0, import_react2.useEffect)(() => {
     if (value) {
       setKept(value);
       return void 0;
@@ -2238,7 +2277,9 @@ body[data-bt-motion=quiet] .bt-mark[data-poke]{cursor:default}
 .bt-side{display:flex;flex-direction:column;min-height:0;flex:1 1 auto;gap:2px;padding:0 12px 8px 0;color:var(--bt-ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
 .bt-side-top{display:flex;justify-content:flex-end;align-items:center;gap:8px;padding:6px 5px 0 0}
 .bt-brand{display:inline-flex;align-items:center;gap:6px;margin-right:auto;padding:4px 8px 4px 4px;border:0;border-radius:8px;background:none;cursor:pointer;font-family:inherit;font-size:15px;line-height:20px;font-weight:600;letter-spacing:-.01em;color:var(--bt-ink);white-space:nowrap}
-.bt-brand-whale{display:inline-flex;color:var(--bt-accent)}
+.bt-brand-mark,.bt-brand-name{display:inline-flex;color:var(--bt-ink)}
+.omni-logo{flex:none;overflow:visible}
+.bt-you .omni-logo{color:var(--bt-ink)}
 .bt-round{width:36px;height:36px;border-radius:50%;border:1px solid var(--bt-line);background:var(--bt-main);color:var(--bt-ink);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;padding:0;transition:background-color .12s ease,transform .12s ease}
 .bt-round:hover{background:var(--bt-hover)}
 .bt-round:active{transform:scale(.94)}
@@ -3202,12 +3243,12 @@ function installCompiledStyles(text, tag) {
 }
 
 // src/client/mark.js
-var import_react2 = require("react");
+var import_react3 = require("react");
 var STATES = ["idle", "thinking", "searching", "working", "sending", "orbit", "waiting", "alert", "done"];
 var botState = (running, activity, alert) => running ? STATES.includes(activity) && activity !== "waiting" ? activity : "working" : alert ? "alert" : activity === "waiting" ? "waiting" : "idle";
 var toolState = (name) => /^(message_bot|stop_bot|create_bot|update_bot|create_group|update_group|delete_group|post_to_group)$/.test(name) ? "sending" : /search|fetch|browse|read|grep|glob|list|recall/i.test(name) ? "searching" : "working";
 function useGaze(ref, enabled) {
-  (0, import_react2.useEffect)(() => {
+  (0, import_react3.useEffect)(() => {
     if (!enabled) return void 0;
     let frame = 0;
     let point = null;
@@ -3241,10 +3282,10 @@ function useGaze(ref, enabled) {
 var FIDGETS = ["hop", "sway", "stretch", "look"];
 function BotMark({ bot, look: given, size = 36, state = "idle", live = false, gaze = false, pokeable = false, label }) {
   const look = given ?? lookOf(bot);
-  const ref = (0, import_react2.useRef)(null);
-  const maskId = (0, import_react2.useRef)("");
+  const ref = (0, import_react3.useRef)(null);
+  const maskId = (0, import_react3.useRef)("");
   if (maskId.current === "") maskId.current = `bt-mark-${nextMarkSerial()}`;
-  const [poked, setPoked] = (0, import_react2.useState)(false);
+  const [poked, setPoked] = (0, import_react3.useState)(false);
   useGaze(ref, gaze);
   const common = {
     ref,
@@ -3264,31 +3305,31 @@ function BotMark({ bot, look: given, size = 36, state = "idle", live = false, ga
       if (/^bt-poke/.test(event.animationName)) setPoked(false);
     } : void 0
   };
-  if (look.image) return (0, import_react2.createElement)("span", common, (0, import_react2.createElement)("img", { className: "bt-mark-img", src: look.image, alt: "", draggable: false }));
+  if (look.image) return (0, import_react3.createElement)("span", common, (0, import_react3.createElement)("img", { className: "bt-mark-img", src: look.image, alt: "", draggable: false }));
   const box = shapeOf(look.shape).size;
-  return (0, import_react2.createElement)("span", common, (0, import_react2.createElement)("svg", { viewBox: `0 0 ${box} ${box}`, dangerouslySetInnerHTML: { __html: characterMarkup(look.shape, look.color).replaceAll(MASK_ID, maskId.current) } }));
+  return (0, import_react3.createElement)("span", common, (0, import_react3.createElement)("svg", { viewBox: `0 0 ${box} ${box}`, dangerouslySetInnerHTML: { __html: characterMarkup(look.shape, look.color).replaceAll(MASK_ID, maskId.current) } }));
 }
 function StarIcon({ size = 8 }) {
-  return (0, import_react2.createElement)(
+  return (0, import_react3.createElement)(
     "svg",
     { width: size, height: size, viewBox: "0 0 10 10", "aria-hidden": true },
-    (0, import_react2.createElement)("path", { d: "M5 .6l1.3 2.8 3 .3-2.3 2 .7 3L5 7.2 2.3 8.7l.7-3L.7 3.7l3-.3z", fill: "#fff" })
+    (0, import_react3.createElement)("path", { d: "M5 .6l1.3 2.8 3 .3-2.3 2 .7 3L5 7.2 2.3 8.7l.7-3L.7 3.7l3-.3z", fill: "#fff" })
   );
 }
 function AdminStar() {
-  return (0, import_react2.createElement)("span", { className: "bt-admin-star", role: "img", "aria-label": t("Admin") }, (0, import_react2.createElement)(StarIcon, { size: 7 }));
+  return (0, import_react3.createElement)("span", { className: "bt-admin-star", role: "img", "aria-label": t("Admin") }, (0, import_react3.createElement)(StarIcon, { size: 7 }));
 }
 function MainStar() {
-  return (0, import_react2.createElement)(
+  return (0, import_react3.createElement)(
     "svg",
     { viewBox: "0 0 20 20", "aria-hidden": true },
-    (0, import_react2.createElement)("path", { d: "M10 2.4l2.29 5.04 5.51.63-4.09 3.74 1.11 5.42L10 14.5l-4.82 2.73 1.11-5.42L2.2 8.07l5.51-.63z" })
+    (0, import_react3.createElement)("path", { d: "M10 2.4l2.29 5.04 5.51.63-4.09 3.74 1.11 5.42L10 14.5l-4.82 2.73 1.11-5.42L2.2 8.07l5.51-.63z" })
   );
 }
 function useSettled(state) {
-  const prev = (0, import_react2.useRef)(state);
-  const [settled, setSettled] = (0, import_react2.useState)(false);
-  (0, import_react2.useEffect)(() => {
+  const prev = (0, import_react3.useRef)(state);
+  const [settled, setSettled] = (0, import_react3.useState)(false);
+  (0, import_react3.useEffect)(() => {
     const was = prev.current;
     prev.current = state;
     if (state !== "idle") {
@@ -3304,16 +3345,16 @@ function useSettled(state) {
 }
 function BotAvatar({ bot, size, state = "idle", main, admin, badge = true, live = true, gaze = false, pokeable = false }) {
   const settled = useSettled(state);
-  if (bot === void 0) return (0, import_react2.createElement)(BotMark, { size });
+  if (bot === void 0) return (0, import_react3.createElement)(BotMark, { size });
   const badgeKind = !badge ? null : state === "alert" ? "alert" : state !== "idle" && state !== "waiting" ? "working" : admin ? "admin" : main ? "main" : null;
-  return (0, import_react2.createElement)(
+  return (0, import_react3.createElement)(
     "span",
     { className: "bt-mark", style: { width: size, height: size, "--bt-size": `${size}px` } },
-    (0, import_react2.createElement)(BotMark, { bot, size, state: settled ? "done" : state, live, gaze, pokeable }),
-    badgeKind === "working" ? (0, import_react2.createElement)("span", { className: "bt-badge bt-badge-working", "aria-label": t("Working"), role: "img" }) : null,
-    badgeKind === "alert" ? (0, import_react2.createElement)("span", { className: "bt-badge bt-badge-alert", "aria-label": t("Waiting for your answer"), role: "img" }, "?") : null,
-    badgeKind === "admin" ? (0, import_react2.createElement)("span", { className: "bt-badge bt-badge-admin", "aria-label": t("Admin"), role: "img" }, (0, import_react2.createElement)(StarIcon)) : null,
-    badgeKind === "main" ? (0, import_react2.createElement)("span", { className: "bt-badge bt-badge-main", "aria-label": t("Main Bot"), role: "img" }, (0, import_react2.createElement)(MainStar)) : null
+    (0, import_react3.createElement)(BotMark, { bot, size, state: settled ? "done" : state, live, gaze, pokeable }),
+    badgeKind === "working" ? (0, import_react3.createElement)("span", { className: "bt-badge bt-badge-working", "aria-label": t("Working"), role: "img" }) : null,
+    badgeKind === "alert" ? (0, import_react3.createElement)("span", { className: "bt-badge bt-badge-alert", "aria-label": t("Waiting for your answer"), role: "img" }, "?") : null,
+    badgeKind === "admin" ? (0, import_react3.createElement)("span", { className: "bt-badge bt-badge-admin", "aria-label": t("Admin"), role: "img" }, (0, import_react3.createElement)(StarIcon)) : null,
+    badgeKind === "main" ? (0, import_react3.createElement)("span", { className: "bt-badge bt-badge-main", "aria-label": t("Main Bot"), role: "img" }, (0, import_react3.createElement)(MainStar)) : null
   );
 }
 function clusterSeats(count, frame) {
@@ -3330,21 +3371,21 @@ function clusterSeats(count, frame) {
 function RoomAvatar({ room: room2, roster, size = 36 }) {
   const members = room2.members.map((id) => roster.byId[id]).filter(Boolean);
   const people = members.length === 1 ? [members[0], null] : members;
-  const seat = (bot, seatSize, key) => bot ? (0, import_react2.createElement)(BotMark, { key, bot, size: seatSize }) : (0, import_react2.createElement)("span", { key, className: "bt-cluster-you", style: { width: seatSize * 0.92, height: seatSize * 0.92, margin: seatSize * 0.04 } });
-  if (people.length === 0) return (0, import_react2.createElement)(BotMark, { size });
+  const seat = (bot, seatSize, key) => bot ? (0, import_react3.createElement)(BotMark, { key, bot, size: seatSize }) : (0, import_react3.createElement)("span", { key, className: "bt-cluster-you", style: { width: seatSize * 0.92, height: seatSize * 0.92, margin: seatSize * 0.04 } });
+  if (people.length === 0) return (0, import_react3.createElement)(BotMark, { size });
   if (size <= 20 && people.length > 1) {
-    return (0, import_react2.createElement)(
+    return (0, import_react3.createElement)(
       "span",
       { className: "bt-stack", style: { "--bt-stack-size": `${size}px` } },
       people.slice(0, 3).map((bot, index) => seat(bot, size, bot?.id ?? `you-${index}`)),
-      people.length > 3 ? (0, import_react2.createElement)("span", { className: "bt-stack-more" }, `+${people.length - 3}`) : null
+      people.length > 3 ? (0, import_react3.createElement)("span", { className: "bt-stack-more" }, `+${people.length - 3}`) : null
     );
   }
   const seats = clusterSeats(Math.min(people.length, 4), size);
   const overflow = people.length > 4 ? people.length - 3 : 0;
   const gap = size / 14;
   const rings = seats.map(([x, y, s]) => ({ cx: x + s / 2, cy: y + s / 2, r: s * 0.48 + gap }));
-  return (0, import_react2.createElement)(
+  return (0, import_react3.createElement)(
     "span",
     { className: "bt-cluster", style: { width: size, height: size } },
     seats.map(([x, y, s], index) => {
@@ -3352,21 +3393,11 @@ function RoomAvatar({ room: room2, roster, size = 36 }) {
       const style = { left: x, top: y, width: s, height: s };
       if (holes2.length > 0) Object.assign(style, { WebkitMaskImage: holes2.join(","), maskImage: holes2.join(","), WebkitMaskComposite: "source-in", maskComposite: "intersect" });
       if (overflow > 0 && index === 3) {
-        return (0, import_react2.createElement)("span", { key: "more", className: "bt-cluster-more", style: { ...style, width: s * 0.92, height: s * 0.92, margin: s * 0.04, fontSize: Math.max(8, Math.round(s * 0.36)) } }, `+${overflow}`);
+        return (0, import_react3.createElement)("span", { key: "more", className: "bt-cluster-more", style: { ...style, width: s * 0.92, height: s * 0.92, margin: s * 0.04, fontSize: Math.max(8, Math.round(s * 0.36)) } }, `+${overflow}`);
       }
       const bot = people[index];
-      return (0, import_react2.createElement)("span", { key: bot?.id ?? "you", style }, seat(bot, s));
+      return (0, import_react3.createElement)("span", { key: bot?.id ?? "you", style }, seat(bot, s));
     })
-  );
-}
-
-// src/client/logo.js
-var import_react3 = require("react");
-function OctopusLogo({ size = 16 }) {
-  return (0, import_react3.createElement)(
-    "svg",
-    { width: size, height: size, viewBox: "0 0 100 100", "aria-hidden": true, focusable: "false" },
-    (0, import_react3.createElement)("path", { d: CHARACTERS.octopus.body, fill: "currentColor" })
   );
 }
 
@@ -5571,7 +5602,7 @@ function ChatPage({ actions }) {
     setDraft("");
   }, [chat?.id]);
   if (!chat || !channel) {
-    return (0, import_react10.createElement)("div", { className: "oc-page oc-chat-empty" }, (0, import_react10.createElement)(OctopusLogo, { size: 40 }), (0, import_react10.createElement)("p", null, t("Pick a chat under your Bots.")));
+    return (0, import_react10.createElement)("div", { className: "oc-page oc-chat-empty" }, (0, import_react10.createElement)(OmniMark, { size: 40 }), (0, import_react10.createElement)("p", null, t("Pick a chat under your Bots.")));
   }
   const type = typeOf(channel.type);
   const writable = canWrite(state);
@@ -5596,7 +5627,7 @@ function ChatPage({ actions }) {
       (0, import_react10.createElement)(
         "span",
         { className: "oc-answer", "data-by": channel.answeredBy === "Omni" ? "omni" : "you" },
-        channel.answeredBy === "Omni" ? (0, import_react10.createElement)(import_react10.Fragment, null, (0, import_react10.createElement)(OctopusLogo, { size: 14 }), t("Omni answers here")) : t("You answer here")
+        channel.answeredBy === "Omni" ? (0, import_react10.createElement)(import_react10.Fragment, null, (0, import_react10.createElement)(OmniMark, { size: 14 }), t("Omni answers here")) : t("You answer here")
       ),
       (0, import_react10.createElement)("button", { type: "button", className: "oc-ghost", onClick: () => omni.openChannels("channel", channel.id) }, (0, import_react10.createElement)(StatusDot, { status: channel.status }), t("Channel health")),
       (0, import_react10.createElement)(PreviewChip)
@@ -5616,7 +5647,7 @@ function ChatPage({ actions }) {
             "div",
             { className: `oc-msg oc-msg-${message.from}${first ? " oc-msg-first" : ""}` },
             first && !mine && message.author ? (0, import_react10.createElement)("span", { className: "oc-msg-author" }, message.author) : null,
-            first && message.from === "omni" ? (0, import_react10.createElement)("span", { className: "oc-msg-author oc-msg-omni" }, (0, import_react10.createElement)(OctopusLogo, { size: 12 }), "Omni") : null,
+            first && message.from === "omni" ? (0, import_react10.createElement)("span", { className: "oc-msg-author oc-msg-omni" }, (0, import_react10.createElement)(OmniMark, { size: 12 }), "Omni") : null,
             (0, import_react10.createElement)("div", { className: "oc-bubble" }, message.text, (0, import_react10.createElement)("time", null, new Date(message.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })))
           ));
         })
@@ -5813,8 +5844,8 @@ function ChannelDetail({ channel, state, omni }) {
         "aria-checked": channel.answeredBy === value,
         className: "oc-seg-opt",
         onClick: () => omni.setAnsweredBy(channel.id, value)
-      }, (0, import_react10.createElement)("strong", null, value === "Omni" ? (0, import_react10.createElement)(OctopusLogo, { size: 16 }) : null, title), (0, import_react10.createElement)("span", null, text)))
-    ) : (0, import_react10.createElement)("div", { className: "oc-seg-opt oc-seg-static" }, channel.answeredBy === "Omni" ? (0, import_react10.createElement)(import_react10.Fragment, null, (0, import_react10.createElement)("strong", null, (0, import_react10.createElement)(OctopusLogo, { size: 16 }), t("Omni answers")), (0, import_react10.createElement)("span", null, t("An agent is assigned to this channel in omni."))) : (0, import_react10.createElement)(import_react10.Fragment, null, (0, import_react10.createElement)("strong", null, t("You answer")), (0, import_react10.createElement)("span", null, t("No agent is assigned to this channel in omni.")))),
+      }, (0, import_react10.createElement)("strong", null, value === "Omni" ? (0, import_react10.createElement)(OmniMark, { size: 16 }) : null, title), (0, import_react10.createElement)("span", null, text)))
+    ) : (0, import_react10.createElement)("div", { className: "oc-seg-opt oc-seg-static" }, channel.answeredBy === "Omni" ? (0, import_react10.createElement)(import_react10.Fragment, null, (0, import_react10.createElement)("strong", null, (0, import_react10.createElement)(OmniMark, { size: 16 }), t("Omni answers")), (0, import_react10.createElement)("span", null, t("An agent is assigned to this channel in omni."))) : (0, import_react10.createElement)(import_react10.Fragment, null, (0, import_react10.createElement)("strong", null, t("You answer")), (0, import_react10.createElement)("span", null, t("No agent is assigned to this channel in omni.")))),
     writable ? (0, import_react10.createElement)(
       "div",
       { className: "oc-danger" },
@@ -6233,7 +6264,7 @@ function workerOf(worker, roster) {
 }
 function WorkerMark({ worker, roster, size = 24 }) {
   const info = workerOf(worker, roster);
-  if (info.session) return (0, import_react11.createElement)("span", { className: "os-session", style: { width: size, height: size } }, (0, import_react11.createElement)(OctopusLogo, { size: Math.round(size * 0.62) }));
+  if (info.session) return (0, import_react11.createElement)("span", { className: "os-session", style: { width: size, height: size } }, (0, import_react11.createElement)(OmniMark, { size: Math.round(size * 0.62) }));
   return (0, import_react11.createElement)(BotMark, info.bot ? { bot: info.bot, size } : { look: info.look, size });
 }
 var TriggerBadge = ({ trigger, size = 36 }) => (0, import_react11.createElement)(
@@ -6917,7 +6948,7 @@ function AgentRow({ agent, actions, useSessions, useSessionStatus, useUi, wide, 
           actions.openMenu({ kind: "agent", id: agent.id, x: event.clientX, y: event.clientY });
         }
       },
-      (0, import_react13.createElement)("span", { className: `bt-agent-ava${running ? " bt-run" : ""}` }, (0, import_react13.createElement)(OctopusLogo, { size: 22 })),
+      (0, import_react13.createElement)("span", { className: `bt-agent-ava${running ? " bt-run" : ""}` }, (0, import_react13.createElement)(OmniMark, { size: 22 })),
       wide ? (0, import_react13.createElement)(
         "span",
         { className: "bt-row-body" },
@@ -7155,7 +7186,7 @@ function YouAvatar() {
   return (0, import_react13.createElement)(
     "span",
     { className: "bt-you-wrap" },
-    (0, import_react13.createElement)("span", { className: "bt-you", "aria-hidden": true }, (0, import_react13.createElement)(BotMark, { look: MAIN_LOOK, size: 24 })),
+    (0, import_react13.createElement)("span", { className: "bt-you", "aria-hidden": true }, (0, import_react13.createElement)(OmniMark, { size: 22 })),
     (0, import_react13.createElement)("span", { style: { position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0 0 0 0)" } }, t("Settings"))
   );
 }
@@ -7282,7 +7313,7 @@ function AccountLauncher({ seat = true, settingsOpen, openSettings, openOnboardi
     (0, import_react13.createElement)(
       "button",
       { ref: button, type: "button", className: "bt-account", "aria-label": t("Account"), "aria-haspopup": "menu", "aria-expanded": open, onClick: toggle },
-      (0, import_react13.createElement)("span", { className: "bt-you", "aria-hidden": true }, (0, import_react13.createElement)(BotMark, { look: MAIN_LOOK, size: 24 }))
+      (0, import_react13.createElement)("span", { className: "bt-you", "aria-hidden": true }, (0, import_react13.createElement)(OmniMark, { size: 22 }))
     ),
     open && box ? (0, import_react_dom3.createPortal)((0, import_react13.createElement)(
       "div",
@@ -7339,7 +7370,7 @@ function BotReturn({ wide, useSurface, actions }) {
   return (0, import_react13.createElement)(
     "button",
     { type: "button", className: "bt-return", "aria-label": t("Omni"), title: t("Omni"), onClick: () => actions.setSurface("bot") },
-    (0, import_react13.createElement)(BotMark, { look: MAIN_LOOK, size: 20 }),
+    (0, import_react13.createElement)(OmniMark, { size: 20 }),
     wide ? (0, import_react13.createElement)("span", { className: "bt-return-name" }, t("Omni")) : null
   );
 }
@@ -7354,10 +7385,10 @@ var RETURN_CSS = `
 .bt-return-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 `;
 function BrandMark({ size = 24 }) {
-  return (0, import_react13.createElement)("span", { className: "bt-brand-whale" }, (0, import_react13.createElement)(BotMark, { look: MAIN_LOOK, size }));
+  return (0, import_react13.createElement)("span", { className: "bt-brand-mark" }, (0, import_react13.createElement)(OmniMark, { size }));
 }
 function BrandName() {
-  return (0, import_react13.createElement)("span", { style: { fontWeight: 600, fontSize: 14 } }, "Omni");
+  return (0, import_react13.createElement)("span", { className: "bt-brand-name" }, (0, import_react13.createElement)(OmniWordmark, { height: 13 }));
 }
 var SIDEBAR_CSS = `
 .bt-side-top .bt-brand{cursor:default;padding-left:6px}
@@ -8150,7 +8181,7 @@ function CommandPalette({ start, token, roster, actions, useSessions }) {
   if (people.length) sections.push([t("Bots"), people]);
   const agents = (roster.agents ?? []).filter(() => matchesName("DSH Agent")).map((agent) => ({
     key: agent.id,
-    avatar: (0, import_react17.createElement)("span", { className: "bt-palette-agent" }, (0, import_react17.createElement)(OctopusLogo, { size: 18 })),
+    avatar: (0, import_react17.createElement)("span", { className: "bt-palette-agent" }, (0, import_react17.createElement)(OmniMark, { size: 18 })),
     title: "DSH Agent",
     subtitle: t("Plain dsh session"),
     run: () => actions.openAgent(agent.id)
@@ -10446,7 +10477,7 @@ function NewChat({ mode, roster, actions }) {
       inputRef.current?.focus();
     } });
     if ((roster.agents ?? []).length === 0) {
-      options.push({ key: "agent", icon: (0, import_react25.createElement)(OctopusLogo, { size: 16 }), label: t("Add DSH Agent"), run: () => run(async () => {
+      options.push({ key: "agent", icon: (0, import_react25.createElement)(OmniMark, { size: 16 }), label: t("Add DSH Agent"), run: () => run(async () => {
         await actions.addAgent();
         close();
       }) });
@@ -16275,6 +16306,7 @@ function apply(ctx) {
     return () => style.remove();
   }, "ds-bot: return styles");
   shadow("sidebar.footer.action", { id: "bot-return", order: -300, inject: face }, BotReturn);
+  ctx.effect(() => installFavicon(), "ds-bot: Omni tab icon");
   ctx.effect(() => {
     let previous;
     const sync = () => {

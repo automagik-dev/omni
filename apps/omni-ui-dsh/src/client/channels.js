@@ -1,6 +1,6 @@
 import { createElement as h, Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { ArrowUpIcon, ChevronLeftIcon, ChevronRightIcon, PlusIcon } from './icons.js'
-import { OctopusLogo } from './logo.js'
+import { OmniMark } from './logo.js'
 import { t } from './i18n.js'
 import { relativeShort } from './text.js'
 import { call } from './api.js'
@@ -103,7 +103,7 @@ export function ChatPage({ actions }) {
   }, [chat?.id, messages.length])
   useEffect(() => { setDraft('') }, [chat?.id])
   if (!chat || !channel) {
-    return h('div', { className: 'oc-page oc-chat-empty' }, h(OctopusLogo, { size: 40 }), h('p', null, t('Pick a chat under your Bots.')))
+    return h('div', { className: 'oc-page oc-chat-empty' }, h(OmniMark, { size: 40 }), h('p', null, t('Pick a chat under your Bots.')))
   }
   const type = typeOf(channel.type)
   const writable = canWrite(state)
@@ -116,7 +116,7 @@ export function ChatPage({ actions }) {
         h('strong', null, chat.name),
         h('span', null, `${type.label} · ${channel.name}`)),
       h('span', { className: 'oc-answer', 'data-by': channel.answeredBy === 'Omni' ? 'omni' : 'you' },
-        channel.answeredBy === 'Omni' ? h(Fragment, null, h(OctopusLogo, { size: 14 }), t('Omni answers here')) : t('You answer here')),
+        channel.answeredBy === 'Omni' ? h(Fragment, null, h(OmniMark, { size: 14 }), t('Omni answers here')) : t('You answer here')),
       h('button', { type: 'button', className: 'oc-ghost', onClick: () => omni.openChannels('channel', channel.id) }, h(StatusDot, { status: channel.status }), t('Channel health')),
       h(PreviewChip)),
     h('div', { ref: scroller, className: 'oc-thread', role: 'log', 'aria-label': t('Conversation with {name}', { name: chat.name }) },
@@ -128,7 +128,7 @@ export function ChatPage({ actions }) {
           const first = newDay || messages[index - 1].from !== message.from || messages[index - 1].author !== message.author
           return h(Fragment, { key: message.id }, newDay ? h('div', { className: 'oc-day' }, dayLabel(message.at)) : null, h('div', { className: `oc-msg oc-msg-${message.from}${first ? ' oc-msg-first' : ''}` },
             first && !mine && message.author ? h('span', { className: 'oc-msg-author' }, message.author) : null,
-            first && message.from === 'omni' ? h('span', { className: 'oc-msg-author oc-msg-omni' }, h(OctopusLogo, { size: 12 }), 'Omni') : null,
+            first && message.from === 'omni' ? h('span', { className: 'oc-msg-author oc-msg-omni' }, h(OmniMark, { size: 12 }), 'Omni') : null,
             h('div', { className: 'oc-bubble' }, message.text, h('time', null, new Date(message.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })))))
         }))),
     h('footer', { className: 'oc-compose-wrap' },
@@ -264,9 +264,9 @@ function ChannelDetail({ channel, state, omni }) {
         [['Omni', t('Omni answers'), t('Omni replies on its own and hands over when it should.')], ['You', t('You answer'), t('Chats wait for you. Omni only drafts.')]].map(([value, title, text]) => h('button', {
           key: value, type: 'button', role: 'radio', 'aria-checked': channel.answeredBy === value, className: 'oc-seg-opt',
           onClick: () => omni.setAnsweredBy(channel.id, value),
-        }, h('strong', null, value === 'Omni' ? h(OctopusLogo, { size: 16 }) : null, title), h('span', null, text))))
+        }, h('strong', null, value === 'Omni' ? h(OmniMark, { size: 16 }) : null, title), h('span', null, text))))
       : h('div', { className: 'oc-seg-opt oc-seg-static' }, channel.answeredBy === 'Omni'
-        ? h(Fragment, null, h('strong', null, h(OctopusLogo, { size: 16 }), t('Omni answers')), h('span', null, t('An agent is assigned to this channel in omni.')))
+        ? h(Fragment, null, h('strong', null, h(OmniMark, { size: 16 }), t('Omni answers')), h('span', null, t('An agent is assigned to this channel in omni.')))
         : h(Fragment, null, h('strong', null, t('You answer')), h('span', null, t('No agent is assigned to this channel in omni.')))),
     writable
       ? h('div', { className: 'oc-danger' },

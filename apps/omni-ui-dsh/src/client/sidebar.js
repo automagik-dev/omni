@@ -1,10 +1,9 @@
 import { createElement as h, Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
-import { OctopusLogo } from './logo.js'
+import { OmniMark, OmniWordmark } from './logo.js'
 import { isMainOf } from './sources.js'
 import { currentPart, previewOf, relativeShort } from './text.js'
 import { PlusIcon, SearchIcon, SidebarIcon, GaugeIcon, PlugIcon, ClockIcon, GearIcon, PinMarkIcon, ConnectorIcon, SwitchIcon, CloudDownloadIcon } from './icons.js'
-import { MAIN_LOOK } from './characters.js'
 import { botState, BotMark, BotAvatar, RoomAvatar } from './mark.js'
 import { reducedMotion } from './activity-row.js'
 import { Shimmer, workPhrase } from './cells.js'
@@ -211,7 +210,7 @@ function AgentRow({ agent, actions, useSessions, useSessionStatus, useUi, wide, 
       'data-agent-id': agent.id, title: wide ? undefined : 'DSH Agent', onClick: () => actions.openAgent(agent.id),
       onContextMenu: (event) => { event.preventDefault(); actions.openMenu({ kind: 'agent', id: agent.id, x: event.clientX, y: event.clientY }) },
     },
-    h('span', { className: `bt-agent-ava${running ? ' bt-run' : ''}` }, h(OctopusLogo, { size: 22 })),
+    h('span', { className: `bt-agent-ava${running ? ' bt-run' : ''}` }, h(OmniMark, { size: 22 })),
     wide ? h('span', { className: 'bt-row-body' },
       h('span', { className: 'bt-row-name' }, 'DSH Agent'),
       preview ? h('span', { className: 'bt-row-preview' }, preview) : null) : null,
@@ -405,7 +404,7 @@ export function ChannelsFooter({ wide, actions }) {
 // Account seat of the Settings trigger: the visible label stays for assistive tech only.
 export function YouAvatar() {
   return h('span', { className: 'bt-you-wrap' },
-    h('span', { className: 'bt-you', 'aria-hidden': true }, h(BotMark, { look: MAIN_LOOK, size: 24 })),
+    h('span', { className: 'bt-you', 'aria-hidden': true }, h(OmniMark, { size: 22 })),
     h('span', { style: { position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)' } }, t('Settings')))
 }
 
@@ -520,7 +519,7 @@ export function AccountLauncher({ seat = true, settingsOpen, openSettings, openO
   ]
   return h(Fragment, null,
     h('button', { ref: button, type: 'button', className: 'bt-account', 'aria-label': t('Account'), 'aria-haspopup': 'menu', 'aria-expanded': open, onClick: toggle },
-      h('span', { className: 'bt-you', 'aria-hidden': true }, h(BotMark, { look: MAIN_LOOK, size: 24 }))),
+      h('span', { className: 'bt-you', 'aria-hidden': true }, h(OmniMark, { size: 22 }))),
     open && box ? createPortal(h('div', { className: 'bt-menu bt-menu-up bt-account-menu', role: 'menu', 'aria-label': t('Account'), style: box },
       groups.map((group, index) => h(Fragment, { key: index },
         index > 0 ? h('div', { className: 'bt-menu-sep', role: 'separator' }) : null,
@@ -572,7 +571,7 @@ export function BotReturn({ wide, useSurface, actions }) {
   const mode = useSurface(value => value.mode)
   if (mode !== 'agent') return null
   return h('button', { type: 'button', className: 'bt-return', 'aria-label': t('Omni'), title: t('Omni'), onClick: () => actions.setSurface('bot') },
-    h(BotMark, { look: MAIN_LOOK, size: 20 }),
+    h(OmniMark, { size: 20 }),
     wide ? h('span', { className: 'bt-return-name' }, t('Omni')) : null)
 }
 
@@ -589,10 +588,10 @@ export const RETURN_CSS = `
 `
 
 export function BrandMark({ size = 24 }) {
-  return h('span', { className: 'bt-brand-whale' }, h(BotMark, { look: MAIN_LOOK, size }))
+  return h('span', { className: 'bt-brand-mark' }, h(OmniMark, { size }))
 }
 export function BrandName() {
-  return h('span', { style: { fontWeight: 600, fontSize: 14 } }, 'Omni')
+  return h('span', { className: 'bt-brand-name' }, h(OmniWordmark, { height: 13 }))
 }
 
 // With the whale holding the settings seat, the Bot row is just the account menu

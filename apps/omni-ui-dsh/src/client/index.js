@@ -1,4 +1,5 @@
 import { call } from './api.js'
+import { installFavicon } from './logo.js'
 import { isHex, inkText, paintCss } from './inks.js'
 import { DEFAULT_MASK, SHAPES, markupCache, maskOf } from './characters.js'
 import { countCards, createSource, EMPTY_ROSTER, indexRoster, isAgentSession } from './sources.js'
@@ -878,6 +879,7 @@ export function apply(ctx) {
     return () => style.remove()
   }, 'ds-bot: return styles')
   shadow('sidebar.footer.action', { id: 'bot-return', order: -300, inject: face }, BotReturn)
+  ctx.effect(() => installFavicon(), 'ds-bot: Omni tab icon')
 
   // The main view decides `plain`: a DSH Agent Session keeps the Bot shell but
   // withdraws the conversation replacements, so the native dsh page shows. A jump

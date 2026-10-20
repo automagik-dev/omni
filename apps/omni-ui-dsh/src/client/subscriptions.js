@@ -1,6 +1,6 @@
 import { createElement as h, Fragment, useEffect, useState } from 'react'
 import { AtIcon, FileIcon, KeywordIcon, MessageIcon, ShieldIcon, UnplugIcon, VoiceIcon } from './icons.js'
-import { OctopusLogo } from './logo.js'
+import { OmniMark } from './logo.js'
 import { BotMark } from './mark.js'
 import { MAIN_LOOK } from './characters.js'
 import { t } from './i18n.js'
@@ -37,7 +37,7 @@ export function workerOf(worker, roster) {
 
 export function WorkerMark({ worker, roster, size = 24 }) {
   const info = workerOf(worker, roster)
-  if (info.session) return h('span', { className: 'os-session', style: { width: size, height: size } }, h(OctopusLogo, { size: Math.round(size * 0.62) }))
+  if (info.session) return h('span', { className: 'os-session', style: { width: size, height: size } }, h(OmniMark, { size: Math.round(size * 0.62) }))
   return h(BotMark, info.bot ? { bot: info.bot, size } : { look: info.look, size })
 }
 
