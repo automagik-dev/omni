@@ -1067,7 +1067,9 @@ var REST_NOTE = "The recent errors do not fit in the link. Omni copied the diagn
 function issueUrl(base, { what = "", diagnostics }) {
   const text = what.trim().slice(0, WHAT_MAX);
   const title = text.split("\n")[0].slice(0, 80);
-  const build = (body) => `${base}?${new URLSearchParams({ template: "bug.yml", ...title ? { title } : {}, ...text ? { what: text } : {}, diagnostics: body })}`;
+  const build = (report) => `${base}?${new URLSearchParams({ ...title ? { title: `[omni-ui] ${title}` } : {}, body: text ? `${text}
+
+${report}` : report })}`;
   const full2 = build(diagnostics);
   if (full2.length <= URL_LIMIT) return { url: full2, inline: true };
   const facts = build(`${diagnostics.split("\n\n")[0]}

@@ -51,8 +51,8 @@ function fakeChild(code) {
 
 const registryLatest = dsBot => ({ [`https://registry.npmjs.org/${PKG.name}/latest`]: { version: PKG.version, dsBot } })
 const githubLatest = (tag, manifest) => ({
-  'https://api.github.com/repos/Fei2411/DeepSeek-Bot/releases/latest': { tag_name: tag },
-  [`https://raw.githubusercontent.com/Fei2411/DeepSeek-Bot/${tag}/ds-bot/package.json`]: manifest,
+  'https://api.github.com/repos/automagik-dev/omni/releases/latest': { tag_name: tag },
+  [`https://raw.githubusercontent.com/automagik-dev/omni/${tag}/apps/omni-ui-dsh/package.json`]: manifest,
 })
 
 test('the newest released bot declares the verified DSH, offered to an older npm install', async () => {
@@ -103,8 +103,8 @@ test('a git or local install asks the public repo\'s latest release for its decl
     const view = await rt.dshUpdateCheck()
     assert.equal(view.verified, '8.8.8')
     assert.deepEqual(fetched, [
-      'https://api.github.com/repos/Fei2411/DeepSeek-Bot/releases/latest',
-      'https://raw.githubusercontent.com/Fei2411/DeepSeek-Bot/v9.0.0/ds-bot/package.json',
+      'https://api.github.com/repos/automagik-dev/omni/releases/latest',
+      'https://raw.githubusercontent.com/automagik-dev/omni/v9.0.0/apps/omni-ui-dsh/package.json',
     ])
   }
 })

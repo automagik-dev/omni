@@ -265,25 +265,24 @@ test('a failed group turn fails its waiter; a stopped one counts as no answer', 
 
 test('issueUrl fills the issue form, keeps the versions when the errors are too long, and falls back to the clipboard', async () => {
   const { issueUrl } = await import('../src/client/diagnostics.js')
-  const base = 'https://github.com/Fei2411/DeepSeek-Bot/issues/new'
+  const base = 'https://github.com/automagik-dev/omni/issues/new'
   const short = issueUrl(base, { what: 'Writer failed\nin the group', diagnostics: '| Omni | 0.1.0 |' })
   assert.equal(short.inline, true)
   const params = new URL(short.url).searchParams
-  assert.equal(params.get('template'), 'bug.yml')
-  assert.equal(params.get('title'), 'Writer failed')
-  assert.equal(params.get('what'), 'Writer failed\nin the group')
-  assert.equal(params.get('diagnostics'), '| Omni | 0.1.0 |')
+  assert.equal(params.has('template'), false)
+  assert.equal(params.get('title'), '[omni-ui] Writer failed')
+  assert.equal(params.get('body'), 'Writer failed\nin the group\n\n| Omni | 0.1.0 |')
   const long = issueUrl(base, { diagnostics: '错误'.repeat(2000) })
   assert.equal(long.inline, false)
   assert.ok(long.url.length < 7000)
-  assert.match(new URL(long.url).searchParams.get('diagnostics'), /clipboard/)
+  assert.match(new URL(long.url).searchParams.get('body'), /clipboard/)
   assert.equal(new URL(long.url).searchParams.has('title'), false)
   const table = '| | |\n|---|---|\n| Omni | 0.1.2 |\n| DSH | 0.2.0 |'
   const errors = issueUrl(base, { what: 'Writer failed', diagnostics: `${table}\n\nRecent host errors:\n${'错误'.repeat(2000)}` })
   assert.equal(errors.inline, false)
   assert.ok(errors.url.length < 7000)
-  const kept = new URL(errors.url).searchParams.get('diagnostics')
-  assert.ok(kept.startsWith(`${table}\n\n`))
+  const kept = new URL(errors.url).searchParams.get('body')
+  assert.ok(kept.startsWith(`Writer failed\n\n${table}\n\n`))
   assert.match(kept, /clipboard: paste them below this line/)
   assert.doesNotMatch(kept, /错误/)
 })

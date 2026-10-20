@@ -73,10 +73,12 @@ export const WHAT_MAX = 2000
 const PASTE_NOTE = 'Omni copied the diagnostics to the clipboard. Paste them here.'
 const REST_NOTE = 'The recent errors do not fit in the link. Omni copied the diagnostics to the clipboard: paste them below this line.'
 
+// The omni repository has no issue form, so the report fills GitHub's plain title and body:
+// what happened first, then the diagnostics.
 export function issueUrl(base, { what = '', diagnostics }) {
   const text = what.trim().slice(0, WHAT_MAX)
   const title = text.split('\n')[0].slice(0, 80)
-  const build = body => `${base}?${new URLSearchParams({ template: 'bug.yml', ...(title ? { title } : {}), ...(text ? { what: text } : {}), diagnostics: body })}`
+  const build = report => `${base}?${new URLSearchParams({ ...(title ? { title: `[omni-ui] ${title}` } : {}), body: text ? `${text}\n\n${report}` : report })}`
   const full = build(diagnostics)
   if (full.length <= URL_LIMIT) return { url: full, inline: true }
   // The versions table leads the report and stays short; only the errors make it

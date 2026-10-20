@@ -3,6 +3,11 @@
 - insert:
     - id: bot
       name: ds-bot
+      # The npm name ds-bot still belongs to upstream DS Bot, so a registry check
+      # would offer upstream releases as Omni updates. Off until Omni publishes
+      # under its own name.
+      config:
+        updateCheck: false
     # Web search with the current conversation route's own key, else a keyless
     # results-page fallback (see README "Web search").
     - id: web-search-auto

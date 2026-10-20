@@ -92,7 +92,7 @@ export function install(rt) {
       const release = await fetchJson(`https://api.github.com/repos/${repo}/releases/latest`, { 'user-agent': `${PKG.name}/${PKG.version}` })
       const tag = cleanVersion(release?.tag_name)
       if (!tag) return null
-      const manifest = await fetchJson(`https://raw.githubusercontent.com/${repo}/${release.tag_name}/ds-bot/package.json`, { 'user-agent': `${PKG.name}/${PKG.version}` })
+      const manifest = await fetchJson(`https://raw.githubusercontent.com/${repo}/${release.tag_name}/${PKG.repository?.directory ?? 'ds-bot'}/package.json`, { 'user-agent': `${PKG.name}/${PKG.version}` })
       return manifest?.dsBot?.verifiedDsh ? manifest.dsBot : null
     } catch { return null }
   }
