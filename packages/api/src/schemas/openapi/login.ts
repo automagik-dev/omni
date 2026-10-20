@@ -61,7 +61,7 @@ export function registerLoginSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     ...common,
     method: 'post',
-    path: '/login/device-key',
+    path: '/api/login/device-key',
     operationId: 'createDeviceKey',
     summary: 'Trade a device token for an Omni key (public)',
     description:
@@ -110,7 +110,7 @@ export function registerLoginSchemas(registry: OpenAPIRegistry): void {
   for (const [method, path, operationId, summary, body, response] of [
     [
       'get',
-      '/login/claim/accounts',
+      '/api/login/claim/accounts',
       'listClaimAccounts',
       'WhatsApp accounts this Omni can be claimed with',
       null,
@@ -118,7 +118,7 @@ export function registerLoginSchemas(registry: OpenAPIRegistry): void {
     ],
     [
       'post',
-      '/login/claim/whatsapp',
+      '/api/login/claim/whatsapp',
       'connectClaimWhatsApp',
       'Link a first WhatsApp to an unclaimed Omni',
       null,
@@ -126,7 +126,7 @@ export function registerLoginSchemas(registry: OpenAPIRegistry): void {
     ],
     [
       'post',
-      '/login/claim/send-code',
+      '/api/login/claim/send-code',
       'sendClaimCode',
       "Send a claim code to that account's self chat",
       z.object({ instanceId: z.string().uuid() }),
@@ -134,7 +134,7 @@ export function registerLoginSchemas(registry: OpenAPIRegistry): void {
     ],
     [
       'post',
-      '/login/claim/verify',
+      '/api/login/claim/verify',
       'verifyClaimCode',
       'Claim the Omni with that code',
       z.object({ instanceId: z.string().uuid(), code: z.string() }),
@@ -156,7 +156,7 @@ export function registerLoginSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     ...common,
     method: 'get',
-    path: '/login/claim/whatsapp/{id}',
+    path: '/api/login/claim/whatsapp/{id}',
     operationId: 'getClaimWhatsApp',
     summary: 'Linking state of the claim WhatsApp (public, claim token)',
     description: 'The QR to scan (SVG) until linked, then the masked number.',

@@ -581,7 +581,7 @@ export function createApp(
   // tenancy/route-ownership.ts. Must be mounted before protectedApp and the UI.
   app.route('/api/auth', loginAuthRoutes(login));
   app.route('/api/v2/login', loginApiRoutes(login));
-  app.route('/login', loginPageRoutes(login));
+  app.route('/api/login', loginPageRoutes(login));
 
   // ── Multitenancy control plane — feature-flagged, OFF by default ────────────
   // Mounted ONLY when OMNI_MULTITENANCY_ENABLED === "true". When off, this

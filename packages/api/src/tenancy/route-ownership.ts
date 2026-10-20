@@ -295,7 +295,7 @@ const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
       'no instance data.',
   },
   {
-    route: 'GET /login/claim',
+    route: 'GET /api/login/claim',
     class: 'public-by-contract',
     justification:
       'Static claim page for an unclaimed Omni (human login). Answers 404 unless the operator set ' +
@@ -303,7 +303,7 @@ const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
       'server-side. What it can do is gated by the claim token on the endpoints it calls.',
   },
   {
-    route: 'GET /login/device',
+    route: 'GET /api/login/device',
     class: 'public-by-contract',
     justification:
       'Static device-approval page (human login). Answers 404 unless the operator set ' +

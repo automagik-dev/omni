@@ -63,6 +63,6 @@ export async function ownerAccount(login: Login): Promise<OwnAccount | null> {
 export async function announceClaim(login: Login): Promise<void> {
   if (await ownerOf(login)) return;
   log.info(
-    `This Omni has no owner yet. Claim it: ${login.config.publicUrl}/login/claim?token=${claimTokenOf(login.config)}`,
+    `This Omni has no owner yet. Claim it: ${login.config.publicUrl}/api/login/claim?token=${claimTokenOf(login.config)}`,
   );
 }

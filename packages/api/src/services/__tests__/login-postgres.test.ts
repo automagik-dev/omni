@@ -152,7 +152,7 @@ postgresDescribe('human login (real PostgreSQL)', () => {
     app = new Hono();
     app.route('/api/auth', loginAuthRoutes(login));
     app.route('/api/v2/login', loginApiRoutes(login));
-    app.route('/login', loginPageRoutes(login));
+    app.route('/api/login', loginPageRoutes(login));
   });
 
   afterAll(async () => {
@@ -225,7 +225,7 @@ postgresDescribe('human login (real PostgreSQL)', () => {
 
   test('a device approved by a code the owner sends to themselves gets one key, once', async () => {
     const device = await startDevice();
-    expect(device.verification_uri_complete).toContain(`${ORIGIN}/login/device`);
+    expect(device.verification_uri_complete).toContain(`${ORIGIN}/api/login/device`);
     expect((await token(device.device_code)).json?.error).toBe('authorization_pending');
 
     // Omni's own send of the code ('append') approves nothing.
@@ -296,10 +296,10 @@ postgresDescribe('human login (real PostgreSQL)', () => {
   });
 
   test('the pages are served, and a passkey can be set up from a signed-in session', async () => {
-    const claimPage = await app.request(`${ORIGIN}/login/claim`);
+    const claimPage = await app.request(`${ORIGIN}/api/login/claim`);
     expect(claimPage.status).toBe(200);
     expect(await claimPage.text()).toContain('Welcome to your Omni');
-    expect((await app.request(`${ORIGIN}/login/device`)).status).toBe(200);
+    expect((await app.request(`${ORIGIN}/api/login/device`)).status).toBe(200);
 
     await call('POST', '/api/v2/login/send-code');
     await call('POST', '/api/v2/login/verify', { code: lastCode(OWNER) });

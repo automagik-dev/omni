@@ -156,7 +156,7 @@ describe('login off', () => {
     const app = new Hono();
     app.route('/api/auth', loginAuthRoutes(null));
     app.route('/api/v2/login', loginApiRoutes(null));
-    app.route('/login', loginPageRoutes(null));
+    app.route('/api/login', loginPageRoutes(null));
     for (const [method, path] of [
       ['POST', '/api/auth/device/code'],
       ['GET', '/api/auth/get-session'],
@@ -164,8 +164,8 @@ describe('login off', () => {
       ['POST', '/api/v2/login/send-code'],
       ['POST', '/api/v2/login/claim/verify'],
       ['POST', '/api/v2/login/device-key'],
-      ['GET', '/login/claim'],
-      ['GET', '/login/device'],
+      ['GET', '/api/login/claim'],
+      ['GET', '/api/login/device'],
     ] as const) {
       const response = await app.request(`https://omni.example.com${path}`, { method });
       expect(response.status).toBe(404);

@@ -142,7 +142,7 @@ export function createLoginAuth({ db, whatsapp, config }: LoginAuthDeps): LoginA
         expiresIn: '10m',
         interval: '2s',
         userCodeLength: USER_CODE_LENGTH,
-        verificationUri: `${config.publicUrl}/login/device`,
+        verificationUri: `${config.publicUrl}/api/login/device`,
         validateClient: (clientId) => isDeviceClient(clientId),
       }),
       bearer(),

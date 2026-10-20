@@ -1,8 +1,8 @@
 /**
  * The two pages a person opens to get into Omni (wish: omni-labs-distribution):
  *
- *   /login/claim?token=…        claim an unclaimed Omni with a WhatsApp number
- *   /login/device?user_code=…   approve a device (desktop app, DSH plugin, CLI)
+ *   /api/login/claim?token=…        claim an unclaimed Omni with a WhatsApp number
+ *   /api/login/device?user_code=…   approve a device (desktop app, DSH plugin, CLI)
  *
  * Plain HTML with a small script each: everything they do goes through Better Auth
  * (/api/auth) and Omni's login endpoints (/api/v2/login). Text is inserted with

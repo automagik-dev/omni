@@ -10,7 +10,7 @@
  *   /api/v2/login/claim/*  claiming an unclaimed Omni (needs the claim token)
  *   /api/v2/login/send-code, /verify   a login code in the owner's WhatsApp self chat
  *   /api/v2/login/device-key           a device trades its one-time device token for an Omni key
- *   /login/claim, /login/device        the pages a person opens
+ *   /api/login/claim, /api/login/device        the pages a person opens
  */
 
 import { createLogger } from '@omni/core';
@@ -57,7 +57,7 @@ export function loginAuthRoutes(login: Login | null) {
   return app;
 }
 
-/** The pages a person opens: /login/claim and /login/device. */
+/** The pages a person opens: /api/login/claim and /api/login/device. */
 export function loginPageRoutes(login: Login | null) {
   const app = new Hono<Env>();
   app.use('*', async (c, next) => {
@@ -92,7 +92,7 @@ export function loginApiRoutes(login: Login | null) {
         claimed: owner !== null,
         // The owner's own number, so a device can show a QR that opens their self chat.
         whatsapp: self ? `+${self.phone}` : null,
-        deviceUrl: `${active.config.publicUrl}/login/device`,
+        deviceUrl: `${active.config.publicUrl}/api/login/device`,
       },
     });
   });
