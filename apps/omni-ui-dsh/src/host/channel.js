@@ -37,6 +37,8 @@ export function install(rt) {
     // Autopilot, the Bot that automations hand their events to (subscriptions.js).
     eventsBotId: rt.eventsBotId?.() ?? null,
     ...rt.subscriptionsView(),
+    // Tasks a Bot started (agents.js), for their live cards in the chat.
+    tasks: state.tasks ?? {},
     // `sessionId` is the Bot's current own-chat part; `parts` its earlier ones.
     // `waiting`: the Bot holds its greeting until the user picks its model.
     bots: Object.values(state.bots).map(({ segments, kickoff, ...bot }) => ({

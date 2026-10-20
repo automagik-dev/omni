@@ -3,6 +3,7 @@ import { installFavicon } from './logo.js'
 import { OMNI_UI_CSS, OmniCanvas } from './omni-ui.js'
 import { setCanvasRenderer } from './canvas-slot.js'
 import { OMNI_LIVE_CSS } from './omni-live.js'
+import { OMNI_PEEK_CSS } from './omni-peek.js'
 import { isHex, inkText, paintCss } from './inks.js'
 import { DEFAULT_MASK, SHAPES, markupCache, maskOf } from './characters.js'
 import { countCards, createSource, EMPTY_ROSTER, indexRoster, isAgentSession } from './sources.js'
@@ -820,7 +821,7 @@ export function apply(ctx) {
     () => installCompiledStyles(ABOUT_CSS, 'about'),
     () => installCompiledStyles(MEMBER_CSS, 'members'),
     () => installCompiledStyles(USER_MESSAGE_CSS, 'user-messages'),
-    () => installCompiledStyles(CHANNELS_CSS + SUBSCRIPTIONS_CSS + AUTOMATIONS_CSS + OMNI_LIVE_CSS + OMNI_UI_CSS, 'channels'),
+    () => installCompiledStyles(CHANNELS_CSS + SUBSCRIPTIONS_CSS + AUTOMATIONS_CSS + OMNI_LIVE_CSS + OMNI_UI_CSS + OMNI_PEEK_CSS, 'channels'),
     browsers ? () => installCompiledStyles(BROWSER_CSS, 'browser') : null,
     () => installTheme(),
     () => shadow('sidebar.workspaces', { priority: BOT_PRIORITY, inject: face }, TeamSidebar),

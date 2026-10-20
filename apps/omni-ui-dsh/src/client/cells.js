@@ -14,6 +14,7 @@ import { FOLD_AT, FOLD_HUGE, NEVER, stripLongNote, useFold } from './fold.js'
 import { hasCanvas, splitCanvases } from './canvas-text.js'
 import { CanvasSlot } from './canvas-slot.js'
 import { OmniCallCard, OmniToolCard, parseCall } from './omni-live.js'
+import { TaskCard } from './omni-peek.js'
 
 // -------------------------------------------------------------------------
 // Chat cells
@@ -764,10 +765,10 @@ function renderCall(call, { sessionId, roster, actions, useUi, useWork, findBot 
       return h('div', { className: 'bt-canvas-line' }, h(CanvasSlot, { program: argValue('program') ?? arg('program') ?? '', complete: done, onAsk: message => message && actions.send(sessionId, message) }))
     }
     case 'start_task': {
-      if (!done) return null
-      const started = /\((session-[^)]+)\) under Tasks/.exec(contentText(call.content))?.[1]
-      return h('div', { className: 'bt-event bt-task-done' }, h(TasksIcon, { size: 15 }), h('span', null, t('Started task')),
-        started ? h('button', { type: 'button', className: 'bt-task-link', onClick: () => actions.openSession(started) }, arg('title') ?? t('a task')) : h('span', null, arg('title') ?? t('a task')))
+      // The task's own card: it works where the user can watch, then says what it found.
+      const started = done ? /\((session-[^)]+)\) under Tasks/.exec(contentText(call.content))?.[1] : undefined
+      if (done && !started) return h('div', { className: 'bt-event' }, contentText(call.content).slice(0, 160))
+      return h(TaskCard, { sessionId: started, title: arg('title') ?? t('a task'), task: started ? roster.tasks?.[started] : undefined, onOpen: () => started && actions.openSession(started) })
     }
     case 'message_bot': {
       const target = findBot(arg('to')) ?? { name: arg('to') ?? '…', color: 'gray' }

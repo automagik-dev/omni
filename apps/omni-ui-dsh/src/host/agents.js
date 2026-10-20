@@ -11,6 +11,8 @@ import { output } from './tools.js'
 
 const TASK_REPORT_MAX = 1500
 const TASKS_KEPT = 60
+const TASK_LINE_MAX = 160
+const TASK_SUMMARY_MAX = 600
 
 export function install(rt) {
   const { ctx, state } = rt
@@ -234,13 +236,22 @@ export function install(rt) {
     if (event?.type === 'assistant/message') {
       const content = event.data?.message?.content
       const text = Array.isArray(content) ? content.filter(block => block?.type === 'text').map(block => block.text).join('\n').trim() : ''
-      if (text) lastWords.set(id, text)
+      // What the task is on, for its card in the chat: its latest words and how far it got.
+      task.steps = (task.steps ?? 0) + 1
+      const calls = Array.isArray(content) ? content.filter(block => block?.type === 'tool-call' || block?.type === 'tool_use').map(block => block.name ?? block.toolName).filter(Boolean) : []
+      if (calls.length > 0) task.tool = String(calls.at(-1)).slice(0, 40)
+      if (text) {
+        lastWords.set(id, text)
+        task.said = text.replace(/\s+/g, ' ').slice(0, TASK_LINE_MAX)
+      }
+      void rt.save().catch(error => rt.warn('ds-bot: saving a task failed: %s', error))
     } else if (event?.type === 'turn/end') {
       const failed = event.data?.reason?.kind === 'error'
       task.status = failed ? 'failed' : 'done'
       task.endedAt = Date.now()
       const words = lastWords.get(id) ?? ''
       lastWords.delete(id)
+      task.summary = (failed ? event.data.reason.error?.message ?? 'It stopped with an error.' : words).slice(0, TASK_SUMMARY_MAX)
       void rt.save().catch(error => rt.warn('ds-bot: saving a task failed: %s', error))
       if (rt.botOf(task.from) === undefined) return
       const said = failed ? `It stopped with an error: ${event.data.reason.error?.message ?? 'unknown'}` : words || 'It ended without a reply.'

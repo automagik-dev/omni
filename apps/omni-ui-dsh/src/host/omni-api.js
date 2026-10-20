@@ -290,7 +290,7 @@ export function install(rt) {
     const result = await call('GET', `/chats?${query}`)
     if (!ok(result)) throw invalid(`omni answered ${result.status} listing chats`)
     const items = (result.data?.items ?? []).map(chat => ({
-      id: chat.id, name: chat.name, type: chat.isGroup ? 'group' : chat.chatType, channelId: chat.instanceId, unread: chat.unreadCount ?? 0,
+      id: chat.id, name: chat.name, type: chat.isGroup ? 'group' : chat.chatType, channelId: chat.instanceId, unread: chat.unreadCount ?? 0, avatarUrl: chat.avatarUrl ?? undefined,
       lastMessageAt: chat.lastMessageAt, preview: chat.lastMessagePreview ? String(chat.lastMessagePreview).slice(0, 120) : undefined,
     }))
     return { items, more: result.data?.meta?.hasMore === true }
