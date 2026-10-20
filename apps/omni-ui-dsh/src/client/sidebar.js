@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { OctopusLogo } from './logo.js'
 import { isMainOf } from './sources.js'
 import { currentPart, previewOf, relativeShort } from './text.js'
-import { PlusIcon, SearchIcon, SidebarIcon, GaugeIcon, PlugIcon, ClockIcon, GearIcon, PinMarkIcon, ConnectorIcon, SwitchIcon, CloudDownloadIcon } from './icons.js'
+import { PlusIcon, SearchIcon, SidebarIcon, GaugeIcon, PlugIcon, ClockIcon, GearIcon, PinMarkIcon, ConnectorIcon, SwitchIcon, CloudDownloadIcon, ChannelsIcon } from './icons.js'
 import { MAIN_LOOK } from './characters.js'
 import { botState, BotMark, BotAvatar, RoomAvatar } from './mark.js'
 import { reducedMotion } from './activity-row.js'
@@ -11,6 +11,8 @@ import { Shimmer, workPhrase } from './cells.js'
 import { springEasing, SPRING_SHAPE } from './motion.js'
 import { hostText, t } from './i18n.js'
 import { showsDshRow } from './dsh-offer.js'
+import { ChatsSection } from './channels.js'
+import { CHANNELS_PANEL } from './omni-store.js'
 
 // -------------------------------------------------------------------------
 // Sidebar
@@ -292,7 +294,8 @@ export function TeamSidebar(props) {
         ? h(BotRow, { key: entry.item.id, ...rowProps, bot: entry.item, marked: markedUnread[entry.item.id] === true })
         : entry.kind === 'room'
           ? h(RoomRow, { key: entry.item.id, ...rowProps, room: entry.item, marked: markedUnread[entry.item.id] === true })
-          : h(AgentRow, { key: entry.item.id, ...rowProps, agent: entry.item, marked: markedUnread[entry.item.id] === true })))))
+          : h(AgentRow, { key: entry.item.id, ...rowProps, agent: entry.item, marked: markedUnread[entry.item.id] === true }))),
+      roster.ready ? h(ChatsSection, { wide, actions, usePanel: props.usePanel }) : null))
 }
 
 // The update button at the sidebar's top right: a cloud while a newer Omni —
@@ -520,6 +523,7 @@ export function AccountLauncher({ seat = true, settingsOpen, openSettings, openO
   const groups = [
     [
       [t('Usage'), GaugeIcon, () => actions.openSettings('usage')],
+      [t('Channels'), ChannelsIcon, () => actions.selectPanel(CHANNELS_PANEL)],
       [t('Connectors'), ConnectorIcon, () => actions.openConnectors()],
       [t('Automation tasks'), ClockIcon, () => actions.selectPanel('schedules')],
       [t('Bot settings'), GearIcon, () => actions.openSettings('general')],

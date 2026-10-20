@@ -33,7 +33,8 @@ import { ErrorToast, FEEDBACK_CSS } from './feedback.js'
 import { ABOUT_CSS } from './about.js'
 import { MEMBER_CSS, MemberDock } from './member-status.js'
 import { USER_MESSAGE_CSS, UserMessageCell, canDrawUserMessages } from './user-message.js'
-import { CHANNELS_CSS, ChannelsButton, ChannelsOverlay } from './channels.js'
+import { CHANNELS_CSS, ChannelsPage, ChatPage } from './channels.js'
+import { CHANNELS_PANEL, CHAT_PANEL } from './omni-store.js'
 import { noticeApprovals } from './approval-notices.js'
 
 export const inject = ['sessions', 'uiWorkspace', 'uiConversation', 'slots', 'theme', 'layout']
@@ -697,7 +698,7 @@ export function apply(ctx) {
   })
   const browserPages = browsers?.pages ?? createSource({})
   const browserTabs = browsers?.tabs ?? createSource({})
-  const face = () => ({ actions, hooks: { roster, ui, activity, work, memoryNews, registry, turnClock, live, cards, browserPages, browserTabs, surface, update } })
+  const face = () => ({ actions, hooks: { roster, ui, activity, work, memoryNews, registry, turnClock, live, cards, browserPages, browserTabs, surface, update, panel: ctx.layout.panelInfo } })
   ctx.effect(() => noticeApprovals({
     work,
     roster,
@@ -781,7 +782,6 @@ export function apply(ctx) {
     () => shadow('sidebar.brand.name', { priority: BOT_PRIORITY }, BrandName),
     () => shadow('sidebar.footer.action', { id: 'bot-account', order: -200, inject: face }, FooterAccount),
     () => shadow('sidebar.footer.action', { id: 'bot-connect', order: -100, inject: face }, ConnectPlugins),
-    () => shadow('sidebar.footer.action', { id: 'omni-channels', order: -120, inject: face }, ChannelsButton),
     () => shadow('settings.trigger', { priority: BOT_PRIORITY }, YouAvatar),
     // The whale wins the seat over a shell account plugin's own launcher (the
     // Desktop's "··· More"), which comes back in Agent mode.
@@ -789,7 +789,10 @@ export function apply(ctx) {
     () => shadow('shell.overlay', { id: 'bot', order: 50, inject: face }, Overlays),
     () => shadow('shell.overlay', { id: 'bot-signin', order: 55, inject: face }, DeepSeekSignIn),
     () => shadow('shell.overlay', { id: 'bot-toast', order: 60, inject: face }, ErrorToast),
-    () => shadow('shell.overlay', { id: 'omni-channels', order: 53, inject: face }, ChannelsOverlay),
+    // Omni chats and the Channels page are main panels, like the shell's Plugins page:
+    // they replace the conversation in the center, and opening a Bot brings it back.
+    () => shadow('main', { key: CHANNELS_PANEL, inject: face }, ChannelsPage),
+    () => shadow('main', { key: CHAT_PANEL, inject: face }, ChatPage),
   ]
   const installConversation = () => [
     () => installCompiledStyles(CONVERSATION_CSS, 'conversation'),

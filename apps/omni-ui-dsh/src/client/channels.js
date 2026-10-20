@@ -1,317 +1,638 @@
-import { createElement as h, Fragment, useEffect, useState, useSyncExternalStore } from 'react'
+import { createElement as h, Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { ArrowUpIcon, ChevronLeftIcon, ChevronRightIcon, PlusIcon } from './icons.js'
+import { OctopusLogo } from './logo.js'
+import { t } from './i18n.js'
+import { relativeShort } from './text.js'
+import {
+  CHANNEL_TYPES, CHANNELS_PANEL, CHAT_PANEL, STATUS, channelOf, chatOf, healthSummary, omniActions, omniStore, unreadOf, visibleChats,
+} from './omni-store.js'
 
-// Omni channels: one icon per connected channel down the left rail, that channel's chats in the
-// middle, and the conversation on the right. A Connect flow lists every channel an install can
-// add. This is a preview with sample data only; the omni API is not called yet.
+// Omni channels inside the Bot surface. The sidebar's Chats section sits under the Bots:
+// one icon per connected channel to filter by, then the chats themselves. A chat opens in
+// the main view like a Bot does (the CHAT_PANEL main panel); the Channels page
+// (CHANNELS_PANEL) connects new channels and shows the health of the connected ones.
+// Sample data only for now: see omni-store.js.
 
-const CHANNELS = {
-  whatsapp: { label: 'WhatsApp', tile: '#25D366', glyph: 'M12 3a9 9 0 0 0-7.8 13.5L3 21l4.6-1.2A9 9 0 1 0 12 3z', blurb: 'Personal and business numbers, with media and voice notes.' },
-  slack: { label: 'Slack', tile: '#4A154B', glyph: 'M9 3 7 21M17 3l-2 18M4 9h16M3 15h16', blurb: 'Workspace channels and direct messages for your team.', stroke: true },
-  telegram: { label: 'Telegram', tile: '#229ED9', glyph: 'M21 4 3 11l6 2 2 7 3-4 5 4z', blurb: 'Bots and groups, with inline buttons and files.' },
-  discord: { label: 'Discord', tile: '#5865F2', glyph: 'M7 7c3-1.5 7-1.5 10 0l1.5 9c-2.5 2-5 2.5-6.5 2.5L11 17c-1.5 0-4-.5-6.5-2.5z', blurb: 'Servers and threads for communities.' },
-  email: { label: 'Email', tile: '#64748B', glyph: 'M3 6h18v12H3zM3 7l9 6 9-6', blurb: 'Inbox threads, replies and attachments.', stroke: true },
-  web: { label: 'Web chat', tile: '#0F9D8F', glyph: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18', blurb: 'A chat widget for your site, answered by Omni.', stroke: true },
-}
+const useOmni = () => useSyncExternalStore(omniStore.subscribe, omniStore.getSnapshot, omniStore.getSnapshot)
+const useActions = actions => useMemo(() => omniActions(id => actions.selectPanel(id)), [actions])
+const activePanel = usePanel => (usePanel ? usePanel(info => info?.activePanelId ?? null) : null)
 
-const SAMPLE_CHANNELS = [
-  { id: 'wa-sofia', type: 'whatsapp', name: 'Sofia', detail: '+55 11 9 xxxx-2291', status: 'connected', unread: 2 },
-  { id: 'wa-personal', type: 'whatsapp', name: 'Personal', detail: '+55 21 9 xxxx-7810', status: 'connected', unread: 0 },
-  { id: 'slack-ns', type: 'slack', name: 'Namastex', detail: '#support, #sales', status: 'connected', unread: 5 },
-  { id: 'tg-bot', type: 'telegram', name: 'Omni bot', detail: '@omni_helper_bot', status: 'attention', unread: 0 },
-]
+// -------------------------------------------------------------------------
+// Marks
 
-const SAMPLE_CHATS = {
-  'wa-sofia': [
-    { id: 'c1', name: 'Marina Lopes', preview: 'Pode me mandar o orçamento de novo?', time: '09:42', unread: 2, initials: 'ML' },
-    { id: 'c2', name: 'Cliente Alpha', preview: 'Recebido, obrigado!', time: 'Ontem', unread: 0, initials: 'CA' },
-    { id: 'c3', name: 'Grupo Obras', preview: 'Rafael: fotos no drive', time: 'Seg', unread: 0, initials: 'GO' },
+const stroke = { fill: 'none', stroke: 'currentColor', strokeWidth: 1.9, strokeLinecap: 'round', strokeLinejoin: 'round' }
+const GLYPHS = {
+  whatsapp: () => [
+    h('path', { key: 'b', d: 'M12 3.6a8.4 8.4 0 0 0-7.2 12.8L3.7 20.3l4-1.1A8.4 8.4 0 1 0 12 3.6z', ...stroke }),
+    h('path', { key: 'p', d: 'M9.2 8.3c-.3 0-.7.1-.9.5-.3.5-.5 1.2-.2 2.1.6 1.8 2.3 3.5 4.1 4.1.9.3 1.6.1 2.1-.2.4-.2.5-.6.5-.9l-.1-.4-1.6-.8-.9 1c-1-.4-1.9-1.3-2.3-2.3l1-.9-.8-1.6z', fill: 'currentColor' }),
   ],
-  'wa-personal': [{ id: 'c4', name: 'Família', preview: 'Almoço domingo?', time: '08:10', unread: 0, initials: 'FA' }],
-  'slack-ns': [
-    { id: 'c5', name: '#support', preview: 'Ticket 482 respondido pelo Omni', time: '10:05', unread: 5, initials: '#S' },
-    { id: 'c6', name: 'Rafael Costa', preview: 'Subo o deploy depois do almoço', time: '09:20', unread: 0, initials: 'RC' },
+  telegram: () => [
+    h('path', { key: 'a', d: 'M20.5 4.5 3.5 11.2l5.3 1.9 2 6.1 3-3.3 4.4 3.3z', ...stroke }),
+    h('path', { key: 'b', d: 'M8.8 13.1 16.8 8', ...stroke }),
   ],
-  'tg-bot': [{ id: 'c7', name: '@grupo_beta', preview: 'Bot aguardando reconexão', time: 'Ter', unread: 0, initials: 'GB' }],
-}
-
-const SAMPLE_MESSAGES = {
-  c1: [
-    { from: 'them', text: 'Oi! Vi o anúncio. Quanto fica o plano anual?', time: '09:30' },
-    { from: 'me', text: 'Oi Marina! O plano anual sai por R$ 1.190 com a instalação inclusa.', time: '09:31', by: 'Omni' },
-    { from: 'them', text: 'Pode me mandar o orçamento de novo? Perdi o arquivo.', time: '09:42' },
-  ],
-  c5: [
-    { from: 'them', text: 'Ticket 482: o link de pagamento não abre no celular', time: '09:58' },
-    { from: 'me', text: 'Já reenviei o link com a versão atualizada. Confirme se abriu.', time: '10:04', by: 'Omni' },
+  slack: () => [h('path', { key: 'a', d: 'M9.5 4.5v6M14.5 13.5v6M4.5 14.5h6M13.5 9.5h6', ...stroke, strokeWidth: 2.8 })],
+  discord: () => [
+    h('path', { key: 'a', d: 'M7.6 7.2c2.9-1.2 5.9-1.2 8.8 0 1.5 2.4 2.1 5 1.9 8-1.6 1.2-3.1 1.8-4.2 2l-.8-1.5m-2.6 0-.8 1.5c-1.1-.2-2.6-.8-4.2-2-.2-3 .4-5.6 1.9-8z', ...stroke }),
+    h('circle', { key: 'l', cx: 9.6, cy: 12.4, r: 1.3, fill: 'currentColor' }),
+    h('circle', { key: 'r', cx: 14.4, cy: 12.4, r: 1.3, fill: 'currentColor' }),
   ],
 }
 
-// A tiny store shared by the footer button and the overlay, which mount in different slots.
-// Each change makes a new state object: useSyncExternalStore re-renders only when the snapshot's identity changes.
-let state = { open: false, view: 'chats', channel: 'wa-sofia', chat: 'c1' }
-const listeners = new Set()
-const setStore = patch => { state = { ...state, ...patch }; listeners.forEach(listener => listener()) }
-const subscribe = listener => { listeners.add(listener); return () => listeners.delete(listener) }
-const snapshot = () => state
-const useOmni = () => useSyncExternalStore(subscribe, snapshot, snapshot)
-
-function ChannelGlyph({ type, size = 22 }) {
-  const channel = CHANNELS[type]
-  const stroke = channel.stroke
-  return h('svg', { width: size, height: size, viewBox: '0 0 24 24', 'aria-hidden': true, focusable: 'false', className: 'oc-glyph' },
-    h('path', stroke
-      ? { d: channel.glyph, fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }
-      : { d: channel.glyph, fill: 'currentColor' }))
+export function Tile({ type, size = 40, ring = false }) {
+  return h('span', {
+    className: `oc-tile${ring ? ' oc-tile-ring' : ''}`,
+    style: { width: size, height: size, borderRadius: Math.round(size * 0.32), background: CHANNEL_TYPES[type].tile },
+  }, h('svg', { width: Math.round(size * 0.62), height: Math.round(size * 0.62), viewBox: '0 0 24 24', 'aria-hidden': true, focusable: 'false' }, GLYPHS[CHANNEL_TYPES[type].glyph]()))
 }
 
-function OctopusMark({ size = 22 }) {
-  return h('svg', { width: size, height: size, viewBox: '0 0 100 100', 'aria-hidden': true, focusable: 'false' },
-    h('path', { d: 'M50 6C75 6 87 24 87 46C87 60 82 68 80 72C84 82 84 92 80 96C76 98 72 92 70 84C68 92 66 98 61 96C57 94 56 84 54 78C52 80 48 80 46 78C44 84 43 94 39 96C34 98 32 92 30 84C28 92 24 98 20 96C16 92 16 82 20 72C18 68 13 60 13 46C13 24 25 6 50 6Z', fill: 'currentColor' }))
+const StatusDot = ({ status }) => h('span', { className: 'oc-dot', 'data-tone': STATUS[status].tone, 'aria-hidden': true })
+
+const StatusPill = ({ status }) => h('span', { className: 'oc-pill', 'data-tone': STATUS[status].tone },
+  h('span', { className: 'oc-pill-dot', 'aria-hidden': true }), t(STATUS[status].label))
+
+// A stable soft color per name, so a chat keeps its avatar color across renders.
+const HUES = [168, 200, 222, 262, 290, 330, 18, 38, 140]
+function hueOf(name) {
+  let sum = 0
+  for (const char of name) sum = (sum * 31 + char.charCodeAt(0)) >>> 0
+  return HUES[sum % HUES.length]
 }
 
-function Tile({ type, size = 40 }) {
-  return h('span', { className: 'oc-tile', style: { width: size, height: size, background: CHANNELS[type].tile } }, h(ChannelGlyph, { type, size: Math.round(size * 0.55) }))
+function ChatAvatar({ chat, channel, size = 36 }) {
+  const hue = hueOf(chat.name)
+  return h('span', { className: 'oc-ava', style: { width: size, height: size, '--oc-hue': hue } },
+    h('span', { className: 'oc-ava-face', style: { fontSize: Math.round(size * 0.34) } }, chat.initials),
+    channel ? h('span', { className: 'oc-ava-badge' }, h(Tile, { type: channel.type, size: Math.round(size * 0.4) })) : null)
 }
 
-export function ChannelsButton() {
-  const omni = useOmni()
-  const unread = SAMPLE_CHANNELS.reduce((sum, channel) => sum + channel.unread, 0)
-  return h('button', {
-    type: 'button',
-    className: 'oc-open',
-    onClick: () => setStore({ open: !omni.open }),
-    'aria-label': 'Channels',
-    title: 'Channels',
-  }, h('span', { className: 'oc-open-glyph' }, h(OctopusMark, { size: 16 })), h('span', null, 'Channels'),
-    unread > 0 ? h('span', { className: 'oc-badge' }, String(unread)) : null)
-}
+const PreviewChip = () => h('span', { className: 'oc-preview-chip', title: t('Nothing here reaches a real channel yet.') }, t('Preview · sample data'))
 
-function Rail({ omni }) {
-  return h('nav', { className: 'oc-rail', 'aria-label': 'Channels' },
-    h('button', {
-      type: 'button',
-      className: `oc-rail-home${omni.view === 'chats' && omni.channel === null ? ' oc-on' : ''}`,
-      onClick: () => setStore({ view: 'chats', channel: null }),
-      'aria-label': 'All chats',
-      title: 'All chats',
-    }, h(OctopusMark, { size: 26 })),
-    h('span', { className: 'oc-rail-divider' }),
-    ...SAMPLE_CHANNELS.map(channel => h('button', {
-      key: channel.id,
-      type: 'button',
-      className: `oc-rail-item${omni.channel === channel.id && omni.view === 'chats' ? ' oc-on' : ''}`,
-      onClick: () => setStore({ view: 'chats', channel: channel.id, chat: SAMPLE_CHATS[channel.id]?.[0]?.id ?? null }),
-      'aria-label': `${CHANNELS[channel.type].label} ${channel.name}${channel.unread ? `, ${channel.unread} unread` : ''}`,
-      title: `${CHANNELS[channel.type].label} · ${channel.name}`,
-    }, h(Tile, { type: channel.type, size: 44 }),
-      channel.unread > 0 ? h('span', { className: 'oc-rail-badge' }, String(channel.unread)) : null,
-      h('span', { className: `oc-status oc-status-${channel.status}`, 'aria-hidden': true }))),
-    h('button', {
-      type: 'button',
-      className: `oc-rail-add${omni.view === 'connect' ? ' oc-on' : ''}`,
-      onClick: () => setStore({ view: 'connect' }),
-      'aria-label': 'Connect a channel',
-      title: 'Connect a channel',
-    }, '+'),
-  )
-}
+// -------------------------------------------------------------------------
+// Sidebar: the Chats section under the Bots
 
-function ChatList({ omni }) {
-  const channel = SAMPLE_CHANNELS.find(item => item.id === omni.channel)
-  const chats = channel ? SAMPLE_CHATS[channel.id] ?? [] : Object.values(SAMPLE_CHATS).flat()
-  const title = channel ? channel.name : 'All chats'
-  const subtitle = channel ? `${CHANNELS[channel.type].label} · ${channel.detail}` : `${SAMPLE_CHANNELS.length} channels`
-  return h('section', { className: 'oc-list', 'aria-label': 'Conversations' },
-    h('header', { className: 'oc-list-head' },
-      h('div', null, h('h2', null, title), h('p', null, subtitle)),
-      channel ? h('span', { className: `oc-pill oc-pill-${channel.status}` }, channel.status === 'connected' ? 'Connected' : 'Needs attention') : null),
-    h('label', { className: 'oc-search' }, h('span', { 'aria-hidden': true }, '⌕'), h('input', { placeholder: 'Search chats', 'aria-label': 'Search chats' })),
-    h('ul', { className: 'oc-chats' },
-      ...chats.map(chat => h('li', { key: chat.id },
-        h('button', {
-          type: 'button',
-          className: `oc-chat${omni.chat === chat.id ? ' oc-on' : ''}`,
-          onClick: () => setStore({ chat: chat.id, view: 'chats' }),
-        },
-          h('span', { className: 'oc-avatar' }, chat.initials),
-          h('span', { className: 'oc-chat-body' },
-            h('span', { className: 'oc-chat-top' }, h('strong', null, chat.name), h('time', null, chat.time)),
-            h('span', { className: 'oc-chat-bottom' }, h('span', { className: 'oc-preview' }, chat.preview),
-              chat.unread > 0 ? h('span', { className: 'oc-count' }, String(chat.unread)) : null))))),
-      chats.length === 0 ? h('li', { className: 'oc-empty' }, 'No chats yet on this channel.') : null))
-}
-
-function Conversation({ omni }) {
-  const channel = SAMPLE_CHANNELS.find(item => item.id === omni.channel) ?? SAMPLE_CHANNELS[0]
-  const chat = (SAMPLE_CHATS[channel.id] ?? []).find(item => item.id === omni.chat) ?? SAMPLE_CHATS[channel.id]?.[0]
-  if (!chat) return h('section', { className: 'oc-thread oc-thread-empty' }, h('p', null, 'Pick a chat to see the conversation.'))
-  const messages = SAMPLE_MESSAGES[chat.id] ?? [{ from: 'them', text: chat.preview, time: chat.time }]
-  return h('section', { className: 'oc-thread', 'aria-label': `Conversation with ${chat.name}` },
-    h('header', { className: 'oc-thread-head' },
-      h('span', { className: 'oc-avatar oc-avatar-lg' }, chat.initials),
-      h('div', null, h('strong', null, chat.name), h('p', null, h('span', { className: 'oc-via' }, h(Tile, { type: channel.type, size: 16 })), ` ${CHANNELS[channel.type].label} · ${channel.name}`))),
-    h('div', { className: 'oc-messages' },
-      h('div', { className: 'oc-day' }, 'Today'),
-      ...messages.map((message, index) => h('div', { key: index, className: `oc-msg oc-msg-${message.from}` },
-        h('p', null, message.text),
-        h('span', { className: 'oc-msg-meta' }, message.by ? `${message.by} · ${message.time}` : message.time)))),
-    h('footer', { className: 'oc-composer' },
-      h('input', { placeholder: `Reply on ${CHANNELS[channel.type].label}`, 'aria-label': 'Reply' }),
-      h('button', { type: 'button', className: 'oc-send', 'aria-label': 'Send' }, '↑')))
-}
-
-const STEPS = ['Choose', 'Connect', 'Done']
-
-function ConnectFlow({ omni }) {
-  const [picked, setPicked] = useState(null)
-  const [step, setStep] = useState(0)
-  useEffect(() => { if (omni.view !== 'connect') { setPicked(null); setStep(0) } }, [omni.view])
-  if (picked === null) {
-    return h('section', { className: 'oc-connect', 'aria-label': 'Connect a channel' },
-      h('header', { className: 'oc-connect-head' }, h('h2', null, 'Connect a channel'), h('p', null, 'Pick where people already talk to you. Omni answers in the same place, and you see every chat in one list.')),
-      h('div', { className: 'oc-grid' }, ...Object.keys(CHANNELS).map(type => h('button', {
-        key: type,
-        type: 'button',
-        className: 'oc-card',
-        onClick: () => { setPicked(type); setStep(0) },
-      }, h(Tile, { type, size: 48 }), h('strong', null, CHANNELS[type].label), h('span', null, CHANNELS[type].blurb), h('em', null, 'Connect →')))))
+export function ChatsSection({ wide, actions, usePanel }) {
+  const state = useOmni()
+  const omni = useActions(actions)
+  const panel = activePanel(usePanel)
+  const chats = visibleChats(state)
+  const summary = healthSummary(state)
+  if (!wide) {
+    // The rail keeps the chats that wait for you, as avatars.
+    const waiting = chats.filter(chat => chat.unread > 0).slice(0, 5)
+    return h('div', { className: 'oc-side oc-side-rail', role: 'group', 'aria-label': t('Chats') },
+      h('span', { className: 'oc-side-rule', 'aria-hidden': true }),
+      waiting.map(chat => h('button', {
+        key: chat.id, type: 'button', className: 'bt-row oc-chat-row', title: chat.name,
+        'aria-label': `${chat.name}, ${t('{n} unread', { n: chat.unread })}`,
+        'aria-current': panel === CHAT_PANEL && state.chatId === chat.id ? 'page' : undefined,
+        onClick: () => omni.openChat(chat.id),
+      }, h(ChatAvatar, { chat, channel: channelOf(state, chat.channelId) }))),
+      h('button', { type: 'button', className: 'bt-row oc-chat-row', title: t('Channels'), 'aria-label': t('Channels'), onClick: () => omni.openChannels() },
+        h('span', { className: 'oc-rail-octo' }, h(OctopusLogo, { size: 20 }), summary.attention > 0 ? h('span', { className: 'oc-warn-dot', 'aria-hidden': true }) : null)))
   }
-  const channel = CHANNELS[picked]
-  return h('section', { className: 'oc-connect oc-connect-flow', 'aria-label': `Connect ${channel.label}` },
-    h('button', { type: 'button', className: 'oc-back', onClick: () => setPicked(null) }, '← All channels'),
-    h('ol', { className: 'oc-steps', 'aria-label': 'Progress' }, ...STEPS.map((label, index) => h('li', { key: label, className: index <= step ? 'oc-step-on' : '' }, h('span', null, String(index + 1)), label))),
+  const filtered = state.filter === null ? null : channelOf(state, state.filter)
+  return h('div', { className: 'oc-side', role: 'group', 'aria-label': t('Chats') },
+    h('div', { className: 'oc-side-head' },
+      h('span', { className: 'oc-side-title' }, t('Chats')),
+      h('button', {
+        type: 'button', className: 'oc-side-manage', 'aria-current': panel === CHANNELS_PANEL ? 'page' : undefined,
+        onClick: () => omni.openChannels(),
+        title: summary.attention > 0 ? t('{n} channel needs attention', { n: summary.attention }) : t('Channels and their health'),
+      }, t('Channels'), summary.attention > 0 ? h('span', { className: 'oc-warn-dot', 'aria-hidden': true }) : null, h(ChevronRightIcon))),
+    h('div', { className: 'oc-filters', role: 'toolbar', 'aria-label': t('Show chats from') },
+      h('button', {
+        type: 'button', className: 'oc-filter oc-filter-all', 'aria-pressed': state.filter === null, title: t('All chats'),
+        onClick: () => omni.setFilter(null),
+      }, h(OctopusLogo, { size: 16 }), unreadOf(state) > 0 ? h('span', { className: 'oc-filter-count' }, String(unreadOf(state))) : null),
+      state.channels.map((channel) => {
+        const unread = unreadOf(state, channel.id)
+        const label = `${CHANNEL_TYPES[channel.type].label} · ${channel.name}`
+        return h('button', {
+          key: channel.id, type: 'button', className: 'oc-filter', 'aria-pressed': state.filter === channel.id,
+          title: `${label} · ${t(STATUS[channel.status].label)}`,
+          'aria-label': [label, t(STATUS[channel.status].label), unread > 0 ? t('{n} unread', { n: unread }) : ''].filter(Boolean).join(', '),
+          onClick: () => omni.setFilter(state.filter === channel.id ? null : channel.id),
+        }, h(Tile, { type: channel.type, size: 24 }), h(StatusDot, { status: channel.status }),
+        unread > 0 ? h('span', { className: 'oc-filter-count' }, String(unread)) : null)
+      }),
+      h('button', { type: 'button', className: 'oc-filter oc-filter-add', title: t('Connect a channel'), 'aria-label': t('Connect a channel'), onClick: () => omni.openChannels('connect') }, h(PlusIcon))),
+    filtered && filtered.status !== 'connected'
+      ? h('button', { type: 'button', className: 'oc-side-alert', 'data-tone': STATUS[filtered.status].tone, onClick: () => omni.openChannels('channel', filtered.id) },
+        h(StatusDot, { status: filtered.status }), h('span', null, t(STATUS[filtered.status].label)), h('span', { className: 'oc-side-alert-go' }, t('Fix')))
+      : null,
+    chats.length === 0
+      ? h('div', { className: 'oc-side-empty' }, filtered ? t('No chats on {name} yet.', { name: filtered.name }) : t('Connect a channel and its chats show up here.'))
+      : chats.map(chat => h(ChatRow, { key: chat.id, chat, channel: channelOf(state, chat.channelId), active: panel === CHAT_PANEL && state.chatId === chat.id, onOpen: () => omni.openChat(chat.id) })))
+}
+
+function ChatRow({ chat, channel, active, onOpen }) {
+  const label = [chat.name, channel ? `${CHANNEL_TYPES[channel.type].label} · ${channel.name}` : '', chat.unread > 0 ? t('{n} unread', { n: chat.unread }) : ''].filter(Boolean).join(', ')
+  return h('button', { type: 'button', className: 'bt-row oc-chat-row', 'aria-label': label, 'aria-current': active ? 'page' : undefined, 'data-chat-id': chat.id, onClick: onOpen },
+    h(ChatAvatar, { chat, channel }),
+    h('span', { className: 'bt-row-body' },
+      h('span', { className: 'bt-row-name' }, h('span', { className: 'bt-row-title' }, chat.name), h('span', { className: 'oc-row-time' }, relativeShort(chat.at))),
+      h('span', { className: 'oc-row-line' },
+        h('span', { className: 'bt-row-preview' }, chat.preview),
+        chat.unread > 0 && !active ? h('span', { className: 'oc-count' }, String(chat.unread)) : null)))
+}
+
+// -------------------------------------------------------------------------
+// Main panel: one chat
+
+export function ChatPage({ actions }) {
+  const state = useOmni()
+  const omni = useActions(actions)
+  const chat = chatOf(state, state.chatId)
+  const channel = chat ? channelOf(state, chat.channelId) : undefined
+  const messages = chat ? state.messages[chat.id] ?? [{ id: 'preview', from: 'them', text: chat.preview, at: chat.at }] : []
+  const scroller = useRef(null)
+  const [draft, setDraft] = useState('')
+  useLayoutEffect(() => {
+    const node = scroller.current
+    if (node) node.scrollTop = node.scrollHeight
+  }, [chat?.id, messages.length])
+  useEffect(() => { setDraft('') }, [chat?.id])
+  if (!chat || !channel) {
+    return h('div', { className: 'oc-page oc-chat-empty' }, h(OctopusLogo, { size: 40 }), h('p', null, t('Pick a chat under your Bots.')))
+  }
+  const type = CHANNEL_TYPES[channel.type]
+  const live = channel.status === 'connected'
+  const send = () => { omni.sendText(chat.id, draft); setDraft('') }
+  return h('div', { className: 'oc-page oc-chat' },
+    h('header', { className: 'oc-chat-head' },
+      h(ChatAvatar, { chat, channel, size: 40 }),
+      h('div', { className: 'oc-chat-who' },
+        h('strong', null, chat.name),
+        h('span', null, `${type.label} · ${channel.name}`)),
+      h('span', { className: 'oc-answer', 'data-by': channel.answeredBy === 'Omni' ? 'omni' : 'you' },
+        channel.answeredBy === 'Omni' ? h(Fragment, null, h(OctopusLogo, { size: 14 }), t('Omni answers here')) : t('You answer here')),
+      h('button', { type: 'button', className: 'oc-ghost', onClick: () => omni.openChannels('channel', channel.id) }, h(StatusDot, { status: channel.status }), t('Channel health')),
+      h(PreviewChip)),
+    h('div', { ref: scroller, className: 'oc-thread', role: 'log', 'aria-label': t('Conversation with {name}', { name: chat.name }) },
+      h('div', { className: 'oc-thread-in' },
+        h('div', { className: 'oc-day' }, t('Today')),
+        messages.map((message, index) => {
+          const mine = message.from !== 'them'
+          const first = index === 0 || messages[index - 1].from !== message.from || messages[index - 1].author !== message.author
+          return h('div', { key: message.id, className: `oc-msg oc-msg-${message.from}${first ? ' oc-msg-first' : ''}` },
+            first && !mine && message.author ? h('span', { className: 'oc-msg-author' }, message.author) : null,
+            first && message.from === 'omni' ? h('span', { className: 'oc-msg-author oc-msg-omni' }, h(OctopusLogo, { size: 12 }), 'Omni') : null,
+            h('div', { className: 'oc-bubble' }, message.text, h('time', null, new Date(message.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))))
+        }))),
+    h('footer', { className: 'oc-compose-wrap' },
+      live ? null : h('button', { type: 'button', className: 'oc-compose-note', onClick: () => omni.openChannels('channel', channel.id) },
+        h(StatusDot, { status: channel.status }), t('{name} is not connected. Fix it to reply.', { name: channel.name })),
+      h('div', { className: 'oc-compose', 'data-off': live ? undefined : true },
+        h('textarea', {
+          rows: 1, value: draft, disabled: !live, placeholder: t('Reply on {channel}', { channel: type.label }), 'aria-label': t('Reply'),
+          onChange: event => setDraft(event.target.value),
+          onKeyDown: (event) => {
+            if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); send() }
+          },
+        }),
+        h('button', { type: 'button', className: 'oc-send', disabled: !live || draft.trim() === '', 'aria-label': t('Send'), onClick: send }, h(ArrowUpIcon)))))
+}
+
+// -------------------------------------------------------------------------
+// Main panel: Channels
+
+export function ChannelsPage({ actions }) {
+  const state = useOmni()
+  const omni = useActions(actions)
+  const { page } = state
+  const channel = page.view === 'channel' ? channelOf(state, page.channelId) : undefined
+  return h('div', { className: 'oc-page oc-channels' },
+    h('div', { className: 'oc-channels-in' },
+      page.view === 'connect' ? h(ConnectFlow, { state, omni })
+        : channel ? h(ChannelDetail, { channel, state, omni })
+          : h(Overview, { state, omni })))
+}
+
+function Overview({ state, omni }) {
+  const summary = healthSummary(state)
+  const troubled = state.channels.filter(channel => channel.status === 'attention' || channel.status === 'connecting')
+  const replies = state.channels.map(channel => channel.health?.replyMedianSec).filter(value => typeof value === 'number')
+  const median = replies.length === 0 ? null : Math.round(replies.reduce((a, b) => a + b, 0) / replies.length)
+  return h(Fragment, null,
+    h('header', { className: 'oc-head' },
+      h('div', null,
+        h('h1', null, t('Channels'), h(PreviewChip)),
+        h('p', null, t('Connect the apps people already use to reach you. Omni answers there, and every chat shows up under your Bots.'))),
+      h('button', { type: 'button', className: 'oc-primary', onClick: () => omni.showPage({ view: 'connect', type: null, step: 0 }) }, h(PlusIcon), t('Add channel'))),
+    troubled.map(channel => h('button', { key: channel.id, type: 'button', className: 'oc-callout', 'data-tone': STATUS[channel.status].tone, onClick: () => omni.showPage({ view: 'channel', channelId: channel.id }) },
+      h(Tile, { type: channel.type, size: 36 }),
+      h('span', { className: 'oc-callout-text' },
+        h('strong', null, t('{name} needs attention', { name: `${CHANNEL_TYPES[channel.type].label} · ${channel.name}` })),
+        h('span', null, channel.problem ?? t(STATUS[channel.status].label))),
+      h('span', { className: 'oc-callout-go' }, t('Fix now'), h(ChevronRightIcon)))),
+    h('div', { className: 'oc-stats' },
+      h(Stat, { value: `${summary.connected}/${summary.total}`, label: t('connected') }),
+      h(Stat, { value: String(summary.attention), label: t('need attention'), tone: summary.attention > 0 ? 'warn' : undefined }),
+      h(Stat, { value: String(summary.messagesToday), label: t('messages today') }),
+      h(Stat, { value: median === null ? '–' : median < 60 ? t('{n} s', { n: median }) : t('{n} min', { n: Math.round(median / 60) }), label: t('typical reply') })),
+    h('h2', { className: 'oc-section' }, t('Your channels')),
+    state.channels.length === 0
+      ? h('div', { className: 'oc-empty' }, t('No channels yet. Add one to start.'))
+      : h('div', { className: 'oc-cards' }, state.channels.map(channel => h(ChannelCard, { key: channel.id, channel, state, omni }))))
+}
+
+const Stat = ({ value, label, tone }) => h('div', { className: 'oc-stat', 'data-tone': tone }, h('strong', null, value), h('span', null, label))
+
+function Spark({ week }) {
+  const top = Math.max(1, ...week)
+  return h('span', { className: 'oc-spark', 'aria-hidden': true }, week.map((value, index) => h('span', { key: index, style: { height: `${Math.max(8, (value / top) * 100)}%` }, 'data-zero': value === 0 || undefined })))
+}
+
+function ChannelCard({ channel, state, omni }) {
+  const unread = unreadOf(state, channel.id)
+  return h('button', { type: 'button', className: 'oc-card', onClick: () => omni.showPage({ view: 'channel', channelId: channel.id }) },
+    h('span', { className: 'oc-card-top' },
+      h(Tile, { type: channel.type, size: 42 }),
+      h('span', { className: 'oc-card-who' }, h('strong', null, channel.name), h('span', null, `${CHANNEL_TYPES[channel.type].label} · ${channel.detail}`)),
+      h(StatusPill, { status: channel.status })),
+    h('span', { className: 'oc-card-bottom' },
+      h(Spark, { week: channel.health.week }),
+      h('span', { className: 'oc-card-facts' },
+        h('span', null, t('{n} today', { n: channel.health.messagesToday })),
+        h('span', null, t('last message {time}', { time: relativeShort(channel.health.lastEventAt) })),
+        unread > 0 ? h('span', { className: 'oc-card-unread' }, t('{n} unread', { n: unread })) : null)))
+}
+
+function ChannelDetail({ channel, state, omni }) {
+  const [confirming, setConfirming] = useState(false)
+  useEffect(() => { setConfirming(false) }, [channel.id])
+  const type = CHANNEL_TYPES[channel.type]
+  const { health } = channel
+  const firstChat = visibleChats({ ...state, filter: channel.id })[0]
+  const days = [6, 5, 4, 3, 2, 1, 0].map(back => new Date(Date.now() - back * 86_400_000).toLocaleDateString([], { weekday: 'short' }))
+  const top = Math.max(1, ...health.week)
+  return h(Fragment, null,
+    h('button', { type: 'button', className: 'oc-back', onClick: () => omni.showPage({ view: 'overview', channelId: null }) }, h(ChevronLeftIcon), t('Channels')),
+    h('header', { className: 'oc-detail-head' },
+      h(Tile, { type: channel.type, size: 56 }),
+      h('div', { className: 'oc-detail-who' },
+        h('h1', null, channel.name),
+        h('p', null, `${type.label} · ${channel.detail}`)),
+      h(StatusPill, { status: channel.status })),
+    channel.status === 'attention' || channel.status === 'connecting'
+      ? h('div', { className: 'oc-callout oc-callout-static', 'data-tone': STATUS[channel.status].tone },
+        h('span', { className: 'oc-callout-text' },
+          h('strong', null, channel.status === 'connecting' ? t('Reconnecting…') : t('This channel stopped working')),
+          h('span', null, channel.status === 'connecting' ? t('Omni is bringing {name} back. Messages sent meanwhile are delivered after.', { name: channel.name }) : channel.problem)),
+        channel.status === 'attention' && type.pairing !== 'token' ? h('button', { type: 'button', className: 'oc-primary', onClick: () => omni.reconnect(channel.id) }, t('Reconnect')) : null,
+        channel.status === 'connecting' ? h('span', { className: 'oc-spinner', 'aria-hidden': true }) : null)
+      : null,
+    channel.status === 'attention' && type.pairing === 'token' ? h(TokenFix, { channel, type, omni }) : null,
+    h('div', { className: 'oc-actions' },
+      firstChat ? h('button', { type: 'button', className: 'oc-secondary', onClick: () => { omni.setFilter(channel.id); omni.openChat(firstChat.id) } }, t('Open chats')) : null,
+      channel.status === 'paused'
+        ? h('button', { type: 'button', className: 'oc-secondary', onClick: () => omni.resume(channel.id) }, t('Resume'))
+        : channel.status === 'connected' ? h('button', { type: 'button', className: 'oc-secondary', onClick: () => omni.pause(channel.id) }, t('Pause')) : null),
+    h('h2', { className: 'oc-section' }, t('Health')),
+    h('div', { className: 'oc-stats' },
+      h(Stat, { value: `${(health.uptime * 100).toFixed(health.uptime === 1 ? 0 : 1)}%`, label: t('online, last 7 days'), tone: health.uptime < 0.95 ? 'warn' : undefined }),
+      h(Stat, { value: String(health.messagesToday), label: t('messages today') }),
+      h(Stat, { value: health.replyMedianSec === null ? '–' : health.replyMedianSec < 60 ? t('{n} s', { n: health.replyMedianSec }) : t('{n} min', { n: Math.round(health.replyMedianSec / 60) }), label: t('typical reply') }),
+      h(Stat, { value: relativeShort(health.lastEventAt), label: t('last message') })),
+    h('div', { className: 'oc-chart', role: 'img', 'aria-label': t('Messages per day, last 7 days: {list}', { list: health.week.join(', ') }) },
+      health.week.map((value, index) => h('span', { key: index, className: 'oc-chart-col' },
+        h('span', { className: 'oc-chart-n' }, value > 0 ? String(value) : ''),
+        h('span', { className: 'oc-chart-bar', style: { height: `${Math.max(3, (value / top) * 100)}%` }, 'data-zero': value === 0 || undefined }),
+        h('span', { className: 'oc-chart-day' }, days[index])))),
+    h('h2', { className: 'oc-section' }, t('Who answers')),
+    h('div', { className: 'oc-seg', role: 'radiogroup', 'aria-label': t('Who answers') },
+      [['Omni', t('Omni answers'), t('Omni replies on its own and hands over when it should.')], ['You', t('You answer'), t('Chats wait for you. Omni only drafts.')]].map(([value, title, text]) => h('button', {
+        key: value, type: 'button', role: 'radio', 'aria-checked': channel.answeredBy === value, className: 'oc-seg-opt',
+        onClick: () => omni.setAnsweredBy(channel.id, value),
+      }, h('strong', null, value === 'Omni' ? h(OctopusLogo, { size: 16 }) : null, title), h('span', null, text)))),
+    h('div', { className: 'oc-danger' },
+      h('div', null, h('strong', null, t('Disconnect {name}', { name: channel.name })), h('span', null, t('Omni stops reading and answering here. Its chats leave the sidebar.'))),
+      h('button', {
+        type: 'button', className: confirming ? 'oc-danger-go oc-danger-armed' : 'oc-danger-go',
+        onClick: () => (confirming ? omni.remove(channel.id) : setConfirming(true)),
+        onBlur: () => setConfirming(false),
+      }, confirming ? t('Click again to disconnect') : t('Disconnect'))))
+}
+
+// Choose a channel type, then pair it the way that channel pairs: a QR code, a token,
+// or the app's own sign-in.
+function ConnectFlow({ state, omni }) {
+  const { type, step } = state.page
+  const [name, setName] = useState('')
+  const [token, setToken] = useState('')
+  useEffect(() => { setName(''); setToken('') }, [type])
+  if (type === null) {
+    return h(Fragment, null,
+      h('button', { type: 'button', className: 'oc-back', onClick: () => omni.showPage({ view: 'overview' }) }, h(ChevronLeftIcon), t('Channels')),
+      h('header', { className: 'oc-head' }, h('div', null,
+        h('h1', null, t('Add a channel'), h(PreviewChip)),
+        h('p', null, t('Pick where people talk to you. It takes about a minute, and you can disconnect at any time.')))),
+      h('div', { className: 'oc-types' }, Object.entries(CHANNEL_TYPES).map(([id, info]) => h('button', {
+        key: id, type: 'button', className: 'oc-type', onClick: () => omni.showPage({ type: id, step: 0 }),
+      }, h(Tile, { type: id, size: 48 }), h('strong', null, info.label), h('span', null, info.blurb),
+      h('em', null, info.pairing === 'qr' ? t('Scan a QR code') : info.pairing === 'token' ? t('Paste a token') : t('Sign in with {app}', { app: info.signIn }))))))
+  }
+  const info = CHANNEL_TYPES[type]
+  const steps = [t('Name it'), info.pairing === 'qr' ? t('Scan') : info.pairing === 'token' ? t('Paste token') : t('Sign in'), t('Done')]
+  return h(Fragment, null,
+    h('button', { type: 'button', className: 'oc-back', onClick: () => omni.showPage({ type: null, step: 0 }) }, h(ChevronLeftIcon), t('All channels')),
+    h('ol', { className: 'oc-steps' }, steps.map((label, index) => h('li', { key: label, 'data-state': index < step ? 'done' : index === step ? 'now' : undefined }, h('span', null, index < step ? '✓' : String(index + 1)), label))),
     h('div', { className: 'oc-flow' },
-      h(Tile, { type: picked, size: 64 }),
+      h(Tile, { type, size: 64, ring: true }),
       step === 0 ? h(Fragment, null,
-        h('h2', null, `Connect ${channel.label}`),
-        h('p', null, channel.blurb),
-        h('ul', { className: 'oc-checks' }, h('li', null, 'Takes about a minute'), h('li', null, 'You can disconnect at any time'), h('li', null, 'Omni only reads chats you allow')),
-        h('button', { type: 'button', className: 'oc-primary', onClick: () => setStep(1) }, `Start with ${channel.label}`))
-        : step === 1 ? h(Fragment, null,
-          h('h2', null, 'Scan this code'),
-          h('p', null, 'Open the app on your phone, go to Linked devices, and scan the code. This is a sample code for the preview.'),
-          h('div', { className: 'oc-qr', 'aria-label': 'Sample QR code' }, h(SampleQr, null)),
-          h('button', { type: 'button', className: 'oc-primary', onClick: () => setStep(2) }, 'I scanned it'))
+        h('h1', null, t('Connect {app}', { app: info.label })),
+        h('p', null, info.blurb),
+        h('label', { className: 'oc-field' }, h('span', null, t('Name')), h('input', {
+          value: name, placeholder: t('For example: Sales, Support, Personal'), onChange: event => setName(event.target.value), autoFocus: true,
+          onKeyDown: (event) => { if (event.key === 'Enter') omni.showPage({ step: 1 }) },
+        })),
+        h('button', { type: 'button', className: 'oc-primary', onClick: () => omni.showPage({ step: 1 }) }, t('Continue')))
+        : step === 1 ? h(Pairing, { info, token, setToken, onDone: () => omni.showPage({ step: 2 }) })
           : h(Fragment, null,
-            h('h2', null, `${channel.label} is connected`),
-            h('p', null, 'New chats on this channel now appear in Omni. Nothing is sent to your contacts until you reply.'),
-            h('button', { type: 'button', className: 'oc-primary', onClick: () => setStore({ view: 'chats', channel: null }) }, 'Open my chats'))))
+            h('h1', null, t('{app} is connected', { app: info.label })),
+            h('p', null, t('New chats appear under your Bots. Nothing is sent to your contacts until Omni or you reply.')),
+            h('button', { type: 'button', className: 'oc-primary', onClick: () => omni.finishConnect(type, name.trim()) }, t('See its health')))))
 }
 
-// Decorative placeholder pattern, not a real pairing code.
-function SampleQr() {
-  const cells = []
-  for (let y = 0; y < 13; y += 1) for (let x = 0; x < 13; x += 1) {
-    if (((x * 7 + y * 13) % 5 === 0) || (x < 3 && y < 3) || (x > 9 && y < 3) || (x < 3 && y > 9)) cells.push(h('rect', { key: `${x}-${y}`, x: x + 1, y: y + 1, width: 1, height: 1, rx: 0.2 }))
+function Pairing({ info, token, setToken, onDone }) {
+  if (info.pairing === 'qr') return h(QrPairing, { info, onDone })
+  if (info.pairing === 'token') {
+    return h(Fragment, null,
+      h('h1', null, t('Paste the {app} token', { app: info.label })),
+      h('p', null, info.label === 'Telegram' ? t('Message @BotFather, send /newbot, and copy the token it gives you.') : t('Create the token in {app}\'s settings and paste it here.', { app: info.label })),
+      h('label', { className: 'oc-field' }, h('span', null, t('Token')), h('input', { type: 'password', value: token, onChange: event => setToken(event.target.value), placeholder: '123456:ABC-…', autoComplete: 'off' })),
+      h('button', { type: 'button', className: 'oc-primary', disabled: token.trim() === '', onClick: onDone }, t('Connect')))
   }
-  return h('svg', { viewBox: '0 0 15 15', width: 184, height: 184, 'aria-hidden': true }, h('g', { fill: 'currentColor' }, ...cells))
+  return h(Fragment, null,
+    h('h1', null, t('Sign in with {app}', { app: info.signIn })),
+    h('p', null, t('A {app} window opens. Approve Omni there and come back.', { app: info.signIn })),
+    h('button', { type: 'button', className: 'oc-primary', onClick: onDone }, t('Continue to {app}', { app: info.signIn })))
 }
 
-export function ChannelsOverlay() {
-  const omni = useOmni()
-  useEffect(() => {
-    if (!omni.open) return undefined
-    const onKey = event => { if (event.key === 'Escape') setStore({ open: false }) }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [omni.open])
-  if (!omni.open) return null
-  return h('div', { className: 'oc-scrim', onClick: event => { if (event.target === event.currentTarget) setStore({ open: false }) } },
-    h('div', { className: 'oc-window', role: 'dialog', 'aria-modal': true, 'aria-label': 'Omni channels' },
-      h('header', { className: 'oc-topbar' },
-        h('span', { className: 'oc-title' }, h(OctopusMark, { size: 20 }), 'Omni channels'),
-        h('span', { className: 'oc-preview-chip' }, 'Preview · sample data'),
-        h('button', { type: 'button', className: 'oc-close', onClick: () => setStore({ open: false }), 'aria-label': 'Close' }, '×')),
-      h('div', { className: 'oc-body' },
-        h(Rail, { omni }),
-        omni.view === 'connect' ? h(ConnectFlow, { omni }) : h(ChatList, { omni }),
-        omni.view === 'connect' ? null : h(Conversation, { omni }))))
+// A revoked token is fixed where it is reported: paste the new one and reconnect.
+function TokenFix({ channel, type, omni }) {
+  const [token, setToken] = useState('')
+  return h('div', { className: 'oc-fix' },
+    h('label', { className: 'oc-field' }, h('span', null, t('New {app} token', { app: type.label })),
+      h('input', { type: 'password', value: token, autoComplete: 'off', placeholder: '123456:ABC-…', onChange: event => setToken(event.target.value),
+        onKeyDown: (event) => { if (event.key === 'Enter' && token.trim() !== '') omni.reconnect(channel.id) } })),
+    h('button', { type: 'button', className: 'oc-primary', disabled: token.trim() === '', onClick: () => omni.reconnect(channel.id) }, t('Reconnect')))
 }
+
+// WhatsApp codes live for 60 seconds; the countdown shows when the next one appears.
+function useCountdown(seconds) {
+  const [left, setLeft] = useState(seconds)
+  useEffect(() => {
+    const timer = setInterval(() => setLeft(value => (value <= 1 ? seconds : value - 1)), 1000)
+    return () => clearInterval(timer)
+  }, [seconds])
+  return left
+}
+
+function QrPairing({ info, onDone }) {
+  const [byPhone, setByPhone] = useState(false)
+  const [phone, setPhone] = useState('')
+  const [code, setCode] = useState(null)
+  const left = useCountdown(60)
+  if (byPhone) {
+    return h(Fragment, null,
+      h('h1', null, t('Link with a phone number')),
+      code === null ? h(Fragment, null,
+        h('p', null, t('Omni shows an 8-character code. Type it on your phone instead of scanning.')),
+        h('label', { className: 'oc-field' }, h('span', null, t('Phone number with country code')), h('input', { value: phone, inputMode: 'tel', placeholder: '+55 11 91234-5678', onChange: event => setPhone(event.target.value), autoFocus: true })),
+        h('button', { type: 'button', className: 'oc-primary', disabled: phone.replace(/\D/g, '').length < 8, onClick: () => setCode('K7QX-4M2P') }, t('Get code')))
+        : h(Fragment, null,
+          h('ol', { className: 'oc-howto' },
+            h('li', null, t('On your phone, open {app} → Linked devices → Link a device', { app: info.label })),
+            h('li', null, t('Tap “Link with phone number instead”')),
+            h('li', null, t('Type this code'))),
+          h('div', { className: 'oc-code', 'aria-label': t('Pairing code') }, code.split('').map((char, index) => h('span', { key: index, 'data-dash': char === '-' || undefined }, char))),
+          h('span', { className: 'oc-qr-wait' }, h('span', { className: 'oc-spinner', 'aria-hidden': true }), t('Waiting for your phone… the code works for {n} s', { n: left })),
+          h('button', { type: 'button', className: 'oc-link', onClick: onDone }, t('Preview: pretend I typed it'))),
+      h('button', { type: 'button', className: 'oc-link', onClick: () => { setByPhone(false); setCode(null) } }, t('Scan a QR code instead')))
+  }
+  return h(Fragment, null,
+    h('h1', null, t('Scan with your phone')),
+    h('ol', { className: 'oc-howto' },
+      h('li', null, t('Open {app} on your phone', { app: info.label })),
+      h('li', null, t('Tap Settings, then Linked devices')),
+      h('li', null, t('Tap Link a device and point the camera here'))),
+    h('div', { className: 'oc-qr' },
+      h('span', { className: 'oc-qr-code' }, h(SampleQr, { seed: Math.floor(Date.now() / 60_000) }), h('span', { className: 'oc-qr-logo' }, h(Tile, { type: 'whatsapp-baileys', size: 34 }))),
+      h('span', { className: 'oc-qr-wait' }, h('span', { className: 'oc-spinner', 'aria-hidden': true }), t('Waiting for your phone · new code in {n} s', { n: left }))),
+    h('span', { className: 'oc-alt' },
+      h('button', { type: 'button', className: 'oc-link', onClick: () => setByPhone(true) }, t('Use a phone number instead')),
+      h('button', { type: 'button', className: 'oc-link', onClick: onDone }, t('Preview: pretend I scanned it'))))
+}
+
+// A placeholder pattern for the preview, not a pairing code.
+function SampleQr({ seed = 1 }) {
+  const N = 25
+  const finder = (x, y) => [[0, 0], [N - 7, 0], [0, N - 7]].find(([fx, fy]) => x >= fx && x < fx + 7 && y >= fy && y < fy + 7)
+  const logo = (x, y) => Math.abs(x - 12) <= 3 && Math.abs(y - 12) <= 3
+  const cells = []
+  let state = seed * 2654435761 >>> 0
+  for (let y = 0; y < N; y += 1) for (let x = 0; x < N; x += 1) {
+    state = (state * 1103515245 + 12345) >>> 0
+    if (finder(x, y) || logo(x, y) || (x === 7 || y === 7) && (x < 8 && y < 8 || x > N - 9 && y < 8 || x < 8 && y > N - 9)) continue
+    if ((state >>> 16) % 100 < 48) cells.push(h('rect', { key: `${x}-${y}`, x, y, width: 1, height: 1, rx: 0.3 }))
+  }
+  const eyes = [[0, 0], [N - 7, 0], [0, N - 7]].map(([x, y]) => h('g', { key: `${x}-${y}` },
+    h('rect', { x: x + 0.5, y: y + 0.5, width: 6, height: 6, rx: 1.6, fill: 'none', stroke: 'currentColor', strokeWidth: 1 }),
+    h('rect', { x: x + 2, y: y + 2, width: 3, height: 3, rx: 0.9 })))
+  return h('svg', { viewBox: `-1 -1 ${N + 2} ${N + 2}`, width: 196, height: 196, 'aria-hidden': true }, h('g', { fill: 'currentColor' }, cells, eyes))
+}
+
+// -------------------------------------------------------------------------
+
+const TONES = '[data-tone=ok]{--oc-tone:#16a34a}[data-tone=busy]{--oc-tone:#0ea5e9}[data-tone=warn]{--oc-tone:#f59e0b}[data-tone=off]{--oc-tone:#94a3b8}'
 
 export const CHANNELS_CSS = `
-.oc-open{display:flex;align-items:center;gap:8px;width:100%;padding:8px 10px;border:1px solid var(--bt-line,#d9e3e1);border-radius:12px;background:var(--bt-card,#fff);color:var(--bt-ink,#0c2630);font:inherit;font-size:13px;cursor:pointer}
-.oc-open:hover{background:var(--bt-hover,#eef6f4)}
-.oc-open-glyph{display:grid;place-items:center;width:24px;height:24px;border-radius:8px;background:var(--bt-accent,#0f9d8f);color:var(--bt-accent-ink,#fff)}
-.oc-badge,.oc-rail-badge,.oc-count{min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:#ef4444;color:#fff;font-size:11px;font-weight:600;display:inline-grid;place-items:center;margin-left:auto}
-.oc-scrim{position:fixed;inset:0;z-index:2000;background:rgba(6,20,26,.45);backdrop-filter:blur(3px);display:grid;place-items:center;padding:24px;animation:oc-in .18s ease-out}
-@keyframes oc-in{from{opacity:0}to{opacity:1}}
-.oc-window{width:min(1180px,100%);height:min(780px,100%);background:var(--bt-main,#f3fbfa);color:var(--bt-ink,#0c2630);border-radius:22px;box-shadow:0 30px 80px rgba(0,0,0,.35);display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--bt-line,#d9e3e1)}
-.oc-topbar{display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--bt-line,#d9e3e1);background:var(--bt-sidebar,#e8f6f3)}
-.oc-title{display:flex;align-items:center;gap:8px;font-weight:650;font-size:15px;color:var(--bt-accent,#0f9d8f)}
-.oc-preview-chip{font-size:12px;padding:3px 10px;border-radius:999px;background:var(--bt-bubble,#dcefea);color:var(--bt-ink,#0c2630);opacity:.8}
-.oc-close{margin-left:auto;width:32px;height:32px;border:0;border-radius:10px;background:transparent;color:inherit;font-size:22px;cursor:pointer}
-.oc-close:hover{background:var(--bt-hover,#eef6f4)}
-.oc-body{flex:1;display:grid;grid-template-columns:76px 300px 1fr;min-height:0}
-.oc-rail{display:flex;flex-direction:column;align-items:center;gap:10px;padding:14px 0;background:var(--bt-sidebar,#e8f6f3);border-right:1px solid var(--bt-line,#d9e3e1);overflow:auto}
-.oc-rail-home,.oc-rail-item,.oc-rail-add{position:relative;width:48px;height:48px;border:0;border-radius:16px;display:grid;place-items:center;background:var(--bt-card,#fff);color:var(--bt-accent,#0f9d8f);cursor:pointer;transition:border-radius .18s,transform .12s}
-.oc-rail-home:hover,.oc-rail-item:hover,.oc-rail-add:hover{border-radius:12px;transform:translateY(-1px)}
-.oc-rail-add{font-size:24px;color:var(--bt-ink,#0c2630);opacity:.7;border:1px dashed var(--bt-line,#d9e3e1);background:transparent}
-.oc-rail .oc-on{box-shadow:0 0 0 2px var(--bt-accent,#0f9d8f);border-radius:14px}
-.oc-rail-divider{width:28px;height:1px;background:var(--bt-line,#d9e3e1);margin:4px 0}
-.oc-rail-item .oc-tile{border-radius:inherit}
-.oc-rail-badge{position:absolute;top:-4px;right:-6px;height:18px;min-width:18px;font-size:10px}
-.oc-status{position:absolute;bottom:-2px;right:-2px;width:11px;height:11px;border-radius:50%;border:2px solid var(--bt-sidebar,#e8f6f3)}
-.oc-status-connected{background:#22c55e}.oc-status-attention{background:#f59e0b}
-.oc-tile{display:grid;place-items:center;border-radius:14px;color:#fff;flex:none}
-.oc-glyph{display:block}
-.oc-list{display:flex;flex-direction:column;border-right:1px solid var(--bt-line,#d9e3e1);min-height:0;background:var(--bt-card,#fff)}
-.oc-list-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;padding:16px 16px 8px}
-.oc-list-head h2{margin:0;font-size:17px}
-.oc-list-head p{margin:2px 0 0;font-size:12px;opacity:.65}
-.oc-pill{font-size:11px;padding:3px 8px;border-radius:999px;white-space:nowrap}
-.oc-pill-connected{background:#dcfce7;color:#166534}.oc-pill-attention{background:#fef3c7;color:#92400e}
-.oc-search{display:flex;align-items:center;gap:8px;margin:6px 12px 10px;padding:8px 10px;border-radius:12px;background:var(--bt-main,#f3fbfa);border:1px solid var(--bt-line,#d9e3e1);font-size:13px}
-.oc-search input{flex:1;border:0;background:transparent;font:inherit;color:inherit;outline:none}
-.oc-chats{list-style:none;margin:0;padding:0 8px 12px;overflow:auto;flex:1}
-.oc-chat{display:flex;gap:10px;align-items:center;width:100%;padding:10px;border:0;border-radius:14px;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}
-.oc-chat:hover{background:var(--bt-hover,#eef6f4)}
-.oc-chat.oc-on{background:var(--bt-active,#d5efea)}
-.oc-avatar{width:40px;height:40px;border-radius:50%;flex:none;display:grid;place-items:center;background:var(--bt-bubble,#dcefea);color:var(--bt-accent,#0f9d8f);font-weight:650;font-size:13px}
-.oc-avatar-lg{width:44px;height:44px}
-.oc-chat-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
-.oc-chat-top,.oc-chat-bottom{display:flex;align-items:center;gap:8px;min-width:0}
-.oc-chat-top strong{flex:1;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.oc-chat-top time{font-size:11px;opacity:.6}
-.oc-preview{flex:1;min-width:0;font-size:12.5px;opacity:.7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.oc-empty{padding:16px;font-size:13px;opacity:.6}
-.oc-thread{display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--bt-main,#f3fbfa)}
-.oc-thread-empty{align-items:center;justify-content:center;opacity:.6}
-.oc-thread-head{display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--bt-line,#d9e3e1);background:var(--bt-card,#fff)}
-.oc-thread-head strong{font-size:15px}
-.oc-thread-head p{margin:2px 0 0;font-size:12px;opacity:.65;display:flex;align-items:center;gap:6px}
-.oc-via .oc-tile{width:16px;height:16px;border-radius:5px}
-.oc-messages{flex:1;overflow:auto;padding:18px 24px;display:flex;flex-direction:column;gap:10px}
-.oc-day{align-self:center;font-size:11px;padding:3px 10px;border-radius:999px;background:var(--bt-bubble,#dcefea);opacity:.8;margin:4px 0}
-.oc-msg{max-width:62%;padding:9px 12px;border-radius:16px;background:var(--bt-bubble,#dcefea)}
-.oc-msg p{margin:0;font-size:14px;line-height:1.45}
-.oc-msg-meta{display:block;margin-top:4px;font-size:11px;opacity:.6}
-.oc-msg-me{align-self:flex-end;background:var(--bt-accent,#0f9d8f);color:var(--bt-accent-ink,#fff);border-bottom-right-radius:6px}
-.oc-msg-me .oc-msg-meta{color:inherit}
-.oc-msg-them{align-self:flex-start;border-bottom-left-radius:6px;background:var(--bt-card,#fff);border:1px solid var(--bt-line,#d9e3e1)}
-.oc-composer{display:flex;gap:10px;padding:12px 16px;border-top:1px solid var(--bt-line,#d9e3e1);background:var(--bt-card,#fff)}
-.oc-composer input{flex:1;padding:10px 14px;border-radius:999px;border:1px solid var(--bt-line,#d9e3e1);background:var(--bt-main,#f3fbfa);font:inherit;color:inherit;outline:none}
-.oc-send{width:40px;height:40px;border-radius:50%;border:0;background:var(--bt-accent,#0f9d8f);color:var(--bt-accent-ink,#fff);font-size:18px;cursor:pointer}
-.oc-connect{grid-column:2 / span 2;overflow:auto;padding:28px 32px;display:flex;flex-direction:column;gap:18px}
-.oc-connect-head h2{margin:0 0 6px;font-size:22px}
-.oc-connect-head p{margin:0;opacity:.7;max-width:620px;line-height:1.5}
-.oc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px}
-.oc-card{display:flex;flex-direction:column;align-items:flex-start;gap:8px;padding:18px;border-radius:18px;border:1px solid var(--bt-line,#d9e3e1);background:var(--bt-card,#fff);color:inherit;font:inherit;text-align:left;cursor:pointer;transition:transform .12s,box-shadow .12s}
-.oc-card:hover{transform:translateY(-2px);box-shadow:0 10px 26px rgba(0,0,0,.10)}
-.oc-card strong{font-size:16px}
-.oc-card > span:not(.oc-tile){font-size:13px;opacity:.7;line-height:1.4}
-.oc-card em{font-style:normal;color:var(--bt-accent,#0f9d8f);font-size:13px;margin-top:auto}
-.oc-connect-flow{align-items:stretch}
-.oc-back{align-self:flex-start;border:0;background:transparent;color:var(--bt-accent,#0f9d8f);font:inherit;cursor:pointer;padding:4px 0}
-.oc-steps{display:flex;gap:18px;list-style:none;margin:0;padding:0;font-size:13px;opacity:.6}
-.oc-steps li{display:flex;align-items:center;gap:6px}
-.oc-steps span{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;border:1px solid currentColor;font-size:11px}
-.oc-steps .oc-step-on{opacity:1;color:var(--bt-accent,#0f9d8f);font-weight:600}
-.oc-steps .oc-step-on span{background:var(--bt-accent,#0f9d8f);color:var(--bt-accent-ink,#fff);border-color:transparent}
-.oc-flow{display:flex;flex-direction:column;align-items:flex-start;gap:12px;max-width:520px;margin-top:8px}
-.oc-flow h2{margin:4px 0 0;font-size:22px}
-.oc-flow p{margin:0;line-height:1.55;opacity:.8}
-.oc-checks{margin:4px 0;padding-left:18px;line-height:1.8;opacity:.8}
-.oc-primary{margin-top:8px;padding:11px 20px;border-radius:14px;border:0;background:var(--bt-accent,#0f9d8f);color:var(--bt-accent-ink,#fff);font:inherit;font-weight:600;cursor:pointer}
-.oc-qr{padding:14px;border-radius:18px;background:#fff;color:#0c2630;border:1px solid var(--bt-line,#d9e3e1)}
-@media (max-width:820px){.oc-body{grid-template-columns:64px 1fr}.oc-thread{display:none}.oc-connect{grid-column:2}}
+${TONES}
+.oc-tile{display:inline-grid;place-items:center;flex:none;color:#fff;box-shadow:inset 0 0 0 .5px rgba(0,0,0,.08)}
+.oc-tile svg{display:block}
+.oc-tile-ring{box-shadow:0 0 0 6px color-mix(in srgb,var(--bt-accent) 14%,transparent)}
+.oc-dot{width:9px;height:9px;border-radius:50%;background:var(--oc-tone);flex:none}
+.oc-pill{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 10px;border-radius:999px;font-size:12px;font-weight:500;white-space:nowrap;color:color-mix(in srgb,var(--oc-tone) 70%,var(--bt-ink));background:color-mix(in srgb,var(--oc-tone) 13%,transparent)}
+.oc-pill-dot{width:6px;height:6px;border-radius:50%;background:var(--oc-tone)}
+.oc-pill[data-tone=busy] .oc-pill-dot,.oc-filter .oc-dot[data-tone=busy]{animation:oc-pulse 1.2s ease-in-out infinite}
+@keyframes oc-pulse{50%{opacity:.35}}
+.oc-preview-chip{display:inline-flex;align-items:center;height:22px;padding:0 9px;margin-left:10px;border-radius:999px;border:1px dashed var(--bt-line-2);color:var(--bt-ink-2);font-size:11.5px;font-weight:500;vertical-align:middle;white-space:nowrap}
+
+/* Chat avatars carry a small channel tile in the corner. */
+.oc-ava{position:relative;flex:none;display:inline-grid;place-items:center;border-radius:50%;background:hsl(var(--oc-hue) 55% 88%);color:hsl(var(--oc-hue) 45% 30%)}
+body[data-ds-dark-theme] .oc-ava{background:hsl(var(--oc-hue) 30% 26%);color:hsl(var(--oc-hue) 60% 82%)}
+.oc-ava-face{font-weight:600;letter-spacing:.01em}
+.oc-ava-badge{position:absolute;right:-4px;bottom:-4px;display:inline-flex;border-radius:32%;box-shadow:0 0 0 2px var(--bt-sidebar)}
+.oc-chat .oc-ava-badge{box-shadow:0 0 0 2px var(--bt-main)}
+
+/* Sidebar: the Chats section under the Bots */
+.oc-side{display:flex;flex-direction:column;gap:3px;margin-top:10px;padding-top:10px;border-top:.5px solid var(--bt-line-2)}
+.oc-side-head{display:flex;align-items:center;justify-content:space-between;padding:0 4px 0 10px;min-height:28px}
+.oc-side-title{font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--bt-ink-3)}
+.oc-side-manage{display:inline-flex;align-items:center;gap:4px;height:26px;padding:0 6px 0 10px;border:0;border-radius:999px;background:none;color:var(--bt-ink-2);font:inherit;font-size:12.5px;cursor:pointer;transition:background-color .12s ease,color .12s ease}
+.oc-side-manage:hover,.oc-side-manage[aria-current=page]{background:var(--bt-hover);color:var(--bt-ink)}
+.oc-warn-dot{width:7px;height:7px;border-radius:50%;background:#f59e0b;box-shadow:0 0 0 1.5px var(--bt-sidebar)}
+.oc-filters{display:flex;flex-wrap:wrap;gap:5px;padding:4px 6px 6px}
+.oc-filter{position:relative;width:34px;height:34px;border-radius:11px;border:1px solid transparent;background:var(--bt-hover);display:inline-grid;place-items:center;padding:0;cursor:pointer;color:var(--bt-accent);transition:transform .12s ease,border-color .12s ease,background-color .12s ease}
+.oc-filter:hover{transform:translateY(-1px)}
+.oc-filter[aria-pressed=true]{border-color:var(--bt-accent);background:color-mix(in srgb,var(--bt-accent) 12%,transparent)}
+.oc-filter .oc-dot{position:absolute;right:2px;bottom:2px;width:9px;height:9px;box-shadow:0 0 0 2px var(--bt-sidebar)}
+.oc-filter-count{position:absolute;top:-5px;right:-5px;min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:var(--bt-accent);color:var(--bt-accent-ink,#fff);font-size:10px;font-weight:600;line-height:16px;box-sizing:border-box;box-shadow:0 0 0 2px var(--bt-sidebar)}
+.oc-filter-add{background:none;border:1px dashed var(--bt-line-2);color:var(--bt-ink-3)}
+.oc-filter-add:hover{color:var(--bt-ink);border-color:var(--bt-ink-3)}
+.oc-filter-add svg{width:16px;height:16px}
+.oc-side-alert{display:flex;align-items:center;gap:8px;margin:0 6px 4px;padding:7px 10px;border:0;border-radius:10px;background:color-mix(in srgb,var(--oc-tone) 12%,transparent);color:var(--bt-ink);font:inherit;font-size:12.5px;text-align:left;cursor:pointer}
+.oc-side-alert-go{margin-left:auto;font-weight:600;color:color-mix(in srgb,var(--oc-tone) 70%,var(--bt-ink))}
+.oc-side-empty{padding:8px 10px 10px;font-size:12.5px;line-height:18px;color:var(--bt-ink-3)}
+.oc-chat-row .bt-row-name{justify-content:space-between}
+.oc-row-time{flex:none;font-size:11px;color:var(--bt-ink-3)}
+.oc-row-line{display:flex;align-items:center;gap:6px;min-width:0}
+.oc-row-line .bt-row-preview{flex:1;min-width:0}
+.oc-count{flex:none;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--bt-accent);color:var(--bt-accent-ink,#fff);font-size:11px;font-weight:600;line-height:18px;text-align:center;box-sizing:border-box}
+.oc-chat-row[aria-current=page]{background:var(--bt-active)}
+.oc-side-rail{align-items:center;border-top:0;margin-top:6px;padding-top:0}
+.oc-side-rule{width:24px;height:1px;background:var(--bt-line-2);margin:2px 0 6px}
+.oc-rail-octo{position:relative;display:inline-grid;place-items:center;width:36px;height:36px;border-radius:50%;background:var(--bt-hover);color:var(--bt-accent)}
+.oc-rail-octo .oc-warn-dot{position:absolute;top:2px;right:2px}
+
+/* Main panels */
+.oc-page{position:relative;height:100%;min-height:0;display:flex;flex-direction:column;background:var(--bt-main);color:var(--bt-ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;animation:oc-page-in .22s cubic-bezier(.2,0,0,1)}
+@keyframes oc-page-in{from{opacity:0;transform:translateY(6px)}}
+.oc-primary,.oc-secondary,.oc-ghost{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:38px;padding:0 16px;border-radius:999px;font:inherit;font-size:14px;font-weight:500;cursor:pointer;white-space:nowrap;transition:transform .12s ease,opacity .12s ease,background-color .12s ease}
+.oc-primary{border:0;background:var(--bt-accent);color:var(--bt-accent-ink,#fff)}
+.oc-primary svg{width:16px;height:16px}
+.oc-primary:hover:not(:disabled){opacity:.92}
+.oc-primary:active:not(:disabled),.oc-secondary:active{transform:scale(.97)}
+.oc-primary:disabled{opacity:.45;cursor:default}
+.oc-secondary{border:1px solid var(--bt-line-2);background:var(--bt-card);color:var(--bt-ink)}
+.oc-secondary:hover{background:var(--bt-hover)}
+.oc-ghost{height:32px;padding:0 12px;border:0;background:none;color:var(--bt-ink-2);font-size:13px}
+.oc-ghost:hover{background:var(--bt-hover);color:var(--bt-ink)}
+.oc-link{border:0;background:none;padding:0;color:var(--bt-ink-2);font:inherit;font-size:13px;text-decoration:underline;text-underline-offset:3px;cursor:pointer}
+.oc-spinner{width:14px;height:14px;border-radius:50%;border:2px solid color-mix(in srgb,var(--bt-accent) 25%,transparent);border-top-color:var(--bt-accent);animation:oc-spin .8s linear infinite;flex:none}
+@keyframes oc-spin{to{transform:rotate(360deg)}}
+
+/* Chat */
+.oc-chat-empty{align-items:center;justify-content:center;gap:12px;color:var(--bt-ink-3)}
+.oc-chat-head{display:flex;align-items:center;gap:12px;padding:12px 20px;border-bottom:.5px solid var(--bt-line-2);flex-wrap:wrap}
+.oc-chat-who{display:flex;flex-direction:column;min-width:0;margin-right:auto}
+.oc-chat-who strong{font-size:15px;line-height:20px;font-weight:600}
+.oc-chat-who span{font-size:12.5px;color:var(--bt-ink-2)}
+.oc-answer{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 11px;border-radius:999px;font-size:12.5px;color:var(--bt-accent);background:color-mix(in srgb,var(--bt-accent) 10%,transparent)}
+.oc-answer[data-by=you]{color:var(--bt-ink-2);background:var(--bt-hover)}
+.oc-thread{flex:1;min-height:0;overflow-y:auto}
+.oc-thread-in{display:flex;flex-direction:column;gap:2px;max-width:var(--dsh-chat-content-width,748px);margin:0 auto;padding:20px 24px 12px}
+.oc-day{align-self:center;margin:4px 0 12px;font-size:11.5px;color:var(--bt-ink-3)}
+.oc-msg{display:flex;flex-direction:column;max-width:72%;animation:oc-msg-in .2s cubic-bezier(.2,0,0,1)}
+@keyframes oc-msg-in{from{opacity:0;transform:translateY(4px)}}
+.oc-msg-first{margin-top:10px}
+.oc-msg-them{align-self:flex-start;align-items:flex-start}
+.oc-msg-omni,.oc-msg-you{align-self:flex-end;align-items:flex-end}
+.oc-msg-author{display:inline-flex;align-items:center;gap:4px;margin:0 12px 3px;font-size:12px;font-weight:500;color:var(--bt-ink-2)}
+.oc-msg-omni .oc-msg-author{color:var(--bt-accent)}
+.oc-bubble{position:relative;padding:8px 12px 7px;border-radius:18px;font-size:14.5px;line-height:21px;white-space:pre-wrap;overflow-wrap:anywhere;margin-top:2px}
+.oc-bubble time{float:right;margin:5px 0 -3px 10px;font-size:10.5px;line-height:14px;opacity:.55}
+.oc-msg-them .oc-bubble{background:var(--bt-bubble);color:var(--bt-ink)}
+.oc-msg-omni .oc-bubble{background:color-mix(in srgb,var(--bt-accent) 14%,var(--bt-main));color:var(--bt-ink)}
+.oc-msg-you .oc-bubble{background:var(--bt-user);color:var(--bt-user-ink)}
+.oc-compose-wrap{padding:8px 24px 20px}
+.oc-compose-note{display:flex;align-items:center;gap:8px;max-width:var(--dsh-chat-content-width,748px);margin:0 auto 8px;width:100%;padding:8px 12px;border:0;border-radius:12px;background:color-mix(in srgb,#f59e0b 12%,transparent);color:var(--bt-ink);font:inherit;font-size:13px;text-align:left;cursor:pointer;box-sizing:border-box}
+.oc-compose{display:flex;align-items:flex-end;gap:8px;max-width:var(--dsh-chat-content-width,748px);margin:0 auto;padding:6px 6px 6px 16px;border-radius:24px;border:1px solid var(--bt-line-2);background:var(--bt-card);box-shadow:0 2px 8px -2px rgba(0,0,0,.06);box-sizing:border-box}
+.oc-compose[data-off]{opacity:.6}
+.oc-compose textarea{flex:1;height:36px;min-height:36px;max-height:160px;padding:8px 0;box-sizing:border-box;border:0;background:none;color:var(--bt-ink);font:inherit;font-size:14.5px;line-height:20px;resize:none;outline:none;field-sizing:content}
+.oc-send{width:36px;height:36px;border-radius:50%;border:0;background:var(--bt-accent);color:var(--bt-accent-ink,#fff);display:inline-grid;place-items:center;cursor:pointer;flex:none;transition:opacity .12s ease,transform .12s ease}
+.oc-send:disabled{opacity:.3;cursor:default}
+.oc-send:active:not(:disabled){transform:scale(.94)}
+
+/* Channels */
+.oc-channels{overflow-y:auto}
+.oc-channels-in{width:100%;max-width:880px;margin:0 auto;padding:28px 32px 48px;box-sizing:border-box;display:flex;flex-direction:column;gap:16px}
+.oc-head{display:flex;align-items:flex-start;justify-content:space-between;gap:20px}
+.oc-head h1,.oc-detail-who h1,.oc-flow h1{margin:0;font-size:24px;line-height:32px;font-weight:650;letter-spacing:-.01em}
+.oc-head p{margin:6px 0 0;max-width:560px;font-size:14px;line-height:21px;color:var(--bt-ink-2)}
+.oc-callout{display:flex;align-items:center;gap:14px;width:100%;padding:14px 16px;border:1px solid color-mix(in srgb,var(--oc-tone) 35%,transparent);border-radius:16px;background:color-mix(in srgb,var(--oc-tone) 9%,var(--bt-main));color:var(--bt-ink);font:inherit;text-align:left;cursor:pointer;box-sizing:border-box;transition:transform .12s ease}
+.oc-callout:hover:not(.oc-callout-static){transform:translateY(-1px)}
+.oc-callout-static{cursor:default}
+.oc-callout-text{display:flex;flex-direction:column;gap:2px;flex:1;min-width:0;font-size:13.5px;line-height:19px;color:var(--bt-ink-2)}
+.oc-callout-text strong{font-size:14px;color:var(--bt-ink);font-weight:600}
+.oc-callout-go{display:inline-flex;align-items:center;gap:2px;font-size:13.5px;font-weight:600;color:color-mix(in srgb,var(--oc-tone) 70%,var(--bt-ink));white-space:nowrap}
+.oc-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.oc-stat{display:flex;flex-direction:column;gap:2px;padding:14px 16px;border-radius:14px;background:var(--bt-card);border:.5px solid var(--bt-line-2)}
+.oc-stat strong{font-size:22px;line-height:28px;font-weight:650;font-variant-numeric:tabular-nums}
+.oc-stat span{font-size:12.5px;color:var(--bt-ink-2)}
+.oc-stat[data-tone=warn] strong{color:#d97706}
+.oc-section{margin:10px 0 0;font-size:13px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;color:var(--bt-ink-3)}
+.oc-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:12px}
+.oc-card{display:flex;flex-direction:column;gap:16px;padding:16px;border-radius:18px;border:.5px solid var(--bt-line-2);background:var(--bt-card);color:var(--bt-ink);font:inherit;text-align:left;cursor:pointer;transition:transform .14s ease,box-shadow .14s ease}
+.oc-card:hover{transform:translateY(-2px);box-shadow:0 12px 28px -12px rgba(0,0,0,.18)}
+.oc-card-top{display:flex;align-items:center;gap:12px}
+.oc-card-who{display:flex;flex-direction:column;flex:1;min-width:0}
+.oc-card-who strong{font-size:15px;line-height:20px;font-weight:600}
+.oc-card-who span{font-size:12.5px;color:var(--bt-ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.oc-card-bottom{display:flex;align-items:flex-end;gap:14px}
+.oc-card-facts{display:flex;flex-direction:column;gap:2px;font-size:12.5px;color:var(--bt-ink-2);margin-left:auto;text-align:right}
+.oc-card-unread{color:var(--bt-accent);font-weight:600}
+.oc-spark{display:flex;align-items:flex-end;gap:3px;height:34px;width:96px}
+.oc-spark span{flex:1;border-radius:3px;background:color-mix(in srgb,var(--bt-accent) 55%,transparent)}
+.oc-spark span:last-child:not([data-zero]){background:var(--bt-accent)}
+.oc-spark span[data-zero]{background:var(--bt-line-2)}
+.oc-back{align-self:flex-start;display:inline-flex;align-items:center;gap:2px;height:30px;padding:0 10px 0 4px;margin-left:-4px;border:0;border-radius:999px;background:none;color:var(--bt-ink-2);font:inherit;font-size:13.5px;cursor:pointer}
+.oc-back:hover{background:var(--bt-hover);color:var(--bt-ink)}
+.oc-detail-head{display:flex;align-items:center;gap:16px}
+.oc-detail-who{flex:1;min-width:0}
+.oc-detail-who p{margin:2px 0 0;font-size:13.5px;color:var(--bt-ink-2)}
+.oc-actions{display:flex;gap:8px;flex-wrap:wrap}
+.oc-chart{display:flex;align-items:stretch;gap:10px;height:150px;padding:16px 16px 10px;border-radius:16px;background:var(--bt-card);border:.5px solid var(--bt-line-2)}
+.oc-chart-col{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:6px;min-width:0}
+.oc-chart-n{font-size:11px;color:var(--bt-ink-3);font-variant-numeric:tabular-nums;min-height:14px}
+.oc-chart-bar{width:100%;max-width:38px;border-radius:8px 8px 4px 4px;background:color-mix(in srgb,var(--bt-accent) 50%,transparent);transform-origin:bottom;animation:oc-grow .5s cubic-bezier(.2,0,0,1) both}
+.oc-chart-col:last-child .oc-chart-bar:not([data-zero]){background:var(--bt-accent)}
+.oc-chart-bar[data-zero]{background:var(--bt-line-2)}
+@keyframes oc-grow{from{transform:scaleY(0)}}
+.oc-chart-day{font-size:11.5px;color:var(--bt-ink-2)}
+.oc-seg{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.oc-seg-opt{display:flex;flex-direction:column;gap:4px;padding:14px 16px;border-radius:14px;border:1px solid var(--bt-line-2);background:var(--bt-card);color:var(--bt-ink);font:inherit;text-align:left;cursor:pointer;transition:border-color .12s ease,background-color .12s ease}
+.oc-seg-opt strong{display:inline-flex;align-items:center;gap:6px;font-size:14px;font-weight:600}
+.oc-seg-opt span{font-size:12.5px;line-height:18px;color:var(--bt-ink-2)}
+.oc-seg-opt[aria-checked=true]{border-color:var(--bt-accent);background:color-mix(in srgb,var(--bt-accent) 8%,var(--bt-card));box-shadow:0 0 0 3px color-mix(in srgb,var(--bt-accent) 14%,transparent)}
+.oc-danger{display:flex;align-items:center;gap:16px;margin-top:14px;padding:16px;border-radius:14px;border:1px solid color-mix(in srgb,var(--bt-danger) 25%,transparent)}
+.oc-danger div{display:flex;flex-direction:column;gap:2px;flex:1;font-size:12.5px;color:var(--bt-ink-2)}
+.oc-danger strong{font-size:14px;color:var(--bt-ink)}
+.oc-danger-go{height:34px;padding:0 14px;border-radius:999px;border:1px solid color-mix(in srgb,var(--bt-danger) 40%,transparent);background:none;color:var(--bt-danger);font:inherit;font-size:13px;font-weight:500;cursor:pointer;white-space:nowrap}
+.oc-danger-armed{background:var(--bt-danger);color:#fff;border-color:transparent}
+.oc-types{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}
+.oc-type{display:flex;flex-direction:column;align-items:flex-start;gap:8px;padding:18px;border-radius:18px;border:.5px solid var(--bt-line-2);background:var(--bt-card);color:var(--bt-ink);font:inherit;text-align:left;cursor:pointer;transition:transform .14s ease,box-shadow .14s ease}
+.oc-type:hover{transform:translateY(-2px);box-shadow:0 12px 28px -12px rgba(0,0,0,.18)}
+.oc-type strong{margin-top:4px;font-size:15px;font-weight:600}
+.oc-type>span:not(.oc-tile){font-size:13px;line-height:19px;color:var(--bt-ink-2)}
+.oc-type em{margin-top:auto;padding-top:6px;font-style:normal;font-size:12.5px;font-weight:500;color:var(--bt-accent)}
+.oc-steps{display:flex;gap:6px;list-style:none;margin:0;padding:0;font-size:13px;color:var(--bt-ink-3)}
+.oc-steps li{display:flex;align-items:center;gap:8px}
+.oc-steps li+li::before{content:"";width:28px;height:1px;background:var(--bt-line-2);margin-right:2px}
+.oc-steps span{width:22px;height:22px;border-radius:50%;display:inline-grid;place-items:center;border:1px solid var(--bt-line-2);font-size:11px;font-weight:600}
+.oc-steps li[data-state=now]{color:var(--bt-ink);font-weight:500}
+.oc-steps li[data-state=now] span{background:var(--bt-accent);border-color:transparent;color:var(--bt-accent-ink,#fff)}
+.oc-steps li[data-state=done] span{background:color-mix(in srgb,var(--bt-accent) 15%,transparent);border-color:transparent;color:var(--bt-accent)}
+.oc-flow{display:flex;flex-direction:column;align-items:flex-start;gap:14px;max-width:520px;margin-top:10px;animation:oc-page-in .22s cubic-bezier(.2,0,0,1)}
+.oc-flow p{margin:0;font-size:14px;line-height:21px;color:var(--bt-ink-2)}
+.oc-field{display:flex;flex-direction:column;gap:6px;width:100%}
+.oc-field span{font-size:12.5px;font-weight:500;color:var(--bt-ink-2)}
+.oc-field input{height:42px;padding:0 14px;border-radius:12px;border:1px solid var(--bt-line-2);background:var(--bt-card);color:var(--bt-ink);font:inherit;font-size:14px;outline:none;transition:border-color .12s ease,box-shadow .12s ease}
+.oc-field input:focus{border-color:var(--bt-accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--bt-accent) 16%,transparent)}
+.oc-howto{margin:0;padding-left:20px;font-size:14px;line-height:24px;color:var(--bt-ink-2)}
+.oc-qr{display:flex;flex-direction:column;align-items:center;gap:12px;padding:20px 20px 14px;border-radius:20px;background:#fff;color:#0c2630;border:.5px solid var(--bt-line-2);box-shadow:0 10px 30px -14px rgba(0,0,0,.25)}
+.oc-qr-wait{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;color:var(--bt-ink-2)}
+.oc-qr .oc-qr-wait{color:#475569}
+.oc-qr-code{position:relative;display:inline-flex}
+.oc-qr-logo{position:absolute;inset:0;display:grid;place-items:center}
+.oc-qr-logo .oc-tile{box-shadow:0 0 0 5px #fff}
+.oc-alt{display:flex;gap:18px;flex-wrap:wrap}
+.oc-code{display:flex;gap:6px}
+.oc-code span{display:inline-grid;place-items:center;width:40px;height:52px;border-radius:12px;background:var(--bt-card);border:1px solid var(--bt-line-2);font-size:24px;font-weight:650;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.oc-code span[data-dash]{width:14px;border:0;background:none;color:var(--bt-ink-3)}
+.oc-fix{display:flex;align-items:flex-end;gap:10px}
+.oc-fix .oc-field{flex:1}
+@media (max-width:720px){.oc-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.oc-seg{grid-template-columns:1fr}.oc-channels-in{padding:20px 16px 40px}.oc-head{flex-direction:column}}
+@media (prefers-reduced-motion:reduce){.oc-page,.oc-msg,.oc-flow,.oc-chart-bar{animation:none}.oc-card,.oc-type,.oc-filter{transition:none}}
 `
