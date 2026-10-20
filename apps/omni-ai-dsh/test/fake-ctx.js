@@ -1,0 +1,76 @@
+// A stand-in for the host plugin context: DSH's settings forms (describe/update with a
+// revision and the same deep merge), the credential store, and the connection's fetch
+// routes, all in memory. Nothing here starts a service.
+
+// dsh-settings' mergeLayers: plain objects merge key by key, anything else replaces.
+const isPlain = value => value !== null && typeof value === 'object' && !Array.isArray(value)
+export function mergeLayers(under, over) {
+  if (!isPlain(under) || !isPlain(over)) return over
+  const merged = { ...under }
+  for (const [key, value] of Object.entries(over)) merged[key] = Object.hasOwn(merged, key) ? mergeLayers(merged[key], value) : value
+  return merged
+}
+
+export function fakeContext({ entries = {}, credentials = {}, records = [] } = {}) {
+  const forms = new Map(Object.entries(entries).map(([ns, value]) => [ns, { value: structuredClone(value), revision: 3 }]))
+  const secrets = new Map(Object.entries(credentials))
+  const stored = new Set(records)
+  const updates = []
+  const routes = []
+  const effects = []
+  const logs = []
+  const presentations = []
+  const ctx = {
+    fiber: { uid: 'omni-ai' },
+    logger: { warn: (...args) => logs.push(args), info: (...args) => logs.push(args) },
+    effect(execute, label) {
+      effects.push(label)
+      execute()
+    },
+    settings: {
+      configure(presentation) {
+        presentations.push(presentation)
+        return () => {}
+      },
+      describe: () => [...forms].map(([ns, form]) => ({ ns, value: structuredClone(form.value), revision: form.revision, applies: 'live' })),
+      async update(ns, patch, expectedRevision) {
+        const form = forms.get(ns)
+        if (form === undefined) throw new Error(`No configurable plugin entry "${ns}"`)
+        if (expectedRevision !== undefined && expectedRevision !== form.revision) {
+          throw Object.assign(new Error(`Settings for "${ns}" changed`), { code: 'SETTINGS_CONFLICT' })
+        }
+        updates.push({ ns, patch: structuredClone(patch), expectedRevision })
+        form.value = mergeLayers(form.value, structuredClone(patch))
+        form.revision += 1
+      },
+    },
+    credentials: {
+      async set(ref, value) {
+        if (typeof value !== 'string' || value === '') throw new Error('empty credential')
+        secrets.set(ref, value)
+      },
+      describe: async ref => ({ configured: secrets.has(ref), writable: true }),
+      describeRecord: async key => ({ configured: stored.has(key), writable: true }),
+    },
+    connection: {
+      fetch: {
+        register(route) {
+          routes.push(route)
+          return () => {}
+        },
+      },
+    },
+  }
+  const valueOf = ns => structuredClone(forms.get(ns)?.value)
+  return { ctx, secrets, updates, routes, effects, logs, presentations, valueOf }
+}
+
+// A gateway's GET /models, recording what it was asked.
+export function fakeGateway({ status = 200, body = { data: [] } } = {}) {
+  const requests = []
+  const fetch = async (url, init) => {
+    requests.push({ url: String(url), init })
+    return new Response(typeof body === 'string' ? body : JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
+  }
+  return { fetch, requests }
+}

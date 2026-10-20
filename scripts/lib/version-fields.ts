@@ -21,11 +21,17 @@ export const repoRoot = join(__dirname, '..', '..');
 
 /**
  * Workspace package directories that should NOT be touched by version sync.
- * omni-ui-dsh (the DSH plugin, npm @automagik/omni-dsh) and omni-desktop (released as
- * omni-desktop-v* builds) are Node + npm apps outside the Bun workspaces, with their own
- * version lines.
+ * omni-ui-dsh and omni-ai-dsh (the DSH plugins, npm @automagik/omni-dsh and
+ * @automagik/omni-ai-dsh) and omni-desktop (released as omni-desktop-v* builds) are
+ * Node + npm apps outside the Bun workspaces, with their own version lines.
  */
-const EXCLUDED_WORKSPACE_PACKAGES = new Set(['audio-decode-shim', 'khal-ui', 'omni-ui-dsh', 'omni-desktop']);
+const EXCLUDED_WORKSPACE_PACKAGES = new Set([
+  'audio-decode-shim',
+  'khal-ui',
+  'omni-ui-dsh',
+  'omni-ai-dsh',
+  'omni-desktop',
+]);
 
 /** Marketplace plugin entry that this repo owns and keeps in sync. */
 const MARKETPLACE_PLUGIN_NAME = 'omni';

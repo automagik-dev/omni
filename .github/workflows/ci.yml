@@ -542,6 +542,48 @@ jobs:
       - name: Test
         run: npm test
 
+  omni-ai-dsh:
+    # apps/omni-ai-dsh is Omni's welcome and Connect AI as a DSH plugin: plain Node + npm
+    # outside the Bun workspaces, tested against the DSH release pinned in its own
+    # dev/harness/package.json, like omni-ui-dsh above.
+    name: Omni AI for DSH (plugin tests)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: apps/omni-ai-dsh
+    env:
+      DO_NOT_TRACK: '1'
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+
+      - name: Cache the pinned DSH harness
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: apps/omni-ai-dsh/dev/harness/node_modules
+          key: dsh-harness-omni-ai-${{ runner.os }}-${{ hashFiles('apps/omni-ai-dsh/dev/harness/package.json') }}
+
+      - name: Install
+        run: |
+          npm ci --no-fund --no-audit
+          [ -d dev/harness/node_modules ] || npm run harness
+
+      - name: Generated files are current
+        run: node scripts/build-client.mjs --check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
   omni-desktop:
     # apps/omni-desktop: the Electron shell around dsh + the Omni UI plugin. Its tests cover
     # the main-process logic in plain Node (home layout, profile install, dsh supervision,
