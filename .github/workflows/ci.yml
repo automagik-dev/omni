@@ -498,6 +498,50 @@ jobs:
           fi
           echo "S3/MinIO suites executed against a real MinIO (S3 backend init lines + non-zero pass count present)"
 
+  omni-ui-dsh:
+    # apps/omni-ui-dsh is the Omni UI as a DeepSeek Harness (DSH) plugin. It is
+    # plain Node + npm, outside the Bun workspaces, and its tests run against
+    # the DSH release it pins in dev/harness/package.json, so it gets its own
+    # job rather than a turbo task.
+    name: Omni UI for DSH (plugin tests)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/omni-ui-dsh
+    env:
+      # @openuidev/lang-core's postinstall sends install telemetry otherwise.
+      DO_NOT_TRACK: '1'
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+
+      - name: Cache the pinned DSH harness
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: apps/omni-ui-dsh/dev/harness/node_modules
+          key: dsh-harness-${{ runner.os }}-${{ hashFiles('apps/omni-ui-dsh/dev/harness/package.json') }}
+
+      - name: Install
+        run: |
+          npm ci --no-fund --no-audit
+          [ -d dev/harness/node_modules ] || npm run harness
+
+      - name: Generated files are current
+        run: node scripts/build-client.mjs --check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
   smoke-test:
     name: Smoke Test (Fresh Environment)
     runs-on: blacksmith-4vcpu-ubuntu-2404
