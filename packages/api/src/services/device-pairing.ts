@@ -39,6 +39,8 @@ const log = createLogger('device-pairing');
 const PAIRING_TTL_MS = 10 * 60 * 1000;
 /** Unexpired pending pairings one instance holds at most; starts beyond it are refused. */
 export const MAX_PENDING_PER_INSTANCE = 20;
+/** Unexpired pending pairings one client IP holds at most, so a few addresses cannot fill the instance's cap. */
+export const MAX_PENDING_PER_IP = 3;
 /** A code typed this long before the pairing was created is not taken as an answer to it. */
 const CLOCK_SKEW_MS = 30 * 1000;
 
@@ -169,7 +171,7 @@ export class DevicePairingService {
     private eventBus: EventBus | null,
   ) {}
 
-  /** Start a pairing on `instanceId`. Returns null when the instance already holds too many pending ones. */
+  /** Start a pairing on `instanceId`. Returns null when the instance, or this client IP, already holds too many pending ones. */
   async start(input: {
     deviceName: string;
     instanceId: string;
@@ -188,6 +190,19 @@ export class DevicePairingService {
         ),
       );
     if ((pending?.value ?? 0) >= MAX_PENDING_PER_INSTANCE) return null;
+    if (input.clientIp) {
+      const [mine] = await this.db
+        .select({ value: count() })
+        .from(devicePairings)
+        .where(
+          and(
+            eq(devicePairings.clientIp, input.clientIp),
+            eq(devicePairings.status, 'pending'),
+            gt(devicePairings.expiresAt, now),
+          ),
+        );
+      if ((mine?.value ?? 0) >= MAX_PENDING_PER_IP) return null;
+    }
 
     const code = generateCode();
     const pollToken = `${POLL_TOKEN_PREFIX}${randomBytes(32).toString('base64url')}`;

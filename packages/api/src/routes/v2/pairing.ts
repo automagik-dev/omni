@@ -59,6 +59,13 @@ function activeConfig(): PairingConfig | null {
 
 export const pairingRoutes = new Hono<{ Variables: AppVariables }>();
 
+// Off answers before anything else runs, rate limiter included, so an off route looks
+// exactly like a path that does not exist: a bare 404, no X-RateLimit-* headers, no 429.
+pairingRoutes.use('*', async (c, next) => {
+  if (!activeConfig()) return c.json(notFound, 404);
+  await next();
+});
+
 pairingRoutes.post('/start', pairingStartRateLimitMiddleware, async (c) => {
   const config = activeConfig();
   if (!config?.instanceId) return c.json(notFound, 404);

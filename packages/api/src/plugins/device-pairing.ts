@@ -5,10 +5,12 @@
  * pairing whose code a message carries, when the message comes from an
  * approver (see services/device-pairing.ts):
  *
- *   * owner — the instance's own account, in its own self chat, typed fresh:
- *     not quoted, not forwarded, not a protocol message, not history sync.
- *     Messages Omni itself sends (API sends, send-self) never reach here: the
- *     WhatsApp plugin drops its own echoes before publishing message.received.
+ *   * owner — the instance's own account, in its own self chat, typed fresh on
+ *     one of the account's other devices (the phone): Baileys delivered it as
+ *     'notify', never as 'append', which is what Omni's own device sends. Not
+ *     quoted, not forwarded, not a protocol message, not history sync. So a
+ *     key that may only send messages cannot approve a pairing by sending the
+ *     code to its own number, even if the echo check upstream misses it.
  *   * allowlist — a number on OMNI_PAIRING_ALLOWED_NUMBERS, in a direct chat.
  *
  * After an owner approval it leaves a notice in the same self chat naming the
@@ -53,13 +55,18 @@ export function isOwnerSelfChatText(event: TypedOmniEvent<'message.received'>, s
   const message = record(raw?.message);
   const extended = record(message?.extendedTextMessage);
   const context = record(extended?.contextInfo);
-  return (
+  // The self chat may be addressed by the account's phone JID or, on LID-first accounts,
+  // by its LID, with the phone JID beside it as remoteJidAlt.
+  const selfChat =
     selfJid !== null &&
+    (key?.remoteJid === selfJid || key?.remoteJidAlt === selfJid) &&
+    (payload.chatId === selfJid || payload.chatId === key?.remoteJid);
+  return (
+    selfChat &&
+    raw?.upsertType === 'notify' &&
     payload.content.type === 'text' &&
     key?.fromMe === true &&
     raw?.isFromMe === true &&
-    key.remoteJid === selfJid &&
-    payload.chatId === selfJid &&
     raw.isHistorySync !== true &&
     !payload.replyToId &&
     !raw.quotedMessage &&

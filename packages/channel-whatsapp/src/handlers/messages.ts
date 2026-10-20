@@ -1125,6 +1125,15 @@ function sanitizeInboundText(content: ExtractedContent, instanceId: string, mess
 }
 
 /**
+ * Record how Baileys delivered the message: 'append' for what this device (Omni) sent,
+ * 'notify' for what arrived, including messages the account typed on its other devices.
+ * Device pairing (api plugins/device-pairing.ts) takes an owner's code only from 'notify'.
+ */
+function annotateUpsertType(msg: WAMessage, type: MessageUpsertType): void {
+  (msg as unknown as Record<string, unknown>).upsertType = type;
+}
+
+/**
  * Mark sender as LID for downstream identity resolution.
  */
 function annotateSenderLidStatus(msg: WAMessage, senderJid: string): void {
@@ -1377,6 +1386,7 @@ export function setupMessageHandlers(
       }
 
       if (shouldProcessMessage(plugin, instanceId, msg)) {
+        annotateUpsertType(msg, upsert.type);
         await processMessage(plugin, instanceId, msg, cache);
       }
     }

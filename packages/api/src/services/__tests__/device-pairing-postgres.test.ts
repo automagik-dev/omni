@@ -15,6 +15,7 @@ import { ApiKeyService } from '../api-keys';
 import {
   DevicePairingService,
   MAX_PENDING_PER_INSTANCE,
+  MAX_PENDING_PER_IP,
   type PairingConfig,
   type PairingMessage,
 } from '../device-pairing';
@@ -59,8 +60,9 @@ postgresDescribe('device pairing (real PostgreSQL)', () => {
   let db: Database;
   let service: DevicePairingService;
 
-  const start = (deviceName = 'Test laptop', instanceId = INSTANCE) =>
-    service.start({ deviceName, instanceId, channelType: 'whatsapp-baileys', clientIp: '203.0.113.7' });
+  let ips = 0;
+  const start = (deviceName = 'Test laptop', instanceId = INSTANCE, clientIp = `203.0.113.${++ips}`) =>
+    service.start({ deviceName, instanceId, channelType: 'whatsapp-baileys', clientIp });
 
   beforeAll(() => {
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
@@ -237,5 +239,13 @@ postgresDescribe('device pairing (real PostgreSQL)', () => {
     expect(await start('One too many', busy)).toBeNull();
     // Others are unaffected.
     expect(await start('Elsewhere')).not.toBeNull();
+  });
+
+  test('one client IP holds at most MAX_PENDING_PER_IP pending pairings', async () => {
+    const ip = '198.51.100.77';
+    const instance = '44444444-4444-4444-8444-444444444444';
+    for (let i = 0; i < MAX_PENDING_PER_IP; i++) expect(await start(`Same IP ${i}`, instance, ip)).not.toBeNull();
+    expect(await start('One more from it', instance, ip)).toBeNull();
+    expect(await start('Another address', instance)).not.toBeNull();
   });
 });

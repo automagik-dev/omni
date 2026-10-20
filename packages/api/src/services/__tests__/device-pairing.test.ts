@@ -128,6 +128,7 @@ function received(o: ReceivedOverrides = {}): TypedOmniEvent<'message.received'>
       rawPayload: {
         key: { remoteJid: chatId, fromMe: true, id: 'ABCDEF' },
         isFromMe: true,
+        upsertType: 'notify',
         message: { conversation: o.text ?? '7KQ4-9XZP' },
         messageTimestamp: Math.floor(Date.now() / 1000),
         ...o.raw,
@@ -147,6 +148,21 @@ describe('approver predicates', () => {
     expect(isOwnerSelfChatText(received(), SELF)).toBe(true);
   });
 
+  test("a self chat addressed by the account's LID counts, with the phone JID beside it", () => {
+    const lid = '100000000000001@lid';
+    const event = received({
+      chatId: lid,
+      raw: { key: { remoteJid: lid, remoteJidAlt: SELF, fromMe: true, id: 'X' } },
+    });
+    expect(isOwnerSelfChatText(event, SELF)).toBe(true);
+    // Someone else's LID chat does not.
+    const other = received({
+      chatId: lid,
+      raw: { key: { remoteJid: lid, remoteJidAlt: '5511900001111@s.whatsapp.net', fromMe: true, id: 'X' } },
+    });
+    expect(isOwnerSelfChatText(other, SELF)).toBe(false);
+  });
+
   test('anything else is not', () => {
     const cases: TypedOmniEvent<'message.received'>[] = [
       // Another chat.
@@ -162,6 +178,9 @@ describe('approver predicates', () => {
         raw: { message: { extendedTextMessage: { text: '7KQ4-9XZP', contextInfo: { isForwarded: true } } } },
       }),
       received({ raw: { message: { protocolMessage: { type: 14 } } } }),
+      // Sent by Omni's own device (an API send to its own number), or of unknown origin.
+      received({ raw: { upsertType: 'append' } }),
+      received({ raw: { upsertType: undefined } }),
     ];
     for (const event of cases) expect(isOwnerSelfChatText(event, SELF)).toBe(false);
     // With the account's identity unknown (disconnected) nothing is the owner.
@@ -327,7 +346,9 @@ describe('pairing routes', () => {
     ]) {
       setup();
       const hono = app();
-      expect((await hono.request(startRequest())).status).toBe(404);
+      const off = await hono.request(startRequest());
+      expect(off.status).toBe(404);
+      expect(off.headers.get('x-ratelimit-limit')).toBeNull();
       expect((await hono.request(pollRequest())).status).toBe(404);
       expect((await hono.request(pollRequest('DELETE'))).status).toBe(404);
       process.env.OMNI_PAIRING_ENABLED = 'true';
