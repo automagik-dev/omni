@@ -26,7 +26,7 @@ test('resources come from the app when packaged and from build/ in a checkout', 
   assert.equal(resourcesOf({ packaged: false, resourcesPath: '/x', appPath: '/src/apps/omni-desktop' }).profile, '/src/apps/omni-desktop/build/profile')
 })
 
-test('the shipped profile is copied in once per build and replaced whole by another build', (t) => {
+test('the shipped profile seeds a new home, and a new build replaces only its packages', (t) => {
   const root = mkdtempSync(join(tmpdir(), 'omni-desktop-profile-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const source = join(root, 'shipped')
@@ -43,6 +43,9 @@ test('the shipped profile is copied in once per build and replaced whole by anot
 
   // dsh writes its own files into the profile; the same build leaves them be.
   writeFileSync(join(first.target, 'cordis.yml'), '[]')
+  writeFileSync(join(first.target, 'cordis.patch.yml'), '- id: llm-pi-ai  # the user\'s models')
+  mkdirSync(join(first.target, '.plugin-manager'))
+  writeFileSync(join(first.target, '.plugin-manager', 'state.json'), '{}')
   assert.equal(installProfile({ dshHome, source }).installed, false)
   assert.equal(existsSync(join(first.target, 'cordis.yml')), true)
 
@@ -50,7 +53,9 @@ test('the shipped profile is copied in once per build and replaced whole by anot
   writeFileSync(join(source, 'node_modules', '@automagik', 'omni-dsh', 'index.js'), 'v2')
   assert.equal(installProfile({ dshHome, source }).installed, true)
   assert.equal(readFileSync(join(first.target, 'node_modules', '@automagik', 'omni-dsh', 'index.js'), 'utf8'), 'v2')
-  assert.equal(existsSync(join(first.target, 'cordis.yml')), false)
+  assert.equal(readFileSync(join(first.target, 'package.json'), 'utf8'), '{"dependencies":{"@automagik/omni-dsh":"0.1.8"}}')
+  // What dsh and the user put there survives the update.
+  assert.equal(readFileSync(join(first.target, 'cordis.yml'), 'utf8'), '[]')
 
   // A build id, when the build stamped one, decides even with the same package.json.
   writeFileSync(join(source, '.build-id'), '0.1.8+one')
@@ -60,6 +65,8 @@ test('the shipped profile is copied in once per build and replaced whole by anot
   writeFileSync(join(source, '.build-id'), '0.1.8+two')
   assert.equal(installProfile({ dshHome, source }).installed, true)
   assert.equal(readFileSync(join(first.target, 'node_modules', '@automagik', 'omni-dsh', 'index.js'), 'utf8'), 'v3')
+  assert.equal(readFileSync(join(first.target, 'cordis.patch.yml'), 'utf8'), '- id: llm-pi-ai  # the user\'s models')
+  assert.equal(readFileSync(join(first.target, '.plugin-manager', 'state.json'), 'utf8'), '{}')
 })
 
 test('the launch URL is read from dsh\'s output, only for the port it was given', () => {

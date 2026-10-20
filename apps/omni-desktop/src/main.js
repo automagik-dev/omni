@@ -26,9 +26,12 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(launch).catch(fail)
 }
 
+// app.exit skips before-quit, so dsh is stopped here: a start that fails after dsh came up
+// must not leave it running on loopback with no window.
 function fail(error) {
+  quitting = true
   dialog.showErrorBox('Omni could not start', `${error?.message ?? error}\n\nLog: ${join(home, 'logs', 'dsh.log')}`)
-  app.exit(1)
+  void stopDsh(dsh?.child).finally(() => app.exit(1))
 }
 
 async function launch() {

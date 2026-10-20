@@ -39,7 +39,10 @@ export function resourcesOf({ packaged, resourcesPath, appPath }) {
  * Put the shipped profile in place under DSH_HOME/profiles/omni. It is copied, not
  * linked: dsh routes a plugin's imports to its own packages only for files inside the
  * profile. A profile already there from the same build (scripts/prepare-runtime.mjs stamps
- * each with .build-id) is left as it is; another build's is replaced whole.
+ * each with .build-id) is left as it is. Another build's gets the new packages
+ * (node_modules, package.json) and nothing else: dsh keeps the user's settings in that
+ * folder too (models and preferences in cordis.patch.yml, .plugin-manager/), and an
+ * update must not take them away. The shipped cordis.patch.yml only seeds a new profile.
  */
 export function installProfile({ dshHome, source }) {
   const target = join(dshHome, 'profiles', PROFILE)
@@ -47,9 +50,17 @@ export function installProfile({ dshHome, source }) {
   const stamp = existsSync(id) ? readFileSync(id, 'utf8') : readFileSync(join(source, 'package.json'), 'utf8')
   const marker = join(target, '.omni-desktop-profile')
   if (existsSync(marker) && readFileSync(marker, 'utf8') === stamp) return { target, installed: false }
-  rmSync(target, { recursive: true, force: true })
-  mkdirSync(join(dshHome, 'profiles'), { recursive: true })
-  cpSync(source, target, { recursive: true })
+  if (!existsSync(target)) {
+    mkdirSync(join(dshHome, 'profiles'), { recursive: true })
+    cpSync(source, target, { recursive: true })
+  } else {
+    rmSync(join(target, 'node_modules'), { recursive: true, force: true })
+    cpSync(join(source, 'node_modules'), join(target, 'node_modules'), { recursive: true })
+    for (const file of ['package.json', '.build-id']) {
+      if (existsSync(join(source, file))) cpSync(join(source, file), join(target, file))
+    }
+    if (!existsSync(join(target, 'cordis.patch.yml'))) cpSync(join(source, 'cordis.patch.yml'), join(target, 'cordis.patch.yml'))
+  }
   writeFileSync(marker, stamp)
   return { target, installed: true }
 }
