@@ -42,13 +42,13 @@ interface Index {
 const isOurs = (source: IndexVersion['source']): source is GitSource =>
   source.type === 'git' && source.url.replace(/\.git$/, '') === REPO_URL;
 
-function git(cwd: string, args: string[]): string {
-  return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+function git(cwd: string, args: string[], timeout?: number): string {
+  return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout }).trim();
 }
 
-function gitOk(cwd: string, args: string[]): boolean {
+function gitOk(cwd: string, args: string[], timeout?: number): boolean {
   try {
-    git(cwd, args);
+    git(cwd, args, timeout);
     return true;
   } catch {
     return false;
@@ -81,9 +81,12 @@ export function checkIndex(value: unknown, repoDir: string): string[] {
       if (!isOurs(entry.source)) continue;
       const { commit, path = '.' } = entry.source;
       if (!gitOk(repoDir, ['cat-file', '-e', `${commit}^{commit}`]))
-        gitOk(repoDir, ['fetch', '--quiet', 'origin', commit]);
+        gitOk(repoDir, ['fetch', '--quiet', 'origin', commit], 30_000);
       if (!gitOk(repoDir, ['merge-base', '--is-ancestor', commit, 'HEAD'])) {
-        problems.push(`${at}: commit ${commit} is not reachable from HEAD`);
+        const shallow = git(repoDir, ['rev-parse', '--is-shallow-repository']) === 'true';
+        problems.push(
+          `${at}: commit ${commit} is not reachable from HEAD${shallow ? ' (this clone is shallow: git fetch --unshallow)' : ''}`,
+        );
         continue;
       }
       const manifest = packageAt(repoDir, commit, path);
@@ -95,7 +98,11 @@ export function checkIndex(value: unknown, repoDir: string): string[] {
   return problems;
 }
 
-/** Point every git entry from this repository at `ref`, adding a version when the package's moved on. */
+/**
+ * Point every git entry from this repository at `ref`, adding a version when the package's moved on.
+ * A version already listed is re-pointed only when its package is byte-identical at `ref`: what a
+ * listed version installs never changes, so a changed package needs a version bump first.
+ */
 export function pinIndex(value: Index, repoDir: string, ref: string): Index {
   const commit = git(repoDir, ['rev-parse', `${ref}^{commit}`]);
   const publishTimestamp = Number(git(repoDir, ['show', '-s', '--format=%ct', commit]));
@@ -106,6 +113,13 @@ export function pinIndex(value: Index, repoDir: string, ref: string): Index {
     if (!manifest?.version) throw new Error(`${plugin.name}: ${ref} has no package.json at ${latest.source.path}`);
     const source: GitSource = { ...latest.source, commit };
     const same = plugin.versions.find((entry) => entry.version === manifest.version);
+    if (same && isOurs(same.source) && same.source.commit !== commit) {
+      const unchanged = gitOk(repoDir, ['diff', '--quiet', same.source.commit, commit, '--', same.source.path ?? '.']);
+      if (!unchanged)
+        throw new Error(
+          `${plugin.name}@${same.version} changed since ${same.source.commit.slice(0, 9)}: bump its version first`,
+        );
+    }
     if (same) Object.assign(same, { publishTimestamp, source });
     else plugin.versions.unshift({ ...latest, version: manifest.version, publishTimestamp, source });
   }

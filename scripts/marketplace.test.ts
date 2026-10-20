@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { INDEX_PATH, REPO_URL, checkIndex } from './marketplace';
+import { INDEX_PATH, REPO_URL, checkIndex, pinIndex } from './marketplace';
 
 const repoDir = join(import.meta.dir, '..');
 const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoDir, encoding: 'utf8' }).trim();
@@ -40,5 +40,29 @@ describe('marketplace index check', () => {
     const foreign = { source: { type: 'git', url: 'https://github.com/someone/else', commit: head } };
     expect(checkIndex(indexWith(foreign), repoDir)[0]).toContain('must come from');
     expect(checkIndex({ format: 2 }, repoDir)[0]).toContain('$.format');
+  });
+
+  test('pin re-points a listed version only when its package is unchanged', () => {
+    // apps/omni-ui-dsh was 0.1.7 at both commits, with the Connect Omni step added in between.
+    const listed = (name: string, version: string, path: string) => ({
+      plugins: [
+        {
+          name,
+          versions: [
+            {
+              version,
+              publishTimestamp: 1,
+              source: { type: 'git' as const, url: REPO_URL, commit: 'b1ed5c4ee6b5df3cec0a191e5527c1b50fa08de1', path },
+            },
+          ],
+        },
+      ],
+    });
+    expect(() => pinIndex(listed('@automagik/omni-dsh', '0.1.7', 'apps/omni-ui-dsh'), repoDir, '54ddd408a')).toThrow(
+      /bump its version/,
+    );
+    // omni-ai-dsh 0.1.0 is byte-identical at both commits, so it may move.
+    const moved = pinIndex(listed('@automagik/omni-ai-dsh', '0.1.0', 'apps/omni-ai-dsh'), repoDir, '58a5dee46');
+    expect(moved.plugins[0]?.versions[0]?.source).toMatchObject({ commit: '58a5dee464713bef73e2e2b754e85c5425bfa660' });
   });
 });
