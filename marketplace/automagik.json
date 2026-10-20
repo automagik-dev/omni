@@ -72,11 +72,11 @@
       "versions": [
         {
           "version": "0.1.8",
-          "publishTimestamp": 1792538416,
+          "publishTimestamp": 1792539336,
           "source": {
             "type": "git",
             "url": "https://github.com/automagik-dev/omni",
-            "commit": "58a5dee464713bef73e2e2b754e85c5425bfa660",
+            "commit": "324170774b449279fa25238001fead489767d1c0",
             "path": "apps/omni-ui-dsh"
           },
           "engines": {
@@ -125,6 +125,19 @@
         ]
       },
       "versions": [
+        {
+          "version": "0.1.1",
+          "publishTimestamp": 1792539336,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/automagik-dev/omni",
+            "commit": "324170774b449279fa25238001fead489767d1c0",
+            "path": "apps/omni-ai-dsh"
+          },
+          "engines": {
+            "dsh": ">=0.2.1-rc.2 <0.3.0"
+          }
+        },
         {
           "version": "0.1.0",
           "publishTimestamp": 1792538416,
