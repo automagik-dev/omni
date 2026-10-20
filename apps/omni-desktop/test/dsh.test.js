@@ -70,6 +70,20 @@ test('the shipped profile seeds a new home, and a new build replaces only its pa
   assert.equal(readFileSync(join(first.target, '.plugin-manager', 'state.json'), 'utf8'), '{}')
 })
 
+// The app opens on the Omni octopus (@automagik/omni-ai-dsh), not on DSH's own welcome
+// notice and credential step.
+test('the shipped profile bundles both Omni plugins and switches DSH\'s own onboarding off', () => {
+  const profile = JSON.parse(readFileSync(new URL('../profile/package.json', import.meta.url), 'utf8'))
+  for (const name of ['@automagik/omni-dsh', '@automagik/omni-ai-dsh']) {
+    assert.ok(Object.hasOwn(profile.dependencies, name), name)
+    assert.ok(profile.dsh.profile.bundles.includes(name), name)
+  }
+  const patch = readFileSync(new URL('../profile/cordis.patch.yml', import.meta.url), 'utf8')
+  // DSH compares the notice version exactly, as a string.
+  assert.match(patch, /^- id: ui-settings-general\n {2}config:\n {4}welcomeNoticeVersion: '2026-09-28\.1'$/m)
+  assert.match(patch, /^- id: ui-settings-models\n {2}config:\n {4}credentialOnboarding: false$/m)
+})
+
 test('the launch URL is read from dsh\'s output, only for the port it was given', () => {
   const line = 'starting…\ndsh web: http://127.0.0.1:41149/?token=abc123\n'
   assert.equal(launchUrlOf(line, 41149), 'http://127.0.0.1:41149/?token=abc123')

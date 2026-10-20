@@ -7,3 +7,12 @@
   config:
     searchProvider: auto
     fetchProvider: http
+# The Omni octopus opens this app (@automagik/omni-ai-dsh: Welcome, Connect Omni, Connect
+# AI), so DSH's own welcome notice and credential step stay off here; DeepSeek's sign-in is
+# one of Connect AI's tiles. DSH compares the notice version exactly: it stays a quoted string.
+- id: ui-settings-general
+  config:
+    welcomeNoticeVersion: '2026-09-28.1'
+- id: ui-settings-models
+  config:
+    credentialOnboarding: false

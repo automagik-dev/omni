@@ -2,10 +2,11 @@
 //
 //   build/runtime/node_modules   the pinned DeepSeek Harness (runtime/package.json + lock)
 //   build/profile/               the dsh profile the app starts: package.json, cordis.patch.yml,
-//                                and node_modules holding only the Omni UI plugin
+//                                and node_modules holding only Omni's plugins
 //
-// The plugin is packed from ../omni-ui-dsh with `npm pack`, so the app ships exactly what
-// that package publishes. Its @deepseek-ai peers are not installed again: dsh supplies them.
+// The plugins (../omni-ui-dsh, and ../omni-ai-dsh with the onboarding) are packed with
+// `npm pack`, so the app ships exactly what each package publishes. Their @deepseek-ai
+// peers are not installed again: dsh supplies them.
 // Native packages are per platform, so run this on the platform you build for.
 // Usage: node scripts/prepare-runtime.mjs [--skip-runtime]
 import { execFileSync } from 'node:child_process'
@@ -14,7 +15,11 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const APP = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const PLUGIN = resolve(APP, '..', 'omni-ui-dsh')
+// Each plugin's folder beside this app, by the package name the profile depends on.
+const PLUGINS = {
+  '@automagik/omni-dsh': resolve(APP, '..', 'omni-ui-dsh'),
+  '@automagik/omni-ai-dsh': resolve(APP, '..', 'omni-ai-dsh'),
+}
 const BUILD = join(APP, 'build')
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
 // @openuidev/lang-core and others phone home from install scripts unless told not to.
@@ -35,28 +40,33 @@ if (!process.argv.includes('--skip-runtime') || !existsSync(join(runtimeDir, 'no
   if (!existsSync(join(APP, 'runtime', 'package-lock.json'))) cpSync(join(runtimeDir, 'package-lock.json'), join(APP, 'runtime', 'package-lock.json'))
 }
 
-say('packing the Omni UI plugin')
+say(`packing ${Object.keys(PLUGINS).join(' and ')}`)
 const packs = join(BUILD, 'packs')
 rmSync(packs, { recursive: true, force: true })
 mkdirSync(packs, { recursive: true })
-const packed = JSON.parse(execFileSync(npm, ['pack', '--json', '--pack-destination', packs], { cwd: PLUGIN, env, encoding: 'utf8' }))
-const tarball = join(packs, packed[0].filename)
+const packed = Object.entries(PLUGINS).map(([name, dir]) => {
+  const [info] = JSON.parse(execFileSync(npm, ['pack', '--json', '--pack-destination', packs], { cwd: dir, env, encoding: 'utf8' }))
+  if (info.name !== name) throw new Error(`${dir} packs ${info.name}, not ${name}`)
+  return { name, version: info.version, tarball: join(packs, info.filename) }
+})
 
 const profileDir = join(BUILD, 'profile')
 rmSync(profileDir, { recursive: true, force: true })
 mkdirSync(profileDir, { recursive: true })
 const profile = JSON.parse(readFileSync(join(APP, 'profile', 'package.json'), 'utf8'))
-profile.dependencies['@automagik/omni-dsh'] = packed[0].version
+for (const plugin of packed) profile.dependencies[plugin.name] = plugin.version
 writeFileSync(join(profileDir, 'package.json'), `${JSON.stringify(profile, null, 2)}\n`)
 cpSync(join(APP, 'profile', 'cordis.patch.yml'), join(profileDir, 'cordis.patch.yml'))
-run(['install', tarball, '--omit=dev', '--legacy-peer-deps', '--no-save', '--no-package-lock', '--ignore-scripts'], profileDir)
+// One install of every tarball: --no-save leaves the versions written above in place.
+run(['install', ...packed.map(plugin => plugin.tarball), '--omit=dev', '--legacy-peer-deps', '--no-save', '--no-package-lock', '--ignore-scripts'], profileDir)
 
 // The app copies the profile into its home again whenever this id changes (src/dsh.js).
-writeFileSync(join(profileDir, '.build-id'), `${packed[0].version}+${new Date().toISOString()}\n`)
+writeFileSync(join(profileDir, '.build-id'), `${packed.map(plugin => plugin.version).join('+')}+${new Date().toISOString()}\n`)
 
 const versions = {
   dsh: JSON.parse(readFileSync(join(runtimeDir, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), 'utf8')).version,
   plugin: packed[0].version,
+  plugins: Object.fromEntries(packed.map(plugin => [plugin.name, plugin.version])),
 }
 writeFileSync(join(BUILD, 'versions.json'), `${JSON.stringify(versions, null, 2)}\n`)
-say(`ready: dsh ${versions.dsh}, @automagik/omni-dsh ${versions.plugin}`)
+say(`ready: dsh ${versions.dsh}, ${packed.map(plugin => `${plugin.name} ${plugin.version}`).join(', ')}`)

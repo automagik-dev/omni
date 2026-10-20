@@ -1,6 +1,6 @@
 # Omni desktop (labs)
 
-Omni on your desktop: a window on a [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) of its own, with the Omni UI plugin ([`apps/omni-ui-dsh`](../omni-ui-dsh)) already in it. Open it, type the address of your Omni, send the code it shows to yourself on WhatsApp, and your channels and chats are there. No keys to copy.
+Omni on your desktop: a window on a [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) of its own, with the Omni UI plugin ([`apps/omni-ui-dsh`](../omni-ui-dsh)) and Omni's welcome ([`apps/omni-ai-dsh`](../omni-ai-dsh)) already in it. Open it and the Omni octopus walks you through three steps: Welcome, Connect Omni (type the address of your Omni and send the code it shows to yourself on WhatsApp) and Connect AI. Your channels and chats are there. No keys to copy.
 
 > Labs build: Linux (AppImage, deb; also WSL with WSLg) and an unsigned macOS dmg. Windows itself is not supported.
 
@@ -19,7 +19,7 @@ Omni on your desktop: a window on a [DeepSeek Harness](https://github.com/deepse
 - The window is a plain page: context isolation and the renderer sandbox are on, there is no Node in it, it stays on dsh's origin, and web links (a `wa.me` link, docs) open in your browser. Other schemes are refused.
 - Linux sandbox: Chromium needs user namespaces or a setuid helper, and Ubuntu 24.04+ restricts user namespaces. The deb installs an AppArmor profile that allows them for the app, so the window is sandboxed. An AppImage cannot carry one; on such a system its launcher runs without the sandbox and says so on stderr. Prefer the deb there.
 - An AppImage opened directly is mounted with FUSE and needs `libfuse2` (`sudo apt install libfuse2t64` on Ubuntu 24.04+; WSL rarely has it). `omni desktop` needs none: it unpacks the AppImage once into `~/.omni/desktop/app/extracted/` and runs it from there. By hand: `./Omni-*.AppImage --appimage-extract`, then `squashfs-root/AppRun`.
-- The app ships the dsh release the plugin is tested against (`runtime/package.json`, pinned with its lock) and the plugin packed with `npm pack`. Nothing updates itself.
+- The app ships the dsh release the plugin is tested against (`runtime/package.json`, pinned with its lock) and both plugins packed with `npm pack`. Its profile switches DSH's own welcome notice and credential step off (`profile/cordis.patch.yml`), so the octopus opens the app. Nothing updates itself.
 
 Models come from dsh: on first start, sign in to DeepSeek, enter an API key, or set up another provider in Settings → Models.
 
@@ -32,7 +32,7 @@ npm run dist:linux      # dist/Omni-<version>-linux-x86_64.AppImage and -amd64.d
 npm run dist:mac        # on macOS: dist/Omni-<version>-labs-unsigned-mac-<arch>.dmg
 ```
 
-`dist:*` first runs `scripts/prepare-runtime.mjs`, which installs the pinned dsh into `build/runtime` and the packed plugin into `build/profile`. Native packages are per platform, so build each target on its own platform. Builds run with `DO_NOT_TRACK=1`.
+`dist:*` first runs `scripts/prepare-runtime.mjs`, which installs the pinned dsh into `build/runtime` and both packed plugins into `build/profile`, in one install. Native packages are per platform, so build each target on its own platform. Builds run with `DO_NOT_TRACK=1`.
 
 To run from a checkout: `npm run prepare-runtime`, then `npx electron .` (add `--no-sandbox` on a system where Chromium's sandbox cannot start unpackaged).
 

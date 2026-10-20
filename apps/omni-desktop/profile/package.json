@@ -1,16 +1,18 @@
 {
   "name": "omni-desktop-profile",
   "private": true,
-  "description": "The dsh profile the Omni desktop app starts: dsh's own base and web app, and Omni.",
+  "description": "The dsh profile the Omni desktop app starts: dsh's own base and web app, Omni, and Omni's welcome.",
   "dependencies": {
-    "@automagik/omni-dsh": "*"
+    "@automagik/omni-dsh": "*",
+    "@automagik/omni-ai-dsh": "*"
   },
   "dsh": {
     "profile": {
       "bundles": [
         "@deepseek-ai/dsh-base",
         "@deepseek-ai/dsh-web-app",
-        "@automagik/omni-dsh"
+        "@automagik/omni-dsh",
+        "@automagik/omni-ai-dsh"
       ]
     }
   }
