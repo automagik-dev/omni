@@ -14,7 +14,7 @@ import {
 // (CHANNELS_PANEL) connects new channels and shows the health of the connected ones.
 // Live when the host has an omni URL and key (src/host/omni.js, read-only); sample data otherwise.
 
-const useOmni = () => useSyncExternalStore(omniStore.subscribe, omniStore.getSnapshot, omniStore.getSnapshot)
+export const useOmni = () => useSyncExternalStore(omniStore.subscribe, omniStore.getSnapshot, omniStore.getSnapshot)
 const useActions = actions => useMemo(() => omniActions(id => actions.selectPanel(id), call), [actions])
 const activePanel = usePanel => (usePanel ? usePanel(info => info?.activePanelId ?? null) : null)
 
@@ -60,7 +60,7 @@ function hueOf(name) {
   return HUES[sum % HUES.length]
 }
 
-function ChatAvatar({ chat, channel, size = 36 }) {
+export function ChatAvatar({ chat, channel, size = 36 }) {
   const hue = hueOf(chat.name)
   return h('span', { className: 'oc-ava', style: { width: size, height: size, '--oc-hue': hue } },
     h('span', { className: 'oc-ava-face', style: { fontSize: Math.round(size * 0.34) } }, chat.initials),
@@ -68,7 +68,7 @@ function ChatAvatar({ chat, channel, size = 36 }) {
     channel ? h('span', { className: 'oc-ava-badge' }, h(Tile, { type: channel.type, size: Math.round(size * 0.4) })) : null)
 }
 
-function PreviewChip() {
+export function PreviewChip() {
   const source = useOmni().source
   if (source.kind === 'live') {
     return h('span', { className: 'oc-preview-chip oc-live-chip', 'data-error': source.error ? true : undefined, title: source.error ?? t('Read from omni every 15 seconds. Sending and connecting are not switched on yet.') },

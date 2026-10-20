@@ -6,6 +6,7 @@ import { createSource } from './sources.js'
 
 export const CHANNELS_PANEL = 'omni-channels'
 export const CHAT_PANEL = 'omni-chat'
+export const SUBS_PANEL = 'omni-subscriptions'
 
 // A channel omni has that this view has no tile for still shows, with a plain chat mark.
 export const typeOf = type => CHANNEL_TYPES[type] ?? { label: type, tile: '#64748B', glyph: 'chat', pairing: 'token', blurb: '' }
@@ -52,6 +53,8 @@ function sample(now) {
     { id: 'c-familia', channelId: 'wa-personal', name: 'Família', initials: 'FA', kind: 'group', preview: 'Almoço domingo?', at: ago(3 * HOUR), unread: 1 },
     { id: 'c-obras', channelId: 'wa-sales', name: 'Grupo Obras', initials: 'GO', kind: 'group', preview: 'Rafael: fotos no drive', at: ago(26 * HOUR), unread: 0 },
     { id: 'c-beta', channelId: 'tg-helper', name: 'Beta testers', initials: 'BT', kind: 'group', preview: 'Is the bot down?', at: ago(19 * HOUR), unread: 0 },
+    { id: 'c-ci', channelId: 'slack-namastex', name: '#ci-alerts', initials: '#', kind: 'group', preview: 'build #1932 failed on dev', at: ago(12 * MIN), unread: 0 },
+    { id: 'c-self', channelId: 'wa-personal', name: 'Me (notes)', initials: 'ME', kind: 'self', preview: '🎤 Voice note (0:14)', at: ago(52 * MIN), unread: 0 },
   ]
   const messages = {
     'c-marina': [
@@ -68,8 +71,33 @@ function sample(now) {
       { id: 'm1', from: 'them', author: 'Leo', text: 'Is the bot down?', at: ago(19 * HOUR) },
     ],
   }
-  return { channels, chats, messages }
+  const src = (chat, channel) => ({ kind: 'chat', id: chat, ...pick(chats.find(item => item.id === chat), channels.find(item => item.id === channel)) })
+  const subscriptions = [
+    { id: 's-react', name: 'Hand a message to Omni', on: true,
+      sources: [{ kind: 'channel', id: 'wa-sales', name: 'Sales', type: 'whatsapp-baileys' }, { kind: 'channel', id: 'wa-personal', name: 'Personal', type: 'whatsapp-baileys' }, { kind: 'channel', id: 'slack-namastex', name: 'Namastex', type: 'slack' }],
+      trigger: { kind: 'reaction', emoji: '🤖' }, worker: { kind: 'main' }, outputs: { react: true, replyToMe: false }, safety: { askFirst: true } },
+    { id: 's-ci', name: 'Build failures', on: true,
+      sources: [src('c-ci', 'slack-namastex'), src('c-support', 'slack-namastex'), src('c-beta', 'tg-helper')],
+      trigger: { kind: 'keyword', words: ['failed', 'error', 'down'] }, worker: { kind: 'bot', name: 'Ops', look: { shape: 'octopus', color: 'orange' } }, outputs: { react: true, replyToMe: false }, safety: { askFirst: true } },
+    { id: 's-voice', name: 'Voice notes to my inbox', on: true,
+      sources: [src('c-self', 'wa-personal')],
+      trigger: { kind: 'voice' }, worker: { kind: 'session', mode: 'ongoing', title: 'Inbox' }, outputs: { react: true, replyToMe: true }, safety: { askFirst: true } },
+    { id: 's-invoices', name: 'Invoices from clients', on: false,
+      sources: [src('c-marina', 'wa-sales'), src('c-alpha', 'wa-sales')],
+      trigger: { kind: 'media' }, worker: { kind: 'bot', name: 'Finance', look: { shape: 'octopus', color: 'green' } }, outputs: { react: false, replyToMe: false }, safety: { askFirst: true } },
+  ]
+  const runs = [
+    { id: 'r1', subId: 's-ci', at: ago(11 * MIN), status: 'waiting', from: '#ci-alerts', excerpt: 'build #1932 failed on dev', summary: 'Wants to run `gh run view 1932 --log-failed`' },
+    { id: 'r2', subId: 's-react', at: ago(26 * MIN), status: 'working', from: 'Marina Lopes', excerpt: 'Pode me mandar o orçamento de novo?', summary: 'Finding the latest quote in Drive' },
+    { id: 'r3', subId: 's-voice', at: ago(52 * MIN), status: 'done', from: 'Me (notes)', excerpt: '🎤 "lembrar de renovar o domínio lembr.ai"', summary: 'Added a task for Friday and replied to you' },
+    { id: 'r4', subId: 's-ci', at: ago(3 * HOUR), status: 'done', from: '#support', excerpt: 'checkout is down for some users', summary: 'Found a 502 spike; posted a summary in Ops' },
+    { id: 'r5', subId: 's-react', at: ago(5 * HOUR), status: 'failed', from: 'Grupo Obras', excerpt: 'Rafael: fotos no drive', summary: 'No access to that Drive folder' },
+  ]
+  return { channels, chats, messages, subscriptions, runs }
 }
+
+const pick = (chat, channel) => ({ name: chat?.name ?? '', type: channel?.type ?? 'whatsapp-baileys', chatKind: chat?.kind ?? 'direct' })
+
 
 export const omniStore = createSource({
   ...sample(Date.now()),
@@ -78,6 +106,8 @@ export const omniStore = createSource({
   chatId: null,
   // The Channels page: the overview, one channel, or the connect flow.
   page: { view: 'overview', channelId: null, type: null, step: 0 },
+  // The Subscriptions page: the list, one subscription, or the editor (`draft`).
+  subs: { view: 'list', id: null, runId: null, draft: null },
   // preview: sample data, every action works locally. live: the host's omni endpoints,
   // read-only. `source` says which, and why the preview stays when omni is not set up.
   preview: true,
@@ -221,4 +251,88 @@ export function startLive(call, every = POLL_MS) {
   void tick()
   polling = () => { stopped = true; clearTimeout(timer); polling = null }
   return polling
+}
+
+// -------------------------------------------------------------------------
+// Subscriptions: chats, groups or whole channels, watched for one kind of event and handed to
+// a Bot or a DSH session. Sample only: nothing here talks to omni yet.
+
+export const TRIGGERS = {
+  reaction: { label: 'You react with', icon: '🤖' },
+  message: { label: 'Any new message', icon: '💬' },
+  mention: { label: 'Someone mentions you', icon: '@' },
+  keyword: { label: 'A message contains', icon: '🔎' },
+  voice: { label: 'A voice note arrives', icon: '🎤' },
+  media: { label: 'A photo or file arrives', icon: '📎' },
+  down: { label: 'The channel disconnects', icon: '⚡' },
+}
+export const REACTIONS = ['🤖', '👀', '📌', '✅', '🧾', '🔥', '❓', '⭐']
+
+export const subOf = (state, id) => state.subscriptions.find(sub => sub.id === id)
+export const runsOf = (state, subId) => state.runs.filter(run => subId === undefined || run.subId === subId).toSorted((a, b) => b.at - a.at)
+export const waitingRuns = state => state.runs.filter(run => run.status === 'waiting').length
+export function firedToday(state, subId) {
+  const midnight = new Date().setHours(0, 0, 0, 0)
+  return state.runs.filter(run => run.subId === subId && run.at >= midnight).length
+}
+
+export const emptyDraft = () => ({ id: null, name: '', on: true, sources: [], trigger: { kind: 'reaction', emoji: '🤖' }, worker: { kind: 'main' }, outputs: { react: true, replyToMe: false }, safety: { askFirst: true } })
+
+const sourceOfChat = (state, chat) => ({ kind: 'chat', id: chat.id, name: chat.name, type: channelOf(state, chat.channelId)?.type ?? 'whatsapp-baileys', chatKind: chat.kind ?? 'direct' })
+export const sourceOfChannel = channel => ({ kind: 'channel', id: channel.id, name: channel.name, type: channel.type })
+export const chatSource = sourceOfChat
+
+// "Describe it to Omni": the preview guesses a draft from the words; the real one is the Main
+// Bot proposing a subscription for you to approve.
+export function guessDraft(text, state) {
+  const words = text.toLowerCase()
+  const draft = { ...emptyDraft(), name: text.trim().slice(0, 48) }
+  const emoji = REACTIONS.find(item => text.includes(item))
+  if (emoji || /\breact/.test(words)) draft.trigger = { kind: 'reaction', emoji: emoji ?? '🤖' }
+  else if (/voice|audio|áudio/.test(words)) draft.trigger = { kind: 'voice' }
+  else if (/photo|file|invoice|pdf|foto|nota/.test(words)) draft.trigger = { kind: 'media' }
+  else if (/mention|@me/.test(words)) draft.trigger = { kind: 'mention' }
+  else {
+    const quoted = [...text.matchAll(/["“']([^"”']+)["”']/g)].map(match => match[1])
+    draft.trigger = { kind: 'keyword', words: quoted.length > 0 ? quoted : ['failed'] }
+  }
+  draft.sources = state.chats.filter(chat => words.includes(chat.name.toLowerCase().replace(/^#/, ''))).map(chat => sourceOfChat(state, chat))
+  if (/\b(me|myself|mim)\b/.test(words)) draft.outputs = { ...draft.outputs, replyToMe: true }
+  return draft
+}
+
+export function subsActions(select) {
+  const show = subs => set(state => ({ subs: { ...state.subs, ...subs } }))
+  return {
+    openSubs(view = 'list', id = null, runId = null) {
+      const sub = id ? subOf(omniStore.getSnapshot(), id) : undefined
+      show({ view, id, runId, draft: view === 'edit' ? (sub ? structuredClone(sub) : emptyDraft()) : null })
+      select(SUBS_PANEL)
+    },
+    show,
+    startDraft: (draft) => { show({ view: 'edit', id: draft.id, runId: null, draft }); select(SUBS_PANEL) },
+    editDraft: patch => set(state => ({ subs: { ...state.subs, draft: { ...state.subs.draft, ...patch } } })),
+    save() {
+      const { draft } = omniStore.getSnapshot().subs
+      if (!draft || draft.sources.length === 0) return
+      const id = draft.id ?? `s-${Date.now()}`
+      const saved = { ...draft, id, name: draft.name.trim() || 'Untitled subscription' }
+      set(state => ({
+        subscriptions: state.subscriptions.some(sub => sub.id === id) ? state.subscriptions.map(sub => (sub.id === id ? saved : sub)) : [...state.subscriptions, saved],
+        subs: { view: 'detail', id, runId: null, draft: null },
+      }))
+    },
+    toggle: id => set(state => ({ subscriptions: state.subscriptions.map(sub => (sub.id === id ? { ...sub, on: !sub.on } : sub)) })),
+    remove: id => set(state => ({ subscriptions: state.subscriptions.filter(sub => sub.id !== id), runs: state.runs.filter(run => run.subId !== id), subs: { view: 'list', id: null, runId: null, draft: null } })),
+    // A test fires the subscription on its newest matching message, as a run that finishes.
+    test(id) {
+      const sub = subOf(omniStore.getSnapshot(), id)
+      if (!sub) return
+      const runId = `r-${Date.now()}`
+      set(state => ({ runs: [{ id: runId, subId: id, at: Date.now(), status: 'working', from: sub.sources[0]?.name ?? 'a chat', excerpt: 'Test: the newest matching message', summary: 'Reading the message' }, ...state.runs], subs: { ...state.subs, runId } }))
+      setTimeout(() => set(state => ({ runs: state.runs.map(run => (run.id === runId ? { ...run, status: 'done', summary: 'Test finished: the worker got the message and where it came from' } : run)) })), 2200)
+    },
+    approve: runId => set(state => ({ runs: state.runs.map(run => (run.id === runId ? { ...run, status: 'working', summary: 'Approved: running it now' } : run)) })),
+    deny: runId => set(state => ({ runs: state.runs.map(run => (run.id === runId ? { ...run, status: 'failed', summary: 'You declined' } : run)) })),
+  }
 }

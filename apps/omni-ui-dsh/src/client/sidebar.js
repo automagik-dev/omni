@@ -11,7 +11,7 @@ import { Shimmer, workPhrase } from './cells.js'
 import { springEasing, SPRING_SHAPE } from './motion.js'
 import { hostText, t } from './i18n.js'
 import { showsDshRow } from './dsh-offer.js'
-import { ChatsSection } from './channels.js'
+import { SubscriptionsSection } from './subscriptions.js'
 import { CHANNELS_PANEL } from './omni-store.js'
 
 // -------------------------------------------------------------------------
@@ -295,7 +295,7 @@ export function TeamSidebar(props) {
         : entry.kind === 'room'
           ? h(RoomRow, { key: entry.item.id, ...rowProps, room: entry.item, marked: markedUnread[entry.item.id] === true })
           : h(AgentRow, { key: entry.item.id, ...rowProps, agent: entry.item, marked: markedUnread[entry.item.id] === true }))),
-      roster.ready ? h(ChatsSection, { wide, actions, usePanel: props.usePanel }) : null))
+      roster.ready ? h(SubscriptionsSection, { wide, actions, usePanel: props.usePanel, roster }) : null))
 }
 
 // The update button at the sidebar's top right: a cloud while a newer Omni —

@@ -34,7 +34,8 @@ import { ABOUT_CSS } from './about.js'
 import { MEMBER_CSS, MemberDock } from './member-status.js'
 import { USER_MESSAGE_CSS, UserMessageCell, canDrawUserMessages } from './user-message.js'
 import { CHANNELS_CSS, ChannelsPage, ChatPage } from './channels.js'
-import { CHANNELS_PANEL, CHAT_PANEL } from './omni-store.js'
+import { SUBSCRIPTIONS_CSS, SubscriptionsPage } from './subscriptions.js'
+import { CHANNELS_PANEL, CHAT_PANEL, SUBS_PANEL } from './omni-store.js'
 import { noticeApprovals } from './approval-notices.js'
 
 export const inject = ['sessions', 'uiWorkspace', 'uiConversation', 'slots', 'theme', 'layout']
@@ -774,7 +775,7 @@ export function apply(ctx) {
     () => installCompiledStyles(ABOUT_CSS, 'about'),
     () => installCompiledStyles(MEMBER_CSS, 'members'),
     () => installCompiledStyles(USER_MESSAGE_CSS, 'user-messages'),
-    () => installCompiledStyles(CHANNELS_CSS, 'channels'),
+    () => installCompiledStyles(CHANNELS_CSS + SUBSCRIPTIONS_CSS, 'channels'),
     browsers ? () => installCompiledStyles(BROWSER_CSS, 'browser') : null,
     () => installTheme(),
     () => shadow('sidebar.workspaces', { priority: BOT_PRIORITY, inject: face }, TeamSidebar),
@@ -793,6 +794,7 @@ export function apply(ctx) {
     // they replace the conversation in the center, and opening a Bot brings it back.
     () => shadow('main', { key: CHANNELS_PANEL, inject: face }, ChannelsPage),
     () => shadow('main', { key: CHAT_PANEL, inject: face }, ChatPage),
+    () => shadow('main', { key: SUBS_PANEL, inject: face }, SubscriptionsPage),
   ]
   const installConversation = () => [
     () => installCompiledStyles(CONVERSATION_CSS, 'conversation'),
