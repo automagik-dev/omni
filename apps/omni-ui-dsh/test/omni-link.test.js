@@ -133,3 +133,29 @@ test('cancelling tells Omni with the poll token and forgets the pairing', async 
   assert.deepEqual(omni.asked.at(-1), { method: 'DELETE', path: '/api/v2/pair/p1', token: 'omni_pt_secret', key: null, body: undefined })
   assert.equal((await rt.omniLinkEndpoint('omni-pair-poll')).status, 'idle')
 })
+
+test('two windows polling at once make one request, and both see the pairing finish', async (t) => {
+  const omni = fakeOmni()
+  const { rt, stop } = runtime()
+  t.after(stop)
+  await rt.omniLinkEndpoint('omni-pair-start', { url: 'omni.example.com' })
+  omni.approve()
+  const before = omni.asked.length
+  const [a, b] = await Promise.all([rt.omniLinkEndpoint('omni-pair-poll'), rt.omniLinkEndpoint('omni-pair-poll')])
+  assert.equal(omni.asked.length - before, 1)
+  assert.deepEqual(a, { status: 'paired', origin: 'omni.example.com' })
+  assert.deepEqual(b, a)
+  assert.equal(rt.omniLink().key, 'omni_sk_paired')
+})
+
+test('a key that arrives after the pairing was cancelled is still kept', async (t) => {
+  const omni = fakeOmni()
+  const { rt, stop } = runtime()
+  t.after(stop)
+  await rt.omniLinkEndpoint('omni-pair-start', { url: 'omni.example.com' })
+  omni.approve()
+  const polling = rt.omniLinkEndpoint('omni-pair-poll')
+  await rt.omniLinkEndpoint('omni-pair-cancel')
+  assert.equal((await polling).status, 'paired')
+  assert.equal(rt.omniLink().key, 'omni_sk_paired')
+})

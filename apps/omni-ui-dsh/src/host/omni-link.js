@@ -14,6 +14,7 @@ import { join } from 'node:path'
 
 export const LINK_FILE = 'omni.json'
 const TIMEOUT_MS = 10_000
+const POLL_TIMEOUT_MS = 30_000
 const DEVICE_NAME_MAX = 80
 
 const invalid = message => Object.assign(new Error(message), { code: 'bot/invalid' })
@@ -63,7 +64,7 @@ export function install(rt) {
     await rename(temp, path)
   }
 
-  async function omniFetch(url, method, route, { body, token } = {}) {
+  async function omniFetch(url, method, route, { body, token, timeoutMs = TIMEOUT_MS } = {}) {
     let response
     try {
       response = await fetch(`${url}/api/v2${route}`, {
@@ -74,7 +75,7 @@ export function install(rt) {
           ...(token ? { 'x-pairing-token': token } : {}),
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-        signal: AbortSignal.timeout(TIMEOUT_MS),
+        signal: AbortSignal.timeout(timeoutMs),
       })
     } catch {
       throw refused(`Could not reach Omni at ${url}`)
@@ -106,19 +107,23 @@ export function install(rt) {
     return { pairing: publicPairing() }
   }
 
-  async function poll() {
+  // One poll at a time per host, whoever asks (two windows poll the same pairing): the
+  // poll that finds it approved is the only one Omni ever answers with the key.
+  let polling = null
+  function poll() {
+    polling ??= pollOnce().finally(() => { polling = null })
+    return polling
+  }
+
+  async function pollOnce() {
     if (!pairing) return { status: 'idle' }
     const current = pairing
-    const reply = await omniFetch(current.url, 'GET', `/pair/${current.pairingId}`, { token: current.pollToken })
-    if (pairing !== current) return { status: 'idle' }
-    if (reply.status === 404) {
-      pairing = null
-      return { status: 'expired' }
-    }
-    if (reply.status !== 200) return { status: 'pending', pairing: publicPairing() }
-    const { status, apiKey } = reply.data ?? {}
+    // Minting the key happens inside this request; give it longer than other calls.
+    const reply = await omniFetch(current.url, 'GET', `/pair/${current.pairingId}`, { token: current.pollToken, timeoutMs: POLL_TIMEOUT_MS })
+    const { status, apiKey } = reply.status === 200 ? reply.data ?? {} : {}
+    // A key is saved whatever happened meanwhile (a cancel, a new start): Omni hands it out once.
     if (status === 'approved' && apiKey) {
-      pairing = null
+      if (pairing === current) pairing = null
       const link = {
         url: cleanOmniUrl(reply.data.apiUrl) ?? current.url,
         key: apiKey,
@@ -131,6 +136,12 @@ export function install(rt) {
       rt.syncOmniEvents?.()
       return { status: 'paired', origin: new URL(link.url).host }
     }
+    if (pairing !== current) return { status: 'idle' }
+    if (reply.status === 404) {
+      pairing = null
+      return { status: 'expired' }
+    }
+    if (reply.status !== 200) return { status: 'pending', pairing: publicPairing() }
     if (status === 'pending') return { status: 'pending', pairing: publicPairing() }
     // expired, cancelled, or consumed by a poll that did not reach us: start again.
     pairing = null
