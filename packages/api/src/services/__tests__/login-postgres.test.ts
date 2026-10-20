@@ -314,7 +314,7 @@ postgresDescribe('human login (real PostgreSQL)', () => {
   test('the pages are served, and a passkey can be set up from a signed-in session', async () => {
     const claimPage = await app.request(`${ORIGIN}/api/login/claim`);
     expect(claimPage.status).toBe(200);
-    expect(await claimPage.text()).toContain('Welcome to your Omni');
+    expect(await claimPage.text()).toContain('Make this Omni yours');
     expect((await app.request(`${ORIGIN}/api/login/device`)).status).toBe(200);
 
     await call('POST', '/api/v2/login/send-code');
