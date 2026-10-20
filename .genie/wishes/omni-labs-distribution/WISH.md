@@ -312,6 +312,20 @@ Findings and how each was closed before or during execution:
 
 ---
 
+### Code review of the branch — 2026-10-20, independent read-only reviewer: FIX-FIRST → fixed
+
+1. Desktop update erased the user's dsh settings (profile folder replaced) → `788e52ec1`: an update replaces node_modules and package.json only.
+2. A send-only key could approve as owner if the echo set missed Omni's own send → `6f47d563d`: owner approval requires Baileys `notify` (Omni's own sends are `append`). Verified live: the code sent by Omni from the pairing instance to its own number did not approve.
+3. LID-addressed self chats never matched → `6f47d563d`: `remoteJidAlt` accepted, tested.
+4. Two IPs could hold the pending cap → `6f47d563d`: 3 pending per client IP in Postgres, tested.
+5. A minted key could be dropped by a racing poll → `96b7b8bf6`: one poll in flight per host; a reply carrying a key is always saved; 30 s poll timeout.
+6. `omni desktop` reused a stale unpack by name → `472ca01ce`: keyed by SHA-256.
+7. A failed start left dsh running → `788e52ec1`.
+8. Off routes leaked rate-limit headers → `6f47d563d`: off answers before the limiter.
+9. SHA256SUMS proves integrity, not origin → open: sign the sums with the existing cosign identity when desktop releases are cut.
+
+Second end-to-end on the second machine with the fixed build (`2.261019.10-labs.2` on the server): the allowlisted number approved; Omni's own send to itself did not; both test keys revoked.
+
 ## Files to Create/Modify
 
 ```
