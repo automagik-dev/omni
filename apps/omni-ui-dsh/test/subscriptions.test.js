@@ -72,7 +72,7 @@ function setup(t) {
   const as = (name, agentId) => args => ctx.registeredTools.get(name).execute(args, { agent: { id: agentId } })
   const call = async (endpoint, payload) => (await (await route.fetch(new Request('http://localhost/api/bot', { method: 'POST', body: JSON.stringify({ endpoint, payload }) }))).json())
   const emit = (sessionId, event) => { for (const listener of ctx.listeners.get('session/event') ?? []) listener({ id: sessionId }, event) }
-  return { tool, as, call, sent, emit, requests }
+  return { tool, as, call, sent, emit, requests, ctx }
 }
 
 test('only the Main Bot manages automations; the Autopilot a team once had is an ordinary Bot', async (t) => {
@@ -185,9 +185,9 @@ test('an automation Omni handles itself gives it each event as a task that only 
 
 test('Omni finds any omni operation and calls it; other Bots cannot', async (t) => {
   const { tool, as, call, requests } = setup(t)
-  const found = await tool('omni_endpoints')({ search: 'connect whatsapp qr' })
+  const found = await tool('omni_endpoints')({ search: 'connect instance' })
   assert.match(found, /^POST \/instances\/\{id\}\/connect — Connect instance \[Instances\]\n  path id: string\(uuid\)/m)
-  assert.match(found, /GET \/instances\/\{id\}\/qr — Get QR code for WhatsApp connection/)
+  assert.match(await tool('omni_endpoints')({ search: 'qr code whatsapp connection' }), /GET \/instances\/\{id\}\/qr — Get QR code for WhatsApp connection/)
   assert.match(await tool('omni_endpoints')({ search: 'create instance' }), /body: \{name: string, channel: "whatsapp-baileys" \| "telegram"\}/)
 
   const connected = JSON.parse(await tool('omni_call')({ method: 'POST', path: '/api/v2/instances/wa-1/connect', body: '{"forceNew": false}' }))
@@ -207,6 +207,48 @@ test('Omni finds any omni operation and calls it; other Bots cannot', async (t) 
   // The browser reads documented GET operations only.
   assert.equal((await call('omni-get', { path: '/instances/wa-1/qr' })).ok, true)
   assert.equal((await call('omni-get', { path: '/instances/wa-1/connect' })).ok, false)
+})
+
+test('Omni shows only canvases that pass, lists channels with their state, and has no shell', async (t) => {
+  const { tool, as, ctx, requests } = setup(t)
+  assert.equal(await tool('show_canvas')({ program: 'root = Stack([a])\na = Text("hi")' }), 'Shown.')
+  assert.match(await tool('show_canvas')({ program: 'root = Stack([a])\na = Text("hi"' }), /^Not shown: Line 2 does not close its brackets .* call show_canvas again\.$/)
+  const chats = JSON.parse(await tool('omni_chats')({ channel: 'Sales', unread_only: true, limit: 5 }))
+  assert.deepEqual(chats.data.items.map(chat => chat.name), ['Grupo Obras', 'Marina Lopes'])
+  assert.equal(requests.at(-1).path, '/chats?sort=activity&limit=5&instanceId=wa-1&unreadOnly=true')
+  assert.match(await tool('omni_chats')({ channel: 'Nope' }), /No channel named .*Nope/)
+  const channels = JSON.parse(await tool('omni_channels')({}))
+  assert.deepEqual(channels.data.items, [{ id: 'wa-1', name: 'Sales', channel: 'whatsapp-baileys', state: 'connected', active: true }])
+  assert.match(await as('omni_channels', 'b2')({}), /Only a Main Bot/)
+  // The computer tools are refused to the Main Bot that operates omni, not to other Bots.
+  const refusals = name => ctx.guards.map(guard => guard({ name, agent: { id: 'm1' } })).filter(Boolean)
+  assert.match(refusals('bash')[0], /start_task/)
+  assert.deepEqual(refusals('web_search'), [])
+  assert.deepEqual(ctx.guards.map(guard => guard({ name: 'bash', agent: { id: 'b2' } })).filter(Boolean), [])
+})
+
+test('a task Omni starts runs under Tasks and reports back to Omni once', async (t) => {
+  const { as, call, sent, emit } = setup(t)
+  const reply = await as('start_task', 'm1')({ title: 'Check the canvas Query', instructions: 'Find out why the stat stays 0.' })
+  assert.match(reply, /^Started task "Check the canvas Query" \((task-\d+)\) under Tasks/)
+  const sessionId = /\((task-\d+)\)/.exec(reply)[1]
+  const team = (await call('state', {})).value
+  assert.deepEqual(team.agents.map(agent => [agent.name, agent.sessions]), [['Tasks', [sessionId]]])
+  assert.equal(sent.at(-1).sessionId, sessionId)
+  assert.equal(sent.at(-1).message.content[0].text, 'Find out why the stat stays 0.')
+  emit(sessionId, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'The field does not exist; nothing is broken.' }] } } })
+  emit(sessionId, { type: 'turn/end', data: { reason: { kind: 'completed' } } })
+  await new Promise(resolve => setTimeout(resolve, 30))
+  const report = sent.at(-1)
+  assert.equal(report.sessionId, 'm1')
+  assert.equal(report.message.content[0].text, '[Task "Check the canvas Query" finished · its last words follow; tell the user what matters in a line or two]\nThe field does not exist; nothing is broken.')
+  assert.equal(report.message.source.taskSessionId, sessionId)
+  // A later turn in the same task does not report again.
+  const count = sent.length
+  emit(sessionId, { type: 'turn/end', data: { reason: { kind: 'completed' } } })
+  await new Promise(resolve => setTimeout(resolve, 30))
+  assert.equal(sent.length, count)
+  assert.match(await as('start_task', 'b2')({ title: 'x', instructions: 'y' }), /Only a Main Bot/)
 })
 
 test('an event matches only the subscriptions that watch its chat or channel, for their moment', async () => {

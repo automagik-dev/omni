@@ -13,12 +13,30 @@ import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 import { createLibrary, defineComponent, markReactive } from '@openuidev/lang-core'
 import { libraryOf, PROMPT_OPTIONS } from '../src/client/omni-ui-spec.js'
+import { sourceRoutes } from './omni-routes.mjs'
 
 const PLUGIN = dirname(dirname(fileURLToPath(import.meta.url)))
 const OUTPUT = join(PLUGIN, 'client.js')
 // Omni's OpenUI authoring prompt, written from the same component definitions the client
 // renders, so the host needs no OpenUI at run time.
 const PROMPT_OUTPUT = join(PLUGIN, 'src/host/omni-ui-prompt.js')
+// The canvas check for the host's show_canvas, bundled so the host needs no OpenUI or zod
+// installed (and never runs their install scripts).
+const CHECK_OUTPUT = join(PLUGIN, 'src/host/omni-ui-check.bundle.js')
+// The omni API routes its source declares, for those its OpenAPI description leaves out.
+// Read from this monorepo's packages/api; outside it, the committed list stays as it is.
+const ROUTES_OUTPUT = join(PLUGIN, 'src/host/omni-routes.js')
+const API_SOURCE = join(PLUGIN, '..', '..', 'packages', 'api')
+
+export function omniRoutes() {
+  const routes = sourceRoutes(API_SOURCE)
+  if (routes === null) return null
+  return [
+    '// Generated from packages/api/src/routes/v2 by `npm run build` (scripts/omni-routes.mjs). Do not edit by hand.',
+    `export const SOURCE_ROUTES = ${JSON.stringify(routes, null, 0).replace(/\},\{/g, '},\n  {').replace(/^\[/, '[\n  ').replace(/\]$/, ',\n]')}`,
+    '',
+  ].join('\n')
+}
 // react/jsx-runtime is seeded by the shell too (deepseek-harness packages/client/web/src/seed.ts);
 // OpenUI's renderer imports it.
 const PLATFORM_MODULES = ['react', 'react/jsx-runtime', 'react-dom', '@deepseek-ai/dsh-client-ui-primitives']
@@ -81,6 +99,25 @@ const REWORDED = [
   [/5\. Every visible filter \$binding appears in at least one Query args object\.\n/, ''],
 ]
 
+export async function bundleCheck() {
+  const result = await build({
+    absWorkingDir: PLUGIN,
+    entryPoints: ['src/client/omni-ui-check.js'],
+    bundle: true,
+    format: 'esm',
+    platform: 'node',
+    target: 'node22',
+    minify: true,
+    legalComments: 'none',
+    charset: 'utf8',
+    write: false,
+    logLevel: 'silent',
+    plugins: [zodEnglishOnly],
+  })
+  if (result.warnings.length > 0) throw new Error(`esbuild warnings:\n${result.warnings.map(warning => warning.text).join('\n')}`)
+  return `// Generated from src/client/omni-ui-check.js by \`npm run build\` (scripts/build-client.mjs). Do not edit by hand.\n// Bundles @openuidev/lang-core and zod (MIT; see NOTICE).\n${result.outputFiles[0].text}`
+}
+
 export function omniUiPrompt() {
   const reactive = (schema) => { markReactive(schema); return schema }
   let text = libraryOf({ createLibrary, defineComponent, reactive }).prompt(PROMPT_OPTIONS)
@@ -102,7 +139,9 @@ export function omniUiPrompt() {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const outputs = [[OUTPUT, await bundleClient(), 'client.js'], [PROMPT_OUTPUT, omniUiPrompt(), 'src/host/omni-ui-prompt.js']]
+  const outputs = [[OUTPUT, await bundleClient(), 'client.js'], [PROMPT_OUTPUT, omniUiPrompt(), 'src/host/omni-ui-prompt.js'], [CHECK_OUTPUT, await bundleCheck(), 'src/host/omni-ui-check.bundle.js']]
+  const routes = omniRoutes()
+  if (routes !== null) outputs.push([ROUTES_OUTPUT, routes, 'src/host/omni-routes.js'])
   for (const [file, next, name] of outputs) {
     if (process.argv.includes('--check')) {
       let current = null

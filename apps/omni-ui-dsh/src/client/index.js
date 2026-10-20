@@ -31,7 +31,7 @@ import { SCHEDULE_CSS } from './schedules.js'
 import { STORAGE, migrateStorage } from './storage.js'
 import { noteLeft, setUnread, sharedMap, toggleReaction } from './shared-map.js'
 import { freePriority, groupsFor, readMode, surfaceGroups, writeMode } from './surface.js'
-import { installLocale, language, t } from './i18n.js'
+import { dateLocale, installLocale, language, t } from './i18n.js'
 import { noteClientError, quietly } from './diagnostics.js'
 import { ErrorToast, FEEDBACK_CSS } from './feedback.js'
 import { ABOUT_CSS } from './about.js'
@@ -841,7 +841,37 @@ export function apply(ctx) {
     () => shadow('main', { key: AUTOMATIONS_PANEL, inject: face }, AutomationsPage),
     () => installBoard(),
   ]
+  // DSH draws the user's own messages itself here (no projectUserText), so each one gets the
+  // time its turn began as an attribute, and CSS prints it under the bubble.
+  const installUserTimes = () => {
+    let frame = 0
+    const paint = () => {
+      frame = 0
+      const list = ctx.sessions.list.getSnapshot()
+      const shown = Object.values(list.byId ?? {}).find(session => (session?.retainedBy?.mainView ?? 0) > 0)?.id
+      const turns = shown === undefined ? {} : turnClock.getSnapshot()[shown] ?? {}
+      for (const row of document.querySelectorAll('[data-chat-flow-kind=user][data-chat-turn]')) {
+        const first = turns[row.dataset.chatTurn]?.first
+        const label = first === undefined ? '' : new Date(first).toLocaleTimeString(dateLocale(), { hour: 'numeric', minute: '2-digit' })
+        if ((row.dataset.btTime ?? '') === label) continue
+        if (label) row.dataset.btTime = label
+        else delete row.dataset.btTime
+      }
+    }
+    const schedule = () => { if (!frame) frame = requestAnimationFrame(paint) }
+    const observer = new MutationObserver(schedule)
+    observer.observe(document.body, { childList: true, subtree: true })
+    const offs = [turnClock.subscribe(schedule), ctx.sessions.list.subscribe(schedule)]
+    schedule()
+    return () => {
+      cancelAnimationFrame(frame)
+      observer.disconnect()
+      for (const off of offs) off()
+      for (const row of document.querySelectorAll('[data-bt-time]')) delete row.dataset.btTime
+    }
+  }
   const installConversation = () => [
+    () => installUserTimes(),
     () => installCompiledStyles(CONVERSATION_CSS, 'conversation'),
     () => installMentions(),
     () => installAtMenu(),

@@ -97,7 +97,8 @@ export function UserMessageCell({ node, sessionId, useRoster, actions, renderMes
         control ? h('div', { className: 'bt-fold-body' }, body) : body,
         control,
         rest.map((block, index) => (ui.JsonBlock ? h(ui.JsonBlock, { key: index, label: t('Content'), payload: block }) : null))) : null,
-      referenceLabels.length > 0 ? h('div', { className: 'bt-urefs' }, t('Referenced {labels}', { labels: referenceLabels.join(t(', ')) })) : null),
+      referenceLabels.length > 0 ? h('div', { className: 'bt-urefs' }, t('Referenced {labels}', { labels: referenceLabels.join(t(', ')) })) : null,
+      typeof data.time === 'number' ? h('time', { className: 'bt-utime', dateTime: new Date(data.time).toISOString() }, clock(data.time)) : null),
     text === '' ? null : h('div', { className: 'bt-utools' }, h(CopyButton, { text })))
 }
 
@@ -116,6 +117,7 @@ export const USER_MESSAGE_CSS = `
 .bt-ufile-name{font-size:14px;line-height:22px;font-weight:500;color:var(--bt-ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .bt-ufile-meta{font-size:12px;line-height:15px;color:var(--bt-ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .bt-urefs{font-size:13px;line-height:18px;color:var(--bt-ink-3)}
+.bt-utime{margin-top:-4px;font-size:11px;line-height:14px;color:var(--bt-ink-3);font-variant-numeric:tabular-nums}
 .bt-utools{display:flex;flex:none;gap:2px;opacity:0;visibility:hidden;transition:opacity .12s ease,visibility .12s}
 .bt-umsg:hover .bt-utools,.bt-umsg:focus-within .bt-utools{opacity:1;visibility:visible}
 `

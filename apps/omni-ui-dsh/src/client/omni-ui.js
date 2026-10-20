@@ -1,23 +1,17 @@
 import { Component, createContext, createElement as h, Fragment, useCallback, useContext, useEffect, useMemo, useState } from 'react'
-import { createLibrary, createParser, defineComponent, reactive, Renderer, useStateField, useTriggerAction } from '@openuidev/react-lang'
-import { BUILTIN_NAMES, parseExpression, split, tokenize, walkAST } from '@openuidev/lang-core'
+import { createLibrary, defineComponent, reactive, Renderer, useStateField, useTriggerAction } from '@openuidev/react-lang'
 import { t } from './i18n.js'
 import { call } from './api.js'
-import { QUERY_TOOL, SPECS, libraryOf } from './omni-ui-spec.js'
+import { CHANNELS_TOOL, QUERY_TOOL, libraryOf } from './omni-ui-spec.js'
+import { checkProgram as checkCanvas } from './omni-ui-check.js'
 import { Badge, KeyValue, LiveChannel, LiveChat, LiveQr, Table, errorText } from './omni-live.js'
 
-// Canvases: Omni answers with an ```openui-lang block and the chat renders it in place as
-// live, native UI. Adapted from genui-canvas (namastexlabs/agent-studio-plugins): the
+// Canvases: Omni shows one with show_canvas (older replies carry it as an openui-lang
+// fence) and the chat renders it in place as live, native UI. Adapted from genui-canvas (namastexlabs/agent-studio-plugins): the
 // program is parsed and checked against the closed library before anything mounts, and a
 // program that fails shows its source instead. Omni's canvases may read omni live (Query
 // with the omni_get tool, GET only, through the host) and their buttons ask Omni to act
 // (@ToAssistant); they never write by themselves: no Mutation.
-
-const PROGRAM_MAX = 32_768
-const TOKENS_MAX = 6000
-const STATEMENTS_MAX = 128
-const NODES_MAX = 4000
-const DEPTH_MAX = 48
 
 // react-lang initializes $defaults in a passive effect; its first empty-store pass stays
 // invisible rather than reading as invalid data (as in genui-canvas).
@@ -101,52 +95,14 @@ const RENDER = {
   Chat: ({ props }) => h(LiveChat, { id: props.id, limit: props.limit }),
 }
 export const omniLibrary = libraryOf({ createLibrary, defineComponent, reactive }, RENDER)
-const parser = createParser(omniLibrary.toJSONSchema(), omniLibrary.root)
-const ALLOWED = new Set([...SPECS.map(([name]) => name), ...BUILTIN_NAMES, 'Query'])
-
-// Checked with the official tokenizer and parser before anything mounts. Null when fine.
-export function checkProgram(program) {
-  if (!program.trim()) return t('The canvas is empty.')
-  if (program.length > PROGRAM_MAX) return t('The canvas is too long.')
-  try {
-    const tokens = tokenize(program)
-    if (tokens.length > TOKENS_MAX) return t('The canvas is too complex.')
-    const statements = split(tokens)
-    if (statements.length > STATEMENTS_MAX) return t('The canvas is too complex.')
-    let nodes = 0
-    for (const statement of statements) {
-      const pending = [[parseExpression(statement.tokens), 0]]
-      while (pending.length) {
-        const [value, depth] = pending.pop()
-        if (depth > DEPTH_MAX) return t('The canvas is nested too deeply.')
-        if (value && typeof value === 'object') for (const child of Object.values(value)) if (child && typeof child === 'object') pending.push([child, depth + 1])
-      }
-      let refusal = null
-      walkAST(parseExpression(statement.tokens), (node) => {
-        if (++nodes > NODES_MAX) refusal ??= t('The canvas is too complex.')
-        if (node.k === 'Comp' && node.name === 'Mutation') refusal ??= t('A canvas cannot change omni; ask Omni instead.')
-        else if (node.k === 'Comp' && !ALLOWED.has(node.name)) refusal ??= t('Unknown component {name}.', { name: node.name })
-      })
-      if (refusal) return refusal
-    }
-    const result = parser.parse(program)
-    if (result.meta.incomplete) return t('The canvas is incomplete.')
-    if (result.mutationStatements.length > 0) return t('A canvas cannot change omni; ask Omni instead.')
-    if (result.queryStatements.some(query => query.toolAST?.k !== 'Str' || query.toolAST.v !== QUERY_TOOL)) return t('A canvas can only read omni.')
-    if (!result.root || result.root.typeName !== omniLibrary.root) return t('The canvas must start with root = Stack(...).')
-    // A line that does not parse leaves its name undefined: its own error says why. Extra
-    // arguments are only dropped, so they do not stop the canvas.
-    const errors = result.meta.errors.filter(error => error.code !== 'excess-args')
-    if (errors.length > 0) return errors.slice(0, 3).map(error => error.message).join(' ')
-    if (result.meta.unresolved.length > 0) return t('The canvas names something it never defines: {names}.', { names: result.meta.unresolved.slice(0, 3).join(', ') })
-    return null
-  } catch (error) {
-    return error instanceof Error ? error.message : t('The canvas could not be read.')
-  }
+// Checked before anything mounts, with the same check the host runs on show_canvas.
+export const checkProgram = (program) => {
+  const refusal = checkCanvas(program)
+  return refusal === null ? null : t(refusal.text, refusal.params)
 }
 
-
 const readOmni = {
+  [CHANNELS_TOOL]: async () => call('omni-channels'),
   [QUERY_TOOL]: async ({ path }) => {
     const reply = await call('omni-get', { path })
     if (!reply.ok) throw new Error(errorText(reply.data, reply.status))

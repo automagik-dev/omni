@@ -57,7 +57,7 @@ export const ROOM_MAX_MEMBERS = 12
 
 // A team's one DSH Agent: a plain dsh entry in the sidebar, not a Bot. Its Sessions
 // are ordinary root Sessions, so the team tools must not be offered to them.
-export const AGENT_NAME = 'DSH Agent'
+export const AGENT_NAME = 'Tasks'
 export const AGENT_SESSION_TITLE_MAX = 80
 // Every tool this plugin registers for Bots. `read_browser` only exists in the
 // Desktop profile, so a restriction filters this list down to registered names.
@@ -69,7 +69,7 @@ export const TEAM_TOOLS = [
   'list_capabilities', 'save_capability', 'delete_capability',
   'attach_capability', 'detach_capability',
   'find_chats', 'list_automations', 'save_automation', 'pause_automation', 'delete_automation',
-  'omni_endpoints', 'omni_call',
+  'omni_endpoints', 'omni_call', 'omni_channels', 'omni_chats', 'omni_messages', 'omni_connect', 'show_canvas', 'start_task',
 ]
 // Answers a group gives to what members post after the round moved on (their finished
 // work, mostly), before the user speaks there again.

@@ -93,7 +93,7 @@ test('add-agent creates one record with a first Session in the Omni workspace', 
   t.after(stop)
   await call('state', {})
   const agent = (await call('add-agent')).value
-  assert.equal(agent.name, 'DSH Agent')
+  assert.equal(agent.name, 'Tasks')
   assert.equal(agent.sessions.length, 1)
   const view = (await call('state', {})).value
   assert.deepEqual(view.agents.map(entry => entry.id), [agent.id])

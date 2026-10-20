@@ -73,7 +73,7 @@ function AgentMenu({ menu, roster, actions, leaving }) {
           [agent.pinned ? t('Unpin') : t('Pin'), PinIcon, () => actions.setFlags(agent.id, { pinned: !agent.pinned })],
         ],
         [
-          [t('Remove DSH Agent'), TrashIcon, () => actions.removeAgent(agent.id), true],
+          [t('Remove Tasks'), TrashIcon, () => actions.removeAgent(agent.id), true],
         ],
       ]
     : [
@@ -84,7 +84,7 @@ function AgentMenu({ menu, roster, actions, leaving }) {
           [t('Archive'), TrashIcon, () => actions.archiveAgentSession(agent.id, menu.id), true],
         ],
       ]
-  return h('div', { ref, className: 'bt-menu', role: 'menu', 'aria-label': menu.kind === 'agent' ? 'DSH Agent' : t('Session actions'), style: place, 'data-leaving': leaving || undefined },
+  return h('div', { ref, className: 'bt-menu', role: 'menu', 'aria-label': menu.kind === 'agent' ? t('Tasks') : t('Session actions'), style: place, 'data-leaving': leaving || undefined },
     groups.map((group, index) => h(Fragment, { key: index },
       index > 0 ? h('div', { className: 'bt-menu-sep', role: 'separator' }) : null,
       group.map(([label, Icon, run, danger]) => h('button', {

@@ -175,7 +175,8 @@ export function install(rt) {
     const text = taskText(sub, event)
     if (task) {
       const title = `${worker.kind === 'session' ? 'Task' : bot?.name ?? 'Task'} · ${sub.name}`.slice(0, 80)
-      run.sessionId = await rt.createSession(title, worker.kind !== 'session' && bot?.workDir ? { dir: bot.workDir } : {})
+      // "A new DSH session" is a Tasks Session, listed with the others under Tasks.
+      run.sessionId = worker.kind === 'session' ? await rt.createTaskSession(title) : await rt.createSession(title, bot?.workDir ? { dir: bot.workDir } : {})
       await guard(sub, bot, run.sessionId)
     } else {
       run.sessionId = rt.chatOf(botId)
@@ -186,7 +187,7 @@ export function install(rt) {
     try {
       if (worker.kind === 'session') {
         const agent = await rt.resolveAgent(run.sessionId)
-        agent.followup(createUserMessage({ content: [{ type: 'text', text }] }))
+        agent.followup(createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } }))
         await ctx.sessions.flush(agent.session)
       } else {
         await rt.deliver({ toId: botId, sessionId: run.sessionId, text, role: 'task', note: sub.name })

@@ -47,3 +47,47 @@ test('a large answer keeps its shape: its lists are shortened until it fits', ()
   assert.match(value._cut, /shortened/)
   assert.equal(fitted({ status: 200, data: { ok: true } }), '{"status":200,"data":{"ok":true}}')
 })
+
+test('a canvas is checked the same way on both sides; a refusal says what to fix', async () => {
+  const { checkProgram, refusalText, unclosedLine } = await import('../src/host/omni-ui-check.bundle.js')
+  assert.equal(checkProgram('root = Stack([a])\na = Text("hi")'), null)
+  // Extra arguments are dropped, not fatal.
+  assert.equal(checkProgram('root = Stack([r])\nr = Row([Text("a")], "m")'), null)
+  const broken = checkProgram('root = Stack([t])\nt = Card("x", [KeyValue([{label: "a", value: "b"}), Row([])])')
+  assert.equal(refusalText(broken), 'Line 2 does not close its brackets or quotes: t = Card("x", [KeyValue([{label: "a", value: "b"}), Row([])]')
+  assert.equal(refusalText(checkProgram('root = Stack([m])\nm = Mutation("omni_get", {})')), 'A canvas cannot change omni; ask Omni instead.')
+  assert.equal(refusalText(checkProgram('root = Stack([x])\nx = Iframe("https://evil.test")')), 'Unknown component Iframe.')
+  assert.equal(refusalText(checkProgram('root = Stack([q])\nq = Query("send_message", {}, {})')), 'A canvas can only read omni.')
+  assert.equal(unclosedLine('a = Text("a (b")'), null, 'brackets inside strings do not count')
+})
+
+test('every example Omni is taught passes the canvas check', async () => {
+  const { checkProgram, refusalText } = await import('../src/host/omni-ui-check.bundle.js')
+  const { OMNI_UI_PROMPT } = await import('../src/host/omni-ui-prompt.js')
+  const examples = OMNI_UI_PROMPT.split('## Examples')[1].split('\n## ')[0].trim().split(/\n\s*\n/).map(block => block.trim()).filter(block => block.startsWith('root ='))
+  assert.ok(examples.length >= 2)
+  for (const example of examples) assert.equal(checkProgram(example) && refusalText(checkProgram(example)), null, example)
+})
+
+test('routes omni declares but leaves out of its API description are found and callable too', async () => {
+  const { withSourceRoutes, search, findOperation } = await import('../src/host/omni-api.js')
+  const { SOURCE_ROUTES } = await import('../src/host/omni-routes.js')
+  // The committed index is this repository's API: chats and sending are in it.
+  const sent = SOURCE_ROUTES.find(route => route.method === 'POST' && route.path === '/messages/send')
+  assert.match(sent.body, /instanceId: z\.string\(\)\.uuid\(\)/)
+  assert.match(SOURCE_ROUTES.find(route => route.method === 'GET' && route.path === '/chats').query, /unreadOnly/)
+  assert.ok(!SOURCE_ROUTES.some(route => route.path === '/' || /^\/\{\w+\}(\/|$)/.test(route.path)), 'no root catch-alls')
+  const documented = [{ method: 'GET', path: '/chats/{id}', pattern: /^\/chats\/[^/]+$/, summary: 'Get chat (documented)', params: [], body: null }]
+  const ops = withSourceRoutes(documented, [
+    { method: 'GET', path: '/chats/{id}', summary: 'Get chat by ID', tag: 'chats' },
+    { method: 'GET', path: '/chats', summary: 'List chats', tag: 'chats', query: 'z.object({ unreadOnly: z.coerce.boolean().optional() })' },
+    { method: 'POST', path: '/messages/send', summary: '', tag: 'messages' },
+  ])
+  assert.deepEqual(ops.map(op => [op.method, op.path, op.summary, op.undocumented === true]), [
+    ['GET', '/chats/{id}', 'Get chat (documented)', false],
+    ['GET', '/chats', 'List chats', true],
+    ['POST', '/messages/send', 'messages · send', true],
+  ])
+  assert.equal(findOperation(ops, 'POST', '/messages/send').summary, 'messages · send')
+  assert.equal(search(ops, 'unread chats')[0].path, '/chats')
+})

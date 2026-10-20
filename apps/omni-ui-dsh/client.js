@@ -13475,13 +13475,13 @@ function collectRefIssues(node2, path, defNames, issues) {
     collectRefIssues(value, `${path}/${key}`, defNames, issues);
   }
 }
-function validateChatLibrary(library) {
+function validateChatLibrary(library2) {
   const issues = [];
-  if (!isPlainObject2(library)) return [{
+  if (!isPlainObject2(library2)) return [{
     code: "invalid-shape",
     message: "chatLibrary must be an object."
   }];
-  const { root, schema, componentGroups } = library;
+  const { root, schema, componentGroups } = library2;
   if (root !== void 0 && (typeof root !== "string" || root.length === 0)) issues.push({
     code: "invalid-shape",
     message: "chatLibrary.root, when present, must be a non-empty string.",
@@ -14230,7 +14230,7 @@ function createLibrary(input2) {
     const available = Object.keys(componentsRecord).join(", ");
     throw new Error(`[createLibrary] Root component "${input2.root}" was not found in components. Available components: ${available}`);
   }
-  const library = {
+  const library2 = {
     components: componentsRecord,
     componentGroups: input2.componentGroups,
     root: input2.root,
@@ -14266,7 +14266,7 @@ function createLibrary(input2) {
     }
     return schema;
   }
-  return library;
+  return library2;
 }
 function isElementNode(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -16088,8 +16088,8 @@ function serializeStateDeclarations(stateDeclarations, paramMap, collector) {
   }
   return lines;
 }
-function jsonToOpenUI(json2, library, options) {
-  const paramMap = compileSchema(library.toJSONSchema());
+function jsonToOpenUI(json2, library2, options) {
+  const paramMap = compileSchema(library2.toJSONSchema());
   const collector = new StatementCollector();
   const rootExpr = serializeElementExpr(json2, paramMap, collector);
   const rootId = json2.statementId || "root";
@@ -17401,34 +17401,34 @@ var init_dist3 = __esm({
 });
 
 // node_modules/@openuidev/react-lang/dist/exports-Cab8UG5o.mjs
-function libraryKey(library) {
-  return library.id ?? library.root ?? Object.keys(library.components).sort().join(",");
+function libraryKey(library2) {
+  return library2.id ?? library2.root ?? Object.keys(library2.components).sort().join(",");
 }
 function getRegistry() {
   const store2 = globalThis;
   return store2[DEVTOOLS_LIBRARIES_KEY] ??= {};
 }
-function upsertRegistry(library) {
-  getRegistry()[libraryKey(library)] = library;
+function upsertRegistry(library2) {
+  getRegistry()[libraryKey(library2)] = library2;
 }
-function publishLibrary(library) {
-  upsertRegistry(library);
+function publishLibrary(library2) {
+  upsertRegistry(library2);
   observability.info({
     kind: LIBRARY_EVENT_KIND,
-    __libraryId: library.__libraryId,
-    ...library.id !== void 0 ? { id: library.id } : {},
-    ...library.root !== void 0 ? { root: library.root } : {},
-    components: Object.keys(library.components),
-    message: library.id ? `Library "${library.id}" registered` : `Library registered (root: ${library.root ?? "none"})`
+    __libraryId: library2.__libraryId,
+    ...library2.id !== void 0 ? { id: library2.id } : {},
+    ...library2.root !== void 0 ? { root: library2.root } : {},
+    components: Object.keys(library2.components),
+    message: library2.id ? `Library "${library2.id}" registered` : `Library registered (root: ${library2.root ?? "none"})`
   });
 }
 function defineComponent$1(config2) {
   return defineComponent(config2);
 }
 function createLibrary$1(input2) {
-  const library = createLibrary(input2);
-  if (true) publishLibrary(library);
-  return library;
+  const library2 = createLibrary(input2);
+  if (true) publishLibrary(library2);
+  return library2;
 }
 function useOpenUI() {
   const ctx = (0, import_react3.useContext)(OpenUIContext);
@@ -17472,7 +17472,7 @@ function useSetDefaultValue({ formName, componentType, name, existingValue, defa
     shouldTriggerSaveCallback
   ]);
 }
-function useOpenUIErrors({ response, isStreaming, result, evaluatedResult, library, querySnapshot, parseExceptionRef, runtimeErrorsRef, renderErrorsRef, onError }) {
+function useOpenUIErrors({ response, isStreaming, result, evaluatedResult, library: library2, querySnapshot, parseExceptionRef, runtimeErrorsRef, renderErrorsRef, onError }) {
   const errorsRef = (0, import_react3.useRef)([]);
   const [errorRevision, setErrorRevision] = (0, import_react3.useState)(0);
   const lastErrorKeyRef = (0, import_react3.useRef)("");
@@ -17493,9 +17493,9 @@ function useOpenUIErrors({ response, isStreaming, result, evaluatedResult, libra
       source: "parser",
       code: "parse-failed",
       message: result ? "Code parsed but produced no renderable root component" : "Response could not be parsed as valid openui-lang",
-      hint: `The entire response must be valid openui-lang code starting with root = ${library.root ?? "Root"}(...)`
+      hint: `The entire response must be valid openui-lang code starting with root = ${library2.root ?? "Root"}(...)`
     });
-    if (result?.meta.errors.length) errors.push(...enrichErrors(result.meta.errors, library.toJSONSchema(), Object.keys(library.components)));
+    if (result?.meta.errors.length) errors.push(...enrichErrors(result.meta.errors, library2.toJSONSchema(), Object.keys(library2.components)));
     errors.push(...runtimeErrorsRef.current);
     errors.push(...renderErrorsRef.current);
     renderErrorsRef.current = [];
@@ -17513,7 +17513,7 @@ function useOpenUIErrors({ response, isStreaming, result, evaluatedResult, libra
     result,
     evaluatedResult,
     querySnapshot,
-    library,
+    library2,
     parseExceptionRef,
     runtimeErrorsRef,
     renderErrorsRef
@@ -17635,8 +17635,8 @@ function unwrapFieldValue(v) {
   if (v && typeof v === "object" && !Array.isArray(v) && "value" in v) return v.value;
   return v;
 }
-function useOpenUIState({ response, library, isStreaming, onAction, onStateUpdate, initialState, toolProvider, onError, publishObservability }, renderDeep2) {
-  const sp = (0, import_react3.useMemo)(() => createStreamingParser(library.toJSONSchema(), library.root), [library]);
+function useOpenUIState({ response, library: library2, isStreaming, onAction, onStateUpdate, initialState, toolProvider, onError, publishObservability }, renderDeep2) {
+  const sp = (0, import_react3.useMemo)(() => createStreamingParser(library2.toJSONSchema(), library2.root), [library2]);
   const parseExceptionRef = (0, import_react3.useRef)(null);
   const result = (0, import_react3.useMemo)(() => {
     parseExceptionRef.current = null;
@@ -17853,7 +17853,7 @@ function useOpenUIState({ response, library, isStreaming, onAction, onStateUpdat
   }, []);
   const isQueryLoading = querySnapshot.__openui_loading.length > 0;
   const contextValue = (0, import_react3.useMemo)(() => ({
-    library,
+    library: library2,
     renderNode: renderDeep2,
     triggerAction,
     isStreaming,
@@ -17864,7 +17864,7 @@ function useOpenUIState({ response, library, isStreaming, onAction, onStateUpdat
     reportError,
     isQueryLoading
   }), [
-    library,
+    library2,
     renderDeep2,
     isStreaming,
     isQueryLoading,
@@ -17881,7 +17881,7 @@ function useOpenUIState({ response, library, isStreaming, onAction, onStateUpdat
     const errors = [];
     const evalCtx = {
       ctx: evaluationContext,
-      library,
+      library: library2,
       store: store2,
       errors
     };
@@ -17905,7 +17905,7 @@ function useOpenUIState({ response, library, isStreaming, onAction, onStateUpdat
   }, [
     result,
     evaluationContext,
-    library,
+    library2,
     store2,
     storeSnapshot,
     querySnapshot
@@ -17915,7 +17915,7 @@ function useOpenUIState({ response, library, isStreaming, onAction, onStateUpdat
     isStreaming,
     result,
     evaluatedResult,
-    library,
+    library: library2,
     querySnapshot,
     parseExceptionRef,
     runtimeErrorsRef,
@@ -17929,7 +17929,7 @@ function useOpenUIState({ response, library, isStreaming, onAction, onStateUpdat
     errorsRef,
     errorRevision,
     publish: publishObservability,
-    __libraryId: library.__libraryId
+    __libraryId: library2.__libraryId
   });
   return {
     result: evaluatedResult,
@@ -17951,8 +17951,8 @@ function renderDeep(value) {
   return null;
 }
 function RenderNode({ node: node2 }) {
-  const { library, reportError } = useOpenUI();
-  const Comp = library.components[node2.typeName]?.component;
+  const { library: library2, reportError } = useOpenUI();
+  const Comp = library2.components[node2.typeName]?.component;
   if (!Comp) return null;
   return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ElementErrorBoundary, {
     componentName: node2.typeName,
@@ -17978,7 +17978,7 @@ function ensureLoadingStyle() {
   style.textContent = `@keyframes openui-spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }`;
   document.head.appendChild(style);
 }
-function Renderer({ response, library, isStreaming = false, onAction, onStateUpdate, initialState, onParseResult, toolProvider, queryLoader, onError, publishObservability }) {
+function Renderer({ response, library: library2, isStreaming = false, onAction, onStateUpdate, initialState, onParseResult, toolProvider, queryLoader, onError, publishObservability }) {
   (0, import_react3.useInsertionEffect)(() => {
     ensureLoadingStyle();
   }, []);
@@ -18000,7 +18000,7 @@ function Renderer({ response, library, isStreaming = false, onAction, onStateUpd
   } });
   const { result, parseResult, contextValue, isQueryLoading } = useOpenUIState({
     response,
-    library,
+    library: library2,
     isStreaming,
     onAction,
     onStateUpdate,
@@ -19415,7 +19415,29 @@ var ZH = {
   "Changed": "修改",
   "Connecting": "连接中",
   "Not connected": "未连接",
-  "Ask to fix it": "让它修正"
+  "Ask to fix it": "让它修正",
+  "1 item": "1 项",
+  "Add Tasks": "添加任务",
+  "a task": "一个任务",
+  "Changing omni": "正在修改 omni",
+  "Checking your channels": "正在查看你的渠道",
+  "Connect channel": "连接渠道",
+  "Connecting a channel": "正在连接渠道",
+  "{count} channels": "{count} 个渠道",
+  "{count} messages": "{count} 条消息",
+  "done": "完成",
+  "Drawing it": "正在绘制",
+  "Looking up omni": "正在查找 omni 接口",
+  "No answer.": "没有回应。",
+  "Reading omni": "正在读取 omni",
+  "Reading your chats": "正在读取你的聊天",
+  "Remove Tasks": "移除任务",
+  "Started task": "已开始任务",
+  "Starting a task": "正在开始任务",
+  "Task finished": "任务完成",
+  "Tasks": "任务",
+  "Line {line} does not close its brackets or quotes: {text}": "第 {line} 行的括号或引号没有闭合：{text}",
+  "{count} chats": "{count} 个聊天"
 };
 var HOST_ERRORS = [
   [/^Model (.+) is not available\. Available: (.*)$/, "模型 $1 不可用。可用的：$2"],
@@ -19689,6 +19711,8 @@ var hasCanvas = (text) => String(text ?? "").includes(`\`\`\`${FENCE}`);
 init_dist2();
 init_v4();
 var QUERY_TOOL = "omni_get";
+var CHANNELS_TOOL = "omni_channels";
+var QUERY_TOOLS = [QUERY_TOOL, CHANNELS_TOOL];
 var ActionExpression = external_exports.any();
 tagSchemaId(ActionExpression, "ActionExpression");
 var tone = external_exports.enum(["ok", "warn", "bad", "info", "muted"]);
@@ -19723,22 +19747,112 @@ function libraryOf({ createLibrary: createLibrary2, defineComponent: defineCompo
   });
 }
 var PROMPT_OPTIONS = {
-  preamble: "Omni draws with openui-lang: a small program that renders as native, live UI inside your chat message.",
-  tools: [{ name: QUERY_TOOL, description: "GET one documented omni API operation and return its JSON ({data} for one record, {items, meta} for lists).", inputSchema: { type: "object", properties: { path: { type: "string", description: "API path under /api/v2 with ids and an optional ?query, e.g. /instances or /chats?limit=20" } }, required: ["path"] } }],
+  preamble: "A canvas is an openui-lang program, passed to show_canvas: it renders as native, live UI in the chat.",
+  tools: [
+    { name: QUERY_TOOL, description: "GET one documented omni API operation and return its JSON ({data} for one record, {items, meta} for lists).", inputSchema: { type: "object", properties: { path: { type: "string", description: "API path under /api/v2 with ids and an optional ?query, e.g. /instances or /chats?limit=20" } }, required: ["path"] } },
+    { name: CHANNELS_TOOL, description: 'Every channel with its live state: {items: [{id, name, channel, state ("connected", "connecting", "paused"…), profile, phone, active}]}.', inputSchema: { type: "object", properties: {} } }
+  ],
   bindings: true,
   additionalRules: [
-    `Query("${QUERY_TOOL}", {path: "/instances"}, {items: []}, 15) reads omni live; the last argument refreshes it every N seconds. Lists come back as {items: [...]}, one record as {data: {...}}.`,
+    `Query("${QUERY_TOOL}", {path: "/chats?limit=20"}, {items: []}, 15) reads omni live; the last argument refreshes it every N seconds. Lists come back as {items: [...]}, one record as {data: {...}}.`,
+    `For anything about connection state use Query("${CHANNELS_TOOL}", {}, {items: []}, 10): its items carry state; /instances items do not.`,
     'Mutation() is not available. Changes are yours to make with omni_call; a Button asks you for one with Action([@ToAssistant("...")]).',
-    "Channel, QrCode and Chat fetch and refresh their own data from an id: prefer them to rebuilding those views from a Query.",
+    "Channel, QrCode and Chat fetch and refresh their own data from an id: prefer them to rebuilding those views from a Query. A channel's live state is what Channel shows; /instances items carry no connection state.",
     "Use only fields you have seen in a real record (read one with omni_call first). Instances carry name, channel, isActive and profileName; whether one is connected comes from /instances/{id}/status, which Channel already shows.",
     'A @Each loop variable exists only inside its template: write @Each(inst.items, "i", Channel(i.id)), never i.name in another statement.',
     "A canvas cannot read secrets, call other services or run code."
   ],
   examples: [
-    'root = Stack([title, row, list])\ntitle = Heading("Channels")\nrow = Row([Stat("Connected", @Count(@Filter(inst.items, "isActive", "==", true))), Stat("Total", @Count(inst.items))])\ninst = Query("omni_get", {path: "/instances"}, {items: []}, 15)\nlist = Table(["Name", "Channel"], @Each(inst.items, "i", [i.name, i.channel]))',
+    'root = Stack([title, row, list])\ntitle = Heading("Channels")\nrow = Row([Stat("Connected", @Count(@Filter(ch.items, "state", "==", "connected"))), Stat("Total", @Count(ch.items))])\nch = Query("omni_channels", {}, {items: []}, 10)\nlist = Stack(@Each(ch.items, "c", Channel(c.id)))',
     'root = Stack([qr, again])\nqr = QrCode("5f0c1d2e-…")\nagain = Button("Get a new code", Action([@ToAssistant("Restart the connection of that channel")]))'
   ]
 };
+
+// src/client/omni-ui-check.js
+init_dist2();
+var PROGRAM_MAX = 32768;
+var TOKENS_MAX = 6e3;
+var STATEMENTS_MAX = 128;
+var NODES_MAX = 4e3;
+var DEPTH_MAX = 48;
+var library = libraryOf({ createLibrary, defineComponent, reactive: (schema) => {
+  markReactive(schema);
+  return schema;
+} });
+var parser = createParser(library.toJSONSchema(), library.root);
+var ALLOWED = /* @__PURE__ */ new Set([...SPECS.map(([name]) => name), ...BUILTIN_NAMES, "Query"]);
+var say = (text, params) => params ? { text, params } : { text };
+function unclosedLine(program) {
+  const lines = program.split("\n");
+  for (const [index, line] of lines.entries()) {
+    if (!line.trim()) continue;
+    const stack = [];
+    let quoted = false;
+    for (let at = 0; at < line.length; at += 1) {
+      const char = line[at];
+      if (quoted) {
+        if (char === "\\") at += 1;
+        else if (char === '"') quoted = false;
+        continue;
+      }
+      if (char === '"') quoted = true;
+      else if ("([{".includes(char)) stack.push(char);
+      else if (")]}".includes(char)) {
+        const open2 = stack.pop();
+        if (open2 !== { ")": "(", "]": "[", "}": "{" }[char]) return { line: index + 1, text: line.trim().slice(0, 60) };
+      }
+    }
+    if (quoted || stack.length > 0) return { line: index + 1, text: line.trim().slice(0, 60) };
+  }
+  return null;
+}
+function checkProgram(program) {
+  const source = String(program ?? "");
+  if (!source.trim()) return say("The canvas is empty.");
+  if (source.length > PROGRAM_MAX) return say("The canvas is too long.");
+  try {
+    const tokens = tokenize(source);
+    if (tokens.length > TOKENS_MAX) return say("The canvas is too complex.");
+    const statements = split(tokens);
+    if (statements.length > STATEMENTS_MAX) return say("The canvas is too complex.");
+    let nodes = 0;
+    for (const statement of statements) {
+      const expression = parseExpression(statement.tokens);
+      const pending = [[expression, 0]];
+      while (pending.length) {
+        const [value, depth] = pending.pop();
+        if (depth > DEPTH_MAX) return say("The canvas is nested too deeply.");
+        if (value && typeof value === "object") {
+          for (const child of Object.values(value)) if (child && typeof child === "object") pending.push([child, depth + 1]);
+        }
+      }
+      let refusal = null;
+      walkAST(expression, (node2) => {
+        if (++nodes > NODES_MAX) refusal ??= say("The canvas is too complex.");
+        if (node2.k === "Comp" && node2.name === "Mutation") refusal ??= say("A canvas cannot change omni; ask Omni instead.");
+        else if (node2.k === "Comp" && !ALLOWED.has(node2.name)) refusal ??= say("Unknown component {name}.", { name: node2.name });
+      });
+      if (refusal) return refusal;
+    }
+    const result = parser.parse(source);
+    if (result.meta.incomplete) {
+      const open3 = unclosedLine(source);
+      return open3 ? say("Line {line} does not close its brackets or quotes: {text}", open3) : say("The canvas is incomplete.");
+    }
+    if (result.mutationStatements.length > 0) return say("A canvas cannot change omni; ask Omni instead.");
+    if (result.queryStatements.some((query) => query.toolAST?.k !== "Str" || !QUERY_TOOLS.includes(query.toolAST.v))) return say("A canvas can only read omni.");
+    if (!result.root || result.root.typeName !== library.root) return say("The canvas must start with root = Stack(...).");
+    const errors = result.meta.errors.filter((error2) => error2.code !== "excess-args");
+    if (errors.length > 0) return say(errors.slice(0, 3).map((error2) => error2.message).join(" "));
+    if (result.meta.unresolved.length > 0) return say("The canvas names something it never defines: {names}.", { names: result.meta.unresolved.slice(0, 3).join(", ") });
+    const open2 = unclosedLine(source);
+    if (open2) return say("Line {line} does not close its brackets or quotes: {text}", open2);
+    return null;
+  } catch (error2) {
+    return say(error2 instanceof Error ? error2.message : "The canvas could not be read.");
+  }
+}
+var refusalText = (refusal) => refusal.text.replace(/\{(\w+)\}/g, (whole, key) => String(refusal.params?.[key] ?? whole));
 
 // node_modules/qrcode-generator/dist/qrcode.mjs
 var qrcode = function(typeNumber, errorCorrectionLevel) {
@@ -21723,6 +21837,15 @@ var SidePanelIcon = lineIcon(["M4.5 4h11A1.5 1.5 0 0 1 17 5.5v9a1.5 1.5 0 0 1-1.
 var FolderIcon = lineIcon(["M3 6A1.5 1.5 0 0 1 4.5 4.5h3.2l1.8 2h6A1.5 1.5 0 0 1 17 8v6.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 3 14.5z"]);
 var ChatsIcon = lineIcon(["M3.5 5.5A1.5 1.5 0 0 1 5 4h7a1.5 1.5 0 0 1 1.5 1.5V10A1.5 1.5 0 0 1 12 11.5H8L5 14v-2.5A1.5 1.5 0 0 1 3.5 10z", "M13.5 7.5H15A1.5 1.5 0 0 1 16.5 9v4.5A1.5 1.5 0 0 1 15 15v2l-2.5-2h-3A1.5 1.5 0 0 1 8 13.5V13"]);
 var SETTINGS_ICONS = { general: GearIcon, bots: PeopleIcon, groups: ChatsIcon, usage: GaugeIcon };
+function TasksIcon({ size = 20 }) {
+  return (0, import_react4.createElement)(
+    "svg",
+    { width: size, height: size, viewBox: "0 0 20 20", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true },
+    (0, import_react4.createElement)("path", { d: "M3.5 5.5l1.5 1.5 2.5-3" }),
+    (0, import_react4.createElement)("path", { d: "M3.5 11.5l1.5 1.5 2.5-3" }),
+    (0, import_react4.createElement)("path", { d: "M10 5.5h6.5M10 11.5h6.5M4 16.5h12.5" })
+  );
+}
 
 // src/client/sources.js
 function createSource(initial) {
@@ -22941,26 +23064,98 @@ function parseCall(argText, content) {
   }
   return { method: String(argText("method") ?? "GET").toUpperCase(), path: String(argText("path") ?? ""), result };
 }
-function OmniCallCard({ method, path, result, done }) {
+function summaryOf(data) {
+  const list = Array.isArray(data) ? data : Array.isArray(data?.items) ? data.items : null;
+  if (list) return list.length === 1 ? t("1 item") : t("{count} items", { count: list.length });
+  const record2 = data?.data ?? data;
+  if (record2 && typeof record2 === "object") return String(record2.name ?? record2.title ?? record2.state ?? record2.status ?? "").slice(0, 40);
+  return "";
+}
+var Chevron = ({ open: open2 }) => (0, import_react6.createElement)("svg", { className: "ou-chev", "data-open": open2 || void 0, width: 12, height: 12, viewBox: "0 0 12 12", "aria-hidden": true }, (0, import_react6.createElement)("path", { d: "M4.5 3l3 3-3 3", fill: "none", stroke: "currentColor", strokeWidth: 1.4, strokeLinecap: "round", strokeLinejoin: "round" }));
+var Dot = ({ kind }) => (0, import_react6.createElement)("span", { className: "ou-call-dot", "data-kind": kind, "aria-hidden": true });
+function CallLine({ verb, kind, title, meta: meta3, failed, done, body, detail }) {
   const [open2, setOpen] = (0, import_react6.useState)(false);
-  const failed = done && (!result || result.error || !(result.status >= 200 && result.status < 300));
-  const title = result?.operation || `${method} ${path}`;
-  const instance = INSTANCE.exec(path)?.[1];
-  const action = INSTANCE.exec(path)?.[2];
-  const head = (0, import_react6.createElement)(
-    "button",
-    { type: "button", className: "ou-call-head", "aria-expanded": open2, onClick: () => setOpen((value) => !value) },
-    (0, import_react6.createElement)("span", { className: "ou-call-verb", "data-method": method }, t(VERB[method] ?? method)),
-    (0, import_react6.createElement)("span", { className: "ou-call-title" }, title),
-    !done ? (0, import_react6.createElement)("span", { className: "ou-muted" }, t("working…")) : failed ? (0, import_react6.createElement)(Badge, { text: result?.status ? String(result.status) : t("failed"), tone: "bad" }) : null,
-    (0, import_react6.createElement)("span", { className: "ou-call-path" }, `${method} ${path}`)
+  const openable = Boolean(body) && done && !failed;
+  return (0, import_react6.createElement)(
+    "div",
+    { className: "ou-call", "data-kind": kind, "data-failed": failed || void 0 },
+    (0, import_react6.createElement)(
+      "button",
+      { type: "button", className: "ou-call-head", "aria-expanded": openable ? open2 : void 0, disabled: !openable, title: detail, onClick: () => setOpen((value) => !value) },
+      (0, import_react6.createElement)(Dot, { kind: failed ? "bad" : done ? kind : "busy" }),
+      (0, import_react6.createElement)("span", { className: "ou-call-verb" }, verb),
+      (0, import_react6.createElement)("span", { className: "ou-call-title" }, title),
+      !done ? (0, import_react6.createElement)("span", { className: "ou-call-meta" }, t("working…")) : failed ? (0, import_react6.createElement)(Badge, { text: t("failed"), tone: "bad" }) : meta3 ? (0, import_react6.createElement)("span", { className: "ou-call-meta" }, meta3) : null,
+      openable ? (0, import_react6.createElement)(Chevron, { open: open2 }) : null
+    ),
+    failed && done ? (0, import_react6.createElement)(Problem, { text: failed }) : null,
+    open2 && openable ? (0, import_react6.createElement)("div", { className: "ou-call-body" }, body) : null
   );
-  if (failed) return (0, import_react6.createElement)("div", { className: "ou-call", "data-failed": "" }, head, (0, import_react6.createElement)(Problem, { text: result?.error ?? errorText(result?.data, result?.status) }));
-  if (method === "GET" && action !== "qr") {
-    return (0, import_react6.createElement)("div", { className: "ou-call ou-call-read" }, head, open2 && done ? (0, import_react6.createElement)("div", { className: "ou-call-body" }, (0, import_react6.createElement)(DataView2, { value: result?.data })) : null);
+}
+var failureOf = (result, done) => !done ? null : !result ? t("No answer.") : result.error ? result.error : result.status >= 200 && result.status < 300 ? null : errorText(result.data, result.status);
+var pathWords = (path) => path.split("/").filter((part) => part && !/^[0-9a-f-]{20,}$/i.test(part)).map((part) => part.replace(/[-_]/g, " ")).join(" · ");
+function OmniCallCard({ method, path, result, done }) {
+  const failed = failureOf(result, done);
+  const title = result?.operation || pathWords(path) || path;
+  const [, instance, action] = INSTANCE.exec(path) ?? [];
+  const kind = method === "GET" ? "read" : method === "DELETE" ? "bad" : "write";
+  const line = { verb: t(VERB[method] ?? method), kind, title, failed, done, detail: `${method} ${path}` };
+  if (method === "GET" && action !== "qr") return (0, import_react6.createElement)(CallLine, { ...line, meta: done ? summaryOf(result?.data) : null, body: (0, import_react6.createElement)(DataView2, { value: result?.data }) });
+  const live = !done || failed ? null : instance && ["connect", "pair", "qr", "restart"].includes(action) ? (0, import_react6.createElement)(LiveQr, { channelId: instance }) : instance ? (0, import_react6.createElement)(LiveChannel, { id: instance }) : method === "POST" && path === "/instances" && result?.data?.data?.id ? (0, import_react6.createElement)(LiveChannel, { id: result.data.data.id }) : (0, import_react6.createElement)(DataView2, { value: result?.data });
+  return (0, import_react6.createElement)("div", { className: "ou-call-card" }, (0, import_react6.createElement)(CallLine, { ...line, meta: done && !failed ? t("done") : null }), live);
+}
+function OmniToolCard({ tool, arg, content, done }) {
+  let result = null;
+  try {
+    result = done ? JSON.parse(content) : null;
+  } catch {
+    result = done ? { status: 0, error: String(content ?? "").slice(0, 300) } : null;
   }
-  const body = !done ? null : instance && (action === "connect" || action === "pair" || action === "qr" || action === "restart") ? (0, import_react6.createElement)(LiveQr, { channelId: instance }) : instance && (action === void 0 || action === "disconnect" || action === "logout" || action === "status") ? (0, import_react6.createElement)(LiveChannel, { id: instance }) : method === "POST" && path === "/instances" && result?.data?.data?.id ? (0, import_react6.createElement)(LiveChannel, { id: result.data.data.id }) : (0, import_react6.createElement)(DataView2, { value: result?.data });
-  return (0, import_react6.createElement)("div", { className: "ou-call ou-call-write", "data-method": method }, head, body ? (0, import_react6.createElement)("div", { className: "ou-call-body" }, body) : null);
+  const failed = failureOf(result, done);
+  if (tool === "omni_channels") {
+    const items = result?.data?.items ?? [];
+    return (0, import_react6.createElement)(
+      "div",
+      { className: "ou-call-card" },
+      (0, import_react6.createElement)(CallLine, { verb: t("Read"), kind: "read", title: t("Channels"), meta: done ? t("{count} channels", { count: items.length }) : null, failed, done }),
+      done && !failed ? (0, import_react6.createElement)("div", { className: "ou-channel-list" }, items.map((item) => (0, import_react6.createElement)(LiveChannel, { key: item.id, id: item.id }))) : null
+    );
+  }
+  if (tool === "omni_chats") {
+    const items = result?.data?.items ?? [];
+    const when3 = (at) => Date.parse(at) ? relativeShort(Date.parse(at)) : "";
+    return (0, import_react6.createElement)(
+      "div",
+      { className: "ou-call-card" },
+      (0, import_react6.createElement)(CallLine, { verb: t("Read"), kind: "read", title: t("Chats"), meta: done ? t("{count} chats", { count: items.length }) : null, failed, done }),
+      done && !failed && items.length > 0 ? (0, import_react6.createElement)("div", { className: "ou-chat-list" }, items.map((chat) => (0, import_react6.createElement)(
+        "div",
+        { key: chat.id, className: "ou-chat-row" },
+        (0, import_react6.createElement)("span", { className: "ou-chat-row-name" }, chat.name ?? t("Chat")),
+        (0, import_react6.createElement)("span", { className: "ou-chat-row-preview" }, chat.preview ?? ""),
+        chat.unread > 0 ? (0, import_react6.createElement)(Badge, { text: String(chat.unread), tone: "info" }) : null,
+        (0, import_react6.createElement)("span", { className: "ou-chat-row-at" }, when3(chat.lastMessageAt))
+      ))) : null
+    );
+  }
+  if (tool === "omni_messages") {
+    const chat = result?.data?.chat;
+    return (0, import_react6.createElement)(
+      "div",
+      { className: "ou-call-card" },
+      (0, import_react6.createElement)(CallLine, { verb: t("Read"), kind: "read", title: chat?.name ?? t("Chat"), meta: done ? t("{count} messages", { count: result?.data?.items?.length ?? 0 }) : null, failed, done }),
+      done && !failed ? (0, import_react6.createElement)(LiveChat, { id: chat?.id ?? arg("chat"), limit: 8 }) : null
+    );
+  }
+  if (tool === "omni_connect") {
+    return (0, import_react6.createElement)(
+      "div",
+      { className: "ou-call-card" },
+      (0, import_react6.createElement)(CallLine, { verb: t("Ran"), kind: "write", title: t("Connect channel"), failed, done }),
+      done && !failed && result?.channelId ? (0, import_react6.createElement)(LiveQr, { channelId: result.channelId }) : null
+    );
+  }
+  return null;
 }
 var OMNI_LIVE_CSS = `
 .ou-card{display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--bt-line);border-radius:14px;background:var(--bt-card);color:var(--bt-ink);min-width:0}
@@ -23001,26 +23196,37 @@ var OMNI_LIVE_CSS = `
 .ou-kv{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:4px 16px;margin:0;font-size:13px}
 .ou-kv dt{color:var(--bt-ink-3)}
 .ou-kv dd{margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ou-call{display:flex;flex-direction:column;gap:8px;margin:4px 0;max-width:640px}
-.ou-call-head{display:flex;align-items:center;gap:8px;min-width:0;padding:0;border:0;background:none;color:var(--bt-ink-2);font:inherit;font-size:13px;text-align:left;cursor:pointer}
+.ou-call{display:flex;flex-direction:column;gap:6px;max-width:640px;min-width:0}
+.ou-call-head{display:flex;align-items:center;gap:8px;width:100%;min-width:0;height:28px;padding:0 8px 0 6px;margin-left:-6px;border:0;border-radius:8px;background:none;color:var(--bt-ink-2);font:inherit;font-size:13px;text-align:left;cursor:pointer;transition:background-color .12s}
+.ou-call-head:hover:not(:disabled){background:var(--bt-hover)}
+.ou-call-head:disabled{cursor:default}
+.ou-call-dot{flex:none;width:6px;height:6px;border-radius:50%;background:var(--bt-ink-3)}
+.ou-call-dot[data-kind=write]{background:var(--bt-accent)}
+.ou-call-dot[data-kind=bad]{background:#e5484d}
+.ou-call-dot[data-kind=busy]{background:var(--bt-accent);animation:ou-pulse 1.2s ease-in-out infinite}
 .ou-call-verb{flex:none;font-weight:600;color:var(--bt-ink)}
-.ou-call-verb[data-method=DELETE]{color:#d13438}
 .ou-call-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ou-call-path{display:none;margin-left:auto;flex:none;font:11px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--bt-ink-3)}
-.ou-call-head:hover .ou-call-path,.ou-call-head:focus-visible .ou-call-path{display:inline}
-.ou-call-write{padding:12px;border:1px solid var(--bt-line);border-radius:16px;background:color-mix(in srgb,var(--bt-card) 70%,transparent)}
-.ou-call-write .ou-call-head{font-size:13.5px}
+.ou-call-meta{flex:none;margin-left:auto;font-size:12px;color:var(--bt-ink-3);font-variant-numeric:tabular-nums}
+.ou-call-meta+.ou-chev{margin-left:0}
+.ou-chev{flex:none;margin-left:auto;color:var(--bt-ink-3);transition:transform .15s}
+.ou-chev[data-open]{transform:rotate(90deg)}
+.ou-call-body{padding:2px 0 4px}
+.ou-call-card{display:flex;flex-direction:column;gap:8px;max-width:640px;min-width:0}
+.ou-channel-list{display:flex;flex-direction:column;gap:6px}
+.ou-chat-list{display:flex;flex-direction:column;border:1px solid var(--bt-line);border-radius:14px;background:var(--bt-card);overflow:hidden}
+.ou-chat-row{display:flex;align-items:center;gap:10px;min-width:0;padding:8px 12px;font-size:13px;border-top:1px solid var(--bt-line)}
+.ou-chat-row:first-child{border-top:0}
+.ou-chat-row-name{flex:none;max-width:40%;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ou-chat-row-preview{flex:1;min-width:0;color:var(--bt-ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ou-chat-row-at{flex:none;font-size:11.5px;color:var(--bt-ink-3)}
+.ou-channel-list .ou-card{padding:9px 12px}
+/* Calls in a row read as one list: consecutive call rows sit close together. */
+[data-chat-flow-kind=tool-call]:has(.ou-call):not(:has(.ou-call-card))+[data-chat-flow-kind=tool-call]:has(.ou-call):not(:has(.ou-call-card)){margin-top:calc(2px - var(--dsh-chat-flow-gap,12px))!important}
 `;
 
 // src/client/omni-ui.js
 var import_react7 = require("react");
 init_dist4();
-init_dist2();
-var PROGRAM_MAX = 32768;
-var TOKENS_MAX = 6e3;
-var STATEMENTS_MAX = 128;
-var NODES_MAX = 4e3;
-var DEPTH_MAX = 48;
 var RuntimeReady = (0, import_react7.createContext)(false);
 var nodeOf = (value, renderNode) => value && typeof value === "object" && "typeName" in value ? renderNode(value) : value === null || value === void 0 ? null : String(value);
 function Stack({ props, renderNode }) {
@@ -23145,48 +23351,12 @@ var RENDER = {
   Chat: ({ props }) => (0, import_react7.createElement)(LiveChat, { id: props.id, limit: props.limit })
 };
 var omniLibrary = libraryOf({ createLibrary: createLibrary$1, defineComponent: defineComponent$1, reactive }, RENDER);
-var parser = createParser(omniLibrary.toJSONSchema(), omniLibrary.root);
-var ALLOWED = /* @__PURE__ */ new Set([...SPECS.map(([name]) => name), ...BUILTIN_NAMES, "Query"]);
-function checkProgram(program) {
-  if (!program.trim()) return t("The canvas is empty.");
-  if (program.length > PROGRAM_MAX) return t("The canvas is too long.");
-  try {
-    const tokens = tokenize(program);
-    if (tokens.length > TOKENS_MAX) return t("The canvas is too complex.");
-    const statements = split(tokens);
-    if (statements.length > STATEMENTS_MAX) return t("The canvas is too complex.");
-    let nodes = 0;
-    for (const statement of statements) {
-      const pending = [[parseExpression(statement.tokens), 0]];
-      while (pending.length) {
-        const [value, depth] = pending.pop();
-        if (depth > DEPTH_MAX) return t("The canvas is nested too deeply.");
-        if (value && typeof value === "object") {
-          for (const child of Object.values(value)) if (child && typeof child === "object") pending.push([child, depth + 1]);
-        }
-      }
-      let refusal = null;
-      walkAST(parseExpression(statement.tokens), (node2) => {
-        if (++nodes > NODES_MAX) refusal ??= t("The canvas is too complex.");
-        if (node2.k === "Comp" && node2.name === "Mutation") refusal ??= t("A canvas cannot change omni; ask Omni instead.");
-        else if (node2.k === "Comp" && !ALLOWED.has(node2.name)) refusal ??= t("Unknown component {name}.", { name: node2.name });
-      });
-      if (refusal) return refusal;
-    }
-    const result = parser.parse(program);
-    if (result.meta.incomplete) return t("The canvas is incomplete.");
-    if (result.mutationStatements.length > 0) return t("A canvas cannot change omni; ask Omni instead.");
-    if (result.queryStatements.some((query) => query.toolAST?.k !== "Str" || query.toolAST.v !== QUERY_TOOL)) return t("A canvas can only read omni.");
-    if (!result.root || result.root.typeName !== omniLibrary.root) return t("The canvas must start with root = Stack(...).");
-    const errors = result.meta.errors.filter((error2) => error2.code !== "excess-args");
-    if (errors.length > 0) return errors.slice(0, 3).map((error2) => error2.message).join(" ");
-    if (result.meta.unresolved.length > 0) return t("The canvas names something it never defines: {names}.", { names: result.meta.unresolved.slice(0, 3).join(", ") });
-    return null;
-  } catch (error2) {
-    return error2 instanceof Error ? error2.message : t("The canvas could not be read.");
-  }
-}
+var checkProgram2 = (program) => {
+  const refusal = checkProgram(program);
+  return refusal === null ? null : t(refusal.text, refusal.params);
+};
 var readOmni = {
+  [CHANNELS_TOOL]: async () => call("omni-channels"),
   [QUERY_TOOL]: async ({ path }) => {
     const reply = await call("omni-get", { path });
     if (!reply.ok) throw new Error(errorText(reply.data, reply.status));
@@ -23220,7 +23390,7 @@ var Boundary = class extends import_react7.Component {
   }
 };
 function Canvas({ program, onAsk }) {
-  const invalid = (0, import_react7.useMemo)(() => checkProgram(program), [program]);
+  const invalid = (0, import_react7.useMemo)(() => checkProgram2(program), [program]);
   const [ready, setReady] = (0, import_react7.useState)(false);
   const [failed, setFailed] = (0, import_react7.useState)(null);
   (0, import_react7.useEffect)(() => setReady(true), []);
@@ -24583,6 +24753,11 @@ var CONVERSATION_CSS = `
 .bt-event-whole>span:first-child{margin-right:2px}
 /* One button cannot wrap like separate parts, so a long name is cut to fit the chat. */
 .bt-event-whole>.bt-event-name{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+[data-chat-flow-kind=user][data-bt-time]:not(:has(.bt-utime))::after{content:attr(data-bt-time);display:block;margin-top:4px;padding-right:2px;text-align:right;font-size:11px;line-height:14px;color:var(--bt-ink-3);font-variant-numeric:tabular-nums}
+.bt-turn-time{display:block;margin:-2px 0 0 2px;font-size:11px;line-height:14px;color:var(--bt-ink-3);font-variant-numeric:tabular-nums}
+.bt-task-done{display:flex;align-items:center;gap:6px}
+.bt-task-link{padding:0;border:0;background:none;color:var(--bt-ink);font:inherit;font-weight:500;cursor:pointer}
+.bt-task-link:hover{text-decoration:underline;text-underline-offset:2px}
 .bt-time-sep{display:flex;justify-content:center;align-items:center;height:28px;margin:14px 0 8px;font-size:12px;line-height:16px;color:var(--bt-ink-2);white-space:nowrap}
 [class*="_scroll"]>[class*="_column"]::before{content:var(--bt-first-sep,none);display:block;flex:none;height:28px;margin:17px 0 12px;font-size:12px;line-height:28px;text-align:center;color:var(--bt-ink-2);white-space:nowrap}
 .bt-activity{display:flex;align-items:center;gap:10px;margin:8px 0 4px 2px;font-size:14px;color:var(--bt-ink-2)}
@@ -26160,6 +26335,16 @@ function TriggerCell({ node: node2, sessionId, useRoster, useSessions, useTurnCl
       if (source.role === "report") {
         return (0, import_react14.createElement)(GroupEvent, { prefix: t("Replies from"), room: roster.roomsById[source.roomId], name: t("a group chat"), roster, actions });
       }
+      if (source.role === "task-done") {
+        const title = /^\[Task "(.*)" finished/.exec(contentText(data.content))?.[1] ?? t("a task");
+        return (0, import_react14.createElement)(
+          "div",
+          { className: "bt-event bt-task-done" },
+          (0, import_react14.createElement)(TasksIcon, { size: 15 }),
+          (0, import_react14.createElement)("span", null, t("Task finished")),
+          source.taskSessionId ? (0, import_react14.createElement)("button", { type: "button", className: "bt-task-link", onClick: () => actions.openSession(source.taskSessionId) }, title) : (0, import_react14.createElement)("span", null, title)
+        );
+      }
       if (source.role === "resume" || source.resumed === true) return (0, import_react14.createElement)("div", { className: "bt-event" }, t("Picked up its work after a restart"));
       if (source.role === "retry" || source.retried === true) return (0, import_react14.createElement)("div", { className: "bt-event" }, t("Asked to make the tool call it wrote as text"));
       const run = relayed ? commRunOf(
@@ -26259,10 +26444,11 @@ function TurnTailCell({ turn: location2, sessionId, useTurnClock, useUi, actions
     const start = nextTurnStart(state[sessionId] ?? {}, turn);
     return start !== void 0 && start > visit2.seen && start <= visit2.entered;
   });
-  if (!label && !fresh) return null;
+  const ended = (0, import_react14.createElement)("time", { className: "bt-turn-time", dateTime: new Date(time3).toISOString() }, new Date(time3).toLocaleTimeString(dateLocale(), { hour: "numeric", minute: "2-digit" }));
   return (0, import_react14.createElement)(
     import_react14.Fragment,
     null,
+    ended,
     label ? (0, import_react14.createElement)("div", { className: "bt-time-sep", role: "separator" }, label) : null,
     fresh ? (0, import_react14.createElement)(NewDivider) : null
   );
@@ -26322,6 +26508,22 @@ function toolActivity(name, arg, findBot, self) {
       return { label: t("Updating memory"), state: "working" };
     case "recall":
       return { label: t("Checking memory"), state: "searching" };
+    case "omni_channels":
+      return { label: t("Checking your channels"), state: "searching" };
+    case "omni_chats":
+    case "omni_messages":
+    case "find_chats":
+      return { label: t("Reading your chats"), state: "searching" };
+    case "omni_endpoints":
+      return { label: t("Looking up omni"), state: "searching" };
+    case "omni_call":
+      return arg("method") === "GET" || arg("method") === void 0 ? { label: t("Reading omni"), state: "searching" } : { label: t("Changing omni"), state: "working" };
+    case "omni_connect":
+      return { label: t("Connecting a channel"), state: "working" };
+    case "show_canvas":
+      return { label: t("Drawing it"), state: "working" };
+    case "start_task":
+      return { label: t("Starting a task"), state: "sending" };
     default:
       if (GROUP_PHRASES[name]) return { label: t(GROUP_PHRASES[name]), state: "sending" };
       const phrase = TOOL_PHRASES.find(([pattern]) => pattern.test(name))?.[1];
@@ -26449,7 +26651,7 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
     })
   );
 }
-var DRAWN = /* @__PURE__ */ new Set(["omni_call", "message_bot", "stop_bot", "create_bot", "update_bot", "group_relay", "create_group", "update_group", "delete_group", "post_to_group", "ask_user", "request_secret", "ask_user_question", "read_group_chat", "remember", "forget"]);
+var DRAWN = /* @__PURE__ */ new Set(["omni_call", "omni_channels", "omni_chats", "omni_messages", "omni_connect", "show_canvas", "start_task", "message_bot", "stop_bot", "create_bot", "update_bot", "group_relay", "create_group", "update_group", "delete_group", "post_to_group", "ask_user", "request_secret", "ask_user_question", "read_group_chat", "remember", "forget"]);
 var CARDS = /* @__PURE__ */ new Set(["ask_user", "request_secret"]);
 function callTree(root) {
   const calls = [];
@@ -26481,6 +26683,26 @@ function renderCall(call2, { sessionId, roster, actions, useUi, useWork, findBot
   switch (tool) {
     case "omni_call":
       return (0, import_react14.createElement)(OmniCallCard, { ...parseCall(arg, done ? contentText(call2.content) : ""), done });
+    case "omni_channels":
+    case "omni_chats":
+    case "omni_messages":
+    case "omni_connect":
+      return (0, import_react14.createElement)(OmniToolCard, { tool, arg, content: done ? contentText(call2.content) : "", done });
+    case "show_canvas": {
+      if (done && !contentText(call2.content).startsWith("Shown")) return null;
+      return (0, import_react14.createElement)("div", { className: "bt-canvas-line" }, (0, import_react14.createElement)(CanvasSlot, { program: argValue("program") ?? arg("program") ?? "", complete: done, onAsk: (message) => message && actions.send(sessionId, message) }));
+    }
+    case "start_task": {
+      if (!done) return null;
+      const started = /\((session-[^)]+)\) under Tasks/.exec(contentText(call2.content))?.[1];
+      return (0, import_react14.createElement)(
+        "div",
+        { className: "bt-event bt-task-done" },
+        (0, import_react14.createElement)(TasksIcon, { size: 15 }),
+        (0, import_react14.createElement)("span", null, t("Started task")),
+        started ? (0, import_react14.createElement)("button", { type: "button", className: "bt-task-link", onClick: () => actions.openSession(started) }, arg("title") ?? t("a task")) : (0, import_react14.createElement)("span", null, arg("title") ?? t("a task"))
+      );
+    }
     case "message_bot": {
       const target = findBot(arg("to")) ?? { name: arg("to") ?? "…", color: "gray" };
       if (done && call2.isError) return (0, import_react14.createElement)("div", { className: "bt-event" }, t("Couldn't message {name}", { name: target.name }));
@@ -26590,7 +26812,7 @@ function useRunningHost(active) {
     let frame = 0;
     const find = () => {
       frame = 0;
-      const node2 = document.querySelector("[data-chat-flow] > [data-chat-running]");
+      const node2 = [...document.querySelectorAll("[data-chat-flow] [data-chat-running]")].at(-1) ?? null;
       setHost((prev) => prev === node2 ? prev : node2);
     };
     const observer = new MutationObserver(() => {
@@ -27432,7 +27654,7 @@ function AgentRow({ agent, actions, useSessions, useSessionStatus, useUi, wide, 
   const unread = sessions.some((session) => session.unread) || marked && !active;
   useMarkedUnread(agent.id, active, marked, actions);
   const preview = sessions[0]?.title ?? t("New session");
-  const label = ["DSH Agent", running ? t("Working") : "", unread ? t("Unread activity") : ""].filter(Boolean).join(", ");
+  const label = [t("Tasks"), running ? t("Working") : "", unread ? t("Unread activity") : ""].filter(Boolean).join(", ");
   const open2 = active && wide;
   return (0, import_react18.createElement)(
     "div",
@@ -27445,18 +27667,18 @@ function AgentRow({ agent, actions, useSessions, useSessionStatus, useUi, wide, 
         "aria-label": label,
         "aria-current": active ? "page" : void 0,
         "data-agent-id": agent.id,
-        title: wide ? void 0 : "DSH Agent",
+        title: wide ? void 0 : t("Tasks"),
         onClick: () => actions.openAgent(agent.id),
         onContextMenu: (event) => {
           event.preventDefault();
           actions.openMenu({ kind: "agent", id: agent.id, x: event.clientX, y: event.clientY });
         }
       },
-      (0, import_react18.createElement)("span", { className: `bt-agent-ava${running ? " bt-run" : ""}` }, (0, import_react18.createElement)(OmniMark, { size: 22 })),
+      (0, import_react18.createElement)("span", { className: `bt-agent-ava${running ? " bt-run" : ""}` }, (0, import_react18.createElement)(TasksIcon, { size: 20 })),
       wide ? (0, import_react18.createElement)(
         "span",
         { className: "bt-row-body" },
-        (0, import_react18.createElement)("span", { className: "bt-row-name" }, "DSH Agent"),
+        (0, import_react18.createElement)("span", { className: "bt-row-name" }, t("Tasks")),
         preview ? (0, import_react18.createElement)("span", { className: "bt-row-preview" }, preview) : null
       ) : null,
       wide && unread && !active ? (0, import_react18.createElement)("span", { className: "bt-unread", "aria-hidden": true }) : null
@@ -27526,7 +27748,8 @@ function TeamSidebar(props) {
       // The Agent sorts by its most recent Session, falling back to when it was added.
       ...(roster.agents ?? []).map((agent) => ({ kind: "agent", item: agent, at: Math.max(0, ...agent.sessions.map((id) => stamps[id] ?? 0)) || agent.createdAt }))
     ];
-    return entries2.sort((a, b) => Number(Boolean(b.item.pinned)) - Number(Boolean(a.item.pinned)) || b.at - a.at);
+    const last = (entry) => Number(entry.kind === "agent");
+    return entries2.sort((a, b) => last(a) - last(b) || Number(Boolean(b.item.pinned)) - Number(Boolean(a.item.pinned)) || b.at - a.at);
   }, [roster, updated]);
   const main = roster.byId[roster.mainBotId];
   useListGlide(listRef, wide, order.map((entry) => entry.item.id).join(","));
@@ -28683,14 +28906,14 @@ function CommandPalette({ start, token, roster, actions, useSessions }) {
     }))
   ];
   if (people.length) sections.push([t("Bots"), people]);
-  const agents = (roster.agents ?? []).filter(() => matchesName("DSH Agent")).map((agent) => ({
+  const agents = (roster.agents ?? []).filter(() => matchesName(t("Tasks")) || matchesName("DSH Agent")).map((agent) => ({
     key: agent.id,
-    avatar: (0, import_react22.createElement)("span", { className: "bt-palette-agent" }, (0, import_react22.createElement)(OmniMark, { size: 18 })),
-    title: "DSH Agent",
+    avatar: (0, import_react22.createElement)("span", { className: "bt-palette-agent" }, (0, import_react22.createElement)(TasksIcon, { size: 18 })),
+    title: t("Tasks"),
     subtitle: t("Plain dsh session"),
     run: () => actions.openAgent(agent.id)
   }));
-  if (agents.length) sections.push(["DSH Agent", agents]);
+  if (agents.length) sections.push([t("Tasks"), agents]);
   const messages = JSON.parse(found).map(([id, turn, snippet]) => {
     const bot = roster.byId[id];
     const room2 = roster.roomsById[id];
@@ -30981,7 +31204,7 @@ function NewChat({ mode, roster, actions }) {
       inputRef.current?.focus();
     } });
     if ((roster.agents ?? []).length === 0) {
-      options.push({ key: "agent", icon: (0, import_react30.createElement)(OmniMark, { size: 16 }), label: t("Add DSH Agent"), run: () => run(async () => {
+      options.push({ key: "agent", icon: (0, import_react30.createElement)(TasksIcon, { size: 16 }), label: t("Add Tasks"), run: () => run(async () => {
         await actions.addAgent();
         close();
       }) });
@@ -32009,7 +32232,7 @@ function ownerFace(owner, roster) {
   if (owner.kind === "agent") {
     return {
       kind: "agent",
-      name: owner.name || "DSH Agent",
+      name: t("Tasks"),
       sub: owner.deleted ? t("Deleted") : "",
       paint: "var(--bt-us-rest)",
       glyph: (size) => glyphBox(size, ChatsIcon)
@@ -33563,7 +33786,7 @@ function AgentMenu({ menu, roster, actions, leaving }) {
       [agent.pinned ? t("Unpin") : t("Pin"), PinIcon, () => actions.setFlags(agent.id, { pinned: !agent.pinned })]
     ],
     [
-      [t("Remove DSH Agent"), TrashIcon, () => actions.removeAgent(agent.id), true]
+      [t("Remove Tasks"), TrashIcon, () => actions.removeAgent(agent.id), true]
     ]
   ] : [
     [
@@ -33575,7 +33798,7 @@ function AgentMenu({ menu, roster, actions, leaving }) {
   ];
   return (0, import_react40.createElement)(
     "div",
-    { ref, className: "bt-menu", role: "menu", "aria-label": menu.kind === "agent" ? "DSH Agent" : t("Session actions"), style: place, "data-leaving": leaving || void 0 },
+    { ref, className: "bt-menu", role: "menu", "aria-label": menu.kind === "agent" ? t("Tasks") : t("Session actions"), style: place, "data-leaving": leaving || void 0 },
     groups.map((group, index) => (0, import_react40.createElement)(
       import_react40.Fragment,
       { key: index },
@@ -35871,7 +36094,8 @@ function UserMessageCell({ node: node2, sessionId, useRoster, actions, renderMes
         control,
         rest.map((block, index) => ui.JsonBlock ? (0, import_react45.createElement)(ui.JsonBlock, { key: index, label: t("Content"), payload: block }) : null)
       ) : null,
-      referenceLabels.length > 0 ? (0, import_react45.createElement)("div", { className: "bt-urefs" }, t("Referenced {labels}", { labels: referenceLabels.join(t(", ")) })) : null
+      referenceLabels.length > 0 ? (0, import_react45.createElement)("div", { className: "bt-urefs" }, t("Referenced {labels}", { labels: referenceLabels.join(t(", ")) })) : null,
+      typeof data.time === "number" ? (0, import_react45.createElement)("time", { className: "bt-utime", dateTime: new Date(data.time).toISOString() }, clock3(data.time)) : null
     ),
     text === "" ? null : (0, import_react45.createElement)("div", { className: "bt-utools" }, (0, import_react45.createElement)(CopyButton, { text }))
   );
@@ -35891,6 +36115,7 @@ var USER_MESSAGE_CSS = `
 .bt-ufile-name{font-size:14px;line-height:22px;font-weight:500;color:var(--bt-ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .bt-ufile-meta{font-size:12px;line-height:15px;color:var(--bt-ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .bt-urefs{font-size:13px;line-height:18px;color:var(--bt-ink-3)}
+.bt-utime{margin-top:-4px;font-size:11px;line-height:14px;color:var(--bt-ink-3);font-variant-numeric:tabular-nums}
 .bt-utools{display:flex;flex:none;gap:2px;opacity:0;visibility:hidden;transition:opacity .12s ease,visibility .12s}
 .bt-umsg:hover .bt-utools,.bt-umsg:focus-within .bt-utools{opacity:1;visibility:visible}
 `;
@@ -36770,7 +36995,37 @@ function apply(ctx) {
     () => shadow("main", { key: AUTOMATIONS_PANEL, inject: face }, AutomationsPage),
     () => installBoard()
   ];
+  const installUserTimes = () => {
+    let frame = 0;
+    const paint = () => {
+      frame = 0;
+      const list = ctx.sessions.list.getSnapshot();
+      const shown = Object.values(list.byId ?? {}).find((session) => (session?.retainedBy?.mainView ?? 0) > 0)?.id;
+      const turns = shown === void 0 ? {} : turnClock.getSnapshot()[shown] ?? {};
+      for (const row of document.querySelectorAll("[data-chat-flow-kind=user][data-chat-turn]")) {
+        const first = turns[row.dataset.chatTurn]?.first;
+        const label = first === void 0 ? "" : new Date(first).toLocaleTimeString(dateLocale(), { hour: "numeric", minute: "2-digit" });
+        if ((row.dataset.btTime ?? "") === label) continue;
+        if (label) row.dataset.btTime = label;
+        else delete row.dataset.btTime;
+      }
+    };
+    const schedule = () => {
+      if (!frame) frame = requestAnimationFrame(paint);
+    };
+    const observer = new MutationObserver(schedule);
+    observer.observe(document.body, { childList: true, subtree: true });
+    const offs = [turnClock.subscribe(schedule), ctx.sessions.list.subscribe(schedule)];
+    schedule();
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+      for (const off of offs) off();
+      for (const row of document.querySelectorAll("[data-bt-time]")) delete row.dataset.btTime;
+    };
+  };
   const installConversation = () => [
+    () => installUserTimes(),
     () => installCompiledStyles(CONVERSATION_CSS, "conversation"),
     () => installMentions(),
     () => installAtMenu(),

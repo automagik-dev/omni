@@ -1,8 +1,16 @@
-// The DSH Agent: a team's one plain dsh entry, listed beside the Bots but not one of
-// them. Its Sessions are ordinary root Sessions in the DS Bot workspace, so they get
-// the whole dsh conversation surface and none of the team tools.
+// The DSH Agent, shown as Tasks: a team's one plain dsh entry, listed under the Bots but
+// not one of them. Its Sessions are ordinary root Sessions in the DS Bot workspace, so
+// they get the whole dsh conversation surface and none of the team tools. A Main Bot hands
+// one-off work there (start_task); when a task's first turn ends, its last words go back
+// to the Bot that started it.
 import { randomUUID } from 'node:crypto'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { defineTool } from '@deepseek-ai/dsh-tools'
 import { AGENT_NAME, AGENT_SESSION_TITLE_MAX, TEAM_TOOLS } from './constants.js'
+import { output } from './tools.js'
+
+const TASK_REPORT_MAX = 1500
+const TASKS_KEPT = 60
 
 export function install(rt) {
   const { ctx, state } = rt
@@ -182,5 +190,88 @@ export function install(rt) {
     await rt.save()
   }
 
-  Object.assign(rt, { agentOf, addAgent, createAgentSession, adoptAgentSession, archiveAgentSession, renameAgentSession, removeAgent })
+  // The team's Tasks entry, made without a first Session when work arrives before it exists.
+  async function ensureTasks() {
+    const existing = Object.values(state.agents)[0]
+    if (existing !== undefined) return existing
+    writeCheck()
+    const agent = { id: randomUUID(), name: AGENT_NAME, sessions: [], createdAt: Date.now() }
+    state.agents[agent.id] = agent
+    await rt.save()
+    return agent
+  }
+
+  // A fresh Tasks Session with a title; automations that run "a new DSH session" use it too.
+  async function createTaskSession(title) {
+    const agent = await ensureTasks()
+    const sessionId = await createAgentSession(agent.id)
+    const clean = String(title ?? '').trim().slice(0, AGENT_SESSION_TITLE_MAX)
+    if (clean !== '') await renameAgentSession(agent.id, sessionId, clean).catch(error => rt.warn('ds-bot: task title not set: %s', error?.message ?? error))
+    return sessionId
+  }
+
+  const tasks = () => (state.tasks ??= {})
+  async function startTask({ title, text, from }) {
+    const sessionId = await createTaskSession(title)
+    tasks()[sessionId] = { title: String(title).slice(0, AGENT_SESSION_TITLE_MAX), from, at: Date.now(), status: 'working' }
+    // Only the newest tasks are remembered for their reports.
+    const kept = Object.entries(tasks()).sort(([, a], [, b]) => b.at - a.at)
+    for (const [id] of kept.slice(TASKS_KEPT)) delete tasks()[id]
+    await rt.save()
+    const live = await rt.resolveAgent(sessionId)
+    // DSH's turn loop reads every input's source: the instructions arrive as the user's.
+    live.followup(createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } }))
+    await ctx.sessions.flush(live.session)
+    return sessionId
+  }
+
+  // A task's first turn ends: its last words go to the Bot that asked, once.
+  const lastWords = new Map()
+  ctx.on('session/event', (session, event) => {
+    const id = session?.id
+    const task = id === undefined ? undefined : state.tasks?.[id]
+    if (task === undefined || task.status !== 'working') return
+    if (event?.type === 'assistant/message') {
+      const content = event.data?.message?.content
+      const text = Array.isArray(content) ? content.filter(block => block?.type === 'text').map(block => block.text).join('\n').trim() : ''
+      if (text) lastWords.set(id, text)
+    } else if (event?.type === 'turn/end') {
+      const failed = event.data?.reason?.kind === 'error'
+      task.status = failed ? 'failed' : 'done'
+      task.endedAt = Date.now()
+      const words = lastWords.get(id) ?? ''
+      lastWords.delete(id)
+      void rt.save().catch(error => rt.warn('ds-bot: saving a task failed: %s', error))
+      if (rt.botOf(task.from) === undefined) return
+      const said = failed ? `It stopped with an error: ${event.data.reason.error?.message ?? 'unknown'}` : words || 'It ended without a reply.'
+      void rt.deliver({ toId: task.from, text: said.slice(0, TASK_REPORT_MAX), role: 'task-done', note: task.title, taskSessionId: id })
+        .catch(error => rt.warn('ds-bot: the report of task %s did not reach its Bot: %s', task.title, error?.message ?? error))
+    }
+  })
+
+  ctx.tools.register(defineTool({
+    name: 'start_task',
+    description: 'Main Bot only. Hands one-off work (code, files, a repo, research, a long investigation) to a new session under Tasks, which has a full computer. Write instructions that stand on their own: it cannot see this chat. Its result comes back to you as a message when its first turn ends.',
+    parameters: {
+      title: { type: 'string', required: true, description: 'A few words the user will see in the Tasks list' },
+      instructions: { type: 'string', required: true, description: 'Everything the task needs: the goal, where to work, what to return' },
+    },
+    output,
+    async execute(args, exec) {
+      await rt.load()
+      const self = rt.selfOf(exec.agent?.id)
+      if (self === undefined || !rt.isMain(self)) return 'Only a Main Bot starts tasks. Ask it in its chat.'
+      const title = String(args.title ?? '').trim()
+      const text = String(args.instructions ?? '').trim()
+      if (title === '' || text === '') return 'A task needs a title and instructions.'
+      try {
+        const sessionId = await startTask({ title, text, from: self })
+        return `Started task "${title.slice(0, AGENT_SESSION_TITLE_MAX)}" (${sessionId}) under Tasks. Its result comes back to you as a message; do not wait or poll.`
+      } catch (error) {
+        return `The task did not start: ${error?.message ?? error}`
+      }
+    },
+  }))
+
+  Object.assign(rt, { agentOf, addAgent, createAgentSession, adoptAgentSession, archiveAgentSession, renameAgentSession, removeAgent, createTaskSession, startTask })
 }

@@ -1,5 +1,6 @@
 {
   "env": { "browser": true, "node": true, "es2024": true },
+  "ignorePatterns": ["src/host/omni-ui-check.bundle.js"],
   "rules": {
     "no-undef": "error",
     "no-unused-vars": ["error", { "ignoreRestSiblings": true }]

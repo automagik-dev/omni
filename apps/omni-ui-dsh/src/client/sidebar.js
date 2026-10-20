@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { OmniMark, OmniWordmark } from './logo.js'
 import { isMainOf } from './sources.js'
 import { currentPart, previewOf, relativeShort } from './text.js'
-import { PlusIcon, SearchIcon, SidebarIcon, GaugeIcon, PlugIcon, ClockIcon, GearIcon, PinMarkIcon, ConnectorIcon, SwitchIcon, CloudDownloadIcon } from './icons.js'
+import { PlusIcon, SearchIcon, SidebarIcon, GaugeIcon, PlugIcon, ClockIcon, GearIcon, PinMarkIcon, ConnectorIcon, SwitchIcon, CloudDownloadIcon, TasksIcon } from './icons.js'
 import { botState, BotAvatar, RoomAvatar } from './mark.js'
 import { reducedMotion } from './activity-row.js'
 import { Shimmer, workPhrase } from './cells.js'
@@ -202,17 +202,17 @@ function AgentRow({ agent, actions, useSessions, useSessionStatus, useUi, wide, 
   const unread = sessions.some(session => session.unread) || (marked && !active)
   useMarkedUnread(agent.id, active, marked, actions)
   const preview = sessions[0]?.title ?? t('New session')
-  const label = ['DSH Agent', running ? t('Working') : '', unread ? t('Unread activity') : ''].filter(Boolean).join(', ')
+  const label = [t('Tasks'), running ? t('Working') : '', unread ? t('Unread activity') : ''].filter(Boolean).join(', ')
   const open = active && wide
   return h('div', { className: 'bt-agent' },
     h('button', {
       type: 'button', className: 'bt-row', 'aria-label': label, 'aria-current': active ? 'page' : undefined,
-      'data-agent-id': agent.id, title: wide ? undefined : 'DSH Agent', onClick: () => actions.openAgent(agent.id),
+      'data-agent-id': agent.id, title: wide ? undefined : t('Tasks'), onClick: () => actions.openAgent(agent.id),
       onContextMenu: (event) => { event.preventDefault(); actions.openMenu({ kind: 'agent', id: agent.id, x: event.clientX, y: event.clientY }) },
     },
-    h('span', { className: `bt-agent-ava${running ? ' bt-run' : ''}` }, h(OmniMark, { size: 22 })),
+    h('span', { className: `bt-agent-ava${running ? ' bt-run' : ''}` }, h(TasksIcon, { size: 20 })),
     wide ? h('span', { className: 'bt-row-body' },
-      h('span', { className: 'bt-row-name' }, 'DSH Agent'),
+      h('span', { className: 'bt-row-name' }, t('Tasks')),
       preview ? h('span', { className: 'bt-row-preview' }, preview) : null) : null,
     wide && unread && !active ? h('span', { className: 'bt-unread', 'aria-hidden': true }) : null),
     h('div', { className: 'bt-agent-sub', 'data-open': open || undefined },
@@ -268,7 +268,9 @@ export function TeamSidebar(props) {
       // The Agent sorts by its most recent Session, falling back to when it was added.
       ...(roster.agents ?? []).map(agent => ({ kind: 'agent', item: agent, at: Math.max(0, ...agent.sessions.map(id => stamps[id] ?? 0)) || agent.createdAt })),
     ]
-    return entries.sort((a, b) => Number(Boolean(b.item.pinned)) - Number(Boolean(a.item.pinned)) || b.at - a.at)
+    // Tasks (the DSH Agent's one-off Sessions) stay at the bottom, under every Bot and group.
+    const last = entry => Number(entry.kind === 'agent')
+    return entries.sort((a, b) => last(a) - last(b) || Number(Boolean(b.item.pinned)) - Number(Boolean(a.item.pinned)) || b.at - a.at)
   }, [roster, updated])
   const main = roster.byId[roster.mainBotId]
   useListGlide(listRef, wide, order.map(entry => entry.item.id).join(','))

@@ -8,8 +8,11 @@ import { z } from 'zod/v4'
 import { FENCE } from './canvas-text.js'
 
 export { FENCE }
-// The one tool a canvas Query may name: a GET of any documented omni operation.
+// The tools a canvas Query may name: a GET of any documented omni operation, and the
+// channels with their live state (which /instances does not carry).
 export const QUERY_TOOL = 'omni_get'
+export const CHANNELS_TOOL = 'omni_channels'
+export const QUERY_TOOLS = [QUERY_TOOL, CHANNELS_TOOL]
 
 // Tagged so the generated prompt documents Action([...]) for Button.
 export const ActionExpression = z.any()
@@ -53,19 +56,23 @@ export function libraryOf({ createLibrary, defineComponent, reactive }, render =
 }
 
 export const PROMPT_OPTIONS = {
-  preamble: 'Omni draws with openui-lang: a small program that renders as native, live UI inside your chat message.',
-  tools: [{ name: QUERY_TOOL, description: 'GET one documented omni API operation and return its JSON ({data} for one record, {items, meta} for lists).', inputSchema: { type: 'object', properties: { path: { type: 'string', description: 'API path under /api/v2 with ids and an optional ?query, e.g. /instances or /chats?limit=20' } }, required: ['path'] } }],
+  preamble: 'A canvas is an openui-lang program, passed to show_canvas: it renders as native, live UI in the chat.',
+  tools: [
+    { name: QUERY_TOOL, description: 'GET one documented omni API operation and return its JSON ({data} for one record, {items, meta} for lists).', inputSchema: { type: 'object', properties: { path: { type: 'string', description: 'API path under /api/v2 with ids and an optional ?query, e.g. /instances or /chats?limit=20' } }, required: ['path'] } },
+    { name: CHANNELS_TOOL, description: 'Every channel with its live state: {items: [{id, name, channel, state ("connected", "connecting", "paused"…), profile, phone, active}]}.', inputSchema: { type: 'object', properties: {} } },
+  ],
   bindings: true,
   additionalRules: [
-    `Query("${QUERY_TOOL}", {path: "/instances"}, {items: []}, 15) reads omni live; the last argument refreshes it every N seconds. Lists come back as {items: [...]}, one record as {data: {...}}.`,
+    `Query("${QUERY_TOOL}", {path: "/chats?limit=20"}, {items: []}, 15) reads omni live; the last argument refreshes it every N seconds. Lists come back as {items: [...]}, one record as {data: {...}}.`,
+    `For anything about connection state use Query("${CHANNELS_TOOL}", {}, {items: []}, 10): its items carry state; /instances items do not.`,
     'Mutation() is not available. Changes are yours to make with omni_call; a Button asks you for one with Action([@ToAssistant("...")]).',
-    'Channel, QrCode and Chat fetch and refresh their own data from an id: prefer them to rebuilding those views from a Query.',
+    'Channel, QrCode and Chat fetch and refresh their own data from an id: prefer them to rebuilding those views from a Query. A channel\'s live state is what Channel shows; /instances items carry no connection state.',
     'Use only fields you have seen in a real record (read one with omni_call first). Instances carry name, channel, isActive and profileName; whether one is connected comes from /instances/{id}/status, which Channel already shows.',
     'A @Each loop variable exists only inside its template: write @Each(inst.items, "i", Channel(i.id)), never i.name in another statement.',
     'A canvas cannot read secrets, call other services or run code.',
   ],
   examples: [
-    'root = Stack([title, row, list])\ntitle = Heading("Channels")\nrow = Row([Stat("Connected", @Count(@Filter(inst.items, "isActive", "==", true))), Stat("Total", @Count(inst.items))])\ninst = Query("omni_get", {path: "/instances"}, {items: []}, 15)\nlist = Table(["Name", "Channel"], @Each(inst.items, "i", [i.name, i.channel]))',
+    'root = Stack([title, row, list])\ntitle = Heading("Channels")\nrow = Row([Stat("Connected", @Count(@Filter(ch.items, "state", "==", "connected"))), Stat("Total", @Count(ch.items))])\nch = Query("omni_channels", {}, {items: []}, 10)\nlist = Stack(@Each(ch.items, "c", Channel(c.id)))',
     'root = Stack([qr, again])\nqr = QrCode("5f0c1d2e-…")\nagain = Button("Get a new code", Action([@ToAssistant("Restart the connection of that channel")]))',
   ],
 }

@@ -170,7 +170,7 @@ export function KeyValue({ pairs }) {
   return h('dl', { className: 'ou-kv' }, pairs.map(({ label, value }, index) => h(Fragment, { key: index }, h('dt', null, label), h('dd', null, cell(value)))))
 }
 
-// --- omni_call cards ---------------------------------------------------------------------
+// --- tool cards ----------------------------------------------------------------------------
 
 const VERB = { GET: 'Read', POST: 'Ran', PUT: 'Set', PATCH: 'Changed', DELETE: 'Deleted' }
 const INSTANCE = /^\/instances\/([0-9a-f-]{36})(?:\/(connect|pair|qr|restart|status|disconnect|logout))?$/i
@@ -181,29 +181,89 @@ export function parseCall(argText, content) {
   return { method: String(argText('method') ?? 'GET').toUpperCase(), path: String(argText('path') ?? ''), result }
 }
 
-// One omni_call as the user sees it. Reads are a line that opens to the data; changes are a
-// card with what changed, and a channel being connected shows its live QR code.
-export function OmniCallCard({ method, path, result, done }) {
+// A few words on what came back: how many, or which one.
+function summaryOf(data) {
+  const list = Array.isArray(data) ? data : Array.isArray(data?.items) ? data.items : null
+  if (list) return list.length === 1 ? t('1 item') : t('{count} items', { count: list.length })
+  const record = data?.data ?? data
+  if (record && typeof record === 'object') return String(record.name ?? record.title ?? record.state ?? record.status ?? '').slice(0, 40)
+  return ''
+}
+
+const Chevron = ({ open }) => h('svg', { className: 'ou-chev', 'data-open': open || undefined, width: 12, height: 12, viewBox: '0 0 12 12', 'aria-hidden': true }, h('path', { d: 'M4.5 3l3 3-3 3', fill: 'none', stroke: 'currentColor', strokeWidth: 1.4, strokeLinecap: 'round', strokeLinejoin: 'round' }))
+const Dot = ({ kind }) => h('span', { className: 'ou-call-dot', 'data-kind': kind, 'aria-hidden': true })
+
+// One call as a line: what it did, in words, what came back, and the data on demand.
+function CallLine({ verb, kind, title, meta, failed, done, body, detail }) {
   const [open, setOpen] = useState(false)
-  const failed = done && (!result || result.error || !(result.status >= 200 && result.status < 300))
-  const title = result?.operation || `${method} ${path}`
-  const instance = INSTANCE.exec(path)?.[1]
-  const action = INSTANCE.exec(path)?.[2]
-  const head = h('button', { type: 'button', className: 'ou-call-head', 'aria-expanded': open, onClick: () => setOpen(value => !value) },
-    h('span', { className: 'ou-call-verb', 'data-method': method }, t(VERB[method] ?? method)),
-    h('span', { className: 'ou-call-title' }, title),
-    !done ? h('span', { className: 'ou-muted' }, t('working…')) : failed ? h(Badge, { text: result?.status ? String(result.status) : t('failed'), tone: 'bad' }) : null,
-    h('span', { className: 'ou-call-path' }, `${method} ${path}`))
-  if (failed) return h('div', { className: 'ou-call', 'data-failed': '' }, head, h(Problem, { text: result?.error ?? errorText(result?.data, result?.status) }))
-  if (method === 'GET' && action !== 'qr') {
-    return h('div', { className: 'ou-call ou-call-read' }, head, open && done ? h('div', { className: 'ou-call-body' }, h(DataView, { value: result?.data })) : null)
-  }
-  const body = !done ? null
-    : instance && (action === 'connect' || action === 'pair' || action === 'qr' || action === 'restart') ? h(LiveQr, { channelId: instance })
-      : instance && (action === undefined || action === 'disconnect' || action === 'logout' || action === 'status') ? h(LiveChannel, { id: instance })
+  const openable = Boolean(body) && done && !failed
+  return h('div', { className: 'ou-call', 'data-kind': kind, 'data-failed': failed || undefined },
+    h('button', { type: 'button', className: 'ou-call-head', 'aria-expanded': openable ? open : undefined, disabled: !openable, title: detail, onClick: () => setOpen(value => !value) },
+      h(Dot, { kind: failed ? 'bad' : done ? kind : 'busy' }),
+      h('span', { className: 'ou-call-verb' }, verb),
+      h('span', { className: 'ou-call-title' }, title),
+      !done ? h('span', { className: 'ou-call-meta' }, t('working…')) : failed ? h(Badge, { text: t('failed'), tone: 'bad' }) : meta ? h('span', { className: 'ou-call-meta' }, meta) : null,
+      openable ? h(Chevron, { open }) : null),
+    failed && done ? h(Problem, { text: failed }) : null,
+    open && openable ? h('div', { className: 'ou-call-body' }, body) : null)
+}
+
+const failureOf = (result, done) => (!done ? null : !result ? t('No answer.') : result.error ? result.error : result.status >= 200 && result.status < 300 ? null : errorText(result.data, result.status))
+
+// omni_call: reads are a line that opens to the data; a change is a card with its result,
+// and a channel being connected shows its live QR code.
+// "/instances/<id>/self/chats" → "instances · self · chats": ids carry no meaning to read.
+const pathWords = path => path.split('/').filter(part => part && !/^[0-9a-f-]{20,}$/i.test(part)).map(part => part.replace(/[-_]/g, ' ')).join(' · ')
+
+export function OmniCallCard({ method, path, result, done }) {
+  const failed = failureOf(result, done)
+  const title = result?.operation || pathWords(path) || path
+  const [, instance, action] = INSTANCE.exec(path) ?? []
+  const kind = method === 'GET' ? 'read' : method === 'DELETE' ? 'bad' : 'write'
+  const line = { verb: t(VERB[method] ?? method), kind, title, failed, done, detail: `${method} ${path}` }
+  if (method === 'GET' && action !== 'qr') return h(CallLine, { ...line, meta: done ? summaryOf(result?.data) : null, body: h(DataView, { value: result?.data }) })
+  const live = !done || failed ? null
+    : instance && ['connect', 'pair', 'qr', 'restart'].includes(action) ? h(LiveQr, { channelId: instance })
+      : instance ? h(LiveChannel, { id: instance })
         : method === 'POST' && path === '/instances' && result?.data?.data?.id ? h(LiveChannel, { id: result.data.data.id })
           : h(DataView, { value: result?.data })
-  return h('div', { className: 'ou-call ou-call-write', 'data-method': method }, head, body ? h('div', { className: 'ou-call-body' }, body) : null)
+  return h('div', { className: 'ou-call-card' }, h(CallLine, { ...line, meta: done && !failed ? t('done') : null }), live)
+}
+
+// The typed omni tools, each drawn as what it is about.
+export function OmniToolCard({ tool, arg, content, done }) {
+  let result = null
+  try { result = done ? JSON.parse(content) : null } catch { result = done ? { status: 0, error: String(content ?? '').slice(0, 300) } : null }
+  const failed = failureOf(result, done)
+  if (tool === 'omni_channels') {
+    const items = result?.data?.items ?? []
+    return h('div', { className: 'ou-call-card' },
+      h(CallLine, { verb: t('Read'), kind: 'read', title: t('Channels'), meta: done ? t('{count} channels', { count: items.length }) : null, failed, done }),
+      done && !failed ? h('div', { className: 'ou-channel-list' }, items.map(item => h(LiveChannel, { key: item.id, id: item.id }))) : null)
+  }
+  if (tool === 'omni_chats') {
+    const items = result?.data?.items ?? []
+    const when = at => (Date.parse(at) ? relativeShort(Date.parse(at)) : '')
+    return h('div', { className: 'ou-call-card' },
+      h(CallLine, { verb: t('Read'), kind: 'read', title: t('Chats'), meta: done ? t('{count} chats', { count: items.length }) : null, failed, done }),
+      done && !failed && items.length > 0 ? h('div', { className: 'ou-chat-list' }, items.map(chat => h('div', { key: chat.id, className: 'ou-chat-row' },
+        h('span', { className: 'ou-chat-row-name' }, chat.name ?? t('Chat')),
+        h('span', { className: 'ou-chat-row-preview' }, chat.preview ?? ''),
+        chat.unread > 0 ? h(Badge, { text: String(chat.unread), tone: 'info' }) : null,
+        h('span', { className: 'ou-chat-row-at' }, when(chat.lastMessageAt))))) : null)
+  }
+  if (tool === 'omni_messages') {
+    const chat = result?.data?.chat
+    return h('div', { className: 'ou-call-card' },
+      h(CallLine, { verb: t('Read'), kind: 'read', title: chat?.name ?? t('Chat'), meta: done ? t('{count} messages', { count: result?.data?.items?.length ?? 0 }) : null, failed, done }),
+      done && !failed ? h(LiveChat, { id: chat?.id ?? arg('chat'), limit: 8 }) : null)
+  }
+  if (tool === 'omni_connect') {
+    return h('div', { className: 'ou-call-card' },
+      h(CallLine, { verb: t('Ran'), kind: 'write', title: t('Connect channel'), failed, done }),
+      done && !failed && result?.channelId ? h(LiveQr, { channelId: result.channelId }) : null)
+  }
+  return null
 }
 
 export const OMNI_LIVE_CSS = `
@@ -245,13 +305,30 @@ export const OMNI_LIVE_CSS = `
 .ou-kv{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:4px 16px;margin:0;font-size:13px}
 .ou-kv dt{color:var(--bt-ink-3)}
 .ou-kv dd{margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ou-call{display:flex;flex-direction:column;gap:8px;margin:4px 0;max-width:640px}
-.ou-call-head{display:flex;align-items:center;gap:8px;min-width:0;padding:0;border:0;background:none;color:var(--bt-ink-2);font:inherit;font-size:13px;text-align:left;cursor:pointer}
+.ou-call{display:flex;flex-direction:column;gap:6px;max-width:640px;min-width:0}
+.ou-call-head{display:flex;align-items:center;gap:8px;width:100%;min-width:0;height:28px;padding:0 8px 0 6px;margin-left:-6px;border:0;border-radius:8px;background:none;color:var(--bt-ink-2);font:inherit;font-size:13px;text-align:left;cursor:pointer;transition:background-color .12s}
+.ou-call-head:hover:not(:disabled){background:var(--bt-hover)}
+.ou-call-head:disabled{cursor:default}
+.ou-call-dot{flex:none;width:6px;height:6px;border-radius:50%;background:var(--bt-ink-3)}
+.ou-call-dot[data-kind=write]{background:var(--bt-accent)}
+.ou-call-dot[data-kind=bad]{background:#e5484d}
+.ou-call-dot[data-kind=busy]{background:var(--bt-accent);animation:ou-pulse 1.2s ease-in-out infinite}
 .ou-call-verb{flex:none;font-weight:600;color:var(--bt-ink)}
-.ou-call-verb[data-method=DELETE]{color:#d13438}
 .ou-call-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ou-call-path{display:none;margin-left:auto;flex:none;font:11px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--bt-ink-3)}
-.ou-call-head:hover .ou-call-path,.ou-call-head:focus-visible .ou-call-path{display:inline}
-.ou-call-write{padding:12px;border:1px solid var(--bt-line);border-radius:16px;background:color-mix(in srgb,var(--bt-card) 70%,transparent)}
-.ou-call-write .ou-call-head{font-size:13.5px}
+.ou-call-meta{flex:none;margin-left:auto;font-size:12px;color:var(--bt-ink-3);font-variant-numeric:tabular-nums}
+.ou-call-meta+.ou-chev{margin-left:0}
+.ou-chev{flex:none;margin-left:auto;color:var(--bt-ink-3);transition:transform .15s}
+.ou-chev[data-open]{transform:rotate(90deg)}
+.ou-call-body{padding:2px 0 4px}
+.ou-call-card{display:flex;flex-direction:column;gap:8px;max-width:640px;min-width:0}
+.ou-channel-list{display:flex;flex-direction:column;gap:6px}
+.ou-chat-list{display:flex;flex-direction:column;border:1px solid var(--bt-line);border-radius:14px;background:var(--bt-card);overflow:hidden}
+.ou-chat-row{display:flex;align-items:center;gap:10px;min-width:0;padding:8px 12px;font-size:13px;border-top:1px solid var(--bt-line)}
+.ou-chat-row:first-child{border-top:0}
+.ou-chat-row-name{flex:none;max-width:40%;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ou-chat-row-preview{flex:1;min-width:0;color:var(--bt-ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ou-chat-row-at{flex:none;font-size:11.5px;color:var(--bt-ink-3)}
+.ou-channel-list .ou-card{padding:9px 12px}
+/* Calls in a row read as one list: consecutive call rows sit close together. */
+[data-chat-flow-kind=tool-call]:has(.ou-call):not(:has(.ou-call-card))+[data-chat-flow-kind=tool-call]:has(.ou-call):not(:has(.ou-call-card)){margin-top:calc(2px - var(--dsh-chat-flow-gap,12px))!important}
 `

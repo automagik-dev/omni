@@ -28,6 +28,7 @@ export function install(rt) {
     if (role === 'room') return `[Group chat "${roomName}" · ${note}]`
     if (role === 'report') return `[Group chat "${roomName}" · replies to your post${goesOn}]`
     if (role === 'task') return `[Task · subscription "${note}" · one run: do it, then end with one or two lines on what you did]`
+    if (role === 'task-done') return `[Task "${note}" finished · its last words follow; tell the user what matters in a line or two]`
     if (role === 'kickoff') return '[Bot team setup]'
     if (role === 'secret') return '[Secret card]'
     if (audience === 'user') return `[Message from ${fromName} · the user sees your reply here]`
@@ -49,7 +50,7 @@ export function install(rt) {
   // `length`: the whole message's length when it went as a file (attachLong). `work`:
   // the work (handoffs.js) a result that came back goes on with. `merged`: a request
   // that takes in an earlier one its recipient had not read, under that one's exchange.
-  async function deliver({ fromId, toId, sessionId, text, role, replyTo, roomId, audience, note, exchangeId = randomUUID(), steer = false, deferred = false, resumed = false, retried = false, resent = false, merged = false, askedBy, fromRoomId, files = [], length, work }) {
+  async function deliver({ fromId, toId, sessionId, text, role, replyTo, roomId, audience, note, exchangeId = randomUUID(), steer = false, deferred = false, resumed = false, retried = false, resent = false, merged = false, askedBy, fromRoomId, files = [], length, work, taskSessionId }) {
     const from = rt.botOf(fromId)
     const to = rt.botOf(toId)
     if (to === undefined) throw new Error(`Unknown Bot ${toId}`)
@@ -73,6 +74,7 @@ export function install(rt) {
       ...(retried ? { retried: true } : {}),
       ...(askedBy ? { askedBy } : {}),
       ...(fromRoomId ? { senderRoomId: fromRoomId } : {}),
+      ...(taskSessionId ? { taskSessionId } : {}),
     }
     const targetSessionId = sessionId ?? rt.chatOf(toId)
     if (EXCHANGE_ROLES.has(role) && !deferred && !resumed && !retried && !resent) {

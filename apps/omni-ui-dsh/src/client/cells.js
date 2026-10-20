@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
 import { inkText } from './inks.js'
 import { linkMentions, mentionTarget, dayLabel, contentText, stripHeader, isHiddenTurn, isRelayContext, relaysBefore, relayPart, commRunOf, toolName, toolArgs, reminderPrompts } from './text.js'
-import { SmileIcon, ReplyIcon, DotsIcon, CheckIcon, DownloadIcon, CopyIcon, MemoryIcon } from './icons.js'
+import { SmileIcon, ReplyIcon, DotsIcon, CheckIcon, DownloadIcon, CopyIcon, MemoryIcon, TasksIcon } from './icons.js'
 import { colorOf, toolState, BotMark, RoomAvatar } from './mark.js'
 import { AnsweredCell, SettledQuestion, PendingQuestion } from './questions.js'
 import { SecretToolCell } from './secret-card.js'
@@ -13,7 +13,7 @@ import { turnReasoning } from './turn-reasoning.js'
 import { FOLD_AT, FOLD_HUGE, NEVER, stripLongNote, useFold } from './fold.js'
 import { hasCanvas, splitCanvases } from './canvas-text.js'
 import { CanvasSlot } from './canvas-slot.js'
-import { OmniCallCard, parseCall } from './omni-live.js'
+import { OmniCallCard, OmniToolCard, parseCall } from './omni-live.js'
 
 // -------------------------------------------------------------------------
 // Chat cells
@@ -421,6 +421,13 @@ export function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnCl
       if (source.role === 'report') {
         return h(GroupEvent, { prefix: t('Replies from'), room: roster.roomsById[source.roomId], name: t('a group chat'), roster, actions })
       }
+      // A task this Bot started under Tasks came back: the line opens it.
+      if (source.role === 'task-done') {
+        const title = /^\[Task "(.*)" finished/.exec(contentText(data.content))?.[1] ?? t('a task')
+        return h('div', { className: 'bt-event bt-task-done' },
+          h(TasksIcon, { size: 15 }), h('span', null, t('Task finished')),
+          source.taskSessionId ? h('button', { type: 'button', className: 'bt-task-link', onClick: () => actions.openSession(source.taskSessionId) }, title) : h('span', null, title))
+      }
       // A request carried on keeps its role, but its message line was shown already.
       if (source.role === 'resume' || source.resumed === true) return h('div', { className: 'bt-event' }, t('Picked up its work after a restart'))
       if (source.role === 'retry' || source.retried === true) return h('div', { className: 'bt-event' }, t('Asked to make the tool call it wrote as text'))
@@ -537,8 +544,10 @@ export function TurnTailCell({ turn: location, sessionId, useTurnClock, useUi, a
     const start = nextTurnStart(state[sessionId] ?? {}, turn)
     return start !== undefined && start > visit.seen && start <= visit.entered
   })
-  if (!label && !fresh) return null
+  // Every reply says when it ended, under its last line.
+  const ended = h('time', { className: 'bt-turn-time', dateTime: new Date(time).toISOString() }, new Date(time).toLocaleTimeString(dateLocale(), { hour: 'numeric', minute: '2-digit' }))
   return h(Fragment, null,
+    ended,
     label ? h('div', { className: 'bt-time-sep', role: 'separator' }, label) : null,
     fresh ? h(NewDivider) : null)
 }
@@ -589,6 +598,15 @@ function toolActivity(name, arg, findBot, self) {
     case 'remember': return { label: t('Saving to memory'), state: 'working' }
     case 'forget': return { label: t('Updating memory'), state: 'working' }
     case 'recall': return { label: t('Checking memory'), state: 'searching' }
+    case 'omni_channels': return { label: t('Checking your channels'), state: 'searching' }
+    case 'omni_chats':
+    case 'omni_messages':
+    case 'find_chats': return { label: t('Reading your chats'), state: 'searching' }
+    case 'omni_endpoints': return { label: t('Looking up omni'), state: 'searching' }
+    case 'omni_call': return arg('method') === 'GET' || arg('method') === undefined ? { label: t('Reading omni'), state: 'searching' } : { label: t('Changing omni'), state: 'working' }
+    case 'omni_connect': return { label: t('Connecting a channel'), state: 'working' }
+    case 'show_canvas': return { label: t('Drawing it'), state: 'working' }
+    case 'start_task': return { label: t('Starting a task'), state: 'sending' }
     default:
       if (GROUP_PHRASES[name]) return { label: t(GROUP_PHRASES[name]), state: 'sending' }
       const phrase = TOOL_PHRASES.find(([pattern]) => pattern.test(name))?.[1]
@@ -695,7 +713,7 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
 
 // The calls ToolCell draws. A PTC program (`run_code`) dispatches the real tools as
 // its sub-calls, so a call draws by its own name wherever it sits in the tree.
-const DRAWN = new Set(['omni_call', 'message_bot', 'stop_bot', 'create_bot', 'update_bot', 'group_relay', 'create_group', 'update_group', 'delete_group', 'post_to_group', 'ask_user', 'request_secret', 'ask_user_question', 'read_group_chat', 'remember', 'forget'])
+const DRAWN = new Set(['omni_call', 'omni_channels', 'omni_chats', 'omni_messages', 'omni_connect', 'show_canvas', 'start_task', 'message_bot', 'stop_bot', 'create_bot', 'update_bot', 'group_relay', 'create_group', 'update_group', 'delete_group', 'post_to_group', 'ask_user', 'request_secret', 'ask_user_question', 'read_group_chat', 'remember', 'forget'])
 // Calls whose card a dock above the composer carries when the call is not drawn.
 const CARDS = new Set(['ask_user', 'request_secret'])
 
@@ -734,6 +752,23 @@ function renderCall(call, { sessionId, roster, actions, useUi, useWork, findBot 
   switch (tool) {
     case 'omni_call':
       return h(OmniCallCard, { ...parseCall(arg, done ? contentText(call.content) : ''), done })
+    case 'omni_channels':
+    case 'omni_chats':
+    case 'omni_messages':
+    case 'omni_connect':
+      return h(OmniToolCard, { tool, arg, content: done ? contentText(call.content) : '', done })
+    case 'show_canvas': {
+      // A refused canvas goes back to the Bot, which sends a fixed one; the user sees only
+      // the canvas that passed.
+      if (done && !contentText(call.content).startsWith('Shown')) return null
+      return h('div', { className: 'bt-canvas-line' }, h(CanvasSlot, { program: argValue('program') ?? arg('program') ?? '', complete: done, onAsk: message => message && actions.send(sessionId, message) }))
+    }
+    case 'start_task': {
+      if (!done) return null
+      const started = /\((session-[^)]+)\) under Tasks/.exec(contentText(call.content))?.[1]
+      return h('div', { className: 'bt-event bt-task-done' }, h(TasksIcon, { size: 15 }), h('span', null, t('Started task')),
+        started ? h('button', { type: 'button', className: 'bt-task-link', onClick: () => actions.openSession(started) }, arg('title') ?? t('a task')) : h('span', null, arg('title') ?? t('a task')))
+    }
     case 'message_bot': {
       const target = findBot(arg('to')) ?? { name: arg('to') ?? '…', color: 'gray' }
       if (done && call.isError) return h('div', { className: 'bt-event' }, t("Couldn't message {name}", { name: target.name }))
