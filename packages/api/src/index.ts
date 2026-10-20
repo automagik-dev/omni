@@ -83,6 +83,7 @@ import {
   setupSyncWorker,
 } from './plugins';
 import { buildAutomationEngineDeps } from './plugins/automation-actions';
+import { setupDevicePairing } from './plugins/device-pairing';
 import { setupScheduler, stopScheduler } from './scheduler';
 import { closeAgentHeartbeat, initAgentHeartbeat } from './services/agent-heartbeat';
 import { ApiKeyService } from './services/api-keys';
@@ -614,6 +615,13 @@ async function setupEventBusServices(
     await setupSessionCleaner(eventBus, services, db);
   } catch (error) {
     log.error('Failed to set up session cleaner', { error: String(error) });
+  }
+
+  // Device pairing (approves POST /pair/start codes sent over WhatsApp; off unless OMNI_PAIRING_ENABLED)
+  try {
+    await setupDevicePairing(eventBus, services);
+  } catch (error) {
+    log.error('Failed to set up device pairing', { error: String(error) });
   }
 
   // Follow-up lifecycle hooks (arm on outbound agent msg, disarm on reply/handoff/archive)

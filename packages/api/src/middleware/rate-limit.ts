@@ -5,6 +5,7 @@
  */
 
 import { createLogger } from '@omni/core';
+import type { Context } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { z } from 'zod';
 import type { AppVariables } from '../types';
@@ -91,6 +92,34 @@ export function resolveClientIp(
 }
 
 /**
+ * The client IP of a request for per-IP limits and records, chosen exactly as
+ * the limiter keys it (see resolveClientIp): the trusted proxy's hop when
+ * TRUSTED_PROXY_HEADER is set, otherwise the socket peer.
+ */
+export function requestClientIp(c: Context): string | undefined {
+  const trustedProxyHeader = process.env.TRUSTED_PROXY_HEADER?.toLowerCase();
+  const trustedProxyIp = trustedProxyHeader ? c.req.header(trustedProxyHeader) : undefined;
+  // Under Bun.serve, Hono's env is the Bun Server, which exposes the peer
+  // address via requestIP() — there is no `remoteAddr` field. Without this,
+  // unauthenticated surfaces (the public webhook ingress) would all share
+  // one 'anon' bucket instead of being limited per IP.
+  const server = c.env as
+    | { remoteAddr?: string; requestIP?: (req: Request) => { address?: string } | null }
+    | undefined;
+  const remoteAddr = server?.remoteAddr ?? server?.requestIP?.(c.req.raw)?.address;
+  const normalizedIp = resolveClientIp(trustedProxyIp, remoteAddr);
+  if (trustedProxyIp !== undefined && normalizedIp === undefined && !warnedUnparseableProxyHop) {
+    // Fail closed (shared anonymous bucket) but say so once, otherwise a
+    // proxy that writes `ip:port` silently throttles every client together.
+    warnedUnparseableProxyHop = true;
+    log.warn('TRUSTED_PROXY_HEADER hop is not a bare IP literal; requests share the anonymous rate-limit bucket', {
+      header: trustedProxyHeader,
+    });
+  }
+  return normalizedIp;
+}
+
+/**
  * Create rate limiting middleware.
  *
  * `keyPrefix` isolates a limiter's counters from the default bucket so a
@@ -104,25 +133,7 @@ function createRateLimiter(config: RateLimitConfig = RATE_LIMITS.general, keyPre
     // (TRUSTED_PROXY_HEADER) — and even then only the hop the trusted proxy
     // wrote, see resolveClientIp.
     const apiKey = c.get('apiKey');
-    const trustedProxyHeader = process.env.TRUSTED_PROXY_HEADER?.toLowerCase();
-    const trustedProxyIp = trustedProxyHeader ? c.req.header(trustedProxyHeader) : undefined;
-    // Under Bun.serve, Hono's env is the Bun Server, which exposes the peer
-    // address via requestIP() — there is no `remoteAddr` field. Without this,
-    // unauthenticated surfaces (the public webhook ingress) would all share
-    // one 'anon' bucket instead of being limited per IP.
-    const server = c.env as
-      | { remoteAddr?: string; requestIP?: (req: Request) => { address?: string } | null }
-      | undefined;
-    const remoteAddr = server?.remoteAddr ?? server?.requestIP?.(c.req.raw)?.address;
-    const normalizedIp = resolveClientIp(trustedProxyIp, remoteAddr);
-    if (trustedProxyIp !== undefined && normalizedIp === undefined && !warnedUnparseableProxyHop) {
-      // Fail closed (shared anonymous bucket) but say so once, otherwise a
-      // proxy that writes `ip:port` silently throttles every client together.
-      warnedUnparseableProxyHop = true;
-      log.warn('TRUSTED_PROXY_HEADER hop is not a bare IP literal; requests share the anonymous rate-limit bucket', {
-        header: trustedProxyHeader,
-      });
-    }
+    const normalizedIp = requestClientIp(c);
     const identifier = apiKey?.id ? `api:${apiKey.id}` : normalizedIp ? `ip:${normalizedIp}` : 'anon';
 
     const key = `${keyPrefix}:${identifier}`;
@@ -186,3 +197,14 @@ export const rateLimitMiddleware = createRateLimiter(RATE_LIMITS.general);
  * Keyed by IP (no API key on that surface), same budget as channel events.
  */
 export const webhookIngressRateLimitMiddleware = createRateLimiter(RATE_LIMITS.events, 'ratelimit:webhook-ingress');
+
+/**
+ * Rate limiter for the auth-exempt device pairing routes: ten requests per IP
+ * per ten minutes covers a person retrying, not a script. Polls are limited
+ * separately (they are frequent by design and carry an unguessable token).
+ */
+export const pairingStartRateLimitMiddleware = createRateLimiter(
+  { windowMs: 10 * 60 * 1000, maxRequests: 10 },
+  'ratelimit:pair-start',
+);
+export const pairingPollRateLimitMiddleware = createRateLimiter(RATE_LIMITS.events, 'ratelimit:pair-poll');

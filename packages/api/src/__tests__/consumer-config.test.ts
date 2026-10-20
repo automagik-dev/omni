@@ -115,6 +115,14 @@ describe('Consumer startFrom Configuration', () => {
     expect(main?.value).toBe('new');
   });
 
+  test('device-pairing: uses startFrom: new (a recreated durable must not replay old codes)', () => {
+    const values = extractStartFromValues(join(PLUGINS_DIR, 'device-pairing.ts'));
+    const main = values.find((v) => v.context === 'device-pairing');
+
+    expect(main).toBeDefined();
+    expect(main?.value).toBe('new');
+  });
+
   test('event-persistence: message consumers use startFrom: first; journal-only consumers are forward-only', () => {
     const values = extractStartFromValues(join(PLUGINS_DIR, 'event-persistence.ts'));
 

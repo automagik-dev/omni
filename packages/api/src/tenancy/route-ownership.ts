@@ -284,6 +284,34 @@ const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
       'connection state; the outcome is read through the authenticated GET /api/v2/slack/oauth/result/:nonce.',
   },
   {
+    route: 'POST /api/v2/pair/start',
+    class: 'public-by-contract',
+    justification:
+      'Device pairing start (wish: omni-labs-distribution). Auth-exempt because the caller is a device with no key ' +
+      'yet; answers 404 unless the operator set OMNI_PAIRING_ENABLED=true, and always 404 with multitenancy on. ' +
+      'Rate-limited per IP, with a cap on pending pairings per instance. It exposes only what the operator turned ' +
+      'pairing on to publish: a fresh random code, the phone number of the ONE configured pairing instance (where ' +
+      'the code must be sent), a wa.me link to it, an expiry and a fresh poll token; or a fixed 503 when that ' +
+      'instance cannot take codes. It reads no tenant data and names no other instance, chat or count.',
+  },
+  {
+    route: 'GET /api/v2/pair/:id',
+    class: 'public-by-contract',
+    justification:
+      'Device pairing poll. Authenticity is the 32-byte poll token issued by POST /api/v2/pair/start to the same ' +
+      'device (stored as SHA-256, compared in constant time); an unknown id and a wrong token give the same 404, ' +
+      'so it is no existence oracle. It returns the pairing status and, exactly once after an approved sender ' +
+      'sent the code over WhatsApp, a freshly minted key whose scopes come from server config and can never ' +
+      'include *, keys:* or platform:*. Nothing about the approver, instance or tenant is returned.',
+  },
+  {
+    route: 'DELETE /api/v2/pair/:id',
+    class: 'public-by-contract',
+    justification:
+      'Device pairing cancel, by the device holding the poll token (same token check and same 404 as the poll). ' +
+      'Returns only whether the pairing was still pending.',
+  },
+  {
     route: 'POST /api/v2/channels/twilio-whatsapp/:instanceId/webhook',
     class: 'public-by-contract',
     justification:

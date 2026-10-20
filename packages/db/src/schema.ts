@@ -688,6 +688,51 @@ export type ApiKey = typeof apiKeys.$inferSelect;
 export type NewApiKey = typeof apiKeys.$inferInsert;
 
 // ============================================================================
+// DEVICE PAIRINGS
+// ============================================================================
+
+export const devicePairingStatuses = ['pending', 'approved', 'consumed', 'cancelled'] as const;
+export type DevicePairingStatus = (typeof devicePairingStatuses)[number];
+
+/**
+ * A device asking for an API key by code (POST /pair/start).
+ *
+ * The device shows the code; its owner sends it over WhatsApp to the pairing
+ * instance, which approves the row; the device's next poll mints the key and
+ * consumes the row. Code and poll token are stored as SHA-256 hex only, and the
+ * key is minted at that poll, so no secret is ever stored here.
+ * `expires_at` bounds pending and approved rows alike.
+ */
+export const devicePairings = pgTable(
+  'device_pairings',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    deviceName: varchar('device_name', { length: 80 }).notNull(),
+    codeHash: varchar('code_hash', { length: 64 }).notNull(),
+    pollTokenHash: varchar('poll_token_hash', { length: 64 }).notNull(),
+    status: varchar('status', { length: 20 }).notNull().default('pending').$type<DevicePairingStatus>(),
+    /** The instance the code must arrive on, fixed when the pairing starts. */
+    instanceId: uuid('instance_id').notNull(),
+    clientIp: varchar('client_ip', { length: 45 }),
+    /** Platform id of the sender whose message approved the pairing. */
+    approvedBy: varchar('approved_by', { length: 255 }),
+    approvedAt: timestamp('approved_at', { withTimezone: true }),
+    /** The key minted at the consuming poll. No FK: the row outlives a deleted key. */
+    apiKeyId: uuid('api_key_id'),
+    consumedAt: timestamp('consumed_at', { withTimezone: true }),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    codeHashIdx: index('device_pairings_code_hash_idx').on(table.codeHash),
+    statusExpiresIdx: index('device_pairings_status_expires_idx').on(table.status, table.expiresAt),
+  }),
+);
+
+export type DevicePairing = typeof devicePairings.$inferSelect;
+export type NewDevicePairing = typeof devicePairings.$inferInsert;
+
+// ============================================================================
 // API KEY AUDIT LOGS
 // ============================================================================
 

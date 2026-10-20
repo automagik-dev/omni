@@ -46,6 +46,9 @@ export const CORE_EVENT_TYPES = [
   'access.denied',
   'access.pairing_requested',
   'access.pairing_approved',
+  // Device pairing (a device obtains an API key by code over WhatsApp)
+  'access.device_pairing_started',
+  'access.device_paired',
   // Presence
   'presence.typing',
   'presence.online',
@@ -543,6 +546,25 @@ export interface AccessPairingApprovedPayload {
   platformUserId: string;
   requestId: string;
   ruleId: string;
+}
+
+/** A device asked for a pairing code (POST /pair/start). Never carries the code. */
+export interface AccessDevicePairingStartedPayload {
+  pairingId: string;
+  instanceId: string;
+  deviceName: string;
+  expiresAt: number;
+}
+
+/** A pairing code arrived from an approved sender; the device's next poll gets its key. */
+export interface AccessDevicePairedPayload {
+  pairingId: string;
+  instanceId: string;
+  deviceName: string;
+  /** Platform id of the sender whose message approved it. */
+  approvedBy: string;
+  /** 'owner' for the instance's own account in its self chat, 'allowlist' for a configured number. */
+  approver: 'owner' | 'allowlist';
 }
 
 /**
@@ -1167,6 +1189,8 @@ export interface EventPayloadMap {
   'access.denied': AccessDeniedPayload;
   'access.pairing_requested': AccessPairingRequestedPayload;
   'access.pairing_approved': AccessPairingApprovedPayload;
+  'access.device_pairing_started': AccessDevicePairingStartedPayload;
+  'access.device_paired': AccessDevicePairedPayload;
   'sync.started': SyncStartedPayload;
   'sync.progress': SyncProgressPayload;
   'sync.completed': SyncCompletedPayload;

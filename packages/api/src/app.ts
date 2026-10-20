@@ -85,6 +85,7 @@ import { createWebhookAuthMiddleware } from './middleware/webhook-auth';
 import { getHealth, healthRoutes } from './routes/health';
 import { openapiRoutes } from './routes/openapi';
 import { v2Routes } from './routes/v2';
+import { pairingRoutes } from './routes/v2/pairing';
 import { platformTenantRoutes } from './routes/v2/platform-tenants';
 import { slackOAuthCallback } from './routes/v2/slack';
 import type { Services } from './services';
@@ -564,6 +565,15 @@ export function createApp(
   // (or a fixed page for the CLI entry). Declared `public-by-contract` in
   // tenancy/route-ownership.ts. Must be mounted before protectedApp.
   app.get('/api/v2/slack/oauth/callback', webhookIngressRateLimitMiddleware, slackOAuthCallback);
+
+  // Device pairing (wish: omni-labs-distribution). Auth-exempt by contract: a
+  // device with no key asks for one by code, approved over WhatsApp by the
+  // pairing instance's owner. Always mounted so that, with OMNI_PAIRING_ENABLED
+  // off, the routes answer 404 themselves instead of falling through to the
+  // bearer auth below (401 would reveal the surface). Declared
+  // `public-by-contract` in tenancy/route-ownership.ts. Must be mounted before
+  // protectedApp.
+  app.route('/api/v2/pair', pairingRoutes);
 
   // ── Multitenancy control plane — feature-flagged, OFF by default ────────────
   // Mounted ONLY when OMNI_MULTITENANCY_ENABLED === "true". When off, this
