@@ -1,0 +1,29 @@
+{
+  "name": "@automagik/omni-desktop",
+  "productName": "Omni",
+  "desktopName": "omni-desktop.desktop",
+  "version": "0.1.0-labs.1",
+  "private": true,
+  "description": "Omni on your desktop: the Omni UI on a DeepSeek Harness of its own, linked to your Omni by a code",
+  "homepage": "https://github.com/automagik-dev/omni/tree/labs/apps/omni-desktop#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/automagik-dev/omni.git",
+    "directory": "apps/omni-desktop"
+  },
+  "author": "Namastex Labs <dev@namastex.ai>",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "src/main.js",
+  "scripts": {
+    "prepare-runtime": "node scripts/prepare-runtime.mjs",
+    "start": "electron .",
+    "test": "node --test \"test/*.test.js\"",
+    "dist:linux": "node scripts/prepare-runtime.mjs && electron-builder --linux AppImage deb",
+    "dist:mac": "node scripts/prepare-runtime.mjs && electron-builder --mac dmg"
+  },
+  "devDependencies": {
+    "electron": "44.5.0",
+    "electron-builder": "26.16.1"
+  }
+}

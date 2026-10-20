@@ -542,6 +542,35 @@ jobs:
       - name: Test
         run: npm test
 
+  omni-desktop:
+    # apps/omni-desktop: the Electron shell around dsh + the Omni UI plugin. Its tests cover
+    # the main-process logic in plain Node (home layout, profile install, dsh supervision,
+    # navigation policy), so the Electron binary itself is not downloaded here.
+    name: Omni desktop (main-process tests)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: apps/omni-desktop
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      DO_NOT_TRACK: '1'
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+
+      - name: Install
+        run: npm ci --no-fund --no-audit
+
+      - name: Test
+        run: npm test
+
   smoke-test:
     name: Smoke Test (Fresh Environment)
     runs-on: blacksmith-4vcpu-ubuntu-2404

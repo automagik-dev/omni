@@ -1,0 +1,51 @@
+# Omni desktop packaging. Run `npm run prepare-runtime` first (the dist:* scripts do):
+# it fills build/runtime and build/profile, which ship as resources beside the app.
+appId: ai.namastex.omni.desktop
+productName: Omni
+copyright: Copyright © 2026 Namastex Labs
+directories:
+  output: dist
+  buildResources: assets
+files:
+  - src/**
+  - package.json
+extraResources:
+  - from: build/runtime/node_modules
+    to: runtime/node_modules
+  - from: build/profile
+    to: profile
+  # Named on its own: extraResources leaves out node_modules folders nested in a `from`.
+  - from: build/profile/node_modules
+    to: profile/node_modules
+  - from: build/versions.json
+    to: versions.json
+asar: true
+# Chromium's sandbox on Linux needs either a setuid chrome-sandbox (the deb sets it on
+# install) or unprivileged user namespaces, which Ubuntu 24.04+ restricts. The launcher
+# the hook writes picks --no-sandbox only when neither is available (an AppImage there).
+afterPack: scripts/after-pack.cjs
+linux:
+  target:
+    - AppImage
+    - deb
+  category: Network
+  executableName: omni-desktop
+  icon: assets/icon.png
+  syncDesktopName: true
+  synopsis: Omni on your desktop
+  description: The Omni UI on a DeepSeek Harness of its own, linked to your Omni by a code sent over WhatsApp.
+  maintainer: Namastex Labs <dev@namastex.ai>
+  artifactName: Omni-${version}-linux-${arch}.${ext}
+deb:
+  packageCategory: net
+  appArmorProfile: scripts/apparmor-profile.tpl
+mac:
+  target: dmg
+  category: public.app-category.productivity
+  icon: assets/icon.png
+  # Labs builds are not signed or notarized (no Apple Developer ID yet).
+  identity: null
+  artifactName: Omni-${version}-labs-unsigned-mac-${arch}.${ext}
+dmg:
+  title: Omni ${version} (labs, unsigned)
+publish: null

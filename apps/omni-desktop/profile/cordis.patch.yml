@@ -1,0 +1,9 @@
+# The Omni desktop app's own dsh profile. Unlike a dsh someone already has, this one is
+# Omni's alone, so it also takes Omni's keyless web search as the default.
+- insert:
+    - id: web-search-auto
+      name: '@automagik/omni-dsh/web-search'
+- id: web
+  config:
+    searchProvider: auto
+    fetchProvider: http
