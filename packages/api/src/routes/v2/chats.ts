@@ -289,6 +289,28 @@ chatsRoutes.post('/', zValidator('json', createChatSchema), async (c) => {
 });
 
 /**
+ * GET /chats/by-external - Find chat by external ID
+ * NOTE: Must be before /:id, which would otherwise take "by-external" as a chat id
+ */
+chatsRoutes.get('/by-external', async (c) => {
+  const instanceId = c.req.query('instanceId');
+  const externalId = c.req.query('externalId');
+  const services = c.get('services');
+
+  if (!instanceId || !externalId) {
+    return c.json({ error: 'instanceId and externalId are required' }, 400);
+  }
+
+  const chat = await services.chats.findByExternalIdSmart(instanceId, externalId);
+
+  if (!chat) {
+    return c.json({ data: null });
+  }
+
+  return c.json({ data: chat });
+});
+
+/**
  * GET /chats/:id - Get chat by ID
  *
  * Accepts either a chat UUID or a platform-native id (WhatsApp JID, Telegram
@@ -719,27 +741,6 @@ chatsRoutes.get('/:id/messages', zValidator('query', listMessagesQuerySchema), a
   });
 
   return c.json({ items: messages });
-});
-
-/**
- * GET /chats/by-external - Find chat by external ID
- */
-chatsRoutes.get('/by-external', async (c) => {
-  const instanceId = c.req.query('instanceId');
-  const externalId = c.req.query('externalId');
-  const services = c.get('services');
-
-  if (!instanceId || !externalId) {
-    return c.json({ error: 'instanceId and externalId are required' }, 400);
-  }
-
-  const chat = await services.chats.findByExternalIdSmart(instanceId, externalId);
-
-  if (!chat) {
-    return c.json({ data: null });
-  }
-
-  return c.json({ data: chat });
 });
 
 // Mark chat as read schema
