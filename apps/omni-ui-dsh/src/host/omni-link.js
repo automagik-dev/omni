@@ -119,14 +119,16 @@ export function install(rt) {
     if (code.status !== 200 || !code.json?.device_code) throw refused(`Omni answered ${code.status} to the sign-in request`)
     const userCode = String(code.json.user_code)
     const shown = userCode.length === 8 ? `${userCode.slice(0, 4)}-${userCode.slice(4)}` : userCode
-    const whatsapp = typeof status.data.whatsapp === 'string' ? status.data.whatsapp.replace(/[^\d]/g, '') : ''
+    // The QR opens the Omni, which sends the phone on to the owner's own WhatsApp chat with
+    // the code typed; the owner's number never reaches this host.
+    const whatsappUrl = status.data.whatsapp === true && typeof status.data.whatsappUrl === 'string' ? status.data.whatsappUrl : null
     pairing = {
       url,
       deviceName,
       deviceCode: code.json.device_code,
       code: shown,
-      sendTo: whatsapp ? `+${whatsapp}` : null,
-      waLink: whatsapp ? `https://wa.me/${whatsapp}?text=${encodeURIComponent(`Omni ${shown}`)}` : null,
+      sendTo: null,
+      waLink: whatsappUrl ? `${whatsappUrl}?user_code=${encodeURIComponent(userCode)}` : null,
       approveUrl: code.json.verification_uri_complete ?? null,
       expiresAt: new Date(Date.now() + Number(code.json.expires_in ?? 600) * 1000).toISOString(),
       pollIntervalMs: Math.max(2000, Number(code.json.interval ?? 2) * 1000),
@@ -143,9 +145,12 @@ export function install(rt) {
     return polling
   }
 
+  // The key, or 'retry' (try again later), or 'lost' (the token is spent or refused: Omni
+  // will not answer it again, so the sign-in has to start over).
   async function exchange(current) {
     const reply = await omniFetch(current.url, 'POST', '/api/v2/login/device-key', { body: { deviceName: current.deviceName }, bearer: current.accessToken, timeoutMs: POLL_TIMEOUT_MS })
-    if (reply.status !== 200 || !reply.data?.apiKey) return null
+    if (reply.status === 400 || reply.status === 401) return 'lost'
+    if (reply.status !== 200 || !reply.data?.apiKey) return 'retry'
     const link = {
       url: cleanOmniUrl(reply.data.apiUrl) ?? current.url,
       key: reply.data.apiKey,
@@ -162,6 +167,10 @@ export function install(rt) {
   async function pollOnce() {
     if (!pairing) return { status: 'idle' }
     const current = pairing
+    if (!current.accessToken && Date.parse(current.expiresAt) <= Date.now()) {
+      pairing = null
+      return { status: 'expired' }
+    }
     if (!current.accessToken) {
       const reply = await omniFetch(current.url, 'POST', '/api/auth/device/token', {
         body: { grant_type: DEVICE_GRANT, device_code: current.deviceCode, client_id: CLIENT_ID },
@@ -178,7 +187,11 @@ export function install(rt) {
     }
     // Approved: the token becomes the key, even if the card was closed meanwhile.
     const link = await exchange(current)
-    if (!link) return { status: 'pending', pairing: publicPairing() }
+    if (link === 'retry') return { status: 'pending', pairing: publicPairing() }
+    if (link === 'lost') {
+      if (pairing === current) pairing = null
+      return { status: 'expired' }
+    }
     if (pairing === current) pairing = null
     return { status: 'paired', origin: new URL(link.url).host }
   }

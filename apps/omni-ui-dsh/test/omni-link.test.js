@@ -21,7 +21,7 @@ test('an Omni address is cleaned to its API base', () => {
 
 // A fake Omni with human login: status, Better Auth's device flow, and the device-key
 // exchange. The device code is pending until `approve()` (or `deny()`); its token works once.
-function fakeOmni({ statusCode = 200, claimed = true, whatsapp = '+5511999990000' } = {}) {
+function fakeOmni({ statusCode = 200, claimed = true, whatsapp = true, keyStatus = 200 } = {}) {
   const asked = []
   let state = 'pending'
   let keyed = false
@@ -31,13 +31,14 @@ function fakeOmni({ statusCode = 200, claimed = true, whatsapp = '+5511999990000
     const json = (status, data) => new Response(JSON.stringify(data), { status })
     switch (url.pathname) {
       case '/api/v2/login/status':
-        return statusCode === 200 ? json(200, { data: { claimed, whatsapp, deviceUrl: 'https://omni.example.com/login/device' } }) : json(statusCode, { error: { code: 'X' } })
+        return statusCode === 200 ? json(200, { data: { claimed, whatsapp, deviceUrl: 'https://omni.example.com/api/login/device', whatsappUrl: 'https://omni.example.com/api/login/whatsapp' } }) : json(statusCode, { error: { code: 'X' } })
       case '/api/auth/device/code':
         return json(200, { device_code: 'dev-1', user_code: 'K7Q4X9ZP', verification_uri: 'https://omni.example.com/login/device', verification_uri_complete: 'https://omni.example.com/login/device?user_code=K7Q4X9ZP', expires_in: 600, interval: 2 })
       case '/api/auth/device/token':
         if (state === 'approved') { state = 'used'; return json(200, { access_token: 'device-token', token_type: 'Bearer' }) }
         return json(400, { error: state === 'pending' ? 'authorization_pending' : state === 'denied' ? 'access_denied' : 'expired_token' })
       case '/api/v2/login/device-key':
+        if (keyStatus !== 200) return json(keyStatus, { error: { code: 'X' } })
         if (init.headers?.authorization !== 'Bearer device-token' || keyed) return json(401, { error: { code: 'UNAUTHORIZED' } })
         keyed = true
         return json(200, { data: { apiKey: 'omni_sk_device', keyId: 'k1', scopes: ['instances:read'], keyExpiresAt: null, apiUrl: 'https://omni.example.com' } })
@@ -74,8 +75,8 @@ test('signing in shows the WhatsApp QR and the approval link, then saves a devic
   assert.deepEqual(started.pairing, {
     origin: 'omni.example.com',
     code: 'K7Q4-X9ZP',
-    sendTo: '+5511999990000',
-    waLink: 'https://wa.me/5511999990000?text=Omni%20K7Q4-X9ZP',
+    sendTo: null,
+    waLink: 'https://omni.example.com/api/login/whatsapp?user_code=K7Q4X9ZP',
     approveUrl: 'https://omni.example.com/login/device?user_code=K7Q4X9ZP',
     expiresAt: started.pairing.expiresAt,
     pollIntervalMs: 2000,
@@ -132,7 +133,7 @@ test('an Omni without login, an unclaimed one, and a bad address say so', async 
 })
 
 test('without the owner\'s WhatsApp connected, the card offers only the approval page', async (t) => {
-  fakeOmni({ whatsapp: null })
+  fakeOmni({ whatsapp: false })
   const { rt, stop } = runtime()
   t.after(stop)
   const { pairing } = await rt.omniLinkEndpoint('omni-pair-start', { url: 'omni.example.com' })
@@ -176,4 +177,28 @@ test('an approval that lands after the card was cancelled still becomes the devi
   await rt.omniLinkEndpoint('omni-pair-cancel')
   assert.equal((await polling).status, 'paired')
   assert.equal(rt.omniLink().key, 'omni_sk_device')
+})
+
+test('a refused device token ends the sign-in instead of polling forever', async (t) => {
+  const omni = fakeOmni({ keyStatus: 401 })
+  const { rt, stop } = runtime()
+  t.after(stop)
+  await rt.omniLinkEndpoint('omni-pair-start', { url: 'omni.example.com' })
+  omni.approve()
+  assert.equal((await rt.omniLinkEndpoint('omni-pair-poll')).status, 'expired')
+  assert.equal((await rt.omniLinkEndpoint('omni-pair-poll')).status, 'idle')
+  assert.equal(rt.omniLink(), null)
+})
+
+test('a sign-in nobody approved stops at its expiry without asking Omni again', async (t) => {
+  const omni = fakeOmni()
+  const { rt, stop } = runtime()
+  t.after(stop)
+  const realNow = Date.now
+  await rt.omniLinkEndpoint('omni-pair-start', { url: 'omni.example.com' })
+  Date.now = () => realNow() + 11 * 60_000
+  t.after(() => { Date.now = realNow })
+  const before = omni.asked.length
+  assert.equal((await rt.omniLinkEndpoint('omni-pair-poll')).status, 'expired')
+  assert.equal(omni.asked.length, before)
 })
