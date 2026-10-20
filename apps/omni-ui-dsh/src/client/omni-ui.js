@@ -2,9 +2,9 @@ import { Component, createContext, createElement as h, Fragment, useCallback, us
 import { createLibrary, defineComponent, reactive, Renderer, useStateField, useTriggerAction } from '@openuidev/react-lang'
 import { t } from './i18n.js'
 import { call } from './api.js'
-import { CHANNELS_TOOL, QUERY_TOOL, libraryOf } from './omni-ui-spec.js'
+import { QUERY_TOOLS, libraryOf } from './omni-ui-spec.js'
 import { checkProgram as checkCanvas } from './omni-ui-check.js'
-import { Badge, KeyValue, LiveChannel, LiveChat, LiveQr, Table, errorText } from './omni-live.js'
+import { Badge, KeyValue, LiveChannel, LiveChat, LiveQr, Table } from './omni-live.js'
 
 // Canvases: Omni shows one with show_canvas (older replies carry it as an openui-lang
 // fence) and the chat renders it in place as live, native UI. Adapted from genui-canvas (namastexlabs/agent-studio-plugins): the
@@ -101,14 +101,8 @@ export const checkProgram = (program) => {
   return refusal === null ? null : t(refusal.text, refusal.params)
 }
 
-const readOmni = {
-  [CHANNELS_TOOL]: async () => call('omni-channels'),
-  [QUERY_TOOL]: async ({ path }) => {
-    const reply = await call('omni-get', { path })
-    if (!reply.ok) throw new Error(errorText(reply.data, reply.status))
-    return reply.data
-  },
-}
+// Each Query tool reads on the host, through the same code as Omni's tool of that name.
+const readOmni = Object.fromEntries(QUERY_TOOLS.map(name => [name, async args => call('omni-read', { tool: name, args })]))
 
 // A canvas that fails says why, keeps its source, and lets the user hand the error back to
 // the Bot that wrote it.

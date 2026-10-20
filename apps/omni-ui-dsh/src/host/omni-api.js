@@ -281,16 +281,8 @@ export function install(rt) {
     parameters: {},
   }, async () => fitted({ status: 200, operation: 'Channels', data: { items: await channels() } }))
 
-  tool({
-    name: 'omni_chats',
-    description: 'Main Bot only. Chats and groups on omni, most recent first: on one channel or all, by name, or only unread ones. The user sees them as a list.',
-    parameters: {
-      channel: { type: 'string', description: 'Channel id or exact name; all channels when left out' },
-      search: { type: 'string', description: 'Part of a chat or group name' },
-      unread_only: { type: 'boolean', description: 'Only chats with unread messages' },
-      limit: { type: 'number', description: 'How many, 1-100 (default 20)' },
-    },
-  }, async (args) => {
+  // The reads behind omni_chats and omni_messages, shared with canvases (Query("omni_chats", …)).
+  async function chats(args = {}) {
     const query = new URLSearchParams({ sort: 'activity', limit: String(Math.min(100, Math.max(1, Number(args.limit) || 20))) })
     if (args.channel) query.set('instanceId', await channelId(args.channel))
     if (args.search) query.set('search', String(args.search))
@@ -301,28 +293,50 @@ export function install(rt) {
       id: chat.id, name: chat.name, type: chat.isGroup ? 'group' : chat.chatType, channelId: chat.instanceId, unread: chat.unreadCount ?? 0,
       lastMessageAt: chat.lastMessageAt, preview: chat.lastMessagePreview ? String(chat.lastMessagePreview).slice(0, 120) : undefined,
     }))
-    return fitted({ status: 200, operation: 'Chats', data: { items, more: result.data?.meta?.hasMore === true } })
-  })
-
-  tool({
-    name: 'omni_messages',
-    description: 'Main Bot only. The latest messages of one chat (id from omni_chats or find_chats), oldest first. The user sees the chat as a live card.',
-    parameters: {
-      chat: { type: 'string', required: true, description: 'Chat id from omni_chats or find_chats' },
-      limit: { type: 'number', description: 'How many messages, 1-50 (default 20)' },
-    },
-  }, async (args) => {
+    return { items, more: result.data?.meta?.hasMore === true }
+  }
+  async function messages(args = {}) {
     const id = String(args.chat ?? '').trim()
-    if (!/^[0-9a-f-]{36}$/i.test(id)) throw invalid('chat must be a chat id from find_chats')
+    if (!/^[0-9a-f-]{36}$/i.test(id)) throw invalid('chat must be a chat id from omni_chats')
     const limit = Math.min(50, Math.max(1, Number(args.limit) || 20))
-    const [chat, messages] = await Promise.all([call('GET', `/chats/${id}`), call('GET', `/chats/${id}/messages?limit=${limit}`)])
+    const [chat, list] = await Promise.all([call('GET', `/chats/${id}`), call('GET', `/chats/${id}/messages?limit=${limit}`)])
     if (!ok(chat)) throw invalid(`omni answered ${chat.status} for that chat`)
-    const items = (messages.data?.items ?? []).map(message => ({
+    const items = (list.data?.items ?? []).map(message => ({
       from: message.isFromMe ? 'you' : message.senderDisplayName ?? 'them', at: message.platformTimestamp ?? message.createdAt,
       text: String(message.textContent || message.transcription || (message.hasMedia ? `[${message.messageType ?? 'media'}]` : '')).slice(0, 500),
     })).sort((a, b) => (Date.parse(a.at) || 0) - (Date.parse(b.at) || 0))
-    return fitted({ status: 200, operation: 'Messages', data: { chat: { id, name: chat.data?.data?.name, channel: chat.data?.data?.channel }, items } })
-  })
+    return { chat: { id, name: chat.data?.data?.name, channel: chat.data?.data?.channel }, items }
+  }
+  // One documented GET, with its query given apart or in the path.
+  async function get(args = {}) {
+    const [bare, inline = ''] = String(args.path ?? '').trim().split('?')
+    if (!/^\/[A-Za-z0-9/_\-.~%:@]*$/.test(bare)) throw invalid('Not an API path')
+    if (!findOperation(await operations(), 'GET', bare)) throw invalid(`GET ${bare} is not an omni API operation`)
+    const query = new URLSearchParams(inline)
+    for (const [key, value] of Object.entries(args.query && typeof args.query === 'object' ? args.query : {})) if (value !== undefined && value !== null) query.set(key, typeof value === 'object' ? JSON.stringify(value) : String(value))
+    const qs = query.toString()
+    return call('GET', `${bare}${qs ? `?${qs}` : ''}`)
+  }
+
+  tool({
+    name: 'omni_chats',
+    description: 'Main Bot only. Chats and groups on omni, most recent first: on one channel or all, by name, or only unread ones. The user sees them as a list.',
+    parameters: {
+      channel: { type: 'string', description: 'Channel id or exact name; all channels when left out' },
+      search: { type: 'string', description: 'Part of a chat or group name' },
+      unread_only: { type: 'boolean', description: 'Only chats with unread messages' },
+      limit: { type: 'number', description: 'How many, 1-100 (default 20)' },
+    },
+  }, async args => fitted({ status: 200, operation: 'Chats', data: await chats(args) }))
+
+  tool({
+    name: 'omni_messages',
+    description: 'Main Bot only. The latest messages of one chat (id from omni_chats), oldest first. The user sees the chat as a live card.',
+    parameters: {
+      chat: { type: 'string', required: true, description: 'Chat id from omni_chats' },
+      limit: { type: 'number', description: 'How many messages, 1-50 (default 20)' },
+    },
+  }, async args => fitted({ status: 200, operation: 'Messages', data: await messages(args) }))
 
   tool({
     name: 'omni_connect',
@@ -347,14 +361,22 @@ export function install(rt) {
     },
   }))
 
-  rt.omniChannels = channels
-
-  // The browser's live reads: one documented GET operation per request.
-  rt.omniGet = async (path) => {
-    const clean = String(path ?? '').trim()
-    const [bare] = clean.split('?')
-    if (!/^\/[A-Za-z0-9/_\-.~%:@]*$/.test(bare)) throw invalid('Not an API path')
-    if (!findOperation(await operations(), 'GET', bare)) throw invalid(`GET ${bare} is not an omni API operation`)
-    return call('GET', clean)
+  // A canvas reads through the same tools Omni has, under the same names and arguments.
+  const READS = {
+    omni_channels: async () => ({ items: await channels() }),
+    omni_chats: chats,
+    omni_messages: messages,
+    omni_get: async (args) => {
+      const result = await get(args)
+      if (!ok(result)) throw invalid(result.data?.error?.message ?? `omni answered ${result.status}`)
+      return result.data
+    },
   }
+  rt.omniRead = async (name, args) => {
+    const read = Object.hasOwn(READS, name) ? READS[name] : undefined
+    if (read === undefined) throw invalid(`A canvas cannot read with ${name}`)
+    return read(args && typeof args === 'object' ? args : {})
+  }
+  // The browser's live reads: one documented GET operation per request.
+  rt.omniGet = path => get({ path })
 }

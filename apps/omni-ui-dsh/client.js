@@ -19437,7 +19437,8 @@ var ZH = {
   "Task finished": "任务完成",
   "Tasks": "任务",
   "Line {line} does not close its brackets or quotes: {text}": "第 {line} 行的括号或引号没有闭合：{text}",
-  "{count} chats": "{count} 个聊天"
+  "{count} chats": "{count} 个聊天",
+  "New conversation": "新对话"
 };
 var HOST_ERRORS = [
   [/^Model (.+) is not available\. Available: (.*)$/, "模型 $1 不可用。可用的：$2"],
@@ -19712,7 +19713,13 @@ init_dist2();
 init_v4();
 var QUERY_TOOL = "omni_get";
 var CHANNELS_TOOL = "omni_channels";
-var QUERY_TOOLS = [QUERY_TOOL, CHANNELS_TOOL];
+var READ_TOOLS = [
+  { name: CHANNELS_TOOL, description: 'Every channel with its live state: {items: [{id, name, channel, state ("connected", "connecting", "paused"…), profile, phone, active}]}.', inputSchema: { type: "object", properties: {} } },
+  { name: "omni_chats", description: "Chats and groups, most recent first: {items: [{id, name, type, channelId, unread, lastMessageAt, preview}], more}.", inputSchema: { type: "object", properties: { channel: { type: "string", description: "Channel id or exact name" }, search: { type: "string" }, unread_only: { type: "boolean" }, limit: { type: "number" } } } },
+  { name: "omni_messages", description: "A chat's latest messages, oldest first: {chat: {id, name, channel}, items: [{from, at, text}]}.", inputSchema: { type: "object", properties: { chat: { type: "string", description: "Chat id" }, limit: { type: "number" } }, required: ["chat"] } },
+  { name: QUERY_TOOL, description: "GET one documented omni API operation and return its JSON ({data} for one record, {items, meta} for lists).", inputSchema: { type: "object", properties: { path: { type: "string", description: "API path under /api/v2 with ids, e.g. /automations" }, query: { type: "object", description: "Query parameters, e.g. {limit: 20}" } }, required: ["path"] } }
+];
+var QUERY_TOOLS = READ_TOOLS.map((tool) => tool.name);
 var ActionExpression = external_exports.any();
 tagSchemaId(ActionExpression, "ActionExpression");
 var tone = external_exports.enum(["ok", "warn", "bad", "info", "muted"]);
@@ -19748,14 +19755,11 @@ function libraryOf({ createLibrary: createLibrary2, defineComponent: defineCompo
 }
 var PROMPT_OPTIONS = {
   preamble: "A canvas is an openui-lang program, passed to show_canvas: it renders as native, live UI in the chat.",
-  tools: [
-    { name: QUERY_TOOL, description: "GET one documented omni API operation and return its JSON ({data} for one record, {items, meta} for lists).", inputSchema: { type: "object", properties: { path: { type: "string", description: "API path under /api/v2 with ids and an optional ?query, e.g. /instances or /chats?limit=20" } }, required: ["path"] } },
-    { name: CHANNELS_TOOL, description: 'Every channel with its live state: {items: [{id, name, channel, state ("connected", "connecting", "paused"…), profile, phone, active}]}.', inputSchema: { type: "object", properties: {} } }
-  ],
+  tools: READ_TOOLS,
   bindings: true,
   additionalRules: [
-    `Query("${QUERY_TOOL}", {path: "/chats?limit=20"}, {items: []}, 15) reads omni live; the last argument refreshes it every N seconds. Lists come back as {items: [...]}, one record as {data: {...}}.`,
-    `For anything about connection state use Query("${CHANNELS_TOOL}", {}, {items: []}, 10): its items carry state; /instances items do not.`,
+    'A Query reads omni live with your own read tools, same names and arguments: Query("omni_chats", {channel: "sales", unread_only: true}, {items: []}, 20). The last argument refreshes it every N seconds.',
+    `Connection state comes from Query("${CHANNELS_TOOL}", {}, {items: []}, 10): its items carry state; /instances items do not.`,
     'Mutation() is not available. Changes are yours to make with omni_call; a Button asks you for one with Action([@ToAssistant("...")]).',
     "Channel, QrCode and Chat fetch and refresh their own data from an id: prefer them to rebuilding those views from a Query. A channel's live state is what Channel shows; /instances items carry no connection state.",
     "Use only fields you have seen in a real record (read one with omni_call first). Instances carry name, channel, isActive and profileName; whether one is connected comes from /instances/{id}/status, which Channel already shows.",
@@ -23355,14 +23359,7 @@ var checkProgram2 = (program) => {
   const refusal = checkProgram(program);
   return refusal === null ? null : t(refusal.text, refusal.params);
 };
-var readOmni = {
-  [CHANNELS_TOOL]: async () => call("omni-channels"),
-  [QUERY_TOOL]: async ({ path }) => {
-    const reply = await call("omni-get", { path });
-    if (!reply.ok) throw new Error(errorText(reply.data, reply.status));
-    return reply.data;
-  }
-};
+var readOmni = Object.fromEntries(QUERY_TOOLS.map((name) => [name, async (args) => call("omni-read", { tool: name, args })]));
 function Fallback({ program, reason, onAsk }) {
   return (0, import_react7.createElement)(
     "div",
@@ -33745,7 +33742,11 @@ function ContextMenu({ menu, roster, actions, leaving = false }) {
       bot && !isMainBot ? [t("Make Main Bot"), StarLineIcon, () => actions.setMain(bot.id, true)] : null,
       bot && isMainBot && mainCount > 1 ? [t("Remove Main Bot role"), StarLineIcon, () => actions.setMain(bot.id, false)] : null
     ],
-    [[t("Copy conversation ID"), CopyIcon, () => navigator.clipboard?.writeText(bot ? currentPart(bot) : menu.id)]],
+    [
+      // The Bot goes on in a fresh conversation; earlier parts stay readable.
+      bot ? [t("New conversation"), PlusIcon, () => actions.freshConversation(bot.id)] : null,
+      [t("Copy conversation ID"), CopyIcon, () => navigator.clipboard?.writeText(bot ? currentPart(bot) : menu.id)]
+    ],
     [
       isMainBot ? null : [t("Hide from sidebar"), HideIcon, () => actions.setFlags(menu.id, { hidden: true })],
       isMainBot ? null : [room2 ? t("Delete group") : t("Delete"), TrashIcon, () => bot ? actions.deleteBot(bot.id) : actions.deleteRoom(menu.id), true]
@@ -36813,6 +36814,7 @@ function apply(ctx) {
     wakeUpdate();
   };
   actions.repoStars = () => call("repo-stars");
+  actions.freshConversation = (botId) => after(call("bot-fresh", { id: botId }));
   actions.noteTurnTime = (sessionId, turn, key, time3) => {
     if (sessionId === void 0 || !Number.isFinite(turn) || !Number.isFinite(time3)) return;
     turnClock.set((state) => {

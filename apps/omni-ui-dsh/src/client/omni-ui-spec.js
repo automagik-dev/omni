@@ -8,11 +8,17 @@ import { z } from 'zod/v4'
 import { FENCE } from './canvas-text.js'
 
 export { FENCE }
-// The tools a canvas Query may name: a GET of any documented omni operation, and the
-// channels with their live state (which /instances does not carry).
+// The tools a canvas Query may name: Omni's own read tools, with the same names and
+// arguments, and omni_get for any other documented GET.
 export const QUERY_TOOL = 'omni_get'
 export const CHANNELS_TOOL = 'omni_channels'
-export const QUERY_TOOLS = [QUERY_TOOL, CHANNELS_TOOL]
+const READ_TOOLS = [
+  { name: CHANNELS_TOOL, description: 'Every channel with its live state: {items: [{id, name, channel, state ("connected", "connecting", "paused"…), profile, phone, active}]}.', inputSchema: { type: 'object', properties: {} } },
+  { name: 'omni_chats', description: 'Chats and groups, most recent first: {items: [{id, name, type, channelId, unread, lastMessageAt, preview}], more}.', inputSchema: { type: 'object', properties: { channel: { type: 'string', description: 'Channel id or exact name' }, search: { type: 'string' }, unread_only: { type: 'boolean' }, limit: { type: 'number' } } } },
+  { name: 'omni_messages', description: 'A chat\'s latest messages, oldest first: {chat: {id, name, channel}, items: [{from, at, text}]}.', inputSchema: { type: 'object', properties: { chat: { type: 'string', description: 'Chat id' }, limit: { type: 'number' } }, required: ['chat'] } },
+  { name: QUERY_TOOL, description: 'GET one documented omni API operation and return its JSON ({data} for one record, {items, meta} for lists).', inputSchema: { type: 'object', properties: { path: { type: 'string', description: 'API path under /api/v2 with ids, e.g. /automations' }, query: { type: 'object', description: 'Query parameters, e.g. {limit: 20}' } }, required: ['path'] } },
+]
+export const QUERY_TOOLS = READ_TOOLS.map(tool => tool.name)
 
 // Tagged so the generated prompt documents Action([...]) for Button.
 export const ActionExpression = z.any()
@@ -57,14 +63,11 @@ export function libraryOf({ createLibrary, defineComponent, reactive }, render =
 
 export const PROMPT_OPTIONS = {
   preamble: 'A canvas is an openui-lang program, passed to show_canvas: it renders as native, live UI in the chat.',
-  tools: [
-    { name: QUERY_TOOL, description: 'GET one documented omni API operation and return its JSON ({data} for one record, {items, meta} for lists).', inputSchema: { type: 'object', properties: { path: { type: 'string', description: 'API path under /api/v2 with ids and an optional ?query, e.g. /instances or /chats?limit=20' } }, required: ['path'] } },
-    { name: CHANNELS_TOOL, description: 'Every channel with its live state: {items: [{id, name, channel, state ("connected", "connecting", "paused"…), profile, phone, active}]}.', inputSchema: { type: 'object', properties: {} } },
-  ],
+  tools: READ_TOOLS,
   bindings: true,
   additionalRules: [
-    `Query("${QUERY_TOOL}", {path: "/chats?limit=20"}, {items: []}, 15) reads omni live; the last argument refreshes it every N seconds. Lists come back as {items: [...]}, one record as {data: {...}}.`,
-    `For anything about connection state use Query("${CHANNELS_TOOL}", {}, {items: []}, 10): its items carry state; /instances items do not.`,
+    'A Query reads omni live with your own read tools, same names and arguments: Query("omni_chats", {channel: "sales", unread_only: true}, {items: []}, 20). The last argument refreshes it every N seconds.',
+    `Connection state comes from Query("${CHANNELS_TOOL}", {}, {items: []}, 10): its items carry state; /instances items do not.`,
     'Mutation() is not available. Changes are yours to make with omni_call; a Button asks you for one with Action([@ToAssistant("...")]).',
     'Channel, QrCode and Chat fetch and refresh their own data from an id: prefer them to rebuilding those views from a Query. A channel\'s live state is what Channel shows; /instances items carry no connection state.',
     'Use only fields you have seen in a real record (read one with omni_call first). Instances carry name, channel, isActive and profileName; whether one is connected comes from /instances/{id}/status, which Channel already shows.',

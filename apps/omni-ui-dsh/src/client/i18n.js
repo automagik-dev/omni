@@ -1182,6 +1182,7 @@ const ZH = {
   'Tasks': '任务',
   'Line {line} does not close its brackets or quotes: {text}': '第 {line} 行的括号或引号没有闭合：{text}',
   '{count} chats': '{count} 个聊天',
+  'New conversation': '新对话',
 }
 
 // Host errors stay English, since Bots read them too; they are translated where the

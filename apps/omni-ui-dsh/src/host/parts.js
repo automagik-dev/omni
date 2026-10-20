@@ -553,6 +553,7 @@ export function install(rt) {
   // together without the model carries the last note the model wrote.
   function noteText(segment) {
     if (segment?.fallback === undefined) return segment?.note
+    if (segment.fallback === 'fresh') return '(No note: the user started a fresh conversation, so nothing of this part was carried over.)'
     if (segment.fallback === 'whole') {
       const head = '(No new note: every message of the part was carried over word for word.'
       return segment.note === undefined ? `${head})` : `${head} Below is the note written at the end of part ${segment.noteFrom}, carried over unchanged.)\n\n${segment.note}`
@@ -564,6 +565,18 @@ export function install(rt) {
     return segment.note === undefined
       ? `${head} There was no earlier note to carry over. Go by the messages below, and look up anything else.)`
       : `${head} It is the note written at the end of part ${segment.noteFrom}, carried over unchanged; anything newer is in the messages below, and read_own_chat finds the rest.)\n\n${segment.note}`
+  }
+
+  // A fresh conversation the user asked for: no record of the last one comes along, so
+  // nothing it got wrong does either.
+  function freshPackage({ room, number }) {
+    return [
+      `[Handoff · part ${number}]`,
+      `The user started a fresh conversation (part ${number}) in ${room ? `the group chat "${room.name}"` : 'your own chat'}. This message is not from the user.`,
+      'Nothing from earlier parts is carried over, on purpose: start from your instructions and your tools as they are now, not from what an earlier conversation concluded about them.',
+      'Earlier parts stay saved; read_own_chat finds them if the user refers to something said there.',
+      'Nothing needs an answer now; wait for the next message.',
+    ].join('\n')
   }
 
   function handoffPackage({ room, segment, lines, number, resume, overflow, failed, bare, folder }) {
@@ -672,10 +685,12 @@ export function install(rt) {
 
   // `hard`: past the hard line or the window, the part moves on even without a note
   // from the model. `folder`: the part moves on because its working folder changed.
-  function startSwitch(agent, { resume = false, carry = [], info, joined, overflow = false, failed, bare = false, folder = false, hard = overflow || folder } = {}) {
+  // `fresh`: the user asked for a new conversation, so nothing of this one is carried, not
+  // even a note: earlier parts stay readable through read_own_chat.
+  function startSwitch(agent, { resume = false, carry = [], info, joined, overflow = false, failed, bare = false, folder = false, fresh = false, hard = overflow || folder || fresh } = {}) {
     const place = placeOf(agent.id)
-    if (place === undefined || switches.has(agent.id) || readOnly()) return
-    const job = { ...place, carry: [...carry], info, joined, resume, overflow, failed, bare, folder, hard, since: Date.now() }
+    if (place === undefined || switches.has(agent.id) || readOnly()) return false
+    const job = { ...place, carry: [...carry], info, joined, resume, overflow, failed, bare: bare || fresh, folder, fresh, hard, since: Date.now() }
     switches.set(agent.id, job)
     void runSwitch(agent, job)
       .catch(error => rt.warn('ds-bot: %s did not move on to a fresh part: %s', rt.botOf(job.botId)?.name ?? agent.id, error))
@@ -701,6 +716,7 @@ export function install(rt) {
         }
         await forward(job, back).catch(error => rt.warn('ds-bot: input for %s was not handed on: %s', agent.id, error))
       })
+    return true
   }
 
   async function runSwitch(agent, job) {
@@ -752,7 +768,7 @@ export function install(rt) {
     const whole = carried?.whole === true && !session.deriveMessages().some(message => message.role === 'tool')
     let written
     let failure
-    if (!job.overflow && job.failed === undefined && !whole) {
+    if (!job.overflow && !job.fresh && job.failed === undefined && !whole) {
       try {
         written = await writeNote(agent, AbortSignal.any([signal, AbortSignal.timeout(NOTE_TIMEOUT_MS)]), { folder: job.folder })
       } catch (error) {
@@ -773,7 +789,8 @@ export function install(rt) {
     if (failure !== undefined) rt.warn('ds-bot: handoff note for %s failed past the hard line; moving on with the earlier note: %s', bot.name, failure)
     const previous = parts.at(-2)
     const noted = written !== undefined ? { note: written.note }
-      : { fallback: whole ? 'whole' : job.failed !== undefined ? 'failure' : job.overflow ? 'overflow' : 'failed', ...(previous?.note ? { note: previous.note, noteFrom: previous.noteFrom ?? previous.number } : {}) }
+      : job.fresh ? { fallback: 'fresh' }
+        : { fallback: whole ? 'whole' : job.failed !== undefined ? 'failure' : job.overflow ? 'overflow' : 'failed', ...(previous?.note ? { note: previous.note, noteFrom: previous.noteFrom ?? previous.number } : {}) }
     carried ??= await readLines()
     if (signal.aborted) throw signal.reason
     const dir = rt.workDirOf(job)
@@ -826,7 +843,7 @@ export function install(rt) {
       folderRetry.set(freshId, Date.now() + FOLDER_RETRY_MS)
       rt.warn('ds-bot: the fresh part of %s did not start in %s; it works in %s', bot.name, intended, cwd)
     }
-    const text = handoffPackage({ room, segment, lines: carried, number: number + 1, resume, overflow: job.overflow, failed: job.failed, bare: job.bare, folder })
+    const text = job.fresh ? freshPackage({ room, number: number + 1 }) : handoffPackage({ room, segment, lines: carried, number: number + 1, resume, overflow: job.overflow, failed: job.failed, bare: job.bare, folder })
     freshParts.set(freshId, estimateTokens(text))
     fresh.followup(createUserMessage({ content: [{ type: 'text', text }], source: handoffSource(job, resume) }))
     await ctx.sessions.flush(fresh.session)
@@ -1084,5 +1101,16 @@ export function install(rt) {
     }
   }
 
-  Object.assign(rt, { clock, partsOf, historyEntry, partLines, noteText, earlierPage, followFolder, switchJobs: () => switches.values() })
+  // The user's "New conversation" for a Bot's own chat: once the Bot is idle, it goes on in
+  // a fresh part.
+  async function startFresh(botId) {
+    const bot = rt.botOf(botId)
+    if (bot === undefined) throw Object.assign(new Error('Unknown Bot'), { code: 'bot/not-found' })
+    if (readOnly()) throw Object.assign(new Error(rt.readOnly()), { code: 'bot/read-only' })
+    const agent = await rt.resolveAgent(rt.chatOf(botId))
+    if (!startSwitch(agent, { fresh: true })) throw Object.assign(new Error(`${bot.name} is already moving to a new conversation.`), { code: 'bot/refused' })
+    return { id: botId }
+  }
+
+  Object.assign(rt, { clock, partsOf, historyEntry, partLines, noteText, earlierPage, followFolder, startFresh, switchJobs: () => switches.values() })
 }

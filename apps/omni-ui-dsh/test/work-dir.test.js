@@ -219,6 +219,22 @@ test('an idle Bot\'s own chat moves to its new folder at once, and back', async 
   assert.match(handoffOf(agentOf('s2')), new RegExp(`because your working folder changed to ${escapeRegExp(team)}\\.`))
 })
 
+test('New conversation moves a Bot on to a fresh part that carries nothing of the last one', async (t) => {
+  const { call, agentOf, state, stop } = await start()
+  t.after(stop)
+  assert.equal((await call('bot-fresh', { id: 'b' })).ok, true)
+  await until(() => state().bots.b.sessionId === 's1')
+  await until(() => handoffOf(agentOf('s1')) !== undefined)
+  // No note was asked of the model and no message came along; the earlier part stays listed.
+  assert.deepEqual(state().bots.b.segments.map(segment => [segment.sessionId, segment.fallback, segment.note]), [['b', 'fresh', undefined]])
+  const text = handoffOf(agentOf('s1'))
+  assert.match(text, /^\[Handoff · part 2\]\nThe user started a fresh conversation \(part 2\) in your own chat\./)
+  assert.match(text, /not from what an earlier conversation concluded about them/)
+  assert.doesNotMatch(text, /## Handoff note|## Latest messages/)
+  assert.equal(agentOf('b').calls.length, 0, 'the old part was not asked for a note')
+  assert.equal((await call('bot-fresh', { id: 'nobody' })).ok, false)
+})
+
 test('a running Bot moves at its next step and carries that step\'s input along', async (t) => {
   const { requests, services } = approvalServices('allowed-once')
   const { tool, preStep, agentOf, created, project, state, stop } = await start({ services })

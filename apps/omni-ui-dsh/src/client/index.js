@@ -663,6 +663,7 @@ export function apply(ctx) {
     wakeUpdate()
   }
   actions.repoStars = () => call('repo-stars')
+  actions.freshConversation = botId => after(call('bot-fresh', { id: botId }))
   actions.noteTurnTime = (sessionId, turn, key, time) => {
     if (sessionId === undefined || !Number.isFinite(turn) || !Number.isFinite(time)) return
     turnClock.set((state) => {

@@ -50,7 +50,7 @@ test('with an omni to operate, the Main Bot alone learns the API tools, automati
   const { ctx, prompt } = start({ omni: { url: 'https://omni.example.com' } })
   t.after(() => ctx.dispose())
   const main = prompt('main')
-  for (const part of ['## You operate Omni for the user', 'omni_endpoints', 'omni_call', '## Automations', 'save_automation', 'show_canvas', 'start_task', 'You have no shell', 'QrCode(channelId: string)', 'Query("omni_get"']) assert.ok(main.includes(part), part)
+  for (const part of ['## You operate Omni for the user', 'omni_endpoints', 'omni_call', '## Automations', 'save_automation', 'show_canvas', 'start_task', 'You have no shell', 'QrCode(channelId: string)', 'Query("omni_chats"', 'omni_get(path: string']) assert.ok(main.includes(part), part)
   // The canvas language is generated from the components the client renders, without the
   // OpenUI features a canvas does not have.
   assert.ok(!/Mutation\(\)(?! is not available)/.test(main))

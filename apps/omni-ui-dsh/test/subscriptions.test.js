@@ -207,6 +207,13 @@ test('Omni finds any omni operation and calls it; other Bots cannot', async (t) 
   // The browser reads documented GET operations only.
   assert.equal((await call('omni-get', { path: '/instances/wa-1/qr' })).ok, true)
   assert.equal((await call('omni-get', { path: '/instances/wa-1/connect' })).ok, false)
+  // A canvas Query reads through Omni's own tools, by name, with the same arguments.
+  const read = await call('omni-read', { tool: 'omni_chats', args: { channel: 'Sales', limit: 2 } })
+  assert.deepEqual(read.value.items.map(chat => chat.name), ['Grupo Obras', 'Marina Lopes'])
+  assert.equal(requests.at(-1).path, '/chats?sort=activity&limit=2&instanceId=wa-1')
+  assert.equal((await call('omni-read', { tool: 'omni_get', args: { path: '/instances', query: { limit: 3 } } })).value.items[0].name, 'Sales')
+  assert.equal(requests.at(-1).path, '/instances?limit=3')
+  assert.equal((await call('omni-read', { tool: 'omni_connect', args: { channel: 'Sales' } })).ok, false)
 })
 
 test('Omni shows only canvases that pass, lists channels with their state, and has no shell', async (t) => {
