@@ -90,6 +90,8 @@ export function dshEnv({ base = process.env, home, electronAsNode = false }) {
     ...base,
     DSH_HOME: join(home, 'dsh'),
     OMNI_HOME: home,
+    // Signs in to an Omni as the desktop app (the Better Auth device-flow client id).
+    OMNI_CLIENT_ID: 'omni-desktop',
     DO_NOT_TRACK: '1',
     ...(electronAsNode ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
   }

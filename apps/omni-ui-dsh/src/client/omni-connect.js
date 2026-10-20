@@ -41,7 +41,7 @@ export function ConnectOmni() {
         }
         if (reply.status !== 'pending') {
           setPairing(null)
-          setProblem(reply.status === 'cancelled' ? t('The pairing was cancelled.') : t('The code expired. Start again for a new one.'))
+          setProblem(reply.status === 'denied' ? t('The sign-in was denied.') : reply.status === 'cancelled' ? t('The pairing was cancelled.') : t('The code expired. Start again for a new one.'))
           return
         }
       } catch (error) {
@@ -80,24 +80,27 @@ export function ConnectOmni() {
   if (pairing) {
     return h('section', { className: 'ox-card', 'aria-live': 'polite' },
       h('div', { className: 'ox-steps' },
-        h('h2', null, t('Send this code on WhatsApp')),
-        h('p', { className: 'ox-muted' }, t('From the WhatsApp of {to}, send it to yourself ("Message yourself"). The link opens that chat with the code typed.', { to: pairing.sendTo })),
+        h('h2', null, t('Approve this device')),
+        h('p', { className: 'ox-muted' }, pairing.waLink
+          ? t('Scan the QR with your phone: it opens your WhatsApp chat with yourself with the code typed. Send it, and this page goes live.')
+          : t('Open the approval page on your phone or here, and approve with Face ID, Touch ID, your fingerprint or a code.')),
         h('div', { className: 'ox-code', 'aria-label': t('Pairing code') }, pairing.code),
         h('div', { className: 'ox-row' },
-          h('a', { className: 'oc-primary', href: pairing.waLink, target: '_blank', rel: 'noreferrer' }, t('Open WhatsApp')),
+          pairing.waLink ? h('a', { className: 'oc-primary', href: pairing.waLink, target: '_blank', rel: 'noreferrer' }, t('Open WhatsApp')) : null,
+          pairing.approveUrl ? h('a', { className: pairing.waLink ? 'oc-ghost' : 'oc-primary', href: pairing.approveUrl, target: '_blank', rel: 'noreferrer' }, t('Approve with Face ID or fingerprint')) : null,
           h('button', { type: 'button', className: 'oc-ghost', onClick: cancel }, t('Cancel'))),
         h('span', { className: 'ox-wait' }, h('span', { className: 'oc-spinner', 'aria-hidden': true }), t('Waiting for the code to arrive at {origin}…', { origin: pairing.origin })),
         problem ? h('p', { className: 'ox-problem', role: 'alert' }, problem) : null),
       h('div', { className: 'ox-qr' },
-        h(QrSvg, { text: pairing.waLink, size: 168 }),
-        h('span', { className: 'ox-muted' }, t('Or scan with the phone camera'))))
+        h(QrSvg, { text: pairing.waLink ?? pairing.approveUrl, size: 168 }),
+        h('span', { className: 'ox-muted' }, pairing.waLink ? t('Scan to send it on WhatsApp') : t('Scan to approve on your phone'))))
   }
 
   return h('form', { className: 'ox-card ox-start', onSubmit: start },
     h('span', { className: 'ox-mark', 'aria-hidden': true }, h(OmniMark, { size: 34 })),
     h('div', { className: 'ox-steps' },
       h('h2', null, t('Connect your Omni')),
-      h('p', { className: 'ox-muted' }, t('Type its address. Omni gives you a code to send from your WhatsApp, and this page goes live. No keys to copy.')),
+      h('p', { className: 'ox-muted' }, t('Type its address, then approve this device from your phone: on WhatsApp, or with Face ID or your fingerprint. No keys to copy.')),
       h('div', { className: 'ox-row' },
         h('input', {
           className: 'ox-input', type: 'text', inputMode: 'url', autoComplete: 'url', spellCheck: false, value: address,

@@ -18431,16 +18431,21 @@ var ZH = {
   "A {app} window opens. Approve Omni there and come back.": "会打开 {app} 窗口。在那里允许 Omni，然后回到这里。",
   "Add a channel": "添加渠道",
   "Add channel": "添加渠道",
+  "The sign-in was denied.": "登录请求被拒绝。",
+  "Approve this device": "批准此设备",
+  "Scan the QR with your phone: it opens your WhatsApp chat with yourself with the code typed. Send it, and this page goes live.": "用手机扫描二维码：它会打开你与自己的 WhatsApp 聊天并填好验证码。发送后，此页面即接入实时数据。",
+  "Open the approval page on your phone or here, and approve with Face ID, Touch ID, your fingerprint or a code.": "在手机或此处打开批准页面，用面容 ID、触控 ID、指纹或验证码批准。",
+  "Approve with Face ID or fingerprint": "用面容 ID 或指纹批准",
+  "Scan to send it on WhatsApp": "扫码在 WhatsApp 上发送",
+  "Scan to approve on your phone": "扫码在手机上批准",
+  "Type its address, then approve this device from your phone: on WhatsApp, or with Face ID or your fingerprint. No keys to copy.": "输入它的地址，然后用手机批准此设备：通过 WhatsApp，或用面容 ID 或指纹。无需复制任何密钥。",
   "The pairing was cancelled.": "配对已取消。",
   "The code expired. Start again for a new one.": "验证码已过期，请重新开始获取新的验证码。",
   "Connected to {origin}": "已连接到 {origin}",
-  "Send this code on WhatsApp": "在 WhatsApp 上发送此验证码",
-  'From the WhatsApp of {to}, send it to yourself ("Message yourself"). The link opens that chat with the code typed.': "用 {to} 的 WhatsApp 发给自己（“给自己发消息”）。链接会打开该聊天并填好验证码。",
   "Open WhatsApp": "打开 WhatsApp",
   "Waiting for the code to arrive at {origin}…": "正在等待验证码送达 {origin}…",
   "Or scan with the phone camera": "或用手机相机扫描",
   "Connect your Omni": "连接你的 Omni",
-  "Type its address. Omni gives you a code to send from your WhatsApp, and this page goes live. No keys to copy.": "输入它的地址。Omni 会给你一个验证码，用你的 WhatsApp 发送后，此页面即接入实时数据。无需复制任何密钥。",
   "Omni address": "Omni 地址",
   "Get a code": "获取验证码",
   "All channels": "全部渠道",
@@ -22212,7 +22217,7 @@ function ConnectOmni() {
         }
         if (reply.status !== "pending") {
           setPairing(null);
-          setProblem(reply.status === "cancelled" ? t("The pairing was cancelled.") : t("The code expired. Start again for a new one."));
+          setProblem(reply.status === "denied" ? t("The sign-in was denied.") : reply.status === "cancelled" ? t("The pairing was cancelled.") : t("The code expired. Start again for a new one."));
           return;
         }
       } catch (error2) {
@@ -22256,13 +22261,14 @@ function ConnectOmni() {
       (0, import_react5.createElement)(
         "div",
         { className: "ox-steps" },
-        (0, import_react5.createElement)("h2", null, t("Send this code on WhatsApp")),
-        (0, import_react5.createElement)("p", { className: "ox-muted" }, t('From the WhatsApp of {to}, send it to yourself ("Message yourself"). The link opens that chat with the code typed.', { to: pairing.sendTo })),
+        (0, import_react5.createElement)("h2", null, t("Approve this device")),
+        (0, import_react5.createElement)("p", { className: "ox-muted" }, pairing.waLink ? t("Scan the QR with your phone: it opens your WhatsApp chat with yourself with the code typed. Send it, and this page goes live.") : t("Open the approval page on your phone or here, and approve with Face ID, Touch ID, your fingerprint or a code.")),
         (0, import_react5.createElement)("div", { className: "ox-code", "aria-label": t("Pairing code") }, pairing.code),
         (0, import_react5.createElement)(
           "div",
           { className: "ox-row" },
-          (0, import_react5.createElement)("a", { className: "oc-primary", href: pairing.waLink, target: "_blank", rel: "noreferrer" }, t("Open WhatsApp")),
+          pairing.waLink ? (0, import_react5.createElement)("a", { className: "oc-primary", href: pairing.waLink, target: "_blank", rel: "noreferrer" }, t("Open WhatsApp")) : null,
+          pairing.approveUrl ? (0, import_react5.createElement)("a", { className: pairing.waLink ? "oc-ghost" : "oc-primary", href: pairing.approveUrl, target: "_blank", rel: "noreferrer" }, t("Approve with Face ID or fingerprint")) : null,
           (0, import_react5.createElement)("button", { type: "button", className: "oc-ghost", onClick: cancel }, t("Cancel"))
         ),
         (0, import_react5.createElement)("span", { className: "ox-wait" }, (0, import_react5.createElement)("span", { className: "oc-spinner", "aria-hidden": true }), t("Waiting for the code to arrive at {origin}…", { origin: pairing.origin })),
@@ -22271,8 +22277,8 @@ function ConnectOmni() {
       (0, import_react5.createElement)(
         "div",
         { className: "ox-qr" },
-        (0, import_react5.createElement)(QrSvg, { text: pairing.waLink, size: 168 }),
-        (0, import_react5.createElement)("span", { className: "ox-muted" }, t("Or scan with the phone camera"))
+        (0, import_react5.createElement)(QrSvg, { text: pairing.waLink ?? pairing.approveUrl, size: 168 }),
+        (0, import_react5.createElement)("span", { className: "ox-muted" }, pairing.waLink ? t("Scan to send it on WhatsApp") : t("Scan to approve on your phone"))
       )
     );
   }
@@ -22284,7 +22290,7 @@ function ConnectOmni() {
       "div",
       { className: "ox-steps" },
       (0, import_react5.createElement)("h2", null, t("Connect your Omni")),
-      (0, import_react5.createElement)("p", { className: "ox-muted" }, t("Type its address. Omni gives you a code to send from your WhatsApp, and this page goes live. No keys to copy.")),
+      (0, import_react5.createElement)("p", { className: "ox-muted" }, t("Type its address, then approve this device from your phone: on WhatsApp, or with Face ID or your fingerprint. No keys to copy.")),
       (0, import_react5.createElement)(
         "div",
         { className: "ox-row" },

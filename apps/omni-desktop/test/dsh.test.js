@@ -14,6 +14,7 @@ test('the app keeps everything in one folder under ~/.omni, apart from a dsh you
   assert.equal(env.OMNI_HOME, '/a/desktop')
   assert.equal(env.ELECTRON_RUN_AS_NODE, '1')
   assert.equal(env.DO_NOT_TRACK, '1')
+  assert.equal(env.OMNI_CLIENT_ID, 'omni-desktop')
   assert.equal(env.PATH, '/bin')
   assert.equal(dshEnv({ base: {}, home: '/a' }).ELECTRON_RUN_AS_NODE, undefined)
 })

@@ -1,11 +1,13 @@
-// The Omni this host is linked to, and linking one by code. The link is a file of Omni's
-// own, omni.json in the plugin's home (0600), holding the API URL and the key a pairing
-// minted; nothing goes into DSH's credential store or profile. Pairing asks the Omni at a
-// URL for a code (POST /api/v2/pair/start), the person sends that code over WhatsApp to
-// the number it names, and the next poll returns the key. The poll token stays on this
-// host; the browser sees the code, where to send it, and the outcome.
+// The Omni this host is linked to, and signing in to one from this device. The link is a
+// file of Omni's own, omni.json in the plugin's home (0600), holding the API URL and the
+// device's Omni key; nothing goes into DSH's credential store or profile. Signing in is
+// the Omni's Better Auth device flow (RFC 8628): the browser shows the code as a QR that
+// opens the owner's WhatsApp chat with themselves with the code typed, plus a link to the
+// approval page; once the owner approves, the device token Omni grants once becomes this
+// device's key. The device token stays on this host; the browser sees the code, the QR
+// link, the approval link and the outcome.
 //
-// Before a pairing, a profile may still name an Omni the older way (config.omni.url and
+// Before a sign-in, a profile may still name an Omni the older way (config.omni.url and
 // the OMNI_API_KEY credential); omni.js reads that only when no link file exists.
 import { readFileSync } from 'node:fs'
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises'
@@ -15,6 +17,9 @@ import { join } from 'node:path'
 export const LINK_FILE = 'omni.json'
 const TIMEOUT_MS = 10_000
 const POLL_TIMEOUT_MS = 30_000
+const DEVICE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code'
+// Which Omni client this is: the desktop app sets OMNI_CLIENT_ID=omni-desktop for its dsh.
+const CLIENT_ID = process.env.OMNI_CLIENT_ID === 'omni-desktop' ? 'omni-desktop' : 'omni-dsh'
 const DEVICE_NAME_MAX = 80
 
 const invalid = message => Object.assign(new Error(message), { code: 'bot/invalid' })
@@ -64,15 +69,16 @@ export function install(rt) {
     await rename(temp, path)
   }
 
-  async function omniFetch(url, method, route, { body, token, timeoutMs = TIMEOUT_MS } = {}) {
+  async function omniFetch(url, method, path, { body, bearer, timeoutMs = TIMEOUT_MS } = {}) {
     let response
     try {
-      response = await fetch(`${url}/api/v2${route}`, {
+      response = await fetch(`${url}${path}`, {
         method,
         headers: {
           accept: 'application/json',
+          'x-omni-client': CLIENT_ID,
           ...(body === undefined ? {} : { 'content-type': 'application/json' }),
-          ...(token ? { 'x-pairing-token': token } : {}),
+          ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
         signal: AbortSignal.timeout(timeoutMs),
@@ -81,7 +87,7 @@ export function install(rt) {
       throw refused(`Could not reach Omni at ${url}`)
     }
     const reply = await response.json().catch(() => null)
-    return { status: response.status, data: reply?.data, error: reply?.error }
+    return { status: response.status, json: reply, data: reply?.data }
   }
 
   const publicPairing = () => pairing && {
@@ -89,71 +95,99 @@ export function install(rt) {
     code: pairing.code,
     sendTo: pairing.sendTo,
     waLink: pairing.waLink,
+    approveUrl: pairing.approveUrl,
     expiresAt: pairing.expiresAt,
     pollIntervalMs: pairing.pollIntervalMs,
   }
 
+  // Signing in is Omni's Better Auth device flow (RFC 8628): a device code, approved by the
+  // owner by sending the user code to themselves on WhatsApp or on the approval page
+  // (Face ID, Touch ID, a fingerprint, or a code), then a one-time token this host trades
+  // for the device's Omni key.
   async function start(body) {
     const url = cleanOmniUrl(body?.url)
     if (!url) throw invalid('Give the address of the Omni to connect to, like omni.example.com')
     const deviceName = String(body?.deviceName ?? '').trim().slice(0, DEVICE_NAME_MAX) || `Omni UI on ${hostname()}`.slice(0, DEVICE_NAME_MAX)
-    if (pairing) await cancel().catch(() => {})
-    const reply = await omniFetch(url, 'POST', '/pair/start', { body: { deviceName } })
-    if (reply.status === 404) throw refused(`${new URL(url).host} does not offer pairing by code. Ask its owner to turn it on, or connect with a key.`)
-    if (reply.status === 429) throw refused('Too many pairing attempts; wait a few minutes and try again.')
-    if (reply.status === 503) throw refused(`${new URL(url).host} cannot take pairing codes right now (its WhatsApp is not connected).`)
-    if (reply.status !== 200 || !reply.data?.pairingId) throw refused(`Omni answered ${reply.status} to the pairing request`)
-    pairing = { url, ...reply.data, startedAt: Date.now() }
+    pairing = null
+    const host = new URL(url).host
+    const status = await omniFetch(url, 'GET', '/api/v2/login/status')
+    if (status.status === 404) throw refused(`${host} does not offer sign-in from devices. Ask its owner to turn it on, or connect with a key.`)
+    if (status.status !== 200) throw refused(`Omni answered ${status.status} at ${host}`)
+    if (!status.data?.claimed) throw refused(`${host} has no owner yet. Claim it first with the link in its server log.`)
+    const code = await omniFetch(url, 'POST', '/api/auth/device/code', { body: { client_id: CLIENT_ID } })
+    if (code.status === 429) throw refused('Too many sign-in attempts; wait a minute and try again.')
+    if (code.status !== 200 || !code.json?.device_code) throw refused(`Omni answered ${code.status} to the sign-in request`)
+    const userCode = String(code.json.user_code)
+    const shown = userCode.length === 8 ? `${userCode.slice(0, 4)}-${userCode.slice(4)}` : userCode
+    const whatsapp = typeof status.data.whatsapp === 'string' ? status.data.whatsapp.replace(/[^\d]/g, '') : ''
+    pairing = {
+      url,
+      deviceName,
+      deviceCode: code.json.device_code,
+      code: shown,
+      sendTo: whatsapp ? `+${whatsapp}` : null,
+      waLink: whatsapp ? `https://wa.me/${whatsapp}?text=${encodeURIComponent(`Omni ${shown}`)}` : null,
+      approveUrl: code.json.verification_uri_complete ?? null,
+      expiresAt: new Date(Date.now() + Number(code.json.expires_in ?? 600) * 1000).toISOString(),
+      pollIntervalMs: Math.max(2000, Number(code.json.interval ?? 2) * 1000),
+      accessToken: null,
+    }
     return { pairing: publicPairing() }
   }
 
-  // One poll at a time per host, whoever asks (two windows poll the same pairing): the
-  // poll that finds it approved is the only one Omni ever answers with the key.
+  // One poll at a time per host, whoever asks (two windows poll the same sign-in): the
+  // device token Omni grants once is held here until it has become the device's key.
   let polling = null
   function poll() {
     polling ??= pollOnce().finally(() => { polling = null })
     return polling
   }
 
+  async function exchange(current) {
+    const reply = await omniFetch(current.url, 'POST', '/api/v2/login/device-key', { body: { deviceName: current.deviceName }, bearer: current.accessToken, timeoutMs: POLL_TIMEOUT_MS })
+    if (reply.status !== 200 || !reply.data?.apiKey) return null
+    const link = {
+      url: cleanOmniUrl(reply.data.apiUrl) ?? current.url,
+      key: reply.data.apiKey,
+      keyId: reply.data.keyId ?? null,
+      scopes: reply.data.scopes ?? [],
+      keyExpiresAt: reply.data.keyExpiresAt ?? null,
+      pairedAt: new Date().toISOString(),
+    }
+    await saveLink(link)
+    rt.syncOmniEvents?.()
+    return link
+  }
+
   async function pollOnce() {
     if (!pairing) return { status: 'idle' }
     const current = pairing
-    // Minting the key happens inside this request; give it longer than other calls.
-    const reply = await omniFetch(current.url, 'GET', `/pair/${current.pairingId}`, { token: current.pollToken, timeoutMs: POLL_TIMEOUT_MS })
-    const { status, apiKey } = reply.status === 200 ? reply.data ?? {} : {}
-    // A key is saved whatever happened meanwhile (a cancel, a new start): Omni hands it out once.
-    if (status === 'approved' && apiKey) {
-      if (pairing === current) pairing = null
-      const link = {
-        url: cleanOmniUrl(reply.data.apiUrl) ?? current.url,
-        key: apiKey,
-        keyId: reply.data.keyId ?? null,
-        scopes: reply.data.scopes ?? [],
-        keyExpiresAt: reply.data.keyExpiresAt ?? null,
-        pairedAt: new Date().toISOString(),
+    if (!current.accessToken) {
+      const reply = await omniFetch(current.url, 'POST', '/api/auth/device/token', {
+        body: { grant_type: DEVICE_GRANT, device_code: current.deviceCode, client_id: CLIENT_ID },
+      })
+      if (reply.status === 200 && reply.json?.access_token) current.accessToken = reply.json.access_token
+      else {
+        const error = reply.json?.error
+        if (error === 'authorization_pending' || error === 'slow_down' || reply.status >= 500 || reply.status === 429) {
+          return pairing === current ? { status: 'pending', pairing: publicPairing() } : { status: 'idle' }
+        }
+        if (pairing === current) pairing = null
+        return { status: error === 'access_denied' ? 'denied' : 'expired' }
       }
-      await saveLink(link)
-      rt.syncOmniEvents?.()
-      return { status: 'paired', origin: new URL(link.url).host }
     }
-    if (pairing !== current) return { status: 'idle' }
-    if (reply.status === 404) {
-      pairing = null
-      return { status: 'expired' }
-    }
-    if (reply.status !== 200) return { status: 'pending', pairing: publicPairing() }
-    if (status === 'pending') return { status: 'pending', pairing: publicPairing() }
-    // expired, cancelled, or consumed by a poll that did not reach us: start again.
-    pairing = null
-    return { status: status === 'cancelled' ? 'cancelled' : 'expired' }
+    // Approved: the token becomes the key, even if the card was closed meanwhile.
+    const link = await exchange(current)
+    if (!link) return { status: 'pending', pairing: publicPairing() }
+    if (pairing === current) pairing = null
+    return { status: 'paired', origin: new URL(link.url).host }
   }
 
   async function cancel() {
-    const current = pairing
+    // Nothing to tell Omni: an unapproved device code just expires.
+    const had = pairing !== null
     pairing = null
-    if (!current) return { status: 'idle' }
-    await omniFetch(current.url, 'DELETE', `/pair/${current.pairingId}`, { token: current.pollToken }).catch(() => null)
-    return { status: 'cancelled' }
+    return { status: had ? 'cancelled' : 'idle' }
   }
 
   async function disconnect() {
