@@ -49,6 +49,10 @@ export function fakeContext({ entries = {}, credentials = {}, records = [] } = {
         if (typeof value !== 'string' || value === '') throw new Error('empty credential')
         secrets.set(ref, value)
       },
+      async unset(ref) {
+        secrets.delete(ref)
+      },
+      resolve: async ref => (secrets.has(ref) ? { value: secrets.get(ref), source: 'file' } : undefined),
       describe: async ref => ({ configured: secrets.has(ref), writable: true }),
       describeRecord: async key => ({ configured: stored.has(key), writable: true }),
     },

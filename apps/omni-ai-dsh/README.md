@@ -27,7 +27,7 @@ The Connect AI tiles, API-key paths first:
 
 | Tile | Leads to |
 |---|---|
-| DeepSeek | Settings → Account: DeepSeek's own sign-in, or its API key. |
+| DeepSeek | Settings → Models: DeepSeek's API key. (The account section exists only once an account is signed in, so it is not a place to send a new user.) |
 | Z.ai, OpenCode, Any API key | Settings → Models: pi-ai's key prompt for that provider. |
 | Codex, Claude, Kimi | Settings → Models: pi-ai's built-in sign-in. |
 | CLIProxyAPI | A form for your gateway's address and key (see below). |

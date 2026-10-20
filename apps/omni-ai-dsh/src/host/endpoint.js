@@ -25,6 +25,8 @@ const TIMEOUT_MS = 15_000
 const MAX_MODELS = 500
 const MAX_ID = 200
 const MAX_KEY = 4096
+// A model listing is small; a gateway that sends more is not read past this.
+const MAX_BODY = 2 * 1024 * 1024
 
 const failure = (code, message) => Object.assign(new Error(message), { code })
 const invalid = message => failure('omni-ai/invalid', message)
@@ -57,6 +59,25 @@ export function modelIdsOf(body) {
   return ids
 }
 
+// The body as text, refused past MAX_BODY without reading the rest.
+async function cappedText(response) {
+  if (!response.body) return ''
+  const reader = response.body.getReader()
+  const chunks = []
+  let size = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    size += value.byteLength
+    if (size > MAX_BODY) {
+      await reader.cancel().catch(() => {})
+      throw new Error('too large')
+    }
+    chunks.push(value)
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks))
+}
+
 async function listModels(fetchImpl, baseURL, apiKey, signal) {
   const signals = [AbortSignal.timeout(TIMEOUT_MS), ...(signal ? [signal] : [])]
   let response
@@ -73,9 +94,9 @@ async function listModels(fetchImpl, baseURL, apiKey, signal) {
   if (response.status === 401 || response.status === 403) throw refused(`The gateway at ${baseURL} refused this key (HTTP ${response.status}).`)
   if (!response.ok) throw refused(`The gateway at ${baseURL} answered HTTP ${response.status} for /models.`)
   try {
-    return modelIdsOf(await response.json())
+    return modelIdsOf(JSON.parse(await cappedText(response)))
   } catch {
-    throw refused(`The gateway at ${baseURL} did not answer /models with JSON.`)
+    throw refused(`The gateway at ${baseURL} did not answer /models with a JSON model list.`)
   }
 }
 
@@ -130,12 +151,16 @@ export function createActions(ctx, { fetch: fetchImpl = globalThis.fetch } = {})
       if (piAi === undefined) throw refused('This DSH has no pi-ai entry (llm-pi-ai) to hold the route.')
       const models = await listModels(fetchImpl, baseURL, apiKey, signal)
       if (models.length === 0) throw refused(`The gateway at ${baseURL} lists no models. Add a provider there, then try again.`)
+      // Kept to put back if DSH refuses the route, so a failed save leaves the old route on its old key.
+      // A key that came from the environment rather than DSH's store ("file") is not copied into the store.
+      const previous = await ctx.credentials.resolve(KEY_REF).catch(() => undefined)
       await ctx.credentials.set(KEY_REF, apiKey)
       // A deep merge: other routes stay as they are; this route's model list is replaced.
       const route = { displayName: 'CLIProxyAPI', api: 'openai-completions', baseURL, apiKeyEnv: KEY_REF, models: models.map(id => ({ id, name: id })) }
       try {
         await ctx.settings.update(PI_AI, { providers: { [ROUTE_ID]: route } }, piAi.revision)
       } catch (error) {
+        await (previous?.source === 'file' ? ctx.credentials.set(KEY_REF, previous.value) : ctx.credentials.unset(KEY_REF)).catch(() => {})
         if (error?.code === 'SETTINGS_CONFLICT') throw refused('DSH\'s model settings changed while saving. Try again.')
         throw refused(`DSH did not save the route: ${error?.message ?? error}`)
       }

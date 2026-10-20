@@ -127,6 +127,26 @@ test('cliproxy refuses without a key, without pi-ai, and when settings moved mea
   const conflict = await raced.handle('cliproxy', { baseURL: 'http://localhost:8317/v1', apiKey: KEY })
   assert.equal(conflict.error.code, 'omni-ai/refused')
   assert.match(conflict.error.message, /changed while saving/)
+  // The key stored for a route that was never saved is taken back out.
+  assert.equal(raced.secrets.has(KEY_REF), false)
+})
+
+test('a refused save puts the previous gateway key back', async () => {
+  const fake = host()
+  fake.secrets.set(KEY_REF, 'sk-previous-key')
+  fake.ctx.settings.update = async () => { throw new Error('refused by pi-ai') }
+  const reply = await fake.handle('cliproxy', { baseURL: 'http://localhost:8317/v1', apiKey: KEY })
+  assert.equal(reply.error.code, 'omni-ai/refused')
+  assert.equal(fake.secrets.get(KEY_REF), 'sk-previous-key')
+})
+
+test('a gateway that answers /models with more than 2 MB is not read past it', async () => {
+  const huge = JSON.stringify({ data: Array.from({ length: 120_000 }, (_, n) => ({ id: `model-${n}-${'x'.repeat(8)}` })) })
+  const fake = host({ gateway: fakeGateway({ body: huge }) })
+  const reply = await fake.handle('cliproxy', { baseURL: 'http://localhost:8317/v1', apiKey: KEY })
+  assert.equal(reply.error.code, 'omni-ai/refused')
+  assert.match(reply.error.message, /JSON model list/)
+  assert.equal(fake.secrets.size, 0)
 })
 
 test('done writes the step flag in the plugin entry', async () => {

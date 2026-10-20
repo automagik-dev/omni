@@ -75,8 +75,8 @@ test('Connect AI lists API-key paths first and marks every subscription sign-in'
   const tiles = plain(GROUPS).flatMap(group => group.tiles.map(tile => ({ ...tile, group: group.title })))
   assert.deepEqual(tiles.map(tile => tile.id), ['deepseek', 'zai', 'opencode', 'api-key', 'codex', 'claude', 'kimi', 'cliproxy'])
   assert.equal(GROUPS[0].title, 'With an API key')
-  assert.equal(tiles.find(tile => tile.id === 'deepseek').section, 'account')
-  for (const id of ['zai', 'opencode', 'api-key', 'codex', 'claude', 'kimi']) assert.equal(tiles.find(tile => tile.id === id).section, 'models')
+  // DeepSeek's key lives on the Models page; the account section is not in every profile.
+  for (const id of ['deepseek', 'zai', 'opencode', 'api-key', 'codex', 'claude', 'kimi']) assert.equal(tiles.find(tile => tile.id === id).section, 'models')
   for (const id of ['codex', 'claude', 'kimi']) assert.equal(tiles.find(tile => tile.id === id).note, VENDOR_TERMS)
   assert.equal(VENDOR_TERMS, 'Personal use under the vendor\'s terms')
   assert.equal(tiles.find(tile => tile.id === 'cliproxy').form, true)

@@ -12,7 +12,7 @@ export const GROUPS = [
   {
     title: 'With an API key',
     tiles: [
-      { id: 'deepseek', name: 'DeepSeek', note: 'Sign in to DeepSeek, or use its API key', section: 'account' },
+      { id: 'deepseek', name: 'DeepSeek', note: 'With a DeepSeek API key', section: 'models' },
       { id: 'zai', name: 'Z.ai', note: 'GLM models, with a Z.ai API key', section: 'models' },
       { id: 'opencode', name: 'OpenCode', note: 'With an OpenCode API key', section: 'models' },
       { id: 'api-key', name: 'Any API key', note: 'Any provider on DSH\'s Models page', section: 'models' },
