@@ -6,6 +6,7 @@ import {
   appCacheDir,
   createDesktopCommand,
   desktopTarget,
+  extractionDir,
   launchPlan,
   parseSums,
   pickRelease,
@@ -86,15 +87,17 @@ describe('where and how it opens', () => {
   test('builds are kept under OMNI_HOME/desktop/app', () => {
     expect(appCacheDir({ OMNI_HOME: '/srv/omni' })).toBe(join('/srv/omni', 'desktop', 'app'));
   });
-  test('an AppImage runs itself, extracted where FUSE is missing or under WSL; a dmg is opened', () => {
+  test('an AppImage runs from its one-time unpack in the cache; a dmg is opened', () => {
     const linux = desktopTarget('linux', 'x64', '');
-    const wsl = desktopTarget('linux', 'x64', 'microsoft-standard-WSL2');
     const mac = desktopTarget('darwin', 'arm64');
-    if (!linux.supported || !wsl.supported || !mac.supported) throw new Error('unreachable');
-    expect(launchPlan('/a/Omni.AppImage', linux, true)).toEqual({ command: '/a/Omni.AppImage', args: [], env: {} });
-    expect(launchPlan('/a/Omni.AppImage', linux, false).env).toEqual({ APPIMAGE_EXTRACT_AND_RUN: '1' });
-    expect(launchPlan('/a/Omni.AppImage', wsl, true).env).toEqual({ APPIMAGE_EXTRACT_AND_RUN: '1' });
-    expect(launchPlan('/a/Omni.dmg', mac, true)).toEqual({ command: 'open', args: ['/a/Omni.dmg'], env: {} });
+    if (!linux.supported || !mac.supported) throw new Error('unreachable');
+    const dir = extractionDir('/home/me/Downloads/Omni-0.1.0-linux-x86_64.AppImage', { OMNI_HOME: '/srv/omni' });
+    expect(dir).toBe(join('/srv/omni', 'desktop', 'app', 'extracted', 'Omni-0.1.0-linux-x86_64'));
+    expect(launchPlan('/x/Omni.AppImage', linux, dir)).toEqual({
+      command: join(dir, 'squashfs-root', 'AppRun'),
+      args: [],
+    });
+    expect(launchPlan('/a/Omni.dmg', mac, '/unused')).toEqual({ command: 'open', args: ['/a/Omni.dmg'] });
   });
 });
 

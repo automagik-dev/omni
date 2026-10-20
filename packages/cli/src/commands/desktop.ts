@@ -10,16 +10,17 @@
  * ~/.omni/desktop/app/<tag>/, and opens it. `--path` opens a build you already
  * have instead.
  *
- * Linux x64 (and WSL, through WSLg) gets the AppImage; macOS the unsigned labs
- * dmg, which is opened so you can drag Omni to Applications. Windows itself is
- * not supported: run this inside WSL.
+ * Linux x64 (and WSL, through WSLg) gets the AppImage, unpacked once into the
+ * cache and run from there, so it needs no FUSE; macOS gets the unsigned labs
+ * dmg, opened so you can drag Omni to Applications. Windows itself is not
+ * supported: run this inside WSL.
  */
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { Command } from 'commander';
 import { z } from 'zod';
 import * as output from '../output.js';
@@ -90,14 +91,36 @@ export function appCacheDir(env: NodeJS.ProcessEnv = process.env): string {
   return join(omni, 'desktop', 'app');
 }
 
-/** How to open a build: the AppImage itself (extracted to run where FUSE is missing, as under WSL), or `open` for a dmg. */
+/**
+ * Where an AppImage is unpacked to run. It runs from a one-time extraction rather than
+ * mounted: mounting needs libfuse2, which Ubuntu 24.04+ and WSL lack by default.
+ */
+export function extractionDir(file: string, env: NodeJS.ProcessEnv = process.env): string {
+  return join(appCacheDir(env), 'extracted', basename(file).replace(/\.AppImage$/, ''));
+}
+
+/** How to open a build: the extracted AppImage's AppRun on Linux, `open` for a dmg on macOS. */
 export function launchPlan(
   file: string,
   target: Extract<DesktopTarget, { supported: true }>,
-  hasFuse: boolean,
-): { command: string; args: string[]; env: Record<string, string> } {
-  if (target.os === 'mac') return { command: 'open', args: [file], env: {} };
-  return { command: file, args: [], env: hasFuse && !target.wsl ? {} : { APPIMAGE_EXTRACT_AND_RUN: '1' } };
+  extracted: string,
+): { command: string; args: string[] } {
+  if (target.os === 'mac') return { command: 'open', args: [file] };
+  return { command: join(extracted, 'squashfs-root', 'AppRun'), args: [] };
+}
+
+/** Unpack an AppImage once (it unpacks itself, no FUSE needed); a finished unpack is reused. */
+function ensureExtracted(file: string, dir: string): void {
+  if (existsSync(join(dir, '.complete'))) return;
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true });
+  chmodSync(file, 0o755);
+  output.info('Unpacking the app (once)…');
+  const result = spawnSync(file, ['--appimage-extract'], { cwd: dir, stdio: 'ignore' });
+  if (result.status !== 0 || !existsSync(join(dir, 'squashfs-root', 'AppRun'))) {
+    throw new Error(`Could not unpack ${file} (exit ${result.status ?? result.signal}).`);
+  }
+  writeFileSync(join(dir, '.complete'), `${file}\n`);
 }
 
 async function fetchJson(url: string): Promise<unknown> {
@@ -142,13 +165,10 @@ async function fetchBuild(
 }
 
 function open(file: string, target: Extract<DesktopTarget, { supported: true }>): void {
-  if (target.os === 'linux') chmodSync(file, 0o755);
-  const plan = launchPlan(file, target, existsSync('/dev/fuse'));
-  const child = spawn(plan.command, plan.args, {
-    detached: true,
-    stdio: 'ignore',
-    env: { ...process.env, ...plan.env },
-  });
+  const extracted = extractionDir(file);
+  if (target.os === 'linux') ensureExtracted(file, extracted);
+  const plan = launchPlan(file, target, extracted);
+  const child = spawn(plan.command, plan.args, { detached: true, stdio: 'ignore' });
   child.unref();
 }
 
@@ -162,7 +182,11 @@ function openLocal(path: string, target: Supported, dryRun: boolean): void {
     output.info(`Would open ${file} (${target.label})`);
     return;
   }
-  open(file, target);
+  try {
+    open(file, target);
+  } catch (error) {
+    output.error(error instanceof Error ? error.message : String(error));
+  }
   output.success(`Opened ${file}`);
 }
 
@@ -204,7 +228,11 @@ export function createDesktopCommand(): Command {
         return output.error(error instanceof Error ? error.message : String(error));
       }
       if (file === null) return;
-      open(file, target);
+      try {
+        open(file, target);
+      } catch (error) {
+        return output.error(error instanceof Error ? error.message : String(error));
+      }
       output.success(target.os === 'mac' ? `Opened ${file}: drag Omni to Applications` : `Opened ${file}`);
     });
 }
