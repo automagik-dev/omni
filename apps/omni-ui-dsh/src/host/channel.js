@@ -34,6 +34,8 @@ export function install(rt) {
     // `mainBotId` is the first Main Bot, which the sidebar shows as its tile.
     mainBotId: state.mainBotIds[0] ?? null,
     mainBotIds: state.mainBotIds,
+    // Tentacall, the Bot that subscriptions hand their events to (subscriptions.js).
+    eventsBotId: state.eventsBotId && state.bots[state.eventsBotId] ? state.eventsBotId : null,
     // `sessionId` is the Bot's current own-chat part; `parts` its earlier ones.
     // `waiting`: the Bot holds its greeting until the user picks its model.
     bots: Object.values(state.bots).map(({ segments, kickoff, ...bot }) => ({
@@ -109,7 +111,11 @@ export function install(rt) {
       switch (endpoint) {
         case 'state':
           if (typeof body.locale === 'string' && /^[a-z]{2,3}(-[\w-]+)?$/i.test(body.locale)) uiLocale = body.locale
-          if (readOnly === undefined) await rt.bootstrap()
+          if (readOnly === undefined) {
+            await rt.bootstrap()
+            // Tentacall is made beside the request, so a failure there never blocks the team view.
+            void rt.ensureEventsBot().catch(error => rt.warn('ds-bot: Tentacall was not created: %s', error?.message ?? error))
+          }
           await rt.catalog()
           await rt.loadSecrets()
           if (body.since === state.revision && (body.models === undefined || body.models === modelsKey())) return ok({ revision: state.revision, unchanged: true, ...live() })

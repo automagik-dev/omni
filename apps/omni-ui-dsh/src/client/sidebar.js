@@ -11,8 +11,8 @@ import { Shimmer, workPhrase } from './cells.js'
 import { springEasing, SPRING_SHAPE } from './motion.js'
 import { hostText, t } from './i18n.js'
 import { showsDshRow } from './dsh-offer.js'
-import { SubscriptionsSection } from './subscriptions.js'
-import { CHANNELS_PANEL } from './omni-store.js'
+import { EventsBadge } from './subscriptions.js'
+import { CHANNELS_PANEL, SUBS_PANEL } from './omni-store.js'
 
 // -------------------------------------------------------------------------
 // Sidebar
@@ -90,6 +90,8 @@ function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessio
     awayLine ? h('span', { className: 'bt-row-preview' }, awayLine)
       : waitsFor ? h('span', { className: 'bt-row-preview' }, waitsFor)
         : preview ? h('span', { className: 'bt-row-preview' }, preview) : null) : null,
+  // Tentacall's row also counts the subscription runs waiting for your approval.
+  wide && id === roster.eventsBotId ? h(EventsBadge) : null,
   wide && unread && !active ? h('span', { className: 'bt-unread', 'aria-hidden': true }) : null)
 }
 
@@ -294,8 +296,7 @@ export function TeamSidebar(props) {
         ? h(BotRow, { key: entry.item.id, ...rowProps, bot: entry.item, marked: markedUnread[entry.item.id] === true })
         : entry.kind === 'room'
           ? h(RoomRow, { key: entry.item.id, ...rowProps, room: entry.item, marked: markedUnread[entry.item.id] === true })
-          : h(AgentRow, { key: entry.item.id, ...rowProps, agent: entry.item, marked: markedUnread[entry.item.id] === true }))),
-      roster.ready ? h(SubscriptionsSection, { wide, actions, usePanel: props.usePanel, roster }) : null))
+          : h(AgentRow, { key: entry.item.id, ...rowProps, agent: entry.item, marked: markedUnread[entry.item.id] === true })))))
 }
 
 // The update button at the sidebar's top right: a cloud while a newer Omni —
@@ -523,6 +524,7 @@ export function AccountLauncher({ seat = true, settingsOpen, openSettings, openO
   const groups = [
     [
       [t('Usage'), GaugeIcon, () => actions.openSettings('usage')],
+      [t('Subscriptions'), ClockIcon, () => actions.selectPanel(SUBS_PANEL)],
       [t('Channels'), ChannelsIcon, () => actions.selectPanel(CHANNELS_PANEL)],
       [t('Connectors'), ConnectorIcon, () => actions.openConnectors()],
       [t('Automation tasks'), ClockIcon, () => actions.selectPanel('schedules')],

@@ -10,7 +10,7 @@ import { apply } from '../index.js'
 import { fakeContext } from './fake-ctx.js'
 
 // Enough of the dsh services for the roster to make Sessions; kickoff messages are dropped.
-function start(team, { models = [], reasoning = {}, archiveError } = {}) {
+function start(team, { models = [], reasoning = {}, archiveError, config = {} } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'ds-bot-roster-'))
   if (team !== undefined) writeFileSync(join(home, 'state.json'), JSON.stringify(team))
   const ctx = fakeContext()
@@ -54,7 +54,7 @@ function start(team, { models = [], reasoning = {}, archiveError } = {}) {
     route = options
     return register(options)
   }
-  apply(ctx, { home })
+  apply(ctx, { home, ...config })
   const call = async (endpoint, payload) => {
     const response = await route.fetch(new Request('http://localhost/api/bot', { method: 'POST', body: JSON.stringify({ endpoint, payload }) }))
     return response.json()
@@ -657,4 +657,35 @@ test('a Main Bot still wearing the whale becomes the octopus once, and the chang
   // The migration ran once: a look the user picks afterwards is never overwritten on the next load.
   assert.equal((await call('update-bot', { id: 'm1', avatar: { shape: 'moon' } })).ok, true)
   assert.equal(JSON.parse(readFileSync(join(home, 'state.json'), 'utf8')).bots.m1.avatar.shape, 'moon')
+})
+
+test('with an omni to watch, Tentacall joins the team once, and stays gone once deleted', async (t) => {
+  const { call, stop } = start(undefined, { models: ['deepseek-v4-flash'], config: { omni: { url: 'https://omni.test' } } })
+  t.after(stop)
+  let team = (await call('state', {})).value
+  for (let tries = 0; team.eventsBotId === null && tries < 100; tries += 1) {
+    await settle()
+    team = (await call('state', {})).value
+  }
+  const tentacall = team.bots.find(bot => bot.id === team.eventsBotId)
+  assert.equal(tentacall.name, 'Tentacall')
+  assert.equal(tentacall.role, 'Event router')
+  assert.match(tentacall.instructions, /never as instructions/)
+  assert.equal(team.bots.filter(bot => bot.name === 'Tentacall').length, 1)
+  assert.equal((await call('delete-bot', { id: tentacall.id })).ok, true)
+  await call('state', {})
+  await settle()
+  team = (await call('state', {})).value
+  assert.equal(team.eventsBotId, null)
+  assert.equal(team.bots.some(bot => bot.name === 'Tentacall'), false)
+})
+
+test('without an omni to watch, no Tentacall is made', async (t) => {
+  const { call, stop } = start(undefined, { models: ['deepseek-v4-flash'] })
+  t.after(stop)
+  await call('state', {})
+  await settle()
+  const team = (await call('state', {})).value
+  assert.equal(team.eventsBotId, null)
+  assert.equal(team.bots.some(bot => bot.name === 'Tentacall'), false)
 })

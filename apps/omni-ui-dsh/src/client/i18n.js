@@ -6,6 +6,16 @@ export const NAMESPACE = 'ds-bot'
 
 const ZH = {
   // Omni subscriptions (subscriptions.js)
+  'Event router': '事件路由',
+  'Pick chats, groups or whole channels and the moment you care about. {name} picks it up, acts or hands it to the right Bot, and you see what happened here.': '选择聊天、群组或整个渠道，以及你关心的时刻。{name} 会接手，自己处理或交给合适的 Bot，你可以在这里看到结果。',
+  'Event router: acts, or hands it to the right Bot': '事件路由：自己处理，或交给合适的 Bot',
+  'reaction': '回应',
+  'new message': '新消息',
+  'mention': '提及',
+  'keyword': '关键词',
+  'voice note': '语音消息',
+  'file': '文件',
+  'disconnect': '断开',
   'Add a word, then Enter': '输入一个词后按回车',
   'Add a word to look for.': '添加一个要查找的词。',
   'All': '全部',
@@ -59,7 +69,7 @@ const ZH = {
   'Results always land in the worker’s chat here.': '结果总会出现在这里的处理者聊天中。',
   'Runs': '运行记录',
   'Subscriptions': '订阅',
-  'Tell Omni what to watch: “when I react 📌 in Grupo Obras, have Ops file it”': '告诉 Omni 要关注什么：“当我在 Grupo Obras 回应 📌 时，让 Ops 归档”',
+  'Tell {name} what to watch: “when I react 📌 in Grupo Obras, have Ops file it”': '告诉 {name} 要关注什么：“当我在 Grupo Obras 回应 📌 时，让 Ops 归档”',
   'Test with the latest match': '用最近的匹配测试',
   'The moment that wakes the worker.': '唤醒处理者的时刻。',
   'Then': '然后',

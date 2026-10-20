@@ -60,6 +60,8 @@ export function createRuntime(ctx, config = {}) {
     defaults: {
       mainName: config.mainName ?? 'Omni',
       mainRole: config.mainRole ?? 'Channel orchestrator',
+      eventsName: config.eventsName ?? 'Tentacall',
+      eventsRole: config.eventsRole ?? 'Event router',
     },
   }
   for (const module of MODULES) module.install(rt)

@@ -1,5 +1,5 @@
 import { createElement as h, Fragment, useEffect, useMemo, useState } from 'react'
-import { ChevronLeftIcon, ChevronRightIcon, PlusIcon, SearchIcon } from './icons.js'
+import { AtIcon, ChevronLeftIcon, FileIcon, KeywordIcon, MessageIcon, PlusIcon, SearchIcon, ShieldIcon, UnplugIcon, VoiceIcon } from './icons.js'
 import { OctopusLogo } from './logo.js'
 import { BotMark } from './mark.js'
 import { MAIN_LOOK } from './characters.js'
@@ -8,21 +8,28 @@ import { relativeShort } from './text.js'
 import { call } from './api.js'
 import { ChatAvatar, PreviewChip, Tile, useOmni } from './channels.js'
 import {
-  REACTIONS, SUBS_PANEL, TRIGGERS, chatSource, firedToday, guessDraft, omniActions, runsOf, sourceOfChannel, startLive, subOf, subsActions, typeOf, waitingRuns,
+  REACTIONS, TRIGGERS, chatSource, firedToday, guessDraft, omniActions, runsOf, sourceOfChannel, startLive, subOf, subsActions, typeOf, waitingRuns,
 } from './omni-store.js'
 
-// Subscriptions: the agent-native side of Omni. You do not read your chats here; you pick
+// Subscriptions: the agent-native side of Omni, owned by Tentacall, the event router Bot. You do not read your chats here; you pick
 // chats, groups or whole channels, the event you care about in them (an emoji you react with,
 // a keyword, a voice note…), and the Bot or DSH session that acts on it. Activity lists what
 // fired and what the workers did, with approvals waiting for you first.
 
+const TRIGGER_ICONS = { message: MessageIcon, mention: AtIcon, keyword: KeywordIcon, voice: VoiceIcon, media: FileIcon, down: UnplugIcon }
+
 const useSubs = actions => useMemo(() => ({ ...omniActions(id => actions.selectPanel(id), call), ...subsActions(id => actions.selectPanel(id)) }), [actions])
-const activePanel = usePanel => (usePanel ? usePanel(info => info?.activePanelId ?? null) : null)
 
 // -------------------------------------------------------------------------
 // Pieces of a subscription, shared by the sidebar, the list and the editor
 
+const EVENTS_LOOK = { shape: 'octopus', color: 'violet' }
+
 export function workerOf(worker, roster) {
+  if (worker.kind === 'events') {
+    const bot = roster?.byId?.[roster.eventsBotId]
+    return { name: bot?.name ?? 'Tentacall', bot, look: EVENTS_LOOK, role: t('Event router') }
+  }
   if (worker.kind === 'main') {
     const main = roster?.byId?.[roster.mainBotId]
     return { name: main?.name ?? 'Omni', bot: main, look: MAIN_LOOK, role: t('Main Bot') }
@@ -38,8 +45,9 @@ export function WorkerMark({ worker, roster, size = 24 }) {
   return h(BotMark, info.bot ? { bot: info.bot, size } : { look: info.look ?? MAIN_LOOK, size })
 }
 
-const TriggerBadge = ({ trigger, size = 36 }) => h('span', { className: 'os-trigger', 'data-kind': trigger.kind, style: { width: size, height: size, fontSize: Math.round(size * 0.5) } },
-  trigger.kind === 'reaction' ? trigger.emoji : TRIGGERS[trigger.kind].icon)
+// A reaction shows the emoji itself; every other trigger has a line icon.
+const TriggerBadge = ({ trigger, size = 36 }) => h('span', { className: 'os-trigger', 'data-kind': trigger.kind, style: { width: size, height: size, fontSize: Math.round(size * 0.5), '--os-icon': `${Math.round(size * 0.52)}px` } },
+  trigger.kind === 'reaction' ? trigger.emoji : h(TRIGGER_ICONS[trigger.kind]))
 
 function triggerText(trigger) {
   if (trigger.kind === 'reaction') return t('you react')
@@ -86,63 +94,25 @@ const RUN_STATUS = {
 }
 
 // -------------------------------------------------------------------------
-// Sidebar: Subscriptions and Activity, under the Bots
+// Tentacall's row and chat header: the only ways in, so the sidebar stays a list of Bots
 
-export function SubscriptionsSection({ wide, actions, usePanel, roster }) {
+// On Tentacall's sidebar row: runs waiting for your approval.
+export function EventsBadge() {
   const state = useOmni()
-  const omni = useSubs(actions)
-  const panel = activePanel(usePanel)
   useEffect(() => { startLive(call) }, [])
   const waiting = waitingRuns(state)
-  const runs = runsOf(state).slice(0, 4)
-  const current = panel === SUBS_PANEL ? state.subs : null
-  if (!wide) {
-    return h('div', { className: 'oc-side oc-side-rail', role: 'group', 'aria-label': t('Subscriptions') },
-      h('span', { className: 'oc-side-rule', 'aria-hidden': true }),
-      state.subscriptions.filter(sub => sub.on).slice(0, 5).map(sub => h('button', {
-        key: sub.id, type: 'button', className: 'bt-row os-row', title: sub.name, 'aria-label': sub.name,
-        'aria-current': current?.id === sub.id ? 'page' : undefined, onClick: () => omni.openSubs('detail', sub.id),
-      }, h(TriggerBadge, { trigger: sub.trigger, size: 34 }))),
-      h('button', { type: 'button', className: 'bt-row os-row', title: t('Activity'), 'aria-label': t('Activity'), onClick: () => omni.openSubs('list') },
-        h('span', { className: 'oc-rail-octo' }, h(OctopusLogo, { size: 20 }), waiting > 0 ? h('span', { className: 'oc-warn-dot', 'aria-hidden': true }) : null)))
-  }
-  return h('div', { className: 'oc-side os-side', role: 'group', 'aria-label': t('Subscriptions') },
-    h('div', { className: 'oc-side-head' },
-      h('button', { type: 'button', className: 'os-side-title', 'aria-current': current?.view === 'list' ? 'page' : undefined, onClick: () => omni.openSubs('list') }, t('Subscriptions')),
-      h('span', { className: 'os-side-tools' },
-        h('button', { type: 'button', className: 'oc-side-manage', title: t('Channels and their health'), onClick: () => omni.openChannels() }, t('Channels'), h(ChevronRightIcon)),
-        h('button', { type: 'button', className: 'os-add', title: t('New subscription'), 'aria-label': t('New subscription'), onClick: () => omni.openSubs('edit') }, h(PlusIcon)))),
-    state.subscriptions.length === 0
-      ? h('button', { type: 'button', className: 'os-empty', onClick: () => omni.openSubs('edit') }, t('Pick chats and what to watch for. A Bot acts when it happens.'))
-      : state.subscriptions.map((sub) => {
-        const pending = state.runs.filter(run => run.subId === sub.id && run.status === 'waiting').length
-        const worker = workerOf(sub.worker, roster)
-        return h('button', {
-          key: sub.id, type: 'button', className: 'bt-row os-row', 'data-off': sub.on ? undefined : true,
-          'aria-current': current?.id === sub.id && current.view !== 'list' ? 'page' : undefined,
-          'aria-label': [sub.name, sub.on ? '' : t('Paused'), pending ? t('{n} waiting for you', { n: pending }) : ''].filter(Boolean).join(', '),
-          onClick: () => omni.openSubs('detail', sub.id),
-        },
-        h(TriggerBadge, { trigger: sub.trigger }),
-        h('span', { className: 'bt-row-body' },
-          h('span', { className: 'bt-row-name' }, h('span', { className: 'bt-row-title' }, sub.name)),
-          h('span', { className: 'os-row-line' }, h(SourceStack, { sources: sub.sources, size: 14 }), h('span', { className: 'os-arrow' }, '→'), h(WorkerMark, { worker: sub.worker, roster, size: 14 }), h('span', { className: 'bt-row-preview' }, worker.name))),
-        pending ? h('span', { className: 'os-pending' }, String(pending)) : sub.on ? null : h('span', { className: 'os-paused' }, t('Paused')))
-      }),
-    runs.length > 0 ? h(Fragment, null,
-      h('div', { className: 'oc-side-head os-activity-head' }, h('span', { className: 'oc-side-title' }, t('Activity')),
-        waiting > 0 ? h('span', { className: 'os-needs' }, t('{n} need you', { n: waiting })) : null),
-      runs.map(run => h(RunRow, { key: run.id, run, sub: subOf(state, run.subId), roster, onOpen: () => omni.openSubs('detail', run.subId, run.id) }))) : null)
+  return waiting > 0 ? h('span', { className: 'os-pending', title: t('{n} waiting for you', { n: waiting }) }, String(waiting)) : null
 }
 
-function RunRow({ run, sub, roster, onOpen }) {
-  if (!sub) return null
-  const status = RUN_STATUS[run.status]
-  return h('button', { type: 'button', className: 'os-run', 'data-tone': status.tone, onClick: onOpen },
-    h(WorkerMark, { worker: sub.worker, roster, size: 22 }),
-    h('span', { className: 'os-run-body' },
-      h('span', { className: 'os-run-top' }, h('strong', null, workerOf(sub.worker, roster).name), h('span', { className: 'os-run-status' }, t(status.label)), h('time', null, relativeShort(run.at))),
-      h('span', { className: 'os-run-text' }, run.summary)))
+// In Tentacall's chat header: its subscriptions, and what waits for you.
+export function SubscriptionsButton({ actions }) {
+  const state = useOmni()
+  const omni = useSubs(actions)
+  const waiting = waitingRuns(state)
+  const on = state.subscriptions.filter(sub => sub.on).length
+  return h('button', { type: 'button', className: 'os-head-btn', onClick: () => omni.openSubs('list') },
+    t('Subscriptions'), h('span', { className: 'os-head-count' }, String(on)),
+    waiting > 0 ? h('span', { className: 'os-pending' }, String(waiting)) : null)
 }
 
 // -------------------------------------------------------------------------
@@ -151,7 +121,8 @@ function RunRow({ run, sub, roster, onOpen }) {
 export function SubscriptionsPage({ actions, useRoster }) {
   const state = useOmni()
   const roster = useRoster ? useRoster(value => value) : null
-  const omni = useSubs(actions)
+  const omni = { ...useSubs(actions), openBot: id => actions.openSession(id) }
+  useEffect(() => { startLive(call) }, [])
   const { subs } = state
   const sub = subs.id ? subOf(state, subs.id) : undefined
   return h('div', { className: 'oc-page oc-channels' },
@@ -161,14 +132,14 @@ export function SubscriptionsPage({ actions, useRoster }) {
           : h(List, { state, roster, omni })))
 }
 
-function Describe({ state, omni }) {
+function Describe({ state, roster, omni }) {
   const [text, setText] = useState('')
   const go = () => { if (text.trim()) omni.startDraft(guessDraft(text, state)) }
   return h('div', { className: 'os-describe' },
-    h('span', { className: 'os-describe-mark' }, h(OctopusLogo, { size: 18 })),
+    h('span', { className: 'os-describe-mark' }, h(WorkerMark, { worker: { kind: 'events' }, roster, size: 22 })),
     h('input', {
       value: text, onChange: event => setText(event.target.value), 'aria-label': t('Describe a subscription'),
-      placeholder: t('Tell Omni what to watch: “when I react 📌 in Grupo Obras, have Ops file it”'),
+      placeholder: t('Tell {name} what to watch: “when I react 📌 in Grupo Obras, have Ops file it”', { name: workerOf({ kind: 'events' }, roster).name }),
       onKeyDown: (event) => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) go() },
     }),
     h('button', { type: 'button', className: 'oc-primary', disabled: text.trim() === '', onClick: go }, t('Draft it')))
@@ -178,12 +149,15 @@ function List({ state, roster, omni }) {
   const runs = runsOf(state)
   const waiting = runs.filter(run => run.status === 'waiting')
   return h(Fragment, null,
-    h('header', { className: 'oc-head' },
+    h('header', { className: 'oc-head os-head' },
+      h(WorkerMark, { worker: { kind: 'events' }, roster, size: 52 }),
       h('div', null,
         h('h1', null, t('Subscriptions'), h(PreviewChip)),
-        h('p', null, t('Pick chats, groups or whole channels and the moment you care about. A Bot or a DSH session acts on it, and you see what it did here.'))),
-      h('button', { type: 'button', className: 'oc-primary', onClick: () => omni.openSubs('edit') }, h(PlusIcon), t('New subscription'))),
-    h(Describe, { state, omni }),
+        h('p', null, t('Pick chats, groups or whole channels and the moment you care about. {name} picks it up, acts or hands it to the right Bot, and you see what happened here.', { name: workerOf({ kind: 'events' }, roster).name }))),
+      h('span', { className: 'os-head-actions' },
+        roster?.eventsBotId ? h('button', { type: 'button', className: 'oc-secondary', onClick: () => omni.openBot(roster.eventsBotId) }, t('Chat with {name}', { name: workerOf({ kind: 'events' }, roster).name })) : null,
+        h('button', { type: 'button', className: 'oc-primary', onClick: () => omni.openSubs('edit') }, h(PlusIcon), t('New subscription')))),
+    h(Describe, { state, roster, omni }),
     waiting.length > 0 ? h(Fragment, null,
       h('h2', { className: 'oc-section' }, t('Waiting for you')),
       waiting.map(run => h(RunCard, { key: run.id, run, sub: subOf(state, run.subId), roster, omni }))) : null,
@@ -247,7 +221,7 @@ function Detail({ sub, state, roster, omni, focus }) {
 
 // An unnamed subscription is named after what it does: "📌 Grupo Obras → Ops".
 function autoName(draft, roster) {
-  const lead = draft.trigger.kind === 'reaction' ? draft.trigger.emoji : TRIGGERS[draft.trigger.kind].icon
+  const lead = draft.trigger.kind === 'reaction' ? draft.trigger.emoji : t(TRIGGERS[draft.trigger.kind].short)
   return `${lead} ${sourcesText(draft.sources)} → ${workerOf(draft.worker, roster).name}`
 }
 
@@ -269,7 +243,7 @@ function Editor({ draft, state, roster, omni }) {
       h(Toggle, { on: draft.outputs.react, onChange: react => edit({ outputs: { ...draft.outputs, react } }), title: t('React on the message: 👀 when it starts, ✅ when done'), text: t('You see progress in the chat you are already in.') }),
       h(Toggle, { on: draft.outputs.replyToMe, onChange: replyToMe => edit({ outputs: { ...draft.outputs, replyToMe } }), title: t('Reply to me in my own chat'), text: t('Only to your own number: the key Omni uses cannot message anyone else.') })),
     h('div', { className: 'os-safety' },
-      h('span', { className: 'os-safety-icon', 'aria-hidden': true }, '🛡'),
+      h('span', { className: 'os-safety-icon', 'aria-hidden': true }, h(ShieldIcon)),
       h('div', null, h('strong', null, t('Messages come from other people')), h('span', null, t('Anyone in a watched chat can write text that tries to steer the Bot. It runs with no secrets, and asks you first before shell, file or network actions.'))),
       h(Toggle, { on: draft.safety.askFirst, onChange: askFirst => edit({ safety: { askFirst } }), title: t('Ask me first'), compact: true })),
     h('div', { className: 'os-save' },
@@ -334,7 +308,7 @@ function TriggerPicker({ draft, edit }) {
   return h(Fragment, null,
     h('div', { className: 'os-triggers' }, Object.entries(TRIGGERS).map(([kind, info]) => h('button', {
       key: kind, type: 'button', className: 'os-trigger-opt', 'aria-pressed': trigger.kind === kind, onClick: () => pick(kind),
-    }, h('span', { className: 'os-trigger-icon' }, kind === 'reaction' ? (trigger.kind === 'reaction' ? trigger.emoji : '🤖') : info.icon), t(info.label)))),
+    }, h('span', { className: 'os-trigger-icon' }, kind === 'reaction' ? (trigger.kind === 'reaction' ? trigger.emoji : '🤖') : h(TRIGGER_ICONS[kind])), t(info.label)))),
     trigger.kind === 'reaction' ? h('div', { className: 'os-emojis' },
       h('span', { className: 'os-emojis-label' }, t('Your reaction on any message in these chats hands it over:')),
       REACTIONS.map(emoji => h('button', { key: emoji, type: 'button', className: 'os-emoji-opt', 'aria-pressed': trigger.emoji === emoji, onClick: () => edit({ trigger: { ...trigger, emoji } }) }, emoji))) : null,
@@ -344,12 +318,13 @@ function TriggerPicker({ draft, edit }) {
 }
 
 function WorkerPicker({ draft, roster, edit }) {
-  const bots = (roster?.bots ?? []).filter(bot => bot.id !== roster?.mainBotId)
+  const bots = (roster?.bots ?? []).filter(bot => bot.id !== roster?.mainBotId && bot.id !== roster?.eventsBotId)
   const { worker } = draft
   const option = (key, selected, onClick, mark, title, text) => h('button', { key, type: 'button', className: 'os-worker-opt', 'aria-pressed': selected, onClick }, mark, h('span', null, h('strong', null, title), h('span', null, text)))
   return h(Fragment, null,
     h('div', { className: 'os-workers' },
-      option('main', worker.kind === 'main', () => edit({ worker: { kind: 'main' } }), h(WorkerMark, { worker: { kind: 'main' }, roster, size: 32 }), workerOf({ kind: 'main' }, roster).name, t('Main Bot: triages, or hands it to the right Bot')),
+      option('events', worker.kind === 'events', () => edit({ worker: { kind: 'events' } }), h(WorkerMark, { worker: { kind: 'events' }, roster, size: 32 }), workerOf({ kind: 'events' }, roster).name, t('Event router: acts, or hands it to the right Bot')),
+      option('main', worker.kind === 'main', () => edit({ worker: { kind: 'main' } }), h(WorkerMark, { worker: { kind: 'main' }, roster, size: 32 }), workerOf({ kind: 'main' }, roster).name, t('Main Bot')),
       bots.map(bot => option(bot.id, worker.kind === 'bot' && worker.botId === bot.id, () => edit({ worker: { kind: 'bot', botId: bot.id, name: bot.name } }), h(BotMark, { bot, size: 32 }), bot.name, bot.role || t('Bot'))),
       option('session', worker.kind === 'session', () => edit({ worker: { kind: 'session', mode: worker.mode ?? 'new', title: worker.title ?? '' } }), h(WorkerMark, { worker: { kind: 'session' }, roster, size: 32 }), t('DSH session'), t('A plain agent session, no Bot'))),
     worker.kind === 'session' ? h('div', { className: 'os-seg os-seg-wide', role: 'radiogroup' },
@@ -360,7 +335,8 @@ function WorkerPicker({ draft, roster, edit }) {
 
 export const SUBSCRIPTIONS_CSS = `
 .os-trigger{display:inline-grid;place-items:center;flex:none;border-radius:30%;background:color-mix(in srgb,var(--bt-accent) 12%,var(--bt-card));box-shadow:inset 0 0 0 .5px var(--bt-line-2);line-height:1}
-.os-trigger:not([data-kind=reaction]){color:var(--bt-accent);font-weight:700}
+.os-trigger:not([data-kind=reaction]){color:var(--bt-accent)}
+.os-trigger svg{width:var(--os-icon,18px);height:var(--os-icon,18px)}
 .os-session{display:inline-grid;place-items:center;flex:none;border-radius:30%;background:var(--bt-ink);color:var(--bt-main)}
 .os-stack{display:inline-flex;align-items:center;flex:none}
 .os-stack-item{display:inline-flex;margin-left:-4px;border-radius:50%;box-shadow:0 0 0 1.5px var(--bt-sidebar)}
@@ -368,33 +344,18 @@ export const SUBSCRIPTIONS_CSS = `
 .os-stack-item .oc-ava-badge{display:none}
 .os-stack-more{margin-left:3px;font-size:10.5px;color:var(--bt-ink-3)}
 
-/* Sidebar */
-.os-side-title{border:0;background:none;padding:0;font:inherit;font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--bt-ink-3);cursor:pointer}
-.os-side-title:hover,.os-side-title[aria-current=page]{color:var(--bt-ink)}
-.os-side-tools{display:inline-flex;align-items:center;gap:2px}
-.os-add{display:inline-grid;place-items:center;width:26px;height:26px;border-radius:50%;border:0;background:none;color:var(--bt-ink-2);cursor:pointer}
-.os-add:hover{background:var(--bt-hover);color:var(--bt-ink)}
-.os-add svg{width:15px;height:15px}
-.os-row[data-off]{opacity:.55}
-.os-row[aria-current=page]{background:var(--bt-active)}
-.os-row-line{display:flex;align-items:center;gap:5px;min-width:0}
-.os-row-line .bt-row-preview{flex:1;min-width:0}
-.os-arrow{color:var(--bt-ink-3);font-size:12px}
+/* Waiting badge (Tentacall's row and header) */
 .os-pending{flex:none;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:#f59e0b;color:#fff;font-size:11px;font-weight:600;line-height:18px;text-align:center;box-sizing:border-box}
-.os-paused{flex:none;font-size:11px;color:var(--bt-ink-3)}
-.os-empty{margin:2px 6px;padding:10px 12px;border:1px dashed var(--bt-line-2);border-radius:12px;background:none;color:var(--bt-ink-2);font:inherit;font-size:12.5px;line-height:18px;text-align:left;cursor:pointer}
-.os-activity-head{margin-top:8px}
-.os-needs{font-size:11.5px;font-weight:600;color:#d97706;padding-right:8px}
-.os-run{display:flex;align-items:flex-start;gap:8px;width:100%;padding:7px 8px;border:0;border-radius:10px;background:none;color:var(--bt-ink);font:inherit;text-align:left;cursor:pointer;box-sizing:border-box}
-.os-run:hover{background:var(--bt-hover)}
-.os-run-body{display:flex;flex-direction:column;min-width:0;flex:1}
-.os-run-top{display:flex;align-items:center;gap:6px;font-size:12.5px;line-height:18px}
-.os-run-top strong{font-weight:500}
-.os-run-top time{margin-left:auto;font-size:11px;color:var(--bt-ink-3)}
-.os-run-status{font-size:11px;font-weight:600;color:color-mix(in srgb,var(--oc-tone) 75%,var(--bt-ink))}
-.os-run[data-tone=busy] .os-run-status{animation:oc-pulse 1.4s ease-in-out infinite}
-.os-run-text{font-size:12px;line-height:17px;color:var(--bt-ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 [data-tone=bad]{--oc-tone:#e5484d}
+
+/* Tentacall's header button and page head */
+.os-head-btn{display:inline-flex;align-items:center;gap:7px;height:32px;padding:0 10px 0 12px;margin-left:8px;border-radius:999px;border:.5px solid var(--bt-line-2);background:var(--bt-main);color:var(--bt-ink);font:inherit;font-size:13px;cursor:pointer;pointer-events:auto;box-shadow:0 2px 8px -1px rgba(0,0,0,.06)}
+.os-head-btn:hover{background:var(--bt-hover)}
+.os-head-count{min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--bt-hover);color:var(--bt-ink-2);font-size:11px;line-height:18px;text-align:center;box-sizing:border-box}
+.os-head{align-items:center}
+.os-head h1{display:flex;align-items:center;flex-wrap:wrap;gap:4px 0}
+.os-head>div{flex:1;min-width:0}
+.os-head-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
 
 /* Sentence */
 .os-sentence{margin:0;display:flex;flex-wrap:wrap;align-items:center;gap:6px 4px;font-size:14px;line-height:28px}
@@ -483,7 +444,8 @@ export const SUBSCRIPTIONS_CSS = `
 .os-chat-opt time{font-size:11.5px;color:var(--bt-ink-3)}
 .os-triggers{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:8px}
 .os-trigger-opt{display:flex;align-items:center;gap:10px;height:46px;padding:0 12px;border-radius:14px;border:1px solid var(--bt-line-2);background:var(--bt-main);color:var(--bt-ink);font:inherit;font-size:13.5px;text-align:left;cursor:pointer}
-.os-trigger-icon{display:inline-grid;place-items:center;width:28px;height:28px;border-radius:9px;background:var(--bt-hover);font-size:15px;font-weight:700;color:var(--bt-accent)}
+.os-trigger-icon{display:inline-grid;place-items:center;width:28px;height:28px;border-radius:9px;background:var(--bt-hover);font-size:15px;color:var(--bt-accent)}
+.os-trigger-icon svg{width:16px;height:16px}
 .os-emojis{display:flex;align-items:center;flex-wrap:wrap;gap:6px}
 .os-emojis-label{width:100%;font-size:12.5px;color:var(--bt-ink-2)}
 .os-emoji-opt{width:44px;height:44px;border-radius:14px;border:1px solid var(--bt-line-2);background:var(--bt-main);font-size:22px;cursor:pointer;transition:transform .12s ease}
@@ -501,7 +463,8 @@ export const SUBSCRIPTIONS_CSS = `
 .os-toggle-text span{font-size:12.5px;color:var(--bt-ink-2)}
 .os-toggle-compact .os-toggle-text strong{font-size:13px;white-space:nowrap}
 .os-safety{display:flex;align-items:center;gap:14px;padding:14px 16px;border-radius:16px;background:color-mix(in srgb,#0ea5e9 7%,var(--bt-card));border:1px solid color-mix(in srgb,#0ea5e9 25%,transparent)}
-.os-safety-icon{font-size:22px}
+.os-safety-icon{display:inline-grid;place-items:center;width:36px;height:36px;border-radius:12px;background:color-mix(in srgb,#0ea5e9 14%,transparent);color:#0284c7;flex:none}
+.os-safety-icon svg{width:20px;height:20px}
 .os-safety>div{display:flex;flex-direction:column;gap:2px;flex:1;font-size:12.5px;line-height:18px;color:var(--bt-ink-2)}
 .os-safety strong{font-size:14px;color:var(--bt-ink)}
 .os-save{display:flex;align-items:center;gap:12px;padding-bottom:8px}

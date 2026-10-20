@@ -1,4 +1,5 @@
 import { createElement as h, Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { SubscriptionsButton } from './subscriptions.js'
 import { createPortal } from 'react-dom'
 import { currentPart, latestMemoryChange } from './text.js'
 import { ArrowUpIcon, CloseIcon, ArrowDownIcon, MemoryIcon, SidePanelIcon } from './icons.js'
@@ -101,6 +102,7 @@ export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus
     h(MemoryNotice, { shown: memoryNotice }),
     h('span', { className: 'bt-pill-go', 'aria-hidden': true }, h(GoArrow))),
     h('span', { className: 'bt-sr', role: 'status' }, memoryNotice ? t('Memory updated') : ''),
+    bot && bot.id === roster.eventsBotId ? h(SubscriptionsButton, { actions }) : null,
     h(NewMessagePills, { key: sessionId, sessionId, useSessions, useUi, useTurnClock }),
     h(ActivityIndicator, { key: `activity:${sessionId}`, sessionId, useRoster, useSessionStatus, useSession, useLive, actions }),
     // DSH's way into its right sidebar sits in the session header this pill replaces.

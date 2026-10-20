@@ -125,6 +125,16 @@ function startGate(allow, devices) {
     upstream.on('error', close)
     socket.on('error', close)
   })
+  // Open browser connections (WebSockets) would keep a stopped launcher alive; stop ends them.
+  const sockets = new Set()
+  server.on('connection', (socket) => {
+    sockets.add(socket)
+    socket.on('close', () => sockets.delete(socket))
+  })
+  server.stop = () => {
+    server.close()
+    for (const socket of sockets) socket.destroy()
+  }
   return new Promise((resolve, reject) => {
     server.once('error', reject)
     server.listen(gatePort, '127.0.0.1', () => resolve(server))
@@ -184,14 +194,16 @@ function stop(code) {
   if (stopping) return
   stopping = true
   if (mode === 'tailscale') serveOff()
-  gate?.close()
+  gate?.stop()
   if (dsh.exitCode === null) dsh.kill('SIGTERM')
   process.exitCode = code
+  // A DSH that does not stop in time is not waited for.
+  setTimeout(() => process.exit(code), 8000).unref()
 }
 process.on('SIGINT', () => stop(0))
 process.on('SIGTERM', () => stop(0))
-dsh.on('exit', code => {
+dsh.on('exit', (code) => {
   say(`DSH exited (${code})`)
   stop(code ?? 1)
-  log.end()
+  log.end(() => process.exit(process.exitCode ?? 0))
 })

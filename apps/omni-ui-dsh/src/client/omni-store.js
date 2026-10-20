@@ -54,7 +54,7 @@ function sample(now) {
     { id: 'c-obras', channelId: 'wa-sales', name: 'Grupo Obras', initials: 'GO', kind: 'group', preview: 'Rafael: fotos no drive', at: ago(26 * HOUR), unread: 0 },
     { id: 'c-beta', channelId: 'tg-helper', name: 'Beta testers', initials: 'BT', kind: 'group', preview: 'Is the bot down?', at: ago(19 * HOUR), unread: 0 },
     { id: 'c-ci', channelId: 'slack-namastex', name: '#ci-alerts', initials: '#', kind: 'group', preview: 'build #1932 failed on dev', at: ago(12 * MIN), unread: 0 },
-    { id: 'c-self', channelId: 'wa-personal', name: 'Me (notes)', initials: 'ME', kind: 'self', preview: '🎤 Voice note (0:14)', at: ago(52 * MIN), unread: 0 },
+    { id: 'c-self', channelId: 'wa-personal', name: 'Me (notes)', initials: 'ME', kind: 'self', preview: 'Voice note (0:14)', at: ago(52 * MIN), unread: 0 },
   ]
   const messages = {
     'c-marina': [
@@ -73,9 +73,9 @@ function sample(now) {
   }
   const src = (chat, channel) => ({ kind: 'chat', id: chat, ...pick(chats.find(item => item.id === chat), channels.find(item => item.id === channel)) })
   const subscriptions = [
-    { id: 's-react', name: 'Hand a message to Omni', on: true,
+    { id: 's-react', name: 'Hand a message to Tentacall', on: true,
       sources: [{ kind: 'channel', id: 'wa-sales', name: 'Sales', type: 'whatsapp-baileys' }, { kind: 'channel', id: 'wa-personal', name: 'Personal', type: 'whatsapp-baileys' }, { kind: 'channel', id: 'slack-namastex', name: 'Namastex', type: 'slack' }],
-      trigger: { kind: 'reaction', emoji: '🤖' }, worker: { kind: 'main' }, outputs: { react: true, replyToMe: false }, safety: { askFirst: true } },
+      trigger: { kind: 'reaction', emoji: '🤖' }, worker: { kind: 'events' }, outputs: { react: true, replyToMe: false }, safety: { askFirst: true } },
     { id: 's-ci', name: 'Build failures', on: true,
       sources: [src('c-ci', 'slack-namastex'), src('c-support', 'slack-namastex'), src('c-beta', 'tg-helper')],
       trigger: { kind: 'keyword', words: ['failed', 'error', 'down'] }, worker: { kind: 'bot', name: 'Ops', look: { shape: 'octopus', color: 'orange' } }, outputs: { react: true, replyToMe: false }, safety: { askFirst: true } },
@@ -89,7 +89,7 @@ function sample(now) {
   const runs = [
     { id: 'r1', subId: 's-ci', at: ago(11 * MIN), status: 'waiting', from: '#ci-alerts', excerpt: 'build #1932 failed on dev', summary: 'Wants to run `gh run view 1932 --log-failed`' },
     { id: 'r2', subId: 's-react', at: ago(26 * MIN), status: 'working', from: 'Marina Lopes', excerpt: 'Pode me mandar o orçamento de novo?', summary: 'Finding the latest quote in Drive' },
-    { id: 'r3', subId: 's-voice', at: ago(52 * MIN), status: 'done', from: 'Me (notes)', excerpt: '🎤 "lembrar de renovar o domínio lembr.ai"', summary: 'Added a task for Friday and replied to you' },
+    { id: 'r3', subId: 's-voice', at: ago(52 * MIN), status: 'done', from: 'Me (notes)', excerpt: 'Voice note: “lembrar de renovar o domínio lembr.ai”', summary: 'Added a task for Friday and replied to you' },
     { id: 'r4', subId: 's-ci', at: ago(3 * HOUR), status: 'done', from: '#support', excerpt: 'checkout is down for some users', summary: 'Found a 502 spike; posted a summary in Ops' },
     { id: 'r5', subId: 's-react', at: ago(5 * HOUR), status: 'failed', from: 'Grupo Obras', excerpt: 'Rafael: fotos no drive', summary: 'No access to that Drive folder' },
   ]
@@ -257,14 +257,15 @@ export function startLive(call, every = POLL_MS) {
 // Subscriptions: chats, groups or whole channels, watched for one kind of event and handed to
 // a Bot or a DSH session. Sample only: nothing here talks to omni yet.
 
+// `icon` names a line icon (subscriptions.js); only a reaction shows an emoji, the one you react with.
 export const TRIGGERS = {
-  reaction: { label: 'You react with', icon: '🤖' },
-  message: { label: 'Any new message', icon: '💬' },
-  mention: { label: 'Someone mentions you', icon: '@' },
-  keyword: { label: 'A message contains', icon: '🔎' },
-  voice: { label: 'A voice note arrives', icon: '🎤' },
-  media: { label: 'A photo or file arrives', icon: '📎' },
-  down: { label: 'The channel disconnects', icon: '⚡' },
+  reaction: { label: 'You react with', short: 'reaction', icon: 'reaction' },
+  message: { label: 'Any new message', short: 'new message', icon: 'message' },
+  mention: { label: 'Someone mentions you', short: 'mention', icon: 'mention' },
+  keyword: { label: 'A message contains', short: 'keyword', icon: 'keyword' },
+  voice: { label: 'A voice note arrives', short: 'voice note', icon: 'voice' },
+  media: { label: 'A photo or file arrives', short: 'file', icon: 'media' },
+  down: { label: 'The channel disconnects', short: 'disconnect', icon: 'down' },
 }
 export const REACTIONS = ['🤖', '👀', '📌', '✅', '🧾', '🔥', '❓', '⭐']
 
@@ -276,7 +277,7 @@ export function firedToday(state, subId) {
   return state.runs.filter(run => run.subId === subId && run.at >= midnight).length
 }
 
-export const emptyDraft = () => ({ id: null, name: '', on: true, sources: [], trigger: { kind: 'reaction', emoji: '🤖' }, worker: { kind: 'main' }, outputs: { react: true, replyToMe: false }, safety: { askFirst: true } })
+export const emptyDraft = () => ({ id: null, name: '', on: true, sources: [], trigger: { kind: 'reaction', emoji: '🤖' }, worker: { kind: 'events' }, outputs: { react: true, replyToMe: false }, safety: { askFirst: true } })
 
 const sourceOfChat = (state, chat) => ({ kind: 'chat', id: chat.id, name: chat.name, type: channelOf(state, chat.channelId)?.type ?? 'whatsapp-baileys', chatKind: chat.kind ?? 'direct' })
 export const sourceOfChannel = channel => ({ kind: 'channel', id: channel.id, name: channel.name, type: channel.type })

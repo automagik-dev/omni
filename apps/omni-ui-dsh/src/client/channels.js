@@ -5,18 +5,16 @@ import { t } from './i18n.js'
 import { relativeShort } from './text.js'
 import { call } from './api.js'
 import {
-  CHANNEL_TYPES, CHANNELS_PANEL, CHAT_PANEL, STATUS, canWrite, channelOf, chatOf, healthSummary, omniActions, omniStore, startLive, typeOf, unreadOf, visibleChats,
+  CHANNEL_TYPES, STATUS, canWrite, channelOf, chatOf, healthSummary, omniActions, omniStore, typeOf, unreadOf, visibleChats,
 } from './omni-store.js'
 
-// Omni channels inside the Bot surface. The sidebar's Chats section sits under the Bots:
-// one icon per connected channel to filter by, then the chats themselves. A chat opens in
-// the main view like a Bot does (the CHAT_PANEL main panel); the Channels page
-// (CHANNELS_PANEL) connects new channels and shows the health of the connected ones.
+// Omni channels inside the Bot surface. The Channels page (CHANNELS_PANEL) connects new
+// channels and shows the health of the connected ones; a chat opens in the CHAT_PANEL main
+// panel. Subscriptions on these channels live in subscriptions.js, under Tentacall.
 // Live when the host has an omni URL and key (src/host/omni.js, read-only); sample data otherwise.
 
 export const useOmni = () => useSyncExternalStore(omniStore.subscribe, omniStore.getSnapshot, omniStore.getSnapshot)
 const useActions = actions => useMemo(() => omniActions(id => actions.selectPanel(id), call), [actions])
-const activePanel = usePanel => (usePanel ? usePanel(info => info?.activePanelId ?? null) : null)
 
 // -------------------------------------------------------------------------
 // Marks
@@ -76,76 +74,6 @@ export function PreviewChip() {
   }
   const missing = source.missing?.join(', ')
   return h('span', { className: 'oc-preview-chip', title: missing ? t('Sample data until DSH has {missing}.', { missing }) : t('Nothing here reaches a real channel yet.') }, t('Preview · sample data'))
-}
-
-// -------------------------------------------------------------------------
-// Sidebar: the Chats section under the Bots
-
-export function ChatsSection({ wide, actions, usePanel }) {
-  const state = useOmni()
-  const omni = useActions(actions)
-  useEffect(() => { startLive(call) }, [])
-  const panel = activePanel(usePanel)
-  const chats = visibleChats(state)
-  const summary = healthSummary(state)
-  if (!wide) {
-    // The rail keeps the chats that wait for you, as avatars.
-    const waiting = chats.filter(chat => chat.unread > 0).slice(0, 5)
-    return h('div', { className: 'oc-side oc-side-rail', role: 'group', 'aria-label': t('Chats') },
-      h('span', { className: 'oc-side-rule', 'aria-hidden': true }),
-      waiting.map(chat => h('button', {
-        key: chat.id, type: 'button', className: 'bt-row oc-chat-row', title: chat.name,
-        'aria-label': `${chat.name}, ${t('{n} unread', { n: chat.unread })}`,
-        'aria-current': panel === CHAT_PANEL && state.chatId === chat.id ? 'page' : undefined,
-        onClick: () => omni.openChat(chat.id),
-      }, h(ChatAvatar, { chat, channel: channelOf(state, chat.channelId) }))),
-      h('button', { type: 'button', className: 'bt-row oc-chat-row', title: t('Channels'), 'aria-label': t('Channels'), onClick: () => omni.openChannels() },
-        h('span', { className: 'oc-rail-octo' }, h(OctopusLogo, { size: 20 }), summary.attention > 0 ? h('span', { className: 'oc-warn-dot', 'aria-hidden': true }) : null)))
-  }
-  const filtered = state.filter === null ? null : channelOf(state, state.filter)
-  return h('div', { className: 'oc-side', role: 'group', 'aria-label': t('Chats') },
-    h('div', { className: 'oc-side-head' },
-      h('span', { className: 'oc-side-title' }, t('Chats')),
-      h('button', {
-        type: 'button', className: 'oc-side-manage', 'aria-current': panel === CHANNELS_PANEL ? 'page' : undefined,
-        onClick: () => omni.openChannels(),
-        title: summary.attention > 0 ? t('{n} channel needs attention', { n: summary.attention }) : t('Channels and their health'),
-      }, t('Channels'), summary.attention > 0 ? h('span', { className: 'oc-warn-dot', 'aria-hidden': true }) : null, h(ChevronRightIcon))),
-    h('div', { className: 'oc-filters', role: 'toolbar', 'aria-label': t('Show chats from') },
-      h('button', {
-        type: 'button', className: 'oc-filter oc-filter-all', 'aria-pressed': state.filter === null, title: t('All chats'),
-        onClick: () => omni.setFilter(null),
-      }, h(OctopusLogo, { size: 16 }), unreadOf(state) > 0 ? h('span', { className: 'oc-filter-count' }, String(unreadOf(state))) : null),
-      state.channels.map((channel) => {
-        const unread = unreadOf(state, channel.id)
-        const label = `${typeOf(channel.type).label} · ${channel.name}`
-        return h('button', {
-          key: channel.id, type: 'button', className: 'oc-filter', 'aria-pressed': state.filter === channel.id,
-          title: `${label} · ${t(STATUS[channel.status].label)}`,
-          'aria-label': [label, t(STATUS[channel.status].label), unread > 0 ? t('{n} unread', { n: unread }) : ''].filter(Boolean).join(', '),
-          onClick: () => omni.setFilter(state.filter === channel.id ? null : channel.id),
-        }, h(Tile, { type: channel.type, size: 24 }), h(StatusDot, { status: channel.status }),
-        unread > 0 ? h('span', { className: 'oc-filter-count' }, String(unread)) : null)
-      }),
-      h('button', { type: 'button', className: 'oc-filter oc-filter-add', title: t('Connect a channel'), 'aria-label': t('Connect a channel'), onClick: () => omni.openChannels('connect') }, h(PlusIcon))),
-    filtered && filtered.status !== 'connected'
-      ? h('button', { type: 'button', className: 'oc-side-alert', 'data-tone': STATUS[filtered.status].tone, onClick: () => omni.openChannels('channel', filtered.id) },
-        h(StatusDot, { status: filtered.status }), h('span', null, t(STATUS[filtered.status].label)), h('span', { className: 'oc-side-alert-go' }, t('Fix')))
-      : null,
-    chats.length === 0
-      ? h('div', { className: 'oc-side-empty' }, filtered ? t('No chats on {name} yet.', { name: filtered.name }) : t('Connect a channel and its chats show up here.'))
-      : chats.map(chat => h(ChatRow, { key: chat.id, chat, channel: channelOf(state, chat.channelId), active: panel === CHAT_PANEL && state.chatId === chat.id, onOpen: () => omni.openChat(chat.id) })))
-}
-
-function ChatRow({ chat, channel, active, onOpen }) {
-  const label = [chat.name, channel ? `${typeOf(channel.type).label} · ${channel.name}` : '', chat.unread > 0 ? t('{n} unread', { n: chat.unread }) : ''].filter(Boolean).join(', ')
-  return h('button', { type: 'button', className: 'bt-row oc-chat-row', 'aria-label': label, 'aria-current': active ? 'page' : undefined, 'data-chat-id': chat.id, onClick: onOpen },
-    h(ChatAvatar, { chat, channel }),
-    h('span', { className: 'bt-row-body' },
-      h('span', { className: 'bt-row-name' }, h('span', { className: 'bt-row-title' }, chat.name), h('span', { className: 'oc-row-time' }, relativeShort(chat.at))),
-      h('span', { className: 'oc-row-line' },
-        h('span', { className: 'bt-row-preview' }, chat.preview),
-        chat.unread > 0 && !active ? h('span', { className: 'oc-count' }, String(chat.unread)) : null)))
 }
 
 // -------------------------------------------------------------------------
@@ -515,36 +443,6 @@ body[data-ds-dark-theme] .oc-ava{background:hsl(var(--oc-hue) 30% 26%);color:hsl
 .oc-ava-img{position:absolute;inset:0;width:100%;height:100%;border-radius:50%;object-fit:cover}
 .oc-ava-badge{position:absolute;right:-4px;bottom:-4px;display:inline-flex;border-radius:32%;box-shadow:0 0 0 2px var(--bt-sidebar)}
 .oc-chat .oc-ava-badge{box-shadow:0 0 0 2px var(--bt-main)}
-
-/* Sidebar: the Chats section under the Bots */
-.oc-side{display:flex;flex-direction:column;gap:3px;margin-top:10px;padding-top:10px;border-top:.5px solid var(--bt-line-2)}
-.oc-side-head{display:flex;align-items:center;justify-content:space-between;padding:0 4px 0 10px;min-height:28px}
-.oc-side-title{font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--bt-ink-3)}
-.oc-side-manage{display:inline-flex;align-items:center;gap:4px;height:26px;padding:0 6px 0 10px;border:0;border-radius:999px;background:none;color:var(--bt-ink-2);font:inherit;font-size:12.5px;cursor:pointer;transition:background-color .12s ease,color .12s ease}
-.oc-side-manage:hover,.oc-side-manage[aria-current=page]{background:var(--bt-hover);color:var(--bt-ink)}
-.oc-warn-dot{width:7px;height:7px;border-radius:50%;background:#f59e0b;box-shadow:0 0 0 1.5px var(--bt-sidebar)}
-.oc-filters{display:flex;flex-wrap:wrap;gap:5px;padding:4px 6px 6px}
-.oc-filter{position:relative;width:34px;height:34px;border-radius:11px;border:1px solid transparent;background:var(--bt-hover);display:inline-grid;place-items:center;padding:0;cursor:pointer;color:var(--bt-accent);transition:transform .12s ease,border-color .12s ease,background-color .12s ease}
-.oc-filter:hover{transform:translateY(-1px)}
-.oc-filter[aria-pressed=true]{border-color:var(--bt-accent);background:color-mix(in srgb,var(--bt-accent) 12%,transparent)}
-.oc-filter .oc-dot{position:absolute;right:2px;bottom:2px;width:9px;height:9px;box-shadow:0 0 0 2px var(--bt-sidebar)}
-.oc-filter-count{position:absolute;top:-5px;right:-5px;min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:var(--bt-accent);color:var(--bt-accent-ink,#fff);font-size:10px;font-weight:600;line-height:16px;box-sizing:border-box;box-shadow:0 0 0 2px var(--bt-sidebar)}
-.oc-filter-add{background:none;border:1px dashed var(--bt-line-2);color:var(--bt-ink-3)}
-.oc-filter-add:hover{color:var(--bt-ink);border-color:var(--bt-ink-3)}
-.oc-filter-add svg{width:16px;height:16px}
-.oc-side-alert{display:flex;align-items:center;gap:8px;margin:0 6px 4px;padding:7px 10px;border:0;border-radius:10px;background:color-mix(in srgb,var(--oc-tone) 12%,transparent);color:var(--bt-ink);font:inherit;font-size:12.5px;text-align:left;cursor:pointer}
-.oc-side-alert-go{margin-left:auto;font-weight:600;color:color-mix(in srgb,var(--oc-tone) 70%,var(--bt-ink))}
-.oc-side-empty{padding:8px 10px 10px;font-size:12.5px;line-height:18px;color:var(--bt-ink-3)}
-.oc-chat-row .bt-row-name{justify-content:space-between}
-.oc-row-time{flex:none;font-size:11px;color:var(--bt-ink-3)}
-.oc-row-line{display:flex;align-items:center;gap:6px;min-width:0}
-.oc-row-line .bt-row-preview{flex:1;min-width:0}
-.oc-count{flex:none;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--bt-accent);color:var(--bt-accent-ink,#fff);font-size:11px;font-weight:600;line-height:18px;text-align:center;box-sizing:border-box}
-.oc-chat-row[aria-current=page]{background:var(--bt-active)}
-.oc-side-rail{align-items:center;border-top:0;margin-top:6px;padding-top:0}
-.oc-side-rule{width:24px;height:1px;background:var(--bt-line-2);margin:2px 0 6px}
-.oc-rail-octo{position:relative;display:inline-grid;place-items:center;width:36px;height:36px;border-radius:50%;background:var(--bt-hover);color:var(--bt-accent)}
-.oc-rail-octo .oc-warn-dot{position:absolute;top:2px;right:2px}
 
 /* Main panels */
 .oc-page{position:relative;height:100%;min-height:0;display:flex;flex-direction:column;background:var(--bt-main);color:var(--bt-ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;animation:oc-page-in .22s cubic-bezier(.2,0,0,1)}
