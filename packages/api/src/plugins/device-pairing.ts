@@ -81,7 +81,7 @@ export function directSenderPhone(event: TypedOmniEvent<'message.received'>): st
   return phoneDigits(resolved) ?? phoneDigits(payload.from);
 }
 
-export function pairingMessageOf(
+function pairingMessageOf(
   event: TypedOmniEvent<'message.received'>,
   instanceId: string,
   selfJid: string | null,

@@ -28,7 +28,7 @@ import type { AppVariables } from '../../types';
 
 const log = createLogger('api:pairing');
 
-export const PairingStartBodySchema = z
+const PairingStartBodySchema = z
   .object({
     deviceName: z.string().trim().min(1).max(80),
   })

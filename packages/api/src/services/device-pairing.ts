@@ -36,7 +36,7 @@ import type { ApiKeyService } from './api-keys';
 const log = createLogger('device-pairing');
 
 /** Codes and pairings live this long. */
-export const PAIRING_TTL_MS = 10 * 60 * 1000;
+const PAIRING_TTL_MS = 10 * 60 * 1000;
 /** Unexpired pending pairings one instance holds at most; starts beyond it are refused. */
 export const MAX_PENDING_PER_INSTANCE = 20;
 /** A code typed this long before the pairing was created is not taken as an answer to it. */
