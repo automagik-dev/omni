@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main, dev, labs]
   pull_request:
-    branches: [main, dev]
+    branches: [main, dev, labs]
   # Merge-queue support (#990): when a merge queue is enabled on dev, GitHub
   # synthesizes gh-readonly-queue/* merge commits (PR + dev + any PRs queued
   # ahead) and requires the branch-protection checks to pass on THEM before
@@ -17,7 +17,7 @@ on:
   # Enabling the queue itself is a one-time settings change — see
   # docs/ci/merge-queue.md.
   merge_group:
-    branches: [main, dev]
+    branches: [main, dev, labs]
 
 concurrency:
   group: ci-${{ github.ref }}
