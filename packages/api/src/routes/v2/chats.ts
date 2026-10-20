@@ -300,6 +300,9 @@ chatsRoutes.get('/by-external', async (c) => {
   if (!instanceId || !externalId) {
     return c.json({ error: 'instanceId and externalId are required' }, 400);
   }
+  // Before the lookup, as in resolveChatIdParam: a key scoped to other instances gets the
+  // same refusal whether or not the chat exists (no cross-instance existence oracle).
+  checkInstanceAccess(c.get('apiKey'), instanceId);
 
   const chat = await services.chats.findByExternalIdSmart(instanceId, externalId);
 
