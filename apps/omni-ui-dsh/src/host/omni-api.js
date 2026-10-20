@@ -114,7 +114,7 @@ export function install(rt) {
   let spec = null
 
   const operating = (sessionId) => {
-    if (!rt.config?.omni?.url) return false
+    if (!(rt.omniNamed?.() ?? Boolean(rt.config?.omni?.url))) return false
     const self = rt.selfOf(sessionId)
     return self !== undefined && rt.isMain(self)
   }
@@ -152,7 +152,7 @@ export function install(rt) {
   async function operations() {
     if (spec && Date.now() - spec.at < SPEC_TTL_MS) return spec.ops
     const response = await rt.omniRequest('GET', '/openapi.json')
-    if (response === null) throw invalid('Omni is not connected here: config.omni.url and the OMNI_API_KEY secret are both needed.')
+    if (response === null) throw invalid('Omni is not connected here: connect one on the Channels page (pair by code).')
     if (!response.ok) throw invalid(`omni answered ${response.status} for its API description`)
     spec = { at: Date.now(), ops: withSourceRoutes(operationsOf(await response.json())) }
     return spec.ops

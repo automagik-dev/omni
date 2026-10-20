@@ -120,7 +120,7 @@ test('apply registers listeners, tools, and effects in a fixed order', (t) => {
     'effect ds-bot: dsh update install',
     'effect ds-bot: omni events',
     'effect ds-bot: api route',
-    'route POST /api/bot',
+    'route POST /api/omni-ui',
     'effect ds-bot: load state',
   ])
 })

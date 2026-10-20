@@ -4,6 +4,7 @@ import { OMNI_UI_CSS, OmniCanvas } from './omni-ui.js'
 import { setCanvasRenderer } from './canvas-slot.js'
 import { OMNI_LIVE_CSS } from './omni-live.js'
 import { OMNI_PEEK_CSS } from './omni-peek.js'
+import { OMNI_CONNECT_CSS } from './omni-connect.js'
 import { isHex, inkText, paintCss } from './inks.js'
 import { DEFAULT_MASK, SHAPES, markupCache, maskOf } from './characters.js'
 import { countCards, createSource, EMPTY_ROSTER, indexRoster, isAgentSession } from './sources.js'
@@ -302,7 +303,7 @@ export function apply(ctx) {
       key = next
       style.textContent = themeCss(themes[id], accent)
       const release = releaseTokens
-      releaseTokens = ctx.theme.overrideTokens('ds-bot', shellTokens(themes[id], accent))
+      releaseTokens = ctx.theme.overrideTokens('omni-ui', shellTokens(themes[id], accent))
       if (typeof release === 'function') release()
       if (snapshot.ready) {
         try { localStorage.setItem(PREFS_KEY, JSON.stringify({ theme: prefs.theme, accent: prefs.accent, motion: prefs.motion })) } catch { /* storage unavailable */ }
@@ -325,13 +326,13 @@ export function apply(ctx) {
 
   ctx.effect(() => {
     const hub = { registerShape, registerTheme, themes: () => Object.keys(allThemes()), shapes: () => Object.keys(SHAPES) }
-    const queued = Array.isArray(window.dshBotQueue) ? window.dshBotQueue : []
+    const queued = Array.isArray(window.omniUiQueue) ? window.omniUiQueue : []
     window.dshBot = hub
-    window.dshBotQueue = { push: (task) => { try { task(hub) } catch (error) { console.warn('[ds-bot] registration', error); noteClientError('registration', error) } } }
-    for (const task of queued) window.dshBotQueue.push(task)
+    window.omniUiQueue = { push: (task) => { try { task(hub) } catch (error) { console.warn('[ds-bot] registration', error); noteClientError('registration', error) } } }
+    for (const task of queued) window.omniUiQueue.push(task)
     return () => {
       if (window.dshBot === hub) delete window.dshBot
-      delete window.dshBotQueue
+      delete window.omniUiQueue
     }
   }, 'ds-bot: registry')
 
@@ -821,7 +822,7 @@ export function apply(ctx) {
     () => installCompiledStyles(ABOUT_CSS, 'about'),
     () => installCompiledStyles(MEMBER_CSS, 'members'),
     () => installCompiledStyles(USER_MESSAGE_CSS, 'user-messages'),
-    () => installCompiledStyles(CHANNELS_CSS + SUBSCRIPTIONS_CSS + AUTOMATIONS_CSS + OMNI_LIVE_CSS + OMNI_UI_CSS + OMNI_PEEK_CSS, 'channels'),
+    () => installCompiledStyles(CHANNELS_CSS + SUBSCRIPTIONS_CSS + AUTOMATIONS_CSS + OMNI_LIVE_CSS + OMNI_UI_CSS + OMNI_PEEK_CSS + OMNI_CONNECT_CSS, 'channels'),
     browsers ? () => installCompiledStyles(BROWSER_CSS, 'browser') : null,
     () => installTheme(),
     () => shadow('sidebar.workspaces', { priority: BOT_PRIORITY, inject: face }, TeamSidebar),

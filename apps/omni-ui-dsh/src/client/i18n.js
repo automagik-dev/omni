@@ -2,7 +2,7 @@
 // Copy is looked up at render time and every slot outlet re-renders on a language
 // switch, so nothing caches a translated string.
 
-export const NAMESPACE = 'ds-bot'
+export const NAMESPACE = 'omni-ui'
 
 const ZH = {
   // Automations page (automations-page.js)
@@ -188,6 +188,18 @@ const ZH = {
   'A {app} window opens. Approve Omni there and come back.': '会打开 {app} 窗口。在那里允许 Omni，然后回到这里。',
   'Add a channel': '添加渠道',
   'Add channel': '添加渠道',
+  'The pairing was cancelled.': '配对已取消。',
+  'The code expired. Start again for a new one.': '验证码已过期，请重新开始获取新的验证码。',
+  'Connected to {origin}': '已连接到 {origin}',
+  'Send this code on WhatsApp': '在 WhatsApp 上发送此验证码',
+  'From the WhatsApp of {to}, send it to yourself ("Message yourself"). The link opens that chat with the code typed.': '用 {to} 的 WhatsApp 发给自己（“给自己发消息”）。链接会打开该聊天并填好验证码。',
+  'Open WhatsApp': '打开 WhatsApp',
+  'Waiting for the code to arrive at {origin}…': '正在等待验证码送达 {origin}…',
+  'Or scan with the phone camera': '或用手机相机扫描',
+  'Connect your Omni': '连接你的 Omni',
+  'Type its address. Omni gives you a code to send from your WhatsApp, and this page goes live. No keys to copy.': '输入它的地址。Omni 会给你一个验证码，用你的 WhatsApp 发送后，此页面即接入实时数据。无需复制任何密钥。',
+  'Omni address': 'Omni 地址',
+  'Get a code': '获取验证码',
   'All channels': '全部渠道',
   'All chats': '全部聊天',
   '{app} is connected': '{app} 已连接',

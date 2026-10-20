@@ -160,17 +160,17 @@ test('a navigation before the guest is ready waits for dom-ready, and the addres
   assert.equal(browsers.pages.getSnapshot()[tab].error, null)
 })
 
-test('the v1 one-page store migrates to one tab per Bot', async () => {
+// DS Bot may share the DSH origin; its browser store is its own.
+test('DS Bot\'s browser store is neither read nor removed', async () => {
   const desktop = fakeDesktop()
-  desktop.storage.setItem('ds-bot.browser.v1', JSON.stringify({ a: { url: 'https://example.com/', title: 'Example' } }))
+  const theirs = JSON.stringify({ a: { url: 'https://example.com/', title: 'Example' } })
+  desktop.storage.setItem('ds-bot.browser.v1', theirs)
   migrateStorage(desktop.storage)
   const browsers = createBotBrowsers({ bridge: desktop.bridge, createSource, storage: desktop.storage, document: desktop.doc })
   browsers.ensureTabs('a')
   const state = browsers.tabs.getSnapshot().a
-  assert.equal(state.ids.length, 1)
-  assert.equal(state.active, state.ids[0])
-  assert.equal(browsers.pages.getSnapshot()[state.ids[0]].url, 'https://example.com/')
-  assert.equal(desktop.storage.getItem('ds-bot.browser.v1'), null)
+  assert.notEqual(browsers.pages.getSnapshot()[state.ids[0]]?.url, 'https://example.com/')
+  assert.equal(desktop.storage.getItem('ds-bot.browser.v1'), theirs)
 })
 
 test('a read reaches the Bot’s active tab', async () => {

@@ -1,14 +1,13 @@
 {
-  "name": "ds-bot",
+  "name": "@automagik/omni-dsh",
   "version": "0.1.7",
-  "description": "DS Bot: a team of long-lived Bots for DeepSeek Harness, with Main Bots, Bot-to-Bot messages and group chats",
+  "description": "Omni for DeepSeek Harness: your Omni channels, chats and automations in DSH, with Omni as the operator Bot",
   "keywords": [
     "dsh-plugin",
     "deepseek-harness",
     "dsh",
-    "deepseek",
-    "bot",
-    "multi-agent",
+    "omni",
+    "whatsapp",
     "agents"
   ],
   "homepage": "https://github.com/automagik-dev/omni/tree/dev/apps/omni-ui-dsh#readme",

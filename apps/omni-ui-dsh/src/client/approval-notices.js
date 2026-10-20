@@ -22,7 +22,7 @@ export function noticeApprovals({ work, roster, shownSession, openSession, since
       const room = entry.roomId ? roomsById[entry.roomId] : undefined
       const note = new Notification(t('{name} is waiting for your approval', { name: byId[entry.botId]?.name ?? t('A Bot') }), {
         body: [room?.name, entry.tool].filter(Boolean).join(' · '),
-        tag: `ds-bot-approval-${entry.id}`,
+        tag: `omni-ui-approval-${entry.id}`,
       })
       note.onclick = () => {
         window.focus()

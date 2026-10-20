@@ -1,8 +1,9 @@
 // Omni channels: the instances, chats and messages of an omni API, read on this host so its
-// key never reaches the browser. The key is the OMNI_API_KEY credential in DSH's credential
-// store; `config.omni.url` names the API (https://omni.example.com, without /api/v2). Without
-// both, the Channels view keeps its sample data. This file only reads; the Main Bot changes
-// omni through omni-api.js, with the same key.
+// key never reaches the browser. The URL and key come from the link a pairing saved
+// (omni-link.js); without one, from the older profile settings: `config.omni.url` (the API,
+// https://omni.example.com, without /api/v2) and the OMNI_API_KEY credential in DSH's store,
+// both only read. Without either, the Channels view keeps its sample data. This file only
+// reads; the Main Bot changes omni through omni-api.js, with the same key.
 
 export const KEY = 'OMNI_API_KEY'
 const TIMEOUT_MS = 10_000
@@ -77,11 +78,19 @@ export function messageOf(message) {
 }
 
 export function install(rt) {
-  const base = () => {
+  const profileUrl = () => {
     const url = rt.config.omni?.url
     return typeof url === 'string' && /^https?:\/\//i.test(url) ? url.replace(/\/+$/, '') : null
   }
-  const key = async () => (await rt.ctx.get?.('credentials')?.resolve?.(KEY))?.value
+  // A saved link wins whole: its URL never pairs with the profile's key, or the reverse.
+  const base = () => rt.omniLink?.()?.url ?? profileUrl()
+  const key = async () => {
+    const link = rt.omniLink?.()
+    if (link) return link.key
+    return (await rt.ctx.get?.('credentials')?.resolve?.(KEY))?.value
+  }
+  // Whether an Omni is named here at all, read without a credential lookup.
+  rt.omniNamed = () => base() !== null
 
   async function get(url, apiKey, path) {
     let response
@@ -114,7 +123,7 @@ export function install(rt) {
   rt.omniEndpoint = async (endpoint, body) => {
     const url = base()
     const apiKey = await key()
-    if (url === null || !apiKey) return { configured: false, missing: [url === null ? 'omni.url' : null, apiKey ? null : KEY].filter(Boolean) }
+    if (url === null || !apiKey) return { configured: false, missing: [url === null ? 'omni.url' : null, apiKey ? null : KEY].filter(Boolean), ...(rt.omniLinkEndpoint ? { link: await rt.omniLinkEndpoint('omni-link') } : {}) }
     if (endpoint === 'omni-overview') {
       const [instances, chats] = await Promise.all([
         get(url, apiKey, '/instances?limit=100'),

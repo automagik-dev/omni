@@ -78,7 +78,7 @@ export const shellTokens = ({ light, dark }, accent) => ({
 })
 
 // Other plugins add character shapes and themes through `window.dshBot`, or queue
-// calls on `window.dshBotQueue` before this plugin loads. A shape draws only its
+// calls on `window.omniUiQueue` before this plugin loads. A shape draws only its
 // body; the eyes are cut out where `eyes.at` says, so it gets every state motion free.
 const customThemes = {}
 export const registry = createSource(0)

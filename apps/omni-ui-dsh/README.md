@@ -1,10 +1,12 @@
-# ds-bot
+# @automagik/omni-dsh
 
-The DS Bot plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh). It turns dsh into a team of long-lived Bots that talk to you, to each other and in group chats. See the [project page](../README.md) for an overview, install steps and screenshots.
+Omni for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh): your Omni channels, chats and automations inside dsh, with Omni as the Bot that operates them, on a team of long-lived Bots that talk to you, to each other and in group chats. It is built on [DS Bot](https://github.com/Fei2411/DeepSeek-Bot) (Apache-2.0, see `VENDORED.md`).
 
-> Early release (v0.1). Features, tools and the saved data format can still change.
+> Labs release. Features, tools and the saved data format can still change.
 
-Tested with dsh `0.2.0-rc.2` (Web and Desktop) on Linux.
+Tested with dsh `0.2.1-rc.2` (Web) on Linux.
+
+**Your own dsh stays yours.** Installed into an existing dsh, Omni keeps its files in `$OMNI_HOME/ui` (`~/.omni/ui`), keeps the key of the Omni it is linked to in its own file there, uses its own route (`/api/omni-ui`), plugin id (`omni-ui`) and browser-storage prefix (`omni-ui:`), overrides no other plugin's configuration, and checks for no updates. It can run beside upstream DS Bot.
 
 ## Features
 
@@ -35,15 +37,16 @@ Tested with dsh `0.2.0-rc.2` (Web and Desktop) on Linux.
 
 The [project page](../README.md#install) has the full steps for dsh Desktop and dsh Web. In short:
 
-- dsh Desktop: Settings → Plugins → add `ds-bot` (npm), a `.tgz` file, or `github:Fei2411/DeepSeek-Bot#v0.1.7&path:/ds-bot`.
-- Command line: `dsh plugin --profile desktop add ds-bot` (or `--profile web`).
+- dsh Desktop: Settings → Plugins → add a `.tgz` of this package (`npm pack` in this folder).
+- Command line: `dsh plugin --profile web add /path/to/automagik-omni-dsh-<version>.tgz`.
+- Or skip dsh setup entirely: the Omni desktop app (`apps/omni-desktop`, `npx @automagik/omni desktop`) ships dsh with this plugin on a home of its own.
 
 To work on the plugin from a checkout, add it to a dsh profile as a linked dependency and a bundle:
 
 ```json
 {
-  "dependencies": { "ds-bot": "link:/path/to/ds-bot" },
-  "dsh": { "profile": { "bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "ds-bot"] } }
+  "dependencies": { "@automagik/omni-dsh": "link:/path/to/apps/omni-ui-dsh" },
+  "dsh": { "profile": { "bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "@automagik/omni-dsh"] } }
 }
 ```
 
@@ -53,26 +56,33 @@ Run `pnpm install` in the profile folder, then start dsh from the deepseek-harne
 pnpm -s dsh --profile web --no-open
 ```
 
-The first time the team opens, the plugin creates a Main Bot called Chief.
+The first time the team opens, the plugin creates a Main Bot called Omni.
 
-**Upgrading from the legacy `dsh-bot` package**: earlier builds used the package name `dsh-bot`. Remove `dsh-bot` from the profile before you add `ds-bot`, because both use the plugin id `bot`. Your team, chats and secrets stay where they are (see [Data and backups](#data-and-backups)); saved browser settings, the theme and Bot colors move over the first time DS Bot opens.
+**Upgrading from the `ds-bot` builds of the Omni UI**: earlier builds were named `ds-bot` with the plugin id `bot` and kept the team in `~/.dsh/bot`. Replace `ds-bot` with `@automagik/omni-dsh` in the profile, and set `importHome: ~/.dsh/bot` once (see [Configuration](#configuration)) to copy that team into `~/.omni/ui`; the old folder is left as it was. Browser settings saved under `ds-bot:` are not carried over, because DS Bot uses the same names.
+
+## Connect to an Omni
+
+On the Channels page, type the address of an Omni (for example `omni.example.com`) and choose **Get a code**. Omni answers with a short code and the WhatsApp number of its pairing channel; send the code to yourself from that WhatsApp ("Message yourself"; **Open WhatsApp** or the QR opens the chat with the code typed). The page goes live as soon as the code arrives. The Omni must have pairing turned on (`OMNI_PAIRING_ENABLED=true` and a pairing instance on the server).
+
+The key Omni mints is saved in `~/.omni/ui/omni.json` (readable by you only), with the scopes the server gives paired keys and an expiry; it never reaches the browser. Delete that file to disconnect; revoke the key in Omni to cut it off from the server side. A profile can still name an Omni the older way, with `omni.url` in this plugin's config and the `OMNI_API_KEY` credential in dsh's store; a saved link wins over both.
 
 ## Configuration
 
-Options go in the profile's `cordis.patch.yml`, under the `bot` entry. All of them are optional.
+Options go in the profile's `cordis.patch.yml`, under the `omni-ui` entry. All of them are optional.
 
 ```yaml
-- id: bot
-  name: ds-bot
+- id: omni-ui
+  name: '@automagik/omni-dsh'
   config:
     workspace: /path/to/workspace   # where the Bots work; default <home>/workspace
-    home: /path/to/bot-data         # where the team is saved; default $DSH_HOME/bot
+    home: /path/to/omni-ui-data     # where the team is saved; default $OMNI_HOME/ui (~/.omni/ui)
+    importHome: ~/.dsh/bot          # copy a team saved there into home once, when home has none
     checkRatio: 0.8                 # share of the model's usable window where the steward decides
     browser: true                   # force the Bot browser on or off; default on in Desktop only
     memory: true                    # false turns memory off: no memory tools, section or panel
     memoryReview: true              # false leaves memory to the Bots' own remember calls
     diagnosticsFile: false          # keep the error log in memory only; default <home>/logs/diagnostics.jsonl
-    updateCheck: true               # look for a newer DS Bot when a window opens; default true
+    updateCheck: false              # the package's own patch sets false: nothing is checked or installed
     updateRegistry: https://registry.example/   # ask only this npm registry for updates
     github: false                   # hide the GitHub connector; default shown in Connectors
 ```
@@ -114,7 +124,19 @@ A read-only dsh (see [Data and backups](#data-and-backups)) shows memory but can
 
 ## Web search
 
-The package includes a second plugin, `ds-bot/web-search`. It registers the search provider `auto`, and `cordis.patch.yml` makes it the default. Each search goes in this order:
+The package includes a second plugin, `@automagik/omni-dsh/web-search`. It registers the search provider `auto`. The package's own `cordis.patch.yml` does not insert it, so installing Omni leaves your dsh's search settings alone; the Omni desktop app's profile inserts it and makes it the default. To use it in your own dsh, add both rows to your profile patch:
+
+```yaml
+- insert:
+    - id: web-search-auto
+      name: '@automagik/omni-dsh/web-search'
+- id: web
+  config:
+    searchProvider: auto
+    fetchProvider: http
+```
+
+Each search goes in this order:
 
 1. If the profile names another `searchProvider`, that one is used.
 2. The current model route's own search, with that route's key and host. The plugin knows the Anthropic Messages, OpenAI Responses and Gemini protocols, and a few search APIs (Ollama, Kimi, Zhipu, MiMo). Add more with `searchApis`.
@@ -127,7 +149,7 @@ Each result starts with a `Search backend: …` line that names the path it took
 
 ```yaml
 - id: web-search-auto
-  name: ds-bot/web-search
+  name: '@automagik/omni-dsh/web-search'
   disabled: true
 - id: web
   name: '@deepseek-ai/dsh-web'
@@ -175,17 +197,16 @@ Limits:
 
 ## Data and backups
 
-The plugin saves its data in `config.home`. Without it, the folder is `$DSH_HOME/bot`, or `~/.dsh/bot` when `DSH_HOME` is not set.
+The plugin saves its data in `config.home`. Without it, the folder is `$OMNI_HOME/ui`, or `~/.omni/ui` when `OMNI_HOME` is not set. It writes nothing of its own under `DSH_HOME`; the Bots' Sessions are dsh Sessions, and dsh keeps those.
 
 | System | Default folder |
 |---|---|
-| Linux, macOS | `~/.dsh/bot/` |
-| Windows | `C:\Users\<user>\.dsh\bot\` |
+| Linux, macOS | `~/.omni/ui/` |
+| Windows (WSL) | `~/.omni/ui/` inside the WSL distribution |
 
-- To move all dsh data (Sessions, profiles and plugin data), set `DSH_HOME`.
-- To move only the plugin data, set `home` in the configuration (see [Configuration](#configuration)).
+- To move Omni's data, set `OMNI_HOME`, or `home` in the configuration (see [Configuration](#configuration)).
 
-Files in `bot/`:
+Files in `ui/`:
 
 | File | Content |
 |---|---|
@@ -198,6 +219,7 @@ Files in `bot/`:
 | `ocr.json` | Cache of image text; safe to delete |
 | `workspace` | The team workspace: the working folder of every Bot without one of its own (`config.workspace` changes it) |
 | `secrets.json` | Saved secrets. Treat backups of it like passwords. |
+| `omni.json` | The Omni this UI is linked to: its URL and the key pairing minted (0600). Treat backups of it like passwords. |
 | `logs/diagnostics.jsonl` | Recent errors and warnings, with keys, tokens, saved secrets and the home folder removed. It moves to `diagnostics.jsonl.1` past 1 MB. Safe to delete. |
 
 The chats themselves are dsh Sessions and are not in `bot/`: they are in `~/.dsh/sessions/`. dsh keeps its workspace list in `~/.dsh/storages/workspace.json` and profiles (with model settings) in `~/.dsh/profiles/`. Bot browser logins are not saved: Desktop keeps each Bot's partition in memory only.

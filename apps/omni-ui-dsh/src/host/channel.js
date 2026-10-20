@@ -86,7 +86,7 @@ export function install(rt) {
   })
   // What a host that only reads the team may still answer.
   // Updates change the dsh profile, not the team, so a reading host may run them too.
-  const READS = new Set(['state', 'models', 'efforts', 'earlier', 'room-progress', 'exchange', 'exchange-text', 'file-text', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars', 'approval-answer', 'omni-overview', 'omni-messages', 'omni-get', 'omni-read'])
+  const READS = new Set(['state', 'models', 'efforts', 'earlier', 'room-progress', 'exchange', 'exchange-text', 'file-text', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars', 'approval-answer', 'omni-overview', 'omni-messages', 'omni-get', 'omni-read', 'omni-link', 'omni-pair-start', 'omni-pair-poll', 'omni-pair-cancel', 'omni-disconnect'])
 
   function setPrefs(body) {
     if (body.theme !== undefined) {
@@ -270,6 +270,12 @@ export function install(rt) {
           return ok(await rt.omniGet(body?.path))
         case 'omni-read':
           return ok(await rt.omniRead(String(body?.tool ?? ''), body?.args))
+        case 'omni-link':
+        case 'omni-pair-start':
+        case 'omni-pair-poll':
+        case 'omni-pair-cancel':
+        case 'omni-disconnect':
+          return ok(await rt.omniLinkEndpoint(endpoint, body))
         case 'automation-set-on':
         case 'automation-delete':
         case 'automation-test':

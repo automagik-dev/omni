@@ -1,7 +1,7 @@
 import { hostText, t } from './i18n.js'
 import { markNoted, noteClientError } from './diagnostics.js'
 
-const ROUTE = 'api/bot'
+const ROUTE = 'api/omni-ui'
 // Refusals carry a message meant for the user, who sees it where they acted.
 const REFUSALS = new Set(['bot/refused', 'bot/invalid', 'bot/read-only', 'bot/not-found', 'bot/browser-off'])
 

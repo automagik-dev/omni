@@ -6,8 +6,8 @@
 import { t } from './i18n.js'
 import { currentPart, relativeShort } from './text.js'
 
-export const BOTS_SOURCE = 'ds-bot'
-export const CHATS_SOURCE = 'ds-bot-chats'
+export const BOTS_SOURCE = 'omni-ui'
+export const CHATS_SOURCE = 'omni-ui-chats'
 // The words the group host reads as "everyone" (groups.js ROOM_ALL).
 const ROOM_ALL = ['all', 'everyone', '所有人', '全体']
 const OTHER_CHATS_MAX = 8

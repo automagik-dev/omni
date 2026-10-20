@@ -17,7 +17,7 @@ test('client.js registers a factory that exports apply and inject', () => {
   runInNewContext(committed(), { window: { __ModuleLoader__: { load: registration => registrations.push(registration) } } })
   assert.equal(registrations.length, 1)
   const [{ id, factory, ...rest }] = registrations
-  assert.equal(id, 'ds-bot')
+  assert.equal(id, '@automagik/omni-dsh')
   assert.deepEqual(Object.keys(rest), [])
 
   const requested = []

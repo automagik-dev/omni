@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, test } from 'node:test'
-import { cleanVersion, install, newer, sourceOf } from '../src/host/update.js'
+import { cleanVersion, encodeName, install, newer, sourceOf } from '../src/host/update.js'
 
 const PKG = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
 const flush = async () => { for (let index = 0; index < 8; index += 1) await Promise.resolve() }
@@ -67,13 +67,13 @@ test('a registry install finds the newest version on the next registry and insta
   const { rt, fetched, installs } = start({
     source: `${PKG.name}@^${PKG.version}`,
     answers: {
-      [`https://registry.npmjs.org/${PKG.name}/latest`]: new Error('offline'),
-      [`https://registry.npmmirror.com/${PKG.name}/latest`]: { version: '9.0.0' },
+      [`https://registry.npmjs.org/${encodeName(PKG.name)}/latest`]: new Error('offline'),
+      [`https://registry.npmmirror.com/${encodeName(PKG.name)}/latest`]: { version: '9.0.0' },
     },
     result: { application: 'restart-required', version: '9.0.0' },
   })
   const view = await rt.updateCheck()
-  assert.deepEqual(fetched, [`https://registry.npmjs.org/${PKG.name}/latest`, `https://registry.npmmirror.com/${PKG.name}/latest`])
+  assert.deepEqual(fetched, [`https://registry.npmjs.org/${encodeName(PKG.name)}/latest`, `https://registry.npmmirror.com/${encodeName(PKG.name)}/latest`])
   assert.equal(view.available, true)
   assert.equal(view.latest, '9.0.0')
   assert.equal(view.current, PKG.version)
@@ -92,11 +92,11 @@ test('a private registry of pnpm\'s own is asked alone, and an answer stands for
   const { rt, fetched } = start({
     source: `${PKG.name}@^${PKG.version}`,
     registries: { registry: null, fallbackRegistries: ['https://registry.npmmirror.com/'], resolved: 'https://npm.corp.example/' },
-    answers: { [`https://npm.corp.example/${PKG.name}/latest`]: { version: PKG.version } },
+    answers: { [`https://npm.corp.example/${encodeName(PKG.name)}/latest`]: { version: PKG.version } },
   })
   const view = await rt.updateCheck()
   assert.equal(view.available, false)
-  assert.deepEqual(fetched, [`https://npm.corp.example/${PKG.name}/latest`])
+  assert.deepEqual(fetched, [`https://npm.corp.example/${encodeName(PKG.name)}/latest`])
   await rt.updateCheck()
   assert.equal(fetched.length, 1)
   await rt.updateCheck({ fresh: true })
@@ -165,7 +165,7 @@ test('without a source from the plugin manager, the profile\'s own dependency en
   writeFileSync(join(dir, 'package.json'), JSON.stringify({ dependencies: { [PKG.name]: `^${PKG.version}` } }))
   const { rt } = start({
     profileDir: dir,
-    answers: { [`https://registry.npmjs.org/${PKG.name}/latest`]: { version: '9.0.0' } },
+    answers: { [`https://registry.npmjs.org/${encodeName(PKG.name)}/latest`]: { version: '9.0.0' } },
   })
   const view = await rt.updateCheck()
   assert.equal(view.source, 'registry')
@@ -179,7 +179,7 @@ test('a check that finds nothing clears the version a check before it found', as
   const dir = mkdtempSync(join(tmpdir(), 'ds-bot-update-'))
   const setSource = source => writeFileSync(join(dir, 'package.json'), JSON.stringify({ dependencies: { [PKG.name]: source } }))
   setSource(`^${PKG.version}`)
-  const latest = `https://registry.npmjs.org/${PKG.name}/latest`
+  const latest = `https://registry.npmjs.org/${encodeName(PKG.name)}/latest`
   const answers = { [latest]: { version: '9.0.0' } }
   const { rt } = start({ profileDir: dir, answers })
   const offered = await rt.updateCheck()
@@ -205,7 +205,7 @@ test('a failed install reports why and can be tried again', async () => {
   const { rt, installs } = start({
     source: `${PKG.name}@^${PKG.version}`,
     config: { updateRegistry: 'https://registry.example' },
-    answers: { [`https://registry.example/${PKG.name}/latest`]: { version: '9.0.0' } },
+    answers: { [`https://registry.example/${encodeName(PKG.name)}/latest`]: { version: '9.0.0' } },
     result: () => (++attempt === 1
       ? { application: 'failed', error: { code: 'incompatible-version', diagnostic: 'needs a newer DSH' } }
       : { application: 'restart-required', version: '9.0.0' }),

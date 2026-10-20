@@ -83,7 +83,7 @@ export function install(rt) {
         `You are ${bot.name}, a Bot on the user's team in Omni.${bot.role ? ` Your role: ${bot.role}.` : ''}`,
         bot.instructions ? `\n${bot.instructions}` : '',
         '',
-        rt.isMain(self) ? [MAIN_RULES, ...(rt.config?.omni?.url ? [OMNI_RULES] : []), TEAM_RULES].join('\n\n') : TEAM_RULES,
+        rt.isMain(self) ? [MAIN_RULES, ...((rt.omniNamed?.() ?? Boolean(rt.config?.omni?.url)) ? [OMNI_RULES] : []), TEAM_RULES].join('\n\n') : TEAM_RULES,
       ].join('\n')
     }
     const room = rt.roomOf(id)

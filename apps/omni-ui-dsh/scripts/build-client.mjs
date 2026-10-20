@@ -16,6 +16,8 @@ import { libraryOf, PROMPT_OPTIONS } from '../src/client/omni-ui-spec.js'
 import { sourceRoutes } from './omni-routes.mjs'
 
 const PLUGIN = dirname(dirname(fileURLToPath(import.meta.url)))
+// DSH's client loader matches a bundle's id to the npm package that ships it.
+const PACKAGE_NAME = JSON.parse(readFileSync(join(PLUGIN, 'package.json'), 'utf8')).name
 const OUTPUT = join(PLUGIN, 'client.js')
 // Omni's OpenUI authoring prompt, written from the same component definitions the client
 // renders, so the host needs no OpenUI at run time.
@@ -73,7 +75,7 @@ export async function bundleClient() {
   return [
     '// Generated from src/client by `npm run build` (scripts/build-client.mjs). Do not edit by hand.',
     'window.__ModuleLoader__.load({',
-    '  id: \'ds-bot\',',
+    `  id: '${PACKAGE_NAME}',`,
     '  factory: (require) => {',
     'const module = { exports: {} }',
     result.outputFiles[0].text.trimEnd(),

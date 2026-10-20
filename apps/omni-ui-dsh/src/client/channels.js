@@ -1,6 +1,7 @@
 import { createElement as h, Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { ArrowUpIcon, ChevronLeftIcon, ChevronRightIcon, PlusIcon } from './icons.js'
 import { OmniMark } from './logo.js'
+import { ConnectOmni } from './omni-connect.js'
 import { t } from './i18n.js'
 import { relativeShort } from './text.js'
 import { call } from './api.js'
@@ -172,6 +173,8 @@ function Overview({ state, omni }) {
         h('h1', null, t('Channels'), h(PreviewChip)),
         h('p', null, t('Connect the apps people already use to reach you. Omni answers there, and every chat shows up under your Bots.'))),
       h('button', { type: 'button', className: 'oc-primary', onClick: () => omni.showPage({ view: 'connect', type: null, step: 0 }) }, h(PlusIcon), state.preview ? t('Add channel') : t('Preview: add channel'))),
+    // Sample data means no Omni is linked yet: connecting one comes first.
+    state.preview ? h(ConnectOmni) : null,
     troubled.map(channel => h('button', { key: channel.id, type: 'button', className: 'oc-callout', 'data-tone': STATUS[channel.status].tone, onClick: () => omni.showPage({ view: 'channel', channelId: channel.id }) },
       h(Tile, { type: channel.type, size: 36 }),
       h('span', { className: 'oc-callout-text' },
