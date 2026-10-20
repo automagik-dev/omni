@@ -91,3 +91,9 @@ test('routes omni declares but leaves out of its API description are found and c
   assert.equal(findOperation(ops, 'POST', '/messages/send').summary, 'messages · send')
   assert.equal(search(ops, 'unread chats')[0].path, '/chats')
 })
+
+test('routes of a router mounted at the root keep their own full path', async () => {
+  const { SOURCE_ROUTES } = await import('../src/host/omni-routes.js')
+  assert.ok(SOURCE_ROUTES.some(route => route.method === 'GET' && route.path === '/events/consumers'))
+  assert.ok(!SOURCE_ROUTES.some(route => route.path.startsWith('//')))
+})

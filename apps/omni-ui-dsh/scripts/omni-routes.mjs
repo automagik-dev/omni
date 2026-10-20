@@ -45,7 +45,8 @@ export function sourceRoutes(apiDir) {
     for (const [at, [, doc, method, sub, rest]] of found.entries()) {
       // The handler runs to the next route; a body it validates by hand names its schema there.
       const handler = text.slice(found[at].index, found[at + 1]?.index ?? text.length).slice(0, 4000)
-      const path = `${prefix}${sub === '/' ? '' : sub}`.replace(/:(\w+)/g, '{$1}').replace(/\/+$/, '') || '/'
+      // A router mounted at the root declares full paths: "/" + "/events/consumers" is one path.
+      const path = `${prefix === '/' ? '' : prefix}${sub === '/' ? '' : sub}`.replace(/:(\w+)/g, '{$1}').replace(/\/+$/, '') || '/'
       // A router mounted at the root for a few extra paths also yields catch-alls there
       // ("/", "/{id}"), which are not routes anyone calls.
       if (prefix === '/' && (path === '/' || /^\/\{\w+\}(\/|$)/.test(path))) continue
