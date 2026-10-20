@@ -326,6 +326,20 @@ Findings and how each was closed before or during execution:
 
 Second end-to-end on the second machine with the fixed build (`2.261019.10-labs.2` on the server): the allowlisted number approved; Omni's own send to itself did not; both test keys revoked.
 
+### Login redesign and its review — 2026-10-20
+
+The owner asked for frictionless login with a human ID and one library instead of two harnesses: the hand-rolled pairing (Group 2) was replaced by Better Auth 1.7.7 — claim by a WhatsApp-verified number, owner codes in the self chat, passkeys, RFC 8628 device flow, device keys (`d34c04561`, `c03c96175`). Pocket ID was considered and set aside: passkeys only, no phone verification.
+
+Independent read-only review: FIX-FIRST → fixed in `c12a34712` and the plugin commit after it:
+1. Device token was a full owner session → Authorization stripped before Better Auth; device-flow sessions marked (`device_client_id`, migration 0087); device-key accepts only those, consumes them atomically before minting.
+2. Mint-then-revoke, endless client polling → consume first; client treats 400/401 as terminal and stops at expiry.
+3. Better Auth limiter trusted client X-Forwarded-For; code flooding → Better Auth limiter off, Omni limiters on /api/auth; one code a minute, ten a day per number.
+4. Status leaked the owner's number → number only via /api/login/whatsapp for a live device request.
+5. No consent context on WhatsApp approval → confirmation names client, address and time, with revoke hint.
+6. Two-owner race; non-constant-time token compare → single-row unique index; timingSafeEqual.
+
+Deployed as `2.261019.10-labs.6` (labs.3 had rolled back automatically on a bundle-only startup crash, fixed by loading reflect-metadata first in the server entry).
+
 ## Files to Create/Modify
 
 ```
