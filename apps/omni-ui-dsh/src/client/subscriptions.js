@@ -9,8 +9,8 @@ import { call } from './api.js'
 import { ChatAvatar, Tile, useOmni } from './channels.js'
 import { TRIGGERS, runsOf, startLive, waitingRuns } from './omni-store.js'
 
-// Tentacall's board: what it actually does, beside its chat. The user never fills a form here;
-// they tell Tentacall what to watch, Tentacall saves it with its own tools (src/host/
+// Autopilot's board: what it actually does, beside its chat. The user never fills a form here;
+// they tell Autopilot what to watch, Autopilot saves it with its own tools (src/host/
 // subscriptions.js), and the board shows the change at the next poll, with the card that
 // changed lit up. The board only pauses, tests and deletes.
 
@@ -24,7 +24,7 @@ export const isEventsBot = (roster, id) => Boolean(roster?.eventsBotId) && roste
 export function workerOf(worker, roster) {
   if (worker.kind === 'events') {
     const bot = roster?.byId?.[roster.eventsBotId]
-    return { name: bot?.name ?? 'Tentacall', bot, look: EVENTS_LOOK }
+    return { name: bot?.name ?? 'Autopilot', bot, look: EVENTS_LOOK }
   }
   if (worker.kind === 'main') {
     const bot = roster?.byId?.[roster.mainBotId]
@@ -91,40 +91,40 @@ const RUN_STATUS = {
 }
 
 // -------------------------------------------------------------------------
-// Tentacall's row and chat header
+// Autopilot's row and chat header
 
 // The task Sessions with an approval open, as a Set; picked as text so a row redraws only
 // when it changes.
 const useWaiting = useWork => new Set((useWork ? useWork(work => (work.approvals ?? []).map(entry => entry.sessionId).join(',')) : '').split(',').filter(Boolean))
 
-// On Tentacall's sidebar row: runs waiting for your approval.
+// On Autopilot's sidebar row: runs waiting for your approval.
 export function EventsBadge({ roster, useWork }) {
   const waiting = waitingRuns(roster, useWaiting(useWork))
   return waiting > 0 ? h('span', { className: 'os-pending', title: t('{n} waiting for you', { n: waiting }) }, String(waiting)) : null
 }
 
-// In Tentacall's chat header: shows or hides its board in the right sidebar.
+// In Autopilot's chat header: shows or hides its board in the right sidebar.
 export function SubscriptionsButton({ roster, actions, useWork }) {
   const count = (roster.subscriptions ?? []).filter(sub => sub.on).length
   const waiting = waitingRuns(roster, useWaiting(useWork))
   return h('button', { type: 'button', className: 'os-head-btn', onClick: () => actions.toggleBoard() },
-    t('Subscriptions'), h('span', { className: 'os-head-count' }, String(count)),
+    t('Automations'), h('span', { className: 'os-head-count' }, String(count)),
     waiting > 0 ? h('span', { className: 'os-pending' }, String(waiting)) : null)
 }
 
 // -------------------------------------------------------------------------
-// The board: a tab of DSH's own right sidebar, so it sits beside Tentacall's chat like
+// The board: a tab of DSH's own right sidebar, so it sits beside Autopilot's chat like
 // Files or a terminal, keeps to that Session, and steps aside with it.
 
 export const BOARD_KIND = 'omni-subscriptions'
 export const BOARD_TAB_ID = 'ds-bot/omni-subscriptions'
-export const boardTabDefinition = () => ({ id: BOARD_TAB_ID, kind: BOARD_KIND, title: () => t('Subscriptions') })
+export const boardTabDefinition = () => ({ id: BOARD_TAB_ID, kind: BOARD_KIND, title: () => t('Automations') })
 
 export function BoardTab({ useRoster, useWork, actions }) {
   const roster = useRoster(value => value)
   const waiting = useWaiting(useWork)
   const bot = roster.byId?.[roster.eventsBotId]
-  if (!bot) return h('div', { className: 'os-board' }, h('p', { className: 'os-board-note' }, t('Subscriptions belong to Tentacall, which this team does not have.')))
+  if (!bot) return h('div', { className: 'os-board' }, h('p', { className: 'os-board-note' }, t('Automations belong to Autopilot, which this team does not have.')))
   return h(SubscriptionsBoard, { bot, roster, actions, waiting })
 }
 
@@ -146,7 +146,7 @@ export function SubscriptionsBoard({ bot, roster, actions, waiting }) {
         subs.some(sub => sub.on && (sub.outputs.react || sub.outputs.replyToMe))
           ? h('div', { className: 'os-board-note os-board-pending' }, t('Reacting on the message and replying to you are not sent yet: this DSH may not send on omni. Results stay in the runs below.'))
           : null,
-        h('div', { className: 'os-list' }, subs.map(sub => h(SubRow, { key: sub.id, sub, roster, runs: runs.filter(run => run.subId === sub.id) }))),
+        h('div', { className: 'os-list' }, subs.map(sub => h(AutomationRow, { key: sub.id, sub, roster, runs: runs.filter(run => run.subId === sub.id) }))),
         runs.length > 0 ? h(Fragment, null,
           h('div', { className: 'os-board-h' }, t('Runs')),
           h('div', { className: 'os-list' }, runs.slice(0, 20).map(run => h(RunRow, { key: run.id, run, sub: subs.find(sub => sub.id === run.subId), roster, actions, asking: waiting?.has(run.sessionId) && run.status === 'working' })))) : null),
@@ -169,7 +169,9 @@ function Empty({ bot, live }) {
     h('ul', { className: 'os-examples' }, examples.map(text => h('li', { key: text }, text))))
 }
 
-function SubRow({ sub, roster, runs }) {
+// One automation: its trigger, name, sentence and switch. `onOpen` makes the name a way into
+// Autopilot's chat (the Automations page); beside that chat the board needs none.
+export function AutomationRow({ sub, roster, runs, onOpen }) {
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState('')
   const fresh = Date.now() - (sub.updatedAt ?? 0) < FRESH_MS
@@ -182,22 +184,22 @@ function SubRow({ sub, roster, runs }) {
     h(TriggerBadge, { trigger: sub.trigger, size: 28 }),
     h('div', { className: 'os-row-body' },
       h('div', { className: 'os-row-top' },
-        h('span', { className: 'os-row-name' }, sub.name),
+        onOpen ? h('button', { type: 'button', className: 'os-row-name os-row-open', onClick: onOpen }, sub.name) : h('span', { className: 'os-row-name' }, sub.name),
         h('button', {
           type: 'button', role: 'switch', 'aria-checked': sub.on, className: 'os-switch', disabled: busy !== '',
           'aria-label': sub.on ? t('Pause {name}', { name: sub.name }) : t('Resume {name}', { name: sub.name }),
-          onClick: () => run('subscription-set-on', { id: sub.id, on: !sub.on }),
+          onClick: () => run('automation-set-on', { id: sub.id, on: !sub.on }),
         }, h('span'))),
       h(Sentence, { sub, roster }),
       h('div', { className: 'os-row-foot' },
         h('span', null, last ? t('last run {time}', { time: relativeShort(last.at) }) : t('not fired yet')),
         sub.askFirst ? null : h('span', { className: 'os-row-warn' }, t('acts without asking')),
         h('span', { className: 'os-row-actions' },
-          h('button', { type: 'button', className: 'os-link', disabled: busy !== '', onClick: () => run('subscription-test', { id: sub.id }) }, t('Test')),
+          h('button', { type: 'button', className: 'os-link', disabled: busy !== '', onClick: () => run('automation-test', { id: sub.id }) }, t('Test')),
           h('button', {
             type: 'button', className: confirming ? 'os-link os-link-danger' : 'os-link', disabled: busy !== '',
             onBlur: () => setConfirming(false),
-            onClick: () => (confirming ? run('subscription-delete', { id: sub.id }) : setConfirming(true)),
+            onClick: () => (confirming ? run('automation-delete', { id: sub.id }) : setConfirming(true)),
           }, confirming ? t('Click again to delete') : t('Delete'))))))
 }
 
@@ -230,7 +232,7 @@ export const SUBSCRIPTIONS_CSS = `
 .os-pending{flex:none;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:#f59e0b;color:#fff;font-size:11px;font-weight:600;line-height:18px;text-align:center;box-sizing:border-box}
 [data-tone=bad]{--oc-tone:#e5484d}
 
-/* Tentacall's header button */
+/* Autopilot's header button */
 .os-head-btn{display:inline-flex;align-items:center;gap:7px;height:32px;padding:0 10px 0 12px;margin-left:8px;border-radius:999px;border:.5px solid var(--bt-line-2);background:var(--bt-main);color:var(--bt-ink);font:inherit;font-size:13px;cursor:pointer;pointer-events:auto;box-shadow:0 2px 8px -1px rgba(0,0,0,.06)}
 .os-head-btn:hover{background:var(--bt-hover)}
 .os-head-count{min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--bt-hover);color:var(--bt-ink-2);font-size:11px;line-height:18px;text-align:center;box-sizing:border-box}
@@ -253,6 +255,8 @@ export const SUBSCRIPTIONS_CSS = `
 .os-row-body{display:flex;flex-direction:column;gap:4px;flex:1;min-width:0}
 .os-row-top{display:flex;align-items:center;gap:8px;min-height:22px}
 .os-row-name{flex:1;min-width:0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.os-row-open{border:0;background:none;padding:0;color:inherit;font:inherit;font-weight:600;text-align:left;cursor:pointer}
+.os-row-open:hover{text-decoration:underline}
 .os-row-foot{display:flex;align-items:center;gap:10px;font-size:11.5px;color:var(--bt-ink-3)}
 .os-row-warn{color:#d97706}
 .os-row-actions{display:inline-flex;gap:10px;margin-left:auto;opacity:0;transition:opacity .12s ease}

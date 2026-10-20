@@ -23,7 +23,7 @@ function setup(t) {
     version: 1, mainBotIds: ['m1'], eventsBotId: 't1', eventsBotStored: true, revision: 1,
     bots: {
       m1: { id: 'm1', name: 'Omni', role: 'Orchestrator', instructions: '', createdAt: 1 },
-      t1: { id: 't1', name: 'Tentacall', role: 'Event router', instructions: '', createdAt: 2 },
+      t1: { id: 't1', name: 'Autopilot', role: 'Automations', instructions: '', createdAt: 2 },
       b2: { id: 'b2', name: 'Ops', role: 'Ops', instructions: '', createdAt: 3 },
     },
     rooms: {}, agents: {}, exchanges: [], exchangeTurns: {},
@@ -67,23 +67,23 @@ function setup(t) {
   return { tool, as, call, sent, emit }
 }
 
-test('only Tentacall manages subscriptions', async (t) => {
+test('only Autopilot manages automations', async (t) => {
   const { as } = setup(t)
-  assert.match(await as('save_subscription', 'b2')({ trigger: 'message', sources: 'chat:obras' }), /Only Tentacall/)
-  assert.match(await as('list_watchable', 'm1')({}), /Only Tentacall/)
+  assert.match(await as('save_automation', 'b2')({ trigger: 'message', sources: 'chat:obras' }), /Only Autopilot/)
+  assert.match(await as('find_chats', 'm1')({}), /Only Autopilot/)
 })
 
-test('Tentacall finds chats by name with the ids it saves with', async (t) => {
+test('Autopilot finds chats by name with the ids it saves with', async (t) => {
   const { tool } = setup(t)
-  const all = await tool('list_watchable')({})
+  const all = await tool('find_chats')({})
   assert.match(all, /channel:wa-1 · whatsapp-baileys · Sales · connected/)
   assert.match(all, /chat:obras · group · Grupo Obras · on Sales/)
-  assert.doesNotMatch(await tool('list_watchable')({ search: 'obras' }), /Marina/)
+  assert.doesNotMatch(await tool('find_chats')({ search: 'obras' }), /Marina/)
 })
 
 test('a saved subscription is on the team view at once, as the board shows it', async (t) => {
   const { tool, call } = setup(t)
-  const reply = await tool('save_subscription')({ sources: 'chat:obras, channel:wa-1', trigger: 'reaction', emoji: '📌', worker: 'Ops', reply_to_me: true })
+  const reply = await tool('save_automation')({ sources: 'chat:obras, channel:wa-1', trigger: 'reaction', emoji: '📌', worker: 'Ops', reply_to_me: true })
   assert.match(reply, /^Saved sub-/)
   assert.match(reply, /when you react 📌 in Grupo Obras, all of Sales → Ops \(one task per event\) \(reacts 👀 then ✅, replies to you\)/)
   const view = (await call('state', {})).value
@@ -97,26 +97,26 @@ test('a saved subscription is on the team view at once, as the board shows it', 
 
 test('what the user has not said is asked, not guessed', async (t) => {
   const { tool, call } = setup(t)
-  assert.match(await tool('save_subscription')({ trigger: 'reaction', sources: 'chat:obras' }), /needs the one emoji .* Ask/)
-  assert.match(await tool('save_subscription')({ trigger: 'keyword', sources: 'chat:obras' }), /needs the words .* Ask/)
-  assert.match(await tool('save_subscription')({ trigger: 'voice' }), /Which chats/)
-  assert.match(await tool('save_subscription')({ trigger: 'voice', sources: 'chat:nope' }), /No channel or chat "chat:nope"/)
-  assert.match(await tool('save_subscription')({ trigger: 'voice', sources: 'chat:obras', worker: 'Nobody' }), /No Bot named "Nobody"/)
+  assert.match(await tool('save_automation')({ trigger: 'reaction', sources: 'chat:obras' }), /needs the one emoji .* Ask/)
+  assert.match(await tool('save_automation')({ trigger: 'keyword', sources: 'chat:obras' }), /needs the words .* Ask/)
+  assert.match(await tool('save_automation')({ trigger: 'voice' }), /Which chats/)
+  assert.match(await tool('save_automation')({ trigger: 'voice', sources: 'chat:nope' }), /No channel or chat "chat:nope"/)
+  assert.match(await tool('save_automation')({ trigger: 'voice', sources: 'chat:obras', worker: 'Nobody' }), /No Bot named "Nobody"/)
   assert.equal((await call('state', {})).value.subscriptions.length, 0)
 })
 
 test('changing, pausing and deleting go by id, from the tools and from the board', async (t) => {
   const { tool, call } = setup(t)
-  await tool('save_subscription')({ sources: 'chat:marina', trigger: 'media' })
+  await tool('save_automation')({ sources: 'chat:marina', trigger: 'media' })
   const id = (await call('state', {})).value.subscriptions[0].id
-  assert.match(await tool('save_subscription')({ id, trigger: 'keyword', words: 'orçamento, quote' }), /a message says "orçamento" or "quote" in Marina Lopes → Tentacall/)
-  assert.match(await tool('pause_subscription')({ id, on: false }), /paused/)
+  assert.match(await tool('save_automation')({ id, trigger: 'keyword', words: 'orçamento, quote' }), /a message says "orçamento" or "quote" in Marina Lopes → Autopilot/)
+  assert.match(await tool('pause_automation')({ id, on: false }), /paused/)
   assert.equal((await call('state', {})).value.subscriptions[0].on, false)
-  assert.equal((await call('subscription-set-on', { id, on: true })).ok, true)
-  assert.equal((await call('subscription-test', { id })).ok, true)
+  assert.equal((await call('automation-set-on', { id, on: true })).ok, true)
+  assert.equal((await call('automation-test', { id })).ok, true)
   assert.equal((await call('state', {})).value.subscriptionRuns[0].test, true)
-  assert.match(await tool('list_subscriptions')({}), new RegExp(`${id} · `))
-  assert.match(await tool('delete_subscription')({ id }), /Deleted/)
+  assert.match(await tool('list_automations')({}), new RegExp(`${id} · `))
+  assert.match(await tool('delete_automation')({ id }), /Deleted/)
   const view = (await call('state', {})).value
   assert.equal(view.subscriptions.length, 0)
   assert.equal(view.subscriptionRuns.length, 0)
@@ -124,9 +124,9 @@ test('changing, pausing and deleting go by id, from the tools and from the board
 
 test('a run gives a Bot the event as a single-run task in a Session of its own, and ends with its last words', async (t) => {
   const { tool, call, sent, emit } = setup(t)
-  await tool('save_subscription')({ sources: 'chat:obras', trigger: 'reaction', emoji: '📌', worker: 'Ops' })
+  await tool('save_automation')({ sources: 'chat:obras', trigger: 'reaction', emoji: '📌', worker: 'Ops' })
   const id = (await call('state', {})).value.subscriptions[0].id
-  const started = await call('subscription-test', { id })
+  const started = await call('automation-test', { id })
   assert.equal(started.ok, true)
   const run = started.value
   assert.equal(run.task, true)
@@ -150,9 +150,9 @@ test('a run gives a Bot the event as a single-run task in a Session of its own, 
 
 test('"as chat" sends the event into the Bot\'s own chat instead', async (t) => {
   const { tool, call, sent } = setup(t)
-  await tool('save_subscription')({ sources: 'chat:obras', trigger: 'voice', worker: 'Ops', as: 'chat' })
+  await tool('save_automation')({ sources: 'chat:obras', trigger: 'voice', worker: 'Ops', as: 'chat' })
   const id = (await call('state', {})).value.subscriptions[0].id
-  const run = (await call('subscription-test', { id })).value
+  const run = (await call('automation-test', { id })).value
   assert.equal(run.task, undefined)
   assert.equal(run.sessionId, 'b2')
   assert.equal(sent[0].sessionId, 'b2')

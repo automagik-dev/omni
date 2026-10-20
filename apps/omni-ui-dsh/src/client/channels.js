@@ -10,7 +10,7 @@ import {
 
 // Omni channels inside the Bot surface. The Channels page (CHANNELS_PANEL) connects new
 // channels and shows the health of the connected ones; a chat opens in the CHAT_PANEL main
-// panel. Subscriptions on these channels live in subscriptions.js, under Tentacall.
+// panel. Subscriptions on these channels live in subscriptions.js, under Autopilot.
 // Live when the host has an omni URL and key (src/host/omni.js, read-only); sample data otherwise.
 
 export const useOmni = () => useSyncExternalStore(omniStore.subscribe, omniStore.getSnapshot, omniStore.getSnapshot)

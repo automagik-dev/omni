@@ -9,8 +9,10 @@ const BACKOFF_MS = [2_000, 5_000, 15_000, 60_000]
 const LOOKUP_TTL_MS = 10 * 60_000
 const TEXT_MAX = 2_000
 
+// Omni filters at the source where it can: a reaction row's rawPayload is the reaction, with
+// the owner flag one level down, so only the user's own reactions ever leave omni.
 export const STREAMS = [
-  { suffix: 'reactions', eventType: 'reaction.received', kinds: ['reaction'] },
+  { suffix: 'own-reactions', eventType: 'reaction.received', kinds: ['reaction'], filters: [{ field: 'rawPayload.isFromMe', operator: 'eq', value: true }] },
   { suffix: 'messages', eventType: 'message.received', kinds: ['message', 'keyword', 'voice', 'media'] },
 ]
 
@@ -121,7 +123,7 @@ export function install(rt) {
   }
 
   async function ensureConsumer(stream) {
-    const response = await rt.omniRequest('POST', '/events/consumers', { body: { name: consumerName(stream.suffix), eventType: stream.eventType, startFrom: 'now' } })
+    const response = await rt.omniRequest('POST', '/events/consumers', { body: { name: consumerName(stream.suffix), eventType: stream.eventType, startFrom: 'now', ...(stream.filters ? { filters: stream.filters } : {}) } })
     if (response === null) throw new Error('omni is not set up here')
     if (!response.ok && response.status !== 409) throw new Error(`omni answered ${response.status} creating the ${stream.suffix} consumer`)
   }
@@ -130,6 +132,19 @@ export function install(rt) {
     const response = await rt.omniRequest('POST', `/events/consumers/${encodeURIComponent(consumerName(stream.suffix))}/ack`, { body: { cursor: Number(cursor) } })
     if (response && !response.ok && response.status !== 400) rt.warn('ds-bot: omni did not take the %s ack (%s)', stream.suffix, response.status)
     cursors()[stream.suffix] = String(cursor)
+    await rt.save()
+  }
+
+  // The first consumer took every reaction; it goes once its filtered successor runs. The
+  // journal position is global, so the successor resumes from the same cursor.
+  async function dropRetired() {
+    if (state.omniRetiredConsumers === true) return
+    const response = await rt.omniRequest('DELETE', `/events/consumers/${encodeURIComponent(consumerName('reactions'))}`)
+    if (response === null || (!response.ok && response.status !== 404)) return
+    const cursors = state.omniEventCursors ?? {}
+    if (cursors.reactions && !cursors['own-reactions']) cursors['own-reactions'] = cursors.reactions
+    delete cursors.reactions
+    state.omniRetiredConsumers = true
     await rt.save()
   }
 
@@ -170,6 +185,7 @@ export function install(rt) {
   async function sync() {
     if (stopped) return
     const configured = await rt.omniConfigured?.()
+    if (configured) await dropRetired().catch(error => rt.warn('ds-bot: retiring the first omni consumer failed: %s', error?.message ?? error))
     const active = Object.values(state.subscriptions ?? {}).filter(sub => sub.on)
     for (const stream of STREAMS) {
       const wanted = configured && active.some(sub => stream.kinds.includes(sub.trigger.kind))

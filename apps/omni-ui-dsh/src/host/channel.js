@@ -34,7 +34,7 @@ export function install(rt) {
     // `mainBotId` is the first Main Bot, which the sidebar shows as its tile.
     mainBotId: state.mainBotIds[0] ?? null,
     mainBotIds: state.mainBotIds,
-    // Tentacall, the Bot that subscriptions hand their events to (subscriptions.js).
+    // Autopilot, the Bot that automations hand their events to (subscriptions.js).
     eventsBotId: state.eventsBotId && state.bots[state.eventsBotId] ? state.eventsBotId : null,
     ...rt.subscriptionsView(),
     // `sessionId` is the Bot's current own-chat part; `parts` its earlier ones.
@@ -115,8 +115,8 @@ export function install(rt) {
           if (typeof body.locale === 'string' && /^[a-z]{2,3}(-[\w-]+)?$/i.test(body.locale)) uiLocale = body.locale
           if (readOnly === undefined) {
             await rt.bootstrap()
-            // Tentacall is made beside the request, so a failure there never blocks the team view.
-            void rt.ensureEventsBot().catch(error => rt.warn('ds-bot: Tentacall was not created: %s', error?.message ?? error))
+            // Autopilot is made beside the request, so a failure there never blocks the team view.
+            void rt.ensureEventsBot().catch(error => rt.warn('ds-bot: Autopilot was not set up: %s', error?.message ?? error))
           }
           await rt.catalog()
           await rt.loadSecrets()
@@ -265,9 +265,9 @@ export function install(rt) {
         case 'omni-overview':
         case 'omni-messages':
           return ok(await rt.omniEndpoint(endpoint, body))
-        case 'subscription-set-on':
-        case 'subscription-delete':
-        case 'subscription-test':
+        case 'automation-set-on':
+        case 'automation-delete':
+        case 'automation-test':
           await rt.load()
           return ok(await rt.subscriptionEndpoint(endpoint, body))
         case 'schedules':

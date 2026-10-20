@@ -93,3 +93,14 @@ test('runs come from the team view, newest first; a working run waits while its 
   assert.equal(waitingRuns(roster), 0)
   assert.equal(waitingRuns({}), 0)
 })
+
+test('a scheduled task\'s timing reads as words on the Automations page', async () => {
+  const { whenText } = await import('../src/client/automation-time.js')
+  assert.equal(whenText({ kind: 'every', everySeconds: 3600 }), 'Every hour')
+  assert.equal(whenText({ kind: 'every', everySeconds: 7200 }), 'Every 2 hours')
+  assert.equal(whenText({ kind: 'every', everySeconds: 900 }), 'Every 15 min')
+  assert.equal(whenText({ kind: 'daily', time: '09:00' }), 'Every day at 09:00')
+  assert.equal(whenText({ kind: 'weekly', time: '09:00', weekdays: [5, 1, 2, 3, 4] }), 'Weekdays at 09:00')
+  assert.equal(whenText({ kind: 'weekly', time: '18:30', weekdays: [1, 3] }), 'Mon, Wed at 18:30')
+  assert.equal(whenText({ kind: 'cron', expression: '0 9 * * 1' }), 'Custom (0 9 * * 1)')
+})

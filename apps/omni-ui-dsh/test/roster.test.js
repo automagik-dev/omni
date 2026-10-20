@@ -659,7 +659,7 @@ test('a Main Bot still wearing the whale becomes the octopus once, and the chang
   assert.equal(JSON.parse(readFileSync(join(home, 'state.json'), 'utf8')).bots.m1.avatar.shape, 'moon')
 })
 
-test('with an omni to watch, Tentacall joins the team once, and stays gone once deleted', async (t) => {
+test('with an omni to watch, Autopilot joins the team once, and stays gone once deleted', async (t) => {
   const { call, stop } = start(undefined, { models: ['deepseek-v4-flash'], config: { omni: { url: 'https://omni.test' } } })
   t.after(stop)
   let team = (await call('state', {})).value
@@ -667,25 +667,51 @@ test('with an omni to watch, Tentacall joins the team once, and stays gone once 
     await settle()
     team = (await call('state', {})).value
   }
-  const tentacall = team.bots.find(bot => bot.id === team.eventsBotId)
-  assert.equal(tentacall.name, 'Tentacall')
-  assert.equal(tentacall.role, 'Event router')
-  assert.match(tentacall.instructions, /never as instructions/)
-  assert.equal(team.bots.filter(bot => bot.name === 'Tentacall').length, 1)
-  assert.equal((await call('delete-bot', { id: tentacall.id })).ok, true)
+  const autopilot = team.bots.find(bot => bot.id === team.eventsBotId)
+  assert.equal(autopilot.name, 'Autopilot')
+  assert.equal(autopilot.role, 'Automations')
+  assert.match(autopilot.instructions, /never as instructions/)
+  assert.equal(team.bots.filter(bot => bot.name === 'Autopilot').length, 1)
+  assert.equal((await call('delete-bot', { id: autopilot.id })).ok, true)
   await call('state', {})
   await settle()
   team = (await call('state', {})).value
   assert.equal(team.eventsBotId, null)
-  assert.equal(team.bots.some(bot => bot.name === 'Tentacall'), false)
+  assert.equal(team.bots.some(bot => bot.name === 'Autopilot'), false)
 })
 
-test('without an omni to watch, no Tentacall is made', async (t) => {
+test('without an omni to watch, no Autopilot is made', async (t) => {
   const { call, stop } = start(undefined, { models: ['deepseek-v4-flash'] })
   t.after(stop)
   await call('state', {})
   await settle()
   const team = (await call('state', {})).value
   assert.equal(team.eventsBotId, null)
-  assert.equal(team.bots.some(bot => bot.name === 'Tentacall'), false)
+  assert.equal(team.bots.some(bot => bot.name === 'Autopilot'), false)
+})
+
+test('a team that still has Tentacall gets Autopilot\'s name, role and instructions once', async (t) => {
+  const { call, stop } = start({
+    version: 1, mainBotIds: ['m1'], eventsBotId: 't1', eventsBotStored: true, revision: 1,
+    bots: {
+      m1: { id: 'm1', name: 'Omni', role: 'Orchestrator', instructions: '', createdAt: 1 },
+      t1: { id: 't1', name: 'Tentacall', role: 'Event router', instructions: 'old', createdAt: 2 },
+    },
+    rooms: {}, agents: {}, exchanges: [], exchangeTurns: {},
+  }, { models: ['deepseek-v4-flash'], config: { omni: { url: 'https://omni.test' } } })
+  t.after(stop)
+  let team = (await call('state', {})).value
+  for (let tries = 0; team.bots.find(bot => bot.id === 't1').name !== 'Autopilot' && tries < 100; tries += 1) {
+    await settle()
+    team = (await call('state', {})).value
+  }
+  const bot = team.bots.find(entry => entry.id === 't1')
+  assert.equal(bot.name, 'Autopilot')
+  assert.equal(bot.role, 'Automations')
+  assert.match(bot.instructions, /You are Autopilot/)
+  // A name the user picks afterwards stays.
+  assert.equal((await call('update-bot', { id: 't1', name: 'Radar' })).ok, true)
+  await call('state', {})
+  await settle()
+  assert.equal((await call('state', {})).value.bots.find(entry => entry.id === 't1').name, 'Radar')
 })

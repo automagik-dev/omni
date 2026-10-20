@@ -36,6 +36,7 @@ import { USER_MESSAGE_CSS, UserMessageCell, canDrawUserMessages } from './user-m
 import { CHANNELS_CSS, ChannelsPage, ChatPage } from './channels.js'
 import { BOARD_KIND, BOARD_TAB_ID, BoardTab, SUBSCRIPTIONS_CSS, boardTabDefinition, isEventsBot } from './subscriptions.js'
 import { CHANNELS_PANEL, CHAT_PANEL } from './omni-store.js'
+import { AUTOMATIONS_CSS, AUTOMATIONS_PANEL, AutomationsPage } from './automations-page.js'
 import { noticeApprovals } from './approval-notices.js'
 
 export const inject = ['sessions', 'uiWorkspace', 'uiConversation', 'slots', 'theme', 'layout']
@@ -755,8 +756,8 @@ export function apply(ctx) {
     })
     return () => fiber.dispose()
   }
-  // Tentacall's board is a tab of DSH's right sidebar, which may load after this plugin.
-  // The first time Tentacall's chat is on screen in a browser, its board opens; after that
+  // Autopilot's board is a tab of DSH's right sidebar, which may load after this plugin.
+  // The first time Autopilot's chat is on screen in a browser, its board opens; after that
   // the Session's own sidebar layout (open, closed, other tabs) is the user's.
   let boardRight = null
   const BOARD_OPENED = 'omni.board.opened'
@@ -779,7 +780,7 @@ export function apply(ctx) {
         const offs = [right.mounted.subscribe(check), roster.subscribe(check)]
         check()
         return () => { boardRight = null; for (const off of offs) off() }
-      }, 'ds-bot: open Tentacall board')
+      }, 'ds-bot: open Autopilot board')
     })
     return () => fiber.dispose()
   }
@@ -814,7 +815,7 @@ export function apply(ctx) {
     () => installCompiledStyles(ABOUT_CSS, 'about'),
     () => installCompiledStyles(MEMBER_CSS, 'members'),
     () => installCompiledStyles(USER_MESSAGE_CSS, 'user-messages'),
-    () => installCompiledStyles(CHANNELS_CSS + SUBSCRIPTIONS_CSS, 'channels'),
+    () => installCompiledStyles(CHANNELS_CSS + SUBSCRIPTIONS_CSS + AUTOMATIONS_CSS, 'channels'),
     browsers ? () => installCompiledStyles(BROWSER_CSS, 'browser') : null,
     () => installTheme(),
     () => shadow('sidebar.workspaces', { priority: BOT_PRIORITY, inject: face }, TeamSidebar),
@@ -833,6 +834,7 @@ export function apply(ctx) {
     // they replace the conversation in the center, and opening a Bot brings it back.
     () => shadow('main', { key: CHANNELS_PANEL, inject: face }, ChannelsPage),
     () => shadow('main', { key: CHAT_PANEL, inject: face }, ChatPage),
+    () => shadow('main', { key: AUTOMATIONS_PANEL, inject: face }, AutomationsPage),
     () => installBoard(),
   ]
   const installConversation = () => [

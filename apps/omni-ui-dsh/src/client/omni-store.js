@@ -229,7 +229,7 @@ export function startLive(call, every = POLL_MS) {
 
 // -------------------------------------------------------------------------
 // Subscriptions live on the host (src/host/subscriptions.js) and ride the team view as
-// roster.subscriptions and roster.subscriptionRuns; Tentacall changes them by talking.
+// roster.subscriptions and roster.subscriptionRuns; Autopilot changes them by talking.
 
 // `icon` names a line icon (subscriptions.js); only a reaction shows an emoji, the one you react with.
 export const TRIGGERS = {

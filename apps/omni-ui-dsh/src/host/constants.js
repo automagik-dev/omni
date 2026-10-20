@@ -68,7 +68,7 @@ export const TEAM_TOOLS = [
   'read_group_chat', 'remember', 'forget', 'recall', 'read_browser',
   'list_capabilities', 'save_capability', 'delete_capability',
   'attach_capability', 'detach_capability',
-  'list_watchable', 'list_subscriptions', 'save_subscription', 'pause_subscription', 'delete_subscription',
+  'find_chats', 'list_automations', 'save_automation', 'pause_automation', 'delete_automation',
 ]
 // Answers a group gives to what members post after the round moved on (their finished
 // work, mostly), before the user speaks there again.

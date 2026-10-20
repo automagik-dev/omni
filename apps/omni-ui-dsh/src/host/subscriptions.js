@@ -1,8 +1,9 @@
-// Subscriptions: which chats, groups or whole channels Tentacall watches, for which moment,
-// and who acts on it. Tentacall changes them with its own tools while the user talks to it,
+// Automations: which chats, groups or whole channels Autopilot watches, for which moment,
+// and who acts on it. Autopilot changes them with its own tools while the user talks to it,
 // and the board beside its chat shows them as they change (they ride the team view, so a
 // save is on screen at the next poll). Sources are checked against the live omni channels
-// and chats, so a subscription never names a chat that does not exist.
+// and chats, so an automation never names a chat that does not exist. (Stored as
+// state.subscriptions, the name they had first.)
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { output } from './tools.js'
@@ -31,15 +32,16 @@ export function install(rt) {
   const { ctx, state } = rt
   const subs = () => (state.subscriptions ??= {})
   const runs = () => (state.subscriptionRuns ??= [])
-  // Loads the team first: the check reads which Bot is Tentacall from the saved state.
+  // Loads the team first: the check reads which Bot is Autopilot from the saved state.
   const isEventsBot = async (exec) => {
     await rt.load()
     return state.eventsBotId !== undefined && rt.selfOf(exec.agent?.id) === state.eventsBotId
   }
-  const NOT_TENTACALL = 'Only Tentacall manages subscriptions. Ask Tentacall in its chat.'
+  const eventsName = () => rt.botOf(state.eventsBotId)?.name ?? 'Autopilot'
+  const notEventsBot = () => `Only ${eventsName()} manages automations. Ask ${eventsName()} in its chat.`
 
   const nameOfWorker = (worker) => {
-    if (worker.kind === 'events') return rt.botOf(state.eventsBotId)?.name ?? 'Tentacall'
+    if (worker.kind === 'events') return eventsName()
     if (worker.kind === 'main') return rt.botOf(state.mainBotIds[0])?.name ?? 'the Main Bot'
     if (worker.kind === 'session') return worker.mode === 'ongoing' ? 'one ongoing DSH session' : 'a new DSH session each time'
     const name = rt.botOf(worker.botId)?.name ?? 'a deleted Bot'
@@ -62,7 +64,7 @@ export function install(rt) {
     if ((kind === 'chat' || kind === '') && chat) {
       return { kind: 'chat', id, name: chat.name, type: channels.get(chat.channelId)?.type ?? 'unknown', chatKind: chat.kind, channelId: chat.channelId }
     }
-    throw invalid(`No channel or chat "${ref}". Use the ids list_watchable gives.`)
+    throw invalid(`No channel or chat "${ref}". Use the ids find_chats gives.`)
   }
 
   // A Bot gets each event as its own single-run task unless `as` is "chat".
@@ -73,7 +75,7 @@ export function install(rt) {
     if (lower === 'session' || lower === 'new session') return { kind: 'session', mode: 'new' }
     if (lower === 'ongoing session') return { kind: 'session', mode: 'ongoing' }
     const bot = Object.values(state.bots).find(item => item.name.toLowerCase() === lower)
-    if (!bot) throw invalid(`No Bot named "${value}". Use a name from list_bots, "Tentacall", "new session" or "ongoing session".`)
+    if (!bot) throw invalid(`No Bot named "${value}". Use a name from list_bots, "${eventsName()}", "new session" or "ongoing session".`)
     if (bot.id === state.eventsBotId) return { kind: 'events' }
     return state.mainBotIds.includes(bot.id) ? { kind: 'main' } : { kind: 'bot', botId: bot.id, mode: as === 'chat' ? 'chat' : 'task' }
   }
@@ -97,17 +99,17 @@ export function install(rt) {
   // `lookup` is one fresh read of omni (watchable()), made only when the sources change.
   async function save(args, lookup) {
     const existing = args.id ? subs()[args.id] : undefined
-    if (args.id && !existing) throw invalid(`No subscription ${args.id}. Use list_subscriptions.`)
+    if (args.id && !existing) throw invalid(`No automation ${args.id}. Use list_automations.`)
     const refs = split(args.sources)
     const sources = refs.length > 0 ? refs.map(ref => sourceOf(ref, lookup)) : existing?.sources ?? []
-    if (sources.length === 0) throw invalid('Which chats, groups or channels? Ask the user, then pass their ids from list_watchable.')
+    if (sources.length === 0) throw invalid('Which chats, groups or channels? Ask the user, then pass their ids from find_chats.')
     const sub = {
       id: existing?.id ?? `sub-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
       name: String(args.name ?? existing?.name ?? '').trim().slice(0, 60),
       on: existing?.on ?? true,
       sources,
       trigger: args.trigger === undefined && existing ? existing.trigger : triggerOf(args),
-      worker: args.worker === undefined && args.as === undefined && existing ? existing.worker : workerOf(args.worker ?? (existing ? rt.botOf(existing.worker.botId)?.name ?? 'Tentacall' : undefined), args.as),
+      worker: args.worker === undefined && args.as === undefined && existing ? existing.worker : workerOf(args.worker ?? (existing ? rt.botOf(existing.worker.botId)?.name ?? eventsName() : undefined), args.as),
       outputs: {
         react: args.react === undefined ? existing?.outputs.react ?? true : yes(args.react),
         replyToMe: args.reply_to_me === undefined ? existing?.outputs.replyToMe ?? false : yes(args.reply_to_me),
@@ -248,19 +250,19 @@ export function install(rt) {
   })
   rt.subscriptionEndpoint = async (endpoint, body) => {
     const id = String(body?.id ?? '')
-    if (endpoint === 'subscription-set-on') return setOn(id, body?.on === true)
-    if (endpoint === 'subscription-delete') { await remove(id); return { id } }
-    if (endpoint === 'subscription-test') return test(id)
-    throw invalid(`Unknown subscriptions endpoint ${endpoint}`)
+    if (endpoint === 'automation-set-on') return setOn(id, body?.on === true)
+    if (endpoint === 'automation-delete') { await remove(id); return { id } }
+    if (endpoint === 'automation-test') return test(id)
+    throw invalid(`Unknown automations endpoint ${endpoint}`)
   }
 
   ctx.tools.register(defineTool({
-    name: 'list_watchable',
-    description: 'Tentacall only. The omni channels and their recent chats and groups that a subscription can watch, with the ids save_subscription takes.',
+    name: 'find_chats',
+    description: 'Autopilot only. The omni channels and their recent chats and groups an automation can watch, with the ids save_automation takes.',
     parameters: { search: { type: 'string', description: 'Part of a chat, group or channel name' } },
     output,
     async execute(args, exec) {
-      if (!await isEventsBot(exec)) return NOT_TENTACALL
+      if (!await isEventsBot(exec)) return notEventsBot()
       try {
         const { channels, chats } = await watchable()
         const needle = String(args.search ?? '').trim().toLowerCase()
@@ -276,29 +278,29 @@ export function install(rt) {
   }))
 
   ctx.tools.register(defineTool({
-    name: 'list_subscriptions',
-    description: 'Tentacall only. The subscriptions you run, with their ids.',
+    name: 'list_automations',
+    description: 'Autopilot only. The automations you run, with their ids.',
     parameters: {},
     output,
     async execute(_args, exec) {
-      if (!await isEventsBot(exec)) return NOT_TENTACALL
+      if (!await isEventsBot(exec)) return notEventsBot()
       await rt.load()
       const list = Object.values(subs())
-      return list.length === 0 ? 'No subscriptions yet.' : list.map(sub => `${sub.id} · ${sub.name}: ${sentenceOf(sub, nameOfWorker)}`).join('\n')
+      return list.length === 0 ? 'No automations yet.' : list.map(sub => `${sub.id} · ${sub.name}: ${sentenceOf(sub, nameOfWorker)}`).join('\n')
     },
   }))
 
   ctx.tools.register(defineTool({
-    name: 'save_subscription',
-    description: 'Tentacall only. Create a subscription, or change one by id. It shows on the board beside your chat at once. Ask the user for anything you do not know (which chats, which emoji, which words, who acts) instead of guessing.',
+    name: 'save_automation',
+    description: 'Autopilot only. Create an automation, or change one by id. It shows in the Automations panel beside your chat at once. Ask the user for anything you do not know (which chats, which emoji, which words, who acts) instead of guessing.',
     parameters: {
-      id: { type: 'string', description: 'Only to change an existing subscription' },
+      id: { type: 'string', description: 'Only to change an existing automation' },
       name: { type: 'string', description: 'Short name the user would recognize' },
-      sources: { type: 'string', description: 'Comma-separated ids from list_watchable, e.g. "chat:…, channel:…"' },
+      sources: { type: 'string', description: 'Comma-separated ids from find_chats, e.g. "chat:…, channel:…"' },
       trigger: { type: 'string', enum: TRIGGER_KINDS, description: 'reaction: the user reacts with an emoji. keyword: a message contains words. message, mention, voice, media (photo or file), down (channel disconnects)' },
       emoji: { type: 'string', description: 'For reaction: the one emoji' },
       words: { type: 'string', description: 'For keyword: comma-separated words' },
-      worker: { type: 'string', description: 'Who acts: "Tentacall" (you; the default), a Bot name, "new session" or "ongoing session"' },
+      worker: { type: 'string', description: 'Who acts: "Autopilot" (you; the default), a Bot name, "new session" or "ongoing session"' },
       as: { type: 'string', enum: ['task', 'chat'], description: 'For a Bot: "task" (the default) gives it each event as its own single-run task; "chat" sends events into its chat' },
       react: { type: 'boolean', description: 'React 👀 when work starts and ✅ when done, on the message. Default true' },
       reply_to_me: { type: 'boolean', description: 'Also reply to the user in their own chat. Default false' },
@@ -306,12 +308,12 @@ export function install(rt) {
     },
     output,
     async execute(args, exec) {
-      if (!await isEventsBot(exec)) return NOT_TENTACALL
+      if (!await isEventsBot(exec)) return notEventsBot()
       try {
         await rt.load()
         const lookup = split(args.sources).length > 0 ? await watchable() : null
         const sub = await save(args, lookup)
-        return `Saved ${sub.id} · ${sub.name}: ${sentenceOf(sub, nameOfWorker)}. It is on the board now.`
+        return `Saved ${sub.id} · ${sub.name}: ${sentenceOf(sub, nameOfWorker)}. It is in the Automations panel now.`
       } catch (error) {
         return `Not saved: ${error.message}`
       }
@@ -319,15 +321,15 @@ export function install(rt) {
   }))
 
   ctx.tools.register(defineTool({
-    name: 'pause_subscription',
-    description: 'Tentacall only. Pause or resume a subscription by id.',
+    name: 'pause_automation',
+    description: 'Autopilot only. Pause or resume an automation by id.',
     parameters: {
       id: { type: 'string', required: true, description: 'Subscription id' },
       on: { type: 'boolean', required: true, description: 'true to resume, false to pause' },
     },
     output,
     async execute(args, exec) {
-      if (!await isEventsBot(exec)) return NOT_TENTACALL
+      if (!await isEventsBot(exec)) return notEventsBot()
       try {
         await rt.load()
         const sub = await setOn(String(args.id), yes(args.on))
@@ -339,12 +341,12 @@ export function install(rt) {
   }))
 
   ctx.tools.register(defineTool({
-    name: 'delete_subscription',
-    description: 'Tentacall only. Delete a subscription by id. Only when the user asks for it.',
+    name: 'delete_automation',
+    description: 'Autopilot only. Delete an automation by id. Only when the user asks for it.',
     parameters: { id: { type: 'string', required: true, description: 'Subscription id' } },
     output,
     async execute(args, exec) {
-      if (!await isEventsBot(exec)) return NOT_TENTACALL
+      if (!await isEventsBot(exec)) return notEventsBot()
       try {
         await rt.load()
         const name = subs()[String(args.id)]?.name

@@ -12,6 +12,7 @@ import { springEasing, SPRING_SHAPE } from './motion.js'
 import { hostText, t } from './i18n.js'
 import { showsDshRow } from './dsh-offer.js'
 import { EventsBadge } from './subscriptions.js'
+import { AUTOMATIONS_PANEL } from './automations-page.js'
 import { Tile } from './channels.js'
 import { CHANNELS_PANEL, healthSummary, omniStore, startLive } from './omni-store.js'
 import { call } from './api.js'
@@ -92,7 +93,7 @@ function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessio
     awayLine ? h('span', { className: 'bt-row-preview' }, awayLine)
       : waitsFor ? h('span', { className: 'bt-row-preview' }, waitsFor)
         : preview ? h('span', { className: 'bt-row-preview' }, preview) : null) : null,
-  // Tentacall's row also counts the subscription runs waiting for your approval.
+  // Autopilot's row also counts the subscription runs waiting for your approval.
   wide && id === roster.eventsBotId ? h(EventsBadge, { roster, useWork }) : null,
   wide && unread && !active ? h('span', { className: 'bt-unread', 'aria-hidden': true }) : null)
 }
@@ -510,7 +511,7 @@ export function AccountLauncher({ seat = true, settingsOpen, openSettings, openO
       [t('Usage'), GaugeIcon, () => actions.openSettings('usage')],
       [t('Plugins'), PlugIcon, () => actions.selectPanel('plugins')],
       [t('Connectors'), ConnectorIcon, () => actions.openConnectors()],
-      [t('Automation tasks'), ClockIcon, () => actions.selectPanel('schedules')],
+      [t('Automations'), ClockIcon, () => actions.selectPanel(AUTOMATIONS_PANEL)],
       [t('Bot settings'), GearIcon, () => actions.openSettings('general')],
     ],
     [

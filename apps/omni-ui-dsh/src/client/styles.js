@@ -381,6 +381,14 @@ button.bt-q-opt:active{background:var(--bt-active)}
 .bt-swatch{width:22px;height:22px;border-radius:50%;border:2px solid transparent;cursor:pointer;padding:0;box-shadow:inset 0 0 0 1px var(--bt-line-2)}
 .bt-swatch[aria-pressed=true]{border-color:var(--bt-ink)}
 .bt-textarea{width:100%;box-sizing:border-box;min-height:120px;border:1px solid var(--bt-line);border-radius:8px;padding:8px;background:var(--bt-card);color:var(--bt-ink);font:inherit;resize:vertical}
+.bt-paste{display:flex;flex-direction:column;gap:8px;margin:2px 0 14px}
+.bt-paste-box{min-height:96px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;line-height:18px}
+.bt-paste-foot{display:flex;align-items:center;gap:12px}
+.bt-paste-foot .bt-set-hint{flex:1;min-width:0}
+.bt-link-btn{border:0;background:none;padding:0;color:var(--bt-ink-2);font:inherit;font-size:12.5px;cursor:pointer;white-space:nowrap}
+.bt-link-btn:hover{color:var(--bt-ink);text-decoration:underline}
+.bt-paste-go{white-space:nowrap}
+.bt-paste-error{color:var(--bt-danger)}
 .bt-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .bt-kv{display:flex;justify-content:space-between;gap:8px;font-size:12px;line-height:20px;color:var(--bt-ink-2)}
 .bt-kv span:last-child{color:var(--bt-ink);font-variant-numeric:tabular-nums}
