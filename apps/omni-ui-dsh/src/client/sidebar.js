@@ -1,9 +1,9 @@
-import { createElement as h, Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createElement as h, Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 import { OctopusLogo } from './logo.js'
 import { isMainOf } from './sources.js'
 import { currentPart, previewOf, relativeShort } from './text.js'
-import { PlusIcon, SearchIcon, SidebarIcon, GaugeIcon, PlugIcon, ClockIcon, GearIcon, PinMarkIcon, ConnectorIcon, SwitchIcon, CloudDownloadIcon, ChannelsIcon } from './icons.js'
+import { PlusIcon, SearchIcon, SidebarIcon, GaugeIcon, PlugIcon, ClockIcon, GearIcon, PinMarkIcon, ConnectorIcon, SwitchIcon, CloudDownloadIcon } from './icons.js'
 import { MAIN_LOOK } from './characters.js'
 import { botState, BotMark, BotAvatar, RoomAvatar } from './mark.js'
 import { reducedMotion } from './activity-row.js'
@@ -12,7 +12,9 @@ import { springEasing, SPRING_SHAPE } from './motion.js'
 import { hostText, t } from './i18n.js'
 import { showsDshRow } from './dsh-offer.js'
 import { EventsBadge } from './subscriptions.js'
-import { CHANNELS_PANEL, SUBS_PANEL } from './omni-store.js'
+import { Tile } from './channels.js'
+import { CHANNELS_PANEL, healthSummary, omniStore, startLive } from './omni-store.js'
+import { call } from './api.js'
 
 // -------------------------------------------------------------------------
 // Sidebar
@@ -91,7 +93,7 @@ function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessio
       : waitsFor ? h('span', { className: 'bt-row-preview' }, waitsFor)
         : preview ? h('span', { className: 'bt-row-preview' }, preview) : null) : null,
   // Tentacall's row also counts the subscription runs waiting for your approval.
-  wide && id === roster.eventsBotId ? h(EventsBadge) : null,
+  wide && id === roster.eventsBotId ? h(EventsBadge, { roster }) : null,
   wide && unread && !active ? h('span', { className: 'bt-unread', 'aria-hidden': true }) : null)
 }
 
@@ -385,36 +387,18 @@ function UpdateButton({ useUpdate, actions }) {
                 }, dshPhase === 'installing' ? t('Updating…') : dshPhase === 'failed' ? t('Try again') : t('Update')))) : null), document.body) : null)
 }
 
-// The footer entry to the shell's plugin panel, marked as not yet adapted: the red
-// badge and a hover tip explain that plugin support lands step by step.
-export function ConnectPlugins({ wide, actions }) {
-  const tipId = useId()
-  const [tip, setTip] = useState(false)
-  const timer = useRef(0)
-  const button = useRef(null)
-  const [box, setBox] = useState(null)
-  useEffect(() => () => clearTimeout(timer.current), [])
+// The footer's way into channel management: the connected channels as small tiles, a dot
+// when one needs attention, and the Channels page (connect, health) on click.
+export function ChannelsFooter({ wide, actions }) {
+  const state = useSyncExternalStore(omniStore.subscribe, omniStore.getSnapshot, omniStore.getSnapshot)
+  useEffect(() => { startLive(call) }, [])
   if (!wide) return null
-  const show = () => {
-    clearTimeout(timer.current)
-    timer.current = setTimeout(() => {
-      const rect = button.current?.getBoundingClientRect()
-      if (!rect) return
-      const left = Math.max(8, Math.min(rect.left, window.innerWidth - 268))
-      setBox({ left, bottom: window.innerHeight - rect.top + 10 })
-      setTip(true)
-    }, 250)
-  }
-  const hide = () => { clearTimeout(timer.current); setTip(false) }
-  return h('span', { className: 'bt-connect-wrap' },
-    h('button', {
-      ref: button, type: 'button', className: 'bt-connect bt-connect-foot', 'aria-describedby': tip ? tipId : undefined,
-      onMouseEnter: show, onMouseLeave: hide, onFocus: show, onBlur: hide,
-      onClick: () => actions.selectPanel('plugins'),
-    },
-    h(PlugIcon), t('Connect plugins'), h('span', { className: 'bt-connect-warn', 'aria-hidden': true }, '!')),
-    tip && box ? createPortal(h('span', { role: 'tooltip', id: tipId, className: 'bt-connect-tip', style: box },
-      t('Plugin compatibility is not fully verified.')), document.body) : null)
+  const summary = healthSummary(state)
+  const label = summary.attention > 0 ? t('{n} channel needs attention', { n: summary.attention }) : t('Channels and their health')
+  return h('span', { className: 'bt-connect-wrap' }, h('button', { type: 'button', className: 'bt-connect bt-connect-foot bt-channels-foot', title: label, 'aria-label': `${t('Channels')}, ${label}`, onClick: () => actions.selectPanel(CHANNELS_PANEL) },
+    h('span', { className: 'bt-channels-tiles', 'aria-hidden': true }, state.channels.slice(0, 4).map(channel => h(Tile, { key: channel.id, type: channel.type, size: 18 }))),
+    t('Channels'),
+    summary.attention > 0 ? h('span', { className: 'oc-warn-dot', 'aria-hidden': true }) : h('span', { className: 'bt-channels-count' }, `${summary.connected}/${summary.total}`)))
 }
 
 // Account seat of the Settings trigger: the visible label stays for assistive tech only.
@@ -524,8 +508,7 @@ export function AccountLauncher({ seat = true, settingsOpen, openSettings, openO
   const groups = [
     [
       [t('Usage'), GaugeIcon, () => actions.openSettings('usage')],
-      [t('Subscriptions'), ClockIcon, () => actions.selectPanel(SUBS_PANEL)],
-      [t('Channels'), ChannelsIcon, () => actions.selectPanel(CHANNELS_PANEL)],
+      [t('Plugins'), PlugIcon, () => actions.selectPanel('plugins')],
       [t('Connectors'), ConnectorIcon, () => actions.openConnectors()],
       [t('Automation tasks'), ClockIcon, () => actions.selectPanel('schedules')],
       [t('Bot settings'), GearIcon, () => actions.openSettings('general')],
@@ -627,6 +610,13 @@ export const SIDEBAR_CSS = `
 [class*="_footArea"]:has(.bt-foot-account)>[class*="_footerActions"]>div>.bt-connect-wrap{grid-column:2}
 [class*="_footArea"]:has(.bt-foot-account)>[class*="_settingsArea"]{grid-column:3}
 [class*="_footArea"]:has(.bt-foot-account)>[class*="_settingsArea"] button[class*="_trigger"] [class*="_label"]{display:none!important}
+
+.bt-channels-foot{gap:8px;justify-content:flex-start;padding:0 12px 0 8px}
+.bt-channels-tiles{display:inline-flex}
+.bt-channels-tiles .oc-tile{margin-left:-5px;box-shadow:0 0 0 1.5px var(--bt-main)}
+.bt-channels-tiles .oc-tile:first-child{margin-left:0}
+.bt-channels-count{margin-left:auto;font-size:12px;color:var(--bt-ink-3)}
+.bt-channels-foot .oc-warn-dot{margin-left:auto}
 
 /* The update cloud springs in when a newer Omni shows up; its arrow drops in a
    loop while the install runs. */

@@ -6,7 +6,7 @@ import { themeCss, shellTokens, registry, registerShape, registerTheme, allTheme
 import { MENTION_ORIGIN, currentPart } from './text.js'
 import { SHELL_CSS, CONVERSATION_CSS, installStyles, installCompiledStyles } from './styles.js'
 import { lookOf } from './mark.js'
-import { TeamSidebar, ConnectPlugins, YouAvatar, AccountLauncher, FooterAccount, BrandMark, BrandName, BotReturn, SIDEBAR_CSS, RETURN_CSS, holdShellShortcuts } from './sidebar.js'
+import { TeamSidebar, ChannelsFooter, YouAvatar, AccountLauncher, FooterAccount, BrandMark, BrandName, BotReturn, SIDEBAR_CSS, RETURN_CSS, holdShellShortcuts } from './sidebar.js'
 import { HeaderPill } from './header.js'
 import { ComposerPlus, ComposerVoice, menuIcons } from './composer.js'
 import { CHATS_SOURCE, atSources } from './at-menu.js'
@@ -34,8 +34,8 @@ import { ABOUT_CSS } from './about.js'
 import { MEMBER_CSS, MemberDock } from './member-status.js'
 import { USER_MESSAGE_CSS, UserMessageCell, canDrawUserMessages } from './user-message.js'
 import { CHANNELS_CSS, ChannelsPage, ChatPage } from './channels.js'
-import { SUBSCRIPTIONS_CSS, SubscriptionsPage } from './subscriptions.js'
-import { CHANNELS_PANEL, CHAT_PANEL, SUBS_PANEL } from './omni-store.js'
+import { SUBSCRIPTIONS_CSS, isEventsBot } from './subscriptions.js'
+import { CHANNELS_PANEL, CHAT_PANEL } from './omni-store.js'
 import { noticeApprovals } from './approval-notices.js'
 
 export const inject = ['sessions', 'uiWorkspace', 'uiConversation', 'slots', 'theme', 'layout']
@@ -439,8 +439,11 @@ export function apply(ctx) {
     },
     // The open panel follows the main view; a subject with no browser (a group
     // chat, an outside Session) settles on the details view.
+    // Tentacall's board opens beside its chat; leaving for a chat without one closes it.
     followPanel: (id) => {
       ui.set((state) => {
+        if (isEventsBot(roster.getSnapshot(), id)) return state.details === id && state.view !== 'details' ? state : { ...state, details: id, view: 'work', renaming: false, tab: null }
+        if (state.view === 'work' && state.details && state.details !== id) return { ...state, details: null, view: 'details', renaming: false, tab: null }
         if (!state.details || state.details === id) return state
         const view = state.view === 'browser' && roster.getSnapshot().byId[id] === undefined ? 'details' : state.view
         return { ...state, details: id, view, renaming: false, tab: null }
@@ -615,8 +618,11 @@ export function apply(ctx) {
     })
   }
   actions.setPanelView = (view) => {
-    if (view !== 'details' && view !== 'browser') return
+    if (view !== 'details' && view !== 'browser' && view !== 'work') return
     ui.set(state => (state.details && state.view !== view ? { ...state, view } : state))
+  }
+  actions.toggleWork = (id) => {
+    ui.set(state => (state.details === id && state.view === 'work' ? { ...state, details: null, view: 'details', renaming: false, tab: null } : { ...state, details: id, view: 'work', renaming: false, tab: null }))
   }
   actions.closePanel = () => { ui.set(state => (state.details ? { ...state, details: null, view: 'details', renaming: false, tab: null } : state)) }
   // Whether AccountLauncher holds the shell's settings seat; FooterAccount steps aside if so.
@@ -782,7 +788,7 @@ export function apply(ctx) {
     () => shadow('sidebar.brand.mark', { priority: BOT_PRIORITY }, BrandMark),
     () => shadow('sidebar.brand.name', { priority: BOT_PRIORITY }, BrandName),
     () => shadow('sidebar.footer.action', { id: 'bot-account', order: -200, inject: face }, FooterAccount),
-    () => shadow('sidebar.footer.action', { id: 'bot-connect', order: -100, inject: face }, ConnectPlugins),
+    () => shadow('sidebar.footer.action', { id: 'bot-connect', order: -100, inject: face }, ChannelsFooter),
     () => shadow('settings.trigger', { priority: BOT_PRIORITY }, YouAvatar),
     // The whale wins the seat over a shell account plugin's own launcher (the
     // Desktop's "··· More"), which comes back in Agent mode.
@@ -794,7 +800,6 @@ export function apply(ctx) {
     // they replace the conversation in the center, and opening a Bot brings it back.
     () => shadow('main', { key: CHANNELS_PANEL, inject: face }, ChannelsPage),
     () => shadow('main', { key: CHAT_PANEL, inject: face }, ChatPage),
-    () => shadow('main', { key: SUBS_PANEL, inject: face }, SubscriptionsPage),
   ]
   const installConversation = () => [
     () => installCompiledStyles(CONVERSATION_CSS, 'conversation'),

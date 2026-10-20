@@ -44,6 +44,27 @@ module.exports = __toCommonJS(index_exports);
 var NAMESPACE = "ds-bot";
 var ZH = {
   // Omni subscriptions (subscriptions.js)
+  "← Subscriptions": "← 订阅",
+  "acts without asking": "不询问直接执行",
+  "A deleted Bot": "已删除的 Bot",
+  "Anyone in a watched chat can write text that tries to steer a Bot. Work started by an event runs with no secrets and asks you before shell, file or network actions, unless you tell {name} otherwise.": "被关注聊天中的任何人都可能写下试图操控 Bot 的文字。由事件触发的工作不带任何密钥运行，执行命令、文件或网络操作前会先问你，除非你告诉 {name} 不必询问。",
+  "Everything is paused.": "全部已暂停。",
+  "last run {time}": "上次运行 {time}",
+  "{name}’s profile": "{name} 的资料",
+  "not fired yet": "还没有触发过",
+  "Omni is not connected to this DSH yet, so there is nothing to watch.": "Omni 还没有连接到这个 DSH，所以暂时没有可关注的内容。",
+  "Pause {name}": "暂停 {name}",
+  "Plugins": "插件",
+  "Resume {name}": "恢复 {name}",
+  "Say it in the chat. {name} finds the chats, asks what is missing, and the subscription shows up here.": "在聊天中说出来。{name} 会找到对应的聊天，询问缺少的信息，订阅就会出现在这里。",
+  "Tell {name} what to watch": "告诉 {name} 要关注什么",
+  "Test": "测试",
+  "Voice notes in my own chat go to one ongoing session": "我自己聊天中的语音消息交给一个持续的会话",
+  "Watch #ci-alerts for “failed” or “error” and hand it to Ops": "关注 #ci-alerts 中的“failed”或“error”，交给 Ops",
+  "Watching 1 chat or channel.": "正在关注 1 个聊天或渠道。",
+  "Watching {n} chats and channels.": "正在关注 {n} 个聊天和渠道。",
+  "Events start arriving once omni’s event stream is connected here.": "连接 omni 的事件流后，事件就会开始到达。",
+  "When I react 📌 to a message in any WhatsApp chat, save it to my notes": "当我在任意 WhatsApp 聊天中对消息回应 📌 时，保存到我的笔记",
   "Event router": "事件路由",
   "Pick chats, groups or whole channels and the moment you care about. {name} picks it up, acts or hands it to the right Bot, and you see what happened here.": "选择聊天、群组或整个渠道，以及你关心的时刻。{name} 会接手，自己处理或交给合适的 Bot，你可以在这里看到结果。",
   "Event router: acts, or hands it to the right Bot": "事件路由：自己处理，或交给合适的 Bot",
@@ -1593,8 +1614,8 @@ function registerShape(id, shape) {
   const at = shape.eyes?.at;
   if (!Array.isArray(at) || at.length !== 2 || !at.every(isPoint)) throw new Error("A shape needs eyes.at: two [x, y] points");
   const size = Number.isFinite(shape.size) && shape.size > 0 ? shape.size : 100;
-  const pick3 = (key, fallback) => Number.isFinite(shape.eyes[key]) ? shape.eyes[key] : fallback;
-  const eyes = at.map(([x, y]) => [x, y, pick3("w", size * 0.1), pick3("h", size * 0.23), pick3("tilt", -27)]);
+  const pick2 = (key, fallback) => Number.isFinite(shape.eyes[key]) ? shape.eyes[key] : fallback;
+  const eyes = at.map(([x, y]) => [x, y, pick2("w", size * 0.1), pick2("h", size * 0.23), pick2("tilt", -27)]);
   const previous = SHAPES[id];
   SHAPES[id] = {
     label: String(shape.label ?? id),
@@ -3425,8 +3446,8 @@ var keyLetter = (index) => String.fromCharCode(65 + index);
 var optionsOf = (question) => (question?.options ?? []).map((option) => typeof option === "string" ? { label: option } : option);
 var isTypingTarget = (node) => node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement || node instanceof HTMLSelectElement || node instanceof HTMLElement && node.isContentEditable;
 function useOptionKeys(count, onPick, ownRef) {
-  const pick3 = (0, import_react5.useRef)(onPick);
-  pick3.current = onPick;
+  const pick2 = (0, import_react5.useRef)(onPick);
+  pick2.current = onPick;
   (0, import_react5.useEffect)(() => {
     if (count === 0) return void 0;
     const onKey = (event) => {
@@ -3436,7 +3457,7 @@ function useOptionKeys(count, onPick, ownRef) {
       const index = event.key.toUpperCase().charCodeAt(0) - 65;
       if (index >= 0 && index < count) {
         event.preventDefault();
-        pick3.current(index);
+        pick2.current(index);
       } else if (index === count && ownRef.current) {
         event.preventDefault();
         ownRef.current.focus();
@@ -5169,7 +5190,6 @@ function showsDshRow(dsh, app) {
 // src/client/omni-store.js
 var CHANNELS_PANEL = "omni-channels";
 var CHAT_PANEL = "omni-chat";
-var SUBS_PANEL = "omni-subscriptions";
 var typeOf = (type) => CHANNEL_TYPES[type] ?? { label: type, tile: "#64748B", glyph: "chat", pairing: "token", blurb: "" };
 var CHANNEL_TYPES = {
   "whatsapp-baileys": { label: "WhatsApp", tile: "#25D366", glyph: "whatsapp", pairing: "qr", blurb: "Link a phone number by scanning a code, like WhatsApp Web." },
@@ -5253,59 +5273,8 @@ function sample(now) {
       { id: "m1", from: "them", author: "Leo", text: "Is the bot down?", at: ago2(19 * HOUR) }
     ]
   };
-  const src = (chat, channel) => ({ kind: "chat", id: chat, ...pick(chats.find((item) => item.id === chat), channels.find((item) => item.id === channel)) });
-  const subscriptions = [
-    {
-      id: "s-react",
-      name: "Hand a message to Tentacall",
-      on: true,
-      sources: [{ kind: "channel", id: "wa-sales", name: "Sales", type: "whatsapp-baileys" }, { kind: "channel", id: "wa-personal", name: "Personal", type: "whatsapp-baileys" }, { kind: "channel", id: "slack-namastex", name: "Namastex", type: "slack" }],
-      trigger: { kind: "reaction", emoji: "🤖" },
-      worker: { kind: "events" },
-      outputs: { react: true, replyToMe: false },
-      safety: { askFirst: true }
-    },
-    {
-      id: "s-ci",
-      name: "Build failures",
-      on: true,
-      sources: [src("c-ci", "slack-namastex"), src("c-support", "slack-namastex"), src("c-beta", "tg-helper")],
-      trigger: { kind: "keyword", words: ["failed", "error", "down"] },
-      worker: { kind: "bot", name: "Ops", look: { shape: "octopus", color: "orange" } },
-      outputs: { react: true, replyToMe: false },
-      safety: { askFirst: true }
-    },
-    {
-      id: "s-voice",
-      name: "Voice notes to my inbox",
-      on: true,
-      sources: [src("c-self", "wa-personal")],
-      trigger: { kind: "voice" },
-      worker: { kind: "session", mode: "ongoing", title: "Inbox" },
-      outputs: { react: true, replyToMe: true },
-      safety: { askFirst: true }
-    },
-    {
-      id: "s-invoices",
-      name: "Invoices from clients",
-      on: false,
-      sources: [src("c-marina", "wa-sales"), src("c-alpha", "wa-sales")],
-      trigger: { kind: "media" },
-      worker: { kind: "bot", name: "Finance", look: { shape: "octopus", color: "green" } },
-      outputs: { react: false, replyToMe: false },
-      safety: { askFirst: true }
-    }
-  ];
-  const runs = [
-    { id: "r1", subId: "s-ci", at: ago2(11 * MIN), status: "waiting", from: "#ci-alerts", excerpt: "build #1932 failed on dev", summary: "Wants to run `gh run view 1932 --log-failed`" },
-    { id: "r2", subId: "s-react", at: ago2(26 * MIN), status: "working", from: "Marina Lopes", excerpt: "Pode me mandar o orçamento de novo?", summary: "Finding the latest quote in Drive" },
-    { id: "r3", subId: "s-voice", at: ago2(52 * MIN), status: "done", from: "Me (notes)", excerpt: "Voice note: “lembrar de renovar o domínio lembr.ai”", summary: "Added a task for Friday and replied to you" },
-    { id: "r4", subId: "s-ci", at: ago2(3 * HOUR), status: "done", from: "#support", excerpt: "checkout is down for some users", summary: "Found a 502 spike; posted a summary in Ops" },
-    { id: "r5", subId: "s-react", at: ago2(5 * HOUR), status: "failed", from: "Grupo Obras", excerpt: "Rafael: fotos no drive", summary: "No access to that Drive folder" }
-  ];
-  return { channels, chats, messages, subscriptions, runs };
+  return { channels, chats, messages };
 }
-var pick = (chat, channel) => ({ name: chat?.name ?? "", type: channel?.type ?? "whatsapp-baileys", chatKind: chat?.kind ?? "direct" });
 var omniStore = createSource({
   ...sample(Date.now()),
   // Which channel the sidebar's Chats section shows (null: all), and the open chat.
@@ -5313,8 +5282,6 @@ var omniStore = createSource({
   chatId: null,
   // The Channels page: the overview, one channel, or the connect flow.
   page: { view: "overview", channelId: null, type: null, step: 0 },
-  // The Subscriptions page: the list, one subscription, or the editor (`draft`).
-  subs: { view: "list", id: null, runId: null, draft: null },
   // preview: sample data, every action works locally. live: the host's omni endpoints,
   // read-only. `source` says which, and why the preview stays when omni is not set up.
   preview: true,
@@ -5459,72 +5426,8 @@ var TRIGGERS = {
   media: { label: "A photo or file arrives", short: "file", icon: "media" },
   down: { label: "The channel disconnects", short: "disconnect", icon: "down" }
 };
-var REACTIONS2 = ["🤖", "👀", "📌", "✅", "🧾", "🔥", "❓", "⭐"];
-var subOf = (state, id) => state.subscriptions.find((sub) => sub.id === id);
-var runsOf = (state, subId) => state.runs.filter((run) => subId === void 0 || run.subId === subId).toSorted((a, b) => b.at - a.at);
-var waitingRuns = (state) => state.runs.filter((run) => run.status === "waiting").length;
-function firedToday(state, subId) {
-  const midnight = (/* @__PURE__ */ new Date()).setHours(0, 0, 0, 0);
-  return state.runs.filter((run) => run.subId === subId && run.at >= midnight).length;
-}
-var emptyDraft = () => ({ id: null, name: "", on: true, sources: [], trigger: { kind: "reaction", emoji: "🤖" }, worker: { kind: "events" }, outputs: { react: true, replyToMe: false }, safety: { askFirst: true } });
-var sourceOfChat = (state, chat) => ({ kind: "chat", id: chat.id, name: chat.name, type: channelOf(state, chat.channelId)?.type ?? "whatsapp-baileys", chatKind: chat.kind ?? "direct" });
-var sourceOfChannel = (channel) => ({ kind: "channel", id: channel.id, name: channel.name, type: channel.type });
-var chatSource = sourceOfChat;
-function guessDraft(text, state) {
-  const words = text.toLowerCase();
-  const draft = { ...emptyDraft(), name: text.trim().slice(0, 48) };
-  const emoji = REACTIONS2.find((item) => text.includes(item));
-  if (emoji || /\breact/.test(words)) draft.trigger = { kind: "reaction", emoji: emoji ?? "🤖" };
-  else if (/voice|audio|áudio/.test(words)) draft.trigger = { kind: "voice" };
-  else if (/photo|file|invoice|pdf|foto|nota/.test(words)) draft.trigger = { kind: "media" };
-  else if (/mention|@me/.test(words)) draft.trigger = { kind: "mention" };
-  else {
-    const quoted = [...text.matchAll(/["“']([^"”']+)["”']/g)].map((match) => match[1]);
-    draft.trigger = { kind: "keyword", words: quoted.length > 0 ? quoted : ["failed"] };
-  }
-  draft.sources = state.chats.filter((chat) => words.includes(chat.name.toLowerCase().replace(/^#/, ""))).map((chat) => sourceOfChat(state, chat));
-  if (/\b(me|myself|mim)\b/.test(words)) draft.outputs = { ...draft.outputs, replyToMe: true };
-  return draft;
-}
-function subsActions(select) {
-  const show = (subs) => set((state) => ({ subs: { ...state.subs, ...subs } }));
-  return {
-    openSubs(view = "list", id = null, runId = null) {
-      const sub = id ? subOf(omniStore.getSnapshot(), id) : void 0;
-      show({ view, id, runId, draft: view === "edit" ? sub ? structuredClone(sub) : emptyDraft() : null });
-      select(SUBS_PANEL);
-    },
-    show,
-    startDraft: (draft) => {
-      show({ view: "edit", id: draft.id, runId: null, draft });
-      select(SUBS_PANEL);
-    },
-    editDraft: (patch) => set((state) => ({ subs: { ...state.subs, draft: { ...state.subs.draft, ...patch } } })),
-    save() {
-      const { draft } = omniStore.getSnapshot().subs;
-      if (!draft || draft.sources.length === 0) return;
-      const id = draft.id ?? `s-${Date.now()}`;
-      const saved = { ...draft, id, name: draft.name.trim() || "Untitled subscription" };
-      set((state) => ({
-        subscriptions: state.subscriptions.some((sub) => sub.id === id) ? state.subscriptions.map((sub) => sub.id === id ? saved : sub) : [...state.subscriptions, saved],
-        subs: { view: "detail", id, runId: null, draft: null }
-      }));
-    },
-    toggle: (id) => set((state) => ({ subscriptions: state.subscriptions.map((sub) => sub.id === id ? { ...sub, on: !sub.on } : sub) })),
-    remove: (id) => set((state) => ({ subscriptions: state.subscriptions.filter((sub) => sub.id !== id), runs: state.runs.filter((run) => run.subId !== id), subs: { view: "list", id: null, runId: null, draft: null } })),
-    // A test fires the subscription on its newest matching message, as a run that finishes.
-    test(id) {
-      const sub = subOf(omniStore.getSnapshot(), id);
-      if (!sub) return;
-      const runId = `r-${Date.now()}`;
-      set((state) => ({ runs: [{ id: runId, subId: id, at: Date.now(), status: "working", from: sub.sources[0]?.name ?? "a chat", excerpt: "Test: the newest matching message", summary: "Reading the message" }, ...state.runs], subs: { ...state.subs, runId } }));
-      setTimeout(() => set((state) => ({ runs: state.runs.map((run) => run.id === runId ? { ...run, status: "done", summary: "Test finished: the worker got the message and where it came from" } : run) })), 2200);
-    },
-    approve: (runId) => set((state) => ({ runs: state.runs.map((run) => run.id === runId ? { ...run, status: "working", summary: "Approved: running it now" } : run) })),
-    deny: (runId) => set((state) => ({ runs: state.runs.map((run) => run.id === runId ? { ...run, status: "failed", summary: "You declined" } : run) }))
-  };
-}
+var runsOf = (roster, subId) => (roster?.subscriptionRuns ?? []).filter((run) => subId === void 0 || run.subId === subId).toSorted((a, b) => b.at - a.at);
+var waitingRuns = (roster) => (roster?.subscriptionRuns ?? []).filter((run) => run.status === "waiting").length;
 
 // src/client/channels.js
 var import_react10 = require("react");
@@ -6261,25 +6164,26 @@ body[data-ds-dark-theme] .oc-ava{background:hsl(var(--oc-hue) 30% 26%);color:hsl
 // src/client/subscriptions.js
 var import_react11 = require("react");
 var TRIGGER_ICONS = { message: MessageIcon, mention: AtIcon, keyword: KeywordIcon, voice: VoiceIcon, media: FileIcon, down: UnplugIcon };
-var useSubs = (actions) => (0, import_react11.useMemo)(() => ({ ...omniActions((id) => actions.selectPanel(id), call), ...subsActions((id) => actions.selectPanel(id)) }), [actions]);
 var EVENTS_LOOK = { shape: "octopus", color: "violet" };
+var FRESH_MS = 6e3;
+var isEventsBot = (roster, id) => Boolean(roster?.eventsBotId) && roster.byId?.[id]?.id === roster.eventsBotId;
 function workerOf(worker, roster) {
   if (worker.kind === "events") {
     const bot2 = roster?.byId?.[roster.eventsBotId];
-    return { name: bot2?.name ?? "Tentacall", bot: bot2, look: EVENTS_LOOK, role: t("Event router") };
+    return { name: bot2?.name ?? "Tentacall", bot: bot2, look: EVENTS_LOOK };
   }
   if (worker.kind === "main") {
-    const main = roster?.byId?.[roster.mainBotId];
-    return { name: main?.name ?? "Omni", bot: main, look: MAIN_LOOK, role: t("Main Bot") };
+    const bot2 = roster?.byId?.[roster.mainBotId];
+    return { name: bot2?.name ?? "Omni", bot: bot2, look: MAIN_LOOK };
   }
-  if (worker.kind === "session") return { name: worker.title || t("DSH session"), session: true, role: worker.mode === "new" ? t("a new session each time") : t("one ongoing session") };
-  const bot = worker.botId ? roster?.byId?.[worker.botId] : void 0;
-  return { name: bot?.name ?? worker.name, bot, look: worker.look, role: t("Bot") };
+  if (worker.kind === "session") return { name: worker.mode === "ongoing" ? t("One ongoing session") : t("A new session each time"), session: true };
+  const bot = roster?.byId?.[worker.botId];
+  return { name: bot?.name ?? t("A deleted Bot"), bot, look: MAIN_LOOK };
 }
 function WorkerMark({ worker, roster, size = 24 }) {
   const info = workerOf(worker, roster);
   if (info.session) return (0, import_react11.createElement)("span", { className: "os-session", style: { width: size, height: size } }, (0, import_react11.createElement)(OctopusLogo, { size: Math.round(size * 0.62) }));
-  return (0, import_react11.createElement)(BotMark, info.bot ? { bot: info.bot, size } : { look: info.look ?? MAIN_LOOK, size });
+  return (0, import_react11.createElement)(BotMark, info.bot ? { bot: info.bot, size } : { look: info.look, size });
 }
 var TriggerBadge = ({ trigger, size = 36 }) => (0, import_react11.createElement)(
   "span",
@@ -6292,7 +6196,6 @@ function triggerText(trigger) {
   return t(TRIGGERS[trigger.kind].label).toLowerCase();
 }
 function sourcesText(sources) {
-  if (sources.length === 0) return t("no chats yet");
   if (sources.length === 1) return sources[0].kind === "channel" ? t("anywhere on {name}", { name: sources[0].name }) : sources[0].name;
   const channels = sources.filter((source) => source.kind === "channel").length;
   const groups = sources.filter((source) => source.kind === "chat" && source.chatKind === "group").length;
@@ -6300,21 +6203,17 @@ function sourcesText(sources) {
   const count = (n, one, many) => n === 0 ? "" : n === 1 ? t(one) : t(many, { n });
   return [count(channels, "1 channel", "{n} channels"), count(groups, "1 group", "{n} groups"), count(chats, "1 chat", "{n} chats")].filter(Boolean).join(" + ");
 }
-function SourceStack({ sources, size = 18 }) {
+var initials = (name) => name.startsWith("#") ? "#" : name.split(/\s+/).filter(Boolean).slice(0, 2).map((word) => word[0]).join("").toUpperCase() || "?";
+var SourceMark = ({ source, size }) => source.kind === "channel" ? (0, import_react11.createElement)(Tile, { type: source.type, size }) : (0, import_react11.createElement)(ChatAvatar, { chat: { name: source.name, initials: initials(source.name) }, size });
+function SourceStack({ sources, size = 16 }) {
   return (0, import_react11.createElement)(
     "span",
     { className: "os-stack" },
-    sources.slice(0, 3).map((source) => (0, import_react11.createElement)(
-      "span",
-      { key: `${source.kind}-${source.id}`, className: "os-stack-item" },
-      source.kind === "channel" ? (0, import_react11.createElement)(Tile, { type: source.type, size }) : (0, import_react11.createElement)(ChatAvatar, { chat: { name: source.name, initials: initials(source.name) }, size })
-    )),
+    sources.slice(0, 3).map((source) => (0, import_react11.createElement)("span", { key: `${source.kind}-${source.id}`, className: "os-stack-item" }, (0, import_react11.createElement)(SourceMark, { source, size }))),
     sources.length > 3 ? (0, import_react11.createElement)("span", { className: "os-stack-more" }, `+${sources.length - 3}`) : null
   );
 }
-var initials = (name) => name.startsWith("#") ? "#" : name.split(/\s+/).filter(Boolean).slice(0, 2).map((word) => word[0]).join("").toUpperCase() || "?";
 function Sentence({ sub, roster }) {
-  const worker = workerOf(sub.worker, roster);
   return (0, import_react11.createElement)(
     "p",
     { className: "os-sentence" },
@@ -6324,11 +6223,11 @@ function Sentence({ sub, roster }) {
     " ",
     (0, import_react11.createElement)("span", { className: "os-w" }, t("in")),
     " ",
-    (0, import_react11.createElement)("span", { className: "os-chip" }, (0, import_react11.createElement)(SourceStack, { sources: sub.sources, size: 16 }), sourcesText(sub.sources)),
+    (0, import_react11.createElement)("span", { className: "os-chip" }, (0, import_react11.createElement)(SourceStack, { sources: sub.sources }), sourcesText(sub.sources)),
     " ",
     (0, import_react11.createElement)("span", { className: "os-w" }, "→"),
     " ",
-    (0, import_react11.createElement)("span", { className: "os-chip os-chip-worker" }, (0, import_react11.createElement)(WorkerMark, { worker: sub.worker, roster, size: 18 }), worker.name),
+    (0, import_react11.createElement)("span", { className: "os-chip os-chip-worker" }, (0, import_react11.createElement)(WorkerMark, { worker: sub.worker, roster, size: 18 }), workerOf(sub.worker, roster).name),
     sub.outputs.react ? (0, import_react11.createElement)(import_react11.Fragment, null, " ", (0, import_react11.createElement)("span", { className: "os-chip os-chip-soft" }, t("reacts 👀 then ✅"))) : null,
     sub.outputs.replyToMe ? (0, import_react11.createElement)(import_react11.Fragment, null, " ", (0, import_react11.createElement)("span", { className: "os-chip os-chip-soft" }, t("replies to you"))) : null
   );
@@ -6339,127 +6238,146 @@ var RUN_STATUS = {
   done: { label: "Done", tone: "ok" },
   failed: { label: "Did not finish", tone: "bad" }
 };
-function EventsBadge() {
-  const state = useOmni();
-  (0, import_react11.useEffect)(() => {
-    startLive(call);
-  }, []);
-  const waiting = waitingRuns(state);
+function EventsBadge({ roster }) {
+  const waiting = waitingRuns(roster);
   return waiting > 0 ? (0, import_react11.createElement)("span", { className: "os-pending", title: t("{n} waiting for you", { n: waiting }) }, String(waiting)) : null;
 }
-function SubscriptionsButton({ actions }) {
-  const state = useOmni();
-  const omni = useSubs(actions);
-  const waiting = waitingRuns(state);
-  const on = state.subscriptions.filter((sub) => sub.on).length;
+function SubscriptionsButton({ sessionId, roster, actions, open }) {
+  const count = (roster.subscriptions ?? []).filter((sub) => sub.on).length;
+  const waiting = waitingRuns(roster);
   return (0, import_react11.createElement)(
     "button",
-    { type: "button", className: "os-head-btn", onClick: () => omni.openSubs("list") },
+    { type: "button", className: "os-head-btn", "aria-pressed": open, onClick: () => actions.toggleWork(sessionId) },
     t("Subscriptions"),
-    (0, import_react11.createElement)("span", { className: "os-head-count" }, String(on)),
+    (0, import_react11.createElement)("span", { className: "os-head-count" }, String(count)),
     waiting > 0 ? (0, import_react11.createElement)("span", { className: "os-pending" }, String(waiting)) : null
   );
 }
-function SubscriptionsPage({ actions, useRoster }) {
-  const state = useOmni();
-  const roster = useRoster ? useRoster((value) => value) : null;
-  const omni = { ...useSubs(actions), openBot: (id) => actions.openSession(id) };
+function SubscriptionsBoard({ bot, roster, actions, onDetails }) {
+  const omni = useOmni();
   (0, import_react11.useEffect)(() => {
     startLive(call);
   }, []);
-  const { subs } = state;
-  const sub = subs.id ? subOf(state, subs.id) : void 0;
+  const subs = roster.subscriptions ?? [];
+  const runs = runsOf(roster);
+  const waiting = runs.filter((run) => run.status === "waiting");
+  const watched = new Set(subs.filter((sub) => sub.on).flatMap((sub) => sub.sources.map((source) => `${source.kind}:${source.id}`))).size;
   return (0, import_react11.createElement)(
     "div",
-    { className: "oc-page oc-channels" },
+    { className: "bt-panel-view os-board" },
     (0, import_react11.createElement)(
       "div",
-      { className: "oc-channels-in" },
-      subs.view === "edit" && subs.draft ? (0, import_react11.createElement)(Editor, { draft: subs.draft, state, roster, omni }) : subs.view === "detail" && sub ? (0, import_react11.createElement)(Detail, { sub, state, roster, omni, focus: subs.runId }) : (0, import_react11.createElement)(List, { state, roster, omni })
+      { className: "os-board-head" },
+      (0, import_react11.createElement)("button", { type: "button", className: "os-board-who", onClick: onDetails, title: t("{name}’s profile", { name: bot.name }) }, (0, import_react11.createElement)(BotMark, { bot, size: 26 }), (0, import_react11.createElement)("strong", null, t("Subscriptions"))),
+      (0, import_react11.createElement)(PreviewChip),
+      (0, import_react11.createElement)("button", { type: "button", className: "bt-icon-btn", "aria-label": t("Close panel"), title: t("Close panel"), onClick: () => actions.closePanel() }, (0, import_react11.createElement)(CloseIcon))
+    ),
+    (0, import_react11.createElement)(
+      "div",
+      { className: "os-board-body" },
+      subs.length === 0 ? (0, import_react11.createElement)(Empty, { bot, live: omni.source.kind === "live" }) : (0, import_react11.createElement)(
+        import_react11.Fragment,
+        null,
+        (0, import_react11.createElement)("p", { className: "os-board-note" }, subs.some((sub) => sub.on) ? `${watched === 1 ? t("Watching 1 chat or channel.") : t("Watching {n} chats and channels.", { n: watched })} ${t("Events start arriving once omni’s event stream is connected here.")}` : t("Everything is paused.")),
+        waiting.length > 0 ? (0, import_react11.createElement)(
+          import_react11.Fragment,
+          null,
+          (0, import_react11.createElement)("h3", { className: "os-board-h" }, t("Waiting for you")),
+          waiting.map((run) => (0, import_react11.createElement)(RunCard, { key: run.id, run, sub: subs.find((sub) => sub.id === run.subId), roster }))
+        ) : null,
+        (0, import_react11.createElement)("h3", { className: "os-board-h" }, t("Watching")),
+        subs.map((sub) => (0, import_react11.createElement)(SubCard, { key: sub.id, sub, roster, runs: runs.filter((run) => run.subId === sub.id) })),
+        runs.length > waiting.length ? (0, import_react11.createElement)(
+          import_react11.Fragment,
+          null,
+          (0, import_react11.createElement)("h3", { className: "os-board-h" }, t("Activity")),
+          runs.filter((run) => run.status !== "waiting").slice(0, 12).map((run) => (0, import_react11.createElement)(RunCard, { key: run.id, run, sub: subs.find((sub) => sub.id === run.subId), roster, compact: true }))
+        ) : null
+      ),
+      (0, import_react11.createElement)(
+        "div",
+        { className: "os-safety" },
+        (0, import_react11.createElement)("span", { className: "os-safety-icon", "aria-hidden": true }, (0, import_react11.createElement)(ShieldIcon)),
+        (0, import_react11.createElement)(
+          "div",
+          null,
+          (0, import_react11.createElement)("strong", null, t("Messages come from other people")),
+          (0, import_react11.createElement)("span", null, t("Anyone in a watched chat can write text that tries to steer a Bot. Work started by an event runs with no secrets and asks you before shell, file or network actions, unless you tell {name} otherwise.", { name: bot.name }))
+        )
+      )
     )
   );
 }
-function Describe({ state, roster, omni }) {
-  const [text, setText] = (0, import_react11.useState)("");
-  const go = () => {
-    if (text.trim()) omni.startDraft(guessDraft(text, state));
-  };
+function Empty({ bot, live }) {
+  const examples = [
+    t("Watch #ci-alerts for “failed” or “error” and hand it to Ops"),
+    t("When I react 📌 to a message in any WhatsApp chat, save it to my notes"),
+    t("Voice notes in my own chat go to one ongoing session")
+  ];
   return (0, import_react11.createElement)(
     "div",
-    { className: "os-describe" },
-    (0, import_react11.createElement)("span", { className: "os-describe-mark" }, (0, import_react11.createElement)(WorkerMark, { worker: { kind: "events" }, roster, size: 22 })),
-    (0, import_react11.createElement)("input", {
-      value: text,
-      onChange: (event) => setText(event.target.value),
-      "aria-label": t("Describe a subscription"),
-      placeholder: t("Tell {name} what to watch: “when I react 📌 in Grupo Obras, have Ops file it”", { name: workerOf({ kind: "events" }, roster).name }),
-      onKeyDown: (event) => {
-        if (event.key === "Enter" && !event.nativeEvent.isComposing) go();
-      }
-    }),
-    (0, import_react11.createElement)("button", { type: "button", className: "oc-primary", disabled: text.trim() === "", onClick: go }, t("Draft it"))
+    { className: "os-empty-board" },
+    (0, import_react11.createElement)(BotMark, { bot, size: 64, live: true }),
+    (0, import_react11.createElement)("strong", null, t("Tell {name} what to watch", { name: bot.name })),
+    (0, import_react11.createElement)("span", null, live ? t("Say it in the chat. {name} finds the chats, asks what is missing, and the subscription shows up here.", { name: bot.name }) : t("Omni is not connected to this DSH yet, so there is nothing to watch.")),
+    (0, import_react11.createElement)("div", { className: "os-examples" }, examples.map((text) => (0, import_react11.createElement)("span", { key: text, className: "os-example" }, text)))
   );
 }
-function List({ state, roster, omni }) {
-  const runs = runsOf(state);
-  const waiting = runs.filter((run) => run.status === "waiting");
+function SubCard({ sub, roster, runs }) {
+  const [confirming, setConfirming] = (0, import_react11.useState)(false);
+  const [busy, setBusy] = (0, import_react11.useState)("");
+  const fresh = Date.now() - (sub.updatedAt ?? 0) < FRESH_MS;
+  const run = async (endpoint, payload) => {
+    setBusy(endpoint);
+    try {
+      await call(endpoint, payload);
+    } finally {
+      setBusy("");
+    }
+  };
+  const last = runs[0];
   return (0, import_react11.createElement)(
-    import_react11.Fragment,
-    null,
+    "div",
+    { className: "os-card", "data-off": sub.on ? void 0 : true, "data-fresh": fresh || void 0 },
     (0, import_react11.createElement)(
-      "header",
-      { className: "oc-head os-head" },
-      (0, import_react11.createElement)(WorkerMark, { worker: { kind: "events" }, roster, size: 52 }),
-      (0, import_react11.createElement)(
-        "div",
-        null,
-        (0, import_react11.createElement)("h1", null, t("Subscriptions"), (0, import_react11.createElement)(PreviewChip)),
-        (0, import_react11.createElement)("p", null, t("Pick chats, groups or whole channels and the moment you care about. {name} picks it up, acts or hands it to the right Bot, and you see what happened here.", { name: workerOf({ kind: "events" }, roster).name }))
-      ),
-      (0, import_react11.createElement)(
-        "span",
-        { className: "os-head-actions" },
-        roster?.eventsBotId ? (0, import_react11.createElement)("button", { type: "button", className: "oc-secondary", onClick: () => omni.openBot(roster.eventsBotId) }, t("Chat with {name}", { name: workerOf({ kind: "events" }, roster).name })) : null,
-        (0, import_react11.createElement)("button", { type: "button", className: "oc-primary", onClick: () => omni.openSubs("edit") }, (0, import_react11.createElement)(PlusIcon), t("New subscription"))
-      )
-    ),
-    (0, import_react11.createElement)(Describe, { state, roster, omni }),
-    waiting.length > 0 ? (0, import_react11.createElement)(
-      import_react11.Fragment,
-      null,
-      (0, import_react11.createElement)("h2", { className: "oc-section" }, t("Waiting for you")),
-      waiting.map((run) => (0, import_react11.createElement)(RunCard, { key: run.id, run, sub: subOf(state, run.subId), roster, omni }))
-    ) : null,
-    (0, import_react11.createElement)("h2", { className: "oc-section" }, t("Your subscriptions")),
-    (0, import_react11.createElement)("div", { className: "os-cards" }, state.subscriptions.map((sub) => (0, import_react11.createElement)(
-      "button",
-      {
-        key: sub.id,
+      "div",
+      { className: "os-card-top" },
+      (0, import_react11.createElement)(TriggerBadge, { trigger: sub.trigger, size: 34 }),
+      (0, import_react11.createElement)("strong", null, sub.name),
+      (0, import_react11.createElement)("button", {
         type: "button",
-        className: "os-card",
-        "data-off": sub.on ? void 0 : true,
-        onClick: () => omni.openSubs("detail", sub.id)
-      },
-      (0, import_react11.createElement)(
-        "span",
-        { className: "os-card-top" },
-        (0, import_react11.createElement)(TriggerBadge, { trigger: sub.trigger, size: 40 }),
-        (0, import_react11.createElement)("strong", null, sub.name),
-        (0, import_react11.createElement)("span", { className: "os-card-meta" }, sub.on ? t("{n} today", { n: firedToday(state, sub.id) }) : t("Paused"))
-      ),
-      (0, import_react11.createElement)(Sentence, { sub, roster })
-    ))),
-    (0, import_react11.createElement)("h2", { className: "oc-section" }, t("Activity")),
-    (0, import_react11.createElement)("div", { className: "os-timeline" }, runs.filter((run) => run.status !== "waiting").map((run) => (0, import_react11.createElement)(RunCard, { key: run.id, run, sub: subOf(state, run.subId), roster, omni, compact: true })))
+        role: "switch",
+        "aria-checked": sub.on,
+        className: "os-switch",
+        disabled: busy !== "",
+        "aria-label": sub.on ? t("Pause {name}", { name: sub.name }) : t("Resume {name}", { name: sub.name }),
+        onClick: () => run("subscription-set-on", { id: sub.id, on: !sub.on })
+      }, (0, import_react11.createElement)("span"))
+    ),
+    (0, import_react11.createElement)(Sentence, { sub, roster }),
+    (0, import_react11.createElement)(
+      "div",
+      { className: "os-card-foot" },
+      (0, import_react11.createElement)("span", { className: "os-card-meta" }, last ? t("last run {time}", { time: relativeShort(last.at) }) : t("not fired yet")),
+      sub.askFirst ? null : (0, import_react11.createElement)("span", { className: "os-card-meta os-card-warn" }, t("acts without asking")),
+      (0, import_react11.createElement)("button", { type: "button", className: "os-link", disabled: busy !== "", onClick: () => run("subscription-test", { id: sub.id }) }, t("Test")),
+      (0, import_react11.createElement)("button", {
+        type: "button",
+        className: confirming ? "os-link os-link-danger" : "os-link",
+        disabled: busy !== "",
+        onBlur: () => setConfirming(false),
+        onClick: () => confirming ? run("subscription-delete", { id: sub.id }) : setConfirming(true)
+      }, confirming ? t("Click again to delete") : t("Delete"))
+    )
   );
 }
-function RunCard({ run, sub, roster, omni, compact: compact2 = false, focused = false }) {
+function RunCard({ run, sub, roster, compact: compact2 = false }) {
   if (!sub) return null;
   const status = RUN_STATUS[run.status];
   return (0, import_react11.createElement)(
     "div",
-    { className: `os-runcard${compact2 ? " os-runcard-compact" : ""}`, "data-tone": status.tone, "data-focus": focused || void 0 },
-    (0, import_react11.createElement)(WorkerMark, { worker: sub.worker, roster, size: compact2 ? 28 : 34 }),
+    { className: `os-runcard${compact2 ? " os-runcard-compact" : ""}`, "data-tone": status.tone },
+    (0, import_react11.createElement)(WorkerMark, { worker: sub.worker, roster, size: compact2 ? 24 : 30 }),
     (0, import_react11.createElement)(
       "div",
       { className: "os-runcard-body" },
@@ -6467,234 +6385,13 @@ function RunCard({ run, sub, roster, omni, compact: compact2 = false, focused = 
         "div",
         { className: "os-runcard-top" },
         (0, import_react11.createElement)("strong", null, workerOf(sub.worker, roster).name),
-        (0, import_react11.createElement)("span", { className: "oc-pill", "data-tone": status.tone === "bad" ? "warn" : status.tone }, (0, import_react11.createElement)("span", { className: "oc-pill-dot", "aria-hidden": true }), t(status.label)),
-        (0, import_react11.createElement)("button", { type: "button", className: "os-link", onClick: () => omni.openSubs("detail", sub.id, run.id) }, sub.name),
+        (0, import_react11.createElement)("span", { className: "oc-pill", "data-tone": status.tone === "bad" ? "warn" : status.tone }, (0, import_react11.createElement)("span", { className: "oc-pill-dot", "aria-hidden": true }), run.test ? t("Test") : t(status.label)),
+        (0, import_react11.createElement)("span", { className: "os-runcard-sub" }, sub.name),
         (0, import_react11.createElement)("time", null, relativeShort(run.at))
       ),
-      (0, import_react11.createElement)("div", { className: "os-quote" }, (0, import_react11.createElement)("span", null, run.from), " ", run.excerpt),
-      (0, import_react11.createElement)("div", { className: "os-summary" }, run.summary),
-      run.status === "waiting" ? (0, import_react11.createElement)(
-        "div",
-        { className: "os-approve" },
-        (0, import_react11.createElement)("button", { type: "button", className: "oc-primary", onClick: () => omni.approve(run.id) }, t("Allow once")),
-        (0, import_react11.createElement)("button", { type: "button", className: "oc-secondary", onClick: () => omni.deny(run.id) }, t("Decline")),
-        (0, import_react11.createElement)("span", { className: "os-approve-why" }, t("This came from a chat message, so the Bot asks before running commands."))
-      ) : null
+      run.excerpt && !run.test ? (0, import_react11.createElement)("div", { className: "os-quote" }, (0, import_react11.createElement)("span", null, run.from), " ", run.excerpt) : null,
+      (0, import_react11.createElement)("div", { className: "os-summary" }, run.summary)
     )
-  );
-}
-function Detail({ sub, state, roster, omni, focus }) {
-  const [confirming, setConfirming] = (0, import_react11.useState)(false);
-  const runs = runsOf(state, sub.id);
-  const worker = workerOf(sub.worker, roster);
-  return (0, import_react11.createElement)(
-    import_react11.Fragment,
-    null,
-    (0, import_react11.createElement)("button", { type: "button", className: "oc-back", onClick: () => omni.show({ view: "list", id: null, runId: null }) }, (0, import_react11.createElement)(ChevronLeftIcon), t("Subscriptions")),
-    (0, import_react11.createElement)(
-      "header",
-      { className: "oc-detail-head" },
-      (0, import_react11.createElement)(TriggerBadge, { trigger: sub.trigger, size: 56 }),
-      (0, import_react11.createElement)("div", { className: "oc-detail-who" }, (0, import_react11.createElement)("h1", null, sub.name), (0, import_react11.createElement)("p", null, sub.on ? t("On · fired {n} times today", { n: firedToday(state, sub.id) }) : t("Paused"))),
-      (0, import_react11.createElement)("button", { type: "button", role: "switch", "aria-checked": sub.on, className: "os-switch", "aria-label": t("On"), onClick: () => omni.toggle(sub.id) }, (0, import_react11.createElement)("span"))
-    ),
-    (0, import_react11.createElement)("div", { className: "os-sentence-card" }, (0, import_react11.createElement)(Sentence, { sub, roster })),
-    (0, import_react11.createElement)(
-      "div",
-      { className: "oc-actions" },
-      (0, import_react11.createElement)("button", { type: "button", className: "oc-secondary", onClick: () => omni.openSubs("edit", sub.id) }, t("Edit")),
-      (0, import_react11.createElement)("button", { type: "button", className: "oc-secondary", onClick: () => omni.test(sub.id) }, t("Test with the latest match"))
-    ),
-    (0, import_react11.createElement)("h2", { className: "oc-section" }, t("Watching")),
-    (0, import_react11.createElement)("div", { className: "os-sources" }, sub.sources.map((source) => (0, import_react11.createElement)(
-      "span",
-      { key: `${source.kind}-${source.id}`, className: "os-source" },
-      source.kind === "channel" ? (0, import_react11.createElement)(Tile, { type: source.type, size: 28 }) : (0, import_react11.createElement)(ChatAvatar, { chat: { name: source.name, initials: initials(source.name) }, size: 28 }),
-      (0, import_react11.createElement)(
-        "span",
-        null,
-        (0, import_react11.createElement)("strong", null, source.kind === "channel" ? t("Everything on {name}", { name: source.name }) : source.name),
-        (0, import_react11.createElement)("small", null, `${typeOf(source.type).label} · ${source.kind === "channel" ? t("whole channel") : source.chatKind === "group" ? t("group") : source.chatKind === "self" ? t("your own chat") : t("direct chat")}`)
-      )
-    ))),
-    (0, import_react11.createElement)("h2", { className: "oc-section" }, t("Runs")),
-    runs.length === 0 ? (0, import_react11.createElement)("div", { className: "oc-empty" }, t("Nothing fired yet. Test it to see what {name} gets.", { name: worker.name })) : runs.map((run) => (0, import_react11.createElement)(RunCard, { key: run.id, run, sub, roster, omni, focused: run.id === focus })),
-    (0, import_react11.createElement)(
-      "div",
-      { className: "oc-danger" },
-      (0, import_react11.createElement)("div", null, (0, import_react11.createElement)("strong", null, t("Delete {name}", { name: sub.name })), (0, import_react11.createElement)("span", null, t("Its runs stay in the Bot’s chat; nothing new fires."))),
-      (0, import_react11.createElement)(
-        "button",
-        { type: "button", className: confirming ? "oc-danger-go oc-danger-armed" : "oc-danger-go", onBlur: () => setConfirming(false), onClick: () => confirming ? omni.remove(sub.id) : setConfirming(true) },
-        confirming ? t("Click again to delete") : t("Delete")
-      )
-    )
-  );
-}
-function autoName(draft, roster) {
-  const lead = draft.trigger.kind === "reaction" ? draft.trigger.emoji : t(TRIGGERS[draft.trigger.kind].short);
-  return `${lead} ${sourcesText(draft.sources)} → ${workerOf(draft.worker, roster).name}`;
-}
-function Editor({ draft, state, roster, omni }) {
-  const edit = omni.editDraft;
-  const ready = draft.sources.length > 0 && (draft.trigger.kind !== "keyword" || draft.trigger.words.length > 0);
-  return (0, import_react11.createElement)(
-    import_react11.Fragment,
-    null,
-    (0, import_react11.createElement)("button", { type: "button", className: "oc-back", onClick: () => omni.show(draft.id ? { view: "detail", id: draft.id } : { view: "list", id: null }) }, (0, import_react11.createElement)(ChevronLeftIcon), draft.id ? draft.name : t("Subscriptions")),
-    (0, import_react11.createElement)("header", { className: "oc-head" }, (0, import_react11.createElement)("div", null, (0, import_react11.createElement)("h1", null, draft.id ? t("Edit subscription") : t("New subscription"), (0, import_react11.createElement)(PreviewChip)))),
-    (0, import_react11.createElement)(
-      "div",
-      { className: "os-sentence-card os-sticky" },
-      (0, import_react11.createElement)(Sentence, { sub: draft, roster }),
-      (0, import_react11.createElement)("input", { className: "os-name", value: draft.name, placeholder: t("Name it (optional)"), "aria-label": t("Name"), onChange: (event) => edit({ name: event.target.value }) })
-    ),
-    (0, import_react11.createElement)(Step, { n: 1, title: t("Where"), hint: t("Chats, groups, whole channels, or a mix.") }, (0, import_react11.createElement)(SourcePicker, { draft, state, edit })),
-    (0, import_react11.createElement)(Step, { n: 2, title: t("When"), hint: t("The moment that wakes the worker.") }, (0, import_react11.createElement)(TriggerPicker, { draft, edit })),
-    (0, import_react11.createElement)(Step, { n: 3, title: t("Who acts"), hint: t("It gets the message, who sent it, and the chat around it.") }, (0, import_react11.createElement)(WorkerPicker, { draft, roster, edit })),
-    (0, import_react11.createElement)(
-      Step,
-      { n: 4, title: t("Then"), hint: t("Results always land in the worker’s chat here.") },
-      (0, import_react11.createElement)(Toggle, { on: draft.outputs.react, onChange: (react) => edit({ outputs: { ...draft.outputs, react } }), title: t("React on the message: 👀 when it starts, ✅ when done"), text: t("You see progress in the chat you are already in.") }),
-      (0, import_react11.createElement)(Toggle, { on: draft.outputs.replyToMe, onChange: (replyToMe) => edit({ outputs: { ...draft.outputs, replyToMe } }), title: t("Reply to me in my own chat"), text: t("Only to your own number: the key Omni uses cannot message anyone else.") })
-    ),
-    (0, import_react11.createElement)(
-      "div",
-      { className: "os-safety" },
-      (0, import_react11.createElement)("span", { className: "os-safety-icon", "aria-hidden": true }, (0, import_react11.createElement)(ShieldIcon)),
-      (0, import_react11.createElement)("div", null, (0, import_react11.createElement)("strong", null, t("Messages come from other people")), (0, import_react11.createElement)("span", null, t("Anyone in a watched chat can write text that tries to steer the Bot. It runs with no secrets, and asks you first before shell, file or network actions."))),
-      (0, import_react11.createElement)(Toggle, { on: draft.safety.askFirst, onChange: (askFirst) => edit({ safety: { askFirst } }), title: t("Ask me first"), compact: true })
-    ),
-    (0, import_react11.createElement)(
-      "div",
-      { className: "os-save" },
-      (0, import_react11.createElement)("button", {
-        type: "button",
-        className: "oc-primary",
-        disabled: !ready,
-        onClick: () => {
-          if (draft.name.trim() === "") edit({ name: autoName(draft, roster) });
-          omni.save();
-        }
-      }, draft.id ? t("Save") : t("Create subscription")),
-      ready ? null : (0, import_react11.createElement)("span", { className: "os-save-why" }, draft.sources.length === 0 ? t("Pick at least one chat, group or channel.") : t("Add a word to look for."))
-    )
-  );
-}
-var Step = ({ n, title, hint, children }) => (0, import_react11.createElement)(
-  "section",
-  { className: "os-step" },
-  (0, import_react11.createElement)("div", { className: "os-step-head" }, (0, import_react11.createElement)("span", { className: "os-step-n" }, String(n)), (0, import_react11.createElement)("strong", null, title), (0, import_react11.createElement)("span", null, hint)),
-  (0, import_react11.createElement)("div", { className: "os-step-body" }, children)
-);
-var Toggle = ({ on, onChange, title, text, compact: compact2 }) => (0, import_react11.createElement)(
-  "button",
-  { type: "button", role: "switch", "aria-checked": on, className: `os-toggle${compact2 ? " os-toggle-compact" : ""}`, onClick: () => onChange(!on) },
-  (0, import_react11.createElement)("span", { className: "os-toggle-text" }, (0, import_react11.createElement)("strong", null, title), text ? (0, import_react11.createElement)("span", null, text) : null),
-  (0, import_react11.createElement)("span", { className: "os-switch", "aria-hidden": true }, (0, import_react11.createElement)("span"))
-);
-function SourcePicker({ draft, state, edit }) {
-  const [query, setQuery] = (0, import_react11.useState)("");
-  const [kind, setKind] = (0, import_react11.useState)("all");
-  const has = (sourceKind, id) => draft.sources.some((source) => source.kind === sourceKind && source.id === id);
-  const flip = (source) => {
-    const next = has(source.kind, source.id) ? draft.sources.filter((item) => !(item.kind === source.kind && item.id === source.id)) : [...draft.sources, source];
-    edit({ sources: next });
-  };
-  const needle = query.trim().toLowerCase();
-  const chats = state.chats.filter((chat) => kind === "all" || (kind === "group" ? chat.kind === "group" : chat.kind !== "group")).filter((chat) => needle === "" || chat.name.toLowerCase().includes(needle)).toSorted((a, b) => b.at - a.at).slice(0, 40);
-  return (0, import_react11.createElement)(
-    import_react11.Fragment,
-    null,
-    draft.sources.length > 0 ? (0, import_react11.createElement)("div", { className: "os-picked" }, draft.sources.map((source) => (0, import_react11.createElement)(
-      "button",
-      { key: `${source.kind}-${source.id}`, type: "button", className: "os-picked-chip", onClick: () => flip(source), title: t("Remove") },
-      source.kind === "channel" ? (0, import_react11.createElement)(Tile, { type: source.type, size: 18 }) : (0, import_react11.createElement)(ChatAvatar, { chat: { name: source.name, initials: initials(source.name) }, size: 18 }),
-      source.kind === "channel" ? t("All of {name}", { name: source.name }) : source.name,
-      (0, import_react11.createElement)("span", { className: "os-x", "aria-hidden": true }, "×")
-    ))) : null,
-    (0, import_react11.createElement)("div", { className: "os-channels" }, state.channels.map((channel) => (0, import_react11.createElement)("button", {
-      key: channel.id,
-      type: "button",
-      className: "os-channel-opt",
-      "aria-pressed": has("channel", channel.id),
-      onClick: () => flip(sourceOfChannel(channel))
-    }, (0, import_react11.createElement)(Tile, { type: channel.type, size: 22 }), (0, import_react11.createElement)("span", null, t("All of {name}", { name: channel.name }))))),
-    (0, import_react11.createElement)(
-      "div",
-      { className: "os-search" },
-      (0, import_react11.createElement)("label", null, (0, import_react11.createElement)(SearchIcon), (0, import_react11.createElement)("input", { value: query, placeholder: t("Find a chat or group"), onChange: (event) => setQuery(event.target.value), "aria-label": t("Find a chat or group") })),
-      (0, import_react11.createElement)("span", { className: "os-seg", role: "radiogroup" }, [["all", t("All")], ["group", t("Groups")], ["direct", t("Chats")]].map(([value, label]) => (0, import_react11.createElement)("button", { key: value, type: "button", role: "radio", "aria-checked": kind === value, onClick: () => setKind(value) }, label)))
-    ),
-    (0, import_react11.createElement)("div", { className: "os-chatlist" }, chats.map((chat) => {
-      const channel = state.channels.find((item) => item.id === chat.channelId);
-      const picked = has("chat", chat.id);
-      return (0, import_react11.createElement)(
-        "button",
-        { key: chat.id, type: "button", className: "os-chat-opt", "aria-pressed": picked, onClick: () => flip(chatSource(state, chat)) },
-        (0, import_react11.createElement)("span", { className: "os-check", "aria-hidden": true }, picked ? "✓" : ""),
-        (0, import_react11.createElement)(ChatAvatar, { chat, channel, size: 30 }),
-        (0, import_react11.createElement)("span", { className: "os-chat-opt-body" }, (0, import_react11.createElement)("strong", null, chat.name), (0, import_react11.createElement)("span", null, `${chat.kind === "group" ? t("Group") : chat.kind === "self" ? t("Your own chat") : t("Direct chat")} · ${channel ? typeOf(channel.type).label : ""}`)),
-        (0, import_react11.createElement)("time", null, relativeShort(chat.at))
-      );
-    }))
-  );
-}
-function TriggerPicker({ draft, edit }) {
-  const [word, setWord] = (0, import_react11.useState)("");
-  const { trigger } = draft;
-  const pick3 = (kind) => edit({ trigger: kind === "reaction" ? { kind, emoji: trigger.emoji ?? "🤖" } : kind === "keyword" ? { kind, words: trigger.words ?? [] } : { kind } });
-  const addWord = () => {
-    const value = word.trim();
-    if (value && !trigger.words.includes(value)) edit({ trigger: { ...trigger, words: [...trigger.words, value] } });
-    setWord("");
-  };
-  return (0, import_react11.createElement)(
-    import_react11.Fragment,
-    null,
-    (0, import_react11.createElement)("div", { className: "os-triggers" }, Object.entries(TRIGGERS).map(([kind, info]) => (0, import_react11.createElement)("button", {
-      key: kind,
-      type: "button",
-      className: "os-trigger-opt",
-      "aria-pressed": trigger.kind === kind,
-      onClick: () => pick3(kind)
-    }, (0, import_react11.createElement)("span", { className: "os-trigger-icon" }, kind === "reaction" ? trigger.kind === "reaction" ? trigger.emoji : "🤖" : (0, import_react11.createElement)(TRIGGER_ICONS[kind])), t(info.label)))),
-    trigger.kind === "reaction" ? (0, import_react11.createElement)(
-      "div",
-      { className: "os-emojis" },
-      (0, import_react11.createElement)("span", { className: "os-emojis-label" }, t("Your reaction on any message in these chats hands it over:")),
-      REACTIONS2.map((emoji) => (0, import_react11.createElement)("button", { key: emoji, type: "button", className: "os-emoji-opt", "aria-pressed": trigger.emoji === emoji, onClick: () => edit({ trigger: { ...trigger, emoji } }) }, emoji))
-    ) : null,
-    trigger.kind === "keyword" ? (0, import_react11.createElement)(
-      "div",
-      { className: "os-words" },
-      trigger.words.map((item) => (0, import_react11.createElement)("button", { key: item, type: "button", className: "os-picked-chip", onClick: () => edit({ trigger: { ...trigger, words: trigger.words.filter((other) => other !== item) } }) }, `“${item}”`, (0, import_react11.createElement)("span", { className: "os-x", "aria-hidden": true }, "×"))),
-      (0, import_react11.createElement)("input", { value: word, placeholder: t("Add a word, then Enter"), onChange: (event) => setWord(event.target.value), onKeyDown: (event) => {
-        if (event.key === "Enter" && !event.nativeEvent.isComposing) addWord();
-      } })
-    ) : null
-  );
-}
-function WorkerPicker({ draft, roster, edit }) {
-  const bots = (roster?.bots ?? []).filter((bot) => bot.id !== roster?.mainBotId && bot.id !== roster?.eventsBotId);
-  const { worker } = draft;
-  const option = (key, selected, onClick, mark, title, text) => (0, import_react11.createElement)("button", { key, type: "button", className: "os-worker-opt", "aria-pressed": selected, onClick }, mark, (0, import_react11.createElement)("span", null, (0, import_react11.createElement)("strong", null, title), (0, import_react11.createElement)("span", null, text)));
-  return (0, import_react11.createElement)(
-    import_react11.Fragment,
-    null,
-    (0, import_react11.createElement)(
-      "div",
-      { className: "os-workers" },
-      option("events", worker.kind === "events", () => edit({ worker: { kind: "events" } }), (0, import_react11.createElement)(WorkerMark, { worker: { kind: "events" }, roster, size: 32 }), workerOf({ kind: "events" }, roster).name, t("Event router: acts, or hands it to the right Bot")),
-      option("main", worker.kind === "main", () => edit({ worker: { kind: "main" } }), (0, import_react11.createElement)(WorkerMark, { worker: { kind: "main" }, roster, size: 32 }), workerOf({ kind: "main" }, roster).name, t("Main Bot")),
-      bots.map((bot) => option(bot.id, worker.kind === "bot" && worker.botId === bot.id, () => edit({ worker: { kind: "bot", botId: bot.id, name: bot.name } }), (0, import_react11.createElement)(BotMark, { bot, size: 32 }), bot.name, bot.role || t("Bot"))),
-      option("session", worker.kind === "session", () => edit({ worker: { kind: "session", mode: worker.mode ?? "new", title: worker.title ?? "" } }), (0, import_react11.createElement)(WorkerMark, { worker: { kind: "session" }, roster, size: 32 }), t("DSH session"), t("A plain agent session, no Bot"))
-    ),
-    worker.kind === "session" ? (0, import_react11.createElement)(
-      "div",
-      { className: "os-seg os-seg-wide", role: "radiogroup" },
-      [["new", t("A new session each time")], ["ongoing", t("One ongoing session")]].map(([mode, label]) => (0, import_react11.createElement)("button", { key: mode, type: "button", role: "radio", "aria-checked": worker.mode === mode, onClick: () => edit({ worker: { ...worker, mode } }) }, label))
-    ) : null
   );
 }
 var SUBSCRIPTIONS_CSS = `
@@ -6703,136 +6400,84 @@ var SUBSCRIPTIONS_CSS = `
 .os-trigger svg{width:var(--os-icon,18px);height:var(--os-icon,18px)}
 .os-session{display:inline-grid;place-items:center;flex:none;border-radius:30%;background:var(--bt-ink);color:var(--bt-main)}
 .os-stack{display:inline-flex;align-items:center;flex:none}
-.os-stack-item{display:inline-flex;margin-left:-4px;border-radius:50%;box-shadow:0 0 0 1.5px var(--bt-sidebar)}
+.os-stack-item{display:inline-flex;margin-left:-4px;border-radius:50%;box-shadow:0 0 0 1.5px var(--bt-card)}
 .os-stack-item:first-child{margin-left:0}
 .os-stack-item .oc-ava-badge{display:none}
 .os-stack-more{margin-left:3px;font-size:10.5px;color:var(--bt-ink-3)}
-
-/* Waiting badge (Tentacall's row and header) */
 .os-pending{flex:none;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:#f59e0b;color:#fff;font-size:11px;font-weight:600;line-height:18px;text-align:center;box-sizing:border-box}
 [data-tone=bad]{--oc-tone:#e5484d}
 
-/* Tentacall's header button and page head */
+/* Tentacall's header button */
 .os-head-btn{display:inline-flex;align-items:center;gap:7px;height:32px;padding:0 10px 0 12px;margin-left:8px;border-radius:999px;border:.5px solid var(--bt-line-2);background:var(--bt-main);color:var(--bt-ink);font:inherit;font-size:13px;cursor:pointer;pointer-events:auto;box-shadow:0 2px 8px -1px rgba(0,0,0,.06)}
-.os-head-btn:hover{background:var(--bt-hover)}
+.os-head-btn:hover,.os-head-btn[aria-pressed=true]{background:var(--bt-hover)}
 .os-head-count{min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--bt-hover);color:var(--bt-ink-2);font-size:11px;line-height:18px;text-align:center;box-sizing:border-box}
-.os-head{align-items:center}
-.os-head h1{display:flex;align-items:center;flex-wrap:wrap;gap:4px 0}
-.os-head>div{flex:1;min-width:0}
-.os-head-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+
+/* Board */
+.os-to-board{align-self:flex-start;margin:10px 0 0 12px;height:28px;padding:0 10px;border:0;border-radius:999px;background:var(--bt-hover);color:var(--bt-ink-2);font:inherit;font-size:12.5px;cursor:pointer}
+.os-to-board:hover{color:var(--bt-ink)}
+.os-board{display:flex;flex-direction:column;min-height:0;flex:1}
+.os-board-head{display:flex;align-items:center;gap:8px;height:52px;flex:none;padding:0 10px 0 12px;border-bottom:.5px solid var(--bt-line)}
+.os-board-who{display:inline-flex;align-items:center;gap:8px;margin-right:auto;padding:4px 8px 4px 4px;border:0;border-radius:10px;background:none;color:var(--bt-ink);font:inherit;font-size:15px;cursor:pointer}
+.os-board-who:hover{background:var(--bt-hover)}
+.os-board-who strong{font-weight:600}
+.os-board .oc-preview-chip{margin-left:0}
+.os-board-body{flex:1;min-height:0;overflow-y:auto;padding:14px 14px 20px;display:flex;flex-direction:column;gap:10px}
+.os-board-note{margin:0;font-size:12.5px;line-height:18px;color:var(--bt-ink-2)}
+.os-board-h{margin:8px 2px 0;font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--bt-ink-3)}
+.os-empty-board{display:flex;flex-direction:column;align-items:center;gap:10px;padding:28px 12px 12px;text-align:center}
+.os-empty-board>strong{font-size:17px;font-weight:600}
+.os-empty-board>span{max-width:340px;font-size:13.5px;line-height:20px;color:var(--bt-ink-2)}
+.os-examples{display:flex;flex-direction:column;gap:6px;width:100%;margin-top:6px}
+.os-example{padding:9px 12px;border-radius:14px;background:var(--bt-card);border:.5px dashed var(--bt-line-2);font-size:13px;line-height:19px;color:var(--bt-ink-2);text-align:left}
+.os-example::before{content:"“";color:var(--bt-ink-3)}
+.os-example::after{content:"”";color:var(--bt-ink-3)}
 
 /* Sentence */
-.os-sentence{margin:0;display:flex;flex-wrap:wrap;align-items:center;gap:6px 4px;font-size:14px;line-height:28px}
+.os-sentence{margin:0;display:flex;flex-wrap:wrap;align-items:center;gap:6px 4px;font-size:13.5px;line-height:26px}
 .os-w{color:var(--bt-ink-3);font-weight:500}
-.os-chip{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:999px;background:var(--bt-card);border:.5px solid var(--bt-line-2);white-space:nowrap}
+.os-chip{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 9px;border-radius:999px;background:var(--bt-main);border:.5px solid var(--bt-line-2);white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis}
 .os-chip-trigger{background:color-mix(in srgb,var(--bt-accent) 10%,var(--bt-card));border-color:color-mix(in srgb,var(--bt-accent) 30%,transparent)}
 .os-chip-worker{font-weight:500}
 .os-chip-soft{background:none;color:var(--bt-ink-2);border-style:dashed}
-.os-emoji{font-size:16px}
-.os-sentence-card{display:flex;flex-direction:column;gap:12px;padding:16px 18px;border-radius:16px;background:color-mix(in srgb,var(--bt-accent) 5%,var(--bt-main));border:1px solid color-mix(in srgb,var(--bt-accent) 22%,transparent)}
-.os-sticky{position:sticky;top:0;z-index:2;box-shadow:0 10px 24px -18px rgba(0,0,0,.35);backdrop-filter:blur(8px);background:color-mix(in srgb,var(--bt-main) 92%,var(--bt-accent))}
-.os-name{height:34px;padding:0 12px;border-radius:10px;border:1px solid var(--bt-line-2);background:var(--bt-card);color:var(--bt-ink);font:inherit;font-size:14px;font-weight:500;outline:none}
-.os-name:focus{border-color:var(--bt-accent)}
+.os-emoji{font-size:15px}
 
-/* Page */
-.os-describe{display:flex;align-items:center;gap:10px;padding:6px 6px 6px 14px;border-radius:999px;border:1px solid var(--bt-line-2);background:var(--bt-card);box-shadow:0 4px 18px -12px rgba(0,0,0,.3)}
-.os-describe:focus-within{border-color:var(--bt-accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--bt-accent) 14%,transparent)}
-.os-describe-mark{display:inline-flex;color:var(--bt-accent)}
-.os-describe input{flex:1;min-width:0;height:38px;border:0;background:none;color:var(--bt-ink);font:inherit;font-size:14px;outline:none}
-.os-cards{display:flex;flex-direction:column;gap:10px}
-.os-card{display:flex;flex-direction:column;gap:12px;padding:16px;border-radius:18px;border:.5px solid var(--bt-line-2);background:var(--bt-card);color:var(--bt-ink);font:inherit;text-align:left;cursor:pointer;transition:transform .14s ease,box-shadow .14s ease}
-.os-card:hover{transform:translateY(-1px);box-shadow:0 12px 28px -14px rgba(0,0,0,.2)}
+/* Cards */
+.os-card{display:flex;flex-direction:column;gap:10px;padding:14px;border-radius:16px;border:.5px solid var(--bt-line-2);background:var(--bt-card);color:var(--bt-ink)}
 .os-card[data-off]{opacity:.6}
-.os-card-top{display:flex;align-items:center;gap:12px}
-.os-card-top strong{flex:1;font-size:15.5px;font-weight:600}
-.os-card-meta{font-size:12.5px;color:var(--bt-ink-2)}
-.os-timeline{display:flex;flex-direction:column;gap:8px}
-.os-runcard{display:flex;gap:12px;padding:14px 16px;border-radius:16px;background:var(--bt-card);border:.5px solid var(--bt-line-2);transition:box-shadow .2s ease}
-.os-runcard[data-tone=warn]{border:1px solid color-mix(in srgb,#f59e0b 40%,transparent);background:color-mix(in srgb,#f59e0b 6%,var(--bt-card))}
-.os-runcard[data-focus]{box-shadow:0 0 0 3px color-mix(in srgb,var(--bt-accent) 30%,transparent)}
-.os-runcard-compact{padding:10px 14px}
-.os-runcard-body{display:flex;flex-direction:column;gap:6px;flex:1;min-width:0}
-.os-runcard-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13.5px}
-.os-runcard-top time{margin-left:auto;font-size:12px;color:var(--bt-ink-3)}
-.os-runcard .oc-pill{height:20px;font-size:11px;padding:0 8px}
-.os-runcard[data-tone=busy] .oc-pill-dot{animation:oc-pulse 1.2s ease-in-out infinite}
+.os-card[data-fresh]{animation:os-fresh 2.4s cubic-bezier(.2,0,0,1)}
+@keyframes os-fresh{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--bt-accent) 0%,transparent);transform:translateY(6px);opacity:.4}20%{box-shadow:0 0 0 4px color-mix(in srgb,var(--bt-accent) 35%,transparent);transform:none;opacity:1}100%{box-shadow:0 0 0 0 color-mix(in srgb,var(--bt-accent) 0%,transparent)}}
+.os-card-top{display:flex;align-items:center;gap:10px}
+.os-card-top strong{flex:1;min-width:0;font-size:14.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.os-card-foot{display:flex;align-items:center;gap:12px}
+.os-card-meta{font-size:12px;color:var(--bt-ink-3)}
+.os-card-meta:first-child{margin-right:auto}
+.os-card-warn{color:#d97706}
 .os-link{border:0;background:none;padding:0;color:var(--bt-ink-2);font:inherit;font-size:12.5px;cursor:pointer}
-.os-link:hover{color:var(--bt-ink);text-decoration:underline}
-.os-quote{padding:6px 10px;border-left:3px solid var(--bt-line-2);border-radius:4px;background:var(--bt-hover);font-size:13px;line-height:19px;color:var(--bt-ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.os-link:hover:not(:disabled){color:var(--bt-ink);text-decoration:underline}
+.os-link:disabled{opacity:.5;cursor:default}
+.os-link-danger{color:var(--bt-danger);font-weight:600}
+.os-switch{position:relative;flex:none;width:38px;height:22px;border-radius:999px;border:0;padding:0;background:var(--bt-line-2);cursor:pointer;transition:background-color .15s ease}
+.os-switch span{position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:transform .18s cubic-bezier(.2,0,0,1)}
+.os-switch[aria-checked=true]{background:var(--bt-accent)}
+.os-switch[aria-checked=true] span{transform:translateX(16px)}
+.os-switch:disabled{opacity:.6}
+.os-runcard{display:flex;gap:10px;padding:12px 14px;border-radius:14px;background:var(--bt-card);border:.5px solid var(--bt-line-2)}
+.os-runcard[data-tone=warn]{border:1px solid color-mix(in srgb,#f59e0b 40%,transparent);background:color-mix(in srgb,#f59e0b 6%,var(--bt-card))}
+.os-runcard-compact{padding:9px 12px}
+.os-runcard-body{display:flex;flex-direction:column;gap:5px;flex:1;min-width:0}
+.os-runcard-top{display:flex;align-items:center;gap:7px;flex-wrap:wrap;font-size:13px}
+.os-runcard-top time{margin-left:auto;font-size:11.5px;color:var(--bt-ink-3)}
+.os-runcard-sub{font-size:12px;color:var(--bt-ink-2)}
+.os-runcard .oc-pill{height:20px;font-size:11px;padding:0 8px}
+.os-quote{padding:5px 9px;border-left:3px solid var(--bt-line-2);border-radius:4px;background:var(--bt-hover);font-size:12.5px;line-height:18px;color:var(--bt-ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .os-quote span{font-weight:600;color:var(--bt-ink)}
-.os-summary{font-size:13.5px;line-height:20px}
-.os-approve{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:4px}
-.os-approve .oc-primary,.os-approve .oc-secondary{height:32px;font-size:13px;padding:0 14px}
-.os-approve-why{font-size:12px;color:var(--bt-ink-3)}
-.os-switch{position:relative;flex:none;width:42px;height:24px;border-radius:999px;border:0;padding:0;background:var(--bt-line-2);cursor:pointer;transition:background-color .15s ease}
-.os-switch span{position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:transform .18s cubic-bezier(.2,0,0,1)}
-[aria-checked=true]>.os-switch,.os-switch[aria-checked=true]{background:var(--bt-accent)}
-[aria-checked=true]>.os-switch span,.os-switch[aria-checked=true] span{transform:translateX(18px)}
-.os-sources{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px}
-.os-source{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:12px;background:var(--bt-card);border:.5px solid var(--bt-line-2)}
-.os-source>span:last-child{display:flex;flex-direction:column;min-width:0}
-.os-source strong{font-size:13.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.os-source small{font-size:12px;color:var(--bt-ink-2)}
-
-/* Editor */
-.os-step{display:flex;flex-direction:column;gap:12px;padding:18px;border-radius:18px;background:var(--bt-card);border:.5px solid var(--bt-line-2)}
-.os-step-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
-.os-step-head strong{font-size:16px;font-weight:600}
-.os-step-head>span:last-child{font-size:13px;color:var(--bt-ink-2)}
-.os-step-n{display:inline-grid;place-items:center;width:24px;height:24px;border-radius:50%;background:var(--bt-accent);color:var(--bt-accent-ink,#fff);font-size:12px;font-weight:700;align-self:center}
-.os-step-body{display:flex;flex-direction:column;gap:10px}
-.os-picked,.os-words{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
-.os-picked-chip{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 6px 0 4px;border-radius:999px;border:1px solid color-mix(in srgb,var(--bt-accent) 35%,transparent);background:color-mix(in srgb,var(--bt-accent) 9%,var(--bt-card));color:var(--bt-ink);font:inherit;font-size:13px;cursor:pointer}
-.os-words .os-picked-chip{padding-left:10px}
-.os-x{display:inline-grid;place-items:center;width:18px;height:18px;border-radius:50%;color:var(--bt-ink-2)}
-.os-picked-chip:hover .os-x{background:var(--bt-hover);color:var(--bt-ink)}
-.os-words input{flex:1;min-width:160px;height:32px;padding:0 10px;border-radius:10px;border:1px solid var(--bt-line-2);background:var(--bt-main);color:var(--bt-ink);font:inherit;font-size:13.5px;outline:none}
-.os-channels{display:flex;flex-wrap:wrap;gap:6px}
-.os-channel-opt{display:inline-flex;align-items:center;gap:8px;height:36px;padding:0 12px 0 7px;border-radius:12px;border:1px solid var(--bt-line-2);background:var(--bt-main);color:var(--bt-ink);font:inherit;font-size:13px;cursor:pointer}
-.os-channel-opt[aria-pressed=true],.os-chat-opt[aria-pressed=true],.os-trigger-opt[aria-pressed=true],.os-worker-opt[aria-pressed=true]{border-color:var(--bt-accent);background:color-mix(in srgb,var(--bt-accent) 9%,var(--bt-card));box-shadow:0 0 0 3px color-mix(in srgb,var(--bt-accent) 12%,transparent)}
-.os-search{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.os-search label{flex:1;min-width:200px;display:flex;align-items:center;gap:8px;height:36px;padding:0 12px;border-radius:12px;border:1px solid var(--bt-line-2);background:var(--bt-main);color:var(--bt-ink-3)}
-.os-search input{flex:1;min-width:0;border:0;background:none;color:var(--bt-ink);font:inherit;font-size:13.5px;outline:none}
-.os-seg{display:inline-flex;padding:3px;border-radius:12px;background:var(--bt-hover);gap:2px}
-.os-seg button{height:30px;padding:0 12px;border:0;border-radius:9px;background:none;color:var(--bt-ink-2);font:inherit;font-size:13px;cursor:pointer}
-.os-seg button[aria-checked=true]{background:var(--bt-card);color:var(--bt-ink);box-shadow:0 1px 3px rgba(0,0,0,.08)}
-.os-seg-wide{align-self:flex-start}
-.os-chatlist{display:flex;flex-direction:column;gap:2px;max-height:300px;overflow-y:auto;padding:2px;margin:0 -2px}
-.os-chat-opt{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:12px;border:1px solid transparent;background:none;color:var(--bt-ink);font:inherit;text-align:left;cursor:pointer}
-.os-chat-opt:hover{background:var(--bt-hover)}
-.os-check{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:6px;border:1.5px solid var(--bt-line-2);font-size:12px;font-weight:700;color:var(--bt-accent-ink,#fff);flex:none}
-.os-chat-opt[aria-pressed=true] .os-check{background:var(--bt-accent);border-color:var(--bt-accent)}
-.os-chat-opt-body{display:flex;flex-direction:column;flex:1;min-width:0}
-.os-chat-opt-body strong{font-size:13.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.os-chat-opt-body span{font-size:12px;color:var(--bt-ink-2)}
-.os-chat-opt time{font-size:11.5px;color:var(--bt-ink-3)}
-.os-triggers{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:8px}
-.os-trigger-opt{display:flex;align-items:center;gap:10px;height:46px;padding:0 12px;border-radius:14px;border:1px solid var(--bt-line-2);background:var(--bt-main);color:var(--bt-ink);font:inherit;font-size:13.5px;text-align:left;cursor:pointer}
-.os-trigger-icon{display:inline-grid;place-items:center;width:28px;height:28px;border-radius:9px;background:var(--bt-hover);font-size:15px;color:var(--bt-accent)}
-.os-trigger-icon svg{width:16px;height:16px}
-.os-emojis{display:flex;align-items:center;flex-wrap:wrap;gap:6px}
-.os-emojis-label{width:100%;font-size:12.5px;color:var(--bt-ink-2)}
-.os-emoji-opt{width:44px;height:44px;border-radius:14px;border:1px solid var(--bt-line-2);background:var(--bt-main);font-size:22px;cursor:pointer;transition:transform .12s ease}
-.os-emoji-opt:hover{transform:scale(1.08)}
-.os-emoji-opt[aria-pressed=true]{border-color:var(--bt-accent);background:color-mix(in srgb,var(--bt-accent) 12%,var(--bt-card));transform:scale(1.08);box-shadow:0 0 0 3px color-mix(in srgb,var(--bt-accent) 14%,transparent)}
-.os-workers{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px}
-.os-worker-opt{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:14px;border:1px solid var(--bt-line-2);background:var(--bt-main);color:var(--bt-ink);font:inherit;text-align:left;cursor:pointer}
-.os-worker-opt>span:last-child{display:flex;flex-direction:column;min-width:0}
-.os-worker-opt strong{font-size:14px;font-weight:600}
-.os-worker-opt>span:last-child>span{font-size:12px;line-height:16px;color:var(--bt-ink-2)}
-.os-toggle{display:flex;align-items:center;gap:14px;width:100%;padding:12px 14px;border-radius:14px;border:1px solid var(--bt-line-2);background:var(--bt-main);color:var(--bt-ink);font:inherit;text-align:left;cursor:pointer}
-.os-toggle-compact{width:auto;padding:0;border:0;background:none}
-.os-toggle-text{display:flex;flex-direction:column;flex:1;gap:2px}
-.os-toggle-text strong{font-size:14px;font-weight:500}
-.os-toggle-text span{font-size:12.5px;color:var(--bt-ink-2)}
-.os-toggle-compact .os-toggle-text strong{font-size:13px;white-space:nowrap}
-.os-safety{display:flex;align-items:center;gap:14px;padding:14px 16px;border-radius:16px;background:color-mix(in srgb,#0ea5e9 7%,var(--bt-card));border:1px solid color-mix(in srgb,#0ea5e9 25%,transparent)}
-.os-safety-icon{display:inline-grid;place-items:center;width:36px;height:36px;border-radius:12px;background:color-mix(in srgb,#0ea5e9 14%,transparent);color:#0284c7;flex:none}
-.os-safety-icon svg{width:20px;height:20px}
-.os-safety>div{display:flex;flex-direction:column;gap:2px;flex:1;font-size:12.5px;line-height:18px;color:var(--bt-ink-2)}
-.os-safety strong{font-size:14px;color:var(--bt-ink)}
-.os-save{display:flex;align-items:center;gap:12px;padding-bottom:8px}
-.os-save-why{font-size:13px;color:var(--bt-ink-2)}
+.os-summary{font-size:13px;line-height:19px}
+.os-safety{display:flex;align-items:flex-start;gap:12px;margin-top:6px;padding:12px 14px;border-radius:14px;background:color-mix(in srgb,#0ea5e9 7%,var(--bt-card));border:1px solid color-mix(in srgb,#0ea5e9 25%,transparent)}
+.os-safety-icon{display:inline-grid;place-items:center;width:30px;height:30px;border-radius:10px;background:color-mix(in srgb,#0ea5e9 14%,transparent);color:#0284c7;flex:none}
+.os-safety-icon svg{width:17px;height:17px}
+.os-safety>div{display:flex;flex-direction:column;gap:2px;flex:1;font-size:12px;line-height:17px;color:var(--bt-ink-2)}
+.os-safety strong{font-size:13px;color:var(--bt-ink)}
+@media (prefers-reduced-motion:reduce){.os-card[data-fresh]{animation:none}}
 `;
 
 // src/client/sidebar.js
@@ -6845,7 +6490,7 @@ function useMarkedUnread(id, active, marked, actions) {
 }
 var PinMark = () => (0, import_react12.createElement)("span", { className: "bt-pin", "aria-hidden": true }, (0, import_react12.createElement)(PinMarkIcon));
 var useApproval = (useWork, match) => useWork ? useWork((work) => (work.approvals ?? []).some(match)) : false;
-var useGroupWork = (useWork, pick3) => useWork ? useWork((work) => JSON.stringify(pick3(work.rooms ?? {}))) : "[]";
+var useGroupWork = (useWork, pick2) => useWork ? useWork((work) => JSON.stringify(pick2(work.rooms ?? {}))) : "[]";
 var workKeys = (text) => JSON.parse(text);
 var doingOf = ({ tool, said, note, target, switching }) => ({ tool, said, note, target, switching });
 var workLine = (lead, doing, more) => (0, import_react12.createElement)(Shimmer, null, `${lead} · ${workPhrase(doing)}…${more > 0 ? ` +${more}` : ""}`);
@@ -6918,7 +6563,7 @@ function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessio
       awayLine ? (0, import_react12.createElement)("span", { className: "bt-row-preview" }, awayLine) : waitsFor ? (0, import_react12.createElement)("span", { className: "bt-row-preview" }, waitsFor) : preview ? (0, import_react12.createElement)("span", { className: "bt-row-preview" }, preview) : null
     ) : null,
     // Tentacall's row also counts the subscription runs waiting for your approval.
-    wide && id === roster.eventsBotId ? (0, import_react12.createElement)(EventsBadge) : null,
+    wide && id === roster.eventsBotId ? (0, import_react12.createElement)(EventsBadge, { roster }) : null,
     wide && unread && !active ? (0, import_react12.createElement)("span", { className: "bt-unread", "aria-hidden": true }) : null
   );
 }
@@ -7286,54 +6931,21 @@ function UpdateButton({ useUpdate, actions }) {
     ), document.body) : null
   );
 }
-function ConnectPlugins({ wide, actions }) {
-  const tipId = (0, import_react12.useId)();
-  const [tip, setTip] = (0, import_react12.useState)(false);
-  const timer = (0, import_react12.useRef)(0);
-  const button = (0, import_react12.useRef)(null);
-  const [box, setBox] = (0, import_react12.useState)(null);
-  (0, import_react12.useEffect)(() => () => clearTimeout(timer.current), []);
+function ChannelsFooter({ wide, actions }) {
+  const state = (0, import_react12.useSyncExternalStore)(omniStore.subscribe, omniStore.getSnapshot, omniStore.getSnapshot);
+  (0, import_react12.useEffect)(() => {
+    startLive(call);
+  }, []);
   if (!wide) return null;
-  const show = () => {
-    clearTimeout(timer.current);
-    timer.current = setTimeout(() => {
-      const rect = button.current?.getBoundingClientRect();
-      if (!rect) return;
-      const left = Math.max(8, Math.min(rect.left, window.innerWidth - 268));
-      setBox({ left, bottom: window.innerHeight - rect.top + 10 });
-      setTip(true);
-    }, 250);
-  };
-  const hide = () => {
-    clearTimeout(timer.current);
-    setTip(false);
-  };
-  return (0, import_react12.createElement)(
-    "span",
-    { className: "bt-connect-wrap" },
-    (0, import_react12.createElement)(
-      "button",
-      {
-        ref: button,
-        type: "button",
-        className: "bt-connect bt-connect-foot",
-        "aria-describedby": tip ? tipId : void 0,
-        onMouseEnter: show,
-        onMouseLeave: hide,
-        onFocus: show,
-        onBlur: hide,
-        onClick: () => actions.selectPanel("plugins")
-      },
-      (0, import_react12.createElement)(PlugIcon),
-      t("Connect plugins"),
-      (0, import_react12.createElement)("span", { className: "bt-connect-warn", "aria-hidden": true }, "!")
-    ),
-    tip && box ? (0, import_react_dom3.createPortal)((0, import_react12.createElement)(
-      "span",
-      { role: "tooltip", id: tipId, className: "bt-connect-tip", style: box },
-      t("Plugin compatibility is not fully verified.")
-    ), document.body) : null
-  );
+  const summary = healthSummary(state);
+  const label = summary.attention > 0 ? t("{n} channel needs attention", { n: summary.attention }) : t("Channels and their health");
+  return (0, import_react12.createElement)("span", { className: "bt-connect-wrap" }, (0, import_react12.createElement)(
+    "button",
+    { type: "button", className: "bt-connect bt-connect-foot bt-channels-foot", title: label, "aria-label": `${t("Channels")}, ${label}`, onClick: () => actions.selectPanel(CHANNELS_PANEL) },
+    (0, import_react12.createElement)("span", { className: "bt-channels-tiles", "aria-hidden": true }, state.channels.slice(0, 4).map((channel) => (0, import_react12.createElement)(Tile, { key: channel.id, type: channel.type, size: 18 }))),
+    t("Channels"),
+    summary.attention > 0 ? (0, import_react12.createElement)("span", { className: "oc-warn-dot", "aria-hidden": true }) : (0, import_react12.createElement)("span", { className: "bt-channels-count" }, `${summary.connected}/${summary.total}`)
+  ));
 }
 function YouAvatar() {
   return (0, import_react12.createElement)(
@@ -7451,8 +7063,7 @@ function AccountLauncher({ seat = true, settingsOpen, openSettings, openOnboardi
   const groups = [
     [
       [t("Usage"), GaugeIcon, () => actions.openSettings("usage")],
-      [t("Subscriptions"), ClockIcon, () => actions.selectPanel(SUBS_PANEL)],
-      [t("Channels"), ChannelsIcon, () => actions.selectPanel(CHANNELS_PANEL)],
+      [t("Plugins"), PlugIcon, () => actions.selectPanel("plugins")],
       [t("Connectors"), ConnectorIcon, () => actions.openConnectors()],
       [t("Automation tasks"), ClockIcon, () => actions.selectPanel("schedules")],
       [t("Bot settings"), GearIcon, () => actions.openSettings("general")]
@@ -7558,6 +7169,13 @@ var SIDEBAR_CSS = `
 [class*="_footArea"]:has(.bt-foot-account)>[class*="_settingsArea"]{grid-column:3}
 [class*="_footArea"]:has(.bt-foot-account)>[class*="_settingsArea"] button[class*="_trigger"] [class*="_label"]{display:none!important}
 
+.bt-channels-foot{gap:8px;justify-content:flex-start;padding:0 12px 0 8px}
+.bt-channels-tiles{display:inline-flex}
+.bt-channels-tiles .oc-tile{margin-left:-5px;box-shadow:0 0 0 1.5px var(--bt-main)}
+.bt-channels-tiles .oc-tile:first-child{margin-left:0}
+.bt-channels-count{margin-left:auto;font-size:12px;color:var(--bt-ink-3)}
+.bt-channels-foot .oc-warn-dot{margin-left:auto}
+
 /* The update cloud springs in when a newer Omni shows up; its arrow drops in a
    loop while the install runs. */
 .bt-round.bt-update{position:relative;color:var(--bt-accent,#4D6BFE);animation:bt-update-in ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing}}
@@ -7659,6 +7277,7 @@ function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSe
   const bot = roster.byId[sessionId];
   const room2 = roster.roomsById[sessionId];
   const detailsOpen = useUi((state) => state.details === sessionId);
+  const workOpen = useUi((state) => state.details === sessionId && state.view === "work");
   const name = bot?.name ?? room2?.name ?? "";
   const useNews = useMemoryNews ?? noNews;
   const memoryIds = bot ? [bot.id] : room2?.members ?? [];
@@ -7698,7 +7317,7 @@ function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus, useSe
       (0, import_react13.createElement)("span", { className: "bt-pill-go", "aria-hidden": true }, (0, import_react13.createElement)(GoArrow))
     ),
     (0, import_react13.createElement)("span", { className: "bt-sr", role: "status" }, memoryNotice ? t("Memory updated") : ""),
-    bot && bot.id === roster.eventsBotId ? (0, import_react13.createElement)(SubscriptionsButton, { actions }) : null,
+    bot && bot.id === roster.eventsBotId ? (0, import_react13.createElement)(SubscriptionsButton, { sessionId, roster, actions, open: workOpen }) : null,
     (0, import_react13.createElement)(NewMessagePills, { key: sessionId, sessionId, useSessions, useUi, useTurnClock }),
     (0, import_react13.createElement)(ActivityIndicator, { key: `activity:${sessionId}`, sessionId, useRoster, useSessionStatus, useSession, useLive, actions }),
     // DSH's way into its right sidebar sits in the session header this pill replaces.
@@ -8613,7 +8232,7 @@ function ModelMenu({ bot, roster, actions, run, wide = false, onPick, onPickEffo
     void actions?.refreshModels?.();
     open();
   };
-  const pick3 = (ref) => {
+  const pick2 = (ref) => {
     close();
     if (onPick) onPick(ref);
     else if (ref !== current || !bot.model) void run(actions.updateBot(bot.id, { model: ref }));
@@ -8651,7 +8270,7 @@ function ModelMenu({ bot, roster, actions, run, wide = false, onPick, onPickEffo
     shownPlace ? (0, import_react_dom6.createPortal)((0, import_react17.createElement)(
       "div",
       { ref: menu, className: `bt-menu bt-model-menu${shownPlace.bottom !== void 0 ? " bt-menu-up" : ""}`, role: "menu", "aria-label": t("Model for {name}", { name: bot.name }), style: shownPlace, "data-leaving": leaving || void 0 },
-      models.length > 0 ? (0, import_react17.createElement)(ModelRows, { roster, current, onPick: pick3 }) : (0, import_react17.createElement)("div", { className: "bt-model-none" }, t("No models are set up in DeepSeek Harness yet.")),
+      models.length > 0 ? (0, import_react17.createElement)(ModelRows, { roster, current, onPick: pick2 }) : (0, import_react17.createElement)("div", { className: "bt-model-none" }, t("No models are set up in DeepSeek Harness yet.")),
       effortRows(reasoning).length > 0 ? (0, import_react17.createElement)(EffortRows, { reasoning, current: picked, onPick: pickEffort }) : null,
       (0, import_react17.createElement)("div", { className: "bt-menu-sep", role: "separator" }),
       (0, import_react17.createElement)("button", { type: "button", role: "menuitem", onClick: () => {
@@ -8674,7 +8293,7 @@ function ModelChoiceDock({ sessionId, useRoster, actions }) {
   const models = roster.models ?? [];
   const lost = bot.model ? !models.some((model) => model.ref === bot.model) : false;
   if (bot.model && (!lost || models.length === 0)) return null;
-  const pick3 = (ref) => {
+  const pick2 = (ref) => {
     setBusy(ref);
     setError("");
     void Promise.resolve(actions.updateBot(bot.id, { model: ref })).catch((failure) => {
@@ -8696,7 +8315,7 @@ function ModelChoiceDock({ sessionId, useRoster, actions }) {
         "aria-busy": busy === model.ref || void 0,
         "aria-label": `${model.name} · ${provider}`,
         title: model.ref === roster.defaultModel ? `${model.ref} · ${t("Harness default")}` : model.ref,
-        onClick: () => pick3(model.ref)
+        onClick: () => pick2(model.ref)
       }, model.name, busy === model.ref ? (0, import_react17.createElement)("span", { className: "bt-model-spin", "aria-label": t("Saving…") }) : null)))
     )),
     (0, import_react17.createElement)("button", { key: "manage", type: "button", className: "bt-model-chip bt-model-chip-quiet", onClick: openHarnessSettings }, (0, import_react17.createElement)(SlidersIcon), t("Manage models"))
@@ -10290,11 +9909,11 @@ function createPayload({ name, look, image, model, effort, brief }) {
 
 // src/client/create-bot.js
 var import_react23 = require("react");
-var pick2 = (list) => list[Math.floor(Math.random() * list.length)];
+var pick = (list) => list[Math.floor(Math.random() * list.length)];
 var randomLook = (avoid = {}) => {
   const shapes = DEFAULT_SHAPES.filter((shape) => shape !== avoid.shape);
   const colors = DEFAULT_COLORS.filter((color) => color !== avoid.color);
-  return { shape: pick2(shapes), color: pick2(colors) };
+  return { shape: pick(shapes), color: pick(colors) };
 };
 function CreateBot({ roster, actions, start, brief = "", onBack, canGoBack, onCreated, inline = false }) {
   const [look, setLook] = (0, import_react23.useState)(() => randomLook());
@@ -10465,7 +10084,7 @@ function NewChat({ mode, roster, actions }) {
       setBusy(false);
     }
   };
-  const pick3 = (bot) => {
+  const pick2 = (bot) => {
     setPicked((current) => [...current, bot.id]);
     setQuery("");
     setCursor(0);
@@ -10483,7 +10102,7 @@ function NewChat({ mode, roster, actions }) {
       return;
     }
     if (group || picked.length > 0) {
-      pick3(bot);
+      pick2(bot);
       return;
     }
     if (bot.hidden) await actions.setFlags(bot.id, { hidden: false });
@@ -11042,7 +10661,7 @@ function PermissionPicker({ catalog, saved, onPick, repick = false }) {
     if (pending === saved) setPending(null);
   }, [pending, saved]);
   const current = pending ?? saved;
-  const pick3 = (value) => {
+  const pick2 = (value) => {
     if (value === current && !repick) return;
     setPending(value);
     void Promise.resolve(onPick(value)).then((done) => {
@@ -11057,7 +10676,7 @@ function PermissionPicker({ catalog, saved, onPick, repick = false }) {
       type: "button",
       "aria-pressed": option.value === current,
       title: option.description,
-      onClick: () => pick3(option.value),
+      onClick: () => pick2(option.value),
       className: presetDanger(option.value) ? "bt-perm-danger" : void 0
     }, presetName(option.value, catalog)))
   );
@@ -12056,7 +11675,7 @@ function UsagePage({ roster, actions, focusId }) {
     );
   }
   const { faces, models, ownerAt, face, keep, all, part, series, tipSeries, fillOf, columns, ranked, isBot, activeDays, oldest } = shaped;
-  const pick3 = (next) => actions.openSettings("usage", `${next.kind}:${next.key}`);
+  const pick2 = (next) => actions.openSettings("usage", `${next.kind}:${next.key}`);
   const chooseRange = (id) => {
     if (id !== "custom") {
       setRangeId(id);
@@ -12086,7 +11705,7 @@ function UsagePage({ roster, actions, focusId }) {
     whole: total,
     index,
     fill: face ? soften(face.paint, 0.8) : fillOf.get(`o${at}`) ?? soften(faces[at].paint),
-    onClick: () => pick3({ kind: "owner", key: view.owners[at].key })
+    onClick: () => pick2({ kind: "owner", key: view.owners[at].key })
   });
   const modelRow = ([at, sum], index) => (0, import_react29.createElement)(Row2, {
     key: `m${at}`,
@@ -12098,7 +11717,7 @@ function UsagePage({ roster, actions, focusId }) {
     whole,
     index,
     fill: face ? soften(face.paint, 0.8) : fillOf.get(`m${at}`) ?? soften(models[at].paint),
-    onClick: () => pick3({ kind: "model", key: view.models[at].key })
+    onClick: () => pick2({ kind: "model", key: view.models[at].key })
   });
   const nothing = (0, import_react29.createElement)("div", { className: "bt-us-none" }, t("Nothing in this range."));
   let body;
@@ -12112,7 +11731,7 @@ function UsagePage({ roster, actions, focusId }) {
         "div",
         { key: "sheet", className: "bt-us-sheet" },
         (0, import_react29.createElement)(Stats, { key: "stats", range, total: part.total, previous: part.previous }),
-        (0, import_react29.createElement)(Chart, { key: "chart", range, columns, series, tipSeries, onPick: pick3 }),
+        (0, import_react29.createElement)(Chart, { key: "chart", range, columns, series, tipSeries, onPick: pick2 }),
         (0, import_react29.createElement)(
           "div",
           { key: "pair", className: "bt-us-pair" },
@@ -12136,7 +11755,7 @@ function UsagePage({ roster, actions, focusId }) {
         "div",
         { key: "sheet", className: "bt-us-sheet" },
         (0, import_react29.createElement)(Stats, { key: "stats", range, total: all.total, previous: all.previous }),
-        (0, import_react29.createElement)(Chart, { key: "chart", range, columns, series, tipSeries, by, onBy: setBy, onPick: pick3 }),
+        (0, import_react29.createElement)(Chart, { key: "chart", range, columns, series, tipSeries, by, onBy: setBy, onPick: pick2 }),
         (0, import_react29.createElement)(
           "div",
           { key: "pair", className: "bt-us-pair" },
@@ -14093,7 +13712,8 @@ function BrowserView({ bot, tabId, leaving, landed, actions, useBrowserPages }) 
 function BotPanel({ pane, leaving, roster, actions, useSessions, useSessionStatus, useActivity, useWork, useBrowserTabs, useBrowserPages }) {
   const bot = roster.byId[pane.id];
   const canBrowse = Boolean(bot && roster.browser === true && actions.browserShow);
-  const view = pane.view === "browser" && canBrowse ? "browser" : "details";
+  const hasWork = isEventsBot(roster, pane.id);
+  const view = pane.view === "browser" && canBrowse ? "browser" : pane.view === "work" && hasWork ? "work" : "details";
   const tabState = useBrowserTabs((map) => bot ? map[bot.id] ?? EMPTY_TABS2 : EMPTY_TABS2);
   const active = tabState.active;
   const page = useBrowserPages((pages) => (active ? pages[active] : null) ?? EMPTY_PAGE);
@@ -14107,7 +13727,7 @@ function BotPanel({ pane, leaving, roster, actions, useSessions, useSessionStatu
   const [resizing, setResizing] = (0, import_react37.useState)(false);
   const instant = dragging || resizing;
   const [reading, setReading] = (0, import_react37.useState)(false);
-  const panelWidth = fitWidth(width ?? (view === "browser" ? DEFAULT_WIDTH : DETAILS_WIDTH), widthRange(view, viewport));
+  const panelWidth = fitWidth(width ?? (view === "browser" ? DEFAULT_WIDTH : view === "work" ? DETAILS_MAX : DETAILS_WIDTH), widthRange(view, viewport));
   (0, import_react37.useLayoutEffect)(() => {
     if (view === "browser" && width === null) setWidth(DEFAULT_WIDTH);
   }, [view, width]);
@@ -14292,7 +13912,7 @@ function BotPanel({ pane, leaving, roster, actions, useSessions, useSessionStatu
       ref: root,
       className: "bt-panel",
       "data-view": view,
-      "aria-label": view === "browser" && bot ? t("{name}'s browser", { name: bot.name }) : t("Conversation details"),
+      "aria-label": view === "browser" && bot ? t("{name}'s browser", { name: bot.name }) : view === "work" ? t("Subscriptions") : t("Conversation details"),
       "data-leaving": leaving || void 0,
       "aria-hidden": leaving || void 0,
       "data-settling": settling || void 0,
@@ -14308,9 +13928,10 @@ function BotPanel({ pane, leaving, roster, actions, useSessions, useSessionStatu
     // pages underneath (the chat, the guest) see no pointer.
     dragging ? (0, import_react_dom8.createPortal)((0, import_react37.createElement)("div", { className: "bt-drag-shield", "aria-hidden": true }), document.body) : null,
     hasStrip ? (0, import_react37.createElement)(PanelStrip, { bot, subject: pane.id, view, ids: tabState.ids, active, reading, onView: switchView, actions: panelActions, useBrowserPages }) : null,
-    view === "browser" && bot ? (0, import_react37.createElement)(BrowserView, { key: `browser:${active}`, bot, tabId: active, leaving, landed: landed && !settling, actions, useBrowserPages }) : (0, import_react37.createElement)(
+    view === "browser" && bot ? (0, import_react37.createElement)(BrowserView, { key: `browser:${active}`, bot, tabId: active, leaving, landed: landed && !settling, actions, useBrowserPages }) : view === "work" && bot ? (0, import_react37.createElement)(SubscriptionsBoard, { key: `work:${pane.id}`, bot, roster, actions, onDetails: () => switchView("details") }) : (0, import_react37.createElement)(
       "div",
       { key: `details:${pane.id}:${pane.renaming ? "rename" : ""}:${pane.tab ?? ""}`, className: "bt-panel-view" },
+      hasWork ? (0, import_react37.createElement)("button", { type: "button", className: "os-to-board", onClick: () => switchView("work") }, t("← Subscriptions")) : null,
       (0, import_react37.createElement)(DetailsDrawer, {
         sessionId: pane.id,
         startRenaming: pane.renaming,
@@ -14417,12 +14038,13 @@ function Overlays({ useRoster, useUi, useSessions, useSessionStatus, useActivity
   const ui2 = useUi((value) => value);
   useRegistry((value) => value);
   const current = useSessions((list) => Object.values(list.byId).find((session) => (session?.retainedBy?.mainView ?? 0) > 0)?.id ?? null);
-  const previous = (0, import_react38.useRef)(current);
+  const previous = (0, import_react38.useRef)(null);
+  const follow = `${current}|${roster.eventsBotId ?? ""}`;
   (0, import_react38.useEffect)(() => {
-    if (previous.current === current) return;
-    previous.current = current;
+    if (previous.current === follow) return;
+    previous.current = follow;
     if (current) actions.followPanel?.(current);
-  }, [current]);
+  }, [follow]);
   const open = ui2.details ? { id: ui2.details, view: ui2.view ?? "details", renaming: ui2.renaming, tab: ui2.tab } : null;
   const [kept, setKept] = (0, import_react38.useState)(open);
   (0, import_react38.useEffect)(() => {
@@ -15912,8 +15534,11 @@ function apply(ctx) {
     },
     // The open panel follows the main view; a subject with no browser (a group
     // chat, an outside Session) settles on the details view.
+    // Tentacall's board opens beside its chat; leaving for a chat without one closes it.
     followPanel: (id) => {
       ui2.set((state) => {
+        if (isEventsBot(roster.getSnapshot(), id)) return state.details === id && state.view !== "details" ? state : { ...state, details: id, view: "work", renaming: false, tab: null };
+        if (state.view === "work" && state.details && state.details !== id) return { ...state, details: null, view: "details", renaming: false, tab: null };
         if (!state.details || state.details === id) return state;
         const view = state.view === "browser" && roster.getSnapshot().byId[id] === void 0 ? "details" : state.view;
         return { ...state, details: id, view, renaming: false, tab: null };
@@ -16105,8 +15730,11 @@ function apply(ctx) {
     });
   }
   actions.setPanelView = (view) => {
-    if (view !== "details" && view !== "browser") return;
+    if (view !== "details" && view !== "browser" && view !== "work") return;
     ui2.set((state) => state.details && state.view !== view ? { ...state, view } : state);
+  };
+  actions.toggleWork = (id) => {
+    ui2.set((state) => state.details === id && state.view === "work" ? { ...state, details: null, view: "details", renaming: false, tab: null } : { ...state, details: id, view: "work", renaming: false, tab: null });
   };
   actions.closePanel = () => {
     ui2.set((state) => state.details ? { ...state, details: null, view: "details", renaming: false, tab: null } : state);
@@ -16259,7 +15887,7 @@ function apply(ctx) {
     () => shadow("sidebar.brand.mark", { priority: BOT_PRIORITY }, BrandMark),
     () => shadow("sidebar.brand.name", { priority: BOT_PRIORITY }, BrandName),
     () => shadow("sidebar.footer.action", { id: "bot-account", order: -200, inject: face }, FooterAccount),
-    () => shadow("sidebar.footer.action", { id: "bot-connect", order: -100, inject: face }, ConnectPlugins),
+    () => shadow("sidebar.footer.action", { id: "bot-connect", order: -100, inject: face }, ChannelsFooter),
     () => shadow("settings.trigger", { priority: BOT_PRIORITY }, YouAvatar),
     // The whale wins the seat over a shell account plugin's own launcher (the
     // Desktop's "··· More"), which comes back in Agent mode.
@@ -16270,8 +15898,7 @@ function apply(ctx) {
     // Omni chats and the Channels page are main panels, like the shell's Plugins page:
     // they replace the conversation in the center, and opening a Bot brings it back.
     () => shadow("main", { key: CHANNELS_PANEL, inject: face }, ChannelsPage),
-    () => shadow("main", { key: CHAT_PANEL, inject: face }, ChatPage),
-    () => shadow("main", { key: SUBS_PANEL, inject: face }, SubscriptionsPage)
+    () => shadow("main", { key: CHAT_PANEL, inject: face }, ChatPage)
   ];
   const installConversation = () => [
     () => installCompiledStyles(CONVERSATION_CSS, "conversation"),

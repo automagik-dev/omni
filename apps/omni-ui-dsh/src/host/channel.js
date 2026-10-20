@@ -36,6 +36,7 @@ export function install(rt) {
     mainBotIds: state.mainBotIds,
     // Tentacall, the Bot that subscriptions hand their events to (subscriptions.js).
     eventsBotId: state.eventsBotId && state.bots[state.eventsBotId] ? state.eventsBotId : null,
+    ...rt.subscriptionsView(),
     // `sessionId` is the Bot's current own-chat part; `parts` its earlier ones.
     // `waiting`: the Bot holds its greeting until the user picks its model.
     bots: Object.values(state.bots).map(({ segments, kickoff, ...bot }) => ({
@@ -263,6 +264,11 @@ export function install(rt) {
         case 'omni-overview':
         case 'omni-messages':
           return ok(await rt.omniEndpoint(endpoint, body))
+        case 'subscription-set-on':
+        case 'subscription-delete':
+        case 'subscription-test':
+          await rt.load()
+          return ok(await rt.subscriptionEndpoint(endpoint, body))
         case 'schedules':
         case 'schedule-create':
         case 'schedule-delete':
