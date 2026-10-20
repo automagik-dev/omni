@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | APPROVED |
+| **Status** | EXECUTED |
 | **Slug** | `omni-ai-marketplace` |
 | **Date** | 2026-10-20 |
 | **Author** | Felipe Rosa (owner), planned by Claude |
@@ -293,6 +293,21 @@ bundle in `dsh.profile.bundles`; (C) a `done` action must write the flags; advis
 
 A–G resolved. Advisory, applied: Simplicity Case names three actions; the host declares `inject: ['settings', 'credentials']`;
 omni-ui-dsh treats a missing omni-ai endpoint as local storage.
+
+### Execution review — 2026-10-20 — FIX-FIRST, then SHIP (independent reviewer, read-only)
+
+Commits: b1ed5c4ee (G1), eb50dacaf 37f438f18 (G2), f8e92f659 54ddd408a (G3), 58a5dee46 df23b65e0 (bump, pin).
+Blocking: the DeepSeek tile opened `account`, a section DSH registers only once an account is signed in — also
+caught by the first-run test on the second machine. Advisory: uncapped `/models` body; key stored before the route
+save; `pin` could re-point a listed version; unbounded fetch in a test; rail assumes both plugins; CI double run.
+Fixes 715ee41dc, 324170774, ef3ea785b (omni-ai-dsh 0.1.1); the rail left as cosmetic; CI runs the gate once.
+Re-review: SHIP — omni-ai-dsh 20/20, marketplace-check 6 pass + "6 plugins ok".
+
+Live evidence (Group 4): labs.3 on a fresh `~/.omni/desktop` on the second machine opened on the octopus, walked
+Welcome → Connect Omni (the owner's Omni answered "no owner yet") → Connect AI, the DeepSeek tile reached Models, and
+a restart showed no onboarding. A stock DSH with only the market bundle and this index (from `labs-distribution`)
+listed all six entries and installed `@automagik/omni-dsh` 0.1.8 from its git source after DSH's trust dialog, in a
+profile with DSH's standard `pnpm-workspace.yaml` (`autoInstallPeers: false`).
 
 ---
 
