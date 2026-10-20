@@ -29,7 +29,7 @@ runInNewContext(bundle.outputFiles[0].text, {
     return react
   },
 })
-const { FOLD_AT, FOLD_HUGE, foldPreview, stripLongNote, useFold } = module.exports
+const { FOLD_AT, FOLD_HUGE, NEVER, foldPreview, stripLongNote, useFold } = module.exports
 const render = (text, options) => { at = 0; return useFold(text, options) }
 const fresh = () => { slots = [] }
 const buttons = node => (node === null || typeof node !== 'object' ? [] : [...(node.type === 'button' ? [node] : []), ...node.children.flatMap(buttons)])
@@ -38,6 +38,8 @@ const lines = count => Array.from({ length: count }, (_, index) => `line ${index
 
 test('a text folds past 1,500 characters or 25 lines, and shows its first ten lines', () => {
   assert.equal(foldPreview('x'.repeat(1500)), null)
+  // A reply with a canvas never folds: a cut would close its fence early and drop lines.
+  assert.equal(foldPreview(`${'x'.repeat(30_000)}\n${lines(400)}`, NEVER), null)
   assert.equal(foldPreview(lines(25)), null)
   assert.equal(foldPreview(lines(26)), lines(10))
   assert.equal(foldPreview('x'.repeat(1501)), 'x'.repeat(600))

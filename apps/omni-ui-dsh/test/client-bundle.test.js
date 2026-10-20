@@ -22,7 +22,9 @@ test('client.js registers a factory that exports apply and inject', () => {
 
   const requested = []
   const platform = {
-    'react': { createElement: () => null, Fragment: Symbol('Fragment'), useState: initial => [initial, () => {}], useEffect: () => {}, useMemo: make => make(), useRef: current => ({ current }) },
+    'react': { createElement: () => null, Fragment: Symbol('Fragment'), useState: initial => [initial, () => {}], useEffect: () => {}, useMemo: make => make(), useRef: current => ({ current }), createContext: value => ({ Provider: () => null, _currentValue: value }), Component: class {} },
+    // OpenUI's renderer imports the JSX runtime, which the shell seeds beside React.
+    'react/jsx-runtime': { jsx: () => null, jsxs: () => null, Fragment: Symbol('Fragment') },
     'react-dom': { createPortal: node => node },
     '@deepseek-ai/dsh-client-ui-primitives': { MarkdownText: () => null },
   }

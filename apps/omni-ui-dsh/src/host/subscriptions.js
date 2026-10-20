@@ -1,6 +1,6 @@
-// Automations: which chats, groups or whole channels Autopilot watches, for which moment,
-// and who acts on it. Autopilot changes them with its own tools while the user talks to it,
-// and the board beside its chat shows them as they change (they ride the team view, so a
+// Automations: which chats, groups or whole channels Omni watches, for which moment, and
+// who acts on it. The Main Bot (Omni) changes them with its own tools while the user talks
+// to it, and the board beside its chat shows them as they change (they ride the team view, so a
 // save is on screen at the next poll). Sources are checked against the live omni channels
 // and chats, so an automation never names a chat that does not exist. (Stored as
 // state.subscriptions, the name they had first.)
@@ -32,17 +32,19 @@ export function install(rt) {
   const { ctx, state } = rt
   const subs = () => (state.subscriptions ??= {})
   const runs = () => (state.subscriptionRuns ??= [])
-  // Loads the team first: the check reads which Bot is Autopilot from the saved state.
+  // The Main Bot runs automations; it was a Bot of its own (Autopilot) before. Loads the team
+  // first: the check reads the Main Bot from the saved state.
+  const eventsBotId = () => state.mainBotIds.find(id => rt.botOf(id))
   const isEventsBot = async (exec) => {
     await rt.load()
-    return state.eventsBotId !== undefined && rt.selfOf(exec.agent?.id) === state.eventsBotId
+    const self = rt.selfOf(exec.agent?.id)
+    return self !== undefined && rt.isMain(self)
   }
-  const eventsName = () => rt.botOf(state.eventsBotId)?.name ?? 'Autopilot'
+  const eventsName = () => rt.botOf(eventsBotId())?.name ?? 'Omni'
   const notEventsBot = () => `Only ${eventsName()} manages automations. Ask ${eventsName()} in its chat.`
 
   const nameOfWorker = (worker) => {
-    if (worker.kind === 'events') return eventsName()
-    if (worker.kind === 'main') return rt.botOf(state.mainBotIds[0])?.name ?? 'the Main Bot'
+    if (worker.kind === 'events' || worker.kind === 'main') return eventsName()
     if (worker.kind === 'session') return worker.mode === 'ongoing' ? 'one ongoing DSH session' : 'a new DSH session each time'
     const name = rt.botOf(worker.botId)?.name ?? 'a deleted Bot'
     return worker.mode === 'chat' ? `${name} (in its chat)` : `${name} (one task per event)`
@@ -71,13 +73,13 @@ export function install(rt) {
   function workerOf(text, as) {
     const value = String(text ?? '').trim()
     const lower = value.toLowerCase()
-    if (value === '' || lower === 'tentacall' || lower === 'me' || lower === 'you') return { kind: 'events' }
+    if (value === '' || ['tentacall', 'autopilot', 'me', 'you'].includes(lower)) return { kind: 'events' }
     if (lower === 'session' || lower === 'new session') return { kind: 'session', mode: 'new' }
     if (lower === 'ongoing session') return { kind: 'session', mode: 'ongoing' }
     const bot = Object.values(state.bots).find(item => item.name.toLowerCase() === lower)
     if (!bot) throw invalid(`No Bot named "${value}". Use a name from list_bots, "${eventsName()}", "new session" or "ongoing session".`)
-    if (bot.id === state.eventsBotId) return { kind: 'events' }
-    return state.mainBotIds.includes(bot.id) ? { kind: 'main' } : { kind: 'bot', botId: bot.id, mode: as === 'chat' ? 'chat' : 'task' }
+    if (state.mainBotIds.includes(bot.id)) return { kind: 'events' }
+    return { kind: 'bot', botId: bot.id, mode: as === 'chat' ? 'chat' : 'task' }
   }
 
   function triggerOf(args) {
@@ -141,9 +143,9 @@ export function install(rt) {
     await rt.save()
     rt.syncOmniEvents?.()
   }
-  // A run hands one event to the subscription's worker. A Bot in task mode gets a fresh
-  // Session of its own for it (owned like its group Sessions, so it speaks as that Bot with
-  // its model and rules); everyone else gets it in their chat. The run is done when that
+  // A run hands one event to the subscription's worker. Omni, and a Bot in task mode, get a
+  // fresh Session of its own for it (owned like its group Sessions, so it speaks as that Bot
+  // with its model and rules); a Bot in chat mode gets it in its chat. The run is done when that
   // Session's turn ends, and its last words become the summary on the board.
   const runOf = sessionId => runs().find(run => run.sessionId === sessionId && run.status === 'working')
   const lastWords = new Map()
@@ -162,9 +164,9 @@ export function install(rt) {
 
   async function startRun(sub, event) {
     const worker = sub.worker
-    const botId = worker.kind === 'events' ? state.eventsBotId : worker.kind === 'main' ? state.mainBotIds[0] : worker.botId
+    const botId = worker.kind === 'events' || worker.kind === 'main' ? eventsBotId() : worker.botId
     const bot = rt.botOf(botId)
-    const task = worker.kind === 'session' || (worker.kind === 'bot' && worker.mode !== 'chat')
+    const task = worker.kind !== 'bot' || worker.mode !== 'chat'
     const run = {
       id: `run-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`, subId: sub.id, at: Date.now(), status: 'working',
       from: event.chat ?? sub.sources[0]?.name ?? '', excerpt: event.text ? event.text.slice(0, 160) : '', summary: `Handing it to ${nameOfWorker(worker)}…`,
@@ -173,7 +175,7 @@ export function install(rt) {
     const text = taskText(sub, event)
     if (task) {
       const title = `${worker.kind === 'session' ? 'Task' : bot?.name ?? 'Task'} · ${sub.name}`.slice(0, 80)
-      run.sessionId = await rt.createSession(title, worker.kind === 'bot' && bot?.workDir ? { dir: bot.workDir } : {})
+      run.sessionId = await rt.createSession(title, worker.kind !== 'session' && bot?.workDir ? { dir: bot.workDir } : {})
       await guard(sub, bot, run.sessionId)
     } else {
       run.sessionId = rt.chatOf(botId)
@@ -243,7 +245,7 @@ export function install(rt) {
   }
   rt.fireSubscription = startRun
 
-  rt.eventsBotId = () => (state.eventsBotId && state.bots[state.eventsBotId] ? state.eventsBotId : undefined)
+  rt.eventsBotId = eventsBotId
   rt.subscriptionsView = () => ({
     subscriptions: Object.values(subs()).sort((a, b) => a.createdAt - b.createdAt),
     subscriptionRuns: runs(),
@@ -258,7 +260,7 @@ export function install(rt) {
 
   ctx.tools.register(defineTool({
     name: 'find_chats',
-    description: 'Autopilot only. The omni channels and their recent chats and groups an automation can watch, with the ids save_automation takes.',
+    description: 'Main Bot only. The omni channels and their recent chats and groups an automation can watch, with the ids save_automation takes.',
     parameters: { search: { type: 'string', description: 'Part of a chat, group or channel name' } },
     output,
     async execute(args, exec) {
@@ -279,7 +281,7 @@ export function install(rt) {
 
   ctx.tools.register(defineTool({
     name: 'list_automations',
-    description: 'Autopilot only. The automations you run, with their ids.',
+    description: 'Main Bot only. The automations you run, with their ids.',
     parameters: {},
     output,
     async execute(_args, exec) {
@@ -292,7 +294,7 @@ export function install(rt) {
 
   ctx.tools.register(defineTool({
     name: 'save_automation',
-    description: 'Autopilot only. Create an automation, or change one by id. It shows in the Automations panel beside your chat at once. Ask the user for anything you do not know (which chats, which emoji, which words, who acts) instead of guessing.',
+    description: 'Main Bot only. Create an automation, or change one by id. It shows in the Automations panel beside your chat at once. Ask the user for anything you do not know (which chats, which emoji, which words, who acts) instead of guessing.',
     parameters: {
       id: { type: 'string', description: 'Only to change an existing automation' },
       name: { type: 'string', description: 'Short name the user would recognize' },
@@ -300,7 +302,7 @@ export function install(rt) {
       trigger: { type: 'string', enum: TRIGGER_KINDS, description: 'reaction: the user reacts with an emoji. keyword: a message contains words. message, mention, voice, media (photo or file), down (channel disconnects)' },
       emoji: { type: 'string', description: 'For reaction: the one emoji' },
       words: { type: 'string', description: 'For keyword: comma-separated words' },
-      worker: { type: 'string', description: 'Who acts: "Autopilot" (you; the default), a Bot name, "new session" or "ongoing session"' },
+      worker: { type: 'string', description: 'Who acts: "me" (you; the default), a Bot name, "new session" or "ongoing session"' },
       as: { type: 'string', enum: ['task', 'chat'], description: 'For a Bot: "task" (the default) gives it each event as its own single-run task; "chat" sends events into its chat' },
       react: { type: 'boolean', description: 'React 👀 when work starts and ✅ when done, on the message. Default true' },
       reply_to_me: { type: 'boolean', description: 'Also reply to the user in their own chat. Default false' },
@@ -322,7 +324,7 @@ export function install(rt) {
 
   ctx.tools.register(defineTool({
     name: 'pause_automation',
-    description: 'Autopilot only. Pause or resume an automation by id.',
+    description: 'Main Bot only. Pause or resume an automation by id.',
     parameters: {
       id: { type: 'string', required: true, description: 'Subscription id' },
       on: { type: 'boolean', required: true, description: 'true to resume, false to pause' },
@@ -342,7 +344,7 @@ export function install(rt) {
 
   ctx.tools.register(defineTool({
     name: 'delete_automation',
-    description: 'Autopilot only. Delete an automation by id. Only when the user asks for it.',
+    description: 'Main Bot only. Delete an automation by id. Only when the user asks for it.',
     parameters: { id: { type: 'string', required: true, description: 'Subscription id' } },
     output,
     async execute(args, exec) {

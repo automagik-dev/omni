@@ -10,13 +10,19 @@ const OMNI = 'https://omni.test'
 const omniAnswers = {
   '/instances': { items: [{ id: 'wa-1', channel: 'whatsapp-baileys', name: 'Sales', isActive: true }] },
   '/instances/wa-1/status': { data: { state: 'connected' } },
+  '/openapi.json': { paths: {
+    '/instances': { get: { summary: 'List instances', tags: ['Instances'] }, post: { summary: 'Create instance', tags: ['Instances'], requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['name', 'channel'], properties: { name: { type: 'string' }, channel: { enum: ['whatsapp-baileys', 'telegram'] } } } } } } } },
+    '/instances/{id}/connect': { post: { summary: 'Connect instance', tags: ['Instances'], parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }] } },
+    '/instances/{id}/qr': { get: { summary: 'Get QR code for WhatsApp connection', tags: ['Instances'] } },
+  } },
+  '/instances/wa-1/connect': { data: { status: 'connecting' } },
   '/chats': { items: [
     { id: 'obras', instanceId: 'wa-1', name: 'Grupo Obras', chatType: 'group' },
     { id: 'marina', instanceId: 'wa-1', name: 'Marina Lopes', chatType: 'dm' },
   ] },
 }
 
-// A team with its Main Bot, Tentacall and Ops, watching a fake omni.
+// A team with its Main Bot, the Autopilot it once had, and Ops, watching a fake omni.
 function setup(t) {
   const home = mkdtempSync(join(tmpdir(), 'ds-bot-subs-'))
   writeFileSync(join(home, 'state.json'), JSON.stringify({
@@ -29,7 +35,9 @@ function setup(t) {
     rooms: {}, agents: {}, exchanges: [], exchangeTurns: {},
   }))
   const realFetch = globalThis.fetch
-  globalThis.fetch = async (address) => {
+  const requests = []
+  globalThis.fetch = async (address, init = {}) => {
+    requests.push({ method: init.method ?? 'GET', path: String(address).replace(`${OMNI}/api/v2`, ''), body: init.body })
     const answer = omniAnswers[String(address).replace(`${OMNI}/api/v2`, '').split('?')[0]]
     return new Response(JSON.stringify(answer ?? {}), { status: answer ? 200 : 404 })
   }
@@ -60,20 +68,21 @@ function setup(t) {
     await ctx.dispose()
     rmSync(home, { recursive: true, force: true, maxRetries: 5 })
   })
-  const tool = name => args => ctx.registeredTools.get(name).execute(args, { agent: { id: 't1' } })
+  const tool = name => args => ctx.registeredTools.get(name).execute(args, { agent: { id: 'm1' } })
   const as = (name, agentId) => args => ctx.registeredTools.get(name).execute(args, { agent: { id: agentId } })
   const call = async (endpoint, payload) => (await (await route.fetch(new Request('http://localhost/api/bot', { method: 'POST', body: JSON.stringify({ endpoint, payload }) }))).json())
   const emit = (sessionId, event) => { for (const listener of ctx.listeners.get('session/event') ?? []) listener({ id: sessionId }, event) }
-  return { tool, as, call, sent, emit }
+  return { tool, as, call, sent, emit, requests }
 }
 
-test('only Autopilot manages automations', async (t) => {
-  const { as } = setup(t)
-  assert.match(await as('save_automation', 'b2')({ trigger: 'message', sources: 'chat:obras' }), /Only Autopilot/)
-  assert.match(await as('find_chats', 'm1')({}), /Only Autopilot/)
+test('only the Main Bot manages automations; the Autopilot a team once had is an ordinary Bot', async (t) => {
+  const { as, call } = setup(t)
+  assert.match(await as('save_automation', 'b2')({ trigger: 'message', sources: 'chat:obras' }), /Only Omni/)
+  assert.match(await as('find_chats', 't1')({}), /Only Omni/)
+  assert.equal((await call('state', {})).value.eventsBotId, 'm1')
 })
 
-test('Autopilot finds chats by name with the ids it saves with', async (t) => {
+test('Omni finds chats by name with the ids it saves with', async (t) => {
   const { tool } = setup(t)
   const all = await tool('find_chats')({})
   assert.match(all, /channel:wa-1 · whatsapp-baileys · Sales · connected/)
@@ -109,7 +118,7 @@ test('changing, pausing and deleting go by id, from the tools and from the board
   const { tool, call } = setup(t)
   await tool('save_automation')({ sources: 'chat:marina', trigger: 'media' })
   const id = (await call('state', {})).value.subscriptions[0].id
-  assert.match(await tool('save_automation')({ id, trigger: 'keyword', words: 'orçamento, quote' }), /a message says "orçamento" or "quote" in Marina Lopes → Autopilot/)
+  assert.match(await tool('save_automation')({ id, trigger: 'keyword', words: 'orçamento, quote' }), /a message says "orçamento" or "quote" in Marina Lopes → Omni/)
   assert.match(await tool('pause_automation')({ id, on: false }), /paused/)
   assert.equal((await call('state', {})).value.subscriptions[0].on, false)
   assert.equal((await call('automation-set-on', { id, on: true })).ok, true)
@@ -156,6 +165,48 @@ test('"as chat" sends the event into the Bot\'s own chat instead', async (t) => 
   assert.equal(run.task, undefined)
   assert.equal(run.sessionId, 'b2')
   assert.equal(sent[0].sessionId, 'b2')
+})
+
+test('an automation Omni handles itself gives it each event as a task that only reads omni', async (t) => {
+  const { tool, as, call, sent, requests } = setup(t)
+  await tool('save_automation')({ sources: 'chat:obras', trigger: 'reaction', emoji: '📌' })
+  const sub = (await call('state', {})).value.subscriptions[0]
+  assert.deepEqual(sub.worker, { kind: 'events' })
+  const run = (await call('automation-test', { id: sub.id })).value
+  assert.equal(run.task, true)
+  assert.equal(run.botId, 'm1')
+  assert.equal(sent[0].sessionId, run.sessionId)
+  // The event's text came from other people: in that task Omni reads omni and changes nothing.
+  const inRun = as('omni_call', run.sessionId)
+  assert.match(await inRun({ method: 'POST', path: '/instances/wa-1/connect' }), /only reads omni/)
+  assert.equal(requests.some(request => request.path.endsWith('/connect')), false)
+  assert.match(await inRun({ method: 'GET', path: '/instances' }), /"status":200/)
+})
+
+test('Omni finds any omni operation and calls it; other Bots cannot', async (t) => {
+  const { tool, as, call, requests } = setup(t)
+  const found = await tool('omni_endpoints')({ search: 'connect whatsapp qr' })
+  assert.match(found, /^POST \/instances\/\{id\}\/connect — Connect instance \[Instances\]\n  path id: string\(uuid\)/m)
+  assert.match(found, /GET \/instances\/\{id\}\/qr — Get QR code for WhatsApp connection/)
+  assert.match(await tool('omni_endpoints')({ search: 'create instance' }), /body: \{name: string, channel: "whatsapp-baileys" \| "telegram"\}/)
+
+  const connected = JSON.parse(await tool('omni_call')({ method: 'POST', path: '/api/v2/instances/wa-1/connect', body: '{"forceNew": false}' }))
+  assert.deepEqual(connected, { status: 200, operation: 'Connect instance', data: { data: { status: 'connecting' } } })
+  assert.deepEqual(requests.at(-1), { method: 'POST', path: '/instances/wa-1/connect', body: '{"forceNew":false}' })
+  const listed = JSON.parse(await tool('omni_call')({ method: 'GET', path: '/instances', query: '{"limit": 5}' }))
+  assert.equal(listed.data.items[0].name, 'Sales')
+  assert.equal(requests.at(-1).path, '/instances?limit=5')
+
+  // Only documented operations, only as a path.
+  assert.match(await tool('omni_call')({ method: 'DELETE', path: '/instances' }), /not an omni API operation/)
+  assert.match(await tool('omni_call')({ method: 'GET', path: 'https://evil.test/x' }), /must be an API path/)
+  assert.match(await tool('omni_call')({ method: 'POST', path: '/instances', body: '{nope' }), /body must be JSON/)
+  assert.match(await as('omni_call', 'b2')({ method: 'GET', path: '/instances' }), /Only a Main Bot/)
+  assert.match(await as('omni_endpoints', 'b2')({ search: 'qr' }), /Only a Main Bot/)
+
+  // The browser reads documented GET operations only.
+  assert.equal((await call('omni-get', { path: '/instances/wa-1/qr' })).ok, true)
+  assert.equal((await call('omni-get', { path: '/instances/wa-1/connect' })).ok, false)
 })
 
 test('an event matches only the subscriptions that watch its chat or channel, for their moment', async () => {

@@ -10,7 +10,10 @@ import { SecretToolCell } from './secret-card.js'
 import { dateLocale, t } from './i18n.js'
 import { failureLabel } from './diagnostics.js'
 import { turnReasoning } from './turn-reasoning.js'
-import { FOLD_AT, FOLD_HUGE, stripLongNote, useFold } from './fold.js'
+import { FOLD_AT, FOLD_HUGE, NEVER, stripLongNote, useFold } from './fold.js'
+import { hasCanvas, splitCanvases } from './canvas-text.js'
+import { CanvasSlot } from './canvas-slot.js'
+import { OmniCallCard, parseCall } from './omni-live.js'
 
 // -------------------------------------------------------------------------
 // Chat cells
@@ -44,16 +47,27 @@ export function Bubbles({ texts, roster, selfId, actions, streaming, sessionId, 
 }
 
 function Bubble({ text, index, roster, selfId, actions, sessionId, msgKey, mentions, fold, picked, live, lead, whole }) {
-  const { shown, folded, control } = useFold(text, { limit: fold, whole, live })
+  // A reply with a canvas is never folded: a cut would split the canvas from its source.
+  const canvas = hasCanvas(text)
+  const { shown, folded, control } = useFold(text, { limit: canvas ? NEVER : fold, whole, live })
   const key = msgKey ? `${msgKey}:${index}` : undefined
-  const body = h(MarkdownText, { text: linkMentions(shown, roster.bots, selfId), streaming: live, labels: mdLabels(), variant: 'compact', fileMentions: mentions })
+  const markdown = value => h(MarkdownText, { text: linkMentions(value, roster.bots, selfId), streaming: live, labels: mdLabels(), variant: 'compact', fileMentions: mentions })
+  const body = canvas ? null : markdown(shown)
+  const tools = live ? null : h(MessageTools, { text: folded ? text : shown, name: roster.byId[selfId]?.name ?? t('Bot'), sessionId, react: key ? emoji => actions.toggleReaction(msgKey, index, emoji) : undefined, actions })
+  // Text stays in bubbles; each canvas sits between them at full width, and its buttons
+  // ask the Bot in this same chat.
+  const lines = canvas
+    ? splitCanvases(shown).map((part, at, parts) => (part.kind === 'canvas'
+      ? h('div', { key: at, className: 'bt-canvas-line' }, h(CanvasSlot, { program: part.program, complete: part.complete, onAsk: message => message && actions.send(sessionId ?? selfId, message) }))
+      : h('div', { key: at, className: 'bt-msg-line' }, at === 0 ? lead : null, h('div', { className: 'bt-bubble' }, markdown(part.text)), at === parts.length - 1 ? tools : null)))
+    : null
   return h('div', { className: 'bt-msg' },
-    h('div', { className: 'bt-msg-line' },
+    lines ?? h('div', { className: 'bt-msg-line' },
       lead,
       h('div', { className: 'bt-bubble', 'data-folded': folded || undefined },
         control ? h('div', { className: 'bt-fold-body' }, body) : body,
         control),
-      live ? null : h(MessageTools, { text: folded ? text : shown, name: roster.byId[selfId]?.name ?? t('Bot'), sessionId, react: key ? emoji => actions.toggleReaction(msgKey, index, emoji) : undefined, actions })),
+      tools),
     picked.length ? h('div', { className: 'bt-reacts' }, picked.map(emoji => h('button', {
       key: emoji, type: 'button', className: 'bt-react', 'aria-label': t('Remove reaction {emoji}', { emoji }), onClick: () => actions.toggleReaction(msgKey, index, emoji),
     }, emoji))) : null)
@@ -681,7 +695,7 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
 
 // The calls ToolCell draws. A PTC program (`run_code`) dispatches the real tools as
 // its sub-calls, so a call draws by its own name wherever it sits in the tree.
-const DRAWN = new Set(['message_bot', 'stop_bot', 'create_bot', 'update_bot', 'group_relay', 'create_group', 'update_group', 'delete_group', 'post_to_group', 'ask_user', 'request_secret', 'ask_user_question', 'read_group_chat', 'remember', 'forget'])
+const DRAWN = new Set(['omni_call', 'message_bot', 'stop_bot', 'create_bot', 'update_bot', 'group_relay', 'create_group', 'update_group', 'delete_group', 'post_to_group', 'ask_user', 'request_secret', 'ask_user_question', 'read_group_chat', 'remember', 'forget'])
 // Calls whose card a dock above the composer carries when the call is not drawn.
 const CARDS = new Set(['ask_user', 'request_secret'])
 
@@ -718,6 +732,8 @@ function renderCall(call, { sessionId, roster, actions, useUi, useWork, findBot 
   const { text: arg, value: argValue } = toolArgs(call)
   const self = roster.byId[sessionId]
   switch (tool) {
+    case 'omni_call':
+      return h(OmniCallCard, { ...parseCall(arg, done ? contentText(call.content) : ''), done })
     case 'message_bot': {
       const target = findBot(arg('to')) ?? { name: arg('to') ?? '…', color: 'gray' }
       if (done && call.isError) return h('div', { className: 'bt-event' }, t("Couldn't message {name}", { name: target.name }))

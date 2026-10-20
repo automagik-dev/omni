@@ -1,8 +1,8 @@
 // Omni channels: the instances, chats and messages of an omni API, read on this host so its
 // key never reaches the browser. The key is the OMNI_API_KEY credential in DSH's credential
 // store; `config.omni.url` names the API (https://omni.example.com, without /api/v2). Without
-// both, the Channels view keeps its sample data. Reads only: the key this plugin is meant to
-// hold has instances:read, chats:read and messages:read, and nothing here sends or connects.
+// both, the Channels view keeps its sample data. This file only reads; the Main Bot changes
+// omni through omni-api.js, with the same key.
 
 export const KEY = 'OMNI_API_KEY'
 const TIMEOUT_MS = 10_000

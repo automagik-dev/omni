@@ -37,7 +37,8 @@
     "web-search.js",
     "cordis.patch.yml",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE"
   ],
   "scripts": {
     "build": "node scripts/build-client.mjs",
@@ -62,6 +63,10 @@
     }
   },
   "devDependencies": {
-    "esbuild": "0.28.2"
+    "@openuidev/lang-core": "0.2.18",
+    "@openuidev/react-lang": "0.2.15",
+    "esbuild": "0.28.2",
+    "qrcode-generator": "2.0.4",
+    "zod": "4.6.5"
   }
 }

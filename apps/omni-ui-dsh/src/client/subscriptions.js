@@ -9,25 +9,21 @@ import { call } from './api.js'
 import { ChatAvatar, Tile, useOmni } from './channels.js'
 import { TRIGGERS, runsOf, startLive, waitingRuns } from './omni-store.js'
 
-// Autopilot's board: what it actually does, beside its chat. The user never fills a form here;
-// they tell Autopilot what to watch, Autopilot saves it with its own tools (src/host/
+// Omni's board: what it actually does, beside its chat. The user never fills a form here;
+// they tell Omni what to watch, Omni saves it with its own tools (src/host/
 // subscriptions.js), and the board shows the change at the next poll, with the card that
 // changed lit up. The board only pauses, tests and deletes.
 
 const TRIGGER_ICONS = { message: MessageIcon, mention: AtIcon, keyword: KeywordIcon, voice: VoiceIcon, media: FileIcon, down: UnplugIcon }
-const EVENTS_LOOK = { shape: 'octopus', color: 'violet' }
 // A card changed this recently is lit up: the board reacting to the conversation.
 const FRESH_MS = 6000
 
 export const isEventsBot = (roster, id) => Boolean(roster?.eventsBotId) && roster.byId?.[id]?.id === roster.eventsBotId
 
 export function workerOf(worker, roster) {
-  if (worker.kind === 'events') {
-    const bot = roster?.byId?.[roster.eventsBotId]
-    return { name: bot?.name ?? 'Autopilot', bot, look: EVENTS_LOOK }
-  }
-  if (worker.kind === 'main') {
-    const bot = roster?.byId?.[roster.mainBotId]
+  // The Main Bot runs the automations it handles itself (it was Autopilot's job once).
+  if (worker.kind === 'events' || worker.kind === 'main') {
+    const bot = roster?.byId?.[roster.eventsBotId ?? roster.mainBotId]
     return { name: bot?.name ?? 'Omni', bot, look: MAIN_LOOK }
   }
   if (worker.kind === 'session') return { name: worker.mode === 'ongoing' ? t('One ongoing session') : t('A new session each time'), session: true }
@@ -91,19 +87,19 @@ const RUN_STATUS = {
 }
 
 // -------------------------------------------------------------------------
-// Autopilot's row and chat header
+// Omni's row and chat header
 
 // The task Sessions with an approval open, as a Set; picked as text so a row redraws only
 // when it changes.
 const useWaiting = useWork => new Set((useWork ? useWork(work => (work.approvals ?? []).map(entry => entry.sessionId).join(',')) : '').split(',').filter(Boolean))
 
-// On Autopilot's sidebar row: runs waiting for your approval.
+// On Omni's sidebar row: runs waiting for your approval.
 export function EventsBadge({ roster, useWork }) {
   const waiting = waitingRuns(roster, useWaiting(useWork))
   return waiting > 0 ? h('span', { className: 'os-pending', title: t('{n} waiting for you', { n: waiting }) }, String(waiting)) : null
 }
 
-// In Autopilot's chat header: shows or hides its board in the right sidebar.
+// In Omni's chat header: shows or hides its board in the right sidebar.
 export function SubscriptionsButton({ roster, actions, useWork }) {
   const count = (roster.subscriptions ?? []).filter(sub => sub.on).length
   const waiting = waitingRuns(roster, useWaiting(useWork))
@@ -113,7 +109,7 @@ export function SubscriptionsButton({ roster, actions, useWork }) {
 }
 
 // -------------------------------------------------------------------------
-// The board: a tab of DSH's own right sidebar, so it sits beside Autopilot's chat like
+// The board: a tab of DSH's own right sidebar, so it sits beside Omni's chat like
 // Files or a terminal, keeps to that Session, and steps aside with it.
 
 export const BOARD_KIND = 'omni-subscriptions'
@@ -124,7 +120,7 @@ export function BoardTab({ useRoster, useWork, actions }) {
   const roster = useRoster(value => value)
   const waiting = useWaiting(useWork)
   const bot = roster.byId?.[roster.eventsBotId]
-  if (!bot) return h('div', { className: 'os-board' }, h('p', { className: 'os-board-note' }, t('Automations belong to Autopilot, which this team does not have.')))
+  if (!bot) return h('div', { className: 'os-board' }, h('p', { className: 'os-board-note' }, t('Automations belong to the Main Bot, which this team does not have.')))
   return h(SubscriptionsBoard, { bot, roster, actions, waiting })
 }
 
@@ -144,7 +140,7 @@ export function SubscriptionsBoard({ bot, roster, actions, waiting }) {
           !subs.some(sub => sub.on) ? t('Everything is paused.')
             : `${watched === 1 ? t('Watching 1 chat or channel.') : t('Watching {n} chats and channels.', { n: watched })} ${listening ? t('Listening to omni.') : t('Connecting to omni…')}`),
         subs.some(sub => sub.on && (sub.outputs.react || sub.outputs.replyToMe))
-          ? h('div', { className: 'os-board-note os-board-pending' }, t('Reacting on the message and replying to you are not sent yet: this DSH may not send on omni. Results stay in the runs below.'))
+          ? h('div', { className: 'os-board-note os-board-pending' }, t('Reactions and replies to you are not sent yet. Results stay in the runs below.'))
           : null,
         h('div', { className: 'os-list' }, subs.map(sub => h(AutomationRow, { key: sub.id, sub, roster, runs: runs.filter(run => run.subId === sub.id) }))),
         runs.length > 0 ? h(Fragment, null,
@@ -170,7 +166,7 @@ function Empty({ bot, live }) {
 }
 
 // One automation: its trigger, name, sentence and switch. `onOpen` makes the name a way into
-// Autopilot's chat (the Automations page); beside that chat the board needs none.
+// Omni's chat (the Automations page); beside that chat the board needs none.
 export function AutomationRow({ sub, roster, runs, onOpen }) {
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState('')
@@ -232,7 +228,7 @@ export const SUBSCRIPTIONS_CSS = `
 .os-pending{flex:none;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:#f59e0b;color:#fff;font-size:11px;font-weight:600;line-height:18px;text-align:center;box-sizing:border-box}
 [data-tone=bad]{--oc-tone:#e5484d}
 
-/* Autopilot's header button */
+/* Omni's header button */
 .os-head-btn{display:inline-flex;align-items:center;gap:7px;height:32px;padding:0 10px 0 12px;margin-left:8px;border-radius:999px;border:.5px solid var(--bt-line-2);background:var(--bt-main);color:var(--bt-ink);font:inherit;font-size:13px;cursor:pointer;pointer-events:auto;box-shadow:0 2px 8px -1px rgba(0,0,0,.06)}
 .os-head-btn:hover{background:var(--bt-hover)}
 .os-head-count{min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--bt-hover);color:var(--bt-ink-2);font-size:11px;line-height:18px;text-align:center;box-sizing:border-box}

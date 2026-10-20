@@ -10,7 +10,7 @@ import {
 
 // Omni channels inside the Bot surface. The Channels page (CHANNELS_PANEL) connects new
 // channels and shows the health of the connected ones; a chat opens in the CHAT_PANEL main
-// panel. Subscriptions on these channels live in subscriptions.js, under Autopilot.
+// panel. Subscriptions on these channels live in subscriptions.js, run by Omni.
 // Live when the host has an omni URL and key (src/host/omni.js, read-only); sample data otherwise.
 
 export const useOmni = () => useSyncExternalStore(omniStore.subscribe, omniStore.getSnapshot, omniStore.getSnapshot)
@@ -69,8 +69,8 @@ export function ChatAvatar({ chat, channel, size = 36 }) {
 export function PreviewChip() {
   const source = useOmni().source
   if (source.kind === 'live') {
-    return h('span', { className: 'oc-preview-chip oc-live-chip', 'data-error': source.error ? true : undefined, title: source.error ?? t('Read from omni every 15 seconds. Sending and connecting are not switched on yet.') },
-      h('span', { className: 'oc-live-dot', 'aria-hidden': true }), source.error ? t('Live · last refresh failed') : t('Live · {origin} · read-only', { origin: source.origin }))
+    return h('span', { className: 'oc-preview-chip oc-live-chip', 'data-error': source.error ? true : undefined, title: source.error ?? t('Read from omni every 15 seconds. To connect, pause or change a channel, ask Omni.') },
+      h('span', { className: 'oc-live-dot', 'aria-hidden': true }), source.error ? t('Live · last refresh failed') : t('Live · {origin}', { origin: source.origin }))
   }
   const missing = source.missing?.join(', ')
   return h('span', { className: 'oc-preview-chip', title: missing ? t('Sample data until DSH has {missing}.', { missing }) : t('Nothing here reaches a real channel yet.') }, t('Preview · sample data'))

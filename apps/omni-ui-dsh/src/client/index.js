@@ -1,5 +1,8 @@
 import { call } from './api.js'
 import { installFavicon } from './logo.js'
+import { OMNI_UI_CSS, OmniCanvas } from './omni-ui.js'
+import { setCanvasRenderer } from './canvas-slot.js'
+import { OMNI_LIVE_CSS } from './omni-live.js'
 import { isHex, inkText, paintCss } from './inks.js'
 import { DEFAULT_MASK, SHAPES, markupCache, maskOf } from './characters.js'
 import { countCards, createSource, EMPTY_ROSTER, indexRoster, isAgentSession } from './sources.js'
@@ -757,8 +760,8 @@ export function apply(ctx) {
     })
     return () => fiber.dispose()
   }
-  // Autopilot's board is a tab of DSH's right sidebar, which may load after this plugin.
-  // The first time Autopilot's chat is on screen in a browser, its board opens; after that
+  // Omni's automations board is a tab of DSH's right sidebar, which may load after this plugin.
+  // The first time Omni's chat is on screen in a browser, its board opens; after that
   // the Session's own sidebar layout (open, closed, other tabs) is the user's.
   let boardRight = null
   const BOARD_OPENED = 'omni.board.opened'
@@ -781,7 +784,7 @@ export function apply(ctx) {
         const offs = [right.mounted.subscribe(check), roster.subscribe(check)]
         check()
         return () => { boardRight = null; for (const off of offs) off() }
-      }, 'ds-bot: open Autopilot board')
+      }, 'ds-bot: open the automations board')
     })
     return () => fiber.dispose()
   }
@@ -816,7 +819,7 @@ export function apply(ctx) {
     () => installCompiledStyles(ABOUT_CSS, 'about'),
     () => installCompiledStyles(MEMBER_CSS, 'members'),
     () => installCompiledStyles(USER_MESSAGE_CSS, 'user-messages'),
-    () => installCompiledStyles(CHANNELS_CSS + SUBSCRIPTIONS_CSS + AUTOMATIONS_CSS, 'channels'),
+    () => installCompiledStyles(CHANNELS_CSS + SUBSCRIPTIONS_CSS + AUTOMATIONS_CSS + OMNI_LIVE_CSS + OMNI_UI_CSS, 'channels'),
     browsers ? () => installCompiledStyles(BROWSER_CSS, 'browser') : null,
     () => installTheme(),
     () => shadow('sidebar.workspaces', { priority: BOT_PRIORITY, inject: face }, TeamSidebar),
@@ -880,6 +883,7 @@ export function apply(ctx) {
   }, 'ds-bot: return styles')
   shadow('sidebar.footer.action', { id: 'bot-return', order: -300, inject: face }, BotReturn)
   ctx.effect(() => installFavicon(), 'ds-bot: Omni tab icon')
+  ctx.effect(() => setCanvasRenderer(OmniCanvas), 'ds-bot: canvases')
 
   // The main view decides `plain`: a DSH Agent Session keeps the Bot shell but
   // withdraws the conversation replacements, so the native dsh page shows. A jump

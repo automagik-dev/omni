@@ -35,7 +35,7 @@ export function install(rt) {
     mainBotId: state.mainBotIds[0] ?? null,
     mainBotIds: state.mainBotIds,
     // Autopilot, the Bot that automations hand their events to (subscriptions.js).
-    eventsBotId: state.eventsBotId && state.bots[state.eventsBotId] ? state.eventsBotId : null,
+    eventsBotId: rt.eventsBotId?.() ?? null,
     ...rt.subscriptionsView(),
     // `sessionId` is the Bot's current own-chat part; `parts` its earlier ones.
     // `waiting`: the Bot holds its greeting until the user picks its model.
@@ -84,7 +84,7 @@ export function install(rt) {
   })
   // What a host that only reads the team may still answer.
   // Updates change the dsh profile, not the team, so a reading host may run them too.
-  const READS = new Set(['state', 'models', 'efforts', 'earlier', 'room-progress', 'exchange', 'exchange-text', 'file-text', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars', 'approval-answer', 'omni-overview', 'omni-messages'])
+  const READS = new Set(['state', 'models', 'efforts', 'earlier', 'room-progress', 'exchange', 'exchange-text', 'file-text', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars', 'approval-answer', 'omni-overview', 'omni-messages', 'omni-get'])
 
   function setPrefs(body) {
     if (body.theme !== undefined) {
@@ -113,11 +113,7 @@ export function install(rt) {
       switch (endpoint) {
         case 'state':
           if (typeof body.locale === 'string' && /^[a-z]{2,3}(-[\w-]+)?$/i.test(body.locale)) uiLocale = body.locale
-          if (readOnly === undefined) {
-            await rt.bootstrap()
-            // Autopilot is made beside the request, so a failure there never blocks the team view.
-            void rt.ensureEventsBot().catch(error => rt.warn('ds-bot: Autopilot was not set up: %s', error?.message ?? error))
-          }
+          if (readOnly === undefined) await rt.bootstrap()
           await rt.catalog()
           await rt.loadSecrets()
           if (body.since === state.revision && (body.models === undefined || body.models === modelsKey())) return ok({ revision: state.revision, unchanged: true, ...live() })
@@ -265,6 +261,8 @@ export function install(rt) {
         case 'omni-overview':
         case 'omni-messages':
           return ok(await rt.omniEndpoint(endpoint, body))
+        case 'omni-get':
+          return ok(await rt.omniGet(body?.path))
         case 'automation-set-on':
         case 'automation-delete':
         case 'automation-test':

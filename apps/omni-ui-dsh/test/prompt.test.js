@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { install } from '../src/host/prompt.js'
 import { fakeContext } from './fake-ctx.js'
 
-function start() {
+function start(config = {}) {
   const ctx = fakeContext()
   const bots = new Map([
     ['main', { name: 'Omni' }],
@@ -15,6 +15,7 @@ function start() {
     botOf: id => bots.get(id),
     roomOf: id => id === 'room' ? {} : undefined,
     isMain: id => id === 'main',
+    config,
   })
   const prompt = id => ctx.sections.get('bot-identity').text({ agent: { id } })
   return { ctx, prompt }
@@ -43,4 +44,21 @@ test('the group relay and non-Bot sessions do not get progress instructions', (t
   assert.match(prompt('room'), /end your turn with an empty reply/)
   assert.doesNotMatch(prompt('room'), /progress|milestone/)
   assert.equal(prompt('outside'), '')
+})
+
+test('with an omni to operate, the Main Bot alone learns the API tools, automations and canvases', (t) => {
+  const { ctx, prompt } = start({ omni: { url: 'https://omni.example.com' } })
+  t.after(() => ctx.dispose())
+  const main = prompt('main')
+  for (const part of ['## You operate Omni for the user', 'omni_endpoints', 'omni_call', '## Automations', 'save_automation', '```openui-lang', 'QrCode(channelId: string)', 'Query("omni_get"']) assert.ok(main.includes(part), part)
+  // The canvas language is generated from the components the client renders, without the
+  // OpenUI features a canvas does not have.
+  assert.ok(!/Mutation\(\)(?! is not available)/.test(main))
+  assert.ok(!main.includes('FormControl'))
+  const worker = prompt('worker')
+  for (const part of ['omni_call', 'openui-lang', 'save_automation']) assert.ok(!worker.includes(part), part)
+  // Without an omni, the Main Bot's prompt has none of it.
+  const plain = start()
+  t.after(() => plain.ctx.dispose())
+  assert.ok(!plain.prompt('main').includes('omni_call'))
 })

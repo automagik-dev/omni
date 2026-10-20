@@ -9,9 +9,9 @@ import { runsOf } from './omni-store.js'
 import { whenText } from './automation-time.js'
 
 // Automations: one place for everything that runs on its own, in the shape of DSH's
-// Automation tasks page (filters, search, rows). Event automations (Autopilot's) and the
+// Automation tasks page (filters, search, rows). Event automations (Omni's) and the
 // team's scheduled tasks (DSH's schedule service) sit in one list. There is no form: "New"
-// opens Autopilot's chat, where the user says what to automate.
+// opens Omni's chat, where the user says what to automate.
 
 export const AUTOMATIONS_PANEL = 'omni-automations'
 

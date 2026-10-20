@@ -103,6 +103,8 @@ test('apply registers listeners, tools, and effects in a fixed order', (t) => {
     'tool save_automation',
     'tool pause_automation',
     'tool delete_automation',
+    'tool omni_endpoints',
+    'tool omni_call',
     'effect ds-bot: usage ledger',
     'on llm/stream',
     'effect ds-bot: update check',
