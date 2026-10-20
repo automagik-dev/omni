@@ -9,6 +9,8 @@ export const STORAGE = {
   surface: 'omni-ui:surface',
   agentSessions: 'omni-ui:agent-sessions',
   browserWidth: 'omni-ui:browser-width',
+  // The onboarding step omni-connect, skipped on a DSH without omni-ai (onboarding.js).
+  connectOmniSkipped: 'omni-ui:connect-omni-skipped',
   browsers: 'omni-ui.browser.v2',
 }
 

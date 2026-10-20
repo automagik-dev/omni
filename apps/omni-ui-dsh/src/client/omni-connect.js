@@ -12,7 +12,9 @@ import { t } from './i18n.js'
 
 const DEFAULT_POLL_MS = 2000
 
-export function ConnectOmni() {
+// `onPaired(origin)` hears a pairing that succeeded (the onboarding step completes on it);
+// `embedded` drops the card's own mark and heading where its host already titles it.
+export function ConnectOmni({ onPaired, embedded = false } = {}) {
   const [address, setAddress] = useState('')
   const [pairing, setPairing] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -37,6 +39,7 @@ export function ConnectOmni() {
           setPairing(null)
           setDone(reply.origin)
           await refreshLive(call).catch(() => {})
+          if (alive.current) onPaired?.(reply.origin)
           return
         }
         if (reply.status !== 'pending') {
@@ -97,9 +100,9 @@ export function ConnectOmni() {
   }
 
   return h('form', { className: 'ox-card ox-start', onSubmit: start },
-    h('span', { className: 'ox-mark', 'aria-hidden': true }, h(OmniMark, { size: 34 })),
+    embedded ? null : h('span', { className: 'ox-mark', 'aria-hidden': true }, h(OmniMark, { size: 34 })),
     h('div', { className: 'ox-steps' },
-      h('h2', null, t('Connect your Omni')),
+      embedded ? null : h('h2', null, t('Connect your Omni')),
       h('p', { className: 'ox-muted' }, t('Type its address, then approve this device from your phone: on WhatsApp, or with Face ID or your fingerprint. No keys to copy.')),
       h('div', { className: 'ox-row' },
         h('input', {

@@ -122,6 +122,29 @@ test('a saved link wins whole over the profile\'s URL and key, and disconnecting
   assert.equal(omni.asked.at(-1).key, 'omni_sk_profile')
 })
 
+// The onboarding step Connect Omni completes on `configured`.
+test('omni-link says whether this host reaches an Omni, by a link or by the profile\'s URL and key', async (t) => {
+  const omni = fakeOmni()
+  const none = runtime()
+  t.after(none.stop)
+  assert.deepEqual(await none.rt.omniLinkEndpoint('omni-link'), { linked: false, configured: false, origin: null, pairedAt: null, pairing: null })
+  const urlOnly = runtime({ omniUrl: 'https://profile.example.com' })
+  t.after(urlOnly.stop)
+  assert.equal((await urlOnly.rt.omniLinkEndpoint('omni-link')).configured, false)
+
+  const profile = runtime({ omniUrl: 'https://profile.example.com', profileKey: 'omni_sk_profile' })
+  t.after(profile.stop)
+  assert.deepEqual(await profile.rt.omniLinkEndpoint('omni-link'), { linked: false, configured: true, origin: null, pairedAt: null, pairing: null })
+
+  await none.rt.omniLinkEndpoint('omni-pair-start', { url: 'omni.example.com' })
+  omni.approve()
+  await none.rt.omniLinkEndpoint('omni-pair-poll')
+  const linked = await none.rt.omniLinkEndpoint('omni-link')
+  assert.equal(linked.linked, true)
+  assert.equal(linked.configured, true)
+  assert.equal(linked.origin, 'omni.example.com')
+})
+
 test('an Omni without login, an unclaimed one, and a bad address say so', async (t) => {
   const { rt, stop } = runtime()
   t.after(stop)

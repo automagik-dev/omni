@@ -216,7 +216,10 @@ export function install(rt) {
     if (endpoint === 'omni-disconnect') return disconnect()
     if (endpoint === 'omni-link') {
       const link = rt.omniLink()
-      return { linked: link !== null, origin: link ? new URL(link.url).host : null, pairedAt: link?.pairedAt ?? null, pairing: publicPairing() }
+      // `configured`: this host reaches an Omni, by this link or by the profile's older URL
+      // and key (omni.js); the onboarding step Connect Omni completes on it.
+      const configured = link !== null || (await Promise.resolve(rt.omniConfigured?.()).catch(() => false)) === true
+      return { linked: link !== null, configured, origin: link ? new URL(link.url).host : null, pairedAt: link?.pairedAt ?? null, pairing: publicPairing() }
     }
     throw invalid(`Unknown omni endpoint ${endpoint}`)
   }

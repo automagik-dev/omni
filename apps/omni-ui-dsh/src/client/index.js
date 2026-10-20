@@ -5,6 +5,7 @@ import { setCanvasRenderer } from './canvas-slot.js'
 import { OMNI_LIVE_CSS } from './omni-live.js'
 import { OMNI_PEEK_CSS } from './omni-peek.js'
 import { OMNI_CONNECT_CSS } from './omni-connect.js'
+import { registerConnectStep } from './connect-step.js'
 import { isHex, inkText, paintCss } from './inks.js'
 import { DEFAULT_MASK, SHAPES, markupCache, maskOf } from './characters.js'
 import { countCards, createSource, EMPTY_ROSTER, indexRoster, isAgentSession } from './sources.js'
@@ -51,6 +52,8 @@ export function apply(ctx) {
   ctx.effect(() => installLocale(ctx.get('locale')), 'ds-bot: interface copy')
   const roster = createSource(EMPTY_ROSTER)
   migrateStorage()
+  // Onboarding: Connect Omni, between omni-ai's welcome and Connect AI when it is installed.
+  registerConnectStep(ctx)
   const unreadStore = sharedMap(STORAGE.unread)
   const reactionStore = sharedMap(STORAGE.reactions)
   // When each conversation was last left; a visit compares new turns against it.
