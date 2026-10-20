@@ -167,6 +167,15 @@ jobs:
             fi
           fi
 
+      - name: Marketplace index gate
+        # marketplace/automagik.json pins Omni's plugins to commits; the gate proves each
+        # one is an ancestor of HEAD and holds the package it names, so it needs history.
+        run: |
+          if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+            git fetch --no-tags --unshallow origin
+          fi
+          make marketplace-check
+
       - name: Migration contract gate
         # Static check of packages/db/drizzle/ (journal ↔ files bijection,
         # deployed-migration immutability, additive-only lint, headers,

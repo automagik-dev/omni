@@ -72,12 +72,54 @@
       "versions": [
         {
           "version": "0.1.7",
-          "publishTimestamp": 1792536901,
+          "publishTimestamp": 1792537710,
           "source": {
             "type": "git",
             "url": "https://github.com/automagik-dev/omni",
-            "commit": "85a36ef949cc295b1a4e089531eec4f0a72130c4",
+            "commit": "b1ed5c4ee6b5df3cec0a191e5527c1b50fa08de1",
             "path": "apps/omni-ui-dsh"
+          },
+          "engines": {
+            "dsh": ">=0.2.1-rc.2 <0.3.0"
+          }
+        }
+      ]
+    },
+    {
+      "name": "@automagik/omni-ai-dsh",
+      "title": {
+        "en": "Omni welcome & Connect AI"
+      },
+      "description": {
+        "en": "The Omni octopus welcomes you and connects your AI: DeepSeek, an API key, Codex, Claude, Kimi or a CLIProxyAPI gateway, through DSH's own sign-ins."
+      },
+      "author": "Automagik",
+      "homepage": "https://github.com/automagik-dev/omni/tree/dev/apps/omni-ai-dsh#readme",
+      "repository": {
+        "url": "https://github.com/automagik-dev/omni",
+        "directory": "apps/omni-ai-dsh"
+      },
+      "metadata": {
+        "category": "omni",
+        "keywords": [
+          "omni",
+          "onboarding",
+          "ai",
+          "cliproxyapi"
+        ],
+        "labels": [
+          "official"
+        ]
+      },
+      "versions": [
+        {
+          "version": "0.1.0",
+          "publishTimestamp": 1792537710,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/automagik-dev/omni",
+            "commit": "b1ed5c4ee6b5df3cec0a191e5527c1b50fa08de1",
+            "path": "apps/omni-ai-dsh"
           },
           "engines": {
             "dsh": ">=0.2.1-rc.2 <0.3.0"
