@@ -219,6 +219,63 @@ test('a turn DSH stops as it shuts down stays noted; one the user stops does not
   await settle(() => inflight(home).a !== undefined && inflight(home).b === undefined)
 })
 
+// A Tasks Session as DSH reopens it: `events` is its log, newest last.
+const withLog = (host, sessionId, events) => {
+  const agent = host.agentOf(sessionId)
+  agent.session = { id: sessionId, seq: events.length, eventAt: seq => events[seq] }
+  agent.status = 'idle'
+  return agent
+}
+const taskTeam = (home, extra = {}) => {
+  const state = JSON.parse(readFileSync(join(home, 'state.json'), 'utf8'))
+  writeFileSync(join(home, 'state.json'), JSON.stringify({ ...state, agents: { t: { id: 't', name: 'Tasks', sessions: ['cut', 'done', 'old'], createdAt: 1 } }, ...extra }))
+}
+
+test('a restart heals the Tasks it cut off: each goes on once, finished and old ones stay', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const home = freshHome(t)
+  taskTeam(home)
+  const host = await start(home)
+  const now = Date.now()
+  withLog(host, 'cut', [{ type: 'turn/start', time: now - 60_000 }, { type: 'turn/end', time: now - 1000, data: { reason: { kind: 'interrupted' } } }])
+  withLog(host, 'done', [{ type: 'turn/start', time: now - 60_000 }, { type: 'turn/end', time: now - 1000, data: { reason: { kind: 'completed' } } }])
+  withLog(host, 'old', [{ type: 'turn/end', time: now - 2 * 24 * 60 * 60 * 1000, data: { reason: { kind: 'interrupted' } } }])
+  t.mock.timers.tick(3000)
+  await settle(() => host.agentOf('cut').calls.length === 1)
+  const note = host.agentOf('cut').calls[0]
+  assert.equal(note.source.kind, 'user')
+  assert.match(text(note), /^\[DeepSeek Harness restarted\]\nDeepSeek Harness restarted while you were working on this/)
+  assert.match(text(note), /Check what is already done/)
+  assert.deepEqual([host.agentOf('done').calls.length, host.agentOf('old').calls.length], [0, 0])
+  await host.stop()
+
+  // Cut again and again: picked up twice in a day, then left stopped.
+  for (let round = 2; round <= 3; round += 1) {
+    const again = await start(home)
+    withLog(again, 'cut', [{ type: 'turn/end', time: Date.now(), data: { reason: { kind: 'aborted', reason: { kind: 'disposed' } } } }])
+    t.mock.timers.tick(3000)
+    if (round === 2) await settle(() => again.agentOf('cut').calls.length === 1)
+    else for (let wait = 0; wait < 20; wait += 1) await new Promise(resolve => setImmediate(resolve))
+    assert.equal(again.agentOf('cut').calls.length, round === 2 ? 1 : 0)
+    assert.equal(JSON.parse(readFileSync(join(home, 'state.json'), 'utf8')).restartResumes.cut.count, 2)
+    await again.stop()
+  }
+})
+
+test('a task a restart cut stays running and reports only when it really ends', async (t) => {
+  const home = freshHome(t)
+  taskTeam(home, { tasks: { cut: { title: 'Ranking', from: 'a', at: Date.now(), status: 'working' } } })
+  const host = await start(home)
+  host.emit('cut', 'turn/end', { turn: 1, reason: { kind: 'interrupted' } })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(JSON.parse(readFileSync(join(home, 'state.json'), 'utf8')).tasks.cut.status, 'working')
+  assert.equal(host.agentOf('a').calls.length, 0)
+  host.emit('cut', 'assistant/message', { message: { content: [{ type: 'text', text: 'Top 30 ready.' }] } })
+  host.emit('cut', 'turn/end', { turn: 2, reason: { kind: 'completed' } })
+  await settle(() => host.agentOf('a').calls.length === 1)
+  assert.match(text(host.agentOf('a').calls[0]), /^\[Task "Ranking" finished/)
+})
+
 test('a message a shutdown cancelled is sent again once; one still waiting, taken up or withdrawn is not', async (t) => {
   const home = freshHome(t)
   const first = await start(home)

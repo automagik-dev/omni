@@ -246,6 +246,8 @@ export function install(rt) {
       }
       void rt.save().catch(error => rt.warn('ds-bot: saving a task failed: %s', error))
     } else if (event?.type === 'turn/end') {
+      // A restart cut the turn: the task is not done, and resume.js sets it going again.
+      if (rt.cutByRestart?.(event.data?.reason)) return
       const failed = event.data?.reason?.kind === 'error'
       task.status = failed ? 'failed' : 'done'
       task.endedAt = Date.now()

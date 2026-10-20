@@ -58,7 +58,17 @@ const darkAccent = (accent) => {
 export const themeCss = (theme, accent) => `html body{${declarations(themeVars(theme.light, false, accent ?? theme.light.accent))}}
 html body[data-ds-dark-theme]{${declarations(themeVars(theme.dark, true, darkAccent(accent) ?? theme.dark.accent))}}
 ${theme.css ?? ''}`
-export const shellTokens = ({ light, dark }) => ({
+// DSH paints its own surfaces (the running "Deep diving" line, the stop and send buttons,
+// its pages) from one blue scale; each step is drawn from the theme's accent instead, the
+// light steps toward white and the dark ones toward black.
+const SCALE = [[50, 8], [100, 14], [200, 22], [300, 36], [400, 62], [450, 82], [500, 100], [600, -20], [800, -55], [900, -70]]
+const step = (accent, amount) => (amount === 100 ? accent : amount > 0 ? `color-mix(in srgb, ${accent} ${amount}%, white)` : `color-mix(in srgb, ${accent} ${100 + amount}%, black)`)
+const accentScale = (lightAccent, darkAccent) => Object.fromEntries(SCALE.map(([name, amount]) => [`--dsw-static-deepseek-${name}`, { light: step(lightAccent, amount), dark: step(darkAccent, amount) }]))
+
+export const shellTokens = ({ light, dark }, accent) => ({
+  ...accentScale(accent ?? light.accent, darkAccent(accent) ?? dark.accent),
+  '--dsw-alias-label-deep-diving': { light: `color-mix(in srgb, ${accent ?? light.accent} 78%, ${light.text})`, dark: `color-mix(in srgb, ${darkAccent(accent) ?? dark.accent} 82%, ${dark.text})` },
+  '--dsw-alias-label-deep-diving-shimmer': { light: `color-mix(in srgb, ${accent ?? light.accent} 35%, ${light.bg})`, dark: `color-mix(in srgb, ${darkAccent(accent) ?? dark.accent} 45%, ${dark.bg})` },
   '--dsw-alias-bg-base': { light: light.bg, dark: dark.bg },
   '--dsw-specific-sidebar-fill': { light: light.sidebar, dark: dark.sidebar },
   '--dsw-specific-input-major': { light: light.bg, dark: dark.sidebar },

@@ -759,8 +759,8 @@ function cleanRegex(source) {
   const end = source.endsWith("$") ? source.length - 1 : source.length;
   return source.slice(start, end);
 }
-function floatSafeRemainder(val, step) {
-  const ratio = val / step;
+function floatSafeRemainder(val, step2) {
+  const ratio = val / step2;
   const roundedRatio = Math.round(ratio);
   const tolerance = 4 * Number.EPSILON * Math.max(Math.abs(ratio), 1);
   if (Math.abs(ratio - roundedRatio) < tolerance)
@@ -17788,19 +17788,19 @@ function useOpenUIState({ response, library: library2, isStreaming, onAction, on
     }
     const actionPlan = action;
     if (actionPlan?.steps) {
-      for (const step of actionPlan.steps) switch (step.type) {
+      for (const step2 of actionPlan.steps) switch (step2.type) {
         case ACTION_STEPS.Run:
-          if (step.refType === "mutation") {
-            const mn = resultRef.current?.mutationStatements?.find((m) => m.statementId === step.statementId);
+          if (step2.refType === "mutation") {
+            const mn = resultRef.current?.mutationStatements?.find((m) => m.statementId === step2.statementId);
             const evaluatedArgs = mn?.argsAST ? evaluate(mn.argsAST, evaluationContext) : {};
-            if (!await queryManager.fireMutation(step.statementId, evaluatedArgs)) return;
-          } else queryManager.invalidate([step.statementId]);
+            if (!await queryManager.fireMutation(step2.statementId, evaluatedArgs)) return;
+          } else queryManager.invalidate([step2.statementId]);
           break;
         case ACTION_STEPS.ToAssistant:
           handler?.({
             type: BuiltinActionType.ContinueConversation,
-            params: step.context ? { context: step.context } : {},
-            humanFriendlyMessage: step.message,
+            params: step2.context ? { context: step2.context } : {},
+            humanFriendlyMessage: step2.message,
             formState: formPayload,
             formName
           });
@@ -17808,24 +17808,24 @@ function useOpenUIState({ response, library: library2, isStreaming, onAction, on
         case ACTION_STEPS.OpenUrl:
           handler?.({
             type: BuiltinActionType.OpenUrl,
-            params: { url: step.url },
+            params: { url: step2.url },
             humanFriendlyMessage: "",
             formState: formPayload,
             formName
           });
           break;
         case ACTION_STEPS.Set: {
-          if (!step.valueAST) {
-            console.warn(`[openui] Set action for ${step.target} has no valueAST — skipping`);
+          if (!step2.valueAST) {
+            console.warn(`[openui] Set action for ${step2.target} has no valueAST — skipping`);
             break;
           }
-          const value = evaluate(step.valueAST, evaluationContext);
-          store2.set(step.target, value);
+          const value = evaluate(step2.valueAST, evaluationContext);
+          store2.set(step2.target, value);
           break;
         }
         case ACTION_STEPS.Reset: {
           const decls = resultRef.current?.stateDeclarations ?? {};
-          for (const target of step.targets) store2.set(target, decls[target] ?? null);
+          for (const target of step2.targets) store2.set(target, decls[target] ?? null);
           break;
         }
       }
@@ -21673,14 +21673,14 @@ var isRelayContext = (data) => {
   if (source.deferred === true || source.resumed === true || source.retried === true) return false;
   return RELAY_ROLES.has(source.role) && typeof source.senderSessionId === "string";
 };
-var stepShows = (step) => (step?.blocks ?? []).some((block) => {
+var stepShows = (step2) => (step2?.blocks ?? []).some((block) => {
   if (block === void 0 || block.kind === "tool-call") return false;
   return block.kind === "text" || block.kind === "reasoning" ? String(block.text ?? "").trim() !== "" : true;
 });
-var stepHasReasoning = (step) => (step?.blocks ?? []).some((block) => block?.kind === "reasoning" && String(block.text ?? "").trim() !== "");
+var stepHasReasoning = (step2) => (step2?.blocks ?? []).some((block) => block?.kind === "reasoning" && String(block.text ?? "").trim() !== "");
 var relayPart = (data, groupPart) => groupPart === void 0 || (stepHasReasoning(data) ? groupPart === "reasoning" : groupPart === "response");
-function relaysBefore(contexts, steps, step) {
-  const index = steps.findIndex((entry) => entry?.step === step?.step);
+function relaysBefore(contexts, steps, step2) {
+  const index = steps.findIndex((entry) => entry?.step === step2?.step);
   if (index === -1) return [];
   let prev = -Infinity;
   for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
@@ -21689,7 +21689,7 @@ function relaysBefore(contexts, steps, step) {
       break;
     }
   }
-  return (contexts ?? []).filter((data) => isRelayContext(data) && typeof data.time === "number" && data.time >= prev && data.time < step.time);
+  return (contexts ?? []).filter((data) => isRelayContext(data) && typeof data.time === "number" && data.time >= prev && data.time < step2.time);
 }
 function commRunOf(order, peers, turn, hiddenTurns = []) {
   const turns = [];
@@ -22529,7 +22529,7 @@ function WeekChart({ week }) {
   );
 }
 function ConnectFlow({ state, omni }) {
-  const { type, step } = state.page;
+  const { type, step: step2 } = state.page;
   const [name, setName] = (0, import_react5.useState)("");
   const [token, setToken] = (0, import_react5.useState)("");
   (0, import_react5.useEffect)(() => {
@@ -22568,12 +22568,12 @@ function ConnectFlow({ state, omni }) {
     import_react5.Fragment,
     null,
     (0, import_react5.createElement)("button", { type: "button", className: "oc-back", onClick: () => omni.showPage({ type: null, step: 0 }) }, (0, import_react5.createElement)(ChevronLeftIcon), t("All channels")),
-    (0, import_react5.createElement)("ol", { className: "oc-steps" }, steps.map((label, index) => (0, import_react5.createElement)("li", { key: label, "data-state": index < step ? "done" : index === step ? "now" : void 0 }, (0, import_react5.createElement)("span", null, index < step ? "✓" : String(index + 1)), label))),
+    (0, import_react5.createElement)("ol", { className: "oc-steps" }, steps.map((label, index) => (0, import_react5.createElement)("li", { key: label, "data-state": index < step2 ? "done" : index === step2 ? "now" : void 0 }, (0, import_react5.createElement)("span", null, index < step2 ? "✓" : String(index + 1)), label))),
     (0, import_react5.createElement)(
       "div",
       { className: "oc-flow" },
       (0, import_react5.createElement)(Tile, { type, size: 64, ring: true }),
-      step === 0 ? (0, import_react5.createElement)(
+      step2 === 0 ? (0, import_react5.createElement)(
         import_react5.Fragment,
         null,
         (0, import_react5.createElement)("h1", null, t("Connect {app}", { app: info.label })),
@@ -22588,7 +22588,7 @@ function ConnectFlow({ state, omni }) {
           }
         })),
         (0, import_react5.createElement)("button", { type: "button", className: "oc-primary", onClick: () => omni.showPage({ step: 1 }) }, t("Continue"))
-      ) : step === 1 ? (0, import_react5.createElement)(Pairing, { info, token, setToken, onDone: () => omni.showPage({ step: 2 }) }) : (0, import_react5.createElement)(
+      ) : step2 === 1 ? (0, import_react5.createElement)(Pairing, { info, token, setToken, onDone: () => omni.showPage({ step: 2 }) }) : (0, import_react5.createElement)(
         import_react5.Fragment,
         null,
         (0, import_react5.createElement)("h1", null, state.preview ? t("{app} is connected", { app: info.label }) : t("That is the whole flow")),
@@ -22927,12 +22927,12 @@ function useCountUp(to) {
     }
     const start = performance.now();
     let frame;
-    const step = (now) => {
+    const step2 = (now) => {
       const progress = Math.min(1, (now - start) / 600);
       setShown(Math.round(to * (1 - (1 - progress) ** 3)));
-      if (progress < 1) frame = requestAnimationFrame(step);
+      if (progress < 1) frame = requestAnimationFrame(step2);
     };
-    frame = requestAnimationFrame(step);
+    frame = requestAnimationFrame(step2);
     return () => cancelAnimationFrame(frame);
   }, [to]);
   return shown;
@@ -24022,7 +24022,13 @@ var darkAccent = (accent) => {
 var themeCss = (theme, accent) => `html body{${declarations(themeVars(theme.light, false, accent ?? theme.light.accent))}}
 html body[data-ds-dark-theme]{${declarations(themeVars(theme.dark, true, darkAccent(accent) ?? theme.dark.accent))}}
 ${theme.css ?? ""}`;
-var shellTokens = ({ light, dark }) => ({
+var SCALE = [[50, 8], [100, 14], [200, 22], [300, 36], [400, 62], [450, 82], [500, 100], [600, -20], [800, -55], [900, -70]];
+var step = (accent, amount) => amount === 100 ? accent : amount > 0 ? `color-mix(in srgb, ${accent} ${amount}%, white)` : `color-mix(in srgb, ${accent} ${100 + amount}%, black)`;
+var accentScale = (lightAccent, darkAccent2) => Object.fromEntries(SCALE.map(([name, amount]) => [`--dsw-static-deepseek-${name}`, { light: step(lightAccent, amount), dark: step(darkAccent2, amount) }]));
+var shellTokens = ({ light, dark }, accent) => ({
+  ...accentScale(accent ?? light.accent, darkAccent(accent) ?? dark.accent),
+  "--dsw-alias-label-deep-diving": { light: `color-mix(in srgb, ${accent ?? light.accent} 78%, ${light.text})`, dark: `color-mix(in srgb, ${darkAccent(accent) ?? dark.accent} 82%, ${dark.text})` },
+  "--dsw-alias-label-deep-diving-shimmer": { light: `color-mix(in srgb, ${accent ?? light.accent} 35%, ${light.bg})`, dark: `color-mix(in srgb, ${darkAccent(accent) ?? dark.accent} 45%, ${dark.bg})` },
   "--dsw-alias-bg-base": { light: light.bg, dark: dark.bg },
   "--dsw-specific-sidebar-fill": { light: light.sidebar, dark: dark.sidebar },
   "--dsw-specific-input-major": { light: light.bg, dark: dark.sidebar },
@@ -24107,7 +24113,7 @@ function liveSprings(apply2) {
   let frame = 0;
   let last = 0;
   const read = () => Object.fromEntries([...values].map(([key, value]) => [key, value.x]));
-  const step = (now) => {
+  const step2 = (now) => {
     const dt = Math.min(0.5, Math.max(1e-3, (now - last) / 1e3));
     last = now;
     const steps = Math.ceil(dt * 240);
@@ -24124,7 +24130,7 @@ function liveSprings(apply2) {
       } else moving = true;
     }
     apply2(read());
-    frame = moving ? requestAnimationFrame(step) : 0;
+    frame = moving ? requestAnimationFrame(step2) : 0;
   };
   return {
     target: () => values.size ? Object.fromEntries([...values].map(([key, value]) => [key, value.to])) : null,
@@ -24143,7 +24149,7 @@ function liveSprings(apply2) {
       }
       if (!frame) {
         last = performance.now();
-        frame = requestAnimationFrame(step);
+        frame = requestAnimationFrame(step2);
       }
     },
     stop: () => cancelAnimationFrame(frame)
@@ -26161,12 +26167,12 @@ var SECRET_CSS = `
 // src/client/turn-reasoning.js
 function turnReasoning(steps, current) {
   const members2 = steps.length ? steps : [current];
-  if (members2.find((step) => stepReasoning(step) !== "")?.step !== current.step) return "";
-  return members2.filter((step) => !thinkingLive(step)).map(stepReasoning).filter(Boolean).join("\n\n");
+  if (members2.find((step2) => stepReasoning(step2) !== "")?.step !== current.step) return "";
+  return members2.filter((step2) => !thinkingLive(step2)).map(stepReasoning).filter(Boolean).join("\n\n");
 }
-var texts = (step) => step.blocks.filter((block) => block.kind === "text" && block.text.trim() !== "");
-var thinkingLive = (step) => step.status === "running" && texts(step).length === 0 && step.blocks.some((block) => block.kind === "reasoning");
-var stepReasoning = (step) => step.blocks.filter((block) => block.kind === "reasoning").map((block) => block.text).join("\n").trim();
+var texts = (step2) => step2.blocks.filter((block) => block.kind === "text" && block.text.trim() !== "");
+var thinkingLive = (step2) => step2.status === "running" && texts(step2).length === 0 && step2.blocks.some((block) => block.kind === "reasoning");
+var stepReasoning = (step2) => step2.blocks.filter((block) => block.kind === "reasoning").map((block) => block.text).join("\n").trim();
 
 // src/client/fold.js
 var import_react14 = require("react");
@@ -32360,7 +32366,7 @@ function spanRange(from, to) {
   const unit = days <= 2 ? "hour" : days <= 62 ? "day" : days <= 182 ? "week" : "month";
   const range = { id: "custom", unit, from, to, days };
   const count = spanBuckets(range).length;
-  const stride = unit === "hour" ? 6 : [1, 2, 3, 5, 7, 10, 14].find((step) => count / step <= 12) ?? Math.ceil(count / 12);
+  const stride = unit === "hour" ? 6 : [1, 2, 3, 5, 7, 10, 14].find((step2) => count / step2 <= 12) ?? Math.ceil(count / 12);
   return { ...range, count, stride };
 }
 function spanBuckets(range) {
@@ -32368,8 +32374,8 @@ function spanBuckets(range) {
   const end = hourMs(range.to) + DAY_MS;
   const buckets = [];
   if (range.unit === "hour" || range.unit === "day") {
-    const step = range.unit === "hour" ? HOUR_MS : DAY_MS;
-    for (let start = first; start < end; start += step) buckets.push({ start, end: start + step, key: range.unit === "hour" ? hourKey(start) : dayKey2(start) });
+    const step2 = range.unit === "hour" ? HOUR_MS : DAY_MS;
+    for (let start = first; start < end; start += step2) buckets.push({ start, end: start + step2, key: range.unit === "hour" ? hourKey(start) : dayKey2(start) });
   } else if (range.unit === "week") {
     for (let monday = mondayOf(first); monday < end; monday += 7 * DAY_MS) {
       buckets.push({ start: Math.max(monday, first), end: Math.min(monday + 7 * DAY_MS, end), key: dayKey2(monday) });
@@ -32527,13 +32533,13 @@ function useTween(value) {
     const begin = from.current;
     const started = performance.now();
     let frame;
-    const step = (now) => {
+    const step2 = (now) => {
       const progress = Math.min(1, (now - started) / 650);
       from.current = begin + (value - begin) * (1 - (1 - progress) ** 3);
       setShown(from.current);
-      if (progress < 1) frame = requestAnimationFrame(step);
+      if (progress < 1) frame = requestAnimationFrame(step2);
     };
-    frame = requestAnimationFrame(step);
+    frame = requestAnimationFrame(step2);
     return () => cancelAnimationFrame(frame);
   }, [value]);
   return shown;
@@ -32626,8 +32632,8 @@ function Stats({ range, total, previous }) {
 }
 function niceTop(max) {
   if (!(max > 0)) return 1;
-  const step = 10 ** Math.floor(Math.log10(max));
-  return [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10].map((scale) => scale * step).find((value) => value >= max);
+  const step2 = 10 ** Math.floor(Math.log10(max));
+  return [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10].map((scale) => scale * step2).find((value) => value >= max);
 }
 function Chart2({ range, columns, series, tipSeries, by, onBy, onPick }) {
   const [hover, setHover] = (0, import_react36.useState)(null);
@@ -36315,7 +36321,7 @@ function surfaceGroups(install, { onError } = {}) {
         if (!wanted[group] || mounted[group].length > 0) continue;
         const disposers = [];
         try {
-          for (const step of install[group]()) if (step) disposers.push(step());
+          for (const step2 of install[group]()) if (step2) disposers.push(step2());
           mounted[group] = disposers;
         } catch (error2) {
           disposeAll(disposers, `roll back ${group}`);
@@ -36757,7 +36763,7 @@ function apply(ctx) {
       key = next;
       style.textContent = themeCss(themes[id], accent);
       const release = releaseTokens;
-      releaseTokens = ctx.theme.overrideTokens("ds-bot", shellTokens(themes[id]));
+      releaseTokens = ctx.theme.overrideTokens("ds-bot", shellTokens(themes[id], accent));
       if (typeof release === "function") release();
       if (snapshot.ready) {
         try {

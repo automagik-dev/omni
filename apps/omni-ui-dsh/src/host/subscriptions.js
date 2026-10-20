@@ -232,6 +232,8 @@ export function install(rt) {
       const text = Array.isArray(content) ? content.filter(block => block?.type === 'text').map(block => block.text).join('\n').trim() : ''
       if (text) lastWords.set(id, text)
     } else if (event?.type === 'turn/end') {
+      // A restart cut the run: it is not done, and resume.js sets it going again.
+      if (rt.cutByRestart?.(event.data?.reason)) return
       const failed = event.data?.reason?.kind === 'error'
       finish(id, failed ? 'failed' : 'done', failed ? event.data.reason.error?.message : lastWords.get(id))
     }

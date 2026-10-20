@@ -1,4 +1,5 @@
-// Resume: Bot work that DeepSeek Harness dropped when it closed or restarted. DSH closes
+// Resume: work that DeepSeek Harness dropped when it closed or restarted (Bot turns from
+// the notes below; Tasks and automation runs from their Sessions, healCutSessions). DSH closes
 // a turn it never finished as interrupted when the Session next opens, and a clean
 // shutdown also cancels the messages still waiting in a Session's inbox; nothing would
 // ever run either again, and whoever waited for them was not told. DS Bot notes each
@@ -6,6 +7,7 @@
 // inflight.json; what is still noted at the next start is picked up once.
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { SOURCE_KIND } from './constants.js'
@@ -15,6 +17,17 @@ const RESUME_DELAY_MS = 3000
 // A delivery waiting longer than this was not lost to a restart.
 const QUEUED_KEPT_MS = 24 * 60 * 60 * 1000
 const QUEUED_MAX = 50
+// A Session edited longer ago than this was not cut off by the last restart.
+const CUT_KEPT_MS = 24 * 60 * 60 * 1000
+// A Session picked up this often in a day stays stopped: a restart loop must not run it forever.
+const RESUMES_MAX = 2
+const EVENTS_SCANNED = 400
+const TASKS_CHECKED = 12
+
+// How DSH ends a turn a restart cut off: `interrupted` when it repairs the log of a process
+// that died, `aborted`/`disposed` when it stops the turn as it shuts down. Neither means the
+// work is done.
+export const cutByRestart = reason => reason?.kind === 'interrupted' || (reason?.kind === 'aborted' && reason.reason?.kind === 'disposed')
 
 export const resumeText = record => [
   'DeepSeek Harness restarted while you were working on this, so your last turn stopped before it finished.',
@@ -131,7 +144,9 @@ export function install(rt) {
   ctx.on('session/event', (session, event) => {
     const id = session?.id
     if (id === undefined) return
-    if ((event.type === 'turn/start' || event.type === 'turn/end') && firstTurn?.has(id) === false) firstTurn.set(id, event.type)
+    // DSH closes a cut-off turn as it reopens the Session; that is not the turn finishing.
+    const finished = event.type === 'turn/end' && !cutByRestart(event.data?.reason)
+    if ((event.type === 'turn/start' || finished) && firstTurn?.has(id) === false) firstTurn.set(id, event.type)
     if (event.type === 'user/message' && event.data?.source?.kind === SOURCE_KIND && event.data.source.exchangeId) {
       taken?.add(event.data.source.exchangeId)
       forgetQueued(event.data.source.exchangeId)
@@ -154,8 +169,7 @@ export function install(rt) {
       }
       case 'turn/end': {
         // DSH stops every turn as it shuts down; that one is picked up at the next start.
-        const reason = event.data?.reason
-        if (reason?.kind === 'aborted' && reason.reason?.kind === 'disposed') break
+        if (cutByRestart(event.data?.reason)) break
         update(id, () => undefined)
         break
       }
@@ -163,6 +177,7 @@ export function install(rt) {
   })
 
   // An approval the restart drops is named when the turn is picked up.
+  rt.cutByRestart = cutByRestart
   rt.noteApproval = (sessionId, approval) => update(sessionId, record => (record === undefined ? record
     : approval === undefined ? (({ approval: _, ...rest }) => rest)(record) : { ...record, approval }))
 
@@ -211,6 +226,46 @@ export function install(rt) {
     }
   }
 
+  // Tasks Sessions and the single-run Sessions of automations are not noted like Bot turns:
+  // a restart's cut is read from the Session itself. Its last turn ended as DSH ends a cut
+  // turn and nothing ran since, so it goes on, with DSH's own repair telling the model which
+  // tool calls have unknown outcomes. `skip`: Sessions already picked up from the notes.
+  function lastTurnOf(agent) {
+    const latest = (agent.session?.seq ?? 0) - 1
+    for (let seq = latest; seq >= Math.max(0, latest - EVENTS_SCANNED); seq -= 1) {
+      const event = agent.session.eventAt?.(seq)
+      if (event?.type === 'turn/end' || event?.type === 'turn/start') return event
+    }
+    return undefined
+  }
+  async function healCutSessions(skip) {
+    const { state } = rt
+    const candidates = new Map()
+    // The newest Tasks Sessions only: an old one was not running when DSH went down.
+    for (const agent of Object.values(state.agents ?? {})) for (const id of (agent.sessions ?? []).slice(-TASKS_CHECKED)) candidates.set(id, { kind: 'tasks' })
+    for (const run of state.subscriptionRuns ?? []) if (run.task && run.sessionId && run.status === 'working') candidates.set(run.sessionId, { kind: run.botId ? 'run' : 'tasks', botId: run.botId })
+    const resumes = state.restartResumes ??= {}
+    for (const [id, entry] of Object.entries(resumes)) if (Date.now() - entry.at > CUT_KEPT_MS) delete resumes[id]
+    for (const [id, target] of candidates) {
+      if (skip.has(id) || (resumes[id]?.count ?? 0) >= RESUMES_MAX) continue
+      const agent = await rt.resolveAgent(id).catch(() => undefined)
+      if (agent === undefined || agent.status === 'running') continue
+      const last = lastTurnOf(agent)
+      if (last?.type !== 'turn/end' || !cutByRestart(last.data?.reason) || Date.now() - (last.time ?? 0) > CUT_KEPT_MS) continue
+      resumes[id] = { count: (resumes[id]?.count ?? 0) + 1, at: Date.now() }
+      await rt.save()
+      const text = resumeText({})
+      if (target.kind === 'run' && rt.botOf(target.botId) !== undefined) {
+        await rt.deliver({ toId: target.botId, sessionId: id, role: 'resume', resumed: true, text })
+      } else {
+        // A Tasks Session is a plain DSH Session: the note arrives as the user's.
+        agent.followup(createUserMessage({ content: [{ type: 'text', text: `[DeepSeek Harness restarted]\n${text}` }], source: { kind: 'user' } }))
+        await ctx.sessions.flush(agent.session)
+      }
+      rt.warn('ds-bot: %s %s was cut off by a restart and goes on', target.kind === 'run' ? 'automation run' : 'task', id)
+    }
+  }
+
   async function resumeAll() {
     await rt.load()
     if (rt.readOnly() !== undefined) return
@@ -236,11 +291,12 @@ export function install(rt) {
     for (const [sessionId, record] of cut) {
       await resumeTurn(sessionId, record).catch(error => rt.warn('ds-bot: picking up the turn of %s failed: %s', sessionId, error))
     }
+    await healCutSessions(new Set(Object.keys(noted))).catch(error => rt.warn('ds-bot: picking up cut-off tasks failed: %s', error))
   }
 
   ctx.effect(() => {
-    const pending = Object.keys(interrupted.turns).length > 0 || Object.keys(interrupted.queued).length > 0
-    const timer = pending ? setTimeout(() => void resumeAll().catch(error => rt.warn('ds-bot: picking up interrupted work failed: %s', error)), RESUME_DELAY_MS) : undefined
+    // Every start looks: the Sessions a restart cut need no notes to be found.
+    const timer = setTimeout(() => void resumeAll().catch(error => rt.warn('ds-bot: picking up interrupted work failed: %s', error)), RESUME_DELAY_MS)
     timer?.unref?.()
     // What the turns stopped by this shutdown left stays as last noted.
     return () => {
