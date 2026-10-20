@@ -16,6 +16,9 @@
  * becomes its only user, and sign-up closes.
  */
 
+// First, before the passkey plugin: @simplewebauthn/server reaches tsyringe (through
+// @peculiar/x509), which throws at load time unless the Reflect metadata polyfill is in.
+import 'reflect-metadata';
 import { passkey } from '@better-auth/passkey';
 import type { Database } from '@omni/db';
 import {
