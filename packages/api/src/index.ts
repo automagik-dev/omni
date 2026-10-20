@@ -1,5 +1,7 @@
 // Sentry must be initialised before all other imports for auto-instrumentation
 import './instrument';
+// Before anything that could load human login's passkey plugin (tsyringe needs it).
+import 'reflect-metadata';
 
 // OpenTelemetry SDK — backend-neutral tracing. No-op when
 // OTEL_EXPORTER_OTLP_ENDPOINT is unset. Imported here (right after Sentry)
