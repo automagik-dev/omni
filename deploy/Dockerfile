@@ -52,6 +52,9 @@ RUN bun install --frozen-lockfile --ignore-scripts
 # Source arrives AFTER the install so code edits don't re-run bun install.
 COPY packages ./packages
 COPY apps ./apps
+# The market (/api/market): the static index the server embeds, and the packer.
+COPY marketplace/automagik.json ./marketplace/automagik.json
+COPY scripts/pack-market.ts ./scripts/pack-market.ts
 
 # ---- builder: bundle the server + copy migrations ---------------------------
 FROM deps AS builder
