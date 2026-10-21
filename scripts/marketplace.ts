@@ -9,6 +9,10 @@
  * repository, proves that the pinned commit is reachable from HEAD and holds, at the entry's
  * path, a package.json with the entry's name and version. A market installs exactly that
  * commit, so an entry that fails here fails in every user's DSH.
+ *
+ * This static index is for DSH users without an Omni. Every Omni also serves the Automagik
+ * marketplace for its own release at /api/market (packages/api/src/market): Omni's plugins,
+ * packed from the release by scripts/pack-market.ts, plus this index's vetted npm add-ons.
  */
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
