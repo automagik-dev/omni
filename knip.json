@@ -9,6 +9,8 @@
         "scripts/pg-gate-warm.ts",
         "scripts/marketplace.ts",
         "scripts/marketplace.test.ts",
+        "scripts/pack-market.ts",
+        "scripts/pack-market.test.ts",
         "scripts/bootstrap-platform-credential.ts",
         "scripts/release/generate-release-notes.test.ts"
       ],

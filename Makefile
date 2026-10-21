@@ -304,9 +304,10 @@ verify-versions:
 	bun test scripts/verify-versions.test.ts
 	bun scripts/verify-versions.ts $(if $(BASE),--base $(BASE),)
 
-# Automagik marketplace index: DSH's own parser, and every pinned omni commit holds its package.
+# Automagik marketplace: the static index (DSH's own parser, and every pinned omni commit holds its
+# package) and the packer that bundles apps/*-dsh into each Omni's own market (needs npm).
 marketplace-check:
-	bun test scripts/marketplace.test.ts
+	bun test scripts/marketplace.test.ts scripts/pack-market.test.ts
 	bun scripts/marketplace.ts check
 
 # Run all quality checks
@@ -469,8 +470,8 @@ cli:
 cli-build:
 	bun run --cwd packages/cli build
 
-cli-build-full: ## Build CLI client + server bundles
-	cd packages/cli && bun run build && bun run build:server
+cli-build-full: ## Build CLI client + server bundles + the packed DSH plugins
+	cd packages/cli && bun run build && bun run build:server && bun run build:market
 
 cli-link: cli-build
 	cd packages/cli && bun link
