@@ -57,6 +57,7 @@ body::after{content:"";position:fixed;left:-50%;right:-50%;bottom:-30vh;height:6
 main{width:100%;background:var(--card);border:1px solid var(--line);border-radius:20px;padding:26px;backdrop-filter:blur(14px);box-shadow:0 30px 80px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.04)}
 h1{font-size:21px;margin:0 0 6px;letter-spacing:-.01em}p{margin:0 0 14px;color:var(--ink2)}
 .mark{font:700 12px/1 ui-monospace,monospace;letter-spacing:.32em;color:var(--accent);margin-bottom:16px}
+[hidden]{display:none!important}
 button,.btn{display:block;width:100%;padding:13px 14px;margin:9px 0;border-radius:13px;border:1px solid var(--line);background:rgba(255,255,255,.02);color:var(--ink);font:inherit;font-weight:600;cursor:pointer;text-align:center;text-decoration:none;transition:transform .15s,box-shadow .15s,border-color .15s}
 button:hover:not(:disabled),.btn:hover{transform:translateY(-1px);border-color:rgba(34,211,197,.6);box-shadow:0 0 0 1px rgba(34,211,197,.25),0 8px 24px rgba(34,211,197,.15)}
 button.primary{background:linear-gradient(135deg,var(--accent),#14a8c7);border-color:transparent;color:#03141a}button:disabled{opacity:.55;cursor:default}
@@ -113,7 +114,10 @@ async function signInWithPasskey() {
   await call('POST', '/api/auth/passkey/verify-authentication', { response: credentialJSON(cred) });
 }
 async function addPasskey() {
-  const options = await call('GET', '/api/auth/passkey/generate-register-options');
+  // Named by the owner's number: without a name, Better Auth names the passkey by the account's placeholder email.
+  const session = await call('GET', '/api/auth/get-session').catch(() => null);
+  const name = session && session.user && session.user.name;
+  const options = await call('GET', '/api/auth/passkey/generate-register-options' + (name ? '?name=' + encodeURIComponent(name) : ''));
   const cred = await navigator.credentials.create({ publicKey: creationOptions(options) });
   await call('POST', '/api/auth/passkey/verify-registration', { response: credentialJSON(cred), name: navigator.platform || 'This device' });
 }
@@ -133,7 +137,7 @@ export function claimPage(): string {
 <section id="link" hidden><h1>Link your WhatsApp</h1><p>On your phone: WhatsApp → Settings → Linked devices → Link a device, and scan this.</p><div class="qr" id="qr"></div></section>
 <section id="code" hidden><h1>Check your WhatsApp</h1><p>I sent a 6-digit code to <strong id="sentTo"></strong>, in your chat with yourself.</p><input id="otp" inputmode="numeric" autocomplete="one-time-code" maxlength="6" aria-label="Code"><button class="primary" id="verify">Claim this Omni</button></section>
 <section id="done" hidden><h1>This Omni is yours</h1><p>Make signing in a touch: use this device's fingerprint or face instead of a code.</p><button class="primary" id="passkey">Use my fingerprint or face</button>
-<p style="margin-top:18px">Next, open Omni on your computer and connect an AI. It shows a QR: scan it and send the code to yourself.</p><code class="cmd">npx @automagik/omni desktop</code></section>`,
+<p style="margin-top:18px">That's all on this page. Next, open Omni on your computer and connect it to <strong id="host"></strong>. It shows a QR: scan it with this phone.</p><code class="cmd">npx @automagik/omni desktop</code></section>`,
     `
 const token = new URLSearchParams(location.search).get('token') || '';
 const claim = (method, path, body) => call(method, '/api/v2/login/claim' + path, body, { 'x-omni-claim-token': token });
@@ -183,7 +187,11 @@ $('verify').onclick = async () => {
     if (!passkeysAvailable()) $('passkey').hidden = true;
   } catch (e) { speak('That is not the code I sent. Try again?'); say(e.message, true); }
 };
-$('passkey').onclick = async () => { try { await addPasskey(); glitch(); speak('Got it. Next time, just a touch.'); $('passkey').hidden = true; } catch (e) { say(e.message, true); } };
+$('host').textContent = location.host;
+$('passkey').onclick = async () => {
+  try { await addPasskey(); glitch(); speak('Got it. Next time, just a touch. You can close this page.'); $('passkey').hidden = true; say(''); }
+  catch (e) { say(e.name === 'InvalidStateError' ? 'This device already has a passkey for this Omni.' : e.message, true); $('passkey').hidden = e.name === 'InvalidStateError'; }
+};
 start();`,
     ['Claim', 'Connect AI', 'Your devices'],
   );
