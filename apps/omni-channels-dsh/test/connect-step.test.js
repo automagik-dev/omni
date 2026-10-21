@@ -142,7 +142,15 @@ test('the step registers on settings.onboarding with its stage styles', async ()
       register: (options, component) => { registered.push({ ...options, component }); return () => {} },
     },
   })
-  assert.deepEqual(effects, ['omni-ui: onboarding stage styles'])
+  assert.deepEqual(effects, ['omni-ui: onboarding stage styles', 'omni-channels: omni-connect on the rail'])
+  // The rail names the steps announced beside this one: alone, just Connect Omni.
+  const { announceStep, railSteps } = module.exports
+  const scope = {}
+  const labels = () => JSON.parse(JSON.stringify(railSteps(scope))).map(([, label]) => label)
+  assert.deepEqual(labels(), ['Connect Omni'])
+  announceStep('omni-connect-ai', scope)
+  announceStep('omni-welcome', scope)
+  assert.deepEqual(labels(), ['Welcome', 'Connect Omni', 'Connect AI'])
   assert.deepEqual(injected, ['settings.onboarding'])
   assert.equal(registered.length, 1)
   assert.deepEqual({ ...registered[0], component: typeof registered[0].component }, { name: 'settings.onboarding', id: 'omni-connect', order: -250, component: 'function' })

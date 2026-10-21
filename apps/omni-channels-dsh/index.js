@@ -15,7 +15,7 @@ import * as omni from './src/host/omni.js'
 import * as omniEvents from './src/host/omni-events.js'
 
 export const name = 'omni-channels'
-export const inject = ['omniTeam', 'tools', 'sessions']
+export const inject = ['omniTeam', 'tools', 'sessions', 'settings']
 
 // The team's install order, kept: automations and Omni's tools first, the link and its
 // events after.

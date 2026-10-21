@@ -3488,8 +3488,17 @@ async function skipConnect({ complete }, { omniAi = callOmniAi, storage = localS
 // src/client/connect-step.js
 var import_react5 = require("react");
 var import_react_dom = require("react-dom");
-var RAIL = ["Welcome", "Connect Omni", "Connect AI"];
-var AT = 1;
+var RAIL = [["omni-welcome", "Welcome"], ["omni-connect", "Connect Omni"], ["omni-connect-ai", "Connect AI"]];
+var ANNOUNCED = /* @__PURE__ */ Symbol.for("automagik.omni.onboarding-steps");
+function announceStep(id, scope = globalThis) {
+  const steps = scope[ANNOUNCED] ??= /* @__PURE__ */ new Set();
+  steps.add(id);
+  return () => steps.delete(id);
+}
+function railSteps(scope = globalThis) {
+  const steps = scope[ANNOUNCED];
+  return RAIL.filter(([id]) => id === CONNECT_STEP.id || steps?.has(id) === true);
+}
 var PAIRED_BEAT_MS = 1600;
 var reducedMotion = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 var OCTOPUS = CHARACTERS.octopus;
@@ -3562,11 +3571,14 @@ function Stage({ title, speech, glitching, children }) {
         (0, import_react5.createElement)("span", { className: "oxs-hidden", role: "status" }, speech),
         (0, import_react5.createElement)("span", { "aria-hidden": "true" }, shown, shown.length < speech.length ? (0, import_react5.createElement)("span", { className: "oxs-caret" }) : null)
       ),
-      (0, import_react5.createElement)("ol", { className: "oxs-rail", "aria-label": t("Setup steps") }, RAIL.map((label, index) => (0, import_react5.createElement)("li", {
-        key: label,
-        className: index < AT ? "oxs-done" : index === AT ? "oxs-on" : "",
-        "aria-current": index === AT ? "step" : void 0
-      }, t(label)))),
+      (0, import_react5.createElement)("ol", { className: "oxs-rail", "aria-label": t("Setup steps") }, railSteps().map(([id, label], index, steps) => {
+        const at = steps.findIndex(([step]) => step === CONNECT_STEP.id);
+        return (0, import_react5.createElement)("li", {
+          key: id,
+          className: index < at ? "oxs-done" : index === at ? "oxs-on" : "",
+          "aria-current": index === at ? "step" : void 0
+        }, t(label));
+      })),
       (0, import_react5.createElement)(
         "main",
         { className: "oxs-card" },
@@ -3695,6 +3707,7 @@ function installStageStyles() {
 }
 function registerConnectStep(ctx) {
   ctx.effect(installStageStyles, "omni-ui: onboarding stage styles");
+  ctx.effect(() => announceStep(CONNECT_STEP.id), "omni-channels: omni-connect on the rail");
   ctx.slots.inject("settings.onboarding", () => ctx.slots.register({ name: "settings.onboarding", id: CONNECT_STEP.id, order: CONNECT_STEP.order }, ConnectOmniStep));
 }
 

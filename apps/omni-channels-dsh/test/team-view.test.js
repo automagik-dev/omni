@@ -58,7 +58,7 @@ function start(team, { models = ['deepseek-v4-flash'], config = {}, channelsConf
 
 test('the plugin is the omni-channels row, on the team it injects', () => {
   assert.equal(plugin.name, 'omni-channels')
-  assert.deepEqual(plugin.inject, ['omniTeam', 'tools', 'sessions'])
+  assert.deepEqual(plugin.inject, ['omniTeam', 'tools', 'sessions', 'settings'])
 })
 
 test('with an omni to operate, the Main Bot runs the automations and no second Bot is made', async (t) => {

@@ -53,13 +53,13 @@ function fakeOmni({ statusCode = 200, claimed = true, whatsapp = true, keyStatus
   return { asked, approve: () => { state = 'approved' }, deny: () => { state = 'denied' } }
 }
 
-function runtime({ omniUrl, profileKey } = {}) {
+function runtime({ omniUrl, profileKey, settings } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'omni-link-'))
   const synced = []
   const rt = {
     home,
     config: omniUrl ? { omni: { url: omniUrl } } : {},
-    ctx: { effect: run => run(), get: name => (name === 'credentials' ? { resolve: async ref => (ref === KEY && profileKey ? { value: profileKey } : undefined) } : undefined) },
+    ctx: { effect: run => run(), settings, get: name => (name === 'credentials' ? { resolve: async ref => (ref === KEY && profileKey ? { value: profileKey } : undefined) } : undefined) },
     syncOmniEvents: () => synced.push(Date.now()),
   }
   installHooks(rt)
@@ -226,4 +226,27 @@ test('a sign-in nobody approved stops at its expiry without asking Omni again', 
   const before = omni.asked.length
   assert.equal((await rt.omniLinkEndpoint('omni-pair-poll')).status, 'expired')
   assert.equal(omni.asked.length, before)
+})
+
+test('a new link adds that Omni\'s market to DSH\'s plugin market, once, when the market is on', async (t) => {
+  const omni = fakeOmni()
+  const updates = []
+  const rows = [{ ns: 'plugin-market', value: { indexes: ['https://example.org/index.json'] }, revision: 3 }]
+  const settings = { describe: () => rows, update: async (ns, patch, revision) => updates.push({ ns, patch, revision }) }
+  const { rt, stop } = runtime({ settings })
+  t.after(stop)
+  await rt.omniLinkEndpoint('omni-pair-start', { url: 'omni.example.com', deviceName: 'Laptop' })
+  omni.approve()
+  assert.equal((await rt.omniLinkEndpoint('omni-pair-poll')).status, 'paired')
+  assert.deepEqual(updates, [{
+    ns: 'plugin-market',
+    patch: { indexes: ['https://example.org/index.json', 'https://omni.example.com/api/market/index.json'] },
+    revision: 3,
+  }])
+  // Already listed, or no market at all: nothing to change.
+  rows[0].value.indexes.push('https://omni.example.com/api/market/index.json')
+  await rt.addOmniMarket('https://omni.example.com')
+  rows.length = 0
+  await rt.addOmniMarket('https://omni.example.com')
+  assert.equal(updates.length, 1)
 })

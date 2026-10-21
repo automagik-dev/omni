@@ -10,8 +10,22 @@ import { call, CHARACTERS, t } from './core.js'
 // own modal, portaled to <body> with #root inert. Every class is prefixed oxs- and the
 // card's theme tokens are set on the overlay, so the stage restyles nothing of DSH's.
 
-const RAIL = ['Welcome', 'Connect Omni', 'Connect AI']
-const AT = 1
+// The rail names only the onboarding steps this DSH has. Each plugin that brings one
+// announces it on a registry shared through globalThis (the same contract as
+// @automagik/omni-ai-dsh's stage.js): this one brings omni-connect.
+const RAIL = [['omni-welcome', 'Welcome'], ['omni-connect', 'Connect Omni'], ['omni-connect-ai', 'Connect AI']]
+const ANNOUNCED = Symbol.for('automagik.omni.onboarding-steps')
+
+export function announceStep(id, scope = globalThis) {
+  const steps = (scope[ANNOUNCED] ??= new Set())
+  steps.add(id)
+  return () => steps.delete(id)
+}
+
+export function railSteps(scope = globalThis) {
+  const steps = scope[ANNOUNCED]
+  return RAIL.filter(([id]) => id === CONNECT_STEP.id || steps?.has(id) === true)
+}
 // How long the stage shows the new link before handing on to the next step.
 const PAIRED_BEAT_MS = 1600
 
@@ -79,11 +93,14 @@ function Stage({ title, speech, glitching, children }) {
       h('div', { className: 'oxs-bubble' },
         h('span', { className: 'oxs-hidden', role: 'status' }, speech),
         h('span', { 'aria-hidden': 'true' }, shown, shown.length < speech.length ? h('span', { className: 'oxs-caret' }) : null)),
-      h('ol', { className: 'oxs-rail', 'aria-label': t('Setup steps') }, RAIL.map((label, index) => h('li', {
-        key: label,
-        className: index < AT ? 'oxs-done' : index === AT ? 'oxs-on' : '',
-        'aria-current': index === AT ? 'step' : undefined,
-      }, t(label)))),
+      h('ol', { className: 'oxs-rail', 'aria-label': t('Setup steps') }, railSteps().map(([id, label], index, steps) => {
+        const at = steps.findIndex(([step]) => step === CONNECT_STEP.id)
+        return h('li', {
+          key: id,
+          className: index < at ? 'oxs-done' : index === at ? 'oxs-on' : '',
+          'aria-current': index === at ? 'step' : undefined,
+        }, t(label))
+      })),
       h('main', { className: 'oxs-card' },
         h('div', { className: 'oxs-mark', 'aria-hidden': 'true' }, 'OMNI'),
         h('h1', { id: 'oxs-title', ref: titleRef, tabIndex: -1 }, title),
@@ -204,5 +221,6 @@ function installStageStyles() {
 // own apply, possibly after this one.
 export function registerConnectStep(ctx) {
   ctx.effect(installStageStyles, 'omni-ui: onboarding stage styles')
+  ctx.effect(() => announceStep(CONNECT_STEP.id), 'omni-channels: omni-connect on the rail')
   ctx.slots.inject('settings.onboarding', () => ctx.slots.register({ name: 'settings.onboarding', id: CONNECT_STEP.id, order: CONNECT_STEP.order }, ConnectOmniStep))
 }

@@ -15,6 +15,8 @@ import { hostname } from 'node:os'
 import { join } from 'node:path'
 
 export const LINK_FILE = 'omni.json'
+export const MARKET_ROW = 'plugin-market'
+export const MARKET_INDEX_PATH = '/api/market/index.json'
 const TIMEOUT_MS = 10_000
 const POLL_TIMEOUT_MS = 30_000
 const DEVICE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code'
@@ -67,7 +69,26 @@ export function install(rt) {
     const temp = `${path}.${process.pid}.tmp`
     await writeFile(temp, `${JSON.stringify(link, null, 2)}\n`, { mode: 0o600 })
     await rename(temp, path)
+    await addOmniMarket(link.url)
   }
+
+  // Each Omni serves a market of its own release's plugins (/api/market/index.json). The
+  // linked one joins DSH's plugin market, when that is on (its plugin-market row), so the
+  // Omni plugins of the right version are a click away. One the user removed stays removed
+  // until the next link.
+  async function addOmniMarket(url) {
+    try {
+      const row = rt.ctx.settings?.describe?.().find(entry => entry.ns === MARKET_ROW)
+      if (row === undefined) return
+      const index = `${url}${MARKET_INDEX_PATH}`
+      const indexes = Array.isArray(row.value?.indexes) ? row.value.indexes : []
+      if (indexes.includes(index)) return
+      await rt.ctx.settings.update(MARKET_ROW, { indexes: [...indexes, index] }, row.revision)
+    } catch (error) {
+      rt.warn?.('omni-channels: the Omni market was not added to the plugin market: %s', error?.message ?? error)
+    }
+  }
+  rt.addOmniMarket = addOmniMarket
 
   async function omniFetch(url, method, path, { body, bearer, timeoutMs = TIMEOUT_MS } = {}) {
     let response
