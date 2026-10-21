@@ -58,7 +58,7 @@ export function cleanOmniUrl(text) {
 const linkOf = (value) => {
   const url = cleanOmniUrl(value?.url)
   return url && typeof value?.key === 'string' && value.key.length > 0
-    ? { url, key: value.key, keyId: value.keyId ?? null, scopes: Array.isArray(value.scopes) ? value.scopes : [], pairedAt: value.pairedAt ?? null, keyExpiresAt: value.keyExpiresAt ?? null, marketOffered: value.marketOffered === true }
+    ? { url, key: value.key, keyId: value.keyId ?? null, scopes: Array.isArray(value.scopes) ? value.scopes : [], pairedAt: value.pairedAt ?? null, keyExpiresAt: value.keyExpiresAt ?? null, marketOffered: value.marketOffered === true, marketUrl: typeof value.marketUrl === 'string' ? value.marketUrl : null }
     : null
 }
 
@@ -85,7 +85,8 @@ export function install(rt) {
   // `typed` is the address the user typed: the market is offered there, not wherever the
   // Omni's reply points.
   async function saveLink(link, typed = link.url) {
-    await writeLink({ ...link, marketOffered: await addOmniMarket(typed) })
+    const offered = await addOmniMarket(typed)
+    await writeLink({ ...link, marketOffered: offered, marketUrl: offered ? typed : null })
   }
 
   async function marketRow() {
@@ -123,7 +124,7 @@ export function install(rt) {
     if (!(await addOmniMarket(link.url))) return
     // A pairing or a disconnect while the market was being updated wins over this mark.
     const now = rt.omniLink()
-    if (now?.url === link.url && now.key === link.key && !now.marketOffered) await writeLink({ ...now, marketOffered: true })
+    if (now?.url === link.url && now.key === link.key && !now.marketOffered) await writeLink({ ...now, marketOffered: true, marketUrl: link.url })
   }
 
   // Disconnecting takes that Omni's market back out of the plugin market.
@@ -279,7 +280,8 @@ export function install(rt) {
   async function disconnect() {
     const link = rt.omniLink()
     await rm(path, { force: true })
-    if (link !== null) await removeOmniMarket(link.url)
+    // The market where it was added, which can differ from the Omni's own API address.
+    if (link?.marketUrl) await removeOmniMarket(link.marketUrl)
     rt.syncOmniEvents?.()
     return { status: 'disconnected' }
   }
