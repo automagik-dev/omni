@@ -1,8 +1,8 @@
 #!/bin/sh
 # One-command check of this checkout on both ends, with the mock model only:
-#   unit     npm test
-#   build    client.js matches src/client (build-client.mjs --check)
-#   lint     npm run lint (warnings do not fail)
+#   unit     npm test, here and in the Omni channels and canvas plugins beside it
+#   build    each client.js matches its src/client (build-client.mjs --check)
+#   lint     npm run lint in each (warnings do not fail)
 #   smoke    a fresh smoke bench and dev/smoke.mjs
 #   web      a fresh Web bench and dev/ui-shots.mjs (sidebar, private chat, group, settings)
 #   desktop  a fresh Desktop (desktop-linux/desktop.sh), the same shots, browser-check.mjs,
@@ -49,7 +49,9 @@ if [ -z "${DSH_HARNESS:-}" ]; then
   [ -d "$DSH_HARNESS" ] || DSH_HARNESS="$MAIN/deepseek-harness"
   [ -d "$DSH_HARNESS" ] || DSH_HARNESS="$(dirname "$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir)")/deepseek-harness"
 fi
-export DSH_HARNESS
+# Without a checkout the unit and lint steps use each plugin's own dev/harness (npm run
+# harness); the benches need the checkout.
+if [ -d "$DSH_HARNESS" ]; then export DSH_HARNESS; else unset DSH_HARNESS; fi
 WEB_PORT=31${SLOT}0 WEB_MOCK=88${SLOT}0 SMOKE_PORT=31${SLOT}1 SMOKE_MOCK=88${SLOT}1
 DESKTOP="$PLUGIN/dev/desktop-linux/desktop.sh"
 
@@ -83,9 +85,20 @@ need_ports() {
   done
 }
 
-step_unit() { cd "$PLUGIN" && npm test; }
-step_build() { cd "$PLUGIN" && node scripts/build-client.mjs --check; }
-step_lint() { cd "$PLUGIN" && npm run lint; }
+# This plugin, then the Omni channels and canvas plugins that sit on it, where present.
+PLUGINS="$PLUGIN"
+for other in omni-channels-dsh omni-canvas-dsh; do [ -d "$ROOT/$other" ] && PLUGINS="$PLUGINS $ROOT/$other"; done
+each() {
+  status=0
+  for dir in $PLUGINS; do
+    echo "-- $dir"
+    (cd "$dir" && "$@") || status=1
+  done
+  return $status
+}
+step_unit() { each npm test; }
+step_build() { each node scripts/build-client.mjs --check; }
+step_lint() { each npm run lint; }
 step_smoke() {
   cd "$PLUGIN" || return 1
   dev/bench.sh check-smoke "$SMOKE_PORT" "$SMOKE_MOCK" stop >/dev/null

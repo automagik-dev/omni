@@ -34,7 +34,7 @@ export function fakeContext({ services = {} } = {}) {
     listeners,
     sections,
     logger: { warn() {}, info() {} },
-    get: name => services[name],
+    get: name => services[name] ?? ctx.provided.get(name),
     on(name, listener, options) {
       calls.push(`on ${name}${options?.prepend ? ' (prepend)' : ''}`)
       listeners.set(name, [...(listeners.get(name) ?? []), listener])
@@ -84,6 +84,12 @@ export function fakeContext({ services = {} } = {}) {
       },
     },
     llm: { listProviders: () => [] },
+    provided: new Map(),
+    provide(name, value) {
+      calls.push(`provide ${name}`)
+      ctx.provided.set(name, value)
+      return () => {}
+    },
   }
   return ctx
 }

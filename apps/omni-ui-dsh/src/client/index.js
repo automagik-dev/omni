@@ -1,19 +1,17 @@
 import { call } from './api.js'
-import { installFavicon } from './logo.js'
-import { OMNI_UI_CSS, OmniCanvas } from './omni-ui.js'
+import { OmniMark, installFavicon } from './logo.js'
+import * as icons from './icons.js'
 import { setCanvasRenderer } from './canvas-slot.js'
-import { OMNI_LIVE_CSS } from './omni-live.js'
-import { OMNI_PEEK_CSS } from './omni-peek.js'
-import { OMNI_CONNECT_CSS } from './omni-connect.js'
-import { registerConnectStep } from './connect-step.js'
+import { badges, headerButtons, mountShellInstallers, nav, onShell, toolCards } from './extend.js'
+import { TASK_CSS } from './task-card.js'
 import { isHex, inkText, paintCss } from './inks.js'
-import { DEFAULT_MASK, SHAPES, markupCache, maskOf } from './characters.js'
+import { CHARACTERS, DEFAULT_MASK, MAIN_LOOK, SHAPES, markupCache, maskOf } from './characters.js'
 import { countCards, createSource, EMPTY_ROSTER, indexRoster, isAgentSession } from './sources.js'
 import { themeCss, shellTokens, registry, registerShape, registerTheme, allThemes } from './themes.js'
-import { MENTION_ORIGIN, currentPart } from './text.js'
+import { MENTION_ORIGIN, currentPart, relativeShort } from './text.js'
 import { SHELL_CSS, CONVERSATION_CSS, installStyles, installCompiledStyles } from './styles.js'
-import { lookOf } from './mark.js'
-import { TeamSidebar, ChannelsFooter, YouAvatar, AccountLauncher, FooterAccount, BrandMark, BrandName, BotReturn, SIDEBAR_CSS, RETURN_CSS, holdShellShortcuts } from './sidebar.js'
+import { BotMark, lookOf } from './mark.js'
+import { TeamSidebar, ChannelsMoved, YouAvatar, AccountLauncher, FooterAccount, BrandMark, BrandName, BotReturn, SIDEBAR_CSS, RETURN_CSS, holdShellShortcuts } from './sidebar.js'
 import { HeaderPill } from './header.js'
 import { ComposerPlus, ComposerVoice, menuIcons } from './composer.js'
 import { CHATS_SOURCE, atSources } from './at-menu.js'
@@ -34,26 +32,39 @@ import { SCHEDULE_CSS } from './schedules.js'
 import { STORAGE, migrateStorage } from './storage.js'
 import { noteLeft, setUnread, sharedMap, toggleReaction } from './shared-map.js'
 import { freePriority, groupsFor, readMode, surfaceGroups, writeMode } from './surface.js'
-import { dateLocale, installLocale, language, t } from './i18n.js'
+import { addStrings, dateLocale, hostText, installLocale, language, t } from './i18n.js'
 import { noteClientError, quietly } from './diagnostics.js'
 import { ErrorToast, FEEDBACK_CSS } from './feedback.js'
 import { ABOUT_CSS } from './about.js'
 import { MEMBER_CSS, MemberDock } from './member-status.js'
 import { USER_MESSAGE_CSS, UserMessageCell, canDrawUserMessages } from './user-message.js'
-import { CHANNELS_CSS, ChannelsPage, ChatPage } from './channels.js'
-import { BOARD_KIND, BOARD_TAB_ID, BoardTab, SUBSCRIPTIONS_CSS, boardTabDefinition, isEventsBot } from './subscriptions.js'
-import { CHANNELS_PANEL, CHAT_PANEL } from './omni-store.js'
-import { AUTOMATIONS_CSS, AUTOMATIONS_PANEL, AutomationsPage } from './automations-page.js'
 import { noticeApprovals } from './approval-notices.js'
 
 export const inject = ['sessions', 'uiWorkspace', 'uiConversation', 'slots', 'theme', 'layout']
+// What a state answer carries that is not roster data, or is kept apart from it.
+const LIVE_OWN = new Set(['revision', 'unchanged', 'activity', 'work', 'memoryNews', 'memoryReviews'])
+
+// What other Omni plugins build on (the channels and canvas plugins, which require this
+// bundle through `dsh.client.external`). They share this module instance: one interface
+// dictionary, one roster, and the registries of extend.js.
+let currentFace = null
+export const omni = Object.freeze({
+  // The host's POST /api/omni-ui, which their own host halves extend.
+  call,
+  // Copy in this plugin's namespace; addStrings brings a plugin's Chinese copy.
+  t, addStrings, hostText, language, dateLocale,
+  // The Bot surface: what runs while it is up, and what draws in its places.
+  onShell, toolCards, nav, badges, headerButtons, setCanvasRenderer,
+  // Parts of the Bot surface a plugin's own views are drawn with.
+  ui: Object.freeze({ icons, OmniMark, BotMark, MAIN_LOOK, CHARACTERS, relativeShort, createSource }),
+  // The roster and actions of the running surface, or null before it runs.
+  face: () => currentFace?.() ?? null,
+})
 
 export function apply(ctx) {
   ctx.effect(() => installLocale(ctx.get('locale')), 'ds-bot: interface copy')
   const roster = createSource(EMPTY_ROSTER)
   migrateStorage()
-  // Onboarding: Connect Omni, between omni-ai's welcome and Connect AI when it is installed.
-  registerConnectStep(ctx)
   const unreadStore = sharedMap(STORAGE.unread)
   const reactionStore = sharedMap(STORAGE.reactions)
   // When each conversation was last left; a visit compares new turns against it.
@@ -156,11 +167,17 @@ export function apply(ctx) {
     if (nextWork !== workKey) { workKey = nextWork; work.set(value.work ?? { bots: {}, approvals: [] }) }
     noteMemoryNews(value.memoryNews ?? {})
     const current = roster.getSnapshot()
-    // Connector and capability states change without a new revision.
+    // Connector and capability states change without a new revision, and so does what
+    // other Omni plugins add to every answer (the host's extend.js), such as the events
+    // Omni listens to: an unchanged answer carries only those.
     const live = {}
     if (value.connectors !== undefined && JSON.stringify(value.connectors) !== JSON.stringify(current.connectors ?? [])) live.connectors = value.connectors
     if (value.capabilityStatuses !== undefined && JSON.stringify(value.capabilityStatuses) !== JSON.stringify(current.capabilityStatuses ?? {})) live.capabilityStatuses = value.capabilityStatuses
-    if (value.omniEvents !== undefined && JSON.stringify(value.omniEvents) !== JSON.stringify(current.omniEvents ?? {})) live.omniEvents = value.omniEvents
+    if (value.unchanged) {
+      for (const [key, next] of Object.entries(value)) {
+        if (!LIVE_OWN.has(key) && !(key in live) && JSON.stringify(next) !== JSON.stringify(current[key])) live[key] = next
+      }
+    }
     if (Object.keys(live).length > 0 && current.ready) roster.set({ ...current, ...live })
     if (value.unchanged || (value.revision === current.revision && value.modelsKey === current.modelsKey)) return
     // On a browser with no visit record yet, everything already there counts as seen.
@@ -766,44 +783,6 @@ export function apply(ctx) {
     })
     return () => fiber.dispose()
   }
-  // Omni's automations board is a tab of DSH's right sidebar, which may load after this plugin.
-  // The first time Omni's chat is on screen in a browser, its board opens; after that
-  // the Session's own sidebar layout (open, closed, other tabs) is the user's.
-  let boardRight = null
-  const BOARD_OPENED = 'omni.board.opened'
-  const installBoard = () => {
-    const fiber = ctx.inject(['sidebarRight', 'sidebarRightTabs'], (scope) => {
-      scope.effect(() => scope.sidebarRightTabs.register(boardTabDefinition()), 'ds-bot: subscriptions tab type')
-      scope.effect(() => ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register({ name: 'sidebar.right.pane.tab', key: BOARD_TAB_ID, inject: face }, BoardTab)), 'ds-bot: subscriptions tab')
-      scope.effect(() => {
-        const right = scope.sidebarRight
-        boardRight = right
-        let opened
-        try { opened = new Set(JSON.parse(localStorage.getItem(BOARD_OPENED) ?? '[]')) } catch { opened = new Set() }
-        const check = () => {
-          const id = right.mounted.getSnapshot()
-          if (!id || opened.has(id) || !isEventsBot(roster.getSnapshot(), id)) return
-          opened.add(id)
-          try { localStorage.setItem(BOARD_OPENED, JSON.stringify([...opened])) } catch { /* storage unavailable */ }
-          queueMicrotask(() => { try { right.openTab(BOARD_KIND) } catch (error) { console.warn('[ds-bot] board', error) } })
-        }
-        const offs = [right.mounted.subscribe(check), roster.subscribe(check)]
-        check()
-        return () => { boardRight = null; for (const off of offs) off() }
-      }, 'ds-bot: open the automations board')
-    })
-    return () => fiber.dispose()
-  }
-  actions.toggleBoard = () => {
-    const right = boardRight
-    if (!right) return
-    try {
-      if (right.isExpanded() && right.active()?.kind === BOARD_KIND) right.toggleExpanded()
-      else right.openTab(BOARD_KIND)
-    } catch (error) {
-      actions.reportError(error, 'board')
-    }
-  }
   actions.canReferenceChat = () => atMenu !== null
   actions.referenceChat = (sessionId, span) => {
     const controller = atMenu?.controllerOf(sessionId)
@@ -825,14 +804,17 @@ export function apply(ctx) {
     () => installCompiledStyles(ABOUT_CSS, 'about'),
     () => installCompiledStyles(MEMBER_CSS, 'members'),
     () => installCompiledStyles(USER_MESSAGE_CSS, 'user-messages'),
-    () => installCompiledStyles(CHANNELS_CSS + SUBSCRIPTIONS_CSS + AUTOMATIONS_CSS + OMNI_LIVE_CSS + OMNI_UI_CSS + OMNI_PEEK_CSS + OMNI_CONNECT_CSS, 'channels'),
+    () => installCompiledStyles(TASK_CSS, 'tasks'),
+    // What other Omni plugins put on the surface (extend.js), where Omni's channels were.
+    () => mountShellInstallers({ face, shadow, installStyles, installCompiledStyles }),
     browsers ? () => installCompiledStyles(BROWSER_CSS, 'browser') : null,
     () => installTheme(),
     () => shadow('sidebar.workspaces', { priority: BOT_PRIORITY, inject: face }, TeamSidebar),
     () => shadow('sidebar.brand.mark', { priority: BOT_PRIORITY }, BrandMark),
     () => shadow('sidebar.brand.name', { priority: BOT_PRIORITY }, BrandName),
     () => shadow('sidebar.footer.action', { id: 'bot-account', order: -200, inject: face }, FooterAccount),
-    () => shadow('sidebar.footer.action', { id: 'bot-connect', order: -100, inject: face }, ChannelsFooter),
+    // Shown only when the team is linked to an Omni without the channels plugin.
+    () => shadow('sidebar.footer.action', { id: 'bot-channels-moved', order: -100, inject: face }, ChannelsMoved),
     () => shadow('settings.trigger', { priority: BOT_PRIORITY }, YouAvatar),
     // The whale wins the seat over a shell account plugin's own launcher (the
     // Desktop's "··· More"), which comes back in Agent mode.
@@ -840,12 +822,6 @@ export function apply(ctx) {
     () => shadow('shell.overlay', { id: 'bot', order: 50, inject: face }, Overlays),
     () => shadow('shell.overlay', { id: 'bot-signin', order: 55, inject: face }, DeepSeekSignIn),
     () => shadow('shell.overlay', { id: 'bot-toast', order: 60, inject: face }, ErrorToast),
-    // Omni chats and the Channels page are main panels, like the shell's Plugins page:
-    // they replace the conversation in the center, and opening a Bot brings it back.
-    () => shadow('main', { key: CHANNELS_PANEL, inject: face }, ChannelsPage),
-    () => shadow('main', { key: CHAT_PANEL, inject: face }, ChatPage),
-    () => shadow('main', { key: AUTOMATIONS_PANEL, inject: face }, AutomationsPage),
-    () => installBoard(),
   ]
   // DSH draws the user's own messages itself here (no projectUserText), so each one gets the
   // time its turn began as an attribute, and CSS prints it under the bubble.
@@ -919,7 +895,8 @@ export function apply(ctx) {
   }, 'ds-bot: return styles')
   shadow('sidebar.footer.action', { id: 'bot-return', order: -300, inject: face }, BotReturn)
   ctx.effect(() => installFavicon(), 'ds-bot: Omni tab icon')
-  ctx.effect(() => setCanvasRenderer(OmniCanvas), 'ds-bot: canvases')
+  currentFace = face
+  ctx.effect(() => () => { if (currentFace === face) currentFace = null }, 'ds-bot: face for other Omni plugins')
 
   // The main view decides `plain`: a DSH Agent Session keeps the Bot shell but
   // withdraws the conversation replacements, so the native dsh page shows. A jump

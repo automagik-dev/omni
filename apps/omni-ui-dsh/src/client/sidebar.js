@@ -1,20 +1,16 @@
-import { createElement as h, Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { createElement as h, Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { OmniMark, OmniWordmark } from './logo.js'
 import { isMainOf } from './sources.js'
 import { currentPart, previewOf, relativeShort } from './text.js'
-import { PlusIcon, SearchIcon, SidebarIcon, GaugeIcon, PlugIcon, ClockIcon, GearIcon, PinMarkIcon, ConnectorIcon, SwitchIcon, CloudDownloadIcon, TasksIcon } from './icons.js'
+import { PlusIcon, SearchIcon, SidebarIcon, GaugeIcon, PlugIcon, GearIcon, PinMarkIcon, ConnectorIcon, SwitchIcon, CloudDownloadIcon, TasksIcon } from './icons.js'
 import { botState, BotAvatar, RoomAvatar } from './mark.js'
 import { reducedMotion } from './activity-row.js'
 import { Shimmer, workPhrase } from './cells.js'
 import { springEasing, SPRING_SHAPE } from './motion.js'
 import { hostText, t } from './i18n.js'
 import { showsDshRow } from './dsh-offer.js'
-import { EventsBadge } from './subscriptions.js'
-import { AUTOMATIONS_PANEL } from './automations-page.js'
-import { Tile } from './channels.js'
-import { CHANNELS_PANEL, healthSummary, omniStore, startLive } from './omni-store.js'
-import { call } from './api.js'
+import { badges, nav, useEntries } from './extend.js'
 
 // -------------------------------------------------------------------------
 // Sidebar
@@ -92,9 +88,15 @@ function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessio
     awayLine ? h('span', { className: 'bt-row-preview' }, awayLine)
       : waitsFor ? h('span', { className: 'bt-row-preview' }, waitsFor)
         : preview ? h('span', { className: 'bt-row-preview' }, preview) : null) : null,
-  // Omni's row also counts the subscription runs waiting for your approval.
-  wide && id === roster.eventsBotId ? h(EventsBadge, { roster, useWork }) : null,
+  // Badges other Omni plugins add (extend.js): Omni's row counts the automation runs waiting for you.
+  wide ? h(RowBadges, { bot, roster, useWork }) : null,
   wide && unread && !active ? h('span', { className: 'bt-unread', 'aria-hidden': true }) : null)
+}
+
+// What other Omni plugins add at the end of a Bot's row (extend.js).
+function RowBadges(props) {
+  const entries = useEntries(badges)
+  return entries.map(entry => h(entry.Component, { key: entry.id, ...props }))
 }
 
 function RoomRow({ room, roster, actions, useSessions, useSessionStatus, useSessionRetainInfo, useWork, wide, marked }) {
@@ -389,18 +391,15 @@ function UpdateButton({ useUpdate, actions }) {
                 }, dshPhase === 'installing' ? t('Updating…') : dshPhase === 'failed' ? t('Try again') : t('Update')))) : null), document.body) : null)
 }
 
-// The footer's way into channel management: the connected channels as small tiles, a dot
-// when one needs attention, and the Channels page (connect, health) on click.
-export function ChannelsFooter({ wide, actions }) {
-  const state = useSyncExternalStore(omniStore.subscribe, omniStore.getSnapshot, omniStore.getSnapshot)
-  useEffect(() => { startLive(call) }, [])
-  if (!wide) return null
-  const summary = healthSummary(state)
-  const label = summary.attention > 0 ? t('{n} channel needs attention', { n: summary.attention }) : t('Channels and their health')
-  return h('span', { className: 'bt-connect-wrap' }, h('button', { type: 'button', className: 'bt-connect bt-connect-foot bt-channels-foot', title: label, 'aria-label': `${t('Channels')}, ${label}`, onClick: () => actions.selectPanel(CHANNELS_PANEL) },
-    h('span', { className: 'bt-channels-tiles', 'aria-hidden': true }, state.channels.slice(0, 4).map(channel => h(Tile, { key: channel.id, type: channel.type, size: 18 }))),
-    t('Channels'),
-    summary.attention > 0 ? h('span', { className: 'oc-warn-dot', 'aria-hidden': true }) : h('span', { className: 'bt-channels-count' }, `${summary.connected}/${summary.total}`)))
+// Where the channels went: a team linked to an Omni whose DSH lacks the Omni channels
+// plugin (the host's channelsMoved) is pointed at the plugin market, in the footer seat the
+// channels had.
+export function ChannelsMoved({ wide, actions, useRoster }) {
+  const moved = useRoster(value => value.channelsMoved === true)
+  if (!wide || !moved) return null
+  const label = t('Channels moved to the Omni channels plugin. Install it from the market.')
+  return h('span', { className: 'bt-connect-wrap' }, h('button', { type: 'button', className: 'bt-connect bt-connect-foot bt-channels-moved', title: label, 'aria-label': label, onClick: () => actions.selectPanel('plugins') },
+    h(PlugIcon), t('Get the channels plugin')))
 }
 
 // Account seat of the Settings trigger: the visible label stays for assistive tech only.
@@ -472,6 +471,7 @@ function pressSettingsShortcut() {
 // back in Agent mode; FooterAccount stands in while no seat exists at all.
 export function AccountLauncher({ seat = true, settingsOpen, openSettings, openOnboarding, actions }) {
   const [open, setOpen] = useState(false)
+  const navRows = useEntries(nav)
   useLayoutEffect(() => {
     if (!seat) return undefined
     actions.seatAccount(true)
@@ -512,7 +512,8 @@ export function AccountLauncher({ seat = true, settingsOpen, openSettings, openO
       [t('Usage'), GaugeIcon, () => actions.openSettings('usage')],
       [t('Plugins'), PlugIcon, () => actions.selectPanel('plugins')],
       [t('Connectors'), ConnectorIcon, () => actions.openConnectors()],
-      [t('Automations'), ClockIcon, () => actions.selectPanel(AUTOMATIONS_PANEL)],
+      // Rows other Omni plugins add (extend.js), such as Automations.
+      ...navRows.map(row => [row.label(), row.icon, () => row.run(actions)]),
       [t('Bot settings'), GearIcon, () => actions.openSettings('general')],
     ],
     [
@@ -610,15 +611,10 @@ export const SIDEBAR_CSS = `
 [class*="_footArea"]:has(.bt-foot-account){grid-template-columns:auto minmax(0,1fr) auto;column-gap:6px}
 [class*="_footArea"]>[class*="_footerActions"]>div>.bt-foot-account{grid-column:1;order:1;display:inline-flex}
 [class*="_footArea"]:has(.bt-foot-account)>[class*="_footerActions"]>div>.bt-connect-wrap{grid-column:2}
+.bt-channels-moved{gap:8px;justify-content:flex-start;padding:0 12px}
 [class*="_footArea"]:has(.bt-foot-account)>[class*="_settingsArea"]{grid-column:3}
 [class*="_footArea"]:has(.bt-foot-account)>[class*="_settingsArea"] button[class*="_trigger"] [class*="_label"]{display:none!important}
 
-.bt-channels-foot{gap:8px;justify-content:flex-start;padding:0 12px 0 8px}
-.bt-channels-tiles{display:inline-flex}
-.bt-channels-tiles .oc-tile{margin-left:-5px;box-shadow:0 0 0 1.5px var(--bt-main)}
-.bt-channels-tiles .oc-tile:first-child{margin-left:0}
-.bt-channels-count{margin-left:auto;font-size:12px;color:var(--bt-ink-3)}
-.bt-channels-foot .oc-warn-dot{margin-left:auto}
 
 /* The update cloud springs in when a newer Omni shows up; its arrow drops in a
    loop while the install runs. */

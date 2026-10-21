@@ -1,7 +1,7 @@
 {
   "name": "@automagik/omni-dsh",
   "version": "2.261019.10",
-  "description": "Omni for DeepSeek Harness: your Omni channels, chats and automations in DSH, with Omni as the operator Bot",
+  "description": "Omni for DeepSeek Harness: a team of long-lived Bots with Omni as the Main Bot; its channels and canvases come with @automagik/omni-channels-dsh and @automagik/omni-canvas-dsh",
   "keywords": [
     "dsh-plugin",
     "deepseek-harness",
@@ -62,10 +62,6 @@
     }
   },
   "devDependencies": {
-    "@openuidev/lang-core": "0.2.18",
-    "@openuidev/react-lang": "0.2.15",
-    "esbuild": "0.28.2",
-    "qrcode-generator": "2.0.4",
-    "zod": "4.6.5"
+    "esbuild": "0.28.2"
   }
 }

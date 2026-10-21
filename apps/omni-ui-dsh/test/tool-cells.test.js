@@ -29,6 +29,7 @@ const react = {
   useLayoutEffect: (effect) => { effects.push(effect) },
   useState: initial => [typeof initial === 'function' ? initial() : initial, value => sets.push(value)],
   useMemo: make => make(), useRef: current => ({ current }), useId: () => 'card-id',
+  useSyncExternalStore: (_subscribe, snapshot) => snapshot(),
 }
 const timers = new Set()
 const module = { exports: {} }
