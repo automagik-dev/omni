@@ -9,7 +9,7 @@
 // It is apart from a dsh you already run (~/.dsh) and from the Omni UI plugin installed
 // into that one (~/.omni/ui), so neither sees the other's Bots or Sessions.
 import { spawn } from 'node:child_process'
-import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { homedir } from 'node:os'
 import { delimiter, join, resolve } from 'node:path'
@@ -121,11 +121,14 @@ export function installProfile({ dshHome, source }) {
     mkdirSync(join(dshHome, 'profiles'), { recursive: true })
     cpSync(source, target, { recursive: true })
   } else {
-    rmSync(join(target, 'node_modules'), { recursive: true, force: true })
-    cpSync(join(source, 'node_modules'), join(target, 'node_modules'), { recursive: true })
-    for (const file of ['package.json', '.build-id']) {
-      if (existsSync(join(source, file))) cpSync(join(source, file), join(target, file))
+    // Only the packages the app ships are replaced: a plugin the user installed (the market,
+    // Settings → Plugins) stays, with its dependencies, and in package.json.
+    for (const name of packagesIn(join(source, 'node_modules'))) {
+      rmSync(join(target, 'node_modules', name), { recursive: true, force: true })
+      cpSync(join(source, 'node_modules', name), join(target, 'node_modules', name), { recursive: true })
     }
+    writeFileSync(join(target, 'package.json'), mergeProfilePackage(readJson(join(target, 'package.json')), readJson(join(source, 'package.json'))))
+    if (existsSync(join(source, '.build-id'))) cpSync(join(source, '.build-id'), join(target, '.build-id'))
     for (const file of ['cordis.patch.yml', 'pnpm-workspace.yaml']) {
       if (!existsSync(join(target, file)) && existsSync(join(source, file))) cpSync(join(source, file), join(target, file))
     }
@@ -136,6 +139,36 @@ export function installProfile({ dshHome, source }) {
   }
   writeFileSync(marker, stamp)
   return { target, installed: true }
+}
+
+const readJson = (file) => {
+  try {
+    return JSON.parse(readFileSync(file, 'utf8'))
+  } catch {
+    return {}
+  }
+}
+
+// The packages in a node_modules folder, scoped ones as @scope/name; npm's and pnpm's own
+// dot files are not packages.
+function packagesIn(dir) {
+  if (!existsSync(dir)) return []
+  return readdirSync(dir).filter(name => !name.startsWith('.')).flatMap(name =>
+    name.startsWith('@') ? readdirSync(join(dir, name)).map(inner => `${name}/${inner}`) : [name])
+}
+
+/**
+ * The shipped profile package.json with what the user added on top: dependencies and
+ * bundles the shipped one does not name keep their place after the shipped ones.
+ */
+export function mergeProfilePackage(user, shipped) {
+  const merged = structuredClone(shipped)
+  const extraDependencies = Object.entries(user?.dependencies ?? {}).filter(([name]) => !Object.hasOwn(shipped.dependencies ?? {}, name))
+  if (extraDependencies.length > 0) merged.dependencies = { ...shipped.dependencies, ...Object.fromEntries(extraDependencies) }
+  const shippedBundles = shipped.dsh?.profile?.bundles ?? []
+  const extraBundles = (user?.dsh?.profile?.bundles ?? []).filter(name => !shippedBundles.includes(name))
+  if (extraBundles.length > 0) merged.dsh.profile.bundles = [...shippedBundles, ...extraBundles]
+  return `${JSON.stringify(merged, null, 2)}\n`
 }
 
 /** A loopback port nobody listens on. */
@@ -161,7 +194,8 @@ export function launchUrlOf(text, port) {
 export function dshEnv({ base = process.env, home, electronAsNode = false, binDir }) {
   return {
     ...base,
-    ...(binDir ? { PATH: [binDir, base.PATH].filter(Boolean).join(delimiter) } : {}),
+    // After the machine's own: a project's commands keep the user's node and pnpm.
+    ...(binDir ? { PATH: [base.PATH, binDir].filter(Boolean).join(delimiter) } : {}),
     DSH_HOME: join(home, 'dsh'),
     OMNI_HOME: home,
     // Signs in to an Omni as the desktop app (the Better Auth device-flow client id).
@@ -174,12 +208,14 @@ export function dshEnv({ base = process.env, home, electronAsNode = false, binDi
 /**
  * Start dsh on 127.0.0.1:`port` and resolve with { child, url } once it prints its launch
  * URL. `node` is the executable that runs dsh: Electron itself (with ELECTRON_RUN_AS_NODE),
- * or a Node in tests. Output goes to `log` (a writable stream) when given.
+ * or a Node in tests. Output goes to `log` (a writable stream) when given. `onSpawn` gets
+ * the process at once, so a quit while dsh starts can stop it.
  */
-export function startDsh({ node, bin, env, port, cwd, log, timeoutMs = READY_TIMEOUT_MS }) {
+export function startDsh({ node, bin, env, port, cwd, log, timeoutMs = READY_TIMEOUT_MS, onSpawn }) {
   const child = spawn(node, [bin, '--profile', PROFILE, '--no-open', '--host', '127.0.0.1', '--port', String(port)], {
     cwd, env, stdio: ['ignore', 'pipe', 'pipe'],
   })
+  onSpawn?.(child)
   const ready = new Promise((done, fail) => {
     let seen = ''
     const timer = setTimeout(() => fail(new Error(`dsh did not start within ${Math.round(timeoutMs / 1000)} s`)), timeoutMs)

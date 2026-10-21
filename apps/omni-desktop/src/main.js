@@ -15,6 +15,8 @@ import { pageLayout, WINDOW_ACTIONS, windowChrome } from './frame.js'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const home = appHome()
 let dsh = null
+// dsh's process from the moment it is spawned: a quit before it is ready still stops it.
+let dshChild = null
 let window = null
 let page = null
 let quitting = false
@@ -37,7 +39,7 @@ function fail(error) {
   quitting = true
   sendState({ status: 'Omni could not start.', problem: true })
   dialog.showErrorBox('Omni could not start', `${error?.message ?? error}\n\nLog: ${join(home, 'logs', 'dsh.log')}`)
-  void stopDsh(dsh?.child).finally(() => app.exit(1))
+  void stopDsh(dshChild).finally(() => app.exit(1))
 }
 
 async function launch() {
@@ -51,7 +53,7 @@ async function launch() {
   const log = createWriteStream(join(home, 'logs', 'dsh.log'), { flags: 'a' })
   // Electron's own binary runs dsh as Node, so the app ships one runtime.
   const binDir = writeTools({ dir: join(home, 'bin'), node: process.execPath, pnpm: resources.pnpm })
-  dsh = await startDsh({ node: process.execPath, bin: resources.bin, env: dshEnv({ home, electronAsNode: true, binDir }), port, cwd: home, log })
+  dsh = await startDsh({ node: process.execPath, bin: resources.bin, env: dshEnv({ home, electronAsNode: true, binDir }), port, cwd: home, log, onSpawn: (child) => { dshChild = child } })
   dsh.child.once('exit', (code) => {
     if (!quitting) fail(new Error(`dsh stopped (${code}).`))
   })
@@ -70,6 +72,9 @@ async function launch() {
   })
   page.setBackgroundColor('#060914')
   page.webContents.on('before-input-event', (event, input) => shortcut(event, input))
+  page.webContents.on('did-fail-load', (_event, code, description, _url, mainFrame) => {
+    if (mainFrame && code !== -3) sendState({ status: `Omni could not load (${description}).`, problem: true })
+  })
   // Laid in once painted, so the frame's octopus stays up until there is something to show.
   page.webContents.once('did-finish-load', () => {
     if (!window) return
@@ -162,6 +167,10 @@ function harden(origin) {
       event.preventDefault()
       if (verdict === 'external') void shell.openExternal(url)
     })
+    // A server redirect is a navigation too.
+    contents.on('will-redirect', (event, url) => {
+      if (navigationOf(url, origin) !== 'allow') event.preventDefault()
+    })
     contents.on('will-attach-webview', event => event.preventDefault())
   })
   // The page asks for nothing beyond notifications and the clipboard.
@@ -172,8 +181,8 @@ function harden(origin) {
 
 app.on('window-all-closed', () => app.quit())
 app.on('before-quit', (event) => {
-  if (quitting || !dsh) return
+  if (quitting || !dshChild) return
   quitting = true
   event.preventDefault()
-  void stopDsh(dsh.child).finally(() => app.quit())
+  void stopDsh(dshChild).finally(() => app.quit())
 })

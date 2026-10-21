@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { appHome, dshEnv, freePort, installProfile, launchUrlOf, mergeProfilePatch, navigationOf, resourcesOf, startDsh, stopDsh, writeTools } from '../src/dsh.js'
+import { appHome, dshEnv, freePort, installProfile, launchUrlOf, mergeProfilePackage, mergeProfilePatch, navigationOf, resourcesOf, startDsh, stopDsh, writeTools } from '../src/dsh.js'
 
 test('the app keeps everything in one folder under ~/.omni, apart from a dsh you already run', () => {
   assert.equal(appHome({}), join(homedir(), '.omni', 'desktop'))
@@ -56,7 +56,7 @@ test('the shipped profile seeds a new home, and a new build replaces only its pa
   writeFileSync(join(source, 'node_modules', '@automagik', 'omni-dsh', 'index.js'), 'v2')
   assert.equal(installProfile({ dshHome, source }).installed, true)
   assert.equal(readFileSync(join(first.target, 'node_modules', '@automagik', 'omni-dsh', 'index.js'), 'utf8'), 'v2')
-  assert.equal(readFileSync(join(first.target, 'package.json'), 'utf8'), '{"dependencies":{"@automagik/omni-dsh":"0.1.8"}}')
+  assert.deepEqual(JSON.parse(readFileSync(join(first.target, 'package.json'), 'utf8')), { dependencies: { '@automagik/omni-dsh': '0.1.8' } })
   // What dsh and the user put there survives the update.
   assert.equal(readFileSync(join(first.target, 'cordis.yml'), 'utf8'), '[]')
 
@@ -147,7 +147,7 @@ test('dsh gets node and pnpm on its PATH, both on the app\'s own Node', (t) => {
   const dir = writeTools({ dir: join(root, 'bin'), node: process.execPath, pnpm: script })
   assert.deepEqual(JSON.parse(execFileSync(join(dir, 'pnpm'), ['add', 'a b'], { encoding: 'utf8' })), ['1', 'add', 'a b'])
   assert.equal(execFileSync(join(dir, 'node'), ['-p', '6*7'], { encoding: 'utf8' }).trim(), '42')
-  assert.equal(dshEnv({ base: { PATH: '/bin' }, home: '/a', binDir: dir }).PATH, `${dir}:/bin`)
+  assert.equal(dshEnv({ base: { PATH: '/bin' }, home: '/a', binDir: dir }).PATH, `/bin:${dir}`)
   assert.equal(dshEnv({ base: { PATH: '/bin' }, home: '/a' }).PATH, '/bin')
 })
 
@@ -197,4 +197,38 @@ test('an existing profile gets pnpm settings and the newer build\'s settings on 
     readFileSync(join(target, 'cordis.patch.yml'), 'utf8'),
     '- id: web\n  config:\n    searchProvider: brave\n- id: plugin-market\n  config:\n    indexes: []\n',
   )
+})
+
+test('an update replaces the packages the app ships and keeps the plugins the user installed', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'omni-desktop-keep-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const source = join(root, 'shipped')
+  const shippedPackage = (version) => ({ dependencies: { '@automagik/omni-dsh': version }, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@automagik/omni-dsh'] } } })
+  mkdirSync(join(source, 'node_modules', '@automagik', 'omni-dsh'), { recursive: true })
+  writeFileSync(join(source, 'node_modules', '@automagik', 'omni-dsh', 'index.js'), 'v1')
+  writeFileSync(join(source, 'package.json'), JSON.stringify(shippedPackage('1')))
+  writeFileSync(join(source, 'cordis.patch.yml'), '[]\n')
+  writeFileSync(join(source, '.build-id'), 'one')
+  const dshHome = join(root, 'dsh')
+  const { target } = installProfile({ dshHome, source })
+  // The user installs a market plugin: dsh's pnpm adds it, and its own dependency, beside Omni's.
+  mkdirSync(join(target, 'node_modules', 'dsh-kimi-subscription'), { recursive: true })
+  mkdirSync(join(target, 'node_modules', '@automagik', 'their-plugin'), { recursive: true })
+  const user = shippedPackage('1')
+  user.dependencies['dsh-kimi-subscription'] = '1.3.10'
+  user.dsh.profile.bundles.push('dsh-kimi-subscription')
+  writeFileSync(join(target, 'package.json'), JSON.stringify(user))
+
+  writeFileSync(join(source, 'node_modules', '@automagik', 'omni-dsh', 'index.js'), 'v2')
+  writeFileSync(join(source, 'package.json'), JSON.stringify(shippedPackage('2')))
+  writeFileSync(join(source, '.build-id'), 'two')
+  installProfile({ dshHome, source })
+  assert.equal(readFileSync(join(target, 'node_modules', '@automagik', 'omni-dsh', 'index.js'), 'utf8'), 'v2')
+  assert.equal(existsSync(join(target, 'node_modules', 'dsh-kimi-subscription')), true)
+  assert.equal(existsSync(join(target, 'node_modules', '@automagik', 'their-plugin')), true)
+  const merged = JSON.parse(readFileSync(join(target, 'package.json'), 'utf8'))
+  assert.deepEqual(merged.dependencies, { '@automagik/omni-dsh': '2', 'dsh-kimi-subscription': '1.3.10' })
+  assert.deepEqual(merged.dsh.profile.bundles, ['@deepseek-ai/dsh-base', '@automagik/omni-dsh', 'dsh-kimi-subscription'])
+  // Nothing added: the shipped package.json as it is.
+  assert.deepEqual(JSON.parse(mergeProfilePackage(shippedPackage('2'), shippedPackage('3'))), shippedPackage('3'))
 })
