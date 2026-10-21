@@ -22,6 +22,18 @@ on:
       # Read only by publish-stable, which never runs under a call.
       NPM_TOKEN:
         required: false
+      # The desktop release's macOS signing and notarization (desktop-release.yml); without
+      # them the dmg is unsigned.
+      MAC_CSC_LINK:
+        required: false
+      MAC_CSC_KEY_PASSWORD:
+        required: false
+      APPLE_API_KEY:
+        required: false
+      APPLE_API_KEY_ID:
+        required: false
+      APPLE_API_ISSUER:
+        required: false
     outputs:
       version:
         description: 'The version cut and tagged on dev'
@@ -406,7 +418,12 @@ jobs:
     uses: ./.github/workflows/desktop-release.yml
     permissions:
       contents: write
-    secrets: inherit
+    secrets:
+      MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+      MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
     with:
       version: ${{ needs.auto-version.outputs.version }}
       ref: ${{ needs.auto-version.outputs.bump_sha }}

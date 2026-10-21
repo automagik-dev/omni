@@ -30,6 +30,17 @@ on:
         required: false
         type: boolean
         default: true
+    secrets:
+      MAC_CSC_LINK:
+        required: false
+      MAC_CSC_KEY_PASSWORD:
+        required: false
+      APPLE_API_KEY:
+        required: false
+      APPLE_API_KEY_ID:
+        required: false
+      APPLE_API_ISSUER:
+        required: false
   workflow_dispatch:
     inputs:
       version:
@@ -115,7 +126,8 @@ jobs:
             export CSC_LINK="${MAC_CSC_LINK}" CSC_KEY_PASSWORD="${MAC_CSC_KEY_PASSWORD}"
             if [[ -n "${APPLE_API_KEY_CONTENT}" && -n "${APPLE_API_KEY_ID}" && -n "${APPLE_API_ISSUER}" ]]; then
               key="${RUNNER_TEMP}/AuthKey_${APPLE_API_KEY_ID}.p8"
-              printf '%s' "${APPLE_API_KEY_CONTENT}" > "${key}"
+              trap 'rm -f "${key}"' EXIT
+              (umask 077 && printf '%s' "${APPLE_API_KEY_CONTENT}" > "${key}")
               export APPLE_API_KEY="${key}"
             else
               echo "::warning ::No App Store Connect API key: the dmg is signed but not notarized"

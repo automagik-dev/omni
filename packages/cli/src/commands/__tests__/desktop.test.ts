@@ -60,6 +60,10 @@ describe('pickRelease', () => {
   test('the newest published desktop release, skipping drafts and the CLI releases', () => {
     expect(pickRelease(releases)?.tag_name).toBe(`${DESKTOP_TAG_PREFIX}0.1.1`);
   });
+  test("the one built with the CLI's own version first, when there is one", () => {
+    expect(pickRelease(releases, undefined, '0.1.0')?.tag_name).toBe(`${DESKTOP_TAG_PREFIX}0.1.0`);
+    expect(pickRelease(releases, undefined, '9.9.9')?.tag_name).toBe(`${DESKTOP_TAG_PREFIX}0.1.1`);
+  });
   test('or exactly the one asked for', () => {
     expect(pickRelease(releases, `${DESKTOP_TAG_PREFIX}0.1.0`)?.tag_name).toBe(`${DESKTOP_TAG_PREFIX}0.1.0`);
     expect(pickRelease(releases, `${DESKTOP_TAG_PREFIX}0.2.0`)).toBeUndefined();

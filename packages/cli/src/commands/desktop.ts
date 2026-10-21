@@ -24,6 +24,7 @@ import { basename, join, resolve } from 'node:path';
 import { Command } from 'commander';
 import { z } from 'zod';
 import * as output from '../output.js';
+import { VERSION } from '../version.js';
 
 const RELEASES_URL = 'https://api.github.com/repos/automagik-dev/omni/releases?per_page=50';
 export const DESKTOP_TAG_PREFIX = 'omni-desktop-v';
@@ -67,10 +68,15 @@ const ReleaseSchema = z.object({
 });
 export type DesktopRelease = z.infer<typeof ReleaseSchema>;
 
-/** The release to use: the one tagged `tag`, else the newest published desktop release (GitHub lists newest first). */
-export function pickRelease(releases: DesktopRelease[], tag?: string): DesktopRelease | undefined {
+/**
+ * The release to use: the one tagged `tag`; else the one built with this CLI's own version
+ * (each dev cut publishes both), so the app matches the CLI; else the newest published
+ * desktop release (GitHub lists newest first).
+ */
+export function pickRelease(releases: DesktopRelease[], tag?: string, version?: string): DesktopRelease | undefined {
   const desktop = releases.filter((release) => !release.draft && release.tag_name.startsWith(DESKTOP_TAG_PREFIX));
-  return tag ? desktop.find((release) => release.tag_name === tag) : desktop[0];
+  if (tag) return desktop.find((release) => release.tag_name === tag);
+  return desktop.find((release) => release.tag_name === `${DESKTOP_TAG_PREFIX}${version}`) ?? desktop[0];
 }
 
 /** `sha256sum` output: "<hex>  <name>" per line. */
@@ -199,7 +205,7 @@ function openLocal(path: string, target: Supported, dryRun: boolean): void {
 /** The build to open from the releases, or null after saying why there is none (or what a dry run would do). */
 async function releaseBuild(target: Supported, options: DesktopOptions): Promise<string | null> {
   const releases = z.array(ReleaseSchema).parse(await fetchJson(RELEASES_URL));
-  const release = pickRelease(releases, options.tag);
+  const release = pickRelease(releases, options.tag, VERSION);
   if (!release) {
     output.error(
       options.tag
