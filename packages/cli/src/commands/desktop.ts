@@ -11,7 +11,7 @@
  * have instead.
  *
  * Linux x64 (and WSL, through WSLg) gets the AppImage, unpacked once into the
- * cache and run from there, so it needs no FUSE; macOS gets the unsigned labs
+ * cache and run from there, so it needs no FUSE; macOS gets the
  * dmg, opened so you can drag Omni to Applications. Windows itself is not
  * supported: run this inside WSL.
  */

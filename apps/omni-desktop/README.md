@@ -2,7 +2,7 @@
 
 Omni on your desktop: a window on a [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) of its own, with the Omni UI plugin ([`apps/omni-ui-dsh`](../omni-ui-dsh)) and Omni's welcome ([`apps/omni-ai-dsh`](../omni-ai-dsh)) already in it. Open it and the Omni octopus walks you through three steps: Welcome, Connect Omni (type the address of your Omni and send the code it shows to yourself on WhatsApp) and Connect AI. Your channels and chats are there. No keys to copy.
 
-> Labs build: Linux (AppImage, deb; also WSL with WSLg) and an unsigned macOS dmg. Windows itself is not supported.
+> Labs build: Linux (AppImage, deb; also WSL with WSLg) and a macOS dmg. Windows itself is not supported.
 
 ## How it works
 
@@ -29,7 +29,7 @@ Models come from dsh: on first start, sign in to DeepSeek, enter an API key, or 
 npm ci                  # Electron and electron-builder
 npm test                # the main-process logic, without Electron
 npm run dist:linux      # dist/Omni-<version>-linux-x86_64.AppImage and -amd64.deb
-npm run dist:mac        # on macOS: dist/Omni-<version>-labs-unsigned-mac-<arch>.dmg
+npm run dist:mac        # on macOS: dist/Omni-<version>-mac-<arch>.dmg, signed and notarized (see macOS)
 ```
 
 `dist:*` first runs `scripts/prepare-runtime.mjs`, which installs the pinned dsh into `build/runtime` and both packed plugins into `build/profile`, in one install. Native packages are per platform, so build each target on its own platform. Builds run with `DO_NOT_TRACK=1`.
@@ -56,4 +56,11 @@ chrome-headless-shell --screenshot=assets/icon.png --window-size=1024,1024 \
 
 ## macOS
 
-The dmg is not signed or notarized. Gatekeeper blocks it on first open; allow it under System Settings → Privacy & Security. Signed builds wait for an Apple Developer ID.
+`npm run dist:mac` signs with the Developer ID Application certificate in the build Mac's login keychain, under the hardened runtime (`assets/entitlements.mac.plist`), and notarizes when `APPLE_KEYCHAIN_PROFILE` names a `notarytool` profile:
+
+```sh
+xcrun notarytool store-credentials omni-notary   # once: Apple ID, app-specific password, team ID
+APPLE_KEYCHAIN_PROFILE=omni-notary npm run dist:mac
+```
+
+Signing reads the login keychain, so run it from a Terminal in the Mac's own session (over ssh the keychain is locked). Without a Developer ID the dmg is unsigned and Gatekeeper blocks it on first open; allow it under System Settings → Privacy & Security.

@@ -43,9 +43,12 @@ mac:
   target: dmg
   category: public.app-category.productivity
   icon: assets/icon.png
-  # Labs builds are not signed or notarized (no Apple Developer ID yet).
-  identity: null
-  artifactName: Omni-${version}-labs-unsigned-mac-${arch}.${ext}
+  # Signed with the Developer ID in the build machine's keychain (none found: unsigned), under
+  # the hardened runtime. Notarized when APPLE_KEYCHAIN_PROFILE names a notarytool profile.
+  hardenedRuntime: true
+  entitlements: assets/entitlements.mac.plist
+  entitlementsInherit: assets/entitlements.mac.plist
+  artifactName: Omni-${version}-mac-${arch}.${ext}
 dmg:
-  title: Omni ${version} (labs, unsigned)
+  title: Omni ${version}
 publish: null

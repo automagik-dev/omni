@@ -36,8 +36,8 @@ describe('desktopTarget', () => {
   test('macOS takes the dmg for its own architecture', () => {
     const arm = desktopTarget('darwin', 'arm64');
     if (!arm.supported) throw new Error('unreachable');
-    expect(arm.asset.test('Omni-0.1.0-labs.1-labs-unsigned-mac-arm64.dmg')).toBe(true);
-    expect(arm.asset.test('Omni-0.1.0-labs.1-labs-unsigned-mac-x64.dmg')).toBe(false);
+    expect(arm.asset.test('Omni-0.1.0-labs.1-mac-arm64.dmg')).toBe(true);
+    expect(arm.asset.test('Omni-0.1.0-labs.1-mac-x64.dmg')).toBe(false);
   });
 
   test('Windows itself, and builds that do not exist, are refused with a reason', () => {
