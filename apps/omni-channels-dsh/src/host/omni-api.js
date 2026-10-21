@@ -1,6 +1,6 @@
 // Omni's hands on the platform: the Main Bot finds any omni API operation in the API's own
 // OpenAPI description (omni_endpoints) and calls it with this host's key (omni_call). Every
-// call is drawn in the chat as a card (src/client/omni-cards.js), so the user watches each
+// call is drawn in the chat as a card (src/client/omni-live.js), so the user watches each
 // read and each change happen. The browser reads through `omni-get`, GET operations only,
 // for the live parts of those cards and of the canvases Omni draws.
 import { defineTool } from '@deepseek-ai/dsh-tools'
