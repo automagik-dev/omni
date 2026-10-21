@@ -124,7 +124,8 @@ describe('market index', () => {
       },
     ]);
     // The static index's presentation for a plugin it lists; derived from the package for one it does not.
-    expect(omni?.title).toEqual({ en: 'Omni' });
+    expect(omni?.title).toEqual(staticIndex.plugins.find((plugin) => plugin.name === omni?.name)?.title);
+    expect(omni?.title).toBeTruthy();
     expect(fresh?.description).toBe('A plugin the static index does not list yet');
     expect(fresh?.repository).toEqual({ url: 'https://github.com/automagik-dev/omni', directory: 'apps/omni-new-dsh' });
     expect(fresh?.metadata).toMatchObject({ category: 'omni', labels: ['official'] });
@@ -133,8 +134,10 @@ describe('market index', () => {
     for (const plugin of parsed.plugins.slice(2)) expect(plugin.versions[0]?.source).toEqual({ type: 'npm' });
   });
 
-  test('without a public URL, the registry is the request origin', async () => {
-    const body = (await (await appWith({ dir: marketDir })('/api/market/index.json')).json()) as MarketIndex;
+  test('without a public URL, the registry is the request origin, cached only per client', async () => {
+    const response = await appWith({ dir: marketDir })('/api/market/index.json');
+    expect(response.headers.get('cache-control')).toBe('private, max-age=60');
+    const body = (await response.json()) as MarketIndex;
     expect(body.plugins[0]?.versions[0]?.source).toEqual({
       type: 'npm',
       registry: 'http://127.0.0.1:8882/api/market/npm/',

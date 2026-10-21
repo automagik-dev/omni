@@ -112,6 +112,8 @@ export interface Market {
   /** A carried plugin's tarball bytes, or null unless `file` is that plugin's listed tarball. */
   tarball(name: string, file: string): Promise<Uint8Array<ArrayBuffer> | null>;
   catalog(origin: string): Catalog;
+  /** Whether URLs come from a configured public URL; false means from each request's origin. */
+  readonly fixedOrigin: boolean;
 }
 
 export interface MarketOptions {
@@ -256,11 +258,19 @@ export function createMarket(options: MarketOptions = {}): Market {
     };
   }
 
+  // Read once: these routes are public and unauthenticated, and a release's tarballs never change.
+  const read = new Map<string, Promise<Uint8Array<ArrayBuffer>>>();
   async function tarball(name: string, file: string): Promise<Uint8Array<ArrayBuffer> | null> {
     const pkg = carried.get(name);
     // Only the exact file the manifest lists: never a path built from the request.
     if (!pkg || pkg.file !== file) return null;
-    return new Uint8Array(await readFile(join(dir, pkg.file)));
+    let bytes = read.get(pkg.file);
+    if (!bytes) {
+      bytes = readFile(join(dir, pkg.file)).then((buffer) => new Uint8Array(buffer));
+      bytes.catch(() => read.delete(pkg.file));
+      read.set(pkg.file, bytes);
+    }
+    return bytes;
   }
 
   function catalog(origin: string): Catalog {
@@ -279,7 +289,7 @@ export function createMarket(options: MarketOptions = {}): Market {
     };
   }
 
-  return { index, packument, tarball, catalog };
+  return { index, packument, tarball, catalog, fixedOrigin: publicUrl !== null };
 }
 
 /** Where a name this Omni does not carry resolves: the public npm registry. */

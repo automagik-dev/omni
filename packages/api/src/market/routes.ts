@@ -17,6 +17,9 @@ import { marketPage } from './page';
 import { type Market, upstreamPackumentUrl } from './service';
 
 const SHORT = 'public, max-age=60';
+// Without a configured public URL the answer names the request's own origin: a shared cache
+// must not hand it to a request for another host.
+const PER_ORIGIN = 'private, max-age=60';
 const IMMUTABLE = 'public, max-age=31536000, immutable';
 const notFound = { error: { code: 'NOT_FOUND', message: 'Not found' } } as const;
 
@@ -43,14 +46,15 @@ function registryPath(pathname: string): { name: string; file?: string } | null 
 export function marketRoutes(market: Market) {
   const app = new Hono();
   const origin = (url: string) => new URL(url).origin;
+  const short = market.fixedOrigin ? SHORT : PER_ORIGIN;
 
   app.get('/', (c) => {
-    c.header('cache-control', SHORT);
+    c.header('cache-control', short);
     return c.html(marketPage(market.catalog(origin(c.req.url))));
   });
 
   app.get('/index.json', (c) => {
-    c.header('cache-control', SHORT);
+    c.header('cache-control', short);
     return c.json(market.index(origin(c.req.url)));
   });
 
@@ -59,7 +63,7 @@ export function marketRoutes(market: Market) {
     if (!target) return c.json(notFound, 404);
     if (target.file === undefined) {
       const packument = market.packument(target.name, origin(c.req.url));
-      c.header('cache-control', SHORT);
+      c.header('cache-control', short);
       return packument ? c.json(packument) : c.redirect(upstreamPackumentUrl(target.name), 302);
     }
     const bytes = await market.tarball(target.name, target.file);
