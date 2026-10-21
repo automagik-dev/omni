@@ -4,7 +4,10 @@ import { fileURLToPath } from 'node:url'
 import { runInNewContext } from 'node:vm'
 import { build } from 'esbuild'
 import { CONNECT_STEP, callOmniAi, gateConnect, skipConnect, skippedHere } from '../src/client/onboarding.js'
-import { STORAGE } from '../src/client/storage.js'
+import { omni } from './omni-client.js'
+
+// The key the team's own plugin kept a skip under, while the step was its own.
+const SKIPPED = 'omni-ui:connect-omni-skipped'
 
 const memoryStorage = (entries = {}) => {
   const map = new Map(Object.entries(entries))
@@ -47,7 +50,7 @@ test('a skip kept by omni-ai, or in this plugin\'s storage, completes the step a
   assert.equal(await gateConnect(kept.props, kept.deps), null)
   assert.deepEqual(kept.log, ['host omni-link', 'omni-ai state', 'complete'])
 
-  const here = world({ omniAi: null, storage: memoryStorage({ [STORAGE.connectOmniSkipped]: '1' }) })
+  const here = world({ omniAi: null, storage: memoryStorage({ [SKIPPED]: '1' }) })
   assert.equal(await gateConnect(here.props, here.deps), null)
   assert.deepEqual(here.log, ['host omni-link', 'complete'])
 })
@@ -69,7 +72,7 @@ test('with no link and no skip the step shows, whether or not omni-ai is install
 })
 
 test('a step the user reopened on purpose shows, skipped or connected', async () => {
-  const skipped = world({ explicit: true, omniAi: { connectOmniSkipped: true }, storage: memoryStorage({ [STORAGE.connectOmniSkipped]: '1' }) })
+  const skipped = world({ explicit: true, omniAi: { connectOmniSkipped: true }, storage: memoryStorage({ [SKIPPED]: '1' }) })
   assert.deepEqual(await gateConnect(skipped.props, skipped.deps), { link: { linked: false, configured: false } })
   assert.equal(skipped.log.includes('complete'), false)
 
@@ -118,7 +121,7 @@ test('the step registers on settings.onboarding with its stage styles', async ()
   const bundle = await build({
     entryPoints: [fileURLToPath(new URL('../src/client/connect-step.js', import.meta.url))],
     bundle: true, format: 'cjs', platform: 'node', write: false, logLevel: 'silent',
-    external: ['react', 'react-dom'],
+    external: ['react', 'react-dom', '@automagik/omni-dsh/client'],
   })
   const module = { exports: {} }
   const react = {
@@ -126,7 +129,7 @@ test('the step registers on settings.onboarding with its stage styles', async ()
     useState: initial => [typeof initial === 'function' ? initial() : initial, () => {}],
     useEffect: () => {}, useRef: current => ({ current }), useCallback: fn => fn, useMemo: make => make(),
   }
-  runInNewContext(bundle.outputFiles[0].text, { module, exports: module.exports, require: name => ({ react, 'react-dom': { createPortal: node => node } })[name] })
+  runInNewContext(bundle.outputFiles[0].text, { module, exports: module.exports, require: name => ({ react, 'react-dom': { createPortal: node => node }, '@automagik/omni-dsh/client': { omni } })[name] })
   const { registerConnectStep, ConnectOmniStep } = module.exports
 
   const injected = []

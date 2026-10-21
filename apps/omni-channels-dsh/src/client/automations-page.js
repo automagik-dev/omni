@@ -1,12 +1,9 @@
 import { createElement as h, Fragment, useEffect, useMemo, useState } from 'react'
-import { ClockIcon, PlusIcon, SearchIcon } from './icons.js'
-import { BotMark } from './mark.js'
-import { t } from './i18n.js'
-import { relativeShort } from './text.js'
-import { call } from './api.js'
 import { AutomationRow } from './subscriptions.js'
 import { runsOf } from './omni-store.js'
 import { whenText } from './automation-time.js'
+import { BotMark, call, relativeShort, t, icons } from './core.js'
+const { ClockIcon, PlusIcon, SearchIcon } = icons
 
 // Automations: one place for everything that runs on its own, in the shape of DSH's
 // Automation tasks page (filters, search, rows). Event automations (Omni's) and the

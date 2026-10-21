@@ -1,11 +1,9 @@
 import { createElement as h, Fragment, useEffect, useMemo, useState } from 'react'
 import qrcode from 'qrcode-generator'
-import { call } from './api.js'
-import { t } from './i18n.js'
-import { relativeShort } from './text.js'
 import { Tile } from './channels.js'
 import { typeOf } from './omni-store.js'
 import { PeekCard, Seen, kindOf, listOf } from './omni-peek.js'
+import { call, relativeShort, t } from './core.js'
 
 // What Omni does on the platform, drawn live: the cards for its omni_call tool calls, and the
 // Channel, QrCode and Chat components its canvases use. Everything here reads through the

@@ -1,10 +1,8 @@
 import { createElement as h, useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { call } from './api.js'
-import { CHARACTERS } from './characters.js'
 import { ConnectOmni, OMNI_CONNECT_CSS } from './omni-connect.js'
 import { CONNECT_STEP, gateConnect, isConnected, skipConnect } from './onboarding.js'
-import { t } from './i18n.js'
+import { call, CHARACTERS, t } from './core.js'
 
 // Onboarding step omni-connect (order -250), between omni-ai's welcome (-300) and its
 // Connect AI (-200): the Channels page's connect card on the octopus stage those steps

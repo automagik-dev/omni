@@ -24,11 +24,13 @@
   "main": "index.js",
   "exports": {
     ".": "./index.js",
+    "./client": "./client.js",
     "./package.json": "./package.json"
   },
   "files": [
     "index.js",
     "src/host/",
+    "client.js",
     "cordis.patch.yml",
     "README.md",
     "LICENSE",
@@ -50,11 +52,18 @@
     "@deepseek-ai/dsh-tools": "*"
   },
   "dsh": {
+    "client": {
+      "platform": "web",
+      "external": [
+        "@automagik/omni-dsh/client"
+      ]
+    },
     "bundle": {
       "patch": "./cordis.patch.yml"
     }
   },
   "devDependencies": {
-    "esbuild": "0.28.2"
+    "esbuild": "0.28.2",
+    "qrcode-generator": "2.0.4"
   }
 }

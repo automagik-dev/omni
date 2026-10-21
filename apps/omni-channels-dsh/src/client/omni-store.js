@@ -1,4 +1,4 @@
-import { createSource } from './sources.js'
+import { createSource } from './core.js'
 
 // The Omni channels state the sidebar's Chats section and the two main panels share:
 // connected channels with their health, their chats, and each chat's messages. This is

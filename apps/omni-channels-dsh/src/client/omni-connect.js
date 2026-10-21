@@ -1,9 +1,7 @@
 import { createElement as h, useEffect, useRef, useState } from 'react'
-import { call } from './api.js'
-import { OmniMark } from './logo.js'
 import { QrSvg } from './omni-live.js'
 import { refreshLive } from './omni-store.js'
-import { t } from './i18n.js'
+import { call, OmniMark, t } from './core.js'
 
 // Connecting this Omni UI to an Omni, by code: no key to find or paste. The host asks the
 // Omni at the address for a pairing (src/host/omni-link.js); this card shows the code and

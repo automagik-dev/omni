@@ -1,8 +1,7 @@
 import { createElement as h, Fragment, useEffect, useState } from 'react'
-import { t } from './i18n.js'
-import { relativeShort } from './text.js'
 import { Tile } from './channels.js'
 import { DataView } from './omni-live.js'
+import { relativeShort, t } from './core.js'
 
 // What Omni saw, drawn as what it is: a read shows its messages as bubbles, its chats with
 // their unread counts, its channels as tiles, its events on a line, anything else as a

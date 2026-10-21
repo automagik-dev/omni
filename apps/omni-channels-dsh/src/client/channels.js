@@ -1,13 +1,10 @@
 import { createElement as h, Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { ArrowUpIcon, ChevronLeftIcon, ChevronRightIcon, PlusIcon } from './icons.js'
-import { OmniMark } from './logo.js'
 import { ConnectOmni } from './omni-connect.js'
-import { t } from './i18n.js'
-import { relativeShort } from './text.js'
-import { call } from './api.js'
 import {
   CHANNEL_TYPES, CHANNELS_PANEL, STATUS, canWrite, channelOf, chatOf, healthSummary, omniActions, omniStore, startLive, typeOf, unreadOf, visibleChats,
 } from './omni-store.js'
+import { call, OmniMark, relativeShort, t, icons } from './core.js'
+const { ArrowUpIcon, ChevronLeftIcon, ChevronRightIcon, PlusIcon } = icons
 
 // Omni channels inside the Bot surface. The Channels page (CHANNELS_PANEL) connects new
 // channels and shows the health of the connected ones; a chat opens in the CHAT_PANEL main

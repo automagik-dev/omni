@@ -1,4 +1,4 @@
-import { t } from './i18n.js'
+import { t } from './core.js'
 
 // When a scheduled task (DSH's schedule service) runs, in words, for the Automations page.
 const pad = value => String(value).padStart(2, '0')

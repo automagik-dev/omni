@@ -1,13 +1,8 @@
 import { createElement as h, Fragment, useEffect, useState } from 'react'
-import { AtIcon, FileIcon, KeywordIcon, MessageIcon, ShieldIcon, UnplugIcon, VoiceIcon } from './icons.js'
-import { OmniMark } from './logo.js'
-import { BotMark } from './mark.js'
-import { MAIN_LOOK } from './characters.js'
-import { t } from './i18n.js'
-import { relativeShort } from './text.js'
-import { call } from './api.js'
 import { ChatAvatar, Tile, useOmni } from './channels.js'
 import { TRIGGERS, runsOf, startLive, waitingRuns } from './omni-store.js'
+import { BotMark, call, MAIN_LOOK, OmniMark, relativeShort, t, icons } from './core.js'
+const { AtIcon, FileIcon, KeywordIcon, MessageIcon, ShieldIcon, UnplugIcon, VoiceIcon } = icons
 
 // Omni's board: what it actually does, beside its chat. The user never fills a form here;
 // they tell Omni what to watch, Omni saves it with its own tools (src/host/

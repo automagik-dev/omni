@@ -1,19 +1,26 @@
 import { createElement as h } from 'react'
-import { ClockIcon } from './icons.js'
-import { t } from './i18n.js'
-import { badges, headerButtons, nav, onShell, toolCards } from './extend.js'
 import { registerConnectStep } from './connect-step.js'
 import { CHANNELS_CSS, ChannelsFooter, ChannelsPage, ChatPage } from './channels.js'
 import { CHANNELS_PANEL, CHAT_PANEL } from './omni-store.js'
 import { BOARD_KIND, BOARD_TAB_ID, BoardTab, EventsBadge, SUBSCRIPTIONS_CSS, SubscriptionsButton, boardTabDefinition, isEventsBot } from './subscriptions.js'
 import { AUTOMATIONS_CSS, AUTOMATIONS_PANEL, AutomationsPage } from './automations-page.js'
-import { OMNI_LIVE_CSS, OmniCallCard, OmniToolCard, parseCall } from './omni-live.js'
+import { Badge, KeyValue, LiveChannel, LiveChat, LiveQr, OMNI_LIVE_CSS, OmniCallCard, OmniToolCard, Table, parseCall } from './omni-live.js'
 import { OMNI_PEEK_CSS } from './omni-peek.js'
 import { OMNI_CONNECT_CSS } from './omni-connect.js'
+import { addStrings, badges, headerButtons, nav, onShell, setLiveViews, t, toolCards, icons } from './core.js'
+import { STRINGS } from './strings.js'
+const { ClockIcon } = icons
 
 // Omni's channels on the Bot surface: the Channels page and chats, the automations and
 // their board, the cards of Omni's calls, and the Connect Omni onboarding step. Everything
-// goes through the team's registries (extend.js), so the Bot surface knows none of it.
+// goes through the team's registries (@automagik/omni-dsh/client), so the Bot surface knows
+// none of it.
+
+export const inject = ['slots']
+
+// The live views of omni the canvas plugin draws with (@automagik/omni-canvas-dsh), which
+// requires this bundle the way this one requires the team's.
+export const channels = Object.freeze({ Badge, KeyValue, LiveChannel, LiveChat, LiveQr, Table })
 
 // Omni's automations board is a tab of DSH's right sidebar, which may load after this plugin.
 // The first time Omni's chat is on screen in a browser, its board opens; after that the
@@ -69,7 +76,10 @@ const PHRASES = {
 const callCard = ({ arg, content, done }) => h(OmniCallCard, { ...parseCall(arg, content), done })
 const toolCard = ({ tool, arg, content, done }) => h(OmniToolCard, { tool, arg, content, done })
 
-export function installChannels(ctx) {
+export function apply(ctx) {
+  ctx.effect(() => addStrings(STRINGS), 'ds-bot: channels copy')
+  // Until canvases have a plugin of their own, the team's canvases draw omni with these.
+  ctx.effect(() => setLiveViews(channels), 'ds-bot: live views for canvases')
   // Onboarding: Connect Omni, between omni-ai's welcome and Connect AI when it is installed.
   registerConnectStep(ctx)
   ctx.effect(() => toolCards.register('omni_call', callCard, { phrase: PHRASES.omni_call }), 'ds-bot: omni call card')

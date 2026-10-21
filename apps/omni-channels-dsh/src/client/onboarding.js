@@ -1,5 +1,3 @@
-import { STORAGE } from './storage.js'
-
 // When the onboarding step omni-connect shows, and how a skip is kept. No React here, so
 // the rules test without a shell.
 //
@@ -10,6 +8,9 @@ import { STORAGE } from './storage.js'
 // this plugin's own browser storage.
 
 export const CONNECT_STEP = Object.freeze({ id: 'omni-connect', order: -250 })
+// Where a skip is kept without omni-ai: the browser-storage key the team's own plugin
+// used while the step was its own, under its omni-ui prefix.
+const SKIPPED_KEY = 'omni-ui:connect-omni-skipped'
 // omni-ai's host endpoint (apps/omni-ai-dsh/src/host/endpoint.js); document-relative like
 // this plugin's own api/omni-ui.
 const OMNI_AI_ROUTE = 'api/omni-ai'
@@ -39,7 +40,7 @@ const localStore = () => {
 
 export function skippedHere(storage = localStore()) {
   try {
-    return storage?.getItem(STORAGE.connectOmniSkipped) === '1'
+    return storage?.getItem(SKIPPED_KEY) === '1'
   } catch {
     return false
   }
@@ -47,7 +48,7 @@ export function skippedHere(storage = localStore()) {
 
 function keepSkipHere(storage = localStore()) {
   try {
-    storage?.setItem(STORAGE.connectOmniSkipped, '1')
+    storage?.setItem(SKIPPED_KEY, '1')
   } catch { /* storage unavailable: the step shows again next time */ }
 }
 

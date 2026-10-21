@@ -391,6 +391,17 @@ function UpdateButton({ useUpdate, actions }) {
                 }, dshPhase === 'installing' ? t('Updating…') : dshPhase === 'failed' ? t('Try again') : t('Update')))) : null), document.body) : null)
 }
 
+// Where the channels went: a team linked to an Omni whose DSH lacks the Omni channels
+// plugin (the host's channelsMoved) is pointed at the plugin market, in the footer seat the
+// channels had.
+export function ChannelsMoved({ wide, actions, useRoster }) {
+  const moved = useRoster(value => value.channelsMoved === true)
+  if (!wide || !moved) return null
+  const label = t('Channels moved to the Omni channels plugin. Install it from the market.')
+  return h('span', { className: 'bt-connect-wrap' }, h('button', { type: 'button', className: 'bt-connect bt-connect-foot bt-channels-moved', title: label, 'aria-label': label, onClick: () => actions.selectPanel('plugins') },
+    h(PlugIcon), t('Get the channels plugin')))
+}
+
 // Account seat of the Settings trigger: the visible label stays for assistive tech only.
 export function YouAvatar() {
   return h('span', { className: 'bt-you-wrap' },
@@ -600,6 +611,7 @@ export const SIDEBAR_CSS = `
 [class*="_footArea"]:has(.bt-foot-account){grid-template-columns:auto minmax(0,1fr) auto;column-gap:6px}
 [class*="_footArea"]>[class*="_footerActions"]>div>.bt-foot-account{grid-column:1;order:1;display:inline-flex}
 [class*="_footArea"]:has(.bt-foot-account)>[class*="_footerActions"]>div>.bt-connect-wrap{grid-column:2}
+.bt-channels-moved{gap:8px;justify-content:flex-start;padding:0 12px}
 [class*="_footArea"]:has(.bt-foot-account)>[class*="_settingsArea"]{grid-column:3}
 [class*="_footArea"]:has(.bt-foot-account)>[class*="_settingsArea"] button[class*="_trigger"] [class*="_label"]{display:none!important}
 

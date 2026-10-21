@@ -43,13 +43,16 @@ const base = resolve(harness, 'packages/bundle/base/package.json')
 const anchor = pathToFileURL(existsSync(base) ? base : resolve(harness, 'package.json')).href
 const owners = [plugin, core].map(dir => `${pathToFileURL(dir).href}/`)
 const coreUrl = `${pathToFileURL(core).href}/`
+const clientShim = pathToFileURL(join(plugin, 'test', 'omni-client.js')).href
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
     const fromOurs = owners.some(owner => context.parentURL?.startsWith(owner))
     if (specifier.startsWith('@deepseek-ai/') && fromOurs) return nextResolve(specifier, { ...context, parentURL: anchor })
-    // The team's entry, or any file of it (its test helpers), by path rather than exports.
+    // The team's entry, or any file of it (its test helpers), by path rather than exports;
+    // its client bundle as DSH hands it over (omni-client.js).
     if (specifier === '@automagik/omni-dsh') return nextResolve(`${coreUrl}index.js`, context)
+    if (specifier === '@automagik/omni-dsh/client') return nextResolve(clientShim, context)
     if (specifier.startsWith('@automagik/omni-dsh/')) return nextResolve(`${coreUrl}${specifier.slice('@automagik/omni-dsh/'.length)}`, context)
     return nextResolve(specifier, context)
   },
