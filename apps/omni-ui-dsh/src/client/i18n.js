@@ -1307,16 +1307,43 @@ const fill = (text, params) => (params
 
 let service = null
 let bound = null
+let unregister = null
+
+// DSH keeps one dictionary per namespace and language, so strings added later go into
+// ZH and it is registered again; the interface re-renders on the new registration.
+const publish = () => {
+  if (!service) return
+  const off = unregister
+  unregister = null
+  if (typeof off === 'function') off()
+  unregister = service.register(NAMESPACE, 'zh', ZH)
+}
 
 // `locale` is the DSH locale service; without one, copy stays English.
 export function installLocale(locale) {
   if (!locale || typeof locale.register !== 'function' || typeof locale.bind !== 'function') return () => {}
   service = locale
   bound = locale.bind(NAMESPACE)
-  const off = locale.register(NAMESPACE, 'zh', ZH)
+  publish()
   return () => {
-    if (service === locale) { service = null; bound = null }
+    if (service !== locale) return
+    const off = unregister
+    service = null
+    bound = null
+    unregister = null
     if (typeof off === 'function') off()
+  }
+}
+
+// Chinese copy another Omni plugin brings for its own strings (extend.js); it shares this
+// namespace, so one `t` serves both. Keys already here keep their text. Returns the disposer.
+export function addStrings(zh) {
+  const added = Object.keys(zh ?? {}).filter(key => !Object.hasOwn(ZH, key))
+  for (const key of added) ZH[key] = zh[key]
+  if (added.length > 0) publish()
+  return () => {
+    for (const key of added) delete ZH[key]
+    if (added.length > 0) publish()
   }
 }
 

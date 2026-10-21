@@ -1,4 +1,4 @@
-import { createElement as h, Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createElement as h, Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 import { MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
 import { inkText } from './inks.js'
@@ -13,8 +13,8 @@ import { turnReasoning } from './turn-reasoning.js'
 import { FOLD_AT, FOLD_HUGE, NEVER, stripLongNote, useFold } from './fold.js'
 import { hasCanvas, splitCanvases } from './canvas-text.js'
 import { CanvasSlot } from './canvas-slot.js'
-import { OmniCallCard, OmniToolCard, parseCall } from './omni-live.js'
-import { TaskCard } from './omni-peek.js'
+import { TaskCard } from './task-card.js'
+import { toolCards } from './extend.js'
 
 // -------------------------------------------------------------------------
 // Chat cells
@@ -599,16 +599,10 @@ function toolActivity(name, arg, findBot, self) {
     case 'remember': return { label: t('Saving to memory'), state: 'working' }
     case 'forget': return { label: t('Updating memory'), state: 'working' }
     case 'recall': return { label: t('Checking memory'), state: 'searching' }
-    case 'omni_channels': return { label: t('Checking your channels'), state: 'searching' }
-    case 'omni_chats':
-    case 'omni_messages':
-    case 'find_chats': return { label: t('Reading your chats'), state: 'searching' }
-    case 'omni_endpoints': return { label: t('Looking up omni'), state: 'searching' }
-    case 'omni_call': return arg('method') === 'GET' || arg('method') === undefined ? { label: t('Reading omni'), state: 'searching' } : { label: t('Changing omni'), state: 'working' }
-    case 'omni_connect': return { label: t('Connecting a channel'), state: 'working' }
-    case 'show_canvas': return { label: t('Drawing it'), state: 'working' }
     case 'start_task': return { label: t('Starting a task'), state: 'sending' }
     default:
+      // Another Omni plugin's tool says what it does (extend.js).
+      if (toolCards.phrase(name)) return toolCards.phrase(name)(arg)
       if (GROUP_PHRASES[name]) return { label: t(GROUP_PHRASES[name]), state: 'sending' }
       const phrase = TOOL_PHRASES.find(([pattern]) => pattern.test(name))?.[1]
       return { label: phrase ? t(phrase) : null, state: toolState(name) }
@@ -714,7 +708,8 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
 
 // The calls ToolCell draws. A PTC program (`run_code`) dispatches the real tools as
 // its sub-calls, so a call draws by its own name wherever it sits in the tree.
-const DRAWN = new Set(['omni_call', 'omni_channels', 'omni_chats', 'omni_messages', 'omni_connect', 'show_canvas', 'start_task', 'message_bot', 'stop_bot', 'create_bot', 'update_bot', 'group_relay', 'create_group', 'update_group', 'delete_group', 'post_to_group', 'ask_user', 'request_secret', 'ask_user_question', 'read_group_chat', 'remember', 'forget'])
+// Another Omni plugin's tools draw when they register a card (extend.js).
+const DRAWN = new Set(['start_task', 'message_bot', 'stop_bot', 'create_bot', 'update_bot', 'group_relay', 'create_group', 'update_group', 'delete_group', 'post_to_group', 'ask_user', 'request_secret', 'ask_user_question', 'read_group_chat', 'remember', 'forget'])
 // Calls whose card a dock above the composer carries when the call is not drawn.
 const CARDS = new Set(['ask_user', 'request_secret'])
 
@@ -750,20 +745,10 @@ function renderCall(call, { sessionId, roster, actions, useUi, useWork, findBot 
   const done = call.kind === 'tool-result'
   const { text: arg, value: argValue } = toolArgs(call)
   const self = roster.byId[sessionId]
+  // A tool another Omni plugin registers draws its own card (extend.js): Omni's calls, canvases.
+  const card = toolCards.renderer(tool)
+  if (card !== undefined) return card({ call, tool, arg, argValue, done, content: done ? contentText(call.content) : '', sessionId, roster, actions })
   switch (tool) {
-    case 'omni_call':
-      return h(OmniCallCard, { ...parseCall(arg, done ? contentText(call.content) : ''), done })
-    case 'omni_channels':
-    case 'omni_chats':
-    case 'omni_messages':
-    case 'omni_connect':
-      return h(OmniToolCard, { tool, arg, content: done ? contentText(call.content) : '', done })
-    case 'show_canvas': {
-      // A refused canvas goes back to the Bot, which sends a fixed one; the user sees only
-      // the canvas that passed.
-      if (done && !contentText(call.content).startsWith('Shown')) return null
-      return h('div', { className: 'bt-canvas-line' }, h(CanvasSlot, { program: argValue('program') ?? arg('program') ?? '', complete: done, onAsk: message => message && actions.send(sessionId, message) }))
-    }
     case 'start_task': {
       // The task's own card: it works where the user can watch, then says what it found.
       const started = done ? /\((session-[^)]+)\) under Tasks/.exec(contentText(call.content))?.[1] : undefined
@@ -846,8 +831,10 @@ export function ToolCell({ node, sessionId, useRoster, useUi, useWork, actions }
   const turn = node.location?.turn?.turn ?? root.turn
   const hidden = isHiddenTurn(roster, sessionId, turn)
   const findBot = nameOrId => roster.byId[nameOrId] ?? roster.bots.find(bot => bot.name.toLowerCase() === String(nameOrId ?? '').toLowerCase())
+  // A plugin that loads after the transcript drew still gets its cards drawn.
+  useSyncExternalStore(toolCards.source.subscribe, toolCards.source.getSnapshot)
   const calls = hidden ? [] : callTree(root)
-  const drawn = calls.filter(call => DRAWN.has(toolName(call)))
+  const drawn = calls.filter(call => DRAWN.has(toolName(call)) || toolCards.renderer(toolName(call)))
   // The newest call still running names the work, so a program reads as the tool it is in.
   const running = root.kind === 'tool-result' ? undefined : calls.findLast(call => call.kind !== 'tool-result')
   const note = running ? toolActivity(toolName(running), toolArgs(running).text, findBot, roster.byId[sessionId]) : null

@@ -35,8 +35,13 @@ test('client.js registers a factory that exports apply and inject', () => {
   })
   assert.deepEqual([...new Set(requested)].sort(), Object.keys(platform).sort())
   assert.equal(Object.prototype.toString.call(exports), '[object Module]')
-  assert.deepEqual(Object.keys(exports), ['apply', 'inject'])
+  // `omni` is what the Omni channels and canvas plugins build on (their bundles require
+  // this one through dsh.client.external).
+  assert.deepEqual(Object.keys(exports), ['apply', 'inject', 'omni'])
   assert.equal(typeof exports.apply, 'function')
+  assert.deepEqual(Object.keys(exports.omni).sort(), ['addStrings', 'badges', 'call', 'dateLocale', 'face', 'headerButtons', 'hostText', 'language', 'nav', 'onShell', 'setCanvasRenderer', 't', 'toolCards'])
+  assert.ok(Object.isFrozen(exports.omni))
+  assert.equal(exports.omni.face(), null)
   // No `configForms`: the client never writes the user's DSH settings, such as the
   // work-details mode it once held at `verbose`.
   assert.deepEqual(Array.from(exports.inject), ['sessions', 'uiWorkspace', 'uiConversation', 'slots', 'theme', 'layout'])

@@ -100,10 +100,10 @@ export function EventsBadge({ roster, useWork }) {
 }
 
 // In Omni's chat header: shows or hides its board in the right sidebar.
-export function SubscriptionsButton({ roster, actions, useWork }) {
+export function SubscriptionsButton({ roster, onToggle, useWork }) {
   const count = (roster.subscriptions ?? []).filter(sub => sub.on).length
   const waiting = waitingRuns(roster, useWaiting(useWork))
-  return h('button', { type: 'button', className: 'os-head-btn', onClick: () => actions.toggleBoard() },
+  return h('button', { type: 'button', className: 'os-head-btn', onClick: onToggle },
     t('Automations'), h('span', { className: 'os-head-count' }, String(count)),
     waiting > 0 ? h('span', { className: 'os-pending' }, String(waiting)) : null)
 }

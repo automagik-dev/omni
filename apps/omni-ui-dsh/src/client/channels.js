@@ -6,7 +6,7 @@ import { t } from './i18n.js'
 import { relativeShort } from './text.js'
 import { call } from './api.js'
 import {
-  CHANNEL_TYPES, STATUS, canWrite, channelOf, chatOf, healthSummary, omniActions, omniStore, typeOf, unreadOf, visibleChats,
+  CHANNEL_TYPES, CHANNELS_PANEL, STATUS, canWrite, channelOf, chatOf, healthSummary, omniActions, omniStore, startLive, typeOf, unreadOf, visibleChats,
 } from './omni-store.js'
 
 // Omni channels inside the Bot surface. The Channels page (CHANNELS_PANEL) connects new
@@ -427,7 +427,27 @@ function SampleQr({ seed = 1 }) {
 
 const TONES = '[data-tone=ok]{--oc-tone:#16a34a}[data-tone=busy]{--oc-tone:#0ea5e9}[data-tone=warn]{--oc-tone:#f59e0b}[data-tone=off]{--oc-tone:#94a3b8}'
 
+// The footer's way into channel management: the connected channels as small tiles, a dot
+// when one needs attention, and the Channels page (connect, health) on click.
+export function ChannelsFooter({ wide, actions }) {
+  const state = useOmni()
+  useEffect(() => { startLive(call) }, [])
+  if (!wide) return null
+  const summary = healthSummary(state)
+  const label = summary.attention > 0 ? t('{n} channel needs attention', { n: summary.attention }) : t('Channels and their health')
+  return h('span', { className: 'bt-connect-wrap' }, h('button', { type: 'button', className: 'bt-connect bt-connect-foot bt-channels-foot', title: label, 'aria-label': `${t('Channels')}, ${label}`, onClick: () => actions.selectPanel(CHANNELS_PANEL) },
+    h('span', { className: 'bt-channels-tiles', 'aria-hidden': true }, state.channels.slice(0, 4).map(channel => h(Tile, { key: channel.id, type: channel.type, size: 18 }))),
+    t('Channels'),
+    summary.attention > 0 ? h('span', { className: 'oc-warn-dot', 'aria-hidden': true }) : h('span', { className: 'bt-channels-count' }, `${summary.connected}/${summary.total}`)))
+}
+
 export const CHANNELS_CSS = `
+.bt-channels-foot{gap:8px;justify-content:flex-start;padding:0 12px 0 8px}
+.bt-channels-tiles{display:inline-flex}
+.bt-channels-tiles .oc-tile{margin-left:-5px;box-shadow:0 0 0 1.5px var(--bt-main)}
+.bt-channels-tiles .oc-tile:first-child{margin-left:0}
+.bt-channels-count{margin-left:auto;font-size:12px;color:var(--bt-ink-3)}
+.bt-channels-foot .oc-warn-dot{margin-left:auto}
 ${TONES}
 .oc-tile{display:inline-grid;place-items:center;flex:none;color:#fff;box-shadow:inset 0 0 0 .5px rgba(0,0,0,.08)}
 .oc-tile svg{display:block}
