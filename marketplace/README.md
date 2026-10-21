@@ -52,7 +52,9 @@ DSH asks before it installs anything, and installs exactly the version listed.
 
 | Plugin | Source | Notes |
 |--------|--------|-------|
-| `@automagik/omni-dsh` | this repository, `apps/omni-ui-dsh`, pinned to a commit | Omni in DSH. Keeps its files in `~/.omni`, never in your DSH profile. |
+| `@automagik/omni-dsh` | this repository, `apps/omni-ui-dsh`, pinned to a commit | Omni team: the Bot team the others build on. Keeps its files in `~/.omni`, never in your DSH profile. |
+| `@automagik/omni-channels-dsh` | this repository, `apps/omni-channels-dsh`, pinned to a commit | Omni channels: link your Omni, its channels, chats and automations. Needs Omni team. |
+| `@automagik/omni-canvas-dsh` | this repository, `apps/omni-canvas-dsh`, pinned to a commit | Omni canvases: live UI in the chat, drawn from your Omni. Needs Omni team and channels. |
 | `@automagik/omni-ai-dsh` | this repository, `apps/omni-ai-dsh`, pinned to a commit | The Omni welcome and Connect AI. |
 | `dsh-codex-subscription` 3.1.3 | npm | ChatGPT/Codex plan through DSH's own Codex sign-in. Personal use under the vendor's terms. |
 | `dsh-oh-my-claude` 1.5.4 | npm | The official Claude Code CLI as a provider. Personal use under the vendor's terms. |

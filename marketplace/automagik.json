@@ -46,10 +46,10 @@
     {
       "name": "@automagik/omni-dsh",
       "title": {
-        "en": "Omni"
+        "en": "Omni team"
       },
       "description": {
-        "en": "Your Omni channels, chats and automations in DSH, with Omni as the operator Bot. Connect to your Omni with a QR and your own WhatsApp."
+        "en": "Omni's Bot team in DSH: the Main Bot and its Bots, sessions, memory and settings. Add Omni channels to link your Omni, and Omni canvases for live UI."
       },
       "author": "Automagik",
       "homepage": "https://github.com/automagik-dev/omni/tree/dev/apps/omni-ui-dsh#readme",
@@ -70,6 +70,19 @@
         ]
       },
       "versions": [
+        {
+          "version": "2.261019.10",
+          "publishTimestamp": 1792556829,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/automagik-dev/omni",
+            "commit": "e1135b8ead17380ac10c8f2a520a111cafbf4e97",
+            "path": "apps/omni-ui-dsh"
+          },
+          "engines": {
+            "dsh": ">=0.2.1-rc.2 <0.3.0"
+          }
+        },
         {
           "version": "0.1.9",
           "publishTimestamp": 1792549968,
@@ -112,6 +125,89 @@
       ]
     },
     {
+      "name": "@automagik/omni-channels-dsh",
+      "title": {
+        "en": "Omni channels"
+      },
+      "description": {
+        "en": "Link your Omni with a QR and your own WhatsApp: its channels and chats in DSH, the Omni Bot operating them, and automations on its events. Needs Omni team."
+      },
+      "author": "Automagik",
+      "homepage": "https://github.com/automagik-dev/omni/tree/dev/apps/omni-channels-dsh#readme",
+      "repository": {
+        "url": "https://github.com/automagik-dev/omni",
+        "directory": "apps/omni-channels-dsh"
+      },
+      "metadata": {
+        "category": "omni",
+        "keywords": [
+          "omni",
+          "whatsapp",
+          "channels",
+          "automations"
+        ],
+        "labels": [
+          "official"
+        ]
+      },
+      "versions": [
+        {
+          "version": "2.261019.10",
+          "publishTimestamp": 1792556829,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/automagik-dev/omni",
+            "commit": "e1135b8ead17380ac10c8f2a520a111cafbf4e97",
+            "path": "apps/omni-channels-dsh"
+          },
+          "engines": {
+            "dsh": ">=0.2.1-rc.2 <0.3.0"
+          }
+        }
+      ]
+    },
+    {
+      "name": "@automagik/omni-canvas-dsh",
+      "title": {
+        "en": "Omni canvases"
+      },
+      "description": {
+        "en": "The Omni Bot shows what it found as live UI in the chat, drawn from your Omni. Needs Omni team and Omni channels."
+      },
+      "author": "Automagik",
+      "homepage": "https://github.com/automagik-dev/omni/tree/dev/apps/omni-canvas-dsh#readme",
+      "repository": {
+        "url": "https://github.com/automagik-dev/omni",
+        "directory": "apps/omni-canvas-dsh"
+      },
+      "metadata": {
+        "category": "omni",
+        "keywords": [
+          "omni",
+          "canvas",
+          "genui"
+        ],
+        "labels": [
+          "official"
+        ]
+      },
+      "versions": [
+        {
+          "version": "2.261019.10",
+          "publishTimestamp": 1792556829,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/automagik-dev/omni",
+            "commit": "e1135b8ead17380ac10c8f2a520a111cafbf4e97",
+            "path": "apps/omni-canvas-dsh"
+          },
+          "engines": {
+            "dsh": ">=0.2.1-rc.2 <0.3.0"
+          }
+        }
+      ]
+    },
+    {
       "name": "@automagik/omni-ai-dsh",
       "title": {
         "en": "Omni welcome & Connect AI"
@@ -138,6 +234,19 @@
         ]
       },
       "versions": [
+        {
+          "version": "2.261019.10",
+          "publishTimestamp": 1792556829,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/automagik-dev/omni",
+            "commit": "e1135b8ead17380ac10c8f2a520a111cafbf4e97",
+            "path": "apps/omni-ai-dsh"
+          },
+          "engines": {
+            "dsh": ">=0.2.1-rc.2 <0.3.0"
+          }
+        },
         {
           "version": "0.1.1",
           "publishTimestamp": 1792549968,
