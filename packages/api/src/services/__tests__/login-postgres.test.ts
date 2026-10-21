@@ -239,7 +239,7 @@ postgresDescribe('human login (real PostgreSQL)', () => {
 
     const approved = await handleDeviceLoginMessage(login, ownerSelfChat(`Omni ${device.user_code}`));
     expect(approved).toMatchObject({ clientId: 'omni-desktop' });
-    expect(sent.at(-1)?.text).toContain('approved the Omni desktop app');
+    expect(sent.at(-1)?.text).toContain('The Omni desktop app is now connected to your Omni.');
     // The same message again does nothing.
     expect(await handleDeviceLoginMessage(login, ownerSelfChat(`Omni ${device.user_code}`))).toBeNull();
 

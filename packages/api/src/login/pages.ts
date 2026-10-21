@@ -26,6 +26,11 @@ const OCTOPUS = `<svg class="octo" viewBox="0 0 100 100" aria-hidden="true">
 <g fill="none" stroke="#0b8f8a" stroke-width="3" stroke-linecap="round"><path d="M20 96Q13 99 12 92"/><path d="M80 96Q87 99 88 92"/></g>
 </svg>`;
 
+// The tab icon, inline: without one the browser asks for /favicon.ico, which Omni's auth gate refuses.
+const ICON = `data:image/svg+xml,${encodeURIComponent(
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path d="${OCTOPUS_BODY}" fill="#22d3c5"/><path d="${OCTOPUS_SHADE}" fill="#06706d" opacity=".55"/><ellipse cx="40" cy="36" rx="6.5" ry="11" fill="#06121f"/><ellipse cx="60" cy="36" rx="6.5" ry="11" fill="#06121f"/></svg>`,
+)}`;
+
 const STYLE = `
 :root{color-scheme:dark;--bg:#05070f;--card:rgba(13,20,36,.78);--ink:#eef3ff;--ink2:#9fb0cc;--line:rgba(120,160,220,.22);--accent:#22d3c5;--accent2:#7c5cff;--bad:#ff6b6b}
 *{box-sizing:border-box}
@@ -126,7 +131,7 @@ const passkeysAvailable = () => typeof PublicKeyCredential !== 'undefined';
 
 function page(title: string, body: string, script: string, rail: string[] = []): string {
   const steps = rail.length ? `<div class="rail">${rail.map((step) => `<span>${step}</span>`).join('')}</div>` : '';
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><meta name="theme-color" content="#05070f"><title>${title}</title><style>${STYLE}</style></head><body><div class="stage">${OCTOPUS}<div class="bubble" id="bubble" role="status"></div>${steps}<main><div class="mark">OMNI</div>${body}<p id="status" class="muted"></p></main></div><script>${SHARED_SCRIPT}${script}</script></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><meta name="theme-color" content="#05070f"><link rel="icon" href="${ICON}"><title>${title}</title><style>${STYLE}</style></head><body><div class="stage">${OCTOPUS}<div class="bubble" id="bubble" role="status"></div>${steps}<main><div class="mark">OMNI</div>${body}<p id="status" class="muted"></p></main></div><script>${SHARED_SCRIPT}${script}</script></body></html>`;
 }
 
 export function claimPage(): string {

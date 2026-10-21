@@ -35,6 +35,7 @@ import { bearer, deviceAuthorization, phoneNumber } from 'better-auth/plugins';
 import { count } from 'drizzle-orm';
 import { phoneDigits } from '../lib/phone';
 import { type LoginConfig, isDeviceClient } from './config';
+import { loginCodeMessage } from './messages';
 import { type WhatsAppAccess, accountByPhone } from './whatsapp';
 
 /** Better Auth endpoints the outside world may call. Everything else under /api/auth answers 404. */
@@ -56,6 +57,8 @@ export const PUBLIC_AUTH_PATHS = new Set([
 
 /** The user codes the device flow issues: Better Auth's own alphabet, 8 characters. */
 const USER_CODE_LENGTH = 8;
+/** How long a WhatsApp login code works. */
+const OTP_TTL_S = 300;
 
 export interface LoginAuthDeps {
   db: Database;
@@ -138,18 +141,14 @@ export function createLoginAuth({ db, whatsapp, config }: LoginAuthDeps): LoginA
     plugins: [
       phoneNumber({
         otpLength: 6,
-        expiresIn: 300,
+        expiresIn: OTP_TTL_S,
         allowedAttempts: 3,
         // Only the accounts connected to this Omni get codes, and only in their own self chat.
         phoneNumberValidator: async (phone) => (await accountByPhone(whatsapp, phone)) !== null,
         sendOTP: async ({ phoneNumber: phone, code }) => {
           const account = await accountByPhone(whatsapp, phone);
           if (!account) throw new Error('This number is not connected to this Omni');
-          await whatsapp.sendToSelf(
-            account,
-            `login-${Date.now()}`,
-            `Omni login code: ${code}\nIt works for 5 minutes. If you did not ask for it, ignore it.`,
-          );
+          await whatsapp.sendToSelf(account, `login-${Date.now()}`, loginCodeMessage(code, OTP_TTL_S / 60));
         },
         signUpOnVerification: {
           getTempEmail: (phone) => `${phoneDigits(phone) ?? 'owner'}@phone.omni.invalid`,

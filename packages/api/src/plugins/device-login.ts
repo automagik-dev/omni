@@ -17,6 +17,7 @@ import type { EventBus, TypedOmniEvent } from '@omni/core';
 import { classifyEnvelope, createLogger } from '@omni/core';
 import { type Login, deviceRequestOf, ownerOf } from '../login';
 import { DEVICE_CLIENTS, isDeviceClient } from '../login/config';
+import { deviceApprovedMessage } from '../login/messages';
 import { platformTime } from '../services/whatsapp-self';
 
 const log = createLogger('device-login');
@@ -124,15 +125,9 @@ export async function handleDeviceLoginMessage(
   // Say who asked, so a code someone talked the owner into sending does not pass unnoticed
   // (RFC 8628 section 5.4, remote phishing).
   const request = deviceRequestOf(login, userCode);
-  const from = request?.ip ? ` from ${request.ip}` : '';
-  const when = request ? ` at ${new Date(request.at).toISOString().slice(11, 16)} UTC` : '';
   log.info('Device approved over WhatsApp', { clientId });
   await login.whatsapp
-    .sendToSelf(
-      account,
-      `device-${deviceCode.id}`,
-      `Omni: approved ${what}, which asked${from}${when}. Not you? Revoke its key ("device: …") under Keys in Omni.`,
-    )
+    .sendToSelf(account, `device-${deviceCode.id}`, deviceApprovedMessage(what, request ?? undefined))
     .catch((error) => log.warn('Could not confirm the approval in the self chat', { error: String(error) }));
   return { userCode, clientId };
 }
