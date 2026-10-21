@@ -329,6 +329,34 @@ const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
       "device clients; approving requires the owner's own Better Auth session.",
   },
   {
+    route: 'GET /api/market',
+    class: 'public-by-contract',
+    justification:
+      'The Automagik marketplace page: the catalog of DSH plugins this release carries and the vetted ' +
+      'third-party add-ons, with the index URL to add to a DSH. Built only from the build-time bundled market ' +
+      '(dist/market/market.json) and marketplace/automagik.json, identical for every caller; reads no database, ' +
+      'no tenant, instance, user or connection state, and its only input is the request origin when no public ' +
+      'URL is configured. Text is inserted with textContent.',
+  },
+  {
+    route: 'GET /api/market/index.json',
+    class: 'public-by-contract',
+    justification:
+      'The Automagik marketplace as a DSH plugin market index (format 1). Lists the plugin names, versions, ' +
+      'descriptions and labels fixed at build time (the bundled market and marketplace/automagik.json), the same ' +
+      'for every caller; reads no database, and exposes no tenant, instance, user, count of anything live, or ' +
+      'configuration beyond the public URL the index points installers at.',
+  },
+  {
+    route: 'GET /api/market/npm/*',
+    class: 'public-by-contract',
+    justification:
+      "The Automagik marketplace's npm registry: the packument and the tarball of each DSH plugin this release " +
+      'carries, read only from the build-time bundled market. A tarball is served only when its file name is the ' +
+      'one market.json lists for that package, never from a path built from the request; any other package name ' +
+      'answers a 302 to the public npm registry. Reads no database and exposes no tenant, instance or user data.',
+  },
+  {
     route: 'GET /api/v2/login/status',
     class: 'public-by-contract',
     justification:

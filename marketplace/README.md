@@ -8,12 +8,36 @@ your own AI.
 https://raw.githubusercontent.com/automagik-dev/omni/labs/marketplace/automagik.json
 ```
 
+## Every Omni is a marketplace
+
+Each Omni serves the Automagik marketplace for its own release, so a DSH pointed at an Omni installs exactly the
+plugins that Omni shipped with:
+
+```
+https://<your-omni>/api/market/index.json
+```
+
+| Route | What it is |
+|-------|------------|
+| `/api/market` | The catalog, and how to add the index to a DSH |
+| `/api/market/index.json` | The market index: Omni's own plugins at Omni's version, plus the vetted add-ons below |
+| `/api/market/npm/` | An npm registry for Omni's own plugins; any other package name redirects to registry.npmjs.org |
+
+Omni's own entries are npm sources whose `registry` is that Omni (`https://<your-omni>/api/market/npm/`). The
+tarballs come from the release itself: `scripts/pack-market.ts` packs every `apps/*-dsh` plugin with `bun pm pack`
+into the CLI's `dist/market` (with a `market.json` manifest) when the CLI is packed. The vetted add-ons come from
+this file, built into the server. A server run from source has no packed plugins and lists the add-ons only;
+point `OMNI_MARKET_DIR` at a `bun scripts/pack-market.ts <dir>` output to serve them. The links use
+`OMNI_PUBLIC_URL` when it is set, else the address the request came in on.
+
+The index in this folder stays for DSH users without an Omni.
+
 ## Add it to your DSH
 
 The market ships with DSH as an optional bundle. Turn it on, then add the index:
 
 1. Settings → Plugins → enable **Plugin market** (`@deepseek-ai/dsh-experimental-plugin-market-bundle`).
-2. Market → Indexes → add the URL above. Or put it straight into your profile's `cordis.patch.yml`:
+2. Market → Indexes → add the URL above (or your Omni's `/api/market/index.json`). Or put it straight into your profile's `cordis.patch.yml`:
 
    ```yaml
    - id: plugin-market
@@ -43,7 +67,8 @@ listed version. A new version is listed only after the same review.
 
 ## Maintaining the index
 
-Omni's own entries are git sources, so nothing is published to npm. After a change to one of Omni's plugins lands:
+In this file, Omni's own entries are git sources, so nothing is published to npm. An Omni's own market needs no
+maintenance: it is packed from the release it serves. After a change to one of Omni's plugins lands:
 
 ```bash
 bun scripts/marketplace.ts pin <commit-or-branch>   # point Omni's entries at it (adds a version when it moved on)
