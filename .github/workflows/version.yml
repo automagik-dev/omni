@@ -395,6 +395,23 @@ jobs:
     with:
       ref: ${{ needs.auto-version.outputs.bump_sha }}
 
+  # The desktop app for each dev cut, built at the bump commit so it and the plugins in it
+  # carry the cut's version: the GitHub release omni-desktop-v<version> that
+  # `omni desktop` downloads. A local reusable call for the same reason as dev-image, and
+  # after auto-version so a failed build never blocks the npm publish.
+  desktop-release:
+    name: Desktop release
+    needs: auto-version
+    if: needs.auto-version.result == 'success' && inputs.candidate != true
+    uses: ./.github/workflows/desktop-release.yml
+    permissions:
+      contents: write
+    secrets: inherit
+    with:
+      version: ${{ needs.auto-version.outputs.version }}
+      ref: ${{ needs.auto-version.outputs.bump_sha }}
+      prerelease: true
+
   publish-stable:
     name: Publish verified stable npm package
     # Read-only: republishes one already-verified stable version and never
