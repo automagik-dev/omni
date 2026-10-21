@@ -1,5 +1,7 @@
 // Client channel: the team view the browser renders, and the POST /api/bot endpoints.
 import { randomUUID } from 'node:crypto'
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { questionReply } from './parts.js'
 import { COLORS, EXTRA_COLORS, ROUTE } from './constants.js'
@@ -82,6 +84,10 @@ export function install(rt) {
     connectors: rt.connectorsView(),
     capabilityStatuses: rt.capabilityStatusesView(),
     ...rt.extended.live(),
+    // Channels moved to their own plugin: a team linked to an Omni (omni.json, which that
+    // plugin keeps, or the older omni.url on this row) whose DSH has only this plugin
+    // learns where they went.
+    channelsMoved: ctx.get?.('omniChannels') === undefined && (typeof rt.config?.omni?.url === 'string' || existsSync(join(rt.home, 'omni.json'))),
   })
   // What a host that only reads the team may still answer.
   // Updates change the dsh profile, not the team, so a reading host may run them too.

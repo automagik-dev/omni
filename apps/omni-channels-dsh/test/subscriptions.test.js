@@ -3,8 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { apply } from '../index.js'
-import { fakeContext } from './fake-ctx.js'
+import { applyBoth, fakeContext } from './team.js'
 
 const OMNI = 'https://omni.test'
 const omniAnswers = {
@@ -62,7 +61,8 @@ function setup(t) {
   let route
   const register = ctx.connection.fetch.register
   ctx.connection.fetch.register = (options) => { route = options; return register(options) }
-  apply(ctx, { home, omni: { url: OMNI } })
+  // The Omni is named the older way, on the team's row: this plugin reads it there.
+  applyBoth(ctx, { home, omni: { url: OMNI } })
   t.after(async () => {
     globalThis.fetch = realFetch
     await ctx.dispose()

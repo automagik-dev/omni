@@ -1,0 +1,10 @@
+# Mounts Omni's channels beside the Omni team (@automagik/omni-dsh, row omni-ui), whose
+# runtime it injects as the omniTeam service; the browser half is discovered through the
+# package's dsh.client manifest and ./client export.
+#
+# Installed into someone's own DSH, this patch adds that row and changes nothing of theirs:
+# the Omni it links to is kept in omni.json in the team's home ($OMNI_HOME/ui), and an
+# older profile that names the Omni with omni.url on the omni-ui row still works.
+- insert:
+    - id: omni-channels
+      name: '@automagik/omni-channels-dsh'

@@ -84,3 +84,11 @@ test('Main Bot rules come in their order, and a hook with nothing to add is left
   assert.deepEqual(viewed.extended.view(), { ok: true })
   assert.equal(warned.length, 1)
 })
+
+test('a team linked to an Omni without the channels plugin learns that channels moved', async (t) => {
+  const { rt, call, stop } = start()
+  t.after(stop)
+  assert.equal((await call('state')).value.channelsMoved, false)
+  writeFileSync(join(rt.home, 'omni.json'), '{}')
+  assert.equal((await call('state')).value.channelsMoved, true)
+})

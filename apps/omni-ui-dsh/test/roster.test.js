@@ -659,30 +659,3 @@ test('a Main Bot still wearing the whale becomes the octopus once, and the chang
   assert.equal(JSON.parse(readFileSync(join(home, 'state.json'), 'utf8')).bots.m1.avatar.shape, 'moon')
 })
 
-test('with an omni to operate, the Main Bot runs the automations and no second Bot is made', async (t) => {
-  const { call, stop } = start(undefined, { models: ['deepseek-v4-flash'], config: { omni: { url: 'https://omni.test' } } })
-  t.after(stop)
-  await call('state', {})
-  await settle()
-  const team = (await call('state', {})).value
-  assert.equal(team.bots.length, 1)
-  assert.equal(team.eventsBotId, team.mainBotIds[0])
-})
-
-test('a team made with Autopilot keeps it as an ordinary Bot; the Main Bot runs the automations', async (t) => {
-  const { call, stop } = start({
-    version: 1, mainBotIds: ['m1'], eventsBotId: 't1', eventsBotStored: true, revision: 1,
-    bots: {
-      m1: { id: 'm1', name: 'Omni', role: 'Orchestrator', instructions: '', createdAt: 1 },
-      t1: { id: 't1', name: 'Autopilot', role: 'Automations', instructions: 'old', createdAt: 2 },
-    },
-    rooms: {}, agents: {}, exchanges: [], exchangeTurns: {},
-  }, { models: ['deepseek-v4-flash'], config: { omni: { url: 'https://omni.test' } } })
-  t.after(stop)
-  await call('state', {})
-  await settle()
-  const team = (await call('state', {})).value
-  assert.equal(team.eventsBotId, 'm1')
-  // Nothing of the user's is deleted: its chat stays, and the user can delete it.
-  assert.equal(team.bots.find(bot => bot.id === 't1').name, 'Autopilot')
-})

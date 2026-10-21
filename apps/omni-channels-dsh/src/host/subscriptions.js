@@ -6,7 +6,7 @@
 // state.subscriptions, the name they had first.)
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { output } from './tools.js'
+import { output } from './output.js'
 
 export const TRIGGER_KINDS = ['reaction', 'message', 'mention', 'keyword', 'voice', 'media', 'down']
 const RUNS_KEPT = 40

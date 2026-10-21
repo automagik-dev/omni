@@ -4,7 +4,7 @@
 // read and each change happen. The browser reads through `omni-get`, GET operations only,
 // for the live parts of those cards and of the canvases Omni draws.
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { output } from './tools.js'
+import { output } from './output.js'
 import { SOURCE_ROUTES } from './omni-routes.js'
 
 const SPEC_TTL_MS = 10 * 60_000

@@ -13,7 +13,6 @@ import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 import { createLibrary, defineComponent, markReactive } from '@openuidev/lang-core'
 import { libraryOf, PROMPT_OPTIONS } from '../src/client/omni-ui-spec.js'
-import { sourceRoutes } from './omni-routes.mjs'
 
 const PLUGIN = dirname(dirname(fileURLToPath(import.meta.url)))
 // DSH's client loader matches a bundle's id to the npm package that ships it.
@@ -25,20 +24,6 @@ const PROMPT_OUTPUT = join(PLUGIN, 'src/host/omni-ui-prompt.js')
 // The canvas check for the host's show_canvas, bundled so the host needs no OpenUI or zod
 // installed (and never runs their install scripts).
 const CHECK_OUTPUT = join(PLUGIN, 'src/host/omni-ui-check.bundle.js')
-// The omni API routes its source declares, for those its OpenAPI description leaves out.
-// Read from this monorepo's packages/api; outside it, the committed list stays as it is.
-const ROUTES_OUTPUT = join(PLUGIN, 'src/host/omni-routes.js')
-const API_SOURCE = join(PLUGIN, '..', '..', 'packages', 'api')
-
-export function omniRoutes() {
-  const routes = sourceRoutes(API_SOURCE)
-  if (routes === null) return null
-  return [
-    '// Generated from packages/api/src/routes/v2 by `npm run build` (scripts/omni-routes.mjs). Do not edit by hand.',
-    `export const SOURCE_ROUTES = ${JSON.stringify(routes, null, 0).replace(/\},\{/g, '},\n  {').replace(/^\[/, '[\n  ').replace(/\]$/, ',\n]')}`,
-    '',
-  ].join('\n')
-}
 // react/jsx-runtime is seeded by the shell too (deepseek-harness packages/client/web/src/seed.ts);
 // OpenUI's renderer imports it.
 const PLATFORM_MODULES = ['react', 'react/jsx-runtime', 'react-dom', '@deepseek-ai/dsh-client-ui-primitives']
@@ -142,8 +127,6 @@ export function omniUiPrompt() {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const outputs = [[OUTPUT, await bundleClient(), 'client.js'], [PROMPT_OUTPUT, omniUiPrompt(), 'src/host/omni-ui-prompt.js'], [CHECK_OUTPUT, await bundleCheck(), 'src/host/omni-ui-check.bundle.js']]
-  const routes = omniRoutes()
-  if (routes !== null) outputs.push([ROUTES_OUTPUT, routes, 'src/host/omni-routes.js'])
   for (const [file, next, name] of outputs) {
     if (process.argv.includes('--check')) {
       let current = null

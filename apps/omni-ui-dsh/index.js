@@ -34,11 +34,6 @@ import * as schedules from './src/host/schedules.js'
 import * as usage from './src/host/usage.js'
 import * as update from './src/host/update.js'
 import * as dshUpdate from './src/host/dsh-update.js'
-import * as omniLink from './src/host/omni-link.js'
-import * as omni from './src/host/omni.js'
-import * as subscriptions from './src/host/subscriptions.js'
-import * as omniEvents from './src/host/omni-events.js'
-import * as omniApi from './src/host/omni-api.js'
 import * as canvas from './src/host/canvas.js'
 import * as channel from './src/host/channel.js'
 
@@ -51,10 +46,11 @@ export const inject = ['llm', 'tools', 'systemPrompt', 'sessionController', 'ses
 // the functions other modules call; they call them through `rt` at run time, never during
 // install. Listeners run and tools are listed in registration order, so this order holds:
 // usage meters model requests after every listener that rewrites them.
-const MODULES = [diagnostics, extend, store, models, permissions, turns, handoffs, delivery, roster, folders, agents, prompt, timeContext, tools, chatIndex, groups, approvals, resume, memory, parts, images, secrets, connectors, capabilities, subscriptions, omniApi, canvas, schedules, browser, usage, update, dshUpdate, omniLink, omni, omniEvents, channel]
+const MODULES = [diagnostics, extend, store, models, permissions, turns, handoffs, delivery, roster, folders, agents, prompt, timeContext, tools, chatIndex, groups, approvals, resume, memory, parts, images, secrets, connectors, capabilities, canvas, schedules, browser, usage, update, dshUpdate, channel]
 
-// Other Omni plugins (channels, canvases) inject the runtime as `omniTeam` and add to it
-// through rt.hooks (src/host/extend.js).
+// Other Omni plugins inject the runtime as `omniTeam` and add to it through rt.hooks
+// (src/host/extend.js): Omni's channels and automations (@automagik/omni-channels-dsh),
+// its canvases (@automagik/omni-canvas-dsh).
 export function apply(ctx, config = {}) {
   const rt = createRuntime(ctx, config)
   ctx.provide('omniTeam', rt)

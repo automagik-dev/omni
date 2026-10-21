@@ -22,7 +22,8 @@ export const CANVAS_RULES = [
 
 export function install(rt) {
   const { ctx } = rt
-  const named = () => rt.omniNamed?.() === true
+  // The channels plugin knows whether an Omni is named here (its omni.js).
+  const named = () => ctx.get?.('omniChannels')?.omniNamed?.() === true
 
   ctx.effect(() => rt.hooks.mainRules(() => (named() ? CANVAS_RULES : null), { order: 200 }), 'ds-bot: canvas rules')
 

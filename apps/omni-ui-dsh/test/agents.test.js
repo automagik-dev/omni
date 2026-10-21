@@ -201,11 +201,16 @@ test('a corrupt agents field resets instead of crashing the view', async (t) => 
   assert.deepEqual(view.agents, [])
 })
 
-test('TEAM_TOOLS names exactly the tools ds-bot registers', async (t) => {
+// The Omni channels plugin registers these for the team; TEAM_TOOLS names them too, so a
+// DSH Agent's Sessions never get them. Its tests check the whole list with it installed.
+const CHANNEL_TOOLS = ['find_chats', 'list_automations', 'save_automation', 'pause_automation', 'delete_automation', 'omni_endpoints', 'omni_call', 'omni_channels', 'omni_chats', 'omni_messages', 'omni_connect']
+
+test('TEAM_TOOLS names exactly the tools ds-bot registers, and those of the other Omni plugins', async (t) => {
   // read_browser registers only in the Desktop profile; the flag stands in for it.
   const { stop, ctx } = start(TEAM, { config: { browser: true } })
   t.after(stop)
-  assert.deepEqual([...ctx.registeredTools.keys()].sort(), [...TEAM_TOOLS].sort())
+  assert.deepEqual([...ctx.registeredTools.keys()].sort(), TEAM_TOOLS.filter(name => !CHANNEL_TOOLS.includes(name)).sort())
+  for (const name of CHANNEL_TOOLS) assert.ok(TEAM_TOOLS.includes(name), name)
 })
 
 test('agent-session honors a known workspace and falls back to the team workspace', async (t) => {
