@@ -121,17 +121,25 @@ export function install(rt) {
   const trimmed = new WeakSet()
   const trimComputer = (agent) => {
     if (agent === undefined || trimmed.has(agent) || !operating(agent.session?.id) || typeof agent.ctx?.tools?.restrict !== 'function') return
+    // restrict() refuses a name that is not a global tool here (a scope-local `subagent`, a
+    // tool this dsh does not ship), and refuses the whole list for it. Restrictions
+    // intersect, so each tool is denied on its own and a refused one is skipped.
+    let served
     try {
-      // restrict() throws on a name this profile does not serve.
-      const served = new Set(ctx.tools.schemas(agent).map(schema => schema.name))
-      const deny = COMPUTER_TOOLS.filter(name => served.has(name))
-      // An empty list can mean the schemas are not up yet: the next refusal tries again.
-      if (deny.length === 0) return
-      agent.ctx.tools.restrict({ deny })
-      trimmed.add(agent)
+      served = new Set(ctx.tools.schemas(agent).map(schema => schema.name))
     } catch (error) {
       rt.warn('ds-bot: the computer tools stay in the Main Bot session %s: %s', agent.session?.id, error)
+      return
     }
+    let denied = 0
+    for (const name of COMPUTER_TOOLS.filter(name => served.has(name))) {
+      try {
+        agent.ctx.tools.restrict({ deny: [name] })
+        denied += 1
+      } catch {}
+    }
+    // Nothing denied can mean the schemas are not up yet: the next refusal tries again.
+    if (denied > 0) trimmed.add(agent)
   }
   ctx.on('agent/created', async ({ agent }) => {
     try {
