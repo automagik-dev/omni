@@ -82,12 +82,12 @@ export function ConnectAiStep(props) {
   if (!state) return null
 
   if (view === 'cliproxy') {
-    return h(Stage, { title: 'Connect CLIProxyAPI', speech: 'Point me at your gateway. Its key stays in DSH, never in a settings file.', at: 2, glitching },
+    return h(Stage, { title: 'Connect CLIProxyAPI', speech: 'Point me at your gateway. Its key stays in DSH, never in a settings file.', at: 'omni-connect-ai', glitching },
       h(CliproxyForm, { onBack: () => setView('tiles'), onSaved: (value) => { setSaved(value); setView('saved') }, glitch }))
   }
   if (view === 'saved') {
     const count = saved?.models?.length ?? 0
-    return h(Stage, { title: 'Gateway connected', speech: `Connected! ${count} ${count === 1 ? 'model' : 'models'} from your gateway, ready in the model picker.`, at: 2, glitching },
+    return h(Stage, { title: 'Gateway connected', speech: `Connected! ${count} ${count === 1 ? 'model' : 'models'} from your gateway, ready in the model picker.`, at: 'omni-connect-ai', glitching },
       h('div', { className: 'oai-models', 'aria-label': 'Models' }, (saved?.models ?? []).map(id => h('div', { key: id }, id))),
       h('button', { type: 'button', className: 'oai-primary', onClick: () => finish() }, 'Done'))
   }
@@ -95,7 +95,7 @@ export function ConnectAiStep(props) {
   return h(Stage, {
     title: 'Connect an AI',
     speech: connected ? 'You already have an AI connected. Add another, or carry on.' : 'Now give me a brain. Pick how you reach your AI; you can add more later.',
-    at: 2,
+    at: 'omni-connect-ai',
     glitching,
   },
   h(Tiles, { onTile: tile => (tile.form ? setView('cliproxy') : finish(tile.section)) }),

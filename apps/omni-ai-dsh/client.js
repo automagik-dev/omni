@@ -116,7 +116,17 @@ var STAGE_CSS = `
 // src/client/stage.js
 var import_react = require("react");
 var import_react_dom = require("react-dom");
-var RAIL = ["Welcome", "Connect Omni", "Connect AI"];
+var RAIL = [["omni-welcome", "Welcome"], ["omni-connect", "Connect Omni"], ["omni-connect-ai", "Connect AI"]];
+var ANNOUNCED = /* @__PURE__ */ Symbol.for("automagik.omni.onboarding-steps");
+function announceStep(id, scope = globalThis) {
+  const steps = scope[ANNOUNCED] ??= /* @__PURE__ */ new Set();
+  steps.add(id);
+  return () => steps.delete(id);
+}
+function railSteps(current, scope = globalThis) {
+  const steps = scope[ANNOUNCED];
+  return RAIL.filter(([id]) => id === current || steps?.has(id) === true);
+}
 var FLAG_OF = { "omni-welcome": "welcomeDone", "omni-connect-ai": "connectAiDone" };
 var reducedMotion = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 async function gate({ stepId, explicit, complete }, request = call) {
@@ -198,13 +208,15 @@ function useTypewriter(text) {
   return shown;
 }
 function Rail({ at }) {
+  const steps = railSteps(at);
+  const here = steps.findIndex(([id]) => id === at);
   return (0, import_react.createElement)(
     "ol",
     { className: "oai-rail", "aria-label": "Setup steps" },
-    RAIL.map((label, index) => (0, import_react.createElement)("li", {
-      key: label,
-      className: index < at ? "oai-done" : index === at ? "oai-on" : "",
-      "aria-current": index === at ? "step" : void 0
+    steps.map(([id, label], index) => (0, import_react.createElement)("li", {
+      key: id,
+      className: index < here ? "oai-done" : index === here ? "oai-on" : "",
+      "aria-current": index === here ? "step" : void 0
     }, label))
   );
 }
@@ -263,7 +275,7 @@ function WelcomeStep(props) {
     {
       title: "Welcome to Omni",
       speech: "Hi! I'm Omni. Every chat, every channel, one place. Let's get you set up.",
-      at: 0,
+      at: "omni-welcome",
       glitching
     },
     (0, import_react2.createElement)("p", null, "Two quick steps: connect your Omni, so I can see your channels, and connect an AI, so I can think."),
@@ -357,7 +369,7 @@ function ConnectAiStep(props) {
   if (view === "cliproxy") {
     return (0, import_react3.createElement)(
       Stage,
-      { title: "Connect CLIProxyAPI", speech: "Point me at your gateway. Its key stays in DSH, never in a settings file.", at: 2, glitching },
+      { title: "Connect CLIProxyAPI", speech: "Point me at your gateway. Its key stays in DSH, never in a settings file.", at: "omni-connect-ai", glitching },
       (0, import_react3.createElement)(CliproxyForm, { onBack: () => setView("tiles"), onSaved: (value) => {
         setSaved(value);
         setView("saved");
@@ -368,7 +380,7 @@ function ConnectAiStep(props) {
     const count = saved?.models?.length ?? 0;
     return (0, import_react3.createElement)(
       Stage,
-      { title: "Gateway connected", speech: `Connected! ${count} ${count === 1 ? "model" : "models"} from your gateway, ready in the model picker.`, at: 2, glitching },
+      { title: "Gateway connected", speech: `Connected! ${count} ${count === 1 ? "model" : "models"} from your gateway, ready in the model picker.`, at: "omni-connect-ai", glitching },
       (0, import_react3.createElement)("div", { className: "oai-models", "aria-label": "Models" }, (saved?.models ?? []).map((id) => (0, import_react3.createElement)("div", { key: id }, id))),
       (0, import_react3.createElement)("button", { type: "button", className: "oai-primary", onClick: () => finish2() }, "Done")
     );
@@ -379,7 +391,7 @@ function ConnectAiStep(props) {
     {
       title: "Connect an AI",
       speech: connected ? "You already have an AI connected. Add another, or carry on." : "Now give me a brain. Pick how you reach your AI; you can add more later.",
-      at: 2,
+      at: "omni-connect-ai",
       glitching
     },
     (0, import_react3.createElement)(Tiles, { onTile: (tile) => tile.form ? setView("cliproxy") : finish2(tile.section) }),
@@ -403,6 +415,7 @@ function installStyles() {
 function apply(ctx) {
   ctx.effect(installStyles, "omni-ai: stage styles");
   for (const step of STEPS) {
+    ctx.effect(() => announceStep(step.id), `omni-ai: ${step.id} on the rail`);
     ctx.slots.inject("settings.onboarding", () => ctx.slots.register({ name: "settings.onboarding", id: step.id, order: step.order }, step.component));
   }
 }

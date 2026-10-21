@@ -41,7 +41,7 @@ test('client.js registers the two onboarding steps on settings.onboarding, in or
       register: (options, component) => { registered.push({ ...options, component: typeof component }); return () => {} },
     },
   })
-  assert.deepEqual(effects, ['omni-ai: stage styles'])
+  assert.deepEqual(effects, ['omni-ai: stage styles', 'omni-ai: omni-welcome on the rail', 'omni-ai: omni-connect-ai on the rail'])
   assert.deepEqual(injected, ['settings.onboarding', 'settings.onboarding'])
   assert.deepEqual(registered, [
     { name: 'settings.onboarding', id: 'omni-welcome', order: -300, component: 'function' },

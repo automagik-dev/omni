@@ -7,7 +7,24 @@ import { OCTOPUS_SVG } from './octopus.js'
 // (octopus, speech bubble, step rail, card). The settings shell paints no chrome for a
 // step, so the stage is the step's own modal, portaled to <body> with #root inert.
 
-export const RAIL = ['Welcome', 'Connect Omni', 'Connect AI']
+// Every Omni onboarding step, in order. Each plugin that brings one announces it as it
+// applies (this one: Welcome and Connect AI; @automagik/omni-dsh's channels: Connect Omni),
+// so the rail names only the steps this DSH will show.
+export const RAIL = [['omni-welcome', 'Welcome'], ['omni-connect', 'Connect Omni'], ['omni-connect-ai', 'Connect AI']]
+const ANNOUNCED = Symbol.for('automagik.omni.onboarding-steps')
+
+/** Marks step `id` as present until the returned function runs. */
+export function announceStep(id, scope = globalThis) {
+  const steps = (scope[ANNOUNCED] ??= new Set())
+  steps.add(id)
+  return () => steps.delete(id)
+}
+
+/** The rail's steps: the announced ones, in order; one never announced still shows itself. */
+export function railSteps(current, scope = globalThis) {
+  const steps = scope[ANNOUNCED]
+  return RAIL.filter(([id]) => id === current || steps?.has(id) === true)
+}
 export const FLAG_OF = { 'omni-welcome': 'welcomeDone', 'omni-connect-ai': 'connectAiDone' }
 
 export const reducedMotion = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -100,11 +117,13 @@ function useTypewriter(text) {
 }
 
 function Rail({ at }) {
+  const steps = railSteps(at)
+  const here = steps.findIndex(([id]) => id === at)
   return h('ol', { className: 'oai-rail', 'aria-label': 'Setup steps' },
-    RAIL.map((label, index) => h('li', {
-      key: label,
-      className: index < at ? 'oai-done' : index === at ? 'oai-on' : '',
-      'aria-current': index === at ? 'step' : undefined,
+    steps.map(([id, label], index) => h('li', {
+      key: id,
+      className: index < here ? 'oai-done' : index === here ? 'oai-on' : '',
+      'aria-current': index === here ? 'step' : undefined,
     }, label)))
 }
 

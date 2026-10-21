@@ -23,7 +23,7 @@ async function load(file) {
 // Values made inside the vm compare by shape, not by realm.
 const plain = value => JSON.parse(JSON.stringify(value))
 
-const { gate, finish, finishInto, FLAG_OF } = await load('stage.js')
+const { gate, finish, finishInto, FLAG_OF, announceStep, railSteps } = await load('stage.js')
 const { GROUPS, VENDOR_TERMS } = await load('connect-ai.js')
 
 function recorder(state = {}) {
@@ -80,4 +80,18 @@ test('Connect AI lists API-key paths first and marks every subscription sign-in'
   for (const id of ['codex', 'claude', 'kimi']) assert.equal(tiles.find(tile => tile.id === id).note, VENDOR_TERMS)
   assert.equal(VENDOR_TERMS, 'Personal use under the vendor\'s terms')
   assert.equal(tiles.find(tile => tile.id === 'cliproxy').form, true)
+})
+
+test('the rail names only the steps this DSH has: Connect Omni only with the plugin that brings it', () => {
+  const scope = {}
+  const labels = current => plain(railSteps(current, scope).map(([, label]) => label))
+  announceStep('omni-welcome', scope)
+  announceStep('omni-connect-ai', scope)
+  assert.deepEqual(labels('omni-welcome'), ['Welcome', 'Connect AI'])
+  const leave = announceStep('omni-connect', scope)
+  assert.deepEqual(labels('omni-connect-ai'), ['Welcome', 'Connect Omni', 'Connect AI'])
+  leave()
+  assert.deepEqual(labels('omni-connect-ai'), ['Welcome', 'Connect AI'])
+  // A step that never announced itself still shows where it is.
+  assert.deepEqual(plain(railSteps('omni-connect', {}).map(([id]) => id)), ['omni-connect'])
 })
