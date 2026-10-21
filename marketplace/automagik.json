@@ -76,7 +76,7 @@
           "source": {
             "type": "git",
             "url": "https://github.com/automagik-dev/omni",
-            "commit": "e1135b8ead17380ac10c8f2a520a111cafbf4e97",
+            "commit": "b06aa17242743a7dff5aaed70d36c4fd9f16b371",
             "path": "apps/omni-ui-dsh"
           },
           "engines": {
@@ -157,7 +157,7 @@
           "source": {
             "type": "git",
             "url": "https://github.com/automagik-dev/omni",
-            "commit": "e1135b8ead17380ac10c8f2a520a111cafbf4e97",
+            "commit": "b06aa17242743a7dff5aaed70d36c4fd9f16b371",
             "path": "apps/omni-channels-dsh"
           },
           "engines": {
@@ -198,7 +198,7 @@
           "source": {
             "type": "git",
             "url": "https://github.com/automagik-dev/omni",
-            "commit": "e1135b8ead17380ac10c8f2a520a111cafbf4e97",
+            "commit": "b06aa17242743a7dff5aaed70d36c4fd9f16b371",
             "path": "apps/omni-canvas-dsh"
           },
           "engines": {
@@ -240,7 +240,7 @@
           "source": {
             "type": "git",
             "url": "https://github.com/automagik-dev/omni",
-            "commit": "e1135b8ead17380ac10c8f2a520a111cafbf4e97",
+            "commit": "b06aa17242743a7dff5aaed70d36c4fd9f16b371",
             "path": "apps/omni-ai-dsh"
           },
           "engines": {
