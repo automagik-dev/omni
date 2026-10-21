@@ -13,7 +13,7 @@
 // Usage: node scripts/prepare-runtime.mjs [--skip-runtime]
 import { execFileSync } from 'node:child_process'
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const APP = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -27,6 +27,7 @@ const PLUGINS = Object.fromEntries(shipped.map(name => {
   return [name, folders[name]]
 }))
 const BUILD = join(APP, 'build')
+const VENDOR = 'vendor'
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
 // @openuidev/lang-core and others phone home from install scripts unless told not to.
 const env = { ...process.env, DO_NOT_TRACK: '1', npm_config_fund: 'false', npm_config_audit: 'false', npm_config_update_notifier: 'false' }
@@ -60,7 +61,14 @@ const profileDir = join(BUILD, 'profile')
 rmSync(profileDir, { recursive: true, force: true })
 mkdirSync(profileDir, { recursive: true })
 const profile = JSON.parse(readFileSync(join(APP, 'profile', 'package.json'), 'utf8'))
-for (const plugin of packed) profile.dependencies[plugin.name] = plugin.version
+// The plugins' tarballs ship in the profile and its package.json names them by file: dsh's
+// pnpm, installing a market plugin later, resolves Omni's own there, offline, whatever
+// registry that install asks (they are not on npm).
+mkdirSync(join(profileDir, VENDOR), { recursive: true })
+for (const plugin of packed) {
+  cpSync(plugin.tarball, join(profileDir, VENDOR, basename(plugin.tarball)))
+  profile.dependencies[plugin.name] = `file:${VENDOR}/${basename(plugin.tarball)}`
+}
 writeFileSync(join(profileDir, 'package.json'), `${JSON.stringify(profile, null, 2)}\n`)
 for (const file of ['cordis.patch.yml', 'pnpm-workspace.yaml']) cpSync(join(APP, 'profile', file), join(profileDir, file))
 // One install of every tarball: --no-save leaves the versions written above in place.

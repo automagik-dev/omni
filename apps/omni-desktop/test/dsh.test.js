@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -221,8 +221,14 @@ test('an update replaces the packages the app ships and keeps the plugins the us
 
   writeFileSync(join(source, 'node_modules', '@automagik', 'omni-dsh', 'index.js'), 'v2')
   writeFileSync(join(source, 'package.json'), JSON.stringify(shippedPackage('2')))
+  // The tarballs package.json names (file:vendor/…) come with the build.
+  mkdirSync(join(source, 'vendor'), { recursive: true })
+  writeFileSync(join(source, 'vendor', 'omni-dsh-2.tgz'), 'two')
+  mkdirSync(join(target, 'vendor'), { recursive: true })
+  writeFileSync(join(target, 'vendor', 'omni-dsh-1.tgz'), 'one')
   writeFileSync(join(source, '.build-id'), 'two')
   installProfile({ dshHome, source })
+  assert.deepEqual(readdirSync(join(target, 'vendor')), ['omni-dsh-2.tgz'])
   assert.equal(readFileSync(join(target, 'node_modules', '@automagik', 'omni-dsh', 'index.js'), 'utf8'), 'v2')
   assert.equal(existsSync(join(target, 'node_modules', 'dsh-kimi-subscription')), true)
   assert.equal(existsSync(join(target, 'node_modules', '@automagik', 'their-plugin')), true)

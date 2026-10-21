@@ -127,6 +127,9 @@ export function installProfile({ dshHome, source }) {
       rmSync(join(target, 'node_modules', name), { recursive: true, force: true })
       cpSync(join(source, 'node_modules', name), join(target, 'node_modules', name), { recursive: true })
     }
+    // The plugins' tarballs the package.json names (file:vendor/…) are the app's own.
+    rmSync(join(target, 'vendor'), { recursive: true, force: true })
+    if (existsSync(join(source, 'vendor'))) cpSync(join(source, 'vendor'), join(target, 'vendor'), { recursive: true })
     writeFileSync(join(target, 'package.json'), mergeProfilePackage(readJson(join(target, 'package.json')), readJson(join(source, 'package.json'))))
     if (existsSync(join(source, '.build-id'))) cpSync(join(source, '.build-id'), join(target, '.build-id'))
     for (const file of ['cordis.patch.yml', 'pnpm-workspace.yaml']) {
