@@ -5,8 +5,10 @@
  *   - scripts/sync-versions.ts  — writes a single calver to every entry
  *   - scripts/verify-versions.ts — fails CI if any entry drifts from root
  *
- * Four kinds of entries are returned (in this order):
- *   1. Standard package.json files (root + every workspace package)
+ * Five kinds of entries are returned (in this order):
+ *   1. Standard package.json files (root + every workspace package, the DSH
+ *      plugins and the desktop app), each with its npm package-lock.json when
+ *      it has one
  *   2. The omni Claude plugin manifest (plugins/omni/.claude-plugin/plugin.json)
  *   3. The marketplace plugin entry (.claude-plugin/marketplace.json -> plugins[name=omni])
  *   4. The umbrella Helm chart appVersion (deploy/helm/omni/Chart.yaml)
@@ -21,17 +23,11 @@ export const repoRoot = join(__dirname, '..', '..');
 
 /**
  * Workspace package directories that should NOT be touched by version sync.
- * omni-ui-dsh and omni-ai-dsh (the DSH plugins, npm @automagik/omni-dsh and
- * @automagik/omni-ai-dsh) and omni-desktop (released as omni-desktop-v* builds) are
- * Node + npm apps outside the Bun workspaces, with their own version lines.
+ * The DSH plugins (apps/*-dsh) and the desktop app are Node + npm apps outside
+ * the Bun workspaces, but they ship with Omni and carry its version: they are
+ * synced, with their package-lock.json.
  */
-const EXCLUDED_WORKSPACE_PACKAGES = new Set([
-  'audio-decode-shim',
-  'khal-ui',
-  'omni-ui-dsh',
-  'omni-ai-dsh',
-  'omni-desktop',
-]);
+const EXCLUDED_WORKSPACE_PACKAGES = new Set(['audio-decode-shim', 'khal-ui']);
 
 /** Marketplace plugin entry that this repo owns and keeps in sync. */
 const MARKETPLACE_PLUGIN_NAME = 'omni';
@@ -84,6 +80,35 @@ function topLevelJsonField(relPath: string, description: string): VersionField {
       const indent = detectIndent(content);
       const updated = `${JSON.stringify(data, null, indent)}\n`;
       writeFileSync(absPath, updated, 'utf-8');
+      return true;
+    },
+  };
+}
+
+/** Build a VersionField for an npm package-lock.json: its own version, at the top and under packages[""]. */
+function packageLockField(relPath: string): VersionField {
+  const absPath = join(repoRoot, relPath);
+  type Lock = { version?: unknown; packages?: Record<string, { version?: unknown }> };
+
+  return {
+    path: relPath,
+    description: 'npm package-lock.json',
+    read(): string | null {
+      if (!existsSync(absPath)) return null;
+      const data = JSON.parse(readFileSync(absPath, 'utf-8')) as Lock;
+      const root = data.packages?.['']?.version;
+      // A lock whose two fields disagree reads as drift, so verify-versions catches it.
+      if (typeof data.version !== 'string' || (root !== undefined && root !== data.version)) return null;
+      return data.version;
+    },
+    write(version: string): boolean {
+      const content = readFileSync(absPath, 'utf-8');
+      const data = JSON.parse(content) as Lock;
+      const root = data.packages?.[''];
+      if (data.version === version && (root === undefined || root.version === version)) return false;
+      data.version = version;
+      if (root) root.version = version;
+      writeFileSync(absPath, `${JSON.stringify(data, null, detectIndent(content))}\n`, 'utf-8');
       return true;
     },
   };
@@ -209,6 +234,8 @@ export function getAllVersionFields(): VersionField[] {
 
   for (const relPath of findWorkspacePackageJsonPaths()) {
     fields.push(topLevelJsonField(relPath, 'workspace package.json'));
+    const lockPath = relPath.replace(/package\.json$/, 'package-lock.json');
+    if (existsSync(join(repoRoot, lockPath))) fields.push(packageLockField(lockPath));
   }
 
   fields.push(topLevelJsonField('plugins/omni/.claude-plugin/plugin.json', 'omni claude plugin manifest'));

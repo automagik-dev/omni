@@ -1,6 +1,6 @@
 {
   "name": "@automagik/omni-dsh",
-  "version": "0.1.9",
+  "version": "2.261019.10",
   "description": "Omni for DeepSeek Harness: your Omni channels, chats and automations in DSH, with Omni as the operator Bot",
   "keywords": [
     "dsh-plugin",

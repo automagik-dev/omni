@@ -2,7 +2,7 @@
   "name": "@automagik/omni-desktop",
   "productName": "Omni",
   "desktopName": "omni-desktop.desktop",
-  "version": "0.1.0-labs.1",
+  "version": "2.261019.10",
   "private": true,
   "description": "Omni on your desktop: the Omni UI on a DeepSeek Harness of its own, linked to your Omni by a code",
   "homepage": "https://github.com/automagik-dev/omni/tree/labs/apps/omni-desktop#readme",
