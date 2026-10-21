@@ -74,16 +74,18 @@ test('the shipped profile seeds a new home, and a new build replaces only its pa
 
 // The app opens on the Omni octopus (@automagik/omni-ai-dsh), not on DSH's own welcome
 // notice and credential step.
-test('the shipped profile bundles both Omni plugins and switches DSH\'s own onboarding off', () => {
+test('the shipped profile bundles Omni\'s plugins, core first, and the plugin market, and switches DSH\'s own onboarding off', () => {
   const profile = JSON.parse(readFileSync(new URL('../profile/package.json', import.meta.url), 'utf8'))
-  for (const name of ['@automagik/omni-dsh', '@automagik/omni-ai-dsh']) {
-    assert.ok(Object.hasOwn(profile.dependencies, name), name)
-    assert.ok(profile.dsh.profile.bundles.includes(name), name)
-  }
+  const omni = ['@automagik/omni-dsh', '@automagik/omni-channels-dsh', '@automagik/omni-canvas-dsh', '@automagik/omni-ai-dsh']
+  assert.deepEqual(Object.keys(profile.dependencies), omni)
+  assert.deepEqual(profile.dsh.profile.bundles.filter(name => name.startsWith('@automagik/')), omni)
+  assert.ok(profile.dsh.profile.bundles.includes('@deepseek-ai/dsh-experimental-plugin-market-bundle'))
   const patch = readFileSync(new URL('../profile/cordis.patch.yml', import.meta.url), 'utf8')
   // DSH compares the notice version exactly, as a string.
   assert.match(patch, /^- id: ui-settings-general\n {2}config:\n {4}welcomeNoticeVersion: '2026-09-28\.1'$/m)
   assert.match(patch, /^- id: ui-settings-models\n {2}config:\n {4}credentialOnboarding: false$/m)
+  // Pairing adds the Omni's market here (apps/omni-channels-dsh omni-link.js).
+  assert.match(patch, /^- id: plugin-market\n {2}config:\n {4}indexes: \[\]$/m)
 })
 
 test('the launch URL is read from dsh\'s output, only for the port it was given', () => {

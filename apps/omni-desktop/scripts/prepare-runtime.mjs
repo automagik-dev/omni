@@ -5,22 +5,27 @@
 //                                pnpm-workspace.yaml,
 //                                and node_modules holding only Omni's plugins
 //
-// The plugins (../omni-ui-dsh, and ../omni-ai-dsh with the onboarding) are packed with
-// `npm pack`, so the app ships exactly what each package publishes. Their @deepseek-ai
-// peers are not installed again: dsh supplies them.
+// The plugins are the @automagik packages profile/package.json depends on, each found among
+// the DSH plugins beside this app (../*-dsh), packed with `npm pack` so the app ships
+// exactly what each package publishes. Their @deepseek-ai peers are not installed again:
+// dsh supplies them.
 // Native packages are per platform, so run this on the platform you build for.
 // Usage: node scripts/prepare-runtime.mjs [--skip-runtime]
 import { execFileSync } from 'node:child_process'
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const APP = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-// Each plugin's folder beside this app, by the package name the profile depends on.
-const PLUGINS = {
-  '@automagik/omni-dsh': resolve(APP, '..', 'omni-ui-dsh'),
-  '@automagik/omni-ai-dsh': resolve(APP, '..', 'omni-ai-dsh'),
-}
+// Each plugin the profile depends on, by its package name, and its folder beside this app.
+const shipped = Object.keys(JSON.parse(readFileSync(join(APP, 'profile', 'package.json'), 'utf8')).dependencies)
+const folders = Object.fromEntries(readdirSync(resolve(APP, '..'))
+  .filter(name => name.endsWith('-dsh') && existsSync(resolve(APP, '..', name, 'package.json')))
+  .map(name => [JSON.parse(readFileSync(resolve(APP, '..', name, 'package.json'), 'utf8')).name, resolve(APP, '..', name)]))
+const PLUGINS = Object.fromEntries(shipped.map(name => {
+  if (!folders[name]) throw new Error(`profile/package.json depends on ${name}, which no ../*-dsh folder holds`)
+  return [name, folders[name]]
+}))
 const BUILD = join(APP, 'build')
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
 // @openuidev/lang-core and others phone home from install scripts unless told not to.
@@ -41,7 +46,7 @@ if (!process.argv.includes('--skip-runtime') || !existsSync(join(runtimeDir, 'no
   if (!existsSync(join(APP, 'runtime', 'package-lock.json'))) cpSync(join(runtimeDir, 'package-lock.json'), join(APP, 'runtime', 'package-lock.json'))
 }
 
-say(`packing ${Object.keys(PLUGINS).join(' and ')}`)
+say(`packing ${Object.keys(PLUGINS).join(', ')}`)
 const packs = join(BUILD, 'packs')
 rmSync(packs, { recursive: true, force: true })
 mkdirSync(packs, { recursive: true })

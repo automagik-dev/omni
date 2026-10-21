@@ -1,9 +1,11 @@
 {
   "name": "omni-desktop-profile",
   "private": true,
-  "description": "The dsh profile the Omni desktop app starts: dsh's own base and web app, Omni, and Omni's welcome.",
+  "description": "The dsh profile the Omni desktop app starts: dsh's own base and web app, its plugin market, and Omni's plugins (the team, channels, canvases and the welcome).",
   "dependencies": {
     "@automagik/omni-dsh": "*",
+    "@automagik/omni-channels-dsh": "*",
+    "@automagik/omni-canvas-dsh": "*",
     "@automagik/omni-ai-dsh": "*"
   },
   "dsh": {
@@ -11,7 +13,10 @@
       "bundles": [
         "@deepseek-ai/dsh-base",
         "@deepseek-ai/dsh-web-app",
+        "@deepseek-ai/dsh-experimental-plugin-market-bundle",
         "@automagik/omni-dsh",
+        "@automagik/omni-channels-dsh",
+        "@automagik/omni-canvas-dsh",
         "@automagik/omni-ai-dsh"
       ]
     }

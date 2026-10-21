@@ -1,6 +1,6 @@
 # Omni desktop (labs)
 
-Omni on your desktop: a window on a [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) of its own, with the Omni UI plugin ([`apps/omni-ui-dsh`](../omni-ui-dsh)) and Omni's welcome ([`apps/omni-ai-dsh`](../omni-ai-dsh)) already in it. Open it and the Omni octopus walks you through three steps: Welcome, Connect Omni (type the address of your Omni and send the code it shows to yourself on WhatsApp) and Connect AI. Your channels and chats are there. No keys to copy.
+Omni on your desktop: a window on a [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) of its own, with Omni's plugins already in it: the team ([`apps/omni-ui-dsh`](../omni-ui-dsh)), channels ([`apps/omni-channels-dsh`](../omni-channels-dsh)), canvases ([`apps/omni-canvas-dsh`](../omni-canvas-dsh)) and the welcome ([`apps/omni-ai-dsh`](../omni-ai-dsh)), plus dsh's plugin market, which lists your Omni's own market once you connect it. Open it and the Omni octopus walks you through three steps: Welcome, Connect Omni (type the address of your Omni and send the code it shows to yourself on WhatsApp) and Connect AI. Your channels and chats are there. No keys to copy.
 
 > Labs build: Linux (AppImage, deb; also WSL with WSLg) and a macOS dmg. Windows itself is not supported.
 

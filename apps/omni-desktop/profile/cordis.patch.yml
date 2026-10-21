@@ -16,3 +16,9 @@
 - id: ui-settings-models
   config:
     credentialOnboarding: false
+# DSH's plugin market. Pairing with an Omni adds that Omni's own market
+# (<omni>/api/market/index.json): the Omni plugins of its version and the add-ons
+# Automagik vetted.
+- id: plugin-market
+  config:
+    indexes: []
