@@ -177,6 +177,7 @@ test('apply registers its listeners, tools and effects after the team\'s, in a f
     'tool omni_connect',
     'effect ds-bot: omni-get',
     'effect ds-bot: omni-read',
+    "effect omni-channels: offer the linked Omni's market",
     'effect ds-bot: omni-link',
     'effect ds-bot: omni-pair-start',
     'effect ds-bot: omni-pair-poll',

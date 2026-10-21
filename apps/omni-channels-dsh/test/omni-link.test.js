@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, test } from 'node:test'
@@ -248,5 +248,23 @@ test('a new link adds that Omni\'s market to DSH\'s plugin market, once, when th
   await rt.addOmniMarket('https://omni.example.com')
   rows.length = 0
   await rt.addOmniMarket('https://omni.example.com')
+  assert.equal(updates.length, 1)
+})
+
+test('a link made before the market was offered gets the offer once, when the plugin starts', async (t) => {
+  const updates = []
+  const rows = [{ ns: 'plugin-market', value: { indexes: [] }, revision: 1 }]
+  const settings = { describe: () => rows, update: async (ns, patch) => updates.push(patch) }
+  const { rt, home, stop } = runtime({ settings })
+  t.after(stop)
+  writeFileSync(join(home, LINK_FILE), JSON.stringify({ url: 'https://omni.example.com', key: 'omni_sk_old' }))
+  await rt.offerOmniMarket()
+  assert.deepEqual(updates, [{ indexes: ['https://omni.example.com/api/market/index.json'] }])
+  const link = JSON.parse(readFileSync(join(home, LINK_FILE), 'utf8'))
+  assert.equal(link.marketOffered, true)
+  assert.equal(link.key, 'omni_sk_old')
+  // Offered once: an index the user removes stays removed.
+  rows[0].value.indexes = []
+  await rt.offerOmniMarket()
   assert.equal(updates.length, 1)
 })

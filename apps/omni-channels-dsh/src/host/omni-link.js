@@ -47,7 +47,7 @@ export function cleanOmniUrl(text) {
 const linkOf = (value) => {
   const url = cleanOmniUrl(value?.url)
   return url && typeof value?.key === 'string' && value.key.length > 0
-    ? { url, key: value.key, keyId: value.keyId ?? null, scopes: Array.isArray(value.scopes) ? value.scopes : [], pairedAt: value.pairedAt ?? null, keyExpiresAt: value.keyExpiresAt ?? null }
+    ? { url, key: value.key, keyId: value.keyId ?? null, scopes: Array.isArray(value.scopes) ? value.scopes : [], pairedAt: value.pairedAt ?? null, keyExpiresAt: value.keyExpiresAt ?? null, marketOffered: value.marketOffered === true }
     : null
 }
 
@@ -64,31 +64,48 @@ export function install(rt) {
     }
   }
 
-  async function saveLink(link) {
+  async function writeLink(link) {
     await mkdir(rt.home, { recursive: true })
     const temp = `${path}.${process.pid}.tmp`
     await writeFile(temp, `${JSON.stringify(link, null, 2)}\n`, { mode: 0o600 })
     await rename(temp, path)
-    await addOmniMarket(link.url)
+  }
+
+  async function saveLink(link) {
+    await writeLink({ ...link, marketOffered: await addOmniMarket(link.url) })
   }
 
   // Each Omni serves a market of its own release's plugins (/api/market/index.json). The
   // linked one joins DSH's plugin market, when that is on (its plugin-market row), so the
-  // Omni plugins of the right version are a click away. One the user removed stays removed
-  // until the next link.
+  // Omni plugins of the right version are a click away. It is offered once per link
+  // (omni.json's marketOffered): one the user removed stays removed until the next link.
+  // True when the market is on and lists it.
   async function addOmniMarket(url) {
     try {
       const row = rt.ctx.settings?.describe?.().find(entry => entry.ns === MARKET_ROW)
-      if (row === undefined) return
+      if (row === undefined) return false
       const index = `${url}${MARKET_INDEX_PATH}`
       const indexes = Array.isArray(row.value?.indexes) ? row.value.indexes : []
-      if (indexes.includes(index)) return
-      await rt.ctx.settings.update(MARKET_ROW, { indexes: [...indexes, index] }, row.revision)
+      if (!indexes.includes(index)) await rt.ctx.settings.update(MARKET_ROW, { indexes: [...indexes, index] }, row.revision)
+      return true
     } catch (error) {
       rt.warn?.('omni-channels: the Omni market was not added to the plugin market: %s', error?.message ?? error)
+      return false
     }
   }
   rt.addOmniMarket = addOmniMarket
+
+  // A link made before its market was offered (an earlier version, or the market off then)
+  // gets the offer when this plugin starts.
+  rt.offerOmniMarket = async () => {
+    const link = rt.omniLink()
+    if (link === null || link.marketOffered) return
+    if (await addOmniMarket(link.url)) await writeLink({ ...link, marketOffered: true })
+  }
+  rt.ctx.effect?.(() => {
+    void rt.offerOmniMarket().catch(() => {})
+    return () => {}
+  }, 'omni-channels: offer the linked Omni\'s market')
 
   async function omniFetch(url, method, path, { body, bearer, timeoutMs = TIMEOUT_MS } = {}) {
     let response
