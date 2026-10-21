@@ -129,7 +129,8 @@ async function addPasskey() {
 const passkeysAvailable = () => typeof PublicKeyCredential !== 'undefined';
 `;
 
-function page(title: string, body: string, script: string, rail: string[] = []): string {
+/** The octopus page shell these pages share, and the marketplace page (market/page.ts) reuses. */
+export function page(title: string, body: string, script: string, rail: string[] = []): string {
   const steps = rail.length ? `<div class="rail">${rail.map((step) => `<span>${step}</span>`).join('')}</div>` : '';
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><meta name="theme-color" content="#05070f"><link rel="icon" href="${ICON}"><title>${title}</title><style>${STYLE}</style></head><body><div class="stage">${OCTOPUS}<div class="bubble" id="bubble" role="status"></div>${steps}<main><div class="mark">OMNI</div>${body}<p id="status" class="muted"></p></main></div><script>${SHARED_SCRIPT}${script}</script></body></html>`;
 }
