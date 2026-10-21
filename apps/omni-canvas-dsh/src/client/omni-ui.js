@@ -1,18 +1,11 @@
 import { Component, createContext, createElement as h, Fragment, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { createLibrary, defineComponent, reactive, Renderer, useStateField, useTriggerAction } from '@openuidev/react-lang'
-import { t } from './i18n.js'
-import { call } from './api.js'
 import { QUERY_TOOLS, libraryOf } from './omni-ui-spec.js'
 import { checkProgram as checkCanvas } from './omni-ui-check.js'
-import { liveViews } from './extend.js'
+import { call, live, t } from './core.js'
 
-// The live views of omni are the channels plugin's, handed over when it loads; without it a
-// canvas draws them as nothing.
-const view = name => (props) => {
-  const View = liveViews()[name]
-  return View ? h(View, props) : null
-}
-const [Badge, KeyValue, LiveChannel, LiveChat, LiveQr, Table] = ['Badge', 'KeyValue', 'LiveChannel', 'LiveChat', 'LiveQr', 'Table'].map(view)
+// The live views of omni are the channels plugin's (its client's `channels`).
+const { Badge, KeyValue, LiveChannel, LiveChat, LiveQr, Table } = live
 
 // Canvases: Omni shows one with show_canvas (older replies carry it as an openui-lang
 // fence) and the chat renders it in place as live, native UI. Adapted from genui-canvas (namastexlabs/agent-studio-plugins): the

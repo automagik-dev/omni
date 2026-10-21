@@ -69,18 +69,3 @@ their ideas; it does not contain their code.
     (packages/experimental/client-ui-voice-input), MIT: the voice chat
     records with the same steps (record, resample to 16 kHz mono, PCM16 WAV)
     before it calls the plugin's speech service.
-
-==============================================================================
-Bundled into client.js (Omni canvases)
-==============================================================================
-
-Each under the MIT License (full text above, with its own copyright line):
-
-  - OpenUI: @openuidev/react-lang, @openuidev/lang-core, @openuidev/devtools,
-    @openuidev/observability — Copyright (c) 2011-2024 Thesys Inc.
-  - zod — Copyright (c) 2025 Colin McDonnell
-  - ci-info — Copyright (c) 2016 Thomas Watson Steen
-
-src/client/omni-ui.js adapts the canvas admission and rendering of genui-canvas
-(https://github.com/namastexlabs/agent-studio-plugins, packages/genui-canvas),
-MIT License, Copyright (c) 2026 Namastex Labs.

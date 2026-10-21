@@ -216,10 +216,8 @@ test('Omni finds any omni operation and calls it; other Bots cannot', async (t) 
   assert.equal((await call('omni-read', { tool: 'omni_connect', args: { channel: 'Sales' } })).ok, false)
 })
 
-test('Omni shows only canvases that pass, lists channels with their state, and has no shell', async (t) => {
+test('Omni lists chats and channels with their state, and has no shell', async (t) => {
   const { tool, as, ctx, requests } = setup(t)
-  assert.equal(await tool('show_canvas')({ program: 'root = Stack([a])\na = Text("hi")' }), 'Shown.')
-  assert.match(await tool('show_canvas')({ program: 'root = Stack([a])\na = Text("hi"' }), /^Not shown: Line 2 does not close its brackets .* call show_canvas again\.$/)
   const chats = JSON.parse(await tool('omni_chats')({ channel: 'Sales', unread_only: true, limit: 5 }))
   assert.deepEqual(chats.data.items.map(chat => chat.name), ['Grupo Obras', 'Marina Lopes'])
   assert.equal(requests.at(-1).path, '/chats?sort=activity&limit=5&instanceId=wa-1&unreadOnly=true')

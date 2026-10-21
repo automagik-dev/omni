@@ -1667,7 +1667,7 @@ var stringToBytes = qrcode.stringToBytes;
 
 // src/client/core.js
 var import_client = require("@automagik/omni-dsh/client");
-var { call, t, addStrings, onShell, toolCards, nav, badges, headerButtons, setLiveViews } = import_client.omni;
+var { call, t, addStrings, onShell, toolCards, nav, badges, headerButtons } = import_client.omni;
 var { OmniMark, BotMark, MAIN_LOOK, CHARACTERS, relativeShort, createSource } = import_client.omni.ui;
 var icons = import_client.omni.ui.icons;
 
@@ -4550,7 +4550,6 @@ var callCard = ({ arg, content, done }) => (0, import_react8.createElement)(Omni
 var toolCard = ({ tool, arg, content, done }) => (0, import_react8.createElement)(OmniToolCard, { tool, arg, content, done });
 function apply(ctx) {
   ctx.effect(() => addStrings(STRINGS), "ds-bot: channels copy");
-  ctx.effect(() => setLiveViews(channels), "ds-bot: live views for canvases");
   registerConnectStep(ctx);
   ctx.effect(() => toolCards.register("omni_call", callCard, { phrase: PHRASES.omni_call }), "ds-bot: omni call card");
   for (const name of ["omni_channels", "omni_chats", "omni_messages", "omni_connect"]) {

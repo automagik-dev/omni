@@ -7,7 +7,7 @@ import { AUTOMATIONS_CSS, AUTOMATIONS_PANEL, AutomationsPage } from './automatio
 import { Badge, KeyValue, LiveChannel, LiveChat, LiveQr, OMNI_LIVE_CSS, OmniCallCard, OmniToolCard, Table, parseCall } from './omni-live.js'
 import { OMNI_PEEK_CSS } from './omni-peek.js'
 import { OMNI_CONNECT_CSS } from './omni-connect.js'
-import { addStrings, badges, headerButtons, nav, onShell, setLiveViews, t, toolCards, icons } from './core.js'
+import { addStrings, badges, headerButtons, nav, onShell, t, toolCards, icons } from './core.js'
 import { STRINGS } from './strings.js'
 const { ClockIcon } = icons
 
@@ -78,8 +78,6 @@ const toolCard = ({ tool, arg, content, done }) => h(OmniToolCard, { tool, arg, 
 
 export function apply(ctx) {
   ctx.effect(() => addStrings(STRINGS), 'ds-bot: channels copy')
-  // Until canvases have a plugin of their own, the team's canvases draw omni with these.
-  ctx.effect(() => setLiveViews(channels), 'ds-bot: live views for canvases')
   // Onboarding: Connect Omni, between omni-ai's welcome and Connect AI when it is installed.
   registerConnectStep(ctx)
   ctx.effect(() => toolCards.register('omni_call', callCard, { phrase: PHRASES.omni_call }), 'ds-bot: omni call card')

@@ -62,9 +62,6 @@
     }
   },
   "devDependencies": {
-    "@openuidev/lang-core": "0.2.18",
-    "@openuidev/react-lang": "0.2.15",
-    "esbuild": "0.28.2",
-    "zod": "4.6.5"
+    "esbuild": "0.28.2"
   }
 }

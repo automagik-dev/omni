@@ -4,7 +4,7 @@
 // refused one. A canvas reads omni through Omni's own reads, so canvases come with an
 // Omni named here, as the rest of operating it does.
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { output } from './tools.js'
+import { output } from './output.js'
 import { checkProgram, refusalText } from './omni-ui-check.bundle.js'
 import { OMNI_UI_PROMPT } from './omni-ui-prompt.js'
 
@@ -22,8 +22,9 @@ export const CANVAS_RULES = [
 
 export function install(rt) {
   const { ctx } = rt
-  // The channels plugin knows whether an Omni is named here (its omni.js).
-  const named = () => ctx.get?.('omniChannels')?.omniNamed?.() === true
+  // The channels plugin knows whether an Omni is named here (its omni.js); this runtime
+  // sits on its runtime.
+  const named = () => rt.omniNamed?.() === true
 
   ctx.effect(() => rt.hooks.mainRules(() => (named() ? CANVAS_RULES : null), { order: 200 }), 'ds-bot: canvas rules')
 

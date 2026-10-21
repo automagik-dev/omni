@@ -87,12 +87,3 @@ export function mountShellInstallers(tools) {
     shell = null
   }
 }
-
-// The live views of omni (a channel, its QR code, a chat) that canvases draw, from the
-// channels plugin until canvases have a plugin of their own.
-let views = {}
-export const liveViews = () => views
-export function setLiveViews(next) {
-  views = next
-  return () => { if (views === next) views = {} }
-}

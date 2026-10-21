@@ -104,15 +104,17 @@ test('the Omni endpoints are this plugin\'s, served on the team\'s route, and go
   assert.equal((await call('omni-overview', {})).error.code, 'bot/not-found')
 })
 
-test('with this plugin, the team registers exactly the tools TEAM_TOOLS names', async (t) => {
+// show_canvas is the canvas plugin's, which checks the whole list.
+test('with this plugin, the team registers the tools TEAM_TOOLS names but show_canvas', async (t) => {
   const { ctx, stop } = start(undefined, { config: { browser: true } })
   t.after(stop)
-  assert.deepEqual([...ctx.registeredTools.keys()].sort(), [...TEAM_TOOLS].sort())
+  assert.deepEqual([...ctx.registeredTools.keys()].sort(), TEAM_TOOLS.filter(name => name !== 'show_canvas').sort())
 })
 
 // The text a Main Bot's prompt had when the Omni parts were part of the team's prompt.js
-// (the team keeps the fixture). With this plugin and an Omni named, it is the same, byte for byte.
-test('a Main Bot\'s prompt with an Omni named is the text it was before the split', async (t) => {
+// (the team keeps the fixture). With this plugin and an Omni named, it is that text without
+// the canvas part, which the canvas plugin adds back in its place (its tests check the whole).
+test('a Main Bot\'s prompt with an Omni named is the text it was before the split, but its canvases', async (t) => {
   const team = { version: 1, mainBotIds: ['m1'], revision: 1, bots: { m1: { id: 'm1', name: 'Omni', role: 'Channel orchestrator', instructions: 'Keep it short.', createdAt: 1 } }, rooms: {}, exchanges: [], exchangeTurns: {} }
   const named = composed(team, { channelsConfig: { omni: { url: 'https://omni.example.com' } } })
   const plain = composed(team)
@@ -120,11 +122,14 @@ test('a Main Bot\'s prompt with an Omni named is the text it was before the spli
   await named.team.load()
   await plain.team.load()
   const prompt = run => run.ctx.sections.get('bot-identity').text({ agent: { id: 'm1' } })
-  assert.equal(prompt(named), readFileSync(teamFile('test/fixtures/main-prompt-omni.txt'), 'utf8'))
+  const before = readFileSync(teamFile('test/fixtures/main-prompt-omni.txt'), 'utf8')
+  const canvases = before.slice(before.indexOf('\n\n## Showing things: canvases'), before.indexOf('\n\n## How your Bot team works'))
+  assert.ok(canvases.length > 1000)
+  assert.equal(prompt(named), before.replace(canvases, ''))
   assert.equal(prompt(plain), readFileSync(teamFile('test/fixtures/main-prompt.txt'), 'utf8'))
 })
 
-test('with an omni to operate, the Main Bot alone learns the API tools, automations and canvases', async (t) => {
+test('with an omni to operate, the Main Bot alone learns the API tools and automations', async (t) => {
   const team = {
     version: 1, mainBotIds: ['m1'], revision: 1, rooms: {}, exchanges: [], exchangeTurns: {},
     bots: { m1: { id: 'm1', name: 'Omni', role: '', instructions: '', createdAt: 1 }, w1: { id: 'w1', name: 'Dev', role: '', instructions: 'Check files.', createdAt: 2 } },
@@ -135,11 +140,9 @@ test('with an omni to operate, the Main Bot alone learns the API tools, automati
   await Promise.all([named.team.load(), plain.team.load()])
   const prompt = (run, id) => run.ctx.sections.get('bot-identity').text({ agent: { id } })
   const main = prompt(named, 'm1')
-  for (const part of ['## You operate Omni for the user', 'omni_endpoints', 'omni_call', '## Automations', 'save_automation', 'show_canvas', 'start_task', 'You have no shell', 'QrCode(channelId: string)', 'Query("omni_chats"', 'omni_get(path: string']) assert.ok(main.includes(part), part)
-  // The canvas language is generated from the components the client renders, without the
-  // OpenUI features a canvas does not have.
-  assert.ok(!/Mutation\(\)(?! is not available)/.test(main))
-  assert.ok(!main.includes('FormControl'))
+  for (const part of ['## You operate Omni for the user', 'omni_endpoints', 'omni_call', '## Automations', 'save_automation', 'start_task', 'You have no shell']) assert.ok(main.includes(part), part)
+  // Canvases are the canvas plugin's.
+  assert.ok(!main.includes('show_canvas'))
   const worker = prompt(named, 'w1')
   for (const part of ['omni_call', 'openui-lang', 'save_automation', 'start_task']) assert.ok(!worker.includes(part), part)
   // Without an omni, the Main Bot's prompt has none of it.

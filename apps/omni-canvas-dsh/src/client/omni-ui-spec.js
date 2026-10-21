@@ -5,9 +5,10 @@
 // exactly when it can be drawn. Arguments are positional, in the order of each `props`.
 import { tagSchemaId } from '@openuidev/lang-core'
 import { z } from 'zod/v4'
-import { FENCE } from './canvas-text.js'
 
-export { FENCE }
+// The fence a reply's canvases come in, ```openui-lang; the team's chat finds them by the
+// same word (its canvas-text.js), and a test keeps the two the same.
+export const FENCE = 'openui-lang'
 // The tools a canvas Query may name: Omni's own read tools, with the same names and
 // arguments, and omni_get for any other documented GET.
 export const QUERY_TOOL = 'omni_get'
