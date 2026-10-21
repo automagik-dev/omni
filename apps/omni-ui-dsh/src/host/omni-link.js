@@ -223,4 +223,8 @@ export function install(rt) {
     }
     throw invalid(`Unknown omni endpoint ${endpoint}`)
   }
+  // Linking changes omni.json, not the team, so a host that only reads the team may link too.
+  for (const name of ['omni-link', 'omni-pair-start', 'omni-pair-poll', 'omni-pair-cancel', 'omni-disconnect']) {
+    rt.ctx.effect(() => rt.hooks.endpoint(name, body => rt.omniLinkEndpoint(name, body), { read: true }), `ds-bot: ${name}`)
+  }
 }

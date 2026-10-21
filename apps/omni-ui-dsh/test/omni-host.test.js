@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { KEY, channelOf, chatOf, initialsOf, install, messageOf, statusOf } from '../src/host/omni.js'
+import { install as installHooks } from '../src/host/extend.js'
 
 test('omni connection states fold into the four the view shows', () => {
   assert.equal(statusOf({ isActive: true }, { state: 'connected' }), 'connected')
@@ -50,7 +51,8 @@ const runtime = ({ url, key, answers = {} }) => {
     if (typeof answer === 'number') return new Response('{}', { status: answer })
     return new Response(JSON.stringify(answer), { status: 200 })
   }
-  const rt = { config: url === undefined ? {} : { omni: { url } }, ctx: { get: name => (name === 'credentials' ? { resolve: async ref => (ref === KEY && key ? { value: key } : undefined) } : undefined) } }
+  const rt = { config: url === undefined ? {} : { omni: { url } }, ctx: { effect: run => run(), get: name => (name === 'credentials' ? { resolve: async ref => (ref === KEY && key ? { value: key } : undefined) } : undefined) } }
+  installHooks(rt)
   install(rt)
   return { rt, asked }
 }

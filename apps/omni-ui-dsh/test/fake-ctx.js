@@ -84,6 +84,12 @@ export function fakeContext({ services = {} } = {}) {
       },
     },
     llm: { listProviders: () => [] },
+    provided: new Map(),
+    provide(name, value) {
+      calls.push(`provide ${name}`)
+      ctx.provided.set(name, value)
+      return () => {}
+    },
   }
   return ctx
 }

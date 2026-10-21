@@ -5,6 +5,8 @@
 // both only read. Without either, the Channels view keeps its sample data. This file only
 // reads; the Main Bot changes omni through omni-api.js, with the same key.
 
+import { OPERATOR_RULES } from './omni-rules.js'
+
 export const KEY = 'OMNI_API_KEY'
 const TIMEOUT_MS = 10_000
 const CHATS_LIMIT = 100
@@ -78,6 +80,7 @@ export function messageOf(message) {
 }
 
 export function install(rt) {
+  const { ctx } = rt
   const profileUrl = () => {
     const url = rt.config.omni?.url
     return typeof url === 'string' && /^https?:\/\//i.test(url) ? url.replace(/\/+$/, '') : null
@@ -145,4 +148,9 @@ export function install(rt) {
     }
     throw invalid(`Unknown omni endpoint ${endpoint}`)
   }
+
+  // Reads, so a host that only reads the team still shows the channels.
+  for (const name of ['omni-overview', 'omni-messages']) ctx.effect(() => rt.hooks.endpoint(name, body => rt.omniEndpoint(name, body), { read: true }), `ds-bot: ${name}`)
+  // With an Omni named here, the Main Bot operates it.
+  ctx.effect(() => rt.hooks.mainRules(() => (rt.omniNamed() ? OPERATOR_RULES : null), { order: 100 }), 'ds-bot: operator rules')
 }

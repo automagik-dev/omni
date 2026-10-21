@@ -203,6 +203,7 @@ export function install(rt) {
 
   rt.syncOmniEvents = () => { void sync().catch(error => rt.warn('ds-bot: omni events: %s', error)) }
   rt.omniEventsView = () => ({ listening: [...loops.keys()] })
+  ctx.effect(() => rt.hooks.live(() => ({ omniEvents: rt.omniEventsView() })), 'ds-bot: omni events view')
   ctx.effect(() => {
     const timer = setInterval(rt.syncOmniEvents, 30_000)
     void rt.load().then(rt.syncOmniEvents, () => {})

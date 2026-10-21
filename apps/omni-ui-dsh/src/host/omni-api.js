@@ -5,7 +5,6 @@
 // for the live parts of those cards and of the canvases Omni draws.
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { output } from './tools.js'
-import { checkProgram, refusalText } from './omni-ui-check.bundle.js'
 import { SOURCE_ROUTES } from './omni-routes.js'
 
 const SPEC_TTL_MS = 10 * 60_000
@@ -356,19 +355,6 @@ export function install(rt) {
     return fitted({ status: result.status, operation: 'Connect channel', channelId: id, data: result.data })
   }, 'POST')
 
-  ctx.tools.register(defineTool({
-    name: 'show_canvas',
-    description: 'Main Bot only. Shows the user a canvas: an openui-lang program, rendered live in the chat. It is checked first; when it is refused, fix what the reason says and call again. Prefer it to long text, lists or tables.',
-    parameters: { program: { type: 'string', required: true, description: 'The openui-lang program, root = Stack([...]) first, one statement per line' } },
-    output,
-    async execute(args, exec) {
-      const refusal = await allowed(exec, 'GET')
-      if (refusal) return refusal
-      const problem = checkProgram(String(args.program ?? ''))
-      return problem === null ? 'Shown.' : `Not shown: ${refusalText(problem)} Fix it and call show_canvas again.`
-    },
-  }))
-
   // A canvas reads through the same tools Omni has, under the same names and arguments.
   const READS = {
     omni_channels: async () => ({ items: await channels() }),
@@ -387,4 +373,6 @@ export function install(rt) {
   }
   // The browser's live reads: one documented GET operation per request.
   rt.omniGet = path => get({ path })
+  ctx.effect(() => rt.hooks.endpoint('omni-get', body => rt.omniGet(body?.path), { read: true }), 'ds-bot: omni-get')
+  ctx.effect(() => rt.hooks.endpoint('omni-read', body => rt.omniRead(String(body?.tool ?? ''), body?.args), { read: true }), 'ds-bot: omni-read')
 }

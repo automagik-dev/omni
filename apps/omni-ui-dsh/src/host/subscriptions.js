@@ -253,12 +253,20 @@ export function install(rt) {
     subscriptions: Object.values(subs()).sort((a, b) => a.createdAt - b.createdAt),
     subscriptionRuns: runs(),
   })
+  // Autopilot, the Bot that automations hand their events to, rides the team view with them.
+  ctx.effect(() => rt.hooks.view(() => ({ eventsBotId: eventsBotId() ?? null, ...rt.subscriptionsView() })), 'ds-bot: automations view')
   rt.subscriptionEndpoint = async (endpoint, body) => {
     const id = String(body?.id ?? '')
     if (endpoint === 'automation-set-on') return setOn(id, body?.on === true)
     if (endpoint === 'automation-delete') { await remove(id); return { id } }
     if (endpoint === 'automation-test') return test(id)
     throw invalid(`Unknown automations endpoint ${endpoint}`)
+  }
+  for (const name of ['automation-set-on', 'automation-delete', 'automation-test']) {
+    ctx.effect(() => rt.hooks.endpoint(name, async (body) => {
+      await rt.load()
+      return rt.subscriptionEndpoint(name, body)
+    }), `ds-bot: ${name}`)
   }
 
   ctx.tools.register(defineTool({

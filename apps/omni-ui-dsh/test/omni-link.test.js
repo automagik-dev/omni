@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { afterEach, test } from 'node:test'
 import { install as installOmni, KEY } from '../src/host/omni.js'
 import { cleanOmniUrl, install, LINK_FILE } from '../src/host/omni-link.js'
+import { install as installHooks } from '../src/host/extend.js'
 
 const realFetch = globalThis.fetch
 afterEach(() => { globalThis.fetch = realFetch })
@@ -58,9 +59,10 @@ function runtime({ omniUrl, profileKey } = {}) {
   const rt = {
     home,
     config: omniUrl ? { omni: { url: omniUrl } } : {},
-    ctx: { get: name => (name === 'credentials' ? { resolve: async ref => (ref === KEY && profileKey ? { value: profileKey } : undefined) } : undefined) },
+    ctx: { effect: run => run(), get: name => (name === 'credentials' ? { resolve: async ref => (ref === KEY && profileKey ? { value: profileKey } : undefined) } : undefined) },
     syncOmniEvents: () => synced.push(Date.now()),
   }
+  installHooks(rt)
   install(rt)
   installOmni(rt)
   return { rt, home, synced, stop: () => rmSync(home, { recursive: true, force: true }) }

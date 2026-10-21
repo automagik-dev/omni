@@ -34,9 +34,8 @@ export function install(rt) {
     // `mainBotId` is the first Main Bot, which the sidebar shows as its tile.
     mainBotId: state.mainBotIds[0] ?? null,
     mainBotIds: state.mainBotIds,
-    // Autopilot, the Bot that automations hand their events to (subscriptions.js).
-    eventsBotId: rt.eventsBotId?.() ?? null,
-    ...rt.subscriptionsView(),
+    // What other Omni plugins add to the view (extend.js): the automations, for one.
+    ...rt.extended.view(),
     // Tasks a Bot started (agents.js), for their live cards in the chat.
     tasks: state.tasks ?? {},
     // `sessionId` is the Bot's current own-chat part; `parts` its earlier ones.
@@ -82,11 +81,11 @@ export function install(rt) {
     memoryReviews: rt.memoryReviews(),
     connectors: rt.connectorsView(),
     capabilityStatuses: rt.capabilityStatusesView(),
-    omniEvents: rt.omniEventsView?.() ?? { listening: [] },
+    ...rt.extended.live(),
   })
   // What a host that only reads the team may still answer.
   // Updates change the dsh profile, not the team, so a reading host may run them too.
-  const READS = new Set(['state', 'models', 'efforts', 'earlier', 'room-progress', 'exchange', 'exchange-text', 'file-text', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars', 'approval-answer', 'omni-overview', 'omni-messages', 'omni-get', 'omni-read', 'omni-link', 'omni-pair-start', 'omni-pair-poll', 'omni-pair-cancel', 'omni-disconnect'])
+  const READS = new Set(['state', 'models', 'efforts', 'earlier', 'room-progress', 'exchange', 'exchange-text', 'file-text', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars', 'approval-answer'])
 
   function setPrefs(body) {
     if (body.theme !== undefined) {
@@ -111,7 +110,9 @@ export function install(rt) {
       const body = payload ?? {}
       await rt.refresh()
       const readOnly = rt.readOnly()
-      if (readOnly !== undefined && !READS.has(endpoint)) return fail(readOnly, 'bot/read-only')
+      // An endpoint another Omni plugin serves (extend.js) says itself whether it only reads.
+      const added = rt.extended.endpointOf(endpoint)
+      if (readOnly !== undefined && !READS.has(endpoint) && added?.read !== true) return fail(readOnly, 'bot/read-only')
       switch (endpoint) {
         case 'state':
           if (typeof body.locale === 'string' && /^[a-z]{2,3}(-[\w-]+)?$/i.test(body.locale)) uiLocale = body.locale
@@ -263,24 +264,6 @@ export function install(rt) {
         case 'bot-capability':
           await rt.load()
           return ok(await rt.capabilityEndpoint(endpoint, body))
-        case 'omni-overview':
-        case 'omni-messages':
-          return ok(await rt.omniEndpoint(endpoint, body))
-        case 'omni-get':
-          return ok(await rt.omniGet(body?.path))
-        case 'omni-read':
-          return ok(await rt.omniRead(String(body?.tool ?? ''), body?.args))
-        case 'omni-link':
-        case 'omni-pair-start':
-        case 'omni-pair-poll':
-        case 'omni-pair-cancel':
-        case 'omni-disconnect':
-          return ok(await rt.omniLinkEndpoint(endpoint, body))
-        case 'automation-set-on':
-        case 'automation-delete':
-        case 'automation-test':
-          await rt.load()
-          return ok(await rt.subscriptionEndpoint(endpoint, body))
         case 'schedules':
         case 'schedule-create':
         case 'schedule-delete':
@@ -360,6 +343,7 @@ export function install(rt) {
           await rt.diagnostics.clear()
           return ok(true)
         default:
+          if (added !== undefined) return ok(await added.fn(body, signal))
           return fail(`Unknown endpoint ${endpoint}`, 'bot/not-found')
       }
     } catch (error) {

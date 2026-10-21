@@ -1,25 +1,49 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { readFileSync } from 'node:fs'
+import { install as installHooks } from '../src/host/extend.js'
 import { install } from '../src/host/prompt.js'
+import { install as installOmni } from '../src/host/omni.js'
+import { install as installCanvas } from '../src/host/canvas.js'
 import { fakeContext } from './fake-ctx.js'
 
-function start(config = {}) {
+const BOTS = [
+  ['main', { name: 'Omni' }],
+  ['worker', { name: 'Dev', instructions: 'Check files.' }],
+]
+
+// The prompt section with the Omni modules that add to the Main Bot's rules (omni.js
+// names an Omni from config.omni.url; canvas.js adds the canvas language).
+function start(config = {}, bots = new Map(BOTS)) {
   const ctx = fakeContext()
-  const bots = new Map([
-    ['main', { name: 'Omni' }],
-    ['worker', { name: 'Dev', instructions: 'Check files.' }],
-  ])
-  install({
+  const rt = {
     ctx,
     selfOf: id => id === 'group-worker' ? 'worker' : id,
     botOf: id => bots.get(id),
     roomOf: id => id === 'room' ? {} : undefined,
     isMain: id => id === 'main',
     config,
-  })
+  }
+  installHooks(rt)
+  install(rt)
+  installOmni(rt)
+  installCanvas(rt)
   const prompt = id => ctx.sections.get('bot-identity').text({ agent: { id } })
   return { ctx, prompt }
 }
+
+// Written by the prompt before its Omni parts moved out of prompt.js, which joined them
+// into one list. The hooks must give a Main Bot the very same text, byte for byte, or its
+// provider's prompt cache starts over.
+test('a Main Bot\'s prompt is the text it was before the Omni parts moved out', (t) => {
+  const fixture = name => readFileSync(new URL(`fixtures/${name}`, import.meta.url), 'utf8')
+  const bots = new Map([['main', { name: 'Omni', role: 'Channel orchestrator', instructions: 'Keep it short.' }]])
+  const plain = start({}, bots)
+  const named = start({ omni: { url: 'https://omni.example.com' } }, bots)
+  t.after(() => Promise.all([plain.ctx.dispose(), named.ctx.dispose()]))
+  assert.equal(plain.prompt('main'), fixture('main-prompt.txt'))
+  assert.equal(named.prompt('main'), fixture('main-prompt-omni.txt'))
+})
 
 test('Bots get a scoped progress rule without changing the private/group prompt prefix', (t) => {
   const { ctx, prompt } = start()

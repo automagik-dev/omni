@@ -6,6 +6,7 @@
 import { cpSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import * as diagnostics from './src/host/diagnostics.js'
+import * as extend from './src/host/extend.js'
 import * as store from './src/host/store.js'
 import * as models from './src/host/models.js'
 import * as permissions from './src/host/permissions.js'
@@ -38,6 +39,7 @@ import * as omni from './src/host/omni.js'
 import * as subscriptions from './src/host/subscriptions.js'
 import * as omniEvents from './src/host/omni-events.js'
 import * as omniApi from './src/host/omni-api.js'
+import * as canvas from './src/host/canvas.js'
 import * as channel from './src/host/channel.js'
 
 export { COLORS } from './src/host/constants.js'
@@ -49,10 +51,13 @@ export const inject = ['llm', 'tools', 'systemPrompt', 'sessionController', 'ses
 // the functions other modules call; they call them through `rt` at run time, never during
 // install. Listeners run and tools are listed in registration order, so this order holds:
 // usage meters model requests after every listener that rewrites them.
-const MODULES = [diagnostics, store, models, permissions, turns, handoffs, delivery, roster, folders, agents, prompt, timeContext, tools, chatIndex, groups, approvals, resume, memory, parts, images, secrets, connectors, capabilities, subscriptions, omniApi, schedules, browser, usage, update, dshUpdate, omniLink, omni, omniEvents, channel]
+const MODULES = [diagnostics, extend, store, models, permissions, turns, handoffs, delivery, roster, folders, agents, prompt, timeContext, tools, chatIndex, groups, approvals, resume, memory, parts, images, secrets, connectors, capabilities, subscriptions, omniApi, canvas, schedules, browser, usage, update, dshUpdate, omniLink, omni, omniEvents, channel]
 
+// Other Omni plugins (channels, canvases) inject the runtime as `omniTeam` and add to it
+// through rt.hooks (src/host/extend.js).
 export function apply(ctx, config = {}) {
-  createRuntime(ctx, config)
+  const rt = createRuntime(ctx, config)
+  ctx.provide('omniTeam', rt)
 }
 
 // A team kept elsewhere before (config.importHome, e.g. ~/.dsh/bot) is copied in once,
