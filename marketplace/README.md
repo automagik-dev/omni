@@ -24,7 +24,7 @@ https://<your-omni>/api/market/index.json
 | `/api/market/npm/` | An npm registry for Omni's own plugins; any other package name redirects to registry.npmjs.org |
 
 Omni's own entries are npm sources whose `registry` is that Omni (`https://<your-omni>/api/market/npm/`). The
-tarballs come from the release itself: `scripts/pack-market.ts` packs every `apps/*-dsh` plugin with `npm pack`
+tarballs come from the release itself: `scripts/pack-market.ts` packs every `apps/*-dsh` plugin with `bun pm pack`
 into the CLI's `dist/market` (with a `market.json` manifest) when the CLI is packed. The vetted add-ons come from
 this file, built into the server. A server run from source has no packed plugins and lists the add-ons only;
 point `OMNI_MARKET_DIR` at a `bun scripts/pack-market.ts <dir>` output to serve them. The links use

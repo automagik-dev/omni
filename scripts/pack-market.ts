@@ -4,8 +4,8 @@
  *
  *   bun scripts/pack-market.ts [outDir]     default: packages/cli/dist/market
  *
- * Each plugin is packed with `npm pack` (they are npm packages, not Bun workspaces) into
- * outDir, next to a market.json manifest the server reads (packages/api/src/market). The
+ * Each plugin is packed with `bun pm pack` (the same files `npm pack` takes: the package's
+ * `files`) into outDir, next to a market.json manifest the server reads (packages/api/src/market). The
  * directory is emptied first, so it holds exactly this release's plugins. A plugin whose
  * version is not Omni's fails the pack: the market serves each plugin at Omni's version.
  */
@@ -42,11 +42,6 @@ const PluginPackageSchema = z.object({
   dsh: z.record(z.unknown()).optional(),
 });
 
-/** What `npm pack --json` reports per package. */
-const NpmPackOutputSchema = z
-  .array(z.object({ name: z.string(), version: z.string(), filename: z.string(), integrity: z.string() }))
-  .length(1);
-
 /** The DSH plugin directories under appsDir (every `*-dsh` with a package.json), by name. */
 export function discoverPlugins(appsDir: string): string[] {
   return readdirSync(appsDir, { withFileTypes: true })
@@ -63,22 +58,20 @@ const readPlugin = (dir: string): PluginPackage =>
 function packOne(dir: string, pkg: PluginPackage, outDir: string, omniVersion: string): MarketPackage {
   if (pkg.version !== omniVersion)
     throw new Error(`${pkg.name} is ${pkg.version}, not Omni's ${omniVersion}: run scripts/sync-versions.ts`);
-  const out = execFileSync('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', outDir], {
+  // npm's tarball name: the scope's @ dropped and its / made a dash.
+  const filename = `${pkg.name.replace(/^@/, '').replace('/', '-')}-${pkg.version}.tgz`;
+  execFileSync(process.execPath, ['pm', 'pack', '--ignore-scripts', '--quiet', '--destination', outDir], {
     cwd: dir,
-    encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  const [packed] = NpmPackOutputSchema.parse(JSON.parse(out));
-  if (!packed || packed.name !== pkg.name || packed.version !== pkg.version)
-    throw new Error(`npm pack in ${dir} packed ${packed?.name}@${packed?.version}`);
-  const bytes = readFileSync(join(outDir, packed.filename));
+  if (!existsSync(join(outDir, filename))) throw new Error(`bun pm pack in ${dir} did not write ${filename}`);
+  const bytes = readFileSync(join(outDir, filename));
   const integrity = `sha512-${createHash('sha512').update(bytes).digest('base64')}`;
-  if (integrity !== packed.integrity) throw new Error(`${packed.filename}: integrity differs from npm's report`);
   const repository = typeof pkg.repository === 'string' ? { type: 'git', url: pkg.repository } : pkg.repository;
   return {
     name: pkg.name,
     version: pkg.version,
-    file: packed.filename,
+    file: filename,
     integrity,
     shasum: createHash('sha1').update(bytes).digest('hex'),
     size: bytes.byteLength,

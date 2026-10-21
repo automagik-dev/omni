@@ -305,7 +305,7 @@ verify-versions:
 	bun scripts/verify-versions.ts $(if $(BASE),--base $(BASE),)
 
 # Automagik marketplace: the static index (DSH's own parser, and every pinned omni commit holds its
-# package) and the packer that bundles apps/*-dsh into each Omni's own market (needs npm).
+# package) and the packer that bundles apps/*-dsh into each Omni's own market (bun pm pack).
 marketplace-check:
 	bun test scripts/marketplace.test.ts scripts/pack-market.test.ts
 	bun scripts/marketplace.ts check
