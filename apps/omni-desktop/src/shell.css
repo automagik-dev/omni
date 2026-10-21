@@ -1,0 +1,41 @@
+/* The Omni window's frame: see shell.html and src/frame.js (BAR_HEIGHT, INSET, RADIUS). */
+:root{--bar:40px;--radius:14px;--ink:#eef3ff;--ink2:#9fb0cc;--accent:#22d3c5;--violet:#7c5cff}
+html,body{margin:0;height:100%;overflow:hidden;background:transparent;color:var(--ink);font:13px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased;user-select:none}
+.frame{position:fixed;inset:0;border-radius:var(--radius);overflow:hidden;
+  background:
+    radial-gradient(90% 70% at 0% 0%,rgba(124,92,255,.26),transparent 62%),
+    radial-gradient(80% 60% at 100% 100%,rgba(34,211,197,.18),transparent 60%),
+    linear-gradient(180deg,#0c1330,#060914 55%,#04060e);
+  box-shadow:inset 0 0 0 1px rgba(160,190,255,.16),inset 0 1px 0 rgba(255,255,255,.08)}
+body.max .frame{border-radius:0;box-shadow:none}
+/* macOS rounds the window itself and blurs what is behind it (vibrancy). */
+body.darwin .frame{border-radius:0;box-shadow:none;background:linear-gradient(180deg,rgba(12,19,48,.72),rgba(4,6,14,.86))}
+
+.bar{height:var(--bar);display:flex;align-items:center;gap:10px;padding:0 7px 0 14px;-webkit-app-region:drag}
+body.darwin .bar{padding-left:84px}
+.brand{display:flex;align-items:center;gap:8px}
+.brand svg{width:20px;height:20px;filter:drop-shadow(0 0 6px rgba(34,211,197,.55))}
+.brand b{font-weight:650;letter-spacing:.02em}
+.chip{font:600 9px/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.16em;text-transform:uppercase;color:#7ff7ea;border:1px solid rgba(127,247,234,.28);background:rgba(34,211,197,.08);border-radius:999px;padding:4px 7px 3px}
+.spacer{flex:1}
+
+.controls{display:flex;gap:6px;-webkit-app-region:no-drag}
+body.darwin .controls{display:none}
+.controls button{width:28px;height:28px;padding:0;border:0;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.05);color:var(--ink2);cursor:pointer;transition:background .15s,color .15s,box-shadow .15s}
+.controls button:hover{background:rgba(255,255,255,.12);color:var(--ink)}
+.controls button.close:hover{background:#ff4f7b;color:#fff;box-shadow:0 0 14px rgba(255,79,123,.55)}
+.controls svg{width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:1.4;stroke-linecap:round}
+.controls .shrink,body.max .controls .grow{display:none}
+body.max .controls .shrink{display:block}
+
+.splash{position:absolute;top:var(--bar);left:0;right:0;bottom:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:rgba(3,5,13,.55);transition:opacity .35s}
+body.ready .splash{opacity:0}
+.octo{width:112px;height:112px;animation:bob 3.2s ease-in-out infinite;filter:drop-shadow(0 0 22px rgba(34,211,197,.45))}
+.octo .eyes{transform-origin:50% 37%;animation:blink 4.6s infinite}
+.splash p{margin:0;font:500 13px/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.08em;color:#9ff8ee}
+.splash p.bad{color:#ff8a9a}
+.scan{width:160px;height:2px;border-radius:2px;background:linear-gradient(90deg,transparent,var(--accent),var(--violet),transparent);background-size:200% 100%;animation:scan 1.4s linear infinite;opacity:.8}
+@keyframes bob{50%{transform:translateY(-8px)}}
+@keyframes blink{0%,94%,100%{transform:scaleY(1)}97%{transform:scaleY(.1)}}
+@keyframes scan{to{background-position:-200% 0}}
+@media (prefers-reduced-motion:reduce){.octo,.octo .eyes,.scan{animation:none}}

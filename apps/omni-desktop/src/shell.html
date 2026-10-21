@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src data:">
+<title>Omni</title>
+<link rel="stylesheet" href="shell.css">
+</head>
+<!-- The Omni window's frame (src/frame.js): the title bar, and the octopus while Omni wakes up.
+     Omni's page itself is a view main.js lays over the area below the bar. -->
+<body>
+<div class="frame">
+  <header class="bar">
+    <div class="brand">
+      <svg viewBox="0 0 100 100" aria-hidden="true"><defs><linearGradient id="s" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7ff7ea"/><stop offset="1" stop-color="#0b8f8a"/></linearGradient></defs>
+        <path fill="url(#s)" d="M50 6C75 6 87 24 87 46C87 60 82 68 80 72C84 82 84 92 80 96C76 98 72 92 70 84C68 92 66 98 61 96C57 94 56 84 54 78C52 80 48 80 46 78C44 84 43 94 39 96C34 98 32 92 30 84C28 92 24 98 20 96C16 92 16 82 20 72C18 68 13 60 13 46C13 24 25 6 50 6Z"/>
+        <ellipse cx="40" cy="37" rx="7" ry="11" fill="#06121f"/><ellipse cx="60" cy="37" rx="7" ry="11" fill="#06121f"/></svg>
+      <b>Omni</b><span class="chip">labs</span>
+    </div>
+    <div class="spacer"></div>
+    <div class="controls">
+      <button data-act="minimize" title="Minimize" aria-label="Minimize"><svg viewBox="0 0 12 12"><path d="M2.5 6h7"/></svg></button>
+      <button data-act="maximize" title="Maximize" aria-label="Maximize"><svg class="grow" viewBox="0 0 12 12"><rect x="2.5" y="2.5" width="7" height="7" rx="1.6"/></svg><svg class="shrink" viewBox="0 0 12 12"><rect x="2" y="4" width="6" height="6" rx="1.4"/><path d="M4.5 2h4a1.5 1.5 0 0 1 1.5 1.5v4"/></svg></button>
+      <button data-act="close" class="close" title="Close" aria-label="Close"><svg viewBox="0 0 12 12"><path d="M3 3l6 6M9 3l-6 6"/></svg></button>
+    </div>
+  </header>
+  <main class="splash" aria-live="polite">
+    <svg class="octo" viewBox="0 0 100 100" aria-hidden="true">
+      <path fill="url(#s)" d="M50 6C75 6 87 24 87 46C87 60 82 68 80 72C84 82 84 92 80 96C76 98 72 92 70 84C68 92 66 98 61 96C57 94 56 84 54 78C52 80 48 80 46 78C44 84 43 94 39 96C34 98 32 92 30 84C28 92 24 98 20 96C16 92 16 82 20 72C18 68 13 60 13 46C13 24 25 6 50 6Z"/>
+      <path fill="#06706d" opacity=".5" d="M87 46C87 60 82 68 80 72C84 82 84 92 80 96C76 98 72 92 70 84C68 92 66 98 61 96C57 94 56 84 54 78C62 76 70 66 75 56C80 48 80 36 75 26C82 32 87 38 87 46Z"/>
+      <path d="M28 24C34 14 43 10 50 10C40 14 33 21 30 30Z" fill="#fff" opacity=".55"/>
+      <g class="eyes"><ellipse cx="40" cy="37" rx="7" ry="11.5" fill="#06121f"/><ellipse cx="60" cy="37" rx="7" ry="11.5" fill="#06121f"/>
+      <circle cx="42.4" cy="31.5" r="2.7" fill="#fff"/><circle cx="62.4" cy="31.5" r="2.7" fill="#fff"/></g>
+      <path d="M44 55Q50 60.5 56 55" stroke="#06121f" stroke-width="2.4" fill="none" stroke-linecap="round"/>
+      <ellipse cx="30.5" cy="51" rx="5" ry="2.8" fill="#ff8cc6" opacity=".8"/><ellipse cx="69.5" cy="51" rx="5" ry="2.8" fill="#ff8cc6" opacity=".8"/>
+    </svg>
+    <p id="status">Waking up…</p>
+    <div class="scan"></div>
+  </main>
+</div>
+<script src="shell.js"></script>
+</body>
+</html>

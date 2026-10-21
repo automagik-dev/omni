@@ -36,7 +36,14 @@ npm run dist:mac        # on macOS: dist/Omni-<version>-labs-unsigned-mac-<arch>
 
 To run from a checkout: `npm run prepare-runtime`, then `npx electron .` (add `--no-sandbox` on a system where Chromium's sandbox cannot start unpackaged).
 
-`npx electron scripts/make-icon.cjs` draws `assets/icon.png` from the Omni mark in the plugin's `logo.js`.
+### The icon
+
+`assets/icon.svg` is the icon's source: the Omni octopus on a night-sky tile. electron-builder makes every platform's icons from `assets/icon.png`, which is the SVG rendered by headless Chromium:
+
+```sh
+chrome-headless-shell --screenshot=assets/icon.png --window-size=1024,1024 \
+  --default-background-color=00000000 --hide-scrollbars "file://$PWD/assets/icon.svg"
+```
 
 ## Measured (labs prototype, 2026-10-20, Linux x64)
 
