@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { appHome, dshEnv, freePort, installProfile, launchUrlOf, navigationOf, resourcesOf, startDsh, stopDsh } from '../src/dsh.js'
+import { appHome, dshEnv, freePort, installProfile, launchUrlOf, mergeProfilePatch, navigationOf, resourcesOf, startDsh, stopDsh, writeTools } from '../src/dsh.js'
 
 test('the app keeps everything in one folder under ~/.omni, apart from a dsh you already run', () => {
   assert.equal(appHome({}), join(homedir(), '.omni', 'desktop'))
@@ -22,6 +23,7 @@ test('the app keeps everything in one folder under ~/.omni, apart from a dsh you
 test('resources come from the app when packaged and from build/ in a checkout', () => {
   assert.deepEqual(resourcesOf({ packaged: true, resourcesPath: '/opt/Omni/resources', appPath: '/x' }), {
     bin: '/opt/Omni/resources/runtime/node_modules/@deepseek-ai/dsh/lib/bin.js',
+    pnpm: '/opt/Omni/resources/runtime/node_modules/pnpm/bin/pnpm.cjs',
     profile: '/opt/Omni/resources/profile',
   })
   assert.equal(resourcesOf({ packaged: false, resourcesPath: '/x', appPath: '/src/apps/omni-desktop' }).profile, '/src/apps/omni-desktop/build/profile')
@@ -133,4 +135,64 @@ test('a dsh that exits before it is ready is reported, and one that never says s
   const silent = join(root, 'silent.mjs')
   writeFileSync(silent, 'setInterval(() => {}, 1000)')
   await assert.rejects(startDsh({ node: process.execPath, bin: silent, env: process.env, port: await freePort(), cwd: root, timeoutMs: 300 }), /did not start within/)
+})
+
+test('dsh gets node and pnpm on its PATH, both on the app\'s own Node', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'omni-desktop-tools-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const script = join(root, "it's pnpm.cjs")
+  writeFileSync(script, 'console.log(JSON.stringify([process.env.ELECTRON_RUN_AS_NODE, ...process.argv.slice(2)]))')
+  const dir = writeTools({ dir: join(root, 'bin'), node: process.execPath, pnpm: script })
+  assert.deepEqual(JSON.parse(execFileSync(join(dir, 'pnpm'), ['add', 'a b'], { encoding: 'utf8' })), ['1', 'add', 'a b'])
+  assert.equal(execFileSync(join(dir, 'node'), ['-p', '6*7'], { encoding: 'utf8' }).trim(), '42')
+  assert.equal(dshEnv({ base: { PATH: '/bin' }, home: '/a', binDir: dir }).PATH, `${dir}:/bin`)
+  assert.equal(dshEnv({ base: { PATH: '/bin' }, home: '/a' }).PATH, '/bin')
+})
+
+test('an update adds the settings a newer build ships and keeps every one the user has', () => {
+  const shipped = `# Omni's own search.
+- insert:
+    - id: web-search-auto
+      name: x
+- id: web
+  config:
+    searchProvider: auto
+# The octopus opens the app.
+- id: ui-settings-models
+  config:
+    credentialOnboarding: false
+`
+  // DSH's empty template takes every shipped entry, comments and all.
+  assert.equal(mergeProfilePatch('[]\n', shipped), shipped)
+  // An entry the user has, changed or not, stays theirs; only the missing one is added.
+  const user = `- id: web\n  config:\n    searchProvider: brave\n- insert:\n    - id: web-search-auto\n      name: x\n`
+  assert.equal(
+    mergeProfilePatch(user, shipped),
+    `${user}# The octopus opens the app.\n- id: ui-settings-models\n  config:\n    credentialOnboarding: false\n`,
+  )
+  assert.equal(mergeProfilePatch(shipped, shipped), null)
+})
+
+test('an existing profile gets pnpm settings and the newer build\'s settings on update', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'omni-desktop-migrate-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const source = join(root, 'shipped')
+  mkdirSync(join(source, 'node_modules'), { recursive: true })
+  writeFileSync(join(source, 'package.json'), '{}')
+  writeFileSync(join(source, '.build-id'), 'one')
+  writeFileSync(join(source, 'cordis.patch.yml'), '- id: web\n  config:\n    searchProvider: auto\n')
+  const dshHome = join(root, 'dsh')
+  const { target } = installProfile({ dshHome, source })
+  // An install from before pnpm-workspace.yaml shipped, with the user's own search.
+  rmSync(join(target, 'pnpm-workspace.yaml'), { force: true })
+  writeFileSync(join(target, 'cordis.patch.yml'), '- id: web\n  config:\n    searchProvider: brave\n')
+  writeFileSync(join(source, 'pnpm-workspace.yaml'), 'nodeLinker: hoisted\n')
+  writeFileSync(join(source, 'cordis.patch.yml'), '- id: web\n  config:\n    searchProvider: auto\n- id: plugin-market\n  config:\n    indexes: []\n')
+  writeFileSync(join(source, '.build-id'), 'two')
+  installProfile({ dshHome, source })
+  assert.equal(readFileSync(join(target, 'pnpm-workspace.yaml'), 'utf8'), 'nodeLinker: hoisted\n')
+  assert.equal(
+    readFileSync(join(target, 'cordis.patch.yml'), 'utf8'),
+    '- id: web\n  config:\n    searchProvider: brave\n- id: plugin-market\n  config:\n    indexes: []\n',
+  )
 })

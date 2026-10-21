@@ -9,7 +9,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, session, shell, WebContentsV
 import { createWriteStream, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { appHome, dshEnv, freePort, installProfile, navigationOf, resourcesOf, startDsh, stopDsh } from './dsh.js'
+import { appHome, dshEnv, freePort, installProfile, navigationOf, resourcesOf, startDsh, stopDsh, writeTools } from './dsh.js'
 import { pageLayout, WINDOW_ACTIONS, windowChrome } from './frame.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -50,7 +50,8 @@ async function launch() {
   const port = await freePort()
   const log = createWriteStream(join(home, 'logs', 'dsh.log'), { flags: 'a' })
   // Electron's own binary runs dsh as Node, so the app ships one runtime.
-  dsh = await startDsh({ node: process.execPath, bin: resources.bin, env: dshEnv({ home, electronAsNode: true }), port, cwd: home, log })
+  const binDir = writeTools({ dir: join(home, 'bin'), node: process.execPath, pnpm: resources.pnpm })
+  dsh = await startDsh({ node: process.execPath, bin: resources.bin, env: dshEnv({ home, electronAsNode: true, binDir }), port, cwd: home, log })
   dsh.child.once('exit', (code) => {
     if (!quitting) fail(new Error(`dsh stopped (${code}).`))
   })

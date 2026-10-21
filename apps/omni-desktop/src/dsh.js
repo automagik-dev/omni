@@ -5,13 +5,14 @@
 // Everything the app keeps is under one folder, ~/.omni/desktop by default:
 //   dsh/   DSH_HOME: dsh's own Sessions, settings and the `omni` profile
 //   ui/    the Omni UI plugin's home (OMNI_HOME is this folder, so the plugin uses ui/)
+//   bin/   `node` and `pnpm` for dsh, both on Electron's own Node (writeTools)
 // It is apart from a dsh you already run (~/.dsh) and from the Omni UI plugin installed
 // into that one (~/.omni/ui), so neither sees the other's Bots or Sessions.
 import { spawn } from 'node:child_process'
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { homedir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { delimiter, join, resolve } from 'node:path'
 
 export const PROFILE = 'omni'
 const READY_TIMEOUT_MS = 120_000
@@ -31,8 +32,74 @@ export function resourcesOf({ packaged, resourcesPath, appPath }) {
   const root = packaged ? resourcesPath : join(appPath, 'build')
   return {
     bin: join(root, 'runtime', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'),
+    pnpm: join(root, 'runtime', 'node_modules', 'pnpm', 'bin', 'pnpm.cjs'),
     profile: join(root, 'profile'),
   }
+}
+
+const shellQuote = text => `'${String(text).replaceAll("'", `'\\''`)}'`
+
+/**
+ * Write `node` and `pnpm` into `dir` for dsh's PATH: dsh's plugin manager installs plugins
+ * (the market, Settings → Plugins) with pnpm, and nothing guarantees a machine has Node or
+ * pnpm. Both run on `node`, the app's own binary as Node (ELECTRON_RUN_AS_NODE). Written at
+ * every launch, since the app's path changes with each install.
+ */
+export function writeTools({ dir, node, pnpm }) {
+  mkdirSync(dir, { recursive: true })
+  const tools = {
+    node: `ELECTRON_RUN_AS_NODE=1 exec ${shellQuote(node)} "$@"`,
+    pnpm: `ELECTRON_RUN_AS_NODE=1 exec ${shellQuote(node)} ${shellQuote(pnpm)} "$@"`,
+  }
+  for (const [name, line] of Object.entries(tools)) {
+    const file = join(dir, name)
+    writeFileSync(file, `#!/bin/sh\n# Written by the Omni desktop app at launch (src/dsh.js writeTools).\n${line}\n`)
+    chmodSync(file, 0o755)
+  }
+  return dir
+}
+
+// The top-level entries of a cordis patch file (a YAML list): each starts with "- " at the
+// first column, runs over its indented lines, and takes the comment lines right above it.
+function patchEntries(text) {
+  const entries = []
+  let comments = []
+  let current = null
+  for (const line of String(text).split('\n')) {
+    if (line.startsWith('- ')) {
+      current = { lines: [...comments, line], ids: [] }
+      comments = []
+      entries.push(current)
+    } else if (line.startsWith('#')) {
+      comments.push(line)
+      continue
+    } else if (current && /^\s+\S/.test(line)) {
+      current.lines.push(line)
+    } else {
+      comments = []
+      continue
+    }
+    const id = line.match(/^[\s-]*id:\s*['"]?([^'"\s#]+)/)
+    if (id) current.ids.push(id[1])
+  }
+  return entries
+}
+
+const idsIn = text => new Set([...String(text).matchAll(/^[\s-]*id:\s*['"]?([^'"\s#]+)/gm)].map(match => match[1]))
+
+/**
+ * The user's profile patch with the shipped entries it lacks appended, or null when it
+ * lacks none. An entry is missing when none of the ids it names appears in the user's file;
+ * one the user has (changed or not) is theirs and stays. DSH's empty template (`[]`) is
+ * replaced rather than appended to.
+ */
+export function mergeProfilePatch(user, shipped) {
+  const have = idsIn(user)
+  const missing = patchEntries(shipped).filter(entry => entry.ids.length > 0 && entry.ids.every(id => !have.has(id)))
+  if (missing.length === 0) return null
+  const added = missing.map(entry => entry.lines.join('\n')).join('\n')
+  const base = String(user).replace(/^\[\]\s*$/m, '').replace(/\s*$/, '')
+  return `${base === '' ? '' : `${base}\n`}${added}\n`
 }
 
 /**
@@ -59,7 +126,13 @@ export function installProfile({ dshHome, source }) {
     for (const file of ['package.json', '.build-id']) {
       if (existsSync(join(source, file))) cpSync(join(source, file), join(target, file))
     }
-    if (!existsSync(join(target, 'cordis.patch.yml'))) cpSync(join(source, 'cordis.patch.yml'), join(target, 'cordis.patch.yml'))
+    for (const file of ['cordis.patch.yml', 'pnpm-workspace.yaml']) {
+      if (!existsSync(join(target, file)) && existsSync(join(source, file))) cpSync(join(source, file), join(target, file))
+    }
+    // A setting a newer build ships (a new plugin's row, a seed) reaches an existing profile.
+    const patch = join(target, 'cordis.patch.yml')
+    const merged = mergeProfilePatch(readFileSync(patch, 'utf8'), readFileSync(join(source, 'cordis.patch.yml'), 'utf8'))
+    if (merged !== null) writeFileSync(patch, merged)
   }
   writeFileSync(marker, stamp)
   return { target, installed: true }
@@ -85,9 +158,10 @@ export function launchUrlOf(text, port) {
 }
 
 /** The environment dsh runs with: its own home, Omni's, and nothing that phones home. */
-export function dshEnv({ base = process.env, home, electronAsNode = false }) {
+export function dshEnv({ base = process.env, home, electronAsNode = false, binDir }) {
   return {
     ...base,
+    ...(binDir ? { PATH: [binDir, base.PATH].filter(Boolean).join(delimiter) } : {}),
     DSH_HOME: join(home, 'dsh'),
     OMNI_HOME: home,
     // Signs in to an Omni as the desktop app (the Better Auth device-flow client id).

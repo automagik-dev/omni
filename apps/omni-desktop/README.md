@@ -13,6 +13,7 @@ Omni on your desktop: a window on a [DeepSeek Harness](https://github.com/deepse
   |---|---|
   | `dsh/` | dsh's home (`DSH_HOME`): its Sessions, settings, and the `omni` profile the app copies in from the build |
   | `ui/` | the Omni UI plugin's home: the Bot team, and `omni.json`, the Omni this app is linked to (0600) |
+  | `bin/` | `node` and `pnpm` for dsh, written at each launch: both run on the app's own Electron as Node, so installing a plugin (Settings → Plugins, the market) needs nothing on the machine |
   | `logs/dsh.log` | dsh's output |
 
   It is apart from a dsh you already run (`~/.dsh`) and from the Omni UI plugin installed into that dsh (`~/.omni/ui`).
@@ -20,6 +21,7 @@ Omni on your desktop: a window on a [DeepSeek Harness](https://github.com/deepse
 - Linux sandbox: Chromium needs user namespaces or a setuid helper, and Ubuntu 24.04+ restricts user namespaces. The deb installs an AppArmor profile that allows them for the app, so the window is sandboxed. An AppImage cannot carry one; on such a system its launcher runs without the sandbox and says so on stderr. Prefer the deb there.
 - An AppImage opened directly is mounted with FUSE and needs `libfuse2` (`sudo apt install libfuse2t64` on Ubuntu 24.04+; WSL rarely has it). `omni desktop` needs none: it unpacks the AppImage once into `~/.omni/desktop/app/extracted/` and runs it from there. By hand: `./Omni-*.AppImage --appimage-extract`, then `squashfs-root/AppRun`.
 - The app ships the dsh release the plugin is tested against (`runtime/package.json`, pinned with its lock) and both plugins packed with `npm pack`. Its profile switches DSH's own welcome notice and credential step off (`profile/cordis.patch.yml`), so the octopus opens the app. Nothing updates itself.
+- An update replaces the profile's packages and keeps everything you set: a setting a newer build ships is added to your `cordis.patch.yml` only when your file has no entry with its id, and `pnpm-workspace.yaml` is added when missing.
 
 Models come from dsh: on first start, sign in to DeepSeek, enter an API key, or set up another provider in Settings → Models.
 

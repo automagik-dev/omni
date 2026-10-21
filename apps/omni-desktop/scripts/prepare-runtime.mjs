@@ -2,6 +2,7 @@
 //
 //   build/runtime/node_modules   the pinned DeepSeek Harness (runtime/package.json + lock)
 //   build/profile/               the dsh profile the app starts: package.json, cordis.patch.yml,
+//                                pnpm-workspace.yaml,
 //                                and node_modules holding only Omni's plugins
 //
 // The plugins (../omni-ui-dsh, and ../omni-ai-dsh with the onboarding) are packed with
@@ -56,7 +57,7 @@ mkdirSync(profileDir, { recursive: true })
 const profile = JSON.parse(readFileSync(join(APP, 'profile', 'package.json'), 'utf8'))
 for (const plugin of packed) profile.dependencies[plugin.name] = plugin.version
 writeFileSync(join(profileDir, 'package.json'), `${JSON.stringify(profile, null, 2)}\n`)
-cpSync(join(APP, 'profile', 'cordis.patch.yml'), join(profileDir, 'cordis.patch.yml'))
+for (const file of ['cordis.patch.yml', 'pnpm-workspace.yaml']) cpSync(join(APP, 'profile', file), join(profileDir, file))
 // One install of every tarball: --no-save leaves the versions written above in place.
 run(['install', ...packed.map(plugin => plugin.tarball), '--omit=dev', '--legacy-peer-deps', '--no-save', '--no-package-lock', '--ignore-scripts'], profileDir)
 
