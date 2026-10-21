@@ -57,6 +57,14 @@ export function install(rt) {
     view: () => merged(views),
     live: () => merged(lives),
     // The parts for one Main Bot, in order; empty ones are left out.
-    rules: self => rules.map(rule => rule.fn(self)).filter(text => typeof text === 'string' && text !== ''),
+    // One plugin's failing rule leaves the others, and the prompt, standing.
+    rules: self => rules.map((rule) => {
+      try {
+        return rule.fn(self)
+      } catch (error) {
+        rt.warn?.('ds-bot: a Main Bot rule failed: %s', error?.message ?? error)
+        return ''
+      }
+    }).filter(text => typeof text === 'string' && text !== ''),
   }
 }

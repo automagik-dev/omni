@@ -1,5 +1,5 @@
 import { createElement as h, useEffect } from 'react'
-import { Stage, useFinish, useGate, useGlitch } from './stage.js'
+import { railSteps, Stage, useFinish, useGate, useGlitch } from './stage.js'
 
 // Step omni-welcome (order -300): the octopus says hello, once.
 export function WelcomeStep(props) {
@@ -14,6 +14,8 @@ export function WelcomeStep(props) {
     at: 'omni-welcome',
     glitching,
   },
-  h('p', null, 'Two quick steps: connect your Omni, so I can see your channels, and connect an AI, so I can think.'),
+  h('p', null, railSteps('omni-welcome').some(([id]) => id === 'omni-connect')
+    ? 'Two quick steps: connect your Omni, so I can see your channels, and connect an AI, so I can think.'
+    : 'One quick step: connect an AI, so I can think.'),
   h('button', { type: 'button', className: 'oai-primary', onClick: () => finish() }, 'Let\'s go'))
 }

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, test } from 'node:test'
 import { install as installOmni, KEY } from '../src/host/omni.js'
-import { cleanOmniUrl, install, LINK_FILE } from '../src/host/omni-link.js'
+import { cleanOmniUrl, install, LINK_FILE, marketUrlAllowed } from '../src/host/omni-link.js'
 import { install as installHooks } from '@automagik/omni-dsh/src/host/extend.js'
 
 const realFetch = globalThis.fetch
@@ -267,4 +267,21 @@ test('a link made before the market was offered gets the offer once, when the pl
   rows[0].value.indexes = []
   await rt.offerOmniMarket()
   assert.equal(updates.length, 1)
+})
+
+test('the market is offered only over https or this machine\'s loopback, and leaves with the link', async (t) => {
+  assert.equal(marketUrlAllowed('https://omni.example.com'), true)
+  assert.equal(marketUrlAllowed('http://127.0.0.1:8882'), true)
+  assert.equal(marketUrlAllowed('http://omni.example.com'), false)
+  const updates = []
+  const rows = [{ ns: 'plugin-market', value: { indexes: [] }, revision: 1 }]
+  const settings = { describe: () => rows, update: async (ns, patch) => { updates.push(patch); rows[0].value = { ...rows[0].value, ...patch } } }
+  const { rt, home, stop } = runtime({ settings })
+  t.after(stop)
+  assert.equal(await rt.addOmniMarket('http://omni.example.com'), false)
+  writeFileSync(join(home, LINK_FILE), JSON.stringify({ url: 'https://omni.example.com', key: 'omni_sk_old' }))
+  await rt.offerOmniMarket()
+  assert.deepEqual(rows[0].value.indexes, ['https://omni.example.com/api/market/index.json'])
+  await rt.omniLinkEndpoint('omni-disconnect')
+  assert.deepEqual(rows[0].value.indexes, [])
 })

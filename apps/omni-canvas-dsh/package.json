@@ -46,8 +46,8 @@
     "dsh": ">=0.2.1-rc.2 <0.3.0"
   },
   "peerDependencies": {
-    "@automagik/omni-channels-dsh": "*",
-    "@automagik/omni-dsh": "*",
+    "@automagik/omni-channels-dsh": ">=2.261019.10",
+    "@automagik/omni-dsh": ">=2.261019.10",
     "@deepseek-ai/cordis": "*",
     "@deepseek-ai/dsh-tools": "*"
   },

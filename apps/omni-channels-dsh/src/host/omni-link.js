@@ -9,6 +9,7 @@
 //
 // Before a sign-in, a profile may still name an Omni the older way (config.omni.url and
 // the OMNI_API_KEY credential); omni.js reads that only when no link file exists.
+import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises'
 import { hostname } from 'node:os'
@@ -17,6 +18,16 @@ import { join } from 'node:path'
 export const LINK_FILE = 'omni.json'
 export const MARKET_ROW = 'plugin-market'
 export const MARKET_INDEX_PATH = '/api/market/index.json'
+
+const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]'])
+export const marketUrlAllowed = (url) => {
+  try {
+    const { protocol, hostname: host } = new URL(url)
+    return protocol === 'https:' || (protocol === 'http:' && LOOPBACK.has(host))
+  } catch {
+    return false
+  }
+}
 const TIMEOUT_MS = 10_000
 const POLL_TIMEOUT_MS = 30_000
 const DEVICE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code'
@@ -66,13 +77,19 @@ export function install(rt) {
 
   async function writeLink(link) {
     await mkdir(rt.home, { recursive: true })
-    const temp = `${path}.${process.pid}.tmp`
+    const temp = `${path}.${process.pid}.${randomUUID()}.tmp`
     await writeFile(temp, `${JSON.stringify(link, null, 2)}\n`, { mode: 0o600 })
     await rename(temp, path)
   }
 
-  async function saveLink(link) {
-    await writeLink({ ...link, marketOffered: await addOmniMarket(link.url) })
+  // `typed` is the address the user typed: the market is offered there, not wherever the
+  // Omni's reply points.
+  async function saveLink(link, typed = link.url) {
+    await writeLink({ ...link, marketOffered: await addOmniMarket(typed) })
+  }
+
+  async function marketRow() {
+    return rt.ctx.settings?.describe?.().find(entry => entry.ns === MARKET_ROW)
   }
 
   // Each Omni serves a market of its own release's plugins (/api/market/index.json). The
@@ -80,9 +97,12 @@ export function install(rt) {
   // Omni plugins of the right version are a click away. It is offered once per link
   // (omni.json's marketOffered): one the user removed stays removed until the next link.
   // True when the market is on and lists it.
+  // Only over https (or this machine's loopback): a plugin source on plain http could be
+  // swapped by anyone on the network.
   async function addOmniMarket(url) {
+    if (!marketUrlAllowed(url)) return false
     try {
-      const row = rt.ctx.settings?.describe?.().find(entry => entry.ns === MARKET_ROW)
+      const row = await marketRow()
       if (row === undefined) return false
       const index = `${url}${MARKET_INDEX_PATH}`
       const indexes = Array.isArray(row.value?.indexes) ? row.value.indexes : []
@@ -100,7 +120,22 @@ export function install(rt) {
   rt.offerOmniMarket = async () => {
     const link = rt.omniLink()
     if (link === null || link.marketOffered) return
-    if (await addOmniMarket(link.url)) await writeLink({ ...link, marketOffered: true })
+    if (!(await addOmniMarket(link.url))) return
+    // A pairing or a disconnect while the market was being updated wins over this mark.
+    const now = rt.omniLink()
+    if (now?.url === link.url && now.key === link.key && !now.marketOffered) await writeLink({ ...now, marketOffered: true })
+  }
+
+  // Disconnecting takes that Omni's market back out of the plugin market.
+  async function removeOmniMarket(url) {
+    try {
+      const row = await marketRow()
+      const indexes = Array.isArray(row?.value?.indexes) ? row.value.indexes : []
+      const index = `${url}${MARKET_INDEX_PATH}`
+      if (row !== undefined && indexes.includes(index)) await rt.ctx.settings.update(MARKET_ROW, { indexes: indexes.filter(item => item !== index) }, row.revision)
+    } catch (error) {
+      rt.warn?.('omni-channels: the Omni market was not removed from the plugin market: %s', error?.message ?? error)
+    }
   }
   rt.ctx.effect?.(() => {
     void rt.offerOmniMarket().catch(() => {})
@@ -197,7 +232,7 @@ export function install(rt) {
       keyExpiresAt: reply.data.keyExpiresAt ?? null,
       pairedAt: new Date().toISOString(),
     }
-    await saveLink(link)
+    await saveLink(link, current.url)
     rt.syncOmniEvents?.()
     return link
   }
@@ -242,7 +277,9 @@ export function install(rt) {
   }
 
   async function disconnect() {
+    const link = rt.omniLink()
     await rm(path, { force: true })
+    if (link !== null) await removeOmniMarket(link.url)
     rt.syncOmniEvents?.()
     return { status: 'disconnected' }
   }

@@ -92,3 +92,14 @@ test('a team linked to an Omni without the channels plugin learns that channels 
   writeFileSync(join(rt.home, 'omni.json'), '{}')
   assert.equal((await call('state')).value.channelsMoved, true)
 })
+
+test('a Main Bot rule that throws is left out, and the other rules still come', () => {
+  const warned = []
+  const rt = { warn: (...args) => warned.push(args) }
+  install(rt)
+  rt.hooks.mainRules(() => 'first', { order: 1 })
+  rt.hooks.mainRules(() => { throw new Error('broken plugin') }, { order: 2 })
+  rt.hooks.mainRules(() => 'third', { order: 3 })
+  assert.deepEqual(rt.extended.rules({}), ['first', 'third'])
+  assert.equal(warned.length, 1)
+})

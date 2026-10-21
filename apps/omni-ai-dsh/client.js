@@ -278,7 +278,7 @@ function WelcomeStep(props) {
       at: "omni-welcome",
       glitching
     },
-    (0, import_react2.createElement)("p", null, "Two quick steps: connect your Omni, so I can see your channels, and connect an AI, so I can think."),
+    (0, import_react2.createElement)("p", null, railSteps("omni-welcome").some(([id]) => id === "omni-connect") ? "Two quick steps: connect your Omni, so I can see your channels, and connect an AI, so I can think." : "One quick step: connect an AI, so I can think."),
     (0, import_react2.createElement)("button", { type: "button", className: "oai-primary", onClick: () => finish2() }, "Let's go")
   );
 }
