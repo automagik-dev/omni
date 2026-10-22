@@ -334,8 +334,10 @@ postgresDescribe('v2.260902.5 -> v2.260908.20 release rehearsal (real PostgreSQL
           SELECT 'trigger:' || tgname FROM pg_trigger
           WHERE tgrelid = 'public.${table}'::regclass AND NOT tgisinternal
           UNION ALL
+          -- PostgreSQL 18 also lists each NOT NULL here (contype 'n'), so a column a
+          -- migration adds would read as a new constraint; 17 and older list none.
           SELECT 'constraint:' || conname || '|' || contype::text FROM pg_constraint
-          WHERE conrelid = 'public.${table}'::regclass
+          WHERE conrelid = 'public.${table}'::regclass AND contype <> 'n'
         ) AS catalog;
       `);
   }

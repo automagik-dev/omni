@@ -388,24 +388,30 @@ jobs:
         run: bun install
 
       - name: Resolve a PostgreSQL server build
+        # The PostgreSQL Omni runs: autopg (the CLI's embedded server, the Helm
+        # chart's and deploy/autopg.Dockerfile's) pins 18, so the gate runs 18,
+        # not whatever the runner image carries (Ubuntu 24.04 ships 16, whose
+        # catalog differs: 18 lists NOT NULL constraints in pg_constraint).
         # `initdb` alone is not enough: a client-only distribution ships initdb
         # and psql but no `postgres`, and initdb then dies halfway through. The
         # harness applies the same postgres-next-to-initdb test, so apply it
-        # here and install only when the runner image does not already satisfy
-        # it. OMNI_PG_BIN_DIR is exported so the harness never has to guess.
+        # here. OMNI_PG_BIN_DIR is exported so the harness never has to guess.
+        env:
+          PG_MAJOR: '18'
         run: |
           set -euo pipefail
-          find_bin_dir() {
-            for dir in /usr/lib/postgresql/*/bin; do
-              if [ -x "$dir/postgres" ] && [ -x "$dir/initdb" ]; then echo "$dir"; return 0; fi
-            done
-            return 1
-          }
-          if ! BIN_DIR=$(find_bin_dir); then
-            echo "No PostgreSQL server build on the runner — installing one."
+          BIN_DIR="/usr/lib/postgresql/${PG_MAJOR}/bin"
+          if [ ! -x "$BIN_DIR/postgres" ] || [ ! -x "$BIN_DIR/initdb" ]; then
+            echo "No PostgreSQL ${PG_MAJOR} server build on the runner — installing one."
+            # The gate makes its own disposable cluster: the package's is not needed.
+            sudo mkdir -p /etc/postgresql-common/createcluster.d
+            echo 'create_main_cluster = false' | sudo tee /etc/postgresql-common/createcluster.d/no-main.conf >/dev/null
+            if ! apt-cache show "postgresql-${PG_MAJOR}" >/dev/null 2>&1; then
+              sudo apt-get install -y --no-install-recommends postgresql-common
+              sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+            fi
             sudo apt-get update
-            sudo apt-get install -y --no-install-recommends postgresql postgresql-client
-            BIN_DIR=$(find_bin_dir)
+            sudo apt-get install -y --no-install-recommends "postgresql-${PG_MAJOR}" "postgresql-client-${PG_MAJOR}"
           fi
           echo "Using PostgreSQL server build at $BIN_DIR"
           "$BIN_DIR/postgres" --version

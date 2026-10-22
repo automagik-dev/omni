@@ -104,7 +104,9 @@ beforeEach(() => {
 afterEach(async () => {
   await plugin?.destroy();
   restore?.();
-  process.env.MEDIA_STORAGE_PATH = previousMediaPath;
+  // Bun 1.4 stores `process.env.X = undefined` as the string "undefined".
+  if (previousMediaPath === undefined) Reflect.deleteProperty(process.env, 'MEDIA_STORAGE_PATH');
+  else process.env.MEDIA_STORAGE_PATH = previousMediaPath;
 });
 
 describe('inbound media', () => {
