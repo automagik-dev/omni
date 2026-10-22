@@ -7,6 +7,8 @@
  * `v2Routes.route('/chats', chatsRoutes)` in index.ts plus `chatsRoutes.get('/:id', …)` in
  * chats.ts is `get /chats/{id}`. A router mounted at the root for a few extra paths also
  * yields catch-alls there (`/`, `/{id}`), which no client calls and the docs leave out.
+ * A router a function builds (`app.route('/api/v2/login', loginApiRoutes(login))`) is read
+ * from that function's body, under the name it gives the router there.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -32,11 +34,22 @@ function importedFiles(src: string): Map<string, string> {
 
 const openApiPath = (path: string) => path.replace(/:(\w+)/g, '{$1}').replace(/\/+$/, '') || '/';
 
-/** The routes `ident` declares in `file`, under `prefix`. */
-function routesOf(file: string, ident: string, prefix: string, into: Set<string>): void {
+/** The body of `export function name(…) {…}` in `src`, up to its closing brace at column 0. */
+function factoryBody(src: string, name: string): string {
+  const start = src.search(new RegExp(`^export function ${name}\\(`, 'm'));
+  if (start < 0) return '';
+  const end = src.indexOf('\n}\n', start);
+  return src.slice(start, end < 0 ? undefined : end);
+}
+
+/** The routes `ident` declares in `file`, under `prefix`; for a factory, the router it builds. */
+function routesOf(file: string, ident: string, prefix: string, into: Set<string>, factory = false): void {
   if (!existsSync(file)) return;
-  const src = readFileSync(file, 'utf8');
-  const pattern = new RegExp(`\\b${ident}\\.(${METHODS.join('|')})\\(\\s*'([^']*)'`, 'g');
+  const whole = readFileSync(file, 'utf8');
+  const src = factory ? factoryBody(whole, ident) : whole;
+  const router = factory ? /\bconst (\w+) = new (?:OpenAPI)?Hono\b/.exec(src)?.[1] : ident;
+  if (!router) return;
+  const pattern = new RegExp(`\\b${router}\\.(${METHODS.join('|')})\\(\\s*'([^']*)'`, 'g');
   for (const [, method = '', sub = ''] of src.matchAll(pattern)) {
     const full = openApiPath(`${prefix === '/' ? '' : prefix}${sub === '/' ? '' : sub}`);
     if (prefix === '/' && (full === '/' || /^\/\{\w+\}(\/|$)/.test(full))) continue;
@@ -66,9 +79,12 @@ export function mountedRoutes(): string[] {
       if (ident) appImports.set(ident, file);
     }
   }
-  for (const [, prefix = '', ident = ''] of app.matchAll(/\bapp\.route\(\s*'\/api\/v2([^']*)'\s*,\s*(\w+)\s*\)/g)) {
+  for (const [, prefix = '', ident = '', call] of app.matchAll(
+    /\bapp\.route\(\s*'\/api\/v2([^']*)'\s*,\s*(\w+)(\([^)]*\))?\s*\)/g,
+  )) {
     const file = appImports.get(ident);
-    if (file && ident !== 'openapiRoutes') routesOf(join(SRC, `${file}.ts`), ident, prefix || '/', routes);
+    if (file && ident !== 'openapiRoutes')
+      routesOf(join(SRC, `${file}.ts`), ident, prefix || '/', routes, Boolean(call));
   }
   for (const [, method = '', path = ''] of app.matchAll(
     new RegExp(`\\bapp\\.(${METHODS.join('|')})\\(\\s*'\\/api\\/v2([^']*)'`, 'g'),
