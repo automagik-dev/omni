@@ -31,6 +31,7 @@ export function install(rt) {
     if (role === 'task-done') return `[Task "${note}" finished · its last words follow; tell the user what matters in a line or two]`
     if (role === 'kickoff') return '[Bot team setup]'
     if (role === 'secret') return '[Secret card]'
+    if (role === 'permission') return '[Omni permission card]'
     if (audience === 'user') return `[Message from ${fromName} · the user sees your reply here]`
     return `[Message from ${fromName}]`
   }

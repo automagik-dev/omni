@@ -2,7 +2,7 @@ import { call } from './api.js'
 import { OmniMark, installFavicon } from './logo.js'
 import * as icons from './icons.js'
 import { setCanvasRenderer } from './canvas-slot.js'
-import { badges, headerButtons, mountShellInstallers, nav, onShell, toolCards } from './extend.js'
+import { badges, botSettings, headerButtons, mountShellInstallers, nav, onShell, toolCards } from './extend.js'
 import { TASK_CSS } from './task-card.js'
 import { isHex, inkText, paintCss } from './inks.js'
 import { CHARACTERS, DEFAULT_MASK, MAIN_LOOK, SHAPES, markupCache, maskOf } from './characters.js'
@@ -54,7 +54,7 @@ export const omni = Object.freeze({
   // Copy in this plugin's namespace; addStrings brings a plugin's Chinese copy.
   t, addStrings, hostText, language, dateLocale,
   // The Bot surface: what runs while it is up, and what draws in its places.
-  onShell, toolCards, nav, badges, headerButtons, setCanvasRenderer,
+  onShell, toolCards, nav, badges, headerButtons, botSettings, setCanvasRenderer,
   // Parts of the Bot surface a plugin's own views are drawn with.
   ui: Object.freeze({ icons, OmniMark, BotMark, MAIN_LOOK, CHARACTERS, relativeShort, createSource }),
   // The roster and actions of the running surface, or null before it runs.

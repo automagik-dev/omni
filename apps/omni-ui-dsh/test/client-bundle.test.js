@@ -37,7 +37,7 @@ test('client.js registers a factory that exports apply and inject', () => {
   // this one through dsh.client.external).
   assert.deepEqual(Object.keys(exports), ['apply', 'inject', 'omni'])
   assert.equal(typeof exports.apply, 'function')
-  assert.deepEqual(Object.keys(exports.omni).sort(), ['addStrings', 'badges', 'call', 'dateLocale', 'face', 'headerButtons', 'hostText', 'language', 'nav', 'onShell', 'setCanvasRenderer', 't', 'toolCards', 'ui'])
+  assert.deepEqual(Object.keys(exports.omni).sort(), ['addStrings', 'badges', 'botSettings', 'call', 'dateLocale', 'face', 'headerButtons', 'hostText', 'language', 'nav', 'onShell', 'setCanvasRenderer', 't', 'toolCards', 'ui'])
   assert.deepEqual(Object.keys(exports.omni.ui).sort(), ['BotMark', 'CHARACTERS', 'MAIN_LOOK', 'OmniMark', 'createSource', 'icons', 'relativeShort'])
   assert.ok(Object.isFrozen(exports.omni))
   assert.equal(exports.omni.face(), null)

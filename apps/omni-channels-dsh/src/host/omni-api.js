@@ -3,6 +3,8 @@
 // call is drawn in the chat as a card (src/client/omni-live.js), so the user watches each
 // read and each change happen. The browser reads through `omni-get`, GET operations only,
 // for the live parts of those cards and of the canvases Omni draws.
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { basename, join } from 'node:path'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { output } from './output.js'
 import { SOURCE_ROUTES } from './omni-routes.js'
@@ -73,6 +75,21 @@ export function search(ops, text) {
 }
 
 export const findOperation = (ops, method, path) => ops.find(op => op.method === method && op.pattern.test(path))
+
+// What an omni_call does that asks the user first, even for a Main Bot (grants.js): sending
+// as the user to a person (a group or a broadcast list is not a person), deleting, editing a
+// sent message, disconnecting a channel, revoking a key. Null for the rest.
+export function sensitiveCall(method, path, body) {
+  if (method === 'GET') return null
+  if (/^\/messages\/send(\/(media|contact|location|sticker|tts|forward|poll|embed))?$/.test(path)) {
+    return /@(g\.us|newsletter|broadcast)$/.test(String(body?.to ?? '')) ? null : 'send'
+  }
+  if (/^\/messages\/(delete|edit)-channel$/.test(path)) return 'delete'
+  if (method === 'DELETE' && /^\/(messages|chats|instances|keys)\/[^/]+$/.test(path)) return 'delete'
+  if (/^\/instances\/[^/]+\/(disconnect|logout)$/.test(path)) return 'disconnect'
+  if (/^\/keys\/[^/]+\/revoke$/.test(path)) return 'delete'
+  return null
+}
 
 // "/instances/{id}/self/chats" → "instances · self · chats", for a route with no summary.
 const pathWords = path => path.split('/').filter(part => part && !part.startsWith('{')).map(part => part.replace(/[-_]/g, ' ')).join(' · ')
@@ -236,14 +253,29 @@ export function install(rt) {
         const op = findOperation(await operations(), method, path)
         if (!op) throw invalid(`${method} ${path} is not an omni API operation. Find it with omni_endpoints.`)
         const query = parse(args.query, 'query')
-        const qs = query && typeof query === 'object' ? new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined && value !== null).map(([key, value]) => [key, typeof value === 'object' ? JSON.stringify(value) : String(value)])).toString() : ''
-        const result = await call(method, `${path}${qs ? `?${qs}` : ''}`, parse(args.body, 'body'))
-        return fitted({ status: result.status, operation: op.summary, data: result.data })
+        const body = parse(args.body, 'body')
+        const act = sensitiveCall(method, path, body)
+        if (act !== null) {
+          const asked = await rt.omniPermit(exec, {
+            action: act, force: 'confirm',
+            resource: { type: 'call', id: `${method} ${path}`, name: op.summary || `${method} ${path}` },
+            call: { tool: 'omni_call', args: { method, path, query, body } },
+            preview: { method, path, ...(typeof body?.to === 'string' ? { to: body.to } : {}), ...(typeof body?.text === 'string' ? { text: body.text } : {}) },
+          })
+          if (asked) return asked
+        }
+        return await runCall({ method, path, query, body }, op)
       } catch (error) {
         return fitted({ status: 0, error: error.message })
       }
     },
   }))
+  async function runCall({ method, path, query, body }, op) {
+    const qs = query && typeof query === 'object' ? new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined && value !== null).map(([key, value]) => [key, typeof value === 'object' ? JSON.stringify(value) : String(value)])).toString() : ''
+    const result = await call(method, `${path}${qs ? `?${qs}` : ''}`, body)
+    return fitted({ status: result.status, operation: op?.summary ?? `${method} ${path}`, data: result.data })
+  }
+  rt.omniExecutor('omni_call', args => runCall(args, findOperation(spec?.ops ?? [], args.method, args.path)))
 
   // The everyday reads and the one change people ask for most, as tools of their own: one
   // call each, and the chat draws each as its card.
@@ -309,8 +341,9 @@ export function install(rt) {
     const [chat, list] = await Promise.all([call('GET', `/chats/${id}`), call('GET', `/chats/${id}/messages?limit=${limit}`)])
     if (!ok(chat)) throw invalid(`omni answered ${chat.status} for that chat`)
     const items = (list.data?.items ?? []).map(message => ({
-      from: message.isFromMe ? 'you' : message.senderDisplayName ?? 'them', at: message.platformTimestamp ?? message.createdAt,
+      id: message.id, from: message.isFromMe ? 'you' : message.senderDisplayName ?? 'them', at: message.platformTimestamp ?? message.createdAt,
       text: String(message.textContent || message.transcription || (message.hasMedia ? `[${message.messageType ?? 'media'}]` : '')).slice(0, 500),
+      ...(message.hasMedia ? { media: message.messageType ?? 'media' } : {}),
     })).sort((a, b) => (Date.parse(a.at) || 0) - (Date.parse(b.at) || 0))
     return { chat: { id, name: chat.data?.data?.name, channel: chat.data?.data?.channel }, items }
   }
@@ -325,25 +358,199 @@ export function install(rt) {
     return call('GET', `${bare}${qs ? `?${qs}` : ''}`)
   }
 
-  tool({
+  // What any Bot reaches on Omni, checked against its permissions (grants.js): the chats it
+  // can name, then per chat what it reads, sends, reacts, opens and deletes.
+  const uuid = (value, what) => {
+    const id = String(value ?? '').trim()
+    if (!/^[0-9a-f-]{36}$/i.test(id)) throw invalid(`${what} must be an id from omni_${what === 'chat' ? 'chats' : 'messages'}`)
+    return id
+  }
+  const owners = new Map()
+  async function ownerOf(instanceId) {
+    if (!owners.has(instanceId)) {
+      const reply = await call('GET', `/instances/${encodeURIComponent(instanceId)}`)
+      owners.set(instanceId, ok(reply) ? String(reply.data?.data?.ownerIdentifier ?? '') : '')
+    }
+    return owners.get(instanceId)
+  }
+  const digits = value => String(value ?? '').replace(/[:@].*$/, '').replace(/\D/g, '')
+  // A chat as a permission's resource: the user's own chat, a person ('chat'), or a group.
+  async function chatResource(chatId) {
+    const reply = await call('GET', `/chats/${chatId}`)
+    if (!ok(reply)) throw invalid(`omni answered ${reply.status} for that chat`)
+    const chat = reply.data?.data ?? {}
+    const owner = digits(await ownerOf(chat.instanceId))
+    const self = chat.chatType === 'dm' && owner !== '' && digits(chat.externalId) === owner
+    return {
+      chat,
+      resource: { type: self ? 'self' : chat.chatType === 'dm' ? 'chat' : 'group', id: chat.id, name: chat.name || chat.externalId || 'a chat', channelId: chat.instanceId },
+    }
+  }
+  async function messageIn(chat, messageId) {
+    const reply = await call('GET', `/messages/${messageId}`)
+    const message = reply.data?.data
+    if (!ok(reply) || message?.chatId !== chat.id) throw invalid('That message is not in this chat')
+    return message
+  }
+  const snippet = message => String(message.textContent || message.transcription || (message.hasMedia ? `[${message.messageType ?? 'media'}]` : '')).slice(0, 300)
+
+  // Each action: what it needs to know before asking, and what it does once allowed. The
+  // card shows `preview`; allowing it runs `run` with the same arguments.
+  const ACTS = {
+    omni_messages: {
+      action: 'read',
+      prepare: async args => ({ chat: uuid(args.chat, 'chat') }),
+      run: async args => fitted({ status: 200, operation: 'Messages', data: await messages(args) }),
+    },
+    omni_send: {
+      action: 'send',
+      prepare: async (args) => {
+        const text = String(args.text ?? '')
+        if (text.trim() === '') throw invalid('text is empty')
+        if (text.length > 4000) throw invalid('text is longer than 4000 characters')
+        return { chat: uuid(args.chat, 'chat'), text }
+      },
+      preview: args => ({ text: args.text }),
+      run: async (args) => {
+        const { chat } = await chatResource(args.chat)
+        const result = await call('POST', '/messages/send', { instanceId: chat.instanceId, to: chat.externalId, text: args.text })
+        return fitted({ status: result.status, operation: 'Send message', data: result.data })
+      },
+    },
+    omni_react: {
+      action: 'react',
+      prepare: async (args) => {
+        const emoji = String(args.emoji ?? '').trim()
+        if (emoji === '' || emoji.length > 16) throw invalid('emoji must be one emoji')
+        return { chat: uuid(args.chat, 'chat'), message: uuid(args.message, 'message'), emoji }
+      },
+      preview: (args, message) => ({ emoji: args.emoji, text: snippet(message) }),
+      run: async (args) => {
+        const { chat } = await chatResource(args.chat)
+        await messageIn(chat, args.message)
+        const result = await call('POST', '/messages/send/reaction', { instanceId: chat.instanceId, to: chat.externalId, messageId: args.message, emoji: args.emoji })
+        return fitted({ status: result.status, operation: 'React', data: result.data })
+      },
+    },
+    omni_media: {
+      action: 'media',
+      prepare: async args => ({ chat: uuid(args.chat, 'chat'), message: uuid(args.message, 'message') }),
+      preview: (_args, message) => ({ text: snippet(message) }),
+      run: async (args) => {
+        const { chat } = await chatResource(args.chat)
+        const message = await messageIn(chat, args.message)
+        if (!message.hasMedia) throw invalid('That message has no media')
+        const ready = await call('POST', '/messages/media/download', { messageId: message.id })
+        const where = ready.data?.data?.mediaLocalPath
+        if (!ok(ready) || typeof where !== 'string') throw invalid(ready.data?.error?.message ?? `omni answered ${ready.status} for that media`)
+        const response = await rt.omniRequest('GET', `/media/${where.split('/').map(encodeURIComponent).join('/')}`)
+        if (response === null || !response.ok) throw invalid(`omni answered ${response?.status ?? 'nothing'} for the file`)
+        const dir = join(rt.home, 'media')
+        mkdirSync(dir, { recursive: true, mode: 0o700 })
+        const file = join(dir, `${message.id}-${basename(where)}`)
+        writeFileSync(file, Buffer.from(await response.arrayBuffer()), { mode: 0o600 })
+        return fitted({ status: 200, operation: 'Media', data: { path: file, type: message.messageType, mimeType: ready.data.data.mediaMimeType ?? null, text: message.transcription || undefined } })
+      },
+    },
+    omni_delete: {
+      action: 'delete',
+      prepare: async args => ({ chat: uuid(args.chat, 'chat'), message: uuid(args.message, 'message') }),
+      preview: (_args, message) => ({ text: snippet(message) }),
+      run: async (args) => {
+        const { chat } = await chatResource(args.chat)
+        const message = await messageIn(chat, args.message)
+        const result = await call('POST', '/messages/delete-channel', { instanceId: chat.instanceId, channelId: chat.externalId, messageId: message.externalId, fromMe: message.isFromMe === true })
+        return fitted({ status: result.status, operation: 'Delete message', data: result.data })
+      },
+    },
+  }
+  const act = (definition) => {
+    const spec = ACTS[definition.name]
+    rt.omniExecutor(definition.name, args => spec.run(args))
+    ctx.tools.register(defineTool({
+      ...definition,
+      output,
+      async execute(raw, exec) {
+        try {
+          const args = await spec.prepare(raw ?? {})
+          const { chat, resource } = await chatResource(args.chat)
+          const message = args.message ? await messageIn(chat, args.message) : undefined
+          const asked = await rt.omniPermit(exec, { action: spec.action, resource, call: { tool: definition.name, args }, preview: spec.preview?.(args, message) ?? {} })
+          if (asked) return asked
+          return await spec.run(args)
+        } catch (error) {
+          return fitted({ status: 0, error: error.message })
+        }
+      },
+    }))
+  }
+
+  ctx.tools.register(defineTool({
     name: 'omni_chats',
-    description: 'Main Bot only. Chats and groups on omni, most recent first: on one channel or all, by name, or only unread ones. The user sees them as a list.',
+    description: 'Chats and groups on omni, most recent first: on one channel or all, by name, or only unread ones. Gives the chat ids the other omni tools take. A Main Bot also sees each chat\'s last message.',
     parameters: {
       channel: { type: 'string', description: 'Channel id or exact name; all channels when left out' },
       search: { type: 'string', description: 'Part of a chat or group name' },
       unread_only: { type: 'boolean', description: 'Only chats with unread messages' },
       limit: { type: 'number', description: 'How many, 1-100 (default 20)' },
     },
-  }, async args => fitted({ status: 200, operation: 'Chats', data: await chats(args) }))
-
-  tool({
+    output,
+    async execute(args, exec) {
+      await rt.load()
+      const self = rt.selfOf(exec.agent?.id)
+      if (rt.botOf(self) === undefined) return 'Only Bots on the team use Omni.'
+      try {
+        const data = await chats(args)
+        // What was said in a chat is for the Bots allowed to read it.
+        if (!rt.isMain(self)) for (const item of data.items) delete item.preview
+        return fitted({ status: 200, operation: 'Chats', data })
+      } catch (error) {
+        return fitted({ status: 0, error: error.message })
+      }
+    },
+  }))
+  const asking = 'Without permission for that chat, the user is asked on a card first and your turn ends; the answer comes back as a note.'
+  act({
     name: 'omni_messages',
-    description: 'Main Bot only. The latest messages of one chat (id from omni_chats), oldest first. The user sees the chat as a live card.',
+    description: `The latest messages of one chat (id from omni_chats), oldest first, each with its id. The user sees the chat as a live card. ${asking}`,
     parameters: {
       chat: { type: 'string', required: true, description: 'Chat id from omni_chats' },
       limit: { type: 'number', description: 'How many messages, 1-50 (default 20)' },
     },
-  }, async args => fitted({ status: 200, operation: 'Messages', data: await messages(args) }))
+  })
+  act({
+    name: 'omni_send',
+    description: `Sends a text message to one chat or group, as the user. Sending to a person (not a group) always asks the user to confirm the exact text first. ${asking}`,
+    parameters: {
+      chat: { type: 'string', required: true, description: 'Chat id from omni_chats' },
+      text: { type: 'string', required: true, description: 'The message, exactly as it should arrive' },
+    },
+  })
+  act({
+    name: 'omni_react',
+    description: `Reacts to one message with an emoji. ${asking}`,
+    parameters: {
+      chat: { type: 'string', required: true, description: 'Chat id from omni_chats' },
+      message: { type: 'string', required: true, description: 'Message id from omni_messages' },
+      emoji: { type: 'string', required: true, description: 'One emoji' },
+    },
+  })
+  act({
+    name: 'omni_media',
+    description: `Saves one message's media (photo, audio, video, document) to a file and returns its path, to read or look at. ${asking}`,
+    parameters: {
+      chat: { type: 'string', required: true, description: 'Chat id from omni_chats' },
+      message: { type: 'string', required: true, description: 'Message id from omni_messages, one with media' },
+    },
+  })
+  act({
+    name: 'omni_delete',
+    description: 'Deletes one message for everyone. The user always confirms first, on a card showing the message.',
+    parameters: {
+      chat: { type: 'string', required: true, description: 'Chat id from omni_chats' },
+      message: { type: 'string', required: true, description: 'Message id from omni_messages' },
+    },
+  })
 
   tool({
     name: 'omni_connect',

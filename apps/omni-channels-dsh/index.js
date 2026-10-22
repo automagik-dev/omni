@@ -8,6 +8,7 @@
 // this plugin's fiber, and they add to the team only through its hooks (rt.hooks), so
 // turning this plugin off takes all of it away. Its own runtime is provided as
 // omniChannels for the canvas plugin, which reads omni through it.
+import * as grants from './src/host/grants.js'
 import * as subscriptions from './src/host/subscriptions.js'
 import * as omniApi from './src/host/omni-api.js'
 import * as omniLink from './src/host/omni-link.js'
@@ -18,8 +19,8 @@ export const name = 'omni-channels'
 export const inject = ['omniTeam', 'tools', 'sessions', 'settings']
 
 // The team's install order, kept: automations and Omni's tools first, the link and its
-// events after.
-const MODULES = [subscriptions, omniApi, omniLink, omni, omniEvents]
+// events after. Permissions come before the tools that check them.
+const MODULES = [grants, subscriptions, omniApi, omniLink, omni, omniEvents]
 
 export function apply(ctx, config = {}) {
   ctx.provide('omniChannels', createRuntime(ctx, ctx.omniTeam, config))

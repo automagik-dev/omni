@@ -4,6 +4,6 @@
 // registries this plugin adds to.
 import { omni } from '@automagik/omni-dsh/client'
 
-export const { call, t, addStrings, onShell, toolCards, nav, badges, headerButtons } = omni
+export const { call, t, addStrings, onShell, toolCards, nav, badges, headerButtons, botSettings } = omni
 export const { OmniMark, BotMark, MAIN_LOOK, CHARACTERS, relativeShort, createSource } = omni.ui
 export const icons = omni.ui.icons

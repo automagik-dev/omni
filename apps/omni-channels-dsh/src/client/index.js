@@ -7,7 +7,8 @@ import { AUTOMATIONS_CSS, AUTOMATIONS_PANEL, AutomationsPage } from './automatio
 import { Badge, KeyValue, LiveChannel, LiveChat, LiveQr, OMNI_LIVE_CSS, OmniCallCard, OmniToolCard, Table, parseCall } from './omni-live.js'
 import { OMNI_PEEK_CSS } from './omni-peek.js'
 import { OMNI_CONNECT_CSS } from './omni-connect.js'
-import { addStrings, badges, headerButtons, nav, onShell, t, toolCards, icons } from './core.js'
+import { addStrings, badges, botSettings, headerButtons, nav, onShell, t, toolCards, icons } from './core.js'
+import { ASKING_TOOLS, ConsentDock, PERMISSIONS_CSS, PermissionsCard, withConsent } from './permissions.js'
 import { STRINGS } from './strings.js'
 const { ClockIcon } = icons
 
@@ -72,6 +73,10 @@ const PHRASES = {
   omni_endpoints: () => ({ label: t('Looking up omni'), state: 'searching' }),
   omni_call: arg => (arg('method') === 'GET' || arg('method') === undefined ? { label: t('Reading omni'), state: 'searching' } : { label: t('Changing omni'), state: 'working' }),
   omni_connect: () => ({ label: t('Connecting a channel'), state: 'working' }),
+  omni_send: () => ({ label: t('Sending a message'), state: 'working' }),
+  omni_react: () => ({ label: t('Reacting'), state: 'working' }),
+  omni_media: () => ({ label: t('Opening a file'), state: 'working' }),
+  omni_delete: () => ({ label: t('Deleting a message'), state: 'working' }),
 }
 const callCard = ({ arg, content, done }) => h(OmniCallCard, { ...parseCall(arg, content), done })
 const toolCard = ({ tool, arg, content, done }) => h(OmniToolCard, { tool, arg, content, done })
@@ -80,10 +85,14 @@ export function apply(ctx) {
   ctx.effect(() => addStrings(STRINGS), 'ds-bot: channels copy')
   // Onboarding: Connect Omni, between omni-ai's welcome and Connect AI when it is installed.
   registerConnectStep(ctx)
-  ctx.effect(() => toolCards.register('omni_call', callCard, { phrase: PHRASES.omni_call }), 'ds-bot: omni call card')
-  for (const name of ['omni_channels', 'omni_chats', 'omni_messages', 'omni_connect']) {
-    ctx.effect(() => toolCards.register(name, toolCard, { phrase: PHRASES[name] }), `ds-bot: ${name} card`)
+  // A call that needs the user's permission draws the card that asks (permissions.js).
+  ctx.effect(() => toolCards.register('omni_call', withConsent(callCard), { phrase: PHRASES.omni_call, asks: true }), 'ds-bot: omni call card')
+  for (const name of ['omni_channels', 'omni_chats', 'omni_messages', 'omni_connect', 'omni_send', 'omni_react', 'omni_media', 'omni_delete']) {
+    const asks = ASKING_TOOLS.includes(name)
+    ctx.effect(() => toolCards.register(name, asks ? withConsent(toolCard) : toolCard, { phrase: PHRASES[name], asks }), `ds-bot: ${name} card`)
   }
+  // What each Bot may do on Omni, on its settings page. A team client older than this plugin has no such list.
+  if (botSettings) ctx.effect(() => botSettings.register({ id: 'omni-permissions', order: 0, Component: PermissionsCard }), 'ds-bot: Omni permissions settings')
   for (const name of ['find_chats', 'omni_endpoints']) ctx.effect(() => toolCards.register(name, null, { phrase: PHRASES[name] }), `ds-bot: ${name} phrase`)
   // Omni's row counts the automation runs waiting for you; its header opens their board.
   ctx.effect(() => badges.register({ id: 'omni-events', Component: ({ bot, roster, useWork }) => (bot.id === roster.eventsBotId ? h(EventsBadge, { roster, useWork }) : null) }), 'ds-bot: automations badge')
@@ -95,7 +104,8 @@ export function apply(ctx) {
   // Omni chats and the Channels page are main panels, like the shell's Plugins page: they
   // replace the conversation in the center, and opening a Bot brings it back.
   ctx.effect(() => onShell(({ face, shadow, installCompiledStyles }) => [
-    () => installCompiledStyles(CHANNELS_CSS + SUBSCRIPTIONS_CSS + AUTOMATIONS_CSS + OMNI_LIVE_CSS + OMNI_PEEK_CSS + OMNI_CONNECT_CSS, 'channels'),
+    () => installCompiledStyles(CHANNELS_CSS + SUBSCRIPTIONS_CSS + AUTOMATIONS_CSS + OMNI_LIVE_CSS + OMNI_PEEK_CSS + OMNI_CONNECT_CSS + PERMISSIONS_CSS, 'channels'),
+    () => shadow('conversation.input.dock', { id: 'omni-consent', order: -80, inject: face }, ConsentDock),
     () => shadow('sidebar.footer.action', { id: 'bot-connect', order: -100, inject: face }, ChannelsFooter),
     () => shadow('main', { key: CHANNELS_PANEL, inject: face }, ChannelsPage),
     () => shadow('main', { key: CHAT_PANEL, inject: face }, ChatPage),

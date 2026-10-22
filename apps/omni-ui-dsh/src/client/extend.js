@@ -25,15 +25,17 @@ export const useEntries = list => useSyncExternalStore(list.source.subscribe, li
 // Tool cards: how the transcript draws one tool's call. `render(props)` gets the call's
 // `{ call, tool, arg, argValue, done, content, sessionId, roster, actions }` and returns
 // an element, or null to draw nothing; `render` null leaves the call undrawn. `phrase(arg)`
-// is what the activity row says while it runs, `{ label, state }`. The last registration
-// for a name wins.
+// is what the activity row says while it runs, `{ label, state }`. `asks`: the call can
+// draw a card the user answers, which a dock above the composer also carries when the call
+// is not drawn; drawn, the dock leaves it out. The last registration for a name wins.
 const cards = registry()
 const cardOf = name => cards.entries().findLast(entry => entry.names.includes(name))
 export const toolCards = {
   source: cards.source,
-  register: (names, render, { phrase } = {}) => cards.register({ names: [names].flat(), render, phrase }),
+  register: (names, render, { phrase, asks = false } = {}) => cards.register({ names: [names].flat(), render, phrase, asks }),
   renderer: name => cardOf(name)?.render ?? undefined,
   phrase: name => cardOf(name)?.phrase,
+  asks: name => cardOf(name)?.asks === true,
 }
 
 // Sidebar nav: rows of the account menu, `{ id, label(), icon, run(actions), order }`.
@@ -42,6 +44,9 @@ export const nav = registry()
 export const badges = registry()
 // Header buttons: drawn in a Bot's chat header, `Component({ bot, roster, actions, useWork })`.
 export const headerButtons = registry()
+// Bot settings: cards of a Bot's settings page, after its capabilities,
+// `Component({ bot, roster, actions, run, Card, Row, SwitchRow })`.
+export const botSettings = registry()
 
 // Shell installers: each one runs while the Bot shell is up (Bot mode) and comes off with
 // it, so what it registers follows the surface like Omni's own panels. It gets the

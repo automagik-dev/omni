@@ -219,6 +219,9 @@ export function OmniCallCard({ method, path, query, result, done }) {
 }
 
 // The typed omni tools, each drawn as what it read.
+// The acts any Bot may be allowed (src/host/grants.js), as the card names them once run.
+const ACTED = { omni_send: 'Sent a message', omni_react: 'Reacted', omni_media: 'Opened a file', omni_delete: 'Deleted a message' }
+
 export function OmniToolCard({ tool, arg, content, done }) {
   let result = null
   try { result = done ? JSON.parse(content) : null } catch { result = done ? { status: 0, error: String(content ?? '').slice(0, 300) } : null }
@@ -243,6 +246,8 @@ export function OmniToolCard({ tool, arg, content, done }) {
     return h(PeekCard, { kind: 'channels', verb: t('Ran'), title: t('Connect channel'), state, failure, accent: true },
       state === 'done' && result?.channelId ? h(LiveQr, { channelId: result.channelId }) : null)
   }
+  const acted = ACTED[tool]
+  if (acted) return h(PeekCard, { kind: 'messages', verb: t('Ran'), title: t(acted), state, failure, accent: true })
   return null
 }
 

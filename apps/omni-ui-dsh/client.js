@@ -1488,13 +1488,15 @@ var cards = registry();
 var cardOf = (name) => cards.entries().findLast((entry) => entry.names.includes(name));
 var toolCards = {
   source: cards.source,
-  register: (names, render, { phrase } = {}) => cards.register({ names: [names].flat(), render, phrase }),
+  register: (names, render, { phrase, asks = false } = {}) => cards.register({ names: [names].flat(), render, phrase, asks }),
   renderer: (name) => cardOf(name)?.render ?? void 0,
-  phrase: (name) => cardOf(name)?.phrase
+  phrase: (name) => cardOf(name)?.phrase,
+  asks: (name) => cardOf(name)?.asks === true
 };
 var nav = registry();
 var badges = registry();
 var headerButtons = registry();
+var botSettings = registry();
 var installers = /* @__PURE__ */ new Set();
 var shell = null;
 var running = /* @__PURE__ */ new Map();
@@ -5170,7 +5172,7 @@ function ToolCell({ node, sessionId, useRoster, useUi, useWork, actions }) {
   const running2 = root.kind === "tool-result" ? void 0 : calls.findLast((call2) => call2.kind !== "tool-result");
   const note = running2 ? toolActivity(toolName(running2), toolArgs(running2).text, findBot, roster.byId[sessionId]) : null;
   useLiveNote(actions, sessionId, `tool:${root.callId ?? node.key}`, note);
-  useShownCards(actions, sessionId, drawn.filter((call2) => CARDS.has(toolName(call2)) && call2.callId).map((call2) => call2.callId));
+  useShownCards(actions, sessionId, drawn.filter((call2) => (CARDS.has(toolName(call2)) || toolCards.asks(toolName(call2))) && call2.callId).map((call2) => call2.callId));
   if (drawn.length === 0) return null;
   const env = { sessionId, roster, actions, useUi, useWork, findBot };
   return (0, import_react11.createElement)(import_react11.Fragment, null, drawn.map((call2, index) => (0, import_react11.createElement)(import_react11.Fragment, { key: call2.callId ?? index }, renderCall(call2, env))));
@@ -8704,6 +8706,7 @@ function BotSettingsForm({ bot, roster, actions, run }) {
   const onlyMain = isMainBot && (roster.mainBotIds ?? []).length === 1;
   const isTile = roster.mainBotId === bot.id;
   const save = (patch) => run(actions.updateBot(bot.id, patch));
+  const extraCards = useEntries(botSettings);
   const duplicate = () => run(actions.duplicateBot(bot.id).then((copy2) => actions.openSession(copy2.id)));
   const remove = () => {
     if (confirming) void run(actions.deleteBot(bot.id));
@@ -8772,6 +8775,7 @@ function BotSettingsForm({ bot, roster, actions, run }) {
       )
     ),
     (0, import_react23.createElement)(BotCapabilitiesCard, { bot, roster, actions, run, Card, SwitchRow }),
+    ...extraCards.map((entry) => (0, import_react23.createElement)(entry.Component, { key: entry.id, bot, roster, actions, run, Card, Row, SwitchRow })),
     roster.memory === false ? null : (0, import_react23.createElement)(MemoryCard, { bot, actions }),
     (0, import_react23.createElement)(BotSchedules, { bot, roster, actions }),
     (0, import_react23.createElement)(
@@ -14093,6 +14097,7 @@ var omni = Object.freeze({
   nav,
   badges,
   headerButtons,
+  botSettings,
   setCanvasRenderer,
   // Parts of the Bot surface a plugin's own views are drawn with.
   ui: Object.freeze({ icons: icons_exports, OmniMark, BotMark, MAIN_LOOK, CHARACTERS, relativeShort, createSource }),

@@ -840,7 +840,7 @@ export function ToolCell({ node, sessionId, useRoster, useUi, useWork, actions }
   const note = running ? toolActivity(toolName(running), toolArgs(running).text, findBot, roster.byId[sessionId]) : null
   // A running tool shows only as the activity row's phrase.
   useLiveNote(actions, sessionId, `tool:${root.callId ?? node.key}`, note)
-  useShownCards(actions, sessionId, drawn.filter(call => CARDS.has(toolName(call)) && call.callId).map(call => call.callId))
+  useShownCards(actions, sessionId, drawn.filter(call => (CARDS.has(toolName(call)) || toolCards.asks(toolName(call))) && call.callId).map(call => call.callId))
   if (drawn.length === 0) return null
   const env = { sessionId, roster, actions, useUi, useWork, findBot }
   return h(Fragment, null, drawn.map((call, index) => h(Fragment, { key: call.callId ?? index }, renderCall(call, env))))

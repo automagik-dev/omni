@@ -204,7 +204,7 @@ test('a corrupt agents field resets instead of crashing the view', async (t) => 
 // The Omni channels and canvas plugins register these for the team; TEAM_TOOLS names them
 // too, so a DSH Agent's Sessions never get them. The canvas plugin's tests check the whole
 // list with all three installed.
-const CHANNEL_TOOLS = ['find_chats', 'list_automations', 'save_automation', 'pause_automation', 'delete_automation', 'omni_endpoints', 'omni_call', 'omni_channels', 'omni_chats', 'omni_messages', 'omni_connect', 'show_canvas']
+const CHANNEL_TOOLS = ['find_chats', 'list_automations', 'save_automation', 'pause_automation', 'delete_automation', 'omni_endpoints', 'omni_call', 'omni_channels', 'omni_chats', 'omni_messages', 'omni_send', 'omni_react', 'omni_media', 'omni_delete', 'omni_connect', 'show_canvas']
 
 test('TEAM_TOOLS names exactly the tools ds-bot registers, and those of the other Omni plugins', async (t) => {
   // read_browser registers only in the Desktop profile; the flag stands in for it.

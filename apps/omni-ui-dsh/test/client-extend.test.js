@@ -9,7 +9,7 @@ import { build } from 'esbuild'
 const { outputFiles } = await build({
   stdin: {
     contents: [
-      "export { badges, mountShellInstallers, nav, onShell, toolCards } from './src/client/extend.js'",
+      "export { badges, botSettings, mountShellInstallers, nav, onShell, toolCards } from './src/client/extend.js'",
       "export { addStrings, installLocale, t } from './src/client/i18n.js'",
     ].join('\n'),
     resolveDir: fileURLToPath(new URL('..', import.meta.url)),
@@ -24,7 +24,7 @@ runInNewContext(outputFiles[0].text, {
     throw new Error(`Unexpected platform module ${name}`)
   },
 })
-const { addStrings, badges, installLocale, mountShellInstallers, nav, onShell, t, toolCards } = module.exports
+const { addStrings, badges, botSettings, installLocale, mountShellInstallers, nav, onShell, t, toolCards } = module.exports
 
 test('a tool card is drawn by the last registration for its name, until its disposer runs', () => {
   const first = () => 'first'
@@ -120,4 +120,21 @@ test('added Chinese copy joins the one namespace and leaves with its disposer, r
     offLocale()
   }
   assert.equal(dicts.size, 0)
+})
+
+test('a tool whose call can ask the user says so, for the docks; Bot settings cards come in order and go with their plugin', () => {
+  const off = toolCards.register('omni_send', () => null, { asks: true })
+  const plain = toolCards.register('omni_chats', () => null)
+  assert.equal(toolCards.asks('omni_send'), true)
+  assert.equal(toolCards.asks('omni_chats'), false)
+  assert.equal(toolCards.asks('nothing'), false)
+  off()
+  plain()
+  assert.equal(toolCards.asks('omni_send'), false)
+  const later = botSettings.register({ id: 'later', order: 5, Component: () => null })
+  const first = botSettings.register({ id: 'omni-permissions', order: 0, Component: () => null })
+  assert.equal(botSettings.entries().map(entry => entry.id).join(), 'omni-permissions,later')
+  first()
+  later()
+  assert.equal(botSettings.entries().length, 0)
 })

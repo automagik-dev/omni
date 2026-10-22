@@ -1667,7 +1667,7 @@ var stringToBytes = qrcode.stringToBytes;
 
 // src/client/core.js
 var import_client = require("@automagik/omni-dsh/client");
-var { call, t, addStrings, onShell, toolCards, nav, badges, headerButtons } = import_client.omni;
+var { call, t, addStrings, onShell, toolCards, nav, badges, headerButtons, botSettings } = import_client.omni;
 var { OmniMark, BotMark, MAIN_LOOK, CHARACTERS, relativeShort, createSource } = import_client.omni.ui;
 var icons = import_client.omni.ui.icons;
 
@@ -3172,6 +3172,7 @@ function OmniCallCard({ method, path, query, result, done }) {
   const live = state !== "done" ? null : instance && ["connect", "pair", "qr", "restart"].includes(action) ? (0, import_react3.createElement)(LiveQr, { channelId: instance }) : instance ? (0, import_react3.createElement)(LiveChannel, { id: instance }) : method === "POST" && path === "/instances" && result?.data?.data?.id ? (0, import_react3.createElement)(LiveChannel, { id: result.data.data.id }) : (0, import_react3.createElement)(Seen, { data: result?.data });
   return (0, import_react3.createElement)(PeekCard, { kind: method === "DELETE" ? "remove" : "write", verb, title, chips: chipsOf(query), state, failure, accent: true }, live);
 }
+var ACTED = { omni_send: "Sent a message", omni_react: "Reacted", omni_media: "Opened a file", omni_delete: "Deleted a message" };
 function OmniToolCard({ tool, arg, content, done }) {
   let result = null;
   try {
@@ -3212,6 +3213,8 @@ function OmniToolCard({ tool, arg, content, done }) {
       state === "done" && result?.channelId ? (0, import_react3.createElement)(LiveQr, { channelId: result.channelId }) : null
     );
   }
+  const acted = ACTED[tool];
+  if (acted) return (0, import_react3.createElement)(PeekCard, { kind: "messages", verb: t("Ran"), title: t(acted), state, failure, accent: true });
   return null;
 }
 var OMNI_LIVE_CSS = `
@@ -4180,6 +4183,178 @@ var AUTOMATIONS_CSS = `
 @media (max-width:720px){.oa-in{padding:20px 16px 40px}}
 `;
 
+// src/client/permissions.js
+var import_react8 = require("react");
+var NONE = {};
+var ASKING_TOOLS = ["omni_messages", "omni_send", "omni_react", "omni_media", "omni_delete", "omni_call"];
+var KIND_OF = { chat: "chat", group: "group", self: "your own chat", channel: "channel" };
+var kindText = (resource) => t(KIND_OF[resource?.type] ?? "chat");
+function askTitle(bot, entry) {
+  const where = entry.resource?.name ?? t("a chat");
+  if (entry.action === "read") return t("{bot} wants to read {where}", { bot: bot.name, where });
+  if (entry.action === "media") return t("{bot} wants to open a file in {where}", { bot: bot.name, where });
+  if (entry.action === "send") return t("{bot} wants to send to {where}", { bot: bot.name, where });
+  if (entry.action === "react") return t("{bot} wants to react in {where}", { bot: bot.name, where });
+  if (entry.action === "delete") return t("{bot} wants to delete a message in {where}", { bot: bot.name, where });
+  if (entry.action === "disconnect") return t("{bot} wants to disconnect a channel", { bot: bot.name });
+  return t("{bot} wants to change Omni", { bot: bot.name });
+}
+function reachText(entry) {
+  const kind = kindText(entry.resource);
+  if (entry.kind === "confirm") {
+    if (entry.action === "send") return entry.resource?.type === "call" ? t("Sends as you. Asks every time.") : t("Sends as you to a person. Asks every time.");
+    if (entry.action === "delete") return t("Deletes for everyone. Asks every time.");
+    if (entry.action === "disconnect") return t("Disconnects the channel. Asks every time.");
+    return t("Asks every time.");
+  }
+  if (entry.action === "read") return t("Read the messages of this {kind}.", { kind });
+  if (entry.action === "media") return t("Open photos, audio and files in this {kind}.", { kind });
+  if (entry.action === "send") return t("Send messages in this {kind}, as you.", { kind });
+  if (entry.action === "react") return t("React to messages in this {kind}.", { kind });
+  return "";
+}
+var CONFIRM_LABEL = { send: "Send", delete: "Delete", disconnect: "Disconnect", react: "React" };
+function Preview({ entry }) {
+  const preview = entry.preview ?? NONE;
+  const lines = [];
+  if (entry.resource?.type === "call") lines.push((0, import_react8.createElement)("code", { key: "op", className: "om-perm-op" }, `${preview.method ?? ""} ${preview.path ?? ""}`.trim()));
+  if (preview.to) lines.push((0, import_react8.createElement)("div", { key: "to", className: "om-perm-to" }, t("To {to}", { to: preview.to })));
+  if (preview.emoji) lines.push((0, import_react8.createElement)("div", { key: "emoji", className: "om-perm-emoji" }, preview.emoji));
+  if (preview.text) lines.push((0, import_react8.createElement)("blockquote", { key: "text", className: "om-perm-text" }, preview.text));
+  return lines.length === 0 ? null : (0, import_react8.createElement)("div", { className: "om-perm-preview" }, lines);
+}
+function ConsentCard({ bot, entry }) {
+  const [busy, setBusy] = (0, import_react8.useState)("");
+  const [error, setError] = (0, import_react8.useState)("");
+  const answer = (choice) => {
+    if (busy) return;
+    setBusy(choice);
+    setError("");
+    Promise.resolve(call("omni-consent-answer", { id: entry.id, answer: choice })).catch((failure) => setError(failure?.message ?? String(failure))).finally(() => setBusy(""));
+  };
+  const running = entry.status === "running";
+  const confirm = entry.kind === "confirm";
+  const button = (choice, label, primary = false) => (0, import_react8.createElement)("button", {
+    type: "button",
+    className: primary ? "bt-q-submit" : "bt-q-btn",
+    disabled: Boolean(busy) || running,
+    onClick: () => answer(choice)
+  }, busy === choice ? "…" : label);
+  return (0, import_react8.createElement)(
+    "div",
+    { className: "bt-q om-perm", role: "group", "aria-label": askTitle(bot, entry), "data-kind": entry.kind },
+    (0, import_react8.createElement)(
+      "div",
+      { className: "bt-q-head" },
+      (0, import_react8.createElement)("span", { className: "om-perm-who" }, (0, import_react8.createElement)(BotMark, { bot, size: 28 })),
+      (0, import_react8.createElement)(
+        "div",
+        { className: "bt-q-text" },
+        (0, import_react8.createElement)("p", { className: "bt-q-title" }, askTitle(bot, entry)),
+        (0, import_react8.createElement)("div", { className: "bt-q-detail" }, reachText(entry))
+      )
+    ),
+    (0, import_react8.createElement)(Preview, { entry }),
+    error ? (0, import_react8.createElement)("div", { className: "om-perm-error", role: "alert" }, error) : null,
+    (0, import_react8.createElement)(
+      "div",
+      { className: "bt-q-foot" },
+      running ? (0, import_react8.createElement)("span", { className: "om-perm-running" }, t("Running…")) : null,
+      confirm ? [(0, import_react8.createElement)("span", { key: "deny" }, button("deny", t("Cancel"))), (0, import_react8.createElement)("span", { key: "once" }, button("once", t(CONFIRM_LABEL[entry.action] ?? "Allow"), true))] : [(0, import_react8.createElement)("span", { key: "deny" }, button("deny", t("No"))), (0, import_react8.createElement)("span", { key: "once" }, button("once", t("Once"))), (0, import_react8.createElement)("span", { key: "always" }, button("always", t("Always"), true))]
+    )
+  );
+}
+var SETTLED = {
+  once: "Allowed once",
+  always: "Allowed from now on",
+  confirmed: "Confirmed",
+  denied: "Not allowed",
+  replaced: "Asked again"
+};
+function Settled({ bot, entry }) {
+  return (0, import_react8.createElement)(
+    "div",
+    { className: "bt-event om-perm-done", "data-status": entry.status },
+    (0, import_react8.createElement)(BotMark, { bot, size: 16 }),
+    ` ${askTitle(bot, entry)} · ${t(SETTLED[entry.status] ?? entry.status)}`
+  );
+}
+var entryAt = (roster, bot, sessionId, callId) => (roster.omniConsents?.[bot.id] ?? []).find((item) => item.callId === callId && item.sessionId === sessionId);
+function withConsent(render) {
+  return (props) => {
+    const bot = props.roster?.byId?.[props.sessionId];
+    const callId = props.call?.callId;
+    const entry = bot && callId ? entryAt(props.roster, bot, props.sessionId, callId) : void 0;
+    if (entry === void 0) {
+      if (props.done && /^(consent|confirmation)_required:/.test(props.content ?? "")) return (0, import_react8.createElement)("div", { className: "bt-event" }, t("Asked you for permission in its chat"));
+      return render ? render(props) : null;
+    }
+    return (0, import_react8.createElement)("div", { className: "bt-q-inline" }, entry.status === "pending" || entry.status === "running" ? (0, import_react8.createElement)(ConsentCard, { bot, entry }) : (0, import_react8.createElement)(Settled, { bot, entry }));
+  };
+}
+function ConsentDock({ sessionId, useRoster, useCards }) {
+  const roster = useRoster((value) => value);
+  const shown = useCards?.((state) => state[sessionId]) ?? NONE;
+  const bot = roster.byId?.[sessionId];
+  if (!bot || (bot.sessionId ?? bot.id) !== sessionId) return null;
+  const drawn = (entry) => entry.callId && entry.sessionId === sessionId && shown[entry.callId] > 0;
+  const waiting = (roster.omniConsents?.[bot.id] ?? []).filter((entry) => (entry.status === "pending" || entry.status === "running") && !drawn(entry));
+  if (waiting.length === 0) return null;
+  return (0, import_react8.createElement)("div", { className: "bt-q-dock om-perm-dock" }, waiting.map((entry) => (0, import_react8.createElement)(ConsentCard, { key: entry.id, bot, entry })));
+}
+var ACTION_TEXT = { read: "read", media: "files", send: "send", react: "react", delete: "delete" };
+function PermissionsCard({ bot, roster, run, Card, SwitchRow }) {
+  if (!roster.omniGrants) return null;
+  const main = (roster.mainBotIds ?? []).includes(bot.id);
+  const grants = (roster.omniGrants ?? []).filter((grant) => grant.botId === bot.id);
+  const now = Date.now();
+  if (main) {
+    return (0, import_react8.createElement)(
+      Card,
+      { title: t("On Omni") },
+      (0, import_react8.createElement)("div", { className: "bt-set-row bt-bs-row" }, (0, import_react8.createElement)(
+        "span",
+        { className: "bt-set-copy" },
+        (0, import_react8.createElement)("span", { className: "bt-bs-label" }, t("All of Omni")),
+        (0, import_react8.createElement)("span", { className: "bt-set-hint" }, t("A Main Bot operates Omni. Messaging a person, deleting and disconnecting still ask you first."))
+      ))
+    );
+  }
+  return (0, import_react8.createElement)(
+    Card,
+    { title: t("On Omni") },
+    grants.length === 0 ? (0, import_react8.createElement)("div", { className: "bt-set-row bt-bs-row" }, (0, import_react8.createElement)(
+      "span",
+      { className: "bt-set-copy" },
+      (0, import_react8.createElement)("span", { className: "bt-bs-label" }, t("Nothing yet")),
+      (0, import_react8.createElement)("span", { className: "bt-set-hint" }, t("When {bot} needs a chat, it asks you there, on a card.", { bot: bot.name }))
+    )) : grants.map((grant) => (0, import_react8.createElement)(
+      "div",
+      { key: grant.id, className: "om-grant" },
+      (0, import_react8.createElement)(SwitchRow, {
+        label: `${grant.resource?.name ?? t("a chat")} · ${grant.actions.map((action) => t(ACTION_TEXT[action] ?? action)).join(", ")}`,
+        hint: [kindText(grant.resource), typeof grant.expiresAt === "number" && grant.expiresAt <= now ? t("expired") : "", t("Ask each time")].filter(Boolean).join(" · "),
+        on: grant.approval === "confirm",
+        onChange: (on) => run(call("omni-grant-approval", { id: grant.id, approval: on ? "confirm" : "auto" }))
+      }),
+      (0, import_react8.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm om-grant-revoke", onClick: () => run(call("omni-grant-revoke", { id: grant.id })) }, t("Revoke"))
+    ))
+  );
+}
+var PERMISSIONS_CSS = `
+.om-perm-who{flex:none;display:grid;place-items:center}
+.om-perm-preview{margin:8px 0 2px;display:flex;flex-direction:column;gap:6px}
+.om-perm-text{margin:0;padding:8px 10px;border-left:3px solid var(--accent,#22d3c5);border-radius:6px;background:rgba(127,127,127,.08);white-space:pre-wrap;overflow-wrap:anywhere;max-height:220px;overflow:auto}
+.om-perm-to,.om-perm-op{font-size:12px;opacity:.8;overflow-wrap:anywhere}
+.om-perm-emoji{font-size:22px;line-height:1}
+.om-perm-error{color:#e5484d;font-size:12px;margin-top:6px}
+.om-perm-running{font-size:12px;opacity:.7;margin-right:auto}
+.om-perm-done{display:flex;align-items:center;gap:4px}
+.om-grant{display:flex;align-items:center;gap:8px}
+.om-grant>:first-child{flex:1;min-width:0}
+.om-grant-revoke{flex:none;margin-right:12px}
+`;
+
 // src/client/strings.js
 var STRINGS = {
   "Every {n} days": "每 {n} 天",
@@ -4490,11 +4665,60 @@ var STRINGS = {
   "Connect a channel and its chats show up here.": "连接一个渠道，它的聊天就会显示在这里。",
   "Fix": "修复",
   "No chats on {name} yet.": "{name} 上还没有聊天。",
-  "Show chats from": "显示来自以下渠道的聊天"
+  "Show chats from": "显示来自以下渠道的聊天",
+  // What a Bot may do on Omni (permissions.js).
+  "Sending a message": "正在发送消息",
+  "Reacting": "正在回应",
+  "Deleting a message": "正在删除消息",
+  "{bot} wants to read {where}": "{bot} 想读取 {where}",
+  "{bot} wants to open a file in {where}": "{bot} 想打开 {where} 中的文件",
+  "{bot} wants to send to {where}": "{bot} 想发送到 {where}",
+  "{bot} wants to react in {where}": "{bot} 想在 {where} 中回应",
+  "{bot} wants to delete a message in {where}": "{bot} 想删除 {where} 中的一条消息",
+  "{bot} wants to disconnect a channel": "{bot} 想断开一个渠道",
+  "{bot} wants to change Omni": "{bot} 想更改 Omni",
+  "Sends as you. Asks every time.": "以你的身份发送。每次都会询问。",
+  "Sends as you to a person. Asks every time.": "以你的身份发给一个人。每次都会询问。",
+  "Deletes for everyone. Asks every time.": "为所有人删除。每次都会询问。",
+  "Disconnects the channel. Asks every time.": "断开该渠道。每次都会询问。",
+  "Asks every time.": "每次都会询问。",
+  "Read the messages of this {kind}.": "读取这个{kind}的消息。",
+  "Open photos, audio and files in this {kind}.": "打开这个{kind}中的照片、音频和文件。",
+  "Send messages in this {kind}, as you.": "以你的身份在这个{kind}中发送消息。",
+  "React to messages in this {kind}.": "回应这个{kind}中的消息。",
+  "To {to}": "发给 {to}",
+  "Running…": "运行中…",
+  "No": "不",
+  "Always": "总是",
+  "Asked you for permission in its chat": "已在它的聊天中请求你的许可",
+  "On Omni": "在 Omni 上",
+  "All of Omni": "Omni 的全部",
+  "A Main Bot operates Omni. Messaging a person, deleting and disconnecting still ask you first.": "主 Bot 操作 Omni。给某人发消息、删除和断开连接仍会先询问你。",
+  "Nothing yet": "还没有",
+  "When {bot} needs a chat, it asks you there, on a card.": "当 {bot} 需要某个聊天时，它会在那里用卡片询问你。",
+  "expired": "已过期",
+  "Ask each time": "每次询问",
+  "Revoke": "撤销",
+  "chat": "聊天",
+  "Allowed once": "已允许一次",
+  "Allowed from now on": "已允许，从现在起",
+  "Confirmed": "已确认",
+  "Not allowed": "未允许",
+  "Asked again": "已再次询问",
+  "read": "读取",
+  "files": "文件",
+  "send": "发送",
+  "react": "回应",
+  "delete": "删除",
+  "React": "回应",
+  "Sent a message": "已发送消息",
+  "Reacted": "已回应",
+  "Opened a file": "已打开文件",
+  "Deleted a message": "已删除消息"
 };
 
 // src/client/index.js
-var import_react8 = require("react");
+var import_react9 = require("react");
 var { ClockIcon: ClockIcon2 } = icons;
 var inject = ["slots"];
 var channels = Object.freeze({ Badge, KeyValue, LiveChannel, LiveChat, LiveQr, Table });
@@ -4557,26 +4781,33 @@ var PHRASES = {
   find_chats: () => ({ label: t("Reading your chats"), state: "searching" }),
   omni_endpoints: () => ({ label: t("Looking up omni"), state: "searching" }),
   omni_call: (arg) => arg("method") === "GET" || arg("method") === void 0 ? { label: t("Reading omni"), state: "searching" } : { label: t("Changing omni"), state: "working" },
-  omni_connect: () => ({ label: t("Connecting a channel"), state: "working" })
+  omni_connect: () => ({ label: t("Connecting a channel"), state: "working" }),
+  omni_send: () => ({ label: t("Sending a message"), state: "working" }),
+  omni_react: () => ({ label: t("Reacting"), state: "working" }),
+  omni_media: () => ({ label: t("Opening a file"), state: "working" }),
+  omni_delete: () => ({ label: t("Deleting a message"), state: "working" })
 };
-var callCard = ({ arg, content, done }) => (0, import_react8.createElement)(OmniCallCard, { ...parseCall(arg, content), done });
-var toolCard = ({ tool, arg, content, done }) => (0, import_react8.createElement)(OmniToolCard, { tool, arg, content, done });
+var callCard = ({ arg, content, done }) => (0, import_react9.createElement)(OmniCallCard, { ...parseCall(arg, content), done });
+var toolCard = ({ tool, arg, content, done }) => (0, import_react9.createElement)(OmniToolCard, { tool, arg, content, done });
 function apply(ctx) {
   ctx.effect(() => addStrings(STRINGS), "ds-bot: channels copy");
   registerConnectStep(ctx);
-  ctx.effect(() => toolCards.register("omni_call", callCard, { phrase: PHRASES.omni_call }), "ds-bot: omni call card");
-  for (const name of ["omni_channels", "omni_chats", "omni_messages", "omni_connect"]) {
-    ctx.effect(() => toolCards.register(name, toolCard, { phrase: PHRASES[name] }), `ds-bot: ${name} card`);
+  ctx.effect(() => toolCards.register("omni_call", withConsent(callCard), { phrase: PHRASES.omni_call, asks: true }), "ds-bot: omni call card");
+  for (const name of ["omni_channels", "omni_chats", "omni_messages", "omni_connect", "omni_send", "omni_react", "omni_media", "omni_delete"]) {
+    const asks = ASKING_TOOLS.includes(name);
+    ctx.effect(() => toolCards.register(name, asks ? withConsent(toolCard) : toolCard, { phrase: PHRASES[name], asks }), `ds-bot: ${name} card`);
   }
+  if (botSettings) ctx.effect(() => botSettings.register({ id: "omni-permissions", order: 0, Component: PermissionsCard }), "ds-bot: Omni permissions settings");
   for (const name of ["find_chats", "omni_endpoints"]) ctx.effect(() => toolCards.register(name, null, { phrase: PHRASES[name] }), `ds-bot: ${name} phrase`);
-  ctx.effect(() => badges.register({ id: "omni-events", Component: ({ bot, roster, useWork }) => bot.id === roster.eventsBotId ? (0, import_react8.createElement)(EventsBadge, { roster, useWork }) : null }), "ds-bot: automations badge");
+  ctx.effect(() => badges.register({ id: "omni-events", Component: ({ bot, roster, useWork }) => bot.id === roster.eventsBotId ? (0, import_react9.createElement)(EventsBadge, { roster, useWork }) : null }), "ds-bot: automations badge");
   ctx.effect(() => headerButtons.register({
     id: "omni-board",
-    Component: ({ bot, roster, actions, useWork }) => bot.id === roster.eventsBotId ? (0, import_react8.createElement)(SubscriptionsButton, { roster, useWork, onToggle: () => toggleBoard(actions.reportError) }) : null
+    Component: ({ bot, roster, actions, useWork }) => bot.id === roster.eventsBotId ? (0, import_react9.createElement)(SubscriptionsButton, { roster, useWork, onToggle: () => toggleBoard(actions.reportError) }) : null
   }), "ds-bot: automations button");
   ctx.effect(() => nav.register({ id: "automations", label: () => t("Automations"), icon: ClockIcon2, run: (actions) => actions.selectPanel(AUTOMATIONS_PANEL) }), "ds-bot: automations nav");
   ctx.effect(() => onShell(({ face, shadow, installCompiledStyles }) => [
-    () => installCompiledStyles(CHANNELS_CSS + SUBSCRIPTIONS_CSS + AUTOMATIONS_CSS + OMNI_LIVE_CSS + OMNI_PEEK_CSS + OMNI_CONNECT_CSS, "channels"),
+    () => installCompiledStyles(CHANNELS_CSS + SUBSCRIPTIONS_CSS + AUTOMATIONS_CSS + OMNI_LIVE_CSS + OMNI_PEEK_CSS + OMNI_CONNECT_CSS + PERMISSIONS_CSS, "channels"),
+    () => shadow("conversation.input.dock", { id: "omni-consent", order: -80, inject: face }, ConsentDock),
     () => shadow("sidebar.footer.action", { id: "bot-connect", order: -100, inject: face }, ChannelsFooter),
     () => shadow("main", { key: CHANNELS_PANEL, inject: face }, ChannelsPage),
     () => shadow("main", { key: CHAT_PANEL, inject: face }, ChatPage),
