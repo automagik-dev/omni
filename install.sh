@@ -38,7 +38,7 @@ resolve_channel() {
 ensure_bun() {
   if has bun; then ok "bun $(bun --version)"; return 0; fi
   printf "Installing bun...\n"
-  curl -fsSL https://bun.sh/install | bash >/dev/null 2>&1
+  curl -fsSL https://bun.sh/install | bash -s "bun-v1.4.2" >/dev/null 2>&1
   export BUN_INSTALL="$HOME/.bun"
   export PATH="$BUN_INSTALL/bin:$PATH"
   has bun || fail "bun install failed; install manually from https://bun.sh and re-run."

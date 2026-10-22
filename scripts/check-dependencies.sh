@@ -100,7 +100,7 @@ else
   MISSING_REQUIRED=$((MISSING_REQUIRED + 1))
   if [ "$AUTO_INSTALL" = "true" ]; then
     echo "  Installing bun..."
-    curl -fsSL https://bun.sh/install | bash 2>/dev/null && echo "  ✓ bun installed" || echo "  ⚠ Could not auto-install bun. Please install from https://bun.sh"
+    curl -fsSL https://bun.sh/install | bash -s "bun-v1.4.2" 2>/dev/null && echo "  ✓ bun installed" || echo "  ⚠ Could not auto-install bun. Please install from https://bun.sh"
   fi
 fi
 
@@ -156,17 +156,17 @@ if [ $MISSING_REQUIRED -gt 0 ]; then
     echo ""
     echo "  Ubuntu/Debian:"
     echo "    sudo apt-get install make curl ffmpeg postgresql-client"
-    echo "    curl -fsSL https://bun.sh/install | bash"
+    echo "    curl -fsSL https://bun.sh/install | bash -s bun-v1.4.2"
     echo "    npm install -g pm2  (or: bun add -g pm2)"
     echo ""
     echo "  macOS (requires Homebrew):"
     echo "    brew install make curl ffmpeg postgresql"
-    echo "    curl -fsSL https://bun.sh/install | bash"
+    echo "    curl -fsSL https://bun.sh/install | bash -s bun-v1.4.2"
     echo "    npm install -g pm2  (or: bun add -g pm2)"
     echo ""
     echo "  Windows (WSL2 recommended):"
     echo "    sudo apt-get install make curl ffmpeg postgresql-client"
-    echo "    curl -fsSL https://bun.sh/install | bash"
+    echo "    curl -fsSL https://bun.sh/install | bash -s bun-v1.4.2"
     echo "    npm install -g pm2  (or: bun add -g pm2)"
     echo ""
   fi
