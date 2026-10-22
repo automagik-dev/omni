@@ -92,6 +92,26 @@ test('a check points electron-updater at the chosen release, reports the downloa
   assert.deepEqual(updater.installs, [[false, true]])
 })
 
+test('on macOS the update is ready only once Squirrel has it, since quitting earlier would not install it', async () => {
+  const updater = fakeUpdater()
+  updater.nativeUpdater = new EventEmitter()
+  const states = []
+  const updates = startUpdates({
+    updater, current: '2.261019.10-labs.14', platform: 'darwin', env: {}, log: quiet, timers: noTimers,
+    onState: state => states.push(state),
+    releases: async () => [release('omni-desktop-v2.261022.1')],
+  })
+  await updates.check()
+  updater.emit('update-downloaded', { version: '2.261022.1' })
+  assert.equal(updates.ready, null)
+  updates.install()
+  assert.deepEqual(updater.installs, [])
+  updater.nativeUpdater.emit('update-downloaded')
+  assert.equal(updates.ready, '2.261022.1')
+  assert.deepEqual(states.at(-2), { version: '2.261022.1', state: 'downloading', percent: 100 })
+  assert.deepEqual(states.at(-1), { version: '2.261022.1', state: 'ready' })
+})
+
 test('no newer release, or GitHub failing, is a quiet no-op', async () => {
   const updater = fakeUpdater()
   const warnings = []
