@@ -109,6 +109,7 @@ export function startUpdates({ updater, current, platform, env, log, onState, re
   updater.on('download-progress', progress => onState({ version: pending, state: 'downloading', percent: Math.round(progress?.percent ?? 0) }))
   updater.on('update-downloaded', info => {
     ready = info?.version ?? pending
+    log.info(`update: ${ready} is downloaded and installs on quit`)
     onState({ version: ready, state: 'ready' })
   })
   updater.on('error', error => log.warn(`update: ${error?.message ?? error}`))
