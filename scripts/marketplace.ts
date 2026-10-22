@@ -11,7 +11,7 @@
  * commit, so an entry that fails here fails in every user's DSH.
  *
  * This static index is for DSH users without an Omni. Every Omni also serves the Automagik
- * marketplace for its own release at /api/market (packages/api/src/market): Omni's plugins,
+ * marketplace for its own release at /api/market, with its page at /market (packages/api/src/market): Omni's plugins,
  * packed from the release by scripts/pack-market.ts, plus this index's vetted npm add-ons.
  */
 import { execFileSync } from 'node:child_process';

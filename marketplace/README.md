@@ -19,9 +19,11 @@ https://<your-omni>/api/market/index.json
 
 | Route | What it is |
 |-------|------------|
-| `/api/market` | The catalog, and how to add the index to a DSH |
+| `/market` | The catalog, and how to add the index to a DSH (`/api/market` redirects there) |
 | `/api/market/index.json` | The market index: Omni's own plugins at Omni's version, plus the vetted add-ons below |
 | `/api/market/npm/` | An npm registry for Omni's own plugins; any other package name redirects to registry.npmjs.org |
+
+A reverse proxy that passes only `/api/*` to Omni must pass `/market` too, unauthenticated, for the page.
 
 Omni's own entries are npm sources whose `registry` is that Omni (`https://<your-omni>/api/market/npm/`). The
 tarballs come from the release itself: `scripts/pack-market.ts` packs every `apps/*-dsh` plugin with `bun pm pack`

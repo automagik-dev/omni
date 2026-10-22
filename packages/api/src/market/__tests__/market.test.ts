@@ -9,7 +9,7 @@ import { parseMarketIndex } from '@deepseek-ai/dsh-plugin-market-index';
 import { Hono } from 'hono';
 import staticIndex from '../../../../../marketplace/automagik.json';
 import { type MarketManifest, MarketManifestSchema } from '../manifest';
-import { marketRoutes } from '../routes';
+import { marketPageRoutes, marketRoutes } from '../routes';
 import { type MarketIndex, type Packument, createMarket } from '../service';
 
 const PUBLIC = 'https://omni.example.com';
@@ -94,7 +94,9 @@ afterAll(() => rmSync(root, { recursive: true, force: true }));
 
 function appWith(options: Parameters<typeof createMarket>[0]) {
   const app = new Hono();
-  app.route('/api/market', marketRoutes(createMarket(options)));
+  const market = createMarket(options);
+  app.route('/api/market', marketRoutes(market));
+  app.route('/market', marketPageRoutes(market));
   return (path: string) => app.request(`http://127.0.0.1:8882${path}`);
 }
 
@@ -154,7 +156,7 @@ describe('market index', () => {
       expect(parseMarketIndex(body, `${PUBLIC}/api/market/index.json`).plugins.map((p) => p.name)).toEqual(THIRD_PARTY);
       const packument = await get('/api/market/npm/@automagik%2fomni-dsh');
       expect(packument.status).toBe(302);
-      expect((await get('/api/market')).status).toBe(200);
+      expect((await get('/market')).status).toBe(200);
     }
   });
 });
@@ -230,11 +232,17 @@ describe('market npm registry', () => {
 });
 
 describe('market page', () => {
+  test('is at /market, beside the UI; /api/market sends a person there', async () => {
+    const response = await appWith({ dir: marketDir, publicUrl: PUBLIC })('/api/market');
+    expect(response.status).toBe(301);
+    expect(response.headers.get('location')).toBe('/market');
+  });
+
   test('lists the catalog and the index URL, with every text inserted as text', async () => {
     const hostile = structuredClone(staticIndex);
     const plugin = hostile.plugins.find((p) => p.name === 'dsh-oh-my-claude');
     if (plugin) plugin.description = { en: '</script><script>alert(1)</script>' };
-    const response = await appWith({ dir: marketDir, publicUrl: PUBLIC, staticIndex: hostile })('/api/market');
+    const response = await appWith({ dir: marketDir, publicUrl: PUBLIC, staticIndex: hostile })('/market');
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toContain('text/html');
     const html = await response.text();

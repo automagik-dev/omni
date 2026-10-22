@@ -331,6 +331,11 @@ const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
   {
     route: 'GET /api/market',
     class: 'public-by-contract',
+    justification: 'A fixed 301 to /market, where the Automagik marketplace page moved. Reads nothing.',
+  },
+  {
+    route: 'GET /market',
+    class: 'public-by-contract',
     justification:
       'The Automagik marketplace page: the catalog of DSH plugins this release carries and the vetted ' +
       'third-party add-ons, with the index URL to add to a DSH. Built only from the build-time bundled market ' +

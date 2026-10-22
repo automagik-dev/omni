@@ -1,8 +1,10 @@
 /**
- * The Automagik marketplace at /api/market (see ./service.ts). Public and read-only: the same
- * answer for every caller, built from this release's bundled plugins and the static index.
+ * The Automagik marketplace (see ./service.ts). Public and read-only: the same answer for every
+ * caller, built from this release's bundled plugins and the static index. Machines read it
+ * under /api/market; the page for a person is /market, beside the UI rather than in the API.
  *
- *   GET /api/market                        the catalog page, for a person
+ *   GET /market                            the catalog page, for a person (marketPageRoutes)
+ *   GET /api/market                        301 to /market
  *   GET /api/market/index.json             the DSH market index (format 1)
  *   GET /api/market/npm/<name>             a carried plugin's npm packument; 302 to npmjs for any other name
  *   GET /api/market/npm/<name>/-/<file>    a carried plugin's tarball
@@ -48,10 +50,7 @@ export function marketRoutes(market: Market) {
   const origin = (url: string) => new URL(url).origin;
   const short = market.fixedOrigin ? SHORT : PER_ORIGIN;
 
-  app.get('/', (c) => {
-    c.header('cache-control', short);
-    return c.html(marketPage(market.catalog(origin(c.req.url))));
-  });
+  app.get('/', (c) => c.redirect('/market', 301));
 
   app.get('/index.json', (c) => {
     c.header('cache-control', short);
@@ -75,5 +74,15 @@ export function marketRoutes(market: Market) {
     });
   });
 
+  return app;
+}
+
+/** The catalog page, mounted at /market. */
+export function marketPageRoutes(market: Market) {
+  const app = new Hono();
+  app.get('/', (c) => {
+    c.header('cache-control', market.fixedOrigin ? SHORT : PER_ORIGIN);
+    return c.html(marketPage(market.catalog(new URL(c.req.url).origin)));
+  });
   return app;
 }

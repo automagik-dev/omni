@@ -1,5 +1,5 @@
 /**
- * GET /api/market: the Automagik marketplace, for a person. The catalog this Omni serves and
+ * GET /market: the Automagik marketplace, for a person. The catalog this Omni serves and
  * how to add its index to a DeepSeek Harness. The octopus page shell of the login pages; the
  * catalog arrives as JSON and is inserted with textContent, never as HTML.
  */

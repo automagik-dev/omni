@@ -77,7 +77,7 @@ import { tenancyMiddleware } from './middleware/tenancy';
 
 import { SLACK_OAUTH_CALLBACK_PATH } from './constants/slack-app';
 import { type Login, createLogin } from './login';
-import { marketRoutes } from './market/routes';
+import { marketPageRoutes, marketRoutes } from './market/routes';
 import { createMarket, readMarketPublicUrl } from './market/service';
 import { createContextMiddleware } from './middleware/context';
 import { errorHandler } from './middleware/error';
@@ -586,10 +586,13 @@ export function createApp(
   app.route('/api/login', loginPageRoutes(login));
 
   // The Automagik marketplace: this release's DSH plugins as a DSH market index and an npm
-  // registry, plus the vetted third-party add-ons. Public by contract, read-only, the same for
-  // every caller: no tenant, instance or user data. Declared `public-by-contract` in
-  // tenancy/route-ownership.ts. Must be mounted before protectedApp and the UI.
-  app.route('/api/market', marketRoutes(createMarket({ publicUrl: login?.config.publicUrl ?? readMarketPublicUrl() })));
+  // registry under /api/market, plus the vetted third-party add-ons, and its page for a person
+  // at /market. Public by contract, read-only, the same for every caller: no tenant, instance or
+  // user data. Declared `public-by-contract` in tenancy/route-ownership.ts. Must be mounted
+  // before protectedApp and the UI.
+  const market = createMarket({ publicUrl: login?.config.publicUrl ?? readMarketPublicUrl() });
+  app.route('/api/market', marketRoutes(market));
+  app.route('/market', marketPageRoutes(market));
 
   // ── Multitenancy control plane — feature-flagged, OFF by default ────────────
   // Mounted ONLY when OMNI_MULTITENANCY_ENABLED === "true". When off, this
