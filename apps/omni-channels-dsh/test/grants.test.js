@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { askText, covers, decide, sensitive } from '../src/host/grants.js'
 import { sensitiveCall } from '../src/host/omni-api.js'
+import { SOURCE_ROUTES } from '../src/host/omni-routes.js'
 import { applyBoth, fakeContext } from './team.js'
 
 const OMNI = 'https://omni.example.com'
@@ -14,12 +15,14 @@ const PERSON = '33333333-3333-4333-8333-333333333333'
 const SELF = '44444444-4444-4444-8444-444444444444'
 const OLD = '55555555-5555-4555-8555-555555555555'
 const PHOTO = '66666666-6666-4666-8666-666666666666'
+const LIST = '77777777-7777-4777-8777-777777777777'
 
 const CHATS = {
   [GROUP]: { id: GROUP, instanceId: 'wa-1', name: '🦞BuildWithFriends', chatType: 'group', externalId: '120363@g.us', lastMessagePreview: 'ship it' },
   [FAMILY]: { id: FAMILY, instanceId: 'wa-1', name: 'Family', chatType: 'group', externalId: '120999@g.us', lastMessagePreview: 'dinner?' },
   [PERSON]: { id: PERSON, instanceId: 'wa-1', name: 'Marina', chatType: 'dm', externalId: '5511888887777@s.whatsapp.net', lastMessagePreview: 'see you' },
   [SELF]: { id: SELF, instanceId: 'wa-1', name: 'Me', chatType: 'dm', externalId: '5511999990000@s.whatsapp.net' },
+  [LIST]: { id: LIST, instanceId: 'wa-1', name: 'Clientes', chatType: 'broadcast', externalId: '1700000000@broadcast' },
 }
 const MESSAGES = {
   [OLD]: { id: OLD, chatId: GROUP, externalId: 'WA-OLD', isFromMe: true, textContent: 'wrong link' },
@@ -36,12 +39,12 @@ function fakeOmni() {
     const method = init.method ?? 'GET'
     if (method !== 'GET') {
       // The events module's own housekeeping (its consumers) is not what these tests watch.
-      if (path.startsWith('/messages')) changes.push({ method, path, body: init.body ? JSON.parse(init.body) : undefined })
+      if (!path.startsWith('/events/consumers')) changes.push({ method, path, body: init.body ? JSON.parse(init.body) : undefined })
       if (path === '/messages/media/download') return reply(200, { data: { mediaLocalPath: 'wa-1/2026/photo.jpg', mediaMimeType: 'image/jpeg' } })
       return reply(200, { data: { ok: true } })
     }
     if (path === '/openapi.json') return reply(200, { paths: {} })
-    if (path === '/instances/wa-1') return reply(200, { data: { id: 'wa-1', ownerIdentifier: '5511999990000:12@s.whatsapp.net' } })
+    if (path === '/instances/wa-1') return reply(200, { data: { id: 'wa-1', name: 'Pessoal', ownerIdentifier: '5511999990000:12@s.whatsapp.net' } })
     if (path === '/chats') return reply(200, { items: Object.values(CHATS), meta: {} })
     const chat = /^\/chats\/([^/]+)(\/messages)?$/.exec(path)
     if (chat && CHATS[chat[1]]) {
@@ -128,18 +131,36 @@ test('grants cover their Bot, action and chat; a channel grant covers its chats;
   assert.match(askText({ action: 'send', resource: { name: 'Family' }, preview: { text: 'oi' } }), /send "oi" to "Family"/)
 })
 
-test("omni_call's sends to a person, deletes, disconnects and key revocations ask; groups and reads do not", () => {
+test("omni_call asks before every write but the quiet ones, which reach no person and destroy nothing", () => {
   assert.equal(sensitiveCall('POST', '/messages/send', { to: '5511888887777' }), 'send')
   assert.equal(sensitiveCall('POST', '/messages/send/media', { to: '5511888887777@s.whatsapp.net' }), 'send')
   assert.equal(sensitiveCall('POST', '/messages/send', { to: '120363@g.us' }), null)
-  assert.equal(sensitiveCall('POST', '/messages/send-self', { text: 'note' }), null)
-  assert.equal(sensitiveCall('POST', '/messages/send/presence', { to: '5511888887777' }), null)
-  assert.equal(sensitiveCall('DELETE', '/messages/abc', undefined), 'delete')
-  assert.equal(sensitiveCall('POST', '/messages/delete-channel', {}), 'delete')
+  // A broadcast list lands in each person's own chat; Status is everyone's.
+  assert.equal(sensitiveCall('POST', '/messages/send', { to: '1700000000@broadcast' }), 'send')
+  assert.equal(sensitiveCall('POST', '/messages/send', { to: 'status@broadcast' }), 'send')
+  assert.equal(sensitiveCall('POST', '/scheduled-messages', { to: '5511888887777', text: 'x' }), 'send')
+  assert.equal(sensitiveCall('POST', '/instances/wa-1/whatsapp-templates/promo/send', {}), 'send')
+  assert.equal(sensitiveCall('DELETE', '/automations/a1', undefined), 'delete')
+  assert.equal(sensitiveCall('POST', '/instances/wa-1/groups/120363@g.us/leave', {}), 'delete')
   assert.equal(sensitiveCall('POST', '/instances/wa-1/logout', {}), 'disconnect')
-  assert.equal(sensitiveCall('POST', '/keys/k1/revoke', {}), 'delete')
+  assert.equal(sensitiveCall('PATCH', '/instances/wa-1', { isActive: false }), 'disconnect')
+  assert.equal(sensitiveCall('POST', '/keys', { name: 'x' }), 'change')
   assert.equal(sensitiveCall('GET', '/chats', undefined), null)
-  assert.equal(sensitiveCall('POST', '/instances/wa-1/connect', {}), null)
+  // Every write route omni declares: these, and only these, run without a card.
+  const quiet = SOURCE_ROUTES.filter(route => route.method !== 'GET' && sensitiveCall(route.method, route.path.replace(/\{[^}]+\}/g, 'x'), {}) === null).map(route => `${route.method} ${route.path}`)
+  assert.deepEqual(quiet, [
+    'POST /access/check', 'POST /agents', 'PATCH /agents/{id}', 'POST /auth/validate', 'POST /automations', 'PATCH /automations/{id}',
+    'POST /automations/{id}/disable', 'POST /automations/{id}/enable', 'POST /batch-jobs/estimate',
+    'POST /chats/{id}/archive', 'POST /chats/{id}/hide', 'POST /chats/{id}/label', 'POST /chats/{id}/mute', 'POST /chats/{id}/pin', 'POST /chats/{id}/read',
+    'POST /chats/{id}/unarchive', 'POST /chats/{id}/unhide', 'POST /chats/{id}/unmute', 'POST /chats/{id}/unpin', 'POST /chats/sync-names',
+    'POST /events/schemas/{eventType}/validate', 'POST /events/search',
+    'POST /instances/{id}/check-number', 'POST /instances/{id}/connect', 'POST /instances/{id}/sync', 'POST /instances/{id}/sync/profile',
+    'POST /instances/{instanceId}/routes', 'PATCH /instances/{instanceId}/routes/{id}',
+    'POST /media/film', 'POST /media/imagine', 'POST /media/music', 'POST /media/stt', 'POST /media/tts', 'POST /media/vision',
+    'POST /messages/{id}/read', 'POST /messages/{id}/star', 'POST /messages/media/download', 'POST /messages/read', 'POST /messages/send-self', 'POST /messages/send/presence',
+    'POST /providers', 'PATCH /providers/{id}', 'POST /webhook-sources', 'PATCH /webhook-sources/{id}',
+  ])
+  assert.ok(SOURCE_ROUTES.filter(route => route.method === 'DELETE').every(route => sensitiveCall('DELETE', route.path, undefined) === 'delete'))
 })
 
 test('a dedicated Bot reads and posts in its own group after two clicks, without the Main Bot', async (t) => {
@@ -232,17 +253,23 @@ test('deleting always asks and shows the message; the Main Bot\'s omni_call dele
   const { as, answer, pending, omni } = setup(t, {
     omniGrants: [{ id: 'g1', botId: 'digest', resource: { type: 'group', id: GROUP, name: '🦞BuildWithFriends', channelId: 'wa-1' }, actions: ['read', 'send', 'delete'], approval: 'auto', grantedBy: 'user', createdAt: 1 }],
   })
-  assert.match((await as('digest')('omni_delete', { chat: GROUP, message: OLD })).text, /^confirmation_required: delete a message in "🦞BuildWithFriends" \("wrong link"\)/)
+  const asked = await as('digest')('omni_delete', { chat: GROUP, message: OLD })
+  assert.match(asked.text, /^confirmation_required: delete a message in "🦞BuildWithFriends" needs/)
+  assert.doesNotMatch(asked.text, /wrong link/, 'what the message says stays on the card')
+  assert.equal((await pending('digest'))[0].preview.text, 'wrong link')
   await answer('digest', 'once')
   assert.deepEqual(omni.changes.at(-1), { method: 'POST', path: '/messages/delete-channel', body: { instanceId: 'wa-1', channelId: '120363@g.us', messageId: 'WA-OLD', fromMe: true } })
   // A message of another chat is refused before anything is asked.
   assert.match((await as('digest')('omni_delete', { chat: FAMILY, message: OLD })).text, /not in this chat/)
 
   const main = as('m1')
-  const asked = await main('omni_call', { method: 'POST', path: '/messages/send', body: JSON.stringify({ instanceId: 'wa-1', to: '5511888887777', text: 'Oi!' }) })
-  assert.match(asked.text, /^confirmation_required/)
+  const body = { instanceId: 'wa-1', to: '5511888887777', text: 'Oi!', mediaUrl: 'https://example.com/a.jpg' }
+  assert.match((await main('omni_call', { method: 'POST', path: '/messages/send', body: JSON.stringify(body) })).text, /^confirmation_required/)
   const [card] = await pending('m1')
-  assert.deepEqual(card.preview, { method: 'POST', path: '/messages/send', to: '5511888887777', text: 'Oi!' })
+  assert.deepEqual(card.preview, { method: 'POST', path: '/messages/send', channel: 'Pessoal', to: '5511888887777', text: 'Oi!', body: JSON.stringify(body, null, 2) })
+  const before = omni.changes.length
+  await answer('m1', 'once')
+  assert.deepEqual(omni.changes.slice(before), [{ method: 'POST', path: '/messages/send', body }])
 })
 
 test('opening media saves the file for the Bot to read', async (t) => {
@@ -250,15 +277,55 @@ test('opening media saves the file for the Bot to read', async (t) => {
   assert.match((await as('digest')('omni_media', { chat: GROUP, message: PHOTO })).text, /^consent_required: you have no permission to open a media file in "🦞BuildWithFriends"/)
   await answer('digest', 'once')
   const path = /"path":"([^"]+)"/.exec(notes.at(-1).text)?.[1]
-  assert.ok(path?.startsWith(join(home, 'media')), notes.at(-1).text)
+  assert.ok(path?.startsWith(join(home, 'media', 'digest')), `${path} | ${notes.at(-1).text.slice(0, 300)}`)
   assert.deepEqual([...readFileSync(path)], [0xff, 0xd8, 0xff])
 })
 
-test("an automation run's Main Bot still only reads, and a Bot's run asks in the Bot's own chat", async (t) => {
-  const { as, pending } = setup(t, { subscriptionRuns: [{ sessionId: 'run-1', botId: 'm1', task: 'x' }, { sessionId: 'run-2', botId: 'digest', task: 'y' }] })
+test("an automation run's Main Bot only reads; another Bot's run asks before anything else, and asks in its own chat", async (t) => {
+  const { as, pending } = setup(t, {
+    subscriptionRuns: [{ sessionId: 'run-1', botId: 'm1', task: 'x' }, { sessionId: 'run-2', botId: 'digest', task: 'y' }, { sessionId: 'digest', botId: 'digest', task: 'z' }],
+    omniGrants: [{ id: 'g1', botId: 'digest', resource: { type: 'group', id: GROUP, name: '🦞BuildWithFriends', channelId: 'wa-1' }, actions: ['read', 'send'], approval: 'auto', grantedBy: 'user', createdAt: 1 }],
+  })
   assert.match((await as('run-1')('omni_send', { chat: GROUP, text: 'x' })).text, /only reads omni/)
-  const asked = await as('run-2')('omni_messages', { chat: GROUP })
-  assert.match(asked.text, /asked on a card in your own chat/)
+  assert.match((await as('run-2')('omni_messages', { chat: GROUP })).text, /hello from/)
+  const asked = await as('run-2')('omni_send', { chat: GROUP, text: 'post this' })
+  assert.match(asked.text, /^confirmation_required: .* asked on a card in your own chat/)
   const [card] = await pending('digest')
   assert.equal(card.callId, undefined, 'not drawn at the call: the dock of the Bot\'s chat carries it')
+  // The Bot's own chat is not an event run, even where an automation once ran in it.
+  assert.equal((await as('digest')('omni_send', { chat: GROUP, text: 'ok' })).concluded, false)
+})
+
+test('Bots other than a Main Bot get none of the Main Bot\'s omni tools', async (t) => {
+  const { as } = setup(t)
+  for (const [name, args] of [['omni_call', { method: 'GET', path: '/chats' }], ['omni_endpoints', { search: 'send' }], ['omni_channels', {}], ['omni_connect', { channel: 'wa-1' }]]) {
+    assert.match((await as('digest')(name, args)).text, /Only a Main Bot/, name)
+  }
+})
+
+test('a broadcast list is people: sending there confirms every time', async (t) => {
+  const { as, pending } = setup(t, {
+    omniGrants: [{ id: 'g1', botId: 'digest', resource: { type: 'chat', id: LIST, name: 'Clientes', channelId: 'wa-1' }, actions: ['send'], approval: 'auto', grantedBy: 'user', createdAt: 1 }],
+  })
+  assert.match((await as('digest')('omni_send', { chat: LIST, text: 'promo' })).text, /^confirmation_required/)
+  assert.equal((await pending('digest'))[0].resource.type, 'chat')
+})
+
+test('Always on the whole channel covers its other chats; limit is kept', async (t) => {
+  const { as, answer, view } = setup(t)
+  const digest = as('digest')
+  assert.match((await digest('omni_messages', { chat: GROUP, limit: 3 })).text, /^consent_required/)
+  const card = await answer('digest', 'channel')
+  assert.equal(card.call.args.limit, 3)
+  const [grant] = (await view()).omniGrants
+  assert.deepEqual([grant.resource.type, grant.resource.id, grant.resource.name, grant.actions], ['channel', 'wa-1', 'Pessoal', ['read']])
+  assert.match((await digest('omni_messages', { chat: FAMILY })).text, /hello from Family/)
+})
+
+test('a card answered just before a restart is settled as interrupted, and its Bot is told', async (t) => {
+  const running = { id: 'c1', sessionId: 'digest', botId: 'digest', kind: 'grant', action: 'send', resource: { type: 'group', id: GROUP, name: '🦞BuildWithFriends' }, call: { tool: 'omni_send', args: {} }, preview: { text: 'x' }, status: 'running', askedAt: 1 }
+  const { view, notes } = setup(t, { omniConsents: { digest: [running] } })
+  await new Promise(resolve => setTimeout(resolve, 20))
+  assert.equal((await view()).omniConsents.digest[0].status, 'interrupted')
+  assert.match(notes.at(-1).text, /restarted while it ran what the user allowed: send "x" to "🦞BuildWithFriends"\. It may or may not have happened/)
 })

@@ -76,19 +76,37 @@ export function search(ops, text) {
 
 export const findOperation = (ops, method, path) => ops.find(op => op.method === method && op.pattern.test(path))
 
-// What an omni_call does that asks the user first, even for a Main Bot (grants.js): sending
-// as the user to a person (a group or a broadcast list is not a person), deleting, editing a
-// sent message, disconnecting a channel, revoking a key. Null for the rest.
+// The omni_call writes that run without asking: reads sent as POST, the user's own chat
+// housekeeping, sending to themselves or to a group, connecting and syncing a channel, and
+// configuring agents, providers, automations and routes. Every other write, any DELETE
+// included, asks the user first, Main Bot or not (grants.js), on a card with the whole call.
+const QUIET_WRITES = [
+  /^POST \/(access\/check|auth\/validate|events\/search|batch-jobs\/estimate|messages\/media\/download|messages\/read|messages\/send-self|messages\/send\/presence|chats\/sync-names)$/,
+  /^POST \/events\/schemas\/[^/]+\/validate$/,
+  /^POST \/instances\/[^/]+\/(connect|check-number|sync|sync\/profile)$/,
+  /^POST \/chats\/[^/]+\/(archive|unarchive|hide|unhide|mute|unmute|pin|unpin|read|label)$/,
+  /^POST \/messages\/[^/]+\/(read|star)$/,
+  /^(POST|PATCH|PUT) \/(agents|providers|automations)(\/[^/]+)?$/,
+  /^POST \/automations\/[^/]+\/(enable|disable)$/,
+  /^(POST|PATCH) \/instances\/[^/]+\/routes(\/[^/]+)?$/,
+  /^(POST|PATCH) \/webhook-sources(\/[^/]+)?$/,
+  /^POST \/media\/(tts|stt|vision|imagine|music|film)$/,
+]
+const SENDS = /^\/messages\/send(\/(media|contact|location|sticker|tts|forward|poll|embed))?$/
+// Where many people read one shared room, not a person's inbox: a WhatsApp group or channel.
+const SHARED_ROOM = /@(g\.us|newsletter)$/
+
+/** What an omni_call is when it asks first (send, delete, disconnect, change); null when it runs quietly. */
 export function sensitiveCall(method, path, body) {
   if (method === 'GET') return null
-  if (/^\/messages\/send(\/(media|contact|location|sticker|tts|forward|poll|embed))?$/.test(path)) {
-    return /@(g\.us|newsletter|broadcast)$/.test(String(body?.to ?? '')) ? null : 'send'
-  }
-  if (/^\/messages\/(delete|edit)-channel$/.test(path)) return 'delete'
-  if (method === 'DELETE' && /^\/(messages|chats|instances|keys)\/[^/]+$/.test(path)) return 'delete'
-  if (/^\/instances\/[^/]+\/(disconnect|logout)$/.test(path)) return 'disconnect'
-  if (/^\/keys\/[^/]+\/revoke$/.test(path)) return 'delete'
-  return null
+  if (method === 'POST' && SENDS.test(path)) return SHARED_ROOM.test(String(body?.to ?? '')) ? null : 'send'
+  const route = `${method} ${path}`
+  if (QUIET_WRITES.some(pattern => pattern.test(route))) return null
+  if (method === 'DELETE' || /\/(delete|edit)-channel$|\/groups\/[^/]+\/leave$|\/participants/.test(path)) return 'delete'
+  if (/^\/instances\/[^/]+\/(disconnect|logout|restart)$|\/whatsapp-business\/connection$/.test(path)) return 'disconnect'
+  if (/^\/instances\/[^/]+$/.test(path) && body?.isActive === false) return 'disconnect'
+  if (/send|scheduled-messages|\/replay$|\/retry$|\/execute$|\/trigger$|\/say$/.test(path)) return 'send'
+  return 'change'
 }
 
 // "/instances/{id}/self/chats" → "instances · self · chats", for a route with no summary.
@@ -256,11 +274,18 @@ export function install(rt) {
         const body = parse(args.body, 'body')
         const act = sensitiveCall(method, path, body)
         if (act !== null) {
+          const channelId = body?.instanceId ?? /^\/instances\/([^/]+)/.exec(path)?.[1]
+          const channel = channelId ? (await channelOf(channelId)).name : undefined
           const asked = await rt.omniPermit(exec, {
             action: act, force: 'confirm',
             resource: { type: 'call', id: `${method} ${path}`, name: op.summary || `${method} ${path}` },
             call: { tool: 'omni_call', args: { method, path, query, body } },
-            preview: { method, path, ...(typeof body?.to === 'string' ? { to: body.to } : {}), ...(typeof body?.text === 'string' ? { text: body.text } : {}) },
+            preview: {
+              method, path, ...(channel ? { channel } : {}),
+              ...(typeof body?.to === 'string' ? { to: body.to } : {}), ...(typeof body?.text === 'string' ? { text: body.text } : {}),
+              ...(query && typeof query === 'object' && Object.keys(query).length > 0 ? { query: JSON.stringify(query) } : {}),
+              ...(body !== undefined ? { body: JSON.stringify(body, null, 2).slice(0, 4000) } : {}),
+            },
           })
           if (asked) return asked
         }
@@ -365,25 +390,33 @@ export function install(rt) {
     if (!/^[0-9a-f-]{36}$/i.test(id)) throw invalid(`${what} must be an id from omni_${what === 'chat' ? 'chats' : 'messages'}`)
     return id
   }
-  const owners = new Map()
-  async function ownerOf(instanceId) {
-    if (!owners.has(instanceId)) {
-      const reply = await call('GET', `/instances/${encodeURIComponent(instanceId)}`)
-      owners.set(instanceId, ok(reply) ? String(reply.data?.data?.ownerIdentifier ?? '') : '')
-    }
-    return owners.get(instanceId)
+  // A channel's owner number and name, for ten minutes; a failed read is not kept.
+  const channelCache = new Map()
+  async function channelOf(instanceId) {
+    const kept = channelCache.get(instanceId)
+    if (kept && Date.now() - kept.at < SPEC_TTL_MS) return kept
+    const reply = await call('GET', `/instances/${encodeURIComponent(instanceId)}`)
+    if (!ok(reply)) return { owner: '', name: undefined }
+    const found = { owner: String(reply.data?.data?.ownerIdentifier ?? ''), name: reply.data?.data?.name ?? undefined, at: Date.now() }
+    channelCache.set(instanceId, found)
+    return found
   }
   const digits = value => String(value ?? '').replace(/[:@].*$/, '').replace(/\D/g, '')
+  // Rooms many people read: what is posted there reaches no one's private inbox. A direct
+  // chat, a broadcast list (it lands in each person's chat) and anything unknown are a person.
+  const ROOMS = new Set(['group', 'channel', 'thread', 'forum', 'voice', 'community', 'announcement', 'stage'])
   // A chat as a permission's resource: the user's own chat, a person ('chat'), or a group.
   async function chatResource(chatId) {
     const reply = await call('GET', `/chats/${chatId}`)
     if (!ok(reply)) throw invalid(`omni answered ${reply.status} for that chat`)
     const chat = reply.data?.data ?? {}
-    const owner = digits(await ownerOf(chat.instanceId))
+    const channel = await channelOf(chat.instanceId)
+    const owner = digits(channel.owner)
     const self = chat.chatType === 'dm' && owner !== '' && digits(chat.externalId) === owner
+    const type = self ? 'self' : ROOMS.has(chat.chatType) ? 'group' : 'chat'
     return {
       chat,
-      resource: { type: self ? 'self' : chat.chatType === 'dm' ? 'chat' : 'group', id: chat.id, name: chat.name || chat.externalId || 'a chat', channelId: chat.instanceId },
+      resource: { type, id: chat.id, name: chat.name || chat.externalId || 'a chat', channelId: chat.instanceId, ...(channel.name ? { channelName: channel.name } : {}) },
     }
   }
   async function messageIn(chat, messageId) {
@@ -399,7 +432,7 @@ export function install(rt) {
   const ACTS = {
     omni_messages: {
       action: 'read',
-      prepare: async args => ({ chat: uuid(args.chat, 'chat') }),
+      prepare: async args => ({ chat: uuid(args.chat, 'chat'), ...(args.limit !== undefined ? { limit: args.limit } : {}) }),
       run: async args => fitted({ status: 200, operation: 'Messages', data: await messages(args) }),
     },
     omni_send: {
@@ -445,7 +478,8 @@ export function install(rt) {
         if (!ok(ready) || typeof where !== 'string') throw invalid(ready.data?.error?.message ?? `omni answered ${ready.status} for that media`)
         const response = await rt.omniRequest('GET', `/media/${where.split('/').map(encodeURIComponent).join('/')}`)
         if (response === null || !response.ok) throw invalid(`omni answered ${response?.status ?? 'nothing'} for the file`)
-        const dir = join(rt.home, 'media')
+        // Each Bot's files apart, under its own id.
+        const dir = join(rt.home, 'media', String(args.bot ?? 'bot').replace(/[^\w-]/g, '_'))
         mkdirSync(dir, { recursive: true, mode: 0o700 })
         const file = join(dir, `${message.id}-${basename(where)}`)
         writeFileSync(file, Buffer.from(await response.arrayBuffer()), { mode: 0o600 })
@@ -472,7 +506,8 @@ export function install(rt) {
       output,
       async execute(raw, exec) {
         try {
-          const args = await spec.prepare(raw ?? {})
+          await rt.load()
+          const args = { ...await spec.prepare(raw ?? {}), bot: rt.selfOf(exec.agent?.id) }
           const { chat, resource } = await chatResource(args.chat)
           const message = args.message ? await messageIn(chat, args.message) : undefined
           const asked = await rt.omniPermit(exec, { action: spec.action, resource, call: { tool: definition.name, args }, preview: spec.preview?.(args, message) ?? {} })

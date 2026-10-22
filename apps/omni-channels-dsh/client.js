@@ -4217,10 +4217,12 @@ var CONFIRM_LABEL = { send: "Send", delete: "Delete", disconnect: "Disconnect", 
 function Preview({ entry }) {
   const preview = entry.preview ?? NONE;
   const lines = [];
-  if (entry.resource?.type === "call") lines.push((0, import_react8.createElement)("code", { key: "op", className: "om-perm-op" }, `${preview.method ?? ""} ${preview.path ?? ""}`.trim()));
+  if (entry.resource?.type === "call") lines.push((0, import_react8.createElement)("code", { key: "op", className: "om-perm-op" }, `${preview.method ?? ""} ${preview.path ?? ""}${preview.query ? ` ?${preview.query}` : ""}`.trim()));
+  if (preview.channel) lines.push((0, import_react8.createElement)("div", { key: "channel", className: "om-perm-to" }, t("From {channel}", { channel: preview.channel })));
   if (preview.to) lines.push((0, import_react8.createElement)("div", { key: "to", className: "om-perm-to" }, t("To {to}", { to: preview.to })));
   if (preview.emoji) lines.push((0, import_react8.createElement)("div", { key: "emoji", className: "om-perm-emoji" }, preview.emoji));
   if (preview.text) lines.push((0, import_react8.createElement)("blockquote", { key: "text", className: "om-perm-text" }, preview.text));
+  if (preview.body) lines.push((0, import_react8.createElement)("pre", { key: "body", className: "om-perm-body" }, preview.body));
   return lines.length === 0 ? null : (0, import_react8.createElement)("div", { className: "om-perm-preview" }, lines);
 }
 function ConsentCard({ bot, entry }) {
@@ -4260,13 +4262,20 @@ function ConsentCard({ bot, entry }) {
       "div",
       { className: "bt-q-foot" },
       running ? (0, import_react8.createElement)("span", { className: "om-perm-running" }, t("Running…")) : null,
-      confirm ? [(0, import_react8.createElement)("span", { key: "deny" }, button("deny", t("Cancel"))), (0, import_react8.createElement)("span", { key: "once" }, button("once", t(CONFIRM_LABEL[entry.action] ?? "Allow"), true))] : [(0, import_react8.createElement)("span", { key: "deny" }, button("deny", t("No"))), (0, import_react8.createElement)("span", { key: "once" }, button("once", t("Once"))), (0, import_react8.createElement)("span", { key: "always" }, button("always", t("Always"), true))]
+      confirm ? [(0, import_react8.createElement)("span", { key: "deny" }, button("deny", t("Cancel"))), (0, import_react8.createElement)("span", { key: "once" }, button("once", t(CONFIRM_LABEL[entry.action] ?? "Allow"), true))] : [
+        (0, import_react8.createElement)("span", { key: "deny" }, button("deny", t("No"))),
+        (0, import_react8.createElement)("span", { key: "once" }, button("once", t("Once"))),
+        entry.resource?.channelId && entry.resource.channelName ? (0, import_react8.createElement)("span", { key: "channel" }, button("channel", t("Always, all of {channel}", { channel: entry.resource.channelName }))) : null,
+        (0, import_react8.createElement)("span", { key: "always" }, button("always", t("Always"), true))
+      ]
     )
   );
 }
 var SETTLED = {
   once: "Allowed once",
   always: "Allowed from now on",
+  channel: "Allowed on the whole channel",
+  interrupted: "Interrupted by a restart",
   confirmed: "Confirmed",
   denied: "Not allowed",
   replaced: "Asked again"
@@ -4345,6 +4354,7 @@ var PERMISSIONS_CSS = `
 .om-perm-who{flex:none;display:grid;place-items:center}
 .om-perm-preview{margin:8px 0 2px;display:flex;flex-direction:column;gap:6px}
 .om-perm-text{margin:0;padding:8px 10px;border-left:3px solid var(--accent,#22d3c5);border-radius:6px;background:rgba(127,127,127,.08);white-space:pre-wrap;overflow-wrap:anywhere;max-height:220px;overflow:auto}
+.om-perm-body{margin:0;padding:8px 10px;border-radius:6px;background:rgba(127,127,127,.08);font:11.5px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto}
 .om-perm-to,.om-perm-op{font-size:12px;opacity:.8;overflow-wrap:anywhere}
 .om-perm-emoji{font-size:22px;line-height:1}
 .om-perm-error{color:#e5484d;font-size:12px;margin-top:6px}
@@ -4714,7 +4724,11 @@ var STRINGS = {
   "Sent a message": "已发送消息",
   "Reacted": "已回应",
   "Opened a file": "已打开文件",
-  "Deleted a message": "已删除消息"
+  "Deleted a message": "已删除消息",
+  "From {channel}": "来自 {channel}",
+  "Always, all of {channel}": "总是，{channel} 的全部",
+  "Allowed on the whole channel": "已在整个渠道上允许",
+  "Interrupted by a restart": "因重启而中断"
 };
 
 // src/client/index.js

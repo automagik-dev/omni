@@ -12,7 +12,8 @@
 import { randomUUID } from 'node:crypto'
 
 export const ACTIONS = ['read', 'media', 'send', 'react', 'delete']
-const ANSWERS = new Set(['once', 'always', 'deny'])
+// Always for the whole channel ('channel') grants what was asked on every chat of that channel.
+const ANSWERS = new Set(['once', 'always', 'channel', 'deny'])
 const KEPT = 20
 const TOLD_MAX = 6000
 
@@ -38,15 +39,18 @@ export function decide({ main, grants, botId, resource, action, now = Date.now()
   return asks || grant.approval === 'confirm' ? 'confirm' : 'allow'
 }
 
-// What the Bot asked for, in words for the Bot.
+// What the Bot asked for, in words for the Bot. Only what the Bot itself wrote comes back to
+// it: a message it wants to react to or delete stays on the user's card, since the Bot may not
+// be allowed to read that chat.
 export function askText({ action, resource, preview = {} }) {
   const where = `"${resource.name}"`
   if (action === 'read') return `read the messages of ${where}`
   if (action === 'media') return `open a media file in ${where}`
+  if (resource.type === 'call') return `${preview.method ?? ''} ${preview.path ?? resource.name}`.trim()
   if (action === 'send') return `send ${JSON.stringify(preview.text ?? '')} to ${where}`
   if (action === 'react') return `react ${preview.emoji ?? ''} to a message in ${where}`
-  if (action === 'delete') return `delete a message in ${where}${preview.text ? ` (${JSON.stringify(preview.text)})` : ''}`
-  return `${preview.method ?? ''} ${preview.path ?? resource.name}${preview.text ? ` with ${JSON.stringify(preview.text)}` : ''}${preview.to ? ` to ${preview.to}` : ''}`.trim()
+  if (action === 'delete') return `delete a message in ${where}`
+  return `${action} in ${where}`
 }
 
 export function install(rt) {
@@ -60,8 +64,9 @@ export function install(rt) {
   const sameAsk = (entry, ask) => entry.status === 'pending' && entry.action === ask.action && entry.resource.id === ask.resource.id
     && JSON.stringify(entry.call) === JSON.stringify(ask.call)
 
-  function addGrant(botId, resource, action) {
+  function addGrant(botId, wanted, action, wholeChannel = false) {
     const now = Date.now()
+    const resource = wholeChannel ? { type: 'channel', id: wanted.channelId, name: wanted.channelName ?? wanted.name } : wanted
     const existing = grants().find(grant => grant.botId === botId && grant.resource.type === resource.type && grant.resource.id === resource.id
       && !(typeof grant.expiresAt === 'number' && grant.expiresAt <= now))
     if (existing) {
@@ -88,11 +93,16 @@ export function install(rt) {
     const botId = rt.selfOf(sessionId)
     if (rt.botOf(botId) === undefined) return 'Only Bots on the team use Omni.'
     const main = rt.isMain(botId)
-    const eventRun = (state.subscriptionRuns ?? []).some(run => run.sessionId === sessionId)
-    if (main && eventRun && action !== 'read' && action !== 'media') {
+    // A run for an automation's event reads text other people wrote. A Bot's own chat is not
+    // one, even when an automation once ran there.
+    const eventRun = rt.chatOwners?.has(sessionId) !== true && (state.subscriptionRuns ?? []).some(run => run.sessionId === sessionId)
+    const reads = action === 'read' || action === 'media'
+    if (main && eventRun && !reads) {
       return 'This Session handles an automation event, so it only reads omni. Tell the user what you would change instead.'
     }
-    const verdict = force ?? decide({ main, grants: grants(), botId, resource, action })
+    let verdict = force ?? decide({ main, grants: grants(), botId, resource, action })
+    // Any other Bot's run asks before anything that is not a read, grant or not.
+    if (eventRun && !reads && verdict === 'allow') verdict = 'confirm'
     if (verdict === 'allow') return null
     const readOnly = rt.readOnly?.()
     if (readOnly !== undefined) return `Nothing can be asked now. ${readOnly}`
@@ -139,7 +149,8 @@ export function install(rt) {
     const choice = String(body.answer ?? '')
     if (!ANSWERS.has(choice)) throw invalid('Answer once, always or deny')
     const { botId, entry } = pending(String(body.id ?? ''))
-    if (entry.kind === 'confirm' && choice === 'always') throw invalid('This one asks every time')
+    if (entry.kind === 'confirm' && (choice === 'always' || choice === 'channel')) throw invalid('This one asks every time')
+    if (choice === 'channel' && !entry.resource?.channelId) throw invalid('This is not on a channel')
     const what = askText(entry)
     if (choice === 'deny') {
       Object.assign(entry, { status: 'denied', settledAt: Date.now() })
@@ -151,7 +162,7 @@ export function install(rt) {
     if (run === undefined) throw invalid('This request can no longer run')
     // Running first, so a second click finds it answered.
     entry.status = 'running'
-    if (choice === 'always') addGrant(botId, entry.resource, entry.action)
+    if (choice === 'always' || choice === 'channel') addGrant(botId, entry.resource, entry.action, choice === 'channel')
     await rt.save()
     let result
     try {
@@ -159,9 +170,13 @@ export function install(rt) {
     } catch (error) {
       result = JSON.stringify({ status: 0, error: error?.message ?? String(error) })
     }
-    Object.assign(entry, { status: choice === 'always' ? 'always' : entry.kind === 'confirm' ? 'confirmed' : 'once', settledAt: Date.now() })
-    await rt.save()
-    const how = entry.kind === 'confirm' ? 'The user confirmed' : choice === 'always' ? 'The user allowed, from now on, that you' : 'The user allowed, this once, that you'
+    const status = { always: 'always', channel: 'channel' }[choice] ?? (entry.kind === 'confirm' ? 'confirmed' : 'once')
+    Object.assign(entry, { status, settledAt: Date.now() })
+    // It ran: the Bot hears so even when the card's state cannot be saved.
+    await rt.save().catch(error => rt.warn('ds-bot: saving an answered Omni permission failed: %s', error))
+    const how = entry.kind === 'confirm' ? 'The user confirmed'
+      : choice === 'channel' ? `The user allowed, from now on on the whole channel${entry.resource.channelName ? ` "${entry.resource.channelName}"` : ''}, that you`
+        : choice === 'always' ? 'The user allowed, from now on, that you' : 'The user allowed, this once, that you'
     await tell(botId, `${how} ${what}. It ran; the result: ${result}`)
     return entry
   }
@@ -191,6 +206,25 @@ export function install(rt) {
     await rt.load()
     return endpoints[name](body)
   }
+  // A card answered just before DSH stopped may or may not have run: its Bot is told so, and
+  // the card leaves the dock.
+  async function recover() {
+    await rt.load()
+    const notes = []
+    for (const [botId, list] of Object.entries(state.omniConsents ?? {})) {
+      for (const entry of list) {
+        if (entry.status !== 'running') continue
+        Object.assign(entry, { status: 'interrupted', settledAt: Date.now() })
+        notes.push([botId, `DeepSeek Harness restarted while it ran what the user allowed: ${askText(entry)}. It may or may not have happened; check before doing it again.`])
+      }
+    }
+    if (notes.length === 0) return
+    await rt.save()
+    for (const [botId, text] of notes) await tell(botId, text)
+  }
+  ctx.effect(() => {
+    void recover().catch(error => rt.warn('ds-bot: checking interrupted Omni permissions failed: %s', error))
+  }, 'ds-bot: interrupted Omni permissions')
   for (const name of Object.keys(endpoints)) ctx.effect(() => rt.hooks.endpoint(name, body => rt.grantEndpoint(name, body)), `ds-bot: ${name}`)
   ctx.effect(() => rt.hooks.view(() => ({ omniGrants: state.omniGrants ?? [], omniConsents: state.omniConsents ?? {} })), 'ds-bot: Omni permissions view')
 }

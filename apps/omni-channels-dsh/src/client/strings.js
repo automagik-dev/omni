@@ -360,4 +360,8 @@ export const STRINGS = {
   'Reacted': '已回应',
   'Opened a file': '已打开文件',
   'Deleted a message': '已删除消息',
+  'From {channel}': '来自 {channel}',
+  'Always, all of {channel}': '总是，{channel} 的全部',
+  'Allowed on the whole channel': '已在整个渠道上允许',
+  'Interrupted by a restart': '因重启而中断',
 }

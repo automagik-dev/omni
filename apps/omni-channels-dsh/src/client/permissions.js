@@ -45,10 +45,13 @@ const CONFIRM_LABEL = { send: 'Send', delete: 'Delete', disconnect: 'Disconnect'
 function Preview({ entry }) {
   const preview = entry.preview ?? NONE
   const lines = []
-  if (entry.resource?.type === 'call') lines.push(h('code', { key: 'op', className: 'om-perm-op' }, `${preview.method ?? ''} ${preview.path ?? ''}`.trim()))
+  if (entry.resource?.type === 'call') lines.push(h('code', { key: 'op', className: 'om-perm-op' }, `${preview.method ?? ''} ${preview.path ?? ''}${preview.query ? ` ?${preview.query}` : ''}`.trim()))
+  if (preview.channel) lines.push(h('div', { key: 'channel', className: 'om-perm-to' }, t('From {channel}', { channel: preview.channel })))
   if (preview.to) lines.push(h('div', { key: 'to', className: 'om-perm-to' }, t('To {to}', { to: preview.to })))
   if (preview.emoji) lines.push(h('div', { key: 'emoji', className: 'om-perm-emoji' }, preview.emoji))
   if (preview.text) lines.push(h('blockquote', { key: 'text', className: 'om-perm-text' }, preview.text))
+  // The whole call, so nothing runs that the card did not show.
+  if (preview.body) lines.push(h('pre', { key: 'body', className: 'om-perm-body' }, preview.body))
   return lines.length === 0 ? null : h('div', { className: 'om-perm-preview' }, lines)
 }
 
@@ -80,12 +83,21 @@ export function ConsentCard({ bot, entry }) {
       running ? h('span', { className: 'om-perm-running' }, t('Running…')) : null,
       confirm
         ? [h('span', { key: 'deny' }, button('deny', t('Cancel'))), h('span', { key: 'once' }, button('once', t(CONFIRM_LABEL[entry.action] ?? 'Allow'), true))]
-        : [h('span', { key: 'deny' }, button('deny', t('No'))), h('span', { key: 'once' }, button('once', t('Once'))), h('span', { key: 'always' }, button('always', t('Always'), true))]))
+        : [
+            h('span', { key: 'deny' }, button('deny', t('No'))),
+            h('span', { key: 'once' }, button('once', t('Once'))),
+            entry.resource?.channelId && entry.resource.channelName
+              ? h('span', { key: 'channel' }, button('channel', t('Always, all of {channel}', { channel: entry.resource.channelName })))
+              : null,
+            h('span', { key: 'always' }, button('always', t('Always'), true)),
+          ]))
 }
 
 const SETTLED = {
   once: 'Allowed once',
   always: 'Allowed from now on',
+  channel: 'Allowed on the whole channel',
+  interrupted: 'Interrupted by a restart',
   confirmed: 'Confirmed',
   denied: 'Not allowed',
   replaced: 'Asked again',
@@ -159,6 +171,7 @@ export const PERMISSIONS_CSS = `
 .om-perm-who{flex:none;display:grid;place-items:center}
 .om-perm-preview{margin:8px 0 2px;display:flex;flex-direction:column;gap:6px}
 .om-perm-text{margin:0;padding:8px 10px;border-left:3px solid var(--accent,#22d3c5);border-radius:6px;background:rgba(127,127,127,.08);white-space:pre-wrap;overflow-wrap:anywhere;max-height:220px;overflow:auto}
+.om-perm-body{margin:0;padding:8px 10px;border-radius:6px;background:rgba(127,127,127,.08);font:11.5px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto}
 .om-perm-to,.om-perm-op{font-size:12px;opacity:.8;overflow-wrap:anywhere}
 .om-perm-emoji{font-size:22px;line-height:1}
 .om-perm-error{color:#e5484d;font-size:12px;margin-top:6px}
