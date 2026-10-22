@@ -1,6 +1,6 @@
 {
   "name": "@omni/api",
-  "version": "2.261019.10",
+  "version": "2.261022.2",
   "private": true,
   "type": "module",
   "exports": {
@@ -62,7 +62,7 @@
     "@omni/channel-harness": "workspace:*",
     "@asteasolutions/zod-to-openapi": "7.3.4",
     "@types/qrcode-terminal": "^0.12.2",
-    "@types/bun": "1.3.14",
+    "@types/bun": "1.4.2",
     "baileys": "file:../channel-whatsapp/vendor/baileys-v7.0.0-rc14.tgz",
     "openapi3-ts": "^4.5.0",
     "qrcode-terminal": "^0.12.0",

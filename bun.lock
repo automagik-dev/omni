@@ -10,7 +10,7 @@
         "@commitlint/config-conventional": "^20.4.1",
         "@deepseek-ai/dsh-plugin-market-index": "0.2.1-rc.2",
         "@openapitools/openapi-generator-cli": "^2.28.0",
-        "@types/bun": "1.3.14",
+        "@types/bun": "1.4.2",
         "husky": "^9.1.7",
         "knip": "^5.85.0",
         "turbo": "^2.3.3",
@@ -20,7 +20,7 @@
     },
     "apps/ui": {
       "name": "@omni/ui",
-      "version": "2.261019.10",
+      "version": "2.261022.2",
       "dependencies": {
         "@omni/sdk": "workspace:*",
         "@radix-ui/react-dialog": "^1.1.15",
@@ -55,7 +55,7 @@
     },
     "packages/api": {
       "name": "@omni/api",
-      "version": "2.261019.10",
+      "version": "2.261022.2",
       "dependencies": {
         "@better-auth/passkey": "1.7.7",
         "@google/genai": "^1.0.0",
@@ -88,7 +88,7 @@
         "@asteasolutions/zod-to-openapi": "7.3.4",
         "@omni/channel-a2a": "workspace:*",
         "@omni/channel-harness": "workspace:*",
-        "@types/bun": "1.3.14",
+        "@types/bun": "1.4.2",
         "@types/qrcode-terminal": "^0.12.2",
         "baileys": "file:../channel-whatsapp/vendor/baileys-v7.0.0-rc14.tgz",
         "openapi3-ts": "^4.5.0",
@@ -102,14 +102,14 @@
     },
     "packages/channel-a2a": {
       "name": "@omni/channel-a2a",
-      "version": "2.261019.10",
+      "version": "2.261022.2",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
         "zod": "^3.24.2",
       },
       "devDependencies": {
-        "@types/bun": "1.3.14",
+        "@types/bun": "1.4.2",
         "typescript": "^5.7.3",
       },
       "peerDependencies": {
@@ -118,13 +118,13 @@
     },
     "packages/channel-asc": {
       "name": "@omni/channel-asc",
-      "version": "2.261019.10",
+      "version": "2.261022.2",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
       },
       "devDependencies": {
-        "@types/bun": "1.3.14",
+        "@types/bun": "1.4.2",
         "typescript": "^5.7.3",
       },
       "peerDependencies": {
@@ -133,13 +133,13 @@
     },
     "packages/channel-asc-flow": {
       "name": "@omni/channel-asc-flow",
-      "version": "2.261019.10",
+      "version": "2.261022.2",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
       },
       "devDependencies": {
-        "@types/bun": "1.3.14",
+        "@types/bun": "1.4.2",
         "typescript": "^5.7.3",
       },
       "peerDependencies": {
@@ -148,7 +148,7 @@
     },
     "packages/channel-discord": {
       "name": "@omni/channel-discord",
-      "version": "2.261019.10",
+      "version": "2.261022.2",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
@@ -156,7 +156,7 @@
         "discord.js": "^14.18.0",
       },
       "devDependencies": {
-        "@types/bun": "1.3.14",
+        "@types/bun": "1.4.2",
         "typescript": "^5.7.3",
       },
       "peerDependencies": {
@@ -165,14 +165,14 @@
     },
     "packages/channel-gupshup": {
       "name": "@omni/channel-gupshup",
-      "version": "2.261019.10",
+      "version": "2.261022.2",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
         "zod": "^3.24.2",
       },
       "devDependencies": {
-        "@types/bun": "1.3.14",
+        "@types/bun": "1.4.2",
         "typescript": "^5.7.3",
       },
       "peerDependencies": {
@@ -181,14 +181,14 @@
     },
     "packages/channel-harness": {
       "name": "@omni/channel-harness",
-      "version": "2.261019.10",
+      "version": "2.261022.2",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
         "zod": "^3.24.2",
       },
       "devDependencies": {
-        "@types/bun": "1.3.14",
+        "@types/bun": "1.4.2",
         "typescript": "^5.7.3",
       },
       "peerDependencies": {
@@ -197,13 +197,13 @@
     },
     "packages/channel-hermes": {
       "name": "@omni/channel-hermes",
-      "version": "2.261019.10",
+      "version": "2.261022.2",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
       },
       "devDependencies": {
-        "@types/bun": "1.3.14",
+        "@types/bun": "1.4.2",
         "typescript": "^5.7.3",
       },
       "peerDependencies": {
@@ -212,13 +212,13 @@
     },
     "packages/channel-internal": {
       "name": "@omni/channel-internal",
-      "version": "2.261019.10",
+      "version": "2.261022.2",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
       },
       "devDependencies": {
-        "@types/bun": "1.3.14",
+        "@types/bun": "1.4.2",
         "typescript": "^5.7.3",
       },
       "peerDependencies": {
@@ -227,19 +227,19 @@
     },
     "packages/channel-sdk": {
       "name": "@omni/channel-sdk",
-      "version": "2.261019.10",
+      "version": "2.261022.2",
       "dependencies": {
         "@omni/core": "workspace:*",
         "zod": "^3.24.1",
       },
       "devDependencies": {
-        "@types/bun": "1.3.14",
+        "@types/bun": "1.4.2",
         "typescript": "^5.7.3",
       },
     },
     "packages/channel-slack": {
       "name": "@omni/channel-slack",
-      "version": "2.261019.10",
+      "version": "2.261022.2",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
@@ -249,7 +249,7 @@
         "zod": "^3.24.1",
       },
       "devDependencies": {
-        "@types/bun": "1.3.14",
+        "@types/bun": "1.4.2",
         "typescript": "^5.7.3",
       },
       "peerDependencies": {
@@ -258,14 +258,14 @@
     },
     "packages/channel-telegram": {
       "name": "@omni/channel-telegram",
-      "version": "2.261019.10",
+      "version": "2.261022.2",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
         "grammy": "^1.35.0",
       },
       "devDependencies": {
-        "@types/bun": "1.3.14",
+        "@types/bun": "1.4.2",
         "typescript": "^5.7.3",
       },
       "peerDependencies": {
@@ -274,13 +274,13 @@
     },
     "packages/channel-twilio-whatsapp": {
       "name": "@omni/channel-twilio-whatsapp",
-      "version": "2.261019.10",
+      "version": "2.261022.2",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
       },
       "devDependencies": {
-        "@types/bun": "1.3.14",
+        "@types/bun": "1.4.2",
         "typescript": "^5.7.3",
       },
       "peerDependencies": {
@@ -289,7 +289,7 @@
     },
     "packages/channel-whatsapp": {
       "name": "@omni/channel-whatsapp",
-      "version": "2.261019.10",
+      "version": "2.261022.2",
       "dependencies": {
         "@hapi/boom": "^10.0.1",
         "@omni/channel-sdk": "workspace:*",
@@ -301,7 +301,7 @@
         "sharp": "^0.35.4",
       },
       "devDependencies": {
-        "@types/bun": "1.3.14",
+        "@types/bun": "1.4.2",
         "typescript": "^5.7.3",
       },
       "peerDependencies": {
@@ -310,14 +310,14 @@
     },
     "packages/channel-whatsapp-business": {
       "name": "@omni/channel-whatsapp-business",
-      "version": "2.261019.10",
+      "version": "2.261022.2",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
         "@omni/db": "workspace:*",
       },
       "devDependencies": {
-        "@types/bun": "1.3.14",
+        "@types/bun": "1.4.2",
         "typescript": "^5.7.3",
       },
       "peerDependencies": {
@@ -326,7 +326,7 @@
     },
     "packages/cli": {
       "name": "@automagik/omni",
-      "version": "2.261019.10",
+      "version": "2.261022.2",
       "bin": {
         "omni": "./bin/omni",
       },
@@ -371,7 +371,7 @@
     },
     "packages/core": {
       "name": "@omni/core",
-      "version": "2.261019.10",
+      "version": "2.261022.2",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "^0.2.62",
         "@opentelemetry/api": "^1.9.1",
@@ -383,27 +383,27 @@
         "zod-to-json-schema": "^3.25.1",
       },
       "devDependencies": {
-        "@types/bun": "1.3.14",
+        "@types/bun": "1.4.2",
         "typescript": "^5.7.3",
       },
     },
     "packages/db": {
       "name": "@omni/db",
-      "version": "2.261019.10",
+      "version": "2.261022.2",
       "dependencies": {
         "@omni/core": "workspace:*",
         "drizzle-orm": "^0.45.2",
         "postgres": "^3.4.5",
       },
       "devDependencies": {
-        "@types/bun": "1.3.14",
+        "@types/bun": "1.4.2",
         "drizzle-kit": "^0.30.1",
         "typescript": "^5.7.3",
       },
     },
     "packages/media-processing": {
       "name": "@omni/media-processing",
-      "version": "2.261019.10",
+      "version": "2.261022.2",
       "dependencies": {
         "@google/generative-ai": "^0.21.0",
         "@omni/core": "workspace:*",
@@ -415,22 +415,22 @@
         "pdf-parse": "^1.1.1",
       },
       "devDependencies": {
-        "@types/bun": "1.3.14",
+        "@types/bun": "1.4.2",
         "@types/pdf-parse": "^1.1.5",
         "typescript": "^5.7.3",
       },
     },
     "packages/plugin-openclaw": {
       "name": "@omni/plugin-openclaw",
-      "version": "2.261019.10",
+      "version": "2.261022.2",
       "devDependencies": {
-        "@types/bun": "1.3.14",
+        "@types/bun": "1.4.2",
         "typescript": "^5.7.3",
       },
     },
     "packages/sdk": {
       "name": "@omni/sdk",
-      "version": "2.261019.10",
+      "version": "2.261022.2",
       "dependencies": {
         "openapi-fetch": "^0.13.6",
       },
@@ -444,14 +444,14 @@
     },
     "packages/voice-client": {
       "name": "@omni/voice-client",
-      "version": "2.261019.10",
+      "version": "2.261022.2",
       "dependencies": {
         "@snazzah/davey": "^0.1.11",
         "libsodium-wrappers": "^0.7.15",
         "opusscript": "^0.1.1",
       },
       "devDependencies": {
-        "@types/bun": "1.3.14",
+        "@types/bun": "1.4.2",
         "@types/libsodium-wrappers": "0.7.14",
         "typescript": "^5.7.3",
       },
@@ -1322,7 +1322,7 @@
 
     "@types/body-parser": ["@types/body-parser@1.19.6", "", { "dependencies": { "@types/connect": "*", "@types/node": "*" } }, "sha512-HLFeCYgz89uk22N5Qg3dvGvsv46B8GLvKKo1zKG4NybA8U2DiEO3w9lqGg29t/tfLRJpJ6iQxnVw4OnB7MoM9g=="],
 
-    "@types/bun": ["@types/bun@1.3.14", "", { "dependencies": { "bun-types": "1.3.14" } }, "sha512-h1hFqFVcvAvD9j9K7ZW7vd82aSA+rTdznZa+5bwvCwqSB1jmmfLcbIWhOLx1/+boy/xmjgCs/OMUL8hRJSmnPw=="],
+    "@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
 
     "@types/connect": ["@types/connect@3.4.38", "", { "dependencies": { "@types/node": "*" } }, "sha512-K6uROf1LD88uDQqJCktA4yzL1YYAK6NgfsI0v/mTgyPKWsX1CnJ0XPSDhViejru1GcRkLWb8RlzFYJRqGUbaug=="],
 
@@ -1480,7 +1480,7 @@
 
     "buffers": ["buffers@0.1.1", "", {}, "sha512-9q/rDEGSb/Qsvv2qvzIzdluL5k7AaJOTrw23z9reQthrbF7is4CtlT0DXyO1oei2DCp4uojjzQ7igaSHp1kAEQ=="],
 
-    "bun-types": ["bun-types@1.3.14", "", { "dependencies": { "@types/node": "*" } }, "sha512-4N0ig0fEomHt5R0KCFWjovxow98rIoRwKolrYdCcknNwMekCXRnWEUvgu5soYV8QXtVsrUD8B95MBOZGPvr6KQ=="],
+    "bun-types": ["bun-types@1.4.2", "", { "dependencies": { "@types/node": "*" } }, "sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w=="],
 
     "bytes": ["bytes@3.1.2", "", {}, "sha512-/Nf7TyzTx6S3yRJObOAV7956r8cr2+Oj8AC5dt8wSP3BQAoeX58NoHyCU8P8zGkNXStjTSi6fzO6F0pBdcYbEg=="],
 

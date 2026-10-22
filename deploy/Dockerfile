@@ -17,9 +17,9 @@
 # node_modules so those externalized requires resolve at runtime.
 # =============================================================================
 
-# Bun version must parse the repo's text bun.lock (lockfileVersion 1 → bun>=1.2);
-# pinned to the toolchain that generated it. Override with --build-arg.
-ARG BUN_VERSION=1.3.9
+# The repository's one Bun (.bun-version; scripts/bun-version.test.ts keeps this in step):
+# the toolchain that writes bun.lock and that CI tests on. Override with --build-arg.
+ARG BUN_VERSION=1.4.2
 
 # ---- manifests: prune the context to workspace package.json files ------------
 # Throwaway stage that extracts ONLY the lockfile + every workspace manifest.
