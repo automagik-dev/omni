@@ -63,7 +63,7 @@ describe('Media Utilities', () => {
       try {
         expect(getWhatsAppMediaDownloadMaxBytes()).toBe(512 * 1024 * 1024);
       } finally {
-        if (original === undefined) process.env.OMNI_WHATSAPP_MEDIA_MAX_DOWNLOAD_MB = undefined;
+        if (original === undefined) Reflect.deleteProperty(process.env, 'OMNI_WHATSAPP_MEDIA_MAX_DOWNLOAD_MB');
         else process.env.OMNI_WHATSAPP_MEDIA_MAX_DOWNLOAD_MB = original;
       }
     });

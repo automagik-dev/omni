@@ -68,7 +68,7 @@ describe('TTSService', () => {
         if (originalKey) {
           process.env.ELEVENLABS_API_KEY = originalKey;
         } else {
-          process.env.ELEVENLABS_API_KEY = undefined;
+          Reflect.deleteProperty(process.env, 'ELEVENLABS_API_KEY');
         }
       }
     });
@@ -123,7 +123,7 @@ describe('TTSService', () => {
       if (originalKey) {
         process.env.ELEVENLABS_API_KEY = originalKey;
       } else {
-        process.env.ELEVENLABS_API_KEY = undefined;
+        Reflect.deleteProperty(process.env, 'ELEVENLABS_API_KEY');
       }
     });
 
@@ -166,7 +166,7 @@ describe('TTSService', () => {
       if (originalKey) {
         process.env.ELEVENLABS_API_KEY = originalKey;
       } else {
-        process.env.ELEVENLABS_API_KEY = undefined;
+        Reflect.deleteProperty(process.env, 'ELEVENLABS_API_KEY');
       }
       if (originalVoice) {
         process.env.ELEVENLABS_DEFAULT_VOICE = originalVoice;
@@ -204,12 +204,12 @@ describe('TTSService', () => {
       if (originalKey) {
         process.env.ELEVENLABS_API_KEY = originalKey;
       } else {
-        process.env.ELEVENLABS_API_KEY = undefined;
+        Reflect.deleteProperty(process.env, 'ELEVENLABS_API_KEY');
       }
       if (originalVoice) {
         process.env.ELEVENLABS_DEFAULT_VOICE = originalVoice;
       } else {
-        process.env.ELEVENLABS_DEFAULT_VOICE = undefined;
+        Reflect.deleteProperty(process.env, 'ELEVENLABS_DEFAULT_VOICE');
       }
     });
 
@@ -237,7 +237,7 @@ describe('TTSService', () => {
       if (originalKey) {
         process.env.ELEVENLABS_API_KEY = originalKey;
       } else {
-        process.env.ELEVENLABS_API_KEY = undefined;
+        Reflect.deleteProperty(process.env, 'ELEVENLABS_API_KEY');
       }
     });
   });
