@@ -52,12 +52,12 @@ describe('desktopTarget', () => {
 
 describe('pickRelease', () => {
   const releases = [
-    release('v2.261019.10', ['omni-linux-x64.tar.gz']),
+    release('nightly', ['omni-linux-x64.tar.gz']),
     release(`${DESKTOP_TAG_PREFIX}0.2.0`, ['a'], { draft: true }),
     release(`${DESKTOP_TAG_PREFIX}0.1.1`, ['b']),
     release(`${DESKTOP_TAG_PREFIX}0.1.0`, ['c']),
   ];
-  test('the newest published desktop release, skipping drafts and the CLI releases', () => {
+  test('the newest published desktop release, skipping drafts and other tags', () => {
     expect(pickRelease(releases)?.tag_name).toBe(`${DESKTOP_TAG_PREFIX}0.1.1`);
   });
   test("the one built with the CLI's own version first, when there is one", () => {

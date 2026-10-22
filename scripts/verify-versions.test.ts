@@ -43,9 +43,9 @@ describe('readBasePaths', () => {
 });
 
 describe('getAllVersionFields', () => {
-  test("the DSH plugins and the desktop app carry Omni's version, lockfiles included", () => {
+  test("the DSH plugins carry Omni's version, lockfiles included", () => {
     const paths = new Set(getAllVersionFields().map((field) => field.path));
-    for (const app of ['omni-ui-dsh', 'omni-ai-dsh', 'omni-desktop']) {
+    for (const app of ['omni-ui-dsh', 'omni-ai-dsh', 'omni-channels-dsh', 'omni-canvas-dsh']) {
       expect(paths.has(`apps/${app}/package.json`)).toBe(true);
       expect(paths.has(`apps/${app}/package-lock.json`)).toBe(true);
     }

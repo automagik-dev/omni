@@ -1,12 +1,16 @@
 # Automagik marketplace
 
-`automagik.json` is a [DeepSeek Harness](https://github.com/deepseek-ai) plugin market index (format 1).
-Add it to any DSH and its market lists Omni's plugins, plus the third-party plugins Automagik vetted for bringing
-your own AI.
+`automagik.json` is Omni's own [DeepSeek Harness](https://github.com/deepseek-ai) plugin market index (format 1):
+Omni's plugins, with their titles, categories and labels, plus the third-party plugins Omni vetted for bringing
+your own AI. Every Omni serves it for its own release (below), and the Automagik market lists it at each Omni
+release, beside Automagik's other products:
 
 ```
-https://raw.githubusercontent.com/automagik-dev/omni/labs/marketplace/automagik.json
+https://raw.githubusercontent.com/automagik-dev/dsh-marketplace/main/index.json
 ```
+
+That is the URL to add to a DSH without an Omni ([automagik-dev/dsh-marketplace](https://github.com/automagik-dev/dsh-marketplace)
+follows Omni's releases and lists Omni's plugins at each one, at Omni's version).
 
 ## Every Omni is a marketplace
 
@@ -32,20 +36,19 @@ this file, built into the server. A server run from source has no packed plugins
 point `OMNI_MARKET_DIR` at a `bun scripts/pack-market.ts <dir>` output to serve them. The links use
 `OMNI_PUBLIC_URL` when it is set, else the address the request came in on.
 
-The index in this folder stays for DSH users without an Omni.
 
 ## Add it to your DSH
 
 The market ships with DSH as an optional bundle. Turn it on, then add the index:
 
 1. Settings → Plugins → enable **Plugin market** (`@deepseek-ai/dsh-experimental-plugin-market-bundle`).
-2. Market → Indexes → add the URL above (or your Omni's `/api/market/index.json`). Or put it straight into your profile's `cordis.patch.yml`:
+2. Market → Indexes → add the Automagik market URL above (or your Omni's `/api/market/index.json`). Or put it straight into your profile's `cordis.patch.yml`:
 
    ```yaml
    - id: plugin-market
      config:
        indexes:
-         - https://raw.githubusercontent.com/automagik-dev/omni/labs/marketplace/automagik.json
+         - https://raw.githubusercontent.com/automagik-dev/dsh-marketplace/main/index.json
    ```
 
 DSH asks before it installs anything, and installs exactly the version listed.
@@ -71,8 +74,10 @@ listed version. A new version is listed only after the same review.
 
 ## Maintaining the index
 
-In this file, Omni's own entries are git sources, so nothing is published to npm. An Omni's own market needs no
-maintenance: it is packed from the release it serves. After a change to one of Omni's plugins lands:
+Omni's own entries are git sources, so nothing is published to npm, and neither market needs a hand-made release:
+an Omni's market is packed from the release it serves, and the Automagik market lists each Omni release by
+itself. Here, keep the entries' paths, titles, categories and labels, and the vetted add-ons, current. To list
+an unreleased commit in this file (for a test DSH):
 
 ```bash
 bun scripts/marketplace.ts pin <commit-or-branch>   # point Omni's entries at it (adds a version when it moved on)

@@ -22,18 +22,6 @@ on:
       # Read only by publish-stable, which never runs under a call.
       NPM_TOKEN:
         required: false
-      # The desktop release's macOS signing and notarization (desktop-release.yml); without
-      # them the dmg is unsigned.
-      MAC_CSC_LINK:
-        required: false
-      MAC_CSC_KEY_PASSWORD:
-        required: false
-      APPLE_API_KEY:
-        required: false
-      APPLE_API_KEY_ID:
-        required: false
-      APPLE_API_ISSUER:
-        required: false
     outputs:
       version:
         description: 'The version cut and tagged on dev'
@@ -406,28 +394,6 @@ jobs:
       attestations: write
     with:
       ref: ${{ needs.auto-version.outputs.bump_sha }}
-
-  # The desktop app for each dev cut, built at the bump commit so it and the plugins in it
-  # carry the cut's version: the GitHub release omni-desktop-v<version> that
-  # `omni desktop` downloads. A local reusable call for the same reason as dev-image, and
-  # after auto-version so a failed build never blocks the npm publish.
-  desktop-release:
-    name: Desktop release
-    needs: auto-version
-    if: needs.auto-version.result == 'success' && inputs.candidate != true
-    uses: ./.github/workflows/desktop-release.yml
-    permissions:
-      contents: write
-    secrets:
-      MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
-      MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
-      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-    with:
-      version: ${{ needs.auto-version.outputs.version }}
-      ref: ${{ needs.auto-version.outputs.bump_sha }}
-      prerelease: true
 
   publish-stable:
     name: Publish verified stable npm package

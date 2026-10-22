@@ -3,10 +3,11 @@
  *
  * omni desktop [--path <file>] [--tag <tag>] [--dry-run]
  *
- * Opens the Omni desktop app (apps/omni-desktop): the Omni UI on a DeepSeek
- * Harness of its own, linked to an Omni by a code sent over WhatsApp. It takes
- * the build for this machine from the repository's GitHub releases (tags
- * `omni-desktop-v*`), checks it against the release's SHA256SUMS, keeps it in
+ * Opens the Omni desktop app (automagik-dev/omni-desktop): the Omni UI on a
+ * DeepSeek Harness of its own, linked to an Omni by a code sent over WhatsApp.
+ * It takes the build for this machine from that repository's GitHub releases
+ * (tags `v<version>`, one per Omni release, at Omni's version), checks it
+ * against the release's SHA256SUMS, keeps it in
  * ~/.omni/desktop/app/<tag>/, and opens it. `--path` opens a build you already
  * have instead.
  *
@@ -26,8 +27,8 @@ import { z } from 'zod';
 import * as output from '../output.js';
 import { VERSION } from '../version.js';
 
-const RELEASES_URL = 'https://api.github.com/repos/automagik-dev/omni/releases?per_page=50';
-export const DESKTOP_TAG_PREFIX = 'omni-desktop-v';
+const RELEASES_URL = 'https://api.github.com/repos/automagik-dev/omni-desktop/releases?per_page=50';
+export const DESKTOP_TAG_PREFIX = 'v';
 const SUMS_ASSET = 'SHA256SUMS';
 
 export type DesktopTarget =
@@ -70,8 +71,8 @@ export type DesktopRelease = z.infer<typeof ReleaseSchema>;
 
 /**
  * The release to use: the one tagged `tag`; else the one built with this CLI's own version
- * (each dev cut publishes both), so the app matches the CLI; else the newest published
- * desktop release (GitHub lists newest first).
+ * (every Omni release gets a desktop release at its version), so the app matches the CLI;
+ * else the newest published desktop release (GitHub lists newest first).
  */
 export function pickRelease(releases: DesktopRelease[], tag?: string, version?: string): DesktopRelease | undefined {
   const desktop = releases.filter((release) => !release.draft && release.tag_name.startsWith(DESKTOP_TAG_PREFIX));
@@ -210,7 +211,7 @@ async function releaseBuild(target: Supported, options: DesktopOptions): Promise
     output.error(
       options.tag
         ? `There is no desktop release ${options.tag}.`
-        : `There is no Omni desktop release yet (tags ${DESKTOP_TAG_PREFIX}*). Build one from apps/omni-desktop and open it with --path.`,
+        : `There is no Omni desktop release yet (tags ${DESKTOP_TAG_PREFIX}*). Build one from automagik-dev/omni-desktop and open it with --path.`,
     );
   }
   if (options.dryRun) {

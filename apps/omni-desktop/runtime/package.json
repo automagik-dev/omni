@@ -1,9 +1,0 @@
-{
-  "name": "omni-desktop-runtime",
-  "private": true,
-  "description": "The DeepSeek Harness the Omni desktop app runs, pinned to the release the Omni UI plugin is tested against (apps/omni-ui-dsh/dev/harness), and the pnpm dsh installs plugins with.",
-  "dependencies": {
-    "@deepseek-ai/dsh": "0.2.1-rc.2",
-    "pnpm": "10.34.6"
-  }
-}

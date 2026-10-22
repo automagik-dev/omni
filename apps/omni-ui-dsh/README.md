@@ -56,7 +56,7 @@ The [project page](../README.md#install) has the full steps for dsh Desktop and 
 
 - dsh Desktop: Settings → Plugins → add a `.tgz` of this package (`npm pack` in this folder).
 - Command line: `dsh plugin --profile web add /path/to/automagik-omni-dsh-<version>.tgz`.
-- Or skip dsh setup entirely: the Omni desktop app (`apps/omni-desktop`, `npx @automagik/omni desktop`) ships dsh with this plugin on a home of its own.
+- Or skip dsh setup entirely: the Omni desktop app ([automagik-dev/omni-desktop](https://github.com/automagik-dev/omni-desktop), `npx @automagik/omni desktop`) ships dsh with this plugin on a home of its own.
 
 To work on the plugins from a checkout, add them to a dsh profile as linked dependencies and bundles (the channels and canvas plugins are optional):
 
