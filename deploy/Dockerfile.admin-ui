@@ -24,7 +24,7 @@
 
 # Pinned to the toolchain that generated apps/khal-ui/bun.lock. Override with
 # --build-arg BUN_VERSION=…
-ARG BUN_VERSION=1.3.9
+ARG BUN_VERSION=1.4.2
 
 # ---- builder: install (private @khal-os) + vite-build the standalone SPA -----
 FROM oven/bun:${BUN_VERSION} AS builder
