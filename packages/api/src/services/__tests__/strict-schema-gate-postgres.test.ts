@@ -144,7 +144,7 @@ postgresDescribe('per-source strict schema validation (real PostgreSQL)', () => 
   }, 180_000);
 
   afterAll(async () => {
-    process.env.OMNI_STRICT_EMIT_EVENT_SCHEMAS = undefined;
+    Reflect.deleteProperty(process.env, 'OMNI_STRICT_EMIT_EVENT_SCHEMAS');
     for (const close of closers) await close();
     runSqlOn(superUrl, `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`);
   });
@@ -223,7 +223,7 @@ postgresDescribe('per-source strict schema validation (real PostgreSQL)', () => 
   });
 
   test('emit_event: unregistered type passes with the global switch off (default)', async () => {
-    process.env.OMNI_STRICT_EMIT_EVENT_SCHEMAS = undefined;
+    Reflect.deleteProperty(process.env, 'OMNI_STRICT_EMIT_EVENT_SCHEMAS');
     const engineDeps = buildAutomationEngineDeps({ eventSchemas, deadLetters } as unknown as Services, db);
 
     const result = await executeAction(
@@ -259,7 +259,7 @@ postgresDescribe('per-source strict schema validation (real PostgreSQL)', () => 
       expect(entry?.error.startsWith('schema_not_registered')).toBe(true);
       expect(entry?.nextAutoRetryAt).toBeNull();
     } finally {
-      process.env.OMNI_STRICT_EMIT_EVENT_SCHEMAS = undefined;
+      Reflect.deleteProperty(process.env, 'OMNI_STRICT_EMIT_EVENT_SCHEMAS');
     }
   });
 
@@ -278,7 +278,7 @@ postgresDescribe('per-source strict schema validation (real PostgreSQL)', () => 
       expect(result.status).toBe('success');
       expect(journalOf('custom.acme.order').length).toBe(publishedBefore + 1);
     } finally {
-      process.env.OMNI_STRICT_EMIT_EVENT_SCHEMAS = undefined;
+      Reflect.deleteProperty(process.env, 'OMNI_STRICT_EMIT_EVENT_SCHEMAS');
     }
   });
 });

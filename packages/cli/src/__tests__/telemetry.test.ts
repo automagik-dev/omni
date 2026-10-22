@@ -104,14 +104,14 @@ describe('isTelemetryDisabled', () => {
 
   afterEach(() => {
     if (originalEnv === undefined) {
-      process.env.OMNI_TELEMETRY = undefined;
+      Reflect.deleteProperty(process.env, 'OMNI_TELEMETRY');
     } else {
       process.env.OMNI_TELEMETRY = originalEnv;
     }
   });
 
   test('returns false when env var is not set (default enabled)', () => {
-    process.env.OMNI_TELEMETRY = undefined;
+    Reflect.deleteProperty(process.env, 'OMNI_TELEMETRY');
     // This also depends on config, which defaults to undefined (enabled)
     // In test environment without config file, should return false
     expect(isTelemetryDisabled()).toBe(false);

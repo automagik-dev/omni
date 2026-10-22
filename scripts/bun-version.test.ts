@@ -4,6 +4,7 @@
  * Docker image on another Bun runs what CI never tested, so they move together.
  */
 import { describe, expect, test } from 'bun:test';
+import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -73,5 +74,34 @@ describe('the Bun version', () => {
       expect(installs.length).toBeGreaterThan(0);
       expect(installs.map(([, version]) => version)).toEqual(installs.map(() => BUN));
     }
+  });
+});
+
+describe('what Bun 1.4 changed', () => {
+  test('nothing assigns undefined to process.env, which Bun 1.4 stores as the string "undefined"', () => {
+    // Reflect.deleteProperty(process.env, 'X') unsets it, so restoring a value that was unset deletes it.
+    let found = '';
+    try {
+      found = execFileSync(
+        'git',
+        [
+          'grep',
+          '-n',
+          '-E',
+          String.raw`process\.env(\.[A-Za-z_]+|\[[^]]+\]) = undefined`,
+          '--',
+          '*.ts',
+          '*.tsx',
+          '*.js',
+          '*.mjs',
+          '*.cjs',
+        ],
+        { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+      );
+    } catch {
+      // git grep exits 1 when nothing matches.
+    }
+    const assignments = found.split('\n').filter((line) => line !== '' && !/^[^:]+:\d+:\s*(\/\/|\*)/.test(line));
+    expect(assignments).toEqual([]);
   });
 });
