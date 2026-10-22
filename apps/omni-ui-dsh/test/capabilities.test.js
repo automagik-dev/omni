@@ -473,3 +473,31 @@ test('a failed HTTP MCP mount does not show the encoded secret from its URL', as
   assert.equal(status.state, 'error')
   assert.equal(status.error, 'Connection failed: fetch https://mcp.exa.test/mcp?apiKey=[secret:EXA_API_KEY]')
 })
+
+test('the UI saves, approves and deletes capabilities through its endpoints', async t => {
+  const home = makeHome(team())
+  const loader = { import: async () => ({ default: { name: 'mcp-client', apply() {} } }), unwrapExports: exports => exports.default }
+  const ctx = fakeContext({ services: { loader } })
+  let route
+  ctx.connection.fetch.register = (options) => { route = options; return () => {} }
+  const rt = createRuntime(ctx, { home, github: false, diagnosticsFile: false })
+  ctx.sessionTitle = { rename: async () => {} }
+  rt.resolveAgent = async sessionId => ({ session: { id: sessionId } })
+  await rt.load()
+  t.after(async () => {
+    ctx.dispose()
+    await rt.scheduleCapabilitiesReconcile()
+    rmSync(home, { recursive: true, force: true, maxRetries: 5 })
+  })
+  const call = async (endpoint, payload) => {
+    const reply = await (await route.fetch(new Request('http://localhost/api/bot', { method: 'POST', body: JSON.stringify({ endpoint, payload }) }))).json()
+    assert.equal(reply.ok, true, `${endpoint}: ${JSON.stringify(reply.error)}`)
+    return reply.value
+  }
+  await call('capability-save', mcp('echo'))
+  assert.equal(rt.state.capabilities.items.echo.kind, 'mcp')
+  await call('capability-approve', { name: 'echo' })
+  assert.equal(rt.state.capabilities.items.echo.approved, true)
+  await call('capability-delete', { name: 'echo' })
+  assert.equal(rt.state.capabilities.items.echo, undefined)
+})

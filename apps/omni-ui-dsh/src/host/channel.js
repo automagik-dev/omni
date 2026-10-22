@@ -261,12 +261,12 @@ export function install(rt) {
         case 'connector-retry':
           await rt.load()
           return ok(await rt.connectorEndpoint(endpoint, body))
-        case 'capability-save':
-        case 'capability-delete':
-        case 'capability-approve':
         case 'bot-fresh':
           await rt.load()
           return ok(await rt.startFresh(String(body?.id ?? '')))
+        case 'capability-save':
+        case 'capability-delete':
+        case 'capability-approve':
         case 'bot-capability':
           await rt.load()
           return ok(await rt.capabilityEndpoint(endpoint, body))
