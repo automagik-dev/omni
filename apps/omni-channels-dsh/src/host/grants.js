@@ -210,6 +210,8 @@ export function install(rt) {
   // the card leaves the dock.
   async function recover() {
     await rt.load()
+    // A window that only reads, beside the one that holds the team, sees that one's live cards.
+    if (rt.readOnly?.() !== undefined) return
     const notes = []
     for (const [botId, list] of Object.entries(state.omniConsents ?? {})) {
       for (const entry of list) {

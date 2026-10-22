@@ -145,20 +145,22 @@ test("omni_call asks before every write but the quiet ones, which reach no perso
   assert.equal(sensitiveCall('POST', '/instances/wa-1/logout', {}), 'disconnect')
   assert.equal(sensitiveCall('PATCH', '/instances/wa-1', { isActive: false }), 'disconnect')
   assert.equal(sensitiveCall('POST', '/keys', { name: 'x' }), 'change')
+  // Each can make Omni message someone, or post their messages somewhere, later.
+  assert.equal(sensitiveCall('POST', '/automations', { actions: [{ type: 'send_message' }] }), 'change')
+  assert.equal(sensitiveCall('POST', '/automations/a1/enable', {}), 'change')
+  assert.equal(sensitiveCall('PATCH', '/providers/p1', { baseUrl: 'https://example.com' }), 'change')
+  assert.equal(sensitiveCall('POST', '/webhook-sources', {}), 'change')
   assert.equal(sensitiveCall('GET', '/chats', undefined), null)
   // Every write route omni declares: these, and only these, run without a card.
   const quiet = SOURCE_ROUTES.filter(route => route.method !== 'GET' && sensitiveCall(route.method, route.path.replace(/\{[^}]+\}/g, 'x'), {}) === null).map(route => `${route.method} ${route.path}`)
   assert.deepEqual(quiet, [
-    'POST /access/check', 'POST /agents', 'PATCH /agents/{id}', 'POST /auth/validate', 'POST /automations', 'PATCH /automations/{id}',
-    'POST /automations/{id}/disable', 'POST /automations/{id}/enable', 'POST /batch-jobs/estimate',
+    'POST /access/check', 'POST /auth/validate', 'POST /batch-jobs/estimate',
     'POST /chats/{id}/archive', 'POST /chats/{id}/hide', 'POST /chats/{id}/label', 'POST /chats/{id}/mute', 'POST /chats/{id}/pin', 'POST /chats/{id}/read',
     'POST /chats/{id}/unarchive', 'POST /chats/{id}/unhide', 'POST /chats/{id}/unmute', 'POST /chats/{id}/unpin', 'POST /chats/sync-names',
     'POST /events/schemas/{eventType}/validate', 'POST /events/search',
     'POST /instances/{id}/check-number', 'POST /instances/{id}/connect', 'POST /instances/{id}/sync', 'POST /instances/{id}/sync/profile',
-    'POST /instances/{instanceId}/routes', 'PATCH /instances/{instanceId}/routes/{id}',
     'POST /media/film', 'POST /media/imagine', 'POST /media/music', 'POST /media/stt', 'POST /media/tts', 'POST /media/vision',
     'POST /messages/{id}/read', 'POST /messages/{id}/star', 'POST /messages/media/download', 'POST /messages/read', 'POST /messages/send-self', 'POST /messages/send/presence',
-    'POST /providers', 'PATCH /providers/{id}', 'POST /webhook-sources', 'PATCH /webhook-sources/{id}',
   ])
   assert.ok(SOURCE_ROUTES.filter(route => route.method === 'DELETE').every(route => sensitiveCall('DELETE', route.path, undefined) === 'delete'))
 })
@@ -270,6 +272,10 @@ test('deleting always asks and shows the message; the Main Bot\'s omni_call dele
   const before = omni.changes.length
   await answer('m1', 'once')
   assert.deepEqual(omni.changes.slice(before), [{ method: 'POST', path: '/messages/send', body }])
+  // A call too long to show whole is not asked about, and does not run.
+  const long = await main('omni_call', { method: 'POST', path: '/messages/send', body: JSON.stringify({ instanceId: 'wa-1', to: '5511888887777', text: 'x'.repeat(13_000) }) })
+  assert.match(long.text, /too long to show the user on a card/)
+  assert.equal(omni.changes.length, before + 1)
 })
 
 test('opening media saves the file for the Bot to read', async (t) => {

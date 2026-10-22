@@ -15,6 +15,7 @@ const FOUND_MAX = 12
 const DETAILED = 3
 const RESULT_MAX = 14_000
 const SCHEMA_DEPTH = 3
+const CARD_BODY_MAX = 12_000
 
 const invalid = message => Object.assign(new Error(message), { code: 'bot/invalid' })
 
@@ -78,18 +79,16 @@ export const findOperation = (ops, method, path) => ops.find(op => op.method ===
 
 // The omni_call writes that run without asking: reads sent as POST, the user's own chat
 // housekeeping, sending to themselves or to a group, connecting and syncing a channel, and
-// configuring agents, providers, automations and routes. Every other write, any DELETE
-// included, asks the user first, Main Bot or not (grants.js), on a card with the whole call.
+// generating media. Every other write, any DELETE included, asks the user first, Main Bot or
+// not (grants.js), on a card with the whole call. That takes in automations, routes, agents,
+// providers and webhook sources too: each can make Omni message someone, or post their
+// messages somewhere, later and with no card of its own.
 const QUIET_WRITES = [
   /^POST \/(access\/check|auth\/validate|events\/search|batch-jobs\/estimate|messages\/media\/download|messages\/read|messages\/send-self|messages\/send\/presence|chats\/sync-names)$/,
   /^POST \/events\/schemas\/[^/]+\/validate$/,
   /^POST \/instances\/[^/]+\/(connect|check-number|sync|sync\/profile)$/,
   /^POST \/chats\/[^/]+\/(archive|unarchive|hide|unhide|mute|unmute|pin|unpin|read|label)$/,
   /^POST \/messages\/[^/]+\/(read|star)$/,
-  /^(POST|PATCH|PUT) \/(agents|providers|automations)(\/[^/]+)?$/,
-  /^POST \/automations\/[^/]+\/(enable|disable)$/,
-  /^(POST|PATCH) \/instances\/[^/]+\/routes(\/[^/]+)?$/,
-  /^(POST|PATCH) \/webhook-sources(\/[^/]+)?$/,
   /^POST \/media\/(tts|stt|vision|imagine|music|film)$/,
 ]
 const SENDS = /^\/messages\/send(\/(media|contact|location|sticker|tts|forward|poll|embed))?$/
@@ -274,6 +273,9 @@ export function install(rt) {
         const body = parse(args.body, 'body')
         const act = sensitiveCall(method, path, body)
         if (act !== null) {
+          // The card shows the whole call, or nothing runs.
+          const shown = body === undefined ? undefined : JSON.stringify(body, null, 2)
+          if (shown !== undefined && shown.length > CARD_BODY_MAX) return fitted({ status: 0, error: `This call's body is too long to show the user on a card (${shown.length} characters, at most ${CARD_BODY_MAX}). Split it into smaller calls.` })
           const channelId = body?.instanceId ?? /^\/instances\/([^/]+)/.exec(path)?.[1]
           const channel = channelId ? (await channelOf(channelId)).name : undefined
           const asked = await rt.omniPermit(exec, {
@@ -284,7 +286,7 @@ export function install(rt) {
               method, path, ...(channel ? { channel } : {}),
               ...(typeof body?.to === 'string' ? { to: body.to } : {}), ...(typeof body?.text === 'string' ? { text: body.text } : {}),
               ...(query && typeof query === 'object' && Object.keys(query).length > 0 ? { query: JSON.stringify(query) } : {}),
-              ...(body !== undefined ? { body: JSON.stringify(body, null, 2).slice(0, 4000) } : {}),
+              ...(body !== undefined ? { body: shown } : {}),
             },
           })
           if (asked) return asked
