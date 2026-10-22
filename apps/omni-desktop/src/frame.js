@@ -28,4 +28,4 @@ export function pageLayout(size, { platform, maximized }) {
 }
 
 /** What the shell page's window buttons may ask the main process for. */
-export const WINDOW_ACTIONS = new Set(['minimize', 'maximize', 'close'])
+export const WINDOW_ACTIONS = new Set(['minimize', 'maximize', 'close', 'update'])

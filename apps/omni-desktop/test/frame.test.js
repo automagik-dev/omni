@@ -20,6 +20,6 @@ test("Omni's page fills the window below the bar, with no border; its corners ro
   assert.equal(pageLayout({ width: 4, height: 10 }, { platform: 'linux', maximized: false }).bounds.height, 0)
 })
 
-test('the frame page can ask for the three window buttons and nothing else', () => {
-  assert.deepEqual([...WINDOW_ACTIONS].sort(), ['close', 'maximize', 'minimize'])
+test("the frame page can ask for the three window buttons and the update's restart, and nothing else", () => {
+  assert.deepEqual([...WINDOW_ACTIONS].sort(), ['close', 'maximize', 'minimize', 'update'])
 })

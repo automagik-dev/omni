@@ -20,10 +20,13 @@
     "start": "electron .",
     "test": "node --test \"test/*.test.js\"",
     "dist:linux": "node scripts/prepare-runtime.mjs && electron-builder --linux AppImage deb",
-    "dist:mac": "node scripts/prepare-runtime.mjs && electron-builder --mac dmg"
+    "dist:mac": "node scripts/prepare-runtime.mjs && electron-builder --mac dmg zip"
   },
   "devDependencies": {
     "electron": "44.5.0",
     "electron-builder": "26.16.1"
+  },
+  "dependencies": {
+    "electron-updater": "6.8.10"
   }
 }

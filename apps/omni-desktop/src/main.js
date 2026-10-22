@@ -6,11 +6,13 @@
 // renderer sandbox are on, dsh's page can navigate only within dsh's origin, web links open
 // in the system browser, and the frame page never navigates.
 import { app, BrowserWindow, dialog, ipcMain, Menu, session, shell, WebContentsView } from 'electron'
+import updaterModule from 'electron-updater'
 import { createWriteStream, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { appHome, dshEnv, freePort, installProfile, navigationOf, resourcesOf, startDsh, stopDsh, writeTools } from './dsh.js'
 import { pageLayout, WINDOW_ACTIONS, windowChrome } from './frame.js'
+import { startUpdates, updatesEnabled } from './update.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const home = appHome()
@@ -21,6 +23,9 @@ let window = null
 let page = null
 let quitting = false
 let ready = false
+// The update the title bar shows ({ version, state, percent }), once there is one.
+let update = null
+let updates = null
 
 if (!app.requestSingleInstanceLock()) {
   app.quit()
@@ -83,6 +88,30 @@ async function launch() {
     layout()
   })
   await page.webContents.loadURL(dsh.url)
+  watchUpdates()
+}
+
+// See update.js. Its log is logs/update.log.
+function watchUpdates() {
+  if (!updatesEnabled({ packaged: app.isPackaged, platform: process.platform, env: process.env })) return
+  const out = createWriteStream(join(home, 'logs', 'update.log'), { flags: 'a' })
+  const line = level => message => out.write(`${new Date().toISOString()} ${level} ${message}\n`)
+  const log = { info: line('info'), warn: line('warn'), error: line('error'), debug() {} }
+  updates = startUpdates({
+    updater: updaterModule.autoUpdater,
+    current: app.getVersion(),
+    platform: process.platform,
+    env: process.env,
+    log,
+    onState: (state) => { update = state; sendState() },
+  })
+}
+
+// Restart into the downloaded update: dsh is stopped first, as on any quit.
+function installUpdate() {
+  if (!updates?.ready || quitting) return
+  quitting = true
+  void stopDsh(dshChild).finally(() => updates.install())
 }
 
 const WINDOW_PREFERENCES = {
@@ -131,12 +160,13 @@ function layout() {
 function sendState(extra = {}) {
   if (!window || window.webContents.isLoading()) return
   const maximized = window.isMaximized() || window.isFullScreen()
-  window.webContents.send('omni-window-state', { maximized, ready, ...extra })
+  window.webContents.send('omni-window-state', { maximized, ready, update, ...extra })
 }
 
 ipcMain.on('omni-window', (event, action) => {
   if (!window || event.sender !== window.webContents || !WINDOW_ACTIONS.has(action)) return
-  if (action === 'minimize') window.minimize()
+  if (action === 'update') installUpdate()
+  else if (action === 'minimize') window.minimize()
   else if (action === 'maximize') window.isMaximized() ? window.unmaximize() : window.maximize()
   else window.close()
 })

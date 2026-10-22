@@ -40,7 +40,10 @@ deb:
   packageCategory: net
   appArmorProfile: scripts/apparmor-profile.tpl
 mac:
-  target: dmg
+  # The zip is what an installed app updates from (src/update.js); the dmg is for a first install.
+  target:
+    - dmg
+    - zip
   category: public.app-category.productivity
   icon: assets/icon.png
   # Signed with the Developer ID in the build machine's keychain (none found: unsigned), under
@@ -51,4 +54,11 @@ mac:
   artifactName: Omni-${version}-mac-${arch}.${ext}
 dmg:
   title: Omni ${version}
-publish: null
+# Where the update feeds (latest-mac.yml, latest-linux.yml) say the builds are. The builds
+# never publish themselves (--publish never): desktop-release.yml uploads them to the release
+# `omni-desktop-v<version>`, and the app reads that release's feed (src/update.js).
+publish:
+  provider: github
+  owner: automagik-dev
+  repo: omni
+  releaseType: prerelease

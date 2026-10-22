@@ -19,6 +19,11 @@ body.darwin .bar{padding-left:84px}
 .chip{font:600 9px/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.16em;text-transform:uppercase;color:#7ff7ea;border:1px solid rgba(127,247,234,.28);background:rgba(34,211,197,.08);border-radius:999px;padding:4px 7px 3px}
 .spacer{flex:1}
 
+[hidden]{display:none!important}
+.update{-webkit-app-region:no-drag;height:24px;padding:0 11px;border-radius:999px;border:1px solid rgba(127,247,234,.22);background:rgba(34,211,197,.06);color:var(--ink2);font:600 11px/1 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;letter-spacing:.02em;transition:background .15s,color .15s,box-shadow .15s}
+.update.ready{cursor:pointer;color:#06121f;border-color:transparent;background:linear-gradient(90deg,var(--accent),#7ff7ea);box-shadow:0 0 14px rgba(34,211,197,.45)}
+.update.ready:hover{box-shadow:0 0 20px rgba(34,211,197,.7)}
+body.darwin .update{margin-right:7px}
 .controls{display:flex;gap:6px;-webkit-app-region:no-drag}
 body.darwin .controls{display:none}
 .controls button{width:28px;height:28px;padding:0;border:0;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.05);color:var(--ink2);cursor:pointer;transition:background .15s,color .15s,box-shadow .15s}
