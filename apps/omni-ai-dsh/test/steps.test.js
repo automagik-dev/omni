@@ -164,6 +164,7 @@ const textOf = node => (Array.isArray(node) ? node.map(textOf).join('') : node &
 const byClass = name => node => String(node?.props?.className ?? '').split(' ').includes(name)
 
 const team = await load('team.js')
+const { ONBOARD_CSS } = await load('onboard-css.js')
 
 // The host as the card calls it: omni-ai (plugins) and the Omni plugins' endpoint (omni-ui).
 function powerHost({ plugins = { ready: true }, polls = [], install, link = { linked: false }, omnis = [] } = {}) {
@@ -198,7 +199,7 @@ test('power on, with the Omni plugins here: Omni wakes and looks, and offers wha
   assert.equal(fake.waits[0], team.WAKE_MS)
 })
 
-test('power on, in a plain DSH: the Omni plugins install first, with their progress, then Omni looks', async () => {
+test('power on, in a plain DSH: the Omni plugins install, start, and then Omni looks', async () => {
   const rows = [{ name: '@automagik/omni-dsh', title: 'Omni team', installed: false }]
   const installing = { ready: false, plugins: rows, install: { phase: 'installing', current: '@automagik/omni-dsh', done: [] } }
   const fake = powerHost({
@@ -207,7 +208,7 @@ test('power on, in a plain DSH: the Omni plugins install first, with their progr
     polls: [{ ready: false, plugins: rows, install: null }, installing, { ready: false, plugins: rows, install: { phase: 'done', done: ['@automagik/omni-dsh'] } }, { ready: true, plugins: rows, install: { phase: 'done', done: ['@automagik/omni-dsh'] } }],
   })
   assert.equal(await fake.run(), 'none')
-  assert.deepEqual(phases(fake.shown), ['waking', 'installing', 'installing', 'installing', 'installing', 'looking', 'none'])
+  assert.deepEqual(phases(fake.shown), ['waking', 'installing', 'installing', 'installing', 'starting', 'looking', 'none'])
   assert.deepEqual(fake.calls, ['omni-plugins', 'omni-plugins-install', 'omni-plugins', 'omni-plugins', 'omni-plugins', 'omni-link', 'omni-discover'])
   assert.equal(fake.shown.at(-1)[1].sandbox.home, '/home/someone/.omni/sandbox')
 })
@@ -291,16 +292,15 @@ test('the capability list is the Bot type\'s groups, with a switch only where it
 
 const card = (phase, detail = null, extra = {}, live = null) => render(team.OmniCard({ power: { phase, detail, busy: null, problem: null, use: () => {}, remote: () => {}, local: () => {}, cancelPairing: () => {}, ...extra }, onPower: () => {}, type: omniType, abilities: {}, onToggle: () => {}, live }))
 
-test('the menu preview lists the linked Omni\'s real channels with their live dots', () => {
+test('once connected, the box shows the linked Omni\'s real channels with their live dots, and only then', () => {
   const live = { configured: true, channels: [{ id: 'a', type: 'whatsapp-baileys', name: 'pessoal', status: 'connected' }, { id: 'b', type: 'telegram', name: 'bot', status: 'disconnected' }] }
   const tree = card('linked', { origin: 'omni.example.com' }, {}, live)
   const rows = findAll(tree, node => node.type === 'li' && node.children.some(child => byClass('oai-dot')(child)))
   assert.deepEqual(rows.map(textOf), ['WhatsApp · pessoal', 'Telegram · bot'])
   assert.deepEqual(rows.map(row => row.children[0].props.className), ['oai-dot ok', 'oai-dot warn'])
   // Its host only: no counts the overview cannot vouch for.
-  assert.equal(textOf(findAll(tree, byClass('oai-linked'))[0]), 'Connected to omni.example.com')
-  const reading = render(team.OmniCard({ power: { phase: 'asleep', detail: null }, onPower: () => {}, type: omniType, abilities: {}, live: undefined }))
-  assert.match(textOf(reading), /Reading your Omni/)
+  assert.equal(textOf(findAll(tree, byClass('oai-status'))[0]), 'Connected to omni.example.com')
+  for (const phase of ['asleep', 'waking', 'looking', 'found', 'none']) assert.equal(findAll(card(phase, { omnis: [] }, {}, live), byClass('oai-menu')).length, 0, `${phase} shows the menu`)
 })
 
 test('a long folder is shortened in the middle', () => {
@@ -309,60 +309,97 @@ test('a long folder is shortened in the middle', () => {
   assert.equal(team.shortPath('/srv/omni/ui/workspace/omni'), '/…/workspace/omni')
 })
 
-test('Omni\'s card starts asleep: closed eyes, z z, dimmed, with a clear power button', () => {
-  const asleep = card('asleep')
-  assert.ok(byClass('oai-is-asleep')(asleep))
-  assert.ok(!byClass('oai-chosen')(asleep))
-  assert.equal(findAll(asleep, byClass('oai-zzz')).length, 1)
-  assert.match(findAll(asleep, byClass('oai-octo-wrap'))[0].props.dangerouslySetInnerHTML.__html, /class="oai-closed"/)
-  const [button] = findAll(asleep, byClass('oai-power'))
-  assert.deepEqual([button.props['aria-pressed'], button.props['aria-label']], [false, 'Power Omni on'])
-  assert.match(textOf(findAll(asleep, byClass('oai-status'))[0]), /Asleep/)
-  assert.ok(findAll(asleep, node => node.props.role === 'switch').every(node => node.props.disabled === true))
+// Every part of the card outside the box: what must not grow while Omni works.
+const outsideBox = tree => findAll(tree, node => node !== tree && !byClass('oai-box')(node) && node.type !== undefined).filter(node => !findAll(tree, byClass('oai-box')).some(box => findAll(box, other => other === node).length > 0))
 
-  // No class title on the card, and no team line while it sleeps.
+test('the default card is the box, the name and one sentence; the capabilities wait behind one closed disclosure', () => {
+  const asleep = card('asleep')
+  const [box] = findAll(asleep, byClass('oai-box'))
+  assert.ok(byClass('oai-is-asleep')(box))
+  assert.ok(!byClass('oai-chosen')(asleep))
+  // The machine's switch is on the box.
+  const [button] = findAll(box, byClass('oai-power'))
+  assert.deepEqual([button.props['aria-pressed'], button.props['aria-label']], [false, 'Power Omni on'])
+  assert.equal(findAll(box, byClass('oai-zzz')).length, 1)
+  assert.match(findAll(box, byClass('oai-octo-wrap'))[0].props.dangerouslySetInnerHTML.__html, /class="oai-closed"/)
+  assert.equal(textOf(findAll(box, byClass('oai-status'))[0]), 'Powered off')
+  // One disclosure, closed, holding every capability row; no class title, no menu.
+  const [starts] = findAll(asleep, node => node.type === 'details')
+  assert.ok(byClass('oai-starts')(starts))
+  assert.equal(starts.props.open, undefined)
+  assert.equal(textOf(findAll(starts, node => node.type === 'summary')[0]), 'What it starts with')
+  const rows = findAll(asleep, node => node.props?.['data-cap'] !== undefined)
+  assert.ok(rows.length > 0)
+  assert.ok(rows.every(row => findAll(starts, node => node === row).length === 1), 'a capability row sits outside the disclosure')
   assert.equal(findAll(asleep, byClass('oai-class')).length, 0)
+  assert.equal(findAll(asleep, byClass('oai-menu')).length, 0)
+  assert.deepEqual(findAll(asleep, node => node.type === 'p' && byClass('oai-about')(node)).map(textOf), ['Every chat on every channel, answered by your team.'])
   assert.equal(findAll(asleep, byClass('oai-team-line')).length, 0)
-  const removed = card('asleep', { removed: true })
-  assert.match(textOf(findAll(removed, byClass('oai-status'))[0]), /Not on your team/)
+  assert.equal(textOf(findAll(card('asleep', { removed: true }), byClass('oai-status'))[0]), 'Powered off · not on your team')
 
   const waking = card('waking')
+  assert.ok(byClass('oai-chosen')(waking))
   const [line] = findAll(waking, byClass('oai-team-line'))
   assert.match(textOf(line), /On your team/)
   assert.equal(textOf(findAll(line, byClass('oai-remove'))[0]), 'Remove')
-  assert.ok(byClass('oai-chosen')(waking))
   assert.equal(findAll(waking, byClass('oai-zzz')).length, 0)
-  assert.equal(findAll(waking, byClass('oai-power'))[0].props['aria-pressed'], true)
 })
 
-test('each phase draws its own body: installing, looking, found, none, linked, pairing', () => {
-  const installing = card('installing', { plugins: { plugins: [{ name: 'a', title: 'Omni team' }, { name: 'b', title: 'Omni channels' }], install: { current: 'b', done: ['a'] } } })
-  assert.deepEqual(findAll(installing, node => node.type === 'li' && /oai-install-/.test(node.props.className)).map(node => node.props.className), ['oai-install-done', 'oai-install-now'])
-  assert.equal(findAll(installing, byClass('oai-power'))[0].props.disabled, true)
-
-  const looking = card('looking')
-  assert.equal(findAll(looking, byClass('oai-scan')).length, 1)
-  assert.match(textOf(findAll(looking, byClass('oai-status'))[0]), /Looking for a connection/)
-
-  const used = []
+test('every phase happens inside the box: outside it, the card stays the same', () => {
   const omnis = [
     { id: 'sandbox', source: 'sandbox', url: 'http://127.0.0.1:18882', local: true, hasKey: true, version: '2.261023.28' },
     { id: 'cli:work', url: 'https://omni.example.com', local: false, pairing: 'on' },
     { id: 'cli:old', url: 'http://127.0.0.1:8882', local: true, reachable: false },
   ]
+  const plugins = { plugins: [{ name: 'a', title: 'Omni team' }, { name: 'b', title: 'Omni channels' }], install: { current: 'b', done: ['a'] } }
+  const phases = {
+    waking: null, installing: { plugins }, starting: { plugins }, looking: null, found: { omnis }, none: { sandbox: null },
+    pairing: { pairing: { code: 'K7Q2-9M', origin: 'omni.example.com', waLink: 'https://wa.me/x' } }, linked: { origin: 'omni.example.com' }, restart: null, failed: { message: 'Omni team: offline' },
+  }
+  const outside = tree => outsideBox(tree).filter(node => typeof node.type === 'string').map(node => `${node.type}.${node.props.className ?? ''}`).join(' ')
+  const awakeShape = outside(card('waking'))
+  for (const [phase, detail] of Object.entries(phases)) {
+    if (phase === 'failed') continue
+    assert.equal(outside(card(phase, detail)), awakeShape, `${phase} changes the card outside the box`)
+  }
+
+  const installing = card('installing', phases.installing)
+  assert.equal(textOf(findAll(installing, byClass('oai-status'))[0]), 'Installing Omni channels · 2 of 2')
+  assert.deepEqual(findAll(installing, node => node.type === 'li' && /oai-install-/.test(node.props.className)).map(node => node.props.className), ['oai-install-done', 'oai-install-now'])
+  assert.equal(findAll(installing, byClass('oai-power'))[0].props.disabled, true)
+  assert.equal(textOf(findAll(card('starting', phases.starting), byClass('oai-status'))[0]), 'Starting Omni in this DSH…')
+
+  const looking = card('looking')
+  assert.equal(findAll(looking, byClass('oai-scan')).length, 1)
+  assert.equal(textOf(findAll(looking, byClass('oai-status'))[0]), 'Looking for a connection…')
+
+  const used = []
   const found = card('found', { omnis }, { use: omni => used.push(omni.id) })
-  const buttons = findAll(found, byClass('oai-pill-primary')).filter(node => node.type === 'button' && node.props.type === 'button')
+  assert.equal(textOf(findAll(found, byClass('oai-status'))[0]), 'Found 2 Omnis')
+  const buttons = findAll(found, byClass('oai-pill-primary')).filter(node => node.type === 'button')
   assert.deepEqual(buttons.map(textOf), ['Use it', 'Connect'])
   buttons[1].props.onClick()
   assert.deepEqual(used, ['cli:work'])
   assert.match(textOf(found), /Not answering right now/)
+  assert.match(textOf(found), /Somewhere else\?/)
 
   const none = card('none', { sandbox: null })
-  assert.ok(findAll(none, node => node.type === 'input' && node.props['aria-label'] === 'Omni address or link').length === 1)
-  assert.match(textOf(none), /Run Omni on this computer/)
+  assert.equal(findAll(none, node => node.type === 'input' && node.props['aria-label'] === 'Omni address or link').length, 1)
+  assert.match(textOf(none), /Or run Omni on this computer/)
+  assert.match(textOf(card('pairing', phases.pairing)), /K7Q2-9M/)
+  assert.match(textOf(card('failed', phases.failed)), /Omni team: offline/)
+})
 
-  assert.match(textOf(card('linked', { origin: 'omni.example.com' })), /Connected to omni\.example\.com/)
-  assert.match(textOf(card('pairing', { pairing: { code: 'K7Q2-9M', origin: 'omni.example.com', waLink: 'https://wa.me/x' } })), /K7Q2-9M/)
+test('the box lights wake one by one, then show what is true', () => {
+  const state = phase => plain(team.lightsOf(phase)).map(([, value]) => value).join(' ')
+  assert.equal(state('asleep'), 'off off off')
+  assert.equal(state('installing'), 'on busy off')
+  assert.equal(state('looking'), 'on on busy')
+  assert.equal(state('linked'), 'on on on')
+  assert.equal(state('failed'), 'on warn off')
+  const css = ONBOARD_CSS
+  assert.match(css, /\.oai-is-waking \.oai-light:nth-child\(3\)\{animation-delay:\.6s\}/)
+  assert.match(css, /\.oai-box\{position:relative;height:340px/, 'the box has one fixed height')
 })
 
 test('a typed address or a link Omni sent reads the way the Connect Omni step reads it', () => {

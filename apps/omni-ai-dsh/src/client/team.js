@@ -34,7 +34,7 @@ export const sleep = (ms, signal) => new Promise((resolve, reject) => {
 
 /**
  * Pressing the power button. `show(phase, detail)` draws each step: waking, installing
- * ({ plugins }), looking, then linked ({ origin }), found ({ omnis, sandbox }), none
+ * ({ plugins }), starting ({ plugins }: installed, coming up), looking, then linked ({ origin }), found ({ omnis, sandbox }), none
  * ({ sandbox }), restart ({ plugins }) or failed ({ message }). Returns the last phase.
  * `signal` is the power going off; `quick` (reduced motion) skips the pauses.
  */
@@ -63,7 +63,8 @@ export async function powerOn({ show, signal, omniAi = call, omniUi = callOmniUi
     let polls = 0
     while (plugins.install?.phase === 'installing' || (plugins.install?.phase === 'done' && !plugins.ready && polls < READY_POLLS)) {
       check()
-      show('installing', { plugins })
+      // Installed, and DSH is bringing the plugins up.
+      show(plugins.install?.phase === 'installing' ? 'installing' : 'starting', { plugins })
       await wait(POLL_MS, signal)
       plugins = await omniAi('omni-plugins')
       if (plugins.install?.phase !== 'installing') polls += 1
@@ -200,63 +201,79 @@ export function Capabilities({ type, abilities = {}, onToggle, disabled = false 
 const CLOSED_EYES = '<g class="oai-closed" fill="none" stroke="#06121f" stroke-width="3" stroke-linecap="round"><path d="M33 37Q40 42 47 37"/><path d="M53 37Q60 42 67 37"/></g>'
 const PORTRAIT_SVG = OCTOPUS_SVG.replace('</svg>', `${CLOSED_EYES}</svg>`)
 
-const PowerIcon = () => h('svg', { viewBox: '0 0 24 24', width: 22, height: 22, 'aria-hidden': true },
+const PowerIcon = () => h('svg', { viewBox: '0 0 24 24', width: 18, height: 18, 'aria-hidden': true },
   h('path', { d: 'M12 3v8', fill: 'none', stroke: 'currentColor', strokeWidth: 2.4, strokeLinecap: 'round' }),
   h('path', { d: 'M6.4 6.6a8 8 0 1 0 11.2 0', fill: 'none', stroke: 'currentColor', strokeWidth: 2.4, strokeLinecap: 'round' }))
 
-// What the card says under the portrait in each phase.
-const STATUS = {
-  asleep: 'Asleep. Press the power button to wake Omni up.',
-  waking: 'Waking up…',
-  installing: 'Installing Omni in this DSH…',
-  looking: 'Looking for a connection…',
-  found: 'Found one. Pick it to connect.',
-  none: 'No Omni on this computer yet.',
-  linked: 'Connected.',
-  pairing: 'Approve this device to connect.',
-  removed: 'Not on your team. Press the power button to bring Omni back.',
-  restart: 'Installed. Restart DSH to finish.',
-  failed: 'Omni could not be installed.',
+const titleOf = (plugins, name) => plugins?.plugins?.find(row => row.name === name)?.title ?? 'Omni'
+
+// The one status line inside the box, under Omni.
+export function statusOf(phase, detail) {
+  if (phase === 'asleep') return detail?.removed ? 'Powered off · not on your team' : 'Powered off'
+  if (phase === 'installing') {
+    const rows = detail?.plugins?.plugins ?? []
+    const install = detail?.plugins?.install
+    const at = Math.min(rows.length, (install?.done?.length ?? 0) + 1)
+    return install?.current ? `Installing ${titleOf(detail.plugins, install.current)} · ${at} of ${rows.length}` : 'Installing Omni…'
+  }
+  if (phase === 'found') {
+    const count = (detail?.omnis ?? []).filter(omni => foundChoice(omni).action).length
+    return count === 1 ? 'Found an Omni' : count > 1 ? `Found ${count} Omnis` : 'Found Omnis, none ready to connect'
+  }
+  if (phase === 'linked') return detail?.origin ? `Connected to ${detail.origin}` : 'Connected'
+  return {
+    waking: 'Waking up…',
+    starting: 'Starting Omni in this DSH…',
+    looking: 'Looking for a connection…',
+    none: 'No Omni found nearby',
+    pairing: 'Approve this device on your phone',
+    restart: 'Installed · restart DSH to start it',
+    failed: 'Could not install Omni',
+  }[phase] ?? ''
+}
+
+// The box's three lights: power, its plugins, its connection. Waking lights them one by one;
+// then each shows what is true: on, working (a blink), or off.
+export function lightsOf(phase) {
+  const ready = ['looking', 'found', 'none', 'pairing', 'linked'].includes(phase)
+  return [
+    ['power', phase === 'asleep' ? 'off' : 'on'],
+    ['plugins', ready ? 'on' : ['installing', 'starting'].includes(phase) ? 'busy' : phase === 'failed' || phase === 'restart' ? 'warn' : 'off'],
+    ['link', phase === 'linked' ? 'on' : ['looking', 'pairing'].includes(phase) ? 'busy' : phase === 'found' ? 'warn' : 'off'],
+  ]
 }
 
 function InstallProgress({ plugins }) {
   const install = plugins?.install
-  const rows = plugins?.plugins ?? []
   const done = new Set(install?.done ?? [])
-  return h('ol', { className: 'oai-install', 'aria-label': 'Installing the Omni plugins' }, rows.map((row) => {
+  return h('ol', { className: 'oai-install', 'aria-label': 'The Omni plugins' }, (plugins?.plugins ?? []).map((row) => {
     const state = done.has(row.name) || (row.installed && row.enabled !== false) ? 'done' : install?.current === row.name ? 'now' : 'next'
     return h('li', { key: row.name, className: `oai-install-${state}` },
       h('span', { className: 'oai-install-dot', 'aria-hidden': true }, state === 'done' ? h(Check) : null),
-      h('span', null, row.title),
-      h('small', null, state === 'done' ? 'Installed' : state === 'now' ? 'Installing…' : 'Waiting'))
+      row.title.replace(/^Omni /, ''))
   }))
 }
 
 function Pairing({ pairing, onCancel }) {
   return h('div', { className: 'oai-pairing', 'aria-live': 'polite' },
-    h('p', { className: 'oai-muted' }, pairing.waLink
-      ? 'Send this code to yourself on WhatsApp, and Omni connects.'
-      : 'Approve this device on the page your Omni opens, with Face ID, a fingerprint or a code.'),
-    h('div', { className: 'oai-code' }, h('code', null, pairing.code)),
+    h('code', { className: 'oai-pair-code' }, pairing.code),
     h('div', { className: 'oai-row' },
       pairing.waLink ? h('a', { className: 'oai-pill oai-pill-primary', href: pairing.waLink, target: '_blank', rel: 'noreferrer' }, 'Open WhatsApp') : null,
       pairing.approveUrl ? h('a', { className: `oai-pill${pairing.waLink ? '' : ' oai-pill-primary'}`, href: pairing.approveUrl, target: '_blank', rel: 'noreferrer' }, 'Approve') : null,
-      h('button', { type: 'button', className: 'oai-pill', onClick: onCancel }, 'Cancel')),
-    h('p', { className: 'oai-muted oai-waiting' }, `Waiting for ${pairing.origin ?? 'your Omni'}…`))
+      h('button', { type: 'button', className: 'oai-pill', onClick: onCancel }, 'Cancel')))
 }
 
 function Found({ omnis, busy, onUse }) {
   const mac = onMac()
   return h('ul', { className: 'oai-found-list' }, omnis.map((omni) => {
     const choice = foundChoice(omni, { mac })
-    return h('li', { key: omni.id, className: 'oai-found-row' },
-      h('span', { className: `oai-found-mark${choice.action ? '' : ' oai-quiet'}`, 'aria-hidden': true }),
-      h('span', { className: 'oai-cap-what' }, h('strong', null, choice.title), choice.sub ? h('small', null, choice.sub) : null, choice.note ? h('small', null, choice.note) : null),
+    return h('li', { key: omni.id, className: `oai-found-row${choice.action ? '' : ' oai-quiet'}`, title: choice.note ?? undefined },
+      h('span', { className: 'oai-found-what' }, h('strong', null, choice.title), h('small', null, choice.note ?? choice.sub)),
       choice.action ? h('button', { type: 'button', className: 'oai-pill oai-pill-primary', disabled: busy !== null, onClick: () => onUse(omni) }, busy === omni.id ? 'Connecting…' : choice.action === 'use' ? 'Use it' : 'Connect') : null)
   }))
 }
 
-function Elsewhere({ busy, onRemote, onLocal, local }) {
+function Elsewhere({ busy, onRemote, onLocal }) {
   const [text, setText] = useState('')
   const wanted = readRemote(text)
   const submit = (event) => {
@@ -265,60 +282,74 @@ function Elsewhere({ busy, onRemote, onLocal, local }) {
   }
   return h('div', { className: 'oai-elsewhere' },
     h('form', { className: 'oai-field', onSubmit: submit },
-      h('input', { type: 'text', inputMode: 'url', autoComplete: 'off', spellCheck: false, value: text, placeholder: 'omni.example.com, or the link Omni sent you', 'aria-label': 'Omni address or link', onChange: event => setText(event.target.value) }),
+      h('input', { type: 'text', inputMode: 'url', autoComplete: 'off', spellCheck: false, value: text, placeholder: 'Its address, or the link Omni sent you', 'aria-label': 'Omni address or link', onChange: event => setText(event.target.value) }),
       h('button', { type: 'submit', className: 'oai-pill oai-pill-primary', disabled: busy !== null || wanted === null }, busy === 'remote' ? 'Connecting…' : 'Connect')),
-    h('p', { className: 'oai-muted' }, 'No address? Text connect to yourself on WhatsApp, and your Omni replies with a link.'),
-    local ? h('button', { type: 'button', className: 'oai-pill oai-local', onClick: onLocal }, h('strong', null, onMac() ? 'Run Omni on this Mac' : 'Run Omni on this computer'), h('small', null, 'A private Omni, about 1 GB. Set up in the next step.')) : null)
+    h('button', { type: 'button', className: 'oai-textlink', onClick: onLocal }, onMac() ? 'Or run Omni on this Mac' : 'Or run Omni on this computer'))
 }
 
-// Omni's card: asleep, then each phase of powerOn, then connecting from what it found.
-export function OmniCard({ power, onPower, type, abilities, onToggle, live }) {
-  const { phase, detail, busy, problem } = power
-  const awake = phase !== 'asleep'
-  const scanning = phase === 'looking'
-  const omnis = detail?.omnis ?? []
-  const hasSandbox = omnis.some(omni => omni.source === 'sandbox')
+// What the box shows under the status line: one thing at a time, in the same place.
+function Inside({ phase, detail, power, live, elsewhere, setElsewhere }) {
   const channels = live?.configured ? live.channels ?? [] : []
-  let body = null
-  if (phase === 'installing') body = h(InstallProgress, { plugins: detail?.plugins })
-  else if (phase === 'restart') body = h('p', { className: 'oai-note' }, 'DSH needs a restart to start the Omni plugins. Restart it, then press the power button again: Omni is already installed.')
-  else if (phase === 'failed') body = h('p', { className: 'oai-error', role: 'alert' }, detail?.message ?? 'Try again, or add the Omni plugins on DSH\'s Plugins page.')
-  else if (phase === 'pairing') body = h(Pairing, { pairing: detail.pairing, onCancel: power.cancelPairing })
-  else if (phase === 'found') {
-    body = h('div', { className: 'oai-connect' },
-      h(Found, { omnis, busy, onUse: power.use }),
-      h('details', { className: 'oai-more' }, h('summary', null, 'Somewhere else?'), h(Elsewhere, { busy, onRemote: power.remote, onLocal: power.local, local: !hasSandbox })))
-  } else if (phase === 'none') body = h('div', { className: 'oai-connect' }, h(Elsewhere, { busy, onRemote: power.remote, onLocal: power.local, local: true }))
-  else if (phase === 'linked') {
-    body = h('p', { className: 'oai-linked', role: 'status' }, h(Check), detail?.origin ? `Connected to ${detail.origin}` : 'Connected to your Omni')
+  if (phase === 'installing') return h(InstallProgress, { plugins: detail?.plugins })
+  if (phase === 'pairing') return h(Pairing, { pairing: detail.pairing, onCancel: power.cancelPairing })
+  if (phase === 'none' || (phase === 'found' && elsewhere)) return h(Elsewhere, { busy: power.busy, onRemote: power.remote, onLocal: power.local })
+  if (phase === 'found') {
+    return h('div', { className: 'oai-found-box' },
+      h(Found, { omnis: detail?.omnis ?? [], busy: power.busy, onUse: power.use }),
+      h('button', { type: 'button', className: 'oai-textlink', onClick: () => setElsewhere(true) }, 'Somewhere else?'))
   }
-  // The linked Omni's channels, each with its live state, as they will sit in the menu.
-  const menu = channels.length > 0
-    ? h('ul', { className: 'oai-menu-preview' }, channels.slice(0, 5).map(channel => h('li', { key: channel.id }, h('span', { className: `oai-dot ${channel.status === 'connected' ? 'ok' : 'warn'}` }), `${channelLabel(channel)} · ${channel.name}`)))
-    : h('p', { className: 'oai-muted' }, live === undefined ? 'Reading your Omni…' : 'Link an Omni, and each of its channels gets a place in your menu.')
-  const removed = phase === 'asleep' && detail?.removed === true
+  // Once connected, its real channels, as they will sit in the menu.
+  if (phase === 'linked' && channels.length > 0) {
+    return h('div', { className: 'oai-menu' },
+      h('span', { className: 'oai-menu-label' }, 'In your menu'),
+      h('ul', { className: 'oai-menu-preview' }, channels.slice(0, 3).map(channel => h('li', { key: channel.id }, h('span', { className: `oai-dot ${channel.status === 'connected' ? 'ok' : 'warn'}` }), `${channelLabel(channel)} · ${channel.name}`))))
+  }
+  if (phase === 'restart') return h('p', { className: 'oai-inside-note' }, 'Restart DSH, then power Omni on again.')
+  if (phase === 'failed') return h('p', { className: 'oai-inside-note oai-bad', title: detail?.message }, detail?.message ?? 'Add the Omni plugins on DSH\'s Plugins page.')
+  return null
+}
 
-  return h('article', { className: `oai-fighter oai-omni oai-is-${phase}${awake ? ' oai-chosen' : ''}`, 'data-phase': phase },
-    h('div', { className: 'oai-portrait', 'aria-hidden': 'true' },
-      scanning ? h('div', { className: 'oai-scan' }, h('i'), h('i'), h('i')) : null,
-      phase === 'asleep' ? h('div', { className: 'oai-zzz' }, h('i', null, 'z'), h('i', null, 'z'), h('i', null, 'z')) : null,
-      awake ? h('div', { className: 'oai-bubbles' }, [0, 1, 2, 3, 4, 5].map(index => h('i', { key: index }))) : null,
+/**
+ * The machine: one box of a fixed size, Omni inside it, a switch on its corner and three
+ * lights. Asleep it is a powered-down screen; everything after happens inside, in place.
+ */
+export function Machine({ kind = 'omni', phase, detail, power, live, onPower, children }) {
+  const [elsewhere, setElsewhere] = useState(false)
+  const awake = phase !== 'asleep'
+  const omni = kind === 'omni'
+  return h('div', { className: `oai-box oai-box-${kind} oai-is-${phase}`, 'data-phase': phase },
+    h('div', { className: 'oai-box-top' },
+      h('span', { className: 'oai-lights', 'aria-hidden': true }, (omni ? lightsOf(phase) : [['power', 'off'], ['plugins', 'off'], ['link', 'off']]).map(([id, state]) => h('i', { key: id, className: `oai-light oai-light-${state}`, title: id }))),
+      omni
+        ? h('button', { type: 'button', className: `oai-power${awake ? ' on' : ''}`, 'aria-pressed': awake, 'aria-label': awake ? 'Power Omni off' : 'Power Omni on', onClick: onPower, disabled: phase === 'installing' || phase === 'starting' }, h(PowerIcon))
+        : null),
+    h('div', { className: 'oai-screen', 'aria-hidden': 'true' },
+      phase === 'looking' ? h('div', { className: 'oai-scan' }, h('i'), h('i'), h('i')) : null,
+      phase === 'asleep' && omni ? h('div', { className: 'oai-zzz' }, h('i', null, 'z'), h('i', null, 'z'), h('i', null, 'z')) : null,
+      children),
+    h('p', { className: `oai-status${['waking', 'installing', 'starting', 'looking'].includes(phase) ? ' oai-working' : ''}`, role: 'status', 'aria-live': 'polite' }, omni ? statusOf(phase, detail) : 'Coming soon'),
+    h('div', { className: 'oai-inside' },
+      omni ? h(Inside, { phase, detail, power, live, elsewhere, setElsewhere }) : null,
+      omni && power?.problem ? h('p', { className: 'oai-inside-note oai-bad', role: 'alert' }, power.problem) : null))
+}
+
+// What a Bot type starts with, behind one disclosure, closed until asked.
+const StartsWith = props => h('details', { className: 'oai-starts' }, h('summary', null, 'What it starts with'), h(Capabilities, props))
+
+// Omni's card: the machine, its name and one sentence. The rest waits behind the disclosure.
+export function OmniCard({ power, onPower, type, abilities, onToggle, live }) {
+  const { phase, detail } = power
+  const awake = phase !== 'asleep'
+  return h('article', { className: `oai-fighter oai-omni${awake ? ' oai-chosen' : ''}`, 'data-phase': phase },
+    h(Machine, { phase, detail, power, live, onPower },
       h('div', { className: 'oai-octo-wrap', dangerouslySetInnerHTML: { __html: PORTRAIT_SVG } })),
-    h('header', null, h('h2', null, 'Omni')),
-    h('div', { className: 'oai-power-row' },
-      h('button', { type: 'button', className: `oai-power${awake ? ' on' : ''}`, 'aria-pressed': awake, 'aria-label': awake ? 'Power Omni off' : 'Power Omni on', onClick: onPower, disabled: phase === 'installing' }, h(PowerIcon)),
-      h('p', { className: `oai-status${scanning || phase === 'waking' || phase === 'installing' ? ' oai-working' : ''}`, role: 'status', 'aria-live': 'polite' }, removed ? STATUS.removed : STATUS[phase] ?? '')),
-    awake && phase !== 'failed'
-      ? h('div', { className: 'oai-team-line' },
-        h('span', { className: 'oai-on-team' }, h(Check), 'On your team'),
-        h('button', { type: 'button', className: 'oai-remove', onClick: onPower, disabled: phase === 'installing' }, 'Remove'))
-      : null,
-    body,
-    problem ? h('p', { className: 'oai-error', role: 'alert' }, problem) : null,
-    h('p', { className: 'oai-about' }, 'Keeps your Omni: every chat on every channel, answered by your team. A little Omni sits in each chat to help there.'),
-    h('div', { className: 'oai-menu-label' }, 'In your menu'),
-    menu,
-    h(Capabilities, { type, abilities, onToggle, disabled: !awake }))
+    h('header', null,
+      h('h2', null, 'Omni'),
+      awake && phase !== 'failed'
+        ? h('span', { className: 'oai-team-line' }, h('span', { className: 'oai-on-team' }, h(Check), 'On your team'), h('button', { type: 'button', className: 'oai-remove', onClick: onPower, disabled: phase === 'installing' || phase === 'starting' }, 'Remove'))
+        : null),
+    h('p', { className: 'oai-about' }, 'Every chat on every channel, answered by your team.'),
+    h(StartsWith, { type, abilities, onToggle, disabled: !awake }))
 }
 
 // The power button's state, and the connecting a found Omni or a typed address does.
@@ -417,6 +448,7 @@ const speechOf = (phase, name, origin) => ({
   asleep: `${name} here! Omni is asleep. Press its power button to bring it along.`,
   waking: 'Omni is waking up…',
   installing: 'Bringing Omni into this DSH. One moment.',
+  starting: 'Omni is starting up…',
   looking: 'Omni is looking for a connection…',
   found: 'Omni found where your channels live!',
   none: 'No Omni here yet. Tell Omni where yours lives.',
@@ -452,7 +484,7 @@ export function TeamStep(props) {
 
   const name = state.companionName ?? 'Your companion'
   const omni = phase !== 'asleep' && phase !== 'failed'
-  const working = ['waking', 'installing', 'looking'].includes(phase)
+  const working = ['waking', 'installing', 'starting', 'looking'].includes(phase)
   const local = () => go({ omni: true })
 
   async function go({ omni: joined = omni } = {}) {
@@ -475,19 +507,17 @@ export function TeamStep(props) {
     glitching,
     wide: true,
   },
-  h('p', { className: 'oai-lede' }, `${name} leads. Each friend comes with its own plugins, tools and project. Switch on the ones you want.`),
+  h('p', { className: 'oai-lede' }, `${name} leads. Who comes along?`),
   h('div', { className: 'oai-select' },
     h(OmniCard, { power: omniPower, onPower: power.toggle, type: omniType, abilities, onToggle: (id, on) => setAbilities(rows => ({ ...rows, [id]: on })), live }),
     h('article', { className: 'oai-fighter oai-genie oai-locked' },
-      h('div', { className: 'oai-portrait', 'aria-hidden': 'true' },
-        h('div', { className: 'oai-genie-wrap', dangerouslySetInnerHTML: { __html: genieSvg(150, { uid: 'oaig' }) } })),
+      h(Machine, { kind: 'genie', phase: 'asleep' },
+        h('div', { className: 'oai-genie-wrap', dangerouslySetInnerHTML: { __html: genieSvg(110, { uid: 'oaig' }) } })),
       h('header', null, h('h2', null, 'Genie')),
-      h('span', { className: 'oai-join oai-soon-badge', 'aria-disabled': 'true' }, 'Coming soon'),
-      h('p', { className: 'oai-about' }, 'Give it a wish, get one delivery. It works in threads of itself, in its own project, and hands you the result.'),
-      h(Capabilities, { type: GENIE_TYPE }))),
+      h('p', { className: 'oai-about' }, 'Give it a wish, get one delivery.'),
+      h(StartsWith, { type: GENIE_TYPE }))),
   problem ? h('p', { className: 'oai-error', role: 'alert' }, problem) : null,
   h('div', { className: 'oai-actions' },
-    phase !== 'linked' && omni && !working ? h('span', { className: 'oai-count' }, 'Connect Omni comes next.') : null,
     h('button', { type: 'button', className: 'oai-primary oai-big', disabled: saving || working, onClick: () => go() },
       saving ? 'Bringing them in…' : working ? 'Omni is waking…' : omni ? 'Continue with Omni' : `Continue with just ${name}`)))
 }
