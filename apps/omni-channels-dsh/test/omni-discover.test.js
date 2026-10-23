@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, test } from 'node:test'
@@ -135,7 +135,7 @@ test('a probe tells an Omni a device can sign in to from one that is too old, of
 
 // The host with the link and discovery modules, on a home of its own; HOME points at a
 // computer whose CLI knows a local Omni with a key and a remote one without.
-function host(t, validate) {
+function host(t, validate, { mint } = {}) {
   const { home: user, stop } = homeWith({ cli: { apiUrl: 'http://localhost:8882', apiKey: LOCAL_KEY, servers: { active: 'default', list: { lab: { url: 'https://lab.example.com' } } } } })
   t.after(stop)
   process.env.HOME = user
@@ -148,6 +148,7 @@ function host(t, validate) {
     asked.push({ host: url.host, path: url.pathname, key: init.headers?.['x-api-key'] ?? null })
     const json = (status, data) => new Response(JSON.stringify(data), { status })
     if (url.pathname === '/api/v2/auth/validate') return validate(json)
+    if (url.pathname === '/api/v2/keys') return mint ? mint(json, init) : json(404, {})
     if (url.pathname === '/api/v2/login/status') return json(200, { data: { claimed: true, whatsapp: false } })
     if (url.pathname === '/api/auth/device/code') return json(200, { device_code: 'dev-1', user_code: 'K7Q4X9ZP', verification_uri_complete: `${url.origin}/login/device?user_code=K7Q4X9ZP`, expires_in: 600, interval: 2 })
     return probes(address, init)
@@ -161,14 +162,16 @@ function host(t, validate) {
 }
 
 test('Use it checks the key with that Omni and links it, and the key stays on the host', async (t) => {
-  const { rt, asked } = host(t, json => json(200, { data: { valid: true, keyName: 'primary', scopes: ['*'], credential: { expiresAt: null } } }))
+  const { rt, asked } = host(t, json => json(200, { data: { valid: true, keyName: 'ui', scopes: ['instances:*', 'chats:*'], credential: { expiresAt: null } } }))
   const { omnis } = await rt.omniDiscoverEndpoint('omni-discover')
   const local = omnis.find(omni => omni.local)
   const reply = await rt.omniDiscoverEndpoint('omni-discover-use', { id: local.id })
   assert.deepEqual(reply, { status: 'paired', origin: 'localhost:8882' })
   assert.ok(asked.some(entry => entry.path === '/api/v2/auth/validate' && entry.key === LOCAL_KEY))
   const link = JSON.parse(readFileSync(join(rt.home, LINK_FILE), 'utf8'))
-  assert.deepEqual({ url: link.url, key: link.key, scopes: link.scopes }, { url: 'http://localhost:8882', key: LOCAL_KEY, scopes: ['*'] })
+  assert.deepEqual({ url: link.url, key: link.key, scopes: link.scopes }, { url: 'http://localhost:8882', key: LOCAL_KEY, scopes: ['instances:*', 'chats:*'] })
+  // A key already scoped is kept as found: no key is made with it.
+  assert.equal(asked.some(entry => entry.path === '/api/v2/keys'), false)
   const shown = await rt.omniLinkEndpoint('omni-link')
   assert.equal(shown.linked, true)
   assert.equal(JSON.stringify(shown).includes(LOCAL_KEY), false)
@@ -185,6 +188,85 @@ test('a key the Omni refuses, or no key at all, signs this device in there inste
   assert.equal(noKey.pairing.origin, 'lab.example.com')
   await assert.rejects(rt.omniDiscoverEndpoint('omni-discover-use', { id: 'nope' }), { code: 'bot/invalid' })
   await assert.rejects(rt.omniDiscoverEndpoint('omni-discover-use', { id: '0123456789abcdef' }), { code: 'bot/refused' })
+})
+
+const PASTED_KEY = 'omni_sk_pasted_by_hand'
+
+test('a pasted API key for an Omni that cannot approve this app links it like Use it, and stays on the host', async (t) => {
+  const { rt, asked } = host(t, json => json(200, { data: { valid: true, scopes: ['instances:*', 'messages:*'], credential: { expiresAt: null } } }))
+  const { omnis } = await rt.omniDiscoverEndpoint('omni-discover')
+  const local = omnis.find(omni => omni.local)
+  const reply = await rt.omniDiscoverEndpoint('omni-discover-key', { id: local.id, apiKey: ` ${PASTED_KEY} ` })
+  assert.deepEqual(reply, { status: 'paired', origin: 'localhost:8882' })
+  assert.ok(asked.some(entry => entry.path === '/api/v2/auth/validate' && entry.key === PASTED_KEY))
+  assert.equal(JSON.parse(readFileSync(join(rt.home, LINK_FILE), 'utf8')).key, PASTED_KEY)
+  assert.equal(JSON.stringify(reply).includes(PASTED_KEY), false)
+  assert.equal(JSON.stringify(await rt.omniLinkEndpoint('omni-link')).includes(PASTED_KEY), false)
+  assert.equal(JSON.stringify(await rt.omniDiscoverEndpoint('omni-discover')).includes(PASTED_KEY), false)
+})
+
+test('a pasted key the Omni refuses shows the Omni\'s own words, links nothing, and never echoes the key', async (t) => {
+  const { rt } = host(t, json => json(401, { error: { code: 'UNAUTHORIZED', message: 'Invalid API key' } }))
+  const { omnis } = await rt.omniDiscoverEndpoint('omni-discover')
+  const local = omnis.find(omni => omni.local)
+  await assert.rejects(rt.omniDiscoverEndpoint('omni-discover-key', { id: local.id, apiKey: PASTED_KEY }), (error) => {
+    assert.equal(error.code, 'bot/refused')
+    assert.equal(error.message, 'Omni did not accept that key: Invalid API key')
+    assert.equal(error.message.includes(PASTED_KEY), false)
+    return true
+  })
+  assert.equal(existsSync(join(rt.home, LINK_FILE)), false)
+  for (const body of [{ id: local.id, apiKey: 'short' }, { id: local.id, apiKey: 'has a space inside it' }, { id: local.id }, { id: local.id, apiKey: PASTED_KEY, extra: 1 }]) {
+    await assert.rejects(rt.omniDiscoverEndpoint('omni-discover-key', body), { code: 'bot/invalid' }, JSON.stringify(body))
+  }
+})
+
+const MINTED_KEY = 'omni_sk_device_minted'
+
+test('a key that can do everything makes this device its own scoped key once, and only that one is kept', async (t) => {
+  const made = []
+  const { rt, asked } = host(t, json => json(200, { data: { valid: true, scopes: ['*'], credential: { expiresAt: null } } }), {
+    mint: (json, init) => {
+      made.push({ key: init.headers['x-api-key'], body: JSON.parse(init.body) })
+      return json(201, { data: { id: 'key-7', name: JSON.parse(init.body).name, scopes: JSON.parse(init.body).scopes, expiresAt: null, plainTextKey: MINTED_KEY } })
+    },
+  })
+  const { omnis } = await rt.omniDiscoverEndpoint('omni-discover')
+  const reply = await rt.omniDiscoverEndpoint('omni-discover-use', { id: omnis.find(omni => omni.local).id })
+  assert.deepEqual(reply, { status: 'paired', origin: 'localhost:8882' })
+  assert.equal(made.length, 1)
+  assert.equal(made[0].key, LOCAL_KEY)
+  assert.match(made[0].body.name, /^device: /)
+  assert.deepEqual(made[0].body.scopes, ['instances:*', 'chats:*', 'messages:*', 'media:*', 'events:*', 'system:read', 'system:update'])
+  assert.equal(made[0].body.scopes.some(scope => /^(\*|keys|settings|auth|platform)/.test(scope)), false)
+  const saved = readFileSync(join(rt.home, LINK_FILE), 'utf8')
+  const link = JSON.parse(saved)
+  assert.deepEqual({ key: link.key, keyId: link.keyId, scopes: link.scopes }, { key: MINTED_KEY, keyId: 'key-7', scopes: made[0].body.scopes })
+  // The broad key is never kept, and never reaches the page.
+  assert.equal(saved.includes(LOCAL_KEY), false)
+  assert.equal(JSON.stringify(reply).includes(LOCAL_KEY), false)
+  assert.equal(asked.filter(entry => entry.path === '/api/v2/keys').length, 1)
+})
+
+test('a pasted key that can make keys is traded for a device key too', async (t) => {
+  const { rt } = host(t, json => json(200, { data: { valid: true, scopes: ['keys:write', 'instances:*'] } }), {
+    mint: json => json(201, { data: { id: 'key-8', plainTextKey: MINTED_KEY } }),
+  })
+  const { omnis } = await rt.omniDiscoverEndpoint('omni-discover')
+  await rt.omniDiscoverEndpoint('omni-discover-key', { id: omnis.find(omni => omni.local).id, apiKey: PASTED_KEY })
+  const saved = readFileSync(join(rt.home, LINK_FILE), 'utf8')
+  assert.equal(JSON.parse(saved).key, MINTED_KEY)
+  assert.equal(saved.includes(PASTED_KEY), false)
+})
+
+test('when a broad key cannot make one, it is kept with a note that it can do everything', async (t) => {
+  const { rt } = host(t, json => json(200, { data: { valid: true, scopes: ['*'] } }), {
+    mint: json => json(403, { error: { code: 'FORBIDDEN', message: 'Cannot grant scopes' } }),
+  })
+  const { omnis } = await rt.omniDiscoverEndpoint('omni-discover')
+  const reply = await rt.omniDiscoverEndpoint('omni-discover-use', { id: omnis.find(omni => omni.local).id })
+  assert.deepEqual(reply, { status: 'paired', origin: 'localhost:8882', notice: 'broad-key' })
+  assert.equal(JSON.parse(readFileSync(join(rt.home, LINK_FILE), 'utf8')).key, LOCAL_KEY)
 })
 
 const GRANT = 'Zx81_kq-Pz0aBcD9eF12-_Qw'

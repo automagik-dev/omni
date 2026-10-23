@@ -1,5 +1,7 @@
 import { createElement as h } from 'react'
 import { registerConnectStep } from './connect-step.js'
+import { registerSettings } from './omni-settings.js'
+import { WizardHost } from './wizard.js'
 import { CHANNELS_CSS, ChannelsFooter, ChannelsPage, ChatPage } from './channels.js'
 import { CHANNELS_PANEL, CHAT_PANEL } from './omni-store.js'
 import { BOARD_KIND, BOARD_TAB_ID, BoardTab, EventsBadge, SUBSCRIPTIONS_CSS, SubscriptionsButton, boardTabDefinition, isEventsBot } from './subscriptions.js'
@@ -85,6 +87,8 @@ export function apply(ctx) {
   ctx.effect(() => addStrings(STRINGS), 'ds-bot: channels copy')
   // Onboarding: Connect Omni, between omni-ai's welcome and Connect AI when it is installed.
   registerConnectStep(ctx)
+  // The Omni page in DSH's settings, which opens the same wizard on demand.
+  registerSettings(ctx)
   // The Omni desktop app hands over an omni://connect link it asked about (src/main.js there).
   ctx.effect(() => {
     if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return undefined
@@ -114,6 +118,8 @@ export function apply(ctx) {
     () => installCompiledStyles(CHANNELS_CSS + SUBSCRIPTIONS_CSS + AUTOMATIONS_CSS + OMNI_LIVE_CSS + OMNI_PEEK_CSS + OMNI_CONNECT_CSS + PERMISSIONS_CSS, 'channels'),
     () => shadow('conversation.input.dock', { id: 'omni-consent', order: -80, inject: face }, ConsentDock),
     () => shadow('sidebar.footer.action', { id: 'bot-connect', order: -100, inject: face }, ChannelsFooter),
+    // The Connect wizard opened on demand (settings, Channels, or once after install) mounts here.
+    () => shadow('sidebar.footer.action', { id: 'omni-connect-wizard', order: 1000, inject: face }, WizardHost),
     () => shadow('main', { key: CHANNELS_PANEL, inject: face }, ChannelsPage),
     () => shadow('main', { key: CHAT_PANEL, inject: face }, ChatPage),
     () => shadow('main', { key: AUTOMATIONS_PANEL, inject: face }, AutomationsPage),

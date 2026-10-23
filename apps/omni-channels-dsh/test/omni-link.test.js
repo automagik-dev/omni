@@ -31,6 +31,8 @@ function fakeOmni({ statusCode = 200, claimed = true, whatsapp = true, keyStatus
     asked.push({ method: init.method ?? 'GET', path: url.pathname, bearer: init.headers?.authorization ?? null, key: init.headers?.['x-api-key'] ?? null, client: init.headers?.['x-omni-client'] ?? null, body: init.body ? JSON.parse(init.body) : undefined })
     const json = (status, data) => new Response(JSON.stringify(data), { status })
     switch (url.pathname) {
+      case '/api/v2/health':
+        return json(200, { status: 'healthy', version: '2.261006.2' })
       case '/api/v2/login/status':
         return statusCode === 200 ? json(200, { data: { claimed, whatsapp, deviceUrl: 'https://omni.example.com/api/login/device', whatsappUrl: 'https://omni.example.com/api/login/whatsapp' } }) : json(statusCode, { error: { code: 'X' } })
       case '/api/auth/device/code':
@@ -152,9 +154,21 @@ test('an Omni without login, an unclaimed one, and a bad address say so', async 
   t.after(stop)
   await assert.rejects(rt.omniLinkEndpoint('omni-pair-start', { url: 'ftp://nope' }), /Give the address/)
   fakeOmni({ statusCode: 404 })
-  await assert.rejects(rt.omniLinkEndpoint('omni-pair-start', { url: 'omni.example.com' }), /does not offer sign-in/)
+  const off = await rt.omniLinkEndpoint('omni-pair-start', { url: 'omni.example.com' })
+  assert.deepEqual({ status: off.status, reason: off.reason, url: off.url, origin: off.origin }, { status: 'unavailable', reason: 'off', url: 'https://omni.example.com', origin: 'omni.example.com' })
+  assert.equal(off.message, 'Pairing is off on omni.example.com. Its owner can turn it on, or you can paste an API key.')
   fakeOmni({ claimed: false })
   await assert.rejects(rt.omniLinkEndpoint('omni-pair-start', { url: 'omni.example.com' }), /has no owner yet/)
+})
+
+test('an Omni from before device sign-in (its login status is behind a key) answers with its version, not an error', async (t) => {
+  const { rt, stop } = runtime()
+  t.after(stop)
+  fakeOmni({ statusCode: 401 })
+  const old = await rt.omniLinkEndpoint('omni-pair-start', { url: 'omni.example.com' })
+  assert.deepEqual({ status: old.status, reason: old.reason, version: old.version, url: old.url }, { status: 'unavailable', reason: 'too-old', version: '2.261006.2', url: 'https://omni.example.com' })
+  assert.equal(old.message, 'Omni 2.261006.2 at omni.example.com is too old to pair from here. Update it, or paste an API key or the link it sent you.')
+  assert.equal(old.pairing, undefined)
 })
 
 test('without the owner\'s WhatsApp connected, the card offers only the approval page', async (t) => {

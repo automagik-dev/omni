@@ -1,7 +1,7 @@
 import { createElement as h, useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ConnectOmni, OMNI_CONNECT_CSS } from './omni-connect.js'
-import { CONNECT_STEP, gateConnect, isConnected, skipConnect } from './onboarding.js'
+import { CONNECT_STEP, gateConnect, isConnected, noteStepShown, skipConnect } from './onboarding.js'
 import { call, CHARACTERS, t } from './core.js'
 
 // Onboarding step omni-connect (order -250), between omni-ai's welcome (-300) and its
@@ -26,8 +26,15 @@ export function railSteps(scope = globalThis) {
   const steps = scope[ANNOUNCED]
   return RAIL.filter(([id]) => id === CONNECT_STEP.id || steps?.has(id) === true)
 }
-// How long the stage shows the new link before handing on to the next step.
-const PAIRED_BEAT_MS = 1600
+
+// The footer's Continue: off until an Omni is linked, then naming the step it goes on to.
+// Opened on demand (wizard.js), the wizard has no next step: it ends with Done.
+export function continueButton(linked, scope = globalThis, { onDemand = false } = {}) {
+  if (onDemand) return linked ? { label: t('Done'), disabled: false, title: undefined } : { label: t('Done'), disabled: true, title: t('Connect an Omni first, or close this') }
+  if (!linked) return { label: t('Continue'), disabled: true, title: t('Connect an Omni first, or skip for now') }
+  const next = railSteps(scope).some(([id]) => id === 'omni-connect-ai')
+  return { label: next ? t('Continue to Connect AI →') : t('Continue'), disabled: false, title: undefined }
+}
 
 const reducedMotion = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
 
@@ -76,7 +83,7 @@ function useTypewriter(text) {
   return shown
 }
 
-function Stage({ title, speech, glitching, children }) {
+function Stage({ title, speech, glitching, rail = true, children }) {
   const titleRef = useRef(null)
   useEffect(() => {
     const root = document.getElementById('root')
@@ -93,14 +100,14 @@ function Stage({ title, speech, glitching, children }) {
       h('div', { className: 'oxs-bubble' },
         h('span', { className: 'oxs-hidden', role: 'status' }, speech),
         h('span', { 'aria-hidden': 'true' }, shown, shown.length < speech.length ? h('span', { className: 'oxs-caret' }) : null)),
-      h('ol', { className: 'oxs-rail', 'aria-label': t('Setup steps') }, railSteps().map(([id, label], index, steps) => {
+      rail ? h('ol', { className: 'oxs-rail', 'aria-label': t('Setup steps') }, railSteps().map(([id, label], index, steps) => {
         const at = steps.findIndex(([step]) => step === CONNECT_STEP.id)
         return h('li', {
           key: id,
           className: index < at ? 'oxs-done' : index === at ? 'oxs-on' : '',
           'aria-current': index === at ? 'step' : undefined,
         }, t(label))
-      })),
+      })) : null,
       h('main', { className: 'oxs-card' },
         h('div', { className: 'oxs-mark', 'aria-hidden': 'true' }, 'OMNI'),
         h('h1', { id: 'oxs-title', ref: titleRef, tabIndex: -1 }, title),
@@ -119,46 +126,49 @@ function useGate(props) {
   return state
 }
 
+// `onDemand`: opened by this plugin (wizard.js) rather than DSH's first-run onboarding. It
+// shows the choices even when an Omni is linked (to change it), has no rail of steps, and
+// closes without keeping a skip.
 export function ConnectOmniStep(props) {
   const state = useGate(props)
   const [glitching, glitch] = useGlitch()
   const [paired, setPaired] = useState(null)
   const finished = useRef(false)
-  const timer = useRef(0)
-  useEffect(() => () => clearTimeout(timer.current), [])
+  const onDemand = props.onDemand === true
   useEffect(() => { if (state) glitch() }, [state, glitch])
+  // While DSH's own onboarding shows this step, the wizard does not open by itself.
+  useEffect(() => (state && !onDemand ? noteStepShown() : undefined), [state, onDemand])
 
   // One completion per step, however it ends.
   const complete = useCallback(() => {
     if (finished.current) return
     finished.current = true
-    clearTimeout(timer.current)
     props.complete()
   }, [props])
   const skip = useCallback(() => {
     if (finished.current) return
     finished.current = true
-    void skipConnect({ complete: props.complete })
-  }, [props])
+    if (onDemand) props.complete()
+    else void skipConnect({ complete: props.complete })
+  }, [props, onDemand])
+  // The link shows on its row, and Continue lights up: the person moves on when they like.
   const onPaired = useCallback((origin) => {
     setPaired(origin)
     glitch()
-    timer.current = setTimeout(complete, reducedMotion() ? 0 : PAIRED_BEAT_MS)
-  }, [complete, glitch])
+  }, [glitch])
 
   if (!state) return null
-  if (paired !== null) {
-    return h(Stage, { title: t('Omni connected'), speech: t('Connected to {origin}! Now I can see your channels.', { origin: paired }), glitching },
-      h('button', { type: 'button', className: 'oxs-primary', onClick: complete }, t('Continue')))
-  }
-  if (isConnected(state.link)) {
+  if (isConnected(state.link) && !onDemand) {
     const origin = state.link.origin ?? ''
     return h(Stage, { title: t('Omni connected'), speech: origin ? t('Connected to {origin}! Now I can see your channels.', { origin }) : t('Your Omni is connected. Now I can see your channels.'), glitching },
       h('button', { type: 'button', className: 'oxs-primary', onClick: complete }, t('Continue')))
   }
-  return h(Stage, { title: t('Connect your Omni'), speech: t('Show me your Omni, so I can see your channels. Approve this device from your phone.'), glitching },
+  const next = continueButton(paired !== null, globalThis, { onDemand })
+  return h(Stage, { title: t('Connect your Omni'), speech: paired !== null ? t('Connected to {origin}! Now I can see your channels.', { origin: paired }) : t('Show me your Omni, so I can see your channels.'), glitching, rail: !onDemand },
     h(ConnectOmni, { onPaired, embedded: true }),
-    h('button', { type: 'button', className: 'oxs-quiet', onClick: skip }, t('Skip for now')))
+    h('div', { className: 'oxs-actions' },
+      h('button', { type: 'button', className: 'oxs-quiet', onClick: skip }, onDemand ? t('Close') : t('Skip for now')),
+      h('button', { type: 'button', className: 'oxs-primary', disabled: next.disabled, title: next.title, onClick: complete }, next.label)))
 }
 
 const STAGE_CSS = `
@@ -204,6 +214,12 @@ const STAGE_CSS = `
 .oxs-card button.oxs-primary,.oxs-card button.oxs-quiet{display:block;width:100%;padding:12px 14px;margin:8px 0 0;border-radius:13px;font:inherit;font-weight:600;cursor:pointer;text-align:center}
 .oxs-card button.oxs-primary{border:1px solid transparent;background:linear-gradient(135deg,var(--oxs-accent),var(--oxs-accent-2));color:#06060f}
 .oxs-card button.oxs-quiet{border:1px solid transparent;background:none;color:var(--oxs-ink2);font-weight:500}
+.oxs-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:18px;padding-top:16px;border-top:1px solid var(--oxs-line)}
+.oxs-card .oxs-actions button.oxs-primary,.oxs-card .oxs-actions button.oxs-quiet{display:inline-flex;width:auto;margin:0;padding:11px 18px}
+.oxs-card .oxs-actions button.oxs-quiet{padding-left:0}
+.oxs-card button.oxs-primary:disabled{opacity:.38;cursor:not-allowed;filter:grayscale(.6)}
+.oxs-card button.oxs-primary:not(:disabled){box-shadow:0 6px 24px -8px rgba(255,59,212,.6)}
+.oxs-card .ox-card{display:block}
 .oxs-card button:focus-visible,.oxs-card a:focus-visible,.oxs-card input:focus-visible{outline:2px solid var(--oxs-accent);outline-offset:2px}
 @media (prefers-reduced-motion:reduce){.oxs-overlay *,.oxs-overlay::before,.oxs-overlay::after{animation:none!important;transition:none!important}}
 `
