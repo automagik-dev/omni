@@ -10,7 +10,9 @@
  *   /api/v2/login/claim/*  claiming an unclaimed Omni (needs the claim token)
  *   /api/v2/login/send-code, /verify   a login code in the owner's WhatsApp self chat
  *   /api/v2/login/device-key           a device trades its one-time device token for an Omni key
+ *   /api/v2/login/connect              a device trades a connect link's grant for an Omni key
  *   /api/login/claim, /api/login/device, /api/login/app   the pages a person opens
+ *   /  (and /api)                      what a browser sees at this Omni's own address
  */
 
 import { timingSafeEqual } from 'node:crypto';
@@ -20,8 +22,10 @@ import { z } from 'zod';
 import { qrSvg } from '../../lib/qr-svg';
 import { type Login, allowCodeSend, ownerAccount, ownerOf } from '../../login';
 import { PUBLIC_AUTH_PATHS } from '../../login/auth';
-import { DEVICE_CLIENTS, claimTokenOf, isDeviceClient } from '../../login/config';
-import { appPage, claimPage, devicePage } from '../../login/pages';
+import { DEVICE_CLIENTS, type DeviceClientId, claimTokenOf, isDeviceClient } from '../../login/config';
+import { GrantSchema, consumeConnectGrant, isLiveGrant } from '../../login/connect';
+import { deviceApprovedMessage } from '../../login/messages';
+import { appPage, claimPage, devicePage, landingPage } from '../../login/pages';
 import { maskPhone } from '../../login/whatsapp';
 import { authRateLimitMiddleware, loginRateLimitMiddleware, requestClientIp } from '../../middleware/rate-limit';
 import { getPlugin } from '../../plugins/loader';
@@ -35,7 +39,15 @@ const CODE = z.string().regex(/^\d{6}$/);
 const InstanceIdSchema = z.object({ instanceId: z.string().uuid() }).strict();
 const VerifySchema = z.object({ code: CODE }).strict();
 const ClaimVerifySchema = z.object({ instanceId: z.string().uuid(), code: CODE }).strict();
-const DeviceKeySchema = z.object({ deviceName: z.string().trim().min(1).max(80) }).strict();
+const DeviceNameSchema = z.string().trim().min(1).max(80);
+const DeviceKeySchema = z.object({ deviceName: DeviceNameSchema }).strict();
+const ConnectSchema = z
+  .object({
+    grant: GrantSchema,
+    clientId: z.string().refine(isDeviceClient, 'unknown device client'),
+    deviceName: DeviceNameSchema,
+  })
+  .strict();
 const UserCodeSchema = z.string().trim().min(4).max(32);
 const OWNER_INSTANCE_NAME = 'owner-whatsapp';
 
@@ -128,7 +140,12 @@ export function loginPageRoutes(login: Login | null) {
   const active = login as Login;
   app.get('/claim', (c) => c.html(claimPage()));
   app.get('/device', (c) => c.html(devicePage(DEVICE_CLIENTS)));
-  app.get('/app', (c) => c.html(appPage()));
+  // With a connect link's grant (texted "connect"), the page opens the app with it; looking never spends it.
+  app.get('/app', async (c) => {
+    const grant = c.req.query('grant');
+    if (grant === undefined) return c.html(appPage());
+    return c.html(appPage((await isLiveGrant(active, grant)) ? { grant } : { expired: true }));
+  });
   // What a device's QR opens: the owner's WhatsApp chat with themselves, with the device's
   // code typed. The owner's number is given out only here, and only for a live request.
   app.get('/whatsapp', authRateLimitMiddleware, async (c) => {
@@ -295,32 +312,94 @@ export function loginApiRoutes(login: Login | null) {
     });
     if (!spent) return c.json({ error: { code: 'UNAUTHORIZED', message: 'Unknown or used device token' } }, 401);
 
+    return c.json({ data: await mintDeviceKey(c, owner.id, clientId, body.data.deviceName, 'device-code') });
+  });
+
+  // ---- A connect link's grant for its Omni key (the owner texted "connect") ----
+
+  app.post('/connect', loginRateLimitMiddleware, async (c) => {
+    const body = ConnectSchema.safeParse(await c.req.json().catch(() => null));
+    if (!body.success)
+      return c.json({ error: { code: 'VALIDATION', message: 'Body must be { grant, clientId, deviceName }' } }, 400);
+    const owner = await ownerOf(active);
+    // Spent before the key exists, as with the device token: exactly one caller wins it.
+    const granted = await consumeConnectGrant(active, body.data.grant);
+    if (!granted || !owner || granted.userId !== owner.id) {
+      return c.json(
+        {
+          error: {
+            code: 'LINK_EXPIRED',
+            message:
+              'This connect link expired or was already used. Text connect to yourself on WhatsApp for a new one.',
+          },
+        },
+        410,
+      );
+    }
+    const clientId = body.data.clientId as DeviceClientId;
+    const minted = await mintDeviceKey(c, owner.id, clientId, body.data.deviceName, 'connect-link');
+    // Say so in the self chat, with where it came from, so a link that leaked does not pass unnoticed.
+    const account = await ownerAccount(active);
+    if (account) {
+      await active.whatsapp
+        .sendToSelf(
+          account,
+          `connect-done-${minted.keyId}`,
+          deviceApprovedMessage(DEVICE_CLIENTS[clientId], { ip: requestClientIp(c) ?? null, at: Date.now() }),
+        )
+        .catch((error) => log.warn('Could not confirm the connection in the self chat', { error: String(error) }));
+    }
+    return c.json({ data: minted });
+  });
+
+  /** A device key for the owner, as the device flow and connect links hand it out. */
+  async function mintDeviceKey(
+    c: Context<Env>,
+    ownerId: string,
+    clientId: string,
+    deviceName: string,
+    via: 'device-code' | 'connect-link',
+  ) {
     const keyExpiresAt = active.config.deviceKeyTtlDays
       ? new Date(Date.now() + active.config.deviceKeyTtlDays * 86_400_000)
       : undefined;
     const created = await active.services.apiKeys.create({
-      name: `device: ${body.data.deviceName}`,
+      name: `device: ${deviceName}`,
       description: `Authorized by the owner for ${isDeviceClient(clientId) ? DEVICE_CLIENTS[clientId] : 'a device'}, from ${requestClientIp(c) ?? 'an unknown address'}`,
       scopes: active.config.deviceKeyScopes,
       ...(keyExpiresAt ? { expiresAt: keyExpiresAt } : {}),
-      createdBy: `login:${owner.id}`,
+      createdBy: `login:${ownerId}`,
     });
     await active.eventBus?.publish('access.device_authorized', {
-      userId: owner.id,
+      userId: ownerId,
       clientId,
-      deviceName: body.data.deviceName,
+      deviceName,
       apiKeyId: created.key.id,
+      via,
     });
-    return c.json({
-      data: {
-        apiKey: created.plainTextKey,
-        keyId: created.key.id,
-        scopes: created.key.scopes,
-        keyExpiresAt: keyExpiresAt?.toISOString() ?? null,
-        apiUrl: active.config.publicUrl,
-      },
-    });
-  });
+    return {
+      apiKey: created.plainTextKey,
+      keyId: created.key.id,
+      scopes: created.key.scopes,
+      keyExpiresAt: keyExpiresAt?.toISOString() ?? null,
+      apiUrl: active.config.publicUrl,
+    };
+  }
 
+  return app;
+}
+
+/**
+ * What a browser sees at this Omni's own address (and /api): what this is, and how to get in.
+ * Anything else asking (a client, a script, curl) gets the same JSON 404 as before.
+ */
+export function landingRoutes(login: Login | null, notFound: (c: Context<Env>) => Response) {
+  const app = new Hono<Env>();
+  const landing = (c: Context<Env>) =>
+    /\btext\/html\b/.test(c.req.header('accept') ?? '')
+      ? c.html(landingPage({ publicUrl: login?.config.publicUrl ?? null }))
+      : notFound(c);
+  app.get('/', landing);
+  app.get('/api', landing);
   return app;
 }

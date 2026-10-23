@@ -49,6 +49,8 @@ export const CORE_EVENT_TYPES = [
   // Human login: the owner claimed the Omni; a device (desktop app, DSH plugin, CLI) was authorized
   'access.owner_claimed',
   'access.device_authorized',
+  // The owner asked for a connect link in their self chat (texting "connect")
+  'access.connect_link_issued',
   // Presence
   'presence.typing',
   'presence.online',
@@ -562,6 +564,16 @@ export interface AccessDeviceAuthorizedPayload {
   clientId: string;
   deviceName: string;
   apiKeyId: string;
+  /** How the owner let it in: a device code they approved, or a connect link they asked for. */
+  via?: 'device-code' | 'connect-link';
+}
+
+/** The owner texted "connect" to themselves and got a one-time link that connects one device. Never carries the link. */
+export interface AccessConnectLinkIssuedPayload {
+  userId: string;
+  /** The connected WhatsApp account whose self chat asked. */
+  instanceId: string;
+  expiresAt: string;
 }
 
 /**
@@ -1188,6 +1200,7 @@ export interface EventPayloadMap {
   'access.pairing_approved': AccessPairingApprovedPayload;
   'access.owner_claimed': AccessOwnerClaimedPayload;
   'access.device_authorized': AccessDeviceAuthorizedPayload;
+  'access.connect_link_issued': AccessConnectLinkIssuedPayload;
   'sync.started': SyncStartedPayload;
   'sync.progress': SyncProgressPayload;
   'sync.completed': SyncCompletedPayload;

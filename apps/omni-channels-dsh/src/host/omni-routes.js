@@ -331,6 +331,8 @@ export const SOURCE_ROUTES = [
   {"method":"GET","path":"/slack/oauth/result/{nonce}","summary":"","tag":"slack"},
   {"method":"POST","path":"/slack/oauth/start","summary":"","tag":"slack","body":"z.object({ mode: z .enum(['user', 'bot']) .default('user') .describe(\"Act as the authorizing person ('user') or as the workspace bot\"), entry: z.enum(['ui', 'cli']).describe('Who is waiting: the dashboard (redirect) or a terminal (fixed page)'), returnTo: z .string() .min(1) .max(2048) .optional() .describe('Where the dashboard resumes after Slack: a path, or a URL on server.public_url'), })"},
   {"method":"GET","path":"/slack/search","summary":"","tag":"slack","query":"z.object({ instanceId: z.string().uuid(), query: z.string().min(1), count: z.coerce.number().int().min(1).max(100).default(20), page: z.coerce.number().int().min(1).default(1), })"},
+  {"method":"GET","path":"/system/update","summary":"","tag":"system"},
+  {"method":"POST","path":"/system/update","summary":"","tag":"system","body":"z.object({ version: UpdateVersionSchema }).strict()"},
   {"method":"POST","path":"/trust/handshake","summary":"","tag":"trust","body":"z.object({ pubkey: z.string().regex(PUBKEY_PATTERN, 'pubkey must be base64url-encoded 32 bytes (ed25519 public key)'), hostname: z.string().min(1).max(255), capabilities: z.record(z.unknown()).optional(), })"},
   {"method":"GET","path":"/trust/hosts","summary":"","tag":"trust"},
   {"method":"DELETE","path":"/trust/hosts/{id}","summary":"","tag":"trust"},

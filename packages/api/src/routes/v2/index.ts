@@ -42,6 +42,7 @@ import { providersRoutes } from './providers';
 import { scheduledMessagesRoutes } from './scheduled-messages';
 import { settingsRoutes } from './settings';
 import { slackRoutes } from './slack';
+import { systemRoutes } from './system';
 import { templatesRoutes } from './templates';
 import { trustRoutes } from './trust';
 import { turnsRoutes } from './turns';
@@ -71,6 +72,7 @@ v2Routes.route('/journeys', journeysRoutes); // Journey tracing endpoints
 v2Routes.route('/persons', personsRoutes);
 v2Routes.route('/access', accessRoutes);
 v2Routes.route('/settings', settingsRoutes);
+v2Routes.route('/system', systemRoutes); // This Omni's version and the updates its owner confirms
 v2Routes.route('/providers', providersRoutes);
 v2Routes.route('/dead-letters', deadLettersRoutes);
 v2Routes.route('/event-ops', eventOpsRoutes);

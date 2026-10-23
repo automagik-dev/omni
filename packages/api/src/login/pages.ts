@@ -4,10 +4,14 @@
  *   /api/login/claim?token=…        claim an unclaimed Omni with a WhatsApp number
  *   /api/login/device?user_code=…   approve a device (desktop app, DSH plugin, CLI)
  *   /api/login/app                  open the Omni app on this computer, connected to this Omni
+ *   /api/login/app?grant=…          the same, from the link the owner got by texting "connect"
+ *   /  (and /api)                   what a browser sees at this Omni's own address
  *
  * "Open in the Omni app" is an omni://connect?url=<this Omni> link: it carries this Omni's
  * address and nothing else. The app asks before connecting, then signs in through the device
- * page here (a passkey, or a code on WhatsApp), so the link grants nothing by itself.
+ * page here (a passkey, or a code on WhatsApp), so the link grants nothing by itself. A link
+ * from "connect" adds its one-time grant (login/connect.ts): the owner already said it is
+ * them, in their own WhatsApp, so the app connects without a second sign-in.
  *
  * Plain HTML with a small script each: everything they do goes through Better Auth
  * (/api/auth) and Omni's login endpoints (/api/v2/login). Text is inserted with
@@ -211,17 +215,61 @@ start();`,
   );
 }
 
-/** Open the Omni app on this computer, connected to this Omni: an omni:// link and how to get the app. */
-export function appPage(): string {
+const GET_APP = 'https://github.com/automagik-dev/omni-desktop/releases/latest';
+
+/**
+ * Open the Omni app on this computer, connected to this Omni: an omni:// link and how to get
+ * the app. With a live `grant` the link carries it; an `expired` one says so and nothing else.
+ */
+export function appPage(link: { grant: string } | { expired: true } | Record<string, never> = {}): string {
+  if ('expired' in link) {
+    return page(
+      'Open Omni',
+      `
+<section id="expired"><h1>This link expired</h1><p>A connect link works once, for ten minutes. Text <strong>connect</strong> to yourself on WhatsApp and I'll send a new one.</p></section>`,
+      `
+speak('That link is used up. Ask me for a new one.');`,
+    );
+  }
+  // The grant matched GrantSchema (base64url) before it got here: safe inside the script.
+  const grant = 'grant' in link ? JSON.stringify(link.grant) : 'null';
   return page(
     'Open Omni',
     `
-<section id="open"><h1>Open Omni on this computer</h1><p>The Omni app connects to <strong id="host"></strong>. It asks you first, then you sign in here with Face ID, Touch ID, your fingerprint or a code on WhatsApp.</p><a class="btn primary" id="openApp" href="#">Open in the Omni app</a>
-<p style="margin-top:18px" class="muted">No app yet? <a href="https://github.com/automagik-dev/omni-desktop/releases/latest">Download Omni for Mac or Linux</a>, or run:</p><code class="cmd">npx @automagik/omni desktop</code></section>`,
+<section id="open"><h1>Open Omni on this computer</h1><p id="lede">The Omni app connects to <strong id="host"></strong>. It asks you first, then you sign in here with Face ID, Touch ID, your fingerprint or a code on WhatsApp.</p><a class="btn primary" id="openApp" href="#">Open in the Omni app</a><button id="copy" hidden>Copy the app link</button>
+<p style="margin-top:18px" class="muted">No app yet? <a href="${GET_APP}">Download Omni for Mac or Linux</a>, or run:</p><code class="cmd">npx @automagik/omni desktop</code></section>`,
     `
+const grant = ${grant};
+const link = appLink() + (grant ? '&grant=' + encodeURIComponent(grant) : '');
 $('host').textContent = location.host;
-$('openApp').href = appLink();
-speak("Let's put me on your computer.");`,
+$('openApp').href = link;
+if (grant) {
+  $('lede').textContent = 'The Omni app connects to ' + location.host + ' right away: you asked for this link in your own WhatsApp. It works once, for ten minutes.';
+  $('copy').hidden = !navigator.clipboard;
+  $('copy').onclick = () => navigator.clipboard.writeText(link).then(() => say('Copied. Paste it in the Omni app, under Connect your Omni.'), (e) => say(e.message, true));
+}
+speak(grant ? "One tap and I'm on this computer." : "Let's put me on your computer.");`,
+  );
+}
+
+/**
+ * What a browser sees at this Omni's address. Public: nothing about the owner or what the
+ * Omni holds. `publicUrl` is set when human login is on; only then can the app connect.
+ */
+export function landingPage({ publicUrl }: { publicUrl: string | null }): string {
+  // encodeURIComponent leaves no quote or angle bracket: safe inside the attribute.
+  const open = publicUrl
+    ? `<a class="btn primary" id="openApp" href="omni://connect?url=${encodeURIComponent(publicUrl)}">Open in the Omni app</a>`
+    : '';
+  const text = publicUrl
+    ? '<p class="muted">Already have the app? Text <strong>connect</strong> to yourself on WhatsApp and open the link I send.</p>'
+    : '';
+  return page(
+    'Omni',
+    `
+<section id="landing"><h1>This is an Omni</h1><p>Every chat, every channel, one place. Use it from the Omni app on your computer.</p>${open}<a class="btn${publicUrl ? '' : ' primary'}" href="${GET_APP}">Get the Omni app</a>${text}</section>`,
+    `
+speak("Hi! I'm Omni.");`,
   );
 }
 
