@@ -1702,6 +1702,98 @@ var { call, t, addStrings, onShell, toolCards, nav, badges, headerButtons, botSe
 var { OmniMark, BotMark, MAIN_LOOK, CHARACTERS, relativeShort, createSource } = import_client.omni.ui;
 var icons = import_client.omni.ui.icons;
 
+// src/client/omni-update.js
+var import_react = require("react");
+function CopyCommand({ command }) {
+  const [copied, setCopied] = (0, import_react.useState)(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(command);
+      setCopied(true);
+    } catch {
+    }
+  };
+  return (0, import_react.createElement)(
+    "span",
+    { className: "ox-command" },
+    (0, import_react.createElement)("code", null, command),
+    (0, import_react.createElement)("button", { type: "button", className: "oc-ghost ox-copy", onClick: copy }, copied ? t("Copied") : t("Copy"))
+  );
+}
+function updateWords(status) {
+  switch (status?.state) {
+    case "available":
+      return t("Omni {latest} is out. This one runs {current}.", { latest: status.latest, current: status.current ?? "?" });
+    case "off":
+      return t("Omni {latest} is out, but updates from the app are off on this Omni. Update it where it runs:", { latest: status.latest });
+    case "pending":
+      return t("An update to {version} is waiting for your yes on WhatsApp.", { version: status.version });
+    case "updating":
+      return t("Updating to {version}…", { version: status.version });
+    case "current":
+      return t("Up to date ({version}).", { version: status.current ?? status.latest });
+    case "terminal":
+      return t("Update it from a terminal:");
+    case "forbidden":
+      return status.message;
+    case "unreachable":
+      return t("Could not reach this Omni to check for updates.");
+    case "unknown":
+      return t("Could not tell whether this Omni has an update.");
+    default:
+      return null;
+  }
+}
+var CONFIRM_ON_WHATSAPP = "Confirm on WhatsApp: your Omni sent you a code. Reply update and that code in your chat with yourself.";
+function UpdateOffer({ id, compact = false }) {
+  const [status, setStatus] = (0, import_react.useState)(null);
+  const [busy, setBusy] = (0, import_react.useState)(false);
+  const [asked, setAsked] = (0, import_react.useState)(null);
+  const [problem, setProblem] = (0, import_react.useState)(null);
+  const alive = (0, import_react.useRef)(true);
+  (0, import_react.useEffect)(() => () => {
+    alive.current = false;
+  }, []);
+  (0, import_react.useEffect)(() => {
+    call("omni-update-status", id ? { id } : {}).then((reply) => {
+      if (alive.current) setStatus(reply);
+    }, (error) => {
+      if (alive.current && !compact) setProblem(error.message);
+    });
+  }, [id, compact]);
+  const ask = async () => {
+    setBusy(true);
+    setProblem(null);
+    try {
+      const reply = await call("omni-update-request", { ...id ? { id } : {}, version: status.latest });
+      if (alive.current) setAsked(reply);
+    } catch (error) {
+      if (alive.current) setProblem(error.message);
+    } finally {
+      if (alive.current) setBusy(false);
+    }
+  };
+  if (compact && !["available", "off", "pending", "updating"].includes(status?.state) && !asked && !problem) return null;
+  const words = asked ? t(CONFIRM_ON_WHATSAPP) : updateWords(status);
+  return (0, import_react.createElement)(
+    "div",
+    { className: `ox-update${compact ? " ox-update-notice" : ""}`, role: "status" },
+    words ? (0, import_react.createElement)("span", { className: "ox-muted" }, words) : status === null && !problem ? (0, import_react.createElement)("span", { className: "ox-muted" }, t("Checking for updates…")) : null,
+    !asked && status?.command && status.state !== "available" ? (0, import_react.createElement)(CopyCommand, { command: status.command }) : null,
+    !asked && status?.state === "available" ? (0, import_react.createElement)("button", { type: "button", className: "oc-primary", disabled: busy, onClick: ask }, busy ? t("Asking…") : t("Update to {version}", { version: status.latest })) : null,
+    problem ? (0, import_react.createElement)("span", { className: "ox-problem", role: "alert" }, problem) : null
+  );
+}
+var OMNI_UPDATE_CSS = `
+.ox-update{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-top:6px}
+.ox-update-notice{margin:0 0 16px;padding:10px 14px;border:1px solid var(--bt-line);border-radius:12px;background:color-mix(in srgb,var(--bt-accent) 7%,transparent)}
+.ox-command{display:inline-flex;align-items:center;gap:8px}
+.ox-command code{padding:4px 8px;border-radius:8px;background:var(--bt-bg,rgba(0,0,0,.2));font:13px ui-monospace,SFMono-Regular,Menlo,monospace;user-select:all}
+.ox-copy{height:28px!important;padding:0 10px!important;font-size:12.5px!important}
+.ox-confirm{display:flex;flex-direction:column;gap:10px;padding:12px 14px;border:1px solid var(--bt-line-2);border-radius:12px}
+.ox-progress{display:inline-flex;align-items:center;gap:8px;color:var(--bt-ink-2);font-size:13px}
+`;
+
 // src/client/omni-store.js
 var CHANNELS_PANEL = "omni-channels";
 var CHAT_PANEL = "omni-chat";
@@ -1945,39 +2037,39 @@ var runsOf = (roster, subId) => (roster?.subscriptionRuns ?? []).filter((run) =>
 var waitingRuns = (roster, waiting = /* @__PURE__ */ new Set()) => (roster?.subscriptionRuns ?? []).filter((run) => run.status === "working" && waiting.has(run.sessionId)).length;
 
 // src/client/channels.js
-var import_react = require("react");
+var import_react2 = require("react");
 var { ArrowUpIcon, ChevronLeftIcon, ChevronRightIcon, PlusIcon } = icons;
-var useOmni = () => (0, import_react.useSyncExternalStore)(omniStore.subscribe, omniStore.getSnapshot, omniStore.getSnapshot);
-var useActions = (actions) => (0, import_react.useMemo)(() => omniActions((id) => actions.selectPanel(id), call), [actions]);
+var useOmni = () => (0, import_react2.useSyncExternalStore)(omniStore.subscribe, omniStore.getSnapshot, omniStore.getSnapshot);
+var useActions = (actions) => (0, import_react2.useMemo)(() => omniActions((id) => actions.selectPanel(id), call), [actions]);
 var stroke = { fill: "none", stroke: "currentColor", strokeWidth: 1.9, strokeLinecap: "round", strokeLinejoin: "round" };
 var GLYPHS = {
   whatsapp: () => [
-    (0, import_react.createElement)("path", { key: "b", d: "M12 3.6a8.4 8.4 0 0 0-7.2 12.8L3.7 20.3l4-1.1A8.4 8.4 0 1 0 12 3.6z", ...stroke }),
-    (0, import_react.createElement)("path", { key: "p", d: "M9.2 8.3c-.3 0-.7.1-.9.5-.3.5-.5 1.2-.2 2.1.6 1.8 2.3 3.5 4.1 4.1.9.3 1.6.1 2.1-.2.4-.2.5-.6.5-.9l-.1-.4-1.6-.8-.9 1c-1-.4-1.9-1.3-2.3-2.3l1-.9-.8-1.6z", fill: "currentColor" })
+    (0, import_react2.createElement)("path", { key: "b", d: "M12 3.6a8.4 8.4 0 0 0-7.2 12.8L3.7 20.3l4-1.1A8.4 8.4 0 1 0 12 3.6z", ...stroke }),
+    (0, import_react2.createElement)("path", { key: "p", d: "M9.2 8.3c-.3 0-.7.1-.9.5-.3.5-.5 1.2-.2 2.1.6 1.8 2.3 3.5 4.1 4.1.9.3 1.6.1 2.1-.2.4-.2.5-.6.5-.9l-.1-.4-1.6-.8-.9 1c-1-.4-1.9-1.3-2.3-2.3l1-.9-.8-1.6z", fill: "currentColor" })
   ],
   telegram: () => [
-    (0, import_react.createElement)("path", { key: "a", d: "M20.5 4.5 3.5 11.2l5.3 1.9 2 6.1 3-3.3 4.4 3.3z", ...stroke }),
-    (0, import_react.createElement)("path", { key: "b", d: "M8.8 13.1 16.8 8", ...stroke })
+    (0, import_react2.createElement)("path", { key: "a", d: "M20.5 4.5 3.5 11.2l5.3 1.9 2 6.1 3-3.3 4.4 3.3z", ...stroke }),
+    (0, import_react2.createElement)("path", { key: "b", d: "M8.8 13.1 16.8 8", ...stroke })
   ],
-  slack: () => [(0, import_react.createElement)("path", { key: "a", d: "M9.5 4.5v6M14.5 13.5v6M4.5 14.5h6M13.5 9.5h6", ...stroke, strokeWidth: 2.8 })],
-  chat: () => [(0, import_react.createElement)("path", { key: "a", d: "M5 5.5h14a1.5 1.5 0 0 1 1.5 1.5v8.5A1.5 1.5 0 0 1 19 17H10l-4.5 3.5V17H5a1.5 1.5 0 0 1-1.5-1.5V7A1.5 1.5 0 0 1 5 5.5z", ...stroke })],
+  slack: () => [(0, import_react2.createElement)("path", { key: "a", d: "M9.5 4.5v6M14.5 13.5v6M4.5 14.5h6M13.5 9.5h6", ...stroke, strokeWidth: 2.8 })],
+  chat: () => [(0, import_react2.createElement)("path", { key: "a", d: "M5 5.5h14a1.5 1.5 0 0 1 1.5 1.5v8.5A1.5 1.5 0 0 1 19 17H10l-4.5 3.5V17H5a1.5 1.5 0 0 1-1.5-1.5V7A1.5 1.5 0 0 1 5 5.5z", ...stroke })],
   discord: () => [
-    (0, import_react.createElement)("path", { key: "a", d: "M7.6 7.2c2.9-1.2 5.9-1.2 8.8 0 1.5 2.4 2.1 5 1.9 8-1.6 1.2-3.1 1.8-4.2 2l-.8-1.5m-2.6 0-.8 1.5c-1.1-.2-2.6-.8-4.2-2-.2-3 .4-5.6 1.9-8z", ...stroke }),
-    (0, import_react.createElement)("circle", { key: "l", cx: 9.6, cy: 12.4, r: 1.3, fill: "currentColor" }),
-    (0, import_react.createElement)("circle", { key: "r", cx: 14.4, cy: 12.4, r: 1.3, fill: "currentColor" })
+    (0, import_react2.createElement)("path", { key: "a", d: "M7.6 7.2c2.9-1.2 5.9-1.2 8.8 0 1.5 2.4 2.1 5 1.9 8-1.6 1.2-3.1 1.8-4.2 2l-.8-1.5m-2.6 0-.8 1.5c-1.1-.2-2.6-.8-4.2-2-.2-3 .4-5.6 1.9-8z", ...stroke }),
+    (0, import_react2.createElement)("circle", { key: "l", cx: 9.6, cy: 12.4, r: 1.3, fill: "currentColor" }),
+    (0, import_react2.createElement)("circle", { key: "r", cx: 14.4, cy: 12.4, r: 1.3, fill: "currentColor" })
   ]
 };
 function Tile({ type, size = 40, ring = false }) {
-  return (0, import_react.createElement)("span", {
+  return (0, import_react2.createElement)("span", {
     className: `oc-tile${ring ? " oc-tile-ring" : ""}`,
     style: { width: size, height: size, borderRadius: Math.round(size * 0.32), background: typeOf(type).tile }
-  }, (0, import_react.createElement)("svg", { width: Math.round(size * 0.62), height: Math.round(size * 0.62), viewBox: "0 0 24 24", "aria-hidden": true, focusable: "false" }, (GLYPHS[typeOf(type).glyph] ?? GLYPHS.chat)()));
+  }, (0, import_react2.createElement)("svg", { width: Math.round(size * 0.62), height: Math.round(size * 0.62), viewBox: "0 0 24 24", "aria-hidden": true, focusable: "false" }, (GLYPHS[typeOf(type).glyph] ?? GLYPHS.chat)()));
 }
-var StatusDot = ({ status }) => (0, import_react.createElement)("span", { className: "oc-dot", "data-tone": STATUS[status].tone, "aria-hidden": true });
-var StatusPill = ({ status }) => (0, import_react.createElement)(
+var StatusDot = ({ status }) => (0, import_react2.createElement)("span", { className: "oc-dot", "data-tone": STATUS[status].tone, "aria-hidden": true });
+var StatusPill = ({ status }) => (0, import_react2.createElement)(
   "span",
   { className: "oc-pill", "data-tone": STATUS[status].tone },
-  (0, import_react.createElement)("span", { className: "oc-pill-dot", "aria-hidden": true }),
+  (0, import_react2.createElement)("span", { className: "oc-pill-dot", "aria-hidden": true }),
   t(STATUS[status].label)
 );
 var HUES = [168, 200, 222, 262, 290, 330, 18, 38, 140];
@@ -1988,28 +2080,28 @@ function hueOf(name) {
 }
 function ChatAvatar({ chat, channel, size = 36 }) {
   const hue = hueOf(chat.name);
-  return (0, import_react.createElement)(
+  return (0, import_react2.createElement)(
     "span",
     { className: "oc-ava", style: { width: size, height: size, "--oc-hue": hue } },
-    (0, import_react.createElement)("span", { className: "oc-ava-face", style: { fontSize: Math.round(size * 0.34) } }, chat.initials),
-    chat.avatarUrl ? (0, import_react.createElement)("img", { className: "oc-ava-img", src: chat.avatarUrl, alt: "", loading: "lazy", referrerPolicy: "no-referrer", onError: (event) => {
+    (0, import_react2.createElement)("span", { className: "oc-ava-face", style: { fontSize: Math.round(size * 0.34) } }, chat.initials),
+    chat.avatarUrl ? (0, import_react2.createElement)("img", { className: "oc-ava-img", src: chat.avatarUrl, alt: "", loading: "lazy", referrerPolicy: "no-referrer", onError: (event) => {
       event.currentTarget.remove();
     } }) : null,
-    channel ? (0, import_react.createElement)("span", { className: "oc-ava-badge" }, (0, import_react.createElement)(Tile, { type: channel.type, size: Math.round(size * 0.4) })) : null
+    channel ? (0, import_react2.createElement)("span", { className: "oc-ava-badge" }, (0, import_react2.createElement)(Tile, { type: channel.type, size: Math.round(size * 0.4) })) : null
   );
 }
 function PreviewChip() {
   const source = useOmni().source;
   if (source.kind === "live") {
-    return (0, import_react.createElement)(
+    return (0, import_react2.createElement)(
       "span",
       { className: "oc-preview-chip oc-live-chip", "data-error": source.error ? true : void 0, title: source.error ?? t("Read from omni every 15 seconds. To connect, pause or change a channel, ask Omni.") },
-      (0, import_react.createElement)("span", { className: "oc-live-dot", "aria-hidden": true }),
+      (0, import_react2.createElement)("span", { className: "oc-live-dot", "aria-hidden": true }),
       source.error ? t("Live · last refresh failed") : t("Live · {origin}", { origin: source.origin })
     );
   }
   const missing = source.missing?.join(", ");
-  return (0, import_react.createElement)("span", { className: "oc-preview-chip", title: missing ? t("Sample data until DSH has {missing}.", { missing }) : t("Nothing here reaches a real channel yet.") }, t("Preview · sample data"));
+  return (0, import_react2.createElement)("span", { className: "oc-preview-chip", title: missing ? t("Sample data until DSH has {missing}.", { missing }) : t("Nothing here reaches a real channel yet.") }, t("Preview · sample data"));
 }
 var dayKey = (at) => new Date(at).toDateString();
 function dayLabel(at) {
@@ -2026,17 +2118,17 @@ function ChatPage({ actions }) {
   const loaded = chat ? state.messages[chat.id] : void 0;
   const loading = chat !== void 0 && loaded === void 0 && !state.preview;
   const messages = chat ? loaded ?? (state.preview ? [{ id: "preview", from: "them", text: chat.preview, at: chat.at }] : []) : [];
-  const scroller = (0, import_react.useRef)(null);
-  const [draft, setDraft] = (0, import_react.useState)("");
-  (0, import_react.useLayoutEffect)(() => {
+  const scroller = (0, import_react2.useRef)(null);
+  const [draft, setDraft] = (0, import_react2.useState)("");
+  (0, import_react2.useLayoutEffect)(() => {
     const node = scroller.current;
     if (node) node.scrollTop = node.scrollHeight;
   }, [chat?.id, messages.length]);
-  (0, import_react.useEffect)(() => {
+  (0, import_react2.useEffect)(() => {
     setDraft("");
   }, [chat?.id]);
   if (!chat || !channel) {
-    return (0, import_react.createElement)("div", { className: "oc-page oc-chat-empty" }, (0, import_react.createElement)(OmniMark, { size: 40 }), (0, import_react.createElement)("p", null, t("Pick a chat under your Bots.")));
+    return (0, import_react2.createElement)("div", { className: "oc-page oc-chat-empty" }, (0, import_react2.createElement)(OmniMark, { size: 40 }), (0, import_react2.createElement)("p", null, t("Pick a chat under your Bots.")));
   }
   const type = typeOf(channel.type);
   const writable = canWrite(state);
@@ -2045,61 +2137,61 @@ function ChatPage({ actions }) {
     omni2.sendText(chat.id, draft);
     setDraft("");
   };
-  return (0, import_react.createElement)(
+  return (0, import_react2.createElement)(
     "div",
     { className: "oc-page oc-chat" },
-    (0, import_react.createElement)(
+    (0, import_react2.createElement)(
       "header",
       { className: "oc-chat-head" },
-      (0, import_react.createElement)(ChatAvatar, { chat, channel, size: 40 }),
-      (0, import_react.createElement)(
+      (0, import_react2.createElement)(ChatAvatar, { chat, channel, size: 40 }),
+      (0, import_react2.createElement)(
         "div",
         { className: "oc-chat-who" },
-        (0, import_react.createElement)("strong", null, chat.name),
-        (0, import_react.createElement)("span", null, `${type.label} · ${channel.name}`)
+        (0, import_react2.createElement)("strong", null, chat.name),
+        (0, import_react2.createElement)("span", null, `${type.label} · ${channel.name}`)
       ),
-      (0, import_react.createElement)(
+      (0, import_react2.createElement)(
         "span",
         { className: "oc-answer", "data-by": channel.answeredBy === "Omni" ? "omni" : "you" },
-        channel.answeredBy === "Omni" ? (0, import_react.createElement)(import_react.Fragment, null, (0, import_react.createElement)(OmniMark, { size: 14 }), t("Omni answers here")) : t("You answer here")
+        channel.answeredBy === "Omni" ? (0, import_react2.createElement)(import_react2.Fragment, null, (0, import_react2.createElement)(OmniMark, { size: 14 }), t("Omni answers here")) : t("You answer here")
       ),
-      (0, import_react.createElement)("button", { type: "button", className: "oc-ghost", onClick: () => omni2.openChannels("channel", channel.id) }, (0, import_react.createElement)(StatusDot, { status: channel.status }), t("Channel health")),
-      (0, import_react.createElement)(PreviewChip)
+      (0, import_react2.createElement)("button", { type: "button", className: "oc-ghost", onClick: () => omni2.openChannels("channel", channel.id) }, (0, import_react2.createElement)(StatusDot, { status: channel.status }), t("Channel health")),
+      (0, import_react2.createElement)(PreviewChip)
     ),
-    (0, import_react.createElement)(
+    (0, import_react2.createElement)(
       "div",
       { ref: scroller, className: "oc-thread", role: "log", "aria-label": t("Conversation with {name}", { name: chat.name }) },
-      (0, import_react.createElement)(
+      (0, import_react2.createElement)(
         "div",
         { className: "oc-thread-in" },
-        loading ? (0, import_react.createElement)("div", { className: "oc-day" }, (0, import_react.createElement)("span", { className: "oc-spinner", "aria-hidden": true }), t("Loading messages…")) : null,
+        loading ? (0, import_react2.createElement)("div", { className: "oc-day" }, (0, import_react2.createElement)("span", { className: "oc-spinner", "aria-hidden": true }), t("Loading messages…")) : null,
         messages.map((message, index) => {
           const mine = message.from !== "them";
           const newDay = index === 0 || dayKey(messages[index - 1].at) !== dayKey(message.at);
           const first = newDay || messages[index - 1].from !== message.from || messages[index - 1].author !== message.author;
-          return (0, import_react.createElement)(import_react.Fragment, { key: message.id }, newDay ? (0, import_react.createElement)("div", { className: "oc-day" }, dayLabel(message.at)) : null, (0, import_react.createElement)(
+          return (0, import_react2.createElement)(import_react2.Fragment, { key: message.id }, newDay ? (0, import_react2.createElement)("div", { className: "oc-day" }, dayLabel(message.at)) : null, (0, import_react2.createElement)(
             "div",
             { className: `oc-msg oc-msg-${message.from}${first ? " oc-msg-first" : ""}` },
-            first && !mine && message.author ? (0, import_react.createElement)("span", { className: "oc-msg-author" }, message.author) : null,
-            first && message.from === "omni" ? (0, import_react.createElement)("span", { className: "oc-msg-author oc-msg-omni" }, (0, import_react.createElement)(OmniMark, { size: 12 }), "Omni") : null,
-            (0, import_react.createElement)("div", { className: "oc-bubble" }, message.text, (0, import_react.createElement)("time", null, new Date(message.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })))
+            first && !mine && message.author ? (0, import_react2.createElement)("span", { className: "oc-msg-author" }, message.author) : null,
+            first && message.from === "omni" ? (0, import_react2.createElement)("span", { className: "oc-msg-author oc-msg-omni" }, (0, import_react2.createElement)(OmniMark, { size: 12 }), "Omni") : null,
+            (0, import_react2.createElement)("div", { className: "oc-bubble" }, message.text, (0, import_react2.createElement)("time", null, new Date(message.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })))
           ));
         })
       )
     ),
-    (0, import_react.createElement)(
+    (0, import_react2.createElement)(
       "footer",
       { className: "oc-compose-wrap" },
-      !writable ? (0, import_react.createElement)("div", { className: "oc-compose-note oc-compose-info" }, t("Read-only for now: replying from here is switched on after you approve this view.")) : live ? null : (0, import_react.createElement)(
+      !writable ? (0, import_react2.createElement)("div", { className: "oc-compose-note oc-compose-info" }, t("Read-only for now: replying from here is switched on after you approve this view.")) : live ? null : (0, import_react2.createElement)(
         "button",
         { type: "button", className: "oc-compose-note", onClick: () => omni2.openChannels("channel", channel.id) },
-        (0, import_react.createElement)(StatusDot, { status: channel.status }),
+        (0, import_react2.createElement)(StatusDot, { status: channel.status }),
         t("{name} is not connected. Fix it to reply.", { name: channel.name })
       ),
-      (0, import_react.createElement)(
+      (0, import_react2.createElement)(
         "div",
         { className: "oc-compose", "data-off": live ? void 0 : true },
-        (0, import_react.createElement)("textarea", {
+        (0, import_react2.createElement)("textarea", {
           rows: 1,
           value: draft,
           disabled: !live,
@@ -2113,7 +2205,7 @@ function ChatPage({ actions }) {
             }
           }
         }),
-        (0, import_react.createElement)("button", { type: "button", className: "oc-send", disabled: !live || draft.trim() === "", "aria-label": t("Send"), onClick: send }, (0, import_react.createElement)(ArrowUpIcon))
+        (0, import_react2.createElement)("button", { type: "button", className: "oc-send", disabled: !live || draft.trim() === "", "aria-label": t("Send"), onClick: send }, (0, import_react2.createElement)(ArrowUpIcon))
       )
     )
   );
@@ -2123,13 +2215,13 @@ function ChannelsPage({ actions }) {
   const omni2 = useActions(actions);
   const { page } = state;
   const channel = page.view === "channel" ? channelOf(state, page.channelId) : void 0;
-  return (0, import_react.createElement)(
+  return (0, import_react2.createElement)(
     "div",
     { className: "oc-page oc-channels" },
-    (0, import_react.createElement)(
+    (0, import_react2.createElement)(
       "div",
       { className: "oc-channels-in" },
-      page.view === "connect" ? (0, import_react.createElement)(ConnectFlow, { state, omni: omni2 }) : channel ? (0, import_react.createElement)(ChannelDetail, { channel, state, omni: omni2 }) : (0, import_react.createElement)(Overview, { state, omni: omni2 })
+      page.view === "connect" ? (0, import_react2.createElement)(ConnectFlow, { state, omni: omni2 }) : channel ? (0, import_react2.createElement)(ChannelDetail, { channel, state, omni: omni2 }) : (0, import_react2.createElement)(Overview, { state, omni: omni2 })
     )
   );
 }
@@ -2138,81 +2230,82 @@ function Overview({ state, omni: omni2 }) {
   const troubled = state.channels.filter((channel) => channel.status === "attention" || channel.status === "connecting");
   const replies = state.channels.map((channel) => channel.health?.replyMedianSec).filter((value) => typeof value === "number");
   const median = replies.length === 0 ? null : Math.round(replies.reduce((a, b) => a + b, 0) / replies.length);
-  return (0, import_react.createElement)(
-    import_react.Fragment,
+  return (0, import_react2.createElement)(
+    import_react2.Fragment,
     null,
-    (0, import_react.createElement)(
+    (0, import_react2.createElement)(
       "header",
       { className: "oc-head" },
-      (0, import_react.createElement)(
+      (0, import_react2.createElement)(
         "div",
         null,
-        (0, import_react.createElement)("h1", null, t("Channels"), (0, import_react.createElement)(PreviewChip)),
-        (0, import_react.createElement)("p", null, t("Connect the apps people already use to reach you. Omni answers there, and every chat shows up under your Bots."))
+        (0, import_react2.createElement)("h1", null, t("Channels"), (0, import_react2.createElement)(PreviewChip)),
+        (0, import_react2.createElement)("p", null, t("Connect the apps people already use to reach you. Omni answers there, and every chat shows up under your Bots."))
       ),
-      (0, import_react.createElement)("button", { type: "button", className: "oc-primary", onClick: () => omni2.showPage({ view: "connect", type: null, step: 0 }) }, (0, import_react.createElement)(PlusIcon), state.preview ? t("Add channel") : t("Preview: add channel"))
+      (0, import_react2.createElement)("button", { type: "button", className: "oc-primary", onClick: () => omni2.showPage({ view: "connect", type: null, step: 0 }) }, (0, import_react2.createElement)(PlusIcon), state.preview ? t("Add channel") : t("Preview: add channel"))
     ),
-    // Sample data means no Omni is linked yet: connecting one comes first.
-    state.preview ? (0, import_react.createElement)(ConnectOmni) : null,
-    troubled.map((channel) => (0, import_react.createElement)(
+    // Sample data means no Omni is linked yet: connecting one comes first. A linked one says
+    // when an update is out.
+    state.preview ? (0, import_react2.createElement)(ConnectOmni) : (0, import_react2.createElement)(UpdateOffer, { compact: true }),
+    troubled.map((channel) => (0, import_react2.createElement)(
       "button",
       { key: channel.id, type: "button", className: "oc-callout", "data-tone": STATUS[channel.status].tone, onClick: () => omni2.showPage({ view: "channel", channelId: channel.id }) },
-      (0, import_react.createElement)(Tile, { type: channel.type, size: 36 }),
-      (0, import_react.createElement)(
+      (0, import_react2.createElement)(Tile, { type: channel.type, size: 36 }),
+      (0, import_react2.createElement)(
         "span",
         { className: "oc-callout-text" },
-        (0, import_react.createElement)("strong", null, t("{name} needs attention", { name: `${typeOf(channel.type).label} · ${channel.name}` })),
-        (0, import_react.createElement)("span", null, channel.problem ?? t(STATUS[channel.status].label))
+        (0, import_react2.createElement)("strong", null, t("{name} needs attention", { name: `${typeOf(channel.type).label} · ${channel.name}` })),
+        (0, import_react2.createElement)("span", null, channel.problem ?? t(STATUS[channel.status].label))
       ),
-      (0, import_react.createElement)("span", { className: "oc-callout-go" }, t("Fix now"), (0, import_react.createElement)(ChevronRightIcon))
+      (0, import_react2.createElement)("span", { className: "oc-callout-go" }, t("Fix now"), (0, import_react2.createElement)(ChevronRightIcon))
     )),
-    (0, import_react.createElement)(
+    (0, import_react2.createElement)(
       "div",
       { className: "oc-stats" },
-      (0, import_react.createElement)(Stat, { value: `${summary.connected}/${summary.total}`, label: t("connected") }),
-      (0, import_react.createElement)(Stat, { value: String(summary.attention), label: t("need attention"), tone: summary.attention > 0 ? "warn" : void 0 }),
-      state.preview ? (0, import_react.createElement)(Stat, { value: String(summary.messagesToday), label: t("messages today") }) : (0, import_react.createElement)(Stat, { value: String(state.chats.length), label: t("recent chats") }),
-      state.preview ? (0, import_react.createElement)(Stat, { value: median === null ? "–" : median < 60 ? t("{n} s", { n: median }) : t("{n} min", { n: Math.round(median / 60) }), label: t("typical reply") }) : (0, import_react.createElement)(Stat, { value: String(unreadOf(state)), label: t("unread") })
+      (0, import_react2.createElement)(Stat, { value: `${summary.connected}/${summary.total}`, label: t("connected") }),
+      (0, import_react2.createElement)(Stat, { value: String(summary.attention), label: t("need attention"), tone: summary.attention > 0 ? "warn" : void 0 }),
+      state.preview ? (0, import_react2.createElement)(Stat, { value: String(summary.messagesToday), label: t("messages today") }) : (0, import_react2.createElement)(Stat, { value: String(state.chats.length), label: t("recent chats") }),
+      state.preview ? (0, import_react2.createElement)(Stat, { value: median === null ? "–" : median < 60 ? t("{n} s", { n: median }) : t("{n} min", { n: Math.round(median / 60) }), label: t("typical reply") }) : (0, import_react2.createElement)(Stat, { value: String(unreadOf(state)), label: t("unread") })
     ),
-    (0, import_react.createElement)("h2", { className: "oc-section" }, t("Your channels")),
-    state.channels.length === 0 ? (0, import_react.createElement)("div", { className: "oc-empty" }, t("No channels yet. Add one to start.")) : (0, import_react.createElement)("div", { className: "oc-cards" }, state.channels.map((channel) => (0, import_react.createElement)(ChannelCard, { key: channel.id, channel, state, omni: omni2 })))
+    (0, import_react2.createElement)("h2", { className: "oc-section" }, t("Your channels")),
+    state.channels.length === 0 ? (0, import_react2.createElement)("div", { className: "oc-empty" }, t("No channels yet. Add one to start.")) : (0, import_react2.createElement)("div", { className: "oc-cards" }, state.channels.map((channel) => (0, import_react2.createElement)(ChannelCard, { key: channel.id, channel, state, omni: omni2 })))
   );
 }
-var Stat = ({ value, label, tone }) => (0, import_react.createElement)("div", { className: "oc-stat", "data-tone": tone }, (0, import_react.createElement)("strong", null, value), (0, import_react.createElement)("span", null, label));
+var Stat = ({ value, label, tone }) => (0, import_react2.createElement)("div", { className: "oc-stat", "data-tone": tone }, (0, import_react2.createElement)("strong", null, value), (0, import_react2.createElement)("span", null, label));
 function Spark({ week }) {
   const top = Math.max(1, ...week);
-  return (0, import_react.createElement)("span", { className: "oc-spark", "aria-hidden": true }, week.map((value, index) => (0, import_react.createElement)("span", { key: index, style: { height: `${Math.max(8, value / top * 100)}%` }, "data-zero": value === 0 || void 0 })));
+  return (0, import_react2.createElement)("span", { className: "oc-spark", "aria-hidden": true }, week.map((value, index) => (0, import_react2.createElement)("span", { key: index, style: { height: `${Math.max(8, value / top * 100)}%` }, "data-zero": value === 0 || void 0 })));
 }
 function ChannelCard({ channel, state, omni: omni2 }) {
   const unread = unreadOf(state, channel.id);
-  return (0, import_react.createElement)(
+  return (0, import_react2.createElement)(
     "button",
     { type: "button", className: "oc-card", onClick: () => omni2.showPage({ view: "channel", channelId: channel.id }) },
-    (0, import_react.createElement)(
+    (0, import_react2.createElement)(
       "span",
       { className: "oc-card-top" },
-      (0, import_react.createElement)(Tile, { type: channel.type, size: 42 }),
-      (0, import_react.createElement)("span", { className: "oc-card-who" }, (0, import_react.createElement)("strong", null, channel.name), (0, import_react.createElement)("span", null, `${typeOf(channel.type).label} · ${channel.detail}`)),
-      (0, import_react.createElement)(StatusPill, { status: channel.status })
+      (0, import_react2.createElement)(Tile, { type: channel.type, size: 42 }),
+      (0, import_react2.createElement)("span", { className: "oc-card-who" }, (0, import_react2.createElement)("strong", null, channel.name), (0, import_react2.createElement)("span", null, `${typeOf(channel.type).label} · ${channel.detail}`)),
+      (0, import_react2.createElement)(StatusPill, { status: channel.status })
     ),
-    (0, import_react.createElement)(
+    (0, import_react2.createElement)(
       "span",
       { className: "oc-card-bottom" },
-      channel.health.week ? (0, import_react.createElement)(Spark, { week: channel.health.week }) : null,
-      (0, import_react.createElement)(
+      channel.health.week ? (0, import_react2.createElement)(Spark, { week: channel.health.week }) : null,
+      (0, import_react2.createElement)(
         "span",
         { className: "oc-card-facts" },
-        channel.health.messagesToday === null ? null : (0, import_react.createElement)("span", null, t("{n} today", { n: channel.health.messagesToday })),
-        (0, import_react.createElement)("span", null, channel.health.lastEventAt ? t("last message {time}", { time: relativeShort(channel.health.lastEventAt) }) : t("no messages yet")),
-        unread > 0 ? (0, import_react.createElement)("span", { className: "oc-card-unread" }, t("{n} unread", { n: unread })) : null
+        channel.health.messagesToday === null ? null : (0, import_react2.createElement)("span", null, t("{n} today", { n: channel.health.messagesToday })),
+        (0, import_react2.createElement)("span", null, channel.health.lastEventAt ? t("last message {time}", { time: relativeShort(channel.health.lastEventAt) }) : t("no messages yet")),
+        unread > 0 ? (0, import_react2.createElement)("span", { className: "oc-card-unread" }, t("{n} unread", { n: unread })) : null
       )
     )
   );
 }
 var replyText = (seconds) => seconds === null ? "–" : seconds < 60 ? t("{n} s", { n: seconds }) : t("{n} min", { n: Math.round(seconds / 60) });
 function ChannelDetail({ channel, state, omni: omni2 }) {
-  const [confirming, setConfirming] = (0, import_react.useState)(false);
-  (0, import_react.useEffect)(() => {
+  const [confirming, setConfirming] = (0, import_react2.useState)(false);
+  (0, import_react2.useEffect)(() => {
     setConfirming(false);
   }, [channel.id]);
   const type = typeOf(channel.type);
@@ -2221,72 +2314,72 @@ function ChannelDetail({ channel, state, omni: omni2 }) {
   const firstChat = visibleChats({ ...state, filter: channel.id })[0];
   const chats = state.chats.filter((chat) => chat.channelId === channel.id);
   const troubled = channel.status === "attention" || channel.status === "connecting";
-  return (0, import_react.createElement)(
-    import_react.Fragment,
+  return (0, import_react2.createElement)(
+    import_react2.Fragment,
     null,
-    (0, import_react.createElement)("button", { type: "button", className: "oc-back", onClick: () => omni2.showPage({ view: "overview", channelId: null }) }, (0, import_react.createElement)(ChevronLeftIcon), t("Channels")),
-    (0, import_react.createElement)(
+    (0, import_react2.createElement)("button", { type: "button", className: "oc-back", onClick: () => omni2.showPage({ view: "overview", channelId: null }) }, (0, import_react2.createElement)(ChevronLeftIcon), t("Channels")),
+    (0, import_react2.createElement)(
       "header",
       { className: "oc-detail-head" },
-      (0, import_react.createElement)(Tile, { type: channel.type, size: 56 }),
-      (0, import_react.createElement)(
+      (0, import_react2.createElement)(Tile, { type: channel.type, size: 56 }),
+      (0, import_react2.createElement)(
         "div",
         { className: "oc-detail-who" },
-        (0, import_react.createElement)("h1", null, channel.name),
-        (0, import_react.createElement)("p", null, `${type.label} · ${channel.detail}`)
+        (0, import_react2.createElement)("h1", null, channel.name),
+        (0, import_react2.createElement)("p", null, `${type.label} · ${channel.detail}`)
       ),
-      (0, import_react.createElement)(StatusPill, { status: channel.status })
+      (0, import_react2.createElement)(StatusPill, { status: channel.status })
     ),
-    troubled ? (0, import_react.createElement)(
+    troubled ? (0, import_react2.createElement)(
       "div",
       { className: "oc-callout oc-callout-static", "data-tone": STATUS[channel.status].tone },
-      (0, import_react.createElement)(
+      (0, import_react2.createElement)(
         "span",
         { className: "oc-callout-text" },
-        (0, import_react.createElement)("strong", null, channel.status === "connecting" ? t("Reconnecting…") : t("This channel stopped working")),
-        (0, import_react.createElement)("span", null, channel.status === "connecting" ? t("Omni is bringing {name} back. Messages sent meanwhile are delivered after.", { name: channel.name }) : channel.problem)
+        (0, import_react2.createElement)("strong", null, channel.status === "connecting" ? t("Reconnecting…") : t("This channel stopped working")),
+        (0, import_react2.createElement)("span", null, channel.status === "connecting" ? t("Omni is bringing {name} back. Messages sent meanwhile are delivered after.", { name: channel.name }) : channel.problem)
       ),
-      writable && channel.status === "attention" && type.pairing !== "token" ? (0, import_react.createElement)("button", { type: "button", className: "oc-primary", onClick: () => omni2.reconnect(channel.id) }, t("Reconnect")) : null,
-      channel.status === "connecting" ? (0, import_react.createElement)("span", { className: "oc-spinner", "aria-hidden": true }) : null
+      writable && channel.status === "attention" && type.pairing !== "token" ? (0, import_react2.createElement)("button", { type: "button", className: "oc-primary", onClick: () => omni2.reconnect(channel.id) }, t("Reconnect")) : null,
+      channel.status === "connecting" ? (0, import_react2.createElement)("span", { className: "oc-spinner", "aria-hidden": true }) : null
     ) : null,
-    writable && channel.status === "attention" && type.pairing === "token" ? (0, import_react.createElement)(TokenFix, { channel, type, omni: omni2 }) : null,
-    (0, import_react.createElement)(
+    writable && channel.status === "attention" && type.pairing === "token" ? (0, import_react2.createElement)(TokenFix, { channel, type, omni: omni2 }) : null,
+    (0, import_react2.createElement)(
       "div",
       { className: "oc-actions" },
-      firstChat ? (0, import_react.createElement)("button", { type: "button", className: "oc-secondary", onClick: () => {
+      firstChat ? (0, import_react2.createElement)("button", { type: "button", className: "oc-secondary", onClick: () => {
         omni2.setFilter(channel.id);
         omni2.openChat(firstChat.id);
       } }, t("Open chats")) : null,
-      !writable ? null : channel.status === "paused" ? (0, import_react.createElement)("button", { type: "button", className: "oc-secondary", onClick: () => omni2.resume(channel.id) }, t("Resume")) : channel.status === "connected" ? (0, import_react.createElement)("button", { type: "button", className: "oc-secondary", onClick: () => omni2.pause(channel.id) }, t("Pause")) : null
+      !writable ? null : channel.status === "paused" ? (0, import_react2.createElement)("button", { type: "button", className: "oc-secondary", onClick: () => omni2.resume(channel.id) }, t("Resume")) : channel.status === "connected" ? (0, import_react2.createElement)("button", { type: "button", className: "oc-secondary", onClick: () => omni2.pause(channel.id) }, t("Pause")) : null
     ),
-    (0, import_react.createElement)("h2", { className: "oc-section" }, t("Health")),
-    (0, import_react.createElement)(
+    (0, import_react2.createElement)("h2", { className: "oc-section" }, t("Health")),
+    (0, import_react2.createElement)(
       "div",
       { className: "oc-stats" },
-      health.uptime === null ? (0, import_react.createElement)(Stat, { value: t(STATUS[channel.status].label), label: t("right now"), tone: channel.status === "connected" ? void 0 : "warn" }) : (0, import_react.createElement)(Stat, { value: `${(health.uptime * 100).toFixed(health.uptime === 1 ? 0 : 1)}%`, label: t("online, last 7 days"), tone: health.uptime < 0.95 ? "warn" : void 0 }),
-      health.messagesToday === null ? (0, import_react.createElement)(Stat, { value: String(chats.reduce((sum, chat) => sum + chat.unread, 0)), label: t("unread") }) : (0, import_react.createElement)(Stat, { value: String(health.messagesToday), label: t("messages today") }),
-      health.replyMedianSec === null && health.lastSeenAt ? (0, import_react.createElement)(Stat, { value: relativeShort(health.lastSeenAt), label: t("last seen online") }) : (0, import_react.createElement)(Stat, { value: replyText(health.replyMedianSec), label: t("typical reply") }),
-      (0, import_react.createElement)(Stat, { value: health.lastEventAt ? relativeShort(health.lastEventAt) : "–", label: t("last message") })
+      health.uptime === null ? (0, import_react2.createElement)(Stat, { value: t(STATUS[channel.status].label), label: t("right now"), tone: channel.status === "connected" ? void 0 : "warn" }) : (0, import_react2.createElement)(Stat, { value: `${(health.uptime * 100).toFixed(health.uptime === 1 ? 0 : 1)}%`, label: t("online, last 7 days"), tone: health.uptime < 0.95 ? "warn" : void 0 }),
+      health.messagesToday === null ? (0, import_react2.createElement)(Stat, { value: String(chats.reduce((sum, chat) => sum + chat.unread, 0)), label: t("unread") }) : (0, import_react2.createElement)(Stat, { value: String(health.messagesToday), label: t("messages today") }),
+      health.replyMedianSec === null && health.lastSeenAt ? (0, import_react2.createElement)(Stat, { value: relativeShort(health.lastSeenAt), label: t("last seen online") }) : (0, import_react2.createElement)(Stat, { value: replyText(health.replyMedianSec), label: t("typical reply") }),
+      (0, import_react2.createElement)(Stat, { value: health.lastEventAt ? relativeShort(health.lastEventAt) : "–", label: t("last message") })
     ),
-    health.week ? (0, import_react.createElement)(WeekChart, { week: health.week }) : null,
-    (0, import_react.createElement)("h2", { className: "oc-section" }, t("Who answers")),
-    writable ? (0, import_react.createElement)(
+    health.week ? (0, import_react2.createElement)(WeekChart, { week: health.week }) : null,
+    (0, import_react2.createElement)("h2", { className: "oc-section" }, t("Who answers")),
+    writable ? (0, import_react2.createElement)(
       "div",
       { className: "oc-seg", role: "radiogroup", "aria-label": t("Who answers") },
-      [["Omni", t("Omni answers"), t("Omni replies on its own and hands over when it should.")], ["You", t("You answer"), t("Chats wait for you. Omni only drafts.")]].map(([value, title, text]) => (0, import_react.createElement)("button", {
+      [["Omni", t("Omni answers"), t("Omni replies on its own and hands over when it should.")], ["You", t("You answer"), t("Chats wait for you. Omni only drafts.")]].map(([value, title, text]) => (0, import_react2.createElement)("button", {
         key: value,
         type: "button",
         role: "radio",
         "aria-checked": channel.answeredBy === value,
         className: "oc-seg-opt",
         onClick: () => omni2.setAnsweredBy(channel.id, value)
-      }, (0, import_react.createElement)("strong", null, value === "Omni" ? (0, import_react.createElement)(OmniMark, { size: 16 }) : null, title), (0, import_react.createElement)("span", null, text)))
-    ) : (0, import_react.createElement)("div", { className: "oc-seg-opt oc-seg-static" }, channel.answeredBy === "Omni" ? (0, import_react.createElement)(import_react.Fragment, null, (0, import_react.createElement)("strong", null, (0, import_react.createElement)(OmniMark, { size: 16 }), t("Omni answers")), (0, import_react.createElement)("span", null, t("An agent is assigned to this channel in omni."))) : (0, import_react.createElement)(import_react.Fragment, null, (0, import_react.createElement)("strong", null, t("You answer")), (0, import_react.createElement)("span", null, t("No agent is assigned to this channel in omni.")))),
-    writable ? (0, import_react.createElement)(
+      }, (0, import_react2.createElement)("strong", null, value === "Omni" ? (0, import_react2.createElement)(OmniMark, { size: 16 }) : null, title), (0, import_react2.createElement)("span", null, text)))
+    ) : (0, import_react2.createElement)("div", { className: "oc-seg-opt oc-seg-static" }, channel.answeredBy === "Omni" ? (0, import_react2.createElement)(import_react2.Fragment, null, (0, import_react2.createElement)("strong", null, (0, import_react2.createElement)(OmniMark, { size: 16 }), t("Omni answers")), (0, import_react2.createElement)("span", null, t("An agent is assigned to this channel in omni."))) : (0, import_react2.createElement)(import_react2.Fragment, null, (0, import_react2.createElement)("strong", null, t("You answer")), (0, import_react2.createElement)("span", null, t("No agent is assigned to this channel in omni.")))),
+    writable ? (0, import_react2.createElement)(
       "div",
       { className: "oc-danger" },
-      (0, import_react.createElement)("div", null, (0, import_react.createElement)("strong", null, t("Disconnect {name}", { name: channel.name })), (0, import_react.createElement)("span", null, t("Omni stops reading and answering here. Its chats leave the sidebar."))),
-      (0, import_react.createElement)("button", {
+      (0, import_react2.createElement)("div", null, (0, import_react2.createElement)("strong", null, t("Disconnect {name}", { name: channel.name })), (0, import_react2.createElement)("span", null, t("Omni stops reading and answering here. Its chats leave the sidebar."))),
+      (0, import_react2.createElement)("button", {
         type: "button",
         className: confirming ? "oc-danger-go oc-danger-armed" : "oc-danger-go",
         onClick: () => confirming ? omni2.remove(channel.id) : setConfirming(true),
@@ -2298,38 +2391,38 @@ function ChannelDetail({ channel, state, omni: omni2 }) {
 function WeekChart({ week }) {
   const days = [6, 5, 4, 3, 2, 1, 0].map((back) => new Date(Date.now() - back * 864e5).toLocaleDateString([], { weekday: "short" }));
   const top = Math.max(1, ...week);
-  return (0, import_react.createElement)(
+  return (0, import_react2.createElement)(
     "div",
     { className: "oc-chart", role: "img", "aria-label": t("Messages per day, last 7 days: {list}", { list: week.join(", ") }) },
-    week.map((value, index) => (0, import_react.createElement)(
+    week.map((value, index) => (0, import_react2.createElement)(
       "span",
       { key: index, className: "oc-chart-col" },
-      (0, import_react.createElement)("span", { className: "oc-chart-n" }, value > 0 ? String(value) : ""),
-      (0, import_react.createElement)("span", { className: "oc-chart-bar", style: { height: `${Math.max(3, value / top * 100)}%` }, "data-zero": value === 0 || void 0 }),
-      (0, import_react.createElement)("span", { className: "oc-chart-day" }, days[index])
+      (0, import_react2.createElement)("span", { className: "oc-chart-n" }, value > 0 ? String(value) : ""),
+      (0, import_react2.createElement)("span", { className: "oc-chart-bar", style: { height: `${Math.max(3, value / top * 100)}%` }, "data-zero": value === 0 || void 0 }),
+      (0, import_react2.createElement)("span", { className: "oc-chart-day" }, days[index])
     ))
   );
 }
 function ConnectFlow({ state, omni: omni2 }) {
   const { type, step } = state.page;
-  const [name, setName] = (0, import_react.useState)("");
-  const [token, setToken] = (0, import_react.useState)("");
-  (0, import_react.useEffect)(() => {
+  const [name, setName] = (0, import_react2.useState)("");
+  const [token, setToken] = (0, import_react2.useState)("");
+  (0, import_react2.useEffect)(() => {
     setName("");
     setToken("");
   }, [type]);
   if (type === null) {
-    return (0, import_react.createElement)(
-      import_react.Fragment,
+    return (0, import_react2.createElement)(
+      import_react2.Fragment,
       null,
-      (0, import_react.createElement)("button", { type: "button", className: "oc-back", onClick: () => omni2.showPage({ view: "overview" }) }, (0, import_react.createElement)(ChevronLeftIcon), t("Channels")),
-      (0, import_react.createElement)("header", { className: "oc-head" }, (0, import_react.createElement)(
+      (0, import_react2.createElement)("button", { type: "button", className: "oc-back", onClick: () => omni2.showPage({ view: "overview" }) }, (0, import_react2.createElement)(ChevronLeftIcon), t("Channels")),
+      (0, import_react2.createElement)("header", { className: "oc-head" }, (0, import_react2.createElement)(
         "div",
         null,
-        (0, import_react.createElement)("h1", null, t("Add a channel"), (0, import_react.createElement)(PreviewChip)),
-        (0, import_react.createElement)("p", null, t("Pick where people talk to you. It takes about a minute, and you can disconnect at any time."))
+        (0, import_react2.createElement)("h1", null, t("Add a channel"), (0, import_react2.createElement)(PreviewChip)),
+        (0, import_react2.createElement)("p", null, t("Pick where people talk to you. It takes about a minute, and you can disconnect at any time."))
       )),
-      (0, import_react.createElement)("div", { className: "oc-types" }, Object.entries(CHANNEL_TYPES).map(([id, info2]) => (0, import_react.createElement)(
+      (0, import_react2.createElement)("div", { className: "oc-types" }, Object.entries(CHANNEL_TYPES).map(([id, info2]) => (0, import_react2.createElement)(
         "button",
         {
           key: id,
@@ -2337,30 +2430,30 @@ function ConnectFlow({ state, omni: omni2 }) {
           className: "oc-type",
           onClick: () => omni2.showPage({ type: id, step: 0 })
         },
-        (0, import_react.createElement)(Tile, { type: id, size: 48 }),
-        (0, import_react.createElement)("strong", null, info2.label),
-        (0, import_react.createElement)("span", null, info2.blurb),
-        (0, import_react.createElement)("em", null, info2.pairing === "qr" ? t("Scan a QR code") : info2.pairing === "token" ? t("Paste a token") : t("Sign in with {app}", { app: info2.signIn }))
+        (0, import_react2.createElement)(Tile, { type: id, size: 48 }),
+        (0, import_react2.createElement)("strong", null, info2.label),
+        (0, import_react2.createElement)("span", null, info2.blurb),
+        (0, import_react2.createElement)("em", null, info2.pairing === "qr" ? t("Scan a QR code") : info2.pairing === "token" ? t("Paste a token") : t("Sign in with {app}", { app: info2.signIn }))
       )))
     );
   }
   const info = CHANNEL_TYPES[type];
   const steps = [t("Name it"), info.pairing === "qr" ? t("Scan") : info.pairing === "token" ? t("Paste token") : t("Sign in"), t("Done")];
-  return (0, import_react.createElement)(
-    import_react.Fragment,
+  return (0, import_react2.createElement)(
+    import_react2.Fragment,
     null,
-    (0, import_react.createElement)("button", { type: "button", className: "oc-back", onClick: () => omni2.showPage({ type: null, step: 0 }) }, (0, import_react.createElement)(ChevronLeftIcon), t("All channels")),
-    (0, import_react.createElement)("ol", { className: "oc-steps" }, steps.map((label, index) => (0, import_react.createElement)("li", { key: label, "data-state": index < step ? "done" : index === step ? "now" : void 0 }, (0, import_react.createElement)("span", null, index < step ? "✓" : String(index + 1)), label))),
-    (0, import_react.createElement)(
+    (0, import_react2.createElement)("button", { type: "button", className: "oc-back", onClick: () => omni2.showPage({ type: null, step: 0 }) }, (0, import_react2.createElement)(ChevronLeftIcon), t("All channels")),
+    (0, import_react2.createElement)("ol", { className: "oc-steps" }, steps.map((label, index) => (0, import_react2.createElement)("li", { key: label, "data-state": index < step ? "done" : index === step ? "now" : void 0 }, (0, import_react2.createElement)("span", null, index < step ? "✓" : String(index + 1)), label))),
+    (0, import_react2.createElement)(
       "div",
       { className: "oc-flow" },
-      (0, import_react.createElement)(Tile, { type, size: 64, ring: true }),
-      step === 0 ? (0, import_react.createElement)(
-        import_react.Fragment,
+      (0, import_react2.createElement)(Tile, { type, size: 64, ring: true }),
+      step === 0 ? (0, import_react2.createElement)(
+        import_react2.Fragment,
         null,
-        (0, import_react.createElement)("h1", null, t("Connect {app}", { app: info.label })),
-        (0, import_react.createElement)("p", null, info.blurb),
-        (0, import_react.createElement)("label", { className: "oc-field" }, (0, import_react.createElement)("span", null, t("Name")), (0, import_react.createElement)("input", {
+        (0, import_react2.createElement)("h1", null, t("Connect {app}", { app: info.label })),
+        (0, import_react2.createElement)("p", null, info.blurb),
+        (0, import_react2.createElement)("label", { className: "oc-field" }, (0, import_react2.createElement)("span", null, t("Name")), (0, import_react2.createElement)("input", {
           value: name,
           placeholder: t("For example: Sales, Support, Personal"),
           onChange: (event) => setName(event.target.value),
@@ -2369,47 +2462,47 @@ function ConnectFlow({ state, omni: omni2 }) {
             if (event.key === "Enter") omni2.showPage({ step: 1 });
           }
         })),
-        (0, import_react.createElement)("button", { type: "button", className: "oc-primary", onClick: () => omni2.showPage({ step: 1 }) }, t("Continue"))
-      ) : step === 1 ? (0, import_react.createElement)(Pairing, { info, token, setToken, onDone: () => omni2.showPage({ step: 2 }) }) : (0, import_react.createElement)(
-        import_react.Fragment,
+        (0, import_react2.createElement)("button", { type: "button", className: "oc-primary", onClick: () => omni2.showPage({ step: 1 }) }, t("Continue"))
+      ) : step === 1 ? (0, import_react2.createElement)(Pairing, { info, token, setToken, onDone: () => omni2.showPage({ step: 2 }) }) : (0, import_react2.createElement)(
+        import_react2.Fragment,
         null,
-        (0, import_react.createElement)("h1", null, state.preview ? t("{app} is connected", { app: info.label }) : t("That is the whole flow")),
-        (0, import_react.createElement)("p", null, state.preview ? t("New chats appear under your Bots. Nothing is sent to your contacts until Omni or you reply.") : t("Connecting from here is switched on after you approve it; this run changed nothing in omni.")),
-        state.preview ? (0, import_react.createElement)("button", { type: "button", className: "oc-primary", onClick: () => omni2.finishConnect(type, name.trim()) }, t("See its health")) : (0, import_react.createElement)("button", { type: "button", className: "oc-primary", onClick: () => omni2.showPage({ view: "overview", type: null, step: 0 }) }, t("Back to channels"))
+        (0, import_react2.createElement)("h1", null, state.preview ? t("{app} is connected", { app: info.label }) : t("That is the whole flow")),
+        (0, import_react2.createElement)("p", null, state.preview ? t("New chats appear under your Bots. Nothing is sent to your contacts until Omni or you reply.") : t("Connecting from here is switched on after you approve it; this run changed nothing in omni.")),
+        state.preview ? (0, import_react2.createElement)("button", { type: "button", className: "oc-primary", onClick: () => omni2.finishConnect(type, name.trim()) }, t("See its health")) : (0, import_react2.createElement)("button", { type: "button", className: "oc-primary", onClick: () => omni2.showPage({ view: "overview", type: null, step: 0 }) }, t("Back to channels"))
       )
     )
   );
 }
 function Pairing({ info, token, setToken, onDone }) {
-  if (info.pairing === "qr") return (0, import_react.createElement)(QrPairing, { info, onDone });
+  if (info.pairing === "qr") return (0, import_react2.createElement)(QrPairing, { info, onDone });
   if (info.pairing === "token") {
-    return (0, import_react.createElement)(
-      import_react.Fragment,
+    return (0, import_react2.createElement)(
+      import_react2.Fragment,
       null,
-      (0, import_react.createElement)("h1", null, t("Paste the {app} token", { app: info.label })),
-      (0, import_react.createElement)("p", null, info.label === "Telegram" ? t("Message @BotFather, send /newbot, and copy the token it gives you.") : t("Create the token in {app}'s settings and paste it here.", { app: info.label })),
-      (0, import_react.createElement)("label", { className: "oc-field" }, (0, import_react.createElement)("span", null, t("Token")), (0, import_react.createElement)("input", { type: "password", value: token, onChange: (event) => setToken(event.target.value), placeholder: "123456:ABC-…", autoComplete: "off" })),
-      (0, import_react.createElement)("button", { type: "button", className: "oc-primary", disabled: token.trim() === "", onClick: onDone }, t("Connect"))
+      (0, import_react2.createElement)("h1", null, t("Paste the {app} token", { app: info.label })),
+      (0, import_react2.createElement)("p", null, info.label === "Telegram" ? t("Message @BotFather, send /newbot, and copy the token it gives you.") : t("Create the token in {app}'s settings and paste it here.", { app: info.label })),
+      (0, import_react2.createElement)("label", { className: "oc-field" }, (0, import_react2.createElement)("span", null, t("Token")), (0, import_react2.createElement)("input", { type: "password", value: token, onChange: (event) => setToken(event.target.value), placeholder: "123456:ABC-…", autoComplete: "off" })),
+      (0, import_react2.createElement)("button", { type: "button", className: "oc-primary", disabled: token.trim() === "", onClick: onDone }, t("Connect"))
     );
   }
-  return (0, import_react.createElement)(
-    import_react.Fragment,
+  return (0, import_react2.createElement)(
+    import_react2.Fragment,
     null,
-    (0, import_react.createElement)("h1", null, t("Sign in with {app}", { app: info.signIn })),
-    (0, import_react.createElement)("p", null, t("A {app} window opens. Approve Omni there and come back.", { app: info.signIn })),
-    (0, import_react.createElement)("button", { type: "button", className: "oc-primary", onClick: onDone }, t("Continue to {app}", { app: info.signIn }))
+    (0, import_react2.createElement)("h1", null, t("Sign in with {app}", { app: info.signIn })),
+    (0, import_react2.createElement)("p", null, t("A {app} window opens. Approve Omni there and come back.", { app: info.signIn })),
+    (0, import_react2.createElement)("button", { type: "button", className: "oc-primary", onClick: onDone }, t("Continue to {app}", { app: info.signIn }))
   );
 }
 function TokenFix({ channel, type, omni: omni2 }) {
-  const [token, setToken] = (0, import_react.useState)("");
-  return (0, import_react.createElement)(
+  const [token, setToken] = (0, import_react2.useState)("");
+  return (0, import_react2.createElement)(
     "div",
     { className: "oc-fix" },
-    (0, import_react.createElement)(
+    (0, import_react2.createElement)(
       "label",
       { className: "oc-field" },
-      (0, import_react.createElement)("span", null, t("New {app} token", { app: type.label })),
-      (0, import_react.createElement)("input", {
+      (0, import_react2.createElement)("span", null, t("New {app} token", { app: type.label })),
+      (0, import_react2.createElement)("input", {
         type: "password",
         value: token,
         autoComplete: "off",
@@ -2420,75 +2513,75 @@ function TokenFix({ channel, type, omni: omni2 }) {
         }
       })
     ),
-    (0, import_react.createElement)("button", { type: "button", className: "oc-primary", disabled: token.trim() === "", onClick: () => omni2.reconnect(channel.id) }, t("Reconnect"))
+    (0, import_react2.createElement)("button", { type: "button", className: "oc-primary", disabled: token.trim() === "", onClick: () => omni2.reconnect(channel.id) }, t("Reconnect"))
   );
 }
 function useCountdown(seconds) {
-  const [left, setLeft] = (0, import_react.useState)(seconds);
-  (0, import_react.useEffect)(() => {
+  const [left, setLeft] = (0, import_react2.useState)(seconds);
+  (0, import_react2.useEffect)(() => {
     const timer = setInterval(() => setLeft((value) => value <= 1 ? seconds : value - 1), 1e3);
     return () => clearInterval(timer);
   }, [seconds]);
   return left;
 }
 function QrPairing({ info, onDone }) {
-  const [byPhone, setByPhone] = (0, import_react.useState)(false);
-  const [phone, setPhone] = (0, import_react.useState)("");
-  const [code, setCode] = (0, import_react.useState)(null);
+  const [byPhone, setByPhone] = (0, import_react2.useState)(false);
+  const [phone, setPhone] = (0, import_react2.useState)("");
+  const [code, setCode] = (0, import_react2.useState)(null);
   const left = useCountdown(60);
   if (byPhone) {
-    return (0, import_react.createElement)(
-      import_react.Fragment,
+    return (0, import_react2.createElement)(
+      import_react2.Fragment,
       null,
-      (0, import_react.createElement)("h1", null, t("Link with a phone number")),
-      code === null ? (0, import_react.createElement)(
-        import_react.Fragment,
+      (0, import_react2.createElement)("h1", null, t("Link with a phone number")),
+      code === null ? (0, import_react2.createElement)(
+        import_react2.Fragment,
         null,
-        (0, import_react.createElement)("p", null, t("Omni shows an 8-character code. Type it on your phone instead of scanning.")),
-        (0, import_react.createElement)("label", { className: "oc-field" }, (0, import_react.createElement)("span", null, t("Phone number with country code")), (0, import_react.createElement)("input", { value: phone, inputMode: "tel", placeholder: "+55 11 91234-5678", onChange: (event) => setPhone(event.target.value), autoFocus: true })),
-        (0, import_react.createElement)("button", { type: "button", className: "oc-primary", disabled: phone.replace(/\D/g, "").length < 8, onClick: () => setCode("K7QX-4M2P") }, t("Get code"))
-      ) : (0, import_react.createElement)(
-        import_react.Fragment,
+        (0, import_react2.createElement)("p", null, t("Omni shows an 8-character code. Type it on your phone instead of scanning.")),
+        (0, import_react2.createElement)("label", { className: "oc-field" }, (0, import_react2.createElement)("span", null, t("Phone number with country code")), (0, import_react2.createElement)("input", { value: phone, inputMode: "tel", placeholder: "+55 11 91234-5678", onChange: (event) => setPhone(event.target.value), autoFocus: true })),
+        (0, import_react2.createElement)("button", { type: "button", className: "oc-primary", disabled: phone.replace(/\D/g, "").length < 8, onClick: () => setCode("K7QX-4M2P") }, t("Get code"))
+      ) : (0, import_react2.createElement)(
+        import_react2.Fragment,
         null,
-        (0, import_react.createElement)(
+        (0, import_react2.createElement)(
           "ol",
           { className: "oc-howto" },
-          (0, import_react.createElement)("li", null, t("On your phone, open {app} → Linked devices → Link a device", { app: info.label })),
-          (0, import_react.createElement)("li", null, t("Tap “Link with phone number instead”")),
-          (0, import_react.createElement)("li", null, t("Type this code"))
+          (0, import_react2.createElement)("li", null, t("On your phone, open {app} → Linked devices → Link a device", { app: info.label })),
+          (0, import_react2.createElement)("li", null, t("Tap “Link with phone number instead”")),
+          (0, import_react2.createElement)("li", null, t("Type this code"))
         ),
-        (0, import_react.createElement)("div", { className: "oc-code", "aria-label": t("Pairing code") }, code.split("").map((char, index) => (0, import_react.createElement)("span", { key: index, "data-dash": char === "-" || void 0 }, char))),
-        (0, import_react.createElement)("span", { className: "oc-qr-wait" }, (0, import_react.createElement)("span", { className: "oc-spinner", "aria-hidden": true }), t("Waiting for your phone… the code works for {n} s", { n: left })),
-        (0, import_react.createElement)("button", { type: "button", className: "oc-link", onClick: onDone }, t("Preview: pretend I typed it"))
+        (0, import_react2.createElement)("div", { className: "oc-code", "aria-label": t("Pairing code") }, code.split("").map((char, index) => (0, import_react2.createElement)("span", { key: index, "data-dash": char === "-" || void 0 }, char))),
+        (0, import_react2.createElement)("span", { className: "oc-qr-wait" }, (0, import_react2.createElement)("span", { className: "oc-spinner", "aria-hidden": true }), t("Waiting for your phone… the code works for {n} s", { n: left })),
+        (0, import_react2.createElement)("button", { type: "button", className: "oc-link", onClick: onDone }, t("Preview: pretend I typed it"))
       ),
-      (0, import_react.createElement)("button", { type: "button", className: "oc-link", onClick: () => {
+      (0, import_react2.createElement)("button", { type: "button", className: "oc-link", onClick: () => {
         setByPhone(false);
         setCode(null);
       } }, t("Scan a QR code instead"))
     );
   }
-  return (0, import_react.createElement)(
-    import_react.Fragment,
+  return (0, import_react2.createElement)(
+    import_react2.Fragment,
     null,
-    (0, import_react.createElement)("h1", null, t("Scan with your phone")),
-    (0, import_react.createElement)(
+    (0, import_react2.createElement)("h1", null, t("Scan with your phone")),
+    (0, import_react2.createElement)(
       "ol",
       { className: "oc-howto" },
-      (0, import_react.createElement)("li", null, t("Open {app} on your phone", { app: info.label })),
-      (0, import_react.createElement)("li", null, t("Tap Settings, then Linked devices")),
-      (0, import_react.createElement)("li", null, t("Tap Link a device and point the camera here"))
+      (0, import_react2.createElement)("li", null, t("Open {app} on your phone", { app: info.label })),
+      (0, import_react2.createElement)("li", null, t("Tap Settings, then Linked devices")),
+      (0, import_react2.createElement)("li", null, t("Tap Link a device and point the camera here"))
     ),
-    (0, import_react.createElement)(
+    (0, import_react2.createElement)(
       "div",
       { className: "oc-qr" },
-      (0, import_react.createElement)("span", { className: "oc-qr-code" }, (0, import_react.createElement)(SampleQr, { seed: Math.floor(Date.now() / 6e4) }), (0, import_react.createElement)("span", { className: "oc-qr-logo" }, (0, import_react.createElement)(Tile, { type: "whatsapp-baileys", size: 34 }))),
-      (0, import_react.createElement)("span", { className: "oc-qr-wait" }, (0, import_react.createElement)("span", { className: "oc-spinner", "aria-hidden": true }), t("Waiting for your phone · new code in {n} s", { n: left }))
+      (0, import_react2.createElement)("span", { className: "oc-qr-code" }, (0, import_react2.createElement)(SampleQr, { seed: Math.floor(Date.now() / 6e4) }), (0, import_react2.createElement)("span", { className: "oc-qr-logo" }, (0, import_react2.createElement)(Tile, { type: "whatsapp-baileys", size: 34 }))),
+      (0, import_react2.createElement)("span", { className: "oc-qr-wait" }, (0, import_react2.createElement)("span", { className: "oc-spinner", "aria-hidden": true }), t("Waiting for your phone · new code in {n} s", { n: left }))
     ),
-    (0, import_react.createElement)(
+    (0, import_react2.createElement)(
       "span",
       { className: "oc-alt" },
-      (0, import_react.createElement)("button", { type: "button", className: "oc-link", onClick: () => setByPhone(true) }, t("Use a phone number instead")),
-      (0, import_react.createElement)("button", { type: "button", className: "oc-link", onClick: onDone }, t("Preview: pretend I scanned it"))
+      (0, import_react2.createElement)("button", { type: "button", className: "oc-link", onClick: () => setByPhone(true) }, t("Use a phone number instead")),
+      (0, import_react2.createElement)("button", { type: "button", className: "oc-link", onClick: onDone }, t("Preview: pretend I scanned it"))
     )
   );
 }
@@ -2501,31 +2594,31 @@ function SampleQr({ seed = 1 }) {
   for (let y = 0; y < N; y += 1) for (let x = 0; x < N; x += 1) {
     state = state * 1103515245 + 12345 >>> 0;
     if (finder(x, y) || logo(x, y) || (x === 7 || y === 7) && (x < 8 && y < 8 || x > N - 9 && y < 8 || x < 8 && y > N - 9)) continue;
-    if ((state >>> 16) % 100 < 48) cells.push((0, import_react.createElement)("rect", { key: `${x}-${y}`, x, y, width: 1, height: 1, rx: 0.3 }));
+    if ((state >>> 16) % 100 < 48) cells.push((0, import_react2.createElement)("rect", { key: `${x}-${y}`, x, y, width: 1, height: 1, rx: 0.3 }));
   }
-  const eyes = [[0, 0], [N - 7, 0], [0, N - 7]].map(([x, y]) => (0, import_react.createElement)(
+  const eyes = [[0, 0], [N - 7, 0], [0, N - 7]].map(([x, y]) => (0, import_react2.createElement)(
     "g",
     { key: `${x}-${y}` },
-    (0, import_react.createElement)("rect", { x: x + 0.5, y: y + 0.5, width: 6, height: 6, rx: 1.6, fill: "none", stroke: "currentColor", strokeWidth: 1 }),
-    (0, import_react.createElement)("rect", { x: x + 2, y: y + 2, width: 3, height: 3, rx: 0.9 })
+    (0, import_react2.createElement)("rect", { x: x + 0.5, y: y + 0.5, width: 6, height: 6, rx: 1.6, fill: "none", stroke: "currentColor", strokeWidth: 1 }),
+    (0, import_react2.createElement)("rect", { x: x + 2, y: y + 2, width: 3, height: 3, rx: 0.9 })
   ));
-  return (0, import_react.createElement)("svg", { viewBox: `-1 -1 ${N + 2} ${N + 2}`, width: 196, height: 196, "aria-hidden": true }, (0, import_react.createElement)("g", { fill: "currentColor" }, cells, eyes));
+  return (0, import_react2.createElement)("svg", { viewBox: `-1 -1 ${N + 2} ${N + 2}`, width: 196, height: 196, "aria-hidden": true }, (0, import_react2.createElement)("g", { fill: "currentColor" }, cells, eyes));
 }
 var TONES = "[data-tone=ok]{--oc-tone:#16a34a}[data-tone=busy]{--oc-tone:#0ea5e9}[data-tone=warn]{--oc-tone:#f59e0b}[data-tone=off]{--oc-tone:#94a3b8}";
 function ChannelsFooter({ wide, actions }) {
   const state = useOmni();
-  (0, import_react.useEffect)(() => {
+  (0, import_react2.useEffect)(() => {
     startLive(call);
   }, []);
   if (!wide) return null;
   const summary = healthSummary(state);
   const label = summary.attention > 0 ? t("{n} channel needs attention", { n: summary.attention }) : t("Channels and their health");
-  return (0, import_react.createElement)("span", { className: "bt-connect-wrap" }, (0, import_react.createElement)(
+  return (0, import_react2.createElement)("span", { className: "bt-connect-wrap" }, (0, import_react2.createElement)(
     "button",
     { type: "button", className: "bt-connect bt-connect-foot bt-channels-foot", title: label, "aria-label": `${t("Channels")}, ${label}`, onClick: () => actions.selectPanel(CHANNELS_PANEL) },
-    (0, import_react.createElement)("span", { className: "bt-channels-tiles", "aria-hidden": true }, state.channels.slice(0, 4).map((channel) => (0, import_react.createElement)(Tile, { key: channel.id, type: channel.type, size: 18 }))),
+    (0, import_react2.createElement)("span", { className: "bt-channels-tiles", "aria-hidden": true }, state.channels.slice(0, 4).map((channel) => (0, import_react2.createElement)(Tile, { key: channel.id, type: channel.type, size: 18 }))),
     t("Channels"),
-    summary.attention > 0 ? (0, import_react.createElement)("span", { className: "oc-warn-dot", "aria-hidden": true }) : (0, import_react.createElement)("span", { className: "bt-channels-count" }, `${summary.connected}/${summary.total}`)
+    summary.attention > 0 ? (0, import_react2.createElement)("span", { className: "oc-warn-dot", "aria-hidden": true }) : (0, import_react2.createElement)("span", { className: "bt-channels-count" }, `${summary.connected}/${summary.total}`)
   ));
 }
 var CHANNELS_CSS = `
@@ -2702,7 +2795,7 @@ body[data-ds-dark-theme] .oc-ava{background:hsl(var(--oc-hue) 30% 26%);color:hsl
 `;
 
 // src/client/omni-peek.js
-var import_react2 = require("react");
+var import_react3 = require("react");
 var PREVIEW = 4;
 var HUES2 = [168, 200, 222, 262, 290, 330, 18, 38, 140];
 var hueOf2 = (name) => {
@@ -2712,19 +2805,19 @@ var hueOf2 = (name) => {
 };
 var initialsOf = (name) => String(name ?? "?").replace(/[^\p{L}\p{N} ]/gu, "").trim().split(/\s+/).slice(0, 2).map((word) => word[0] ?? "").join("").toUpperCase() || "?";
 function Avatar({ name, url, size = 28 }) {
-  return (0, import_react2.createElement)(
+  return (0, import_react3.createElement)(
     "span",
     { className: "op-ava", style: { width: size, height: size, "--op-hue": hueOf2(name), fontSize: Math.round(size * 0.38) } },
     initialsOf(name),
-    url ? (0, import_react2.createElement)("img", { src: url, alt: "", loading: "lazy", referrerPolicy: "no-referrer", onError: (event) => {
+    url ? (0, import_react3.createElement)("img", { src: url, alt: "", loading: "lazy", referrerPolicy: "no-referrer", onError: (event) => {
       event.currentTarget.remove();
     } }) : null
   );
 }
 var still = () => typeof window !== "undefined" && (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches || document.body?.dataset.btMotion === "quiet");
 function useCountUp(to) {
-  const [shown, setShown] = (0, import_react2.useState)(still() ? to : 0);
-  (0, import_react2.useEffect)(() => {
+  const [shown, setShown] = (0, import_react3.useState)(still() ? to : 0);
+  (0, import_react3.useEffect)(() => {
     if (still() || !Number.isFinite(to)) {
       setShown(to);
       return void 0;
@@ -2760,7 +2853,7 @@ var ICONS = {
   write: "M13.5 3.5l3 3L7 16H4v-3z",
   remove: "M5 6h10M8 6V4h4v2M6.5 6l.7 10h5.6l.7-10"
 };
-var Icon = ({ kind }) => (0, import_react2.createElement)("svg", { width: 16, height: 16, viewBox: "0 0 20 20", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true }, (0, import_react2.createElement)("path", { d: ICONS[kind] ?? ICONS.records }));
+var Icon = ({ kind }) => (0, import_react3.createElement)("svg", { width: 16, height: 16, viewBox: "0 0 20 20", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true }, (0, import_react3.createElement)("path", { d: ICONS[kind] ?? ICONS.records }));
 var listOf = (data) => Array.isArray(data) ? data : Array.isArray(data?.items) ? data.items : null;
 function kindOf(items) {
   const item = items.find((entry) => entry && typeof entry === "object") ?? {};
@@ -2772,22 +2865,22 @@ function kindOf(items) {
   if ("displayName" in item || "primaryPhone" in item) return "people";
   return "records";
 }
-var Row = ({ index, children, className = "" }) => (0, import_react2.createElement)("div", { className: `op-row ${className}`, style: { "--i": index } }, children);
+var Row = ({ index, children, className = "" }) => (0, import_react3.createElement)("div", { className: `op-row ${className}`, style: { "--i": index } }, children);
 function MessageRows({ items }) {
   return items.map((item, index) => {
     const mine = item.isFromMe === true || item.from === "you";
     const name = mine ? t("You") : item.senderDisplayName ?? item.from ?? item.senderName ?? t("Someone");
     const text = item.textContent ?? item.text ?? item.transcription ?? (item.hasMedia ? `[${item.messageType ?? "media"}]` : "");
-    return (0, import_react2.createElement)(
+    return (0, import_react3.createElement)(
       Row,
       { key: item.id ?? index, index, className: mine ? "op-msg op-msg-mine" : "op-msg" },
-      mine ? null : (0, import_react2.createElement)(Avatar, { name, size: 26 }),
-      (0, import_react2.createElement)(
+      mine ? null : (0, import_react3.createElement)(Avatar, { name, size: 26 }),
+      (0, import_react3.createElement)(
         "div",
         { className: "op-bubble" },
-        mine ? null : (0, import_react2.createElement)("span", { className: "op-bubble-who" }, name),
-        (0, import_react2.createElement)("span", { className: "op-bubble-text" }, String(text || "…").slice(0, 220)),
-        (0, import_react2.createElement)("span", { className: "op-bubble-at" }, when(item.platformTimestamp ?? item.at ?? item.createdAt))
+        mine ? null : (0, import_react3.createElement)("span", { className: "op-bubble-who" }, name),
+        (0, import_react3.createElement)("span", { className: "op-bubble-text" }, String(text || "…").slice(0, 220)),
+        (0, import_react3.createElement)("span", { className: "op-bubble-at" }, when(item.platformTimestamp ?? item.at ?? item.createdAt))
       )
     );
   });
@@ -2800,104 +2893,104 @@ var kindTag = (item) => {
 function ChatRows({ items }) {
   return items.map((item, index) => {
     const unread = item.unread ?? item.unreadCount ?? 0;
-    return (0, import_react2.createElement)(
+    return (0, import_react3.createElement)(
       Row,
       { key: item.id ?? index, index, className: "op-chat" },
-      (0, import_react2.createElement)(Avatar, { name: item.name, url: item.avatarUrl, size: 30 }),
-      (0, import_react2.createElement)(
+      (0, import_react3.createElement)(Avatar, { name: item.name, url: item.avatarUrl, size: 30 }),
+      (0, import_react3.createElement)(
         "div",
         { className: "op-chat-body" },
-        (0, import_react2.createElement)("span", { className: "op-chat-name" }, (0, import_react2.createElement)("span", { className: "op-chat-name-text" }, item.name ?? t("Chat")), kindTag(item) ? (0, import_react2.createElement)("span", { className: "op-tag" }, t(kindTag(item))) : null),
-        (0, import_react2.createElement)("span", { className: "op-chat-preview" }, String(item.preview ?? item.lastMessagePreview ?? "").slice(0, 120))
+        (0, import_react3.createElement)("span", { className: "op-chat-name" }, (0, import_react3.createElement)("span", { className: "op-chat-name-text" }, item.name ?? t("Chat")), kindTag(item) ? (0, import_react3.createElement)("span", { className: "op-tag" }, t(kindTag(item))) : null),
+        (0, import_react3.createElement)("span", { className: "op-chat-preview" }, String(item.preview ?? item.lastMessagePreview ?? "").slice(0, 120))
       ),
-      (0, import_react2.createElement)(
+      (0, import_react3.createElement)(
         "div",
         { className: "op-chat-side" },
-        (0, import_react2.createElement)("span", { className: "op-chat-at" }, when(item.lastMessageAt)),
-        unread > 0 ? (0, import_react2.createElement)("span", { className: "op-unread" }, unread > 99 ? "99+" : unread) : null
+        (0, import_react3.createElement)("span", { className: "op-chat-at" }, when(item.lastMessageAt)),
+        unread > 0 ? (0, import_react3.createElement)("span", { className: "op-unread" }, unread > 99 ? "99+" : unread) : null
       )
     );
   });
 }
 function ChannelTiles({ items }) {
-  return (0, import_react2.createElement)("div", { className: "op-tiles" }, items.map((item, index) => {
+  return (0, import_react3.createElement)("div", { className: "op-tiles" }, items.map((item, index) => {
     const state = item.state ?? (item.isActive === false ? "paused" : "unknown");
-    return (0, import_react2.createElement)(
+    return (0, import_react3.createElement)(
       "div",
       { key: item.id ?? index, className: "op-tile", style: { "--i": index }, "data-state": state },
-      (0, import_react2.createElement)(Tile, { type: item.channel, size: 30 }),
-      (0, import_react2.createElement)("span", { className: "op-tile-name" }, item.name),
-      (0, import_react2.createElement)("span", { className: "op-tile-state" }, (0, import_react2.createElement)("i", { "aria-hidden": true }), item.profile ?? item.profileName ?? state)
+      (0, import_react3.createElement)(Tile, { type: item.channel, size: 30 }),
+      (0, import_react3.createElement)("span", { className: "op-tile-name" }, item.name),
+      (0, import_react3.createElement)("span", { className: "op-tile-state" }, (0, import_react3.createElement)("i", { "aria-hidden": true }), item.profile ?? item.profileName ?? state)
     );
   }));
 }
 function EventLine({ items }) {
-  return (0, import_react2.createElement)("div", { className: "op-events" }, items.map((item, index) => (0, import_react2.createElement)(
+  return (0, import_react3.createElement)("div", { className: "op-events" }, items.map((item, index) => (0, import_react3.createElement)(
     Row,
     { key: item.id ?? index, index, className: "op-event" },
-    (0, import_react2.createElement)("span", { className: "op-event-dot", "aria-hidden": true }),
-    (0, import_react2.createElement)("span", { className: "op-event-type" }, item.eventType),
-    (0, import_react2.createElement)("span", { className: "op-event-text" }, String(item.textContent ?? item.chatName ?? item.source ?? "").slice(0, 100)),
-    (0, import_react2.createElement)("span", { className: "op-event-at" }, when(item.receivedAt ?? item.createdAt ?? item.timestamp))
+    (0, import_react3.createElement)("span", { className: "op-event-dot", "aria-hidden": true }),
+    (0, import_react3.createElement)("span", { className: "op-event-type" }, item.eventType),
+    (0, import_react3.createElement)("span", { className: "op-event-text" }, String(item.textContent ?? item.chatName ?? item.source ?? "").slice(0, 100)),
+    (0, import_react3.createElement)("span", { className: "op-event-at" }, when(item.receivedAt ?? item.createdAt ?? item.timestamp))
   )));
 }
 function NamedRows({ items, kind }) {
-  return items.map((item, index) => (0, import_react2.createElement)(
+  return items.map((item, index) => (0, import_react3.createElement)(
     Row,
     { key: item.id ?? index, index, className: "op-named" },
-    kind === "people" ? (0, import_react2.createElement)(Avatar, { name: item.displayName ?? item.name, size: 26 }) : (0, import_react2.createElement)("span", { className: "op-named-icon" }, (0, import_react2.createElement)(Icon, { kind })),
-    (0, import_react2.createElement)("span", { className: "op-named-name" }, String(item.displayName ?? item.name ?? item.title ?? item.id ?? "—").slice(0, 80)),
-    (0, import_react2.createElement)("span", { className: "op-named-meta" }, String(item.status ?? item.state ?? item.type ?? item.triggerType ?? item.channel ?? "").slice(0, 40))
+    kind === "people" ? (0, import_react3.createElement)(Avatar, { name: item.displayName ?? item.name, size: 26 }) : (0, import_react3.createElement)("span", { className: "op-named-icon" }, (0, import_react3.createElement)(Icon, { kind })),
+    (0, import_react3.createElement)("span", { className: "op-named-name" }, String(item.displayName ?? item.name ?? item.title ?? item.id ?? "—").slice(0, 80)),
+    (0, import_react3.createElement)("span", { className: "op-named-meta" }, String(item.status ?? item.state ?? item.type ?? item.triggerType ?? item.channel ?? "").slice(0, 40))
   ));
 }
 function RecordFields({ record }) {
   const pairs = Object.entries(record).filter(([, value]) => value !== null && value !== void 0 && value !== "" && typeof value !== "object").slice(0, 8);
-  return (0, import_react2.createElement)("dl", { className: "op-fields" }, pairs.map(([key, value], index) => (0, import_react2.createElement)(
-    import_react2.Fragment,
+  return (0, import_react3.createElement)("dl", { className: "op-fields" }, pairs.map(([key, value], index) => (0, import_react3.createElement)(
+    import_react3.Fragment,
     { key },
-    (0, import_react2.createElement)("dt", { style: { "--i": index } }, key),
-    (0, import_react2.createElement)("dd", { style: { "--i": index } }, String(value).slice(0, 120))
+    (0, import_react3.createElement)("dt", { style: { "--i": index } }, key),
+    (0, import_react3.createElement)("dd", { style: { "--i": index } }, String(value).slice(0, 120))
   )));
 }
 function Seen({ data, kind: forced }) {
-  const [all, setAll] = (0, import_react2.useState)(false);
+  const [all, setAll] = (0, import_react3.useState)(false);
   const list = listOf(data);
   if (list === null) {
     const record = data?.data ?? data;
-    return record && typeof record === "object" ? (0, import_react2.createElement)(RecordFields, { record }) : null;
+    return record && typeof record === "object" ? (0, import_react3.createElement)(RecordFields, { record }) : null;
   }
-  if (list.length === 0) return (0, import_react2.createElement)("p", { className: "op-empty" }, t("Nothing came back."));
+  if (list.length === 0) return (0, import_react3.createElement)("p", { className: "op-empty" }, t("Nothing came back."));
   const kind = forced ?? kindOf(list);
   const shown = list.slice(0, PREVIEW);
   const rest = list.length - shown.length;
-  const view = kind === "messages" ? (0, import_react2.createElement)(MessageRows, { items: shown }) : kind === "chats" ? (0, import_react2.createElement)(ChatRows, { items: shown }) : kind === "channels" ? (0, import_react2.createElement)(ChannelTiles, { items: shown }) : kind === "events" ? (0, import_react2.createElement)(EventLine, { items: shown }) : (0, import_react2.createElement)(NamedRows, { items: shown, kind });
-  return (0, import_react2.createElement)(
-    import_react2.Fragment,
+  const view = kind === "messages" ? (0, import_react3.createElement)(MessageRows, { items: shown }) : kind === "chats" ? (0, import_react3.createElement)(ChatRows, { items: shown }) : kind === "channels" ? (0, import_react3.createElement)(ChannelTiles, { items: shown }) : kind === "events" ? (0, import_react3.createElement)(EventLine, { items: shown }) : (0, import_react3.createElement)(NamedRows, { items: shown, kind });
+  return (0, import_react3.createElement)(
+    import_react3.Fragment,
     null,
-    (0, import_react2.createElement)("div", { className: "op-seen", "data-kind": kind }, view),
-    rest > 0 || kind === "records" ? (0, import_react2.createElement)(
+    (0, import_react3.createElement)("div", { className: "op-seen", "data-kind": kind }, view),
+    rest > 0 || kind === "records" ? (0, import_react3.createElement)(
       "div",
       { className: "op-more" },
-      (0, import_react2.createElement)("button", { type: "button", className: "op-more-btn", onClick: () => setAll((value) => !value) }, all ? t("Hide") : t("Show all {count}", { count: list.length }))
+      (0, import_react3.createElement)("button", { type: "button", className: "op-more-btn", onClick: () => setAll((value) => !value) }, all ? t("Hide") : t("Show all {count}", { count: list.length }))
     ) : null,
-    all ? (0, import_react2.createElement)("div", { className: "op-all" }, (0, import_react2.createElement)(DataView, { value: data })) : null
+    all ? (0, import_react3.createElement)("div", { className: "op-all" }, (0, import_react3.createElement)(DataView, { value: data })) : null
   );
 }
 function PeekCard({ kind = "records", verb, title, count, unit, chips = [], state, failure, children, accent = false }) {
   const shownCount = useCountUp(Number.isFinite(count) ? count : 0);
-  return (0, import_react2.createElement)(
+  return (0, import_react3.createElement)(
     "section",
     { className: "op-card", "data-state": state, "data-accent": accent || void 0 },
-    (0, import_react2.createElement)(
+    (0, import_react3.createElement)(
       "header",
       { className: "op-head" },
-      (0, import_react2.createElement)("span", { className: "op-icon", "data-kind": kind }, (0, import_react2.createElement)(Icon, { kind })),
-      (0, import_react2.createElement)("span", { className: "op-verb" }, verb),
-      (0, import_react2.createElement)("span", { className: "op-title" }, title),
-      state === "working" ? (0, import_react2.createElement)("span", { className: "op-working" }, t("looking…")) : state === "failed" ? (0, import_react2.createElement)("span", { className: "op-failed" }, t("failed")) : Number.isFinite(count) ? (0, import_react2.createElement)("span", { className: "op-count" }, (0, import_react2.createElement)("b", null, shownCount), " ", unit ?? (count === 1 ? t("item") : t("items"))) : null
+      (0, import_react3.createElement)("span", { className: "op-icon", "data-kind": kind }, (0, import_react3.createElement)(Icon, { kind })),
+      (0, import_react3.createElement)("span", { className: "op-verb" }, verb),
+      (0, import_react3.createElement)("span", { className: "op-title" }, title),
+      state === "working" ? (0, import_react3.createElement)("span", { className: "op-working" }, t("looking…")) : state === "failed" ? (0, import_react3.createElement)("span", { className: "op-failed" }, t("failed")) : Number.isFinite(count) ? (0, import_react3.createElement)("span", { className: "op-count" }, (0, import_react3.createElement)("b", null, shownCount), " ", unit ?? (count === 1 ? t("item") : t("items"))) : null
     ),
-    chips.length > 0 ? (0, import_react2.createElement)("div", { className: "op-chips" }, chips.map(([key, value]) => (0, import_react2.createElement)("span", { key, className: "op-chip" }, (0, import_react2.createElement)("span", null, key), chipText(value)))) : null,
-    state === "working" ? (0, import_react2.createElement)("div", { className: "op-skeleton", "aria-hidden": true }, [0, 1, 2].map((index) => (0, import_react2.createElement)("span", { key: index, style: { "--i": index } }))) : state === "failed" ? (0, import_react2.createElement)("p", { className: "op-problem", role: "alert" }, failure) : children ? (0, import_react2.createElement)("div", { className: "op-body" }, children) : null
+    chips.length > 0 ? (0, import_react3.createElement)("div", { className: "op-chips" }, chips.map(([key, value]) => (0, import_react3.createElement)("span", { key, className: "op-chip" }, (0, import_react3.createElement)("span", null, key), chipText(value)))) : null,
+    state === "working" ? (0, import_react3.createElement)("div", { className: "op-skeleton", "aria-hidden": true }, [0, 1, 2].map((index) => (0, import_react3.createElement)("span", { key: index, style: { "--i": index } }))) : state === "failed" ? (0, import_react3.createElement)("p", { className: "op-problem", role: "alert" }, failure) : children ? (0, import_react3.createElement)("div", { className: "op-body" }, children) : null
   );
 }
 var OMNI_PEEK_CSS = `
@@ -2981,10 +3074,10 @@ body[data-bt-motion=quiet] :is(.op-card,.op-row,.op-tile,.op-fields dt,.op-field
 `;
 
 // src/client/omni-live.js
-var import_react3 = require("react");
+var import_react4 = require("react");
 function useOmniGet(path, every = 0) {
-  const [state, setState] = (0, import_react3.useState)({ loading: true, data: null, error: null });
-  (0, import_react3.useEffect)(() => {
+  const [state, setState] = (0, import_react4.useState)({ loading: true, data: null, error: null });
+  (0, import_react4.useEffect)(() => {
     if (!path) return void 0;
     let live = true;
     let timer;
@@ -3020,31 +3113,31 @@ var STATE = {
   attention: { tone: "bad", label: "Not connected" }
 };
 var phoneOf = (owner) => typeof owner === "string" ? owner.replace(/[:@].*$/, "").replace(/^(\d{6,})$/, "+$1") : "";
-var Badge = ({ text, tone = "muted" }) => (0, import_react3.createElement)("span", { className: "ou-badge", "data-tone": tone }, text);
-var Problem = ({ text }) => (0, import_react3.createElement)("p", { className: "ou-problem", role: "alert" }, text);
+var Badge = ({ text, tone = "muted" }) => (0, import_react4.createElement)("span", { className: "ou-badge", "data-tone": tone }, text);
+var Problem = ({ text }) => (0, import_react4.createElement)("p", { className: "ou-problem", role: "alert" }, text);
 function LiveChannel({ id }) {
   const instance = useOmniGet(id ? `/instances/${encodeURIComponent(id)}` : null, 3e4);
   const status = useOmniGet(id ? `/instances/${encodeURIComponent(id)}/status` : null, 8e3);
   const record = instance.data?.data;
   const live = status.data?.data;
-  if (instance.error) return (0, import_react3.createElement)(Problem, { text: instance.error });
-  if (!record) return (0, import_react3.createElement)("div", { className: "ou-card ou-loading" }, t("Loading channel…"));
+  if (instance.error) return (0, import_react4.createElement)(Problem, { text: instance.error });
+  if (!record) return (0, import_react4.createElement)("div", { className: "ou-card ou-loading" }, t("Loading channel…"));
   const state = stateOf(record, live);
-  return (0, import_react3.createElement)(
+  return (0, import_react4.createElement)(
     "div",
     { className: "ou-card ou-channel" },
-    (0, import_react3.createElement)(Tile, { type: record.channel, size: 38 }),
-    (0, import_react3.createElement)(
+    (0, import_react4.createElement)(Tile, { type: record.channel, size: 38 }),
+    (0, import_react4.createElement)(
       "div",
       { className: "ou-channel-body" },
-      (0, import_react3.createElement)("strong", null, record.name),
-      (0, import_react3.createElement)("span", { className: "ou-muted" }, [typeOf(record.channel).label ?? record.channel, live?.profileName ?? record.profileName, phoneOf(live?.ownerIdentifier ?? record.ownerIdentifier)].filter(Boolean).join(" · "))
+      (0, import_react4.createElement)("strong", null, record.name),
+      (0, import_react4.createElement)("span", { className: "ou-muted" }, [typeOf(record.channel).label ?? record.channel, live?.profileName ?? record.profileName, phoneOf(live?.ownerIdentifier ?? record.ownerIdentifier)].filter(Boolean).join(" · "))
     ),
-    (0, import_react3.createElement)(Badge, { text: t(STATE[state].label), tone: STATE[state].tone })
+    (0, import_react4.createElement)(Badge, { text: t(STATE[state].label), tone: STATE[state].tone })
   );
 }
 function QrSvg({ text, size = 208 }) {
-  const path = (0, import_react3.useMemo)(() => {
+  const path = (0, import_react4.useMemo)(() => {
     const code = qrcode_default(0, "L");
     code.addData(text);
     code.make();
@@ -3053,11 +3146,11 @@ function QrSvg({ text, size = 208 }) {
     for (let row = 0; row < count; row += 1) for (let col = 0; col < count; col += 1) if (code.isDark(row, col)) d += `M${col} ${row}h1v1h-1z`;
     return { d, count };
   }, [text]);
-  return (0, import_react3.createElement)(
+  return (0, import_react4.createElement)(
     "svg",
     { className: "ou-qr-svg", width: size, height: size, viewBox: `-2 -2 ${path.count + 4} ${path.count + 4}`, role: "img", "aria-label": t("QR code"), shapeRendering: "crispEdges" },
-    (0, import_react3.createElement)("rect", { x: -2, y: -2, width: path.count + 4, height: path.count + 4, fill: "#fff" }),
-    (0, import_react3.createElement)("path", { d: path.d, fill: "#000" })
+    (0, import_react4.createElement)("rect", { x: -2, y: -2, width: path.count + 4, height: path.count + 4, fill: "#fff" }),
+    (0, import_react4.createElement)("path", { d: path.d, fill: "#000" })
   );
 }
 function LiveQr({ channelId }) {
@@ -3068,24 +3161,24 @@ function LiveQr({ channelId }) {
   const code = qr.data?.data?.qr;
   if (connected) {
     const live = status.data.data;
-    return (0, import_react3.createElement)(
+    return (0, import_react4.createElement)(
       "div",
       { className: "ou-card ou-qr ou-qr-done" },
-      (0, import_react3.createElement)("span", { className: "ou-qr-check", "aria-hidden": true }, "✓"),
-      (0, import_react3.createElement)("strong", null, t("Connected")),
-      (0, import_react3.createElement)("span", { className: "ou-muted" }, [live.profileName, phoneOf(live.ownerIdentifier)].filter(Boolean).join(" · "))
+      (0, import_react4.createElement)("span", { className: "ou-qr-check", "aria-hidden": true }, "✓"),
+      (0, import_react4.createElement)("strong", null, t("Connected")),
+      (0, import_react4.createElement)("span", { className: "ou-muted" }, [live.profileName, phoneOf(live.ownerIdentifier)].filter(Boolean).join(" · "))
     );
   }
-  return (0, import_react3.createElement)(
+  return (0, import_react4.createElement)(
     "div",
     { className: "ou-card ou-qr" },
-    code ? (0, import_react3.createElement)(QrSvg, { text: code }) : (0, import_react3.createElement)("div", { className: "ou-qr-wait" }, qr.error ? (0, import_react3.createElement)(Problem, { text: qr.error }) : t("Waiting for a code…")),
-    (0, import_react3.createElement)(
+    code ? (0, import_react4.createElement)(QrSvg, { text: code }) : (0, import_react4.createElement)("div", { className: "ou-qr-wait" }, qr.error ? (0, import_react4.createElement)(Problem, { text: qr.error }) : t("Waiting for a code…")),
+    (0, import_react4.createElement)(
       "div",
       { className: "ou-qr-help" },
-      (0, import_react3.createElement)("strong", null, t("Scan with WhatsApp")),
-      (0, import_react3.createElement)("span", { className: "ou-muted" }, t("On the phone: Settings → Linked devices → Link a device.")),
-      (0, import_react3.createElement)("span", { className: "ou-live" }, (0, import_react3.createElement)("span", { className: "ou-live-dot", "aria-hidden": true }), qr.data?.data?.message || t("Live · refreshes by itself"))
+      (0, import_react4.createElement)("strong", null, t("Scan with WhatsApp")),
+      (0, import_react4.createElement)("span", { className: "ou-muted" }, t("On the phone: Settings → Linked devices → Link a device.")),
+      (0, import_react4.createElement)("span", { className: "ou-live" }, (0, import_react4.createElement)("span", { className: "ou-live-dot", "aria-hidden": true }), qr.data?.data?.message || t("Live · refreshes by itself"))
     )
   );
 }
@@ -3093,24 +3186,24 @@ function LiveChat({ id, limit = 8 }) {
   const chat = useOmniGet(id ? `/chats/${encodeURIComponent(id)}` : null, 6e4);
   const messages = useOmniGet(id ? `/chats/${encodeURIComponent(id)}/messages?limit=${Math.min(30, Math.max(1, limit))}` : null, 1e4);
   const record = chat.data?.data;
-  if (chat.error) return (0, import_react3.createElement)(Problem, { text: chat.error });
+  if (chat.error) return (0, import_react4.createElement)(Problem, { text: chat.error });
   const items = [...messages.data?.items ?? []].sort((a, b) => (Date.parse(a.platformTimestamp ?? a.createdAt) || 0) - (Date.parse(b.platformTimestamp ?? b.createdAt) || 0));
-  return (0, import_react3.createElement)(
+  return (0, import_react4.createElement)(
     "div",
     { className: "ou-card ou-chat" },
-    (0, import_react3.createElement)(
+    (0, import_react4.createElement)(
       "div",
       { className: "ou-chat-head" },
-      (0, import_react3.createElement)(Tile, { type: record?.channel, size: 26 }),
-      (0, import_react3.createElement)("strong", null, record?.name ?? t("Chat")),
-      record?.isGroup ? (0, import_react3.createElement)(Badge, { text: t("Group") }) : null
+      (0, import_react4.createElement)(Tile, { type: record?.channel, size: 26 }),
+      (0, import_react4.createElement)("strong", null, record?.name ?? t("Chat")),
+      record?.isGroup ? (0, import_react4.createElement)(Badge, { text: t("Group") }) : null
     ),
-    items.length === 0 ? (0, import_react3.createElement)("span", { className: "ou-muted" }, messages.loading ? t("Loading messages…") : t("no messages yet")) : (0, import_react3.createElement)("div", { className: "ou-chat-lines" }, items.map((message) => (0, import_react3.createElement)(
+    items.length === 0 ? (0, import_react4.createElement)("span", { className: "ou-muted" }, messages.loading ? t("Loading messages…") : t("no messages yet")) : (0, import_react4.createElement)("div", { className: "ou-chat-lines" }, items.map((message) => (0, import_react4.createElement)(
       "div",
       { key: message.id, className: "ou-chat-line", "data-me": message.isFromMe ? "" : void 0 },
-      message.isFromMe ? null : (0, import_react3.createElement)("span", { className: "ou-chat-who" }, message.senderDisplayName ?? ""),
-      (0, import_react3.createElement)("span", { className: "ou-chat-text" }, message.textContent || message.transcription || (message.hasMedia ? `[${message.messageType ?? "media"}]` : "")),
-      (0, import_react3.createElement)("span", { className: "ou-chat-at" }, relativeShort(Date.parse(message.platformTimestamp ?? message.createdAt) || Date.now()))
+      message.isFromMe ? null : (0, import_react4.createElement)("span", { className: "ou-chat-who" }, message.senderDisplayName ?? ""),
+      (0, import_react4.createElement)("span", { className: "ou-chat-text" }, message.textContent || message.transcription || (message.hasMedia ? `[${message.messageType ?? "media"}]` : "")),
+      (0, import_react4.createElement)("span", { className: "ou-chat-at" }, relativeShort(Date.parse(message.platformTimestamp ?? message.createdAt) || Date.now()))
     )))
   );
 }
@@ -3127,38 +3220,38 @@ var FIRST = ["name", "title", "displayName", "channel", "status", "state", "type
 function DataView({ value }) {
   const list = Array.isArray(value) ? value : Array.isArray(value?.items) ? value.items : null;
   if (list) {
-    if (list.length === 0) return (0, import_react3.createElement)("span", { className: "ou-muted" }, t("Nothing here."));
-    if (!list.every((item) => item && typeof item === "object" && !Array.isArray(item))) return (0, import_react3.createElement)("span", null, list.slice(0, ROWS_MAX).map(cell).join(", "));
+    if (list.length === 0) return (0, import_react4.createElement)("span", { className: "ou-muted" }, t("Nothing here."));
+    if (!list.every((item) => item && typeof item === "object" && !Array.isArray(item))) return (0, import_react4.createElement)("span", null, list.slice(0, ROWS_MAX).map(cell).join(", "));
     const keys = new Set(list.slice(0, 20).flatMap((item) => Object.keys(item).filter((key) => PLAIN(item[key]))));
     const columns = [...FIRST.filter((key) => keys.has(key)), ...[...keys].filter((key) => !FIRST.includes(key))].slice(0, COLUMNS_MAX);
-    return (0, import_react3.createElement)(
-      import_react3.Fragment,
+    return (0, import_react4.createElement)(
+      import_react4.Fragment,
       null,
-      (0, import_react3.createElement)(Table, { columns, rows: list.slice(0, ROWS_MAX).map((item) => columns.map((key) => item[key])) }),
-      list.length > ROWS_MAX || value?.meta?.hasMore ? (0, import_react3.createElement)("span", { className: "ou-muted" }, t("First {count} shown.", { count: Math.min(list.length, ROWS_MAX) })) : null
+      (0, import_react4.createElement)(Table, { columns, rows: list.slice(0, ROWS_MAX).map((item) => columns.map((key) => item[key])) }),
+      list.length > ROWS_MAX || value?.meta?.hasMore ? (0, import_react4.createElement)("span", { className: "ou-muted" }, t("First {count} shown.", { count: Math.min(list.length, ROWS_MAX) })) : null
     );
   }
   const record = value && typeof value === "object" && !Array.isArray(value) ? value.data ?? value : null;
   if (record && typeof record === "object") {
     const pairs = Object.entries(record).filter(([, item]) => item !== null && item !== void 0 && item !== "").slice(0, 24);
-    return (0, import_react3.createElement)(KeyValue, { pairs: pairs.map(([label, item]) => ({ label, value: item })) });
+    return (0, import_react4.createElement)(KeyValue, { pairs: pairs.map(([label, item]) => ({ label, value: item })) });
   }
-  return (0, import_react3.createElement)("span", null, cell(value));
+  return (0, import_react4.createElement)("span", null, cell(value));
 }
 function Table({ columns, rows }) {
-  return (0, import_react3.createElement)(
+  return (0, import_react4.createElement)(
     "div",
     { className: "ou-table-wrap" },
-    (0, import_react3.createElement)(
+    (0, import_react4.createElement)(
       "table",
       { className: "ou-table" },
-      (0, import_react3.createElement)("thead", null, (0, import_react3.createElement)("tr", null, columns.map((column, index) => (0, import_react3.createElement)("th", { key: index }, column)))),
-      (0, import_react3.createElement)("tbody", null, rows.map((row, index) => (0, import_react3.createElement)("tr", { key: index }, columns.map((_, col) => (0, import_react3.createElement)("td", { key: col }, cell(row[col]))))))
+      (0, import_react4.createElement)("thead", null, (0, import_react4.createElement)("tr", null, columns.map((column, index) => (0, import_react4.createElement)("th", { key: index }, column)))),
+      (0, import_react4.createElement)("tbody", null, rows.map((row, index) => (0, import_react4.createElement)("tr", { key: index }, columns.map((_, col) => (0, import_react4.createElement)("td", { key: col }, cell(row[col]))))))
     )
   );
 }
 function KeyValue({ pairs }) {
-  return (0, import_react3.createElement)("dl", { className: "ou-kv" }, pairs.map(({ label, value }, index) => (0, import_react3.createElement)(import_react3.Fragment, { key: index }, (0, import_react3.createElement)("dt", null, label), (0, import_react3.createElement)("dd", null, cell(value)))));
+  return (0, import_react4.createElement)("dl", { className: "ou-kv" }, pairs.map(({ label, value }, index) => (0, import_react4.createElement)(import_react4.Fragment, { key: index }, (0, import_react4.createElement)("dt", null, label), (0, import_react4.createElement)("dd", null, cell(value)))));
 }
 var VERB = { GET: "Read", POST: "Ran", PUT: "Set", PATCH: "Changed", DELETE: "Deleted" };
 var INSTANCE = /^\/instances\/([0-9a-f-]{36})(?:\/(connect|pair|qr|restart|status|disconnect|logout))?$/i;
@@ -3194,14 +3287,14 @@ function OmniCallCard({ method, path, query, result, done }) {
   if (method === "GET" && action !== "qr") {
     const list = listOf(result?.data);
     const kind = kindOfPath(path) ?? (list ? kindOf(list) : "records");
-    return (0, import_react3.createElement)(
+    return (0, import_react4.createElement)(
       PeekCard,
       { kind, verb, title, count: list?.length, chips: chipsOf(query), state, failure },
-      state === "done" ? (0, import_react3.createElement)(Seen, { data: result?.data, kind: list && kind !== "records" ? kind : void 0 }) : null
+      state === "done" ? (0, import_react4.createElement)(Seen, { data: result?.data, kind: list && kind !== "records" ? kind : void 0 }) : null
     );
   }
-  const live = state !== "done" ? null : instance && ["connect", "pair", "qr", "restart"].includes(action) ? (0, import_react3.createElement)(LiveQr, { channelId: instance }) : instance ? (0, import_react3.createElement)(LiveChannel, { id: instance }) : method === "POST" && path === "/instances" && result?.data?.data?.id ? (0, import_react3.createElement)(LiveChannel, { id: result.data.data.id }) : (0, import_react3.createElement)(Seen, { data: result?.data });
-  return (0, import_react3.createElement)(PeekCard, { kind: method === "DELETE" ? "remove" : "write", verb, title, chips: chipsOf(query), state, failure, accent: true }, live);
+  const live = state !== "done" ? null : instance && ["connect", "pair", "qr", "restart"].includes(action) ? (0, import_react4.createElement)(LiveQr, { channelId: instance }) : instance ? (0, import_react4.createElement)(LiveChannel, { id: instance }) : method === "POST" && path === "/instances" && result?.data?.data?.id ? (0, import_react4.createElement)(LiveChannel, { id: result.data.data.id }) : (0, import_react4.createElement)(Seen, { data: result?.data });
+  return (0, import_react4.createElement)(PeekCard, { kind: method === "DELETE" ? "remove" : "write", verb, title, chips: chipsOf(query), state, failure, accent: true }, live);
 }
 var ACTED = { omni_send: "Sent a message", omni_react: "Reacted", omni_media: "Opened a file", omni_delete: "Deleted a message" };
 function OmniToolCard({ tool, arg, content, done }) {
@@ -3215,37 +3308,37 @@ function OmniToolCard({ tool, arg, content, done }) {
   const state = callState(done, failure);
   const items = result?.data?.items ?? [];
   if (tool === "omni_channels") {
-    return (0, import_react3.createElement)(
+    return (0, import_react4.createElement)(
       PeekCard,
       { kind: "channels", verb: t("Read"), title: t("Channels"), count: done ? items.length : void 0, unit: t("channels"), state, failure },
-      state === "done" ? (0, import_react3.createElement)(Seen, { data: items, kind: "channels" }) : null
+      state === "done" ? (0, import_react4.createElement)(Seen, { data: items, kind: "channels" }) : null
     );
   }
   if (tool === "omni_chats") {
     const chips = [["channel", arg("channel")], ["search", arg("search")], ["unread only", arg("unread_only") === "true" || arg("unread_only") === true ? t("yes") : void 0], ["limit", arg("limit")]].filter(([, value]) => value !== void 0 && value !== null && value !== "");
-    return (0, import_react3.createElement)(
+    return (0, import_react4.createElement)(
       PeekCard,
       { kind: "chats", verb: t("Read"), title: t("Chats"), count: done ? items.length : void 0, unit: t("chats"), chips, state, failure },
-      state === "done" ? (0, import_react3.createElement)(Seen, { data: items, kind: "chats" }) : null
+      state === "done" ? (0, import_react4.createElement)(Seen, { data: items, kind: "chats" }) : null
     );
   }
   if (tool === "omni_messages") {
     const chat = result?.data?.chat;
-    return (0, import_react3.createElement)(
+    return (0, import_react4.createElement)(
       PeekCard,
       { kind: "messages", verb: t("Read"), title: chat?.name ?? t("Chat"), count: done ? items.length : void 0, unit: t("messages"), state, failure },
-      state === "done" ? (0, import_react3.createElement)(Seen, { data: items, kind: "messages" }) : null
+      state === "done" ? (0, import_react4.createElement)(Seen, { data: items, kind: "messages" }) : null
     );
   }
   if (tool === "omni_connect") {
-    return (0, import_react3.createElement)(
+    return (0, import_react4.createElement)(
       PeekCard,
       { kind: "channels", verb: t("Ran"), title: t("Connect channel"), state, failure, accent: true },
-      state === "done" && result?.channelId ? (0, import_react3.createElement)(LiveQr, { channelId: result.channelId }) : null
+      state === "done" && result?.channelId ? (0, import_react4.createElement)(LiveQr, { channelId: result.channelId }) : null
     );
   }
   const acted = ACTED[tool];
-  if (acted) return (0, import_react3.createElement)(PeekCard, { kind: "messages", verb: t("Ran"), title: t(acted), state, failure, accent: true });
+  if (acted) return (0, import_react4.createElement)(PeekCard, { kind: "messages", verb: t("Ran"), title: t(acted), state, failure, accent: true });
   return null;
 }
 var OMNI_LIVE_CSS = `
@@ -3300,8 +3393,9 @@ var OMNI_LIVE_CSS = `
 `;
 
 // src/client/omni-connect.js
-var import_react4 = require("react");
+var import_react5 = require("react");
 var DEFAULT_POLL_MS = 2e3;
+var LOCAL_POLL_MS = 1500;
 var PAIRING_EVENT = "omni:pairing";
 async function connectFromApp(url, grant) {
   if (typeof url !== "string" || url === "") return;
@@ -3331,52 +3425,72 @@ function foundDetail(omni2) {
   const where = omni2.source === "cli" ? t("from your Omni CLI") : omni2.source === "cli-server" ? omni2.name ? t("from your Omni CLI as {name}", { name: omni2.name }) : t("from your Omni CLI") : omni2.source === "running" && port ? t("answering on port {port}", { port }) : null;
   return [omni2.version ? `v${omni2.version}` : null, where].filter(Boolean).join(" · ");
 }
-function FoundOmni({ omni: omni2, busy, onUse }) {
-  const action = (label, disabled = false) => (0, import_react4.createElement)("button", { type: "button", className: "oc-primary", disabled: disabled || busy, onClick: disabled ? void 0 : () => onUse(omni2) }, label);
+function FoundOmni({ omni: omni2, busy, onUse, onLocal }) {
+  const [updating, setUpdating] = (0, import_react5.useState)(false);
+  const action = (label, onClick, disabled = false) => (0, import_react5.createElement)("button", { type: "button", className: "oc-primary", disabled: disabled || busy, onClick }, label);
   let note = null;
   let button = null;
+  let below = null;
   if (omni2.local && omni2.reachable === false) note = t("Not answering right now.");
-  else if (omni2.hasKey) button = action(t("Use it"));
-  else if (omni2.pairing === "too-old") {
+  else if (omni2.pairing === "too-old" && !omni2.hasKey) {
     note = t("Omni {version} on this computer is too old to pair. Update it to connect.", { version: omni2.version ?? "" });
-    button = action(t("Update"), true);
+    below = (0, import_react5.createElement)("div", { className: "ox-update" }, (0, import_react5.createElement)("span", { className: "ox-muted" }, t("Update it from a terminal:")), (0, import_react5.createElement)(CopyCommand, { command: "omni update" }));
+  } else if (omni2.hasKey) {
+    button = action(t("Use it"), () => onUse(omni2));
+    if (omni2.pairing === "too-old") {
+      note = t("Omni {version} on this computer is older than this app.", { version: omni2.version ?? "" });
+      below = updating ? (0, import_react5.createElement)(UpdateOffer, { id: omni2.id }) : (0, import_react5.createElement)("button", { type: "button", className: "oc-ghost", onClick: () => setUpdating(true) }, t("Update"));
+    }
   } else if (omni2.pairing === "off") note = t("Sign-in from devices is off on this Omni.");
-  else button = action(t("Connect"));
+  else button = action(t("Connect"), () => onUse(omni2));
+  if (omni2.updateTo) below = (0, import_react5.createElement)("button", { type: "button", className: "oc-ghost", disabled: busy, onClick: () => onLocal({ update: true }) }, t("Update to {version}", { version: omni2.updateTo }));
   const detail = foundDetail(omni2);
-  return (0, import_react4.createElement)(
+  return (0, import_react5.createElement)(
     "li",
     { className: "ox-found-row" },
-    (0, import_react4.createElement)("span", { className: "ox-found-dot", "aria-hidden": true }),
-    (0, import_react4.createElement)(
+    (0, import_react5.createElement)("span", { className: "ox-found-dot", "aria-hidden": true }),
+    (0, import_react5.createElement)(
       "div",
       { className: "ox-found-text" },
-      (0, import_react4.createElement)("strong", null, foundLabel(omni2)),
-      detail ? (0, import_react4.createElement)("span", { className: "ox-muted" }, detail) : null,
-      note ? (0, import_react4.createElement)("span", { className: "ox-muted" }, note) : null
+      (0, import_react5.createElement)("strong", null, foundLabel(omni2)),
+      detail ? (0, import_react5.createElement)("span", { className: "ox-muted" }, detail) : null,
+      note ? (0, import_react5.createElement)("span", { className: "ox-muted" }, note) : null,
+      below
     ),
     button
   );
 }
+function localStep(progress) {
+  if (progress.step === "download-bun") return t("Getting Bun…");
+  if (progress.step === "install") return progress.update ? t("Updating Omni… This takes a minute.") : t("Installing and starting Omni… The first time takes a few minutes.");
+  if (progress.step === "linking") return t("Connecting to it…");
+  return t("Looking for Bun…");
+}
 function ConnectOmni({ onPaired, embedded = false } = {}) {
-  const [address, setAddress] = (0, import_react4.useState)("");
-  const [linkText, setLinkText] = (0, import_react4.useState)("");
-  const [pairing, setPairing] = (0, import_react4.useState)(null);
-  const [found, setFound] = (0, import_react4.useState)([]);
-  const [busy, setBusy] = (0, import_react4.useState)(null);
-  const [problem, setProblem] = (0, import_react4.useState)(null);
-  const [note, setNote] = (0, import_react4.useState)(null);
-  const [done, setDone] = (0, import_react4.useState)(null);
-  const alive = (0, import_react4.useRef)(true);
-  (0, import_react4.useEffect)(() => () => {
+  const [address, setAddress] = (0, import_react5.useState)("");
+  const [linkText, setLinkText] = (0, import_react5.useState)("");
+  const [pairing, setPairing] = (0, import_react5.useState)(null);
+  const [found, setFound] = (0, import_react5.useState)([]);
+  const [busy, setBusy] = (0, import_react5.useState)(null);
+  const [problem, setProblem] = (0, import_react5.useState)(null);
+  const [note, setNote] = (0, import_react5.useState)(null);
+  const [done, setDone] = (0, import_react5.useState)(null);
+  const [local, setLocal] = (0, import_react5.useState)(null);
+  const alive = (0, import_react5.useRef)(true);
+  (0, import_react5.useEffect)(() => () => {
     alive.current = false;
   }, []);
-  (0, import_react4.useEffect)(() => {
+  (0, import_react5.useEffect)(() => {
     call("omni-link").then((link) => {
       if (alive.current && link?.pairing) setPairing(link.pairing);
     }, () => {
     });
     call("omni-discover").then((reply) => {
       if (alive.current) setFound(Array.isArray(reply?.omnis) ? reply.omnis : []);
+    }, () => {
+    });
+    call("omni-local-progress").then((reply) => {
+      if (alive.current && reply?.status === "installing") setLocal(reply);
     }, () => {
     });
     const onPairing = (event) => {
@@ -3395,7 +3509,7 @@ function ConnectOmni({ onPaired, embedded = false } = {}) {
     });
     if (alive.current) onPaired?.(origin);
   };
-  (0, import_react4.useEffect)(() => {
+  (0, import_react5.useEffect)(() => {
     if (!pairing) return void 0;
     let timer = 0;
     const tick = async () => {
@@ -3416,6 +3530,42 @@ function ConnectOmni({ onPaired, embedded = false } = {}) {
     timer = setTimeout(tick, pairing.pollIntervalMs ?? DEFAULT_POLL_MS);
     return () => clearTimeout(timer);
   }, [pairing]);
+  (0, import_react5.useEffect)(() => {
+    if (local?.status !== "installing") return void 0;
+    let timer = 0;
+    const tick = async () => {
+      try {
+        const reply = await call("omni-local-progress");
+        if (!alive.current) return;
+        if (reply.status === "paired") {
+          setLocal(null);
+          return finish(reply.origin);
+        }
+        if (reply.status === "failed") {
+          setLocal(null);
+          setProblem(reply.logsDir ? t("{error} Its logs are in {dir}.", { error: reply.error, dir: reply.logsDir }) : reply.error);
+          return;
+        }
+        if (reply.status === "installing") setLocal(reply);
+        else return setLocal(null);
+      } catch (error) {
+        if (alive.current) setProblem(error.message);
+      }
+      if (alive.current) timer = setTimeout(tick, LOCAL_POLL_MS);
+    };
+    timer = setTimeout(tick, LOCAL_POLL_MS);
+    return () => clearTimeout(timer);
+  }, [local?.status]);
+  const runLocal = async (payload = {}) => {
+    setProblem(null);
+    setNote(null);
+    try {
+      const reply = await call("omni-local-install", payload);
+      if (alive.current) setLocal(reply.status === "confirm" || reply.status === "installing" ? reply : null);
+    } catch (error) {
+      if (alive.current) setProblem(error.message);
+    }
+  };
   const run = async (which, endpoint, payload) => {
     setBusy(which);
     setProblem(null);
@@ -3452,58 +3602,58 @@ function ConnectOmni({ onPaired, embedded = false } = {}) {
     });
   };
   if (done) {
-    return (0, import_react4.createElement)(
+    return (0, import_react5.createElement)(
       "section",
       { className: "ox-card ox-done" },
-      (0, import_react4.createElement)("span", { className: "ox-check", "aria-hidden": true }, "✓"),
-      (0, import_react4.createElement)("strong", null, t("Connected to {origin}", { origin: done }))
+      (0, import_react5.createElement)("span", { className: "ox-check", "aria-hidden": true }, "✓"),
+      (0, import_react5.createElement)("strong", null, t("Connected to {origin}", { origin: done }))
     );
   }
   if (pairing) {
-    return (0, import_react4.createElement)(
+    return (0, import_react5.createElement)(
       "section",
       { className: "ox-card", "aria-live": "polite" },
-      (0, import_react4.createElement)(
+      (0, import_react5.createElement)(
         "div",
         { className: "ox-steps" },
-        (0, import_react4.createElement)("h2", null, t("Approve this device")),
-        (0, import_react4.createElement)("p", { className: "ox-muted" }, pairing.waLink ? t("Scan the QR with your phone: it opens your WhatsApp chat with yourself with the code typed. Send it, and this page goes live.") : t("Open the approval page on your phone or here, and approve with Face ID, Touch ID, your fingerprint or a code.")),
-        (0, import_react4.createElement)("div", { className: "ox-code", "aria-label": t("Pairing code") }, pairing.code),
-        (0, import_react4.createElement)(
+        (0, import_react5.createElement)("h2", null, t("Approve this device")),
+        (0, import_react5.createElement)("p", { className: "ox-muted" }, pairing.waLink ? t("Scan the QR with your phone: it opens your WhatsApp chat with yourself with the code typed. Send it, and this page goes live.") : t("Open the approval page on your phone or here, and approve with Face ID, Touch ID, your fingerprint or a code.")),
+        (0, import_react5.createElement)("div", { className: "ox-code", "aria-label": t("Pairing code") }, pairing.code),
+        (0, import_react5.createElement)(
           "div",
           { className: "ox-row" },
-          pairing.waLink ? (0, import_react4.createElement)("a", { className: "oc-primary", href: pairing.waLink, target: "_blank", rel: "noreferrer" }, t("Open WhatsApp")) : null,
-          pairing.approveUrl ? (0, import_react4.createElement)("a", { className: pairing.waLink ? "oc-ghost" : "oc-primary", href: pairing.approveUrl, target: "_blank", rel: "noreferrer" }, t("Approve with Face ID or fingerprint")) : null,
-          (0, import_react4.createElement)("button", { type: "button", className: "oc-ghost", onClick: cancel }, t("Cancel"))
+          pairing.waLink ? (0, import_react5.createElement)("a", { className: "oc-primary", href: pairing.waLink, target: "_blank", rel: "noreferrer" }, t("Open WhatsApp")) : null,
+          pairing.approveUrl ? (0, import_react5.createElement)("a", { className: pairing.waLink ? "oc-ghost" : "oc-primary", href: pairing.approveUrl, target: "_blank", rel: "noreferrer" }, t("Approve with Face ID or fingerprint")) : null,
+          (0, import_react5.createElement)("button", { type: "button", className: "oc-ghost", onClick: cancel }, t("Cancel"))
         ),
-        (0, import_react4.createElement)("span", { className: "ox-wait" }, (0, import_react4.createElement)("span", { className: "oc-spinner", "aria-hidden": true }), t("Waiting for the code to arrive at {origin}…", { origin: pairing.origin })),
-        problem ? (0, import_react4.createElement)("p", { className: "ox-problem", role: "alert" }, problem) : null
+        (0, import_react5.createElement)("span", { className: "ox-wait" }, (0, import_react5.createElement)("span", { className: "oc-spinner", "aria-hidden": true }), t("Waiting for the code to arrive at {origin}…", { origin: pairing.origin })),
+        problem ? (0, import_react5.createElement)("p", { className: "ox-problem", role: "alert" }, problem) : null
       ),
-      (0, import_react4.createElement)(
+      (0, import_react5.createElement)(
         "div",
         { className: "ox-qr" },
-        (0, import_react4.createElement)(QrSvg, { text: pairing.waLink ?? pairing.approveUrl, size: 168 }),
-        (0, import_react4.createElement)("span", { className: "ox-muted" }, pairing.waLink ? t("Scan to send it on WhatsApp") : t("Scan to approve on your phone"))
+        (0, import_react5.createElement)(QrSvg, { text: pairing.waLink ?? pairing.approveUrl, size: 168 }),
+        (0, import_react5.createElement)("span", { className: "ox-muted" }, pairing.waLink ? t("Scan to send it on WhatsApp") : t("Scan to approve on your phone"))
       )
     );
   }
-  const anyBusy = busy !== null;
-  return (0, import_react4.createElement)(
+  const anyBusy = busy !== null || local !== null;
+  return (0, import_react5.createElement)(
     "section",
     { className: "ox-card ox-start" },
-    embedded ? null : (0, import_react4.createElement)("span", { className: "ox-mark", "aria-hidden": true }, (0, import_react4.createElement)(OmniMark, { size: 34 })),
-    (0, import_react4.createElement)(
+    embedded ? null : (0, import_react5.createElement)("span", { className: "ox-mark", "aria-hidden": true }, (0, import_react5.createElement)(OmniMark, { size: 34 })),
+    (0, import_react5.createElement)(
       "div",
       { className: "ox-steps" },
-      embedded ? null : (0, import_react4.createElement)("h2", null, t("Connect your Omni")),
-      found.length > 0 ? (0, import_react4.createElement)("h3", { className: "ox-sub" }, t("We found")) : null,
-      found.length > 0 ? (0, import_react4.createElement)("ul", { className: "ox-found" }, found.map((omni2) => (0, import_react4.createElement)(FoundOmni, { key: omni2.id, omni: omni2, busy: anyBusy, onUse: (entry) => run(entry.id, "omni-discover-use", { id: entry.id }) }))) : null,
-      found.length > 0 ? (0, import_react4.createElement)("h3", { className: "ox-sub" }, t("Connect another Omni")) : null,
-      (0, import_react4.createElement)("p", { className: "ox-muted" }, t("Type your Omni's address, or paste the link it sent you. Then approve with Face ID, Touch ID, your fingerprint or a code on WhatsApp. No keys to copy.")),
-      (0, import_react4.createElement)(
+      embedded ? null : (0, import_react5.createElement)("h2", null, t("Connect your Omni")),
+      found.length > 0 ? (0, import_react5.createElement)("h3", { className: "ox-sub" }, t("We found")) : null,
+      found.length > 0 ? (0, import_react5.createElement)("ul", { className: "ox-found" }, found.map((omni2) => (0, import_react5.createElement)(FoundOmni, { key: omni2.id, omni: omni2, busy: anyBusy, onUse: (entry) => run(entry.id, "omni-discover-use", { id: entry.id }), onLocal: runLocal }))) : null,
+      found.length > 0 ? (0, import_react5.createElement)("h3", { className: "ox-sub" }, t("Connect another Omni")) : null,
+      (0, import_react5.createElement)("p", { className: "ox-muted" }, t("Type your Omni's address, or paste the link it sent you. Then approve with Face ID, Touch ID, your fingerprint or a code on WhatsApp. No keys to copy.")),
+      (0, import_react5.createElement)(
         "form",
         { className: "ox-row", onSubmit: start },
-        (0, import_react4.createElement)("input", {
+        (0, import_react5.createElement)("input", {
           className: "ox-input",
           type: "text",
           inputMode: "url",
@@ -3514,12 +3664,12 @@ function ConnectOmni({ onPaired, embedded = false } = {}) {
           "aria-label": t("Omni address"),
           onChange: (event) => setAddress(event.target.value)
         }),
-        (0, import_react4.createElement)("button", { type: "submit", className: "oc-primary", disabled: anyBusy || address.trim() === "" }, busy === "address" ? t("Connecting…") : t("Get a code"))
+        (0, import_react5.createElement)("button", { type: "submit", className: "oc-primary", disabled: anyBusy || address.trim() === "" }, busy === "address" ? t("Connecting…") : t("Get a code"))
       ),
-      (0, import_react4.createElement)(
+      (0, import_react5.createElement)(
         "form",
         { className: "ox-row", onSubmit: pasteLink },
-        (0, import_react4.createElement)("input", {
+        (0, import_react5.createElement)("input", {
           className: "ox-input",
           type: "text",
           inputMode: "url",
@@ -3530,20 +3680,30 @@ function ConnectOmni({ onPaired, embedded = false } = {}) {
           "aria-label": t("Link from your Omni"),
           onChange: (event) => setLinkText(event.target.value)
         }),
-        (0, import_react4.createElement)("button", { type: "submit", className: "oc-ghost", disabled: anyBusy || linkText.trim() === "" }, busy === "link" ? t("Connecting…") : t("Connect"))
+        (0, import_react5.createElement)("button", { type: "submit", className: "oc-ghost", disabled: anyBusy || linkText.trim() === "" }, busy === "link" ? t("Connecting…") : t("Connect"))
       ),
-      (0, import_react4.createElement)("p", { className: "ox-muted ox-hint" }, t("Text connect to yourself on WhatsApp and your Omni sends you the link.")),
-      (0, import_react4.createElement)(
+      (0, import_react5.createElement)("p", { className: "ox-muted ox-hint" }, t("Text connect to yourself on WhatsApp and your Omni sends you the link.")),
+      local?.status === "confirm" ? (0, import_react5.createElement)(
+        "div",
+        { className: "ox-confirm", role: "dialog", "aria-label": t("Run Omni on this computer") },
+        (0, import_react5.createElement)("span", null, local.update ? t("Update your sandboxed Omni to {version}? Its data stays.", { version: local.version }) : t("Install Omni on this computer? It runs on its own, in {home}, and doesn't touch other installs.", { home: local.home })),
+        (0, import_react5.createElement)(
+          "div",
+          { className: "ox-row" },
+          (0, import_react5.createElement)("button", { type: "button", className: "oc-primary", onClick: () => runLocal({ confirm: true, update: local.update }) }, local.update ? t("Update") : t("Install")),
+          (0, import_react5.createElement)("button", { type: "button", className: "oc-ghost", onClick: () => setLocal(null) }, t("Cancel"))
+        )
+      ) : local?.status === "installing" ? (0, import_react5.createElement)("span", { className: "ox-progress", role: "status" }, (0, import_react5.createElement)("span", { className: "oc-spinner", "aria-hidden": true }), localStep(local)) : (0, import_react5.createElement)(
         "div",
         { className: "ox-row" },
-        (0, import_react4.createElement)("button", { type: "button", className: "oc-ghost", disabled: anyBusy, onClick: () => run("local", "omni-local-install") }, busy === "local" ? t("Starting…") : t("Run Omni on this computer"))
+        (0, import_react5.createElement)("button", { type: "button", className: "oc-ghost", disabled: anyBusy, onClick: () => runLocal() }, t("Run Omni on this computer"))
       ),
-      note ? (0, import_react4.createElement)("p", { className: "ox-muted ox-note", role: "status" }, note) : null,
-      problem ? (0, import_react4.createElement)("p", { className: "ox-problem", role: "alert" }, problem) : null
+      note ? (0, import_react5.createElement)("p", { className: "ox-muted ox-note", role: "status" }, note) : null,
+      problem ? (0, import_react5.createElement)("p", { className: "ox-problem", role: "alert" }, problem) : null
     )
   );
 }
-var OMNI_CONNECT_CSS = `
+var OMNI_CONNECT_CSS = OMNI_UPDATE_CSS + `
 .ox-card{display:flex;gap:22px;align-items:flex-start;margin:4px 0 22px;padding:20px 22px;border:1px solid var(--bt-line);border-radius:16px;background:color-mix(in srgb,var(--bt-accent) 5%,var(--bt-surface,transparent))}
 .ox-start{align-items:center}
 .ox-mark{flex:none;display:inline-grid;place-items:center;width:56px;height:56px;border-radius:16px;background:color-mix(in srgb,var(--bt-accent) 12%,transparent);color:var(--bt-ink)}
@@ -3641,7 +3801,7 @@ async function skipConnect({ complete }, { omniAi = callOmniAi, storage = localS
 }
 
 // src/client/connect-step.js
-var import_react5 = require("react");
+var import_react6 = require("react");
 var import_react_dom = require("react-dom");
 var RAIL = [["omni-welcome", "Welcome"], ["omni-connect", "Connect Omni"], ["omni-connect-ai", "Connect AI"]];
 var ANNOUNCED = /* @__PURE__ */ Symbol.for("automagik.omni.onboarding-steps");
@@ -3667,10 +3827,10 @@ var OCTOPUS_SVG = `<svg class="oxs-octo" viewBox="0 0 100 100" aria-hidden="true
 <ellipse cx="31" cy="50" rx="5" ry="2.8" fill="#ff5fb8" opacity=".5"/><ellipse cx="69" cy="50" rx="5" ry="2.8" fill="#ff5fb8" opacity=".5"/>
 </svg>`;
 function useGlitch() {
-  const [on, setOn] = (0, import_react5.useState)(false);
-  const timer = (0, import_react5.useRef)(0);
-  (0, import_react5.useEffect)(() => () => clearTimeout(timer.current), []);
-  const glitch = (0, import_react5.useCallback)(() => {
+  const [on, setOn] = (0, import_react6.useState)(false);
+  const timer = (0, import_react6.useRef)(0);
+  (0, import_react6.useEffect)(() => () => clearTimeout(timer.current), []);
+  const glitch = (0, import_react6.useCallback)(() => {
     if (reducedMotion()) return;
     setOn(true);
     clearTimeout(timer.current);
@@ -3679,8 +3839,8 @@ function useGlitch() {
   return [on, glitch];
 }
 function useTypewriter(text) {
-  const [shown, setShown] = (0, import_react5.useState)(() => reducedMotion() ? text : "");
-  (0, import_react5.useEffect)(() => {
+  const [shown, setShown] = (0, import_react6.useState)(() => reducedMotion() ? text : "");
+  (0, import_react6.useEffect)(() => {
     if (reducedMotion()) {
       setShown(text);
       return void 0;
@@ -3699,8 +3859,8 @@ function useTypewriter(text) {
   return shown;
 }
 function Stage({ title, speech, glitching, children }) {
-  const titleRef = (0, import_react5.useRef)(null);
-  (0, import_react5.useEffect)(() => {
+  const titleRef = (0, import_react6.useRef)(null);
+  (0, import_react6.useEffect)(() => {
     const root = document.getElementById("root");
     if (root === null) return void 0;
     const previous = root.inert;
@@ -3709,45 +3869,45 @@ function Stage({ title, speech, glitching, children }) {
       root.inert = previous;
     };
   }, []);
-  (0, import_react5.useEffect)(() => {
+  (0, import_react6.useEffect)(() => {
     titleRef.current?.focus();
   }, [title]);
   const shown = useTypewriter(speech);
-  return (0, import_react_dom.createPortal)((0, import_react5.createElement)(
+  return (0, import_react_dom.createPortal)((0, import_react6.createElement)(
     "div",
     { className: "oxs-overlay", role: "dialog", "aria-modal": "true", "aria-labelledby": "oxs-title" },
-    (0, import_react5.createElement)(
+    (0, import_react6.createElement)(
       "div",
       { className: `oxs-stage${glitching ? " oxs-glitch" : ""}` },
-      (0, import_react5.createElement)("div", { dangerouslySetInnerHTML: { __html: OCTOPUS_SVG } }),
-      (0, import_react5.createElement)(
+      (0, import_react6.createElement)("div", { dangerouslySetInnerHTML: { __html: OCTOPUS_SVG } }),
+      (0, import_react6.createElement)(
         "div",
         { className: "oxs-bubble" },
-        (0, import_react5.createElement)("span", { className: "oxs-hidden", role: "status" }, speech),
-        (0, import_react5.createElement)("span", { "aria-hidden": "true" }, shown, shown.length < speech.length ? (0, import_react5.createElement)("span", { className: "oxs-caret" }) : null)
+        (0, import_react6.createElement)("span", { className: "oxs-hidden", role: "status" }, speech),
+        (0, import_react6.createElement)("span", { "aria-hidden": "true" }, shown, shown.length < speech.length ? (0, import_react6.createElement)("span", { className: "oxs-caret" }) : null)
       ),
-      (0, import_react5.createElement)("ol", { className: "oxs-rail", "aria-label": t("Setup steps") }, railSteps().map(([id, label], index, steps) => {
+      (0, import_react6.createElement)("ol", { className: "oxs-rail", "aria-label": t("Setup steps") }, railSteps().map(([id, label], index, steps) => {
         const at = steps.findIndex(([step]) => step === CONNECT_STEP.id);
-        return (0, import_react5.createElement)("li", {
+        return (0, import_react6.createElement)("li", {
           key: id,
           className: index < at ? "oxs-done" : index === at ? "oxs-on" : "",
           "aria-current": index === at ? "step" : void 0
         }, t(label));
       })),
-      (0, import_react5.createElement)(
+      (0, import_react6.createElement)(
         "main",
         { className: "oxs-card" },
-        (0, import_react5.createElement)("div", { className: "oxs-mark", "aria-hidden": "true" }, "OMNI"),
-        (0, import_react5.createElement)("h1", { id: "oxs-title", ref: titleRef, tabIndex: -1 }, title),
+        (0, import_react6.createElement)("div", { className: "oxs-mark", "aria-hidden": "true" }, "OMNI"),
+        (0, import_react6.createElement)("h1", { id: "oxs-title", ref: titleRef, tabIndex: -1 }, title),
         children
       )
     )
   ), document.body);
 }
 function useGate(props) {
-  const first = (0, import_react5.useRef)(props);
-  const [state, setState] = (0, import_react5.useState)(void 0);
-  (0, import_react5.useEffect)(() => {
+  const first = (0, import_react6.useRef)(props);
+  const [state, setState] = (0, import_react6.useState)(void 0);
+  (0, import_react6.useEffect)(() => {
     let alive = true;
     gateConnect(first.current, { request: call }).then((next) => {
       if (alive) setState(next);
@@ -3761,50 +3921,50 @@ function useGate(props) {
 function ConnectOmniStep(props) {
   const state = useGate(props);
   const [glitching, glitch] = useGlitch();
-  const [paired, setPaired] = (0, import_react5.useState)(null);
-  const finished = (0, import_react5.useRef)(false);
-  const timer = (0, import_react5.useRef)(0);
-  (0, import_react5.useEffect)(() => () => clearTimeout(timer.current), []);
-  (0, import_react5.useEffect)(() => {
+  const [paired, setPaired] = (0, import_react6.useState)(null);
+  const finished = (0, import_react6.useRef)(false);
+  const timer = (0, import_react6.useRef)(0);
+  (0, import_react6.useEffect)(() => () => clearTimeout(timer.current), []);
+  (0, import_react6.useEffect)(() => {
     if (state) glitch();
   }, [state, glitch]);
-  const complete = (0, import_react5.useCallback)(() => {
+  const complete = (0, import_react6.useCallback)(() => {
     if (finished.current) return;
     finished.current = true;
     clearTimeout(timer.current);
     props.complete();
   }, [props]);
-  const skip = (0, import_react5.useCallback)(() => {
+  const skip = (0, import_react6.useCallback)(() => {
     if (finished.current) return;
     finished.current = true;
     void skipConnect({ complete: props.complete });
   }, [props]);
-  const onPaired = (0, import_react5.useCallback)((origin) => {
+  const onPaired = (0, import_react6.useCallback)((origin) => {
     setPaired(origin);
     glitch();
     timer.current = setTimeout(complete, reducedMotion() ? 0 : PAIRED_BEAT_MS);
   }, [complete, glitch]);
   if (!state) return null;
   if (paired !== null) {
-    return (0, import_react5.createElement)(
+    return (0, import_react6.createElement)(
       Stage,
       { title: t("Omni connected"), speech: t("Connected to {origin}! Now I can see your channels.", { origin: paired }), glitching },
-      (0, import_react5.createElement)("button", { type: "button", className: "oxs-primary", onClick: complete }, t("Continue"))
+      (0, import_react6.createElement)("button", { type: "button", className: "oxs-primary", onClick: complete }, t("Continue"))
     );
   }
   if (isConnected(state.link)) {
     const origin = state.link.origin ?? "";
-    return (0, import_react5.createElement)(
+    return (0, import_react6.createElement)(
       Stage,
       { title: t("Omni connected"), speech: origin ? t("Connected to {origin}! Now I can see your channels.", { origin }) : t("Your Omni is connected. Now I can see your channels."), glitching },
-      (0, import_react5.createElement)("button", { type: "button", className: "oxs-primary", onClick: complete }, t("Continue"))
+      (0, import_react6.createElement)("button", { type: "button", className: "oxs-primary", onClick: complete }, t("Continue"))
     );
   }
-  return (0, import_react5.createElement)(
+  return (0, import_react6.createElement)(
     Stage,
     { title: t("Connect your Omni"), speech: t("Show me your Omni, so I can see your channels. Approve this device from your phone."), glitching },
-    (0, import_react5.createElement)(ConnectOmni, { onPaired, embedded: true }),
-    (0, import_react5.createElement)("button", { type: "button", className: "oxs-quiet", onClick: skip }, t("Skip for now"))
+    (0, import_react6.createElement)(ConnectOmni, { onPaired, embedded: true }),
+    (0, import_react6.createElement)("button", { type: "button", className: "oxs-quiet", onClick: skip }, t("Skip for now"))
   );
 }
 var STAGE_CSS = `
@@ -3867,7 +4027,7 @@ function registerConnectStep(ctx) {
 }
 
 // src/client/subscriptions.js
-var import_react6 = require("react");
+var import_react7 = require("react");
 var { AtIcon, FileIcon, KeywordIcon, MessageIcon, ShieldIcon, UnplugIcon, VoiceIcon } = icons;
 var TRIGGER_ICONS = { message: MessageIcon, mention: AtIcon, keyword: KeywordIcon, voice: VoiceIcon, media: FileIcon, down: UnplugIcon };
 var FRESH_MS = 6e3;
@@ -3883,13 +4043,13 @@ function workerOf(worker, roster) {
 }
 function WorkerMark({ worker, roster, size = 24 }) {
   const info = workerOf(worker, roster);
-  if (info.session) return (0, import_react6.createElement)("span", { className: "os-session", style: { width: size, height: size } }, (0, import_react6.createElement)(OmniMark, { size: Math.round(size * 0.62) }));
-  return (0, import_react6.createElement)(BotMark, info.bot ? { bot: info.bot, size } : { look: info.look, size });
+  if (info.session) return (0, import_react7.createElement)("span", { className: "os-session", style: { width: size, height: size } }, (0, import_react7.createElement)(OmniMark, { size: Math.round(size * 0.62) }));
+  return (0, import_react7.createElement)(BotMark, info.bot ? { bot: info.bot, size } : { look: info.look, size });
 }
-var TriggerBadge = ({ trigger, size = 36 }) => (0, import_react6.createElement)(
+var TriggerBadge = ({ trigger, size = 36 }) => (0, import_react7.createElement)(
   "span",
   { className: "os-trigger", "data-kind": trigger.kind, style: { width: size, height: size, fontSize: Math.round(size * 0.5), "--os-icon": `${Math.round(size * 0.52)}px` } },
-  trigger.kind === "reaction" ? trigger.emoji : (0, import_react6.createElement)(TRIGGER_ICONS[trigger.kind])
+  trigger.kind === "reaction" ? trigger.emoji : (0, import_react7.createElement)(TRIGGER_ICONS[trigger.kind])
 );
 function triggerText(trigger) {
   if (trigger.kind === "reaction") return t("you react");
@@ -3905,32 +4065,32 @@ function sourcesText(sources) {
   return [count(channels2, "1 channel", "{n} channels"), count(groups, "1 group", "{n} groups"), count(chats, "1 chat", "{n} chats")].filter(Boolean).join(" + ");
 }
 var initials = (name) => name.startsWith("#") ? "#" : name.split(/\s+/).filter(Boolean).slice(0, 2).map((word) => word[0]).join("").toUpperCase() || "?";
-var SourceMark = ({ source, size }) => source.kind === "channel" ? (0, import_react6.createElement)(Tile, { type: source.type, size }) : (0, import_react6.createElement)(ChatAvatar, { chat: { name: source.name, initials: initials(source.name) }, size });
+var SourceMark = ({ source, size }) => source.kind === "channel" ? (0, import_react7.createElement)(Tile, { type: source.type, size }) : (0, import_react7.createElement)(ChatAvatar, { chat: { name: source.name, initials: initials(source.name) }, size });
 function SourceStack({ sources, size = 16 }) {
-  return (0, import_react6.createElement)(
+  return (0, import_react7.createElement)(
     "span",
     { className: "os-stack" },
-    sources.slice(0, 3).map((source) => (0, import_react6.createElement)("span", { key: `${source.kind}-${source.id}`, className: "os-stack-item" }, (0, import_react6.createElement)(SourceMark, { source, size }))),
-    sources.length > 3 ? (0, import_react6.createElement)("span", { className: "os-stack-more" }, `+${sources.length - 3}`) : null
+    sources.slice(0, 3).map((source) => (0, import_react7.createElement)("span", { key: `${source.kind}-${source.id}`, className: "os-stack-item" }, (0, import_react7.createElement)(SourceMark, { source, size }))),
+    sources.length > 3 ? (0, import_react7.createElement)("span", { className: "os-stack-more" }, `+${sources.length - 3}`) : null
   );
 }
 function Sentence({ sub, roster }) {
-  return (0, import_react6.createElement)(
+  return (0, import_react7.createElement)(
     "p",
     { className: "os-sentence" },
-    (0, import_react6.createElement)("span", { className: "os-w" }, t("When")),
+    (0, import_react7.createElement)("span", { className: "os-w" }, t("When")),
     " ",
-    (0, import_react6.createElement)("span", { className: "os-chip os-chip-trigger" }, sub.trigger.kind === "reaction" ? (0, import_react6.createElement)("b", { className: "os-emoji" }, sub.trigger.emoji) : null, triggerText(sub.trigger)),
+    (0, import_react7.createElement)("span", { className: "os-chip os-chip-trigger" }, sub.trigger.kind === "reaction" ? (0, import_react7.createElement)("b", { className: "os-emoji" }, sub.trigger.emoji) : null, triggerText(sub.trigger)),
     " ",
-    (0, import_react6.createElement)("span", { className: "os-w" }, t("in")),
+    (0, import_react7.createElement)("span", { className: "os-w" }, t("in")),
     " ",
-    (0, import_react6.createElement)("span", { className: "os-chip" }, (0, import_react6.createElement)(SourceStack, { sources: sub.sources }), sourcesText(sub.sources)),
+    (0, import_react7.createElement)("span", { className: "os-chip" }, (0, import_react7.createElement)(SourceStack, { sources: sub.sources }), sourcesText(sub.sources)),
     " ",
-    (0, import_react6.createElement)("span", { className: "os-w" }, "→"),
+    (0, import_react7.createElement)("span", { className: "os-w" }, "→"),
     " ",
-    (0, import_react6.createElement)("span", { className: "os-chip os-chip-worker" }, (0, import_react6.createElement)(WorkerMark, { worker: sub.worker, roster, size: 18 }), workerOf(sub.worker, roster).name),
-    sub.outputs.react ? (0, import_react6.createElement)(import_react6.Fragment, null, " ", (0, import_react6.createElement)("span", { className: "os-chip os-chip-soft" }, t("reacts 👀 then ✅"))) : null,
-    sub.outputs.replyToMe ? (0, import_react6.createElement)(import_react6.Fragment, null, " ", (0, import_react6.createElement)("span", { className: "os-chip os-chip-soft" }, t("replies to you"))) : null
+    (0, import_react7.createElement)("span", { className: "os-chip os-chip-worker" }, (0, import_react7.createElement)(WorkerMark, { worker: sub.worker, roster, size: 18 }), workerOf(sub.worker, roster).name),
+    sub.outputs.react ? (0, import_react7.createElement)(import_react7.Fragment, null, " ", (0, import_react7.createElement)("span", { className: "os-chip os-chip-soft" }, t("reacts 👀 then ✅"))) : null,
+    sub.outputs.replyToMe ? (0, import_react7.createElement)(import_react7.Fragment, null, " ", (0, import_react7.createElement)("span", { className: "os-chip os-chip-soft" }, t("replies to you"))) : null
   );
 }
 var RUN_STATUS = {
@@ -3942,17 +4102,17 @@ var RUN_STATUS = {
 var useWaiting = (useWork) => new Set((useWork ? useWork((work) => (work.approvals ?? []).map((entry) => entry.sessionId).join(",")) : "").split(",").filter(Boolean));
 function EventsBadge({ roster, useWork }) {
   const waiting = waitingRuns(roster, useWaiting(useWork));
-  return waiting > 0 ? (0, import_react6.createElement)("span", { className: "os-pending", title: t("{n} waiting for you", { n: waiting }) }, String(waiting)) : null;
+  return waiting > 0 ? (0, import_react7.createElement)("span", { className: "os-pending", title: t("{n} waiting for you", { n: waiting }) }, String(waiting)) : null;
 }
 function SubscriptionsButton({ roster, onToggle, useWork }) {
   const count = (roster.subscriptions ?? []).filter((sub) => sub.on).length;
   const waiting = waitingRuns(roster, useWaiting(useWork));
-  return (0, import_react6.createElement)(
+  return (0, import_react7.createElement)(
     "button",
     { type: "button", className: "os-head-btn", onClick: onToggle },
     t("Automations"),
-    (0, import_react6.createElement)("span", { className: "os-head-count" }, String(count)),
-    waiting > 0 ? (0, import_react6.createElement)("span", { className: "os-pending" }, String(waiting)) : null
+    (0, import_react7.createElement)("span", { className: "os-head-count" }, String(count)),
+    waiting > 0 ? (0, import_react7.createElement)("span", { className: "os-pending" }, String(waiting)) : null
   );
 }
 var BOARD_KIND = "omni-subscriptions";
@@ -3962,44 +4122,44 @@ function BoardTab({ useRoster, useWork, actions }) {
   const roster = useRoster((value) => value);
   const waiting = useWaiting(useWork);
   const bot = roster.byId?.[roster.eventsBotId];
-  if (!bot) return (0, import_react6.createElement)("div", { className: "os-board" }, (0, import_react6.createElement)("p", { className: "os-board-note" }, t("Automations belong to the Main Bot, which this team does not have.")));
-  return (0, import_react6.createElement)(SubscriptionsBoard, { bot, roster, actions, waiting });
+  if (!bot) return (0, import_react7.createElement)("div", { className: "os-board" }, (0, import_react7.createElement)("p", { className: "os-board-note" }, t("Automations belong to the Main Bot, which this team does not have.")));
+  return (0, import_react7.createElement)(SubscriptionsBoard, { bot, roster, actions, waiting });
 }
 function SubscriptionsBoard({ bot, roster, actions, waiting }) {
   const omni2 = useOmni();
-  (0, import_react6.useEffect)(() => {
+  (0, import_react7.useEffect)(() => {
     startLive(call);
   }, []);
   const subs = roster.subscriptions ?? [];
   const runs = runsOf(roster);
   const watched = new Set(subs.filter((sub) => sub.on).flatMap((sub) => sub.sources.map((source) => `${source.kind}:${source.id}`))).size;
   const listening = (roster.omniEvents?.listening ?? []).length > 0;
-  return (0, import_react6.createElement)(
+  return (0, import_react7.createElement)(
     "div",
     { className: "os-board" },
-    subs.length === 0 ? (0, import_react6.createElement)(Empty, { bot, live: omni2.source.kind === "live" }) : (0, import_react6.createElement)(
-      import_react6.Fragment,
+    subs.length === 0 ? (0, import_react7.createElement)(Empty, { bot, live: omni2.source.kind === "live" }) : (0, import_react7.createElement)(
+      import_react7.Fragment,
       null,
-      (0, import_react6.createElement)(
+      (0, import_react7.createElement)(
         "div",
         { className: "os-board-status" },
-        (0, import_react6.createElement)("span", { className: "oc-live-dot", "data-on": listening || void 0, "aria-hidden": true }),
+        (0, import_react7.createElement)("span", { className: "oc-live-dot", "data-on": listening || void 0, "aria-hidden": true }),
         !subs.some((sub) => sub.on) ? t("Everything is paused.") : `${watched === 1 ? t("Watching 1 chat or channel.") : t("Watching {n} chats and channels.", { n: watched })} ${listening ? t("Listening to omni.") : t("Connecting to omni…")}`
       ),
-      subs.some((sub) => sub.on && (sub.outputs.react || sub.outputs.replyToMe)) ? (0, import_react6.createElement)("div", { className: "os-board-note os-board-pending" }, t("Reactions and replies to you are not sent yet. Results stay in the runs below.")) : null,
-      (0, import_react6.createElement)("div", { className: "os-list" }, subs.map((sub) => (0, import_react6.createElement)(AutomationRow, { key: sub.id, sub, roster, runs: runs.filter((run) => run.subId === sub.id) }))),
-      runs.length > 0 ? (0, import_react6.createElement)(
-        import_react6.Fragment,
+      subs.some((sub) => sub.on && (sub.outputs.react || sub.outputs.replyToMe)) ? (0, import_react7.createElement)("div", { className: "os-board-note os-board-pending" }, t("Reactions and replies to you are not sent yet. Results stay in the runs below.")) : null,
+      (0, import_react7.createElement)("div", { className: "os-list" }, subs.map((sub) => (0, import_react7.createElement)(AutomationRow, { key: sub.id, sub, roster, runs: runs.filter((run) => run.subId === sub.id) }))),
+      runs.length > 0 ? (0, import_react7.createElement)(
+        import_react7.Fragment,
         null,
-        (0, import_react6.createElement)("div", { className: "os-board-h" }, t("Runs")),
-        (0, import_react6.createElement)("div", { className: "os-list" }, runs.slice(0, 20).map((run) => (0, import_react6.createElement)(RunRow, { key: run.id, run, sub: subs.find((sub) => sub.id === run.subId), roster, actions, asking: waiting?.has(run.sessionId) && run.status === "working" })))
+        (0, import_react7.createElement)("div", { className: "os-board-h" }, t("Runs")),
+        (0, import_react7.createElement)("div", { className: "os-list" }, runs.slice(0, 20).map((run) => (0, import_react7.createElement)(RunRow, { key: run.id, run, sub: subs.find((sub) => sub.id === run.subId), roster, actions, asking: waiting?.has(run.sessionId) && run.status === "working" })))
       ) : null
     ),
-    (0, import_react6.createElement)(
+    (0, import_react7.createElement)(
       "div",
       { className: "os-safety" },
-      (0, import_react6.createElement)(ShieldIcon),
-      (0, import_react6.createElement)("span", null, t("Anyone in a watched chat can write text that tries to steer a Bot. Work started by an event runs with no secrets and asks you before shell, file or network actions, unless you tell {name} otherwise.", { name: bot.name }))
+      (0, import_react7.createElement)(ShieldIcon),
+      (0, import_react7.createElement)("span", null, t("Anyone in a watched chat can write text that tries to steer a Bot. Work started by an event runs with no secrets and asks you before shell, file or network actions, unless you tell {name} otherwise.", { name: bot.name }))
     )
   );
 }
@@ -4009,18 +4169,18 @@ function Empty({ bot, live }) {
     t("When I react 📌 to a message in any WhatsApp chat, save it to my notes"),
     t("Voice notes in my own chat go to one ongoing session")
   ];
-  return (0, import_react6.createElement)(
+  return (0, import_react7.createElement)(
     "div",
     { className: "os-empty-board" },
-    (0, import_react6.createElement)(BotMark, { bot, size: 48, live: true }),
-    (0, import_react6.createElement)("strong", null, t("Tell {name} what to watch", { name: bot.name })),
-    (0, import_react6.createElement)("span", null, live ? t("Say it in the chat. {name} finds the chats, asks what is missing, and the subscription shows up here.", { name: bot.name }) : t("Omni is not connected to this DSH yet, so there is nothing to watch.")),
-    (0, import_react6.createElement)("ul", { className: "os-examples" }, examples.map((text) => (0, import_react6.createElement)("li", { key: text }, text)))
+    (0, import_react7.createElement)(BotMark, { bot, size: 48, live: true }),
+    (0, import_react7.createElement)("strong", null, t("Tell {name} what to watch", { name: bot.name })),
+    (0, import_react7.createElement)("span", null, live ? t("Say it in the chat. {name} finds the chats, asks what is missing, and the subscription shows up here.", { name: bot.name }) : t("Omni is not connected to this DSH yet, so there is nothing to watch.")),
+    (0, import_react7.createElement)("ul", { className: "os-examples" }, examples.map((text) => (0, import_react7.createElement)("li", { key: text }, text)))
   );
 }
 function AutomationRow({ sub, roster, runs, onOpen }) {
-  const [confirming, setConfirming] = (0, import_react6.useState)(false);
-  const [busy, setBusy] = (0, import_react6.useState)("");
+  const [confirming, setConfirming] = (0, import_react7.useState)(false);
+  const [busy, setBusy] = (0, import_react7.useState)("");
   const fresh = Date.now() - (sub.updatedAt ?? 0) < FRESH_MS;
   const run = async (endpoint, payload) => {
     setBusy(endpoint);
@@ -4031,18 +4191,18 @@ function AutomationRow({ sub, roster, runs, onOpen }) {
     }
   };
   const last = runs[0];
-  return (0, import_react6.createElement)(
+  return (0, import_react7.createElement)(
     "div",
     { className: "os-row", "data-off": sub.on ? void 0 : true, "data-fresh": fresh || void 0 },
-    (0, import_react6.createElement)(TriggerBadge, { trigger: sub.trigger, size: 28 }),
-    (0, import_react6.createElement)(
+    (0, import_react7.createElement)(TriggerBadge, { trigger: sub.trigger, size: 28 }),
+    (0, import_react7.createElement)(
       "div",
       { className: "os-row-body" },
-      (0, import_react6.createElement)(
+      (0, import_react7.createElement)(
         "div",
         { className: "os-row-top" },
-        onOpen ? (0, import_react6.createElement)("button", { type: "button", className: "os-row-name os-row-open", onClick: onOpen }, sub.name) : (0, import_react6.createElement)("span", { className: "os-row-name" }, sub.name),
-        (0, import_react6.createElement)("button", {
+        onOpen ? (0, import_react7.createElement)("button", { type: "button", className: "os-row-name os-row-open", onClick: onOpen }, sub.name) : (0, import_react7.createElement)("span", { className: "os-row-name" }, sub.name),
+        (0, import_react7.createElement)("button", {
           type: "button",
           role: "switch",
           "aria-checked": sub.on,
@@ -4050,19 +4210,19 @@ function AutomationRow({ sub, roster, runs, onOpen }) {
           disabled: busy !== "",
           "aria-label": sub.on ? t("Pause {name}", { name: sub.name }) : t("Resume {name}", { name: sub.name }),
           onClick: () => run("automation-set-on", { id: sub.id, on: !sub.on })
-        }, (0, import_react6.createElement)("span"))
+        }, (0, import_react7.createElement)("span"))
       ),
-      (0, import_react6.createElement)(Sentence, { sub, roster }),
-      (0, import_react6.createElement)(
+      (0, import_react7.createElement)(Sentence, { sub, roster }),
+      (0, import_react7.createElement)(
         "div",
         { className: "os-row-foot" },
-        (0, import_react6.createElement)("span", null, last ? t("last run {time}", { time: relativeShort(last.at) }) : t("not fired yet")),
-        sub.askFirst ? null : (0, import_react6.createElement)("span", { className: "os-row-warn" }, t("acts without asking")),
-        (0, import_react6.createElement)(
+        (0, import_react7.createElement)("span", null, last ? t("last run {time}", { time: relativeShort(last.at) }) : t("not fired yet")),
+        sub.askFirst ? null : (0, import_react7.createElement)("span", { className: "os-row-warn" }, t("acts without asking")),
+        (0, import_react7.createElement)(
           "span",
           { className: "os-row-actions" },
-          (0, import_react6.createElement)("button", { type: "button", className: "os-link", disabled: busy !== "", onClick: () => run("automation-test", { id: sub.id }) }, t("Test")),
-          (0, import_react6.createElement)("button", {
+          (0, import_react7.createElement)("button", { type: "button", className: "os-link", disabled: busy !== "", onClick: () => run("automation-test", { id: sub.id }) }, t("Test")),
+          (0, import_react7.createElement)("button", {
             type: "button",
             className: confirming ? "os-link os-link-danger" : "os-link",
             disabled: busy !== "",
@@ -4078,22 +4238,22 @@ function RunRow({ run, sub, roster, actions, asking = false }) {
   if (!sub) return null;
   const status = RUN_STATUS[asking ? "waiting" : run.status];
   const open = run.sessionId ? () => actions.openSession(run.sessionId) : void 0;
-  return (0, import_react6.createElement)(
+  return (0, import_react7.createElement)(
     "button",
     { type: "button", className: "os-run", "data-tone": status.tone, disabled: !open, onClick: open, title: open ? t("Open this run") : void 0 },
-    (0, import_react6.createElement)(WorkerMark, { worker: sub.worker, roster, size: 22 }),
-    (0, import_react6.createElement)(
+    (0, import_react7.createElement)(WorkerMark, { worker: sub.worker, roster, size: 22 }),
+    (0, import_react7.createElement)(
       "span",
       { className: "os-run-body" },
-      (0, import_react6.createElement)(
+      (0, import_react7.createElement)(
         "span",
         { className: "os-run-top" },
-        (0, import_react6.createElement)("span", { className: "os-run-name" }, workerOf(sub.worker, roster).name),
-        (0, import_react6.createElement)("span", { className: "os-run-status" }, run.test ? `${t("Test")} · ${t(status.label)}` : t(status.label)),
-        (0, import_react6.createElement)("time", null, relativeShort(run.at))
+        (0, import_react7.createElement)("span", { className: "os-run-name" }, workerOf(sub.worker, roster).name),
+        (0, import_react7.createElement)("span", { className: "os-run-status" }, run.test ? `${t("Test")} · ${t(status.label)}` : t(status.label)),
+        (0, import_react7.createElement)("time", null, relativeShort(run.at))
       ),
-      run.excerpt && !run.test ? (0, import_react6.createElement)("span", { className: "os-run-quote" }, run.from ? `${run.from}: ` : "", run.excerpt) : null,
-      (0, import_react6.createElement)("span", { className: "os-run-text" }, run.summary)
+      run.excerpt && !run.test ? (0, import_react7.createElement)("span", { className: "os-run-quote" }, run.from ? `${run.from}: ` : "", run.excerpt) : null,
+      (0, import_react7.createElement)("span", { className: "os-run-text" }, run.summary)
     )
   );
 }
@@ -4208,15 +4368,15 @@ function whenText(task) {
 }
 
 // src/client/automations-page.js
-var import_react7 = require("react");
+var import_react8 = require("react");
 var { ClockIcon, PlusIcon: PlusIcon2, SearchIcon } = icons;
 var AUTOMATIONS_PANEL = "omni-automations";
 function AutomationsPage({ useRoster, actions }) {
   const roster = useRoster((value) => value);
-  const [filter, setFilter] = (0, import_react7.useState)("all");
-  const [query, setQuery] = (0, import_react7.useState)("");
-  const [schedules, setSchedules] = (0, import_react7.useState)({ available: false, tasks: [] });
-  (0, import_react7.useEffect)(() => {
+  const [filter, setFilter] = (0, import_react8.useState)("all");
+  const [query, setQuery] = (0, import_react8.useState)("");
+  const [schedules, setSchedules] = (0, import_react8.useState)({ available: false, tasks: [] });
+  (0, import_react8.useEffect)(() => {
     let live = true;
     const load = () => call("schedules").then((value) => {
       if (live) setSchedules(value);
@@ -4233,7 +4393,7 @@ function AutomationsPage({ useRoster, actions }) {
   const runs = runsOf(roster);
   const autopilot = roster.byId?.[roster.eventsBotId];
   const needle = query.trim().toLowerCase();
-  const rows = (0, import_react7.useMemo)(() => {
+  const rows = (0, import_react8.useMemo)(() => {
     const list = [
       ...events.map((sub) => ({ kind: "event", id: sub.id, on: sub.on, title: sub.name, sort: sub.createdAt, sub })),
       ...schedules.tasks.map((task) => ({ kind: "schedule", id: `${task.sessionId}:${task.id}`, on: task.status === "active", title: task.title, sort: Date.parse(task.scheduledAt) || 0, task }))
@@ -4243,23 +4403,23 @@ function AutomationsPage({ useRoster, actions }) {
   const talk = () => {
     if (autopilot) actions.openSession(autopilot.id);
   };
-  return (0, import_react7.createElement)(
+  return (0, import_react8.createElement)(
     "div",
     { className: "oa-page" },
-    (0, import_react7.createElement)(
+    (0, import_react8.createElement)(
       "div",
       { className: "oa-in" },
-      (0, import_react7.createElement)(
+      (0, import_react8.createElement)(
         "header",
         { className: "oa-head" },
-        (0, import_react7.createElement)("h1", null, t("Automations")),
-        (0, import_react7.createElement)("button", { type: "button", className: "oa-new", disabled: !autopilot, onClick: talk, title: autopilot ? t("Tell {name} what to automate", { name: autopilot.name }) : void 0 }, (0, import_react7.createElement)(PlusIcon2), t("New"))
+        (0, import_react8.createElement)("h1", null, t("Automations")),
+        (0, import_react8.createElement)("button", { type: "button", className: "oa-new", disabled: !autopilot, onClick: talk, title: autopilot ? t("Tell {name} what to automate", { name: autopilot.name }) : void 0 }, (0, import_react8.createElement)(PlusIcon2), t("New"))
       ),
-      (0, import_react7.createElement)("p", { className: "oa-lede" }, autopilot ? t("Things that run on their own: when something happens in your chats, or on a schedule. Say what you want to {name}; it sets it up and it shows here.", { name: autopilot.name }) : t("Things that run on their own, on a schedule or when something happens in your chats.")),
-      (0, import_react7.createElement)(
+      (0, import_react8.createElement)("p", { className: "oa-lede" }, autopilot ? t("Things that run on their own: when something happens in your chats, or on a schedule. Say what you want to {name}; it sets it up and it shows here.", { name: autopilot.name }) : t("Things that run on their own, on a schedule or when something happens in your chats.")),
+      (0, import_react8.createElement)(
         "div",
         { className: "oa-filters", role: "radiogroup", "aria-label": t("Show") },
-        [["all", t("All")], ["enabled", t("Enabled")], ["inactive", t("Inactive")]].map(([value, label]) => (0, import_react7.createElement)("button", {
+        [["all", t("All")], ["enabled", t("Enabled")], ["inactive", t("Inactive")]].map(([value, label]) => (0, import_react8.createElement)("button", {
           key: value,
           type: "button",
           role: "radio",
@@ -4267,14 +4427,14 @@ function AutomationsPage({ useRoster, actions }) {
           onClick: () => setFilter(value)
         }, label))
       ),
-      (0, import_react7.createElement)("label", { className: "oa-search" }, (0, import_react7.createElement)(SearchIcon), (0, import_react7.createElement)("input", { value: query, placeholder: t("Search automations"), "aria-label": t("Search automations"), onChange: (event) => setQuery(event.target.value) })),
-      rows.length === 0 ? (0, import_react7.createElement)(
+      (0, import_react8.createElement)("label", { className: "oa-search" }, (0, import_react8.createElement)(SearchIcon), (0, import_react8.createElement)("input", { value: query, placeholder: t("Search automations"), "aria-label": t("Search automations"), onChange: (event) => setQuery(event.target.value) })),
+      rows.length === 0 ? (0, import_react8.createElement)(
         "div",
         { className: "oa-empty" },
-        (0, import_react7.createElement)(ClockIcon),
-        (0, import_react7.createElement)("span", null, events.length + schedules.tasks.length === 0 ? t("Nothing runs on its own yet.") : t("No automations match.")),
-        autopilot ? (0, import_react7.createElement)("button", { type: "button", className: "oa-empty-go", onClick: talk }, t("Tell {name} what to automate", { name: autopilot.name })) : null
-      ) : (0, import_react7.createElement)("div", { className: "oa-list" }, rows.map((row) => row.kind === "event" ? (0, import_react7.createElement)(AutomationRow, { key: row.id, sub: row.sub, roster, runs: runs.filter((run) => run.subId === row.id), onOpen: talk }) : (0, import_react7.createElement)(ScheduleRow, { key: row.id, task: row.task, roster, actions })))
+        (0, import_react8.createElement)(ClockIcon),
+        (0, import_react8.createElement)("span", null, events.length + schedules.tasks.length === 0 ? t("Nothing runs on its own yet.") : t("No automations match.")),
+        autopilot ? (0, import_react8.createElement)("button", { type: "button", className: "oa-empty-go", onClick: talk }, t("Tell {name} what to automate", { name: autopilot.name })) : null
+      ) : (0, import_react8.createElement)("div", { className: "oa-list" }, rows.map((row) => row.kind === "event" ? (0, import_react8.createElement)(AutomationRow, { key: row.id, sub: row.sub, roster, runs: runs.filter((run) => run.subId === row.id), onOpen: talk }) : (0, import_react8.createElement)(ScheduleRow, { key: row.id, task: row.task, roster, actions })))
     )
   );
 }
@@ -4282,30 +4442,30 @@ function ScheduleRow({ task, roster, actions }) {
   const owner = roster.byId?.[task.botId];
   const room = roster.roomsById?.[task.roomId];
   const active = task.status === "active";
-  return (0, import_react7.createElement)(
+  return (0, import_react8.createElement)(
     "button",
     { type: "button", className: "os-row oa-schedule", "data-off": active ? void 0 : true, onClick: () => actions.selectPanel("schedules"), title: t("Edit the timing in Automation tasks") },
-    (0, import_react7.createElement)("span", { className: "os-trigger", "data-kind": "schedule", style: { width: 28, height: 28, "--os-icon": "15px" } }, (0, import_react7.createElement)(ClockIcon)),
-    (0, import_react7.createElement)(
+    (0, import_react8.createElement)("span", { className: "os-trigger", "data-kind": "schedule", style: { width: 28, height: 28, "--os-icon": "15px" } }, (0, import_react8.createElement)(ClockIcon)),
+    (0, import_react8.createElement)(
       "span",
       { className: "os-row-body" },
-      (0, import_react7.createElement)(
+      (0, import_react8.createElement)(
         "span",
         { className: "os-row-top" },
-        (0, import_react7.createElement)("span", { className: "os-row-name" }, task.title),
-        (0, import_react7.createElement)("span", { className: "oa-tag" }, active ? t("Scheduled") : t("Inactive"))
+        (0, import_react8.createElement)("span", { className: "os-row-name" }, task.title),
+        (0, import_react8.createElement)("span", { className: "oa-tag" }, active ? t("Scheduled") : t("Inactive"))
       ),
-      (0, import_react7.createElement)(
+      (0, import_react8.createElement)(
         "span",
         { className: "os-sentence" },
-        (0, import_react7.createElement)("span", { className: "os-chip" }, whenText(task)),
-        (0, import_react7.createElement)("span", { className: "os-w" }, "→"),
-        (0, import_react7.createElement)("span", { className: "os-chip" }, owner ? (0, import_react7.createElement)(import_react7.Fragment, null, (0, import_react7.createElement)(BotMark, { bot: owner, size: 16 }), owner.name) : room?.name ?? t("a chat"))
+        (0, import_react8.createElement)("span", { className: "os-chip" }, whenText(task)),
+        (0, import_react8.createElement)("span", { className: "os-w" }, "→"),
+        (0, import_react8.createElement)("span", { className: "os-chip" }, owner ? (0, import_react8.createElement)(import_react8.Fragment, null, (0, import_react8.createElement)(BotMark, { bot: owner, size: 16 }), owner.name) : room?.name ?? t("a chat"))
       ),
-      (0, import_react7.createElement)(
+      (0, import_react8.createElement)(
         "span",
         { className: "os-row-foot" },
-        (0, import_react7.createElement)("span", null, active && task.scheduledAt ? t("next run {time}", { time: new Date(task.scheduledAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) }) : task.lastDelivery ? t("last run {time}", { time: relativeShort(Date.parse(task.lastDelivery.deliveredAt ?? task.lastDelivery) || Date.now()) }) : t("not run yet"))
+        (0, import_react8.createElement)("span", null, active && task.scheduledAt ? t("next run {time}", { time: new Date(task.scheduledAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) }) : task.lastDelivery ? t("last run {time}", { time: relativeShort(Date.parse(task.lastDelivery.deliveredAt ?? task.lastDelivery) || Date.now()) }) : t("not run yet"))
       )
     )
   );
@@ -4336,7 +4496,7 @@ var AUTOMATIONS_CSS = `
 `;
 
 // src/client/permissions.js
-var import_react8 = require("react");
+var import_react9 = require("react");
 var NONE = {};
 var ASKING_TOOLS = ["omni_messages", "omni_send", "omni_react", "omni_media", "omni_delete", "omni_call"];
 var KIND_OF = { chat: "chat", group: "group", self: "your own chat", channel: "channel" };
@@ -4369,17 +4529,17 @@ var CONFIRM_LABEL = { send: "Send", delete: "Delete", disconnect: "Disconnect", 
 function Preview({ entry }) {
   const preview = entry.preview ?? NONE;
   const lines = [];
-  if (entry.resource?.type === "call") lines.push((0, import_react8.createElement)("code", { key: "op", className: "om-perm-op" }, `${preview.method ?? ""} ${preview.path ?? ""}${preview.query ? ` ?${preview.query}` : ""}`.trim()));
-  if (preview.channel) lines.push((0, import_react8.createElement)("div", { key: "channel", className: "om-perm-to" }, t("From {channel}", { channel: preview.channel })));
-  if (preview.to) lines.push((0, import_react8.createElement)("div", { key: "to", className: "om-perm-to" }, t("To {to}", { to: preview.to })));
-  if (preview.emoji) lines.push((0, import_react8.createElement)("div", { key: "emoji", className: "om-perm-emoji" }, preview.emoji));
-  if (preview.text) lines.push((0, import_react8.createElement)("blockquote", { key: "text", className: "om-perm-text" }, preview.text));
-  if (preview.body) lines.push((0, import_react8.createElement)("pre", { key: "body", className: "om-perm-body" }, preview.body));
-  return lines.length === 0 ? null : (0, import_react8.createElement)("div", { className: "om-perm-preview" }, lines);
+  if (entry.resource?.type === "call") lines.push((0, import_react9.createElement)("code", { key: "op", className: "om-perm-op" }, `${preview.method ?? ""} ${preview.path ?? ""}${preview.query ? ` ?${preview.query}` : ""}`.trim()));
+  if (preview.channel) lines.push((0, import_react9.createElement)("div", { key: "channel", className: "om-perm-to" }, t("From {channel}", { channel: preview.channel })));
+  if (preview.to) lines.push((0, import_react9.createElement)("div", { key: "to", className: "om-perm-to" }, t("To {to}", { to: preview.to })));
+  if (preview.emoji) lines.push((0, import_react9.createElement)("div", { key: "emoji", className: "om-perm-emoji" }, preview.emoji));
+  if (preview.text) lines.push((0, import_react9.createElement)("blockquote", { key: "text", className: "om-perm-text" }, preview.text));
+  if (preview.body) lines.push((0, import_react9.createElement)("pre", { key: "body", className: "om-perm-body" }, preview.body));
+  return lines.length === 0 ? null : (0, import_react9.createElement)("div", { className: "om-perm-preview" }, lines);
 }
 function ConsentCard({ bot, entry }) {
-  const [busy, setBusy] = (0, import_react8.useState)("");
-  const [error, setError] = (0, import_react8.useState)("");
+  const [busy, setBusy] = (0, import_react9.useState)("");
+  const [error, setError] = (0, import_react9.useState)("");
   const answer = (choice) => {
     if (busy) return;
     setBusy(choice);
@@ -4388,37 +4548,37 @@ function ConsentCard({ bot, entry }) {
   };
   const running = entry.status === "running";
   const confirm = entry.kind === "confirm";
-  const button = (choice, label, primary = false) => (0, import_react8.createElement)("button", {
+  const button = (choice, label, primary = false) => (0, import_react9.createElement)("button", {
     type: "button",
     className: primary ? "bt-q-submit" : "bt-q-btn",
     disabled: Boolean(busy) || running,
     onClick: () => answer(choice)
   }, busy === choice ? "…" : label);
-  return (0, import_react8.createElement)(
+  return (0, import_react9.createElement)(
     "div",
     { className: "bt-q om-perm", role: "group", "aria-label": askTitle(bot, entry), "data-kind": entry.kind },
-    (0, import_react8.createElement)(
+    (0, import_react9.createElement)(
       "div",
       { className: "bt-q-head" },
-      (0, import_react8.createElement)("span", { className: "om-perm-who" }, (0, import_react8.createElement)(BotMark, { bot, size: 28 })),
-      (0, import_react8.createElement)(
+      (0, import_react9.createElement)("span", { className: "om-perm-who" }, (0, import_react9.createElement)(BotMark, { bot, size: 28 })),
+      (0, import_react9.createElement)(
         "div",
         { className: "bt-q-text" },
-        (0, import_react8.createElement)("p", { className: "bt-q-title" }, askTitle(bot, entry)),
-        (0, import_react8.createElement)("div", { className: "bt-q-detail" }, reachText(entry))
+        (0, import_react9.createElement)("p", { className: "bt-q-title" }, askTitle(bot, entry)),
+        (0, import_react9.createElement)("div", { className: "bt-q-detail" }, reachText(entry))
       )
     ),
-    (0, import_react8.createElement)(Preview, { entry }),
-    error ? (0, import_react8.createElement)("div", { className: "om-perm-error", role: "alert" }, error) : null,
-    (0, import_react8.createElement)(
+    (0, import_react9.createElement)(Preview, { entry }),
+    error ? (0, import_react9.createElement)("div", { className: "om-perm-error", role: "alert" }, error) : null,
+    (0, import_react9.createElement)(
       "div",
       { className: "bt-q-foot" },
-      running ? (0, import_react8.createElement)("span", { className: "om-perm-running" }, t("Running…")) : null,
-      confirm ? [(0, import_react8.createElement)("span", { key: "deny" }, button("deny", t("Cancel"))), (0, import_react8.createElement)("span", { key: "once" }, button("once", t(CONFIRM_LABEL[entry.action] ?? "Allow"), true))] : [
-        (0, import_react8.createElement)("span", { key: "deny" }, button("deny", t("No"))),
-        (0, import_react8.createElement)("span", { key: "once" }, button("once", t("Once"))),
-        entry.resource?.channelId && entry.resource.channelName ? (0, import_react8.createElement)("span", { key: "channel" }, button("channel", t("Always, all of {channel}", { channel: entry.resource.channelName }))) : null,
-        (0, import_react8.createElement)("span", { key: "always" }, button("always", t("Always"), true))
+      running ? (0, import_react9.createElement)("span", { className: "om-perm-running" }, t("Running…")) : null,
+      confirm ? [(0, import_react9.createElement)("span", { key: "deny" }, button("deny", t("Cancel"))), (0, import_react9.createElement)("span", { key: "once" }, button("once", t(CONFIRM_LABEL[entry.action] ?? "Allow"), true))] : [
+        (0, import_react9.createElement)("span", { key: "deny" }, button("deny", t("No"))),
+        (0, import_react9.createElement)("span", { key: "once" }, button("once", t("Once"))),
+        entry.resource?.channelId && entry.resource.channelName ? (0, import_react9.createElement)("span", { key: "channel" }, button("channel", t("Always, all of {channel}", { channel: entry.resource.channelName }))) : null,
+        (0, import_react9.createElement)("span", { key: "always" }, button("always", t("Always"), true))
       ]
     )
   );
@@ -4433,10 +4593,10 @@ var SETTLED = {
   replaced: "Asked again"
 };
 function Settled({ bot, entry }) {
-  return (0, import_react8.createElement)(
+  return (0, import_react9.createElement)(
     "div",
     { className: "bt-event om-perm-done", "data-status": entry.status },
-    (0, import_react8.createElement)(BotMark, { bot, size: 16 }),
+    (0, import_react9.createElement)(BotMark, { bot, size: 16 }),
     ` ${askTitle(bot, entry)} · ${t(SETTLED[entry.status] ?? entry.status)}`
   );
 }
@@ -4447,10 +4607,10 @@ function withConsent(render) {
     const callId = props.call?.callId;
     const entry = bot && callId ? entryAt(props.roster, bot, props.sessionId, callId) : void 0;
     if (entry === void 0) {
-      if (props.done && /^(consent|confirmation)_required:/.test(props.content ?? "")) return (0, import_react8.createElement)("div", { className: "bt-event" }, t("Asked you for permission in its chat"));
+      if (props.done && /^(consent|confirmation)_required:/.test(props.content ?? "")) return (0, import_react9.createElement)("div", { className: "bt-event" }, t("Asked you for permission in its chat"));
       return render ? render(props) : null;
     }
-    return (0, import_react8.createElement)("div", { className: "bt-q-inline" }, entry.status === "pending" || entry.status === "running" ? (0, import_react8.createElement)(ConsentCard, { bot, entry }) : (0, import_react8.createElement)(Settled, { bot, entry }));
+    return (0, import_react9.createElement)("div", { className: "bt-q-inline" }, entry.status === "pending" || entry.status === "running" ? (0, import_react9.createElement)(ConsentCard, { bot, entry }) : (0, import_react9.createElement)(Settled, { bot, entry }));
   };
 }
 function ConsentDock({ sessionId, useRoster, useCards }) {
@@ -4461,7 +4621,7 @@ function ConsentDock({ sessionId, useRoster, useCards }) {
   const drawn = (entry) => entry.callId && entry.sessionId === sessionId && shown[entry.callId] > 0;
   const waiting = (roster.omniConsents?.[bot.id] ?? []).filter((entry) => (entry.status === "pending" || entry.status === "running") && !drawn(entry));
   if (waiting.length === 0) return null;
-  return (0, import_react8.createElement)("div", { className: "bt-q-dock om-perm-dock" }, waiting.map((entry) => (0, import_react8.createElement)(ConsentCard, { key: entry.id, bot, entry })));
+  return (0, import_react9.createElement)("div", { className: "bt-q-dock om-perm-dock" }, waiting.map((entry) => (0, import_react9.createElement)(ConsentCard, { key: entry.id, bot, entry })));
 }
 var ACTION_TEXT = { read: "read", media: "files", send: "send", react: "react", delete: "delete" };
 function PermissionsCard({ bot, roster, run, Card, SwitchRow }) {
@@ -4470,35 +4630,35 @@ function PermissionsCard({ bot, roster, run, Card, SwitchRow }) {
   const grants = (roster.omniGrants ?? []).filter((grant) => grant.botId === bot.id);
   const now = Date.now();
   if (main) {
-    return (0, import_react8.createElement)(
+    return (0, import_react9.createElement)(
       Card,
       { title: t("On Omni") },
-      (0, import_react8.createElement)("div", { className: "bt-set-row bt-bs-row" }, (0, import_react8.createElement)(
+      (0, import_react9.createElement)("div", { className: "bt-set-row bt-bs-row" }, (0, import_react9.createElement)(
         "span",
         { className: "bt-set-copy" },
-        (0, import_react8.createElement)("span", { className: "bt-bs-label" }, t("All of Omni")),
-        (0, import_react8.createElement)("span", { className: "bt-set-hint" }, t("A Main Bot operates Omni. Messaging a person, deleting and disconnecting still ask you first."))
+        (0, import_react9.createElement)("span", { className: "bt-bs-label" }, t("All of Omni")),
+        (0, import_react9.createElement)("span", { className: "bt-set-hint" }, t("A Main Bot operates Omni. Messaging a person, deleting and disconnecting still ask you first."))
       ))
     );
   }
-  return (0, import_react8.createElement)(
+  return (0, import_react9.createElement)(
     Card,
     { title: t("On Omni") },
-    grants.length === 0 ? (0, import_react8.createElement)("div", { className: "bt-set-row bt-bs-row" }, (0, import_react8.createElement)(
+    grants.length === 0 ? (0, import_react9.createElement)("div", { className: "bt-set-row bt-bs-row" }, (0, import_react9.createElement)(
       "span",
       { className: "bt-set-copy" },
-      (0, import_react8.createElement)("span", { className: "bt-bs-label" }, t("Nothing yet")),
-      (0, import_react8.createElement)("span", { className: "bt-set-hint" }, t("When {bot} needs a chat, it asks you there, on a card.", { bot: bot.name }))
-    )) : grants.map((grant) => (0, import_react8.createElement)(
+      (0, import_react9.createElement)("span", { className: "bt-bs-label" }, t("Nothing yet")),
+      (0, import_react9.createElement)("span", { className: "bt-set-hint" }, t("When {bot} needs a chat, it asks you there, on a card.", { bot: bot.name }))
+    )) : grants.map((grant) => (0, import_react9.createElement)(
       "div",
       { key: grant.id, className: "om-grant" },
-      (0, import_react8.createElement)(SwitchRow, {
+      (0, import_react9.createElement)(SwitchRow, {
         label: `${grant.resource?.name ?? t("a chat")} · ${grant.actions.map((action) => t(ACTION_TEXT[action] ?? action)).join(", ")}`,
         hint: [kindText(grant.resource), typeof grant.expiresAt === "number" && grant.expiresAt <= now ? t("expired") : "", t("Ask each time")].filter(Boolean).join(" · "),
         on: grant.approval === "confirm",
         onChange: (on) => run(call("omni-grant-approval", { id: grant.id, approval: on ? "confirm" : "auto" }))
       }),
-      (0, import_react8.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm om-grant-revoke", onClick: () => run(call("omni-grant-revoke", { id: grant.id })) }, t("Revoke"))
+      (0, import_react9.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm om-grant-revoke", onClick: () => run(call("omni-grant-revoke", { id: grant.id })) }, t("Revoke"))
     ))
   );
 }
@@ -4657,7 +4817,28 @@ var STRINGS = {
   "That is not a link your Omni sends. It looks like https://your-omni/api/login/app?grant=…": "这不是你的 Omni 发送的链接。它看起来像 https://your-omni/api/login/app?grant=…",
   "Text connect to yourself on WhatsApp and your Omni sends you the link.": "在 WhatsApp 上给自己发送 connect，你的 Omni 就会把链接发给你。",
   "Run Omni on this computer": "在这台电脑上运行 Omni",
-  "Starting…": "正在启动…",
+  "Install": "安装",
+  "Install Omni on this computer? It runs on its own, in {home}, and doesn't touch other installs.": "要在这台电脑上安装 Omni 吗？它独立运行在 {home} 中，不会动到其他安装。",
+  "Update your sandboxed Omni to {version}? Its data stays.": "要把你的沙盒 Omni 更新到 {version} 吗？数据会保留。",
+  "Looking for Bun…": "正在查找 Bun…",
+  "Getting Bun…": "正在获取 Bun…",
+  "Installing and starting Omni… The first time takes a few minutes.": "正在安装并启动 Omni… 第一次需要几分钟。",
+  "Updating Omni… This takes a minute.": "正在更新 Omni… 需要一分钟左右。",
+  "Connecting to it…": "正在连接…",
+  "{error} Its logs are in {dir}.": "{error} 日志在 {dir}。",
+  "Omni {version} on this computer is older than this app.": "这台电脑上的 Omni {version} 比这个应用旧。",
+  "Update it from a terminal:": "在终端里更新它：",
+  "Update to {version}": "更新到 {version}",
+  "Checking for updates…": "正在检查更新…",
+  "Asking…": "正在请求…",
+  "Omni {latest} is out. This one runs {current}.": "Omni {latest} 已发布。这个 Omni 运行的是 {current}。",
+  "Omni {latest} is out, but updates from the app are off on this Omni. Update it where it runs:": "Omni {latest} 已发布，但这个 Omni 关闭了从应用更新。请在它运行的地方更新：",
+  "An update to {version} is waiting for your yes on WhatsApp.": "更新到 {version} 正在等待你在 WhatsApp 上确认。",
+  "Updating to {version}…": "正在更新到 {version}…",
+  "Up to date ({version}).": "已是最新（{version}）。",
+  "Could not reach this Omni to check for updates.": "无法连接这个 Omni 来检查更新。",
+  "Could not tell whether this Omni has an update.": "无法判断这个 Omni 是否有更新。",
+  "Confirm on WhatsApp: your Omni sent you a code. Reply update and that code in your chat with yourself.": "在 WhatsApp 上确认：你的 Omni 给你发了一个验证码。在你和自己的聊天里回复 update 加上这个验证码。",
   "Omni address": "Omni 地址",
   "Get a code": "获取验证码",
   "Setup steps": "设置步骤",
@@ -4904,7 +5085,7 @@ var STRINGS = {
 };
 
 // src/client/index.js
-var import_react9 = require("react");
+var import_react10 = require("react");
 var { ClockIcon: ClockIcon2 } = icons;
 var inject = ["slots"];
 var channels = Object.freeze({ Badge, KeyValue, LiveChannel, LiveChat, LiveQr, Table });
@@ -4973,8 +5154,8 @@ var PHRASES = {
   omni_media: () => ({ label: t("Opening a file"), state: "working" }),
   omni_delete: () => ({ label: t("Deleting a message"), state: "working" })
 };
-var callCard = ({ arg, content, done }) => (0, import_react9.createElement)(OmniCallCard, { ...parseCall(arg, content), done });
-var toolCard = ({ tool, arg, content, done }) => (0, import_react9.createElement)(OmniToolCard, { tool, arg, content, done });
+var callCard = ({ arg, content, done }) => (0, import_react10.createElement)(OmniCallCard, { ...parseCall(arg, content), done });
+var toolCard = ({ tool, arg, content, done }) => (0, import_react10.createElement)(OmniToolCard, { tool, arg, content, done });
 function apply(ctx) {
   ctx.effect(() => addStrings(STRINGS), "ds-bot: channels copy");
   registerConnectStep(ctx);
@@ -4991,10 +5172,10 @@ function apply(ctx) {
   }
   if (botSettings) ctx.effect(() => botSettings.register({ id: "omni-permissions", order: 0, Component: PermissionsCard }), "ds-bot: Omni permissions settings");
   for (const name of ["find_chats", "omni_endpoints"]) ctx.effect(() => toolCards.register(name, null, { phrase: PHRASES[name] }), `ds-bot: ${name} phrase`);
-  ctx.effect(() => badges.register({ id: "omni-events", Component: ({ bot, roster, useWork }) => bot.id === roster.eventsBotId ? (0, import_react9.createElement)(EventsBadge, { roster, useWork }) : null }), "ds-bot: automations badge");
+  ctx.effect(() => badges.register({ id: "omni-events", Component: ({ bot, roster, useWork }) => bot.id === roster.eventsBotId ? (0, import_react10.createElement)(EventsBadge, { roster, useWork }) : null }), "ds-bot: automations badge");
   ctx.effect(() => headerButtons.register({
     id: "omni-board",
-    Component: ({ bot, roster, actions, useWork }) => bot.id === roster.eventsBotId ? (0, import_react9.createElement)(SubscriptionsButton, { roster, useWork, onToggle: () => toggleBoard(actions.reportError) }) : null
+    Component: ({ bot, roster, actions, useWork }) => bot.id === roster.eventsBotId ? (0, import_react10.createElement)(SubscriptionsButton, { roster, useWork, onToggle: () => toggleBoard(actions.reportError) }) : null
   }), "ds-bot: automations button");
   ctx.effect(() => nav.register({ id: "automations", label: () => t("Automations"), icon: ClockIcon2, run: (actions) => actions.selectPanel(AUTOMATIONS_PANEL) }), "ds-bot: automations nav");
   ctx.effect(() => onShell(({ face, shadow, installCompiledStyles }) => [
