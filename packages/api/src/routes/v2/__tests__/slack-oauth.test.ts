@@ -52,6 +52,14 @@ const ALL_SETTINGS: Record<string, string> = {
 const ALL_KEYS = Object.values(SLACK_APP_SETTINGS).map((s) => s.key);
 const ALL_ENVS = Object.values(SLACK_APP_SETTINGS).map((s) => s.env);
 
+/**
+ * The signature with its last hex digit changed. Always different: overwriting the tail with a
+ * fixed `00` left it valid whenever the random nonce's digest already ended in `00` (1 in 256).
+ */
+function tamperedSignature(sig: string): string {
+  return `${sig.slice(0, -1)}${sig.endsWith('0') ? '1' : '0'}`;
+}
+
 /** Slack's answer to a user-mode authorize: the person's token and no bot, since no bot scope was asked for. */
 function accessResponse(overrides: Record<string, unknown> = {}) {
   return {
@@ -580,7 +588,7 @@ describe('GET /api/v2/slack/oauth/callback', () => {
     const state = h.stateOf(started.body.authorizeUrl);
     const [nonce, sig] = state.split('.') as [string, string];
 
-    const tampered = await h.callback({ code: 'c', state: `${nonce}.${sig.slice(0, -2)}00` });
+    const tampered = await h.callback({ code: 'c', state: `${nonce}.${tamperedSignature(sig)}` });
     expect(tampered.res.status).toBe(400);
 
     const foreign = await h.callback({ code: 'c', state: `${nonce.slice(0, -1)}z.${sig}` });
@@ -844,7 +852,7 @@ describe('GET /api/v2/slack/oauth/callback', () => {
     const started = await configured.start();
     const [nonce, sig] = configured.stateOf(started.body.authorizeUrl).split('.') as [string, string];
     // Same nonce, broken signature: a configured deployment answers invalid_state.
-    const invalidState = await configured.callback({ code: 'c', state: `${nonce}.${sig.slice(0, -2)}00` });
+    const invalidState = await configured.callback({ code: 'c', state: `${nonce}.${tamperedSignature(sig)}` });
 
     const unconfigured = harness({ settings: {} });
     const notConfigured = await unconfigured.callback({ code: 'c', state: `${nonce}.${sig}` });
