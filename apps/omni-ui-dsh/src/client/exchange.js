@@ -1,10 +1,11 @@
-import { createElement as h, Fragment, useEffect, useState } from 'react'
+import { createElement as h, Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { inkText } from './inks.js'
 import { dayLabel } from './text.js'
 import { colorOf, BotMark } from './mark.js'
 import { Bubbles } from './cells.js'
 import { stripLongNote } from './fold.js'
 import { useEscape, usePaneLeft } from './overlay-hooks.js'
+import { layoutOf } from './themes.js'
 import { t } from './i18n.js'
 
 const SHEET_EXIT_MS = 220
@@ -12,6 +13,11 @@ const SHEET_EXIT_MS = 220
 export function ExchangeDialog({ pair, roster, actions }) {
   const [entries, setEntries] = useState(null)
   const [leaving, setLeaving] = useState(false)
+  const log = useRef(null)
+  const atEnd = useRef(true)
+  useLayoutEffect(() => {
+    if (entries !== null && atEnd.current && log.current) log.current.scrollTop = log.current.scrollHeight
+  }, [entries])
   // The sheet slides back down before it unmounts.
   const close = () => {
     if (leaving) return
@@ -23,6 +29,8 @@ export function ExchangeDialog({ pair, roster, actions }) {
     let stop = false
     let timer
     let seen = null
+    atEnd.current = true
+    setEntries(null)
     const load = async () => {
       const result = await actions.exchange(pair[0], pair[1])
       if (stop) return
@@ -35,6 +43,7 @@ export function ExchangeDialog({ pair, roster, actions }) {
   }, [pair[0], pair[1]])
   const left = roster.byId[pair[0]]
   const right = roster.byId[pair[1]]
+  const flat = layoutOf(roster.prefs) === 'flat'
   let lastDay = 0
   const paneLeft = usePaneLeft()
   return h('div', { className: 'bt-pane bt-exchange', style: { left: paneLeft }, 'data-leaving': leaving || undefined },
@@ -43,7 +52,10 @@ export function ExchangeDialog({ pair, roster, actions }) {
         left ? h(BotMark, { bot: left, size: 22 }) : null, left?.name ?? '?',
         h('span', { className: 'bt-swap' }, '⇄'),
         right ? h(BotMark, { bot: right, size: 22 }) : null, right?.name ?? '?')),
-      h('div', { className: 'bt-dialog-log', role: 'log', 'aria-label': t('Bot exchange transcript') },
+      h('div', { ref: log, className: 'bt-dialog-log', role: 'log', 'aria-label': t('Bot exchange transcript'), onScroll: (event) => {
+        const node = event.currentTarget
+        atEnd.current = node.scrollHeight - node.scrollTop - node.clientHeight < 2
+      } },
         entries === null ? h('div', { className: 'bt-hint' }, t('Loading…'))
           : entries.length === 0 ? h('div', { className: 'bt-hint' }, t('No messages yet'))
             : entries.map((entry) => {
@@ -52,11 +64,12 @@ export function ExchangeDialog({ pair, roster, actions }) {
               lastDay = entry.time
               // A long message comes with its start only; the rest is read on request.
               const whole = entry.length === undefined ? undefined : { length: entry.length, load: () => actions.exchangeText(entry.id) }
+              const lead = h('span', { className: 'bt-lead' }, h(BotMark, { bot: bot, size: 22 }))
               return h(Fragment, { key: entry.id },
                 showDay ? h('time', { className: 'bt-time' }, dayLabel(entry.time)) : null,
                 h('div', { className: 'bt-group-msg' },
-                  h('span', { className: 'bt-group-name', style: { color: inkText(colorOf(bot)) } }, bot.name),
-                  h(Bubbles, { texts: [stripLongNote(entry.text)], roster, selfId: bot.id, actions, whole, lead: h('span', { className: 'bt-lead' }, h(BotMark, { bot: bot, size: 22 })) })))
+                  h('span', { className: 'bt-group-name', style: flat ? undefined : { color: inkText(colorOf(bot)) } }, flat ? lead : null, bot.name),
+                  h(Bubbles, { texts: [stripLongNote(entry.text)], roster, selfId: bot.id, actions, whole, lead: flat ? null : lead })))
             })),
       h('div', { className: 'bt-dialog-foot' }, h('button', { type: 'button', className: 'bt-soft', onClick: close }, t('Close Chat')))))
 }

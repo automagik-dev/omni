@@ -67,7 +67,7 @@ export function AboutPage({ useUpdate, actions, run, Section, Row }) {
   // Same rule as the sidebar card.
   const dshNew = showsDshRow(dsh, update.app)
   const dshShown = dshNew && dsh.available
-  const botControl = phase === 'installed' ? null
+  const botControl = phase === 'installed' || update.source === 'app' ? null
     : update.available || phase === 'installing'
       ? h('button', { type: 'button', className: 'bt-fb-primary', disabled: phase === 'installing', onClick: () => run(actions.installUpdate()) },
           phase === 'installing' ? t('Updating…') : phase === 'failed' ? t('Try again') : t('Update'))

@@ -4,6 +4,7 @@
 // runs from the next DSH start. A linked or local checkout is never offered one.
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { inDesktopApp } from './constants.js'
 
 const PKG = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'))
 export const OFFICIAL_REGISTRY = 'https://registry.npmjs.org/'
@@ -170,7 +171,8 @@ export function install(rt) {
   }
 
   async function runCheck() {
-    const source = sourceOf(await installSpecOf(ctx))
+    // The desktop app updates as a whole, with this package inside it.
+    const source = inDesktopApp() ? { kind: 'app' } : sourceOf(await installSpecOf(ctx))
     status.source = source.kind
     let found = null
     try {

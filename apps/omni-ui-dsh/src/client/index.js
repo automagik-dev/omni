@@ -6,18 +6,22 @@ import { badges, botSettings, headerButtons, mountShellInstallers, nav, onShell,
 import { TASK_CSS } from './task-card.js'
 import { isHex, inkText, paintCss } from './inks.js'
 import { CHARACTERS, DEFAULT_MASK, MAIN_LOOK, SHAPES, markupCache, maskOf } from './characters.js'
-import { countCards, createSource, EMPTY_ROSTER, indexRoster, isAgentSession } from './sources.js'
-import { themeCss, shellTokens, registry, registerShape, registerTheme, allThemes } from './themes.js'
+import { createSource, EMPTY_ROSTER, indexRoster, isAgentSession } from './sources.js'
+import { teamActions } from './team-actions.js'
+import { themeCss, shellTokens, registry, registerShape, registerTheme, allThemes, layoutOf, widthOf, flatWidthOf } from './themes.js'
 import { MENTION_ORIGIN, currentPart, relativeShort } from './text.js'
 import { SHELL_CSS, CONVERSATION_CSS, installStyles, installCompiledStyles } from './styles.js'
 import { BotMark, lookOf } from './mark.js'
-import { TeamSidebar, ChannelsMoved, YouAvatar, AccountLauncher, FooterAccount, BrandMark, BrandName, BotReturn, SIDEBAR_CSS, RETURN_CSS, holdShellShortcuts } from './sidebar.js'
+import { TeamSidebar, ChannelsMoved, YouAvatar, AccountLauncher, FooterAccount, BrandMark, BrandName, BotReturn, SIDEBAR_CSS, RETURN_CSS, holdShellShortcuts, openHarnessOnboarding, openHarnessSettings } from './sidebar.js'
 import { HeaderPill } from './header.js'
 import { ComposerPlus, ComposerVoice, menuIcons } from './composer.js'
 import { CHATS_SOURCE, atSources } from './at-menu.js'
+import { BtwDock, BtwTurnTail, btwSource } from './btw.js'
 import { VOICE_BUNDLE } from './speech.js'
 import { sameVersion } from './dsh-offer.js'
-import { AnsweredCell, QuestionCard, QuestionDock } from './questions.js'
+import { QuestionCard, QuestionDock } from './questions.js'
+import { AnsweredReply, WidgetDock, WIDGET_CSS } from './widget-cell.js'
+import { installHeaderNavigation } from './header-navigation.js'
 import { AssistantCell, TriggerCell, TurnProcessCell, Nothing, TurnTailCell, ToolCell } from './cells.js'
 import { Overlays } from './overlays.js'
 import { createBotBrowsers, serveBrowserReads } from './bot-browsers.js'
@@ -34,11 +38,13 @@ import { noteLeft, setUnread, sharedMap, toggleReaction } from './shared-map.js'
 import { freePriority, groupsFor, readMode, surfaceGroups, writeMode } from './surface.js'
 import { addStrings, dateLocale, hostText, installLocale, language, t } from './i18n.js'
 import { noteClientError, quietly } from './diagnostics.js'
+import { RIGHTBAR_ATTRIBUTES, columnOpened, createSwitchWindow, drawerOpened, rightColumnOpen } from './right-panel.js'
 import { ErrorToast, FEEDBACK_CSS } from './feedback.js'
 import { ABOUT_CSS } from './about.js'
 import { MEMBER_CSS, MemberDock } from './member-status.js'
 import { USER_MESSAGE_CSS, UserMessageCell, canDrawUserMessages } from './user-message.js'
 import { noticeApprovals } from './approval-notices.js'
+import { listedOpener } from './open-listed.js'
 
 export const inject = ['sessions', 'uiWorkspace', 'uiConversation', 'slots', 'theme', 'layout']
 // What a state answer carries that is not roster data, or is kept apart from it.
@@ -128,6 +134,9 @@ export function apply(ctx) {
   // Per Session, the ask_user and request_secret calls its transcript draws; the
   // docks carry the cards of the other calls.
   const cards = createSource({})
+  // Edited dock cards keep their component when history arrives. This source
+  // holds only request identities and counts, never drafts or secret values.
+  const heldCards = createSource({})
   // Per Session, the first visible time and the end time of each turn the transcript
   // has rendered; time separators compare one turn's end with the next turn's start.
   const turnClock = createSource({})
@@ -178,6 +187,7 @@ export function apply(ctx) {
         if (!LIVE_OWN.has(key) && !(key in live) && JSON.stringify(next) !== JSON.stringify(current[key])) live[key] = next
       }
     }
+    if (value.btwCards !== undefined && JSON.stringify(value.btwCards) !== JSON.stringify(current.btwCards ?? {})) live.btwCards = value.btwCards
     if (Object.keys(live).length > 0 && current.ready) roster.set({ ...current, ...live })
     if (value.unchanged || (value.revision === current.revision && value.modelsKey === current.modelsKey)) return
     // On a browser with no visit record yet, everything already there counts as seen.
@@ -250,9 +260,9 @@ export function apply(ctx) {
     }, 'ds-bot: app update status')
   }
 
-  // Bot browsers need the Desktop shell's webview bridge, and the host serves
-  // read_browser only in the Desktop profile (`browser` in the state).
-  const bridge = window.dshDesktop?.protocolVersion === 1 ? window.dshDesktop.browser ?? null : null
+  // Bot browsers need a webview bridge: DSH Desktop's, or the desktop app's of the
+  // same shape. The host serves read_browser only in those two (`browser` in the state).
+  const bridge = (window.dshDesktop?.protocolVersion === 1 ? window.dshDesktop.browser : globalThis.dsBotApp?.browser) ?? null
   const browsers = bridge ? createBotBrowsers({ bridge, createSource }) : null
   if (browsers) {
     ctx.effect(() => {
@@ -317,8 +327,14 @@ export function apply(ctx) {
       const id = themes[prefs.theme] ? prefs.theme : 'deepseek'
       const accent = isHex(prefs.accent) ? prefs.accent : undefined
       const motion = prefs.motion === 'quiet' || prefs.motion === 'lively' ? prefs.motion : 'normal'
+      const layout = layoutOf(prefs)
+      const width = widthOf(prefs)
+      const flatWidth = flatWidthOf(prefs)
       document.body.dataset.btMotion = motion
-      const next = `${id}|${accent ?? ''}|${motion}|${registry.getSnapshot()}`
+      document.body.dataset.btLayout = layout
+      document.body.style.setProperty('--bt-msg-w', String(width / 100))
+      document.body.style.setProperty('--bt-flat-w', String(flatWidth / 100))
+      const next = `${id}|${accent ?? ''}|${motion}|${layout}|${width}|${flatWidth}|${registry.getSnapshot()}`
       if (next === key) return
       key = next
       style.textContent = themeCss(themes[id], accent)
@@ -326,7 +342,7 @@ export function apply(ctx) {
       releaseTokens = ctx.theme.overrideTokens('omni-ui', shellTokens(themes[id], accent))
       if (typeof release === 'function') release()
       if (snapshot.ready) {
-        try { localStorage.setItem(PREFS_KEY, JSON.stringify({ theme: prefs.theme, accent: prefs.accent, motion: prefs.motion })) } catch { /* storage unavailable */ }
+        try { localStorage.setItem(PREFS_KEY, JSON.stringify({ theme: prefs.theme, accent: prefs.accent, motion: prefs.motion, layout: prefs.layout, width: prefs.width, flatWidth: prefs.flatWidth, thinking: prefs.thinking })) } catch { /* storage unavailable */ }
       }
     }
     render()
@@ -339,6 +355,9 @@ export function apply(ctx) {
         if (typeof releaseTokens === 'function') releaseTokens()
       } finally {
         delete document.body.dataset.btMotion
+        delete document.body.dataset.btLayout
+        document.body.style.removeProperty('--bt-msg-w')
+        document.body.style.removeProperty('--bt-flat-w')
         style.remove()
       }
     }
@@ -370,7 +389,10 @@ export function apply(ctx) {
     for (const [id, owner] of pendingAdopt) if (owner === agentId && !ids.includes(id)) ids.push(id)
     return ids
   }
+  const mainView = () => Object.values(ctx.sessions.list.getSnapshot().byId ?? {}).find(session => (session?.retainedBy?.mainView ?? 0) > 0)?.id
+  const show = listedOpener({ list: ctx.sessions.list, refresh: () => Promise.resolve(ctx.sessions.refresh?.()).catch(quietly('refresh sessions')), open: (target) => { expected = target; ctx.uiWorkspace.openSession(target) }, current: mainView })
   const actions = {
+    ...teamActions({ call, after, partFor, roster, ui, live, cards, heldCards, turnClock }),
     // The full-pane overlays sit above the conversation, so opening one must dismiss them
     // or the click appears to do nothing.
     isAgentSession: id => isAgentSessionId(id),
@@ -380,16 +402,14 @@ export function apply(ctx) {
       ui.set(state => (state.newChat || state.exchange || state.menu || state.palette ? { ...state, newChat: null, exchange: null, menu: null, palette: null } : state))
       setPlain(false)
       const target = partFor(id)
-      expected = target
-      ctx.uiWorkspace.openSession(target)
+      show(target)
     },
     // The conversation replacements withdraw for a plain Session; set the surface
     // before the navigation so the Bot skin never flashes.
     openAgentSession: (sessionId) => {
       ui.set(state => ({ ...state, newChat: null, exchange: null, menu: null, palette: null, details: null, view: 'details', renaming: false, tab: null }))
       setPlain(true)
-      expected = sessionId
-      ctx.uiWorkspace.openSession(sessionId)
+      show(sessionId)
     },
     addAgent: async () => {
       const agent = await after(call('add-agent'))
@@ -447,42 +467,10 @@ export function apply(ctx) {
       const bot = last ? roster.getSnapshot().byId[last.botId] : undefined
       setPlain(false)
       const target = bot && currentPart(bot) !== last.sessionId ? currentPart(bot) : partFor(id)
-      expected = target
-      ctx.uiWorkspace.openSession(target)
+      show(target)
     },
     selectPanel: (id) => { ctx.layout.selectPanel(id) },
     toggleSidebar: () => { ctx.layout.toggleSidebar() },
-    openNewChat: (mode) => { ui.set(state => ({ ...state, newChat: mode, menu: null, palette: null })) },
-    openPalette: (query = '') => { ui.set(state => ({ ...state, palette: { query, token: Date.now() }, newChat: null, menu: null })) },
-    // The token keeps a late exit timer from closing a palette opened again since.
-    closePalette: (token) => { ui.set(state => (state.palette && (token === undefined || state.palette.token === token) ? { ...state, palette: null } : state)) },
-    openExchange: (a, b) => { if (a && b) ui.set(state => ({ ...state, exchange: [a, b] })) },
-    openVoice: (id) => { if (id) ui.set(state => ({ ...state, voice: id, menu: null })) },
-    closeVoice: () => { ui.set(state => (state.voice ? { ...state, voice: null } : state)) },
-    toggleDetails: (id, force) => {
-      ui.set((state) => {
-        const details = force || state.details !== id || state.view !== 'details' ? id : null
-        return { ...state, renaming: false, tab: null, details, view: 'details' }
-      })
-    },
-    // The open panel follows the main view; a subject with no browser (a group
-    // chat, an outside Session) settles on the details view.
-    followPanel: (id) => {
-      ui.set((state) => {
-        if (!state.details || state.details === id) return state
-        const view = state.view === 'browser' && roster.getSnapshot().byId[id] === undefined ? 'details' : state.view
-        return { ...state, details: id, view, renaming: false, tab: null }
-      })
-    },
-    showDetails: (id, tab = null) => { ui.set(state => ({ ...state, details: id, view: 'details', renaming: false, tab })) },
-    // Opening the conversation would move focus to its composer and blur the name field.
-    renameBot: (id) => { ui.set(state => ({ ...state, details: id, view: 'details', renaming: true, tab: null })) },
-    // `id` opens one Bot (page 'bots') or one group chat (page 'groups').
-    openSettings: (page = 'general', id = null) => { ui.set(state => ({ ...state, settings: { page, id }, menu: null, palette: null, newChat: null })) },
-    closeSettings: () => { ui.set(state => (state.settings ? { ...state, settings: null } : state)) },
-    openMemory: (botId) => { ui.set(state => ({ ...state, memory: botId, menu: null, palette: null })) },
-    closeMemory: () => { ui.set(state => (state.memory ? { ...state, memory: null } : state)) },
-    openConnectors: () => { ui.set(state => ({ ...state, settings: { page: 'connectors', id: null }, menu: null, palette: null, newChat: null })) },
     // Agent mode hands the surface back to the shell; everything open on the Bot
     // surface closes first so nothing stale reopens on the way back.
     setSurface: (mode) => {
@@ -534,77 +522,7 @@ export function apply(ctx) {
       const reactions = reactionStore.update(saved => toggleReaction(saved, key, index, emoji), ui.getSnapshot().reactions)
       ui.set(state => ({ ...state, reactions }))
     },
-    quote: (sessionId, text) => ui.set(state => ({ ...state, quote: { sessionId, text, token: Date.now() } })),
-    clearQuote: token => ui.set(state => (state.quote?.token === token ? { ...state, quote: null } : state)),
     clearUnread: id => writeUnread(id, false),
-    setFlags: (id, flags) => after(call('set-flags', { id, ...flags })),
-    deleteRoom: id => after(call('delete-room', { id })),
-    openMenu: (menu) => { ui.set(state => ({ ...state, menu })) },
-    closeMenu: () => { ui.set(state => (state.menu ? { ...state, menu: null } : state)) },
-    closeOverlay: () => { ui.set(state => ({ ...state, newChat: null, exchange: null, details: state.newChat || state.exchange ? state.details : null })) },
-    createBot: payload => after(call('create-bot', payload)),
-    createRoom: (members, options = {}) => after(call('create-room', { members, ...options })),
-    updateBot: (id, patch) => after(call('update-bot', { id, ...patch })),
-    refreshModels: () => after(call('models')).catch(() => {}),
-    efforts: ref => call('efforts', { ref }),
-    folders: () => call('folders'),
-    folderPick: () => call('folder-pick'),
-    folderList: path => call('folder-list', { path: path ?? '' }),
-    deleteBot: id => after(call('delete-bot', { id })),
-    duplicateBot: id => after(call('duplicate-bot', { id })),
-    setPrefs: prefs => after(call('set-prefs', prefs)),
-    setMain: (id, main = true, options = {}) => after(call('set-main', { id, main, ...options })),
-    updateRoom: (id, patch) => after(call('update-room', { id, ...patch })),
-    send: (sessionId, text) => after(call('send', { sessionId: partFor(sessionId), text })),
-    answerQuestion: (sessionId, questionId, answer) => after(call('answer-question', { sessionId: partFor(sessionId), questionId, answer })),
-    dismissQuestion: sessionId => after(call('dismiss-question', { sessionId })),
-    answerApproval: (id, choice) => after(call('approval-answer', { id, choice })),
-    stopMemberWork: (roomId, botId) => after(call('stop-member-work', { roomId, botId })),
-    // Values go out in these requests and never come back in a response.
-    secretSet: payload => after(call('secret-set', payload)),
-    secretAllow: requestId => after(call('secret-allow', { requestId })),
-    secretCancel: requestId => after(call('secret-cancel', { requestId })),
-    secretUpdate: (name, scope) => after(call('secret-update', { name, scope })),
-    secretDelete: name => after(call('secret-delete', { name })),
-    connectorConnect: (id, token) => after(call('connector-connect', { id, token })),
-    connectorDisconnect: id => after(call('connector-disconnect', { id })),
-    connectorRetry: id => after(call('connector-retry', { id })),
-    saveCapability: capability => after(call('capability-save', capability)),
-    deleteCapability: name => after(call('capability-delete', { name })),
-    approveCapability: name => after(call('capability-approve', { name })),
-    setBotCapability: (botId, name, attached) => after(call('bot-capability', { botId, name, attached })),
-    schedules: () => call('schedules'),
-    scheduleCreate: task => call('schedule-create', task),
-    scheduleDelete: (sessionId, id) => call('schedule-delete', { sessionId, id }),
-    exchange: (a, b) => call('exchange', { a, b }).catch(() => []),
-    exchangeText: id => call('exchange-text', { id }).catch(() => undefined),
-    fileText: file => call('file-text', { file }).catch(() => undefined),
-    roomProgress: roomId => call('room-progress', { roomId }).catch(() => []),
-    earlier: (sessionId, cursor) => call('earlier', { sessionId, cursor: cursor ?? null }),
-    // Hours come back in this browser's time zone, so days start at local midnight.
-    usage: () => call('usage', { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }),
-    // `summarize` starts a summary when the entries changed; `regenerate` always does.
-    memoryView: (botId, flags = {}) => call('memory-view', { botId, ...flags }),
-    memoryAsk: (botId, text) => call('memory-ask', { botId, text }),
-    memoryForget: (botId, entry) => call('memory-forget', { botId, scope: entry.scope, topic: entry.topic, text: entry.text }),
-    diagnostics: payload => call('diagnostics', payload),
-    diagnosticsLog: () => call('diagnostics-log'),
-    diagnosticsClear: () => call('diagnostics-clear'),
-    // DSH's right sidebar (files, terminals), which a plugin may load after this one.
-    hasRightSidebar: () => ctx.get('sidebarRight') !== undefined,
-    toggleRightSidebar: () => {
-      try {
-        ctx.get('sidebarRight')?.toggleExpanded()
-      } catch (error) {
-        actions.reportError(error, 'right-sidebar')
-      }
-    },
-    // A failed action away from any form (a menu, the palette) shows as a toast.
-    reportError: (error, where = 'action') => {
-      noteClientError(where, error)
-      ui.set(state => ({ ...state, toast: { text: error?.message ?? String(error), token: Date.now() } }))
-    },
-    dismissToast: token => ui.set(state => (state.toast && (token === undefined || state.toast.token === token) ? { ...state, toast: null } : state)),
   }
   // Without the Desktop bridge these stay undefined, and no browser control renders.
   if (browsers) {
@@ -640,13 +558,17 @@ export function apply(ctx) {
       browserNavigate: (tabId, input) => browsers.navigate(tabId, input),
       browserCommand: (tabId, name) => browsers.command(tabId, name),
       browserFocus: (tabId) => browsers.focus(tabId),
+      // Cookie imports, only where the bridge offers them (the desktop app): a file or an
+      // installed browser's profile is previewed, then applied into the Bot's storage key.
+      browserImport: typeof bridge.importSources === 'function' ? {
+        sources: () => bridge.importSources(),
+        pick: () => bridge.importPick(),
+        live: (source, close) => bridge.importLive(source, close),
+        apply: (botId, pending) => bridge.importApply(`bot:${botId}`, pending),
+        cancel: (pending) => bridge.importCancel(pending),
+      } : null,
     })
   }
-  actions.setPanelView = (view) => {
-    if (view !== 'details' && view !== 'browser') return
-    ui.set(state => (state.details && state.view !== view ? { ...state, view } : state))
-  }
-  actions.closePanel = () => { ui.set(state => (state.details ? { ...state, details: null, view: 'details', renaming: false, tab: null } : state)) }
   // Whether AccountLauncher holds the shell's settings seat; FooterAccount steps aside if so.
   actions.signInEntry = () => ctx.slots.entries?.('settings.models.sign-in')?.[0] ?? null
   actions.canSignIn = () => Boolean(actions.signInEntry())
@@ -655,6 +577,9 @@ export function apply(ctx) {
   actions.accountT = () => ctx.get('locale').bind('settings.account')
   // The Voice Input plugin's speech Remote; absent while that plugin is off.
   actions.speech = () => ctx.get('remote.speech') ?? undefined
+  // DSH's own settings: models, providers, keys and its plugins.
+  actions.openHarnessSettings = openHarnessSettings
+  actions.openHarnessOnboarding = openHarnessOnboarding
   actions.voiceSetup = () => {
     const navigation = ctx.get('pluginNavigation')
     return navigation ? () => navigation.openBundle(VOICE_BUNDLE) : null
@@ -684,51 +609,10 @@ export function apply(ctx) {
     update.set(previous => ({ ...value, app: previous.app }))
     wakeUpdate()
   }
-  actions.repoStars = () => call('repo-stars')
   actions.freshConversation = botId => after(call('bot-fresh', { id: botId }))
-  actions.noteTurnTime = (sessionId, turn, key, time) => {
-    if (sessionId === undefined || !Number.isFinite(turn) || !Number.isFinite(time)) return
-    turnClock.set((state) => {
-      const turns = state[sessionId] ?? {}
-      const entry = turns[turn] ?? {}
-      const next = key === 'first' && entry.first !== undefined ? Math.min(entry.first, time) : time
-      if (entry[key] === next) return state
-      return { ...state, [sessionId]: { ...turns, [turn]: { ...entry, [key]: next } } }
-    })
-  }
-  actions.noteTurnPeer = (sessionId, turn, peerId) => {
-    if (sessionId === undefined || !Number.isFinite(turn)) return
-    turnClock.set((state) => {
-      const turns = state[sessionId] ?? {}
-      const entry = turns[turn] ?? {}
-      if (entry.peer === peerId) return state
-      return { ...state, [sessionId]: { ...turns, [turn]: { ...entry, peer: peerId } } }
-    })
-  }
-  actions.noteLive = (sessionId, id, entry) => {
-    if (sessionId === undefined) return
-    live.set((state) => {
-      const own = state[sessionId] ?? {}
-      const prev = own[id]
-      if (entry === null ? prev === undefined : prev !== undefined && JSON.stringify({ ...prev, at: 0 }) === JSON.stringify({ ...entry, at: 0 })) return state
-      const next = { ...own }
-      if (entry === null) delete next[id]
-      else next[id] = { ...entry, at: prev?.at ?? Date.now() }
-      return { ...state, [sessionId]: next }
-    })
-  }
-  actions.noteCards = (sessionId, callIds, delta) => {
-    if (sessionId !== undefined) cards.set(state => countCards(state, sessionId, callIds, delta))
-  }
-  actions.clearLive = sessionId => live.set((state) => {
-    if (!state[sessionId]) return state
-    const next = { ...state }
-    delete next[sessionId]
-    return next
-  })
   const browserPages = browsers?.pages ?? createSource({})
   const browserTabs = browsers?.tabs ?? createSource({})
-  const face = () => ({ actions, hooks: { roster, ui, activity, work, memoryNews, registry, turnClock, live, cards, browserPages, browserTabs, surface, update, panel: ctx.layout.panelInfo } })
+  const face = () => ({ actions, hooks: { roster, ui, activity, work, memoryNews, registry, turnClock, live, cards, heldCards, browserPages, browserTabs, surface, update, panel: ctx.layout.panelInfo } })
   ctx.effect(() => noticeApprovals({
     work,
     roster,
@@ -753,6 +637,86 @@ export function apply(ctx) {
     } }
   }
 
+  actions.cancelBtw = card => call('btw-cancel', { sessionId: card.partId, id: card.id })
+  // The dock lives outside the chat snapshot, so it subscribes for the turn that
+  // owns a card. Until that turn closes, the card stays by the composer.
+  actions.turnFacts = (sessionId) => {
+    try {
+      const binding = ctx.sessions.binding(sessionId)
+      if (binding === undefined) return { turns: undefined, openTurn: undefined }
+      const conversation = ctx.uiConversation.binding(binding)
+      const chat = conversation.target('chat').getSnapshot()
+      return { turns: chat?.timeline?.turns, openTurn: conversation.openTurn.getSnapshot() }
+    } catch {
+      return { turns: undefined, openTurn: undefined }
+    }
+  }
+  actions.watchTurns = (sessionId, listener) => {
+    try {
+      const binding = ctx.sessions.binding(sessionId)
+      if (binding === undefined) return () => {}
+      const conversation = ctx.uiConversation.binding(binding)
+      const offChat = conversation.target('chat').subscribe(listener)
+      const offOpen = conversation.openTurn.subscribe(listener)
+      return () => { offChat(); offOpen() }
+    } catch {
+      return () => {}
+    }
+  }
+  // A terminal tab in DSH's right column, only where the terminal plugin
+  // registered its type and the column face is there.
+  actions.canOpenTerminal = () => ctx.get('sidebarRight') !== undefined && ctx.get('sidebarRightTabs')?.get('terminal') !== undefined
+  actions.newTerminal = () => {
+    // The column takes the drawer's space: hand it over first.
+    actions.closePanel()
+    try {
+      ctx.get('sidebarRight')?.openTab('terminal')
+    } catch (error) {
+      actions.reportError(error, 'right-sidebar')
+    }
+  }
+
+  // The drawer and DSH's right column never share the window: whichever the
+  // user asked for last wins. The column's state is read off the frame's
+  // attributes through a MutationObserver. `mounted` moves before the DOM of a
+  // Session switch does, so a switch opens a timed window (createSwitchWindow):
+  // an attribute batch inside it is the switch revealing that Session's own
+  // column — the drawer wins and folds it back — while one outside it is the
+  // user's own opening and takes the space.
+  ctx.effect(() => {
+    const sidebar = ctx.get('sidebarRight')
+    if (!sidebar) return undefined
+    let open = rightColumnOpen(document)
+    // Long enough for a fullscreen panel's slide, which reports only once it ends.
+    const switchWindow = createSwitchWindow(done => setTimeout(done, 400))
+    const collapseColumn = () => {
+      try {
+        if (sidebar.isExpanded()) sidebar.toggleExpanded()
+      } catch (error) {
+        actions.reportError(error, 'right-sidebar')
+      }
+    }
+    const observer = new MutationObserver(() => {
+      const next = rightColumnOpen(document)
+      const opening = next && !open
+      open = next
+      const verdict = opening ? columnOpened(ui.getSnapshot().details !== null, switchWindow.pending) : null
+      if (verdict === 'close-drawer') actions.closePanel()
+      else if (verdict === 'collapse-column') collapseColumn()
+    })
+    observer.observe(document.documentElement, {
+      subtree: true, attributes: true, attributeFilter: RIGHTBAR_ATTRIBUTES,
+    })
+    const offMounted = sidebar.mounted.subscribe(() => switchWindow.moved())
+    let drawer = ui.getSnapshot().details !== null
+    const offUi = ui.subscribe(() => {
+      const next = ui.getSnapshot().details !== null
+      if (next && !drawer && drawerOpened(rightColumnOpen(document)) === 'collapse-column') collapseColumn()
+      drawer = next
+    })
+    return () => { observer.disconnect(); offMounted(); offUi() }
+  }, 'ds-bot: one right panel')
+
   // A Bot surface owns the cells it shadows. It starts far below the -10 that plugins
   // commonly use and goes below whatever already holds the cell, so a plugin that
   // shadows the same cell neither breaks the install nor shows through.
@@ -760,6 +724,7 @@ export function apply(ctx) {
   const shadow = (name, options, component) => ctx.slots.inject(name, () => ctx.slots.register({
     name, ...options, ...(options.priority === undefined ? {} : { priority: freePriority(ctx.slots.entries(name), options) }),
   }, component))
+  const installHeader = () => ctx.slots.inject('conversation.session.header', () => installHeaderNavigation(ctx.slots, face, HeaderPill, BOT_PRIORITY))
 
   // The "@" menu's Bot group and the chats "+" references. The composer's controller
   // for a Session is the shell's own, so the chats open at its caret.
@@ -773,7 +738,10 @@ export function apply(ctx) {
           return binding === undefined ? undefined : triggers.sessionOf(binding.ctx)
         }
         const launched = sessionId => controllerOf(sessionId)?.launcher.getSnapshot() === CHATS_SOURCE
-        const offs = atSources({ roster, sessions: ctx.sessions, launched, iconFor: menuIcons(roster) }).map(source => triggers.registerSource(source))
+        const offs = [
+          ...atSources({ roster, sessions: ctx.sessions, launched, iconFor: menuIcons(roster) }).map(source => triggers.registerSource(source)),
+          triggers.registerSource(btwSource({ roster })),
+        ]
         atMenu = { controllerOf }
         return () => {
           atMenu = null
@@ -807,6 +775,7 @@ export function apply(ctx) {
     () => installCompiledStyles(TASK_CSS, 'tasks'),
     // What other Omni plugins put on the surface (extend.js), where Omni's channels were.
     () => mountShellInstallers({ face, shadow, installStyles, installCompiledStyles }),
+    () => installCompiledStyles(WIDGET_CSS, 'widgets'),
     browsers ? () => installCompiledStyles(BROWSER_CSS, 'browser') : null,
     () => installTheme(),
     () => shadow('sidebar.workspaces', { priority: BOT_PRIORITY, inject: face }, TeamSidebar),
@@ -857,7 +826,7 @@ export function apply(ctx) {
     () => installCompiledStyles(CONVERSATION_CSS, 'conversation'),
     () => installMentions(),
     () => installAtMenu(),
-    () => shadow('conversation.session.header', { priority: BOT_PRIORITY, inject: face }, HeaderPill),
+    installHeader,
     () => shadow('conversation.chat.node', { key: 'assistant-step', priority: BOT_PRIORITY, locale: 'chat', inject: assistantFace }, AssistantCell),
     () => shadow('conversation.chat.node', { key: 'turn-trigger', priority: BOT_PRIORITY, locale: 'chat', inject: face }, TriggerCell),
     () => shadow('conversation.chat.node', { key: 'tool-call', priority: BOT_PRIORITY, locale: 'chat', inject: face }, ToolCell),
@@ -865,10 +834,16 @@ export function apply(ctx) {
     // DSH's own turn tail stays, so what other plugins add there shows, such as the
     // cards of the files a turn delivered; its copy and branch row is hidden.
     () => shadow('conversation.chat.turnTail', { id: 'bot-turn-separators', order: 1000, inject: face }, TurnTailCell),
+    // A side question is not a transcript row. After its snapshot turn closes it
+    // sits on that turn's tail, ahead of the time separator.
+    () => shadow('conversation.chat.turnTail', { id: 'bot-btw', order: 800, priority: BOT_PRIORITY, inject: face }, BtwTurnTail),
     // A Bot condenses its conversation without telling anyone; the chat keeps showing
     // every message.
-    () => shadow('conversation.chat.node', { key: 'question-reply', priority: BOT_PRIORITY, locale: 'chat' }, AnsweredCell),
+    () => shadow('conversation.chat.node', { key: 'question-reply', priority: BOT_PRIORITY, locale: 'chat' }, AnsweredReply),
     () => shadow('conversation.chat.node', { key: 'compaction', priority: BOT_PRIORITY, locale: 'chat' }, Nothing),
+    // A Bot chat leaves DSH's context lines (tool updates, injected context) out; a Bot
+    // message spliced in mid-turn gets an event line from the step that reads it instead.
+    () => shadow('conversation.chat.node', { key: 'context', priority: BOT_PRIORITY, locale: 'chat' }, Nothing),
     ...(canDrawUserMessages() ? ['user', 'steering'].map(key => () => shadow('conversation.chat.node', { key, priority: BOT_PRIORITY, locale: 'chat', inject: face }, UserMessageCell)) : []),
     () => shadow('conversation.input.permission', { priority: BOT_PRIORITY }, Nothing),
     () => shadow('conversation.input.plan', { priority: BOT_PRIORITY }, Nothing),
@@ -877,6 +852,7 @@ export function apply(ctx) {
     () => shadow('conversation.input.model', { priority: BOT_PRIORITY }, Nothing),
     () => shadow('conversation.composer.dock', { id: 'activity', order: 0, priority: BOT_PRIORITY }, Nothing),
     () => shadow('conversation.composer.dock', { id: 'usage', order: 1, priority: BOT_PRIORITY }, Nothing),
+    () => shadow('conversation.composer.dock', { id: 'btw', order: 2, priority: BOT_PRIORITY, inject: face }, BtwDock),
     () => shadow('conversation.input.left', { id: 'bot-plus', order: -100, inject: face }, ComposerPlus),
     () => shadow('conversation.input.right', { id: 'bot-voice', order: 100, inject: face }, ComposerVoice),
     () => shadow('conversation.composer', {
@@ -886,13 +862,11 @@ export function apply(ctx) {
     () => shadow('conversation.input.dock', { id: 'bot-members', order: -120, inject: face }, MemberDock),
     () => shadow('conversation.input.dock', { id: 'bot-model', order: -110, inject: face }, ModelChoiceDock),
     () => shadow('conversation.input.dock', { id: 'bot-question', order: -100, inject: face }, QuestionDock),
+    () => shadow('conversation.input.dock', { id: 'bot-view', order: -95, inject: face }, WidgetDock),
     () => shadow('conversation.input.dock', { id: 'bot-secret', order: -90, inject: face }, SecretDock),
   ]
   // The return button belongs to neither group: it renders only in Agent mode.
-  ctx.effect(() => {
-    const style = installStyles(RETURN_CSS, 'return')
-    return () => style.remove()
-  }, 'ds-bot: return styles')
+  ctx.effect(() => installCompiledStyles(RETURN_CSS, 'return'), 'ds-bot: return styles')
   shadow('sidebar.footer.action', { id: 'bot-return', order: -300, inject: face }, BotReturn)
   ctx.effect(() => installFavicon(), 'ds-bot: Omni tab icon')
   currentFace = face

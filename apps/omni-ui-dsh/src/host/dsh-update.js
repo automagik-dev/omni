@@ -10,6 +10,7 @@ import { spawn } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
+import { inDesktopApp } from './constants.js'
 import {
   CHECK_TTL_MS, cleanVersion, encodeName, fetchJson, installSpecOf,
   newer, registryPlan, repoSlug, sourceOf,
@@ -101,10 +102,12 @@ export function install(rt) {
     try {
       status.current = await currentDsh()
       status.kind = installKind()
+      // The desktop app pins its DSH and updates it as a whole, so it has nothing to offer.
+      const inApp = inDesktopApp()
       // The release the running package itself verified stays the floor: a bot
       // older than its own declaration has nothing newer to offer.
-      const declared = [{ verifiedDsh: PKG.dsBot?.verifiedDsh }]
-      const released = await releasedDeclaration(sourceOf(await installSpecOf(ctx)))
+      const declared = inApp ? [] : [{ verifiedDsh: PKG.dsBot?.verifiedDsh }]
+      const released = inApp ? null : await releasedDeclaration(sourceOf(await installSpecOf(ctx)))
       if (released) declared.push(released)
       const newestDeclared = declared
         .filter(entry => cleanVersion(entry.verifiedDsh))

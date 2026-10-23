@@ -1,7 +1,7 @@
 import { createElement as h, Fragment, useEffect, useRef, useState } from 'react'
 import { isMainOf } from './sources.js'
-import { HEADER, currentPart, stripHeader, usageOf } from './text.js'
-import { PlusIcon, ShareIcon, CloseIcon, ChevronLeftIcon, GearIcon } from './icons.js'
+import { HEADER, currentPart, runStatsOf, stripHeader, usageOf } from './text.js'
+import { PlusIcon, ShareIcon, CloseIcon, ChevronLeftIcon, GearIcon, TerminalIcon } from './icons.js'
 import { botState, BotMark, BotAvatar } from './mark.js'
 import { GlobeIcon, Favicon } from './browser-pane.js'
 import { useEscape } from './overlay-hooks.js'
@@ -44,14 +44,36 @@ function PermissionRow({ bot, roster, actions, run }) {
     h(PermissionPicker, { catalog, saved: bot.permission ?? catalog.defaultPreset, repick: bot.permission === undefined, onPick: permission => run(actions.updateBot(bot.id, { permission })) }))
 }
 
-// The Bot's browser inside the details page: its tabs as small window cards on
-// Desktop, a pointer there on web.
+// The current part's turns, speed, cache hits and context, for a window without DSH's
+// status bar (actions.runStats). It reads them again when a turn starts or ends.
+function RunStats({ bot, part, running, actions }) {
+  const [values, setValues] = useState(null)
+  useEffect(() => {
+    if (!actions.runStats) return undefined
+    let current = true
+    actions.runStats(bot.id).then(
+      (next) => { if (current) setValues(next) },
+      // The line stays as it was until the next read works.
+      () => {},
+    )
+    return () => { current = false }
+  }, [bot.id, part, running])
+  const shown = runStatsOf(values)
+  if (shown.length === 0) return null
+  return h('div', { className: 'bt-run-stats' },
+    shown.map((entry, index) => h(Fragment, { key: entry.key },
+      index > 0 ? h('span', { className: 'bt-run-sep', 'aria-hidden': true }, '·') : null,
+      h('span', { title: entry.title }, entry.text))))
+}
+
+// The Bot's browser inside the details page: its tabs as small window cards in the
+// desktop apps, a pointer there on web.
 function BrowserCards({ bot, sessionId, roster, actions, useBrowserTabs, useBrowserPages }) {
   const state = useBrowserTabs(map => map[bot.id] ?? EMPTY_TABS)
   const pages = useBrowserPages(map => map)
   useEffect(() => { actions.browserEnsure?.(bot.id) }, [bot.id])
   if (roster.browser !== true || !actions.browserShow) {
-    return h('div', { className: 'bt-muted' }, t('The browser is in the DSH Desktop app.'))
+    return h('div', { className: 'bt-muted' }, t('The browser is in DSH Desktop and the Omni app.'))
   }
   if (state.ids.length === 0) {
     return h('div', { className: 'bt-browser-empty-mark' },
@@ -111,7 +133,7 @@ const markOf = entry => (entry?.state === 'ask' ? 'alert' : entry?.state === 'wo
 
 // One member: its mark, name and what it is doing on one surface that opens its chat;
 // Stop beside it while it works here, and the approvals it waits on below.
-function MemberRow({ member, entry, room, roster, actions, now }) {
+function MemberRow({ member, entry, room, roster, actions }) {
   return h('div', { role: 'listitem', className: 'bt-member' },
     h('div', { className: 'bt-member-row' },
       h('button', { type: 'button', className: 'bt-member-open', title: t("Open {name}'s chat", { name: member.name }), onClick: () => actions.openSession(member.id) },
@@ -120,16 +142,16 @@ function MemberRow({ member, entry, room, roster, actions, now }) {
           h('span', { className: 'bt-member-line' },
             h('span', { className: 'bt-member-name' }, member.name),
             room.admin === member.id ? h('span', { className: 'bt-tag' }, t('Admin')) : null),
-          h(MemberState, { entry, bot: member, room, roster, now }))),
+          h(MemberState, { entry, bot: member, room, roster }))),
       h(StopMemberWork, { entry, bot: member, room, actions })),
     h(MemberApprovals, { entry, bot: member, actions }))
 }
 
-// A group's overview: what members read, who is in it, and who answers. Changes are
-// made in its settings.
+// A group's overview: what members read, who is in it, who answers, and what it
+// remembers. Changes are made in its settings.
 function GroupOverview({ room, roster, actions, usage, useWork, openSettings }) {
   const members = room.members.map(id => roster.byId[id]).filter(Boolean)
-  const { entries, now } = useMemberWork(room, useWork)
+  const { entries } = useMemberWork(room, useWork)
   return [
     room.notice
       ? h(About, { key: 'notice', title: 'Notice', text: room.notice })
@@ -137,12 +159,13 @@ function GroupOverview({ room, roster, actions, usage, useWork, openSettings }) 
     h('div', { key: 'members' },
       h('div', { className: 'bt-section-title' }, t('Members · {count}', { count: members.length })),
       h('div', { className: 'bt-members', role: 'list' }, members.map(member => h(MemberRow, {
-        key: member.id, member, entry: entries.find(item => item.id === member.id), room, roster, actions, now,
+        key: member.id, member, entry: entries.find(item => item.id === member.id), room, roster, actions,
       })))),
     h('div', { key: 'mode' }, h('div', { className: 'bt-section-title' }, t('Who answers')),
       h('div', { className: 'bt-kv' }, h('span', null, t(ROOM_MODES.find(([id]) => id === shownMode(room, roster))?.[1] ?? 'Everyone')))),
     room.permission ? h('div', { key: 'permission' }, h('div', { className: 'bt-section-title' }, t('Permissions')),
       h('div', { className: 'bt-kv' }, h('span', { className: presetDanger(room.permission) ? 'bt-perm-danger' : undefined }, presetName(room.permission, roster.permissions)))) : null,
+    roster.memory === false ? null : h(MemoryRow, { key: 'memory', owner: { id: room.id, name: room.name, group: true }, actions }),
     usage ? h('div', { key: 'usage' }, h('div', { className: 'bt-section-title' }, t('Usage')),
       h('div', { className: 'bt-kv' }, h('span', null, room.name), h('span', null, usage))) : null,
   ]
@@ -200,6 +223,9 @@ export function DetailsDrawer({ sessionId, startRenaming, startTab, hasStrip, ro
     bot && roster.browser === true && actions.openBrowser
       ? h('button', { type: 'button', className: 'bt-round', 'aria-label': t('Open browser'), title: t("Open this Bot's browser"), onClick: () => actions.openBrowser(sessionId) }, h(GlobeIcon))
       : null,
+    (bot || room) && actions.canOpenTerminal?.()
+      ? h('button', { type: 'button', className: 'bt-round', 'data-info-row': 'terminal', 'aria-label': t('New terminal'), title: t('New terminal'), onClick: () => actions.newTerminal() }, h(TerminalIcon))
+      : null,
     bot || room ? h('button', { type: 'button', className: 'bt-round', 'aria-label': copied ? t('Copied conversation') : t('Share conversation'), title: copied ? t('Copied') : t('Copy conversation as Markdown'), onClick: share }, copied ? h('span', { key: 'copied', className: 'bt-pop-in' }, '✓') : h(ShareIcon)) : null,
     hasStrip ? null : h('button', { type: 'button', className: 'bt-round', 'aria-label': t('Close details'), onClick: close }, h(CloseIcon)))
   if (!bot && !room) {
@@ -238,6 +264,7 @@ export function DetailsDrawer({ sessionId, startRenaming, startTab, hasStrip, ro
       errorLine,
       room && tab === 'details' ? h(GroupOverview, { room, roster, actions, usage, useWork, openSettings: () => setView('settings') }) : null,
       bot && tab === 'details' ? [
+        h(RunStats, { key: 'stats', bot, part, running, actions }),
         h('div', { key: 'model', className: 'bt-drawer-model' },
           h('div', { className: 'bt-section-title' }, t('Model')),
           h(ModelMenu, { bot, roster, actions, run, wide: true }),
@@ -249,7 +276,7 @@ export function DetailsDrawer({ sessionId, startRenaming, startTab, hasStrip, ro
         bot.instructions
           ? h(About, { key: 'about', text: bot.instructions })
           : h('button', { key: 'about', type: 'button', className: 'bt-more', onClick: () => setView('settings') }, t('Add instructions in Bot settings')),
-        roster.memory === false ? null : h(MemoryRow, { key: 'memory', bot, actions }),
+        roster.memory === false ? null : h(MemoryRow, { key: 'memory', owner: { id: bot.id, name: bot.name }, actions }),
         usage ? h('div', { key: 'usage' }, h('div', { className: 'bt-section-title' }, t('Usage')),
           h('div', { className: 'bt-kv' }, h('span', null, bot.name), h('span', null, usage))) : null,
         h(ScheduleSummary, { key: 'routines', bot, actions }),
