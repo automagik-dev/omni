@@ -17,6 +17,7 @@ import type { ApiKeyProfile, ApiKeyProfileOverrides, Database } from '@omni/db';
 import { type ApiKey, type NewApiKey, apiKeys } from '@omni/db';
 import { and, eq, gt, isNull, or, sql } from 'drizzle-orm';
 import { CacheKeys, CacheTTL, type CachedApiKey, apiKeyCache, authCacheTtlMs } from '../cache';
+import { SCOPE_IMPLIED_BY } from '../constants/scopes';
 
 const log = createLogger('api-keys');
 
@@ -450,7 +451,8 @@ export class ApiKeyService {
     const [namespace] = requiredScope.split(':');
     if (scopes.includes(`${namespace}:*`)) return true;
 
-    return false;
+    // A broader scope that grants this one (e.g., "system:admin" allows "system:update")
+    return (SCOPE_IMPLIED_BY[requiredScope] ?? []).some((broader) => scopes.includes(broader));
   }
 
   /**

@@ -93,6 +93,7 @@ import { ApiKeyService } from './services/api-keys';
 import { closeAllConsumerStreams } from './services/event-consumer-stream';
 import { closeTurnEvents, getTurnEventsConnection, initTurnEvents } from './services/turn-events';
 import { TurnMonitor } from './services/turn-monitor';
+import type { SystemUpdater } from './system/update';
 import { resolveAuthPlaneConnection } from './tenancy/auth-plane-connection';
 import { warnOnMixedTenancyState } from './tenancy/enforcement-posture';
 import { installInstanceOwnerResolver } from './tenancy/instance-owner-registry';
@@ -576,6 +577,7 @@ async function setupEventBusServices(
   services: ReturnType<typeof createApp>['services'],
   db: Database,
   login: Login | null,
+  updater: SystemUpdater,
 ): Promise<void> {
   if (!eventBus) {
     log.warn('Skipping event bus services (no event bus)');
@@ -622,13 +624,15 @@ async function setupEventBusServices(
   }
 
   // Human login: devices approved by the owner over WhatsApp, and the claim link for an
-  // unclaimed Omni (off unless OMNI_LOGIN_ENABLED)
+  // unclaimed Omni (off unless OMNI_LOGIN_ENABLED). The same self chat confirms updates.
   try {
-    await setupDeviceLogin(eventBus, login);
+    await setupDeviceLogin(eventBus, login, updater);
     if (login) await announceClaim(login);
   } catch (error) {
     log.error('Failed to set up human login', { error: String(error) });
   }
+  // An update recorded before a restart: tell the owner how it went, without holding up boot.
+  void updater.reconcile().catch((error) => log.warn('Could not reconcile the last update', { error: String(error) }));
 
   // Follow-up lifecycle hooks (arm on outbound agent msg, disarm on reply/handoff/archive)
   try {
@@ -919,7 +923,7 @@ async function main() {
   }
 
   // Create app and get services
-  const { app, services, login } = createApp(db, eventBus, globalChannelRegistry);
+  const { app, services, login, updater } = createApp(db, eventBus, globalChannelRegistry);
   globalServicesRef = services;
 
   // G5 (ADR-0008): opt the instance monitor into the tenant fan-out now that the
@@ -961,7 +965,7 @@ async function main() {
   }
 
   // Set up event bus related services (persistence, agent responder, sync worker)
-  await setupEventBusServices(eventBus, services, db, login);
+  await setupEventBusServices(eventBus, services, db, login, updater);
 
   // Setup scheduler with services and channel registry (for unread count refresh)
   log.info('Starting scheduler');

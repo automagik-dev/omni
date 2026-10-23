@@ -89,6 +89,8 @@ const TIER_BY_VERB: Readonly<Record<string, ScopeTier>> = Object.freeze({
   send: 'write',
   close: 'write',
   synthesize: 'write',
+  /** `system:update` — asks the owner to confirm an update; changes nothing by itself. */
+  update: 'write',
   admin: 'admin',
 });
 

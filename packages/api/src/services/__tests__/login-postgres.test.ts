@@ -18,9 +18,10 @@ import { type Login, createLogin } from '../../login';
 import { claimTokenOf } from '../../login/config';
 import { isLiveGrant } from '../../login/connect';
 import type { OwnAccount, WhatsAppAccess } from '../../login/whatsapp';
-import { handleConnectMessage, handleDeviceLoginMessage } from '../../plugins/device-login';
+import { handleConnectMessage, handleDeviceLoginMessage, handleUpdateMessage } from '../../plugins/device-login';
 import { loginApiRoutes, loginAuthRoutes, loginPageRoutes } from '../../routes/v2/login';
 import type { Services } from '../../services';
+import { createSystemUpdater } from '../../system/update';
 import { ApiKeyService } from '../api-keys';
 
 const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
@@ -401,6 +402,106 @@ postgresDescribe('human login (real PostgreSQL)', () => {
     expect(wait).toMatchObject({ retryAfterSeconds: expect.any(Number) });
     expect(sent.at(-1)?.text).toContain('Wait');
     expect(await isLiveGrant(login, grants[3] ?? '')).toBe(true);
+  });
+
+  test("an update starts only on the owner's own update code, in their self chat, once", async () => {
+    const spawned: string[][] = [];
+    const updater = createSystemUpdater({
+      version: '2.261023.7',
+      login,
+      eventBus: null,
+      env: {
+        OMNI_UPDATE_COMMAND: 'omni update --yes',
+        OMNI_UPDATE_STATE_DIR: `/tmp/omni-update-${crypto.randomUUID()}`,
+      },
+      fetch: async () => new Response(JSON.stringify({ latest: '2.261023.8' })),
+      spawn: (command, args) => {
+        spawned.push([command, ...args]);
+        return { onError: () => {}, onExit: () => {}, unref: () => {} };
+      },
+    });
+    expect(await updater.request('2.261023.8', 'key-1')).toMatchObject({ ok: true });
+    const code = sent.at(-1)?.text.match(/^update ([A-Z0-9]{6})$/m)?.[1] ?? '';
+    expect(sent.at(-1)?.account.phone).toBe(OWNER.phone);
+    expect(code).toMatch(/^[A-Z0-9]{6}$/);
+    // Only a hash is stored.
+    const stored = await db
+      .select()
+      .from(loginVerifications)
+      .where(like(loginVerifications.identifier, 'omni-update:%'));
+    expect(stored.length).toBe(1);
+    expect(JSON.stringify(stored)).not.toContain(code);
+
+    const message = (change: (event: TypedOmniEvent<'message.received'>) => void = () => {}) => {
+      const event = ownerSelfChat(`update ${code}`);
+      change(event);
+      return event;
+    };
+    // Omni's own send, someone else, another account's self chat, another chat: nothing starts.
+    expect(await handleUpdateMessage(login, updater, ownerSelfChat(`update ${code}`, 'append'))).toBeNull();
+    expect(
+      await handleUpdateMessage(
+        login,
+        updater,
+        message((event) => {
+          rawOf(event).key = { remoteJid: OWNER.selfJid, fromMe: false, id: 'X' };
+          rawOf(event).isFromMe = false;
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      await handleUpdateMessage(
+        login,
+        updater,
+        message((event) => {
+          event.metadata.instanceId = OTHER.instanceId;
+          event.payload.chatId = OTHER.selfJid;
+          rawOf(event).key = { remoteJid: OTHER.selfJid, fromMe: true, id: 'X' };
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      await handleUpdateMessage(
+        login,
+        updater,
+        message((event) => {
+          event.payload.chatId = '5511900001111@s.whatsapp.net';
+          rawOf(event).key = { remoteJid: '5511900001111@s.whatsapp.net', fromMe: true, id: 'X' };
+        }),
+      ),
+    ).toBeNull();
+    expect(spawned).toEqual([]);
+
+    expect(await handleUpdateMessage(login, updater, message())).toBe('started');
+    expect(spawned).toEqual([['omni', 'update', '--yes']]);
+    expect(await handleUpdateMessage(login, updater, message())).toBeNull();
+    expect(spawned.length).toBe(1);
+  });
+
+  test('an update code expires with its request', async () => {
+    const updater = createSystemUpdater({
+      version: '2.261023.7',
+      login,
+      eventBus: null,
+      env: {
+        OMNI_UPDATE_COMMAND: 'omni update --yes',
+        OMNI_UPDATE_STATE_DIR: `/tmp/omni-update-${crypto.randomUUID()}`,
+      },
+      fetch: async () => new Response(JSON.stringify({ latest: '2.261023.8' })),
+      spawn: () => {
+        throw new Error('must not run');
+      },
+    });
+    expect(await updater.request('2.261023.8', 'key-1')).toMatchObject({ ok: true });
+    const code = sent.at(-1)?.text.match(/^update ([A-Z0-9]{6})$/m)?.[1] ?? '';
+    await db
+      .update(loginVerifications)
+      .set({ expiresAt: new Date(Date.now() - 1000) })
+      .where(like(loginVerifications.identifier, 'omni-update:%'));
+    expect(await updater.status()).not.toHaveProperty('pending');
+    expect(await handleUpdateMessage(login, updater, ownerSelfChat(`update ${code}`))).toBeNull();
+    // An expired request no longer blocks a new one.
+    expect(await updater.request('2.261023.8', 'key-1')).toMatchObject({ ok: true });
   });
 
   test('a device approved on the web page after the owner signs in with a WhatsApp code', async () => {

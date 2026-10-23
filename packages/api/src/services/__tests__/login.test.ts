@@ -35,7 +35,7 @@ describe('readLoginConfig', () => {
       enabled: true,
       publicUrl: 'https://omni.example.com',
       secret: 'x'.repeat(40),
-      deviceKeyScopes: ['instances:read', 'chats:read', 'messages:read', 'events:read'],
+      deviceKeyScopes: ['instances:read', 'chats:read', 'messages:read', 'events:read', 'system:read', 'system:update'],
       deviceKeyTtlDays: null,
     });
     expect(
