@@ -25,8 +25,8 @@ function fakeAuthorization(flows = ['llm-pi-ai/kimi-coding', 'llm-pi-ai/openai-c
   }
 }
 
-function host({ entries = withPiAi(), authorization = fakeAuthorization(), ...rest } = {}) {
-  const fake = fakeContext({ entries, services: authorization ? { authorization } : {}, ...rest })
+function host({ entries = withPiAi(), authorization = fakeAuthorization(), services = {}, ...rest } = {}) {
+  const fake = fakeContext({ entries, services: { ...(authorization ? { authorization } : {}), ...services }, ...rest })
   const { handle } = install(fake.ctx)
   return { ...fake, handle, authorization }
 }
@@ -118,4 +118,41 @@ test('providers reports, per tile, a stored key, a sign-in and whether this DSH 
   assert.equal(value['kimi-coding'].signedIn, true)
   assert.equal(value['kimi-coding'].signIn, true)
   assert.equal(value['github-copilot'].signIn, false)
+})
+
+test('Claude has no sign-in of ours: no anthropic flow is ever begun', async () => {
+  const fake = host({ authorization: fakeAuthorization(['llm-pi-ai/anthropic']) })
+  assert.equal((await fake.handle('signin-start', { provider: 'anthropic' })).error.code, 'omni-ai/invalid')
+  assert.equal(fake.authorization.begun.length, 0)
+})
+
+test('claude-code finds the CLI, reads `claude auth status`, and sees the dsh-oh-my-claude route', async () => {
+  const { mkdtempSync, writeFileSync, chmodSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = mkdtempSync(join(tmpdir(), 'claude-cli-'))
+  const bin = join(dir, 'claude')
+  writeFileSync(bin, '#!/bin/sh\n[ "$1 $2" = "auth status" ] && echo \'{"loggedIn":true,"authMethod":"claude.ai","email":"owner@example.com","subscriptionType":"max"}\'\n')
+  chmodSync(bin, 0o755)
+  const path = process.env.PATH
+  process.env.PATH = `${dir}:${path}`
+  const llm = { listProviders: () => [{ id: 'deepseek-official' }, { id: 'claude-code' }] }
+  try {
+    const fake = host({ services: { llm } })
+    const value = (await fake.handle('claude-code')).value
+    assert.deepEqual(value, { plugin: true, installed: true, path: bin, reachable: true, loggedIn: true, email: 'owner@example.com', plan: 'max' })
+    writeFileSync(bin, '#!/bin/sh\necho \'{"loggedIn":false}\'\n')
+    assert.equal((await fake.handle('claude-code')).value.loggedIn, false)
+    // Without the plugin's route, Claude cannot run here whatever the CLI says.
+    assert.equal((await host().handle('claude-code')).value.plugin, false)
+  } finally {
+    process.env.PATH = path
+  }
+})
+
+test('an older CLI that answers auth status in prose is still read', async () => {
+  const { parseClaudeStatus, claudeCandidates } = await import('../src/host/providers.js')
+  assert.equal(parseClaudeStatus('Logged in as owner@example.com').loggedIn, true)
+  assert.equal(parseClaudeStatus('Not logged in').loggedIn, false)
+  assert.ok(claudeCandidates({ PATH: '' }, '/home/u').includes('/home/u/.local/bin/claude'))
 })

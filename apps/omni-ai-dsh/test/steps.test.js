@@ -77,7 +77,11 @@ test('Connect AI tiles connect for real: sign-ins first, marked, then keys, then
   assert.equal(GROUPS[0].terms, VENDOR_TERMS)
   assert.equal(VENDOR_TERMS, 'Personal use under the vendor\'s terms')
   // A sign-in tile names the pi-ai provider whose flow it runs; a key tile, where to get a key.
-  for (const tile of GROUPS[0].tiles) assert.ok(tile.signin === true && typeof tile.provider === 'string', tile.id)
+  // Claude goes through the person's own Claude Code, never a sign-in of ours.
+  const claude = GROUPS[0].tiles.find(tile => tile.id === 'claude')
+  assert.equal(claude.claudeCode, true)
+  assert.equal(claude.signin, undefined)
+  for (const tile of GROUPS[0].tiles.filter(tile => tile.id !== 'claude')) assert.ok(tile.signin === true && typeof tile.provider === 'string', tile.id)
   for (const tile of GROUPS[1].tiles) assert.ok(typeof tile.provider === 'string' && /^https:\/\//.test(tile.key), tile.id)
   // Only "Another provider" leads to DSH's Models page; no tile is a dead end.
   assert.deepEqual(tiles.filter(tile => tile.section).map(tile => tile.id), ['api-key'])

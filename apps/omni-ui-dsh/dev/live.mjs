@@ -139,7 +139,11 @@ const RELOADER = `<script>(()=>{const s=new EventSource(${JSON.stringify(`${LIVE
 let dsh = null
 let launchPath = null
 function startDsh() {
-  const env = { ...process.env, DSH_HOME: dshHome, OMNI_HOME: home, OMNI_CLIENT_ID: 'omni-desktop', DO_NOT_TRACK: '1' }
+  // After the shell's own PATH: where CLIs that plugins drive install themselves (Claude Code
+  // in ~/.local/bin for dsh-oh-my-claude), so a launcher started without a login shell finds them.
+  const tools = [join(homedir(), '.local', 'bin'), join(homedir(), '.claude', 'local'), '/opt/homebrew/bin', '/usr/local/bin']
+  const PATH = [...String(process.env.PATH ?? '').split(':').filter(Boolean), ...tools].filter((dir, index, all) => all.indexOf(dir) === index).join(':')
+  const env = { ...process.env, PATH, DSH_HOME: dshHome, OMNI_HOME: home, OMNI_CLIENT_ID: 'omni-desktop', DO_NOT_TRACK: '1' }
   dsh = spawn(process.execPath, [DSH_BIN, '--profile', PROFILE, '--no-open', '--host', '127.0.0.1', '--port', String(dshPort)], { cwd: home, env, stdio: ['ignore', 'pipe', 'pipe'] })
   const relay = (chunk) => {
     process.stdout.write(chunk)

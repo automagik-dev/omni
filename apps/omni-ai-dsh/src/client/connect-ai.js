@@ -16,7 +16,7 @@ export const GROUPS = [
     terms: VENDOR_TERMS,
     tiles: [
       { id: 'codex', provider: 'openai-codex', name: 'ChatGPT', note: 'Plus, Pro or Team, through Codex', signin: true },
-      { id: 'claude', provider: 'anthropic', name: 'Claude', note: 'Pro or Max', signin: true },
+      { id: 'claude', name: 'Claude', note: 'Pro or Max, through your Claude Code', claudeCode: true },
       { id: 'kimi', provider: 'kimi-coding', name: 'Kimi', note: 'Kimi Code', signin: true },
       { id: 'copilot', provider: 'github-copilot', name: 'GitHub Copilot', note: 'Your Copilot plan', signin: true },
     ],
@@ -49,6 +49,7 @@ export const SUBSCRIPTIONS_GROUP = { title: 'More subscriptions', terms: VENDOR_
 // subscription plugin's signed-in accounts for that provider.
 export function connectionsOf(tile, status, accounts) {
   if (tile.subscription) return signedInCount(accounts, tile.provider)
+  if (tile.claudeCode) return status?.claudeCode?.loggedIn ? 1 : 0
   const own = status?.[tile.provider]
   if (tile.signin) return own?.signedIn ? 1 : 0
   if (tile.key) return own?.key ? 1 : 0
@@ -94,6 +95,64 @@ function KeyForm({ tile, onBack, onSaved, glitch }) {
     problem ? h('p', { className: 'oai-error', role: 'alert', style: { marginTop: '10px' } }, problem) : null,
     h('button', { type: 'submit', className: 'oai-primary', disabled: busy }, busy ? 'Connecting…' : 'Connect'),
     h('button', { type: 'button', className: 'oai-quiet', disabled: busy, onClick: onBack }, 'Back'))
+}
+
+// Claude through the person's own Claude Code (the dsh-oh-my-claude plugin runs `claude -p`):
+// Anthropic lets a Claude plan work in other apps that way, never through a sign-in of ours.
+// This only checks, every few seconds, that the CLI is installed and signed in, and says the
+// next step: Anthropic's installer, then Anthropic's own `claude auth login`.
+export const CLAUDE_INSTALL = 'curl -fsSL https://claude.ai/install.sh | bash'
+export const CLAUDE_LOGIN = 'claude auth login'
+function Copyable({ text }) {
+  const [copied, setCopied] = useState(false)
+  return h('div', { className: 'oai-code oai-command' },
+    h('code', null, text),
+    h('button', { type: 'button', className: 'oai-ghost', onClick: () => navigator.clipboard?.writeText(text).then(() => setCopied(true)) }, copied ? 'Copied' : 'Copy'))
+}
+function ClaudeCode({ onBack, onSaved, glitch }) {
+  const [check, setCheck] = useState(null)
+  const [problem, setProblem] = useState(null)
+  useEffect(() => {
+    let live = true
+    let timer = 0
+    const poll = async () => {
+      try {
+        const next = await call('claude-code')
+        if (!live) return
+        setCheck(next)
+        setProblem(null)
+        if (next.plugin && next.loggedIn && next.reachable !== false) {
+          glitch()
+          onSaved({ name: 'Claude', detail: [next.email, next.plan ? `${next.plan[0].toUpperCase()}${next.plan.slice(1)} plan` : null].filter(Boolean).join(' · ') })
+          return
+        }
+      } catch (error) {
+        if (live) setProblem(error.message)
+      }
+      if (live) timer = setTimeout(poll, 3000)
+    }
+    poll()
+    return () => {
+      live = false
+      clearTimeout(timer)
+    }
+  }, [])
+  return h('div', { className: 'oai-signin' },
+    !check && !problem ? h('p', { className: 'oai-muted' }, 'Looking for Claude Code on this computer…') : null,
+    check && !check.plugin ? h('p', null, 'Claude runs through the Oh My Claude plugin, which this DSH does not have. Add it from Settings → Plugins.') : null,
+    check?.plugin && !check.installed ? [
+      h('p', { key: 'p' }, 'Install Claude Code, Anthropic\'s own app. In a terminal:'),
+      h(Copyable, { key: 'c', text: CLAUDE_INSTALL }),
+      h('p', { key: 'm', className: 'oai-muted' }, 'Or follow ', h('a', { className: 'oai-link', href: 'https://code.claude.com/docs/en/setup', target: '_blank', rel: 'noreferrer' }, 'Anthropic\'s setup guide'), '.'),
+    ] : null,
+    check?.plugin && check.installed && check.loggedIn && check.reachable === false ? h('p', { className: 'oai-error' }, `Claude Code is signed in, at ${check.path}, but this app cannot start it from there. Restart the app to pick it up.`) : null,
+    check?.plugin && check.installed && !check.loggedIn ? [
+      h('p', { key: 'p' }, 'Claude Code is here. Sign it in with your Claude account, in a terminal:'),
+      h(Copyable, { key: 'c', text: CLAUDE_LOGIN }),
+    ] : null,
+    check?.plugin && !check.loggedIn ? h('p', { className: 'oai-muted oai-waiting' }, 'I\'ll notice as soon as it\'s done.') : null,
+    problem ? h('p', { className: 'oai-error', role: 'alert' }, problem) : null,
+    h('button', { type: 'button', className: 'oai-quiet', onClick: onBack }, 'Back'))
 }
 
 // A sign-in running in DSH: its latest notice (a page to open, a code to type), its open
@@ -204,12 +263,17 @@ export function ConnectAiStep(props) {
   const [accounts, setAccounts] = useState(null)
   useEffect(() => {
     if (view !== 'tiles') return
-    call('providers').then(setStatus, () => setStatus(null))
+    Promise.all([call('providers').catch(() => ({})), call('claude-code').catch(() => null)])
+      .then(([providers, claudeCode]) => setStatus({ ...providers, claudeCode }))
     subscriptionAccounts().then(setAccounts)
   }, [view])
   useEffect(() => { if (state) glitch() }, [state, glitch])
   if (!state) return null
 
+  if (view?.claudeCode) {
+    return h(Stage, { title: 'Claude, through your Claude Code', speech: 'I\'ll think with your own Claude Code: your login, your plan.', at: 'omni-connect-ai', glitching },
+      h(ClaudeCode, { onBack: () => setView('tiles'), onSaved: (value) => { setSaved(value); setView('saved') }, glitch }))
+  }
   if (view?.subscription) {
     return h(Stage, { title: `Connect ${view.subscription.name}`, speech: 'Sign in with your plan; I\'ll add it to what you already have.', at: 'omni-connect-ai', glitching },
       h(SubscriptionSignIn, { tile: view.subscription, onBack: () => setView('tiles'), onSaved: (value) => { setSaved(value); setView('saved') }, glitch }))
@@ -234,6 +298,7 @@ export function ConnectAiStep(props) {
   }
   if (view === 'saved') {
     return h(Stage, { title: `${saved?.name ?? 'AI'} connected`, speech: `Connected! ${saved?.name ?? 'Its'} models join the others in the model picker.`, at: 'omni-connect-ai', glitching },
+      saved?.detail ? h('p', { className: 'oai-muted' }, saved.detail) : null,
       h('button', { type: 'button', className: 'oai-primary', onClick: () => finish() }, 'Done'),
       h('button', { type: 'button', onClick: () => setView('tiles') }, 'Connect another'))
   }
@@ -244,6 +309,6 @@ export function ConnectAiStep(props) {
     at: 'omni-connect-ai',
     glitching,
   },
-  h(Tiles, { status, accounts, onTile: tile => (tile.subscription ? setView({ subscription: tile }) : tile.form ? setView('cliproxy') : tile.signin ? setView({ signin: tile }) : tile.key ? setView({ key: tile }) : finish(tile.section)) }),
+  h(Tiles, { status, accounts, onTile: tile => (tile.claudeCode ? setView({ claudeCode: true }) : tile.subscription ? setView({ subscription: tile }) : tile.form ? setView('cliproxy') : tile.signin ? setView({ signin: tile }) : tile.key ? setView({ key: tile }) : finish(tile.section)) }),
   h('button', { type: 'button', className: connected ? 'oai-primary' : 'oai-quiet', style: { marginTop: '16px' }, onClick: () => finish() }, connected ? 'Continue' : 'Skip for now'))
 }
