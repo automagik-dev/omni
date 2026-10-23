@@ -243,11 +243,6 @@ test('a grant that is not one an Omni mints is refused before anything is sent',
   assert.equal(sent.length, 0)
 })
 
-test('running Omni on this computer answers that it is not available yet', async (t) => {
-  const { rt } = host(t, json => json(500, {}))
-  assert.equal((await rt.omniDiscoverEndpoint('omni-local-install')).status, 'unavailable')
-})
-
 test('a link the Omni sends reads as its address and grant, and anything else as nothing', () => {
   const grant = GRANT
   assert.deepEqual(parseConnectLink(`https://omni.example.com/api/login/app?grant=${grant}`), { url: 'https://omni.example.com', grant })

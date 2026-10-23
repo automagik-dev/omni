@@ -14,6 +14,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { cleanOmniUrl } from './omni-link.js'
+import { newer, PLUGIN_VERSION } from './version.js'
 
 export const DEFAULT_PORT = 8882
 const PROBE_TIMEOUT_MS = 800
@@ -87,7 +88,7 @@ export function candidates({ env = process.env, home = homedir() } = {}) {
 
 // One entry per Omni: the details of the first place in SOURCES that names it, and a key
 // from whichever place has one.
-function merge(found) {
+export function merge(found) {
   const byOmni = new Map()
   for (const candidate of [...found].sort((a, b) => SOURCES.indexOf(a.source) - SOURCES.indexOf(b.source))) {
     const id = idOf(candidate.url)
@@ -135,49 +136,57 @@ export async function discover({ env = process.env, home = homedir(), fetchImpl 
     .map((omni, index) => {
       const local = isLoopback(omni.url)
       const answer = answers[index] ?? { reachable: null, version: null, canPair: null, pairing: 'unknown' }
-      return { id: omni.id, url: omni.url, source: omni.source, name: omni.name ?? null, local, hasKey: Boolean(omni.key), ...answer }
+      // A sandboxed Omni from an earlier release moves to this plugin's (omni-local.js).
+      const updateTo = omni.source === 'sandbox' && newer(PLUGIN_VERSION, answer.version) ? PLUGIN_VERSION : null
+      return { id: omni.id, url: omni.url, source: omni.source, name: omni.name ?? null, local, hasKey: Boolean(omni.key), updateTo, ...answer }
     })
     .filter(omni => omni.source !== 'running' || omni.reachable)
     .sort((a, b) => Number(b.local) - Number(a.local))
+}
+
+// The Omni found with this id, its key included (for this host only).
+export const foundOmni = id => merge(candidates()).find(entry => entry.id === id)
+
+// Links this host to an Omni by a key it already has: the key is checked with that Omni
+// first, then written to the link file a sign-in writes. `refused` when the Omni no longer
+// takes it.
+export async function linkWithKey(rt, url, key) {
+  let reply
+  try {
+    reply = await fetch(`${url}/api/v2/auth/validate`, { method: 'POST', headers: { accept: 'application/json', 'x-api-key': key, 'x-omni-client': CLIENT_ID }, signal: AbortSignal.timeout(CHECK_TIMEOUT_MS) })
+  } catch {
+    throw refused(`Could not reach Omni at ${url}`)
+  }
+  if (reply.status === 401 || reply.status === 403) return { status: 'refused' }
+  const valid = Validated.safeParse(await reply.json().catch(() => null))
+  if (reply.status !== 200 || !valid.success) throw refused(`Omni answered ${reply.status} at ${new URL(url).host}`)
+  await rt.saveOmniLink({
+    url,
+    key,
+    keyId: null,
+    scopes: valid.data.data.scopes ?? [],
+    keyExpiresAt: valid.data.data.credential?.expiresAt ?? null,
+    pairedAt: new Date().toISOString(),
+  })
+  rt.syncOmniEvents?.()
+  return { status: 'paired', origin: new URL(url).host }
 }
 
 export function install(rt) {
   async function use(body) {
     const parsed = UsePayload.safeParse(body)
     if (!parsed.success) throw invalid('Pick one of the Omnis found on this computer')
-    const omni = merge(candidates()).find(entry => entry.id === parsed.data.id)
+    const omni = foundOmni(parsed.data.id)
     if (!omni) throw refused('That Omni is not there any more. Look again.')
     if (!omni.key) return { status: 'pairing', ...(await rt.startOmniPairing({ url: omni.url })) }
-    let reply
-    try {
-      reply = await fetch(`${omni.url}/api/v2/auth/validate`, { method: 'POST', headers: { accept: 'application/json', 'x-api-key': omni.key, 'x-omni-client': CLIENT_ID }, signal: AbortSignal.timeout(CHECK_TIMEOUT_MS) })
-    } catch {
-      throw refused(`Could not reach Omni at ${omni.url}`)
-    }
+    const linked = await linkWithKey(rt, omni.url, omni.key)
     // A key the Omni no longer takes: sign this device in there instead.
-    if (reply.status === 401 || reply.status === 403) return { status: 'pairing', ...(await rt.startOmniPairing({ url: omni.url })) }
-    const valid = Validated.safeParse(await reply.json().catch(() => null))
-    if (reply.status !== 200 || !valid.success) throw refused(`Omni answered ${reply.status} at ${new URL(omni.url).host}`)
-    await rt.saveOmniLink({
-      url: omni.url,
-      key: omni.key,
-      keyId: null,
-      scopes: valid.data.data.scopes ?? [],
-      keyExpiresAt: valid.data.data.credential?.expiresAt ?? null,
-      pairedAt: new Date().toISOString(),
-    })
-    rt.syncOmniEvents?.()
-    return { status: 'paired', origin: new URL(omni.url).host }
+    return linked.status === 'refused' ? { status: 'pairing', ...(await rt.startOmniPairing({ url: omni.url })) } : linked
   }
-
-  // Not here yet: running Omni on this computer (`omni install --sandbox`) arrives in its
-  // own change.
-  const localInstall = async () => ({ status: 'unavailable', message: 'Running Omni on this computer is not available yet.' })
 
   const endpoints = {
     'omni-discover': async () => ({ omnis: await discover() }),
     'omni-discover-use': use,
-    'omni-local-install': localInstall,
   }
   rt.omniDiscoverEndpoint = (endpoint, body) => endpoints[endpoint](body)
   for (const [name, run] of Object.entries(endpoints)) {

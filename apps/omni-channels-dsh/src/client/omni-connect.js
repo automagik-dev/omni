@@ -3,6 +3,7 @@ import { parseConnectLink } from './connect-link.js'
 import { QrSvg } from './omni-live.js'
 import { refreshLive } from './omni-store.js'
 import { call, OmniMark, t } from './core.js'
+import { CopyCommand, OMNI_UPDATE_CSS, UpdateOffer } from './omni-update.js'
 
 // Connecting this Omni UI to an Omni, by code: no key to find or paste. The host asks the
 // Omni at the address for a pairing (src/host/omni-link.js); this card shows the code and
@@ -10,6 +11,7 @@ import { call, OmniMark, t } from './core.js'
 // The poll token stays on the host.
 
 const DEFAULT_POLL_MS = 2000
+const LOCAL_POLL_MS = 1500
 // A sign-in the desktop app started (connectFromApp) is announced to any Connect card on screen.
 const PAIRING_EVENT = 'omni:pairing'
 
@@ -52,26 +54,45 @@ function foundDetail(omni) {
   return [omni.version ? `v${omni.version}` : null, where].filter(Boolean).join(' · ')
 }
 
-// One row per Omni found: its one action, or why there is none yet.
-function FoundOmni({ omni, busy, onUse }) {
-  const action = (label, disabled = false) => h('button', { type: 'button', className: 'oc-primary', disabled: disabled || busy, onClick: disabled ? undefined : () => onUse(omni) }, label)
+// One row per Omni found: its one action, or why there is none yet. An Omni too old to
+// pair is updated here when the app holds its key, else from a terminal; a sandboxed Omni
+// from an earlier release moves to this one's (`onLocal`).
+function FoundOmni({ omni, busy, onUse, onLocal }) {
+  const [updating, setUpdating] = useState(false)
+  const action = (label, onClick, disabled = false) => h('button', { type: 'button', className: 'oc-primary', disabled: disabled || busy, onClick }, label)
   let note = null
   let button = null
+  let below = null
   if (omni.local && omni.reachable === false) note = t('Not answering right now.')
-  else if (omni.hasKey) button = action(t('Use it'))
-  else if (omni.pairing === 'too-old') {
+  else if (omni.pairing === 'too-old' && !omni.hasKey) {
     note = t('Omni {version} on this computer is too old to pair. Update it to connect.', { version: omni.version ?? '' })
-    button = action(t('Update'), true)
+    below = h('div', { className: 'ox-update' }, h('span', { className: 'ox-muted' }, t('Update it from a terminal:')), h(CopyCommand, { command: 'omni update' }))
+  } else if (omni.hasKey) {
+    button = action(t('Use it'), () => onUse(omni))
+    if (omni.pairing === 'too-old') {
+      note = t('Omni {version} on this computer is older than this app.', { version: omni.version ?? '' })
+      below = updating ? h(UpdateOffer, { id: omni.id }) : h('button', { type: 'button', className: 'oc-ghost', onClick: () => setUpdating(true) }, t('Update'))
+    }
   } else if (omni.pairing === 'off') note = t('Sign-in from devices is off on this Omni.')
-  else button = action(t('Connect'))
+  else button = action(t('Connect'), () => onUse(omni))
+  if (omni.updateTo) below = h('button', { type: 'button', className: 'oc-ghost', disabled: busy, onClick: () => onLocal({ update: true }) }, t('Update to {version}', { version: omni.updateTo }))
   const detail = foundDetail(omni)
   return h('li', { className: 'ox-found-row' },
     h('span', { className: 'ox-found-dot', 'aria-hidden': true }),
     h('div', { className: 'ox-found-text' },
       h('strong', null, foundLabel(omni)),
       detail ? h('span', { className: 'ox-muted' }, detail) : null,
-      note ? h('span', { className: 'ox-muted' }, note) : null),
+      note ? h('span', { className: 'ox-muted' }, note) : null,
+      below),
     button)
+}
+
+// What the sandboxed install is doing (src/host/omni-local.js), in words.
+function localStep(progress) {
+  if (progress.step === 'download-bun') return t('Getting Bun…')
+  if (progress.step === 'install') return progress.update ? t('Updating Omni… This takes a minute.') : t('Installing and starting Omni… The first time takes a few minutes.')
+  if (progress.step === 'linking') return t('Connecting to it…')
+  return t('Looking for Bun…')
 }
 
 // `onPaired(origin)` hears a pairing that succeeded (the onboarding step completes on it);
@@ -85,6 +106,9 @@ export function ConnectOmni({ onPaired, embedded = false } = {}) {
   const [problem, setProblem] = useState(null)
   const [note, setNote] = useState(null)
   const [done, setDone] = useState(null)
+  // Running Omni here: `{status:'confirm', home, version, update}` while asking, then the
+  // job's progress while it installs.
+  const [local, setLocal] = useState(null)
   const alive = useRef(true)
   useEffect(() => () => { alive.current = false }, [])
 
@@ -93,6 +117,8 @@ export function ConnectOmni({ onPaired, embedded = false } = {}) {
     call('omni-link').then((link) => { if (alive.current && link?.pairing) setPairing(link.pairing) }, () => {})
     // The Omnis this computer already has: its CLI's, a sandboxed one, one answering here.
     call('omni-discover').then((reply) => { if (alive.current) setFound(Array.isArray(reply?.omnis) ? reply.omnis : []) }, () => {})
+    // An install started before a reload keeps going.
+    call('omni-local-progress').then((reply) => { if (alive.current && reply?.status === 'installing') setLocal(reply) }, () => {})
     const onPairing = (event) => {
       if (!alive.current) return
       if (event.detail?.problem) setProblem(event.detail.problem)
@@ -131,6 +157,45 @@ export function ConnectOmni({ onPaired, embedded = false } = {}) {
     timer = setTimeout(tick, pairing.pollIntervalMs ?? DEFAULT_POLL_MS)
     return () => clearTimeout(timer)
   }, [pairing])
+
+  useEffect(() => {
+    if (local?.status !== 'installing') return undefined
+    let timer = 0
+    const tick = async () => {
+      try {
+        const reply = await call('omni-local-progress')
+        if (!alive.current) return
+        if (reply.status === 'paired') {
+          setLocal(null)
+          return finish(reply.origin)
+        }
+        if (reply.status === 'failed') {
+          setLocal(null)
+          setProblem(reply.logsDir ? t('{error} Its logs are in {dir}.', { error: reply.error, dir: reply.logsDir }) : reply.error)
+          return
+        }
+        if (reply.status === 'installing') setLocal(reply)
+        else return setLocal(null)
+      } catch (error) {
+        if (alive.current) setProblem(error.message)
+      }
+      if (alive.current) timer = setTimeout(tick, LOCAL_POLL_MS)
+    }
+    timer = setTimeout(tick, LOCAL_POLL_MS)
+    return () => clearTimeout(timer)
+  }, [local?.status])
+
+  // Running Omni here asks first: the host says where it goes, the person says yes.
+  const runLocal = async (payload = {}) => {
+    setProblem(null)
+    setNote(null)
+    try {
+      const reply = await call('omni-local-install', payload)
+      if (alive.current) setLocal(reply.status === 'confirm' || reply.status === 'installing' ? reply : null)
+    } catch (error) {
+      if (alive.current) setProblem(error.message)
+    }
+  }
 
   // Each action answers `paired` (linked already), `pairing` (approve it on the phone), or
   // a message to show (`unavailable`).
@@ -194,13 +259,13 @@ export function ConnectOmni({ onPaired, embedded = false } = {}) {
         h('span', { className: 'ox-muted' }, pairing.waLink ? t('Scan to send it on WhatsApp') : t('Scan to approve on your phone'))))
   }
 
-  const anyBusy = busy !== null
+  const anyBusy = busy !== null || local !== null
   return h('section', { className: 'ox-card ox-start' },
     embedded ? null : h('span', { className: 'ox-mark', 'aria-hidden': true }, h(OmniMark, { size: 34 })),
     h('div', { className: 'ox-steps' },
       embedded ? null : h('h2', null, t('Connect your Omni')),
       found.length > 0 ? h('h3', { className: 'ox-sub' }, t('We found')) : null,
-      found.length > 0 ? h('ul', { className: 'ox-found' }, found.map(omni => h(FoundOmni, { key: omni.id, omni, busy: anyBusy, onUse: entry => run(entry.id, 'omni-discover-use', { id: entry.id }) }))) : null,
+      found.length > 0 ? h('ul', { className: 'ox-found' }, found.map(omni => h(FoundOmni, { key: omni.id, omni, busy: anyBusy, onUse: entry => run(entry.id, 'omni-discover-use', { id: entry.id }), onLocal: runLocal }))) : null,
       found.length > 0 ? h('h3', { className: 'ox-sub' }, t('Connect another Omni')) : null,
       h('p', { className: 'ox-muted' }, t('Type your Omni\'s address, or paste the link it sent you. Then approve with Face ID, Touch ID, your fingerprint or a code on WhatsApp. No keys to copy.')),
       h('form', { className: 'ox-row', onSubmit: start },
@@ -216,13 +281,23 @@ export function ConnectOmni({ onPaired, embedded = false } = {}) {
         }),
         h('button', { type: 'submit', className: 'oc-ghost', disabled: anyBusy || linkText.trim() === '' }, busy === 'link' ? t('Connecting…') : t('Connect'))),
       h('p', { className: 'ox-muted ox-hint' }, t('Text connect to yourself on WhatsApp and your Omni sends you the link.')),
-      h('div', { className: 'ox-row' },
-        h('button', { type: 'button', className: 'oc-ghost', disabled: anyBusy, onClick: () => run('local', 'omni-local-install') }, busy === 'local' ? t('Starting…') : t('Run Omni on this computer'))),
+      local?.status === 'confirm'
+        ? h('div', { className: 'ox-confirm', role: 'dialog', 'aria-label': t('Run Omni on this computer') },
+          h('span', null, local.update
+            ? t('Update your sandboxed Omni to {version}? Its data stays.', { version: local.version })
+            : t('Install Omni on this computer? It runs on its own, in {home}, and doesn\'t touch other installs.', { home: local.home })),
+          h('div', { className: 'ox-row' },
+            h('button', { type: 'button', className: 'oc-primary', onClick: () => runLocal({ confirm: true, update: local.update }) }, local.update ? t('Update') : t('Install')),
+            h('button', { type: 'button', className: 'oc-ghost', onClick: () => setLocal(null) }, t('Cancel'))))
+        : local?.status === 'installing'
+          ? h('span', { className: 'ox-progress', role: 'status' }, h('span', { className: 'oc-spinner', 'aria-hidden': true }), localStep(local))
+          : h('div', { className: 'ox-row' },
+            h('button', { type: 'button', className: 'oc-ghost', disabled: anyBusy, onClick: () => runLocal() }, t('Run Omni on this computer'))),
       note ? h('p', { className: 'ox-muted ox-note', role: 'status' }, note) : null,
       problem ? h('p', { className: 'ox-problem', role: 'alert' }, problem) : null))
 }
 
-export const OMNI_CONNECT_CSS = `
+export const OMNI_CONNECT_CSS = OMNI_UPDATE_CSS + `
 .ox-card{display:flex;gap:22px;align-items:flex-start;margin:4px 0 22px;padding:20px 22px;border:1px solid var(--bt-line);border-radius:16px;background:color-mix(in srgb,var(--bt-accent) 5%,var(--bt-surface,transparent))}
 .ox-start{align-items:center}
 .ox-mark{flex:none;display:inline-grid;place-items:center;width:56px;height:56px;border-radius:16px;background:color-mix(in srgb,var(--bt-accent) 12%,transparent);color:var(--bt-ink)}
