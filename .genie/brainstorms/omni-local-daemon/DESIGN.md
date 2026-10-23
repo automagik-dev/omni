@@ -1,0 +1,168 @@
+# Design: Omni local daemon — a built-in, sandboxed Omni the desktop app runs
+
+| Field | Value |
+|-------|-------|
+| **Slug** | `omni-local-daemon` |
+| **Date** | 2026-10-23 |
+| **Status** | DRAFT: open questions below |
+
+## Problem
+
+The desktop app connects only to an Omni that already exists somewhere. A person who
+downloads it has nothing to connect to: there is no "run Omni here". Today a local Omni
+is the CLI service path (`omni install`), which needs `bun` and `pm2` on PATH and runs
+`omni-api` and `omni-nats` under PM2. Its Postgres is the machine-wide autopg on 5432,
+shared with genie and others, with its data in `~/.pgserve`, outside `~/.omni`. The ports
+are fixed (8882, 4222, 5432) and the API binds every interface. Self-healing is PM2's ten
+restarts plus a manual `omni doctor --fix`. The release tarballs carry only the CLI, so they
+cannot run a server. The labs wish deferred "local Omni inside the app" on purpose
+(`.genie/wishes/omni-labs-distribution/WISH.md`, Out of scope).
+
+## Outcome
+
+Opening the app for the first time offers **Run Omni on this computer** next to **Connect
+to my Omni**. Choosing it starts a local Omni the app owns: no terminal, no PM2, nothing
+outside `~/.omni`, reachable only from this machine. The person claims it as its owner
+(their WhatsApp number, the human ID the login redesign already uses), links WhatsApp by
+scanning a QR, and is live. An existing Omni on the machine is detected and offered a
+one-click move into the new daemon. The daemon keeps itself healthy and says so, and
+`omni doctor` explains and repairs what it cannot.
+
+## Shape
+
+### One supervisor: `omnid`
+
+A single long-running process, the only thing started at login, that owns three
+children and nothing else:
+
+| Child | What | Where |
+|---|---|---|
+| Postgres 18 | its own cluster, never the shared autopg | `~/.omni/daemon/pg/` |
+| NATS JetStream | the pinned nats-server | `~/.omni/daemon/nats/` |
+| API | the server bundle (`dist/server`) on a bundled Bun | — |
+
+- **Sandboxed.** Every child binds loopback only. Postgres listens on a Unix socket in
+  `~/.omni/daemon/run/`, NATS and the API on ports picked at first start and kept in
+  `~/.omni/daemon/state.json`, so they never fight an existing install for 8882, 4222 or
+  5432. The API gets `API_HOST=127.0.0.1`. The database role is scoped; there is no
+  `postgres:postgres`.
+- **Ordered.** It starts Postgres, waits until it is ready, then NATS, then the API, whose boot
+  migrations run under their advisory lock. It stops them in reverse order.
+- **Self-healing.** Restarts are driven by health, not just by exit. It probes each child (a
+  Postgres query, NATS `/healthz`, the API's `/api/v2/health`). A failing child restarts
+  with backoff, and its dependents restart after it. A crash loop stops trying and raises
+  a visible fault instead of spinning. Every few minutes it runs the safe `doctor` checks
+  (stale `postmaster.pid`, stale lock files, port taken, disk low, a migration pending, a
+  JetStream stream unhealthy) and fixes the safe ones itself.
+- **Started at login without root.** A launchd user agent on macOS, a `systemd --user`
+  unit on Linux (WSL: started by the app). `omnid` writes and removes its own unit.
+- **One status surface.** `~/.omni/daemon/status.json`, plus a loopback status route, say what is
+  running, what was repaired and what needs the person. The desktop app shows it, and
+  `omni status` reads it.
+
+### What ships where
+
+- **The app does not carry the backend in its download.** On first "Run Omni on this computer",
+  the app downloads the daemon bundle for its platform from the Omni release matching its
+  own version (one version, as with the plugins): `omnid`, the server bundle, a Bun
+  runtime, nats-server and Postgres 18 binaries, checked against `SHA256SUMS` as `omni
+  desktop` already does. Keeping the backend out of the dmg keeps it at about 330 MB.
+  Someone who only connects to a remote Omni never downloads the backend at all.
+- **The same bundle backs the CLI.** `omni install` and `install.sh` move onto `omnid`, and
+  PM2 is retired from the default path. So the release tarballs become runnable servers,
+  which closes the gap that they carry only the CLI today.
+
+### `~/.omni` layout
+
+```
+~/.omni/
+  config.json            the CLI's (apiUrl, apiKey, servers), unchanged
+  daemon/
+    state.json           ports, version, owner claimed, last migration
+    status.json          the health surface
+    pg/  nats/  media/  logs/  run/
+    bin/                 omnid, bun, nats-server, postgres (the downloaded bundle)
+  desktop/               the app's DSH and UI, as today
+```
+
+Every path derives from one home (`OMNI_HOME`, default `~/.omni`). The hard-coded
+`homedir()/.omni` in the CLI's data, logs, NATS and `scoped-role.json` paths changes to
+use it.
+
+### First run: claim and connect, nothing typed
+
+1. **Run Omni on this computer**: download (with progress), start `omnid`, wait for healthy.
+2. **Claim**: the person enters their WhatsApp number once (the human ID from the login
+   redesign), then links WhatsApp by scanning the QR the channel already shows. The first
+   message to themselves proves the number; they are now the owner.
+3. **The app links itself**: it is on the same machine, so it gets its device key from the local
+   daemon directly, with no QR, URL or key typed. It writes the key to `~/.omni/ui/omni.json`.
+
+**Connect to my Omni** (a remote one) keeps the scan-to-approve flow: a QR, a code sent to
+yourself on WhatsApp, approved by your Omni. The missing step is how the address and key
+reach the app without being typed. The proposal is a small relay: the QR carries a
+one-time id and an encryption key, the Omni posts its address and the device key
+encrypted to that id, and the app picks them up. Typing the address or pasting an API key
+stay available, hidden under "Other ways".
+
+### Moving an existing install in
+
+`omnid` detects what the CLI's reinstall detection already finds: `config.json`, PM2 entries
+`omni-api`/`omni-nats`/`omni-v2-*`, an `omni` database on the shared autopg,
+`~/.omni/data/pgserve` from before the autopg cutover, and the media and NATS stores under
+`~/.omni/data`. It then offers to move them:
+
+1. Back up first (`pg_dump` of the `omni` database into `~/.omni/backups/`, plus a manifest).
+2. Restore into the daemon's own cluster, and copy media. JetStream streams are recreated,
+   not copied: durable consumers resume from the database.
+3. Keep the identity: the `__primary__` API key and the instance credentials come along, so
+   the CLI and paired devices keep working, and `config.json` points at the new port.
+4. Verify that the API is healthy on the daemon, instance counts match and channels reconnect.
+   Only then does it stop the PM2 entries (`pm2 delete`, `pm2 save`). The shared autopg and its
+   `omni` database are left alone, never dropped. The person can remove them later from `omni
+   doctor`.
+5. Roll back if verification fails: stop the daemon, restart the PM2 entries as they were,
+   and report what failed.
+
+Reuse: `install-helpers.ts` reinstall detection, `legacy-cleanup.ts`,
+`embedded-canonical-migration.ts`, the pg_dump/psql path in `canonical-pgserve.ts`, and
+`runtime-env.ts`'s hermetic environment.
+
+### `omni doctor`, keyed to the daemon
+
+Today about half the checks are PM2-specific. With a daemon the checks become: the daemon
+is installed and running, it starts at login, each child is healthy, ports are free and
+owned by us, the Postgres cluster is consistent and its version matches, migrations have
+run, JetStream is healthy, there is disk headroom, the CLI and daemon versions match, the
+owner is claimed, and leftovers of an old install remain. `--fix` runs the same repairs the
+supervisor runs automatically, plus the ones it never runs alone (the move, cleaning up an
+old install, a version change of Postgres).
+
+## Decisions to take
+
+1. **tactu.** "Self-healing services with doctor, like planned on tactu": where does that plan
+   live? It is not in this repo, the desktop and marketplace repos, brain, sigil, the Mac's
+   `~/prod`, or the automagik-dev and namastexlabs GitHub orgs. This design should follow it
+   where they overlap.
+2. **The relay** for scan-to-connect to a remote Omni: does Automagik host it (for example
+   `connect.automagik.dev`)? Without it, a remote connect has to ask for something first.
+3. **Postgres binaries.** Fetch autopg's PG 18 build per platform (the version we already
+   run), or ship plain upstream binaries? Each is 30–60 MB per platform.
+4. **The CLI path.** Should `omni install` move to `omnid` in the same release (one runtime,
+   PM2 gone), or after the desktop path has run for a release?
+
+## Not in scope
+
+- Windows outside WSL.
+- Multiple local Omnis per user.
+- Exposing the local daemon to the LAN or the internet. The tailnet gate (dev/omni-ui.mjs)
+  stays the way to reach a machine remotely.
+
+## Risks
+
+| Risk | Mitigation |
+|---|---|
+| Memory: the app is about 1.0 GB RSS idle before the backend | Measure the daemon's RSS on first build (Postgres with small `shared_buffers`, NATS memory caps); show it in status. |
+| A move loses data | Back up before anything, verify before stopping the old services, never drop the old database, roll back on failure. |
+| Two Omnis competing for one WhatsApp session | During the move the old API is stopped before the daemon's channels connect; doctor flags two live sessions. |
+| Start-at-login units outliving an uninstall | `omnid uninstall` removes its units; the app's uninstall notes say how. |
