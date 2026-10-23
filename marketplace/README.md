@@ -62,7 +62,7 @@ DSH asks before it installs anything, and installs exactly the version listed.
 | `@automagik/omni-canvas-dsh` | this repository, `apps/omni-canvas-dsh`, pinned to a commit | Omni canvases: live UI in the chat, drawn from your Omni. Needs Omni team and channels. |
 | `@automagik/omni-ai-dsh` | this repository, `apps/omni-ai-dsh`, pinned to a commit | The Omni welcome and Connect AI. |
 | `dsh-codex-subscription` 3.1.3 | npm | ChatGPT/Codex plan through DSH's own Codex sign-in. Personal use under the vendor's terms. |
-| `dsh-oh-my-claude` 1.5.4 | npm | The official Claude Code CLI as a provider. Personal use under the vendor's terms. |
+| `dsh-oh-my-claude` 1.5.5 | npm | The official Claude Code CLI as a provider. Personal use under the vendor's terms. |
 | `dsh-kimi-subscription` 1.3.10 | npm | Kimi Code membership. Its own update button can move past this vetted version. |
 | `dsh-opencode-go` 0.1.24 | npm | Not yet tested on 0.2.1-rc.2; DSH's built-in `opencode-go` route covers basic use. |
 
