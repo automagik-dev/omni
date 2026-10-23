@@ -146,31 +146,69 @@ use it.
 3. **The app links itself**: it is on the same machine, so it gets its device key from the local
    daemon directly, with no QR, URL or key typed. It writes the key to `~/.omni/ui/omni.json`.
 
-**Connect to my Omni** (a remote one) keeps the scan-to-approve flow: a QR, a code sent to
-yourself on WhatsApp, approved by your Omni. The missing step is how the address and key
-reach the app without being typed. The proposal is a small relay: the QR carries a
-one-time id and an encryption key, the Omni posts its address and the device key
-encrypted to that id, and the app picks them up. Typing the address or pasting an API key
-stay available, hidden under "Other ways".
+**Connect to my Omni** (a remote one) starts on that Omni, not in the app, so nothing is
+typed and nothing passes through a service of ours. The person opens their Omni in the
+browser at `/api/login/app` and chooses "Open in the Omni app". That is an
+`omni://connect?url=<the Omni's address>` link, and the app registers the scheme. A link
+carries an address and nothing else. The app shows the host and asks before it starts, then
+runs the device sign-in against that Omni. The person approves it on the Omni's own page with
+a passkey, or with a code sent to themselves on WhatsApp. The Omni then mints the device key,
+and the app writes it to `~/.omni/ui/omni.json`. There is no hosted relay. Typing the address,
+or pasting an API key, stay available, hidden under "Other ways".
 
 ### Moving an existing install in
 
 `omnid` detects what the CLI's reinstall detection already finds: `config.json`, PM2 entries
 `omni-api`/`omni-nats`/`omni-v2-*`, an `omni` database on the shared autopg,
 `~/.omni/data/pgserve` from before the autopg cutover, and the media and NATS stores under
-`~/.omni/data`. It then offers to move them:
+`~/.omni/data`. It also records how the old API is reached: its port, its bind address
+(`API_HOST`), and whether any API key was last used from somewhere other than loopback
+(`api_keys.last_used_ip`). Then it offers the move, in this order. The old install is
+fenced before any snapshot is taken, so no write can land after the copy.
 
-1. Back up first (`pg_dump` of the `omni` database into `~/.omni/backups/`, plus a manifest).
-2. Restore into the daemon's own cluster, and copy media. JetStream streams are recreated,
-   not copied: durable consumers resume from the database.
-3. Keep the identity: the `__primary__` API key and the instance credentials come along, so
-   the CLI and paired devices keep working, and `config.json` points at the new port.
-4. Verify that the API is healthy on the daemon, instance counts match and channels reconnect.
-   Only then does it stop the PM2 entries (`pm2 delete`, `pm2 save`). The shared autopg and its
-   `omni` database are left alone, never dropped. The person can remove them later from `omni
-   doctor`.
-5. Roll back if verification fails: stop the daemon, restart the PM2 entries as they were,
-   and report what failed.
+1. **Survey, still live.** Read the old NATS monitor (`/jsz?streams=true&consumers=true`)
+   and keep, per stream, the message count and last sequence, and per durable consumer, the
+   delivered sequence, the ack floor, `num_pending` and `num_ack_pending`. Write them, the
+   instance count and the bind survey into a manifest in `~/.omni/backups/`.
+2. **Fence.** Stop the old writers: `pm2 stop` (not delete) on `omni-api` and every
+   `omni-v2-*` process. The channels disconnect and webhooks get no answer. The senders retry
+   later; Omni holds no buffer of its own outside the database and JetStream. Then stop
+   `omni-nats`, so its store is quiet on disk.
+3. **Snapshot.** Run `pg_dump` of the `omni` database into `~/.omni/backups/`. Nothing writes
+   to it now, so the dump is final.
+4. **Restore.** Restore the dump into the daemon's own cluster and copy media. **Copy the
+   JetStream store directory as-is** (`<dataDir>/nats`, the `-sd` the CLI passes) into
+   `~/.omni/daemon/nats/`, with both servers stopped. Recreating the streams would lose
+   retained messages, pending and unacknowledged deliveries, and every consumer's position.
+   Consumers resume only through JetStream: `NatsEventBus.subscribeInternal`
+   (`packages/core/src/events/nats/client.ts`) creates or updates a durable consumer, then
+   consumes it. The database offsets only drive gap monitoring, never a start position.
+   Copying is safer than draining to zero pending. A drain needs the old API consuming while
+   nothing new arrives, which is the fence and the API at the same time, and a consumer
+   stuck in redelivery never drains. The copy needs two conditions: the daemon's pinned
+   nats-server is the same version as the old one or newer, and both use the default
+   account. If either fails, the move stops here, before anything is switched, and says why.
+5. **Keep the identity and the address.** The `__primary__` API key and the instance
+   credentials come along. A moved install also keeps its old API port and bind address
+   instead of picking new ones: `state.json` records them as inherited. So devices paired
+   from other machines, and a proxy or tailnet in front of the old port, still reach it.
+   `config.json` needs no change. A fresh install stays loopback-only on a port of its own.
+   Only a moved install keeps exposure it already had, and status shows it as inherited.
+6. **Verify** on the daemon before declaring success:
+   - the API is healthy;
+   - the instance count matches the manifest;
+   - every stream's message count and last sequence match;
+   - every durable consumer's delivered sequence and ack floor match (consumers are
+     read from the copied store before the API starts);
+   - the channels reconnect;
+   - the old address answers from the daemon.
+
+   Only then does it delete the PM2 entries (`pm2 delete`, `pm2 save`). The shared autopg and
+   its `omni` database are left alone, never dropped. The person can remove them later from
+   `omni doctor`.
+7. **Roll back** if any step fails: stop the daemon, start the old NATS and then the PM2
+   entries, exactly as they were, and report what failed. The old database and store were
+   only read, so the old install picks up where it stopped.
 
 Reuse: `install-helpers.ts` reinstall detection, `legacy-cleanup.ts`,
 `embedded-canonical-migration.ts`, the pg_dump/psql path in `canonical-pgserve.ts`, and
@@ -182,31 +220,38 @@ Today about half the checks are PM2-specific. With a daemon the checks become: t
 is installed and running, it starts at login, each child is healthy, ports are free and
 owned by us, the Postgres cluster is consistent and its version matches, migrations have
 run, JetStream is healthy, there is disk headroom, the CLI and daemon versions match, the
-owner is claimed, and leftovers of an old install remain. `--fix` runs the same repairs the
+owner is claimed, and whether leftovers of an old install remain. After a move it also
+checks for a **stranded device**: an API key last used from a non-loopback address before the
+move that has not been seen since, while the old address no longer answers from the daemon.
+It reports which device and since when, and offers two repairs: restore the inherited bind, or
+send that device a fresh connect (`/api/login/app`). `--fix` runs the same repairs the
 supervisor runs automatically, plus the ones it never runs alone (the move, cleaning up an
 old install, a version change of Postgres).
 
 ## Decisions to take
 
-1. **The relay** for scan-to-connect to a remote Omni: does Automagik host it (for example
-   `connect.automagik.dev`)? Without it, a remote connect has to ask for something first.
-2. **Postgres binaries.** Fetch autopg's PG 18 build per platform (the version we already
+Decided: remote connect is an `omni://` link from the Omni's own page, then a passkey or
+WhatsApp sign-in on that Omni. No relay is hosted.
+
+1. **Postgres binaries.** Fetch autopg's PG 18 build per platform (the version we already
    run), or ship plain upstream binaries? Each is 30–60 MB per platform.
-3. **The CLI path.** Should `omni install` move to `omnid` in the same release (one runtime,
+2. **The CLI path.** Should `omni install` move to `omnid` in the same release (one runtime,
    PM2 gone), or after the desktop path has run for a release?
 
 ## Not in scope
 
 - Windows outside WSL.
 - Multiple local Omnis per user.
-- Exposing the local daemon to the LAN or the internet. The tailnet gate (dev/omni-ui.mjs)
-  stays the way to reach a machine remotely.
+- Exposing a fresh local daemon to the LAN or the internet. The tailnet gate
+  (dev/omni-ui.mjs) stays the way to reach a machine remotely. A moved install keeps only
+  the exposure it already had (see the move).
 
 ## Risks
 
 | Risk | Mitigation |
 |---|---|
 | Memory: the app is about 1.0 GB RSS idle before the backend | Measure the daemon's RSS on first build (Postgres with small `shared_buffers`, NATS memory caps); show it in status. |
-| A move loses data | Back up before anything, verify before stopping the old services, never drop the old database, roll back on failure. |
-| Two Omnis competing for one WhatsApp session | During the move the old API is stopped before the daemon's channels connect; doctor flags two live sessions. |
+| A move loses data | Fence the old writers before the snapshot, copy the JetStream store rather than recreate it, verify streams and consumer positions, never drop the old database, roll back on failure. |
+| A move strands devices on other machines | Keep the old port and bind for a moved install; doctor flags a remote key not seen since the move and offers a fresh connect. |
+| Two Omnis competing for one WhatsApp session | The fence stops the old API before the daemon's channels connect; doctor flags two live sessions. |
 | Start-at-login units outliving an uninstall | `omnid uninstall` removes its units; the app's uninstall notes say how. |
