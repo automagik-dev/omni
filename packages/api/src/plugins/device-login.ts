@@ -9,6 +9,9 @@
  * The other way round needs no address at all: the owner texts "connect" there and
  * gets back a one-time link that connects one device (login/connect.ts).
  *
+ * The same chat carries the owner's yes for an update an app asked for: `update <CODE>`
+ * (system/update.ts).
+ *
  * It counts only the owner's own fresh text in their own self chat, typed on one
  * of their devices: Baileys delivered it as 'notify', never as 'append', which is
  * how Omni's own sends arrive. Not quoted, forwarded, a protocol message or history
@@ -22,8 +25,10 @@ import { type Login, deviceRequestOf, ownerOf } from '../login';
 import { DEVICE_CLIENTS, isDeviceClient } from '../login/config';
 import { CONNECT_TTL_MS, allowConnectLink, isConnectRequest, mintConnectGrant } from '../login/connect';
 import { connectLinkMessage, connectTooSoonMessage, deviceApprovedMessage } from '../login/messages';
+import { updateCodeInMessage } from '../login/update-requests';
 import type { OwnAccount } from '../login/whatsapp';
 import { platformTime } from '../services/whatsapp-self';
+import type { SystemUpdater } from '../system/update';
 
 const log = createLogger('device-login');
 
@@ -183,13 +188,35 @@ export async function handleConnectMessage(
   return { url, expiresAt };
 }
 
-export async function setupDeviceLogin(eventBus: EventBus, login: Login | null): Promise<void> {
+/**
+ * Answer the owner's `update <CODE>` in their self chat: start the update it confirms. Null
+ * when the message is not that, nothing was waiting, or it is not the owner's fresh text.
+ */
+export async function handleUpdateMessage(
+  login: Login,
+  updater: SystemUpdater,
+  event: TypedOmniEvent<'message.received'>,
+): Promise<Awaited<ReturnType<SystemUpdater['confirm']>>> {
+  const code = updateCodeInMessage(event.payload.content.text);
+  if (!code) return null;
+  const self = await ownerSelfChat(login, event);
+  if (!self || self.sentAt < Date.now() - CONNECT_FRESH_MS) return null;
+  return updater.confirm(code, self.account);
+}
+
+export async function setupDeviceLogin(
+  eventBus: EventBus,
+  login: Login | null,
+  updater: SystemUpdater | null = null,
+): Promise<void> {
   if (!login) {
     log.debug('Human login is off (OMNI_LOGIN_ENABLED)');
     return;
   }
   const handle = async (event: TypedOmniEvent<'message.received'>) =>
-    (await handleConnectMessage(login, event)) ?? (await handleDeviceLoginMessage(login, event));
+    (await handleConnectMessage(login, event)) ??
+    (updater ? await handleUpdateMessage(login, updater, event) : null) ??
+    (await handleDeviceLoginMessage(login, event));
   await eventBus.subscribe('message.received', async (event) => void (await handle(event)), {
     durable: 'device-login',
     queue: 'device-login',

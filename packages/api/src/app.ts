@@ -72,6 +72,7 @@ import { requireSignedInstanceMiddleware } from './middleware/require-signed-ins
 import { scopeEnforcerMiddleware } from './middleware/scope-enforcer';
 import { tenancyMiddleware } from './middleware/tenancy';
 
+import packageJson from '../package.json';
 import { SLACK_OAUTH_CALLBACK_PATH } from './constants/slack-app';
 import { type Login, createLogin } from './login';
 import { marketPageRoutes, marketRoutes } from './market/routes';
@@ -90,6 +91,7 @@ import { platformTenantRoutes } from './routes/v2/platform-tenants';
 import { slackOAuthCallback } from './routes/v2/slack';
 import type { Services } from './services';
 import { resolveA2AAgentCard } from './services/a2a-discovery';
+import { type SystemUpdater, createSystemUpdater } from './system/update';
 import { isMultitenancyEnabled } from './tenancy/feature-flag';
 import type { AppVariables } from './types';
 import { parseJsonObjectBody } from './utils/json-body';
@@ -126,6 +128,8 @@ export interface CreateAppResult {
   app: Hono<{ Variables: AppVariables }>;
   services: Services;
   login: Login | null;
+  /** Updates the owner confirms; off unless the operator set OMNI_UPDATE_COMMAND. */
+  updater: SystemUpdater;
 }
 
 /** The JSON 404 every unknown path answers. */
@@ -147,6 +151,7 @@ export function createApp(
   // Human login (Better Auth); null when OMNI_LOGIN_ENABLED is off. index.ts passes the one
   // its WhatsApp approval subscriber uses, so there is one Better Auth instance per process.
   const login = givenLogin === undefined ? createLogin(db, services, eventBus) : givenLogin;
+  const updater = createSystemUpdater({ version: packageJson.version, login, eventBus });
 
   // Global middleware
   app.use('*', timing());
@@ -634,6 +639,11 @@ export function createApp(
   protectedApp.use('*', outputRedactorMiddleware);
   protectedApp.use('*', rateLimitMiddleware);
 
+  // This Omni's version and the updates its owner confirms on WhatsApp (routes/v2/system.ts)
+  protectedApp.use('*', async (c, next) => {
+    c.set('updater', updater);
+    await next();
+  });
   // Mount v2 routes
   protectedApp.route('/', v2Routes);
 
@@ -642,7 +652,7 @@ export function createApp(
   // 404 handler
   app.notFound(endpointNotFound);
 
-  return { app, services, login };
+  return { app, services, login, updater };
 }
 
 export type App = Hono<{ Variables: AppVariables }>;

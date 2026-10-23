@@ -379,6 +379,10 @@ export const SCOPE_MAP: Record<string, string> = {
   'GET /providers/:id/teams': 'providers:read',
   'GET /providers/:id/workflows': 'providers:read',
 
+  // --- system: this Omni's version and the updates its owner confirms ---
+  'GET /system/update': 'system:read',
+  'POST /system/update': 'system:admin',
+
   // --- settings ---
   'GET /settings': 'settings:read',
   'GET /settings/:key': 'settings:read',

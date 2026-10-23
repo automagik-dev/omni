@@ -1023,6 +1023,19 @@ const OBSERVABILITY_ROUTES: readonly RouteKey[] = [
   'GET /api/v2/metrics',
 ];
 
+/**
+ * This Omni's own version and the updates its owner confirms (system/update.ts). One server
+ * binary serves every tenant, so its version and its update are deployment-level, never a
+ * tenant's: a tenant credential must not reach them.
+ */
+const SYSTEM_UPDATE_ROUTES: readonly RouteKey[] = ['GET /api/v2/system/update', 'POST /api/v2/system/update'];
+
+const SYSTEM_UPDATE_JUSTIFICATION =
+  "The deployment's own version and its update. GET says what runs, what the update channel publishes and " +
+  'whether an update waits or runs; it reads no tenant row. POST only asks: it needs OMNI_UPDATE_COMMAND set by ' +
+  "the operator, the exact published version, and the owner's yes in their own WhatsApp self chat before the " +
+  'operator command runs. Deployment-wide by nature, so platform-admin.';
+
 const OBSERVABILITY_JUSTIFICATION =
   'Process-level observability aggregated across every tenant the deployment serves: Prometheus counters and ' +
   'the in-process log ring buffer. There is no per-tenant row to scope, and the values themselves are ' +
@@ -1055,6 +1068,11 @@ export const ROUTE_OWNERSHIP: readonly RouteOwnershipDeclaration[] = [
     route,
     class: 'platform-admin' as const,
     justification: OBSERVABILITY_JUSTIFICATION,
+  })),
+  ...SYSTEM_UPDATE_ROUTES.map((route) => ({
+    route,
+    class: 'platform-admin' as const,
+    justification: SYSTEM_UPDATE_JUSTIFICATION,
   })),
   ...PUBLIC_PRIVACY_CONTRACTS,
 ];
