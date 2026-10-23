@@ -661,7 +661,8 @@ jobs:
     # workspaces, tested against the DSH release pinned in its own dev/harness/package.json,
     # which Bun installs. Its own lockfile stays npm's, as omni-channels-dsh's does: it peers
     # on those Omni plugins, which are not on npm, and Bun resolves every peer there.
-    # Its tests compose all three runtimes and client bundles from this checkout.
+    # Its tests compose all three runtimes and client bundles from this checkout, so the
+    # channels plugin's own dependencies (zod) are installed too.
     name: Omni canvases for DSH (plugin tests)
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
@@ -694,6 +695,7 @@ jobs:
       - name: Install
         run: |
           npm ci --no-fund --no-audit
+          npm ci --no-fund --no-audit --ignore-scripts --prefix ../omni-channels-dsh
           [ -d dev/harness/node_modules ] || bun run harness
 
       - name: Generated files are current
