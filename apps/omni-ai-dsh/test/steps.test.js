@@ -10,6 +10,7 @@ async function load(file) {
     entryPoints: [fileURLToPath(new URL(`../src/client/${file}`, import.meta.url))],
     bundle: true, format: 'cjs', platform: 'node', write: false, logLevel: 'silent',
     external: ['react', 'react-dom'],
+    loader: { '.css': 'text' },
   })
   const module = { exports: {} }
   const react = {
@@ -24,7 +25,6 @@ async function load(file) {
 const plain = value => JSON.parse(JSON.stringify(value))
 
 const { gate, finish, finishInto, FLAG_OF, announceStep, railSteps } = await load('stage.js')
-const { GROUPS, VENDOR_TERMS } = await load('connect-ai.js')
 
 function recorder(state = {}) {
   const log = []
@@ -71,21 +71,39 @@ test('finishing writes the flag, then completes; a tile completes before it open
   assert.deepEqual(failing.log, ['complete'])
 })
 
-test('Connect AI tiles connect for real: sign-ins first, marked, then keys, then the rest', () => {
-  const tiles = plain(GROUPS).flatMap(group => group.tiles.map(tile => ({ ...tile, group: group.title })))
-  assert.deepEqual(tiles.map(tile => tile.id), ['codex', 'claude', 'kimi', 'copilot', 'deepseek', 'openai', 'anthropic', 'openrouter', 'zai', 'moonshot', 'opencode', 'cliproxy', 'api-key'])
-  assert.equal(GROUPS[0].terms, VENDOR_TERMS)
-  assert.equal(VENDOR_TERMS, 'Personal use under the vendor\'s terms')
-  // A sign-in tile names the pi-ai provider whose flow it runs; a key tile, where to get a key.
-  // Claude goes through the person's own Claude Code, never a sign-in of ours.
-  const claude = GROUPS[0].tiles.find(tile => tile.id === 'claude')
-  assert.equal(claude.claudeCode, true)
-  assert.equal(claude.signin, undefined)
-  for (const tile of GROUPS[0].tiles.filter(tile => tile.id !== 'claude')) assert.ok(tile.signin === true && typeof tile.provider === 'string', tile.id)
-  for (const tile of GROUPS[1].tiles) assert.ok(typeof tile.provider === 'string' && /^https:\/\//.test(tile.key), tile.id)
-  // Only "Another provider" leads to DSH's Models page; no tile is a dead end.
-  assert.deepEqual(tiles.filter(tile => tile.section).map(tile => tile.id), ['api-key'])
-  assert.equal(tiles.find(tile => tile.id === 'cliproxy').form, true)
+test('Connect AI is a list of switches: found first, then 4 more and the rest on demand', async () => {
+  const { sections, onCount, flipAction, FIRST_OTHERS } = await load('connect-ai.js')
+  const rows = [
+    { id: 'claude', found: 'Signed in to Claude Code', ready: true, on: true },
+    { id: 'chatgpt', found: null, ready: false, on: false },
+    { id: 'deepseek', found: 'DEEPSEEK_API_KEY found', ready: true, on: true },
+    { id: 'openai', found: null, ready: true, on: true },
+    { id: 'kimi', found: null, ready: true, on: false },
+  ]
+  const { found, others } = plain(sections(rows))
+  // On rows count as found: they are what this computer already uses.
+  assert.deepEqual(found.map(row => row.id), ['claude', 'deepseek', 'openai'])
+  assert.deepEqual(others.map(row => row.id), ['chatgpt', 'kimi'])
+  assert.equal(FIRST_OTHERS, 4)
+  assert.equal(onCount(rows), 3)
+  // Flipping: off when on, on when set up, else open its setup in place.
+  assert.deepEqual(rows.map(flipAction), ['off', 'setup', 'off', 'off', 'on'])
+})
+
+test('Continue needs one AI really on; Skip always finishes', async () => {
+  const { onCount } = await load('connect-ai.js')
+  assert.equal(onCount([{ on: false }, { on: false }]), 0)
+  assert.equal(onCount([]), 0)
+  assert.equal(onCount([{ on: false }, { on: true }]), 1)
+})
+
+test('every row that signs in names its own provider; Claude never signs in, keys say where to get one', async () => {
+  const { PROVIDER_OF, LOGOS } = await load('connect-ai.js')
+  const providers = plain(PROVIDER_OF)
+  assert.equal(providers.claude, undefined)
+  assert.deepEqual([providers.chatgpt, providers.kimi, providers.copilot, providers.grok], ['openai-codex', 'kimi-coding', 'github-copilot', 'xai'])
+  assert.ok(!Object.values(providers).includes('claude'))
+  assert.equal(typeof plain(LOGOS).claude, 'string')
 })
 
 test('the rail names only the steps this DSH has: Connect Omni only with the plugin that brings it', () => {
@@ -102,28 +120,28 @@ test('the rail names only the steps this DSH has: Connect Omni only with the plu
   assert.deepEqual(plain(railSteps('omni-connect', {}).map(([id]) => id)), ['omni-connect'])
 })
 
-test('a subscription takes the next free account slot, so accounts add up; tiles count what is connected', async () => {
-  const { nextIndex, signedInCount } = await load('subscriptions.js')
-  const { connectionsOf, SUBSCRIPTIONS_GROUP } = await load('connect-ai.js')
+test('a subscription takes the next free account slot; only vendors nothing else covers are offered', async () => {
+  const { nextIndex, signedInCount, SUBSCRIPTION_TILES } = await load('subscriptions.js')
+  const { subscriptionRows } = await load('connect-ai.js')
   const accounts = [
-    { provider: 'grok', index: 1, configured: true },
-    { provider: 'grok', index: 2, configured: false },
+    { provider: 'kiro', index: 1, configured: true },
+    { provider: 'kiro', index: 2, configured: false },
     { provider: 'cursor', index: 1, configured: true },
     { provider: 'cursor', index: 3, configured: true },
   ]
-  assert.equal(nextIndex(accounts, 'grok'), 2)
+  assert.equal(nextIndex(accounts, 'kiro'), 2)
   assert.equal(nextIndex(accounts, 'cursor'), 4)
-  assert.equal(nextIndex(accounts, 'kiro'), 1)
-  assert.equal(nextIndex(null, 'kiro'), 1)
+  assert.equal(nextIndex(accounts, 'glm'), 1)
+  assert.equal(nextIndex(null, 'glm'), 1)
   assert.equal(signedInCount(accounts, 'cursor'), 2)
-  // DSH's own sign-ins (ChatGPT, Kimi, Copilot), compared by provider id, and Claude, which
-  // goes through Claude Code, are not offered twice.
-  const ids = plain(SUBSCRIPTIONS_GROUP.tiles).map(tile => tile.provider)
-  const own = [...GROUPS[0].tiles.map(tile => tile.provider).filter(Boolean), 'anthropic', 'claude', 'antigravity']
-  assert.ok(own.includes('openai-codex') && own.includes('kimi-coding'), own.join())
-  for (const id of own) assert.ok(!ids.includes(id), id)
-  const cursor = SUBSCRIPTIONS_GROUP.tiles.find(tile => tile.id === 'cursor')
-  assert.equal(connectionsOf(cursor, null, accounts), 2)
-  assert.equal(connectionsOf(GROUPS[0].tiles[0], { 'openai-codex': { signedIn: true } }, null), 1)
-  assert.equal(connectionsOf(GROUPS[1].tiles[0], { deepseek: { key: false } }, null), 0)
+  // Claude, ChatGPT, Kimi, Copilot and Grok each have their own row: never offered twice.
+  const ids = plain(SUBSCRIPTION_TILES).map(tile => tile.provider)
+  for (const id of ['claude', 'codex', 'kimi', 'copilot', 'grok', 'ollama', 'openai-codex', 'kimi-coding', 'anthropic']) assert.ok(!ids.includes(id), id)
+  // A row per vendor, on when signed in and not hidden.
+  const rows = plain(subscriptionRows({ accounts: [{ provider: 'cursor', index: 1 }, { provider: 'cursor', index: 3 }, { provider: 'kiro', index: 1 }], hidden: ['kiro'] }))
+  const by = Object.fromEntries(rows.map(row => [row.tile.provider, row]))
+  assert.deepEqual([by.cursor.on, by.cursor.found], [true, '2 accounts'])
+  assert.deepEqual([by.kiro.on, by.kiro.ready], [false, true])
+  assert.deepEqual([by.glm.on, by.glm.ready, by.glm.found], [false, false, null])
+  assert.deepEqual(plain(subscriptionRows(null)), [])
 })

@@ -2,6 +2,7 @@ import { WelcomeStep } from './welcome.js'
 import { ConnectAiStep } from './connect-ai.js'
 import { STAGE_CSS } from './octopus.js'
 import { announceStep } from './stage.js'
+import { TERMINAL_CSS } from './terminal.js'
 
 // Omni's onboarding on DSH's settings.onboarding slot. The shell mounts one step at a time,
 // in order; Omni's come ahead of DSH's own welcome-notice (-100) and deepseek-official (0).
@@ -16,7 +17,7 @@ export const inject = ['slots']
 function installStyles() {
   const style = document.createElement('style')
   style.dataset.omniAi = ''
-  style.textContent = STAGE_CSS
+  style.textContent = STAGE_CSS + TERMINAL_CSS
   document.head.append(style)
   return () => style.remove()
 }

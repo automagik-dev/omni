@@ -8,9 +8,11 @@ const KEY = 'sk-cliproxy-secret-0123456789'
 const MODELS = { object: 'list', data: [{ id: 'gpt-5' }, { id: 'claude-sonnet-4-5' }, { id: 'gpt-5' }, { id: '' }, { nope: 1 }] }
 const withPiAi = (providers = {}) => ({ 'omni-ai': {}, 'llm-pi-ai': { providers } })
 
-function host({ entries = withPiAi(), gateway = fakeGateway({ body: MODELS }), ...rest } = {}) {
+// No Claude Code here, unless a test says so.
+const noClaude = async () => ({ plugin: false, installed: false, loggedIn: false })
+function host({ entries = withPiAi(), gateway = fakeGateway({ body: MODELS }), checkClaude = noClaude, ...rest } = {}) {
   const fake = fakeContext({ entries, ...rest })
-  const { actions, handle } = install(fake.ctx, { fetch: gateway.fetch })
+  const { actions, handle } = install(fake.ctx, { fetch: gateway.fetch, checkClaude })
   return { ...fake, actions, handle, gateway }
 }
 const everything = fake => JSON.stringify([fake.updates, [...fake.routes].map(route => route.path), fake.logs, fake.valueOf('llm-pi-ai'), fake.valueOf('omni-ai')])
@@ -165,12 +167,17 @@ test('state reports the flags and whether an AI is already connected', async () 
   const fresh = await host().handle('state')
   assert.deepEqual(fresh.value, { welcomeDone: false, connectAiDone: false, connectOmniSkipped: false, deepseek: false, piAiRoutes: [], aiConnected: false })
 
-  const fake = host({ entries: { 'omni-ai': { welcomeDone: true, connectAiDone: true }, 'llm-pi-ai': { providers: { zai: {} } } } })
+  const fake = host({ entries: { 'omni-ai': { welcomeDone: true, connectAiDone: true }, 'llm-pi-ai': { providers: { zai: { apiKeyEnv: 'ZAI_API_KEY' } } } }, credentials: { ZAI_API_KEY: 'x' } })
   const value = (await fake.handle('state')).value
   assert.equal(value.welcomeDone, true)
   assert.equal(value.connectAiDone, true)
   assert.deepEqual(value.piAiRoutes, ['zai'])
   assert.equal(value.aiConnected, true)
+  // A route with nothing behind it (a sign-in that never finished) is not an AI.
+  assert.equal((await host({ entries: withPiAi({ 'kimi-coding': {} }) }).handle('state')).value.aiConnected, false)
+  // Claude Code signed in is.
+  const claude = async () => ({ plugin: true, installed: true, loggedIn: true, reachable: true })
+  assert.equal((await host({ checkClaude: claude }).handle('state')).value.aiConnected, true)
 
   assert.equal((await host({ credentials: { DEEPSEEK_API_KEY: 'x' } }).handle('state')).value.deepseek, true)
   assert.equal((await host({ records: ['deepseek-account-platform/default'] }).handle('state')).value.deepseek, true)
