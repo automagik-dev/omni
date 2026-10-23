@@ -22,8 +22,3 @@
 - id: plugin-market
   config:
     indexes: []
-# dsh-subscriptions (an add-on in dev/live-addons.json): no local-Ollama fallback, so a chat
-# never moves to another model on its own, and nothing probes 127.0.0.1:11434 every minute.
-- id: dsh-subscriptions
-  config:
-    ollamaFallback: false
