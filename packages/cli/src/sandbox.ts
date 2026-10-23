@@ -1,0 +1,993 @@
+/**
+ * Sandboxed local Omni
+ *
+ * `omni install --sandbox` / `omni sandbox <status|start|stop|uninstall|run>`.
+ *
+ * A complete Omni on this computer that shares nothing with an existing
+ * install: everything lives under one home (default `$OMNI_HOME/sandbox`, else
+ * `~/.omni/sandbox`), and nothing reads or writes `~/.omni/config.json`, the
+ * user's PM2, the shared autopg/pgserve on 5432 or its socket directory.
+ *
+ *   <home>/sandbox.json        ports, version, runtime (no secrets)
+ *   <home>/config/config.json  CLI config for this Omni (API key, mode 0600)
+ *   <home>/runtime/            @automagik/omni + pgserve, installed with bun
+ *   <home>/cache/              bun's package cache for that install
+ *   <home>/bin/nats-server     its own NATS binary
+ *   <home>/data/{pg,nats,media,packages}
+ *   <home>/pgserve/            pgserve's config dir and Postgres binaries
+ *   <home>/run/                supervisor pid, status, Postgres socket dir
+ *   <home>/logs/               one log per process
+ *
+ * One supervisor (`omni sandbox run`) owns Postgres (pgserve's postmaster on
+ * its own cluster), NATS and the API, all on loopback, started in that order
+ * and restarted with backoff. It is the first concrete step of the omnid
+ * design (.genie/brainstorms/omni-local-daemon): same shape, scoped to a
+ * sandbox. `--at-login` adds a per-user launchd agent or systemd --user unit
+ * (no sudo) that runs the supervisor; those unit files are the only writes
+ * outside the home.
+ *
+ * Every function that touches processes, ports, the network or the clock
+ * takes its effects from {@link SandboxDeps}, so tests run none of them.
+ */
+
+import { type SpawnOptions, spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import {
+  chmodSync,
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { createConnection } from 'node:net';
+import { homedir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { z } from 'zod';
+import { quoteSystemdArg } from './install-helpers.js';
+import { installNatsBinary } from './nats-install.js';
+import { buildNatsServerArgs } from './nats-server-args.js';
+import { generateApiKey } from './utils/keys.js';
+import { VERSION } from './version.js';
+
+/** pgserve release whose `postmaster` runs the sandbox's own Postgres cluster. */
+export const SANDBOX_PGSERVE_VERSION = '2.6.10';
+/** Ports tried first; the next free one up is taken when a port is in use. */
+export const SANDBOX_PREFERRED_PORTS = { api: 18882, pg: 15432, nats: 14222 } as const;
+const PORT_SEARCH_SPAN = 200;
+/** First boot downloads the Postgres binaries, so the API can take a while. */
+const SANDBOX_HEALTH_TIMEOUT_MS = 180_000;
+const STOP_TIMEOUT_MS = 30_000;
+const LAUNCHD_LABEL = 'ai.namastex.omni.sandbox';
+const SYSTEMD_UNIT = 'omni-sandbox';
+
+/** Exit codes of the sandbox commands. */
+export const SANDBOX_EXIT = { ok: 0, failed: 1, notInstalled: 3 } as const;
+
+// ----------------------------------------------------------------------------
+// Layout and state
+// ----------------------------------------------------------------------------
+
+export interface SandboxLayout {
+  home: string;
+  statePath: string;
+  configDir: string;
+  configPath: string;
+  runtimeDir: string;
+  cacheDir: string;
+  natsBinary: string;
+  dataDir: string;
+  pgDataDir: string;
+  natsDataDir: string;
+  pgserveConfigDir: string;
+  runDir: string;
+  pgSocketDir: string;
+  pidPath: string;
+  statusPath: string;
+  logsDir: string;
+}
+
+/** Where the sandbox lives: `--home`, else `$OMNI_HOME/sandbox`, else `~/.omni/sandbox`. */
+export function resolveSandboxHome(
+  flag: string | undefined,
+  env: Record<string, string | undefined> = process.env,
+  userHome: string = homedir(),
+): string {
+  if (flag && flag.trim().length > 0) return resolve(flag.trim());
+  const omniHome = env.OMNI_HOME?.trim();
+  if (omniHome) return join(resolve(omniHome), 'sandbox');
+  return join(userHome, '.omni', 'sandbox');
+}
+
+export function sandboxLayout(home: string): SandboxLayout {
+  const dataDir = join(home, 'data');
+  const runDir = join(home, 'run');
+  return {
+    home,
+    statePath: join(home, 'sandbox.json'),
+    configDir: join(home, 'config'),
+    configPath: join(home, 'config', 'config.json'),
+    runtimeDir: join(home, 'runtime'),
+    cacheDir: join(home, 'cache'),
+    natsBinary: join(home, 'bin', 'nats-server'),
+    dataDir,
+    pgDataDir: join(dataDir, 'pg'),
+    natsDataDir: join(dataDir, 'nats'),
+    pgserveConfigDir: join(home, 'pgserve'),
+    runDir,
+    pgSocketDir: join(runDir, 'pg'),
+    pidPath: join(runDir, 'supervisor.pid'),
+    statusPath: join(runDir, 'status.json'),
+    logsDir: join(home, 'logs'),
+  };
+}
+
+const PortSchema = z.number().int().min(1024).max(65535);
+
+export const SandboxStateSchema = z.object({
+  schemaVersion: z.literal(1),
+  /** @automagik/omni version the runtime carries. */
+  version: z.string().min(1),
+  /** Dependency spec installed into the runtime (a version, or file:/npm: spec). */
+  packageSpec: z.string().min(1),
+  /** Absolute path of the bun that runs every process. */
+  bun: z.string().min(1),
+  ports: z.object({ api: PortSchema, pg: PortSchema, nats: PortSchema }),
+  atLogin: z.boolean(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type SandboxState = z.infer<typeof SandboxStateSchema>;
+
+export function readSandboxState(layout: SandboxLayout): SandboxState | null {
+  if (!existsSync(layout.statePath)) return null;
+  try {
+    const parsed = SandboxStateSchema.safeParse(JSON.parse(readFileSync(layout.statePath, 'utf-8')));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeSandboxState(layout: SandboxLayout, state: SandboxState): void {
+  writeFileSync(layout.statePath, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
+}
+
+const SandboxConfigSchema = z.object({ apiKey: z.string().min(1) }).passthrough();
+
+/** The sandbox's API key, from its own config file. */
+export function readSandboxApiKey(layout: SandboxLayout): string | null {
+  if (!existsSync(layout.configPath)) return null;
+  try {
+    const parsed = SandboxConfigSchema.safeParse(JSON.parse(readFileSync(layout.configPath, 'utf-8')));
+    return parsed.success ? parsed.data.apiKey : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The CLI config of the sandbox, in the shape `omni` reads with
+ * `OMNI_CONFIG_DIR=<home>/config`, so `omni status` and friends work against it.
+ */
+function buildSandboxConfig(layout: SandboxLayout, state: SandboxState, apiKey: string): Record<string, unknown> {
+  return {
+    apiUrl: sandboxApiUrl(state),
+    apiKey,
+    format: 'human',
+    server: {
+      port: state.ports.api,
+      databaseUrl: sandboxDatabaseUrl(state),
+      dataDir: layout.dataDir,
+      logLevel: 'info',
+      nodeEnv: 'production',
+      natsHost: '127.0.0.1',
+    },
+  };
+}
+
+function writeSandboxConfig(layout: SandboxLayout, state: SandboxState, apiKey: string): void {
+  mkdirSync(layout.configDir, { recursive: true, mode: 0o700 });
+  writeFileSync(layout.configPath, `${JSON.stringify(buildSandboxConfig(layout, state, apiKey), null, 2)}\n`, {
+    mode: 0o600,
+  });
+  chmodSync(layout.configPath, 0o600);
+}
+
+const sandboxApiUrl = (state: SandboxState): string => `http://127.0.0.1:${state.ports.api}`;
+const sandboxDatabaseUrl = (state: SandboxState): string =>
+  `postgresql://postgres:postgres@localhost:${state.ports.pg}/omni`;
+
+// ----------------------------------------------------------------------------
+// Processes
+// ----------------------------------------------------------------------------
+
+/** Variables a child may inherit; everything else comes from the sandbox. */
+const INHERITED_ENV = ['HOME', 'USER', 'LOGNAME', 'PATH', 'SHELL', 'TMPDIR', 'LANG', 'LC_ALL', 'TZ'] as const;
+
+/**
+ * Base environment of every sandbox process. It starts empty and takes only
+ * {@link INHERITED_ENV} from the caller, so a DATABASE_URL, PGHOST, PM2_HOME or
+ * OMNI_CONFIG_DIR exported in the user's shell never reaches the sandbox.
+ */
+function sandboxBaseEnv(
+  layout: SandboxLayout,
+  parentEnv: Record<string, string | undefined> = process.env,
+): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const key of INHERITED_ENV) {
+    const value = parentEnv[key];
+    if (value !== undefined) env[key] = value;
+  }
+  // `bun run` and `bun x` put their own node_modules/.bin dirs first; a unit keeps the PATH for good.
+  if (env.PATH) {
+    env.PATH = env.PATH.split(':')
+      .filter((dir) => dir.length > 0 && !dir.endsWith('/node_modules/.bin'))
+      .join(':');
+  }
+  env.OMNI_CONFIG_DIR = layout.configDir;
+  env.OMNI_SANDBOX_HOME = layout.home;
+  env.AUTOPG_CONFIG_DIR = layout.pgserveConfigDir;
+  env.PGSERVE_CONFIG_DIR = layout.pgserveConfigDir;
+  env.PM2_HOME = join(layout.runDir, 'pm2');
+  env.BUN_INSTALL_CACHE_DIR = layout.cacheDir;
+  env.OMNI_TELEMETRY = 'false';
+  return env;
+}
+
+export type SandboxChildName = 'pg' | 'nats' | 'api';
+
+export interface SandboxChildSpec {
+  name: SandboxChildName;
+  cmd: string[];
+  env: Record<string, string>;
+  /** Loopback TCP port that answers once the child is ready. */
+  readyPort: number;
+  logPath: string;
+}
+
+/** The three children, in start order. */
+export function sandboxChildSpecs(
+  layout: SandboxLayout,
+  state: SandboxState,
+  apiKey: string,
+  parentEnv: Record<string, string | undefined> = process.env,
+): SandboxChildSpec[] {
+  const base = sandboxBaseEnv(layout, parentEnv);
+  const modules = join(layout.runtimeDir, 'node_modules');
+  return [
+    {
+      name: 'pg',
+      // pgserve's postmaster: a plain Postgres cluster with its own data dir and
+      // socket dir. The socket dir must be ours: pgserve's default is the shared
+      // `$XDG_RUNTIME_DIR/pgserve`, where it would overwrite runtime.json.
+      cmd: [
+        state.bun,
+        join(modules, 'pgserve', 'bin', 'postgres-server.js'),
+        'postmaster',
+        '--port',
+        String(state.ports.pg),
+        '--data',
+        layout.pgDataDir,
+        '--socket-dir',
+        layout.pgSocketDir,
+      ],
+      env: base,
+      readyPort: state.ports.pg,
+      logPath: join(layout.logsDir, 'pg.log'),
+    },
+    {
+      name: 'nats',
+      cmd: [
+        layout.natsBinary,
+        ...buildNatsServerArgs({ natsDataDir: layout.natsDataDir, host: '127.0.0.1' }),
+        '-p',
+        String(state.ports.nats),
+      ],
+      env: base,
+      readyPort: state.ports.nats,
+      logPath: join(layout.logsDir, 'nats.log'),
+    },
+    {
+      name: 'api',
+      cmd: [state.bun, join(modules, '@automagik', 'omni', 'dist', 'server', 'index.js')],
+      env: {
+        ...base,
+        API_PORT: String(state.ports.api),
+        API_HOST: '127.0.0.1',
+        DATABASE_URL: sandboxDatabaseUrl(state),
+        // postgres.js dials the Unix socket in PGHOST (mode 0700) instead of TCP.
+        PGHOST: layout.pgSocketDir,
+        PGPORT: String(state.ports.pg),
+        OMNI_API_KEY: apiKey,
+        MEDIA_STORAGE_PATH: join(layout.dataDir, 'media'),
+        OMNI_PACKAGES_DIR: join(layout.dataDir, 'packages'),
+        PGSERVE_EMBEDDED: 'false',
+        PGSERVE_DATA: layout.pgDataDir,
+        PGSERVE_PORT: String(state.ports.pg),
+        NATS_URL: `nats://127.0.0.1:${state.ports.nats}`,
+        NODE_ENV: 'production',
+        LOG_LEVEL: 'info',
+      },
+      readyPort: state.ports.api,
+      logPath: join(layout.logsDir, 'api.log'),
+    },
+  ];
+}
+
+/** The command that runs the supervisor, from the runtime's own copy of the CLI. */
+export function supervisorCommand(layout: SandboxLayout, state: SandboxState): string[] {
+  return [
+    state.bun,
+    join(layout.runtimeDir, 'node_modules', '@automagik', 'omni', 'bin', 'omni'),
+    'sandbox',
+    'run',
+    '--home',
+    layout.home,
+  ];
+}
+
+// ----------------------------------------------------------------------------
+// At-login units
+// ----------------------------------------------------------------------------
+
+/** Unit names; a sandbox outside the default home gets a suffix of its own. */
+export function sandboxUnitNames(home: string, defaultHome: string): { label: string; systemdUnit: string } {
+  const suffix =
+    resolve(home) === resolve(defaultHome) ? '' : `-${createHash('sha1').update(home).digest('hex').slice(0, 8)}`;
+  return { label: `${LAUNCHD_LABEL}${suffix}`, systemdUnit: `${SYSTEMD_UNIT}${suffix}.service` };
+}
+
+const xmlEscape = (value: string): string =>
+  value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+export function buildLaunchdPlist(
+  label: string,
+  cmd: string[],
+  layout: SandboxLayout,
+  env: Record<string, string>,
+): string {
+  const args = cmd.map((arg) => `    <string>${xmlEscape(arg)}</string>`).join('\n');
+  const vars = Object.entries(env)
+    .map(([key, value]) => `    <key>${xmlEscape(key)}</key>\n    <string>${xmlEscape(value)}</string>`)
+    .join('\n');
+  const log = xmlEscape(join(layout.logsDir, 'supervisor.log'));
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${xmlEscape(label)}</string>
+  <key>ProgramArguments</key>
+  <array>
+${args}
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+${vars}
+  </dict>
+  <key>WorkingDirectory</key>
+  <string>${xmlEscape(layout.home)}</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>StandardOutPath</key>
+  <string>${log}</string>
+  <key>StandardErrorPath</key>
+  <string>${log}</string>
+</dict>
+</plist>
+`;
+}
+
+export function buildSystemdUserUnit(cmd: string[], layout: SandboxLayout, env: Record<string, string>): string {
+  const environment = Object.entries(env)
+    .map(([key, value]) => `Environment=${quoteSystemdArg(`${key}=${value}`)}`)
+    .join('\n');
+  // WorkingDirectory= takes the path as it is: systemd refuses a quoted one as "not absolute".
+  if (/[\r\n]/.test(layout.home)) throw new Error(`sandbox home must not contain a newline: ${layout.home}`);
+  return `[Unit]
+Description=Omni (sandbox at ${layout.home})
+
+[Service]
+Type=simple
+ExecStart=${cmd.map(quoteSystemdArg).join(' ')}
+WorkingDirectory=${layout.home.replace(/%/g, '%%')}
+${environment}
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target
+`;
+}
+
+// ----------------------------------------------------------------------------
+// Effects
+// ----------------------------------------------------------------------------
+
+export interface RunResult {
+  code: number;
+  stdout: string;
+  stderr: string;
+}
+
+export interface SandboxDeps {
+  platform: NodeJS.Platform;
+  uid: number;
+  /** The user's home, where launchd agents and systemd user units live. */
+  userHome: string;
+  /** Absolute path of the bun running this CLI. */
+  bun: string;
+  env: Record<string, string | undefined>;
+  run(cmd: string[], opts: { cwd?: string; env: Record<string, string> }): Promise<RunResult>;
+  spawnDetached(cmd: string[], opts: { cwd: string; env: Record<string, string>; logPath: string }): number;
+  isPortFree(port: number): Promise<boolean>;
+  health(apiUrl: string, timeoutMs: number): Promise<boolean>;
+  installNats(target: string): Promise<boolean>;
+  isAlive(pid: number): boolean;
+  kill(pid: number, signal: NodeJS.Signals): void;
+  now(): Date;
+  sleep(ms: number): Promise<void>;
+}
+
+async function runCommand(cmd: string[], opts: { cwd?: string; env: Record<string, string> }): Promise<RunResult> {
+  const proc = Bun.spawn({ cmd, cwd: opts.cwd, env: opts.env, stdout: 'pipe', stderr: 'pipe' });
+  const [stdout, stderr, code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  return { code, stdout, stderr };
+}
+
+function spawnDetachedProcess(
+  cmd: string[],
+  opts: { cwd: string; env: Record<string, string>; logPath: string },
+): number {
+  const [file, ...args] = cmd;
+  if (!file) throw new Error('empty command');
+  const log = openSync(opts.logPath, 'a', 0o600);
+  try {
+    const options: SpawnOptions = { cwd: opts.cwd, env: opts.env, detached: true, stdio: ['ignore', log, log] };
+    const child = spawn(file, args, options);
+    child.unref();
+    if (child.pid === undefined) throw new Error(`could not start ${file}`);
+    return child.pid;
+  } finally {
+    closeSync(log);
+  }
+}
+
+/** True when nothing answers on 127.0.0.1:<port>. */
+export function isLoopbackPortFree(port: number): Promise<boolean> {
+  return new Promise((done) => {
+    const socket = createConnection({ host: '127.0.0.1', port });
+    const finish = (free: boolean) => {
+      socket.destroy();
+      done(free);
+    };
+    socket.setTimeout(1000, () => finish(false));
+    socket.once('connect', () => finish(false));
+    socket.once('error', (error: NodeJS.ErrnoException) => finish(error.code === 'ECONNREFUSED'));
+  });
+}
+
+async function pollHealth(apiUrl: string, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  do {
+    try {
+      const response = await fetch(`${apiUrl}/api/v2/health`, { signal: AbortSignal.timeout(2000) });
+      if (response.ok) return true;
+    } catch {
+      // not up yet
+    }
+    if (Date.now() + 1000 > deadline) break;
+    await Bun.sleep(1000);
+  } while (Date.now() < deadline);
+  return false;
+}
+
+export function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+function defaultSandboxDeps(): SandboxDeps {
+  return {
+    platform: process.platform,
+    uid: process.getuid?.() ?? 0,
+    userHome: homedir(),
+    bun: process.execPath,
+    env: process.env,
+    run: runCommand,
+    spawnDetached: spawnDetachedProcess,
+    isPortFree: isLoopbackPortFree,
+    health: pollHealth,
+    installNats: installNatsBinary,
+    isAlive: processAlive,
+    kill: (pid, signal) => process.kill(pid, signal),
+    now: () => new Date(),
+    sleep: (ms) => Bun.sleep(ms),
+  };
+}
+
+// ----------------------------------------------------------------------------
+// Reports
+// ----------------------------------------------------------------------------
+
+/** What every sandbox command prints with `--json`. Never carries the API key. */
+export interface SandboxReport {
+  ok: boolean;
+  installed: boolean;
+  home: string;
+  version: string | null;
+  apiUrl: string | null;
+  configPath: string;
+  running: boolean;
+  healthy: boolean;
+  atLogin: boolean;
+  ports: { api: number; pg: number; nats: number } | null;
+  pid: number | null;
+  logsDir: string;
+  error?: string;
+}
+
+export class SandboxError extends Error {
+  constructor(
+    message: string,
+    readonly exitCode: number = SANDBOX_EXIT.failed,
+  ) {
+    super(message);
+  }
+}
+
+export function readPid(layout: SandboxLayout): number | null {
+  try {
+    const pid = Number.parseInt(readFileSync(layout.pidPath, 'utf-8').trim(), 10);
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+function livePid(layout: SandboxLayout, deps: SandboxDeps): number | null {
+  const pid = readPid(layout);
+  return pid !== null && deps.isAlive(pid) ? pid : null;
+}
+
+async function report(layout: SandboxLayout, deps: SandboxDeps, checkHealthFor = 2000): Promise<SandboxReport> {
+  const state = readSandboxState(layout);
+  if (!state) {
+    return {
+      ok: true,
+      installed: false,
+      home: layout.home,
+      version: null,
+      apiUrl: null,
+      configPath: layout.configPath,
+      running: false,
+      healthy: false,
+      atLogin: false,
+      ports: null,
+      pid: null,
+      logsDir: layout.logsDir,
+    };
+  }
+  const pid = livePid(layout, deps);
+  const apiUrl = sandboxApiUrl(state);
+  const healthy = pid !== null ? await deps.health(apiUrl, checkHealthFor) : false;
+  return {
+    ok: true,
+    installed: true,
+    home: layout.home,
+    version: state.version,
+    apiUrl,
+    configPath: layout.configPath,
+    running: pid !== null,
+    healthy,
+    atLogin: state.atLogin,
+    ports: { ...state.ports },
+    pid,
+    logsDir: layout.logsDir,
+  };
+}
+
+// ----------------------------------------------------------------------------
+// Operations
+// ----------------------------------------------------------------------------
+
+export interface SandboxInstallOptions {
+  home: string;
+  defaultHome: string;
+  /** Dependency spec for @automagik/omni in the runtime; defaults to this CLI's version. */
+  packageSpec?: string;
+  atLogin?: boolean;
+  start?: boolean;
+  healthTimeoutMs?: number;
+}
+
+async function pickPort(preferred: number, taken: Set<number>, deps: SandboxDeps): Promise<number> {
+  for (let port = preferred; port < preferred + PORT_SEARCH_SPAN; port++) {
+    if (taken.has(port)) continue;
+    if (await deps.isPortFree(port)) return port;
+  }
+  throw new SandboxError(`No free port on 127.0.0.1 between ${preferred} and ${preferred + PORT_SEARCH_SPAN - 1}`);
+}
+
+async function pickPorts(deps: SandboxDeps): Promise<SandboxState['ports']> {
+  const taken = new Set<number>();
+  const api = await pickPort(SANDBOX_PREFERRED_PORTS.api, taken, deps);
+  taken.add(api);
+  const pg = await pickPort(SANDBOX_PREFERRED_PORTS.pg, taken, deps);
+  taken.add(pg);
+  const nats = await pickPort(SANDBOX_PREFERRED_PORTS.nats, taken, deps);
+  return { api, pg, nats };
+}
+
+function ensureLayout(layout: SandboxLayout): void {
+  for (const dir of [
+    layout.home,
+    layout.configDir,
+    layout.runtimeDir,
+    layout.cacheDir,
+    join(layout.home, 'bin'),
+    layout.dataDir,
+    layout.pgDataDir,
+    layout.natsDataDir,
+    join(layout.dataDir, 'media'),
+    join(layout.dataDir, 'packages'),
+    layout.pgserveConfigDir,
+    layout.runDir,
+    layout.pgSocketDir,
+    layout.logsDir,
+  ]) {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+  }
+}
+
+/** The runtime's package.json: this Omni and the pgserve that runs its Postgres. */
+function buildRuntimeManifest(packageSpec: string): string {
+  return `${JSON.stringify(
+    {
+      name: 'omni-sandbox-runtime',
+      private: true,
+      dependencies: { '@automagik/omni': packageSpec, pgserve: SANDBOX_PGSERVE_VERSION },
+    },
+    null,
+    2,
+  )}\n`;
+}
+
+function installedVersion(layout: SandboxLayout, name: string): string | null {
+  try {
+    const pkg = JSON.parse(readFileSync(join(layout.runtimeDir, 'node_modules', name, 'package.json'), 'utf-8'));
+    return typeof pkg.version === 'string' ? pkg.version : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Installs the runtime with bun, unless it already carries exactly this manifest. */
+async function ensureRuntime(layout: SandboxLayout, packageSpec: string, deps: SandboxDeps): Promise<string> {
+  const manifestPath = join(layout.runtimeDir, 'package.json');
+  const manifest = buildRuntimeManifest(packageSpec);
+  const current = existsSync(manifestPath) ? readFileSync(manifestPath, 'utf-8') : null;
+  const omniVersion = installedVersion(layout, '@automagik/omni');
+  if (current === manifest && omniVersion && installedVersion(layout, 'pgserve') === SANDBOX_PGSERVE_VERSION) {
+    return omniVersion;
+  }
+  writeFileSync(manifestPath, manifest, { mode: 0o600 });
+  const result = await deps.run([deps.bun, 'install', '--production'], {
+    cwd: layout.runtimeDir,
+    env: sandboxBaseEnv(layout, deps.env),
+  });
+  if (result.code !== 0) {
+    throw new SandboxError(
+      `bun install failed in ${layout.runtimeDir}: ${result.stderr.trim().split('\n').slice(-3).join(' ')}`,
+    );
+  }
+  const installed = installedVersion(layout, '@automagik/omni');
+  if (!installed) throw new SandboxError(`@automagik/omni is missing from ${layout.runtimeDir} after bun install`);
+  return installed;
+}
+
+function unitPaths(names: { label: string; systemdUnit: string }, deps: SandboxDeps) {
+  return {
+    plist: join(deps.userHome, 'Library', 'LaunchAgents', `${names.label}.plist`),
+    unit: join(deps.userHome, '.config', 'systemd', 'user', names.systemdUnit),
+  };
+}
+
+/**
+ * Environment for systemctl --user and launchctl. They talk to the user's own
+ * session (its bus and XDG_RUNTIME_DIR), so they get the caller's environment,
+ * not the sandbox's stripped one; the processes they start still get only the
+ * sandbox environment written into their unit.
+ */
+function serviceManagerEnv(deps: Pick<SandboxDeps, 'env'>): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(deps.env)) if (value !== undefined) env[key] = value;
+  return env;
+}
+
+function atLoginSupported(deps: SandboxDeps): boolean {
+  return deps.platform === 'darwin' || deps.platform === 'linux';
+}
+
+async function writeAtLoginUnit(
+  layout: SandboxLayout,
+  state: SandboxState,
+  opts: SandboxInstallOptions,
+  deps: SandboxDeps,
+) {
+  if (!atLoginSupported(deps)) throw new SandboxError(`--at-login is not supported on ${deps.platform}`);
+  const names = sandboxUnitNames(layout.home, opts.defaultHome);
+  const paths = unitPaths(names, deps);
+  const cmd = supervisorCommand(layout, state);
+  const env = sandboxBaseEnv(layout, deps.env);
+  if (deps.platform === 'darwin') {
+    mkdirSync(join(deps.userHome, 'Library', 'LaunchAgents'), { recursive: true });
+    writeFileSync(paths.plist, buildLaunchdPlist(names.label, cmd, layout, env), { mode: 0o600 });
+  } else {
+    mkdirSync(join(deps.userHome, '.config', 'systemd', 'user'), { recursive: true });
+    writeFileSync(paths.unit, buildSystemdUserUnit(cmd, layout, env), { mode: 0o600 });
+    const host = { env: serviceManagerEnv(deps) };
+    await deps.run(['systemctl', '--user', 'daemon-reload'], host);
+    // Enabled now, so the next login starts it even when the supervisor already runs on its own.
+    const enabled = await deps.run(['systemctl', '--user', 'enable', names.systemdUnit], host);
+    if (enabled.code !== 0) {
+      throw new SandboxError(
+        `systemctl --user could not enable ${names.systemdUnit} (is there a systemd user session?): ${enabled.stderr.trim()}`,
+      );
+    }
+  }
+}
+
+async function removeAtLoginUnit(layout: SandboxLayout, defaultHome: string, deps: SandboxDeps): Promise<void> {
+  const names = sandboxUnitNames(layout.home, defaultHome);
+  const paths = unitPaths(names, deps);
+  const env = serviceManagerEnv(deps);
+  if (deps.platform === 'darwin') {
+    await deps.run(['launchctl', 'bootout', `gui/${deps.uid}/${names.label}`], { env });
+    if (existsSync(paths.plist)) unlinkSync(paths.plist);
+  } else if (deps.platform === 'linux') {
+    await deps.run(['systemctl', '--user', 'disable', '--now', names.systemdUnit], { env });
+    if (existsSync(paths.unit)) unlinkSync(paths.unit);
+    await deps.run(['systemctl', '--user', 'daemon-reload'], { env });
+  }
+}
+
+/**
+ * Command-line fragments that mark a process as one of this sandbox's children:
+ * pgserve's postmaster wrapper, the postgres it runs, NATS and the API. Every
+ * one is a path inside the home, so nothing else on the machine matches.
+ */
+function sandboxChildMarkers(layout: SandboxLayout): string[] {
+  const modules = join(layout.runtimeDir, 'node_modules');
+  return [
+    join(modules, 'pgserve', 'bin', 'postgres-server.js'),
+    `${join(layout.pgserveConfigDir, 'bin')}/`,
+    layout.natsBinary,
+    join(modules, '@automagik', 'omni', 'dist', 'server', 'index.js'),
+  ];
+}
+
+/** Pids in `ps -axo pid=,args=` output whose command line carries a child marker. */
+export function leftoverChildPids(psOutput: string, layout: SandboxLayout, exclude: number[] = []): number[] {
+  const markers = sandboxChildMarkers(layout);
+  const pids: number[] = [];
+  for (const line of psOutput.split('\n')) {
+    const match = /^\s*(\d+)\s+(.*)$/.exec(line);
+    if (!match?.[1] || !match[2]) continue;
+    const pid = Number.parseInt(match[1], 10);
+    if (exclude.includes(pid)) continue;
+    const args = match[2];
+    if (markers.some((marker) => args.includes(marker))) pids.push(pid);
+  }
+  return pids;
+}
+
+/**
+ * Stops children an earlier supervisor left behind. A supervisor killed with
+ * SIGKILL (or a crash) cannot stop its children, and they keep the sandbox's
+ * ports, so a new one would restart-loop against them and `stop` could not
+ * reach them. Returns how many it stopped.
+ */
+export async function sweepSandboxLeftovers(
+  layout: SandboxLayout,
+  deps: Pick<SandboxDeps, 'run' | 'kill' | 'isAlive' | 'sleep' | 'now' | 'env'> = defaultSandboxDeps(),
+  exclude: number[] = [process.pid],
+): Promise<number> {
+  const ps = await deps.run(['ps', '-axo', 'pid=,args='], { env: sandboxBaseEnv(layout, deps.env) });
+  if (ps.code !== 0) return 0;
+  const pids = leftoverChildPids(ps.stdout, layout, exclude);
+  for (const pid of pids) {
+    try {
+      deps.kill(pid, 'SIGTERM');
+    } catch {
+      // already gone
+    }
+  }
+  const deadline = deps.now().getTime() + STOP_TIMEOUT_MS;
+  while (pids.some((pid) => deps.isAlive(pid)) && deps.now().getTime() < deadline) await deps.sleep(250);
+  for (const pid of pids.filter((pid) => deps.isAlive(pid))) {
+    try {
+      deps.kill(pid, 'SIGKILL');
+    } catch {
+      // already gone
+    }
+  }
+  return pids.length;
+}
+
+function requireState(layout: SandboxLayout): SandboxState {
+  const state = readSandboxState(layout);
+  if (!state) throw new SandboxError(`No sandboxed Omni at ${layout.home}`, SANDBOX_EXIT.notInstalled);
+  return state;
+}
+
+/** Starts the supervisor (through its unit when it has one) and waits for the API. */
+export async function startSandbox(
+  opts: { home: string; defaultHome: string; healthTimeoutMs?: number },
+  deps: SandboxDeps = defaultSandboxDeps(),
+): Promise<SandboxReport> {
+  const layout = sandboxLayout(opts.home);
+  const state = requireState(layout);
+  if (livePid(layout, deps) === null) {
+    // Children of a supervisor that died hard still hold the ports (and would answer the health check).
+    await sweepSandboxLeftovers(layout, deps);
+    const env = serviceManagerEnv(deps);
+    if (state.atLogin && deps.platform === 'darwin') {
+      const names = sandboxUnitNames(layout.home, opts.defaultHome);
+      const plist = unitPaths(names, deps).plist;
+      const loaded = await deps.run(['launchctl', 'print', `gui/${deps.uid}/${names.label}`], { env });
+      const result =
+        loaded.code === 0
+          ? await deps.run(['launchctl', 'kickstart', `gui/${deps.uid}/${names.label}`], { env })
+          : await deps.run(['launchctl', 'bootstrap', `gui/${deps.uid}`, plist], { env });
+      if (result.code !== 0)
+        throw new SandboxError(`launchctl could not start ${names.label}: ${result.stderr.trim()}`);
+    } else if (state.atLogin && deps.platform === 'linux') {
+      const names = sandboxUnitNames(layout.home, opts.defaultHome);
+      const result = await deps.run(['systemctl', '--user', 'enable', '--now', names.systemdUnit], { env });
+      if (result.code !== 0)
+        throw new SandboxError(`systemctl could not start ${names.systemdUnit}: ${result.stderr.trim()}`);
+    } else {
+      deps.spawnDetached(supervisorCommand(layout, state), {
+        cwd: layout.home,
+        env: sandboxBaseEnv(layout, deps.env),
+        logPath: join(layout.logsDir, 'supervisor.log'),
+      });
+    }
+  }
+  const healthy = await deps.health(sandboxApiUrl(state), opts.healthTimeoutMs ?? SANDBOX_HEALTH_TIMEOUT_MS);
+  const result = await report(layout, deps, 2000);
+  if (!healthy) {
+    return { ...result, ok: false, error: `Omni did not answer at ${sandboxApiUrl(state)}; see ${layout.logsDir}` };
+  }
+  return { ...result, healthy: true };
+}
+
+/** Stops the supervisor, which stops the API, NATS and Postgres in that order. */
+export async function stopSandbox(
+  opts: { home: string; defaultHome: string },
+  deps: SandboxDeps = defaultSandboxDeps(),
+): Promise<SandboxReport> {
+  const layout = sandboxLayout(opts.home);
+  const state = requireState(layout);
+  const env = serviceManagerEnv(deps);
+  const names = sandboxUnitNames(layout.home, opts.defaultHome);
+  // A unit would bring a killed supervisor straight back, so stop the unit itself.
+  if (state.atLogin && deps.platform === 'darwin') {
+    await deps.run(['launchctl', 'bootout', `gui/${deps.uid}/${names.label}`], { env });
+  } else if (state.atLogin && deps.platform === 'linux') {
+    await deps.run(['systemctl', '--user', 'stop', names.systemdUnit], { env });
+  }
+  const pid = livePid(layout, deps);
+  if (pid !== null) {
+    deps.kill(pid, 'SIGTERM');
+    const deadline = deps.now().getTime() + STOP_TIMEOUT_MS;
+    while (deps.isAlive(pid) && deps.now().getTime() < deadline) await deps.sleep(250);
+    if (deps.isAlive(pid)) deps.kill(pid, 'SIGKILL');
+  }
+  // Whatever a supervisor that died hard left behind; normally nothing.
+  await sweepSandboxLeftovers(layout, deps);
+  if (existsSync(layout.pidPath)) rmSync(layout.pidPath, { force: true });
+  return report(layout, deps, 0);
+}
+
+export async function sandboxStatus(
+  opts: { home: string },
+  deps: SandboxDeps = defaultSandboxDeps(),
+): Promise<SandboxReport> {
+  return report(sandboxLayout(opts.home), deps);
+}
+
+/**
+ * Install or reinstall. Ports, the API key and all data survive a reinstall;
+ * a CLI of another version moves the runtime to its own version.
+ */
+export async function installSandbox(
+  opts: SandboxInstallOptions,
+  deps: SandboxDeps = defaultSandboxDeps(),
+): Promise<SandboxReport> {
+  const layout = sandboxLayout(opts.home);
+  ensureLayout(layout);
+  const previous = readSandboxState(layout);
+  const packageSpec = opts.packageSpec?.trim() || VERSION;
+  const atLogin = opts.atLogin ?? previous?.atLogin ?? false;
+  const running = livePid(layout, deps) !== null;
+  // A supervisor runs either on its own or under its launchd/systemd unit. Switching
+  // at-login restarts it under the other, or launchd/systemd would not bring it back.
+  const restart =
+    previous && (previous.packageSpec !== packageSpec || previous.bun !== deps.bun || previous.atLogin !== atLogin);
+  if (running && restart) {
+    await stopSandbox({ home: opts.home, defaultHome: opts.defaultHome }, deps);
+  }
+
+  const version = await ensureRuntime(layout, packageSpec, deps);
+  if (!existsSync(layout.natsBinary) && !(await deps.installNats(layout.natsBinary))) {
+    throw new SandboxError(`Could not install nats-server at ${layout.natsBinary}`);
+  }
+
+  const now = deps.now().toISOString();
+  const state: SandboxState = {
+    schemaVersion: 1,
+    version,
+    packageSpec,
+    bun: deps.bun,
+    ports: previous?.ports ?? (await pickPorts(deps)),
+    atLogin,
+    createdAt: previous?.createdAt ?? now,
+    updatedAt: now,
+  };
+  writeSandboxState(layout, state);
+  writeSandboxConfig(layout, state, readSandboxApiKey(layout) ?? generateApiKey());
+
+  if (state.atLogin) await writeAtLoginUnit(layout, state, opts, deps);
+  else if (previous?.atLogin) await removeAtLoginUnit(layout, opts.defaultHome, deps);
+
+  if (opts.start === false) return report(layout, deps, 0);
+  return startSandbox({ home: opts.home, defaultHome: opts.defaultHome, healthTimeoutMs: opts.healthTimeoutMs }, deps);
+}
+
+/**
+ * Stops the sandbox, removes its units and its runtime. The data and the
+ * config (with its API key) stay, so a later install picks them up again;
+ * `purge` deletes the whole home.
+ */
+export async function uninstallSandbox(
+  opts: { home: string; defaultHome: string; purge?: boolean },
+  deps: SandboxDeps = defaultSandboxDeps(),
+): Promise<SandboxReport> {
+  const layout = sandboxLayout(opts.home);
+  requireState(layout);
+  await stopSandbox(opts, deps);
+  await removeAtLoginUnit(layout, opts.defaultHome, deps);
+  if (opts.purge) {
+    const home = resolve(layout.home);
+    if (home === '/' || home === resolve(deps.userHome)) throw new SandboxError(`Refusing to delete ${home}`);
+    rmSync(home, { recursive: true, force: true });
+  } else {
+    for (const path of [layout.statePath, layout.runtimeDir, layout.cacheDir, layout.runDir]) {
+      rmSync(path, { recursive: true, force: true });
+    }
+  }
+  return report(layout, deps, 0);
+}

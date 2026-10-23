@@ -54,6 +54,7 @@ import { createReplayCommand } from './commands/replay.js';
 import { createRequirementsCommand } from './commands/requirements.js';
 import { createRestartCommand } from './commands/restart.js';
 import { createResyncCommand } from './commands/resync.js';
+import { createSandboxCommand } from './commands/sandbox.js';
 import { createSayCommand } from './commands/say.js';
 import { createScheduleCommand } from './commands/schedule.js';
 import { createSeeCommand } from './commands/see.js';
@@ -464,6 +465,12 @@ const COMMANDS: CommandDef[] = [
     category: 'standard',
     helpGroup: 'System',
     helpDescription: 'Interactive setup wizard (bootstrap Omni server)',
+  },
+  {
+    create: createSandboxCommand,
+    category: 'standard',
+    helpGroup: 'System',
+    helpDescription: 'Manage the sandboxed local Omni (omni install --sandbox)',
   },
   {
     create: createDesktopCommand,

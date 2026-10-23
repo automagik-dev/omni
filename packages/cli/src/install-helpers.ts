@@ -259,7 +259,7 @@ function logrotateAlreadyConfigured(confOutput: string): boolean {
  * `\\` and `"`, and double `%` (unit specifiers) and `$` (environment
  * expansion) so the value reaches the process verbatim.
  */
-function quoteSystemdArg(arg: string): string {
+export function quoteSystemdArg(arg: string): string {
   if (/[\r\n]/.test(arg))
     throw new Error(`systemd ExecStart argument must not contain a newline: ${JSON.stringify(arg)}`);
   const escaped = arg
