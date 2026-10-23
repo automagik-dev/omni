@@ -212,6 +212,13 @@ test('apply registers its listeners, tools and effects after the team\'s, in a f
     'effect ds-bot: operator rules',
     'effect ds-bot: omni events view',
     'effect ds-bot: omni events',
+    'effect omni-channels: omni-channel-abilities',
+    'effect omni-channels: omni-channel-pairing',
+    'effect omni-channels: omni-channel-create',
+    'effect omni-channels: omni-channel-phone-code',
+    'effect omni-channels: omni-channel-cancel',
+    'effect omni-channels: omni-channel-act',
+    'effect omni-channels: omni-send',
     'provide omniChannels',
   ])
   assert.ok(!own.includes('on llm/stream'))
