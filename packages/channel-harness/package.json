@@ -1,6 +1,6 @@
 {
   "name": "@omni/channel-harness",
-  "version": "2.261023.31",
+  "version": "2.261023.32",
   "description": "E2E agent-testing channel for Omni — drives conversations, captures outbound verbatim, simulates taps",
   "type": "module",
   "main": "src/index.ts",
