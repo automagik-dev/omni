@@ -1,0 +1,69 @@
+{
+  "name": "@automagik/omni-channels-dsh",
+  "version": "2.261022.4",
+  "description": "Omni's channels for DeepSeek Harness: link an Omni, see its channels and chats, and let the Omni Bot operate it and run your automations",
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "dsh",
+    "omni",
+    "whatsapp",
+    "agents"
+  ],
+  "homepage": "https://github.com/automagik-dev/omni/tree/dev/apps/omni-channels-dsh#readme",
+  "bugs": {
+    "url": "https://github.com/automagik-dev/omni/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/automagik-dev/omni.git",
+    "directory": "apps/omni-channels-dsh"
+  },
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "src/host/",
+    "client.js",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "scripts": {
+    "build": "node scripts/build-client.mjs",
+    "test": "node --import ./test/harness-resolve.mjs --test \"test/*.test.js\"",
+    "lint": "node scripts/lint.mjs",
+    "harness": "npm install --prefix dev/harness --legacy-peer-deps=false --no-package-lock --no-fund --no-audit"
+  },
+  "engines": {
+    "dsh": ">=0.2.1-rc.2 <0.3.0"
+  },
+  "peerDependencies": {
+    "@automagik/omni-dsh": ">=2.261019.10",
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-llm": "*",
+    "@deepseek-ai/dsh-tools": "*"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "external": [
+        "@automagik/omni-dsh/client"
+      ]
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "qrcode-generator": "2.0.4"
+  }
+}

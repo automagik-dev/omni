@@ -1,0 +1,12 @@
+Omni AI for DeepSeek Harness (@automagik/omni-ai-dsh)
+Copyright 2026 Namastex Labs and the Omni contributors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+The Omni octopus and its stage are copied from this repository's own
+apps/omni-ui-dsh (src/client/characters.js) and packages/api (src/login/pages.ts),
+both Apache-2.0.
+
+No third-party code is copied into this package. At run time the plugin uses the
+@deepseek-ai/* packages and React of the DeepSeek Harness install it runs in;
+they are not bundled. esbuild is a build tool only.

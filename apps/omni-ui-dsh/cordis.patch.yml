@@ -1,0 +1,15 @@
+# Mounts Omni's host plugin; the browser half is discovered through the package's
+# dsh.client manifest and ./client export.
+#
+# Installed into someone's own DSH, this patch adds Omni and changes nothing of theirs:
+# Omni keeps its files in $OMNI_HOME/ui (~/.omni/ui), its Omni key in its own link file
+# there, and it overrides no other entry's config. The keyless web search
+# (@automagik/omni-dsh/web-search) is not inserted here, because it takes over DSH's
+# searchProvider; the Omni desktop app's own profile adds it (see README "Web search").
+- insert:
+    - id: omni-ui
+      name: '@automagik/omni-dsh'
+      config:
+        # Omni is not on a registry release channel yet; nothing checks for or installs
+        # updates, of Omni or of DSH.
+        updateCheck: false

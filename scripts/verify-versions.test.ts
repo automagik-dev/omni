@@ -5,6 +5,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
+import { getAllVersionFields } from './lib/version-fields';
 import { fieldStatus, readBasePaths } from './verify-versions';
 
 describe('fieldStatus', () => {
@@ -38,5 +39,15 @@ describe('readBasePaths', () => {
     const paths = readBasePaths('HEAD');
     expect(paths?.has('package.json')).toBe(true);
     expect(paths?.has('scripts/verify-versions.ts')).toBe(true);
+  });
+});
+
+describe('getAllVersionFields', () => {
+  test("the DSH plugins carry Omni's version, lockfiles included", () => {
+    const paths = new Set(getAllVersionFields().map((field) => field.path));
+    for (const app of ['omni-ui-dsh', 'omni-ai-dsh', 'omni-channels-dsh', 'omni-canvas-dsh']) {
+      expect(paths.has(`apps/${app}/package.json`)).toBe(true);
+      expect(paths.has(`apps/${app}/package-lock.json`)).toBe(true);
+    }
   });
 });

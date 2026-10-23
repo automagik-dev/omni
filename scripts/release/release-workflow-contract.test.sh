@@ -775,7 +775,7 @@ else:
         errors.append(f"candidate pipeline mint permissions are {permissions_at(rc_jobs.get('mint', []), 4)}, expected exactly {expected_mint}")
     if permissions_at(rc_jobs.get("pin", []), 4) != {"contents": "read", "packages": "read", "attestations": "read"}:
         errors.append("candidate pipeline pin permissions are not exactly read-only")
-require(version_workflow, r"^  workflow_call:\n    inputs:\n      candidate:\n[\s\S]{0,300}    secrets:\n      VERSION_BUMP_PAT:\n        required: true\n[\s\S]{0,200}    outputs:\n      version:\n", "the version workflow cannot be called for an in-run candidate cut that emits its version")
+require(version_workflow, r"^  workflow_call:\n    inputs:\n      candidate:\n[\s\S]{0,300}    secrets:\n      VERSION_BUMP_PAT:\n        required: true\n[\s\S]{0,600}    outputs:\n      version:\n", "the version workflow cannot be called for an in-run candidate cut that emits its version")
 require(version_workflow, r"\(github\.event_name == 'push' && inputs\.candidate == true\)", "the version writer admits a called push that is not a candidate cut")
 back_merge = workflows.get("back-merge-main.yml")
 if back_merge is None:

@@ -60,7 +60,7 @@ function freshInboxWindow(input: z.infer<typeof SelfMessagesSchema>) {
     throw new Error('Read window expired');
 }
 /** Decode only the numeric or serialized protobuf Long used by native Baileys. */
-function platformTime(value: unknown): string | null {
+export function platformTime(value: unknown): string | null {
   let seconds: number;
   if (typeof value === 'number') seconds = value;
   else {

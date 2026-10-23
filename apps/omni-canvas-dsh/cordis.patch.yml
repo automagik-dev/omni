@@ -1,0 +1,9 @@
+# Mounts Omni's canvases beside the Omni team (@automagik/omni-dsh, row omni-ui) and its
+# channels (@automagik/omni-channels-dsh, row omni-channels), whose runtimes it injects as
+# the omniTeam and omniChannels services; the browser half is discovered through the
+# package's dsh.client manifest and ./client export.
+#
+# Installed into someone's own DSH, this patch adds that row and changes nothing of theirs.
+- insert:
+    - id: omni-canvas
+      name: '@automagik/omni-canvas-dsh'

@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main, dev, labs]
   pull_request:
-    branches: [main, dev]
+    branches: [main, dev, labs]
   # Merge-queue support (#990): when a merge queue is enabled on dev, GitHub
   # synthesizes gh-readonly-queue/* merge commits (PR + dev + any PRs queued
   # ahead) and requires the branch-protection checks to pass on THEM before
@@ -17,7 +17,7 @@ on:
   # Enabling the queue itself is a one-time settings change — see
   # docs/ci/merge-queue.md.
   merge_group:
-    branches: [main, dev]
+    branches: [main, dev, labs]
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -166,6 +166,15 @@ jobs:
               bun scripts/verify-versions.ts --base "origin/${VERSION_BASE_BRANCH}"
             fi
           fi
+
+      - name: Marketplace index gate
+        # marketplace/automagik.json pins Omni's plugins to commits; the gate proves each
+        # one is an ancestor of HEAD and holds the package it names, so it needs history.
+        run: |
+          if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+            git fetch --no-tags --unshallow origin
+          fi
+          make marketplace-check
 
       - name: Migration contract gate
         # Static check of packages/db/drizzle/ (journal ↔ files bijection,
@@ -503,6 +512,179 @@ jobs:
             exit 1
           fi
           echo "S3/MinIO suites executed against a real MinIO (S3 backend init lines + non-zero pass count present)"
+
+  omni-ui-dsh:
+    # apps/omni-ui-dsh is the Omni UI as a DeepSeek Harness (DSH) plugin. It is
+    # plain Node + npm, outside the Bun workspaces, and its tests run against
+    # the DSH release it pins in dev/harness/package.json, so it gets its own
+    # job rather than a turbo task.
+    name: Omni UI for DSH (plugin tests)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/omni-ui-dsh
+    env:
+      # @openuidev/lang-core's postinstall sends install telemetry otherwise.
+      DO_NOT_TRACK: '1'
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+
+      - name: Cache the pinned DSH harness
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: apps/omni-ui-dsh/dev/harness/node_modules
+          key: dsh-harness-${{ runner.os }}-${{ hashFiles('apps/omni-ui-dsh/dev/harness/package.json') }}
+
+      - name: Install
+        run: |
+          npm ci --no-fund --no-audit
+          [ -d dev/harness/node_modules ] || npm run harness
+
+      - name: Generated files are current
+        run: node scripts/build-client.mjs --check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+  omni-ai-dsh:
+    # apps/omni-ai-dsh is Omni's welcome and Connect AI as a DSH plugin: plain Node + npm
+    # outside the Bun workspaces, tested against the DSH release pinned in its own
+    # dev/harness/package.json, like omni-ui-dsh above.
+    name: Omni AI for DSH (plugin tests)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: apps/omni-ai-dsh
+    env:
+      DO_NOT_TRACK: '1'
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+
+      - name: Cache the pinned DSH harness
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: apps/omni-ai-dsh/dev/harness/node_modules
+          key: dsh-harness-omni-ai-${{ runner.os }}-${{ hashFiles('apps/omni-ai-dsh/dev/harness/package.json') }}
+
+      - name: Install
+        run: |
+          npm ci --no-fund --no-audit
+          [ -d dev/harness/node_modules ] || npm run harness
+
+      - name: Generated files are current
+        run: node scripts/build-client.mjs --check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+  omni-channels-dsh:
+    # apps/omni-channels-dsh is Omni's channels, chats and automations as a DSH plugin on the
+    # Omni team (apps/omni-ui-dsh): plain Node + npm outside the Bun workspaces, tested against
+    # the DSH release pinned in its own dev/harness/package.json, like omni-ui-dsh above. Its
+    # tests compose the team's runtime and client.js from this checkout with its own.
+    name: Omni channels for DSH (plugin tests)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: apps/omni-channels-dsh
+    env:
+      DO_NOT_TRACK: '1'
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+
+      - name: Cache the pinned DSH harness
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: apps/omni-channels-dsh/dev/harness/node_modules
+          key: dsh-harness-omni-channels-${{ runner.os }}-${{ hashFiles('apps/omni-channels-dsh/dev/harness/package.json') }}
+
+      - name: Install
+        run: |
+          npm ci --no-fund --no-audit
+          [ -d dev/harness/node_modules ] || npm run harness
+
+      - name: Generated files are current
+        run: node scripts/build-client.mjs --check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+  omni-canvas-dsh:
+    # apps/omni-canvas-dsh is Omni's canvases as a DSH plugin on the Omni team and its
+    # channels (apps/omni-ui-dsh, apps/omni-channels-dsh): plain Node + npm outside the Bun
+    # workspaces, tested against the DSH release pinned in its own dev/harness/package.json.
+    # Its tests compose all three runtimes and client bundles from this checkout.
+    name: Omni canvases for DSH (plugin tests)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: apps/omni-canvas-dsh
+    env:
+      # @openuidev/lang-core's postinstall sends install telemetry otherwise.
+      DO_NOT_TRACK: '1'
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+
+      - name: Cache the pinned DSH harness
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: apps/omni-canvas-dsh/dev/harness/node_modules
+          key: dsh-harness-omni-canvas-${{ runner.os }}-${{ hashFiles('apps/omni-canvas-dsh/dev/harness/package.json') }}
+
+      - name: Install
+        run: |
+          npm ci --no-fund --no-audit
+          [ -d dev/harness/node_modules ] || npm run harness
+
+      - name: Generated files are current
+        run: node scripts/build-client.mjs --check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
 
   smoke-test:
     name: Smoke Test (Fresh Environment)

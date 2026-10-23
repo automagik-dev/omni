@@ -9,6 +9,7 @@
 # Runtime is the bundled server produced by `packages/cli` scripts:
 #   build:server      → dist/server/index.js  (bun bundle, target=bun)
 #   build:migrations  → db/drizzle/           (applied on boot by the API)
+#   build:market      → dist/market/          (the apps/*-dsh plugins /api/market serves)
 #
 # `build:server` EXTERNALIZES native/heavy deps (@anthropic-ai/claude-agent-sdk,
 # @snazzah/davey, libsodium-wrappers, opusscript, pdf-parse, mammoth, exceljs,
@@ -51,13 +52,16 @@ RUN bun install --frozen-lockfile --ignore-scripts
 # Source arrives AFTER the install so code edits don't re-run bun install.
 COPY packages ./packages
 COPY apps ./apps
+# The market (/api/market): the static index the server embeds, and the packer.
+COPY marketplace/automagik.json ./marketplace/automagik.json
+COPY scripts/pack-market.ts ./scripts/pack-market.ts
 
 # ---- builder: bundle the server + copy migrations ---------------------------
 FROM deps AS builder
 WORKDIR /src/packages/cli
 # Workspace packages resolve to their TS `src/` via package exports, so the
 # server bundle is fully self-contained — no per-package pre-build needed.
-RUN bun run build:server && bun run build:migrations
+RUN bun run build:server && bun run build:migrations && bun run build:market
 
 # ---- prod-deps: production node_modules for the externalized requires --------
 # A clean, standalone install of packages/cli's `dependencies` only. The
@@ -99,6 +103,8 @@ RUN apt-get update \
 COPY --from=prod-deps /prod/node_modules ./node_modules
 COPY --from=prod-deps /prod/package.json ./package.json
 COPY --from=builder   /src/packages/cli/dist/server ./dist/server
+# The plugins this release serves at /api/market (scripts/pack-market.ts).
+COPY --from=builder   /src/packages/cli/dist/market ./dist/market
 COPY --from=builder   /src/packages/cli/db/drizzle ./db/drizzle
 
 # `bun` user (uid 1000) ships with the oven/bun image.

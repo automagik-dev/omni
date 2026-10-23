@@ -1,0 +1,257 @@
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { parseMarketIndex } from '@deepseek-ai/dsh-plugin-market-index';
+import { Hono } from 'hono';
+import staticIndex from '../../../../../marketplace/automagik.json';
+import { type MarketManifest, MarketManifestSchema } from '../manifest';
+import { marketPageRoutes, marketRoutes } from '../routes';
+import { type MarketIndex, type Packument, createMarket } from '../service';
+
+const PUBLIC = 'https://omni.example.com';
+const VERSION = '2.261019.10';
+const PACKED_AT = 1792553326;
+const THIRD_PARTY = staticIndex.plugins
+  .filter((plugin) => plugin.versions.some((entry) => entry.source.type === 'npm'))
+  .map((plugin) => plugin.name);
+
+let root: string;
+let marketDir: string;
+const tarballs = new Map<string, Buffer>();
+
+/** A real, tiny npm tarball: package/package.json and package/index.js. */
+function tinyTarball(dir: string, name: string, file: string): Buffer {
+  const src = mkdtempSync(join(root, 'src-'));
+  mkdirSync(join(src, 'package'));
+  writeFileSync(join(src, 'package', 'package.json'), JSON.stringify({ name, version: VERSION, main: 'index.js' }));
+  writeFileSync(join(src, 'package', 'index.js'), 'export default {};\n');
+  execFileSync('tar', ['-czf', join(dir, file), '-C', src, 'package']);
+  return readFileSync(join(dir, file));
+}
+
+function entry(name: string, file: string, extra: Partial<MarketManifest['packages'][number]> = {}) {
+  const bytes = tinyTarball(marketDir, name, file);
+  tarballs.set(name, bytes);
+  return {
+    name,
+    version: VERSION,
+    file,
+    integrity: `sha512-${createHash('sha512').update(bytes).digest('base64')}`,
+    shasum: createHash('sha1').update(bytes).digest('hex'),
+    size: bytes.byteLength,
+    peerDependencies: { '@deepseek-ai/cordis': '*' },
+    ...extra,
+  };
+}
+
+beforeAll(() => {
+  root = mkdtempSync(join(tmpdir(), 'omni-market-'));
+  marketDir = join(root, 'market');
+  mkdirSync(marketDir);
+  const manifest = MarketManifestSchema.parse({
+    format: 1,
+    omniVersion: VERSION,
+    packedAt: PACKED_AT,
+    packages: [
+      entry('@automagik/omni-dsh', 'automagik-omni-dsh-2.261019.10.tgz', {
+        description: 'Omni for DSH',
+        license: 'Apache-2.0',
+        repository: {
+          type: 'git',
+          url: 'git+https://github.com/automagik-dev/omni.git',
+          directory: 'apps/omni-ui-dsh',
+        },
+      }),
+      entry('@automagik/omni-new-dsh', 'automagik-omni-new-dsh-2.261019.10.tgz', {
+        description: 'A plugin the static index does not list yet',
+        keywords: ['omni'],
+        engines: { dsh: '>=0.2.1-rc.2 <0.3.0' },
+        repository: {
+          type: 'git',
+          url: 'git+https://github.com/automagik-dev/omni.git',
+          directory: 'apps/omni-new-dsh',
+        },
+      }),
+      // Listed, but its tarball is missing from the bundle: dropped, not served.
+      {
+        name: '@automagik/omni-gone-dsh',
+        version: VERSION,
+        file: 'gone.tgz',
+        integrity: `sha512-${'A'.repeat(86)}==`,
+        shasum: '0'.repeat(40),
+        size: 1,
+      },
+    ],
+  });
+  writeFileSync(join(marketDir, 'market.json'), JSON.stringify(manifest));
+});
+
+afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+function appWith(options: Parameters<typeof createMarket>[0]) {
+  const app = new Hono();
+  const market = createMarket(options);
+  app.route('/api/market', marketRoutes(market));
+  app.route('/market', marketPageRoutes(market));
+  return (path: string) => app.request(`http://127.0.0.1:8882${path}`);
+}
+
+describe('market index', () => {
+  test("is a valid DSH market index: this release's plugins from this Omni, the vetted add-ons from npm", async () => {
+    const get = appWith({ dir: marketDir, publicUrl: PUBLIC });
+    const response = await get('/api/market/index.json');
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('public, max-age=60');
+    const body = (await response.json()) as MarketIndex;
+    const parsed = parseMarketIndex(body, `${PUBLIC}/api/market/index.json`);
+    expect(parsed.title).toEqual({ en: 'Automagik' });
+    expect(parsed.metadata.categories).toHaveProperty('omni');
+    expect(parsed.metadata.labels).toHaveProperty('vetted');
+    expect(parsed.plugins.map((plugin) => plugin.name)).toEqual([
+      '@automagik/omni-dsh',
+      '@automagik/omni-new-dsh',
+      ...THIRD_PARTY,
+    ]);
+    const [omni, fresh] = parsed.plugins;
+    expect(omni?.versions).toEqual([
+      {
+        version: VERSION,
+        publishTimestamp: PACKED_AT,
+        source: { type: 'npm', registry: `${PUBLIC}/api/market/npm/` },
+        engines: { dsh: '>=0.2.1-rc.2 <0.3.0' },
+      },
+    ]);
+    // The static index's presentation for a plugin it lists; derived from the package for one it does not.
+    expect(omni?.title).toEqual(staticIndex.plugins.find((plugin) => plugin.name === omni?.name)?.title);
+    expect(omni?.title).toBeTruthy();
+    expect(fresh?.description).toBe('A plugin the static index does not list yet');
+    expect(fresh?.repository).toEqual({ url: 'https://github.com/automagik-dev/omni', directory: 'apps/omni-new-dsh' });
+    expect(fresh?.metadata).toMatchObject({ category: 'omni', labels: ['official'] });
+    // No git pins: everything installs from npm, Omni's own from this Omni.
+    for (const plugin of parsed.plugins) for (const v of plugin.versions) expect(v.source.type).toBe('npm');
+    for (const plugin of parsed.plugins.slice(2)) expect(plugin.versions[0]?.source).toEqual({ type: 'npm' });
+  });
+
+  test('without a public URL, the registry is the request origin, cached only per client', async () => {
+    const response = await appWith({ dir: marketDir })('/api/market/index.json');
+    expect(response.headers.get('cache-control')).toBe('private, max-age=60');
+    const body = (await response.json()) as MarketIndex;
+    expect(body.plugins[0]?.versions[0]?.source).toEqual({
+      type: 'npm',
+      registry: 'http://127.0.0.1:8882/api/market/npm/',
+    });
+  });
+
+  test('without a bundled market, the vetted add-ons are still listed and nothing crashes', async () => {
+    const empty = mkdtempSync(join(root, 'empty-'));
+    const corrupt = mkdtempSync(join(root, 'corrupt-'));
+    writeFileSync(join(corrupt, 'market.json'), '{"format": 2');
+    for (const dir of [empty, corrupt]) {
+      const get = appWith({ dir, publicUrl: PUBLIC });
+      const body = (await (await get('/api/market/index.json')).json()) as MarketIndex;
+      expect(parseMarketIndex(body, `${PUBLIC}/api/market/index.json`).plugins.map((p) => p.name)).toEqual(THIRD_PARTY);
+      const packument = await get('/api/market/npm/@automagik%2fomni-dsh');
+      expect(packument.status).toBe(302);
+      expect((await get('/market')).status).toBe(200);
+    }
+  });
+});
+
+describe('market npm registry', () => {
+  const get = () => appWith({ dir: marketDir, publicUrl: PUBLIC });
+
+  test('serves a packument for a carried plugin, scoped name encoded or not', async () => {
+    for (const path of [
+      '/api/market/npm/@automagik%2fomni-dsh',
+      '/api/market/npm/@automagik%2Fomni-dsh',
+      '/api/market/npm/@automagik/omni-dsh',
+    ]) {
+      const response = await get()(path);
+      expect(response.status).toBe(200);
+      expect(response.headers.get('cache-control')).toBe('public, max-age=60');
+      const body = (await response.json()) as Packument;
+      const bytes = tarballs.get('@automagik/omni-dsh') as Buffer;
+      expect(body.name).toBe('@automagik/omni-dsh');
+      expect(body['dist-tags']).toEqual({ latest: VERSION });
+      expect(body.time[VERSION]).toBe(new Date(PACKED_AT * 1000).toISOString());
+      expect(body.versions[VERSION]).toMatchObject({
+        name: '@automagik/omni-dsh',
+        version: VERSION,
+        description: 'Omni for DSH',
+        license: 'Apache-2.0',
+        peerDependencies: { '@deepseek-ai/cordis': '*' },
+        dist: {
+          tarball: `${PUBLIC}/api/market/npm/@automagik/omni-dsh/-/automagik-omni-dsh-2.261019.10.tgz`,
+          integrity: `sha512-${createHash('sha512').update(bytes).digest('base64')}`,
+          shasum: createHash('sha1').update(bytes).digest('hex'),
+        },
+      });
+    }
+  });
+
+  test('serves the listed tarball bytes, immutable', async () => {
+    const response = await get()('/api/market/npm/@automagik/omni-dsh/-/automagik-omni-dsh-2.261019.10.tgz');
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('application/octet-stream');
+    expect(response.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
+    expect(Buffer.from(await response.arrayBuffer()).equals(tarballs.get('@automagik/omni-dsh') as Buffer)).toBe(true);
+    const encoded = await get()('/api/market/npm/@automagik%2fomni-dsh/-/automagik-omni-dsh-2.261019.10.tgz');
+    expect(encoded.status).toBe(200);
+  });
+
+  test('sends any name it does not carry to the public npm registry', async () => {
+    const scoped = await get()('/api/market/npm/@someone%2fthing');
+    expect(scoped.status).toBe(302);
+    expect(scoped.headers.get('location')).toBe('https://registry.npmjs.org/@someone%2fthing');
+    const plain = await get()('/api/market/npm/dsh-oh-my-claude');
+    expect(plain.headers.get('location')).toBe('https://registry.npmjs.org/dsh-oh-my-claude');
+    // A listed package whose tarball is missing from the bundle is not carried.
+    expect((await get()('/api/market/npm/@automagik%2fomni-gone-dsh')).status).toBe(302);
+  });
+
+  test('serves no file the manifest does not list for that package', async () => {
+    for (const path of [
+      '/api/market/npm/@automagik/omni-dsh/-/..%2fmarket.json',
+      '/api/market/npm/@automagik/omni-dsh/-/%2e%2e%2f%2e%2e%2fmarket.tgz',
+      '/api/market/npm/@automagik/omni-dsh/-/market.json',
+      '/api/market/npm/@automagik/omni-dsh/-/automagik-omni-new-dsh-2.261019.10.tgz',
+      '/api/market/npm/@automagik/omni-dsh/-/other.tgz/-/x.tgz',
+      '/api/market/npm/@automagik/omni-gone-dsh/-/gone.tgz',
+      '/api/market/npm/@someone/thing/-/thing-1.0.0.tgz',
+      '/api/market/npm/..%2f..%2fetc',
+      '/api/market/npm/%E0%A4%A',
+    ]) {
+      const response = await get()(path);
+      expect([path, response.status]).toEqual([path, 404]);
+    }
+  });
+});
+
+describe('market page', () => {
+  test('is at /market, beside the UI; /api/market sends a person there', async () => {
+    const response = await appWith({ dir: marketDir, publicUrl: PUBLIC })('/api/market');
+    expect(response.status).toBe(301);
+    expect(response.headers.get('location')).toBe('/market');
+  });
+
+  test('lists the catalog and the index URL, with every text inserted as text', async () => {
+    const hostile = structuredClone(staticIndex);
+    const plugin = hostile.plugins.find((p) => p.name === 'dsh-oh-my-claude');
+    if (plugin) plugin.description = { en: '</script><script>alert(1)</script>' };
+    const response = await appWith({ dir: marketDir, publicUrl: PUBLIC, staticIndex: hostile })('/market');
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toContain('text/html');
+    const html = await response.text();
+    expect(html).toContain('Automagik marketplace');
+    expect(html).toContain(`"indexUrl":"${PUBLIC}/api/market/index.json"`);
+    expect(html).toContain('"name":"@automagik/omni-dsh"');
+    expect(html).toContain('Settings → Plugins');
+    expect(html).not.toContain('<script>alert(1)');
+    expect(html).toContain('\\u003c/script>\\u003cscript>alert(1)');
+    expect(html).not.toContain('innerHTML');
+  });
+});

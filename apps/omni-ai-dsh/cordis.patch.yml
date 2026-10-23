@@ -1,0 +1,11 @@
+# Mounts Omni's welcome and Connect AI; the browser half is discovered through the
+# package's dsh.client manifest and ./client export.
+#
+# The row's Config (index.js) is three live flags — welcomeDone, connectAiDone and
+# connectOmniSkipped — so a finished or skipped onboarding step stays finished across
+# restarts. Installed into someone's own DSH, this patch adds that row and changes
+# nothing of theirs: provider routes are written only when the person saves one, through
+# DSH's own settings, and keys go to DSH's credential store.
+- insert:
+    - id: omni-ai
+      name: '@automagik/omni-ai-dsh'

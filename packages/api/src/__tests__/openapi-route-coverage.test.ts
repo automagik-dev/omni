@@ -23,10 +23,12 @@ const isDocumented = new Set(documented);
 
 describe('openapi route coverage', () => {
   it('reads every kind of mount', () => {
-    // A prefixed v2 router, a root-mounted one, app.ts's own router and its direct routes.
+    // A prefixed v2 router, a root-mounted one, app.ts's own router, one a function builds,
+    // and app.ts's direct routes.
     for (const route of [
       'get /chats/{id}',
       'get /events/consumers',
+      'get /login/status',
       'get /health',
       'post /channels/gupshup/{instanceId}/webhook',
     ]) {

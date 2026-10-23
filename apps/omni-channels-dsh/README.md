@@ -1,0 +1,108 @@
+# Omni channels for DSH
+
+`@automagik/omni-channels-dsh` brings your Omni into the Omni team for DeepSeek Harness
+(DSH): link this DSH to an Omni, see its channels and chats, and let Omni, the Main Bot,
+operate the platform and run your automations. It sits on the team plugin
+(`@automagik/omni-dsh`, [apps/omni-ui-dsh](../omni-ui-dsh/README.md#three-plugins)) and
+needs it; the canvas plugin (`@automagik/omni-canvas-dsh`) sits on this one.
+
+> Labs release. Features, tools and the saved data format can still change.
+
+## What it adds
+
+- **The link to an Omni**: the Channels page pairs this DSH with an Omni by a code you send
+  yourself on WhatsApp, and keeps the key the Omni mints in `omni.json` (see below).
+- **Channels and chats**: the Channels page (connect a channel, its health) and each chat as
+  a main panel; the footer shows the connected channels and a dot when one needs attention.
+- **Omni's tools**, for a Main Bot only: `omni_channels`, `omni_chats`, `omni_messages`,
+  `omni_connect`, and `omni_endpoints` and `omni_call` for any other operation of the Omni
+  API. Each call is drawn in the chat as a card. With an Omni named, a Main Bot's Sessions
+  lose DSH's shell and file tools; `start_task` (the team's) hands that work to Tasks.
+- **Automations**: `find_chats`, `list_automations`, `save_automation`, `pause_automation`
+  and `delete_automation`; Omni's event streams start a run for each match. The board is a
+  tab of DSH's right sidebar beside Omni's chat, and the account menu opens the Automations
+  page. A run for an event only reads omni.
+- **Omni's rules**: how to operate Omni, hand work to Tasks and run automations, as a part
+  of the Main Bot's rules inside the team's prompt section.
+- **Connect Omni**, the onboarding step `omni-connect` (order −250), between the Omni AI
+  plugin's welcome (−300) and Connect AI (−200). A skip is kept by `@automagik/omni-ai-dsh`
+  when it is installed, else in this browser.
+
+## Install
+
+The plugin needs DSH `>=0.2.1-rc.2 <0.3.0` and the Omni team plugin. Add the Automagik
+marketplace index to DSH's plugin market ([marketplace/README.md](../../marketplace/README.md)
+has the URL and the steps) and install `@automagik/omni-channels-dsh` from it. DSH applies
+the bundle patch (`cordis.patch.yml`), which adds one row, `id: omni-channels`, and changes
+nothing else. Restart DSH.
+
+From a checkout, link it into a profile next to the team plugin; the team's
+[README](../omni-ui-dsh/README.md#install) has the profile.
+
+## Connect to an Omni
+
+On the Channels page, type the address of an Omni (for example `omni.example.com`) and
+choose **Get a code**. Omni answers with a short code; send it to yourself from WhatsApp
+("Message yourself"; **Open WhatsApp** or the QR opens the chat with the code typed). The
+page goes live as soon as the code arrives. The Omni must have pairing turned on.
+
+The key Omni mints is saved in `omni.json` in the team's folder (`$OMNI_HOME/ui`, readable by
+you only), with its scopes and expiry; it never reaches the browser. Delete that file to
+disconnect; revoke the key in Omni to cut it off from the server side.
+
+A profile can still name an Omni the older way: `omni.url` (the API, without `/api/v2`) in
+this row's config, or on the team's `omni-ui` row where it lived before this plugin, and the
+`OMNI_API_KEY` credential in DSH's store. A saved link wins over both.
+
+```yaml
+- id: omni-channels
+  name: '@automagik/omni-channels-dsh'
+  config:
+    omni:
+      url: https://omni.example.com
+```
+
+## How it plugs into the team
+
+- **Host**: it injects the team's runtime (`omniTeam`) and installs `subscriptions`,
+  `omni-api`, `omni-link`, `omni` and `omni-events` on a runtime of its own whose prototype is
+  the team's, so they call the team's functions while their tools and effects stay on this
+  plugin's fiber. It adds to the team only through `rt.hooks`: the `omni-*` and
+  `automation-*` endpoints of `POST /api/omni-ui` (the reads also on a host that only reads
+  the team), the automations in the team view, the events Omni listens to in every state
+  answer, and the operator rules. It provides its runtime as `omniChannels`.
+- **Browser**: `client.js` names `@automagik/omni-dsh/client` in `dsh.client.external`, so
+  DSH loads the team's bundle first and this one shares it: the host call, the interface
+  copy (this plugin's Chinese copy joins it with `addStrings`), and the registries it adds
+  its tool cards, account-menu row, row badge, header button and Bot-surface panels to. It
+  exports `channels`, the live views of omni the canvas plugin draws with.
+- **Data**: the automations and their runs (`subscriptions`, `subscriptionRuns`,
+  `omniEventCursors`) stay in the team's `state.json`, saved through the team's lock; a DSH
+  that only reads the team does not change them.
+
+## Develop
+
+```sh
+npm ci               # esbuild and qrcode-generator, for the client bundle
+npm run harness      # the pinned DSH release the tests and the linter run against
+npm test             # composes the team (../omni-ui-dsh) with this plugin
+npm run lint
+npm run build        # rewrites client.js and src/host/omni-routes.js; commit them
+node scripts/build-client.mjs --check
+```
+
+`client.js` is generated from `src/client` and committed, so git and `link:` installs need
+no build step. The tests load the team plugin from `../omni-ui-dsh` (or `OMNI_DSH_CORE`):
+its `index.js`, its test context, and its committed `client.js`.
+
+| Path | Purpose |
+|---|---|
+| `index.js` | Host entry: the runtime on the team's, its modules in order |
+| `src/host/` | The link (`omni-link`), reads (`omni`), Omni's tools (`omni-api`, `omni-routes`), events (`omni-events`), automations (`subscriptions`), rules (`omni-rules`) |
+| `src/client/` | The Channels page, chats, automations page and board, call cards, Connect Omni; `core.js` is what it takes from the team's client |
+| `client.js` | Built from `src/client/` by `scripts/build-client.mjs`; committed |
+| `test/` | Unit tests; `team.js` composes the team with this plugin |
+
+## License
+
+[Apache-2.0](LICENSE)

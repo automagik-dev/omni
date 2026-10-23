@@ -6,6 +6,10 @@
  * without needing monorepo filesystem discovery.
  */
 
+// First of all: human login's passkey plugin reaches tsyringe, which throws at load time
+// unless the Reflect metadata polyfill is already in. A bundle evaluates its entry's
+// imports in order, so it goes here, ahead of everything that could pull that in.
+import 'reflect-metadata';
 import { type ChannelPlugin, channelRegistry } from '@omni/channel-sdk';
 
 import ascPlugin from '@omni/channel-asc';

@@ -457,4 +457,12 @@ export const REGISTERED_EGRESS: readonly RegisteredEgress[] = [
     justification:
       'The Bun server INBOUND request handler (`fetch(req, server)`), not an outbound call. No tenant-influenced destination.',
   },
+  {
+    file: 'packages/api/src/login/pages.ts',
+    class: 'infra',
+    sites: 1,
+    justification:
+      'Browser script inside the login pages (`fetch(path, …)` in a template string). It runs in the visitor’s ' +
+      'browser and calls only same-origin relative paths (/api/auth, /api/v2/login); the server makes no request.',
+  },
 ];

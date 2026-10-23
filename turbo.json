@@ -1,5 +1,6 @@
 {
   "$schema": "https://turbo.build/schema.json",
+  "globalDependencies": ["marketplace/automagik.json"],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],

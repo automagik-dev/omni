@@ -56,7 +56,8 @@
     "clean": "rm -rf dist db",
     "build:server": "bun build src/bundled-server-entry.ts --outdir dist/server --entry-naming 'index.[ext]' --asset-naming '[name].[ext]' --target bun --external @anthropic-ai/claude-agent-sdk --external @snazzah/davey --external libsodium-wrappers --external opusscript --external pdf-parse --external mammoth --external exceljs --external sharp",
     "build:migrations": "rm -rf db/drizzle && mkdir -p db && cp -r ../db/drizzle db/drizzle",
-    "prepack": "bun run build && bun run build:server && bun run build:migrations"
+    "build:market": "bun ../../scripts/pack-market.ts dist/market",
+    "prepack": "bun run build && bun run build:server && bun run build:migrations && bun run build:market"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.62",
@@ -72,6 +73,7 @@
     "pdf-parse": "^1.1.1",
     "postgres": "^3.4.5",
     "qrcode-terminal": "^0.12.0",
+    "reflect-metadata": "0.2.2",
     "sharp": "^0.35.4",
     "zod": "^3.24.1"
   },
