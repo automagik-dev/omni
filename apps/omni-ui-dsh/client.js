@@ -1642,6 +1642,7 @@ var toolCards = {
 };
 var nav = registry();
 var badges = registry();
+var botChildren = registry();
 var headerButtons = registry();
 var botSettings = registry();
 var installers = /* @__PURE__ */ new Set();
@@ -8779,6 +8780,11 @@ function RowBadges(props) {
   const entries2 = useEntries(badges);
   return entries2.map((entry) => (0, import_react18.createElement)(entry.Component, { key: entry.id, ...props }));
 }
+function BotChildren({ bot, roster, actions, wide }) {
+  const entries2 = useEntries(botChildren);
+  if (!wide || entries2.length === 0) return null;
+  return entries2.map((entry) => (0, import_react18.createElement)(entry.Component, { key: entry.id, bot, roster, actions }));
+}
 function RoomRow({ room: room2, roster, actions, useSessions, useSessionStatus, useSessionRetainInfo, useWork, wide, marked }) {
   const id = room2.id;
   const fallback = useSessions((list) => previewOf(list, id));
@@ -9003,8 +9009,8 @@ function TeamSidebar(props) {
       // The Agent sorts by its most recent Session, falling back to when it was added.
       ...(roster.agents ?? []).map((agent) => ({ kind: "agent", item: agent, at: Math.max(0, ...agent.sessions.map((id) => stamps[id] ?? 0)) || agent.createdAt }))
     ];
-    const last = (entry) => Number(entry.kind === "agent");
-    return entries2.sort((a, b) => last(a) - last(b) || Number(Boolean(b.item.pinned)) - Number(Boolean(a.item.pinned)) || b.at - a.at);
+    const rank = (entry) => entry.kind === "agent" ? 2 : entry.kind === "bot" && entry.item.kind !== void 0 ? 0 : 1;
+    return entries2.sort((a, b) => rank(a) - rank(b) || Number(Boolean(b.item.pinned)) - Number(Boolean(a.item.pinned)) || b.at - a.at);
   }, [roster, updated]);
   const main = roster.byId[roster.mainBotId];
   useListGlide(listRef, wide, order.map((entry) => entry.item.id).join(","));
@@ -9054,7 +9060,12 @@ function TeamSidebar(props) {
       "div",
       { ref: listRef, className: "bt-list", role: "region", "aria-label": t("Bot list") },
       main ? (0, import_react18.createElement)(BotRow, { ...rowProps, bot: main, marked: markedUnread[main.id] === true }) : roster.ready ? null : (0, import_react18.createElement)("div", { className: "bt-hint" }, t("Setting up your Main Bot…")),
-      order.map((entry) => entry.kind === "bot" ? (0, import_react18.createElement)(BotRow, { key: entry.item.id, ...rowProps, bot: entry.item, marked: markedUnread[entry.item.id] === true }) : entry.kind === "room" ? (0, import_react18.createElement)(RoomRow, { key: entry.item.id, ...rowProps, room: entry.item, marked: markedUnread[entry.item.id] === true }) : (0, import_react18.createElement)(AgentRow, { key: entry.item.id, ...rowProps, agent: entry.item, marked: markedUnread[entry.item.id] === true }))
+      order.map((entry) => entry.kind === "bot" ? (0, import_react18.createElement)(
+        import_react18.Fragment,
+        { key: entry.item.id },
+        (0, import_react18.createElement)(BotRow, { ...rowProps, bot: entry.item, marked: markedUnread[entry.item.id] === true }),
+        (0, import_react18.createElement)(BotChildren, { bot: entry.item, roster, actions, wide })
+      ) : entry.kind === "room" ? (0, import_react18.createElement)(RoomRow, { key: entry.item.id, ...rowProps, room: entry.item, marked: markedUnread[entry.item.id] === true }) : (0, import_react18.createElement)(AgentRow, { key: entry.item.id, ...rowProps, agent: entry.item, marked: markedUnread[entry.item.id] === true }))
     )
   );
 }
@@ -18461,6 +18472,7 @@ var omni = Object.freeze({
   toolCards,
   nav,
   badges,
+  botChildren,
   headerButtons,
   botSettings,
   setCanvasRenderer,

@@ -7,6 +7,18 @@ The Omni octopus and its stage are copied from this repository's own
 apps/omni-ui-dsh (src/client/characters.js) and packages/api (src/login/pages.ts),
 both Apache-2.0.
 
-No third-party code is copied into this package. At run time the plugin uses the
-@deepseek-ai/* packages and React of the DeepSeek Harness install it runs in;
-they are not bundled. esbuild is a build tool only.
+At run time the plugin uses the @deepseek-ai/* packages and React of the DeepSeek
+Harness install it runs in; they are not bundled. esbuild is a build tool only.
+
+Bundled into client.js (MIT):
+
+  - xterm.js (@xterm/xterm 6.0.0) — Copyright (c) 2017-2019, The xterm.js authors;
+    Copyright (c) 2014-2016, SourceLair Private Company; Copyright (c) 2012-2013,
+    Christopher Jeffrey
+
+Followed, not bundled (MIT):
+
+  - Orca (https://github.com/stablyai/orca), Copyright (c) 2026 Lovecast Inc.:
+    src/client/terminal.js and src/host/terminal.js follow its onboarding terminal (the
+    command typed at a prompt, run with Enter, its exit code read), as the Omni channels
+    plugin's Connect step does.

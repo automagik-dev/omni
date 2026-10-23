@@ -26,6 +26,8 @@ export async function bundleClient() {
     platform: 'browser',
     target: 'es2022',
     external: PLATFORM_MODULES,
+    // xterm's stylesheet joins the page's styles as text (src/client/terminal.js).
+    loader: { '.css': 'text' },
     treeShaking: false,
     charset: 'utf8',
     write: false,

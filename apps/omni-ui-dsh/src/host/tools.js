@@ -276,7 +276,8 @@ export function install(rt) {
         const creator = callerBot(exec)
         const served = creator?.model && (await rt.catalog()).some(entry => entry.ref === creator.model)
         const model = args.model || (served ? creator.model : undefined)
-        const bot = await rt.createBot({ ...args, avatar: avatar === undefined ? undefined : { image: avatar }, model, workDir, effort: args.effort, createdBy: creator?.id })
+        // A kind is the onboarding's to give (a plugin's own team member), never a model's.
+        const bot = await rt.createBot({ ...args, kind: undefined, avatar: avatar === undefined ? undefined : { image: avatar }, model, workDir, effort: args.effort, createdBy: creator?.id })
         return `Created ${bot.name}${workDir ? `, working in ${workDir}` : ''}. It is greeting the user now.`
       } catch (error) {
         return `Could not create the Bot: ${error.message}`

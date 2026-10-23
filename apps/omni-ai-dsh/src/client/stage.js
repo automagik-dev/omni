@@ -1,7 +1,7 @@
 import { createElement as h, useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { call } from './api.js'
-import { OCTOPUS_SVG } from './octopus.js'
+import { Hero, useCompanion } from './companion-art.js'
 
 // What every Omni onboarding step shares: the done-flag gate, the finish, and the stage
 // (octopus, speech bubble, step rail, card). The settings shell paints no chrome for a
@@ -10,7 +10,7 @@ import { OCTOPUS_SVG } from './octopus.js'
 // Every Omni onboarding step, in order. Each plugin that brings one announces it as it
 // applies (this one: Welcome and Connect AI; @automagik/omni-dsh's channels: Connect Omni),
 // so the rail names only the steps this DSH will show.
-export const RAIL = [['omni-welcome', 'Welcome'], ['omni-connect', 'Connect Omni'], ['omni-connect-ai', 'Connect AI']]
+export const RAIL = [['omni-companion', 'Your companion'], ['omni-team', 'Your team'], ['omni-connect', 'Connect Omni'], ['omni-connect-ai', 'Connect AI']]
 const ANNOUNCED = Symbol.for('automagik.omni.onboarding-steps')
 
 /** Marks step `id` as present until the returned function runs. */
@@ -25,7 +25,7 @@ export function railSteps(current, scope = globalThis) {
   const steps = scope[ANNOUNCED]
   return RAIL.filter(([id]) => id === current || steps?.has(id) === true)
 }
-export const FLAG_OF = { 'omni-welcome': 'welcomeDone', 'omni-connect-ai': 'connectAiDone' }
+export const FLAG_OF = { 'omni-companion': 'companionDone', 'omni-team': 'teamDone', 'omni-connect-ai': 'connectAiDone' }
 
 export const reducedMotion = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
 
@@ -127,7 +127,8 @@ function Rail({ at }) {
     }, label)))
 }
 
-export function Stage({ title, speech, at, glitching, children }) {
+// `hero` replaces the companion (or, before there is one, the octopus) at the top.
+export function Stage({ title, speech, at, glitching, hero, mark = 'AUTOMAGIK', wide = false, children }) {
   const titleRef = useRef(null)
   useEffect(() => {
     const root = document.getElementById('root')
@@ -138,15 +139,16 @@ export function Stage({ title, speech, at, glitching, children }) {
   }, [])
   useEffect(() => { titleRef.current?.focus() }, [title])
   const shown = useTypewriter(speech)
+  const [look] = useCompanion()
   return createPortal(h('div', { className: 'oai-overlay', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'oai-title' },
-    h('div', { className: `oai-stage${glitching ? ' oai-glitch' : ''}` },
-      h('div', { dangerouslySetInnerHTML: { __html: OCTOPUS_SVG } }),
+    h('div', { className: `oai-stage${glitching ? ' oai-glitch' : ''}${wide ? ' oai-wide' : ''}` },
+      hero ?? h(Hero, { look }),
       h('div', { className: 'oai-bubble' },
         h('span', { className: 'oai-hidden', role: 'status' }, speech),
         h('span', { 'aria-hidden': 'true' }, shown, shown.length < speech.length ? h('span', { className: 'oai-caret' }) : null)),
       h(Rail, { at }),
       h('main', { className: 'oai-card' },
-        h('div', { className: 'oai-mark', 'aria-hidden': 'true' }, 'OMNI'),
+        h('div', { className: 'oai-mark', 'aria-hidden': 'true' }, mark),
         h('h1', { id: 'oai-title', ref: titleRef, tabIndex: -1 }, title),
         children))), document.body)
 }

@@ -459,4 +459,10 @@ export const STRINGS = {
   'Put it back': '放回输入框',
   'Resuming…': '正在恢复…',
   'Pausing…': '正在暂停…',
+  // The Omni Bot's channels and chats in the sidebar (omni-tree.js).
+  'No chats yet': '还没有聊天',
+  '{name} helps in this chat': '{name} 在这个聊天里帮忙',
+  'All chats (+{n})': '全部聊天（+{n}）',
+  'Link your Omni to see its channels here': '连接你的 Omni，在这里查看它的渠道',
+  '{name}\'s channels': '{name} 的渠道',
 }

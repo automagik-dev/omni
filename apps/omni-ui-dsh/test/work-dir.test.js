@@ -204,6 +204,20 @@ test('a new Bot with a folder starts its Session there; others start in the team
   assert.deepEqual(created.at(-1), { cwd: project })
 })
 
+test('a Bot another Omni plugin adds keeps its kind; a model making a Bot cannot give one', async (t) => {
+  const { ctx, state, tool, stop } = await start()
+  t.after(stop)
+  const rt = ctx.provided.get('omniTeam')
+  const omni = await rt.createBot({ name: 'Channels', kind: 'omni', pickModel: true })
+  assert.equal(state().bots[omni.id].kind, 'omni')
+  const odd = await rt.createBot({ name: 'Odd', kind: 'wizard', pickModel: true })
+  assert.equal(state().bots[odd.id].kind, undefined)
+  await tool('create_bot', { name: 'Sneaky', role: 'Sneak', instructions: 'Be sneaky.', kind: 'omni' }, 'a')
+  const sneaky = Object.values(state().bots).find(bot => bot.name === 'Sneaky')
+  assert.ok(sneaky)
+  assert.equal(sneaky.kind, undefined)
+})
+
 test('an idle Bot\'s own chat moves to its new folder at once, and back', async (t) => {
   const { call, created, agentOf, project, team, state, stop } = await start()
   t.after(stop)
