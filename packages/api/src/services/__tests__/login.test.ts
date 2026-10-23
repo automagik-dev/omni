@@ -9,10 +9,13 @@ import { describe, expect, test } from 'bun:test';
 import type { TypedOmniEvent } from '@omni/core';
 import { Hono } from 'hono';
 import { phoneDigits } from '../../lib/phone';
+import type { Login } from '../../login';
 import { claimTokenOf, isDeviceClient, readLoginConfig } from '../../login/config';
+import { LINKS_PER_WINDOW, LINK_WINDOW_MS, allowConnectLink, isConnectRequest } from '../../login/connect';
+import { appPage } from '../../login/pages';
 import { maskPhone } from '../../login/whatsapp';
 import { isOwnerSelfChatText, userCodeInMessage } from '../../plugins/device-login';
-import { loginApiRoutes, loginAuthRoutes, loginPageRoutes } from '../../routes/v2/login';
+import { landingRoutes, loginApiRoutes, loginAuthRoutes, loginPageRoutes } from '../../routes/v2/login';
 
 const SELF = '5511999990000@s.whatsapp.net';
 const ON = {
@@ -32,7 +35,7 @@ describe('readLoginConfig', () => {
       enabled: true,
       publicUrl: 'https://omni.example.com',
       secret: 'x'.repeat(40),
-      deviceKeyScopes: ['instances:read', 'chats:read', 'messages:read', 'events:read'],
+      deviceKeyScopes: ['instances:read', 'chats:read', 'messages:read', 'events:read', 'system:read', 'system:update'],
       deviceKeyTtlDays: null,
     });
     expect(
@@ -164,12 +167,84 @@ describe('login off', () => {
       ['POST', '/api/v2/login/send-code'],
       ['POST', '/api/v2/login/claim/verify'],
       ['POST', '/api/v2/login/device-key'],
+      ['POST', '/api/v2/login/connect'],
       ['GET', '/api/login/claim'],
       ['GET', '/api/login/device'],
+      ['GET', '/api/login/app?grant=AAAAAAAAAAAAAAAAAAAAAAAA'],
     ] as const) {
       const response = await app.request(`https://omni.example.com${path}`, { method });
       expect(response.status).toBe(404);
       expect(response.headers.get('x-ratelimit-limit')).toBeNull();
     }
+  });
+});
+
+describe('connect links', () => {
+  test('only a message that is nothing but "connect" asks for one', () => {
+    for (const text of ['connect', ' Connect ', 'CONNECT', 'omni connect', 'Omni  Connect', 'conectar']) {
+      expect(isConnectRequest(text)).toBe(true);
+    }
+    for (const text of ['connect me', 'please connect', 'omni', 'connected', '', undefined]) {
+      expect(isConnectRequest(text)).toBe(false);
+    }
+  });
+
+  test('a self chat gets a few links per window, then waits', () => {
+    const login = { connectLinks: new Map() } as unknown as Login;
+    const start = 1_000_000;
+    for (let i = 0; i < LINKS_PER_WINDOW; i++) expect(allowConnectLink(login, 'self', start + i)).toBe(0);
+    const wait = allowConnectLink(login, 'self', start + LINKS_PER_WINDOW);
+    expect(wait).toBeGreaterThan(0);
+    expect(wait).toBeLessThanOrEqual(LINK_WINDOW_MS / 1000);
+    // Another self chat has its own count, and the window moves on.
+    expect(allowConnectLink(login, 'other', start)).toBe(0);
+    expect(allowConnectLink(login, 'self', start + LINK_WINDOW_MS + 1)).toBe(0);
+  });
+
+  test('the app page carries a live grant into the app link, and says when one expired', () => {
+    const live = appPage({ grant: 'AbCdEfGhIjKlMnOpQrStUv_-' });
+    expect(live).toContain('const grant = "AbCdEfGhIjKlMnOpQrStUv_-";');
+    expect(live).toContain("'&grant=' + encodeURIComponent(grant)");
+    const expired = appPage({ expired: true });
+    expect(expired).toContain('This link expired');
+    expect(expired).not.toContain('openApp');
+    expect(appPage()).toContain('const grant = null;');
+  });
+});
+
+describe('the landing page at the Omni address', () => {
+  const notFound = (c: { json: (body: unknown, status: 404) => Response; req: { path: string } }) =>
+    c.json({ error: { code: 'NOT_FOUND', message: `Endpoint not found: GET ${c.req.path}` } }, 404);
+  const mount = (login: Login | null) => {
+    const app = new Hono();
+    app.route('/', landingRoutes(login, notFound as never));
+    return app;
+  };
+  const html = { accept: 'text/html,application/xhtml+xml,*/*;q=0.8' };
+
+  test('a browser gets the page; anything else keeps the JSON 404', async () => {
+    const app = mount({ config: { publicUrl: 'https://omni.example.com' } } as Login);
+    for (const path of ['/', '/api']) {
+      const page = await app.request(`https://omni.example.com${path}`, { headers: html });
+      expect(page.status).toBe(200);
+      const body = await page.text();
+      expect(body).toContain('This is an Omni');
+      expect(body).toContain(`href="omni://connect?url=${encodeURIComponent('https://omni.example.com')}"`);
+      expect(body).toContain('Text <strong>connect</strong> to yourself');
+      expect(body).toContain('https://github.com/automagik-dev/omni-desktop/releases/latest');
+
+      for (const headers of [{}, { accept: 'application/json' }, { accept: '*/*' }] as Record<string, string>[]) {
+        const json = await app.request(`https://omni.example.com${path}`, { headers });
+        expect(json.status).toBe(404);
+        expect(await json.json()).toEqual({ error: { code: 'NOT_FOUND', message: `Endpoint not found: GET ${path}` } });
+      }
+    }
+  });
+
+  test('with login off the page only offers the app download', async () => {
+    const body = await (await mount(null).request('https://omni.example.com/', { headers: html })).text();
+    expect(body).toContain('This is an Omni');
+    expect(body.includes('href="omni://connect')).toBe(false);
+    expect(body.includes('Text <strong>connect</strong>')).toBe(false);
   });
 });

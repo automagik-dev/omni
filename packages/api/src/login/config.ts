@@ -13,7 +13,8 @@ import { isMultitenancyEnabled } from '../tenancy/feature-flag';
 
 /** Scopes a device key may never carry: everything, and the ability to mint or edit keys. */
 const FORBIDDEN_SCOPE = /^(\*|keys:.*|platform:.*)$/;
-const DEFAULT_SCOPES = ['instances:read', 'chats:read', 'messages:read', 'events:read'];
+/** What a device key carries unless the operator says otherwise: reading, plus seeing this Omni's version and asking the owner to update it. */
+const DEFAULT_SCOPES = ['instances:read', 'chats:read', 'messages:read', 'events:read', 'system:read', 'system:update'];
 
 /** The device-flow clients this Omni knows (Better Auth `client_id`). */
 export const DEVICE_CLIENTS = {

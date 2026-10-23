@@ -13,6 +13,14 @@
 export const DEFAULT_TURN_SCOPES = ['messages:send', 'turns:close', 'tts:synthesize', 'context:read'] as const;
 
 /**
+ * Broader scopes that also grant a narrower one. `system:update` only asks the owner to
+ * confirm an update on WhatsApp (device keys carry it); `system:admin` covers it too.
+ */
+export const SCOPE_IMPLIED_BY: Readonly<Record<string, readonly string[]>> = {
+  'system:update': ['system:admin'],
+};
+
+/**
  * Map of METHOD + path pattern -> required scope.
  *
  * Path patterns use Hono-style segments:
@@ -378,6 +386,10 @@ export const SCOPE_MAP: Record<string, string> = {
   'GET /providers/:id/agents': 'providers:read',
   'GET /providers/:id/teams': 'providers:read',
   'GET /providers/:id/workflows': 'providers:read',
+
+  // --- system: this Omni's version and the updates its owner confirms ---
+  'GET /system/update': 'system:read',
+  'POST /system/update': 'system:update',
 
   // --- settings ---
   'GET /settings': 'settings:read',

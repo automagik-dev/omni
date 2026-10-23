@@ -72,6 +72,7 @@ import { requireSignedInstanceMiddleware } from './middleware/require-signed-ins
 import { scopeEnforcerMiddleware } from './middleware/scope-enforcer';
 import { tenancyMiddleware } from './middleware/tenancy';
 
+import packageJson from '../package.json';
 import { SLACK_OAUTH_CALLBACK_PATH } from './constants/slack-app';
 import { type Login, createLogin } from './login';
 import { marketPageRoutes, marketRoutes } from './market/routes';
@@ -85,11 +86,12 @@ import { createWebhookAuthMiddleware } from './middleware/webhook-auth';
 import { getHealth, healthRoutes } from './routes/health';
 import { openapiRoutes } from './routes/openapi';
 import { v2Routes } from './routes/v2';
-import { loginApiRoutes, loginAuthRoutes, loginPageRoutes } from './routes/v2/login';
+import { landingRoutes, loginApiRoutes, loginAuthRoutes, loginPageRoutes } from './routes/v2/login';
 import { platformTenantRoutes } from './routes/v2/platform-tenants';
 import { slackOAuthCallback } from './routes/v2/slack';
 import type { Services } from './services';
 import { resolveA2AAgentCard } from './services/a2a-discovery';
+import { type SystemUpdater, createSystemUpdater } from './system/update';
 import { isMultitenancyEnabled } from './tenancy/feature-flag';
 import type { AppVariables } from './types';
 import { parseJsonObjectBody } from './utils/json-body';
@@ -113,6 +115,7 @@ const TIMEOUT_EXEMPT_PATHS: readonly string[] = [SLACK_OAUTH_CALLBACK_PATH];
  * mutexes and corrupting state (see #72 / #70). So only GET/HEAD is timed out
  * — minus the enumerated GETs that write.
  */
+
 export function shouldTimeoutRequest(method: string, path: string): boolean {
   if (method !== 'GET' && method !== 'HEAD') return false;
   return !TIMEOUT_EXEMPT_PATHS.includes(path);
@@ -125,8 +128,13 @@ export interface CreateAppResult {
   app: Hono<{ Variables: AppVariables }>;
   services: Services;
   login: Login | null;
+  /** Updates the owner confirms; off unless the operator set OMNI_UPDATE_COMMAND. */
+  updater: SystemUpdater;
 }
 
+/** The JSON 404 every unknown path answers. */
+const endpointNotFound = (c: Context) =>
+  c.json({ error: { code: 'NOT_FOUND', message: `Endpoint not found: ${c.req.method} ${c.req.path}` } }, 404);
 /**
  * Create the Hono application
  */
@@ -143,6 +151,7 @@ export function createApp(
   // Human login (Better Auth); null when OMNI_LOGIN_ENABLED is off. index.ts passes the one
   // its WhatsApp approval subscriber uses, so there is one Better Auth instance per process.
   const login = givenLogin === undefined ? createLogin(db, services, eventBus) : givenLogin;
+  const updater = createSystemUpdater({ version: packageJson.version, login, eventBus });
 
   // Global middleware
   app.use('*', timing());
@@ -581,6 +590,9 @@ export function createApp(
   app.route('/api/auth', loginAuthRoutes(login));
   app.route('/api/v2/login', loginApiRoutes(login));
   app.route('/api/login', loginPageRoutes(login));
+  // What a browser sees at this Omni's own address (and /api): what this is and how to get in.
+  // Everything else asking there keeps the plain JSON 404 below. Declared `public-by-contract`.
+  app.route('/', landingRoutes(login, endpointNotFound));
 
   // The Automagik marketplace: this release's DSH plugins as a DSH market index and an npm
   // registry under /api/market, plus the vetted third-party add-ons, and its page for a person
@@ -627,25 +639,20 @@ export function createApp(
   protectedApp.use('*', outputRedactorMiddleware);
   protectedApp.use('*', rateLimitMiddleware);
 
+  // This Omni's version and the updates its owner confirms on WhatsApp (routes/v2/system.ts)
+  protectedApp.use('*', async (c, next) => {
+    c.set('updater', updater);
+    await next();
+  });
   // Mount v2 routes
   protectedApp.route('/', v2Routes);
 
   app.route('/api/v2', protectedApp);
 
   // 404 handler
-  app.notFound((c) => {
-    return c.json(
-      {
-        error: {
-          code: 'NOT_FOUND',
-          message: `Endpoint not found: ${c.req.method} ${c.req.path}`,
-        },
-      },
-      404,
-    );
-  });
+  app.notFound(endpointNotFound);
 
-  return { app, services, login };
+  return { app, services, login, updater };
 }
 
 export type App = Hono<{ Variables: AppVariables }>;
