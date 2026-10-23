@@ -202,6 +202,7 @@ export function createCompanionActions(ctx, { fetch: fetchImpl = globalThis.fetc
             role: COMPANION_ROLE,
             ...(fields.color ? { color: fields.color } : {}),
             ...(fields.shape ? { avatar: { shape: fields.shape } } : {}),
+            ...(fields.avatar ? { avatar: { image: fields.avatar } } : {}),
           }).catch((error) => { throw refused(String(error?.message ?? error)) })
           applied = true
         }

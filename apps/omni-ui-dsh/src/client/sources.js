@@ -16,7 +16,7 @@ export function createSource(initial) {
   }
 }
 
-export const EMPTY_ROSTER = { revision: -1, mainBotId: null, mainBotIds: [], bots: [], rooms: [], agents: [], exchangeTurns: {}, questions: {}, secrets: [], capabilities: [], capabilityStatuses: {}, secretRequests: {}, models: [], defaultModel: null, modelsKey: null, prefs: {}, byId: {}, roomsById: {}, agentsById: {}, agentOf: {}, ready: false }
+export const EMPTY_ROSTER = { revision: -1, mainBotId: null, mainBotIds: [], bots: [], rooms: [], agents: [], exchangeTurns: {}, questions: {}, btwCards: {}, secrets: [], capabilities: [], capabilityStatuses: {}, secretRequests: {}, models: [], defaultModel: null, modelsKey: null, prefs: {}, byId: {}, roomsById: {}, agentsById: {}, agentOf: {}, ready: false }
 // Any Main Bot holds the Main Bot powers; `mainBotId`, the first one, is the sidebar tile.
 export const isMainOf = (roster, id) => id !== undefined && (roster.mainBotIds ?? []).includes(id)
 
@@ -49,7 +49,10 @@ export function isAgentSession(roster, cache, sessionId) {
   return cache.has(sessionId)
 }
 
-// Per Session, how many mounted cells draw each card call; a count of 0 drops the call.
+// A request can reuse a call id; question and secret ids belong to separate kinds.
+export const heldCardKey = (kind, requestId) => JSON.stringify([kind, requestId])
+
+// Per Session, how many mounted cells draw or hold each card; 0 drops the entry.
 export function countCards(state, sessionId, callIds, delta) {
   const own = { ...state[sessionId] }
   for (const callId of callIds) {

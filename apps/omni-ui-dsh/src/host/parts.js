@@ -16,9 +16,12 @@
 // read_own_chat searches every part, the condensed messages included.
 import { randomUUID } from 'node:crypto'
 import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
+import { openTurnAt } from './btw.js'
 import { HANDOFF_ACK, HISTORY_TIMEOUT_MS, REPLY_KIND, SOURCE_KIND } from './constants.js'
 import { CHECKPOINT_PROMPT, STEWARD_SYSTEM, checkpointCount, checkpointTail, checkpointTailNote, checkpointText, linesFor, parseDecision, stewardRequest } from './steward.js'
+import { RESUME_DELAY_MS } from './resume.js'
 import { clip, createClock, escapeRegExp, estimateTokens, splitRef, textOf } from './text.js'
+import { checkShownView, inputsSummary, normalizeView, validateViewAnswer, viewSummary } from '../shared/views.js'
 
 // An ask_user card as the user saw it. The user's reply is often just an option label,
 // which means nothing without the card. Arguments the tool would refuse (no question,
@@ -35,6 +38,24 @@ export function cardText(args) {
   if (question === '' || options.length === 0) return ''
   const detail = typeof card.detail === 'string' ? card.detail.trim() : ''
   return `[Question card] ${question}${detail ? ` (${detail})` : ''}\nOptions: ${options.join(' / ')}`
+}
+
+// A show_view card as the user saw it. A call the tool would refuse (an oversized
+// or invalid view, no title, a display-only card asked to wait or an interactive
+// one told not to) showed no card, so it gives no text. checkShownView runs the
+// tool's own checks, normalization included, so a wrapped card keeps its summary.
+export function viewCardText(args) {
+  let card = args
+  if (typeof card === 'string') {
+    try { card = JSON.parse(card) } catch { return '' }
+  }
+  const shown = checkShownView(card?.title, card?.view)
+  if (shown.error !== undefined) return ''
+  if (!shown.interactive && card?.await_reply === true) return ''
+  if (shown.interactive && card?.await_reply === false) return ''
+  const summary = viewSummary(shown.view)
+  const head = shown.title === '' ? '[View card]' : `[View card] ${shown.title}`
+  return summary === '' ? head : `${head}\n${summary}`
 }
 
 // What one event adds to a Bot's chat history: an answer of the Bot's (its text, or a
@@ -66,18 +87,63 @@ export function questionReply(question, answer) {
   }
 }
 
+// The user's answer to a show_view card. The message carries the blueprint with
+// the answer, so the answer still makes sense after a checkpoint drops the card.
+export function viewReply(record, action, values) {
+  const checked = validateViewAnswer(record?.view, action, values)
+  if (checked.error !== undefined) return undefined
+  const callId = record.callId ?? record.id
+  const shown = { id: record.id, title: record.title, view: record.view }
+  const given = { id: record.id, action, values: checked }
+  return {
+    text: JSON.stringify({ kind: 'answer_to_pending_view', tool: 'show_view', callId, views: [shown], answers: [given] }),
+    source: { kind: REPLY_KIND, callId, outcome: 'answered' },
+  }
+}
+
+const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value)
+
 export function readReply(text) {
   let value
   try { value = JSON.parse(text) } catch { return undefined }
+  if (value?.kind === 'answer_to_pending_view' || (Array.isArray(value?.views) && value.views.length > 0 && value?.kind !== 'answer_to_pending_question')) {
+    const views = (Array.isArray(value.views) ? value.views : []).filter(item => typeof item?.id === 'string' && typeof item.title === 'string' && isRecord(item.view))
+    if (views.length === 0) return undefined
+    const answers = (Array.isArray(value.answers) ? value.answers : []).filter(item => typeof item?.id === 'string' && typeof item.action === 'string' && isRecord(item.values))
+    return { views, answers }
+  }
   const questions = Array.isArray(value?.questions) ? value.questions.filter(item => typeof item?.id === 'string' && typeof item.question === 'string') : []
   if (questions.length === 0) return undefined
   const answers = (Array.isArray(value.answers) ? value.answers : []).filter(item => typeof item?.id === 'string' && Array.isArray(item.selected))
   return { questions, answers }
 }
 
+// The submitted component, and the view's inputs as the user left them. A long form
+// is cut so a checkpoint stays small.
+function actionSummary(answer, view) {
+  const values = answer?.values
+  if (!isRecord(values)) return '(skipped)'
+  const inputs = inputsSummary(view, values.inputs)
+  let text
+  if (Array.isArray(values.selected)) text = `selected: ${values.selected.join(', ')}`
+  else if (typeof values.confirmed === 'boolean') text = values.confirmed ? 'confirmed' : 'cancelled'
+  else if (isRecord(values.fields)) text = Object.entries(values.fields).map(([key, value]) => `${key}: ${value}`).join('; ')
+  else if (inputs !== '') text = ''
+  else text = typeof answer.action === 'string' && answer.action !== '' ? answer.action : '(skipped)'
+  if (inputs !== '') text = text === '' ? inputs : `${text}; ${inputs}`
+  if (text === '') text = '(empty)'
+  return text.length > 500 ? text.slice(0, 500) : text
+}
+
 export function replyText(text) {
   const reply = readReply(text)
   if (reply === undefined) return text
+  if (reply.views !== undefined) {
+    return reply.views.map((view) => {
+      const answer = reply.answers.find(item => item.id === view.id)
+      return `${view.title === '' ? '[Answer to view card]' : `[Answer to view card] ${view.title}`}\nAnswer: ${actionSummary(answer, view.view)}`
+    }).join('\n\n')
+  }
   return reply.questions.map((question) => {
     const answer = reply.answers.find(item => item.id === question.id)
     const values = [...(answer?.selected ?? []), ...(answer?.custom ? [answer.custom] : [])]
@@ -91,9 +157,9 @@ export function historyEntry(event, group) {
     return text === '' ? undefined : { answer: true, text }
   }
   // Cards only show in an own chat. A PTC program's sub-call asks too.
-  const asks = (event.type === 'tool/call' || event.type === 'tool/ptc-dispatch-start') && event.data?.name === 'ask_user'
-  if (asks && !group) {
-    const text = cardText(event.data.arguments)
+  const named = (event.type === 'tool/call' || event.type === 'tool/ptc-dispatch-start') ? event.data?.name : undefined
+  if ((named === 'ask_user' || named === 'show_view') && !group) {
+    const text = named === 'ask_user' ? cardText(event.data.arguments) : viewCardText(event.data.arguments)
     return text === '' ? undefined : { answer: true, text }
   }
   const source = event.data?.source
@@ -144,6 +210,7 @@ export function install(rt) {
   const STEWARD_TIMEOUT_MS = 120_000
   const STEWARD_LINES = 40
   const FOLDER_RETRY_MS = 300_000
+  const PAUSE_NOTE = 'Omni paused your turn for a context check. Go on with it now from where you stopped.'
 
   // A broken provider adapter must not crash every turn; estimate from the
   // derived messages instead, with one warning.
@@ -671,16 +738,80 @@ export function install(rt) {
     if (target === undefined || messages.length === 0) return
     await rt.ensureCapabilities(target)
     const agent = await rt.resolveAgent(target)
+    // A retry after a forward that stopped halfway must not deliver the same input twice.
+    const pending = [...agent.inbox.nextStep, ...agent.inbox.nextTurn]
     for (const message of messages) {
       const kind = message.source?.kind
       // DSH's notice of a folder change is about the Session it was queued in; the part
       // that goes on has its own folder, which its handoff names.
       if (kind === 'working-directory') continue
+      const exchangeId = message.source?.exchangeId
+      if (exchangeId !== undefined && pending.some(queued => queued.source?.exchangeId === exchangeId)) continue
       const copy = createUserMessage({ content: message.content, ...(message.source ? { source: message.source } : {}) })
       if (kind === 'user' || kind === SOURCE_KIND || kind === REPLY_KIND) agent.followup(copy)
       else agent.inject(copy)
+      pending.push(copy)
     }
     await ctx.sessions.flush(agent.session)
+  }
+
+  // The plugin's own fiber is disposed (a reload, or DSH closing): every service
+  // lookup fails with the same inactive-context error, and logging through rt.warn
+  // would fail the same way, so an unloaded failure is noted once at info instead.
+  const unloaded = error => ctx.fiber?.uid === null || /in inactive context/.test(String(error?.message ?? error))
+  const noteInfo = (template, ...args) => { try { ctx.logger.info(template, ...args) } catch {} }
+
+  // A message's inbox boundary, the same one forward() delivers it to.
+  const inboxTargetOf = message => (message.source?.kind === 'user' || message.source?.kind === SOURCE_KIND || message.source?.kind === REPLY_KIND ? 'next-turn' : 'next-step')
+
+  // Input a switch could not hand on goes back into the part's own durable inbox, in
+  // order: input followup would deliver waits for the next turn, the rest waits for
+  // the next step. agent.inbox writes do not touch this plugin's context, so they
+  // still work while it is being unloaded.
+  const restore = (agent, messages) => {
+    for (const message of [...messages].reverse()) {
+      const exchangeId = message.source?.exchangeId
+      const pending = [...agent.inbox.nextStep, ...agent.inbox.nextTurn]
+      if (pending.some(queued => queued.id === message.id || (exchangeId !== undefined && queued.source?.exchangeId === exchangeId))) continue
+      agent.inbox.prepend(inboxTargetOf(message), message)
+    }
+  }
+
+  // Input in the inbox is durable but does not wake the driver; send() is what wakes
+  // it. Re-send what waits, in order, the first message with the wake, so a stopped
+  // turn goes on without waiting for the next input. Only while the plugin is live —
+  // a turn that starts during unload would run without DS Bot's hooks.
+  const wake = (agent) => {
+    const pending = [...agent.inbox.nextStep, ...agent.inbox.nextTurn]
+    for (const message of pending) agent.inbox.remove(message.id)
+    pending.forEach((message, index) => agent.send(message, inboxTargetOf(message), index === 0))
+  }
+
+  // A switch that lost its move or its input to a failure leaves its part marked in
+  // state.switching. Hand on what it kept: input an earlier part still holds goes to
+  // the part that replaced it and the earlier part is archived as the switch meant
+  // to; a part that stayed just wakes so its kept input goes on.
+  async function heldBack() {
+    await rt.load()
+    if (rt.readOnly() !== undefined) return
+    for (const [sessionId, owner] of Object.entries(state.switching ?? {})) {
+      try {
+        const agent = await rt.resolveAgent(sessionId)
+        const held = [...agent.inbox.nextStep, ...agent.inbox.nextTurn]
+        if (currentOf(owner) !== sessionId) {
+          await forward(owner, held)
+          for (const message of held) agent.inbox.remove(message.id)
+          await ctx.workspaceRegistry.archiveSession(sessionId)
+            .catch(error => rt.warn('ds-bot: earlier part %s not archived: %s', sessionId, error))
+        } else {
+          try { wake(agent) } catch (error) { rt.warn('ds-bot: part %s could not be woken for its kept input: %s', sessionId, error) }
+        }
+        delete state.switching[sessionId]
+        await rt.save()
+      } catch (error) {
+        rt.warn('ds-bot: input kept in part %s was not handed on: %s', sessionId, error)
+      }
+    }
   }
 
   // `hard`: past the hard line or the window, the part moves on even without a note
@@ -693,10 +824,18 @@ export function install(rt) {
     const job = { ...place, carry: [...carry], info, joined, resume, overflow, failed, bare: bare || fresh, folder, fresh, hard, since: Date.now() }
     switches.set(agent.id, job)
     void runSwitch(agent, job)
-      .catch(error => rt.warn('ds-bot: %s did not move on to a fresh part: %s', rt.botOf(job.botId)?.name ?? agent.id, error))
+      .catch(error => {
+        if (unloaded(error)) return noteInfo('ds-bot: plugin unloaded while %s switched parts; input kept in part %s', rt.botOf(job.botId)?.name ?? agent.id, agent.id)
+        rt.warn('ds-bot: %s did not move on to a fresh part: %s', rt.botOf(job.botId)?.name ?? agent.id, error)
+      })
       .finally(async () => {
         switches.delete(agent.id)
         if (job.moved) {
+          // A move that had to put input back keeps the part marked for the restart pass.
+          if (job.kept !== true) {
+            delete state.switching[agent.id]
+            await rt.save()
+          }
           noteFailures.delete(agent.id)
           folderRetry.delete(agent.id)
           // The folder may have changed again while the switch ran.
@@ -705,21 +844,40 @@ export function install(rt) {
         }
         if (folder) folderRetry.set(agent.id, Date.now() + FOLDER_RETRY_MS)
         if (!job.noteFailed) partBase.set(agent.id, tokensOf(agent.session) ?? 0)
-        // The stopped turn goes on where it was.
+        // The stopped turn goes on where it was. A retry finds the note among the
+        // input this part kept, so it is added once.
         const back = job.carry.splice(0)
-        if (resume) {
+        const noted = [...agent.inbox.nextStep, ...agent.inbox.nextTurn].some(message => textOf(message.content) === PAUSE_NOTE)
+        if (resume && !back.some(message => textOf(message.content) === PAUSE_NOTE) && !noted) {
           const carried = job.joined?.length ? { joined: job.joined } : {}
           back.unshift(createUserMessage({
-            content: [{ type: 'text', text: 'Omni paused your turn for a context check. Go on with it now from where you stopped.' }],
+            content: [{ type: 'text', text: PAUSE_NOTE }],
             source: job.info ? { ...job.info, ...carried } : { kind: SOURCE_KIND, form: 'relay', role: 'resume', exchangeId: randomUUID(), senderName: 'Omni', ...carried },
           }))
         }
-        await forward(job, back).catch(error => rt.warn('ds-bot: input for %s was not handed on: %s', agent.id, error))
+        await forward(job, back).then(() => {
+          delete state.switching[agent.id]
+        }).catch((error) => {
+          job.kept = true
+          try { restore(agent, back) } catch {}
+          if (unloaded(error)) return noteInfo('ds-bot: plugin unloaded during the switch of %s; input kept in part %s', agent.id, agent.id)
+          rt.warn('ds-bot: input for %s was not handed on: %s', agent.id, error)
+          // The input is back where it was; the turn that owns it goes on at once.
+          try { wake(agent) } catch {}
+        })
+        await rt.save()
       })
+      // A state write that fails here (full disk, a file another program holds, a lost lock)
+      // must not end up as an unhandled rejection, which stops the whole host.
+      .catch(error => rt.warn('ds-bot: the switch of %s did not finish: %s', agent.id, error))
     return true
   }
 
   async function runSwitch(agent, job) {
+    // Marks the part while the switch runs; it stays marked whenever input was put
+    // back, so a restart knows where to look without resolving every earlier part.
+    state.switching[agent.id] = job.roomId === undefined ? { botId: job.botId } : { botId: job.botId, roomId: job.roomId }
+    await rt.save()
     for (let attempt = 1; ; attempt += 1) {
       await agent.whenIdle()
       try {
@@ -818,11 +976,16 @@ export function install(rt) {
       ;(bot.segments ??= []).push(segment)
       bot.sessionId = freshId
       // The card's call stays in the old part, so the fresh part shows it in the
-      // composer dock, which takes questions without a call.
+      // composer dock, which takes a card without a call.
       if (state.questions[agent.id] !== undefined) {
         const { callId: _call, ...question } = state.questions[agent.id]
         state.questions[freshId] = question
         delete state.questions[agent.id]
+      }
+      if (state.views?.[agent.id] !== undefined) {
+        const { callId: _call, ...pending } = state.views[agent.id]
+        state.views[freshId] = pending
+        delete state.views[agent.id]
       }
     }
     await rt.save()
@@ -834,23 +997,41 @@ export function install(rt) {
     void rt.moveSchedules(agent.id, freshId)
     job.moved = true
     const resume = job.resume || job.overflow
-    await rt.ensureCapabilities(freshId)
-    const fresh = await rt.resolveAgent(freshId)
-    const cwd = fresh.session.header?.cwd
-    const folder = cwd !== undefined && cwd !== session.header?.cwd ? cwd : undefined
-    // A fresh part that is not where it was made for would move on at every step.
-    if (intended !== undefined && cwd !== undefined && cwd !== intended) {
-      folderRetry.set(freshId, Date.now() + FOLDER_RETRY_MS)
-      rt.warn('ds-bot: the fresh part of %s did not start in %s; it works in %s', bot.name, intended, cwd)
-    }
-    const text = job.fresh ? freshPackage({ room, number: number + 1 }) : handoffPackage({ room, segment, lines: carried, number: number + 1, resume, overflow: job.overflow, failed: job.failed, bare: job.bare, folder })
-    freshParts.set(freshId, estimateTokens(text))
-    fresh.followup(createUserMessage({ content: [{ type: 'text', text }], source: handoffSource(job, resume) }))
-    await ctx.sessions.flush(fresh.session)
-    // Then what the old part held: the stopped turn's input, then whatever waited.
+    // Then what the old part held: the stopped turn's input, then whatever waited. It
+    // moves first; only after that does the old inbox give it up, so a failure keeps it.
     const held = [...agent.inbox.nextStep, ...agent.inbox.nextTurn]
+    const carry = []
+    let folder
+    try {
+      await rt.ensureCapabilities(freshId)
+      const fresh = await rt.resolveAgent(freshId)
+      const cwd = fresh.session.header?.cwd
+      folder = cwd !== undefined && cwd !== session.header?.cwd ? cwd : undefined
+      // A fresh part that is not where it was made for would move on at every step.
+      if (intended !== undefined && cwd !== undefined && cwd !== intended) {
+        folderRetry.set(freshId, Date.now() + FOLDER_RETRY_MS)
+        rt.warn('ds-bot: the fresh part of %s did not start in %s; it works in %s', bot.name, intended, cwd)
+      }
+      const text = job.fresh ? freshPackage({ room, number: number + 1 }) : handoffPackage({ room, segment, lines: carried, number: number + 1, resume, overflow: job.overflow, failed: job.failed, bare: job.bare, folder })
+      freshParts.set(freshId, estimateTokens(text))
+      fresh.followup(createUserMessage({ content: [{ type: 'text', text }], source: handoffSource(job, resume) }))
+      await ctx.sessions.flush(fresh.session)
+      carry.push(...job.carry.splice(0))
+      await forward(job, [...carry, ...held])
+    } catch (error) {
+      job.kept = true
+      try { restore(agent, [...carry, ...job.carry.splice(0)]) } catch {}
+      throw error
+    }
     for (const message of held) agent.inbox.remove(message.id)
-    await forward(job, [...job.carry.splice(0), ...held])
+    // Input the old part claimed while the rest moved goes on after it.
+    for (let late = job.carry.splice(0); late.length > 0; late = job.carry.splice(0)) {
+      await forward(job, late).catch((error) => {
+        job.kept = true
+        try { restore(agent, late) } catch {}
+        throw error
+      })
+    }
     ctx.logger.info('ds-bot: %s%s moved on to part %d at %d tokens (check line %d, hard line %d); %s; %d latest and %d earlier messages carried%s', bot.name, room ? ` in ${room.name}` : '', number + 1, tokens ?? -1, lines?.check ?? -1, lines?.hard ?? -1,
       written !== undefined ? `note written in ${written.attempts} attempt(s)` : `note put together by Omni (${noted.fallback}${noted.note ? `, carries part ${noted.noteFrom}'s` : ', nothing to carry'})`,
       carried.recent.length, carried.earlier.length, folder === undefined ? '' : `; now works in ${folder}`)
@@ -911,7 +1092,11 @@ export function install(rt) {
     const cwd = agent.session.header?.cwd
     if (place === undefined || cwd === undefined || (midTurn && place.roomId !== undefined) || Date.now() < (folderRetry.get(agent.id) ?? 0)) return undefined
     const wanted = rt.workDirOf(place)
-    const target = wanted !== undefined && await rt.isFolder(wanted) ? wanted : rt.teamFolder()
+    const usable = wanted !== undefined && await rt.isFolder(wanted)
+    // A team copied from another DSH_HOME has no team workspace here until one is made, and its
+    // Sessions still work in the old one.
+    if (!usable && rt.teamFolder() === undefined) await rt.ensureWorkspace()
+    const target = usable ? wanted : rt.teamFolder()
     return target === undefined || target === cwd ? undefined : target
   }
 
@@ -1021,6 +1206,12 @@ export function install(rt) {
     if (end !== undefined && end.data?.reason?.kind !== 'error') rescued.delete(agent.id)
   }
 
+  ctx.effect(() => {
+    const timer = setTimeout(() => void heldBack().catch(error => rt.warn('ds-bot: handing on input kept in earlier parts failed: %s', error)), RESUME_DELAY_MS)
+    timer.unref?.()
+    return () => clearTimeout(timer)
+  }, 'ds-bot: hand on input kept in earlier parts')
+
   ctx.on('agent/status', ({ agent, status }) => {
     if (status === 'idle' && rt.isBotSession(agent.id)) {
       releaseRescued(agent)
@@ -1049,13 +1240,44 @@ export function install(rt) {
   // Earlier parts of a Bot's own chat, newest page first, for the chat to show above
   // the current part as one conversation.
   const EARLIER_PAGE = 60
-  function displayItems(partId, events) {
+  function displayItems(partId, events, session) {
     const hidden = new Set(state.exchangeTurns[partId] ?? [])
     const items = []
+    // The turn/start still in effect. A steered or queued user message stays in
+    // it; only another turn/start moves on. A later page does not repeat the
+    // turn/start from the page before, so seed that turn when the projection has it.
+    let turn = openTurnAt(ctx.get?.('sessionProjections'), session, events[0]?.seq)
+    const stamp = (event, item) => {
+      if (typeof event.seq === 'number' && Number.isInteger(event.seq)) item.seq = event.seq
+      if (turn !== undefined) item.turn = turn
+      items.push(item)
+    }
     for (const event of events) {
+      if (event.type === 'turn/start') {
+        if (typeof event.data?.turn === 'number' && Number.isInteger(event.data.turn)) turn = event.data.turn
+        continue
+      }
       if (event.type === 'assistant/message') {
-        const text = textOf(event.data?.message?.content)
-        if (text !== '' && !hidden.has(event.data?.turn)) items.push({ kind: 'bot', text, time: event.time })
+        if (hidden.has(event.data?.turn)) continue
+        // One entry per text block: the chat shows each block in a bubble of its own.
+        const content = Array.isArray(event.data?.message?.content) ? event.data.message.content : []
+        for (const block of content) {
+          if (block?.type === 'text' && typeof block.text === 'string' && block.text.trim() !== '') stamp(event, { kind: 'bot', text: block.text, time: event.time })
+        }
+        continue
+      }
+      if (event.type === 'tool/call') {
+        // Hidden turns and refused calls never showed a display card. Interactive
+        // cards live in the pending dock or on their answer message instead.
+        if (event.data?.name === 'show_view' && !hidden.has(event.data?.turn)) {
+          let args = event.data?.arguments
+          if (typeof args === 'string') { try { args = JSON.parse(args) } catch { args = undefined } }
+          const view = normalizeView(args?.view)
+          const shown = checkShownView(args?.title, view)
+          if (shown.error === undefined && !shown.interactive && args?.await_reply !== true) {
+            items.push({ kind: 'view', title: shown.title, view, callId: event.data?.callId ?? null, time: event.time })
+          }
+        }
         continue
       }
       if (event.type !== 'user/message') continue
@@ -1063,24 +1285,20 @@ export function install(rt) {
       if (source?.kind === 'user') {
         const content = Array.isArray(event.data.content) ? event.data.content : []
         const images = content.filter(block => block?.type === 'image').length
-        items.push({ kind: 'user', text: textOf(content), ...(images > 0 ? { images } : {}), time: event.time })
+        stamp(event, { kind: 'user', text: textOf(content), ...(images > 0 ? { images } : {}), time: event.time })
       } else if (source?.kind === REPLY_KIND) {
-        const reply = readReply(textOf(event.data.content))
-        if (reply !== undefined) items.push({ kind: 'answer', questions: reply.questions, answers: reply.answers, time: event.time })
+        const text = textOf(event.data.content)
+        const reply = readReply(text)
+        if (reply?.questions !== undefined) stamp(event, { kind: 'answer', questions: reply.questions, answers: reply.answers, time: event.time })
+        else if (reply?.views !== undefined) stamp(event, { kind: 'answer', text: replyText(text), views: reply.views, answers: reply.answers, time: event.time })
       } else if (source?.kind === SOURCE_KIND && source.handoff !== true && source.deferred !== true && ['request', 'reply', 'report', 'stopped'].includes(source.role)) {
-        items.push({ kind: 'event', role: source.role, botId: source.senderSessionId ?? null, name: source.senderName ?? null, roomId: source.roomId ?? null, time: event.time })
+        stamp(event, { kind: 'event', role: source.role, botId: source.senderSessionId ?? null, name: source.senderName ?? null, roomId: source.roomId ?? null, time: event.time })
       }
     }
     return items
   }
 
-  async function earlierPage(sessionId, cursor) {
-    const past = rt.pastOwners.get(sessionId)
-    const botId = rt.chatOwners.get(sessionId) ?? (past?.roomId === undefined ? past?.botId : undefined)
-    const parts = botId === undefined ? [] : partsOf(botId)
-    const at = parts.findIndex(part => part.sessionId === sessionId)
-    const index = Number.isInteger(cursor?.part) ? cursor.part : at - 1
-    if (at <= 0 || index < 0 || index >= at) return { items: [], cursor: null, startedAt: parts[at]?.startedAt ?? null }
+  async function partPage(parts, index, cursor) {
     const part = parts[index]
     const agent = await rt.resolveAgent(part.sessionId)
     const page = await ctx.sessionController.page({
@@ -1090,15 +1308,11 @@ export function install(rt) {
       maxMessages: EARLIER_PAGE,
     }, AbortSignal.timeout(HISTORY_TIMEOUT_MS))
     const events = page.records.map(record => record.event)
-    const items = displayItems(part.sessionId, events)
+    const items = displayItems(part.sessionId, events, agent.session)
     const more = page.hasMore && events.length > 0
     // The line above a part's first message marks where it began.
     if (!more && index > 0) items.unshift({ kind: 'divider', time: part.startedAt })
-    return {
-      items,
-      cursor: more ? { part: index, beforeSeq: events[0].seq } : index > 0 ? { part: index - 1 } : null,
-      startedAt: parts[at].startedAt,
-    }
+    return { items, cursor: more ? { part: index, beforeSeq: events[0].seq } : index > 0 ? { part: index - 1 } : null }
   }
 
   // The user's "New conversation" for a Bot's own chat: once the Bot is idle, it goes on in
@@ -1112,5 +1326,28 @@ export function install(rt) {
     return { id: botId }
   }
 
-  Object.assign(rt, { clock, partsOf, historyEntry, partLines, noteText, earlierPage, followFolder, startFresh, switchJobs: () => switches.values() })
+  async function earlierPage(sessionId, cursor) {
+    const past = rt.pastOwners.get(sessionId)
+    const botId = rt.chatOwners.get(sessionId) ?? (past?.roomId === undefined ? past?.botId : undefined)
+    const parts = botId === undefined ? [] : partsOf(botId)
+    const at = parts.findIndex(part => part.sessionId === sessionId)
+    const index = Number.isInteger(cursor?.part) ? cursor.part : at - 1
+    if (at <= 0 || index < 0 || index >= at) return { items: [], cursor: null, startedAt: parts[at]?.startedAt ?? null }
+    // Aside cards belong to the part that was current when they were asked, so
+    // they ride along with that part's history instead of the team view.
+    const btw = (await rt.btwPartCards?.(botId, parts[index].sessionId)) ?? []
+    return { ...(await partPage(parts, index, cursor)), btw, startedAt: parts[at].startedAt }
+  }
+
+  // A Bot's whole own chat, newest page first: the current part, then the earlier
+  // ones, for a window that draws the conversation itself.
+  async function chatPage(botId, cursor) {
+    const parts = partsOf(botId)
+    if (parts.length === 0) throw Object.assign(new Error('Unknown Bot'), { code: 'bot/not-found' })
+    const index = Number.isInteger(cursor?.part) ? cursor.part : parts.length - 1
+    if (index < 0 || index >= parts.length) return { sessionId: parts.at(-1).sessionId, items: [], cursor: null }
+    return { sessionId: parts.at(-1).sessionId, ...(await partPage(parts, index, cursor)) }
+  }
+
+  Object.assign(rt, { clock, partsOf, historyEntry, partLines, noteText, earlierPage, chatPage, displayItems, followFolder, heldBack, startFresh, switchJobs: () => switches.values() })
 }

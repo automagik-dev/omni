@@ -29,9 +29,9 @@ How they fit:
 ## Features
 
 - **Long-lived Bots**: each Bot is a dsh Session in the "DS Bot" workspace, with its own name, role, instructions and model.
-- **Working folders**: a Bot can work in a folder you choose instead of the team workspace, and a group chat can set one folder for all its members there. Pick it in the Bot's settings or details panel or in the group's settings, or ask a Bot (`update_bot`, `update_group`). After a change, the chat goes on in a fresh part that starts in the new folder. When a Bot sets a folder outside the team workspace, or adds a Bot to a group that works in one, it asks for your approval if those Bots can only write in their folder. Folders that hold dsh data (`$DSH_HOME`, the team's data) are refused.
+- **Working folders**: a Bot can work in a folder you choose instead of the team workspace, and a group chat can set one folder for all its members there. Pick it in the Bot's settings or details panel or in the group's settings, or ask a Bot (`update_bot`, `update_group`). After a change, the chat goes on in a fresh part that starts in the new folder. When a Bot sets a folder outside the team workspace, or adds a Bot to a group that works in one, it asks for your approval if those Bots can only write in their folder. Folders that hold dsh data (`$DSH_HOME`, the team's data) are refused. The team workspace itself moves in Settings > General > Locations; Bots and groups that work there go on in a fresh part in the new folder, and the old folder keeps its files.
 - **Permission presets**: each Bot runs with its own dsh permission preset (Read only, Workspace or Full access), set in its details panel. A group chat can run all its members with one preset there, in place of their own: turn on **Same for every member** under Permissions in the group's settings. Only you set permissions; Bots cannot change them.
-- **Bots work together**: `message_bot` sends a message to another Bot, `create_bot` and `update_bot` add and set up Bots, and `ask_user` asks you a question without blocking the other Bots.
+- **Bots work together**: `message_bot` sends a message to another Bot, `create_bot` and `update_bot` add and set up Bots (including a profile photo from a local image file or a data URL), and `ask_user` asks you a question without blocking the other Bots. `show_view` draws a card in a Bot's own chat — text, metrics, tables, progress, choices, confirmations and short forms; an interactive card waits for your answer.
 - **Group chats**: members speak one at a time, and each one reads the latest messages first. A message can `@Name` a member to pass the turn on; type `@` to pick one from a list. **+ → Reference a chat** adds another Bot's chat to a message as context, and in a group the members who answer get it. A member with nothing new to add stays quiet (`[PASS]`). Each member has its own hidden Session per group, so a group never reads a Bot's private chat.
 - **Roles and permissions**:
 
@@ -40,12 +40,12 @@ How they fit:
   | You | Everything |
   | Main Bot (there can be more than one) | Manage every group; change and delete Bots |
   | Group admin | Manage its own group only (name, notice, members, reply mode) |
-  | Member | Speak in the group and `@` another member |
+  | Member | Speak in the group, `@` another member, and post into its groups from outside them |
 
 - **Long chats stay inside the model's window**: dsh's own compaction never runs on a Bot's Session. When a turn ends past the check line (a share of the model's context window), a small separate model call, the context steward, reads the latest messages of the chat and decides once. If the work is still under way, the chat is condensed in place into a checkpoint: a handoff summary plus your recent messages word for word. If the work has reached a stopping point, the Bot writes a handoff note and continues in a new part. Either way you still see one chat, with no marker. Earlier parts and condensed messages stay searchable in a full-text index (`node:sqlite` FTS5) through `read_own_chat`.
-- **Memory**: each Bot keeps notes across all its conversations, and the team shares one more. See [Memory](#memory).
+- **Memory**: each Bot keeps notes across all its conversations, each group chat keeps its own for its members, and the team shares one more. See [Memory](#memory).
 - **Web search**: see [Web search](#web-search).
-- **Bot browser (dsh Desktop only)**: see [Bot browser](#bot-browser).
+- **Bot browser (dsh Desktop and the desktop app)**: see [Bot browser](#bot-browser).
 - **Images**: for a model that cannot read images, a vision model first turns the image into text.
 - **Secrets**: a Bot asks for an API key or token with a card in its own chat and never sees the value. See [Secrets](#secrets).
 - **Usage**: Settings → Usage shows token usage by time (24 hours to 12 months, or days picked on a calendar), by Bot and by model, with a page for each Bot and each model. Calls that a Session logs are read from the logs, so older chats count too. Calls that leave no log (checkpoints, handoff notes, the steward, image readings, dsh titles and compaction) are counted while they stream, from the time the plugin runs. Tokens only, no cost.
@@ -100,7 +100,7 @@ Options go in the profile's `cordis.patch.yml`, under the `omni-ui` entry. All o
     home: /path/to/omni-ui-data     # where the team is saved; default $OMNI_HOME/ui (~/.omni/ui)
     importHome: ~/.dsh/bot          # copy a team saved there into home once, when home has none
     checkRatio: 0.8                 # share of the model's usable window where the steward decides
-    browser: true                   # force the Bot browser on or off; default on in Desktop only
+    browser: true                   # force the Bot browser on or off; default on in Desktop and the desktop app only
     memory: true                    # false turns memory off: no memory tools, section or panel
     memoryReview: true              # false leaves memory to the Bots' own remember calls
     diagnosticsFile: false          # keep the error log in memory only; default <home>/logs/diagnostics.jsonl
@@ -125,22 +125,22 @@ Model providers are set up with dsh's `llm-pi-ai` plugin in `cordis.patch.yml`. 
 
 A Bot remembers what should last beyond one conversation: your preferences, decisions, corrections and facts it should not ask again. Memory is plain Markdown in the [Agent Memory Repo](https://github.com/AgentMemoryRepo/agentmemoryrepo) format: one entry per line, ending in `[source: …; added: …]`.
 
-After each turn, a memory review reads what is new in the Bot's chat (and in each group, per member) and keeps, updates or removes entries itself, so memory does not depend on the Bot deciding to call `remember`. It keeps only what you say, writes entries in your language, and refuses keys, passwords and ID numbers.
+After each turn, a memory review reads what is new in the conversation and keeps, updates or removes entries itself, so memory does not depend on the Bot deciding to call `remember`. A Bot's own chat is reviewed by its model into its own memory; a group chat is reviewed once for the whole group, by the admin's model (or the first member's), into the group memory only. It keeps only what you say, writes entries in your language, and refuses keys, passwords and ID numbers.
 
-- **Two scopes**: each Bot has its own memory, and the team memory is read by every Bot. A Bot writes its own. Main Bots and group admins (of any group) also write the team memory; a Main Bot can read and change another Bot's memory when you ask.
-- **Tools**: `remember` saves an entry or replaces one (`replace`), `forget` removes one, and `recall` searches every entry, reads a topic whole, or lists what is saved. The Bot adds the source (a part anchor such as `part 2 #1234`, which `read_own_chat` opens) and the date; a Bot that writes for others is named with `by:`.
+- **Three scopes**: each Bot has its own memory; each group chat has a group memory, which its members read in that group only (not in their own chats, and not in other groups); and the team memory is read by every Bot. A Bot writes its own, and any member writes its group's memory from the group. Main Bots and group admins (of any group) also write the team memory; a Main Bot can read and change another Bot's memory when you ask.
+- **Tools**: `remember` saves an entry or replaces one (`replace`), `forget` removes one, and `recall` searches every entry, reads a topic whole, or lists what is saved. In a Bot's own chat they use its own memory by default; in a group chat, the group memory (`scope: "own"` for the Bot's own). The Bot adds the source (a part anchor such as `part 2 #1234`, which `read_own_chat` opens, or the group and the time) and the date; a Bot that writes for others is named with `by:`.
 - **Files**: `MEMORY.md` holds what every conversation needs, and details go in topic files linked from its `## Index` as `[[topic]]`.
-- **In the prompt**: both `MEMORY.md` files go into the Bot's system prompt. The section is frozen when a Session starts, so the provider's prompt cache holds; a change shows from the next part or checkpoint, and `recall` finds it at once.
+- **In the prompt**: the Bot's own and the team's `MEMORY.md` go into the Bot's system prompt, and in a group Session the group's after them. The section is frozen when a Session starts, so the provider's prompt cache holds; a change shows from the next part or checkpoint, and `recall` finds it at once.
 - **Fixed sizes**: an entry has at most 300 characters, a `MEMORY.md` 4,000, a topic 16,000, and a scope 40 topics. A save past a limit fails and says how to make room.
 - **Safety**: memory is data, not instructions. An entry that looks like a key or token is refused, and a Bot is told not to save what a web page, file or tool result asks it to remember.
-- **History**: files change in place, and `journal.jsonl` keeps every change with the line before and after. When a Bot is deleted, its memory moves to `archive/`.
+- **History**: files change in place, and `journal.jsonl` keeps every change with the line before and after. When a Bot or a group chat is deleted, its memory moves to `archive/`.
 
-**The memory panel**: the Bot's details panel has a Memory row with the entry count; Manage opens the memory panel.
+**The memory panel**: the details panel of a Bot, and of a group chat, has a Memory row with the entry count; Manage opens the memory panel. A Bot's panel shows its own memory and the team memory; a group's shows the group memory.
 
-- **Memory summary**: the Bot's model writes a short summary in prose from every entry, in the interface language. It is written again when the entries change, and the ⋯ menu can regenerate it.
+- **Memory summary**: a model writes a short summary in prose from every entry, in the interface language: the Bot's, or for a group its admin's. It is written again when the entries change, and the ⋯ menu can regenerate it.
 - **All entries**: the ⋯ menu lists every entry by scope and topic, with its date and author, and the size of each `MEMORY.md`. Remove takes two clicks.
 - **Ask or update**: ask what the Bot remembers, or tell it what to add, correct or remove. One model call answers from the entries only, and its changes go through the same checks as the tools.
-- A line in the chat ("Memory updated") shows when a Bot changes memory and opens the panel. When memory changes in the background, the Bot's capsule at the top of its chat stretches to say "Memory updated" for a moment; clicking it opens the memory panel.
+- A line in the chat ("Memory updated") shows when a Bot changes memory and opens the panel. When memory changes in the background, the capsule at the top of the chat (the Bot's, or the group's) stretches to say "Memory updated" for a moment; clicking it opens the memory panel.
 
 A read-only dsh (see [Data and backups](#data-and-backups)) shows memory but cannot change it.
 
@@ -184,9 +184,9 @@ Another plugin can also set the search provider while dsh runs, after the profil
 
 ## Bot browser
 
-In dsh Desktop, a Bot's chat header has a globe button. It opens that Bot's own browser panel.
+In dsh Desktop and the desktop app, a Bot's chat header has a globe button. It opens that Bot's own browser panel.
 
-- **One partition per Bot** (`bot:<id>`): logins and cookies belong to that Bot only.
+- **One partition per Bot** (`bot:<id>`): logins and cookies belong to that Bot only. The desktop app keeps them on disk, so a Bot stays signed in after a restart; dsh Desktop keeps them in memory only.
 - **The Bot can read the page**: the `read_browser` tool reads the page's DOM, not a screenshot. The text becomes Markdown with headings, nested lists, tables, code blocks and quotes. Links and form controls are marked `[#n]` in place and listed below with their targets and values. The tool also reads the text you selected. Long pages are read in parts (`from`). Page content is treated as data, never as instructions.
   - It reads open Shadow DOM (with `<slot>`) and same-origin iframes up to 3 levels deep.
   - It reads only what is visible: `display:none`, `visibility:hidden`, zero-height and closed `<details>` content is skipped.
@@ -196,6 +196,7 @@ In dsh Desktop, a Bot's chat header has a globe button. It opens that Bot's own 
   - Read only: the Bot cannot click, type, scroll or open addresses yet.
 - **Addresses**: http and https only. localhost and LAN addresses are allowed; cloud metadata addresses (such as `169.254.x.x`) and dsh's own ports are not.
 - The browser panel and the details drawer share the right column; opening one closes the other. Switching chats switches the panel to that Bot. Deleting a Bot clears its browser and saved address.
+- **Cookie import (desktop app only)**: the import button in the browser bar previews the cookies of a file (Cookie-Editor JSON, Netscape `cookies.txt`, Playwright `storageState`) or of an installed Chromium/Firefox profile, then writes them into the Bot's partition. A source browser closes for a moment so its cookie store can be copied, and it reopens with its tabs. Sign-in that lives outside cookies (localStorage, passkeys) does not come along.
 
 dsh Web has no browser panel and no `read_browser` tool.
 
@@ -234,17 +235,17 @@ Files in `ui/`:
 |---|---|
 | `state.json` | The team: Bots, groups, Bot-to-Bot messages, preferences and open questions. A long message keeps only its first 2,000 characters here; all of it is in the Session it went to. |
 | `group-lines/` | Long group lines, up to the 20,000 characters a member reads, one file per line; each is removed when its line leaves the group's latest 60 lines or the group is deleted |
-| `state.lock` | The dsh that is using this data (pid and host). It is removed when that dsh exits. |
+| `state.lock` | The dsh that is using this data (pid and host), its mtime bumped as a heartbeat. It is removed when that dsh exits; a leftover whose heartbeat has stopped is taken over by the next dsh to load. |
 | `chat-index.sqlite` | Full-text index of older chat parts (`read_own_chat`); rebuilt if deleted |
 | `usage.sqlite` | Token counts for the Usage page; rebuilt from the Session logs if deleted, losing only the calls outside the logs and the names of deleted Bots |
-| `memory/` | Memory (see [Memory](#memory)): `bots/<id>/` and `team/` (`MEMORY.md` and topics), `journal.jsonl` (every change), `snapshots/` (the section each Session froze), `summaries/` (the panel's summary; safe to delete), `reviewed.json` (how far the memory review has read) and `archive/` (deleted Bots) |
+| `memory/` | Memory (see [Memory](#memory)): `bots/<id>/`, `groups/<id>/` and `team/` (`MEMORY.md` and topics), `journal.jsonl` (every change), `snapshots/` (the section each Session froze), `summaries/` (the panel's summary; safe to delete), `reviewed.json` (how far the memory review has read) and `archive/` (deleted Bots and group chats) |
 | `ocr.json` | Cache of image text; safe to delete |
 | `workspace` | The team workspace: the working folder of every Bot without one of its own (`config.workspace` changes it) |
 | `secrets.json` | Saved secrets. Treat backups of it like passwords. |
 | `omni.json` | The Omni this UI is linked to (kept by the channels plugin): its URL and the key pairing minted (0600). Treat backups of it like passwords. |
 | `logs/diagnostics.jsonl` | Recent errors and warnings, with keys, tokens, saved secrets and the home folder removed. It moves to `diagnostics.jsonl.1` past 1 MB. Safe to delete. |
 
-The chats themselves are dsh Sessions and are not in `bot/`: they are in `~/.dsh/sessions/`. dsh keeps its workspace list in `~/.dsh/storages/workspace.json` and profiles (with model settings) in `~/.dsh/profiles/`. Bot browser logins are not saved: Desktop keeps each Bot's partition in memory only.
+The chats themselves are dsh Sessions and are not in `bot/`: they are in `~/.dsh/sessions/`. dsh keeps its workspace list in `~/.dsh/storages/workspace.json` and profiles (with model settings) in `~/.dsh/profiles/`. dsh Desktop keeps each Bot's browser partition in memory only, so its logins are not saved. The desktop app saves them with its own window data, not in the data location, and clears a Bot's when the Bot is deleted.
 
 **Back up and restore**
 

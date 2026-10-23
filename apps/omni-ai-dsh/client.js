@@ -9442,6 +9442,24 @@ var import_react3 = require("react");
 var IDEAS = ["a sleepy cyan fox with a lantern tail", "a tiny robot made of moonlight", "a round jellyfish that wears headphones"];
 var NAMES = ["Pip", "Nova", "Mochi", "Echo", "Biscuit"];
 var NAME_RULE = /^[\p{L}\p{N}][\p{L}\p{N} ._-]{0,39}$/u;
+var AVATAR_SIZE = 256;
+var MAX_AVATAR = 16e4;
+async function avatarOf(src) {
+  try {
+    const picture = new Image();
+    picture.src = src;
+    await picture.decode();
+    const canvas = document.createElement("canvas");
+    canvas.width = AVATAR_SIZE;
+    canvas.height = AVATAR_SIZE;
+    const side = Math.min(picture.naturalWidth, picture.naturalHeight);
+    canvas.getContext("2d").drawImage(picture, (picture.naturalWidth - side) / 2, (picture.naturalHeight - side) / 2, side, side, 0, 0, AVATAR_SIZE, AVATAR_SIZE);
+    const small = [canvas.toDataURL("image/webp", 0.86), canvas.toDataURL("image/png")].find((url) => /^data:image\/(webp|png);/.test(url) && url.length <= MAX_AVATAR);
+    return small;
+  } catch {
+    return void 0;
+  }
+}
 function CompanionStep(props) {
   const state = useGate(props);
   const finish2 = useFinish(props);
@@ -9490,7 +9508,8 @@ function CompanionStep(props) {
     setSaving(true);
     setProblem(null);
     try {
-      await call("companion-save", { name: name.trim(), ...image ? { image } : { shape, color } });
+      const avatar = image ? await avatarOf(image) : void 0;
+      await call("companion-save", { name: name.trim(), ...image ? { image, ...avatar ? { avatar } : {} } : { shape, color } });
       setLook({ ...image ? { src: image } : { shape, color }, name: name.trim() });
       setHatching(true);
       setTimeout(() => finish2(), 1100);

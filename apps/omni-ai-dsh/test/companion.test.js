@@ -120,6 +120,23 @@ test('saving the companion makes it the Main Bot, by look and name', async () =>
   assert.deepEqual((await host().handle('companion-save', { name: 'Pip', shape: 'star' })).value, { name: 'Pip', applied: false, image: false })
 })
 
+test('a drawn companion becomes the Main Bot\'s avatar, shrunk', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'omni-ai-companion-'))
+  try {
+    const team = fakeTeam()
+    const fake = host({ team, env: { OMNI_HOME: home } })
+    const avatar = `data:image/webp;base64,${PNG}`
+    const reply = await fake.handle('companion-save', { name: 'Nova', image: `data:image/png;base64,${PNG}`, avatar })
+    assert.deepEqual(reply.value, { name: 'Nova', applied: true, image: true })
+    assert.deepEqual(team.calls, [['updateBot', 'main', { name: 'Nova', role: COMPANION_ROLE, avatar: { image: avatar } }]])
+    // Past the Bot avatar limit, the save is refused rather than failing in the team plugin.
+    const big = `data:image/webp;base64,${'A'.repeat(160_000)}`
+    assert.equal((await fake.handle('companion-save', { name: 'Nova', image: `data:image/png;base64,${PNG}`, avatar: big })).error.code, 'omni-ai/invalid')
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
 test('a drawn companion is kept as a private file in the Omni home', async () => {
   const home = mkdtempSync(join(tmpdir(), 'omni-ai-companion-'))
   try {

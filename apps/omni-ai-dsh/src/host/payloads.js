@@ -27,6 +27,8 @@ export const CompanionPayload = z.object({
   shape: z.string().regex(/^[a-z]{2,24}$/).optional(),
   color: z.string().regex(/^([a-z]{3,16}|#[0-9a-fA-F]{6})$/).optional(),
   image: z.string().regex(/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/).max(9 * 1024 * 1024).optional(),
+  // The drawing shrunk for the Main Bot's avatar, within omni-ui's 160 KB limit.
+  avatar: z.string().regex(/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/).max(160_000).optional(),
 }).refine(value => value.shape !== undefined || value.image !== undefined, 'a look')
 export const GeneratePayload = z.object({ description: z.string().trim().min(3).max(600) })
 // Who joins the team, and which of the Omni Bot's abilities stay on.

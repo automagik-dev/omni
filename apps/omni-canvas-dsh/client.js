@@ -18636,7 +18636,6 @@ var STRINGS = {
   "A canvas cannot change omni; ask Omni instead.": "画布不能修改 omni；请让 Omni 来做。",
   "A canvas can only read omni.": "画布只能读取 omni。",
   "a part could not be rendered.": "有一部分无法显示。",
-  "Chart": "图表",
   "Drawing…": "正在绘制…",
   "it failed while rendering.": "显示时出错。",
   "No data to chart.": "没有可绘制的数据。",
