@@ -778,7 +778,7 @@ async function removeAtLoginUnit(layout: SandboxLayout, defaultHome: string, dep
  * pgserve's postmaster wrapper, the postgres it runs, NATS and the API. Every
  * one is a path inside the home, so nothing else on the machine matches.
  */
-export function sandboxChildMarkers(layout: SandboxLayout): string[] {
+function sandboxChildMarkers(layout: SandboxLayout): string[] {
   const modules = join(layout.runtimeDir, 'node_modules');
   return [
     join(modules, 'pgserve', 'bin', 'postgres-server.js'),
