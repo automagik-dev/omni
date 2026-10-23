@@ -33,7 +33,7 @@ module.exports = __toCommonJS(index_exports);
 
 // src/client/connect-link.js
 var APP_PAGE = /\/api\/login\/app\/?$/;
-var GRANT = /^[A-Za-z0-9._~-]{16,512}$/;
+var GRANT = /^[A-Za-z0-9_-]{24}$/;
 var omniBase = (text) => {
   try {
     const url = new URL(text);
@@ -3303,9 +3303,16 @@ var OMNI_LIVE_CSS = `
 var import_react4 = require("react");
 var DEFAULT_POLL_MS = 2e3;
 var PAIRING_EVENT = "omni:pairing";
-async function connectFromApp(url) {
+async function connectFromApp(url, grant) {
   if (typeof url !== "string" || url === "") return;
   try {
+    if (typeof grant === "string" && grant !== "") {
+      const reply2 = await call("omni-connect-grant", { url, grant });
+      await refreshLive(call).catch(() => {
+      });
+      window.dispatchEvent(new CustomEvent(PAIRING_EVENT, { detail: { paired: reply2.origin } }));
+      return;
+    }
     const reply = await call("omni-pair-start", { url, auto: true });
     window.dispatchEvent(new CustomEvent(PAIRING_EVENT, { detail: reply.pairing }));
     if (reply.pairing?.approveUrl) window.open(reply.pairing.approveUrl, "_blank", "noopener");
@@ -3375,6 +3382,7 @@ function ConnectOmni({ onPaired, embedded = false } = {}) {
     const onPairing = (event) => {
       if (!alive.current) return;
       if (event.detail?.problem) setProblem(event.detail.problem);
+      else if (event.detail?.paired) void finish(event.detail.paired);
       else if (event.detail) setPairing(event.detail);
     };
     window.addEventListener(PAIRING_EVENT, onPairing);
@@ -4972,7 +4980,7 @@ function apply(ctx) {
   registerConnectStep(ctx);
   ctx.effect(() => {
     if (typeof window === "undefined" || typeof window.addEventListener !== "function") return void 0;
-    const onConnect = (event) => void connectFromApp(event.detail?.url);
+    const onConnect = (event) => void connectFromApp(event.detail?.url, event.detail?.grant);
     window.addEventListener("omni-desktop:connect", onConnect);
     return () => window.removeEventListener("omni-desktop:connect", onConnect);
   }, "ds-bot: omni:// links");

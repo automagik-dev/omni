@@ -14,13 +14,20 @@ const DEFAULT_POLL_MS = 2000
 const PAIRING_EVENT = 'omni:pairing'
 
 /**
- * An omni://connect link the person confirmed in the desktop app: start signing in to that
- * Omni and open its approval page in the browser, where they approve with a passkey (or a
- * code on WhatsApp). The host finishes the sign-in by itself once they have approved.
+ * An omni://connect link the person confirmed in the desktop app. One with a grant (the
+ * owner texted "connect" and tapped the link their Omni sent) links at once. One without
+ * starts signing in to that Omni and opens its approval page in the browser, where they
+ * approve with a passkey (or a code on WhatsApp); the host finishes the sign-in by itself.
  */
-export async function connectFromApp(url) {
+export async function connectFromApp(url, grant) {
   if (typeof url !== 'string' || url === '') return
   try {
+    if (typeof grant === 'string' && grant !== '') {
+      const reply = await call('omni-connect-grant', { url, grant })
+      await refreshLive(call).catch(() => {})
+      window.dispatchEvent(new CustomEvent(PAIRING_EVENT, { detail: { paired: reply.origin } }))
+      return
+    }
     const reply = await call('omni-pair-start', { url, auto: true })
     window.dispatchEvent(new CustomEvent(PAIRING_EVENT, { detail: reply.pairing }))
     if (reply.pairing?.approveUrl) window.open(reply.pairing.approveUrl, '_blank', 'noopener')
@@ -89,6 +96,7 @@ export function ConnectOmni({ onPaired, embedded = false } = {}) {
     const onPairing = (event) => {
       if (!alive.current) return
       if (event.detail?.problem) setProblem(event.detail.problem)
+      else if (event.detail?.paired) void finish(event.detail.paired)
       else if (event.detail) setPairing(event.detail)
     }
     window.addEventListener(PAIRING_EVENT, onPairing)

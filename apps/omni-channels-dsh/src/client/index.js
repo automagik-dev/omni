@@ -88,7 +88,7 @@ export function apply(ctx) {
   // The Omni desktop app hands over an omni://connect link it asked about (src/main.js there).
   ctx.effect(() => {
     if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return undefined
-    const onConnect = event => void connectFromApp(event.detail?.url)
+    const onConnect = event => void connectFromApp(event.detail?.url, event.detail?.grant)
     window.addEventListener('omni-desktop:connect', onConnect)
     return () => window.removeEventListener('omni-desktop:connect', onConnect)
   }, 'ds-bot: omni:// links')

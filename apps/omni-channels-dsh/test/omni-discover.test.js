@@ -187,16 +187,69 @@ test('a key the Omni refuses, or no key at all, signs this device in there inste
   await assert.rejects(rt.omniDiscoverEndpoint('omni-discover-use', { id: '0123456789abcdef' }), { code: 'bot/refused' })
 })
 
-test('a link from the Omni and running Omni here answer that they are not available yet', async (t) => {
+const GRANT = 'Zx81_kq-Pz0aBcD9eF12-_Qw'
+const DEVICE_KEY = 'omni_sk_connect_secret'
+
+// An Omni's answer to POST /api/v2/login/connect, recorded with what it was sent.
+function connectOmni(t, answer) {
   const { rt } = host(t, json => json(500, {}))
-  assert.equal((await rt.omniDiscoverEndpoint('omni-connect-grant', { url: 'https://omni.example.com', grant: 'g'.repeat(32) })).status, 'unavailable')
-  await assert.rejects(rt.omniDiscoverEndpoint('omni-connect-grant', { url: 'https://omni.example.com', grant: 'short' }), { code: 'bot/invalid' })
-  await assert.rejects(rt.omniDiscoverEndpoint('omni-connect-grant', { url: 'ftp://omni.example.com', grant: 'g'.repeat(32) }), { code: 'bot/invalid' })
+  const sent = []
+  const probes = globalThis.fetch
+  globalThis.fetch = async (address, init = {}) => {
+    const url = new URL(String(address))
+    if (url.pathname !== '/api/v2/login/connect') return probes(address, init)
+    sent.push({ host: url.host, method: init.method, headers: init.headers, body: JSON.parse(init.body) })
+    return answer((status, data) => new Response(JSON.stringify(data), { status }))
+  }
+  return { rt, sent }
+}
+
+test('a link the Omni sent becomes this device\'s key at once, kept on the host', async (t) => {
+  const { rt, sent } = connectOmni(t, json => json(200, { data: { apiKey: DEVICE_KEY, keyId: 'k9', scopes: ['instances:read'], keyExpiresAt: null, apiUrl: 'https://api.omni.example.com/' } }))
+  const reply = await rt.omniLinkEndpoint('omni-connect-grant', { url: 'https://omni.example.com', grant: GRANT, deviceName: 'Laptop' })
+  assert.deepEqual(reply, { status: 'paired', origin: 'api.omni.example.com' })
+  assert.equal(sent.length, 1)
+  assert.deepEqual(sent[0].body, { grant: GRANT, clientId: 'omni-dsh', deviceName: 'Laptop' })
+  assert.equal(sent[0].headers['x-api-key'], undefined)
+  assert.equal(sent[0].headers.authorization, undefined)
+  const link = JSON.parse(readFileSync(join(rt.home, LINK_FILE), 'utf8'))
+  assert.deepEqual({ url: link.url, key: link.key, keyId: link.keyId, scopes: link.scopes }, { url: 'https://api.omni.example.com', key: DEVICE_KEY, keyId: 'k9', scopes: ['instances:read'] })
+  const shown = await rt.omniLinkEndpoint('omni-link')
+  assert.equal(shown.origin, 'api.omni.example.com')
+  assert.equal(JSON.stringify([reply, shown]).includes(DEVICE_KEY), false)
+})
+
+test('a spent link, sign-in turned off and too many tries each say so, and nothing is linked', async (t) => {
+  const expired = 'This connect link expired or was already used. Text connect to yourself on WhatsApp for a new one.'
+  const cases = [
+    [json => json(410, { error: { code: 'LINK_EXPIRED', message: expired } }), expired],
+    [json => json(404, { error: { code: 'NOT_FOUND', message: 'Not found' } }), 'Sign-in is off on omni.example.com.'],
+    [json => json(429, { error: { code: 'RATE_LIMITED' } }), 'Too many tries; wait a minute and try again.'],
+    [json => json(400, { error: { code: 'VALIDATION', message: 'Body must be { grant, clientId, deviceName }' } }), 'Body must be { grant, clientId, deviceName }'],
+    [json => json(200, { data: {} }), 'Omni answered 200 at omni.example.com'],
+  ]
+  for (const [answer, message] of cases) {
+    const { rt } = connectOmni(t, answer)
+    await assert.rejects(rt.omniLinkEndpoint('omni-connect-grant', { url: 'omni.example.com', grant: GRANT }), { code: 'bot/refused', message })
+    assert.equal((await rt.omniLinkEndpoint('omni-link')).linked, false)
+  }
+})
+
+test('a grant that is not one an Omni mints is refused before anything is sent', async (t) => {
+  const { rt, sent } = connectOmni(t, json => json(200, {}))
+  for (const body of [{ url: 'https://omni.example.com', grant: 'short' }, { url: 'https://omni.example.com', grant: `${GRANT}x` }, { url: 'https://omni.example.com', grant: `${GRANT.slice(0, 23)}.` }, { url: 'ftp://omni.example.com', grant: GRANT }, { url: 'https://omni.example.com' }]) {
+    await assert.rejects(rt.omniLinkEndpoint('omni-connect-grant', body), { code: 'bot/invalid' })
+  }
+  assert.equal(sent.length, 0)
+})
+
+test('running Omni on this computer answers that it is not available yet', async (t) => {
+  const { rt } = host(t, json => json(500, {}))
   assert.equal((await rt.omniDiscoverEndpoint('omni-local-install')).status, 'unavailable')
 })
 
 test('a link the Omni sends reads as its address and grant, and anything else as nothing', () => {
-  const grant = 'Zx81_kq-Pz0.aB~cD9eF'
+  const grant = GRANT
   assert.deepEqual(parseConnectLink(`https://omni.example.com/api/login/app?grant=${grant}`), { url: 'https://omni.example.com', grant })
   assert.deepEqual(parseConnectLink(` https://omni.example.com/base/api/login/app/?grant=${grant} `), { url: 'https://omni.example.com/base', grant })
   assert.deepEqual(parseConnectLink(`omni://connect?url=${encodeURIComponent('https://omni.example.com/api/v2')}&grant=${grant}`), { url: 'https://omni.example.com', grant })
@@ -207,6 +260,8 @@ test('a link the Omni sends reads as its address and grant, and anything else as
     'https://omni.example.com/api/login/app',
     'https://omni.example.com/api/login/app?grant=short',
     `https://omni.example.com/api/login/app?grant=${grant}%20x`,
+    `https://omni.example.com/api/login/app?grant=${grant}x`,
+    `https://omni.example.com/api/login/app?grant=${grant.slice(0, 23)}~`,
     `omni://connect?url=${encodeURIComponent('javascript:alert(1)')}&grant=${grant}`,
     `omni://other?url=https://omni.example.com&grant=${grant}`,
     `ftp://omni.example.com/api/login/app?grant=${grant}`,

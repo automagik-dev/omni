@@ -2,7 +2,8 @@
 // https://<omni>/api/login/app?grant=<grant>, or the omni://connect?url=<omni>&grant=<grant>
 // link that page opens. Either reads as { url, grant }, or null when it is neither.
 const APP_PAGE = /\/api\/login\/app\/?$/
-const GRANT = /^[A-Za-z0-9._~-]{16,512}$/
+// The grant: 24 base64url characters, as the Omni mints it.
+const GRANT = /^[A-Za-z0-9_-]{24}$/
 
 const omniBase = (text) => {
   try {

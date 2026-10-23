@@ -39,7 +39,6 @@ const Health = z.object({ version: text(64).optional() })
 const LoginStatus = z.object({ data: z.object({ claimed: z.boolean().optional() }).optional() })
 const Validated = z.object({ data: z.object({ valid: z.literal(true), scopes: z.array(text(200)).max(500).optional(), credential: z.object({ expiresAt: text(64).nullable().optional() }).optional() }) })
 const UsePayload = z.object({ id: z.string().regex(/^[a-f0-9]{16}$/) })
-const GrantPayload = z.object({ url: text(2048), grant: z.string().min(16).max(512).regex(/^[A-Za-z0-9._~-]+$/) })
 
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]'])
 export const isLoopback = url => LOOPBACK.has(new URL(url).hostname)
@@ -171,19 +170,13 @@ export function install(rt) {
     return { status: 'paired', origin: new URL(omni.url).host }
   }
 
-  // Not here yet: the Omni's side of a link sent in its owner's WhatsApp chat, and running
-  // Omni on this computer (`omni install --sandbox`), arrive in their own changes.
-  async function connectGrant(body) {
-    const parsed = GrantPayload.safeParse(body)
-    if (!parsed.success || cleanOmniUrl(parsed.data.url) === null) throw invalid('That link is not one your Omni sends. Text connect to yourself on WhatsApp for a new one.')
-    return { status: 'unavailable', message: 'Connecting with a link is not available yet. Type your Omni\'s address and get a code instead.' }
-  }
+  // Not here yet: running Omni on this computer (`omni install --sandbox`) arrives in its
+  // own change.
   const localInstall = async () => ({ status: 'unavailable', message: 'Running Omni on this computer is not available yet.' })
 
   const endpoints = {
     'omni-discover': async () => ({ omnis: await discover() }),
     'omni-discover-use': use,
-    'omni-connect-grant': connectGrant,
     'omni-local-install': localInstall,
   }
   rt.omniDiscoverEndpoint = (endpoint, body) => endpoints[endpoint](body)

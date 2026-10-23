@@ -35,6 +35,11 @@ const DEVICE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code'
 const CLIENT_ID = process.env.OMNI_CLIENT_ID === 'omni-desktop' ? 'omni-desktop' : 'omni-dsh'
 const DEVICE_NAME_MAX = 80
 
+const deviceNameOf = body => String(body?.deviceName ?? '').trim().slice(0, DEVICE_NAME_MAX) || `Omni UI on ${hostname()}`.slice(0, DEVICE_NAME_MAX)
+// The one-time grant in a link an Omni sends its owner who texted "connect" (24 base64url
+// characters, as the Omni's GrantSchema has it).
+export const GRANT = /^[A-Za-z0-9_-]{24}$/
+
 const invalid = message => Object.assign(new Error(message), { code: 'bot/invalid' })
 const refused = message => Object.assign(new Error(message), { code: 'bot/refused' })
 
@@ -181,7 +186,7 @@ export function install(rt) {
   async function start(body) {
     const url = cleanOmniUrl(body?.url)
     if (!url) throw invalid('Give the address of the Omni to connect to, like omni.example.com')
-    const deviceName = String(body?.deviceName ?? '').trim().slice(0, DEVICE_NAME_MAX) || `Omni UI on ${hostname()}`.slice(0, DEVICE_NAME_MAX)
+    const deviceName = deviceNameOf(body)
     pairing = null
     const host = new URL(url).host
     const status = await omniFetch(url, 'GET', '/api/v2/login/status')
@@ -282,6 +287,34 @@ export function install(rt) {
     return { status: 'paired', origin: new URL(link.url).host }
   }
 
+  // A link the Omni sent its owner, who texted "connect" in their own chat: its grant is the
+  // owner's yes already, so it becomes this device's key at once, with no code to approve.
+  // The grant is spent there whatever happens next; the key stays on this host.
+  async function connectWithGrant(body) {
+    const url = cleanOmniUrl(body?.url)
+    const grant = typeof body?.grant === 'string' ? body.grant : ''
+    if (!url || !GRANT.test(grant)) throw invalid('That is not a link your Omni sends. Text connect to yourself on WhatsApp for a new one.')
+    const host = new URL(url).host
+    const reply = await omniFetch(url, 'POST', '/api/v2/login/connect', { body: { grant, clientId: CLIENT_ID, deviceName: deviceNameOf(body) } })
+    const message = typeof reply.json?.error?.message === 'string' ? reply.json.error.message : null
+    if (reply.status === 410 || reply.status === 400) throw refused(message ?? 'This connect link expired or was already used. Text connect to yourself on WhatsApp for a new one.')
+    if (reply.status === 404) throw refused(`Sign-in is off on ${host}.`)
+    if (reply.status === 429) throw refused('Too many tries; wait a minute and try again.')
+    if (reply.status !== 200 || typeof reply.data?.apiKey !== 'string' || reply.data.apiKey === '') throw refused(`Omni answered ${reply.status} at ${host}`)
+    const link = {
+      url: cleanOmniUrl(reply.data.apiUrl) ?? url,
+      key: reply.data.apiKey,
+      keyId: reply.data.keyId ?? null,
+      scopes: Array.isArray(reply.data.scopes) ? reply.data.scopes : [],
+      keyExpiresAt: reply.data.keyExpiresAt ?? null,
+      pairedAt: new Date().toISOString(),
+    }
+    pairing = null
+    await saveLink(link, url)
+    rt.syncOmniEvents?.()
+    return { status: 'paired', origin: new URL(link.url).host }
+  }
+
   async function cancel() {
     // Nothing to tell Omni: an unapproved device code just expires.
     const had = pairing !== null
@@ -306,6 +339,7 @@ export function install(rt) {
     if (endpoint === 'omni-pair-start') return start(body)
     if (endpoint === 'omni-pair-poll') return poll()
     if (endpoint === 'omni-pair-cancel') return cancel()
+    if (endpoint === 'omni-connect-grant') return connectWithGrant(body)
     if (endpoint === 'omni-disconnect') return disconnect()
     if (endpoint === 'omni-link') {
       const link = rt.omniLink()
@@ -317,7 +351,7 @@ export function install(rt) {
     throw invalid(`Unknown omni endpoint ${endpoint}`)
   }
   // Linking changes omni.json, not the team, so a host that only reads the team may link too.
-  for (const name of ['omni-link', 'omni-pair-start', 'omni-pair-poll', 'omni-pair-cancel', 'omni-disconnect']) {
+  for (const name of ['omni-link', 'omni-pair-start', 'omni-pair-poll', 'omni-pair-cancel', 'omni-connect-grant', 'omni-disconnect']) {
     rt.ctx.effect(() => rt.hooks.endpoint(name, body => rt.omniLinkEndpoint(name, body), { read: true }), `ds-bot: ${name}`)
   }
 }
