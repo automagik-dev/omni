@@ -43,7 +43,9 @@ export function registerSystemSchemas(registry: OpenAPIRegistry): void {
     operationId: 'getUpdateStatus',
     tags: ['System'],
     summary: 'Version and update status',
-    description: 'What this Omni runs, what its update channel publishes, and any update waiting or running.',
+    description:
+      'What this Omni runs, what its update channel publishes, and any update waiting or running. Needs ' +
+      'system:read (device keys carry it by default).',
     responses: { 200: ok(UpdateStatusSchema, 'Update status') },
   });
 
@@ -56,7 +58,8 @@ export function registerSystemSchemas(registry: OpenAPIRegistry): void {
     description:
       'Asks this Omni to update to the version its channel publishes now. Nothing changes yet: the owner gets ' +
       '"Update Omni from X to Y? Reply update <CODE>" in their own WhatsApp self chat, and only that reply, ' +
-      "within ten minutes, runs the operator's OMNI_UPDATE_COMMAND. Off unless the operator set it.",
+      "within ten minutes, runs the operator's OMNI_UPDATE_COMMAND. Off unless the operator set it. Needs " +
+      'system:update (device keys carry it by default) or system:admin.',
     request: {
       body: {
         content: {
