@@ -147,6 +147,17 @@ test('a linked checkout, an unversioned git install, or a disabled check never a
   assert.deepEqual(fetched, [])
 })
 
+test('in the desktop app, which updates as a whole, it never asks the network and offers nothing', async (t) => {
+  process.env.DS_BOT_APP = '1'
+  t.after(() => { delete process.env.DS_BOT_APP })
+  const { rt, fetched } = start({ source: `${PKG.name}@^${PKG.version}`, answers: { [`https://registry.npmjs.org/${PKG.name}/latest`]: { version: '9.0.0' } } })
+  const view = await rt.updateCheck({ fresh: true })
+  assert.equal(view.source, 'app')
+  assert.equal(view.available, false)
+  assert.deepEqual(fetched, [])
+  assert.throws(() => rt.updateStart(), /No DS Bot update/)
+})
+
 test('the star count comes from the repository, is kept for an hour, and survives a failed answer', async () => {
   const repo = 'https://api.github.com/repos/Fei2411/DeepSeek-Bot'
   const answers = { [repo]: new Error('offline') }

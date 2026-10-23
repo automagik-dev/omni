@@ -63,15 +63,12 @@ export const AGENT_SESSION_TITLE_MAX = 80
 // Desktop profile, so a restriction filters this list down to registered names.
 export const TEAM_TOOLS = [
   'list_bots', 'message_bot', 'stop_bot', 'create_bot', 'update_bot', 'list_models',
-  'create_group', 'update_group', 'delete_group', 'post_to_group', 'ask_user',
+  'create_group', 'update_group', 'delete_group', 'post_to_group', 'ask_user', 'show_view',
   'request_secret', 'list_secrets', 'group_relay', 'read_own_chat',
   'read_group_chat', 'remember', 'forget', 'recall', 'read_browser',
   'list_capabilities', 'save_capability', 'delete_capability',
   'attach_capability', 'detach_capability',
 ]
-// Answers a group gives to what members post after the round moved on (their finished
-// work, mostly), before the user speaks there again.
-export const ROOM_LATE_ROUNDS = 10
 // A member still at work this long after its first tool call lets the round go on; it
 // posts its reply when the work is done.
 export const ROOM_WORK_GRACE_MS = 15_000
@@ -86,3 +83,5 @@ export const OWN_CHAT_SEARCH = 20
 export const HISTORY_PAGE = 200
 export const HISTORY_PAGES_MAX = 50
 export const HISTORY_TIMEOUT_MS = 20_000
+// Shown when an aside stops at the route's own output limit. The partial answer stays.
+export const BTW_LIMIT = 'Answer cut off at the output limit.'

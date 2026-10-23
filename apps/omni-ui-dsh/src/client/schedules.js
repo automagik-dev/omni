@@ -4,7 +4,6 @@
 import { createElement as h, Fragment, useEffect, useState } from 'react'
 import { BotAvatar, RoomAvatar } from './mark.js'
 import { ClockIcon, PlusIcon, TrashIcon } from './icons.js'
-import { openHarnessSettings } from './sidebar.js'
 import { Segmented } from './motion.js'
 import { dateLocale, hostText, t } from './i18n.js'
 
@@ -170,19 +169,19 @@ function TaskForm({ roster, actions, start, onDone, onCancel }) {
 }
 
 // Settings has no schedule service to show: Automation tasks are off in DSH.
-function AutomationOff() {
+function AutomationOff({ actions }) {
   return h('div', { className: 'bt-set-card bt-task-off' },
     h('span', { className: 'bt-task-off-mark' }, h(ClockIcon)),
     h('span', { className: 'bt-task-off-title' }, t('Turn on Automation tasks in DSH')),
     h('span', { className: 'bt-set-hint' }, t('Switch on Automation tasks on the Plugins page in Harness settings.')),
-    h('button', { type: 'button', className: 'bt-soft bt-soft-sm', onClick: openHarnessSettings }, t('Open Harness settings')))
+    actions.openHarnessSettings ? h('button', { type: 'button', className: 'bt-soft bt-soft-sm', onClick: actions.openHarnessSettings }, t('Open Harness settings')) : null)
 }
 
 export function SchedulesPage({ roster, actions, start }) {
   const view = useSchedules(actions)
   const [adding, setAdding] = useState(Boolean(start))
   if (view === null) return h('div', { className: 'bt-set-hint' }, t('Loading…'))
-  if (!view.available) return h(AutomationOff)
+  if (!view.available) return h(AutomationOff, { actions })
   const shown = next => { publish(next); setAdding(false) }
   const byChat = [
     ...roster.bots.map(bot => [bot.id, h(BotAvatar, { bot, size: 18, badge: false, live: false }), bot.name, view.tasks.filter(task => task.botId === bot.id)]),
@@ -211,7 +210,7 @@ export function BotSchedules({ bot, roster, actions }) {
       !view.available
         ? h('div', { className: 'bt-set-row bt-bs-row' },
             h('span', { className: 'bt-set-copy' }, h('span', { className: 'bt-set-hint' }, t('Switch on Automation tasks on the Plugins page in Harness settings.'))),
-            h('button', { type: 'button', className: 'bt-soft bt-soft-sm', onClick: openHarnessSettings }, t('Open Harness settings')))
+            actions.openHarnessSettings ? h('button', { type: 'button', className: 'bt-soft bt-soft-sm', onClick: actions.openHarnessSettings }, t('Open Harness settings')) : null)
         : [
             ...tasks.map(task => h(TaskRow, { key: task.id, task, actions, roster, onView: publish })),
             h('button', { key: 'new', type: 'button', className: 'bt-set-row bt-bs-row bt-gs-add', onClick: () => actions.openSettings('schedules', bot.id) }, h(PlusIcon), t('New task')),
@@ -267,4 +266,11 @@ export const SCHEDULE_CSS = `
 .bt-task-line-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bt-task-line-when{flex:none;font-size:12px;color:var(--bt-ink-3)}
 @media (prefers-reduced-motion:reduce){.bt-task-form{animation:none}}
+/* Phone-width viewports: the form's fixed minimums would overflow; let the
+   fields wrap and share the row. */
+@media (max-width:640px){
+  .bt-task-bot{min-width:0;width:100%}
+  .bt-task-time{min-width:0;flex:1 1 110px}
+  .bt-task-count{width:auto!important;flex:1 1 72px}
+}
 `

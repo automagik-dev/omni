@@ -18,6 +18,7 @@
 // Commands to a Bot:
 //   建群 名: A, B · 群发[回报] 名: 消息 · 改群 名 公告|管理员|模式|加|踢: 值 · 删群 名
 //   看群 名 (read_group_chat) · 转告 名: 消息, also over several lines (message_bot) · 搜索：查询1 | 查询2 (web_search)
+//   进目录 路径 (working_directory with cd)
 //   插话 名: 消息 (message_bot when "now") · 排队 名: 消息 (message_bot when "queue") · 叫停 名: 原因 (stop_bot)
 //   In a message from a Bot: 转告 名: 消息 (hands it on with message_bot) · 慢慢做 N (answers after N seconds)
 //   长文 N / long N (N×1000 characters) · 长任务 N [K] (N steps of K×1000, default 4)
@@ -26,6 +27,8 @@
 //   报错 (fake rejected key, 401; also as the text of 转告, so the receiving Bot fails)
 //   卡片 K (K×1000 characters, then a question card) · 笔记模式 截断一次|缺节一次|总截断|总缺节|失败|正常
 //   记住[@话题] 事实 · 团队记住 事实 (remember) · 忘掉 事实 (forget) · 回忆 [词] (recall)
+//   视图选项 (options card, waits) · 视图表单 (form card, waits) · 视图展示 (display-only
+//   stack) · 大视图 (display-only, just under the byte limit)
 //   查能力 [词] (names the mcp__ tools and catalog skills that contain 词; also in a group)
 //   A message with a file (a long Bot message as a file, a file the user sent): the Bot
 //   reads the saved path, then says how many lines it read and how the file ends.
@@ -33,6 +36,8 @@
 //   删掉|remove N, 改|edit N: X change entries, anything else gets the entry count.
 // Commands in a group:
 //   把X拉进群 · 把X踢出群 · 群名改成X · 讨论 (admin @all) · 私聊聊了啥 (repeats the briefing)
+//   记住[@话题] 事实 (the admin saves to the group memory) · 自己记住 / 团队记住 事实 (own / team)
+//   忘掉 事实 (the admin) · 回忆 [词] (every member)
 //   查私聊 关键词 (read_own_chat) · 长文 N · 上下文里有 词 · 撑爆 · 报错 [名] (that member's call, or every member's, fails with 401)
 //   提权 (members other than the admin run a shell command that asks for full access)
 //   写成文字 (members write their tool call as text instead of making it; also in a Bot's own chat)
@@ -119,6 +124,10 @@ function decide(body) {
   }).filter(message => message.role !== 'user' || message.content.length > 0)
   const last = messages.at(-1)
   const blocks = Array.isArray(last?.content) ? last.content : []
+  // An aside (btw.js). The first line is the marker; the reply is fixed and calls nothing.
+  if (last?.role === 'user' && textBlocks(last.content).some(value => value.startsWith('ds-bot/btw\n') || value === 'ds-bot/btw')) {
+    return [text('Based on the conversation so far.')]
+  }
   const me = /You are (.+?), a Bot on the user's team/.exec(system)?.[1] ?? 'Bot'
   const isMain = system.includes('You are the Main Bot')
   const isRelay = system.includes('# Group chat relay')
@@ -138,8 +147,8 @@ function decide(body) {
 
   // The memory panel: a prose summary of the entries it lists, and "ask or update".
   if (system.includes('You write the memory summary')) return [text(memorySummary(textOf(last?.content)))]
-  if (system.includes('You keep the memory of one Bot')) return [text(JSON.stringify(memoryAsk(textOf(last?.content))))]
-  if (system.includes('You keep the long-term memory of one Bot')) return [text(JSON.stringify(memoryReview(textOf(last?.content))))]
+  if (/You keep the memory of one (Bot|group chat)/.test(system)) return [text(JSON.stringify(memoryAsk(textOf(last?.content))))]
+  if (/You keep the long-term memory of one (Bot|group chat)/.test(system)) return [text(JSON.stringify(memoryReview(textOf(last?.content))))]
 
   const kind = isSummary(body)
   if (kind === 'checkpoint') {
@@ -228,6 +237,7 @@ function decide(body) {
       // The user's answer can ride in the same message as the card's tool result.
       case 'ask_user': if (textOf(last.content).trim() === '') return [text('')]
         break
+      case 'show_view': return [text(resultText.startsWith('The view is on screen') ? '这些都是示例数据，换成你的数据我再画一次。' : `没画成：${resultText}`)]
       case 'ask_user_question': {
         let picked = ''
         try { picked = JSON.parse(resultText).answers?.[0]?.selected?.[0] ?? '' } catch {}
@@ -259,6 +269,7 @@ function decide(body) {
         return [text(/^(Saved to|Updated in|Removed from) /.test(resultText) ? (used.name === 'remember' ? '记下了。' : '已经忘掉了。') : `没记成：${resultText}`)]
       case 'recall': return [text(`记忆里有：\n${resultText}`)]
       case 'web_search': return [text(result.is_error ? `搜索失败：${resultText}` : `搜到了：\n${resultText}`)]
+      case 'working_directory': return [text(result.is_error ? `没进去：${resultText}` : `现在在 ${resultText}`)]
       case 'read_browser': {
         const title = /^Title: (.+)$/m.exec(resultText)?.[1]
         const body = (resultText.split(/^Text[^\n]*:\n/m)[1] ?? '').split('\n\nLinks and controls')[0].replace(/\s+/g, ' ').trim()
@@ -350,6 +361,13 @@ function decide(body) {
       const earlier = messages.slice(0, -1).map(m => textOf(m.content)).join('\n')
       return [text(earlier.includes(ask[1]) ? `上下文里有「${ask[1]}」。` : `上下文里没有「${ask[1]}」。`)]
     }
+    // Group memory: the admin saves, so a round of members does not save it twice.
+    if ((ask = /^User: (团队|自己)?记住(?:@(\S+))?\s*[:：]?\s*(.+)$/.exec(userLine)) && tools.has('remember')) {
+      if (!leads) return [text('[PASS]')]
+      return [tool('remember', { text: ask[3].trim(), ...(ask[2] ? { topic: ask[2] } : {}), ...(ask[1] ? { scope: ask[1] === '团队' ? 'team' : 'own' } : {}) })]
+    }
+    if ((ask = /^User: 忘掉\s*[:：]?\s*(.+)$/.exec(userLine)) && tools.has('forget')) return leads ? [tool('forget', { entry: ask[1].trim() })] : [text('[PASS]')]
+    if ((ask = /^User: 回忆(?:\s+(.+))?$/.exec(userLine)) && tools.has('recall')) return [tool('recall', ask[1] ? { query: ask[1].trim() } : {})]
     // Group Sessions: the frozen brief is in the Session's first message, the lookup a tool.
     if ((ask = /查能力\s*(\S*)/.exec(userLine))) return [text(capabilityReport(me, tools, messages, ask[1]))]
     if ((ask = /查私聊\s*(\S*)/.exec(userLine))) return [tool('read_own_chat', ask[1] ? { query: ask[1] } : {})]
@@ -414,6 +432,7 @@ function decide(body) {
   if ((order = /^忘掉\s*[:：]?\s*(.+)$/.exec(userText)) && tools.has('forget')) return [tool('forget', { entry: order[1].trim() })]
   if ((order = /^回忆(?:\s+(.+))?$/.exec(userText)) && tools.has('recall')) return [tool('recall', order[1] ? { query: order[1].trim() } : {})]
   if ((order = /^搜索\s*[:：]\s*([^\n]+)/.exec(userText)) && tools.has('web_search')) return [tool('web_search', { queries: order[1].trim().split(/\s*[|｜]\s*/) })]
+  if ((order = /^进目录\s+(.+)$/.exec(userText)) && tools.has('working_directory')) return [tool('working_directory', { cd: order[1].trim() })]
   if (/^看(?:网页|页面)/.test(userText) && tools.has('read_browser')) return [tool('read_browser', {})]
   if (userText.startsWith('写成文字')) return [text(WRITTEN_CALL)]
   // Context-line tests: grow the context, run a long multi-step turn, search history.
@@ -464,6 +483,75 @@ function decide(body) {
   if (/^\s*阻塞提问/.test(userText) && tools.has('ask_user_question')) {
     return [tool('ask_user_question', { questions: [{ id: 'start', header: 'Choose', question: '先从哪块开始？', options: [{ label: '先定目标 (Recommended)', description: '先把要做成什么说清楚' }, { label: '整理日常事务' }] }] })]
   }
+  // View cards: 视图选项 and 视图表单 wait for an answer; 视图展示 and 大视图 are
+  // display-only — the latter sits just under the view byte limit.
+  if (/^\s*视图选项/.test(userText) && tools.has('show_view')) {
+    return [tool('show_view', { title: 'Pick a lane', view: { type: 'options', id: 'lane', options: [{ label: 'Ship now' }, { label: 'One more pass' }] } })]
+  }
+  if (/^\s*视图表单/.test(userText) && tools.has('show_view')) {
+    return [tool('show_view', { title: 'A few details', view: { type: 'form', id: 'ask', submitLabel: 'Send', fields: [{ id: 'name', label: 'Name', placeholder: 'Ada' }, { id: 'note', label: 'Note' }] } })]
+  }
+  if (/^\s*视图展示/.test(userText) && tools.has('show_view')) {
+    return [tool('show_view', {
+      title: 'Status board', await_reply: false,
+      view: {
+        type: 'stack',
+        children: [
+          { type: 'text', text: '**Release readiness** — all checks are in.' },
+          { type: 'metric', label: 'Open issues', value: 3, tone: 'warn' },
+          { type: 'table', columns: [{ key: 'item', label: 'Item' }, { key: 'state', label: 'State' }], rows: [['Tests', 'green'], ['Docs', 'draft'], ['Changelog', 'done']] },
+          { type: 'progress', label: 'Reviewed', percent: 72 },
+        ],
+      },
+    })]
+  }
+  if (/^\s*大视图/.test(userText) && tools.has('show_view')) {
+    // Big but valid: every text node stays under the component limit, the whole
+    // blueprint just under the byte limit.
+    return [tool('show_view', { title: 'A long note', view: { type: 'stack', children: [0, 1, 2, 3].map(() => ({ type: 'text', text: 'x'.repeat(1900) })) }, await_reply: false })]
+  }
+  // 视图图表, 视图计算器 and 视图网页 cover the chart kinds, inputs with formulas
+  // and a submit, and the sandboxed html frame.
+  if (/^\s*视图图表/.test(userText) && tools.has('show_view')) {
+    return [text('B 最快，D 最慢。下面是四个模型的首字延迟（示例数据）：'), tool('show_view', {
+      view: {
+        type: 'stack',
+        children: [
+          { type: 'chart', kind: 'bar', categories: ['Model A', 'Model B', 'Model C', 'Model D'], series: [{ name: 'p50', values: [420, 310, 520, 680] }, { name: 'p95', values: [690, 540, 810, 1150] }], unit: 'ms', caption: 'Time to first token, sample data' },
+          { type: 'row', children: [{ type: 'chart', kind: 'line', categories: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'], series: [{ name: 'Requests', values: [120, 180, 160, 240, 210] }] }, { type: 'chart', kind: 'donut', categories: ['Cached', 'Fresh', 'Failed'], series: [{ values: [62, 33, 5] }], unit: '%' }] },
+          { type: 'sources', items: [{ label: 'Bench notes', url: 'https://example.com/bench' }] },
+        ],
+      },
+    })]
+  }
+  if (/^\s*视图计算器/.test(userText) && tools.has('show_view')) {
+    return [text('拖一下滑块看看每月要花多少：'), tool('show_view', {
+      title: 'Monthly cost',
+      view: {
+        type: 'stack',
+        let: { tokens: 'req * 30 * 2000 / 1e6', cost: 'tokens * (1 - hit) * 2 + tokens * hit * 0.5' },
+        children: [
+          { type: 'slider', id: 'req', label: 'Requests a day', min: 100, max: 5000, step: 100, value: 1200 },
+          { type: 'choice', id: 'hit', label: 'Cache hits', options: [{ label: 'Low', value: 0.2 }, { label: 'Mid', value: 0.5 }, { label: 'High', value: 0.8 }], value: 0.5 },
+          { type: 'row', children: [
+            { type: 'metric', label: 'Cost a month', value: { '=': "'¥' + format(cost, 0)" }, tone: { '=': "cost > 100 ? 'bad' : 'good'" } },
+            { type: 'metric', label: 'Tokens a month', value: { '=': "format(tokens, 1) + ' M'" } },
+          ] },
+          { type: 'progress', label: 'Basic plan (¥100)', value: { '=': 'min(cost, 100)' }, max: 100, valueLabel: { '=': "cost > 100 ? '¥' + format(cost - 100, 0) + ' over' : '¥' + format(100 - cost, 0) + ' left'" }, tone: { '=': "cost > 100 ? 'bad' : cost > 80 ? 'warn' : 'good'" } },
+          { type: 'callout', text: 'Assumes 2,000 tokens a request and list prices.', tone: 'info' },
+          { type: 'submit', id: 'send', label: 'Send to Bot' },
+        ],
+      },
+    })]
+  }
+  if (/^\s*视图网页/.test(userText) && tools.has('show_view')) {
+    return [tool('show_view', {
+      view: {
+        type: 'html', summary: 'Six seats, two taken', height: 96,
+        html: '<style>.g{display:grid;grid-template-columns:repeat(6,1fr);gap:8px}.s{height:40px;border-radius:8px;background:var(--bt-hover);border:0;color:var(--bt-ink);font:inherit;cursor:pointer}.s[data-on]{background:var(--bt-accent);color:#fff}.s:disabled{opacity:.4}</style><div class="g"></div><p id="n" style="color:var(--bt-ink-2);margin:8px 0 0">Pick a seat</p><script>const g=document.querySelector(".g");for(let i=1;i<=6;i++){const b=document.createElement("button");b.className="s";b.textContent="A"+i;if(i===2||i===5)b.disabled=true;b.onclick=()=>{b.toggleAttribute("data-on");document.getElementById("n").textContent=[...g.querySelectorAll("[data-on]")].map(x=>x.textContent).join(", ")||"Pick a seat"};g.append(b)}</script>',
+      },
+    })]
+  }
   // Streams slowly, then checks the team: exercises the activity row stepping aside
   // for a streaming reply and coming back for the tool.
   if (/^\s*慢慢说/.test(userText) && tools.has('list_bots')) {
@@ -483,7 +571,8 @@ function decide(body) {
 
 // The memory panel's summary: headed paragraphs that restate the listed entries.
 function memorySummary(request) {
-  const name = /Here is everything (.+?) remembers/.exec(request)?.[1] ?? 'Bot'
+  const asked = /Here is everything (?:the group chat "(.+?)"|(.+?)) remembers/.exec(request)
+  const name = asked?.[1] ?? asked?.[2] ?? 'Bot'
   const zh = /Write the summary in [^,]*Chinese/.test(request)
   const [own = [], team = []] = request.split(/^## .*$/m).slice(1, 3).map(part => part.split('\n')
     .filter(line => line.startsWith('- ')).map(line => line.slice(2).replace(/^\[\[[^\]]+\]\]\s*/, '').replace(/[。.]$/u, '')))
@@ -584,7 +673,14 @@ function searchApi(req, res) {
 
 const server = createServer((req, res) => {
   if (req.method === 'POST' && req.url === '/api/web_search') return searchApi(req, res)
-  if (req.method !== 'POST' || !req.url.endsWith('/v1/messages')) {
+  // Anthropic's own client, which a provider set up by hand uses, adds a query string.
+  const path = req.url.split('?')[0]
+  if (req.method === 'GET' && path.endsWith('/v1/models')) {
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ data: [{ type: 'model', id: 'mock-model', display_name: 'Mock Model' }, { type: 'model', id: 'mock-model-mini', display_name: 'Mock Model Mini' }], has_more: false }))
+    return
+  }
+  if (req.method !== 'POST' || !path.endsWith('/v1/messages')) {
     res.writeHead(404, { 'content-type': 'application/json' })
     res.end(JSON.stringify({ error: { message: `no route ${req.method} ${req.url}` } }))
     return

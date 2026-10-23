@@ -170,7 +170,8 @@ export function install(rt) {
   }
 
   async function runCheck() {
-    const source = sourceOf(await installSpecOf(ctx))
+    // The desktop app updates as a whole, with this package inside it.
+    const source = process.env.DS_BOT_APP === '1' ? { kind: 'app' } : sourceOf(await installSpecOf(ctx))
     status.source = source.kind
     let found = null
     try {

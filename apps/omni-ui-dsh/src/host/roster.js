@@ -1,13 +1,12 @@
 // Roster: creating, changing, and deleting Bots and group chats, the Main Bot role, and
 // the first Main Bot of a new team.
 import { mkdir } from 'node:fs/promises'
-import { join } from 'node:path'
 import { MAX_AVATAR_IMAGE, ROOM_MAX_MEMBERS, ROOM_MODES, ROOM_NAME_MAX, ROOM_NOTICE_MAX } from './constants.js'
 import { currentColor, isColor, normalize, unquote } from './text.js'
 import { nameProblem } from '../shared/mentions.js'
 
 export function install(rt) {
-  const { ctx, config, home, defaults, state } = rt
+  const { ctx, defaults, state } = rt
 
   let bootstrapping = null
 
@@ -23,7 +22,7 @@ export function install(rt) {
       await keepTeamFolder()
       return state.workspaceId
     }
-    const path = config.workspace ?? join(home, 'workspace')
+    const path = rt.defaultTeamFolder()
     await mkdir(path, { recursive: true })
     const workspace = await ctx.workspaceRegistry.resolveByPath(path) ?? await ctx.workspaceRegistry.create(path, 'DS Bot')
     state.workspaceId = workspace.id
@@ -108,7 +107,10 @@ export function install(rt) {
     const cleanAvatarValue = cleanAvatar(avatar)
     // The model is fixed at creation, so a later change of the DSH default leaves it alone.
     const modelRef = model ? await rt.resolveModel(model) : pickModel ? undefined : await rt.defaultModel()
-    const effortId = modelRef !== undefined && effort !== undefined ? await rt.resolveEffort(modelRef, effort) : undefined
+    // A thinking level needs a model to resolve against; with none it would be dropped
+    // silently, so the create fails before a Session is made.
+    if (effort !== undefined && effort !== '' && modelRef === undefined) throw new Error('Pick a model before choosing a thinking level')
+    const effortId = modelRef === undefined ? undefined : await rt.resolveEffort(modelRef, effort)
     const dir = workDir === undefined || workDir === null ? undefined : await rt.cleanWorkDir(workDir)
     const id = await createSession(cleanName, { dir })
     try {
@@ -206,9 +208,24 @@ export function install(rt) {
   async function updateBot(id, patch) {
     const bot = rt.botOf(id)
     if (bot === undefined) throw new Error('Unknown Bot')
-    // Checked first, so a folder that does not pass leaves the rest unchanged too.
+    // Checked first, so a folder, model or level that does not pass leaves the rest
+    // unchanged too.
     const moving = patch.workDir !== undefined
     const workDir = moving ? await rt.cleanWorkDir(patch.workDir ?? '') : undefined
+    const modelRef = patch.model === undefined ? undefined
+      : patch.model === null || patch.model === '' ? null
+      : await rt.resolveModel(patch.model)
+    // A new level resolves against the model the Bot will run on: the new one, the
+    // model it keeps, or — the model cleared — the one it last ran on.
+    const effortRef = modelRef === undefined ? bot.model ?? bot.appliedModel : modelRef ?? bot.appliedModel
+    let effortId
+    if (patch.effort !== undefined) {
+      if (patch.effort === null || patch.effort === '') effortId = null
+      else {
+        if (effortRef === undefined) throw new Error('Pick a model before choosing a thinking level')
+        effortId = await rt.resolveEffort(effortRef, patch.effort)
+      }
+    }
     if (patch.name !== undefined) {
       const next = String(patch.name).trim().slice(0, 40)
       const clash = rt.findBot(next)
@@ -235,17 +252,13 @@ export function install(rt) {
       else delete bot.avatar
     }
     if (patch.model !== undefined) {
-      if (patch.model === null || patch.model === '') delete bot.model
-      else bot.model = await rt.resolveModel(patch.model)
+      if (modelRef === null) delete bot.model
+      else bot.model = modelRef
       modelChanged = true
     }
     if (patch.effort !== undefined) {
-      if (patch.effort === null || patch.effort === '') delete bot.effort
-      else {
-        const ref = bot.model ?? bot.appliedModel
-        if (ref === undefined) throw new Error('Pick a model before choosing a thinking level')
-        bot.effort = await rt.resolveEffort(ref, patch.effort)
-      }
+      if (effortId === null) delete bot.effort
+      else bot.effort = effortId
       modelChanged = true
     }
     if (patch.permission !== undefined) await rt.setPermission(bot, patch.permission)
@@ -267,7 +280,7 @@ export function install(rt) {
   }
 
   async function setFlags(id, { pinned, hidden }) {
-    const entry = rt.botOf(id) ?? rt.roomOf(id) ?? state.agents[id]
+    const entry = rt.botOf(id) ?? rt.roomOf(id) ?? rt.own(state.agents, id)
     if (entry === undefined) throw new Error('Unknown conversation')
     if (typeof pinned === 'boolean') entry.pinned = pinned
     if (typeof hidden === 'boolean') entry.hidden = hidden
@@ -395,10 +408,19 @@ export function install(rt) {
     // A Bot's own permissions are the user's to set, so a group's are too.
     if (patch.permission !== undefined && actorId !== undefined) throw new Error(`Only the user can set the permissions of "${room.name}"`)
     const permission = patch.permission === undefined ? undefined : rt.cleanRoomPermission(patch.permission)
+    // The relay limit is the user's guard against a group that never stops; it is
+    // not a member's to move, whatever its role.
+    if (patch.relayLimit !== undefined && actorId !== undefined) throw new Error(`Only the user can set the relay limit of "${room.name}"`)
+    let relayLimit
+    if (patch.relayLimit === null) relayLimit = null
+    else if (patch.relayLimit !== undefined) {
+      if (!Number.isInteger(patch.relayLimit) || patch.relayLimit < 1 || patch.relayLimit > 200) throw new Error('Relay limit must be a whole number from 1 to 200')
+      relayLimit = patch.relayLimit
+    }
     // The second run is the last check before the change is written, so no other change
     // can take the name in between.
     const name = patch.name === undefined ? undefined : cleanRoomName(patch.name, room.id)
-    return { members, admin, name, notice, permission }
+    return { members, admin, name, notice, permission, relayLimit }
   }
 
   // `actorId` is the Bot asking, or undefined for the user. Returns what changed, in words.
@@ -411,7 +433,7 @@ export function install(rt) {
     // No await from here until every change is written.
     const room = rt.roomOf(id)
     if (room === undefined) throw new Error('Unknown group chat')
-    const { members, admin, name, notice, permission } = planRoomChange(room, patch, actorId)
+    const { members, admin, name, notice, permission, relayLimit } = planRoomChange(room, patch, actorId)
 
     const changes = []
     const names = ids => ids.map(member => rt.botOf(member)?.name).filter(Boolean).join(', ')
@@ -431,6 +453,11 @@ export function install(rt) {
     if (patch.mode !== undefined && patch.mode !== room.mode) {
       room.mode = patch.mode
       changes.push(patch.mode === 'admin' ? 'plain messages now go to the admin first' : 'every member now replies in turn')
+    }
+    if (relayLimit !== undefined && relayLimit !== (room.relayLimit ?? null)) {
+      if (relayLimit === null) delete room.relayLimit
+      else room.relayLimit = relayLimit
+      changes.push(relayLimit === null ? 'Bots pause at the default relay count again' : `Bots now pause after ${relayLimit} relays`)
     }
     if (notice !== undefined && notice !== (room.notice ?? '')) {
       room.notice = notice
@@ -467,10 +494,13 @@ export function install(rt) {
   async function deleteRoom(id) {
     const room = rt.roomOf(id)
     if (room === undefined) throw new Error('Unknown group chat')
+    // Before the group's Sessions leave the state, which the archive reads.
+    const archived = rt.archiveGroupMemory(room)
     for (const botId of Object.keys(room.sessions ?? {})) rt.dropGroupSession(room, botId)
     delete state.rooms[id]
     rt.roomInbox.delete(id)
     rt.dropGroupLines(id)
+    await archived
     const failed = await saveForDelete()
     // Armed scheduled tasks refuse a plain archive and would keep delivering into
     // the deleted group; the session-stop that stopActivity runs removes them.
@@ -523,7 +553,9 @@ export function install(rt) {
     delete state.bots[id]
     for (const part of parts) {
       delete state.questions[part]
+      if (state.views !== undefined) delete state.views[part]
       delete state.exchangeTurns[part]
+      delete state.switching[part]
     }
     const touched = []
     for (const room of Object.values(state.rooms)) {
