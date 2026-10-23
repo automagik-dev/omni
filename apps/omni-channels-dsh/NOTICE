@@ -1,8 +1,8 @@
 Omni channels for DeepSeek Harness (@automagik/omni-channels-dsh)
 Copyright 2026 Namastex Labs and the Omni contributors
 
-This plugin was split out of @automagik/omni-dsh (apps/omni-ui-dsh), which is built on
-DS Bot; that package's notice follows.
+This plugin was split out of @automagik/omni-dsh (apps/omni-ui-dsh), now @automagik/bots-dsh
+in automagik-dev/automagik, which is built on DS Bot; that package's notice follows.
 
 DS Bot
 Copyright 2026 Fei2411 and the DS Bot contributors

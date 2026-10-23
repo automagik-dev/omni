@@ -1,7 +1,8 @@
 // Generated from src/client by `npm run build` (scripts/build-client.mjs). Do not edit by hand.
 window.__ModuleLoader__.load({
   id: '@automagik/omni-canvas-dsh',
-  factory: (require) => {
+  factory: (dshRequire) => {
+const require = (spec) => { if (spec !== '@automagik/bots-dsh/client') return dshRequire(spec); try { return dshRequire(spec) } catch (error) { try { return dshRequire('@automagik/omni-dsh/client') } catch { throw error } } }
 const module = { exports: {} }
 "use strict";
 var __create = Object.create;
@@ -18396,7 +18397,7 @@ function checkProgram(program) {
 var refusalText = (refusal) => refusal.text.replace(/\{(\w+)\}/g, (whole, key) => String(refusal.params?.[key] ?? whole));
 
 // src/client/core.js
-var import_client = require("@automagik/omni-dsh/client");
+var import_client = require("@automagik/bots-dsh/client");
 var import_client2 = require("@automagik/omni-channels-dsh/client");
 var { call, t, addStrings, onShell, toolCards, setCanvasRenderer } = import_client.omni;
 var live = import_client2.channels;

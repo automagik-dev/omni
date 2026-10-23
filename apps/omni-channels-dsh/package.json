@@ -46,15 +46,25 @@
     "dsh": ">=0.2.1-rc.2 <0.3.0"
   },
   "peerDependencies": {
+    "@automagik/bots-dsh": ">=3.261023.1",
     "@automagik/omni-dsh": ">=2.261019.10",
     "@deepseek-ai/cordis": "*",
     "@deepseek-ai/dsh-llm": "*",
     "@deepseek-ai/dsh-tools": "*"
   },
+  "peerDependenciesMeta": {
+    "@automagik/bots-dsh": {
+      "optional": true
+    },
+    "@automagik/omni-dsh": {
+      "optional": true
+    }
+  },
   "dsh": {
     "client": {
       "platform": "web",
       "external": [
+        "@automagik/bots-dsh/client",
         "@automagik/omni-dsh/client"
       ]
     },

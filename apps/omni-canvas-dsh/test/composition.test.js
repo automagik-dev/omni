@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { TEAM_TOOLS } from '@automagik/omni-dsh/src/host/constants.js'
+import { TEAM_TOOLS } from '@automagik/bots-dsh/src/host/constants.js'
 import * as plugin from '../index.js'
 import { applyAll, composed, fakeContext, teamFile } from './team.js'
 

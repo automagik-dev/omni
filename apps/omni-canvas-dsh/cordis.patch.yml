@@ -1,4 +1,4 @@
-# Mounts Omni's canvases beside the Omni team (@automagik/omni-dsh, row omni-ui) and its
+# Mounts Omni's canvases beside the Bot team (@automagik/bots-dsh, formerly @automagik/omni-dsh; row omni-ui) and its
 # channels (@automagik/omni-channels-dsh, row omni-channels), whose runtimes it injects as
 # the omniTeam and omniChannels services; the browser half is discovered through the
 # package's dsh.client manifest and ./client export.

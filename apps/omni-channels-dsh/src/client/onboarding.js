@@ -3,7 +3,7 @@
 //
 // The step completes at once when this DSH already reaches an Omni (a paired link, or the
 // older profile URL and key), and when the user skipped it before, unless they reopened
-// it on purpose. A skip is kept by the omni-ai plugin (@automagik/omni-ai-dsh), whose
+// it on purpose. A skip is kept by the omni-ai plugin (@automagik/welcome-dsh), whose
 // settings entry holds the other onboarding flags; a DSH without it keeps the skip in
 // this plugin's own browser storage.
 
@@ -11,7 +11,7 @@ export const CONNECT_STEP = Object.freeze({ id: 'omni-connect', order: -250 })
 // Where a skip is kept without omni-ai: the browser-storage key the team's own plugin
 // used while the step was its own, under its omni-ui prefix.
 const SKIPPED_KEY = 'omni-ui:connect-omni-skipped'
-// omni-ai's host endpoint (apps/omni-ai-dsh/src/host/endpoint.js); document-relative like
+// omni-ai's host endpoint (apps/welcome-dsh/src/host/endpoint.js in automagik-dev/automagik); document-relative like
 // this plugin's own api/omni-ui.
 const OMNI_AI_ROUTE = 'api/omni-ai'
 
@@ -59,7 +59,11 @@ export function noteStepShown() {
   stepsShown += 1
   return () => { stepsShown -= 1 }
 }
-export const stepShown = () => stepsShown > 0
+// The welcome's onboarding steps (@automagik/welcome-dsh) count themselves on this shared
+// counter while they show: its team step installs this plugin mid-onboarding, and the wizard
+// must not open on top of it.
+const OMNI_AI_SHOWING = Symbol.for('automagik.omni.onboarding-showing')
+export const stepShown = (scope = globalThis) => stepsShown > 0 || (scope[OMNI_AI_SHOWING] ?? 0) > 0
 
 // Whether the link this host reports reaches an Omni.
 export const isConnected = link => link?.linked === true || link?.configured === true

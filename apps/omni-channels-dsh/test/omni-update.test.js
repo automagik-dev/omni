@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { afterEach, test } from 'node:test'
 import { install as installDiscover } from '../src/host/omni-discover.js'
 import { FORBIDDEN, install, REFUSALS, TERMINAL_COMMAND } from '../src/host/omni-update.js'
-import { install as installHooks } from '@automagik/omni-dsh/src/host/extend.js'
+import { install as installHooks } from '@automagik/bots-dsh/src/host/extend.js'
 
 const realFetch = globalThis.fetch
 const realEnv = { HOME: process.env.HOME, OMNI_CONFIG_DIR: process.env.OMNI_CONFIG_DIR, OMNI_HOME: process.env.OMNI_HOME }

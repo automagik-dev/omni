@@ -1,7 +1,8 @@
 // Generated from src/client by `npm run build` (scripts/build-client.mjs). Do not edit by hand.
 window.__ModuleLoader__.load({
   id: '@automagik/omni-channels-dsh',
-  factory: (require) => {
+  factory: (dshRequire) => {
+const require = (spec) => { if (spec !== '@automagik/bots-dsh/client') return dshRequire(spec); try { return dshRequire(spec) } catch (error) { try { return dshRequire('@automagik/omni-dsh/client') } catch { throw error } } }
 const module = { exports: {} }
 "use strict";
 var __defProp = Object.defineProperty;
@@ -10672,7 +10673,8 @@ function noteStepShown() {
     stepsShown -= 1;
   };
 }
-var stepShown = () => stepsShown > 0;
+var OMNI_AI_SHOWING = /* @__PURE__ */ Symbol.for("automagik.omni.onboarding-showing");
+var stepShown = (scope = globalThis) => stepsShown > 0 || (scope[OMNI_AI_SHOWING] ?? 0) > 0;
 var isConnected = (link) => link?.linked === true || link?.configured === true;
 async function gateConnect({ explicit, complete }, { request, omniAi = callOmniAi, storage: storage2 = localStore() } = {}) {
   let link = null;
@@ -10708,7 +10710,7 @@ async function skipConnect({ complete }, { omniAi = callOmniAi, storage: storage
 }
 
 // src/client/core.js
-var import_client = require("@automagik/omni-dsh/client");
+var import_client = require("@automagik/bots-dsh/client");
 var { call, t, addStrings, onShell, toolCards, nav, badges, botChildren, headerButtons, botSettings } = import_client.omni;
 var { OmniMark, BotMark, MAIN_LOOK, CHARACTERS, relativeShort, createSource } = import_client.omni.ui;
 var icons = import_client.omni.ui.icons;

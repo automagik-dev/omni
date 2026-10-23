@@ -17,7 +17,7 @@ async function load() {
   const bundle = await build({
     stdin: { contents: entry, resolveDir: fileURLToPath(new URL('../src/client/', import.meta.url)), loader: 'js' },
     bundle: true, format: 'cjs', platform: 'node', write: false, logLevel: 'silent',
-    external: ['react', 'react-dom', '@automagik/omni-dsh/client'],
+    external: ['react', 'react-dom', '@automagik/bots-dsh/client'],
     loader: { '.css': 'text' },
   })
   const module = { exports: {} }
@@ -26,7 +26,7 @@ async function load() {
     useState: initial => [typeof initial === 'function' ? initial() : initial, () => {}],
     useEffect: () => {}, useRef: current => ({ current }), useCallback: fn => fn, useSyncExternalStore: (_subscribe, snapshot) => snapshot(),
   }
-  runInNewContext(bundle.outputFiles[0].text, { module, exports: module.exports, URL, require: name => ({ react, 'react-dom': { createPortal: node => node }, '@automagik/omni-dsh/client': { omni } })[name] })
+  runInNewContext(bundle.outputFiles[0].text, { module, exports: module.exports, URL, require: name => ({ react, 'react-dom': { createPortal: node => node }, '@automagik/bots-dsh/client': { omni } })[name] })
   return module.exports
 }
 const ui = await load()
@@ -135,4 +135,9 @@ test('the wizard opens by itself once, only when there is no Omni and no skip, a
   release()
   assert.equal(later.map.has(ui.AUTO_OPENED), false)
   assert.deepEqual(await run(later, { shown: ui.stepShown }), { result: true, opened: 1 })
+  // The welcome's onboarding on screen (it installed this plugin from its team step) counts too.
+  const showing = Symbol.for('automagik.omni.onboarding-showing')
+  assert.equal(ui.stepShown({ [showing]: 1 }), true)
+  assert.equal(ui.stepShown({ [showing]: 0 }), false)
+  assert.equal(ui.stepShown({}), false)
 })

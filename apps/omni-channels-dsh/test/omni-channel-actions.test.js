@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { FORBIDDEN_CHANGE, FORBIDDEN_SEND, install, scopeAllows } from '../src/host/omni-channel-actions.js'
-import { install as installHooks } from '@automagik/omni-dsh/src/host/extend.js'
+import { install as installHooks } from '@automagik/bots-dsh/src/host/extend.js'
 
 const KEY = 'omni_sk_linked_secret'
 const CHANNEL = '11111111-2222-4333-8444-555555555555'

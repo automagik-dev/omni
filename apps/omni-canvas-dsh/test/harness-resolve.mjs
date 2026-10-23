@@ -3,17 +3,20 @@
 // the packages that `bun run harness` installs in dev/harness, else the nearest
 // deepseek-harness/ checkout in a folder above the plugin, else the same search from the
 // plugin's place in the main worktree (a git worktree has no checkout of its own). The
-// Omni team (@automagik/omni-dsh) and channels (@automagik/omni-channels-dsh) are this
-// repository's apps/omni-ui-dsh and apps/omni-channels-dsh, or OMNI_DSH_CORE and
-// OMNI_DSH_CHANNELS; tests compose their runtimes with this plugin's.
+// Bot team (@automagik/bots-dsh, formerly @automagik/omni-dsh) is automagik-dev/automagik's
+// apps/bots-dsh at the release apps/automagik.json pins (apps/automagik.mjs fetches it into
+// apps/.automagik), and the channels (@automagik/omni-channels-dsh) this repository's
+// apps/omni-channels-dsh; or OMNI_DSH_CORE and OMNI_DSH_CHANNELS. Tests compose their
+// runtimes with this plugin's.
 import { execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { registerHooks } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { checkoutSource } from '../../automagik.mjs'
 
 const plugin = resolve(import.meta.dirname, '..')
-const core = resolve(process.env.OMNI_DSH_CORE ?? join(plugin, '..', 'omni-ui-dsh'))
+const core = resolve(process.env.OMNI_DSH_CORE ?? join(checkoutSource(), 'apps', 'bots-dsh'))
 const channels = resolve(process.env.OMNI_DSH_CHANNELS ?? join(plugin, '..', 'omni-channels-dsh'))
 const above = (start) => {
   for (let dir = start; ; dir = dirname(dir)) {
@@ -45,7 +48,7 @@ process.env.OMNI_DSH_CHANNELS = channels
 const base = resolve(harness, 'packages/bundle/base/package.json')
 const anchor = pathToFileURL(existsSync(base) ? base : resolve(harness, 'package.json')).href
 const owners = [plugin, core, channels].map(dir => `${pathToFileURL(dir).href}/`)
-const SIBLINGS = { '@automagik/omni-dsh': core, '@automagik/omni-channels-dsh': channels }
+const SIBLINGS = { '@automagik/bots-dsh': core, '@automagik/omni-dsh': core, '@automagik/omni-channels-dsh': channels }
 const clientShim = pathToFileURL(join(plugin, 'test', 'omni-client.js')).href
 
 registerHooks({
@@ -54,7 +57,7 @@ registerHooks({
     if (specifier.startsWith('@deepseek-ai/') && fromOurs) return nextResolve(specifier, { ...context, parentURL: anchor })
     // The other plugins' client bundles as DSH hands them over (omni-client.js); their
     // entries, or any file of theirs, by path rather than exports.
-    if (specifier === '@automagik/omni-dsh/client' || specifier === '@automagik/omni-channels-dsh/client') return nextResolve(clientShim, context)
+    if (['@automagik/bots-dsh/client', '@automagik/omni-dsh/client', '@automagik/omni-channels-dsh/client'].includes(specifier)) return nextResolve(clientShim, context)
     for (const [name, dir] of Object.entries(SIBLINGS)) {
       const url = `${pathToFileURL(dir).href}/`
       if (specifier === name) return nextResolve(`${url}index.js`, context)

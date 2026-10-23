@@ -57,6 +57,7 @@
       "bin",
       "*.generated.ts",
       "marketplace/automagik.json",
+      "apps/.automagik",
       "omni-*",
       ".worktrees",
       ".genie",

@@ -1,10 +1,15 @@
 # Omni channels for DSH
 
-`@automagik/omni-channels-dsh` brings your Omni into the Omni team for DeepSeek Harness
+`@automagik/omni-channels-dsh` brings your Omni into the Bot team for DeepSeek Harness
 (DSH): link this DSH to an Omni, see its channels and chats, and let Omni, the Main Bot,
 operate the platform and run your automations. It sits on the team plugin
-(`@automagik/omni-dsh`, [apps/omni-ui-dsh](../omni-ui-dsh/README.md#three-plugins)) and
-needs it; the canvas plugin (`@automagik/omni-canvas-dsh`) sits on this one.
+(`@automagik/bots-dsh`, [apps/bots-dsh in automagik-dev/automagik](https://github.com/automagik-dev/automagik/tree/dev/apps/bots-dsh#three-plugins))
+and needs it; the canvas plugin (`@automagik/omni-canvas-dsh`) sits on this one.
+
+The team was `@automagik/omni-dsh` (this repository's `apps/omni-ui-dsh`) until it moved to
+Automagik. This plugin works on either: in a DSH that still runs `@automagik/omni-dsh`, its
+client takes the team's client under that name (`scripts/build-client.mjs`), and the team
+runtime is the same `omniTeam` service.
 
 > Labs release. Features, tools and the saved data format can still change.
 
@@ -25,19 +30,19 @@ needs it; the canvas plugin (`@automagik/omni-canvas-dsh`) sits on this one.
 - **Omni's rules**: how to operate Omni, hand work to Tasks and run automations, as a part
   of the Main Bot's rules inside the team's prompt section.
 - **Connect Omni**, the onboarding step `omni-connect` (order −250), between the Omni AI
-  plugin's welcome (−300) and Connect AI (−200). A skip is kept by `@automagik/omni-ai-dsh`
+  plugin's welcome (−300) and Connect AI (−200). A skip is kept by `@automagik/welcome-dsh`
   when it is installed, else in this browser.
 
 ## Install
 
-The plugin needs DSH `>=0.2.1-rc.2 <0.3.0` and the Omni team plugin. Add the Automagik
+The plugin needs DSH `>=0.2.1-rc.2 <0.3.0` and the Bot team plugin. Add the Automagik
 marketplace index to DSH's plugin market ([marketplace/README.md](../../marketplace/README.md)
 has the URL and the steps) and install `@automagik/omni-channels-dsh` from it. DSH applies
 the bundle patch (`cordis.patch.yml`), which adds one row, `id: omni-channels`, and changes
 nothing else. Restart DSH.
 
 From a checkout, link it into a profile next to the team plugin; the team's
-[README](../omni-ui-dsh/README.md#install) has the profile.
+[README](https://github.com/automagik-dev/automagik/tree/dev/apps/bots-dsh#install) has the profile.
 
 ## Connect to an Omni
 
@@ -71,8 +76,9 @@ this row's config, or on the team's `omni-ui` row where it lived before this plu
   `automation-*` endpoints of `POST /api/omni-ui` (the reads also on a host that only reads
   the team), the automations in the team view, the events Omni listens to in every state
   answer, and the operator rules. It provides its runtime as `omniChannels`.
-- **Browser**: `client.js` names `@automagik/omni-dsh/client` in `dsh.client.external`, so
-  DSH loads the team's bundle first and this one shares it: the host call, the interface
+- **Browser**: `client.js` names `@automagik/bots-dsh/client` (and the team's former name,
+  `@automagik/omni-dsh/client`) in `dsh.client.external`, so DSH loads the team's bundle
+  first and this one shares it: the host call, the interface
   copy (this plugin's Chinese copy joins it with `addStrings`), and the registries it adds
   its tool cards, account-menu row, row badge, header button and Bot-surface panels to. It
   exports `channels`, the live views of omni the canvas plugin draws with.
@@ -85,7 +91,7 @@ this row's config, or on the team's `omni-ui` row where it lived before this plu
 ```sh
 npm ci               # esbuild and qrcode-generator, for the client bundle (see below)
 bun run harness      # the pinned DSH release the tests and the linter run against
-bun run test         # composes the team (../omni-ui-dsh) with this plugin, on Node
+bun run test         # composes the team (the Automagik release apps/automagik.json pins) with this plugin, on Node
 bun run lint
 bun run build        # rewrites client.js and src/host/omni-routes.js; commit them
 node scripts/build-client.mjs --check
@@ -95,8 +101,10 @@ The folder's own lockfile is npm's: Bun resolves every peer from the registry, a
 peers on the Omni plugins, which ship through the Automagik market rather than npm.
 
 `client.js` is generated from `src/client` and committed, so git and `link:` installs need
-no build step. The tests load the team plugin from `../omni-ui-dsh` (or `OMNI_DSH_CORE`):
-its `index.js`, its test context, and its committed `client.js`.
+no build step. The tests load the team plugin from automagik-dev/automagik at the release
+`apps/automagik.json` pins (`node ../automagik.mjs source` fetches its `apps/bots-dsh` into
+`apps/.automagik`; or `OMNI_DSH_CORE`): its `index.js`, its test context, and its committed
+`client.js`.
 
 | Path | Purpose |
 |---|---|

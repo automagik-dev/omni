@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { DISCORD_PERMISSIONS, discordInviteUrl, install } from '../src/host/omni-channel-actions.js'
-import { install as installHooks } from '@automagik/omni-dsh/src/host/extend.js'
+import { install as installHooks } from '@automagik/bots-dsh/src/host/extend.js'
 import { ADD, ORDER, copiedTelegramToken, isTelegramToken, offered, telegramChat } from '../src/client/channel-add.js'
 import { dismiss, dismissedFor, updateBar } from '../src/client/update-bar.js'
 import { CHANNEL_TYPES } from '../src/client/omni-store.js'

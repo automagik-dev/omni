@@ -1,4 +1,4 @@
-// Omni's channels for DeepSeek Harness, on the Omni team (@automagik/omni-dsh): the Omni
+// Omni's channels for DeepSeek Harness, on the Bot team (@automagik/bots-dsh): the Omni
 // this DSH is linked to (omni.json, pairing), its channels and chats, the Main Bot's tools
 // that operate it, the events it streams and the automations that act on them.
 //

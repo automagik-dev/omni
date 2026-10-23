@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { KEY, channelOf, chatOf, initialsOf, install, messageOf, statusOf } from '../src/host/omni.js'
-import { install as installHooks } from '@automagik/omni-dsh/src/host/extend.js'
+import { install as installHooks } from '@automagik/bots-dsh/src/host/extend.js'
 
 test('omni connection states fold into the four the view shows', () => {
   assert.equal(statusOf({ isActive: true }, { state: 'connected' }), 'connected')
