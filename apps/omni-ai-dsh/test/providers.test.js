@@ -25,9 +25,13 @@ function fakeAuthorization(flows = ['llm-pi-ai/kimi-coding', 'llm-pi-ai/openai-c
   }
 }
 
-function host({ entries = withPiAi(), authorization = fakeAuthorization(), services = {}, ...rest } = {}) {
+// Nothing answers on this computer's network, and no Claude Code, unless a test says so
+// (checkClaude: null runs the real check).
+const offline = async () => { throw new Error('offline') }
+const noClaude = async () => ({ plugin: false, installed: false, loggedIn: false })
+function host({ entries = withPiAi(), authorization = fakeAuthorization(), services = {}, checkClaude = noClaude, fetch = offline, ...rest } = {}) {
   const fake = fakeContext({ entries, services: { ...(authorization ? { authorization } : {}), ...services }, ...rest })
-  const { handle } = install(fake.ctx)
+  const { handle } = install(fake.ctx, { fetch, ...(checkClaude ? { checkClaude } : {}) })
   return { ...fake, handle, authorization }
 }
 
@@ -74,7 +78,7 @@ test('a key DSH would not route is taken back: the earlier key returns, or none 
   assert.equal(fresh.secrets.has('ZAI_API_KEY'), false)
 })
 
-test('two starts at once begin one sign-in and write the route once, with no settings conflict', async () => {
+test('two starts at once begin one sign-in; a cancelled one leaves no route behind', async () => {
   const fake = host()
   const [first, second] = await Promise.all([
     fake.handle('signin-start', { provider: 'kimi-coding' }),
@@ -82,19 +86,19 @@ test('two starts at once begin one sign-in and write the route once, with no set
   ])
   assert.equal(first.ok && second.ok, true, JSON.stringify([first, second]))
   assert.equal(fake.authorization.begun.length, 1)
-  assert.equal(fake.updates.length, 1)
-  // A route that is there already is not written again.
+  // Nothing is written while the sign-in runs.
+  assert.equal(fake.updates.length, 0)
   fake.authorization.begun[0].settle({ status: 'cancelled' })
   await tick()
-  assert.equal((await fake.handle('signin-start', { provider: 'kimi-coding' })).ok, true)
-  assert.equal(fake.updates.length, 1)
+  assert.equal(fake.updates.length, 0)
+  assert.deepEqual(fake.valueOf('llm-pi-ai').providers, {})
 })
 
 test('a sign-in adds the route, relays its notice and question, takes the answer and ends authorized', async () => {
   const fake = host()
   const started = await fake.handle('signin-start', { provider: 'openai-codex' })
   assert.equal(started.value.status, 'running')
-  assert.deepEqual(fake.valueOf('llm-pi-ai').providers['openai-codex'], {})
+  assert.equal(fake.valueOf('llm-pi-ai').providers['openai-codex'], undefined)
   const [attempt] = fake.authorization.begun
   assert.equal(attempt.key, 'llm-pi-ai/openai-codex')
   assert.equal(attempt.method, 'oauth')
@@ -112,7 +116,10 @@ test('a sign-in adds the route, relays its notice and question, takes the answer
 
   attempt.settle({ status: 'authorized' })
   await tick()
+  await tick()
   assert.equal((await fake.handle('signin-status', { provider: 'openai-codex' })).value.status, 'authorized')
+  // The route arrives with the finished sign-in.
+  assert.deepEqual(fake.valueOf('llm-pi-ai').providers['openai-codex'], {})
 })
 
 test('a second start while one runs joins it; cancel withdraws the attempt and its question', async () => {
@@ -172,13 +179,13 @@ test('claude-code finds the CLI, reads `claude auth status`, and sees the dsh-oh
   process.env.PATH = `${dir}:${path}`
   const llm = { listProviders: () => [{ id: 'deepseek-official' }, { id: 'claude-code' }] }
   try {
-    const fake = host({ services: { llm } })
+    const fake = host({ services: { llm }, checkClaude: null })
     const value = (await fake.handle('claude-code')).value
     assert.deepEqual(value, { plugin: true, installed: true, path: bin, reachable: true, loggedIn: true, email: 'owner@example.com', plan: 'max' })
     writeFileSync(bin, '#!/bin/sh\necho \'{"loggedIn":false}\'\n')
     assert.equal((await fake.handle('claude-code')).value.loggedIn, false)
     // Without the plugin's route, Claude cannot run here whatever the CLI says.
-    assert.equal((await host().handle('claude-code')).value.plugin, false)
+    assert.equal((await host({ checkClaude: null }).handle('claude-code')).value.plugin, false)
   } finally {
     process.env.PATH = path
   }

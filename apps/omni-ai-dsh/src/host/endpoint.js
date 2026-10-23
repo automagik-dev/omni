@@ -1,5 +1,7 @@
 import { CliproxyPayload, DonePayload, RequestBody, Secret, parse } from './payloads.js'
-import { createProviderActions } from './providers.js'
+import { createAiActions } from './ais.js'
+import { checkClaudeCode, createProviderActions, saveRoute, unsetRoute } from './providers.js'
+import { createTerminalActions } from './terminal.js'
 
 // The host endpoint the onboarding steps call: POST /api/omni-ai with
 // { endpoint, payload }, answered { ok: true, value } or { ok: false, error }.
@@ -10,7 +12,10 @@ import { createProviderActions } from './providers.js'
 //                      lists the gateway's models with the key, stores the key in DSH's
 //                      credential store and writes a pi-ai route that references it
 //   providers, provider-key, signin-*
-//                      the tiles' own connections (src/host/providers.js)
+//                      the rows' own connections (src/host/providers.js)
+//   ais, ai-switch, ai-dedupe
+//                      the rows themselves: what is found, set up and on (src/host/ais.js)
+//   ai-terminal-*      the terminal that signs Claude Code in (src/host/terminal.js)
 //
 // The key never enters settings, a reply or a log line: the route names it by the
 // env-shaped reference OMNI_AI_CLIPROXY_API_KEY, which DSH resolves per request.
@@ -120,7 +125,7 @@ const isConfigured = async (read) => {
   }
 }
 
-export function createActions(ctx, { fetch: fetchImpl = globalThis.fetch } = {}) {
+export function createActions(ctx, { fetch: fetchImpl = globalThis.fetch, anyOn } = {}) {
   return {
     async state() {
       const rows = describeAll(ctx)
@@ -134,7 +139,8 @@ export function createActions(ctx, { fetch: fetchImpl = globalThis.fetch } = {})
         connectOmniSkipped: own.connectOmniSkipped === true,
         deepseek,
         piAiRoutes,
-        aiConnected: deepseek || piAiRoutes.length > 0,
+        // Really on: a route that is set up, Claude Code signed in, or a subscription account.
+        aiConnected: anyOn ? await anyOn().catch(() => false) : deepseek || piAiRoutes.length > 0,
       }
     },
 
@@ -174,8 +180,14 @@ export function createActions(ctx, { fetch: fetchImpl = globalThis.fetch } = {})
   }
 }
 
-export function install(ctx, deps) {
-  const actions = { ...createActions(ctx, deps), ...createProviderActions(ctx) }
+export function install(ctx, deps = {}) {
+  const checkClaude = deps.checkClaude ?? (() => checkClaudeCode(ctx))
+  const ai = createAiActions(ctx, { fetch: deps.fetch, claudeCode: checkClaude, saveRoute: (provider, patch) => saveRoute(ctx, provider, patch), unsetRoute: provider => unsetRoute(ctx, provider) })
+  const terminal = createTerminalActions(ctx, { checkClaude, ...deps.terminal })
+  const { anyOn, ...aiEndpoints } = ai
+  const { closeAll, ...terminalEndpoints } = terminal
+  const actions = { ...createActions(ctx, { ...deps, anyOn }), ...createProviderActions(ctx), ...aiEndpoints, ...terminalEndpoints }
+  if (deps.checkClaude) actions['claude-code'] = () => checkClaude()
   const handle = async (endpoint, payload, signal) => {
     if (!Object.hasOwn(actions, endpoint)) return { ok: false, error: { code: 'omni-ai/not-found', message: `Unknown endpoint ${endpoint.slice(0, 40)}` } }
     try {
@@ -202,5 +214,6 @@ export function install(ctx, deps) {
       return new Response(JSON.stringify(result), { status: 200, headers: { 'content-type': 'application/json' } })
     },
   }), 'omni-ai: api route')
+  ctx.effect(() => closeAll, 'omni-ai: close terminals')
   return { actions, handle }
 }
