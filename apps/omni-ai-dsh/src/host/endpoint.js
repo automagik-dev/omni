@@ -3,6 +3,7 @@ import { createAiActions } from './ais.js'
 import { checkClaudeCode, createProviderActions, saveRoute, unsetRoute } from './providers.js'
 import { createTerminalActions } from './terminal.js'
 import { createCompanionActions } from './companion.js'
+import { createBotTypeActions } from './bot-types.js'
 
 // The host endpoint the onboarding steps call: POST /api/omni-ai with
 // { endpoint, payload }, answered { ok: true, value } or { ok: false, error }.
@@ -19,6 +20,9 @@ import { createCompanionActions } from './companion.js'
 //   ai-terminal-*      the terminal that signs Claude Code in (src/host/terminal.js)
 //   companion, companion-generate, companion-save, companion-image, team-save
 //                      the person's own companion and team (src/host/companion.js)
+//   omni-plugins, omni-plugins-install, bot-type
+//                      the Omni plugins, installed through DSH's plugin manager, and what
+//                      a Bot type starts with (src/host/bot-types.js)
 //
 // The key never enters settings, a reply or a log line: the route names it by the
 // env-shaped reference OMNI_AI_CLIPROXY_API_KEY, which DSH resolves per request.
@@ -197,7 +201,8 @@ export function install(ctx, deps = {}) {
   const terminal = createTerminalActions(ctx, { checkClaude, ...deps.terminal })
   const { anyOn, ...aiEndpoints } = ai
   const { closeAll, ...terminalEndpoints } = terminal
-  const actions = { ...createActions(ctx, { ...deps, anyOn }), ...createProviderActions(ctx), ...aiEndpoints, ...terminalEndpoints, ...createCompanionActions(ctx, deps.companion) }
+  const { team, omniProjectOf, ...companion } = createCompanionActions(ctx, deps.companion)
+  const actions = { ...createActions(ctx, { ...deps, anyOn }), ...createProviderActions(ctx), ...aiEndpoints, ...terminalEndpoints, ...companion, ...createBotTypeActions(ctx, { team, omniProjectOf }) }
   if (deps.checkClaude) actions['claude-code'] = () => checkClaude()
   const handle = async (endpoint, payload, signal) => {
     if (!Object.hasOwn(actions, endpoint)) return { ok: false, error: { code: 'omni-ai/not-found', message: `Unknown endpoint ${endpoint.slice(0, 40)}` } }

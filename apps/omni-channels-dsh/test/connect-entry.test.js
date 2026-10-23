@@ -135,4 +135,9 @@ test('the wizard opens by itself once, only when there is no Omni and no skip, a
   release()
   assert.equal(later.map.has(ui.AUTO_OPENED), false)
   assert.deepEqual(await run(later, { shown: ui.stepShown }), { result: true, opened: 1 })
+  // omni-ai's onboarding on screen (it installed this plugin from its team step) counts too.
+  const showing = Symbol.for('automagik.omni.onboarding-showing')
+  assert.equal(ui.stepShown({ [showing]: 1 }), true)
+  assert.equal(ui.stepShown({ [showing]: 0 }), false)
+  assert.equal(ui.stepShown({}), false)
 })

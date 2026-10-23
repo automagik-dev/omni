@@ -35,6 +35,8 @@ export const TeamPayload = z.object({
   genie: z.boolean().default(false),
   omniAbilities: z.record(z.string().regex(/^[a-z]{2,24}$/), z.boolean()).refine(value => Object.keys(value).length <= 12).optional(),
 })
+// A Bot type the team step describes.
+export const BotTypePayload = z.object({ type: z.enum(['omni']) })
 
 /** The parsed value, or undefined when it does not match. */
 export function parse(schema, value) {

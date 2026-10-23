@@ -2,7 +2,7 @@
 // app starts them, and reloads the browser whenever one changes: the live loop for working on
 // the UI.
 //
-//   node dev/live.mjs [--home ~/.omni-dev] [--port 3080] [--fresh]
+//   node dev/live.mjs [--home ~/.omni-dev] [--port 3080] [--fresh] [--plain]
 //
 // The DSH and its profile live under --home (DSH_HOME is <home>/dsh, the plugins' home is
 // <home>/ui), apart from any DSH or Omni desktop app you already run. --fresh empties it
@@ -29,14 +29,14 @@ const LIVE_PATH = '/__omni-live'
 // The plugins the desktop app ships, by folder, in its bundle order.
 const FOLDERS = ['omni-ui-dsh', 'omni-channels-dsh', 'omni-canvas-dsh', 'omni-ai-dsh']
 
-const options = { home: join(homedir(), '.omni-dev'), port: '3080', fresh: false }
+const options = { home: join(homedir(), '.omni-dev'), port: '3080', fresh: false, plain: false }
 const args = process.argv.slice(2)
 for (let i = 0; i < args.length; i++) {
   const key = args[i].replace(/^--/, '')
-  if (key === 'fresh') options.fresh = true
+  if (key === 'fresh' || key === 'plain') options[key] = true
   else if (key in options && args[i + 1] !== undefined) options[key] = args[++i]
   else {
-    console.error('usage: node dev/live.mjs [--home ~/.omni-dev] [--port 3080] [--fresh]')
+    console.error('usage: node dev/live.mjs [--home ~/.omni-dev] [--port 3080] [--fresh] [--plain]')
     process.exit(2)
   }
 }
@@ -67,7 +67,9 @@ mkdirSync(home, { recursive: true })
 writeFileSync(MARKER, 'made by apps/omni-ui-dsh/dev/live.mjs; --fresh may empty this folder\n')
 
 // The profile: the desktop app's bundles and settings, with each plugin linked in place.
-const plugins = FOLDERS.map(folder => ({ folder, dir: join(APPS, folder), name: readJson(join(APPS, folder, 'package.json')).name }))
+// --plain is a DSH without the Omni plugins: only omni-ai's onboarding is linked, and its
+// team step installs the rest through DSH's plugin manager, as in anyone's own DSH.
+const plugins = FOLDERS.filter(folder => !options.plain || folder === 'omni-ai-dsh').map(folder => ({ folder, dir: join(APPS, folder), name: readJson(join(APPS, folder, 'package.json')).name }))
 const profileDir = join(dshHome, 'profiles', PROFILE)
 mkdirSync(join(profileDir, 'node_modules', '@automagik'), { recursive: true })
 for (const plugin of plugins) {
@@ -90,21 +92,39 @@ const installed = name => {
     return null
   }
 }
-const writeProfile = () => writeFileSync(join(profileDir, 'package.json'), `${JSON.stringify({
-  name: 'omni-live-profile',
-  private: true,
-  dependencies: { ...Object.fromEntries(plugins.map(plugin => [plugin.name, `link:${plugin.dir}`])), ...Object.fromEntries(Object.entries(addons).map(([name, want]) => [name, specOf(want)])) },
-  dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', '@deepseek-ai/dsh-experimental-plugin-market-bundle', ...plugins.map(plugin => plugin.name), ...Object.keys(addons)] } },
-}, null, 2)}\n`)
+// A plain DSH keeps the Omni plugins its plugin manager installed since.
+const installedHere = () => {
+  if (!options.plain) return { dependencies: {}, bundles: [] }
+  try {
+    const own = readJson(join(profileDir, 'package.json'))
+    const names = Object.keys(own.dependencies ?? {}).filter(name => name.startsWith('@automagik/') && !plugins.some(plugin => plugin.name === name))
+    return { dependencies: Object.fromEntries(names.map(name => [name, own.dependencies[name]])), bundles: (own.dsh?.profile?.bundles ?? []).filter(name => names.includes(name)) }
+  } catch {
+    return { dependencies: {}, bundles: [] }
+  }
+}
+const writeProfile = () => {
+  const kept = installedHere()
+  writeFileSync(join(profileDir, 'package.json'), `${JSON.stringify({
+    name: 'omni-live-profile',
+    private: true,
+    dependencies: { ...Object.fromEntries(plugins.map(plugin => [plugin.name, `link:${plugin.dir}`])), ...Object.fromEntries(Object.entries(addons).map(([name, want]) => [name, specOf(want)])), ...kept.dependencies },
+    dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', '@deepseek-ai/dsh-experimental-plugin-market-bundle', ...plugins.map(plugin => plugin.name), ...Object.keys(addons), ...kept.bundles] } },
+  }, null, 2)}\n`)
+}
 if (!existsSync(join(profileDir, 'pnpm-workspace.yaml'))) writeFileSync(join(profileDir, 'pnpm-workspace.yaml'), 'packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n')
 writeProfile()
 const missing = Object.entries(addons).filter(([name, want]) => installed(name) !== versionOf(want))
-if (missing.length > 0) {
-  say(`adding ${missing.map(([name, want]) => `${name}@${specOf(want)}`).join(', ')} with dsh plugin add (${PNPM})`)
-  // A pnpm shim first on PATH, so DSH's plugin manager runs the pinned pnpm.
+// A pnpm shim first on PATH, so DSH's plugin manager runs the pinned pnpm.
+function pnpmShim() {
   const shims = join(home, 'bin')
   mkdirSync(shims, { recursive: true })
   writeFileSync(join(shims, 'pnpm'), `#!/bin/sh\nexec npx --yes ${PNPM} "$@"\n`, { mode: 0o755 })
+  return shims
+}
+if (missing.length > 0) {
+  say(`adding ${missing.map(([name, want]) => `${name}@${specOf(want)}`).join(', ')} with dsh plugin add (${PNPM})`)
+  const shims = pnpmShim()
   execFileSync(process.execPath, [DSH_BIN, 'plugin', '--profile', PROFILE, 'add', '--ignore-scripts', ...missing.map(([name, want]) => `${name}@${specOf(want)}`)], {
     cwd: profileDir,
     env: { ...process.env, DSH_HOME: dshHome, DO_NOT_TRACK: '1', PATH: `${shims}:${process.env.PATH}` },
@@ -115,7 +135,9 @@ if (missing.length > 0) {
 }
 // The profile's settings: dev/live-profile.patch.yml seeds a new profile, and an entry it
 // ships that an existing profile lacks (by id) is appended, as the desktop app does.
-const shippedPatch = readFileSync(join(HERE, 'live-profile.patch.yml'), 'utf8')
+// A plain DSH has no Omni plugin for the shipped rows that load one (web-search-auto).
+const withoutOmniRows = text => text.replace(/^- insert:\n(?:\s+.*\n)*?\s+name: '@automagik\/[^\n]*\n/gm, '')
+const shippedPatch = (text => (options.plain ? withoutOmniRows(text) : text))(readFileSync(join(HERE, 'live-profile.patch.yml'), 'utf8'))
 const patchFile = join(profileDir, 'cordis.patch.yml')
 if (!existsSync(patchFile)) writeFileSync(patchFile, shippedPatch)
 else {
@@ -156,7 +178,9 @@ function startDsh() {
   // After the shell's own PATH: where CLIs that plugins drive install themselves (Claude Code
   // in ~/.local/bin for dsh-oh-my-claude), so a launcher started without a login shell finds them.
   const tools = [join(homedir(), '.local', 'bin'), join(homedir(), '.claude', 'local'), '/opt/homebrew/bin', '/usr/local/bin']
-  const PATH = [...String(process.env.PATH ?? '').split(':').filter(Boolean), ...tools].filter((dir, index, all) => all.indexOf(dir) === index).join(':')
+  // A plain DSH installs the Omni plugins with its plugin manager, which runs the pinned pnpm.
+  const shims = options.plain ? [pnpmShim()] : []
+  const PATH = [...shims, ...String(process.env.PATH ?? '').split(':').filter(Boolean), ...tools].filter((dir, index, all) => all.indexOf(dir) === index).join(':')
   const env = { ...process.env, PATH, DSH_HOME: dshHome, OMNI_HOME: home, OMNI_CLIENT_ID: 'omni-desktop', DO_NOT_TRACK: '1' }
   dsh = spawn(process.execPath, [DSH_BIN, '--profile', PROFILE, '--no-open', '--host', '127.0.0.1', '--port', String(dshPort)], { cwd: home, env, stdio: ['ignore', 'pipe', 'pipe'] })
   const relay = (chunk) => {

@@ -8965,10 +8965,13 @@ module.exports = __toCommonJS(index_exports);
 
 // src/client/api.js
 var ROUTE = "api/omni-ai";
-async function call(endpoint, payload) {
+var OMNI_UI = "api/omni-ui";
+var call = (endpoint, payload) => callRoute(ROUTE, endpoint, payload);
+var callOmniUi = (endpoint, payload) => callRoute(OMNI_UI, endpoint, payload);
+async function callRoute(route, endpoint, payload) {
   let response;
   try {
-    response = await fetch(ROUTE, {
+    response = await fetch(route, {
       method: "POST",
       credentials: "same-origin",
       headers: { "content-type": "application/json" },
@@ -9396,6 +9399,13 @@ function Rail({ at: at2 }) {
     }, label))
   );
 }
+var SHOWING = /* @__PURE__ */ Symbol.for("automagik.omni.onboarding-showing");
+function noteShowing(scope = globalThis) {
+  scope[SHOWING] = (scope[SHOWING] ?? 0) + 1;
+  return () => {
+    scope[SHOWING] -= 1;
+  };
+}
 function Stage({ title, speech, at: at2, glitching, hero, mark = "AUTOMAGIK", wide = false, children }) {
   const titleRef = (0, import_react2.useRef)(null);
   (0, import_react2.useEffect)(() => {
@@ -9407,6 +9417,7 @@ function Stage({ title, speech, at: at2, glitching, hero, mark = "AUTOMAGIK", wi
       root.inert = previous;
     };
   }, []);
+  (0, import_react2.useEffect)(() => noteShowing(), []);
   (0, import_react2.useEffect)(() => {
     titleRef.current?.focus();
   }, [title]);
@@ -9616,139 +9627,485 @@ function genieSvg(size, { wisp = "right", uid = "g", tilt = -8 } = {}) {
 
 // src/client/team.js
 var import_react4 = require("react");
-async function overview() {
-  try {
-    const response = await fetch("api/omni-ui", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ endpoint: "omni-overview", payload: {} }) });
-    const result = await response.json();
-    return result.ok ? result.value : null;
-  } catch {
-    return null;
+var WAKE_MS = 1100;
+var LOOK_MS = 1800;
+var POLL_MS = 900;
+var READY_POLLS = 20;
+var abortError = () => Object.assign(new Error("Omni was switched off"), { name: "AbortError" });
+var sleep = (ms2, signal) => new Promise((resolve, reject) => {
+  if (signal?.aborted) return reject(abortError());
+  if (ms2 <= 0) return resolve();
+  const timer = setTimeout(resolve, ms2);
+  signal?.addEventListener("abort", () => {
+    clearTimeout(timer);
+    reject(abortError());
+  }, { once: true });
+});
+async function powerOn({ show, signal, omniAi = call, omniUi = callOmniUi, wait = sleep, quick = reducedMotion() }) {
+  const check = () => {
+    if (signal?.aborted) throw abortError();
+  };
+  const pause = (ms2) => wait(quick ? 0 : ms2, signal);
+  const end = (phase, detail) => {
+    check();
+    show(phase, detail);
+    return phase;
+  };
+  show("waking");
+  await pause(WAKE_MS);
+  check();
+  let plugins = await omniAi("omni-plugins");
+  check();
+  if (!plugins.ready) {
+    show("installing", { plugins });
+    if (plugins.install?.phase !== "installing") {
+      try {
+        plugins = await omniAi("omni-plugins-install");
+      } catch (error) {
+        return end("failed", { message: error.message });
+      }
+    }
+    let polls = 0;
+    while (plugins.install?.phase === "installing" || plugins.install?.phase === "done" && !plugins.ready && polls < READY_POLLS) {
+      check();
+      show("installing", { plugins });
+      await wait(POLL_MS, signal);
+      plugins = await omniAi("omni-plugins");
+      if (plugins.install?.phase !== "installing") polls += 1;
+    }
+    if (plugins.install?.phase === "failed") return end("failed", { message: plugins.install.error });
+    if (!plugins.ready) return end("restart", { plugins });
   }
+  show("looking");
+  const started = Date.now();
+  let link = null;
+  try {
+    link = await omniUi("omni-link");
+  } catch (error) {
+    if (error?.code === "HTTP_404") return end("restart", { plugins });
+  }
+  check();
+  if (link?.linked === true || link?.configured === true) {
+    await pause(LOOK_MS / 2);
+    return end("linked", { origin: link.origin ?? null });
+  }
+  const found = await omniUi("omni-discover").catch(() => null);
+  check();
+  await pause(Math.max(0, LOOK_MS - (Date.now() - started)));
+  const omnis = Array.isArray(found?.omnis) ? found.omnis : [];
+  return end(omnis.length > 0 ? "found" : "none", { omnis, sandbox: found?.sandbox ?? null });
 }
-var tilde = (path) => path.replace(/^\/(?:home|Users)\/[^/]+(?=\/)/, "~");
+var onMac = (scope = globalThis) => /Mac/i.test(scope.navigator?.platform ?? "") || /Mac OS X/.test(scope.navigator?.userAgent ?? "");
+var hostOf = (url) => {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+};
+var portOf = (url) => {
+  try {
+    return new URL(url).port;
+  } catch {
+    return "";
+  }
+};
+function foundChoice(omni, { mac = false } = {}) {
+  const here = mac ? "this Mac" : "this computer";
+  const title = omni.source === "sandbox" ? `Your Omni on ${here}` : omni.local ? `Omni on ${here}` : hostOf(omni.url);
+  const port = omni.local ? portOf(omni.url) : "";
+  const sub = [omni.version ? `v${omni.version}` : null, port ? `port ${port}` : null, !omni.local ? "saved in your Omni CLI" : null].filter(Boolean).join(" · ");
+  const row = (action, note = null) => ({ id: omni.id, title, sub, action, note });
+  if (omni.local && omni.reachable === false) return row(null, "Not answering right now.");
+  if (omni.updateTo || omni.pairing === "too-old" && !omni.hasKey) return row(null, "Needs an update first; Connect Omni, next, does it.");
+  if (omni.hasKey) return row("use");
+  if (omni.pairing === "off") return row(null, "Sign-in from devices is off on it.");
+  return row("connect");
+}
+function readRemote(text) {
+  const value = String(text ?? "").trim();
+  if (value === "") return null;
+  let link = null;
+  try {
+    link = new URL(value);
+  } catch {
+  }
+  const grant = link?.searchParams.get("grant") ?? "";
+  if (/^[A-Za-z0-9_-]{24}$/.test(grant)) {
+    if (link.protocol === "omni:") {
+      const url = link.searchParams.get("url");
+      return url ? { kind: "grant", url, grant } : { kind: "bad-link" };
+    }
+    if (/\/api\/login\/app\/?$/.test(link.pathname)) return { kind: "grant", url: `${link.origin}${link.pathname.replace(/\/api\/login\/app\/?$/, "")}`, grant };
+  }
+  if (/^omni:/i.test(value) || /[?&]grant=/.test(value)) return { kind: "bad-link" };
+  return { kind: "address", url: value };
+}
 var TYPE_LABEL = { "whatsapp-baileys": "WhatsApp", "whatsapp-cloud": "WhatsApp Business", slack: "Slack", telegram: "Telegram", discord: "Discord", gupshup: "Gupshup" };
 var channelLabel = (channel) => TYPE_LABEL[channel.type] ?? channel.type ?? "Channel";
-var OMNI_STATS = [
-  { id: "channels", label: "Channels", value: 5, on: true, locked: true },
-  { id: "threads", label: "Threads", value: 3, on: true },
-  { id: "canvases", label: "Live canvases", value: 4, on: true },
-  { id: "files", label: "Files", value: 1, on: false },
-  { id: "shell", label: "Shell", value: 0, on: false }
-];
-var GENIE_STATS = [
-  { id: "threads", label: "Threads", value: 5 },
-  { id: "files", label: "Files", value: 4 },
-  { id: "shell", label: "Shell", value: 4 },
-  { id: "plugins", label: "Plugins", value: 3 },
-  { id: "channels", label: "Channels", value: 1 }
-];
-function Stat({ stat, onToggle, disabled }) {
+var GENIE_TYPE = {
+  type: "genie",
+  groups: [
+    { id: "plugins", label: "Plugins", rows: [{ id: "genie", label: "Genie", detail: "Not released for DSH yet" }] },
+    { id: "tools", label: "Tools", rows: [{ id: "threads", label: "Threads of itself", detail: "One per wish, under Genie" }, { id: "computer", label: "Shell and files", detail: "In its project" }] },
+    { id: "setup", label: "Setup", rows: [{ id: "folder", label: "Folder", detail: "Its own, per wish" }] }
+  ]
+};
+var abilitiesOf = (type) => Object.fromEntries((type?.groups ?? []).find((group) => group.id === "tools")?.rows.filter((row) => typeof row.on === "boolean").map((row) => [row.id, row.on]) ?? []);
+function shortPath(path, keep = 2) {
+  const parts = String(path).split("/");
+  const head = parts[0] === "~" ? "~" : "";
+  const tail = parts.slice(-keep).filter(Boolean);
+  return parts.length - (head ? 1 : 0) > keep + 1 ? `${head}/…/${tail.join("/")}` : path;
+}
+var Check = () => (0, import_react4.createElement)("svg", { viewBox: "0 0 16 16", width: 12, height: 12, "aria-hidden": true }, (0, import_react4.createElement)("path", { d: "M3 8.5l3 3 7-7", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" }));
+function Capabilities({ type, abilities = {}, onToggle, disabled = false }) {
+  if (!type) return (0, import_react4.createElement)("p", { className: "oai-muted oai-caps-wait" }, "Reading what it starts with…");
+  return (0, import_react4.createElement)("div", { className: "oai-caps" }, type.groups.map((group) => (0, import_react4.createElement)(
+    "section",
+    { key: group.id, className: "oai-cap-group", "aria-label": group.label },
+    (0, import_react4.createElement)("h3", null, group.label),
+    group.rows.length === 0 ? (0, import_react4.createElement)("p", { className: "oai-muted oai-cap-empty" }, group.empty ?? "None") : (0, import_react4.createElement)("ul", null, group.rows.map((row) => {
+      const on2 = typeof row.on === "boolean" ? abilities[row.id] ?? row.on : null;
+      return (0, import_react4.createElement)(
+        "li",
+        { key: row.id, className: `oai-cap${on2 === false ? " oai-off" : ""}`, "data-cap": row.id },
+        (0, import_react4.createElement)(
+          "span",
+          { className: "oai-cap-what" },
+          (0, import_react4.createElement)("strong", null, row.label),
+          row.detail ? (0, import_react4.createElement)("small", row.path ? { title: row.detail } : null, row.path ? shortPath(row.detail) : row.detail) : null,
+          row.installed === false ? (0, import_react4.createElement)("small", null, "Installs when Omni powers on") : null,
+          row.tools ? (0, import_react4.createElement)("code", null, row.tools.join(" · ")) : null
+        ),
+        row.version ? (0, import_react4.createElement)("span", { className: `oai-version${row.installed === false ? " oai-pending" : ""}` }, `v${row.version}`) : null,
+        row.installed === true ? (0, import_react4.createElement)("span", { className: "oai-tick", title: "Installed" }, (0, import_react4.createElement)(Check)) : null,
+        row.locked ? (0, import_react4.createElement)("span", { className: "oai-core", title: "What this Bot is for: always on" }, "Always on") : on2 !== null && onToggle ? (0, import_react4.createElement)("button", { type: "button", role: "switch", className: "oai-switch", "aria-checked": on2, "aria-label": `${row.label} for this Bot`, disabled, onClick: () => onToggle(row.id, !on2) }) : null
+      );
+    }))
+  )));
+}
+var CLOSED_EYES = '<g class="oai-closed" fill="none" stroke="#06121f" stroke-width="3" stroke-linecap="round"><path d="M33 37Q40 42 47 37"/><path d="M53 37Q60 42 67 37"/></g>';
+var PORTRAIT_SVG = OCTOPUS_SVG.replace("</svg>", `${CLOSED_EYES}</svg>`);
+var PowerIcon = () => (0, import_react4.createElement)(
+  "svg",
+  { viewBox: "0 0 24 24", width: 22, height: 22, "aria-hidden": true },
+  (0, import_react4.createElement)("path", { d: "M12 3v8", fill: "none", stroke: "currentColor", strokeWidth: 2.4, strokeLinecap: "round" }),
+  (0, import_react4.createElement)("path", { d: "M6.4 6.6a8 8 0 1 0 11.2 0", fill: "none", stroke: "currentColor", strokeWidth: 2.4, strokeLinecap: "round" })
+);
+var STATUS = {
+  asleep: "Asleep. Press the power button to wake Omni up.",
+  waking: "Waking up…",
+  installing: "Installing Omni in this DSH…",
+  looking: "Looking for a connection…",
+  found: "Found one. Pick it to connect.",
+  none: "No Omni on this computer yet.",
+  linked: "Connected.",
+  pairing: "Approve this device to connect.",
+  removed: "Not on your team. Press the power button to bring Omni back.",
+  restart: "Installed. Restart DSH to finish.",
+  failed: "Omni could not be installed."
+};
+function InstallProgress({ plugins }) {
+  const install = plugins?.install;
+  const rows = plugins?.plugins ?? [];
+  const done = new Set(install?.done ?? []);
+  return (0, import_react4.createElement)("ol", { className: "oai-install", "aria-label": "Installing the Omni plugins" }, rows.map((row) => {
+    const state = done.has(row.name) || row.installed && row.enabled !== false ? "done" : install?.current === row.name ? "now" : "next";
+    return (0, import_react4.createElement)(
+      "li",
+      { key: row.name, className: `oai-install-${state}` },
+      (0, import_react4.createElement)("span", { className: "oai-install-dot", "aria-hidden": true }, state === "done" ? (0, import_react4.createElement)(Check) : null),
+      (0, import_react4.createElement)("span", null, row.title),
+      (0, import_react4.createElement)("small", null, state === "done" ? "Installed" : state === "now" ? "Installing…" : "Waiting")
+    );
+  }));
+}
+function Pairing({ pairing, onCancel }) {
   return (0, import_react4.createElement)(
-    "li",
-    { className: `oai-stat${stat.on === false ? " oai-off" : ""}` },
-    (0, import_react4.createElement)("span", { className: "oai-stat-label" }, stat.label),
-    (0, import_react4.createElement)("span", { className: "oai-bar", "aria-label": `${stat.value} of 5` }, [0, 1, 2, 3, 4].map((index) => (0, import_react4.createElement)("i", { key: index, className: index < stat.value ? "oai-pip on" : "oai-pip" }))),
-    !onToggle ? (0, import_react4.createElement)("span", { className: "oai-soon" }, "soon") : stat.locked ? (0, import_react4.createElement)("span", { className: "oai-core", title: "What this Bot is for: always on" }, "core") : (0, import_react4.createElement)("button", { type: "button", role: "switch", className: "oai-switch", "aria-checked": stat.on === true, "aria-label": `${stat.label} for this Bot`, disabled, onClick: onToggle })
+    "div",
+    { className: "oai-pairing", "aria-live": "polite" },
+    (0, import_react4.createElement)("p", { className: "oai-muted" }, pairing.waLink ? "Send this code to yourself on WhatsApp, and Omni connects." : "Approve this device on the page your Omni opens, with Face ID, a fingerprint or a code."),
+    (0, import_react4.createElement)("div", { className: "oai-code" }, (0, import_react4.createElement)("code", null, pairing.code)),
+    (0, import_react4.createElement)(
+      "div",
+      { className: "oai-row" },
+      pairing.waLink ? (0, import_react4.createElement)("a", { className: "oai-pill oai-pill-primary", href: pairing.waLink, target: "_blank", rel: "noreferrer" }, "Open WhatsApp") : null,
+      pairing.approveUrl ? (0, import_react4.createElement)("a", { className: `oai-pill${pairing.waLink ? "" : " oai-pill-primary"}`, href: pairing.approveUrl, target: "_blank", rel: "noreferrer" }, "Approve") : null,
+      (0, import_react4.createElement)("button", { type: "button", className: "oai-pill", onClick: onCancel }, "Cancel")
+    ),
+    (0, import_react4.createElement)("p", { className: "oai-muted oai-waiting" }, `Waiting for ${pairing.origin ?? "your Omni"}…`)
   );
 }
-function Facts({ rows }) {
-  return (0, import_react4.createElement)("dl", { className: "oai-facts" }, rows.map(([term, value]) => [(0, import_react4.createElement)("dt", { key: `${term}t` }, term), (0, import_react4.createElement)("dd", { key: `${term}d` }, value)]));
+function Found({ omnis, busy, onUse }) {
+  const mac = onMac();
+  return (0, import_react4.createElement)("ul", { className: "oai-found-list" }, omnis.map((omni) => {
+    const choice = foundChoice(omni, { mac });
+    return (0, import_react4.createElement)(
+      "li",
+      { key: omni.id, className: "oai-found-row" },
+      (0, import_react4.createElement)("span", { className: `oai-found-mark${choice.action ? "" : " oai-quiet"}`, "aria-hidden": true }),
+      (0, import_react4.createElement)("span", { className: "oai-cap-what" }, (0, import_react4.createElement)("strong", null, choice.title), choice.sub ? (0, import_react4.createElement)("small", null, choice.sub) : null, choice.note ? (0, import_react4.createElement)("small", null, choice.note) : null),
+      choice.action ? (0, import_react4.createElement)("button", { type: "button", className: "oai-pill oai-pill-primary", disabled: busy !== null, onClick: () => onUse(omni) }, busy === omni.id ? "Connecting…" : choice.action === "use" ? "Use it" : "Connect") : null
+    );
+  }));
 }
+function Elsewhere({ busy, onRemote, onLocal, local }) {
+  const [text, setText] = (0, import_react4.useState)("");
+  const wanted = readRemote(text);
+  const submit = (event) => {
+    event.preventDefault();
+    if (wanted !== null) onRemote(wanted);
+  };
+  return (0, import_react4.createElement)(
+    "div",
+    { className: "oai-elsewhere" },
+    (0, import_react4.createElement)(
+      "form",
+      { className: "oai-field", onSubmit: submit },
+      (0, import_react4.createElement)("input", { type: "text", inputMode: "url", autoComplete: "off", spellCheck: false, value: text, placeholder: "omni.example.com, or the link Omni sent you", "aria-label": "Omni address or link", onChange: (event) => setText(event.target.value) }),
+      (0, import_react4.createElement)("button", { type: "submit", className: "oai-pill oai-pill-primary", disabled: busy !== null || wanted === null }, busy === "remote" ? "Connecting…" : "Connect")
+    ),
+    (0, import_react4.createElement)("p", { className: "oai-muted" }, "No address? Text connect to yourself on WhatsApp, and your Omni replies with a link."),
+    local ? (0, import_react4.createElement)("button", { type: "button", className: "oai-pill oai-local", onClick: onLocal }, (0, import_react4.createElement)("strong", null, onMac() ? "Run Omni on this Mac" : "Run Omni on this computer"), (0, import_react4.createElement)("small", null, "A private Omni, about 1 GB. Set up in the next step.")) : null
+  );
+}
+function OmniCard({ power, onPower, type, abilities, onToggle, live }) {
+  const { phase, detail, busy, problem } = power;
+  const awake = phase !== "asleep";
+  const scanning = phase === "looking";
+  const omnis = detail?.omnis ?? [];
+  const hasSandbox = omnis.some((omni) => omni.source === "sandbox");
+  const channels = live?.configured ? live.channels ?? [] : [];
+  let body = null;
+  if (phase === "installing") body = (0, import_react4.createElement)(InstallProgress, { plugins: detail?.plugins });
+  else if (phase === "restart") body = (0, import_react4.createElement)("p", { className: "oai-note" }, "DSH needs a restart to start the Omni plugins. Restart it, then press the power button again: Omni is already installed.");
+  else if (phase === "failed") body = (0, import_react4.createElement)("p", { className: "oai-error", role: "alert" }, detail?.message ?? "Try again, or add the Omni plugins on DSH's Plugins page.");
+  else if (phase === "pairing") body = (0, import_react4.createElement)(Pairing, { pairing: detail.pairing, onCancel: power.cancelPairing });
+  else if (phase === "found") {
+    body = (0, import_react4.createElement)(
+      "div",
+      { className: "oai-connect" },
+      (0, import_react4.createElement)(Found, { omnis, busy, onUse: power.use }),
+      (0, import_react4.createElement)("details", { className: "oai-more" }, (0, import_react4.createElement)("summary", null, "Somewhere else?"), (0, import_react4.createElement)(Elsewhere, { busy, onRemote: power.remote, onLocal: power.local, local: !hasSandbox }))
+    );
+  } else if (phase === "none") body = (0, import_react4.createElement)("div", { className: "oai-connect" }, (0, import_react4.createElement)(Elsewhere, { busy, onRemote: power.remote, onLocal: power.local, local: true }));
+  else if (phase === "linked") {
+    body = (0, import_react4.createElement)("p", { className: "oai-linked", role: "status" }, (0, import_react4.createElement)(Check), detail?.origin ? `Connected to ${detail.origin}` : "Connected to your Omni");
+  }
+  const menu = channels.length > 0 ? (0, import_react4.createElement)("ul", { className: "oai-menu-preview" }, channels.slice(0, 5).map((channel) => (0, import_react4.createElement)("li", { key: channel.id }, (0, import_react4.createElement)("span", { className: `oai-dot ${channel.status === "connected" ? "ok" : "warn"}` }), `${channelLabel(channel)} · ${channel.name}`))) : (0, import_react4.createElement)("p", { className: "oai-muted" }, live === void 0 ? "Reading your Omni…" : "Link an Omni, and each of its channels gets a place in your menu.");
+  const removed = phase === "asleep" && detail?.removed === true;
+  return (0, import_react4.createElement)(
+    "article",
+    { className: `oai-fighter oai-omni oai-is-${phase}${awake ? " oai-chosen" : ""}`, "data-phase": phase },
+    (0, import_react4.createElement)(
+      "div",
+      { className: "oai-portrait", "aria-hidden": "true" },
+      scanning ? (0, import_react4.createElement)("div", { className: "oai-scan" }, (0, import_react4.createElement)("i"), (0, import_react4.createElement)("i"), (0, import_react4.createElement)("i")) : null,
+      phase === "asleep" ? (0, import_react4.createElement)("div", { className: "oai-zzz" }, (0, import_react4.createElement)("i", null, "z"), (0, import_react4.createElement)("i", null, "z"), (0, import_react4.createElement)("i", null, "z")) : null,
+      awake ? (0, import_react4.createElement)("div", { className: "oai-bubbles" }, [0, 1, 2, 3, 4, 5].map((index) => (0, import_react4.createElement)("i", { key: index }))) : null,
+      (0, import_react4.createElement)("div", { className: "oai-octo-wrap", dangerouslySetInnerHTML: { __html: PORTRAIT_SVG } })
+    ),
+    (0, import_react4.createElement)("header", null, (0, import_react4.createElement)("h2", null, "Omni")),
+    (0, import_react4.createElement)(
+      "div",
+      { className: "oai-power-row" },
+      (0, import_react4.createElement)("button", { type: "button", className: `oai-power${awake ? " on" : ""}`, "aria-pressed": awake, "aria-label": awake ? "Power Omni off" : "Power Omni on", onClick: onPower, disabled: phase === "installing" }, (0, import_react4.createElement)(PowerIcon)),
+      (0, import_react4.createElement)("p", { className: `oai-status${scanning || phase === "waking" || phase === "installing" ? " oai-working" : ""}`, role: "status", "aria-live": "polite" }, removed ? STATUS.removed : STATUS[phase] ?? "")
+    ),
+    awake && phase !== "failed" ? (0, import_react4.createElement)(
+      "div",
+      { className: "oai-team-line" },
+      (0, import_react4.createElement)("span", { className: "oai-on-team" }, (0, import_react4.createElement)(Check), "On your team"),
+      (0, import_react4.createElement)("button", { type: "button", className: "oai-remove", onClick: onPower, disabled: phase === "installing" }, "Remove")
+    ) : null,
+    body,
+    problem ? (0, import_react4.createElement)("p", { className: "oai-error", role: "alert" }, problem) : null,
+    (0, import_react4.createElement)("p", { className: "oai-about" }, "Keeps your Omni: every chat on every channel, answered by your team. A little Omni sits in each chat to help there."),
+    (0, import_react4.createElement)("div", { className: "oai-menu-label" }, "In your menu"),
+    menu,
+    (0, import_react4.createElement)(Capabilities, { type, abilities, onToggle, disabled: !awake })
+  );
+}
+function usePower() {
+  const [phase, setPhase] = (0, import_react4.useState)("asleep");
+  const [detail, setDetail] = (0, import_react4.useState)(null);
+  const [busy, setBusy] = (0, import_react4.useState)(null);
+  const [problem, setProblem] = (0, import_react4.useState)(null);
+  const run = (0, import_react4.useRef)(null);
+  const back = (0, import_react4.useRef)(null);
+  (0, import_react4.useEffect)(() => () => run.current?.abort(), []);
+  const show = (next, value = null) => {
+    setPhase(next);
+    setDetail(value);
+  };
+  const on2 = () => {
+    run.current?.abort();
+    const controller = new AbortController();
+    run.current = controller;
+    setProblem(null);
+    powerOn({ show, signal: controller.signal }).catch((error) => {
+      if (error?.name !== "AbortError") show("failed", { message: error.message });
+    });
+  };
+  const off = () => {
+    run.current?.abort();
+    if (phase === "pairing") void callOmniUi("omni-pair-cancel").catch(() => {
+    });
+    setProblem(null);
+    setBusy(null);
+    show("asleep", { removed: true });
+  };
+  const connect = async (row, endpoint, payload) => {
+    setBusy(row);
+    setProblem(null);
+    try {
+      const reply = await callOmniUi(endpoint, payload);
+      if (run.current?.signal.aborted) return;
+      if (reply.status === "paired") show("linked", { origin: reply.origin ?? null });
+      else if (reply.pairing) {
+        back.current = { phase, detail };
+        show("pairing", { pairing: reply.pairing });
+      } else setProblem(reply.message ?? "That Omni cannot approve this app from here. Connect Omni, next, can use its API key.");
+    } catch (error) {
+      setProblem(error.message);
+    } finally {
+      setBusy(null);
+    }
+  };
+  (0, import_react4.useEffect)(() => {
+    if (phase !== "pairing") return void 0;
+    let timer = 0;
+    let alive = true;
+    const tick = async () => {
+      try {
+        const reply = await callOmniUi("omni-pair-poll");
+        if (!alive) return;
+        if (reply.status === "paired") return show("linked", { origin: reply.origin ?? null });
+        if (reply.status !== "pending") {
+          setProblem(reply.status === "denied" ? "The sign-in was denied." : "The code expired. Try again for a new one.");
+          return show(back.current?.phase ?? "none", back.current?.detail ?? null);
+        }
+      } catch (error) {
+        if (alive) setProblem(error.message);
+      }
+      if (alive) timer = setTimeout(tick, detail?.pairing?.pollIntervalMs ?? 2e3);
+    };
+    timer = setTimeout(tick, detail?.pairing?.pollIntervalMs ?? 2e3);
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [phase]);
+  return {
+    phase,
+    detail,
+    busy,
+    problem,
+    toggle: () => phase === "asleep" ? on2() : off(),
+    use: (omni) => connect(omni.id, "omni-discover-use", { id: omni.id }),
+    remote: (wanted) => wanted.kind === "bad-link" ? setProblem("That is not a link your Omni sends. It looks like https://your-omni/api/login/app?grant=…") : wanted.kind === "grant" ? connect("remote", "omni-connect-grant", { url: wanted.url, grant: wanted.grant }) : connect("remote", "omni-pair-start", { url: wanted.url }),
+    cancelPairing: () => {
+      void callOmniUi("omni-pair-cancel").catch(() => {
+      });
+      show(back.current?.phase ?? "none", back.current?.detail ?? null);
+    }
+  };
+}
+var speechOf = (phase, name, origin) => ({
+  asleep: `${name} here! Omni is asleep. Press its power button to bring it along.`,
+  waking: "Omni is waking up…",
+  installing: "Bringing Omni into this DSH. One moment.",
+  looking: "Omni is looking for a connection…",
+  found: "Omni found where your channels live!",
+  none: "No Omni here yet. Tell Omni where yours lives.",
+  pairing: "Approve this device, and Omni connects.",
+  linked: origin ? `Omni is connected to ${origin}!` : "Omni is connected!",
+  restart: "Omni is installed. Restart DSH to wake it.",
+  failed: "Omni could not be installed here."
+})[phase];
 function TeamStep(props) {
   const state = useGate(props);
   const finish2 = useFinish(props);
   const [glitching, glitch] = useGlitch();
-  const [omni, setOmni] = (0, import_react4.useState)(true);
-  const [stats, setStats] = (0, import_react4.useState)(OMNI_STATS);
+  const power = usePower();
+  const [omniType, setOmniType] = (0, import_react4.useState)(null);
+  const [abilities, setAbilities] = (0, import_react4.useState)({});
   const [live, setLive] = (0, import_react4.useState)(void 0);
   const [saving, setSaving] = (0, import_react4.useState)(false);
   const [problem, setProblem] = (0, import_react4.useState)(null);
-  const [project, setProject] = (0, import_react4.useState)(null);
+  const { phase } = power;
+  const awakeNow = phase === "looking" || phase === "linked";
   (0, import_react4.useEffect)(() => {
-    overview().then(setLive);
-  }, []);
-  (0, import_react4.useEffect)(() => {
-    call("companion").then((reply) => setProject(reply?.omniProject ?? null), () => {
+    call("bot-type", { type: "omni" }).then(setOmniType, () => {
     });
+  }, [awakeNow]);
+  (0, import_react4.useEffect)(() => {
+    callOmniUi("omni-overview", {}).then(setLive, () => setLive(null));
   }, []);
+  (0, import_react4.useEffect)(() => {
+    if (phase !== "linked") return;
+    callOmniUi("omni-overview", {}).then(setLive, () => setLive(null));
+    glitch();
+  }, [phase, glitch]);
   (0, import_react4.useEffect)(() => {
     if (state) glitch();
   }, [state, glitch]);
   if (!state) return null;
-  const channels = live?.configured ? live.channels ?? [] : [];
-  const chats = live?.configured ? live.chats ?? [] : [];
   const name = state.companionName ?? "Your companion";
-  const toggle = (id) => setStats((rows) => rows.map((row) => row.id === id && !row.locked ? { ...row, on: !row.on } : row));
-  const go2 = async () => {
+  const omni = phase !== "asleep" && phase !== "failed";
+  const working = ["waking", "installing", "looking"].includes(phase);
+  const local = () => go2({ omni: true });
+  async function go2({ omni: joined = omni } = {}) {
     setSaving(true);
     setProblem(null);
     try {
-      await call("team-save", { omni, genie: false, omniAbilities: Object.fromEntries(stats.map((row) => [row.id, row.on])) });
+      await call("team-save", { omni: joined, genie: false, omniAbilities: { ...abilitiesOf(omniType), ...abilities } });
       finish2();
     } catch (error) {
       setProblem(error.message);
       setSaving(false);
     }
-  };
-  const menu = channels.length > 0 ? (0, import_react4.createElement)("ul", { className: "oai-menu-preview" }, channels.slice(0, 5).map((channel) => (0, import_react4.createElement)("li", { key: channel.id }, (0, import_react4.createElement)("span", { className: `oai-dot ${channel.status === "connected" ? "ok" : "warn"}` }), `${channelLabel(channel)} · ${channel.name}`))) : (0, import_react4.createElement)("p", { className: "oai-muted" }, live === void 0 ? "Reading your Omni…" : "Link an Omni next, and each of its channels gets a place in your menu.");
+  }
+  const omniPower = { ...power, local };
   return (0, import_react4.createElement)(
     Stage,
     {
       title: "Grow your team",
-      speech: `${name} here! Two friends can join us. Pick who comes along.`,
+      speech: speechOf(phase, name, power.detail?.origin),
       at: "omni-team",
       glitching,
       wide: true
     },
-    (0, import_react4.createElement)("p", { className: "oai-lede" }, `${name} leads. Each friend brings its own powers, its own project and its own place in your menu.`),
+    (0, import_react4.createElement)("p", { className: "oai-lede" }, `${name} leads. Each friend comes with its own plugins, tools and project. Switch on the ones you want.`),
     (0, import_react4.createElement)(
       "div",
       { className: "oai-select" },
-      (0, import_react4.createElement)(
-        "article",
-        { className: `oai-fighter oai-omni${omni ? " oai-chosen" : ""}` },
-        (0, import_react4.createElement)(
-          "div",
-          { className: "oai-portrait oai-rise", "aria-hidden": "true" },
-          (0, import_react4.createElement)("div", { className: "oai-bubbles" }, [0, 1, 2, 3, 4, 5].map((index) => (0, import_react4.createElement)("i", { key: index }))),
-          (0, import_react4.createElement)("div", { className: "oai-octo-wrap", dangerouslySetInnerHTML: { __html: OCTOPUS_SVG } })
-        ),
-        (0, import_react4.createElement)("header", null, (0, import_react4.createElement)("h2", null, "Omni"), (0, import_react4.createElement)("span", { className: "oai-class" }, "Channel keeper")),
-        (0, import_react4.createElement)("p", null, "Runs your Omni: every chat on every channel, answered by your team. A little Omni sits in each chat to help there."),
-        (0, import_react4.createElement)("ul", { className: "oai-stats" }, stats.map((stat) => (0, import_react4.createElement)(Stat, { key: stat.id, stat, onToggle: () => toggle(stat.id), disabled: !omni }))),
-        (0, import_react4.createElement)(Facts, { rows: [
-          ["Controls", live?.configured ? `${live.origin}: ${channels.length} channels, ${chats.length} recent chats` : "The Omni you link next"],
-          ["Project", project ? `Its own: ${tilde(project)}` : "Its own, in your team workspace"],
-          ["Plugins", "Omni channels · Omni canvases"],
-          ["Helpers", "A little Omni in each chat"]
-        ] }),
-        (0, import_react4.createElement)("div", { className: "oai-menu-label" }, "In your menu"),
-        menu,
-        (0, import_react4.createElement)("button", { type: "button", role: "switch", className: `oai-join${omni ? " on" : ""}`, "aria-checked": omni, onClick: () => setOmni((value) => !value) }, omni ? "On your team" : "Add to your team")
-      ),
+      (0, import_react4.createElement)(OmniCard, { power: omniPower, onPower: power.toggle, type: omniType, abilities, onToggle: (id, on2) => setAbilities((rows) => ({ ...rows, [id]: on2 })), live }),
       (0, import_react4.createElement)(
         "article",
         { className: "oai-fighter oai-genie oai-locked" },
         (0, import_react4.createElement)(
           "div",
-          { className: "oai-portrait oai-emerge", "aria-hidden": "true" },
-          (0, import_react4.createElement)("div", { className: "oai-sparkles" }, [0, 1, 2, 3, 4].map((index) => (0, import_react4.createElement)("i", { key: index }))),
+          { className: "oai-portrait", "aria-hidden": "true" },
           (0, import_react4.createElement)("div", { className: "oai-genie-wrap", dangerouslySetInnerHTML: { __html: genieSvg(150, { uid: "oaig" }) } })
         ),
-        (0, import_react4.createElement)("header", null, (0, import_react4.createElement)("h2", null, "Genie"), (0, import_react4.createElement)("span", { className: "oai-class" }, "Wish granter")),
-        (0, import_react4.createElement)("p", null, "Give it a wish, get one delivery. It works in threads of itself, in its own project, and hands you the result."),
-        (0, import_react4.createElement)("ul", { className: "oai-stats" }, GENIE_STATS.map((stat) => (0, import_react4.createElement)(Stat, { key: stat.id, stat }))),
-        (0, import_react4.createElement)(Facts, { rows: [["Controls", "Code, files and tasks in its project"], ["Project", "Its own, per wish"], ["Plugins", "Genie (not released for DSH yet)"], ["Helpers", "One thread per wish"]] }),
-        (0, import_react4.createElement)("div", { className: "oai-menu-label" }, "In your menu"),
-        (0, import_react4.createElement)("p", { className: "oai-muted" }, "Its threads, under Genie."),
-        (0, import_react4.createElement)("span", { className: "oai-join oai-soon-badge", "aria-disabled": "true" }, "Coming soon")
+        (0, import_react4.createElement)("header", null, (0, import_react4.createElement)("h2", null, "Genie")),
+        (0, import_react4.createElement)("span", { className: "oai-join oai-soon-badge", "aria-disabled": "true" }, "Coming soon"),
+        (0, import_react4.createElement)("p", { className: "oai-about" }, "Give it a wish, get one delivery. It works in threads of itself, in its own project, and hands you the result."),
+        (0, import_react4.createElement)(Capabilities, { type: GENIE_TYPE })
       )
     ),
     problem ? (0, import_react4.createElement)("p", { className: "oai-error", role: "alert" }, problem) : null,
     (0, import_react4.createElement)(
       "div",
       { className: "oai-actions" },
-      (0, import_react4.createElement)("button", { type: "button", className: "oai-primary oai-big", disabled: saving, onClick: go2 }, saving ? "Bringing them in…" : omni ? "Continue with Omni" : `Continue with just ${name}`)
+      phase !== "linked" && omni && !working ? (0, import_react4.createElement)("span", { className: "oai-count" }, "Connect Omni comes next.") : null,
+      (0, import_react4.createElement)(
+        "button",
+        { type: "button", className: "oai-primary oai-big", disabled: saving || working, onClick: () => go2() },
+        saving ? "Bringing them in…" : working ? "Omni is waking…" : omni ? "Continue with Omni" : `Continue with just ${name}`
+      )
     )
   );
 }
@@ -9806,36 +10163,98 @@ var ONBOARD_CSS = `
 .oai-omni .oai-class{color:#7fe9ff}
 .oai-portrait{position:relative;height:150px;border-radius:14px;overflow:hidden;display:grid;place-items:end center;background:radial-gradient(120% 90% at 50% 110%,rgba(34,211,238,.18),transparent 60%),linear-gradient(180deg,#0b1430,#060a18)}
 .oai-genie .oai-portrait{place-items:center;background:radial-gradient(90% 80% at 50% 80%,rgba(255,59,212,.2),transparent 60%),linear-gradient(180deg,#140b2c,#070512)}
-.oai-octo-wrap .oai-octo{width:120px;height:120px;animation:oai-rise 1.4s cubic-bezier(.2,1.2,.4,1) both,oai-float 4.5s ease-in-out 1.4s infinite}
-@keyframes oai-rise{from{transform:translateY(140px)}to{transform:translateY(8px)}}
+.oai-octo-wrap .oai-octo{width:120px;height:120px;animation:oai-float 4.5s ease-in-out infinite}
+.oai-is-waking .oai-octo-wrap .oai-octo{animation:oai-hop .9s cubic-bezier(.2,1.4,.4,1) both,oai-float 4.5s ease-in-out .9s infinite}
+@keyframes oai-hop{0%{transform:translateY(14px)}50%{transform:translateY(-12px)}100%{transform:translateY(0)}}
 .oai-bubbles i{position:absolute;bottom:-12px;width:10px;height:10px;border-radius:50%;border:1.5px solid rgba(143,244,255,.7);animation:oai-bubble 3.2s ease-in infinite}
 .oai-bubbles i:nth-child(1){left:18%;animation-delay:.2s}.oai-bubbles i:nth-child(2){left:30%;width:6px;height:6px;animation-delay:1.1s}.oai-bubbles i:nth-child(3){left:68%;animation-delay:.6s}.oai-bubbles i:nth-child(4){left:80%;width:7px;height:7px;animation-delay:1.8s}.oai-bubbles i:nth-child(5){left:45%;width:5px;height:5px;animation-delay:2.4s}.oai-bubbles i:nth-child(6){left:58%;animation-delay:1.5s}
 @keyframes oai-bubble{0%{transform:translateY(0);opacity:0}15%{opacity:1}100%{transform:translateY(-170px) translateX(6px);opacity:0}}
 .oai-genie-wrap svg{animation:oai-emerge 1.6s cubic-bezier(.2,1.3,.4,1) .3s both,oai-float 5s ease-in-out 1.9s infinite}
 @keyframes oai-emerge{0%{transform:translateY(60px) scale(.2);opacity:0;filter:blur(6px)}60%{opacity:1;filter:blur(0)}100%{transform:none}}
-.oai-sparkles i{position:absolute;width:5px;height:5px;border-radius:50%;background:#64f4ff;box-shadow:0 0 10px #64f4ff;animation:oai-twinkle-dot 2s ease-in-out infinite}
-.oai-sparkles i:nth-child(1){top:24px;left:22%}.oai-sparkles i:nth-child(2){top:40px;right:20%;animation-delay:.4s}.oai-sparkles i:nth-child(3){bottom:30px;left:16%;animation-delay:.9s;background:#ff8be3;box-shadow:0 0 10px #ff8be3}.oai-sparkles i:nth-child(4){bottom:22px;right:26%;animation-delay:1.3s}.oai-sparkles i:nth-child(5){top:70px;left:50%;animation-delay:.7s;background:#ff8be3;box-shadow:0 0 10px #ff8be3}
-.oai-stats{list-style:none;margin:2px 0 0;padding:0;display:grid;gap:6px}
-.oai-stat{display:grid;grid-template-columns:110px 1fr auto;align-items:center;gap:10px;font-size:13.5px}
-.oai-stat.oai-off .oai-stat-label{color:var(--oai-ink2);text-decoration:line-through;text-decoration-color:rgba(255,255,255,.25)}
-.oai-bar{display:flex;gap:3px}
-.oai-pip{flex:1;height:8px;border-radius:2px;background:rgba(255,255,255,.07)}
-.oai-pip.on{background:linear-gradient(90deg,#22d3ee,#ff3bd4)}
-.oai-genie .oai-pip.on{background:linear-gradient(90deg,#ff3bd4,#b77bff)}
-.oai-off .oai-pip.on{filter:grayscale(1);opacity:.4}
 .oai-core{font:600 10px/1 ui-monospace,Menlo,monospace;letter-spacing:.1em;text-transform:uppercase;color:#7fe9ff;border:1px solid rgba(127,233,255,.4);border-radius:999px;padding:3px 7px}
 .oai-hero{margin-bottom:8px}
 .oai-soon{font:600 10px/1 ui-monospace,Menlo,monospace;letter-spacing:.1em;text-transform:uppercase;color:#ff8be3;border:1px solid rgba(255,139,227,.35);border-radius:999px;padding:3px 6px}
-.oai-facts{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:4px 0 0;font-size:13px}
-.oai-facts dt{color:var(--oai-ink2)}.oai-facts dd{margin:0;color:var(--oai-ink)}
+.oai-card button.oai-join,.oai-join{justify-self:stretch;text-align:center;margin-top:4px;padding:11px;border-radius:12px;border:1px solid var(--oai-line);background:rgba(255,255,255,.04);color:var(--oai-ink);font:600 14px/1 inherit;font-family:inherit;cursor:pointer}
+.oai-card button.oai-join.on{background:linear-gradient(90deg,rgba(34,211,238,.25),rgba(255,59,212,.25));border-color:rgba(34,211,238,.6)}
+.oai-soon-badge{cursor:default;color:#ff8be3;border-style:dashed}
+.oai-about{font-size:13.5px!important}
+.oai-fighter{transition:border-color .4s,box-shadow .4s,background .4s}
+.oai-is-asleep{background:linear-gradient(180deg,rgba(12,16,30,.92),rgba(7,9,18,.95))}
+.oai-is-asleep .oai-portrait,.oai-is-asleep .oai-caps,.oai-is-asleep header,.oai-is-asleep .oai-about{filter:saturate(.25) brightness(.62);transition:filter .6s}
+.oai-portrait{transition:box-shadow .6s,background .6s}
+.oai-is-asleep .oai-portrait{background:linear-gradient(180deg,#070b18,#04060d)}
+.oai-is-asleep .oai-octo-wrap .oai-octo{animation:oai-breathe 4.8s ease-in-out infinite}
+@keyframes oai-breathe{0%,100%{transform:translateY(14px) scale(1,.97)}50%{transform:translateY(8px) scale(1.02,1)}}
+.oai-closed{display:none}.oai-is-asleep .oai-closed{display:inline}.oai-is-asleep .oai-eyes{display:none}
+.oai-is-waking .oai-eyes{animation:oai-open .9s cubic-bezier(.3,1.5,.5,1) both}
+@keyframes oai-open{0%{transform:scaleY(.08)}55%{transform:scaleY(.08)}100%{transform:scaleY(1)}}
+.oai-omni:not(.oai-is-asleep) .oai-portrait{box-shadow:inset 0 0 0 1px rgba(34,211,238,.35),0 0 38px -6px rgba(34,211,238,.55);background:radial-gradient(120% 90% at 50% 110%,rgba(34,211,238,.32),transparent 60%),linear-gradient(180deg,#0b1430,#060a18)}
+.oai-is-waking .oai-portrait{animation:oai-glow 1.1s ease-out both}
+@keyframes oai-glow{0%{box-shadow:inset 0 0 0 1px rgba(34,211,238,0),0 0 0 rgba(34,211,238,0);filter:brightness(.6)}70%{filter:brightness(1.35)}100%{filter:none}}
+.oai-zzz i{position:absolute;left:58%;top:42%;font:700 15px/1 ui-monospace,monospace;font-style:normal;color:#9fb0cc;opacity:0;animation:oai-z 3.6s ease-in infinite}
+.oai-zzz i:nth-child(2){animation-delay:1.2s;font-size:12px}.oai-zzz i:nth-child(3){animation-delay:2.4s;font-size:10px}
+@keyframes oai-z{0%{transform:translate(0,0);opacity:0}20%{opacity:.85}100%{transform:translate(26px,-58px);opacity:0}}
+.oai-scan{position:absolute;inset:0;display:grid;place-items:center;pointer-events:none}
+.oai-scan i{position:absolute;width:60px;height:60px;border-radius:50%;border:1.5px solid rgba(34,211,238,.7);opacity:0;animation:oai-ping 2.1s cubic-bezier(.2,.6,.4,1) infinite}
+.oai-scan i:nth-child(2){animation-delay:.7s;border-color:rgba(255,59,212,.6)}.oai-scan i:nth-child(3){animation-delay:1.4s}
+@keyframes oai-ping{0%{transform:scale(.4);opacity:.9}100%{transform:scale(4.2);opacity:0}}
+.oai-power-row{display:flex;align-items:center;gap:12px}
+.oai-card button.oai-power{flex:none;display:grid;place-items:center;width:52px;height:52px;margin:0;padding:0;border-radius:50%;corner-shape:round;border:1.5px solid rgba(34,211,238,.55);background:radial-gradient(circle at 50% 35%,rgba(34,211,238,.22),rgba(5,8,18,.9));color:#7fe9ff;box-shadow:0 0 0 4px rgba(34,211,238,.08),0 0 26px -4px rgba(34,211,238,.6)}
+.oai-is-asleep button.oai-power{animation:oai-call 2.4s ease-in-out infinite}
+@keyframes oai-call{0%,100%{box-shadow:0 0 0 4px rgba(34,211,238,.08),0 0 20px -6px rgba(34,211,238,.5)}50%{box-shadow:0 0 0 9px rgba(34,211,238,.12),0 0 34px -2px rgba(34,211,238,.75)}}
+.oai-card button.oai-power.on{border-color:transparent;background:linear-gradient(135deg,var(--oai-accent),var(--oai-accent-2));color:#06060f;box-shadow:0 0 28px -4px rgba(255,59,212,.6)}
+.oai-card button.oai-power:hover:not(:disabled){transform:scale(1.05)}
+.oai-status{margin:0!important;font-size:14px;color:var(--oai-ink)!important}
+.oai-is-asleep .oai-status{color:var(--oai-ink2)!important}
+.oai-working::after{content:"";display:inline-block;width:8px;height:8px;margin-left:8px;border-radius:50%;background:var(--oai-accent-2);animation:oai-caret 1s steps(1) infinite}
+.oai-install{list-style:none;margin:0;padding:10px 12px;display:grid;gap:8px;border-radius:12px;border:1px solid var(--oai-line);background:rgba(5,8,18,.55)}
+.oai-install li{display:grid;grid-template-columns:18px 1fr auto;align-items:center;gap:10px;font-size:13.5px}
+.oai-install small{color:var(--oai-ink2);font-size:12px}
+.oai-install-dot{display:grid;place-items:center;width:18px;height:18px;border-radius:50%;border:1.5px solid var(--oai-line)}
+.oai-install-done .oai-install-dot{border-color:#4fe0a8;color:#4fe0a8}
+.oai-install-now .oai-install-dot{border-color:rgba(34,211,238,.25);border-top-color:var(--oai-accent);animation:oai-spin .8s linear infinite}
+.oai-install-next{opacity:.6}
+@keyframes oai-spin{to{transform:rotate(360deg)}}
+.oai-connect{display:grid;gap:10px}
+.oai-found-list{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.oai-found-row{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:12px;border:1px solid rgba(34,211,238,.45);background:rgba(34,211,238,.06);animation:oai-in .35s ease-out both}
+@keyframes oai-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.oai-found-mark{flex:none;width:10px;height:10px;border-radius:50%;background:#4fe0a8;box-shadow:0 0 10px #4fe0a8}
+.oai-found-mark.oai-quiet{background:var(--oai-ink2);box-shadow:none;opacity:.6}
+.oai-card .oai-pill,.oai-pill{display:inline-flex;align-items:center;justify-content:center;gap:6px;width:auto;margin:0;padding:8px 14px;border-radius:999px;border:1px solid var(--oai-line);background:none;color:var(--oai-ink2);font:inherit;font-size:13.5px;font-weight:600;text-decoration:none;white-space:nowrap;cursor:pointer}
+.oai-card .oai-pill-primary,.oai-pill-primary{border-color:transparent;background:linear-gradient(135deg,var(--oai-accent),var(--oai-accent-2));color:#06060f}
+.oai-card button.oai-local{display:grid;justify-items:start;gap:2px;width:100%;padding:10px 14px;border-radius:12px;text-align:left}
+.oai-local strong{color:var(--oai-ink)}.oai-local small{font-weight:400;color:var(--oai-ink2);font-size:12px}
+.oai-elsewhere{display:grid;gap:8px}.oai-elsewhere p{margin:0!important}
+.oai-more summary{cursor:pointer;color:var(--oai-accent);font-size:13px}
+.oai-more[open] summary{margin-bottom:8px}
+.oai-pairing{display:grid;gap:8px}.oai-pairing p{margin:0!important}
+.oai-linked{display:grid;grid-template-columns:auto 1fr;align-items:center;gap:4px 8px;margin:0!important;padding:10px 12px;border-radius:12px;border:1px solid rgba(79,224,168,.45);background:rgba(79,224,168,.07);color:#4fe0a8!important;font-weight:600}
+.oai-linked small{grid-column:2;color:var(--oai-ink2);font-weight:400;font-size:12.5px}
 .oai-menu-label{font:600 11px/1 ui-monospace,Menlo,monospace;letter-spacing:.14em;text-transform:uppercase;color:var(--oai-ink2);margin-top:4px}
 .oai-menu-preview{list-style:none;margin:0;padding:8px;border-radius:12px;background:rgba(5,8,18,.6);border:1px solid var(--oai-line);display:grid;gap:4px;font-size:13px}
 .oai-menu-preview li{display:flex;align-items:center;gap:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .oai-dot{width:7px;height:7px;border-radius:50%;flex:none}.oai-dot.ok{background:#4fe0a8}.oai-dot.warn{background:#f2c25b}
-.oai-card button.oai-join,.oai-join{justify-self:stretch;text-align:center;margin-top:4px;padding:11px;border-radius:12px;border:1px solid var(--oai-line);background:rgba(255,255,255,.04);color:var(--oai-ink);font:600 14px/1 inherit;font-family:inherit;cursor:pointer}
-.oai-card button.oai-join.on{background:linear-gradient(90deg,rgba(34,211,238,.25),rgba(255,59,212,.25));border-color:rgba(34,211,238,.6)}
-.oai-soon-badge{cursor:default;color:#ff8be3;border-style:dashed}
-@media (prefers-reduced-motion: reduce){.oai-hero,.oai-egg-shell,.oai-spark,.oai-octo-wrap .oai-octo,.oai-bubbles i,.oai-genie-wrap svg,.oai-sparkles i,.oai-hatch,.oai-drawing{animation:none!important}.oai-bubbles,.oai-sparkles{display:none}}
+.oai-team-line{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 12px;border-radius:12px;border:1px solid rgba(79,224,168,.35);background:rgba(79,224,168,.06)}
+.oai-on-team{display:inline-flex;align-items:center;gap:6px;color:#4fe0a8;font-weight:600;font-size:13.5px}
+.oai-card button.oai-remove{width:auto;margin:0;padding:6px 12px;border-radius:999px;font-size:13px;font-weight:600;color:var(--oai-ink2);background:none;border:1px solid var(--oai-line)}
+.oai-card button.oai-remove:hover:not(:disabled){color:var(--oai-ink);border-color:rgba(255,107,107,.6);box-shadow:none;transform:none}
+.oai-cap.oai-off .oai-cap-what{opacity:.55}
+.oai-cap-what small{overflow:hidden;text-overflow:ellipsis}
+.oai-caps{display:grid;gap:12px;padding-top:4px;border-top:1px solid var(--oai-line)}
+.oai-cap-group h3{margin:8px 0 6px;font:600 11px/1 ui-monospace,Menlo,monospace;letter-spacing:.14em;text-transform:uppercase;color:var(--oai-ink2)}
+.oai-cap-group ul{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+.oai-cap{display:flex;align-items:center;gap:10px;font-size:13.5px}
+.oai-cap-what{flex:1;min-width:0;display:flex;flex-direction:column}
+.oai-cap-what strong{font-weight:600}
+.oai-cap-what small{color:var(--oai-ink2);font-size:12px;line-height:1.35}
+.oai-cap-what code{font:11px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;color:#7fb8c8;overflow-wrap:anywhere}
+.oai-cap-empty{font-size:12.5px!important}
+.oai-version{flex:none;font:11px/1 ui-monospace,Menlo,monospace;color:var(--oai-ink2);padding:3px 7px;border-radius:999px;border:1px solid var(--oai-line)}
+.oai-version.oai-pending{border-style:dashed}
+.oai-tick{flex:none;display:grid;place-items:center;color:#4fe0a8}
+.oai-genie .oai-soon-badge{justify-self:start;padding:6px 12px}
+@media (prefers-reduced-motion: reduce){.oai-hero,.oai-egg-shell,.oai-spark,.oai-octo-wrap .oai-octo,.oai-bubbles i,.oai-genie-wrap svg,.oai-hatch,.oai-drawing,.oai-zzz i,.oai-scan i,.oai-power,.oai-portrait,.oai-eyes,.oai-found-row{animation:none!important}.oai-bubbles,.oai-scan i:nth-child(n+2){display:none}.oai-zzz i{opacity:.7}.oai-zzz i:nth-child(2){transform:translate(12px,-22px)}.oai-zzz i:nth-child(3){transform:translate(22px,-40px)}.oai-scan i{opacity:.6;transform:scale(2.2)}}
 `;
 
 // src/client/subscriptions.js

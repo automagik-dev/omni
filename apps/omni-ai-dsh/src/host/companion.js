@@ -132,7 +132,28 @@ export function createCompanionActions(ctx, { fetch: fetchImpl = globalThis.fetc
     return rt.createBot({ ...OMNI_BOT, name, workDir: project, pickModel: true })
   }
 
+  // The companion made before the Omni plugins ran here (installed by the team step) is
+  // the Main Bot's look and name once they do.
+  async function applyCompanion(rt, entry = ownEntry(ctx)) {
+    if (typeof entry.companionName !== 'string') return false
+    const id = await mainBotOf(rt)
+    if (id === undefined) return false
+    const bot = rt.botOf?.(id)
+    if (bot?.name === entry.companionName && bot?.role === COMPANION_ROLE) return true
+    await rt.updateBot(id, {
+      name: entry.companionName,
+      role: COMPANION_ROLE,
+      ...(entry.companionColor ? { color: entry.companionColor } : {}),
+      ...(entry.companionShape ? { avatar: { shape: entry.companionShape } } : {}),
+    })
+    return true
+  }
+
   return {
+    // Not endpoints: the Bot types (bot-types.js) read the team through these.
+    team,
+    omniProjectOf,
+
     // What the companion step needs: can it generate, and is a companion already made.
     async companion() {
       const source = await imageSource(ctx, now())
@@ -234,6 +255,7 @@ export function createCompanionActions(ctx, { fetch: fetchImpl = globalThis.fetc
       await ctx.settings.update(ENTRY, { teamOmni: omni, teamGenie: genie, ...(omniAbilities ? { teamOmniAbilities: JSON.stringify(omniAbilities) } : {}), ...(omni ? {} : { connectOmniSkipped: true }) })
       const rt = team()
       let omniBot = null
+      if (rt !== undefined) await applyCompanion(rt).catch(error => ctx.logger?.warn?.('omni-ai: the companion was not applied: %s', error?.message ?? error))
       if (omni && rt !== undefined) {
         const bot = await joinOmni(rt).catch((error) => { throw refused(String(error?.message ?? error)) })
         omniBot = { id: bot.id, name: bot.name }

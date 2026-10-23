@@ -10672,7 +10672,8 @@ function noteStepShown() {
     stepsShown -= 1;
   };
 }
-var stepShown = () => stepsShown > 0;
+var OMNI_AI_SHOWING = /* @__PURE__ */ Symbol.for("automagik.omni.onboarding-showing");
+var stepShown = (scope = globalThis) => stepsShown > 0 || (scope[OMNI_AI_SHOWING] ?? 0) > 0;
 var isConnected = (link) => link?.linked === true || link?.configured === true;
 async function gateConnect({ explicit, complete }, { request, omniAi = callOmniAi, storage = localStore() } = {}) {
   let link = null;

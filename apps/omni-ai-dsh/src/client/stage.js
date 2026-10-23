@@ -127,6 +127,14 @@ function Rail({ at }) {
     }, label)))
 }
 
+// While a step shows, it counts itself here, so the Omni channels plugin (which the team
+// step can install mid-onboarding) keeps its own Connect wizard from opening on top.
+const SHOWING = Symbol.for('automagik.omni.onboarding-showing')
+export function noteShowing(scope = globalThis) {
+  scope[SHOWING] = (scope[SHOWING] ?? 0) + 1
+  return () => { scope[SHOWING] -= 1 }
+}
+
 // `hero` replaces the companion (or, before there is one, the octopus) at the top.
 export function Stage({ title, speech, at, glitching, hero, mark = 'AUTOMAGIK', wide = false, children }) {
   const titleRef = useRef(null)
@@ -137,6 +145,7 @@ export function Stage({ title, speech, at, glitching, hero, mark = 'AUTOMAGIK', 
     root.inert = true
     return () => { root.inert = previous }
   }, [])
+  useEffect(() => noteShowing(), [])
   useEffect(() => { titleRef.current?.focus() }, [title])
   const shown = useTypewriter(speech)
   const [look] = useCompanion()

@@ -59,7 +59,10 @@ export function noteStepShown() {
   stepsShown += 1
   return () => { stepsShown -= 1 }
 }
-export const stepShown = () => stepsShown > 0
+// omni-ai's onboarding steps count themselves on this shared counter while they show: its team
+// step installs this plugin mid-onboarding, and the wizard must not open on top of it.
+const OMNI_AI_SHOWING = Symbol.for('automagik.omni.onboarding-showing')
+export const stepShown = (scope = globalThis) => stepsShown > 0 || (scope[OMNI_AI_SHOWING] ?? 0) > 0
 
 // Whether the link this host reports reaches an Omni.
 export const isConnected = link => link?.linked === true || link?.configured === true

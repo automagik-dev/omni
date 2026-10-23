@@ -136,9 +136,13 @@ The shape was read from DSH 0.2.1-rc.2:
 | `ai-subscription` | `{ provider, on }` | Shows or hides a dsh-subscriptions vendor's models. |
 | `provider-key`, `signin-*` | see `src/host/providers.js` | A key, or a sign-in run through DSH's authorization service. |
 | `ai-terminal-open`, `-read`, `-write`, `-resize`, `-close` | `{ kind: 'claude-login' }`, then the terminal id | The terminal that runs `claude auth login`, typed at a prompt and run with Enter. |
+| `omni-plugins` | none | The Omni plugins (`@automagik/omni-dsh`, `-channels-dsh`, `-canvas-dsh`): each one's version and whether it is installed, `ready` once they run here, and the install in progress. |
+| `omni-plugins-install` | none | Installs the missing ones in order through DSH's plugin manager (`installBundle`, from this plugin's own source pointed at its siblings, else this release from the registry), switching on any that are off. Pressing Omni's power button in the team step calls it. |
+| `bot-type` | `{ type: 'omni' }` | What the Omni Bot starts with, as groups: model and thinking (DSH's default), plugins with versions, tool groups with their switches, skills, folder and permissions. |
 
 The host declares `inject: ['settings', 'credentials', 'connection']`; `connection` serves
-the route. It reads DSH's `llm`, `authorization` and `pluginManager` services and its process
+the route. It reads DSH's `llm`, `authorization`, `pluginManager`, `agentDefaultModel`, `tools`, `skills`
+and `permissionPresets` services and its process
 service (`subprocess`, for the terminal) when they are there.
 
 ## Develop
