@@ -11,6 +11,13 @@
 | **Repos touched** | automagik-dev/omni |
 | **Design** | _No brainstorm — direct wish_ |
 
+> **As shipped (2026-10-23).** Pairing did not ship as the `OMNI_PAIRING_*` env vars and `/api/v2/pair/*` routes
+> planned below. It shipped as human login on Better Auth: the RFC 8628 device flow at `/api/auth/device/*`, keys
+> from `/api/v2/login/device-key` and `/api/v2/login/connect`, and `OMNI_LOGIN_*` / `OMNI_DEVICE_KEY_*` settings
+> (see `.env.example`). Login is on by default for a single-tenant Omni; the operator claims it and approves devices
+> with `omni claim` / `omni approve` / `omni connect`, and WhatsApp is optional. Guide:
+> `docs/guides/pair-dsh-with-omni.md`. The pairing criteria below are kept as the record of the plan.
+
 ## Summary
 
 Publish Omni three ways from one new `labs` branch: a desktop app (Linux AppImage/deb now, macOS dmg as an unsigned labs build), the same app launched through `npx @automagik/omni desktop`, and the Omni UI as an independent DSH plugin that keeps all of its own data under `~/.omni`. Connecting the app to a remote Omni needs no keys: the app shows a code, the user sends it to themselves on WhatsApp on the remote's pairing channel, and the app receives a scoped key.

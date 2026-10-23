@@ -11,7 +11,7 @@ import { asc } from 'drizzle-orm';
 import { phoneDigits } from '../lib/phone';
 import type { Services } from '../services';
 import { type LoginAuth, createLoginAuth } from './auth';
-import { type LoginConfig, claimTokenOf, readLoginConfig } from './config';
+import { type LoginConfig, type LoginDefaults, claimTokenOf, readLoginConfig } from './config';
 import { type OwnAccount, type WhatsAppAccess, accountByPhone, whatsappAccess } from './whatsapp';
 
 const log = createLogger('login');
@@ -31,16 +31,20 @@ export interface Login {
   connectLinks: Map<string, number[]>;
 }
 
-/** Login for this app, or null when it is off (OMNI_LOGIN_ENABLED unset, multitenancy on, or misconfigured). */
+/**
+ * Login for this app, or null when it is off (OMNI_LOGIN_ENABLED=false, multitenancy on,
+ * or misconfigured). `defaults` are what index.ts resolved at boot (login/secret.ts).
+ */
 export function createLogin(
   db: Database,
   services: Services,
   eventBus: EventBus | null,
   whatsapp: WhatsAppAccess = whatsappAccess(services),
+  defaults: LoginDefaults = {},
 ): Login | null {
   let config: LoginConfig | null;
   try {
-    config = readLoginConfig();
+    config = readLoginConfig(process.env, defaults);
   } catch (error) {
     log.error('Human login is misconfigured and stays off', { error: String(error) });
     return null;
@@ -78,9 +82,10 @@ export async function ownerAccount(login: Login): Promise<OwnAccount | null> {
 /** Say once at boot how to claim an unclaimed Omni. */
 export async function announceClaim(login: Login): Promise<void> {
   if (await ownerOf(login)) return;
-  log.info(
-    `This Omni has no owner yet. Claim it: ${login.config.publicUrl}/api/login/claim?token=${claimTokenOf(login.config)}`,
-  );
+  const path = `/api/login/claim?token=${claimTokenOf(login.config)}`;
+  // Without a fixed public URL this line names only the path: the boot log is no place to guess an address.
+  const where = login.config.publicUrl ? `${login.config.publicUrl}${path}` : `<this Omni's address>${path}`;
+  log.info(`This Omni has no owner yet. Claim it: run \`omni claim\` on this server, or open ${where}`);
 }
 
 const CODE_COOLDOWN_MS = 60_000;

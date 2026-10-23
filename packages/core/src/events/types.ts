@@ -48,6 +48,8 @@ export const CORE_EVENT_TYPES = [
   'access.pairing_approved',
   // Human login: the owner claimed the Omni; a device (desktop app, DSH plugin, CLI) was authorized
   'access.owner_claimed',
+  'access.owner_whatsapp_linked',
+  'access.device_code_approved',
   'access.device_authorized',
   // The owner asked for a connect link in their self chat (texting "connect")
   'access.connect_link_issued',
@@ -553,8 +555,27 @@ export interface AccessPairingApprovedPayload {
 /** The first verified human claimed this Omni; they are its owner from now on. */
 export interface AccessOwnerClaimedPayload {
   userId: string;
-  /** The connected WhatsApp account whose number they verified. */
+  /** The connected WhatsApp account whose number they verified; absent when they claimed without WhatsApp. */
+  instanceId?: string;
+  /** How they proved they run this Omni: a verified WhatsApp number, the boot claim token, or an admin key. */
+  via?: 'whatsapp' | 'claim-token' | 'operator';
+  /** The admin key that claimed it, when `via` is 'operator'. */
+  apiKeyId?: string;
+}
+
+/** An owner who claimed without WhatsApp linked one, so approvals can come from their phone. */
+export interface AccessOwnerWhatsappLinkedPayload {
+  userId: string;
   instanceId: string;
+}
+
+/** The owner approved a waiting device's code from the server (`omni approve`). Never carries the code. */
+export interface AccessDeviceCodeApprovedPayload {
+  userId: string;
+  /** The device-flow client, when the request named one. */
+  clientId: string | null;
+  via: 'operator';
+  apiKeyId: string;
 }
 
 /** A device got its Omni key after its owner approved it. Never carries the key. */
@@ -571,9 +592,10 @@ export interface AccessDeviceAuthorizedPayload {
 /** The owner texted "connect" to themselves and got a one-time link that connects one device. Never carries the link. */
 export interface AccessConnectLinkIssuedPayload {
   userId: string;
-  /** The connected WhatsApp account whose self chat asked. */
-  instanceId: string;
+  /** The connected WhatsApp account whose self chat asked; absent when the operator asked (`omni connect`). */
+  instanceId?: string;
   expiresAt: string;
+  via?: 'self-chat' | 'operator';
 }
 
 /**
@@ -1199,6 +1221,8 @@ export interface EventPayloadMap {
   'access.pairing_requested': AccessPairingRequestedPayload;
   'access.pairing_approved': AccessPairingApprovedPayload;
   'access.owner_claimed': AccessOwnerClaimedPayload;
+  'access.owner_whatsapp_linked': AccessOwnerWhatsappLinkedPayload;
+  'access.device_code_approved': AccessDeviceCodeApprovedPayload;
   'access.device_authorized': AccessDeviceAuthorizedPayload;
   'access.connect_link_issued': AccessConnectLinkIssuedPayload;
   'sync.started': SyncStartedPayload;

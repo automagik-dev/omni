@@ -66,6 +66,11 @@ export type RuntimeEnv = {
   NATS_URL: string;
   NODE_ENV: string;
   LOG_LEVEL: string;
+  // Human login (device pairing) is on in the API by default and keeps its own secret in the
+  // database, so neither is needed. Set only when the operator chose them in config.json, so
+  // `omni stop && omni start` and a reinstall keep that choice.
+  OMNI_PUBLIC_URL?: string;
+  OMNI_LOGIN_ENABLED?: string;
 };
 
 /** Legacy default — anything pointing at this was inherited from pre-embedded pgserve days. */
@@ -264,5 +269,7 @@ export function buildRuntimeEnv(serverConfig: ServerConfig, cliConfig: Config = 
     NATS_URL: 'nats://localhost:4222',
     NODE_ENV: serverConfig.nodeEnv,
     LOG_LEVEL: serverConfig.logLevel,
+    ...(serverConfig.publicUrl ? { OMNI_PUBLIC_URL: serverConfig.publicUrl } : {}),
+    ...(serverConfig.login === 'off' ? { OMNI_LOGIN_ENABLED: 'false' } : {}),
   };
 }

@@ -2,7 +2,7 @@
  * OpenAPI schemas for human login (wish: omni-labs-distribution).
  *
  * Omni's own login endpoints under /api/v2/login, all public (`security: []`) and
- * all 404 unless the deployment set OMNI_LOGIN_ENABLED=true. Better Auth's own
+ * all 404 when login is off (OMNI_LOGIN_ENABLED=false, or multitenancy). Better Auth's own
  * endpoints under /api/auth (the RFC 8628 device flow and passkeys) follow Better
  * Auth's documentation and are not repeated here.
  */
@@ -28,6 +28,10 @@ export const LoginStatusSchema = z
       description: "The owner's own WhatsApp number (+E.164) while connected; a device's QR opens its self chat",
     }),
     deviceUrl: z.string().openapi({ description: 'The device-approval page (RFC 8628 verification_uri)' }),
+    passkeys: z.boolean().openapi({
+      description:
+        'Whether the approval page offers Face ID and fingerprints: only with a fixed public URL (OMNI_PUBLIC_URL)',
+    }),
   })
   .openapi('LoginStatus');
 
@@ -132,6 +136,22 @@ export function registerLoginSchemas(registry: OpenAPIRegistry): void {
     responses: { 200: ok(z.object({ signedIn: z.boolean() }), 'Signed in'), 400: error('Wrong or expired code') },
   });
 
+  registry.registerPath({
+    ...common,
+    method: 'post',
+    path: '/login/claim/token',
+    operationId: 'claimWithToken',
+    summary: 'Claim the Omni with the claim token alone (public, claim token)',
+    description:
+      'Whoever has the claim token from the boot log runs this server, so the token alone makes them the owner, ' +
+      'with no WhatsApp. They can link one after, with the claim steps below, to approve devices from their phone.',
+    request: { headers: claimToken },
+    responses: {
+      201: ok(z.object({ claimed: z.literal(true) }), 'Claimed'),
+      404: error('Claimed already, wrong token, or login off'),
+    },
+  });
+
   for (const [method, path, operationId, summary, body, response] of [
     [
       'get',
@@ -172,7 +192,9 @@ export function registerLoginSchemas(registry: OpenAPIRegistry): void {
       path,
       operationId,
       summary: `${summary} (public, claim token)`,
-      description: 'Only while the Omni has no owner, and only with the claim token from the boot log; otherwise 404.',
+      description:
+        'Only with the claim token from the boot log, while the Omni has no owner or its owner has no WhatsApp ' +
+        'yet (then these steps link one); otherwise 404.',
       request: { headers: claimToken, ...(body ? json(body) : {}) },
       responses: { 200: ok(response, 'Done'), 404: error('Claimed already, wrong token, or login off') },
     });

@@ -25,8 +25,10 @@ const ON = {
 };
 
 describe('readLoginConfig', () => {
-  test('is off unless enabled, and always off with multitenancy', () => {
-    expect(readLoginConfig({})).toBeNull();
+  test('is on with nothing set, off only when switched off, and always off with multitenancy', () => {
+    expect(readLoginConfig({}, { secret: 's'.repeat(43) })).toMatchObject({ enabled: true, publicUrl: null });
+    expect(readLoginConfig({ OMNI_LOGIN_ENABLED: 'false' }, { secret: 's'.repeat(43) })).toBeNull();
+    expect(readLoginConfig({ OMNI_LOGIN_ENABLED: 'FALSE' })).toBeNull();
     expect(readLoginConfig({ ...ON, OMNI_MULTITENANCY_ENABLED: 'true' })).toBeNull();
   });
 
@@ -35,21 +37,43 @@ describe('readLoginConfig', () => {
       enabled: true,
       publicUrl: 'https://omni.example.com',
       secret: 'x'.repeat(40),
-      deviceKeyScopes: ['instances:read', 'chats:read', 'messages:read', 'events:read', 'system:read', 'system:update'],
+      deviceKeyScopes: ['instances:*', 'chats:*', 'messages:*', 'events:*', 'system:read', 'system:update'],
       deviceKeyTtlDays: null,
     });
     expect(
-      readLoginConfig({ ...ON, OMNI_DEVICE_KEY_SCOPES: 'instances:*', OMNI_DEVICE_KEY_TTL_DAYS: '30' }),
+      readLoginConfig({ ...ON, OMNI_DEVICE_KEY_SCOPES: 'instances:read', OMNI_DEVICE_KEY_TTL_DAYS: '30' }),
     ).toMatchObject({
-      deviceKeyScopes: ['instances:*'],
+      deviceKeyScopes: ['instances:read'],
       deviceKeyTtlDays: 30,
     });
   });
 
-  test('refuses a short secret, a missing URL, and scopes that would let a device mint keys', () => {
+  test('takes the generated secret and the stored public URL when the environment has neither', () => {
+    expect(readLoginConfig({}, { secret: 'g'.repeat(43), publicUrl: 'http://omni.tail.ts.net:8882' })).toMatchObject({
+      secret: 'g'.repeat(43),
+      publicUrl: 'http://omni.tail.ts.net:8882',
+    });
+    // The environment wins over both.
+    expect(readLoginConfig(ON, { secret: 'g'.repeat(43), publicUrl: 'http://other' })).toMatchObject({
+      secret: 'x'.repeat(40),
+      publicUrl: 'https://omni.example.com',
+    });
+  });
+
+  test('refuses a short or missing secret, a URL with a path, and scopes that govern Omni itself', () => {
     expect(() => readLoginConfig({ ...ON, OMNI_AUTH_SECRET: 'short' })).toThrow();
-    expect(() => readLoginConfig({ ...ON, OMNI_PUBLIC_URL: '' })).toThrow();
-    for (const scopes of ['*', 'keys:write', 'instances:read,platform:admin']) {
+    expect(() => readLoginConfig({})).toThrow();
+    expect(() => readLoginConfig({ ...ON, OMNI_PUBLIC_URL: 'https://omni.example.com/app' })).toThrow();
+    expect(() => readLoginConfig({ ...ON, OMNI_PUBLIC_URL: 'ftp://omni.example.com' })).toThrow();
+    for (const scopes of [
+      '*',
+      'keys:write',
+      'instances:read,platform:admin',
+      'settings:write',
+      'auth:admin',
+      'trust:write',
+      'audit:read',
+    ]) {
       expect(() => readLoginConfig({ ...ON, OMNI_DEVICE_KEY_SCOPES: scopes })).toThrow();
     }
   });

@@ -75,6 +75,7 @@ import { tenancyMiddleware } from './middleware/tenancy';
 import packageJson from '../package.json';
 import { SLACK_OAUTH_CALLBACK_PATH } from './constants/slack-app';
 import { type Login, createLogin } from './login';
+import type { LoginDefaults } from './login/config';
 import { marketPageRoutes, marketRoutes } from './market/routes';
 import { createMarket, readMarketPublicUrl } from './market/service';
 import { createContextMiddleware } from './middleware/context';
@@ -143,14 +144,15 @@ export function createApp(
   eventBus: EventBus | null = null,
   channelRegistry: ChannelRegistry | null = null,
   givenLogin?: Login | null,
+  loginDefaults: LoginDefaults = {},
 ): CreateAppResult {
   const app = new Hono<{ Variables: AppVariables }>();
 
   // Create context middleware and get services
   const { middleware: contextMiddleware, services } = createContextMiddleware(db, eventBus, channelRegistry);
-  // Human login (Better Auth); null when OMNI_LOGIN_ENABLED is off. index.ts passes the one
-  // its WhatsApp approval subscriber uses, so there is one Better Auth instance per process.
-  const login = givenLogin === undefined ? createLogin(db, services, eventBus) : givenLogin;
+  // Human login (Better Auth); null when OMNI_LOGIN_ENABLED=false or multitenancy is on.
+  // `loginDefaults` are what index.ts resolved at boot (login/secret.ts).
+  const login = givenLogin === undefined ? createLogin(db, services, eventBus, undefined, loginDefaults) : givenLogin;
   const updater = createSystemUpdater({ version: packageJson.version, login, eventBus });
 
   // Global middleware
@@ -642,6 +644,7 @@ export function createApp(
   // This Omni's version and the updates its owner confirms on WhatsApp (routes/v2/system.ts)
   protectedApp.use('*', async (c, next) => {
     c.set('updater', updater);
+    c.set('login', login);
     await next();
   });
   // Mount v2 routes

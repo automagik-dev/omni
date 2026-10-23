@@ -65,6 +65,7 @@ const shutdownLog = createLogger('api:shutdown');
 import packageJson from '../package.json';
 import { type App, createApp } from './app';
 import { type Login, announceClaim } from './login';
+import { resolveLoginDefaults } from './login/secret';
 import { markPluginsDegraded } from './plugin-state';
 import {
   InstanceMonitor,
@@ -624,7 +625,7 @@ async function setupEventBusServices(
   }
 
   // Human login: devices approved by the owner over WhatsApp, and the claim link for an
-  // unclaimed Omni (off unless OMNI_LOGIN_ENABLED). The same self chat confirms updates.
+  // unclaimed Omni (on by default; OMNI_LOGIN_ENABLED=false turns it off). The same self chat confirms updates.
   try {
     await setupDeviceLogin(eventBus, login, updater);
     if (login) await announceClaim(login);
@@ -922,8 +923,12 @@ async function main() {
     pluginLog.warn('Skipping channel plugin loading (no event bus)');
   }
 
+  // Human login needs a secret and, optionally, a public URL: resolved from the database
+  // when the environment leaves them unset, so pairing works with nothing configured.
+  const loginDefaults = await resolveLoginDefaults(db);
+
   // Create app and get services
-  const { app, services, login, updater } = createApp(db, eventBus, globalChannelRegistry);
+  const { app, services, login, updater } = createApp(db, eventBus, globalChannelRegistry, undefined, loginDefaults);
   globalServicesRef = services;
 
   // G5 (ADR-0008): opt the instance monitor into the tenant fan-out now that the

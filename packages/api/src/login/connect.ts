@@ -26,7 +26,8 @@ export const LINK_WINDOW_MS = 10 * 60 * 1000;
 const PREFIX = 'omni-connect:';
 /** What a grant looks like: base64url, 24 characters for 18 random bytes. */
 export const GrantSchema = z.string().regex(/^[A-Za-z0-9_-]{24}$/);
-const GrantRecordSchema = z.object({ userId: z.string().min(1), instanceId: z.string().min(1) });
+/** Who a grant connects a device for, and the self chat that asked for it (none when the operator did). */
+const GrantRecordSchema = z.object({ userId: z.string().min(1), instanceId: z.string().min(1).optional() });
 export type GrantRecord = z.infer<typeof GrantRecordSchema>;
 
 const identifierOf = (grant: string) => `${PREFIX}${createHash('sha256').update(grant).digest('hex')}`;

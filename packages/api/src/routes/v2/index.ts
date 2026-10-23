@@ -35,6 +35,7 @@ import { logsRoutes } from './logs';
 import { mediaRoutes } from './media';
 import { messagesRoutes } from './messages';
 import { metricsRoutes } from './metrics';
+import { ownerRoutes } from './owner';
 import { payloadsRoutes } from './payloads';
 import { personsRoutes } from './persons';
 import { processedEventsRoutes } from './processed-events';
@@ -72,6 +73,7 @@ v2Routes.route('/journeys', journeysRoutes); // Journey tracing endpoints
 v2Routes.route('/persons', personsRoutes);
 v2Routes.route('/access', accessRoutes);
 v2Routes.route('/settings', settingsRoutes);
+v2Routes.route('/owner', ownerRoutes); // The operator's way in: omni claim, omni approve, omni connect
 v2Routes.route('/system', systemRoutes); // This Omni's version and the updates its owner confirms
 v2Routes.route('/providers', providersRoutes);
 v2Routes.route('/dead-letters', deadLettersRoutes);

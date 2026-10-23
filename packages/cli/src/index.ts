@@ -45,6 +45,7 @@ import { createMessagesCommand } from './commands/messages.js';
 import { createMultitenancyCommand } from './commands/multitenancy.js';
 import { createMusicCommand } from './commands/music.js';
 import { createOpenCommand } from './commands/open.js';
+import { createApproveCommand, createClaimCommand } from './commands/owner.js';
 import { createPayloadsCommand } from './commands/payloads.js';
 import { createPersonsCommand } from './commands/persons.js';
 import { createPromptsCommand } from './commands/prompts.js';
@@ -344,7 +345,19 @@ const COMMANDS: CommandDef[] = [
     create: createConnectCommand,
     category: 'core',
     helpGroup: 'Management',
-    helpDescription: 'Connect instance to genie agent via NATS',
+    helpDescription: 'A link that connects a device; or wire an instance to a Genie agent',
+  },
+  {
+    create: createApproveCommand,
+    category: 'core',
+    helpGroup: 'Management',
+    helpDescription: 'Let a device in by the code it shows',
+  },
+  {
+    create: createClaimCommand,
+    category: 'core',
+    helpGroup: 'Management',
+    helpDescription: 'Make this Omni yours (no WhatsApp needed)',
   },
   {
     create: createTopLevelSetupCommand,
