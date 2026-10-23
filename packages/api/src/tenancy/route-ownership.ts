@@ -301,7 +301,9 @@ const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
       'Static "open the Omni app" page (human login). Answers 404 unless the operator set ' +
       'OMNI_LOGIN_ENABLED=true, and always with multitenancy on. Fixed HTML and script; its only link is ' +
       "omni://connect with this Omni's own address, which grants nothing: the app then signs in through " +
-      "the device page, which needs the owner's own session.",
+      "the device page, which needs the owner's own session. With ?grant= (a connect link the owner got in " +
+      'their own self chat) it looks the grant up without spending it and puts it in that link, or says the ' +
+      'link expired; it reveals only whether that exact grant is live.',
   },
   {
     route: 'GET /api/login/device',
@@ -422,6 +424,33 @@ const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
       "always with multitenancy on. Only a Bearer token of the owner's session counts, never a cookie; the " +
       'session ends with the exchange, so one approval mints one key. Scopes come from server config and ' +
       'can never include *, keys:* or platform:*.',
+  },
+  {
+    route: 'POST /api/v2/login/connect',
+    class: 'public-by-contract',
+    justification:
+      'Device sign-in from a connect link: a device trades the one-time grant the owner got by texting ' +
+      '"connect" in their own WhatsApp self chat for an Omni API key. Answers 404 unless the operator set ' +
+      'OMNI_LOGIN_ENABLED=true, and always with multitenancy on. Rate-limited per IP; a grant is 144 random ' +
+      'bits stored only as a hash, lives ten minutes and is spent before the key exists, so one link mints ' +
+      'one key. Any failure is the same 410. Scopes come from server config and can never include *, keys:* ' +
+      'or platform:*.',
+  },
+  {
+    route: 'GET /',
+    class: 'public-by-contract',
+    justification:
+      "What a browser sees at this Omni's address: a fixed page saying this is an Omni, with links to get " +
+      'the app and, when human login is on, to open it (omni://connect with the configured public URL, which ' +
+      'grants nothing). Reads no database, tenant, instance, user or connection state. Any request not asking ' +
+      'for HTML gets the plain JSON 404 it got before.',
+  },
+  {
+    route: 'GET /api',
+    class: 'public-by-contract',
+    justification:
+      "The same fixed page as GET /, for a browser that opens this Omni's /api address. Reads no database, " +
+      'tenant, instance, user or connection state; anything not asking for HTML gets the plain JSON 404.',
   },
   {
     route: 'POST /api/v2/channels/twilio-whatsapp/:instanceId/webhook',

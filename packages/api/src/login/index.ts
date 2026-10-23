@@ -27,6 +27,8 @@ export interface Login {
   deviceRequests: Map<string, { ip: string | null; at: number }>;
   /** When codes were last sent to each number (for the per-number cooldown). */
   codeSends: Map<string, number[]>;
+  /** When connect links were last issued in each self chat (login/connect.ts). */
+  connectLinks: Map<string, number[]>;
 }
 
 /** Login for this app, or null when it is off (OMNI_LOGIN_ENABLED unset, multitenancy on, or misconfigured). */
@@ -53,6 +55,7 @@ export function createLogin(
     whatsapp,
     deviceRequests: new Map(),
     codeSends: new Map(),
+    connectLinks: new Map(),
   };
 }
 

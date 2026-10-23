@@ -85,6 +85,31 @@ export function registerLoginSchemas(registry: OpenAPIRegistry): void {
   registry.registerPath({
     ...common,
     method: 'post',
+    path: '/login/connect',
+    operationId: 'connectWithLink',
+    summary: 'Trade a connect link for an Omni key (public)',
+    description:
+      'The owner texts "connect" to themselves on WhatsApp and gets a link, /api/login/app?grant=…, that opens ' +
+      'omni://connect?url=<this Omni>&grant=<grant>. The app sends that grant here and gets an Omni API key, ' +
+      'with no second sign-in. A grant works once, for ten minutes; any failure is the same 410.',
+    request: json(
+      z.object({
+        grant: z.string().regex(/^[A-Za-z0-9_-]{24}$/),
+        clientId: z.enum(['omni-desktop', 'omni-dsh', 'omni-cli']),
+        deviceName: z.string().min(1).max(80),
+      }),
+    ),
+    responses: {
+      200: ok(DeviceKeySchema, 'The device key'),
+      400: error('Malformed body'),
+      404: error('Login is not enabled here'),
+      410: error('The link expired or was already used'),
+    },
+  });
+
+  registry.registerPath({
+    ...common,
+    method: 'post',
     path: '/login/send-code',
     operationId: 'sendOwnerLoginCode',
     summary: "Send a login code to the owner's WhatsApp (public)",

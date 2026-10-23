@@ -85,7 +85,7 @@ import { createWebhookAuthMiddleware } from './middleware/webhook-auth';
 import { getHealth, healthRoutes } from './routes/health';
 import { openapiRoutes } from './routes/openapi';
 import { v2Routes } from './routes/v2';
-import { loginApiRoutes, loginAuthRoutes, loginPageRoutes } from './routes/v2/login';
+import { landingRoutes, loginApiRoutes, loginAuthRoutes, loginPageRoutes } from './routes/v2/login';
 import { platformTenantRoutes } from './routes/v2/platform-tenants';
 import { slackOAuthCallback } from './routes/v2/slack';
 import type { Services } from './services';
@@ -113,6 +113,7 @@ const TIMEOUT_EXEMPT_PATHS: readonly string[] = [SLACK_OAUTH_CALLBACK_PATH];
  * mutexes and corrupting state (see #72 / #70). So only GET/HEAD is timed out
  * — minus the enumerated GETs that write.
  */
+
 export function shouldTimeoutRequest(method: string, path: string): boolean {
   if (method !== 'GET' && method !== 'HEAD') return false;
   return !TIMEOUT_EXEMPT_PATHS.includes(path);
@@ -127,6 +128,9 @@ export interface CreateAppResult {
   login: Login | null;
 }
 
+/** The JSON 404 every unknown path answers. */
+const endpointNotFound = (c: Context) =>
+  c.json({ error: { code: 'NOT_FOUND', message: `Endpoint not found: ${c.req.method} ${c.req.path}` } }, 404);
 /**
  * Create the Hono application
  */
@@ -581,6 +585,9 @@ export function createApp(
   app.route('/api/auth', loginAuthRoutes(login));
   app.route('/api/v2/login', loginApiRoutes(login));
   app.route('/api/login', loginPageRoutes(login));
+  // What a browser sees at this Omni's own address (and /api): what this is and how to get in.
+  // Everything else asking there keeps the plain JSON 404 below. Declared `public-by-contract`.
+  app.route('/', landingRoutes(login, endpointNotFound));
 
   // The Automagik marketplace: this release's DSH plugins as a DSH market index and an npm
   // registry under /api/market, plus the vetted third-party add-ons, and its page for a person
@@ -633,17 +640,7 @@ export function createApp(
   app.route('/api/v2', protectedApp);
 
   // 404 handler
-  app.notFound((c) => {
-    return c.json(
-      {
-        error: {
-          code: 'NOT_FOUND',
-          message: `Endpoint not found: ${c.req.method} ${c.req.path}`,
-        },
-      },
-      404,
-    );
-  });
+  app.notFound(endpointNotFound);
 
   return { app, services, login };
 }

@@ -6,6 +6,9 @@
  * user code. When the owner sends it, this subscriber approves that device code
  * as the owner, exactly as the approval page would, and says so in the same chat.
  *
+ * The other way round needs no address at all: the owner texts "connect" there and
+ * gets back a one-time link that connects one device (login/connect.ts).
+ *
  * It counts only the owner's own fresh text in their own self chat, typed on one
  * of their devices: Baileys delivered it as 'notify', never as 'append', which is
  * how Omni's own sends arrive. Not quoted, forwarded, a protocol message or history
@@ -17,7 +20,9 @@ import type { EventBus, TypedOmniEvent } from '@omni/core';
 import { classifyEnvelope, createLogger } from '@omni/core';
 import { type Login, deviceRequestOf, ownerOf } from '../login';
 import { DEVICE_CLIENTS, isDeviceClient } from '../login/config';
-import { deviceApprovedMessage } from '../login/messages';
+import { CONNECT_TTL_MS, allowConnectLink, isConnectRequest, mintConnectGrant } from '../login/connect';
+import { connectLinkMessage, connectTooSoonMessage, deviceApprovedMessage } from '../login/messages';
+import type { OwnAccount } from '../login/whatsapp';
 import { platformTime } from '../services/whatsapp-self';
 
 const log = createLogger('device-login');
@@ -26,6 +31,8 @@ const log = createLogger('device-login');
 const DEVICE_CODE_TTL_MS = 10 * 60 * 1000;
 /** A code typed this long before its device asked is not taken as an answer to it. */
 const CLOCK_SKEW_MS = 30 * 1000;
+/** A "connect" older than this (a replayed or delayed event) gets no link. */
+const CONNECT_FRESH_MS = 2 * 60 * 1000;
 /** Better Auth's user-code alphabet. */
 const USER_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
@@ -77,6 +84,24 @@ export function isOwnerSelfChatText(event: TypedOmniEvent<'message.received'>, s
 
 export type DeviceApproval = { userCode: string; clientId: string | null };
 
+/** The owner and their account when the event is the owner's own fresh text in their own self chat, else null. */
+async function ownerSelfChat(
+  login: Login,
+  event: TypedOmniEvent<'message.received'>,
+): Promise<{ owner: { id: string; phone: string }; account: OwnAccount; sentAt: number } | null> {
+  if (!event.metadata.instanceId) return null;
+  // Device keys are legacy keys; a tenant-stamped (or quarantined) envelope approves nothing.
+  if (classifyEnvelope(event.metadata).world !== 'legacy') return null;
+  const owner = await ownerOf(login);
+  if (!owner?.phone) return null;
+  const account = (await login.whatsapp.accounts()).find(
+    (candidate) => candidate.instanceId === event.metadata.instanceId && candidate.phone === owner.phone,
+  );
+  if (!account || !isOwnerSelfChatText(event, account.selfJid)) return null;
+  const at = platformTime(record(event.payload.rawPayload)?.messageTimestamp);
+  return { owner: { id: owner.id, phone: owner.phone }, account, sentAt: at ? Date.parse(at) : event.timestamp };
+}
+
 /** Approve the device whose code the owner sent to themselves; null when the message approves nothing. */
 export async function handleDeviceLoginMessage(
   login: Login,
@@ -84,20 +109,10 @@ export async function handleDeviceLoginMessage(
 ): Promise<DeviceApproval | null> {
   const userCode = userCodeInMessage(event.payload.content.text);
   // Almost every message stops here, before any lookup.
-  if (!userCode || !event.metadata.instanceId) return null;
-  // Device keys are legacy keys; a tenant-stamped (or quarantined) envelope approves nothing.
-  if (classifyEnvelope(event.metadata).world !== 'legacy') return null;
-
-  const owner = await ownerOf(login);
-  if (!owner?.phone) return null;
-  const account = (await login.whatsapp.accounts()).find(
-    (candidate) => candidate.instanceId === event.metadata.instanceId && candidate.phone === owner.phone,
-  );
-  if (!account || !isOwnerSelfChatText(event, account.selfJid)) return null;
-
-  const raw = record(event.payload.rawPayload);
-  const at = platformTime(raw?.messageTimestamp);
-  const sentAt = at ? Date.parse(at) : event.timestamp;
+  if (!userCode) return null;
+  const self = await ownerSelfChat(login, event);
+  if (!self) return null;
+  const { owner, account, sentAt } = self;
 
   const { adapter } = await login.auth.$context;
   const deviceCode = await adapter.findOne<{ id: string; status: string; expiresAt: Date; clientId?: string | null }>({
@@ -132,12 +147,50 @@ export async function handleDeviceLoginMessage(
   return { userCode, clientId };
 }
 
+export type ConnectLink = { url: string; expiresAt: Date } | { retryAfterSeconds: number };
+
+/**
+ * Answer the owner's "connect" in their self chat with a one-time connect link; null when
+ * the message is not that. Too many in a window get a "wait" instead of a link.
+ */
+export async function handleConnectMessage(
+  login: Login,
+  event: TypedOmniEvent<'message.received'>,
+): Promise<ConnectLink | null> {
+  if (!isConnectRequest(event.payload.content.text)) return null;
+  const self = await ownerSelfChat(login, event);
+  if (!self || self.sentAt < Date.now() - CONNECT_FRESH_MS) return null;
+  const { owner, account } = self;
+
+  const wait = allowConnectLink(login, account.instanceId);
+  if (wait > 0) {
+    await login.whatsapp
+      .sendToSelf(account, `connect-wait-${Date.now()}`, connectTooSoonMessage(wait))
+      .catch((error) => log.warn('Could not answer connect in the self chat', { error: String(error) }));
+    return { retryAfterSeconds: wait };
+  }
+  const { grant, expiresAt } = await mintConnectGrant(login, { userId: owner.id, instanceId: account.instanceId });
+  const url = `${login.config.publicUrl}/api/login/app?grant=${grant}`;
+  await login.eventBus?.publish(
+    'access.connect_link_issued',
+    { userId: owner.id, instanceId: account.instanceId, expiresAt: expiresAt.toISOString() },
+    { instanceId: account.instanceId, channelType: 'whatsapp-baileys' },
+  );
+  log.info('Connect link issued in the self chat', { instanceId: account.instanceId });
+  await login.whatsapp
+    .sendToSelf(account, `connect-${expiresAt.getTime()}`, connectLinkMessage(url, CONNECT_TTL_MS / 60_000))
+    .catch((error) => log.warn('Could not send the connect link to the self chat', { error: String(error) }));
+  return { url, expiresAt };
+}
+
 export async function setupDeviceLogin(eventBus: EventBus, login: Login | null): Promise<void> {
   if (!login) {
     log.debug('Human login is off (OMNI_LOGIN_ENABLED)');
     return;
   }
-  await eventBus.subscribe('message.received', async (event) => void (await handleDeviceLoginMessage(login, event)), {
+  const handle = async (event: TypedOmniEvent<'message.received'>) =>
+    (await handleConnectMessage(login, event)) ?? (await handleDeviceLoginMessage(login, event));
+  await eventBus.subscribe('message.received', async (event) => void (await handle(event)), {
     durable: 'device-login',
     queue: 'device-login',
     maxRetries: 2,

@@ -10,14 +10,15 @@
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { TypedOmniEvent } from '@omni/core';
-import { type Database, apiKeys, createDbHandle } from '@omni/db';
+import { type Database, apiKeys, createDbHandle, loginVerifications } from '@omni/db';
 import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
-import { eq, sql } from 'drizzle-orm';
+import { eq, like, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { type Login, createLogin } from '../../login';
 import { claimTokenOf } from '../../login/config';
+import { isLiveGrant } from '../../login/connect';
 import type { OwnAccount, WhatsAppAccess } from '../../login/whatsapp';
-import { handleDeviceLoginMessage } from '../../plugins/device-login';
+import { handleConnectMessage, handleDeviceLoginMessage } from '../../plugins/device-login';
 import { loginApiRoutes, loginAuthRoutes, loginPageRoutes } from '../../routes/v2/login';
 import type { Services } from '../../services';
 import { ApiKeyService } from '../api-keys';
@@ -273,6 +274,133 @@ postgresDescribe('human login (real PostgreSQL)', () => {
 
     // The device token works once.
     expect((await call('POST', '/api/v2/login/device-key', { deviceName: 'Again' }, bearer)).status).toBe(401);
+  });
+
+  /** The owner's "connect", or the same message changed by `change` (another chat, an old one...). */
+  const connectMessage = (change: (event: TypedOmniEvent<'message.received'>) => void = () => {}) => {
+    const event = ownerSelfChat('connect');
+    change(event);
+    return event;
+  };
+  const rawOf = (event: TypedOmniEvent<'message.received'>) => event.payload.rawPayload as Record<string, unknown>;
+  const grantOf = (url: string) => new URL(url).searchParams.get('grant') ?? '';
+
+  test('"connect" in the owner\'s self chat answers with a link that connects one device, once', async () => {
+    login.connectLinks.clear();
+    // Omni's own send, someone else, another account's self chat, another chat: no link.
+    expect(await handleConnectMessage(login, ownerSelfChat('connect', 'append'))).toBeNull();
+    expect(
+      await handleConnectMessage(
+        login,
+        connectMessage((event) => {
+          rawOf(event).key = { remoteJid: OWNER.selfJid, fromMe: false, id: 'X' };
+          rawOf(event).isFromMe = false;
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      await handleConnectMessage(
+        login,
+        connectMessage((event) => {
+          event.metadata.instanceId = OTHER.instanceId;
+          event.payload.chatId = OTHER.selfJid;
+          rawOf(event).key = { remoteJid: OTHER.selfJid, fromMe: true, id: 'X' };
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      await handleConnectMessage(
+        login,
+        connectMessage((event) => {
+          event.payload.chatId = '5511900001111@s.whatsapp.net';
+          rawOf(event).key = { remoteJid: '5511900001111@s.whatsapp.net', fromMe: true, id: 'X' };
+        }),
+      ),
+    ).toBeNull();
+    // A "connect" from minutes ago (a replayed event) gets nothing either.
+    expect(
+      await handleConnectMessage(
+        login,
+        connectMessage((event) => {
+          rawOf(event).messageTimestamp = Math.floor(Date.now() / 1000) - 300;
+        }),
+      ),
+    ).toBeNull();
+
+    const before = sent.length;
+    const link = await handleConnectMessage(login, connectMessage());
+    if (!link || !('url' in link)) throw new Error('no link');
+    expect(link.url.startsWith(`${ORIGIN}/api/login/app?grant=`)).toBe(true);
+    expect(sent.length).toBe(before + 1);
+    expect(sent.at(-1)?.account.phone).toBe(OWNER.phone);
+    expect(sent.at(-1)?.text).toContain(link.url);
+    const grant = grantOf(link.url);
+    expect(grant).toMatch(/^[A-Za-z0-9_-]{24}$/);
+    // Only a hash is stored.
+    const stored = await db
+      .select()
+      .from(loginVerifications)
+      .where(like(loginVerifications.identifier, 'omni-connect:%'));
+    expect(JSON.stringify(stored)).not.toContain(grant);
+
+    // Opening the page (or WhatsApp's link preview) does not spend the grant.
+    for (let i = 0; i < 2; i++) {
+      const page = await (await app.request(link.url)).text();
+      expect(page).toContain(`const grant = ${JSON.stringify(grant)};`);
+    }
+    expect(await (await app.request(`${ORIGIN}/api/login/app?grant=${'A'.repeat(24)}`)).text()).toContain(
+      'This link expired',
+    );
+
+    expect(
+      (await call('POST', '/api/v2/login/connect', { grant, clientId: 'evil', deviceName: 'Laptop' })).status,
+    ).toBe(400);
+    const connected = await call('POST', '/api/v2/login/connect', {
+      grant,
+      clientId: 'omni-desktop',
+      deviceName: 'Connect laptop',
+    });
+    expect(connected.status).toBe(200);
+    const minted = connected.data as { apiKey: string; keyId: string; apiUrl: string };
+    expect(minted.apiKey).toMatch(/^omni_sk_/);
+    expect(minted.apiUrl).toBe(ORIGIN);
+    const [row] = await db.select().from(apiKeys).where(eq(apiKeys.id, minted.keyId));
+    expect(row?.name).toBe('device: Connect laptop');
+    expect(row?.scopes).toEqual(['instances:read', 'chats:read']);
+    expect(sent.at(-1)?.text).toContain('The Omni desktop app is now connected to your Omni.');
+
+    // Once: the same grant again, and its page, say it expired.
+    const again = await call('POST', '/api/v2/login/connect', { grant, clientId: 'omni-desktop', deviceName: 'Again' });
+    expect(again.status).toBe(410);
+    expect((again.json.error as Json).code).toBe('LINK_EXPIRED');
+    expect(await (await app.request(link.url)).text()).toContain('This link expired');
+  });
+
+  test('connect links expire, a new one retires the oldest, and a self chat waits after a few', async () => {
+    login.connectLinks.clear();
+    const issue = async () => {
+      const link = await handleConnectMessage(login, connectMessage());
+      if (!link || !('url' in link)) throw new Error('no link');
+      return grantOf(link.url);
+    };
+    const old = await issue();
+    await db
+      .update(loginVerifications)
+      .set({ expiresAt: new Date(Date.now() - 1000) })
+      .where(like(loginVerifications.identifier, 'omni-connect:%'));
+    expect(await isLiveGrant(login, old)).toBe(false);
+    expect(
+      (await call('POST', '/api/v2/login/connect', { grant: old, clientId: 'omni-dsh', deviceName: 'Late' })).status,
+    ).toBe(410);
+
+    const grants = [await issue(), await issue(), await issue(), await issue()];
+    expect(await Promise.all(grants.map((grant) => isLiveGrant(login, grant)))).toEqual([false, true, true, true]);
+
+    // Five links in ten minutes, then a "wait" instead of a sixth.
+    const wait = await handleConnectMessage(login, connectMessage());
+    expect(wait).toMatchObject({ retryAfterSeconds: expect.any(Number) });
+    expect(sent.at(-1)?.text).toContain('Wait');
+    expect(await isLiveGrant(login, grants[3] ?? '')).toBe(true);
   });
 
   test('a device approved on the web page after the owner signs in with a WhatsApp code', async () => {
