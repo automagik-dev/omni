@@ -1,12 +1,12 @@
 {
   "name": "omni-admin-ui-profile",
   "private": true,
-  "description": "The dsh profile the Omni Admin UI image starts: dsh's own base and web app, its plugin market, and Omni's plugins (the team, channels, canvases and the welcome). Plus dsh-subscriptions (AI subscription sign-ins). prepare.mjs points each plugin at its tarball from apps/*-dsh.",
+  "description": "The dsh profile the Omni Admin UI image starts: dsh's own base and web app, its plugin market, the Bot team and the welcome (Automagik's, at the release apps/automagik.json pins), Omni's channels and canvases (apps/*-dsh), and dsh-subscriptions (AI subscription sign-ins). prepare.mjs points each plugin at its tarball.",
   "dependencies": {
-    "@automagik/omni-dsh": "*",
+    "@automagik/bots-dsh": "*",
     "@automagik/omni-channels-dsh": "*",
     "@automagik/omni-canvas-dsh": "*",
-    "@automagik/omni-ai-dsh": "*",
+    "@automagik/welcome-dsh": "*",
     "@goodandready/dsh-subscriptions": "0.7.19"
   },
   "dsh": {
@@ -15,10 +15,10 @@
         "@deepseek-ai/dsh-base",
         "@deepseek-ai/dsh-web-app",
         "@deepseek-ai/dsh-experimental-plugin-market-bundle",
-        "@automagik/omni-dsh",
+        "@automagik/bots-dsh",
         "@automagik/omni-channels-dsh",
         "@automagik/omni-canvas-dsh",
-        "@automagik/omni-ai-dsh",
+        "@automagik/welcome-dsh",
         "@goodandready/dsh-subscriptions"
       ]
     }

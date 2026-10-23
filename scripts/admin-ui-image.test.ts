@@ -3,31 +3,43 @@
  * deploy/admin-ui/server.mjs, keeping the contract the Helm chart's adminUi workload uses.
  */
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 // @ts-expect-error: a plain Node module with no type declarations.
-import { configOf, dshArgsOf, installProfile, launchPathOf, writeLink } from '../deploy/admin-ui/server.mjs';
+import {
+  configOf,
+  dshArgsOf,
+  installProfile,
+  launchPathOf,
+  renamePatch,
+  writeLink,
+} from '../deploy/admin-ui/server.mjs';
 
 const ROOT = join(import.meta.dir, '..');
 const readJson = (path: string) => JSON.parse(readFileSync(join(ROOT, path), 'utf8'));
 
 describe('what the image ships', () => {
   test('the DSH it runs is the one the plugins are tested on', () => {
-    const tested = readJson('apps/omni-ui-dsh/dev/harness/package.json').dependencies['@deepseek-ai/dsh'];
+    const tested = readJson('apps/omni-channels-dsh/dev/harness/package.json').dependencies['@deepseek-ai/dsh'];
     expect(readJson('deploy/admin-ui/runtime/package.json').dependencies['@deepseek-ai/dsh']).toBe(tested);
     expect(
       readJson('deploy/admin-ui/runtime/package-lock.json').packages['node_modules/@deepseek-ai/dsh'].version,
     ).toBe(tested);
   });
 
-  test("the profile bundles Omni's apps/*-dsh plugins and the vetted add-ons, each at an exact version", () => {
+  test("the profile bundles Omni's apps/*-dsh plugins, Automagik's pinned ones and the vetted add-ons", () => {
     const profile = readJson('deploy/admin-ui/profile/package.json');
     for (const name of Object.keys(profile.dependencies)) {
       expect(profile.dsh.profile.bundles).toContain(name);
     }
-    const names = ['omni-ui-dsh', 'omni-channels-dsh', 'omni-canvas-dsh', 'omni-ai-dsh'].map(
-      (dir) => readJson(`apps/${dir}/package.json`).name,
+    const names = [
+      ...['omni-channels-dsh', 'omni-canvas-dsh'].map((dir) => readJson(`apps/${dir}/package.json`).name),
+      ...Object.keys(readJson('apps/automagik.json').packages),
+    ];
+    // The Bot team comes first: the other plugins sit on it.
+    expect(profile.dsh.profile.bundles.filter((name: string) => name.startsWith('@automagik/'))[0]).toBe(
+      '@automagik/bots-dsh',
     );
     const addons = { '@goodandready/dsh-subscriptions': '0.7.19' };
     expect(Object.keys(profile.dependencies).sort()).toEqual([...names, ...Object.keys(addons)].sort());
@@ -97,12 +109,12 @@ describe('server.mjs', () => {
     const source = join(base, 'source');
     const dshHome = join(base, 'dsh');
     const shipped = {
-      dependencies: { '@automagik/omni-dsh': 'file:vendor/omni-dsh-1.tgz' },
-      dsh: { profile: { bundles: ['@automagik/omni-dsh'] } },
+      dependencies: { '@automagik/bots-dsh': 'file:vendor/bots-dsh-1.tgz' },
+      dsh: { profile: { bundles: ['@automagik/bots-dsh'] } },
     };
-    mkdirSync(join(source, 'node_modules', '@automagik', 'omni-dsh'), { recursive: true });
+    mkdirSync(join(source, 'node_modules', '@automagik', 'bots-dsh'), { recursive: true });
     mkdirSync(join(source, 'vendor'), { recursive: true });
-    writeFileSync(join(source, 'node_modules', '@automagik', 'omni-dsh', 'index.js'), 'one');
+    writeFileSync(join(source, 'node_modules', '@automagik', 'bots-dsh', 'index.js'), 'one');
     writeFileSync(join(source, 'package.json'), JSON.stringify(shipped));
     writeFileSync(join(source, 'cordis.patch.yml'), '[]\n');
     writeFileSync(join(source, 'pnpm-workspace.yaml'), 'packages: [.]\n');
@@ -116,16 +128,74 @@ describe('server.mjs', () => {
       join(target, 'package.json'),
       JSON.stringify({
         dependencies: { ...shipped.dependencies, 'added-plugin': '1.0.0' },
-        dsh: { profile: { bundles: ['@automagik/omni-dsh', 'added-plugin'] } },
+        dsh: { profile: { bundles: ['@automagik/bots-dsh', 'added-plugin'] } },
       }),
     );
-    writeFileSync(join(source, 'node_modules', '@automagik', 'omni-dsh', 'index.js'), 'two');
+    writeFileSync(join(source, 'node_modules', '@automagik', 'bots-dsh', 'index.js'), 'two');
     writeFileSync(join(source, '.build-id'), 'two');
     expect(installProfile({ dshHome, source }).installed).toBe(true);
-    expect(readFileSync(join(target, 'node_modules', '@automagik', 'omni-dsh', 'index.js'), 'utf8')).toBe('two');
+    expect(readFileSync(join(target, 'node_modules', '@automagik', 'bots-dsh', 'index.js'), 'utf8')).toBe('two');
     expect(readFileSync(join(target, 'cordis.patch.yml'), 'utf8')).toBe('- id: mine\n');
     const merged = JSON.parse(readFileSync(join(target, 'package.json'), 'utf8'));
     expect(merged.dependencies['added-plugin']).toBe('1.0.0');
-    expect(merged.dsh.profile.bundles).toEqual(['@automagik/omni-dsh', 'added-plugin']);
+    expect(merged.dsh.profile.bundles).toEqual(['@automagik/bots-dsh', 'added-plugin']);
+  });
+
+  // Images up to 2.261023.x shipped the Bot team and the welcome as @automagik/omni-dsh and
+  // @automagik/omni-ai-dsh: a deployment's profile (on its /data volume) moves to the new names.
+  test("a profile from an image with the old names moves to the new ones and keeps the user's rows", () => {
+    const base = mkdtempSync(join(tmpdir(), 'admin-ui-rename-'));
+    const dshHome = join(base, 'dsh');
+    const target = join(dshHome, 'profiles', 'omni');
+    for (const name of ['omni-dsh', 'omni-ai-dsh', 'omni-channels-dsh']) {
+      mkdirSync(join(target, 'node_modules', '@automagik', name), { recursive: true });
+    }
+    writeFileSync(
+      join(target, 'package.json'),
+      JSON.stringify({
+        dependencies: {
+          '@automagik/omni-dsh': 'file:vendor/a.tgz',
+          '@automagik/omni-channels-dsh': 'file:vendor/b.tgz',
+          '@automagik/omni-ai-dsh': 'file:vendor/c.tgz',
+          'added-plugin': '1.0.0',
+        },
+        dsh: {
+          profile: {
+            bundles: ['@automagik/omni-dsh', '@automagik/omni-channels-dsh', '@automagik/omni-ai-dsh', 'added-plugin'],
+          },
+        },
+      }),
+    );
+    const rows =
+      "- insert:\n    - id: web-search-auto\n      name: '@automagik/omni-dsh/web-search'\n- id: omni-ui\n  name: '@automagik/omni-dsh'\n  config:\n    memory: false\n";
+    writeFileSync(join(target, 'cordis.patch.yml'), rows);
+    writeFileSync(join(target, '.omni-admin-ui-profile'), 'old image');
+    const source = join(base, 'source');
+    const fresh = ['@automagik/bots-dsh', '@automagik/omni-channels-dsh', '@automagik/welcome-dsh'];
+    for (const name of fresh) mkdirSync(join(source, 'node_modules', name), { recursive: true });
+    mkdirSync(join(source, 'vendor'), { recursive: true });
+    writeFileSync(
+      join(source, 'package.json'),
+      JSON.stringify({
+        dependencies: Object.fromEntries(fresh.map((name) => [name, 'file:vendor/x.tgz'])),
+        dsh: { profile: { bundles: fresh } },
+      }),
+    );
+    writeFileSync(join(source, 'pnpm-workspace.yaml'), 'packages: [.]\n');
+    writeFileSync(join(source, '.build-id'), 'new image');
+
+    expect(installProfile({ dshHome, source }).installed).toBe(true);
+    const merged = JSON.parse(readFileSync(join(target, 'package.json'), 'utf8'));
+    expect(Object.keys(merged.dependencies)).toEqual([...fresh, 'added-plugin']);
+    expect(merged.dsh.profile.bundles).toEqual([...fresh, 'added-plugin']);
+    expect(existsSync(join(target, 'node_modules', '@automagik', 'omni-dsh'))).toBe(false);
+    expect(existsSync(join(target, 'node_modules', '@automagik', 'omni-ai-dsh'))).toBe(false);
+    expect(readFileSync(join(target, 'cordis.patch.yml'), 'utf8')).toBe(renamePatch(rows));
+    expect(renamePatch(rows)).toContain("name: '@automagik/bots-dsh'\n  config:\n    memory: false");
+    expect(renamePatch(rows)).toContain("name: '@automagik/bots-dsh/web-search'");
+    expect(renamePatch("name: '@automagik/omni-dsh-other'")).toBeNull();
+    expect(renamePatch('# opens this app (@automagik/omni-ai-dsh: Welcome)')).toBe(
+      '# opens this app (@automagik/welcome-dsh: Welcome)',
+    );
   });
 });

@@ -2,7 +2,7 @@
 # =============================================================================
 # Omni Admin UI — the Omni UI (DeepSeek Harness + Omni's plugins) as one image
 # =============================================================================
-# Build from the REPO ROOT (context must see package.json + apps/*-dsh):
+# Build from the REPO ROOT (context must see package.json, apps/*-dsh and apps/automagik.*):
 #
 #   DOCKER_BUILDKIT=1 docker build --platform linux/arm64 \
 #     -f deploy/Dockerfile.admin-ui -t omni-admin-ui:dev .
@@ -11,17 +11,21 @@
 # port 8899 (PORT), GET /health, and OMNI_BASE_URL + OMNI_API_KEY from the
 # ConfigMap and Secret. The key stays on the server: the plugins call Omni
 # from DSH's host process, never from the browser. What runs is DSH on loopback
-# with the profile deploy/admin-ui/prepare.mjs assembles (Omni's plugins packed
-# from apps/*-dsh at this checkout's version), behind deploy/admin-ui/server.mjs.
+# with the profile deploy/admin-ui/prepare.mjs assembles (Omni's channels and
+# canvases packed from apps/*-dsh at this checkout's version; the Bot team and the
+# welcome from the Automagik release apps/automagik.json pins, downloaded from its
+# GitHub release and checked against the pinned integrity), behind
+# deploy/admin-ui/server.mjs.
 # See server.mjs for the settings and the sign-in (the launch URL in the log).
 #
 # Everything needed is public: no build secret is read (an `npmrc` secret
-# passed by an existing pipeline is accepted and unused).
+# passed by an existing pipeline is accepted and unused). The builder reaches
+# github.com for the pinned Automagik tarballs, as it reaches the npm registry.
 # =============================================================================
 
 ARG NODE_VERSION=22.23.2
 
-# ---- builder: the pinned DSH + Omni's plugins, packed from this checkout -----
+# ---- builder: the pinned DSH + the plugins (this checkout's, Automagik's pinned) --
 FROM node:${NODE_VERSION}-bookworm-slim AS builder
 WORKDIR /src
 COPY package.json ./

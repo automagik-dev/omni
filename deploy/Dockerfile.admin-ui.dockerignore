@@ -2,14 +2,17 @@
 # (buildx >= v0.33), so the repo-root build context stays lean.
 #
 # This image only COPYs package.json (the Omni version), apps/*-dsh (what each
-# plugin packs) and deploy/admin-ui; everything else is left out.
+# plugin packs), apps/automagik.json and apps/automagik.mjs (the pinned Automagik
+# release and its fetcher) and deploy/admin-ui; everything else is left out.
 *
 !package.json
 !apps/*-dsh
+!apps/automagik.json
+!apps/automagik.mjs
 !deploy/admin-ui
 **/node_modules
 apps/*/dev
-!apps/omni-ui-dsh/dev/harness/package.json
+!apps/omni-channels-dsh/dev/harness/package.json
 apps/*/test
 deploy/admin-ui/build
 **/.env
