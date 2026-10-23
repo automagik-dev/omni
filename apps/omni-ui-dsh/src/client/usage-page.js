@@ -123,7 +123,7 @@ function ownerFace(owner, roster) {
   }
   if (owner.kind === 'agent') {
     return {
-      kind: 'agent', name: t('Tasks'), sub: owner.deleted ? t('Deleted') : '',
+      kind: 'agent', name: owner.name || 'DSH Agent', sub: owner.deleted ? t('Deleted') : '',
       paint: 'var(--bt-us-rest)', glyph: size => glyphBox(size, ChatsIcon),
     }
   }

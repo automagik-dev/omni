@@ -103,7 +103,7 @@ export function menuIcons(roster) {
 
 // The composer's "+" in a Bot's chat or a group chat: add files, reference another
 // chat, or set a scheduled task for this chat. It stands in for the shell's command
-// menu, whose plan, permission, model and compact rows reach past what Omni keeps
+// menu, whose plan, permission, model and compact rows reach past what DS Bot keeps
 // for its Bots; "/" still opens that menu. Files go through the shell's own file
 // input beside it.
 export function ComposerPlus({ sessionId, inputActions, useRoster, actions }) {

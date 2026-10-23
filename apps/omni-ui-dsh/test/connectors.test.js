@@ -27,7 +27,7 @@ const TEAM = {
   version: 1,
   mainBotIds: ['m1'],
   revision: 1,
-  bots: { m1: { id: 'm1', sessionId: 'm1', name: 'Omni', role: 'Channel orchestrator', instructions: '', createdAt: 1 } },
+  bots: { m1: { id: 'm1', sessionId: 'm1', name: 'Chief', role: 'Chief of Staff', instructions: '', createdAt: 1 } },
   rooms: {},
   exchanges: [],
   exchangeTurns: {},

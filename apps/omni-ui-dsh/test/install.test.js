@@ -40,8 +40,6 @@ test('apply registers listeners, tools, and effects in a fixed order', (t) => {
     'on session/event',
     'effect ds-bot: agent tool restrict retry',
     'on agent/created',
-    'on session/event',
-    'tool start_task',
     'effect ds-bot: identity section',
     'prompt bot-identity 640',
     'on agent/pre-step (prepend)',
@@ -104,9 +102,8 @@ test('apply registers listeners, tools, and effects in a fixed order', (t) => {
     'effect ds-bot: update check',
     'effect ds-bot: dsh update install',
     'effect ds-bot: api route',
-    'route POST /api/omni-ui',
+    'route POST /api/bot',
     'effect ds-bot: load state',
-    'provide omniTeam',
   ])
 })
 
@@ -116,7 +113,7 @@ test('the client channel answers from the saved state', async (t) => {
     mainBotId: 'm1',
     revision: 4,
     bots: {
-      m1: { id: 'm1', name: 'Omni', role: 'Channel orchestrator', lab: 'deepseek', appliedModel: 'ollama/deepseek-v4.1-flash', instructions: '', createdAt: 1 },
+      m1: { id: 'm1', name: 'Chief', role: 'Chief of Staff', lab: 'deepseek', appliedModel: 'ollama/deepseek-v4.1-flash', instructions: '', createdAt: 1 },
       b2: { id: 'b2', name: 'Writer', role: '写作', lab: 'kimi', instructions: 'Kimi-style long reads', createdAt: 2 },
     },
     rooms: {},
@@ -125,12 +122,12 @@ test('the client channel answers from the saved state', async (t) => {
     questions: {},
   })
   t.after(stop)
-  // A team saved before the octopus was stored gets it on its first Main Bot when loaded.
+  // A team saved before the whale was stored gets it on its first Main Bot when loaded.
   // A team saved with labs keeps the model each Bot last ran on and loses the lab.
   const loaded = (await call('state')).value
   const [chief, writer] = ['m1', 'b2'].map(id => loaded.bots.find(bot => bot.id === id))
   assert.deepEqual(loaded.mainBotIds, ['m1'])
-  assert.deepEqual([chief.model, chief.color, chief.avatar?.shape], ['ollama/deepseek-v4.1-flash', 'deepseek', 'octopus'])
+  assert.deepEqual([chief.model, chief.color, chief.avatar?.shape], ['ollama/deepseek-v4.1-flash', 'deepseek', 'whale'])
   assert.deepEqual([writer.role, writer.model, writer.color, writer.avatar, writer.instructions], ['写作', undefined, undefined, undefined, 'Kimi-style long reads'])
   const saved = (await call('state')).value.bots
   assert.equal(saved.some(bot => 'lab' in bot), false)
@@ -155,7 +152,7 @@ const TEAM = {
   mainBotId: 'm1',
   revision: 1,
   bots: {
-    m1: { id: 'm1', sessionId: 'm1', name: 'Omni', role: 'Channel orchestrator', lab: 'deepseek', instructions: '', createdAt: 1 },
+    m1: { id: 'm1', sessionId: 'm1', name: 'Chief', role: 'Chief of Staff', lab: 'deepseek', instructions: '', createdAt: 1 },
     b2: { id: 'b2', sessionId: 'b2', name: 'Writer', role: '写作', instructions: '', createdAt: 2 },
   },
   rooms: {},

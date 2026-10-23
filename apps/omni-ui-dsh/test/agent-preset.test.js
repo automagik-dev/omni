@@ -15,7 +15,7 @@ const TEAM = {
   mainBotIds: ['chief'],
   revision: 1,
   whaleStored: true,
-  bots: { chief: { id: 'chief', sessionId: 'chief', name: 'Omni', role: 'Lead', instructions: '', createdAt: 1 } },
+  bots: { chief: { id: 'chief', sessionId: 'chief', name: 'Chief', role: 'Lead', instructions: '', createdAt: 1 } },
   rooms: { room: { id: 'room', name: 'Desk', members: ['chief'], admin: 'chief', mode: 'everyone', sessions: {}, seq: 0, log: [] } },
   exchanges: [],
   exchangeTurns: {},
@@ -73,7 +73,7 @@ test('a new Bot Session is made with the standard preset when DSH serves it', as
   const { rt, created, stop } = start({ presets: [{ id: 'ptc' }, { id: 'standard' }] })
   t.after(stop)
   await rt.load()
-  await rt.createSession('Omni')
+  await rt.createSession('Chief')
   assert.deepEqual(created, [{ workspaceId: 'w1', agentPreset: 'standard' }])
 })
 
@@ -82,7 +82,7 @@ test('without a usable standard preset a Bot Session keeps DSH\'s default', asyn
     const { rt, created, stop } = start({ presets })
     t.after(stop)
     await rt.load()
-    await rt.createSession('Omni')
+    await rt.createSession('Chief')
     assert.deepEqual(created, [{ workspaceId: 'w1' }])
   }
 })

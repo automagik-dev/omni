@@ -1,8 +1,7 @@
 #!/bin/sh
 # Mock test bench: the scripted mock model (dev/mock-llm.mjs) plus a dsh web whose profile
-# links the plugin to this checkout, with the Omni channels and canvas plugins beside it
-# (../omni-channels-dsh, ../omni-canvas-dsh), so edits need no reinstall (host code needs a
-# restart; src/client needs `npm run build` and a page reload).
+# links the plugin to this checkout, so edits need no reinstall (host code needs a restart;
+# src/client needs `npm run build` and a page reload).
 #
 #   dev/bench.sh <name> <web-port> <mock-port> [start|stop|reset|status]
 #
@@ -49,14 +48,14 @@ stop_one() {
 
 ensure_profile() {
   profile="$HOME_DIR/profiles/web"
-  if [ -f "$profile/package.json" ] && grep -q "\"link:$PLUGIN\"" "$profile/package.json" && grep -q "omni-canvas-dsh" "$profile/package.json"; then return 0; fi
+  if [ -f "$profile/package.json" ] && grep -q "\"link:$PLUGIN\"" "$profile/package.json"; then return 0; fi
   mkdir -p "$profile"
   cat > "$profile/package.json" <<EOF
 {
   "name": "dsh-profile-web",
   "private": true,
-  "dependencies": { "ds-bot": "link:$PLUGIN", "@automagik/omni-channels-dsh": "link:$ROOT/omni-channels-dsh", "@automagik/omni-canvas-dsh": "link:$ROOT/omni-canvas-dsh" },
-  "dsh": { "profile": { "bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "ds-bot", "@automagik/omni-channels-dsh", "@automagik/omni-canvas-dsh"] } }
+  "dependencies": { "ds-bot": "link:$PLUGIN" },
+  "dsh": { "profile": { "bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "ds-bot"] } }
 }
 EOF
   printf 'packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n' > "$profile/pnpm-workspace.yaml"

@@ -4,7 +4,7 @@ import * as plugin from '../index.js'
 import { COLORS, EXTRA_COLORS, LEGACY_COLORS, ROOM_MODES } from '../src/host/constants.js'
 
 test('the plugin entry re-exports the shared colors', () => {
-  assert.equal(plugin.name, 'omni-ui')
+  assert.equal(plugin.name, 'ds-bot')
   assert.equal(plugin.COLORS, COLORS)
   assert.equal('LABS' in plugin, false)
   assert.equal(typeof plugin.apply, 'function')

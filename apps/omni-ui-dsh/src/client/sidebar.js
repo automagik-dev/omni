@@ -1,16 +1,16 @@
-import { createElement as h, Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createElement as h, Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { OmniMark, OmniWordmark } from './logo.js'
+import { FishLogo } from '@deepseek-ai/dsh-client-ui-primitives'
 import { isMainOf } from './sources.js'
 import { currentPart, previewOf, relativeShort } from './text.js'
-import { PlusIcon, SearchIcon, SidebarIcon, GaugeIcon, PlugIcon, GearIcon, PinMarkIcon, ConnectorIcon, SwitchIcon, CloudDownloadIcon, TasksIcon } from './icons.js'
-import { botState, BotAvatar, RoomAvatar } from './mark.js'
+import { PlusIcon, SearchIcon, SidebarIcon, GaugeIcon, PlugIcon, ClockIcon, GearIcon, PinMarkIcon, ConnectorIcon, SwitchIcon, CloudDownloadIcon } from './icons.js'
+import { MAIN_LOOK } from './characters.js'
+import { botState, BotMark, BotAvatar, RoomAvatar } from './mark.js'
 import { reducedMotion } from './activity-row.js'
 import { Shimmer, workPhrase } from './cells.js'
 import { springEasing, SPRING_SHAPE } from './motion.js'
 import { hostText, t } from './i18n.js'
 import { showsDshRow } from './dsh-offer.js'
-import { badges, nav, useEntries } from './extend.js'
 
 // -------------------------------------------------------------------------
 // Sidebar
@@ -88,15 +88,7 @@ function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessio
     awayLine ? h('span', { className: 'bt-row-preview' }, awayLine)
       : waitsFor ? h('span', { className: 'bt-row-preview' }, waitsFor)
         : preview ? h('span', { className: 'bt-row-preview' }, preview) : null) : null,
-  // Badges other Omni plugins add (extend.js): Omni's row counts the automation runs waiting for you.
-  wide ? h(RowBadges, { bot, roster, useWork }) : null,
   wide && unread && !active ? h('span', { className: 'bt-unread', 'aria-hidden': true }) : null)
-}
-
-// What other Omni plugins add at the end of a Bot's row (extend.js).
-function RowBadges(props) {
-  const entries = useEntries(badges)
-  return entries.map(entry => h(entry.Component, { key: entry.id, ...props }))
 }
 
 function RoomRow({ room, roster, actions, useSessions, useSessionStatus, useSessionRetainInfo, useWork, wide, marked }) {
@@ -204,17 +196,17 @@ function AgentRow({ agent, actions, useSessions, useSessionStatus, useUi, wide, 
   const unread = sessions.some(session => session.unread) || (marked && !active)
   useMarkedUnread(agent.id, active, marked, actions)
   const preview = sessions[0]?.title ?? t('New session')
-  const label = [t('Tasks'), running ? t('Working') : '', unread ? t('Unread activity') : ''].filter(Boolean).join(', ')
+  const label = ['DSH Agent', running ? t('Working') : '', unread ? t('Unread activity') : ''].filter(Boolean).join(', ')
   const open = active && wide
   return h('div', { className: 'bt-agent' },
     h('button', {
       type: 'button', className: 'bt-row', 'aria-label': label, 'aria-current': active ? 'page' : undefined,
-      'data-agent-id': agent.id, title: wide ? undefined : t('Tasks'), onClick: () => actions.openAgent(agent.id),
+      'data-agent-id': agent.id, title: wide ? undefined : 'DSH Agent', onClick: () => actions.openAgent(agent.id),
       onContextMenu: (event) => { event.preventDefault(); actions.openMenu({ kind: 'agent', id: agent.id, x: event.clientX, y: event.clientY }) },
     },
-    h('span', { className: `bt-agent-ava${running ? ' bt-run' : ''}` }, h(TasksIcon, { size: 20 })),
+    h('span', { className: `bt-agent-ava${running ? ' bt-run' : ''}` }, h(FishLogo, { size: 22 })),
     wide ? h('span', { className: 'bt-row-body' },
-      h('span', { className: 'bt-row-name' }, t('Tasks')),
+      h('span', { className: 'bt-row-name' }, 'DSH Agent'),
       preview ? h('span', { className: 'bt-row-preview' }, preview) : null) : null,
     wide && unread && !active ? h('span', { className: 'bt-unread', 'aria-hidden': true }) : null),
     h('div', { className: 'bt-agent-sub', 'data-open': open || undefined },
@@ -270,9 +262,7 @@ export function TeamSidebar(props) {
       // The Agent sorts by its most recent Session, falling back to when it was added.
       ...(roster.agents ?? []).map(agent => ({ kind: 'agent', item: agent, at: Math.max(0, ...agent.sessions.map(id => stamps[id] ?? 0)) || agent.createdAt })),
     ]
-    // Tasks (the DSH Agent's one-off Sessions) stay at the bottom, under every Bot and group.
-    const last = entry => Number(entry.kind === 'agent')
-    return entries.sort((a, b) => last(a) - last(b) || Number(Boolean(b.item.pinned)) - Number(Boolean(a.item.pinned)) || b.at - a.at)
+    return entries.sort((a, b) => Number(Boolean(b.item.pinned)) - Number(Boolean(a.item.pinned)) || b.at - a.at)
   }, [roster, updated])
   const main = roster.byId[roster.mainBotId]
   useListGlide(listRef, wide, order.map(entry => entry.item.id).join(','))
@@ -305,7 +295,7 @@ export function TeamSidebar(props) {
           : h(AgentRow, { key: entry.item.id, ...rowProps, agent: entry.item, marked: markedUnread[entry.item.id] === true })))))
 }
 
-// The update button at the sidebar's top right: a cloud while a newer Omni —
+// The update button at the sidebar's top right: a cloud while a newer DS Bot —
 // or a newer verified DSH — is available, then the install's progress and
 // result. Its card has one row each for the bot and DSH, with their versions,
 // the release notes link, and each row's own button.
@@ -346,29 +336,29 @@ function UpdateButton({ useUpdate, actions }) {
     setDshError('')
     void actions.installDshUpdate().catch(failure => setDshError(hostText(failure?.message ?? String(failure))))
   }
-  const label = phase === 'installing' ? t('Updating Omni…')
+  const label = phase === 'installing' ? t('Updating DS Bot…')
     : dshPhase === 'installing' ? t('Updating DSH…')
-      : phase === 'installed' ? t('Omni {version} is installed. Restart DSH to use it.', { version: update.installed ?? update.latest })
+      : phase === 'installed' ? t('DS Bot {version} is installed. Restart DSH to use it.', { version: update.installed ?? update.latest })
         : dshPhase === 'installed' ? t('Restart DSH to start using DSH {version}.', { version: dsh.installed ?? dsh.verified })
-          : update?.available ? t('Omni {version} is available', { version: update.latest })
+          : update?.available ? t('DS Bot {version} is available', { version: update.latest })
             : t('DSH {version} is available', { version: dsh?.verified })
   const message = error || (phase === 'failed' ? update.error : '')
   const dshMessage = dshError || (dshPhase === 'failed' ? dsh?.error : '')
   const dshText = dshPhase === 'installed'
     ? t('Restart DSH to start using DSH {version}.', { version: dsh.installed ?? dsh.verified })
     : dsh?.available === false && dsh?.blockedBy
-      ? t('Update Omni {version} first.', { version: dsh.blockedBy })
+      ? t('Update DS Bot {version} first.', { version: dsh.blockedBy })
       : t('You have {version}.', { version: dsh?.current })
   return h(Fragment, null,
     h('button', {
       ref: button, type: 'button', className: 'bt-round bt-update', 'data-phase': cloudPhase, 'aria-label': label, title: label,
       'aria-haspopup': 'dialog', 'aria-expanded': open, onClick: toggle,
     }, h(CloudDownloadIcon, { done: phase === 'installed' }), phase === 'failed' || dshPhase === 'failed' ? h('span', { className: 'bt-update-dot', 'aria-hidden': true }) : null),
-    open && box ? createPortal(h('div', { className: 'bt-update-pop', role: 'dialog', 'aria-label': update?.available || phase !== 'idle' ? t('Omni update') : t('DSH update'), style: box },
+    open && box ? createPortal(h('div', { className: 'bt-update-pop', role: 'dialog', 'aria-label': update?.available || phase !== 'idle' ? t('DS Bot update') : t('DSH update'), style: box },
       update?.available || phase !== 'idle' ? h(Fragment, null,
-        h('div', { className: 'bt-update-title' }, phase === 'installed' ? t('Update installed') : t('Omni {version}', { version: update.latest })),
+        h('div', { className: 'bt-update-title' }, phase === 'installed' ? t('Update installed') : t('DS Bot {version}', { version: update.latest })),
         h('div', { className: 'bt-update-text' }, phase === 'installed'
-          ? t('Restart DSH to start using Omni {version}.', { version: update.installed ?? update.latest })
+          ? t('Restart DSH to start using DS Bot {version}.', { version: update.installed ?? update.latest })
           : t('You have {version}.', { version: update.current })),
         message ? h('div', { className: 'bt-update-error', role: 'alert' }, t('The update did not finish: {reason}', { reason: message })) : null,
         h('div', { className: 'bt-update-actions' },
@@ -391,21 +381,42 @@ function UpdateButton({ useUpdate, actions }) {
                 }, dshPhase === 'installing' ? t('Updating…') : dshPhase === 'failed' ? t('Try again') : t('Update')))) : null), document.body) : null)
 }
 
-// Where the channels went: a team linked to an Omni whose DSH lacks the Omni channels
-// plugin (the host's channelsMoved) is pointed at the plugin market, in the footer seat the
-// channels had.
-export function ChannelsMoved({ wide, actions, useRoster }) {
-  const moved = useRoster(value => value.channelsMoved === true)
-  if (!wide || !moved) return null
-  const label = t('Channels moved to the Omni channels plugin. Install it from the market.')
-  return h('span', { className: 'bt-connect-wrap' }, h('button', { type: 'button', className: 'bt-connect bt-connect-foot bt-channels-moved', title: label, 'aria-label': label, onClick: () => actions.selectPanel('plugins') },
-    h(PlugIcon), t('Get the channels plugin')))
+// The footer entry to the shell's plugin panel, marked as not yet adapted: the red
+// badge and a hover tip explain that plugin support lands step by step.
+export function ConnectPlugins({ wide, actions }) {
+  const tipId = useId()
+  const [tip, setTip] = useState(false)
+  const timer = useRef(0)
+  const button = useRef(null)
+  const [box, setBox] = useState(null)
+  useEffect(() => () => clearTimeout(timer.current), [])
+  if (!wide) return null
+  const show = () => {
+    clearTimeout(timer.current)
+    timer.current = setTimeout(() => {
+      const rect = button.current?.getBoundingClientRect()
+      if (!rect) return
+      const left = Math.max(8, Math.min(rect.left, window.innerWidth - 268))
+      setBox({ left, bottom: window.innerHeight - rect.top + 10 })
+      setTip(true)
+    }, 250)
+  }
+  const hide = () => { clearTimeout(timer.current); setTip(false) }
+  return h('span', { className: 'bt-connect-wrap' },
+    h('button', {
+      ref: button, type: 'button', className: 'bt-connect bt-connect-foot', 'aria-describedby': tip ? tipId : undefined,
+      onMouseEnter: show, onMouseLeave: hide, onFocus: show, onBlur: hide,
+      onClick: () => actions.selectPanel('plugins'),
+    },
+    h(PlugIcon), t('Connect plugins'), h('span', { className: 'bt-connect-warn', 'aria-hidden': true }, '!')),
+    tip && box ? createPortal(h('span', { role: 'tooltip', id: tipId, className: 'bt-connect-tip', style: box },
+      t('Plugin compatibility is not fully verified.')), document.body) : null)
 }
 
 // Account seat of the Settings trigger: the visible label stays for assistive tech only.
 export function YouAvatar() {
   return h('span', { className: 'bt-you-wrap' },
-    h('span', { className: 'bt-you', 'aria-hidden': true }, h(OmniMark, { size: 22 })),
+    h('span', { className: 'bt-you', 'aria-hidden': true }, h(BotMark, { look: MAIN_LOOK, size: 24 })),
     h('span', { style: { position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)' } }, t('Settings')))
 }
 
@@ -471,7 +482,6 @@ function pressSettingsShortcut() {
 // back in Agent mode; FooterAccount stands in while no seat exists at all.
 export function AccountLauncher({ seat = true, settingsOpen, openSettings, openOnboarding, actions }) {
   const [open, setOpen] = useState(false)
-  const navRows = useEntries(nav)
   useLayoutEffect(() => {
     if (!seat) return undefined
     actions.seatAccount(true)
@@ -510,10 +520,8 @@ export function AccountLauncher({ seat = true, settingsOpen, openSettings, openO
   const groups = [
     [
       [t('Usage'), GaugeIcon, () => actions.openSettings('usage')],
-      [t('Plugins'), PlugIcon, () => actions.selectPanel('plugins')],
       [t('Connectors'), ConnectorIcon, () => actions.openConnectors()],
-      // Rows other Omni plugins add (extend.js), such as Automations.
-      ...navRows.map(row => [row.label(), row.icon, () => row.run(actions)]),
+      [t('Automation tasks'), ClockIcon, () => actions.selectPanel('schedules')],
       [t('Bot settings'), GearIcon, () => actions.openSettings('general')],
     ],
     [
@@ -522,7 +530,7 @@ export function AccountLauncher({ seat = true, settingsOpen, openSettings, openO
   ]
   return h(Fragment, null,
     h('button', { ref: button, type: 'button', className: 'bt-account', 'aria-label': t('Account'), 'aria-haspopup': 'menu', 'aria-expanded': open, onClick: toggle },
-      h('span', { className: 'bt-you', 'aria-hidden': true }, h(OmniMark, { size: 22 }))),
+      h('span', { className: 'bt-you', 'aria-hidden': true }, h(BotMark, { look: MAIN_LOOK, size: 24 }))),
     open && box ? createPortal(h('div', { className: 'bt-menu bt-menu-up bt-account-menu', role: 'menu', 'aria-label': t('Account'), style: box },
       groups.map((group, index) => h(Fragment, { key: index },
         index > 0 ? h('div', { className: 'bt-menu-sep', role: 'separator' }) : null,
@@ -573,9 +581,9 @@ export function FooterAccount(props) {
 export function BotReturn({ wide, useSurface, actions }) {
   const mode = useSurface(value => value.mode)
   if (mode !== 'agent') return null
-  return h('button', { type: 'button', className: 'bt-return', 'aria-label': t('Omni'), title: t('Omni'), onClick: () => actions.setSurface('bot') },
-    h(OmniMark, { size: 20 }),
-    wide ? h('span', { className: 'bt-return-name' }, t('Omni')) : null)
+  return h('button', { type: 'button', className: 'bt-return', 'aria-label': t('DS Bot'), title: t('DS Bot'), onClick: () => actions.setSurface('bot') },
+    h(BotMark, { look: MAIN_LOOK, size: 20 }),
+    wide ? h('span', { className: 'bt-return-name' }, t('DS Bot')) : null)
 }
 
 // Agent mode has none of the shell-group styles, so the return button carries its own.
@@ -591,10 +599,10 @@ export const RETURN_CSS = `
 `
 
 export function BrandMark({ size = 24 }) {
-  return h('span', { className: 'bt-brand-mark' }, h(OmniMark, { size }))
+  return h('span', { className: 'bt-brand-whale' }, h(BotMark, { look: MAIN_LOOK, size }))
 }
 export function BrandName() {
-  return h('span', { className: 'bt-brand-name' }, h(OmniWordmark, { height: 13 }))
+  return h('span', { style: { fontWeight: 600, fontSize: 14 } }, 'DS Bot')
 }
 
 // With the whale holding the settings seat, the Bot row is just the account menu
@@ -611,12 +619,10 @@ export const SIDEBAR_CSS = `
 [class*="_footArea"]:has(.bt-foot-account){grid-template-columns:auto minmax(0,1fr) auto;column-gap:6px}
 [class*="_footArea"]>[class*="_footerActions"]>div>.bt-foot-account{grid-column:1;order:1;display:inline-flex}
 [class*="_footArea"]:has(.bt-foot-account)>[class*="_footerActions"]>div>.bt-connect-wrap{grid-column:2}
-.bt-channels-moved{gap:8px;justify-content:flex-start;padding:0 12px}
 [class*="_footArea"]:has(.bt-foot-account)>[class*="_settingsArea"]{grid-column:3}
 [class*="_footArea"]:has(.bt-foot-account)>[class*="_settingsArea"] button[class*="_trigger"] [class*="_label"]{display:none!important}
 
-
-/* The update cloud springs in when a newer Omni shows up; its arrow drops in a
+/* The update cloud springs in when a newer DS Bot shows up; its arrow drops in a
    loop while the install runs. */
 .bt-round.bt-update{position:relative;color:var(--bt-accent,#4D6BFE);animation:bt-update-in ${SPRING_SHAPE.duration}ms ${SPRING_SHAPE.easing}}
 .bt-round.bt-update svg{width:17px;height:17px}

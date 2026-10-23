@@ -7,12 +7,12 @@ import { apply } from '../index.js'
 import { fakeContext } from './fake-ctx.js'
 import { ROOM_LATE_ROUNDS, ROOM_STEP_GAP_MS, ROOM_WORK_GRACE_MS } from '../src/host/constants.js'
 
-// Omni, the admin of group 'r1', speaks there from 'ga'; Writer from 'gb'; Tester from 'gc'.
+// Chief, the admin of group 'r1', speaks there from 'ga'; Writer from 'gb'; Tester from 'gc'.
 const seed = (room = {}) => ({
   version: 1,
   mainBotIds: ['a'],
   bots: {
-    a: { id: 'a', name: 'Omni', role: 'Boss', sessionId: 'a', createdAt: 1 },
+    a: { id: 'a', name: 'Chief', role: 'Boss', sessionId: 'a', createdAt: 1 },
     b: { id: 'b', name: 'Writer', role: 'Write', sessionId: 'b', createdAt: 2 },
     c: { id: 'c', name: 'Tester', role: 'Test', sessionId: 'c', createdAt: 3 },
   },
@@ -119,7 +119,7 @@ const kinds = result => result.replies.map(reply => [reply.kind ?? 'message', re
 test('work past the grace lets the round go on, and the member that asked answers the result', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const host = await start(t)
-  const first = host.round('c1', host.say('@Omni 安排一下文档'))
+  const first = host.round('c1', host.say('@Chief 安排一下文档'))
   await settle(() => host.agentOf('ga').calls.length === 1)
   host.begin('ga')
   host.finish('ga', '@Writer 把文档整理好')
@@ -132,7 +132,7 @@ test('work past the grace lets the round go on, and the member that asked answer
   assert.equal(first(), undefined)
   t.mock.timers.tick(1)
   await settle(() => first() !== undefined)
-  assert.deepEqual(kinds(first()), [['message', 'Omni'], ['working', 'Writer']])
+  assert.deepEqual(kinds(first()), [['message', 'Chief'], ['working', 'Writer']])
 
   host.emit('gb', 'tool/result', { callId: 'k1' })
   host.finish('gb', '整理好了，在 docs/ 下。')
@@ -148,12 +148,12 @@ test('work past the grace lets the round go on, and the member that asked answer
   assert.deepEqual(host.agentOf('gc').calls, [])
 })
 
-// 公开#165: asked in a group to hand out work, Omni sent it with message_bot. Members
+// 公开#165: asked in a group to hand out work, Chief sent it with message_bot. Members
 // did it in their own chats, apart from the group (Bots outside the group too), and
 // again when called in the group.
 test('message_bot from a group to one of its members calls it there, as "@Name" would', async (t) => {
   const host = await start(t)
-  const first = host.round('c1', host.say('@Omni 安排一下文档'))
+  const first = host.round('c1', host.say('@Chief 安排一下文档'))
   await settle(() => host.agentOf('ga').calls.length === 1)
   host.begin('ga')
   const sent = await host.tool('message_bot', { to: 'Writer', message: '把文档整理好' }, 'ga')
@@ -162,10 +162,10 @@ test('message_bot from a group to one of its members calls it there, as "@Name" 
   await settle(() => host.agentOf('gb').calls.length === 1)
   const called = host.begin('gb')
   assert.equal(called.source.askedBy, 'a')
-  assert.match(text(called), /Omni: @Writer 把文档整理好/)
+  assert.match(text(called), /Chief: @Writer 把文档整理好/)
   host.finish('gb', '整理好了。')
   await settle(() => first() !== undefined)
-  assert.deepEqual(kinds(first()), [['message', 'Omni'], ['message', 'Omni'], ['message', 'Writer']])
+  assert.deepEqual(kinds(first()), [['message', 'Chief'], ['message', 'Chief'], ['message', 'Writer']])
   assert.deepEqual([host.agentOf('b').calls, host.agentOf('gc').calls], [[], []])
 })
 
@@ -218,13 +218,13 @@ test('read_group_chat shows a Bot named "User" apart from the user', async (t) =
 })
 
 // 公开#185: the result went out as the work's first step line, next to one last tool
-// call, and the turn then ended with an empty reply. Omni, which asked for the work,
+// call, and the turn then ended with an empty reply. Chief, which asked for the work,
 // was never called to answer it.
 const resultAsStep = async (t, ask) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const host = await start(t)
   const first = host.round('c1', host.say(ask))
-  if (ask.startsWith('@Omni')) {
+  if (ask.startsWith('@Chief')) {
     await settle(() => host.agentOf('ga').calls.length === 1)
     host.begin('ga')
     host.finish('ga', '@Writer 把文档整理好')
@@ -248,7 +248,7 @@ const resultAsStep = async (t, ask) => {
 }
 
 test('late work whose result went out as a step line still tells the member that asked, which answers it', async (t) => {
-  const host = await resultAsStep(t, '@Omni 安排一下文档')
+  const host = await resultAsStep(t, '@Chief 安排一下文档')
   await settle(() => host.agentOf('r1').calls.length === 1)
   const done = host.takePost()
   assert.deepEqual([done.source.done, done.source.late, done.source.askedBy], [true, true, 'a'])
@@ -260,10 +260,10 @@ test('late work whose result went out as a step line still tells the member that
   host.begin('ga')
   host.finish('ga', '收到，辛苦了。')
   await settle(() => third() !== undefined)
-  assert.deepEqual(kinds(third()), [['done', 'Writer'], ['message', 'Omni']])
+  assert.deepEqual(kinds(third()), [['done', 'Writer'], ['message', 'Chief']])
   assert.deepEqual(host.agentOf('gc').calls, [])
   const log = JSON.parse(readFileSync(join(host.home, 'state.json'), 'utf8')).rooms.r1.log.map(line => [line.who, line.kind ?? 'message'])
-  assert.deepEqual(log.slice(-3), [['Writer', 'message'], ['Writer', 'done'], ['Omni', 'message']])
+  assert.deepEqual(log.slice(-3), [['Writer', 'message'], ['Writer', 'done'], ['Chief', 'message']])
 })
 
 test('late work the user asked for directly ends without a post once its result is out', async (t) => {
@@ -274,7 +274,7 @@ test('late work the user asked for directly ends without a post once its result 
 
 test('replies a post waits for are work handed on: the answer to the Bot that asked waits for them and carries them', async (t) => {
   const host = await start(t)
-  await host.tool('message_bot', { to: 'Omni', message: '让群里看一下文档' }, 'c')
+  await host.tool('message_bot', { to: 'Chief', message: '让群里看一下文档' }, 'c')
   host.begin('a')
   const posted = await host.tool('post_to_group', { group: 'Ops', message: '@Writer 看一下文档', report_back: true }, 'a')
   assert.match(posted, /your answer goes to Tester once all of it is back\.$/)
@@ -292,7 +292,7 @@ test('replies a post waits for are work handed on: the answer to the Bot that as
   assert.match(text(report), /^\[Group chat "Ops" · replies to your post · for the work Tester asked you for; your answer goes to Tester once everything you handed on is back\]/)
   host.finish('a', 'Writer 看过了，没问题。')
   await settle(() => host.agentOf('c').calls.length === 1)
-  assert.equal(text(host.agentOf('c').calls[0]), '[Reply from Omni]\nWriter 看过了，没问题。\n\n[Handed back to Omni for this work]\n\nGroup "Ops":\nReplies to your post (oldest first):\nWriter: 文档没问题。')
+  assert.equal(text(host.agentOf('c').calls[0]), '[Reply from Chief]\nWriter 看过了，没问题。\n\n[Handed back to Chief for this work]\n\nGroup "Ops":\nReplies to your post (oldest first):\nWriter: 文档没问题。')
 })
 
 test('a member called while still at earlier work lets the round go on at once', async (t) => {
@@ -315,7 +315,7 @@ test('a quick team tool does not let the round go on', async (t) => {
   t.mock.timers.tick(ROOM_WORK_GRACE_MS * 2)
   await settle(() => true)
   assert.equal(result(), undefined)
-  host.finish('gb', 'Omni、Tester 和我。')
+  host.finish('gb', 'Chief、Tester 和我。')
   await settle(() => result() !== undefined)
   assert.deepEqual(kinds(result()), [['message', 'Writer']])
 })
@@ -480,7 +480,7 @@ test('a member whose every message went out while it worked counts as posted, no
 test('after the round went on, lines a member writes close together reach the group as one message; only the result is answered', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const host = await start(t)
-  const first = host.round('c1', host.say('@Omni 安排一下文档'))
+  const first = host.round('c1', host.say('@Chief 安排一下文档'))
   await settle(() => host.agentOf('ga').calls.length === 1)
   host.begin('ga')
   host.finish('ga', '@Writer 把文档整理好')
@@ -489,7 +489,7 @@ test('after the round went on, lines a member writes close together reach the gr
   step(host, 'gb', '收到，开始整理。', 'k1')
   t.mock.timers.tick(ROOM_WORK_GRACE_MS)
   await settle(() => first() !== undefined)
-  assert.deepEqual(kinds(first()), [['message', 'Omni'], ['message', 'Writer'], ['working', 'Writer']])
+  assert.deepEqual(kinds(first()), [['message', 'Chief'], ['message', 'Writer'], ['working', 'Writer']])
 
   host.emit('gb', 'tool/result', { callId: 'k1' })
   step(host, 'gb', '目录理好了。', 'k2')
@@ -607,7 +607,7 @@ test('the team view says what a member is doing in the call\'s own words', async
 test('deleting a working Bot clears its activity and tells the Bots waiting for its reply', async (t) => {
   const host = await start(t)
   host.emit('b', 'turn/start', { turn: 1 })
-  host.emit('b', 'user/message', { content: [{ type: 'text', text: '[Message from Omni]\nwrite the docs' }], source: { kind: 'bot', role: 'request', senderSessionId: 'a', senderName: 'Omni', exchangeId: 'x1', hop: 1 } })
+  host.emit('b', 'user/message', { content: [{ type: 'text', text: '[Message from Chief]\nwrite the docs' }], source: { kind: 'bot', role: 'request', senderSessionId: 'a', senderName: 'Chief', exchangeId: 'x1', hop: 1 } })
   host.emit('b', 'tool/call', { callId: 'k1', name: 'pwsh', arguments: '{}' })
   // A second request that Writer has not read yet.
   host.agentOf('b').inbox.nextStep.push({ id: 'm2', source: { kind: 'bot', role: 'request', senderSessionId: 'c', senderName: 'Tester', exchangeId: 'x2', hop: 1 } })

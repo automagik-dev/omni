@@ -1,23 +1,24 @@
 {
-  "name": "@automagik/omni-dsh",
-  "version": "2.261023.26",
-  "description": "Omni for DeepSeek Harness: a team of long-lived Bots with Omni as the Main Bot; its channels and canvases come with @automagik/omni-channels-dsh and @automagik/omni-canvas-dsh",
+  "name": "ds-bot",
+  "version": "0.1.7",
+  "description": "DS Bot: a team of long-lived Bots for DeepSeek Harness, with Main Bots, Bot-to-Bot messages and group chats",
   "keywords": [
     "dsh-plugin",
     "deepseek-harness",
     "dsh",
-    "omni",
-    "whatsapp",
+    "deepseek",
+    "bot",
+    "multi-agent",
     "agents"
   ],
-  "homepage": "https://github.com/automagik-dev/omni/tree/dev/apps/omni-ui-dsh#readme",
+  "homepage": "https://github.com/Fei2411/DeepSeek-Bot#readme",
   "bugs": {
-    "url": "https://github.com/automagik-dev/omni/issues"
+    "url": "https://github.com/Fei2411/DeepSeek-Bot/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/automagik-dev/omni.git",
-    "directory": "apps/omni-ui-dsh"
+    "url": "git+https://github.com/Fei2411/DeepSeek-Bot.git",
+    "directory": "ds-bot"
   },
   "license": "Apache-2.0",
   "type": "module",
@@ -36,16 +37,14 @@
     "web-search.js",
     "cordis.patch.yml",
     "README.md",
-    "LICENSE",
-    "NOTICE"
+    "LICENSE"
   ],
   "scripts": {
     "build": "node scripts/build-client.mjs",
     "test": "node --import ./test/harness-resolve.mjs --test \"test/*.test.js\"",
     "lint": "node scripts/lint.mjs",
-    "harness": "bun install --cwd dev/harness --no-save --no-summary",
-    "check": "sh dev/check.sh",
-    "dev:client": "node scripts/watch-client.mjs"
+    "harness": "npm install --prefix dev/harness --legacy-peer-deps=false --no-package-lock --no-fund --no-audit",
+    "check": "sh dev/check.sh"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "*",

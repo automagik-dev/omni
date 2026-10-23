@@ -7,7 +7,7 @@ const ROSTER_VALUE = {
   revision: 3,
   mainBotId: 'm1',
   mainBotIds: ['m1'],
-  bots: [{ id: 'm1', sessionId: 'm1', name: 'Omni', parts: [] }],
+  bots: [{ id: 'm1', sessionId: 'm1', name: 'Chief', parts: [] }],
   rooms: [{ id: 'g1', name: 'Group', members: ['m1'] }],
   agents: [{ id: 'a1', name: 'DSH Agent', sessions: ['s1', 's2'], createdAt: 5 }],
   exchangeTurns: {},

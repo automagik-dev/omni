@@ -13,10 +13,8 @@ import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 
 const PLUGIN = dirname(dirname(fileURLToPath(import.meta.url)))
-// DSH's client loader matches a bundle's id to the npm package that ships it.
-const PACKAGE_NAME = JSON.parse(readFileSync(join(PLUGIN, 'package.json'), 'utf8')).name
 const OUTPUT = join(PLUGIN, 'client.js')
-export const PLATFORM_MODULES = ['react', 'react-dom', '@deepseek-ai/dsh-client-ui-primitives']
+const PLATFORM_MODULES = ['react', 'react-dom', '@deepseek-ai/dsh-client-ui-primitives']
 
 export async function bundleClient() {
   const result = await build({
@@ -39,7 +37,7 @@ export async function bundleClient() {
   return [
     '// Generated from src/client by `npm run build` (scripts/build-client.mjs). Do not edit by hand.',
     'window.__ModuleLoader__.load({',
-    `  id: '${PACKAGE_NAME}',`,
+    '  id: \'ds-bot\',',
     '  factory: (require) => {',
     'const module = { exports: {} }',
     result.outputFiles[0].text.trimEnd(),
@@ -58,7 +56,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     let current = null
     try { current = readFileSync(OUTPUT, 'utf8') } catch { /* missing counts as stale */ }
     if (current !== next) {
-      console.error('client.js is stale: run `npm run build` in apps/omni-ui-dsh and commit the result')
+      console.error('client.js is stale: run `npm run build` in ds-bot and commit the result')
       process.exit(1)
     }
   } else {

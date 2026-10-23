@@ -7,12 +7,12 @@ import { apply } from '../index.js'
 import { fakeContext } from './fake-ctx.js'
 import { ROOM_REPLY_TIMEOUT_MS } from '../src/host/constants.js'
 
-// Omni in its own chat 'a'; Writer, the admin of group 'r1', speaks there from 'gb'.
+// Chief in its own chat 'a'; Writer, the admin of group 'r1', speaks there from 'gb'.
 const seed = () => ({
   version: 1,
   mainBotIds: ['a'],
   bots: {
-    a: { id: 'a', name: 'Omni', role: 'Boss', sessionId: 'a', createdAt: 1 },
+    a: { id: 'a', name: 'Chief', role: 'Boss', sessionId: 'a', createdAt: 1 },
     b: { id: 'b', name: 'Writer', role: 'Write', sessionId: 'b', createdAt: 2 },
   },
   rooms: { r1: { id: 'r1', name: 'Ops', members: ['a', 'b'], mode: 'admin', admin: 'b', named: true, sessions: { b: 'gb' }, log: [], seq: 0, seen: {} } },
@@ -143,7 +143,7 @@ test('an own chat\'s approval stays with DSH and is listed while it waits', asyn
   release('rejected')
   assert.equal(await outcome, 'rejected')
   assert.deepEqual((await host.call('state', {})).value.work.approvals, [])
-  // Sessions off the team are not Omni's to answer.
+  // Sessions off the team are not DS Bot's to answer.
   assert.equal(await host.askApproval('elsewhere'), 'from-dsh')
 })
 
@@ -267,7 +267,7 @@ test('a Bot running a PTC program shows the tool the program is in', async (t) =
   host.emit('b', 'turn/start', { turn: 1 })
   program(host.emit, 'b', 'k1')
   assert.deepEqual(await now(), ['working', 'run_code'])
-  const messaged = dispatch(host.emit, 'b', 'k1', 1, 'message_bot', { to: 'Omni', message: 'Done?' })
+  const messaged = dispatch(host.emit, 'b', 'k1', 1, 'message_bot', { to: 'Chief', message: 'Done?' })
   assert.deepEqual(await now(), ['sending', 'message_bot'])
   const read = dispatch(host.emit, 'b', 'k1', 2, 'read_group_chat', { group: 'Ops' })
   assert.deepEqual(await now(), ['searching', 'read_group_chat'])

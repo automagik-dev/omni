@@ -35,7 +35,7 @@ function nodes(tree, match) {
 
 function dock(models, { model, ready = true } = {}) {
   const picked = []
-  const bot = { id: 'chief', name: 'Omni', model }
+  const bot = { id: 'chief', name: 'Chief', model }
   const roster = { ready, byId: { chief: bot }, models, defaultModel: models[0]?.ref }
   const tree = ModelChoiceDock({
     sessionId: bot.id, useRoster: select => select(roster),
@@ -84,10 +84,10 @@ test('an unavailable model offers the same provider groups', () => {
   assert.ok(nodes(tree, node => node.props.className === 'bt-bubble')[0].children[0].includes('not available anymore'))
 })
 
-test('an empty catalog offers setup choices, Connect an AI first, and a ready model needs no choice dock', () => {
+test('an empty catalog offers setup choices, and a ready model needs no choice dock', () => {
   const { tree } = dock([])
   assert.deepEqual(nodes(tree, node => node.type === 'button').map(button => button.children[0]), [
-    'Connect an AI: ChatGPT, Claude, Kimi or an API key', 'Enter a DeepSeek API key', 'Open settings to set up a custom model',
+    'Enter a DeepSeek API key', 'Open settings to set up a custom model',
   ])
   assert.equal(dock(models, { model: models[0].ref }).tree, null)
   assert.equal(dock(models, { ready: false }).tree, null)

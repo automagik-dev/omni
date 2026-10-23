@@ -7,12 +7,12 @@ import { apply } from '../index.js'
 import { fakeContext } from './fake-ctx.js'
 import { stripWrittenCalls, writesToolCall } from '../src/host/turns.js'
 
-// Omni in its own chat 'a'; Writer, the admin of group 'r1', speaks there from 'gb'.
+// Chief in its own chat 'a'; Writer, the admin of group 'r1', speaks there from 'gb'.
 const seed = () => ({
   version: 1,
   mainBotIds: ['a'],
   bots: {
-    a: { id: 'a', name: 'Omni', role: 'Boss', sessionId: 'a', createdAt: 1 },
+    a: { id: 'a', name: 'Chief', role: 'Boss', sessionId: 'a', createdAt: 1 },
     b: { id: 'b', name: 'Writer', role: 'Write', sessionId: 'b', createdAt: 2 },
   },
   rooms: { r1: { id: 'r1', name: 'Ops', members: ['a', 'b'], mode: 'admin', admin: 'b', named: true, sessions: { b: 'gb' }, log: [], seq: 0, seen: {} } },
@@ -24,7 +24,7 @@ const seed = () => ({
   revision: 0,
 })
 
-// One Omni host on `home`; a second start on the same home is a restart.
+// One DS Bot host on `home`; a second start on the same home is a restart.
 // Hosts by home: a home is removed only after its hosts stopped and their writes landed.
 const started = new Map()
 
@@ -146,7 +146,7 @@ test('a request cut off by a restart goes on under the same exchange; own-chat w
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const home = freshHome(t)
   const first = await start(home)
-  run(first, 'b', 1, { content: [{ type: 'text', text: '[Message from Omni]\nDraft the plan' }], source: { kind: 'bot', form: 'relay', role: 'request', exchangeId: 'x1', senderName: 'Omni', senderSessionId: 'a', hop: 0 } })
+  run(first, 'b', 1, { content: [{ type: 'text', text: '[Message from Chief]\nDraft the plan' }], source: { kind: 'bot', form: 'relay', role: 'request', exchangeId: 'x1', senderName: 'Chief', senderSessionId: 'a', hop: 0 } })
   run(first, 'a', 1, { content: [{ type: 'text', text: 'hello' }], source: { kind: 'user' } })
   await settle(() => inflight(home).b?.trigger !== undefined && inflight(home).a !== undefined)
   await first.stop()
@@ -156,7 +156,7 @@ test('a request cut off by a restart goes on under the same exchange; own-chat w
   await settle(() => second.agentOf('b').calls.length === 1 && second.agentOf('a').calls.length === 1)
   const request = second.agentOf('b').calls[0]
   assert.deepEqual([request.source.role, request.source.exchangeId, request.source.senderSessionId, request.source.resumed], ['request', 'x1', 'a', true])
-  assert.match(text(request), /^\[Message from Omni · DeepSeek Harness restarted while you were working on it\]/)
+  assert.match(text(request), /^\[Message from Chief · DeepSeek Harness restarted while you were working on it\]/)
   const own = second.agentOf('a').calls[0]
   assert.deepEqual([own.source.role, own.source.resumed], ['resume', true])
   assert.match(text(own), /^\[DeepSeek Harness restarted while you were working\]/)
@@ -164,16 +164,16 @@ test('a request cut off by a restart goes on under the same exchange; own-chat w
   assert.equal(state.exchanges.length, 0)
 })
 
-test('when only Omni restarts, a turn still running or finished meanwhile is not picked up', async (t) => {
+test('when only DS Bot restarts, a turn still running or finished meanwhile is not picked up', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const home = freshHome(t)
   const first = await start(home)
-  run(first, 'b', 1, { content: [{ type: 'text', text: '[Message from Omni]\nDraft the plan' }], source: { kind: 'bot', form: 'relay', role: 'request', exchangeId: 'x1', senderName: 'Omni', senderSessionId: 'a', hop: 0 } })
+  run(first, 'b', 1, { content: [{ type: 'text', text: '[Message from Chief]\nDraft the plan' }], source: { kind: 'bot', form: 'relay', role: 'request', exchangeId: 'x1', senderName: 'Chief', senderSessionId: 'a', hop: 0 } })
   run(first, 'a', 1, { content: [{ type: 'text', text: 'hello' }], source: { kind: 'user' } })
   await settle(() => inflight(home).b?.trigger !== undefined && inflight(home).a !== undefined)
   await first.stop()
 
-  // DSH went on: Writer is still at work, and Omni's turn ends before the pick-up.
+  // DSH went on: Writer is still at work, and Chief's turn ends before the pick-up.
   const second = await start(home)
   second.agentOf('b').status = 'running'
   second.emit('a', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
@@ -219,63 +219,6 @@ test('a turn DSH stops as it shuts down stays noted; one the user stops does not
   await settle(() => inflight(home).a !== undefined && inflight(home).b === undefined)
 })
 
-// A Tasks Session as DSH reopens it: `events` is its log, newest last.
-const withLog = (host, sessionId, events) => {
-  const agent = host.agentOf(sessionId)
-  agent.session = { id: sessionId, seq: events.length, eventAt: seq => events[seq] }
-  agent.status = 'idle'
-  return agent
-}
-const taskTeam = (home, extra = {}) => {
-  const state = JSON.parse(readFileSync(join(home, 'state.json'), 'utf8'))
-  writeFileSync(join(home, 'state.json'), JSON.stringify({ ...state, agents: { t: { id: 't', name: 'Tasks', sessions: ['cut', 'done', 'old'], createdAt: 1 } }, ...extra }))
-}
-
-test('a restart heals the Tasks it cut off: each goes on once, finished and old ones stay', async (t) => {
-  t.mock.timers.enable({ apis: ['setTimeout'] })
-  const home = freshHome(t)
-  taskTeam(home)
-  const host = await start(home)
-  const now = Date.now()
-  withLog(host, 'cut', [{ type: 'turn/start', time: now - 60_000 }, { type: 'turn/end', time: now - 1000, data: { reason: { kind: 'interrupted' } } }])
-  withLog(host, 'done', [{ type: 'turn/start', time: now - 60_000 }, { type: 'turn/end', time: now - 1000, data: { reason: { kind: 'completed' } } }])
-  withLog(host, 'old', [{ type: 'turn/end', time: now - 2 * 24 * 60 * 60 * 1000, data: { reason: { kind: 'interrupted' } } }])
-  t.mock.timers.tick(3000)
-  await settle(() => host.agentOf('cut').calls.length === 1)
-  const note = host.agentOf('cut').calls[0]
-  assert.equal(note.source.kind, 'user')
-  assert.match(text(note), /^\[DeepSeek Harness restarted\]\nDeepSeek Harness restarted while you were working on this/)
-  assert.match(text(note), /Check what is already done/)
-  assert.deepEqual([host.agentOf('done').calls.length, host.agentOf('old').calls.length], [0, 0])
-  await host.stop()
-
-  // Cut again and again: picked up twice in a day, then left stopped.
-  for (let round = 2; round <= 3; round += 1) {
-    const again = await start(home)
-    withLog(again, 'cut', [{ type: 'turn/end', time: Date.now(), data: { reason: { kind: 'aborted', reason: { kind: 'disposed' } } } }])
-    t.mock.timers.tick(3000)
-    if (round === 2) await settle(() => again.agentOf('cut').calls.length === 1)
-    else for (let wait = 0; wait < 20; wait += 1) await new Promise(resolve => setImmediate(resolve))
-    assert.equal(again.agentOf('cut').calls.length, round === 2 ? 1 : 0)
-    assert.equal(JSON.parse(readFileSync(join(home, 'state.json'), 'utf8')).restartResumes.cut.count, 2)
-    await again.stop()
-  }
-})
-
-test('a task a restart cut stays running and reports only when it really ends', async (t) => {
-  const home = freshHome(t)
-  taskTeam(home, { tasks: { cut: { title: 'Ranking', from: 'a', at: Date.now(), status: 'working' } } })
-  const host = await start(home)
-  host.emit('cut', 'turn/end', { turn: 1, reason: { kind: 'interrupted' } })
-  await new Promise(resolve => setImmediate(resolve))
-  assert.equal(JSON.parse(readFileSync(join(home, 'state.json'), 'utf8')).tasks.cut.status, 'working')
-  assert.equal(host.agentOf('a').calls.length, 0)
-  host.emit('cut', 'assistant/message', { message: { content: [{ type: 'text', text: 'Top 30 ready.' }] } })
-  host.emit('cut', 'turn/end', { turn: 2, reason: { kind: 'completed' } })
-  await settle(() => host.agentOf('a').calls.length === 1)
-  assert.match(text(host.agentOf('a').calls[0]), /^\[Task "Ranking" finished/)
-})
-
 test('a message a shutdown cancelled is sent again once; one still waiting, taken up or withdrawn is not', async (t) => {
   const home = freshHome(t)
   const first = await start(home)
@@ -285,7 +228,7 @@ test('a message a shutdown cancelled is sent again once; one still waiting, take
   await send('Read the notes')
   await send('Never mind')
   const [plan, numbers, notesMessage, withdrawn] = first.agentOf('b').calls
-  // Taken up by a turn, or withdrawn while Omni runs (the user stopped the Bot).
+  // Taken up by a turn, or withdrawn while DS Bot runs (the user stopped the Bot).
   first.emit('b', 'user/message', { content: notesMessage.content, source: notesMessage.source })
   for (const listener of first.ctx.listeners.get('agent/inbox/discarded')) listener({ message: withdrawn })
   await settle(() => (notes(home).queued.b ?? []).length === 2)

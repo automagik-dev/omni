@@ -27,9 +27,7 @@ function useRunningHost(active) {
     let frame = 0
     const find = () => {
       frame = 0
-      // DSH 0.2.1 wraps the running status in a row of its own, so it is found anywhere
-      // in the flow; the last one is the live tail.
-      const node = [...document.querySelectorAll('[data-chat-flow] [data-chat-running]')].at(-1) ?? null
+      const node = document.querySelector('[data-chat-flow] > [data-chat-running]')
       setHost(prev => (prev === node ? prev : node))
     }
     const observer = new MutationObserver(() => { if (!frame) frame = requestAnimationFrame(find) })

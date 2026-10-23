@@ -8,12 +8,10 @@ import { createSource } from './sources.js'
 
 const THEME_KEYS = ['bg', 'sidebar', 'bubble', 'card', 'text', 'user', 'userText', 'accent']
 const THEMES = {
-  // Automagik's duality: cyan is Omni (its ink, the accent, actions), magenta is you (your
-  // messages), on a deep-ink night sky. The id stays `deepseek` so saved choices keep it.
   deepseek: {
-    label: 'Omni',
-    light: { bg: '#f7f8fc', sidebar: '#eef0f8', bubble: '#e7eaf5', card: '#ffffff', text: '#12152b', user: '#c21fb4', userText: '#ffffff', accent: '#0891b2' },
-    dark: { bg: '#090c18', sidebar: '#0d1122', bubble: '#171c35', card: '#11162c', text: '#e9ecff', user: '#cc22c0', userText: '#ffffff', accent: '#22d3ee' },
+    label: 'DeepSeek',
+    light: { bg: '#fcfcfc', sidebar: '#f7f7f7', bubble: '#eeeeee', card: '#ffffff', text: '#141414', user: '#070707', userText: '#fcfcfc', accent: '#4d6bfe' },
+    dark: { bg: '#141414', sidebar: '#1b1b1b', bubble: '#262626', card: '#1f1f1f', text: '#f2f2f2', user: '#f2f2f2', userText: '#141414', accent: '#5b7bff' },
   },
   mono: {
     label: 'Mono',
@@ -60,17 +58,7 @@ const darkAccent = (accent) => {
 export const themeCss = (theme, accent) => `html body{${declarations(themeVars(theme.light, false, accent ?? theme.light.accent))}}
 html body[data-ds-dark-theme]{${declarations(themeVars(theme.dark, true, darkAccent(accent) ?? theme.dark.accent))}}
 ${theme.css ?? ''}`
-// DSH paints its own surfaces (the running "Deep diving" line, the stop and send buttons,
-// its pages) from one blue scale; each step is drawn from the theme's accent instead, the
-// light steps toward white and the dark ones toward black.
-const SCALE = [[50, 8], [100, 14], [200, 22], [300, 36], [400, 62], [450, 82], [500, 100], [600, -20], [800, -55], [900, -70]]
-const step = (accent, amount) => (amount === 100 ? accent : amount > 0 ? `color-mix(in srgb, ${accent} ${amount}%, white)` : `color-mix(in srgb, ${accent} ${100 + amount}%, black)`)
-const accentScale = (lightAccent, darkAccent) => Object.fromEntries(SCALE.map(([name, amount]) => [`--dsw-static-deepseek-${name}`, { light: step(lightAccent, amount), dark: step(darkAccent, amount) }]))
-
-export const shellTokens = ({ light, dark }, accent) => ({
-  ...accentScale(accent ?? light.accent, darkAccent(accent) ?? dark.accent),
-  '--dsw-alias-label-deep-diving': { light: `color-mix(in srgb, ${accent ?? light.accent} 78%, ${light.text})`, dark: `color-mix(in srgb, ${darkAccent(accent) ?? dark.accent} 82%, ${dark.text})` },
-  '--dsw-alias-label-deep-diving-shimmer': { light: `color-mix(in srgb, ${accent ?? light.accent} 35%, ${light.bg})`, dark: `color-mix(in srgb, ${darkAccent(accent) ?? dark.accent} 45%, ${dark.bg})` },
+export const shellTokens = ({ light, dark }) => ({
   '--dsw-alias-bg-base': { light: light.bg, dark: dark.bg },
   '--dsw-specific-sidebar-fill': { light: light.sidebar, dark: dark.sidebar },
   '--dsw-specific-input-major': { light: light.bg, dark: dark.sidebar },
@@ -80,7 +68,7 @@ export const shellTokens = ({ light, dark }, accent) => ({
 })
 
 // Other plugins add character shapes and themes through `window.dshBot`, or queue
-// calls on `window.omniUiQueue` before this plugin loads. A shape draws only its
+// calls on `window.dshBotQueue` before this plugin loads. A shape draws only its
 // body; the eyes are cut out where `eyes.at` says, so it gets every state motion free.
 const customThemes = {}
 export const registry = createSource(0)

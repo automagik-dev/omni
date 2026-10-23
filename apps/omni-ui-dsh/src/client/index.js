@@ -1,17 +1,12 @@
 import { call } from './api.js'
-import { OmniMark, installFavicon } from './logo.js'
-import * as icons from './icons.js'
-import { setCanvasRenderer } from './canvas-slot.js'
-import { badges, botSettings, headerButtons, mountShellInstallers, nav, onShell, toolCards } from './extend.js'
-import { TASK_CSS } from './task-card.js'
 import { isHex, inkText, paintCss } from './inks.js'
-import { CHARACTERS, DEFAULT_MASK, MAIN_LOOK, SHAPES, markupCache, maskOf } from './characters.js'
+import { DEFAULT_MASK, SHAPES, markupCache, maskOf } from './characters.js'
 import { countCards, createSource, EMPTY_ROSTER, indexRoster, isAgentSession } from './sources.js'
 import { themeCss, shellTokens, registry, registerShape, registerTheme, allThemes } from './themes.js'
-import { MENTION_ORIGIN, currentPart, relativeShort } from './text.js'
+import { MENTION_ORIGIN, currentPart } from './text.js'
 import { SHELL_CSS, CONVERSATION_CSS, installStyles, installCompiledStyles } from './styles.js'
-import { BotMark, lookOf } from './mark.js'
-import { TeamSidebar, ChannelsMoved, YouAvatar, AccountLauncher, FooterAccount, BrandMark, BrandName, BotReturn, SIDEBAR_CSS, RETURN_CSS, holdShellShortcuts } from './sidebar.js'
+import { lookOf } from './mark.js'
+import { TeamSidebar, ConnectPlugins, YouAvatar, AccountLauncher, FooterAccount, BrandMark, BrandName, BotReturn, SIDEBAR_CSS, RETURN_CSS, holdShellShortcuts } from './sidebar.js'
 import { HeaderPill } from './header.js'
 import { ComposerPlus, ComposerVoice, menuIcons } from './composer.js'
 import { CHATS_SOURCE, atSources } from './at-menu.js'
@@ -32,7 +27,7 @@ import { SCHEDULE_CSS } from './schedules.js'
 import { STORAGE, migrateStorage } from './storage.js'
 import { noteLeft, setUnread, sharedMap, toggleReaction } from './shared-map.js'
 import { freePriority, groupsFor, readMode, surfaceGroups, writeMode } from './surface.js'
-import { addStrings, dateLocale, hostText, installLocale, language, t } from './i18n.js'
+import { installLocale, language, t } from './i18n.js'
 import { noteClientError, quietly } from './diagnostics.js'
 import { ErrorToast, FEEDBACK_CSS } from './feedback.js'
 import { ABOUT_CSS } from './about.js'
@@ -41,25 +36,6 @@ import { USER_MESSAGE_CSS, UserMessageCell, canDrawUserMessages } from './user-m
 import { noticeApprovals } from './approval-notices.js'
 
 export const inject = ['sessions', 'uiWorkspace', 'uiConversation', 'slots', 'theme', 'layout']
-// What a state answer carries that is not roster data, or is kept apart from it.
-const LIVE_OWN = new Set(['revision', 'unchanged', 'activity', 'work', 'memoryNews', 'memoryReviews'])
-
-// What other Omni plugins build on (the channels and canvas plugins, which require this
-// bundle through `dsh.client.external`). They share this module instance: one interface
-// dictionary, one roster, and the registries of extend.js.
-let currentFace = null
-export const omni = Object.freeze({
-  // The host's POST /api/omni-ui, which their own host halves extend.
-  call,
-  // Copy in this plugin's namespace; addStrings brings a plugin's Chinese copy.
-  t, addStrings, hostText, language, dateLocale,
-  // The Bot surface: what runs while it is up, and what draws in its places.
-  onShell, toolCards, nav, badges, headerButtons, botSettings, setCanvasRenderer,
-  // Parts of the Bot surface a plugin's own views are drawn with.
-  ui: Object.freeze({ icons, OmniMark, BotMark, MAIN_LOOK, CHARACTERS, relativeShort, createSource }),
-  // The roster and actions of the running surface, or null before it runs.
-  face: () => currentFace?.() ?? null,
-})
 
 export function apply(ctx) {
   ctx.effect(() => installLocale(ctx.get('locale')), 'ds-bot: interface copy')
@@ -167,17 +143,10 @@ export function apply(ctx) {
     if (nextWork !== workKey) { workKey = nextWork; work.set(value.work ?? { bots: {}, approvals: [] }) }
     noteMemoryNews(value.memoryNews ?? {})
     const current = roster.getSnapshot()
-    // Connector and capability states change without a new revision, and so does what
-    // other Omni plugins add to every answer (the host's extend.js), such as the events
-    // Omni listens to: an unchanged answer carries only those.
+    // Connector and capability states change without a new revision.
     const live = {}
     if (value.connectors !== undefined && JSON.stringify(value.connectors) !== JSON.stringify(current.connectors ?? [])) live.connectors = value.connectors
     if (value.capabilityStatuses !== undefined && JSON.stringify(value.capabilityStatuses) !== JSON.stringify(current.capabilityStatuses ?? {})) live.capabilityStatuses = value.capabilityStatuses
-    if (value.unchanged) {
-      for (const [key, next] of Object.entries(value)) {
-        if (!LIVE_OWN.has(key) && !(key in live) && JSON.stringify(next) !== JSON.stringify(current[key])) live[key] = next
-      }
-    }
     if (Object.keys(live).length > 0 && current.ready) roster.set({ ...current, ...live })
     if (value.unchanged || (value.revision === current.revision && value.modelsKey === current.modelsKey)) return
     // On a browser with no visit record yet, everything already there counts as seen.
@@ -323,7 +292,7 @@ export function apply(ctx) {
       key = next
       style.textContent = themeCss(themes[id], accent)
       const release = releaseTokens
-      releaseTokens = ctx.theme.overrideTokens('omni-ui', shellTokens(themes[id], accent))
+      releaseTokens = ctx.theme.overrideTokens('ds-bot', shellTokens(themes[id]))
       if (typeof release === 'function') release()
       if (snapshot.ready) {
         try { localStorage.setItem(PREFS_KEY, JSON.stringify({ theme: prefs.theme, accent: prefs.accent, motion: prefs.motion })) } catch { /* storage unavailable */ }
@@ -346,13 +315,13 @@ export function apply(ctx) {
 
   ctx.effect(() => {
     const hub = { registerShape, registerTheme, themes: () => Object.keys(allThemes()), shapes: () => Object.keys(SHAPES) }
-    const queued = Array.isArray(window.omniUiQueue) ? window.omniUiQueue : []
+    const queued = Array.isArray(window.dshBotQueue) ? window.dshBotQueue : []
     window.dshBot = hub
-    window.omniUiQueue = { push: (task) => { try { task(hub) } catch (error) { console.warn('[ds-bot] registration', error); noteClientError('registration', error) } } }
-    for (const task of queued) window.omniUiQueue.push(task)
+    window.dshBotQueue = { push: (task) => { try { task(hub) } catch (error) { console.warn('[ds-bot] registration', error); noteClientError('registration', error) } } }
+    for (const task of queued) window.dshBotQueue.push(task)
     return () => {
       if (window.dshBot === hub) delete window.dshBot
-      delete window.omniUiQueue
+      delete window.dshBotQueue
     }
   }, 'ds-bot: registry')
 
@@ -666,7 +635,7 @@ export function apply(ctx) {
     update.set(previous => ({ ...previous, ...value }))
     wakeUpdate()
   }
-  // The DSH the newest released Omni verified installs the same way.
+  // The DSH the newest released DS Bot verified installs the same way.
   actions.installDshUpdate = async () => {
     const dsh = await call('dsh-update-install')
     update.set(previous => ({ ...previous, dsh }))
@@ -685,7 +654,6 @@ export function apply(ctx) {
     wakeUpdate()
   }
   actions.repoStars = () => call('repo-stars')
-  actions.freshConversation = botId => after(call('bot-fresh', { id: botId }))
   actions.noteTurnTime = (sessionId, turn, key, time) => {
     if (sessionId === undefined || !Number.isFinite(turn) || !Number.isFinite(time)) return
     turnClock.set((state) => {
@@ -728,7 +696,7 @@ export function apply(ctx) {
   })
   const browserPages = browsers?.pages ?? createSource({})
   const browserTabs = browsers?.tabs ?? createSource({})
-  const face = () => ({ actions, hooks: { roster, ui, activity, work, memoryNews, registry, turnClock, live, cards, browserPages, browserTabs, surface, update, panel: ctx.layout.panelInfo } })
+  const face = () => ({ actions, hooks: { roster, ui, activity, work, memoryNews, registry, turnClock, live, cards, browserPages, browserTabs, surface, update } })
   ctx.effect(() => noticeApprovals({
     work,
     roster,
@@ -804,17 +772,13 @@ export function apply(ctx) {
     () => installCompiledStyles(ABOUT_CSS, 'about'),
     () => installCompiledStyles(MEMBER_CSS, 'members'),
     () => installCompiledStyles(USER_MESSAGE_CSS, 'user-messages'),
-    () => installCompiledStyles(TASK_CSS, 'tasks'),
-    // What other Omni plugins put on the surface (extend.js), where Omni's channels were.
-    () => mountShellInstallers({ face, shadow, installStyles, installCompiledStyles }),
     browsers ? () => installCompiledStyles(BROWSER_CSS, 'browser') : null,
     () => installTheme(),
     () => shadow('sidebar.workspaces', { priority: BOT_PRIORITY, inject: face }, TeamSidebar),
     () => shadow('sidebar.brand.mark', { priority: BOT_PRIORITY }, BrandMark),
     () => shadow('sidebar.brand.name', { priority: BOT_PRIORITY }, BrandName),
     () => shadow('sidebar.footer.action', { id: 'bot-account', order: -200, inject: face }, FooterAccount),
-    // Shown only when the team is linked to an Omni without the channels plugin.
-    () => shadow('sidebar.footer.action', { id: 'bot-channels-moved', order: -100, inject: face }, ChannelsMoved),
+    () => shadow('sidebar.footer.action', { id: 'bot-connect', order: -100, inject: face }, ConnectPlugins),
     () => shadow('settings.trigger', { priority: BOT_PRIORITY }, YouAvatar),
     // The whale wins the seat over a shell account plugin's own launcher (the
     // Desktop's "··· More"), which comes back in Agent mode.
@@ -823,37 +787,7 @@ export function apply(ctx) {
     () => shadow('shell.overlay', { id: 'bot-signin', order: 55, inject: face }, DeepSeekSignIn),
     () => shadow('shell.overlay', { id: 'bot-toast', order: 60, inject: face }, ErrorToast),
   ]
-  // DSH draws the user's own messages itself here (no projectUserText), so each one gets the
-  // time its turn began as an attribute, and CSS prints it under the bubble.
-  const installUserTimes = () => {
-    let frame = 0
-    const paint = () => {
-      frame = 0
-      const list = ctx.sessions.list.getSnapshot()
-      const shown = Object.values(list.byId ?? {}).find(session => (session?.retainedBy?.mainView ?? 0) > 0)?.id
-      const turns = shown === undefined ? {} : turnClock.getSnapshot()[shown] ?? {}
-      for (const row of document.querySelectorAll('[data-chat-flow-kind=user][data-chat-turn]')) {
-        const first = turns[row.dataset.chatTurn]?.first
-        const label = first === undefined ? '' : new Date(first).toLocaleTimeString(dateLocale(), { hour: 'numeric', minute: '2-digit' })
-        if ((row.dataset.btTime ?? '') === label) continue
-        if (label) row.dataset.btTime = label
-        else delete row.dataset.btTime
-      }
-    }
-    const schedule = () => { if (!frame) frame = requestAnimationFrame(paint) }
-    const observer = new MutationObserver(schedule)
-    observer.observe(document.body, { childList: true, subtree: true })
-    const offs = [turnClock.subscribe(schedule), ctx.sessions.list.subscribe(schedule)]
-    schedule()
-    return () => {
-      cancelAnimationFrame(frame)
-      observer.disconnect()
-      for (const off of offs) off()
-      for (const row of document.querySelectorAll('[data-bt-time]')) delete row.dataset.btTime
-    }
-  }
   const installConversation = () => [
-    () => installUserTimes(),
     () => installCompiledStyles(CONVERSATION_CSS, 'conversation'),
     () => installMentions(),
     () => installAtMenu(),
@@ -894,9 +828,6 @@ export function apply(ctx) {
     return () => style.remove()
   }, 'ds-bot: return styles')
   shadow('sidebar.footer.action', { id: 'bot-return', order: -300, inject: face }, BotReturn)
-  ctx.effect(() => installFavicon(), 'ds-bot: Omni tab icon')
-  currentFace = face
-  ctx.effect(() => () => { if (currentFace === face) currentFace = null }, 'ds-bot: face for other Omni plugins')
 
   // The main view decides `plain`: a DSH Agent Session keeps the Bot shell but
   // withdraws the conversation replacements, so the native dsh page shows. A jump

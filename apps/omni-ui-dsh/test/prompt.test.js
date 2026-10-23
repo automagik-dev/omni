@@ -1,55 +1,24 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { readFileSync } from 'node:fs'
-import { install as installHooks } from '../src/host/extend.js'
 import { install } from '../src/host/prompt.js'
 import { fakeContext } from './fake-ctx.js'
 
-const BOTS = [
-  ['main', { name: 'Omni' }],
-  ['worker', { name: 'Dev', instructions: 'Check files.' }],
-]
-
-// The prompt section and the hooks other Omni plugins add the Main Bot's rules through.
-function start(config = {}, bots = new Map(BOTS)) {
+function start() {
   const ctx = fakeContext()
-  const rt = {
+  const bots = new Map([
+    ['main', { name: 'Chief' }],
+    ['worker', { name: 'Dev', instructions: 'Check files.' }],
+  ])
+  install({
     ctx,
     selfOf: id => id === 'group-worker' ? 'worker' : id,
     botOf: id => bots.get(id),
     roomOf: id => id === 'room' ? {} : undefined,
     isMain: id => id === 'main',
-    config,
-  }
-  installHooks(rt)
-  install(rt)
+  })
   const prompt = id => ctx.sections.get('bot-identity').text({ agent: { id } })
-  return { ctx, rt, prompt }
+  return { ctx, prompt }
 }
-
-// Written by the prompt before its Omni parts moved out of prompt.js, which joined them
-// into one list. The hooks must give a Main Bot the very same text, byte for byte, or its
-// provider's prompt cache starts over. main-prompt-omni.txt is the same Main Bot with an
-// Omni named; the channels and canvas plugins check it with their parts added.
-test('a Main Bot\'s prompt is the text it was before the Omni parts moved out', (t) => {
-  const fixture = name => readFileSync(new URL(`fixtures/${name}`, import.meta.url), 'utf8')
-  const plain = start({}, new Map([['main', { name: 'Omni', role: 'Channel orchestrator', instructions: 'Keep it short.' }]]))
-  t.after(() => plain.ctx.dispose())
-  assert.equal(plain.prompt('main'), fixture('main-prompt.txt'))
-})
-
-test('the parts other Omni plugins add go between the Main Bot\'s rules and the team\'s, for Main Bots only', (t) => {
-  const { ctx, rt, prompt } = start()
-  t.after(() => ctx.dispose())
-  const before = prompt('main')
-  const off = rt.hooks.mainRules(self => `## Part for ${self}`, { order: 100 })
-  const main = prompt('main')
-  assert.ok(main.includes('\n\n## Part for main\n\n## How your Bot team works'))
-  assert.ok(main.indexOf('## You are the Main Bot') < main.indexOf('## Part for main'))
-  assert.ok(!prompt('worker').includes('## Part for'))
-  off()
-  assert.equal(prompt('main'), before)
-})
 
 test('Bots get a scoped progress rule without changing the private/group prompt prefix', (t) => {
   const { ctx, prompt } = start()

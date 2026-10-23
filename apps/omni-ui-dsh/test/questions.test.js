@@ -10,7 +10,7 @@ const TEAM = {
   version: 1,
   mainBotIds: ['chief'],
   bots: {
-    chief: { id: 'chief', name: 'Omni', role: 'Lead', sessionId: 'chief', createdAt: 1 },
+    chief: { id: 'chief', name: 'Chief', role: 'Lead', sessionId: 'chief', createdAt: 1 },
     writer: { id: 'writer', name: 'Writer', role: 'Write', sessionId: 'writer', createdAt: 2 },
   },
   rooms: {},
@@ -63,7 +63,7 @@ test('a card asked in a hidden Bot-to-Bot turn goes to the dock, without its cal
   const { emit, ask, questions, stop } = await start()
   t.after(stop)
   emit('writer', 'turn/start', { turn: 1 })
-  emit('writer', 'user/message', { content: text('[Message from Omni]\nThe user wants a new Bot; ask them for its name'), source: { kind: 'bot', role: 'request', senderSessionId: 'chief', senderName: 'Omni', exchangeId: 'x1', hop: 0 } })
+  emit('writer', 'user/message', { content: text('[Message from Chief]\nThe user wants a new Bot; ask them for its name'), source: { kind: 'bot', role: 'request', senderSessionId: 'chief', senderName: 'Chief', exchangeId: 'x1', hop: 0 } })
   await ask('writer', 'call-1')
   const asked = (await questions()).writer
   assert.equal(asked.question, 'Which name?')
@@ -81,7 +81,7 @@ test('a card asked in a visible turn stays at its call', async (t) => {
   // A message that asks for an answer in the recipient's own chat is visible too.
   emit('writer', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
   emit('writer', 'turn/start', { turn: 2 })
-  emit('writer', 'user/message', { content: text('[Message from Omni · the user sees your reply here]\nIntroduce yourself'), source: { kind: 'bot', role: 'request', audience: 'user', senderSessionId: 'chief', senderName: 'Omni', exchangeId: 'x2', hop: 0 } })
+  emit('writer', 'user/message', { content: text('[Message from Chief · the user sees your reply here]\nIntroduce yourself'), source: { kind: 'bot', role: 'request', audience: 'user', senderSessionId: 'chief', senderName: 'Chief', exchangeId: 'x2', hop: 0 } })
   await ask('writer', 'call-3')
   assert.equal((await questions()).writer.callId, 'call-3')
 })

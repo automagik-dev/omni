@@ -16,7 +16,7 @@ const team = () => ({
   version: 1,
   mainBotIds: ['chief'],
   bots: {
-    chief: { id: 'chief', sessionId: 'chief', name: 'Omni', capabilities: [], createdAt: 1 },
+    chief: { id: 'chief', sessionId: 'chief', name: 'Chief', capabilities: [], createdAt: 1 },
     worker: { id: 'worker', sessionId: 'worker', name: 'Worker', capabilities: [], createdAt: 2 },
     helper: { id: 'helper', sessionId: 'helper', name: 'Helper', capabilities: [], createdAt: 3 },
   },
@@ -173,7 +173,7 @@ test('capability tool descriptions and attach results explain approval', async t
     { name: 'blocked' },
     { agent: { id: 'worker' } },
   )
-  assert.ok(attached.endsWith(' The user must allow blocked in Omni settings before it can work.'))
+  assert.ok(attached.endsWith(' The user must allow blocked in DS Bot settings before it can work.'))
 })
 
 test('read-only secret reload does not requeue capability reconciliation', async t => {
@@ -381,8 +381,8 @@ test('mounts agent-only MCP and skills, remounts changed config, resolves scoped
   await rt.capabilitySave({ name: 'team', kind: 'pack', items: ['echo', 'guide'] }, { botId: 'chief' })
   await rt.changeCapabilityAttachment('attach', { name: 'team' }, 'chief')
   await rt.changeCapabilityAttachment('attach', { name: 'team', bot: 'Worker' }, 'chief')
-  await assert.rejects(rt.changeCapabilityAttachment('attach', { name: 'team', bot: 'Omni' }, 'worker'), /Main Bot/)
-  await assert.rejects(rt.changeCapabilityAttachment('detach', { name: 'team', bot: 'Omni' }, 'worker'), /Main Bot/)
+  await assert.rejects(rt.changeCapabilityAttachment('attach', { name: 'team', bot: 'Chief' }, 'worker'), /Main Bot/)
+  await assert.rejects(rt.changeCapabilityAttachment('detach', { name: 'team', bot: 'Chief' }, 'worker'), /Main Bot/)
   await rt.capabilitySave(mcp('blocked'), { botId: 'worker' })
   await rt.changeCapabilityAttachment('attach', { name: 'blocked' }, 'worker')
   const chief = testAgent('chief', mounts, skills)
@@ -472,32 +472,4 @@ test('a failed HTTP MCP mount does not show the encoded secret from its URL', as
   const status = env.rt.capabilityStatusesView().chief.exa
   assert.equal(status.state, 'error')
   assert.equal(status.error, 'Connection failed: fetch https://mcp.exa.test/mcp?apiKey=[secret:EXA_API_KEY]')
-})
-
-test('the UI saves, approves and deletes capabilities through its endpoints', async t => {
-  const home = makeHome(team())
-  const loader = { import: async () => ({ default: { name: 'mcp-client', apply() {} } }), unwrapExports: exports => exports.default }
-  const ctx = fakeContext({ services: { loader } })
-  let route
-  ctx.connection.fetch.register = (options) => { route = options; return () => {} }
-  const rt = createRuntime(ctx, { home, github: false, diagnosticsFile: false })
-  ctx.sessionTitle = { rename: async () => {} }
-  rt.resolveAgent = async sessionId => ({ session: { id: sessionId } })
-  await rt.load()
-  t.after(async () => {
-    ctx.dispose()
-    await rt.scheduleCapabilitiesReconcile()
-    rmSync(home, { recursive: true, force: true, maxRetries: 5 })
-  })
-  const call = async (endpoint, payload) => {
-    const reply = await (await route.fetch(new Request('http://localhost/api/bot', { method: 'POST', body: JSON.stringify({ endpoint, payload }) }))).json()
-    assert.equal(reply.ok, true, `${endpoint}: ${JSON.stringify(reply.error)}`)
-    return reply.value
-  }
-  await call('capability-save', mcp('echo'))
-  assert.equal(rt.state.capabilities.items.echo.kind, 'mcp')
-  await call('capability-approve', { name: 'echo' })
-  assert.equal(rt.state.capabilities.items.echo.approved, true)
-  await call('capability-delete', { name: 'echo' })
-  assert.equal(rt.state.capabilities.items.echo, undefined)
 })

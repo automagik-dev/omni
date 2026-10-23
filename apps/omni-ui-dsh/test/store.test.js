@@ -73,7 +73,7 @@ test('a failed state write rejects and leaves the saved file unchanged', async (
 })
 
 test('a failed migration write warns but load() still resolves', async (t) => {
-  const { rt, statePath, warnings } = runtime(t, { version: 1, mainBotId: 'chief', bots: { chief: { id: 'chief', name: 'Omni' } } })
+  const { rt, statePath, warnings } = runtime(t, { version: 1, mainBotId: 'chief', bots: { chief: { id: 'chief', name: 'Chief' } } })
   // The migrated team's first write fails: a directory takes the temp file's path.
   fs.mkdirSync(`${statePath}.${process.pid}.tmp`)
   await rt.load()
@@ -139,7 +139,7 @@ test('a state from a newer version remains untouched', async (t) => {
   const original = JSON.stringify({ version: 999, revision: 77, recoveryMarker: 'keep' })
   const { rt, statePath } = runtime(t, original)
   await rt.load()
-  assert.match(rt.readOnly(), /saved by a newer Omni; update Omni/)
+  assert.match(rt.readOnly(), /saved by a newer DS Bot; update DS Bot/)
   rt.state.prefs.marker = 'not saved'
   await rt.save()
   assert.equal(fs.readFileSync(statePath, 'utf8'), original)

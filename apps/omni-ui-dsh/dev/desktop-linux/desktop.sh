@@ -75,13 +75,13 @@ ensure_profile() {
   profile="$HOME_DIR/profiles/desktop"
   mkdir -p "$profile"
   [ -f "$profile/cordis.patch.yml" ] || cp "$HERE/onboarding.patch.yml" "$profile/cordis.patch.yml"
-  if [ -f "$profile/package.json" ] && grep -q "\"link:$PLUGIN\"" "$profile/package.json" && grep -q "omni-canvas-dsh" "$profile/package.json" && [ -d "$profile/node_modules" ]; then return 0; fi
+  if [ -f "$profile/package.json" ] && grep -q "\"link:$PLUGIN\"" "$profile/package.json" && [ -d "$profile/node_modules" ]; then return 0; fi
   cat > "$profile/package.json" <<EOF
 {
   "name": "dsh-profile-desktop",
   "private": true,
-  "dependencies": { "ds-bot": "link:$PLUGIN", "@automagik/omni-channels-dsh": "link:$ROOT/omni-channels-dsh", "@automagik/omni-canvas-dsh": "link:$ROOT/omni-canvas-dsh" },
-  "dsh": { "profile": { "bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "ds-bot", "@automagik/omni-channels-dsh", "@automagik/omni-canvas-dsh"] } }
+  "dependencies": { "ds-bot": "link:$PLUGIN" },
+  "dsh": { "profile": { "bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "ds-bot"] } }
 }
 EOF
   printf 'packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n' > "$profile/pnpm-workspace.yaml"

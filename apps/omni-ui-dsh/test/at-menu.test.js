@@ -6,7 +6,7 @@ import { indexRoster } from '../src/client/sources.js'
 
 const roster = indexRoster({
   bots: [
-    { id: 'chief', name: 'Omni', role: 'Lead', sessionId: 'chief-2', parts: ['chief'] },
+    { id: 'chief', name: 'Chief', role: 'Lead', sessionId: 'chief-2', parts: ['chief'] },
     { id: 'king', name: 'King', sessionId: 'king' },
     { id: 'writer', name: 'Writer', sessionId: 'writer' },
   ],
@@ -23,7 +23,7 @@ test('a session mention is the one DSH writes and reads back', () => {
 })
 
 test('"@" offers a group\'s members and everyone, or every other Bot in a Bot\'s chat', () => {
-  assert.deepEqual(names(mentionRows(roster, 'room')), ['Omni', 'King', 'everyone'])
+  assert.deepEqual(names(mentionRows(roster, 'room')), ['Chief', 'King', 'everyone'])
   assert.deepEqual(names(mentionRows(roster, 'chief-2')), ['King', 'Writer'])
   assert.deepEqual(names(mentionRows(roster, 'chief', 'wri')), ['Writer'])
   assert.deepEqual(names(mentionRows(roster, 'room', 'ev')), ['everyone'])
@@ -72,7 +72,7 @@ test('the chats join only the menu that "+" opened, and a pick inserts a session
   assert.equal(await chats.codec.serialize(picked.insert.ref), picked.insert.ref)
 
   const mentions = await bots.candidates({ sessionId: 'room' }, { query: '' })
-  assert.deepEqual(mentions.map(row => [row.name, row.description]), [['Omni', 'Lead'], ['King', undefined], ['Everyone', '2 members']])
+  assert.deepEqual(mentions.map(row => [row.name, row.description]), [['Chief', 'Lead'], ['King', undefined], ['Everyone', '2 members']])
   assert.deepEqual(bots.onPick({ candidate: mentions[1] }), { text: '@King ' })
   assert.deepEqual(await bots.candidates({ sessionId: 'plain' }, { query: '' }), [])
 })

@@ -14,7 +14,7 @@ const TEAM = {
   mainBotIds: ['a'],
   workspaceId: 'w1',
   bots: {
-    a: { id: 'a', name: 'Omni', role: 'Boss', sessionId: 'a', createdAt: 1 },
+    a: { id: 'a', name: 'Chief', role: 'Boss', sessionId: 'a', createdAt: 1 },
     b: { id: 'b', name: 'Writer', role: 'Write', sessionId: 'b', createdAt: 2 },
   },
   rooms: { r1: { id: 'r1', name: 'Ops', members: ['a', 'b'], mode: 'admin', admin: 'b', named: true, sessions: { b: 'gb' } } },
@@ -64,7 +64,7 @@ async function start({ services = {}, workspaces = [], llm, team: saved = TEAM }
     }
     return agents.get(sessionId)
   }
-  const registry = new Map([['w1', { id: 'w1', path: team, title: 'Omni' }], ...workspaces.map(workspace => [workspace.id, workspace])])
+  const registry = new Map([['w1', { id: 'w1', path: team, title: 'DS Bot' }], ...workspaces.map(workspace => [workspace.id, workspace])])
   Object.assign(ctx, {
     llm: llm ?? { listProviders: () => [], listModels: async () => [], resolveModelInfo: async () => ({}) },
     workspaceRegistry: {
@@ -217,22 +217,6 @@ test('an idle Bot\'s own chat moves to its new folder at once, and back', async 
   await until(() => handoffOf(agentOf('s2')) !== undefined)
   assert.deepEqual(created.at(-1), { workspaceId: 'w1' })
   assert.match(handoffOf(agentOf('s2')), new RegExp(`because your working folder changed to ${escapeRegExp(team)}\\.`))
-})
-
-test('New conversation moves a Bot on to a fresh part that carries nothing of the last one', async (t) => {
-  const { call, agentOf, state, stop } = await start()
-  t.after(stop)
-  assert.equal((await call('bot-fresh', { id: 'b' })).ok, true)
-  await until(() => state().bots.b.sessionId === 's1')
-  await until(() => handoffOf(agentOf('s1')) !== undefined)
-  // No note was asked of the model and no message came along; the earlier part stays listed.
-  assert.deepEqual(state().bots.b.segments.map(segment => [segment.sessionId, segment.fallback, segment.note]), [['b', 'fresh', undefined]])
-  const text = handoffOf(agentOf('s1'))
-  assert.match(text, /^\[Handoff · part 2\]\nThe user started a fresh conversation \(part 2\) in your own chat\./)
-  assert.match(text, /not from what an earlier conversation concluded about them/)
-  assert.doesNotMatch(text, /## Handoff note|## Latest messages/)
-  assert.equal(agentOf('b').calls.length, 0, 'the old part was not asked for a note')
-  assert.equal((await call('bot-fresh', { id: 'nobody' })).ok, false)
 })
 
 test('a running Bot moves at its next step and carries that step\'s input along', async (t) => {

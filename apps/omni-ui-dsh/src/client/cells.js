@@ -1,20 +1,16 @@
-import { createElement as h, Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { createElement as h, Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
 import { inkText } from './inks.js'
 import { linkMentions, mentionTarget, dayLabel, contentText, stripHeader, isHiddenTurn, isRelayContext, relaysBefore, relayPart, commRunOf, toolName, toolArgs, reminderPrompts } from './text.js'
-import { SmileIcon, ReplyIcon, DotsIcon, CheckIcon, DownloadIcon, CopyIcon, MemoryIcon, TasksIcon } from './icons.js'
+import { SmileIcon, ReplyIcon, DotsIcon, CheckIcon, DownloadIcon, CopyIcon, MemoryIcon } from './icons.js'
 import { colorOf, toolState, BotMark, RoomAvatar } from './mark.js'
 import { AnsweredCell, SettledQuestion, PendingQuestion } from './questions.js'
 import { SecretToolCell } from './secret-card.js'
 import { dateLocale, t } from './i18n.js'
 import { failureLabel } from './diagnostics.js'
 import { turnReasoning } from './turn-reasoning.js'
-import { FOLD_AT, FOLD_HUGE, NEVER, stripLongNote, useFold } from './fold.js'
-import { hasCanvas, splitCanvases } from './canvas-text.js'
-import { CanvasSlot } from './canvas-slot.js'
-import { TaskCard } from './task-card.js'
-import { toolCards } from './extend.js'
+import { FOLD_AT, FOLD_HUGE, stripLongNote, useFold } from './fold.js'
 
 // -------------------------------------------------------------------------
 // Chat cells
@@ -48,27 +44,16 @@ export function Bubbles({ texts, roster, selfId, actions, streaming, sessionId, 
 }
 
 function Bubble({ text, index, roster, selfId, actions, sessionId, msgKey, mentions, fold, picked, live, lead, whole }) {
-  // A reply with a canvas is never folded: a cut would split the canvas from its source.
-  const canvas = hasCanvas(text)
-  const { shown, folded, control } = useFold(text, { limit: canvas ? NEVER : fold, whole, live })
+  const { shown, folded, control } = useFold(text, { limit: fold, whole, live })
   const key = msgKey ? `${msgKey}:${index}` : undefined
-  const markdown = value => h(MarkdownText, { text: linkMentions(value, roster.bots, selfId), streaming: live, labels: mdLabels(), variant: 'compact', fileMentions: mentions })
-  const body = canvas ? null : markdown(shown)
-  const tools = live ? null : h(MessageTools, { text: folded ? text : shown, name: roster.byId[selfId]?.name ?? t('Bot'), sessionId, react: key ? emoji => actions.toggleReaction(msgKey, index, emoji) : undefined, actions })
-  // Text stays in bubbles; each canvas sits between them at full width, and its buttons
-  // ask the Bot in this same chat.
-  const lines = canvas
-    ? splitCanvases(shown).map((part, at, parts) => (part.kind === 'canvas'
-      ? h('div', { key: at, className: 'bt-canvas-line' }, h(CanvasSlot, { program: part.program, complete: part.complete, onAsk: message => message && actions.send(sessionId ?? selfId, message) }))
-      : h('div', { key: at, className: 'bt-msg-line' }, at === 0 ? lead : null, h('div', { className: 'bt-bubble' }, markdown(part.text)), at === parts.length - 1 ? tools : null)))
-    : null
+  const body = h(MarkdownText, { text: linkMentions(shown, roster.bots, selfId), streaming: live, labels: mdLabels(), variant: 'compact', fileMentions: mentions })
   return h('div', { className: 'bt-msg' },
-    lines ?? h('div', { className: 'bt-msg-line' },
+    h('div', { className: 'bt-msg-line' },
       lead,
       h('div', { className: 'bt-bubble', 'data-folded': folded || undefined },
         control ? h('div', { className: 'bt-fold-body' }, body) : body,
         control),
-      tools),
+      live ? null : h(MessageTools, { text: folded ? text : shown, name: roster.byId[selfId]?.name ?? t('Bot'), sessionId, react: key ? emoji => actions.toggleReaction(msgKey, index, emoji) : undefined, actions })),
     picked.length ? h('div', { className: 'bt-reacts' }, picked.map(emoji => h('button', {
       key: emoji, type: 'button', className: 'bt-react', 'aria-label': t('Remove reaction {emoji}', { emoji }), onClick: () => actions.toggleReaction(msgKey, index, emoji),
     }, emoji))) : null)
@@ -422,13 +407,6 @@ export function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnCl
       if (source.role === 'report') {
         return h(GroupEvent, { prefix: t('Replies from'), room: roster.roomsById[source.roomId], name: t('a group chat'), roster, actions })
       }
-      // A task this Bot started under Tasks came back: the line opens it.
-      if (source.role === 'task-done') {
-        const title = /^\[Task "(.*)" finished/.exec(contentText(data.content))?.[1] ?? t('a task')
-        return h('div', { className: 'bt-event bt-task-done' },
-          h(TasksIcon, { size: 15 }), h('span', null, t('Task finished')),
-          source.taskSessionId ? h('button', { type: 'button', className: 'bt-task-link', onClick: () => actions.openSession(source.taskSessionId) }, title) : h('span', null, title))
-      }
       // A request carried on keeps its role, but its message line was shown already.
       if (source.role === 'resume' || source.resumed === true) return h('div', { className: 'bt-event' }, t('Picked up its work after a restart'))
       if (source.role === 'retry' || source.retried === true) return h('div', { className: 'bt-event' }, t('Asked to make the tool call it wrote as text'))
@@ -545,10 +523,8 @@ export function TurnTailCell({ turn: location, sessionId, useTurnClock, useUi, a
     const start = nextTurnStart(state[sessionId] ?? {}, turn)
     return start !== undefined && start > visit.seen && start <= visit.entered
   })
-  // Every reply says when it ended, under its last line.
-  const ended = h('time', { className: 'bt-turn-time', dateTime: new Date(time).toISOString() }, new Date(time).toLocaleTimeString(dateLocale(), { hour: 'numeric', minute: '2-digit' }))
+  if (!label && !fresh) return null
   return h(Fragment, null,
-    ended,
     label ? h('div', { className: 'bt-time-sep', role: 'separator' }, label) : null,
     fresh ? h(NewDivider) : null)
 }
@@ -599,10 +575,7 @@ function toolActivity(name, arg, findBot, self) {
     case 'remember': return { label: t('Saving to memory'), state: 'working' }
     case 'forget': return { label: t('Updating memory'), state: 'working' }
     case 'recall': return { label: t('Checking memory'), state: 'searching' }
-    case 'start_task': return { label: t('Starting a task'), state: 'sending' }
     default:
-      // Another Omni plugin's tool says what it does (extend.js).
-      if (toolCards.phrase(name)) return toolCards.phrase(name)(arg)
       if (GROUP_PHRASES[name]) return { label: t(GROUP_PHRASES[name]), state: 'sending' }
       const phrase = TOOL_PHRASES.find(([pattern]) => pattern.test(name))?.[1]
       return { label: phrase ? t(phrase) : null, state: toolState(name) }
@@ -708,8 +681,7 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
 
 // The calls ToolCell draws. A PTC program (`run_code`) dispatches the real tools as
 // its sub-calls, so a call draws by its own name wherever it sits in the tree.
-// Another Omni plugin's tools draw when they register a card (extend.js).
-const DRAWN = new Set(['start_task', 'message_bot', 'stop_bot', 'create_bot', 'update_bot', 'group_relay', 'create_group', 'update_group', 'delete_group', 'post_to_group', 'ask_user', 'request_secret', 'ask_user_question', 'read_group_chat', 'remember', 'forget'])
+const DRAWN = new Set(['message_bot', 'stop_bot', 'create_bot', 'update_bot', 'group_relay', 'create_group', 'update_group', 'delete_group', 'post_to_group', 'ask_user', 'request_secret', 'ask_user_question', 'read_group_chat', 'remember', 'forget'])
 // Calls whose card a dock above the composer carries when the call is not drawn.
 const CARDS = new Set(['ask_user', 'request_secret'])
 
@@ -745,16 +717,7 @@ function renderCall(call, { sessionId, roster, actions, useUi, useWork, findBot 
   const done = call.kind === 'tool-result'
   const { text: arg, value: argValue } = toolArgs(call)
   const self = roster.byId[sessionId]
-  // A tool another Omni plugin registers draws its own card (extend.js): Omni's calls, canvases.
-  const card = toolCards.renderer(tool)
-  if (card !== undefined) return card({ call, tool, arg, argValue, done, content: done ? contentText(call.content) : '', sessionId, roster, actions })
   switch (tool) {
-    case 'start_task': {
-      // The task's own card: it works where the user can watch, then says what it found.
-      const started = done ? /\((session-[^)]+)\) under Tasks/.exec(contentText(call.content))?.[1] : undefined
-      if (done && !started) return h('div', { className: 'bt-event' }, contentText(call.content).slice(0, 160))
-      return h(TaskCard, { sessionId: started, title: arg('title') ?? t('a task'), task: started ? roster.tasks?.[started] : undefined, onOpen: () => started && actions.openSession(started) })
-    }
     case 'message_bot': {
       const target = findBot(arg('to')) ?? { name: arg('to') ?? '…', color: 'gray' }
       if (done && call.isError) return h('div', { className: 'bt-event' }, t("Couldn't message {name}", { name: target.name }))
@@ -831,16 +794,14 @@ export function ToolCell({ node, sessionId, useRoster, useUi, useWork, actions }
   const turn = node.location?.turn?.turn ?? root.turn
   const hidden = isHiddenTurn(roster, sessionId, turn)
   const findBot = nameOrId => roster.byId[nameOrId] ?? roster.bots.find(bot => bot.name.toLowerCase() === String(nameOrId ?? '').toLowerCase())
-  // A plugin that loads after the transcript drew still gets its cards drawn.
-  useSyncExternalStore(toolCards.source.subscribe, toolCards.source.getSnapshot)
   const calls = hidden ? [] : callTree(root)
-  const drawn = calls.filter(call => DRAWN.has(toolName(call)) || toolCards.renderer(toolName(call)))
+  const drawn = calls.filter(call => DRAWN.has(toolName(call)))
   // The newest call still running names the work, so a program reads as the tool it is in.
   const running = root.kind === 'tool-result' ? undefined : calls.findLast(call => call.kind !== 'tool-result')
   const note = running ? toolActivity(toolName(running), toolArgs(running).text, findBot, roster.byId[sessionId]) : null
   // A running tool shows only as the activity row's phrase.
   useLiveNote(actions, sessionId, `tool:${root.callId ?? node.key}`, note)
-  useShownCards(actions, sessionId, drawn.filter(call => (CARDS.has(toolName(call)) || toolCards.asks(toolName(call))) && call.callId).map(call => call.callId))
+  useShownCards(actions, sessionId, drawn.filter(call => CARDS.has(toolName(call)) && call.callId).map(call => call.callId))
   if (drawn.length === 0) return null
   const env = { sessionId, roster, actions, useUi, useWork, findBot }
   return h(Fragment, null, drawn.map((call, index) => h(Fragment, { key: call.callId ?? index }, renderCall(call, env))))

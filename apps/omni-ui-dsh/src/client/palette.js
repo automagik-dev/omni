@@ -1,7 +1,8 @@
 import { createElement as h, Fragment, useEffect, useState } from 'react'
+import { FishLogo } from '@deepseek-ai/dsh-client-ui-primitives'
 import { isMainOf } from './sources.js'
 import { currentPart, stripHeader } from './text.js'
-import { PlusIcon, SearchIcon, PeopleIcon, CloseIcon, GearIcon, TasksIcon } from './icons.js'
+import { PlusIcon, SearchIcon, PeopleIcon, CloseIcon, GearIcon } from './icons.js'
 import { BotAvatar, RoomAvatar } from './mark.js'
 import { useEscape } from './overlay-hooks.js'
 import { QUICK_EDGES, useFlip, useGlide } from './motion.js'
@@ -60,12 +61,12 @@ export function CommandPalette({ start, token, roster, actions, useSessions }) {
     })),
   ]
   if (people.length) sections.push([t('Bots'), people])
-  const agents = (roster.agents ?? []).filter(() => matchesName(t('Tasks')) || matchesName('DSH Agent')).map(agent => ({
-    key: agent.id, avatar: h('span', { className: 'bt-palette-agent' }, h(TasksIcon, { size: 18 })), title: t('Tasks'),
+  const agents = (roster.agents ?? []).filter(() => matchesName('DSH Agent')).map(agent => ({
+    key: agent.id, avatar: h('span', { className: 'bt-palette-agent' }, h(FishLogo, { size: 18 })), title: 'DSH Agent',
     subtitle: t('Plain dsh session'),
     run: () => actions.openAgent(agent.id),
   }))
-  if (agents.length) sections.push([t('Tasks'), agents])
+  if (agents.length) sections.push(['DSH Agent', agents])
   const messages = JSON.parse(found).map(([id, turn, snippet]) => {
     const bot = roster.byId[id]
     const room = roster.roomsById[id]

@@ -55,7 +55,7 @@ function start(home, { listedExtra, logsExtra, subagentsExtra } = {}) {
     mainBotIds: ['b1'],
     revision: 1,
     bots: {
-      b1: { id: 'b1', sessionId: 's-b1', segments: [{ sessionId: 'b1', endedAt: LONG_AGO }], name: 'Omni', instructions: '', createdAt: 1 },
+      b1: { id: 'b1', sessionId: 's-b1', segments: [{ sessionId: 'b1', endedAt: LONG_AGO }], name: 'Chief', instructions: '', createdAt: 1 },
       b2: { id: 'b2', sessionId: 'b2', name: 'Writer', instructions: '', createdAt: 2 },
     },
     rooms: { r1: { id: 'r1', name: '研发群', named: true, members: ['b1', 'b2'], admin: 'b1', mode: 'everyone', notice: '', sessions: { b1: 's-g1' }, log: [], createdAt: 3 } },
@@ -135,9 +135,9 @@ test('the usage view counts every Session under its owner, by hour in the asked 
   const { call, meter, pages, stop } = start()
   t.after(stop)
   const view = (await call('usage', { timeZone: 'Asia/Shanghai' })).value
-  // Omni: both parts of its own chat and its subagent; its group Session counts as group use.
+  // Chief: both parts of its own chat and its subagent; its group Session counts as group use.
   // The DSH Agent's Sessions count beside the Bots, not with the other sessions.
-  assert.deepEqual(totals(view), { 'Omni/chat': 160 + 220 + 10, 'Omni/group': 330, 'DSH Agent/chat': 77, 'other/chat': 44 })
+  assert.deepEqual(totals(view), { 'Chief/chat': 160 + 220 + 10, 'Chief/group': 330, 'DSH Agent/chat': 77, 'other/chat': 44 })
   assert.deepEqual(view.rows.map(row => row[0]), ['1970-01-01 08', '1970-01-01 09', '1970-01-01 09', '1970-01-01 09', '1970-01-01 10'])
   assert.deepEqual(view.models.map(model => model.key).sort(), ['deepseek/v4-flash', 'deepseek/v4-pro', 'kimi/k3'])
   assert.equal(view.scanning, false)
@@ -152,7 +152,7 @@ test('the usage view counts every Session under its owner, by hour in the asked 
   assert.deepEqual(chunks, [chunk])
   await drain(meter({ sessionId: 's-b1', purpose: 'compaction', provider: 'deepseek', model: 'v4-flash', messages: [] }, async function* () { yield chunk }))
   const again = (await call('usage', { timeZone: 'Asia/Shanghai' })).value
-  assert.equal(totals(again)['Omni/compaction'], 1100)
+  assert.equal(totals(again)['Chief/compaction'], 1100)
 })
 
 test('a call made in a group chat stays group use after the room is gone', async (t) => {
@@ -160,7 +160,7 @@ test('a call made in a group chat stays group use after the room is gone', async
   const { home } = first
   t.after(() => rmSync(home, { recursive: true, force: true, maxRetries: 5 }))
   const before = (await first.call('usage', { timeZone: 'Asia/Shanghai' })).value
-  assert.equal(totals(before)['Omni/group'], 330)
+  assert.equal(totals(before)['Chief/group'], 330)
   await first.ctx.dispose()
 
   const state = JSON.parse(readFileSync(join(home, 'state.json'), 'utf8'))
@@ -169,7 +169,7 @@ test('a call made in a group chat stays group use after the room is gone', async
 
   const second = start(home)
   const after = (await second.call('usage', { timeZone: 'Asia/Shanghai' })).value
-  assert.equal(totals(after)['Omni/group'], 330)
+  assert.equal(totals(after)['Chief/group'], 330)
   await second.ctx.dispose()
 })
 
@@ -216,7 +216,7 @@ test('a subagent Session is read through its parent, even a parent that is gone;
   })
   t.after(stop)
   const view = (await call('usage', { timeZone: 'Asia/Shanghai' })).value
-  assert.equal(totals(view)['Omni/chat'], 160 + 220 + 10)
+  assert.equal(totals(view)['Chief/chat'], 160 + 220 + 10)
   assert.equal(totals(view)['other/chat'], 44 + 9)
   // No parent on record: it cannot be addressed, so it is not asked for.
   assert.ok(!pages.includes('s-lost'))

@@ -1,5 +1,4 @@
 import { createElement as h, useEffect, useState } from 'react'
-import { extractSecrets, mcpRequest } from './mcp-paste.js'
 import { t } from './i18n.js'
 
 const blank = () => ({ name: '', kind: 'mcp', description: '', transport: 'stdio', command: '', argsText: '', envText: '{}', url: '', headersText: '{}', content: '', items: [] })
@@ -110,48 +109,6 @@ function CapabilityRow({ item, onEdit, onDelete, onApprove, confirming }) {
         h('button', { type: 'button', className: 'bt-soft bt-soft-sm', onClick: onDelete }, confirming ? t('Click again to delete.') : t('Delete')))))
 }
 
-// Paste what an MCP server's docs say; the Main Bot sets it up while the user watches its
-// chat. Keys are saved as secrets first and only their references go along (mcp-paste.js).
-function PasteHelper({ roster, actions, onByHand }) {
-  const [text, setText] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-  const main = roster.byId?.[roster.mainBotId]
-  const found = text.trim() ? extractSecrets(text).secrets.length : 0
-  const go = async () => {
-    if (!main || text.trim() === '') return
-    setBusy(true)
-    setError('')
-    try {
-      const { text: safe, secrets } = extractSecrets(text)
-      for (const secret of secrets) await actions.secretSet({ name: secret.name, value: secret.value, purpose: t('Key for an MCP server added from Capabilities') })
-      await actions.send(main.id, mcpRequest(safe))
-      setText('')
-      actions.closeSettings()
-      actions.openSession(main.id)
-    } catch (failure) {
-      setError(failure?.message ?? String(failure))
-    } finally {
-      setBusy(false)
-    }
-  }
-  return h('div', { className: 'bt-paste' },
-    h('textarea', {
-      className: 'bt-textarea bt-paste-box', value: text, rows: 4, spellCheck: false, 'aria-label': t('What the MCP server’s docs say'),
-      placeholder: t('Paste what the MCP server’s docs say: a JSON block, a command like npx -y @scope/server, or a URL.'),
-      onChange: event => setText(event.target.value),
-    }),
-    h('div', { className: 'bt-paste-foot' },
-      h('span', { className: 'bt-set-hint' }, found === 1
-        ? t('The key in it will be saved as a secret first; {name} only sees its name.', { name: main?.name ?? 'Omni' })
-        : found > 1 ? t('{n} keys will be saved as secrets first; {name} only sees their names.', { n: found, name: main?.name ?? 'Omni' })
-        : t('{name} works out the rest and asks you for anything missing.', { name: main?.name ?? 'Omni' })),
-      h('button', { type: 'button', className: 'bt-link-btn', onClick: onByHand }, t('Set it up by hand')),
-      h('button', { type: 'button', className: 'bt-soft bt-soft-sm bt-paste-go', disabled: busy || !main || text.trim() === '', onClick: go },
-        busy ? t('Sending…') : t('Add with {name}', { name: main?.name ?? 'Omni' }))),
-    error ? h('div', { className: 'bt-set-hint bt-paste-error', role: 'alert' }, error) : null)
-}
-
 export function CapabilitiesPage({ roster, actions, run }) {
   const items = [...(roster.capabilities ?? [])].sort((a, b) => a.name.localeCompare(b.name))
   const [draft, setDraft] = useState(null)
@@ -178,7 +135,9 @@ export function CapabilitiesPage({ roster, actions, run }) {
   }
   return h('section', { className: 'bt-set-section' },
     h('h3', null, t('Shared capabilities')),
-    draft ? h(CapabilityForm, { draft, setDraft, items, actions, onClose: () => setDraft(null) }) : h(PasteHelper, { roster, actions, onByHand: startNew }),
+    h('div', { className: 'bt-actions' },
+      h('button', { type: 'button', className: 'bt-soft bt-soft-sm', onClick: startNew }, t('Add capability'))),
+    draft ? h(CapabilityForm, { draft, setDraft, items, actions, onClose: () => setDraft(null) }) : null,
     h('div', { className: 'bt-set-card bt-connectors-card' },
       items.length === 0 ? h('div', { className: 'bt-set-row' }, h('span', { className: 'bt-set-hint' }, t('No capabilities saved')))
         : items.map(item => h(CapabilityRow, {

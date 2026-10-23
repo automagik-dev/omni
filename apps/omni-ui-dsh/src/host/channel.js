@@ -1,7 +1,5 @@
 // Client channel: the team view the browser renders, and the POST /api/bot endpoints.
 import { randomUUID } from 'node:crypto'
-import { existsSync } from 'node:fs'
-import { join } from 'node:path'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { questionReply } from './parts.js'
 import { COLORS, EXTRA_COLORS, ROUTE } from './constants.js'
@@ -36,10 +34,6 @@ export function install(rt) {
     // `mainBotId` is the first Main Bot, which the sidebar shows as its tile.
     mainBotId: state.mainBotIds[0] ?? null,
     mainBotIds: state.mainBotIds,
-    // What other Omni plugins add to the view (extend.js): the automations, for one.
-    ...rt.extended.view(),
-    // Tasks a Bot started (agents.js), for their live cards in the chat.
-    tasks: state.tasks ?? {},
     // `sessionId` is the Bot's current own-chat part; `parts` its earlier ones.
     // `waiting`: the Bot holds its greeting until the user picks its model.
     bots: Object.values(state.bots).map(({ segments, kickoff, ...bot }) => ({
@@ -83,11 +77,6 @@ export function install(rt) {
     memoryReviews: rt.memoryReviews(),
     connectors: rt.connectorsView(),
     capabilityStatuses: rt.capabilityStatusesView(),
-    ...rt.extended.live(),
-    // Channels moved to their own plugin: a team linked to an Omni (omni.json, which that
-    // plugin keeps, or the older omni.url on this row) whose DSH has only this plugin
-    // learns where they went.
-    channelsMoved: ctx.get?.('omniChannels') === undefined && (typeof rt.config?.omni?.url === 'string' || existsSync(join(rt.home, 'omni.json'))),
   })
   // What a host that only reads the team may still answer.
   // Updates change the dsh profile, not the team, so a reading host may run them too.
@@ -116,9 +105,7 @@ export function install(rt) {
       const body = payload ?? {}
       await rt.refresh()
       const readOnly = rt.readOnly()
-      // An endpoint another Omni plugin serves (extend.js) says itself whether it only reads.
-      const added = rt.extended.endpointOf(endpoint)
-      if (readOnly !== undefined && !READS.has(endpoint) && added?.read !== true) return fail(readOnly, 'bot/read-only')
+      if (readOnly !== undefined && !READS.has(endpoint)) return fail(readOnly, 'bot/read-only')
       switch (endpoint) {
         case 'state':
           if (typeof body.locale === 'string' && /^[a-z]{2,3}(-[\w-]+)?$/i.test(body.locale)) uiLocale = body.locale
@@ -261,9 +248,6 @@ export function install(rt) {
         case 'connector-retry':
           await rt.load()
           return ok(await rt.connectorEndpoint(endpoint, body))
-        case 'bot-fresh':
-          await rt.load()
-          return ok(await rt.startFresh(String(body?.id ?? '')))
         case 'capability-save':
         case 'capability-delete':
         case 'capability-approve':
@@ -349,7 +333,6 @@ export function install(rt) {
           await rt.diagnostics.clear()
           return ok(true)
         default:
-          if (added !== undefined) return ok(await added.fn(body, signal))
           return fail(`Unknown endpoint ${endpoint}`, 'bot/not-found')
       }
     } catch (error) {

@@ -186,33 +186,3 @@ test('a Bot on the default model with its own thinking level leaves the default 
   await rt.applyModel({ id: 'b1', model: 'deepseek/v4-flash', effort: 'low' })
   assert.deepEqual(current(), fallback)
 })
-
-test('Claude through Claude Code offers the newest of each family, and keeps what a Bot runs on', async () => {
-  const { currentClaudeModels } = await import('../src/host/models.js')
-  const row = (id, provider = 'claude-code') => ({ ref: `${provider}/${id}`, provider, id, name: id })
-  // What dsh-oh-my-claude 1.5.5 lists once the CLI (2.1.309) has answered: its lineup, then
-  // the models it knew before.
-  const live = ['default', 'opus', 'claude-fable-5-1[1m]', 'sonnet', 'haiku', 'claude-fable-5-1', 'claude-fable-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-opus-4-5', 'claude-sonnet-4-5', 'claude-haiku-4-5-20251001']
-  const ids = list => list.map(entry => entry.ref)
-  assert.deepEqual(ids(currentClaudeModels([...live.map(id => row(id)), row('deepseek-v4-pro', 'deepseek')])), ['claude-code/default', 'claude-code/opus', 'claude-code/claude-fable-5-1[1m]', 'claude-code/sonnet', 'claude-code/haiku', 'deepseek/deepseek-v4-pro'])
-  // Before the CLI answered, only the models it knew: the newest of each.
-  const known = ['claude-fable-5-1', 'claude-fable-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-haiku-4-5']
-  assert.deepEqual(ids(currentClaudeModels(known.map(id => row(id)))), ['claude-code/claude-fable-5-1', 'claude-code/claude-opus-5', 'claude-code/claude-sonnet-5', 'claude-code/claude-haiku-4-5'])
-  // Once the plugin knows the 5.5 ids, its lineup takes them, and the older ones go.
-  assert.deepEqual(ids(currentClaudeModels(['claude-opus-5-5', 'claude-opus-5', 'claude-haiku-5-5', 'claude-haiku-4-5'].map(id => row(id)))), ['claude-code/claude-opus-5-5', 'claude-code/claude-haiku-5-5'])
-  // A Bot on an older model keeps it; another box's route is weighed on its own.
-  assert.deepEqual(ids(currentClaudeModels([row('opus'), row('claude-opus-4-8'), row('claude-opus-4-8', 'claude-code-studio')], new Set(['claude-code/claude-opus-4-8']))), ['claude-code/opus', 'claude-code/claude-opus-4-8', 'claude-code-studio/claude-opus-4-8'])
-})
-
-test('the catalog leaves out superseded Claude models but keeps one a Bot runs on', async () => {
-  const ctx = {
-    llm: {
-      listProviders: () => [{ id: 'claude-code', name: 'Oh My Claude' }],
-      listModels: async () => ['opus', 'sonnet', 'claude-opus-4-8', 'claude-sonnet-4-6'].map(id => ({ provider: 'claude-code', id, name: id })),
-    },
-    get: () => undefined,
-  }
-  const rt = { ctx, state: { bots: { a: { model: 'claude-code/claude-sonnet-4-6' } } } }
-  install(rt)
-  assert.deepEqual((await rt.catalog({ fresh: true })).map(entry => entry.ref), ['claude-code/opus', 'claude-code/sonnet', 'claude-code/claude-sonnet-4-6'])
-})

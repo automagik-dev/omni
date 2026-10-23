@@ -17,12 +17,12 @@ test('client.js registers a factory that exports apply and inject', () => {
   runInNewContext(committed(), { window: { __ModuleLoader__: { load: registration => registrations.push(registration) } } })
   assert.equal(registrations.length, 1)
   const [{ id, factory, ...rest }] = registrations
-  assert.equal(id, '@automagik/omni-dsh')
+  assert.equal(id, 'ds-bot')
   assert.deepEqual(Object.keys(rest), [])
 
   const requested = []
   const platform = {
-    'react': { createElement: () => null, Fragment: Symbol('Fragment'), useState: initial => [initial, () => {}], useEffect: () => {}, useMemo: make => make(), useRef: current => ({ current }), createContext: value => ({ Provider: () => null, _currentValue: value }), Component: class {} },
+    'react': { createElement: () => null, Fragment: Symbol('Fragment'), useState: initial => [initial, () => {}], useEffect: () => {}, useMemo: make => make(), useRef: current => ({ current }) },
     'react-dom': { createPortal: node => node },
     '@deepseek-ai/dsh-client-ui-primitives': { MarkdownText: () => null },
   }
@@ -33,14 +33,8 @@ test('client.js registers a factory that exports apply and inject', () => {
   })
   assert.deepEqual([...new Set(requested)].sort(), Object.keys(platform).sort())
   assert.equal(Object.prototype.toString.call(exports), '[object Module]')
-  // `omni` is what the Omni channels and canvas plugins build on (their bundles require
-  // this one through dsh.client.external).
-  assert.deepEqual(Object.keys(exports), ['apply', 'inject', 'omni'])
+  assert.deepEqual(Object.keys(exports), ['apply', 'inject'])
   assert.equal(typeof exports.apply, 'function')
-  assert.deepEqual(Object.keys(exports.omni).sort(), ['addStrings', 'badges', 'botSettings', 'call', 'dateLocale', 'face', 'headerButtons', 'hostText', 'language', 'nav', 'onShell', 'setCanvasRenderer', 't', 'toolCards', 'ui'])
-  assert.deepEqual(Object.keys(exports.omni.ui).sort(), ['BotMark', 'CHARACTERS', 'MAIN_LOOK', 'OmniMark', 'createSource', 'icons', 'relativeShort'])
-  assert.ok(Object.isFrozen(exports.omni))
-  assert.equal(exports.omni.face(), null)
   // No `configForms`: the client never writes the user's DSH settings, such as the
   // work-details mode it once held at `verbose`.
   assert.deepEqual(Array.from(exports.inject), ['sessions', 'uiWorkspace', 'uiConversation', 'slots', 'theme', 'layout'])

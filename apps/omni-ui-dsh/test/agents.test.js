@@ -81,19 +81,19 @@ const TEAM = {
   version: 1,
   mainBotIds: ['m1'],
   revision: 2,
-  bots: { m1: { id: 'm1', sessionId: 'm1', name: 'Omni', role: 'Channel orchestrator', instructions: '', createdAt: 1 } },
+  bots: { m1: { id: 'm1', sessionId: 'm1', name: 'Chief', role: 'Chief of Staff', instructions: '', createdAt: 1 } },
   rooms: {},
   exchanges: [],
   exchangeTurns: {},
   questions: {},
 }
 
-test('add-agent creates one record with a first Session in the Omni workspace', async (t) => {
+test('add-agent creates one record with a first Session in the DS Bot workspace', async (t) => {
   const { call, stop, created } = start(TEAM)
   t.after(stop)
   await call('state', {})
   const agent = (await call('add-agent')).value
-  assert.equal(agent.name, 'Tasks')
+  assert.equal(agent.name, 'DSH Agent')
   assert.equal(agent.sessions.length, 1)
   const view = (await call('state', {})).value
   assert.deepEqual(view.agents.map(entry => entry.id), [agent.id])
@@ -201,17 +201,11 @@ test('a corrupt agents field resets instead of crashing the view', async (t) => 
   assert.deepEqual(view.agents, [])
 })
 
-// The Omni channels and canvas plugins register these for the team; TEAM_TOOLS names them
-// too, so a DSH Agent's Sessions never get them. The canvas plugin's tests check the whole
-// list with all three installed.
-const CHANNEL_TOOLS = ['find_chats', 'list_automations', 'save_automation', 'pause_automation', 'delete_automation', 'omni_endpoints', 'omni_call', 'omni_channels', 'omni_chats', 'omni_messages', 'omni_send', 'omni_react', 'omni_media', 'omni_delete', 'omni_connect', 'show_canvas']
-
-test('TEAM_TOOLS names exactly the tools ds-bot registers, and those of the other Omni plugins', async (t) => {
+test('TEAM_TOOLS names exactly the tools ds-bot registers', async (t) => {
   // read_browser registers only in the Desktop profile; the flag stands in for it.
   const { stop, ctx } = start(TEAM, { config: { browser: true } })
   t.after(stop)
-  assert.deepEqual([...ctx.registeredTools.keys()].sort(), TEAM_TOOLS.filter(name => !CHANNEL_TOOLS.includes(name)).sort())
-  for (const name of CHANNEL_TOOLS) assert.ok(TEAM_TOOLS.includes(name), name)
+  assert.deepEqual([...ctx.registeredTools.keys()].sort(), [...TEAM_TOOLS].sort())
 })
 
 test('agent-session honors a known workspace and falls back to the team workspace', async (t) => {

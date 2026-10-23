@@ -16,9 +16,6 @@ const expandHome = text => (text === '~' ? homedir() : /^~[\\/]/.test(text) ? jo
 // Read as DSH reads it, so the team's data and the guarded folder are where DSH keeps
 // its own: a blank value counts as unset.
 export const dshHomeOf = value => resolve(expandHome(value?.trim() ? value : join(homedir(), '.dsh')))
-// Omni's own home ($OMNI_HOME, default ~/.omni); the plugin keeps its files in ui/ there.
-export const omniHomeOf = value => resolve(expandHome(value?.trim() ? value : join(homedir(), '.omni')))
-export const expandPath = value => resolve(expandHome(String(value)))
 
 export function install(rt) {
   const { ctx, state } = rt

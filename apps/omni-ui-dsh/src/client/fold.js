@@ -7,7 +7,6 @@ import { t } from './i18n.js'
 export const FOLD_AT = { chars: 1500, lines: 25 }
 export const FOLD_HUGE = { chars: 20_000, lines: Infinity }
 const ALWAYS = { chars: -1, lines: 0 }
-export const NEVER = { chars: Infinity, lines: Infinity }
 const PREVIEW_LINES = 10
 const PREVIEW_CHARS = 600
 const FENCE = /^ {0,3}(`{3,}|~{3,})/
