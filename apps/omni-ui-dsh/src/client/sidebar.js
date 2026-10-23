@@ -10,7 +10,7 @@ import { Shimmer, workPhrase } from './cells.js'
 import { springEasing, SPRING_SHAPE } from './motion.js'
 import { hostText, t } from './i18n.js'
 import { showsDshRow } from './dsh-offer.js'
-import { badges, nav, useEntries } from './extend.js'
+import { badges, botChildren, nav, useEntries } from './extend.js'
 
 // -------------------------------------------------------------------------
 // Sidebar
@@ -97,6 +97,13 @@ function BotRow({ bot, roster, actions, useSessions, useSessionStatus, useSessio
 function RowBadges(props) {
   const entries = useEntries(badges)
   return entries.map(entry => h(entry.Component, { key: entry.id, ...props }))
+}
+
+// What other Omni plugins hang under a Bot's row (extend.js), in the wide sidebar only.
+function BotChildren({ bot, roster, actions, wide }) {
+  const entries = useEntries(botChildren)
+  if (!wide || entries.length === 0) return null
+  return entries.map(entry => h(entry.Component, { key: entry.id, bot, roster, actions }))
 }
 
 function RoomRow({ room, roster, actions, useSessions, useSessionStatus, useSessionRetainInfo, useWork, wide, marked }) {
@@ -270,9 +277,10 @@ export function TeamSidebar(props) {
       // The Agent sorts by its most recent Session, falling back to when it was added.
       ...(roster.agents ?? []).map(agent => ({ kind: 'agent', item: agent, at: Math.max(0, ...agent.sessions.map(id => stamps[id] ?? 0)) || agent.createdAt })),
     ]
+    // The team members other plugins brought (the Omni Bot) sit right under the Main Bot;
     // Tasks (the DSH Agent's one-off Sessions) stay at the bottom, under every Bot and group.
-    const last = entry => Number(entry.kind === 'agent')
-    return entries.sort((a, b) => last(a) - last(b) || Number(Boolean(b.item.pinned)) - Number(Boolean(a.item.pinned)) || b.at - a.at)
+    const rank = entry => (entry.kind === 'agent' ? 2 : entry.kind === 'bot' && entry.item.kind !== undefined ? 0 : 1)
+    return entries.sort((a, b) => rank(a) - rank(b) || Number(Boolean(b.item.pinned)) - Number(Boolean(a.item.pinned)) || b.at - a.at)
   }, [roster, updated])
   const main = roster.byId[roster.mainBotId]
   useListGlide(listRef, wide, order.map(entry => entry.item.id).join(','))
@@ -299,7 +307,9 @@ export function TeamSidebar(props) {
     h('div', { ref: listRef, className: 'bt-list', role: 'region', 'aria-label': t('Bot list') },
       main ? h(BotRow, { ...rowProps, bot: main, marked: markedUnread[main.id] === true }) : roster.ready ? null : h('div', { className: 'bt-hint' }, t('Setting up your Main Bot…')),
       order.map(entry => (entry.kind === 'bot'
-        ? h(BotRow, { key: entry.item.id, ...rowProps, bot: entry.item, marked: markedUnread[entry.item.id] === true })
+        ? h(Fragment, { key: entry.item.id },
+            h(BotRow, { ...rowProps, bot: entry.item, marked: markedUnread[entry.item.id] === true }),
+            h(BotChildren, { bot: entry.item, roster, actions, wide }))
         : entry.kind === 'room'
           ? h(RoomRow, { key: entry.item.id, ...rowProps, room: entry.item, marked: markedUnread[entry.item.id] === true })
           : h(AgentRow, { key: entry.item.id, ...rowProps, agent: entry.item, marked: markedUnread[entry.item.id] === true })))))
