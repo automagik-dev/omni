@@ -298,6 +298,10 @@ export function install(rt) {
     return { status: 'disconnected' }
   }
 
+  // For omni-discover.js: an Omni found on this computer links the same way a sign-in does.
+  rt.saveOmniLink = saveLink
+  rt.startOmniPairing = start
+
   rt.omniLinkEndpoint = async (endpoint, body) => {
     if (endpoint === 'omni-pair-start') return start(body)
     if (endpoint === 'omni-pair-poll') return poll()

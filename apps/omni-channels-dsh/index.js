@@ -12,15 +12,17 @@ import * as grants from './src/host/grants.js'
 import * as subscriptions from './src/host/subscriptions.js'
 import * as omniApi from './src/host/omni-api.js'
 import * as omniLink from './src/host/omni-link.js'
+import * as omniDiscover from './src/host/omni-discover.js'
 import * as omni from './src/host/omni.js'
 import * as omniEvents from './src/host/omni-events.js'
 
 export const name = 'omni-channels'
 export const inject = ['omniTeam', 'tools', 'sessions', 'settings']
 
-// The team's install order, kept: automations and Omni's tools first, the link and its
-// events after. Permissions come before the tools that check them.
-const MODULES = [grants, subscriptions, omniApi, omniLink, omni, omniEvents]
+// The team's install order, kept: automations and Omni's tools first, the link (and the
+// Omnis found on this computer to link) and its events after. Permissions come before the
+// tools that check them.
+const MODULES = [grants, subscriptions, omniApi, omniLink, omniDiscover, omni, omniEvents]
 
 export function apply(ctx, config = {}) {
   ctx.provide('omniChannels', createRuntime(ctx, ctx.omniTeam, config))

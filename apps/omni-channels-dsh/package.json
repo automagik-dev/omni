@@ -65,5 +65,8 @@
   "devDependencies": {
     "esbuild": "0.28.2",
     "qrcode-generator": "2.0.4"
+  },
+  "dependencies": {
+    "zod": "4.6.5"
   }
 }

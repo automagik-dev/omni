@@ -31,6 +31,37 @@ __export(index_exports, {
 });
 module.exports = __toCommonJS(index_exports);
 
+// src/client/connect-link.js
+var APP_PAGE = /\/api\/login\/app\/?$/;
+var GRANT = /^[A-Za-z0-9._~-]{16,512}$/;
+var omniBase = (text) => {
+  try {
+    const url = new URL(text);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+    if (url.username || url.password) return null;
+    return `${url.origin}${url.pathname.replace(/\/api\/v2\/?$/, "").replace(/\/+$/, "")}`;
+  } catch {
+    return null;
+  }
+};
+function parseConnectLink(text) {
+  let link;
+  try {
+    link = new URL(String(text ?? "").trim());
+  } catch {
+    return null;
+  }
+  const grant = link.searchParams.get("grant") ?? "";
+  if (!GRANT.test(grant)) return null;
+  if (link.protocol === "omni:") {
+    const url2 = link.hostname === "connect" || link.pathname.replace(/^\/+/, "") === "connect" ? omniBase(link.searchParams.get("url") ?? "") : null;
+    return url2 ? { url: url2, grant } : null;
+  }
+  if (link.protocol !== "https:" && link.protocol !== "http:" || !APP_PAGE.test(link.pathname)) return null;
+  const url = omniBase(`${link.origin}${link.pathname.replace(APP_PAGE, "")}`);
+  return url ? { url, grant } : null;
+}
+
 // node_modules/qrcode-generator/dist/qrcode.mjs
 var qrcode = function(typeNumber, errorCorrectionLevel) {
   const PAD0 = 236;
@@ -3282,11 +3313,51 @@ async function connectFromApp(url) {
     window.dispatchEvent(new CustomEvent(PAIRING_EVENT, { detail: { problem: error.message } }));
   }
 }
+function foundLabel(omni2) {
+  if (omni2.source === "sandbox") return t("Your sandboxed Omni on this computer");
+  if (!omni2.local) return new URL(omni2.url).host;
+  if (omni2.source === "running") return t("An Omni running on this computer");
+  return omni2.name && omni2.name !== "default" ? t("{name} on this computer", { name: omni2.name }) : t("Omni on this computer");
+}
+function foundDetail(omni2) {
+  const port = new URL(omni2.url).port;
+  const where = omni2.source === "cli" ? t("from your Omni CLI") : omni2.source === "cli-server" ? omni2.name ? t("from your Omni CLI as {name}", { name: omni2.name }) : t("from your Omni CLI") : omni2.source === "running" && port ? t("answering on port {port}", { port }) : null;
+  return [omni2.version ? `v${omni2.version}` : null, where].filter(Boolean).join(" · ");
+}
+function FoundOmni({ omni: omni2, busy, onUse }) {
+  const action = (label, disabled = false) => (0, import_react4.createElement)("button", { type: "button", className: "oc-primary", disabled: disabled || busy, onClick: disabled ? void 0 : () => onUse(omni2) }, label);
+  let note = null;
+  let button = null;
+  if (omni2.local && omni2.reachable === false) note = t("Not answering right now.");
+  else if (omni2.hasKey) button = action(t("Use it"));
+  else if (omni2.pairing === "too-old") {
+    note = t("Omni {version} on this computer is too old to pair. Update it to connect.", { version: omni2.version ?? "" });
+    button = action(t("Update"), true);
+  } else if (omni2.pairing === "off") note = t("Sign-in from devices is off on this Omni.");
+  else button = action(t("Connect"));
+  const detail = foundDetail(omni2);
+  return (0, import_react4.createElement)(
+    "li",
+    { className: "ox-found-row" },
+    (0, import_react4.createElement)("span", { className: "ox-found-dot", "aria-hidden": true }),
+    (0, import_react4.createElement)(
+      "div",
+      { className: "ox-found-text" },
+      (0, import_react4.createElement)("strong", null, foundLabel(omni2)),
+      detail ? (0, import_react4.createElement)("span", { className: "ox-muted" }, detail) : null,
+      note ? (0, import_react4.createElement)("span", { className: "ox-muted" }, note) : null
+    ),
+    button
+  );
+}
 function ConnectOmni({ onPaired, embedded = false } = {}) {
   const [address, setAddress] = (0, import_react4.useState)("");
+  const [linkText, setLinkText] = (0, import_react4.useState)("");
   const [pairing, setPairing] = (0, import_react4.useState)(null);
-  const [busy, setBusy] = (0, import_react4.useState)(false);
+  const [found, setFound] = (0, import_react4.useState)([]);
+  const [busy, setBusy] = (0, import_react4.useState)(null);
   const [problem, setProblem] = (0, import_react4.useState)(null);
+  const [note, setNote] = (0, import_react4.useState)(null);
   const [done, setDone] = (0, import_react4.useState)(null);
   const alive = (0, import_react4.useRef)(true);
   (0, import_react4.useEffect)(() => () => {
@@ -3297,6 +3368,10 @@ function ConnectOmni({ onPaired, embedded = false } = {}) {
       if (alive.current && link?.pairing) setPairing(link.pairing);
     }, () => {
     });
+    call("omni-discover").then((reply) => {
+      if (alive.current) setFound(Array.isArray(reply?.omnis) ? reply.omnis : []);
+    }, () => {
+    });
     const onPairing = (event) => {
       if (!alive.current) return;
       if (event.detail?.problem) setProblem(event.detail.problem);
@@ -3305,6 +3380,13 @@ function ConnectOmni({ onPaired, embedded = false } = {}) {
     window.addEventListener(PAIRING_EVENT, onPairing);
     return () => window.removeEventListener(PAIRING_EVENT, onPairing);
   }, []);
+  const finish = async (origin) => {
+    setPairing(null);
+    setDone(origin);
+    await refreshLive(call).catch(() => {
+    });
+    if (alive.current) onPaired?.(origin);
+  };
   (0, import_react4.useEffect)(() => {
     if (!pairing) return void 0;
     let timer = 0;
@@ -3312,14 +3394,7 @@ function ConnectOmni({ onPaired, embedded = false } = {}) {
       try {
         const reply = await call("omni-pair-poll");
         if (!alive.current) return;
-        if (reply.status === "paired") {
-          setPairing(null);
-          setDone(reply.origin);
-          await refreshLive(call).catch(() => {
-          });
-          if (alive.current) onPaired?.(reply.origin);
-          return;
-        }
+        if (reply.status === "paired") return finish(reply.origin);
         if (reply.status !== "pending") {
           setPairing(null);
           setProblem(reply.status === "denied" ? t("The sign-in was denied.") : reply.status === "cancelled" ? t("The pairing was cancelled.") : t("The code expired. Start again for a new one."));
@@ -3333,18 +3408,35 @@ function ConnectOmni({ onPaired, embedded = false } = {}) {
     timer = setTimeout(tick, pairing.pollIntervalMs ?? DEFAULT_POLL_MS);
     return () => clearTimeout(timer);
   }, [pairing]);
-  const start = async (event) => {
-    event.preventDefault();
-    setBusy(true);
+  const run = async (which, endpoint, payload) => {
+    setBusy(which);
     setProblem(null);
+    setNote(null);
     try {
-      const reply = await call("omni-pair-start", { url: address });
-      if (alive.current) setPairing(reply.pairing);
+      const reply = await call(endpoint, payload);
+      if (!alive.current) return;
+      if (reply.status === "paired") await finish(reply.origin);
+      else if (reply.pairing) setPairing(reply.pairing);
+      else if (reply.message) setNote(reply.message);
     } catch (error) {
       if (alive.current) setProblem(error.message);
     } finally {
-      if (alive.current) setBusy(false);
+      if (alive.current) setBusy(null);
     }
+  };
+  const start = (event) => {
+    event.preventDefault();
+    return run("address", "omni-pair-start", { url: address });
+  };
+  const pasteLink = (event) => {
+    event.preventDefault();
+    const link = parseConnectLink(linkText);
+    if (link === null) {
+      setNote(null);
+      setProblem(t("That is not a link your Omni sends. It looks like https://your-omni/api/login/app?grant=…"));
+      return void 0;
+    }
+    return run("link", "omni-connect-grant", link);
   };
   const cancel = async () => {
     setPairing(null);
@@ -3387,18 +3479,22 @@ function ConnectOmni({ onPaired, embedded = false } = {}) {
       )
     );
   }
+  const anyBusy = busy !== null;
   return (0, import_react4.createElement)(
-    "form",
-    { className: "ox-card ox-start", onSubmit: start },
+    "section",
+    { className: "ox-card ox-start" },
     embedded ? null : (0, import_react4.createElement)("span", { className: "ox-mark", "aria-hidden": true }, (0, import_react4.createElement)(OmniMark, { size: 34 })),
     (0, import_react4.createElement)(
       "div",
       { className: "ox-steps" },
       embedded ? null : (0, import_react4.createElement)("h2", null, t("Connect your Omni")),
-      (0, import_react4.createElement)("p", { className: "ox-muted" }, t("Open your Omni in the browser and choose Open in the Omni app, or type its address here. Then approve with Face ID, Touch ID, your fingerprint or a code on WhatsApp. No keys to copy.")),
+      found.length > 0 ? (0, import_react4.createElement)("h3", { className: "ox-sub" }, t("We found")) : null,
+      found.length > 0 ? (0, import_react4.createElement)("ul", { className: "ox-found" }, found.map((omni2) => (0, import_react4.createElement)(FoundOmni, { key: omni2.id, omni: omni2, busy: anyBusy, onUse: (entry) => run(entry.id, "omni-discover-use", { id: entry.id }) }))) : null,
+      found.length > 0 ? (0, import_react4.createElement)("h3", { className: "ox-sub" }, t("Connect another Omni")) : null,
+      (0, import_react4.createElement)("p", { className: "ox-muted" }, t("Type your Omni's address, or paste the link it sent you. Then approve with Face ID, Touch ID, your fingerprint or a code on WhatsApp. No keys to copy.")),
       (0, import_react4.createElement)(
-        "div",
-        { className: "ox-row" },
+        "form",
+        { className: "ox-row", onSubmit: start },
         (0, import_react4.createElement)("input", {
           className: "ox-input",
           type: "text",
@@ -3410,8 +3506,31 @@ function ConnectOmni({ onPaired, embedded = false } = {}) {
           "aria-label": t("Omni address"),
           onChange: (event) => setAddress(event.target.value)
         }),
-        (0, import_react4.createElement)("button", { type: "submit", className: "oc-primary", disabled: busy || address.trim() === "" }, busy ? t("Connecting…") : t("Get a code"))
+        (0, import_react4.createElement)("button", { type: "submit", className: "oc-primary", disabled: anyBusy || address.trim() === "" }, busy === "address" ? t("Connecting…") : t("Get a code"))
       ),
+      (0, import_react4.createElement)(
+        "form",
+        { className: "ox-row", onSubmit: pasteLink },
+        (0, import_react4.createElement)("input", {
+          className: "ox-input",
+          type: "text",
+          inputMode: "url",
+          autoComplete: "off",
+          spellCheck: false,
+          value: linkText,
+          placeholder: t("or paste the link your Omni sent you"),
+          "aria-label": t("Link from your Omni"),
+          onChange: (event) => setLinkText(event.target.value)
+        }),
+        (0, import_react4.createElement)("button", { type: "submit", className: "oc-ghost", disabled: anyBusy || linkText.trim() === "" }, busy === "link" ? t("Connecting…") : t("Connect"))
+      ),
+      (0, import_react4.createElement)("p", { className: "ox-muted ox-hint" }, t("Text connect to yourself on WhatsApp and your Omni sends you the link.")),
+      (0, import_react4.createElement)(
+        "div",
+        { className: "ox-row" },
+        (0, import_react4.createElement)("button", { type: "button", className: "oc-ghost", disabled: anyBusy, onClick: () => run("local", "omni-local-install") }, busy === "local" ? t("Starting…") : t("Run Omni on this computer"))
+      ),
+      note ? (0, import_react4.createElement)("p", { className: "ox-muted ox-note", role: "status" }, note) : null,
       problem ? (0, import_react4.createElement)("p", { className: "ox-problem", role: "alert" }, problem) : null
     )
   );
@@ -3431,6 +3550,13 @@ var OMNI_CONNECT_CSS = `
 .ox-problem{margin:0;color:var(--oc-bad,#c0392b);font-size:13px}
 .ox-qr{flex:none;display:flex;flex-direction:column;align-items:center;gap:8px;padding:10px;border-radius:12px;background:#fff}
 .ox-qr .ox-muted{color:#555;font-size:11.5px}
+.ox-sub{margin:4px 0 0;font-size:11.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--bt-ink-2)}
+.ox-found{display:flex;flex-direction:column;gap:8px;margin:0;padding:0;list-style:none}
+.ox-found-row{display:flex;align-items:center;gap:12px;padding:10px 12px;border:1px solid var(--bt-line);border-radius:12px;background:var(--bt-bg,transparent)}
+.ox-found-dot{flex:none;width:9px;height:9px;border-radius:50%;background:var(--bt-accent);box-shadow:0 0 0 4px color-mix(in srgb,var(--bt-accent) 18%,transparent)}
+.ox-found-text{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+.ox-found-text strong{font-size:14px;font-weight:600;overflow-wrap:anywhere}
+.ox-hint,.ox-note{font-size:12.5px}
 .ox-done{align-items:center;gap:12px}
 .ox-check{display:inline-grid;place-items:center;width:28px;height:28px;border-radius:50%;background:var(--bt-accent);color:#fff;font-weight:700}
 @media (max-width:720px){.ox-card{flex-direction:column}.ox-qr{align-self:center}}
@@ -4504,7 +4630,26 @@ var STRINGS = {
   "Open WhatsApp": "打开 WhatsApp",
   "Waiting for the code to arrive at {origin}…": "正在等待验证码送达 {origin}…",
   "Connect your Omni": "连接你的 Omni",
-  "Open your Omni in the browser and choose Open in the Omni app, or type its address here. Then approve with Face ID, Touch ID, your fingerprint or a code on WhatsApp. No keys to copy.": "在浏览器中打开你的 Omni 并选择“在 Omni 应用中打开”，或在此输入它的地址。然后用面容 ID、触控 ID、指纹或 WhatsApp 验证码批准。无需复制任何密钥。",
+  "Type your Omni's address, or paste the link it sent you. Then approve with Face ID, Touch ID, your fingerprint or a code on WhatsApp. No keys to copy.": "输入你的 Omni 的地址，或粘贴它发给你的链接。然后用面容 ID、触控 ID、指纹或 WhatsApp 验证码批准。无需复制任何密钥。",
+  "We found": "我们找到了",
+  "Connect another Omni": "连接另一个 Omni",
+  "Your sandboxed Omni on this computer": "这台电脑上你的沙盒 Omni",
+  "An Omni running on this computer": "这台电脑上正在运行的 Omni",
+  "{name} on this computer": "这台电脑上的 {name}",
+  "Omni on this computer": "这台电脑上的 Omni",
+  "from your Omni CLI": "来自你的 Omni CLI",
+  "from your Omni CLI as {name}": "来自你的 Omni CLI，名为 {name}",
+  "answering on port {port}": "在端口 {port} 上响应",
+  "Not answering right now.": "目前没有响应。",
+  "Use it": "使用它",
+  "Omni {version} on this computer is too old to pair. Update it to connect.": "这台电脑上的 Omni {version} 版本太旧，无法配对。请更新后再连接。",
+  "Sign-in from devices is off on this Omni.": "这个 Omni 已关闭设备登录。",
+  "or paste the link your Omni sent you": "或粘贴你的 Omni 发给你的链接",
+  "Link from your Omni": "来自你的 Omni 的链接",
+  "That is not a link your Omni sends. It looks like https://your-omni/api/login/app?grant=…": "这不是你的 Omni 发送的链接。它看起来像 https://your-omni/api/login/app?grant=…",
+  "Text connect to yourself on WhatsApp and your Omni sends you the link.": "在 WhatsApp 上给自己发送 connect，你的 Omni 就会把链接发给你。",
+  "Run Omni on this computer": "在这台电脑上运行 Omni",
+  "Starting…": "正在启动…",
   "Omni address": "Omni 地址",
   "Get a code": "获取验证码",
   "Setup steps": "设置步骤",
