@@ -1,8 +1,9 @@
 import { createElement as h, Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { ConnectOmni } from './omni-connect.js'
 import { UpdateOffer } from './omni-update.js'
+import { LiveConnectFlow } from './channel-connect-live.js'
 import {
-  CHANNEL_TYPES, CHANNELS_PANEL, STATUS, canWrite, channelOf, chatOf, healthSummary, omniActions, omniStore, startLive, typeOf, unreadOf, visibleChats,
+  CHANNEL_TYPES, CHANNELS_PANEL, STATUS, canSend, canWrite, channelOf, chatOf, healthSummary, omniActions, omniStore, startLive, typeOf, unreadOf, visibleChats,
 } from './omni-store.js'
 import { call, OmniMark, relativeShort, t, icons } from './core.js'
 const { ArrowUpIcon, ChevronLeftIcon, ChevronRightIcon, PlusIcon } = icons
@@ -10,7 +11,9 @@ const { ArrowUpIcon, ChevronLeftIcon, ChevronRightIcon, PlusIcon } = icons
 // Omni channels inside the Bot surface. The Channels page (CHANNELS_PANEL) connects new
 // channels and shows the health of the connected ones; a chat opens in the CHAT_PANEL main
 // panel. Subscriptions on these channels live in subscriptions.js, run by Omni.
-// Live when the host has an omni URL and key (src/host/omni.js, read-only); sample data otherwise.
+// Live when the host has an omni URL and key (src/host/omni.js); sample data otherwise. On a
+// live Omni, adding, reconnecting, pausing and replying go through the host as far as the
+// key allows (src/host/omni-channel-actions.js).
 
 export const useOmni = () => useSyncExternalStore(omniStore.subscribe, omniStore.getSnapshot, omniStore.getSnapshot)
 const useActions = actions => useMemo(() => omniActions(id => actions.selectPanel(id), call), [actions])
@@ -68,7 +71,7 @@ export function ChatAvatar({ chat, channel, size = 36 }) {
 export function PreviewChip() {
   const source = useOmni().source
   if (source.kind === 'live') {
-    return h('span', { className: 'oc-preview-chip oc-live-chip', 'data-error': source.error ? true : undefined, title: source.error ?? t('Read from omni every 15 seconds. To connect, pause or change a channel, ask Omni.') },
+    return h('span', { className: 'oc-preview-chip oc-live-chip', 'data-error': source.error ? true : undefined, title: source.error ?? t('Read from omni every 15 seconds.') },
       h('span', { className: 'oc-live-dot', 'aria-hidden': true }), source.error ? t('Live · last refresh failed') : t('Live · {origin}', { origin: source.origin }))
   }
   const missing = source.missing?.join(', ')
@@ -105,9 +108,10 @@ export function ChatPage({ actions }) {
     return h('div', { className: 'oc-page oc-chat-empty' }, h(OmniMark, { size: 40 }), h('p', null, t('Pick a chat under your Bots.')))
   }
   const type = typeOf(channel.type)
-  const writable = canWrite(state)
+  const writable = canSend(state)
   const live = channel.status === 'connected' && writable
   const send = () => { omni.sendText(chat.id, draft); setDraft('') }
+  const failed = state.sendError?.chatId === chat.id ? state.sendError : null
   return h('div', { className: 'oc-page oc-chat' },
     h('header', { className: 'oc-chat-head' },
       h(ChatAvatar, { chat, channel, size: 40 }),
@@ -128,10 +132,11 @@ export function ChatPage({ actions }) {
           return h(Fragment, { key: message.id }, newDay ? h('div', { className: 'oc-day' }, dayLabel(message.at)) : null, h('div', { className: `oc-msg oc-msg-${message.from}${first ? ' oc-msg-first' : ''}` },
             first && !mine && message.author ? h('span', { className: 'oc-msg-author' }, message.author) : null,
             first && message.from === 'omni' ? h('span', { className: 'oc-msg-author oc-msg-omni' }, h(OmniMark, { size: 12 }), 'Omni') : null,
-            h('div', { className: 'oc-bubble' }, message.text, h('time', null, new Date(message.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })))))
+            h('div', { className: 'oc-bubble', 'data-sending': message.sending || undefined }, message.text, h('time', null, message.sending ? t('Sending…') : new Date(message.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })))))
         }))),
     h('footer', { className: 'oc-compose-wrap' },
-      !writable ? h('div', { className: 'oc-compose-note oc-compose-info' }, t('Read-only for now: replying from here is switched on after you approve this view.'))
+      failed ? h('button', { type: 'button', className: 'oc-compose-note oc-compose-fail', role: 'alert', onClick: () => setDraft(failed.text) }, t('Not sent: {reason}', { reason: failed.message }), ' ', h('u', null, t('Put it back'))) : null,
+      !writable ? h('div', { className: 'oc-compose-note oc-compose-info' }, t('This device\'s key can\'t send messages; ask your Omni\'s owner.'))
         : live ? null : h('button', { type: 'button', className: 'oc-compose-note', onClick: () => omni.openChannels('channel', channel.id) },
           h(StatusDot, { status: channel.status }), t('{name} is not connected. Fix it to reply.', { name: channel.name })),
       h('div', { className: 'oc-compose', 'data-off': live ? undefined : true },
@@ -170,7 +175,7 @@ function Overview({ state, omni }) {
       h('div', null,
         h('h1', null, t('Channels'), h(PreviewChip)),
         h('p', null, t('Connect the apps people already use to reach you. Omni answers there, and every chat shows up under your Bots.'))),
-      h('button', { type: 'button', className: 'oc-primary', onClick: () => omni.showPage({ view: 'connect', type: null, step: 0 }) }, h(PlusIcon), state.preview ? t('Add channel') : t('Preview: add channel'))),
+      h('button', { type: 'button', className: 'oc-primary', disabled: !canWrite(state), title: canWrite(state) ? undefined : t('This device\'s key can\'t change channels; ask your Omni\'s owner.'), onClick: () => omni.showPage({ view: 'connect', type: null, step: 0 }) }, h(PlusIcon), t('Add channel'))),
     // Sample data means no Omni is linked yet: connecting one comes first. A linked one says
     // when an update is out.
     state.preview ? h(ConnectOmni) : h(UpdateOffer, { compact: true }),
@@ -238,15 +243,16 @@ function ChannelDetail({ channel, state, omni }) {
         h('span', { className: 'oc-callout-text' },
           h('strong', null, channel.status === 'connecting' ? t('Reconnecting…') : t('This channel stopped working')),
           h('span', null, channel.status === 'connecting' ? t('Omni is bringing {name} back. Messages sent meanwhile are delivered after.', { name: channel.name }) : channel.problem)),
-        writable && channel.status === 'attention' && type.pairing !== 'token' ? h('button', { type: 'button', className: 'oc-primary', onClick: () => omni.reconnect(channel.id) }, t('Reconnect')) : null,
-        channel.status === 'connecting' ? h('span', { className: 'oc-spinner', 'aria-hidden': true }) : null)
+        writable && channel.status === 'attention' && type.pairing !== 'token' ? h('button', { type: 'button', className: 'oc-primary', disabled: Boolean(channel.busy), onClick: () => omni.reconnect(channel.id) }, channel.busy === 'reconnect' ? t('Reconnecting…') : t('Reconnect')) : null,
+        channel.status === 'connecting' || channel.busy ? h('span', { className: 'oc-spinner', 'aria-hidden': true }) : null)
       : null,
+    channel.actionError ? h('p', { className: 'oc-problem', role: 'alert' }, channel.actionError) : null,
     writable && channel.status === 'attention' && type.pairing === 'token' ? h(TokenFix, { channel, type, omni }) : null,
     h('div', { className: 'oc-actions' },
       firstChat ? h('button', { type: 'button', className: 'oc-secondary', onClick: () => { omni.setFilter(channel.id); omni.openChat(firstChat.id) } }, t('Open chats')) : null,
       !writable ? null : channel.status === 'paused'
-        ? h('button', { type: 'button', className: 'oc-secondary', onClick: () => omni.resume(channel.id) }, t('Resume'))
-        : channel.status === 'connected' ? h('button', { type: 'button', className: 'oc-secondary', onClick: () => omni.pause(channel.id) }, t('Pause')) : null),
+        ? h('button', { type: 'button', className: 'oc-secondary', disabled: Boolean(channel.busy), onClick: () => omni.resume(channel.id) }, channel.busy === 'resume' ? t('Resuming…') : t('Resume'))
+        : channel.status === 'connected' ? h('button', { type: 'button', className: 'oc-secondary', disabled: Boolean(channel.busy), onClick: () => omni.pause(channel.id) }, channel.busy === 'pause' ? t('Pausing…') : t('Pause')) : null),
     h('h2', { className: 'oc-section' }, t('Health')),
     h('div', { className: 'oc-stats' },
       health.uptime === null
@@ -261,7 +267,8 @@ function ChannelDetail({ channel, state, omni }) {
       h(Stat, { value: health.lastEventAt ? relativeShort(health.lastEventAt) : '–', label: t('last message') })),
     health.week ? h(WeekChart, { week: health.week }) : null,
     h('h2', { className: 'oc-section' }, t('Who answers')),
-    writable
+    // Who answers is the agent omni routes a channel to; on a live Omni, Omni changes that by talking.
+    state.preview
       ? h('div', { className: 'oc-seg', role: 'radiogroup', 'aria-label': t('Who answers') },
         [['Omni', t('Omni answers'), t('Omni replies on its own and hands over when it should.')], ['You', t('You answer'), t('Chats wait for you. Omni only drafts.')]].map(([value, title, text]) => h('button', {
           key: value, type: 'button', role: 'radio', 'aria-checked': channel.answeredBy === value, className: 'oc-seg-opt',
@@ -270,7 +277,7 @@ function ChannelDetail({ channel, state, omni }) {
       : h('div', { className: 'oc-seg-opt oc-seg-static' }, channel.answeredBy === 'Omni'
         ? h(Fragment, null, h('strong', null, h(OmniMark, { size: 16 }), t('Omni answers')), h('span', null, t('An agent is assigned to this channel in omni.')))
         : h(Fragment, null, h('strong', null, t('You answer')), h('span', null, t('No agent is assigned to this channel in omni.')))),
-    writable
+    state.preview
       ? h('div', { className: 'oc-danger' },
         h('div', null, h('strong', null, t('Disconnect {name}', { name: channel.name })), h('span', null, t('Omni stops reading and answering here. Its chats leave the sidebar.'))),
         h('button', {
@@ -294,6 +301,10 @@ function WeekChart({ week }) {
 // Choose a channel type, then pair it the way that channel pairs: a QR code, a token,
 // or the app's own sign-in.
 function ConnectFlow({ state, omni }) {
+  return state.preview ? h(PreviewConnectFlow, { state, omni }) : h(LiveConnectFlow, { state, omni, Tile, PreviewChip })
+}
+
+function PreviewConnectFlow({ state, omni }) {
   const { type, step } = state.page
   const [name, setName] = useState('')
   const [token, setToken] = useState('')
@@ -354,8 +365,8 @@ function TokenFix({ channel, type, omni }) {
   return h('div', { className: 'oc-fix' },
     h('label', { className: 'oc-field' }, h('span', null, t('New {app} token', { app: type.label })),
       h('input', { type: 'password', value: token, autoComplete: 'off', placeholder: '123456:ABC-…', onChange: event => setToken(event.target.value),
-        onKeyDown: (event) => { if (event.key === 'Enter' && token.trim() !== '') omni.reconnect(channel.id) } })),
-    h('button', { type: 'button', className: 'oc-primary', disabled: token.trim() === '', onClick: () => omni.reconnect(channel.id) }, t('Reconnect')))
+        onKeyDown: (event) => { if (event.key === 'Enter' && token.trim() !== '') omni.reconnect(channel.id, token.trim()) } })),
+    h('button', { type: 'button', className: 'oc-primary', disabled: token.trim() === '' || Boolean(channel.busy), onClick: () => omni.reconnect(channel.id, token.trim()) }, t('Reconnect')))
 }
 
 // WhatsApp codes live for 60 seconds; the countdown shows when the next one appears.
@@ -609,6 +620,13 @@ body[data-ds-dark-theme] .oc-ava{background:hsl(var(--oc-hue) 30% 26%);color:hsl
 .oc-code span[data-dash]{width:14px;border:0;background:none;color:var(--bt-ink-3)}
 .oc-fix{display:flex;align-items:flex-end;gap:10px}
 .oc-fix .oc-field{flex:1}
+.oc-problem{margin:4px 0 0;padding:10px 12px;border-radius:12px;font-size:13px;color:color-mix(in srgb,#d97706 85%,var(--bt-ink));background:color-mix(in srgb,#f59e0b 12%,transparent)}
+.oc-compose-fail{color:color-mix(in srgb,#d97706 85%,var(--bt-ink));background:color-mix(in srgb,#f59e0b 12%,transparent)}
+.oc-bubble[data-sending]{opacity:.6}
+.oc-type:disabled{opacity:.5;cursor:not-allowed}
+.oc-type-cli{cursor:default}
+.oc-cli{display:block;width:100%;margin-top:4px;padding:8px 10px;border-radius:10px;background:var(--bt-hover);color:var(--bt-ink-2);font:11.5px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-all;user-select:all}
+.oc-qr-empty{display:grid;place-items:center;width:196px;height:196px}
 @media (max-width:720px){.oc-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.oc-seg{grid-template-columns:1fr}.oc-channels-in{padding:20px 16px 40px}.oc-head{flex-direction:column}}
 @media (prefers-reduced-motion:reduce){.oc-page,.oc-msg,.oc-flow,.oc-chart-bar{animation:none}.oc-card,.oc-type,.oc-filter{transition:none}}
 `

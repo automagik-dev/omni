@@ -405,4 +405,17 @@ export const STRINGS = {
   'Always, all of {channel}': '总是，{channel} 的全部',
   'Allowed on the whole channel': '已在整个渠道上允许',
   'Interrupted by a restart': '因重启而中断',
+  // Changing channels on a linked Omni (channels.js, channel-connect-live.js).
+  'This device\'s key can\'t change channels; ask your Omni\'s owner.': '此设备的密钥无法更改渠道；请联系你的 Omni 的所有者。',
+  'This device\'s key can\'t send messages; ask your Omni\'s owner.': '此设备的密钥无法发送消息；请联系你的 Omni 的所有者。',
+  'Set up from the CLI': '请用命令行设置',
+  'Starting…': '正在开始…',
+  'Waiting for Omni to say the channel is up': '正在等待 Omni 确认渠道已连接',
+  'Waiting for your phone…': '正在等待你的手机…',
+  'Waiting for your phone · the code refreshes by itself': '正在等待你的手机 · 二维码会自动刷新',
+  'Read from omni every 15 seconds.': '每 15 秒从 omni 读取一次。',
+  'Not sent: {reason}': '未发送：{reason}',
+  'Put it back': '放回输入框',
+  'Resuming…': '正在恢复…',
+  'Pausing…': '正在暂停…',
 }
