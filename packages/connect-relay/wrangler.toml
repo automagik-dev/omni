@@ -1,0 +1,18 @@
+# Scan-to-connect relay (src/worker.ts). Deploy: bunx wrangler deploy (needs a Cloudflare token
+# with Workers and the automagik.dev zone). One Durable Object per slot; nothing else is stored.
+name = "omni-connect-relay"
+main = "src/worker.ts"
+compatibility_date = "2026-10-01"
+workers_dev = false
+routes = [{ pattern = "connect.automagik.dev", custom_domain = true }]
+
+[[durable_objects.bindings]]
+name = "SLOTS"
+class_name = "Slot"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Slot"]
+
+[observability]
+enabled = false

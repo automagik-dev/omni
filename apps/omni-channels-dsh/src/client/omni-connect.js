@@ -3,10 +3,11 @@ import { QrSvg } from './omni-live.js'
 import { refreshLive } from './omni-store.js'
 import { call, OmniMark, t } from './core.js'
 
-// Connecting this Omni UI to an Omni, by code: no key to find or paste. The host asks the
-// Omni at the address for a pairing (src/host/omni-link.js); this card shows the code and
-// where to send it on WhatsApp, polls until it arrives, and the Channels page goes live.
-// The poll token stays on the host.
+// Connecting this Omni UI to an Omni with nothing to type: a QR that opens WhatsApp with a
+// pairing typed. The owner sends it to themselves, their Omni answers through the relay
+// (src/host/connect-relay.js), and the Channels page goes live. Typing the Omni's address
+// (its device sign-in, approved by a code on WhatsApp or the approval page) is the other way,
+// under "Other ways". Keys and tokens stay on the host.
 
 const DEFAULT_POLL_MS = 2000
 
@@ -18,8 +19,56 @@ export function ConnectOmni({ onPaired, embedded = false } = {}) {
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState(null)
   const [done, setDone] = useState(null)
+  // 'scan' (the default) or 'address'.
+  const [mode, setMode] = useState('scan')
+  const [scan, setScan] = useState(null)
   const alive = useRef(true)
   useEffect(() => () => { alive.current = false }, [])
+
+  const paired = async (origin) => {
+    setDone(origin)
+    await refreshLive(call).catch(() => {})
+    if (alive.current) onPaired?.(origin)
+  }
+
+  // Scanning: a fresh QR whenever one is needed, polled until the owner's Omni answers.
+  useEffect(() => {
+    if (mode !== 'scan' || pairing || done) return undefined
+    let timer = 0
+    let live = true
+    const begin = async () => {
+      try {
+        const reply = await call('omni-scan-start')
+        if (!live) return
+        setScan(reply.scan)
+        timer = setTimeout(tick, DEFAULT_POLL_MS)
+      } catch (error) {
+        if (!live) return
+        setMode('address')
+        setProblem(error.message)
+      }
+    }
+    const tick = async () => {
+      try {
+        const reply = await call('omni-scan-poll')
+        if (!live) return
+        if (reply.status === 'paired') return paired(reply.origin)
+        if (reply.status !== 'pending') return begin()
+      } catch {}
+      if (live) timer = setTimeout(tick, DEFAULT_POLL_MS)
+    }
+    begin()
+    return () => {
+      live = false
+      clearTimeout(timer)
+    }
+  }, [mode, pairing, done])
+
+  const otherWays = () => {
+    setMode('address')
+    setScan(null)
+    void call('omni-scan-cancel').catch(() => {})
+  }
 
   // A pairing started before a reload keeps going.
   useEffect(() => {
@@ -35,9 +84,7 @@ export function ConnectOmni({ onPaired, embedded = false } = {}) {
         if (!alive.current) return
         if (reply.status === 'paired') {
           setPairing(null)
-          setDone(reply.origin)
-          await refreshLive(call).catch(() => {})
-          if (alive.current) onPaired?.(reply.origin)
+          await paired(reply.origin)
           return
         }
         if (reply.status !== 'pending') {
@@ -97,6 +144,21 @@ export function ConnectOmni({ onPaired, embedded = false } = {}) {
         h('span', { className: 'ox-muted' }, pairing.waLink ? t('Scan to send it on WhatsApp') : t('Scan to approve on your phone'))))
   }
 
+  if (mode === 'scan') {
+    return h('section', { className: 'ox-card', 'aria-live': 'polite' },
+      h('div', { className: 'ox-steps' },
+        embedded ? null : h('h2', null, t('Connect your Omni')),
+        h('ol', { className: 'ox-how' },
+          h('li', null, t('Scan the QR with your phone. WhatsApp opens with a message ready.')),
+          h('li', null, t('Choose your own chat, "Message yourself", and send it.')),
+          h('li', null, t('Your Omni connects this app. Nothing to type.'))),
+        scan ? h('span', { className: 'ox-wait' }, h('span', { className: 'oc-spinner', 'aria-hidden': true }), t('Waiting for your message…')) : null,
+        h('button', { type: 'button', className: 'oc-link ox-other', onClick: otherWays }, t('Other ways'))),
+      h('div', { className: 'ox-qr' },
+        scan ? h(QrSvg, { text: scan.waLink, size: 176 }) : h('div', { className: 'ox-qr-wait', style: { width: 176, height: 176 } }),
+        h('span', { className: 'ox-muted' }, t('Scan with your phone'))))
+  }
+
   return h('form', { className: 'ox-card ox-start', onSubmit: start },
     embedded ? null : h('span', { className: 'ox-mark', 'aria-hidden': true }, h(OmniMark, { size: 34 })),
     h('div', { className: 'ox-steps' },
@@ -108,7 +170,8 @@ export function ConnectOmni({ onPaired, embedded = false } = {}) {
           placeholder: 'omni.example.com', 'aria-label': t('Omni address'), onChange: event => setAddress(event.target.value),
         }),
         h('button', { type: 'submit', className: 'oc-primary', disabled: busy || address.trim() === '' }, busy ? t('Connecting…') : t('Get a code'))),
-      problem ? h('p', { className: 'ox-problem', role: 'alert' }, problem) : null))
+      problem ? h('p', { className: 'ox-problem', role: 'alert' }, problem) : null,
+      h('button', { type: 'button', className: 'oc-link ox-other', onClick: () => { setProblem(null); setMode('scan') } }, t('Scan a QR instead'))))
 }
 
 export const OMNI_CONNECT_CSS = `
@@ -126,6 +189,9 @@ export const OMNI_CONNECT_CSS = `
 .ox-problem{margin:0;color:var(--oc-bad,#c0392b);font-size:13px}
 .ox-qr{flex:none;display:flex;flex-direction:column;align-items:center;gap:8px;padding:10px;border-radius:12px;background:#fff}
 .ox-qr .ox-muted{color:#555;font-size:11.5px}
+.ox-how{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px;color:var(--bt-ink);font-size:13.5px;line-height:1.45}
+.ox-other{align-self:flex-start;padding:0;border:0;background:none;color:var(--bt-ink-2);font:inherit;font-size:12.5px;text-decoration:underline;text-underline-offset:3px;cursor:pointer}
+.ox-qr-wait{border-radius:8px;background:repeating-linear-gradient(45deg,#f2f2f2 0 8px,#fafafa 8px 16px)}
 .ox-done{align-items:center;gap:12px}
 .ox-check{display:inline-grid;place-items:center;width:28px;height:28px;border-radius:50%;background:var(--bt-accent);color:#fff;font-weight:700}
 @media (max-width:720px){.ox-card{flex-direction:column}.ox-qr{align-self:center}}

@@ -86,6 +86,7 @@ import {
   setupSyncWorker,
 } from './plugins';
 import { buildAutomationEngineDeps } from './plugins/automation-actions';
+import { setupConnectRelay } from './plugins/connect-relay';
 import { setupDeviceLogin } from './plugins/device-login';
 import { setupScheduler, stopScheduler } from './scheduler';
 import { closeAgentHeartbeat, initAgentHeartbeat } from './services/agent-heartbeat';
@@ -625,6 +626,7 @@ async function setupEventBusServices(
   // unclaimed Omni (off unless OMNI_LOGIN_ENABLED)
   try {
     await setupDeviceLogin(eventBus, login);
+    await setupConnectRelay(eventBus, login);
     if (login) await announceClaim(login);
   } catch (error) {
     log.error('Failed to set up human login', { error: String(error) });

@@ -29,6 +29,7 @@
         "@omni/channel-sdk": "workspace:*",
         "@omni/channel-slack": "workspace:*",
         "@omni/channel-whatsapp-business": "workspace:*",
+        "@omni/connect-relay": "workspace:*",
         "@omni/core": "workspace:*",
         "@omni/db": "workspace:*",
         "@omni/media-processing": "workspace:*",
@@ -331,6 +332,14 @@
         "@omni/sdk": "workspace:*",
         "@types/node": "^22.10.3",
         "@types/qrcode-terminal": "^0.12.2",
+        "typescript": "^5.7.3",
+      },
+    },
+    "packages/connect-relay": {
+      "name": "@omni/connect-relay",
+      "version": "2.261023.6",
+      "devDependencies": {
+        "@types/bun": "1.4.2",
         "typescript": "^5.7.3",
       },
     },
@@ -764,6 +773,8 @@
     "@omni/channel-whatsapp": ["@omni/channel-whatsapp@workspace:packages/channel-whatsapp"],
 
     "@omni/channel-whatsapp-business": ["@omni/channel-whatsapp-business@workspace:packages/channel-whatsapp-business"],
+
+    "@omni/connect-relay": ["@omni/connect-relay@workspace:packages/connect-relay"],
 
     "@omni/core": ["@omni/core@workspace:packages/core"],
 

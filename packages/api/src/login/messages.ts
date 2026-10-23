@@ -30,3 +30,14 @@ export function deviceApprovedMessage(device: string, request?: { ip: string | n
     '*Not you?* In Omni, open *Keys* and revoke its _device:_ key.',
   ].join('\n');
 }
+
+/** A device connected by scanning: it asked through the relay, so there is no address to name. */
+export function connectApprovedMessage(): string {
+  return [
+    '🐙 *New device connected*',
+    '',
+    'The device that showed you this QR is now connected to your Omni.',
+    '',
+    '*Not you?* In Omni, open *Keys* and revoke its _device: scanned to connect_ key.',
+  ].join('\n');
+}
