@@ -6,6 +6,37 @@ import { normalize, splitRef } from './text.js'
 const CATALOG_TTL_MS = 10_000
 const ROUTE_WAIT_MS = 30_000
 
+// Claude through Claude Code (dsh-oh-my-claude, provider claude-code or claude-code-<box>)
+// lists the CLI's own lineup and then every model the plugin has known, so a Session stored
+// on an older id still resolves. Omni offers the newest of each family: a model that a newer
+// one of its family, or the CLI's alias for the family (opus, sonnet, haiku), supersedes is
+// left out, and the 1M variant stands in for its plain twin. A model a Bot runs on stays.
+const isClaudeCode = provider => provider === 'claude-code' || String(provider).startsWith('claude-code-')
+const VERSIONED = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?(\[1m\])?$/
+const versionOf = (id) => {
+  const match = VERSIONED.exec(id)
+  return match ? { family: match[1], version: Number(match[2]) + Number(match[3] ?? 0) / 100, wide: match[4] !== undefined } : undefined
+}
+export function currentClaudeModels(entries, keep = new Set()) {
+  const providers = new Map()
+  for (const entry of entries) {
+    if (!isClaudeCode(entry.provider)) continue
+    const seen = providers.get(entry.provider) ?? { aliases: new Set(), newest: new Map() }
+    providers.set(entry.provider, seen)
+    if (/^[a-z]+$/.test(entry.id) && entry.id !== 'default') seen.aliases.add(entry.id)
+    const at = versionOf(entry.id)
+    const best = at && seen.newest.get(at.family)
+    if (at && (!best || at.version > best.version || (at.version === best.version && at.wide && !best.wide))) seen.newest.set(at.family, at)
+  }
+  return entries.filter((entry) => {
+    const at = isClaudeCode(entry.provider) && !keep.has(entry.ref) ? versionOf(entry.id) : undefined
+    if (at === undefined) return true
+    const seen = providers.get(entry.provider)
+    const best = seen.newest.get(at.family)
+    return !seen.aliases.has(at.family) && at.version === best.version && at.wide === best.wide
+  })
+}
+
 export function install(rt) {
   const { ctx, state } = rt
 
@@ -36,12 +67,12 @@ export function install(rt) {
   // also carry their `reasoning`, so the picker can offer thinking levels.
   async function catalog({ fresh = false } = {}) {
     if (!fresh && Date.now() - catalogCache.at < CATALOG_TTL_MS && catalogCache.value.length > 0) return catalogCache.value
-    const entries = []
+    const listed = []
     for (const provider of ctx.llm.listProviders()) {
       let models = []
       try { models = await ctx.llm.listModels(provider.id) } catch { continue }
       for (const model of models) {
-        entries.push({
+        listed.push({
           ref: `${provider.id}/${model.id}`,
           provider: provider.id,
           providerName: provider.name ?? provider.id,
@@ -52,6 +83,7 @@ export function install(rt) {
       }
     }
     const used = new Set(Object.values(state.bots ?? {}).flatMap(bot => [bot.model, bot.appliedModel].filter(Boolean)))
+    const entries = currentClaudeModels(listed, used)
     await Promise.all(entries.filter(entry => used.has(entry.ref)).map(async (entry) => {
       const reasoning = await reasoningOf(entry.ref)
       if (reasoning !== undefined) entry.reasoning = reasoning
