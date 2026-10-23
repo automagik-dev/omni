@@ -18,7 +18,7 @@ const PacingField = z.enum(['humanized', 'immediate']).optional().openapi({
     "Outbound pacing for this send (WhatsApp Baileys): 'immediate' skips the humanized anti-ban delay and typing simulation; 'humanized' keeps them. Default: the instance's outboundPacing. 'immediate' on a humanized instance needs the instance's outboundPacingOverride (otherwise 403)",
 });
 
-const PacingForbiddenResponse = {
+export const PacingForbiddenResponse = {
   description:
     "pacing 'immediate' refused: the instance's outboundPacing is 'humanized' and outboundPacingOverride is not set",
   content: { 'application/json': { schema: ErrorSchema } },
@@ -399,7 +399,7 @@ export function registerMessageSchemas(registry: OpenAPIRegistry): void {
 
   registry.registerPath({
     method: 'post',
-    path: '/messages/reaction',
+    path: '/messages/send/reaction',
     operationId: 'sendReaction',
     tags: ['Messages'],
     summary: 'Send reaction',
@@ -415,7 +415,7 @@ export function registerMessageSchemas(registry: OpenAPIRegistry): void {
 
   registry.registerPath({
     method: 'post',
-    path: '/messages/sticker',
+    path: '/messages/send/sticker',
     operationId: 'sendSticker',
     tags: ['Messages'],
     summary: 'Send sticker',
@@ -433,7 +433,7 @@ export function registerMessageSchemas(registry: OpenAPIRegistry): void {
 
   registry.registerPath({
     method: 'post',
-    path: '/messages/contact',
+    path: '/messages/send/contact',
     operationId: 'sendContact',
     tags: ['Messages'],
     summary: 'Send contact card',
@@ -451,7 +451,7 @@ export function registerMessageSchemas(registry: OpenAPIRegistry): void {
 
   registry.registerPath({
     method: 'post',
-    path: '/messages/location',
+    path: '/messages/send/location',
     operationId: 'sendLocation',
     tags: ['Messages'],
     summary: 'Send location',

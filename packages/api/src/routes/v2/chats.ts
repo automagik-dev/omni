@@ -174,7 +174,7 @@ async function getPluginForInstance(
 }
 
 // Chat type schema
-const ChatTypeSchema = z.enum([
+export const ChatTypeSchema = z.enum([
   'dm',
   'group',
   'channel',
@@ -188,7 +188,7 @@ const ChatTypeSchema = z.enum([
 ]);
 
 // List chats query schema
-const listQuerySchema = z.object({
+export const listQuerySchema = z.object({
   instanceId: z.string().uuid().optional(),
   channel: z
     .string()
@@ -215,7 +215,7 @@ const listQuerySchema = z.object({
 });
 
 // Create chat body schema
-const createChatSchema = z.object({
+export const createChatSchema = z.object({
   instanceId: z.string().uuid(),
   externalId: z.string().min(1),
   chatType: ChatTypeSchema,
@@ -230,7 +230,7 @@ const createChatSchema = z.object({
 });
 
 // Update chat body schema
-const updateChatSchema = z.object({
+export const updateChatSchema = z.object({
   name: z.string().optional(),
   description: z.string().optional(),
   avatarUrl: z.string().url().optional().nullable(),
@@ -240,7 +240,7 @@ const updateChatSchema = z.object({
 });
 
 // Add participant body schema
-const addParticipantSchema = z.object({
+export const addParticipantSchema = z.object({
   platformUserId: z.string().min(1),
   displayName: z.string().optional(),
   avatarUrl: z.string().url().optional(),
@@ -286,6 +286,31 @@ chatsRoutes.post('/', zValidator('json', createChatSchema), async (c) => {
   const chat = await services.chats.create(body);
 
   return c.json({ data: chat }, 201);
+});
+
+/**
+ * GET /chats/by-external - Find chat by external ID
+ * NOTE: Must be before /:id, which would otherwise take "by-external" as a chat id
+ */
+chatsRoutes.get('/by-external', async (c) => {
+  const instanceId = c.req.query('instanceId');
+  const externalId = c.req.query('externalId');
+  const services = c.get('services');
+
+  if (!instanceId || !externalId) {
+    return c.json({ error: 'instanceId and externalId are required' }, 400);
+  }
+  // Before the lookup, as in resolveChatIdParam: a key scoped to other instances gets the
+  // same refusal whether or not the chat exists (no cross-instance existence oracle).
+  checkInstanceAccess(c.get('apiKey'), instanceId);
+
+  const chat = await services.chats.findByExternalIdSmart(instanceId, externalId);
+
+  if (!chat) {
+    return c.json({ data: null });
+  }
+
+  return c.json({ data: chat });
 });
 
 /**
@@ -691,7 +716,7 @@ chatsRoutes.patch(
   },
 );
 
-const listMessagesQuerySchema = z.object({
+export const listMessagesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(1000).default(100),
   before: optionalDateParam('before'),
   after: optionalDateParam('after'),
@@ -719,27 +744,6 @@ chatsRoutes.get('/:id/messages', zValidator('query', listMessagesQuerySchema), a
   });
 
   return c.json({ items: messages });
-});
-
-/**
- * GET /chats/by-external - Find chat by external ID
- */
-chatsRoutes.get('/by-external', async (c) => {
-  const instanceId = c.req.query('instanceId');
-  const externalId = c.req.query('externalId');
-  const services = c.get('services');
-
-  if (!instanceId || !externalId) {
-    return c.json({ error: 'instanceId and externalId are required' }, 400);
-  }
-
-  const chat = await services.chats.findByExternalIdSmart(instanceId, externalId);
-
-  if (!chat) {
-    return c.json({ data: null });
-  }
-
-  return c.json({ data: chat });
 });
 
 // Mark chat as read schema

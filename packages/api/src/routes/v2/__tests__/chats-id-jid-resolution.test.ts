@@ -505,3 +505,33 @@ describe('cross-instance existence oracle — checkInstanceAccess runs BEFORE fi
     expect(calls.findByExternalIdSmart).toHaveLength(0);
   });
 });
+
+describe('GET /chats/by-external — reachable, and scoped like the rest', () => {
+  test('is not taken for a chat id by /:id', async () => {
+    const { app, calls } = mountHarness({ resolvedChat: { id: RESOLVED_UUID } });
+
+    const res = await app.request(
+      `/chats/by-external?instanceId=${ALLOWED_INSTANCE_ID}&externalId=${encodeURIComponent(WHATSAPP_DM_JID)}`,
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ data: { id: RESOLVED_UUID } });
+    expect(calls.findByExternalIdSmart).toEqual([{ instanceId: ALLOWED_INSTANCE_ID, externalId: WHATSAPP_DM_JID }]);
+    expect(calls.getById).toHaveLength(0);
+  });
+
+  test('a key scoped to other instances is refused before any lookup', async () => {
+    const { app, calls } = mountHarness({
+      apiKeyInstanceIds: [ALLOWED_INSTANCE_ID],
+      resolvedChat: { id: RESOLVED_UUID },
+    });
+
+    const res = await app.request(
+      `/chats/by-external?instanceId=${FORBIDDEN_INSTANCE_ID}&externalId=${encodeURIComponent(WHATSAPP_DM_JID)}`,
+    );
+
+    expect(res.status).not.toBe(200);
+    expect(res.status).not.toBe(404);
+    expect(calls.findByExternalIdSmart).toHaveLength(0);
+  });
+});

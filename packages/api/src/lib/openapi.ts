@@ -65,6 +65,7 @@ export const apiTags = [
   { name: 'System', description: 'System health and info' },
   { name: 'Auth', description: 'API key validation' },
   { name: 'Instances', description: 'Channel instance management' },
+  { name: 'Chats', description: 'Chats and groups across channels' },
   { name: 'Messages', description: 'Send messages' },
   { name: 'Events', description: 'Message events/traces' },
   { name: 'Persons', description: 'Identity management' },
