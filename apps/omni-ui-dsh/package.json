@@ -1,6 +1,6 @@
 {
   "name": "@automagik/omni-dsh",
-  "version": "2.261023.27",
+  "version": "2.261023.28",
   "description": "Omni for DeepSeek Harness: a team of long-lived Bots with Omni as the Main Bot; its channels and canvases come with @automagik/omni-channels-dsh and @automagik/omni-canvas-dsh",
   "keywords": [
     "dsh-plugin",
