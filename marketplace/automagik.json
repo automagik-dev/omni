@@ -276,6 +276,44 @@
       ]
     },
     {
+      "name": "@goodandready/dsh-subscriptions",
+      "title": {
+        "en": "AI subscriptions"
+      },
+      "description": {
+        "en": "Sign in with the AI plans you already pay for, several accounts each: Grok, Cursor, Kiro, Perplexity, JetBrains AI, GLM, Qwen and more. Some sign-ins present themselves as the provider's own app; providers may object. Its own update button can move past this vetted version."
+      },
+      "author": "GooDAnDReaDY",
+      "homepage": "https://github.com/GooDAnDReaDY/dsh-subscriptions",
+      "metadata": {
+        "category": "ai",
+        "keywords": [
+          "grok",
+          "cursor",
+          "kiro",
+          "perplexity",
+          "subscriptions",
+          "oauth"
+        ],
+        "labels": [
+          "vetted",
+          "personal-use"
+        ]
+      },
+      "versions": [
+        {
+          "version": "0.7.19",
+          "publishTimestamp": 1792682329,
+          "source": {
+            "type": "npm"
+          },
+          "engines": {
+            "dsh": ">=0.2.1-rc.2 <0.3.0"
+          }
+        }
+      ]
+    },
+    {
       "name": "dsh-codex-subscription",
       "title": {
         "en": "ChatGPT / Codex subscription"
