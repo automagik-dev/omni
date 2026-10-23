@@ -262,6 +262,7 @@ export const STRINGS = {
   'Open {app} on your phone': '在手机上打开 {app}',
   'Open chats': '打开聊天',
   'Pairing code': '配对代码',
+  'Or, on the computer that runs that Omni:': '或者在运行该 Omni 的电脑上执行：',
   'Paste a token': '粘贴 token',
   'Paste the {app} token': '粘贴 {app} token',
   'Paste token': '粘贴 token',

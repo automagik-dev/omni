@@ -12,8 +12,13 @@
  *   * bearer       — a device presents its one-time device token to exchange it
  *     for an Omni API key (routes/v2/login.ts).
  *
- * One human owns an Omni: the first one to verify a phone number (the claim)
- * becomes its only user, and sign-up closes.
+ * One human owns an Omni: whoever claims it first, with the claim token from the boot
+ * log, an admin key (login/operator.ts) or a verified WhatsApp number, becomes its only
+ * user, and sign-up closes.
+ *
+ * Without a fixed public URL (login/config.ts) Better Auth takes its base URL from each
+ * request, a browser may post from either scheme on the address it came in on, and
+ * passkeys are off: WebAuthn binds a passkey to one fixed host.
  */
 
 // First, before the passkey plugin: @simplewebauthn/server reaches tsyringe (through
@@ -36,6 +41,7 @@ import { count } from 'drizzle-orm';
 import { phoneDigits } from '../lib/phone';
 import { type LoginConfig, isDeviceClient } from './config';
 import { loginCodeMessage } from './messages';
+import { sameHostOrigins } from './origin';
 import { type WhatsAppAccess, accountByPhone } from './whatsapp';
 
 /** Better Auth endpoints the outside world may call. Everything else under /api/auth answers 404. */
@@ -81,6 +87,10 @@ type Where = { field: string; value: unknown }[];
 export interface LoginAuth {
   handler: (request: Request) => Promise<Response>;
   $context: Promise<{
+    internalAdapter: {
+      createSession(userId: string): Promise<{ id: string; token: string } | null>;
+      deleteSession(token: string): Promise<void>;
+    };
     adapter: {
       findOne<T>(query: { model: string; where: Where }): Promise<T | null>;
       update<T>(query: { model: string; where: Where; update: Record<string, unknown> }): Promise<T | null>;
@@ -92,7 +102,8 @@ export interface LoginAuth {
   api: {
     sendPhoneNumberOTP(input: { body: { phoneNumber: string } }): Promise<unknown>;
     verifyPhoneNumber(input: {
-      body: { phoneNumber: string; code: string };
+      body: { phoneNumber: string; code: string; updatePhoneNumber?: boolean; disableSession?: boolean };
+      headers?: Headers;
       returnHeaders: true;
     }): Promise<{ headers: Headers; response: unknown }>;
     getSession(input: {
@@ -105,14 +116,14 @@ export interface LoginAuth {
 }
 
 export function createLoginAuth({ db, whatsapp, config }: LoginAuthDeps): LoginAuth {
-  const origin = new URL(config.publicUrl).origin;
+  const fixed = config.publicUrl ? new URL(config.publicUrl) : null;
   const trustedProxyHeader = process.env.TRUSTED_PROXY_HEADER?.trim().toLowerCase();
   const auth = betterAuth({
     appName: 'Omni',
-    baseURL: config.publicUrl,
+    baseURL: config.publicUrl ?? undefined,
     basePath: '/api/auth',
     secret: config.secret,
-    trustedOrigins: [origin],
+    trustedOrigins: fixed ? [fixed.origin] : (request?: Request) => (request ? sameHostOrigins(request) : []),
     telemetry: { enabled: false },
     database: drizzleAdapter(db, {
       provider: 'pg',
@@ -155,12 +166,13 @@ export function createLoginAuth({ db, whatsapp, config }: LoginAuthDeps): LoginA
           getTempName: (phone) => `+${phoneDigits(phone) ?? phone}`,
         },
       }),
-      passkey({ rpID: new URL(config.publicUrl).hostname, rpName: 'Omni', origin }),
+      ...(fixed ? [passkey({ rpID: fixed.hostname, rpName: 'Omni', origin: fixed.origin })] : []),
       deviceAuthorization({
         expiresIn: '10m',
         interval: '2s',
         userCodeLength: USER_CODE_LENGTH,
-        verificationUri: `${config.publicUrl}/api/login/device`,
+        // Relative without a fixed URL: Better Auth resolves it against the request's own address.
+        verificationUri: `${config.publicUrl ?? ''}/api/login/device`,
         validateClient: (clientId) => isDeviceClient(clientId),
       }),
       bearer(),

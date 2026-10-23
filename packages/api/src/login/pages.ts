@@ -138,23 +138,36 @@ async function addPasskey() {
   const cred = await navigator.credentials.create({ publicKey: creationOptions(options) });
   await call('POST', '/api/auth/passkey/verify-registration', { response: credentialJSON(cred), name: navigator.platform || 'This device' });
 }
-const passkeysAvailable = () => typeof PublicKeyCredential !== 'undefined';
+// PASSKEYS: this Omni has a fixed public URL, which WebAuthn needs (login/config.ts).
+const passkeysAvailable = () => PASSKEYS && typeof PublicKeyCredential !== 'undefined';
 `;
 
-/** The octopus page shell these pages share, and the marketplace page (market/page.ts) reuses. */
-export function page(title: string, body: string, script: string, rail: string[] = []): string {
-  const steps = rail.length ? `<div class="rail">${rail.map((step) => `<span>${step}</span>`).join('')}</div>` : '';
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><meta name="theme-color" content="#05070f"><link rel="icon" href="${ICON}"><title>${title}</title><style>${STYLE}</style></head><body><div class="stage">${OCTOPUS}<div class="bubble" id="bubble" role="status"></div>${steps}<main><div class="mark">OMNI</div>${body}<p id="status" class="muted"></p></main></div><script>${SHARED_SCRIPT}${script}</script></body></html>`;
+/** What a page may offer: passkeys only where this Omni has a fixed public URL. */
+export interface PageOptions {
+  passkeys?: boolean;
 }
 
-export function claimPage(): string {
+/** The octopus page shell these pages share, and the marketplace page (market/page.ts) reuses. */
+export function page(
+  title: string,
+  body: string,
+  script: string,
+  rail: string[] = [],
+  options: PageOptions = {},
+): string {
+  const steps = rail.length ? `<div class="rail">${rail.map((step) => `<span>${step}</span>`).join('')}</div>` : '';
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><meta name="theme-color" content="#05070f"><link rel="icon" href="${ICON}"><title>${title}</title><style>${STYLE}</style></head><body><div class="stage">${OCTOPUS}<div class="bubble" id="bubble" role="status"></div>${steps}<main><div class="mark">OMNI</div>${body}<p id="status" class="muted"></p></main></div><script>const PASSKEYS = ${options.passkeys === true};${SHARED_SCRIPT}${script}</script></body></html>`;
+}
+
+export function claimPage(options: PageOptions = {}): string {
   return page(
     'Welcome to Omni',
     `
-<section id="pick"><h1>Make this Omni yours</h1><p>Pick your WhatsApp number. That's how I'll know it's you, from now on.</p><div id="accounts"></div><button id="connect">Connect my WhatsApp</button></section>
+<section id="claim"><h1>Make this Omni yours</h1><p>You have its claim link, so you run it. One tap and it's yours.</p><button class="primary" id="claimNow">Claim this Omni</button><button id="withPhone">Claim it with my WhatsApp instead</button></section>
+<section id="pick" hidden><h1 id="pickTitle">Approve from your phone</h1><p>Optional: link your WhatsApp, and you can approve new devices by texting yourself. Without it, approve them with <code>omni approve</code> on the server.</p><div id="accounts"></div><button id="connect">Connect my WhatsApp</button><button id="skipPhone">Not now</button></section>
 <section id="link" hidden><h1>Link your WhatsApp</h1><p>On your phone: WhatsApp → Settings → Linked devices → Link a device, and scan this.</p><div class="qr" id="qr"></div></section>
 <section id="code" hidden><h1>Check your WhatsApp</h1><p>I sent a 6-digit code to <strong id="sentTo"></strong>, in your chat with yourself.</p><input id="otp" inputmode="numeric" autocomplete="one-time-code" maxlength="6" aria-label="Code"><button class="primary" id="verify">Claim this Omni</button></section>
-<section id="done" hidden><h1>This Omni is yours</h1><p>Make signing in a touch: use this device's fingerprint or face instead of a code.</p><button class="primary" id="passkey">Use my fingerprint or face</button>
+<section id="done" hidden><h1>This Omni is yours</h1><p id="doneLede">Make signing in a touch: use this device's fingerprint or face instead of a code.</p><button class="primary" id="passkey">Use my fingerprint or face</button>
 <p style="margin-top:18px">That's all on this page. Next, open Omni on your computer and connect it to <strong id="host"></strong>: open this Omni's <a id="appPage" href="app">app page</a> there and tap <em>Open in the Omni app</em>.</p><code class="cmd">npx @automagik/omni desktop</code></section>`,
     `
 const token = new URLSearchParams(location.search).get('token') || '';
@@ -166,12 +179,18 @@ async function sendCode(id) {
   $('sentTo').textContent = sentTo; show('code'); $('otp').focus();
   speak('Check your chat with yourself. Six digits, from me.');
 }
-async function start() {
-  rail(0);
-  speak("Hi! I'm Omni. Every chat, every channel, one place. Let's make me yours.");
-  if (!token) { speak('I need my claim link. It is in my server log.'); return say('Open the claim link printed in the Omni server log.', true); }
-  try {
-    const accounts = await claim('GET', '/accounts');
+let claimedByToken = false;
+function finish(viaPhone) {
+  say(''); show('done'); rail(1); glitch();
+  speak("I'm yours! Now open me on your computer and give me a brain.");
+  if (!viaPhone) $('doneLede').textContent = 'Approve new devices with omni approve on the server, or link WhatsApp later from this same link to approve them from your phone.';
+  // A passkey needs a signed-in session, which only the WhatsApp code gives, and a fixed address.
+  if (!viaPhone || !passkeysAvailable()) $('passkey').hidden = true;
+}
+async function pickPhone() {
+  show('pick');
+  const accounts = await claim('GET', '/accounts');
+  $('accounts').replaceChildren();
     for (const account of accounts) {
       const b = document.createElement('button'); b.className = 'primary';
       b.textContent = 'My number: ' + account.phone;
@@ -179,11 +198,28 @@ async function start() {
       $('accounts').append(b);
     }
     if (accounts.length) $('connect').textContent = 'Connect another WhatsApp';
-  } catch (e) {
+}
+async function start() {
+  rail(0);
+  speak("Hi! I'm Omni. Every chat, every channel, one place. Let's make me yours.");
+  if (!token) { speak('I need my claim link. It is in my server log.'); return say('Open the claim link printed in the Omni server log, or run omni claim on the server.', true); }
+  try {
+    const status = await call('GET', '/api/v2/login/status');
+    await pickPhone(); // checks the link: it works while nobody owns me, or my owner has no WhatsApp yet
+    if (status.claimed) { claimedByToken = true; speak('I am yours already. Want approvals on your phone?'); }
+    else show('claim');
+  }
+  catch (e) {
     speak(e.message === 'Not found' ? 'I already have an owner. Or this link is not mine.' : 'Hmm, something is off.');
-    say(e.message === 'Not found' ? 'This Omni is already claimed, or the claim link is wrong.' : e.message, true); $('connect').hidden = true;
+    say(e.message === 'Not found' ? 'This Omni is already claimed, or the claim link is wrong.' : e.message, true); show('none');
   }
 }
+$('claimNow').onclick = async () => {
+  try { await claim('POST', '/token'); claimedByToken = true; glitch(); speak("I'm yours. Want approvals on your phone too?"); await pickPhone(); $('pickTitle').textContent = 'This Omni is yours. Approve from your phone too?'; }
+  catch (e) { say(e.message, true); }
+};
+$('withPhone').onclick = () => show('pick');
+$('skipPhone').onclick = () => (claimedByToken ? finish(false) : show('claim'));
 $('connect').onclick = async () => {
   try {
     const { instanceId: id } = await claim('POST', '/whatsapp');
@@ -200,9 +236,8 @@ $('connect').onclick = async () => {
 $('verify').onclick = async () => {
   try {
     await claim('POST', '/verify', { instanceId, code: $('otp').value.trim() });
-    say(''); show('done'); rail(1); glitch();
-    speak("I'm yours! Now open me on your computer and give me a brain.");
-    if (!passkeysAvailable()) $('passkey').hidden = true;
+    // Linking after a claim by token gives no session, so no passkey from here.
+    finish(!claimedByToken);
   } catch (e) { speak('That is not the code I sent. Try again?'); say(e.message, true); }
 };
 $('host').textContent = location.host;
@@ -212,6 +247,7 @@ $('passkey').onclick = async () => {
 };
 start();`,
     ['Claim', 'Connect AI', 'Your devices'],
+    options,
   );
 }
 
@@ -273,11 +309,11 @@ speak("Hi! I'm Omni.");`,
   );
 }
 
-export function devicePage(clients: Record<string, string>): string {
+export function devicePage(clients: Record<string, string>, options: PageOptions = {}): string {
   return page(
     'Approve a device',
     `
-<section id="signin" hidden><h1>Sign in to approve</h1><p>A device is asking to use your Omni. First, show it's you.</p><button class="primary" id="usePasskey">Use Face ID, Touch ID or fingerprint</button><button id="sendCode">Send me a code on WhatsApp</button><div id="codeBox" hidden><p>Code sent to <strong id="sentTo"></strong>, in your chat with yourself.</p><input id="otp" inputmode="numeric" autocomplete="one-time-code" maxlength="6"><button class="primary" id="verify">Sign in</button></div></section>
+<section id="signin" hidden><h1>Sign in to approve</h1><p>A device is asking to use your Omni. First, show it's you.</p><button class="primary" id="usePasskey">Use Face ID, Touch ID or fingerprint</button><button id="sendCode">Send me a code on WhatsApp</button><p class="muted">Or on the server: <code id="approveCmd"></code></p><p class="muted" id="noPasskey" hidden>Face ID and fingerprints need this Omni's fixed address (OMNI_PUBLIC_URL), so they are off here.</p><div id="codeBox" hidden><p>Code sent to <strong id="sentTo"></strong>, in your chat with yourself.</p><input id="otp" inputmode="numeric" autocomplete="one-time-code" maxlength="6"><button class="primary" id="verify">Sign in</button></div></section>
 <section id="approve" hidden><h1>Approve this device?</h1><div class="device"><strong id="client"></strong><span class="muted">Code <span id="userCode"></span></span></div><p>It will be able to use your Omni until you revoke it.</p><button class="primary" id="yes">Approve</button><button id="no">Deny</button></section>
 <section id="done" hidden><h1 id="doneTitle">Approved</h1><p id="doneText">The device is signing in now.</p><a class="btn primary" id="backToApp" href="omni://open" hidden>Back to the Omni app</a><button id="passkey" hidden>Use this device's fingerprint or face next time</button></section>`,
     `
@@ -288,7 +324,11 @@ async function load() {
   speak('Someone wants to use your Omni. Is it you?');
   if (!userCode) return say('Open this page from the QR code on the device.', true);
   const session = await call('GET', '/api/auth/get-session').catch(() => null);
-  if (!session) { show('signin'); if (!passkeysAvailable()) $('usePasskey').hidden = true; return; }
+  if (!session) {
+    show('signin'); $('approveCmd').textContent = 'omni approve ' + userCode;
+    if (!passkeysAvailable()) { $('usePasskey').hidden = true; $('noPasskey').hidden = PASSKEYS; }
+    return;
+  }
   try {
     const request = await call('GET', '/api/auth/device?user_code=' + encodeURIComponent(userCode));
     clientId = request.client_id || request.clientId || null;
@@ -313,5 +353,7 @@ $('yes').onclick = async () => {
 $('no').onclick = async () => { try { await call('POST', '/api/auth/device/deny', { userCode }); $('doneTitle').textContent = 'Denied'; $('doneText').textContent = 'The device was not let in.'; show('done'); } catch (e) { say(e.message, true); } };
 $('passkey').onclick = async () => { try { await addPasskey(); say('Done. Next time, approve with your fingerprint or face.'); $('passkey').hidden = true; } catch (e) { say(e.message, true); } };
 load();`,
+    [],
+    options,
   );
 }

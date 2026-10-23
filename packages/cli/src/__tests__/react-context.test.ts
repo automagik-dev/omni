@@ -61,6 +61,12 @@ const mockContextGet = mock(
 const mockSendReaction = mock(() => Promise.resolve({ messageId: 'sent-reaction-id' }));
 
 mock.module('../client.js', () => ({
+  // Bun's module mocks are process-wide: every export another test file imports must exist.
+  exitNotAuthenticated: () => {
+    throw new Error('not authenticated');
+  },
+  getOptionalClient: () => null,
+  installActorHeader: () => {},
   getClient: () => ({
     context: { get: mockContextGet },
     messages: { sendReaction: mockSendReaction },

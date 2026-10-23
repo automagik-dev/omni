@@ -6,6 +6,7 @@ import type { ChannelRegistry } from '@omni/channel-sdk';
 import type { EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
 import type { ApiKeyProfile, ApiKeyProfileOverrides } from '@omni/db';
+import type { Login } from './login';
 import type { Services } from './services';
 import type { SystemUpdater } from './system/update';
 import type { PlatformAuthContext, TenantAuthContext } from './tenancy/auth-context';
@@ -50,6 +51,8 @@ export interface AppVariables {
   services: Services;
   /** Updates the owner confirms (system/update.ts); set for the /api/v2 routes by app.ts. */
   updater?: SystemUpdater;
+  /** Human login, or null when it is off; set for the /api/v2 routes by app.ts (routes/v2/owner.ts). */
+  login?: Login | null;
   apiKey?: ApiKeyData;
   requestId: string;
   /**

@@ -13465,6 +13465,8 @@ function ConnectOmni({ onPaired, embedded = false } = {}) {
         (0, import_react8.createElement)("h2", null, t("Approve this device")),
         (0, import_react8.createElement)("p", { className: "ox-muted" }, pairing.waLink ? t("Scan the QR with your phone: it opens your WhatsApp chat with yourself with the code typed. Send it, and this page goes live.") : t("Open the approval page on your phone or here, and approve with Face ID, Touch ID, your fingerprint or a code.")),
         (0, import_react8.createElement)("div", { className: "ox-code", "aria-label": t("Pairing code") }, pairing.code),
+        // The operator owns the Omni, so approving from its own terminal works without a phone.
+        (0, import_react8.createElement)("p", { className: "ox-muted" }, t("Or, on the computer that runs that Omni:"), " ", (0, import_react8.createElement)("code", null, `omni approve ${pairing.code}`)),
         (0, import_react8.createElement)(
           "div",
           { className: "ox-row" },
@@ -14908,6 +14910,7 @@ var STRINGS = {
   "Open {app} on your phone": "在手机上打开 {app}",
   "Open chats": "打开聊天",
   "Pairing code": "配对代码",
+  "Or, on the computer that runs that Omni:": "或者在运行该 Omni 的电脑上执行：",
   "Paste a token": "粘贴 token",
   "Paste the {app} token": "粘贴 {app} token",
   "Paste token": "粘贴 token",

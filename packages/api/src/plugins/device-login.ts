@@ -24,7 +24,12 @@ import { classifyEnvelope, createLogger } from '@omni/core';
 import { type Login, deviceRequestOf, ownerOf } from '../login';
 import { DEVICE_CLIENTS, isDeviceClient } from '../login/config';
 import { CONNECT_TTL_MS, allowConnectLink, isConnectRequest, mintConnectGrant } from '../login/connect';
-import { connectLinkMessage, connectTooSoonMessage, deviceApprovedMessage } from '../login/messages';
+import {
+  connectLinkMessage,
+  connectNeedsAddressMessage,
+  connectTooSoonMessage,
+  deviceApprovedMessage,
+} from '../login/messages';
 import { updateCodeInMessage } from '../login/update-requests';
 import type { OwnAccount } from '../login/whatsapp';
 import { platformTime } from '../services/whatsapp-self';
@@ -152,7 +157,7 @@ export async function handleDeviceLoginMessage(
   return { userCode, clientId };
 }
 
-export type ConnectLink = { url: string; expiresAt: Date } | { retryAfterSeconds: number };
+export type ConnectLink = { url: string; expiresAt: Date } | { retryAfterSeconds: number } | { needsAddress: true };
 
 /**
  * Answer the owner's "connect" in their self chat with a one-time connect link; null when
@@ -166,6 +171,14 @@ export async function handleConnectMessage(
   const self = await ownerSelfChat(login, event);
   if (!self || self.sentAt < Date.now() - CONNECT_FRESH_MS) return null;
   const { owner, account } = self;
+  // A link that leaves on its own is never built from a request's address (login/origin.ts).
+  const base = login.config.publicUrl;
+  if (!base) {
+    await login.whatsapp
+      .sendToSelf(account, `connect-address-${Date.now()}`, connectNeedsAddressMessage())
+      .catch((error) => log.warn('Could not answer connect in the self chat', { error: String(error) }));
+    return { needsAddress: true };
+  }
 
   const wait = allowConnectLink(login, account.instanceId);
   if (wait > 0) {
@@ -175,10 +188,10 @@ export async function handleConnectMessage(
     return { retryAfterSeconds: wait };
   }
   const { grant, expiresAt } = await mintConnectGrant(login, { userId: owner.id, instanceId: account.instanceId });
-  const url = `${login.config.publicUrl}/api/login/app?grant=${grant}`;
+  const url = `${base}/api/login/app?grant=${grant}`;
   await login.eventBus?.publish(
     'access.connect_link_issued',
-    { userId: owner.id, instanceId: account.instanceId, expiresAt: expiresAt.toISOString() },
+    { userId: owner.id, instanceId: account.instanceId, expiresAt: expiresAt.toISOString(), via: 'self-chat' },
     { instanceId: account.instanceId, channelType: 'whatsapp-baileys' },
   );
   log.info('Connect link issued in the self chat', { instanceId: account.instanceId });

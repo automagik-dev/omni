@@ -200,6 +200,19 @@ describe('buildRuntimeEnv', () => {
     expect(env.OMNI_API_KEY).toBe('');
   });
 
+  test('carries the public URL and the login switch only when config.json sets them', () => {
+    const plain = buildRuntimeEnv(DEFAULT_SERVER_CONFIG, {});
+    expect(plain.OMNI_PUBLIC_URL).toBeUndefined();
+    expect(plain.OMNI_LOGIN_ENABLED).toBeUndefined();
+    const chosen = buildRuntimeEnv(
+      { ...DEFAULT_SERVER_CONFIG, publicUrl: 'https://omni.example.com', login: 'off' },
+      {},
+    );
+    expect(chosen.OMNI_PUBLIC_URL).toBe('https://omni.example.com');
+    expect(chosen.OMNI_LOGIN_ENABLED).toBe('false');
+    expect(buildRuntimeEnv({ ...DEFAULT_SERVER_CONFIG, login: 'on' }, {}).OMNI_LOGIN_ENABLED).toBeUndefined();
+  });
+
   test('CANONICAL_PG_PORT is re-exported from pgserve-transport (5432)', () => {
     expect(CANONICAL_PG_PORT).toBe(5432);
   });

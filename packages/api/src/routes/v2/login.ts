@@ -1,13 +1,15 @@
 /**
  * Human login surface (wish: omni-labs-distribution). Unauthenticated by contract:
- * these are how a person and their devices get in. All of it answers 404 unless
- * OMNI_LOGIN_ENABLED=true (and never with multitenancy on), like a path that does
- * not exist. Mounted on the root app before protectedApp (see app.ts).
+ * these are how a person and their devices get in. All of it answers 404 when
+ * OMNI_LOGIN_ENABLED=false (and always with multitenancy on), like a path that does
+ * not exist. Mounted on the root app before protectedApp (see app.ts). The operator's
+ * own way in, behind an admin key, is routes/v2/owner.ts.
  *
  *   /api/auth/*            Better Auth itself, limited to PUBLIC_AUTH_PATHS: the device
  *                          flow (RFC 8628), passkeys, session read and sign-out
  *   /api/v2/login/status   claimed or not, and the owner's WhatsApp for the device QR
- *   /api/v2/login/claim/*  claiming an unclaimed Omni (needs the claim token)
+ *   /api/v2/login/claim/*  claiming an unclaimed Omni with the claim token: on its own, or by
+ *                          verifying a WhatsApp number; a phoneless owner links one the same way
  *   /api/v2/login/send-code, /verify   a login code in the owner's WhatsApp self chat
  *   /api/v2/login/device-key           a device trades its one-time device token for an Omni key
  *   /api/v2/login/connect              a device trades a connect link's grant for an Omni key
@@ -25,6 +27,9 @@ import { PUBLIC_AUTH_PATHS } from '../../login/auth';
 import { DEVICE_CLIENTS, type DeviceClientId, claimTokenOf, isDeviceClient } from '../../login/config';
 import { GrantSchema, consumeConnectGrant, isLiveGrant } from '../../login/connect';
 import { deviceApprovedMessage } from '../../login/messages';
+import { claimForOperator } from '../../login/operator';
+import { pendingDeviceCode } from '../../login/operator';
+import { publicOrigin } from '../../login/origin';
 import { appPage, claimPage, devicePage, landingPage } from '../../login/pages';
 import { maskPhone } from '../../login/whatsapp';
 import { authRateLimitMiddleware, loginRateLimitMiddleware, requestClientIp } from '../../middleware/rate-limit';
@@ -67,15 +72,8 @@ const sameSecret = (given: string | undefined, expected: string) => {
   return a.length === b.length && timingSafeEqual(a, b);
 };
 
-/** A pending, unexpired device-flow request for this user code, or null. */
-async function pendingDevice(login: Login, userCode: string) {
-  const { adapter } = await login.auth.$context;
-  const row = await adapter.findOne<{ id: string; status: string; expiresAt: Date; clientId?: string | null }>({
-    model: 'deviceCode',
-    where: [{ field: 'userCode', value: userCode.replace(/[^a-zA-Z0-9]/g, '').toUpperCase() }],
-  });
-  return row && row.status === 'pending' && new Date(row.expiresAt).getTime() > Date.now() ? row : null;
-}
+/** Where people reach this Omni, for links handed to whoever asked: the public URL, else this request's address. */
+const originOf = (login: Login, c: Context<Env>) => publicOrigin(login.config, c.req.raw) ?? '';
 
 const tooSoon = (c: Context<Env>, retryAfterSeconds: number) =>
   c.json(
@@ -138,8 +136,8 @@ export function loginPageRoutes(login: Login | null) {
     await next();
   });
   const active = login as Login;
-  app.get('/claim', (c) => c.html(claimPage()));
-  app.get('/device', (c) => c.html(devicePage(DEVICE_CLIENTS)));
+  app.get('/claim', (c) => c.html(claimPage({ passkeys: active.config.publicUrl !== null })));
+  app.get('/device', (c) => c.html(devicePage(DEVICE_CLIENTS, { passkeys: active.config.publicUrl !== null })));
   // With a connect link's grant (texted "connect"), the page opens the app with it; looking never spends it.
   app.get('/app', async (c) => {
     const grant = c.req.query('grant');
@@ -150,7 +148,7 @@ export function loginPageRoutes(login: Login | null) {
   // code typed. The owner's number is given out only here, and only for a live request.
   app.get('/whatsapp', authRateLimitMiddleware, async (c) => {
     const userCode = UserCodeSchema.safeParse(c.req.query('user_code'));
-    if (!userCode.success || !(await pendingDevice(active, userCode.data))) return c.json(notFound, 404);
+    if (!userCode.success || !(await pendingDeviceCode(active, userCode.data))) return c.json(notFound, 404);
     const account = await ownerAccount(active);
     if (!account) return c.json(notFound, 404);
     const code = userCode.data.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
@@ -172,8 +170,15 @@ export function loginApiRoutes(login: Login | null) {
   // guard above answers 404 before any handler runs when it is off.
   const active = login as Login;
 
-  const claimable = async (token: string | undefined) =>
-    sameSecret(token, claimTokenOf(active.config)) && !(await ownerOf(active));
+  const tokenOk = (token: string | undefined) => sameSecret(token, claimTokenOf(active.config));
+  /** The claim token, on an Omni nobody owns yet. */
+  const claimable = async (token: string | undefined) => tokenOk(token) && !(await ownerOf(active));
+  /** The claim token, while there is no owner or the owner has no WhatsApp yet: the WhatsApp steps link one. */
+  const linkable = async (token: string | undefined) => {
+    if (!tokenOk(token)) return false;
+    const owner = await ownerOf(active);
+    return owner === null || owner.phone === null;
+  };
 
   app.get('/status', async (c) => {
     const owner = await ownerOf(active);
@@ -183,16 +188,27 @@ export function loginApiRoutes(login: Login | null) {
         // Whether a device's QR can approve it over WhatsApp right now (the owner's account
         // is connected). The number itself is never listed here; see /api/login/whatsapp.
         whatsapp: owner !== null && (await ownerAccount(active)) !== null,
-        deviceUrl: `${active.config.publicUrl}/api/login/device`,
-        whatsappUrl: `${active.config.publicUrl}/api/login/whatsapp`,
+        deviceUrl: `${originOf(active, c)}/api/login/device`,
+        whatsappUrl: `${originOf(active, c)}/api/login/whatsapp`,
+        // Face ID and fingerprints need a fixed public URL; `omni approve <code>` on the server always works.
+        passkeys: active.config.publicUrl !== null,
       },
     });
   });
 
   // ---- Claiming an unclaimed Omni (claim token from the boot log) ----
 
-  app.get('/claim/accounts', loginRateLimitMiddleware, async (c) => {
+  // The token alone: whoever has the boot log runs this server. WhatsApp can be linked after.
+  app.post('/claim/token', loginRateLimitMiddleware, async (c) => {
     if (!(await claimable(c.req.header('x-omni-claim-token')))) return c.json(notFound, 404);
+    const { owner, claimed } = await claimForOperator(active, { via: 'claim-token' });
+    if (!claimed) return c.json(notFound, 404);
+    log.info('Omni claimed with the claim token', { userId: owner.id });
+    return c.json({ data: { claimed: true } }, 201);
+  });
+
+  app.get('/claim/accounts', loginRateLimitMiddleware, async (c) => {
+    if (!(await linkable(c.req.header('x-omni-claim-token')))) return c.json(notFound, 404);
     const accounts = await active.whatsapp.accounts();
     return c.json({
       data: accounts.map((account) => ({
@@ -204,7 +220,7 @@ export function loginApiRoutes(login: Login | null) {
   });
 
   app.post('/claim/whatsapp', loginRateLimitMiddleware, async (c) => {
-    if (!(await claimable(c.req.header('x-omni-claim-token')))) return c.json(notFound, 404);
+    if (!(await linkable(c.req.header('x-omni-claim-token')))) return c.json(notFound, 404);
     const plugin = await getPlugin('whatsapp-baileys');
     if (!plugin) return c.json({ error: { code: 'UNAVAILABLE', message: 'WhatsApp is not available here' } }, 503);
     const instance = await active.services.instances.create({ name: OWNER_INSTANCE_NAME, channel: 'whatsapp-baileys' });
@@ -215,7 +231,7 @@ export function loginApiRoutes(login: Login | null) {
   });
 
   app.get('/claim/whatsapp/:id', authRateLimitMiddleware, async (c) => {
-    if (!(await claimable(c.req.header('x-omni-claim-token')))) return c.json(notFound, 404);
+    if (!(await linkable(c.req.header('x-omni-claim-token')))) return c.json(notFound, 404);
     const id = z.string().uuid().safeParse(c.req.param('id'));
     if (!id.success) return c.json(notFound, 404);
     const account = (await active.whatsapp.accounts()).find((candidate) => candidate.instanceId === id.data);
@@ -225,7 +241,7 @@ export function loginApiRoutes(login: Login | null) {
   });
 
   app.post('/claim/send-code', loginRateLimitMiddleware, async (c) => {
-    if (!(await claimable(c.req.header('x-omni-claim-token')))) return c.json(notFound, 404);
+    if (!(await linkable(c.req.header('x-omni-claim-token')))) return c.json(notFound, 404);
     const body = InstanceIdSchema.safeParse(await c.req.json().catch(() => null));
     if (!body.success) return c.json({ error: { code: 'VALIDATION', message: 'Body must be { instanceId }' } }, 400);
     const account = (await active.whatsapp.accounts()).find(
@@ -239,7 +255,7 @@ export function loginApiRoutes(login: Login | null) {
   });
 
   app.post('/claim/verify', loginRateLimitMiddleware, async (c) => {
-    if (!(await claimable(c.req.header('x-omni-claim-token')))) return c.json(notFound, 404);
+    if (!(await linkable(c.req.header('x-omni-claim-token')))) return c.json(notFound, 404);
     const body = ClaimVerifySchema.safeParse(await c.req.json().catch(() => null));
     if (!body.success)
       return c.json({ error: { code: 'VALIDATION', message: 'Body must be { instanceId, code }' } }, 400);
@@ -247,6 +263,8 @@ export function loginApiRoutes(login: Login | null) {
       (candidate) => candidate.instanceId === body.data.instanceId,
     );
     if (!account) return c.json({ error: { code: 'NOT_CONNECTED', message: 'That WhatsApp is not connected' } }, 409);
+    const existing = await ownerOf(active);
+    if (existing) return linkOwnerWhatsApp(c, existing.id, account, body.data.code);
     const verified = await active.auth.api
       .verifyPhoneNumber({ body: { phoneNumber: `+${account.phone}`, code: body.data.code }, returnHeaders: true })
       .catch(() => null);
@@ -256,12 +274,50 @@ export function loginApiRoutes(login: Login | null) {
     }
     await active.eventBus?.publish(
       'access.owner_claimed',
-      { userId: owner.id, instanceId: account.instanceId },
+      { userId: owner.id, instanceId: account.instanceId, via: 'whatsapp' },
       { instanceId: account.instanceId, channelType: 'whatsapp-baileys' },
     );
     log.info('Omni claimed', { instanceId: account.instanceId });
     return withCookies({ data: { claimed: true } }, verified.headers);
   });
+
+  /**
+   * An owner who claimed without WhatsApp links one: the code they got in that account's
+   * self chat proves the number is theirs. Better Auth updates the number on a session, so
+   * the owner gets one for this call only.
+   */
+  async function linkOwnerWhatsApp(
+    c: Context<Env>,
+    ownerId: string,
+    account: { instanceId: string; phone: string },
+    code: string,
+  ) {
+    const context = await active.auth.$context;
+    const session = await context.internalAdapter.createSession(ownerId);
+    if (!session) return c.json({ error: { code: 'UNAVAILABLE', message: 'Could not link WhatsApp now' } }, 503);
+    try {
+      const verified = await active.auth.api
+        .verifyPhoneNumber({
+          body: { phoneNumber: `+${account.phone}`, code, updatePhoneNumber: true },
+          headers: new Headers({ authorization: `Bearer ${session.token}` }),
+          returnHeaders: true,
+        })
+        .catch(() => null);
+      const owner = await ownerOf(active);
+      if (!verified || owner?.id !== ownerId || owner.phone !== account.phone) {
+        return c.json({ error: { code: 'INVALID_CODE', message: 'That code is not right' } }, 400);
+      }
+    } finally {
+      await context.internalAdapter.deleteSession(session.token).catch(() => undefined);
+    }
+    await active.eventBus?.publish(
+      'access.owner_whatsapp_linked',
+      { userId: ownerId, instanceId: account.instanceId },
+      { instanceId: account.instanceId, channelType: 'whatsapp-baileys' },
+    );
+    log.info('Owner linked WhatsApp', { instanceId: account.instanceId });
+    return c.json({ data: { claimed: true, linked: true } });
+  }
 
   // ---- The owner signing in with a code in their own WhatsApp ----
 
@@ -330,7 +386,7 @@ export function loginApiRoutes(login: Login | null) {
           error: {
             code: 'LINK_EXPIRED',
             message:
-              'This connect link expired or was already used. Text connect to yourself on WhatsApp for a new one.',
+              'This connect link expired or was already used. Text connect to yourself on WhatsApp, or run omni connect on the server, for a new one.',
           },
         },
         410,
@@ -382,7 +438,7 @@ export function loginApiRoutes(login: Login | null) {
       keyId: created.key.id,
       scopes: created.key.scopes,
       keyExpiresAt: keyExpiresAt?.toISOString() ?? null,
-      apiUrl: active.config.publicUrl,
+      apiUrl: originOf(active, c),
     };
   }
 
@@ -397,7 +453,7 @@ export function landingRoutes(login: Login | null, notFound: (c: Context<Env>) =
   const app = new Hono<Env>();
   const landing = (c: Context<Env>) =>
     /\btext\/html\b/.test(c.req.header('accept') ?? '')
-      ? c.html(landingPage({ publicUrl: login?.config.publicUrl ?? null }))
+      ? c.html(landingPage({ publicUrl: login ? publicOrigin(login.config, c.req.raw) : null }))
       : notFound(c);
   app.get('/', landing);
   app.get('/api', landing);

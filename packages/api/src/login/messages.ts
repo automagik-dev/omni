@@ -69,6 +69,15 @@ export function updateFinishedMessage(to: string, running: string, ok: boolean):
   return ok ? `🐙 *Omni updated to ${to}.*` : `🐙 The update to ${to} did not complete; Omni is still on ${running}.`;
 }
 
+/** The answer to "connect" when this Omni has no fixed address to put in a link. */
+export function connectNeedsAddressMessage(): string {
+  return [
+    "🐙 I can't send you a link: I don't know the address you reach me on.",
+    '',
+    'Run `omni connect` on the server for a link, or set OMNI_PUBLIC_URL (or the server.public_url setting) and text *connect* again.',
+  ].join('\n');
+}
+
 export function connectTooSoonMessage(seconds: number): string {
   const minutes = Math.max(1, Math.ceil(seconds / 60));
   return `🐙 That's a lot of connect links. Wait ${minutes} minute${minutes === 1 ? '' : 's'} and text *connect* again.`;

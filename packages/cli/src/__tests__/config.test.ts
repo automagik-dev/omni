@@ -285,6 +285,32 @@ describe('server.natsHost', () => {
   });
 });
 
+describe('server.publicUrl and server.login', () => {
+  withSandbox();
+
+  test('are unset by default: pairing stays on and links follow the address devices use', () => {
+    expect(getConfigValue('server.publicUrl')).toBeUndefined();
+    expect(getConfigValue('server.login')).toBeUndefined();
+  });
+
+  test('publicUrl takes http(s)://host[:port], drops a trailing slash, and refuses a path', () => {
+    setConfigValue('server.publicUrl', 'https://omni.example.com/');
+    expect(loadServerConfig().publicUrl).toBe('https://omni.example.com');
+    setConfigValue('server.publicUrl', 'http://omni-box.tail.ts.net:8882');
+    expect(getConfigValue('server.publicUrl')).toBe('http://omni-box.tail.ts.net:8882');
+    for (const bad of ['omni.example.com', 'https://omni.example.com/app', 'ftp://x', 'https://a b']) {
+      expect(() => setConfigValue('server.publicUrl', bad)).toThrow(/Invalid publicUrl/);
+    }
+    expect(getConfigValue('server.publicUrl')).toBe('http://omni-box.tail.ts.net:8882');
+  });
+
+  test('login is on or off', () => {
+    setConfigValue('server.login', 'off');
+    expect(loadServerConfig().login).toBe('off');
+    expect(() => setConfigValue('server.login', 'maybe')).toThrow();
+  });
+});
+
 // ============================================================================
 // Multi-server registry
 // ============================================================================

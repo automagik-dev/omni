@@ -1,5 +1,8 @@
 /**
- * Connect Command — omni connect <instance-id> <agent-name>
+ * Connect Command
+ *
+ *   omni connect [--url <address>]        a one-time link that connects one device (commands/owner.ts)
+ *   omni connect <instance-id> <agent-name>   wire an instance to a Genie agent over NATS:
  *
  * One-command setup for Omni ↔ Genie NATS integration:
  *   1. Discovers agent via `genie dir ls <agent-name> --json`
@@ -13,6 +16,7 @@ import { Command } from 'commander';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
 import { findOrCreateAgent, findOrCreateProvider } from './_setup-helpers.js';
+import { printConnectLink } from './owner.js';
 
 interface GenieDirectoryEntry {
   name: string;
@@ -22,6 +26,7 @@ interface GenieDirectoryEntry {
 }
 
 interface ConnectOptions {
+  url?: string;
   natsUrl: string;
   mode: 'turn-based' | 'fire-and-forget';
   replyFilter: 'all' | 'filtered';
@@ -29,13 +34,18 @@ interface ConnectOptions {
 
 export function createConnectCommand(): Command {
   return new Command('connect')
-    .description('Connect an Omni instance to a Genie agent via NATS')
-    .argument('<instance-id>', 'Omni instance ID')
-    .argument('<agent-name>', 'Genie agent name (from genie directory)')
+    .description('A one-time link that connects a device; or, with two arguments, wire an instance to a Genie agent')
+    .argument('[instance-id]', 'Omni instance ID (Genie wiring)')
+    .argument('[agent-name]', 'Genie agent name, from the genie directory (Genie wiring)')
+    .option('--url <address>', 'Where devices reach this Omni, for the link (default: the address this CLI uses)')
     .option('--nats-url <url>', 'NATS server URL', 'localhost:4222')
     .option('--mode <mode>', 'Trigger mode: turn-based (round-trip) or fire-and-forget', 'turn-based')
     .option('--reply-filter <filter>', 'Reply filter: all (reply to everything) or filtered', 'all')
-    .action(async (instanceId: string, agentName: string, options: ConnectOptions) => {
+    .action(async (instanceId: string | undefined, agentName: string | undefined, options: ConnectOptions) => {
+      if (instanceId === undefined && agentName === undefined) return printConnectLink({ url: options.url });
+      if (instanceId === undefined || agentName === undefined) {
+        return output.error('Give both <instance-id> and <agent-name>, or neither for a device link.');
+      }
       const client = getClient();
 
       // 1. Discover agent from genie directory
