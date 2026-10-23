@@ -34,6 +34,7 @@ describe('readLoginConfig', () => {
       secret: 'x'.repeat(40),
       deviceKeyScopes: ['instances:read', 'chats:read', 'messages:read', 'events:read'],
       deviceKeyTtlDays: null,
+      connectRelayUrl: 'https://connect.automagik.dev',
     });
     expect(
       readLoginConfig({ ...ON, OMNI_DEVICE_KEY_SCOPES: 'instances:*', OMNI_DEVICE_KEY_TTL_DAYS: '30' }),
@@ -41,6 +42,14 @@ describe('readLoginConfig', () => {
       deviceKeyScopes: ['instances:*'],
       deviceKeyTtlDays: 30,
     });
+  });
+
+  test("the scan-to-connect relay is Automagik's unless set, can be turned off, and must be https", () => {
+    expect(readLoginConfig({ ...ON, OMNI_CONNECT_RELAY_URL: 'https://relay.example.test/' })?.connectRelayUrl).toBe(
+      'https://relay.example.test',
+    );
+    expect(readLoginConfig({ ...ON, OMNI_CONNECT_RELAY_URL: 'off' })?.connectRelayUrl).toBeNull();
+    expect(() => readLoginConfig({ ...ON, OMNI_CONNECT_RELAY_URL: 'http://relay.example.test' })).toThrow();
   });
 
   test('refuses a short secret, a missing URL, and scopes that would let a device mint keys', () => {

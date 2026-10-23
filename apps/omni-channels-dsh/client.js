@@ -3277,10 +3277,56 @@ function ConnectOmni({ onPaired, embedded = false } = {}) {
   const [busy, setBusy] = (0, import_react4.useState)(false);
   const [problem, setProblem] = (0, import_react4.useState)(null);
   const [done, setDone] = (0, import_react4.useState)(null);
+  const [mode, setMode] = (0, import_react4.useState)("scan");
+  const [scan, setScan] = (0, import_react4.useState)(null);
   const alive = (0, import_react4.useRef)(true);
   (0, import_react4.useEffect)(() => () => {
     alive.current = false;
   }, []);
+  const paired = async (origin) => {
+    setDone(origin);
+    await refreshLive(call).catch(() => {
+    });
+    if (alive.current) onPaired?.(origin);
+  };
+  (0, import_react4.useEffect)(() => {
+    if (mode !== "scan" || pairing || done) return void 0;
+    let timer = 0;
+    let live = true;
+    const begin = async () => {
+      try {
+        const reply = await call("omni-scan-start");
+        if (!live) return;
+        setScan(reply.scan);
+        timer = setTimeout(tick, DEFAULT_POLL_MS);
+      } catch (error) {
+        if (!live) return;
+        setMode("address");
+        setProblem(error.message);
+      }
+    };
+    const tick = async () => {
+      try {
+        const reply = await call("omni-scan-poll");
+        if (!live) return;
+        if (reply.status === "paired") return paired(reply.origin);
+        if (reply.status !== "pending") return begin();
+      } catch {
+      }
+      if (live) timer = setTimeout(tick, DEFAULT_POLL_MS);
+    };
+    begin();
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [mode, pairing, done]);
+  const otherWays = () => {
+    setMode("address");
+    setScan(null);
+    void call("omni-scan-cancel").catch(() => {
+    });
+  };
   (0, import_react4.useEffect)(() => {
     call("omni-link").then((link) => {
       if (alive.current && link?.pairing) setPairing(link.pairing);
@@ -3296,10 +3342,7 @@ function ConnectOmni({ onPaired, embedded = false } = {}) {
         if (!alive.current) return;
         if (reply.status === "paired") {
           setPairing(null);
-          setDone(reply.origin);
-          await refreshLive(call).catch(() => {
-          });
-          if (alive.current) onPaired?.(reply.origin);
+          await paired(reply.origin);
           return;
         }
         if (reply.status !== "pending") {
@@ -3369,6 +3412,32 @@ function ConnectOmni({ onPaired, embedded = false } = {}) {
       )
     );
   }
+  if (mode === "scan") {
+    return (0, import_react4.createElement)(
+      "section",
+      { className: "ox-card", "aria-live": "polite" },
+      (0, import_react4.createElement)(
+        "div",
+        { className: "ox-steps" },
+        embedded ? null : (0, import_react4.createElement)("h2", null, t("Connect your Omni")),
+        (0, import_react4.createElement)(
+          "ol",
+          { className: "ox-how" },
+          (0, import_react4.createElement)("li", null, t("Scan the QR with your phone. WhatsApp opens with a message ready.")),
+          (0, import_react4.createElement)("li", null, t('Choose your own chat, "Message yourself", and send it.')),
+          (0, import_react4.createElement)("li", null, t("Your Omni connects this app. Nothing to type."))
+        ),
+        scan ? (0, import_react4.createElement)("span", { className: "ox-wait" }, (0, import_react4.createElement)("span", { className: "oc-spinner", "aria-hidden": true }), t("Waiting for your message…")) : null,
+        (0, import_react4.createElement)("button", { type: "button", className: "oc-link ox-other", onClick: otherWays }, t("Other ways"))
+      ),
+      (0, import_react4.createElement)(
+        "div",
+        { className: "ox-qr" },
+        scan ? (0, import_react4.createElement)(QrSvg, { text: scan.waLink, size: 176 }) : (0, import_react4.createElement)("div", { className: "ox-qr-wait", style: { width: 176, height: 176 } }),
+        (0, import_react4.createElement)("span", { className: "ox-muted" }, t("Scan with your phone"))
+      )
+    );
+  }
   return (0, import_react4.createElement)(
     "form",
     { className: "ox-card ox-start", onSubmit: start },
@@ -3394,7 +3463,11 @@ function ConnectOmni({ onPaired, embedded = false } = {}) {
         }),
         (0, import_react4.createElement)("button", { type: "submit", className: "oc-primary", disabled: busy || address.trim() === "" }, busy ? t("Connecting…") : t("Get a code"))
       ),
-      problem ? (0, import_react4.createElement)("p", { className: "ox-problem", role: "alert" }, problem) : null
+      problem ? (0, import_react4.createElement)("p", { className: "ox-problem", role: "alert" }, problem) : null,
+      (0, import_react4.createElement)("button", { type: "button", className: "oc-link ox-other", onClick: () => {
+        setProblem(null);
+        setMode("scan");
+      } }, t("Scan a QR instead"))
     )
   );
 }
@@ -3413,6 +3486,9 @@ var OMNI_CONNECT_CSS = `
 .ox-problem{margin:0;color:var(--oc-bad,#c0392b);font-size:13px}
 .ox-qr{flex:none;display:flex;flex-direction:column;align-items:center;gap:8px;padding:10px;border-radius:12px;background:#fff}
 .ox-qr .ox-muted{color:#555;font-size:11.5px}
+.ox-how{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px;color:var(--bt-ink);font-size:13.5px;line-height:1.45}
+.ox-other{align-self:flex-start;padding:0;border:0;background:none;color:var(--bt-ink-2);font:inherit;font-size:12.5px;text-decoration:underline;text-underline-offset:3px;cursor:pointer}
+.ox-qr-wait{border-radius:8px;background:repeating-linear-gradient(45deg,#f2f2f2 0 8px,#fafafa 8px 16px)}
 .ox-done{align-items:center;gap:12px}
 .ox-check{display:inline-grid;place-items:center;width:28px;height:28px;border-radius:50%;background:var(--bt-accent);color:#fff;font-weight:700}
 @media (max-width:720px){.ox-card{flex-direction:column}.ox-qr{align-self:center}}
@@ -4486,6 +4562,12 @@ var STRINGS = {
   "Open WhatsApp": "打开 WhatsApp",
   "Waiting for the code to arrive at {origin}…": "正在等待验证码送达 {origin}…",
   "Connect your Omni": "连接你的 Omni",
+  "Scan the QR with your phone. WhatsApp opens with a message ready.": "用手机扫描二维码，WhatsApp 会打开并备好一条消息。",
+  'Choose your own chat, "Message yourself", and send it.': '选择你自己的聊天（"给自己发消息"）并发送。',
+  "Your Omni connects this app. Nothing to type.": "你的 Omni 会连接这个应用，无需输入任何内容。",
+  "Waiting for your message…": "正在等待你的消息…",
+  "Other ways": "其他方式",
+  "Scan a QR instead": "改为扫描二维码",
   "Omni address": "Omni 地址",
   "Get a code": "获取验证码",
   "Setup steps": "设置步骤",

@@ -44,7 +44,15 @@ export const LoginConfigSchema = z.object({
     }),
   /** Null: device keys never expire (they are revoked instead). */
   deviceKeyTtlDays: z.number().int().min(1).max(3650).nullable(),
+  /**
+   * The scan-to-connect relay a device's QR names (plugins/connect-relay.ts): where this Omni
+   * leaves the sealed address and device key for a device its owner approved by scanning.
+   * Null (OMNI_CONNECT_RELAY_URL=off): scanning to connect is off.
+   */
+  connectRelayUrl: z.string().url().startsWith('https://').nullable(),
 });
+
+const DEFAULT_CONNECT_RELAY_URL = 'https://connect.automagik.dev';
 export type LoginConfig = z.infer<typeof LoginConfigSchema>;
 
 /** The login configuration, or null when login is off on this deployment. Throws when it is on but misconfigured. */
@@ -57,6 +65,10 @@ export function readLoginConfig(env: NodeJS.ProcessEnv = process.env): LoginConf
     secret: env.OMNI_AUTH_SECRET ?? '',
     deviceKeyScopes: scopes.length ? scopes : DEFAULT_SCOPES,
     deviceKeyTtlDays: env.OMNI_DEVICE_KEY_TTL_DAYS ? Number(env.OMNI_DEVICE_KEY_TTL_DAYS) : null,
+    connectRelayUrl:
+      env.OMNI_CONNECT_RELAY_URL?.trim() === 'off'
+        ? null
+        : (env.OMNI_CONNECT_RELAY_URL?.trim() || DEFAULT_CONNECT_RELAY_URL).replace(/\/+$/, ''),
   });
 }
 

@@ -14,6 +14,7 @@ import { readFileSync } from 'node:fs'
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
+import { newPairing, openBox, pairingMessage, relayUrlOf, writeHashOf } from './connect-relay.js'
 
 export const LINK_FILE = 'omni.json'
 export const MARKET_ROW = 'plugin-market'
@@ -270,6 +271,67 @@ export function install(rt) {
     return { status: 'paired', origin: new URL(link.url).host }
   }
 
+  // Scan to connect (./connect-relay.js): no address typed. The QR types a pairing into
+  // WhatsApp; the owner sends it to themselves, their Omni leaves its address and a key for
+  // this device on the relay, sealed with the pairing, and this host collects them.
+  let scan = null
+  const RELAY_TIMEOUT_MS = 10_000
+  async function relayFetch(method, slot, body) {
+    try {
+      return await fetch(`${scan?.relay ?? relayUrlOf()}/v1/slots/${slot}`, {
+        method,
+        headers: body === undefined ? {} : { 'content-type': 'application/json' },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        signal: AbortSignal.timeout(RELAY_TIMEOUT_MS),
+      })
+    } catch {
+      return null
+    }
+  }
+  const publicScan = () => scan && { text: scan.text, waLink: scan.waLink, expiresAt: scan.expiresAt }
+
+  async function scanStart() {
+    const relay = relayUrlOf()
+    const pairing = newPairing()
+    scan = { relay, pairing }
+    const created = await relayFetch('POST', pairing.slot, { writeHash: await writeHashOf(pairing) })
+    if (created?.status !== 201) {
+      scan = null
+      throw refused('Scanning to connect is not reachable right now. Type your Omni\'s address instead.')
+    }
+    const text = pairingMessage(pairing)
+    scan = {
+      relay,
+      pairing,
+      text,
+      // No number: WhatsApp asks which chat, and the owner picks their own ("Message yourself").
+      waLink: `https://wa.me/?text=${encodeURIComponent(text)}`,
+      expiresAt: (await created.json().catch(() => null))?.expiresAt ?? new Date(Date.now() + 10 * 60_000).toISOString(),
+    }
+    return { scan: publicScan() }
+  }
+
+  async function scanPoll() {
+    if (!scan) return { status: 'idle' }
+    const current = scan
+    const reply = await relayFetch('GET', current.pairing.slot)
+    if (reply?.status === 202 || reply === null || reply.status >= 500) return { status: 'pending', scan: publicScan() }
+    if (scan === current) scan = null
+    if (reply.status !== 200) return { status: 'expired' }
+    const body = await reply.json().catch(() => null)
+    let payload
+    try {
+      payload = await openBox(current.pairing, String(body?.box ?? ''))
+    } catch {
+      return { status: 'expired' }
+    }
+    const url = cleanOmniUrl(payload.url)
+    if (!url) return { status: 'expired' }
+    await saveLink({ url, key: payload.apiKey, keyId: payload.keyId, scopes: payload.scopes ?? [], keyExpiresAt: payload.keyExpiresAt ?? null, pairedAt: new Date().toISOString() }, url)
+    rt.syncOmniEvents?.()
+    return { status: 'paired', origin: new URL(url).host }
+  }
+
   async function cancel() {
     // Nothing to tell Omni: an unapproved device code just expires.
     const had = pairing !== null
@@ -291,6 +353,12 @@ export function install(rt) {
     if (endpoint === 'omni-pair-poll') return poll()
     if (endpoint === 'omni-pair-cancel') return cancel()
     if (endpoint === 'omni-disconnect') return disconnect()
+    if (endpoint === 'omni-scan-start') return scanStart()
+    if (endpoint === 'omni-scan-poll') return scanPoll()
+    if (endpoint === 'omni-scan-cancel') {
+      scan = null
+      return { status: 'cancelled' }
+    }
     if (endpoint === 'omni-link') {
       const link = rt.omniLink()
       // `configured`: this host reaches an Omni, by this link or by the profile's older URL
@@ -301,7 +369,7 @@ export function install(rt) {
     throw invalid(`Unknown omni endpoint ${endpoint}`)
   }
   // Linking changes omni.json, not the team, so a host that only reads the team may link too.
-  for (const name of ['omni-link', 'omni-pair-start', 'omni-pair-poll', 'omni-pair-cancel', 'omni-disconnect']) {
+  for (const name of ['omni-link', 'omni-pair-start', 'omni-pair-poll', 'omni-pair-cancel', 'omni-disconnect', 'omni-scan-start', 'omni-scan-poll', 'omni-scan-cancel']) {
     rt.ctx.effect(() => rt.hooks.endpoint(name, body => rt.omniLinkEndpoint(name, body), { read: true }), `ds-bot: ${name}`)
   }
 }
