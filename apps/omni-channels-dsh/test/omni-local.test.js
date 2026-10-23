@@ -182,7 +182,7 @@ function host(t, { report, code = 0, validate = 200 }) {
   const checked = []
   globalThis.fetch = async (address, init = {}) => {
     checked.push({ url: String(address), key: init.headers?.['x-api-key'] })
-    return new Response(JSON.stringify(validate === 200 ? { data: { valid: true, scopes: ['*'] } } : { error: { code: 'UNAUTHORIZED' } }), { status: validate })
+    return new Response(JSON.stringify(validate === 200 ? { data: { valid: true, scopes: ['instances:*', 'chats:*'] } } : { error: { code: 'UNAUTHORIZED' } }), { status: validate })
   }
   const rt = { home: join(home, 'plugin'), config: {}, ctx: { effect: run => run() }, syncOmniEvents: () => {} }
   installHooks(rt)

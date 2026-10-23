@@ -9,11 +9,11 @@
 // Omni and copied, here on the host, into the link file a sign-in writes (omni-link.js).
 // Without a key, or with one the Omni refuses, it starts the usual device sign-in there.
 import { createHash } from 'node:crypto'
-import { readFileSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod'
-import { cleanOmniUrl } from './omni-link.js'
+import { cleanOmniUrl, deviceNameOf } from './omni-link.js'
 import { newer, PLUGIN_VERSION } from './version.js'
 
 export const DEFAULT_PORT = 8882
@@ -40,6 +40,10 @@ const Health = z.object({ version: text(64).optional() })
 const LoginStatus = z.object({ data: z.object({ claimed: z.boolean().optional() }).optional() })
 const Validated = z.object({ data: z.object({ valid: z.literal(true), scopes: z.array(text(200)).max(500).optional(), credential: z.object({ expiresAt: text(64).nullable().optional() }).optional() }) })
 const UsePayload = z.object({ id: z.string().regex(/^[a-f0-9]{16}$/) })
+// A key the person pastes for an Omni that cannot approve this app: one unbroken string.
+const KeyPayload = z.object({ id: z.string().regex(/^[a-f0-9]{16}$/).optional(), url: text(2048).optional(), apiKey: z.string().trim().min(8).max(4096).regex(/^\S+$/) }).strict()
+  .refine(body => (body.id === undefined) !== (body.url === undefined), 'Name either a found Omni or an address')
+const Refusal = z.object({ error: z.object({ message: text(500).optional() }).optional() })
 
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]'])
 export const isLoopback = url => LOOPBACK.has(new URL(url).hostname)
@@ -62,6 +66,64 @@ function readConfig(path) {
   }
 }
 
+// <OMNI_HOME>, else ~/.omni: the desktop app sets OMNI_HOME to its own home. A sandboxed
+// Omni (omni-local.js) lives in its sandbox folder.
+const omniRoot = ({ env, home }) => env.OMNI_HOME || join(home, '.omni')
+export const sandboxHome = ({ env = process.env, home = homedir() } = {}) => join(omniRoot({ env, home }), 'sandbox')
+const cliConfigPath = ({ env, home }) => join(env.OMNI_CONFIG_DIR || join(home, '.omni'), 'config.json')
+
+const processAlive = (pid) => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return error?.code === 'EPERM'
+  }
+}
+
+// The services `omni install` runs its API under (packages/cli): PM2's omni-api, whose pid
+// files sit in PM2's home, or the omni-api unit `--systemd` writes.
+function cliServiceRuns({ env, home, exists, list, readText, isAlive }) {
+  if (exists('/etc/systemd/system/omni-api.service')) return true
+  const pids = join(env.PM2_HOME || join(home, '.pm2'), 'pids')
+  let names = []
+  try {
+    names = list(pids).filter(name => /^omni-api-\d+\.pid$/.test(name))
+  } catch {
+    return false
+  }
+  return names.some((name) => {
+    const pid = Number.parseInt(readText(join(pids, name)), 10)
+    return Number.isInteger(pid) && pid > 0 && isAlive(pid)
+  })
+}
+
+const portOf = (url) => {
+  try {
+    const at = new URL(url)
+    return Number(at.port || (at.protocol === 'https:' ? 443 : 80))
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Who runs an Omni found at `url` on this computer: `sandbox` for the sandboxed one, `cli` when
+ * the Omni CLI's own install runs it (its config names that port, and its PM2 process or
+ * systemd unit is there), `other` for any other loopback Omni (another app runs it, so this
+ * one cannot update it), null for an Omni elsewhere.
+ */
+export function managerOf(url, { env = process.env, home = homedir(), exists = existsSync, list = readdirSync, readText = path => readFileSync(path, 'utf8'), isAlive = processAlive } = {}) {
+  if (!isLoopback(url)) return null
+  const sandbox = readConfig(join(sandboxHome({ env, home }), 'config', 'config.json'))
+  if (sandbox?.apiUrl && cleanOmniUrl(sandbox.apiUrl) && sameOmni(cleanOmniUrl(sandbox.apiUrl)) === sameOmni(url)) return 'sandbox'
+  const cli = readConfig(cliConfigPath({ env, home }))
+  if (cli === null) return 'other'
+  const cliPort = cli.server?.port ?? (cli.apiUrl && isLoopback(cli.apiUrl) ? portOf(cli.apiUrl) : null) ?? DEFAULT_PORT
+  if (portOf(url) !== cliPort) return 'other'
+  return cliServiceRuns({ env, home, exists, list, readText, isAlive }) ? 'cli' : 'other'
+}
+
 // Every place that names an Omni, keys included; this stays on the host.
 export function candidates({ env = process.env, home = homedir() } = {}) {
   const found = []
@@ -69,8 +131,7 @@ export function candidates({ env = process.env, home = homedir() } = {}) {
     const clean = cleanOmniUrl(url)
     if (clean) found.push({ source, url: clean, ...extra })
   }
-  const cliDir = env.OMNI_CONFIG_DIR || join(home, '.omni')
-  const cli = readConfig(join(cliDir, 'config.json'))
+  const cli = readConfig(cliConfigPath({ env, home }))
   if (cli) {
     // The CLI's own default when it names none: the API it installs on this computer.
     add('cli', cli.apiUrl ?? `http://localhost:${cli.server?.port ?? DEFAULT_PORT}`, { key: cli.apiKey })
@@ -129,7 +190,7 @@ export async function probe(url, fetchImpl = fetch, timeoutMs = PROBE_TIMEOUT_MS
 // The Omnis to offer, as the page may see them. Omnis elsewhere are not asked anything
 // until the person picks one; `running` entries that do not answer are left out, since
 // nothing but the probe named them.
-export async function discover({ env = process.env, home = homedir(), fetchImpl = fetch } = {}) {
+export async function discover({ env = process.env, home = homedir(), fetchImpl = fetch, manager = url => managerOf(url, { env, home }) } = {}) {
   const omnis = merge(candidates({ env, home }))
   const answers = await Promise.all(omnis.map(omni => (isLoopback(omni.url) ? probe(omni.url, fetchImpl) : null)))
   return omnis
@@ -138,7 +199,7 @@ export async function discover({ env = process.env, home = homedir(), fetchImpl 
       const answer = answers[index] ?? { reachable: null, version: null, canPair: null, pairing: 'unknown' }
       // A sandboxed Omni from an earlier release moves to this plugin's (omni-local.js).
       const updateTo = omni.source === 'sandbox' && newer(PLUGIN_VERSION, answer.version) ? PLUGIN_VERSION : null
-      return { id: omni.id, url: omni.url, source: omni.source, name: omni.name ?? null, local, hasKey: Boolean(omni.key), updateTo, ...answer }
+      return { id: omni.id, url: omni.url, source: omni.source, name: omni.name ?? null, local, hasKey: Boolean(omni.key), updateTo, manager: local ? manager(omni.url) : null, ...answer }
     })
     .filter(omni => omni.source !== 'running' || omni.reachable)
     .sort((a, b) => Number(b.local) - Number(a.local))
@@ -150,29 +211,75 @@ export const foundOmni = id => merge(candidates()).find(entry => entry.id === id
 // Links this host to an Omni by a key it already has: the key is checked with that Omni
 // first, then written to the link file a sign-in writes. `refused` when the Omni no longer
 // takes it.
-export async function linkWithKey(rt, url, key) {
+// What a key this plugin makes for itself carries: what it reads and acts on in Omni
+// (instances, chats, messages, media, events and their durable consumers), and seeing and
+// asking for updates. Never keys, settings, auth or platform.
+export const DEVICE_SCOPES = Object.freeze(['instances:*', 'chats:*', 'messages:*', 'media:*', 'events:*', 'system:read', 'system:update'])
+// A key that can do anything, or make keys, is never kept as found.
+const BROAD = new Set(['*', 'keys:*', 'keys:write'])
+export const isBroad = scopes => (scopes ?? []).some(scope => BROAD.has(scope))
+const Minted = z.object({ data: z.object({ id: text(200).optional(), plainTextKey: text(4096).min(1), scopes: z.array(text(200)).max(500).optional(), expiresAt: text(64).nullable().optional() }) })
+
+// A device key of this host's own, made once with a broad key (POST /api/v2/keys); null when
+// that key cannot make one.
+async function mintDeviceKey(url, key, deviceName) {
+  let reply
+  try {
+    reply = await fetch(`${url}/api/v2/keys`, {
+      method: 'POST',
+      headers: { accept: 'application/json', 'content-type': 'application/json', 'x-api-key': key, 'x-omni-client': CLIENT_ID },
+      body: JSON.stringify({ name: `device: ${deviceName}`.slice(0, 255), scopes: [...DEVICE_SCOPES] }),
+      signal: AbortSignal.timeout(CHECK_TIMEOUT_MS),
+    })
+  } catch {
+    return null
+  }
+  if (reply.status !== 201 && reply.status !== 200) return null
+  const minted = Minted.safeParse(await reply.json().catch(() => null))
+  if (!minted.success) return null
+  return { key: minted.data.data.plainTextKey, keyId: minted.data.data.id ?? null, scopes: minted.data.data.scopes ?? [...DEVICE_SCOPES], keyExpiresAt: minted.data.data.expiresAt ?? null }
+}
+
+// Links this host to an Omni by a key it already has: the key is checked with that Omni
+// first. A scoped key is written to the link file a sign-in writes. A broad one (it can do
+// anything, or make keys) is used once to make this device a key of its own, and only that
+// one is kept; when it cannot, the found key is kept and the reply says so (`notice`).
+// `refused` when the Omni no longer takes it.
+export async function linkWithKey(rt, url, key, { deviceName = deviceNameOf() } = {}) {
   let reply
   try {
     reply = await fetch(`${url}/api/v2/auth/validate`, { method: 'POST', headers: { accept: 'application/json', 'x-api-key': key, 'x-omni-client': CLIENT_ID }, signal: AbortSignal.timeout(CHECK_TIMEOUT_MS) })
   } catch {
     throw refused(`Could not reach Omni at ${url}`)
   }
-  if (reply.status === 401 || reply.status === 403) return { status: 'refused' }
+  // Omni's own words for a key it refuses, when it gives them.
+  if (reply.status === 401 || reply.status === 403) return { status: 'refused', message: Refusal.safeParse(await reply.json().catch(() => null)).data?.error?.message ?? null }
   const valid = Validated.safeParse(await reply.json().catch(() => null))
   if (reply.status !== 200 || !valid.success) throw refused(`Omni answered ${reply.status} at ${new URL(url).host}`)
-  await rt.saveOmniLink({
-    url,
-    key,
-    keyId: null,
-    scopes: valid.data.data.scopes ?? [],
-    keyExpiresAt: valid.data.data.credential?.expiresAt ?? null,
-    pairedAt: new Date().toISOString(),
-  })
+  const scopes = valid.data.data.scopes ?? []
+  const own = isBroad(scopes) ? await mintDeviceKey(url, key, deviceName) : null
+  const kept = own ?? { key, keyId: null, scopes, keyExpiresAt: valid.data.data.credential?.expiresAt ?? null }
+  await rt.saveOmniLink({ url, ...kept, pairedAt: new Date().toISOString() })
   rt.syncOmniEvents?.()
-  return { status: 'paired', origin: new URL(url).host }
+  const origin = new URL(url).host
+  return isBroad(scopes) && own === null ? { status: 'paired', origin, notice: 'broad-key' } : { status: 'paired', origin }
 }
 
 export function install(rt) {
+  // An Omni that cannot approve this app (one from before device sign-in, or with it off)
+  // takes its API key instead, pasted by the person: checked with that Omni and kept like
+  // "Use it" keeps one. The key goes no further than this host.
+  async function useKey(body) {
+    const parsed = KeyPayload.safeParse(body)
+    if (!parsed.success) throw invalid('Paste the whole API key.')
+    // A found Omni by its id, or one at an address the person typed.
+    const url = parsed.data.id ? foundOmni(parsed.data.id)?.url : cleanOmniUrl(parsed.data.url)
+    if (!url) throw parsed.data.id ? refused('That Omni is not there any more. Look again.') : invalid('Give the address of the Omni, like omni.example.com')
+    const linked = await linkWithKey(rt, url, parsed.data.apiKey)
+    if (linked.status !== 'paired') throw refused(linked.message ? `Omni did not accept that key: ${linked.message}` : 'Omni did not accept that key.')
+    return linked
+  }
+
   async function use(body) {
     const parsed = UsePayload.safeParse(body)
     if (!parsed.success) throw invalid('Pick one of the Omnis found on this computer')
@@ -184,9 +291,22 @@ export function install(rt) {
     return linked.status === 'refused' ? { status: 'pairing', ...(await rt.startOmniPairing({ url: omni.url })) } : linked
   }
 
+  // The Omni this host is linked to, for the settings page: where it is and the version it
+  // answers with. Never its key.
+  async function linkInfo() {
+    const link = rt.omniLink?.() ?? null
+    const configured = link !== null || (await Promise.resolve(rt.omniConfigured?.()).catch(() => false)) === true
+    if (link === null) return { linked: false, configured, origin: null, version: null, pairedAt: null }
+    const answer = await probe(link.url, fetch, CHECK_TIMEOUT_MS / 5).catch(() => null)
+    return { linked: true, configured, origin: new URL(link.url).host, version: answer?.version ?? null, reachable: answer?.reachable ?? false, pairedAt: link.pairedAt ?? null }
+  }
+
   const endpoints = {
-    'omni-discover': async () => ({ omnis: await discover() }),
+    // Where a sandboxed Omni would go, so the page can say before setting one up.
+    'omni-discover': async () => ({ omnis: await discover(), sandbox: { home: sandboxHome(), version: PLUGIN_VERSION } }),
+    'omni-link-info': linkInfo,
     'omni-discover-use': use,
+    'omni-discover-key': useKey,
   }
   rt.omniDiscoverEndpoint = (endpoint, body) => endpoints[endpoint](body)
   for (const [name, run] of Object.entries(endpoints)) {

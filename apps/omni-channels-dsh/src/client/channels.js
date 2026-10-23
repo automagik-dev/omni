@@ -1,5 +1,5 @@
 import { createElement as h, Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { ConnectOmni } from './omni-connect.js'
+import { ConnectPrompt, openConnectWizard } from './wizard.js'
 import { UpdateOffer } from './omni-update.js'
 import { LiveConnectFlow } from './channel-connect-live.js'
 import {
@@ -75,7 +75,9 @@ export function PreviewChip() {
       h('span', { className: 'oc-live-dot', 'aria-hidden': true }), source.error ? t('Live · last refresh failed') : t('Live · {origin}', { origin: source.origin }))
   }
   const missing = source.missing?.join(', ')
-  return h('span', { className: 'oc-preview-chip', title: missing ? t('Sample data until DSH has {missing}.', { missing }) : t('Nothing here reaches a real channel yet.') }, t('Preview · sample data'))
+  // Sample data until an Omni is linked: the chip opens the Connect wizard.
+  return h('button', { type: 'button', className: 'oc-preview-chip oc-chip-action', onClick: openConnectWizard, title: missing ? t('Sample data until DSH has {missing}.', { missing }) : t('Nothing here reaches a real channel yet.') },
+    t('Preview · sample data'), h('span', { className: 'oc-chip-go' }, t('Connect your Omni')))
 }
 
 // -------------------------------------------------------------------------
@@ -176,9 +178,9 @@ function Overview({ state, omni }) {
         h('h1', null, t('Channels'), h(PreviewChip)),
         h('p', null, t('Connect the apps people already use to reach you. Omni answers there, and every chat shows up under your Bots.'))),
       h('button', { type: 'button', className: 'oc-primary', disabled: !canWrite(state), title: canWrite(state) ? undefined : t('This device\'s key can\'t change channels; ask your Omni\'s owner.'), onClick: () => omni.showPage({ view: 'connect', type: null, step: 0 }) }, h(PlusIcon), t('Add channel'))),
-    // Sample data means no Omni is linked yet: connecting one comes first. A linked one says
-    // when an update is out.
-    state.preview ? h(ConnectOmni) : h(UpdateOffer, { compact: true }),
+    // Sample data means no Omni is linked yet: connecting one comes first, in the Connect
+    // wizard (wizard.js). A linked one says when an update is out.
+    state.preview ? h(ConnectPrompt) : h(UpdateOffer, { compact: true }),
     troubled.map(channel => h('button', { key: channel.id, type: 'button', className: 'oc-callout', 'data-tone': STATUS[channel.status].tone, onClick: () => omni.showPage({ view: 'channel', channelId: channel.id }) },
       h(Tile, { type: channel.type, size: 36 }),
       h('span', { className: 'oc-callout-text' },
@@ -468,6 +470,12 @@ ${TONES}
 .oc-pill[data-tone=busy] .oc-pill-dot,.oc-filter .oc-dot[data-tone=busy]{animation:oc-pulse 1.2s ease-in-out infinite}
 @keyframes oc-pulse{50%{opacity:.35}}
 .oc-preview-chip{display:inline-flex;align-items:center;height:22px;padding:0 9px;margin-left:10px;border-radius:999px;border:1px dashed var(--bt-line-2);color:var(--bt-ink-2);font-size:11.5px;font-weight:500;vertical-align:middle;white-space:nowrap}
+.oc-chip-action{cursor:pointer;font:inherit;font-size:11.5px;background:none;gap:6px}
+.oc-chip-action:hover{border-color:var(--bt-accent);color:var(--bt-ink)}
+.oc-chip-go{color:var(--bt-accent);font-weight:600}
+.oc-connect-prompt{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin:4px 0 22px;padding:18px 20px;border:1px solid var(--bt-line);border-radius:16px;background:color-mix(in srgb,var(--bt-accent) 6%,var(--bt-surface,transparent))}
+.oc-connect-prompt strong{font-size:15px;font-weight:600}
+.oc-connect-prompt p{margin:4px 0 0;color:var(--bt-ink-2);font-size:13px}
 
 /* Chat avatars carry a small channel tile in the corner. */
 .oc-ava{position:relative;flex:none;display:inline-grid;place-items:center;border-radius:50%;background:hsl(var(--oc-hue) 55% 88%);color:hsl(var(--oc-hue) 45% 30%)}

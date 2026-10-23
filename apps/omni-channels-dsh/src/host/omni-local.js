@@ -9,6 +9,8 @@
 // Installing takes minutes the first time (Postgres comes down too), so it runs as a job:
 // the page starts it once the person confirms, then polls its progress. One job at a time;
 // it lives in memory, and a restart drops it (the CLI's install is safe to run again).
+// The Connect step runs the same install in a terminal the person watches instead
+// (omni-terminal.js), with this module's Bun.
 import { spawn as spawnProcess } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { accessSync, constants, readFileSync, statSync } from 'node:fs'
@@ -17,8 +19,10 @@ import { homedir } from 'node:os'
 import { delimiter, dirname, isAbsolute, join, relative } from 'node:path'
 import { inflateRawSync } from 'node:zlib'
 import { z } from 'zod'
-import { linkWithKey } from './omni-discover.js'
+import { linkWithKey, sandboxHome } from './omni-discover.js'
 import { PLUGIN_VERSION } from './version.js'
+
+export { sandboxHome }
 
 // The Bun this plugin downloads when the computer has none, and where its release lives.
 export const BUN_VERSION = '1.4.2'
@@ -53,7 +57,6 @@ const InstallPayload = z.object({ confirm: z.literal(true).optional(), update: z
 
 // <OMNI_HOME>, else ~/.omni: the desktop app sets OMNI_HOME to its own home.
 const omniRoot = ({ env, home }) => env.OMNI_HOME || join(home, '.omni')
-export const sandboxHome = ctx => join(omniRoot(ctx), 'sandbox')
 const ownBun = ctx => join(omniRoot(ctx), 'runtime', 'bun', 'bun')
 
 function executable(path) {
