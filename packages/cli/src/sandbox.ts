@@ -931,8 +931,13 @@ export async function installSandbox(
   ensureLayout(layout);
   const previous = readSandboxState(layout);
   const packageSpec = opts.packageSpec?.trim() || VERSION;
+  const atLogin = opts.atLogin ?? previous?.atLogin ?? false;
   const running = livePid(layout, deps) !== null;
-  if (running && previous && (previous.packageSpec !== packageSpec || previous.bun !== deps.bun)) {
+  // A supervisor runs either on its own or under its launchd/systemd unit. Switching
+  // at-login restarts it under the other, or launchd/systemd would not bring it back.
+  const restart =
+    previous && (previous.packageSpec !== packageSpec || previous.bun !== deps.bun || previous.atLogin !== atLogin);
+  if (running && restart) {
     await stopSandbox({ home: opts.home, defaultHome: opts.defaultHome }, deps);
   }
 
@@ -948,7 +953,7 @@ export async function installSandbox(
     packageSpec,
     bun: deps.bun,
     ports: previous?.ports ?? (await pickPorts(deps)),
-    atLogin: opts.atLogin ?? previous?.atLogin ?? false,
+    atLogin,
     createdAt: previous?.createdAt ?? now,
     updatedAt: now,
   };

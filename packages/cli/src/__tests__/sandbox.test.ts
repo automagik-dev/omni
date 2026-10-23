@@ -290,13 +290,42 @@ describe('at login', () => {
     expect(detached).toHaveLength(0);
   });
 
-  test('linux: a sandbox already running gets its unit enabled for the next login', async () => {
-    const { deps, runs } = fakeDeps();
+  test('linux: a sandbox already running on its own restarts under its unit', async () => {
+    const { deps, runs, kills, detached } = fakeDeps();
     await installSandbox({ home, defaultHome }, deps);
     runs.length = 0;
     await installSandbox({ home, defaultHome, atLogin: true }, deps);
     const names = sandboxUnitNames(home, defaultHome);
-    expect(runs.map((call) => call.cmd.join(' '))).toContain(`systemctl --user enable ${names.systemdUnit}`);
+    const commands = runs.map((call) => call.cmd.join(' '));
+    expect(kills).toEqual([[4242, 'SIGTERM']]);
+    expect(commands).toContain(`systemctl --user enable ${names.systemdUnit}`);
+    expect(commands).toContain(`systemctl --user enable --now ${names.systemdUnit}`);
+    expect(detached).toHaveLength(1); // only the first, unit-less start
+  });
+
+  test('macOS: a sandbox already running on its own restarts under launchd', async () => {
+    const { deps, runs, kills, detached } = fakeDeps({ platform: 'darwin' });
+    const run = deps.run;
+    // Nothing is loaded in the GUI domain until the agent is bootstrapped.
+    deps.run = async (cmd, opts) => {
+      const result = await run(cmd, opts);
+      return cmd[0] === 'launchctl' && cmd[1] === 'print' ? { ...result, code: 113 } : result;
+    };
+    await installSandbox({ home, defaultHome }, deps);
+    runs.length = 0;
+    await installSandbox({ home, defaultHome, atLogin: true }, deps);
+    const names = sandboxUnitNames(home, defaultHome);
+    const plist = join(userHome, 'Library', 'LaunchAgents', `${names.label}.plist`);
+    expect(kills).toEqual([[4242, 'SIGTERM']]);
+    expect(runs.map((call) => call.cmd.join(' '))).toContain(`launchctl bootstrap gui/501 ${plist}`);
+    expect(detached).toHaveLength(1);
+  });
+
+  test('a reinstall that keeps at-login as it was leaves the running supervisor alone', async () => {
+    const { deps, kills } = fakeDeps();
+    await installSandbox({ home, defaultHome }, deps);
+    await installSandbox({ home, defaultHome }, deps);
+    expect(kills).toEqual([]);
   });
 
   test('linux: no systemd user session fails the install instead of claiming at-login', async () => {
