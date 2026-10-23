@@ -1,3 +1,4 @@
+import { CliproxyPayload, DonePayload, RequestBody, Secret, parse } from './payloads.js'
 import { createProviderActions } from './providers.js'
 
 // The host endpoint the onboarding steps call: POST /api/omni-ai with
@@ -28,7 +29,6 @@ const DEEPSEEK_ACCOUNT = 'deepseek-account-platform/default'
 const TIMEOUT_MS = 15_000
 const MAX_MODELS = 500
 const MAX_ID = 200
-const MAX_KEY = 4096
 // A model listing is small; a gateway that sends more is not read past this.
 const MAX_BODY = 2 * 1024 * 1024
 
@@ -139,7 +139,7 @@ export function createActions(ctx, { fetch: fetchImpl = globalThis.fetch } = {})
     },
 
     async done(payload) {
-      const stepId = typeof payload?.stepId === 'string' ? payload.stepId : ''
+      const stepId = parse(DonePayload, payload)?.stepId ?? ''
       const field = Object.hasOwn(FLAGS, stepId) ? FLAGS[stepId] : undefined
       if (field === undefined) throw invalid(`No onboarding step "${stepId.slice(0, 40)}"`)
       await ctx.settings.update(ENTRY, { [field]: true })
@@ -147,10 +147,11 @@ export function createActions(ctx, { fetch: fetchImpl = globalThis.fetch } = {})
     },
 
     async cliproxy(payload, signal) {
-      const baseURL = cleanBaseUrl(payload?.baseURL)
+      const fields = parse(CliproxyPayload, payload)
+      const baseURL = cleanBaseUrl(fields?.baseURL)
       if (baseURL === null) throw invalid('Type the gateway address as an http:// or https:// URL, such as http://localhost:8317/v1.')
-      const apiKey = typeof payload?.apiKey === 'string' ? payload.apiKey.trim() : ''
-      if (apiKey === '' || apiKey.length > MAX_KEY || /\s/.test(apiKey)) throw invalid('Paste the gateway\'s API key.')
+      const apiKey = parse(Secret, fields?.apiKey)
+      if (apiKey === undefined) throw invalid('Paste the gateway\'s API key.')
       const piAi = entryOf(describeAll(ctx), PI_AI)
       if (piAi === undefined) throw refused('This DSH has no pi-ai entry (llm-pi-ai) to hold the route.')
       const models = await listModels(fetchImpl, baseURL, apiKey, signal)
@@ -196,7 +197,8 @@ export function install(ctx, deps) {
     fetch: async (request) => {
       let body
       try { body = await request.json() } catch { body = {} }
-      const result = await handle(String(body?.endpoint ?? ''), body?.payload, request.signal)
+      const asked = parse(RequestBody, body) ?? { endpoint: '' }
+      const result = await handle(asked.endpoint, asked.payload, request.signal)
       return new Response(JSON.stringify(result), { status: 200, headers: { 'content-type': 'application/json' } })
     },
   }), 'omni-ai: api route')

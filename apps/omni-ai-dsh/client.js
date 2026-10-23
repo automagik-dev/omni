@@ -355,16 +355,21 @@ function SubscriptionSignIn({ tile, onBack, onSaved, glitch }) {
           const device = await post("oauth/device/start", { provider: tile.provider, index: slot });
           if (!live) return;
           setStep({ code: device.userCode, url: device.authUrl });
+          const every = Math.max(device.intervalMs ?? 5e3, 2e3);
           const poll = async () => {
             try {
               const out = await post("oauth/device/poll", { state: device.state });
               if (out.status === "authorized") return done();
-              if (live) timer = setTimeout(poll, Math.max(device.intervalMs ?? 5e3, 2e3));
+              if (!live) return;
+              if (out.status === "expired") return setProblem("The code expired before the sign-in finished. Go back and start again.");
+              setProblem(null);
             } catch (error) {
-              if (live) setProblem(error.message);
+              if (!live) return;
+              setProblem(error.message);
             }
+            timer = setTimeout(poll, every);
           };
-          timer = setTimeout(poll, Math.max(device.intervalMs ?? 5e3, 2e3));
+          timer = setTimeout(poll, every);
         } else if (tile.kind === "browser") {
           const started = await request(`oauth/start?provider=${encodeURIComponent(tile.provider)}&index=${slot}`);
           if (!live) return;
@@ -599,7 +604,7 @@ function SignIn({ tile, onBack, onSaved, glitch }) {
           onSaved({ name: tile.name });
           return;
         }
-        if (next.status === "running" || next.status === "none") timer = setTimeout(() => poll(false), 1e3);
+        if (next.status === "running") timer = setTimeout(() => poll(false), 1e3);
       } catch (error) {
         if (live) setProblem(error.message);
       }
@@ -626,7 +631,8 @@ function SignIn({ tile, onBack, onSaved, glitch }) {
   };
   const notice = attempt?.notice;
   const prompt = attempt?.prompt;
-  const ended = attempt && ["cancelled", "failed"].includes(attempt.status);
+  const ended = attempt && ["cancelled", "failed", "none"].includes(attempt.status);
+  const endedText = { failed: `The sign-in did not finish: ${attempt?.error}`, cancelled: "The sign-in was cancelled.", none: "The sign-in stopped before it finished. Go back and start it again." };
   return (0, import_react4.createElement)(
     "div",
     { className: "oai-signin" },
@@ -656,7 +662,7 @@ function SignIn({ tile, onBack, onSaved, glitch }) {
       (0, import_react4.createElement)("button", { type: "submit", className: "oai-primary" }, "Continue")
     ) : null,
     attempt?.status === "running" && !prompt ? (0, import_react4.createElement)("p", { className: "oai-muted oai-waiting" }, "Waiting for you to finish signing in…") : null,
-    ended ? (0, import_react4.createElement)("p", { className: "oai-error", role: "alert" }, attempt.status === "failed" ? `The sign-in did not finish: ${attempt.error}` : "The sign-in was cancelled.") : null,
+    ended ? (0, import_react4.createElement)("p", { className: "oai-error", role: "alert" }, endedText[attempt.status]) : null,
     problem ? (0, import_react4.createElement)("p", { className: "oai-error", role: "alert" }, problem) : null,
     (0, import_react4.createElement)("button", { type: "button", className: "oai-quiet", onClick: ended || problem ? onBack : cancel }, ended || problem ? "Back" : "Cancel")
   );
