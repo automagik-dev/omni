@@ -92,22 +92,6 @@
           }
         }
       }
-    },
-    {
-      "include": ["apps/ui/**"],
-      "linter": {
-        "rules": {
-          "complexity": {
-            "noExcessiveCognitiveComplexity": "off"
-          },
-          "style": {
-            "noNonNullAssertion": "off"
-          },
-          "a11y": {
-            "useSemanticElements": "off"
-          }
-        }
-      }
     }
   ]
 }

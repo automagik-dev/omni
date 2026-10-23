@@ -18,7 +18,6 @@
 - Shared types → `@omni/core` (`packages/core/src/types/whatsapp-business.ts`).
 - REST routes for OAuth / templates → `@omni/api` (`packages/api/src/routes/v2/whatsapp-business.ts`, `routes/v2/templates.ts`).
 - Webhook route mount → `@omni/api` (`packages/api/src/app.ts`).
-- Frontend UI → `apps/ui`.
 - Sentry scrubbing → `@omni/api` (`packages/api/src/lib/sentry-scrub.ts`).
 
 This package is a **plugin**, not a service. It exposes `WhatsAppBusinessPlugin` as default export, registered by the bundled server entry.
