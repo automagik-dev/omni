@@ -51,6 +51,13 @@ export const headerButtons = registry()
 // `Component({ bot, roster, actions, run, Card, Row, SwitchRow })`.
 export const botSettings = registry()
 
+// Composer packs: what a Bot's composer offers for the AI the Bot runs on. The first pack
+// (lowest `order`) that matches the Bot's provider and is available wins; none means
+// Omni's own composer, which shows no permission, plan or model control. See
+// composer-packs.js for the shape and the packs Omni brings (Claude Code, thinking levels).
+export const composerPacks = registry()
+export const registerComposerPack = pack => composerPacks.register(pack)
+
 // Shell installers: each one runs while the Bot shell is up (Bot mode) and comes off with
 // it, so what it registers follows the surface like Omni's own panels. It gets the
 // surface's `face`, `shadow` (a slot registration on the shell) and `installStyles`, and
