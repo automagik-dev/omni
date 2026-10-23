@@ -237,11 +237,13 @@ export function ModelChoiceDock({ sessionId, useRoster, actions }) {
     error ? h('div', { className: 'bt-secret-error bt-model-error', role: 'alert' }, error) : null)
 }
 
-// Ways to get a first model. The DeepSeek sign-in exists only where the shell carries
-// its account plugin (the Desktop); the API key and custom models use the shell's
-// own editors.
+// Ways to get a first model. Connect an AI is the welcome plugin's step (@automagik/omni-ai-dsh:
+// a subscription sign-in, an API key or a gateway); the DeepSeek sign-in exists only where
+// the shell carries its account plugin (the Desktop); the API key and custom models use the
+// shell's own editors.
 function setupChoices(actions) {
   return [
+    [t('Connect an AI: ChatGPT, Claude, Kimi or an API key'), () => openHarnessOnboarding('omni-connect-ai')],
     actions.canSignIn?.() ? [t('Sign in to DeepSeek'), () => actions.signIn()] : null,
     [t('Enter a DeepSeek API key'), () => openHarnessOnboarding('deepseek-official')],
     [t('Open settings to set up a custom model'), openHarnessSettings],

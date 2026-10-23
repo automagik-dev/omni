@@ -94,6 +94,12 @@ export function bodyOf(def, paint, flat = false) {
   if (def.path) return `<g fill-rule="evenodd"><path d="${def.path}" fill="${paint}"/>${flat ? '' : def.layers}</g>`
   try { return def.body(paint) } catch { return '' }
 }
+// What the eyes look like: a dark pupil with a catchlight, drawn over the hole the mask cuts,
+// with the same classes as the mask's eyes so every blink, glance and squint moves both.
+const PUPIL = '#0a0f1f'
+const pupilMarkup = ([cx, cy, w, h, tilt]) => `<g transform="translate(${cx} ${cy}) rotate(${tilt})"><g class="bt-eye"><rect x="${-w / 2}" y="${-h / 2}" width="${w}" height="${h}" rx="${w / 2}" fill="${PUPIL}"/><circle cx="${w * 0.12}" cy="${-h * 0.24}" r="${w * 0.3}" fill="#fff"/><circle cx="${-w * 0.16}" cy="${h * 0.22}" r="${w * 0.12}" fill="#fff" fill-opacity=".7"/></g></g>`
+// Cheeks, just under and outside each eye.
+const blushMarkup = ([cx, cy, w, h, tilt]) => `<ellipse cx="${cx}" cy="${cy + h * 0.56}" rx="${w * 0.78}" ry="${w * 0.4}" transform="rotate(${tilt} ${cx} ${cy})" fill="#ff5fb8" fill-opacity=".42"/>`
 const eyeMarkup = ([cx, cy, w, h, tilt]) => `<g transform="translate(${cx} ${cy}) rotate(${tilt})"><rect class="bt-eye" x="${-w / 2}" y="${-h / 2}" width="${w}" height="${h}" rx="${w / 2}"/></g>`
 // A closed, happy eye (an upturned arc) in the same spot, shown while the mark is petted.
 const happyEyeMarkup = ([cx, cy, w, h, tilt]) => `<g transform="translate(${cx} ${cy}) rotate(${tilt})"><path class="bt-eye-happy" opacity="0" d="M${-w * 0.62} ${h * 0.14}Q0 ${-h * 0.42} ${w * 0.62} ${h * 0.14}" fill="none" stroke="#000" stroke-width="${w * 0.5}" stroke-linecap="round"/></g>`
@@ -115,9 +121,14 @@ export function characterMarkup(shape, color) {
     // The eyes sit in the mask, untransformed by their placement, so CSS blinks and
     // glances never replace where they sit.
     const eyes = `<g class="bt-gaze"><g class="bt-eyes" fill="#000">${def.eyes.map(eyeMarkup).join('')}${def.eyes.map(happyEyeMarkup).join('')}</g></g>`
-    const stops = GRADIENTS[color]
-    const gradient = stops ? `<linearGradient id="${MASK_ID}g" gradientUnits="userSpaceOnUse" x1="18" y1="10" x2="78" y2="92">${stops.map(([offset, value]) => `<stop offset="${offset}" stop-color="${value}"/>`).join('')}</linearGradient>` : ''
-    const body = `<g mask="url(#${MASK_ID})">${bodyOf(def, stops ? `url(#${MASK_ID}g)` : inkFill(color))}</g>`
+    // The body is lit from the top left: a gradient from a paler ink through the ink to a
+    // deeper one (a gradient color keeps its own stops).
+    const ink = inkFill(color)
+    const stops = GRADIENTS[color] ?? [[0, `color-mix(in srgb, ${ink} 58%, #fff)`], [0.5, ink], [1, `color-mix(in srgb, ${ink} 72%, #000)`]]
+    const box = def.size
+    const gradient = `<linearGradient id="${MASK_ID}g" gradientUnits="userSpaceOnUse" x1="${box * 0.18}" y1="${box * 0.08}" x2="${box * 0.8}" y2="${box * 0.95}">${stops.map(([offset, value]) => `<stop offset="${offset}" style="stop-color:${value}"/>`).join('')}</linearGradient>`
+    const face = `<g class="bt-gaze"><g class="bt-eyes">${def.eyes.map(pupilMarkup).join('')}${def.eyes.map(happyEyeMarkup).join('').replaceAll('stroke="#000"', `stroke="${PUPIL}"`)}</g></g>`
+    const body = `<g mask="url(#${MASK_ID})">${bodyOf(def, `url(#${MASK_ID}g)`)}</g>${def.eyes.map(blushMarkup).join('')}${face}`
     markup = `<defs>${gradient}<mask id="${MASK_ID}" ${maskBox(def.size)}>${holes(def, eyes)}</mask></defs><g class="bt-b">${def.wrap ? `<g transform="${def.wrap}">${body}</g>` : body}</g>`
     markupCache.set(key, markup)
   }

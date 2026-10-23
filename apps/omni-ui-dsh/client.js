@@ -173,6 +173,7 @@ var ZH = {
   "Hi, I'm {name}. I don't have a model yet. How do you want to set one up?": "你好，我是 {name}。我还没有可用的模型。你想怎么配置？",
   "Hi, I'm {name}. Pick a model for me first. You can change it later in my details.": "你好，我是 {name}。先给我选一个模型吧，以后可以在我的详情里换。",
   "Mode": "模式",
+  "Connect an AI: ChatGPT, Claude, Kimi or an API key": "连接 AI：ChatGPT、Claude、Kimi 或 API 密钥",
   "Sign in to DeepSeek": "登录 DeepSeek 账号",
   "Enter a DeepSeek API key": "填入 DeepSeek API key",
   "Open settings to set up a custom model": "打开设置配置自定义模型",
@@ -1637,7 +1638,7 @@ body[data-bt-motion=quiet] :is(.op-task,.op-task-said,.op-task-summary,.op-orbit
 
 // src/client/inks.js
 var INKS = {
-  deepseek: ["#0F9D8F", "#2DD4BF"],
+  deepseek: ["#0891B2", "#22D3EE"],
   charcoal: ["#141416", "#F1F2F4"],
   graphite: ["#2D2D2D", "#D6D6DA"],
   rose: ["#EC2F6B", "#FF5A7A"],
@@ -1745,6 +1746,9 @@ function bodyOf(def, paint, flat = false) {
     return "";
   }
 }
+var PUPIL = "#0a0f1f";
+var pupilMarkup = ([cx, cy, w, h39, tilt]) => `<g transform="translate(${cx} ${cy}) rotate(${tilt})"><g class="bt-eye"><rect x="${-w / 2}" y="${-h39 / 2}" width="${w}" height="${h39}" rx="${w / 2}" fill="${PUPIL}"/><circle cx="${w * 0.12}" cy="${-h39 * 0.24}" r="${w * 0.3}" fill="#fff"/><circle cx="${-w * 0.16}" cy="${h39 * 0.22}" r="${w * 0.12}" fill="#fff" fill-opacity=".7"/></g></g>`;
+var blushMarkup = ([cx, cy, w, h39, tilt]) => `<ellipse cx="${cx}" cy="${cy + h39 * 0.56}" rx="${w * 0.78}" ry="${w * 0.4}" transform="rotate(${tilt} ${cx} ${cy})" fill="#ff5fb8" fill-opacity=".42"/>`;
 var eyeMarkup = ([cx, cy, w, h39, tilt]) => `<g transform="translate(${cx} ${cy}) rotate(${tilt})"><rect class="bt-eye" x="${-w / 2}" y="${-h39 / 2}" width="${w}" height="${h39}" rx="${w / 2}"/></g>`;
 var happyEyeMarkup = ([cx, cy, w, h39, tilt]) => `<g transform="translate(${cx} ${cy}) rotate(${tilt})"><path class="bt-eye-happy" opacity="0" d="M${-w * 0.62} ${h39 * 0.14}Q0 ${-h39 * 0.42} ${w * 0.62} ${h39 * 0.14}" fill="none" stroke="#000" stroke-width="${w * 0.5}" stroke-linecap="round"/></g>`;
 var maskBox = (size) => `maskUnits="userSpaceOnUse" x="${-size}" y="${-size}" width="${size * 3}" height="${size * 3}"`;
@@ -1759,9 +1763,12 @@ function characterMarkup(shape, color) {
   if (markup === void 0) {
     const def = shapeOf(shape);
     const eyes = `<g class="bt-gaze"><g class="bt-eyes" fill="#000">${def.eyes.map(eyeMarkup).join("")}${def.eyes.map(happyEyeMarkup).join("")}</g></g>`;
-    const stops = GRADIENTS[color];
-    const gradient = stops ? `<linearGradient id="${MASK_ID}g" gradientUnits="userSpaceOnUse" x1="18" y1="10" x2="78" y2="92">${stops.map(([offset, value]) => `<stop offset="${offset}" stop-color="${value}"/>`).join("")}</linearGradient>` : "";
-    const body = `<g mask="url(#${MASK_ID})">${bodyOf(def, stops ? `url(#${MASK_ID}g)` : inkFill(color))}</g>`;
+    const ink = inkFill(color);
+    const stops = GRADIENTS[color] ?? [[0, `color-mix(in srgb, ${ink} 58%, #fff)`], [0.5, ink], [1, `color-mix(in srgb, ${ink} 72%, #000)`]];
+    const box = def.size;
+    const gradient = `<linearGradient id="${MASK_ID}g" gradientUnits="userSpaceOnUse" x1="${box * 0.18}" y1="${box * 0.08}" x2="${box * 0.8}" y2="${box * 0.95}">${stops.map(([offset, value]) => `<stop offset="${offset}" style="stop-color:${value}"/>`).join("")}</linearGradient>`;
+    const face = `<g class="bt-gaze"><g class="bt-eyes">${def.eyes.map(pupilMarkup).join("")}${def.eyes.map(happyEyeMarkup).join("").replaceAll('stroke="#000"', `stroke="${PUPIL}"`)}</g></g>`;
+    const body = `<g mask="url(#${MASK_ID})">${bodyOf(def, `url(#${MASK_ID}g)`)}</g>${def.eyes.map(blushMarkup).join("")}${face}`;
     markup = `<defs>${gradient}<mask id="${MASK_ID}" ${maskBox(def.size)}>${holes(def, eyes)}</mask></defs><g class="bt-b">${def.wrap ? `<g transform="${def.wrap}">${body}</g>` : body}</g>`;
     markupCache.set(key, markup);
   }
@@ -1784,10 +1791,12 @@ var DEFAULT_MASK = maskOf(FALLBACK_SHAPE);
 // src/client/themes.js
 var THEME_KEYS = ["bg", "sidebar", "bubble", "card", "text", "user", "userText", "accent"];
 var THEMES = {
+  // Automagik's duality: cyan is Omni (its ink, the accent, actions), magenta is you (your
+  // messages), on a deep-ink night sky. The id stays `deepseek` so saved choices keep it.
   deepseek: {
-    label: "Deep ocean",
-    light: { bg: "#f3fbfa", sidebar: "#e8f6f3", bubble: "#dcefea", card: "#ffffff", text: "#0c2630", user: "#0b3d45", userText: "#f3fbfa", accent: "#0f9d8f" },
-    dark: { bg: "#0a1820", sidebar: "#0e212b", bubble: "#163342", card: "#112a36", text: "#e4f4f2", user: "#2dd4bf", userText: "#0a1820", accent: "#2dd4bf" }
+    label: "Omni",
+    light: { bg: "#f7f8fc", sidebar: "#eef0f8", bubble: "#e7eaf5", card: "#ffffff", text: "#12152b", user: "#c21fb4", userText: "#ffffff", accent: "#0891b2" },
+    dark: { bg: "#090c18", sidebar: "#0d1122", bubble: "#171c35", card: "#11162c", text: "#e9ecff", user: "#cc22c0", userText: "#ffffff", accent: "#22d3ee" }
   },
   mono: {
     label: "Mono",
@@ -7224,6 +7233,7 @@ function ModelChoiceDock({ sessionId, useRoster, actions }) {
 }
 function setupChoices(actions) {
   return [
+    [t("Connect an AI: ChatGPT, Claude, Kimi or an API key"), () => openHarnessOnboarding("omni-connect-ai")],
     actions.canSignIn?.() ? [t("Sign in to DeepSeek"), () => actions.signIn()] : null,
     [t("Enter a DeepSeek API key"), () => openHarnessOnboarding("deepseek-official")],
     [t("Open settings to set up a custom model"), openHarnessSettings]

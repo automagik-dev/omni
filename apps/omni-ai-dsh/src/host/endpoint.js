@@ -1,3 +1,5 @@
+import { createProviderActions } from './providers.js'
+
 // The host endpoint the onboarding steps call: POST /api/omni-ai with
 // { endpoint, payload }, answered { ok: true, value } or { ok: false, error }.
 //
@@ -6,6 +8,8 @@
 //   cliproxy { baseURL, apiKey }
 //                      lists the gateway's models with the key, stores the key in DSH's
 //                      credential store and writes a pi-ai route that references it
+//   providers, provider-key, signin-*
+//                      the tiles' own connections (src/host/providers.js)
 //
 // The key never enters settings, a reply or a log line: the route names it by the
 // env-shaped reference OMNI_AI_CLIPROXY_API_KEY, which DSH resolves per request.
@@ -170,7 +174,7 @@ export function createActions(ctx, { fetch: fetchImpl = globalThis.fetch } = {})
 }
 
 export function install(ctx, deps) {
-  const actions = createActions(ctx, deps)
+  const actions = { ...createActions(ctx, deps), ...createProviderActions(ctx) }
   const handle = async (endpoint, payload, signal) => {
     if (!Object.hasOwn(actions, endpoint)) return { ok: false, error: { code: 'omni-ai/not-found', message: `Unknown endpoint ${endpoint.slice(0, 40)}` } }
     try {
