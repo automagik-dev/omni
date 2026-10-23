@@ -117,6 +117,8 @@ var STAGE_CSS = `
 .oai-card .oai-code button.oai-ghost{display:inline-block;width:auto;margin:0;padding:8px 12px;font-size:13px}
 .oai-choices button{text-align:left}.oai-choices button span{display:block;font-size:12px;font-weight:400;color:var(--oai-ink2)}
 .oai-waiting::before{content:"";display:inline-block;width:9px;height:9px;margin-right:8px;border-radius:50%;background:var(--oai-accent-2);animation:oai-caret 1s steps(1) infinite}
+.oai-card button.oai-tile-on{border-color:rgba(34,211,238,.55)}
+.oai-tile em.oai-on{display:inline-block;margin-top:6px;padding:2px 8px;border-radius:999px;font:600 10px/1.6 ui-monospace,monospace;letter-spacing:.08em;text-transform:uppercase;font-style:normal;color:#06060f;background:var(--oai-accent)}
 @media (prefers-reduced-motion:reduce){.oai-overlay *,.oai-overlay::before,.oai-overlay::after{animation:none!important;transition:none!important}}
 `;
 
@@ -136,10 +138,10 @@ function railSteps(current, scope = globalThis) {
 }
 var FLAG_OF = { "omni-welcome": "welcomeDone", "omni-connect-ai": "connectAiDone" };
 var reducedMotion = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
-async function gate({ stepId, explicit, complete }, request = call) {
+async function gate({ stepId, explicit, complete }, request2 = call) {
   let state = {};
   try {
-    state = await request("state") ?? {};
+    state = await request2("state") ?? {};
   } catch {
   }
   if (explicit !== true && state[FLAG_OF[stepId]] === true) {
@@ -148,15 +150,15 @@ async function gate({ stepId, explicit, complete }, request = call) {
   }
   return state;
 }
-async function finish({ stepId, complete }, request = call) {
+async function finish({ stepId, complete }, request2 = call) {
   try {
-    await request("done", { stepId });
+    await request2("done", { stepId });
   } catch {
   }
   complete();
 }
-async function finishInto(props, section, request = call) {
-  await finish(props, request);
+async function finishInto(props, section, request2 = call) {
+  await finish(props, request2);
   props.openSection(section);
 }
 function useGate(props) {
@@ -290,8 +292,142 @@ function WelcomeStep(props) {
   );
 }
 
-// src/client/connect-ai.js
+// src/client/subscriptions.js
 var import_react3 = require("react");
+var BASE = "dsh-subscriptions";
+var SUBSCRIPTION_TILES = [
+  { id: "grok", provider: "grok", name: "Grok", note: "SuperGrok or X Premium", kind: "device" },
+  { id: "perplexity", provider: "perplexity", name: "Perplexity", note: "Perplexity Pro", kind: "browser" },
+  { id: "jetbrains", provider: "jetbrains", name: "JetBrains AI", note: "Your JetBrains AI plan", kind: "browser" },
+  { id: "cursor", provider: "cursor", name: "Cursor", note: "Your Cursor plan", kind: "token", where: "https://cursor.com/settings", what: "Cursor session token" },
+  { id: "kiro", provider: "kiro", name: "Kiro", note: "AWS Kiro", kind: "token", where: "https://kiro.dev", what: "Kiro token" },
+  { id: "glm", provider: "glm", name: "Zhipu GLM", note: "GLM coding plan", kind: "token", where: "https://bigmodel.cn/usercenter/proj-mgmt/apikeys", what: "GLM API key" },
+  { id: "qwen", provider: "qwen", name: "Qwen", note: "Alibaba Bailian", kind: "token", where: "https://bailian.console.aliyun.com/", what: "DashScope API key" },
+  { id: "cody", provider: "cody", name: "Sourcegraph Cody", note: "Cody Pro", kind: "token", where: "https://sourcegraph.com/user/settings/tokens", what: "Sourcegraph access token" },
+  { id: "replit", provider: "replit", name: "Replit", note: "Replit Core", kind: "token", where: "https://replit.com/account", what: "Replit token" }
+];
+async function request(path, init) {
+  let response;
+  try {
+    response = await fetch(`${BASE}/${path}`, { credentials: "same-origin", ...init });
+  } catch {
+    throw new Error("Could not reach the subscriptions plugin.");
+  }
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok || body.ok === false) throw new Error(body?.error?.message ?? `HTTP ${response.status}`);
+  return body;
+}
+var post = (path, payload) => request(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+async function subscriptionAccounts() {
+  try {
+    return (await request("config")).accounts ?? [];
+  } catch {
+    return null;
+  }
+}
+function nextIndex(accounts, provider) {
+  const own = (accounts ?? []).filter((account) => account.provider === provider);
+  const free = own.find((account) => !account.configured);
+  if (free) return free.index;
+  return own.reduce((top, account) => Math.max(top, account.index), 0) + 1;
+}
+var signedInCount = (accounts, provider) => (accounts ?? []).filter((account) => account.provider === provider && account.configured).length;
+function SubscriptionSignIn({ tile, onBack, onSaved, glitch }) {
+  const [step, setStep] = (0, import_react3.useState)(null);
+  const [problem, setProblem] = (0, import_react3.useState)(null);
+  const [value, setValue] = (0, import_react3.useState)("");
+  const [busy, setBusy] = (0, import_react3.useState)(false);
+  const [index, setIndex] = (0, import_react3.useState)(null);
+  (0, import_react3.useEffect)(() => {
+    let live = true;
+    let timer = 0;
+    const done = () => {
+      if (!live) return;
+      glitch();
+      onSaved({ name: tile.name });
+    };
+    const start = async () => {
+      try {
+        const slot = nextIndex(await subscriptionAccounts(), tile.provider);
+        if (!live) return;
+        setIndex(slot);
+        if (tile.kind === "device") {
+          const device = await post("oauth/device/start", { provider: tile.provider, index: slot });
+          if (!live) return;
+          setStep({ code: device.userCode, url: device.authUrl });
+          const poll = async () => {
+            try {
+              const out = await post("oauth/device/poll", { state: device.state });
+              if (out.status === "authorized") return done();
+              if (live) timer = setTimeout(poll, Math.max(device.intervalMs ?? 5e3, 2e3));
+            } catch (error) {
+              if (live) setProblem(error.message);
+            }
+          };
+          timer = setTimeout(poll, Math.max(device.intervalMs ?? 5e3, 2e3));
+        } else if (tile.kind === "browser") {
+          const started = await request(`oauth/start?provider=${encodeURIComponent(tile.provider)}&index=${slot}`);
+          if (!live) return;
+          setStep({ url: started.url, state: started.state, autoCatch: started.autoCatch });
+          const watch = async () => {
+            const accounts = await subscriptionAccounts();
+            if (accounts?.some((account) => account.provider === tile.provider && account.index === slot && account.configured)) return done();
+            if (live) timer = setTimeout(watch, 2e3);
+          };
+          timer = setTimeout(watch, 2e3);
+        } else setStep({ url: tile.where });
+      } catch (error) {
+        if (live) setProblem(error.message);
+      }
+    };
+    start();
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [tile.provider]);
+  const submit = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    setProblem(null);
+    try {
+      if (tile.kind === "token") await post("import-token", { provider: tile.provider, index, apiKey: value.trim() });
+      else {
+        const pasted = value.trim();
+        await post("oauth/complete", { provider: tile.provider, index, state: step.state, .../^https?:\/\//i.test(pasted) ? { url: pasted } : { code: pasted } });
+      }
+      setValue("");
+      glitch();
+      onSaved({ name: tile.name });
+    } catch (error) {
+      setProblem(error.message);
+      setBusy(false);
+    }
+  };
+  return (0, import_react3.createElement)(
+    "div",
+    { className: "oai-signin" },
+    !step && !problem ? (0, import_react3.createElement)("p", { className: "oai-muted" }, `Starting the ${tile.name} sign-in…`) : null,
+    step?.code ? (0, import_react3.createElement)("p", null, `Open ${tile.name}, sign in, and enter this code:`) : null,
+    step?.code ? (0, import_react3.createElement)("div", { className: "oai-code" }, (0, import_react3.createElement)("code", null, step.code)) : null,
+    step?.url && tile.kind !== "token" ? (0, import_react3.createElement)("a", { className: "oai-primary oai-button", href: step.url, target: "_blank", rel: "noreferrer" }, `Open ${tile.name} to sign in`) : null,
+    tile.kind === "device" && step ? (0, import_react3.createElement)("p", { className: "oai-muted oai-waiting" }, "Waiting for you to finish signing in…") : null,
+    tile.kind === "browser" && step ? (0, import_react3.createElement)("p", { className: "oai-muted" }, step.autoCatch ? "Sign in on their page; this finishes on its own. If it ends on a page that does not load, paste its address here." : "Sign in on their page, then paste the address it ends on here.") : null,
+    tile.kind === "token" && step ? (0, import_react3.createElement)("p", null, `Copy your ${tile.what} from `, (0, import_react3.createElement)("a", { className: "oai-link", href: tile.where, target: "_blank", rel: "noreferrer" }, tile.name), " and paste it here. It stays in DSH's credential store on this computer.") : null,
+    step && tile.kind !== "device" ? (0, import_react3.createElement)(
+      "form",
+      { onSubmit: submit },
+      (0, import_react3.createElement)("label", { htmlFor: "oai-sub-value" }, tile.kind === "token" ? tile.what : "The address you landed on"),
+      (0, import_react3.createElement)("input", { id: "oai-sub-value", type: tile.kind === "token" ? "password" : "text", required: true, autoComplete: "off", spellCheck: false, value, onChange: (e) => setValue(e.target.value) }),
+      (0, import_react3.createElement)("button", { type: "submit", className: tile.kind === "token" ? "oai-primary" : "", disabled: busy }, busy ? "Connecting…" : "Connect")
+    ) : null,
+    problem ? (0, import_react3.createElement)("p", { className: "oai-error", role: "alert" }, problem) : null,
+    (0, import_react3.createElement)("button", { type: "button", className: "oai-quiet", onClick: onBack }, "Back")
+  );
+}
+
+// src/client/connect-ai.js
+var import_react4 = require("react");
 var VENDOR_TERMS = "Personal use under the vendor's terms";
 var GROUPS = [
   {
@@ -324,24 +460,42 @@ var GROUPS = [
     ]
   }
 ];
-function Tiles({ onTile }) {
-  return GROUPS.map((group) => (0, import_react3.createElement)(
+var SUBSCRIPTIONS_GROUP = { title: "More subscriptions", terms: VENDOR_TERMS, tiles: SUBSCRIPTION_TILES.map((tile) => ({ ...tile, subscription: true })) };
+function connectionsOf(tile, status, accounts) {
+  if (tile.subscription) return signedInCount(accounts, tile.provider);
+  const own = status?.[tile.provider];
+  if (tile.signin) return own?.signedIn ? 1 : 0;
+  if (tile.key) return own?.key ? 1 : 0;
+  return 0;
+}
+function Tiles({ onTile, status, accounts }) {
+  const groups = accounts ? [GROUPS[0], SUBSCRIPTIONS_GROUP, ...GROUPS.slice(1)] : GROUPS;
+  return groups.map((group) => (0, import_react4.createElement)(
     "section",
     { key: group.title, className: "oai-group", "aria-label": group.title },
-    (0, import_react3.createElement)("h2", null, group.title),
-    group.terms ? (0, import_react3.createElement)("p", { className: "oai-terms oai-muted" }, group.terms) : null,
-    (0, import_react3.createElement)("div", { className: "oai-tiles" }, group.tiles.map((tile) => (0, import_react3.createElement)("button", {
-      key: tile.id,
-      type: "button",
-      className: "oai-tile",
-      onClick: () => onTile(tile)
-    }, (0, import_react3.createElement)("strong", null, tile.name), (0, import_react3.createElement)("span", null, tile.note))))
+    (0, import_react4.createElement)("h2", null, group.title),
+    group.terms ? (0, import_react4.createElement)("p", { className: "oai-terms oai-muted" }, group.terms) : null,
+    (0, import_react4.createElement)("div", { className: "oai-tiles" }, group.tiles.map((tile) => {
+      const count = connectionsOf(tile, status, accounts);
+      return (0, import_react4.createElement)(
+        "button",
+        {
+          key: tile.id,
+          type: "button",
+          className: count > 0 ? "oai-tile oai-tile-on" : "oai-tile",
+          onClick: () => onTile(tile)
+        },
+        (0, import_react4.createElement)("strong", null, tile.name),
+        (0, import_react4.createElement)("span", null, tile.note),
+        count > 0 ? (0, import_react4.createElement)("em", { className: "oai-on" }, count === 1 ? "Connected" : `${count} accounts`) : null
+      );
+    }))
   ));
 }
 function KeyForm({ tile, onBack, onSaved, glitch }) {
-  const [apiKey, setApiKey] = (0, import_react3.useState)("");
-  const [busy, setBusy] = (0, import_react3.useState)(false);
-  const [problem, setProblem] = (0, import_react3.useState)(null);
+  const [apiKey, setApiKey] = (0, import_react4.useState)("");
+  const [busy, setBusy] = (0, import_react4.useState)(false);
+  const [problem, setProblem] = (0, import_react4.useState)(null);
   const submit = async (event) => {
     event.preventDefault();
     setBusy(true);
@@ -356,23 +510,23 @@ function KeyForm({ tile, onBack, onSaved, glitch }) {
       setBusy(false);
     }
   };
-  return (0, import_react3.createElement)(
+  return (0, import_react4.createElement)(
     "form",
     { onSubmit: submit },
-    (0, import_react3.createElement)("p", null, "The key stays in DSH's own credential store on this computer. ", (0, import_react3.createElement)("a", { className: "oai-link", href: tile.key, target: "_blank", rel: "noreferrer" }, `Get a ${tile.name} key`), "."),
-    (0, import_react3.createElement)("label", { htmlFor: "oai-key" }, `${tile.name} API key`),
-    (0, import_react3.createElement)("input", { id: "oai-key", type: "password", required: true, autoComplete: "off", spellCheck: false, autoFocus: true, value: apiKey, onChange: (e) => setApiKey(e.target.value) }),
-    problem ? (0, import_react3.createElement)("p", { className: "oai-error", role: "alert", style: { marginTop: "10px" } }, problem) : null,
-    (0, import_react3.createElement)("button", { type: "submit", className: "oai-primary", disabled: busy }, busy ? "Connecting…" : "Connect"),
-    (0, import_react3.createElement)("button", { type: "button", className: "oai-quiet", disabled: busy, onClick: onBack }, "Back")
+    (0, import_react4.createElement)("p", null, "The key stays in DSH's own credential store on this computer. ", (0, import_react4.createElement)("a", { className: "oai-link", href: tile.key, target: "_blank", rel: "noreferrer" }, `Get a ${tile.name} key`), "."),
+    (0, import_react4.createElement)("label", { htmlFor: "oai-key" }, `${tile.name} API key`),
+    (0, import_react4.createElement)("input", { id: "oai-key", type: "password", required: true, autoComplete: "off", spellCheck: false, autoFocus: true, value: apiKey, onChange: (e) => setApiKey(e.target.value) }),
+    problem ? (0, import_react4.createElement)("p", { className: "oai-error", role: "alert", style: { marginTop: "10px" } }, problem) : null,
+    (0, import_react4.createElement)("button", { type: "submit", className: "oai-primary", disabled: busy }, busy ? "Connecting…" : "Connect"),
+    (0, import_react4.createElement)("button", { type: "button", className: "oai-quiet", disabled: busy, onClick: onBack }, "Back")
   );
 }
 function SignIn({ tile, onBack, onSaved, glitch }) {
-  const [attempt, setAttempt] = (0, import_react3.useState)(null);
-  const [problem, setProblem] = (0, import_react3.useState)(null);
-  const [answer, setAnswer] = (0, import_react3.useState)("");
-  const [copied, setCopied] = (0, import_react3.useState)(false);
-  (0, import_react3.useEffect)(() => {
+  const [attempt, setAttempt] = (0, import_react4.useState)(null);
+  const [problem, setProblem] = (0, import_react4.useState)(null);
+  const [answer, setAnswer] = (0, import_react4.useState)("");
+  const [copied, setCopied] = (0, import_react4.useState)(false);
+  (0, import_react4.useEffect)(() => {
     let live = true;
     let timer = 0;
     const poll = async (first) => {
@@ -413,45 +567,45 @@ function SignIn({ tile, onBack, onSaved, glitch }) {
   const notice = attempt?.notice;
   const prompt = attempt?.prompt;
   const ended = attempt && ["cancelled", "failed"].includes(attempt.status);
-  return (0, import_react3.createElement)(
+  return (0, import_react4.createElement)(
     "div",
     { className: "oai-signin" },
-    !attempt && !problem ? (0, import_react3.createElement)("p", { className: "oai-muted" }, `Starting the ${tile.name} sign-in…`) : null,
-    notice?.message ? (0, import_react3.createElement)("p", null, notice.message) : null,
-    notice?.code ? (0, import_react3.createElement)(
+    !attempt && !problem ? (0, import_react4.createElement)("p", { className: "oai-muted" }, `Starting the ${tile.name} sign-in…`) : null,
+    notice?.message ? (0, import_react4.createElement)("p", null, notice.message) : null,
+    notice?.code ? (0, import_react4.createElement)(
       "div",
       { className: "oai-code" },
-      (0, import_react3.createElement)("code", null, notice.code),
-      (0, import_react3.createElement)("button", { type: "button", className: "oai-ghost", onClick: () => navigator.clipboard?.writeText(notice.code).then(() => setCopied(true)) }, copied ? "Copied" : "Copy code")
+      (0, import_react4.createElement)("code", null, notice.code),
+      (0, import_react4.createElement)("button", { type: "button", className: "oai-ghost", onClick: () => navigator.clipboard?.writeText(notice.code).then(() => setCopied(true)) }, copied ? "Copied" : "Copy code")
     ) : null,
-    notice?.url ? (0, import_react3.createElement)("a", { className: "oai-primary oai-button", href: notice.url, target: "_blank", rel: "noreferrer" }, `Open ${tile.name} to sign in`) : null,
-    prompt?.kind === "select" ? (0, import_react3.createElement)(
+    notice?.url ? (0, import_react4.createElement)("a", { className: "oai-primary oai-button", href: notice.url, target: "_blank", rel: "noreferrer" }, `Open ${tile.name} to sign in`) : null,
+    prompt?.kind === "select" ? (0, import_react4.createElement)(
       "div",
       { className: "oai-choices", role: "group", "aria-label": prompt.message },
-      (0, import_react3.createElement)("p", null, prompt.message),
-      prompt.options.map((option) => (0, import_react3.createElement)("button", { key: option.id, type: "button", onClick: () => reply(option.id) }, (0, import_react3.createElement)("strong", null, option.label), option.description ? (0, import_react3.createElement)("span", null, option.description) : null))
+      (0, import_react4.createElement)("p", null, prompt.message),
+      prompt.options.map((option) => (0, import_react4.createElement)("button", { key: option.id, type: "button", onClick: () => reply(option.id) }, (0, import_react4.createElement)("strong", null, option.label), option.description ? (0, import_react4.createElement)("span", null, option.description) : null))
     ) : null,
-    prompt && prompt.kind !== "select" ? (0, import_react3.createElement)(
+    prompt && prompt.kind !== "select" ? (0, import_react4.createElement)(
       "form",
       { onSubmit: (event) => {
         event.preventDefault();
         reply(answer);
       } },
-      (0, import_react3.createElement)("label", { htmlFor: "oai-answer" }, prompt.message),
-      (0, import_react3.createElement)("input", { id: "oai-answer", type: prompt.kind === "secret" ? "password" : "text", required: true, autoComplete: "off", spellCheck: false, autoFocus: true, placeholder: prompt.placeholder, value: answer, onChange: (e) => setAnswer(e.target.value) }),
-      (0, import_react3.createElement)("button", { type: "submit", className: "oai-primary" }, "Continue")
+      (0, import_react4.createElement)("label", { htmlFor: "oai-answer" }, prompt.message),
+      (0, import_react4.createElement)("input", { id: "oai-answer", type: prompt.kind === "secret" ? "password" : "text", required: true, autoComplete: "off", spellCheck: false, autoFocus: true, placeholder: prompt.placeholder, value: answer, onChange: (e) => setAnswer(e.target.value) }),
+      (0, import_react4.createElement)("button", { type: "submit", className: "oai-primary" }, "Continue")
     ) : null,
-    attempt?.status === "running" && !prompt ? (0, import_react3.createElement)("p", { className: "oai-muted oai-waiting" }, "Waiting for you to finish signing in…") : null,
-    ended ? (0, import_react3.createElement)("p", { className: "oai-error", role: "alert" }, attempt.status === "failed" ? `The sign-in did not finish: ${attempt.error}` : "The sign-in was cancelled.") : null,
-    problem ? (0, import_react3.createElement)("p", { className: "oai-error", role: "alert" }, problem) : null,
-    (0, import_react3.createElement)("button", { type: "button", className: "oai-quiet", onClick: ended || problem ? onBack : cancel }, ended || problem ? "Back" : "Cancel")
+    attempt?.status === "running" && !prompt ? (0, import_react4.createElement)("p", { className: "oai-muted oai-waiting" }, "Waiting for you to finish signing in…") : null,
+    ended ? (0, import_react4.createElement)("p", { className: "oai-error", role: "alert" }, attempt.status === "failed" ? `The sign-in did not finish: ${attempt.error}` : "The sign-in was cancelled.") : null,
+    problem ? (0, import_react4.createElement)("p", { className: "oai-error", role: "alert" }, problem) : null,
+    (0, import_react4.createElement)("button", { type: "button", className: "oai-quiet", onClick: ended || problem ? onBack : cancel }, ended || problem ? "Back" : "Cancel")
   );
 }
 function CliproxyForm({ onBack, onSaved, glitch }) {
-  const [baseURL, setBaseURL] = (0, import_react3.useState)("");
-  const [apiKey, setApiKey] = (0, import_react3.useState)("");
-  const [busy, setBusy] = (0, import_react3.useState)(false);
-  const [problem, setProblem] = (0, import_react3.useState)(null);
+  const [baseURL, setBaseURL] = (0, import_react4.useState)("");
+  const [apiKey, setApiKey] = (0, import_react4.useState)("");
+  const [busy, setBusy] = (0, import_react4.useState)(false);
+  const [problem, setProblem] = (0, import_react4.useState)(null);
   const submit = async (event) => {
     event.preventDefault();
     setBusy(true);
@@ -466,54 +620,71 @@ function CliproxyForm({ onBack, onSaved, glitch }) {
       setBusy(false);
     }
   };
-  return (0, import_react3.createElement)(
+  return (0, import_react4.createElement)(
     "form",
     { onSubmit: submit },
-    (0, import_react3.createElement)("p", null, "Omni lists the gateway's models with your key, keeps the key in DSH's credential store, and adds the models to the model picker."),
-    (0, import_react3.createElement)("label", { htmlFor: "oai-cliproxy-url" }, "Gateway address"),
-    (0, import_react3.createElement)("input", { id: "oai-cliproxy-url", type: "url", required: true, placeholder: "http://localhost:8317/v1", autoComplete: "off", value: baseURL, onChange: (e) => setBaseURL(e.target.value) }),
-    (0, import_react3.createElement)("label", { htmlFor: "oai-cliproxy-key" }, "API key"),
-    (0, import_react3.createElement)("input", { id: "oai-cliproxy-key", type: "password", required: true, autoComplete: "off", spellCheck: false, value: apiKey, onChange: (e) => setApiKey(e.target.value) }),
-    problem ? (0, import_react3.createElement)("p", { className: "oai-error", role: "alert", style: { marginTop: "10px" } }, problem) : null,
-    (0, import_react3.createElement)("button", { type: "submit", className: "oai-primary", disabled: busy }, busy ? "Connecting…" : "Connect"),
-    (0, import_react3.createElement)("button", { type: "button", className: "oai-quiet", disabled: busy, onClick: onBack }, "Back")
+    (0, import_react4.createElement)("p", null, "Omni lists the gateway's models with your key, keeps the key in DSH's credential store, and adds the models to the model picker."),
+    (0, import_react4.createElement)("label", { htmlFor: "oai-cliproxy-url" }, "Gateway address"),
+    (0, import_react4.createElement)("input", { id: "oai-cliproxy-url", type: "url", required: true, placeholder: "http://localhost:8317/v1", autoComplete: "off", value: baseURL, onChange: (e) => setBaseURL(e.target.value) }),
+    (0, import_react4.createElement)("label", { htmlFor: "oai-cliproxy-key" }, "API key"),
+    (0, import_react4.createElement)("input", { id: "oai-cliproxy-key", type: "password", required: true, autoComplete: "off", spellCheck: false, value: apiKey, onChange: (e) => setApiKey(e.target.value) }),
+    problem ? (0, import_react4.createElement)("p", { className: "oai-error", role: "alert", style: { marginTop: "10px" } }, problem) : null,
+    (0, import_react4.createElement)("button", { type: "submit", className: "oai-primary", disabled: busy }, busy ? "Connecting…" : "Connect"),
+    (0, import_react4.createElement)("button", { type: "button", className: "oai-quiet", disabled: busy, onClick: onBack }, "Back")
   );
 }
 function ConnectAiStep(props) {
   const state = useGate(props);
   const finish2 = useFinish(props);
   const [glitching, glitch] = useGlitch();
-  const [view, setView] = (0, import_react3.useState)("tiles");
-  const [saved, setSaved] = (0, import_react3.useState)(null);
-  (0, import_react3.useEffect)(() => {
+  const [view, setView] = (0, import_react4.useState)("tiles");
+  const [saved, setSaved] = (0, import_react4.useState)(null);
+  const [status, setStatus] = (0, import_react4.useState)(null);
+  const [accounts, setAccounts] = (0, import_react4.useState)(null);
+  (0, import_react4.useEffect)(() => {
+    if (view !== "tiles") return;
+    call("providers").then(setStatus, () => setStatus(null));
+    subscriptionAccounts().then(setAccounts);
+  }, [view]);
+  (0, import_react4.useEffect)(() => {
     if (state) glitch();
   }, [state, glitch]);
   if (!state) return null;
+  if (view?.subscription) {
+    return (0, import_react4.createElement)(
+      Stage,
+      { title: `Connect ${view.subscription.name}`, speech: "Sign in with your plan; I'll add it to what you already have.", at: "omni-connect-ai", glitching },
+      (0, import_react4.createElement)(SubscriptionSignIn, { tile: view.subscription, onBack: () => setView("tiles"), onSaved: (value) => {
+        setSaved(value);
+        setView("saved");
+      }, glitch })
+    );
+  }
   if (view?.signin) {
-    return (0, import_react3.createElement)(
+    return (0, import_react4.createElement)(
       Stage,
       { title: `Sign in to ${view.signin.name}`, speech: "Sign in on their page; I'll wait right here.", at: "omni-connect-ai", glitching },
-      (0, import_react3.createElement)(SignIn, { tile: view.signin, onBack: () => setView("tiles"), onSaved: (value) => {
+      (0, import_react4.createElement)(SignIn, { tile: view.signin, onBack: () => setView("tiles"), onSaved: (value) => {
         setSaved(value);
         setView("saved");
       }, glitch })
     );
   }
   if (view?.key) {
-    return (0, import_react3.createElement)(
+    return (0, import_react4.createElement)(
       Stage,
       { title: `Connect ${view.key.name}`, speech: "Paste your key and I'm ready to think.", at: "omni-connect-ai", glitching },
-      (0, import_react3.createElement)(KeyForm, { tile: view.key, onBack: () => setView("tiles"), onSaved: (value) => {
+      (0, import_react4.createElement)(KeyForm, { tile: view.key, onBack: () => setView("tiles"), onSaved: (value) => {
         setSaved(value);
         setView("saved");
       }, glitch })
     );
   }
   if (view === "cliproxy") {
-    return (0, import_react3.createElement)(
+    return (0, import_react4.createElement)(
       Stage,
       { title: "Connect CLIProxyAPI", speech: "Point me at your gateway. Its key stays in DSH, never in a settings file.", at: "omni-connect-ai", glitching },
-      (0, import_react3.createElement)(CliproxyForm, { onBack: () => setView("tiles"), onSaved: (value) => {
+      (0, import_react4.createElement)(CliproxyForm, { onBack: () => setView("tiles"), onSaved: (value) => {
         setSaved(value);
         setView("saved");
       }, glitch })
@@ -521,22 +692,23 @@ function ConnectAiStep(props) {
   }
   if (view === "saved" && saved?.models) {
     const count = saved.models.length;
-    return (0, import_react3.createElement)(
+    return (0, import_react4.createElement)(
       Stage,
       { title: "Gateway connected", speech: `Connected! ${count} ${count === 1 ? "model" : "models"} from your gateway, ready in the model picker.`, at: "omni-connect-ai", glitching },
-      (0, import_react3.createElement)("div", { className: "oai-models", "aria-label": "Models" }, saved.models.map((id) => (0, import_react3.createElement)("div", { key: id }, id))),
-      (0, import_react3.createElement)("button", { type: "button", className: "oai-primary", onClick: () => finish2() }, "Done")
+      (0, import_react4.createElement)("div", { className: "oai-models", "aria-label": "Models" }, saved.models.map((id) => (0, import_react4.createElement)("div", { key: id }, id))),
+      (0, import_react4.createElement)("button", { type: "button", className: "oai-primary", onClick: () => finish2() }, "Done")
     );
   }
   if (view === "saved") {
-    return (0, import_react3.createElement)(
+    return (0, import_react4.createElement)(
       Stage,
-      { title: `${saved?.name ?? "AI"} connected`, speech: `Connected! ${saved?.name ?? "Its"} models are in the model picker now.`, at: "omni-connect-ai", glitching },
-      (0, import_react3.createElement)("button", { type: "button", className: "oai-primary", onClick: () => finish2() }, "Done")
+      { title: `${saved?.name ?? "AI"} connected`, speech: `Connected! ${saved?.name ?? "Its"} models join the others in the model picker.`, at: "omni-connect-ai", glitching },
+      (0, import_react4.createElement)("button", { type: "button", className: "oai-primary", onClick: () => finish2() }, "Done"),
+      (0, import_react4.createElement)("button", { type: "button", onClick: () => setView("tiles") }, "Connect another")
     );
   }
   const connected = state.aiConnected === true;
-  return (0, import_react3.createElement)(
+  return (0, import_react4.createElement)(
     Stage,
     {
       title: "Connect an AI",
@@ -544,8 +716,8 @@ function ConnectAiStep(props) {
       at: "omni-connect-ai",
       glitching
     },
-    (0, import_react3.createElement)(Tiles, { onTile: (tile) => tile.form ? setView("cliproxy") : tile.signin ? setView({ signin: tile }) : tile.key ? setView({ key: tile }) : finish2(tile.section) }),
-    (0, import_react3.createElement)("button", { type: "button", className: connected ? "oai-primary" : "oai-quiet", style: { marginTop: "16px" }, onClick: () => finish2() }, connected ? "Continue" : "Skip for now")
+    (0, import_react4.createElement)(Tiles, { status, accounts, onTile: (tile) => tile.subscription ? setView({ subscription: tile }) : tile.form ? setView("cliproxy") : tile.signin ? setView({ signin: tile }) : tile.key ? setView({ key: tile }) : finish2(tile.section) }),
+    (0, import_react4.createElement)("button", { type: "button", className: connected ? "oai-primary" : "oai-quiet", style: { marginTop: "16px" }, onClick: () => finish2() }, connected ? "Continue" : "Skip for now")
   );
 }
 

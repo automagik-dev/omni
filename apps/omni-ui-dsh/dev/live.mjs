@@ -8,9 +8,10 @@
 // <home>/ui), apart from any DSH or Omni desktop app you already run. --fresh empties it
 // first, so the welcome and the connect steps show again. The profile links the plugins'
 // folders in place (apps/*-dsh beside this one). A change under a plugin's src/client
-// rebuilds its bundle (npm run build) and reloads the page; a change to host code
-// (index.js, src/host, src/shared) restarts DSH, then reloads. Open the URL it prints.
-import { spawn } from 'node:child_process'
+// rebuilds its bundle (npm run build); that, or a change to host code (index.js, src/host,
+// src/shared), restarts DSH, which serves a plugin's bundle as it was when DSH started;
+// then the page reloads. Open the URL it prints.
+import { execFileSync, spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer, request } from 'node:http'
 import { connect } from 'node:net'
@@ -63,13 +64,65 @@ for (const plugin of plugins) {
   rmSync(link, { recursive: true, force: true })
   symlinkSync(plugin.dir, link, 'dir')
 }
-writeFileSync(join(profileDir, 'package.json'), `${JSON.stringify({
+// Add-ons (dev/live-addons.json: npm name -> exact version) join the profile the way DSH adds
+// any plugin: `dsh plugin --profile omni add`, which is pnpm in the profile (hoisted, as every
+// DSH profile is), never npm. pnpm is pinned to the release the desktop app ships.
+const PNPM = 'pnpm@10.34.6'
+const addons = existsSync(join(HERE, 'live-addons.json')) ? readJson(join(HERE, 'live-addons.json')) : {}
+const installed = name => {
+  try {
+    return readJson(join(profileDir, 'node_modules', name, 'package.json')).version
+  } catch {
+    return null
+  }
+}
+const writeProfile = () => writeFileSync(join(profileDir, 'package.json'), `${JSON.stringify({
   name: 'omni-live-profile',
   private: true,
-  dependencies: Object.fromEntries(plugins.map(plugin => [plugin.name, `link:${plugin.dir}`])),
-  dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', '@deepseek-ai/dsh-experimental-plugin-market-bundle', ...plugins.map(plugin => plugin.name)] } },
+  dependencies: { ...Object.fromEntries(plugins.map(plugin => [plugin.name, `link:${plugin.dir}`])), ...addons },
+  dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', '@deepseek-ai/dsh-experimental-plugin-market-bundle', ...plugins.map(plugin => plugin.name), ...Object.keys(addons)] } },
 }, null, 2)}\n`)
-if (!existsSync(join(profileDir, 'cordis.patch.yml'))) writeFileSync(join(profileDir, 'cordis.patch.yml'), readFileSync(join(HERE, 'live-profile.patch.yml')))
+if (!existsSync(join(profileDir, 'pnpm-workspace.yaml'))) writeFileSync(join(profileDir, 'pnpm-workspace.yaml'), 'packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n')
+writeProfile()
+const missing = Object.entries(addons).filter(([name, version]) => installed(name) !== version)
+if (missing.length > 0) {
+  say(`adding ${missing.map(([name, version]) => `${name}@${version}`).join(', ')} with dsh plugin add (${PNPM})`)
+  // A pnpm shim first on PATH, so DSH's plugin manager runs the pinned pnpm.
+  const shims = join(home, 'bin')
+  mkdirSync(shims, { recursive: true })
+  writeFileSync(join(shims, 'pnpm'), `#!/bin/sh\nexec npx --yes ${PNPM} "$@"\n`, { mode: 0o755 })
+  execFileSync(process.execPath, [DSH_BIN, 'plugin', '--profile', PROFILE, 'add', '--ignore-scripts', ...missing.map(([name, version]) => `${name}@${version}`)], {
+    cwd: profileDir,
+    env: { ...process.env, DSH_HOME: dshHome, DO_NOT_TRACK: '1', PATH: `${shims}:${process.env.PATH}` },
+    stdio: ['ignore', 'inherit', 'inherit'],
+  })
+  // DSH's add records the plugin its own way; the profile is rewritten from the same lists.
+  writeProfile()
+}
+// The profile's settings: dev/live-profile.patch.yml seeds a new profile, and an entry it
+// ships that an existing profile lacks (by id) is appended, as the desktop app does.
+const shippedPatch = readFileSync(join(HERE, 'live-profile.patch.yml'), 'utf8')
+const patchFile = join(profileDir, 'cordis.patch.yml')
+if (!existsSync(patchFile)) writeFileSync(patchFile, shippedPatch)
+else {
+  const ids = text => new Set([...String(text).matchAll(/^[\s-]*id:\s*['"]?([^'"\s#]+)/gm)].map(match => match[1]))
+  const have = ids(readFileSync(patchFile, 'utf8'))
+  const entries = []
+  let comments = []
+  for (const line of shippedPatch.split('\n')) {
+    if (line.startsWith('- ')) {
+      entries.push({ lines: [...comments, line] })
+      comments = []
+    } else if (line.startsWith('#')) comments.push(line)
+    else if (entries.length > 0 && /^\s+\S/.test(line)) entries.at(-1).lines.push(line)
+    else comments = []
+  }
+  const missing = entries.filter(entry => [...ids(entry.lines.join('\n'))].every(id => !have.has(id)))
+  if (missing.length > 0) {
+    writeFileSync(patchFile, `${readFileSync(patchFile, 'utf8').replace(/\s*$/, '')}\n${missing.map(entry => entry.lines.join('\n')).join('\n')}\n`)
+    say(`profile settings: added ${missing.length} shipped ${missing.length === 1 ? 'entry' : 'entries'}`)
+  }
+}
 
 // Browsers waiting for a reload (Server-Sent Events).
 const listeners = new Set()
@@ -77,7 +130,10 @@ const reload = (why) => {
   say(`reload: ${why}`)
   for (const res of listeners) res.write(`data: ${why}\n\n`)
 }
-const RELOADER = `<script>(()=>{const s=new EventSource(${JSON.stringify(LIVE_PATH)});s.onmessage=()=>location.reload()})()</script>`
+// A page carries the launcher run it came from: one served by an earlier run reloads as soon
+// as it reconnects, so restarting this script also refreshes an open tab.
+const BOOT = Date.now().toString(36)
+const RELOADER = `<script>(()=>{const s=new EventSource(${JSON.stringify(`${LIVE_PATH}?boot=${BOOT}`)});s.onmessage=()=>location.reload()})()</script>`
 
 // DSH on loopback, restarted when host code changes.
 let dsh = null
@@ -116,9 +172,10 @@ async function restartDsh(why) {
 
 // The front door: a reverse proxy to DSH that adds the reloader to its pages.
 const gate = createServer((req, res) => {
-  if (req.url === LIVE_PATH) {
+  if (req.url === LIVE_PATH || req.url.startsWith(`${LIVE_PATH}?`)) {
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' })
     res.write(': live\n\n')
+    if (new URL(req.url, 'http://live').searchParams.get('boot') !== BOOT) res.write('data: a newer launcher run\n\n')
     listeners.add(res)
     res.on('close', () => listeners.delete(res))
     return
@@ -183,7 +240,9 @@ function build(plugin) {
   child.on('exit', (code) => {
     state.running = false
     quietUntil.set(plugin.folder, Date.now() + 1000)
-    if (code === 0) reload(`${plugin.folder} rebuilt in ${Date.now() - started} ms`)
+    // DSH fingerprints each plugin's client.js when it starts and serves it as immutable
+    // under that fingerprint, so a new bundle reaches the page only through a restart.
+    if (code === 0) debounce('dsh', () => restartDsh(`${plugin.folder} rebuilt in ${Date.now() - started} ms`))
     else say(`${plugin.folder}: build failed (${code})`)
     if (state.again) {
       state.again = false

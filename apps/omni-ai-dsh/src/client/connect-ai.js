@@ -1,6 +1,7 @@
 import { createElement as h, useEffect, useState } from 'react'
 import { call } from './api.js'
 import { Stage, useFinish, useGate, useGlitch } from './stage.js'
+import { SUBSCRIPTION_TILES, SubscriptionSignIn, signedInCount, subscriptionAccounts } from './subscriptions.js'
 
 // Step omni-connect-ai (order -200): each tile connects for real. A subscription tile runs
 // that provider's own sign-in in DSH (src/host/providers.js relays its link, code and
@@ -41,13 +42,31 @@ export const GROUPS = [
   },
 ]
 
-function Tiles({ onTile }) {
-  return GROUPS.map(group => h('section', { key: group.title, className: 'oai-group', 'aria-label': group.title },
+// The subscriptions dsh-subscriptions adds, as a group after DSH's own sign-ins.
+export const SUBSCRIPTIONS_GROUP = { title: 'More subscriptions', terms: VENDOR_TERMS, tiles: SUBSCRIPTION_TILES.map(tile => ({ ...tile, subscription: true })) }
+
+// How many of a tile's connections exist: a signed-in account, a stored key, or the
+// subscription plugin's signed-in accounts for that provider.
+export function connectionsOf(tile, status, accounts) {
+  if (tile.subscription) return signedInCount(accounts, tile.provider)
+  const own = status?.[tile.provider]
+  if (tile.signin) return own?.signedIn ? 1 : 0
+  if (tile.key) return own?.key ? 1 : 0
+  return 0
+}
+
+function Tiles({ onTile, status, accounts }) {
+  const groups = accounts ? [GROUPS[0], SUBSCRIPTIONS_GROUP, ...GROUPS.slice(1)] : GROUPS
+  return groups.map(group => h('section', { key: group.title, className: 'oai-group', 'aria-label': group.title },
     h('h2', null, group.title),
     group.terms ? h('p', { className: 'oai-terms oai-muted' }, group.terms) : null,
-    h('div', { className: 'oai-tiles' }, group.tiles.map(tile => h('button', {
-      key: tile.id, type: 'button', className: 'oai-tile', onClick: () => onTile(tile),
-    }, h('strong', null, tile.name), h('span', null, tile.note))))))
+    h('div', { className: 'oai-tiles' }, group.tiles.map((tile) => {
+      const count = connectionsOf(tile, status, accounts)
+      return h('button', {
+        key: tile.id, type: 'button', className: count > 0 ? 'oai-tile oai-tile-on' : 'oai-tile', onClick: () => onTile(tile),
+      }, h('strong', null, tile.name), h('span', null, tile.note),
+      count > 0 ? h('em', { className: 'oai-on' }, count === 1 ? 'Connected' : `${count} accounts`) : null)
+    }))))
 }
 
 function KeyForm({ tile, onBack, onSaved, glitch }) {
@@ -180,9 +199,21 @@ export function ConnectAiStep(props) {
   const [glitching, glitch] = useGlitch()
   const [view, setView] = useState('tiles')
   const [saved, setSaved] = useState(null)
+  // What is connected already, refreshed whenever the tiles show again.
+  const [status, setStatus] = useState(null)
+  const [accounts, setAccounts] = useState(null)
+  useEffect(() => {
+    if (view !== 'tiles') return
+    call('providers').then(setStatus, () => setStatus(null))
+    subscriptionAccounts().then(setAccounts)
+  }, [view])
   useEffect(() => { if (state) glitch() }, [state, glitch])
   if (!state) return null
 
+  if (view?.subscription) {
+    return h(Stage, { title: `Connect ${view.subscription.name}`, speech: 'Sign in with your plan; I\'ll add it to what you already have.', at: 'omni-connect-ai', glitching },
+      h(SubscriptionSignIn, { tile: view.subscription, onBack: () => setView('tiles'), onSaved: (value) => { setSaved(value); setView('saved') }, glitch }))
+  }
   if (view?.signin) {
     return h(Stage, { title: `Sign in to ${view.signin.name}`, speech: 'Sign in on their page; I\'ll wait right here.', at: 'omni-connect-ai', glitching },
       h(SignIn, { tile: view.signin, onBack: () => setView('tiles'), onSaved: (value) => { setSaved(value); setView('saved') }, glitch }))
@@ -202,8 +233,9 @@ export function ConnectAiStep(props) {
       h('button', { type: 'button', className: 'oai-primary', onClick: () => finish() }, 'Done'))
   }
   if (view === 'saved') {
-    return h(Stage, { title: `${saved?.name ?? 'AI'} connected`, speech: `Connected! ${saved?.name ?? 'Its'} models are in the model picker now.`, at: 'omni-connect-ai', glitching },
-      h('button', { type: 'button', className: 'oai-primary', onClick: () => finish() }, 'Done'))
+    return h(Stage, { title: `${saved?.name ?? 'AI'} connected`, speech: `Connected! ${saved?.name ?? 'Its'} models join the others in the model picker.`, at: 'omni-connect-ai', glitching },
+      h('button', { type: 'button', className: 'oai-primary', onClick: () => finish() }, 'Done'),
+      h('button', { type: 'button', onClick: () => setView('tiles') }, 'Connect another'))
   }
   const connected = state.aiConnected === true
   return h(Stage, {
@@ -212,6 +244,6 @@ export function ConnectAiStep(props) {
     at: 'omni-connect-ai',
     glitching,
   },
-  h(Tiles, { onTile: tile => (tile.form ? setView('cliproxy') : tile.signin ? setView({ signin: tile }) : tile.key ? setView({ key: tile }) : finish(tile.section)) }),
+  h(Tiles, { status, accounts, onTile: tile => (tile.subscription ? setView({ subscription: tile }) : tile.form ? setView('cliproxy') : tile.signin ? setView({ signin: tile }) : tile.key ? setView({ key: tile }) : finish(tile.section)) }),
   h('button', { type: 'button', className: connected ? 'oai-primary' : 'oai-quiet', style: { marginTop: '16px' }, onClick: () => finish() }, connected ? 'Continue' : 'Skip for now'))
 }

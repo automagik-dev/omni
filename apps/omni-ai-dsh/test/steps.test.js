@@ -97,3 +97,26 @@ test('the rail names only the steps this DSH has: Connect Omni only with the plu
   // A step that never announced itself still shows where it is.
   assert.deepEqual(plain(railSteps('omni-connect', {}).map(([id]) => id)), ['omni-connect'])
 })
+
+test('a subscription takes the next free account slot, so accounts add up; tiles count what is connected', async () => {
+  const { nextIndex, signedInCount } = await load('subscriptions.js')
+  const { connectionsOf, SUBSCRIPTIONS_GROUP } = await load('connect-ai.js')
+  const accounts = [
+    { provider: 'grok', index: 1, configured: true },
+    { provider: 'grok', index: 2, configured: false },
+    { provider: 'cursor', index: 1, configured: true },
+    { provider: 'cursor', index: 3, configured: true },
+  ]
+  assert.equal(nextIndex(accounts, 'grok'), 2)
+  assert.equal(nextIndex(accounts, 'cursor'), 4)
+  assert.equal(nextIndex(accounts, 'kiro'), 1)
+  assert.equal(nextIndex(null, 'kiro'), 1)
+  assert.equal(signedInCount(accounts, 'cursor'), 2)
+  // DSH's own sign-ins (ChatGPT, Claude, Kimi, Copilot) are not offered twice.
+  const ids = plain(SUBSCRIPTIONS_GROUP.tiles).map(tile => tile.provider)
+  for (const own of ['codex', 'claude', 'kimi', 'copilot', 'antigravity']) assert.ok(!ids.includes(own), own)
+  const cursor = SUBSCRIPTIONS_GROUP.tiles.find(tile => tile.id === 'cursor')
+  assert.equal(connectionsOf(cursor, null, accounts), 2)
+  assert.equal(connectionsOf(GROUPS[0].tiles[0], { 'openai-codex': { signedIn: true } }, null), 1)
+  assert.equal(connectionsOf(GROUPS[1].tiles[0], { deepseek: { key: false } }, null), 0)
+})
