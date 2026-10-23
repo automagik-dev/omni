@@ -1,6 +1,6 @@
 {
   "name": "@automagik/omni-ai-dsh",
-  "version": "2.261023.21",
+  "version": "2.261023.22",
   "description": "Omni's welcome for DeepSeek Harness: the Omni octopus greets you and connects your AI through DSH's own sign-ins",
   "keywords": [
     "dsh-plugin",
