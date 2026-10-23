@@ -295,6 +295,15 @@ const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
       'server-side. What it can do is gated by the claim token on the endpoints it calls.',
   },
   {
+    route: 'GET /api/login/app',
+    class: 'public-by-contract',
+    justification:
+      'Static "open the Omni app" page (human login). Answers 404 unless the operator set ' +
+      'OMNI_LOGIN_ENABLED=true, and always with multitenancy on. Fixed HTML and script; its only link is ' +
+      "omni://connect with this Omni's own address, which grants nothing: the app then signs in through " +
+      "the device page, which needs the owner's own session.",
+  },
+  {
     route: 'GET /api/login/device',
     class: 'public-by-contract',
     justification:

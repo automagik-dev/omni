@@ -9,6 +9,24 @@ import { call, OmniMark, t } from './core.js'
 // The poll token stays on the host.
 
 const DEFAULT_POLL_MS = 2000
+// A sign-in the desktop app started (connectFromApp) is announced to any Connect card on screen.
+const PAIRING_EVENT = 'omni:pairing'
+
+/**
+ * An omni://connect link the person confirmed in the desktop app: start signing in to that
+ * Omni and open its approval page in the browser, where they approve with a passkey (or a
+ * code on WhatsApp). The host finishes the sign-in by itself once they have approved.
+ */
+export async function connectFromApp(url) {
+  if (typeof url !== 'string' || url === '') return
+  try {
+    const reply = await call('omni-pair-start', { url, auto: true })
+    window.dispatchEvent(new CustomEvent(PAIRING_EVENT, { detail: reply.pairing }))
+    if (reply.pairing?.approveUrl) window.open(reply.pairing.approveUrl, '_blank', 'noopener')
+  } catch (error) {
+    window.dispatchEvent(new CustomEvent(PAIRING_EVENT, { detail: { problem: error.message } }))
+  }
+}
 
 // `onPaired(origin)` hears a pairing that succeeded (the onboarding step completes on it);
 // `embedded` drops the card's own mark and heading where its host already titles it.
@@ -21,9 +39,16 @@ export function ConnectOmni({ onPaired, embedded = false } = {}) {
   const alive = useRef(true)
   useEffect(() => () => { alive.current = false }, [])
 
-  // A pairing started before a reload keeps going.
+  // A pairing started before a reload keeps going, and one the desktop app started shows here.
   useEffect(() => {
     call('omni-link').then((link) => { if (alive.current && link?.pairing) setPairing(link.pairing) }, () => {})
+    const onPairing = (event) => {
+      if (!alive.current) return
+      if (event.detail?.problem) setProblem(event.detail.problem)
+      else if (event.detail) setPairing(event.detail)
+    }
+    window.addEventListener(PAIRING_EVENT, onPairing)
+    return () => window.removeEventListener(PAIRING_EVENT, onPairing)
   }, [])
 
   useEffect(() => {
@@ -101,7 +126,7 @@ export function ConnectOmni({ onPaired, embedded = false } = {}) {
     embedded ? null : h('span', { className: 'ox-mark', 'aria-hidden': true }, h(OmniMark, { size: 34 })),
     h('div', { className: 'ox-steps' },
       embedded ? null : h('h2', null, t('Connect your Omni')),
-      h('p', { className: 'ox-muted' }, t('Type its address, then approve this device from your phone: on WhatsApp, or with Face ID or your fingerprint. No keys to copy.')),
+      h('p', { className: 'ox-muted' }, t('Open your Omni in the browser and choose Open in the Omni app, or type its address here. Then approve with Face ID, Touch ID, your fingerprint or a code on WhatsApp. No keys to copy.')),
       h('div', { className: 'ox-row' },
         h('input', {
           className: 'ox-input', type: 'text', inputMode: 'url', autoComplete: 'url', spellCheck: false, value: address,
