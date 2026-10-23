@@ -28,7 +28,10 @@ export const INDEX_URL = 'https://raw.githubusercontent.com/automagik-dev/omni/l
  * Third-party plugins Omni ships from its own reviewed fork, pinned to a commit, instead of the
  * upstream npm package. Only these repositories may appear as a git source besides Omni's own.
  */
-export const VETTED_FORKS = ['https://github.com/automagik-genie/dsh-oh-my-claude'];
+export const VETTED_FORKS = [
+  'https://github.com/automagik-genie/dsh-oh-my-claude',
+  'https://github.com/automagik-genie/dsh-subscriptions',
+];
 
 interface GitSource {
   type: 'git';
