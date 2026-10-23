@@ -1,6 +1,6 @@
 // Tests import index.js outside a dsh profile, so its @deepseek-ai peers resolve from a
 // DeepSeek Harness, as a profile would supply them: DSH_HARNESS, else the packages that
-// `npm run harness` installs in dev/harness, else the nearest deepseek-harness/ checkout in
+// `bun run harness` installs in dev/harness, else the nearest deepseek-harness/ checkout in
 // a folder above the plugin, else the same search from the plugin's place in the main
 // worktree (a git worktree has no checkout of its own).
 import { execFileSync } from 'node:child_process'
@@ -31,7 +31,7 @@ const findHarness = () => {
   }
 }
 const harness = findHarness()
-// A checkout links the packages into its base bundle; an npm install has them at its root.
+// A checkout links the packages into its base bundle; an install has them at its root.
 const base = resolve(harness, 'packages/bundle/base/package.json')
 const anchor = pathToFileURL(existsSync(base) ? base : resolve(harness, 'package.json')).href
 const pluginUrl = `${pathToFileURL(plugin).href}/`

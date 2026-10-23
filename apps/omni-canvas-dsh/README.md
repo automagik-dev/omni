@@ -43,13 +43,16 @@ which adds one row, `id: omni-canvas`, and changes nothing else. Restart DSH.
 ## Develop
 
 ```sh
-npm ci               # esbuild, OpenUI and zod, for the bundles and the prompt
-npm run harness      # the pinned DSH release the tests and the linter run against
-npm test             # composes the team, the channels and this plugin
-npm run lint
-npm run build        # rewrites client.js, src/host/omni-ui-prompt.js and src/host/omni-ui-check.bundle.js; commit them
+npm ci               # esbuild, OpenUI and zod, for the bundles and the prompt (see below)
+bun run harness      # the pinned DSH release the tests and the linter run against
+bun run test         # composes the team, the channels and this plugin, on Node
+bun run lint
+bun run build        # rewrites client.js, src/host/omni-ui-prompt.js and src/host/omni-ui-check.bundle.js; commit them
 node scripts/build-client.mjs --check
 ```
+
+The folder's own lockfile is npm's, as the channels plugin's is: Bun resolves every peer from
+the registry, and this plugin peers on the Omni plugins, which are not on npm.
 
 The tests load the team plugin from `../omni-ui-dsh` (or `OMNI_DSH_CORE`) and the channels
 plugin from `../omni-channels-dsh` (or `OMNI_DSH_CHANNELS`), with their committed
