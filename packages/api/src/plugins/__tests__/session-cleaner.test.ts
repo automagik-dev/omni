@@ -146,6 +146,28 @@ describe('session-cleaner worker tenant boundary (G5)', () => {
     expect(probe.scopeSeen).toBeNull();
   });
 
+  it('(d) an agent-less instance does not touch the chat (nothing to resume)', async () => {
+    let chatLookups = 0;
+    const services = {
+      ...(makeProbeServices({
+        scopeSeen: undefined,
+        getInstanceCalls: 0,
+        sendMessageCalls: 0,
+        disarmTenant: undefined,
+      }) as Record<string, unknown>),
+      chats: {
+        findByExternalIdSmart: async () => {
+          chatLookups += 1;
+          return null;
+        },
+      },
+    } as never;
+
+    await runTrashEmojiCleanup(services, fakeDb(), makeEvent({ correlationId: 'c1' }));
+
+    expect(chatLookups).toBe(0);
+  });
+
   it('(c) a malformed envelope (tenant without version) is refused and performs no cleanup work', async () => {
     const probe: CleanupProbe = {
       scopeSeen: undefined,
@@ -159,5 +181,110 @@ describe('session-cleaner worker tenant boundary (G5)', () => {
     await expect(runTrashEmojiCleanup(services, fakeDb(), event)).rejects.toThrow();
 
     expect(probe.getInstanceCalls).toBe(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Providers that cannot reset sessions (webhook): the trash emoji still lifts a
+// handoff pause, because `agentPaused` is Omni's own chat state. Before the fix
+// the "not supported" error was skipped silently BEFORE the resume, so a paused
+// webhook chat stayed paused and every inbound was dropped.
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface WebhookProbe {
+  updates: Array<Record<string, unknown>>;
+  disarmCalls: number;
+  sendCalls: number;
+}
+
+/** A legacy-world Database whose agent lookups resolve to a webhook provider. */
+function webhookAgentDb(): Database {
+  const row = {
+    id: 'agent-w',
+    name: 'webhook agent',
+    agentProviderId: 'provider-webhook-resume',
+    agentType: null,
+    metadata: null,
+    configPath: null,
+  };
+  return {
+    select: () => ({ from: () => ({ where: () => ({ limit: async () => [row] }) }) }),
+  } as unknown as Database;
+}
+
+function makeWebhookServices(probe: WebhookProbe, settings: Record<string, unknown>) {
+  return {
+    agentRunner: {
+      getInstanceWithProvider: async () => ({
+        id: 'inst-w',
+        agentId: 'agent-w',
+        channel: 'whatsapp-business',
+        agentSessionStrategy: 'per_chat',
+      }),
+    },
+    providers: {
+      getById: async () => ({
+        id: 'provider-webhook-resume',
+        schema: 'webhook',
+        baseUrl: 'http://webhook.invalid/hook',
+        apiKey: '',
+        defaultTimeout: 1,
+      }),
+    },
+    chats: {
+      findByExternalIdSmart: async () => ({ id: 'chat-w', settings }),
+      update: async (_id: string, data: { settings: Record<string, unknown> }) => {
+        probe.updates.push(data.settings);
+        return { id: 'chat-w' };
+      },
+    },
+    followUpLifecycle: {
+      disarm: async () => {
+        probe.disarmCalls += 1;
+      },
+    },
+    instances: {
+      getById: async () => {
+        probe.sendCalls += 1;
+        return { id: 'inst-w', channel: 'whatsapp-business' };
+      },
+    },
+  } as never;
+}
+
+function makeWebhookEvent(): TypedOmniEvent<'message.received'> {
+  return {
+    id: 'evt-w',
+    type: 'message.received',
+    timestamp: new Date().toISOString(),
+    payload: { chatId: 'chat-ext-w', from: 'user-w', content: { text: '🗑️' }, rawPayload: {} },
+    metadata: { instanceId: 'inst-w', personId: 'person-w', correlationId: 'c-w' },
+  } as unknown as TypedOmniEvent<'message.received'>;
+}
+
+describe('session-cleaner on providers that cannot reset sessions', () => {
+  it('resumes a paused agent and keeps the other chat settings', async () => {
+    const probe: WebhookProbe = { updates: [], disarmCalls: 0, sendCalls: 0 };
+    const services = makeWebhookServices(probe, { agentPaused: true, muted: true });
+
+    await runTrashEmojiCleanup(services, webhookAgentDb(), makeWebhookEvent());
+
+    expect(probe.disarmCalls).toBe(1);
+    expect(probe.updates).toHaveLength(1);
+    expect(probe.updates[0]).toMatchObject({ agentPaused: false, muted: true });
+    expect(typeof probe.updates[0]?.agentResumedAt).toBe('string');
+    // Still a silent skip for the session itself: no confirmation nor error message.
+    expect(probe.sendCalls).toBe(0);
+  });
+
+  it('disarms follow-ups but writes nothing when the agent is not paused', async () => {
+    const probe: WebhookProbe = { updates: [], disarmCalls: 0, sendCalls: 0 };
+    const services = makeWebhookServices(probe, { muted: true });
+
+    await runTrashEmojiCleanup(services, webhookAgentDb(), makeWebhookEvent());
+
+    expect(probe.disarmCalls).toBe(1);
+    expect(probe.updates).toHaveLength(0);
+    expect(probe.sendCalls).toBe(0);
   });
 });

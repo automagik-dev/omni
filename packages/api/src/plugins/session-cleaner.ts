@@ -22,6 +22,9 @@ import { getPlugin } from './loader';
 
 const log = createLogger('session-cleaner');
 
+/** Prefix of the error thrown when the agent's provider cannot reset sessions. */
+const UNSUPPORTED_SESSION_CLEAR = 'Session clearing not supported for';
+
 /**
  * Classify the consumed envelope once and return the trusted tenant to thread
  * through the cleanup's DB blocks, or `null` for a legacy envelope. Throws on a
@@ -235,7 +238,7 @@ export async function clearAgentSession(
 
   // Fallback: direct AgnoOS client
   if (providerRecord.schema !== 'agno') {
-    throw new Error(`Session clearing not supported for ${providerRecord.schema} providers`);
+    throw new Error(`${UNSUPPORTED_SESSION_CLEAR} ${providerRecord.schema} providers`);
   }
 
   const client = createAgnoClient({
@@ -294,6 +297,64 @@ async function handleTrashEmojiMessage(
   }
 }
 
+/**
+ * Disarm any active follow-up sequence and resume the agent if a handoff paused it.
+ *
+ * Clearing the session means the user has explicitly reset the conversation:
+ * queued follow-ups referencing the cleared context should not fire, and the
+ * trash emoji from dev/QA is the explicit signal to re-enable the agent. Both
+ * are Omni's own chat state, so this also runs when the provider cannot reset
+ * its session. Failures are logged, never thrown — the caller still answers.
+ */
+async function resumeChatAfterSessionClear(
+  services: Services,
+  db: Database,
+  instanceId: string,
+  chatId: string,
+  tenantId: string | null,
+): Promise<void> {
+  try {
+    const dbChat = await runTenantWorkDb(db, tenantId, () => services.chats.findByExternalIdSmart(instanceId, chatId));
+    if (!dbChat?.id) return;
+
+    // Disarm THREADS the tenant — the lifecycle service scopes its own DB
+    // blocks and publishes between them, so wrapping it in one scope here
+    // would hold a worker transaction across a publish.
+    await services.followUpLifecycle.disarm({
+      chatId: dbChat.id,
+      instanceId,
+      reason: 'session_cleared',
+      tenantId,
+    });
+
+    // Resume agent if handoff had paused it.
+    // Also record agentResumedAt so the dispatcher can drop messages that
+    // arrived before the resume (NATS redelivery of pre-handoff messages).
+    const isAgentPaused = (dbChat.settings as { agentPaused?: boolean } | null)?.agentPaused === true;
+    if (isAgentPaused) {
+      // Discrete DB block → scoped. This write sets agentPaused:false, so
+      // chats.update's false→true handoff publish never fires here.
+      // Merge — a bare replace would drop unrelated settings keys.
+      await runTenantWorkDb(db, tenantId, () =>
+        services.chats.update(dbChat.id, {
+          settings: {
+            ...((dbChat.settings as Record<string, unknown>) ?? {}),
+            agentPaused: false,
+            agentResumedAt: new Date().toISOString(),
+          },
+        }),
+      );
+      log.info('Agent resumed after session clear (was paused by handoff)', { instanceId, chatId });
+    }
+  } catch (disarmError) {
+    log.warn('Failed to disarm follow-up after session clear', {
+      instanceId,
+      chatId,
+      error: String(disarmError),
+    });
+  }
+}
+
 export async function runTrashEmojiCleanup(
   services: Services,
   db: Database,
@@ -335,48 +396,7 @@ export async function runTrashEmojiCleanup(
       channelSegment,
     });
 
-    // Disarm any active follow-up sequence — clearing the session means the
-    // user has explicitly reset the conversation; queued follow-ups referencing
-    // the cleared context should not fire.
-    // Also resume agent if paused (handoff active) — trash emoji from dev/QA
-    // is the explicit signal to re-enable the agent and start fresh.
-    try {
-      const dbChat = await runTenantWorkDb(db, tenantId, () =>
-        services.chats.findByExternalIdSmart(instanceId, chatId),
-      );
-      if (dbChat?.id) {
-        // Disarm THREADS the tenant — the lifecycle service scopes its own DB
-        // blocks and publishes between them, so wrapping it in one scope here
-        // would hold a worker transaction across a publish.
-        await services.followUpLifecycle.disarm({
-          chatId: dbChat.id,
-          instanceId,
-          reason: 'session_cleared',
-          tenantId,
-        });
-
-        // Resume agent if handoff had paused it.
-        // Also record agentResumedAt so the dispatcher can drop messages that
-        // arrived before the resume (NATS redelivery of pre-handoff messages).
-        const isAgentPaused = (dbChat.settings as { agentPaused?: boolean } | null)?.agentPaused === true;
-        if (isAgentPaused) {
-          // Discrete DB block → scoped. This write sets agentPaused:false, so
-          // chats.update's false→true handoff publish never fires here.
-          await runTenantWorkDb(db, tenantId, () =>
-            services.chats.update(dbChat.id, {
-              settings: { agentPaused: false, agentResumedAt: new Date().toISOString() },
-            }),
-          );
-          log.info('Agent resumed after session clear (was paused by handoff)', { instanceId, chatId });
-        }
-      }
-    } catch (disarmError) {
-      log.warn('Failed to disarm follow-up after session clear', {
-        instanceId,
-        chatId,
-        error: String(disarmError),
-      });
-    }
+    await resumeChatAfterSessionClear(services, db, instanceId, chatId, tenantId);
 
     // Send confirmation message
     try {
@@ -400,10 +420,16 @@ export async function runTrashEmojiCleanup(
       'No agent configured',
       'No agent provider',
       'Agent has no provider',
-      'Session clearing not supported for',
+      UNSUPPORTED_SESSION_CLEAR,
     ];
     if (skippableErrors.some((e) => errorMessage.includes(e))) {
       log.debug('Session clearing skipped', { instanceId, reason: errorMessage });
+      // The agent exists but its provider cannot reset sessions (e.g. webhook):
+      // the trash emoji is still the dev/QA signal to lift a handoff pause, which
+      // is Omni's own chat state and does not depend on the provider.
+      if (errorMessage.includes(UNSUPPORTED_SESSION_CLEAR)) {
+        await resumeChatAfterSessionClear(services, db, instanceId, chatId, tenantId);
+      }
       return;
     }
 
