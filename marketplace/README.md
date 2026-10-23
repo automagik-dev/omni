@@ -31,8 +31,12 @@ A reverse proxy that passes only `/api/*` to Omni must pass `/market` too, unaut
 
 Omni's own entries are npm sources whose `registry` is that Omni (`https://<your-omni>/api/market/npm/`). The
 tarballs come from the release itself: `scripts/pack-market.ts` packs every `apps/*-dsh` plugin with `bun pm pack`
-into the CLI's `dist/market` (with a `market.json` manifest) when the CLI is packed. The vetted add-ons come from
-this file, built into the server. A server run from source has no packed plugins and lists the add-ons only;
+into the CLI's `dist/market` (with a `market.json` manifest) when the CLI is packed, and adds the Bot team and the
+welcome as the tarballs of the Automagik release `apps/automagik.json` pins (`apps/automagik.mjs` downloads them and
+refuses any whose integrity is not the pinned one; `AUTOMAGIK_TARBALLS` names a folder that already holds them, for
+an offline build). So an Omni serves the Bot team at the Automagik version it was tested with. The vetted add-ons
+come from this file, built into the server. A server run from source has no packed plugins and lists the add-ons
+(and Automagik's plugins, from their pinned commit) only;
 point `OMNI_MARKET_DIR` at a `bun scripts/pack-market.ts <dir>` output to serve them. The links use
 `OMNI_PUBLIC_URL` when it is set, else the address the request came in on.
 
@@ -57,10 +61,10 @@ DSH asks before it installs anything, and installs exactly the version listed.
 
 | Plugin | Source | Notes |
 |--------|--------|-------|
-| `@automagik/omni-dsh` | this repository, `apps/omni-ui-dsh`, pinned to a commit | Omni team: the Bot team the others build on. Keeps its files in `~/.omni`, never in your DSH profile. |
-| `@automagik/omni-channels-dsh` | this repository, `apps/omni-channels-dsh`, pinned to a commit | Omni channels: link your Omni, its channels, chats and automations. Needs Omni team. |
-| `@automagik/omni-canvas-dsh` | this repository, `apps/omni-canvas-dsh`, pinned to a commit | Omni canvases: live UI in the chat, drawn from your Omni. Needs Omni team and channels. |
-| `@automagik/omni-ai-dsh` | this repository, `apps/omni-ai-dsh`, pinned to a commit | The Omni welcome and Connect AI. |
+| `@automagik/bots-dsh` | [automagik-dev/automagik](https://github.com/automagik-dev/automagik), `apps/bots-dsh`, at the release `apps/automagik.json` pins | The Bot team the others build on (formerly `@automagik/omni-dsh`). Keeps its files in `~/.omni`, never in your DSH profile. |
+| `@automagik/omni-channels-dsh` | this repository, `apps/omni-channels-dsh`, pinned to a commit | Omni channels: link your Omni, its channels, chats and automations. Needs the Bot team. |
+| `@automagik/omni-canvas-dsh` | this repository, `apps/omni-canvas-dsh`, pinned to a commit | Omni canvases: live UI in the chat, drawn from your Omni. Needs the Bot team and channels. |
+| `@automagik/welcome-dsh` | automagik-dev/automagik, `apps/welcome-dsh`, at the release `apps/automagik.json` pins | The welcome and Connect AI (formerly `@automagik/omni-ai-dsh`). |
 | `dsh-oh-my-claude` 1.5.6-omni.1 | git: [automagik-genie fork](https://github.com/automagik-genie/dsh-oh-my-claude), pinned commit | The official Claude Code CLI as a provider. Omni's reviewed fork of lcestou's plugin. Personal use under the vendor's terms. |
 | `@goodandready/dsh-subscriptions` 0.7.21-omni.1 | git: [automagik-genie fork](https://github.com/automagik-genie/dsh-subscriptions), pinned commit | Antigravity, Cursor, Kiro, Perplexity and the other plans DSH doesn't sign in to itself. Omni's fork of GooDAnDReaDY's plugin, without the vendors DSH covers and without its own updater. Personal use under the vendors' terms. |
 
