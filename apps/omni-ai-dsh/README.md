@@ -109,11 +109,11 @@ the route.
 ## Develop
 
 ```sh
-npm install          # esbuild, for the client bundle
-npm run harness      # the pinned DSH release the tests and the linter run against
-npm test
-npm run lint
-npm run build        # rewrites client.js; commit it
+bun install          # esbuild, for the client bundle
+bun run harness      # the pinned DSH release the tests and the linter run against
+bun run test         # on Node, as DSH runs
+bun run lint
+bun run build        # rewrites client.js; commit it
 node scripts/build-client.mjs --check
 ```
 

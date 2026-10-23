@@ -43,10 +43,13 @@ describe('readBasePaths', () => {
 });
 
 describe('getAllVersionFields', () => {
-  test("the DSH plugins carry Omni's version, lockfiles included", () => {
+  test("the DSH plugins carry Omni's version, npm lockfiles included where a folder keeps one", () => {
     const paths = new Set(getAllVersionFields().map((field) => field.path));
     for (const app of ['omni-ui-dsh', 'omni-ai-dsh', 'omni-channels-dsh', 'omni-canvas-dsh']) {
       expect(paths.has(`apps/${app}/package.json`)).toBe(true);
+    }
+    // Bun's lockfile does not record the root package's own version, so there is nothing to sync.
+    for (const app of ['omni-channels-dsh', 'omni-canvas-dsh']) {
       expect(paths.has(`apps/${app}/package-lock.json`)).toBe(true);
     }
   });
