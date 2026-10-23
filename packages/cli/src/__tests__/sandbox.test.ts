@@ -22,7 +22,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInstallCommand } from '../commands/install.js';
 import { createSandboxCommand } from '../commands/sandbox.js';
-import { type ChildHandle, SandboxSupervisor, type SupervisorDeps } from '../sandbox-supervisor.js';
+import {
+  CappedLog,
+  type ChildHandle,
+  SandboxSupervisor,
+  type SupervisorDeps,
+  spawnChildProcess,
+} from '../sandbox-supervisor.js';
 import {
   SANDBOX_PGSERVE_VERSION,
   SANDBOX_PREFERRED_PORTS,
@@ -692,6 +698,56 @@ describe('SandboxSupervisor', () => {
     expect(await supervisor.run()).toBe(1);
     expect(fake.events).toContain('kill pg SIGTERM');
     expect(fake.events).not.toContain('spawn api');
+  });
+});
+
+describe('CappedLog', () => {
+  test('a write that would pass the cap moves the log to .1 and starts a new one', () => {
+    const path = join(root, 'pg.log');
+    writeFileSync(path, 'x'.repeat(60));
+    const log = new CappedLog(path, 100);
+    log.write(Buffer.from('a'.repeat(30)));
+    expect(statSync(path).size).toBe(90);
+    log.write(Buffer.from('b'.repeat(30)));
+    log.write(Buffer.from('c'.repeat(30)));
+    log.close();
+    expect(readFileSync(`${path}.1`, 'utf8')).toBe(`${'x'.repeat(60)}${'a'.repeat(30)}`);
+    expect(readFileSync(path, 'utf8')).toBe(`${'b'.repeat(30)}${'c'.repeat(30)}`);
+  });
+
+  test('a later rotation replaces the older .1, so at most two logs exist', () => {
+    const path = join(root, 'api.log');
+    const log = new CappedLog(path, 10);
+    for (const letter of ['a', 'b', 'c']) log.write(Buffer.from(letter.repeat(8)));
+    log.close();
+    expect(readFileSync(`${path}.1`, 'utf8')).toBe('b'.repeat(8));
+    expect(readFileSync(path, 'utf8')).toBe('c'.repeat(8));
+    expect(readdirSync(root).filter((name) => name.startsWith('api.log'))).toHaveLength(2);
+  });
+
+  test("a child's stdout and stderr reach its log through the supervisor", async () => {
+    const logPath = join(root, 'child.log');
+    const handle = spawnChildProcess({
+      name: 'nats',
+      cmd: [process.execPath, '-e', 'console.log("out line"); console.error("err line")'],
+      env: { PATH: process.env.PATH ?? '' },
+      readyPort: 1,
+      logPath,
+    });
+    expect(await handle.exited).toBe(0);
+    await Bun.sleep(50);
+    const text = readFileSync(logPath, 'utf8');
+    expect(text).toContain('out line');
+    expect(text).toContain('err line');
+  });
+
+  test('writes after close are dropped, not thrown', () => {
+    const path = join(root, 'nats.log');
+    const log = new CappedLog(path, 100);
+    log.close();
+    log.close();
+    expect(() => log.write(Buffer.from('late'))).not.toThrow();
+    expect(readFileSync(path, 'utf8')).toBe('');
   });
 });
 

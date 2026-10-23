@@ -14,7 +14,7 @@
  */
 
 import { type ChildProcess, spawn } from 'node:child_process';
-import { closeSync, openSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, fstatSync, openSync, renameSync, rmSync, writeFileSync, writeSync } from 'node:fs';
 import { ensureOmniDatabaseExists, waitForCanonicalReady } from './lib/canonical-pgserve.js';
 import {
   SANDBOX_EXIT,
@@ -38,6 +38,51 @@ const BACKOFF_START_MS = 1000;
 const BACKOFF_MAX_MS = 30_000;
 const READY_TIMEOUT_MS = { pg: 180_000, nats: 30_000, api: 180_000 } as const;
 const CHILD_STOP_TIMEOUT_MS = 20_000;
+const MAX_LOG_BYTES = 10 * 1024 * 1024;
+
+/**
+ * A child's log, kept under a size cap: a write that would pass it first moves
+ * the log to `<log>.1` (replacing the older one) and starts a new one. pgserve
+ * runs Postgres with `log_statement=all`, so pg.log would otherwise grow with
+ * every query the API makes.
+ */
+export class CappedLog {
+  private fd: number;
+  private size: number;
+  private closed = false;
+
+  constructor(
+    private readonly path: string,
+    private readonly maxBytes = MAX_LOG_BYTES,
+  ) {
+    this.fd = openSync(path, 'a', 0o600);
+    this.size = fstatSync(this.fd).size;
+  }
+
+  write(chunk: Uint8Array): void {
+    if (this.closed) return;
+    try {
+      if (this.size > 0 && this.size + chunk.length > this.maxBytes) this.rotate();
+      writeSync(this.fd, chunk);
+      this.size += chunk.length;
+    } catch {
+      // a full or vanished disk must not take the supervisor down with it
+    }
+  }
+
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    closeSync(this.fd);
+  }
+
+  private rotate(): void {
+    closeSync(this.fd);
+    renameSync(this.path, `${this.path}.1`);
+    this.fd = openSync(this.path, 'a', 0o600);
+    this.size = 0;
+  }
+}
 
 export interface ChildHandle {
   pid: number;
@@ -70,16 +115,21 @@ type ChildState = {
   state: 'starting' | 'ready' | 'restarting' | 'stopped' | 'failed';
 };
 
-function spawnChildProcess(spec: SandboxChildSpec): ChildHandle {
+export function spawnChildProcess(spec: SandboxChildSpec): ChildHandle {
   const [file, ...args] = spec.cmd;
   if (!file) throw new Error(`empty command for ${spec.name}`);
-  const log = openSync(spec.logPath, 'a', 0o600);
+  // Output goes through the supervisor, so it can keep the log under its cap.
+  const log = new CappedLog(spec.logPath);
   let child: ChildProcess;
   try {
-    child = spawn(file, args, { env: spec.env, stdio: ['ignore', log, log] });
-  } finally {
-    closeSync(log);
+    child = spawn(file, args, { env: spec.env, stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (error) {
+    log.close();
+    throw error;
   }
+  child.stdout?.on('data', (chunk: Buffer) => log.write(chunk));
+  child.stderr?.on('data', (chunk: Buffer) => log.write(chunk));
+  child.once('close', () => log.close());
   const exited = new Promise<number>((done) => {
     child.once('exit', (code, signal) => done(code ?? (signal ? 128 : 1)));
     child.once('error', () => done(127));
