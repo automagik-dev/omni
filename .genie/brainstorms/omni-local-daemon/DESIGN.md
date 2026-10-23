@@ -23,10 +23,58 @@ cannot run a server. The labs wish deferred "local Omni inside the app" on purpo
 Opening the app for the first time offers **Run Omni on this computer** next to **Connect
 to my Omni**. Choosing it starts a local Omni the app owns: no terminal, no PM2, nothing
 outside `~/.omni`, reachable only from this machine. The person claims it as its owner
-(their WhatsApp number, the human ID the login redesign already uses), links WhatsApp by
+(their WhatsApp number, the human ID the login redesign already uses; Tactu stores its owner
+verifier as a salted hash readable only by the daemon and the doctor, and so does this), links WhatsApp by
 scanning a QR, and is live. An existing Omni on the machine is detected and offered a
 one-click move into the new daemon. The daemon keeps itself healthy and says so, and
 `omni doctor` explains and repairs what it cannot.
+
+## What it takes from Tactu
+
+Tactu (the `droid` repo, `dev` branch: `infra/deploy.mjs`, `docs/OPERATIONS.md`, the
+`tactu-deploy` and `droid-oss-bundle` designs) already runs a self-healing deployer and has
+designed its doctor. This daemon follows it:
+
+- **The platform supervises, not a loop of ours.** On Linux, systemd user units:
+  `Restart=on-failure`, `RestartMode=direct`, `StartLimitBurst`, `OnFailure=` (acting only once
+  the start limit is hit), `Type=notify` with `READY=1`, `UMask=0077`, `NoNewPrivileges` and
+  memory caps. On macOS, launchd `KeepAlive` plus our own record of starts.
+- **The healer is apart from what it heals.** Rollback and the doctor run from a pinned copy
+  outside every release (`~/.omni/bin/omnid`): never restart from the interpreter being replaced.
+- **Restart policy, taken as-is:**
+  - A single crash only restarts.
+  - A crash loop rolls back only a *new* release, within its bake window: 15 minutes, gates
+    every minute, three failures in a row.
+  - A promoted release is never rolled back by health. It gets backoff restarts of 1, 2, 4,
+    8 and 16 minutes, capped at 30, reset after 60 healthy minutes.
+  - Anything else raises `needsOwner`, which stops automation until the owner clears it.
+- **Layered probes per service, in order:**
+  1. The unit is active and stable (no new restarts in 30 s).
+  2. Its socket or CLI answers.
+  3. A protocol smoke that changes nothing.
+  4. Remote telemetry, advisory only: `inconclusive` when unreachable.
+
+  For Omni that is: `pg_isready` → the NATS monitor and JetStream → `GET /api/v2/health` →
+  a read-only API call.
+- **Doctor: plain checks, no model, a verdict per check.**
+  - Diagnosing is automatic. Fixing comes from a closed list.
+  - Each fix is proposed with a single-use id that expires in 15 minutes, and applied only
+    after the owner's yes ("it tells you first, and fixes only after your yes").
+  - A small list of automatic restarts starts empty at install; the owner adds to it.
+  - Exit codes are 0 (done or nothing to do), 1 (refused or rolled back), 2 (config error) and
+    3 (needs the owner), with `--json`.
+  - The doctor's own page keeps working while the daemon is down.
+- **Install and move as transactions with inverses.** `install --check` prints the plan and
+  its inverses, and `--undo` reverts. Moving an existing install is a **cutover**: pin the old
+  build as `legacy`, snapshot the data with its services stopped, then switch. Migrations are
+  append-only and checked before they apply; data is restored only when the schema changed.
+- **Receipts:**
+  - `journal.jsonl`: one line per step (`at, op, step, result, detail`).
+  - `alerts.jsonl`, `state.json`, a failure log per release, and a `FREEZE` file.
+  - An O_EXCL lock that is taken over when its pid is dead.
+  - Alerts go to the journal and the app. Never to WhatsApp.
+- **Before any password prompt:** check the machine (disk, memory, OS) first. When root is
+  needed at all, list the steps in plain words and ask once. The daemon itself needs none.
 
 ## Shape
 
@@ -140,15 +188,11 @@ old install, a version change of Postgres).
 
 ## Decisions to take
 
-1. **tactu.** "Self-healing services with doctor, like planned on tactu": where does that plan
-   live? It is not in this repo, the desktop and marketplace repos, brain, sigil, the Mac's
-   `~/prod`, or the automagik-dev and namastexlabs GitHub orgs. This design should follow it
-   where they overlap.
-2. **The relay** for scan-to-connect to a remote Omni: does Automagik host it (for example
+1. **The relay** for scan-to-connect to a remote Omni: does Automagik host it (for example
    `connect.automagik.dev`)? Without it, a remote connect has to ask for something first.
-3. **Postgres binaries.** Fetch autopg's PG 18 build per platform (the version we already
+2. **Postgres binaries.** Fetch autopg's PG 18 build per platform (the version we already
    run), or ship plain upstream binaries? Each is 30–60 MB per platform.
-4. **The CLI path.** Should `omni install` move to `omnid` in the same release (one runtime,
+3. **The CLI path.** Should `omni install` move to `omnid` in the same release (one runtime,
    PM2 gone), or after the desktop path has run for a release?
 
 ## Not in scope
