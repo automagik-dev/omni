@@ -228,8 +228,7 @@ format:
 # DATABASE_URL / TEST_DATABASE_URL / ENABLE_DB_TESTS / OMNI_* on top of each
 # package's files, so pointing at a different database invalidates the cache.
 # Env is loaded into the environment here because per-package `bun test` runs
-# have no --env-file. Workspaces only — apps/khal-ui stays out (private
-# @khal-os deps, own test run).
+# have no --env-file.
 # LOG_LEVEL is forced to 'silent' AFTER .env loads (which sets debug): suites
 # intentionally exercise thousands of warn/error paths and the JSON flood is
 # pure I/O + noise (#967). Override: make test TEST_LOG_LEVEL=debug
@@ -307,7 +306,7 @@ verify-versions:
 # Automagik marketplace: the static index (DSH's own parser, and every pinned omni commit holds its
 # package) and the packer that bundles apps/*-dsh into each Omni's own market (bun pm pack).
 marketplace-check:
-	bun test scripts/marketplace.test.ts scripts/pack-market.test.ts
+	bun test scripts/marketplace.test.ts scripts/pack-market.test.ts scripts/admin-ui-image.test.ts
 	bun scripts/marketplace.ts check
 
 # Run all quality checks

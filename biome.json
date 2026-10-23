@@ -63,11 +63,7 @@
       "brain/.obsidian",
       ".dev",
       ".hermes",
-      "repos",
-      "apps/khal-ui/scripts/openapi.snapshot.json",
-      "apps/khal-ui/package/src/capabilities/capabilities.json",
-      "apps/khal-ui/package/src/capabilities/evidence-summary.json",
-      "apps/khal-ui/evidence"
+      "repos"
     ]
   },
   "overrides": [
@@ -106,25 +102,6 @@
           },
           "style": {
             "noNonNullAssertion": "off"
-          },
-          "a11y": {
-            "useSemanticElements": "off"
-          }
-        }
-      }
-    },
-    {
-      "include": ["apps/khal-ui/**"],
-      "linter": {
-        "rules": {
-          "complexity": {
-            "noExcessiveCognitiveComplexity": "off"
-          },
-          "style": {
-            "noNonNullAssertion": "off"
-          },
-          "suspicious": {
-            "noConsole": "off"
           },
           "a11y": {
             "useSemanticElements": "off"

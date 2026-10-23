@@ -1,78 +1,66 @@
 # syntax=docker/dockerfile:1.7
 # =============================================================================
-# Omni Admin UI — single-origin image (KhalOS pack + BFF)
+# Omni Admin UI — the Omni UI (DeepSeek Harness + Omni's plugins) as one image
 # =============================================================================
-# Build from the REPO ROOT (context must see apps/khal-ui + packages/sdk):
+# Build from the REPO ROOT (context must see package.json + apps/*-dsh):
 #
 #   DOCKER_BUILDKIT=1 docker build --platform linux/arm64 \
-#     -f deploy/Dockerfile.admin-ui \
-#     --secret id=npmrc,src=$HOME/.npmrc \
-#     -t omni-admin-ui:dev .
+#     -f deploy/Dockerfile.admin-ui -t omni-admin-ui:dev .
 #
-# One process serves everything on port 8899:
-#   • the built SPA (the dev/ Vite harness = the standalone KhalOS shell that
-#     bundles the pack from source and supplies the @khal-os context) on any
-#     non-API route, and
-#   • the BFF proxy on `/omni/*` (injects `x-api-key` server-side so the browser
-#     never sees the key) + `/health` + `/diag`.
+# The image keeps the contract the Helm chart's adminUi workload has always used:
+# port 8899 (PORT), GET /health, and OMNI_BASE_URL + OMNI_API_KEY from the
+# ConfigMap and Secret. The key stays on the server: the plugins call Omni
+# from DSH's host process, never from the browser. What runs is DSH on loopback
+# with the profile deploy/admin-ui/prepare.mjs assembles (Omni's plugins packed
+# from apps/*-dsh at this checkout's version), behind deploy/admin-ui/server.mjs.
+# See server.mjs for the settings and the sign-in (the launch URL in the log).
 #
-# The private @khal-os/* packages (git.namastex.io) are only reachable at BUILD
-# time via the `npmrc` build secret — never baked into a layer, never in the
-# runtime image. The BFF itself has zero runtime deps (pure Bun APIs), so the
-# runtime stage ships no node_modules.
+# Everything needed is public: no build secret is read (an `npmrc` secret
+# passed by an existing pipeline is accepted and unused).
 # =============================================================================
 
-# Pinned to the toolchain that generated apps/khal-ui/bun.lock. Override with
-# --build-arg BUN_VERSION=…
-ARG BUN_VERSION=1.4.2
+ARG NODE_VERSION=22.23.2
 
-# ---- builder: install (private @khal-os) + vite-build the standalone SPA -----
-FROM oven/bun:${BUN_VERSION} AS builder
-ENV HUSKY=0
-WORKDIR /app/apps/khal-ui
-# packages/sdk is the file: target of the pack's `@omni/sdk` dep and the Vite
-# alias source; place it where the relative link expects
-# (apps/khal-ui/package → ../../../packages/sdk).
-COPY packages/sdk /app/packages/sdk
-# App sources — includes the committed capabilities.json the pack imports.
-COPY apps/khal-ui /app/apps/khal-ui
-# The token for @khal-os/* is mounted (never persisted to a layer). BuildKit
-# required. `.npmrc` in the app dir maps the registry; this supplies the auth.
-RUN --mount=type=secret,id=npmrc,target=/root/.npmrc,required=true \
-    bun install --frozen-lockfile
-# packages/sdk's only runtime dep (openapi-fetch, public npm) must resolve from
-# its OWN src/ during the Vite build — rolldown resolves relative to the
-# importing file (packages/sdk/src/client.ts), and apps/khal-ui/node_modules is
-# not on that path. In the monorepo it comes from the omni root install; here we
-# give packages/sdk its own node_modules. --production skips the heavy
-# openapi-typescript devDep (only needed to regenerate types, not to build).
-RUN cd /app/packages/sdk && bun install --production --ignore-scripts
-# Build the Vite harness → apps/khal-ui/dev/dist (a self-contained servable SPA).
-RUN bun run --filter '@omni/khal-ui-dev' build
+# ---- builder: the pinned DSH + Omni's plugins, packed from this checkout -----
+FROM node:${NODE_VERSION}-bookworm-slim AS builder
+WORKDIR /src
+COPY package.json ./
+COPY apps ./apps
+COPY deploy/admin-ui ./deploy/admin-ui
+RUN node deploy/admin-ui/prepare.mjs /out
 
-# ---- runtime: slim, non-root; BFF serves the SPA + injects x-api-key ---------
-FROM oven/bun:${BUN_VERSION}-slim AS runtime
+# ---- runtime: non-root; server.mjs fronts DSH on PORT ------------------------
+FROM node:${NODE_VERSION}-bookworm-slim AS runtime
+# git and certificates for what Bots run (clones, https); nothing else is added.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates git \
+  && rm -rf /var/lib/apt/lists/*
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=8899 \
-    PUBLIC_DIR=/app/public \
-    HOME=/home/bun
+    OMNI_HOME=/data \
+    HOME=/home/node \
+    DO_NOT_TRACK=1
 WORKDIR /app
-# The BFF is pure Bun (Bun.serve/Bun.file/fetch/node:*), so no node_modules.
-COPY --from=builder /app/apps/khal-ui/service/src ./service/src
-COPY --from=builder /app/apps/khal-ui/dev/dist ./public
-
-# `bun` user (uid 1000) ships with the oven/bun image.
-RUN mkdir -p /home/bun && chown -R bun:bun /app /home/bun
-USER bun
+COPY --from=builder /out/runtime ./runtime
+COPY --from=builder /out/profile ./profile
+COPY --from=builder /out/versions.json ./versions.json
+COPY deploy/admin-ui/server.mjs ./server.mjs
+# DSH's plugin manager runs pnpm (the runtime ships it) to install market plugins.
+RUN ln -s /app/runtime/node_modules/pnpm/bin/pnpm.cjs /usr/local/bin/pnpm \
+  && mkdir -p /data \
+  && chown -R node:node /data /home/node
+# `node` user (uid 1000) ships with the node image, as the chart's securityContext expects.
+USER node
+VOLUME /data
 
 LABEL org.opencontainers.image.title="omni-admin-ui" \
-      org.opencontainers.image.description="Omni Admin UI (KhalOS pack + BFF) — single-origin static + x-api-key proxy" \
+      org.opencontainers.image.description="Omni Admin UI: the Omni UI (DeepSeek Harness + Omni's plugins) behind /health on port 8899" \
       org.opencontainers.image.source="https://github.com/automagik-dev/omni" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 EXPOSE 8899
-# Health: GET /health → "ok" (the BFF answers immediately; no upstream needed).
-HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-  CMD bun -e "fetch('http://127.0.0.1:8899/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-ENTRYPOINT ["bun", "run", "service/src/index.ts"]
+# Health: GET /health → "ok" once DSH is up.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||8899)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+ENTRYPOINT ["node", "server.mjs"]

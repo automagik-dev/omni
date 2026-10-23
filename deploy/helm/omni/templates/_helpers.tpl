@@ -76,7 +76,7 @@ app.kubernetes.io/component: api
 {{- end }}
 
 {{/*
-Admin UI (khal-ui) workload — an optional second Deployment+Service gated on
+Admin UI (the Omni UI: DSH + Omni's plugins) workload — an optional second Deployment+Service gated on
 adminUi.enabled. Its own component label keeps it clear of the api workload's
 PDB / anti-affinity / networkpolicy selectors (which key on component: api).
 */}}
@@ -97,7 +97,7 @@ Name of the chart-minted admin-ui Secret (OMNI_API_KEY from adminUi.secret.env).
 {{- end }}
 
 {{/*
-OMNI_BASE_URL the admin UI's BFF proxies to: an explicit
+OMNI_BASE_URL the admin UI's plugins call: an explicit
 adminUi.config.OMNI_BASE_URL wins, else the in-cluster omni-api Service.
 */}}
 {{- define "omni.adminUi.baseUrl" -}}
@@ -105,6 +105,19 @@ adminUi.config.OMNI_BASE_URL wins, else the in-cluster omni-api Service.
 {{- .Values.adminUi.config.OMNI_BASE_URL -}}
 {{- else -}}
 {{- printf "http://%s:%v" (include "omni.fullname" .) .Values.service.port -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+OMNI_UI_PUBLIC_URL the UI advertises and trusts: an explicit
+adminUi.config.OMNI_UI_PUBLIC_URL wins, else https://<ingress host><path> when
+the ingress is on (the ingress terminates TLS), else empty (port-forward only).
+*/}}
+{{- define "omni.adminUi.publicUrl" -}}
+{{- if .Values.adminUi.config.OMNI_UI_PUBLIC_URL -}}
+{{- .Values.adminUi.config.OMNI_UI_PUBLIC_URL -}}
+{{- else if and .Values.adminUi.ingress.enabled .Values.adminUi.ingress.host -}}
+{{- printf "https://%s%s" .Values.adminUi.ingress.host (.Values.adminUi.ingress.path | default "/") -}}
 {{- end -}}
 {{- end }}
 

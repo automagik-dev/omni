@@ -27,7 +27,7 @@ export const repoRoot = join(__dirname, '..', '..');
  * the Bun workspaces, but they ship with Omni and carry its version: they are
  * synced, with their package-lock.json.
  */
-const EXCLUDED_WORKSPACE_PACKAGES = new Set(['audio-decode-shim', 'khal-ui']);
+const EXCLUDED_WORKSPACE_PACKAGES = new Set(['audio-decode-shim']);
 
 /** Marketplace plugin entry that this repo owns and keeps in sync. */
 const MARKETPLACE_PLUGIN_NAME = 'omni';

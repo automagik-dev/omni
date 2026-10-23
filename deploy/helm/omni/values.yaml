@@ -206,17 +206,21 @@ extraVolumes: []
 extraVolumeMounts: []
 
 # =============================================================================
-# Admin UI (khal-ui) — optional second workload
+# Admin UI (the Omni UI) — optional second workload
 # =============================================================================
-# The Omni Admin UI (apps/khal-ui, app id "omni-admin") as a single-container
-# pod: one Bun process serves the built SPA AND proxies /omni/* to omni-api,
-# injecting the omni_sk_ key server-side so the browser never sees it. Image is
-# ghcr.io/automagik-dev/omni-admin-ui. No public workflow builds or pushes it
-# today (image-publish.yml is verification-only and image-build.yml mints only
-# omni-api); an operator supplies it. OFF by default and in the generic AWS
-# overlays; the dev overlay turns it on. On the shared khal.ai realms it stays OFF until a real
-# auth layer fronts it — the harness shell mocks a full-admin user, so an open
-# ingress would hand anyone reaching the host full control of the omni backend.
+# The Omni UI (DeepSeek Harness with Omni's plugins, apps/*-dsh) as a
+# single-container pod built from deploy/Dockerfile.admin-ui: DSH listens on
+# loopback behind deploy/admin-ui/server.mjs, which answers /health and passes
+# everything else (WebSockets included) to DSH. The plugins call omni-api from
+# the server with the omni_sk_ key, so the browser never sees it. DSH locks the
+# UI with a launch token: open the `[omni-ui] open …?token=…` URL from the pod's
+# log once and the browser keeps a cookie (across restarts while persistence
+# keeps /data). Image is ghcr.io/automagik-dev/omni-admin-ui. No public workflow
+# builds or pushes it today (image-publish.yml is verification-only and
+# image-build.yml mints only omni-api); an operator supplies it. OFF by default
+# and in the generic AWS overlays; the dev overlay turns it on. Bots run tools
+# (a shell among them) inside this pod, so an ingress should still sit behind
+# the realm's own auth when anyone but the owner can reach it.
 adminUi:
   enabled: false
   image:
@@ -227,7 +231,7 @@ adminUi:
   replicaCount: 1
   service:
     type: ClusterIP
-    port: 8899           # BFF bind port; drives containerPort + config PORT
+    port: 8899           # UI bind port; drives containerPort + config PORT
   ingress:
     enabled: false
     className: ""
@@ -236,14 +240,26 @@ adminUi:
     path: /
     pathType: Prefix
     tls: []
-  # Non-secret env → the admin-ui ConfigMap. PORT + PUBLIC_DIR are derived by the
-  # chart; leave OMNI_BASE_URL empty to target the in-cluster omni-api Service.
+  # Non-secret env → the admin-ui ConfigMap. PORT is derived by the chart; leave
+  # OMNI_BASE_URL empty to target the in-cluster omni-api Service, and
+  # OMNI_UI_PUBLIC_URL empty to derive https://<ingress.host><ingress.path>.
   config:
     HOST: "0.0.0.0"
     OMNI_BASE_URL: ""
-    BFF_CORS_ORIGINS: ""
+    OMNI_UI_PUBLIC_URL: ""
   extraConfig: {}
-  # OMNI_API_KEY (omni_sk_…) — the BFF's server-side bearer key. Two ways in,
+  # /data: the UI's Bots, Sessions, sign-in cookie secret and Omni link. Off →
+  # an emptyDir (lost on restart). On → a PVC (or existingClaim), and the
+  # Deployment rolls with Recreate so one pod holds the ReadWriteOnce volume.
+  persistence:
+    enabled: false
+    existingClaim: ""
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+    size: 5Gi
+  # OMNI_API_KEY (omni_sk_…) — the UI's server-side Omni key. Without one the
+  # UI signs in to an Omni itself (Connect Omni). Two ways in,
   # both envFrom'd (the browser never sees it):
   #   • existingSecret — an operator/ESO-synced Secret carrying OMNI_API_KEY
   #     (the homolog/prod path; see deploy/k8s/omni-hml/externalsecret-omni-ui.yaml).
@@ -268,11 +284,11 @@ adminUi:
       failureThreshold: 6
   resources:
     requests:
-      cpu: 50m
-      memory: 128Mi
+      cpu: 100m
+      memory: 512Mi
     limits:
-      cpu: 500m
-      memory: 256Mi
+      cpu: "2"
+      memory: 2Gi
   podAnnotations: {}
   nodeSelector: {}
   tolerations: []

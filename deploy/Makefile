@@ -27,9 +27,9 @@ VALUES         ?= $(CHART)/values-$(REALM).yaml
 HELM_EXTRA     ?=
 PORT           ?= 8882
 
-# Admin UI (khal-ui) bearer key — supplied at deploy time, NEVER committed. When
-# set, it is injected into the UI BFF's Secret via --set-string; empty → no flag
-# (the UI, when enabled, runs keyless until a key is provided). --set-string
+# Admin UI (the Omni UI) Omni key — supplied at deploy time, NEVER committed. When
+# set, it is injected into the UI's Secret via --set-string; empty → no flag
+# (the UI, when enabled, signs in to an Omni itself until a key is provided). --set-string
 # avoids any type coercion of the omni_sk_ value.
 OMNI_API_KEY   ?=
 ADMIN_UI_KEY_SET := $(if $(OMNI_API_KEY),--set-string adminUi.secret.env.OMNI_API_KEY=$(OMNI_API_KEY),)
@@ -55,14 +55,11 @@ build-autopg: ## Build autopg:dev image from deploy/autopg.Dockerfile
 	  -t autopg:dev --load $(CURDIR)
 
 .PHONY: build-ui
-build-ui: ## Build omni-admin-ui:dev image (needs @khal-os token in ~/.npmrc)
-	# The UI image bundles PRIVATE @khal-os/* packages; the git.namastex.io token
-	# is read from ~/.npmrc and passed as a BuildKit secret (never baked into a
-	# layer). Context is the repo root (the Dockerfile COPYs apps/khal-ui +
-	# packages/sdk). buildx forces BuildKit so the secret mount + per-Dockerfile
-	# .dockerignore are honored.
+build-ui: ## Build omni-admin-ui:dev image (the Omni UI: DSH + Omni's plugins)
+	# Context is the repo root (the Dockerfile COPYs package.json, apps/*-dsh and
+	# deploy/admin-ui); everything it installs is public. buildx forces BuildKit
+	# so the per-Dockerfile .dockerignore is honored.
 	docker buildx build --platform $(PLATFORM) -f $(CURDIR)/Dockerfile.admin-ui \
-	  --secret id=npmrc,src=$(HOME)/.npmrc \
 	  -t omni-admin-ui:$(TAG) --load $(ROOT)
 
 .PHONY: lint

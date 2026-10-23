@@ -93,11 +93,11 @@ database:
 #   persistence:
 #     storageClass: gp3
 
-# ---- Admin UI (khal-ui) — enable later, behind auth -------------------------
+# ---- Admin UI (the Omni UI) — enable later, behind auth ---------------------
 # The UI ships OFF in this realm (values-homolog.yaml `adminUi.enabled: false`).
 # To turn it on once a real auth layer fronts it, flip enabled=true and
 # uncomment the ingress below. It inherits the ALB shape; supply the ACM cert
-# ARN the same way the api ingress does (--set, dots escaped). The BFF's
+# ARN the same way the api ingress does (--set, dots escaped). The UI's
 # OMNI_API_KEY comes from the ESO-synced `omni-ui` Secret
 # (deploy/k8s/omni-hml/externalsecret-omni-ui.yaml — apply it first).
 # adminUi:
