@@ -34,6 +34,10 @@ export async function connectFromApp(url, grant) {
       return
     }
     const reply = await call('omni-pair-start', { url, auto: true })
+    if (reply.status === 'unavailable') {
+      window.dispatchEvent(new CustomEvent(PAIRING_EVENT, { detail: { problem: unavailableWords(reply) } }))
+      return
+    }
     window.dispatchEvent(new CustomEvent(PAIRING_EVENT, { detail: reply.pairing }))
     if (reply.pairing?.approveUrl) window.open(reply.pairing.approveUrl, '_blank', 'noopener')
   } catch (error) {
@@ -93,6 +97,23 @@ export function foundRow(omni, { mac = false, linked = false } = {}) {
 }
 
 /**
+ * What the page says when a typed address answers that it cannot approve this app
+ * (omni-link.js start): too old (`version` from its health), or pairing off.
+ */
+export function unavailableWords(reply) {
+  if (reply?.reason === 'too-old') {
+    return reply.version
+      ? t('Omni {version} is too old to pair from here. Update it, or paste an API key or the link it sent you.', { version: reply.version })
+      : t('This Omni is too old to pair from here. Update it, or paste an API key or the link it sent you.')
+  }
+  if (reply?.reason === 'off') return t('Pairing is off on this Omni. Its owner can turn it on, or you can paste an API key.')
+  return reply?.message ?? null
+}
+
+// A link made with a key that can do everything (it could not make this device its own).
+export const noticeWords = notice => (notice === 'broad-key' ? t('This key can do everything on your Omni; consider giving this device its own key.') : null)
+
+/**
  * The row to open first: the first found Omni with something to do, else the remote one.
  */
 export function firstOpen(found, { mac = false } = {}) {
@@ -125,8 +146,8 @@ function Choice({ id, open, icon, accent, title, sub, badge, tone, onToggle, chi
 
 // A pasted API key for an Omni that cannot approve this app. It goes to this host, which
 // checks it with that Omni and keeps it (omni-discover.js); nothing sends it back here.
-function KeyEntry({ hint, disabled, onConnect }) {
-  const [open, setOpen] = useState(false)
+function KeyEntry({ hint, disabled, onConnect, startOpen = false }) {
+  const [open, setOpen] = useState(startOpen)
   const [value, setValue] = useState('')
   if (!open) return h('button', { type: 'button', className: 'ox-link', onClick: () => setOpen(true) }, t('Use it with an API key'))
   const submit = (event) => {
@@ -162,6 +183,8 @@ export function ConnectOmni({ onPaired, embedded = false } = {}) {
   const [linked, setLinked] = useState(null)
   // `{row, kind, id, title}` while a row's terminal is open.
   const [terminal, setTerminal] = useState(null)
+  // `{url, reason, version}` when a typed address cannot approve this app: its key instead.
+  const [remoteKey, setRemoteKey] = useState(null)
   const alive = useRef(true)
   useEffect(() => () => { alive.current = false }, [])
 
@@ -231,8 +254,13 @@ export function ConnectOmni({ onPaired, embedded = false } = {}) {
     try {
       const reply = await call(endpoint, payload)
       if (!alive.current) return
-      if (reply.status === 'paired') await finish(row, reply.origin)
-      else if (reply.pairing) {
+      if (reply.status === 'paired') {
+        await finish(row, reply.origin)
+        if (alive.current) setNote(noticeWords(reply.notice))
+      } else if (reply.status === 'unavailable') {
+        if (row === REMOTE) setRemoteKey({ url: reply.url, reason: reply.reason, version: reply.version ?? null })
+        setProblem(unavailableWords(reply))
+      } else if (reply.pairing) {
         pairingRow.current = row
         setPairing(reply.pairing)
       } else if (reply.message) setNote(reply.message)
@@ -341,10 +369,11 @@ export function ConnectOmni({ onPaired, embedded = false } = {}) {
       h('form', { className: 'ox-field', onSubmit: submitRemote },
         h('input', {
           className: 'ox-input', type: 'text', inputMode: 'url', autoComplete: 'off', spellCheck: false, value: remote,
-          placeholder: t('omni.example.com, or the link Omni sent you'), 'aria-label': t('Omni address or link'), onChange: event => setRemote(event.target.value),
+          placeholder: t('omni.example.com, or the link Omni sent you'), 'aria-label': t('Omni address or link'), onChange: (event) => { setRemote(event.target.value); setRemoteKey(null) },
         }),
         h('button', { type: 'submit', className: 'oc-primary', disabled: anyBusy || readRemote(remote) === null }, busy === REMOTE ? t('Connecting…') : t('Continue'))),
-      h('p', { className: 'ox-muted ox-hint' }, t('No address? Text connect to yourself on WhatsApp, and your Omni replies with a link that connects this app.')))))
+      h('p', { className: 'ox-muted ox-hint' }, t('No address? Text connect to yourself on WhatsApp, and your Omni replies with a link that connects this app.')),
+      remoteKey ? h(KeyEntry, { key: remoteKey.url, startOpen: true, disabled: anyBusy, onConnect: apiKey => run(REMOTE, 'omni-discover-key', { url: remoteKey.url, apiKey }) }) : null)))
 
   if (!hasSandbox) {
     const localLinked = linked?.row === LOCAL

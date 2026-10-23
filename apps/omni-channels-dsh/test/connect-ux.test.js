@@ -10,7 +10,7 @@ import { omni } from './omni-client.js'
 // footer says. Bundled as DSH bundles the client, with stand-in React.
 async function load() {
   const entry = `
-    export { foundRow, firstOpen, readRemote, onMac } from './omni-connect.js'
+    export { foundRow, firstOpen, readRemote, onMac, unavailableWords, noticeWords } from './omni-connect.js'
     export { continueButton, announceStep } from './connect-step.js'
     export { footFor, columnsFor } from './omni-terminal.js'
   `
@@ -67,6 +67,14 @@ test('an Omni that cannot approve this app also takes a pasted API key; another 
   assert.equal(ui.foundRow(local({ hasKey: true })).keyEntry, false)
   assert.equal(ui.foundRow(local({ reachable: false })).keyEntry, false)
   assert.equal(ui.foundRow(local(), { linked: true }).keyEntry, false)
+})
+
+test('a typed address that cannot approve this app says why and what to do instead', () => {
+  assert.equal(ui.unavailableWords({ status: 'unavailable', reason: 'too-old', version: '2.261006.2' }), 'Omni 2.261006.2 is too old to pair from here. Update it, or paste an API key or the link it sent you.')
+  assert.equal(ui.unavailableWords({ status: 'unavailable', reason: 'too-old', version: null }), 'This Omni is too old to pair from here. Update it, or paste an API key or the link it sent you.')
+  assert.equal(ui.unavailableWords({ status: 'unavailable', reason: 'off' }), 'Pairing is off on this Omni. Its owner can turn it on, or you can paste an API key.')
+  assert.equal(ui.noticeWords('broad-key'), 'This key can do everything on your Omni; consider giving this device its own key.')
+  assert.equal(ui.noticeWords(undefined), null)
 })
 
 test('the first row with something to do opens; with none, the remote row does', () => {

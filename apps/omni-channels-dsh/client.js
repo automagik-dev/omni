@@ -12941,6 +12941,10 @@ async function connectFromApp(url, grant) {
       return;
     }
     const reply = await call("omni-pair-start", { url, auto: true });
+    if (reply.status === "unavailable") {
+      window.dispatchEvent(new CustomEvent(PAIRING_EVENT, { detail: { problem: unavailableWords(reply) } }));
+      return;
+    }
     window.dispatchEvent(new CustomEvent(PAIRING_EVENT, { detail: reply.pairing }));
     if (reply.pairing?.approveUrl) window.open(reply.pairing.approveUrl, "_blank", "noopener");
   } catch (error) {
@@ -12981,6 +12985,14 @@ function foundRow(omni2, { mac = false, linked = false } = {}) {
   if (omni2.pairing === "off") return row(t("Sign-in off"), "muted", null, t("Sign-in from devices is off on this Omni."));
   return row(t("Ready"), "ok", "connect", t("Approve this device from your phone."));
 }
+function unavailableWords(reply) {
+  if (reply?.reason === "too-old") {
+    return reply.version ? t("Omni {version} is too old to pair from here. Update it, or paste an API key or the link it sent you.", { version: reply.version }) : t("This Omni is too old to pair from here. Update it, or paste an API key or the link it sent you.");
+  }
+  if (reply?.reason === "off") return t("Pairing is off on this Omni. Its owner can turn it on, or you can paste an API key.");
+  return reply?.message ?? null;
+}
+var noticeWords = (notice) => notice === "broad-key" ? t("This key can do everything on your Omni; consider giving this device its own key.") : null;
 function firstOpen(found, { mac = false } = {}) {
   const ready = found.find((omni2) => ["use", "connect", "update", "reinstall"].includes(foundRow(omni2, { mac }).action));
   return ready ? ready.id : REMOTE;
@@ -13008,8 +13020,8 @@ function Choice({ id, open, icon, accent, title, sub, badge, tone, onToggle, chi
     open ? (0, import_react7.createElement)("div", { className: "ox-body", id: `ox-body-${id}` }, children) : null
   );
 }
-function KeyEntry({ hint, disabled, onConnect }) {
-  const [open, setOpen] = (0, import_react7.useState)(false);
+function KeyEntry({ hint, disabled, onConnect, startOpen = false }) {
+  const [open, setOpen] = (0, import_react7.useState)(startOpen);
   const [value, setValue] = (0, import_react7.useState)("");
   if (!open) return (0, import_react7.createElement)("button", { type: "button", className: "ox-link", onClick: () => setOpen(true) }, t("Use it with an API key"));
   const submit = (event) => {
@@ -13045,6 +13057,7 @@ function ConnectOmni({ onPaired, embedded = false } = {}) {
   const [note, setNote] = (0, import_react7.useState)(null);
   const [linked, setLinked] = (0, import_react7.useState)(null);
   const [terminal, setTerminal] = (0, import_react7.useState)(null);
+  const [remoteKey, setRemoteKey] = (0, import_react7.useState)(null);
   const alive = (0, import_react7.useRef)(true);
   (0, import_react7.useEffect)(() => () => {
     alive.current = false;
@@ -13112,8 +13125,13 @@ function ConnectOmni({ onPaired, embedded = false } = {}) {
     try {
       const reply = await call(endpoint, payload);
       if (!alive.current) return;
-      if (reply.status === "paired") await finish(row, reply.origin);
-      else if (reply.pairing) {
+      if (reply.status === "paired") {
+        await finish(row, reply.origin);
+        if (alive.current) setNote(noticeWords(reply.notice));
+      } else if (reply.status === "unavailable") {
+        if (row === REMOTE) setRemoteKey({ url: reply.url, reason: reply.reason, version: reply.version ?? null });
+        setProblem(unavailableWords(reply));
+      } else if (reply.pairing) {
         pairingRow.current = row;
         setPairing(reply.pairing);
       } else if (reply.message) setNote(reply.message);
@@ -13239,11 +13257,15 @@ function ConnectOmni({ onPaired, embedded = false } = {}) {
         value: remote,
         placeholder: t("omni.example.com, or the link Omni sent you"),
         "aria-label": t("Omni address or link"),
-        onChange: (event) => setRemote(event.target.value)
+        onChange: (event) => {
+          setRemote(event.target.value);
+          setRemoteKey(null);
+        }
       }),
       (0, import_react7.createElement)("button", { type: "submit", className: "oc-primary", disabled: anyBusy || readRemote(remote) === null }, busy === REMOTE ? t("Connecting…") : t("Continue"))
     ),
-    (0, import_react7.createElement)("p", { className: "ox-muted ox-hint" }, t("No address? Text connect to yourself on WhatsApp, and your Omni replies with a link that connects this app."))
+    (0, import_react7.createElement)("p", { className: "ox-muted ox-hint" }, t("No address? Text connect to yourself on WhatsApp, and your Omni replies with a link that connects this app.")),
+    remoteKey ? (0, import_react7.createElement)(KeyEntry, { key: remoteKey.url, startOpen: true, disabled: anyBusy, onConnect: (apiKey) => run(REMOTE, "omni-discover-key", { url: remoteKey.url, apiKey }) }) : null
   )));
   if (!hasSandbox) {
     const localLinked = linked?.row === LOCAL;
@@ -14527,6 +14549,10 @@ var STRINGS = {
   "Find the key where that app keeps its settings.": "在那个应用保存设置的地方找到密钥。",
   "API key": "API 密钥",
   "API key for this Omni": "这个 Omni 的 API 密钥",
+  "Omni {version} is too old to pair from here. Update it, or paste an API key or the link it sent you.": "Omni {version} 太旧，无法从这里配对。请更新它，或粘贴 API 密钥或它发给你的链接。",
+  "This Omni is too old to pair from here. Update it, or paste an API key or the link it sent you.": "这个 Omni 太旧，无法从这里配对。请更新它，或粘贴 API 密钥或它发给你的链接。",
+  "Pairing is off on this Omni. Its owner can turn it on, or you can paste an API key.": "这个 Omni 已关闭配对。它的所有者可以开启，或者你可以粘贴 API 密钥。",
+  "This key can do everything on your Omni; consider giving this device its own key.": "这个密钥可以在你的 Omni 上做任何事；建议为这台设备单独创建一个密钥。",
   "Omni on this computer": "这台电脑上的 Omni",
   "Use it": "使用它",
   "Sign-in from devices is off on this Omni.": "这个 Omni 已关闭设备登录。",

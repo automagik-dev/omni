@@ -35,7 +35,7 @@ const DEVICE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code'
 const CLIENT_ID = process.env.OMNI_CLIENT_ID === 'omni-desktop' ? 'omni-desktop' : 'omni-dsh'
 const DEVICE_NAME_MAX = 80
 
-const deviceNameOf = body => String(body?.deviceName ?? '').trim().slice(0, DEVICE_NAME_MAX) || `Omni UI on ${hostname()}`.slice(0, DEVICE_NAME_MAX)
+export const deviceNameOf = body => String(body?.deviceName ?? '').trim().slice(0, DEVICE_NAME_MAX) || `Omni UI on ${hostname()}`.slice(0, DEVICE_NAME_MAX)
 // The one-time grant in a link an Omni sends its owner who texted "connect" (24 base64url
 // characters, as the Omni's GrantSchema has it).
 export const GRANT = /^[A-Za-z0-9_-]{24}$/
@@ -190,7 +190,15 @@ export function install(rt) {
     pairing = null
     const host = new URL(url).host
     const status = await omniFetch(url, 'GET', '/api/v2/login/status')
-    if (status.status === 404) throw refused(`${host} does not offer sign-in from devices. Ask its owner to turn it on, or connect with a key.`)
+    // Two Omnis that cannot approve this device answer the page, not an error, so it can
+    // offer the key instead: one with sign-in off (404), and one from before device sign-in,
+    // whose login status is behind a key (401); its version comes from its health.
+    if (status.status === 404) return { status: 'unavailable', reason: 'off', url, origin: host, message: `Pairing is off on ${host}. Its owner can turn it on, or you can paste an API key.` }
+    if (status.status === 401 || status.status === 403) {
+      const version = (await omniFetch(url, 'GET', '/api/v2/health').catch(() => null))?.json?.version
+      const at = typeof version === 'string' && /^[\w.+-]{1,64}$/.test(version) ? version : null
+      return { status: 'unavailable', reason: 'too-old', url, origin: host, version: at, message: `Omni ${at ?? ''} at ${host} is too old to pair from here. Update it, or paste an API key or the link it sent you.`.replace('Omni  at', 'Omni at') }
+    }
     if (status.status !== 200) throw refused(`Omni answered ${status.status} at ${host}`)
     if (!status.data?.claimed) throw refused(`${host} has no owner yet. Claim it first with the link in its server log.`)
     const code = await omniFetch(url, 'POST', '/api/auth/device/code', { body: { client_id: CLIENT_ID } })
