@@ -175,7 +175,8 @@ function SignIn({ tile, onBack, onSaved, glitch }) {
           onSaved({ name: tile.name })
           return
         }
-        if (next.status === 'running' || next.status === 'none') timer = setTimeout(() => poll(false), 1000)
+        // 'none' comes only from signin-status: the attempt is gone (DSH restarted), so it ends.
+        if (next.status === 'running') timer = setTimeout(() => poll(false), 1000)
       } catch (error) {
         if (live) setProblem(error.message)
       }
@@ -201,7 +202,8 @@ function SignIn({ tile, onBack, onSaved, glitch }) {
   }
   const notice = attempt?.notice
   const prompt = attempt?.prompt
-  const ended = attempt && ['cancelled', 'failed'].includes(attempt.status)
+  const ended = attempt && ['cancelled', 'failed', 'none'].includes(attempt.status)
+  const endedText = { failed: `The sign-in did not finish: ${attempt?.error}`, cancelled: 'The sign-in was cancelled.', none: 'The sign-in stopped before it finished. Go back and start it again.' }
   return h('div', { className: 'oai-signin' },
     !attempt && !problem ? h('p', { className: 'oai-muted' }, `Starting the ${tile.name} sign-in…`) : null,
     notice?.message ? h('p', null, notice.message) : null,
@@ -217,7 +219,7 @@ function SignIn({ tile, onBack, onSaved, glitch }) {
       h('input', { id: 'oai-answer', type: prompt.kind === 'secret' ? 'password' : 'text', required: true, autoComplete: 'off', spellCheck: false, autoFocus: true, placeholder: prompt.placeholder, value: answer, onChange: e => setAnswer(e.target.value) }),
       h('button', { type: 'submit', className: 'oai-primary' }, 'Continue')) : null,
     attempt?.status === 'running' && !prompt ? h('p', { className: 'oai-muted oai-waiting' }, 'Waiting for you to finish signing in…') : null,
-    ended ? h('p', { className: 'oai-error', role: 'alert' }, attempt.status === 'failed' ? `The sign-in did not finish: ${attempt.error}` : 'The sign-in was cancelled.') : null,
+    ended ? h('p', { className: 'oai-error', role: 'alert' }, endedText[attempt.status]) : null,
     problem ? h('p', { className: 'oai-error', role: 'alert' }, problem) : null,
     h('button', { type: 'button', className: 'oai-quiet', onClick: ended || problem ? onBack : cancel }, ended || problem ? 'Back' : 'Cancel'))
 }

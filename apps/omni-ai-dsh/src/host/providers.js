@@ -26,6 +26,7 @@ import { randomUUID } from 'node:crypto'
 import { accessSync, constants, readdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { delimiter, join } from 'node:path'
+import { Answer, AnswerPayload, KeyPayload, ProviderPayload, Secret, parse } from './payloads.js'
 
 export const PI_AI = 'llm-pi-ai'
 // pi-ai's credential record scope: a sign-in is the record llm-pi-ai/<provider>.
@@ -47,8 +48,6 @@ export const SIGNIN_PROVIDERS = {
   'kimi-coding': { label: 'Kimi Code' },
   'github-copilot': { label: 'GitHub Copilot' },
 }
-const MAX_KEY = 4096
-const MAX_ANSWER = 4096
 // A finished attempt is kept this long, so a page that comes back still learns how it ended.
 const KEEP_MS = 10 * 60 * 1000
 
@@ -95,7 +94,7 @@ export const keyRefOf = provider => `${provider.toUpperCase().replace(/[^A-Z0-9]
 const recordKeyOf = provider => `${RECORD_SCOPE}/${provider}`
 
 const providerArg = (payload, table) => {
-  const provider = typeof payload?.provider === 'string' ? payload.provider : ''
+  const provider = parse(ProviderPayload, payload)?.provider ?? ''
   if (!Object.hasOwn(table, provider)) throw invalid(`No provider "${provider.slice(0, 40)}" here`)
   return provider
 }
@@ -185,12 +184,22 @@ export function createProviderActions(ctx) {
 
     async 'provider-key'(payload) {
       const provider = providerArg(payload, KEY_PROVIDERS)
-      const apiKey = typeof payload?.apiKey === 'string' ? payload.apiKey.trim() : ''
-      if (apiKey === '' || apiKey.length > MAX_KEY || /\s/.test(apiKey)) throw invalid('Paste the whole API key.')
+      const apiKey = parse(Secret, parse(KeyPayload, payload)?.apiKey)
+      if (apiKey === undefined) throw invalid('Paste the whole API key.')
       const info = KEY_PROVIDERS[provider]
       const ref = info.ref ?? keyRefOf(provider)
+      // Kept to put back if DSH refuses the route, so a failed save leaves the old key in place.
+      // A key that came from the environment rather than DSH's store ("file") is not copied in.
+      const previous = await ctx.credentials.resolve(ref).catch(() => undefined)
       await ctx.credentials.set(ref, apiKey)
-      if (info.route !== false) await saveRoute(ctx, provider, { apiKeyEnv: ref })
+      if (info.route !== false) {
+        try {
+          await saveRoute(ctx, provider, { apiKeyEnv: ref })
+        } catch (error) {
+          await (previous?.source === 'file' ? ctx.credentials.set(ref, previous.value) : ctx.credentials.unset(ref)).catch(() => {})
+          throw error
+        }
+      }
       return { provider, connected: true }
     },
 
@@ -201,13 +210,23 @@ export function createProviderActions(ctx) {
       if (!authorization) throw refused('This DSH cannot run sign-ins (no authorization service).')
       const key = recordKeyOf(provider)
       if (authorization.describe(key) === undefined) throw refused(`This DSH offers no ${SIGNIN_PROVIDERS[provider].label} sign-in.`)
-      const running = attempts.get(provider)
-      if (running?.status === 'running') return view(provider)
-      // A sign-in sits beneath a key: a route with apiKeyEnv uses the key, so the route
-      // this adds has none (one the person already keyed keeps its key).
-      await saveRoute(ctx, provider, {})
+      const earlier = attempts.get(provider)
+      if (earlier?.status === 'running') return view(provider)
+      // Taken before the route write awaits, so a second start (a page reloaded mid-request)
+      // finds this one running rather than writing the route and beginning a sign-in again.
       const attempt = { id: randomUUID(), status: 'running', notice: null, prompt: null, error: null, finishedAt: 0 }
       attempts.set(provider, attempt)
+      // A sign-in sits beneath a key: a route with apiKeyEnv uses the key, so the route
+      // this adds has none. A route that exists already (keyed or not) is left as it is.
+      if (!Object.hasOwn(piAiEntry(ctx)?.value?.providers ?? {}, provider)) {
+        try {
+          await saveRoute(ctx, provider, {})
+        } catch (error) {
+          if (earlier) attempts.set(provider, earlier)
+          else attempts.delete(provider)
+          throw error
+        }
+      }
       const interaction = {
         notify(notice) {
           attempt.notice = { message: String(notice?.message ?? ''), url: typeof notice?.url === 'string' ? notice.url : undefined, code: typeof notice?.code === 'string' ? notice.code : undefined }
@@ -253,9 +272,10 @@ export function createProviderActions(ctx) {
       const provider = providerArg(payload, SIGNIN_PROVIDERS)
       const attempt = attempts.get(provider)
       const asked = attempt?.prompt
-      if (!asked || asked.id !== payload?.promptId) throw refused('That question is no longer open.')
-      const value = typeof payload?.value === 'string' ? payload.value.trim() : ''
-      if (value === '' || value.length > MAX_ANSWER) throw invalid('Type an answer.')
+      const fields = parse(AnswerPayload, payload)
+      if (!asked || asked.id !== fields?.promptId) throw refused('That question is no longer open.')
+      const value = parse(Answer, fields.value)
+      if (value === undefined) throw invalid('Type an answer.')
       if (asked.kind === 'select' && !asked.options?.some(option => option.id === value)) throw invalid('Pick one of the options.')
       attempt.prompt = null
       asked.resolve(value)
