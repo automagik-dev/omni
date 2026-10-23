@@ -4,7 +4,7 @@ Omni for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (ds
 
 > Labs release. Features, tools and the saved data format can still change.
 
-Tested with dsh `0.2.1-rc.2` (Web) on Linux.
+Tested with dsh `0.2.1-rc.3` (Web) on Linux.
 
 **Your own dsh stays yours.** Installed into an existing dsh, Omni keeps its files in `$OMNI_HOME/ui` (`~/.omni/ui`), keeps the key of the Omni it is linked to in its own file there, uses its own route (`/api/omni-ui`), plugin id (`omni-ui`) and browser-storage prefix (`omni-ui:`), overrides no other plugin's configuration, and checks for no updates. It can run beside upstream DS Bot.
 

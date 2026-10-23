@@ -64,9 +64,9 @@ DSH asks before it installs anything, and installs exactly the version listed.
 | `dsh-codex-subscription` 3.1.3 | npm | ChatGPT/Codex plan through DSH's own Codex sign-in. Personal use under the vendor's terms. |
 | `dsh-oh-my-claude` 1.5.6 | npm | The official Claude Code CLI as a provider. Personal use under the vendor's terms. |
 | `dsh-kimi-subscription` 1.3.10 | npm | Kimi Code membership. Its own update button can move past this vetted version. |
-| `dsh-opencode-go` 0.1.24 | npm | Not yet tested on 0.2.1-rc.2; DSH's built-in `opencode-go` route covers basic use. |
+| `dsh-opencode-go` 0.1.24 | npm | Not yet tested on 0.2.1-rc.3; DSH's built-in `opencode-go` route covers basic use. |
 
-DSH 0.2.1-rc.2 already signs in to DeepSeek, Codex, Claude and Kimi, and takes API keys for Z.ai, OpenCode and
+DSH 0.2.1-rc.3 already signs in to DeepSeek, Codex, Claude and Kimi, and takes API keys for Z.ai, OpenCode and
 the other pi-ai providers, without any of these.
 
 Vetting means: no install scripts, no telemetry, credentials kept in DSH's own store, and the source read at the
