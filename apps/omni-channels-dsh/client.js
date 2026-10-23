@@ -3506,13 +3506,13 @@ var PAIRED_BEAT_MS = 1600;
 var reducedMotion = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 var OCTOPUS = CHARACTERS.octopus;
 var OCTOPUS_SVG = `<svg class="oxs-octo" viewBox="0 0 100 100" aria-hidden="true">
-<defs><linearGradient id="oxs-octo-skin" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3ee6d0"/><stop offset="1" stop-color="#0b8f8a"/></linearGradient></defs>
+<defs><linearGradient id="oxs-octo-skin" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8ff4ff"/><stop offset=".5" stop-color="#22d3ee"/><stop offset="1" stop-color="#0e7490"/></linearGradient></defs>
 <path class="oxs-ghost oxs-cyan" d="${OCTOPUS.body}"/><path class="oxs-ghost oxs-magenta" d="${OCTOPUS.body}"/>
-<path d="${OCTOPUS.body}" fill="url(#oxs-octo-skin)"/><path d="${OCTOPUS.shade}" fill="#06706d" opacity=".55"/>
+<path d="${OCTOPUS.body}" fill="url(#oxs-octo-skin)"/><path d="${OCTOPUS.shade}" fill="#0b4f6c" opacity=".55"/>
 <path d="${OCTOPUS.light}" fill="#fff" opacity=".45"/>
 <g class="oxs-eyes">${OCTOPUS.eyes.map(([cx, cy, width, height]) => `<ellipse cx="${cx}" cy="${cy}" rx="${width}" ry="${height}" fill="#06121f"/><circle cx="${cx + 2}" cy="${cy - 5}" r="2.4" fill="#fff"/>`).join("")}</g>
 <path d="M44 54Q50 59 56 54" stroke="#06121f" stroke-width="2.4" fill="none" stroke-linecap="round"/>
-<ellipse cx="31" cy="50" rx="5" ry="2.8" fill="#ff7ab8" opacity=".5"/><ellipse cx="69" cy="50" rx="5" ry="2.8" fill="#ff7ab8" opacity=".5"/>
+<ellipse cx="31" cy="50" rx="5" ry="2.8" fill="#ff5fb8" opacity=".5"/><ellipse cx="69" cy="50" rx="5" ry="2.8" fill="#ff5fb8" opacity=".5"/>
 </svg>`;
 function useGlitch() {
   const [on, setOn] = (0, import_react5.useState)(false);
@@ -3656,22 +3656,22 @@ function ConnectOmniStep(props) {
   );
 }
 var STAGE_CSS = `
-.oxs-overlay{--oxs-bg:#05070f;--oxs-card:rgba(13,20,36,.8);--oxs-ink:#eef3ff;--oxs-ink2:#9fb0cc;--oxs-line:rgba(120,160,220,.22);--oxs-accent:#22d3c5;
+.oxs-overlay{--oxs-bg:#05070f;--oxs-card:rgba(13,20,36,.8);--oxs-ink:#eef3ff;--oxs-ink2:#9fb0cc;--oxs-line:rgba(120,160,220,.22);--oxs-accent:#22d3ee;--oxs-accent-2:#ff3bd4;
   --bt-line:var(--oxs-line);--bt-line-2:rgba(120,160,220,.32);--bt-accent:var(--oxs-accent);--bt-accent-ink:#03141a;--bt-ink:var(--oxs-ink);--bt-ink-2:var(--oxs-ink2);--bt-surface:transparent;--bt-bg:rgba(0,0,0,.25);--bt-hover:rgba(255,255,255,.06);--oc-bad:#ff6b6b;
   position:fixed;inset:0;z-index:2000;overflow:auto;display:grid;place-items:center;padding:24px 16px;box-sizing:border-box;color-scheme:dark;color:var(--oxs-ink);
   font:15px/1.55 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
-  background:radial-gradient(1200px 600px at 50% -10%,rgba(34,211,197,.18),transparent 60%),radial-gradient(900px 500px at 100% 110%,rgba(124,92,255,.18),transparent 60%),var(--oxs-bg)}
+  background:radial-gradient(1200px 600px at 50% -10%,rgba(34,211,238,.18),transparent 60%),radial-gradient(900px 500px at 100% 110%,rgba(255,59,212,.16),transparent 60%),var(--oxs-bg)}
 .oxs-overlay *{box-sizing:border-box}
 .oxs-overlay::before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.55;
   background-image:radial-gradient(1px 1px at 12% 18%,#fff,transparent),radial-gradient(1px 1px at 72% 12%,#cde,transparent),radial-gradient(1.5px 1.5px at 38% 72%,#fff,transparent),radial-gradient(1px 1px at 86% 64%,#bcd,transparent),radial-gradient(1px 1px at 22% 88%,#fff,transparent),radial-gradient(1.5px 1.5px at 58% 40%,#def,transparent);
   animation:oxs-twinkle 6s ease-in-out infinite alternate}
 .oxs-overlay::after{content:"";position:fixed;left:-50%;right:-50%;bottom:-30vh;height:60vh;pointer-events:none;opacity:.35;
-  background-image:linear-gradient(rgba(34,211,197,.35) 1px,transparent 1px),linear-gradient(90deg,rgba(34,211,197,.35) 1px,transparent 1px);background-size:56px 56px;
+  background-image:linear-gradient(rgba(34,211,238,.35) 1px,transparent 1px),linear-gradient(90deg,rgba(255,59,212,.22) 1px,transparent 1px);background-size:56px 56px;
   transform:perspective(420px) rotateX(62deg);mask-image:linear-gradient(to top,#000,transparent);animation:oxs-grid 9s linear infinite}
 @keyframes oxs-twinkle{from{opacity:.35}to{opacity:.7}}
 @keyframes oxs-grid{from{background-position:0 0}to{background-position:0 56px}}
 .oxs-stage{position:relative;z-index:1;width:min(640px,100%);display:flex;flex-direction:column;align-items:center}
-.oxs-octo{width:124px;height:124px;filter:drop-shadow(0 12px 30px rgba(34,211,197,.35));animation:oxs-float 4.5s ease-in-out infinite}
+.oxs-octo{width:124px;height:124px;filter:drop-shadow(0 12px 30px rgba(34,211,238,.35));animation:oxs-float 4.5s ease-in-out infinite}
 .oxs-ghost{opacity:0}.oxs-cyan{fill:#00f0ff}.oxs-magenta{fill:#ff2bd6}
 .oxs-octo:hover .oxs-cyan,.oxs-glitch .oxs-cyan{opacity:.55;transform:translate(-2.5px,0);animation:oxs-glitch 2.4s steps(1) infinite}
 .oxs-octo:hover .oxs-magenta,.oxs-glitch .oxs-magenta{opacity:.55;transform:translate(2.5px,0);animation:oxs-glitch 2.4s steps(1) infinite reverse}
@@ -3679,24 +3679,24 @@ var STAGE_CSS = `
 @keyframes oxs-float{0%,100%{transform:translateY(0) rotate(-2deg)}50%{transform:translateY(-10px) rotate(2deg)}}
 @keyframes oxs-blink{0%,92%,100%{transform:scaleY(1)}95%{transform:scaleY(.1)}}
 @keyframes oxs-glitch{0%{clip-path:inset(0 0 70% 0)}25%{clip-path:inset(40% 0 30% 0)}50%{clip-path:inset(75% 0 0 0)}75%{clip-path:inset(10% 0 60% 0)}}
-.oxs-bubble{position:relative;margin:6px 0 18px;padding:10px 16px;border-radius:14px;background:rgba(34,211,197,.12);border:1px solid rgba(34,211,197,.35);color:#c9fff8;font:500 15px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;min-height:44px;max-width:100%}
-.oxs-bubble::before{content:"";position:absolute;top:-7px;left:50%;width:12px;height:12px;border-left:inherit;border-top:inherit;transform:translateX(-50%) rotate(45deg);background:#0e2a33}
-.oxs-caret{display:inline-block;width:.55em;height:1.05em;margin-left:2px;vertical-align:-2px;background:#7ff7ea;animation:oxs-caret 1s steps(1) infinite}
+.oxs-bubble{position:relative;margin:6px 0 18px;padding:10px 16px;border-radius:14px;background:rgba(34,211,238,.12);border:1px solid rgba(34,211,238,.35);color:#d6f8ff;font:500 15px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;min-height:44px;max-width:100%}
+.oxs-bubble::before{content:"";position:absolute;top:-7px;left:50%;width:12px;height:12px;border-left:inherit;border-top:inherit;transform:translateX(-50%) rotate(45deg);background:#0d2232}
+.oxs-caret{display:inline-block;width:.55em;height:1.05em;margin-left:2px;vertical-align:-2px;background:var(--oxs-accent-2);animation:oxs-caret 1s steps(1) infinite}
 @keyframes oxs-caret{50%{opacity:0}}
 .oxs-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 .oxs-rail{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin:0 0 14px;padding:0;list-style:none;font:600 11px/1 ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase;color:var(--oxs-ink2)}
-.oxs-rail li{padding:6px 10px;border-radius:999px;border:1px solid var(--oxs-line)}.oxs-rail li.oxs-on{color:#05070f;background:var(--oxs-accent);border-color:var(--oxs-accent)}.oxs-rail li.oxs-done{color:var(--oxs-accent);border-color:rgba(34,211,197,.5)}
+.oxs-rail li{padding:6px 10px;border-radius:999px;border:1px solid var(--oxs-line)}.oxs-rail li.oxs-on{color:#05070f;background:var(--oxs-accent);border-color:var(--oxs-accent)}.oxs-rail li.oxs-done{color:var(--oxs-accent);border-color:rgba(34,211,238,.5)}
 .oxs-card{width:100%;background:var(--oxs-card);border:1px solid var(--oxs-line);border-radius:20px;padding:24px;backdrop-filter:blur(14px);box-shadow:0 30px 80px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.04)}
 .oxs-card h1{font-size:21px;margin:0 0 10px;letter-spacing:-.01em;outline:none}
 .oxs-mark{font:700 12px/1 ui-monospace,monospace;letter-spacing:.32em;color:var(--oxs-accent);margin-bottom:14px}
 .oxs-card .ox-card{margin:4px 0 8px;background:rgba(0,0,0,.2)}
 .oxs-card .oc-primary,.oxs-card .oc-ghost{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:38px;padding:0 16px;border-radius:999px;font:inherit;font-size:14px;font-weight:600;cursor:pointer;white-space:nowrap;text-decoration:none}
-.oxs-card .oc-primary{border:0;background:linear-gradient(135deg,var(--oxs-accent),#14a8c7);color:#03141a}.oxs-card .oc-primary:disabled{opacity:.45;cursor:default}
+.oxs-card .oc-primary{border:0;background:linear-gradient(135deg,var(--oxs-accent),var(--oxs-accent-2));color:#06060f}.oxs-card .oc-primary:disabled{opacity:.45;cursor:default}
 .oxs-card .oc-ghost{border:1px solid var(--oxs-line);background:none;color:var(--oxs-ink2)}
-.oxs-card .oc-spinner{width:14px;height:14px;border-radius:50%;border:2px solid rgba(34,211,197,.25);border-top-color:var(--oxs-accent);animation:oxs-spin .8s linear infinite;flex:none}
+.oxs-card .oc-spinner{width:14px;height:14px;border-radius:50%;border:2px solid rgba(34,211,238,.25);border-top-color:var(--oxs-accent);animation:oxs-spin .8s linear infinite;flex:none}
 @keyframes oxs-spin{to{transform:rotate(360deg)}}
 .oxs-card button.oxs-primary,.oxs-card button.oxs-quiet{display:block;width:100%;padding:12px 14px;margin:8px 0 0;border-radius:13px;font:inherit;font-weight:600;cursor:pointer;text-align:center}
-.oxs-card button.oxs-primary{border:1px solid transparent;background:linear-gradient(135deg,var(--oxs-accent),#14a8c7);color:#03141a}
+.oxs-card button.oxs-primary{border:1px solid transparent;background:linear-gradient(135deg,var(--oxs-accent),var(--oxs-accent-2));color:#06060f}
 .oxs-card button.oxs-quiet{border:1px solid transparent;background:none;color:var(--oxs-ink2);font-weight:500}
 .oxs-card button:focus-visible,.oxs-card a:focus-visible,.oxs-card input:focus-visible{outline:2px solid var(--oxs-accent);outline-offset:2px}
 @media (prefers-reduced-motion:reduce){.oxs-overlay *,.oxs-overlay::before,.oxs-overlay::after{animation:none!important;transition:none!important}}
@@ -4353,7 +4353,7 @@ function PermissionsCard({ bot, roster, run, Card, SwitchRow }) {
 var PERMISSIONS_CSS = `
 .om-perm-who{flex:none;display:grid;place-items:center}
 .om-perm-preview{margin:8px 0 2px;display:flex;flex-direction:column;gap:6px}
-.om-perm-text{margin:0;padding:8px 10px;border-left:3px solid var(--accent,#22d3c5);border-radius:6px;background:rgba(127,127,127,.08);white-space:pre-wrap;overflow-wrap:anywhere;max-height:220px;overflow:auto}
+.om-perm-text{margin:0;padding:8px 10px;border-left:3px solid var(--accent,#22d3ee);border-radius:6px;background:rgba(127,127,127,.08);white-space:pre-wrap;overflow-wrap:anywhere;max-height:220px;overflow:auto}
 .om-perm-body{margin:0;padding:8px 10px;border-radius:6px;background:rgba(127,127,127,.08);font:11.5px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto}
 .om-perm-to,.om-perm-op{font-size:12px;opacity:.8;overflow-wrap:anywhere}
 .om-perm-emoji{font-size:22px;line-height:1}

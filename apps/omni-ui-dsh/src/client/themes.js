@@ -8,10 +8,12 @@ import { createSource } from './sources.js'
 
 const THEME_KEYS = ['bg', 'sidebar', 'bubble', 'card', 'text', 'user', 'userText', 'accent']
 const THEMES = {
+  // Automagik's duality: cyan is Omni (its ink, the accent, actions), magenta is you (your
+  // messages), on a deep-ink night sky. The id stays `deepseek` so saved choices keep it.
   deepseek: {
-    label: 'Deep ocean',
-    light: { bg: '#f3fbfa', sidebar: '#e8f6f3', bubble: '#dcefea', card: '#ffffff', text: '#0c2630', user: '#0b3d45', userText: '#f3fbfa', accent: '#0f9d8f' },
-    dark: { bg: '#0a1820', sidebar: '#0e212b', bubble: '#163342', card: '#112a36', text: '#e4f4f2', user: '#2dd4bf', userText: '#0a1820', accent: '#2dd4bf' },
+    label: 'Omni',
+    light: { bg: '#f7f8fc', sidebar: '#eef0f8', bubble: '#e7eaf5', card: '#ffffff', text: '#12152b', user: '#c21fb4', userText: '#ffffff', accent: '#0891b2' },
+    dark: { bg: '#090c18', sidebar: '#0d1122', bubble: '#171c35', card: '#11162c', text: '#e9ecff', user: '#cc22c0', userText: '#ffffff', accent: '#22d3ee' },
   },
   mono: {
     label: 'Mono',

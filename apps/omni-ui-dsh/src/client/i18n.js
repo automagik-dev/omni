@@ -135,6 +135,7 @@ const ZH = {
   "Hi, I'm {name}. I don't have a model yet. How do you want to set one up?": '你好，我是 {name}。我还没有可用的模型。你想怎么配置？',
   "Hi, I'm {name}. Pick a model for me first. You can change it later in my details.": '你好，我是 {name}。先给我选一个模型吧，以后可以在我的详情里换。',
   'Mode': '模式',
+  'Connect an AI: ChatGPT, Claude, Kimi or an API key': '连接 AI：ChatGPT、Claude、Kimi 或 API 密钥',
   'Sign in to DeepSeek': '登录 DeepSeek 账号',
   'Enter a DeepSeek API key': '填入 DeepSeek API key',
   'Open settings to set up a custom model': '打开设置配置自定义模型',

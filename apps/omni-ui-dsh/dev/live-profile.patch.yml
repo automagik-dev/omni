@@ -1,0 +1,29 @@
+# The profile dev/live.mjs starts: the same settings the Omni desktop app seeds
+# (omni-desktop profile/cordis.patch.yml). Its own DSH, so Omni's keyless web search is the default.
+- insert:
+    - id: web-search-auto
+      name: '@automagik/omni-dsh/web-search'
+- id: web
+  config:
+    searchProvider: auto
+    fetchProvider: http
+# The Omni octopus opens this app (@automagik/omni-ai-dsh: Welcome, Connect Omni, Connect
+# AI), so DSH's own welcome notice and credential step stay off here; DeepSeek's sign-in is
+# one of Connect AI's tiles. DSH compares the notice version exactly: it stays a quoted string.
+- id: ui-settings-general
+  config:
+    welcomeNoticeVersion: '2026-09-28.1'
+- id: ui-settings-models
+  config:
+    credentialOnboarding: false
+# DSH's plugin market. Pairing with an Omni adds that Omni's own market
+# (<omni>/api/market/index.json): the Omni plugins of its version and the add-ons
+# Automagik vetted.
+- id: plugin-market
+  config:
+    indexes: []
+# dsh-subscriptions (an add-on in dev/live-addons.json): no local-Ollama fallback, so a chat
+# never moves to another model on its own, and nothing probes 127.0.0.1:11434 every minute.
+- id: dsh-subscriptions
+  config:
+    ollamaFallback: false
