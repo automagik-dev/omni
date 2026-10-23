@@ -10,12 +10,16 @@ export const CHAT_PANEL = 'omni-chat'
 // A channel omni has that this view has no tile for still shows, with a plain chat mark.
 export const typeOf = type => CHANNEL_TYPES[type] ?? { label: type, tile: '#64748B', glyph: 'chat', pairing: 'token', blurb: '' }
 
-// Keyed by omni's channel ids (core/src/types/channel.ts), with how each one pairs.
+// Keyed by omni's channel ids (core/src/types/channel.ts), with how each one pairs. On a linked
+// Omni, the ones with `cli` are set up from the Omni CLI with those commands; the page adds the
+// others itself (src/host/omni-channel-actions.js).
 export const CHANNEL_TYPES = {
   'whatsapp-baileys': { label: 'WhatsApp', tile: '#25D366', glyph: 'whatsapp', pairing: 'qr', blurb: 'Link a phone number by scanning a code, like WhatsApp Web.' },
-  'whatsapp-business': { label: 'WhatsApp Business', tile: '#128C7E', glyph: 'whatsapp', pairing: 'oauth', signIn: 'Meta', blurb: 'The official Business API, through your Meta account.' },
+  'whatsapp-business': { label: 'WhatsApp Business', tile: '#128C7E', glyph: 'whatsapp', pairing: 'oauth', signIn: 'Meta', blurb: 'The official Business API, through your Meta account.',
+    cli: ['omni instances create --name Business --channel whatsapp-business', 'omni instances connect <id> --access-token <token> --phone-number-id <id> --waba-id <id>'] },
   telegram: { label: 'Telegram', tile: '#229ED9', glyph: 'telegram', pairing: 'token', blurb: 'A bot of yours, in direct chats and groups.' },
-  slack: { label: 'Slack', tile: '#4A154B', glyph: 'slack', pairing: 'oauth', signIn: 'Slack', blurb: 'Workspace channels and direct messages.' },
+  slack: { label: 'Slack', tile: '#4A154B', glyph: 'slack', pairing: 'oauth', signIn: 'Slack', blurb: 'Workspace channels and direct messages.',
+    cli: ['omni instances create --name Slack --channel slack --slack-bot-token xoxb-… --slack-app-token xapp-…'] },
   discord: { label: 'Discord', tile: '#5865F2', glyph: 'discord', pairing: 'token', blurb: 'Servers, threads and direct messages.' },
 }
 
@@ -113,14 +117,25 @@ export function healthSummary(state) {
   }
 }
 
-// Only the preview changes channels and sends; the live view reads.
-export const canWrite = state => state.preview
+// The preview changes its sample freely. A linked Omni is changed through the host, as far as
+// its key allows (`abilities`, from omni-channel-abilities): channels, and replies apart.
+export const canWrite = state => state.preview || (state.source.kind === 'live' && state.abilities?.changeChannels === true)
+export const canSend = state => state.preview || (state.source.kind === 'live' && state.abilities?.send === true)
 
 const set = patch => omniStore.set(state => ({ ...state, ...(typeof patch === 'function' ? patch(state) : patch) }))
 const patchChannel = (id, patch) => set(state => ({ channels: state.channels.map(channel => (channel.id === id ? { ...channel, ...patch } : channel)) }))
 
 // `select` is ctx.layout.selectPanel: chats and the Channels page are DSH main panels.
 export function omniActions(select, call) {
+  // On a linked Omni, a channel change goes through the host and the overview is read again;
+  // the preview changes its sample (`local`). A refusal shows on the channel.
+  const liveAct = (channelId, action, local, token) => {
+    if (omniStore.getSnapshot().preview || !call) return local()
+    patchChannel(channelId, { busy: action, actionError: undefined })
+    call('omni-channel-act', { id: channelId, action, ...(token ? { token } : {}) })
+      .then(() => refreshLive(call))
+      .then(() => patchChannel(channelId, { busy: undefined }), error => patchChannel(channelId, { busy: undefined, actionError: error.message }))
+  }
   return {
     setFilter: filter => set({ filter }),
     openChat(chatId) {
@@ -139,22 +154,44 @@ export function omniActions(select, call) {
     showPage: page => set(state => ({ page: { ...state.page, ...page } })),
     sendText(chatId, text) {
       const body = text.trim()
-      if (body === '' || !canWrite(omniStore.getSnapshot())) return
+      const before = omniStore.getSnapshot()
+      if (body === '' || !canSend(before)) return
       const at = Date.now()
+      const localId = `local-${at}`
       set(state => ({
-        messages: { ...state.messages, [chatId]: [...(state.messages[chatId] ?? []), { id: `local-${at}`, from: 'you', text: body, at }] },
+        messages: { ...state.messages, [chatId]: [...(state.messages[chatId] ?? []), { id: localId, from: 'you', text: body, at, ...(state.preview ? {} : { sending: true }) }] },
         chats: state.chats.map(chat => (chat.id === chatId ? { ...chat, preview: `You: ${body}`, at } : chat)),
+        sendError: null,
       }))
+      if (before.preview || !call) return
+      // Shown at once; a refusal takes it back and says why. A sent one stays until the
+      // chat's messages come back from omni with it.
+      call('omni-send', { chatId, text: body }).then(
+        () => { set(state => ({ messages: { ...state.messages, [chatId]: (state.messages[chatId] ?? []).map(message => (message.id === localId ? { ...message, sending: false } : message)) } })); void loadMessages(call, chatId) },
+        error => set(state => ({
+          messages: { ...state.messages, [chatId]: (state.messages[chatId] ?? []).filter(message => message.id !== localId) },
+          chats: state.chats.map(chat => (chat.id === chatId ? chatOf(before, chatId) ?? chat : chat)),
+          sendError: { chatId, text: body, message: error.message },
+        })),
+      )
     },
     setAnsweredBy: (channelId, answeredBy) => patchChannel(channelId, { answeredBy }),
-    pause: channelId => patchChannel(channelId, { status: 'paused' }),
-    resume: channelId => patchChannel(channelId, { status: 'connected', problem: undefined }),
-    reconnect(channelId) {
-      patchChannel(channelId, { status: 'connecting', problem: undefined })
-      setTimeout(() => patchChannel(channelId, { status: 'connected', health: { ...channelOf(omniStore.getSnapshot(), channelId)?.health, lastEventAt: Date.now() } }), 1600)
+    pause: channelId => liveAct(channelId, 'pause', () => patchChannel(channelId, { status: 'paused' })),
+    resume: channelId => liveAct(channelId, 'resume', () => patchChannel(channelId, { status: 'connected', problem: undefined })),
+    reconnect(channelId, token) {
+      liveAct(channelId, token ? 'token' : 'reconnect', () => {
+        patchChannel(channelId, { status: 'connecting', problem: undefined })
+        setTimeout(() => patchChannel(channelId, { status: 'connected', health: { ...channelOf(omniStore.getSnapshot(), channelId)?.health, lastEventAt: Date.now() } }), 1600)
+      }, token)
     },
-    // The preview's connect flow ends with a new sample channel.
-    finishConnect(type, name) {
+    // The preview's connect flow ends with a new sample channel; a live one with the channel
+    // omni just connected (`id`), shown once the overview has it.
+    finishConnect(type, name, liveId) {
+      if (liveId) {
+        set({ page: { view: 'channel', channelId: liveId, type: null, step: 0 } })
+        if (call) void refreshLive(call).catch(() => {})
+        return
+      }
       const id = `${type}-${Date.now()}`
       set(state => ({
         channels: [...state.channels, { id, type, name: name || CHANNEL_TYPES[type].label, detail: 'Just connected', status: 'connected', answeredBy: 'Omni',
@@ -194,12 +231,15 @@ export async function refreshLive(call) {
     set(state => (state.preview ? { source: { kind: 'preview', missing: reply.missing } } : {}))
     return
   }
+  // What this device's key may change, read once per page (the host keeps it a minute).
+  const abilities = omniStore.getSnapshot().abilities ?? await call('omni-channel-abilities').catch(() => ({ changeChannels: false, send: false }))
   set(state => ({
     // The first live answer drops every sample: their chats and messages are not omni's.
     ...(state.preview ? { messages: {}, chatId: null, page: { view: 'overview', channelId: null, type: null, step: 0 } } : {}),
+    abilities,
     preview: false,
     source: { kind: 'live', origin: reply.origin, at: Date.now() },
-    channels: reply.channels,
+    channels: reply.channels.map(channel => { const kept = channelOf(state, channel.id); return kept?.busy || kept?.actionError ? { ...channel, busy: kept.busy, actionError: kept.actionError } : channel }),
     chats: markSeen(state.seen, reply.chats),
     filter: reply.channels.some(channel => channel.id === state.filter) ? state.filter : null,
   }))
