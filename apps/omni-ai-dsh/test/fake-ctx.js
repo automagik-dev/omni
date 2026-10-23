@@ -11,7 +11,9 @@ export function mergeLayers(under, over) {
   return merged
 }
 
-export function fakeContext({ entries = {}, credentials = {}, records = [], services = {} } = {}) {
+// `env` holds references DSH would read from the environment rather than its own store.
+// `recordValues` are the stored records a plugin reads whole (a sign-in's grant), by key.
+export function fakeContext({ entries = {}, credentials = {}, records = [], recordValues = {}, services = {}, env = {} } = {}) {
   const forms = new Map(Object.entries(entries).map(([ns, value]) => [ns, { value: structuredClone(value), revision: 3 }]))
   const secrets = new Map(Object.entries(credentials))
   const stored = new Set(records)
@@ -45,7 +47,7 @@ export function fakeContext({ entries = {}, credentials = {}, records = [], serv
         form.value = mergeLayers(form.value, structuredClone(patch))
         form.revision += 1
       },
-      // Only `set` at a path, which is all the plugin writes.
+      // `set` and `unset` at a path, which is all the plugin writes.
       async mutate(ns, ops, expectedRevision) {
         const form = forms.get(ns)
         if (form === undefined) throw new Error(`No configurable plugin entry "${ns}"`)
@@ -53,10 +55,11 @@ export function fakeContext({ entries = {}, credentials = {}, records = [], serv
           throw Object.assign(new Error(`Settings for "${ns}" changed`), { code: 'SETTINGS_CONFLICT' })
         }
         for (const op of ops) {
-          if (op.op !== 'set') throw new Error(`unsupported op ${op.op}`)
+          if (op.op !== 'set' && op.op !== 'unset') throw new Error(`unsupported op ${op.op}`)
           let node = form.value
           for (const key of op.path.slice(0, -1)) node = node[key] ??= {}
-          node[op.path.at(-1)] = structuredClone(op.value)
+          if (op.op === 'unset') delete node[op.path.at(-1)]
+          else node[op.path.at(-1)] = structuredClone(op.value)
         }
         updates.push({ ns, ops: structuredClone(ops), expectedRevision })
         form.revision += 1
@@ -71,8 +74,9 @@ export function fakeContext({ entries = {}, credentials = {}, records = [], serv
         secrets.delete(ref)
       },
       resolve: async ref => (secrets.has(ref) ? { value: secrets.get(ref), source: 'file' } : undefined),
-      describe: async ref => ({ configured: secrets.has(ref), writable: true }),
-      describeRecord: async key => ({ configured: stored.has(key), writable: true }),
+      describe: async ref => (secrets.has(ref) ? { configured: true, source: 'file', writable: true } : Object.hasOwn(env, ref) ? { configured: true, source: 'env', writable: true } : { configured: false, writable: true }),
+      describeRecord: async key => ({ configured: stored.has(key) || Object.hasOwn(recordValues, key), writable: true }),
+      readRecord: async key => (Object.hasOwn(recordValues, key) ? structuredClone(recordValues[key]) : undefined),
     },
     connection: {
       fetch: {

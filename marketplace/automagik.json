@@ -37,7 +37,7 @@
       },
       "untested": {
         "title": {
-          "en": "Not yet tested on 0.2.1-rc.2"
+          "en": "Not yet tested on 0.2.1-rc.3"
         }
       }
     }
@@ -70,6 +70,32 @@
         ]
       },
       "versions": [
+        {
+          "version": "2.261023.28",
+          "publishTimestamp": 1792788644,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/automagik-dev/omni",
+            "commit": "21bcd8f09ffc75efa91876edf5c65294736cf9a4",
+            "path": "apps/omni-ui-dsh"
+          },
+          "engines": {
+            "dsh": ">=0.2.1-rc.2 <0.3.0"
+          }
+        },
+        {
+          "version": "2.261023.26",
+          "publishTimestamp": 1792779747,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/automagik-dev/omni",
+            "commit": "12769408a8c76cad7665ed7589f1f54fbd67b9f6",
+            "path": "apps/omni-ui-dsh"
+          },
+          "engines": {
+            "dsh": ">=0.2.1-rc.2 <0.3.0"
+          }
+        },
         {
           "version": "2.261019.10",
           "publishTimestamp": 1792556829,
@@ -152,6 +178,32 @@
       },
       "versions": [
         {
+          "version": "2.261023.28",
+          "publishTimestamp": 1792788644,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/automagik-dev/omni",
+            "commit": "21bcd8f09ffc75efa91876edf5c65294736cf9a4",
+            "path": "apps/omni-channels-dsh"
+          },
+          "engines": {
+            "dsh": ">=0.2.1-rc.2 <0.3.0"
+          }
+        },
+        {
+          "version": "2.261023.26",
+          "publishTimestamp": 1792779747,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/automagik-dev/omni",
+            "commit": "12769408a8c76cad7665ed7589f1f54fbd67b9f6",
+            "path": "apps/omni-channels-dsh"
+          },
+          "engines": {
+            "dsh": ">=0.2.1-rc.2 <0.3.0"
+          }
+        },
+        {
           "version": "2.261019.10",
           "publishTimestamp": 1792556829,
           "source": {
@@ -192,6 +244,32 @@
         ]
       },
       "versions": [
+        {
+          "version": "2.261023.28",
+          "publishTimestamp": 1792788644,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/automagik-dev/omni",
+            "commit": "21bcd8f09ffc75efa91876edf5c65294736cf9a4",
+            "path": "apps/omni-canvas-dsh"
+          },
+          "engines": {
+            "dsh": ">=0.2.1-rc.2 <0.3.0"
+          }
+        },
+        {
+          "version": "2.261023.26",
+          "publishTimestamp": 1792779747,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/automagik-dev/omni",
+            "commit": "12769408a8c76cad7665ed7589f1f54fbd67b9f6",
+            "path": "apps/omni-canvas-dsh"
+          },
+          "engines": {
+            "dsh": ">=0.2.1-rc.2 <0.3.0"
+          }
+        },
         {
           "version": "2.261019.10",
           "publishTimestamp": 1792556829,
@@ -234,6 +312,32 @@
         ]
       },
       "versions": [
+        {
+          "version": "2.261023.28",
+          "publishTimestamp": 1792788644,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/automagik-dev/omni",
+            "commit": "21bcd8f09ffc75efa91876edf5c65294736cf9a4",
+            "path": "apps/omni-ai-dsh"
+          },
+          "engines": {
+            "dsh": ">=0.2.1-rc.2 <0.3.0"
+          }
+        },
+        {
+          "version": "2.261023.26",
+          "publishTimestamp": 1792779747,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/automagik-dev/omni",
+            "commit": "12769408a8c76cad7665ed7589f1f54fbd67b9f6",
+            "path": "apps/omni-ai-dsh"
+          },
+          "engines": {
+            "dsh": ">=0.2.1-rc.2 <0.3.0"
+          }
+        },
         {
           "version": "2.261019.10",
           "publishTimestamp": 1792556829,
@@ -281,14 +385,14 @@
         "en": "AI subscriptions"
       },
       "description": {
-        "en": "Sign in with the AI plans you already pay for, several accounts each: Grok, Cursor, Kiro, Perplexity, JetBrains AI, GLM, Qwen and more. Some sign-ins present themselves as the provider's own app; providers may object. Its own update button can move past this vetted version."
+        "en": "Sign in with the AI plans you already pay for, several accounts each: Antigravity, Cursor, Kiro, GLM, Qwen, ERNIE, Spark, JetBrains AI, Perplexity, Replit and Cody. Omni's reviewed fork of GooDAnDReaDY's plugin, without the vendors DSH's own sign-ins already cover and without its own updater."
       },
       "author": "GooDAnDReaDY",
-      "homepage": "https://github.com/GooDAnDReaDY/dsh-subscriptions",
+      "homepage": "https://github.com/automagik-genie/dsh-subscriptions#readme",
       "metadata": {
         "category": "ai",
         "keywords": [
-          "grok",
+          "antigravity",
           "cursor",
           "kiro",
           "perplexity",
@@ -302,45 +406,12 @@
       },
       "versions": [
         {
-          "version": "0.7.19",
-          "publishTimestamp": 1792682329,
+          "version": "0.7.21-omni.1",
+          "publishTimestamp": 1792787505,
           "source": {
-            "type": "npm"
-          },
-          "engines": {
-            "dsh": ">=0.2.1-rc.2 <0.3.0"
-          }
-        }
-      ]
-    },
-    {
-      "name": "dsh-codex-subscription",
-      "title": {
-        "en": "ChatGPT / Codex subscription"
-      },
-      "description": {
-        "en": "Use a ChatGPT or Codex plan through DSH's own Codex sign-in."
-      },
-      "author": "WSL043",
-      "homepage": "https://github.com/WSL043/dsh-codex-subscription",
-      "metadata": {
-        "category": "ai",
-        "keywords": [
-          "codex",
-          "chatgpt",
-          "oauth"
-        ],
-        "labels": [
-          "vetted",
-          "personal-use"
-        ]
-      },
-      "versions": [
-        {
-          "version": "3.1.3",
-          "publishTimestamp": 1792482129,
-          "source": {
-            "type": "npm"
+            "type": "git",
+            "url": "https://github.com/automagik-genie/dsh-subscriptions",
+            "commit": "2eff034ede95c9d06ecee290517101e6419c7fee"
           },
           "engines": {
             "dsh": ">=0.2.1-rc.2 <0.3.0"
@@ -357,7 +428,7 @@
         "en": "The official Claude Code CLI as a model provider."
       },
       "author": "lcestou",
-      "homepage": "https://github.com/lcestou/dsh-oh-my-claude#readme",
+      "homepage": "https://github.com/automagik-genie/dsh-oh-my-claude#readme",
       "metadata": {
         "category": "ai",
         "keywords": [
@@ -371,76 +442,12 @@
       },
       "versions": [
         {
-          "version": "1.5.5",
-          "publishTimestamp": 1792684436,
+          "version": "1.5.6-omni.1",
+          "publishTimestamp": 1792778878,
           "source": {
-            "type": "npm"
-          },
-          "engines": {
-            "dsh": ">=0.2.1-rc.2 <0.3.0"
-          }
-        }
-      ]
-    },
-    {
-      "name": "dsh-kimi-subscription",
-      "title": {
-        "en": "Kimi Code subscription"
-      },
-      "description": {
-        "en": "A Kimi Code membership through a dedicated model route. Its own update button can move past this vetted version."
-      },
-      "author": "BaronCyrus",
-      "homepage": "https://github.com/BaronCyrus/dsh-kimi-subscription#readme",
-      "metadata": {
-        "category": "ai",
-        "keywords": [
-          "kimi",
-          "moonshot",
-          "oauth"
-        ],
-        "labels": [
-          "vetted",
-          "personal-use"
-        ]
-      },
-      "versions": [
-        {
-          "version": "1.3.10",
-          "publishTimestamp": 1792237688,
-          "source": {
-            "type": "npm"
-          },
-          "engines": {
-            "dsh": ">=0.2.1-rc.2 <0.3.0"
-          }
-        }
-      ]
-    },
-    {
-      "name": "dsh-opencode-go",
-      "title": {
-        "en": "OpenCode Go"
-      },
-      "description": {
-        "en": "OpenCode Go with its settings page. DSH's built-in opencode-go route covers basic use."
-      },
-      "homepage": "https://github.com/Duskriver/dsh-opencode-go#readme",
-      "metadata": {
-        "category": "ai",
-        "keywords": [
-          "opencode"
-        ],
-        "labels": [
-          "untested"
-        ]
-      },
-      "versions": [
-        {
-          "version": "0.1.24",
-          "publishTimestamp": 1792089970,
-          "source": {
-            "type": "npm"
+            "type": "git",
+            "url": "https://github.com/automagik-genie/dsh-oh-my-claude",
+            "commit": "ccca7fe46871c0e188d2272d2aa92f2d7d4502c4"
           },
           "engines": {
             "dsh": ">=0.2.1-rc.2 <0.3.0"

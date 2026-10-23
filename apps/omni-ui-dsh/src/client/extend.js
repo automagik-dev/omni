@@ -42,6 +42,9 @@ export const toolCards = {
 export const nav = registry()
 // Row badges: drawn at the end of a Bot's sidebar row, `Component({ bot, roster, useWork })`.
 export const badges = registry()
+// Rows under a Bot's row in the wide sidebar, `Component({ bot, roster, actions })`: the
+// Omni channels plugin hangs the Omni Bot's channels and their chats there.
+export const botChildren = registry()
 // Header buttons: drawn in a Bot's chat header, `Component({ bot, roster, actions, useWork })`.
 export const headerButtons = registry()
 // Bot settings: cards of a Bot's settings page, after its capabilities,

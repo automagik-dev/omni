@@ -16,7 +16,15 @@ const PUBLIC = 'https://omni.example.com';
 const VERSION = '2.261019.10';
 const PACKED_AT = 1792553326;
 const THIRD_PARTY = staticIndex.plugins
-  .filter((plugin) => plugin.versions.some((entry) => entry.source.type === 'npm'))
+  .filter((plugin) =>
+    plugin.versions.some(
+      (entry) =>
+        entry.source.type === 'npm' ||
+        ('url' in entry.source &&
+          typeof entry.source.url === 'string' &&
+          !entry.source.url.startsWith('https://github.com/automagik-dev/omni')),
+    ),
+  )
   .map((plugin) => plugin.name);
 
 let root: string;
@@ -131,9 +139,16 @@ describe('market index', () => {
     expect(fresh?.description).toBe('A plugin the static index does not list yet');
     expect(fresh?.repository).toEqual({ url: 'https://github.com/automagik-dev/omni', directory: 'apps/omni-new-dsh' });
     expect(fresh?.metadata).toMatchObject({ category: 'omni', labels: ['official'] });
-    // No git pins: everything installs from npm, Omni's own from this Omni.
-    for (const plugin of parsed.plugins) for (const v of plugin.versions) expect(v.source.type).toBe('npm');
-    for (const plugin of parsed.plugins.slice(2)) expect(plugin.versions[0]?.source).toEqual({ type: 'npm' });
+    // No git pins into Omni's own repository: Omni's plugins install from this Omni. An add-on installs
+    // from npm, or from the commit of its reviewed fork that the static index pins.
+    for (const plugin of parsed.plugins)
+      for (const v of plugin.versions)
+        if (v.source.type === 'git') expect(v.source.url).not.toContain('automagik-dev/omni');
+    for (const plugin of parsed.plugins.slice(2)) {
+      const listed = staticIndex.plugins.find((entry) => entry.name === plugin.name);
+      const want: unknown = listed?.versions[0]?.source;
+      expect(plugin.versions[0]?.source as unknown).toEqual(want);
+    }
   });
 
   test('without a public URL, the registry is the request origin, cached only per client', async () => {

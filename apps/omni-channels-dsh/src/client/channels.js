@@ -47,7 +47,7 @@ export function Tile({ type, size = 40, ring = false }) {
   }, h('svg', { width: Math.round(size * 0.62), height: Math.round(size * 0.62), viewBox: '0 0 24 24', 'aria-hidden': true, focusable: 'false' }, (GLYPHS[typeOf(type).glyph] ?? GLYPHS.chat)()))
 }
 
-const StatusDot = ({ status }) => h('span', { className: 'oc-dot', 'data-tone': STATUS[status].tone, 'aria-hidden': true })
+export const StatusDot = ({ status }) => h('span', { className: 'oc-dot', 'data-tone': STATUS[status].tone, 'aria-hidden': true })
 
 const StatusPill = ({ status }) => h('span', { className: 'oc-pill', 'data-tone': STATUS[status].tone },
   h('span', { className: 'oc-pill-dot', 'aria-hidden': true }), t(STATUS[status].label))

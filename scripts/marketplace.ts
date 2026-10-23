@@ -16,13 +16,22 @@
  * packed from the release by scripts/pack-market.ts, plus this index's vetted npm add-ons.
  */
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseMarketIndex } from '@deepseek-ai/dsh-plugin-market-index';
 
 export const REPO_URL = 'https://github.com/automagik-dev/omni';
 export const INDEX_PATH = join(import.meta.dir, '..', 'marketplace', 'automagik.json');
 export const INDEX_URL = 'https://raw.githubusercontent.com/automagik-dev/omni/labs/marketplace/automagik.json';
+/**
+ * Third-party plugins Omni ships from its own reviewed fork, pinned to a commit, instead of the
+ * upstream npm package. Only these repositories may appear as a git source besides Omni's own.
+ */
+export const VETTED_FORKS = [
+  'https://github.com/automagik-genie/dsh-oh-my-claude',
+  'https://github.com/automagik-genie/dsh-subscriptions',
+];
 
 interface GitSource {
   type: 'git';
@@ -46,6 +55,8 @@ interface Index {
 
 const isOurs = (source: IndexVersion['source']): source is GitSource =>
   source.type === 'git' && source.url.replace(/\.git$/, '') === REPO_URL;
+const isVettedFork = (source: IndexVersion['source']): source is GitSource =>
+  source.type === 'git' && VETTED_FORKS.includes(source.url.replace(/\.git$/, ''));
 
 function git(cwd: string, args: string[], timeout?: number): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout }).trim();
@@ -68,8 +79,25 @@ function packageAt(cwd: string, commit: string, path: string): { name?: string; 
   }
 }
 
+/** A vetted fork's package.json at `commit`, read from a cached bare clone; null when unreachable. */
+export function forkManifest(url: string, commit: string, path: string): { name?: string; version?: string } | null {
+  const cache = join(tmpdir(), 'omni-market-forks', url.replace(/[^a-z0-9]+/gi, '-'));
+  if (!existsSync(cache)) {
+    mkdirSync(cache, { recursive: true });
+    git(cache, ['init', '--quiet', '--bare']);
+  }
+  if (!gitOk(cache, ['cat-file', '-e', `${commit}^{commit}`]))
+    gitOk(cache, ['fetch', '--quiet', '--depth', '1', url, commit], 60_000);
+  // A bare clone has no working directory for a `./` path to resolve against.
+  try {
+    return JSON.parse(git(cache, ['show', `${commit}:${path === '.' ? '' : `${path}/`}package.json`]));
+  } catch {
+    return null;
+  }
+}
+
 /** Every problem with the index, empty when it is fit to serve. */
-export function checkIndex(value: unknown, repoDir: string): string[] {
+export function checkIndex(value: unknown, repoDir: string, readFork = forkManifest): string[] {
   try {
     parseMarketIndex(value, INDEX_URL);
   } catch (error) {
@@ -79,8 +107,16 @@ export function checkIndex(value: unknown, repoDir: string): string[] {
   for (const plugin of (value as Index).plugins) {
     for (const entry of plugin.versions) {
       const at = `${plugin.name}@${entry.version}`;
+      if (isVettedFork(entry.source)) {
+        const { url, commit, path = '.' } = entry.source;
+        const manifest = /^[0-9a-f]{40}$/.test(commit) ? readFork(url, commit, path) : null;
+        if (!manifest) problems.push(`${at}: ${url} has no ${path}/package.json at ${commit}`);
+        else if (manifest.name !== plugin.name || manifest.version !== entry.version)
+          problems.push(`${at}: ${url} ${commit}:${path}/package.json is ${manifest.name}@${manifest.version}`);
+        continue;
+      }
       if (entry.source.type === 'git' && !isOurs(entry.source)) {
-        problems.push(`${at}: git sources must come from ${REPO_URL}`);
+        problems.push(`${at}: git sources must come from ${REPO_URL} or a vetted fork (${VETTED_FORKS.join(', ')})`);
         continue;
       }
       if (!isOurs(entry.source)) continue;

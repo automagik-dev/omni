@@ -7,7 +7,8 @@
 //                                 stores the key in DSH's credential store under the
 //                                 reference the Models page would use, and points the
 //                                 provider's pi-ai route at it (DeepSeek: DSH's own key)
-//   signin-start { provider }     adds the provider's pi-ai route and starts its sign-in
+//   signin-start { provider }     starts the provider's sign-in; its pi-ai route is added
+//                                 once the sign-in succeeds, so a cancelled one leaves none
 //   signin-status { provider }    the attempt: running, authorized, cancelled or failed,
 //                                 its latest notice (message, url, code) and open question
 //   signin-answer { provider, promptId, value }
@@ -40,6 +41,7 @@ export const KEY_PROVIDERS = {
   opencode: { label: 'OpenCode' },
   openrouter: { label: 'OpenRouter' },
   moonshotai: { label: 'Moonshot (Kimi API)' },
+  xai: { label: 'xAI' },
 }
 // Providers a subscription sign-in can connect, by pi-ai's provider id. Claude is not one:
 // see claude-code.
@@ -47,6 +49,7 @@ export const SIGNIN_PROVIDERS = {
   'openai-codex': { label: 'ChatGPT (Codex)' },
   'kimi-coding': { label: 'Kimi Code' },
   'github-copilot': { label: 'GitHub Copilot' },
+  xai: { label: 'Grok' },
 }
 // A finished attempt is kept this long, so a page that comes back still learns how it ended.
 const KEEP_MS = 10 * 60 * 1000
@@ -109,7 +112,7 @@ const piAiEntry = (ctx) => {
 
 // Write one route under llm-pi-ai.providers, keeping what it already holds. A route that
 // does not exist yet is added; DSH checks it before the change applies.
-async function saveRoute(ctx, provider, patch) {
+export async function saveRoute(ctx, provider, patch) {
   const entry = piAiEntry(ctx)
   if (entry === undefined) throw refused('This DSH has no pi-ai entry (llm-pi-ai) to connect providers with.')
   const current = entry.value?.providers?.[provider]
@@ -119,6 +122,18 @@ async function saveRoute(ctx, provider, patch) {
   } catch (error) {
     if (error?.code === 'SETTINGS_CONFLICT') throw refused('DSH\'s model settings changed while saving. Try again.')
     throw refused(`DSH did not save the ${provider} route: ${error?.message ?? error}`)
+  }
+}
+
+// Removes one route from llm-pi-ai.providers. The key or sign-in it used stays stored.
+export async function unsetRoute(ctx, provider) {
+  const entry = piAiEntry(ctx)
+  if (entry === undefined || !Object.hasOwn(entry.value?.providers ?? {}, provider)) return
+  try {
+    await ctx.settings.mutate(PI_AI, [{ op: 'unset', path: ['providers', provider] }], entry.revision)
+  } catch (error) {
+    if (error?.code === 'SETTINGS_CONFLICT') throw refused('DSH\'s model settings changed while saving. Try again.')
+    throw refused(`DSH did not remove the ${provider} route: ${error?.message ?? error}`)
   }
 }
 
@@ -140,6 +155,20 @@ const authorizationOf = (ctx) => {
   }
 }
 
+// Claude through Claude Code: the plugin's route, the CLI, its sign-in, and whether DSH's own
+// PATH reaches the CLI (the plugin starts a plain `claude`).
+export async function checkClaudeCode(ctx, { env = process.env, home = homedir() } = {}) {
+  let plugin = false
+  try {
+    plugin = (ctx.get?.('llm')?.listProviders?.() ?? []).some(provider => provider?.id === CLAUDE_CODE_ROUTE)
+  } catch {}
+  const path = claudeCandidates(env, home).find(executable) ?? null
+  if (path === null) return { plugin, installed: false, loggedIn: false }
+  const status = parseClaudeStatus((await runStatus(path, env)) ?? '')
+  const reachable = String(env.PATH ?? '').split(delimiter).filter(Boolean).some(dir => executable(join(dir, 'claude')))
+  return { plugin, installed: true, path, reachable, loggedIn: status.loggedIn, email: status.email, plan: status.plan }
+}
+
 export function createProviderActions(ctx) {
   // One attempt per provider: { id, status, notice, prompt, error, answer, finishedAt }.
   const attempts = new Map()
@@ -157,17 +186,7 @@ export function createProviderActions(ctx) {
 
   return {
     async 'claude-code'() {
-      // dsh-oh-my-claude registers the claude-code model route; DSH's model service lists it.
-      let plugin = false
-      try {
-        plugin = (ctx.get?.('llm')?.listProviders?.() ?? []).some(provider => provider?.id === CLAUDE_CODE_ROUTE)
-      } catch {}
-      const path = claudeCandidates().find(executable) ?? null
-      if (path === null) return { plugin, installed: false, loggedIn: false }
-      const status = parseClaudeStatus((await runStatus(path, process.env)) ?? '')
-      // The plugin starts a plain `claude`, so it reaches the CLI only through DSH's own PATH.
-      const reachable = String(process.env.PATH ?? '').split(delimiter).filter(Boolean).some(dir => executable(join(dir, 'claude')))
-      return { plugin, installed: true, path, reachable, loggedIn: status.loggedIn, email: status.email, plan: status.plan }
+      return checkClaudeCode(ctx)
     },
 
     async providers() {
@@ -210,23 +229,10 @@ export function createProviderActions(ctx) {
       if (!authorization) throw refused('This DSH cannot run sign-ins (no authorization service).')
       const key = recordKeyOf(provider)
       if (authorization.describe(key) === undefined) throw refused(`This DSH offers no ${SIGNIN_PROVIDERS[provider].label} sign-in.`)
-      const earlier = attempts.get(provider)
-      if (earlier?.status === 'running') return view(provider)
-      // Taken before the route write awaits, so a second start (a page reloaded mid-request)
-      // finds this one running rather than writing the route and beginning a sign-in again.
+      // A page reloaded mid-sign-in finds this one running rather than beginning another.
+      if (attempts.get(provider)?.status === 'running') return view(provider)
       const attempt = { id: randomUUID(), status: 'running', notice: null, prompt: null, error: null, finishedAt: 0 }
       attempts.set(provider, attempt)
-      // A sign-in sits beneath a key: a route with apiKeyEnv uses the key, so the route
-      // this adds has none. A route that exists already (keyed or not) is left as it is.
-      if (!Object.hasOwn(piAiEntry(ctx)?.value?.providers ?? {}, provider)) {
-        try {
-          await saveRoute(ctx, provider, {})
-        } catch (error) {
-          if (earlier) attempts.set(provider, earlier)
-          else attempts.delete(provider)
-          throw error
-        }
-      }
       const interaction = {
         notify(notice) {
           attempt.notice = { message: String(notice?.message ?? ''), url: typeof notice?.url === 'string' ? notice.url : undefined, code: typeof notice?.code === 'string' ? notice.code : undefined }
@@ -251,9 +257,18 @@ export function createProviderActions(ctx) {
         },
       }
       authorization.begin({ key, method: 'oauth', interaction })
-        .then((outcome) => {
-          attempt.status = outcome?.status === 'authorized' ? 'authorized' : 'cancelled'
-        }, (error) => {
+        .then(async (outcome) => {
+          if (outcome?.status !== 'authorized') {
+            attempt.status = 'cancelled'
+            return
+          }
+          // Only a finished sign-in gets a route. A sign-in sits beneath a key: a route with
+          // apiKeyEnv uses the key, so the route this adds names none, and one that exists
+          // already (keyed or not) is left as it is.
+          if (!Object.hasOwn(piAiEntry(ctx)?.value?.providers ?? {}, provider)) await saveRoute(ctx, provider, {})
+          attempt.status = 'authorized'
+        })
+        .catch((error) => {
           attempt.status = 'failed'
           attempt.error = String(error?.message ?? error).slice(0, 300)
         })

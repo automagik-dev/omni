@@ -61,13 +61,12 @@ DSH asks before it installs anything, and installs exactly the version listed.
 | `@automagik/omni-channels-dsh` | this repository, `apps/omni-channels-dsh`, pinned to a commit | Omni channels: link your Omni, its channels, chats and automations. Needs Omni team. |
 | `@automagik/omni-canvas-dsh` | this repository, `apps/omni-canvas-dsh`, pinned to a commit | Omni canvases: live UI in the chat, drawn from your Omni. Needs Omni team and channels. |
 | `@automagik/omni-ai-dsh` | this repository, `apps/omni-ai-dsh`, pinned to a commit | The Omni welcome and Connect AI. |
-| `dsh-codex-subscription` 3.1.3 | npm | ChatGPT/Codex plan through DSH's own Codex sign-in. Personal use under the vendor's terms. |
-| `dsh-oh-my-claude` 1.5.5 | npm | The official Claude Code CLI as a provider. Personal use under the vendor's terms. |
-| `dsh-kimi-subscription` 1.3.10 | npm | Kimi Code membership. Its own update button can move past this vetted version. |
-| `dsh-opencode-go` 0.1.24 | npm | Not yet tested on 0.2.1-rc.2; DSH's built-in `opencode-go` route covers basic use. |
+| `dsh-oh-my-claude` 1.5.6-omni.1 | git: [automagik-genie fork](https://github.com/automagik-genie/dsh-oh-my-claude), pinned commit | The official Claude Code CLI as a provider. Omni's reviewed fork of lcestou's plugin. Personal use under the vendor's terms. |
+| `@goodandready/dsh-subscriptions` 0.7.21-omni.1 | git: [automagik-genie fork](https://github.com/automagik-genie/dsh-subscriptions), pinned commit | Antigravity, Cursor, Kiro, Perplexity and the other plans DSH doesn't sign in to itself. Omni's fork of GooDAnDReaDY's plugin, without the vendors DSH covers and without its own updater. Personal use under the vendors' terms. |
 
-DSH 0.2.1-rc.2 already signs in to DeepSeek, Codex, Claude and Kimi, and takes API keys for Z.ai, OpenCode and
-the other pi-ai providers, without any of these.
+DSH 0.2.1-rc.3 already signs in to DeepSeek, Codex, Claude, Kimi, GitHub Copilot and Grok, and takes API keys for
+Z.ai, OpenCode (including OpenCode Go) and the other pi-ai providers, so the add-ons above cover only what it
+doesn't. One source per vendor: an add-on that duplicates a built-in sign-in is not listed.
 
 Vetting means: no install scripts, no telemetry, credentials kept in DSH's own store, and the source read at the
 listed version. A new version is listed only after the same review.
@@ -76,8 +75,10 @@ listed version. A new version is listed only after the same review.
 
 Omni's own entries are git sources, so nothing is published to npm, and neither market needs a hand-made release:
 an Omni's market is packed from the release it serves, and the Automagik market lists each Omni release by
-itself. Here, keep the entries' paths, titles, categories and labels, and the vetted add-ons, current. To list
-an unreleased commit in this file (for a test DSH):
+itself. This file follows Omni too: pinning a release candidate (`.github/workflows/pin-candidate.yml`) lists
+Omni's plugins at the candidate's version, at its tag commit, in the same commit that pins the public channels,
+and `make marketplace-check` fails when they differ. Here, keep the entries' paths, titles, categories and labels,
+and the vetted add-ons, current. To list an unreleased commit (for a test DSH, not committed):
 
 ```bash
 bun scripts/marketplace.ts pin <commit-or-branch>   # point Omni's entries at it (adds a version when it moved on)
