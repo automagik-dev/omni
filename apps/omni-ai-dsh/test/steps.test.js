@@ -116,9 +116,12 @@ test('a subscription takes the next free account slot, so accounts add up; tiles
   assert.equal(nextIndex(accounts, 'kiro'), 1)
   assert.equal(nextIndex(null, 'kiro'), 1)
   assert.equal(signedInCount(accounts, 'cursor'), 2)
-  // DSH's own sign-ins (ChatGPT, Claude, Kimi, Copilot) are not offered twice.
+  // DSH's own sign-ins (ChatGPT, Kimi, Copilot), compared by provider id, and Claude, which
+  // goes through Claude Code, are not offered twice.
   const ids = plain(SUBSCRIPTIONS_GROUP.tiles).map(tile => tile.provider)
-  for (const own of ['codex', 'claude', 'kimi', 'copilot', 'antigravity']) assert.ok(!ids.includes(own), own)
+  const own = [...GROUPS[0].tiles.map(tile => tile.provider).filter(Boolean), 'anthropic', 'claude', 'antigravity']
+  assert.ok(own.includes('openai-codex') && own.includes('kimi-coding'), own.join())
+  for (const id of own) assert.ok(!ids.includes(id), id)
   const cursor = SUBSCRIPTIONS_GROUP.tiles.find(tile => tile.id === 'cursor')
   assert.equal(connectionsOf(cursor, null, accounts), 2)
   assert.equal(connectionsOf(GROUPS[0].tiles[0], { 'openai-codex': { signedIn: true } }, null), 1)

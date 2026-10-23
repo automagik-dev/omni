@@ -12,6 +12,7 @@
 // src/shared), restarts DSH, which serves a plugin's bundle as it was when DSH started;
 // then the page reloads. Open the URL it prints.
 import { execFileSync, spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer, request } from 'node:http'
 import { connect } from 'node:net'
@@ -50,10 +51,20 @@ if (!existsSync(DSH_BIN)) {
   console.error('no DSH here: run `npm run harness` in apps/omni-ui-dsh first')
   process.exit(2)
 }
-if (options.fresh) {
+// A home this launcher made carries this marker, and --fresh empties no other: a mistyped
+// --home (the real ~/.dsh, say) is refused, not removed. The default home is the launcher's own.
+const MARKER = join(home, '.omni-live-home')
+const DEFAULT_HOME = join(homedir(), '.omni-dev')
+if (options.fresh && existsSync(home)) {
+  if (!existsSync(MARKER) && home !== DEFAULT_HOME) {
+    console.error(`--fresh empties only a home this launcher made, and ${home} has no ${MARKER}`)
+    process.exit(2)
+  }
   rmSync(home, { recursive: true, force: true })
   say(`emptied ${home}`)
 }
+mkdirSync(home, { recursive: true })
+writeFileSync(MARKER, 'made by apps/omni-ui-dsh/dev/live.mjs; --fresh may empty this folder\n')
 
 // The profile: the desktop app's bundles and settings, with each plugin linked in place.
 const plugins = FOLDERS.map(folder => ({ folder, dir: join(APPS, folder), name: readJson(join(APPS, folder, 'package.json')).name }))
@@ -161,8 +172,13 @@ function startDsh() {
   })
 }
 let restarting = false
+// A restart asked for during one (a bundle that finished building meanwhile) runs after it.
+let restartAgain = null
 async function restartDsh(why) {
-  if (restarting) return
+  if (restarting) {
+    restartAgain = why
+    return
+  }
   restarting = true
   say(`restarting DSH: ${why}`)
   if (dsh?.exitCode === null) {
@@ -172,6 +188,11 @@ async function restartDsh(why) {
   }
   restarting = false
   startDsh()
+  if (restartAgain !== null) {
+    const next = restartAgain
+    restartAgain = null
+    void restartDsh(next)
+  }
 }
 
 // The front door: a reverse proxy to DSH that adds the reloader to its pages.
@@ -186,6 +207,11 @@ const gate = createServer((req, res) => {
   }
   const headers = { ...req.headers, 'accept-encoding': 'identity' }
   const upstream = request({ host: '127.0.0.1', port: dshPort, method: req.method, path: req.url, headers }, (reply) => {
+    // DSH stopping mid-answer (a restart) cuts the reply: end this one, never crash the launcher.
+    reply.on('error', () => {
+      if (!res.headersSent) res.writeHead(502, { 'content-type': 'text/plain' })
+      res.destroy()
+    })
     const html = String(reply.headers['content-type'] ?? '').includes('text/html')
     if (!html) {
       res.writeHead(reply.statusCode, reply.headers)
@@ -226,11 +252,8 @@ gate.on('upgrade', (req, socket, head) => {
   socket.on('error', close)
 })
 
-// One build at a time per plugin; a change during a build builds once more after it. What a
-// build writes itself (client.js, and generated host files such as omni-routes.js) is not a
-// change to react to: events from a plugin during its build and for a second after are dropped.
+// One build at a time per plugin; a change during a build builds once more after it.
 const building = new Map()
-const quietUntil = new Map()
 function build(plugin) {
   const state = building.get(plugin.folder) ?? { running: false, again: false }
   building.set(plugin.folder, state)
@@ -243,7 +266,6 @@ function build(plugin) {
   const child = spawn('npm', ['run', '--silent', 'build'], { cwd: plugin.dir, env: { ...process.env, DO_NOT_TRACK: '1' }, stdio: ['ignore', 'inherit', 'inherit'] })
   child.on('exit', (code) => {
     state.running = false
-    quietUntil.set(plugin.folder, Date.now() + 1000)
     // DSH fingerprints each plugin's client.js when it starts and serves it as immutable
     // under that fingerprint, so a new bundle reaches the page only through a restart.
     if (code === 0) debounce('dsh', () => restartDsh(`${plugin.folder} rebuilt in ${Date.now() - started} ms`))
@@ -262,8 +284,19 @@ const debounce = (key, fn) => {
 }
 // Polled, not fs.watch: on macOS fs.watch reports every file as changed when it starts and
 // misses files a sync rewrites. A plugin's sources are a few hundred files, so a stat of each
-// every 400 ms is cheap.
+// every 400 ms is cheap. A file is compared by its content (hashed again only when its stat
+// moves): what a build writes itself (generated host files such as omni-routes.js) comes out
+// byte for byte the same unless its sources changed, so a build is no change to react to and
+// nothing has to be ignored while one runs, an edit made meanwhile included.
 const WATCHED = [/^src\/client\//, /^src\/host\//, /^src\/shared\//, /^index\.js$/, /^cordis\.patch\.yml$/]
+const hashes = new Map()
+function contentOf(file, stamp) {
+  const known = hashes.get(file)
+  if (known?.stamp === stamp) return known.hash
+  const hash = createHash('sha1').update(readFileSync(file)).digest('hex')
+  hashes.set(file, { stamp, hash })
+  return hash
+}
 function snapshot(dir, prefix = '', into = new Map()) {
   for (const entry of readdirSync(join(dir, prefix), { withFileTypes: true })) {
     const path = prefix ? `${prefix}/${entry.name}` : entry.name
@@ -272,7 +305,7 @@ function snapshot(dir, prefix = '', into = new Map()) {
     } else if (WATCHED.some(pattern => pattern.test(path))) {
       try {
         const info = statSync(join(dir, path))
-        into.set(path, `${info.mtimeMs}:${info.size}`)
+        into.set(path, contentOf(join(dir, path), `${info.mtimeMs}:${info.size}`))
       } catch {}
     }
   }
@@ -284,13 +317,13 @@ setInterval(() => {
     const before = seen.get(plugin.folder)
     const now = snapshot(plugin.dir)
     seen.set(plugin.folder, now)
-    if (building.get(plugin.folder)?.running || Date.now() < (quietUntil.get(plugin.folder) ?? 0)) continue
-    const changed = [...now].filter(([path, stamp]) => before.get(path) !== stamp).map(([path]) => path)
+    const changed = [...now].filter(([path, hash]) => before.get(path) !== hash).map(([path]) => path)
     for (const path of before.keys()) if (!now.has(path)) changed.push(path)
-    if (changed.length === 0) continue
-    if (changed.some(path => !path.startsWith('src/client/'))) {
-      debounce('dsh', () => restartDsh(`${plugin.folder}/${changed.find(path => !path.startsWith('src/client/'))}`))
-    } else debounce(`${plugin.folder}:client`, () => build(plugin))
+    // Both kinds in one poll do both: the bundle builds (and restarts DSH when it is done) and
+    // the host change restarts DSH.
+    if (changed.some(path => path.startsWith('src/client/'))) debounce(`${plugin.folder}:client`, () => build(plugin))
+    const host = changed.find(path => !path.startsWith('src/client/'))
+    if (host !== undefined) debounce('dsh', () => restartDsh(`${plugin.folder}/${host}`))
   }
 }, 400).unref()
 
