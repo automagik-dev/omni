@@ -6,7 +6,7 @@ import { BOARD_KIND, BOARD_TAB_ID, BoardTab, EventsBadge, SUBSCRIPTIONS_CSS, Sub
 import { AUTOMATIONS_CSS, AUTOMATIONS_PANEL, AutomationsPage } from './automations-page.js'
 import { Badge, KeyValue, LiveChannel, LiveChat, LiveQr, OMNI_LIVE_CSS, OmniCallCard, OmniToolCard, Table, parseCall } from './omni-live.js'
 import { OMNI_PEEK_CSS } from './omni-peek.js'
-import { OMNI_CONNECT_CSS } from './omni-connect.js'
+import { OMNI_CONNECT_CSS, connectFromApp } from './omni-connect.js'
 import { addStrings, badges, botSettings, headerButtons, nav, onShell, t, toolCards, icons } from './core.js'
 import { ASKING_TOOLS, ConsentDock, PERMISSIONS_CSS, PermissionsCard, withConsent } from './permissions.js'
 import { STRINGS } from './strings.js'
@@ -85,6 +85,13 @@ export function apply(ctx) {
   ctx.effect(() => addStrings(STRINGS), 'ds-bot: channels copy')
   // Onboarding: Connect Omni, between omni-ai's welcome and Connect AI when it is installed.
   registerConnectStep(ctx)
+  // The Omni desktop app hands over an omni://connect link it asked about (src/main.js there).
+  ctx.effect(() => {
+    if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return undefined
+    const onConnect = event => void connectFromApp(event.detail?.url)
+    window.addEventListener('omni-desktop:connect', onConnect)
+    return () => window.removeEventListener('omni-desktop:connect', onConnect)
+  }, 'ds-bot: omni:// links')
   // A call that needs the user's permission draws the card that asks (permissions.js).
   ctx.effect(() => toolCards.register('omni_call', withConsent(callCard), { phrase: PHRASES.omni_call, asks: true }), 'ds-bot: omni call card')
   for (const name of ['omni_channels', 'omni_chats', 'omni_messages', 'omni_connect', 'omni_send', 'omni_react', 'omni_media', 'omni_delete']) {

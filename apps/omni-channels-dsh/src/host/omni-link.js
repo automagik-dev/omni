@@ -208,7 +208,19 @@ export function install(rt) {
       pollIntervalMs: Math.max(2000, Number(code.json.interval ?? 2) * 1000),
       accessToken: null,
     }
+    // `auto`: the desktop app started this from an omni:// link and no card may be on screen
+    // to poll, so this host polls until the sign-in ends.
+    if (body?.auto === true) void autoPoll(pairing)
     return { pairing: publicPairing() }
+  }
+
+  async function autoPoll(current) {
+    while (pairing === current) {
+      await new Promise(resolve => setTimeout(resolve, current.pollIntervalMs))
+      if (pairing !== current) return
+      const reply = await poll().catch(() => ({ status: 'pending' }))
+      if (reply.status !== 'pending') return
+    }
   }
 
   // One poll at a time per host, whoever asks (two windows poll the same sign-in): the
