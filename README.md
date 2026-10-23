@@ -478,7 +478,7 @@ make sdk-generate
 
 ## Desktop app
 
-Omni's UI is the [Omni desktop app](https://github.com/automagik-dev/omni-desktop): it runs Omni on your machine or connects to a remote one. The API serves no web pages of its own.
+Omni's UI is the [Automagik desktop app](https://github.com/automagik-dev/automagik/tree/dev/apps/desktop) (`omni desktop` opens it with Omni preloaded): it runs Omni on your machine or connects to a remote one. The API serves no web pages of its own.
 
 <details>
 <summary>🔐 API Keys & Security</summary>
