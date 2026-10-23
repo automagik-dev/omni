@@ -50,8 +50,8 @@ PY
 APP_VERSION_RE="${APP_VERSION//./\\.}"
 
 # Top-level image.tag of a values file: prints the scalar, "<absent>" when the
-# key is not set. Only the top-level `image:` block is inspected (adminUi.image
-# and autopg.image are nested deeper and ignored).
+# key is not set. Only the top-level `image:` block is inspected (autopg.image
+# is nested deeper and ignored).
 image_tag_of() {
   python3 - "$1" <<'PY'
 import sys

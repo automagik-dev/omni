@@ -36,10 +36,8 @@ describe('the Bun version', () => {
     expect(unpinned).toEqual([]);
   });
 
-  test('the images build and run on it', () => {
-    for (const file of ['deploy/Dockerfile', 'deploy/Dockerfile.admin-ui']) {
-      expect(read(file).match(/^ARG BUN_VERSION=(\S+)$/m)?.[1]).toBe(BUN);
-    }
+  test('the image builds and runs on it', () => {
+    expect(read('deploy/Dockerfile').match(/^ARG BUN_VERSION=(\S+)$/m)?.[1]).toBe(BUN);
   });
 
   test('packageManager and every @types/bun name it', () => {

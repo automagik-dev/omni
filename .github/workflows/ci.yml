@@ -325,8 +325,7 @@ jobs:
         # cache replay on the integration branch, and the one-process run is
         # also the only configuration where cross-file state leaks (e.g.
         # globalThis.fetch pollution, issue #967 comment) reproduce. Scope to
-        # omni packages + the ui app; apps/khal-ui is a decoupled sub-project
-        # (private @khal-os deps) with its own test run.
+        # omni packages + the ui app.
         # merge_group events (#990) take this same path deliberately: the
         # queue's speculative merge commit is exactly the state dev would
         # become, so sweeping it catches green-in-isolation/red-in-combination
