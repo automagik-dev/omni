@@ -334,13 +334,13 @@ jobs:
         # cache replay on the integration branch, and the one-process run is
         # also the only configuration where cross-file state leaks (e.g.
         # globalThis.fetch pollution, issue #967 comment) reproduce. Scope to
-        # omni packages + the ui app.
+        # omni packages.
         # merge_group events (#990) take this same path deliberately: the
         # queue's speculative merge commit is exactly the state dev would
         # become, so sweeping it catches green-in-isolation/red-in-combination
         # PR pairs (the #964+#965 global-fetch clash) BEFORE they land.
         if: ${{ github.event_name != 'pull_request' }}
-        run: bun test packages apps/ui --env-file=.env
+        run: bun test packages --env-file=.env
         env:
           NODE_ENV: test
           LOG_LEVEL: silent

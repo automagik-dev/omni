@@ -1,9 +1,9 @@
 # Omni v2 Makefile
 # Universal Event-Driven Omnichannel Platform
 
-.PHONY: help install dev dev-api dev-ui dev-services dev-stop build build-ui clean version \
+.PHONY: help install dev dev-api dev-services dev-stop build clean version \
         test test-sweep test-watch test-api test-db test-pg-gate test-pg-gate-warm pg-gate-warm-stop \
-        typecheck typecheck-ui lint lint-fix lint-ui format check check-all dead-code verify-migrations verify-versions marketplace-check \
+        typecheck lint lint-fix format check check-all dead-code verify-migrations verify-versions marketplace-check \
         db-push db-migrate db-studio db-reset \
         ensure-nats ensure-ffmpeg check-ffmpeg check-deps start stop restart logs status \
         restart-api restart-nats restart-pgserve logs-api \
@@ -23,7 +23,6 @@ help:
 	@echo "  make install       Install deps + .env + init database"
 	@echo "  make dev           Start services + API in watch mode"
 	@echo "  make dev-api       Start just the API (services must be running)"
-	@echo "  make dev-ui        Start UI dev server (Vite on :5173)"
 	@echo "  make dev-services  Start infrastructure (pgserve + NATS) via PM2"
 	@echo "  make dev-stop      Stop PM2 dev services"
 	@echo ""
@@ -62,7 +61,6 @@ help:
 	@echo ""
 	@echo "Building:"
 	@echo "  make build         Build all packages"
-	@echo "  make build-ui      Build UI for production"
 	@echo "  make clean         Clean build artifacts"
 	@echo ""
 	@echo "Production:"
@@ -186,10 +184,6 @@ dev-stop:
 	-pm2 delete ecosystem.config.cjs 2>/dev/null || true
 	@echo "Dev services stopped"
 
-# Start UI dev server (Vite)
-dev-ui:
-	cd apps/ui && bun run dev
-
 # ============================================================================
 # Quality Checks
 # ============================================================================
@@ -209,12 +203,6 @@ lint-api:
 
 lint-db:
 	bunx biome check packages/db
-
-lint-ui:
-	cd apps/ui && bun run lint
-
-typecheck-ui:
-	cd apps/ui && bun run typecheck
 
 lint-core:
 	bunx biome check packages/core
@@ -239,7 +227,7 @@ test: _build-dist _sync-db
 # cross-file state leaks (e.g. globalThis.fetch pollution) that only reproduce
 # when every suite shares one process.
 test-sweep: _build-dist _sync-db
-	bun test --env-file=.env packages apps/ui
+	bun test --env-file=.env packages
 
 test-watch: _build-dist
 	bun test --env-file=.env --watch
@@ -379,9 +367,6 @@ sync-versions: version
 
 build: version
 	bun run build
-
-build-ui:
-	cd apps/ui && bun run build
 
 clean:
 	rm -rf node_modules/.cache

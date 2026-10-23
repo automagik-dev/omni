@@ -136,32 +136,6 @@ export function evaluateRouteOwnership(
  */
 const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
   {
-    route: 'GET /favicon.svg',
-    class: 'public-by-contract',
-    justification:
-      'Static browser icon from the built UI bundle (registered only when apps/ui/dist exists, or under the ' +
-      'enumeration-only OMNI_FORCE_UI_ROUTES override). Serves a fixed asset file byte-for-byte. Exposes NO ' +
-      'tenant data, inventory, identifiers, or connection state — the response is identical for every caller.',
-  },
-  {
-    route: 'GET /favicon.ico',
-    class: 'public-by-contract',
-    justification:
-      'Static browser icon from the built UI bundle (registered only when apps/ui/dist exists, or under the ' +
-      'enumeration-only OMNI_FORCE_UI_ROUTES override). Serves a fixed asset file byte-for-byte. Exposes NO ' +
-      'tenant data, inventory, identifiers, or connection state — the response is identical for every caller.',
-  },
-  {
-    route: 'GET /*',
-    class: 'public-by-contract',
-    justification:
-      'SPA fallback for the built UI: serves the static index.html for any non-/api path so client-side ' +
-      'routing works, and returns a plain 404 JSON for unmatched /api paths. Registered only when apps/ui/dist ' +
-      'exists (or under the enumeration-only OMNI_FORCE_UI_ROUTES override). The HTML is the same fixed bundle ' +
-      'for every caller; it embeds NO tenant data, counts, identifiers, connection state, or existence oracle — ' +
-      'all data the UI shows is fetched later through the authenticated /api surface.',
-  },
-  {
     route: 'GET /health',
     class: 'public-by-contract',
     justification:
