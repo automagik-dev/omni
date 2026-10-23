@@ -8,7 +8,7 @@
 // <home>/ui), apart from any DSH or Omni desktop app you already run. --fresh empties it
 // first, so the welcome and the connect steps show again. The profile links the plugins'
 // folders in place (apps/*-dsh beside this one). A change under a plugin's src/client
-// rebuilds its bundle (npm run build); that, or a change to host code (index.js, src/host,
+// rebuilds its bundle (its build script); that, or a change to host code (index.js, src/host,
 // src/shared), restarts DSH, which serves a plugin's bundle as it was when DSH started;
 // then the page reloads. Open the URL it prints.
 import { execFileSync, spawn } from 'node:child_process'
@@ -47,7 +47,7 @@ const say = message => console.log(`[omni-live] ${message}`)
 const readJson = file => JSON.parse(readFileSync(file, 'utf8'))
 
 if (!existsSync(DSH_BIN)) {
-  console.error('no DSH here: run `npm run harness` in apps/omni-ui-dsh first')
+  console.error('no DSH here: run `bun run harness` in apps/omni-ui-dsh first')
   process.exit(2)
 }
 if (options.fresh) {
@@ -240,7 +240,9 @@ function build(plugin) {
   }
   state.running = true
   const started = Date.now()
-  const child = spawn('npm', ['run', '--silent', 'build'], { cwd: plugin.dir, env: { ...process.env, DO_NOT_TRACK: '1' }, stdio: ['ignore', 'inherit', 'inherit'] })
+  // Each plugin's `build` script is `node scripts/build-client.mjs`; run with this Node, it needs
+  // no package manager on PATH (an app launched from the Dock has none of the shell's).
+  const child = spawn(process.execPath, ['scripts/build-client.mjs'], { cwd: plugin.dir, env: { ...process.env, DO_NOT_TRACK: '1' }, stdio: ['ignore', 'inherit', 'inherit'] })
   child.on('exit', (code) => {
     state.running = false
     quietUntil.set(plugin.folder, Date.now() + 1000)
