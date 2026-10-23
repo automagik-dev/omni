@@ -10652,16 +10652,16 @@ var localStore = () => {
     return null;
   }
 };
-function skippedHere(storage = localStore()) {
+function skippedHere(storage2 = localStore()) {
   try {
-    return storage?.getItem(SKIPPED_KEY) === "1";
+    return storage2?.getItem(SKIPPED_KEY) === "1";
   } catch {
     return false;
   }
 }
-function keepSkipHere(storage = localStore()) {
+function keepSkipHere(storage2 = localStore()) {
   try {
-    storage?.setItem(SKIPPED_KEY, "1");
+    storage2?.setItem(SKIPPED_KEY, "1");
   } catch {
   }
 }
@@ -10674,7 +10674,7 @@ function noteStepShown() {
 }
 var stepShown = () => stepsShown > 0;
 var isConnected = (link) => link?.linked === true || link?.configured === true;
-async function gateConnect({ explicit, complete }, { request, omniAi = callOmniAi, storage = localStore() } = {}) {
+async function gateConnect({ explicit, complete }, { request, omniAi = callOmniAi, storage: storage2 = localStore() } = {}) {
   let link = null;
   try {
     link = await request("omni-link");
@@ -10685,7 +10685,7 @@ async function gateConnect({ explicit, complete }, { request, omniAi = callOmniA
     complete();
     return null;
   }
-  let skipped = skippedHere(storage);
+  let skipped = skippedHere(storage2);
   if (!skipped) {
     try {
       skipped = (await omniAi("state"))?.connectOmniSkipped === true;
@@ -10698,11 +10698,11 @@ async function gateConnect({ explicit, complete }, { request, omniAi = callOmniA
   }
   return { link };
 }
-async function skipConnect({ complete }, { omniAi = callOmniAi, storage = localStore() } = {}) {
+async function skipConnect({ complete }, { omniAi = callOmniAi, storage: storage2 = localStore() } = {}) {
   try {
     await omniAi("done", { stepId: CONNECT_STEP.id });
   } catch {
-    keepSkipHere(storage);
+    keepSkipHere(storage2);
   }
   complete();
 }
@@ -10737,18 +10737,18 @@ function closeConnectWizard() {
 }
 var AUTO_OPENED = "omni-channels:connect-wizard-opened";
 var AUTO_OPEN_DELAY_MS = 1500;
-async function autoOpenOnce({ request = call, omniAi = callOmniAi, storage = localStore(), gate = gateConnect, shown = stepShown, open = openConnectWizard, wait = (ms2) => new Promise((resolve) => setTimeout(resolve, ms2)) } = {}) {
+async function autoOpenOnce({ request = call, omniAi = callOmniAi, storage: storage2 = localStore(), gate = gateConnect, shown = stepShown, open = openConnectWizard, wait = (ms2) => new Promise((resolve) => setTimeout(resolve, ms2)) } = {}) {
   try {
-    if (storage?.getItem(AUTO_OPENED) === "1") return false;
+    if (storage2?.getItem(AUTO_OPENED) === "1") return false;
   } catch {
   }
   const state = await gate({ stepId: CONNECT_STEP.id, complete: () => {
-  } }, { request, omniAi, storage }).catch(() => null);
+  } }, { request, omniAi, storage: storage2 }).catch(() => null);
   if (!state) return false;
   await wait(AUTO_OPEN_DELAY_MS);
   if (shown()) return false;
   try {
-    storage?.setItem(AUTO_OPENED, "1");
+    storage2?.setItem(AUTO_OPENED, "1");
   } catch {
   }
   open();
@@ -10777,8 +10777,53 @@ function ConnectPrompt() {
   );
 }
 
+// src/client/update-bar.js
+var KEY = "omni-ui:update-dismissed:";
+function updateBar(status, dismissed = null) {
+  const latest = status?.latest;
+  switch (status?.state) {
+    case "available":
+      if (dismissed === latest) return null;
+      return { kind: "available", latest, current: status.current ?? null, action: "update" };
+    case "off":
+    case "forbidden":
+      if (!latest || dismissed === latest) return null;
+      return { kind: "admin", latest, action: "how", command: status.command ?? null };
+    case "pending":
+      return { kind: "pending", version: status.version, action: "none" };
+    case "updating":
+      return { kind: "updating", version: status.version, action: "none" };
+    default:
+      return null;
+  }
+}
+var storage = () => {
+  try {
+    return globalThis.localStorage ?? null;
+  } catch {
+    return null;
+  }
+};
+function dismissedFor(origin, store = storage()) {
+  try {
+    return store?.getItem(KEY + origin) ?? null;
+  } catch {
+    return null;
+  }
+}
+function dismiss(origin, version, store = storage()) {
+  try {
+    store?.setItem(KEY + origin, version);
+  } catch {
+  }
+}
+
 // src/client/omni-update.js
 var import_react2 = require("react");
+function rich(template, parts) {
+  const marks = Object.fromEntries(Object.keys(parts).map((key) => [key, `${key}`]));
+  return t(template, marks).split(/\uE000(\w+)\uE000/).map((piece, index) => index % 2 === 1 ? (0, import_react2.createElement)(import_react2.Fragment, { key: index }, parts[piece]) : piece);
+}
 function CopyCommand({ command }) {
   const [copied, setCopied] = (0, import_react2.useState)(false);
   const copy = async () => {
@@ -10820,48 +10865,70 @@ function updateWords(status) {
   }
 }
 var CONFIRM_ON_WHATSAPP = "Confirm on WhatsApp: your Omni sent you a code. Reply update and that code in your chat with yourself.";
-function UpdateOffer({ id, compact = false }) {
+function UpdateBar({ origin }) {
   const [status, setStatus] = (0, import_react2.useState)(null);
+  const [dismissed, setDismissed] = (0, import_react2.useState)(() => dismissedFor(origin));
+  const [asked, setAsked] = (0, import_react2.useState)(false);
+  const [how, setHow] = (0, import_react2.useState)(false);
   const [busy, setBusy] = (0, import_react2.useState)(false);
-  const [asked, setAsked] = (0, import_react2.useState)(null);
   const [problem, setProblem] = (0, import_react2.useState)(null);
   const alive = (0, import_react2.useRef)(true);
   (0, import_react2.useEffect)(() => () => {
     alive.current = false;
   }, []);
   (0, import_react2.useEffect)(() => {
-    call("omni-update-status", id ? { id } : {}).then((reply) => {
+    call("omni-update-status", {}).then((reply) => {
       if (alive.current) setStatus(reply);
-    }, (error) => {
-      if (alive.current && !compact) setProblem(error.message);
+    }, () => {
     });
-  }, [id, compact]);
+  }, [origin]);
+  const bar = updateBar(status, dismissed);
+  if (!bar) return null;
+  const close = () => {
+    dismiss(origin, bar.latest);
+    setDismissed(bar.latest);
+  };
   const ask = async () => {
     setBusy(true);
     setProblem(null);
     try {
-      const reply = await call("omni-update-request", { ...id ? { id } : {}, version: status.latest });
-      if (alive.current) setAsked(reply);
+      await call("omni-update-request", { version: bar.latest });
+      if (alive.current) setAsked(true);
     } catch (error) {
       if (alive.current) setProblem(error.message);
     } finally {
       if (alive.current) setBusy(false);
     }
   };
-  if (compact && !["available", "off", "pending", "updating"].includes(status?.state) && !asked && !problem) return null;
-  const words = asked ? t(CONFIRM_ON_WHATSAPP) : updateWords(status);
+  let words;
+  if (asked) words = t(CONFIRM_ON_WHATSAPP);
+  else if (bar.kind === "available") {
+    const version = (0, import_react2.createElement)("b", null, `Omni ${bar.latest}`);
+    words = bar.current ? rich("{version} is available · you're on {current}", { version, current: bar.current }) : rich("{version} is available", { version });
+  } else if (bar.kind === "admin") words = rich("{version} is available. Its admin updates this Omni.", { version: (0, import_react2.createElement)("b", null, `Omni ${bar.latest}`) });
+  else words = updateWords({ state: bar.kind, version: bar.version });
   return (0, import_react2.createElement)(
     "div",
-    { className: `ox-update${compact ? " ox-update-notice" : ""}`, role: "status" },
-    words ? (0, import_react2.createElement)("span", { className: "ox-muted" }, words) : status === null && !problem ? (0, import_react2.createElement)("span", { className: "ox-muted" }, t("Checking for updates…")) : null,
-    !asked && status?.command && status.state !== "available" ? (0, import_react2.createElement)(CopyCommand, { command: status.command }) : null,
-    !asked && status?.state === "available" ? (0, import_react2.createElement)("button", { type: "button", className: "oc-primary", disabled: busy, onClick: ask }, busy ? t("Asking…") : t("Update to {version}", { version: status.latest })) : null,
+    { className: "ox-bar", role: "status", "data-kind": bar.kind },
+    (0, import_react2.createElement)("span", { className: "ox-bar-dot", "aria-hidden": true }),
+    (0, import_react2.createElement)("span", { className: "ox-bar-text" }, words),
+    !asked && bar.action === "update" ? (0, import_react2.createElement)("button", { type: "button", className: "oc-primary ox-bar-go", disabled: busy, onClick: ask }, busy ? t("Asking…") : t("Update")) : null,
+    bar.action === "how" ? (0, import_react2.createElement)("button", { type: "button", className: "oc-link", "aria-expanded": how, onClick: () => setHow((value) => !value) }, t("How")) : null,
+    bar.action !== "none" ? (0, import_react2.createElement)("button", { type: "button", className: "ox-bar-x", "aria-label": t("Hide until the next version"), title: t("Hide until the next version"), onClick: close }, "×") : null,
+    how ? (0, import_react2.createElement)("div", { className: "ox-bar-how" }, bar.command ? (0, import_react2.createElement)(import_react2.Fragment, null, (0, import_react2.createElement)("span", null, t("Whoever runs this Omni updates it with:")), (0, import_react2.createElement)(CopyCommand, { command: bar.command })) : (0, import_react2.createElement)("span", null, t("Ask whoever runs your Omni to update it."))) : null,
     problem ? (0, import_react2.createElement)("span", { className: "ox-problem", role: "alert" }, problem) : null
   );
 }
 var OMNI_UPDATE_CSS = `
-.ox-update{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-top:6px}
-.ox-update-notice{margin:0 0 16px;padding:10px 14px;border:1px solid var(--bt-line);border-radius:12px;background:color-mix(in srgb,var(--bt-accent) 7%,transparent)}
+.ox-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin:0 0 6px;padding:9px 12px 9px 14px;border:1px solid var(--bt-line-2);border-radius:12px;background:var(--bt-card);font-size:13.5px}
+.ox-bar-dot{width:8px;height:8px;border-radius:50%;background:var(--bt-accent);flex:none}
+.ox-bar[data-kind=admin] .ox-bar-dot{background:var(--bt-ink-3)}
+.ox-bar-text{flex:1;min-width:200px;color:var(--bt-ink-2)}
+.ox-bar-text b{color:var(--bt-ink);font-weight:600}
+.ox-bar-go{height:30px!important;padding:0 12px!important;font-size:13px!important}
+.ox-bar-x{width:26px;height:26px;border:0;border-radius:8px;background:none;color:var(--bt-ink-3);font-size:18px;line-height:1;cursor:pointer}
+.ox-bar-x:hover{background:var(--bt-hover);color:var(--bt-ink)}
+.ox-bar-how{flex-basis:100%;display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 0 2px 20px;color:var(--bt-ink-2)}
 .ox-command{display:inline-flex;align-items:center;gap:8px}
 .ox-command code{padding:4px 8px;border-radius:8px;background:var(--bt-bg,rgba(0,0,0,.2));font:13px ui-monospace,SFMono-Regular,Menlo,monospace;user-select:all}
 .ox-copy{height:28px!important;padding:0 10px!important;font-size:12.5px!important}
@@ -10874,27 +10941,11 @@ var CHANNELS_PANEL = "omni-channels";
 var CHAT_PANEL = "omni-chat";
 var typeOf = (type) => CHANNEL_TYPES[type] ?? { label: type, tile: "#64748B", glyph: "chat", pairing: "token", blurb: "" };
 var CHANNEL_TYPES = {
-  "whatsapp-baileys": { label: "WhatsApp", tile: "#25D366", glyph: "whatsapp", pairing: "qr", blurb: "Link a phone number by scanning a code, like WhatsApp Web." },
-  "whatsapp-business": {
-    label: "WhatsApp Business",
-    tile: "#128C7E",
-    glyph: "whatsapp",
-    pairing: "oauth",
-    signIn: "Meta",
-    blurb: "The official Business API, through your Meta account.",
-    cli: ["omni instances create --name Business --channel whatsapp-business", "omni instances connect <id> --access-token <token> --phone-number-id <id> --waba-id <id>"]
-  },
-  telegram: { label: "Telegram", tile: "#229ED9", glyph: "telegram", pairing: "token", blurb: "A bot of yours, in direct chats and groups." },
-  slack: {
-    label: "Slack",
-    tile: "#4A154B",
-    glyph: "slack",
-    pairing: "oauth",
-    signIn: "Slack",
-    blurb: "Workspace channels and direct messages.",
-    cli: ["omni instances create --name Slack --channel slack --slack-bot-token xoxb-… --slack-app-token xapp-…"]
-  },
-  discord: { label: "Discord", tile: "#5865F2", glyph: "discord", pairing: "token", blurb: "Servers, threads and direct messages." }
+  "whatsapp-baileys": { label: "WhatsApp", tile: "#25D366", glyph: "whatsapp", pairing: "qr", blurb: "Your own number, linked like WhatsApp Web." },
+  "whatsapp-business": { label: "WhatsApp Business", tile: "#128C7E", glyph: "whatsapp", pairing: "meta", signIn: "Meta", blurb: "The official Business API, through your Meta account." },
+  slack: { label: "Slack", tile: "#4A154B", glyph: "slack", pairing: "oauth", signIn: "Slack", blurb: "Channels and DMs, as a bot or as yourself." },
+  telegram: { label: "Telegram", tile: "#229ED9", glyph: "telegram", pairing: "token", blurb: "A bot of yours, in chats and groups." },
+  discord: { label: "Discord", tile: "#5865F2", glyph: "discord", pairing: "token", blurb: "Servers, threads and DMs, through your bot." }
 };
 var STATUS = {
   connected: { label: "Connected", tone: "ok" },
@@ -11162,61 +11213,133 @@ var TRIGGERS = {
 var runsOf = (roster, subId) => (roster?.subscriptionRuns ?? []).filter((run) => subId === void 0 || run.subId === subId).toSorted((a, b2) => b2.at - a.at);
 var waitingRuns = (roster, waiting = /* @__PURE__ */ new Set()) => (roster?.subscriptionRuns ?? []).filter((run) => run.status === "working" && waiting.has(run.sessionId)).length;
 
+// src/client/channel-add.js
+var ADD = {
+  "whatsapp-baileys": { time: "1 min", how: "Scan a code", steps: ["Name it", "Scan", "Done"] },
+  "whatsapp-business": { time: "3 min", how: "Enter your Meta details", steps: ["Enter the details", "Done"] },
+  slack: { time: "1 min", how: "Connect with Slack", steps: ["Choose how it joins", "Approve in Slack", "Done"] },
+  telegram: { time: "2 min", how: "Create a bot", steps: ["Create the bot", "Paste its token", "Say hi"] },
+  discord: { time: "2 min", how: "Add your bot", steps: ["Paste the bot token", "Invite it to a server", "Done"] }
+};
+var ORDER = ["whatsapp-baileys", "whatsapp-business", "slack", "telegram", "discord"];
+var offered = (supported) => ORDER.filter((type) => supported === null || supported === void 0 || supported.includes(type));
+var TELEGRAM_TOKEN = /^\d{6,12}:[A-Za-z0-9_-]{30,}$/;
+var isTelegramToken = (text) => typeof text === "string" && TELEGRAM_TOKEN.test(text.trim());
+async function copiedTelegramToken(readText) {
+  try {
+    const text = await readText();
+    return isTelegramToken(text) ? text.trim() : null;
+  } catch {
+    return null;
+  }
+}
+function telegramChat(detail) {
+  const name = typeof detail === "string" ? detail.trim().replace(/^@/, "") : "";
+  return /^[A-Za-z][A-Za-z0-9_]{3,31}$/.test(name) ? `https://t.me/${name}` : null;
+}
+var stepState = (index, at2) => index < at2 ? "done" : index === at2 ? "now" : void 0;
+
 // src/client/channel-connect-live.js
 var import_react3 = require("react");
 var { ChevronLeftIcon } = icons;
 var POLL_MS2 = 2e3;
-var liveType = (type) => CHANNEL_TYPES[type] !== void 0 && CHANNEL_TYPES[type].cli === void 0;
 function LiveConnectFlow({ state, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip2 }) {
   const { type } = state.page;
-  const writable = canWrite(state);
+  const [supported, setSupported] = (0, import_react3.useState)(void 0);
+  (0, import_react3.useEffect)(() => {
+    let live = true;
+    call("omni-channel-types").then((reply) => {
+      if (live) setSupported(reply.types ?? null);
+    }, () => {
+      if (live) setSupported(null);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
   if (type === null) {
-    return (0, import_react3.createElement)(
-      import_react3.Fragment,
-      null,
-      (0, import_react3.createElement)("button", { type: "button", className: "oc-back", onClick: () => omni2.showPage({ view: "overview" }) }, (0, import_react3.createElement)(ChevronLeftIcon), t("Channels")),
-      (0, import_react3.createElement)("header", { className: "oc-head" }, (0, import_react3.createElement)(
-        "div",
-        null,
-        (0, import_react3.createElement)("h1", null, t("Add a channel"), (0, import_react3.createElement)(PreviewChip2)),
-        (0, import_react3.createElement)("p", null, writable ? t("Pick where people talk to you. It takes about a minute, and you can disconnect at any time.") : t("This device's key can't change channels; ask your Omni's owner."))
-      )),
-      (0, import_react3.createElement)("div", { className: "oc-types" }, Object.entries(CHANNEL_TYPES).map(([id, info]) => info.cli ? (0, import_react3.createElement)(
-        "div",
-        { key: id, className: "oc-type oc-type-cli" },
-        (0, import_react3.createElement)(Tile2, { type: id, size: 48 }),
-        (0, import_react3.createElement)("strong", null, info.label),
-        (0, import_react3.createElement)("span", null, info.blurb),
-        (0, import_react3.createElement)("em", null, t("Set up from the CLI")),
-        (0, import_react3.createElement)("code", { className: "oc-cli" }, info.cli.join("\n"))
-      ) : (0, import_react3.createElement)(
-        "button",
-        { key: id, type: "button", className: "oc-type", disabled: !writable, onClick: () => omni2.showPage({ type: id, step: 0 }) },
-        (0, import_react3.createElement)(Tile2, { type: id, size: 48 }),
-        (0, import_react3.createElement)("strong", null, info.label),
-        (0, import_react3.createElement)("span", null, info.blurb),
-        (0, import_react3.createElement)("em", null, info.pairing === "qr" ? t("Scan a QR code") : t("Paste a token"))
-      )))
-    );
+    return (0, import_react3.createElement)(AddGrid, {
+      types: supported === void 0 ? [] : offered(supported),
+      loading: supported === void 0,
+      writable: canWrite(state),
+      onPick: (id) => omni2.showPage({ type: id, step: 0 }),
+      onBack: () => omni2.showPage({ view: "overview" }),
+      Tile: Tile2,
+      PreviewChip: PreviewChip2
+    });
   }
-  return (0, import_react3.createElement)(LivePairing, { key: type, type, omni: omni2, Tile: Tile2 });
+  const props = { key: type, type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip2 };
+  if (type === "slack") return (0, import_react3.createElement)(SlackFlow, props);
+  if (type === "whatsapp-business") return (0, import_react3.createElement)(BusinessFlow, props);
+  if (type === "telegram" || type === "discord") return (0, import_react3.createElement)(TokenFlow, props);
+  return (0, import_react3.createElement)(WhatsAppFlow, props);
 }
-function LivePairing({ type, omni: omni2, Tile: Tile2 }) {
+function AddGrid({ types, loading = false, writable = true, onPick, onBack, Tile: Tile2, PreviewChip: PreviewChip2 }) {
+  return (0, import_react3.createElement)(
+    import_react3.Fragment,
+    null,
+    (0, import_react3.createElement)("button", { type: "button", className: "oc-back", onClick: onBack }, (0, import_react3.createElement)(ChevronLeftIcon), t("Channels")),
+    (0, import_react3.createElement)("header", { className: "oc-head" }, (0, import_react3.createElement)(
+      "div",
+      null,
+      (0, import_react3.createElement)("h1", null, t("Add a channel"), (0, import_react3.createElement)(PreviewChip2)),
+      (0, import_react3.createElement)("p", null, writable ? t("Pick where people talk to you. Every option connects from here.") : t("This device's key can't change channels; ask your Omni's owner."))
+    )),
+    loading ? (0, import_react3.createElement)("span", { className: "oc-qr-wait" }, (0, import_react3.createElement)("span", { className: "oc-spinner", "aria-hidden": true }), t("Looking at what this Omni offers…")) : null,
+    (0, import_react3.createElement)("div", { className: "oc-types" }, types.map((id) => {
+      const info = CHANNEL_TYPES[id];
+      const add = ADD[id];
+      return (0, import_react3.createElement)(
+        "button",
+        { key: id, type: "button", className: "oc-type", disabled: !writable, onClick: () => onPick(id) },
+        (0, import_react3.createElement)("span", { className: "oc-type-top" }, (0, import_react3.createElement)(Tile2, { type: id, size: 44 }), (0, import_react3.createElement)("strong", null, info.label), (0, import_react3.createElement)("span", { className: "oc-type-time" }, add.time)),
+        (0, import_react3.createElement)("span", { className: "oc-type-blurb" }, t(info.blurb)),
+        (0, import_react3.createElement)("span", { className: "oc-type-how" }, (0, import_react3.createElement)("span", null, t("How")), (0, import_react3.createElement)("b", null, t(add.how), " →"))
+      );
+    }))
+  );
+}
+function FlowShell({ type, at: at2, Tile: Tile2, PreviewChip: PreviewChip2, onBack, children }) {
   const info = CHANNEL_TYPES[type];
-  const [step, setStep] = (0, import_react3.useState)(0);
-  const [name, setName] = (0, import_react3.useState)("");
-  const [token, setToken] = (0, import_react3.useState)("");
-  const [channel, setChannel] = (0, import_react3.useState)(null);
-  const [pairing, setPairing] = (0, import_react3.useState)(null);
-  const [problem, setProblem] = (0, import_react3.useState)(null);
-  const [busy, setBusy] = (0, import_react3.useState)(false);
+  const add = ADD[type];
+  return (0, import_react3.createElement)(
+    import_react3.Fragment,
+    null,
+    (0, import_react3.createElement)("button", { type: "button", className: "oc-back", onClick: onBack }, (0, import_react3.createElement)(ChevronLeftIcon), t("All channels")),
+    (0, import_react3.createElement)("header", { className: "oc-head" }, (0, import_react3.createElement)(
+      "div",
+      null,
+      (0, import_react3.createElement)("h1", null, (0, import_react3.createElement)(Tile2, { type, size: 34 }), info.label, (0, import_react3.createElement)(PreviewChip2)),
+      (0, import_react3.createElement)("p", null, t("About {time}. You can disconnect any time from the channel's page.", { time: add.time }))
+    )),
+    (0, import_react3.createElement)(
+      "div",
+      { className: "oc-guide" },
+      (0, import_react3.createElement)("ol", { className: "oc-guide-steps" }, add.steps.map((label, index) => (0, import_react3.createElement)(
+        "li",
+        { key: label, "data-state": stepState(index, at2) },
+        (0, import_react3.createElement)("span", null, index < at2 ? "✓" : String(index + 1)),
+        t(label)
+      ))),
+      (0, import_react3.createElement)("section", { className: "oc-guide-pane" }, children)
+    )
+  );
+}
+var Problem = ({ text }) => text ? (0, import_react3.createElement)("p", { className: "oc-problem", role: "alert" }, text) : null;
+var Spinner = ({ text }) => (0, import_react3.createElement)("span", { className: "oc-qr-wait" }, (0, import_react3.createElement)("span", { className: "oc-spinner", "aria-hidden": true }), text);
+function useUnfinished() {
   const unfinished = (0, import_react3.useRef)(null);
   (0, import_react3.useEffect)(() => () => {
     if (unfinished.current) void call("omni-channel-cancel", { id: unfinished.current }).catch(() => {
     });
   }, []);
+  return unfinished;
+}
+function usePairing(channel, on2, onConnected) {
+  const [pairing, setPairing] = (0, import_react3.useState)(null);
+  const [problem, setProblem] = (0, import_react3.useState)(null);
   (0, import_react3.useEffect)(() => {
-    if (step !== 1 || !channel) return void 0;
+    if (!on2 || !channel) return void 0;
     let live = true;
     let timer = 0;
     const poll = async () => {
@@ -11224,11 +11347,8 @@ function LivePairing({ type, omni: omni2, Tile: Tile2 }) {
         const reply = await call("omni-channel-pairing", { id: channel.id });
         if (!live) return;
         setPairing(reply);
-        if (reply.connected) {
-          unfinished.current = null;
-          setStep(2);
-          return;
-        }
+        setProblem(null);
+        if (reply.connected) return onConnected(reply);
       } catch (error) {
         if (live) setProblem(error.message);
       }
@@ -11239,77 +11359,66 @@ function LivePairing({ type, omni: omni2, Tile: Tile2 }) {
       live = false;
       clearTimeout(timer);
     };
-  }, [step, channel?.id]);
-  const create = async () => {
+  }, [on2, channel?.id]);
+  return { pairing, problem };
+}
+function Connected({ type, channel, detail, omni: omni2, children }) {
+  const info = CHANNEL_TYPES[type];
+  return (0, import_react3.createElement)(
+    import_react3.Fragment,
+    null,
+    (0, import_react3.createElement)("h2", null, t("{app} is connected", { app: info.label })),
+    (0, import_react3.createElement)("p", null, [detail, t("New chats appear under your Bots. Nothing is sent to your contacts until Omni or you reply.")].filter(Boolean).join(" · ")),
+    children,
+    (0, import_react3.createElement)("div", { className: "oc-row" }, (0, import_react3.createElement)("button", { type: "button", className: "oc-primary", onClick: () => omni2.finishConnect(type, channel.name, channel.id) }, t("See its health")))
+  );
+}
+function WhatsAppFlow({ type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip2 }) {
+  const info = CHANNEL_TYPES[type];
+  const [name, setName] = (0, import_react3.useState)("");
+  const [channel, setChannel] = (0, import_react3.useState)(null);
+  const [done, setDone] = (0, import_react3.useState)(null);
+  const [busy, setBusy] = (0, import_react3.useState)(false);
+  const [problem, setProblem] = (0, import_react3.useState)(null);
+  const unfinished = useUnfinished();
+  const { pairing, problem: pollProblem } = usePairing(channel, channel !== null && done === null, (reply) => {
+    unfinished.current = null;
+    setDone(reply);
+  });
+  const start = async () => {
     setBusy(true);
     setProblem(null);
     try {
-      const made = await call("omni-channel-create", { type, name: name.trim() || info.label, ...info.pairing === "token" ? { token: token.trim() } : {} });
+      const made = await call("omni-channel-create", { type, name: name.trim() || info.label });
       unfinished.current = made.id;
       setChannel(made);
-      setStep(1);
     } catch (error) {
       setProblem(error.message);
     } finally {
       setBusy(false);
     }
   };
-  const back = () => omni2.showPage({ type: null, step: 0 });
-  const next = () => {
-    if (info.pairing === "qr") void create();
-    else setStep(0.5);
-  };
-  const steps = [t("Name it"), info.pairing === "qr" ? t("Scan") : t("Paste token"), t("Done")];
-  const shown = Math.ceil(step);
-  const named = name.trim() !== "";
+  const at2 = done ? 2 : channel ? 1 : 0;
   return (0, import_react3.createElement)(
-    import_react3.Fragment,
-    null,
-    (0, import_react3.createElement)("button", { type: "button", className: "oc-back", onClick: back }, (0, import_react3.createElement)(ChevronLeftIcon), t("All channels")),
-    (0, import_react3.createElement)("ol", { className: "oc-steps" }, steps.map((label, index) => (0, import_react3.createElement)("li", { key: label, "data-state": index < shown ? "done" : index === shown ? "now" : void 0 }, (0, import_react3.createElement)("span", null, index < shown ? "✓" : String(index + 1)), label))),
-    (0, import_react3.createElement)(
-      "div",
-      { className: "oc-flow" },
-      (0, import_react3.createElement)(Tile2, { type, size: 64, ring: true }),
-      step === 0 ? (0, import_react3.createElement)(
-        import_react3.Fragment,
-        null,
-        (0, import_react3.createElement)("h1", null, t("Connect {app}", { app: info.label })),
-        (0, import_react3.createElement)("p", null, info.blurb),
-        (0, import_react3.createElement)("label", { className: "oc-field" }, (0, import_react3.createElement)("span", null, t("Name")), (0, import_react3.createElement)("input", {
-          value: name,
-          placeholder: t("For example: Sales, Support, Personal"),
-          onChange: (event) => setName(event.target.value),
-          autoFocus: true,
-          onKeyDown: (event) => {
-            if (event.key === "Enter" && named) next();
-          }
-        })),
-        (0, import_react3.createElement)("button", { type: "button", className: "oc-primary", disabled: !named || busy, onClick: next }, busy ? t("Starting…") : t("Continue"))
-      ) : step === 0.5 ? (0, import_react3.createElement)(
-        import_react3.Fragment,
-        null,
-        (0, import_react3.createElement)("h1", null, t("Paste the {app} token", { app: info.label })),
-        (0, import_react3.createElement)("p", null, info.label === "Telegram" ? t("Message @BotFather, send /newbot, and copy the token it gives you.") : t("Create the token in {app}'s settings and paste it here.", { app: info.label })),
-        (0, import_react3.createElement)("label", { className: "oc-field" }, (0, import_react3.createElement)("span", null, t("Token")), (0, import_react3.createElement)("input", { type: "password", value: token, onChange: (event) => setToken(event.target.value), placeholder: "123456:ABC-…", autoComplete: "off", autoFocus: true })),
-        (0, import_react3.createElement)("button", { type: "button", className: "oc-primary", disabled: token.trim().length < 8 || busy, onClick: create }, busy ? t("Connecting…") : t("Connect"))
-      ) : step === 1 ? info.pairing === "qr" ? (0, import_react3.createElement)(QrStep, { info, channel, pairing }) : (0, import_react3.createElement)(Waiting, { pairing }) : (0, import_react3.createElement)(
-        import_react3.Fragment,
-        null,
-        (0, import_react3.createElement)("h1", null, t("{app} is connected", { app: info.label })),
-        (0, import_react3.createElement)("p", null, [pairing?.detail, t("New chats appear under your Bots. Nothing is sent to your contacts until Omni or you reply.")].filter(Boolean).join(" · ")),
-        (0, import_react3.createElement)("button", { type: "button", className: "oc-primary", onClick: () => omni2.finishConnect(type, channel.name, channel.id) }, t("See its health"))
-      ),
-      problem ? (0, import_react3.createElement)("p", { className: "oc-problem", role: "alert" }, problem) : null
-    )
-  );
-}
-function Waiting({ pairing }) {
-  return (0, import_react3.createElement)(
-    import_react3.Fragment,
-    null,
-    (0, import_react3.createElement)("h1", null, t("Connecting…")),
-    (0, import_react3.createElement)("span", { className: "oc-qr-wait" }, (0, import_react3.createElement)("span", { className: "oc-spinner", "aria-hidden": true }), pairing?.message ?? t("Waiting for Omni to say the channel is up"))
+    FlowShell,
+    { type, at: at2, Tile: Tile2, PreviewChip: PreviewChip2, onBack: () => omni2.showPage({ type: null, step: 0 }) },
+    done ? (0, import_react3.createElement)(Connected, { type, channel, detail: done.detail, omni: omni2 }) : channel ? (0, import_react3.createElement)(QrStep, { info, channel, pairing }) : (0, import_react3.createElement)(
+      import_react3.Fragment,
+      null,
+      (0, import_react3.createElement)("h2", null, t("Name this number")),
+      (0, import_react3.createElement)("p", null, t("So you can tell your channels apart, for example Sales or Personal.")),
+      (0, import_react3.createElement)("label", { className: "oc-field" }, (0, import_react3.createElement)("span", null, t("Name")), (0, import_react3.createElement)("input", {
+        value: name,
+        placeholder: info.label,
+        autoFocus: true,
+        onChange: (event) => setName(event.target.value),
+        onKeyDown: (event) => {
+          if (event.key === "Enter" && !busy) void start();
+        }
+      })),
+      (0, import_react3.createElement)("div", { className: "oc-row" }, (0, import_react3.createElement)("button", { type: "button", className: "oc-primary", disabled: busy, onClick: start }, busy ? t("Starting…") : t("Show the code")))
+    ),
+    (0, import_react3.createElement)(Problem, { text: problem ?? pollProblem })
   );
 }
 function QrStep({ info, channel, pairing }) {
@@ -11329,13 +11438,13 @@ function QrStep({ info, channel, pairing }) {
     return (0, import_react3.createElement)(
       import_react3.Fragment,
       null,
-      (0, import_react3.createElement)("h1", null, t("Link with a phone number")),
+      (0, import_react3.createElement)("h2", null, t("Link with a phone number")),
       code === null ? (0, import_react3.createElement)(
         import_react3.Fragment,
         null,
         (0, import_react3.createElement)("p", null, t("Omni shows an 8-character code. Type it on your phone instead of scanning.")),
         (0, import_react3.createElement)("label", { className: "oc-field" }, (0, import_react3.createElement)("span", null, t("Phone number with country code")), (0, import_react3.createElement)("input", { value: phone, inputMode: "tel", placeholder: "+55 11 91234-5678", onChange: (event) => setPhone(event.target.value), autoFocus: true })),
-        (0, import_react3.createElement)("button", { type: "button", className: "oc-primary", disabled: phone.replace(/\D/g, "").length < 8, onClick: askCode }, t("Get code"))
+        (0, import_react3.createElement)("div", { className: "oc-row" }, (0, import_react3.createElement)("button", { type: "button", className: "oc-primary", disabled: phone.replace(/\D/g, "").length < 8, onClick: askCode }, t("Get code")))
       ) : (0, import_react3.createElement)(
         import_react3.Fragment,
         null,
@@ -11347,9 +11456,9 @@ function QrStep({ info, channel, pairing }) {
           (0, import_react3.createElement)("li", null, t("Type this code"))
         ),
         (0, import_react3.createElement)("div", { className: "oc-code", "aria-label": t("Pairing code") }, code.split("").map((char, index) => (0, import_react3.createElement)("span", { key: index, "data-dash": char === "-" || void 0 }, char))),
-        (0, import_react3.createElement)("span", { className: "oc-qr-wait" }, (0, import_react3.createElement)("span", { className: "oc-spinner", "aria-hidden": true }), t("Waiting for your phone…"))
+        (0, import_react3.createElement)(Spinner, { text: t("Waiting for your phone…") })
       ),
-      problem ? (0, import_react3.createElement)("p", { className: "oc-problem", role: "alert" }, problem) : null,
+      (0, import_react3.createElement)(Problem, { text: problem }),
       (0, import_react3.createElement)("button", { type: "button", className: "oc-link", onClick: () => {
         setByPhone(false);
         setCode(null);
@@ -11357,27 +11466,293 @@ function QrStep({ info, channel, pairing }) {
     );
   }
   return (0, import_react3.createElement)(
-    import_react3.Fragment,
-    null,
-    (0, import_react3.createElement)("h1", null, t("Scan with your phone")),
-    (0, import_react3.createElement)(
-      "ol",
-      { className: "oc-howto" },
-      (0, import_react3.createElement)("li", null, t("Open {app} on your phone", { app: info.label })),
-      (0, import_react3.createElement)("li", null, t("Tap Settings, then Linked devices")),
-      (0, import_react3.createElement)("li", null, t("Tap Link a device and point the camera here"))
-    ),
+    "div",
+    { className: "oc-qr-row" },
     (0, import_react3.createElement)(
       "div",
       { className: "oc-qr" },
-      pairing?.qr ? (0, import_react3.createElement)("span", { className: "oc-qr-code" }, (0, import_react3.createElement)(QrSvg, { text: pairing.qr, size: 196 })) : (0, import_react3.createElement)("span", { className: "oc-qr-empty" }, (0, import_react3.createElement)("span", { className: "oc-spinner", "aria-hidden": true })),
-      (0, import_react3.createElement)("span", { className: "oc-qr-wait" }, (0, import_react3.createElement)("span", { className: "oc-spinner", "aria-hidden": true }), pairing?.qr ? t("Waiting for your phone · the code refreshes by itself") : t("Waiting for a code…"))
+      pairing?.qr ? (0, import_react3.createElement)("span", { className: "oc-qr-code" }, (0, import_react3.createElement)(QrSvg, { text: pairing.qr, size: 196 })) : (0, import_react3.createElement)("span", { className: "oc-qr-empty" }, (0, import_react3.createElement)("span", { className: "oc-spinner", "aria-hidden": true }))
     ),
     (0, import_react3.createElement)(
-      "span",
-      { className: "oc-alt" },
-      (0, import_react3.createElement)("button", { type: "button", className: "oc-link", onClick: () => setByPhone(true) }, t("Use a phone number instead"))
+      "div",
+      { className: "oc-qr-side" },
+      (0, import_react3.createElement)("h2", null, t("Scan with your phone")),
+      (0, import_react3.createElement)(
+        "ol",
+        { className: "oc-howto" },
+        (0, import_react3.createElement)("li", null, t("Open {app} → Settings → Linked devices", { app: info.label })),
+        (0, import_react3.createElement)("li", null, t("Tap Link a device and point the camera here"))
+      ),
+      (0, import_react3.createElement)(Spinner, { text: pairing?.qr ? t("The code refreshes by itself") : t("Waiting for a code…") }),
+      (0, import_react3.createElement)("button", { type: "button", className: "oc-link", onClick: () => setByPhone(true) }, t("No camera? Link with your number instead"))
     )
+  );
+}
+var TOKEN_HELP = {
+  telegram: () => (0, import_react3.createElement)(
+    import_react3.Fragment,
+    null,
+    (0, import_react3.createElement)("h2", null, t("Make a Telegram bot for Omni")),
+    (0, import_react3.createElement)(
+      "ol",
+      { className: "oc-numbered" },
+      (0, import_react3.createElement)("li", null, rich("Open {bot} in Telegram", { bot: (0, import_react3.createElement)("a", { href: "https://t.me/BotFather", target: "_blank", rel: "noreferrer" }, "@BotFather") })),
+      (0, import_react3.createElement)("li", null, rich("Send {command}, then pick a name and a username", { command: (0, import_react3.createElement)("code", null, "/newbot") })),
+      (0, import_react3.createElement)("li", null, t("Copy the token it sends you and paste it here"))
+    )
+  ),
+  discord: () => (0, import_react3.createElement)(
+    import_react3.Fragment,
+    null,
+    (0, import_react3.createElement)("h2", null, t("Connect your Discord bot")),
+    (0, import_react3.createElement)(
+      "ol",
+      { className: "oc-numbered" },
+      (0, import_react3.createElement)("li", null, rich("In the {portal}, open your app → Bot", { portal: (0, import_react3.createElement)("a", { href: "https://discord.com/developers/applications", target: "_blank", rel: "noreferrer" }, t("Discord Developer Portal")) })),
+      (0, import_react3.createElement)("li", null, t("Turn on Message Content Intent, then Reset Token and copy it"))
+    )
+  )
+};
+function TokenFlow({ type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip2 }) {
+  const info = CHANNEL_TYPES[type];
+  const [token, setToken] = (0, import_react3.useState)("");
+  const [copied, setCopied] = (0, import_react3.useState)(null);
+  const [channel, setChannel] = (0, import_react3.useState)(null);
+  const [done, setDone] = (0, import_react3.useState)(null);
+  const [invited, setInvited] = (0, import_react3.useState)(false);
+  const [busy, setBusy] = (0, import_react3.useState)(false);
+  const [problem, setProblem] = (0, import_react3.useState)(null);
+  const unfinished = useUnfinished();
+  const { pairing, problem: pollProblem } = usePairing(channel, channel !== null && done === null, (reply) => {
+    unfinished.current = null;
+    setDone(reply);
+  });
+  (0, import_react3.useEffect)(() => {
+    if (type !== "telegram" || channel) return void 0;
+    const onFocus = () => {
+      if (token.trim() !== "" || !navigator.clipboard?.readText) return;
+      void copiedTelegramToken(() => navigator.clipboard.readText()).then((found) => setCopied(found));
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [type, channel, token]);
+  const connect = async () => {
+    setBusy(true);
+    setProblem(null);
+    try {
+      const made = await call("omni-channel-create", { type, name: info.label, token: token.trim() });
+      unfinished.current = made.id;
+      setToken("");
+      setChannel(made);
+    } catch (error) {
+      setProblem(error.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const at2 = type === "discord" ? invited ? 2 : done ? 1 : 0 : done ? 2 : 1;
+  let body;
+  if (done && type === "telegram") {
+    const chat = telegramChat(done.detail);
+    body = (0, import_react3.createElement)(
+      Connected,
+      { type, channel, detail: done.detail, omni: omni2 },
+      chat ? (0, import_react3.createElement)("a", { className: "oc-secondary", href: chat, target: "_blank", rel: "noreferrer" }, t("Say hi to your bot")) : null
+    );
+  } else if (done && type === "discord" && !invited) {
+    body = (0, import_react3.createElement)(
+      import_react3.Fragment,
+      null,
+      (0, import_react3.createElement)("h2", null, t("Invite it to a server")),
+      (0, import_react3.createElement)("p", null, t("One click: Discord asks which server, with the permissions Omni needs filled in.")),
+      (0, import_react3.createElement)(
+        "div",
+        { className: "oc-row" },
+        channel.inviteUrl ? (0, import_react3.createElement)("a", { className: "oc-primary", href: channel.inviteUrl, target: "_blank", rel: "noreferrer", onClick: () => setInvited(true) }, t("Invite to a server")) : null,
+        (0, import_react3.createElement)("button", { type: "button", className: "oc-link", onClick: () => setInvited(true) }, channel.inviteUrl ? t("It is already on my server") : t("Continue"))
+      )
+    );
+  } else if (done) {
+    body = (0, import_react3.createElement)(Connected, { type, channel, detail: done.detail, omni: omni2 });
+  } else if (channel) {
+    body = (0, import_react3.createElement)(import_react3.Fragment, null, (0, import_react3.createElement)("h2", null, t("Connecting…")), (0, import_react3.createElement)(Spinner, { text: pairing?.message ?? t("Waiting for Omni to say the bot is up") }));
+  } else {
+    body = (0, import_react3.createElement)(
+      import_react3.Fragment,
+      null,
+      TOKEN_HELP[type](),
+      copied ? (0, import_react3.createElement)(
+        "div",
+        { className: "oc-suggest" },
+        (0, import_react3.createElement)("span", null, t("Use the token you just copied?")),
+        (0, import_react3.createElement)("button", { type: "button", className: "oc-secondary", onClick: () => {
+          setToken(copied);
+          setCopied(null);
+        } }, t("Use it"))
+      ) : null,
+      (0, import_react3.createElement)("label", { className: "oc-field" }, (0, import_react3.createElement)("span", null, t("Bot token")), (0, import_react3.createElement)("input", {
+        type: "password",
+        value: token,
+        autoComplete: "off",
+        autoFocus: true,
+        placeholder: type === "telegram" ? "123456:ABC-DEF…" : "MTA…",
+        onChange: (event) => setToken(event.target.value),
+        onKeyDown: (event) => {
+          if (event.key === "Enter" && token.trim().length >= 8 && !busy) void connect();
+        }
+      })),
+      (0, import_react3.createElement)("div", { className: "oc-row" }, (0, import_react3.createElement)("button", { type: "button", className: "oc-primary", disabled: token.trim().length < 8 || busy, onClick: connect }, busy ? t("Connecting…") : type === "discord" ? t("Continue") : t("Connect"))),
+      (0, import_react3.createElement)("p", { className: "oc-fine" }, type === "telegram" ? t("Next we show a link to your bot so you can send it a first message.") : t("Next: one click to invite it to your server."))
+    );
+  }
+  return (0, import_react3.createElement)(FlowShell, { type, at: at2, Tile: Tile2, PreviewChip: PreviewChip2, onBack: () => omni2.showPage({ type: null, step: 0 }) }, body, (0, import_react3.createElement)(Problem, { text: problem ?? pollProblem }));
+}
+function SlackFlow({ type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip2 }) {
+  const [app, setApp] = (0, import_react3.useState)(void 0);
+  const [mode, setMode] = (0, import_react3.useState)("bot");
+  const [flow, setFlow] = (0, import_react3.useState)(null);
+  const [done, setDone] = (0, import_react3.useState)(null);
+  const [problem, setProblem] = (0, import_react3.useState)(null);
+  (0, import_react3.useEffect)(() => {
+    let live = true;
+    call("omni-slack-app").then((reply) => {
+      if (live) setApp(reply.configured);
+    }, () => {
+      if (live) setApp(null);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+  (0, import_react3.useEffect)(() => {
+    if (!flow) return void 0;
+    let live = true;
+    let timer = 0;
+    const poll = async () => {
+      try {
+        const reply = await call("omni-slack-result", { nonce: flow.nonce });
+        if (!live) return;
+        if (reply.status === "done") return setDone({ id: reply.id });
+        if (reply.status === "error") {
+          setFlow(null);
+          return setProblem(reply.message);
+        }
+      } catch (error) {
+        if (live) setProblem(error.message);
+      }
+      if (live) timer = setTimeout(poll, POLL_MS2);
+    };
+    timer = setTimeout(poll, POLL_MS2);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [flow?.nonce]);
+  const start = async () => {
+    setProblem(null);
+    try {
+      const reply = await call("omni-slack-start", { mode });
+      if (!reply.configured) return setApp(false);
+      setFlow(reply);
+      window.open(reply.authorizeUrl, "_blank", "noopener,noreferrer");
+    } catch (error) {
+      setProblem(error.message);
+    }
+  };
+  const at2 = done ? 2 : flow ? 1 : 0;
+  const channel = done ? { id: done.id, name: "Slack" } : null;
+  let body;
+  if (app === false) {
+    body = (0, import_react3.createElement)(
+      import_react3.Fragment,
+      null,
+      (0, import_react3.createElement)("h2", null, t("Slack isn't set up on this Omni yet")),
+      (0, import_react3.createElement)("p", null, t("Your Omni's owner sets up its Slack app once in Omni's settings. After that, everyone connects with one button here."))
+    );
+  } else if (done) {
+    body = (0, import_react3.createElement)(Connected, { type, channel, detail: mode === "bot" ? t("As a bot") : t("As you"), omni: omni2 });
+  } else if (flow) {
+    body = (0, import_react3.createElement)(
+      import_react3.Fragment,
+      null,
+      (0, import_react3.createElement)("h2", null, t("Approve in Slack")),
+      (0, import_react3.createElement)("p", null, t("Slack opened in your browser. Pick the workspace and allow Omni; this page goes on by itself.")),
+      (0, import_react3.createElement)(Spinner, { text: t("Waiting for Slack…") }),
+      (0, import_react3.createElement)(
+        "div",
+        { className: "oc-row" },
+        (0, import_react3.createElement)("a", { className: "oc-link", href: flow.authorizeUrl, target: "_blank", rel: "noreferrer" }, t("Open Slack again")),
+        (0, import_react3.createElement)("button", { type: "button", className: "oc-link", onClick: () => setFlow(null) }, t("Start over"))
+      )
+    );
+  } else {
+    body = (0, import_react3.createElement)(
+      import_react3.Fragment,
+      null,
+      (0, import_react3.createElement)("h2", null, t("How should Omni join your workspace?")),
+      (0, import_react3.createElement)("p", null, t("You can change this later by connecting again.")),
+      (0, import_react3.createElement)(
+        "div",
+        { className: "oc-seg", role: "radiogroup", "aria-label": t("How Omni joins Slack") },
+        [
+          ["bot", t("As a bot"), t("Omni shows up as its own app. People @mention it, and it only sees channels it is invited to.")],
+          ["user", t("As yourself"), t("Omni reads and replies as you, in your DMs and channels, and can search them.")]
+        ].map(([value, title, text]) => (0, import_react3.createElement)("button", {
+          key: value,
+          type: "button",
+          role: "radio",
+          "aria-checked": mode === value,
+          className: "oc-seg-opt",
+          onClick: () => setMode(value)
+        }, (0, import_react3.createElement)("strong", null, title), (0, import_react3.createElement)("span", null, text)))
+      ),
+      (0, import_react3.createElement)(
+        "div",
+        { className: "oc-row" },
+        (0, import_react3.createElement)("button", { type: "button", className: "oc-brand", style: { background: "#4A154B" }, disabled: app === void 0, onClick: start }, t("Connect with Slack")),
+        (0, import_react3.createElement)("span", { className: "oc-fine" }, t("Opens Slack in your browser."))
+      )
+    );
+  }
+  return (0, import_react3.createElement)(FlowShell, { type, at: at2, Tile: Tile2, PreviewChip: PreviewChip2, onBack: () => omni2.showPage({ type: null, step: 0 }) }, body, (0, import_react3.createElement)(Problem, { text: problem }));
+}
+function BusinessFlow({ type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip2 }) {
+  const info = CHANNEL_TYPES[type];
+  const [fields, setFields] = (0, import_react3.useState)({ accessToken: "", phoneNumberId: "", wabaId: "" });
+  const [channel, setChannel] = (0, import_react3.useState)(null);
+  const [busy, setBusy] = (0, import_react3.useState)(false);
+  const [problem, setProblem] = (0, import_react3.useState)(null);
+  const set2 = (key) => (event) => setFields((value) => ({ ...value, [key]: event.target.value }));
+  const ready = fields.accessToken.trim().length >= 8 && /^\d{5,25}$/.test(fields.phoneNumberId.trim()) && /^\d{5,25}$/.test(fields.wabaId.trim());
+  const connect = async () => {
+    setBusy(true);
+    setProblem(null);
+    try {
+      const made = await call("omni-wab-connect", { name: info.label, accessToken: fields.accessToken.trim(), phoneNumberId: fields.phoneNumberId.trim(), wabaId: fields.wabaId.trim() });
+      setFields({ accessToken: "", phoneNumberId: "", wabaId: "" });
+      setChannel(made);
+    } catch (error) {
+      setProblem(error.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const field = (key, label, extra) => (0, import_react3.createElement)("label", { className: "oc-field" }, (0, import_react3.createElement)("span", null, label), (0, import_react3.createElement)("input", { value: fields[key], onChange: set2(key), autoComplete: "off", ...extra }));
+  return (0, import_react3.createElement)(
+    FlowShell,
+    { type, at: channel ? 1 : 0, Tile: Tile2, PreviewChip: PreviewChip2, onBack: () => omni2.showPage({ type: null, step: 0 }) },
+    channel ? (0, import_react3.createElement)(Connected, { type, channel, omni: omni2 }) : (0, import_react3.createElement)(
+      import_react3.Fragment,
+      null,
+      (0, import_react3.createElement)("h2", null, t("Connect your Business number")),
+      (0, import_react3.createElement)("p", null, rich("Find these in Meta's {manager} → API setup.", { manager: (0, import_react3.createElement)("a", { href: "https://business.facebook.com/wa/manage/home/", target: "_blank", rel: "noreferrer" }, t("WhatsApp Manager")) })),
+      field("accessToken", t("Access token"), { type: "password", placeholder: "EAAG…", autoFocus: true }),
+      field("phoneNumberId", t("Phone number ID"), { inputMode: "numeric", placeholder: "123456789012345" }),
+      field("wabaId", t("WhatsApp Business Account ID"), { inputMode: "numeric", placeholder: "987654321098765" }),
+      (0, import_react3.createElement)("div", { className: "oc-row" }, (0, import_react3.createElement)("button", { type: "button", className: "oc-primary", disabled: !ready || busy, onClick: connect }, busy ? t("Connecting…") : t("Connect"))),
+      (0, import_react3.createElement)("p", { className: "oc-fine" }, t("The token stays with your Omni. Omni only gets that number's messages."))
+    ),
+    (0, import_react3.createElement)(Problem, { text: problem })
   );
 }
 
@@ -11598,7 +11973,7 @@ function Overview({ state, omni: omni2 }) {
     ),
     // Sample data means no Omni is linked yet: connecting one comes first, in the Connect
     // wizard (wizard.js). A linked one says when an update is out.
-    state.preview ? (0, import_react4.createElement)(ConnectPrompt) : (0, import_react4.createElement)(UpdateOffer, { compact: true }),
+    state.preview ? (0, import_react4.createElement)(ConnectPrompt) : (0, import_react4.createElement)(UpdateBar, { origin: state.source.origin }),
     troubled.map((channel) => (0, import_react4.createElement)(
       "button",
       { key: channel.id, type: "button", className: "oc-callout", "data-tone": STATUS[channel.status].tone, onClick: () => omni2.showPage({ view: "channel", channelId: channel.id }) },
@@ -11769,30 +12144,7 @@ function PreviewConnectFlow({ state, omni: omni2 }) {
     setToken("");
   }, [type]);
   if (type === null) {
-    return (0, import_react4.createElement)(
-      import_react4.Fragment,
-      null,
-      (0, import_react4.createElement)("button", { type: "button", className: "oc-back", onClick: () => omni2.showPage({ view: "overview" }) }, (0, import_react4.createElement)(ChevronLeftIcon2), t("Channels")),
-      (0, import_react4.createElement)("header", { className: "oc-head" }, (0, import_react4.createElement)(
-        "div",
-        null,
-        (0, import_react4.createElement)("h1", null, t("Add a channel"), (0, import_react4.createElement)(PreviewChip)),
-        (0, import_react4.createElement)("p", null, t("Pick where people talk to you. It takes about a minute, and you can disconnect at any time."))
-      )),
-      (0, import_react4.createElement)("div", { className: "oc-types" }, Object.entries(CHANNEL_TYPES).map(([id, info2]) => (0, import_react4.createElement)(
-        "button",
-        {
-          key: id,
-          type: "button",
-          className: "oc-type",
-          onClick: () => omni2.showPage({ type: id, step: 0 })
-        },
-        (0, import_react4.createElement)(Tile, { type: id, size: 48 }),
-        (0, import_react4.createElement)("strong", null, info2.label),
-        (0, import_react4.createElement)("span", null, info2.blurb),
-        (0, import_react4.createElement)("em", null, info2.pairing === "qr" ? t("Scan a QR code") : info2.pairing === "token" ? t("Paste a token") : t("Sign in with {app}", { app: info2.signIn }))
-      )))
-    );
+    return (0, import_react4.createElement)(AddGrid, { types: ORDER, onPick: (id) => omni2.showPage({ type: id, step: 0 }), onBack: () => omni2.showPage({ view: "overview" }), Tile, PreviewChip });
   }
   const info = CHANNEL_TYPES[type];
   const steps = [t("Name it"), info.pairing === "qr" ? t("Scan") : info.pairing === "token" ? t("Paste token") : t("Sign in"), t("Done")];
@@ -12115,12 +12467,41 @@ body[data-ds-dark-theme] .oc-ava{background:hsl(var(--oc-hue) 30% 26%);color:hsl
 .oc-danger strong{font-size:14px;color:var(--bt-ink)}
 .oc-danger-go{height:34px;padding:0 14px;border-radius:999px;border:1px solid color-mix(in srgb,var(--bt-danger) 40%,transparent);background:none;color:var(--bt-danger);font:inherit;font-size:13px;font-weight:500;cursor:pointer;white-space:nowrap}
 .oc-danger-armed{background:var(--bt-danger);color:#fff;border-color:transparent}
-.oc-types{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}
-.oc-type{display:flex;flex-direction:column;align-items:flex-start;gap:8px;padding:18px;border-radius:18px;border:.5px solid var(--bt-line-2);background:var(--bt-card);color:var(--bt-ink);font:inherit;text-align:left;cursor:pointer;transition:transform .14s ease,box-shadow .14s ease}
-.oc-type:hover{transform:translateY(-2px);box-shadow:0 12px 28px -12px rgba(0,0,0,.18)}
-.oc-type strong{margin-top:4px;font-size:15px;font-weight:600}
-.oc-type>span:not(.oc-tile){font-size:13px;line-height:19px;color:var(--bt-ink-2)}
-.oc-type em{margin-top:auto;padding-top:6px;font-style:normal;font-size:12.5px;font-weight:500;color:var(--bt-accent)}
+.oc-types{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;align-items:stretch}
+.oc-type{display:flex;flex-direction:column;align-items:stretch;gap:10px;min-height:184px;padding:18px;border-radius:18px;border:.5px solid var(--bt-line-2);background:var(--bt-card);color:var(--bt-ink);font:inherit;text-align:left;cursor:pointer;transition:transform .14s ease,box-shadow .14s ease,border-color .14s ease}
+.oc-type:hover:not(:disabled){transform:translateY(-2px);border-color:var(--bt-line);box-shadow:0 12px 28px -12px rgba(0,0,0,.18)}
+.oc-type-top{display:flex;align-items:center;gap:12px}
+.oc-type-top strong{flex:1;min-width:0;font-size:16px;font-weight:600}
+.oc-type-time{flex:none;padding:2px 8px;border-radius:999px;border:1px solid var(--bt-line-2);color:var(--bt-ink-3);font-size:11.5px;white-space:nowrap}
+.oc-type-blurb{flex:1;font-size:13.5px;line-height:20px;color:var(--bt-ink-2)}
+.oc-type-how{display:flex;align-items:center;justify-content:space-between;gap:8px;padding-top:12px;border-top:.5px solid var(--bt-line-2);font-size:12.5px;color:var(--bt-ink-3)}
+.oc-type-how b{color:var(--bt-accent);font-weight:600}
+.oc-head h1 .oc-tile{margin-right:10px;vertical-align:-6px}
+.oc-guide{display:grid;grid-template-columns:200px minmax(0,1fr);gap:28px;margin-top:6px;align-items:start}
+.oc-guide-steps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px;font-size:13.5px;color:var(--bt-ink-3)}
+.oc-guide-steps li{display:flex;align-items:center;gap:10px;padding:6px 0}
+.oc-guide-steps span{width:24px;height:24px;border-radius:50%;display:inline-grid;place-items:center;flex:none;border:1px solid var(--bt-line-2);font-size:11.5px;font-weight:600}
+.oc-guide-steps li[data-state=now]{color:var(--bt-ink);font-weight:500}
+.oc-guide-steps li[data-state=now] span{border-color:var(--bt-accent);color:var(--bt-accent)}
+.oc-guide-steps li[data-state=done] span{background:color-mix(in srgb,#16a34a 14%,transparent);border-color:transparent;color:#16a34a}
+.oc-guide-pane{display:flex;flex-direction:column;align-items:flex-start;gap:14px;padding:22px;border-radius:18px;border:.5px solid var(--bt-line-2);background:var(--bt-card);animation:oc-page-in .22s cubic-bezier(.2,0,0,1)}
+.oc-guide-pane h2{margin:0;font-size:19px;line-height:26px;font-weight:650}
+.oc-guide-pane>p{margin:-6px 0 0;font-size:14px;line-height:21px;color:var(--bt-ink-2)}
+.oc-guide-pane a:not(.oc-primary):not(.oc-secondary){color:var(--bt-accent)}
+.oc-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.oc-fine{margin:0;font-size:12.5px;color:var(--bt-ink-3)}
+.oc-numbered{list-style:none;counter-reset:oc-n;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;font-size:14px;color:var(--bt-ink-2)}
+.oc-numbered li{counter-increment:oc-n;display:flex;align-items:baseline;gap:10px}
+.oc-numbered li::before{content:counter(oc-n);flex:none;width:22px;height:22px;border-radius:7px;display:inline-grid;place-items:center;background:color-mix(in srgb,var(--bt-accent) 12%,transparent);color:var(--bt-accent);font-size:12px;font-weight:600}
+.oc-numbered code{padding:1px 6px;border-radius:6px;background:var(--bt-hover);font:13px ui-monospace,SFMono-Regular,Menlo,monospace}
+.oc-suggest{display:flex;align-items:center;gap:12px;width:100%;padding:10px 12px;border-radius:12px;background:color-mix(in srgb,var(--bt-accent) 9%,transparent);font-size:13.5px;box-sizing:border-box}
+.oc-suggest span{flex:1}
+.oc-brand{display:inline-flex;align-items:center;justify-content:center;height:40px;padding:0 18px;border:0;border-radius:12px;color:#fff;font:inherit;font-size:14px;font-weight:600;cursor:pointer}
+.oc-brand:disabled{opacity:.5;cursor:default}
+.oc-qr-row{display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap}
+.oc-qr-side{display:flex;flex-direction:column;align-items:flex-start;gap:12px;flex:1;min-width:220px}
+.oc-qr-side h2{margin:0}
+.oc-guide-pane .oc-seg{width:100%}
 .oc-steps{display:flex;gap:6px;list-style:none;margin:0;padding:0;font-size:13px;color:var(--bt-ink-3)}
 .oc-steps li{display:flex;align-items:center;gap:8px}
 .oc-steps li+li::before{content:"";width:28px;height:1px;background:var(--bt-line-2);margin-right:2px}
@@ -12157,11 +12538,9 @@ body[data-ds-dark-theme] .oc-ava{background:hsl(var(--oc-hue) 30% 26%);color:hsl
 .oc-compose-fail{color:color-mix(in srgb,#d97706 85%,var(--bt-ink));background:color-mix(in srgb,#f59e0b 12%,transparent)}
 .oc-bubble[data-sending]{opacity:.6}
 .oc-type:disabled{opacity:.5;cursor:not-allowed}
-.oc-type-cli{cursor:default}
-.oc-cli{display:block;width:100%;margin-top:4px;padding:8px 10px;border-radius:10px;background:var(--bt-hover);color:var(--bt-ink-2);font:11.5px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-all;user-select:all}
 .oc-qr-empty{display:grid;place-items:center;width:196px;height:196px}
-@media (max-width:720px){.oc-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.oc-seg{grid-template-columns:1fr}.oc-channels-in{padding:20px 16px 40px}.oc-head{flex-direction:column}}
-@media (prefers-reduced-motion:reduce){.oc-page,.oc-msg,.oc-flow,.oc-chart-bar{animation:none}.oc-card,.oc-type,.oc-filter{transition:none}}
+@media (max-width:720px){.oc-guide{grid-template-columns:1fr;gap:12px}.oc-guide-steps{flex-direction:row;flex-wrap:wrap;gap:4px 14px}.oc-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.oc-seg{grid-template-columns:1fr}.oc-channels-in{padding:20px 16px 40px}.oc-head{flex-direction:column}}
+@media (prefers-reduced-motion:reduce){.oc-page,.oc-msg,.oc-flow,.oc-guide-pane,.oc-chart-bar{animation:none}.oc-card,.oc-type,.oc-filter{transition:none}}
 `;
 
 // src/client/omni-peek.js
@@ -12484,13 +12863,13 @@ var STATE = {
 };
 var phoneOf = (owner) => typeof owner === "string" ? owner.replace(/[:@].*$/, "").replace(/^(\d{6,})$/, "+$1") : "";
 var Badge = ({ text, tone = "muted" }) => (0, import_react6.createElement)("span", { className: "ou-badge", "data-tone": tone }, text);
-var Problem = ({ text }) => (0, import_react6.createElement)("p", { className: "ou-problem", role: "alert" }, text);
+var Problem2 = ({ text }) => (0, import_react6.createElement)("p", { className: "ou-problem", role: "alert" }, text);
 function LiveChannel({ id }) {
   const instance = useOmniGet(id ? `/instances/${encodeURIComponent(id)}` : null, 3e4);
   const status = useOmniGet(id ? `/instances/${encodeURIComponent(id)}/status` : null, 8e3);
   const record = instance.data?.data;
   const live = status.data?.data;
-  if (instance.error) return (0, import_react6.createElement)(Problem, { text: instance.error });
+  if (instance.error) return (0, import_react6.createElement)(Problem2, { text: instance.error });
   if (!record) return (0, import_react6.createElement)("div", { className: "ou-card ou-loading" }, t("Loading channel…"));
   const state = stateOf(record, live);
   return (0, import_react6.createElement)(
@@ -12542,7 +12921,7 @@ function LiveQr({ channelId }) {
   return (0, import_react6.createElement)(
     "div",
     { className: "ou-card ou-qr" },
-    code ? (0, import_react6.createElement)(QrSvg, { text: code }) : (0, import_react6.createElement)("div", { className: "ou-qr-wait" }, qr2.error ? (0, import_react6.createElement)(Problem, { text: qr2.error }) : t("Waiting for a code…")),
+    code ? (0, import_react6.createElement)(QrSvg, { text: code }) : (0, import_react6.createElement)("div", { className: "ou-qr-wait" }, qr2.error ? (0, import_react6.createElement)(Problem2, { text: qr2.error }) : t("Waiting for a code…")),
     (0, import_react6.createElement)(
       "div",
       { className: "ou-qr-help" },
@@ -12556,7 +12935,7 @@ function LiveChat({ id, limit = 8 }) {
   const chat = useOmniGet(id ? `/chats/${encodeURIComponent(id)}` : null, 6e4);
   const messages = useOmniGet(id ? `/chats/${encodeURIComponent(id)}/messages?limit=${Math.min(30, Math.max(1, limit))}` : null, 1e4);
   const record = chat.data?.data;
-  if (chat.error) return (0, import_react6.createElement)(Problem, { text: chat.error });
+  if (chat.error) return (0, import_react6.createElement)(Problem2, { text: chat.error });
   const items = [...messages.data?.items ?? []].sort((a, b2) => (Date.parse(a.platformTimestamp ?? a.createdAt) || 0) - (Date.parse(b2.platformTimestamp ?? b2.createdAt) || 0));
   return (0, import_react6.createElement)(
     "div",
@@ -15109,7 +15488,81 @@ var STRINGS = {
   "Not sent: {reason}": "未发送：{reason}",
   "Put it back": "放回输入框",
   "Resuming…": "正在恢复…",
-  "Pausing…": "正在暂停…"
+  "Pausing…": "正在暂停…",
+  // Adding a channel and the update bar (channel-connect-live.js, channel-add.js, omni-update.js).
+  "Pick where people talk to you. Every option connects from here.": "选择别人联系你的地方。每一种都在这里直接连接。",
+  "Looking at what this Omni offers…": "正在查看这个 Omni 支持哪些渠道…",
+  "How": "方式",
+  "About {time}. You can disconnect any time from the channel's page.": "大约 {time}。你随时可以在渠道页面断开连接。",
+  "Name this number": "给这个号码起个名字",
+  "So you can tell your channels apart, for example Sales or Personal.": "方便区分你的渠道，例如“销售”或“个人”。",
+  "Show the code": "显示二维码",
+  "Open {app} → Settings → Linked devices": "打开 {app} → 设置 → 已关联的设备",
+  "The code refreshes by itself": "二维码会自动刷新",
+  "No camera? Link with your number instead": "没有摄像头？改用手机号关联",
+  "Make a Telegram bot for Omni": "为 Omni 创建一个 Telegram 机器人",
+  "Open {bot} in Telegram": "在 Telegram 中打开 {bot}",
+  "Send {command}, then pick a name and a username": "发送 {command}，然后设置名称和用户名",
+  "Copy the token it sends you and paste it here": "复制它发给你的令牌并粘贴到这里",
+  "Connect your Discord bot": "连接你的 Discord 机器人",
+  "In the {portal}, open your app → Bot": "在 {portal} 中打开你的应用 → Bot",
+  "Discord Developer Portal": "Discord 开发者门户",
+  "Turn on Message Content Intent, then Reset Token and copy it": "开启 Message Content Intent，然后点 Reset Token 并复制",
+  "Say hi to your bot": "跟你的机器人打个招呼",
+  "Invite it to a server": "邀请它加入服务器",
+  "One click: Discord asks which server, with the permissions Omni needs filled in.": "只需一步：Discord 会询问加入哪个服务器，Omni 需要的权限已填好。",
+  "Invite to a server": "邀请加入服务器",
+  "It is already on my server": "它已经在我的服务器里了",
+  "Waiting for Omni to say the bot is up": "正在等待 Omni 确认机器人已上线",
+  "Use the token you just copied?": "使用你刚复制的令牌？",
+  "Bot token": "机器人令牌",
+  "Next we show a link to your bot so you can send it a first message.": "接下来会显示你的机器人链接，方便你发第一条消息。",
+  "Next: one click to invite it to your server.": "下一步：一键邀请它加入你的服务器。",
+  "Slack isn't set up on this Omni yet": "这个 Omni 还没有设置 Slack",
+  "Your Omni's owner sets up its Slack app once in Omni's settings. After that, everyone connects with one button here.": "你的 Omni 的所有者需要在 Omni 设置中配置一次 Slack 应用。之后，每个人都可以在这里一键连接。",
+  "As a bot": "作为机器人",
+  "As you": "以你的身份",
+  "As yourself": "以你自己的身份",
+  "Approve in Slack": "在 Slack 中批准",
+  "Slack opened in your browser. Pick the workspace and allow Omni; this page goes on by itself.": "Slack 已在浏览器中打开。选择工作区并允许 Omni；此页面会自动继续。",
+  "Waiting for Slack…": "正在等待 Slack…",
+  "Open Slack again": "再次打开 Slack",
+  "Start over": "重新开始",
+  "How should Omni join your workspace?": "Omni 应该以什么方式加入你的工作区？",
+  "You can change this later by connecting again.": "之后可以重新连接来更改。",
+  "How Omni joins Slack": "Omni 加入 Slack 的方式",
+  "Omni shows up as its own app. People @mention it, and it only sees channels it is invited to.": "Omni 以独立应用出现。大家 @ 它，它只能看到被邀请加入的频道。",
+  "Omni reads and replies as you, in your DMs and channels, and can search them.": "Omni 以你的身份在私信和频道中阅读和回复，并且可以搜索它们。",
+  "Connect with Slack": "通过 Slack 连接",
+  "Opens Slack in your browser.": "会在浏览器中打开 Slack。",
+  "Connect your Business number": "连接你的企业号码",
+  "Find these in Meta's {manager} → API setup.": "在 Meta 的 {manager} → API 设置中找到这些信息。",
+  "WhatsApp Manager": "WhatsApp 管理工具",
+  "Access token": "访问令牌",
+  "Phone number ID": "电话号码 ID",
+  "WhatsApp Business Account ID": "WhatsApp 企业账户 ID",
+  "The token stays with your Omni. Omni only gets that number's messages.": "令牌只保存在你的 Omni 中。Omni 只会收到该号码的消息。",
+  "{version} is available": "{version} 已发布",
+  "{version} is available · you're on {current}": "{version} 已发布 · 你当前使用 {current}",
+  "{version} is available. Its admin updates this Omni.": "{version} 已发布。由管理员更新这个 Omni。",
+  "Hide until the next version": "在下个版本前隐藏",
+  "Whoever runs this Omni updates it with:": "运行这个 Omni 的人可以用以下命令更新：",
+  "Ask whoever runs your Omni to update it.": "请让运行你的 Omni 的人更新它。",
+  "Enter your Meta details": "填写你的 Meta 信息",
+  "Scan a code": "扫码",
+  "Create a bot": "创建机器人",
+  "Add your bot": "添加你的机器人",
+  "Enter the details": "填写信息",
+  "Choose how it joins": "选择加入方式",
+  "Create the bot": "创建机器人",
+  "Paste its token": "粘贴令牌",
+  "Say hi": "打个招呼",
+  "Paste the bot token": "粘贴机器人令牌",
+  "Your own number, linked like WhatsApp Web.": "你自己的号码，像 WhatsApp 网页版一样关联。",
+  "The official Business API, through your Meta account.": "官方企业 API，通过你的 Meta 账户接入。",
+  "Channels and DMs, as a bot or as yourself.": "频道和私信，以机器人或你自己的身份。",
+  "A bot of yours, in chats and groups.": "你自己的机器人，用于私聊和群组。",
+  "Servers, threads and DMs, through your bot.": "服务器、话题和私信，通过你的机器人。"
 };
 
 // src/client/index.js

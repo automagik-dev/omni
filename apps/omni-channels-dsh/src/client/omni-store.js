@@ -11,16 +11,14 @@ export const CHAT_PANEL = 'omni-chat'
 export const typeOf = type => CHANNEL_TYPES[type] ?? { label: type, tile: '#64748B', glyph: 'chat', pairing: 'token', blurb: '' }
 
 // Keyed by omni's channel ids (core/src/types/channel.ts), with how each one pairs. On a linked
-// Omni, the ones with `cli` are set up from the Omni CLI with those commands; the page adds the
-// others itself (src/host/omni-channel-actions.js).
+// Omni the page adds every one itself (src/host/omni-channel-actions.js); channel-add.js has
+// their guided steps.
 export const CHANNEL_TYPES = {
-  'whatsapp-baileys': { label: 'WhatsApp', tile: '#25D366', glyph: 'whatsapp', pairing: 'qr', blurb: 'Link a phone number by scanning a code, like WhatsApp Web.' },
-  'whatsapp-business': { label: 'WhatsApp Business', tile: '#128C7E', glyph: 'whatsapp', pairing: 'oauth', signIn: 'Meta', blurb: 'The official Business API, through your Meta account.',
-    cli: ['omni instances create --name Business --channel whatsapp-business', 'omni instances connect <id> --access-token <token> --phone-number-id <id> --waba-id <id>'] },
-  telegram: { label: 'Telegram', tile: '#229ED9', glyph: 'telegram', pairing: 'token', blurb: 'A bot of yours, in direct chats and groups.' },
-  slack: { label: 'Slack', tile: '#4A154B', glyph: 'slack', pairing: 'oauth', signIn: 'Slack', blurb: 'Workspace channels and direct messages.',
-    cli: ['omni instances create --name Slack --channel slack --slack-bot-token xoxb-… --slack-app-token xapp-…'] },
-  discord: { label: 'Discord', tile: '#5865F2', glyph: 'discord', pairing: 'token', blurb: 'Servers, threads and direct messages.' },
+  'whatsapp-baileys': { label: 'WhatsApp', tile: '#25D366', glyph: 'whatsapp', pairing: 'qr', blurb: 'Your own number, linked like WhatsApp Web.' },
+  'whatsapp-business': { label: 'WhatsApp Business', tile: '#128C7E', glyph: 'whatsapp', pairing: 'meta', signIn: 'Meta', blurb: 'The official Business API, through your Meta account.' },
+  slack: { label: 'Slack', tile: '#4A154B', glyph: 'slack', pairing: 'oauth', signIn: 'Slack', blurb: 'Channels and DMs, as a bot or as yourself.' },
+  telegram: { label: 'Telegram', tile: '#229ED9', glyph: 'telegram', pairing: 'token', blurb: 'A bot of yours, in chats and groups.' },
+  discord: { label: 'Discord', tile: '#5865F2', glyph: 'discord', pairing: 'token', blurb: 'Servers, threads and DMs, through your bot.' },
 }
 
 // connected: working. connecting: pairing or reconnecting by itself. attention: needs the

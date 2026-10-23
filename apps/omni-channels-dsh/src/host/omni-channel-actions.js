@@ -1,17 +1,40 @@
 // Changing Omni's channels from the Channels page, on the linked Omni: add one (WhatsApp by
-// its QR code or a phone-number code, Telegram and Discord by a bot token), reconnect, pause
-// and resume it, and reply in a chat. Every call goes through this host with the linked key
-// (rt.omniRequest, omni.js), so the key never reaches the page: the page gets the channel,
-// the code to scan, the connection state and Omni's own words when it refuses.
+// its QR code or a phone-number code, Telegram and Discord by a bot token, Slack through
+// Slack's own sign-in as a bot or as the person, WhatsApp Business with its Meta details),
+// reconnect, pause and resume it, and reply in a chat. Every call goes through this host with
+// the linked key (rt.omniRequest, omni.js), so the key never reaches the page: the page gets
+// the channel, the code to scan, the connection state and Omni's own words when it refuses.
+// A token or access token the person types goes from the page to here once and is not
+// returned.
 //
 // What the key may do is read from POST /auth/validate: without instances:write the page
 // stays read-only for channels, without messages:send for replies. An Omni from before that
 // route is tried, and a 403 says the key cannot.
 import { z } from 'zod'
 
-// The channel types the page adds here, with how each pairs. The others are set up from the
-// CLI (omni-store.js names the command), never faked.
+// The channel types the page adds here, with how each pairs. Slack's sign-in creates its
+// channel on Omni's side (omni-slack-start), and WhatsApp Business is created and connected
+// in one call (omni-wab-connect), so neither goes through omni-channel-create.
 export const LIVE_TYPES = { 'whatsapp-baileys': 'qr', telegram: 'token', discord: 'token' }
+export const ALL_TYPES = ['whatsapp-baileys', 'whatsapp-business', 'slack', 'telegram', 'discord']
+
+// What Discord's invite gives the bot: view channels, send messages (also in threads), read
+// history, embed links, attach files and add reactions. The scopes add slash commands.
+export const DISCORD_PERMISSIONS = [1n << 10n, 1n << 11n, 1n << 38n, 1n << 16n, 1n << 14n, 1n << 15n, 1n << 6n].reduce((sum, bit) => sum | bit, 0n)
+
+// A Discord bot token starts with its application id in base64; the invite needs that id.
+export function discordInviteUrl(botToken) {
+  const [head] = String(botToken ?? '').split('.')
+  let id = ''
+  try {
+    id = Buffer.from(head.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')
+  } catch {
+    return null
+  }
+  if (!/^\d{15,22}$/.test(id)) return null
+  const query = new URLSearchParams({ client_id: id, scope: 'bot applications.commands', permissions: String(DISCORD_PERMISSIONS) })
+  return `https://discord.com/oauth2/authorize?${query}`
+}
 export const FORBIDDEN_CHANGE = 'This device\'s key can\'t change channels; ask your Omni\'s owner.'
 export const FORBIDDEN_SEND = 'This device\'s key can\'t send messages; ask your Omni\'s owner.'
 
@@ -34,6 +57,15 @@ const ChannelPayload = z.object({ id })
 const PhonePayload = z.object({ id, phone: z.string().trim().regex(/^\+?[\d\s().-]{8,24}$/) })
 const ActPayload = z.object({ id, action: z.enum(['reconnect', 'pause', 'resume', 'token']), token: token.optional() })
 const SendPayload = z.object({ chatId: id, text: z.string().min(1).max(4000).refine(text => text.trim() !== '') })
+const SlackStartPayload = z.object({ mode: z.enum(['bot', 'user']) })
+const SlackResultPayload = z.object({ nonce: z.string().regex(/^[A-Za-z0-9_-]{8,128}$/) })
+const metaId = z.string().trim().regex(/^\d{5,25}$/)
+const WabPayload = z.object({
+  name: z.string().trim().min(1).max(80),
+  accessToken: token,
+  phoneNumberId: metaId,
+  wabaId: metaId,
+})
 
 const Instance = z.object({ data: z.object({ id, name: z.string(), channel: z.string() }).passthrough() })
 const Status = z.object({ data: z.object({ state: z.string().max(40), isConnected: z.boolean().optional(), message: z.string().max(500).nullish(), profileName: z.string().max(200).nullish(), ownerIdentifier: z.string().max(200).nullish() }).passthrough() })
@@ -41,6 +73,14 @@ const Qr = z.object({ data: z.object({ qr: z.string().max(2048).nullable(), expi
 const PhoneCode = z.object({ data: z.object({ code: z.string().min(4).max(16), expiresIn: z.number().optional() }).passthrough() })
 const Chat = z.object({ data: z.object({ id, instanceId: id, externalId: z.string().min(1) }).passthrough() })
 const Validate = z.object({ data: z.object({ scopes: z.array(z.string()) }).passthrough() })
+const Supported = z.object({ items: z.array(z.object({ id: z.string(), loaded: z.boolean().optional() }).passthrough()) }).passthrough()
+const SlackApp = z.object({ configured: z.boolean() }).passthrough()
+const SlackStart = z.object({ authorizeUrl: z.string().url().max(4096), nonce: z.string().regex(/^[A-Za-z0-9_-]{8,128}$/) }).passthrough()
+const SlackResult = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('pending') }),
+  z.object({ status: z.literal('done'), instanceId: id }),
+  z.object({ status: z.literal('error'), code: z.string().max(80).optional(), message: z.string().max(500).optional() }),
+])
 
 const parse = (schema, value, what) => {
   const parsed = schema.safeParse(value ?? {})
@@ -104,7 +144,65 @@ export function install(rt) {
     const created = parse(Instance, reply, 'Omni did not return the new channel')
     sweep()
     pending.set(created.data.id, Date.now())
-    return { id: created.data.id, type: created.data.channel, name: created.data.name }
+    const invite = payload.type === 'discord' ? discordInviteUrl(payload.token) : null
+    return { id: created.data.id, type: created.data.channel, name: created.data.name, ...(invite ? { inviteUrl: invite } : {}) }
+  }
+
+  // The channel types this Omni has loaded, of the ones the page can add; null when the Omni
+  // cannot say, and the page then offers them all.
+  async function types() {
+    const reply = await request('GET', '/instances/supported-channels').catch(() => null)
+    const parsed = Supported.safeParse(reply?.json)
+    if (!reply?.ok || !parsed.success) return { types: null }
+    const loaded = new Set(parsed.data.items.filter(item => item.loaded === true).map(item => item.id))
+    return { types: ALL_TYPES.filter(type => loaded.has(type)) }
+  }
+
+  // Slack: Omni signs in to Slack itself and creates the channel when Slack sends the person
+  // back; this host only starts the sign-in and asks how it ended. The page opens the
+  // returned address in the browser.
+  const slackFlows = new Map()
+  async function slackApp() {
+    const reply = await request('GET', '/slack/app')
+    const parsed = SlackApp.safeParse(reply.json)
+    return { configured: reply.ok && parsed.success && parsed.data.configured }
+  }
+  async function slackStart(body) {
+    const { mode } = parse(SlackStartPayload, body, 'Pick how Omni joins Slack')
+    const reply = await request('POST', '/slack/oauth/start', { mode, entry: 'ui' })
+    if (reply.status === 401 || reply.status === 403) throw refused(FORBIDDEN_CHANGE)
+    if (reply.json?.error?.code === 'SLACK_APP_NOT_CONFIGURED') return { configured: false }
+    if (!reply.ok) throw refused(reply.message ?? `Omni answered ${reply.status}`)
+    const started = parse(SlackStart, reply.json, 'Omni did not start the Slack sign-in')
+    // Only Slack's own sign-in page is opened from here.
+    if (new URL(started.authorizeUrl).hostname !== 'slack.com') throw refused('Omni sent a sign-in address that is not Slack\'s')
+    for (const [nonce, at] of slackFlows) if (Date.now() - at > PENDING_TTL_MS) slackFlows.delete(nonce)
+    slackFlows.set(started.nonce, Date.now())
+    return { configured: true, authorizeUrl: started.authorizeUrl, nonce: started.nonce }
+  }
+  async function slackResult(body) {
+    const { nonce } = parse(SlackResultPayload, body, 'Unknown Slack sign-in')
+    if (!slackFlows.has(nonce)) throw invalid('Unknown Slack sign-in')
+    const result = parse(SlackResult, await must('GET', `/slack/oauth/result/${nonce}`), 'Omni did not say how the Slack sign-in went')
+    if (result.status !== 'pending') slackFlows.delete(nonce)
+    if (result.status === 'done') return { status: 'done', id: result.instanceId }
+    if (result.status === 'error') return { status: 'error', message: result.message ?? 'Slack did not finish the sign-in.' }
+    return { status: 'pending' }
+  }
+
+  // WhatsApp Business with the details from Meta's WhatsApp Manager: the channel is created
+  // and connected here in one go, and removed again when Meta refuses the details.
+  async function wabConnect(body) {
+    const payload = parse(WabPayload, body, 'Fill in the access token, the phone number ID and the WhatsApp Business Account ID')
+    const created = parse(Instance, await must('POST', '/instances', { name: payload.name, channel: 'whatsapp-business' }), 'Omni did not return the new channel')
+    const channelId = created.data.id
+    try {
+      await must('POST', `/instances/${channelId}/whatsapp-business/connect`, { accessToken: payload.accessToken, phoneNumberId: payload.phoneNumberId, wabaId: payload.wabaId })
+    } catch (error) {
+      await request('DELETE', `/instances/${channelId}`).catch(() => {})
+      throw error
+    }
+    return { id: channelId, type: 'whatsapp-business', name: created.data.name }
   }
 
   // Where pairing stands: the connection state and, while WhatsApp waits for a scan, the code.
@@ -159,16 +257,16 @@ export function install(rt) {
 
   const ENDPOINTS = {
     'omni-channel-create': create, 'omni-channel-phone-code': phoneCode, 'omni-channel-cancel': cancel, 'omni-channel-act': act, 'omni-send': send,
+    'omni-slack-start': slackStart, 'omni-slack-result': slackResult, 'omni-wab-connect': wabConnect,
   }
+  const READS = { 'omni-channel-abilities': readAbilities, 'omni-channel-pairing': pairing, 'omni-channel-types': types, 'omni-slack-app': slackApp }
   rt.omniChannelEndpoint = (endpoint, body) => {
-    if (endpoint === 'omni-channel-abilities') return readAbilities()
-    if (endpoint === 'omni-channel-pairing') return pairing(body)
-    const run = ENDPOINTS[endpoint]
+    const run = READS[endpoint] ?? ENDPOINTS[endpoint]
     if (!run) throw invalid(`Unknown endpoint ${endpoint}`)
     return run(body)
   }
   // Reads answer any host that shows the page; the changes only a host that may change things.
-  for (const name of ['omni-channel-abilities', 'omni-channel-pairing']) {
+  for (const name of Object.keys(READS)) {
     rt.ctx.effect(() => rt.hooks.endpoint(name, body => rt.omniChannelEndpoint(name, body), { read: true }), `omni-channels: ${name}`)
   }
   for (const name of Object.keys(ENDPOINTS)) {
