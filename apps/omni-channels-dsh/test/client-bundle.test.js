@@ -61,12 +61,14 @@ test('client.js requires React, ReactDOM and the team\'s client, and adds to the
   assert.equal(omni.toolCards.phrase('find_chats')(() => undefined).state, 'searching')
   assert.deepEqual([...omni.nav.entries()].map(entry => entry.id), ['automations'])
   assert.deepEqual([...omni.badges.entries()].map(entry => entry.id), ['omni-events'])
+  assert.deepEqual([...omni.botChildren.entries()].map(entry => entry.id), ['omni-channels'])
   assert.deepEqual([...omni.headerButtons.entries()].map(entry => entry.id), ['omni-board'])
   assert.equal(omni.t('Channels and their health'), 'Channels and their health')
   // Everything it added leaves with its effects.
   for (const dispose of disposers.reverse()) dispose()
   assert.equal(omni.toolCards.renderer('omni_call'), undefined)
   assert.equal(omni.nav.entries().length, 0)
+  assert.equal(omni.botChildren.entries().length, 0)
   assert.ok(effects.includes('ds-bot: channels copy'))
 })
 

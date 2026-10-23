@@ -1,7 +1,8 @@
 // Omni's welcome and Connect AI for DeepSeek Harness. The browser half (client.js) draws
 // the onboarding steps; this host half keeps their done flags in the plugin's own
-// settings entry and saves a CLIProxyAPI route through DSH's settings and credentials.
-// It adds no provider code: every sign-in is DSH's own.
+// settings entry, finds the AIs this computer has, and turns them on and off through
+// DSH's settings, credentials and plugin manager. It adds no provider code: every sign-in
+// is DSH's own, and Claude Code signs itself in.
 import z from '@deepseek-ai/schemastery'
 import { install } from './src/host/endpoint.js'
 
@@ -11,6 +12,15 @@ export const inject = ['settings', 'credentials', 'connection']
 
 // Live (volatile) fields, so ctx.settings can write them into the profile patch.
 export const Config = z.object({
+  companionDone: z.boolean().volatile(),
+  teamDone: z.boolean().volatile(),
+  companionName: z.string().volatile(),
+  companionShape: z.string().volatile(),
+  companionColor: z.string().volatile(),
+  companionImage: z.string().volatile(),
+  teamOmni: z.boolean().volatile(),
+  teamGenie: z.boolean().volatile(),
+  teamOmniAbilities: z.string().volatile(),
   welcomeDone: z.boolean().volatile(),
   connectAiDone: z.boolean().volatile(),
   connectOmniSkipped: z.boolean().volatile(),

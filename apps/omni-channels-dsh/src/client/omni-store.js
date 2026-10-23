@@ -101,6 +101,15 @@ export function visibleChats(state) {
   return [...chats].sort((a, b) => b.at - a.at)
 }
 
+// The Omni Bot (kind omni, added by onboarding's team step) carries the channels in the sidebar.
+export const isOmniBot = bot => bot?.kind === 'omni'
+
+// One channel's chats, newest first, the first `shown` of them and how many more there are.
+export function chatsOf(state, channelId, shown) {
+  const all = state.chats.filter(chat => chat.channelId === channelId).toSorted((a, b) => b.at - a.at)
+  return { chats: all.slice(0, shown), more: Math.max(0, all.length - shown) }
+}
+
 export const unreadOf = (state, channelId) => state.chats
   .filter(chat => channelId === undefined || chat.channelId === channelId)
   .reduce((sum, chat) => sum + chat.unread, 0)

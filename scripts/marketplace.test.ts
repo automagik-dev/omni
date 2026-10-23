@@ -16,8 +16,35 @@ function indexWith(entry: Record<string, unknown>, name = omniUi.name) {
   };
 }
 const ours = (commit: string, path = 'apps/omni-ui-dsh') => ({ source: { type: 'git', url: REPO_URL, commit, path } });
+const readJson = (path: string) => JSON.parse(readFileSync(join(repoDir, path), 'utf8'));
 
 describe('marketplace index check', () => {
+  test("Omni's own plugins are listed at the pinned candidate's version, all at the candidate commit", () => {
+    // pin-candidate.yml writes .well-known/latest.json and runs `marketplace.ts pin v<version>` in the
+    // same commit, so the index never trails the Omni release it ships with.
+    const candidate = readJson('.well-known/latest.json').version;
+    const index = readJson('marketplace/automagik.json');
+    const own = index.plugins.filter(
+      (plugin: { versions: { source: { url?: string } }[] }) => plugin.versions[0]?.source.url === REPO_URL,
+    );
+    expect(own.map((plugin: { name: string }) => plugin.name).sort()).toEqual(
+      ['omni-ui-dsh', 'omni-channels-dsh', 'omni-canvas-dsh', 'omni-ai-dsh']
+        .map((dir) => readJson(`apps/${dir}/package.json`).name)
+        .sort(),
+    );
+    for (const plugin of own) expect([plugin.name, plugin.versions[0].version]).toEqual([plugin.name, candidate]);
+    const commits = new Set(
+      own.map((plugin: { versions: { source: { commit: string } }[] }) => plugin.versions[0]?.source.commit),
+    );
+    expect(commits.size).toBe(1);
+    // The commit is the candidate itself: Omni's own version there is the candidate's.
+    const cli = execFileSync('git', ['show', `${[...commits][0]}:packages/cli/package.json`], {
+      cwd: repoDir,
+      encoding: 'utf8',
+    });
+    expect(JSON.parse(cli).version).toBe(candidate);
+  });
+
   test('the committed index passes', () => {
     expect(checkIndex(JSON.parse(readFileSync(INDEX_PATH, 'utf8')), repoDir)).toEqual([]);
   });

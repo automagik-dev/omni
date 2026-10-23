@@ -6,11 +6,13 @@
 # its stable publication finished (or an operator dispatches it for a candidate
 # that already minted). It re-verifies the candidate from public state alone —
 # the immutable v<version> tag, the attested registry alias, and the public
-# stable release — and then commits exactly three files to dev:
+# stable release — and then commits exactly four files to dev:
 #
 #   .well-known/latest.json        version, released_at, tarball_base
 #   .well-known/dev.json           same values (dev tracks the stable candidate)
 #   deploy/helm/omni/values.yaml   image.tag: v<version>
+#   marketplace/automagik.json     Omni's own plugins listed at v<version>, pinned
+#                                  to the candidate commit (scripts/marketplace.ts)
 #
 # image-publish.yml and the CI promotion gate derive the candidate identity
 # from the tree (package version → tag → alias), so no workflow or test pins
@@ -174,6 +176,20 @@ jobs:
           PY
           git diff --stat
 
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.2
+
+      # The market index lists Omni's own plugins at the candidate's version, the
+      # one their package.json files carry at the tag, so it never trails Omni.
+      - name: List the candidate's plugins in the market index
+        run: |
+          set -euo pipefail
+          bun install --frozen-lockfile --ignore-scripts
+          bun scripts/marketplace.ts pin "v${VERSION}"
+          bun scripts/marketplace.ts check
+          git diff --stat marketplace/automagik.json
+
       - name: Commit and push the pin to dev
         env:
           VERSION_WRITER_TOKEN: ${{ secrets.VERSION_BUMP_PAT }}
@@ -183,7 +199,7 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .well-known/latest.json .well-known/dev.json deploy/helm/omni/values.yaml
+          git add .well-known/latest.json .well-known/dev.json deploy/helm/omni/values.yaml marketplace/automagik.json
           if git diff --cached --quiet; then
             echo "dev already pins candidate v${VERSION}; nothing to commit"
             exit 0

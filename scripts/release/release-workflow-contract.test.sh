@@ -681,8 +681,9 @@ require(ci, r"candidate=true", "the promotion pin gate error text does not name 
 
 # pin-candidate.yml is the only writer of the public channel pins: it
 # re-verifies the candidate from public state (tag, attested alias, stable
-# release), writes exactly three files, and pushes to dev with the same
-# machine credential and concurrency group as version.yml's bump. Its
+# release), writes exactly four files (the three public channel pins and the
+# market index listing Omni's plugins at the candidate), and pushes to dev
+# with the same machine credential and concurrency group as version.yml's bump. Its
 # github.token stays read-only and it never builds, tags, or publishes.
 pin_candidate = workflows.get("pin-candidate.yml")
 if pin_candidate is None:
@@ -699,7 +700,9 @@ else:
     require(pin_candidate, r"verify-remote-tag\.sh[\s\S]{0,120}--mode exact", "candidate pin does not bind the remote tag to the candidate")
     require(pin_candidate, r"gh attestation verify \"oci://\$\{IMAGE\}@\$\{digest\}\"[\s\S]{0,200}--source-digest \"\$\{candidate_sha\}\"[\s\S]{0,100}--signer-workflow \"\$\{GITHUB_REPOSITORY\}/\.github/workflows/image-build\.yml\"", "candidate pin does not require the alias to be attested from the candidate source by the minter")
     require(pin_candidate, r"== \$'false\\tfalse' \]\] \|\| \{", "candidate pin does not require a public stable release at the tag")
-    require(pin_candidate, r"git add \.well-known/latest\.json \.well-known/dev\.json deploy/helm/omni/values\.yaml\n", "candidate pin does not commit exactly the three public channel pin files")
+    require(pin_candidate, r"git add \.well-known/latest\.json \.well-known/dev\.json deploy/helm/omni/values\.yaml marketplace/automagik\.json\n", "candidate pin does not commit exactly the three public channel pin files and the market index")
+    require(pin_candidate, r"bun scripts/marketplace\.ts pin \"v\$\{VERSION\}\"\n\s+bun scripts/marketplace\.ts check\n", "candidate pin does not list Omni's plugins at the candidate's version in the market index")
+    require(pin_candidate, r"bun install --frozen-lockfile --ignore-scripts\n", "candidate pin does not install the market tooling without install scripts (they could leave git hooks for the commit)")
     require(pin_candidate, r'git commit -m "chore\(release\): pin candidate v\$\{VERSION\}"', "candidate pin commit is not a conventional chore(release) commit")
     require(pin_candidate, r"VERSION_WRITER_TOKEN\}@github\.com/\$\{GITHUB_REPOSITORY\}\.git\" \\\n\s+\"HEAD:refs/heads/dev\"", "candidate pin does not push to dev with the machine writer credential")
     for pattern, message in (

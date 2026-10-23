@@ -9,7 +9,8 @@ import { AUTOMATIONS_CSS, AUTOMATIONS_PANEL, AutomationsPage } from './automatio
 import { Badge, KeyValue, LiveChannel, LiveChat, LiveQr, OMNI_LIVE_CSS, OmniCallCard, OmniToolCard, Table, parseCall } from './omni-live.js'
 import { OMNI_PEEK_CSS } from './omni-peek.js'
 import { OMNI_CONNECT_CSS, connectFromApp } from './omni-connect.js'
-import { addStrings, badges, botSettings, headerButtons, nav, onShell, t, toolCards, icons } from './core.js'
+import { addStrings, badges, botChildren, botSettings, headerButtons, nav, onShell, t, toolCards, icons } from './core.js'
+import { OMNI_TREE_CSS, OmniTree } from './omni-tree.js'
 import { ASKING_TOOLS, ConsentDock, PERMISSIONS_CSS, PermissionsCard, withConsent } from './permissions.js'
 import { STRINGS } from './strings.js'
 const { ClockIcon } = icons
@@ -107,6 +108,9 @@ export function apply(ctx) {
   for (const name of ['find_chats', 'omni_endpoints']) ctx.effect(() => toolCards.register(name, null, { phrase: PHRASES[name] }), `ds-bot: ${name} phrase`)
   // Omni's row counts the automation runs waiting for you; its header opens their board.
   ctx.effect(() => badges.register({ id: 'omni-events', Component: ({ bot, roster, useWork }) => (bot.id === roster.eventsBotId ? h(EventsBadge, { roster, useWork }) : null) }), 'ds-bot: automations badge')
+  // The Omni Bot's channels hang under its sidebar row, each with its chats. A team client
+  // older than this plugin has no such place.
+  if (botChildren) ctx.effect(() => botChildren.register({ id: 'omni-channels', Component: OmniTree }), 'ds-bot: Omni channels in the sidebar')
   ctx.effect(() => headerButtons.register({
     id: 'omni-board',
     Component: ({ bot, roster, actions, useWork }) => (bot.id === roster.eventsBotId ? h(SubscriptionsButton, { roster, useWork, onToggle: () => toggleBoard(actions.reportError) }) : null),
@@ -115,7 +119,7 @@ export function apply(ctx) {
   // Omni chats and the Channels page are main panels, like the shell's Plugins page: they
   // replace the conversation in the center, and opening a Bot brings it back.
   ctx.effect(() => onShell(({ face, shadow, installCompiledStyles }) => [
-    () => installCompiledStyles(CHANNELS_CSS + SUBSCRIPTIONS_CSS + AUTOMATIONS_CSS + OMNI_LIVE_CSS + OMNI_PEEK_CSS + OMNI_CONNECT_CSS + PERMISSIONS_CSS, 'channels'),
+    () => installCompiledStyles(CHANNELS_CSS + OMNI_TREE_CSS + SUBSCRIPTIONS_CSS + AUTOMATIONS_CSS + OMNI_LIVE_CSS + OMNI_PEEK_CSS + OMNI_CONNECT_CSS + PERMISSIONS_CSS, 'channels'),
     () => shadow('conversation.input.dock', { id: 'omni-consent', order: -80, inject: face }, ConsentDock),
     () => shadow('sidebar.footer.action', { id: 'bot-connect', order: -100, inject: face }, ChannelsFooter),
     // The Connect wizard opened on demand (settings, Channels, or once after install) mounts here.

@@ -536,4 +536,10 @@ export const STRINGS = {
   'Channels and DMs, as a bot or as yourself.': '频道和私信，以机器人或你自己的身份。',
   'A bot of yours, in chats and groups.': '你自己的机器人，用于私聊和群组。',
   'Servers, threads and DMs, through your bot.': '服务器、话题和私信，通过你的机器人。',
+  // The Omni Bot's channels and chats in the sidebar (omni-tree.js).
+  'No chats yet': '还没有聊天',
+  '{name} helps in this chat': '{name} 在这个聊天里帮忙',
+  'All chats (+{n})': '全部聊天（+{n}）',
+  'Link your Omni to see its channels here': '连接你的 Omni，在这里查看它的渠道',
+  '{name}\'s channels': '{name} 的渠道',
 }
