@@ -1,14 +1,16 @@
 /**
  * QA matrix rows Durability and Races (core share): idempotent login, the seven-day deadline in
  * store time, explicit fresh login only, generation fences in both orders, and the bounded
- * transaction, cookie and response rules.
+ * transaction, cookie and response rules. Test names are stable acceptance ids that run-required
+ * --require matches; rename them only with the wish's evidence record.
  */
 import { beforeAll, describe, expect, test } from 'bun:test';
-import { hashSecret } from '../src/sessions';
+import { type OidcSettings, createOidcClient } from '../src/oidc';
+import { createConnectCore, hashSecret } from '../src/sessions';
 import { TransactionStore } from '../src/transactions';
 import { FakeIssuer } from './fake-issuer';
 import { SESSION_DAYS } from './memory-store';
-import { SESSION, TX, type Wiring, cookie, finish, request, signIn, wire } from './setup';
+import { SESSION, TX, type Wiring, cookie, finish, request, settings, signIn, wire } from './setup';
 
 let issuer: FakeIssuer;
 beforeAll(async () => {
@@ -118,6 +120,61 @@ describe('durability', () => {
     };
     expect(list.sessions.map((s) => s.current)).toEqual([true]);
   });
+});
+
+describe('durability across restart and provider outage', () => {
+  test('a new core over the same store keeps both profiles; an issuer outage revokes nothing', async () => {
+    const w = await wire(issuer);
+    const [a, b] = [await signedIn(w), await signedIn(w)];
+    const oidc = createOidcClient(settings(), { fetch: issuer.fetch });
+    const restarted = createConnectCore({ appName: 'brain', store: w.store, oidc });
+    w.issuer.down = true;
+    for (const session of [a, b]) expect((await restarted.authenticate(request('/', [session]))).kind).toBe('active');
+    const again = await restarted.login(request('/auth/login', [a]));
+    expect([again.status, again.headers.getSetCookie().length]).toEqual([303, 0]);
+  });
+
+  test('the right session id with a wrong secret is signed-out; login answers 401 without OIDC or a store write', async () => {
+    const w = await wire(issuer);
+    const session = await signedIn(w);
+    const forged = `${session.slice(0, session.indexOf('.') + 1)}${'A'.repeat(43)}`;
+    expect(await w.core.authenticate(request('/', [forged]))).toEqual({ kind: 'signed-out', reason: 'invalid' });
+    const [hits, calls] = [w.issuer.hits.length, w.store.calls.length];
+    expect((await w.core.login(request('/auth/login', [forged]))).status).toBe(401);
+    expect(w.issuer.hits.length).toBe(hits);
+    expect(w.store.calls.slice(calls)).toEqual(['resolveSession']);
+    expect(await kind(w, session)).toBe('active');
+  });
+});
+
+describe('trust: a changed issuer, client, origin or group policy needs local confirmation', () => {
+  const changes: [string, Partial<OidcSettings>][] = [
+    ['issuer', { issuer: 'https://other-issuer.test' }],
+    ['client', { clientId: 'another-client' }],
+    ['origin', { origin: 'https://other-studio.test' }],
+    ['group policy', { requiredGroup: 'another-group' }],
+  ];
+  for (const [name, change] of changes) {
+    test(`changed ${name}: existing sessions and login start are refused until confirm-trust`, async () => {
+      const w = await wire(issuer);
+      const session = await signedIn(w);
+      const oidc = createOidcClient(settings(change), { fetch: issuer.fetch });
+      const changed = createConnectCore({ appName: 'brain', store: w.store, oidc });
+      expect(await changed.authenticate(request('/', [session]))).toEqual({
+        kind: 'unavailable',
+        reason: 'trust-mismatch',
+      });
+      const [hits, rows] = [w.issuer.hits.length, w.store.sessions.size];
+      expect((await changed.login(request('/auth/login', [session]))).status).toBe(503);
+      expect((await changed.login(request('/auth/login'))).status).toBe(503);
+      expect([w.issuer.hits.length, w.store.sessions.size]).toEqual([hits, rows]);
+      const previousTrust = w.store.installation?.trustFingerprint ?? '';
+      await w.store.adminUpdate({ op: 'confirm-trust', previousTrust, trustFingerprint: oidc.trustFingerprint });
+      expect(await changed.authenticate(request('/', [session]))).toEqual({ kind: 'signed-out', reason: 'revoked' });
+      // The fixture serves only its own issuer, so a confirmed new issuer fails at discovery instead.
+      expect((await changed.login(request('/auth/login'))).status).toBe(name === 'issuer' ? 503 : 302);
+    });
+  }
 });
 
 describe('races: generation fences in both orders', () => {

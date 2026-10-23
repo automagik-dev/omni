@@ -9,7 +9,8 @@
  * the future), auth_time and the required group. No UserInfo, no token-exchange input, no email
  * authority; the token response is dropped once the identity is read.
  *
- * Provider traffic is https only, without redirects, with a timeout and a response size cap.
+ * Provider traffic is https only, without redirects, with a timeout and a response size cap, and
+ * TLS verification forced on: NODE_TLS_REJECT_UNAUTHORIZED=0 cannot turn it off for this client.
  * openid-client keeps the JWKS at most five minutes and refetches at most once a minute on an
  * unknown key id. There is no default issuer and nothing is read from the environment.
  */
@@ -44,7 +45,7 @@ export interface OidcSettings {
   readonly providerMaxBytes?: number;
 }
 type Resolved = Required<Omit<OidcSettings, 'requiredGroup'>> & { requiredGroup: string | null };
-export type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
+export type FetchLike = (url: string, init: BunFetchRequestInit) => Promise<Response>;
 /** `fetch` defaults to the platform fetch, which verifies TLS; tests pass an in-process issuer. */
 export type OidcDependencies = { fetch?: FetchLike; now?: () => number };
 
@@ -140,7 +141,7 @@ function boundedFetch(inner: FetchLike, timeoutMs: number, maxBytes: number): cl
     if (!url.startsWith('https://')) throw new ProviderUnavailableError('provider endpoint is not https');
     const signal = AbortSignal.any([AbortSignal.timeout(timeoutMs), ...(options.signal ? [options.signal] : [])]);
     try {
-      const response = await inner(url, { ...options, redirect: 'manual', signal });
+      const response = await inner(url, { ...options, redirect: 'manual', signal, tls: { rejectUnauthorized: true } });
       const chunks: Uint8Array[] = [];
       let total = 0;
       for await (const chunk of response.body ?? []) {

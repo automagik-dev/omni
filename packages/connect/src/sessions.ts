@@ -64,6 +64,7 @@ export function newSetupCapability(): { capability: string; hash: string } {
   return { capability, hash: hashSecret(capability) };
 }
 
+/** Constant-time equality; hashes and CSRF tokens compared here are fixed-length digests. */
 function sameText(a: string, b: string): boolean {
   const [left, right] = [Buffer.from(a), Buffer.from(b)];
   return left.length === right.length && timingSafeEqual(left, right);
@@ -92,6 +93,7 @@ export class ConnectCore {
   readonly #oidc: OidcClient;
   readonly #limits: CoreLimits;
   readonly #transactions: TransactionStore;
+  /** Per core, so per installation, not per client: the app keys a per-client limit in front (Group 4). */
   readonly #starts: { take(): boolean };
   readonly #setups: { take(): boolean };
   readonly #setupMaxAge: number | undefined;

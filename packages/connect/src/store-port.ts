@@ -14,6 +14,8 @@
  *   which it turns into the binding; it inserts one independent session and commits before `issued`.
  * - Revocation is permanent; nothing clears it or creates a successor. Secrets arrive only as
  *   SHA-256 hashes; provider tokens never arrive.
+ * - Admission removal, disable and readmission, and what each `Denied<string>` resource reason
+ *   means, are app operations and policy outside this port (Brain Groups 3 and 5).
  */
 
 /** An issuer and subject proven by a freshly exchanged, verified ID token. Never an email. */

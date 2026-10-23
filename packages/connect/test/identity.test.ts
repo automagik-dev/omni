@@ -1,9 +1,13 @@
 /**
  * QA matrix row Identity/bootstrap: every issuance path (login, and setup which rebind also uses)
  * accepts only a freshly exchanged, fully verified ID token; email never stands in for identity.
+ * Test names are stable acceptance ids that run-required --require matches; rename them only with
+ * the wish's evidence record.
  */
 import { beforeAll, describe, expect, spyOn, test } from 'bun:test';
-import { readFileSync, readdirSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, readdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ConnectConfigError, type OidcSettings, createOidcClient, readClientSecret } from '../src/oidc';
 import { createConnectCore, newSetupCapability } from '../src/sessions';
@@ -48,6 +52,7 @@ const BAD_PROOFS: [string, TokenPlan, Parameters<typeof finish>[2]?][] = [
   ],
   ['missing required group', { claims: { groups: ['someone-else'] } }],
   ['group only implied by email', { claims: { groups: undefined, email: 'studio-owners@example.test' } }],
+  ['empty subject', { claims: { sub: '' } }],
 ];
 
 describe('identity: bad proofs deny on every issuance path', () => {
@@ -183,5 +188,47 @@ describe('identity: configuration and provider bounds', () => {
     const started = Date.now();
     expect((await core.login(request('/auth/login'))).status).toBe(503);
     expect(Date.now() - started).toBeLessThan(5000);
+  });
+
+  test('TLS stays verified when NODE_TLS_REJECT_UNAUTHORIZED=0 is set', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'connect-tls-'));
+    const [key, cert] = [join(dir, 'key.pem'), join(dir, 'cert.pem')];
+    const subject = ['-subj', '/CN=localhost', '-addext', 'subjectAltName=DNS:localhost', '-days', '1', '-nodes'];
+    const ec = ['-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-keyout', key, '-out', cert];
+    expect(spawnSync('openssl', ['req', '-x509', ...ec, ...subject]).status).toBe(0);
+    const tls = { key: readFileSync(key, 'utf8'), cert: readFileSync(cert, 'utf8') };
+    let base = '';
+    const doc = () => ({
+      issuer: base,
+      authorization_endpoint: `${base}/a`,
+      token_endpoint: `${base}/t`,
+      jwks_uri: `${base}/j`,
+    });
+    const server = Bun.serve({ port: 0, hostname: '127.0.0.1', tls, fetch: () => Response.json(doc()) });
+    base = `https://localhost:${server.port}`;
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+    try {
+      expect((await fetch(`${base}/.well-known/openid-configuration`)).status).toBe(200);
+      const oidc = createOidcClient(settings({ issuer: base }));
+      const tx = {
+        id: 'i',
+        state: 's',
+        nonce: 'n',
+        codeVerifier: 'v'.repeat(43),
+        purpose: 'login',
+        generation: 1,
+        startedAt: 0,
+      } as const;
+      const chain: string[] = [];
+      let error: unknown = await oidc.authorizationUrl(tx).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      for (; error instanceof Error; error = error.cause) chain.push(`${error.name}: ${error.message}`);
+      expect(chain.join(' | ')).toMatch(/ProviderUnavailableError.*self.signed certificate/i);
+    } finally {
+      Reflect.deleteProperty(process.env, 'NODE_TLS_REJECT_UNAUTHORIZED');
+      server.stop(true);
+    }
   });
 });

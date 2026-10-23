@@ -1,6 +1,8 @@
 /**
  * The store port contract on the reference model, and the core's fail-closed use of it: every port
  * failure denies, no path falls through to issuance, resource answers carry the full context.
+ * Test names are stable acceptance ids that run-required --require matches; rename them only with
+ * the wish's evidence record.
  */
 import { beforeAll, describe, expect, test } from 'bun:test';
 import { hashSecret } from '../src/sessions';
@@ -131,6 +133,22 @@ describe('store port: failures deny', () => {
       expect([response.status, cookie(response, SESSION)]).toEqual([503, null]);
     });
   }
+
+  test('an active answer for another session id or a passed deadline is still refused', async () => {
+    const w = await wire(issuer);
+    const session = cookie(await signIn(w), SESSION);
+    const resolve = w.store.resolveSession.bind(w.store);
+    const lie = (patch: object) => {
+      w.store.resolveSession = async (input) => {
+        const result = await resolve(input);
+        return result.kind === 'active' ? { ...result, session: { ...result.session, ...patch } } : result;
+      };
+    };
+    lie({ id: 'x'.repeat(22) });
+    expect(await w.core.authenticate(request('/', [session]))).toEqual({ kind: 'signed-out', reason: 'invalid' });
+    lie({ expiresAt: new Date(w.store.now) });
+    expect(await w.core.authenticate(request('/', [session]))).toEqual({ kind: 'signed-out', reason: 'expired' });
+  });
 
   test('a store that fails while issuing answers 503 and sets no session', async () => {
     const w = await wire(issuer);

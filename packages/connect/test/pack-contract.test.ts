@@ -1,6 +1,8 @@
 /**
  * QA matrix row Recovery/package (Group 2 share): the exact `bun pm pack` archive passes the pack
  * contract under Bun 1.4.2, and each negative control fails for its own reason.
+ * Test names are stable acceptance ids that run-required --require matches; rename them only with
+ * the wish's evidence record.
  */
 import { beforeAll, describe, expect, test } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
