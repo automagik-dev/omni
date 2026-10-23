@@ -17,7 +17,8 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "bun test"
+    "test": "bun test",
+    "verify-pack": "bun scripts/verify-pack.ts"
   },
   "dependencies": {
     "openid-client": "6.8.8"
