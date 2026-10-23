@@ -58,10 +58,13 @@ function printReport(report: SandboxReport, json: boolean | undefined, verb: str
   if (report.error) output.warn(report.error);
 }
 
+// The CLI strips a global --json before Commander sees it and switches the output format.
+const wantsJson = (options: SandboxCliOptions): boolean =>
+  options.json === true || output.getCurrentFormat() === 'json';
+
 /** Runs one operation and prints its report; exit code 0, 1 or 3. */
 async function act(options: SandboxCliOptions, verb: string, operation: () => Promise<SandboxReport>): Promise<void> {
-  // The CLI strips a global --json before Commander sees it and switches the output format.
-  const json = options.json === true || output.getCurrentFormat() === 'json';
+  const json = wantsJson(options);
   try {
     const report = await operation();
     printReport(report, json, verb);
@@ -131,7 +134,7 @@ function runSandboxInstall(options: SandboxInstallFlags): Promise<void> {
     atLogin: options.atLogin,
     start: options.start,
   };
-  if (!options.json)
+  if (!wantsJson(options))
     output.raw(`Installing a sandboxed Omni at ${home} (first start downloads Postgres; give it a minute)…`);
   return act(options, 'installed', () => installSandbox(install));
 }

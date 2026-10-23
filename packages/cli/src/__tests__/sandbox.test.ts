@@ -32,6 +32,7 @@ import {
   buildLaunchdPlist,
   buildSystemdUserUnit,
   installSandbox,
+  leftoverChildPids,
   readSandboxApiKey,
   readSandboxState,
   resolveSandboxHome,
@@ -39,6 +40,7 @@ import {
   sandboxLayout,
   sandboxStatus,
   sandboxUnitNames,
+  startSandbox,
   stopSandbox,
   supervisorCommand,
   uninstallSandbox,
@@ -278,10 +280,60 @@ describe('at login', () => {
     );
     expect(unit).toContain('Restart=on-failure');
     expect(unit).toContain('WantedBy=default.target');
+    // systemd refuses a quoted WorkingDirectory= as "not absolute".
+    expect(unit).toContain(`\nWorkingDirectory=${home}\n`);
     expect(unit).toContain(`Environment="OMNI_CONFIG_DIR=${join(home, 'config')}"`);
     expect(unit).not.toContain('DATABASE_URL');
-    expect(runs.map((call) => call.cmd.join(' '))).toContain(`systemctl --user enable --now ${names.systemdUnit}`);
+    const commands = runs.map((call) => call.cmd.join(' '));
+    expect(commands).toContain(`systemctl --user enable ${names.systemdUnit}`);
+    expect(commands).toContain(`systemctl --user enable --now ${names.systemdUnit}`);
     expect(detached).toHaveLength(0);
+  });
+
+  test('linux: a sandbox already running gets its unit enabled for the next login', async () => {
+    const { deps, runs } = fakeDeps();
+    await installSandbox({ home, defaultHome }, deps);
+    runs.length = 0;
+    await installSandbox({ home, defaultHome, atLogin: true }, deps);
+    const names = sandboxUnitNames(home, defaultHome);
+    expect(runs.map((call) => call.cmd.join(' '))).toContain(`systemctl --user enable ${names.systemdUnit}`);
+  });
+
+  test('linux: no systemd user session fails the install instead of claiming at-login', async () => {
+    const { deps } = fakeDeps();
+    const run = deps.run;
+    deps.run = async (cmd, opts) =>
+      cmd[0] === 'systemctl' && cmd[2] === 'enable'
+        ? { code: 1, stdout: '', stderr: 'Failed to connect to bus' }
+        : run(cmd, opts);
+    await expect(installSandbox({ home, defaultHome, atLogin: true }, deps)).rejects.toThrow(
+      'Failed to connect to bus',
+    );
+  });
+
+  test('systemctl reaches the user session through the caller env; the unit keeps the sandbox env', async () => {
+    const session = { XDG_RUNTIME_DIR: '/run/user/501', DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/501/bus' };
+    const { deps, runs } = fakeDeps({ env: { ...LEAKY_ENV, ...session } });
+    await installSandbox({ home, defaultHome, atLogin: true }, deps);
+    const systemctl = runs.filter((call) => call.cmd[0] === 'systemctl');
+    expect(systemctl.length).toBeGreaterThan(0);
+    for (const call of systemctl) expect(call.env).toMatchObject(session);
+    const unit = readFileSync(
+      join(userHome, '.config', 'systemd', 'user', sandboxUnitNames(home, defaultHome).systemdUnit),
+      'utf-8',
+    );
+    expect(unit).not.toContain('XDG_RUNTIME_DIR');
+    expect(unit).not.toContain('PGHOST');
+  });
+
+  test('the unit PATH drops the node_modules/.bin dirs bun run adds', async () => {
+    const { deps } = fakeDeps({ env: { PATH: '/x/node_modules/.bin:/usr/bin:/bin', HOME: userHome } });
+    await installSandbox({ home, defaultHome, atLogin: true }, deps);
+    const unit = readFileSync(
+      join(userHome, '.config', 'systemd', 'user', sandboxUnitNames(home, defaultHome).systemdUnit),
+      'utf-8',
+    );
+    expect(unit).toContain('Environment="PATH=/usr/bin:/bin"');
   });
 
   test('macOS: a launchd agent with RunAtLoad and KeepAlive, bootstrapped into the GUI domain', async () => {
@@ -303,6 +355,56 @@ describe('at login', () => {
     expect(plist).toContain('<string>&quot;q&quot;</string>');
     const unit = buildSystemdUserUnit(['/bin/x', '50%$HOME'], layout, {});
     expect(unit).toContain('ExecStart="/bin/x" "50%%$$HOME"');
+  });
+});
+
+describe('children a supervisor left behind', () => {
+  const psOutput = (h: string) =>
+    [
+      `  101 /opt/bun/bin/bun ${h}/runtime/node_modules/pgserve/bin/postgres-server.js postmaster --port 15432`,
+      `  102 ${h}/pgserve/bin/linux-x64/bin/postgres -D ${h}/data/pg -p 15432`,
+      `  103 ${h}/bin/nats-server -js -sd ${h}/data/nats`,
+      `  104 /opt/bun/bin/bun ${h}/runtime/node_modules/@automagik/omni/dist/server/index.js`,
+      `  105 /opt/bun/bin/bun ${h}/runtime/node_modules/@automagik/omni/bin/omni sandbox run --home ${h}`,
+      '  106 postgres: omni omni [local] idle',
+      '  107 /usr/bin/postgres -D /var/lib/postgresql/data',
+      `  108 /opt/bun/bin/bun ${h}-other/runtime/node_modules/@automagik/omni/dist/server/index.js`,
+      `  109 tail -f ${h}/logs/api.log`,
+    ].join('\n');
+
+  test('only this sandbox children are matched, not its supervisor or anything else', () => {
+    expect(leftoverChildPids(psOutput(home), sandboxLayout(home))).toEqual([101, 102, 103, 104]);
+    expect(leftoverChildPids(psOutput(home), sandboxLayout(home), [104])).toEqual([101, 102, 103]);
+  });
+
+  test('start stops leftovers before it starts a new supervisor, and stop reaches them too', async () => {
+    const { deps, kills, detached } = fakeDeps();
+    await installSandbox({ home, defaultHome, start: false }, deps);
+    const leftovers = new Set([101, 102, 103, 104]);
+    const run = deps.run;
+    deps.run = async (cmd, opts) =>
+      cmd[0] === 'ps' ? { code: 0, stdout: psOutput(home), stderr: '' } : run(cmd, opts);
+    const isAlive = deps.isAlive;
+    deps.isAlive = (pid) => leftovers.has(pid) || isAlive(pid);
+    const kill = deps.kill;
+    deps.kill = (pid, signal) => {
+      kill(pid, signal);
+      leftovers.delete(pid);
+    };
+    await startSandbox({ home, defaultHome }, deps);
+    expect(kills).toEqual([
+      [101, 'SIGTERM'],
+      [102, 'SIGTERM'],
+      [103, 'SIGTERM'],
+      [104, 'SIGTERM'],
+    ]);
+    expect(detached).toHaveLength(1);
+    kills.length = 0;
+    for (const pid of [101, 102, 103, 104]) leftovers.add(pid);
+    await stopSandbox({ home, defaultHome }, deps);
+    expect(kills.filter(([, signal]) => signal === 'SIGTERM').map(([pid]) => pid)).toEqual(
+      expect.arrayContaining([101, 102, 103, 104]),
+    );
   });
 });
 

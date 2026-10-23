@@ -29,6 +29,7 @@ import {
   readSandboxState,
   sandboxChildSpecs,
   sandboxLayout,
+  sweepSandboxLeftovers,
 } from './sandbox.js';
 
 const MAX_FAST_CRASHES = 5;
@@ -57,6 +58,8 @@ export interface SupervisorDeps {
   isAlive(pid: number): boolean;
   env: Record<string, string | undefined>;
   onSignal(handler: (signal: NodeJS.Signals) => void): void;
+  /** Stops children an earlier supervisor left running; resolves with how many. */
+  sweepLeftovers?(layout: SandboxLayout): Promise<number>;
 }
 
 type ChildState = {
@@ -109,6 +112,7 @@ function defaultSupervisorDeps(): SupervisorDeps {
       process.on('SIGTERM', () => handler('SIGTERM'));
       process.on('SIGINT', () => handler('SIGINT'));
     },
+    sweepLeftovers: (layout) => sweepSandboxLeftovers(layout, undefined, [process.pid]),
   };
 }
 
@@ -263,6 +267,9 @@ export async function runSandboxSupervisor(
   if (running !== null && running !== deps.pid && deps.isAlive(running)) {
     throw new SandboxError(`The sandbox at ${home} is already running (pid ${running})`);
   }
+  // A supervisor that died hard (SIGKILL, a crash) leaves its children holding the ports.
+  const swept = (await deps.sweepLeftovers?.(layout)) ?? 0;
+  if (swept > 0) deps.log(`stopped ${swept} process(es) an earlier run left behind`);
   const supervisor = new SandboxSupervisor(layout, sandboxChildSpecs(layout, state, apiKey, deps.env), deps);
   return supervisor.run();
 }

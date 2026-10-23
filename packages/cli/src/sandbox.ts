@@ -222,6 +222,12 @@ function sandboxBaseEnv(
     const value = parentEnv[key];
     if (value !== undefined) env[key] = value;
   }
+  // `bun run` and `bun x` put their own node_modules/.bin dirs first; a unit keeps the PATH for good.
+  if (env.PATH) {
+    env.PATH = env.PATH.split(':')
+      .filter((dir) => dir.length > 0 && !dir.endsWith('/node_modules/.bin'))
+      .join(':');
+  }
   env.OMNI_CONFIG_DIR = layout.configDir;
   env.OMNI_SANDBOX_HOME = layout.home;
   env.AUTOPG_CONFIG_DIR = layout.pgserveConfigDir;
@@ -387,13 +393,15 @@ export function buildSystemdUserUnit(cmd: string[], layout: SandboxLayout, env: 
   const environment = Object.entries(env)
     .map(([key, value]) => `Environment=${quoteSystemdArg(`${key}=${value}`)}`)
     .join('\n');
+  // WorkingDirectory= takes the path as it is: systemd refuses a quoted one as "not absolute".
+  if (/[\r\n]/.test(layout.home)) throw new Error(`sandbox home must not contain a newline: ${layout.home}`);
   return `[Unit]
-Description=Omni (sandbox at ${layout.home.replace(/[\r\n]/g, ' ')})
+Description=Omni (sandbox at ${layout.home})
 
 [Service]
 Type=simple
 ExecStart=${cmd.map(quoteSystemdArg).join(' ')}
-WorkingDirectory=${quoteSystemdArg(layout.home)}
+WorkingDirectory=${layout.home.replace(/%/g, '%%')}
 ${environment}
 Restart=on-failure
 RestartSec=5
@@ -706,6 +714,18 @@ function unitPaths(names: { label: string; systemdUnit: string }, deps: SandboxD
   };
 }
 
+/**
+ * Environment for systemctl --user and launchctl. They talk to the user's own
+ * session (its bus and XDG_RUNTIME_DIR), so they get the caller's environment,
+ * not the sandbox's stripped one; the processes they start still get only the
+ * sandbox environment written into their unit.
+ */
+function serviceManagerEnv(deps: Pick<SandboxDeps, 'env'>): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(deps.env)) if (value !== undefined) env[key] = value;
+  return env;
+}
+
 function atLoginSupported(deps: SandboxDeps): boolean {
   return deps.platform === 'darwin' || deps.platform === 'linux';
 }
@@ -727,14 +747,22 @@ async function writeAtLoginUnit(
   } else {
     mkdirSync(join(deps.userHome, '.config', 'systemd', 'user'), { recursive: true });
     writeFileSync(paths.unit, buildSystemdUserUnit(cmd, layout, env), { mode: 0o600 });
-    await deps.run(['systemctl', '--user', 'daemon-reload'], { env: sandboxBaseEnv(layout, deps.env) });
+    const host = { env: serviceManagerEnv(deps) };
+    await deps.run(['systemctl', '--user', 'daemon-reload'], host);
+    // Enabled now, so the next login starts it even when the supervisor already runs on its own.
+    const enabled = await deps.run(['systemctl', '--user', 'enable', names.systemdUnit], host);
+    if (enabled.code !== 0) {
+      throw new SandboxError(
+        `systemctl --user could not enable ${names.systemdUnit} (is there a systemd user session?): ${enabled.stderr.trim()}`,
+      );
+    }
   }
 }
 
 async function removeAtLoginUnit(layout: SandboxLayout, defaultHome: string, deps: SandboxDeps): Promise<void> {
   const names = sandboxUnitNames(layout.home, defaultHome);
   const paths = unitPaths(names, deps);
-  const env = sandboxBaseEnv(layout, deps.env);
+  const env = serviceManagerEnv(deps);
   if (deps.platform === 'darwin') {
     await deps.run(['launchctl', 'bootout', `gui/${deps.uid}/${names.label}`], { env });
     if (existsSync(paths.plist)) unlinkSync(paths.plist);
@@ -743,6 +771,69 @@ async function removeAtLoginUnit(layout: SandboxLayout, defaultHome: string, dep
     if (existsSync(paths.unit)) unlinkSync(paths.unit);
     await deps.run(['systemctl', '--user', 'daemon-reload'], { env });
   }
+}
+
+/**
+ * Command-line fragments that mark a process as one of this sandbox's children:
+ * pgserve's postmaster wrapper, the postgres it runs, NATS and the API. Every
+ * one is a path inside the home, so nothing else on the machine matches.
+ */
+export function sandboxChildMarkers(layout: SandboxLayout): string[] {
+  const modules = join(layout.runtimeDir, 'node_modules');
+  return [
+    join(modules, 'pgserve', 'bin', 'postgres-server.js'),
+    `${join(layout.pgserveConfigDir, 'bin')}/`,
+    layout.natsBinary,
+    join(modules, '@automagik', 'omni', 'dist', 'server', 'index.js'),
+  ];
+}
+
+/** Pids in `ps -axo pid=,args=` output whose command line carries a child marker. */
+export function leftoverChildPids(psOutput: string, layout: SandboxLayout, exclude: number[] = []): number[] {
+  const markers = sandboxChildMarkers(layout);
+  const pids: number[] = [];
+  for (const line of psOutput.split('\n')) {
+    const match = /^\s*(\d+)\s+(.*)$/.exec(line);
+    if (!match?.[1] || !match[2]) continue;
+    const pid = Number.parseInt(match[1], 10);
+    if (exclude.includes(pid)) continue;
+    const args = match[2];
+    if (markers.some((marker) => args.includes(marker))) pids.push(pid);
+  }
+  return pids;
+}
+
+/**
+ * Stops children an earlier supervisor left behind. A supervisor killed with
+ * SIGKILL (or a crash) cannot stop its children, and they keep the sandbox's
+ * ports, so a new one would restart-loop against them and `stop` could not
+ * reach them. Returns how many it stopped.
+ */
+export async function sweepSandboxLeftovers(
+  layout: SandboxLayout,
+  deps: Pick<SandboxDeps, 'run' | 'kill' | 'isAlive' | 'sleep' | 'now' | 'env'> = defaultSandboxDeps(),
+  exclude: number[] = [process.pid],
+): Promise<number> {
+  const ps = await deps.run(['ps', '-axo', 'pid=,args='], { env: sandboxBaseEnv(layout, deps.env) });
+  if (ps.code !== 0) return 0;
+  const pids = leftoverChildPids(ps.stdout, layout, exclude);
+  for (const pid of pids) {
+    try {
+      deps.kill(pid, 'SIGTERM');
+    } catch {
+      // already gone
+    }
+  }
+  const deadline = deps.now().getTime() + STOP_TIMEOUT_MS;
+  while (pids.some((pid) => deps.isAlive(pid)) && deps.now().getTime() < deadline) await deps.sleep(250);
+  for (const pid of pids.filter((pid) => deps.isAlive(pid))) {
+    try {
+      deps.kill(pid, 'SIGKILL');
+    } catch {
+      // already gone
+    }
+  }
+  return pids.length;
 }
 
 function requireState(layout: SandboxLayout): SandboxState {
@@ -759,7 +850,9 @@ export async function startSandbox(
   const layout = sandboxLayout(opts.home);
   const state = requireState(layout);
   if (livePid(layout, deps) === null) {
-    const env = sandboxBaseEnv(layout, deps.env);
+    // Children of a supervisor that died hard still hold the ports (and would answer the health check).
+    await sweepSandboxLeftovers(layout, deps);
+    const env = serviceManagerEnv(deps);
     if (state.atLogin && deps.platform === 'darwin') {
       const names = sandboxUnitNames(layout.home, opts.defaultHome);
       const plist = unitPaths(names, deps).plist;
@@ -778,7 +871,7 @@ export async function startSandbox(
     } else {
       deps.spawnDetached(supervisorCommand(layout, state), {
         cwd: layout.home,
-        env,
+        env: sandboxBaseEnv(layout, deps.env),
         logPath: join(layout.logsDir, 'supervisor.log'),
       });
     }
@@ -798,7 +891,7 @@ export async function stopSandbox(
 ): Promise<SandboxReport> {
   const layout = sandboxLayout(opts.home);
   const state = requireState(layout);
-  const env = sandboxBaseEnv(layout, deps.env);
+  const env = serviceManagerEnv(deps);
   const names = sandboxUnitNames(layout.home, opts.defaultHome);
   // A unit would bring a killed supervisor straight back, so stop the unit itself.
   if (state.atLogin && deps.platform === 'darwin') {
@@ -813,6 +906,8 @@ export async function stopSandbox(
     while (deps.isAlive(pid) && deps.now().getTime() < deadline) await deps.sleep(250);
     if (deps.isAlive(pid)) deps.kill(pid, 'SIGKILL');
   }
+  // Whatever a supervisor that died hard left behind; normally nothing.
+  await sweepSandboxLeftovers(layout, deps);
   if (existsSync(layout.pidPath)) rmSync(layout.pidPath, { force: true });
   return report(layout, deps, 0);
 }
