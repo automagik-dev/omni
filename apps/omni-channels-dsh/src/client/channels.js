@@ -1,5 +1,6 @@
 import { createElement as h, Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { ConnectOmni } from './omni-connect.js'
+import { UpdateOffer } from './omni-update.js'
 import {
   CHANNEL_TYPES, CHANNELS_PANEL, STATUS, canWrite, channelOf, chatOf, healthSummary, omniActions, omniStore, startLive, typeOf, unreadOf, visibleChats,
 } from './omni-store.js'
@@ -170,8 +171,9 @@ function Overview({ state, omni }) {
         h('h1', null, t('Channels'), h(PreviewChip)),
         h('p', null, t('Connect the apps people already use to reach you. Omni answers there, and every chat shows up under your Bots.'))),
       h('button', { type: 'button', className: 'oc-primary', onClick: () => omni.showPage({ view: 'connect', type: null, step: 0 }) }, h(PlusIcon), state.preview ? t('Add channel') : t('Preview: add channel'))),
-    // Sample data means no Omni is linked yet: connecting one comes first.
-    state.preview ? h(ConnectOmni) : null,
+    // Sample data means no Omni is linked yet: connecting one comes first. A linked one says
+    // when an update is out.
+    state.preview ? h(ConnectOmni) : h(UpdateOffer, { compact: true }),
     troubled.map(channel => h('button', { key: channel.id, type: 'button', className: 'oc-callout', 'data-tone': STATUS[channel.status].tone, onClick: () => omni.showPage({ view: 'channel', channelId: channel.id }) },
       h(Tile, { type: channel.type, size: 36 }),
       h('span', { className: 'oc-callout-text' },
