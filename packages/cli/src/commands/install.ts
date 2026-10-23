@@ -2,7 +2,7 @@
  * Install Command
  *
  * omni install [--port <port>] [--database-url <url>] [--api-key <key>]
- *              [--systemd] [--force-cleanup] [--non-interactive]
+ *              [--systemd] [--force-cleanup] [--non-interactive]   (--sandbox: see sandbox.ts)
  *
  * Non-interactive, reinstall-safe bootstrapper. Rewritten from an interactive
  * wizard in 2026-04 (WISH: omni-install-resilience). Flow:
@@ -46,6 +46,7 @@ import { buildEmbeddedDatabaseUrl, buildRuntimeEnv } from '../runtime-env.js';
 import { getServerBundlePath, getServerLauncherPath } from '../server-bundle.js';
 import { generateApiKey, maskApiKey } from '../utils/keys.js';
 import { VERSION } from '../version.js';
+import { withSandboxInstall } from './sandbox.js';
 
 const DEFAULT_DATA_DIR = join(homedir(), '.omni', 'data');
 
@@ -385,13 +386,13 @@ async function runInstall(options: InstallOptions): Promise<void> {
 }
 
 export function createInstallCommand(): Command {
-  return new Command('install')
+  const command = new Command('install')
     .description('Bootstrap Omni server (non-interactive, reinstall-safe, agent-first)')
     .option('--port <port>', `API port to use (default: ${DEFAULT_API_PORT})`)
     .option('--database-url <url>', 'External PostgreSQL URL (opt-in; defaults to embedded pgserve)')
     .option('--api-key <key>', 'Explicit API key (default: generate a new one)')
     .option('--systemd', 'Write systemd units instead of using pm2 (requires sudo)')
     .option('--force-cleanup', 'Allow pgserve startup to kill orphan postgres processes on the internal port')
-    .option('--non-interactive', '[deprecated] silent no-op — install is always non-interactive')
-    .action(runInstall);
+    .option('--non-interactive', '[deprecated] silent no-op — install is always non-interactive');
+  return withSandboxInstall(command, runInstall);
 }

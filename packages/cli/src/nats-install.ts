@@ -8,7 +8,7 @@
 
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import ora from 'ora';
 import * as output from './output.js';
 
@@ -26,8 +26,8 @@ function platformInfo(): { os: string; arch: string } | null {
   return { os, arch: natsArch };
 }
 
-/** Download and install NATS binary. Returns true on success. */
-async function downloadNats(): Promise<boolean> {
+/** Download the NATS binary to `target` (default `~/.omni/nats-server`). Returns true on success. */
+async function downloadNats(target: string = NATS_BINARY_PATH): Promise<boolean> {
   const info = platformInfo();
   if (!info) {
     output.warn('Unsupported platform for automatic NATS download — install manually');
@@ -39,7 +39,8 @@ async function downloadNats(): Promise<boolean> {
   const spinner = ora(`Downloading NATS ${NATS_VERSION} for ${info.os}/${info.arch}...`).start();
 
   try {
-    mkdirSync(OMNI_DIR, { recursive: true, mode: 0o700 });
+    const workDir = dirname(target);
+    mkdirSync(workDir, { recursive: true, mode: 0o700 });
 
     const resp = await fetch(url, { signal: AbortSignal.timeout(60_000) });
     if (!resp.ok) {
@@ -47,11 +48,11 @@ async function downloadNats(): Promise<boolean> {
       return false;
     }
 
-    const tarPath = join(OMNI_DIR, fileName);
+    const tarPath = join(workDir, fileName);
     writeFileSync(tarPath, Buffer.from(await resp.arrayBuffer()));
 
     spinner.text = 'Extracting NATS binary...';
-    const tmpDir = join(OMNI_DIR, 'nats-tmp');
+    const tmpDir = join(workDir, 'nats-tmp');
     mkdirSync(tmpDir, { recursive: true });
 
     const tar = Bun.spawn({ cmd: ['tar', '-xzf', tarPath, '-C', tmpDir], stdout: 'pipe', stderr: 'pipe' });
@@ -69,11 +70,11 @@ async function downloadNats(): Promise<boolean> {
       return false;
     }
 
-    await Bun.spawn({ cmd: ['mv', binPath, NATS_BINARY_PATH] }).exited;
-    chmodSync(NATS_BINARY_PATH, 0o755);
+    await Bun.spawn({ cmd: ['mv', binPath, target] }).exited;
+    chmodSync(target, 0o755);
     await Bun.spawn({ cmd: ['rm', '-rf', tarPath, tmpDir] }).exited;
 
-    spinner.succeed(`NATS ${NATS_VERSION} installed to ${NATS_BINARY_PATH}`);
+    spinner.succeed(`NATS ${NATS_VERSION} installed to ${target}`);
     return true;
   } catch (err) {
     spinner.fail(`NATS download error: ${err instanceof Error ? err.message : String(err)}`);
@@ -89,4 +90,10 @@ export async function ensureNats(): Promise<void> {
   }
   output.raw('  NATS binary not found — downloading...');
   await downloadNats();
+}
+
+/** Download nats-server to `target` (a sandbox's own bin dir). No-op if it is already there. */
+export async function installNatsBinary(target: string): Promise<boolean> {
+  if (existsSync(target)) return true;
+  return downloadNats(target);
 }
