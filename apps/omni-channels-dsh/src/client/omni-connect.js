@@ -315,6 +315,8 @@ export function ConnectOmni({ onPaired, embedded = false } = {}) {
           ? t('Scan the QR with your phone: it opens your WhatsApp chat with yourself with the code typed. Send it, and this page goes live.')
           : t('Open the approval page on your phone or here, and approve with Face ID, Touch ID, your fingerprint or a code.')),
         h('div', { className: 'ox-code', 'aria-label': t('Pairing code') }, pairing.code),
+        // The operator owns the Omni, so approving from its own terminal works without a phone.
+        h('p', { className: 'ox-muted' }, t('Or, on the computer that runs that Omni:'), ' ', h('code', null, `omni approve ${pairing.code}`)),
         h('div', { className: 'ox-row' },
           pairing.waLink ? h('a', { className: 'oc-primary', href: pairing.waLink, target: '_blank', rel: 'noreferrer' }, t('Open WhatsApp')) : null,
           pairing.approveUrl ? h('a', { className: pairing.waLink ? 'oc-ghost' : 'oc-primary', href: pairing.approveUrl, target: '_blank', rel: 'noreferrer' }, t('Approve with Face ID or fingerprint')) : null,
