@@ -36,6 +36,8 @@ export async function bundleClient() {
     platform: 'browser',
     target: 'es2022',
     external: [...PLATFORM_MODULES, ...EXTERNAL_BUNDLES],
+    // xterm's stylesheet joins the page's styles as text (src/client/omni-terminal.js).
+    loader: { '.css': 'text' },
     treeShaking: false,
     charset: 'utf8',
     write: false,

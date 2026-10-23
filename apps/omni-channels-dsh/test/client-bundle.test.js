@@ -55,7 +55,7 @@ test('client.js requires React, ReactDOM and the team\'s client, and adds to the
       register: (options) => { registered.push([options.name, options.id]); return () => {} },
     },
   })
-  assert.deepEqual(registered, [['settings.onboarding', 'omni-connect']])
+  assert.deepEqual(registered, [['settings.onboarding', 'omni-connect'], ['settings.section', 'omni']])
   for (const name of ['omni_call', 'omni_channels', 'omni_chats', 'omni_messages', 'omni_connect']) assert.equal(typeof omni.toolCards.renderer(name), 'function', name)
   assert.equal(omni.toolCards.renderer('find_chats'), undefined)
   assert.equal(omni.toolCards.phrase('find_chats')(() => undefined).state, 'searching')

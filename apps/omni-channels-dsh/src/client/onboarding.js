@@ -30,7 +30,7 @@ export async function callOmniAi(endpoint, payload, fetchImpl = globalThis.fetch
   return result.value
 }
 
-const localStore = () => {
+export const localStore = () => {
   try {
     return globalThis.localStorage ?? null
   } catch {
@@ -51,6 +51,15 @@ function keepSkipHere(storage = localStore()) {
     storage?.setItem(SKIPPED_KEY, '1')
   } catch { /* storage unavailable: the step shows again next time */ }
 }
+
+// The first-run step DSH mounts counts itself here while it shows, so the wizard this plugin
+// opens on its own (wizard.js) never stacks on it.
+let stepsShown = 0
+export function noteStepShown() {
+  stepsShown += 1
+  return () => { stepsShown -= 1 }
+}
+export const stepShown = () => stepsShown > 0
 
 // Whether the link this host reports reaches an Omni.
 export const isConnected = link => link?.linked === true || link?.configured === true

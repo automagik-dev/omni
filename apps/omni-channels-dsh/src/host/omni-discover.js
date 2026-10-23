@@ -9,7 +9,7 @@
 // Omni and copied, here on the host, into the link file a sign-in writes (omni-link.js).
 // Without a key, or with one the Omni refuses, it starts the usual device sign-in there.
 import { createHash } from 'node:crypto'
-import { readFileSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod'
@@ -62,6 +62,64 @@ function readConfig(path) {
   }
 }
 
+// <OMNI_HOME>, else ~/.omni: the desktop app sets OMNI_HOME to its own home. A sandboxed
+// Omni (omni-local.js) lives in its sandbox folder.
+const omniRoot = ({ env, home }) => env.OMNI_HOME || join(home, '.omni')
+export const sandboxHome = ({ env = process.env, home = homedir() } = {}) => join(omniRoot({ env, home }), 'sandbox')
+const cliConfigPath = ({ env, home }) => join(env.OMNI_CONFIG_DIR || join(home, '.omni'), 'config.json')
+
+const processAlive = (pid) => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return error?.code === 'EPERM'
+  }
+}
+
+// The services `omni install` runs its API under (packages/cli): PM2's omni-api, whose pid
+// files sit in PM2's home, or the omni-api unit `--systemd` writes.
+function cliServiceRuns({ env, home, exists, list, readText, isAlive }) {
+  if (exists('/etc/systemd/system/omni-api.service')) return true
+  const pids = join(env.PM2_HOME || join(home, '.pm2'), 'pids')
+  let names = []
+  try {
+    names = list(pids).filter(name => /^omni-api-\d+\.pid$/.test(name))
+  } catch {
+    return false
+  }
+  return names.some((name) => {
+    const pid = Number.parseInt(readText(join(pids, name)), 10)
+    return Number.isInteger(pid) && pid > 0 && isAlive(pid)
+  })
+}
+
+const portOf = (url) => {
+  try {
+    const at = new URL(url)
+    return Number(at.port || (at.protocol === 'https:' ? 443 : 80))
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Who runs an Omni found at `url` on this computer: `sandbox` for the sandboxed one, `cli` when
+ * the Omni CLI's own install runs it (its config names that port, and its PM2 process or
+ * systemd unit is there), `other` for any other loopback Omni (another app runs it, so this
+ * one cannot update it), null for an Omni elsewhere.
+ */
+export function managerOf(url, { env = process.env, home = homedir(), exists = existsSync, list = readdirSync, readText = path => readFileSync(path, 'utf8'), isAlive = processAlive } = {}) {
+  if (!isLoopback(url)) return null
+  const sandbox = readConfig(join(sandboxHome({ env, home }), 'config', 'config.json'))
+  if (sandbox?.apiUrl && cleanOmniUrl(sandbox.apiUrl) && sameOmni(cleanOmniUrl(sandbox.apiUrl)) === sameOmni(url)) return 'sandbox'
+  const cli = readConfig(cliConfigPath({ env, home }))
+  if (cli === null) return 'other'
+  const cliPort = cli.server?.port ?? (cli.apiUrl && isLoopback(cli.apiUrl) ? portOf(cli.apiUrl) : null) ?? DEFAULT_PORT
+  if (portOf(url) !== cliPort) return 'other'
+  return cliServiceRuns({ env, home, exists, list, readText, isAlive }) ? 'cli' : 'other'
+}
+
 // Every place that names an Omni, keys included; this stays on the host.
 export function candidates({ env = process.env, home = homedir() } = {}) {
   const found = []
@@ -69,8 +127,7 @@ export function candidates({ env = process.env, home = homedir() } = {}) {
     const clean = cleanOmniUrl(url)
     if (clean) found.push({ source, url: clean, ...extra })
   }
-  const cliDir = env.OMNI_CONFIG_DIR || join(home, '.omni')
-  const cli = readConfig(join(cliDir, 'config.json'))
+  const cli = readConfig(cliConfigPath({ env, home }))
   if (cli) {
     // The CLI's own default when it names none: the API it installs on this computer.
     add('cli', cli.apiUrl ?? `http://localhost:${cli.server?.port ?? DEFAULT_PORT}`, { key: cli.apiKey })
@@ -129,7 +186,7 @@ export async function probe(url, fetchImpl = fetch, timeoutMs = PROBE_TIMEOUT_MS
 // The Omnis to offer, as the page may see them. Omnis elsewhere are not asked anything
 // until the person picks one; `running` entries that do not answer are left out, since
 // nothing but the probe named them.
-export async function discover({ env = process.env, home = homedir(), fetchImpl = fetch } = {}) {
+export async function discover({ env = process.env, home = homedir(), fetchImpl = fetch, manager = url => managerOf(url, { env, home }) } = {}) {
   const omnis = merge(candidates({ env, home }))
   const answers = await Promise.all(omnis.map(omni => (isLoopback(omni.url) ? probe(omni.url, fetchImpl) : null)))
   return omnis
@@ -138,7 +195,7 @@ export async function discover({ env = process.env, home = homedir(), fetchImpl 
       const answer = answers[index] ?? { reachable: null, version: null, canPair: null, pairing: 'unknown' }
       // A sandboxed Omni from an earlier release moves to this plugin's (omni-local.js).
       const updateTo = omni.source === 'sandbox' && newer(PLUGIN_VERSION, answer.version) ? PLUGIN_VERSION : null
-      return { id: omni.id, url: omni.url, source: omni.source, name: omni.name ?? null, local, hasKey: Boolean(omni.key), updateTo, ...answer }
+      return { id: omni.id, url: omni.url, source: omni.source, name: omni.name ?? null, local, hasKey: Boolean(omni.key), updateTo, manager: local ? manager(omni.url) : null, ...answer }
     })
     .filter(omni => omni.source !== 'running' || omni.reachable)
     .sort((a, b) => Number(b.local) - Number(a.local))
@@ -184,8 +241,20 @@ export function install(rt) {
     return linked.status === 'refused' ? { status: 'pairing', ...(await rt.startOmniPairing({ url: omni.url })) } : linked
   }
 
+  // The Omni this host is linked to, for the settings page: where it is and the version it
+  // answers with. Never its key.
+  async function linkInfo() {
+    const link = rt.omniLink?.() ?? null
+    const configured = link !== null || (await Promise.resolve(rt.omniConfigured?.()).catch(() => false)) === true
+    if (link === null) return { linked: false, configured, origin: null, version: null, pairedAt: null }
+    const answer = await probe(link.url, fetch, CHECK_TIMEOUT_MS / 5).catch(() => null)
+    return { linked: true, configured, origin: new URL(link.url).host, version: answer?.version ?? null, reachable: answer?.reachable ?? false, pairedAt: link.pairedAt ?? null }
+  }
+
   const endpoints = {
-    'omni-discover': async () => ({ omnis: await discover() }),
+    // Where a sandboxed Omni would go, so the page can say before setting one up.
+    'omni-discover': async () => ({ omnis: await discover(), sandbox: { home: sandboxHome(), version: PLUGIN_VERSION } }),
+    'omni-link-info': linkInfo,
     'omni-discover-use': use,
   }
   rt.omniDiscoverEndpoint = (endpoint, body) => endpoints[endpoint](body)
