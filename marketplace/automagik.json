@@ -357,7 +357,7 @@
         "en": "The official Claude Code CLI as a model provider."
       },
       "author": "lcestou",
-      "homepage": "https://github.com/lcestou/dsh-oh-my-claude#readme",
+      "homepage": "https://github.com/automagik-genie/dsh-oh-my-claude#readme",
       "metadata": {
         "category": "ai",
         "keywords": [
@@ -371,10 +371,12 @@
       },
       "versions": [
         {
-          "version": "1.5.6",
-          "publishTimestamp": 1792771822,
+          "version": "1.5.6-omni.1",
+          "publishTimestamp": 1792778878,
           "source": {
-            "type": "npm"
+            "type": "git",
+            "url": "https://github.com/automagik-genie/dsh-oh-my-claude",
+            "commit": "ccca7fe46871c0e188d2272d2aa92f2d7d4502c4"
           },
           "engines": {
             "dsh": ">=0.2.1-rc.2 <0.3.0"

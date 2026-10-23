@@ -1,4 +1,7 @@
 {
   "@goodandready/dsh-subscriptions": "0.7.19",
-  "dsh-oh-my-claude": "1.5.6"
+  "dsh-oh-my-claude": {
+    "version": "1.5.6-omni.1",
+    "from": "github:automagik-genie/dsh-oh-my-claude#ccca7fe46871c0e188d2272d2aa92f2d7d4502c4"
+  }
 }

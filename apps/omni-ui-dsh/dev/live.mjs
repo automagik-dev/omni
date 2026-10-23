@@ -75,11 +75,14 @@ for (const plugin of plugins) {
   rmSync(link, { recursive: true, force: true })
   symlinkSync(plugin.dir, link, 'dir')
 }
-// Add-ons (dev/live-addons.json: npm name -> exact version) join the profile the way DSH adds
+// Add-ons (dev/live-addons.json: npm name -> exact version, or -> { version, from } for one
+// installed from a pinned git commit such as `github:owner/repo#<sha>`) join the profile the way DSH adds
 // any plugin: `dsh plugin --profile omni add`, which is pnpm in the profile (hoisted, as every
 // DSH profile is), never npm. pnpm is pinned to the release the desktop app ships.
 const PNPM = 'pnpm@10.34.6'
 const addons = existsSync(join(HERE, 'live-addons.json')) ? readJson(join(HERE, 'live-addons.json')) : {}
+const specOf = want => (typeof want === 'string' ? want : want.from)
+const versionOf = want => (typeof want === 'string' ? want : want.version)
 const installed = name => {
   try {
     return readJson(join(profileDir, 'node_modules', name, 'package.json')).version
@@ -90,19 +93,19 @@ const installed = name => {
 const writeProfile = () => writeFileSync(join(profileDir, 'package.json'), `${JSON.stringify({
   name: 'omni-live-profile',
   private: true,
-  dependencies: { ...Object.fromEntries(plugins.map(plugin => [plugin.name, `link:${plugin.dir}`])), ...addons },
+  dependencies: { ...Object.fromEntries(plugins.map(plugin => [plugin.name, `link:${plugin.dir}`])), ...Object.fromEntries(Object.entries(addons).map(([name, want]) => [name, specOf(want)])) },
   dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', '@deepseek-ai/dsh-experimental-plugin-market-bundle', ...plugins.map(plugin => plugin.name), ...Object.keys(addons)] } },
 }, null, 2)}\n`)
 if (!existsSync(join(profileDir, 'pnpm-workspace.yaml'))) writeFileSync(join(profileDir, 'pnpm-workspace.yaml'), 'packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n')
 writeProfile()
-const missing = Object.entries(addons).filter(([name, version]) => installed(name) !== version)
+const missing = Object.entries(addons).filter(([name, want]) => installed(name) !== versionOf(want))
 if (missing.length > 0) {
-  say(`adding ${missing.map(([name, version]) => `${name}@${version}`).join(', ')} with dsh plugin add (${PNPM})`)
+  say(`adding ${missing.map(([name, want]) => `${name}@${specOf(want)}`).join(', ')} with dsh plugin add (${PNPM})`)
   // A pnpm shim first on PATH, so DSH's plugin manager runs the pinned pnpm.
   const shims = join(home, 'bin')
   mkdirSync(shims, { recursive: true })
   writeFileSync(join(shims, 'pnpm'), `#!/bin/sh\nexec npx --yes ${PNPM} "$@"\n`, { mode: 0o755 })
-  execFileSync(process.execPath, [DSH_BIN, 'plugin', '--profile', PROFILE, 'add', '--ignore-scripts', ...missing.map(([name, version]) => `${name}@${version}`)], {
+  execFileSync(process.execPath, [DSH_BIN, 'plugin', '--profile', PROFILE, 'add', '--ignore-scripts', ...missing.map(([name, want]) => `${name}@${specOf(want)}`)], {
     cwd: profileDir,
     env: { ...process.env, DSH_HOME: dshHome, DO_NOT_TRACK: '1', PATH: `${shims}:${process.env.PATH}` },
     stdio: ['ignore', 'inherit', 'inherit'],
