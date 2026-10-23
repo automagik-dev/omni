@@ -8,6 +8,11 @@ metadata:
     app.kubernetes.io/component: admin-ui
 spec:
   replicas: {{ .Values.adminUi.replicaCount }}
+  {{- if .Values.adminUi.persistence.enabled }}
+  # One pod at a time holds the ReadWriteOnce /data volume.
+  strategy:
+    type: Recreate
+  {{- end }}
   selector:
     matchLabels:
       {{- include "omni.adminUiSelectorLabels" . | nindent 6 }}
@@ -43,7 +48,7 @@ spec:
               containerPort: {{ .Values.adminUi.service.port }}
               protocol: TCP
           envFrom:
-            # Non-secret config (HOST, PORT, PUBLIC_DIR, OMNI_BASE_URL, ...)
+            # Non-secret config (HOST, PORT, OMNI_BASE_URL, OMNI_UI_PUBLIC_URL, ...)
             - configMapRef:
                 name: {{ include "omni.adminUi.fullname" . }}-config
             {{- if gt (len (default (dict) .Values.adminUi.secret.env)) 0 }}
@@ -74,6 +79,18 @@ spec:
             failureThreshold: {{ .Values.adminUi.probes.liveness.failureThreshold }}
           resources:
             {{- toYaml .Values.adminUi.resources | nindent 12 }}
+          volumeMounts:
+            # Bots, Sessions, the sign-in cookie secret and the Omni link.
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          {{- if .Values.adminUi.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.adminUi.persistence.existingClaim | default (printf "%s-data" (include "omni.adminUi.fullname" .)) }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
       {{- with .Values.adminUi.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

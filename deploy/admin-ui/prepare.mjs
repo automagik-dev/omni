@@ -1,0 +1,105 @@
+// Assembles what the Omni Admin UI image runs, from this Omni checkout, into <out>/:
+//
+//   <out>/runtime/node_modules   the pinned DeepSeek Harness (runtime/package.json + lock)
+//   <out>/profile/               the dsh profile the image starts: package.json,
+//                                cordis.patch.yml, pnpm-workspace.yaml, vendor/ (the plugins'
+//                                tarballs) and node_modules holding only Omni's plugins
+//
+// The plugins are the @automagik packages profile/package.json depends on, packed from this
+// checkout's apps/*-dsh with `npm pack`, so the image ships exactly what each package
+// publishes, each at this Omni's version. Their @deepseek-ai peers are not installed again:
+// dsh supplies them. Native packages are per platform: run this on the platform the image is for.
+// Usage: node deploy/admin-ui/prepare.mjs <out>
+import { execFileSync } from 'node:child_process';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const OMNI = resolve(HERE, '..', '..');
+const OUT = resolve(process.argv[2] ?? join(HERE, 'build'));
+const VENDOR = 'vendor';
+// @openuidev/lang-core and others phone home from install scripts unless told not to.
+const env = {
+  ...process.env,
+  DO_NOT_TRACK: '1',
+  npm_config_fund: 'false',
+  npm_config_audit: 'false',
+  npm_config_update_notifier: 'false',
+};
+const npm = (args, cwd) => execFileSync('npm', args, { cwd, env, stdio: ['ignore', 'inherit', 'inherit'] });
+const say = (message) => console.log(`[admin-ui] ${message}`);
+const readJson = (file) => JSON.parse(readFileSync(file, 'utf8'));
+
+const version = readJson(join(OMNI, 'package.json')).version;
+const apps = join(OMNI, 'apps');
+const folders = Object.fromEntries(
+  readdirSync(apps)
+    .filter((name) => name.endsWith('-dsh') && existsSync(join(apps, name, 'package.json')))
+    .map((name) => [readJson(join(apps, name, 'package.json')).name, join(apps, name)]),
+);
+const shipped = Object.keys(readJson(join(HERE, 'profile', 'package.json')).dependencies);
+for (const name of shipped) {
+  if (!folders[name]) throw new Error(`profile/package.json depends on ${name}, which apps/*-dsh do not hold`);
+}
+
+// The DeepSeek Harness the image runs is the one Omni's plugins are tested against.
+const tested = readJson(join(apps, 'omni-ui-dsh', 'dev', 'harness', 'package.json')).dependencies['@deepseek-ai/dsh'];
+const pinned = readJson(join(HERE, 'runtime', 'package.json')).dependencies['@deepseek-ai/dsh'];
+if (tested !== pinned)
+  throw new Error(`runtime/package.json pins dsh ${pinned}, but Omni's plugins are tested on ${tested}`);
+
+rmSync(OUT, { recursive: true, force: true });
+const runtimeDir = join(OUT, 'runtime');
+mkdirSync(runtimeDir, { recursive: true });
+for (const file of ['package.json', 'package-lock.json']) cpSync(join(HERE, 'runtime', file), join(runtimeDir, file));
+say(`installing the DeepSeek Harness ${pinned}`);
+npm(['ci', '--omit=dev'], runtimeDir);
+
+say(`packing ${shipped.join(', ')}`);
+const packs = join(OUT, 'packs');
+mkdirSync(packs, { recursive: true });
+const packed = shipped.map((name) => {
+  const [info] = JSON.parse(
+    execFileSync('npm', ['pack', '--json', '--pack-destination', packs], { cwd: folders[name], env, encoding: 'utf8' }),
+  );
+  if (info.name !== name) throw new Error(`${folders[name]} packs ${info.name}, not ${name}`);
+  if (info.version !== version) throw new Error(`${name} is ${info.version}, not Omni's ${version}`);
+  return { name, version: info.version, tarball: join(packs, info.filename) };
+});
+
+const profileDir = join(OUT, 'profile');
+mkdirSync(join(profileDir, VENDOR), { recursive: true });
+const profile = readJson(join(HERE, 'profile', 'package.json'));
+// The profile's package.json names the tarballs it ships (file:vendor/…): dsh's pnpm,
+// installing a market plugin later, resolves Omni's own there, offline.
+for (const plugin of packed) {
+  cpSync(plugin.tarball, join(profileDir, VENDOR, basename(plugin.tarball)));
+  profile.dependencies[plugin.name] = `file:${VENDOR}/${basename(plugin.tarball)}`;
+}
+writeFileSync(join(profileDir, 'package.json'), `${JSON.stringify(profile, null, 2)}\n`);
+for (const file of ['cordis.patch.yml', 'pnpm-workspace.yaml'])
+  cpSync(join(HERE, 'profile', file), join(profileDir, file));
+// One install of every tarball: --no-save leaves the file: specs written above in place.
+npm(
+  [
+    'install',
+    ...packed.map((plugin) => plugin.tarball),
+    '--omit=dev',
+    '--legacy-peer-deps',
+    '--no-save',
+    '--no-package-lock',
+    '--ignore-scripts',
+  ],
+  profileDir,
+);
+// server.mjs puts the profile in place again whenever this id changes.
+writeFileSync(join(profileDir, '.build-id'), `${version}+${new Date().toISOString()}\n`);
+rmSync(packs, { recursive: true, force: true });
+
+const dsh = readJson(join(runtimeDir, 'node_modules', '@deepseek-ai', 'dsh', 'package.json')).version;
+writeFileSync(
+  join(OUT, 'versions.json'),
+  `${JSON.stringify({ omni: version, dsh, plugins: Object.fromEntries(packed.map((plugin) => [plugin.name, plugin.version])) }, null, 2)}\n`,
+);
+say(`ready: Omni ${version}, dsh ${dsh}`);
