@@ -1,7 +1,8 @@
 import { createElement as h, Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { ConnectPrompt, openConnectWizard } from './wizard.js'
-import { UpdateOffer } from './omni-update.js'
-import { LiveConnectFlow } from './channel-connect-live.js'
+import { UpdateBar } from './omni-update.js'
+import { AddGrid, LiveConnectFlow } from './channel-connect-live.js'
+import { ORDER } from './channel-add.js'
 import {
   CHANNEL_TYPES, CHANNELS_PANEL, STATUS, canSend, canWrite, channelOf, chatOf, healthSummary, omniActions, omniStore, startLive, typeOf, unreadOf, visibleChats,
 } from './omni-store.js'
@@ -180,7 +181,7 @@ function Overview({ state, omni }) {
       h('button', { type: 'button', className: 'oc-primary', disabled: !canWrite(state), title: canWrite(state) ? undefined : t('This device\'s key can\'t change channels; ask your Omni\'s owner.'), onClick: () => omni.showPage({ view: 'connect', type: null, step: 0 }) }, h(PlusIcon), t('Add channel'))),
     // Sample data means no Omni is linked yet: connecting one comes first, in the Connect
     // wizard (wizard.js). A linked one says when an update is out.
-    state.preview ? h(ConnectPrompt) : h(UpdateOffer, { compact: true }),
+    state.preview ? h(ConnectPrompt) : h(UpdateBar, { origin: state.source.origin }),
     troubled.map(channel => h('button', { key: channel.id, type: 'button', className: 'oc-callout', 'data-tone': STATUS[channel.status].tone, onClick: () => omni.showPage({ view: 'channel', channelId: channel.id }) },
       h(Tile, { type: channel.type, size: 36 }),
       h('span', { className: 'oc-callout-text' },
@@ -312,15 +313,7 @@ function PreviewConnectFlow({ state, omni }) {
   const [token, setToken] = useState('')
   useEffect(() => { setName(''); setToken('') }, [type])
   if (type === null) {
-    return h(Fragment, null,
-      h('button', { type: 'button', className: 'oc-back', onClick: () => omni.showPage({ view: 'overview' }) }, h(ChevronLeftIcon), t('Channels')),
-      h('header', { className: 'oc-head' }, h('div', null,
-        h('h1', null, t('Add a channel'), h(PreviewChip)),
-        h('p', null, t('Pick where people talk to you. It takes about a minute, and you can disconnect at any time.')))),
-      h('div', { className: 'oc-types' }, Object.entries(CHANNEL_TYPES).map(([id, info]) => h('button', {
-        key: id, type: 'button', className: 'oc-type', onClick: () => omni.showPage({ type: id, step: 0 }),
-      }, h(Tile, { type: id, size: 48 }), h('strong', null, info.label), h('span', null, info.blurb),
-      h('em', null, info.pairing === 'qr' ? t('Scan a QR code') : info.pairing === 'token' ? t('Paste a token') : t('Sign in with {app}', { app: info.signIn }))))))
+    return h(AddGrid, { types: ORDER, onPick: id => omni.showPage({ type: id, step: 0 }), onBack: () => omni.showPage({ view: 'overview' }), Tile, PreviewChip })
   }
   const info = CHANNEL_TYPES[type]
   const steps = [t('Name it'), info.pairing === 'qr' ? t('Scan') : info.pairing === 'token' ? t('Paste token') : t('Sign in'), t('Done')]
@@ -590,12 +583,41 @@ body[data-ds-dark-theme] .oc-ava{background:hsl(var(--oc-hue) 30% 26%);color:hsl
 .oc-danger strong{font-size:14px;color:var(--bt-ink)}
 .oc-danger-go{height:34px;padding:0 14px;border-radius:999px;border:1px solid color-mix(in srgb,var(--bt-danger) 40%,transparent);background:none;color:var(--bt-danger);font:inherit;font-size:13px;font-weight:500;cursor:pointer;white-space:nowrap}
 .oc-danger-armed{background:var(--bt-danger);color:#fff;border-color:transparent}
-.oc-types{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}
-.oc-type{display:flex;flex-direction:column;align-items:flex-start;gap:8px;padding:18px;border-radius:18px;border:.5px solid var(--bt-line-2);background:var(--bt-card);color:var(--bt-ink);font:inherit;text-align:left;cursor:pointer;transition:transform .14s ease,box-shadow .14s ease}
-.oc-type:hover{transform:translateY(-2px);box-shadow:0 12px 28px -12px rgba(0,0,0,.18)}
-.oc-type strong{margin-top:4px;font-size:15px;font-weight:600}
-.oc-type>span:not(.oc-tile){font-size:13px;line-height:19px;color:var(--bt-ink-2)}
-.oc-type em{margin-top:auto;padding-top:6px;font-style:normal;font-size:12.5px;font-weight:500;color:var(--bt-accent)}
+.oc-types{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;align-items:stretch}
+.oc-type{display:flex;flex-direction:column;align-items:stretch;gap:10px;min-height:184px;padding:18px;border-radius:18px;border:.5px solid var(--bt-line-2);background:var(--bt-card);color:var(--bt-ink);font:inherit;text-align:left;cursor:pointer;transition:transform .14s ease,box-shadow .14s ease,border-color .14s ease}
+.oc-type:hover:not(:disabled){transform:translateY(-2px);border-color:var(--bt-line);box-shadow:0 12px 28px -12px rgba(0,0,0,.18)}
+.oc-type-top{display:flex;align-items:center;gap:12px}
+.oc-type-top strong{flex:1;min-width:0;font-size:16px;font-weight:600}
+.oc-type-time{flex:none;padding:2px 8px;border-radius:999px;border:1px solid var(--bt-line-2);color:var(--bt-ink-3);font-size:11.5px;white-space:nowrap}
+.oc-type-blurb{flex:1;font-size:13.5px;line-height:20px;color:var(--bt-ink-2)}
+.oc-type-how{display:flex;align-items:center;justify-content:space-between;gap:8px;padding-top:12px;border-top:.5px solid var(--bt-line-2);font-size:12.5px;color:var(--bt-ink-3)}
+.oc-type-how b{color:var(--bt-accent);font-weight:600}
+.oc-head h1 .oc-tile{margin-right:10px;vertical-align:-6px}
+.oc-guide{display:grid;grid-template-columns:200px minmax(0,1fr);gap:28px;margin-top:6px;align-items:start}
+.oc-guide-steps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px;font-size:13.5px;color:var(--bt-ink-3)}
+.oc-guide-steps li{display:flex;align-items:center;gap:10px;padding:6px 0}
+.oc-guide-steps span{width:24px;height:24px;border-radius:50%;display:inline-grid;place-items:center;flex:none;border:1px solid var(--bt-line-2);font-size:11.5px;font-weight:600}
+.oc-guide-steps li[data-state=now]{color:var(--bt-ink);font-weight:500}
+.oc-guide-steps li[data-state=now] span{border-color:var(--bt-accent);color:var(--bt-accent)}
+.oc-guide-steps li[data-state=done] span{background:color-mix(in srgb,#16a34a 14%,transparent);border-color:transparent;color:#16a34a}
+.oc-guide-pane{display:flex;flex-direction:column;align-items:flex-start;gap:14px;padding:22px;border-radius:18px;border:.5px solid var(--bt-line-2);background:var(--bt-card);animation:oc-page-in .22s cubic-bezier(.2,0,0,1)}
+.oc-guide-pane h2{margin:0;font-size:19px;line-height:26px;font-weight:650}
+.oc-guide-pane>p{margin:-6px 0 0;font-size:14px;line-height:21px;color:var(--bt-ink-2)}
+.oc-guide-pane a:not(.oc-primary):not(.oc-secondary){color:var(--bt-accent)}
+.oc-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.oc-fine{margin:0;font-size:12.5px;color:var(--bt-ink-3)}
+.oc-numbered{list-style:none;counter-reset:oc-n;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;font-size:14px;color:var(--bt-ink-2)}
+.oc-numbered li{counter-increment:oc-n;display:flex;align-items:baseline;gap:10px}
+.oc-numbered li::before{content:counter(oc-n);flex:none;width:22px;height:22px;border-radius:7px;display:inline-grid;place-items:center;background:color-mix(in srgb,var(--bt-accent) 12%,transparent);color:var(--bt-accent);font-size:12px;font-weight:600}
+.oc-numbered code{padding:1px 6px;border-radius:6px;background:var(--bt-hover);font:13px ui-monospace,SFMono-Regular,Menlo,monospace}
+.oc-suggest{display:flex;align-items:center;gap:12px;width:100%;padding:10px 12px;border-radius:12px;background:color-mix(in srgb,var(--bt-accent) 9%,transparent);font-size:13.5px;box-sizing:border-box}
+.oc-suggest span{flex:1}
+.oc-brand{display:inline-flex;align-items:center;justify-content:center;height:40px;padding:0 18px;border:0;border-radius:12px;color:#fff;font:inherit;font-size:14px;font-weight:600;cursor:pointer}
+.oc-brand:disabled{opacity:.5;cursor:default}
+.oc-qr-row{display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap}
+.oc-qr-side{display:flex;flex-direction:column;align-items:flex-start;gap:12px;flex:1;min-width:220px}
+.oc-qr-side h2{margin:0}
+.oc-guide-pane .oc-seg{width:100%}
 .oc-steps{display:flex;gap:6px;list-style:none;margin:0;padding:0;font-size:13px;color:var(--bt-ink-3)}
 .oc-steps li{display:flex;align-items:center;gap:8px}
 .oc-steps li+li::before{content:"";width:28px;height:1px;background:var(--bt-line-2);margin-right:2px}
@@ -632,9 +654,7 @@ body[data-ds-dark-theme] .oc-ava{background:hsl(var(--oc-hue) 30% 26%);color:hsl
 .oc-compose-fail{color:color-mix(in srgb,#d97706 85%,var(--bt-ink));background:color-mix(in srgb,#f59e0b 12%,transparent)}
 .oc-bubble[data-sending]{opacity:.6}
 .oc-type:disabled{opacity:.5;cursor:not-allowed}
-.oc-type-cli{cursor:default}
-.oc-cli{display:block;width:100%;margin-top:4px;padding:8px 10px;border-radius:10px;background:var(--bt-hover);color:var(--bt-ink-2);font:11.5px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-all;user-select:all}
 .oc-qr-empty{display:grid;place-items:center;width:196px;height:196px}
-@media (max-width:720px){.oc-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.oc-seg{grid-template-columns:1fr}.oc-channels-in{padding:20px 16px 40px}.oc-head{flex-direction:column}}
-@media (prefers-reduced-motion:reduce){.oc-page,.oc-msg,.oc-flow,.oc-chart-bar{animation:none}.oc-card,.oc-type,.oc-filter{transition:none}}
+@media (max-width:720px){.oc-guide{grid-template-columns:1fr;gap:12px}.oc-guide-steps{flex-direction:row;flex-wrap:wrap;gap:4px 14px}.oc-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.oc-seg{grid-template-columns:1fr}.oc-channels-in{padding:20px 16px 40px}.oc-head{flex-direction:column}}
+@media (prefers-reduced-motion:reduce){.oc-page,.oc-msg,.oc-flow,.oc-guide-pane,.oc-chart-bar{animation:none}.oc-card,.oc-type,.oc-filter{transition:none}}
 `

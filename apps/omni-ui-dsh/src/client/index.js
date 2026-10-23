@@ -2,7 +2,9 @@ import { call } from './api.js'
 import { OmniMark, installFavicon } from './logo.js'
 import * as icons from './icons.js'
 import { setCanvasRenderer } from './canvas-slot.js'
-import { badges, botChildren, botSettings, headerButtons, mountShellInstallers, nav, onShell, toolCards } from './extend.js'
+import { badges, botChildren, botSettings, composerPacks, headerButtons, mountShellInstallers, nav, onShell, registerComposerPack, toolCards } from './extend.js'
+import { BUILTIN_PACKS, packCellSync, stepsAside } from './composer-packs.js'
+import { COMPOSER_PACK_CSS, packModelCell } from './composer-pack-cells.js'
 import { TASK_CSS } from './task-card.js'
 import { isHex, inkText, paintCss } from './inks.js'
 import { CHARACTERS, DEFAULT_MASK, MAIN_LOOK, SHAPES, markupCache, maskOf } from './characters.js'
@@ -60,7 +62,7 @@ export const omni = Object.freeze({
   // Copy in this plugin's namespace; addStrings brings a plugin's Chinese copy.
   t, addStrings, hostText, language, dateLocale,
   // The Bot surface: what runs while it is up, and what draws in its places.
-  onShell, toolCards, nav, badges, botChildren, headerButtons, botSettings, setCanvasRenderer,
+  onShell, toolCards, nav, badges, botChildren, headerButtons, botSettings, registerComposerPack, setCanvasRenderer,
   // Parts of the Bot surface a plugin's own views are drawn with.
   ui: Object.freeze({ icons, OmniMark, BotMark, MAIN_LOOK, CHARACTERS, relativeShort, createSource }),
   // The roster and actions of the running surface, or null before it runs.
@@ -821,8 +823,33 @@ export function apply(ctx) {
       for (const row of document.querySelectorAll('[data-bt-time]')) delete row.dataset.btTime
     }
   }
+  // Composer packs (composer-packs.js): the AI a Bot runs on decides what its composer
+  // offers. The model cell draws per Session; the permission cell steps aside (its
+  // registration withdrawn) while the Session in the main view runs on an AI whose pack
+  // shows another plugin's control there, such as Claude Code's permission modes.
+  const packEnv = { registrants: key => ctx.slots.entries(key).map(entry => entry.registrant) }
+  const shownSessionId = () => Object.values(ctx.sessions.list.getSnapshot().byId ?? {}).find(session => (session?.retainedBy?.mainView ?? 0) > 0)?.id
+  const PackModelCell = packModelCell(packEnv)
+  const installPackCell = (key, cell) => {
+    const sync = packCellSync({
+      register: () => shadow(key, { priority: BOT_PRIORITY }, Nothing),
+      wantHost: () => stepsAside({ roster: roster.getSnapshot(), sessionId: shownSessionId(), cell, key, env: packEnv }),
+    })
+    const offs = [
+      roster.subscribe(sync.sync),
+      ctx.sessions.list.subscribe(sync.sync),
+      composerPacks.source.subscribe(sync.sync),
+      ctx.slots.subscribe?.(key, sync.sync),
+    ]
+    sync.sync()
+    return () => {
+      for (const off of offs) off?.()
+      sync.dispose()
+    }
+  }
   const installConversation = () => [
     () => installUserTimes(),
+    () => installCompiledStyles(COMPOSER_PACK_CSS, 'composer-packs'),
     () => installCompiledStyles(CONVERSATION_CSS, 'conversation'),
     () => installMentions(),
     () => installAtMenu(),
@@ -845,11 +872,11 @@ export function apply(ctx) {
     // message spliced in mid-turn gets an event line from the step that reads it instead.
     () => shadow('conversation.chat.node', { key: 'context', priority: BOT_PRIORITY, locale: 'chat' }, Nothing),
     ...(canDrawUserMessages() ? ['user', 'steering'].map(key => () => shadow('conversation.chat.node', { key, priority: BOT_PRIORITY, locale: 'chat', inject: face }, UserMessageCell)) : []),
-    () => shadow('conversation.input.permission', { priority: BOT_PRIORITY }, Nothing),
+    () => installPackCell('conversation.input.permission', 'permission'),
     () => shadow('conversation.input.plan', { priority: BOT_PRIORITY }, Nothing),
-    // The composer carries no model picker or run statistics; a Bot's model lives
-    // in its details panel.
-    () => shadow('conversation.input.model', { priority: BOT_PRIORITY }, Nothing),
+    // The composer carries no run statistics, and DSH's model picker stays out: a Bot's
+    // model lives on the Bot. A pack that offers it draws Omni's own model menu here.
+    () => shadow('conversation.input.model', { priority: BOT_PRIORITY, inject: face }, PackModelCell),
     () => shadow('conversation.composer.dock', { id: 'activity', order: 0, priority: BOT_PRIORITY }, Nothing),
     () => shadow('conversation.composer.dock', { id: 'usage', order: 1, priority: BOT_PRIORITY }, Nothing),
     () => shadow('conversation.composer.dock', { id: 'btw', order: 2, priority: BOT_PRIORITY, inject: face }, BtwDock),
@@ -869,6 +896,10 @@ export function apply(ctx) {
   ctx.effect(() => installCompiledStyles(RETURN_CSS, 'return'), 'ds-bot: return styles')
   shadow('sidebar.footer.action', { id: 'bot-return', order: -300, inject: face }, BotReturn)
   ctx.effect(() => installFavicon(), 'ds-bot: Omni tab icon')
+  ctx.effect(() => {
+    const offs = BUILTIN_PACKS.map(pack => registerComposerPack(pack))
+    return () => { for (const off of offs) off() }
+  }, 'ds-bot: composer packs')
   currentFace = face
   ctx.effect(() => () => { if (currentFace === face) currentFace = null }, 'ds-bot: face for other Omni plugins')
 

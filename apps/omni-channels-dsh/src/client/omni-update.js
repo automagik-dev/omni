@@ -1,9 +1,16 @@
-import { createElement as h, useEffect, useRef, useState } from 'react'
+import { createElement as h, Fragment, useEffect, useRef, useState } from 'react'
 import { call, t } from './core.js'
+import { dismiss, dismissedFor, updateBar } from './update-bar.js'
 
 // Updating an Omni (src/host/omni-update.js): the app asks, the Omni asks its owner on
 // WhatsApp, and the owner's reply there runs it. An Omni from before that is updated where
-// it runs, with the command shown here to copy.
+// it runs, with the command shown here to copy. On the Channels page that is a slim bar.
+
+// A translated sentence with elements in it: each {name} in the template becomes parts[name].
+export function rich(template, parts) {
+  const marks = Object.fromEntries(Object.keys(parts).map(key => [key, `\uE000${key}\uE000`]))
+  return t(template, marks).split(/\uE000(\w+)\uE000/).map((piece, index) => (index % 2 === 1 ? h(Fragment, { key: index }, parts[piece]) : piece))
+}
 
 // A command to type in a terminal, with a button that copies it.
 export function CopyCommand({ command }) {
@@ -37,45 +44,65 @@ export function updateWords(status) {
 
 const CONFIRM_ON_WHATSAPP = 'Confirm on WhatsApp: your Omni sent you a code. Reply update and that code in your chat with yourself.'
 
-// Status, then the one action it allows. `id` is an Omni found on this computer; without
-// it, the linked Omni. `compact` shows nothing until there is an update to offer.
-export function UpdateOffer({ id, compact = false }) {
+// The slim bar on the Channels page (update-bar.js decides what it says): one action, and a ×
+// that hides it until the next version of this Omni.
+export function UpdateBar({ origin }) {
   const [status, setStatus] = useState(null)
+  const [dismissed, setDismissed] = useState(() => dismissedFor(origin))
+  const [asked, setAsked] = useState(false)
+  const [how, setHow] = useState(false)
   const [busy, setBusy] = useState(false)
-  const [asked, setAsked] = useState(null)
   const [problem, setProblem] = useState(null)
   const alive = useRef(true)
   useEffect(() => () => { alive.current = false }, [])
   useEffect(() => {
-    // The notice on the Channels page stays out of the way when the check itself fails.
-    call('omni-update-status', id ? { id } : {}).then((reply) => { if (alive.current) setStatus(reply) }, (error) => { if (alive.current && !compact) setProblem(error.message) })
-  }, [id, compact])
-
+    // The bar stays out of the way when the check itself fails.
+    call('omni-update-status', {}).then((reply) => { if (alive.current) setStatus(reply) }, () => {})
+  }, [origin])
+  const bar = updateBar(status, dismissed)
+  if (!bar) return null
+  const close = () => { dismiss(origin, bar.latest); setDismissed(bar.latest) }
   const ask = async () => {
     setBusy(true)
     setProblem(null)
     try {
-      const reply = await call('omni-update-request', { ...(id ? { id } : {}), version: status.latest })
-      if (alive.current) setAsked(reply)
+      await call('omni-update-request', { version: bar.latest })
+      if (alive.current) setAsked(true)
     } catch (error) {
       if (alive.current) setProblem(error.message)
     } finally {
       if (alive.current) setBusy(false)
     }
   }
-
-  if (compact && !['available', 'off', 'pending', 'updating'].includes(status?.state) && !asked && !problem) return null
-  const words = asked ? t(CONFIRM_ON_WHATSAPP) : updateWords(status)
-  return h('div', { className: `ox-update${compact ? ' ox-update-notice' : ''}`, role: 'status' },
-    words ? h('span', { className: 'ox-muted' }, words) : status === null && !problem ? h('span', { className: 'ox-muted' }, t('Checking for updates…')) : null,
-    !asked && status?.command && status.state !== 'available' ? h(CopyCommand, { command: status.command }) : null,
-    !asked && status?.state === 'available' ? h('button', { type: 'button', className: 'oc-primary', disabled: busy, onClick: ask }, busy ? t('Asking…') : t('Update to {version}', { version: status.latest })) : null,
+  let words
+  if (asked) words = t(CONFIRM_ON_WHATSAPP)
+  else if (bar.kind === 'available') {
+    const version = h('b', null, `Omni ${bar.latest}`)
+    words = bar.current ? rich('{version} is available · you\'re on {current}', { version, current: bar.current }) : rich('{version} is available', { version })
+  } else if (bar.kind === 'admin') words = rich('{version} is available. Its admin updates this Omni.', { version: h('b', null, `Omni ${bar.latest}`) })
+  else words = updateWords({ state: bar.kind, version: bar.version })
+  return h('div', { className: 'ox-bar', role: 'status', 'data-kind': bar.kind },
+    h('span', { className: 'ox-bar-dot', 'aria-hidden': true }),
+    h('span', { className: 'ox-bar-text' }, words),
+    !asked && bar.action === 'update' ? h('button', { type: 'button', className: 'oc-primary ox-bar-go', disabled: busy, onClick: ask }, busy ? t('Asking…') : t('Update')) : null,
+    bar.action === 'how' ? h('button', { type: 'button', className: 'oc-link', 'aria-expanded': how, onClick: () => setHow(value => !value) }, t('How')) : null,
+    bar.action !== 'none' ? h('button', { type: 'button', className: 'ox-bar-x', 'aria-label': t('Hide until the next version'), title: t('Hide until the next version'), onClick: close }, '×') : null,
+    how ? h('div', { className: 'ox-bar-how' }, bar.command
+      ? h(Fragment, null, h('span', null, t('Whoever runs this Omni updates it with:')), h(CopyCommand, { command: bar.command }))
+      : h('span', null, t('Ask whoever runs your Omni to update it.'))) : null,
     problem ? h('span', { className: 'ox-problem', role: 'alert' }, problem) : null)
 }
 
 export const OMNI_UPDATE_CSS = `
-.ox-update{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-top:6px}
-.ox-update-notice{margin:0 0 16px;padding:10px 14px;border:1px solid var(--bt-line);border-radius:12px;background:color-mix(in srgb,var(--bt-accent) 7%,transparent)}
+.ox-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin:0 0 6px;padding:9px 12px 9px 14px;border:1px solid var(--bt-line-2);border-radius:12px;background:var(--bt-card);font-size:13.5px}
+.ox-bar-dot{width:8px;height:8px;border-radius:50%;background:var(--bt-accent);flex:none}
+.ox-bar[data-kind=admin] .ox-bar-dot{background:var(--bt-ink-3)}
+.ox-bar-text{flex:1;min-width:200px;color:var(--bt-ink-2)}
+.ox-bar-text b{color:var(--bt-ink);font-weight:600}
+.ox-bar-go{height:30px!important;padding:0 12px!important;font-size:13px!important}
+.ox-bar-x{width:26px;height:26px;border:0;border-radius:8px;background:none;color:var(--bt-ink-3);font-size:18px;line-height:1;cursor:pointer}
+.ox-bar-x:hover{background:var(--bt-hover);color:var(--bt-ink)}
+.ox-bar-how{flex-basis:100%;display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 0 2px 20px;color:var(--bt-ink-2)}
 .ox-command{display:inline-flex;align-items:center;gap:8px}
 .ox-command code{padding:4px 8px;border-radius:8px;background:var(--bt-bg,rgba(0,0,0,.2));font:13px ui-monospace,SFMono-Regular,Menlo,monospace;user-select:all}
 .ox-copy{height:28px!important;padding:0 10px!important;font-size:12.5px!important}
