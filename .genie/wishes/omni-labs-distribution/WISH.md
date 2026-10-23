@@ -101,7 +101,7 @@ Publish Omni three ways from one new `labs` branch: a desktop app (Linux AppImag
 - Hand-written, additive, idempotent migration with a header comment and a journal entry (`make verify-migrations`).
 - No production hostnames, phone numbers, instance names or ops paths in the repo.
 - Conventional commits; author Felipe Rosa <felipe@namastex.ai>; `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
-- DSH pinned at 0.2.1-rc.2. Builds run with `DO_NOT_TRACK=1`.
+- DSH pinned at 0.2.1-rc.3. Builds run with `DO_NOT_TRACK=1`.
 - Electron renderer: contextIsolation on, sandbox on, nodeIntegration off, narrow preload, navigation allowlist.
 
 ## Execution Groups

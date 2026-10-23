@@ -2,7 +2,7 @@
 
 `@automagik/omni-ai-dsh` is the first thing a DeepSeek Harness (DSH) shows with Omni
 installed: the Omni octopus says hello, then helps you connect an AI. It adds no provider
-code. Every sign-in it offers is one DSH 0.2.1-rc.2 already ships, and every route it
+code. Every sign-in it offers is one DSH 0.2.1-rc.3 already ships, and every route it
 writes goes through DSH's own settings and credential store.
 
 ## What it does
