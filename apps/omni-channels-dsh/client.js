@@ -12967,7 +12967,8 @@ function foundRow(omni2, { mac = false, linked = false } = {}) {
   const port = portOf(omni2.url);
   const where = omni2.local ? port ? t("port {port}", { port }) : null : omni2.name && omni2.name !== "default" ? t("saved in your Omni CLI as {name}", { name: omni2.name }) : t("saved in your Omni CLI");
   const sub = [omni2.version ? `v${omni2.version}` : null, where].filter(Boolean).join(" · ");
-  const row = (badge, tone, action, note) => ({ title, sub, badge, tone, action, note });
+  const keyEntry = !linked && !omni2.hasKey && omni2.reachable !== false && ["too-old", "off", "unclaimed"].includes(omni2.pairing);
+  const row = (badge, tone, action, note) => ({ title, sub, badge, tone, action, note, keyEntry, keyHint: keyEntry && action === "elsewhere" });
   if (linked) return row(t("Connected"), "ok", null, null);
   if (omni2.local && omni2.reachable === false) return row(t("Not answering"), "muted", null, t("It is not answering right now."));
   if (omni2.updateTo) return row(t("Needs an update"), "warn", "reinstall", t("It runs an older Omni than this app. Updating takes about a minute and keeps its chats and channels."));
@@ -13005,6 +13006,30 @@ function Choice({ id, open, icon, accent, title, sub, badge, tone, onToggle, chi
       (0, import_react7.createElement)("span", { className: "ox-chev", "aria-hidden": true }, "›")
     ),
     open ? (0, import_react7.createElement)("div", { className: "ox-body", id: `ox-body-${id}` }, children) : null
+  );
+}
+function KeyEntry({ hint, disabled, onConnect }) {
+  const [open, setOpen] = (0, import_react7.useState)(false);
+  const [value, setValue] = (0, import_react7.useState)("");
+  if (!open) return (0, import_react7.createElement)("button", { type: "button", className: "ox-link", onClick: () => setOpen(true) }, t("Use it with an API key"));
+  const submit = (event) => {
+    event.preventDefault();
+    const key = value.trim();
+    if (key === "") return;
+    setValue("");
+    onConnect(key);
+  };
+  return (0, import_react7.createElement)(
+    "form",
+    { className: "ox-keyform", onSubmit: submit },
+    (0, import_react7.createElement)("p", { className: "ox-muted" }, t("Older Omnis can't approve this app. Paste its API key instead; it stays on this computer.")),
+    hint ? (0, import_react7.createElement)("p", { className: "ox-muted" }, t("Find the key where that app keeps its settings.")) : null,
+    (0, import_react7.createElement)(
+      "div",
+      { className: "ox-field" },
+      (0, import_react7.createElement)("input", { className: "ox-input", type: "password", autoComplete: "off", spellCheck: false, value, placeholder: t("API key"), "aria-label": t("API key for this Omni"), onChange: (event) => setValue(event.target.value) }),
+      (0, import_react7.createElement)("button", { type: "submit", className: "oc-primary", disabled: disabled || value.trim() === "" }, t("Connect"))
+    )
   );
 }
 var Linked = ({ text }) => (0, import_react7.createElement)("p", { className: "ox-linked", role: "status" }, (0, import_react7.createElement)("span", { "aria-hidden": true }, "✓"), text);
@@ -13178,7 +13203,13 @@ function ConnectOmni({ onPaired, embedded = false } = {}) {
     else if (terminal?.row === omni2.id) body = terminalOn(omni2.id);
     else {
       const action = view.action === "update" ? (0, import_react7.createElement)("div", null, primary(t("Update and connect"), () => openTerminal(omni2.id, "update", omni2.id)), whatRuns("omni update --yes")) : view.action === "reinstall" ? (0, import_react7.createElement)("div", null, primary(t("Update and connect"), () => openTerminal(omni2.id, "install")), whatRuns(`bun x --bun @automagik/omni@${omni2.updateTo} install --sandbox`)) : view.action === "use" ? primary(busy === omni2.id ? t("Connecting…") : t("Use it"), () => run(omni2.id, "omni-discover-use", { id: omni2.id })) : view.action === "connect" ? primary(busy === omni2.id ? t("Connecting…") : t("Connect"), () => run(omni2.id, "omni-discover-use", { id: omni2.id })) : view.action === "elsewhere" && !hasSandbox ? (0, import_react7.createElement)("button", { type: "button", className: "oc-ghost", onClick: () => setOpen(LOCAL) }, mac ? t("Run Omni on this Mac") : t("Run Omni on this computer")) : null;
-      body = (0, import_react7.createElement)("div", null, view.note ? (0, import_react7.createElement)("p", { className: "ox-muted" }, view.note) : null, action ? (0, import_react7.createElement)("div", { className: "ox-row ox-act" }, action) : null);
+      body = (0, import_react7.createElement)(
+        "div",
+        null,
+        view.note ? (0, import_react7.createElement)("p", { className: "ox-muted" }, view.note) : null,
+        action ? (0, import_react7.createElement)("div", { className: "ox-row ox-act" }, action) : null,
+        view.keyEntry ? (0, import_react7.createElement)(KeyEntry, { hint: view.keyHint, disabled: anyBusy, onConnect: (apiKey) => run(omni2.id, "omni-discover-key", { id: omni2.id, apiKey }) }) : null
+      );
     }
     return (0, import_react7.createElement)(Choice, { key: omni2.id, id: omni2.id, open: open === omni2.id, icon: "◉", title: view.title, sub: view.sub, badge: view.badge, tone: view.tone, onToggle: toggle(omni2.id) }, body);
   });
@@ -13288,6 +13319,8 @@ var OMNI_CONNECT_CSS = OMNI_UPDATE_CSS + OMNI_TERMINAL_CSS + `
 .ox-more{color:var(--bt-ink-2);font-size:12.5px;margin-top:8px}
 .ox-more summary{cursor:pointer}
 .ox-more code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--bt-ink)}
+.ox-link{align-self:flex-start;margin-top:8px;padding:0;border:0;background:none;color:var(--bt-accent);font:inherit;font-size:13px;cursor:pointer;text-decoration:underline;text-underline-offset:3px}
+.ox-keyform{display:flex;flex-direction:column;gap:8px;margin-top:10px}
 .ox-linked{display:flex;align-items:center;gap:10px;margin:0;color:#4fe0a8;font-weight:600}
 @media (max-width:720px){.ox-card{flex-direction:column}.ox-qr{align-self:center}.ox-body{padding-left:16px}}
 `;
@@ -14489,6 +14522,11 @@ var STRINGS = {
   "Disconnect from {origin}? Your Bots stop seeing its channels until you connect again.": "要断开与 {origin} 的连接吗？在你重新连接之前，你的 Bot 将看不到它的渠道。",
   "Looking for your Omni…": "正在查找你的 Omni…",
   "This page shows sample data until this DSH is linked to your Omni.": "在这个 DSH 关联到你的 Omni 之前，此页面显示示例数据。",
+  "Use it with an API key": "用 API 密钥使用它",
+  "Older Omnis can't approve this app. Paste its API key instead; it stays on this computer.": "较旧的 Omni 无法批准这个应用。请改为粘贴它的 API 密钥；密钥只保存在这台电脑上。",
+  "Find the key where that app keeps its settings.": "在那个应用保存设置的地方找到密钥。",
+  "API key": "API 密钥",
+  "API key for this Omni": "这个 Omni 的 API 密钥",
   "Omni on this computer": "这台电脑上的 Omni",
   "Use it": "使用它",
   "Sign-in from devices is off on this Omni.": "这个 Omni 已关闭设备登录。",

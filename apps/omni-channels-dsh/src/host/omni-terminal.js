@@ -25,6 +25,8 @@ const IDLE_MS = 30 * 60_000
 const GRACE_MS = 2000
 // What the shell exits with when the person backs out of the prompt (Ctrl-C, Ctrl-D).
 export const CANCELLED = 130
+// zsh's vared dies with the terminal's SIGINT on Ctrl-C, leaving no exit code: a cancel too.
+export const codeOf = outcome => outcome.exitCode ?? (outcome.signal === 'SIGINT' ? CANCELLED : 128)
 
 const invalid = message => Object.assign(new Error(message), { code: 'bot/invalid' })
 const refused = message => Object.assign(new Error(message), { code: 'bot/refused' })
@@ -96,7 +98,19 @@ export function install(rt, deps = {}) {
   const version = deps.version ?? PLUGIN_VERSION
   const fetchImpl = deps.fetch ?? ((...args) => fetch(...args))
   const spawnPipe = deps.spawn ?? spawnProcess
-  const subprocess = () => (deps.subprocess !== undefined ? deps.subprocess : subprocessOf(rt.ctx))
+  // DSH's process service, while it is there: this plugin does not require it, so it reads it
+  // from a fiber of its own, as the team reads its optional services (schedules.js there).
+  let service = null
+  if (deps.subprocess === undefined) {
+    const attach = (sub) => {
+      const own = sub.subprocess
+      service = own
+      sub.effect(() => () => { if (service === own) service = null }, 'omni-channels: terminal service')
+    }
+    if (typeof rt.ctx.inject === 'function') rt.ctx.inject(['subprocess'], attach)
+    else service = subprocessOf(rt.ctx)
+  }
+  const subprocess = () => (deps.subprocess !== undefined ? deps.subprocess : service)
   const findFound = deps.foundOmni ?? (id => foundOmni(id))
   const managerFor = deps.managerOf ?? (url => managerOf(url, { env, home }))
   const link = deps.linkWithKey ?? ((url, key) => linkWithKey(rt, url, key))
@@ -193,7 +207,7 @@ export function install(rt, deps = {}) {
         entry.handle.output.setEncoding?.('utf8')
         entry.handle.output.on('data', chunk => append(entry, String(chunk)))
         entry.state = 'ready'
-        entry.handle.done.then(outcome => finish(entry, outcome.exitCode ?? 128), () => finish(entry, 1))
+        entry.handle.done.then(outcome => finish(entry, codeOf(outcome)), () => finish(entry, 1))
         return
       } catch (error) {
         rt.warn?.('omni-channels: no terminal for %s, running on pipes: %s', entry.kind, error?.message ?? error)

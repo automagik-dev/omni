@@ -35,6 +35,7 @@ test('an old Omni the Omni CLI runs offers Update and connect; one another app r
   assert.deepEqual(ui.foundRow(local({ manager: 'cli' }), { mac: true }), {
     title: 'Omni on this Mac', sub: 'v2.261006.2 · port 8882', badge: 'Needs an update', tone: 'warn', action: 'update',
     note: 'It is too old to pair with this app. Updating takes about a minute and keeps your chats and channels.',
+    keyEntry: true, keyHint: false,
   })
   // The owner's Mac: the Yours project runs this one.
   const theirs = ui.foundRow(local(), { mac: true })
@@ -53,6 +54,19 @@ test('each found Omni gets the one action that fits it', () => {
   assert.deepEqual(ui.foundRow(local({ manager: 'cli' }), { linked: true }).badge, 'Connected')
   const remote = ui.foundRow({ ...local(), url: 'https://omni.example.com', local: false, source: 'cli-server', name: 'work', manager: null, pairing: 'unknown' })
   assert.deepEqual([remote.title, remote.sub], ['omni.example.com', 'v2.261006.2 · saved in your Omni CLI as work'])
+})
+
+test('an Omni that cannot approve this app also takes a pasted API key; another app\'s gets the hint where to find it', () => {
+  const theirs = ui.foundRow(local(), { mac: true })
+  assert.deepEqual([theirs.keyEntry, theirs.keyHint], [true, true])
+  const cli = ui.foundRow(local({ manager: 'cli' }))
+  assert.deepEqual([cli.action, cli.keyEntry, cli.keyHint], ['update', true, false])
+  assert.equal(ui.foundRow(local({ pairing: 'off', version: '2.261023.16' })).keyEntry, true)
+  // One that pairs, one this computer has the key for, or one not answering: no key form.
+  assert.equal(ui.foundRow(local({ pairing: 'available', canPair: true })).keyEntry, false)
+  assert.equal(ui.foundRow(local({ hasKey: true })).keyEntry, false)
+  assert.equal(ui.foundRow(local({ reachable: false })).keyEntry, false)
+  assert.equal(ui.foundRow(local(), { linked: true }).keyEntry, false)
 })
 
 test('the first row with something to do opens; with none, the remote row does', () => {

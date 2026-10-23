@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { test } from 'node:test'
 import { managerOf } from '../src/host/omni-discover.js'
-import { CANCELLED, install, promptArgv, shellOrder } from '../src/host/omni-terminal.js'
+import { CANCELLED, codeOf, install, promptArgv, shellOrder } from '../src/host/omni-terminal.js'
 
 const SANDBOX_KEY = 'omni_sk_sandbox_secret'
 const FOUND_KEY = 'omni_sk_cli_secret'
@@ -215,6 +215,12 @@ test('without a terminal from DSH, the command waits shown and runs on pipes onl
   assert.equal(reply.state, 'done')
   assert.match(reply.data, /done\r\n/)
   assert.deepEqual(links, [['http://127.0.0.1:18882', SANDBOX_KEY]])
+})
+
+test('Ctrl-C at zsh\'s prompt ends the shell by SIGINT, which reads as a cancel', () => {
+  assert.equal(codeOf({ exitCode: null, signal: 'SIGINT' }), CANCELLED)
+  assert.equal(codeOf({ exitCode: null, signal: 'SIGKILL' }), 128)
+  assert.equal(codeOf({ exitCode: 0, signal: null }), 0)
 })
 
 test('macOS holds the command in zsh (its bash has no read -i), Linux in bash', () => {

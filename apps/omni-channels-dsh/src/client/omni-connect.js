@@ -73,7 +73,10 @@ export function foundRow(omni, { mac = false, linked = false } = {}) {
   const where = omni.local ? (port ? t('port {port}', { port }) : null)
     : omni.name && omni.name !== 'default' ? t('saved in your Omni CLI as {name}', { name: omni.name }) : t('saved in your Omni CLI')
   const sub = [omni.version ? `v${omni.version}` : null, where].filter(Boolean).join(' · ')
-  const row = (badge, tone, action, note) => ({ title, sub, badge, tone, action, note })
+  // An Omni that cannot approve this app takes a pasted API key instead (`keyEntry`); `keyHint`
+  // when another app runs it, so its key is wherever that app keeps its settings.
+  const keyEntry = !linked && !omni.hasKey && omni.reachable !== false && ['too-old', 'off', 'unclaimed'].includes(omni.pairing)
+  const row = (badge, tone, action, note) => ({ title, sub, badge, tone, action, note, keyEntry, keyHint: keyEntry && action === 'elsewhere' })
   if (linked) return row(t('Connected'), 'ok', null, null)
   if (omni.local && omni.reachable === false) return row(t('Not answering'), 'muted', null, t('It is not answering right now.'))
   if (omni.updateTo) return row(t('Needs an update'), 'warn', 'reinstall', t('It runs an older Omni than this app. Updating takes about a minute and keeps its chats and channels.'))
@@ -118,6 +121,27 @@ function Choice({ id, open, icon, accent, title, sub, badge, tone, onToggle, chi
       badge ? h('span', { className: `ox-badge ox-${tone}` }, badge) : null,
       h('span', { className: 'ox-chev', 'aria-hidden': true }, '›')),
     open ? h('div', { className: 'ox-body', id: `ox-body-${id}` }, children) : null)
+}
+
+// A pasted API key for an Omni that cannot approve this app. It goes to this host, which
+// checks it with that Omni and keeps it (omni-discover.js); nothing sends it back here.
+function KeyEntry({ hint, disabled, onConnect }) {
+  const [open, setOpen] = useState(false)
+  const [value, setValue] = useState('')
+  if (!open) return h('button', { type: 'button', className: 'ox-link', onClick: () => setOpen(true) }, t('Use it with an API key'))
+  const submit = (event) => {
+    event.preventDefault()
+    const key = value.trim()
+    if (key === '') return
+    setValue('')
+    onConnect(key)
+  }
+  return h('form', { className: 'ox-keyform', onSubmit: submit },
+    h('p', { className: 'ox-muted' }, t('Older Omnis can\'t approve this app. Paste its API key instead; it stays on this computer.')),
+    hint ? h('p', { className: 'ox-muted' }, t('Find the key where that app keeps its settings.')) : null,
+    h('div', { className: 'ox-field' },
+      h('input', { className: 'ox-input', type: 'password', autoComplete: 'off', spellCheck: false, value, placeholder: t('API key'), 'aria-label': t('API key for this Omni'), onChange: event => setValue(event.target.value) }),
+      h('button', { type: 'submit', className: 'oc-primary', disabled: disabled || value.trim() === '' }, t('Connect'))))
 }
 
 const Linked = ({ text }) => h('p', { className: 'ox-linked', role: 'status' }, h('span', { 'aria-hidden': true }, '✓'), text)
@@ -299,7 +323,10 @@ export function ConnectOmni({ onPaired, embedded = false } = {}) {
             : view.action === 'connect' ? primary(busy === omni.id ? t('Connecting…') : t('Connect'), () => run(omni.id, 'omni-discover-use', { id: omni.id }))
               : view.action === 'elsewhere' && !hasSandbox ? h('button', { type: 'button', className: 'oc-ghost', onClick: () => setOpen(LOCAL) }, mac ? t('Run Omni on this Mac') : t('Run Omni on this computer'))
                 : null
-      body = h('div', null, view.note ? h('p', { className: 'ox-muted' }, view.note) : null, action ? h('div', { className: 'ox-row ox-act' }, action) : null)
+      body = h('div', null,
+        view.note ? h('p', { className: 'ox-muted' }, view.note) : null,
+        action ? h('div', { className: 'ox-row ox-act' }, action) : null,
+        view.keyEntry ? h(KeyEntry, { hint: view.keyHint, disabled: anyBusy, onConnect: apiKey => run(omni.id, 'omni-discover-key', { id: omni.id, apiKey }) }) : null)
     }
     return h(Choice, { key: omni.id, id: omni.id, open: open === omni.id, icon: '◉', title: view.title, sub: view.sub, badge: view.badge, tone: view.tone, onToggle: toggle(omni.id) }, body)
   })
@@ -385,6 +412,8 @@ export const OMNI_CONNECT_CSS = OMNI_UPDATE_CSS + OMNI_TERMINAL_CSS + `
 .ox-more{color:var(--bt-ink-2);font-size:12.5px;margin-top:8px}
 .ox-more summary{cursor:pointer}
 .ox-more code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--bt-ink)}
+.ox-link{align-self:flex-start;margin-top:8px;padding:0;border:0;background:none;color:var(--bt-accent);font:inherit;font-size:13px;cursor:pointer;text-decoration:underline;text-underline-offset:3px}
+.ox-keyform{display:flex;flex-direction:column;gap:8px;margin-top:10px}
 .ox-linked{display:flex;align-items:center;gap:10px;margin:0;color:#4fe0a8;font-weight:600}
 @media (max-width:720px){.ox-card{flex-direction:column}.ox-qr{align-self:center}.ox-body{padding-left:16px}}
 `

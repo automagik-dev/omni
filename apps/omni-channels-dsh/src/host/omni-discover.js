@@ -40,6 +40,9 @@ const Health = z.object({ version: text(64).optional() })
 const LoginStatus = z.object({ data: z.object({ claimed: z.boolean().optional() }).optional() })
 const Validated = z.object({ data: z.object({ valid: z.literal(true), scopes: z.array(text(200)).max(500).optional(), credential: z.object({ expiresAt: text(64).nullable().optional() }).optional() }) })
 const UsePayload = z.object({ id: z.string().regex(/^[a-f0-9]{16}$/) })
+// A key the person pastes for an Omni that cannot approve this app: one unbroken string.
+const KeyPayload = z.object({ id: z.string().regex(/^[a-f0-9]{16}$/), apiKey: z.string().trim().min(8).max(4096).regex(/^\S+$/) }).strict()
+const Refusal = z.object({ error: z.object({ message: text(500).optional() }).optional() })
 
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]'])
 export const isLoopback = url => LOOPBACK.has(new URL(url).hostname)
@@ -214,7 +217,8 @@ export async function linkWithKey(rt, url, key) {
   } catch {
     throw refused(`Could not reach Omni at ${url}`)
   }
-  if (reply.status === 401 || reply.status === 403) return { status: 'refused' }
+  // Omni's own words for a key it refuses, when it gives them.
+  if (reply.status === 401 || reply.status === 403) return { status: 'refused', message: Refusal.safeParse(await reply.json().catch(() => null)).data?.error?.message ?? null }
   const valid = Validated.safeParse(await reply.json().catch(() => null))
   if (reply.status !== 200 || !valid.success) throw refused(`Omni answered ${reply.status} at ${new URL(url).host}`)
   await rt.saveOmniLink({
@@ -230,6 +234,19 @@ export async function linkWithKey(rt, url, key) {
 }
 
 export function install(rt) {
+  // An Omni that cannot approve this app (one from before device sign-in, or with it off)
+  // takes its API key instead, pasted by the person: checked with that Omni and kept like
+  // "Use it" keeps one. The key goes no further than this host.
+  async function useKey(body) {
+    const parsed = KeyPayload.safeParse(body)
+    if (!parsed.success) throw invalid('Paste the whole API key.')
+    const omni = foundOmni(parsed.data.id)
+    if (!omni) throw refused('That Omni is not there any more. Look again.')
+    const linked = await linkWithKey(rt, omni.url, parsed.data.apiKey)
+    if (linked.status !== 'paired') throw refused(linked.message ? `Omni did not accept that key: ${linked.message}` : 'Omni did not accept that key.')
+    return linked
+  }
+
   async function use(body) {
     const parsed = UsePayload.safeParse(body)
     if (!parsed.success) throw invalid('Pick one of the Omnis found on this computer')
@@ -256,6 +273,7 @@ export function install(rt) {
     'omni-discover': async () => ({ omnis: await discover(), sandbox: { home: sandboxHome(), version: PLUGIN_VERSION } }),
     'omni-link-info': linkInfo,
     'omni-discover-use': use,
+    'omni-discover-key': useKey,
   }
   rt.omniDiscoverEndpoint = (endpoint, body) => endpoints[endpoint](body)
   for (const [name, run] of Object.entries(endpoints)) {

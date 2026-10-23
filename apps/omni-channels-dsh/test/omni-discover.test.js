@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, test } from 'node:test'
@@ -185,6 +185,37 @@ test('a key the Omni refuses, or no key at all, signs this device in there inste
   assert.equal(noKey.pairing.origin, 'lab.example.com')
   await assert.rejects(rt.omniDiscoverEndpoint('omni-discover-use', { id: 'nope' }), { code: 'bot/invalid' })
   await assert.rejects(rt.omniDiscoverEndpoint('omni-discover-use', { id: '0123456789abcdef' }), { code: 'bot/refused' })
+})
+
+const PASTED_KEY = 'omni_sk_pasted_by_hand'
+
+test('a pasted API key for an Omni that cannot approve this app links it like Use it, and stays on the host', async (t) => {
+  const { rt, asked } = host(t, json => json(200, { data: { valid: true, scopes: ['*'], credential: { expiresAt: null } } }))
+  const { omnis } = await rt.omniDiscoverEndpoint('omni-discover')
+  const local = omnis.find(omni => omni.local)
+  const reply = await rt.omniDiscoverEndpoint('omni-discover-key', { id: local.id, apiKey: ` ${PASTED_KEY} ` })
+  assert.deepEqual(reply, { status: 'paired', origin: 'localhost:8882' })
+  assert.ok(asked.some(entry => entry.path === '/api/v2/auth/validate' && entry.key === PASTED_KEY))
+  assert.equal(JSON.parse(readFileSync(join(rt.home, LINK_FILE), 'utf8')).key, PASTED_KEY)
+  assert.equal(JSON.stringify(reply).includes(PASTED_KEY), false)
+  assert.equal(JSON.stringify(await rt.omniLinkEndpoint('omni-link')).includes(PASTED_KEY), false)
+  assert.equal(JSON.stringify(await rt.omniDiscoverEndpoint('omni-discover')).includes(PASTED_KEY), false)
+})
+
+test('a pasted key the Omni refuses shows the Omni\'s own words, links nothing, and never echoes the key', async (t) => {
+  const { rt } = host(t, json => json(401, { error: { code: 'UNAUTHORIZED', message: 'Invalid API key' } }))
+  const { omnis } = await rt.omniDiscoverEndpoint('omni-discover')
+  const local = omnis.find(omni => omni.local)
+  await assert.rejects(rt.omniDiscoverEndpoint('omni-discover-key', { id: local.id, apiKey: PASTED_KEY }), (error) => {
+    assert.equal(error.code, 'bot/refused')
+    assert.equal(error.message, 'Omni did not accept that key: Invalid API key')
+    assert.equal(error.message.includes(PASTED_KEY), false)
+    return true
+  })
+  assert.equal(existsSync(join(rt.home, LINK_FILE)), false)
+  for (const body of [{ id: local.id, apiKey: 'short' }, { id: local.id, apiKey: 'has a space inside it' }, { id: local.id }, { id: local.id, apiKey: PASTED_KEY, extra: 1 }]) {
+    await assert.rejects(rt.omniDiscoverEndpoint('omni-discover-key', body), { code: 'bot/invalid' }, JSON.stringify(body))
+  }
 })
 
 const GRANT = 'Zx81_kq-Pz0aBcD9eF12-_Qw'
