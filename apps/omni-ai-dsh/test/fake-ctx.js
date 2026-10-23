@@ -12,7 +12,8 @@ export function mergeLayers(under, over) {
 }
 
 // `env` holds references DSH would read from the environment rather than its own store.
-export function fakeContext({ entries = {}, credentials = {}, records = [], services = {}, env = {} } = {}) {
+// `recordValues` are the stored records a plugin reads whole (a sign-in's grant), by key.
+export function fakeContext({ entries = {}, credentials = {}, records = [], recordValues = {}, services = {}, env = {} } = {}) {
   const forms = new Map(Object.entries(entries).map(([ns, value]) => [ns, { value: structuredClone(value), revision: 3 }]))
   const secrets = new Map(Object.entries(credentials))
   const stored = new Set(records)
@@ -74,7 +75,8 @@ export function fakeContext({ entries = {}, credentials = {}, records = [], serv
       },
       resolve: async ref => (secrets.has(ref) ? { value: secrets.get(ref), source: 'file' } : undefined),
       describe: async ref => (secrets.has(ref) ? { configured: true, source: 'file', writable: true } : Object.hasOwn(env, ref) ? { configured: true, source: 'env', writable: true } : { configured: false, writable: true }),
-      describeRecord: async key => ({ configured: stored.has(key), writable: true }),
+      describeRecord: async key => ({ configured: stored.has(key) || Object.hasOwn(recordValues, key), writable: true }),
+      readRecord: async key => (Object.hasOwn(recordValues, key) ? structuredClone(recordValues[key]) : undefined),
     },
     connection: {
       fetch: {

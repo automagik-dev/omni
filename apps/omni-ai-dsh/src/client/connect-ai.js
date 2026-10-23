@@ -291,7 +291,7 @@ export function ConnectAiStep(props) {
 
   return h(Stage, {
     title: 'Turn on your AIs',
-    speech: count > 0 ? 'Turn on everything you have. More brains, more Omni.' : 'Now give me a brain. Turn on every AI you have; you can change it any time.',
+    speech: count > 0 ? `Turn on everything you have. More brains, more ${state.companionName ?? 'Omni'}.` : 'Now give me a brain. Turn on every AI you have; you can change it any time.',
     at: 'omni-connect-ai',
     glitching,
   },

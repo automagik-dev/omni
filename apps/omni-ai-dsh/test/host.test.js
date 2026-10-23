@@ -17,13 +17,16 @@ function host({ entries = withPiAi(), gateway = fakeGateway({ body: MODELS }), c
 }
 const everything = fake => JSON.stringify([fake.updates, [...fake.routes].map(route => route.path), fake.logs, fake.valueOf('llm-pi-ai'), fake.valueOf('omni-ai')])
 
-test('the plugin declares its entry, its services, and three live done flags', () => {
+test('the plugin declares its entry, its services, and its live onboarding fields', () => {
   assert.equal(plugin.name, 'omni-ai')
   assert.deepEqual(plugin.inject, ['settings', 'credentials', 'connection'])
   const { uid, refs } = plugin.Config.toJSON()
   const fields = refs[uid].dict
-  assert.deepEqual(Object.keys(fields).sort(), ['connectAiDone', 'connectOmniSkipped', 'welcomeDone'])
-  for (const ref of Object.values(fields)) assert.deepEqual(refs[ref], { type: 'boolean', meta: { volatile: true } })
+  const flags = ['companionDone', 'connectAiDone', 'connectOmniSkipped', 'teamDone', 'teamGenie', 'teamOmni', 'welcomeDone']
+  const texts = ['companionColor', 'companionImage', 'companionName', 'companionShape', 'teamOmniAbilities']
+  assert.deepEqual(Object.keys(fields).sort(), [...flags, ...texts].sort())
+  for (const name of flags) assert.deepEqual(refs[fields[name]], { type: 'boolean', meta: { volatile: true } })
+  for (const name of texts) assert.deepEqual(refs[fields[name]], { type: 'string', meta: { volatile: true } })
 })
 
 test('apply serves one POST route and keeps the flags off the generated settings pages', () => {
@@ -153,10 +156,10 @@ test('a gateway that answers /models with more than 2 MB is not read past it', a
 
 test('done writes the step flag in the plugin entry', async () => {
   const fake = host()
-  assert.deepEqual(await fake.handle('done', { stepId: 'omni-welcome' }), { ok: true, value: { welcomeDone: true } })
+  assert.deepEqual(await fake.handle('done', { stepId: 'omni-companion' }), { ok: true, value: { companionDone: true } })
   assert.deepEqual((await fake.handle('done', { stepId: 'omni-connect' })).value, { connectOmniSkipped: true })
-  assert.deepEqual(fake.updates.map(update => [update.ns, update.patch]), [['omni-ai', { welcomeDone: true }], ['omni-ai', { connectOmniSkipped: true }]])
-  assert.deepEqual(fake.valueOf('omni-ai'), { welcomeDone: true, connectOmniSkipped: true })
+  assert.deepEqual(fake.updates.map(update => [update.ns, update.patch]), [['omni-ai', { companionDone: true }], ['omni-ai', { connectOmniSkipped: true }]])
+  assert.deepEqual(fake.valueOf('omni-ai'), { companionDone: true, connectOmniSkipped: true })
   for (const stepId of ['toString', 'deepseek-official', undefined]) {
     assert.equal((await fake.handle('done', { stepId })).error.code, 'omni-ai/invalid')
   }
@@ -165,7 +168,10 @@ test('done writes the step flag in the plugin entry', async () => {
 
 test('state reports the flags and whether an AI is already connected', async () => {
   const fresh = await host().handle('state')
-  assert.deepEqual(fresh.value, { welcomeDone: false, connectAiDone: false, connectOmniSkipped: false, deepseek: false, piAiRoutes: [], aiConnected: false })
+  assert.deepEqual(JSON.parse(JSON.stringify(fresh.value)), {
+    companionDone: false, teamDone: false, welcomeDone: false, connectAiDone: false, connectOmniSkipped: false,
+    companionImage: false, teamOmni: true, teamGenie: false, deepseek: false, piAiRoutes: [], aiConnected: false,
+  })
 
   const fake = host({ entries: { 'omni-ai': { welcomeDone: true, connectAiDone: true }, 'llm-pi-ai': { providers: { zai: { apiKeyEnv: 'ZAI_API_KEY' } } } }, credentials: { ZAI_API_KEY: 'x' } })
   const value = (await fake.handle('state')).value

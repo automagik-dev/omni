@@ -478,21 +478,21 @@ function sl(s15, t, e, i, r, n) {
   for (let l = 0; l < s15.length - 1; l++) {
     let a = l, u = s15.get(++a);
     if (!u.isWrapped) continue;
-    let h6 = [s15.get(l)];
-    for (; a < s15.length && u.isWrapped; ) h6.push(u), u = s15.get(++a);
+    let h8 = [s15.get(l)];
+    for (; a < s15.length && u.isWrapped; ) h8.push(u), u = s15.get(++a);
     if (!n && i >= l && i < a) {
-      l += h6.length - 1;
+      l += h8.length - 1;
       continue;
     }
-    let c = 0, d = ri(h6, c, t), _ = 1, p = 0;
-    for (; _ < h6.length; ) {
-      let f = ri(h6, _, t), A = f - p, R = e - d, O = Math.min(A, R);
-      h6[c].copyCellsFrom(h6[_], p, d, O, false), d += O, d === e && (c++, d = 0), p += O, p === f && (_++, p = 0), d === 0 && c !== 0 && h6[c - 1].getWidth(e - 1) === 2 && (h6[c].copyCellsFrom(h6[c - 1], e - 1, d++, 1, false), h6[c - 1].setCell(e - 1, r));
+    let c = 0, d = ri(h8, c, t), _ = 1, p = 0;
+    for (; _ < h8.length; ) {
+      let f = ri(h8, _, t), A = f - p, R = e - d, O = Math.min(A, R);
+      h8[c].copyCellsFrom(h8[_], p, d, O, false), d += O, d === e && (c++, d = 0), p += O, p === f && (_++, p = 0), d === 0 && c !== 0 && h8[c - 1].getWidth(e - 1) === 2 && (h8[c].copyCellsFrom(h8[c - 1], e - 1, d++, 1, false), h8[c - 1].setCell(e - 1, r));
     }
-    h6[c].replaceCells(d, e, r);
+    h8[c].replaceCells(d, e, r);
     let m = 0;
-    for (let f = h6.length - 1; f > 0 && (f > c || h6[f].getTrimmedLength() === 0); f--) m++;
-    m > 0 && (o.push(l + h6.length - m), o.push(m)), l += h6.length - 1;
+    for (let f = h8.length - 1; f > 0 && (f > c || h8[f].getTrimmedLength() === 0); f--) m++;
+    m > 0 && (o.push(l + h8.length - m), o.push(m)), l += h8.length - 1;
   }
   return o;
 }
@@ -522,8 +522,8 @@ function al(s15, t, e) {
     n > a && (n -= a, o++);
     let u = s15[o].getWidth(n - 1) === 2;
     u && n--;
-    let h6 = u ? e - 1 : e;
-    i.push(h6), l += h6;
+    let h8 = u ? e - 1 : e;
+    i.push(h8), l += h8;
   }
   return i;
 }
@@ -812,23 +812,23 @@ var init_xterm = __esm({
       decode(t, e) {
         let i = t.length;
         if (!i) return 0;
-        let r = 0, n, o, l, a, u = 0, h6 = 0;
+        let r = 0, n, o, l, a, u = 0, h8 = 0;
         if (this.interim[0]) {
           let _ = false, p = this.interim[0];
           p &= (p & 224) === 192 ? 31 : (p & 240) === 224 ? 15 : 7;
           let m = 0, f;
           for (; (f = this.interim[++m] & 63) && m < 4; ) p <<= 6, p |= f;
           let A = (this.interim[0] & 224) === 192 ? 2 : (this.interim[0] & 240) === 224 ? 3 : 4, R = A - m;
-          for (; h6 < R; ) {
-            if (h6 >= i) return 0;
-            if (f = t[h6++], (f & 192) !== 128) {
-              h6--, _ = true;
+          for (; h8 < R; ) {
+            if (h8 >= i) return 0;
+            if (f = t[h8++], (f & 192) !== 128) {
+              h8--, _ = true;
               break;
             } else this.interim[m++] = f, p <<= 6, p |= f & 63;
           }
-          _ || (A === 2 ? p < 128 ? h6-- : e[r++] = p : A === 3 ? p < 2048 || p >= 55296 && p <= 57343 || p === 65279 || (e[r++] = p) : p < 65536 || p > 1114111 || (e[r++] = p)), this.interim.fill(0);
+          _ || (A === 2 ? p < 128 ? h8-- : e[r++] = p : A === 3 ? p < 2048 || p >= 55296 && p <= 57343 || p === 65279 || (e[r++] = p) : p < 65536 || p > 1114111 || (e[r++] = p)), this.interim.fill(0);
         }
-        let c = i - 4, d = h6;
+        let c = i - 4, d = h8;
         for (; d < i; ) {
           for (; d < c && !((n = t[d]) & 128) && !((o = t[d + 1]) & 128) && !((l = t[d + 2]) & 128) && !((a = t[d + 3]) & 128); ) e[r++] = n, e[r++] = o, e[r++] = l, e[r++] = a, d += 4;
           if (n = t[d++], n < 128) e[r++] = n;
@@ -1113,17 +1113,17 @@ var init_xterm = __esm({
           e(void 0);
           return;
         }
-        let r = [], n = this._optionsService.rawOptions.linkHandler, o = new q(), l = i.getTrimmedLength(), a = -1, u = -1, h6 = false;
+        let r = [], n = this._optionsService.rawOptions.linkHandler, o = new q(), l = i.getTrimmedLength(), a = -1, u = -1, h8 = false;
         for (let c = 0; c < l; c++) if (!(u === -1 && !i.hasContent(c))) {
           if (i.loadCell(c, o), o.hasExtendedAttrs() && o.extended.urlId) if (u === -1) {
             u = c, a = o.extended.urlId;
             continue;
-          } else h6 = o.extended.urlId !== a;
-          else u !== -1 && (h6 = true);
-          if (h6 || u !== -1 && c === l - 1) {
+          } else h8 = o.extended.urlId !== a;
+          else u !== -1 && (h8 = true);
+          if (h8 || u !== -1 && c === l - 1) {
             let d = this._oscLinkService.getLinkData(a)?.uri;
             if (d) {
-              let _ = { start: { x: u + 1, y: t }, end: { x: c + (!h6 && c === l - 1 ? 1 : 0), y: t } }, p = false;
+              let _ = { start: { x: u + 1, y: t }, end: { x: c + (!h8 && c === l - 1 ? 1 : 0), y: t } }, p = false;
               if (!n?.allowNonHttpProtocols) try {
                 let m = new URL(d);
                 ["http:", "https:"].includes(m.protocol) || (p = true);
@@ -1132,7 +1132,7 @@ var init_xterm = __esm({
               }
               p || r.push({ text: d, range: _, activate: (m, f) => n ? n.activate(m, f, _) : Ol(m, f), hover: (m, f) => n?.hover?.(m, f, _), leave: (m, f) => n?.leave?.(m, f, _) });
             }
-            h6 = false, o.hasExtendedAttrs() && o.extended.urlId ? (u = c, a = o.extended.urlId) : (u = -1, a = -1);
+            h8 = false, o.hasExtendedAttrs() && o.extended.urlId ? (u = c, a = o.extended.urlId) : (u = -1, a = -1);
           }
         }
         e(r);
@@ -1375,10 +1375,10 @@ var init_xterm = __esm({
         return false;
       }
       O.some = u;
-      function h6(I, k) {
+      function h8(I, k) {
         for (let P of I) if (k(P)) return P;
       }
-      O.find = h6;
+      O.find = h8;
       function* c(I, k) {
         for (let P of I) k(P) && (yield P);
       }
@@ -1466,29 +1466,29 @@ var init_xterm = __esm({
         else {
           let a = /* @__PURE__ */ new Map(), u = [...this.livingDisposables.values()].filter((c) => c.source !== null && !this.getRootParent(c, a).isSingleton);
           if (u.length === 0) return;
-          let h6 = new Set(u.map((c) => c.value));
-          if (i = u.filter((c) => !(c.parent && h6.has(c.parent))), i.length === 0) throw new Error("There are cyclic diposable chains!");
+          let h8 = new Set(u.map((c) => c.value));
+          if (i = u.filter((c) => !(c.parent && h8.has(c.parent))), i.length === 0) throw new Error("There are cyclic diposable chains!");
         }
         if (!i) return;
         function r(a) {
           function u(c, d) {
             for (; c.length > 0 && d.some((_) => typeof _ == "string" ? _ === c[0] : c[0].match(_)); ) c.shift();
           }
-          let h6 = a.source.split(`
+          let h8 = a.source.split(`
 `).map((c) => c.trim().replace("at ", "")).filter((c) => c !== "");
-          return u(h6, ["Error", /^trackDisposable \(.*\)$/, /^DisposableTracker.trackDisposable \(.*\)$/]), h6.reverse();
+          return u(h8, ["Error", /^trackDisposable \(.*\)$/, /^DisposableTracker.trackDisposable \(.*\)$/]), h8.reverse();
         }
         let n = new ur();
         for (let a of i) {
           let u = r(a);
-          for (let h6 = 0; h6 <= u.length; h6++) n.add(u.slice(0, h6).join(`
+          for (let h8 = 0; h8 <= u.length; h8++) n.add(u.slice(0, h8).join(`
 `), a);
         }
         i.sort(no((a) => a.idx, so));
         let o = "", l = 0;
         for (let a of i.slice(0, t)) {
           l++;
-          let u = r(a), h6 = [];
+          let u = r(a), h8 = [];
           for (let c = 0; c < u.length; c++) {
             let d = u[c];
             d = `(shared with ${n.get(u.slice(0, c + 1).join(`
@@ -1496,14 +1496,14 @@ var init_xterm = __esm({
             let p = n.get(u.slice(0, c).join(`
 `)), m = co([...p].map((f) => r(f)[c]), (f) => f);
             delete m[u[c]];
-            for (let [f, A] of Object.entries(m)) h6.unshift(`    - stacktraces of ${A.length} other leaks continue with ${f}`);
-            h6.unshift(d);
+            for (let [f, A] of Object.entries(m)) h8.unshift(`    - stacktraces of ${A.length} other leaks continue with ${f}`);
+            h8.unshift(d);
           }
           o += `
 
 
 ==================== Leaking disposable ${l}/${i.length}: ${a.value.constructor.name} ====================
-${h6.join(`
+${h8.join(`
 `)}
 ============================================================
 
@@ -1732,17 +1732,17 @@ ${h6.join(`
       }
       Qe.once = i;
       function r(y, T, g) {
-        return h6((w, E = null, x) => y((N) => w.call(E, T(N)), null, x), g);
+        return h8((w, E = null, x) => y((N) => w.call(E, T(N)), null, x), g);
       }
       Qe.map = r;
       function n(y, T, g) {
-        return h6((w, E = null, x) => y((N) => {
+        return h8((w, E = null, x) => y((N) => {
           T(N), w.call(E, N);
         }, null, x), g);
       }
       Qe.forEach = n;
       function o(y, T, g) {
-        return h6((w, E = null, x) => y((N) => T(N) && w.call(E, N), null, x), g);
+        return h8((w, E = null, x) => y((N) => T(N) && w.call(E, N), null, x), g);
       }
       Qe.filter = o;
       function l(y) {
@@ -1761,7 +1761,7 @@ ${h6.join(`
         return r(y, (x) => (E = T(E, x), E), w);
       }
       Qe.reduce = u;
-      function h6(y, T) {
+      function h8(y, T) {
         let g, w = { onWillAddFirstListener() {
           g = y(E.fire, E);
         }, onDidRemoveLastListener() {
@@ -2066,8 +2066,8 @@ ${h6.join(`
           if (this._leakageMon && this._size > this._leakageMon.threshold ** 2) {
             let a = `[${this._leakageMon.name}] REFUSES to accept new listeners because it exceeded its threshold by far (${this._size} vs ${this._leakageMon.threshold})`;
             console.warn(a);
-            let u = this._leakageMon.getMostFrequentStack() ?? ["UNKNOWN stack", -1], h6 = new Yn(`${a}. HINT: Stack shows most frequent listener (${u[1]}-times)`, u[0]);
-            return (this._options?.onListenerError || Lt)(h6), D.None;
+            let u = this._leakageMon.getMostFrequentStack() ?? ["UNKNOWN stack", -1], h8 = new Yn(`${a}. HINT: Stack shows most frequent listener (${u[1]}-times)`, u[0]);
+            return (this._options?.onListenerError || Lt)(h8), D.None;
           }
           if (this._disposed) return D.None;
           e && (t = t.bind(e));
@@ -2687,8 +2687,8 @@ ${h6.join(`
         let t = Cr2._bigBlock32, e = this._buffDV;
         for (let c = 0; c < 64; c += 4) t.setUint32(c, e.getUint32(c, false), false);
         for (let c = 64; c < 320; c += 4) t.setUint32(c, rs(t.getUint32(c - 12, false) ^ t.getUint32(c - 32, false) ^ t.getUint32(c - 56, false) ^ t.getUint32(c - 64, false), 1), false);
-        let i = this._h0, r = this._h1, n = this._h2, o = this._h3, l = this._h4, a, u, h6;
-        for (let c = 0; c < 80; c++) c < 20 ? (a = r & n | ~r & o, u = 1518500249) : c < 40 ? (a = r ^ n ^ o, u = 1859775393) : c < 60 ? (a = r & n | r & o | n & o, u = 2400959708) : (a = r ^ n ^ o, u = 3395469782), h6 = rs(i, 5) + a + l + u + t.getUint32(c * 4, false) & 4294967295, l = o, o = n, n = rs(r, 30), r = i, i = h6;
+        let i = this._h0, r = this._h1, n = this._h2, o = this._h3, l = this._h4, a, u, h8;
+        for (let c = 0; c < 80; c++) c < 20 ? (a = r & n | ~r & o, u = 1518500249) : c < 40 ? (a = r ^ n ^ o, u = 1859775393) : c < 60 ? (a = r & n | r & o | n & o, u = 2400959708) : (a = r ^ n ^ o, u = 3395469782), h8 = rs(i, 5) + a + l + u + t.getUint32(c * 4, false) & 4294967295, l = o, o = n, n = rs(r, 30), r = i, i = h8;
         this._h0 = this._h0 + i & 4294967295, this._h1 = this._h1 + r & 4294967295, this._h2 = this._h2 + n & 4294967295, this._h3 = this._h3 + o & 4294967295, this._h4 = this._h4 + l & 4294967295;
       }
     };
@@ -2773,13 +2773,13 @@ ${h6.join(`
         i.set(n, false);
       };
       mt = (n, o, l = 0) => {
-        let a = Oo(n), u = new Di(o, l), h6 = s15.get(a);
-        return h6 || (h6 = [], s15.set(a, h6)), h6.push(u), e.get(a) || (e.set(a, true), n.requestAnimationFrame(() => r(a))), u;
+        let a = Oo(n), u = new Di(o, l), h8 = s15.get(a);
+        return h8 || (h8 = [], s15.set(a, h8)), h8.push(u), e.get(a) || (e.set(a, true), n.requestAnimationFrame(() => r(a))), u;
       }, wa = (n, o, l) => {
         let a = Oo(n);
         if (i.get(a)) {
-          let u = new Di(o, l), h6 = t.get(a);
-          return h6 || (h6 = [], t.set(a, h6)), h6.push(u), u;
+          let u = new Di(o, l), h8 = t.get(a);
+          return h8 || (h8 = [], t.set(a, h8)), h8.push(u), u;
         } else return mt(n, o, l);
       };
     })();
@@ -3066,11 +3066,11 @@ ${h6.join(`
             console.warn("move of an UNKNOWN touch", a);
             continue;
           }
-          let u = this.activeTouches[a.identifier], h6 = Date.now() - u.initialTimeStamp;
-          if (h6 < Q2.HOLD_DELAY && Math.abs(u.initialPageX - Se(u.rollingPageX)) < 30 && Math.abs(u.initialPageY - Se(u.rollingPageY)) < 30) {
+          let u = this.activeTouches[a.identifier], h8 = Date.now() - u.initialTimeStamp;
+          if (h8 < Q2.HOLD_DELAY && Math.abs(u.initialPageX - Se(u.rollingPageX)) < 30 && Math.abs(u.initialPageY - Se(u.rollingPageY)) < 30) {
             let c = this.newGestureEvent(He.Tap, u.initialTarget);
             c.pageX = Se(u.rollingPageX), c.pageY = Se(u.rollingPageY), this.dispatchEvent(c);
-          } else if (h6 >= Q2.HOLD_DELAY && Math.abs(u.initialPageX - Se(u.rollingPageX)) < 30 && Math.abs(u.initialPageY - Se(u.rollingPageY)) < 30) {
+          } else if (h8 >= Q2.HOLD_DELAY && Math.abs(u.initialPageX - Se(u.rollingPageX)) < 30 && Math.abs(u.initialPageY - Se(u.rollingPageY)) < 30) {
             let c = this.newGestureEvent(He.Contextmenu, u.initialTarget);
             c.pageX = Se(u.rollingPageX), c.pageY = Se(u.rollingPageY), this.dispatchEvent(c);
           } else if (n === 1) {
@@ -3102,12 +3102,12 @@ ${h6.join(`
           for (let [r, n] of i) n.dispatchEvent(e), this.dispatched = true;
         }
       }
-      inertia(e, i, r, n, o, l, a, u, h6) {
+      inertia(e, i, r, n, o, l, a, u, h8) {
         this.handle = mt(e, () => {
           let c = Date.now(), d = c - r, _ = 0, p = 0, m = true;
           n += Q2.SCROLL_FRICTION * d, a += Q2.SCROLL_FRICTION * d, n > 0 && (m = false, _ = o * n * d), a > 0 && (m = false, p = u * a * d);
           let f = this.newGestureEvent(He.Change);
-          f.translationX = _, f.translationY = p, i.forEach((A) => A.dispatchEvent(f)), m || this.inertia(e, i, c, n, o, l + _, a, u, h6 + p);
+          f.translationX = _, f.translationY = p, i.forEach((A) => A.dispatchEvent(f)), m || this.inertia(e, i, c, n, o, l + _, a, u, h8 + p);
         });
       }
       onTouchMove(e) {
@@ -3453,8 +3453,8 @@ ${h6.join(`
       static _computeValues(t, e, i, r, n) {
         let o = Math.max(0, i - t), l = Math.max(0, o - 2 * e), a = r > 0 && r > i;
         if (!a) return { computedAvailableSize: Math.round(o), computedIsNeeded: a, computedSliderSize: Math.round(l), computedSliderRatio: 0, computedSliderPosition: 0 };
-        let u = Math.round(Math.max(20, Math.floor(i * l / r))), h6 = (l - u) / (r - i), c = n * h6;
-        return { computedAvailableSize: Math.round(o), computedIsNeeded: a, computedSliderSize: Math.round(u), computedSliderRatio: h6, computedSliderPosition: Math.round(c) };
+        let u = Math.round(Math.max(20, Math.floor(i * l / r))), h8 = (l - u) / (r - i), c = n * h8;
+        return { computedAvailableSize: Math.round(o), computedIsNeeded: a, computedSliderSize: Math.round(u), computedSliderRatio: h8, computedSliderPosition: Math.round(c) };
       }
       _refreshComputedValues() {
         let t = s11._computeValues(this._oppositeScrollbarSize, this._arrowSize, this._visibleSize, this._scrollSize, this._scrollPosition);
@@ -3597,8 +3597,8 @@ ${h6.join(`
         if (Math.abs(t.deltaX) > 0 && Math.abs(t.deltaY) > 0) return 1;
         let i = 0.5;
         if ((!this._isAlmostInt(t.deltaX) || !this._isAlmostInt(t.deltaY)) && (i += 0.25), e) {
-          let r = Math.abs(t.deltaX), n = Math.abs(t.deltaY), o = Math.abs(e.deltaX), l = Math.abs(e.deltaY), a = Math.max(Math.min(r, o), 1), u = Math.max(Math.min(n, l), 1), h6 = Math.max(r, o), c = Math.max(n, l);
-          h6 % a === 0 && c % u === 0 && (i -= 0.5);
+          let r = Math.abs(t.deltaX), n = Math.abs(t.deltaY), o = Math.abs(e.deltaX), l = Math.abs(e.deltaY), a = Math.max(Math.min(r, o), 1), u = Math.max(Math.min(n, l), 1), h8 = Math.max(r, o), c = Math.max(n, l);
+          h8 % a === 0 && c % u === 0 && (i -= 0.5);
         }
         return Math.min(Math.max(i, 0), 1);
       }
@@ -3671,16 +3671,16 @@ ${h6.join(`
           this._options.scrollPredominantAxis && (this._options.scrollYToX && l + o === 0 ? l = o = 0 : Math.abs(o) >= Math.abs(l) ? l = 0 : o = 0), this._options.flipAxes && ([o, l] = [l, o]);
           let a = !Te && e.browserEvent && e.browserEvent.shiftKey;
           (this._options.scrollYToX || a) && !l && (l = o, o = 0), e.browserEvent && e.browserEvent.altKey && (l = l * this._options.fastScrollSensitivity, o = o * this._options.fastScrollSensitivity);
-          let u = this._scrollable.getFutureScrollPosition(), h6 = {};
+          let u = this._scrollable.getFutureScrollPosition(), h8 = {};
           if (o) {
             let c = Ko * o, d = u.scrollTop - (c < 0 ? Math.floor(c) : Math.ceil(c));
-            this._verticalScrollbar.writeScrollPosition(h6, d);
+            this._verticalScrollbar.writeScrollPosition(h8, d);
           }
           if (l) {
             let c = Ko * l, d = u.scrollLeft - (c < 0 ? Math.floor(c) : Math.ceil(c));
-            this._horizontalScrollbar.writeScrollPosition(h6, d);
+            this._horizontalScrollbar.writeScrollPosition(h8, d);
           }
-          h6 = this._scrollable.validateScrollPosition(h6), (u.scrollLeft !== h6.scrollLeft || u.scrollTop !== h6.scrollTop) && (zo && this._options.mouseWheelSmoothScroll && i.isPhysicalMouseWheel() ? this._scrollable.setScrollPositionSmooth(h6) : this._scrollable.setScrollPositionNow(h6), r = true);
+          h8 = this._scrollable.validateScrollPosition(h8), (u.scrollLeft !== h8.scrollLeft || u.scrollTop !== h8.scrollTop) && (zo && this._options.mouseWheelSmoothScroll && i.isPhysicalMouseWheel() ? this._scrollable.setScrollPositionSmooth(h8) : this._scrollable.setScrollPositionNow(h8), r = true);
         }
         let n = r;
         !n && this._options.alwaysConsumeMouseWheel && (n = true), !n && this._options.consumeMouseWheelIfScrollbarIsNeeded && (this._verticalScrollbar.isNeeded() || this._horizontalScrollbar.isNeeded()) && (n = true), n && (e.preventDefault(), e.stopPropagation());
@@ -3742,10 +3742,10 @@ ${h6.join(`
         this._isSyncing = false;
         this._isHandlingScroll = false;
         this._suppressOnScrollHandler = false;
-        let h6 = this._register(new Ri({ forceIntegerValues: false, smoothScrollDuration: this._optionsService.rawOptions.smoothScrollDuration, scheduleAtNextAnimationFrame: (c) => mt(n.window, c) }));
+        let h8 = this._register(new Ri({ forceIntegerValues: false, smoothScrollDuration: this._optionsService.rawOptions.smoothScrollDuration, scheduleAtNextAnimationFrame: (c) => mt(n.window, c) }));
         this._register(this._optionsService.onSpecificOptionChange("smoothScrollDuration", () => {
-          h6.setSmoothScrollDuration(this._optionsService.rawOptions.smoothScrollDuration);
-        })), this._scrollableElement = this._register(new Kr(i, { vertical: 1, horizontal: 2, useShadows: false, mouseWheelSmoothScroll: true, ...this._getChangeOptions() }, h6)), this._register(this._optionsService.onMultipleOptionChange(["scrollSensitivity", "fastScrollSensitivity", "overviewRuler"], () => this._scrollableElement.updateOptions(this._getChangeOptions()))), this._register(o.onProtocolChange((c) => {
+          h8.setSmoothScrollDuration(this._optionsService.rawOptions.smoothScrollDuration);
+        })), this._scrollableElement = this._register(new Kr(i, { vertical: 1, horizontal: 2, useShadows: false, mouseWheelSmoothScroll: true, ...this._getChangeOptions() }, h8)), this._register(this._optionsService.onMultipleOptionChange(["scrollSensitivity", "fastScrollSensitivity", "overviewRuler"], () => this._scrollableElement.updateOptions(this._getChangeOptions()))), this._register(o.onProtocolChange((c) => {
           this._scrollableElement.updateOptions({ handleMouseWheel: !(c & 16) });
         })), this._scrollableElement.setScrollDimensions({ height: 0, scrollHeight: 0 }), this._register($.runAndSubscribe(l.onChangeColors, () => {
           this._scrollableElement.getDomNode().style.backgroundColor = l.colors.background.css;
@@ -3897,8 +3897,8 @@ ${h6.join(`
         this._shouldUpdateAnchor = true;
         this._lastKnownBufferLength = 0;
         this._canvas = this._coreBrowserService.mainDocument.createElement("canvas"), this._canvas.classList.add("xterm-decoration-overview-ruler"), this._refreshCanvasDimensions(), this._viewportElement.parentElement?.insertBefore(this._canvas, this._viewportElement), this._register(C(() => this._canvas?.remove()));
-        let h6 = this._canvas.getContext("2d");
-        if (h6) this._ctx = h6;
+        let h8 = this._canvas.getContext("2d");
+        if (h8) this._ctx = h8;
         else throw new Error("Ctx cannot be null");
         this._register(this._decorationService.onDecorationRegistered(() => this._queueRefresh(void 0, true))), this._register(this._decorationService.onDecorationRemoved(() => this._queueRefresh(void 0, true))), this._register(this._renderService.onRenderedViewportChange(() => this._queueRefresh())), this._register(this._bufferService.buffers.onBufferActivate(() => {
           this._canvas.style.display = this._bufferService.buffer === this._bufferService.buffers.alt ? "none" : "block";
@@ -4039,8 +4039,8 @@ ${h6.join(`
     ((l) => {
       function s15(a, u) {
         if (J = (u.rgba & 255) / 255, J === 1) return { css: u.css, rgba: u.rgba };
-        let h6 = u.rgba >> 24 & 255, c = u.rgba >> 16 & 255, d = u.rgba >> 8 & 255, _ = a.rgba >> 24 & 255, p = a.rgba >> 16 & 255, m = a.rgba >> 8 & 255;
-        ue = _ + Math.round((h6 - _) * J), he = p + Math.round((c - p) * J), de = m + Math.round((d - m) * J);
+        let h8 = u.rgba >> 24 & 255, c = u.rgba >> 16 & 255, d = u.rgba >> 8 & 255, _ = a.rgba >> 24 & 255, p = a.rgba >> 16 & 255, m = a.rgba >> 8 & 255;
+        ue = _ + Math.round((h8 - _) * J), he = p + Math.round((c - p) * J), de = m + Math.round((d - m) * J);
         let f = j.toCss(ue, he, de), A = j.toRgba(ue, he, de);
         return { css: f, rgba: A };
       }
@@ -4049,8 +4049,8 @@ ${h6.join(`
         return (a.rgba & 255) === 255;
       }
       l.isOpaque = t;
-      function e(a, u, h6) {
-        let c = $r.ensureContrastRatio(a.rgba, u.rgba, h6);
+      function e(a, u, h8) {
+        let c = $r.ensureContrastRatio(a.rgba, u.rgba, h8);
         if (c) return j.toColor(c >> 24 & 255, c >> 16 & 255, c >> 8 & 255);
       }
       l.ensureContrastRatio = e;
@@ -4107,22 +4107,22 @@ ${h6.join(`
       }
       e.relativeLuminance = s15;
       function t(i, r, n) {
-        let o = i / 255, l = r / 255, a = n / 255, u = o <= 0.03928 ? o / 12.92 : Math.pow((o + 0.055) / 1.055, 2.4), h6 = l <= 0.03928 ? l / 12.92 : Math.pow((l + 0.055) / 1.055, 2.4), c = a <= 0.03928 ? a / 12.92 : Math.pow((a + 0.055) / 1.055, 2.4);
-        return u * 0.2126 + h6 * 0.7152 + c * 0.0722;
+        let o = i / 255, l = r / 255, a = n / 255, u = o <= 0.03928 ? o / 12.92 : Math.pow((o + 0.055) / 1.055, 2.4), h8 = l <= 0.03928 ? l / 12.92 : Math.pow((l + 0.055) / 1.055, 2.4), c = a <= 0.03928 ? a / 12.92 : Math.pow((a + 0.055) / 1.055, 2.4);
+        return u * 0.2126 + h8 * 0.7152 + c * 0.0722;
       }
       e.relativeLuminance2 = t;
     })(ve ||= {});
     ((n) => {
       function s15(o, l) {
         if (J = (l & 255) / 255, J === 1) return l;
-        let a = l >> 24 & 255, u = l >> 16 & 255, h6 = l >> 8 & 255, c = o >> 24 & 255, d = o >> 16 & 255, _ = o >> 8 & 255;
-        return ue = c + Math.round((a - c) * J), he = d + Math.round((u - d) * J), de = _ + Math.round((h6 - _) * J), j.toRgba(ue, he, de);
+        let a = l >> 24 & 255, u = l >> 16 & 255, h8 = l >> 8 & 255, c = o >> 24 & 255, d = o >> 16 & 255, _ = o >> 8 & 255;
+        return ue = c + Math.round((a - c) * J), he = d + Math.round((u - d) * J), de = _ + Math.round((h8 - _) * J), j.toRgba(ue, he, de);
       }
       n.blend = s15;
       function t(o, l, a) {
-        let u = ve.relativeLuminance(o >> 8), h6 = ve.relativeLuminance(l >> 8);
-        if (Xe(u, h6) < a) {
-          if (h6 < u) {
+        let u = ve.relativeLuminance(o >> 8), h8 = ve.relativeLuminance(l >> 8);
+        if (Xe(u, h8) < a) {
+          if (h8 < u) {
             let p = e(o, l, a), m = Xe(u, ve.relativeLuminance(p >> 8));
             if (m < a) {
               let f = i(o, l, a), A = Xe(u, ve.relativeLuminance(f >> 8));
@@ -4140,14 +4140,14 @@ ${h6.join(`
       }
       n.ensureContrastRatio = t;
       function e(o, l, a) {
-        let u = o >> 24 & 255, h6 = o >> 16 & 255, c = o >> 8 & 255, d = l >> 24 & 255, _ = l >> 16 & 255, p = l >> 8 & 255, m = Xe(ve.relativeLuminance2(d, _, p), ve.relativeLuminance2(u, h6, c));
-        for (; m < a && (d > 0 || _ > 0 || p > 0); ) d -= Math.max(0, Math.ceil(d * 0.1)), _ -= Math.max(0, Math.ceil(_ * 0.1)), p -= Math.max(0, Math.ceil(p * 0.1)), m = Xe(ve.relativeLuminance2(d, _, p), ve.relativeLuminance2(u, h6, c));
+        let u = o >> 24 & 255, h8 = o >> 16 & 255, c = o >> 8 & 255, d = l >> 24 & 255, _ = l >> 16 & 255, p = l >> 8 & 255, m = Xe(ve.relativeLuminance2(d, _, p), ve.relativeLuminance2(u, h8, c));
+        for (; m < a && (d > 0 || _ > 0 || p > 0); ) d -= Math.max(0, Math.ceil(d * 0.1)), _ -= Math.max(0, Math.ceil(_ * 0.1)), p -= Math.max(0, Math.ceil(p * 0.1)), m = Xe(ve.relativeLuminance2(d, _, p), ve.relativeLuminance2(u, h8, c));
         return (d << 24 | _ << 16 | p << 8 | 255) >>> 0;
       }
       n.reduceLuminance = e;
       function i(o, l, a) {
-        let u = o >> 24 & 255, h6 = o >> 16 & 255, c = o >> 8 & 255, d = l >> 24 & 255, _ = l >> 16 & 255, p = l >> 8 & 255, m = Xe(ve.relativeLuminance2(d, _, p), ve.relativeLuminance2(u, h6, c));
-        for (; m < a && (d < 255 || _ < 255 || p < 255); ) d = Math.min(255, d + Math.ceil((255 - d) * 0.1)), _ = Math.min(255, _ + Math.ceil((255 - _) * 0.1)), p = Math.min(255, p + Math.ceil((255 - p) * 0.1)), m = Xe(ve.relativeLuminance2(d, _, p), ve.relativeLuminance2(u, h6, c));
+        let u = o >> 24 & 255, h8 = o >> 16 & 255, c = o >> 8 & 255, d = l >> 24 & 255, _ = l >> 16 & 255, p = l >> 8 & 255, m = Xe(ve.relativeLuminance2(d, _, p), ve.relativeLuminance2(u, h8, c));
+        for (; m < a && (d < 255 || _ < 255 || p < 255); ) d = Math.min(255, d + Math.ceil((255 - d) * 0.1)), _ = Math.min(255, _ + Math.ceil((255 - _) * 0.1)), p = Math.min(255, p + Math.ceil((255 - p) * 0.1)), m = Xe(ve.relativeLuminance2(d, _, p), ve.relativeLuminance2(u, h8, c));
         return (d << 24 | _ << 16 | p << 8 | 255) >>> 0;
       }
       n.increaseLuminance = i;
@@ -4201,19 +4201,19 @@ ${h6.join(`
         let e = this._bufferService.buffer.lines.get(t);
         if (!e || e.length === 0) return [];
         let i = [], r = e.translateToString(true), n = 0, o = 0, l = 0, a = e.getFg(0), u = e.getBg(0);
-        for (let h6 = 0; h6 < e.getTrimmedLength(); h6++) if (e.loadCell(h6, this._workCell), this._workCell.getWidth() !== 0) {
+        for (let h8 = 0; h8 < e.getTrimmedLength(); h8++) if (e.loadCell(h8, this._workCell), this._workCell.getWidth() !== 0) {
           if (this._workCell.fg !== a || this._workCell.bg !== u) {
-            if (h6 - n > 1) {
+            if (h8 - n > 1) {
               let c = this._getJoinedRanges(r, l, o, e, n);
               for (let d = 0; d < c.length; d++) i.push(c[d]);
             }
-            n = h6, l = o, a = this._workCell.fg, u = this._workCell.bg;
+            n = h8, l = o, a = this._workCell.fg, u = this._workCell.bg;
           }
           o += this._workCell.getChars().length || we.length;
         }
         if (this._bufferService.cols - n > 1) {
-          let h6 = this._getJoinedRanges(r, l, o, e, n);
-          for (let c = 0; c < h6.length; c++) i.push(h6[c]);
+          let h8 = this._getJoinedRanges(r, l, o, e, n);
+          for (let c = 0; c < h8.length; c++) i.push(h8[c]);
         }
         return i;
       }
@@ -4226,7 +4226,7 @@ ${h6.join(`
         }
         for (let a = 1; a < this._characterJoiners.length; a++) try {
           let u = this._characterJoiners[a].handler(o);
-          for (let h6 = 0; h6 < u.length; h6++) ct._mergeRanges(l, u[h6]);
+          for (let h8 = 0; h8 < u.length; h8++) ct._mergeRanges(l, u[h8]);
         } catch (u) {
           console.error(u);
         }
@@ -4236,13 +4236,13 @@ ${h6.join(`
         let r = 0, n = false, o = 0, l = t[r];
         if (l) {
           for (let a = i; a < this._bufferService.cols; a++) {
-            let u = e.getWidth(a), h6 = e.getString(a).length || we.length;
+            let u = e.getWidth(a), h8 = e.getString(a).length || we.length;
             if (u !== 0) {
               if (!n && l[0] <= o && (l[0] = a, n = true), l[1] <= o) {
                 if (l[1] = a, l = t[++r], !l) break;
                 l[0] <= o ? (l[0] = a, n = true) : n = false;
               }
-              o += h6;
+              o += h8;
             }
           }
           l && (l[1] = this._bufferService.cols);
@@ -4283,10 +4283,10 @@ ${h6.join(`
       handleSelectionChanged(t, e, i) {
         this._selectionStart = t, this._selectionEnd = e, this._columnSelectMode = i;
       }
-      createRow(t, e, i, r, n, o, l, a, u, h6, c) {
+      createRow(t, e, i, r, n, o, l, a, u, h8, c) {
         let d = [], _ = this._characterJoinerService.getJoinedCharacters(e), p = this._themeService.colors, m = t.getNoBgTrimmedLength();
         i && m < o + 1 && (m = o + 1);
-        let f, A = 0, R = "", O = 0, I = 0, k = 0, P = 0, oe = false, Me = 0, Pe = false, Ke = 0, di = 0, V = [], Qe = h6 !== -1 && c !== -1;
+        let f, A = 0, R = "", O = 0, I = 0, k = 0, P = 0, oe = false, Me = 0, Pe = false, Ke = 0, di = 0, V = [], Qe = h8 !== -1 && c !== -1;
         for (let y = 0; y < m; y++) {
           t.loadCell(y, this._workCell);
           let T = this._workCell.getWidth();
@@ -4297,7 +4297,7 @@ ${h6.join(`
             for (O = W[0] + 1; O < W[1]; O++) w &&= An === this._isCellInSelection(O, e);
             w &&= !i || o < W[0] || o >= W[1], w ? (g = true, x = new Vr(this._workCell, t.translateToString(true, W[0], W[1]), W[1] - W[0]), E = W[1] - 1, T = x.getWidth()) : di = W[1];
           }
-          let N = this._isCellInSelection(y, e), Z = i && y === o, te = Qe && y >= h6 && y <= c, Oe = false;
+          let N = this._isCellInSelection(y, e), Z = i && y === o, te = Qe && y >= h8 && y <= c, Oe = false;
           this._decorationService.forEachDecorationAtCell(y, e, void 0, (W) => {
             Oe = true;
           });
@@ -4466,7 +4466,7 @@ ${h6.join(`
       }
     };
     _s = "xterm-dom-renderer-owner-", Le = "xterm-rows", jr = "xterm-fg-", jo = "xterm-bg-", ki = "xterm-focus", Xr = "xterm-selection", Na = 1, Yt = class extends D {
-      constructor(e, i, r, n, o, l, a, u, h6, c, d, _, p, m) {
+      constructor(e, i, r, n, o, l, a, u, h8, c, d, _, p, m) {
         super();
         this._terminal = e;
         this._document = i;
@@ -4475,7 +4475,7 @@ ${h6.join(`
         this._viewportElement = o;
         this._helperContainer = l;
         this._linkifier2 = a;
-        this._charSizeService = h6;
+        this._charSizeService = h8;
         this._optionsService = c;
         this._bufferService = d;
         this._coreService = _;
@@ -4536,11 +4536,11 @@ ${h6.join(`
         if (this._selectionContainer.replaceChildren(), this._rowFactory.handleSelectionChanged(e, i, r), this.renderRows(0, this._bufferService.rows - 1), !e || !i || (this._selectionRenderModel.update(this._terminal, e, i, r), !this._selectionRenderModel.hasSelection)) return;
         let n = this._selectionRenderModel.viewportStartRow, o = this._selectionRenderModel.viewportEndRow, l = this._selectionRenderModel.viewportCappedStartRow, a = this._selectionRenderModel.viewportCappedEndRow, u = this._document.createDocumentFragment();
         if (r) {
-          let h6 = e[0] > i[0];
-          u.appendChild(this._createSelectionElement(l, h6 ? i[0] : e[0], h6 ? e[0] : i[0], a - l + 1));
+          let h8 = e[0] > i[0];
+          u.appendChild(this._createSelectionElement(l, h8 ? i[0] : e[0], h8 ? e[0] : i[0], a - l + 1));
         } else {
-          let h6 = n === l ? e[0] : 0, c = l === o ? i[0] : this._bufferService.cols;
-          u.appendChild(this._createSelectionElement(l, h6, c));
+          let h8 = n === l ? e[0] : 0, c = l === o ? i[0] : this._bufferService.cols;
+          u.appendChild(this._createSelectionElement(l, h8, c));
           let d = a - l - 1;
           if (u.appendChild(this._createSelectionElement(l + 1, 0, this._bufferService.cols, d)), l !== a) {
             let _ = o === a ? i[0] : this._bufferService.cols;
@@ -4563,8 +4563,8 @@ ${h6.join(`
       }
       renderRows(e, i) {
         let r = this._bufferService.buffer, n = r.ybase + r.y, o = Math.min(r.x, this._bufferService.cols - 1), l = this._coreService.decPrivateModes.cursorBlink ?? this._optionsService.rawOptions.cursorBlink, a = this._coreService.decPrivateModes.cursorStyle ?? this._optionsService.rawOptions.cursorStyle, u = this._optionsService.rawOptions.cursorInactiveStyle;
-        for (let h6 = e; h6 <= i; h6++) {
-          let c = h6 + r.ydisp, d = this._rowElements[h6], _ = r.lines.get(c);
+        for (let h8 = e; h8 <= i; h8++) {
+          let c = h8 + r.ydisp, d = this._rowElements[h8], _ = r.lines.get(c);
           if (!d || !_) break;
           d.replaceChildren(...this._rowFactory.createRow(_, c, c === n, a, u, o, l, this.dimensions.css.cell.width, this._widthCache, -1, -1));
         }
@@ -4582,11 +4582,11 @@ ${h6.join(`
         r < 0 && (e = 0), n < 0 && (i = 0);
         let a = this._bufferService.rows - 1;
         r = Math.max(Math.min(r, a), 0), n = Math.max(Math.min(n, a), 0), o = Math.min(o, this._bufferService.cols);
-        let u = this._bufferService.buffer, h6 = u.ybase + u.y, c = Math.min(u.x, o - 1), d = this._optionsService.rawOptions.cursorBlink, _ = this._optionsService.rawOptions.cursorStyle, p = this._optionsService.rawOptions.cursorInactiveStyle;
+        let u = this._bufferService.buffer, h8 = u.ybase + u.y, c = Math.min(u.x, o - 1), d = this._optionsService.rawOptions.cursorBlink, _ = this._optionsService.rawOptions.cursorStyle, p = this._optionsService.rawOptions.cursorInactiveStyle;
         for (let m = r; m <= n; ++m) {
           let f = m + u.ydisp, A = this._rowElements[m], R = u.lines.get(f);
           if (!A || !R) break;
-          A.replaceChildren(...this._rowFactory.createRow(R, f, f === h6, _, p, c, d, this.dimensions.css.cell.width, this._widthCache, l ? m === r ? e : 0 : -1, l ? (m === n ? i : o) - 1 : -1));
+          A.replaceChildren(...this._rowFactory.createRow(R, f, f === h8, _, p, c, d, this.dimensions.css.cell.width, this._widthCache, l ? m === r ? e : 0 : -1, l ? (m === n ? i : o) - 1 : -1));
         }
       }
     };
@@ -4819,7 +4819,7 @@ ${h6.join(`
       }
     };
     Qt = class extends D {
-      constructor(e, i, r, n, o, l, a, u, h6) {
+      constructor(e, i, r, n, o, l, a, u, h8) {
         super();
         this._rowCount = e;
         this._optionsService = r;
@@ -4846,7 +4846,7 @@ ${h6.join(`
         this.onRefreshRequest = this._onRefreshRequest.event;
         this._renderDebouncer = new en((c, d) => this._renderRows(c, d), this._coreBrowserService), this._register(this._renderDebouncer), this._syncOutputHandler = new xs(this._coreBrowserService, this._coreService, () => this._fullRefresh()), this._register(C(() => this._syncOutputHandler.dispose())), this._register(this._coreBrowserService.onDprChange(() => this.handleDevicePixelRatioChange())), this._register(a.onResize(() => this._fullRefresh())), this._register(a.buffers.onBufferActivate(() => this._renderer.value?.clear())), this._register(this._optionsService.onOptionChange(() => this._handleOptionsChanged())), this._register(this._charSizeService.onCharSizeChange(() => this.handleCharSizeChanged())), this._register(l.onDecorationRegistered(() => this._fullRefresh())), this._register(l.onDecorationRemoved(() => this._fullRefresh())), this._register(this._optionsService.onMultipleOptionChange(["customGlyphs", "drawBoldTextInBrightColors", "letterSpacing", "lineHeight", "fontFamily", "fontSize", "fontWeight", "fontWeightBold", "minimumContrastRatio", "rescaleOverlappingGlyphs"], () => {
           this.clear(), this.handleResize(a.cols, a.rows), this._fullRefresh();
-        })), this._register(this._optionsService.onMultipleOptionChange(["cursorBlink", "cursorStyle"], () => this.refreshRows(a.buffer.y, a.buffer.y, true))), this._register(h6.onChangeColors(() => this._fullRefresh())), this._registerIntersectionObserver(this._coreBrowserService.window, i), this._register(this._coreBrowserService.onWindowChange((c) => this._registerIntersectionObserver(c, i)));
+        })), this._register(this._optionsService.onMultipleOptionChange(["cursorBlink", "cursorStyle"], () => this.refreshRows(a.buffer.y, a.buffer.y, true))), this._register(h8.onChangeColors(() => this._fullRefresh())), this._registerIntersectionObserver(this._coreBrowserService.window, i), this._register(this._coreBrowserService.onWindowChange((c) => this._registerIntersectionObserver(c, i)));
       }
       get dimensions() {
         return this._renderer.value.dimensions;
@@ -4990,7 +4990,7 @@ ${h6.join(`
     };
     Ds = 50, Ya = 15, ja = 50, Xa = 500, Za = " ", Ja = new RegExp(Za, "g");
     ei = class extends D {
-      constructor(e, i, r, n, o, l, a, u, h6) {
+      constructor(e, i, r, n, o, l, a, u, h8) {
         super();
         this._element = e;
         this._screenElement = i;
@@ -5000,7 +5000,7 @@ ${h6.join(`
         this._mouseService = l;
         this._optionsService = a;
         this._renderService = u;
-        this._coreBrowserService = h6;
+        this._coreBrowserService = h8;
         this._dragScrollAmount = 0;
         this._enabled = true;
         this._workCell = new q();
@@ -5051,15 +5051,15 @@ ${h6.join(`
           if (e[0] === i[0]) return "";
           let l = e[0] < i[0] ? e[0] : i[0], a = e[0] < i[0] ? i[0] : e[0];
           for (let u = e[1]; u <= i[1]; u++) {
-            let h6 = r.translateBufferLineToString(u, true, l, a);
-            n.push(h6);
+            let h8 = r.translateBufferLineToString(u, true, l, a);
+            n.push(h8);
           }
         } else {
           let l = e[1] === i[1] ? i[0] : void 0;
           n.push(r.translateBufferLineToString(e[1], true, e[0], l));
           for (let a = e[1] + 1; a <= i[1] - 1; a++) {
-            let u = r.lines.get(a), h6 = r.translateBufferLineToString(a, true);
-            u?.isWrapped ? n[n.length - 1] += h6 : n.push(h6);
+            let u = r.lines.get(a), h8 = r.translateBufferLineToString(a, true);
+            u?.isWrapped ? n[n.length - 1] += h8 : n.push(h8);
           }
           if (e[1] !== i[1]) {
             let a = r.lines.get(i[1]), u = r.translateBufferLineToString(i[1], true, 0, i[0]);
@@ -5216,28 +5216,28 @@ ${h6.join(`
         if (e[0] >= this._bufferService.cols) return;
         let o = this._bufferService.buffer, l = o.lines.get(e[1]);
         if (!l) return;
-        let a = o.translateBufferLineToString(e[1], false), u = this._convertViewportColToCharacterIndex(l, e[0]), h6 = u, c = e[0] - u, d = 0, _ = 0, p = 0, m = 0;
+        let a = o.translateBufferLineToString(e[1], false), u = this._convertViewportColToCharacterIndex(l, e[0]), h8 = u, c = e[0] - u, d = 0, _ = 0, p = 0, m = 0;
         if (a.charAt(u) === " ") {
           for (; u > 0 && a.charAt(u - 1) === " "; ) u--;
-          for (; h6 < a.length && a.charAt(h6 + 1) === " "; ) h6++;
+          for (; h8 < a.length && a.charAt(h8 + 1) === " "; ) h8++;
         } else {
           let R = e[0], O = e[0];
           l.getWidth(R) === 0 && (d++, R--), l.getWidth(O) === 2 && (_++, O++);
           let I = l.getString(O).length;
-          for (I > 1 && (m += I - 1, h6 += I - 1); R > 0 && u > 0 && !this._isCharWordSeparator(l.loadCell(R - 1, this._workCell)); ) {
+          for (I > 1 && (m += I - 1, h8 += I - 1); R > 0 && u > 0 && !this._isCharWordSeparator(l.loadCell(R - 1, this._workCell)); ) {
             l.loadCell(R - 1, this._workCell);
             let k = this._workCell.getChars().length;
             this._workCell.getWidth() === 0 ? (d++, R--) : k > 1 && (p += k - 1, u -= k - 1), u--, R--;
           }
-          for (; O < l.length && h6 + 1 < a.length && !this._isCharWordSeparator(l.loadCell(O + 1, this._workCell)); ) {
+          for (; O < l.length && h8 + 1 < a.length && !this._isCharWordSeparator(l.loadCell(O + 1, this._workCell)); ) {
             l.loadCell(O + 1, this._workCell);
             let k = this._workCell.getChars().length;
-            this._workCell.getWidth() === 2 ? (_++, O++) : k > 1 && (m += k - 1, h6 += k - 1), h6++, O++;
+            this._workCell.getWidth() === 2 ? (_++, O++) : k > 1 && (m += k - 1, h8 += k - 1), h8++, O++;
           }
         }
-        h6++;
-        let f = u + c - d + p, A = Math.min(this._bufferService.cols, h6 - u + d + _ - p - m);
-        if (!(!i && a.slice(u, h6).trim() === "")) {
+        h8++;
+        let f = u + c - d + p, A = Math.min(this._bufferService.cols, h8 - u + d + _ - p - m);
+        if (!(!i && a.slice(u, h8).trim() === "")) {
           if (r && f === 0 && l.getCodePoint(0) !== 32) {
             let R = o.lines.get(e[1] - 1);
             if (R && l.isWrapped && R.getCodePoint(this._bufferService.cols - 1) !== 32) {
@@ -5848,7 +5848,7 @@ ${h6.join(`
             let I = this.ybase + this.y;
             if (I >= l && I < l + u.length) continue;
           }
-          let h6 = u[u.length - 1].getTrimmedLength(), c = al(u, this._cols, t), d = c.length - u.length, _;
+          let h8 = u[u.length - 1].getTrimmedLength(), c = al(u, this._cols, t), d = c.length - u.length, _;
           this.ybase === 0 && this.y !== this.lines.length - 1 ? _ = Math.max(0, this.y - this.lines.maxLength + d) : _ = Math.max(0, this.lines.length - this.lines.maxLength + d);
           let p = [];
           for (let I = 0; I < d; I++) {
@@ -5858,7 +5858,7 @@ ${h6.join(`
           p.length > 0 && (n.push({ start: l + u.length + o, newLines: p }), o += p.length), u.push(...p);
           let m = c.length - 1, f = c[m];
           f === 0 && (m--, f = c[m]);
-          let A = u.length - d - 1, R = h6;
+          let A = u.length - d - 1, R = h8;
           for (; A >= 0; ) {
             let I = Math.min(R, f);
             if (u[m] === void 0) break;
@@ -5876,13 +5876,13 @@ ${h6.join(`
         if (n.length > 0) {
           let l = [], a = [];
           for (let f = 0; f < this.lines.length; f++) a.push(this.lines.get(f));
-          let u = this.lines.length, h6 = u - 1, c = 0, d = n[c];
+          let u = this.lines.length, h8 = u - 1, c = 0, d = n[c];
           this.lines.length = Math.min(this.lines.maxLength, this.lines.length + o);
           let _ = 0;
-          for (let f = Math.min(this.lines.maxLength - 1, u + o - 1); f >= 0; f--) if (d && d.start > h6 + _) {
+          for (let f = Math.min(this.lines.maxLength - 1, u + o - 1); f >= 0; f--) if (d && d.start > h8 + _) {
             for (let A = d.newLines.length - 1; A >= 0; A--) this.lines.set(f--, d.newLines[A]);
-            f++, l.push({ index: h6 + 1, amount: d.newLines.length }), _ += d.newLines.length, d = n[++c];
-          } else this.lines.set(f, a[h6--]);
+            f++, l.push({ index: h8 + 1, amount: d.newLines.length }), _ += d.newLines.length, d = n[++c];
+          } else this.lines.set(f, a[h8--]);
           let p = 0;
           for (let f = l.length - 1; f >= 0; f--) l[f].index += p, this.lines.onInsertEmitter.fire(l[f]), p += l[f].amount;
           let m = Math.max(0, u + o - this.lines.maxLength);
@@ -6672,17 +6672,17 @@ ${h6.join(`
         if (this._parseStack.state) if (this._parseStack.state === 2) this._parseStack.state = 0, l = this._parseStack.chunkPos + 1;
         else {
           if (r === void 0 || this._parseStack.state === 1) throw this._parseStack.state = 1, new Error("improper continuation due to previous async handler, giving up parsing");
-          let u = this._parseStack.handlers, h6 = this._parseStack.handlerPos - 1;
+          let u = this._parseStack.handlers, h8 = this._parseStack.handlerPos - 1;
           switch (this._parseStack.state) {
             case 3:
-              if (r === false && h6 > -1) {
-                for (; h6 >= 0 && (a = u[h6](this._params), a !== true); h6--) if (a instanceof Promise) return this._parseStack.handlerPos = h6, a;
+              if (r === false && h8 > -1) {
+                for (; h8 >= 0 && (a = u[h8](this._params), a !== true); h8--) if (a instanceof Promise) return this._parseStack.handlerPos = h8, a;
               }
               this._parseStack.handlers = [];
               break;
             case 4:
-              if (r === false && h6 > -1) {
-                for (; h6 >= 0 && (a = u[h6](), a !== true); h6--) if (a instanceof Promise) return this._parseStack.handlerPos = h6, a;
+              if (r === false && h8 > -1) {
+                for (; h8 >= 0 && (a = u[h8](), a !== true); h8--) if (a instanceof Promise) return this._parseStack.handlerPos = h8, a;
               }
               this._parseStack.handlers = [];
               break;
@@ -6792,7 +6792,7 @@ ${h6.join(`
     dc = /^([\da-f])\/([\da-f])\/([\da-f])$|^([\da-f]{2})\/([\da-f]{2})\/([\da-f]{2})$|^([\da-f]{3})\/([\da-f]{3})\/([\da-f]{3})$|^([\da-f]{4})\/([\da-f]{4})\/([\da-f]{4})$/, fc = /^[\da-f]+$/;
     mc = { "(": 0, ")": 1, "*": 2, "+": 3, "-": 1, ".": 2 }, ut = 131072, _l = 10;
     vl = 5e3, gl = 0, vn = class extends D {
-      constructor(e, i, r, n, o, l, a, u, h6 = new bn()) {
+      constructor(e, i, r, n, o, l, a, u, h8 = new bn()) {
         super();
         this._bufferService = e;
         this._charsetService = i;
@@ -6802,7 +6802,7 @@ ${h6.join(`
         this._oscLinkService = l;
         this._coreMouseService = a;
         this._unicodeService = u;
-        this._parser = h6;
+        this._parser = h8;
         this._parseBuffer = new Uint32Array(4096);
         this._stringDecoder = new er();
         this._utf8Decoder = new tr();
@@ -6884,11 +6884,11 @@ ${h6.join(`
           if (r = this._parser.parse(this._parseBuffer, c)) return this._preserveStack(n, o, c, 0), this._logSlowResolvingAsync(r), r;
         }
         (this._activeBuffer.x !== n || this._activeBuffer.y !== o) && this._onCursorMove.fire();
-        let u = this._dirtyRowTracker.end + (this._bufferService.buffer.ybase - this._bufferService.buffer.ydisp), h6 = this._dirtyRowTracker.start + (this._bufferService.buffer.ybase - this._bufferService.buffer.ydisp);
-        h6 < this._bufferService.rows && this._onRequestRefreshRows.fire({ start: Math.min(h6, this._bufferService.rows - 1), end: Math.min(u, this._bufferService.rows - 1) });
+        let u = this._dirtyRowTracker.end + (this._bufferService.buffer.ybase - this._bufferService.buffer.ydisp), h8 = this._dirtyRowTracker.start + (this._bufferService.buffer.ybase - this._bufferService.buffer.ydisp);
+        h8 < this._bufferService.rows && this._onRequestRefreshRows.fire({ start: Math.min(h8, this._bufferService.rows - 1), end: Math.min(u, this._bufferService.rows - 1) });
       }
       print(e, i, r) {
-        let n, o, l = this._charsetService.charset, a = this._optionsService.rawOptions.screenReaderMode, u = this._bufferService.cols, h6 = this._coreService.decPrivateModes.wraparound, c = this._coreService.modes.insertMode, d = this._curAttrData, _ = this._activeBuffer.lines.get(this._activeBuffer.ybase + this._activeBuffer.y);
+        let n, o, l = this._charsetService.charset, a = this._optionsService.rawOptions.screenReaderMode, u = this._bufferService.cols, h8 = this._coreService.decPrivateModes.wraparound, c = this._coreService.modes.insertMode, d = this._curAttrData, _ = this._activeBuffer.lines.get(this._activeBuffer.ybase + this._activeBuffer.y);
         this._dirtyRowTracker.markDirty(this._activeBuffer.y), this._activeBuffer.x && r - i > 0 && _.getWidth(this._activeBuffer.x - 1) === 2 && _.setCellFromCodepoint(this._activeBuffer.x - 1, 0, 1, d);
         let p = this._parser.precedingJoinState;
         for (let m = i; m < r; ++m) {
@@ -6900,7 +6900,7 @@ ${h6.join(`
           o = Ae.extractWidth(f);
           let A = Ae.extractShouldJoin(f), R = A ? Ae.extractWidth(p) : 0;
           if (p = f, a && this._onA11yChar.fire(Ce(n)), this._getCurrentLinkId() && this._oscLinkService.addLineToLink(this._getCurrentLinkId(), this._activeBuffer.ybase + this._activeBuffer.y), this._activeBuffer.x + o - R > u) {
-            if (h6) {
+            if (h8) {
               let O = _, I = this._activeBuffer.x - R;
               for (this._activeBuffer.x = R, this._activeBuffer.y++, this._activeBuffer.y === this._activeBuffer.scrollBottom + 1 ? (this._activeBuffer.y--, this._bufferService.scroll(this._eraseAttrData(), true)) : (this._activeBuffer.y >= this._bufferService.rows && (this._activeBuffer.y = this._bufferService.rows - 1), this._activeBuffer.lines.get(this._activeBuffer.ybase + this._activeBuffer.y).isWrapped = true), _ = this._activeBuffer.lines.get(this._activeBuffer.ybase + this._activeBuffer.y), R > 0 && _ instanceof Ze && _.copyCellsFrom(O, I, 0, R, false); I < u; ) O.setCellFromCodepoint(I++, 0, 1, d);
             } else if (this._activeBuffer.x = u - 1, o === 2) continue;
@@ -7157,13 +7157,13 @@ ${h6.join(`
       repeatPrecedingCharacter(e) {
         let i = this._parser.precedingJoinState;
         if (!i) return true;
-        let r = e.params[0] || 1, n = Ae.extractWidth(i), o = this._activeBuffer.x - n, a = this._activeBuffer.lines.get(this._activeBuffer.ybase + this._activeBuffer.y).getString(o), u = new Uint32Array(a.length * r), h6 = 0;
+        let r = e.params[0] || 1, n = Ae.extractWidth(i), o = this._activeBuffer.x - n, a = this._activeBuffer.lines.get(this._activeBuffer.ybase + this._activeBuffer.y).getString(o), u = new Uint32Array(a.length * r), h8 = 0;
         for (let d = 0; d < a.length; ) {
           let _ = a.codePointAt(d) || 0;
-          u[h6++] = _, d += _ > 65535 ? 2 : 1;
+          u[h8++] = _, d += _ > 65535 ? 2 : 1;
         }
-        let c = h6;
-        for (let d = 1; d < r; ++d) u.copyWithin(c, 0, h6), c += h6;
+        let c = h8;
+        for (let d = 1; d < r; ++d) u.copyWithin(c, 0, h8), c += h8;
         return this.print(u, 0, c), true;
       }
       sendDeviceAttributesPrimary(e) {
@@ -7338,8 +7338,8 @@ ${h6.join(`
       requestMode(e, i) {
         let r;
         ((P) => (P[P.NOT_RECOGNIZED = 0] = "NOT_RECOGNIZED", P[P.SET = 1] = "SET", P[P.RESET = 2] = "RESET", P[P.PERMANENTLY_SET = 3] = "PERMANENTLY_SET", P[P.PERMANENTLY_RESET = 4] = "PERMANENTLY_RESET"))(r ||= {});
-        let n = this._coreService.decPrivateModes, { activeProtocol: o, activeEncoding: l } = this._coreMouseService, a = this._coreService, { buffers: u, cols: h6 } = this._bufferService, { active: c, alt: d } = u, _ = this._optionsService.rawOptions, p = (A, R) => (a.triggerDataEvent(`${b.ESC}[${i ? "" : "?"}${A};${R}$y`), true), m = (A) => A ? 1 : 2, f = e.params[0];
-        return i ? f === 2 ? p(f, 4) : f === 4 ? p(f, m(a.modes.insertMode)) : f === 12 ? p(f, 3) : f === 20 ? p(f, m(_.convertEol)) : p(f, 0) : f === 1 ? p(f, m(n.applicationCursorKeys)) : f === 3 ? p(f, _.windowOptions.setWinLines ? h6 === 80 ? 2 : h6 === 132 ? 1 : 0 : 0) : f === 6 ? p(f, m(n.origin)) : f === 7 ? p(f, m(n.wraparound)) : f === 8 ? p(f, 3) : f === 9 ? p(f, m(o === "X10")) : f === 12 ? p(f, m(_.cursorBlink)) : f === 25 ? p(f, m(!a.isCursorHidden)) : f === 45 ? p(f, m(n.reverseWraparound)) : f === 66 ? p(f, m(n.applicationKeypad)) : f === 67 ? p(f, 4) : f === 1e3 ? p(f, m(o === "VT200")) : f === 1002 ? p(f, m(o === "DRAG")) : f === 1003 ? p(f, m(o === "ANY")) : f === 1004 ? p(f, m(n.sendFocus)) : f === 1005 ? p(f, 4) : f === 1006 ? p(f, m(l === "SGR")) : f === 1015 ? p(f, 4) : f === 1016 ? p(f, m(l === "SGR_PIXELS")) : f === 1048 ? p(f, 1) : f === 47 || f === 1047 || f === 1049 ? p(f, m(c === d)) : f === 2004 ? p(f, m(n.bracketedPasteMode)) : f === 2026 ? p(f, m(n.synchronizedOutput)) : p(f, 0);
+        let n = this._coreService.decPrivateModes, { activeProtocol: o, activeEncoding: l } = this._coreMouseService, a = this._coreService, { buffers: u, cols: h8 } = this._bufferService, { active: c, alt: d } = u, _ = this._optionsService.rawOptions, p = (A, R) => (a.triggerDataEvent(`${b.ESC}[${i ? "" : "?"}${A};${R}$y`), true), m = (A) => A ? 1 : 2, f = e.params[0];
+        return i ? f === 2 ? p(f, 4) : f === 4 ? p(f, m(a.modes.insertMode)) : f === 12 ? p(f, 3) : f === 20 ? p(f, m(_.convertEol)) : p(f, 0) : f === 1 ? p(f, m(n.applicationCursorKeys)) : f === 3 ? p(f, _.windowOptions.setWinLines ? h8 === 80 ? 2 : h8 === 132 ? 1 : 0 : 0) : f === 6 ? p(f, m(n.origin)) : f === 7 ? p(f, m(n.wraparound)) : f === 8 ? p(f, 3) : f === 9 ? p(f, m(o === "X10")) : f === 12 ? p(f, m(_.cursorBlink)) : f === 25 ? p(f, m(!a.isCursorHidden)) : f === 45 ? p(f, m(n.reverseWraparound)) : f === 66 ? p(f, m(n.applicationKeypad)) : f === 67 ? p(f, 4) : f === 1e3 ? p(f, m(o === "VT200")) : f === 1002 ? p(f, m(o === "DRAG")) : f === 1003 ? p(f, m(o === "ANY")) : f === 1004 ? p(f, m(n.sendFocus)) : f === 1005 ? p(f, 4) : f === 1006 ? p(f, m(l === "SGR")) : f === 1015 ? p(f, 4) : f === 1016 ? p(f, m(l === "SGR_PIXELS")) : f === 1048 ? p(f, 1) : f === 47 || f === 1047 || f === 1049 ? p(f, m(c === d)) : f === 2004 ? p(f, m(n.bracketedPasteMode)) : f === 2026 ? p(f, m(n.synchronizedOutput)) : p(f, 0);
       }
       _updateAttrColor(e, i, r, n, o) {
         return i === 2 ? (e |= 50331648, e &= -16777216, e |= De.fromColorRGB([r, n, o])) : i === 5 && (e &= -50331904, e |= 33554432 | r & 255), e;
@@ -8009,8 +8009,8 @@ ${h6.join(`
       _renderRows(e, i) {
         let r = this._terminal.buffer, n = r.lines.length.toString();
         for (let o = e; o <= i; o++) {
-          let l = r.lines.get(r.ydisp + o), a = [], u = l?.translateToString(true, void 0, void 0, a) || "", h6 = (r.ydisp + o + 1).toString(), c = this._rowElements[o];
-          c && (u.length === 0 ? (c.textContent = " ", this._rowColumns.set(c, [0, 1])) : (c.textContent = u, this._rowColumns.set(c, a)), c.setAttribute("aria-posinset", h6), c.setAttribute("aria-setsize", n), this._alignRowWidth(c));
+          let l = r.lines.get(r.ydisp + o), a = [], u = l?.translateToString(true, void 0, void 0, a) || "", h8 = (r.ydisp + o + 1).toString(), c = this._rowElements[o];
+          c && (u.length === 0 ? (c.textContent = " ", this._rowColumns.set(c, [0, 1])) : (c.textContent = u, this._rowColumns.set(c, a)), c.setAttribute("aria-posinset", h8), c.setAttribute("aria-setsize", n), this._alignRowWidth(c));
         }
         this._announceCharacters();
       }
@@ -8022,11 +8022,11 @@ ${h6.join(`
         if (o === l || e.relatedTarget !== n) return;
         let a, u;
         if (i === 0 ? (a = r, u = this._rowElements.pop(), this._rowContainer.removeChild(u)) : (a = this._rowElements.shift(), u = r, this._rowContainer.removeChild(a)), a.removeEventListener("focus", this._topBoundaryFocusListener), u.removeEventListener("focus", this._bottomBoundaryFocusListener), i === 0) {
-          let h6 = this._createAccessibilityTreeNode();
-          this._rowElements.unshift(h6), this._rowContainer.insertAdjacentElement("afterbegin", h6);
+          let h8 = this._createAccessibilityTreeNode();
+          this._rowElements.unshift(h8), this._rowContainer.insertAdjacentElement("afterbegin", h8);
         } else {
-          let h6 = this._createAccessibilityTreeNode();
-          this._rowElements.push(h6), this._rowContainer.appendChild(h6);
+          let h8 = this._createAccessibilityTreeNode();
+          this._rowElements.push(h8), this._rowContainer.appendChild(h8);
         }
         this._rowElements[0].addEventListener("focus", this._topBoundaryFocusListener), this._rowElements[this._rowElements.length - 1].addEventListener("focus", this._bottomBoundaryFocusListener), this._terminal.scrollLines(i === 0 ? -1 : 1), this._rowElements[i === 0 ? 1 : this._rowElements.length - 2].focus(), e.preventDefault(), e.stopImmediatePropagation();
       }
@@ -8046,12 +8046,12 @@ ${h6.join(`
         if ((i.node.compareDocumentPosition(r.node) & Node.DOCUMENT_POSITION_PRECEDING || i.node === r.node && i.offset > r.offset) && ([i, r] = [r, i]), i.node.compareDocumentPosition(this._rowElements[0]) & (Node.DOCUMENT_POSITION_CONTAINED_BY | Node.DOCUMENT_POSITION_FOLLOWING) && (i = { node: this._rowElements[0].childNodes[0], offset: 0 }), !this._rowContainer.contains(i.node)) return;
         let n = this._rowElements.slice(-1)[0];
         if (r.node.compareDocumentPosition(n) & (Node.DOCUMENT_POSITION_CONTAINED_BY | Node.DOCUMENT_POSITION_PRECEDING) && (r = { node: n, offset: n.textContent?.length ?? 0 }), !this._rowContainer.contains(r.node)) return;
-        let o = ({ node: u, offset: h6 }) => {
+        let o = ({ node: u, offset: h8 }) => {
           let c = u instanceof Text ? u.parentNode : u, d = parseInt(c?.getAttribute("aria-posinset"), 10) - 1;
           if (isNaN(d)) return console.warn("row is invalid. Race condition?"), null;
           let _ = this._rowColumns.get(c);
           if (!_) return console.warn("columns is null. Race condition?"), null;
-          let p = h6 < _.length ? _[h6] : _.slice(-1)[0] + 1;
+          let p = h8 < _.length ? _[h8] : _.slice(-1)[0] + 1;
           return p >= this._terminal.cols && (++d, p = 0), { row: d, column: p };
         }, l = o(i), a = o(r);
         if (!(!l || !a)) {
@@ -8152,8 +8152,8 @@ ${h6.join(`
         for (let n = 0; n < i.size; n++) {
           let o = i.get(n);
           if (o) for (let l = 0; l < o.length; l++) {
-            let a = o[l], u = a.link.range.start.y < e ? 0 : a.link.range.start.x, h6 = a.link.range.end.y > e ? this._bufferService.cols : a.link.range.end.x;
-            for (let c = u; c <= h6; c++) {
+            let a = o[l], u = a.link.range.start.y < e ? 0 : a.link.range.start.x, h8 = a.link.range.end.y > e ? this._bufferService.cols : a.link.range.end.x;
+            for (let c = u; c <= h8; c++) {
               if (r.has(c)) {
                 o.splice(l--, 1);
                 break;
@@ -8394,27 +8394,27 @@ ${h6.join(`
         function r(l) {
           let a = e._mouseService.getMouseReportCoords(l, e.screenElement);
           if (!a) return false;
-          let u, h6;
+          let u, h8;
           switch (l.overrideType || l.type) {
             case "mousemove":
-              h6 = 32, l.buttons === void 0 ? (u = 3, l.button !== void 0 && (u = l.button < 3 ? l.button : 3)) : u = l.buttons & 1 ? 0 : l.buttons & 4 ? 1 : l.buttons & 2 ? 2 : 3;
+              h8 = 32, l.buttons === void 0 ? (u = 3, l.button !== void 0 && (u = l.button < 3 ? l.button : 3)) : u = l.buttons & 1 ? 0 : l.buttons & 4 ? 1 : l.buttons & 2 ? 2 : 3;
               break;
             case "mouseup":
-              h6 = 0, u = l.button < 3 ? l.button : 3;
+              h8 = 0, u = l.button < 3 ? l.button : 3;
               break;
             case "mousedown":
-              h6 = 1, u = l.button < 3 ? l.button : 3;
+              h8 = 1, u = l.button < 3 ? l.button : 3;
               break;
             case "wheel":
               if (e._customWheelEventHandler && e._customWheelEventHandler(l) === false) return false;
               let c = l.deltaY;
               if (c === 0 || e.coreMouseService.consumeWheelEvent(l, e._renderService?.dimensions?.device?.cell?.height, e._coreBrowserService?.dpr) === 0) return false;
-              h6 = c < 0 ? 0 : 1, u = 4;
+              h8 = c < 0 ? 0 : 1, u = 4;
               break;
             default:
               return false;
           }
-          return h6 === void 0 || u === void 0 || u > 4 ? false : e.coreMouseService.triggerMouseEvent({ col: a.col, row: a.row, x: a.x, y: a.y, button: u, action: h6, ctrl: l.ctrlKey, alt: l.altKey, shift: l.shiftKey });
+          return h8 === void 0 || u === void 0 || u > 4 ? false : e.coreMouseService.triggerMouseEvent({ col: a.col, row: a.row, x: a.x, y: a.y, button: u, action: h8, ctrl: l.ctrlKey, alt: l.altKey, shift: l.shiftKey });
         }
         let n = { mouseup: null, wheel: null, mousedrag: null, mousemove: null }, o = { mouseup: (l) => (r(l), l.buttons || (this._document.removeEventListener("mouseup", n.mouseup), n.mousedrag && this._document.removeEventListener("mousemove", n.mousedrag)), this.cancel(l)), wheel: (l) => (r(l), this.cancel(l, true)), mousedrag: (l) => {
           l.buttons && r(l);
@@ -8431,8 +8431,8 @@ ${h6.join(`
             if (!this.buffer.hasScrollback) {
               if (l.deltaY === 0) return false;
               if (e.coreMouseService.consumeWheelEvent(l, e._renderService?.dimensions?.device?.cell?.height, e._coreBrowserService?.dpr) === 0) return this.cancel(l, true);
-              let h6 = b.ESC + (this.coreService.decPrivateModes.applicationCursorKeys ? "O" : "[") + (l.deltaY < 0 ? "A" : "B");
-              return this.coreService.triggerDataEvent(h6, true), this.cancel(l, true);
+              let h8 = b.ESC + (this.coreService.decPrivateModes.applicationCursorKeys ? "O" : "[") + (l.deltaY < 0 ? "A" : "B");
+              return this.coreService.triggerDataEvent(h8, true), this.cancel(l, true);
             }
           }
         }, { passive: false }));
@@ -8983,6 +8983,158 @@ async function call(endpoint, payload) {
   return result.value;
 }
 
+// src/client/vendor/inks.js
+var INKS = {
+  deepseek: ["#0891B2", "#22D3EE"],
+  charcoal: ["#141416", "#F1F2F4"],
+  graphite: ["#2D2D2D", "#D6D6DA"],
+  rose: ["#EC2F6B", "#FF5A7A"],
+  sky: ["#0AA8D6", "#2EE6E0"],
+  tangerine: ["#FF6900", "#FF8A2E"],
+  cobalt: ["#082DFF", "#5C78FF"],
+  black: ["#000000", "#FFFFFF"],
+  brown: ["#A27952", "#855C36"],
+  red: ["#FF3E51", "#E02135"],
+  orange: ["#FF781C", "#FF6700"],
+  yellow: ["#FFAF38", "#FF9800"],
+  green: ["#00C972", "#009957"],
+  cyan: ["#1CC3B0", "#00A592"],
+  blue: ["#2A92FE", "#0E74E0"],
+  violet: ["#A97EFE", "#804EE0"],
+  magenta: ["#FF5EB1", "#E02A88"],
+  gray: ["#959595", "#777777"],
+  aurora: ["#00B8D4", "#2EE6E0"]
+};
+var GRADIENTS = { aurora: [[0, "#A4FFB0"], [0.42, "#00F0E4"], [1, "#2E9EF7"]] };
+var ACCENT_INKS = ["deepseek", "charcoal", "graphite", "rose", "sky", "tangerine", "cobalt"];
+var LEGACY_INKS = { kimi: "charcoal", zai: "graphite", minimax: "rose", stepfun: "sky", mimo: "tangerine", qwen: "cobalt" };
+var isHex = (color) => typeof color === "string" && /^#[0-9a-f]{6}$/i.test(color);
+var luminance = (hex) => [1, 3, 5].map((index) => parseInt(hex.slice(index, index + 2), 16) / 255).map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4).reduce((sum, channel, index) => sum + channel * [0.2126, 0.7152, 0.0722][index], 0);
+var inkName = (color) => INKS[color] ? color : INKS[LEGACY_INKS[color]] ? LEGACY_INKS[color] : "gray";
+var inkFill = (color) => isHex(color) ? color : `var(--bt-ink-${inkName(color)})`;
+var inkText = (color) => color === "black" ? "var(--bt-ink-gray)" : inkFill(color);
+var paintCss = (color) => GRADIENTS[color] ? `linear-gradient(135deg,${GRADIENTS[color].map(([offset, value]) => `${value} ${offset * 100}%`).join(",")})` : inkFill(color);
+
+// src/client/vendor/characters.js
+var CHARACTERS = {
+  whale: { label: "Whale", body: "M65.3 20.9l5.1 .1 4.8 .9 4.8 1.7 4.3 2.3 3.8 3.1 3 3.4 2.3 3.8 1.6 4.3 .9 4.3 0 4.8-.8 4.8-1.4 4.3-2.3 4.3-3.2 4.3-3.4 3.3-4.3 3.1-7.2 3.5-7.6 1.7-7.2 .1-9.6-1.6-3.3-1-2.9-1.7-8.8-8.9-6-4.7-3.3-.5-7.7 1.1-4.8-.1-4.7-1.2-1.9-1.2-1-1-.5-1.5 .4-1.4 1.1-1.3 1.9-1.3 4.7-1.5 7.7-.6 1.1-.5 .7-1 0-1.4-2.8-7.2-1.2-5.3-.1-4.3 .4-1.4 .9-1.2 1.9-.2 2 1 2.2 2.3 2.2 3.4 3.2 7.6 1.9 9.7 .5-.1 1.1-7.2 1.8-4.8 3.2-5.2 3.9-4.3 4.9-3.9 5.6-2.9 5.8-1.9z", paints: [["M93.3 55.8l1-.3 .1 1.2-2.4 5.3-3.4 4.8-3.8 3.8-4.8 3.4-5.7 2.8-4.8 1.5-4.8 .4 20.1-17.4 5.2-3.7z", "#fff", 1]], shade: "M88.6 29.5l2.4 2.9 1.9 2.8 2.4 6.3 .5 3.3 .1 5.3-1.5 6.6-1.9 4.3-2 3.3-4.8 5.4-5.7 4.3-7.2 3.3-6.2 1.5-6.7 .1-3.3-.2-9.6-1.8-3.3-1.5-2.4-1.9-8.6-8.9-5.3-3.9-3.3-.1-2.9 .2-3.3 .8-5.8 0-4.3-1-2.9-1.9 .6-.6 3.8-1.3 10.5-2.5 4.3 .9 1.4-.1 2.2-1.7 .5-1.4-.3-1.5-1.2-1.4-2.2-1.4-1.2-1.9-.6-12 .4-3.3 .5-.5 2.9 3.8 2.4 4.8 1.9 5.7 .7 5.8 .7 2.8 2.1 2.4 2.7 5.5 3.8 4.3 2.9 2.2 3.3 1 3.4-.4 6.2-3 7.1-4.5 7.3-5.6 6.6-5.9 5.9-6.5 3.7-5.3 1.7-4.2 .1-2.9z", light: "M55.6 22.8l1.9-.3 1.5 .3 .6 1 .1 .9-2 4.3-3.8 5.3-5.8 6.2-5.4 4.4-4.8 2.3-1.4 0-1.2-.5-.8-1.9 .5-3.3 2.5-4.8 3.3-4.3 2.4-2.4 5.3-3.9zM19.3 28.1l-1.4 2 .3-1.1zM21.7 49.1l.6 .5-.3 .5-.8 0zM35.8 52l1.2-.4 .9 .7 .7 1.6-.4 .9-1.2 .1-2.6-.5zM7.2 52.9l-2.9 2.9 1.2-1.6z", eyes: [[72.5, 48.4, 9.3, 23, -15.8], [85.6, 43.4, 7, 22.9, -21.2]] },
+  octopus: { label: "Octopus", body: "M50 6C75 6 87 24 87 46C87 60 82 68 80 72C84 82 84 92 80 96C76 98 72 92 70 84C68 92 66 98 61 96C57 94 56 84 54 78C52 80 48 80 46 78C44 84 43 94 39 96C34 98 32 92 30 84C28 92 24 98 20 96C16 92 16 82 20 72C18 68 13 60 13 46C13 24 25 6 50 6Z", shade: "M87 46C87 60 82 68 80 72C84 82 84 92 80 96C76 98 72 92 70 84C68 92 66 98 61 96C57 94 56 84 54 78C62 76 70 66 75 56C80 48 80 36 75 26C82 32 87 38 87 46Z", light: "M30 22C36 14 44 11 50 11C40 14 33 20 30 28Z", eyes: [[40, 36, 6.5, 11, 0], [60, 36, 6.5, 11, 0]] },
+  star: { label: "Star", body: "M40.1 4.4l1.5-.4 1.9 .1 5.2 1.1 1.9 .9 13.2 14.9 17.1-.8 5.2 1.1 1.8 .9 1.7 1.6 .7 2.4-.4 1.9-9.7 23.6 5.6 23.7 .1 1.9-.6 1.4-2.1 1.8-2.3 .5-19.9-1.8-16.6 15.5-1.9 1-1.9 .3-7-1.5-2.6-2.1-.9-2.4-2.8-24.1-16-13.6-1.1-1.5-.5-1.9 .4-1.9 1.2-1.5 18.9-13.6 7.1-24.6 1-1.7z", shade: "M52 7.7l14.3 16.1 1 2.9 .3 3.1 19.4-1.3 2-1.4 .7-2.3-.4-1 .5 .5 .5 1.9-.4 1.9-9.8 23.2 5.5 23.1 .1 3.4-2 2.4-2.8 .8-19.4-2.1-1.9 1.4-14.7 14-2.4 1.4-3.3 .1-4.7-1-2-1 .6-.2 3.3 .8 2.8 .1 5.1-2.1 .7-.9 .4-2.4-2.6-22.7-.3-.3-1.4 .2-1.4 .7-5.7 .7-5.6-1.2-16.7-13.8 1-.1 5.2 1 3.8-1.1 1-.7 1.9-.4 .4-.4 1.5 .3 .4-.4 1 .2 18-12.8 6.7-23.5 0-1.8-.4-.5-.3-1.9 .4-2.4z", light: "M40.1 4.4l2-.1 4.7 1 .7 1-.5 1.4-2.8 1.5-6.6 23.1 .7 1.2 .6 .3-18.1 12.5-1.8 2.1-3.4 .7-5.2-1.2-.3-.4 .3-.9 1.4-1.4 18.3-12.9 .9-2.3 6.4-22.7 .8-1.4z", eyes: [[53.9, 53.4, 7.2, 18.8, -10], [65.1, 49.2, 7.2, 18.8, -10]] },
+  moon: { label: "Moon", body: "M45.8 4.2l4.7-.2 4.2 .4 10.2 2.4 3.7 1.6 3.6 2.1 3.3 2.5 3 3.1 4.6 6.7 3.4 8.3 1.5 8.8 .1 4.6-.8 7.8-2.6 8.8-3.9 7.7-5.1 6.7-6.1 5.3-4.1 2.6-3.6 1.6-27.2 10.2-2.8 .7-2.6 0-5.7-1.3-2-.8-1.9-1.7-1.1-2.6-6.5-37.7-.2-5.2 .8-7.7 1.3-5.2 3.1-7.8 4.2-6.7 3-3.6 3.9-3.6 6.3-4.2 4.1-1.8z", paints: [["M57.6 9.9l.2-.3 .2 .3 2 4.7 1.9 1.9 2.6 .5 1.5-.7 1.1-1.1 .4 .4-.1 1.6-.7 1.5-2.2 2.5-1.6 .7-2 0-1.6-.8-1.3-1.4-.8-2-.4-2.6 .1-3.1z", "#1783FF", 1]], shade: "M74.3 13.5l2.1 1.5 .3-.4-.3-.6 2.1 2.1 4.6 6.7 3.1 7.4 1.5 7.6 .1 10.4-.6 4.6-2.5 8.3-4.2 8.2-3.1 4.2-5.7 5.7-6.2 4.2-4.6 2-28 10.3-4.1 0-5.2-1.1-2-.9-.5-.7 .5 .5 1.5 0 3.6 1 2.6-.3 5.7-2.1 2.1-2.1-5.4-31.5-.2-4.1 .4-1.1-.1-2.6 .5-3.6 1.8-7.7 2.8-6.7 1.9-3.1 3.9-5.2 3.2-3.1 2.5-2 5.2-2.9 3.1-1.1 3.1-.8 2.1 0 .5-.4 2.6 .2 1-.3 1.6 .4 1-.5 2.1 .8 1-.8 2.1 1.2z", light: "M38 6.3l1.7-.3 2.5 .2 .6 .4 1.5 0 .5 .5 1.6 .3-3.1 1.3 .4 .7-2.5 1.6-.5 1-2.5 2.1-2.7 2.9-6.2 7.9-1.5 2.7-1 .9-1.2 2.6-1.4 1-1.3 3.7-1.3 .3-6-1.4-1 3.6-.8 0 .9-3.6-.5-1 1.1-3.6 2.7-5.7 4.1-6.2 5.7-5.8 3.1-2.4 3.6-2.2z", eyes: [[51.6, 48.5, 8.4, 22.1, -10], [66.8, 42.9, 8.4, 22.1, -10]] },
+  wave: { label: "Wave", body: "M46.1 4l6.1 .3 9.6 2.1 4.5 1.8 4.1 2.4 3.5 2.8 4.4 4.8 2.6 4 2.1 4.1 2.2 6 4.8 26 .5 5.3-.3 4.1-1.2 3.8-1.5 2.8-2.4 2.5-2.1 1.4-3.1 1-3 .3-8.1-1.5-3.2 5.3-2.1 2.1-2.5 1.5-2.8 1-3 .4-9.1-1.6-2.7 4.2-3.4 3.1-4 1.7-4.6 .1-7-1.5-3.5-1.9-3.4-3.5-2.1-4-1.5-5.6-3.7-20.7-.6-5.6-.1-5 .5-6.1 2.3-9.6 2.3-5.5 2.7-4.9 2.7-3.7 3.2-3.6 4.2-3.6 4.7-2.9 4.4-2 4-1.2z", paints: [["M61.6 48.5l2.2-.3 2 1.1 1.1 2.2 .3 3-.6 3.1-1.5 3.5-2.5 4.1-2.4 2.8-5-2.2-3-2.2-2.3-3-.7-3.5 .6-2.6 1.8-2.1 1.6-.7 1.5 0 1.5 .6 1.5 1.3 2-3.6z", "#fff", 0.4]], shade: "M69.3 13.6l2.6 1.3 .5-.3 .5-1.3 2 1.7 .5 0 2.5 2.7 3.5 5.5 3.6 8.6 1.5 6.6 3.5 19.7 .5 5.5-.4 4.6-2 5-1 1.6-2.6 2.5-3 1.5-2.1 .5-4 0-6.6-1.4-1.4 2.9-1.9 2.5-2.7 2.6-3.1 1.5-2.5 .6-4 .1-7.1-1.5-1.5 2.8-2.6 3-2 1.6-3 1.4-4.5 .6-7.1-1.5-3.6-1.5-3.5-3.1 6.6 1.5 2.8-.5 .5-.5-.3-.5 3.2-2-.4-1 1.4-1.5-.3-1 .7-1.6-.2-2.5-3.4-19.2 .3-.5-.6-5 .5-.5-.1-4.6 .4-.5 .3-4 1-4.1 1.5-4.5 3.8-7.7 5.5-6.9 3.1-2.6 6.5-3.9 7.6-2.2 3.1 0 .5-.4 3 .5 1-.5 2.5 1z", light: "M36.5 6.1l2-.3 .5 .6 4.1 .5 1 .7-3.3 1.5-.3 1.2-3 2-.3 .8-2.8 2.6-3.5 4-3.9 5-2 3.6-1 .5-1.7 4-1.5 .5-1.4 4.6-1.6 .2-.5-.4-5.6-.9-.4-.4 1.4-5.1 1.5-3.5 2.6-5.1 4-5.5 6.6-6.2 4-2.5z", eyes: [[47.5, 37.2, 8.4, 22.1, -10], [61.6, 31.9, 8.4, 22.1, -10]] },
+  squircle: { label: "Squircle", body: "M54.5 4.2l3.9-.2 3.7 .3 11.6 2.7 3.1 1.6 2.8 1.9 2.6 2.7 2.2 3.1 2.4 4.8 1.9 5.8 3.7 19.4 .8 11.1-.4 4.7-1 4.7-1.3 3.5-1.8 3.4-4.8 5.8-6.4 4.7-8 4-14.2 5.3-9.5 2.2-7.4 .1-10.5-2.2-5.3-2.5-4.3-3.7-3.3-4.8-2.7-6.3-2.4-9.5-2.8-17.9-.2-7.8 1.3-7.9 2.2-5.3 2.8-4.2 4.1-4.2 4.3-3.1 6.3-3.4 11.6-4.6 7.9-2.7z", shade: "M80.5 11.6l2.1 2.1 2.1 3.2 3.2 7.3 2.1 8.4 2.7 15.8 .5 7.9-.6 7.4-2 6.3-3.8 6.3-4.2 4.3-2.6 2-6.9 3.8-15.2 6.2-9.5 2.7-6.8 .6-6.2-.7-8.5-2-5.8-3.2-3.2-3.3 .5 .4 1.1-.2 5.8 1.4 2.1-.8 1.4-.7-.3-.5 1.4-1.1-.1-1 .8-.5 0-1.1 1.1-1 .1-2.1 .4-.6-.2-3.6-2.4-17.9-.2-9.5 .8-5.3 1.1-3.6 1.2-2.7 2.2-3.5 2.7-2.8 3.1-2.5 5.8-3.2 17.9-6.9 5.3-1.4 8.4-1.4 1.6-1.1 .5 .1 .9-1.5z", light: "M39.4 8.4l1.2 0-1.6 .7-1-.1 1-.1zM36.8 9.5l1 0 .6 .9 4.2 .6 .7 .6-3.8-.4-.3 .4 1.9 .3 .1 .7-3.2 1.6-6.9 5.8-5.3 6-4.7 6.1-3.8 3.7-.2 .5-1.8 .1-6.8-1.7 .4-3.6 2.1-4.2 2.2-3.2 4.2-4.3 4.2-3 3.1-1.8 5.3-2.5zM35.1 10.5l1.7 0-.5 .4zM36.5 11.1l.3-.5 2.2 .1 .4 .4-.4 .3z", eyes: [[52.6, 52.4, 8.4, 22.1, -10], [67.3, 46.9, 8.4, 22.1, -10]] },
+  zed: { label: "Bull", body: "M77 4.4l1.1-.4 1.1 .2 1.2 1.3 2 9.8 2.2 5.9 .4 2.8-.3 2.1-.8 1.7-4.7 5.1-1.3 1.9-.4 1.7 .1 1.6 1 1.7 4.4 .2 3.8 1.3 2 1.7 .6 1.6-.3 1.7-.7 1.1-3.5 2.7 1.7 6 .4 5.9-.8 6.6-1.9 6-3.4 5.9-4.4 5.3-5.5 4.4-6 3.1-6.5 2-7.1 .7-6.5-.7-6.5-2.1-6-3.4-4.8-4.4-3.5-4.9-3.1-6.7-3.3 1.1-2.7 .3-2-.6-1.1-1.1-.3-2.2 .9-2.7 2.9-3.8 4.6-3.8 1.8-7.1-6.3-1.8-1.6-1.3-1.3-1.8-.6-2.7 0-6.6-1.4-8.7 .2-1.1 1.5-1.4 1.1-.1 1 .5 5.5 7.9 2.2 2.2 2.7 1.4 4.9 .4 .5-.1 6.5-5.1 6.6-3.2 6-1.6 8.7-.7 3.8-.9 2.7-1.5 3.9-3.2 3-3.8 2.4-4.9 2.1-10z", paints: [["M61 36.5l1.9 .7 1.4 2-.7 5.4 .3 .4 2.8-1.2 1.1 0 1 .9 .5 1.6-.5 .8-1 .5-7.1 2.4-1.1-.5-.9-1.6 1.4-5.4-.5-.6-3.3 1.1-1.1-.1-1.6-1-1-1.6 .5-.9z", "#fff", 1]], shade: "M80.2 5.5l.6 1.6 1.3 8.2 2.5 6 .2 3.7-.1 1.1-1.2 2.2-5.2 5.4-1.1 3.3 .9 2.7 3.8 3.9 1.6 .1 4.4-1.4 1.2 1.2 .1 1.1-.2 1.7-.6 1.1-3.6 2.7 .9 2.2 1.1 5.4 .1 6-1.1 6.5-2.3 6-3.8 6-6 6-4.9 3.3-5.9 2.6-7.1 1.7-7.1 .1-6-1.1-5.9-2.3-4.4-2.7-4.4-4.5 3.8 .4 5.5-1.5 7.6-3.9 6.8-4.7 7.9-6.5 7.1-6.9 5.4-6.5 4.4-6.7 1.8-4.4 .4-3.2-.3-1.1-3.3-3.8-.8-2.8 .8-2.7 6.2-7 .8-2.2-.1-2.7-1.7-4.4-.8-8.2zM14.9 29.9l.1-.5 4 6.5 2.3 2.7-1.4 .1-2-.6-3.6-7.1zM24.3 44.6l1-.3 1.1 .2 3.3 2.9 1.7 .5 .3 1.6-.5 2.2-1 1.6-1.6 1.5-1.6 .7-1.7 .1-3.2-2.2-2.2 0-2.7-.6-2.9-1.6 3.9-1.6 2.2-1.7 2.2-2.3zM21 68.6l.5-.5 1.1 .1 1.1 .5 .8 1 .6 2.7-.1 1.1-.7 1.1-.6 .1-2.2-1.2-2.7 1.1-3.8 .6-2.7-1.2 3.4-1.6z", light: "M77 4.4l.6-.2 .1 .7-1.2 .8-.1-.8zM74.2 15.8l.6 1.1 .1 2.7-.6 2.2-1 1.6-5.5 5-1.7 .7-3.3 .3 .1-.6 2.1-1.2 4.2-3.6 2.7-3.9zM11.7 28.9l.8 0-.1 .5-1.2 .8-.1-.8zM44.3 32.1l3.1 0 .8 1.1 0 1.1-1.9 4.3-3 4.1-1.7-1.1-2.1-.8-4.4-.6-4.4 .1 5.5-4.4zM22 54.4l.6 0-.3 .6 .2 .5 2.3 2.7 .4 1.7-1 .9-4.8 2.3-7.1 7.8 0-1.8 2.1-3.3 6.4-5.4 1.2-4.3z", eyes: [[61.8, 69, 9.5, 22.3, -10.5], [78.4, 62.7, 6.9, 22.2, -11.2]] },
+  hex: { label: "Blossom", body: "M38.8 4.2l2.6-.1 6 1.3 2 1.3 3 3.3 12-4.5 2-.5 6.5 1.1 2.9 1.6 4.9 6 .8 2 .3 2-.2 2.5-1.9 7-1.3 2.2-1.9 1.8 2.9 1.3 1.8 1.7 10.1 12.5 1.5 3 .1 4-1.8 7-.9 2-2.8 2.7-7.1 2.7-5.2 20-.8 2-1.4 1.9-1.5 1.1-6.5 2.6-3 .2-6.5-1.6-2-1.4-4-4.9-16 5.7-2 .1-4.5-1-3-1.2-5.2-6-1.3-3 0-3.5 2-8.5-10.8-13.4-1.4-3-.3-2 .3-2.5 1.7-6.5 1.8-3 2.2-1.8 5.9-2.2 2.1-.4 2.5 .3 .4-.4-.7-2.5 .1-2.5 4.8-18.5 1-2.5 2.9-2.9z", shade: "M49.7 7.7l.2-.4 .5 .4 2 2.3 0 .7 1.6 1.5 1 2 .1 1.5-.3 .5 .6 1.3 17.5-6.5 2.5-1.3 1-1.5 4.5 6 .6 1.5 .3 3-1.9 8-1 2-3 3-.3 1 .4 .5-1.7 3 .1 .5-.5 .5 0 .7 5.5-2.2 1.5-1.5 2 2 8 10 1 1.5 1 2.5-.1 4-1.9 7-1.1 1.9-2.9 2.5-6.8 2.5-4.7 19-1.5 3.5-2.5 2.5-6.5 2.6-4 0-5.5-1.4-2.2-1.7-3.2-4 4.9 .8 2.5-1.4 1.5-2.6 .7-2.3 1.7-6.5-.4-.3-.6 .8-.7 3.5-1.1 1.5 .3 .5-.3 .5-.7-.5-1.4-5.5-.5 1-.2 2-.9 1-.1 1.5-1.1 2-2.7 2.8-1 .4-1 .1-15.5 5.8-3-.1-4.5-1-2-1-2-2-2.2-3 .2-.2 4 .9 2-1.1 1.7-1.6 1.3-3.2 1.7-6.3 1.1-2.5-.3-.3-.5 .2-6.5-.3-.5-.5-2 0-.5-.5-1.7-.1-10.4-13.4 4.1 .7 3.1-1.7 1.3-2 2.5-8.5 .9-1.5 1.7-1.3 6.5-2.7 2-1.5-.3-.5 .3-.5 1.5-1.2 1.5-3 5.6-20.3 1.9-2 6-2.4 1.1-.6zM73.2 31.2l1.5 0-.8 1-34 12.7-1 .1-1.5-.5-2 .8-1.9-2.6 .4-.9 2 .5 1.5 1 .5-.4 1 .5 1-.3 1 .4 3-1.5 1 .1 3-1.6 1 .1 3-1.6 1 .1 3-1.6 2.5-.5 1.5-1 2.5-.5 1.5-1 2.5-.5 1.5-1 2.5-.5 1.5-1 1 0zM61.3 74.6l.1-.2 .4 .2-.4 1.7z", light: "M33.4 6.2l3 .1 1.9 .9-.1 .5-1.8 2.5-3.4 3.5-4.5 17-3.6-.9-1 .4 0-1 4.4-16.5 0-1.5 2.1-3.1zM68.2 6.2l1.2 0zM14.9 37.7l3.5 .9 .4 .6-.3 1-5 5.5-1.1 4.6-2.5-.5-2 .1 0-1.7 1-4.5 1-2.5 2-2.1zM19.4 71.6l4 .7 1.8 .8-1.2 1-1.1 5.1-4.5-.5-.5-.6 1.4-5z", eyes: [[49.8, 55.5, 6.7, 17.7, -10], [61.6, 51.1, 6.7, 17.7, -10]] },
+  gumdrop: { body: "M38.7 4.5l4.4-.5 4.6 .8 4.1 1.9 3.7 3.2 23.2 36.6 2.3 5 1.4 5.1 .7 6.4-.7 6.4-1.8 6.1-3.1 5.7-4.1 5.1-5.2 4.2-5.8 3.1-6 1.8-6.4 .6-6.4-.6-6-1.8-5.9-3.1-5.1-4.2-4.1-5.1-3-5.4-1.9-6.4-.7-6 .5-5.9 9-41.6 2-4.1 2.6-3.2 3.4-2.5z", shade: "M54.9 9.5l1.9 2.3 22.9 36.5 1.8 4.6 .9 3.7 .6 4.1-.1 5.9-1.4 6.4-2.3 5.5-3.7 5.4-4.1 4.2-4.5 3.3-7.3 3.2-6.4 1.2-6.4 0-5.1-.9-5.9-2.1-5.5-3.3-4.6-4.1 .5-.3 4.1 .8 5.5-1 6.4-2.6 7.3-4.5 7.2-5.7 6.5-6.4 5.5-6.9 3.5-5.9-18.1-37 1.1-3.7 .2-2.3z", light: "M37.1 4.9l2.5 0 .8 1.4-.5 2.1-1.8 2.9-3.2 3.2-3.2 2.1-2.3 .7-1.8-.1-.7-.9 .1-1.8 2.4-4.1 2.7-2.8z", eyes: [[52.1, 40.3, 9.7, 22.9, -15.2], [64.8, 35.6, 6.3, 23, -27]] },
+  peanut: { body: "M43.5 4l6.6 .7 5.8 2.2 5.4 3.8 4.1 4.7 2 3.8 1.4 4.3 1.3 11.9 1 4.3 1.6 3.8 5.8 10.5 1.4 3.8 .8 4.3 .1 6.2-1 5.7-2.1 5.5-3.2 4.9-4.1 4.3-4.8 3.4-5.6 2.4-5.7 1.3-6.1 .1-5.8-1.1-5.7-2.2-4.7-3.1-4.3-4.1-3.3-4.8-2.5-5.7-1.2-5.7-.1-6.7 1.7-9 .4-4.3-.5-4.7-2.5-9.6-.6-3.8 .2-5.2 1.2-5.2 1.5-3.4 2.2-3.3 2.5-2.9 2.8-2.3 3.4-2.1 3.4-1.4 3.8-.9z", shade: "M62.7 12.6l2.6 2.8 2.8 5.8 1.1 4.2 1 11.9 1 3.4 2.3 4.7 4.2 6.7 1.9 4.7 .9 3.8 .2 2.9-.1 6.2-.5 3.3-1.9 5.3-3.4 5.7-3.4 3.8-4.2 3.3-5.7 2.9-4.8 1.4-5.7 .6-6.2-.6-3.8-1-5.2-2.3-4.8-3.4-2.9-2.8 3.9 .8 5.2-.7 6.2-2.5 5.7-3.3 6.7-5.1 6.2-5.9 5.1-6.2 3.5-5.7-1.1-2.8-2.4-2.4-3.2-1.7-11.5-4.1-2.7-1.8-1.6-2.4-.2-2.4 .8-2.9 7.8-8 4.9-7.7 1.6-5.2z", light: "M35.9 5.4l3.2-.2 1.3 .7 .5 1-.5 3.3-2.9 4.8-4.1 4.1-4.8 3.3-4.2 1.5-1.5 0-1.4-.6-.7-1.2 .2-2.4 1.9-3.8 2.4-3.3 4.3-3.9z", eyes: [[50.9, 31.5, 8.7, 20.5, -11.9], [64.2, 26.5, 5.7, 20.3, -16.3]] },
+  saucer: { body: "M45 22.7l6.7 .1 6.7 1.9 4.3 2.5 3.5 3.1 2.8 3.5 2.5 4.5 6.8 .9 5.6 1.2 4.5 1.6 3.5 2.1 2.8 2.8 1.3 3.5-.5 3.5-2 3.5-2.6 2.8-3.5 2.8-4.5 2.8-5.1 2.6-12 4.4-13.6 3.1-13.6 1.5-12.6-.3-5.5-.7-5-1.2-4.1-1.6-3.5-2-2.8-3.1-1.1-3 .5-3.5 2-3.6 2.7-3 3.7-2.9 10.3-5.6 .7-5.1 1.5-4.5 2.6-4.5 3.1-3.5 3-2.4 3.5-2 3.5-1.4z", shade: "M66.5 31.3l.3-.2 .6 .7 1.9 2.5 2 4.5 1.6 1.5 .1 1.5-1.7 1.7-3 1.2-3.1 .5-3.1-.3 4-8.1 .7-3.5zM94.9 47.4l1.1 3-.5 3.5-2.1 3.5-4 4.1-5 3.5-6.1 3.1-7 2.9-6.6 2.1-8 2-9.1 1.5-6.5 .6-11.6 0-4.5-.2-8-1.4-4.6-1.5-3.6-2.1 4.1 1.2 5.1 .8 7 .3 6-.2 15.1-1.9 15.6-3.6 14.5-5.1 5.4-2.5 5.3-3.1 4-3 2.3-2.5 1.2-2.1zM7.3 71l.7 .5z", light: "M40.6 23.7l2.8 0 .8 .5 .7 1.5-.8 3.6-2.6 4-3.9 4-4.5 3.2-4.6 1.7-2.5-.4-1-1.4 0-1.6 .9-2.5 2.1-3.5 2.6-3 3-2.6 3.5-2.1zM22.4 47.4l.7 0-.5 .5 0 1.5 .4 .8 2 1.4 3 1.2 9.1 2 15.1 1.1-.2 1.5-2.2 3.6-3 2.5-4.9 2.5-6 2-7.9 1.5-6.5 .5-7.1-.4-4.9-1.1-3-1.5-1.6-1.7-.6-2.3 1.1-3.1 2.9-3.5 4.1-3.5 4.1-2.6z", eyes: [[53.6, 45, 7.8, 18.4, -14.5], [66.2, 40.3, 5, 18.3, -25.1]] },
+  bunny: { body: "M49.3 4.4l1.5-.4 2 1.2 1.6 2.7 1.2 3.4 1.6 8.9 .2 6-.2 6.4 .6 3 2.4 2.5 5.4 3 3.4 2.4 5.1 5.5 2.4 3.9 1.7 4 1.1 4.4 .4 4.5-.5 5.9-1.6 5.5-2.8 5.4-3.6 4.5-4.6 3.8-4.9 2.7-5.5 1.7-5.9 .7-6-.5-5.4-1.7-4.9-2.5-4.7-3.7-3.8-4.5-2.7-4.9-1.8-5.5-.7-5.9 .6-6.5 1.9-5.9 3.1-5.4 4.6-5.5-.4-2-3.4-8.4-1.8-6.9-.6-6.9 .3-3 .6-2 1.3-1.4 2-.1 2.5 1.5 2.1 2.5 4 6.9 2.1 5.5 1.7 5.9 1.5 2.1 1.8-1.6 .7-2-.4-12.4 1-8.9 1.6-4.9z", shade: "M52.7 5.4l2.1 3.5 1.9 7.4 .7 7.9-.5 8.4 .8 3.6-4.4-2.5-2.1-2.6 1.4-17.3zM31.2 15.3l.3-.5 2 2.5 2.9 4.9 2.5 6 1.7 6.4 1.4 2.5 0 .5-1.1 .9-4.5 1.9-2.4 .2-1.2-.6zM71.5 46l3.6 4.4 2.9 6 1.5 6.4 .1 5.5-1.1 6.3-2 5-3.4 5.4-3.5 3.6-4 2.9-6.4 3-4 1-6.9 .5-5.9-1-5.5-2-5.4-3.5-3.6-3.4 2.6 .7 2.5 .1 2.9-.5 4-1.3 8.4-4.6 8.7-6.8 7.4-7.9 5.3-7.9 1.3-3 1-3.5 .2-2.9-.2-2z", light: "M49.3 4.4l.6 0-3.6 6.2 1-3.7zM26 13.3l.5-.4 .2 .4-1.7 2.2 0-.7zM44.8 34.6l.5-.1 1.2 1.1 .8 1 0 .7-.5 .3-4-.5zM45.1 42.5l.8 0-.3 1-2.4 4.5-3.8 4.4-4.1 3.5-3.8 2.4-4 1.6-2.9 .1-1.8-1.1-.4-2.5 1.1-3.5 3.5-5.4 3-3.1 .2 1.6 .8 .8 3 .1 4.4-1.2z", eyes: [[59.2, 69.2, 8.2, 19.3, -12], [72.9, 64, 5.6, 19.1, -15.4]] },
+  kitty: { body: "M62.4 4.2l1.6-.1 1.5 1.2 7.4 21.3 3.7 6.4 6.2 7.4 3.1 5.9 1.5 4.8 .7 5.3-.2 5.4-1.1 5.3-3 7.4-4.4 6.4-5.3 5.4-6.9 4.6-7.5 3.1-8 1.7-8 .2-7.4-1.4-4.3-1.5-3.7-1.8-3.8-2.5-3.1-2.7-2.7-3-2.5-3.7-1.9-3.7-1.4-4.3-.9-5.3 .1-5.8 1.4-7 1.6-4.2 2-3.8 .8-3.2 .2-20.2 1.1-1.4 1.1-.3 1.1 .3 12.2 9.7 5.9-2.5 8-2.1 3.2-1.8 2.3-2.4 8.3-16z", shade: "M64.9 5.8l.1-.3 .7 .3 6.5 19.7 3.1 5.9 2.5 3.2-1.6-.8-2.6-2.4-5.1-8zM79.4 36.7l2.2 2.1 1.6 2.2 3.3 6.9 1.5 6.9-.1 6.4-1.6 7.5-3.1 6.9-3.8 5.3-5.3 5.4-6.4 4.3-7 3.1-6.3 1.6-4.3 .6-5.3 0-7.5-1.1-5.8-2-5.9-3.3-5.9-5.4 2.7 .7 3.2-.1 3.7-.8 5.2-1.9 10.3-5.5 11-7.8 10.7-9.6 7.8-9.1 3-4.6 1.6-3.4 .7-3.2z", light: "M62.4 4.2l.5-.1 0 .6-.8 1.1-4.5 14.4 .2 2.7-.3 1.6-1.1 1-2 .6-6.9-.5 2.6-1.3 3.1-3 8.1-16zM18.7 20.7l1.1-.5 0 .8-1.1 .9-.6-.1zM39.5 27.7l2.6-.3 1.9 .8 .4 1.6-.7 1.8-4.2-1.5-5.4 .2 0-.5zM16 47.4l.3 4.2 1.6 2.2 3 2.1-.6 .5-3.7 .6-1.1-.3-1.1-1.1-.4-1.8 .4-2.7z", eyes: [[59.6, 65.1, 9.4, 22.6, -11.9], [77.5, 58.4, 7, 22.5, -14]] },
+  beacon: { body: "M40 4.1l2.7 0 2.5 .9 2 1.7 1.1 2.1 .5 2-.2 2.1-2.1 4.1-.4 1.6 1.5 7.7 9-3.1 4.1-.2 18.5 4 3.1 1.6 2.4 2.3 1.3 2.1 .9 2.6 5.8 33.4-.4 3.1-1.3 3.1-2 2.5-2.6 1.9-41.7 15.7-4.1 .7-19.6-4-3.5-1.9-2.5-2.5-1.2-2.1-.8-2.6-5.7-32.9 .4-3.1 1-2.7 1.7-2.5 2.4-1.9 28.4-10.9-1.5-9.3-.7-1-3.5-3.3-.9-1.9-.4-2 .5-2.6 1.1-2.1 1.7-1.5z", shade: "M47.1 7.2l.4 0 .8 1.6 .3 2-.2 2.6-2.5 4.7 1.5 8.2 0 2 .5 .6 .1 1.5 .5 1-1.2 .4-1.3-.4-.3-.5-1.9-10.3-4.1-1.5-3.2-2.6 3.1-.9 3.2-2.2 2.5-2.6zM84.2 30.9l1.2 1.1 1.5 3.6 5.7 32.4 0 2.6-1 3.6-1 1.5-3.1 3.2-4.2 1.9-40.6 15-4.2 0-16.4-3.6-3.6-1.4-2.6-2.2 .5 .4 17.5 3.4 3.8-1.2 5-3.4 1-1.3-5.4-30.3 .2-.6 3.1-3.4 40.2-15.1 2-3.6z", light: "M38.5 4.7l2 0-.1 1-.8 1.4-2.6 2.2-1 .4-1.1-.1-.1-.8 .7-1.6 1.5-1.6zM55 23.7l1.1 .1-1.6 .6-.9-.2 .9 0zM52.4 24.7l1 0-3 1.2-.9-.1 2.4-.6zM48.3 26.3l1 0-1.5 .6zM40 29.4l1.1 0-3.1 1.2-.9-.2 2.5-.5zM35.9 30.9l1 0-3 1.2-.9-.1 2.5-.6zM31.8 32.5l1 0-3 1.2-.9-.2 2.4-.5zM40.2 33l.4-.4 1-.1 1.6 .8 3 .7-1.5 .5-4.1 0-.9-1zM27.7 34l1 0-3 1.2-1-.2 2.5-.5zM23.6 35.6l1 0-3 1.1-1-.1 2.5-.5zM19.4 37.1l1 0-2.4 .8-.5 .7 15.4 3.3 .5 .3 .3 1.1-1.1 2.6-3.3 3.3-3.1 1.5-17.5-3.6-.6-1.2 .5-1.6 3.2-3.7 2.1-1.4 2.5-1.1 1 0 .6-.5 1 0z", eyes: [[55.5, 65.3, 8.4, 22.1, -10], [74.2, 58.3, 8.4, 22.1, -10]] },
+  plus: { body: "M44.6 4.3l3.3-.1 11.9 2.5 2.5 1.3 1.3 1.4 .7 1.6 2.1 11.4 4.1-1.2 2.1 0 12.3 2.6 2.8 1.6 1.2 1.5 .7 1.5 3.8 21.6-.5 3.1-1 1.5-1.3 1.3-17 6.6 3.4 20.4-.4 2.5-1.2 2.1-2.3 1.6-19 6.9-2-.2-11.9-2.5-2.5-1.3-1.3-1.4-.7-1.6-2.1-11.4-4.1 1.2-2.1 0-12.3-2.6-2.8-1.6-1.2-1.5-.7-1.5-3.8-21.6 .5-3.1 1-1.5 1.3-1.3 17-6.6-3.4-20.4 .2-2 1.1-2.2 2.6-2z", shade: "M63.2 9.4l.7 .6 .5 1.5 2.1 13.3 .6 .6 0 2.5 .5 .5 .1 2.6 .5 .5 .1 2.1-.8 3.1 19-7.1 1-1.2 1-2.1 1.1 2.1 .4 2.6 3.2 18 0 3.1-1 2-2.2 2.1-15.9 5.8-.8 .8 3.6 19.5-.1 2.6-1.5 2.6-2.2 1.6-16.4 6.1-2.1 .6-2.5 0-12.4-2.7-2.2-1.5 12.5 2.5 2.4-1 2.7-2-3.9-22.1-3.8 3.5-1 .4-2.6 .5-1.5 1-2.6 .5-1.5 1-2.6 .4-1.5 1-4.6 1.5-2.5 0-11.9-2.6-2.7-1.6 12.4 2.3 2.6-.9 2.4-1.9-3.4-20.5 .3-.5 1.7-1.8 18.6-6.9 .3-.6-.7-1-3.8-22.1 2.1-2.1 16.4-6.1 .6-.5z", light: "M28.4 10.5l1.1 .5 10.2 2.1 .5 .4-.1 1.1-1.9 2.3-2.1 1-12.3-2.5-.1-1.3 1-1.6 1.2-1zM11.4 43.3l11.4 2.2 1 .6 0 .8-1.5 2.3-2.6 1.4-12.3-2.6-.2-1.1 .6-1 2.2-2.1z", eyes: [[54.5, 53.1, 6.1, 15.9, -10], [64.5, 49.4, 6.1, 15.9, -10]] },
+  magnet: { body: "M71.9 4.2l1.2-.2 12.1 2.6 .5 .3 .6 1 6.2 35.6 .6 5.8-.1 5.7-.7 5.8-1.5 5.7-2.2 5.8-4.2 7.3-5.5 6.5-6.5 5-7.1 3.4-6.3 1.3-6.3 0-15.2-3.1-5.2-1.8-5.2-3-4.6-4.1-4-5.2-2.9-5.8-2.4-7.8-6.4-36.2 25-9.5 13.1 2.9 .5 .9 6.3 35.3 1.8-3.9 .5-4.7-6.3-36.1 .4-.6z", shade: "M86.2 9.5l.5 1 5.8 33 .6 4.7 0 5.2-.6 5.8-2.1 8.4-3.1 7.3-3.7 5.8-6.3 6.8-5.7 4.1-5.8 2.7-6.8 1.5-6.3 0-15.2-3.1-5.7-2-5.2-3.2-5.9-5.8 .1-.7 11.5 2.5 .3-3.4-1.9-13.6-5.7-32.4 1-.1 18.3-6.9 .9-.9 .4-1 6.1 35 1.6 2.1 .1 .6 4 4.7 3.2 1.1 3.6-.6 3.2-1.9 2.4-2.8 1.9-4.2 .6-3.7-6.4-36.6 19.3-7.1 .8-.8z", light: "M53.6 54.5l.7-.4 12 2.8 .6 1.8-.6 2.1-2.1 2.4-2.6 1-1.5 0-6.3-1.4-1.6-2.6-.2-2.1z", eyes: [[59.6, 82.1, 6.1, 15.9, -10], [72, 77.5, 6.1, 15.9, -10]] },
+  acorn: { body: "M47.6 4l2.1 .6 1.3 1.5 .4 1.5-.4 5.2 .3 .3 8.8-.1 7.7 1 7.3 2.1 5.7 2.9 3.6 2.9 2.6 3 1.8 3.4 .9 3.7 0 4.1-1 3.6-1.7 2.2-3.9 3 2.9 8.3 .9 8.3-.9 8.3-2.7 7.7-4.2 6.8-2.9 3.1-3.2 2.6-6.7 3.8-3.7 1.2-4.1 .8-7.2 0-7.3-1.7-7-3.6-5.9-5.1-4.8-6.3-3.3-7.3-1.8-7.7-.1-8.3-4.5-1.5-2.6-1.7-2.6-4.1-1.1-4.1 0-4.2 1.2-4.1 2.2-4.1 2.8-3.7 5.2-4.6 6.3-3.8 7.2-3.2 8.3-2.3 .9-8.3 1.2-1.4z", shade: "M50.6 6.1l.1-.5 .6 2-.6 5.7 .2 2.1-1.2 .2-1.2-.7 .5-6.8zM85.8 23.7l1.7 2 1.6 3.7 .6 2.6-.1 4.1-.5 2.6-1.1 2.1-2.1 2-2.9 2.1 1.4 3.1 1.6 5.2 .9 8.8-.5 5.7-1.4 5.7-2.2 5.1-2.6 4.2-5.1 5.7-5.2 3.6-4.7 2.2-6.2 1.5-7.7 .1-5.7-1.2-6.8-3-4.6-3.2-4.2-4.2 2.1 1 2.1 .3 3.1-.3 3.1-.9 6.4-3.1 6.5-4.6 6.6-5.8 5.9-6.4 5.6-7.9 4-7.4-2.4 .4-.5 .5-1.1 0-.5 .5-1 0-.5 .5-1.1 0-.5 .5-1 0-.5 .6-1.6-.1-.5 .5-1.6 0-.5 .5-3.6 .5-.5 .5-2.1-.1-.5 .6-2.1-.1-.5 .7-3.1-.2-.5 .5-3.1 0-.5 .7-4.7-.2-.5 .7-15.6-.3 0-.3 8.3-.6 11.4-2.4 11.4-3.8 10.5-4.8 9.2-5.7 6-5.2 2.2-2.6 1.6-2.9 .5-1.7z", light: "M46 4.5l1.1-.1 0 .6-1.5 1.6-1.1 .2-.1-.7zM38.5 15.9l5 0 3.3 1.6 1.6 3.1 .1 3.1-.9 3.1-1.9 3.1-3.2 3.6-4 3.1-3.6 2.1-8.5 3.2-4.1 .7-4.2 .1-3.1-.5-2.6-1.5-1.1-2 .1-2.1 .5-1.5 2.1-3.7 4.1-4.6 3.7-3.1 5.1-3.2 6.3-3z", eyes: [[63.6, 63.3, 9.6, 22.7, -11.9], [79.5, 57.3, 6.5, 22.5, -15.5]] },
+  pebbles: { body: "M47.3 4.5l2.7-.4 2.7 .1 13.7 3 4.3 2.1 3.3 3.4 1.3 2.2 1 2.8 2 12-.5 4.3-3.1 7.7 .2 .5 8.4 1.9 2.7 1 3.3 2.1 2.7 2.8 2.4 4.3 1.4 6.5 .1 4.4-.8 3.8-1.3 2.7-2 2.8-2.4 2.2-2.7 1.6-45.5 17-3.3 .6-3.2-.2-19.2-4.2-4.9-2.8-3.4-3.8-1.9-4.4-1.3-7.7 .2-3.2 .8-2.8 1.3-2.7 2-2.7 3.2-2.8 7.9-3.8 2.5-2.2-.4-1.6-5.4-6.1-1.8-3.8-2.3-12.5 .2-3.3 .7-2.7 2.6-4.4 2.2-2 2.2-1.4z", shade: "M73.2 12.2l.4 0 1.5 2.2 1.2 3.3 1.8 11.4-.2 4.4-3.3 7.6 0 1.1 .6 1.1-1.2 1.3-26.8 10.1-3.2 .5-5.8-.4-15.2-3.3-1.4-.5-3.5-3.8 .2-.3 1.6 .2 10.9 2.2 2.8-.5 4.4-2.2 5-3.8 .1-.6-1.5-8.7 4-4.5 24.2-9.2 2.4-3.8zM90.9 48.8l2.8 3.8 1 2.8 1.2 6 0 4.3-1.1 3.9-1.7 3.2-3.8 3.9-2.7 1.7-42.1 15.8-5.5 1.6-3.8 0-18-3.8-4.9-2.1-3.4-2.9 17.6 3.8 2.7-.2 3.3-1.2 4.3-2.6 4.4-3.6-.4-3.8 4.4-4.9 42.5-16 2.1-3.1 1.1-2.8 .5-3.3z", light: "M45.6 5.1l1.5 0-.4 .2-22.9 8.5 11.4 2.5 .6 .8 0 1.6-1.5 2.8-1.9 2.2-2.8 2.1-3.1 1.2-13.2-2.8-.1-2.2 1.2-2.2 1.7-2.2 2.7-2.2 2.2-1.1 2.2-.5 .5-.5 2.8-.6 1.6-1.1 2.7-.5 1.7-1.1 2.7-.6 1.6-1 2.8-.6 1.6-1.1 2.8-.5zM21.6 53.2l15.8 3.6 1.2 .7-.1 .9-.8 .8-3.1 1.6-1.3 3.8-3 3.8-3.3 2.5-3.3 1.4-18-3.6-.6-1.3 .6-2.2 1.6-2.7 1.7-1.8 3.8-2.8 5.5-2.2z", eyes: [[51.2, 34.1, 6.9, 18.1, -10], [66.4, 28.4, 6.9, 18.1, -10]] },
+  cushion: { body: "M64.2 4.4l3.3-.4 2.8 .2 3.9 .8 2.8 1.1 2.7 1.7 2.4 2.1 1.9 2.4 1.5 2.8 1.2 3.9 7.1 40.6-.1 5-1.4 4.5-1.6 2.9-1.9 2.2-2.2 1.9-2.8 1.7-45.6 17.1-3.4 .9-3.4 .2-4.5-.7-3.4-1.2-3.3-2-2.9-2.7-2.3-3.4-1.5-3.9-7.3-41.7 .1-5 1.4-4.5 1.6-2.9 1.9-2.2 2.2-1.9 2.8-1.7z", shade: "M82.1 10l2.9 4 1.6 4.5 7.3 42.2-.5 5.1-1.1 3.3-1.7 2.9-4.6 4.5-3.3 1.7-46.8 17.4-5.6 .2-4-.7-3.3-1.2-3.4-2.2-1.7-1.8 .6 .4 3.3 .2 4.5-1.2 5.1-2.8 5.3-4.4-6.9-39.4 5-5.7 43.9-16.4 2.3-3.6 1.1-2.8 .5-3.6z", light: "M62.3 4.9l1.8 .1-43.4 16.1 1.1 .4 .8 .9 .1 1.7-1.6 3.4-2.6 3-3.4 2.7-3.4 1.5-3.4-.2-.8-.8-.2-1.2 .4-1.6 1.7-2.9 3.4-3.5 2.3-1.6 3.4-1.6 5.6-1.8 .6-.5 1.1 0 .5-.6 2.3-.5 .6-.6 1.1 0 .6-.6 2.2-.5 .6-.6 1.1 0 .6-.6 2.2-.5 .6-.6 1.1 0 .6-.5 2.2-.6 .6-.6 1.1 0 .6-.5 2.2-.6 .6-.5 1.1-.1 .6-.5 2.2-.6 .6-.5 1.1-.1 .6-.5 2.2-.6 .6-.5 1.1 0 .6-.6 2.2-.6 .6-.5 1.1 0z", eyes: [[51.1, 57.2, 8.4, 22.1, -10], [69.9, 50.1, 8.4, 22.1, -10]] },
+  ring: { body: "M48.1 4.3l8-.1 7.8 1.8 7.3 3.5 6.7 5.4 5.2 6.7 4.1 8.3 2.3 8.9 .7 9-1 9.5-2.5 8.9-4.1 8.3-5.3 7.3-6.6 6.1-7.3 4.5-7.8 2.7-8.4 .9-7.2-.8-7.3-2.5-6.7-4.1-5.6-5.3-4.5-6.5-3.5-7.8-2-8.4-.6-8.4 .9-8.9 2.2-8.4 3.5-7.8 4.9-7.2 5.8-6.1 6.3-4.5 7.1-3.3zM50.5 33.8l2.3-.3 1.7 .4 1.6 1.1 2 2.2 1.3 2.8 .8 2.7 .4 3.4-.1 3.3-1.4 6.2-3 5.6-2.2 2.4-2.2 1.6-2.3 1-2.2 .3-1.7-.4-1.6-1.1-2.8-3.7-1.5-5.2-.1-5.5 1.2-5.6 2.4-5 3.6-4z", shade: "M76.2 14.9l1.1-.5 3.4 3.8 2.8 3.9 2.3 4.5 1.6 3.9 1.6 5.6 1.1 8.3-.4 10.1-1.3 6.1-2.6 7.8-4.6 8.3-4.4 5.6-6.2 5.7-6.1 3.8-7.2 2.9-6.2 1.1-7.8-.1-7.2-1.7-3.9-1.6-4-2.2-5.5-4.5-2.8-3.4 1.7-.6 2.4-2.1 2-2.8 1.2-2.8 1.2-5 1.1-13.4 1.4-7.8 2.5-7.8 3.8-7.3 3.3-4.5 3.4-3.4 3.9-3.1 4.4-2.6 3.9-1.5 4.5-1.1 12.3-.9zM50.5 33.8l.6-.3 2.8 0 1.6 .9 2.7 2.8 3 1.4 3.3 .5 6.1 .2 3.9 .9 1.7 1 1.7 1.6 2.1 4.4 .7 4.5-.3 5-1.2 5-1.9 4.5-2.8 4.2-3.3 3.6-3.9 2.8-3.9 1.7-3.4 .6-3.3-.1-3.4-1.1-2.5-1.7-2.5-3-3.6-7-2.9-3.4-2.1-5-.6-5.6 .6-4.4 1-3.4 2.3-4.4 1.4-2.1 2.3-2.2 2.7-1.7z", light: "M41.1 5.9l.5 .1 .2 .5-.3 .6-12.4 13.3-13.1 18.1-2.3 2.1-1.1 0-.2-1.2 .2-2.8 1.6-5 4.6-8.3 3.9-5.1 4.4-4.4 4.5-3.4 5-2.8zM60.5 53.3l1.2-.3 1.1 .6 1.1 1.3 .8 1.8-.2 3.3-1.5 2.8-2 1.7-2.6 1-7.3 .2 2.2-1.4 2.6-2.6z", eyes: [[56.2, 84.6, 5.3, 13.3, -6.8], [71.7, 78.8, 5.1, 13.4, -6.5]] },
+  gem: { body: "M57 9.3l2.9-.4 14.9 3.5 19.6 14.1 1 1.4 .6 1.6-.5 2.6-27.1 56.5-1.6 1.8-2.1 .7-15.9-3.4-42.9-30.7-1.3-1.6-.6-1.6 .5-2.6 12-25.2 1.1-1.5 1.5-1z", shade: "M75.7 14.6l.1-.4 .6 .2 16.9 12.3 1.1 .7 .5-.2 .5 .7 .6 2.6-.5 1.6-26.4 55.1-1.2 2.1-1.1 1.1-1.6 .6-2.1 0-14.3-3.3-42.8-30.7 1.5-.2 11.6 2.5 2.2-.7 2.8-2.6 11.9-24.9 .6-.8 38.2-14.2z", light: "M19.1 23.6l1.1-.4 .5 .5 11.7 2.2 1 .9-.2 .5-1.8 2.7-11.7 24.4-1.6 .6-13.3-2.8-.5-.5 12.1-25.4 1.2-1.7z", eyes: [[51.4, 42.9, 6.7, 17.7, -10], [66.1, 37.4, 6.7, 17.7, -10]] }
+};
+var PICKER_SHAPES = Object.keys(CHARACTERS);
+var PICKER_COLUMNS = 6;
+var DEFAULT_SHAPES = ["star", "moon", "gumdrop", "peanut", "bunny", "kitty", "acorn"];
+var FALLBACK_SHAPE = "gumdrop";
+var MAIN_LOOK = Object.freeze({ shape: "octopus", color: "deepseek" });
+var CHARACTER_COLORS = ["black", "brown", "red", "orange", "yellow", "green", "cyan", "blue", "violet", "magenta", "gray", "aurora"];
+var DEFAULT_COLORS = CHARACTER_COLORS.filter((color) => !["black", "gray", "brown"].includes(color) && !GRADIENTS[color]);
+var isColor = (color) => isHex(color) || Object.hasOwn(INKS, color);
+function fnv1a(text) {
+  let value = 2166136261;
+  for (let index = 0; index < text.length; index += 1) value = Math.imul(value ^ text.charCodeAt(index), 16777619);
+  return value >>> 0;
+}
+function defaultColor(id) {
+  const t = fnv1a(id) + 1831565813 | 0;
+  let n = Math.imul(t ^ t >>> 15, 1 | t);
+  n = n + Math.imul(n ^ n >>> 7, 61 | n) ^ n;
+  return DEFAULT_COLORS[Math.floor(((n ^ n >>> 14) >>> 0) / 4294967296 * DEFAULT_COLORS.length)];
+}
+function defaultShape(id) {
+  let value = fnv1a(id) | 0;
+  value = Math.imul(value ^ value >>> 16, 73244475);
+  value = Math.imul(value ^ value >>> 13, 3266489909);
+  return DEFAULT_SHAPES[((value ^ value >>> 16) >>> 0) % DEFAULT_SHAPES.length];
+}
+var colorOf = (bot) => isColor(bot?.color) ? bot.color : bot?.id ? defaultColor(String(bot.id)) : "black";
+function lookOf(bot) {
+  const avatar = bot?.avatar ?? {};
+  return {
+    shape: hasShape(avatar.shape) ? avatar.shape : bot?.id ? defaultShape(String(bot.id)) : FALLBACK_SHAPE,
+    image: avatar.image,
+    color: colorOf(bot)
+  };
+}
+var SHAPES = {};
+for (const [id, character] of Object.entries(CHARACTERS)) {
+  const layers = [
+    ...(character.paints ?? []).map(([d, fill, opacity]) => `<path d="${d}" fill="${fill}" fill-opacity="${opacity}"/>`),
+    `<path d="${character.shade}" fill="#000" fill-opacity=".14"/>`,
+    `<path d="${character.light}" fill="#fff" fill-opacity=".16"/>`
+  ].join("");
+  SHAPES[id] = { label: character.label ?? id[0].toUpperCase() + id.slice(1), size: 100, path: character.body, layers, eyes: character.eyes };
+}
+var hasShape = (id) => typeof id === "string" && Object.hasOwn(SHAPES, id);
+var shapeId = (id) => hasShape(id) ? id : FALLBACK_SHAPE;
+var shapeOf = (id) => SHAPES[shapeId(id)];
+function bodyOf(def, paint, flat = false) {
+  if (def.path) return `<g fill-rule="evenodd"><path d="${def.path}" fill="${paint}"/>${flat ? "" : def.layers}</g>`;
+  try {
+    return def.body(paint);
+  } catch {
+    return "";
+  }
+}
+var PUPIL = "#0a0f1f";
+var pupilMarkup = ([cx, cy, w, h8, tilt]) => `<g transform="translate(${cx} ${cy}) rotate(${tilt})"><g class="bt-eye"><rect x="${-w / 2}" y="${-h8 / 2}" width="${w}" height="${h8}" rx="${w / 2}" fill="${PUPIL}"/><circle cx="${w * 0.12}" cy="${-h8 * 0.24}" r="${w * 0.3}" fill="#fff"/><circle cx="${-w * 0.16}" cy="${h8 * 0.22}" r="${w * 0.12}" fill="#fff" fill-opacity=".7"/></g></g>`;
+var blushMarkup = ([cx, cy, w, h8, tilt]) => `<ellipse cx="${cx}" cy="${cy + h8 * 0.56}" rx="${w * 0.78}" ry="${w * 0.4}" transform="rotate(${tilt} ${cx} ${cy})" fill="#ff5fb8" fill-opacity=".42"/>`;
+var eyeMarkup = ([cx, cy, w, h8, tilt]) => `<g transform="translate(${cx} ${cy}) rotate(${tilt})"><rect class="bt-eye" x="${-w / 2}" y="${-h8 / 2}" width="${w}" height="${h8}" rx="${w / 2}"/></g>`;
+var happyEyeMarkup = ([cx, cy, w, h8, tilt]) => `<g transform="translate(${cx} ${cy}) rotate(${tilt})"><path class="bt-eye-happy" opacity="0" d="M${-w * 0.62} ${h8 * 0.14}Q0 ${-h8 * 0.42} ${w * 0.62} ${h8 * 0.14}" fill="none" stroke="#000" stroke-width="${w * 0.5}" stroke-linecap="round"/></g>`;
+var maskBox = (size) => `maskUnits="userSpaceOnUse" x="${-size}" y="${-size}" width="${size * 3}" height="${size * 3}"`;
+var holes = (def, eyes) => `<rect x="${-def.size}" y="${-def.size}" width="${def.size * 3}" height="${def.size * 3}" fill="#fff"/>${eyes}`;
+var MASK_ID = "%MASK%";
+var markSerial = 0;
+var nextMarkSerial = () => markSerial += 1;
+var markupCache = /* @__PURE__ */ new Map();
+function characterMarkup(shape, color) {
+  const key = `${shape}|${color}`;
+  let markup = markupCache.get(key);
+  if (markup === void 0) {
+    const def = shapeOf(shape);
+    const eyes = `<g class="bt-gaze"><g class="bt-eyes" fill="#000">${def.eyes.map(eyeMarkup).join("")}${def.eyes.map(happyEyeMarkup).join("")}</g></g>`;
+    const ink = inkFill(color);
+    const stops = GRADIENTS[color] ?? [[0, `color-mix(in srgb, ${ink} 58%, #fff)`], [0.5, ink], [1, `color-mix(in srgb, ${ink} 72%, #000)`]];
+    const box = def.size;
+    const gradient = `<linearGradient id="${MASK_ID}g" gradientUnits="userSpaceOnUse" x1="${box * 0.18}" y1="${box * 0.08}" x2="${box * 0.8}" y2="${box * 0.95}">${stops.map(([offset, value]) => `<stop offset="${offset}" style="stop-color:${value}"/>`).join("")}</linearGradient>`;
+    const face = `<g class="bt-gaze"><g class="bt-eyes">${def.eyes.map(pupilMarkup).join("")}${def.eyes.map(happyEyeMarkup).join("").replaceAll('stroke="#000"', `stroke="${PUPIL}"`)}</g></g>`;
+    const body = `<g mask="url(#${MASK_ID})">${bodyOf(def, `url(#${MASK_ID}g)`)}</g>${def.eyes.map(blushMarkup).join("")}${face}`;
+    markup = `<defs>${gradient}<mask id="${MASK_ID}" ${maskBox(def.size)}>${holes(def, eyes)}</mask></defs><g class="bt-b">${def.wrap ? `<g transform="${def.wrap}">${body}</g>` : body}</g>`;
+    markupCache.set(key, markup);
+  }
+  return markup;
+}
+var svgUrl = (inner, size) => `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}">${inner}</svg>`)}")`;
+var maskCache = /* @__PURE__ */ new Map();
+function maskOf(shape) {
+  let mask = maskCache.get(shape);
+  if (mask === void 0) {
+    const def = shapeOf(shape);
+    const body = `<g mask="url(#e)">${bodyOf(def, "#000", true)}</g>`;
+    mask = svgUrl(`<mask id="e" ${maskBox(def.size)}>${holes(def, def.eyes.map(eyeMarkup).join("").replaceAll('class="bt-eye"', 'fill="#000"'))}</mask>${def.wrap ? `<g transform="${def.wrap}">${body}</g>` : body}`, def.size);
+    maskCache.set(shape, mask);
+  }
+  return mask;
+}
+var DEFAULT_MASK = maskOf(FALLBACK_SHAPE);
+
 // src/client/octopus.js
 var BODY = "M50 6C75 6 87 24 87 46C87 60 82 68 80 72C84 82 84 92 80 96C76 98 72 92 70 84C68 92 66 98 61 96C57 94 56 84 54 78C52 80 48 80 46 78C44 84 43 94 39 96C34 98 32 92 30 84C28 92 24 98 20 96C16 92 16 82 20 72C18 68 13 60 13 46C13 24 25 6 50 6Z";
 var SHADE = "M87 46C87 60 82 68 80 72C84 82 84 92 80 96C76 98 72 92 70 84C68 92 66 98 61 96C57 94 56 84 54 78C62 76 70 66 75 56C80 48 80 36 75 26C82 32 87 38 87 46Z";
@@ -9081,10 +9233,66 @@ var STAGE_CSS = `
 @media (prefers-reduced-motion:reduce){.oai-overlay *,.oai-overlay::before,.oai-overlay::after{animation:none!important;transition:none!important}}
 `;
 
-// src/client/stage.js
+// src/client/companion-art.js
 var import_react = require("react");
+var SHAPES2 = PICKER_SHAPES;
+var COLORS = CHARACTER_COLORS;
+var serial = 0;
+function characterSvg(shape, color, size = 120) {
+  serial += 1;
+  return `<svg viewBox="0 0 100 100" width="${size}" height="${size}" aria-hidden="true">${characterMarkup(shape, color).replaceAll("%MASK%", `oaic${serial}`)}</svg>`;
+}
+var INK_CSS = `.oai-overlay{${Object.entries(INKS).map(([name, [, dark]]) => `--bt-ink-${name}:${dark}`).join(";")}}`;
+var swatchOf = (color) => GRADIENTS[color] ? `linear-gradient(135deg,${GRADIENTS[color].map(([at2, value]) => `${value} ${at2 * 100}%`).join(",")})` : INKS[color]?.[1] ?? color;
+var cached;
+function companionLook(state) {
+  if (!state) return void 0;
+  if (state.companionImage) return { image: true, name: state.companionName };
+  if (state.companionShape) return { shape: state.companionShape, color: state.companionColor ?? "cyan", name: state.companionName };
+  return void 0;
+}
+function useCompanion() {
+  const [look, setLook] = (0, import_react.useState)(cached);
+  (0, import_react.useEffect)(() => {
+    let alive = true;
+    call("state").then(async (state) => {
+      let next = companionLook(state);
+      if (next?.image) {
+        const { image } = await call("companion-image").catch(() => ({ image: null }));
+        next = image ? { ...next, src: image } : void 0;
+      }
+      cached = next;
+      if (alive) setLook(next);
+    }).catch(() => {
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  return [look, (next) => {
+    cached = next;
+    setLook(next);
+  }];
+}
+function Hero({ look, hatching }) {
+  const cls = `oai-hero${hatching ? " oai-hatch" : ""}`;
+  if (look?.src) return (0, import_react.createElement)("div", { className: cls }, (0, import_react.createElement)("img", { className: "oai-hero-img", src: look.src, alt: look.name ? `${look.name}, your companion` : "Your companion" }));
+  if (look?.shape) return (0, import_react.createElement)("div", { className: cls, dangerouslySetInnerHTML: { __html: characterSvg(look.shape, look.color, 132) } });
+  return (0, import_react.createElement)("div", { className: cls, dangerouslySetInnerHTML: { __html: OCTOPUS_SVG } });
+}
+function Egg() {
+  return (0, import_react.createElement)(
+    "div",
+    { className: "oai-hero oai-egg", "aria-hidden": "true" },
+    (0, import_react.createElement)("span", { className: "oai-egg-shell" }),
+    [0, 1, 2, 3, 4].map((index) => (0, import_react.createElement)("i", { key: index, className: `oai-spark oai-spark-${index}` }))
+  );
+}
+
+// src/client/stage.js
+var import_react2 = require("react");
 var import_react_dom = require("react-dom");
-var RAIL = [["omni-welcome", "Welcome"], ["omni-connect", "Connect Omni"], ["omni-connect-ai", "Connect AI"]];
+var RAIL = [["omni-companion", "Your companion"], ["omni-team", "Your team"], ["omni-connect", "Connect Omni"], ["omni-connect-ai", "Connect AI"]];
 var ANNOUNCED = /* @__PURE__ */ Symbol.for("automagik.omni.onboarding-steps");
 function announceStep(id, scope = globalThis) {
   const steps = scope[ANNOUNCED] ??= /* @__PURE__ */ new Set();
@@ -9095,7 +9303,7 @@ function railSteps(current, scope = globalThis) {
   const steps = scope[ANNOUNCED];
   return RAIL.filter(([id]) => id === current || steps?.has(id) === true);
 }
-var FLAG_OF = { "omni-welcome": "welcomeDone", "omni-connect-ai": "connectAiDone" };
+var FLAG_OF = { "omni-companion": "companionDone", "omni-team": "teamDone", "omni-connect-ai": "connectAiDone" };
 var reducedMotion = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 async function gate({ stepId, explicit, complete }, request2 = call) {
   let state = {};
@@ -9121,9 +9329,9 @@ async function finishInto(props, section, request2 = call) {
   props.openSection(section);
 }
 function useGate(props) {
-  const first = (0, import_react.useRef)(props);
-  const [state, setState] = (0, import_react.useState)(void 0);
-  (0, import_react.useEffect)(() => {
+  const first = (0, import_react2.useRef)(props);
+  const [state, setState] = (0, import_react2.useState)(void 0);
+  (0, import_react2.useEffect)(() => {
     let alive = true;
     gate(first.current).then((next) => {
       if (alive) setState(next);
@@ -9135,8 +9343,8 @@ function useGate(props) {
   return state;
 }
 function useFinish(props) {
-  const done = (0, import_react.useRef)(false);
-  return (0, import_react.useCallback)((section) => {
+  const done = (0, import_react2.useRef)(false);
+  return (0, import_react2.useCallback)((section) => {
     if (done.current) return;
     done.current = true;
     if (section) void finishInto(props, section);
@@ -9144,10 +9352,10 @@ function useFinish(props) {
   }, [props]);
 }
 function useGlitch() {
-  const [on2, setOn] = (0, import_react.useState)(false);
-  const timer = (0, import_react.useRef)(0);
-  (0, import_react.useEffect)(() => () => clearTimeout(timer.current), []);
-  const glitch = (0, import_react.useCallback)(() => {
+  const [on2, setOn] = (0, import_react2.useState)(false);
+  const timer = (0, import_react2.useRef)(0);
+  (0, import_react2.useEffect)(() => () => clearTimeout(timer.current), []);
+  const glitch = (0, import_react2.useCallback)(() => {
     if (reducedMotion()) return;
     setOn(true);
     clearTimeout(timer.current);
@@ -9156,8 +9364,8 @@ function useGlitch() {
   return [on2, glitch];
 }
 function useTypewriter(text) {
-  const [shown, setShown] = (0, import_react.useState)(() => reducedMotion() ? text : "");
-  (0, import_react.useEffect)(() => {
+  const [shown, setShown] = (0, import_react2.useState)(() => reducedMotion() ? text : "");
+  (0, import_react2.useEffect)(() => {
     if (reducedMotion()) {
       setShown(text);
       return void 0;
@@ -9178,19 +9386,19 @@ function useTypewriter(text) {
 function Rail({ at: at2 }) {
   const steps = railSteps(at2);
   const here = steps.findIndex(([id]) => id === at2);
-  return (0, import_react.createElement)(
+  return (0, import_react2.createElement)(
     "ol",
     { className: "oai-rail", "aria-label": "Setup steps" },
-    steps.map(([id, label], index) => (0, import_react.createElement)("li", {
+    steps.map(([id, label], index) => (0, import_react2.createElement)("li", {
       key: id,
       className: index < here ? "oai-done" : index === here ? "oai-on" : "",
       "aria-current": index === here ? "step" : void 0
     }, label))
   );
 }
-function Stage({ title, speech, at: at2, glitching, children }) {
-  const titleRef = (0, import_react.useRef)(null);
-  (0, import_react.useEffect)(() => {
+function Stage({ title, speech, at: at2, glitching, hero, mark = "AUTOMAGIK", wide = false, children }) {
+  const titleRef = (0, import_react2.useRef)(null);
+  (0, import_react2.useEffect)(() => {
     const root = document.getElementById("root");
     if (root === null) return void 0;
     const previous = root.inert;
@@ -9199,60 +9407,439 @@ function Stage({ title, speech, at: at2, glitching, children }) {
       root.inert = previous;
     };
   }, []);
-  (0, import_react.useEffect)(() => {
+  (0, import_react2.useEffect)(() => {
     titleRef.current?.focus();
   }, [title]);
   const shown = useTypewriter(speech);
-  return (0, import_react_dom.createPortal)((0, import_react.createElement)(
+  const [look] = useCompanion();
+  return (0, import_react_dom.createPortal)((0, import_react2.createElement)(
     "div",
     { className: "oai-overlay", role: "dialog", "aria-modal": "true", "aria-labelledby": "oai-title" },
-    (0, import_react.createElement)(
+    (0, import_react2.createElement)(
       "div",
-      { className: `oai-stage${glitching ? " oai-glitch" : ""}` },
-      (0, import_react.createElement)("div", { dangerouslySetInnerHTML: { __html: OCTOPUS_SVG } }),
-      (0, import_react.createElement)(
+      { className: `oai-stage${glitching ? " oai-glitch" : ""}${wide ? " oai-wide" : ""}` },
+      hero ?? (0, import_react2.createElement)(Hero, { look }),
+      (0, import_react2.createElement)(
         "div",
         { className: "oai-bubble" },
-        (0, import_react.createElement)("span", { className: "oai-hidden", role: "status" }, speech),
-        (0, import_react.createElement)("span", { "aria-hidden": "true" }, shown, shown.length < speech.length ? (0, import_react.createElement)("span", { className: "oai-caret" }) : null)
+        (0, import_react2.createElement)("span", { className: "oai-hidden", role: "status" }, speech),
+        (0, import_react2.createElement)("span", { "aria-hidden": "true" }, shown, shown.length < speech.length ? (0, import_react2.createElement)("span", { className: "oai-caret" }) : null)
       ),
-      (0, import_react.createElement)(Rail, { at: at2 }),
-      (0, import_react.createElement)(
+      (0, import_react2.createElement)(Rail, { at: at2 }),
+      (0, import_react2.createElement)(
         "main",
         { className: "oai-card" },
-        (0, import_react.createElement)("div", { className: "oai-mark", "aria-hidden": "true" }, "OMNI"),
-        (0, import_react.createElement)("h1", { id: "oai-title", ref: titleRef, tabIndex: -1 }, title),
+        (0, import_react2.createElement)("div", { className: "oai-mark", "aria-hidden": "true" }, mark),
+        (0, import_react2.createElement)("h1", { id: "oai-title", ref: titleRef, tabIndex: -1 }, title),
         children
       )
     )
   ), document.body);
 }
 
-// src/client/welcome.js
-var import_react2 = require("react");
-function WelcomeStep(props) {
+// src/client/companion.js
+var import_react3 = require("react");
+var IDEAS = ["a sleepy cyan fox with a lantern tail", "a tiny robot made of moonlight", "a round jellyfish that wears headphones"];
+var NAMES = ["Pip", "Nova", "Mochi", "Echo", "Biscuit"];
+var NAME_RULE = /^[\p{L}\p{N}][\p{L}\p{N} ._-]{0,39}$/u;
+function CompanionStep(props) {
   const state = useGate(props);
   const finish2 = useFinish(props);
   const [glitching, glitch] = useGlitch();
-  (0, import_react2.useEffect)(() => {
+  const [, setLook] = useCompanion();
+  const [caps, setCaps] = (0, import_react3.useState)(null);
+  const [mode, setMode] = (0, import_react3.useState)("pick");
+  const [shape, setShape] = (0, import_react3.useState)(null);
+  const [color, setColor] = (0, import_react3.useState)("cyan");
+  const [description, setDescription] = (0, import_react3.useState)("");
+  const [image, setImage] = (0, import_react3.useState)(null);
+  const [drawing, setDrawing] = (0, import_react3.useState)(false);
+  const [name, setName] = (0, import_react3.useState)("");
+  const [problem, setProblem] = (0, import_react3.useState)(null);
+  const [saving, setSaving] = (0, import_react3.useState)(false);
+  const [hatching, setHatching] = (0, import_react3.useState)(false);
+  (0, import_react3.useEffect)(() => {
+    call("companion").then((reply) => {
+      setCaps(reply);
+      if (reply?.generate) setMode("describe");
+    }).catch(() => setCaps({ generate: null }));
+  }, []);
+  (0, import_react3.useEffect)(() => {
     if (state) glitch();
   }, [state, glitch]);
   if (!state) return null;
-  return (0, import_react2.createElement)(
+  const generating = caps?.generate;
+  const look = image ? { src: image, name } : shape ? { shape, color, name } : null;
+  const nameOk = NAME_RULE.test(name.trim());
+  const ready = look !== null && nameOk && !saving;
+  const draw = async () => {
+    setProblem(null);
+    setDrawing(true);
+    try {
+      const reply = await call("companion-generate", { description });
+      setImage(reply.image);
+      glitch();
+    } catch (error) {
+      setProblem(error.message);
+    } finally {
+      setDrawing(false);
+    }
+  };
+  const hatch = async () => {
+    if (!ready) return;
+    setSaving(true);
+    setProblem(null);
+    try {
+      await call("companion-save", { name: name.trim(), ...image ? { image } : { shape, color } });
+      setLook({ ...image ? { src: image } : { shape, color }, name: name.trim() });
+      setHatching(true);
+      setTimeout(() => finish2(), 1100);
+    } catch (error) {
+      setProblem(error.message);
+      setSaving(false);
+    }
+  };
+  const speech = look ? nameOk ? `I'm ${name.trim()}! Ready when you are.` : "Oh, that's me! What's my name?" : "Hi! I'm going to be yours. What should I look like?";
+  const hero = look ? (0, import_react3.createElement)(Hero, { look, hatching }) : (0, import_react3.createElement)(Egg);
+  return (0, import_react3.createElement)(
     Stage,
-    {
-      title: "Welcome to Omni",
-      speech: "Hi! I'm Omni. Every chat, every channel, one place. Let's get you set up.",
-      at: "omni-welcome",
-      glitching
-    },
-    (0, import_react2.createElement)("p", null, railSteps("omni-welcome").some(([id]) => id === "omni-connect") ? "Two quick steps: connect your Omni, so I can see your channels, and connect an AI, so I can think." : "One quick step: connect an AI, so I can think."),
-    (0, import_react2.createElement)("button", { type: "button", className: "oai-primary", onClick: () => finish2() }, "Let's go")
+    { title: "Create your companion", speech, at: "omni-companion", glitching, hero },
+    (0, import_react3.createElement)("p", { className: "oai-lede" }, "Your companion runs your team: it talks with you, hands work to the others and keeps an eye on everything. Make it yours."),
+    (0, import_react3.createElement)(
+      "div",
+      { className: "oai-seg", role: "tablist", "aria-label": "How to make it" },
+      (0, import_react3.createElement)("button", { type: "button", role: "tab", "aria-selected": mode === "describe", onClick: () => setMode("describe") }, "Describe it"),
+      (0, import_react3.createElement)("button", { type: "button", role: "tab", "aria-selected": mode === "pick", onClick: () => setMode("pick") }, "Pick one")
+    ),
+    mode === "describe" ? (0, import_react3.createElement)(
+      "div",
+      { className: "oai-describe" },
+      (0, import_react3.createElement)("label", { htmlFor: "oai-desc" }, "What does it look like?"),
+      (0, import_react3.createElement)("textarea", { id: "oai-desc", rows: 2, value: description, placeholder: IDEAS[0], onChange: (event) => setDescription(event.target.value), disabled: drawing }),
+      (0, import_react3.createElement)("div", { className: "oai-chips" }, IDEAS.map((idea) => (0, import_react3.createElement)("button", { key: idea, type: "button", className: "oai-chip", onClick: () => setDescription(idea) }, idea))),
+      generating ? (0, import_react3.createElement)(
+        "div",
+        { className: "oai-row" },
+        (0, import_react3.createElement)("button", { type: "button", className: "oai-primary", disabled: drawing || description.trim().length < 3 || !generating.ready, onClick: draw }, drawing ? "Drawing…" : image ? "Draw again" : "Bring it to life"),
+        (0, import_react3.createElement)("span", { className: "oai-muted" }, generating.kind === "chatgpt" ? "Drawn with your ChatGPT plan (gpt-image-2)" : "Drawn with your OpenAI key (gpt-image-1)")
+      ) : (0, import_react3.createElement)("p", { className: "oai-note" }, "Drawing a companion needs ChatGPT or an OpenAI key. Connect one in the AI step, then come back from Settings. For now, pick one."),
+      drawing ? (0, import_react3.createElement)("div", { className: "oai-drawing", "aria-hidden": "true" }) : null
+    ) : (0, import_react3.createElement)(
+      "div",
+      { className: "oai-pick" },
+      (0, import_react3.createElement)(
+        "div",
+        { className: "oai-shapes", role: "radiogroup", "aria-label": "Character" },
+        SHAPES2.map((id) => (0, import_react3.createElement)("button", {
+          key: id,
+          type: "button",
+          role: "radio",
+          "aria-checked": shape === id && !image,
+          "aria-label": id,
+          className: "oai-shape",
+          onClick: () => {
+            setImage(null);
+            setShape(id);
+          },
+          dangerouslySetInnerHTML: { __html: characterSvg(id, color, 54) }
+        }))
+      ),
+      (0, import_react3.createElement)(
+        "div",
+        { className: "oai-swatches", role: "radiogroup", "aria-label": "Color" },
+        COLORS.map((id) => (0, import_react3.createElement)("button", { key: id, type: "button", role: "radio", "aria-checked": color === id, "aria-label": id, className: "oai-swatch", style: { background: swatchOf(id) }, onClick: () => setColor(id) }))
+      )
+    ),
+    (0, import_react3.createElement)(
+      "div",
+      { className: "oai-name" },
+      (0, import_react3.createElement)("label", { htmlFor: "oai-name" }, "Its name"),
+      (0, import_react3.createElement)(
+        "div",
+        { className: "oai-row" },
+        (0, import_react3.createElement)("input", { id: "oai-name", value: name, maxLength: 40, placeholder: NAMES[0], autoComplete: "off", onChange: (event) => setName(event.target.value), onKeyDown: (event) => {
+          if (event.key === "Enter") void hatch();
+        } }),
+        (0, import_react3.createElement)("div", { className: "oai-chips" }, NAMES.map((option) => (0, import_react3.createElement)("button", { key: option, type: "button", className: "oai-chip", onClick: () => setName(option) }, option)))
+      )
+    ),
+    problem ? (0, import_react3.createElement)("p", { className: "oai-error", role: "alert" }, problem) : null,
+    (0, import_react3.createElement)(
+      "div",
+      { className: "oai-actions" },
+      (0, import_react3.createElement)("button", { type: "button", className: "oai-primary oai-big", disabled: !ready, onClick: hatch }, saving ? "Hatching…" : nameOk ? `Hatch ${name.trim()}` : "Hatch")
+    )
   );
 }
 
+// src/client/genie.js
+var WISPS = {
+  right: "M50 35.5C50 27 53 21.5 61 20C70 18.5 74 24 81.5 19.5C87 16 86 9 81 8.8C77.8 8.7 76.8 11.5 78.6 13.2",
+  left: "M50 35.5C50 27 47 21.5 39 20C30 18.5 26 24 18.5 19.5C13 16 14 9 19 8.8C22.2 8.7 23.2 11.5 21.4 13.2",
+  question: "M50 35.5C50 30 54.5 27 57 22.5C59.5 18 57.5 12 52 11.5C47 11 44.5 15 46 18.5",
+  flame: "M50 35.5C47.5 30 52.5 27 51.2 22C50.2 18 48 16 50.4 10.5"
+};
+function genieSvg(size, { wisp = "right", uid = "g", tilt = -8 } = {}) {
+  const CY = "#64f4ff", MG = "#ff4fd8", INK = "#0b0718";
+  const eye = (x, y, w) => `<path d="M${x - w} ${y}Q${x} ${y - w * 1.35} ${x + w} ${y}Q${x} ${y - w * 0.62} ${x - w} ${y}Z"/><path d="M${x - w * 0.78} ${y + w * 0.95}Q${x} ${y + w * 0.1} ${x + w * 0.78} ${y + w * 0.95}Q${x} ${y + w * 0.5} ${x - w * 0.78} ${y + w * 0.95}Z"/>`;
+  const ear = "M32.4 63C25.5 60.5 19 53.5 15.2 41.5C22.8 45 28.8 48.8 33.6 53Z";
+  const fold = "M30.2 58C26.2 54.6 22 50.2 18.8 45.4";
+  return `<svg viewBox="6 2 90 90" width="${size}" height="${size}" aria-hidden="true">
+  <defs>
+    <radialGradient id="${uid}s" cx="38%" cy="32%" r="78%"><stop offset="0" stop-color="#22143f"/><stop offset=".6" stop-color="#110a24"/><stop offset="1" stop-color="${INK}"/></radialGradient>
+    <filter id="${uid}gm" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation=".8" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <filter id="${uid}gc" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation=".7" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  </defs>
+  <g transform="rotate(${tilt} 50 60)">
+    <g filter="url(#${uid}gm)" stroke-linecap="round" stroke-linejoin="round">
+      <path d="${WISPS[wisp]}" fill="none" stroke="${MG}" stroke-width="4.4"/>
+      <path d="${WISPS[wisp]}" fill="none" stroke="${INK}" stroke-width="2.3"/>
+      <g fill="url(#${uid}s)" stroke="${MG}" stroke-width="1.25">
+        <path d="${ear}"/><path d="${ear}" transform="matrix(-1 0 0 1 100 0)"/>
+        <ellipse cx="50" cy="61" rx="21" ry="20.2"/>
+      </g>
+      <g fill="none" stroke="${MG}" stroke-width="1"><path d="${fold}"/><path d="${fold}" transform="matrix(-1 0 0 1 100 0)"/></g>
+    </g>
+    <g filter="url(#${uid}gc)" stroke-linecap="round" stroke-linejoin="round">
+      <g fill="none" stroke="${CY}" stroke-width="1.2">
+        <path d="M45.6 41V37.2M54.4 41V37.2"/><ellipse cx="50" cy="37.2" rx="4.4" ry="1.3" fill="${INK}"/>
+        <circle cx="29.6" cy="68.2" r="2.3"/><circle cx="70.4" cy="68.2" r="2.3"/>
+      </g>
+      <g fill="${CY}" stroke="${CY}" stroke-width=".35">
+        ${eye(42.3, 58, 4.6)}${eye(57.7, 58, 4.6)}
+        <path d="M42.5 67.2Q51 75.6 59.4 66.4Q51.4 71.2 42.5 67.2Z"/>
+      </g>
+    </g>
+  </g>
+  </svg>`;
+}
+
+// src/client/team.js
+var import_react4 = require("react");
+async function overview() {
+  try {
+    const response = await fetch("api/omni-ui", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ endpoint: "omni-overview", payload: {} }) });
+    const result = await response.json();
+    return result.ok ? result.value : null;
+  } catch {
+    return null;
+  }
+}
+var tilde = (path) => path.replace(/^\/(?:home|Users)\/[^/]+(?=\/)/, "~");
+var TYPE_LABEL = { "whatsapp-baileys": "WhatsApp", "whatsapp-cloud": "WhatsApp Business", slack: "Slack", telegram: "Telegram", discord: "Discord", gupshup: "Gupshup" };
+var channelLabel = (channel) => TYPE_LABEL[channel.type] ?? channel.type ?? "Channel";
+var OMNI_STATS = [
+  { id: "channels", label: "Channels", value: 5, on: true, locked: true },
+  { id: "threads", label: "Threads", value: 3, on: true },
+  { id: "canvases", label: "Live canvases", value: 4, on: true },
+  { id: "files", label: "Files", value: 1, on: false },
+  { id: "shell", label: "Shell", value: 0, on: false }
+];
+var GENIE_STATS = [
+  { id: "threads", label: "Threads", value: 5 },
+  { id: "files", label: "Files", value: 4 },
+  { id: "shell", label: "Shell", value: 4 },
+  { id: "plugins", label: "Plugins", value: 3 },
+  { id: "channels", label: "Channels", value: 1 }
+];
+function Stat({ stat, onToggle, disabled }) {
+  return (0, import_react4.createElement)(
+    "li",
+    { className: `oai-stat${stat.on === false ? " oai-off" : ""}` },
+    (0, import_react4.createElement)("span", { className: "oai-stat-label" }, stat.label),
+    (0, import_react4.createElement)("span", { className: "oai-bar", "aria-label": `${stat.value} of 5` }, [0, 1, 2, 3, 4].map((index) => (0, import_react4.createElement)("i", { key: index, className: index < stat.value ? "oai-pip on" : "oai-pip" }))),
+    !onToggle ? (0, import_react4.createElement)("span", { className: "oai-soon" }, "soon") : stat.locked ? (0, import_react4.createElement)("span", { className: "oai-core", title: "What this Bot is for: always on" }, "core") : (0, import_react4.createElement)("button", { type: "button", role: "switch", className: "oai-switch", "aria-checked": stat.on === true, "aria-label": `${stat.label} for this Bot`, disabled, onClick: onToggle })
+  );
+}
+function Facts({ rows }) {
+  return (0, import_react4.createElement)("dl", { className: "oai-facts" }, rows.map(([term, value]) => [(0, import_react4.createElement)("dt", { key: `${term}t` }, term), (0, import_react4.createElement)("dd", { key: `${term}d` }, value)]));
+}
+function TeamStep(props) {
+  const state = useGate(props);
+  const finish2 = useFinish(props);
+  const [glitching, glitch] = useGlitch();
+  const [omni, setOmni] = (0, import_react4.useState)(true);
+  const [stats, setStats] = (0, import_react4.useState)(OMNI_STATS);
+  const [live, setLive] = (0, import_react4.useState)(void 0);
+  const [saving, setSaving] = (0, import_react4.useState)(false);
+  const [problem, setProblem] = (0, import_react4.useState)(null);
+  const [project, setProject] = (0, import_react4.useState)(null);
+  (0, import_react4.useEffect)(() => {
+    overview().then(setLive);
+  }, []);
+  (0, import_react4.useEffect)(() => {
+    call("companion").then((reply) => setProject(reply?.omniProject ?? null), () => {
+    });
+  }, []);
+  (0, import_react4.useEffect)(() => {
+    if (state) glitch();
+  }, [state, glitch]);
+  if (!state) return null;
+  const channels = live?.configured ? live.channels ?? [] : [];
+  const chats = live?.configured ? live.chats ?? [] : [];
+  const name = state.companionName ?? "Your companion";
+  const toggle = (id) => setStats((rows) => rows.map((row) => row.id === id && !row.locked ? { ...row, on: !row.on } : row));
+  const go2 = async () => {
+    setSaving(true);
+    setProblem(null);
+    try {
+      await call("team-save", { omni, genie: false, omniAbilities: Object.fromEntries(stats.map((row) => [row.id, row.on])) });
+      finish2();
+    } catch (error) {
+      setProblem(error.message);
+      setSaving(false);
+    }
+  };
+  const menu = channels.length > 0 ? (0, import_react4.createElement)("ul", { className: "oai-menu-preview" }, channels.slice(0, 5).map((channel) => (0, import_react4.createElement)("li", { key: channel.id }, (0, import_react4.createElement)("span", { className: `oai-dot ${channel.status === "connected" ? "ok" : "warn"}` }), `${channelLabel(channel)} · ${channel.name}`))) : (0, import_react4.createElement)("p", { className: "oai-muted" }, live === void 0 ? "Reading your Omni…" : "Link an Omni next, and each of its channels gets a place in your menu.");
+  return (0, import_react4.createElement)(
+    Stage,
+    {
+      title: "Grow your team",
+      speech: `${name} here! Two friends can join us. Pick who comes along.`,
+      at: "omni-team",
+      glitching,
+      wide: true
+    },
+    (0, import_react4.createElement)("p", { className: "oai-lede" }, `${name} leads. Each friend brings its own powers, its own project and its own place in your menu.`),
+    (0, import_react4.createElement)(
+      "div",
+      { className: "oai-select" },
+      (0, import_react4.createElement)(
+        "article",
+        { className: `oai-fighter oai-omni${omni ? " oai-chosen" : ""}` },
+        (0, import_react4.createElement)(
+          "div",
+          { className: "oai-portrait oai-rise", "aria-hidden": "true" },
+          (0, import_react4.createElement)("div", { className: "oai-bubbles" }, [0, 1, 2, 3, 4, 5].map((index) => (0, import_react4.createElement)("i", { key: index }))),
+          (0, import_react4.createElement)("div", { className: "oai-octo-wrap", dangerouslySetInnerHTML: { __html: OCTOPUS_SVG } })
+        ),
+        (0, import_react4.createElement)("header", null, (0, import_react4.createElement)("h2", null, "Omni"), (0, import_react4.createElement)("span", { className: "oai-class" }, "Channel keeper")),
+        (0, import_react4.createElement)("p", null, "Runs your Omni: every chat on every channel, answered by your team. A little Omni sits in each chat to help there."),
+        (0, import_react4.createElement)("ul", { className: "oai-stats" }, stats.map((stat) => (0, import_react4.createElement)(Stat, { key: stat.id, stat, onToggle: () => toggle(stat.id), disabled: !omni }))),
+        (0, import_react4.createElement)(Facts, { rows: [
+          ["Controls", live?.configured ? `${live.origin}: ${channels.length} channels, ${chats.length} recent chats` : "The Omni you link next"],
+          ["Project", project ? `Its own: ${tilde(project)}` : "Its own, in your team workspace"],
+          ["Plugins", "Omni channels · Omni canvases"],
+          ["Helpers", "A little Omni in each chat"]
+        ] }),
+        (0, import_react4.createElement)("div", { className: "oai-menu-label" }, "In your menu"),
+        menu,
+        (0, import_react4.createElement)("button", { type: "button", role: "switch", className: `oai-join${omni ? " on" : ""}`, "aria-checked": omni, onClick: () => setOmni((value) => !value) }, omni ? "On your team" : "Add to your team")
+      ),
+      (0, import_react4.createElement)(
+        "article",
+        { className: "oai-fighter oai-genie oai-locked" },
+        (0, import_react4.createElement)(
+          "div",
+          { className: "oai-portrait oai-emerge", "aria-hidden": "true" },
+          (0, import_react4.createElement)("div", { className: "oai-sparkles" }, [0, 1, 2, 3, 4].map((index) => (0, import_react4.createElement)("i", { key: index }))),
+          (0, import_react4.createElement)("div", { className: "oai-genie-wrap", dangerouslySetInnerHTML: { __html: genieSvg(150, { uid: "oaig" }) } })
+        ),
+        (0, import_react4.createElement)("header", null, (0, import_react4.createElement)("h2", null, "Genie"), (0, import_react4.createElement)("span", { className: "oai-class" }, "Wish granter")),
+        (0, import_react4.createElement)("p", null, "Give it a wish, get one delivery. It works in threads of itself, in its own project, and hands you the result."),
+        (0, import_react4.createElement)("ul", { className: "oai-stats" }, GENIE_STATS.map((stat) => (0, import_react4.createElement)(Stat, { key: stat.id, stat }))),
+        (0, import_react4.createElement)(Facts, { rows: [["Controls", "Code, files and tasks in its project"], ["Project", "Its own, per wish"], ["Plugins", "Genie (not released for DSH yet)"], ["Helpers", "One thread per wish"]] }),
+        (0, import_react4.createElement)("div", { className: "oai-menu-label" }, "In your menu"),
+        (0, import_react4.createElement)("p", { className: "oai-muted" }, "Its threads, under Genie."),
+        (0, import_react4.createElement)("span", { className: "oai-join oai-soon-badge", "aria-disabled": "true" }, "Coming soon")
+      )
+    ),
+    problem ? (0, import_react4.createElement)("p", { className: "oai-error", role: "alert" }, problem) : null,
+    (0, import_react4.createElement)(
+      "div",
+      { className: "oai-actions" },
+      (0, import_react4.createElement)("button", { type: "button", className: "oai-primary oai-big", disabled: saving, onClick: go2 }, saving ? "Bringing them in…" : omni ? "Continue with Omni" : `Continue with just ${name}`)
+    )
+  );
+}
+
+// src/client/onboard-css.js
+var ONBOARD_CSS = `
+.oai-stage.oai-wide{width:min(980px,100%)}
+.oai-hero{width:132px;height:132px;display:grid;place-items:center;filter:drop-shadow(0 12px 30px rgba(34,211,238,.35)) drop-shadow(0 0 18px rgba(255,59,212,.18));animation:oai-float 4.5s ease-in-out infinite}
+.oai-hero svg{width:132px;height:132px}
+.oai-hero .oai-octo{width:124px;height:124px;filter:none;animation:none}
+.oai-hero-img{width:132px;height:132px;object-fit:cover;border-radius:28px;border:1px solid rgba(255,255,255,.12)}
+.oai-hatch{animation:oai-hatch 1s cubic-bezier(.2,1.4,.4,1) both}
+@keyframes oai-hatch{0%{transform:scale(.6) rotate(-8deg);filter:brightness(2.4) drop-shadow(0 0 40px #22d3ee)}60%{transform:scale(1.18) rotate(3deg)}100%{transform:scale(1)}}
+.oai-egg{position:relative}
+.oai-egg-shell{width:84px;height:104px;border-radius:50% 50% 46% 46%/58% 58% 42% 42%;background:radial-gradient(circle at 36% 30%,#fff 0,#b9f6ff 12%,#22d3ee 42%,#7a3cff 78%,#ff3bd4 100%);box-shadow:0 0 30px rgba(34,211,238,.5),0 0 60px rgba(255,59,212,.25);animation:oai-wobble 2.6s ease-in-out infinite}
+@keyframes oai-wobble{0%,100%{transform:rotate(-4deg)}50%{transform:rotate(4deg) translateY(-4px)}}
+.oai-spark{position:absolute;width:6px;height:6px;border-radius:50%;background:#fff;box-shadow:0 0 8px #22d3ee;animation:oai-twinkle-dot 2.4s ease-in-out infinite}
+.oai-spark-0{top:8px;left:16px}.oai-spark-1{top:22px;right:10px;animation-delay:.5s}.oai-spark-2{bottom:16px;left:6px;animation-delay:1s;background:#ff8be3}.oai-spark-3{bottom:6px;right:22px;animation-delay:1.5s}.oai-spark-4{top:52px;right:-4px;animation-delay:.8s;background:#ff8be3}
+@keyframes oai-twinkle-dot{0%,100%{opacity:.2;transform:scale(.6)}50%{opacity:1;transform:scale(1.2)}}
+.oai-lede{color:var(--oai-ink2);margin:0 0 16px}
+.oai-seg{display:inline-flex;padding:4px;border-radius:12px;background:rgba(255,255,255,.04);border:1px solid var(--oai-line);gap:4px;margin-bottom:14px}
+.oai-card .oai-seg button{width:auto;margin:0;white-space:nowrap;background:transparent;border:0;color:var(--oai-ink2);font-weight:600;font-size:14px;padding:9px 16px;border-radius:9px;transform:none;box-shadow:none}
+.oai-card .oai-seg button[aria-selected="true"]{background:linear-gradient(90deg,rgba(34,211,238,.22),rgba(255,59,212,.22));color:var(--oai-ink)}
+.oai-describe,.oai-pick,.oai-name{display:grid;gap:10px;margin-bottom:16px}
+.oai-describe label,.oai-name label{font-size:13px;color:var(--oai-ink2)}
+.oai-describe textarea,.oai-name input{width:100%;background:rgba(5,8,18,.7);border:1px solid var(--oai-line);border-radius:12px;color:var(--oai-ink);padding:11px 12px;font:inherit;resize:vertical}
+.oai-describe textarea:focus,.oai-name input:focus{outline:2px solid rgba(34,211,238,.55);outline-offset:0}
+.oai-name .oai-row{display:grid;gap:8px}
+.oai-chips{display:flex;flex-wrap:wrap;gap:6px}
+.oai-card button.oai-chip{display:inline-block;width:auto;margin:0;font-weight:500;background:rgba(255,255,255,.04);border:1px solid var(--oai-line);color:var(--oai-ink2);border-radius:999px;padding:5px 10px;font:inherit;font-size:12.5px;cursor:pointer}
+.oai-card button.oai-chip:hover{transform:none;box-shadow:none;color:var(--oai-ink);border-color:rgba(34,211,238,.5)}
+.oai-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.oai-muted{color:var(--oai-ink2);font-size:13px;margin:0}
+.oai-note{color:#ffd9a0;background:rgba(255,184,77,.08);border:1px solid rgba(255,184,77,.28);border-radius:12px;padding:10px 12px;font-size:13.5px;margin:0}
+.oai-drawing{height:6px;border-radius:6px;background:linear-gradient(90deg,transparent,#22d3ee,#ff3bd4,transparent);background-size:200% 100%;animation:oai-shimmer 1.2s linear infinite}
+@keyframes oai-shimmer{from{background-position:200% 0}to{background-position:-200% 0}}
+.oai-shapes{display:grid;grid-template-columns:repeat(auto-fill,minmax(64px,1fr));gap:8px}
+.oai-card button.oai-shape{width:auto;margin:0;aspect-ratio:1;background:rgba(255,255,255,.03);border:1px solid var(--oai-line);border-radius:14px;padding:4px;display:grid;place-items:center;cursor:pointer;transition:transform .15s,border-color .15s}
+.oai-card button.oai-shape:hover{box-shadow:none;transform:translateY(-2px);border-color:rgba(34,211,238,.45)}
+.oai-card button.oai-shape[aria-checked="true"]{border-color:#22d3ee;box-shadow:0 0 0 1px #22d3ee inset,0 0 18px rgba(34,211,238,.25)}
+.oai-swatches{display:flex;flex-wrap:wrap;gap:8px}
+.oai-card button.oai-swatch{display:inline-block;width:26px;height:26px;margin:0;padding:0;border-radius:50%;border:2px solid transparent;cursor:pointer;box-shadow:0 0 0 1px rgba(255,255,255,.12)}
+.oai-card button.oai-swatch[aria-checked="true"]{border-color:#fff;box-shadow:0 0 0 3px rgba(255,255,255,.18)}
+.oai-error{color:var(--oai-bad);margin:0 0 10px}
+.oai-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:6px}
+.oai-big{padding:12px 20px;font-size:15px}
+.oai-select{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-bottom:12px}
+.oai-fighter{position:relative;display:grid;gap:10px;align-content:start;padding:16px;border-radius:18px;border:1px solid var(--oai-line);background:linear-gradient(180deg,rgba(17,25,48,.9),rgba(9,13,28,.9));transition:border-color .2s,box-shadow .2s}
+.oai-fighter.oai-chosen{border-color:#22d3ee;box-shadow:0 0 0 1px rgba(34,211,238,.6),0 18px 50px -20px rgba(34,211,238,.55)}
+.oai-fighter.oai-locked{opacity:.92}
+.oai-fighter header{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
+.oai-fighter h2{margin:0;font-size:22px;letter-spacing:.01em}
+.oai-fighter p{margin:0;color:var(--oai-ink2);font-size:14px}
+.oai-class{font:600 11px/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.14em;text-transform:uppercase;color:#ff8be3}
+.oai-omni .oai-class{color:#7fe9ff}
+.oai-portrait{position:relative;height:150px;border-radius:14px;overflow:hidden;display:grid;place-items:end center;background:radial-gradient(120% 90% at 50% 110%,rgba(34,211,238,.18),transparent 60%),linear-gradient(180deg,#0b1430,#060a18)}
+.oai-genie .oai-portrait{place-items:center;background:radial-gradient(90% 80% at 50% 80%,rgba(255,59,212,.2),transparent 60%),linear-gradient(180deg,#140b2c,#070512)}
+.oai-octo-wrap .oai-octo{width:120px;height:120px;animation:oai-rise 1.4s cubic-bezier(.2,1.2,.4,1) both,oai-float 4.5s ease-in-out 1.4s infinite}
+@keyframes oai-rise{from{transform:translateY(140px)}to{transform:translateY(8px)}}
+.oai-bubbles i{position:absolute;bottom:-12px;width:10px;height:10px;border-radius:50%;border:1.5px solid rgba(143,244,255,.7);animation:oai-bubble 3.2s ease-in infinite}
+.oai-bubbles i:nth-child(1){left:18%;animation-delay:.2s}.oai-bubbles i:nth-child(2){left:30%;width:6px;height:6px;animation-delay:1.1s}.oai-bubbles i:nth-child(3){left:68%;animation-delay:.6s}.oai-bubbles i:nth-child(4){left:80%;width:7px;height:7px;animation-delay:1.8s}.oai-bubbles i:nth-child(5){left:45%;width:5px;height:5px;animation-delay:2.4s}.oai-bubbles i:nth-child(6){left:58%;animation-delay:1.5s}
+@keyframes oai-bubble{0%{transform:translateY(0);opacity:0}15%{opacity:1}100%{transform:translateY(-170px) translateX(6px);opacity:0}}
+.oai-genie-wrap svg{animation:oai-emerge 1.6s cubic-bezier(.2,1.3,.4,1) .3s both,oai-float 5s ease-in-out 1.9s infinite}
+@keyframes oai-emerge{0%{transform:translateY(60px) scale(.2);opacity:0;filter:blur(6px)}60%{opacity:1;filter:blur(0)}100%{transform:none}}
+.oai-sparkles i{position:absolute;width:5px;height:5px;border-radius:50%;background:#64f4ff;box-shadow:0 0 10px #64f4ff;animation:oai-twinkle-dot 2s ease-in-out infinite}
+.oai-sparkles i:nth-child(1){top:24px;left:22%}.oai-sparkles i:nth-child(2){top:40px;right:20%;animation-delay:.4s}.oai-sparkles i:nth-child(3){bottom:30px;left:16%;animation-delay:.9s;background:#ff8be3;box-shadow:0 0 10px #ff8be3}.oai-sparkles i:nth-child(4){bottom:22px;right:26%;animation-delay:1.3s}.oai-sparkles i:nth-child(5){top:70px;left:50%;animation-delay:.7s;background:#ff8be3;box-shadow:0 0 10px #ff8be3}
+.oai-stats{list-style:none;margin:2px 0 0;padding:0;display:grid;gap:6px}
+.oai-stat{display:grid;grid-template-columns:110px 1fr auto;align-items:center;gap:10px;font-size:13.5px}
+.oai-stat.oai-off .oai-stat-label{color:var(--oai-ink2);text-decoration:line-through;text-decoration-color:rgba(255,255,255,.25)}
+.oai-bar{display:flex;gap:3px}
+.oai-pip{flex:1;height:8px;border-radius:2px;background:rgba(255,255,255,.07)}
+.oai-pip.on{background:linear-gradient(90deg,#22d3ee,#ff3bd4)}
+.oai-genie .oai-pip.on{background:linear-gradient(90deg,#ff3bd4,#b77bff)}
+.oai-off .oai-pip.on{filter:grayscale(1);opacity:.4}
+.oai-core{font:600 10px/1 ui-monospace,Menlo,monospace;letter-spacing:.1em;text-transform:uppercase;color:#7fe9ff;border:1px solid rgba(127,233,255,.4);border-radius:999px;padding:3px 7px}
+.oai-hero{margin-bottom:8px}
+.oai-soon{font:600 10px/1 ui-monospace,Menlo,monospace;letter-spacing:.1em;text-transform:uppercase;color:#ff8be3;border:1px solid rgba(255,139,227,.35);border-radius:999px;padding:3px 6px}
+.oai-facts{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:4px 0 0;font-size:13px}
+.oai-facts dt{color:var(--oai-ink2)}.oai-facts dd{margin:0;color:var(--oai-ink)}
+.oai-menu-label{font:600 11px/1 ui-monospace,Menlo,monospace;letter-spacing:.14em;text-transform:uppercase;color:var(--oai-ink2);margin-top:4px}
+.oai-menu-preview{list-style:none;margin:0;padding:8px;border-radius:12px;background:rgba(5,8,18,.6);border:1px solid var(--oai-line);display:grid;gap:4px;font-size:13px}
+.oai-menu-preview li{display:flex;align-items:center;gap:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.oai-dot{width:7px;height:7px;border-radius:50%;flex:none}.oai-dot.ok{background:#4fe0a8}.oai-dot.warn{background:#f2c25b}
+.oai-card button.oai-join,.oai-join{justify-self:stretch;text-align:center;margin-top:4px;padding:11px;border-radius:12px;border:1px solid var(--oai-line);background:rgba(255,255,255,.04);color:var(--oai-ink);font:600 14px/1 inherit;font-family:inherit;cursor:pointer}
+.oai-card button.oai-join.on{background:linear-gradient(90deg,rgba(34,211,238,.25),rgba(255,59,212,.25));border-color:rgba(34,211,238,.6)}
+.oai-soon-badge{cursor:default;color:#ff8be3;border-style:dashed}
+@media (prefers-reduced-motion: reduce){.oai-hero,.oai-egg-shell,.oai-spark,.oai-octo-wrap .oai-octo,.oai-bubbles i,.oai-genie-wrap svg,.oai-sparkles i,.oai-hatch,.oai-drawing{animation:none!important}.oai-bubbles,.oai-sparkles{display:none}}
+`;
+
 // src/client/subscriptions.js
-var import_react3 = require("react");
+var import_react5 = require("react");
 var BASE = "dsh-subscriptions";
 var SUBSCRIPTION_TILES = [
   { id: "perplexity", provider: "perplexity", name: "Perplexity", note: "Perplexity Pro", kind: "browser" },
@@ -9291,12 +9878,12 @@ function nextIndex(accounts, provider) {
 }
 var signedInCount = (accounts, provider) => (accounts ?? []).filter((account) => account.provider === provider && account.configured).length;
 function SubscriptionSignIn({ tile, onBack, onSaved, glitch }) {
-  const [step, setStep] = (0, import_react3.useState)(null);
-  const [problem, setProblem] = (0, import_react3.useState)(null);
-  const [value, setValue] = (0, import_react3.useState)("");
-  const [busy, setBusy] = (0, import_react3.useState)(false);
-  const [index, setIndex] = (0, import_react3.useState)(null);
-  (0, import_react3.useEffect)(() => {
+  const [step, setStep] = (0, import_react5.useState)(null);
+  const [problem, setProblem] = (0, import_react5.useState)(null);
+  const [value, setValue] = (0, import_react5.useState)("");
+  const [busy, setBusy] = (0, import_react5.useState)(false);
+  const [index, setIndex] = (0, import_react5.useState)(null);
+  (0, import_react5.useEffect)(() => {
     let live = true;
     let timer = 0;
     const done = () => {
@@ -9367,25 +9954,25 @@ function SubscriptionSignIn({ tile, onBack, onSaved, glitch }) {
       setBusy(false);
     }
   };
-  return (0, import_react3.createElement)(
+  return (0, import_react5.createElement)(
     "div",
     { className: "oai-signin" },
-    !step && !problem ? (0, import_react3.createElement)("p", { className: "oai-muted" }, `Starting the ${tile.name} sign-in…`) : null,
-    step?.code ? (0, import_react3.createElement)("p", null, `Open ${tile.name}, sign in, and enter this code:`) : null,
-    step?.code ? (0, import_react3.createElement)("div", { className: "oai-code" }, (0, import_react3.createElement)("code", null, step.code)) : null,
-    step?.url && tile.kind !== "token" ? (0, import_react3.createElement)("a", { className: "oai-primary oai-button", href: step.url, target: "_blank", rel: "noreferrer" }, `Open ${tile.name} to sign in`) : null,
-    tile.kind === "device" && step ? (0, import_react3.createElement)("p", { className: "oai-muted oai-waiting" }, "Waiting for you to finish signing in…") : null,
-    tile.kind === "browser" && step ? (0, import_react3.createElement)("p", { className: "oai-muted" }, step.autoCatch ? "Sign in on their page; this finishes on its own. If it ends on a page that does not load, paste its address here." : "Sign in on their page, then paste the address it ends on here.") : null,
-    tile.kind === "token" && step ? (0, import_react3.createElement)("p", null, `Copy your ${tile.what} from `, (0, import_react3.createElement)("a", { className: "oai-link", href: tile.where, target: "_blank", rel: "noreferrer" }, tile.name), " and paste it here. It stays in DSH's credential store on this computer.") : null,
-    step && tile.kind !== "device" ? (0, import_react3.createElement)(
+    !step && !problem ? (0, import_react5.createElement)("p", { className: "oai-muted" }, `Starting the ${tile.name} sign-in…`) : null,
+    step?.code ? (0, import_react5.createElement)("p", null, `Open ${tile.name}, sign in, and enter this code:`) : null,
+    step?.code ? (0, import_react5.createElement)("div", { className: "oai-code" }, (0, import_react5.createElement)("code", null, step.code)) : null,
+    step?.url && tile.kind !== "token" ? (0, import_react5.createElement)("a", { className: "oai-primary oai-button", href: step.url, target: "_blank", rel: "noreferrer" }, `Open ${tile.name} to sign in`) : null,
+    tile.kind === "device" && step ? (0, import_react5.createElement)("p", { className: "oai-muted oai-waiting" }, "Waiting for you to finish signing in…") : null,
+    tile.kind === "browser" && step ? (0, import_react5.createElement)("p", { className: "oai-muted" }, step.autoCatch ? "Sign in on their page; this finishes on its own. If it ends on a page that does not load, paste its address here." : "Sign in on their page, then paste the address it ends on here.") : null,
+    tile.kind === "token" && step ? (0, import_react5.createElement)("p", null, `Copy your ${tile.what} from `, (0, import_react5.createElement)("a", { className: "oai-link", href: tile.where, target: "_blank", rel: "noreferrer" }, tile.name), " and paste it here. It stays in DSH's credential store on this computer.") : null,
+    step && tile.kind !== "device" ? (0, import_react5.createElement)(
       "form",
       { onSubmit: submit },
-      (0, import_react3.createElement)("label", { htmlFor: "oai-sub-value" }, tile.kind === "token" ? tile.what : "The address you landed on"),
-      (0, import_react3.createElement)("input", { id: "oai-sub-value", type: tile.kind === "token" ? "password" : "text", required: true, autoComplete: "off", spellCheck: false, value, onChange: (e) => setValue(e.target.value) }),
-      (0, import_react3.createElement)("button", { type: "submit", className: tile.kind === "token" ? "oai-primary" : "", disabled: busy }, busy ? "Connecting…" : "Connect")
+      (0, import_react5.createElement)("label", { htmlFor: "oai-sub-value" }, tile.kind === "token" ? tile.what : "The address you landed on"),
+      (0, import_react5.createElement)("input", { id: "oai-sub-value", type: tile.kind === "token" ? "password" : "text", required: true, autoComplete: "off", spellCheck: false, value, onChange: (e) => setValue(e.target.value) }),
+      (0, import_react5.createElement)("button", { type: "submit", className: tile.kind === "token" ? "oai-primary" : "", disabled: busy }, busy ? "Connecting…" : "Connect")
     ) : null,
-    problem ? (0, import_react3.createElement)("p", { className: "oai-error", role: "alert" }, problem) : null,
-    (0, import_react3.createElement)("button", { type: "button", className: "oai-quiet", onClick: onBack }, "Back")
+    problem ? (0, import_react5.createElement)("p", { className: "oai-error", role: "alert" }, problem) : null,
+    (0, import_react5.createElement)("button", { type: "button", className: "oai-quiet", onClick: onBack }, "Back")
   );
 }
 
@@ -9678,7 +10265,7 @@ var xterm_default = `/**
 `;
 
 // src/client/terminal.js
-var import_react4 = require("react");
+var import_react6 = require("react");
 var READ_MS = 150;
 var ROWS = 10;
 var FONT = "13px ui-monospace, SFMono-Regular, Menlo, monospace";
@@ -9729,11 +10316,11 @@ function footFor({ state, entered, exitCode, error }) {
   return `It stopped with exit code ${exitCode ?? "?"}. Read what it printed above, then try again.`;
 }
 function ClaudeLoginTerminal({ onEnded, onClose }) {
-  const box = (0, import_react4.useRef)(null);
-  const [status, setStatus] = (0, import_react4.useState)({ state: "preparing", entered: false });
-  const ended = (0, import_react4.useRef)(onEnded);
+  const box = (0, import_react6.useRef)(null);
+  const [status, setStatus] = (0, import_react6.useState)({ state: "preparing", entered: false });
+  const ended = (0, import_react6.useRef)(onEnded);
   ended.current = onEnded;
-  (0, import_react4.useEffect)(() => {
+  (0, import_react6.useEffect)(() => {
     let alive = true;
     let timer = 0;
     let terminal = null;
@@ -9809,18 +10396,18 @@ function ClaudeLoginTerminal({ onEnded, onClose }) {
     };
   }, []);
   const stopped = status.state === "failed" || status.state === "cancelled";
-  return (0, import_react4.createElement)(
+  return (0, import_react6.createElement)(
     "div",
     { className: `oai-term${stopped ? " oai-term-stopped" : ""}` },
-    (0, import_react4.createElement)(
+    (0, import_react6.createElement)(
       "div",
       { className: "oai-term-bar" },
-      (0, import_react4.createElement)("span", { className: "oai-term-dots", "aria-hidden": true }, (0, import_react4.createElement)("i"), (0, import_react4.createElement)("i"), (0, import_react4.createElement)("i")),
-      (0, import_react4.createElement)("span", { className: "oai-term-title" }, "Sign in to Claude Code"),
-      onClose ? (0, import_react4.createElement)("button", { type: "button", className: "oai-term-close", onClick: onClose, "aria-label": "Close the terminal" }, "×") : (0, import_react4.createElement)("span")
+      (0, import_react6.createElement)("span", { className: "oai-term-dots", "aria-hidden": true }, (0, import_react6.createElement)("i"), (0, import_react6.createElement)("i"), (0, import_react6.createElement)("i")),
+      (0, import_react6.createElement)("span", { className: "oai-term-title" }, "Sign in to Claude Code"),
+      onClose ? (0, import_react6.createElement)("button", { type: "button", className: "oai-term-close", onClick: onClose, "aria-label": "Close the terminal" }, "×") : (0, import_react6.createElement)("span")
     ),
-    (0, import_react4.createElement)("div", { className: "oai-term-screen", ref: box, role: "application", "aria-label": "Claude Code sign-in terminal" }),
-    (0, import_react4.createElement)("div", { className: "oai-term-foot", role: "status" }, footFor(status))
+    (0, import_react6.createElement)("div", { className: "oai-term-screen", ref: box, role: "application", "aria-label": "Claude Code sign-in terminal" }),
+    (0, import_react6.createElement)("div", { className: "oai-term-foot", role: "status" }, footFor(status))
   );
 }
 var TERMINAL_CSS = xterm_default + `
@@ -9836,7 +10423,7 @@ var TERMINAL_CSS = xterm_default + `
 `;
 
 // src/client/connect-ai.js
-var import_react5 = require("react");
+var import_react7 = require("react");
 var VENDOR_TERMS = "Personal use under the vendor's terms";
 var FIRST_OTHERS = 4;
 var LOGOS = { claude: "C", chatgpt: "G", deepseek: "D", kimi: "K", copilot: "P", grok: "X", openai: "O", anthropic: "A", openrouter: "R", zai: "Z", moonshot: "M", opencode: "OC", cliproxy: "⇄", ollama: "L" };
@@ -9860,18 +10447,18 @@ function flipAction(row) {
   return row.ready ? "on" : "setup";
 }
 function Copyable({ text }) {
-  const [copied, setCopied] = (0, import_react5.useState)(false);
-  return (0, import_react5.createElement)(
+  const [copied, setCopied] = (0, import_react7.useState)(false);
+  return (0, import_react7.createElement)(
     "div",
     { className: "oai-code oai-command" },
-    (0, import_react5.createElement)("code", null, text),
-    (0, import_react5.createElement)("button", { type: "button", className: "oai-ghost", onClick: () => navigator.clipboard?.writeText(text).then(() => setCopied(true)) }, copied ? "Copied" : "Copy")
+    (0, import_react7.createElement)("code", null, text),
+    (0, import_react7.createElement)("button", { type: "button", className: "oai-ghost", onClick: () => navigator.clipboard?.writeText(text).then(() => setCopied(true)) }, copied ? "Copied" : "Copy")
   );
 }
 function KeyForm({ row, provider, onSaved }) {
-  const [apiKey, setApiKey] = (0, import_react5.useState)("");
-  const [busy, setBusy] = (0, import_react5.useState)(false);
-  const [problem, setProblem] = (0, import_react5.useState)(null);
+  const [apiKey, setApiKey] = (0, import_react7.useState)("");
+  const [busy, setBusy] = (0, import_react7.useState)(false);
+  const [problem, setProblem] = (0, import_react7.useState)(null);
   const submit = async (event) => {
     event.preventDefault();
     setBusy(true);
@@ -9885,25 +10472,25 @@ function KeyForm({ row, provider, onSaved }) {
       setBusy(false);
     }
   };
-  return (0, import_react5.createElement)(
+  return (0, import_react7.createElement)(
     "form",
     { onSubmit: submit, className: "oai-setup-form" },
-    (0, import_react5.createElement)(
+    (0, import_react7.createElement)(
       "div",
       { className: "oai-field" },
-      (0, import_react5.createElement)("input", { type: "password", required: true, autoComplete: "off", spellCheck: false, autoFocus: true, placeholder: `Paste your ${row.name} key`, "aria-label": `${row.name} key`, value: apiKey, onChange: (e) => setApiKey(e.target.value) }),
-      (0, import_react5.createElement)("button", { type: "submit", className: "oai-primary", disabled: busy }, busy ? "Turning on…" : "Turn on")
+      (0, import_react7.createElement)("input", { type: "password", required: true, autoComplete: "off", spellCheck: false, autoFocus: true, placeholder: `Paste your ${row.name} key`, "aria-label": `${row.name} key`, value: apiKey, onChange: (e) => setApiKey(e.target.value) }),
+      (0, import_react7.createElement)("button", { type: "submit", className: "oai-primary", disabled: busy }, busy ? "Turning on…" : "Turn on")
     ),
-    (0, import_react5.createElement)("p", { className: "oai-muted" }, "It stays on this computer, in DSH's own credential store.", row.keyUrl ? [" ", (0, import_react5.createElement)("a", { key: "k", className: "oai-link", href: row.keyUrl, target: "_blank", rel: "noreferrer" }, `Get a ${row.name} key`)] : null),
-    problem ? (0, import_react5.createElement)("p", { className: "oai-error", role: "alert" }, problem) : null
+    (0, import_react7.createElement)("p", { className: "oai-muted" }, "It stays on this computer, in DSH's own credential store.", row.keyUrl ? [" ", (0, import_react7.createElement)("a", { key: "k", className: "oai-link", href: row.keyUrl, target: "_blank", rel: "noreferrer" }, `Get a ${row.name} key`)] : null),
+    problem ? (0, import_react7.createElement)("p", { className: "oai-error", role: "alert" }, problem) : null
   );
 }
 function SignIn({ row, provider, onSaved, onCancel }) {
-  const [attempt, setAttempt] = (0, import_react5.useState)(null);
-  const [problem, setProblem] = (0, import_react5.useState)(null);
-  const [answer, setAnswer] = (0, import_react5.useState)("");
-  const [copied, setCopied] = (0, import_react5.useState)(false);
-  (0, import_react5.useEffect)(() => {
+  const [attempt, setAttempt] = (0, import_react7.useState)(null);
+  const [problem, setProblem] = (0, import_react7.useState)(null);
+  const [answer, setAnswer] = (0, import_react7.useState)("");
+  const [copied, setCopied] = (0, import_react7.useState)(false);
+  (0, import_react7.useEffect)(() => {
     let live = true;
     let timer = 0;
     const poll = async (first) => {
@@ -9941,45 +10528,45 @@ function SignIn({ row, provider, onSaved, onCancel }) {
   const prompt = attempt?.prompt;
   const ended = attempt && ["cancelled", "failed", "none"].includes(attempt.status);
   const endedText = { failed: `The sign-in did not finish: ${attempt?.error}`, cancelled: "The sign-in was cancelled. Nothing was turned on.", none: "The sign-in stopped before it finished. Flip the switch to start again." };
-  return (0, import_react5.createElement)(
+  return (0, import_react7.createElement)(
     "div",
     { className: "oai-signin" },
-    !attempt && !problem ? (0, import_react5.createElement)("p", { className: "oai-muted" }, `Starting the ${row.name} sign-in…`) : null,
-    notice?.message ? (0, import_react5.createElement)("p", null, notice.message) : null,
-    notice?.code ? (0, import_react5.createElement)(
+    !attempt && !problem ? (0, import_react7.createElement)("p", { className: "oai-muted" }, `Starting the ${row.name} sign-in…`) : null,
+    notice?.message ? (0, import_react7.createElement)("p", null, notice.message) : null,
+    notice?.code ? (0, import_react7.createElement)(
       "div",
       { className: "oai-code" },
-      (0, import_react5.createElement)("code", null, notice.code),
-      (0, import_react5.createElement)("button", { type: "button", className: "oai-ghost", onClick: () => navigator.clipboard?.writeText(notice.code).then(() => setCopied(true)) }, copied ? "Copied" : "Copy code")
+      (0, import_react7.createElement)("code", null, notice.code),
+      (0, import_react7.createElement)("button", { type: "button", className: "oai-ghost", onClick: () => navigator.clipboard?.writeText(notice.code).then(() => setCopied(true)) }, copied ? "Copied" : "Copy code")
     ) : null,
-    notice?.url ? (0, import_react5.createElement)("a", { className: "oai-primary oai-button", href: notice.url, target: "_blank", rel: "noreferrer" }, `Sign in with ${row.name}`) : null,
-    prompt?.kind === "select" ? (0, import_react5.createElement)(
+    notice?.url ? (0, import_react7.createElement)("a", { className: "oai-primary oai-button", href: notice.url, target: "_blank", rel: "noreferrer" }, `Sign in with ${row.name}`) : null,
+    prompt?.kind === "select" ? (0, import_react7.createElement)(
       "div",
       { className: "oai-choices", role: "group", "aria-label": prompt.message },
-      (0, import_react5.createElement)("p", null, prompt.message),
-      prompt.options.map((option) => (0, import_react5.createElement)("button", { key: option.id, type: "button", onClick: () => reply(option.id) }, (0, import_react5.createElement)("strong", null, option.label), option.description ? (0, import_react5.createElement)("span", null, option.description) : null))
+      (0, import_react7.createElement)("p", null, prompt.message),
+      prompt.options.map((option) => (0, import_react7.createElement)("button", { key: option.id, type: "button", onClick: () => reply(option.id) }, (0, import_react7.createElement)("strong", null, option.label), option.description ? (0, import_react7.createElement)("span", null, option.description) : null))
     ) : null,
-    prompt && prompt.kind !== "select" ? (0, import_react5.createElement)(
+    prompt && prompt.kind !== "select" ? (0, import_react7.createElement)(
       "form",
       { onSubmit: (event) => {
         event.preventDefault();
         reply(answer);
       } },
-      (0, import_react5.createElement)("label", { htmlFor: `oai-answer-${row.id}` }, prompt.message),
-      (0, import_react5.createElement)("input", { id: `oai-answer-${row.id}`, type: prompt.kind === "secret" ? "password" : "text", required: true, autoComplete: "off", spellCheck: false, autoFocus: true, placeholder: prompt.placeholder, value: answer, onChange: (e) => setAnswer(e.target.value) }),
-      (0, import_react5.createElement)("button", { type: "submit", className: "oai-primary" }, "Continue")
+      (0, import_react7.createElement)("label", { htmlFor: `oai-answer-${row.id}` }, prompt.message),
+      (0, import_react7.createElement)("input", { id: `oai-answer-${row.id}`, type: prompt.kind === "secret" ? "password" : "text", required: true, autoComplete: "off", spellCheck: false, autoFocus: true, placeholder: prompt.placeholder, value: answer, onChange: (e) => setAnswer(e.target.value) }),
+      (0, import_react7.createElement)("button", { type: "submit", className: "oai-primary" }, "Continue")
     ) : null,
-    attempt?.status === "running" && !prompt ? (0, import_react5.createElement)("p", { className: "oai-muted oai-waiting" }, "Finish signing in on their page…") : null,
-    ended ? (0, import_react5.createElement)("p", { className: "oai-error", role: "alert" }, endedText[attempt.status]) : null,
-    problem ? (0, import_react5.createElement)("p", { className: "oai-error", role: "alert" }, problem) : null,
-    !ended && !problem ? (0, import_react5.createElement)("button", { type: "button", className: "oai-quiet", onClick: cancel }, "Cancel") : null
+    attempt?.status === "running" && !prompt ? (0, import_react7.createElement)("p", { className: "oai-muted oai-waiting" }, "Finish signing in on their page…") : null,
+    ended ? (0, import_react7.createElement)("p", { className: "oai-error", role: "alert" }, endedText[attempt.status]) : null,
+    problem ? (0, import_react7.createElement)("p", { className: "oai-error", role: "alert" }, problem) : null,
+    !ended && !problem ? (0, import_react7.createElement)("button", { type: "button", className: "oai-quiet", onClick: cancel }, "Cancel") : null
   );
 }
 function CliproxyForm({ onSaved }) {
-  const [baseURL, setBaseURL] = (0, import_react5.useState)("");
-  const [apiKey, setApiKey] = (0, import_react5.useState)("");
-  const [busy, setBusy] = (0, import_react5.useState)(false);
-  const [problem, setProblem] = (0, import_react5.useState)(null);
+  const [baseURL, setBaseURL] = (0, import_react7.useState)("");
+  const [apiKey, setApiKey] = (0, import_react7.useState)("");
+  const [busy, setBusy] = (0, import_react7.useState)(false);
+  const [problem, setProblem] = (0, import_react7.useState)(null);
   const submit = async (event) => {
     event.preventDefault();
     setBusy(true);
@@ -9993,52 +10580,52 @@ function CliproxyForm({ onSaved }) {
       setBusy(false);
     }
   };
-  return (0, import_react5.createElement)(
+  return (0, import_react7.createElement)(
     "form",
     { onSubmit: submit, className: "oai-setup-form" },
-    (0, import_react5.createElement)("input", { type: "url", required: true, placeholder: "http://localhost:8317/v1", "aria-label": "Gateway address", autoComplete: "off", value: baseURL, onChange: (e) => setBaseURL(e.target.value) }),
-    (0, import_react5.createElement)(
+    (0, import_react7.createElement)("input", { type: "url", required: true, placeholder: "http://localhost:8317/v1", "aria-label": "Gateway address", autoComplete: "off", value: baseURL, onChange: (e) => setBaseURL(e.target.value) }),
+    (0, import_react7.createElement)(
       "div",
       { className: "oai-field" },
-      (0, import_react5.createElement)("input", { type: "password", required: true, placeholder: "Gateway key", "aria-label": "Gateway key", autoComplete: "off", spellCheck: false, value: apiKey, onChange: (e) => setApiKey(e.target.value) }),
-      (0, import_react5.createElement)("button", { type: "submit", className: "oai-primary", disabled: busy }, busy ? "Turning on…" : "Turn on")
+      (0, import_react7.createElement)("input", { type: "password", required: true, placeholder: "Gateway key", "aria-label": "Gateway key", autoComplete: "off", spellCheck: false, value: apiKey, onChange: (e) => setApiKey(e.target.value) }),
+      (0, import_react7.createElement)("button", { type: "submit", className: "oai-primary", disabled: busy }, busy ? "Turning on…" : "Turn on")
     ),
-    (0, import_react5.createElement)("p", { className: "oai-muted" }, "Omni lists the gateway's models with your key and keeps the key in DSH's credential store."),
-    problem ? (0, import_react5.createElement)("p", { className: "oai-error", role: "alert" }, problem) : null
+    (0, import_react7.createElement)("p", { className: "oai-muted" }, "Omni lists the gateway's models with your key and keeps the key in DSH's credential store."),
+    problem ? (0, import_react7.createElement)("p", { className: "oai-error", role: "alert" }, problem) : null
   );
 }
 function ClaudeSetup({ row, onSaved, onClose }) {
-  if (row.needs === "plugin") return (0, import_react5.createElement)("p", null, "Claude runs through the Oh My Claude plugin, which this DSH does not have. Add it from Settings → Plugins.");
+  if (row.needs === "plugin") return (0, import_react7.createElement)("p", null, "Claude runs through the Oh My Claude plugin, which this DSH does not have. Add it from Settings → Plugins.");
   if (row.needs === "install") {
-    return (0, import_react5.createElement)(
+    return (0, import_react7.createElement)(
       "div",
       null,
-      (0, import_react5.createElement)("p", null, "Install Claude Code, Anthropic's own app. In a terminal:"),
-      (0, import_react5.createElement)(Copyable, { text: CLAUDE_INSTALL }),
-      (0, import_react5.createElement)("p", { className: "oai-muted" }, "Or follow ", (0, import_react5.createElement)("a", { className: "oai-link", href: "https://code.claude.com/docs/en/setup", target: "_blank", rel: "noreferrer" }, "Anthropic's setup guide"), ". Then flip this again.")
+      (0, import_react7.createElement)("p", null, "Install Claude Code, Anthropic's own app. In a terminal:"),
+      (0, import_react7.createElement)(Copyable, { text: CLAUDE_INSTALL }),
+      (0, import_react7.createElement)("p", { className: "oai-muted" }, "Or follow ", (0, import_react7.createElement)("a", { className: "oai-link", href: "https://code.claude.com/docs/en/setup", target: "_blank", rel: "noreferrer" }, "Anthropic's setup guide"), ". Then flip this again.")
     );
   }
-  if (row.needs === "restart") return (0, import_react5.createElement)("p", { className: "oai-error" }, "Claude Code is signed in, but this app cannot start it from where it is installed. Restart the app to pick it up.");
-  return (0, import_react5.createElement)(
+  if (row.needs === "restart") return (0, import_react7.createElement)("p", { className: "oai-error" }, "Claude Code is signed in, but this app cannot start it from where it is installed. Restart the app to pick it up.");
+  return (0, import_react7.createElement)(
     "div",
     null,
-    (0, import_react5.createElement)(ClaudeLoginTerminal, { onClose, onEnded: (reply) => {
+    (0, import_react7.createElement)(ClaudeLoginTerminal, { onClose, onEnded: (reply) => {
       if (reply.state === "done") onSaved();
     } }),
-    (0, import_react5.createElement)("p", { className: "oai-muted" }, "Press Enter in the terminal. Claude Code signs in with your own Claude account; Omni only talks to the Claude Code app.")
+    (0, import_react7.createElement)("p", { className: "oai-muted" }, "Press Enter in the terminal. Claude Code signs in with your own Claude account; Omni only talks to the Claude Code app.")
   );
 }
 function Setup({ row, onSaved, onClose }) {
-  if (row.kind === "claude") return (0, import_react5.createElement)(ClaudeSetup, { row, onSaved, onClose });
-  if (row.kind === "key") return (0, import_react5.createElement)(KeyForm, { row, provider: providerOf(row), onSaved });
+  if (row.kind === "claude") return (0, import_react7.createElement)(ClaudeSetup, { row, onSaved, onClose });
+  if (row.kind === "key") return (0, import_react7.createElement)(KeyForm, { row, provider: providerOf(row), onSaved });
   if (row.kind === "signin") {
-    if (row.signIn) return (0, import_react5.createElement)(SignIn, { row, provider: providerOf(row), onSaved, onCancel: onClose });
-    if (row.keyUrl) return (0, import_react5.createElement)(KeyForm, { row, provider: providerOf(row), onSaved });
-    return (0, import_react5.createElement)("p", null, `This DSH offers no ${row.name} sign-in.`);
+    if (row.signIn) return (0, import_react7.createElement)(SignIn, { row, provider: providerOf(row), onSaved, onCancel: onClose });
+    if (row.keyUrl) return (0, import_react7.createElement)(KeyForm, { row, provider: providerOf(row), onSaved });
+    return (0, import_react7.createElement)("p", null, `This DSH offers no ${row.name} sign-in.`);
   }
-  if (row.kind === "gateway") return (0, import_react5.createElement)(CliproxyForm, { onSaved });
-  if (row.kind === "local") return (0, import_react5.createElement)("p", { className: "oai-muted" }, "Ollama is not running on this computer. Start it, then flip this again.");
-  if (row.kind === "subscription") return (0, import_react5.createElement)(SubscriptionSignIn, { tile: row.tile, onBack: onClose, onSaved, glitch: () => {
+  if (row.kind === "gateway") return (0, import_react7.createElement)(CliproxyForm, { onSaved });
+  if (row.kind === "local") return (0, import_react7.createElement)("p", { className: "oai-muted" }, "Ollama is not running on this computer. Start it, then flip this again.");
+  if (row.kind === "subscription") return (0, import_react7.createElement)(SubscriptionSignIn, { tile: row.tile, onBack: onClose, onSaved, glitch: () => {
   } });
   return null;
 }
@@ -10047,60 +10634,60 @@ var providerOf = (row) => PROVIDER_OF[row.id] ?? row.id;
 function Duplicates({ row, onDedupe }) {
   if (!row.duplicates?.length) return null;
   const shown = row.duplicates.filter((duplicate) => !duplicate.hidden);
-  return (0, import_react5.createElement)(
+  return (0, import_react7.createElement)(
     "div",
     { className: "oai-dupes" },
-    row.duplicates.map((duplicate) => (0, import_react5.createElement)(
+    row.duplicates.map((duplicate) => (0, import_react7.createElement)(
       "p",
       { key: `${duplicate.via}:${duplicate.provider}`, className: "oai-muted" },
       `Also connected through ${duplicate.via}; Omni uses ${row.name} ${row.kind === "claude" ? "through Claude Code" : "here"}.`,
       duplicate.hidden ? " Its models are hidden." : null
     )),
-    shown.length && row.on ? (0, import_react5.createElement)("button", { type: "button", className: "oai-ghost", onClick: onDedupe }, `Use only this ${row.name}`) : null
+    shown.length && row.on ? (0, import_react7.createElement)("button", { type: "button", className: "oai-ghost", onClick: onDedupe }, `Use only this ${row.name}`) : null
   );
 }
 function Row({ row, open, busy, problem, onFlip, onSaved, onClose, onDedupe }) {
   const logo = LOGOS[row.id] ?? row.name.slice(0, 1);
-  return (0, import_react5.createElement)(
+  return (0, import_react7.createElement)(
     "div",
     { className: `oai-ai${row.on ? " oai-ai-on" : ""}` },
-    (0, import_react5.createElement)(
+    (0, import_react7.createElement)(
       "div",
       { className: "oai-ai-row" },
-      (0, import_react5.createElement)("div", { className: "oai-logo", "aria-hidden": true }, logo),
-      (0, import_react5.createElement)(
+      (0, import_react7.createElement)("div", { className: "oai-logo", "aria-hidden": true }, logo),
+      (0, import_react7.createElement)(
         "div",
         { className: "oai-ai-what" },
-        (0, import_react5.createElement)("strong", null, row.name),
-        (0, import_react5.createElement)("span", null, row.detail ? `${row.via} · ${row.detail}` : row.via)
+        (0, import_react7.createElement)("strong", null, row.name),
+        (0, import_react7.createElement)("span", null, row.detail ? `${row.via} · ${row.detail}` : row.via)
       ),
-      row.found ? (0, import_react5.createElement)("em", { className: "oai-found" }, row.found) : null,
-      (0, import_react5.createElement)("button", { type: "button", role: "switch", className: "oai-switch", "aria-checked": row.on ? "true" : "false", "aria-label": row.name, disabled: busy, onClick: onFlip })
+      row.found ? (0, import_react7.createElement)("em", { className: "oai-found" }, row.found) : null,
+      (0, import_react7.createElement)("button", { type: "button", role: "switch", className: "oai-switch", "aria-checked": row.on ? "true" : "false", "aria-label": row.name, disabled: busy, onClick: onFlip })
     ),
-    open && !row.on ? (0, import_react5.createElement)("div", { className: "oai-ai-setup" }, (0, import_react5.createElement)(Setup, { row, onSaved, onClose })) : null,
-    problem ? (0, import_react5.createElement)("p", { className: "oai-error oai-ai-problem", role: "alert" }, problem) : null,
-    (0, import_react5.createElement)(Duplicates, { row, onDedupe })
+    open && !row.on ? (0, import_react7.createElement)("div", { className: "oai-ai-setup" }, (0, import_react7.createElement)(Setup, { row, onSaved, onClose })) : null,
+    problem ? (0, import_react7.createElement)("p", { className: "oai-error oai-ai-problem", role: "alert" }, problem) : null,
+    (0, import_react7.createElement)(Duplicates, { row, onDedupe })
   );
 }
 function ConnectAiStep(props) {
   const state = useGate(props);
   const finish2 = useFinish(props);
   const [glitching, glitch] = useGlitch();
-  const [rows, setRows] = (0, import_react5.useState)(null);
-  const [subs, setSubs] = (0, import_react5.useState)(null);
-  const [open, setOpen] = (0, import_react5.useState)(null);
-  const [busy, setBusy] = (0, import_react5.useState)(null);
-  const [problems, setProblems] = (0, import_react5.useState)({});
-  const [showAll, setShowAll] = (0, import_react5.useState)(false);
-  const refresh = (0, import_react5.useCallback)(async () => {
+  const [rows, setRows] = (0, import_react7.useState)(null);
+  const [subs, setSubs] = (0, import_react7.useState)(null);
+  const [open, setOpen] = (0, import_react7.useState)(null);
+  const [busy, setBusy] = (0, import_react7.useState)(null);
+  const [problems, setProblems] = (0, import_react7.useState)({});
+  const [showAll, setShowAll] = (0, import_react7.useState)(false);
+  const refresh = (0, import_react7.useCallback)(async () => {
     const reply = await call("ais").catch(() => ({ rows: [], subscriptions: null }));
     setRows(reply.rows ?? []);
     setSubs(reply.subscriptions ?? null);
   }, []);
-  (0, import_react5.useEffect)(() => {
+  (0, import_react7.useEffect)(() => {
     void refresh();
   }, [refresh]);
-  (0, import_react5.useEffect)(() => {
+  (0, import_react7.useEffect)(() => {
     if (state) glitch();
   }, [state, glitch]);
   if (!state) return null;
@@ -10143,56 +10730,57 @@ function ConnectAiStep(props) {
   const count = all ? onCount(all) : 0;
   const { found, others } = sections(all ?? []);
   const visible = showAll ? others : others.slice(0, FIRST_OTHERS);
-  const rowOf = (row) => (0, import_react5.createElement)(Row, { key: row.id, row, open: open === row.id, busy: busy !== null, problem: problems[row.id], onFlip: () => flip(row), onSaved: saved(row), onClose: () => setOpen(null), onDedupe: dedupe(row) });
-  return (0, import_react5.createElement)(
+  const rowOf = (row) => (0, import_react7.createElement)(Row, { key: row.id, row, open: open === row.id, busy: busy !== null, problem: problems[row.id], onFlip: () => flip(row), onSaved: saved(row), onClose: () => setOpen(null), onDedupe: dedupe(row) });
+  return (0, import_react7.createElement)(
     Stage,
     {
       title: "Turn on your AIs",
-      speech: count > 0 ? "Turn on everything you have. More brains, more Omni." : "Now give me a brain. Turn on every AI you have; you can change it any time.",
+      speech: count > 0 ? `Turn on everything you have. More brains, more ${state.companionName ?? "Omni"}.` : "Now give me a brain. Turn on every AI you have; you can change it any time.",
       at: "omni-connect-ai",
       glitching
     },
-    all === null ? (0, import_react5.createElement)("p", { className: "oai-muted" }, "Looking at what this computer has…") : [
-      found.length ? (0, import_react5.createElement)(
+    all === null ? (0, import_react7.createElement)("p", { className: "oai-muted" }, "Looking at what this computer has…") : [
+      found.length ? (0, import_react7.createElement)(
         "section",
         { key: "found", className: "oai-group", "aria-label": "Found on this computer" },
-        (0, import_react5.createElement)("h2", null, "Found on this computer"),
-        (0, import_react5.createElement)("div", { className: "oai-list" }, found.map(rowOf))
+        (0, import_react7.createElement)("h2", null, "Found on this computer"),
+        (0, import_react7.createElement)("div", { className: "oai-list" }, found.map(rowOf))
       ) : null,
-      (0, import_react5.createElement)(
+      (0, import_react7.createElement)(
         "section",
         { key: "others", className: "oai-group", "aria-label": found.length ? "Add another" : "Your AIs" },
-        (0, import_react5.createElement)("h2", null, found.length ? "Add another" : "Your AIs"),
-        (0, import_react5.createElement)("p", { className: "oai-terms oai-muted" }, `Subscriptions: ${VENDOR_TERMS.toLowerCase()}.`),
-        (0, import_react5.createElement)(
+        (0, import_react7.createElement)("h2", null, found.length ? "Add another" : "Your AIs"),
+        (0, import_react7.createElement)("p", { className: "oai-terms oai-muted" }, `Subscriptions: ${VENDOR_TERMS.toLowerCase()}.`),
+        (0, import_react7.createElement)(
           "div",
           { className: "oai-list" },
           visible.map(rowOf),
-          !showAll && others.length > FIRST_OTHERS ? (0, import_react5.createElement)("button", { type: "button", className: "oai-more", onClick: () => setShowAll(true) }, `Show ${others.length - FIRST_OTHERS} more`) : null
+          !showAll && others.length > FIRST_OTHERS ? (0, import_react7.createElement)("button", { type: "button", className: "oai-more", onClick: () => setShowAll(true) }, `Show ${others.length - FIRST_OTHERS} more`) : null
         )
       ),
-      (0, import_react5.createElement)("p", { key: "more", className: "oai-muted oai-every" }, "Every other provider DSH knows is in ", (0, import_react5.createElement)("button", { type: "button", className: "oai-inline", onClick: () => finish2("models") }, "Settings → Models"), ".")
+      (0, import_react7.createElement)("p", { key: "more", className: "oai-muted oai-every" }, "Every other provider DSH knows is in ", (0, import_react7.createElement)("button", { type: "button", className: "oai-inline", onClick: () => finish2("models") }, "Settings → Models"), ".")
     ],
-    (0, import_react5.createElement)(
+    (0, import_react7.createElement)(
       "div",
       { className: "oai-actions" },
-      (0, import_react5.createElement)("button", { type: "button", className: "oai-quiet", onClick: () => finish2() }, "Skip for now"),
-      (0, import_react5.createElement)("span", { className: "oai-count" }, count > 0 ? `${count} on` : "Turn on at least one"),
-      (0, import_react5.createElement)("button", { type: "button", className: "oai-primary", disabled: count === 0, onClick: () => finish2() }, count > 0 ? "Continue →" : "Continue")
+      (0, import_react7.createElement)("button", { type: "button", className: "oai-quiet", onClick: () => finish2() }, "Skip for now"),
+      (0, import_react7.createElement)("span", { className: "oai-count" }, count > 0 ? `${count} on` : "Turn on at least one"),
+      (0, import_react7.createElement)("button", { type: "button", className: "oai-primary", disabled: count === 0, onClick: () => finish2() }, count > 0 ? "Continue →" : "Continue")
     )
   );
 }
 
 // src/client/index.js
 var STEPS = [
-  { id: "omni-welcome", order: -300, component: WelcomeStep },
+  { id: "omni-companion", order: -300, component: CompanionStep },
+  { id: "omni-team", order: -270, component: TeamStep },
   { id: "omni-connect-ai", order: -200, component: ConnectAiStep }
 ];
 var inject = ["slots"];
 function installStyles() {
   const style = document.createElement("style");
   style.dataset.omniAi = "";
-  style.textContent = STAGE_CSS + TERMINAL_CSS;
+  style.textContent = STAGE_CSS + ONBOARD_CSS + INK_CSS + TERMINAL_CSS;
   document.head.append(style);
   return () => style.remove();
 }

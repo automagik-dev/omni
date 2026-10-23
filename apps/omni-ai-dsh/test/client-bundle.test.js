@@ -12,7 +12,7 @@ test('client.js is the build of src/client', async () => {
 
 // DSH runs client.js as a classic script that hands a factory to the module loader; the
 // factory's `require` answers only the shell's platform modules.
-test('client.js registers the two onboarding steps on settings.onboarding, in order', () => {
+test('client.js registers its three onboarding steps on settings.onboarding, in order', () => {
   const registrations = []
   runInNewContext(committed(), { window: { __ModuleLoader__: { load: registration => registrations.push(registration) } } })
   assert.equal(registrations.length, 1)
@@ -41,10 +41,11 @@ test('client.js registers the two onboarding steps on settings.onboarding, in or
       register: (options, component) => { registered.push({ ...options, component: typeof component }); return () => {} },
     },
   })
-  assert.deepEqual(effects, ['omni-ai: stage styles', 'omni-ai: omni-welcome on the rail', 'omni-ai: omni-connect-ai on the rail'])
-  assert.deepEqual(injected, ['settings.onboarding', 'settings.onboarding'])
+  assert.deepEqual(effects, ['omni-ai: stage styles', 'omni-ai: omni-companion on the rail', 'omni-ai: omni-team on the rail', 'omni-ai: omni-connect-ai on the rail'])
+  assert.deepEqual(injected, ['settings.onboarding', 'settings.onboarding', 'settings.onboarding'])
   assert.deepEqual(registered, [
-    { name: 'settings.onboarding', id: 'omni-welcome', order: -300, component: 'function' },
+    { name: 'settings.onboarding', id: 'omni-companion', order: -300, component: 'function' },
+    { name: 'settings.onboarding', id: 'omni-team', order: -270, component: 'function' },
     { name: 'settings.onboarding', id: 'omni-connect-ai', order: -200, component: 'function' },
   ])
 })

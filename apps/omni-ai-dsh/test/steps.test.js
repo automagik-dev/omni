@@ -45,12 +45,12 @@ test('a step whose done flag is set completes at once and shows nothing', async 
 })
 
 test('a step shows when its flag is unset, or when the user reopened it', async () => {
-  const fresh = recorder({ welcomeDone: false, aiConnected: true })
-  assert.deepEqual(plain(await gate(fresh.props('omni-welcome'), fresh.request)), { welcomeDone: false, aiConnected: true })
+  const fresh = recorder({ companionDone: false, aiConnected: true })
+  assert.deepEqual(plain(await gate(fresh.props('omni-companion'), fresh.request)), { companionDone: false, aiConnected: true })
   assert.deepEqual(fresh.log, ['state'])
 
-  const reopened = recorder({ welcomeDone: true })
-  assert.deepEqual(plain(await gate({ ...reopened.props('omni-welcome'), explicit: true }, reopened.request)), { welcomeDone: true })
+  const reopened = recorder({ companionDone: true })
+  assert.deepEqual(plain(await gate({ ...reopened.props('omni-companion'), explicit: true }, reopened.request)), { companionDone: true })
   assert.deepEqual(reopened.log, ['state'])
 
   const offline = recorder()
@@ -59,15 +59,15 @@ test('a step shows when its flag is unset, or when the user reopened it', async 
 
 test('finishing writes the flag, then completes; a tile completes before it opens a section', async () => {
   const done = recorder()
-  await finish(done.props('omni-welcome'), done.request)
-  assert.deepEqual(done.log, ['done {"stepId":"omni-welcome"}', 'complete'])
+  await finish(done.props('omni-team'), done.request)
+  assert.deepEqual(done.log, ['done {"stepId":"omni-team"}', 'complete'])
 
   const tile = recorder()
   await finishInto(tile.props('omni-connect-ai'), 'models', tile.request)
   assert.deepEqual(tile.log, ['done {"stepId":"omni-connect-ai"}', 'complete', 'open models'])
 
   const failing = recorder()
-  await finish(failing.props('omni-welcome'), async () => { throw new Error('down') })
+  await finish(failing.props('omni-companion'), async () => { throw new Error('down') })
   assert.deepEqual(failing.log, ['complete'])
 })
 
@@ -109,13 +109,12 @@ test('every row that signs in names its own provider; Claude never signs in, key
 test('the rail names only the steps this DSH has: Connect Omni only with the plugin that brings it', () => {
   const scope = {}
   const labels = current => plain(railSteps(current, scope).map(([, label]) => label))
-  announceStep('omni-welcome', scope)
-  announceStep('omni-connect-ai', scope)
-  assert.deepEqual(labels('omni-welcome'), ['Welcome', 'Connect AI'])
+  for (const id of ['omni-companion', 'omni-team', 'omni-connect-ai']) announceStep(id, scope)
+  assert.deepEqual(labels('omni-companion'), ['Your companion', 'Your team', 'Connect AI'])
   const leave = announceStep('omni-connect', scope)
-  assert.deepEqual(labels('omni-connect-ai'), ['Welcome', 'Connect Omni', 'Connect AI'])
+  assert.deepEqual(labels('omni-connect-ai'), ['Your companion', 'Your team', 'Connect Omni', 'Connect AI'])
   leave()
-  assert.deepEqual(labels('omni-connect-ai'), ['Welcome', 'Connect AI'])
+  assert.deepEqual(labels('omni-connect-ai'), ['Your companion', 'Your team', 'Connect AI'])
   // A step that never announced itself still shows where it is.
   assert.deepEqual(plain(railSteps('omni-connect', {}).map(([id]) => id)), ['omni-connect'])
 })
@@ -144,4 +143,14 @@ test('a subscription takes the next free account slot; only vendors nothing else
   assert.deepEqual([by.kiro.on, by.kiro.ready], [false, true])
   assert.deepEqual([by.glm.on, by.glm.ready, by.glm.found], [false, false, null])
   assert.deepEqual(plain(subscriptionRows(null)), [])
+})
+
+test('the team select: Omni is for its channels, the rest it may do are switches; Genie only shows its stats', async () => {
+  const { OMNI_STATS, GENIE_STATS, channelLabel } = await load('team.js')
+  const omni = plain(OMNI_STATS)
+  assert.deepEqual(omni.filter(stat => stat.locked).map(stat => stat.id), ['channels'])
+  assert.ok(omni.every(stat => stat.value >= 0 && stat.value <= 5 && typeof stat.on === 'boolean'))
+  assert.ok(plain(GENIE_STATS).every(stat => stat.on === undefined))
+  assert.equal(channelLabel({ type: 'whatsapp-baileys' }), 'WhatsApp')
+  assert.equal(channelLabel({ type: 'matrix' }), 'matrix')
 })
