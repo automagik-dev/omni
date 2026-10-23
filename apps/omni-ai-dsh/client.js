@@ -54,32 +54,32 @@ async function call(endpoint, payload) {
 var BODY = "M50 6C75 6 87 24 87 46C87 60 82 68 80 72C84 82 84 92 80 96C76 98 72 92 70 84C68 92 66 98 61 96C57 94 56 84 54 78C52 80 48 80 46 78C44 84 43 94 39 96C34 98 32 92 30 84C28 92 24 98 20 96C16 92 16 82 20 72C18 68 13 60 13 46C13 24 25 6 50 6Z";
 var SHADE = "M87 46C87 60 82 68 80 72C84 82 84 92 80 96C76 98 72 92 70 84C68 92 66 98 61 96C57 94 56 84 54 78C62 76 70 66 75 56C80 48 80 36 75 26C82 32 87 38 87 46Z";
 var OCTOPUS_SVG = `<svg class="oai-octo" viewBox="0 0 100 100" aria-hidden="true">
-<defs><linearGradient id="oai-octo-skin" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3ee6d0"/><stop offset="1" stop-color="#0b8f8a"/></linearGradient></defs>
+<defs><linearGradient id="oai-octo-skin" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8ff4ff"/><stop offset=".5" stop-color="#22d3ee"/><stop offset="1" stop-color="#0e7490"/></linearGradient></defs>
 <path class="oai-ghost oai-cyan" d="${BODY}"/><path class="oai-ghost oai-magenta" d="${BODY}"/>
-<path d="${BODY}" fill="url(#oai-octo-skin)"/><path d="${SHADE}" fill="#06706d" opacity=".55"/>
+<path d="${BODY}" fill="url(#oai-octo-skin)"/><path d="${SHADE}" fill="#0b4f6c" opacity=".5"/>
 <path d="M30 22C36 14 44 11 50 11C40 14 33 20 30 28Z" fill="#fff" opacity=".45"/>
 <g class="oai-eyes"><ellipse cx="40" cy="36" rx="6.5" ry="11" fill="#06121f"/><ellipse cx="60" cy="36" rx="6.5" ry="11" fill="#06121f"/>
 <circle cx="42" cy="31" r="2.4" fill="#fff"/><circle cx="62" cy="31" r="2.4" fill="#fff"/></g>
 <path d="M44 54Q50 59 56 54" stroke="#06121f" stroke-width="2.4" fill="none" stroke-linecap="round"/>
-<ellipse cx="31" cy="50" rx="5" ry="2.8" fill="#ff7ab8" opacity=".5"/><ellipse cx="69" cy="50" rx="5" ry="2.8" fill="#ff7ab8" opacity=".5"/>
-<g fill="none" stroke="#0b8f8a" stroke-width="3" stroke-linecap="round"><path d="M20 96Q13 99 12 92"/><path d="M80 96Q87 99 88 92"/></g>
+<ellipse cx="31" cy="50" rx="5" ry="2.8" fill="#ff5fb8" opacity=".6"/><ellipse cx="69" cy="50" rx="5" ry="2.8" fill="#ff5fb8" opacity=".6"/>
+<g fill="none" stroke="#0e7490" stroke-width="3" stroke-linecap="round"><path d="M20 96Q13 99 12 92"/><path d="M80 96Q87 99 88 92"/></g>
 </svg>`;
 var STAGE_CSS = `
-.oai-overlay{--oai-bg:#05070f;--oai-card:rgba(13,20,36,.8);--oai-ink:#eef3ff;--oai-ink2:#9fb0cc;--oai-line:rgba(120,160,220,.22);--oai-accent:#22d3c5;--oai-bad:#ff6b6b;
+.oai-overlay{--oai-bg:#05070f;--oai-card:rgba(13,20,36,.8);--oai-ink:#eef3ff;--oai-ink2:#9fb0cc;--oai-line:rgba(120,160,220,.22);--oai-accent:#22d3ee;--oai-accent-2:#ff3bd4;--oai-bad:#ff6b6b;
   position:fixed;inset:0;z-index:2000;overflow:auto;display:grid;place-items:center;padding:24px 16px;box-sizing:border-box;color-scheme:dark;color:var(--oai-ink);
   font:15px/1.55 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
-  background:radial-gradient(1200px 600px at 50% -10%,rgba(34,211,197,.18),transparent 60%),radial-gradient(900px 500px at 100% 110%,rgba(124,92,255,.18),transparent 60%),var(--oai-bg)}
+  background:radial-gradient(1200px 600px at 50% -10%,rgba(34,211,238,.18),transparent 60%),radial-gradient(900px 500px at 100% 110%,rgba(255,59,212,.16),transparent 60%),var(--oai-bg)}
 .oai-overlay *{box-sizing:border-box}
 .oai-overlay::before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.55;
   background-image:radial-gradient(1px 1px at 12% 18%,#fff,transparent),radial-gradient(1px 1px at 72% 12%,#cde,transparent),radial-gradient(1.5px 1.5px at 38% 72%,#fff,transparent),radial-gradient(1px 1px at 86% 64%,#bcd,transparent),radial-gradient(1px 1px at 22% 88%,#fff,transparent),radial-gradient(1.5px 1.5px at 58% 40%,#def,transparent);
   animation:oai-twinkle 6s ease-in-out infinite alternate}
 .oai-overlay::after{content:"";position:fixed;left:-50%;right:-50%;bottom:-30vh;height:60vh;pointer-events:none;opacity:.35;
-  background-image:linear-gradient(rgba(34,211,197,.35) 1px,transparent 1px),linear-gradient(90deg,rgba(34,211,197,.35) 1px,transparent 1px);background-size:56px 56px;
+  background-image:linear-gradient(rgba(34,211,238,.32) 1px,transparent 1px),linear-gradient(90deg,rgba(255,59,212,.22) 1px,transparent 1px);background-size:56px 56px;
   transform:perspective(420px) rotateX(62deg);mask-image:linear-gradient(to top,#000,transparent);animation:oai-grid 9s linear infinite}
 @keyframes oai-twinkle{from{opacity:.35}to{opacity:.7}}
 @keyframes oai-grid{from{background-position:0 0}to{background-position:0 56px}}
 .oai-stage{position:relative;z-index:1;width:min(580px,100%);display:flex;flex-direction:column;align-items:center}
-.oai-octo{width:124px;height:124px;filter:drop-shadow(0 12px 30px rgba(34,211,197,.35));animation:oai-float 4.5s ease-in-out infinite}
+.oai-octo{width:124px;height:124px;filter:drop-shadow(0 12px 30px rgba(34,211,238,.35)) drop-shadow(0 0 18px rgba(255,59,212,.18));animation:oai-float 4.5s ease-in-out infinite}
 .oai-ghost{opacity:0}.oai-cyan{fill:#00f0ff}.oai-magenta{fill:#ff2bd6}
 .oai-octo:hover .oai-cyan,.oai-glitch .oai-cyan{opacity:.55;transform:translate(-2.5px,0);animation:oai-glitch 2.4s steps(1) infinite}
 .oai-octo:hover .oai-magenta,.oai-glitch .oai-magenta{opacity:.55;transform:translate(2.5px,0);animation:oai-glitch 2.4s steps(1) infinite reverse}
@@ -87,19 +87,19 @@ var STAGE_CSS = `
 @keyframes oai-float{0%,100%{transform:translateY(0) rotate(-2deg)}50%{transform:translateY(-10px) rotate(2deg)}}
 @keyframes oai-blink{0%,92%,100%{transform:scaleY(1)}95%{transform:scaleY(.1)}}
 @keyframes oai-glitch{0%{clip-path:inset(0 0 70% 0)}25%{clip-path:inset(40% 0 30% 0)}50%{clip-path:inset(75% 0 0 0)}75%{clip-path:inset(10% 0 60% 0)}}
-.oai-bubble{position:relative;margin:6px 0 18px;padding:10px 16px;border-radius:14px;background:rgba(34,211,197,.12);border:1px solid rgba(34,211,197,.35);color:#c9fff8;font:500 15px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;min-height:44px;max-width:100%}
-.oai-bubble::before{content:"";position:absolute;top:-7px;left:50%;width:12px;height:12px;border-left:inherit;border-top:inherit;transform:translateX(-50%) rotate(45deg);background:#0e2a33}
-.oai-caret{display:inline-block;width:.55em;height:1.05em;margin-left:2px;vertical-align:-2px;background:#7ff7ea;animation:oai-caret 1s steps(1) infinite}
+.oai-bubble{position:relative;margin:6px 0 18px;padding:10px 16px;border-radius:14px;background:rgba(34,211,238,.1);border:1px solid rgba(34,211,238,.35);color:#d6f8ff;font:500 15px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;min-height:44px;max-width:100%}
+.oai-bubble::before{content:"";position:absolute;top:-7px;left:50%;width:12px;height:12px;border-left:inherit;border-top:inherit;transform:translateX(-50%) rotate(45deg);background:#0d2232}
+.oai-caret{display:inline-block;width:.55em;height:1.05em;margin-left:2px;vertical-align:-2px;background:var(--oai-accent-2);animation:oai-caret 1s steps(1) infinite}
 @keyframes oai-caret{50%{opacity:0}}
 .oai-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 .oai-rail{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin:0 0 14px;padding:0;list-style:none;font:600 11px/1 ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase;color:var(--oai-ink2)}
-.oai-rail li{padding:6px 10px;border-radius:999px;border:1px solid var(--oai-line)}.oai-rail li.oai-on{color:#05070f;background:var(--oai-accent);border-color:var(--oai-accent)}.oai-rail li.oai-done{color:var(--oai-accent);border-color:rgba(34,211,197,.5)}
+.oai-rail li{padding:6px 10px;border-radius:999px;border:1px solid var(--oai-line)}.oai-rail li.oai-on{color:#05070f;background:var(--oai-accent);border-color:var(--oai-accent)}.oai-rail li.oai-done{color:var(--oai-accent);border-color:rgba(34,211,238,.5)}
 .oai-card{width:100%;background:var(--oai-card);border:1px solid var(--oai-line);border-radius:20px;padding:24px;backdrop-filter:blur(14px);box-shadow:0 30px 80px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.04)}
 .oai-card h1{font-size:21px;margin:0 0 6px;letter-spacing:-.01em;outline:none}.oai-card p{margin:0 0 14px;color:var(--oai-ink2)}
 .oai-mark{font:700 12px/1 ui-monospace,monospace;letter-spacing:.32em;color:var(--oai-accent);margin-bottom:14px}
 .oai-card button{display:block;width:100%;padding:12px 14px;margin:8px 0 0;border-radius:13px;border:1px solid var(--oai-line);background:rgba(255,255,255,.02);color:var(--oai-ink);font:inherit;font-weight:600;cursor:pointer;text-align:center;transition:transform .15s,box-shadow .15s,border-color .15s}
-.oai-card button:hover:not(:disabled),.oai-card button:focus-visible{transform:translateY(-1px);border-color:rgba(34,211,197,.6);box-shadow:0 0 0 1px rgba(34,211,197,.25),0 8px 24px rgba(34,211,197,.15);outline:none}
-.oai-card button.oai-primary{background:linear-gradient(135deg,var(--oai-accent),#14a8c7);border-color:transparent;color:#03141a}.oai-card button:disabled{opacity:.55;cursor:default}
+.oai-card button:hover:not(:disabled),.oai-card button:focus-visible{transform:translateY(-1px);border-color:rgba(255,59,212,.6);box-shadow:0 0 0 1px rgba(255,59,212,.25),0 8px 24px rgba(255,59,212,.14);outline:none}
+.oai-card button.oai-primary{background:linear-gradient(135deg,var(--oai-accent),var(--oai-accent-2));border-color:transparent;color:#06060f}.oai-card button:disabled{opacity:.55;cursor:default}
 .oai-card button.oai-quiet{background:none;border-color:transparent;color:var(--oai-ink2);font-weight:500}
 .oai-group{margin:16px 0 0}.oai-group h2{margin:0 0 2px;font:600 11px/1.4 ui-monospace,monospace;letter-spacing:.14em;text-transform:uppercase;color:var(--oai-accent)}
 .oai-group .oai-terms{margin:0 0 4px;font-size:12px}
@@ -107,9 +107,16 @@ var STAGE_CSS = `
 .oai-card button.oai-tile{margin:4px 0 0;text-align:left;padding:10px 12px}.oai-tile strong{display:block}.oai-tile span{display:block;font-size:12px;font-weight:400;color:var(--oai-ink2)}
 .oai-card label{display:block;margin:12px 0 4px;font-size:13px;color:var(--oai-ink2)}
 .oai-card input{width:100%;padding:11px 12px;border-radius:12px;border:1px solid var(--oai-line);background:rgba(0,0,0,.25);color:var(--oai-ink);font:14px/1.3 ui-monospace,monospace}
-.oai-card input:focus{outline:none;border-color:var(--oai-accent);box-shadow:0 0 0 3px rgba(34,211,197,.2)}
+.oai-card input:focus{outline:none;border-color:var(--oai-accent);box-shadow:0 0 0 3px rgba(34,211,238,.2)}
 .oai-error{color:var(--oai-bad)!important}.oai-muted{font-size:13px}
-.oai-models{margin:8px 0 0;padding:8px 12px;border-radius:10px;border:1px solid var(--oai-line);background:rgba(0,0,0,.3);font:12px/1.5 ui-monospace,monospace;color:#c9fff8;max-height:120px;overflow:auto}
+.oai-models{margin:8px 0 0;padding:8px 12px;border-radius:10px;border:1px solid var(--oai-line);background:rgba(0,0,0,.3);font:12px/1.5 ui-monospace,monospace;color:#d6f8ff;max-height:120px;overflow:auto}
+.oai-card a.oai-link{color:var(--oai-accent);text-decoration:underline;text-underline-offset:3px}
+.oai-card a.oai-button{display:block;margin:12px 0 0;padding:12px 14px;border-radius:13px;text-align:center;font-weight:600;text-decoration:none;background:linear-gradient(135deg,var(--oai-accent),var(--oai-accent-2));color:#06060f}
+.oai-code{display:flex;align-items:center;gap:10px;margin:6px 0 4px;padding:12px 14px;border-radius:14px;border:1px dashed rgba(255,59,212,.5);background:rgba(255,59,212,.07)}
+.oai-code code{flex:1;font:700 24px/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.18em;color:#fff}
+.oai-card .oai-code button.oai-ghost{display:inline-block;width:auto;margin:0;padding:8px 12px;font-size:13px}
+.oai-choices button{text-align:left}.oai-choices button span{display:block;font-size:12px;font-weight:400;color:var(--oai-ink2)}
+.oai-waiting::before{content:"";display:inline-block;width:9px;height:9px;margin-right:8px;border-radius:50%;background:var(--oai-accent-2);animation:oai-caret 1s steps(1) infinite}
 @media (prefers-reduced-motion:reduce){.oai-overlay *,.oai-overlay::before,.oai-overlay::after{animation:none!important;transition:none!important}}
 `;
 
@@ -288,26 +295,33 @@ var import_react3 = require("react");
 var VENDOR_TERMS = "Personal use under the vendor's terms";
 var GROUPS = [
   {
-    title: "With an API key",
-    tiles: [
-      { id: "deepseek", name: "DeepSeek", note: "With a DeepSeek API key", section: "models" },
-      { id: "zai", name: "Z.ai", note: "GLM models, with a Z.ai API key", section: "models" },
-      { id: "opencode", name: "OpenCode", note: "With an OpenCode API key", section: "models" },
-      { id: "api-key", name: "Any API key", note: "Any provider on DSH's Models page", section: "models" }
-    ]
-  },
-  {
-    title: "With a subscription sign-in",
+    title: "Sign in with a plan you have",
     terms: VENDOR_TERMS,
     tiles: [
-      { id: "codex", name: "Codex", note: VENDOR_TERMS, section: "models" },
-      { id: "claude", name: "Claude", note: VENDOR_TERMS, section: "models" },
-      { id: "kimi", name: "Kimi", note: VENDOR_TERMS, section: "models" }
+      { id: "codex", provider: "openai-codex", name: "ChatGPT", note: "Plus, Pro or Team, through Codex", signin: true },
+      { id: "claude", provider: "anthropic", name: "Claude", note: "Pro or Max", signin: true },
+      { id: "kimi", provider: "kimi-coding", name: "Kimi", note: "Kimi Code", signin: true },
+      { id: "copilot", provider: "github-copilot", name: "GitHub Copilot", note: "Your Copilot plan", signin: true }
     ]
   },
   {
-    title: "Through your own gateway",
-    tiles: [{ id: "cliproxy", name: "CLIProxyAPI", note: "An OpenAI-compatible gateway you run", form: true }]
+    title: "With an API key",
+    tiles: [
+      { id: "deepseek", provider: "deepseek", name: "DeepSeek", note: "A DeepSeek API key", key: "https://platform.deepseek.com/api_keys" },
+      { id: "openai", provider: "openai", name: "OpenAI", note: "An OpenAI API key", key: "https://platform.openai.com/api-keys" },
+      { id: "anthropic", provider: "anthropic", name: "Anthropic", note: "An Anthropic API key", key: "https://console.anthropic.com/settings/keys" },
+      { id: "openrouter", provider: "openrouter", name: "OpenRouter", note: "Hundreds of models, one key", key: "https://openrouter.ai/keys" },
+      { id: "zai", provider: "zai", name: "Z.ai", note: "GLM models", key: "https://z.ai/manage-apikey/apikey-list" },
+      { id: "moonshot", provider: "moonshotai", name: "Moonshot", note: "Kimi models by API key", key: "https://platform.moonshot.ai/console/api-keys" },
+      { id: "opencode", provider: "opencode", name: "OpenCode", note: "An OpenCode Zen key", key: "https://opencode.ai/zen" }
+    ]
+  },
+  {
+    title: "Something else",
+    tiles: [
+      { id: "cliproxy", name: "Your own gateway", note: "CLIProxyAPI or any OpenAI-compatible server", form: true },
+      { id: "api-key", name: "Another provider", note: "Every provider DSH knows, in Settings", section: "models" }
+    ]
   }
 ];
 function Tiles({ onTile }) {
@@ -323,6 +337,115 @@ function Tiles({ onTile }) {
       onClick: () => onTile(tile)
     }, (0, import_react3.createElement)("strong", null, tile.name), (0, import_react3.createElement)("span", null, tile.note))))
   ));
+}
+function KeyForm({ tile, onBack, onSaved, glitch }) {
+  const [apiKey, setApiKey] = (0, import_react3.useState)("");
+  const [busy, setBusy] = (0, import_react3.useState)(false);
+  const [problem, setProblem] = (0, import_react3.useState)(null);
+  const submit = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    setProblem(null);
+    try {
+      await call("provider-key", { provider: tile.provider, apiKey });
+      setApiKey("");
+      glitch();
+      onSaved({ name: tile.name });
+    } catch (error) {
+      setProblem(error.message);
+      setBusy(false);
+    }
+  };
+  return (0, import_react3.createElement)(
+    "form",
+    { onSubmit: submit },
+    (0, import_react3.createElement)("p", null, "The key stays in DSH's own credential store on this computer. ", (0, import_react3.createElement)("a", { className: "oai-link", href: tile.key, target: "_blank", rel: "noreferrer" }, `Get a ${tile.name} key`), "."),
+    (0, import_react3.createElement)("label", { htmlFor: "oai-key" }, `${tile.name} API key`),
+    (0, import_react3.createElement)("input", { id: "oai-key", type: "password", required: true, autoComplete: "off", spellCheck: false, autoFocus: true, value: apiKey, onChange: (e) => setApiKey(e.target.value) }),
+    problem ? (0, import_react3.createElement)("p", { className: "oai-error", role: "alert", style: { marginTop: "10px" } }, problem) : null,
+    (0, import_react3.createElement)("button", { type: "submit", className: "oai-primary", disabled: busy }, busy ? "Connecting…" : "Connect"),
+    (0, import_react3.createElement)("button", { type: "button", className: "oai-quiet", disabled: busy, onClick: onBack }, "Back")
+  );
+}
+function SignIn({ tile, onBack, onSaved, glitch }) {
+  const [attempt, setAttempt] = (0, import_react3.useState)(null);
+  const [problem, setProblem] = (0, import_react3.useState)(null);
+  const [answer, setAnswer] = (0, import_react3.useState)("");
+  const [copied, setCopied] = (0, import_react3.useState)(false);
+  (0, import_react3.useEffect)(() => {
+    let live = true;
+    let timer = 0;
+    const poll = async (first) => {
+      try {
+        const next = await call(first ? "signin-start" : "signin-status", { provider: tile.provider });
+        if (!live) return;
+        setAttempt(next);
+        if (next.status === "authorized") {
+          glitch();
+          onSaved({ name: tile.name });
+          return;
+        }
+        if (next.status === "running" || next.status === "none") timer = setTimeout(() => poll(false), 1e3);
+      } catch (error) {
+        if (live) setProblem(error.message);
+      }
+    };
+    poll(true);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [tile.provider]);
+  const reply = async (value) => {
+    setProblem(null);
+    try {
+      setAttempt(await call("signin-answer", { provider: tile.provider, promptId: attempt.prompt.id, value }));
+      setAnswer("");
+    } catch (error) {
+      setProblem(error.message);
+    }
+  };
+  const cancel = async () => {
+    await call("signin-cancel", { provider: tile.provider }).catch(() => {
+    });
+    onBack();
+  };
+  const notice = attempt?.notice;
+  const prompt = attempt?.prompt;
+  const ended = attempt && ["cancelled", "failed"].includes(attempt.status);
+  return (0, import_react3.createElement)(
+    "div",
+    { className: "oai-signin" },
+    !attempt && !problem ? (0, import_react3.createElement)("p", { className: "oai-muted" }, `Starting the ${tile.name} sign-in…`) : null,
+    notice?.message ? (0, import_react3.createElement)("p", null, notice.message) : null,
+    notice?.code ? (0, import_react3.createElement)(
+      "div",
+      { className: "oai-code" },
+      (0, import_react3.createElement)("code", null, notice.code),
+      (0, import_react3.createElement)("button", { type: "button", className: "oai-ghost", onClick: () => navigator.clipboard?.writeText(notice.code).then(() => setCopied(true)) }, copied ? "Copied" : "Copy code")
+    ) : null,
+    notice?.url ? (0, import_react3.createElement)("a", { className: "oai-primary oai-button", href: notice.url, target: "_blank", rel: "noreferrer" }, `Open ${tile.name} to sign in`) : null,
+    prompt?.kind === "select" ? (0, import_react3.createElement)(
+      "div",
+      { className: "oai-choices", role: "group", "aria-label": prompt.message },
+      (0, import_react3.createElement)("p", null, prompt.message),
+      prompt.options.map((option) => (0, import_react3.createElement)("button", { key: option.id, type: "button", onClick: () => reply(option.id) }, (0, import_react3.createElement)("strong", null, option.label), option.description ? (0, import_react3.createElement)("span", null, option.description) : null))
+    ) : null,
+    prompt && prompt.kind !== "select" ? (0, import_react3.createElement)(
+      "form",
+      { onSubmit: (event) => {
+        event.preventDefault();
+        reply(answer);
+      } },
+      (0, import_react3.createElement)("label", { htmlFor: "oai-answer" }, prompt.message),
+      (0, import_react3.createElement)("input", { id: "oai-answer", type: prompt.kind === "secret" ? "password" : "text", required: true, autoComplete: "off", spellCheck: false, autoFocus: true, placeholder: prompt.placeholder, value: answer, onChange: (e) => setAnswer(e.target.value) }),
+      (0, import_react3.createElement)("button", { type: "submit", className: "oai-primary" }, "Continue")
+    ) : null,
+    attempt?.status === "running" && !prompt ? (0, import_react3.createElement)("p", { className: "oai-muted oai-waiting" }, "Waiting for you to finish signing in…") : null,
+    ended ? (0, import_react3.createElement)("p", { className: "oai-error", role: "alert" }, attempt.status === "failed" ? `The sign-in did not finish: ${attempt.error}` : "The sign-in was cancelled.") : null,
+    problem ? (0, import_react3.createElement)("p", { className: "oai-error", role: "alert" }, problem) : null,
+    (0, import_react3.createElement)("button", { type: "button", className: "oai-quiet", onClick: ended || problem ? onBack : cancel }, ended || problem ? "Back" : "Cancel")
+  );
 }
 function CliproxyForm({ onBack, onSaved, glitch }) {
   const [baseURL, setBaseURL] = (0, import_react3.useState)("");
@@ -366,6 +489,26 @@ function ConnectAiStep(props) {
     if (state) glitch();
   }, [state, glitch]);
   if (!state) return null;
+  if (view?.signin) {
+    return (0, import_react3.createElement)(
+      Stage,
+      { title: `Sign in to ${view.signin.name}`, speech: "Sign in on their page; I'll wait right here.", at: "omni-connect-ai", glitching },
+      (0, import_react3.createElement)(SignIn, { tile: view.signin, onBack: () => setView("tiles"), onSaved: (value) => {
+        setSaved(value);
+        setView("saved");
+      }, glitch })
+    );
+  }
+  if (view?.key) {
+    return (0, import_react3.createElement)(
+      Stage,
+      { title: `Connect ${view.key.name}`, speech: "Paste your key and I'm ready to think.", at: "omni-connect-ai", glitching },
+      (0, import_react3.createElement)(KeyForm, { tile: view.key, onBack: () => setView("tiles"), onSaved: (value) => {
+        setSaved(value);
+        setView("saved");
+      }, glitch })
+    );
+  }
   if (view === "cliproxy") {
     return (0, import_react3.createElement)(
       Stage,
@@ -376,12 +519,19 @@ function ConnectAiStep(props) {
       }, glitch })
     );
   }
-  if (view === "saved") {
-    const count = saved?.models?.length ?? 0;
+  if (view === "saved" && saved?.models) {
+    const count = saved.models.length;
     return (0, import_react3.createElement)(
       Stage,
       { title: "Gateway connected", speech: `Connected! ${count} ${count === 1 ? "model" : "models"} from your gateway, ready in the model picker.`, at: "omni-connect-ai", glitching },
-      (0, import_react3.createElement)("div", { className: "oai-models", "aria-label": "Models" }, (saved?.models ?? []).map((id) => (0, import_react3.createElement)("div", { key: id }, id))),
+      (0, import_react3.createElement)("div", { className: "oai-models", "aria-label": "Models" }, saved.models.map((id) => (0, import_react3.createElement)("div", { key: id }, id))),
+      (0, import_react3.createElement)("button", { type: "button", className: "oai-primary", onClick: () => finish2() }, "Done")
+    );
+  }
+  if (view === "saved") {
+    return (0, import_react3.createElement)(
+      Stage,
+      { title: `${saved?.name ?? "AI"} connected`, speech: `Connected! ${saved?.name ?? "Its"} models are in the model picker now.`, at: "omni-connect-ai", glitching },
       (0, import_react3.createElement)("button", { type: "button", className: "oai-primary", onClick: () => finish2() }, "Done")
     );
   }
@@ -394,7 +544,7 @@ function ConnectAiStep(props) {
       at: "omni-connect-ai",
       glitching
     },
-    (0, import_react3.createElement)(Tiles, { onTile: (tile) => tile.form ? setView("cliproxy") : finish2(tile.section) }),
+    (0, import_react3.createElement)(Tiles, { onTile: (tile) => tile.form ? setView("cliproxy") : tile.signin ? setView({ signin: tile }) : tile.key ? setView({ key: tile }) : finish2(tile.section) }),
     (0, import_react3.createElement)("button", { type: "button", className: connected ? "oai-primary" : "oai-quiet", style: { marginTop: "16px" }, onClick: () => finish2() }, connected ? "Continue" : "Skip for now")
   );
 }

@@ -170,7 +170,7 @@ export function PermissionsCard({ bot, roster, run, Card, SwitchRow }) {
 export const PERMISSIONS_CSS = `
 .om-perm-who{flex:none;display:grid;place-items:center}
 .om-perm-preview{margin:8px 0 2px;display:flex;flex-direction:column;gap:6px}
-.om-perm-text{margin:0;padding:8px 10px;border-left:3px solid var(--accent,#22d3c5);border-radius:6px;background:rgba(127,127,127,.08);white-space:pre-wrap;overflow-wrap:anywhere;max-height:220px;overflow:auto}
+.om-perm-text{margin:0;padding:8px 10px;border-left:3px solid var(--accent,#22d3ee);border-radius:6px;background:rgba(127,127,127,.08);white-space:pre-wrap;overflow-wrap:anywhere;max-height:220px;overflow:auto}
 .om-perm-body{margin:0;padding:8px 10px;border-radius:6px;background:rgba(127,127,127,.08);font:11.5px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto}
 .om-perm-to,.om-perm-op{font-size:12px;opacity:.8;overflow-wrap:anywhere}
 .om-perm-emoji{font-size:22px;line-height:1}

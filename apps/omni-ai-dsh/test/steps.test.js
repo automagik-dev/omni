@@ -71,14 +71,16 @@ test('finishing writes the flag, then completes; a tile completes before it open
   assert.deepEqual(failing.log, ['complete'])
 })
 
-test('Connect AI lists API-key paths first and marks every subscription sign-in', () => {
+test('Connect AI tiles connect for real: sign-ins first, marked, then keys, then the rest', () => {
   const tiles = plain(GROUPS).flatMap(group => group.tiles.map(tile => ({ ...tile, group: group.title })))
-  assert.deepEqual(tiles.map(tile => tile.id), ['deepseek', 'zai', 'opencode', 'api-key', 'codex', 'claude', 'kimi', 'cliproxy'])
-  assert.equal(GROUPS[0].title, 'With an API key')
-  // DeepSeek's key lives on the Models page; the account section is not in every profile.
-  for (const id of ['deepseek', 'zai', 'opencode', 'api-key', 'codex', 'claude', 'kimi']) assert.equal(tiles.find(tile => tile.id === id).section, 'models')
-  for (const id of ['codex', 'claude', 'kimi']) assert.equal(tiles.find(tile => tile.id === id).note, VENDOR_TERMS)
+  assert.deepEqual(tiles.map(tile => tile.id), ['codex', 'claude', 'kimi', 'copilot', 'deepseek', 'openai', 'anthropic', 'openrouter', 'zai', 'moonshot', 'opencode', 'cliproxy', 'api-key'])
+  assert.equal(GROUPS[0].terms, VENDOR_TERMS)
   assert.equal(VENDOR_TERMS, 'Personal use under the vendor\'s terms')
+  // A sign-in tile names the pi-ai provider whose flow it runs; a key tile, where to get a key.
+  for (const tile of GROUPS[0].tiles) assert.ok(tile.signin === true && typeof tile.provider === 'string', tile.id)
+  for (const tile of GROUPS[1].tiles) assert.ok(typeof tile.provider === 'string' && /^https:\/\//.test(tile.key), tile.id)
+  // Only "Another provider" leads to DSH's Models page; no tile is a dead end.
+  assert.deepEqual(tiles.filter(tile => tile.section).map(tile => tile.id), ['api-key'])
   assert.equal(tiles.find(tile => tile.id === 'cliproxy').form, true)
 })
 

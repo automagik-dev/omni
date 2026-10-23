@@ -11,7 +11,7 @@ export function mergeLayers(under, over) {
   return merged
 }
 
-export function fakeContext({ entries = {}, credentials = {}, records = [] } = {}) {
+export function fakeContext({ entries = {}, credentials = {}, records = [], services = {} } = {}) {
   const forms = new Map(Object.entries(entries).map(([ns, value]) => [ns, { value: structuredClone(value), revision: 3 }]))
   const secrets = new Map(Object.entries(credentials))
   const stored = new Set(records)
@@ -22,6 +22,8 @@ export function fakeContext({ entries = {}, credentials = {}, records = [] } = {
   const presentations = []
   const ctx = {
     fiber: { uid: 'omni-ai' },
+    // Services looked up rather than injected (ctx.get), such as authorization.
+    get: name => services[name],
     logger: { warn: (...args) => logs.push(args), info: (...args) => logs.push(args) },
     effect(execute, label) {
       effects.push(label)
@@ -41,6 +43,22 @@ export function fakeContext({ entries = {}, credentials = {}, records = [] } = {
         }
         updates.push({ ns, patch: structuredClone(patch), expectedRevision })
         form.value = mergeLayers(form.value, structuredClone(patch))
+        form.revision += 1
+      },
+      // Only `set` at a path, which is all the plugin writes.
+      async mutate(ns, ops, expectedRevision) {
+        const form = forms.get(ns)
+        if (form === undefined) throw new Error(`No configurable plugin entry "${ns}"`)
+        if (expectedRevision !== undefined && expectedRevision !== form.revision) {
+          throw Object.assign(new Error(`Settings for "${ns}" changed`), { code: 'SETTINGS_CONFLICT' })
+        }
+        for (const op of ops) {
+          if (op.op !== 'set') throw new Error(`unsupported op ${op.op}`)
+          let node = form.value
+          for (const key of op.path.slice(0, -1)) node = node[key] ??= {}
+          node[op.path.at(-1)] = structuredClone(op.value)
+        }
+        updates.push({ ns, ops: structuredClone(ops), expectedRevision })
         form.revision += 1
       },
     },
