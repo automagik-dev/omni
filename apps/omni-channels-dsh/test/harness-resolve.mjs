@@ -1,6 +1,6 @@
 // Tests import index.js outside a dsh profile, so its peers resolve as a profile would
 // supply them. The @deepseek-ai packages come from a DeepSeek Harness: DSH_HARNESS, else
-// the packages that `npm run harness` installs in dev/harness, else the nearest
+// the packages that `bun run harness` installs in dev/harness, else the nearest
 // deepseek-harness/ checkout in a folder above the plugin, else the same search from the
 // plugin's place in the main worktree (a git worktree has no checkout of its own). The
 // Omni team (@automagik/omni-dsh) is this repository's apps/omni-ui-dsh, or OMNI_DSH_CORE;
@@ -38,7 +38,7 @@ const harness = findHarness()
 // finds the team's files here.
 process.env.DSH_HARNESS = harness
 process.env.OMNI_DSH_CORE = core
-// A checkout links the packages into its base bundle; an npm install has them at its root.
+// A checkout links the packages into its base bundle; an install has them at its root.
 const base = resolve(harness, 'packages/bundle/base/package.json')
 const anchor = pathToFileURL(existsSync(base) ? base : resolve(harness, 'package.json')).href
 const owners = [plugin, core].map(dir => `${pathToFileURL(dir).href}/`)

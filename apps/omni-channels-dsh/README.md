@@ -83,13 +83,16 @@ this row's config, or on the team's `omni-ui` row where it lived before this plu
 ## Develop
 
 ```sh
-npm ci               # esbuild and qrcode-generator, for the client bundle
-npm run harness      # the pinned DSH release the tests and the linter run against
-npm test             # composes the team (../omni-ui-dsh) with this plugin
-npm run lint
-npm run build        # rewrites client.js and src/host/omni-routes.js; commit them
+npm ci               # esbuild and qrcode-generator, for the client bundle (see below)
+bun run harness      # the pinned DSH release the tests and the linter run against
+bun run test         # composes the team (../omni-ui-dsh) with this plugin, on Node
+bun run lint
+bun run build        # rewrites client.js and src/host/omni-routes.js; commit them
 node scripts/build-client.mjs --check
 ```
+
+The folder's own lockfile is npm's: Bun resolves every peer from the registry, and this plugin
+peers on the Omni plugins, which ship through the Automagik market rather than npm.
 
 `client.js` is generated from `src/client` and committed, so git and `link:` installs need
 no build step. The tests load the team plugin from `../omni-ui-dsh` (or `OMNI_DSH_CORE`):
