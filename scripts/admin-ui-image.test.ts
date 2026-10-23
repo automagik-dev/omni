@@ -21,7 +21,7 @@ describe('what the image ships', () => {
     ).toBe(tested);
   });
 
-  test('every plugin the profile names is an apps/*-dsh package it bundles', () => {
+  test("the profile bundles Omni's apps/*-dsh plugins and the vetted add-ons, each at an exact version", () => {
     const profile = readJson('deploy/admin-ui/profile/package.json');
     for (const name of Object.keys(profile.dependencies)) {
       expect(profile.dsh.profile.bundles).toContain(name);
@@ -29,7 +29,13 @@ describe('what the image ships', () => {
     const names = ['omni-ui-dsh', 'omni-channels-dsh', 'omni-canvas-dsh', 'omni-ai-dsh'].map(
       (dir) => readJson(`apps/${dir}/package.json`).name,
     );
-    expect(Object.keys(profile.dependencies).sort()).toEqual(names.sort());
+    const addons = { '@goodandready/dsh-subscriptions': '0.7.19' };
+    expect(Object.keys(profile.dependencies).sort()).toEqual([...names, ...Object.keys(addons)].sort());
+    for (const [name, version] of Object.entries(addons)) expect(profile.dependencies[name]).toBe(version);
+    // No local-Ollama fallback: a chat never moves to another model on its own.
+    expect(readFileSync(join(ROOT, 'deploy/admin-ui/profile/cordis.patch.yml'), 'utf8')).toMatch(
+      /^- id: dsh-subscriptions\n {2}config:\n {4}ollamaFallback: false$/m,
+    );
   });
 });
 
