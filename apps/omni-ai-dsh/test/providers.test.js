@@ -56,6 +56,40 @@ test('a key for a provider no tile offers, or no key at all, is refused', async 
   assert.equal(fake.secrets.size, 0)
 })
 
+test('payloads are parsed before use: wrong types read as missing fields, never as values', async () => {
+  const fake = host()
+  assert.equal((await fake.handle('provider-key', { provider: 42, apiKey: 'sk' })).error.code, 'omni-ai/invalid')
+  assert.equal((await fake.handle('provider-key', { provider: 'zai', apiKey: ['sk'] })).error.code, 'omni-ai/invalid')
+  assert.equal((await fake.handle('provider-key', 'zai')).error.code, 'omni-ai/invalid')
+  assert.equal((await fake.handle('signin-answer', { provider: 'kimi-coding', promptId: { id: 1 }, value: 'x' })).error.code, 'omni-ai/refused')
+  assert.equal(fake.secrets.size, 0)
+})
+
+test('a key DSH would not route is taken back: the earlier key returns, or none stays', async () => {
+  const keyed = host({ entries: { 'omni-ai': {} }, credentials: { ZAI_API_KEY: 'sk-old' } })
+  assert.equal((await keyed.handle('provider-key', { provider: 'zai', apiKey: 'sk-new' })).error.code, 'omni-ai/refused')
+  assert.equal(keyed.secrets.get('ZAI_API_KEY'), 'sk-old')
+  const fresh = host({ entries: { 'omni-ai': {} } })
+  assert.equal((await fresh.handle('provider-key', { provider: 'zai', apiKey: 'sk-new' })).ok, false)
+  assert.equal(fresh.secrets.has('ZAI_API_KEY'), false)
+})
+
+test('two starts at once begin one sign-in and write the route once, with no settings conflict', async () => {
+  const fake = host()
+  const [first, second] = await Promise.all([
+    fake.handle('signin-start', { provider: 'kimi-coding' }),
+    fake.handle('signin-start', { provider: 'kimi-coding' }),
+  ])
+  assert.equal(first.ok && second.ok, true, JSON.stringify([first, second]))
+  assert.equal(fake.authorization.begun.length, 1)
+  assert.equal(fake.updates.length, 1)
+  // A route that is there already is not written again.
+  fake.authorization.begun[0].settle({ status: 'cancelled' })
+  await tick()
+  assert.equal((await fake.handle('signin-start', { provider: 'kimi-coding' })).ok, true)
+  assert.equal(fake.updates.length, 1)
+})
+
 test('a sign-in adds the route, relays its notice and question, takes the answer and ends authorized', async () => {
   const fake = host()
   const started = await fake.handle('signin-start', { provider: 'openai-codex' })

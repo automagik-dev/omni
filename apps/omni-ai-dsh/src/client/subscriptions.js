@@ -77,16 +77,23 @@ export function SubscriptionSignIn({ tile, onBack, onSaved, glitch }) {
           const device = await post('oauth/device/start', { provider: tile.provider, index: slot })
           if (!live) return
           setStep({ code: device.userCode, url: device.authUrl })
+          const every = Math.max(device.intervalMs ?? 5000, 2000)
+          // A failed poll is shown and polled again: the sign-in may still finish in the
+          // browser. An expired code ends it.
           const poll = async () => {
             try {
               const out = await post('oauth/device/poll', { state: device.state })
               if (out.status === 'authorized') return done()
-              if (live) timer = setTimeout(poll, Math.max(device.intervalMs ?? 5000, 2000))
+              if (!live) return
+              if (out.status === 'expired') return setProblem('The code expired before the sign-in finished. Go back and start again.')
+              setProblem(null)
             } catch (error) {
-              if (live) setProblem(error.message)
+              if (!live) return
+              setProblem(error.message)
             }
+            timer = setTimeout(poll, every)
           }
-          timer = setTimeout(poll, Math.max(device.intervalMs ?? 5000, 2000))
+          timer = setTimeout(poll, every)
         } else if (tile.kind === 'browser') {
           const started = await request(`oauth/start?provider=${encodeURIComponent(tile.provider)}&index=${slot}`)
           if (!live) return

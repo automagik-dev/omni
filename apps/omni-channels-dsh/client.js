@@ -3271,6 +3271,17 @@ var OMNI_LIVE_CSS = `
 // src/client/omni-connect.js
 var import_react4 = require("react");
 var DEFAULT_POLL_MS = 2e3;
+var PAIRING_EVENT = "omni:pairing";
+async function connectFromApp(url) {
+  if (typeof url !== "string" || url === "") return;
+  try {
+    const reply = await call("omni-pair-start", { url, auto: true });
+    window.dispatchEvent(new CustomEvent(PAIRING_EVENT, { detail: reply.pairing }));
+    if (reply.pairing?.approveUrl) window.open(reply.pairing.approveUrl, "_blank", "noopener");
+  } catch (error) {
+    window.dispatchEvent(new CustomEvent(PAIRING_EVENT, { detail: { problem: error.message } }));
+  }
+}
 function ConnectOmni({ onPaired, embedded = false } = {}) {
   const [address, setAddress] = (0, import_react4.useState)("");
   const [pairing, setPairing] = (0, import_react4.useState)(null);
@@ -3286,6 +3297,13 @@ function ConnectOmni({ onPaired, embedded = false } = {}) {
       if (alive.current && link?.pairing) setPairing(link.pairing);
     }, () => {
     });
+    const onPairing = (event) => {
+      if (!alive.current) return;
+      if (event.detail?.problem) setProblem(event.detail.problem);
+      else if (event.detail) setPairing(event.detail);
+    };
+    window.addEventListener(PAIRING_EVENT, onPairing);
+    return () => window.removeEventListener(PAIRING_EVENT, onPairing);
   }, []);
   (0, import_react4.useEffect)(() => {
     if (!pairing) return void 0;
@@ -3377,7 +3395,7 @@ function ConnectOmni({ onPaired, embedded = false } = {}) {
       "div",
       { className: "ox-steps" },
       embedded ? null : (0, import_react4.createElement)("h2", null, t("Connect your Omni")),
-      (0, import_react4.createElement)("p", { className: "ox-muted" }, t("Type its address, then approve this device from your phone: on WhatsApp, or with Face ID or your fingerprint. No keys to copy.")),
+      (0, import_react4.createElement)("p", { className: "ox-muted" }, t("Open your Omni in the browser and choose Open in the Omni app, or type its address here. Then approve with Face ID, Touch ID, your fingerprint or a code on WhatsApp. No keys to copy.")),
       (0, import_react4.createElement)(
         "div",
         { className: "ox-row" },
@@ -4486,6 +4504,7 @@ var STRINGS = {
   "Open WhatsApp": "打开 WhatsApp",
   "Waiting for the code to arrive at {origin}…": "正在等待验证码送达 {origin}…",
   "Connect your Omni": "连接你的 Omni",
+  "Open your Omni in the browser and choose Open in the Omni app, or type its address here. Then approve with Face ID, Touch ID, your fingerprint or a code on WhatsApp. No keys to copy.": "在浏览器中打开你的 Omni 并选择“在 Omni 应用中打开”，或在此输入它的地址。然后用面容 ID、触控 ID、指纹或 WhatsApp 验证码批准。无需复制任何密钥。",
   "Omni address": "Omni 地址",
   "Get a code": "获取验证码",
   "Setup steps": "设置步骤",
@@ -4806,6 +4825,12 @@ var toolCard = ({ tool, arg, content, done }) => (0, import_react9.createElement
 function apply(ctx) {
   ctx.effect(() => addStrings(STRINGS), "ds-bot: channels copy");
   registerConnectStep(ctx);
+  ctx.effect(() => {
+    if (typeof window === "undefined" || typeof window.addEventListener !== "function") return void 0;
+    const onConnect = (event) => void connectFromApp(event.detail?.url);
+    window.addEventListener("omni-desktop:connect", onConnect);
+    return () => window.removeEventListener("omni-desktop:connect", onConnect);
+  }, "ds-bot: omni:// links");
   ctx.effect(() => toolCards.register("omni_call", withConsent(callCard), { phrase: PHRASES.omni_call, asks: true }), "ds-bot: omni call card");
   for (const name of ["omni_channels", "omni_chats", "omni_messages", "omni_connect", "omni_send", "omni_react", "omni_media", "omni_delete"]) {
     const asks = ASKING_TOOLS.includes(name);
