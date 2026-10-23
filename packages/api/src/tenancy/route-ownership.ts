@@ -473,6 +473,25 @@ const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
       'fixed 200 acks with no row data.',
   },
   {
+    route: 'GET /api/v2/channels/webchat/:instanceId/:action',
+    class: 'public-by-contract',
+    justification:
+      'Webchat (prototype) widget page and Server-Sent Events stream. Auth-exempt because the caller is an ' +
+      'anonymous site visitor with no API key. The plugin answers only for a connected webchat instance addressed ' +
+      'by its UUID path, and the event stream returns only the replies Omni sent to the visitorId the browser ' +
+      'itself generated; that visitorId is a bearer secret with no server-side signature, origin allowlist or ' +
+      'rate limit yet. It withholds every other chat, contact and instance setting.',
+  },
+  {
+    route: 'POST /api/v2/channels/webchat/:instanceId/:action',
+    class: 'public-by-contract',
+    justification:
+      'Webchat (prototype) visitor message ingress. Auth-exempt because the caller is an anonymous site visitor ' +
+      'with no API key. The body is Zod-validated (visitorId, optional name, text) and becomes message.received ' +
+      'on the instance addressed by the UUID path; the tenant comes from that server-side instance record, never ' +
+      'from the body. The response is a fixed 202 ack with the new message id and no row data.',
+  },
+  {
     route: 'POST /api/v2/channels/asc/:instanceId/webhook',
     class: 'public-by-contract',
     justification:

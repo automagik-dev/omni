@@ -3412,7 +3412,7 @@ export interface components {
              * @description Channel type
              * @enum {string}
              */
-            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
+            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness" | "webchat";
             /** @description Whether instance is active */
             isActive: boolean;
             /** @description Whether this is the default instance for channel */
@@ -3596,7 +3596,7 @@ export interface components {
              * @description Channel type
              * @enum {string}
              */
-            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
+            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness" | "webchat";
             /**
              * Format: uuid
              * @description Agent UUID (agents table)
@@ -3843,7 +3843,7 @@ export interface components {
              * @description Channel type ID
              * @enum {string}
              */
-            id: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
+            id: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness" | "webchat";
             /** @description Human-readable channel name */
             name: string;
             /** @description Plugin version */
@@ -8780,7 +8780,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
+                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness" | "webchat";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -8984,7 +8984,7 @@ export interface operations {
                      * @description Channel type
                      * @enum {string}
                      */
-                    channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
+                    channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness" | "webchat";
                     /**
                      * Format: uuid
                      * @description Agent UUID (agents table)
@@ -9182,7 +9182,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
+                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness" | "webchat";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -9406,7 +9406,7 @@ export interface operations {
                              * @description Channel type ID
                              * @enum {string}
                              */
-                            id: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
+                            id: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness" | "webchat";
                             /** @description Human-readable channel name */
                             name: string;
                             /** @description Plugin version */
@@ -9455,7 +9455,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
+                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness" | "webchat";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */
@@ -9724,7 +9724,7 @@ export interface operations {
                      * @description Channel type
                      * @enum {string}
                      */
-                    channel?: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
+                    channel?: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness" | "webchat";
                     /**
                      * Format: uuid
                      * @description Agent UUID (agents table)
@@ -9922,7 +9922,7 @@ export interface operations {
                              * @description Channel type
                              * @enum {string}
                              */
-                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
+                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness" | "webchat";
                             /** @description Whether instance is active */
                             isActive: boolean;
                             /** @description Whether this is the default instance for channel */

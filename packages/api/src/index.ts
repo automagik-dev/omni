@@ -49,6 +49,7 @@ import {
   verifyCriticalColumns,
 } from '@omni/db';
 import * as Sentry from '@sentry/bun';
+import type { WebSocketHandler } from 'bun';
 import { sql } from 'drizzle-orm';
 
 // Configure logging at startup
@@ -278,13 +279,67 @@ async function initializeChannelPlugins(db: Database, eventBus: EventBus): Promi
 }
 
 /**
+ * Webchat voice socket (PROTOTYPE, packages/channel-webchat/src/voice.ts).
+ * A plugin's handleWebhook cannot upgrade to a WebSocket, so the browser socket
+ * is upgraded here and every frame is handed to the webchat plugin.
+ */
+const WEBCHAT_VOICE_PATH = /^\/api\/v2\/channels\/webchat\/([0-9a-f-]{36})\/voice$/;
+
+interface WebchatVoiceSocketPlugin {
+  voiceSocketOpen(
+    socket: { send(data: string | Uint8Array): unknown; close(code?: number, reason?: string): void },
+    instanceId: string,
+    visitorId: string | null,
+  ): Promise<string | null>;
+  voiceSocketMessage(sessionId: string, data: string | Uint8Array): void;
+  voiceSocketClose(sessionId: string): Promise<void>;
+}
+
+function webchatVoicePlugin(): WebchatVoiceSocketPlugin | null {
+  const plugin = globalChannelRegistry?.get('webchat');
+  return plugin && 'voiceSocketOpen' in plugin ? (plugin as unknown as WebchatVoiceSocketPlugin) : null;
+}
+
+interface WsData {
+  params: ReturnType<typeof parseVoiceStreamParams>;
+  webchat?: { instanceId: string; visitorId: string | null; sessionId?: string };
+}
+
+/** Route webchat voice sockets to the plugin; everything else to the voice stream handler. */
+function withWebchatVoice(handler: WebSocketHandler<WsData>): WebSocketHandler<WsData> {
+  return {
+    ...handler,
+    async open(ws) {
+      const webchat = ws.data.webchat;
+      if (!webchat) return handler.open?.(ws);
+      const plugin = webchatVoicePlugin();
+      if (!plugin) {
+        ws.close(4004, 'Webchat plugin not loaded');
+        return;
+      }
+      webchat.sessionId = (await plugin.voiceSocketOpen(ws, webchat.instanceId, webchat.visitorId)) ?? undefined;
+    },
+    message(ws, message) {
+      const webchat = ws.data.webchat;
+      if (!webchat) return handler.message(ws, message);
+      if (webchat.sessionId) webchatVoicePlugin()?.voiceSocketMessage(webchat.sessionId, message);
+    },
+    close(ws, code, reason) {
+      const webchat = ws.data.webchat;
+      if (!webchat) return handler.close?.(ws, code, reason);
+      if (webchat.sessionId) void webchatVoicePlugin()?.voiceSocketClose(webchat.sessionId);
+    },
+  };
+}
+
+/**
  * Start the HTTP server using Bun.serve with WebSocket support.
  *
  * Voice stream WebSocket: ws://host/api/v2/voice/stream/{sessionId}?api_key=<key>&format=opus|pcm
  * Auth is validated on upgrade. Binary frames carry tagged audio per user.
  */
 function startBunServer(app: App) {
-  return Bun.serve<{ params: ReturnType<typeof parseVoiceStreamParams> }>({
+  return Bun.serve<WsData>({
     port: PORT,
     hostname: HOST,
     // Bun's default idleTimeout is 10s, which cut the socket under an idle
@@ -293,6 +348,16 @@ function startBunServer(app: App) {
     idleTimeout: 60,
     fetch(req, server) {
       const url = new URL(req.url);
+
+      const webchatVoice = WEBCHAT_VOICE_PATH.exec(url.pathname);
+      if (webchatVoice?.[1]) {
+        const data: WsData = {
+          params: null,
+          webchat: { instanceId: webchatVoice[1], visitorId: url.searchParams.get('visitorId') },
+        };
+        if (server.upgrade(req, { data })) return undefined as unknown as Response;
+        return new Response('WebSocket upgrade failed', { status: 500 });
+      }
 
       // Voice stream WebSocket upgrade
       if (url.pathname.startsWith('/api/v2/voice/stream/')) {
@@ -313,7 +378,7 @@ function startBunServer(app: App) {
       // All other requests handled by Hono
       return app.fetch(req, server);
     },
-    websocket: {
+    websocket: withWebchatVoice({
       async open(ws) {
         const params = ws.data.params;
         if (!params) {
@@ -426,7 +491,7 @@ function startBunServer(app: App) {
           if (!stillLive) voiceStreamRegistry.unbindSession(sessionId);
         }
       },
-    },
+    }),
   });
 }
 
