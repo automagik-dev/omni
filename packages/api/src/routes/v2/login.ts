@@ -10,7 +10,7 @@
  *   /api/v2/login/claim/*  claiming an unclaimed Omni (needs the claim token)
  *   /api/v2/login/send-code, /verify   a login code in the owner's WhatsApp self chat
  *   /api/v2/login/device-key           a device trades its one-time device token for an Omni key
- *   /api/login/claim, /api/login/device        the pages a person opens
+ *   /api/login/claim, /api/login/device, /api/login/app   the pages a person opens
  */
 
 import { timingSafeEqual } from 'node:crypto';
@@ -21,7 +21,7 @@ import { qrSvg } from '../../lib/qr-svg';
 import { type Login, allowCodeSend, ownerAccount, ownerOf } from '../../login';
 import { PUBLIC_AUTH_PATHS } from '../../login/auth';
 import { DEVICE_CLIENTS, claimTokenOf, isDeviceClient } from '../../login/config';
-import { claimPage, devicePage } from '../../login/pages';
+import { appPage, claimPage, devicePage } from '../../login/pages';
 import { maskPhone } from '../../login/whatsapp';
 import { authRateLimitMiddleware, loginRateLimitMiddleware, requestClientIp } from '../../middleware/rate-limit';
 import { getPlugin } from '../../plugins/loader';
@@ -128,6 +128,7 @@ export function loginPageRoutes(login: Login | null) {
   const active = login as Login;
   app.get('/claim', (c) => c.html(claimPage()));
   app.get('/device', (c) => c.html(devicePage(DEVICE_CLIENTS)));
+  app.get('/app', (c) => c.html(appPage()));
   // What a device's QR opens: the owner's WhatsApp chat with themselves, with the device's
   // code typed. The owner's number is given out only here, and only for a live request.
   app.get('/whatsapp', authRateLimitMiddleware, async (c) => {

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, test } from 'node:test'
@@ -284,4 +284,17 @@ test('the market is offered only over https or this machine\'s loopback, and lea
   assert.deepEqual(rows[0].value.indexes, ['https://omni.example.com/api/market/index.json'])
   await rt.omniLinkEndpoint('omni-disconnect')
   assert.deepEqual(rows[0].value.indexes, [])
+})
+
+test('a sign-in the desktop app started from an omni:// link finishes by itself once approved', async (t) => {
+  const omni = fakeOmni()
+  const { rt, home, stop } = runtime()
+  t.after(stop)
+  const started = await rt.omniLinkEndpoint('omni-pair-start', { url: 'https://omni.example.com', auto: true })
+  assert.equal(started.pairing.approveUrl, 'https://omni.example.com/login/device?user_code=K7Q4X9ZP')
+  omni.approve()
+  // Nobody polls: the host does, on the pairing's own interval (2 s).
+  for (let waited = 0; waited < 8000 && !existsSync(join(home, LINK_FILE)); waited += 100) await new Promise(resolve => setTimeout(resolve, 100))
+  assert.equal(JSON.parse(readFileSync(join(home, LINK_FILE), 'utf8')).key, 'omni_sk_device')
+  assert.equal((await rt.omniLinkEndpoint('omni-pair-poll')).status, 'idle')
 })

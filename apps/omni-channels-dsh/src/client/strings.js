@@ -121,6 +121,7 @@ export const STRINGS = {
   'Open WhatsApp': '打开 WhatsApp',
   'Waiting for the code to arrive at {origin}…': '正在等待验证码送达 {origin}…',
   'Connect your Omni': '连接你的 Omni',
+  'Open your Omni in the browser and choose Open in the Omni app, or type its address here. Then approve with Face ID, Touch ID, your fingerprint or a code on WhatsApp. No keys to copy.': '在浏览器中打开你的 Omni 并选择“在 Omni 应用中打开”，或在此输入它的地址。然后用面容 ID、触控 ID、指纹或 WhatsApp 验证码批准。无需复制任何密钥。',
   'Omni address': 'Omni 地址',
   'Get a code': '获取验证码',
   'Setup steps': '设置步骤',
