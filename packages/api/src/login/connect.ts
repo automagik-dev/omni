@@ -18,7 +18,7 @@ import type { Login } from './index';
 
 export const CONNECT_TTL_MS = 10 * 60 * 1000;
 /** Live links at a time; asking for another retires the oldest. */
-export const MAX_LIVE = 3;
+const MAX_LIVE = 3;
 /** Links one self chat may ask for in a window. */
 export const LINKS_PER_WINDOW = 5;
 export const LINK_WINDOW_MS = 10 * 60 * 1000;

@@ -38,7 +38,7 @@ export function updateCodeInMessage(text: string | undefined): string | null {
 }
 
 /** The request waiting for the owner's yes, if any (without its code). */
-export async function pendingUpdate(
+async function pendingUpdate(
   login: Login,
   now = new Date(),
 ): Promise<{ request: UpdateRequest; expiresAt: Date } | null> {
@@ -52,7 +52,7 @@ export async function pendingUpdate(
 }
 
 /** A new request and its code, after sweeping expired ones. The caller has checked none is waiting. */
-export async function createUpdateRequest(
+async function createUpdateRequest(
   login: Login,
   request: UpdateRequest,
   now = new Date(),
@@ -72,7 +72,7 @@ export async function createUpdateRequest(
 }
 
 /** Spend a code: its request when it was live, else null. Under a race exactly one caller gets it. */
-export async function consumeUpdateRequest(login: Login, code: string): Promise<UpdateRequest | null> {
+async function consumeUpdateRequest(login: Login, code: string): Promise<UpdateRequest | null> {
   const [row] = await login.db
     .delete(loginVerifications)
     .where(and(eq(loginVerifications.identifier, identifierOf(code)), gt(loginVerifications.expiresAt, new Date())))
@@ -81,7 +81,7 @@ export async function consumeUpdateRequest(login: Login, code: string): Promise<
 }
 
 /** Drop every waiting request (too many wrong codes). */
-export async function cancelUpdateRequests(login: Login): Promise<void> {
+async function cancelUpdateRequests(login: Login): Promise<void> {
   await login.db.delete(loginVerifications).where(pending);
 }
 
