@@ -19,6 +19,7 @@ import type {
 import type { Logger } from '@omni/core';
 import type { ChannelType } from '@omni/core/types';
 
+import { WhatsAppFlowSendSchema } from '@omni/core/schemas';
 import { ZodError } from 'zod';
 import { GUPSHUP_CAPABILITIES } from './capabilities';
 import { GupshupClient } from './client';
@@ -31,6 +32,7 @@ import {
 } from './handoff-options';
 import { sendCloseContact } from './senders/close-contact';
 import { sendHandoff } from './senders/handoff';
+import { sendFlow, sendInteractive } from './senders/interactive';
 import { sendLocation } from './senders/location';
 import { sendMedia } from './senders/media';
 import { sendText } from './senders/text';
@@ -49,6 +51,7 @@ async function dispatchContent(
   dest: string,
   message: OutgoingMessage,
   handoffOptions?: GupshupHandoffOptions,
+  logger?: Logger,
 ): Promise<GupshupSendResponse> {
   const { content } = message;
   const meta = message.metadata as Record<string, unknown> | undefined;
@@ -73,6 +76,22 @@ async function dispatchContent(
     return sendCloseContact(client, dest, content.text ?? '', closeReason, closeOutcome, closeFields);
   }
 
+  if (content.type === 'flow') {
+    return sendFlow(client, dest, parseFlowDescriptor(meta?.flow));
+  }
+  if (content.buttons?.length) {
+    const { response, droppedRows } = await sendInteractive(
+      client,
+      dest,
+      content.text ?? '',
+      content.buttons,
+      content.list,
+    );
+    if (droppedRows > 0) {
+      logger?.warn('[gupshup] interactive list capped at 10 rows — extra options dropped', { droppedRows });
+    }
+    return response;
+  }
   if (content.type === 'text') {
     return sendText(client, dest, content.text ?? '');
   }
@@ -85,6 +104,22 @@ async function dispatchContent(
   }
   // Fallback: send as text
   return sendText(client, dest, content.text ?? '[Unsupported content]');
+}
+
+/**
+ * `content.type = 'flow'` carries its descriptor in `metadata.flow` (same
+ * convention as whatsapp-business). The `/whatsapp-flows/send` route mints the
+ * correlation token; a direct plugin caller that omits it gets a fresh one.
+ */
+function parseFlowDescriptor(raw: unknown) {
+  const parsed = WhatsAppFlowSendSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new GupshupError(
+      GupshupErrorCode.BAD_REQUEST,
+      `content.type=flow requires a valid metadata.flow descriptor: ${parsed.error.issues[0]?.message ?? 'invalid'}`,
+    );
+  }
+  return { ...parsed.data, flowToken: parsed.data.flowToken ?? `omni.${crypto.randomUUID()}` };
 }
 
 interface GupshupInstanceState {
@@ -253,7 +288,7 @@ export class GupshupPlugin extends BaseChannelPlugin {
     if (correlationId) this.captureT10(correlationId);
 
     try {
-      const response = await dispatchContent(client, dest, message, state.config.handoffOptions);
+      const response = await dispatchContent(client, dest, message, state.config.handoffOptions, this.logger as Logger);
       const providerAliases = extractGupshupProviderAliases(response);
       // Preserve existing externalId semantics: use Gupshup's canonical
       // messageId when present, otherwise keep Omni's UUID fallback. Other

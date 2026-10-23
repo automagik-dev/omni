@@ -184,6 +184,97 @@ function normalizeSimplifiedWebhook(
   };
 }
 
+// ─────────────────────────────────────────────────────────────
+// WhatsApp Flow submission (Bot Studio "WhatsApp Flow Journey" → API node)
+// A submitted Flow never reaches the regular inbound path: Gupshup lands it on
+// the Flow Journey, whose API node POSTs it here. The shape is OUR contract —
+// the node body is free-form — documented in RUNBOOK.md:
+//   { event_type: "flow_response", sender: { id, name? },
+//     flow: { token, id?, response: {…} | "<json string>" }, timestamp? }
+// It becomes an ordinary text inbound (a readable "field: value" rendition the
+// agent can use as-is) with the structured answers in rawPayload.flowResponse.
+// ─────────────────────────────────────────────────────────────
+
+export const GUPSHUP_FLOW_RESPONSE_EVENT = 'flow_response';
+
+export const GupshupFlowResponseSchema = z
+  .object({
+    event_type: z.literal(GUPSHUP_FLOW_RESPONSE_EVENT),
+    sender: z.object({
+      id: z.string().min(1).max(32),
+      name: z.string().max(256).optional(),
+    }),
+    flow: z.object({
+      token: z.string().min(1).max(512),
+      id: z.string().max(64).optional(),
+      // Bot Studio keeps the answers as a JSON variable; an API node may
+      // serialize it — accept both.
+      response: z.union([z.record(z.string(), z.unknown()), z.string().max(65536)]),
+    }),
+    timestamp: z.union([z.string(), z.number()]).optional(),
+  })
+  .passthrough();
+
+const FLOW_TOKEN_KEY = 'flow_token';
+
+function parseFlowAnswers(response: Record<string, unknown> | string): Record<string, unknown> | null {
+  if (typeof response !== 'string') return response;
+  try {
+    const parsed: unknown = JSON.parse(response);
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** "field: value" lines, flow_token dropped — the agent reads this as the user's message. */
+export function renderFlowAnswers(answers: Record<string, unknown>): string {
+  const lines = Object.entries(answers)
+    .filter(([key, value]) => key !== FLOW_TOKEN_KEY && value !== undefined && value !== null && value !== '')
+    .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(', ') : String(value)}`);
+  return ['[Form submitted]', ...lines].join('\n');
+}
+
+function normalizeFlowResponse(p: z.infer<typeof GupshupFlowResponseSchema>): GupshupNativeInboundWebhook | null {
+  const answers = parseFlowAnswers(p.flow.response);
+  if (!answers) return null;
+  const phone = p.sender.id;
+  const tsSeconds = toUnixSeconds(p.timestamp);
+  const text = renderFlowAnswers(answers);
+  return {
+    source: 'gupshup-flow-journey',
+    sender: phone,
+    channel: 'whatsapp',
+    destination: '',
+    botname: '',
+    event_type: GUPSHUP_FLOW_RESPONSE_EVENT,
+    message: text,
+    postbackText: null,
+    senderobj: { channelid: phone, display: p.sender.name, channeltype: 'whatsapp' },
+    messageobj: {
+      // The flow token is unique per send, so a Journey retry dedupes.
+      id: `gs-flow-${textDigest(p.flow.token)}-${textDigest(JSON.stringify(answers))}`,
+      type: 'text',
+      from: phone,
+      timestamp: tsSeconds,
+      text,
+      raw: {
+        sender: { name: p.sender.name },
+        flowResponse: { flowToken: p.flow.token, flowId: p.flow.id, answers },
+      },
+    },
+    messageHeader: { event_type: GUPSHUP_FLOW_RESPONSE_EVENT },
+  };
+}
+
+/** Try the Flow-submission schema; return a normalized native webhook, or null if it doesn't match. */
+export function parseFlowResponseWebhook(parsed: unknown): GupshupNativeInboundWebhook | null {
+  const r = GupshupFlowResponseSchema.safeParse(parsed);
+  return r.success ? normalizeFlowResponse(r.data) : null;
+}
+
 /** Try the simplified schema; return a normalized native webhook, or null if it doesn't match. */
 export function parseSimplifiedWebhook(parsed: unknown): GupshupNativeInboundWebhook | null {
   const r = GupshupSimplifiedWebhookSchema.safeParse(parsed);
@@ -203,6 +294,14 @@ function resolveInboundWebhook(
   const result = GupshupNativeWebhookSchema.safeParse(parsed);
   if (result.success) {
     return result.data as unknown as GupshupNativeInboundWebhook;
+  }
+  const flowResponse = parseFlowResponseWebhook(parsed);
+  if (flowResponse) {
+    logger.info('[gupshup] WhatsApp Flow submission received', {
+      instanceId,
+      sender: flowResponse.sender,
+    });
+    return flowResponse;
   }
   const simplified = parseSimplifiedWebhook(parsed);
   if (simplified) {
@@ -240,6 +339,7 @@ const KNOWN_MESSAGE_EVENT_TYPES = new Set<string>([
   'user_input', // legacy — pre-2026-04-22 format
   'async_response', // current — post-2026-04-22 17:58 BRT cutover
   'click_to_chat_advertise', // ad click → message from FB/IG ad
+  GUPSHUP_FLOW_RESPONSE_EVENT, // Flow submission posted by the Flow Journey's API node
 ]);
 
 // Known event_type values that are NOT messages (status/billing/etc.)
