@@ -39,7 +39,7 @@ already shaped for it:
    queued ahead of it), runs the required checks on **that commit**, and only
    merges green groups. The combined state is tested before merge by
    construction. Crucially, `ci.yml` already routes non-`pull_request` events
-   to the **full single-process sweep** (`bun test packages apps/ui`) — the
+   to the **full single-process sweep** (`bun test packages`) — the
    only configuration where cross-file state leaks like the
    `globalThis.fetch` clash reproduce — so `merge_group` runs inherit exactly
    the right test mode with no new machinery. Batching also means one

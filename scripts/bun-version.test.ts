@@ -5,7 +5,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 const ROOT = join(import.meta.dir, '..');
@@ -44,11 +44,13 @@ describe('the Bun version', () => {
     expect(JSON.parse(read('package.json')).packageManager).toBe(`bun@${BUN}`);
     const manifests = [
       'package.json',
-      ...['apps', 'packages'].flatMap((dir) =>
-        readdirSync(join(ROOT, dir), { withFileTypes: true })
-          .filter((entry) => entry.isDirectory())
-          .map((entry) => `${dir}/${entry.name}/package.json`),
-      ),
+      ...['apps', 'packages']
+        .filter((dir) => existsSync(join(ROOT, dir)))
+        .flatMap((dir) =>
+          readdirSync(join(ROOT, dir), { withFileTypes: true })
+            .filter((entry) => entry.isDirectory())
+            .map((entry) => `${dir}/${entry.name}/package.json`),
+        ),
     ].filter((path) => {
       try {
         read(path);

@@ -202,8 +202,6 @@ omni-v2/
 │   ├── channel-*/      # Official channel implementations
 │   ├── cli/            # LLM-optimized CLI
 │   └── sdk/            # Auto-generated TypeScript SDK
-├── apps/
-│   └── ui/             # React dashboard
 ├── docs/               # Documentation
 ├── scripts/            # Build, deploy, SDK generation
 ├── .claude/            # AI workflow (agents, commands, hooks, skills)

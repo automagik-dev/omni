@@ -80,7 +80,7 @@ if ! make typecheck; then
 fi
 
 # Full test suite, per-package via turbo. Coverage is identical to the old
-# `bun test packages apps/ui` (every workspace with test files has a `test`
+# `bun test packages` (every workspace with test files has a `test`
 # script — keep it that way when adding packages). --concurrency=4 bounds
 # concurrent bun processes so two agents pushing at once cannot exhaust swap
 # the way one monolithic 6500-test process previously did.

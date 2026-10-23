@@ -226,7 +226,7 @@ Deep dives: [event system](docs/architecture/event-system.md) · [durable consum
                          └─────────┬─────────┘
               ┌────────────────────┼────────────────────┐
         ┌─────▼─────┐        ┌─────▼─────┐        ┌─────▼─────┐
-        │  REST API │        │    CLI    │        │ Dashboard │ Interfaces
+        │  REST API │        │    CLI    │        │  Desktop  │ Interfaces
         └───────────┘        └───────────┘        └───────────┘
 ```
 
@@ -259,8 +259,6 @@ packages/
 ├── sdk/                     # TypeScript SDK
 ├── sdk-go/                  # Go SDK
 └── sdk-python/              # Python SDK
-apps/
-└── ui/                      # React + Vite + Tailwind dashboard
 ```
 
 </details>
@@ -478,14 +476,9 @@ Regenerate SDKs after API changes:
 make sdk-generate
 ```
 
-## Web Dashboard
+## Desktop app
 
-```bash
-make dev-ui    # Dev → http://localhost:5173
-make build-ui  # Prod → served by API on :8882
-```
-
-Pages: Dashboard · Instances · Chats · Chat View · Contacts · Persons · Providers · Automations · Access Rules · Batch Jobs · Dead Letters · Events · Logs · Voices · Settings
+Omni's UI is the [Omni desktop app](https://github.com/automagik-dev/omni-desktop): it runs Omni on your machine or connects to a remote one. The API serves no web pages of its own.
 
 <details>
 <summary>🔐 API Keys & Security</summary>
@@ -531,7 +524,6 @@ Managed NATS listens on loopback only once `omni-nats` is (re)created by `omni s
 
 ```bash
 make dev           # Start all services + API
-make dev-ui        # Start dashboard dev server
 make test          # Run test suite
 make typecheck     # TypeScript checks
 make lint          # Biome lint
@@ -589,7 +581,6 @@ export class MyPlugin extends BaseChannelPlugin {
 | DB | PostgreSQL + [Drizzle](https://orm.drizzle.team) |
 | Events | [NATS JetStream](https://nats.io) |
 | Validation | [Zod](https://zod.dev) |
-| Frontend | React + [Vite](https://vitejs.dev) + Tailwind |
 | Monorepo | [Turborepo](https://turbo.build) |
 | Linter | [Biome](https://biomejs.dev) |
 

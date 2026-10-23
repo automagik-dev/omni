@@ -1,8 +1,10 @@
 # Wish: Canonical UI Consolidation (khal-ui → apps/ui) + Topology Doctrine
 
+> **Superseded 2026-10-23.** Both UIs this wish consolidates were removed: `apps/khal-ui` and `apps/ui`. Omni's UI is now the DSH plugin (`apps/omni-ui-dsh`) and the Omni desktop app.
+
 | Field | Value |
 |-------|-------|
-| **Status** | APPROVED |
+| **Status** | SUPERSEDED |
 | **Slug** | `canonical-ui-consolidation` |
 | **Date** | 2026-08-12 |
 | **Author** | Felipe Rosa |
