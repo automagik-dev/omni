@@ -3,13 +3,13 @@ import { registerConnectStep } from './connect-step.js'
 import { registerSettings } from './omni-settings.js'
 import { WizardHost } from './wizard.js'
 import { CHANNELS_CSS, ChannelsFooter, ChannelsPage, ChatPage } from './channels.js'
-import { CHANNELS_PANEL, CHAT_PANEL } from './omni-store.js'
-import { BOARD_KIND, BOARD_TAB_ID, BoardTab, EventsBadge, SUBSCRIPTIONS_CSS, SubscriptionsButton, boardTabDefinition, isEventsBot } from './subscriptions.js'
+import { CHANNELS_PANEL, CHAT_PANEL, omniStore, startLive } from './omni-store.js'
+import { BOARD_KIND, BOARD_TAB_ID, BoardTab, EventsBadge, SUBSCRIPTIONS_CSS, SavedAutomationCard, SubscriptionsButton, boardOpensFor, boardTabDefinition, isEventsBot } from './subscriptions.js'
 import { AUTOMATIONS_CSS, AUTOMATIONS_PANEL, AutomationsPage } from './automations-page.js'
 import { Badge, KeyValue, LiveChannel, LiveChat, LiveQr, OMNI_LIVE_CSS, OmniCallCard, OmniToolCard, Table, parseCall } from './omni-live.js'
 import { OMNI_PEEK_CSS } from './omni-peek.js'
 import { OMNI_CONNECT_CSS, connectFromApp } from './omni-connect.js'
-import { addStrings, badges, botChildren, botSettings, headerButtons, nav, onShell, t, toolCards, icons } from './core.js'
+import { addStrings, badges, botChildren, botSettings, call, headerButtons, nav, onShell, t, toolCards, icons } from './core.js'
 import { OMNI_TREE_CSS, OmniTree } from './omni-tree.js'
 import { ASKING_TOOLS, ConsentDock, PERMISSIONS_CSS, PermissionsCard, withConsent } from './permissions.js'
 import { STRINGS } from './strings.js'
@@ -27,8 +27,10 @@ export const inject = ['slots']
 export const channels = Object.freeze({ Badge, KeyValue, LiveChannel, LiveChat, LiveQr, Table })
 
 // Omni's automations board is a tab of DSH's right sidebar, which may load after this plugin.
-// The first time Omni's chat is on screen in a browser, its board opens; after that the
-// Session's own sidebar layout (open, closed, other tabs) is the user's.
+// The first time Omni's chat is on screen in a browser with omni connected, its board opens;
+// after that the Session's own sidebar layout (open, closed, other tabs) is the user's. Until
+// omni is connected the board stays shut (it would only say there is nothing to watch), and
+// the header's Automations button opens it.
 const BOARD_OPENED = 'omni.board.opened'
 let boardRight = null
 function toggleBoard(reportError) {
@@ -55,11 +57,14 @@ function installBoard(ctx, face) {
       const check = () => {
         const id = right.mounted.getSnapshot()
         if (!id || opened.has(id) || !isEventsBot(roster.getSnapshot(), id)) return
+        // Whether omni is connected comes from the host's overview, read once a page.
+        startLive(call)
+        if (!boardOpensFor({ id, opened, roster: roster.getSnapshot(), omni: omniStore.getSnapshot() })) return
         opened.add(id)
         try { localStorage.setItem(BOARD_OPENED, JSON.stringify([...opened])) } catch { /* storage unavailable */ }
         queueMicrotask(() => { try { right.openTab(BOARD_KIND) } catch (error) { console.warn('[ds-bot] board', error) } })
       }
-      const offs = [right.mounted.subscribe(check), roster.subscribe(check)]
+      const offs = [right.mounted.subscribe(check), roster.subscribe(check), omniStore.subscribe(check)]
       check()
       return () => { boardRight = null; for (const off of offs) off() }
     }, 'ds-bot: open the automations board')
@@ -73,6 +78,7 @@ const PHRASES = {
   omni_chats: () => ({ label: t('Reading your chats'), state: 'searching' }),
   omni_messages: () => ({ label: t('Reading your chats'), state: 'searching' }),
   find_chats: () => ({ label: t('Reading your chats'), state: 'searching' }),
+  save_automation: () => ({ label: t('Saving an automation'), state: 'working' }),
   omni_endpoints: () => ({ label: t('Looking up omni'), state: 'searching' }),
   omni_call: arg => (arg('method') === 'GET' || arg('method') === undefined ? { label: t('Reading omni'), state: 'searching' } : { label: t('Changing omni'), state: 'working' }),
   omni_connect: () => ({ label: t('Connecting a channel'), state: 'working' }),
@@ -106,6 +112,8 @@ export function apply(ctx) {
   // What each Bot may do on Omni, on its settings page. A team client older than this plugin has no such list.
   if (botSettings) ctx.effect(() => botSettings.register({ id: 'omni-permissions', order: 0, Component: PermissionsCard }), 'ds-bot: Omni permissions settings')
   for (const name of ['find_chats', 'omni_endpoints']) ctx.effect(() => toolCards.register(name, null, { phrase: PHRASES[name] }), `ds-bot: ${name} phrase`)
+  // Saving an automation confirms in the chat, with the steering warning the board carries.
+  ctx.effect(() => toolCards.register('save_automation', props => h(SavedAutomationCard, props), { phrase: PHRASES.save_automation }), 'ds-bot: save_automation card')
   // Omni's row counts the automation runs waiting for you; its header opens their board.
   ctx.effect(() => badges.register({ id: 'omni-events', Component: ({ bot, roster, useWork }) => (bot.id === roster.eventsBotId ? h(EventsBadge, { roster, useWork }) : null) }), 'ds-bot: automations badge')
   // The Omni Bot's channels hang under its sidebar row, each with its chats. A team client
