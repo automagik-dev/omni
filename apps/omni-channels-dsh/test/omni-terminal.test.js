@@ -86,7 +86,7 @@ test('the install terminal waits at a prompt with the command typed, and runs no
   const opened = await call('omni-terminal-open', { kind: 'install', cols: 90, rows: 12 })
   await rt.omniTerminalReady(opened.terminal)
   const [handle] = subprocess.spawned
-  const command = 'bun x --bun @automagik/omni@9.9.9 install --sandbox'
+  const command = 'bun x --bun @automagik/omni@9.9.9 install --sandbox --at-login'
   // The command reaches the shell only in its environment; the prompt script holds it for
   // editing and evaluates what the person sends.
   assert.equal(handle.spec.env.OMNI_TERMINAL_COMMAND, command)
@@ -200,14 +200,14 @@ test('without a terminal from DSH, the command waits shown and runs on pipes onl
   await rt.omniTerminalReady(opened.terminal)
   const shown = await call('omni-terminal-read', { terminal: opened.terminal })
   assert.equal(shown.state, 'ready')
-  assert.match(shown.data, /bun x --bun @automagik\/omni@9\.9\.9 install --sandbox/)
+  assert.match(shown.data, /bun x --bun @automagik\/omni@9\.9\.9 install --sandbox --at-login/)
   await call('omni-terminal-write', { terminal: opened.terminal, data: 'x' })
   assert.equal(piped.length, 0, 'a key that is not Enter runs nothing')
   await call('omni-terminal-write', { terminal: opened.terminal, data: '\r' })
   assert.equal(piped.length, 1)
   assert.deepEqual([piped[0].file, piped[0].args], ['/bin/sh', ['-c', 'eval "$OMNI_TERMINAL_COMMAND"']])
   assert.equal(piped[0].options.shell, false)
-  assert.equal(piped[0].options.env.OMNI_TERMINAL_COMMAND, 'bun x --bun @automagik/omni@9.9.9 install --sandbox')
+  assert.equal(piped[0].options.env.OMNI_TERMINAL_COMMAND, 'bun x --bun @automagik/omni@9.9.9 install --sandbox --at-login')
   piped[0].child.stdout.write('done\n')
   piped[0].child.emit('close', 0)
   await settle()

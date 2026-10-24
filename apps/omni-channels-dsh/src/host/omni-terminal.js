@@ -129,7 +129,7 @@ export function install(rt, deps = {}) {
       entry.step = null
       return {
         title: 'Install Omni on this computer',
-        command: `bun x --bun @automagik/omni@${version} install --sandbox`,
+        command: `bun x --bun @automagik/omni@${version} install --sandbox --at-login`,
         env: { PATH: withPath(env, [dirname(bun), ...bunFolders]) },
         after: linkSandbox,
       }
