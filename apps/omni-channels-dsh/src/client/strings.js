@@ -378,7 +378,6 @@ export const STRINGS = {
   'The moment that wakes the worker.': '唤醒处理者的时刻。',
   'Then': '然后',
   'This came from a chat message, so the Bot asks before running commands.': '这来自一条聊天消息，所以 Bot 在运行命令前会先询问。',
-  'Waiting for you': '等待你处理',
   'Watching': '关注范围',
   'Where': '在哪里',
   'Who acts': '谁来处理',
