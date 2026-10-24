@@ -336,7 +336,7 @@
     },
     "packages/connect": {
       "name": "@omni/connect",
-      "version": "2.261023.19",
+      "version": "2.261024.4",
       "dependencies": {
         "openid-client": "6.8.8",
       },
