@@ -19,7 +19,7 @@
  *
  * Linux x64 (and WSL, through WSLg) gets the AppImage, unpacked once into the
  * cache and run from there, so it needs no FUSE; macOS gets the
- * dmg, opened so you can drag Omni to Applications. Windows itself is not
+ * dmg, opened so you can drag Automagik to Applications. Windows itself is not
  * supported: run this inside WSL.
  */
 
@@ -84,7 +84,7 @@ export function desktopTarget(platform: NodeJS.Platform, arch: string, procVersi
       reason: 'Windows itself is not supported. Run `npx @automagik/omni desktop` inside WSL.',
     };
   }
-  return { supported: false, reason: `There is no Omni desktop build for ${platform}.` };
+  return { supported: false, reason: `There is no Automagik desktop build for ${platform}.` };
 }
 
 const ReleaseSchema = z.object({
@@ -310,7 +310,7 @@ export function createDesktopCommand(): Command {
         return output.error(error instanceof Error ? error.message : String(error));
       }
       output.success(
-        target.os === 'mac' ? `Opened ${file}: drag Omni to Applications, then open it` : `Opened ${file}`,
+        target.os === 'mac' ? `Opened ${file}: drag Automagik to Applications, then open it` : `Opened ${file}`,
       );
     });
 }
