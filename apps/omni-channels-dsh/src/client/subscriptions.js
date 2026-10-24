@@ -14,6 +14,16 @@ const TRIGGER_ICONS = { message: MessageIcon, mention: AtIcon, keyword: KeywordI
 const FRESH_MS = 6000
 
 export const isEventsBot = (roster, id) => Boolean(roster?.eventsBotId) && roster.byId?.[id]?.id === roster.eventsBotId
+// Whether the host reads a real omni (omni-store.js), rather than showing the sample.
+export const omniLive = omni => omni?.source?.kind === 'live'
+
+// The board opens by itself once per Omni chat, the first time that chat is on screen with
+// omni connected; before that it would only say there is nothing to watch, and the header's
+// Automations button is the way in.
+export const boardOpensFor = ({ id, opened, roster, omni }) => Boolean(id) && !opened.has(id) && isEventsBot(roster, id) && omniLive(omni)
+
+// The header button's count: the automations there are, none until there is one.
+export const headCount = roster => (roster?.subscriptions ?? []).length || null
 
 export function workerOf(worker, roster) {
   // The Main Bot runs the automations it handles itself (it was Autopilot's job once).
@@ -96,11 +106,46 @@ export function EventsBadge({ roster, useWork }) {
 
 // In Omni's chat header: shows or hides its board in the right sidebar.
 export function SubscriptionsButton({ roster, onToggle, useWork }) {
-  const count = (roster.subscriptions ?? []).filter(sub => sub.on).length
+  const count = headCount(roster)
   const waiting = waitingRuns(roster, useWaiting(useWork))
   return h('button', { type: 'button', className: 'os-head-btn', onClick: onToggle },
-    t('Automations'), h('span', { className: 'os-head-count' }, String(count)),
+    t('Automations'), count === null ? null : h('span', { className: 'os-head-count' }, String(count)),
     waiting > 0 ? h('span', { className: 'os-pending' }, String(waiting)) : null)
+}
+
+// -------------------------------------------------------------------------
+// Omni's confirmation in its chat when it saves an automation. The board, whose footnote
+// warns about steering, may never be open, so the confirmation carries that warning too:
+// quietly when the work asks first, loudly when it acts without asking.
+
+const SAVED = /^Saved (sub-[a-z0-9]+) · (.*?): when /
+
+export function savedOf(content, roster, askFirstArg) {
+  const match = SAVED.exec(String(content ?? ''))
+  if (!match) return null
+  const sub = (roster?.subscriptions ?? []).find(entry => entry.id === match[1])
+  // What Omni passed is what was saved, read as the host reads it (only true, "true" or
+  // "yes" is on); an edit that left it alone kept the automation's own.
+  const askFirst = askFirstArg !== undefined ? askFirstArg === true || askFirstArg === 'true' || askFirstArg === 'yes' : sub ? sub.askFirst !== false : true
+  return { id: match[1], name: sub?.name ?? match[2], sub, askFirst }
+}
+
+export function savedNotice({ askFirst, main }) {
+  return askFirst
+    ? { loud: false, text: t('Anyone in a watched chat can write text that tries to steer a Bot. The work this starts reads on its own and asks you before anything else.') }
+    : { loud: true, text: t('This automation acts without asking you. Anyone in a watched chat can write text that tries to steer a Bot, and the work it starts runs shell, file, web and connector actions with that Bot\'s own permissions and keys. Tell {name} to ask first to change that.', { name: main }) }
+}
+
+export function SavedAutomationCard({ argValue, content, done, roster }) {
+  if (!done) return null
+  const saved = savedOf(content, roster, argValue?.('ask_first'))
+  if (saved === null) return h('div', { className: 'bt-event', title: content }, String(content ?? '').slice(0, 160))
+  const notice = savedNotice({ askFirst: saved.askFirst, main: roster?.byId?.[roster.eventsBotId]?.name ?? 'Omni' })
+  return h('div', { className: 'os-saved', 'data-loud': notice.loud || undefined },
+    h('div', { className: 'os-saved-top' },
+      saved.sub ? h(TriggerBadge, { trigger: saved.sub.trigger, size: 22 }) : null,
+      h('span', null, t('Saved automation')), h('strong', null, saved.name)),
+    h('p', { className: 'os-saved-note', role: notice.loud ? 'alert' : undefined }, h(ShieldIcon), h('span', null, notice.text)))
 }
 
 // -------------------------------------------------------------------------
@@ -143,7 +188,7 @@ export function SubscriptionsBoard({ bot, roster, actions, waiting }) {
           h('div', { className: 'os-list' }, runs.slice(0, 20).map(run => h(RunRow, { key: run.id, run, sub: subs.find(sub => sub.id === run.subId), roster, actions, asking: waiting?.has(run.sessionId) && run.status === 'working' })))) : null),
     h('div', { className: 'os-safety' },
       h(ShieldIcon),
-      h('span', null, t('Anyone in a watched chat can write text that tries to steer a Bot. Work started by an event runs with no secrets and asks you before shell, file or network actions, unless you tell {name} otherwise.', { name: bot.name }))))
+      h('span', null, t('Anyone in a watched chat can write text that tries to steer a Bot. Work started by an event reads on its own and asks you before any shell command, file change, web or connector call, or message, unless you tell {name} otherwise. What you allow runs with that Bot\'s keys.', { name: bot.name }))))
 }
 
 function Empty({ bot, live }) {
@@ -293,5 +338,15 @@ export const SUBSCRIPTIONS_CSS = `
 
 .os-safety{display:flex;gap:8px;margin-top:auto;padding:10px 8px 0;border-top:.5px solid var(--bt-line);font-size:11.5px;line-height:16px;color:var(--bt-ink-3)}
 .os-safety svg{flex:none;margin-top:1px}
+
+/* Omni's confirmation of a saved automation, in its chat */
+.os-saved{display:flex;flex-direction:column;gap:6px;max-width:560px;margin:6px 0;padding:10px 12px;border-radius:12px;border:.5px solid var(--bt-line-2);background:var(--bt-card);font-size:12.5px;line-height:18px;color:var(--bt-ink-2)}
+.os-saved-top{display:flex;align-items:center;gap:8px;min-width:0}
+.os-saved-top strong{min-width:0;color:var(--bt-ink);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.os-saved-note{display:flex;gap:8px;margin:0;font-size:11.5px;line-height:16px;color:var(--bt-ink-3)}
+.os-saved-note svg{flex:none;margin-top:1px}
+.os-saved[data-loud]{border-color:color-mix(in srgb,#d97706 50%,var(--bt-line-2));background:color-mix(in srgb,#f59e0b 9%,var(--bt-card))}
+.os-saved[data-loud] .os-saved-note{font-size:12.5px;line-height:18px;color:var(--bt-ink)}
+.os-saved[data-loud] .os-saved-note svg{color:#d97706}
 @media (prefers-reduced-motion:reduce){.os-row[data-fresh]{animation:none}}
 `

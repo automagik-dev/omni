@@ -79,7 +79,7 @@ test('client.js requires React, ReactDOM and the team\'s client, and adds to the
     },
   })
   assert.deepEqual(registered, [['settings.onboarding', 'omni-connect'], ['settings.section', 'omni']])
-  for (const name of ['omni_call', 'omni_channels', 'omni_chats', 'omni_messages', 'omni_connect']) assert.equal(typeof omni.toolCards.renderer(name), 'function', name)
+  for (const name of ['omni_call', 'omni_channels', 'omni_chats', 'omni_messages', 'omni_connect', 'save_automation']) assert.equal(typeof omni.toolCards.renderer(name), 'function', name)
   assert.equal(omni.toolCards.renderer('find_chats'), undefined)
   assert.equal(omni.toolCards.phrase('find_chats')(() => undefined).state, 'searching')
   assert.deepEqual([...omni.nav.entries()].map(entry => entry.id), ['automations'])

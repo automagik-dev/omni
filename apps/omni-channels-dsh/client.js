@@ -14389,6 +14389,9 @@ var { AtIcon, FileIcon, KeywordIcon, MessageIcon, ShieldIcon, UnplugIcon, VoiceI
 var TRIGGER_ICONS = { message: MessageIcon, mention: AtIcon, keyword: KeywordIcon, voice: VoiceIcon, media: FileIcon, down: UnplugIcon };
 var FRESH_MS = 6e3;
 var isEventsBot = (roster, id) => Boolean(roster?.eventsBotId) && roster.byId?.[id]?.id === roster.eventsBotId;
+var omniLive = (omni2) => omni2?.source?.kind === "live";
+var boardOpensFor = ({ id, opened, roster, omni: omni2 }) => Boolean(id) && !opened.has(id) && isEventsBot(roster, id) && omniLive(omni2);
+var headCount = (roster) => (roster?.subscriptions ?? []).length || null;
 function workerOf(worker, roster) {
   if (worker.kind === "events" || worker.kind === "main") {
     const bot2 = roster?.byId?.[roster.eventsBotId ?? roster.mainBotId];
@@ -14462,14 +14465,43 @@ function EventsBadge({ roster, useWork }) {
   return waiting > 0 ? (0, import_react11.createElement)("span", { className: "os-pending", title: t("{n} waiting for you", { n: waiting }) }, String(waiting)) : null;
 }
 function SubscriptionsButton({ roster, onToggle, useWork }) {
-  const count = (roster.subscriptions ?? []).filter((sub) => sub.on).length;
+  const count = headCount(roster);
   const waiting = waitingRuns(roster, useWaiting(useWork));
   return (0, import_react11.createElement)(
     "button",
     { type: "button", className: "os-head-btn", onClick: onToggle },
     t("Automations"),
-    (0, import_react11.createElement)("span", { className: "os-head-count" }, String(count)),
+    count === null ? null : (0, import_react11.createElement)("span", { className: "os-head-count" }, String(count)),
     waiting > 0 ? (0, import_react11.createElement)("span", { className: "os-pending" }, String(waiting)) : null
+  );
+}
+var SAVED = /^Saved (sub-[a-z0-9]+) · (.*?): when /;
+function savedOf(content, roster, askFirstArg) {
+  const match = SAVED.exec(String(content ?? ""));
+  if (!match) return null;
+  const sub = (roster?.subscriptions ?? []).find((entry) => entry.id === match[1]);
+  const askFirst = askFirstArg !== void 0 ? askFirstArg === true || askFirstArg === "true" || askFirstArg === "yes" : sub ? sub.askFirst !== false : true;
+  return { id: match[1], name: sub?.name ?? match[2], sub, askFirst };
+}
+function savedNotice({ askFirst, main }) {
+  return askFirst ? { loud: false, text: t("Anyone in a watched chat can write text that tries to steer a Bot. The work this starts reads on its own and asks you before anything else.") } : { loud: true, text: t("This automation acts without asking you. Anyone in a watched chat can write text that tries to steer a Bot, and the work it starts runs shell, file, web and connector actions with that Bot's own permissions and keys. Tell {name} to ask first to change that.", { name: main }) };
+}
+function SavedAutomationCard({ argValue, content, done, roster }) {
+  if (!done) return null;
+  const saved = savedOf(content, roster, argValue?.("ask_first"));
+  if (saved === null) return (0, import_react11.createElement)("div", { className: "bt-event", title: content }, String(content ?? "").slice(0, 160));
+  const notice = savedNotice({ askFirst: saved.askFirst, main: roster?.byId?.[roster.eventsBotId]?.name ?? "Omni" });
+  return (0, import_react11.createElement)(
+    "div",
+    { className: "os-saved", "data-loud": notice.loud || void 0 },
+    (0, import_react11.createElement)(
+      "div",
+      { className: "os-saved-top" },
+      saved.sub ? (0, import_react11.createElement)(TriggerBadge, { trigger: saved.sub.trigger, size: 22 }) : null,
+      (0, import_react11.createElement)("span", null, t("Saved automation")),
+      (0, import_react11.createElement)("strong", null, saved.name)
+    ),
+    (0, import_react11.createElement)("p", { className: "os-saved-note", role: notice.loud ? "alert" : void 0 }, (0, import_react11.createElement)(ShieldIcon), (0, import_react11.createElement)("span", null, notice.text))
   );
 }
 var BOARD_KIND = "omni-subscriptions";
@@ -14516,7 +14548,7 @@ function SubscriptionsBoard({ bot, roster, actions, waiting }) {
       "div",
       { className: "os-safety" },
       (0, import_react11.createElement)(ShieldIcon),
-      (0, import_react11.createElement)("span", null, t("Anyone in a watched chat can write text that tries to steer a Bot. Work started by an event runs with no secrets and asks you before shell, file or network actions, unless you tell {name} otherwise.", { name: bot.name }))
+      (0, import_react11.createElement)("span", null, t("Anyone in a watched chat can write text that tries to steer a Bot. Work started by an event reads on its own and asks you before any shell command, file change, web or connector call, or message, unless you tell {name} otherwise. What you allow runs with that Bot's keys.", { name: bot.name }))
     )
   );
 }
@@ -14697,6 +14729,16 @@ var SUBSCRIPTIONS_CSS = `
 
 .os-safety{display:flex;gap:8px;margin-top:auto;padding:10px 8px 0;border-top:.5px solid var(--bt-line);font-size:11.5px;line-height:16px;color:var(--bt-ink-3)}
 .os-safety svg{flex:none;margin-top:1px}
+
+/* Omni's confirmation of a saved automation, in its chat */
+.os-saved{display:flex;flex-direction:column;gap:6px;max-width:560px;margin:6px 0;padding:10px 12px;border-radius:12px;border:.5px solid var(--bt-line-2);background:var(--bt-card);font-size:12.5px;line-height:18px;color:var(--bt-ink-2)}
+.os-saved-top{display:flex;align-items:center;gap:8px;min-width:0}
+.os-saved-top strong{min-width:0;color:var(--bt-ink);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.os-saved-note{display:flex;gap:8px;margin:0;font-size:11.5px;line-height:16px;color:var(--bt-ink-3)}
+.os-saved-note svg{flex:none;margin-top:1px}
+.os-saved[data-loud]{border-color:color-mix(in srgb,#d97706 50%,var(--bt-line-2));background:color-mix(in srgb,#f59e0b 9%,var(--bt-card))}
+.os-saved[data-loud] .os-saved-note{font-size:12.5px;line-height:18px;color:var(--bt-ink)}
+.os-saved[data-loud] .os-saved-note svg{color:#d97706}
 @media (prefers-reduced-motion:reduce){.os-row[data-fresh]{animation:none}}
 `;
 
@@ -14935,7 +14977,7 @@ function OmniTree({ bot, actions }) {
   }, []);
   if (!isOmniBot(bot)) return null;
   if (state.preview) {
-    return (0, import_react13.createElement)("div", { className: "ot-tree" }, (0, import_react13.createElement)("button", { type: "button", className: "ot-channel-row ot-link", onClick: openConnectWizard }, t("Link your Omni to see its channels here")));
+    return (0, import_react13.createElement)("div", { className: "ot-tree" }, (0, import_react13.createElement)("button", { type: "button", className: "ot-channel-row ot-link", onClick: openConnectWizard }, t("Connect Omni"), (0, import_react13.createElement)("span", { "aria-hidden": true }, " →")));
   }
   const toggle = (id) => setOpen((before) => {
     const next = new Set(before);
@@ -15197,7 +15239,11 @@ var STRINGS = {
   "Open this run": "打开这次运行",
   "acts without asking": "不询问直接执行",
   "A deleted Bot": "已删除的 Bot",
-  "Anyone in a watched chat can write text that tries to steer a Bot. Work started by an event runs with no secrets and asks you before shell, file or network actions, unless you tell {name} otherwise.": "被关注聊天中的任何人都可能写下试图操控 Bot 的文字。由事件触发的工作不带任何密钥运行，执行命令、文件或网络操作前会先问你，除非你告诉 {name} 不必询问。",
+  "Anyone in a watched chat can write text that tries to steer a Bot. Work started by an event reads on its own and asks you before any shell command, file change, web or connector call, or message, unless you tell {name} otherwise. What you allow runs with that Bot's keys.": "被关注聊天中的任何人都可能写下试图操控 Bot 的文字。由事件触发的工作可以自行读取，但在执行任何命令、修改文件、访问网络或连接器、发送消息之前都会先问你，除非你告诉 {name} 不必询问。你允许的操作会使用该 Bot 的密钥运行。",
+  "Anyone in a watched chat can write text that tries to steer a Bot. The work this starts reads on its own and asks you before anything else.": "被关注聊天中的任何人都可能写下试图操控 Bot 的文字。它触发的工作可以自行读取，做其他任何事之前都会先问你。",
+  "This automation acts without asking you. Anyone in a watched chat can write text that tries to steer a Bot, and the work it starts runs shell, file, web and connector actions with that Bot's own permissions and keys. Tell {name} to ask first to change that.": "这个自动化不会先问你就行动。被关注聊天中的任何人都可能写下试图操控 Bot 的文字，而它触发的工作会以该 Bot 自己的权限和密钥执行命令、文件、网络和连接器操作。告诉 {name} 先问你，即可改变这一点。",
+  "Saved automation": "已保存自动化",
+  "Saving an automation": "正在保存自动化",
   "Everything is paused.": "全部已暂停。",
   "last run {time}": "上次运行 {time}",
   "not fired yet": "还没有触发过",
@@ -15495,7 +15541,6 @@ var STRINGS = {
   "Add a word to look for.": "添加一个要查找的词。",
   "All of {name}": "{name} 全部",
   "a new session each time": "每次新建会话",
-  "Anyone in a watched chat can write text that tries to steer the Bot. It runs with no secrets, and asks you first before shell, file or network actions.": "被订阅聊天中的任何人都可能写下试图操控 Bot 的文字。它运行时不带任何密钥，执行命令、文件或网络操作前会先问你。",
   "A plain agent session, no Bot": "普通的智能体会话，不使用 Bot",
   "Ask me first": "先问我",
   "Chats, groups, whole channels, or a mix.": "聊天、群组、整个渠道，或它们的组合。",
@@ -15698,7 +15743,6 @@ var STRINGS = {
   "No chats yet": "还没有聊天",
   "{name} helps in this chat": "{name} 在这个聊天里帮忙",
   "All chats (+{n})": "全部聊天（+{n}）",
-  "Link your Omni to see its channels here": "连接你的 Omni，在这里查看它的渠道",
   "{name}'s channels": "{name} 的渠道"
 };
 
@@ -15736,6 +15780,8 @@ function installBoard(ctx, face) {
       const check = () => {
         const id = right.mounted.getSnapshot();
         if (!id || opened.has(id) || !isEventsBot(roster.getSnapshot(), id)) return;
+        startLive(call);
+        if (!boardOpensFor({ id, opened, roster: roster.getSnapshot(), omni: omniStore.getSnapshot() })) return;
         opened.add(id);
         try {
           localStorage.setItem(BOARD_OPENED, JSON.stringify([...opened]));
@@ -15749,7 +15795,7 @@ function installBoard(ctx, face) {
           }
         });
       };
-      const offs = [right.mounted.subscribe(check), roster.subscribe(check)];
+      const offs = [right.mounted.subscribe(check), roster.subscribe(check), omniStore.subscribe(check)];
       check();
       return () => {
         boardRight = null;
@@ -15764,6 +15810,7 @@ var PHRASES = {
   omni_chats: () => ({ label: t("Reading your chats"), state: "searching" }),
   omni_messages: () => ({ label: t("Reading your chats"), state: "searching" }),
   find_chats: () => ({ label: t("Reading your chats"), state: "searching" }),
+  save_automation: () => ({ label: t("Saving an automation"), state: "working" }),
   omni_endpoints: () => ({ label: t("Looking up omni"), state: "searching" }),
   omni_call: (arg) => arg("method") === "GET" || arg("method") === void 0 ? { label: t("Reading omni"), state: "searching" } : { label: t("Changing omni"), state: "working" },
   omni_connect: () => ({ label: t("Connecting a channel"), state: "working" }),
@@ -15791,6 +15838,7 @@ function apply(ctx) {
   }
   if (botSettings) ctx.effect(() => botSettings.register({ id: "omni-permissions", order: 0, Component: PermissionsCard }), "ds-bot: Omni permissions settings");
   for (const name of ["find_chats", "omni_endpoints"]) ctx.effect(() => toolCards.register(name, null, { phrase: PHRASES[name] }), `ds-bot: ${name} phrase`);
+  ctx.effect(() => toolCards.register("save_automation", (props) => (0, import_react15.createElement)(SavedAutomationCard, props), { phrase: PHRASES.save_automation }), "ds-bot: save_automation card");
   ctx.effect(() => badges.register({ id: "omni-events", Component: ({ bot, roster, useWork }) => bot.id === roster.eventsBotId ? (0, import_react15.createElement)(EventsBadge, { roster, useWork }) : null }), "ds-bot: automations badge");
   if (botChildren) ctx.effect(() => botChildren.register({ id: "omni-channels", Component: OmniTree }), "ds-bot: Omni channels in the sidebar");
   ctx.effect(() => headerButtons.register({
