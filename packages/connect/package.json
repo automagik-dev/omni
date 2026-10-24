@@ -1,0 +1,30 @@
+{
+  "name": "@omni/connect",
+  "version": "2.261023.19",
+  "private": true,
+  "description": "Browser sign-in core: one owner bound from an external OpenID Connect issuer, durable opaque sessions behind an app-owned store port",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "files": ["LICENSE", "src/index.ts", "src/oidc.ts", "src/sessions.ts", "src/store-port.ts", "src/transactions.ts"],
+  "engines": {
+    "bun": "1.4.2"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.consumer.json",
+    "test": "bun test",
+    "verify-pack": "bun scripts/verify-pack.ts"
+  },
+  "dependencies": {
+    "openid-client": "6.8.8"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.2",
+    "typescript": "^5.7.3"
+  }
+}
