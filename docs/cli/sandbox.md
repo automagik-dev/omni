@@ -20,6 +20,19 @@ runs Omni, autopg/pgserve or PM2.
 the CLI that installed it. Running a newer CLI's `omni install --sandbox` moves
 it to that version, keeping data, ports and the API key.
 
+## Who runs the supervisor
+
+With `--at-login`, the launchd agent or `systemd --user` unit does, at every
+login. Without it, the supervisor still goes to the user's service manager, for
+this login only: a transient `systemd --user` service
+(`omni-sandbox-<hash>-session.service`, collected once it stops) or a launchd
+job in the GUI domain whose plist stays in `<home>/run`. So it belongs to
+neither the CLI nor whatever ran the CLI. An app that runs `omni install
+--sandbox` in a terminal and then ends that terminal's whole process range (a
+systemd scope, a process tree) leaves the sandbox running. Where there is no
+service manager to ask (no systemd user session, an ssh login on macOS), it is
+a detached child instead. `omni sandbox stop` stops whichever it is.
+
 ## Commands
 
 ```sh
