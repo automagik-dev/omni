@@ -14478,7 +14478,7 @@ function savedOf(content, roster, askFirstArg) {
   const match = SAVED.exec(String(content ?? ""));
   if (!match) return null;
   const sub = (roster?.subscriptions ?? []).find((entry) => entry.id === match[1]);
-  const askFirst = askFirstArg !== void 0 ? !(askFirstArg === false || askFirstArg === "false") : sub ? sub.askFirst !== false : true;
+  const askFirst = askFirstArg !== void 0 ? askFirstArg === true || askFirstArg === "true" || askFirstArg === "yes" : sub ? sub.askFirst !== false : true;
   return { id: match[1], name: sub?.name ?? match[2], sub, askFirst };
 }
 function savedNotice({ askFirst, main }) {

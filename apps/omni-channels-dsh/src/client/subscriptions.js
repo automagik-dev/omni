@@ -124,8 +124,9 @@ export function savedOf(content, roster, askFirstArg) {
   const match = SAVED.exec(String(content ?? ''))
   if (!match) return null
   const sub = (roster?.subscriptions ?? []).find(entry => entry.id === match[1])
-  // What Omni passed is what was saved; an edit that left it alone kept the automation's own.
-  const askFirst = askFirstArg !== undefined ? !(askFirstArg === false || askFirstArg === 'false') : sub ? sub.askFirst !== false : true
+  // What Omni passed is what was saved, read as the host reads it (only true, "true" or
+  // "yes" is on); an edit that left it alone kept the automation's own.
+  const askFirst = askFirstArg !== undefined ? askFirstArg === true || askFirstArg === 'true' || askFirstArg === 'yes' : sub ? sub.askFirst !== false : true
   return { id: match[1], name: sub?.name ?? match[2], sub, askFirst }
 }
 

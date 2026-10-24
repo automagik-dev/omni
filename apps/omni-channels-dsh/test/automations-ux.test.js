@@ -55,6 +55,10 @@ test('Omni\'s confirmation of a saved automation carries the steering warning, l
   assert.deepEqual(JSON.parse(JSON.stringify(ui.savedOf(saved, roster(), undefined))), { id: 'sub-mh2k9x1abcd', name: 'Pins', askFirst: true })
   assert.equal(ui.savedOf(saved, roster(), false).askFirst, false)
   assert.equal(ui.savedOf(saved, roster(), 'false').askFirst, false)
+  // Read as the host reads it: anything but true, "true" or "yes" turns it off.
+  assert.equal(ui.savedOf(saved, roster(), 'no').askFirst, false)
+  assert.equal(ui.savedOf(saved, roster(), '').askFirst, false)
+  assert.equal(ui.savedOf(saved, roster(), 'yes').askFirst, true)
   // An edit that leaves ask first alone shows the automation's own.
   const off = { id: 'sub-mh2k9x1abcd', name: 'Pins', askFirst: false, trigger: { kind: 'reaction', emoji: '📌' } }
   assert.equal(ui.savedOf(saved, roster([off]), undefined).askFirst, false)
