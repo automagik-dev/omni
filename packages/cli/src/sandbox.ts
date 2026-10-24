@@ -457,7 +457,7 @@ WantedBy=default.target
  * `systemctl stop` reach the supervisor first, which stops its children in order.
  * `literalArgv` (systemd 254+) keeps a `$` in a path from being expanded.
  */
-export function buildSystemdRunCommand(
+function buildSystemdRunCommand(
   unit: string,
   cmd: string[],
   layout: SandboxLayout,
