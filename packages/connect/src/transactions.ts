@@ -78,12 +78,37 @@ export function rateLimiter(limit: number, windowMs: number, now: () => number):
 export async function readBoundedText(request: Request, maxBytes: number): Promise<string | null> {
   const declared = Number(request.headers.get('content-length') ?? '0');
   if (!Number.isFinite(declared) || declared > maxBytes) return null;
+  const bytes = await readCapped(request.body, maxBytes);
+  return bytes === null ? null : new TextDecoder().decode(bytes);
+}
+
+/**
+ * A stream's bytes in one ArrayBuffer-backed array, or null once they exceed `maxBytes`; reading
+ * stops and the stream is cancelled at the cap. Uses a reader, not async iteration, so it compiles
+ * under any consumer lib set (DOM included).
+ */
+export async function readCapped(stream: ByteStream | null, maxBytes: number): Promise<Uint8Array<ArrayBuffer> | null> {
+  const reader = stream?.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
-  for await (const chunk of request.body ?? []) {
-    total += chunk.byteLength;
-    if (total > maxBytes) return null;
-    chunks.push(chunk);
+  while (reader) {
+    const { done, value } = await reader.read();
+    if (done || !value) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
   }
-  return Buffer.concat(chunks).toString('utf8');
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
 }
+
+/** The part of a byte stream readCapped uses; the DOM, Node and Bun stream types all satisfy it. */
+type ByteStream = { getReader(): { read(): Promise<{ done: boolean; value?: Uint8Array }>; cancel(): Promise<void> } };

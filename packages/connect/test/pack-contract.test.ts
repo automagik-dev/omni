@@ -5,6 +5,7 @@
  * the wish's evidence record.
  */
 import { beforeAll, describe, expect, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -57,6 +58,16 @@ describe('pack contract', () => {
     expect([...report.entries].sort()).toEqual(ALLOWLIST);
     expect(report.sha256).toMatch(/^[0-9a-f]{64}$/);
     expect(checkEntries(entries)).toEqual([]);
+  });
+
+  test('the sources typecheck under a consumer config with DOM libs and bun-types', () => {
+    const tsc = join(PACKAGE_DIR, 'node_modules/typescript/bin/tsc');
+    const run = spawnSync(process.execPath, [tsc, '-p', 'tsconfig.consumer.json'], {
+      cwd: PACKAGE_DIR,
+      encoding: 'utf8',
+    });
+    expect(`${run.stdout}${run.stderr}`.trim()).toBe('');
+    expect(run.status).toBe(0);
   });
 
   test('the workspace manifest claims Bun 1.4.2 only, private, Apache-2.0', () => {

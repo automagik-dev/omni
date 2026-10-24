@@ -19,7 +19,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import * as client from 'openid-client';
 import type { VerifiedIdentity } from './store-port';
-import type { PendingTransaction } from './transactions';
+import { type PendingTransaction, readCapped } from './transactions';
 
 export const CALLBACK_PATH = '/auth/callback';
 /** Largest clock difference accepted between this host and the issuer, in seconds. */
@@ -141,15 +141,13 @@ function boundedFetch(inner: FetchLike, timeoutMs: number, maxBytes: number): cl
     if (!url.startsWith('https://')) throw new ProviderUnavailableError('provider endpoint is not https');
     const signal = AbortSignal.any([AbortSignal.timeout(timeoutMs), ...(options.signal ? [options.signal] : [])]);
     try {
-      const response = await inner(url, { ...options, redirect: 'manual', signal, tls: { rejectUnauthorized: true } });
-      const chunks: Uint8Array[] = [];
-      let total = 0;
-      for await (const chunk of response.body ?? []) {
-        total += chunk.byteLength;
-        if (total > maxBytes) throw new ProviderUnavailableError('provider response exceeds the size cap');
-        chunks.push(chunk);
-      }
-      return new Response(Buffer.concat(chunks), { status: response.status, headers: response.headers });
+      // A Uint8Array body is copied into an ArrayBuffer-backed one, which every lib accepts as BodyInit.
+      const body = options.body instanceof Uint8Array ? new Uint8Array(options.body) : options.body;
+      const init = { ...options, body, redirect: 'manual', signal, tls: { rejectUnauthorized: true } } as const;
+      const response = await inner(url, init);
+      const bytes = await readCapped(response.body, maxBytes);
+      if (bytes === null) throw new ProviderUnavailableError('provider response exceeds the size cap');
+      return new Response(bytes, { status: response.status, headers: response.headers });
     } catch (cause) {
       throw cause instanceof ProviderUnavailableError
         ? cause
