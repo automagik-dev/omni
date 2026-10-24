@@ -518,7 +518,8 @@ describe('channel coverage', () => {
           e.name !== 'channel-internal' &&
           e.name !== 'channel-harness' && // Transport-less E2E test harness (#953) — no webhooks/media/dedupe, same category as internal
           e.name !== 'channel-linkedin' && // Placeholder package — no source yet
-          e.name !== 'channel-gupshup', // In progress — PR #334
+          e.name !== 'channel-gupshup' && // In progress — PR #334
+          e.name !== 'channel-webchat', // Prototype — no dedupe, timing checkpoints or error class yet (docs/research/webchat)
       )
       .map((e) => e.name.replace('channel-', ''));
 

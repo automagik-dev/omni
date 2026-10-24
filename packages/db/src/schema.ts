@@ -51,6 +51,7 @@ export const channelTypes = [
   'twilio-whatsapp',
   'internal',
   'harness', // no-migration-needed: channel columns are varchar(50), not a pg enum — a new literal needs no DDL
+  'webchat', // no-migration-needed: same varchar(50) column — prototype channel
 ] as const;
 export type ChannelType = (typeof channelTypes)[number];
 
