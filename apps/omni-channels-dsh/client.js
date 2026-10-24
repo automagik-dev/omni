@@ -14975,7 +14975,7 @@ function OmniTree({ bot, actions }) {
   }, []);
   if (!isOmniBot(bot)) return null;
   if (state.preview) {
-    return (0, import_react13.createElement)("div", { className: "ot-tree" }, (0, import_react13.createElement)("button", { type: "button", className: "ot-channel-row ot-link", onClick: openConnectWizard }, t("Link your Omni to see its channels here")));
+    return (0, import_react13.createElement)("div", { className: "ot-tree" }, (0, import_react13.createElement)("button", { type: "button", className: "ot-channel-row ot-link", onClick: openConnectWizard }, t("Connect Omni"), (0, import_react13.createElement)("span", { "aria-hidden": true }, " →")));
   }
   const toggle = (id) => setOpen((before) => {
     const next = new Set(before);
@@ -15539,7 +15539,6 @@ var STRINGS = {
   "Add a word to look for.": "添加一个要查找的词。",
   "All of {name}": "{name} 全部",
   "a new session each time": "每次新建会话",
-  "Anyone in a watched chat can write text that tries to steer the Bot. It runs with no secrets, and asks you first before shell, file or network actions.": "被订阅聊天中的任何人都可能写下试图操控 Bot 的文字。它运行时不带任何密钥，执行命令、文件或网络操作前会先问你。",
   "A plain agent session, no Bot": "普通的智能体会话，不使用 Bot",
   "Ask me first": "先问我",
   "Chats, groups, whole channels, or a mix.": "聊天、群组、整个渠道，或它们的组合。",
@@ -15742,7 +15741,6 @@ var STRINGS = {
   "No chats yet": "还没有聊天",
   "{name} helps in this chat": "{name} 在这个聊天里帮忙",
   "All chats (+{n})": "全部聊天（+{n}）",
-  "Link your Omni to see its channels here": "连接你的 Omni，在这里查看它的渠道",
   "{name}'s channels": "{name} 的渠道"
 };
 

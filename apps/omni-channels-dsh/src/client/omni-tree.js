@@ -55,8 +55,10 @@ export function OmniTree({ bot, actions }) {
   const [open, setOpen] = useState(readOpen)
   useEffect(() => { startLive(call) }, [])
   if (!isOmniBot(bot)) return null
+  // Not linked yet: one quiet way into the Connect wizard, so the screen does not say
+  // "not connected" a second time here.
   if (state.preview) {
-    return h('div', { className: 'ot-tree' }, h('button', { type: 'button', className: 'ot-channel-row ot-link', onClick: openConnectWizard }, t('Link your Omni to see its channels here')))
+    return h('div', { className: 'ot-tree' }, h('button', { type: 'button', className: 'ot-channel-row ot-link', onClick: openConnectWizard }, t('Connect Omni'), h('span', { 'aria-hidden': true }, ' →')))
   }
   const toggle = id => setOpen((before) => {
     const next = new Set(before)
