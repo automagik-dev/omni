@@ -1,4 +1,4 @@
-# The Omni Admin UI image's own dsh profile (the same settings the Omni desktop app seeds).
+# The Omni Admin UI image's own dsh profile (the same settings the Automagik app seeds).
 # This dsh is Omni's alone, so it also takes Omni's keyless web search as the default.
 - insert:
     - id: web-search-auto

@@ -3,11 +3,11 @@
  *
  *   /api/login/claim?token=…        claim an unclaimed Omni with a WhatsApp number
  *   /api/login/device?user_code=…   approve a device (desktop app, DSH plugin, CLI)
- *   /api/login/app                  open the Omni app on this computer, connected to this Omni
+ *   /api/login/app                  open Automagik on this computer, connected to this Omni
  *   /api/login/app?grant=…          the same, from the link the owner got by texting "connect"
  *   /  (and /api)                   what a browser sees at this Omni's own address
  *
- * "Open in the Omni app" is an omni://connect?url=<this Omni> link: it carries this Omni's
+ * "Open in Automagik" is an omni://connect?url=<this Omni> link: it carries this Omni's
  * address and nothing else. The app asks before connecting, then signs in through the device
  * page here (a passkey, or a code on WhatsApp), so the link grants nothing by itself. A link
  * from "connect" adds its one-time grant (login/connect.ts): the owner already said it is
@@ -168,7 +168,7 @@ export function claimPage(options: PageOptions = {}): string {
 <section id="link" hidden><h1>Link your WhatsApp</h1><p>On your phone: WhatsApp → Settings → Linked devices → Link a device, and scan this.</p><div class="qr" id="qr"></div></section>
 <section id="code" hidden><h1>Check your WhatsApp</h1><p>I sent a 6-digit code to <strong id="sentTo"></strong>, in your chat with yourself.</p><input id="otp" inputmode="numeric" autocomplete="one-time-code" maxlength="6" aria-label="Code"><button class="primary" id="verify">Claim this Omni</button></section>
 <section id="done" hidden><h1>This Omni is yours</h1><p id="doneLede">Make signing in a touch: use this device's fingerprint or face instead of a code.</p><button class="primary" id="passkey">Use my fingerprint or face</button>
-<p style="margin-top:18px">That's all on this page. Next, open Omni on your computer and connect it to <strong id="host"></strong>: open this Omni's <a id="appPage" href="app">app page</a> there and tap <em>Open in the Omni app</em>.</p><code class="cmd">npx @automagik/omni desktop</code></section>`,
+<p style="margin-top:18px">That's all on this page. Next, open Automagik on your computer and connect it to <strong id="host"></strong>: open this Omni's <a id="appPage" href="app">app page</a> there and tap <em>Open in Automagik</em>.</p><code class="cmd">npx @automagik/omni desktop</code></section>`,
     `
 const token = new URLSearchParams(location.search).get('token') || '';
 const claim = (method, path, body) => call(method, '/api/v2/login/claim' + path, body, { 'x-omni-claim-token': token });
@@ -255,13 +255,13 @@ start();`,
 const GET_APP = 'https://github.com/automagik-dev/automagik/releases/latest';
 
 /**
- * Open the Omni app on this computer, connected to this Omni: an omni:// link and how to get
+ * Open Automagik on this computer, connected to this Omni: an omni:// link and how to get
  * the app. With a live `grant` the link carries it; an `expired` one says so and nothing else.
  */
 export function appPage(link: { grant: string } | { expired: true } | Record<string, never> = {}): string {
   if ('expired' in link) {
     return page(
-      'Open Omni',
+      'Open Automagik',
       `
 <section id="expired"><h1>This link expired</h1><p>A connect link works once, for ten minutes. Text <strong>connect</strong> to yourself on WhatsApp and I'll send a new one.</p></section>`,
       `
@@ -271,19 +271,19 @@ speak('That link is used up. Ask me for a new one.');`,
   // The grant matched GrantSchema (base64url) before it got here: safe inside the script.
   const grant = 'grant' in link ? JSON.stringify(link.grant) : 'null';
   return page(
-    'Open Omni',
+    'Open Automagik',
     `
-<section id="open"><h1>Open Omni on this computer</h1><p id="lede">The Omni app connects to <strong id="host"></strong>. It asks you first, then you sign in here with Face ID, Touch ID, your fingerprint or a code on WhatsApp.</p><a class="btn primary" id="openApp" href="#">Open in the Omni app</a><button id="copy" hidden>Copy the app link</button>
-<p style="margin-top:18px" class="muted">No app yet? <a href="${GET_APP}">Download Omni for Mac or Linux</a>, or run:</p><code class="cmd">npx @automagik/omni desktop</code></section>`,
+<section id="open"><h1>Open Automagik on this computer</h1><p id="lede">Automagik connects to <strong id="host"></strong>. It asks you first, then you sign in here with Face ID, Touch ID, your fingerprint or a code on WhatsApp.</p><a class="btn primary" id="openApp" href="#">Open in Automagik</a><button id="copy" hidden>Copy the app link</button>
+<p style="margin-top:18px" class="muted">No app yet? <a href="${GET_APP}">Download Automagik for Mac or Linux</a>, or run:</p><code class="cmd">npx @automagik/omni desktop</code></section>`,
     `
 const grant = ${grant};
 const link = appLink() + (grant ? '&grant=' + encodeURIComponent(grant) : '');
 $('host').textContent = location.host;
 $('openApp').href = link;
 if (grant) {
-  $('lede').textContent = 'The Omni app connects to ' + location.host + ' right away: you asked for this link in your own WhatsApp. It works once, for ten minutes.';
+  $('lede').textContent = 'Automagik connects to ' + location.host + ' right away: you asked for this link in your own WhatsApp. It works once, for ten minutes.';
   $('copy').hidden = !navigator.clipboard;
-  $('copy').onclick = () => navigator.clipboard.writeText(link).then(() => say('Copied. Paste it in the Omni app, under Connect your Omni.'), (e) => say(e.message, true));
+  $('copy').onclick = () => navigator.clipboard.writeText(link).then(() => say('Copied. Paste it in Automagik, under Connect your Omni.'), (e) => say(e.message, true));
 }
 speak(grant ? "One tap and I'm on this computer." : "Let's put me on your computer.");`,
   );
@@ -296,7 +296,7 @@ speak(grant ? "One tap and I'm on this computer." : "Let's put me on your comput
 export function landingPage({ publicUrl }: { publicUrl: string | null }): string {
   // encodeURIComponent leaves no quote or angle bracket: safe inside the attribute.
   const open = publicUrl
-    ? `<a class="btn primary" id="openApp" href="omni://connect?url=${encodeURIComponent(publicUrl)}">Open in the Omni app</a>`
+    ? `<a class="btn primary" id="openApp" href="omni://connect?url=${encodeURIComponent(publicUrl)}">Open in Automagik</a>`
     : '';
   const text = publicUrl
     ? '<p class="muted">Already have the app? Text <strong>connect</strong> to yourself on WhatsApp and open the link I send.</p>'
@@ -304,7 +304,7 @@ export function landingPage({ publicUrl }: { publicUrl: string | null }): string
   return page(
     'Omni',
     `
-<section id="landing"><h1>This is an Omni</h1><p>Every chat, every channel, one place. Use it from the Omni app on your computer.</p>${open}<a class="btn${publicUrl ? '' : ' primary'}" href="${GET_APP}">Get the Omni app</a>${text}</section>`,
+<section id="landing"><h1>This is an Omni</h1><p>Every chat, every channel, one place. Use it from Automagik on your computer.</p>${open}<a class="btn${publicUrl ? '' : ' primary'}" href="${GET_APP}">Get Automagik</a>${text}</section>`,
     `
 speak("Hi! I'm Omni.");`,
   );
@@ -316,7 +316,7 @@ export function devicePage(clients: Record<string, string>, options: PageOptions
     `
 <section id="signin" hidden><h1>Sign in to approve</h1><p>A device is asking to use your Omni. First, show it's you.</p><button class="primary" id="usePasskey">Use Face ID, Touch ID or fingerprint</button><button id="sendCode">Send me a code on WhatsApp</button><p class="muted">Or on the server: <code id="approveCmd"></code></p><p class="muted" id="noPasskey" hidden>Face ID and fingerprints need this Omni's fixed address (OMNI_PUBLIC_URL), so they are off here.</p><div id="codeBox" hidden><p>Code sent to <strong id="sentTo"></strong>, in your chat with yourself.</p><input id="otp" inputmode="numeric" autocomplete="one-time-code" maxlength="6"><button class="primary" id="verify">Sign in</button></div></section>
 <section id="approve" hidden><h1>Approve this device?</h1><div class="device"><strong id="client"></strong><span class="muted">Code <span id="userCode"></span></span></div><p>It will be able to use your Omni until you revoke it.</p><button class="primary" id="yes">Approve</button><button id="no">Deny</button></section>
-<section id="done" hidden><h1 id="doneTitle">Approved</h1><p id="doneText">The device is signing in now.</p><a class="btn primary" id="backToApp" href="omni://open" hidden>Back to the Omni app</a><button id="passkey" hidden>Use this device's fingerprint or face next time</button></section>`,
+<section id="done" hidden><h1 id="doneTitle">Approved</h1><p id="doneText">The device is signing in now.</p><a class="btn primary" id="backToApp" href="omni://open" hidden>Back to Automagik</a><button id="passkey" hidden>Use this device's fingerprint or face next time</button></section>`,
     `
 const CLIENTS = ${JSON.stringify(clients)};
 const userCode = (new URLSearchParams(location.search).get('user_code') || '').toUpperCase();

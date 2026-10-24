@@ -1,6 +1,6 @@
 # Pair DSH with your Omni
 
-The Omni desktop app, and the Omni plugins in your own DeepSeek Harness (DSH), connect to an Omni by pairing. You don't need API keys, environment variables or HTTPS. You don't even need a WhatsApp number.
+The Automagik app, and the Omni plugins in your own DeepSeek Harness (DSH), connect to an Omni by pairing. You don't need API keys, environment variables or HTTPS. You don't even need a WhatsApp number.
 
 Claiming without WhatsApp, `omni approve` and `omni connect` need an Omni newer than 2.261023.16. On an older one, update it first (see [Updating](#updating)), or paste an API key in the app instead.
 

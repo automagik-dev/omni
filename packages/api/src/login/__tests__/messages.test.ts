@@ -10,8 +10,8 @@ describe('self-chat messages', () => {
 
   test('an approval names the device, where and when it asked, and how to revoke it', () => {
     const at = Date.UTC(2026, 9, 21, 2, 16);
-    const text = deviceApprovedMessage('the Omni desktop app', { ip: '203.0.113.7', at });
-    expect(text).toContain('The Omni desktop app is now connected to your Omni.');
+    const text = deviceApprovedMessage('the Automagik app', { ip: '203.0.113.7', at });
+    expect(text).toContain('The Automagik app is now connected to your Omni.');
     expect(text).toContain('_It asked from 203.0.113.7 at 02:16 UTC._');
     expect(text).toContain('*Keys*');
   });
