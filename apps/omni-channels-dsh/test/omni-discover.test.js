@@ -6,7 +6,7 @@ import { afterEach, test } from 'node:test'
 import { candidates, discover, install, probe, sameOmni } from '../src/host/omni-discover.js'
 import { install as installLink, LINK_FILE } from '../src/host/omni-link.js'
 import { parseConnectLink } from '../src/client/connect-link.js'
-import { install as installHooks } from '@automagik/omni-dsh/src/host/extend.js'
+import { install as installHooks } from '@automagik/bots-dsh/src/host/extend.js'
 
 const realFetch = globalThis.fetch
 const realEnv = { HOME: process.env.HOME, OMNI_CONFIG_DIR: process.env.OMNI_CONFIG_DIR, OMNI_HOME: process.env.OMNI_HOME }

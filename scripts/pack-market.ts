@@ -1,19 +1,26 @@
 #!/usr/bin/env bun
 /**
- * Pack the Automagik marketplace a release carries: every DSH plugin in apps/*-dsh.
+ * Pack the Automagik marketplace a release carries: every DSH plugin in apps/*-dsh, and the
+ * Automagik plugins Omni's own build on (the Bot team, the welcome) at the Automagik release
+ * apps/automagik.json pins.
  *
  *   bun scripts/pack-market.ts [outDir]     default: packages/cli/dist/market
  *
- * Each plugin is packed with `bun pm pack` (the same files `npm pack` takes: the package's
- * `files`) into outDir, next to a market.json manifest the server reads (packages/api/src/market). The
- * directory is emptied first, so it holds exactly this release's plugins. A plugin whose
- * version is not Omni's fails the pack: the market serves each plugin at Omni's version.
+ * Each plugin of this repository is packed with `bun pm pack` (the same files `npm pack`
+ * takes: the package's `files`) into outDir, next to a market.json manifest the server reads
+ * (packages/api/src/market). A plugin whose version is not Omni's fails the pack: the market
+ * serves each of Omni's own plugins at Omni's version. The Automagik plugins come as the
+ * pinned release's own tarballs (apps/automagik.mjs: downloaded, or taken from
+ * AUTOMAGIK_TARBALLS, and refused unless their integrity is the pinned one), at their own
+ * version. The directory is emptied first, so it holds exactly this release's plugins.
  */
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { z } from 'zod';
+// @ts-expect-error -- plain Node ESM without types (apps/automagik.mjs), shared with the admin UI image.
+import { fetchTarballs, readPin } from '../apps/automagik.mjs';
 import {
   MARKET_MANIFEST_FILE,
   type MarketManifest,
@@ -65,6 +72,11 @@ function packOne(dir: string, pkg: PluginPackage, outDir: string, omniVersion: s
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   if (!existsSync(join(outDir, filename))) throw new Error(`bun pm pack in ${dir} did not write ${filename}`);
+  return describeTarball(outDir, filename, pkg);
+}
+
+/** A tarball's manifest entry: its checksums and the package.json fields a registry serves. */
+function describeTarball(outDir: string, filename: string, pkg: PluginPackage): MarketPackage {
   const bytes = readFileSync(join(outDir, filename));
   const integrity = `sha512-${createHash('sha512').update(bytes).digest('base64')}`;
   const repository = typeof pkg.repository === 'string' ? { type: 'git', url: pkg.repository } : pkg.repository;
@@ -88,23 +100,55 @@ function packOne(dir: string, pkg: PluginPackage, outDir: string, omniVersion: s
   };
 }
 
+/** The package.json a tarball carries (npm's layout: package/package.json). */
+export function tarballPackage(path: string): PluginPackage {
+  return PluginPackageSchema.parse(
+    JSON.parse(execFileSync('tar', ['-xzOf', path, 'package/package.json'], { encoding: 'utf8' })),
+  );
+}
+
+/** The pinned Automagik release's plugins in outDir, checked, as manifest entries. */
+async function automagikPackages(
+  outDir: string,
+  options: { pinFile?: string; from?: string },
+): Promise<MarketPackage[]> {
+  const pin = readPin(options.pinFile);
+  const tarballs: { name: string; version: string; path: string }[] = await fetchTarballs(outDir, {
+    pin,
+    ...(options.from ? { from: options.from } : {}),
+  });
+  return tarballs.map(({ name, version, path }) => {
+    const pkg = tarballPackage(path);
+    if (pkg.name !== name || pkg.version !== version)
+      throw new Error(`${basename(path)} holds ${pkg.name}@${pkg.version}, not the pinned ${name}@${version}`);
+    return describeTarball(outDir, basename(path), pkg);
+  });
+}
+
 export interface PackMarketOptions {
   appsDir: string;
   outDir: string;
   omniVersion: string;
   /** Unix seconds; defaults to SOURCE_DATE_EPOCH, else now. */
   packedAt?: number;
+  /**
+   * The Automagik plugins: the pin to take (default apps/automagik.json) and a folder that
+   * already holds its tarballs (default AUTOMAGIK_TARBALLS, else download). false leaves them out.
+   */
+  automagik?: { pinFile?: string; from?: string } | false;
 }
 
 /** Pack every plugin into outDir (emptied first) and write its market.json. */
-export function packMarket(options: PackMarketOptions): MarketManifest {
+export async function packMarket(options: PackMarketOptions): Promise<MarketManifest> {
   const outDir = resolve(options.outDir);
   rmSync(outDir, { recursive: true, force: true });
   mkdirSync(outDir, { recursive: true });
-  const packages = discoverPlugins(options.appsDir)
+  const own = discoverPlugins(options.appsDir)
     .map((dir) => ({ dir, pkg: readPlugin(dir) }))
     .filter(({ pkg }) => pkg.private !== true)
     .map(({ dir, pkg }) => packOne(dir, pkg, outDir, options.omniVersion));
+  const automagik = options.automagik === false ? [] : await automagikPackages(outDir, options.automagik ?? {});
+  const packages = [...automagik, ...own];
   const epoch = Number(process.env.SOURCE_DATE_EPOCH);
   const manifest = MarketManifestSchema.parse({
     format: 1,
@@ -121,7 +165,7 @@ if (import.meta.main) {
   const { version } = z
     .object({ version: z.string() })
     .parse(JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')));
-  const manifest = packMarket({ appsDir: join(repoRoot, 'apps'), outDir, omniVersion: version });
+  const manifest = await packMarket({ appsDir: join(repoRoot, 'apps'), outDir, omniVersion: version });
   for (const pkg of manifest.packages) console.log(`market: ${pkg.name}@${pkg.version} ${pkg.file} (${pkg.size} B)`);
   console.log(`market: ${manifest.packages.length} plugins packed into ${outDir}`);
 }

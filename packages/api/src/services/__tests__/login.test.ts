@@ -255,7 +255,7 @@ describe('the landing page at the Omni address', () => {
       expect(body).toContain('This is an Omni');
       expect(body).toContain(`href="omni://connect?url=${encodeURIComponent('https://omni.example.com')}"`);
       expect(body).toContain('Text <strong>connect</strong> to yourself');
-      expect(body).toContain('https://github.com/automagik-dev/omni-desktop/releases/latest');
+      expect(body).toContain('https://github.com/automagik-dev/automagik/releases/latest');
 
       for (const headers of [{}, { accept: 'application/json' }, { accept: '*/*' }] as Record<string, string>[]) {
         const json = await app.request(`https://omni.example.com${path}`, { headers });

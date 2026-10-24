@@ -119,3 +119,6 @@ deploy/helm/omni/values-local.yaml
 
 # pg-gate keep-warm cluster state (#967)
 .pg-gate-warm.json
+
+# The Bot team at the Automagik release apps/automagik.json pins (apps/automagik.mjs source)
+apps/.automagik/

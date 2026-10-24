@@ -20,12 +20,12 @@ function plugin(appsDir: string, dir: string, pkg: Record<string, unknown>) {
 describe('pack-market', () => {
   test('discovers every apps/*-dsh plugin, never a hard-coded list', () => {
     const dirs = discoverPlugins(join(repoRoot, 'apps')).map((dir) => basename(dir));
-    expect(dirs).toContain('omni-ui-dsh');
-    expect(dirs).toContain('omni-ai-dsh');
+    expect(dirs).toContain('omni-channels-dsh');
+    expect(dirs).toContain('omni-canvas-dsh');
     for (const dir of dirs) expect(dir.endsWith('-dsh')).toBe(true);
   });
 
-  test('packs each plugin with npm pack and writes a manifest the server accepts', () => {
+  test('packs each plugin with npm pack and writes a manifest the server accepts', async () => {
     const appsDir = join(root, 'apps');
     plugin(appsDir, 'one-dsh', {
       name: '@automagik/one-dsh',
@@ -45,7 +45,13 @@ describe('pack-market', () => {
     mkdirSync(outDir);
     writeFileSync(join(outDir, 'stale.tgz'), 'old');
 
-    const manifest = packMarket({ appsDir, outDir, omniVersion: '2.1.0', packedAt: 1792553326 });
+    const manifest = await packMarket({
+      appsDir,
+      outDir,
+      omniVersion: '2.1.0',
+      packedAt: 1792553326,
+      automagik: false,
+    });
 
     expect(MarketManifestSchema.parse(JSON.parse(readFileSync(join(outDir, 'market.json'), 'utf8')))).toEqual(manifest);
     expect(manifest).toMatchObject({ format: 1, omniVersion: '2.1.0', packedAt: 1792553326 });
@@ -68,11 +74,81 @@ describe('pack-market', () => {
     expect(() => readFileSync(join(outDir, 'stale.tgz'))).toThrow();
   });
 
-  test("refuses a plugin that is not at Omni's version", () => {
+  test("refuses a plugin that is not at Omni's version", async () => {
     const appsDir = join(root, 'drift');
     plugin(appsDir, 'old-dsh', { name: 'old-dsh', version: '0.1.9' });
-    expect(() => packMarket({ appsDir, outDir: join(root, 'drift-out'), omniVersion: '2.1.0' })).toThrow(
-      /not Omni's 2\.1\.0/,
-    );
+    await expect(
+      packMarket({ appsDir, outDir: join(root, 'drift-out'), omniVersion: '2.1.0', automagik: false }),
+    ).rejects.toThrow(/not Omni's 2\.1\.0/);
+  });
+
+  test('carries the pinned Automagik release, at its own version, and refuses other bytes', async () => {
+    // A release's tarball, as automagik's release.yml packs it.
+    const release = join(root, 'automagik-release');
+    plugin(join(root, 'automagik-src'), 'bots-dsh', {
+      name: '@automagik/bots-dsh',
+      version: '3.261023.1',
+      description: 'The Bot team',
+      dsh: { client: { platform: 'web' } },
+    });
+    mkdirSync(release, { recursive: true });
+    Bun.spawnSync([process.execPath, 'pm', 'pack', '--quiet', '--destination', release], {
+      cwd: join(root, 'automagik-src', 'bots-dsh'),
+    });
+    const file = 'automagik-bots-dsh-3.261023.1.tgz';
+    const bytes = readFileSync(join(release, file));
+    const pin = {
+      repository: 'https://github.com/automagik-dev/automagik',
+      version: '3.261023.1',
+      commit: 'a'.repeat(40),
+      packages: {
+        '@automagik/bots-dsh': {
+          version: '3.261023.1',
+          file,
+          integrity: `sha512-${createHash('sha512').update(bytes).digest('base64')}`,
+          size: bytes.byteLength,
+        },
+      },
+    };
+    const pinFile = join(root, 'automagik.json');
+    writeFileSync(pinFile, JSON.stringify(pin));
+    const appsDir = join(root, 'with-automagik');
+    plugin(appsDir, 'omni-channels-dsh', { name: '@automagik/omni-channels-dsh', version: '2.1.0' });
+    const outDir = join(root, 'with-automagik-out');
+
+    const manifest = await packMarket({ appsDir, outDir, omniVersion: '2.1.0', automagik: { pinFile, from: release } });
+
+    expect(manifest.packages.map((pkg) => [pkg.name, pkg.version])).toEqual([
+      ['@automagik/bots-dsh', '3.261023.1'],
+      ['@automagik/omni-channels-dsh', '2.1.0'],
+    ]);
+    expect(manifest.packages[0]).toMatchObject({
+      file,
+      integrity: pin.packages['@automagik/bots-dsh'].integrity,
+      description: 'The Bot team',
+      dsh: { client: { platform: 'web' } },
+    });
+    expect(readFileSync(join(outDir, file))).toEqual(bytes);
+
+    // Other bytes under the pinned name are refused.
+    const tampered = join(root, 'tampered');
+    mkdirSync(tampered, { recursive: true });
+    writeFileSync(join(tampered, file), 'not the release');
+    await expect(
+      packMarket({
+        appsDir,
+        outDir: join(root, 'tampered-out'),
+        omniVersion: '2.1.0',
+        automagik: { pinFile, from: tampered },
+      }),
+    ).rejects.toThrow(/is not the pinned tarball/);
+  });
+
+  test("the repository's own pin names a release of automagik-dev/automagik", async () => {
+    // @ts-expect-error -- plain Node ESM without types
+    const { readPin } = await import('../apps/automagik.mjs');
+    const pin = readPin();
+    expect(Object.keys(pin.packages).sort()).toEqual(['@automagik/bots-dsh', '@automagik/welcome-dsh']);
+    expect(pin.commit).toMatch(/^[0-9a-f]{40}$/);
   });
 });

@@ -1,16 +1,21 @@
 import { describe, expect, test } from 'bun:test';
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   DESKTOP_TAG_PREFIX,
   type DesktopRelease,
+  PRELOAD,
   appCacheDir,
   createDesktopCommand,
+  desktopHome,
   desktopTarget,
   extractionDir,
   launchPlan,
   parseSums,
   pickRelease,
   sha256Of,
+  writePreload,
 } from '../desktop';
 
 const release = (tag: string, names: string[], extra: Partial<DesktopRelease> = {}): DesktopRelease => ({
@@ -33,11 +38,12 @@ describe('desktopTarget', () => {
     });
   });
 
-  test('macOS takes the dmg for its own architecture', () => {
+  test('macOS takes the dmg for its own architecture, from a signed release only', () => {
     const arm = desktopTarget('darwin', 'arm64');
     if (!arm.supported) throw new Error('unreachable');
     expect(arm.asset.test('Omni-0.1.0-labs.1-mac-arm64.dmg')).toBe(true);
     expect(arm.asset.test('Omni-0.1.0-labs.1-mac-x64.dmg')).toBe(false);
+    expect(arm.requires).toBe('latest-mac.yml');
   });
 
   test('Windows itself, and builds that do not exist, are refused with a reason', () => {
@@ -60,9 +66,25 @@ describe('pickRelease', () => {
   test('the newest published desktop release, skipping drafts and other tags', () => {
     expect(pickRelease(releases)?.tag_name).toBe(`${DESKTOP_TAG_PREFIX}0.1.1`);
   });
-  test("the one built with the CLI's own version first, when there is one", () => {
-    expect(pickRelease(releases, undefined, '0.1.0')?.tag_name).toBe(`${DESKTOP_TAG_PREFIX}0.1.0`);
-    expect(pickRelease(releases, undefined, '9.9.9')?.tag_name).toBe(`${DESKTOP_TAG_PREFIX}0.1.1`);
+  test("the newest that has this machine's build and its checksums; on macOS a signed one", () => {
+    const linux = desktopTarget('linux', 'x64', '');
+    const mac = desktopTarget('darwin', 'arm64');
+    if (!linux.supported || !mac.supported) throw new Error('unreachable');
+    const automagik = [
+      // A release with the plugins only, then one whose macOS build is unsigned (no feed).
+      release('v3.261024.2', ['automagik-bots-dsh-3.261024.2.tgz', 'plugins.json']),
+      release('v3.261024.1', [
+        'Omni-3.261024.1-linux-x86_64.AppImage',
+        'Omni-3.261024.1-mac-arm64.dmg',
+        'latest-linux.yml',
+        'SHA256SUMS',
+      ]),
+      release('v3.261023.1', ['Omni-3.261023.1-linux-x86_64.AppImage']),
+    ];
+    expect(pickRelease(automagik, undefined, linux)?.tag_name).toBe('v3.261024.1');
+    expect(pickRelease(automagik, undefined, mac)).toBeUndefined();
+    const signed = release('v3.261025.1', ['Omni-3.261025.1-mac-arm64.dmg', 'latest-mac.yml', 'SHA256SUMS']);
+    expect(pickRelease([signed, ...automagik], undefined, mac)?.tag_name).toBe('v3.261025.1');
   });
   test('or exactly the one asked for', () => {
     expect(pickRelease(releases, `${DESKTOP_TAG_PREFIX}0.1.0`)?.tag_name).toBe(`${DESKTOP_TAG_PREFIX}0.1.0`);
@@ -99,10 +121,20 @@ describe('where and how it opens', () => {
     expect(dir).toBe(join('/srv/omni', 'desktop', 'app', 'extracted', 'Omni-0.1.0-linux-x86_64'));
     expect(launchPlan('/x/Omni.AppImage', linux, dir)).toEqual({
       command: join(dir, 'squashfs-root', 'AppRun'),
-      args: [],
+      args: ['--preload=omni'],
     });
     expect(launchPlan('/a/Omni.dmg', mac, '/unused')).toEqual({ command: 'open', args: ['/a/Omni.dmg'] });
   });
+});
+
+test("the preload lands in the app's home, where the app reads it however it was installed", () => {
+  const omniHome = mkdtempSync(join(tmpdir(), 'omni-desktop-preload-'));
+  expect(PRELOAD).toBe('omni');
+  expect(desktopHome({ OMNI_HOME: omniHome })).toBe(join(omniHome, 'desktop'));
+  expect(desktopHome({ OMNI_HOME: omniHome, OMNI_DESKTOP_HOME: '/srv/app' })).toBe('/srv/app');
+  const file = writePreload({ OMNI_HOME: omniHome });
+  expect(file).toBe(join(omniHome, 'desktop', 'preload'));
+  expect(readFileSync(file, 'utf8')).toBe('omni\n');
 });
 
 test('the command is `desktop`, with --path, --tag and --dry-run', () => {

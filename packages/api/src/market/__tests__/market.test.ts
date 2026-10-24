@@ -15,7 +15,9 @@ import { type MarketIndex, type Packument, createMarket } from '../service';
 const PUBLIC = 'https://omni.example.com';
 const VERSION = '2.261019.10';
 const PACKED_AT = 1792553326;
-const THIRD_PARTY = staticIndex.plugins
+// Every plugin the static index lists from npm or from a repository other than Omni's: the
+// vetted add-ons, and Automagik's plugins (the Bot team, the welcome) at the pinned release.
+const ADD_ONS = staticIndex.plugins
   .filter((plugin) =>
     plugin.versions.some(
       (entry) =>
@@ -26,6 +28,9 @@ const THIRD_PARTY = staticIndex.plugins
     ),
   )
   .map((plugin) => plugin.name);
+// The plugins the bundle below carries are served from this Omni instead.
+const CARRIED = new Set(['@automagik/bots-dsh']);
+const THIRD_PARTY = ADD_ONS.filter((name) => !CARRIED.has(name));
 
 let root: string;
 let marketDir: string;
@@ -65,13 +70,13 @@ beforeAll(() => {
     omniVersion: VERSION,
     packedAt: PACKED_AT,
     packages: [
-      entry('@automagik/omni-dsh', 'automagik-omni-dsh-2.261019.10.tgz', {
-        description: 'Omni for DSH',
+      entry('@automagik/bots-dsh', 'automagik-bots-dsh-2.261019.10.tgz', {
+        description: 'The Bot team, carried from the Automagik release Omni pins',
         license: 'Apache-2.0',
         repository: {
           type: 'git',
-          url: 'git+https://github.com/automagik-dev/omni.git',
-          directory: 'apps/omni-ui-dsh',
+          url: 'git+https://github.com/automagik-dev/automagik.git',
+          directory: 'apps/bots-dsh',
         },
       }),
       entry('@automagik/omni-new-dsh', 'automagik-omni-new-dsh-2.261019.10.tgz', {
@@ -120,7 +125,7 @@ describe('market index', () => {
     expect(parsed.metadata.categories).toHaveProperty('omni');
     expect(parsed.metadata.labels).toHaveProperty('vetted');
     expect(parsed.plugins.map((plugin) => plugin.name)).toEqual([
-      '@automagik/omni-dsh',
+      '@automagik/bots-dsh',
       '@automagik/omni-new-dsh',
       ...THIRD_PARTY,
     ]);
@@ -168,8 +173,9 @@ describe('market index', () => {
     for (const dir of [empty, corrupt]) {
       const get = appWith({ dir, publicUrl: PUBLIC });
       const body = (await (await get('/api/market/index.json')).json()) as MarketIndex;
-      expect(parseMarketIndex(body, `${PUBLIC}/api/market/index.json`).plugins.map((p) => p.name)).toEqual(THIRD_PARTY);
-      const packument = await get('/api/market/npm/@automagik%2fomni-dsh');
+      // A server run from source carries nothing: Automagik's plugins are listed from their pinned commit.
+      expect(parseMarketIndex(body, `${PUBLIC}/api/market/index.json`).plugins.map((p) => p.name)).toEqual(ADD_ONS);
+      const packument = await get('/api/market/npm/@automagik%2fbots-dsh');
       expect(packument.status).toBe(302);
       expect((await get('/market')).status).toBe(200);
     }
@@ -181,26 +187,26 @@ describe('market npm registry', () => {
 
   test('serves a packument for a carried plugin, scoped name encoded or not', async () => {
     for (const path of [
-      '/api/market/npm/@automagik%2fomni-dsh',
-      '/api/market/npm/@automagik%2Fomni-dsh',
-      '/api/market/npm/@automagik/omni-dsh',
+      '/api/market/npm/@automagik%2fbots-dsh',
+      '/api/market/npm/@automagik%2Fbots-dsh',
+      '/api/market/npm/@automagik/bots-dsh',
     ]) {
       const response = await get()(path);
       expect(response.status).toBe(200);
       expect(response.headers.get('cache-control')).toBe('public, max-age=60');
       const body = (await response.json()) as Packument;
-      const bytes = tarballs.get('@automagik/omni-dsh') as Buffer;
-      expect(body.name).toBe('@automagik/omni-dsh');
+      const bytes = tarballs.get('@automagik/bots-dsh') as Buffer;
+      expect(body.name).toBe('@automagik/bots-dsh');
       expect(body['dist-tags']).toEqual({ latest: VERSION });
       expect(body.time[VERSION]).toBe(new Date(PACKED_AT * 1000).toISOString());
       expect(body.versions[VERSION]).toMatchObject({
-        name: '@automagik/omni-dsh',
+        name: '@automagik/bots-dsh',
         version: VERSION,
-        description: 'Omni for DSH',
+        description: 'The Bot team, carried from the Automagik release Omni pins',
         license: 'Apache-2.0',
         peerDependencies: { '@deepseek-ai/cordis': '*' },
         dist: {
-          tarball: `${PUBLIC}/api/market/npm/@automagik/omni-dsh/-/automagik-omni-dsh-2.261019.10.tgz`,
+          tarball: `${PUBLIC}/api/market/npm/@automagik/bots-dsh/-/automagik-bots-dsh-2.261019.10.tgz`,
           integrity: `sha512-${createHash('sha512').update(bytes).digest('base64')}`,
           shasum: createHash('sha1').update(bytes).digest('hex'),
         },
@@ -209,12 +215,12 @@ describe('market npm registry', () => {
   });
 
   test('serves the listed tarball bytes, immutable', async () => {
-    const response = await get()('/api/market/npm/@automagik/omni-dsh/-/automagik-omni-dsh-2.261019.10.tgz');
+    const response = await get()('/api/market/npm/@automagik/bots-dsh/-/automagik-bots-dsh-2.261019.10.tgz');
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toBe('application/octet-stream');
     expect(response.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
-    expect(Buffer.from(await response.arrayBuffer()).equals(tarballs.get('@automagik/omni-dsh') as Buffer)).toBe(true);
-    const encoded = await get()('/api/market/npm/@automagik%2fomni-dsh/-/automagik-omni-dsh-2.261019.10.tgz');
+    expect(Buffer.from(await response.arrayBuffer()).equals(tarballs.get('@automagik/bots-dsh') as Buffer)).toBe(true);
+    const encoded = await get()('/api/market/npm/@automagik%2fbots-dsh/-/automagik-bots-dsh-2.261019.10.tgz');
     expect(encoded.status).toBe(200);
   });
 
@@ -230,11 +236,11 @@ describe('market npm registry', () => {
 
   test('serves no file the manifest does not list for that package', async () => {
     for (const path of [
-      '/api/market/npm/@automagik/omni-dsh/-/..%2fmarket.json',
-      '/api/market/npm/@automagik/omni-dsh/-/%2e%2e%2f%2e%2e%2fmarket.tgz',
-      '/api/market/npm/@automagik/omni-dsh/-/market.json',
-      '/api/market/npm/@automagik/omni-dsh/-/automagik-omni-new-dsh-2.261019.10.tgz',
-      '/api/market/npm/@automagik/omni-dsh/-/other.tgz/-/x.tgz',
+      '/api/market/npm/@automagik/bots-dsh/-/..%2fmarket.json',
+      '/api/market/npm/@automagik/bots-dsh/-/%2e%2e%2f%2e%2e%2fmarket.tgz',
+      '/api/market/npm/@automagik/bots-dsh/-/market.json',
+      '/api/market/npm/@automagik/bots-dsh/-/automagik-omni-new-dsh-2.261019.10.tgz',
+      '/api/market/npm/@automagik/bots-dsh/-/other.tgz/-/x.tgz',
       '/api/market/npm/@automagik/omni-gone-dsh/-/gone.tgz',
       '/api/market/npm/@someone/thing/-/thing-1.0.0.tgz',
       '/api/market/npm/..%2f..%2fetc',
@@ -263,7 +269,7 @@ describe('market page', () => {
     const html = await response.text();
     expect(html).toContain('Automagik marketplace');
     expect(html).toContain(`"indexUrl":"${PUBLIC}/api/market/index.json"`);
-    expect(html).toContain('"name":"@automagik/omni-dsh"');
+    expect(html).toContain('"name":"@automagik/bots-dsh"');
     expect(html).toContain('Settings → Plugins');
     expect(html).not.toContain('<script>alert(1)');
     expect(html).toContain('\\u003c/script>\\u003cscript>alert(1)');

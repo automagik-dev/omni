@@ -9,7 +9,7 @@ import { deflateRawSync } from 'node:zlib'
 import { BUN_VERSION, downloadBun, findBun, install, installArgs, runInstall, sandboxKey, unzipEntry } from '../src/host/omni-local.js'
 import { install as installLink, LINK_FILE } from '../src/host/omni-link.js'
 import { PLUGIN_VERSION } from '../src/host/version.js'
-import { install as installHooks } from '@automagik/omni-dsh/src/host/extend.js'
+import { install as installHooks } from '@automagik/bots-dsh/src/host/extend.js'
 
 const realFetch = globalThis.fetch
 afterEach(() => { globalThis.fetch = realFetch })

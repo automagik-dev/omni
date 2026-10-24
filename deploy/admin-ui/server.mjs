@@ -111,6 +111,47 @@ function packagesIn(dir) {
 }
 
 /**
+ * Packages earlier images shipped under another name: the Bot team and the welcome were
+ * @automagik/omni-dsh and @automagik/omni-ai-dsh while they lived in this repository. A new
+ * image moves a profile it finds to the new names (installProfile), so DSH does not run two
+ * copies of one plugin and the settings rows keep applying: DSH applies a profile row only to
+ * the package its `name` names.
+ */
+export const RENAMED = Object.freeze({
+  '@automagik/omni-dsh': '@automagik/bots-dsh',
+  '@automagik/omni-ai-dsh': '@automagik/welcome-dsh',
+});
+
+const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+
+/** A cordis patch file's text with each renamed package (and its subpaths) under its new name; null when unchanged. */
+export function renamePatch(text, renamed = RENAMED) {
+  let next = String(text);
+  for (const [from, to] of Object.entries(renamed)) {
+    next = next.replace(new RegExp(`(?<![\\w@/.-])${escapeRegExp(from)}(?![\\w.-])`, 'gm'), to);
+  }
+  return next === String(text) ? null : next;
+}
+
+/**
+ * Move a profile from the renamed packages to the new names the shipped profile carries: the
+ * old packages leave node_modules, and the profile's patch and DSH's own name the new ones. The
+ * team's home ($OMNI_HOME/ui) is not touched.
+ */
+export function migrateRenamed({ target, dshHome, shipped, renamed = RENAMED }) {
+  const moved = Object.entries(renamed).filter(([, to]) => Object.hasOwn(shipped.dependencies ?? {}, to));
+  for (const [from] of moved)
+    rmSync(join(target, 'node_modules', ...from.split('/')), { recursive: true, force: true });
+  const only = Object.fromEntries(moved);
+  for (const file of [join(target, 'cordis.patch.yml'), join(dshHome, 'cordis.patch.yml')]) {
+    if (moved.length === 0 || !existsSync(file)) continue;
+    const next = renamePatch(readFileSync(file, 'utf8'), only);
+    if (next !== null) writeFileSync(file, next);
+  }
+  return moved.map(([from]) => from);
+}
+
+/**
  * Put the image's profile in place under DSH_HOME/profiles/omni. It is copied, not linked:
  * dsh routes a plugin's imports to its own packages only for files inside the profile. A
  * profile from the same image (.build-id) stays as it is. Another image's gets the shipped
@@ -126,22 +167,24 @@ export function installProfile({ dshHome, source }) {
     mkdirSync(dirname(target), { recursive: true });
     cpSync(source, target, { recursive: true });
   } else {
+    const shipped = readJson(join(source, 'package.json'));
+    // A profile from an image that shipped the Bot team or the welcome under its old name.
+    const replaced = migrateRenamed({ target, dshHome, shipped });
     for (const name of packagesIn(join(source, 'node_modules'))) {
       rmSync(join(target, 'node_modules', name), { recursive: true, force: true });
       cpSync(join(source, 'node_modules', name), join(target, 'node_modules', name), { recursive: true });
     }
     rmSync(join(target, 'vendor'), { recursive: true, force: true });
     cpSync(join(source, 'vendor'), join(target, 'vendor'), { recursive: true });
-    const shipped = readJson(join(source, 'package.json'));
     const user = readJson(join(target, 'package.json')) ?? {};
     const added = Object.entries(user.dependencies ?? {}).filter(
-      ([name]) => !Object.hasOwn(shipped.dependencies, name),
+      ([name]) => !Object.hasOwn(shipped.dependencies, name) && !replaced.includes(name),
     );
     if (added.length > 0) shipped.dependencies = { ...shipped.dependencies, ...Object.fromEntries(added) };
     const bundles = shipped.dsh.profile.bundles;
     shipped.dsh.profile.bundles = [
       ...bundles,
-      ...(user.dsh?.profile?.bundles ?? []).filter((name) => !bundles.includes(name)),
+      ...(user.dsh?.profile?.bundles ?? []).filter((name) => !bundles.includes(name) && !replaced.includes(name)),
     ];
     writeFileSync(join(target, 'package.json'), `${JSON.stringify(shipped, null, 2)}\n`);
     for (const file of ['cordis.patch.yml', 'pnpm-workspace.yaml']) {

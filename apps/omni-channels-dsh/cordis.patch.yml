@@ -1,4 +1,4 @@
-# Mounts Omni's channels beside the Omni team (@automagik/omni-dsh, row omni-ui), whose
+# Mounts Omni's channels beside the Bot team (@automagik/bots-dsh, formerly @automagik/omni-dsh; row omni-ui), whose
 # runtime it injects as the omniTeam service; the browser half is discovered through the
 # package's dsh.client manifest and ./client export.
 #

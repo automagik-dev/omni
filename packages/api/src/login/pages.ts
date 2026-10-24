@@ -18,7 +18,7 @@
  * textContent, never as HTML.
  */
 
-// The Omni octopus (apps/omni-ui-dsh/src/client/characters.js), drawn for these pages.
+// The Omni octopus (apps/bots-dsh/src/client/characters.js in automagik-dev/automagik), drawn for these pages.
 const OCTOPUS_BODY =
   'M50 6C75 6 87 24 87 46C87 60 82 68 80 72C84 82 84 92 80 96C76 98 72 92 70 84C68 92 66 98 61 96C57 94 56 84 54 78C52 80 48 80 46 78C44 84 43 94 39 96C34 98 32 92 30 84C28 92 24 98 20 96C16 92 16 82 20 72C18 68 13 60 13 46C13 24 25 6 50 6Z';
 const OCTOPUS_SHADE =
@@ -251,7 +251,8 @@ start();`,
   );
 }
 
-const GET_APP = 'https://github.com/automagik-dev/omni-desktop/releases/latest';
+// The desktop app (Automagik's, formerly automagik-dev/omni-desktop): its latest release.
+const GET_APP = 'https://github.com/automagik-dev/automagik/releases/latest';
 
 /**
  * Open the Omni app on this computer, connected to this Omni: an omni:// link and how to get

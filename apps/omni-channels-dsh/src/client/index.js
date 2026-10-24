@@ -17,7 +17,7 @@ const { ClockIcon } = icons
 
 // Omni's channels on the Bot surface: the Channels page and chats, the automations and
 // their board, the cards of Omni's calls, and the Connect Omni onboarding step. Everything
-// goes through the team's registries (@automagik/omni-dsh/client), so the Bot surface knows
+// goes through the team's registries (@automagik/bots-dsh/client), so the Bot surface knows
 // none of it.
 
 export const inject = ['slots']

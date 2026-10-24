@@ -3,16 +3,19 @@
 // the packages that `bun run harness` installs in dev/harness, else the nearest
 // deepseek-harness/ checkout in a folder above the plugin, else the same search from the
 // plugin's place in the main worktree (a git worktree has no checkout of its own). The
-// Omni team (@automagik/omni-dsh) is this repository's apps/omni-ui-dsh, or OMNI_DSH_CORE;
-// tests compose its runtime with this plugin's, so they may read its files too.
+// Bot team (@automagik/bots-dsh, formerly @automagik/omni-dsh) is automagik-dev/automagik's
+// apps/bots-dsh at the release apps/automagik.json pins (apps/automagik.mjs fetches it into
+// apps/.automagik), or OMNI_DSH_CORE; tests compose its runtime with this plugin's, so they
+// may read its files too.
 import { execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { registerHooks } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { checkoutSource } from '../../automagik.mjs'
 
 const plugin = resolve(import.meta.dirname, '..')
-const core = resolve(process.env.OMNI_DSH_CORE ?? join(plugin, '..', 'omni-ui-dsh'))
+const core = resolve(process.env.OMNI_DSH_CORE ?? join(checkoutSource(), 'apps', 'bots-dsh'))
 const above = (start) => {
   for (let dir = start; ; dir = dirname(dir)) {
     if (existsSync(join(dir, 'deepseek-harness'))) return join(dir, 'deepseek-harness')
@@ -44,6 +47,7 @@ const anchor = pathToFileURL(existsSync(base) ? base : resolve(harness, 'package
 const owners = [plugin, core].map(dir => `${pathToFileURL(dir).href}/`)
 const coreUrl = `${pathToFileURL(core).href}/`
 const clientShim = pathToFileURL(join(plugin, 'test', 'omni-client.js')).href
+const TEAM_NAMES = ['@automagik/bots-dsh', '@automagik/omni-dsh']
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -51,9 +55,12 @@ registerHooks({
     if (specifier.startsWith('@deepseek-ai/') && fromOurs) return nextResolve(specifier, { ...context, parentURL: anchor })
     // The team's entry, or any file of it (its test helpers), by path rather than exports;
     // its client bundle as DSH hands it over (omni-client.js).
-    if (specifier === '@automagik/omni-dsh') return nextResolve(`${coreUrl}index.js`, context)
-    if (specifier === '@automagik/omni-dsh/client') return nextResolve(clientShim, context)
-    if (specifier.startsWith('@automagik/omni-dsh/')) return nextResolve(`${coreUrl}${specifier.slice('@automagik/omni-dsh/'.length)}`, context)
+    // Under its name and its former one.
+    for (const name of TEAM_NAMES) {
+      if (specifier === name) return nextResolve(`${coreUrl}index.js`, context)
+      if (specifier === `${name}/client`) return nextResolve(clientShim, context)
+      if (specifier.startsWith(`${name}/`)) return nextResolve(`${coreUrl}${specifier.slice(name.length + 1)}`, context)
+    }
     return nextResolve(specifier, context)
   },
 })

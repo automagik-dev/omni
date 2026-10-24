@@ -3,17 +3,21 @@
 //   <out>/runtime/node_modules   the pinned DeepSeek Harness (runtime/package.json + lock)
 //   <out>/profile/               the dsh profile the image starts: package.json,
 //                                cordis.patch.yml, pnpm-workspace.yaml, vendor/ (the plugins'
-//                                tarballs) and node_modules holding only Omni's plugins
+//                                tarballs) and node_modules holding only the plugins
 //
-// The plugins are the @automagik packages profile/package.json depends on, packed from this
-// checkout's apps/*-dsh with `npm pack`, so the image ships exactly what each package
-// publishes, each at this Omni's version. Their @deepseek-ai peers are not installed again:
-// dsh supplies them. Native packages are per platform: run this on the platform the image is for.
+// The plugins are the @automagik packages profile/package.json depends on: Omni's own, packed
+// from this checkout's apps/*-dsh with `npm pack` at this Omni's version, and Automagik's (the
+// Bot team and the welcome), the tarballs of the Automagik release apps/automagik.json pins,
+// downloaded (or taken from AUTOMAGIK_TARBALLS) and refused unless their integrity is the
+// pinned one. The image ships exactly what each package publishes. Their @deepseek-ai peers
+// are not installed again: dsh supplies them. Native packages are per platform: run this on the
+// platform the image is for.
 // Usage: node deploy/admin-ui/prepare.mjs <out>
 import { execFileSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { fetchTarballs, readPin } from '../../apps/automagik.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const OMNI = resolve(HERE, '..', '..');
@@ -38,21 +42,26 @@ const folders = Object.fromEntries(
     .filter((name) => name.endsWith('-dsh') && existsSync(join(apps, name, 'package.json')))
     .map((name) => [readJson(join(apps, name, 'package.json')).name, join(apps, name)]),
 );
-// Omni's own plugins (apps/*-dsh, packed at this version) and add-ons from npm at the exact
-// version the profile names (vetted there).
+// Omni's own plugins (apps/*-dsh, packed at this version), Automagik's (the pinned release's
+// tarballs) and add-ons from npm at the exact version the profile names (vetted there).
+const automagik = readPin();
 const shipped = [];
+const fromAutomagik = [];
 const addons = {};
 for (const [name, spec] of Object.entries(readJson(join(HERE, 'profile', 'package.json')).dependencies)) {
   if (folders[name]) shipped.push(name);
+  else if (automagik.packages[name]) fromAutomagik.push(name);
   else if (/^\d+\.\d+\.\d+(-[\w.]+)?$/.test(spec)) addons[name] = spec;
   else
     throw new Error(
-      `profile/package.json depends on ${name}@${spec}: neither apps/*-dsh nor an add-on at an exact version`,
+      `profile/package.json depends on ${name}@${spec}: neither apps/*-dsh, nor Automagik's (apps/automagik.json), nor an add-on at an exact version`,
     );
 }
 
 // The DeepSeek Harness the image runs is the one Omni's plugins are tested against.
-const tested = readJson(join(apps, 'omni-ui-dsh', 'dev', 'harness', 'package.json')).dependencies['@deepseek-ai/dsh'];
+const tested = readJson(join(apps, 'omni-channels-dsh', 'dev', 'harness', 'package.json')).dependencies[
+  '@deepseek-ai/dsh'
+];
 const pinned = readJson(join(HERE, 'runtime', 'package.json')).dependencies['@deepseek-ai/dsh'];
 if (tested !== pinned)
   throw new Error(`runtime/package.json pins dsh ${pinned}, but Omni's plugins are tested on ${tested}`);
@@ -75,6 +84,11 @@ const packed = shipped.map((name) => {
   if (info.version !== version) throw new Error(`${name} is ${info.version}, not Omni's ${version}`);
   return { name, version: info.version, tarball: join(packs, info.filename) };
 });
+say(`taking ${fromAutomagik.join(', ')} from Automagik ${automagik.version}`);
+const fetched = (await fetchTarballs(packs, { pin: automagik })).filter((tarball) =>
+  fromAutomagik.includes(tarball.name),
+);
+packed.push(...fetched.map(({ name, version: at, path }) => ({ name, version: at, tarball: path })));
 
 // The profile is installed the way DSH installs any plugin: the pinned dsh's own
 // `dsh plugin --profile omni install` (pnpm from the runtime, hoisted, no install scripts) in
@@ -125,6 +139,6 @@ rmSync(packs, { recursive: true, force: true });
 const dsh = readJson(join(runtimeDir, 'node_modules', '@deepseek-ai', 'dsh', 'package.json')).version;
 writeFileSync(
   join(OUT, 'versions.json'),
-  `${JSON.stringify({ omni: version, dsh, plugins: Object.fromEntries(packed.map((plugin) => [plugin.name, plugin.version])), addons }, null, 2)}\n`,
+  `${JSON.stringify({ omni: version, automagik: automagik.version, dsh, plugins: Object.fromEntries(packed.map((plugin) => [plugin.name, plugin.version])), addons }, null, 2)}\n`,
 );
 say(`ready: Omni ${version}, dsh ${dsh}`);

@@ -17,12 +17,12 @@ async function load() {
   const bundle = await build({
     stdin: { contents: entry, resolveDir: fileURLToPath(new URL('../src/client/', import.meta.url)), loader: 'js' },
     bundle: true, format: 'cjs', platform: 'node', write: false, logLevel: 'silent',
-    external: ['react', 'react-dom', '@automagik/omni-dsh/client'],
+    external: ['react', 'react-dom', '@automagik/bots-dsh/client'],
     loader: { '.css': 'text' },
   })
   const module = { exports: {} }
   const react = { createElement: () => null, useState: initial => [initial, () => {}], useEffect: () => {}, useRef: current => ({ current }), useCallback: fn => fn }
-  runInNewContext(bundle.outputFiles[0].text, { module, exports: module.exports, URL, URLSearchParams, require: name => ({ react, 'react-dom': { createPortal: node => node }, '@automagik/omni-dsh/client': { omni } })[name] })
+  runInNewContext(bundle.outputFiles[0].text, { module, exports: module.exports, URL, URLSearchParams, require: name => ({ react, 'react-dom': { createPortal: node => node }, '@automagik/bots-dsh/client': { omni } })[name] })
   // Objects made in the bundle's realm come back as plain ones, so they compare as values.
   const plain = value => (value !== null && typeof value === 'object' ? JSON.parse(JSON.stringify(value)) : value)
   return Object.fromEntries(Object.entries(module.exports).map(([name, value]) => [name, typeof value === 'function' ? (...args) => plain(value(...args)) : value]))

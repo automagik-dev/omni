@@ -2,12 +2,12 @@
 # This dsh is Omni's alone, so it also takes Omni's keyless web search as the default.
 - insert:
     - id: web-search-auto
-      name: '@automagik/omni-dsh/web-search'
+      name: '@automagik/bots-dsh/web-search'
 - id: web
   config:
     searchProvider: auto
     fetchProvider: http
-# The Omni octopus opens this app (@automagik/omni-ai-dsh: Welcome, Connect Omni, Connect
+# The Omni octopus opens this app (@automagik/welcome-dsh: Welcome, Connect Omni, Connect
 # AI), so DSH's own welcome notice and credential step stay off here; DeepSeek's sign-in is
 # one of Connect AI's tiles. DSH compares the notice version exactly: it stays a quoted string.
 - id: ui-settings-general

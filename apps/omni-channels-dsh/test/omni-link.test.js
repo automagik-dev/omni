@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { afterEach, test } from 'node:test'
 import { install as installOmni, KEY } from '../src/host/omni.js'
 import { cleanOmniUrl, install, LINK_FILE, marketUrlAllowed } from '../src/host/omni-link.js'
-import { install as installHooks } from '@automagik/omni-dsh/src/host/extend.js'
+import { install as installHooks } from '@automagik/bots-dsh/src/host/extend.js'
 
 const realFetch = globalThis.fetch
 afterEach(() => { globalThis.fetch = realFetch })

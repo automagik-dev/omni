@@ -16,13 +16,30 @@ test('client.js is the build of src/client', async () => {
 })
 
 test('the team\'s and the channels\' client bundles are named in dsh.client.external', () => {
-  assert.deepEqual(manifest.dsh.client, { platform: 'web', external: ['@automagik/omni-dsh/client', '@automagik/omni-channels-dsh/client'] })
+  assert.deepEqual(manifest.dsh.client, { platform: 'web', external: ['@automagik/bots-dsh/client', '@automagik/omni-dsh/client', '@automagik/omni-channels-dsh/client'] })
   assert.deepEqual(EXTERNAL_BUNDLES, manifest.dsh.client.external)
 })
 
 test('canvases come in the fence the team\'s chat looks for', async () => {
   const { FENCE: chat } = await import(teamUrl('src/client/canvas-text.js'))
   assert.equal(FENCE, chat)
+})
+
+// A DSH that still runs the team as @automagik/omni-dsh hands its client over under that name.
+test('client.js takes the team\'s client under its former name when the new one is missing', () => {
+  const { team, channels } = loadClients()
+  const registrations = []
+  runInNewContext(committed(), { window: { __ModuleLoader__: { load: registration => registrations.push(registration) } } })
+  const [{ factory }] = registrations
+  const modules = { ...PLATFORM, '@automagik/omni-dsh/client': team, '@automagik/omni-channels-dsh/client': channels }
+  const requested = []
+  const exports = factory((specifier) => {
+    requested.push(specifier)
+    if (!(specifier in modules)) throw new Error(`no module ${specifier}`)
+    return modules[specifier]
+  })
+  assert.deepEqual(requested.filter(name => name.includes('-dsh/')).slice(0, 2), ['@automagik/bots-dsh/client', '@automagik/omni-dsh/client'])
+  assert.deepEqual(Object.keys(exports), ['apply'])
 })
 
 // DSH runs client.js as a classic script that hands a factory to the module loader; the
@@ -34,7 +51,7 @@ test('client.js requires the platform and the two bundles it names, and draws sh
   assert.equal(registrations.length, 1)
   const [{ id, factory }] = registrations
   assert.equal(id, '@automagik/omni-canvas-dsh')
-  const modules = { ...PLATFORM, '@automagik/omni-dsh/client': team, '@automagik/omni-channels-dsh/client': channels }
+  const modules = { ...PLATFORM, '@automagik/bots-dsh/client': team, '@automagik/omni-channels-dsh/client': channels }
   const requested = new Set()
   const exports = factory((specifier) => {
     requested.add(specifier)
@@ -42,7 +59,7 @@ test('client.js requires the platform and the two bundles it names, and draws sh
     return modules[specifier]
   })
   // react-dom stays external in case OpenUI ever imports it; today nothing does.
-  assert.deepEqual([...requested].sort(), ['@automagik/omni-channels-dsh/client', '@automagik/omni-dsh/client', 'react', 'react/jsx-runtime'])
+  assert.deepEqual([...requested].sort(), ['@automagik/bots-dsh/client', '@automagik/omni-channels-dsh/client', 'react', 'react/jsx-runtime'])
   assert.ok([...requested].every(name => PLATFORM_MODULES.includes(name) || EXTERNAL_BUNDLES.includes(name)))
   assert.equal(Object.prototype.toString.call(exports), '[object Module]')
   assert.deepEqual(Object.keys(exports), ['apply'])

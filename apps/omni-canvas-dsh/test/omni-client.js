@@ -15,8 +15,10 @@ export const PLATFORM = {
 }
 
 function run(dir, modules) {
+  // The bundle's own registration comes first; the Bot team's client also registers under
+  // its former name (@automagik/omni-dsh), which hands over the same module.
   let registration
-  runInNewContext(readFileSync(join(dir, 'client.js'), 'utf8'), { window: { __ModuleLoader__: { load: (entry) => { registration = entry } } } })
+  runInNewContext(readFileSync(join(dir, 'client.js'), 'utf8'), { window: { __ModuleLoader__: { load: (entry) => { registration ??= entry } } } })
   return registration.factory((name) => {
     if (!(name in modules)) throw new Error(`no module ${name}`)
     return modules[name]
@@ -26,7 +28,7 @@ function run(dir, modules) {
 // Fresh instances of both, the channels one on the team one.
 export function loadClients(platform = PLATFORM) {
   const team = run(process.env.OMNI_DSH_CORE, platform)
-  const channels = run(process.env.OMNI_DSH_CHANNELS, { ...platform, '@automagik/omni-dsh/client': team })
+  const channels = run(process.env.OMNI_DSH_CHANNELS, { ...platform, '@automagik/bots-dsh/client': team })
   return { team, channels }
 }
 

@@ -1,5 +1,0 @@
-[install]
-# The @deepseek-ai peers come from the dsh profile that loads the plugin (dev/harness in tests).
-# Keep Bun from installing them here: only the build tools in devDependencies belong in
-# node_modules.
-peer = false

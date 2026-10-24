@@ -1,14 +1,14 @@
 // The Omni team, its channels and this plugin, as DSH composes them: the team's
-// createRuntime (@automagik/omni-dsh), the channels runtime on top of it
+// createRuntime (@automagik/bots-dsh), the channels runtime on top of it
 // (@automagik/omni-channels-dsh), then this plugin's on top of that. All three share one
 // fake plugin context, so its records hold what any of them registered, in order.
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { apply as applyTeam, createRuntime as createTeam } from '@automagik/omni-dsh'
+import { apply as applyTeam, createRuntime as createTeam } from '@automagik/bots-dsh'
 import { apply as applyChannels, createRuntime as createChannels } from '@automagik/omni-channels-dsh'
-import { fakeContext } from '@automagik/omni-dsh/test/fake-ctx.js'
+import { fakeContext } from '@automagik/bots-dsh/test/fake-ctx.js'
 import { apply, createRuntime } from '../index.js'
 
 export { fakeContext }

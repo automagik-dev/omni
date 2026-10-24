@@ -3,12 +3,17 @@
  * The Automagik plugin marketplace index (marketplace/automagik.json), a DSH market index (format 1).
  *
  *   bun scripts/marketplace.ts check        validate the index; exit 1 on the first problem
- *   bun scripts/marketplace.ts pin <ref>    point Omni's own git entries at <ref>
+ *   bun scripts/marketplace.ts pin <ref>    point Omni's own git entries at <ref> (and Automagik's at the pin)
+ *   bun scripts/marketplace.ts automagik    list Automagik's plugins at the release apps/automagik.json pins
  *
  * `check` runs DSH's own parser (parseMarketIndex) and then, for every git entry from this
  * repository, proves that the pinned commit is reachable from HEAD and holds, at the entry's
  * path, a package.json with the entry's name and version. A market installs exactly that
  * commit, so an entry that fails here fails in every user's DSH.
+ *
+ * Automagik's plugins (the Bot team Omni's channels and canvases build on, and the welcome) are
+ * listed from automagik-dev/automagik at the release apps/automagik.json pins: `check` holds
+ * them to that pin, and `pin` and `automagik` keep them on it.
  *
  * automagik-dev/dsh-marketplace lists this index at each Omni release, for DSH users without an
  * Omni (its git entries pinned to the release). Every Omni also serves the Automagik
@@ -20,8 +25,12 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseMarketIndex } from '@deepseek-ai/dsh-plugin-market-index';
+// @ts-expect-error -- plain Node ESM without types (apps/automagik.mjs), shared with the admin UI image.
+import { readPin } from '../apps/automagik.mjs';
 
 export const REPO_URL = 'https://github.com/automagik-dev/omni';
+/** Where the Bot team and the welcome live since they left this repository. */
+export const AUTOMAGIK_URL = 'https://github.com/automagik-dev/automagik';
 export const INDEX_PATH = join(import.meta.dir, '..', 'marketplace', 'automagik.json');
 export const INDEX_URL = 'https://raw.githubusercontent.com/automagik-dev/omni/labs/marketplace/automagik.json';
 /**
@@ -57,6 +66,18 @@ const isOurs = (source: IndexVersion['source']): source is GitSource =>
   source.type === 'git' && source.url.replace(/\.git$/, '') === REPO_URL;
 const isVettedFork = (source: IndexVersion['source']): source is GitSource =>
   source.type === 'git' && VETTED_FORKS.includes(source.url.replace(/\.git$/, ''));
+const isAutomagik = (source: IndexVersion['source']): source is GitSource =>
+  source.type === 'git' && source.url.replace(/\.git$/, '') === AUTOMAGIK_URL;
+
+interface AutomagikPin {
+  version: string;
+  commit: string;
+  packages: Record<string, { version: string }>;
+}
+const pinnedAutomagik = (): AutomagikPin => readPin();
+
+/** An Automagik plugin's folder in its repository: apps/<name without the scope>. */
+const automagikPath = (name: string) => `apps/${name.replace(/^@automagik\//, '')}`;
 
 function git(cwd: string, args: string[], timeout?: number): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout }).trim();
@@ -97,7 +118,12 @@ export function forkManifest(url: string, commit: string, path: string): { name?
 }
 
 /** Every problem with the index, empty when it is fit to serve. */
-export function checkIndex(value: unknown, repoDir: string, readFork = forkManifest): string[] {
+export function checkIndex(
+  value: unknown,
+  repoDir: string,
+  readFork = forkManifest,
+  automagik: AutomagikPin = pinnedAutomagik(),
+): string[] {
   try {
     parseMarketIndex(value, INDEX_URL);
   } catch (error) {
@@ -107,6 +133,23 @@ export function checkIndex(value: unknown, repoDir: string, readFork = forkManif
   for (const plugin of (value as Index).plugins) {
     for (const entry of plugin.versions) {
       const at = `${plugin.name}@${entry.version}`;
+      if (isAutomagik(entry.source)) {
+        const pinned = automagik.packages[plugin.name];
+        const { commit, path = '.' } = entry.source;
+        if (!pinned || entry.version !== pinned.version || commit !== automagik.commit) {
+          problems.push(
+            `${at}: Automagik's plugins are listed at the release apps/automagik.json pins (${automagik.version}, ${automagik.commit.slice(0, 9)}): bun scripts/marketplace.ts automagik`,
+          );
+          continue;
+        }
+        const manifest = readFork(AUTOMAGIK_URL, commit, path);
+        if (!manifest) problems.push(`${at}: ${AUTOMAGIK_URL} has no ${path}/package.json at ${commit}`);
+        else if (manifest.name !== plugin.name || manifest.version !== entry.version)
+          problems.push(
+            `${at}: ${AUTOMAGIK_URL} ${commit}:${path}/package.json is ${manifest.name}@${manifest.version}`,
+          );
+        continue;
+      }
       if (isVettedFork(entry.source)) {
         const { url, commit, path = '.' } = entry.source;
         const manifest = /^[0-9a-f]{40}$/.test(commit) ? readFork(url, commit, path) : null;
@@ -116,7 +159,9 @@ export function checkIndex(value: unknown, repoDir: string, readFork = forkManif
         continue;
       }
       if (entry.source.type === 'git' && !isOurs(entry.source)) {
-        problems.push(`${at}: git sources must come from ${REPO_URL} or a vetted fork (${VETTED_FORKS.join(', ')})`);
+        problems.push(
+          `${at}: git sources must come from ${REPO_URL}, ${AUTOMAGIK_URL} or a vetted fork (${VETTED_FORKS.join(', ')})`,
+        );
         continue;
       }
       if (!isOurs(entry.source)) continue;
@@ -167,6 +212,32 @@ export function pinIndex(value: Index, repoDir: string, ref: string): Index {
   return value;
 }
 
+/**
+ * List Automagik's plugins at the pinned release: one version each, a git source at the pin's
+ * commit with the plugin's folder. Entries the pin does not name are left as they are.
+ */
+export function pinAutomagik(
+  value: Index,
+  automagik: AutomagikPin = pinnedAutomagik(),
+  publishTimestamp?: number,
+): Index {
+  for (const plugin of value.plugins) {
+    const pinned = automagik.packages[plugin.name];
+    if (!pinned) continue;
+    const listed = plugin.versions[0];
+    const same = listed && isAutomagik(listed.source) && listed.source.commit === automagik.commit;
+    plugin.versions = [
+      {
+        version: pinned.version,
+        publishTimestamp: same ? listed.publishTimestamp : (publishTimestamp ?? Math.floor(Date.now() / 1000)),
+        source: { type: 'git', url: AUTOMAGIK_URL, commit: automagik.commit, path: automagikPath(plugin.name) },
+        ...(listed?.engines ? { engines: listed.engines } : {}),
+      },
+    ];
+  }
+  return value;
+}
+
 if (import.meta.main) {
   const [command, ref] = process.argv.slice(2);
   const repoDir = join(import.meta.dir, '..');
@@ -177,10 +248,13 @@ if (import.meta.main) {
     if (problems.length > 0) process.exit(1);
     console.log(`marketplace: ${index.plugins.length} plugins ok`);
   } else if (command === 'pin' && ref) {
-    writeFileSync(INDEX_PATH, `${JSON.stringify(pinIndex(index, repoDir, ref), null, 2)}\n`);
+    writeFileSync(INDEX_PATH, `${JSON.stringify(pinAutomagik(pinIndex(index, repoDir, ref)), null, 2)}\n`);
     console.log(`marketplace: pinned to ${ref}`);
+  } else if (command === 'automagik') {
+    writeFileSync(INDEX_PATH, `${JSON.stringify(pinAutomagik(index), null, 2)}\n`);
+    console.log(`marketplace: Automagik's plugins at ${pinnedAutomagik().version}`);
   } else {
-    console.error('usage: bun scripts/marketplace.ts check | pin <ref>');
+    console.error('usage: bun scripts/marketplace.ts check | pin <ref> | automagik');
     process.exit(2);
   }
 }

@@ -12,7 +12,7 @@ import { call, CHARACTERS, t } from './core.js'
 
 // The rail names only the onboarding steps this DSH has. Each plugin that brings one
 // announces it on a registry shared through globalThis (the same contract as
-// @automagik/omni-ai-dsh's stage.js): this one brings omni-connect.
+// @automagik/welcome-dsh's stage.js): this one brings omni-connect.
 const RAIL = [['omni-welcome', 'Welcome'], ['omni-connect', 'Connect Omni'], ['omni-connect-ai', 'Connect AI']]
 const ANNOUNCED = Symbol.for('automagik.omni.onboarding-steps')
 

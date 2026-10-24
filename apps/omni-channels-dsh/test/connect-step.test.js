@@ -121,7 +121,7 @@ test('the step registers on settings.onboarding with its stage styles', async ()
   const bundle = await build({
     entryPoints: [fileURLToPath(new URL('../src/client/connect-step.js', import.meta.url))],
     bundle: true, format: 'cjs', platform: 'node', write: false, logLevel: 'silent',
-    external: ['react', 'react-dom', '@automagik/omni-dsh/client'],
+    external: ['react', 'react-dom', '@automagik/bots-dsh/client'],
     loader: { '.css': 'text' },
   })
   const module = { exports: {} }
@@ -130,7 +130,7 @@ test('the step registers on settings.onboarding with its stage styles', async ()
     useState: initial => [typeof initial === 'function' ? initial() : initial, () => {}],
     useEffect: () => {}, useRef: current => ({ current }), useCallback: fn => fn, useMemo: make => make(),
   }
-  runInNewContext(bundle.outputFiles[0].text, { module, exports: module.exports, require: name => ({ react, 'react-dom': { createPortal: node => node }, '@automagik/omni-dsh/client': { omni } })[name] })
+  runInNewContext(bundle.outputFiles[0].text, { module, exports: module.exports, require: name => ({ react, 'react-dom': { createPortal: node => node }, '@automagik/bots-dsh/client': { omni } })[name] })
   const { registerConnectStep, ConnectOmniStep } = module.exports
 
   const injected = []

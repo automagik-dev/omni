@@ -3,17 +3,23 @@
  *
  * omni desktop [--path <file>] [--tag <tag>] [--dry-run]
  *
- * Opens the Omni desktop app (automagik-dev/omni-desktop): the Omni UI on a
- * DeepSeek Harness of its own, linked to an Omni by a code sent over WhatsApp.
- * It takes the build for this machine from that repository's GitHub releases
- * (tags `v<version>`, one per Omni release, at Omni's version), checks it
- * against the release's SHA256SUMS, keeps it in
+ * Opens the Automagik desktop app with Omni preloaded: the Bot team and Omni's
+ * channels on a DeepSeek Harness of its own, linked to an Omni by a code. It
+ * takes the build for this machine from automagik-dev/automagik's GitHub
+ * releases (tags `v<version>`, Automagik's version: the newest that has this
+ * machine's build), checks it against the release's SHA256SUMS, keeps it in
  * ~/.omni/desktop/app/<tag>/, and opens it. `--path` opens a build you already
- * have instead.
+ * have instead. Releases from before the app moved there (automagik-dev/omni-desktop)
+ * are taken only when Automagik has no build for this machine yet.
+ *
+ * The preload: the app's home keeps `preload` (`omni`), written here before the app
+ * opens, so the app (and its welcome, which lists Omni first and starts with it on the
+ * team) knows what it was opened for however it is installed, a dmg dragged to
+ * Applications included; the AppImage is also started with `--preload=omni`.
  *
  * Linux x64 (and WSL, through WSLg) gets the AppImage, unpacked once into the
  * cache and run from there, so it needs no FUSE; macOS gets the
- * dmg, opened so you can drag Omni to Applications. Windows itself is not
+ * dmg, opened so you can drag Automagik to Applications. Windows itself is not
  * supported: run this inside WSL.
  */
 
@@ -25,14 +31,26 @@ import { basename, join, resolve } from 'node:path';
 import { Command } from 'commander';
 import { z } from 'zod';
 import * as output from '../output.js';
-import { VERSION } from '../version.js';
 
-const RELEASES_URL = 'https://api.github.com/repos/automagik-dev/omni-desktop/releases?per_page=50';
+/** The Automagik desktop app's releases. */
+const RELEASES_URL = 'https://api.github.com/repos/automagik-dev/automagik/releases?per_page=50';
+/** Builds released before the app moved to Automagik; taken only when Automagik has none for this machine. */
+const LEGACY_RELEASES_URL = 'https://api.github.com/repos/automagik-dev/omni-desktop/releases?per_page=50';
 export const DESKTOP_TAG_PREFIX = 'v';
 const SUMS_ASSET = 'SHA256SUMS';
+/** What `omni desktop` opens the app for. */
+export const PRELOAD = 'omni';
 
 export type DesktopTarget =
-  | { supported: true; os: 'linux' | 'mac'; wsl: boolean; asset: RegExp; label: string }
+  | {
+      supported: true;
+      os: 'linux' | 'mac';
+      wsl: boolean;
+      asset: RegExp;
+      label: string;
+      /** A file the release must carry too: on macOS the update feed, which only a signed build has. */
+      requires?: string;
+    }
   | { supported: false; reason: string };
 
 /** Which build fits this machine. `procVersion` is /proc/version, which names Microsoft under WSL. */
@@ -50,7 +68,15 @@ export function desktopTarget(platform: NodeJS.Platform, arch: string, procVersi
   }
   if (platform === 'darwin') {
     if (arch !== 'arm64' && arch !== 'x64') return { supported: false, reason: `There is no macOS ${arch} build.` };
-    return { supported: true, os: 'mac', wsl: false, asset: new RegExp(`-mac-${arch}\\.dmg$`), label: `macOS ${arch}` };
+    // An unsigned dmg does not open on macOS: only a signed release carries latest-mac.yml.
+    return {
+      supported: true,
+      os: 'mac',
+      wsl: false,
+      asset: new RegExp(`-mac-${arch}\\.dmg$`),
+      label: `macOS ${arch}`,
+      requires: 'latest-mac.yml',
+    };
   }
   if (platform === 'win32') {
     return {
@@ -58,7 +84,7 @@ export function desktopTarget(platform: NodeJS.Platform, arch: string, procVersi
       reason: 'Windows itself is not supported. Run `npx @automagik/omni desktop` inside WSL.',
     };
   }
-  return { supported: false, reason: `There is no Omni desktop build for ${platform}.` };
+  return { supported: false, reason: `There is no Automagik desktop build for ${platform}.` };
 }
 
 const ReleaseSchema = z.object({
@@ -70,14 +96,26 @@ const ReleaseSchema = z.object({
 export type DesktopRelease = z.infer<typeof ReleaseSchema>;
 
 /**
- * The release to use: the one tagged `tag`; else the one built with this CLI's own version
- * (every Omni release gets a desktop release at its version), so the app matches the CLI;
- * else the newest published desktop release (GitHub lists newest first).
+ * The release to use: the one tagged `tag`; else the newest published release (GitHub lists
+ * newest first) that has this machine's build, its SHA256SUMS and, where the target needs it,
+ * the file only a signed build carries.
  */
-export function pickRelease(releases: DesktopRelease[], tag?: string, version?: string): DesktopRelease | undefined {
+export function pickRelease(
+  releases: DesktopRelease[],
+  tag?: string,
+  target?: Extract<DesktopTarget, { supported: true }>,
+): DesktopRelease | undefined {
   const desktop = releases.filter((release) => !release.draft && release.tag_name.startsWith(DESKTOP_TAG_PREFIX));
   if (tag) return desktop.find((release) => release.tag_name === tag);
-  return desktop.find((release) => release.tag_name === `${DESKTOP_TAG_PREFIX}${version}`) ?? desktop[0];
+  const has = (release: DesktopRelease, test: (name: string) => boolean) =>
+    release.assets.some((asset) => test(asset.name));
+  return desktop.find(
+    (release) =>
+      !target ||
+      (has(release, (name) => target.asset.test(name)) &&
+        has(release, (name) => name === SUMS_ASSET) &&
+        (!target.requires || has(release, (name) => name === target.requires))),
+  );
 }
 
 /** `sha256sum` output: "<hex>  <name>" per line. */
@@ -91,6 +129,22 @@ export function parseSums(text: string): Map<string, string> {
 }
 
 export const sha256Of = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
+
+/** The desktop app's own home: OMNI_DESKTOP_HOME, else $OMNI_HOME/desktop, else ~/.omni/desktop (as the app reads it). */
+export function desktopHome(env: NodeJS.ProcessEnv = process.env): string {
+  if (env.OMNI_DESKTOP_HOME?.trim()) return resolve(env.OMNI_DESKTOP_HOME.trim());
+  const omni = env.OMNI_HOME?.trim() ? resolve(env.OMNI_HOME.trim()) : join(homedir(), '.omni');
+  return join(omni, 'desktop');
+}
+
+/** Say what the app is opened for: its home's `preload` file, which the app reads at every start. */
+export function writePreload(env: NodeJS.ProcessEnv = process.env, preload = PRELOAD): string {
+  const home = desktopHome(env);
+  mkdirSync(home, { recursive: true });
+  const file = join(home, 'preload');
+  writeFileSync(file, `${preload}\n`);
+  return file;
+}
 
 /** Where downloaded builds are kept: $OMNI_HOME/desktop/app, else ~/.omni/desktop/app. */
 export function appCacheDir(env: NodeJS.ProcessEnv = process.env): string {
@@ -106,14 +160,17 @@ export function extractionDir(file: string, env: NodeJS.ProcessEnv = process.env
   return join(appCacheDir(env), 'extracted', basename(file).replace(/\.AppImage$/, ''));
 }
 
-/** How to open a build: the extracted AppImage's AppRun on Linux, `open` for a dmg on macOS. */
+/**
+ * How to open a build: the extracted AppImage's AppRun on Linux, with the preload; `open` for a
+ * dmg on macOS (the app, dragged to Applications, reads the preload from its home).
+ */
 export function launchPlan(
   file: string,
   target: Extract<DesktopTarget, { supported: true }>,
   extracted: string,
 ): { command: string; args: string[] } {
   if (target.os === 'mac') return { command: 'open', args: [file] };
-  return { command: join(extracted, 'squashfs-root', 'AppRun'), args: [] };
+  return { command: join(extracted, 'squashfs-root', 'AppRun'), args: [`--preload=${PRELOAD}`] };
 }
 
 /**
@@ -178,6 +235,7 @@ async function fetchBuild(
 }
 
 function open(file: string, target: Extract<DesktopTarget, { supported: true }>): void {
+  writePreload();
   const extracted = extractionDir(file);
   if (target.os === 'linux') ensureExtracted(file, extracted);
   const plan = launchPlan(file, target, extracted);
@@ -206,12 +264,17 @@ function openLocal(path: string, target: Supported, dryRun: boolean): void {
 /** The build to open from the releases, or null after saying why there is none (or what a dry run would do). */
 async function releaseBuild(target: Supported, options: DesktopOptions): Promise<string | null> {
   const releases = z.array(ReleaseSchema).parse(await fetchJson(RELEASES_URL));
-  const release = pickRelease(releases, options.tag, VERSION);
+  let release = pickRelease(releases, options.tag, target);
+  if (!release && !options.tag) {
+    // No Automagik build for this machine yet (a macOS one is published only signed).
+    release = pickRelease(z.array(ReleaseSchema).parse(await fetchJson(LEGACY_RELEASES_URL)), undefined, target);
+    if (release) output.info(`Taking ${release.tag_name} from automagik-dev/omni-desktop; it updates itself.`);
+  }
   if (!release) {
-    output.error(
+    return output.error(
       options.tag
         ? `There is no desktop release ${options.tag}.`
-        : `There is no Omni desktop release yet (tags ${DESKTOP_TAG_PREFIX}*). Build one from automagik-dev/omni-desktop and open it with --path.`,
+        : `There is no Automagik desktop release for ${target.label} yet (tags ${DESKTOP_TAG_PREFIX}*). Build one from automagik-dev/automagik (apps/desktop) and open it with --path.`,
     );
   }
   if (options.dryRun) {
@@ -224,7 +287,7 @@ async function releaseBuild(target: Supported, options: DesktopOptions): Promise
 
 export function createDesktopCommand(): Command {
   return new Command('desktop')
-    .description('Open the Omni desktop app (downloads the build for this machine)')
+    .description('Open the Automagik desktop app with Omni preloaded (downloads the build for this machine)')
     .option('--path <file>', 'Open this AppImage or dmg instead of downloading one')
     .option('--tag <tag>', `Release to take it from (default: the newest ${DESKTOP_TAG_PREFIX}*)`)
     .option('--dry-run', 'Say what would be downloaded and opened, and stop')
@@ -246,6 +309,8 @@ export function createDesktopCommand(): Command {
       } catch (error) {
         return output.error(error instanceof Error ? error.message : String(error));
       }
-      output.success(target.os === 'mac' ? `Opened ${file}: drag Omni to Applications` : `Opened ${file}`);
+      output.success(
+        target.os === 'mac' ? `Opened ${file}: drag Automagik to Applications, then open it` : `Opened ${file}`,
+      );
     });
 }
