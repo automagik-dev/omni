@@ -162,6 +162,7 @@ test('apply registers its listeners, tools and effects after the team\'s, in a f
     'effect ds-bot: omni-grant-revoke',
     'effect ds-bot: omni-grant-approval',
     'effect ds-bot: Omni permissions view',
+    'on tools/pre-execute (prepend)',
     'on session/event',
     'effect ds-bot: automations view',
     'effect ds-bot: automation-set-on',

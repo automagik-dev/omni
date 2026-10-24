@@ -143,7 +143,7 @@ export function SubscriptionsBoard({ bot, roster, actions, waiting }) {
           h('div', { className: 'os-list' }, runs.slice(0, 20).map(run => h(RunRow, { key: run.id, run, sub: subs.find(sub => sub.id === run.subId), roster, actions, asking: waiting?.has(run.sessionId) && run.status === 'working' })))) : null),
     h('div', { className: 'os-safety' },
       h(ShieldIcon),
-      h('span', null, t('Anyone in a watched chat can write text that tries to steer a Bot. Work started by an event runs with no secrets and asks you before shell, file or network actions, unless you tell {name} otherwise.', { name: bot.name }))))
+      h('span', null, t('Anyone in a watched chat can write text that tries to steer a Bot. Work started by an event reads on its own and asks you before any shell command, file change, web or connector call, or message, unless you tell {name} otherwise. What you allow runs with that Bot\'s keys.', { name: bot.name }))))
 }
 
 function Empty({ bot, live }) {

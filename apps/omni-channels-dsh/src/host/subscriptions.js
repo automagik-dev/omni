@@ -13,6 +13,15 @@ const RUNS_KEPT = 40
 const SUMMARY_MAX = 280
 const LIST_LIMIT = 40
 
+// Event text comes from other people. While a run that asks first works, these tools run as
+// they are: they only read. Everything else (a shell, a file change, the web, a connector,
+// another Bot, a task, an automation) waits for the user's approval first.
+const READ_PRESET = 'read-only'
+const READ_TOOLS = new Set(['read', 'read_image', 'glob', 'grep', 'todo_write', 'omni_channels', 'omni_chats', 'omni_messages', 'omni_endpoints', 'find_chats', 'list_automations'])
+// In a run's own Session, Omni's actions confirm on a card whatever the grants, or are
+// refused to the Main Bot (grants.js), so they need no second question.
+const CONFIRMED_IN_TASK = new Set(['omni_send', 'omni_react', 'omni_delete'])
+
 const refused = message => Object.assign(new Error(message), { code: 'bot/refused' })
 const invalid = message => Object.assign(new Error(message), { code: 'bot/invalid' })
 const split = text => String(text ?? '').split(',').map(part => part.trim()).filter(Boolean)
@@ -173,17 +182,27 @@ export function install(rt) {
       ...(event.test ? { test: true } : {}), ...(task ? { task: true } : {}), ...(worker.kind !== 'session' && botId ? { botId } : {}),
     }
     const text = taskText(sub, event)
+    // The run keeps the choice it started with: changing the automation later does not
+    // lift the questions off work already going.
+    if (sub.askFirst) run.askFirst = true
+    let uncontained
     if (task) {
       const title = `${worker.kind === 'session' ? 'Task' : bot?.name ?? 'Task'} · ${sub.name}`.slice(0, 80)
       // "A new DSH session" is a Tasks Session, listed with the others under Tasks.
       run.sessionId = worker.kind === 'session' ? await rt.createTaskSession(title) : await rt.createSession(title, bot?.workDir ? { dir: bot.workDir } : {})
-      await guard(sub, bot, run.sessionId)
+      uncontained = await contain(sub, bot, run.sessionId).then(() => undefined, error => error)
     } else {
       run.sessionId = rt.chatOf(botId)
+    }
+    if (uncontained) {
+      // Fails closed: without its permission the event's text never reaches the worker.
+      rt.warn('ds-bot: an automation run did not start, its permission was not set: %s', uncontained.message ?? uncontained)
+      Object.assign(run, { status: 'failed', endedAt: Date.now(), summary: `Not started: ${sub.askFirst ? 'the read-only permission that makes it ask you first' : 'its Bot\'s permission'} could not be set (${uncontained.message ?? uncontained}). Nothing ran.`.slice(0, SUMMARY_MAX) })
     }
     state.subscriptionRuns = [run, ...runs()].slice(0, RUNS_KEPT)
     rt.indexSessions()
     await rt.save()
+    if (uncontained) return run
     try {
       if (worker.kind === 'session') {
         const agent = await rt.resolveAgent(run.sessionId)
@@ -198,21 +217,39 @@ export function install(rt) {
     return run
   }
 
-  // Event text comes from other people. With askFirst, a task Session runs read-only and
-  // every escalation waits for the user's approval (DSH's read-only preset); otherwise it
-  // takes its Bot's own preset.
-  async function guard(sub, bot, sessionId) {
-    const presets = ctx.get?.('permissionPresets')
-    try {
-      if (sub.askFirst && presets?.catalog().options.some(option => option.value === 'read-only')) {
-        presets.set((await rt.resolveAgent(sessionId)).session, 'read-only')
-      } else if (bot) {
-        await rt.applyPermission?.(bot, sessionId)
-      }
-    } catch (error) {
-      rt.warn('ds-bot: the permission of a subscription run was not set: %s', error?.message ?? error)
+  // Event text comes from other people. With askFirst, a task Session runs under DSH's
+  // read-only preset (no file changes; a wider retry waits for the user) and the tool gate
+  // below; otherwise it takes its Bot's own preset. Throws when that cannot be set, so the
+  // run does not start rather than start with more than it should.
+  async function contain(sub, bot, sessionId) {
+    if (!sub.askFirst) {
+      if (bot) await rt.applyPermission(bot, sessionId)
+      return
     }
+    const presets = ctx.get?.('permissionPresets')
+    if (presets === undefined) throw new Error('this DeepSeek Harness has no permission presets')
+    if (!presets.catalog().options.some(option => option.value === READ_PRESET)) throw new Error(`this DeepSeek Harness offers no ${READ_PRESET} preset`)
+    const { session } = await rt.resolveAgent(sessionId)
+    presets.set(session, READ_PRESET)
+    if (typeof presets.current === 'function' && presets.current(session) !== READ_PRESET) throw new Error(`the Session is on ${presets.current(session)}, not ${READ_PRESET}`)
   }
+
+  // The run that asks first and is working in this Session: its own task Session, or the
+  // chat of a Bot that takes events in its chat, while that event's turn lasts.
+  const askingRun = sessionId => runs().find(run => run.sessionId === sessionId && run.status === 'working'
+    && (run.askFirst ?? subs()[run.subId]?.askFirst ?? true))
+  // Ahead of DSH's own gates, so their answer is the one this one tightens: anything but a
+  // read asks the user (DSH's approval, which fails closed when no one can answer).
+  ctx.on('tools/pre-execute', async (exec, next) => {
+    const decision = await next()
+    if (decision?.kind !== 'allow') return decision
+    try { await rt.load() } catch { /* the runs in memory still count */ }
+    const run = askingRun(exec.agent?.id ?? exec.agent?.session?.id)
+    if (run === undefined || READ_TOOLS.has(exec.name)) return decision
+    if (exec.name === 'omni_call' && String(exec.arguments?.method ?? 'GET').toUpperCase() === 'GET') return decision
+    if (run.task && CONFIRMED_IN_TASK.has(exec.name)) return decision
+    return { kind: 'ask', reason: `An automation event is being handled here, and its text was written by other people. Allow ${exec.name} this once?` }
+  }, { prepend: true })
 
   function finish(sessionId, status, summary) {
     const run = runOf(sessionId)

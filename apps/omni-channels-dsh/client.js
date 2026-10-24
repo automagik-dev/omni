@@ -14514,7 +14514,7 @@ function SubscriptionsBoard({ bot, roster, actions, waiting }) {
       "div",
       { className: "os-safety" },
       (0, import_react11.createElement)(ShieldIcon),
-      (0, import_react11.createElement)("span", null, t("Anyone in a watched chat can write text that tries to steer a Bot. Work started by an event runs with no secrets and asks you before shell, file or network actions, unless you tell {name} otherwise.", { name: bot.name }))
+      (0, import_react11.createElement)("span", null, t("Anyone in a watched chat can write text that tries to steer a Bot. Work started by an event reads on its own and asks you before any shell command, file change, web or connector call, or message, unless you tell {name} otherwise. What you allow runs with that Bot's keys.", { name: bot.name }))
     )
   );
 }
@@ -15195,7 +15195,7 @@ var STRINGS = {
   "Open this run": "打开这次运行",
   "acts without asking": "不询问直接执行",
   "A deleted Bot": "已删除的 Bot",
-  "Anyone in a watched chat can write text that tries to steer a Bot. Work started by an event runs with no secrets and asks you before shell, file or network actions, unless you tell {name} otherwise.": "被关注聊天中的任何人都可能写下试图操控 Bot 的文字。由事件触发的工作不带任何密钥运行，执行命令、文件或网络操作前会先问你，除非你告诉 {name} 不必询问。",
+  "Anyone in a watched chat can write text that tries to steer a Bot. Work started by an event reads on its own and asks you before any shell command, file change, web or connector call, or message, unless you tell {name} otherwise. What you allow runs with that Bot's keys.": "被关注聊天中的任何人都可能写下试图操控 Bot 的文字。由事件触发的工作可以自行读取，但在执行任何命令、修改文件、访问网络或连接器、发送消息之前都会先问你，除非你告诉 {name} 不必询问。你允许的操作会使用该 Bot 的密钥运行。",
   "Everything is paused.": "全部已暂停。",
   "last run {time}": "上次运行 {time}",
   "not fired yet": "还没有触发过",
