@@ -348,7 +348,7 @@ export function ConnectOmni({ onPaired, embedded = false } = {}) {
     else if (terminal?.row === omni.id) body = terminalOn(omni.id)
     else {
       const action = view.action === 'update' ? h('div', null, primary(t('Update and connect'), () => openTerminal(omni.id, 'update', omni.id)), whatRuns('omni update --yes'))
-        : view.action === 'reinstall' ? h('div', null, primary(t('Update and connect'), () => openTerminal(omni.id, 'install')), whatRuns(`bun x --bun @automagik/omni@${omni.updateTo} install --sandbox`))
+        : view.action === 'reinstall' ? h('div', null, primary(t('Update and connect'), () => openTerminal(omni.id, 'install')), whatRuns(`bun x --bun @automagik/omni@${omni.updateTo} install --sandbox --at-login`))
           : view.action === 'use' ? primary(busy === omni.id ? t('Connecting…') : t('Use it'), () => run(omni.id, 'omni-discover-use', { id: omni.id }))
             : view.action === 'connect' ? primary(busy === omni.id ? t('Connecting…') : t('Connect'), () => run(omni.id, 'omni-discover-use', { id: omni.id }))
               : view.action === 'elsewhere' && !hasSandbox ? h('button', { type: 'button', className: 'oc-ghost', onClick: () => setOpen(LOCAL) }, mac ? t('Run Omni on this Mac') : t('Run Omni on this computer'))
