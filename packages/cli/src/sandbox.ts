@@ -24,7 +24,10 @@
  * design (.genie/brainstorms/omni-local-daemon): same shape, scoped to a
  * sandbox. `--at-login` adds a per-user launchd agent or systemd --user unit
  * (no sudo) that runs the supervisor; those unit files are the only writes
- * outside the home.
+ * outside the home. Without it the supervisor still runs under the user's
+ * service manager, for this login only (a transient systemd --user service, a
+ * launchd job whose plist stays in <home>/run), so it outlives whatever ran
+ * the CLI; a detached child is the fallback where there is none.
  *
  * Every function that touches processes, ports, the network or the clock
  * takes its effects from {@link SandboxDeps}, so tests run none of them.
@@ -63,6 +66,7 @@ const SANDBOX_HEALTH_TIMEOUT_MS = 180_000;
 const STOP_TIMEOUT_MS = 30_000;
 const LAUNCHD_LABEL = 'ai.namastex.omni.sandbox';
 const SYSTEMD_UNIT = 'omni-sandbox';
+const SYSTEMD_RUN_LITERAL_ARGV = '--expand-environment=no';
 
 /** Exit codes of the sandbox commands. */
 export const SANDBOX_EXIT = { ok: 0, failed: 1, notInstalled: 3 } as const;
@@ -334,27 +338,66 @@ export function supervisorCommand(layout: SandboxLayout, state: SandboxState): s
 // At-login units
 // ----------------------------------------------------------------------------
 
-/** Unit names; a sandbox outside the default home gets a suffix of its own. */
-export function sandboxUnitNames(home: string, defaultHome: string): { label: string; systemdUnit: string } {
-  const suffix =
-    resolve(home) === resolve(defaultHome) ? '' : `-${createHash('sha1').update(home).digest('hex').slice(0, 8)}`;
-  return { label: `${LAUNCHD_LABEL}${suffix}`, systemdUnit: `${SYSTEMD_UNIT}${suffix}.service` };
+export interface SandboxUnitNames {
+  /** launchd label of the at-login agent. */
+  label: string;
+  /** systemd --user unit of the at-login service. */
+  systemdUnit: string;
+  /** launchd label of the job that runs the supervisor for this login only. */
+  sessionLabel: string;
+  /** Transient systemd --user unit that runs the supervisor for this login only. */
+  sessionUnit: string;
+}
+
+/**
+ * Unit names. An at-login unit outside the default home gets a suffix of its
+ * own. A session unit always carries its home's: which home is the default
+ * depends on the caller's $OMNI_HOME (an app sets its own), so two sandboxes
+ * could both be "the default" and one start would stop the other's unit.
+ */
+export function sandboxUnitNames(home: string, defaultHome: string): SandboxUnitNames {
+  const hash = (path: string) => createHash('sha1').update(path).digest('hex').slice(0, 8);
+  const suffix = resolve(home) === resolve(defaultHome) ? '' : `-${hash(home)}`;
+  const own = `-${hash(resolve(home))}`;
+  return {
+    label: `${LAUNCHD_LABEL}${suffix}`,
+    systemdUnit: `${SYSTEMD_UNIT}${suffix}.service`,
+    sessionLabel: `${LAUNCHD_LABEL}${own}.session`,
+    sessionUnit: `${SYSTEMD_UNIT}${own}-session.service`,
+  };
 }
 
 const xmlEscape = (value: string): string =>
   value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
+/**
+ * A launchd job that runs the supervisor. The at-login agent (in LaunchAgents)
+ * is kept alive; the session job (`keepAlive: false`, its plist in the run
+ * dir) runs once when bootstrapped and is gone at logout.
+ */
 export function buildLaunchdPlist(
   label: string,
   cmd: string[],
   layout: SandboxLayout,
   env: Record<string, string>,
+  opts: { keepAlive?: boolean } = {},
 ): string {
   const args = cmd.map((arg) => `    <string>${xmlEscape(arg)}</string>`).join('\n');
   const vars = Object.entries(env)
     .map(([key, value]) => `    <key>${xmlEscape(key)}</key>\n    <string>${xmlEscape(value)}</string>`)
     .join('\n');
   const log = xmlEscape(join(layout.logsDir, 'supervisor.log'));
+  const keepAlive =
+    opts.keepAlive === false
+      ? ''
+      : `  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+`;
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -373,14 +416,7 @@ ${vars}
   <string>${xmlEscape(layout.home)}</string>
   <key>RunAtLoad</key>
   <true/>
-  <key>KeepAlive</key>
-  <dict>
-    <key>SuccessfulExit</key>
-    <false/>
-  </dict>
-  <key>ThrottleInterval</key>
-  <integer>30</integer>
-  <key>StandardOutPath</key>
+${keepAlive}  <key>StandardOutPath</key>
   <string>${log}</string>
   <key>StandardErrorPath</key>
   <string>${log}</string>
@@ -413,6 +449,44 @@ WantedBy=default.target
 `;
 }
 
+/**
+ * `systemd-run --user` that starts the supervisor as a transient service of
+ * the user's systemd: a cgroup of its own, outside whatever started the CLI
+ * (a terminal's scope that is killed whole when the terminal ends, say), gone
+ * once it stops (`--collect`) and never started at login. KillMode=mixed lets
+ * `systemctl stop` reach the supervisor first, which stops its children in order.
+ * `literalArgv` (systemd 254+) keeps a `$` in a path from being expanded.
+ */
+export function buildSystemdRunCommand(
+  unit: string,
+  cmd: string[],
+  layout: SandboxLayout,
+  env: Record<string, string>,
+  literalArgv: boolean,
+): string[] {
+  if (/[\r\n]/.test(layout.home)) throw new Error(`sandbox home must not contain a newline: ${layout.home}`);
+  const log = join(layout.logsDir, 'supervisor.log');
+  return [
+    'systemd-run',
+    '--user',
+    '--quiet',
+    '--collect',
+    `--unit=${unit}`,
+    `--description=Omni (sandbox at ${layout.home})`,
+    ...(literalArgv ? [SYSTEMD_RUN_LITERAL_ARGV] : []),
+    `--working-directory=${layout.home}`,
+    '--property=Type=simple',
+    '--property=KillMode=mixed',
+    '--property=KillSignal=SIGTERM',
+    `--property=TimeoutStopSec=${STOP_TIMEOUT_MS / 1000}`,
+    `--property=StandardOutput=append:${log}`,
+    `--property=StandardError=append:${log}`,
+    ...Object.entries(env).map(([key, value]) => `--setenv=${key}=${value}`),
+    '--',
+    ...cmd,
+  ];
+}
+
 // ----------------------------------------------------------------------------
 // Effects
 // ----------------------------------------------------------------------------
@@ -443,7 +517,13 @@ export interface SandboxDeps {
 }
 
 async function runCommand(cmd: string[], opts: { cwd?: string; env: Record<string, string> }): Promise<RunResult> {
-  const proc = Bun.spawn({ cmd, cwd: opts.cwd, env: opts.env, stdout: 'pipe', stderr: 'pipe' });
+  let proc: Bun.Subprocess<'ignore', 'pipe', 'pipe'>;
+  try {
+    proc = Bun.spawn({ cmd, cwd: opts.cwd, env: opts.env, stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' });
+  } catch (error) {
+    // Not installed here (no systemd-run on a non-systemd Linux, say): a failed run, not a crash.
+    return { code: 127, stdout: '', stderr: error instanceof Error ? error.message : String(error) };
+  }
   const [stdout, stderr, code] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
@@ -720,9 +800,11 @@ function unitPaths(names: { label: string; systemdUnit: string }, deps: SandboxD
  * not the sandbox's stripped one; the processes they start still get only the
  * sandbox environment written into their unit.
  */
-function serviceManagerEnv(deps: Pick<SandboxDeps, 'env'>): Record<string, string> {
+function serviceManagerEnv(deps: Pick<SandboxDeps, 'env' | 'platform' | 'uid'>): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(deps.env)) if (value !== undefined) env[key] = value;
+  // A caller started outside a login shell (an app's terminal, say) may lack it; systemd's is fixed.
+  if (deps.platform === 'linux' && !env.XDG_RUNTIME_DIR) env.XDG_RUNTIME_DIR = `/run/user/${deps.uid}`;
   return env;
 }
 
@@ -836,6 +918,62 @@ export async function sweepSandboxLeftovers(
   return pids.length;
 }
 
+const sessionPlistPath = (layout: SandboxLayout, names: SandboxUnitNames): string =>
+  join(layout.runDir, `${names.sessionLabel}.plist`);
+
+/**
+ * Starts the supervisor for this login only (no at-login unit). It goes to the
+ * user's service manager, a transient systemd --user service or a launchd job
+ * in the GUI domain, so it belongs to neither the CLI nor whatever ran the CLI:
+ * an app that runs the install in a terminal and then ends that terminal's
+ * whole process range (a systemd scope, a process tree) leaves it running. A
+ * detached child is the fallback where there is no service manager to ask.
+ */
+async function startSessionSupervisor(
+  layout: SandboxLayout,
+  state: SandboxState,
+  defaultHome: string,
+  deps: SandboxDeps,
+): Promise<void> {
+  const cmd = supervisorCommand(layout, state);
+  const env = sandboxBaseEnv(layout, deps.env);
+  const names = sandboxUnitNames(layout.home, defaultHome);
+  const host = { env: serviceManagerEnv(deps) };
+  if (deps.platform === 'linux') {
+    // A unit of an earlier run that is still loaded would make systemd-run refuse the name.
+    await deps.run(['systemctl', '--user', 'stop', names.sessionUnit], host);
+    let started = await deps.run(buildSystemdRunCommand(names.sessionUnit, cmd, layout, env, true), host);
+    if (started.code !== 0 && /unrecognized option.*expand-environment/.test(started.stderr)) {
+      started = await deps.run(buildSystemdRunCommand(names.sessionUnit, cmd, layout, env, false), host);
+    }
+    if (started.code === 0) return;
+  } else if (deps.platform === 'darwin') {
+    const plist = sessionPlistPath(layout, names);
+    writeFileSync(plist, buildLaunchdPlist(names.sessionLabel, cmd, layout, env, { keepAlive: false }), {
+      mode: 0o600,
+    });
+    // A job of an earlier run stays loaded after its supervisor exits; bootstrap refuses a loaded label.
+    await deps.run(['launchctl', 'bootout', `gui/${deps.uid}/${names.sessionLabel}`], host);
+    const started = await deps.run(['launchctl', 'bootstrap', `gui/${deps.uid}`, plist], host);
+    if (started.code === 0) return;
+    rmSync(plist, { force: true });
+  }
+  deps.spawnDetached(cmd, { cwd: layout.home, env, logPath: join(layout.logsDir, 'supervisor.log') });
+}
+
+/** Stops the session unit or job, if the supervisor runs under one; a no-op otherwise. */
+async function stopSessionSupervisor(layout: SandboxLayout, names: SandboxUnitNames, deps: SandboxDeps) {
+  const host = { env: serviceManagerEnv(deps) };
+  if (deps.platform === 'linux') {
+    await deps.run(['systemctl', '--user', 'stop', names.sessionUnit], host);
+  } else if (deps.platform === 'darwin') {
+    const plist = sessionPlistPath(layout, names);
+    if (!existsSync(plist)) return;
+    await deps.run(['launchctl', 'bootout', `gui/${deps.uid}/${names.sessionLabel}`], host);
+    rmSync(plist, { force: true });
+  }
+}
+
 function requireState(layout: SandboxLayout): SandboxState {
   const state = readSandboxState(layout);
   if (!state) throw new SandboxError(`No sandboxed Omni at ${layout.home}`, SANDBOX_EXIT.notInstalled);
@@ -869,11 +1007,7 @@ export async function startSandbox(
       if (result.code !== 0)
         throw new SandboxError(`systemctl could not start ${names.systemdUnit}: ${result.stderr.trim()}`);
     } else {
-      deps.spawnDetached(supervisorCommand(layout, state), {
-        cwd: layout.home,
-        env: sandboxBaseEnv(layout, deps.env),
-        logPath: join(layout.logsDir, 'supervisor.log'),
-      });
+      await startSessionSupervisor(layout, state, opts.defaultHome, deps);
     }
   }
   const healthy = await deps.health(sandboxApiUrl(state), opts.healthTimeoutMs ?? SANDBOX_HEALTH_TIMEOUT_MS);
@@ -898,6 +1032,8 @@ export async function stopSandbox(
     await deps.run(['launchctl', 'bootout', `gui/${deps.uid}/${names.label}`], { env });
   } else if (state.atLogin && deps.platform === 'linux') {
     await deps.run(['systemctl', '--user', 'stop', names.systemdUnit], { env });
+  } else {
+    await stopSessionSupervisor(layout, names, deps);
   }
   const pid = livePid(layout, deps);
   if (pid !== null) {

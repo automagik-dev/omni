@@ -83,7 +83,18 @@ afterEach(() => {
 
 type Call = { cmd: string[]; cwd?: string; env: Record<string, string> };
 
-function fakeDeps(overrides: Partial<SandboxDeps> = {}) {
+/** systemd-run, or launchctl bootstrap of the session job (its plist sits in the home's run dir). */
+const startsSessionSupervisor = (cmd: string[]) =>
+  cmd[0] === 'systemd-run' ||
+  (cmd[0] === 'launchctl' && cmd[1] === 'bootstrap' && (cmd[3] ?? '').startsWith(join(home, 'run')));
+const SERVICE_MANAGERS = new Set(['systemctl', 'systemd-run', 'launchctl']);
+
+/**
+ * `serviceManager: false` (the default) is a computer whose user service
+ * manager cannot start the session supervisor (no systemd user session, no
+ * GUI launchd domain), so it falls back to a detached child.
+ */
+function fakeDeps(overrides: Partial<SandboxDeps> = {}, { serviceManager = false } = {}) {
   const runs: Call[] = [];
   const detached: Call[] = [];
   const kills: Array<[number, string]> = [];
@@ -98,6 +109,13 @@ function fakeDeps(overrides: Partial<SandboxDeps> = {}) {
     env: LEAKY_ENV,
     run: async (cmd, opts) => {
       runs.push({ cmd, cwd: opts.cwd, env: opts.env });
+      if (startsSessionSupervisor(cmd)) {
+        if (!serviceManager) return { code: 1, stdout: '', stderr: 'Failed to connect to bus: No medium found' };
+        // The supervisor the service manager starts writes its own pid file.
+        alive.add(4242);
+        writeFileSync(sandboxLayout(home).pidPath, '4242\n');
+        return { code: 0, stdout: '', stderr: '' };
+      }
       if (cmd[1] === 'install' && opts.cwd) {
         // What `bun install` would leave behind.
         const manifest = JSON.parse(readFileSync(join(opts.cwd, 'package.json'), 'utf-8'));
@@ -214,7 +232,8 @@ describe('installSandbox', () => {
     const { deps, runs, detached } = fakeDeps();
     await installSandbox({ home, defaultHome }, deps);
     expect(filesUnder(userHome)).toEqual([]);
-    for (const call of [...runs, ...detached]) {
+    // systemctl and friends get the caller's env to reach its session (see the at-login tests).
+    for (const call of [...runs.filter((run) => !SERVICE_MANAGERS.has(run.cmd[0] ?? '')), ...detached]) {
       expect(call.env.OMNI_CONFIG_DIR).toBe(join(home, 'config'));
       expect(call.env.PM2_HOME).toBe(join(home, 'run', 'pm2'));
       expect(call.env.AUTOPG_CONFIG_DIR).toBe(join(home, 'pgserve'));
@@ -390,6 +409,132 @@ describe('at login', () => {
     expect(plist).toContain('<string>&quot;q&quot;</string>');
     const unit = buildSystemdUserUnit(['/bin/x', '50%$HOME'], layout, {});
     expect(unit).toContain('ExecStart="/bin/x" "50%%$$HOME"');
+  });
+});
+
+describe('without at-login: the supervisor runs under the service manager for this login', () => {
+  const supervisor = () => [
+    BUN,
+    join(home, 'runtime', 'node_modules', '@automagik', 'omni', 'bin', 'omni'),
+    'sandbox',
+    'run',
+    '--home',
+    home,
+  ];
+
+  test('linux: a transient systemd --user service, outside the scope of whatever ran the CLI', async () => {
+    const { deps, runs, detached } = fakeDeps({}, { serviceManager: true });
+    const result = await installSandbox({ home, defaultHome }, deps);
+    expect(result).toMatchObject({ ok: true, running: true, healthy: true, atLogin: false, pid: 4242 });
+    expect(detached).toHaveLength(0);
+
+    const names = sandboxUnitNames(home, defaultHome);
+    expect(names.sessionUnit).toMatch(/^omni-sandbox-[0-9a-f]{8}-session\.service$/);
+    expect(names.sessionUnit).not.toBe(names.systemdUnit);
+    const run = runs.find((call) => call.cmd[0] === 'systemd-run');
+    const args = run?.cmd ?? [];
+    expect(args.slice(0, 5)).toEqual(['systemd-run', '--user', '--quiet', '--collect', `--unit=${names.sessionUnit}`]);
+    expect(args).toContain('--expand-environment=no');
+    expect(args).toContain(`--working-directory=${home}`);
+    expect(args).toContain('--property=KillMode=mixed');
+    expect(args).toContain(`--property=StandardOutput=append:${join(home, 'logs', 'supervisor.log')}`);
+    expect(args).toContain(`--setenv=OMNI_CONFIG_DIR=${join(home, 'config')}`);
+    expect(args.filter((arg) => /^--setenv=(DATABASE_URL|PGHOST|OMNI_API_KEY)=/.test(arg))).toEqual([]);
+    expect(args.slice(args.indexOf('--') + 1)).toEqual(supervisor());
+    // Through the caller's session; a stale unit of the same name is stopped first.
+    const commands = runs.map((call) => call.cmd.join(' '));
+    expect(commands.indexOf(`systemctl --user stop ${names.sessionUnit}`)).toBeLessThan(
+      commands.findIndex((command) => command.startsWith('systemd-run')),
+    );
+    expect(run?.env.XDG_RUNTIME_DIR).toBe('/run/user/501');
+    // Nothing is enabled, and nothing is written outside the home.
+    expect(commands.some((command) => command.includes('enable'))).toBe(false);
+    expect(filesUnder(userHome)).toEqual([]);
+  });
+
+  test('session unit names follow the home alone, whatever the caller takes for the default', () => {
+    const a = sandboxUnitNames('/a/sandbox', '/a/sandbox');
+    expect(sandboxUnitNames('/a/sandbox', '/u/.omni/sandbox')).toMatchObject({
+      sessionUnit: a.sessionUnit,
+      sessionLabel: a.sessionLabel,
+    });
+    expect(sandboxUnitNames('/b/sandbox', '/b/sandbox').sessionUnit).not.toBe(a.sessionUnit);
+    expect(a.sessionLabel).toMatch(/^ai\.namastex\.omni\.sandbox-[0-9a-f]{8}\.session$/);
+  });
+
+  test('linux: a systemd older than --expand-environment gets the same unit without it', async () => {
+    const { deps, runs, detached } = fakeDeps({}, { serviceManager: true });
+    const run = deps.run;
+    deps.run = async (cmd, opts) =>
+      cmd[0] === 'systemd-run' && cmd.includes('--expand-environment=no')
+        ? { code: 1, stdout: '', stderr: "systemd-run: unrecognized option '--expand-environment=no'" }
+        : run(cmd, opts);
+    const result = await installSandbox({ home, defaultHome }, deps);
+    expect(result.running).toBe(true);
+    expect(runs.filter((call) => call.cmd[0] === 'systemd-run')).toHaveLength(1);
+    expect(detached).toHaveLength(0);
+  });
+
+  test('linux: no systemd user session falls back to a detached supervisor', async () => {
+    const { deps, runs, detached } = fakeDeps();
+    const result = await installSandbox({ home, defaultHome }, deps);
+    expect(runs.some((call) => call.cmd[0] === 'systemd-run')).toBe(true);
+    expect(detached.map((call) => call.cmd)).toEqual([supervisor()]);
+    expect(result).toMatchObject({ ok: true, running: true });
+  });
+
+  test('linux: stop stops the transient service, then makes sure the supervisor is gone', async () => {
+    const { deps, runs, kills } = fakeDeps({}, { serviceManager: true });
+    await installSandbox({ home, defaultHome }, deps);
+    runs.length = 0;
+    const result = await stopSandbox({ home, defaultHome }, deps);
+    const names = sandboxUnitNames(home, defaultHome);
+    expect(runs[0]?.cmd).toEqual(['systemctl', '--user', 'stop', names.sessionUnit]);
+    expect(kills).toEqual([[4242, 'SIGTERM']]);
+    expect(result).toMatchObject({ running: false, pid: null });
+  });
+
+  test('macOS: a launchd job bootstrapped into the GUI domain, its plist in the run dir, not kept alive', async () => {
+    const { deps, runs, detached } = fakeDeps({ platform: 'darwin' }, { serviceManager: true });
+    const result = await installSandbox({ home, defaultHome }, deps);
+    expect(result).toMatchObject({ running: true, pid: 4242 });
+    expect(detached).toHaveLength(0);
+    const names = sandboxUnitNames(home, defaultHome);
+    const plistPath = join(home, 'run', `${names.sessionLabel}.plist`);
+    const plist = readFileSync(plistPath, 'utf-8');
+    expect(plist).toContain(`<string>${names.sessionLabel}</string>`);
+    expect(plist).toContain('<key>RunAtLoad</key>\n  <true/>');
+    expect(plist).not.toContain('KeepAlive');
+    expect(plist).toContain(`<string>${join(home, 'config')}</string>`);
+    const commands = runs.map((call) => call.cmd.join(' '));
+    expect(commands).toContain(`launchctl bootstrap gui/501 ${plistPath}`);
+    // Never in LaunchAgents, so it does not come back at the next login.
+    expect(filesUnder(userHome)).toEqual([]);
+
+    runs.length = 0;
+    await stopSandbox({ home, defaultHome }, deps);
+    expect(runs[0]?.cmd).toEqual(['launchctl', 'bootout', `gui/501/${names.sessionLabel}`]);
+    expect(existsSync(plistPath)).toBe(false);
+  });
+
+  test('macOS: no GUI domain (an ssh login) falls back to a detached supervisor', async () => {
+    const { deps, detached } = fakeDeps({ platform: 'darwin' });
+    const result = await installSandbox({ home, defaultHome }, deps);
+    expect(detached.map((call) => call.cmd)).toEqual([supervisor()]);
+    expect(result.running).toBe(true);
+    expect(readdirSync(join(home, 'run')).filter((file) => file.endsWith('.plist'))).toEqual([]);
+  });
+
+  test('switching to at-login stops the session service and starts the at-login unit', async () => {
+    const { deps, runs } = fakeDeps({}, { serviceManager: true });
+    await installSandbox({ home, defaultHome }, deps);
+    runs.length = 0;
+    await installSandbox({ home, defaultHome, atLogin: true }, deps);
+    const names = sandboxUnitNames(home, defaultHome);
+    const commands = runs.map((call) => call.cmd.join(' '));
+    expect(commands[0]).toBe(`systemctl --user stop ${names.sessionUnit}`);
+    expect(commands).toContain(`systemctl --user enable --now ${names.systemdUnit}`);
+    expect(commands.some((command) => command.startsWith('systemd-run'))).toBe(false);
   });
 });
 
