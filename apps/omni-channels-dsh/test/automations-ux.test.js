@@ -12,13 +12,13 @@ async function load() {
   const bundle = await build({
     stdin: { contents: entry, resolveDir: fileURLToPath(new URL('../src/client/', import.meta.url)), loader: 'js' },
     bundle: true, format: 'cjs', platform: 'node', write: false, logLevel: 'silent',
-    external: ['react', 'react-dom', '@automagik/omni-dsh/client'],
+    external: ['react', 'react-dom', '@automagik/bots-dsh/client'],
     loader: { '.css': 'text' },
   })
   const module = { exports: {} }
   // Elements come back as plain data, so a test can read what a component draws.
   const react = { createElement: (type, props, ...children) => ({ type: typeof type === 'function' ? type.name : type, props: props ?? {}, children: children.flat() }), Fragment: 'Fragment', useState: initial => [initial, () => {}], useEffect: () => {}, useSyncExternalStore: (_subscribe, get) => get() }
-  runInNewContext(bundle.outputFiles[0].text, { module, exports: module.exports, URL, require: name => ({ react, 'react-dom': { createPortal: node => node }, '@automagik/omni-dsh/client': { omni } })[name] })
+  runInNewContext(bundle.outputFiles[0].text, { module, exports: module.exports, URL, require: name => ({ react, 'react-dom': { createPortal: node => node }, '@automagik/bots-dsh/client': { omni } })[name] })
   return module.exports
 }
 const ui = await load()
