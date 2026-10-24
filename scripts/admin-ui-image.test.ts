@@ -3,7 +3,7 @@
  * deploy/admin-ui/server.mjs, keeping the contract the Helm chart's adminUi workload uses.
  */
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 // @ts-expect-error: a plain Node module with no type declarations.
@@ -194,6 +194,7 @@ describe('server.mjs', () => {
     expect(renamePatch(rows)).toContain("name: '@automagik/bots-dsh'\n  config:\n    memory: false");
     expect(renamePatch(rows)).toContain("name: '@automagik/bots-dsh/web-search'");
     expect(renamePatch("name: '@automagik/omni-dsh-other'")).toBeNull();
+    rmSync(base, { recursive: true, force: true });
     expect(renamePatch('# opens this app (@automagik/omni-ai-dsh: Welcome)')).toBe(
       '# opens this app (@automagik/welcome-dsh: Welcome)',
     );
