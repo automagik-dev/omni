@@ -296,7 +296,7 @@ const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
     route: 'GET /api/login/app',
     class: 'public-by-contract',
     justification:
-      'Static "open the Omni app" page (human login). Answers 404 when login is off (OMNI_LOGIN_ENABLED=false), and always with multitenancy on. Fixed HTML and script; its only link is ' +
+      'Static "open Automagik" page (human login). Answers 404 when login is off (OMNI_LOGIN_ENABLED=false), and always with multitenancy on. Fixed HTML and script; its only link is ' +
       "omni://connect with this Omni's own address, which grants nothing: the app then signs in through " +
       "the device page, which needs the owner's own session. With ?grant= (a connect link the owner got in " +
       'their own self chat) it looks the grant up without spending it and puts it in that link, or says the ' +

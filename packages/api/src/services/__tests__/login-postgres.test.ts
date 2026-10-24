@@ -241,7 +241,7 @@ postgresDescribe('human login (real PostgreSQL)', () => {
 
     const approved = await handleDeviceLoginMessage(login, ownerSelfChat(`Omni ${device.user_code}`));
     expect(approved).toMatchObject({ clientId: 'omni-desktop' });
-    expect(sent.at(-1)?.text).toContain('The Omni desktop app is now connected to your Omni.');
+    expect(sent.at(-1)?.text).toContain('The Automagik app is now connected to your Omni.');
     // The same message again does nothing.
     expect(await handleDeviceLoginMessage(login, ownerSelfChat(`Omni ${device.user_code}`))).toBeNull();
 
@@ -271,7 +271,7 @@ postgresDescribe('human login (real PostgreSQL)', () => {
     expect(row?.scopes).toEqual(['instances:read', 'chats:read']);
     expect(row?.expiresAt).toBeNull();
     expect(row?.name).toBe('device: Test laptop');
-    expect(row?.description).toContain('the Omni desktop app');
+    expect(row?.description).toContain('the Automagik app');
 
     // The device token works once.
     expect((await call('POST', '/api/v2/login/device-key', { deviceName: 'Again' }, bearer)).status).toBe(401);
@@ -368,7 +368,7 @@ postgresDescribe('human login (real PostgreSQL)', () => {
     const [row] = await db.select().from(apiKeys).where(eq(apiKeys.id, minted.keyId));
     expect(row?.name).toBe('device: Connect laptop');
     expect(row?.scopes).toEqual(['instances:read', 'chats:read']);
-    expect(sent.at(-1)?.text).toContain('The Omni desktop app is now connected to your Omni.');
+    expect(sent.at(-1)?.text).toContain('The Automagik app is now connected to your Omni.');
 
     // Once: the same grant again, and its page, say it expired.
     const again = await call('POST', '/api/v2/login/connect', { grant, clientId: 'omni-desktop', deviceName: 'Again' });

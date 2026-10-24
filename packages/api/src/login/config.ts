@@ -41,7 +41,7 @@ export const DEFAULT_DEVICE_KEY_SCOPES = [
 
 /** The device-flow clients this Omni knows (Better Auth `client_id`). */
 export const DEVICE_CLIENTS = {
-  'omni-desktop': 'the Omni desktop app',
+  'omni-desktop': 'the Automagik app',
   'omni-dsh': 'the Omni plugin for DeepSeek Harness',
   'omni-cli': 'the omni command line',
 } as const satisfies Record<string, string>;

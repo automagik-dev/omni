@@ -15,7 +15,7 @@ export function loginCodeMessage(code: string, minutes: number): string {
   ].join('\n');
 }
 
-/** `device` names what signed in, as DEVICE_CLIENTS does ("the Omni desktop app"). */
+/** `device` names what signed in, as DEVICE_CLIENTS does ("the Automagik app"). */
 export function deviceApprovedMessage(device: string, request?: { ip: string | null; at: number }): string {
   const asked = [
     request?.ip ? `from ${request.ip}` : '',
