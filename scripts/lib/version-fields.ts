@@ -2,13 +2,14 @@
  * Shared registry of every version field tracked by the omni monorepo.
  *
  * Used by:
- *   - scripts/sync-versions.ts  — writes a single calver to every entry
- *   - scripts/verify-versions.ts — fails CI if any entry drifts from root
+ *   - scripts/sync-versions.ts  — writes a single calver to every entry, except that Omni's own
+ *     DSH plugins move only when their folder changed (scripts/lib/plugin-versions.ts)
+ *   - scripts/verify-versions.ts — fails CI if any entry drifts from root (a plugin may lag, by
+ *     the rule in scripts/lib/plugin-versions.ts)
  *
  * Five kinds of entries are returned (in this order):
- *   1. Standard package.json files (root + every workspace package, the DSH
- *      plugins and the desktop app), each with its npm package-lock.json when
- *      it has one
+ *   1. Standard package.json files (root + every workspace package and the DSH
+ *      plugins), each with its npm package-lock.json when it has one
  *   2. The omni Claude plugin manifest (plugins/omni/.claude-plugin/plugin.json)
  *   3. The marketplace plugin entry (.claude-plugin/marketplace.json -> plugins[name=omni])
  *   4. The umbrella Helm chart appVersion (deploy/helm/omni/Chart.yaml)
@@ -23,9 +24,9 @@ export const repoRoot = join(__dirname, '..', '..');
 
 /**
  * Workspace package directories that should NOT be touched by version sync.
- * The DSH plugins (apps/*-dsh) and the desktop app are Node + npm apps outside
- * the Bun workspaces, but they ship with Omni and carry its version: they are
- * synced, with their package-lock.json.
+ * The DSH plugins (apps/*-dsh) are Node + npm apps outside the Bun workspaces;
+ * they carry the Omni version of their last change, with their package-lock.json
+ * (`plugin` on their fields).
  */
 const EXCLUDED_WORKSPACE_PACKAGES = new Set(['audio-decode-shim']);
 
@@ -49,6 +50,8 @@ export type VersionField = {
   read: () => string | null;
   /** Writes the version. Returns true if the file was changed. */
   write: (version: string) => boolean;
+  /** Set on an Omni DSH plugin's fields: its folder (apps/<name>-dsh), whose version may lag. */
+  plugin?: string;
 };
 
 function detectIndent(content: string): string {
@@ -233,9 +236,11 @@ export function getAllVersionFields(): VersionField[] {
   fields.push(topLevelJsonField('package.json', 'root package.json'));
 
   for (const relPath of findWorkspacePackageJsonPaths()) {
-    fields.push(topLevelJsonField(relPath, 'workspace package.json'));
+    const dir = dirname(relPath);
+    const plugin = dir.startsWith('apps/') && dir.endsWith('-dsh') ? { plugin: dir } : {};
+    fields.push({ ...topLevelJsonField(relPath, 'workspace package.json'), ...plugin });
     const lockPath = relPath.replace(/package\.json$/, 'package-lock.json');
-    if (existsSync(join(repoRoot, lockPath))) fields.push(packageLockField(lockPath));
+    if (existsSync(join(repoRoot, lockPath))) fields.push({ ...packageLockField(lockPath), ...plugin });
   }
 
   fields.push(topLevelJsonField('plugins/omni/.claude-plugin/plugin.json', 'omni claude plugin manifest'));

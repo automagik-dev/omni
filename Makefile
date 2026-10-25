@@ -288,7 +288,7 @@ verify-migrations:
 # Version sync gate: every tracked version field matches root package.json.
 # Pass BASE=<ref> to exempt files absent on that ref (what CI does on PRs, #1020).
 verify-versions:
-	bun test scripts/verify-versions.test.ts scripts/bun-version.test.ts
+	bun test scripts/verify-versions.test.ts scripts/plugin-versions.test.ts scripts/bun-version.test.ts
 	bun scripts/verify-versions.ts $(if $(BASE),--base $(BASE),)
 
 # Automagik marketplace: the static index (DSH's own parser, and every pinned omni commit holds its

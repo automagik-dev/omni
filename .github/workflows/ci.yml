@@ -148,12 +148,14 @@ jobs:
         # so it re-drifts on every merge to dev. The base is resolved exactly
         # like the migration gate below: HEAD^1 of the test merge commit,
         # falling back to the base-branch tip when the PR merged mid-run.
-        # Pushes to dev/main keep the strict full check.
+        # Pushes to dev/main keep the strict full check. Omni's DSH plugins may lag the
+        # root (they carry the Omni version of their last change): the check reads the
+        # release tags it compares, fetching each one this shallow clone lacks.
         env:
           VERSION_BASE_BRANCH: ${{ github.base_ref || 'dev' }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
-          bun test scripts/verify-versions.test.ts
+          bun test scripts/verify-versions.test.ts scripts/plugin-versions.test.ts
           if [ "${EVENT_NAME}" = "push" ]; then
             bun scripts/verify-versions.ts
           else

@@ -192,6 +192,9 @@ jobs:
         env:
           OMNI_BUILD_NUMBER: ${{ steps.version.outputs.build_number }}
 
+      # Omni's own DSH plugins (apps/*-dsh) move to this version only when their folder
+      # changed since the release their version names (its tag; this checkout has every
+      # tag): each carries the Omni version of its last change (scripts/lib/plugin-versions.ts).
       - name: Sync versions (package.json + chart appVersion)
         env:
           VERSION: ${{ steps.version.outputs.version }}
