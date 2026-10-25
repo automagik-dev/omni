@@ -13,8 +13,8 @@ runs Omni, autopg/pgserve or PM2.
 | Supervisor | PM2 | `omni sandbox run` (one process, no PM2, no node) |
 | At login | `--systemd` (sudo) | `--at-login`: launchd agent / `systemd --user` unit, no sudo |
 
-`<home>` is `--home`, else `$OMNI_HOME/sandbox` (the Automagik app sets
-`OMNI_HOME=~/.omni/desktop`), else `~/.omni/sandbox`. Ports are picked once
+`<home>` is `--home`, else `$OMNI_HOME/sandbox`, else `~/.omni/sandbox`: one
+sandbox, whether the CLI or the Automagik app installed it. Ports are picked once
 (18882, 15432 and 14222, or the next free ones) and kept in
 `<home>/sandbox.json`. The runtime carries the same `@automagik/omni` version as
 the CLI that installed it. Running a newer CLI's `omni install --sandbox` moves

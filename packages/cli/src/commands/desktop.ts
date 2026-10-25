@@ -8,7 +8,7 @@
  * takes the build for this machine from automagik-dev/automagik's GitHub
  * releases (tags `v<version>`, Automagik's version: the newest that has this
  * machine's build), checks it against the release's SHA256SUMS, keeps it in
- * ~/.omni/desktop/app/<tag>/, and opens it. `--path` opens a build you already
+ * ~/.automagik/app/<tag>/, and opens it. `--path` opens a build you already
  * have instead. Releases from before the app moved there (automagik-dev/omni-desktop)
  * are taken only when Automagik has no build for this machine yet.
  *
@@ -130,11 +130,9 @@ export function parseSums(text: string): Map<string, string> {
 
 export const sha256Of = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 
-/** The desktop app's own home: OMNI_DESKTOP_HOME, else $OMNI_HOME/desktop, else ~/.omni/desktop (as the app reads it). */
+/** The Automagik app's own home: AUTOMAGIK_HOME, else ~/.automagik (as the app reads it). */
 export function desktopHome(env: NodeJS.ProcessEnv = process.env): string {
-  if (env.OMNI_DESKTOP_HOME?.trim()) return resolve(env.OMNI_DESKTOP_HOME.trim());
-  const omni = env.OMNI_HOME?.trim() ? resolve(env.OMNI_HOME.trim()) : join(homedir(), '.omni');
-  return join(omni, 'desktop');
+  return env.AUTOMAGIK_HOME?.trim() ? resolve(env.AUTOMAGIK_HOME.trim()) : join(homedir(), '.automagik');
 }
 
 /** Say what the app is opened for: its home's `preload` file, which the app reads at every start. */
@@ -146,10 +144,9 @@ export function writePreload(env: NodeJS.ProcessEnv = process.env, preload = PRE
   return file;
 }
 
-/** Where downloaded builds are kept: $OMNI_HOME/desktop/app, else ~/.omni/desktop/app. */
+/** Where downloaded builds are kept: the app's home's app/ (shared with `genie desktop`). */
 export function appCacheDir(env: NodeJS.ProcessEnv = process.env): string {
-  const omni = env.OMNI_HOME?.trim() ? resolve(env.OMNI_HOME.trim()) : join(homedir(), '.omni');
-  return join(omni, 'desktop', 'app');
+  return join(desktopHome(env), 'app');
 }
 
 /**

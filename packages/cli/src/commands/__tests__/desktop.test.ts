@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { mkdtempSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   DESKTOP_TAG_PREFIX,
@@ -110,15 +110,20 @@ describe('checksums', () => {
 });
 
 describe('where and how it opens', () => {
-  test('builds are kept under OMNI_HOME/desktop/app', () => {
-    expect(appCacheDir({ OMNI_HOME: '/srv/omni' })).toBe(join('/srv/omni', 'desktop', 'app'));
+  test("builds are kept in the app's home, never in Omni's", () => {
+    expect(appCacheDir({ AUTOMAGIK_HOME: '/srv/automagik', OMNI_HOME: '/srv/omni' })).toBe(
+      join('/srv/automagik', 'app'),
+    );
+    expect(appCacheDir({ OMNI_HOME: '/srv/omni' })).toBe(join(homedir(), '.automagik', 'app'));
   });
   test('an AppImage runs from its one-time unpack in the cache; a dmg is opened', () => {
     const linux = desktopTarget('linux', 'x64', '');
     const mac = desktopTarget('darwin', 'arm64');
     if (!linux.supported || !mac.supported) throw new Error('unreachable');
-    const dir = extractionDir('/home/me/Downloads/Omni-0.1.0-linux-x86_64.AppImage', { OMNI_HOME: '/srv/omni' });
-    expect(dir).toBe(join('/srv/omni', 'desktop', 'app', 'extracted', 'Omni-0.1.0-linux-x86_64'));
+    const dir = extractionDir('/home/me/Downloads/Omni-0.1.0-linux-x86_64.AppImage', {
+      AUTOMAGIK_HOME: '/srv/automagik',
+    });
+    expect(dir).toBe(join('/srv/automagik', 'app', 'extracted', 'Omni-0.1.0-linux-x86_64'));
     expect(launchPlan('/x/Omni.AppImage', linux, dir)).toEqual({
       command: join(dir, 'squashfs-root', 'AppRun'),
       args: ['--preload=omni'],
@@ -128,12 +133,13 @@ describe('where and how it opens', () => {
 });
 
 test("the preload lands in the app's home, where the app reads it however it was installed", () => {
-  const omniHome = mkdtempSync(join(tmpdir(), 'omni-desktop-preload-'));
+  const appHome = mkdtempSync(join(tmpdir(), 'omni-desktop-preload-'));
   expect(PRELOAD).toBe('omni');
-  expect(desktopHome({ OMNI_HOME: omniHome })).toBe(join(omniHome, 'desktop'));
-  expect(desktopHome({ OMNI_HOME: omniHome, OMNI_DESKTOP_HOME: '/srv/app' })).toBe('/srv/app');
-  const file = writePreload({ OMNI_HOME: omniHome });
-  expect(file).toBe(join(omniHome, 'desktop', 'preload'));
+  expect(desktopHome({})).toBe(join(homedir(), '.automagik'));
+  expect(desktopHome({ OMNI_HOME: '/srv/omni', OMNI_DESKTOP_HOME: '/srv/app' })).toBe(join(homedir(), '.automagik'));
+  expect(desktopHome({ AUTOMAGIK_HOME: appHome })).toBe(appHome);
+  const file = writePreload({ AUTOMAGIK_HOME: appHome });
+  expect(file).toBe(join(appHome, 'preload'));
   expect(readFileSync(file, 'utf8')).toBe('omni\n');
 });
 
