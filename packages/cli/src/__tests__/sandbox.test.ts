@@ -734,6 +734,10 @@ describe('a reinstall from anywhere keeps its units', () => {
       'bun install failed',
     );
     expect(alive.has(4242)).toBe(true);
+    // The next try installs for real: the failed one did not leave the new manifest behind.
+    deps.run = run;
+    await installSandbox({ home, defaultHome, packageSpec: '2.261026.1' }, deps);
+    expect(readSandboxState(sandboxLayout(home))?.version).toBe('2.261026.1');
   });
 });
 

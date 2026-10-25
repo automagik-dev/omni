@@ -803,6 +803,10 @@ async function ensureRuntime(layout: SandboxLayout, packageSpec: string, deps: S
     env: sandboxBaseEnv(layout, deps.env),
   });
   if (result.code !== 0) {
+    // Put the manifest back: left naming the new version over the old modules, the next try
+    // would read as already installed and never install it.
+    if (current === null) rmSync(manifestPath, { force: true });
+    else writeFileSync(manifestPath, current, { mode: 0o600 });
     throw new SandboxError(
       `bun install failed in ${layout.runtimeDir}: ${result.stderr.trim().split('\n').slice(-3).join(' ')}`,
     );
