@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
 import { runInNewContext } from 'node:vm'
-import { EXTERNAL_BUNDLES, PLATFORM_MODULES, bundleClient } from '../scripts/build-client.mjs'
+import { EXTERNAL_BUNDLES, PLATFORM_MODULES, TELEMETRY_TRACES, bundleClient } from '../scripts/build-client.mjs'
 import { FENCE } from '../src/client/omni-ui-spec.js'
 import { STRINGS } from '../src/client/strings.js'
 import { PLATFORM, loadClients } from './omni-client.js'
@@ -88,4 +88,14 @@ test('every literal this client translates has a Chinese entry, here or in the t
   }
   assert.deepEqual(missing, [])
   assert.deepEqual(Object.keys(STRINGS).filter(key => Object.hasOwn(DICTIONARY.zh, key)), [])
+})
+
+// Omni sends nothing to anyone: OpenUI's PostHog reporting is cut from what ships, and no
+// dependency runs an install script (lang-core's would report the install).
+test('nothing this plugin ships or installs reports to OpenUI\'s PostHog', () => {
+  for (const file of ['../client.js', '../src/host/omni-ui-check.bundle.js']) {
+    const text = readFileSync(new URL(file, import.meta.url), 'utf8')
+    assert.deepEqual(TELEMETRY_TRACES.filter(trace => text.includes(trace)), [], file)
+  }
+  assert.match(readFileSync(new URL('../.npmrc', import.meta.url), 'utf8'), /^ignore-scripts=true$/m)
 })

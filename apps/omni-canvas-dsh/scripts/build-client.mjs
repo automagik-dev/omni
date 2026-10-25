@@ -48,6 +48,35 @@ const zodEnglishOnly = {
   },
 }
 
+// OpenUI's lang-core reports its use to PostHog (at run time when OPENUI_RUNTIME_TELEMETRY_ENABLED
+// is set). Omni sends nothing to anyone, so its bundles carry none of it: the switch always
+// reads off and the endpoint is gone. Each cut must find its text, and a bundle that still
+// names the endpoint or the switch fails the build.
+const TELEMETRY_CUTS = [
+  [/(function isRuntimeTelemetryEnabled\(env\) \{)[^}]*\}/, '$1\n\treturn false;\n}'],
+  [/(function getPostHogConfig\(env\) \{)[\s\S]*?\n\}/, '$1\n\treturn { apiKey: "", captureUrl: "" };\n}'],
+]
+export const TELEMETRY_TRACES = ['phc_', 'cloudfront.net', 'OPENUI_POSTHOG', 'OPENUI_RUNTIME_TELEMETRY_ENABLED']
+const openuiNoTelemetry = {
+  name: 'openui-no-telemetry',
+  setup(build) {
+    build.onLoad({ filter: /[\\/]@openuidev[\\/]lang-core[\\/]dist[\\/][^\\/]+\.mjs$/ }, args => {
+      let text = readFileSync(args.path, 'utf8')
+      if (!/function (isRuntimeTelemetryEnabled|getPostHogConfig)\(/.test(text)) return undefined
+      for (const [pattern, replacement] of TELEMETRY_CUTS) {
+        if (!pattern.test(text)) throw new Error(`OpenUI telemetry: ${pattern} matched nothing in ${args.path}`)
+        text = text.replace(pattern, replacement)
+      }
+      return { contents: text, loader: 'js' }
+    })
+  },
+}
+const withoutTelemetry = (text, name) => {
+  const left = TELEMETRY_TRACES.filter(trace => text.includes(trace))
+  if (left.length > 0) throw new Error(`${name} still carries OpenUI telemetry: ${left.join(', ')}`)
+  return text
+}
+
 export async function bundleClient() {
   const result = await build({
     // Region comments name sources relative to the plugin, wherever the script runs from.
@@ -64,9 +93,10 @@ export async function bundleClient() {
     charset: 'utf8',
     write: false,
     logLevel: 'silent',
-    plugins: [zodEnglishOnly],
+    plugins: [zodEnglishOnly, openuiNoTelemetry],
   })
   if (result.warnings.length > 0) throw new Error(`esbuild warnings:\n${result.warnings.map(warning => warning.text).join('\n')}`)
+  withoutTelemetry(result.outputFiles[0].text, 'client.js')
   return [
     '// Generated from src/client by `npm run build` (scripts/build-client.mjs). Do not edit by hand.',
     'window.__ModuleLoader__.load({',
@@ -111,9 +141,10 @@ export async function bundleCheck() {
     charset: 'utf8',
     write: false,
     logLevel: 'silent',
-    plugins: [zodEnglishOnly],
+    plugins: [zodEnglishOnly, openuiNoTelemetry],
   })
   if (result.warnings.length > 0) throw new Error(`esbuild warnings:\n${result.warnings.map(warning => warning.text).join('\n')}`)
+  withoutTelemetry(result.outputFiles[0].text, 'src/host/omni-ui-check.bundle.js')
   return `// Generated from src/client/omni-ui-check.js by \`npm run build\` (scripts/build-client.mjs). Do not edit by hand.\n// Bundles @openuidev/lang-core and zod (MIT; see NOTICE).\n${result.outputFiles[0].text}`
 }
 
