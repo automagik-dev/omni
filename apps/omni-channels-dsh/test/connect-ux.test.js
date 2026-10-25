@@ -47,6 +47,11 @@ test('an old Omni the Omni CLI runs offers Update and connect; one another app r
 
 test('each found Omni gets the one action that fits it', () => {
   assert.equal(ui.foundRow(local({ source: 'sandbox', manager: 'sandbox', pairing: 'available', canPair: true, hasKey: true, updateTo: '2.261023.16' })).action, 'reinstall')
+  // Older than the oldest Omni this app works with (engines.omni): the CLI updates one it runs,
+  // and one another app runs can still be used, as before.
+  const below = local({ pairing: 'available', canPair: true, hasKey: true, manager: 'cli', outdated: true })
+  assert.deepEqual([ui.foundRow(below).action, ui.foundRow(below).badge], ['update', 'Needs an update'])
+  assert.equal(ui.foundRow({ ...below, manager: 'other' }).action, 'use')
   assert.equal(ui.foundRow(local({ pairing: 'available', canPair: true, hasKey: true, manager: 'cli' })).action, 'use')
   assert.equal(ui.foundRow(local({ pairing: 'available', canPair: true })).action, 'connect')
   assert.equal(ui.foundRow(local({ reachable: false })).badge, 'Not answering')

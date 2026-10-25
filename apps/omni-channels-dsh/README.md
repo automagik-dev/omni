@@ -35,7 +35,10 @@ runtime is the same `omniTeam` service.
 
 ## Install
 
-The plugin needs DSH `>=0.2.1-rc.2 <0.3.0` and the Bot team plugin. Add the Automagik
+The plugin needs DSH `>=0.2.1-rc.2 <0.3.0`, the Bot team plugin (`@automagik/bots-dsh`
+`>=3.2.0 <3.261000.0`: Automagik's 3.N releases) and an Omni no older than its `engines.omni`
+minimum. Its version is the Omni release of its last change: an Omni release moves it only when
+this folder changed, so it can trail the newest Omni. Add the Automagik
 marketplace index to DSH's plugin market ([marketplace/README.md](../../marketplace/README.md)
 has the URL and the steps) and install `@automagik/omni-channels-dsh` from it. DSH applies
 the bundle patch (`cordis.patch.yml`), which adds one row, `id: omni-channels`, and changes
@@ -54,6 +57,12 @@ page goes live as soon as the code arrives. The Omni must have pairing turned on
 The key Omni mints is saved in `omni.json` in the team's folder (`$OMNI_HOME/ui`, readable by
 you only), with its scopes and expiry; it never reaches the browser. Delete that file to
 disconnect; revoke the key in Omni to cut it off from the server side.
+
+Without an Omni, the Connect step can run one on this computer (`omni install --sandbox`). It
+installs the newest Omni release that meets the minimum, read from npm's `latest` tag (else
+`next`) as one exact version that the step shows before anything runs; offline, the plugin's
+own version. A sandboxed Omni below the minimum is offered that release, and one the Omni CLI
+runs is offered `omni update`.
 
 A profile can still name an Omni the older way: `omni.url` (the API, without `/api/v2`) in
 this row's config, or on the team's `omni-ui` row where it lived before this plugin, and the

@@ -17,7 +17,7 @@ import { delimiter, dirname, join } from 'node:path'
 import { z } from 'zod'
 import { candidates, foundOmni, linkWithKey, managerOf, probe } from './omni-discover.js'
 import { downloadBun, findBun } from './omni-local.js'
-import { PLUGIN_VERSION } from './version.js'
+import { installRelease } from './omni-release.js'
 
 const MAX_OUTPUT = 256 * 1024
 const MAX_TERMINALS = 2
@@ -95,8 +95,9 @@ export function install(rt, deps = {}) {
   const env = deps.env ?? process.env
   const home = deps.home ?? homedir()
   const platform = deps.platform ?? process.platform
-  const version = deps.version ?? PLUGIN_VERSION
   const fetchImpl = deps.fetch ?? ((...args) => fetch(...args))
+  // The Omni the install command names: one exact release (omni-release.js).
+  const release = deps.version !== undefined ? async () => deps.version : async () => (await installRelease({ fetchImpl, env })).version
   const spawnPipe = deps.spawn ?? spawnProcess
   // DSH's process service, while it is there: this plugin does not require it, so it reads it
   // from a fiber of its own, as the team reads its optional services (schedules.js there).
@@ -126,12 +127,13 @@ export function install(rt, deps = {}) {
         entry.step = 'download-bun'
         bun = await (deps.downloadBun ?? downloadBun)({ env, home, fetchImpl })
       }
+      const version = await release()
       entry.step = null
       return {
         title: 'Install Omni on this computer',
         command: `bun x --bun @automagik/omni@${version} install --sandbox --at-login`,
         env: { PATH: withPath(env, [dirname(bun), ...bunFolders]) },
-        after: linkSandbox,
+        after: () => linkSandbox(version),
       }
     }
     const omni = findFound(entry.foundId)
@@ -146,7 +148,7 @@ export function install(rt, deps = {}) {
   }
 
   // After the install: the sandbox's own config holds its address and key (omni-discover.js).
-  async function linkSandbox() {
+  async function linkSandbox(version) {
     const sandbox = candidates({ env, home }).find(found => found.source === 'sandbox' && found.key)
     if (!sandbox) throw new Error('Omni is set up, but its key could not be read.')
     const linked = await link(sandbox.url, sandbox.key)

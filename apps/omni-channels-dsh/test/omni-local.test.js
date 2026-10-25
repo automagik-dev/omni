@@ -8,7 +8,8 @@ import { afterEach, test } from 'node:test'
 import { deflateRawSync } from 'node:zlib'
 import { BUN_VERSION, downloadBun, findBun, install, installArgs, runInstall, sandboxKey, unzipEntry } from '../src/host/omni-local.js'
 import { install as installLink, LINK_FILE } from '../src/host/omni-link.js'
-import { PLUGIN_VERSION } from '../src/host/version.js'
+import { forgetReleases } from '../src/host/omni-release.js'
+import { OMNI_MINIMUM, PLUGIN_VERSION } from '../src/host/version.js'
 import { install as installHooks } from '@automagik/bots-dsh/src/host/extend.js'
 
 const realFetch = globalThis.fetch
@@ -180,7 +181,11 @@ function host(t, { report, code = 0, validate = 200 }) {
   writeFileSync(join(sandbox, 'config', 'config.json'), JSON.stringify({ apiUrl: 'http://127.0.0.1:18882', apiKey: SANDBOX_KEY }), { mode: 0o600 })
   const fake = fakeSpawn({ stdout: `${JSON.stringify(report(sandbox))}\n`, code })
   const checked = []
+  forgetReleases()
   globalThis.fetch = async (address, init = {}) => {
+    // npm's dist-tags for @automagik/omni (omni-release.js): the release a new sandbox gets.
+    if (String(address) === 'https://registry.npmjs.org/-/package/@automagik%2fomni/dist-tags')
+      return new Response(JSON.stringify({ latest: LATEST, next: '2.999999.2' }))
     checked.push({ url: String(address), key: init.headers?.['x-api-key'] })
     return new Response(JSON.stringify(validate === 200 ? { data: { valid: true, scopes: ['instances:*', 'chats:*'] } } : { error: { code: 'UNAUTHORIZED' } }), { status: validate })
   }
@@ -191,12 +196,15 @@ function host(t, { report, code = 0, validate = 200 }) {
   return { rt, sandbox, calls: fake.calls, checked }
 }
 
+// The stable Omni npm names: newer than the plugin, and at least its minimum.
+const LATEST = '2.999999.1'
 const okReport = sandbox => ({ ok: true, installed: true, home: sandbox, version: PLUGIN_VERSION, apiUrl: 'http://127.0.0.1:18882', configPath: join(sandbox, 'config', 'config.json'), running: true, healthy: true, logsDir: join(sandbox, 'logs') })
 
 test('running Omni here asks first, then installs, links it, and the key never reaches the page', async (t) => {
   const { rt, sandbox, calls, checked } = host(t, { report: okReport })
   const asked = await rt.omniLocalEndpoint('omni-local-install', {})
-  assert.deepEqual(asked, { status: 'confirm', home: sandbox, version: PLUGIN_VERSION, update: false })
+  // Not this plugin's own version (the release of its last change): the newest Omni it works with.
+  assert.deepEqual(asked, { status: 'confirm', home: sandbox, version: LATEST, update: false })
   assert.equal(calls.length, 0, 'nothing runs before the person says yes')
   assert.equal((await rt.omniLocalEndpoint('omni-local-progress')).status, 'idle')
 
@@ -206,7 +214,7 @@ test('running Omni here asks first, then installs, links it, and the key never r
   const done = await rt.omniLocalEndpoint('omni-local-progress')
   assert.deepEqual({ status: done.status, origin: done.origin }, { status: 'paired', origin: '127.0.0.1:18882' })
   assert.equal(calls.length, 1)
-  assert.equal(calls[0].args[2], `@automagik/omni@${PLUGIN_VERSION}`)
+  assert.equal(calls[0].args[2], `@automagik/omni@${LATEST}`)
   assert.deepEqual(checked, [{ url: 'http://127.0.0.1:18882/api/v2/auth/validate', key: SANDBOX_KEY }])
   const link = JSON.parse(readFileSync(join(rt.home, LINK_FILE), 'utf8'))
   assert.deepEqual({ url: link.url, key: link.key }, { url: 'http://127.0.0.1:18882', key: SANDBOX_KEY })
@@ -234,7 +242,7 @@ test('a sandbox that refuses its own key is a failure, not a link', async (t) =>
   assert.equal(existsSync(join(rt.home, LINK_FILE)), false)
 })
 
-test('a sandboxed Omni from an earlier release is offered this plugin\'s version, a current or newer one is not', async (t) => {
+test('a sandboxed Omni below this plugin\'s minimum is offered the release a new one gets; one at it or newer is not', async (t) => {
   const { discover } = await import('../src/host/omni-discover.js')
   const { newer } = await import('../src/host/version.js')
   const home = tempDir(t, 'omni-local-behind-')
@@ -246,10 +254,19 @@ test('a sandboxed Omni from an earlier release is offered this plugin\'s version
     if (path === '/api/v2/health') return new Response(JSON.stringify({ version }))
     return new Response(JSON.stringify({ data: { claimed: true } }))
   }
-  const [behind] = await discover({ env: {}, home, fetchImpl: answering('2.261001.1') })
-  assert.equal(behind.updateTo, PLUGIN_VERSION)
-  const [current] = await discover({ env: {}, home, fetchImpl: answering(PLUGIN_VERSION) })
-  assert.equal(current.updateTo, null)
+  let asked = 0
+  const release = async () => { asked += 1; return { version: LATEST, from: 'latest' } }
+  const [behind] = await discover({ env: {}, home, fetchImpl: answering('2.261001.1'), release })
+  assert.deepEqual([behind.outdated, behind.updateTo], [true, LATEST])
+  // At the minimum, or newer, nothing is offered, and the registry is not asked.
+  const [current] = await discover({ env: {}, home, fetchImpl: answering(OMNI_MINIMUM), release })
+  assert.deepEqual([current.outdated, current.updateTo], [false, null])
+  // An Omni older than this plugin's own version but at its minimum is current: the version is
+  // only the release of the plugin's last change.
+  const [lagging] = await discover({ env: {}, home, fetchImpl: answering(OMNI_MINIMUM), release, minimum: '2.261001.1' })
+  assert.deepEqual([lagging.outdated, lagging.updateTo], [false, null])
+  assert.equal(asked, 1)
+  assert.equal(newer(OMNI_MINIMUM, PLUGIN_VERSION), false, 'the plugin is never older than its own minimum')
   assert.equal(newer('2.261023.10', '2.261023.9'), true)
   assert.equal(newer('2.261023.6-labs.2', '2.261023.6'), false)
   assert.equal(newer('3.0.0', null), false)
