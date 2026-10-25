@@ -102,7 +102,10 @@ export function releaseCommit(root: string, version: string): string | null {
       : null;
   const found = resolve();
   if (found) return found;
-  gitOk(root, ['fetch', '--quiet', '--no-tags', '--depth=1', 'origin', `+${ref}:${ref}`]);
+  // --depth only in a clone that is already shallow: in a full clone it would make the clone
+  // shallow again, and checks that walk history after this one (the market gate) would break.
+  const shallow = git(root, ['rev-parse', '--is-shallow-repository']) === 'true';
+  gitOk(root, ['fetch', '--quiet', '--no-tags', ...(shallow ? ['--depth=1'] : []), 'origin', `+${ref}:${ref}`]);
   return resolve();
 }
 
