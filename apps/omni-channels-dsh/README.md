@@ -36,7 +36,7 @@ runtime is the same `omniTeam` service.
 ## Install
 
 The plugin needs DSH `>=0.2.1-rc.2 <0.3.0`, the Bot team plugin (`@automagik/bots-dsh`
-`>=3.2.0 <3.261000.0`: Automagik's 3.N releases) and an Omni no older than its `engines.omni`
+`>=3.1.0 <3.261000.0`: Automagik's 3.N releases) and an Omni no older than its `engines.omni`
 minimum. Its version is the Omni release of its last change: an Omni release moves it only when
 this folder changed, so it can trail the newest Omni. Add the Automagik
 marketplace index to DSH's plugin market ([marketplace/README.md](../../marketplace/README.md)

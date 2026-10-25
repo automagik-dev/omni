@@ -1,6 +1,6 @@
 {
   "name": "@automagik/omni-channels-dsh",
-  "version": "2.261025.2",
+  "version": "2.261025.4",
   "description": "Omni's channels for DeepSeek Harness: link an Omni, see its channels and chats, and let the Omni Bot operate it and run your automations",
   "keywords": [
     "dsh-plugin",
@@ -47,7 +47,7 @@
     "omni": ">=2.261025.2"
   },
   "peerDependencies": {
-    "@automagik/bots-dsh": ">=3.2.0 <3.261000.0",
+    "@automagik/bots-dsh": ">=3.1.0 <3.261000.0",
     "@automagik/omni-dsh": ">=2.261019.10",
     "@deepseek-ai/cordis": "*",
     "@deepseek-ai/dsh-llm": "*",
