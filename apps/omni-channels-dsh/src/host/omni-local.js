@@ -57,7 +57,7 @@ const Report = z.object({
 const SandboxConfig = z.object({ apiKey: z.string().min(1).max(4096) }).passthrough()
 const InstallPayload = z.object({ confirm: z.literal(true).optional(), update: z.boolean().optional() }).optional()
 
-// <OMNI_HOME>, else ~/.omni: the desktop app sets OMNI_HOME to its own home.
+// <OMNI_HOME>, else ~/.omni: Omni's own folder (the Automagik app leaves it unset).
 const omniRoot = ({ env, home }) => env.OMNI_HOME || join(home, '.omni')
 const ownBun = ctx => join(omniRoot(ctx), 'runtime', 'bun', 'bun')
 
