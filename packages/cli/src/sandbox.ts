@@ -141,10 +141,20 @@ export const SandboxStateSchema = z.object({
   bun: z.string().min(1),
   ports: z.object({ api: PortSchema, pg: PortSchema, nats: PortSchema }),
   atLogin: z.boolean(),
+  /**
+   * The default home when it was installed, which names its at-login unit (sandboxUnitNames).
+   * Kept so that a reinstall from anywhere names it the same: an update the API hands off runs
+   * without the OMNI_HOME of whoever installed it. Absent in sandboxes from before it was kept.
+   */
+  defaultHome: z.string().min(1).optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
 export type SandboxState = z.infer<typeof SandboxStateSchema>;
+
+/** The default home that names this sandbox's units: the one recorded at install, else the caller's. */
+const unitDefaultHome = (state: SandboxState | null, callerDefault: string): string =>
+  state?.defaultHome ?? callerDefault;
 
 export function readSandboxState(layout: SandboxLayout): SandboxState | null {
   if (!existsSync(layout.statePath)) return null;
@@ -1002,12 +1012,13 @@ export async function startSandbox(
 ): Promise<SandboxReport> {
   const layout = sandboxLayout(opts.home);
   const state = requireState(layout);
+  const defaultHome = unitDefaultHome(state, opts.defaultHome);
   if (livePid(layout, deps) === null) {
     // Children of a supervisor that died hard still hold the ports (and would answer the health check).
     await sweepSandboxLeftovers(layout, deps);
     const env = serviceManagerEnv(deps);
     if (state.atLogin && deps.platform === 'darwin') {
-      const names = sandboxUnitNames(layout.home, opts.defaultHome);
+      const names = sandboxUnitNames(layout.home, defaultHome);
       const plist = unitPaths(names, deps).plist;
       const loaded = await deps.run(['launchctl', 'print', `gui/${deps.uid}/${names.label}`], { env });
       const result =
@@ -1017,12 +1028,12 @@ export async function startSandbox(
       if (result.code !== 0)
         throw new SandboxError(`launchctl could not start ${names.label}: ${result.stderr.trim()}`);
     } else if (state.atLogin && deps.platform === 'linux') {
-      const names = sandboxUnitNames(layout.home, opts.defaultHome);
+      const names = sandboxUnitNames(layout.home, defaultHome);
       const result = await deps.run(['systemctl', '--user', 'enable', '--now', names.systemdUnit], { env });
       if (result.code !== 0)
         throw new SandboxError(`systemctl could not start ${names.systemdUnit}: ${result.stderr.trim()}`);
     } else {
-      await startSessionSupervisor(layout, state, opts.defaultHome, deps);
+      await startSessionSupervisor(layout, state, defaultHome, deps);
     }
   }
   const healthy = await deps.health(sandboxApiUrl(state), opts.healthTimeoutMs ?? SANDBOX_HEALTH_TIMEOUT_MS);
@@ -1041,7 +1052,7 @@ export async function stopSandbox(
   const layout = sandboxLayout(opts.home);
   const state = requireState(layout);
   const env = serviceManagerEnv(deps);
-  const names = sandboxUnitNames(layout.home, opts.defaultHome);
+  const names = sandboxUnitNames(layout.home, unitDefaultHome(state, opts.defaultHome));
   // A unit would bring a killed supervisor straight back, so stop the unit itself.
   if (state.atLogin && deps.platform === 'darwin') {
     await deps.run(['launchctl', 'bootout', `gui/${deps.uid}/${names.label}`], { env });
@@ -1083,18 +1094,25 @@ export async function installSandbox(
   const previous = readSandboxState(layout);
   const packageSpec = opts.packageSpec?.trim() || VERSION;
   const atLogin = opts.atLogin ?? previous?.atLogin ?? false;
+  const defaultHome = unitDefaultHome(previous, opts.defaultHome);
   const running = livePid(layout, deps) !== null;
   // A supervisor runs either on its own or under its launchd/systemd unit. Switching
   // at-login restarts it under the other, or launchd/systemd would not bring it back.
   const restart =
     previous && (previous.packageSpec !== packageSpec || previous.bun !== deps.bun || previous.atLogin !== atLogin);
-  if (running && restart) {
-    await stopSandbox({ home: opts.home, defaultHome: opts.defaultHome }, deps);
-  }
+  const stopped = Boolean(running && restart);
+  if (stopped) await stopSandbox({ home: opts.home, defaultHome }, deps);
 
-  const version = await ensureRuntime(layout, packageSpec, deps);
-  if (!existsSync(layout.natsBinary) && !(await deps.installNats(layout.natsBinary))) {
-    throw new SandboxError(`Could not install nats-server at ${layout.natsBinary}`);
+  let version: string;
+  try {
+    version = await ensureRuntime(layout, packageSpec, deps);
+    if (!existsSync(layout.natsBinary) && !(await deps.installNats(layout.natsBinary))) {
+      throw new SandboxError(`Could not install nats-server at ${layout.natsBinary}`);
+    }
+  } catch (error) {
+    // Nobody may be watching (an update from the app): bring back the sandbox that was running.
+    if (stopped) await startSandbox({ home: opts.home, defaultHome }, deps).catch(() => undefined);
+    throw error;
   }
 
   const now = deps.now().toISOString();
@@ -1105,17 +1123,18 @@ export async function installSandbox(
     bun: deps.bun,
     ports: previous?.ports ?? (await pickPorts(deps)),
     atLogin,
+    defaultHome,
     createdAt: previous?.createdAt ?? now,
     updatedAt: now,
   };
   writeSandboxState(layout, state);
   writeSandboxConfig(layout, state, readSandboxApiKey(layout) ?? generateApiKey());
 
-  if (state.atLogin) await writeAtLoginUnit(layout, state, opts, deps);
-  else if (previous?.atLogin) await removeAtLoginUnit(layout, opts.defaultHome, deps);
+  if (state.atLogin) await writeAtLoginUnit(layout, state, { ...opts, defaultHome }, deps);
+  else if (previous?.atLogin) await removeAtLoginUnit(layout, defaultHome, deps);
 
   if (opts.start === false) return report(layout, deps, 0);
-  return startSandbox({ home: opts.home, defaultHome: opts.defaultHome, healthTimeoutMs: opts.healthTimeoutMs }, deps);
+  return startSandbox({ home: opts.home, defaultHome, healthTimeoutMs: opts.healthTimeoutMs }, deps);
 }
 
 /**
@@ -1128,9 +1147,9 @@ export async function uninstallSandbox(
   deps: SandboxDeps = defaultSandboxDeps(),
 ): Promise<SandboxReport> {
   const layout = sandboxLayout(opts.home);
-  requireState(layout);
+  const state = requireState(layout);
   await stopSandbox(opts, deps);
-  await removeAtLoginUnit(layout, opts.defaultHome, deps);
+  await removeAtLoginUnit(layout, unitDefaultHome(state, opts.defaultHome), deps);
   if (opts.purge) {
     const home = resolve(layout.home);
     if (home === '/' || home === resolve(deps.userHome)) throw new SandboxError(`Refusing to delete ${home}`);
@@ -1178,7 +1197,7 @@ export async function handOffSandboxUpdate(
   const env = sandboxBaseEnv(layout, deps.env);
   const logPath = join(layout.logsDir, 'update.log');
   if (deps.platform === 'linux') {
-    const names = sandboxUnitNames(layout.home, opts.defaultHome);
+    const names = sandboxUnitNames(layout.home, unitDefaultHome(state, opts.defaultHome));
     const unit = names.sessionUnit.replace(/-session\.service$/, `-update-${deps.now().getTime()}.service`);
     const job = { description: `Omni sandbox update to ${opts.version} (${layout.home})`, log: logPath };
     const host = { env: serviceManagerEnv(deps) };
@@ -1187,6 +1206,12 @@ export async function handOffSandboxUpdate(
       started = await deps.run(buildSystemdRunCommand(unit, cmd, layout, env, false, job), host);
     }
     if (started.code === 0) return { via: 'systemd', logPath, version: opts.version };
+    // A detached process stays in the unit that runs the sandbox, which the install stops:
+    // it would be killed halfway, leaving the sandbox down. Refuse; the API says it failed.
+    const own = state.atLogin ? names.systemdUnit : names.sessionUnit;
+    if ((await deps.run(['systemctl', '--user', 'is-active', '--quiet', own], host)).code === 0) {
+      throw new SandboxError(`systemd-run could not start the update outside ${own}: ${started.stderr.trim()}`);
+    }
   }
   deps.spawnDetached(cmd, { cwd: layout.home, env, logPath });
   return { via: 'detached', logPath, version: opts.version };

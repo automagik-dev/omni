@@ -1032,9 +1032,10 @@ const SYSTEM_UPDATE_ROUTES: readonly RouteKey[] = ['GET /api/v2/system/update', 
 
 const SYSTEM_UPDATE_JUSTIFICATION =
   "The deployment's own version and its update. GET says what runs, what the update channel publishes and " +
-  'whether an update waits or runs; it reads no tenant row. POST only asks: it needs OMNI_UPDATE_COMMAND set by ' +
-  "the operator, the exact published version, and the owner's yes in their own WhatsApp self chat before the " +
-  'operator command runs. Deployment-wide by nature, so platform-admin.';
+  'whether an update waits or runs; it reads no tenant row. POST needs OMNI_UPDATE_COMMAND set by the operator ' +
+  "and the exact published version; it then asks for the owner's yes in their own WhatsApp self chat before the " +
+  'operator command runs, except on a loopback-only Omni whose operator set OMNI_UPDATE_CONFIRM=app (a sandbox), ' +
+  'where the request is the yes. Deployment-wide by nature, so platform-admin.';
 
 /**
  * The operator's way in (routes/v2/owner.ts): claim the deployment, approve a device, mint a

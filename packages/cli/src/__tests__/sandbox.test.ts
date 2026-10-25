@@ -90,6 +90,9 @@ const startsSessionSupervisor = (cmd: string[]) =>
   cmd[0] === 'systemd-run' ||
   (cmd[0] === 'launchctl' && cmd[1] === 'bootstrap' && (cmd[3] ?? '').startsWith(join(home, 'run')));
 const SERVICE_MANAGERS = new Set(['systemctl', 'systemd-run', 'launchctl']);
+const asksIsActive = (cmd: string[]) => cmd[0] === 'systemctl' && cmd.includes('is-active');
+/** A unit is active only where there is a service manager to run it. */
+const isActiveAnswer = (serviceManager: boolean) => ({ code: serviceManager ? 0 : 3, stdout: '', stderr: '' });
 
 /**
  * `serviceManager: false` (the default) is a computer whose user service
@@ -111,6 +114,7 @@ function fakeDeps(overrides: Partial<SandboxDeps> = {}, { serviceManager = false
     env: LEAKY_ENV,
     run: async (cmd, opts) => {
       runs.push({ cmd, cwd: opts.cwd, env: opts.env });
+      if (asksIsActive(cmd)) return isActiveAnswer(serviceManager);
       if (startsSessionSupervisor(cmd)) {
         if (!serviceManager) return { code: 1, stdout: '', stderr: 'Failed to connect to bus: No medium found' };
         // The supervisor the service manager starts writes its own pid file.
@@ -699,6 +703,40 @@ describe('sandboxChildSpecs', () => {
   });
 });
 
+describe('a reinstall from anywhere keeps its units', () => {
+  test('the default home recorded at install names the units, whatever the caller thinks the default is', async () => {
+    // Installed with OMNI_HOME pointing at this home: it is the default, so its unit has no suffix.
+    const { deps, runs } = fakeDeps();
+    await installSandbox({ home, defaultHome: home, atLogin: true }, deps);
+    expect(readSandboxState(sandboxLayout(home))?.defaultHome).toBe(home);
+    const unitDir = join(userHome, '.config', 'systemd', 'user');
+    const plain = sandboxUnitNames(home, home).systemdUnit;
+    expect(existsSync(join(unitDir, plain))).toBe(true);
+    // An update the API hands off runs with no OMNI_HOME, so its default is ~/.omni/sandbox.
+    runs.length = 0;
+    await installSandbox({ home, defaultHome, packageSpec: '2.261026.1' }, deps);
+    const hashed = sandboxUnitNames(home, defaultHome).systemdUnit;
+    expect(hashed).not.toBe(plain);
+    expect(existsSync(join(unitDir, hashed))).toBe(false);
+    expect(runs.some((call) => call.cmd.includes(hashed))).toBe(false);
+    expect(runs.some((call) => call.cmd.join(' ') === `systemctl --user enable --now ${plain}`)).toBe(true);
+    expect(readSandboxState(sandboxLayout(home))?.defaultHome).toBe(home);
+  });
+
+  test('an install that fails after stopping the sandbox starts it again', async () => {
+    const { deps, alive } = fakeDeps();
+    await installSandbox({ home, defaultHome }, deps);
+    expect(alive.has(4242)).toBe(true);
+    const run = deps.run;
+    deps.run = async (cmd, opts) =>
+      cmd[1] === 'install' && opts.cwd ? { code: 1, stdout: '', stderr: 'registry unreachable' } : run(cmd, opts);
+    await expect(installSandbox({ home, defaultHome, packageSpec: '2.261026.1' }, deps)).rejects.toThrow(
+      'bun install failed',
+    );
+    expect(alive.has(4242)).toBe(true);
+  });
+});
+
 describe('updates from the app: omni sandbox update hands the install off', () => {
   const install = (version: string) => [
     BUN,
@@ -746,6 +784,22 @@ describe('updates from the app: omni sandbox update hands the install off', () =
     expect((await handOffSandboxUpdate({ home, defaultHome, version: '2.261026.1' }, mac.deps)).via).toBe('detached');
     expect(mac.runs.slice(runsBefore).some((call) => call.cmd[0] === 'launchctl')).toBe(false);
     expect(mac.detached.at(-1)?.cmd).toEqual(install('2.261026.1'));
+  });
+
+  test('linux: where systemd-run fails but a unit runs the sandbox, it refuses rather than be killed halfway', async () => {
+    const { deps, runs, detached } = fakeDeps({}, { serviceManager: true });
+    await installSandbox({ home, defaultHome }, deps);
+    const run = deps.run;
+    deps.run = async (cmd, opts) =>
+      cmd[0] === 'systemd-run' && cmd.some((arg) => arg.includes('-update-'))
+        ? { code: 1, stdout: '', stderr: 'Failed to start transient service unit' }
+        : run(cmd, opts);
+    detached.length = 0;
+    await expect(handOffSandboxUpdate({ home, defaultHome, version: '2.261026.1' }, deps)).rejects.toThrow(
+      'could not start the update outside',
+    );
+    expect(detached).toHaveLength(0);
+    expect(runs.some((call) => call.cmd.includes('is-active'))).toBe(true);
   });
 
   test('takes only a release version, and only for a sandbox that exists', async () => {
