@@ -1,19 +1,19 @@
 {
   "repository": "https://github.com/automagik-dev/automagik",
-  "version": "3.14.0",
-  "commit": "094918180a648cac60c2ad7051c9903f3d793444",
+  "version": "3.15.0",
+  "commit": "41a728ea5f45bc807678e4d9efc2e0c0bc962703",
   "packages": {
     "@automagik/bots-dsh": {
-      "version": "3.14.0",
-      "file": "automagik-bots-dsh-3.14.0.tgz",
-      "integrity": "sha512-7JmGdYqgAWk3FAowuTrqs5bQyNS/UFNrmJ4OGrQhUgr7jf5J1xbxI+xoUzl6mOhB0Zi1mx6eM9VqavXWkmVRzw==",
-      "size": 793468
+      "version": "3.15.0",
+      "file": "automagik-bots-dsh-3.15.0.tgz",
+      "integrity": "sha512-Q6aA6LQb39HsjEB46PUJjTuBde6wmJGw8nv+DQ89vDa9HcbhlHfpABB4kBHYujBDAMoY9B/n/ZNOmEA6SZFTSg==",
+      "size": 793731
     },
     "@automagik/welcome-dsh": {
-      "version": "3.14.0",
-      "file": "automagik-welcome-dsh-3.14.0.tgz",
-      "integrity": "sha512-5KA+QG+1YzfYjmwLw0Mnrplu+uYw8GKIKODJMeBQ4FSdUxiITuYjWNbkh7GvlX6p74r4Nc1gQvVY4BreDBUZ8g==",
-      "size": 327266
+      "version": "3.15.0",
+      "file": "automagik-welcome-dsh-3.15.0.tgz",
+      "integrity": "sha512-0v3QSlAB7U9BN9x3QsuzA5CY72d6ehwNDwnArxzyfwpwBJ/hGwnfkiifV2mEUr2/0KwqZ08jLT4AFK4/G2+THw==",
+      "size": 327265
     }
   }
 }
