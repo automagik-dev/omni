@@ -28,6 +28,7 @@ import { join } from 'node:path';
 import { parseMarketIndex } from '@deepseek-ai/dsh-plugin-market-index';
 // @ts-expect-error -- plain Node ESM without types (apps/automagik.mjs), shared with the admin UI image.
 import { readPin } from '../apps/automagik.mjs';
+import { releaseCommit } from './lib/plugin-versions';
 
 export const REPO_URL = 'https://github.com/automagik-dev/omni';
 /** Where the Bot team and the welcome live since they left this repository. */
@@ -173,7 +174,10 @@ export function checkIndex(
  * changes, so a changed package needs a version bump first. Older versions stay listed.
  */
 export function pinIndex(value: Index, repoDir: string, ref: string): Index {
-  const commit = git(repoDir, ['rev-parse', `${ref}^{commit}`]);
+  // A release tag (v<version>) is fetched when this clone lacks it, as CI's checkout has no tags.
+  const release = /^v(\d+\.\d+\.\d+)$/.exec(ref);
+  const commit = release ? releaseCommit(repoDir, release[1]) : git(repoDir, ['rev-parse', `${ref}^{commit}`]);
+  if (!commit) throw new Error(`${ref}: no such release`);
   const publishTimestamp = Number(git(repoDir, ['show', '-s', '--format=%ct', commit]));
   for (const plugin of value.plugins) {
     const latest = plugin.versions.find((entry) => isOurs(entry.source));
