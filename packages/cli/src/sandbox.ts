@@ -1167,7 +1167,7 @@ export async function uninstallSandbox(
 }
 
 /** A version `omni sandbox update` takes: what npm publishes, never a range or a tag. */
-export const SANDBOX_UPDATE_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+const SANDBOX_UPDATE_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
 /**
  * Updates the sandbox to `version` from outside it. The sandbox's own API runs this when the
