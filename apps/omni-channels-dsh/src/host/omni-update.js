@@ -1,8 +1,10 @@
 // Updating an Omni this host knows: one found on this computer with a key (omni-discover.js),
 // or the linked one (omni-link.js). The app never updates an Omni by itself: it asks the
 // Omni (POST /api/v2/system/update), the Omni asks its owner on WhatsApp, and only the
-// owner's reply there ("update <code>") runs the update its operator set up. An Omni from
-// before that route answers 404, and is updated where it runs, with `omni update`.
+// owner's reply there ("update <code>") runs the update its operator set up. A sandboxed
+// Omni on this computer (`confirm: 'app'`: it listens on loopback only) takes the person's
+// yes in the app instead, so the page asks before it asks, and the update starts at once.
+// An Omni from before that route answers 404, and is updated where it runs, with `omni update`.
 //
 // The key stays on this host; the page sees what the Omni runs, what is out, and where an
 // update stands.
@@ -24,11 +26,17 @@ const Status = z.object({
     latest: version.nullable().optional(),
     updateAvailable: z.boolean().optional(),
     mode: z.enum(['off', 'command']).optional(),
+    confirm: z.enum(['whatsapp', 'app']).optional(),
     pending: z.object({ version, expiresAt: z.string().max(64).optional() }).optional(),
     inFlight: z.object({ version, startedAt: z.string().max(64).optional() }).optional(),
   }),
 })
-const Accepted = z.object({ data: z.object({ status: z.literal('awaiting-confirmation'), version, expiresAt: z.string().max(64).optional() }) })
+const Accepted = z.object({
+  data: z.discriminatedUnion('status', [
+    z.object({ status: z.literal('awaiting-confirmation'), version, expiresAt: z.string().max(64).optional() }),
+    z.object({ status: z.literal('started'), version, startedAt: z.string().max(64).optional() }),
+  ]),
+})
 const Target = z.object({ id: z.string().regex(/^[a-f0-9]{16}$/).optional() })
 const RequestPayload = Target.extend({ version: z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/).max(64) })
 
@@ -42,6 +50,7 @@ export const REFUSALS = {
   ALREADY_CURRENT: 'This Omni is up to date.',
   REGISTRY_UNAVAILABLE: 'Could not check for the newest Omni right now. Try again later.',
   CONFIRM_SEND_FAILED: 'Omni could not send the confirmation to WhatsApp. Try again.',
+  UPDATE_START_FAILED: 'The update could not start on this Omni. Its logs say why.',
 }
 export const FORBIDDEN = `This device may not update that Omni: its key lacks the system scopes. Update it where it runs: ${TERMINAL_COMMAND}`
 
@@ -73,7 +82,8 @@ export function install(rt) {
     }
   }
 
-  // `state`: terminal (update it where it runs), available, off (out, but not from here),
+  // `state`: terminal (update it where it runs), available (with `confirm: 'app'` when the
+  // person's yes here starts it), off (out, but not from here),
   // pending (waiting for the owner on WhatsApp), updating, current, forbidden, unreachable,
   // unknown, or none (nothing to ask).
   async function status(body) {
@@ -90,7 +100,10 @@ export function install(rt) {
     const known = { current: data.current ?? null, latest: data.latest ?? null }
     if (data.inFlight) return { state: 'updating', ...known, version: data.inFlight.version }
     if (data.pending) return { state: 'pending', ...known, version: data.pending.version, expiresAt: data.pending.expiresAt ?? null }
-    if (data.updateAvailable && data.latest) return data.mode === 'command' ? { state: 'available', ...known } : { state: 'off', ...known, command: TERMINAL_COMMAND }
+    if (data.updateAvailable && data.latest) {
+      if (data.mode !== 'command') return { state: 'off', ...known, command: TERMINAL_COMMAND }
+      return { state: 'available', ...known, ...(data.confirm === 'app' ? { confirm: 'app' } : {}) }
+    }
     return { state: data.latest ? 'current' : 'unknown', ...known }
   }
 
@@ -104,7 +117,9 @@ export function install(rt) {
     if (reply.status === 202) {
       const accepted = Accepted.safeParse(reply.json)
       if (!accepted.success) throw refused(`Omni answered 202 at ${new URL(target.url).host} without the update`)
-      return { state: 'awaiting-confirmation', version: accepted.data.data.version, expiresAt: accepted.data.data.expiresAt ?? null }
+      const answer = accepted.data.data
+      if (answer.status === 'started') return { state: 'updating', version: answer.version }
+      return { state: 'awaiting-confirmation', version: answer.version, expiresAt: answer.expiresAt ?? null }
     }
     if (reply.status === 404) throw refused(`This Omni cannot be updated from the app. Update it where it runs: ${TERMINAL_COMMAND}`)
     if (reply.status === 401 || reply.status === 403) throw refused(FORBIDDEN)

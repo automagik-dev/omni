@@ -6,13 +6,14 @@
 const KEY = 'omni-ui:update-dismissed:'
 
 // null: nothing to show. Otherwise the bar's kind, its words and its action:
-// update (ask the Omni, then confirm on WhatsApp), how (a note on who updates it), or none.
+// update (ask the Omni, then confirm on WhatsApp, or here when `confirm` is 'app'), how (a
+// note on who updates it), or none.
 export function updateBar(status, dismissed = null) {
   const latest = status?.latest
   switch (status?.state) {
     case 'available':
       if (dismissed === latest) return null
-      return { kind: 'available', latest, current: status.current ?? null, action: 'update' }
+      return { kind: 'available', latest, current: status.current ?? null, action: 'update', ...(status.confirm === 'app' ? { confirm: 'app' } : {}) }
     case 'off':
     case 'forbidden':
       if (!latest || dismissed === latest) return null

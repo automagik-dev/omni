@@ -3,8 +3,10 @@ import { call, t } from './core.js'
 import { dismiss, dismissedFor, updateBar } from './update-bar.js'
 
 // Updating an Omni (src/host/omni-update.js): the app asks, the Omni asks its owner on
-// WhatsApp, and the owner's reply there runs it. An Omni from before that is updated where
-// it runs, with the command shown here to copy. On the Channels page that is a slim bar.
+// WhatsApp, and the owner's reply there runs it. A sandboxed Omni on this computer takes the
+// yes here instead (`confirm: 'app'`): the bar asks first, and the update starts at once. An
+// Omni from before that is updated where it runs, with the command shown here to copy. On the
+// Channels page that is a slim bar.
 
 // A translated sentence with elements in it: each {name} in the template becomes parts[name].
 export function rich(template, parts) {
@@ -43,13 +45,17 @@ export function updateWords(status) {
 }
 
 const CONFIRM_ON_WHATSAPP = 'Confirm on WhatsApp: your Omni sent you a code. Reply update and that code in your chat with yourself.'
+const UPDATING_HERE = 'Updating to {version}. Omni restarts by itself in a minute or two.'
 
 // The slim bar on the Channels page (update-bar.js decides what it says): one action, and a ×
 // that hides it until the next version of this Omni.
 export function UpdateBar({ origin }) {
   const [status, setStatus] = useState(null)
   const [dismissed, setDismissed] = useState(() => dismissedFor(origin))
-  const [asked, setAsked] = useState(false)
+  // What asking answered: null, 'awaiting-confirmation' (WhatsApp) or 'updating' (the yes was here).
+  const [asked, setAsked] = useState(null)
+  // An Omni on this computer: the person said Update once, and is asked to be sure.
+  const [sure, setSure] = useState(false)
   const [how, setHow] = useState(false)
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState(null)
@@ -66,16 +72,19 @@ export function UpdateBar({ origin }) {
     setBusy(true)
     setProblem(null)
     try {
-      await call('omni-update-request', { version: bar.latest })
-      if (alive.current) setAsked(true)
+      const reply = await call('omni-update-request', { version: bar.latest })
+      if (alive.current) setAsked(reply?.state === 'updating' ? 'updating' : 'awaiting-confirmation')
     } catch (error) {
       if (alive.current) setProblem(error.message)
     } finally {
       if (alive.current) setBusy(false)
     }
   }
+  const here = bar.confirm === 'app'
   let words
-  if (asked) words = t(CONFIRM_ON_WHATSAPP)
+  if (asked === 'updating') words = t(UPDATING_HERE, { version: bar.latest })
+  else if (asked) words = t(CONFIRM_ON_WHATSAPP)
+  else if (sure) words = rich('Update the Omni on this computer to {version}? It stops for a minute or two and comes back by itself.', { version: h('b', null, bar.latest) })
   else if (bar.kind === 'available') {
     const version = h('b', null, `Omni ${bar.latest}`)
     words = bar.current ? rich('{version} is available · you\'re on {current}', { version, current: bar.current }) : rich('{version} is available', { version })
@@ -84,7 +93,9 @@ export function UpdateBar({ origin }) {
   return h('div', { className: 'ox-bar', role: 'status', 'data-kind': bar.kind },
     h('span', { className: 'ox-bar-dot', 'aria-hidden': true }),
     h('span', { className: 'ox-bar-text' }, words),
-    !asked && bar.action === 'update' ? h('button', { type: 'button', className: 'oc-primary ox-bar-go', disabled: busy, onClick: ask }, busy ? t('Asking…') : t('Update')) : null,
+    !asked && bar.action === 'update' && !sure ? h('button', { type: 'button', className: 'oc-primary ox-bar-go', disabled: busy, onClick: here ? () => setSure(true) : ask }, busy ? t('Asking…') : t('Update')) : null,
+    !asked && sure ? h('button', { type: 'button', className: 'oc-primary ox-bar-go', disabled: busy, onClick: ask }, busy ? t('Starting…') : t('Update now')) : null,
+    !asked && sure && !busy ? h('button', { type: 'button', className: 'oc-link', onClick: () => setSure(false) }, t('Not now')) : null,
     bar.action === 'how' ? h('button', { type: 'button', className: 'oc-link', 'aria-expanded': how, onClick: () => setHow(value => !value) }, t('How')) : null,
     bar.action !== 'none' ? h('button', { type: 'button', className: 'ox-bar-x', 'aria-label': t('Hide until the next version'), title: t('Hide until the next version'), onClick: close }, '×') : null,
     how ? h('div', { className: 'ox-bar-how' }, bar.command

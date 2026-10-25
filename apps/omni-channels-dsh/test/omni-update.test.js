@@ -91,6 +91,17 @@ test('asking for the update hands the yes to WhatsApp, and every refusal says wh
   }
 })
 
+test('a sandboxed Omni on this computer takes the yes here: it says so, and asking starts the update', async (t) => {
+  const here = host(t, status({ confirm: 'app' }))
+  assert.deepEqual(await here.rt.omniUpdateEndpoint('omni-update-status', {}), { state: 'available', current: '2.261023.6', latest: '2.261023.10', confirm: 'app' })
+  const whatsapp = host(t, status({ confirm: 'whatsapp' }))
+  assert.deepEqual(await whatsapp.rt.omniUpdateEndpoint('omni-update-status', {}), { state: 'available', current: '2.261023.6', latest: '2.261023.10' })
+  const started = host(t, json => json(202, { data: { status: 'started', version: '2.261023.10', startedAt: '2026-10-23T20:00:00Z' } }))
+  assert.deepEqual(await started.rt.omniUpdateEndpoint('omni-update-request', { version: '2.261023.10' }), { state: 'updating', version: '2.261023.10' })
+  const odd = host(t, json => json(202, { data: { status: 'done', version: '2.261023.10' } }))
+  await assert.rejects(odd.rt.omniUpdateEndpoint('omni-update-request', { version: '2.261023.10' }), { code: 'bot/refused' })
+})
+
 test('an Omni found on this computer is asked with its own key, and one without a key is updated from a terminal', async (t) => {
   const { rt, sent } = host(t, status({}))
   const { omnis } = await rt.omniDiscoverEndpoint('omni-discover')

@@ -11,9 +11,16 @@
  *   3. The owner says yes in their own WhatsApp self chat, `update <CODE>`, within ten
  *      minutes (login/update-requests.ts, plugins/device-login.ts).
  *
- * Then the command runs detached, its words as argv with no shell, with
- * OMNI_UPDATE_VERSION set. The update in flight is written to a small file first, so the
- * Omni that boots after the restart can tell the owner how it went (reconcile).
+ * One exception to 3: an Omni that only listens on this computer's loopback (API_HOST
+ * 127.0.0.1, ::1 or localhost), whose operator set OMNI_UPDATE_CONFIRM=app, takes the yes from
+ * the app itself, which asks the person on screen before it asks. That is the sandbox
+ * `omni install --sandbox` sets up (packages/cli/src/sandbox.ts): it often has no WhatsApp,
+ * and nothing but this computer can reach it. Anywhere else the setting is ignored.
+ *
+ * Then the command runs detached, its words as argv with no shell (a JSON array of strings
+ * when a word holds a space), with OMNI_UPDATE_VERSION set. The update in flight is written
+ * to a small file first, so the Omni that boots after the restart can tell the owner how it
+ * went (reconcile).
  */
 
 import { type SpawnOptions, spawn as nodeSpawn } from 'node:child_process';
@@ -60,20 +67,55 @@ const InFlightSchema = z.object({
 });
 type InFlight = z.infer<typeof InFlightSchema>;
 
+const CommandArraySchema = z.array(z.string().min(1)).min(1);
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost']);
+
+/** Who says yes to an update: the owner on WhatsApp, or the app on this computer (a loopback-only Omni). */
+export type UpdateConfirm = 'whatsapp' | 'app';
+
 export interface UpdateConfig {
   /** The operator's update command as argv, or null when updates are off. */
   command: string[] | null;
+  confirm: UpdateConfirm;
   channel: UpdateChannel;
   registry: string;
   stateFile: string;
 }
 
+/** OMNI_UPDATE_COMMAND as argv: a JSON array of strings, else its words. */
+function commandOf(raw: string | undefined): string[] | null {
+  const text = (raw ?? '').trim();
+  if (text.startsWith('[')) {
+    try {
+      const parsed = CommandArraySchema.safeParse(JSON.parse(text));
+      if (parsed.success) return parsed.data;
+    } catch {
+      // not JSON: refused below
+    }
+    log.warn('OMNI_UPDATE_COMMAND looks like a JSON array but is not one of strings; updates are off');
+    return null;
+  }
+  const words = text.split(/\s+/).filter(Boolean);
+  return words.length ? words : null;
+}
+
+/** The app's yes counts only on an Omni nothing but this computer can reach. */
+function confirmOf(env: NodeJS.ProcessEnv): UpdateConfirm {
+  if (env.OMNI_UPDATE_CONFIRM?.trim() !== 'app') return 'whatsapp';
+  const host = env.API_HOST?.trim() ?? '';
+  if (LOOPBACK_HOSTS.has(host)) return 'app';
+  log.warn('OMNI_UPDATE_CONFIRM=app is ignored: API_HOST is not loopback, so the owner confirms on WhatsApp', {
+    host,
+  });
+  return 'whatsapp';
+}
+
 /** Read from the environment and nowhere else. A prerelease version follows `next`, a release `latest`. */
 export function readUpdateConfig(version: string, env: NodeJS.ProcessEnv = process.env): UpdateConfig {
-  const words = (env.OMNI_UPDATE_COMMAND ?? '').trim().split(/\s+/).filter(Boolean);
   const channel = ChannelSchema.safeParse(env.OMNI_UPDATE_CHANNEL?.trim());
   return {
-    command: words.length ? words : null,
+    command: commandOf(env.OMNI_UPDATE_COMMAND),
+    confirm: confirmOf(env),
     channel: channel.success ? channel.data : version.includes('-') ? 'next' : 'latest',
     registry: (env.OMNI_UPDATE_REGISTRY?.trim() || DEFAULT_REGISTRY).replace(/\/+$/, ''),
     stateFile: join(env.OMNI_UPDATE_STATE_DIR?.trim() || './data', 'system-update.json'),
@@ -87,12 +129,14 @@ export interface UpdateStatus {
   latest: string | null;
   updateAvailable: boolean;
   mode: 'off' | 'command';
+  confirm: UpdateConfirm;
   pending?: { version: string; expiresAt: string };
   inFlight?: { version: string; startedAt: string };
 }
 
 export type UpdateRequestResult =
-  | { ok: true; version: string; expiresAt: Date }
+  | { ok: true; status: 'awaiting-confirmation'; version: string; expiresAt: Date }
+  | { ok: true; status: 'started'; version: string; startedAt: Date }
   | { ok: false; status: 409 | 502 | 503; code: string; message: string };
 
 /** What the updater needs of the command it starts. */
@@ -252,6 +296,7 @@ export function createSystemUpdater(deps: SystemUpdaterDeps): SystemUpdater {
       latest: published,
       updateAvailable: published !== null && Bun.semver.order(published, current) > 0,
       mode: config.command ? 'command' : 'off',
+      confirm: config.confirm,
       ...(waiting ? { pending: { version: waiting.request.to, expiresAt: waiting.expiresAt.toISOString() } } : {}),
       ...(inFlight ? { inFlight: { version: inFlight.to, startedAt: inFlight.startedAt } } : {}),
     };
@@ -259,17 +304,22 @@ export function createSystemUpdater(deps: SystemUpdaterDeps): SystemUpdater {
 
   const PENDING_MESSAGE = 'An update is already waiting for the owner to confirm it on WhatsApp.';
 
+  /** Why an update to `version` cannot run now (null: it can), whoever confirms it. */
+  async function versionRefusal(version: string): Promise<Refusal | null> {
+    if (await readInFlight()) return refuse(409, 'UPDATE_IN_PROGRESS', 'An update is already running.');
+    const published = await latest();
+    if (!published) return refuse(503, 'REGISTRY_UNAVAILABLE', 'Could not read the update channel. Try again later.');
+    if (version !== published) {
+      return refuse(409, 'VERSION_MISMATCH', `Only the version the ${config.channel} channel publishes, ${published}.`);
+    }
+    if (version === current) return refuse(409, 'ALREADY_CURRENT', `This Omni already runs ${current}.`);
+    return null;
+  }
+
   /** Why an update to `version` cannot be asked for now, or where to ask the owner. */
   async function precheck(
     version: string,
   ): Promise<Refusal | { owner: OwnerChannel; requests: UpdateRequestStore; account: OwnAccount }> {
-    if (!config.command) {
-      return refuse(
-        409,
-        'UPDATE_NOT_CONFIGURED',
-        'Updates are off here: the operator has not set OMNI_UPDATE_COMMAND.',
-      );
-    }
     const account = owner ? await owner.account() : null;
     if (!owner || !requests || !account) {
       return refuse(
@@ -279,14 +329,7 @@ export function createSystemUpdater(deps: SystemUpdaterDeps): SystemUpdater {
       );
     }
     if (await requests.pending()) return refuse(409, 'UPDATE_PENDING', PENDING_MESSAGE);
-    if (await readInFlight()) return refuse(409, 'UPDATE_IN_PROGRESS', 'An update is already running.');
-    const published = await latest();
-    if (!published) return refuse(503, 'REGISTRY_UNAVAILABLE', 'Could not read the update channel. Try again later.');
-    if (version !== published) {
-      return refuse(409, 'VERSION_MISMATCH', `Only the version the ${config.channel} channel publishes, ${published}.`);
-    }
-    if (version === current) return refuse(409, 'ALREADY_CURRENT', `This Omni already runs ${current}.`);
-    return { owner, requests, account };
+    return (await versionRefusal(version)) ?? { owner, requests, account };
   }
 
   async function request(version: string, requestedBy: string): Promise<UpdateRequestResult> {
@@ -294,6 +337,15 @@ export function createSystemUpdater(deps: SystemUpdaterDeps): SystemUpdater {
     if (requesting) return refuse(409, 'UPDATE_PENDING', PENDING_MESSAGE);
     requesting = true;
     try {
+      const command = config.command;
+      if (!command) {
+        return refuse(
+          409,
+          'UPDATE_NOT_CONFIGURED',
+          'Updates are off here: the operator has not set OMNI_UPDATE_COMMAND.',
+        );
+      }
+      if (config.confirm === 'app') return await requestOnThisComputer(command, version, requestedBy);
       const checked = await precheck(version);
       if ('ok' in checked) return checked;
       const { code, expiresAt } = await checked.requests.create({ from: current, to: version, requestedBy });
@@ -318,10 +370,77 @@ export function createSystemUpdater(deps: SystemUpdaterDeps): SystemUpdater {
         })
         .catch((error) => log.warn('Could not publish the update request', { error: String(error) }));
       log.info('Update requested; waiting for the owner', { to: version });
-      return { ok: true, version, expiresAt };
+      return { ok: true, status: 'awaiting-confirmation', version, expiresAt };
     } finally {
       requesting = false;
     }
+  }
+
+  /** A loopback-only Omni whose operator lets the app confirm: the request is the yes. */
+  async function requestOnThisComputer(
+    command: string[],
+    version: string,
+    requestedBy: string,
+  ): Promise<UpdateRequestResult> {
+    const refusal = await versionRefusal(version);
+    if (refusal) return refusal;
+    await eventBus
+      ?.publishGeneric('system.update.requested', { from: current, to: version, requestedBy, confirmedBy: 'app' })
+      .catch((error) => log.warn('Could not publish the update request', { error: String(error) }));
+    const record = await begin(command, version);
+    if (!record) {
+      return refuse(503, 'UPDATE_START_FAILED', 'The update command could not start. See the logs of this Omni.');
+    }
+    return { ok: true, status: 'started', version, startedAt: new Date(record.startedAt) };
+  }
+
+  /**
+   * Starts the update to `to`: records it, runs the command detached, and settles it if the
+   * command fails. Null when it could not start (it is settled as failed then).
+   */
+  async function begin(command: string[], to: string): Promise<InFlight | null> {
+    const record: InFlight = {
+      id: crypto.randomUUID(),
+      from: current,
+      to,
+      startedAt: new Date(now()).toISOString(),
+    };
+    await eventBus
+      ?.publishGeneric('system.update.confirmed', {
+        id: record.id,
+        from: record.from,
+        to: record.to,
+        confirmedBy: config.confirm,
+      })
+      .catch((error) => log.warn('Could not publish the confirmation', { error: String(error) }));
+    await writeInFlight(record);
+
+    let child: UpdateChild;
+    try {
+      child = spawn(command[0] as string, command.slice(1), {
+        detached: true,
+        shell: false,
+        stdio: 'ignore',
+        env: { ...process.env, OMNI_UPDATE_VERSION: record.to },
+      });
+    } catch (error) {
+      await settle(record, false, `could not start: ${String(error)}`);
+      return null;
+    }
+    child.onError((error) => void settle(record, false, `could not start: ${String(error)}`));
+    // The command usually restarts this Omni before it exits. If it exits first, a failure
+    // is final here; a success waits for the restart, and the grace period ends a missing one.
+    child.onExit((exitCode, signal) => {
+      if (exitCode !== 0) void settle(record, false, signal ? `stopped by ${signal}` : `exited with ${exitCode}`);
+    });
+    child.unref();
+    settleLate(record);
+
+    await eventBus
+      ?.publishGeneric('system.update.started', { id: record.id, from: record.from, to: record.to })
+      .catch((error) => log.warn('Could not publish the update start', { error: String(error) }));
+    log.info('Update started', { to: record.to });
+    return record;
   }
 
   async function confirm(code: string, account: OwnAccount) {
@@ -343,43 +462,8 @@ export function createSystemUpdater(deps: SystemUpdaterDeps): SystemUpdater {
     wrongCodes = 0;
     const command = config.command;
     if (!command || (await readInFlight())) return 'failed';
-
-    const record: InFlight = {
-      id: crypto.randomUUID(),
-      from: current,
-      to: asked.to,
-      startedAt: new Date(now()).toISOString(),
-    };
-    await eventBus
-      ?.publishGeneric('system.update.confirmed', { id: record.id, from: record.from, to: record.to })
-      .catch((error) => log.warn('Could not publish the confirmation', { error: String(error) }));
-    await writeInFlight(record);
-
-    let child: UpdateChild;
-    try {
-      child = spawn(command[0] as string, command.slice(1), {
-        detached: true,
-        shell: false,
-        stdio: 'ignore',
-        env: { ...process.env, OMNI_UPDATE_VERSION: record.to },
-      });
-    } catch (error) {
-      await settle(record, false, `could not start: ${String(error)}`);
-      return 'failed';
-    }
-    child.onError((error) => void settle(record, false, `could not start: ${String(error)}`));
-    // The command usually restarts this Omni before it exits. If it exits first, a failure
-    // is final here; a success waits for the restart, and the grace period ends a missing one.
-    child.onExit((exitCode, signal) => {
-      if (exitCode !== 0) void settle(record, false, signal ? `stopped by ${signal}` : `exited with ${exitCode}`);
-    });
-    child.unref();
-    settleLate(record);
-
-    await eventBus
-      ?.publishGeneric('system.update.started', { id: record.id, from: record.from, to: record.to })
-      .catch((error) => log.warn('Could not publish the update start', { error: String(error) }));
-    log.info('Update started', { to: record.to });
+    const record = await begin(command, asked.to);
+    if (!record) return 'failed';
     await owner
       .send(account, `update-start-${record.id}`, updateStartedMessage(record.from, record.to))
       .catch((error) => log.warn('Could not say the update started', { error: String(error) }));

@@ -2,7 +2,8 @@
  * This Omni's own version and the updates its owner confirms (system/update.ts).
  *
  *   GET  /api/v2/system/update   what runs, what the update channel publishes, and any update waiting or running
- *   POST /api/v2/system/update   ask for the published version; the owner confirms it on WhatsApp
+ *   POST /api/v2/system/update   ask for the published version; the owner confirms it on WhatsApp,
+ *                                or, on a loopback-only Omni set up for it, the request starts it
  */
 
 import { type Context, Hono } from 'hono';
@@ -32,14 +33,14 @@ systemRoutes.post('/update', async (c) => {
   }
   const result = await updaterOf(c).request(body.data.version, c.get('apiKey')?.id ?? 'unknown');
   if (!result.ok) return c.json({ error: { code: result.code, message: result.message } }, result.status);
+  if (result.status === 'started') {
+    return c.json(
+      { data: { status: result.status, version: result.version, startedAt: result.startedAt.toISOString() } },
+      202,
+    );
+  }
   return c.json(
-    {
-      data: {
-        status: 'awaiting-confirmation' as const,
-        version: result.version,
-        expiresAt: result.expiresAt.toISOString(),
-      },
-    },
+    { data: { status: result.status, version: result.version, expiresAt: result.expiresAt.toISOString() } },
     202,
   );
 });

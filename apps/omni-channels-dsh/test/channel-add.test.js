@@ -176,6 +176,7 @@ test('the bot\'s chat link comes from its username only', () => {
 
 test('the update bar: one action when this Omni can update, a note when its admin does, nothing otherwise', () => {
   assert.deepEqual(updateBar({ state: 'available', latest: '2.261023.25', current: '2.261023.12' }), { kind: 'available', latest: '2.261023.25', current: '2.261023.12', action: 'update' })
+  assert.deepEqual(updateBar({ state: 'available', latest: '2.261023.25', current: '2.261023.12', confirm: 'app' }), { kind: 'available', latest: '2.261023.25', current: '2.261023.12', action: 'update', confirm: 'app' })
   assert.deepEqual(updateBar({ state: 'off', latest: '2.261023.25', current: '2.261023.12', command: 'omni update' }), { kind: 'admin', latest: '2.261023.25', action: 'how', command: 'omni update' })
   assert.deepEqual(updateBar({ state: 'pending', version: '2.261023.25' }), { kind: 'pending', version: '2.261023.25', action: 'none' })
   assert.deepEqual(updateBar({ state: 'updating', version: '2.261023.25' }), { kind: 'updating', version: '2.261023.25', action: 'none' })

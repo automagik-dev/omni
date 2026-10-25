@@ -42,6 +42,7 @@ omni sandbox start     [--home <dir>] [--json]
 omni sandbox stop      [--home <dir>] [--json]
 omni sandbox uninstall [--home <dir>] [--purge] [--json]
 omni sandbox run       [--home <dir>]        # the supervisor; launchd/systemd start this
+omni sandbox update    [--home <dir>] [--to <version>] [--json]   # what its API runs to update it
 ```
 
 With `--json`, each command prints one line:
@@ -64,6 +65,24 @@ sandbox, use its config: `OMNI_CONFIG_DIR=<home>/config omni status`.
 `uninstall` stops the sandbox and removes its runtime and at-login unit. It
 keeps the data and config, so a later install picks them up again. `--purge`
 deletes the whole home.
+
+## Updates from the app
+
+The Automagik app can update a sandbox without a terminal. The app shows that an update is out,
+asks you to be sure, and asks the sandbox's API (`POST /api/v2/system/update`). Elsewhere the
+owner confirms an update on WhatsApp. A sandbox listens only on 127.0.0.1 and may have no
+WhatsApp, so the app's yes is enough: the install sets `OMNI_UPDATE_CONFIRM=app`, which the API
+honours only while `API_HOST` is loopback.
+
+The API then runs `omni sandbox update` from the sandbox's own runtime, with the version in
+`OMNI_UPDATE_VERSION`. That command runs inside the sandbox's service, which the update has to
+stop, so it hands the work off: `omni install --sandbox` of that version runs in a transient
+`systemd --user` service of its own on Linux, or a detached process of its own elsewhere. It
+keeps the ports, the key, the data and the at-login choice, and logs to `<home>/logs/update.log`.
+When the API comes back on the new version, it records that the update finished.
+
+The update only takes a version npm publishes on the sandbox's channel (`latest`, or `next` for a
+prerelease), and only one update runs at a time.
 
 ## Requirements
 

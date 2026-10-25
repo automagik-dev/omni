@@ -89,7 +89,10 @@ const TIER_BY_VERB: Readonly<Record<string, ScopeTier>> = Object.freeze({
   send: 'write',
   close: 'write',
   synthesize: 'write',
-  /** `system:update` — asks the owner to confirm an update; changes nothing by itself. */
+  /**
+   * `system:update` — asks the owner to confirm an update, or, on a loopback-only Omni whose
+   * operator set OMNI_UPDATE_CONFIRM=app, starts it (system/update.ts).
+   */
   update: 'write',
   admin: 'admin',
 });

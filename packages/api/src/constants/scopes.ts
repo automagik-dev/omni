@@ -13,8 +13,9 @@
 export const DEFAULT_TURN_SCOPES = ['messages:send', 'turns:close', 'tts:synthesize', 'context:read'] as const;
 
 /**
- * Broader scopes that also grant a narrower one. `system:update` only asks the owner to
- * confirm an update on WhatsApp (device keys carry it); `system:admin` covers it too.
+ * Broader scopes that also grant a narrower one. `system:update` asks the owner to confirm
+ * an update on WhatsApp, or starts it on a loopback-only Omni set up for the app's yes
+ * (system/update.ts; device keys carry it); `system:admin` covers it too.
  */
 export const SCOPE_IMPLIED_BY: Readonly<Record<string, readonly string[]>> = {
   'system:update': ['system:admin'],
