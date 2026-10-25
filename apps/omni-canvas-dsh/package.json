@@ -43,7 +43,7 @@
     "harness": "bun install --cwd dev/harness --no-save --no-summary"
   },
   "engines": {
-    "dsh": ">=0.2.1-rc.2 <0.3.0",
+    "dsh": ">=0.2.1-rc.3 <0.2.2-0",
     "omni": ">=2.261025.2"
   },
   "peerDependencies": {

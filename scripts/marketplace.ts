@@ -83,7 +83,21 @@ function gitOk(cwd: string, args: string[], timeout?: number): boolean {
   }
 }
 
-function packageAt(cwd: string, commit: string, path: string): { name?: string; version?: string } | null {
+/** What the index reads from a plugin's package.json. */
+interface Manifest {
+  name?: string;
+  version?: string;
+  engines?: { dsh?: string };
+}
+
+/** A market admits what an entry says; DSH admits what the manifest says. Null when they agree. */
+function dshMismatch(entry: IndexVersion, manifest: Manifest): string | null {
+  const declared = manifest.engines?.dsh;
+  if (declared === undefined || entry.engines?.dsh === declared) return null;
+  return `lists dsh ${entry.engines?.dsh ?? '(none)'} but its package.json declares ${declared}`;
+}
+
+function packageAt(cwd: string, commit: string, path: string): Manifest | null {
   try {
     return JSON.parse(git(cwd, ['show', `${commit}:${path}/package.json`]));
   } catch {
@@ -92,7 +106,7 @@ function packageAt(cwd: string, commit: string, path: string): { name?: string; 
 }
 
 /** Another repository's package.json at `commit`, read from a cached bare clone; null when unreachable. */
-export function forkManifest(url: string, commit: string, path: string): { name?: string; version?: string } | null {
+export function forkManifest(url: string, commit: string, path: string): Manifest | null {
   const cache = join(tmpdir(), 'omni-market-forks', url.replace(/[^a-z0-9]+/gi, '-'));
   if (!existsSync(cache)) {
     mkdirSync(cache, { recursive: true });
@@ -139,6 +153,7 @@ export function checkIndex(
           problems.push(
             `${at}: ${AUTOMAGIK_URL} ${commit}:${path}/package.json is ${manifest.name}@${manifest.version}`,
           );
+        else if (dshMismatch(entry, manifest)) problems.push(`${at}: ${dshMismatch(entry, manifest)}`);
         continue;
       }
       if (!isOurs(entry.source)) {
@@ -161,6 +176,7 @@ export function checkIndex(
       if (!manifest) problems.push(`${at}: ${commit} has no ${path}/package.json`);
       else if (manifest.name !== plugin.name || manifest.version !== entry.version)
         problems.push(`${at}: ${commit}:${path}/package.json is ${manifest.name}@${manifest.version}`);
+      else if (dshMismatch(entry, manifest)) problems.push(`${at}: ${dshMismatch(entry, manifest)}`);
     }
   }
   return problems;
@@ -193,31 +209,38 @@ export function pinIndex(value: Index, repoDir: string, ref: string): Index {
           `${plugin.name}@${same.version} changed since ${same.source.commit.slice(0, 9)}: bump its version first`,
         );
     }
-    if (!same) plugin.versions.unshift({ ...latest, version: manifest.version, publishTimestamp, source });
+    // The DSH range is the release's own (package.json engines.dsh), as DSH reads it at startup.
+    const engines = manifest.engines?.dsh ? { engines: { ...latest.engines, dsh: manifest.engines.dsh } } : {};
+    if (!same) plugin.versions.unshift({ ...latest, version: manifest.version, publishTimestamp, source, ...engines });
   }
   return value;
 }
 
 /**
  * List Automagik's plugins at the pinned release: one version each, a git source at the pin's
- * commit with the plugin's folder. Entries the pin does not name are left as they are.
+ * commit with the plugin's folder, and the DSH range its package.json declares there (the listed
+ * one when that cannot be read, which the check then reports). Entries the pin does not name are
+ * left as they are.
  */
 export function pinAutomagik(
   value: Index,
   automagik: AutomagikPin = pinnedAutomagik(),
   publishTimestamp?: number,
+  readFork = forkManifest,
 ): Index {
   for (const plugin of value.plugins) {
     const pinned = automagik.packages[plugin.name];
     if (!pinned) continue;
     const listed = plugin.versions[0];
     const same = listed && isAutomagik(listed.source) && listed.source.commit === automagik.commit;
+    const dsh = readFork(AUTOMAGIK_URL, automagik.commit, automagikPath(plugin.name))?.engines?.dsh;
+    const engines = dsh ? { ...listed?.engines, dsh } : listed?.engines;
     plugin.versions = [
       {
         version: pinned.version,
         publishTimestamp: same ? listed.publishTimestamp : (publishTimestamp ?? Math.floor(Date.now() / 1000)),
         source: { type: 'git', url: AUTOMAGIK_URL, commit: automagik.commit, path: automagikPath(plugin.name) },
-        ...(listed?.engines ? { engines: listed.engines } : {}),
+        ...(engines ? { engines } : {}),
       },
     ];
   }

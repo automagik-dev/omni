@@ -16,8 +16,10 @@ function indexWith(entry: Record<string, unknown>, name = channels.name) {
     plugins: [{ name, versions: [{ version: channels.version, publishTimestamp: 1, ...entry }] }],
   };
 }
+// An entry of ours lists the DSH range its package.json declares.
 const ours = (commit: string, path = 'apps/omni-channels-dsh') => ({
   source: { type: 'git', url: REPO_URL, commit, path },
+  engines: { dsh: channels.engines.dsh },
 });
 const readJson = (path: string) => JSON.parse(readFileSync(join(repoDir, path), 'utf8'));
 
@@ -131,7 +133,7 @@ describe('marketplace index check', () => {
       commit: 'e'.repeat(40),
       packages: { '@automagik/bots-dsh': { version: '3.261231.9' } },
     };
-    const moved = pinAutomagik(team(pin.version, pin.commit) as never, next, 42);
+    const moved = pinAutomagik(team(pin.version, pin.commit) as never, next, 42, () => null);
     expect(moved.plugins[0]?.versions).toEqual([
       {
         version: '3.261231.9',
@@ -139,6 +141,69 @@ describe('marketplace index check', () => {
         source: { type: 'git', url: AUTOMAGIK_URL, commit: 'e'.repeat(40), path: 'apps/bots-dsh' },
       },
     ]);
+    // ...listing the DSH range their package.json declares at the pinned commit.
+    const ranged = pinAutomagik(team(pin.version, pin.commit) as never, next, 42, () => ({
+      name: '@automagik/bots-dsh',
+      version: '3.261231.9',
+      engines: { dsh: '>=0.2.1-rc.3 <0.2.2-0' },
+    }));
+    expect(ranged.plugins[0]?.versions[0]?.engines).toEqual({ dsh: '>=0.2.1-rc.3 <0.2.2-0' });
+  });
+
+  test('an entry lists the DSH range its package.json declares, which covers the DSH its tests run on', () => {
+    const range = channels.engines.dsh;
+    expect(checkIndex(indexWith(ours(head)), repoDir)).toEqual([]);
+    expect(checkIndex(indexWith({ ...ours(head), engines: { dsh: '>=0.2.1-rc.2 <0.3.0' } }), repoDir)[0]).toContain(
+      `lists dsh >=0.2.1-rc.2 <0.3.0 but its package.json declares ${range}`,
+    );
+    const { engines: _, ...unranged } = ours(head);
+    expect(checkIndex(indexWith(unranged), repoDir)[0]).toContain('lists dsh (none)');
+    const readAutomagik = () => ({ name: '@automagik/bots-dsh', version: '3.1.0', engines: { dsh: range } });
+    const team = {
+      format: 1,
+      title: { en: 'Test' },
+      plugins: [
+        {
+          name: '@automagik/bots-dsh',
+          versions: [
+            {
+              version: '3.1.0',
+              publishTimestamp: 1,
+              source: { type: 'git', url: AUTOMAGIK_URL, commit: 'f'.repeat(40), path: 'apps/bots-dsh' },
+            },
+          ],
+        },
+      ],
+    };
+    const pin = { version: '3.1.0', commit: 'f'.repeat(40), packages: { '@automagik/bots-dsh': { version: '3.1.0' } } };
+    expect(checkIndex(team, repoDir, readAutomagik, pin)[0]).toContain('lists dsh (none)');
+    // Each plugin of ours declares a tested range, and the DSH its tests run on is in it.
+    for (const dir of ['omni-channels-dsh', 'omni-canvas-dsh']) {
+      const declared = readJson(`apps/${dir}/package.json`).engines?.dsh;
+      const tested = readJson(`apps/${dir}/dev/harness/package.json`).dependencies['@deepseek-ai/dsh'];
+      expect(typeof declared).toBe('string');
+      expect(Bun.semver.satisfies(tested, declared)).toBe(true);
+    }
+  });
+
+  test('pin lists a new version with the DSH range its package.json declares at the ref', () => {
+    const older = {
+      plugins: [
+        {
+          name: channels.name,
+          versions: [
+            {
+              version: '2.261025.1',
+              publishTimestamp: 1,
+              source: { type: 'git' as const, url: REPO_URL, commit: head, path: 'apps/omni-channels-dsh' },
+              engines: { dsh: '>=0.0.1' },
+            },
+          ],
+        },
+      ],
+    };
+    const [added] = pinIndex(older, repoDir, 'HEAD').plugins[0]?.versions ?? [];
+    expect(added).toMatchObject({ version: channels.version, engines: { dsh: channels.engines.dsh } });
   });
 
   test('pin keeps a listed version where it is when its package is unchanged, and refuses a changed one', () => {
