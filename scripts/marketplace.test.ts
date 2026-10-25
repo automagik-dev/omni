@@ -171,11 +171,19 @@ describe('marketplace index check', () => {
       index.plugins.filter(
         (plugin: { versions: { source: { url?: string } }[] }) => plugin.versions[0]?.source.url === REPO_URL,
       );
-    const before = structuredClone(ownPlugins(committed));
-    const again = pinIndex(structuredClone(committed), repoDir, 'v2.261025.2');
+    // Later cuts may already sit on top of the committed index, so the test works on the index as it
+    // stood at v2.261025.2: every entry newer than that release is dropped first.
+    const atRef = structuredClone(committed);
+    for (const plugin of ownPlugins(atRef)) {
+      plugin.versions = plugin.versions.filter(
+        (entry: { version: string }) => Bun.semver.order(entry.version, '2.261025.2') <= 0,
+      );
+    }
+    const before = structuredClone(ownPlugins(atRef));
+    const again = pinIndex(structuredClone(atRef), repoDir, 'v2.261025.2');
     expect(ownPlugins(again)).toEqual(before);
     // A plugin whose newest entry is older than its version at the ref gets that version added on top.
-    const behind = structuredClone(committed);
+    const behind = structuredClone(atRef);
     for (const plugin of ownPlugins(behind)) plugin.versions = plugin.versions.slice(1);
     const added = pinIndex(behind, repoDir, 'v2.261025.2');
     for (const plugin of ownPlugins(added)) {
