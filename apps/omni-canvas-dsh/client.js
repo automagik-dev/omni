@@ -596,11 +596,7 @@ var require_ci_info = __commonJS({
 
 // node_modules/@openuidev/lang-core/dist/shared-Dzgc28Wo.mjs
 function getPostHogConfig(env) {
-  const host = env?.["OPENUI_POSTHOG_HOST"] ?? "https://dgoeivjus9jfp.cloudfront.net";
-  return {
-    apiKey: env?.["OPENUI_POSTHOG_KEY"] ?? "phc_3OLW53x09ZTVZSV6BEpj5uycj3ooqR6KOemOjx04e3D",
-    captureUrl: new URL("/capture/", host).toString()
-  };
+  return { apiKey: "", captureUrl: "" };
 }
 function isTruthyEnv(value) {
   return value === "1" || value?.toLowerCase() === "true";
@@ -609,7 +605,7 @@ function isTelemetryDisabled(env) {
   return isTruthyEnv(env?.["OPENUI_TELEMETRY_DISABLED"]) || isTruthyEnv(env?.["DO_NOT_TRACK"]);
 }
 function isRuntimeTelemetryEnabled(env) {
-  return isTruthyEnv(env?.["OPENUI_RUNTIME_TELEMETRY_ENABLED"]) && !isTelemetryDisabled(env);
+  return false;
 }
 function normalizeProjectIdentity(rawValue) {
   const value = rawValue.trim();
