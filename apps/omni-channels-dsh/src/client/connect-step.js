@@ -183,7 +183,7 @@ const STAGE_CSS = `
 .oxs-overlay{
   --oxs-bg:#f6eee2;--oxs-card:#fbf5ec;--oxs-clay:#f2e6d5;--oxs-niche:#ebdecb;
   --oxs-ink:#3c3049;--oxs-ink2:#6c5f71;--oxs-line:#e0d0bd;
-  --oxs-accent:#1b7f96;--oxs-accent-2:#b4498f;--oxs-bad:#b93a32;--oxs-ok:#2f8a63;--oxs-warn:#a8700f;
+  --oxs-accent:#1b7f96;--oxs-accent-2:#b4498f;--oxs-bad:#b93a32;--oxs-ok:#2f8a63;--oxs-warn:#a8700f;--oxs-ok-ink:#1a5c3f;--oxs-warn-ink:#7a5108;
   --oxs-cyan:#8fdcec;--oxs-cyan-ink:#1d4753;--oxs-pink:#f0bddf;--oxs-lilac:#e0cff3;--oxs-lilac-ink:#45305e;
   --oxs-skin:#2bc3b6;--oxs-skin-shade:#16867d;
   --oxs-shine:#fff;--oxs-umber:#5b3b22;--oxs-hi:42%;--oxs-lo:80%;--oxs-ledge:72%;
@@ -199,7 +199,7 @@ const STAGE_CSS = `
 body[data-ds-dark-theme] .oxs-overlay{
   --oxs-bg:#1e1923;--oxs-card:#2a2330;--oxs-clay:#322a39;--oxs-niche:#16121a;
   --oxs-ink:#f3e9dd;--oxs-ink2:#bcadb8;--oxs-line:#40364a;
-  --oxs-accent:#7fd8ea;--oxs-accent-2:#f2a6dc;--oxs-bad:#ff9a8f;--oxs-ok:#7ad9a8;--oxs-warn:#f2c25b;
+  --oxs-accent:#7fd8ea;--oxs-accent-2:#f2a6dc;--oxs-bad:#ff9a8f;--oxs-ok:#7ad9a8;--oxs-warn:#f2c25b;--oxs-ok-ink:#7ad9a8;--oxs-warn-ink:#f2c25b;
   --oxs-cyan:#5cbdd1;--oxs-cyan-ink:#0d262c;--oxs-pink:#b76aa1;--oxs-lilac:#55456b;--oxs-lilac-ink:#f4ecff;
   --oxs-skin:#3fd3c5;--oxs-skin-shade:#1c8f86;
   --oxs-shine:#fff;--oxs-umber:#000;--oxs-hi:84%;--oxs-lo:62%;--oxs-ledge:50%;
@@ -226,7 +226,7 @@ body[data-ds-dark-theme] .oxs-overlay::before{background:radial-gradient(1100px 
 .oxs-rail{display:flex;flex-wrap:wrap;justify-content:center;gap:10px;margin:0 0 18px;padding:0;list-style:none;font:600 12.5px/1 var(--oxs-font);color:var(--oxs-ink2)}
 .oxs-rail li{padding:8px 12px;border-radius:var(--oxs-r-sm);${recessed('var(--oxs-niche)')}}
 .oxs-rail li.oxs-on{color:var(--oxs-lilac-ink);${raised('var(--oxs-lilac)', 3)};transform:translateY(-2px)}
-.oxs-rail li.oxs-done{color:var(--oxs-cyan-ink);${raised('color-mix(in srgb,var(--oxs-cyan) 55%,var(--oxs-clay))', 2)}}
+.oxs-rail li.oxs-done{color:var(--oxs-cyan-ink);${raised('color-mix(in srgb,var(--oxs-cyan) 80%,var(--oxs-clay))', 2)}}
 .oxs-card{width:100%;border-radius:26px 30px 25px 29px;padding:26px;${raised('var(--oxs-card)', 6)}}
 .oxs-card h1{font:800 24px/1.2 var(--oxs-head);letter-spacing:-.02em;margin:0 0 12px;outline:none}
 /* The connect card inside (omni-connect.js), in the same clay: choices are pieces, fields are hollows. */
@@ -239,8 +239,8 @@ body[data-ds-dark-theme] .oxs-overlay::before{background:radial-gradient(1100px 
 .oxs-card .ox-head{border-radius:var(--oxs-r)}
 .oxs-card .ox-head:focus-visible{outline:3px solid var(--oxs-ring);outline-offset:2px}
 .oxs-card .ox-badge{border:0;${recessed('var(--oxs-niche)')};color:var(--oxs-ink2)}
-.oxs-card .ox-badge.ox-ok{background:color-mix(in srgb,var(--oxs-ok) 22%,var(--oxs-card));box-shadow:none;color:var(--oxs-ok)}
-.oxs-card .ox-badge.ox-warn{background:color-mix(in srgb,var(--oxs-warn) 22%,var(--oxs-card));box-shadow:none;color:var(--oxs-warn)}
+.oxs-card .ox-badge.ox-ok{background:color-mix(in srgb,var(--oxs-ok) 22%,var(--oxs-card));box-shadow:none;color:var(--oxs-ok-ink)}
+.oxs-card .ox-badge.ox-warn{background:color-mix(in srgb,var(--oxs-warn) 22%,var(--oxs-card));box-shadow:none;color:var(--oxs-warn-ink)}
 .oxs-card .ox-linked{color:var(--oxs-ok)}
 .oxs-card .ox-input{height:44px;padding:0 14px;border:0;border-radius:var(--oxs-r-sm);${recessed('var(--oxs-niche)')};color:var(--oxs-ink);font:15px/1.3 var(--oxs-font)}
 .oxs-card .ox-input::placeholder{color:color-mix(in srgb,var(--oxs-ink2) 80%,transparent)}
