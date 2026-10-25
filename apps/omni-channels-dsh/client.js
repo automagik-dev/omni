@@ -15451,7 +15451,6 @@ var STRINGS = {
   "Run Omni on this computer": "在这台电脑上运行 Omni",
   "Update it from a terminal:": "在终端里更新它：",
   "Update to {version}": "更新到 {version}",
-  "Checking for updates…": "正在检查更新…",
   "Omni {latest} is out. This one runs {current}.": "Omni {latest} 已发布。这个 Omni 运行的是 {current}。",
   "Omni {latest} is out, but updates from the app are off on this Omni. Update it where it runs:": "Omni {latest} 已发布，但这个 Omni 关闭了从应用更新。请在它运行的地方更新：",
   "An update to {version} is waiting for your yes on WhatsApp.": "更新到 {version} 正在等待你在 WhatsApp 上确认。",
