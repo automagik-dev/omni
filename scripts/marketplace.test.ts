@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { AUTOMAGIK_URL, INDEX_PATH, REPO_URL, VETTED_FORKS, checkIndex, pinAutomagik, pinIndex } from './marketplace';
+import { AUTOMAGIK_URL, INDEX_PATH, REPO_URL, checkIndex, pinAutomagik, pinIndex } from './marketplace';
 
 const repoDir = join(import.meta.dir, '..');
 const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoDir, encoding: 'utf8' }).trim();
@@ -63,29 +63,12 @@ describe('marketplace index check', () => {
     expect(checkIndex(indexWith(ours(head, 'apps/nowhere'), channels.name), repoDir)[0]).toContain('has no');
   });
 
-  test("a vetted fork's commit passes only when its package.json is the entry's name and version", () => {
-    const fork = VETTED_FORKS[0] as string;
-    const commit = 'c'.repeat(40);
-    const entry = { source: { type: 'git', url: fork, commit } };
-    const reads: string[] = [];
-    const readFork = (url: string, at: string, path: string) => {
-      reads.push(`${url} ${at} ${path}`);
-      return { name: 'dsh-oh-my-claude', version: '1.5.6-omni.1' };
+  test("an outside plugin fails, from git or npm, and DSH's own parser runs first", () => {
+    const foreign = {
+      source: { type: 'git', url: 'https://github.com/automagik-genie/dsh-oh-my-claude', commit: head },
     };
-    const index = (version: string) => ({
-      format: 1,
-      title: { en: 'Test' },
-      plugins: [{ name: 'dsh-oh-my-claude', versions: [{ version, publishTimestamp: 1, ...entry }] }],
-    });
-    expect(checkIndex(index('1.5.6-omni.1'), repoDir, readFork)).toEqual([]);
-    expect(reads).toEqual([`${fork} ${commit} .`]);
-    expect(checkIndex(index('1.5.7'), repoDir, readFork)[0]).toContain('is dsh-oh-my-claude@1.5.6-omni.1');
-    expect(checkIndex(index('1.5.6-omni.1'), repoDir, () => null)[0]).toContain('has no ./package.json');
-  });
-
-  test("a git source from another repository fails, and DSH's own parser runs first", () => {
-    const foreign = { source: { type: 'git', url: 'https://github.com/someone/else', commit: head } };
-    expect(checkIndex(indexWith(foreign), repoDir)[0]).toContain('must come from');
+    expect(checkIndex(indexWith(foreign), repoDir)[0]).toContain('must be git commits of');
+    expect(checkIndex(indexWith({ source: { type: 'npm' } }), repoDir)[0]).toContain('must be git commits of');
     expect(checkIndex({ format: 2 }, repoDir)[0]).toContain('$.format');
   });
 

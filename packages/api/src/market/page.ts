@@ -23,7 +23,7 @@ export function marketPage(catalog: Catalog): string {
   return page(
     'Automagik marketplace',
     `${MARKET_STYLE}
-<section id="market"><h1>Automagik marketplace</h1><p>The DeepSeek Harness plugins of this Omni's release, and the add-ons Automagik vetted for bringing your own AI.</p>
+<section id="market"><h1>Automagik marketplace</h1><p>The DeepSeek Harness plugins of this Omni's release, and the Automagik plugins it was tested with.</p>
 <div id="plugins"></div>
 <h2>Add it to your DSH</h2>
 <ol><li>Settings → Plugins → enable <strong>Plugin market</strong>.</li><li>Market → Indexes → add this index:</li></ol>

@@ -6,10 +6,10 @@
  *     with market.json (see ./manifest.ts). Served as npm packages from this Omni's own
  *     registry at /api/market/npm/, one version each: Omni's.
  *   - marketplace/automagik.json, imported into the bundle: its titles, categories and labels,
- *     and its vetted third-party npm add-ons, which install from the client's own registry.
+ *     and Automagik's plugins at the pinned release commit, for whichever this Omni does not carry.
  *
- * Without a bundled market (a server run from source) the index lists the third-party
- * add-ons only.
+ * Without a bundled market (a server run from source) the index lists Automagik's plugins only.
+ * Outside plugins Automagik vetted are in Automagik's own index, not Omni's.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -200,7 +200,7 @@ function bundledPlugin(pkg: MarketPackage, known: IndexPlugin | undefined, publi
 const encodedName = (name: string) => name.replace('/', '%2f');
 
 const OMNI_REPO = 'https://github.com/automagik-dev/omni';
-/** An add-on version this Omni lists: an npm package, or a git commit outside Omni's own repository. */
+/** A version this Omni lists from the static index: anything but a git commit of Omni's own repository. */
 const isAddOnSource = (entry: IndexPlugin['versions'][number]) =>
   entry.source.type === 'npm' || entry.source.url.replace(/\.git$/, '') !== OMNI_REPO;
 
@@ -217,9 +217,9 @@ export function createMarket(options: MarketOptions = {}): Market {
   const base = (origin: string) => publicUrl ?? origin.replace(/\/+$/, '');
   const registryOf = (origin: string) => `${base(origin)}/api/market/npm/`;
 
-  // The vetted third-party add-ons: the static index's versions of plugins this Omni does not carry,
-  // from npm or from a reviewed fork pinned to a commit. Omni's own git entries are left out: this
-  // Omni serves its own plugins from its release instead.
+  // The static index's plugins this Omni does not carry (Automagik's, at the pinned commit, when
+  // the release packed none). Omni's own git entries are left out: this Omni serves its own
+  // plugins from its release instead.
   const thirdParty: IndexPlugin[] = staticIndex.plugins
     .filter((plugin) => !carried.has(plugin.name))
     .map((plugin) => ({ ...plugin, versions: plugin.versions.filter(isAddOnSource) }))

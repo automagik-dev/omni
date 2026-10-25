@@ -15,8 +15,8 @@ import { type MarketIndex, type Packument, createMarket } from '../service';
 const PUBLIC = 'https://omni.example.com';
 const VERSION = '2.261019.10';
 const PACKED_AT = 1792553326;
-// Every plugin the static index lists from npm or from a repository other than Omni's: the
-// vetted add-ons, and Automagik's plugins (the Bot team, the welcome) at the pinned release.
+// Every plugin the static index lists from a repository other than Omni's: Automagik's plugins
+// (the Bot team, the welcome) at the pinned release.
 const ADD_ONS = staticIndex.plugins
   .filter((plugin) =>
     plugin.versions.some(
@@ -114,7 +114,7 @@ function appWith(options: Parameters<typeof createMarket>[0]) {
 }
 
 describe('market index', () => {
-  test("is a valid DSH market index: this release's plugins from this Omni, the vetted add-ons from npm", async () => {
+  test("is a valid DSH market index: this release's plugins from this Omni, Automagik's at their pin", async () => {
     const get = appWith({ dir: marketDir, publicUrl: PUBLIC });
     const response = await get('/api/market/index.json');
     expect(response.status).toBe(200);
@@ -123,7 +123,9 @@ describe('market index', () => {
     const parsed = parseMarketIndex(body, `${PUBLIC}/api/market/index.json`);
     expect(parsed.title).toEqual({ en: 'Automagik' });
     expect(parsed.metadata.categories).toHaveProperty('omni');
-    expect(parsed.metadata.labels).toHaveProperty('vetted');
+    expect(parsed.metadata.labels).toHaveProperty('official');
+    // Outside plugins are Automagik's index's to list, never Omni's.
+    expect(parsed.metadata.labels).not.toHaveProperty('vetted');
     expect(parsed.plugins.map((plugin) => plugin.name)).toEqual([
       '@automagik/bots-dsh',
       '@automagik/omni-new-dsh',
@@ -144,8 +146,8 @@ describe('market index', () => {
     expect(fresh?.description).toBe('A plugin the static index does not list yet');
     expect(fresh?.repository).toEqual({ url: 'https://github.com/automagik-dev/omni', directory: 'apps/omni-new-dsh' });
     expect(fresh?.metadata).toMatchObject({ category: 'omni', labels: ['official'] });
-    // No git pins into Omni's own repository: Omni's plugins install from this Omni. An add-on installs
-    // from npm, or from the commit of its reviewed fork that the static index pins.
+    // No git pins into Omni's own repository: Omni's plugins install from this Omni. Automagik's
+    // install from the commit the static index pins.
     for (const plugin of parsed.plugins)
       for (const v of plugin.versions)
         if (v.source.type === 'git') expect(v.source.url).not.toContain('automagik-dev/omni');
@@ -166,7 +168,7 @@ describe('market index', () => {
     });
   });
 
-  test('without a bundled market, the vetted add-ons are still listed and nothing crashes', async () => {
+  test("without a bundled market, Automagik's plugins are still listed and nothing crashes", async () => {
     const empty = mkdtempSync(join(root, 'empty-'));
     const corrupt = mkdtempSync(join(root, 'corrupt-'));
     writeFileSync(join(corrupt, 'market.json'), '{"format": 2');
@@ -261,7 +263,7 @@ describe('market page', () => {
 
   test('lists the catalog and the index URL, with every text inserted as text', async () => {
     const hostile = structuredClone(staticIndex);
-    const plugin = hostile.plugins.find((p) => p.name === 'dsh-oh-my-claude');
+    const plugin = hostile.plugins.find((p) => p.name === '@automagik/welcome-dsh');
     if (plugin) plugin.description = { en: '</script><script>alert(1)</script>' };
     const response = await appWith({ dir: marketDir, publicUrl: PUBLIC, staticIndex: hostile })('/market');
     expect(response.status).toBe(200);
