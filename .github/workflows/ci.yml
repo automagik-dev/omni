@@ -172,6 +172,8 @@ jobs:
       - name: Marketplace index gate
         # marketplace/automagik.json pins Omni's plugins to commits; the gate proves each
         # one is an ancestor of HEAD and holds the package it names, so it needs history.
+        # It also checks each plugin against the API of the oldest Omni it declares
+        # (scripts/plugin-compat.test.ts), reading that release's tag.
         run: |
           if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
             git fetch --no-tags --unshallow origin

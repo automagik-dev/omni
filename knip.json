@@ -14,6 +14,8 @@
         "scripts/admin-ui-image.test.ts",
         "scripts/bun-version.test.ts",
         "scripts/package-managers.test.ts",
+        "scripts/plugin-compat.ts",
+        "scripts/plugin-compat.test.ts",
         "scripts/plugin-versions.test.ts",
         "scripts/bootstrap-platform-credential.ts",
         "scripts/release/generate-release-notes.test.ts"
