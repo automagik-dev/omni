@@ -586,6 +586,13 @@ export interface WebhookPayload {
   executionContext?: OmniExecutionContext;
   /** The endpoint to call back for sending responses */
   replyEndpoint: string;
+  /**
+   * Present only on lifecycle events that act on a session rather than carry a
+   * message — today just `session.reset`. The receiver is told WHICH session to
+   * act on instead of having to re-derive it from `chat.id`, which is not always
+   * the session key (see `resolveKhalSessionId`).
+   */
+  session?: { key: string };
 }
 
 /**

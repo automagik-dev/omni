@@ -4,6 +4,19 @@
  * Supports two modes:
  * - round-trip: POST event → wait for response → return as AgentTriggerResult
  * - fire-and-forget: POST event → return null immediately (provider calls back via Omni API)
+ *
+ * Session reset (automagik-dev/omni#…): the trash emoji flow needs
+ * `IAgentProvider.resetSession()`. Without it, `session-cleaner` falls through to
+ * its Agno-only branch and throws "Session clearing not supported for webhook
+ * providers" — which sits in its own skippable list, so the user sends 🗑️, the
+ * dispatcher drops the message (agent-dispatcher guard) and NOTHING happens, with
+ * no error and no feedback. See the test file for the trace of that silence.
+ *
+ * We do not reach into the webhook's own API to delete anything: a webhook URL is
+ * an opaque endpoint, and assuming an AgentOS behind it would be wrong for every
+ * other webhook consumer. Instead we send the same `WebhookPayload` the receiver
+ * already parses, with `event.type = 'session.reset'` and `session.key` set, and
+ * let the owner of that endpoint decide what resetting means.
  */
 
 import { createLogger } from '../logger';
@@ -147,6 +160,43 @@ export class WebhookAgentProvider implements IAgentProvider {
       headers.Authorization = `Bearer ${this.config.apiKey}`;
     }
     return headers;
+  }
+
+  /**
+   * Tell the webhook that a session should be reset.
+   *
+   * `sessionKey` is what the caller resolved as the agent-side session; `chatId`
+   * is passed through because some receivers key sessions by chat. Both travel,
+   * so the receiver can use whichever it owns.
+   *
+   * Reset is round-trip even in fire-and-forget mode: `session-cleaner` only
+   * confirms to the user after this resolves, so swallowing the outcome would
+   * tell people their history was wiped when it may not have been.
+   */
+  async resetSession(sessionKey: string, chatId?: string, instanceId?: string): Promise<void> {
+    const payload: WebhookPayload = {
+      event: {
+        id: `reset-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+        type: 'session.reset',
+        timestamp: Date.now(),
+      },
+      instance: { id: instanceId ?? '', channelType: '' },
+      chat: { id: chatId ?? sessionKey },
+      sender: { id: chatId ?? sessionKey },
+      content: {},
+      traceId: `reset-${sessionKey}`,
+      replyEndpoint: 'POST /api/v2/messages/send',
+      session: { key: sessionKey },
+    };
+
+    log.info('Sending webhook session reset', {
+      webhookUrl: this.config.webhookUrl,
+      sessionKey,
+      chatId,
+      instanceId,
+    });
+
+    await this.postWebhookWithRetry(payload);
   }
 
   private async postWebhook(payload: WebhookPayload): Promise<WebhookResponse | null> {
