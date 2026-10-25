@@ -61,7 +61,10 @@ export type MarketPackage = z.infer<typeof MarketPackageSchema>;
 
 export const MarketManifestSchema = z.object({
   format: z.literal(1),
-  /** The Omni release the plugins were packed from; each plugin carries the same version. */
+  /**
+   * The Omni release the plugins were packed from. Each of Omni's own plugins carries the Omni
+   * release of its last change, at most this one; Automagik's carry Automagik's.
+   */
   omniVersion: ExactVersionSchema,
   /** When the plugins were packed, in Unix seconds: the market's publish time. */
   packedAt: z.number().int().nonnegative(),

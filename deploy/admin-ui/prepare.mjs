@@ -6,7 +6,8 @@
 //                                tarballs) and node_modules holding only the plugins
 //
 // The plugins are the @automagik packages profile/package.json depends on: Omni's own, packed
-// from this checkout's apps/*-dsh with `npm pack` at this Omni's version, and Automagik's (the
+// from this checkout's apps/*-dsh with `npm pack` at their own version (the Omni release of their
+// last change, at most this Omni's), and Automagik's (the
 // Bot team and the welcome), the tarballs of the Automagik release apps/automagik.json pins,
 // downloaded (or taken from AUTOMAGIK_TARBALLS) and refused unless their integrity is the
 // pinned one. The image ships exactly what each package publishes. Their @deepseek-ai peers
@@ -36,13 +37,20 @@ const say = (message) => console.log(`[admin-ui] ${message}`);
 const readJson = (file) => JSON.parse(readFileSync(file, 'utf8'));
 
 const version = readJson(join(OMNI, 'package.json')).version;
+// An Omni release (<major>.<yymmdd>.<n>) no newer than `omni` (scripts/lib/plugin-versions.ts).
+const atMost = (plugin, omni) => {
+  if (!/^\d+\.\d{6}\.\d+$/.test(plugin)) return false;
+  const [a, b] = [plugin, omni].map((v) => v.split('.').map(Number));
+  const at = a.findIndex((part, index) => part !== b[index]);
+  return at === -1 || a[at] < b[at];
+};
 const apps = join(OMNI, 'apps');
 const folders = Object.fromEntries(
   readdirSync(apps)
     .filter((name) => name.endsWith('-dsh') && existsSync(join(apps, name, 'package.json')))
     .map((name) => [readJson(join(apps, name, 'package.json')).name, join(apps, name)]),
 );
-// Omni's own plugins (apps/*-dsh, packed at this version), Automagik's (the pinned release's
+// Omni's own plugins (apps/*-dsh, packed at their own version), Automagik's (the pinned release's
 // tarballs) and add-ons from npm at the exact version the profile names (vetted there).
 const automagik = readPin();
 const shipped = [];
@@ -81,7 +89,10 @@ const packed = shipped.map((name) => {
     execFileSync('npm', ['pack', '--json', '--pack-destination', packs], { cwd: folders[name], env, encoding: 'utf8' }),
   );
   if (info.name !== name) throw new Error(`${folders[name]} packs ${info.name}, not ${name}`);
-  if (info.version !== version) throw new Error(`${name} is ${info.version}, not Omni's ${version}`);
+  if (!atMost(info.version, version))
+    throw new Error(
+      `${name} is ${info.version}: an Omni plugin carries an Omni release, at most this Omni's ${version}`,
+    );
   return { name, version: info.version, tarball: join(packs, info.filename) };
 });
 say(`taking ${fromAutomagik.join(', ')} from Automagik ${automagik.version}`);

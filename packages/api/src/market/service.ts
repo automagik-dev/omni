@@ -4,7 +4,8 @@
  * Two sources, both fixed at build time and identical for every caller:
  *   - the bundled market: this release's apps/*-dsh plugins, packed into the CLI's dist/market
  *     with market.json (see ./manifest.ts). Served as npm packages from this Omni's own
- *     registry at /api/market/npm/, one version each: Omni's.
+ *     registry at /api/market/npm/, one version each: the plugin's own, the Omni release of
+ *     its last change (so an unchanged plugin keeps one version across Omni releases).
  *   - marketplace/automagik.json, imported into the bundle: its titles, categories and labels,
  *     and Automagik's plugins at the pinned release commit, for whichever this Omni does not carry.
  *

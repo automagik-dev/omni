@@ -8,8 +8,9 @@
  *
  * Each plugin of this repository is packed with `bun pm pack` (the same files `npm pack`
  * takes: the package's `files`) into outDir, next to a market.json manifest the server reads
- * (packages/api/src/market). A plugin whose version is not Omni's fails the pack: the market
- * serves each of Omni's own plugins at Omni's version. The Automagik plugins come as the
+ * (packages/api/src/market). Each of Omni's own plugins is served at its own version, the Omni
+ * release of its last change (scripts/lib/plugin-versions.ts): a plugin whose version is no Omni
+ * release, or is newer than this Omni, fails the pack. The Automagik plugins come as the
  * pinned release's own tarballs (apps/automagik.mjs: downloaded, or taken from
  * AUTOMAGIK_TARBALLS, and refused unless their integrity is the pinned one), at their own
  * version. The directory is emptied first, so it holds exactly this release's plugins.
@@ -27,6 +28,7 @@ import {
   MarketManifestSchema,
   type MarketPackage,
 } from '../packages/api/src/market/manifest';
+import { RELEASE_VERSION, compareRelease } from './lib/plugin-versions';
 
 const repoRoot = join(import.meta.dir, '..');
 
@@ -63,8 +65,10 @@ const readPlugin = (dir: string): PluginPackage =>
   PluginPackageSchema.parse(JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')));
 
 function packOne(dir: string, pkg: PluginPackage, outDir: string, omniVersion: string): MarketPackage {
-  if (pkg.version !== omniVersion)
-    throw new Error(`${pkg.name} is ${pkg.version}, not Omni's ${omniVersion}: run scripts/sync-versions.ts`);
+  if (!RELEASE_VERSION.test(pkg.version) || compareRelease(pkg.version, omniVersion) > 0)
+    throw new Error(
+      `${pkg.name} is ${pkg.version}: a plugin carries the Omni release of its last change, at most Omni's ${omniVersion}`,
+    );
   // npm's tarball name: the scope's @ dropped and its / made a dash.
   const filename = `${pkg.name.replace(/^@/, '').replace('/', '-')}-${pkg.version}.tgz`;
   execFileSync(process.execPath, ['pm', 'pack', '--ignore-scripts', '--quiet', '--destination', outDir], {

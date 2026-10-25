@@ -11,8 +11,10 @@
 #   .well-known/latest.json        version, released_at, tarball_base
 #   .well-known/dev.json           same values (dev tracks the stable candidate)
 #   deploy/helm/omni/values.yaml   image.tag: v<version>
-#   marketplace/automagik.json     Omni's own plugins listed at v<version>, pinned
-#                                  to the candidate commit (scripts/marketplace.ts)
+#   marketplace/automagik.json     Omni's own plugins listed at their version in
+#                                  v<version> (the Omni release of their last change;
+#                                  a new one pinned to the candidate commit,
+#                                  scripts/marketplace.ts)
 #
 # image-publish.yml and the CI promotion gate derive the candidate identity
 # from the tree (package version → tag → alias), so no workflow or test pins
@@ -180,8 +182,9 @@ jobs:
         with:
           bun-version: 1.4.2
 
-      # The market index lists Omni's own plugins at the candidate's version, the
-      # one their package.json files carry at the tag, so it never trails Omni.
+      # The market index lists Omni's own plugins at the version their package.json
+      # files carry at the tag (the Omni release of each one's last change), so it
+      # never trails Omni; an unchanged plugin keeps its listed entry.
       - name: List the candidate's plugins in the market index
         run: |
           set -euo pipefail

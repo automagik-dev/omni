@@ -12,7 +12,13 @@ https://raw.githubusercontent.com/automagik-dev/dsh-marketplace/main/index.json
 ```
 
 That is the URL to add to a DSH without an Omni ([automagik-dev/dsh-marketplace](https://github.com/automagik-dev/dsh-marketplace)
-follows Omni's releases and lists Omni's plugins at each one, at Omni's version).
+follows Omni's releases and lists Omni's plugins at each one, each at its own version).
+
+Each of Omni's plugins carries the Omni version of its last change: a release moves a plugin to its version only
+when something in the plugin's folder changed since the plugin's version was cut, so an unchanged plugin keeps one
+version (one listed entry, one commit) across Omni releases. Each declares the oldest Omni it works with in
+`engines.omni` (`>=<release>`, checked against that release's API by `scripts/plugin-compat.ts`) and the Bot team it
+needs in `peerDependencies['@automagik/bots-dsh']`.
 
 ## Every Omni is a marketplace
 
@@ -26,7 +32,7 @@ https://<your-omni>/api/market/index.json
 | Route | What it is |
 |-------|------------|
 | `/market` | The catalog, and how to add the index to a DSH (`/api/market` redirects there) |
-| `/api/market/index.json` | The market index: Omni's own plugins at Omni's version, and Automagik's at the release Omni pins |
+| `/api/market/index.json` | The market index: Omni's own plugins, each at its own version (the Omni release of its last change), and Automagik's at the release Omni pins |
 | `/api/market/npm/` | An npm registry for Omni's own plugins; any other package name redirects to registry.npmjs.org |
 
 A reverse proxy that passes only `/api/*` to Omni must pass `/market` too, unauthenticated, for the page.
@@ -76,11 +82,13 @@ repository or of Automagik.
 Omni's own entries are git sources, so nothing is published to npm, and neither market needs a hand-made release:
 an Omni's market is packed from the release it serves, and the Automagik market lists each Omni release by
 itself. This file follows Omni too: pinning a release candidate (`.github/workflows/pin-candidate.yml`) lists
-Omni's plugins at the candidate's version, at its tag commit, in the same commit that pins the public channels,
-and `make marketplace-check` fails when they differ. Here, keep the entries' paths, titles, categories and labels current. To list an unreleased commit (for a test DSH, not committed):
+each of Omni's plugins at its version in the candidate, in the same commit that pins the public channels: a version
+new at the candidate is added at the candidate's tag commit, and one already listed keeps its entry (its commit and
+time), which `pin` refuses unless the plugin's folder is byte-identical there. `make marketplace-check` fails when an
+entry's commit does not hold the version it names. Here, keep the entries' paths, titles, categories and labels current. To list an unreleased commit (for a test DSH, not committed):
 
 ```bash
-bun scripts/marketplace.ts pin <commit-or-branch>   # point Omni's entries at it (adds a version when it moved on)
+bun scripts/marketplace.ts pin <commit-or-branch>   # list Omni's plugins at their version there (adds a version when one moved on)
 make marketplace-check                             # DSH's parser, plus: each commit is in the history and holds the package
 ```
 
