@@ -10786,7 +10786,7 @@ function updateBar(status, dismissed = null) {
   switch (status?.state) {
     case "available":
       if (dismissed === latest) return null;
-      return { kind: "available", latest, current: status.current ?? null, action: "update" };
+      return { kind: "available", latest, current: status.current ?? null, action: "update", ...status.confirm === "app" ? { confirm: "app" } : {} };
     case "off":
     case "forbidden":
       if (!latest || dismissed === latest) return null;
@@ -10867,10 +10867,12 @@ function updateWords(status) {
   }
 }
 var CONFIRM_ON_WHATSAPP = "Confirm on WhatsApp: your Omni sent you a code. Reply update and that code in your chat with yourself.";
+var UPDATING_HERE = "Updating to {version}. Omni restarts by itself in a minute or two.";
 function UpdateBar({ origin }) {
   const [status, setStatus] = (0, import_react2.useState)(null);
   const [dismissed, setDismissed] = (0, import_react2.useState)(() => dismissedFor(origin));
-  const [asked, setAsked] = (0, import_react2.useState)(false);
+  const [asked, setAsked] = (0, import_react2.useState)(null);
+  const [sure, setSure] = (0, import_react2.useState)(false);
   const [how, setHow] = (0, import_react2.useState)(false);
   const [busy, setBusy] = (0, import_react2.useState)(false);
   const [problem, setProblem] = (0, import_react2.useState)(null);
@@ -10894,16 +10896,19 @@ function UpdateBar({ origin }) {
     setBusy(true);
     setProblem(null);
     try {
-      await call("omni-update-request", { version: bar.latest });
-      if (alive.current) setAsked(true);
+      const reply = await call("omni-update-request", { version: bar.latest });
+      if (alive.current) setAsked(reply?.state === "updating" ? "updating" : "awaiting-confirmation");
     } catch (error) {
       if (alive.current) setProblem(error.message);
     } finally {
       if (alive.current) setBusy(false);
     }
   };
+  const here = bar.confirm === "app";
   let words;
-  if (asked) words = t(CONFIRM_ON_WHATSAPP);
+  if (asked === "updating") words = t(UPDATING_HERE, { version: bar.latest });
+  else if (asked) words = t(CONFIRM_ON_WHATSAPP);
+  else if (sure) words = rich("Update the Omni on this computer to {version}? It stops for a minute or two and comes back by itself.", { version: (0, import_react2.createElement)("b", null, bar.latest) });
   else if (bar.kind === "available") {
     const version = (0, import_react2.createElement)("b", null, `Omni ${bar.latest}`);
     words = bar.current ? rich("{version} is available · you're on {current}", { version, current: bar.current }) : rich("{version} is available", { version });
@@ -10914,7 +10919,9 @@ function UpdateBar({ origin }) {
     { className: "ox-bar", role: "status", "data-kind": bar.kind },
     (0, import_react2.createElement)("span", { className: "ox-bar-dot", "aria-hidden": true }),
     (0, import_react2.createElement)("span", { className: "ox-bar-text" }, words),
-    !asked && bar.action === "update" ? (0, import_react2.createElement)("button", { type: "button", className: "oc-primary ox-bar-go", disabled: busy, onClick: ask }, busy ? t("Asking…") : t("Update")) : null,
+    !asked && bar.action === "update" && !sure ? (0, import_react2.createElement)("button", { type: "button", className: "oc-primary ox-bar-go", disabled: busy, onClick: here ? () => setSure(true) : ask }, busy ? t("Asking…") : t("Update")) : null,
+    !asked && sure ? (0, import_react2.createElement)("button", { type: "button", className: "oc-primary ox-bar-go", disabled: busy, onClick: ask }, busy ? t("Starting…") : t("Update now")) : null,
+    !asked && sure && !busy ? (0, import_react2.createElement)("button", { type: "button", className: "oc-link", onClick: () => setSure(false) }, t("Not now")) : null,
     bar.action === "how" ? (0, import_react2.createElement)("button", { type: "button", className: "oc-link", "aria-expanded": how, onClick: () => setHow((value) => !value) }, t("How")) : null,
     bar.action !== "none" ? (0, import_react2.createElement)("button", { type: "button", className: "ox-bar-x", "aria-label": t("Hide until the next version"), title: t("Hide until the next version"), onClick: close }, "×") : null,
     how ? (0, import_react2.createElement)("div", { className: "ox-bar-how" }, bar.command ? (0, import_react2.createElement)(import_react2.Fragment, null, (0, import_react2.createElement)("span", null, t("Whoever runs this Omni updates it with:")), (0, import_react2.createElement)(CopyCommand, { command: bar.command })) : (0, import_react2.createElement)("span", null, t("Ask whoever runs your Omni to update it."))) : null,
@@ -15414,6 +15421,10 @@ var STRINGS = {
   "Could not reach this Omni to check for updates.": "无法连接这个 Omni 来检查更新。",
   "Could not tell whether this Omni has an update.": "无法判断这个 Omni 是否有更新。",
   "Confirm on WhatsApp: your Omni sent you a code. Reply update and that code in your chat with yourself.": "在 WhatsApp 上确认：你的 Omni 给你发了一个验证码。在你和自己的聊天里回复 update 加上这个验证码。",
+  "Updating to {version}. Omni restarts by itself in a minute or two.": "正在更新到 {version}。Omni 会在一两分钟内自行重启。",
+  "Update the Omni on this computer to {version}? It stops for a minute or two and comes back by itself.": "要把这台电脑上的 Omni 更新到 {version} 吗？它会停一两分钟，然后自行恢复。",
+  "Update now": "立即更新",
+  "Not now": "暂不",
   "Setup steps": "设置步骤",
   "Welcome": "欢迎",
   "Connect Omni": "连接 Omni",

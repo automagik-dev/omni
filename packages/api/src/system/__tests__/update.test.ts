@@ -144,6 +144,31 @@ describe('update config', () => {
     ]);
   });
 
+  test('a JSON array of strings is argv as it is, for words that hold a space', () => {
+    const command = '["/Users/me/My Omni/bun", "omni", "sandbox", "update"]';
+    expect(readUpdateConfig(CURRENT, { OMNI_UPDATE_COMMAND: command }).command).toEqual([
+      '/Users/me/My Omni/bun',
+      'omni',
+      'sandbox',
+      'update',
+    ]);
+    expect(readUpdateConfig(CURRENT, { OMNI_UPDATE_COMMAND: '["omni", 3]' }).command).toBeNull();
+    expect(readUpdateConfig(CURRENT, { OMNI_UPDATE_COMMAND: '[not json' }).command).toBeNull();
+    expect(readUpdateConfig(CURRENT, { OMNI_UPDATE_COMMAND: '[]' }).command).toBeNull();
+  });
+
+  test("the app's yes counts only on an Omni that listens on loopback alone", () => {
+    expect(readUpdateConfig(CURRENT, {}).confirm).toBe('whatsapp');
+    for (const host of ['127.0.0.1', '::1', 'localhost']) {
+      expect(readUpdateConfig(CURRENT, { OMNI_UPDATE_CONFIRM: 'app', API_HOST: host }).confirm).toBe('app');
+    }
+    for (const host of ['0.0.0.0', '::', '192.168.0.10', '']) {
+      expect(readUpdateConfig(CURRENT, { OMNI_UPDATE_CONFIRM: 'app', API_HOST: host }).confirm).toBe('whatsapp');
+    }
+    expect(readUpdateConfig(CURRENT, { OMNI_UPDATE_CONFIRM: 'app' }).confirm).toBe('whatsapp');
+    expect(readUpdateConfig(CURRENT, { OMNI_UPDATE_CONFIRM: 'yes', API_HOST: '127.0.0.1' }).confirm).toBe('whatsapp');
+  });
+
   test('a prerelease follows next and a release latest, unless the operator says otherwise', () => {
     expect(readUpdateConfig('2.261023.6-labs.2', {}).channel).toBe('next');
     expect(readUpdateConfig(CURRENT, {}).channel).toBe('latest');
@@ -161,6 +186,7 @@ describe('update status', () => {
       latest: LATEST,
       updateAvailable: true,
       mode: 'off',
+      confirm: 'whatsapp',
     });
     await updater.status();
     expect(fetched).toEqual(['https://registry.npmjs.org/-/package/%40automagik%2Fomni/dist-tags']);
@@ -313,6 +339,69 @@ describe("the owner's yes", () => {
   });
 });
 
+describe("the app's yes, on a loopback-only Omni", () => {
+  const APP = { OMNI_UPDATE_COMMAND: 'omni sandbox update', OMNI_UPDATE_CONFIRM: 'app', API_HOST: '127.0.0.1' };
+
+  test('the request starts the update at once, with no WhatsApp', async () => {
+    account = null;
+    const { updater, requests } = setup(APP);
+    expect((await updater.status()).confirm).toBe('app');
+    const result = await updater.request(LATEST, 'key-1');
+    expect(result).toMatchObject({ ok: true, status: 'started', version: LATEST });
+    expect(requests.rows.size).toBe(0);
+    expect(sent).toEqual([]);
+    expect(spawned.length).toBe(1);
+    expect(spawned[0]?.args).toEqual(['sandbox', 'update']);
+    expect(spawned[0]?.options).toMatchObject({ detached: true, shell: false, stdio: 'ignore' });
+    expect(spawned[0]?.options.env?.OMNI_UPDATE_VERSION).toBe(LATEST);
+    expect(JSON.parse(readFileSync(stateFile(), 'utf8'))).toMatchObject({ from: CURRENT, to: LATEST });
+    expect(events.map((event) => event.type)).toEqual([
+      'system.update.requested',
+      'system.update.confirmed',
+      'system.update.started',
+    ]);
+    expect(events[1]?.payload).toMatchObject({ confirmedBy: 'app' });
+    expect(await updater.status()).toMatchObject({ inFlight: { version: LATEST } });
+    expect(await updater.request(LATEST, 'key-2')).toMatchObject({ code: 'UPDATE_IN_PROGRESS' });
+    expect(spawned.length).toBe(1);
+  });
+
+  test('takes only the version the channel publishes now, and never while updates are off', async () => {
+    const { updater } = setup(APP);
+    expect(await updater.request('2.261023.9', 'key-1')).toMatchObject({ code: 'VERSION_MISMATCH' });
+    const off = setup({ OMNI_UPDATE_CONFIRM: 'app', API_HOST: '127.0.0.1' });
+    expect(await off.updater.request(LATEST, 'key-1')).toMatchObject({ code: 'UPDATE_NOT_CONFIGURED' });
+    expect(spawned).toEqual([]);
+  });
+
+  test('a command that cannot start is refused and settled', async () => {
+    const { updater } = setup(APP);
+    const failing = createSystemUpdater({
+      version: CURRENT,
+      login: null,
+      eventBus: null,
+      owner: null,
+      requests: null,
+      env: { OMNI_UPDATE_STATE_DIR: dir, ...APP },
+      fetch: async () => new Response(JSON.stringify(tags), { status: 200 }),
+      spawn: () => {
+        throw new Error('ENOENT');
+      },
+    });
+    expect(await failing.request(LATEST, 'key-1')).toMatchObject({ ok: false, code: 'UPDATE_START_FAILED' });
+    expect(existsSync(stateFile())).toBe(false);
+    expect((await updater.status()).inFlight).toBeUndefined();
+  });
+
+  test('on an Omni the network can reach, the setting is ignored and WhatsApp confirms', async () => {
+    account = null;
+    const { updater } = setup({ ...APP, API_HOST: '0.0.0.0' });
+    expect((await updater.status()).confirm).toBe('whatsapp');
+    expect(await updater.request(LATEST, 'key-1')).toMatchObject({ code: 'CONFIRM_CHANNEL_MISSING' });
+    expect(spawned).toEqual([]);
+  });
+});
+
 describe('after the restart', () => {
   const record = (startedAt: number) =>
     writeFileSync(
@@ -393,6 +482,29 @@ describe('the routes', () => {
       status: 'awaiting-confirmation',
       version: LATEST,
     });
+  });
+
+  test('POST on an Omni the app confirms says the update started', async () => {
+    const { updater } = setup({
+      OMNI_UPDATE_COMMAND: 'omni sandbox update',
+      OMNI_UPDATE_CONFIRM: 'app',
+      API_HOST: '::1',
+    });
+    const app = new Hono<{ Variables: AppVariables }>();
+    app.use('*', async (c, next) => {
+      c.set('updater', updater);
+      await next();
+    });
+    app.route('/', systemRoutes);
+    const started = await app.request('/update', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ version: LATEST }),
+    });
+    expect(started.status).toBe(202);
+    const data = ((await started.json()) as { data: { status: string; version: string; startedAt: string } }).data;
+    expect(data).toMatchObject({ status: 'started', version: LATEST });
+    expect(Number.isNaN(Date.parse(data.startedAt))).toBe(false);
   });
 });
 

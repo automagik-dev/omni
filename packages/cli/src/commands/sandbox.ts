@@ -6,6 +6,8 @@
  * omni sandbox stop      [--home <dir>] [--json]
  * omni sandbox uninstall [--home <dir>] [--purge] [--json]
  * omni sandbox run       [--home <dir>]          (the supervisor; launchd/systemd run this)
+ * omni sandbox update    [--home <dir>] [--to <version>] [--json]
+ *                        (hands an update off; the sandbox's API runs this when the app asks)
  *
  * Manages the sandboxed Omni that `omni install --sandbox` creates (see
  * src/sandbox.ts). With `--json` every subcommand prints one
@@ -22,6 +24,7 @@ import {
   SandboxError,
   type SandboxInstallOptions,
   type SandboxReport,
+  handOffSandboxUpdate,
   installSandbox,
   resolveSandboxHome,
   sandboxStatus,
@@ -166,6 +169,24 @@ export function createSandboxCommand(): Command {
   ).action((options: SandboxCliOptions & { purge?: boolean }) =>
     act(options, 'uninstalled', () => uninstallSandbox({ ...homes(options), purge: options.purge === true })),
   );
+  sandbox
+    .command('update')
+    .description('Update the sandbox to a published version from outside it (what its API runs when the app asks)')
+    .option('--home <dir>', 'Sandbox home (default: $OMNI_HOME/sandbox, else ~/.omni/sandbox)')
+    .option('--to <version>', 'The version to update to (default: $OMNI_UPDATE_VERSION, which the API sets)')
+    .option('--json', 'Print one JSON line')
+    .action(async (options: SandboxCliOptions & { to?: string }) => {
+      const version = options.to?.trim() || process.env.OMNI_UPDATE_VERSION?.trim() || '';
+      try {
+        const handed = await handOffSandboxUpdate({ ...homes(options), version });
+        if (options.json) process.stdout.write(`${JSON.stringify({ ok: true, ...handed })}\n`);
+        else output.raw(`Updating the sandbox to ${handed.version}; it restarts by itself. Log: ${handed.logPath}`);
+        process.exit(SANDBOX_EXIT.ok);
+      } catch (error) {
+        const exitCode = error instanceof SandboxError ? error.exitCode : SANDBOX_EXIT.failed;
+        output.error(error instanceof Error ? error.message : String(error), undefined, exitCode);
+      }
+    });
   sandbox
     .command('run')
     .description('Run the sandbox supervisor in the foreground (what launchd/systemd start)')

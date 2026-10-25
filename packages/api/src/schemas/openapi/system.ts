@@ -23,6 +23,11 @@ export const UpdateStatusSchema = z
       .openapi({ description: 'What the channel publishes now; null when the registry could not be read' }),
     updateAvailable: z.boolean(),
     mode: z.enum(['off', 'command']).openapi({ description: 'off: the operator has not set OMNI_UPDATE_COMMAND' }),
+    confirm: z.enum(['whatsapp', 'app']).openapi({
+      description:
+        "Who says yes: whatsapp, the owner's `update <CODE>`; app, the request itself (a loopback-only Omni " +
+        'whose operator set OMNI_UPDATE_CONFIRM=app, such as a sandbox)',
+    }),
     pending: z
       .object({ version: z.string(), expiresAt: z.string().datetime() })
       .optional()
@@ -58,7 +63,9 @@ export function registerSystemSchemas(registry: OpenAPIRegistry): void {
     description:
       'Asks this Omni to update to the version its channel publishes now. Nothing changes yet: the owner gets ' +
       '"Update Omni from X to Y? Reply update <CODE>" in their own WhatsApp self chat, and only that reply, ' +
-      "within ten minutes, runs the operator's OMNI_UPDATE_COMMAND. Off unless the operator set it. Needs " +
+      "within ten minutes, runs the operator's OMNI_UPDATE_COMMAND. On an Omni that listens only on loopback and " +
+      'whose operator set OMNI_UPDATE_CONFIRM=app (a sandbox), the request is the yes: the app asked the person ' +
+      'on screen, and the update starts at once. Off unless the operator set OMNI_UPDATE_COMMAND. Needs ' +
       'system:update (device keys carry it by default) or system:admin.',
     request: {
       body: {
@@ -73,19 +80,24 @@ export function registerSystemSchemas(registry: OpenAPIRegistry): void {
     },
     responses: {
       202: ok(
-        z.object({
-          status: z.literal('awaiting-confirmation'),
-          version: z.string(),
-          expiresAt: z.string().datetime(),
-        }),
-        "Waiting for the owner's yes on WhatsApp",
+        z.discriminatedUnion('status', [
+          z.object({
+            status: z.literal('awaiting-confirmation'),
+            version: z.string(),
+            expiresAt: z.string().datetime(),
+          }),
+          z.object({ status: z.literal('started'), version: z.string(), startedAt: z.string().datetime() }),
+        ]),
+        "Waiting for the owner's yes on WhatsApp, or started (confirm: app)",
       ),
       400: error('Malformed body'),
       409: error(
         'UPDATE_NOT_CONFIGURED, CONFIRM_CHANNEL_MISSING, UPDATE_PENDING, UPDATE_IN_PROGRESS, VERSION_MISMATCH or ALREADY_CURRENT',
       ),
       502: error('CONFIRM_SEND_FAILED: the owner could not be reached on WhatsApp'),
-      503: error('REGISTRY_UNAVAILABLE: the update channel could not be read'),
+      503: error(
+        'REGISTRY_UNAVAILABLE: the update channel could not be read; UPDATE_START_FAILED: the command could not start',
+      ),
     },
   });
 }

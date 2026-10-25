@@ -37,6 +37,7 @@ import {
   type SandboxState,
   buildLaunchdPlist,
   buildSystemdUserUnit,
+  handOffSandboxUpdate,
   installSandbox,
   leftoverChildPids,
   readSandboxApiKey,
@@ -46,6 +47,7 @@ import {
   sandboxLayout,
   sandboxStatus,
   sandboxUnitNames,
+  sandboxUpdateCommand,
   startSandbox,
   stopSandbox,
   supervisorCommand,
@@ -682,6 +684,84 @@ describe('sandboxChildSpecs', () => {
     expect(pg?.env.OMNI_API_KEY).toBeUndefined();
     expect(supervisorCommand(layout, state)[1]).toBe('/s/runtime/node_modules/@automagik/omni/bin/omni');
   });
+
+  test("the API updates from the app: the app's yes confirms, and the runtime's CLI hands the update off", () => {
+    const layout = sandboxLayout('/s');
+    const api = sandboxChildSpecs(layout, state, 'omni_sk_test', LEAKY_ENV)[2];
+    expect(api?.env).toMatchObject({
+      API_HOST: '127.0.0.1',
+      OMNI_UPDATE_CONFIRM: 'app',
+      OMNI_UPDATE_STATE_DIR: '/s/data',
+    });
+    const command = [BUN, '/s/runtime/node_modules/@automagik/omni/bin/omni', 'sandbox', 'update', '--home', '/s'];
+    expect(JSON.parse(api?.env.OMNI_UPDATE_COMMAND ?? '[]')).toEqual(command);
+    expect(sandboxUpdateCommand(layout, state)).toEqual(command);
+  });
+});
+
+describe('updates from the app: omni sandbox update hands the install off', () => {
+  const install = (version: string) => [
+    BUN,
+    'x',
+    '--bun',
+    `@automagik/omni@${version}`,
+    'install',
+    '--sandbox',
+    '--home',
+    home,
+    '--json',
+  ];
+
+  test("linux: the install runs in a transient systemd --user service of its own, never the sandbox's", async () => {
+    const { deps, runs, detached } = fakeDeps({}, { serviceManager: true });
+    await installSandbox({ home, defaultHome }, deps);
+    runs.length = 0;
+    const handed = await handOffSandboxUpdate({ home, defaultHome, version: '2.261026.1' }, deps);
+    expect(handed).toEqual({ via: 'systemd', logPath: join(home, 'logs', 'update.log'), version: '2.261026.1' });
+    const names = sandboxUnitNames(home, defaultHome);
+    const run = runs.find((call) => call.cmd[0] === 'systemd-run');
+    const args = run?.cmd ?? [];
+    const unit = args.find((arg) => arg.startsWith('--unit='));
+    expect(unit).toMatch(/^--unit=omni-sandbox-[0-9a-f]{8}-update-\d+\.service$/);
+    expect(unit).not.toBe(`--unit=${names.sessionUnit}`);
+    expect(unit).not.toBe(`--unit=${names.systemdUnit}`);
+    expect(args).toContain(`--property=StandardOutput=append:${join(home, 'logs', 'update.log')}`);
+    expect(args.slice(args.indexOf('--') + 1)).toEqual(install('2.261026.1'));
+    // Only the sandbox's own environment: nothing from the API's (its key, its database).
+    expect(args.some((arg) => arg.startsWith('--setenv=DATABASE_URL'))).toBe(false);
+    expect(args.some((arg) => arg.startsWith('--setenv=OMNI_API_KEY'))).toBe(false);
+    expect(detached).toHaveLength(0);
+  });
+
+  test('without a service manager, or on macOS, a detached process of its own', async () => {
+    const linux = fakeDeps();
+    await installSandbox({ home, defaultHome }, linux.deps);
+    linux.detached.length = 0;
+    expect((await handOffSandboxUpdate({ home, defaultHome, version: '2.261026.1' }, linux.deps)).via).toBe('detached');
+    expect(linux.detached.at(-1)?.cmd).toEqual(install('2.261026.1'));
+    expect(linux.detached.at(-1)?.env.DATABASE_URL).toBeUndefined();
+
+    const mac = fakeDeps({ platform: 'darwin' });
+    const runsBefore = mac.runs.length;
+    expect((await handOffSandboxUpdate({ home, defaultHome, version: '2.261026.1' }, mac.deps)).via).toBe('detached');
+    expect(mac.runs.slice(runsBefore).some((call) => call.cmd[0] === 'launchctl')).toBe(false);
+    expect(mac.detached.at(-1)?.cmd).toEqual(install('2.261026.1'));
+  });
+
+  test('takes only a release version, and only for a sandbox that exists', async () => {
+    const { deps, runs, detached } = fakeDeps({}, { serviceManager: true });
+    await expect(handOffSandboxUpdate({ home, defaultHome, version: '2.261026.1' }, deps)).rejects.toMatchObject({
+      exitCode: 3,
+    });
+    await installSandbox({ home, defaultHome }, deps);
+    runs.length = 0;
+    detached.length = 0;
+    for (const version of ['', 'latest', '^2.261026.1', '2.261026.1 --evil', '2.261026']) {
+      await expect(handOffSandboxUpdate({ home, defaultHome, version }, deps)).rejects.toThrow('Not a release version');
+    }
+    expect(runs).toHaveLength(0);
+    expect(detached).toHaveLength(0);
+  });
 });
 
 describe('SandboxSupervisor', () => {
@@ -904,8 +984,8 @@ describe('command wiring', () => {
     }
   });
 
-  test('omni sandbox has status, start, stop, uninstall and run', () => {
+  test('omni sandbox has status, start, stop, uninstall, update and run', () => {
     const names = createSandboxCommand().commands.map((command) => command.name());
-    expect(names).toEqual(['status', 'start', 'stop', 'uninstall', 'run']);
+    expect(names).toEqual(['status', 'start', 'stop', 'uninstall', 'update', 'run']);
   });
 });

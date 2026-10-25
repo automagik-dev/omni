@@ -315,6 +315,11 @@ export function sandboxChildSpecs(
         NATS_URL: `nats://127.0.0.1:${state.ports.nats}`,
         NODE_ENV: 'production',
         LOG_LEVEL: 'info',
+        // Updates from the app (packages/api/src/system/update.ts): this API listens on loopback
+        // only, so the app's own yes confirms them, and the runtime's CLI hands the update off.
+        OMNI_UPDATE_COMMAND: JSON.stringify(sandboxUpdateCommand(layout, state)),
+        OMNI_UPDATE_CONFIRM: 'app',
+        OMNI_UPDATE_STATE_DIR: layout.dataDir,
       },
       readyPort: state.ports.api,
       logPath: join(layout.logsDir, 'api.log'),
@@ -332,6 +337,12 @@ export function supervisorCommand(layout: SandboxLayout, state: SandboxState): s
     '--home',
     layout.home,
   ];
+}
+
+/** What the API runs to update this sandbox: the runtime's own CLI, `omni sandbox update`. */
+export function sandboxUpdateCommand(layout: SandboxLayout, state: SandboxState): string[] {
+  const [bun, cli] = supervisorCommand(layout, state);
+  return [bun as string, cli as string, 'sandbox', 'update', '--home', layout.home];
 }
 
 // ----------------------------------------------------------------------------
@@ -463,16 +474,20 @@ function buildSystemdRunCommand(
   layout: SandboxLayout,
   env: Record<string, string>,
   literalArgv: boolean,
+  job: { description: string; log: string } = {
+    description: `Omni (sandbox at ${layout.home})`,
+    log: join(layout.logsDir, 'supervisor.log'),
+  },
 ): string[] {
   if (/[\r\n]/.test(layout.home)) throw new Error(`sandbox home must not contain a newline: ${layout.home}`);
-  const log = join(layout.logsDir, 'supervisor.log');
+  const log = job.log;
   return [
     'systemd-run',
     '--user',
     '--quiet',
     '--collect',
     `--unit=${unit}`,
-    `--description=Omni (sandbox at ${layout.home})`,
+    `--description=${job.description}`,
     ...(literalArgv ? [SYSTEMD_RUN_LITERAL_ARGV] : []),
     `--working-directory=${layout.home}`,
     '--property=Type=simple',
@@ -1126,4 +1141,53 @@ export async function uninstallSandbox(
     }
   }
   return report(layout, deps, 0);
+}
+
+/** A version `omni sandbox update` takes: what npm publishes, never a range or a tag. */
+export const SANDBOX_UPDATE_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+
+/**
+ * Updates the sandbox to `version` from outside it. The sandbox's own API runs this when the
+ * app asks (OMNI_UPDATE_COMMAND, packages/api/src/system/update.ts), from inside the unit the
+ * update has to stop, so the install itself (`omni install --sandbox` of that version, which
+ * keeps the ports, the key, the data and the at-login choice) is handed to a transient
+ * systemd --user service of its own, or else to a detached process (a session of its own,
+ * which stopping the sandbox's launchd job does not reach). It returns once handed off: the
+ * API learns how it went when it comes back on the new version (its reconcile).
+ */
+export async function handOffSandboxUpdate(
+  opts: { home: string; defaultHome: string; version: string },
+  deps: SandboxDeps = defaultSandboxDeps(),
+): Promise<{ via: 'systemd' | 'detached'; logPath: string; version: string }> {
+  if (!SANDBOX_UPDATE_VERSION.test(opts.version)) {
+    throw new SandboxError(`Not a release version: '${opts.version}'`);
+  }
+  const layout = sandboxLayout(opts.home);
+  const state = requireState(layout);
+  const cmd = [
+    state.bun,
+    'x',
+    '--bun',
+    `@automagik/omni@${opts.version}`,
+    'install',
+    '--sandbox',
+    '--home',
+    layout.home,
+    '--json',
+  ];
+  const env = sandboxBaseEnv(layout, deps.env);
+  const logPath = join(layout.logsDir, 'update.log');
+  if (deps.platform === 'linux') {
+    const names = sandboxUnitNames(layout.home, opts.defaultHome);
+    const unit = names.sessionUnit.replace(/-session\.service$/, `-update-${deps.now().getTime()}.service`);
+    const job = { description: `Omni sandbox update to ${opts.version} (${layout.home})`, log: logPath };
+    const host = { env: serviceManagerEnv(deps) };
+    let started = await deps.run(buildSystemdRunCommand(unit, cmd, layout, env, true, job), host);
+    if (started.code !== 0 && /unrecognized option.*expand-environment/.test(started.stderr)) {
+      started = await deps.run(buildSystemdRunCommand(unit, cmd, layout, env, false, job), host);
+    }
+    if (started.code === 0) return { via: 'systemd', logPath, version: opts.version };
+  }
+  deps.spawnDetached(cmd, { cwd: layout.home, env, logPath });
+  return { via: 'detached', logPath, version: opts.version };
 }
