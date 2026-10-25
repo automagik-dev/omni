@@ -65,7 +65,8 @@ const hostOf = (url) => {
 /**
  * What a found Omni's row shows and offers: its title and the line under it, a badge with
  * its tone, a note for when it is open, and its one action: `update` (the Omni CLI runs it
- * and it is too old to pair), `reinstall` (the sandboxed one, from an earlier release), `use`
+ * and it is too old to pair, or older than the oldest Omni this app works with), `reinstall`
+ * (the sandboxed one, older than that), `use`
  * (this computer has its key), `connect` (sign this device in), `elsewhere` (another app runs
  * it, so the person runs a new one here instead), or none.
  */
@@ -84,6 +85,8 @@ export function foundRow(omni, { mac = false, linked = false } = {}) {
   if (linked) return row(t('Connected'), 'ok', null, null)
   if (omni.local && omni.reachable === false) return row(t('Not answering'), 'muted', null, t('It is not answering right now.'))
   if (omni.updateTo) return row(t('Needs an update'), 'warn', 'reinstall', t('It runs an older Omni than this app. Updating takes about a minute and keeps its chats and channels.'))
+  // Older than the oldest Omni this app works with (`engines.omni`): the Omni CLI updates it.
+  if (omni.outdated && omni.manager === 'cli') return row(t('Needs an update'), 'warn', 'update', t('It runs an older Omni than this app. Updating takes about a minute and keeps its chats and channels.'))
   if (omni.pairing === 'too-old') {
     if (omni.manager === 'cli') return row(t('Needs an update'), 'warn', 'update', t('It is too old to pair with this app. Updating takes about a minute and keeps your chats and channels.'))
     if (omni.hasKey) return row(t('Ready'), 'ok', 'use', t('This computer has its key, so it connects without a code.'))

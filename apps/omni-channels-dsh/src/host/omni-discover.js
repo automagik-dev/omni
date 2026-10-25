@@ -14,7 +14,8 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { cleanOmniUrl, deviceNameOf } from './omni-link.js'
-import { newer, PLUGIN_VERSION } from './version.js'
+import { installRelease } from './omni-release.js'
+import { newer, OMNI_MINIMUM } from './version.js'
 
 export const DEFAULT_PORT = 8882
 const PROBE_TIMEOUT_MS = 800
@@ -190,16 +191,20 @@ export async function probe(url, fetchImpl = fetch, timeoutMs = PROBE_TIMEOUT_MS
 // The Omnis to offer, as the page may see them. Omnis elsewhere are not asked anything
 // until the person picks one; `running` entries that do not answer are left out, since
 // nothing but the probe named them.
-export async function discover({ env = process.env, home = homedir(), fetchImpl = fetch, manager = url => managerOf(url, { env, home }) } = {}) {
+// An Omni older than this plugin's minimum (`engines.omni`) is `outdated`: a sandboxed one is
+// reinstalled at the release a new one would get (`updateTo`, omni-release.js), one the Omni
+// CLI runs is updated with it, and any other says so.
+export async function discover({ env = process.env, home = homedir(), fetchImpl = fetch, manager = url => managerOf(url, { env, home }), release = () => installRelease({ env }), minimum = OMNI_MINIMUM } = {}) {
   const omnis = merge(candidates({ env, home }))
   const answers = await Promise.all(omnis.map(omni => (isLoopback(omni.url) ? probe(omni.url, fetchImpl) : null)))
+  const outdated = answers.map(answer => newer(minimum, answer?.version))
+  // Asked only when a sandbox needs it, so discovery stays off the network otherwise.
+  const updateTo = omnis.some((omni, index) => omni.source === 'sandbox' && outdated[index]) ? (await release()).version : null
   return omnis
     .map((omni, index) => {
       const local = isLoopback(omni.url)
       const answer = answers[index] ?? { reachable: null, version: null, canPair: null, pairing: 'unknown' }
-      // A sandboxed Omni from an earlier release moves to this plugin's (omni-local.js).
-      const updateTo = omni.source === 'sandbox' && newer(PLUGIN_VERSION, answer.version) ? PLUGIN_VERSION : null
-      return { id: omni.id, url: omni.url, source: omni.source, name: omni.name ?? null, local, hasKey: Boolean(omni.key), updateTo, manager: local ? manager(omni.url) : null, ...answer }
+      return { id: omni.id, url: omni.url, source: omni.source, name: omni.name ?? null, local, hasKey: Boolean(omni.key), outdated: outdated[index], updateTo: omni.source === 'sandbox' && outdated[index] ? updateTo : null, manager: local ? manager(omni.url) : null, ...answer }
     })
     .filter(omni => omni.source !== 'running' || omni.reachable)
     .sort((a, b) => Number(b.local) - Number(a.local))
@@ -303,7 +308,7 @@ export function install(rt) {
 
   const endpoints = {
     // Where a sandboxed Omni would go, so the page can say before setting one up.
-    'omni-discover': async () => ({ omnis: await discover(), sandbox: { home: sandboxHome(), version: PLUGIN_VERSION } }),
+    'omni-discover': async () => ({ omnis: await discover(), sandbox: { home: sandboxHome(), minimum: OMNI_MINIMUM } }),
     'omni-link-info': linkInfo,
     'omni-discover-use': use,
     'omni-discover-key': useKey,

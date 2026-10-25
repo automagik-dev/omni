@@ -268,3 +268,17 @@ test('an Omni with no CLI config is another app\'s; the sandbox is ours; one els
   assert.equal(managerOf('http://localhost:18882', { env: {}, home, ...fsWith() }), 'sandbox')
   assert.equal(managerOf('https://omni.example.com', { env: {}, home, ...fsWith() }), null)
 })
+
+test('the install terminal names the newest Omni npm has that meets the minimum, not the plugin\'s own version', async (t) => {
+  const { forgetReleases } = await import('../src/host/omni-release.js')
+  forgetReleases()
+  t.after(forgetReleases)
+  const subprocess = fakeSubprocess()
+  const fetch = async (url) => (String(url).endsWith('/-/package/@automagik%2fomni/dist-tags')
+    ? new Response(JSON.stringify({ latest: '2.999999.1', next: '2.999999.3' }))
+    : new Response(JSON.stringify({ version: '2.999999.1' })))
+  const { call, rt } = start(t, { subprocess, version: undefined, fetch })
+  const opened = await call('omni-terminal-open', { kind: 'install' })
+  await rt.omniTerminalReady(opened.terminal)
+  assert.equal(subprocess.spawned[0].spec.env.OMNI_TERMINAL_COMMAND, 'bun x --bun @automagik/omni@2.999999.1 install --sandbox --at-login')
+})

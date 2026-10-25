@@ -13646,6 +13646,7 @@ function foundRow(omni2, { mac = false, linked = false } = {}) {
   if (linked) return row(t("Connected"), "ok", null, null);
   if (omni2.local && omni2.reachable === false) return row(t("Not answering"), "muted", null, t("It is not answering right now."));
   if (omni2.updateTo) return row(t("Needs an update"), "warn", "reinstall", t("It runs an older Omni than this app. Updating takes about a minute and keeps its chats and channels."));
+  if (omni2.outdated && omni2.manager === "cli") return row(t("Needs an update"), "warn", "update", t("It runs an older Omni than this app. Updating takes about a minute and keeps its chats and channels."));
   if (omni2.pairing === "too-old") {
     if (omni2.manager === "cli") return row(t("Needs an update"), "warn", "update", t("It is too old to pair with this app. Updating takes about a minute and keeps your chats and channels."));
     if (omni2.hasKey) return row(t("Ready"), "ok", "use", t("This computer has its key, so it connects without a code."));

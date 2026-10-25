@@ -288,15 +288,17 @@ verify-migrations:
 # Version sync gate: every tracked version field matches root package.json.
 # Pass BASE=<ref> to exempt files absent on that ref (what CI does on PRs, #1020).
 verify-versions:
-	bun test scripts/verify-versions.test.ts scripts/bun-version.test.ts
+	bun test scripts/verify-versions.test.ts scripts/plugin-versions.test.ts scripts/bun-version.test.ts
 	bun scripts/verify-versions.ts $(if $(BASE),--base $(BASE),)
 
 # Automagik marketplace: the static index (DSH's own parser, and every pinned omni commit holds its
 # package) and the packer that bundles apps/*-dsh into each Omni's own market (bun pm pack), and
-# which package manager installs each plugin folder and each DSH profile.
+# which package manager installs each plugin folder and each DSH profile, and that each plugin
+# works with the oldest Omni it declares (engines.omni, against that release's API).
 marketplace-check:
-	bun test scripts/marketplace.test.ts scripts/pack-market.test.ts scripts/admin-ui-image.test.ts scripts/package-managers.test.ts
+	bun test scripts/marketplace.test.ts scripts/pack-market.test.ts scripts/admin-ui-image.test.ts scripts/package-managers.test.ts scripts/plugin-compat.test.ts
 	bun scripts/marketplace.ts check
+	bun scripts/plugin-compat.ts
 
 # Run all quality checks
 check: typecheck lint dead-code verify-migrations verify-versions marketplace-check test

@@ -29,7 +29,7 @@ describe('pack-market', () => {
     const appsDir = join(root, 'apps');
     plugin(appsDir, 'one-dsh', {
       name: '@automagik/one-dsh',
-      version: '2.1.0',
+      version: '2.261025.2',
       description: 'One',
       license: 'Apache-2.0',
       repository: 'git+https://github.com/automagik-dev/omni.git',
@@ -38,9 +38,9 @@ describe('pack-market', () => {
       dsh: { client: { platform: 'web' } },
       scripts: { prepack: 'exit 1' },
     });
-    plugin(appsDir, 'two-dsh', { name: 'two-dsh', version: '2.1.0' });
-    plugin(appsDir, 'private-dsh', { name: 'private-dsh', version: '2.1.0', private: true });
-    plugin(appsDir, 'ui', { name: 'not-a-plugin', version: '2.1.0' });
+    plugin(appsDir, 'two-dsh', { name: 'two-dsh', version: '2.261025.2' });
+    plugin(appsDir, 'private-dsh', { name: 'private-dsh', version: '2.261025.2', private: true });
+    plugin(appsDir, 'ui', { name: 'not-a-plugin', version: '2.261025.2' });
     const outDir = join(root, 'out');
     mkdirSync(outDir);
     writeFileSync(join(outDir, 'stale.tgz'), 'old');
@@ -48,18 +48,18 @@ describe('pack-market', () => {
     const manifest = await packMarket({
       appsDir,
       outDir,
-      omniVersion: '2.1.0',
+      omniVersion: '2.261025.2',
       packedAt: 1792553326,
       automagik: false,
     });
 
     expect(MarketManifestSchema.parse(JSON.parse(readFileSync(join(outDir, 'market.json'), 'utf8')))).toEqual(manifest);
-    expect(manifest).toMatchObject({ format: 1, omniVersion: '2.1.0', packedAt: 1792553326 });
+    expect(manifest).toMatchObject({ format: 1, omniVersion: '2.261025.2', packedAt: 1792553326 });
     expect(manifest.packages.map((pkg) => pkg.name)).toEqual(['@automagik/one-dsh', 'two-dsh']);
     const [one] = manifest.packages;
     const bytes = readFileSync(join(outDir, one?.file ?? ''));
     expect(one).toMatchObject({
-      file: 'automagik-one-dsh-2.1.0.tgz',
+      file: 'automagik-one-dsh-2.261025.2.tgz',
       integrity: `sha512-${createHash('sha512').update(bytes).digest('base64')}`,
       shasum: createHash('sha1').update(bytes).digest('hex'),
       size: bytes.byteLength,
@@ -74,12 +74,34 @@ describe('pack-market', () => {
     expect(() => readFileSync(join(outDir, 'stale.tgz'))).toThrow();
   });
 
-  test("refuses a plugin that is not at Omni's version", async () => {
-    const appsDir = join(root, 'drift');
-    plugin(appsDir, 'old-dsh', { name: 'old-dsh', version: '0.1.9' });
-    await expect(
-      packMarket({ appsDir, outDir: join(root, 'drift-out'), omniVersion: '2.1.0', automagik: false }),
-    ).rejects.toThrow(/not Omni's 2\.1\.0/);
+  test('packs a plugin at its own version, the Omni release of its last change', async () => {
+    const appsDir = join(root, 'lagging');
+    plugin(appsDir, 'kept-dsh', { name: 'kept-dsh', version: '2.261024.6' });
+    plugin(appsDir, 'moved-dsh', { name: 'moved-dsh', version: '2.261025.2' });
+    const manifest = await packMarket({
+      appsDir,
+      outDir: join(root, 'lagging-out'),
+      omniVersion: '2.261025.2',
+      automagik: false,
+    });
+    expect(manifest.omniVersion).toBe('2.261025.2');
+    expect(manifest.packages.map((pkg) => [pkg.name, pkg.version, pkg.file])).toEqual([
+      ['kept-dsh', '2.261024.6', 'kept-dsh-2.261024.6.tgz'],
+      ['moved-dsh', '2.261025.2', 'moved-dsh-2.261025.2.tgz'],
+    ]);
+  });
+
+  test('refuses a plugin newer than Omni, or at a version that is no Omni release', async () => {
+    for (const [dir, version] of [
+      ['ahead', '2.261026.1'],
+      ['other', '0.1.9'],
+    ] as const) {
+      const appsDir = join(root, dir);
+      plugin(appsDir, 'odd-dsh', { name: 'odd-dsh', version });
+      await expect(
+        packMarket({ appsDir, outDir: join(root, `${dir}-out`), omniVersion: '2.261025.2', automagik: false }),
+      ).rejects.toThrow(`odd-dsh is ${version}: a plugin carries the Omni release of its last change`);
+    }
   });
 
   test('carries the pinned Automagik release, at its own version, and refuses other bytes', async () => {
@@ -113,14 +135,19 @@ describe('pack-market', () => {
     const pinFile = join(root, 'automagik.json');
     writeFileSync(pinFile, JSON.stringify(pin));
     const appsDir = join(root, 'with-automagik');
-    plugin(appsDir, 'omni-channels-dsh', { name: '@automagik/omni-channels-dsh', version: '2.1.0' });
+    plugin(appsDir, 'omni-channels-dsh', { name: '@automagik/omni-channels-dsh', version: '2.261025.2' });
     const outDir = join(root, 'with-automagik-out');
 
-    const manifest = await packMarket({ appsDir, outDir, omniVersion: '2.1.0', automagik: { pinFile, from: release } });
+    const manifest = await packMarket({
+      appsDir,
+      outDir,
+      omniVersion: '2.261025.2',
+      automagik: { pinFile, from: release },
+    });
 
     expect(manifest.packages.map((pkg) => [pkg.name, pkg.version])).toEqual([
       ['@automagik/bots-dsh', '3.261023.1'],
-      ['@automagik/omni-channels-dsh', '2.1.0'],
+      ['@automagik/omni-channels-dsh', '2.261025.2'],
     ]);
     expect(manifest.packages[0]).toMatchObject({
       file,
@@ -138,7 +165,7 @@ describe('pack-market', () => {
       packMarket({
         appsDir,
         outDir: join(root, 'tampered-out'),
-        omniVersion: '2.1.0',
+        omniVersion: '2.261025.2',
         automagik: { pinFile, from: tampered },
       }),
     ).rejects.toThrow(/is not the pinned tarball/);

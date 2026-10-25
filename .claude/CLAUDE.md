@@ -494,6 +494,11 @@ ci(rolling-pr): update workflow permissions
 ### Public Release Boundary
 
 - Integration versioning happens on `dev`.
+- Omni's DSH plugins (`apps/omni-channels-dsh`, `apps/omni-canvas-dsh`) carry the
+  Omni version of their last change: a cut moves a plugin only when its folder
+  changed since its version's tag. Each declares the oldest Omni it needs in
+  `engines.omni`, checked against that release's API (`scripts/plugin-compat.ts`);
+  a minimum above the repo's version means "the release this change is cut in".
 - The reviewed version carries unchanged into `main`.
 - The public `main` path only verifies existing immutable artifacts.
 - Production release and runtime decisions belong to the separate/private

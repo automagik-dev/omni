@@ -278,3 +278,51 @@ describe('market page', () => {
     expect(html).not.toContain('innerHTML');
   });
 });
+
+describe("Omni's plugins at their own versions", () => {
+  test('a plugin unchanged since an older release is listed and served at that version, not Omni’s', async () => {
+    const dir = mkdtempSync(join(root, 'own-versions-'));
+    const kept = '2.261024.6';
+    const src = mkdtempSync(join(root, 'src-'));
+    mkdirSync(join(src, 'package'));
+    writeFileSync(
+      join(src, 'package', 'package.json'),
+      JSON.stringify({ name: '@automagik/omni-kept-dsh', version: kept }),
+    );
+    const file = `automagik-omni-kept-dsh-${kept}.tgz`;
+    execFileSync('tar', ['-czf', join(dir, file), '-C', src, 'package']);
+    const bytes = readFileSync(join(dir, file));
+    const manifest = MarketManifestSchema.parse({
+      format: 1,
+      omniVersion: '2.261025.2',
+      packedAt: PACKED_AT,
+      packages: [
+        {
+          name: '@automagik/omni-kept-dsh',
+          version: kept,
+          file,
+          integrity: `sha512-${createHash('sha512').update(bytes).digest('base64')}`,
+          shasum: createHash('sha1').update(bytes).digest('hex'),
+          size: bytes.byteLength,
+          engines: { dsh: '>=0.2.1-rc.2 <0.3.0', omni: '>=2.261024.1' },
+        },
+      ],
+    });
+    writeFileSync(join(dir, 'market.json'), JSON.stringify(manifest));
+    const get = appWith({ dir, publicUrl: PUBLIC });
+    const index = parseMarketIndex(
+      await (await get('/api/market/index.json')).json(),
+      `${PUBLIC}/api/market/index.json`,
+    );
+    expect(
+      index.plugins.find((plugin) => plugin.name === '@automagik/omni-kept-dsh')?.versions.map((v) => v.version),
+    ).toEqual([kept]);
+    const packument = (await (await get('/api/market/npm/@automagik%2fomni-kept-dsh')).json()) as Packument;
+    expect(packument['dist-tags'].latest).toBe(kept);
+    // The packument carries engines whole, so DSH's pnpm sees the Omni the plugin needs.
+    expect(packument.versions[kept]?.engines).toEqual({ dsh: '>=0.2.1-rc.2 <0.3.0', omni: '>=2.261024.1' });
+    const tarball = await get(`/api/market/npm/@automagik/omni-kept-dsh/-/${file}`);
+    expect(tarball.status).toBe(200);
+    expect(Buffer.from(await tarball.arrayBuffer()).equals(bytes)).toBe(true);
+  });
+});

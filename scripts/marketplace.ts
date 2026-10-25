@@ -3,7 +3,7 @@
  * The Automagik plugin marketplace index (marketplace/automagik.json), a DSH market index (format 1).
  *
  *   bun scripts/marketplace.ts check        validate the index; exit 1 on the first problem
- *   bun scripts/marketplace.ts pin <ref>    point Omni's own git entries at <ref> (and Automagik's at the pin)
+ *   bun scripts/marketplace.ts pin <ref>    list Omni's own plugins at their version at <ref> (and Automagik's at the pin)
  *   bun scripts/marketplace.ts automagik    list Automagik's plugins at the release apps/automagik.json pins
  *
  * `check` runs DSH's own parser (parseMarketIndex) and then, for every git entry from this
@@ -16,7 +16,7 @@
  * them to that pin, and `pin` and `automagik` keep them on it.
  *
  * automagik-dev/dsh-marketplace lists this index at each Omni release, for DSH users without an
- * Omni (its git entries pinned to the release). Every Omni also serves the Automagik
+ * Omni (each of Omni's plugins at its own version, pinned to the commit this index names). Every Omni also serves the Automagik
  * marketplace for its own release at /api/market, with its page at /market (packages/api/src/market): Omni's plugins,
  * packed from the release by scripts/pack-market.ts, plus Automagik's plugins at the pin.
  * Outside plugins Automagik vetted are listed by Automagik's own index, not this one.
@@ -166,9 +166,11 @@ export function checkIndex(
 }
 
 /**
- * Point every git entry from this repository at `ref`, adding a version when the package's moved on.
- * A version already listed is re-pointed only when its package is byte-identical at `ref`: what a
- * listed version installs never changes, so a changed package needs a version bump first.
+ * List each of this repository's plugins at its version at `ref`, pinned to `ref`, adding that
+ * version when it is new. A plugin carries the Omni release of its last change, so at most
+ * releases its version is one already listed: that entry stays as it is (its commit and publish
+ * time), and its package must be byte-identical at `ref`. What a listed version installs never
+ * changes, so a changed package needs a version bump first. Older versions stay listed.
  */
 export function pinIndex(value: Index, repoDir: string, ref: string): Index {
   const commit = git(repoDir, ['rev-parse', `${ref}^{commit}`]);
@@ -187,8 +189,7 @@ export function pinIndex(value: Index, repoDir: string, ref: string): Index {
           `${plugin.name}@${same.version} changed since ${same.source.commit.slice(0, 9)}: bump its version first`,
         );
     }
-    if (same) Object.assign(same, { publishTimestamp, source });
-    else plugin.versions.unshift({ ...latest, version: manifest.version, publishTimestamp, source });
+    if (!same) plugin.versions.unshift({ ...latest, version: manifest.version, publishTimestamp, source });
   }
   return value;
 }

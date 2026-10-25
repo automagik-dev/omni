@@ -21,10 +21,15 @@ const ours = (commit: string, path = 'apps/omni-channels-dsh') => ({
 const readJson = (path: string) => JSON.parse(readFileSync(join(repoDir, path), 'utf8'));
 
 describe('marketplace index check', () => {
-  test("Omni's own plugins are listed at the pinned candidate's version, all at the candidate commit", () => {
+  test("Omni's own plugins are listed at their version in the pinned candidate", () => {
     // pin-candidate.yml writes .well-known/latest.json and runs `marketplace.ts pin v<version>` in the
-    // same commit, so the index never trails the Omni release it ships with.
+    // same commit, so the index never trails the Omni release it ships with. Each plugin carries the
+    // Omni release of its last change, so its newest entry is the version its package.json has in
+    // the candidate, pinned to a commit no newer than the candidate's that holds that version.
     const candidate = readJson('.well-known/latest.json').version;
+    const at = (commit: string, path: string) =>
+      JSON.parse(execFileSync('git', ['show', `${commit}:${path}`], { cwd: repoDir, encoding: 'utf8' }));
+    const tag = execFileSync('git', ['rev-parse', `v${candidate}^{commit}`], { cwd: repoDir, encoding: 'utf8' }).trim();
     const index = readJson('marketplace/automagik.json');
     const own = index.plugins.filter(
       (plugin: { versions: { source: { url?: string } }[] }) => plugin.versions[0]?.source.url === REPO_URL,
@@ -32,17 +37,15 @@ describe('marketplace index check', () => {
     expect(own.map((plugin: { name: string }) => plugin.name).sort()).toEqual(
       ['omni-channels-dsh', 'omni-canvas-dsh'].map((dir) => readJson(`apps/${dir}/package.json`).name).sort(),
     );
-    for (const plugin of own) expect([plugin.name, plugin.versions[0].version]).toEqual([plugin.name, candidate]);
-    const commits = new Set(
-      own.map((plugin: { versions: { source: { commit: string } }[] }) => plugin.versions[0]?.source.commit),
-    );
-    expect(commits.size).toBe(1);
-    // The commit is the candidate itself: Omni's own version there is the candidate's.
-    const cli = execFileSync('git', ['show', `${[...commits][0]}:packages/cli/package.json`], {
-      cwd: repoDir,
-      encoding: 'utf8',
-    });
-    expect(JSON.parse(cli).version).toBe(candidate);
+    for (const plugin of own) {
+      const [newest] = plugin.versions;
+      const version = at(tag, `${newest.source.path}/package.json`).version;
+      expect([plugin.name, newest.version]).toEqual([plugin.name, version]);
+      expect(Bun.semver.order(version, candidate)).toBeLessThanOrEqual(0);
+      expect(
+        execFileSync('git', ['merge-base', '--is-ancestor', newest.source.commit, tag], { cwd: repoDir }).length,
+      ).toBe(0);
+    }
   });
 
   test('the committed index passes', () => {
@@ -135,7 +138,7 @@ describe('marketplace index check', () => {
     ]);
   });
 
-  test('pin re-points a listed version only when its package is unchanged', () => {
+  test('pin keeps a listed version where it is when its package is unchanged, and refuses a changed one', () => {
     // apps/omni-ui-dsh was 0.1.7 at both commits, with the Connect Omni step added in between.
     const listed = (name: string, version: string, path: string) => ({
       plugins: [
@@ -154,8 +157,38 @@ describe('marketplace index check', () => {
     expect(() => pinIndex(listed('@automagik/omni-dsh', '0.1.7', 'apps/omni-ui-dsh'), repoDir, '54ddd408a')).toThrow(
       /bump its version/,
     );
-    // omni-ai-dsh 0.1.0 is byte-identical at both commits, so it may move.
-    const moved = pinIndex(listed('@automagik/omni-ai-dsh', '0.1.0', 'apps/omni-ai-dsh'), repoDir, '58a5dee46');
-    expect(moved.plugins[0]?.versions[0]?.source).toMatchObject({ commit: '58a5dee464713bef73e2e2b754e85c5425bfa660' });
+    // omni-ai-dsh 0.1.0 is byte-identical at both commits: its entry stays at its commit and time.
+    const kept = pinIndex(listed('@automagik/omni-ai-dsh', '0.1.0', 'apps/omni-ai-dsh'), repoDir, '58a5dee46');
+    expect(kept.plugins[0]?.versions).toEqual(
+      listed('@automagik/omni-ai-dsh', '0.1.0', 'apps/omni-ai-dsh').plugins[0]?.versions,
+    );
+  });
+
+  test('pin adds a moved plugin at its new version and keeps an unchanged one, older versions included', () => {
+    // At v2.261025.2 both plugins are 2.261025.2; the index lists them there, and earlier ones too.
+    const committed = JSON.parse(readFileSync(INDEX_PATH, 'utf8'));
+    const ownPlugins = (index: typeof committed) =>
+      index.plugins.filter(
+        (plugin: { versions: { source: { url?: string } }[] }) => plugin.versions[0]?.source.url === REPO_URL,
+      );
+    // Later cuts may already sit on top of the committed index, so the test works on the index as it
+    // stood at v2.261025.2: every entry newer than that release is dropped first.
+    const atRef = structuredClone(committed);
+    for (const plugin of ownPlugins(atRef)) {
+      plugin.versions = plugin.versions.filter(
+        (entry: { version: string }) => Bun.semver.order(entry.version, '2.261025.2') <= 0,
+      );
+    }
+    const before = structuredClone(ownPlugins(atRef));
+    const again = pinIndex(structuredClone(atRef), repoDir, 'v2.261025.2');
+    expect(ownPlugins(again)).toEqual(before);
+    // A plugin whose newest entry is older than its version at the ref gets that version added on top.
+    const behind = structuredClone(atRef);
+    for (const plugin of ownPlugins(behind)) plugin.versions = plugin.versions.slice(1);
+    const added = pinIndex(behind, repoDir, 'v2.261025.2');
+    for (const plugin of ownPlugins(added)) {
+      expect(plugin.versions[0]).toMatchObject({ version: '2.261025.2' });
+      expect(plugin.versions.length).toBe(before.find((p: { name: string }) => p.name === plugin.name).versions.length);
+    }
   });
 });

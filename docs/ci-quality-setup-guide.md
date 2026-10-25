@@ -586,7 +586,10 @@ Version format: `2.YYYYMMDD.N` (date-based, N = build number for the day).
 Steps:
 1. Derive version from git tags
 2. Run `generate-version.ts` → `version.json`
-3. Run `sync-versions.ts` → updates all `package.json` versions
+3. Run `sync-versions.ts` → updates all `package.json` versions, except Omni's DSH
+   plugins (`apps/*-dsh`), which move only when their folder changed since the
+   release their version names: each carries the Omni version of its last change
+   (`scripts/lib/plugin-versions.ts`; `verify-versions.ts` holds the repository to it)
 4. Format JSON with biome
 5. Commit `[skip ci]` + tag + push to dev
 

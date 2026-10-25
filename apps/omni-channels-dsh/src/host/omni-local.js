@@ -2,7 +2,8 @@
 // in a home of its own, sharing nothing with another install. It runs on Bun: the one this
 // computer has, else one this plugin downloads once from Bun's own releases and checks
 // against the release's SHASUMS256.txt before unpacking it. `bun x` then installs and starts
-// @automagik/omni at this plugin's version (`install --sandbox --at-login --json`), and the sandbox's
+// @automagik/omni at the newest release this plugin works with (omni-release.js: one exact
+// version, shown before it runs) (`install --sandbox --at-login --json`), and the sandbox's
 // key links this host the way "Use it" does (omni-discover.js). The key is read here, from
 // the sandbox's config file, and never reaches the page.
 //
@@ -20,6 +21,7 @@ import { delimiter, dirname, isAbsolute, join, relative } from 'node:path'
 import { inflateRawSync } from 'node:zlib'
 import { z } from 'zod'
 import { linkWithKey, sandboxHome } from './omni-discover.js'
+import { installRelease } from './omni-release.js'
 import { PLUGIN_VERSION } from './version.js'
 
 export { sandboxHome }
@@ -213,7 +215,8 @@ export function install(rt, deps = {}) {
   const home = deps.home ?? homedir()
   const spawn = deps.spawn ?? spawnProcess
   const fetchImpl = deps.fetch ?? ((...args) => fetch(...args))
-  const version = deps.version ?? PLUGIN_VERSION
+  // The Omni to install: one exact release, the same for the question and the install it confirms.
+  const release = deps.version !== undefined ? async () => deps.version : async () => (await installRelease({ fetchImpl, env })).version
   let job = null
 
   const progress = () => (job === null ? { status: 'idle' } : {
@@ -225,7 +228,7 @@ export function install(rt, deps = {}) {
     ...(job.logsDir ? { logsDir: job.logsDir } : {}),
   })
 
-  async function run(current) {
+  async function run(current, version) {
     try {
       let bun = findBun({ env, home })
       if (bun === null) {
@@ -255,9 +258,10 @@ export function install(rt, deps = {}) {
     if (!parsed.success) throw invalid('Confirm installing Omni on this computer first')
     const update = parsed.data?.update === true
     if (job?.status === 'installing') return progress()
+    const version = await release()
     if (parsed.data?.confirm !== true) return { status: 'confirm', home: sandboxHome({ env, home }), version, update }
-    job = { status: 'installing', step: 'bun', update, origin: null, error: null, logsDir: null }
-    job.done = run(job)
+    job = { status: 'installing', step: 'bun', update, version, origin: null, error: null, logsDir: null }
+    job.done = run(job, version)
     return progress()
   }
 
