@@ -1,6 +1,6 @@
 {
   "name": "@omni/channel-sdk",
-  "version": "2.261025.22",
+  "version": "2.261025.23",
   "type": "module",
   "exports": {
     ".": {
