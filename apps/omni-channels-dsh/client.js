@@ -14050,13 +14050,13 @@ function continueButton(linked, scope = globalThis, { onDemand = false } = {}) {
 var reducedMotion = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 var OCTOPUS = CHARACTERS.octopus;
 var OCTOPUS_SVG = `<svg class="oxs-octo" viewBox="0 0 100 100" aria-hidden="true">
-<defs><linearGradient id="oxs-octo-skin" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8ff4ff"/><stop offset=".5" stop-color="#22d3ee"/><stop offset="1" stop-color="#0e7490"/></linearGradient></defs>
+<defs><radialGradient id="oxs-octo-skin" cx=".35" cy=".25" r=".9"><stop offset="0" style="stop-color:color-mix(in srgb,var(--oxs-skin) 55%,#fff)"/><stop offset=".55" style="stop-color:var(--oxs-skin)"/><stop offset="1" style="stop-color:var(--oxs-skin-shade)"/></radialGradient></defs>
 <path class="oxs-ghost oxs-cyan" d="${OCTOPUS.body}"/><path class="oxs-ghost oxs-magenta" d="${OCTOPUS.body}"/>
-<path d="${OCTOPUS.body}" fill="url(#oxs-octo-skin)"/><path d="${OCTOPUS.shade}" fill="#0b4f6c" opacity=".55"/>
-<path d="${OCTOPUS.light}" fill="#fff" opacity=".45"/>
-<g class="oxs-eyes">${OCTOPUS.eyes.map(([cx, cy, width, height]) => `<ellipse cx="${cx}" cy="${cy}" rx="${width}" ry="${height}" fill="#06121f"/><circle cx="${cx + 2}" cy="${cy - 5}" r="2.4" fill="#fff"/>`).join("")}</g>
-<path d="M44 54Q50 59 56 54" stroke="#06121f" stroke-width="2.4" fill="none" stroke-linecap="round"/>
-<ellipse cx="31" cy="50" rx="5" ry="2.8" fill="#ff5fb8" opacity=".5"/><ellipse cx="69" cy="50" rx="5" ry="2.8" fill="#ff5fb8" opacity=".5"/>
+<path d="${OCTOPUS.body}" fill="url(#oxs-octo-skin)"/><path d="${OCTOPUS.shade}" style="fill:var(--oxs-skin-shade)" opacity=".45"/>
+<path d="${OCTOPUS.light}" fill="#fff" opacity=".4"/>
+<g class="oxs-eyes">${OCTOPUS.eyes.map(([cx, cy, width, height]) => `<ellipse cx="${cx}" cy="${cy}" rx="${width}" ry="${height}" fill="#2a2233"/><circle cx="${cx + 2}" cy="${cy - 5}" r="2.4" fill="#fff"/>`).join("")}</g>
+<path d="M44 54Q50 59 56 54" stroke="#2a2233" stroke-width="2.4" fill="none" stroke-linecap="round"/>
+<ellipse cx="31" cy="50" rx="5" ry="2.8" fill="#e98bbf" opacity=".55"/><ellipse cx="69" cy="50" rx="5" ry="2.8" fill="#e98bbf" opacity=".55"/>
 </svg>`;
 function useGlitch() {
   const [on2, setOn] = (0, import_react9.useState)(false);
@@ -14129,7 +14129,6 @@ function Stage({ title, speech, glitching, rail = true, children }) {
       (0, import_react9.createElement)(
         "main",
         { className: "oxs-card" },
-        (0, import_react9.createElement)("div", { className: "oxs-mark", "aria-hidden": "true" }, "OMNI"),
         (0, import_react9.createElement)("h1", { id: "oxs-title", ref: titleRef, tabIndex: -1 }, title),
         children
       )
@@ -14197,56 +14196,98 @@ function ConnectOmniStep(props) {
     )
   );
 }
+var raised = (fill, depth = 4) => `background:${fill};box-shadow:inset 2px 3px 4px color-mix(in srgb,${fill} var(--oxs-hi),var(--oxs-shine)),inset -3px -4px 6px color-mix(in srgb,${fill} var(--oxs-lo),var(--oxs-umber)),0 ${depth}px 0 color-mix(in srgb,${fill} var(--oxs-ledge),var(--oxs-umber)),0 ${depth + 3}px ${depth + 5}px var(--oxs-cast),0 ${depth * 3 + 4}px ${depth * 5 + 8}px var(--oxs-cast-far)`;
+var pressed = (fill, depth = 4) => `transform:translateY(${depth - 1}px);box-shadow:inset 3px 4px 6px color-mix(in srgb,${fill} var(--oxs-lo),var(--oxs-umber)),inset -1px -2px 3px color-mix(in srgb,${fill} var(--oxs-hi),var(--oxs-shine)),0 1px 0 color-mix(in srgb,${fill} var(--oxs-ledge),var(--oxs-umber)),0 2px 3px var(--oxs-cast)`;
+var recessed = (fill) => `background:${fill};box-shadow:inset 3px 4px 6px color-mix(in srgb,${fill} var(--oxs-lo),var(--oxs-umber)),inset -2px -2px 3px color-mix(in srgb,${fill} var(--oxs-hi),var(--oxs-shine)),0 1px 0 color-mix(in srgb,var(--oxs-bg) var(--oxs-hi),var(--oxs-shine))`;
 var STAGE_CSS = `
-.oxs-overlay{--oxs-bg:#05070f;--oxs-card:rgba(13,20,36,.8);--oxs-ink:#eef3ff;--oxs-ink2:#9fb0cc;--oxs-line:rgba(120,160,220,.22);--oxs-accent:#22d3ee;--oxs-accent-2:#ff3bd4;
-  --bt-line:var(--oxs-line);--bt-line-2:rgba(120,160,220,.32);--bt-accent:var(--oxs-accent);--bt-accent-ink:#03141a;--bt-ink:var(--oxs-ink);--bt-ink-2:var(--oxs-ink2);--bt-surface:transparent;--bt-bg:rgba(0,0,0,.25);--bt-hover:rgba(255,255,255,.06);--oc-bad:#ff6b6b;
-  position:fixed;inset:0;z-index:2000;overflow:auto;display:grid;place-items:center;padding:24px 16px;box-sizing:border-box;color-scheme:dark;color:var(--oxs-ink);
-  font:15px/1.55 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
-  background:radial-gradient(1200px 600px at 50% -10%,rgba(34,211,238,.18),transparent 60%),radial-gradient(900px 500px at 100% 110%,rgba(255,59,212,.16),transparent 60%),var(--oxs-bg)}
+.oxs-overlay{
+  --oxs-bg:#f6eee2;--oxs-card:#fbf5ec;--oxs-clay:#f2e6d5;--oxs-niche:#ebdecb;
+  --oxs-ink:#3c3049;--oxs-ink2:#6c5f71;--oxs-line:#e0d0bd;
+  --oxs-accent:#1b7f96;--oxs-accent-2:#b4498f;--oxs-bad:#b93a32;--oxs-ok:#2f8a63;--oxs-warn:#a8700f;--oxs-ok-ink:#1a5c3f;--oxs-warn-ink:#7a5108;
+  --oxs-cyan:#8fdcec;--oxs-cyan-ink:#1d4753;--oxs-pink:#f0bddf;--oxs-lilac:#e0cff3;--oxs-lilac-ink:#45305e;
+  --oxs-skin:#2bc3b6;--oxs-skin-shade:#16867d;
+  --oxs-shine:#fff;--oxs-umber:#5b3b22;--oxs-hi:42%;--oxs-lo:80%;--oxs-ledge:72%;
+  --oxs-cast:rgba(111,81,53,.2);--oxs-cast-far:rgba(121,91,53,.1);--oxs-ring:#b4498f;
+  --oxs-r:19px 22px 18px 21px;--oxs-r-sm:12px 14px 12px 13px;
+  --oxs-font:"DM Sans",ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --oxs-head:Manrope,"DM Sans",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  --bt-line:var(--oxs-line);--bt-line-2:color-mix(in srgb,var(--oxs-line) 70%,var(--oxs-ink2));--bt-accent:var(--oxs-accent);--bt-accent-ink:#fff;
+  --bt-ink:var(--oxs-ink);--bt-ink-2:var(--oxs-ink2);--bt-ink-3:var(--oxs-ink2);--bt-surface:transparent;--bt-bg:var(--oxs-niche);--bt-card:var(--oxs-card);
+  --bt-hover:color-mix(in srgb,var(--oxs-clay) 70%,var(--oxs-niche));--oc-bad:var(--oxs-bad);
+  position:fixed;inset:0;z-index:2000;overflow:auto;display:grid;place-items:center;padding:24px 16px;box-sizing:border-box;color-scheme:light;color:var(--oxs-ink);
+  font:15px/1.55 var(--oxs-font);background:var(--oxs-bg)}
+body[data-ds-dark-theme] .oxs-overlay{
+  --oxs-bg:#1e1923;--oxs-card:#2a2330;--oxs-clay:#322a39;--oxs-niche:#16121a;
+  --oxs-ink:#f3e9dd;--oxs-ink2:#bcadb8;--oxs-line:#40364a;
+  --oxs-accent:#7fd8ea;--oxs-accent-2:#f2a6dc;--oxs-bad:#ff9a8f;--oxs-ok:#7ad9a8;--oxs-warn:#f2c25b;--oxs-ok-ink:#7ad9a8;--oxs-warn-ink:#f2c25b;
+  --oxs-cyan:#5cbdd1;--oxs-cyan-ink:#0d262c;--oxs-pink:#b76aa1;--oxs-lilac:#55456b;--oxs-lilac-ink:#f4ecff;
+  --oxs-skin:#3fd3c5;--oxs-skin-shade:#1c8f86;
+  --oxs-shine:#fff;--oxs-umber:#000;--oxs-hi:84%;--oxs-lo:62%;--oxs-ledge:50%;
+  --oxs-cast:rgba(0,0,0,.42);--oxs-cast-far:rgba(0,0,0,.28);--oxs-ring:#f2a6dc;--bt-accent-ink:#0d262c;
+  color-scheme:dark}
 .oxs-overlay *{box-sizing:border-box}
-.oxs-overlay::before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.55;
-  background-image:radial-gradient(1px 1px at 12% 18%,#fff,transparent),radial-gradient(1px 1px at 72% 12%,#cde,transparent),radial-gradient(1.5px 1.5px at 38% 72%,#fff,transparent),radial-gradient(1px 1px at 86% 64%,#bcd,transparent),radial-gradient(1px 1px at 22% 88%,#fff,transparent),radial-gradient(1.5px 1.5px at 58% 40%,#def,transparent);
-  animation:oxs-twinkle 6s ease-in-out infinite alternate}
-.oxs-overlay::after{content:"";position:fixed;left:-50%;right:-50%;bottom:-30vh;height:60vh;pointer-events:none;opacity:.35;
-  background-image:linear-gradient(rgba(34,211,238,.35) 1px,transparent 1px),linear-gradient(90deg,rgba(255,59,212,.22) 1px,transparent 1px);background-size:56px 56px;
-  transform:perspective(420px) rotateX(62deg);mask-image:linear-gradient(to top,#000,transparent);animation:oxs-grid 9s linear infinite}
-@keyframes oxs-twinkle{from{opacity:.35}to{opacity:.7}}
-@keyframes oxs-grid{from{background-position:0 0}to{background-position:0 56px}}
-.oxs-stage{position:relative;z-index:1;width:min(640px,100%);display:flex;flex-direction:column;align-items:center}
-.oxs-octo{width:124px;height:124px;filter:drop-shadow(0 12px 30px rgba(34,211,238,.35));animation:oxs-float 4.5s ease-in-out infinite}
-.oxs-ghost{opacity:0}.oxs-cyan{fill:#00f0ff}.oxs-magenta{fill:#ff2bd6}
-.oxs-octo:hover .oxs-cyan,.oxs-glitch .oxs-cyan{opacity:.55;transform:translate(-2.5px,0);animation:oxs-glitch 2.4s steps(1) infinite}
-.oxs-octo:hover .oxs-magenta,.oxs-glitch .oxs-magenta{opacity:.55;transform:translate(2.5px,0);animation:oxs-glitch 2.4s steps(1) infinite reverse}
+.oxs-overlay ::selection{background:var(--oxs-lilac);color:var(--oxs-lilac-ink)}
+.oxs-overlay::before{content:"";position:fixed;inset:0;pointer-events:none;background:radial-gradient(1100px 620px at 30% -12%,color-mix(in srgb,var(--oxs-bg) 55%,var(--oxs-shine)),transparent 70%)}
+body[data-ds-dark-theme] .oxs-overlay::before{background:radial-gradient(1100px 620px at 30% -12%,color-mix(in srgb,var(--oxs-bg) 88%,var(--oxs-cyan)),transparent 70%)}
+.oxs-stage{position:relative;z-index:1;width:min(600px,100%);display:flex;flex-direction:column;align-items:center}
+.oxs-octo{width:124px;height:124px;filter:drop-shadow(0 10px 8px var(--oxs-cast)) drop-shadow(0 22px 22px var(--oxs-cast-far));animation:oxs-float 4.5s ease-in-out infinite}
+.oxs-ghost{opacity:0}.oxs-cyan{fill:var(--oxs-cyan)}.oxs-magenta{fill:var(--oxs-pink)}
+.oxs-glitch .oxs-cyan{opacity:.7;transform:translate(-2px,0);animation:oxs-wobble .9s ease-out}
+.oxs-glitch .oxs-magenta{opacity:.7;transform:translate(2px,0);animation:oxs-wobble .9s ease-out reverse}
 .oxs-eyes{transform-origin:50px 36px;animation:oxs-blink 5s infinite}
 @keyframes oxs-float{0%,100%{transform:translateY(0) rotate(-2deg)}50%{transform:translateY(-10px) rotate(2deg)}}
 @keyframes oxs-blink{0%,92%,100%{transform:scaleY(1)}95%{transform:scaleY(.1)}}
-@keyframes oxs-glitch{0%{clip-path:inset(0 0 70% 0)}25%{clip-path:inset(40% 0 30% 0)}50%{clip-path:inset(75% 0 0 0)}75%{clip-path:inset(10% 0 60% 0)}}
-.oxs-bubble{position:relative;margin:6px 0 18px;padding:10px 16px;border-radius:14px;background:rgba(34,211,238,.12);border:1px solid rgba(34,211,238,.35);color:#d6f8ff;font:500 15px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;min-height:44px;max-width:100%}
-.oxs-bubble::before{content:"";position:absolute;top:-7px;left:50%;width:12px;height:12px;border-left:inherit;border-top:inherit;transform:translateX(-50%) rotate(45deg);background:#0d2232}
-.oxs-caret{display:inline-block;width:.55em;height:1.05em;margin-left:2px;vertical-align:-2px;background:var(--oxs-accent-2);animation:oxs-caret 1s steps(1) infinite}
+@keyframes oxs-wobble{from{opacity:.7}to{opacity:0}}
+.oxs-bubble{position:relative;margin:10px 0 20px;padding:11px 18px;border-radius:var(--oxs-r);${raised("var(--oxs-cyan)", 4)};color:var(--oxs-cyan-ink);font:500 15px/1.45 var(--oxs-font);min-height:46px;max-width:100%}
+.oxs-bubble::before{content:"";position:absolute;top:-7px;left:50%;width:14px;height:14px;border-radius:3px 0 0 0;transform:translateX(-50%) rotate(45deg);background:var(--oxs-cyan);box-shadow:inset 2px 2px 3px color-mix(in srgb,var(--oxs-cyan) var(--oxs-hi),var(--oxs-shine))}
+.oxs-caret{display:inline-block;width:.5em;height:1.05em;margin-left:2px;vertical-align:-2px;border-radius:2px;background:var(--oxs-accent-2);animation:oxs-caret 1s steps(1) infinite}
 @keyframes oxs-caret{50%{opacity:0}}
 .oxs-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
-.oxs-rail{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin:0 0 14px;padding:0;list-style:none;font:600 11px/1 ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase;color:var(--oxs-ink2)}
-.oxs-rail li{padding:6px 10px;border-radius:999px;border:1px solid var(--oxs-line)}.oxs-rail li.oxs-on{color:#05070f;background:var(--oxs-accent);border-color:var(--oxs-accent)}.oxs-rail li.oxs-done{color:var(--oxs-accent);border-color:rgba(34,211,238,.5)}
-.oxs-card{width:100%;background:var(--oxs-card);border:1px solid var(--oxs-line);border-radius:20px;padding:24px;backdrop-filter:blur(14px);box-shadow:0 30px 80px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.04)}
-.oxs-card h1{font-size:21px;margin:0 0 10px;letter-spacing:-.01em;outline:none}
-.oxs-mark{font:700 12px/1 ui-monospace,monospace;letter-spacing:.32em;color:var(--oxs-accent);margin-bottom:14px}
-.oxs-card .ox-card{margin:4px 0 8px;background:rgba(0,0,0,.2)}
-.oxs-card .oc-primary,.oxs-card .oc-ghost{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:38px;padding:0 16px;border-radius:999px;font:inherit;font-size:14px;font-weight:600;cursor:pointer;white-space:nowrap;text-decoration:none}
-.oxs-card .oc-primary{border:0;background:linear-gradient(135deg,var(--oxs-accent),var(--oxs-accent-2));color:#06060f}.oxs-card .oc-primary:disabled{opacity:.45;cursor:default}
-.oxs-card .oc-ghost{border:1px solid var(--oxs-line);background:none;color:var(--oxs-ink2)}
-.oxs-card .oc-spinner{width:14px;height:14px;border-radius:50%;border:2px solid rgba(34,211,238,.25);border-top-color:var(--oxs-accent);animation:oxs-spin .8s linear infinite;flex:none}
+.oxs-rail{display:flex;flex-wrap:wrap;justify-content:center;gap:10px;margin:0 0 18px;padding:0;list-style:none;font:600 12.5px/1 var(--oxs-font);color:var(--oxs-ink2)}
+.oxs-rail li{padding:8px 12px;border-radius:var(--oxs-r-sm);${recessed("var(--oxs-niche)")}}
+.oxs-rail li.oxs-on{color:var(--oxs-lilac-ink);${raised("var(--oxs-lilac)", 3)};transform:translateY(-2px)}
+.oxs-rail li.oxs-done{color:var(--oxs-cyan-ink);${raised("color-mix(in srgb,var(--oxs-cyan) 80%,var(--oxs-clay))", 2)}}
+.oxs-card{width:100%;border-radius:26px 30px 25px 29px;padding:26px;${raised("var(--oxs-card)", 6)}}
+.oxs-card h1{font:800 24px/1.2 var(--oxs-head);letter-spacing:-.02em;margin:0 0 12px;outline:none}
+/* The connect card inside (omni-connect.js), in the same clay: choices are pieces, fields are hollows. */
+.oxs-card .ox-card{display:block;margin:4px 0 8px;padding:0;border:0;background:none}
+.oxs-card .ox-mark,.oxs-card .ox-icon{${raised("var(--oxs-clay)", 2)};border-radius:11px 12px 10px 12px;color:var(--oxs-ink)}
+.oxs-card .ox-icon.ox-accent{${raised("var(--oxs-pink)", 2)};color:var(--oxs-ink)}
+.oxs-card .ox-choice{border:0;border-radius:var(--oxs-r);${raised("var(--oxs-clay)", 3)};transition:transform .16s cubic-bezier(.3,1.4,.5,1)}
+.oxs-card .ox-choice.ox-open{${raised("var(--oxs-card)", 3)}}
+.oxs-card .ox-choice:not(.ox-open):hover{transform:translateY(-2px)}
+.oxs-card .ox-head{border-radius:var(--oxs-r)}
+.oxs-card .ox-head:focus-visible{outline:3px solid var(--oxs-ring);outline-offset:2px}
+.oxs-card .ox-badge{border:0;${recessed("var(--oxs-niche)")};color:var(--oxs-ink2)}
+.oxs-card .ox-badge.ox-ok{background:color-mix(in srgb,var(--oxs-ok) 22%,var(--oxs-card));box-shadow:none;color:var(--oxs-ok-ink)}
+.oxs-card .ox-badge.ox-warn{background:color-mix(in srgb,var(--oxs-warn) 22%,var(--oxs-card));box-shadow:none;color:var(--oxs-warn-ink)}
+.oxs-card .ox-linked{color:var(--oxs-ok)}
+.oxs-card .ox-input{height:44px;padding:0 14px;border:0;border-radius:var(--oxs-r-sm);${recessed("var(--oxs-niche)")};color:var(--oxs-ink);font:15px/1.3 var(--oxs-font)}
+.oxs-card .ox-input::placeholder{color:color-mix(in srgb,var(--oxs-ink2) 80%,transparent)}
+.oxs-card .ox-input:focus{outline:3px solid var(--oxs-ring);outline-offset:2px}
+.oxs-card .ox-code{font-weight:700;color:var(--oxs-ink)}
+.oxs-card .ox-qr{${raised("#fff", 3)}}
+.oxs-card .oc-primary,.oxs-card .oc-ghost{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:40px;padding:0 16px;border:0;border-radius:var(--oxs-r-sm);font:inherit;font-size:14px;font-weight:600;cursor:pointer;white-space:nowrap;text-decoration:none;transition:transform .16s cubic-bezier(.3,1.4,.5,1)}
+.oxs-card .oc-primary{${raised("var(--oxs-cyan)", 4)};color:var(--oxs-cyan-ink)}
+.oxs-card .oc-primary:active:not(:disabled){${pressed("var(--oxs-cyan)", 4)}}
+.oxs-card .oc-ghost{${raised("var(--oxs-clay)", 3)};color:var(--oxs-ink)}
+.oxs-card .oc-ghost:active:not(:disabled){${pressed("var(--oxs-clay)", 3)}}
+.oxs-card .oc-primary:hover:not(:disabled),.oxs-card .oc-ghost:hover:not(:disabled){transform:translateY(-2px)}
+.oxs-card .oc-primary:disabled,.oxs-card .oc-ghost:disabled{${recessed("var(--oxs-niche)")};color:var(--oxs-ink2);cursor:default;transform:none}
+.oxs-card .oc-spinner{width:14px;height:14px;border-radius:50%;border:2px solid color-mix(in srgb,var(--oxs-accent) 25%,transparent);border-top-color:var(--oxs-accent);animation:oxs-spin .8s linear infinite;flex:none}
 @keyframes oxs-spin{to{transform:rotate(360deg)}}
-.oxs-card button.oxs-primary,.oxs-card button.oxs-quiet{display:block;width:100%;padding:12px 14px;margin:8px 0 0;border-radius:13px;font:inherit;font-weight:600;cursor:pointer;text-align:center}
-.oxs-card button.oxs-primary{border:1px solid transparent;background:linear-gradient(135deg,var(--oxs-accent),var(--oxs-accent-2));color:#06060f}
-.oxs-card button.oxs-quiet{border:1px solid transparent;background:none;color:var(--oxs-ink2);font-weight:500}
-.oxs-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:18px;padding-top:16px;border-top:1px solid var(--oxs-line)}
+.oxs-card .ox-link{color:var(--oxs-accent)}
+.oxs-card button.oxs-primary,.oxs-card button.oxs-quiet{display:block;width:100%;min-height:44px;padding:12px 16px;margin:10px 0 0;border:0;border-radius:var(--oxs-r-sm);font:inherit;font-weight:600;cursor:pointer;text-align:center;transition:transform .16s cubic-bezier(.3,1.4,.5,1),box-shadow .16s ease}
+.oxs-card button.oxs-primary{${raised("var(--oxs-cyan)", 5)};color:var(--oxs-cyan-ink)}
+.oxs-card button.oxs-primary:hover:not(:disabled){transform:translateY(-2px)}
+.oxs-card button.oxs-primary:active:not(:disabled){${pressed("var(--oxs-cyan)", 5)}}
+/* Off until an Omni is linked: a flat hollow, not a piece, so it never reads as pressable. */
+.oxs-card button.oxs-primary:disabled{${recessed("var(--oxs-niche)")};color:var(--oxs-ink2);cursor:not-allowed;transform:none}
+.oxs-card button.oxs-quiet{background:none;box-shadow:none;color:var(--oxs-ink2);font-weight:500}
+.oxs-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:20px;padding-top:16px;border-top:2px solid color-mix(in srgb,var(--oxs-line) 70%,transparent)}
 .oxs-card .oxs-actions button.oxs-primary,.oxs-card .oxs-actions button.oxs-quiet{display:inline-flex;width:auto;margin:0;padding:11px 18px}
 .oxs-card .oxs-actions button.oxs-quiet{padding-left:0}
-.oxs-card button.oxs-primary:disabled{opacity:.38;cursor:not-allowed;filter:grayscale(.6)}
-.oxs-card button.oxs-primary:not(:disabled){box-shadow:0 6px 24px -8px rgba(255,59,212,.6)}
-.oxs-card .ox-card{display:block}
-.oxs-card button:focus-visible,.oxs-card a:focus-visible,.oxs-card input:focus-visible{outline:2px solid var(--oxs-accent);outline-offset:2px}
+.oxs-card button:focus-visible,.oxs-card a:focus-visible{outline:3px solid var(--oxs-ring);outline-offset:3px}
 @media (prefers-reduced-motion:reduce){.oxs-overlay *,.oxs-overlay::before,.oxs-overlay::after{animation:none!important;transition:none!important}}
 `;
 function installStageStyles() {
