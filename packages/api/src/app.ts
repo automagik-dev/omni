@@ -597,7 +597,7 @@ export function createApp(
   app.route('/', landingRoutes(login, endpointNotFound));
 
   // The Automagik marketplace: this release's DSH plugins as a DSH market index and an npm
-  // registry under /api/market, plus the vetted third-party add-ons, and its page for a person
+  // registry under /api/market, with Automagik's plugins it was tested with, and its page for a person
   // at /market. Public by contract, read-only, the same for every caller: no tenant, instance or
   // user data. Declared `public-by-contract` in tenancy/route-ownership.ts. Must be mounted
   // before protectedApp and the UI.

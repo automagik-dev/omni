@@ -318,8 +318,8 @@ const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
     route: 'GET /market',
     class: 'public-by-contract',
     justification:
-      'The Automagik marketplace page: the catalog of DSH plugins this release carries and the vetted ' +
-      'third-party add-ons, with the index URL to add to a DSH. Built only from the build-time bundled market ' +
+      'The Automagik marketplace page: the catalog of DSH plugins this release carries and the Automagik ' +
+      'plugins it was tested with, with the index URL to add to a DSH. Built only from the build-time bundled market ' +
       '(dist/market/market.json) and marketplace/automagik.json, identical for every caller; reads no database, ' +
       'no tenant, instance, user or connection state, and its only input is the request origin when no public ' +
       'URL is configured. Text is inserted with textContent.',

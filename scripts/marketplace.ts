@@ -18,7 +18,8 @@
  * automagik-dev/dsh-marketplace lists this index at each Omni release, for DSH users without an
  * Omni (its git entries pinned to the release). Every Omni also serves the Automagik
  * marketplace for its own release at /api/market, with its page at /market (packages/api/src/market): Omni's plugins,
- * packed from the release by scripts/pack-market.ts, plus this index's vetted npm add-ons.
+ * packed from the release by scripts/pack-market.ts, plus Automagik's plugins at the pin.
+ * Outside plugins Automagik vetted are listed by Automagik's own index, not this one.
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -33,15 +34,6 @@ export const REPO_URL = 'https://github.com/automagik-dev/omni';
 export const AUTOMAGIK_URL = 'https://github.com/automagik-dev/automagik';
 export const INDEX_PATH = join(import.meta.dir, '..', 'marketplace', 'automagik.json');
 export const INDEX_URL = 'https://raw.githubusercontent.com/automagik-dev/omni/labs/marketplace/automagik.json';
-/**
- * Third-party plugins Omni ships from its own reviewed fork, pinned to a commit, instead of the
- * upstream npm package. Only these repositories may appear as a git source besides Omni's own.
- */
-export const VETTED_FORKS = [
-  'https://github.com/automagik-genie/dsh-oh-my-claude',
-  'https://github.com/automagik-genie/dsh-subscriptions',
-];
-
 interface GitSource {
   type: 'git';
   url: string;
@@ -64,8 +56,6 @@ interface Index {
 
 const isOurs = (source: IndexVersion['source']): source is GitSource =>
   source.type === 'git' && source.url.replace(/\.git$/, '') === REPO_URL;
-const isVettedFork = (source: IndexVersion['source']): source is GitSource =>
-  source.type === 'git' && VETTED_FORKS.includes(source.url.replace(/\.git$/, ''));
 const isAutomagik = (source: IndexVersion['source']): source is GitSource =>
   source.type === 'git' && source.url.replace(/\.git$/, '') === AUTOMAGIK_URL;
 
@@ -100,7 +90,7 @@ function packageAt(cwd: string, commit: string, path: string): { name?: string; 
   }
 }
 
-/** A vetted fork's package.json at `commit`, read from a cached bare clone; null when unreachable. */
+/** Another repository's package.json at `commit`, read from a cached bare clone; null when unreachable. */
 export function forkManifest(url: string, commit: string, path: string): { name?: string; version?: string } | null {
   const cache = join(tmpdir(), 'omni-market-forks', url.replace(/[^a-z0-9]+/gi, '-'));
   if (!existsSync(cache)) {
@@ -150,21 +140,12 @@ export function checkIndex(
           );
         continue;
       }
-      if (isVettedFork(entry.source)) {
-        const { url, commit, path = '.' } = entry.source;
-        const manifest = /^[0-9a-f]{40}$/.test(commit) ? readFork(url, commit, path) : null;
-        if (!manifest) problems.push(`${at}: ${url} has no ${path}/package.json at ${commit}`);
-        else if (manifest.name !== plugin.name || manifest.version !== entry.version)
-          problems.push(`${at}: ${url} ${commit}:${path}/package.json is ${manifest.name}@${manifest.version}`);
-        continue;
-      }
-      if (entry.source.type === 'git' && !isOurs(entry.source)) {
+      if (!isOurs(entry.source)) {
         problems.push(
-          `${at}: git sources must come from ${REPO_URL}, ${AUTOMAGIK_URL} or a vetted fork (${VETTED_FORKS.join(', ')})`,
+          `${at}: sources must be git commits of ${REPO_URL} or ${AUTOMAGIK_URL} (Automagik's index lists the outside plugins it vetted)`,
         );
         continue;
       }
-      if (!isOurs(entry.source)) continue;
       const { commit, path = '.' } = entry.source;
       if (!gitOk(repoDir, ['cat-file', '-e', `${commit}^{commit}`]))
         gitOk(repoDir, ['fetch', '--quiet', 'origin', commit], 30_000);

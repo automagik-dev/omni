@@ -4,7 +4,7 @@
     "en": "Automagik"
   },
   "description": {
-    "en": "Omni and the plugins it was tested with: your channels, chats and automations in DeepSeek Harness, and vetted ways to bring your own AI."
+    "en": "Omni and the plugins it was tested with: your channels, chats and automations in DeepSeek Harness."
   },
   "metadata": {
     "categories": {
@@ -12,27 +12,12 @@
         "title": {
           "en": "Omni"
         }
-      },
-      "ai": {
-        "title": {
-          "en": "Bring your own AI"
-        }
       }
     },
     "labels": {
       "official": {
         "title": {
           "en": "Automagik"
-        }
-      },
-      "vetted": {
-        "title": {
-          "en": "Vetted by Automagik"
-        }
-      },
-      "personal-use": {
-        "title": {
-          "en": "Personal use under the vendor's terms"
         }
       },
       "untested": {
@@ -359,82 +344,6 @@
             "url": "https://github.com/automagik-dev/automagik",
             "commit": "8464655f17072500e5eb41b891f1722f9a1d2ce0",
             "path": "apps/welcome-dsh"
-          },
-          "engines": {
-            "dsh": ">=0.2.1-rc.2 <0.3.0"
-          }
-        }
-      ]
-    },
-    {
-      "name": "@goodandready/dsh-subscriptions",
-      "title": {
-        "en": "AI subscriptions"
-      },
-      "description": {
-        "en": "Sign in with the AI plans you already pay for, several accounts each: Antigravity, Cursor, Kiro, GLM, Qwen, ERNIE, Spark, JetBrains AI, Perplexity, Replit and Cody. Omni's reviewed fork of GooDAnDReaDY's plugin, without the vendors DSH's own sign-ins already cover and without its own updater."
-      },
-      "author": "GooDAnDReaDY",
-      "homepage": "https://github.com/automagik-genie/dsh-subscriptions#readme",
-      "metadata": {
-        "category": "ai",
-        "keywords": [
-          "antigravity",
-          "cursor",
-          "kiro",
-          "perplexity",
-          "subscriptions",
-          "oauth"
-        ],
-        "labels": [
-          "vetted",
-          "personal-use"
-        ]
-      },
-      "versions": [
-        {
-          "version": "0.7.21-omni.1",
-          "publishTimestamp": 1792787505,
-          "source": {
-            "type": "git",
-            "url": "https://github.com/automagik-genie/dsh-subscriptions",
-            "commit": "2eff034ede95c9d06ecee290517101e6419c7fee"
-          },
-          "engines": {
-            "dsh": ">=0.2.1-rc.2 <0.3.0"
-          }
-        }
-      ]
-    },
-    {
-      "name": "dsh-oh-my-claude",
-      "title": {
-        "en": "Claude Code"
-      },
-      "description": {
-        "en": "The official Claude Code CLI as a model provider."
-      },
-      "author": "lcestou",
-      "homepage": "https://github.com/automagik-genie/dsh-oh-my-claude#readme",
-      "metadata": {
-        "category": "ai",
-        "keywords": [
-          "claude",
-          "anthropic"
-        ],
-        "labels": [
-          "vetted",
-          "personal-use"
-        ]
-      },
-      "versions": [
-        {
-          "version": "1.5.6-omni.1",
-          "publishTimestamp": 1792778878,
-          "source": {
-            "type": "git",
-            "url": "https://github.com/automagik-genie/dsh-oh-my-claude",
-            "commit": "ccca7fe46871c0e188d2272d2aa92f2d7d4502c4"
           },
           "engines": {
             "dsh": ">=0.2.1-rc.2 <0.3.0"
