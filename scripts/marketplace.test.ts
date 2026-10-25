@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { releaseCommit } from './lib/plugin-versions';
 import { AUTOMAGIK_URL, INDEX_PATH, REPO_URL, checkIndex, pinAutomagik, pinIndex } from './marketplace';
 
 const repoDir = join(import.meta.dir, '..');
@@ -29,7 +30,9 @@ describe('marketplace index check', () => {
     const candidate = readJson('.well-known/latest.json').version;
     const at = (commit: string, path: string) =>
       JSON.parse(execFileSync('git', ['show', `${commit}:${path}`], { cwd: repoDir, encoding: 'utf8' }));
-    const tag = execFileSync('git', ['rev-parse', `v${candidate}^{commit}`], { cwd: repoDir, encoding: 'utf8' }).trim();
+    // The candidate's tag is fetched when this clone lacks it (CI checks out without tags).
+    const tag = releaseCommit(repoDir, candidate);
+    if (!tag) throw new Error(`no release v${candidate}`);
     const index = readJson('marketplace/automagik.json');
     const own = index.plugins.filter(
       (plugin: { versions: { source: { url?: string } }[] }) => plugin.versions[0]?.source.url === REPO_URL,
