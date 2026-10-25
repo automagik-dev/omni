@@ -23,8 +23,9 @@ both: a canvas reads omni through Omni's own reads. The team's
 
 ## Install
 
-The plugin needs DSH `>=0.2.1-rc.2 <0.3.0`, the Bot team plugin and the Omni channels
-plugin. Add the Automagik marketplace index to DSH's plugin market
+The plugin needs DSH `>=0.2.1-rc.2 <0.3.0`, the Bot team plugin (`>=3.2.0 <3.261000.0`), the
+Omni channels plugin and an Omni no older than its `engines.omni` minimum. Its version is the
+Omni release of its last change, so it can trail the newest Omni. Add the Automagik marketplace index to DSH's plugin market
 ([marketplace/README.md](../../marketplace/README.md) has the URL and the steps) and install
 `@automagik/omni-canvas-dsh` from it. DSH applies the bundle patch (`cordis.patch.yml`),
 which adds one row, `id: omni-canvas`, and changes nothing else. Restart DSH.
