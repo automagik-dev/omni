@@ -1,6 +1,6 @@
 {
   "name": "@automagik/omni-canvas-dsh",
-  "version": "2.261025.3",
+  "version": "2.261025.4",
   "description": "Omni's canvases for DeepSeek Harness: the Omni Bot shows what it found as live UI in the chat, drawn from your Omni",
   "keywords": [
     "dsh-plugin",
