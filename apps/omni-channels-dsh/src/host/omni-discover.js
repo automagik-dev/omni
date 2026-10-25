@@ -67,8 +67,8 @@ function readConfig(path) {
   }
 }
 
-// <OMNI_HOME>, else ~/.omni: the desktop app sets OMNI_HOME to its own home. A sandboxed
-// Omni (omni-local.js) lives in its sandbox folder.
+// <OMNI_HOME>, else ~/.omni: Omni's own folder (the Automagik app keeps to ~/.automagik and
+// leaves it unset). A sandboxed Omni (omni-local.js) lives in its sandbox folder.
 const omniRoot = ({ env, home }) => env.OMNI_HOME || join(home, '.omni')
 export const sandboxHome = ({ env = process.env, home = homedir() } = {}) => join(omniRoot({ env, home }), 'sandbox')
 const cliConfigPath = ({ env, home }) => join(env.OMNI_CONFIG_DIR || join(home, '.omni'), 'config.json')

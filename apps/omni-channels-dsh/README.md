@@ -54,8 +54,9 @@ choose **Get a code**. Omni answers with a short code; send it to yourself from 
 ("Message yourself"; **Open WhatsApp** or the QR opens the chat with the code typed). The
 page goes live as soon as the code arrives. The Omni must have pairing turned on.
 
-The key Omni mints is saved in `omni.json` in the team's folder (`$OMNI_HOME/ui`, readable by
-you only), with its scopes and expiry; it never reaches the browser. Delete that file to
+The key Omni mints is saved in `omni.json` in the Bot team's home (`$AUTOMAGIK_BOTS_HOME`, else
+`~/.automagik/bots`; `~/.automagik/desktop/bots` in the Automagik app), readable by you only, with its
+scopes and expiry; it never reaches the browser. Delete that file to
 disconnect; revoke the key in Omni to cut it off from the server side.
 
 Without an Omni, the Connect step can run one on this computer (`omni install --sandbox`). It
