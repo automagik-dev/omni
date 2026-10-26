@@ -24,7 +24,7 @@ import { z } from 'zod';
 import { qrSvg } from '../../lib/qr-svg';
 import { type Login, allowCodeSend, ownerAccount, ownerOf } from '../../login';
 import { PUBLIC_AUTH_PATHS } from '../../login/auth';
-import { DEVICE_CLIENTS, type DeviceClientId, claimTokenOf, isDeviceClient } from '../../login/config';
+import { DEVICE_CLIENTS, type DeviceClientId, claimTokenOf, deviceKeysFor, isDeviceClient } from '../../login/config';
 import { GrantSchema, consumeConnectGrant, isLiveGrant } from '../../login/connect';
 import { deviceApprovedMessage } from '../../login/messages';
 import { claimForOperator } from '../../login/operator';
@@ -46,6 +46,17 @@ const VerifySchema = z.object({ code: CODE }).strict();
 const ClaimVerifySchema = z.object({ instanceId: z.string().uuid(), code: CODE }).strict();
 const DeviceNameSchema = z.string().trim().min(1).max(80);
 const DeviceKeySchema = z.object({ deviceName: DeviceNameSchema }).strict();
+
+/** The refusal for a client this Omni's device-key scopes leave nothing to, sent before its token is spent. */
+function noDeviceScopes(clientId: string) {
+  const what = isDeviceClient(clientId) ? DEVICE_CLIENTS[clientId] : 'this device';
+  return {
+    error: {
+      code: 'NO_DEVICE_SCOPES',
+      message: `This Omni's device-key scopes (OMNI_DEVICE_KEY_SCOPES) leave nothing for ${what}.`,
+    },
+  };
+}
 const ConnectSchema = z
   .object({
     grant: GrantSchema,
@@ -358,6 +369,9 @@ export function loginApiRoutes(login: Login | null) {
     if (!session || !clientId || !owner || session.user.id !== owner.id) {
       return c.json({ error: { code: 'UNAUTHORIZED', message: 'Unknown or used device token' } }, 401);
     }
+    // A client whose declared scopes this Omni's ceiling leaves empty keeps its token.
+    const keys = deviceKeysFor(clientId, active.config.deviceKeyScopes);
+    if (keys.scopes.length === 0) return c.json(noDeviceScopes(clientId), 403);
     // The token is spent before the key exists: exactly one caller wins it, and a failure
     // after this point loses a key that was never handed out, rather than leaving the
     // token able to mint more.
@@ -368,7 +382,7 @@ export function loginApiRoutes(login: Login | null) {
     });
     if (!spent) return c.json({ error: { code: 'UNAUTHORIZED', message: 'Unknown or used device token' } }, 401);
 
-    return c.json({ data: await mintDeviceKey(c, owner.id, clientId, body.data.deviceName, 'device-code') });
+    return c.json({ data: await mintDeviceKey(c, owner.id, clientId, body.data.deviceName, 'device-code', keys) });
   });
 
   // ---- A connect link's grant for its Omni key (the owner texted "connect") ----
@@ -378,6 +392,8 @@ export function loginApiRoutes(login: Login | null) {
     if (!body.success)
       return c.json({ error: { code: 'VALIDATION', message: 'Body must be { grant, clientId, deviceName }' } }, 400);
     const owner = await ownerOf(active);
+    const keys = deviceKeysFor(body.data.clientId, active.config.deviceKeyScopes);
+    if (keys.scopes.length === 0) return c.json(noDeviceScopes(body.data.clientId), 403);
     // Spent before the key exists, as with the device token: exactly one caller wins it.
     const granted = await consumeConnectGrant(active, body.data.grant);
     if (!granted || !owner || granted.userId !== owner.id) {
@@ -393,7 +409,7 @@ export function loginApiRoutes(login: Login | null) {
       );
     }
     const clientId = body.data.clientId as DeviceClientId;
-    const minted = await mintDeviceKey(c, owner.id, clientId, body.data.deviceName, 'connect-link');
+    const minted = await mintDeviceKey(c, owner.id, clientId, body.data.deviceName, 'connect-link', keys);
     // Say so in the self chat, with where it came from, so a link that leaked does not pass unnoticed.
     const account = await ownerAccount(active);
     if (account) {
@@ -408,29 +424,53 @@ export function loginApiRoutes(login: Login | null) {
     return c.json({ data: minted });
   });
 
-  /** A device key for the owner, as the device flow and connect links hand it out. */
+  /**
+   * A device key for the owner, as the device flow and connect links hand it out, and the
+   * companion keys its client declares (login/config.ts DEVICE_CLIENT_KEYS), all minted here
+   * so none outlives the one-time token or grant that paid for them.
+   */
   async function mintDeviceKey(
     c: Context<Env>,
     ownerId: string,
     clientId: string,
     deviceName: string,
     via: 'device-code' | 'connect-link',
+    keys: ReturnType<typeof deviceKeysFor>,
   ) {
     const keyExpiresAt = active.config.deviceKeyTtlDays
       ? new Date(Date.now() + active.config.deviceKeyTtlDays * 86_400_000)
       : undefined;
+    const label = isDeviceClient(clientId) ? DEVICE_CLIENTS[clientId] : 'a device';
+    const from = requestClientIp(c) ?? 'an unknown address';
     const created = await active.services.apiKeys.create({
       name: `device: ${deviceName}`,
-      description: `Authorized by the owner for ${isDeviceClient(clientId) ? DEVICE_CLIENTS[clientId] : 'a device'}, from ${requestClientIp(c) ?? 'an unknown address'}`,
-      scopes: active.config.deviceKeyScopes,
+      description: `Authorized by the owner for ${label}, from ${from}`,
+      scopes: keys.scopes,
       ...(keyExpiresAt ? { expiresAt: keyExpiresAt } : {}),
       createdBy: `login:${ownerId}`,
     });
+    const companions = [];
+    for (const companion of keys.companions) {
+      const extra = await active.services.apiKeys.create({
+        name: `device: ${deviceName} (${companion.name})`,
+        description: `The ${companion.name} key of device key ${created.key.id}, authorized by the owner for ${label}, from ${from}`,
+        scopes: companion.scopes,
+        ...(keyExpiresAt ? { expiresAt: keyExpiresAt } : {}),
+        createdBy: `login:${ownerId}`,
+      });
+      companions.push({
+        name: companion.name,
+        apiKey: extra.plainTextKey,
+        keyId: extra.key.id,
+        scopes: extra.key.scopes,
+      });
+    }
     await active.eventBus?.publish('access.device_authorized', {
       userId: ownerId,
       clientId,
       deviceName,
       apiKeyId: created.key.id,
+      ...(companions.length ? { companionKeyIds: companions.map((companion) => companion.keyId) } : {}),
       via,
     });
     return {
@@ -439,6 +479,7 @@ export function loginApiRoutes(login: Login | null) {
       scopes: created.key.scopes,
       keyExpiresAt: keyExpiresAt?.toISOString() ?? null,
       apiUrl: originOf(active, c),
+      companions,
     };
   }
 
