@@ -498,4 +498,24 @@ describe('what the review asked for', () => {
     expect(await served.tarball('@automagik/bots-dsh', 'automagik-bots-dsh-3.24.0.tgz')).toEqual(bytes);
     expect(await served.tarball('@automagik/bots-dsh', 'automagik-bots-dsh-3.24.1.tgz')).toEqual(next.bytes);
   });
+
+  test('only the few lanes before stay served, under their own names, and the disk keeps only the lane served', async () => {
+    const lane = publisher();
+    const pluginLane = createPluginLane({ keys, floor: FLOOR, dir, fetchImpl: lane.fetchImpl });
+    const taken: Array<{ file: string; bytes: Uint8Array<ArrayBuffer> }> = [];
+    for (let patch = 0; patch < 5; patch++) {
+      const next = bots(`3.24.${patch}`);
+      lane.put(next.plugin.url, next.bytes);
+      lane.publish(laneOf(240000 + patch, [next.plugin]));
+      expect(await pluginLane.refresh()).toBe(true);
+      taken.push({ file: `automagik-bots-dsh-3.24.${patch}.tgz`, bytes: next.bytes });
+    }
+    // The current lane and the three before it; the first is gone.
+    expect(pluginLane.tarball('@automagik/bots-dsh', taken[0]?.file ?? '')).toBeNull();
+    for (const { file, bytes } of taken.slice(1))
+      expect(pluginLane.tarball('@automagik/bots-dsh', file)).toEqual(bytes);
+    // Only under the name the lane lists it for, never a name that shares its prefix.
+    expect(pluginLane.tarball('@automagik/bots', taken[4]?.file ?? '')).toBeNull();
+    expect(readdirSync(dir).sort()).toEqual(['automagik-bots-dsh-3.24.4.tgz', 'kept.json']);
+  });
 });

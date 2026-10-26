@@ -314,7 +314,7 @@ export function createMarket(options: MarketOptions = {}): Market {
   async function tarball(name: string, file: string): Promise<Uint8Array<ArrayBuffer> | null> {
     // Only a file the manifest or a taken lane lists, for this name: never a path built from the
     // request. A version served before stays served, so a lockfile written then still installs.
-    const fromLane = file.startsWith(`${name.replace(/^@/, '').replace('/', '-')}-`) ? lane?.tarball(file) : null;
+    const fromLane = lane?.tarball(name, file);
     if (fromLane) return fromLane;
     const pkg = bundledPackages.get(name);
     if (!pkg || pkg.file !== file) return null;

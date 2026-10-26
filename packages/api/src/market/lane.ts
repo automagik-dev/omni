@@ -18,7 +18,19 @@
  */
 
 import { createHash, createPublicKey, randomBytes, verify } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  writeSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import { type EventBus, createLogger } from '@omni/core';
@@ -37,6 +49,8 @@ export const LANE_URL = 'https://github.com/automagik-dev/automagik/releases/dow
 const REPOSITORY = 'https://github.com/automagik-dev/automagik';
 const RELEASES_PATH = '/automagik-dev/automagik/releases/download/';
 const KEPT_FILE = 'kept.json';
+// Lanes taken before the current one whose tarballs stay served in this run.
+const KEEP_EARLIER = 3;
 const PUBLISHER = 'automagik';
 const SCOPE = '@automagik/';
 /** Automagik's lane keys (plugin-lane/keys.json there), pinned: a lane signed by any other is refused. */
@@ -88,8 +102,11 @@ export interface TakenLane {
 export interface PluginLane {
   /** The lane taken, or null while none is. */
   current(): TakenLane | null;
-  /** A tarball of the lane taken, or of one taken before it in this run; null for any other file. */
-  tarball(file: string): Uint8Array<ArrayBuffer> | null;
+  /**
+   * A tarball the lane taken lists for `name`, or one of the few lanes taken before it in this
+   * run did; null for anything else.
+   */
+  tarball(name: string, file: string): Uint8Array<ArrayBuffer> | null;
   /** Settles once the lane kept on disk, if any, is checked and served. */
   readonly loaded: Promise<void>;
   /** Looks at the lane now (one look at a time); resolves to whether a newer one was taken. */
@@ -280,10 +297,19 @@ async function download(fetchImpl: typeof fetch, url: string, max: number): Prom
   return bytes;
 }
 
-/** Writes `path` whole: a fresh temp file renamed over it, so a crash or a link there never leaves half of it. */
+/**
+ * Writes `path` whole: a fresh temp file, flushed to disk, renamed over it, so a crash, a power
+ * loss or a link there never leaves half of it.
+ */
 function writeWhole(path: string, data: Uint8Array | string): void {
   const temp = `${path}.${randomBytes(6).toString('hex')}.tmp`;
-  writeFileSync(temp, data, { flag: 'wx' });
+  const fd = openSync(temp, 'wx');
+  try {
+    writeSync(fd, typeof data === 'string' ? Buffer.from(data) : data);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
   renameSync(temp, path);
 }
 
@@ -304,8 +330,8 @@ export function createPluginLane(options: PluginLaneOptions): PluginLane {
   const { dir, floor } = options;
   let taken: TakenLane | null = null;
   let takenBytes: Uint8Array | null = null;
-  // Tarballs of lanes taken earlier in this run: a lockfile written then still installs.
-  const earlier = new Map<string, Uint8Array<ArrayBuffer>>();
+  // The last few lanes taken before this one in this run: a lockfile written then still installs.
+  const earlier: TakenLane[] = [];
 
   // The plugins of a lane this Omni serves: Automagik's own, on Automagik's releases, at or past the floor.
   const servedPlugins = (lane: Lane) =>
@@ -361,7 +387,8 @@ export function createPluginLane(options: PluginLaneOptions): PluginLane {
   }
 
   // The tarballs first, then the lane and its signature in one file swapped in whole: a crash
-  // leaves the previous lane, whose tarballs are never removed, as it was.
+  // leaves the previous lane as it was. Only then go the files no kept lane needs (older
+  // tarballs, temp files a failed write left).
   function keep(next: TakenLane, bytes: Uint8Array, signature: string): void {
     if (!dir) return;
     try {
@@ -370,7 +397,10 @@ export function createPluginLane(options: PluginLaneOptions): PluginLane {
       writeWhole(join(dir, KEPT_FILE), JSON.stringify({ lane: Buffer.from(bytes).toString('base64'), signature }));
     } catch (error) {
       log.warn('Could not keep the plugin lane on disk; serving it from memory', { dir, error: String(error) });
+      return;
     }
+    for (const file of readdirSync(dir))
+      if (file !== KEPT_FILE && !next.tarballs.has(file)) rmSync(join(dir, file), { force: true });
   }
 
   // One look at a time: a slow look and the next tick must not finish out of order.
@@ -415,7 +445,8 @@ export function createPluginLane(options: PluginLaneOptions): PluginLane {
     }
     // The kept lane may have been served while the tarballs downloaded.
     if (taken && taken.sequence >= next.sequence) return false;
-    for (const [file, tarball] of taken?.tarballs ?? []) earlier.set(file, tarball);
+    if (taken) earlier.unshift(taken);
+    earlier.splice(KEEP_EARLIER);
     taken = next;
     takenBytes = bytes;
     keep(next, bytes, signature);
@@ -444,6 +475,11 @@ export function createPluginLane(options: PluginLaneOptions): PluginLane {
   }
 
   const loaded = load();
-  const tarball = (file: string) => taken?.tarballs.get(file) ?? earlier.get(file) ?? null;
+  // A tarball only under the name its lane lists it for.
+  const tarball = (name: string, file: string) => {
+    for (const lane of taken ? [taken, ...earlier] : earlier)
+      if (lane.packages.some((pkg) => pkg.name === name && pkg.file === file)) return lane.tarballs.get(file) ?? null;
+    return null;
+  };
   return { current: () => taken, tarball, loaded, refresh, start };
 }
