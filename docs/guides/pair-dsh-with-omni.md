@@ -65,7 +65,7 @@ Apply a change with `omni stop && omni start`.
   - **Passkeys** (Face ID, Touch ID, fingerprints) on the approval page: WebAuthn binds a passkey to one host. HTTPS matters for passkeys only.
   - **The WhatsApp `connect` reply**: a link sent on its own is never built from a request's address.
 - **The login secret** signs sessions and the claim link. Omni generates it at first boot and keeps it in its database, so every replica shares it. Set `OMNI_AUTH_SECRET` (32 characters or more) only to choose it yourself.
-- **Device keys** can run channels, chats and messages, read events, see the version and ask the owner to update: `instances:*`, `chats:*`, `messages:*`, `events:*`, `system:read`, `system:update`. They can never hold `keys`, `settings`, `auth`, `trust`, `audit` or `platform` scopes, even if `OMNI_DEVICE_KEY_SCOPES` lists them. Revoke one with `omni keys revoke <id>`.
+- **Device keys** operate all of Omni, so the Omni Bot of a paired app has full control of it: channels, chats, messages, events, persons, automations, agents, providers, routes and the rest of the API, plus `system:read` and `system:update` to see the version and ask the owner to update. The list is `DEFAULT_DEVICE_KEY_SCOPES` in `packages/api/src/login/config.ts`. `logs:*` and `metrics:*` come only when `OMNI_DEVICE_KEY_SCOPES` lists them. A key keeps the scopes it was minted with, so a device paired before this change has the old ones until it pairs again. Device keys can never hold `keys`, `settings`, `auth`, `trust`, `audit` or `platform` scopes, even if `OMNI_DEVICE_KEY_SCOPES` lists them. Revoke one with `omni keys revoke <id>`.
 
 ## Source and Docker installs
 

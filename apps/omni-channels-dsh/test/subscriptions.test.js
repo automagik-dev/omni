@@ -146,6 +146,20 @@ test('an Omni Bot that is not a Main Bot manages automations and handles their e
   assert.match(await as('find_chats', 'b2')({}), /Only Channel keeper/)
 })
 
+test('#1392: the Omni Bot asking for worker "Omni" keeps Omni, never the Main Bot Caramelo', async (t) => {
+  const omni = { id: 'o1', name: 'Omni', role: 'Omni', kind: 'omni', instructions: '', createdAt: 4 }
+  const { as, call } = setup(t, { bots: { m1: { id: 'm1', name: 'Caramelo', role: 'Main', instructions: '', createdAt: 1 }, o1: omni } })
+  for (const worker of ['Omni', 'me']) {
+    assert.match(await as('save_automation', 'o1')({ sources: 'chat:obras', trigger: 'voice', worker }), /^Saved /)
+    const sub = (await call('state', {})).value.subscriptions.at(-1)
+    assert.deepEqual(sub.worker, { kind: 'events' }, worker)
+    assert.equal((await call('automation-test', { id: sub.id })).value.botId, 'o1', worker)
+  }
+  const listed = await as('list_automations', 'o1')({})
+  assert.match(listed, /Omni/)
+  assert.doesNotMatch(listed, /Caramelo/)
+})
+
 test('Omni finds chats by name with the ids it saves with', async (t) => {
   const { tool } = setup(t)
   const all = await tool('find_chats')({})
