@@ -426,7 +426,7 @@ export const STRINGS = {
   'Asked you for permission in its chat': '已在它的聊天中请求你的许可',
   'On Omni': '在 Omni 上',
   'All of Omni': 'Omni 的全部',
-  'A Main Bot operates Omni. Messaging a person, deleting and disconnecting still ask you first.': '主 Bot 操作 Omni。给某人发消息、删除和断开连接仍会先询问你。',
+  'Omni and Main Bots operate Omni. Messaging a person, deleting and disconnecting still ask you first.': 'Omni Bot 和主 Bot 操作 Omni。给某人发消息、删除和断开连接仍会先询问你。',
   'Nothing yet': '还没有',
   'When {bot} needs a chat, it asks you there, on a card.': '当 {bot} 需要某个聊天时，它会在那里用卡片询问你。',
   'expired': '已过期',

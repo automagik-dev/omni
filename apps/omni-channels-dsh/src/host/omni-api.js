@@ -1,4 +1,4 @@
-// Omni's hands on the platform: the Main Bot finds any omni API operation in the API's own
+// Omni's hands on the platform: the Bot that operates Omni (a Main Bot or an Omni Bot) finds any omni API operation in the API's own
 // OpenAPI description (omni_endpoints) and calls it with this host's key (omni_call). Every
 // call is drawn in the chat as a card (src/client/omni-live.js), so the user watches each
 // read and each change happen. The browser reads through `omni-get`, GET operations only,
@@ -6,6 +6,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { operatesOmni } from './grants.js'
 import { output } from './output.js'
 import { SOURCE_ROUTES } from './omni-routes.js'
 
@@ -20,7 +21,7 @@ const CARD_BODY_MAX = 12_000
 const invalid = message => Object.assign(new Error(message), { code: 'bot/invalid' })
 
 // Omni operates the platform through its tools; files and the shell belong to Tasks. With
-// an omni to operate, a Main Bot's Sessions lose DSH's computer tools, and start_task hands
+// an omni to operate, the Sessions of a Bot that operates it lose DSH's computer tools, and start_task hands
 // that work on.
 export const COMPUTER_TOOLS = ['bash', 'read', 'write', 'edit', 'glob', 'grep', 'subagent', 'subagent_fork', 'workflow', 'job_kill', 'job_list', 'job_output', 'todo_write', 'working_directory']
 const COMPUTER_REFUSAL = 'Omni works through its own tools, not files or the shell. Hand this to a task with start_task.'
@@ -149,7 +150,7 @@ export function install(rt) {
   const operating = (sessionId) => {
     if (!(rt.omniNamed?.() ?? Boolean(rt.config?.omni?.url))) return false
     const self = rt.selfOf(sessionId)
-    return self !== undefined && rt.isMain(self)
+    return operatesOmni(rt, self)
   }
   const trimmed = new WeakSet()
   const trimComputer = (agent) => {
@@ -199,13 +200,13 @@ export function install(rt) {
     return spec.ops
   }
 
-  // The Main Bot operates omni. In a Session that handles an automation's event, whose text
+  // A Main Bot or an Omni Bot operates omni. In a Session that handles an automation's event, whose text
   // came from other people, it only reads.
   async function allowed(exec, method) {
     await rt.load()
     const id = exec.agent?.id
     const self = rt.selfOf(id)
-    if (!rt.isMain(self)) return 'Only a Main Bot operates omni. Ask it in its chat.'
+    if (!operatesOmni(rt, self)) return 'Only an Omni Bot or a Main Bot operates omni. Ask one in its chat.'
     const eventRun = (state.subscriptionRuns ?? []).some(run => run.sessionId === id)
     if (eventRun && method !== 'GET') return 'This Session handles an automation event, so it only reads omni. Tell the user what you would change instead.'
     return null
@@ -228,7 +229,7 @@ export function install(rt) {
 
   ctx.tools.register(defineTool({
     name: 'omni_endpoints',
-    description: 'Main Bot only. Finds omni API operations (channels/instances, chats, messages, automations, agents, providers, routes, keys, events, settings…) by words. Returns METHOD /path — summary; the best matches also list their parameters and JSON body.',
+    description: 'Omni and Main Bots only. Finds omni API operations (channels/instances, chats, messages, automations, agents, providers, routes, keys, events, settings…) by words. Returns METHOD /path — summary; the best matches also list their parameters and JSON body.',
     parameters: { search: { type: 'string', required: true, description: 'Words for what you want to do, e.g. "connect whatsapp qr" or "send message"' } },
     output,
     async execute(args, exec) {
@@ -251,7 +252,7 @@ export function install(rt) {
 
   ctx.tools.register(defineTool({
     name: 'omni_call',
-    description: 'Main Bot only. Calls one omni API operation with full permissions, on the user\'s behalf. The user sees every call as a card in the chat (a QR code to scan, a channel, a table), so do not repeat its data in text. Find the operation with omni_endpoints first.',
+    description: 'Omni and Main Bots only. Calls one omni API operation with full permissions, on the user\'s behalf. The user sees every call as a card in the chat (a QR code to scan, a channel, a table), so do not repeat its data in text. Find the operation with omni_endpoints first.',
     parameters: {
       method: { type: 'string', required: true, enum: METHODS, description: 'HTTP method' },
       path: { type: 'string', required: true, description: 'API path under /api/v2 with ids filled in, e.g. /instances/<id>/connect' },
@@ -343,7 +344,7 @@ export function install(rt) {
 
   tool({
     name: 'omni_channels',
-    description: 'Main Bot only. Every omni channel with its live connection state (connected, connecting, paused…), profile and number, in one call. The user sees them as live cards.',
+    description: 'Omni and Main Bots only. Every omni channel with its live connection state (connected, connecting, paused…), profile and number, in one call. The user sees them as live cards.',
     parameters: {},
   }, async () => fitted({ status: 200, operation: 'Channels', data: { items: await channels() } }))
 
@@ -524,7 +525,7 @@ export function install(rt) {
 
   ctx.tools.register(defineTool({
     name: 'omni_chats',
-    description: 'Chats and groups on omni, most recent first: on one channel or all, by name, or only unread ones. Gives the chat ids the other omni tools take. A Main Bot also sees each chat\'s last message.',
+    description: 'Chats and groups on omni, most recent first: on one channel or all, by name, or only unread ones. Gives the chat ids the other omni tools take. An Omni Bot or a Main Bot also sees each chat\'s last message.',
     parameters: {
       channel: { type: 'string', description: 'Channel id or exact name; all channels when left out' },
       search: { type: 'string', description: 'Part of a chat or group name' },
@@ -539,7 +540,7 @@ export function install(rt) {
       try {
         const data = await chats(args)
         // What was said in a chat is for the Bots allowed to read it.
-        if (!rt.isMain(self)) for (const item of data.items) delete item.preview
+        if (!operatesOmni(rt, self)) for (const item of data.items) delete item.preview
         return fitted({ status: 200, operation: 'Chats', data })
       } catch (error) {
         return fitted({ status: 0, error: error.message })
@@ -591,7 +592,7 @@ export function install(rt) {
 
   tool({
     name: 'omni_connect',
-    description: 'Main Bot only. Starts connecting a channel (WhatsApp shows a QR code to scan). The user sees the live QR code, which turns into Connected once scanned; do not read it back.',
+    description: 'Omni and Main Bots only. Starts connecting a channel (WhatsApp shows a QR code to scan). The user sees the live QR code, which turns into Connected once scanned; do not read it back.',
     parameters: { channel: { type: 'string', required: true, description: 'Channel id or exact name' } },
   }, async (args) => {
     const id = await channelId(args.channel)

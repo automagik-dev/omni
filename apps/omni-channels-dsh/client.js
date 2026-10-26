@@ -15232,7 +15232,7 @@ function ConsentDock({ sessionId, useRoster, useCards }) {
 var ACTION_TEXT = { read: "read", media: "files", send: "send", react: "react", delete: "delete" };
 function PermissionsCard({ bot, roster, run, Card, SwitchRow }) {
   if (!roster.omniGrants) return null;
-  const main = (roster.mainBotIds ?? []).includes(bot.id);
+  const main = bot.kind === "omni" || (roster.mainBotIds ?? []).includes(bot.id);
   const grants = (roster.omniGrants ?? []).filter((grant) => grant.botId === bot.id);
   const now = Date.now();
   if (main) {
@@ -15243,7 +15243,7 @@ function PermissionsCard({ bot, roster, run, Card, SwitchRow }) {
         "span",
         { className: "bt-set-copy" },
         (0, import_react14.createElement)("span", { className: "bt-bs-label" }, t("All of Omni")),
-        (0, import_react14.createElement)("span", { className: "bt-set-hint" }, t("A Main Bot operates Omni. Messaging a person, deleting and disconnecting still ask you first."))
+        (0, import_react14.createElement)("span", { className: "bt-set-hint" }, t("Omni and Main Bots operate Omni. Messaging a person, deleting and disconnecting still ask you first."))
       ))
     );
   }
@@ -15709,7 +15709,7 @@ var STRINGS = {
   "Asked you for permission in its chat": "已在它的聊天中请求你的许可",
   "On Omni": "在 Omni 上",
   "All of Omni": "Omni 的全部",
-  "A Main Bot operates Omni. Messaging a person, deleting and disconnecting still ask you first.": "主 Bot 操作 Omni。给某人发消息、删除和断开连接仍会先询问你。",
+  "Omni and Main Bots operate Omni. Messaging a person, deleting and disconnecting still ask you first.": "Omni Bot 和主 Bot 操作 Omni。给某人发消息、删除和断开连接仍会先询问你。",
   "Nothing yet": "还没有",
   "When {bot} needs a chat, it asks you there, on a card.": "当 {bot} 需要某个聊天时，它会在那里用卡片询问你。",
   "expired": "已过期",

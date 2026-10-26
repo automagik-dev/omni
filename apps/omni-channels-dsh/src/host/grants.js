@@ -1,4 +1,5 @@
-// What each Bot may do on Omni. A Main Bot operates all of it; any other Bot starts with
+// What each Bot may do on Omni. A Main Bot or the team's Omni Bot (kind 'omni') operates all
+// of it (operatesOmni); any other Bot starts with
 // nothing and is granted, per chat, group or whole channel, the actions it asks for: read
 // messages, open media, send, react, delete. Nothing is set up front. The first time a Bot
 // needs something, its tool call puts a card in front of the user, in the Bot's own chat:
@@ -6,7 +7,7 @@
 // ask_user), and the answer comes back to the Bot as a note. Once and Always run the exact
 // call the card showed; Always also keeps a grant, which the Bot's settings list and revoke.
 //
-// Some acts ask every time, grant or not, Main Bot included: sending as the user to a person,
+// Some acts ask every time, grant or not, Omni and Main Bots included: sending as the user to a person,
 // deleting, disconnecting a channel. Their card shows the destination and the exact text, and
 // confirming runs that call, nothing else.
 import { randomUUID } from 'node:crypto'
@@ -18,6 +19,12 @@ const KEPT = 20
 const TOLD_MAX = 6000
 
 const invalid = message => Object.assign(new Error(message), { code: 'bot/invalid' })
+
+/**
+ * Whether `botId` operates Omni: a Main Bot, or an Omni Bot (kind 'omni') whether it is a Main
+ * Bot or not. The owner wants an Omni Bot to have full control of Omni without being the Main Bot.
+ */
+export const operatesOmni = (rt, botId) => botId !== undefined && (rt.isMain(botId) || rt.botOf(botId)?.kind === 'omni')
 
 /** Whether `grant` lets `botId` do `action` on `resource` at `now`. */
 export function covers(grant, { botId, resource, action, now = Date.now() }) {
@@ -92,7 +99,7 @@ export function install(rt) {
     const sessionId = exec.agent?.id
     const botId = rt.selfOf(sessionId)
     if (rt.botOf(botId) === undefined) return 'Only Bots on the team use Omni.'
-    const main = rt.isMain(botId)
+    const main = operatesOmni(rt, botId)
     // A run for an automation's event reads text other people wrote. A Bot's own chat is not
     // one, even when an automation once ran there.
     const eventRun = rt.chatOwners?.has(sessionId) !== true && (state.subscriptionRuns ?? []).some(run => run.sessionId === sessionId)
