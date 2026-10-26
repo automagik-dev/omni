@@ -4,6 +4,9 @@
 
 ## Simmering
 
+- live-update-and-releases — superseded 2026-10-24 by automagik-dev-flow (owner: Omni's process stays unchanged; the new process is Automagik's). Kept locally as research. Stopped at round 10, WRS 93.
+- automagik-dev-flow — moved 2026-10-24 to the Automagik repository (Automagik owns it; see its .genie/INDEX.md).
+
 ## Ready
 
 ## Poured

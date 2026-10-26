@@ -122,3 +122,7 @@ deploy/helm/omni/values-local.yaml
 
 # The Bot team at the Automagik release apps/automagik.json pins (apps/automagik.mjs source)
 apps/.automagik/
+
+# Backups Genie's installer leaves beside the configs it edits
+.mcp.json.genie-backup-*
+.codex/config.toml.genie-backup-*
