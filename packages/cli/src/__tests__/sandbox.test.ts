@@ -704,6 +704,8 @@ describe('sandboxChildSpecs', () => {
 });
 
 describe('a reinstall from anywhere keeps its units', () => {
+  // A release the CLI under test never is: a spec equal to its own VERSION reinstalls nothing.
+  const OTHER_RELEASE = '2.261023.8';
   test('the default home recorded at install names the units, whatever the caller thinks the default is', async () => {
     // Installed with OMNI_HOME pointing at this home: it is the default, so its unit has no suffix.
     const { deps, runs } = fakeDeps();
@@ -714,7 +716,7 @@ describe('a reinstall from anywhere keeps its units', () => {
     expect(existsSync(join(unitDir, plain))).toBe(true);
     // An update the API hands off runs with no OMNI_HOME, so its default is ~/.omni/sandbox.
     runs.length = 0;
-    await installSandbox({ home, defaultHome, packageSpec: '2.261026.1' }, deps);
+    await installSandbox({ home, defaultHome, packageSpec: OTHER_RELEASE }, deps);
     const hashed = sandboxUnitNames(home, defaultHome).systemdUnit;
     expect(hashed).not.toBe(plain);
     expect(existsSync(join(unitDir, hashed))).toBe(false);
@@ -730,14 +732,14 @@ describe('a reinstall from anywhere keeps its units', () => {
     const run = deps.run;
     deps.run = async (cmd, opts) =>
       cmd[1] === 'install' && opts.cwd ? { code: 1, stdout: '', stderr: 'registry unreachable' } : run(cmd, opts);
-    await expect(installSandbox({ home, defaultHome, packageSpec: '2.261026.1' }, deps)).rejects.toThrow(
+    await expect(installSandbox({ home, defaultHome, packageSpec: OTHER_RELEASE }, deps)).rejects.toThrow(
       'bun install failed',
     );
     expect(alive.has(4242)).toBe(true);
     // The next try installs for real: the failed one did not leave the new manifest behind.
     deps.run = run;
-    await installSandbox({ home, defaultHome, packageSpec: '2.261026.1' }, deps);
-    expect(readSandboxState(sandboxLayout(home))?.version).toBe('2.261026.1');
+    await installSandbox({ home, defaultHome, packageSpec: OTHER_RELEASE }, deps);
+    expect(readSandboxState(sandboxLayout(home))?.version).toBe(OTHER_RELEASE);
   });
 });
 
