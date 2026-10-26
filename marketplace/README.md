@@ -54,7 +54,8 @@ starts, then hourly, and takes a lane only when all of it checks out:
 
 - `lane.json` is signed by a key Omni pins (`LANE_KEYS`), and it is Automagik's;
 - its `sequence` is higher than the last lane taken's, so an older lane can't be replayed;
-- only `@automagik/*` plugins on Automagik's releases count, each at least the version `apps/automagik.json` names;
+- only the plugins `apps/automagik.json` names (the Bot team and the welcome) count, on Automagik's releases, each at
+  least the version it names; Automagik's other plugins, such as its desktop Unfold bridge, aren't an Omni's to list;
 - every tarball has the size, sha256 and sha512 the lane says, and a `package.json` of that name and version.
 
 Anything else keeps what the Omni serves. The release's own version, and any lane version served before in the run,

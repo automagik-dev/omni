@@ -7,8 +7,9 @@
  *   - lane.json is signed (ed25519 over its exact bytes, lane.json.sig) by a key pinned here,
  *     and is Automagik's (publisher, repository);
  *   - its sequence is higher than the last lane taken's, so an old one cannot be replayed;
- *   - only `@automagik/*` plugins count, each at least the version Omni's floor names
- *     (apps/automagik.json), with its tarball on one of Automagik's releases;
+ *   - only the plugins Omni's floor names (apps/automagik.json: the Bot team and the welcome)
+ *     count, each at least that version, with its tarball on one of Automagik's releases; Automagik's
+ *     other plugins (desktop ones such as its Unfold bridge) are not an Omni market's to list;
  *   - every tarball has the size, sha256 and sha512 the lane says, and holds a package.json of
  *     that name and version.
  * Anything else keeps what this Omni serves now. The last lane taken is kept on disk (the signed
@@ -333,12 +334,12 @@ export function createPluginLane(options: PluginLaneOptions): PluginLane {
   // The last few lanes taken before this one in this run: a lockfile written then still installs.
   const earlier: TakenLane[] = [];
 
-  // The plugins of a lane this Omni serves: Automagik's own, on Automagik's releases, at or past the floor.
+  // The plugins of a lane this Omni serves: the floor's, on Automagik's releases, at or past the floor.
   const servedPlugins = (lane: Lane) =>
     lane.plugins.filter((plugin) => {
       if (!plugin.name.startsWith(SCOPE) || !onAutomagikReleases(plugin.url)) return false;
-      const oldest = floor[plugin.name];
-      return !oldest || Bun.semver.order(plugin.version, oldest) >= 0;
+      const oldest = Object.hasOwn(floor, plugin.name) ? floor[plugin.name] : undefined;
+      return oldest !== undefined && Bun.semver.order(plugin.version, oldest) >= 0;
     });
 
   /**
