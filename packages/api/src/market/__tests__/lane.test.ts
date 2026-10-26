@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
 import { createHash, createPublicKey, generateKeyPairSync, sign } from 'node:crypto';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
@@ -332,5 +332,170 @@ describe('the market with a plugin lane', () => {
       ['interval', 3_600_000],
     ]);
     stop();
+  });
+});
+
+describe('what the review asked for', () => {
+  test('size, sha256 and sha512 are each checked, and so are the name and the repository', async () => {
+    const { bytes, plugin } = bots('3.24.0');
+    const cases: Array<[string, Lane['plugins'][number]]> = [
+      ['size', { ...plugin, size: plugin.size + 1 }],
+      ['sha256', { ...plugin, sha256: '0'.repeat(64) }],
+      ['sha512', { ...plugin, integrity: `sha512-${createHash('sha512').update('other').digest('base64')}` }],
+    ];
+    for (const [what, wrong] of cases) {
+      const lane = publisher();
+      lane.put(plugin.url, bytes);
+      lane.publish(laneOf(240000, [wrong]));
+      const pluginLane = createPluginLane({ keys, floor: FLOOR, dir: null, fetchImpl: lane.fetchImpl });
+      expect([what, await pluginLane.refresh()]).toEqual([what, false]);
+    }
+    const renamed = tarballOf(pluginPackage('@automagik/welcome-dsh', '3.24.0'));
+    const lane = publisher();
+    const misnamed = lanePlugin('@automagik/bots-dsh', '3.24.0', renamed);
+    lane.put(misnamed.url, renamed);
+    lane.publish(laneOf(240000, [misnamed]));
+    expect(await createPluginLane({ keys, floor: FLOOR, dir: null, fetchImpl: lane.fetchImpl }).refresh()).toBe(false);
+    const elsewhere = Buffer.from(
+      JSON.stringify(laneOf(1, [], { repository: 'https://github.com/mallory/automagik' })),
+    );
+    expect(verifyLane(elsewhere, sign(null, elsewhere, privateKey).toString('base64'), keys)).toMatchObject({
+      refused: expect.stringContaining('mallory/automagik'),
+    });
+    const proto = Buffer.from(JSON.stringify(laneOf(1, [], { keyId: '__proto__' })));
+    expect(verifyLane(proto, sign(null, proto, privateKey).toString('base64'), keys)).toMatchObject({
+      refused: expect.stringContaining('does not pin (__proto__)'),
+    });
+  });
+
+  test('an equal sequence is not newer, and tarball URLs are taken only as written', async () => {
+    const lane = publisher();
+    const { bytes, plugin } = bots('3.24.0');
+    lane.put(plugin.url, bytes);
+    lane.publish(laneOf(240000, [plugin]));
+    const pluginLane = createPluginLane({ keys, floor: FLOOR, dir: null, fetchImpl: lane.fetchImpl });
+    expect(await pluginLane.refresh()).toBe(true);
+    lane.publish(laneOf(240000, [plugin], { issuedAt: '2026-10-27T00:00:00Z' }));
+    expect(await pluginLane.refresh()).toBe(false);
+    for (const url of [
+      `${RELEASES}/../../../mallory/x/releases/download/v1/automagik-bots-dsh-3.24.1.tgz`,
+      `${RELEASES}/v3.24.1/automagik-bots-dsh-3.24.1.tgz?x=1`,
+    ]) {
+      const sneaky = publisher();
+      const next = bots('3.24.1');
+      sneaky.put(url, next.bytes);
+      sneaky.publish(laneOf(240001, [{ ...next.plugin, url }]));
+      const other = createPluginLane({ keys, floor: FLOOR, dir: null, fetchImpl: sneaky.fetchImpl });
+      expect(await other.refresh()).toBe(true);
+      expect(other.current()?.packages).toEqual([]);
+    }
+  });
+
+  test('a lane or a tarball bigger than allowed is cut off while it arrives', async () => {
+    // 10 MB with no content-length, in 64 KB parts: reading stops just past the lane's 256 KB.
+    let sent = 0;
+    const endless = (async () =>
+      new Response(
+        new ReadableStream({
+          pull(controller) {
+            sent += 64 * 1024;
+            controller.enqueue(new Uint8Array(64 * 1024));
+            if (sent >= 10 * 1024 * 1024) controller.close();
+          },
+        }),
+      )) as unknown as typeof fetch;
+    expect(await createPluginLane({ keys, floor: FLOOR, dir: null, fetchImpl: endless }).refresh()).toBe(false);
+    expect(sent).toBeLessThan(1024 * 1024);
+    const lane = publisher();
+    const { bytes, plugin } = bots('3.24.0');
+    lane.put(plugin.url, Buffer.concat([bytes, Buffer.alloc(1024)]));
+    lane.publish(laneOf(240000, [plugin]));
+    expect(await createPluginLane({ keys, floor: FLOOR, dir: null, fetchImpl: lane.fetchImpl }).refresh()).toBe(false);
+  });
+
+  test('one look at a time, and a folder it cannot write keeps the lane in memory', async () => {
+    const lane = publisher();
+    const { bytes, plugin } = bots('3.24.0');
+    lane.put(plugin.url, bytes);
+    lane.publish(laneOf(240000, [plugin]));
+    const blocked = join(dir, 'a-file');
+    writeFileSync(blocked, 'not a folder');
+    const pluginLane = createPluginLane({ keys, floor: FLOOR, dir: join(blocked, 'lane'), fetchImpl: lane.fetchImpl });
+    const [first, second] = await Promise.all([pluginLane.refresh(), pluginLane.refresh()]);
+    expect([first, second]).toEqual([true, true]);
+    expect(lane.asked.filter((url) => url === LANE_URL)).toHaveLength(1);
+    expect(pluginLane.current()?.packages.map((pkg) => pkg.version)).toEqual(['3.24.0']);
+  });
+
+  test('the kept lane is one file swapped in whole, and a leftover temp file changes nothing', async () => {
+    const lane = publisher();
+    const { bytes, plugin } = bots('3.24.0');
+    lane.put(plugin.url, bytes);
+    lane.publish(laneOf(240000, [plugin]));
+    expect(await createPluginLane({ keys, floor: FLOOR, dir, fetchImpl: lane.fetchImpl }).refresh()).toBe(true);
+    expect(readdirSync(dir).sort()).toEqual(['automagik-bots-dsh-3.24.0.tgz', 'kept.json']);
+    writeFileSync(join(dir, 'kept.json.0123456789ab.tmp'), '{"half":');
+    const restarted = createPluginLane({ keys, floor: FLOOR, dir, fetchImpl: publisher().fetchImpl });
+    await restarted.loaded;
+    expect(restarted.current()?.sequence).toBe(240000);
+    expect(existsSync(join(dir, 'lane.json'))).toBe(false);
+  });
+
+  test("with a bundled market: the newer of the release's and the lane's is served, and both stay installable", async () => {
+    const market = mkdtempSync(join(root, 'market-'));
+    const bundle = (version: string) => {
+      const bytes = tarballOf(pluginPackage('@automagik/bots-dsh', version));
+      const file = `automagik-bots-dsh-${version}.tgz`;
+      writeFileSync(join(market, file), bytes);
+      writeFileSync(
+        join(market, 'market.json'),
+        JSON.stringify({
+          format: 1,
+          omniVersion: '2.261026.9',
+          packedAt: 1_792_900_000,
+          packages: [
+            {
+              name: '@automagik/bots-dsh',
+              version,
+              file,
+              integrity: `sha512-${createHash('sha512').update(bytes).digest('base64')}`,
+              shasum: createHash('sha1').update(bytes).digest('hex'),
+              size: bytes.byteLength,
+            },
+          ],
+        }),
+      );
+      return bytes;
+    };
+    const lane = publisher();
+    const { bytes, plugin } = bots('3.24.0');
+    lane.put(plugin.url, bytes);
+    lane.publish(laneOf(240000, [plugin]));
+    const pluginLane = createPluginLane({ keys, floor: FLOOR, dir: null, fetchImpl: lane.fetchImpl });
+    expect(await pluginLane.refresh()).toBe(true);
+    // A release that bundled a newer Bot team than the lane serves its own.
+    bundle('3.25.0');
+    const newer = createMarket({ dir: market, lane: pluginLane });
+    expect(newer.index('https://o').plugins.find((p) => p.name === '@automagik/bots-dsh')?.versions[0]?.version).toBe(
+      '3.25.0',
+    );
+    // An older bundle: the lane's is the latest, the release's still installs.
+    const old = bundle('3.20.0');
+    const served = createMarket({ dir: market, lane: pluginLane });
+    expect(served.index('https://o').plugins.find((p) => p.name === '@automagik/bots-dsh')?.versions[0]?.version).toBe(
+      '3.24.0',
+    );
+    const packument = served.packument('@automagik/bots-dsh', 'https://o');
+    expect(packument?.['dist-tags']).toEqual({ latest: '3.24.0' });
+    expect(Object.keys(packument?.versions ?? {}).sort()).toEqual(['3.20.0', '3.24.0']);
+    expect(await served.tarball('@automagik/bots-dsh', 'automagik-bots-dsh-3.20.0.tgz')).toEqual(old);
+    expect(await served.tarball('@automagik/welcome-dsh', 'automagik-bots-dsh-3.24.0.tgz')).toBeNull();
+    // A newer lane later: the one served before still installs.
+    const next = bots('3.24.1');
+    lane.put(next.plugin.url, next.bytes);
+    lane.publish(laneOf(240001, [next.plugin]));
+    expect(await pluginLane.refresh()).toBe(true);
+    expect(await served.tarball('@automagik/bots-dsh', 'automagik-bots-dsh-3.24.0.tgz')).toEqual(bytes);
+    expect(await served.tarball('@automagik/bots-dsh', 'automagik-bots-dsh-3.24.1.tgz')).toEqual(next.bytes);
   });
 });

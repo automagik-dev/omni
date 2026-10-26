@@ -129,7 +129,7 @@ export interface MarketOptions {
   /** The static index; defaults to marketplace/automagik.json. */
   staticIndex?: unknown;
   /** Automagik's plugin lane; none serves the release's plugins only. */
-  lane?: Pick<PluginLane, 'current'> | null;
+  lane?: Pick<PluginLane, 'current' | 'tarball'> | null;
 }
 
 /**
@@ -274,21 +274,34 @@ export function createMarket(options: MarketOptions = {}): Market {
     const served = carriedNow().get(name);
     if (!served) return null;
     const { pkg } = served;
-    const { file, integrity, shasum, size: _size, ...fields } = pkg;
     const published = new Date(served.publishedAt * 1000).toISOString();
+    // A lane's version is the latest; the release's own stays installable beside it.
+    const bundledPkg = bundledPackages.get(name);
+    const listedVersions = served.fromLane && bundledPkg ? [{ pkg: bundledPkg, at: bundled?.packedAt ?? 0 }] : [];
+    const version = (entry: MarketPackage) => {
+      const { file, integrity, shasum, size: _size, ...fields } = entry;
+      return {
+        ...fields,
+        _id: `${entry.name}@${entry.version}`,
+        dist: { tarball: `${registryOf(origin)}${entry.name}/-/${file}`, integrity, shasum },
+      };
+    };
     return {
       _id: pkg.name,
       name: pkg.name,
       description: pkg.description,
       'dist-tags': { latest: pkg.version },
-      versions: {
-        [pkg.version]: {
-          ...fields,
-          _id: `${pkg.name}@${pkg.version}`,
-          dist: { tarball: `${registryOf(origin)}${pkg.name}/-/${file}`, integrity, shasum },
-        },
+      versions: Object.fromEntries(
+        [...listedVersions.map(({ pkg: old }) => old), pkg].map((entry) => [entry.version, version(entry)]),
+      ),
+      time: {
+        created: published,
+        modified: published,
+        ...Object.fromEntries(
+          listedVersions.map(({ pkg: old, at }) => [old.version, new Date(at * 1000).toISOString()]),
+        ),
+        [pkg.version]: published,
       },
-      time: { created: published, modified: published, [pkg.version]: published },
       license: pkg.license,
       homepage: pkg.homepage,
       keywords: pkg.keywords,
@@ -299,11 +312,12 @@ export function createMarket(options: MarketOptions = {}): Market {
   // Read once: these routes are public and unauthenticated, and a release's tarballs never change.
   const read = new Map<string, Promise<Uint8Array<ArrayBuffer>>>();
   async function tarball(name: string, file: string): Promise<Uint8Array<ArrayBuffer> | null> {
-    const served = carriedNow().get(name);
-    // Only the exact file the manifest or the lane lists: never a path built from the request.
-    if (!served || served.pkg.file !== file) return null;
-    if (served.fromLane) return lane?.current()?.tarballs.get(file) ?? null;
-    const { pkg } = served;
+    // Only a file the manifest or a taken lane lists, for this name: never a path built from the
+    // request. A version served before stays served, so a lockfile written then still installs.
+    const fromLane = file.startsWith(`${name.replace(/^@/, '').replace('/', '-')}-`) ? lane?.tarball(file) : null;
+    if (fromLane) return fromLane;
+    const pkg = bundledPackages.get(name);
+    if (!pkg || pkg.file !== file) return null;
     let bytes = read.get(pkg.file);
     if (!bytes) {
       bytes = readFile(join(dir, pkg.file)).then((buffer) => new Uint8Array(buffer));

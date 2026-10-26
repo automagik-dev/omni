@@ -306,6 +306,17 @@ export const SystemEventSchemas = {
     }),
     { description: 'A fire-and-forget call_agent run settled (completed or failed)' },
   ),
+
+  // The market took a newer Automagik plugin lane (packages/api/src/market/lane.ts).
+  pluginLaneTaken: createEventSchema(
+    'system.plugin_lane.taken',
+    z.object({
+      sequence: z.number().int().nonnegative(),
+      version: z.string(),
+      plugins: z.array(z.object({ name: z.string(), version: z.string() })),
+    }),
+    { description: 'The market serves a newer plugin lane: its sequence, release and plugins' },
+  ),
 };
 
 /**

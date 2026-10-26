@@ -6,18 +6,19 @@
  * A lane is taken only when all of it checks out:
  *   - lane.json is signed (ed25519 over its exact bytes, lane.json.sig) by a key pinned here,
  *     and is Automagik's (publisher, repository);
- *   - its sequence is no lower than the last lane taken, so an old one cannot be replayed;
+ *   - its sequence is higher than the last lane taken's, so an old one cannot be replayed;
  *   - only `@automagik/*` plugins count, each at least the version Omni's floor names
  *     (apps/automagik.json), with its tarball on one of Automagik's releases;
  *   - every tarball has the size, sha256 and sha512 the lane says, and holds a package.json of
  *     that name and version.
  * Anything else keeps what this Omni serves now. The last lane taken is kept on disk (the signed
- * bytes and the tarballs) and checked again on start. OMNI_PLUGIN_LANE=off makes no request.
+ * bytes, their signature and the tarballs, swapped in whole) and checked again on start, with no
+ * request. A tarball this Omni served before stays served. OMNI_PLUGIN_LANE=off makes no request.
  * `engines.dsh` is listed for DSH to read: this Omni cannot know which DSH installs a plugin.
  */
 
-import { createHash, createPublicKey, verify } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { createHash, createPublicKey, randomBytes, verify } from 'node:crypto';
+import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import { type EventBus, createLogger } from '@omni/core';
@@ -34,6 +35,8 @@ const log = createLogger('api:market:lane');
 
 export const LANE_URL = 'https://github.com/automagik-dev/automagik/releases/download/plugin-lane/lane.json';
 const REPOSITORY = 'https://github.com/automagik-dev/automagik';
+const RELEASES_PATH = '/automagik-dev/automagik/releases/download/';
+const KEPT_FILE = 'kept.json';
 const PUBLISHER = 'automagik';
 const SCOPE = '@automagik/';
 /** Automagik's lane keys (plugin-lane/keys.json there), pinned: a lane signed by any other is refused. */
@@ -85,9 +88,11 @@ export interface TakenLane {
 export interface PluginLane {
   /** The lane taken, or null while none is. */
   current(): TakenLane | null;
+  /** A tarball of the lane taken, or of one taken before it in this run; null for any other file. */
+  tarball(file: string): Uint8Array<ArrayBuffer> | null;
   /** Settles once the lane kept on disk, if any, is checked and served. */
   readonly loaded: Promise<void>;
-  /** Looks at the lane now; resolves to whether a newer one was taken. */
+  /** Looks at the lane now (one look at a time); resolves to whether a newer one was taken. */
   refresh(): Promise<boolean>;
   /** Looks a minute from now, then hourly; returns the stop. */
   start(): () => void;
@@ -144,7 +149,7 @@ export function verifyLane(
     return { refused: 'lane.json is not JSON' };
   }
   const keyId = z.object({ keyId: z.string() }).safeParse(raw);
-  const pem = keyId.success ? keys[keyId.data.keyId] : undefined;
+  const pem = keyId.success && Object.hasOwn(keys, keyId.data.keyId) ? keys[keyId.data.keyId] : undefined;
   if (!pem)
     return { refused: `lane.json names a key this Omni does not pin (${keyId.success ? keyId.data.keyId : 'none'})` };
   let signed = false;
@@ -162,11 +167,15 @@ export function verifyLane(
   return { lane: lane.data };
 }
 
-/** `package/package.json` from an npm tarball (gzip'd ustar), or null when it has none. */
+/**
+ * `package/package.json` from an npm tarball (gzip'd ustar), or null when it has none. The last
+ * one wins, as npm extracts it. Only signed bytes reach here (their hashes are checked first).
+ */
 export function packageJsonOf(tarball: Uint8Array): unknown {
   const tar = gunzipSync(tarball, { maxOutputLength: 4 * MAX_TARBALL_BYTES });
   const field = (header: Uint8Array, start: number, length: number) =>
     new TextDecoder().decode(header.subarray(start, start + length)).replace(/\0.*$/s, '');
+  let found: Uint8Array | null = null;
   for (let at = 0; at + 512 <= tar.length; ) {
     const header = tar.subarray(at, at + 512);
     if (header.every((byte) => byte === 0)) break;
@@ -177,10 +186,10 @@ export function packageJsonOf(tarball: Uint8Array): unknown {
     const body = at + 512;
     if (!Number.isFinite(size) || size < 0 || body + size > tar.length) return null;
     if (type === '0' && (prefix ? `${prefix}/${name}` : name) === 'package/package.json')
-      return JSON.parse(new TextDecoder().decode(tar.subarray(body, body + size)));
+      found = tar.subarray(body, body + size);
     at = body + Math.ceil(size / 512) * 512;
   }
-  return null;
+  return found ? JSON.parse(new TextDecoder().decode(found)) : null;
 }
 
 // The package.json fields a registry packument carries, as scripts/pack-market.ts reads them.
@@ -230,16 +239,62 @@ function marketPackageOf(plugin: Lane['plugins'][number], bytes: Uint8Array<Arra
   });
 }
 
-/** Bytes from `url`, at most `max`; throws on any other answer. */
+/** Whether `raw` is a file on one of Automagik's releases, exactly as written (no `..`, query or fragment). */
+function onAutomagikReleases(raw: string): boolean {
+  try {
+    const url = new URL(raw);
+    return (
+      url.href === raw &&
+      url.origin === 'https://github.com' &&
+      url.pathname.startsWith(RELEASES_PATH) &&
+      !url.search &&
+      !url.hash
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Bytes from `url`, at most `max`, counted as they arrive; throws on any other answer. */
 async function download(fetchImpl: typeof fetch, url: string, max: number): Promise<Uint8Array<ArrayBuffer>> {
   const response = await fetchImpl(url, { redirect: 'follow', signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
   if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
-  const declared = Number(response.headers.get('content-length') ?? 0);
-  if (declared > max) throw new Error(`${url}: ${declared} bytes, more than ${max}`);
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  if (bytes.byteLength > max) throw new Error(`${url}: more than ${max} bytes`);
+  if (Number(response.headers.get('content-length') ?? 0) > max) throw new Error(`${url}: more than ${max} bytes`);
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  const reader = response.body?.getReader();
+  for (let part = await reader?.read(); part && !part.done; part = await reader?.read()) {
+    total += part.value.byteLength;
+    if (total > max) {
+      await reader?.cancel();
+      throw new Error(`${url}: more than ${max} bytes`);
+    }
+    chunks.push(part.value);
+  }
+  const bytes = new Uint8Array(total);
+  let at = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, at);
+    at += chunk.byteLength;
+  }
   return bytes;
 }
+
+/** Writes `path` whole: a fresh temp file renamed over it, so a crash or a link there never leaves half of it. */
+function writeWhole(path: string, data: Uint8Array | string): void {
+  const temp = `${path}.${randomBytes(6).toString('hex')}.tmp`;
+  writeFileSync(temp, data, { flag: 'wx' });
+  renameSync(temp, path);
+}
+
+/** A kept file's bytes, when it is a plain file no bigger than `max`; else null. */
+function readKept(path: string, max: number): Uint8Array<ArrayBuffer> | null {
+  if (!existsSync(path)) return null;
+  const stat = lstatSync(path);
+  return stat.isFile() && stat.size <= max ? new Uint8Array(readFileSync(path)) : null;
+}
+
+const KeptSchema = z.object({ lane: z.string(), signature: z.string() });
 
 export function createPluginLane(options: PluginLaneOptions): PluginLane {
   const url = options.url ?? LANE_URL;
@@ -249,11 +304,13 @@ export function createPluginLane(options: PluginLaneOptions): PluginLane {
   const { dir, floor } = options;
   let taken: TakenLane | null = null;
   let takenBytes: Uint8Array | null = null;
+  // Tarballs of lanes taken earlier in this run: a lockfile written then still installs.
+  const earlier = new Map<string, Uint8Array<ArrayBuffer>>();
 
   // The plugins of a lane this Omni serves: Automagik's own, on Automagik's releases, at or past the floor.
   const servedPlugins = (lane: Lane) =>
     lane.plugins.filter((plugin) => {
-      if (!plugin.name.startsWith(SCOPE) || !plugin.url.startsWith(`${REPOSITORY}/releases/download/`)) return false;
+      if (!plugin.name.startsWith(SCOPE) || !onAutomagikReleases(plugin.url)) return false;
       const oldest = floor[plugin.name];
       return !oldest || Bun.semver.order(plugin.version, oldest) >= 0;
     });
@@ -283,40 +340,49 @@ export function createPluginLane(options: PluginLaneOptions): PluginLane {
 
   // What was kept on disk is trusted no more than the network: the same checks, again.
   async function load(): Promise<void> {
-    if (!dir || !existsSync(join(dir, 'lane.json'))) return;
+    const keptPath = dir ? join(dir, KEPT_FILE) : null;
+    if (!dir || !keptPath || !existsSync(keptPath)) return;
     try {
-      const bytes = new Uint8Array(readFileSync(join(dir, 'lane.json')));
-      const checked = verifyLane(bytes, readFileSync(join(dir, 'lane.json.sig'), 'utf8'), keys);
+      const raw = readKept(keptPath, 2 * MAX_LANE_BYTES);
+      if (!raw) throw new Error(`${KEPT_FILE} is not a plain file of a lane's size`);
+      const kept = KeptSchema.parse(JSON.parse(new TextDecoder().decode(raw)));
+      const bytes = new Uint8Array(Buffer.from(kept.lane, 'base64'));
+      const checked = verifyLane(bytes, kept.signature, keys);
       if ('refused' in checked) throw new Error(checked.refused);
-      const fromDisk = (file: string) => {
-        const path = join(dir, TarballFileSchema.parse(file));
-        return existsSync(path) ? new Uint8Array(readFileSync(path)) : null;
-      };
-      const kept = await take(checked.lane, fromDisk, true);
-      if (taken && taken.sequence >= kept.sequence) return;
-      taken = kept;
+      const fromDisk = (file: string) => readKept(join(dir, TarballFileSchema.parse(file)), MAX_TARBALL_BYTES);
+      const lane = await take(checked.lane, fromDisk, true);
+      if (taken && taken.sequence >= lane.sequence) return;
+      taken = lane;
       takenBytes = bytes;
-      log.info('Serving the kept plugin lane', { sequence: kept.sequence, version: kept.version });
+      log.info('Serving the kept plugin lane', { sequence: lane.sequence, version: lane.version });
     } catch (error) {
       log.warn('The kept plugin lane does not check out; serving the release', { error: String(error) });
     }
   }
 
+  // The tarballs first, then the lane and its signature in one file swapped in whole: a crash
+  // leaves the previous lane, whose tarballs are never removed, as it was.
   function keep(next: TakenLane, bytes: Uint8Array, signature: string): void {
     if (!dir) return;
     try {
       mkdirSync(dir, { recursive: true });
-      for (const [file, tarball] of next.tarballs) writeFileSync(join(dir, file), tarball);
-      // The signature first, then the lane by rename: a crash leaves the previous lane whole.
-      writeFileSync(join(dir, 'lane.json.sig'), signature);
-      writeFileSync(join(dir, 'lane.json.next'), bytes);
-      renameSync(join(dir, 'lane.json.next'), join(dir, 'lane.json'));
+      for (const [file, tarball] of next.tarballs) writeWhole(join(dir, file), tarball);
+      writeWhole(join(dir, KEPT_FILE), JSON.stringify({ lane: Buffer.from(bytes).toString('base64'), signature }));
     } catch (error) {
       log.warn('Could not keep the plugin lane on disk; serving it from memory', { dir, error: String(error) });
     }
   }
 
-  async function refresh(): Promise<boolean> {
+  // One look at a time: a slow look and the next tick must not finish out of order.
+  let looking: Promise<boolean> | null = null;
+  function refresh(): Promise<boolean> {
+    looking ??= look().finally(() => {
+      looking = null;
+    });
+    return looking;
+  }
+
+  async function look(): Promise<boolean> {
     let bytes: Uint8Array;
     let signature: string;
     try {
@@ -334,8 +400,10 @@ export function createPluginLane(options: PluginLaneOptions): PluginLane {
     }
     const lane = checked.lane;
     if (taken && lane.sequence <= taken.sequence) {
-      if (lane.sequence < taken.sequence)
-        log.warn('Plugin lane refused: older than the one served', { sequence: lane.sequence, served: taken.sequence });
+      log.warn('Plugin lane refused: not newer than the one served', {
+        sequence: lane.sequence,
+        served: taken.sequence,
+      });
       return false;
     }
     let next: TakenLane;
@@ -345,6 +413,9 @@ export function createPluginLane(options: PluginLaneOptions): PluginLane {
       log.warn('Plugin lane refused: a tarball does not check out', { sequence: lane.sequence, error: String(error) });
       return false;
     }
+    // The kept lane may have been served while the tarballs downloaded.
+    if (taken && taken.sequence >= next.sequence) return false;
+    for (const [file, tarball] of taken?.tarballs ?? []) earlier.set(file, tarball);
     taken = next;
     takenBytes = bytes;
     keep(next, bytes, signature);
@@ -373,5 +444,6 @@ export function createPluginLane(options: PluginLaneOptions): PluginLane {
   }
 
   const loaded = load();
-  return { current: () => taken, loaded, refresh, start };
+  const tarball = (file: string) => taken?.tarballs.get(file) ?? earlier.get(file) ?? null;
+  return { current: () => taken, tarball, loaded, refresh, start };
 }

@@ -53,11 +53,12 @@ from there, the same way, without a new Omni release (`packages/api/src/market/l
 starts, then hourly, and takes a lane only when all of it checks out:
 
 - `lane.json` is signed by a key Omni pins (`LANE_KEYS`), and it is Automagik's;
-- its `sequence` is no lower than the last lane taken, so an older lane can't be replayed;
+- its `sequence` is higher than the last lane taken's, so an older lane can't be replayed;
 - only `@automagik/*` plugins on Automagik's releases count, each at least the version `apps/automagik.json` names;
 - every tarball has the size, sha256 and sha512 the lane says, and a `package.json` of that name and version.
 
-Anything else keeps what the Omni serves. The last lane taken is kept in `OMNI_PLUGIN_LANE_DIR` (default
+Anything else keeps what the Omni serves. The release's own version, and any lane version served before in the run,
+stay installable beside the newest. The last lane taken is kept in `OMNI_PLUGIN_LANE_DIR` (default
 `$OMNI_UPDATE_STATE_DIR/plugin-lane`) and checked again on start, with no request. `OMNI_PLUGIN_LANE=off` turns
 the lane off, so the market makes no request at all. `engines.dsh` stays in each entry for DSH to read.
 
