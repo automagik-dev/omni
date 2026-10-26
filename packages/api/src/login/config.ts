@@ -24,20 +24,48 @@ import { isMultitenancyEnabled } from '../tenancy/feature-flag';
  * and the namespaces that govern Omni itself (keys, settings, login, trust, the audit
  * trail, the platform).
  */
-const FORBIDDEN_SCOPE = /^(\*|(keys|settings|auth|trust|audit|platform):.*)$/;
+export const FORBIDDEN_SCOPE = /^(\*|(keys|settings|auth|trust|audit|platform):.*)$/;
 /**
- * What an owner-approved device key carries unless the operator says otherwise: running
- * the channels, chats and messages it shows, its events, and seeing this Omni's version
- * and asking the owner to update it.
+ * What an owner-approved device key carries unless the operator says otherwise: all of
+ * operating Omni, so the Omni Bot of a paired app has full control of it (#1392): channels,
+ * chats, messages, events, persons, automations, agents, providers, routes and the rest of
+ * the API, and seeing this Omni's version and asking the owner to update it. Not governing
+ * Omni itself (FORBIDDEN_SCOPE), and not the platform's own logs and metrics, which an
+ * operator may add.
  */
 export const DEFAULT_DEVICE_KEY_SCOPES = [
   'instances:*',
   'chats:*',
   'messages:*',
   'events:*',
+  'persons:*',
+  'automations:*',
+  'agents:*',
+  'agent-state:*',
+  'agent-tasks:*',
+  'providers:*',
+  'routes:*',
+  'follow-up:*',
+  'handoffs:*',
+  'conversations:*',
+  'context:*',
+  'media:*',
+  'voice:*',
+  'tts:*',
+  'turns:*',
+  'webhooks:*',
+  'batch-jobs:*',
+  'payloads:*',
+  'dead-letters:*',
+  'event-ops:*',
+  'journeys:*',
+  'access:*',
   'system:read',
   'system:update',
 ] as const;
+
+/** Namespaces a default device key leaves out although an operator may grant them. */
+export const DEVICE_KEY_OPT_IN_NAMESPACES = ['logs', 'metrics'] as const;
 
 /** The device-flow clients this Omni knows (Better Auth `client_id`). */
 export const DEVICE_CLIENTS = {

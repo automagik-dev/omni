@@ -10,7 +10,7 @@ import { SCOPE_MAP } from '../../constants/scopes';
 import { ownerRoutes } from '../../routes/v2/owner';
 import { ApiKeyService } from '../../services/api-keys';
 import type { AppVariables } from '../../types';
-import { DEFAULT_DEVICE_KEY_SCOPES } from '../config';
+import { DEFAULT_DEVICE_KEY_SCOPES, DEVICE_KEY_OPT_IN_NAMESPACES, FORBIDDEN_SCOPE } from '../config';
 import { publicOrigin, requestOrigin, sameHostOrigins } from '../origin';
 import { AUTH_SECRET_SETTING, resolveLoginDefaults } from '../secret';
 
@@ -104,6 +104,35 @@ describe('resolveLoginDefaults', () => {
       getString: async () => undefined,
     };
     expect(await resolveLoginDefaults({} as never, {}, broken)).toEqual({});
+  });
+});
+
+describe('a default device key (#1392)', () => {
+  test('operates all of Omni: every scope the API asks for, but governing Omni and the opt-in logs and metrics', () => {
+    const optIn: readonly string[] = DEVICE_KEY_OPT_IN_NAMESPACES;
+    const scopes = [...new Set(Object.values(SCOPE_MAP))];
+    const missing = scopes.filter(
+      (scope) =>
+        !FORBIDDEN_SCOPE.test(scope) &&
+        !optIn.includes(scope.split(':')[0] ?? '') &&
+        !ApiKeyService.scopeAllows([...DEFAULT_DEVICE_KEY_SCOPES], scope),
+    );
+    expect(missing).toEqual([]);
+    for (const scope of ['persons:read', 'automations:read', 'agents:write', 'routes:write', 'follow-up:read']) {
+      expect(ApiKeyService.scopeAllows([...DEFAULT_DEVICE_KEY_SCOPES], scope)).toBe(true);
+    }
+    for (const scope of [
+      'keys:write',
+      'settings:write',
+      'auth:admin',
+      'trust:read',
+      'audit:read',
+      'logs:read',
+      'metrics:read',
+    ]) {
+      expect(ApiKeyService.scopeAllows([...DEFAULT_DEVICE_KEY_SCOPES], scope)).toBe(false);
+    }
+    expect(DEFAULT_DEVICE_KEY_SCOPES.some((scope) => FORBIDDEN_SCOPE.test(scope))).toBe(false);
   });
 });
 
