@@ -1,11 +1,14 @@
 /**
  * The Automagik marketplace an Omni serves for its own release (routes in ./routes.ts).
  *
- * Two sources, both fixed at build time and identical for every caller:
+ * Its sources, identical for every caller:
  *   - the bundled market: this release's apps/*-dsh plugins, packed into the CLI's dist/market
  *     with market.json (see ./manifest.ts). Served as npm packages from this Omni's own
  *     registry at /api/market/npm/, one version each: the plugin's own, the Omni release of
  *     its last change (so an unchanged plugin keeps one version across Omni releases).
+ *   - Automagik's plugin lane (./lane.ts), when one was taken: its plugins are served the same
+ *     way, over the bundled ones they are newer than, so a Bot team release reaches DSH
+ *     without a new Omni. The release's bundle stays the floor.
  *   - marketplace/automagik.json, imported into the bundle: its titles, categories and labels,
  *     and Automagik's plugins at the pinned release commit, for whichever this Omni does not carry.
  *
@@ -20,6 +23,7 @@ import { fileURLToPath } from 'node:url';
 import { createLogger } from '@omni/core';
 import { z } from 'zod';
 import staticIndexJson from '../../../../marketplace/automagik.json';
+import type { PluginLane } from './lane';
 import {
   ExactVersionSchema,
   MARKET_MANIFEST_FILE,
@@ -124,6 +128,8 @@ export interface MarketOptions {
   dir?: string;
   /** The static index; defaults to marketplace/automagik.json. */
   staticIndex?: unknown;
+  /** Automagik's plugin lane; none serves the release's plugins only. */
+  lane?: Pick<PluginLane, 'current'> | null;
 }
 
 /**
@@ -210,42 +216,66 @@ export function createMarket(options: MarketOptions = {}): Market {
   const dir = options.dir ?? defaultMarketDir();
   const bundled = loadBundledMarket(dir);
   const publicUrl = options.publicUrl?.replace(/\/+$/, '') || null;
-  const carried = new Map((bundled?.packages ?? []).map((pkg) => [pkg.name, pkg]));
+  const bundledPackages = new Map((bundled?.packages ?? []).map((pkg) => [pkg.name, pkg]));
   const listed = new Map(staticIndex.plugins.map((plugin) => [plugin.name, plugin]));
+  const lane = options.lane ?? null;
   const categories = staticIndex.metadata?.categories ?? {};
   const labels = staticIndex.metadata?.labels ?? {};
 
   const base = (origin: string) => publicUrl ?? origin.replace(/\/+$/, '');
   const registryOf = (origin: string) => `${base(origin)}/api/market/npm/`;
 
+  /** A plugin this Omni serves: its package, when it was published, and where its bytes are. */
+  interface Carried {
+    pkg: MarketPackage;
+    publishedAt: number;
+    fromLane: boolean;
+  }
+  // What this Omni serves now: the release's plugins, and a taken lane's over those it is newer than.
+  function carriedNow(): Map<string, Carried> {
+    const now = new Map<string, Carried>();
+    for (const pkg of bundledPackages.values())
+      now.set(pkg.name, { pkg, publishedAt: bundled?.packedAt ?? 0, fromLane: false });
+    const taken = lane?.current();
+    for (const pkg of taken?.packages ?? []) {
+      const have = now.get(pkg.name);
+      if (!have || Bun.semver.order(pkg.version, have.pkg.version) > 0)
+        now.set(pkg.name, { pkg, publishedAt: taken?.publishedAt ?? 0, fromLane: true });
+    }
+    return now;
+  }
+
   // The static index's plugins this Omni does not carry (Automagik's, at the pinned commit, when
-  // the release packed none). Omni's own git entries are left out: this Omni serves its own
-  // plugins from its release instead.
-  const thirdParty: IndexPlugin[] = staticIndex.plugins
-    .filter((plugin) => !carried.has(plugin.name))
-    .map((plugin) => ({ ...plugin, versions: plugin.versions.filter(isAddOnSource) }))
-    .filter((plugin) => plugin.versions.length > 0);
+  // neither the release nor a lane has them). Omni's own git entries are left out: this Omni
+  // serves its own plugins from its release instead.
+  const thirdPartyOf = (carried: Map<string, Carried>): IndexPlugin[] =>
+    staticIndex.plugins
+      .filter((plugin) => !carried.has(plugin.name))
+      .map((plugin) => ({ ...plugin, versions: plugin.versions.filter(isAddOnSource) }))
+      .filter((plugin) => plugin.versions.length > 0);
 
   function index(origin: string): MarketIndex {
+    const carried = carriedNow();
     return {
       format: 1,
       title: { en: 'Automagik' },
       ...(staticIndex.description ? { description: staticIndex.description } : {}),
       metadata: { categories, labels },
       plugins: [
-        ...[...carried.values()].map((pkg) =>
-          bundledPlugin(pkg, listed.get(pkg.name), bundled?.packedAt ?? 0, registryOf(origin)),
+        ...[...carried.values()].map(({ pkg, publishedAt }) =>
+          bundledPlugin(pkg, listed.get(pkg.name), publishedAt, registryOf(origin)),
         ),
-        ...thirdParty,
+        ...thirdPartyOf(carried),
       ],
     };
   }
 
   function packument(name: string, origin: string): Packument | null {
-    const pkg = carried.get(name);
-    if (!pkg || !bundled) return null;
+    const served = carriedNow().get(name);
+    if (!served) return null;
+    const { pkg } = served;
     const { file, integrity, shasum, size: _size, ...fields } = pkg;
-    const published = new Date(bundled.packedAt * 1000).toISOString();
+    const published = new Date(served.publishedAt * 1000).toISOString();
     return {
       _id: pkg.name,
       name: pkg.name,
@@ -269,9 +299,11 @@ export function createMarket(options: MarketOptions = {}): Market {
   // Read once: these routes are public and unauthenticated, and a release's tarballs never change.
   const read = new Map<string, Promise<Uint8Array<ArrayBuffer>>>();
   async function tarball(name: string, file: string): Promise<Uint8Array<ArrayBuffer> | null> {
-    const pkg = carried.get(name);
-    // Only the exact file the manifest lists: never a path built from the request.
-    if (!pkg || pkg.file !== file) return null;
+    const served = carriedNow().get(name);
+    // Only the exact file the manifest or the lane lists: never a path built from the request.
+    if (!served || served.pkg.file !== file) return null;
+    if (served.fromLane) return lane?.current()?.tarballs.get(file) ?? null;
+    const { pkg } = served;
     let bytes = read.get(pkg.file);
     if (!bytes) {
       bytes = readFile(join(dir, pkg.file)).then((buffer) => new Uint8Array(buffer));
@@ -283,6 +315,7 @@ export function createMarket(options: MarketOptions = {}): Market {
 
   function catalog(origin: string): Catalog {
     const labelTitle = (id: string) => text(labels[id]?.title) || id;
+    const carried = carriedNow();
     return {
       title: 'Automagik',
       indexUrl: `${base(origin)}/api/market/index.json`,

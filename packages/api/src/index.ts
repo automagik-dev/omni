@@ -928,7 +928,13 @@ async function main() {
   const loginDefaults = await resolveLoginDefaults(db);
 
   // Create app and get services
-  const { app, services, login, updater } = createApp(db, eventBus, globalChannelRegistry, undefined, loginDefaults);
+  const { app, services, login, updater, pluginLane } = createApp(
+    db,
+    eventBus,
+    globalChannelRegistry,
+    undefined,
+    loginDefaults,
+  );
   globalServicesRef = services;
 
   // G5 (ADR-0008): opt the instance monitor into the tenant fan-out now that the
@@ -978,6 +984,9 @@ async function main() {
 
   // Start HTTP server
   const server = startBunServer(app);
+
+  // Automagik's plugin lane: a look a minute from now, then hourly (OMNI_PLUGIN_LANE=off: none).
+  pluginLane?.start();
 
   // Print startup banner
   printStartupBanner({
