@@ -79,27 +79,37 @@ export async function readBoundedText(request: Request, maxBytes: number): Promi
   const declared = Number(request.headers.get('content-length') ?? '0');
   if (!Number.isFinite(declared) || declared > maxBytes) return null;
   const bytes = await readCapped(request.body, maxBytes);
-  return bytes === null ? null : new TextDecoder().decode(bytes);
+  // Buffer UTF-8 decoding of the whole body: a leading BOM stays U+FEFF, invalid bytes become U+FFFD.
+  return bytes === null ? null : Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('utf8');
 }
 
 /**
  * A stream's bytes in one ArrayBuffer-backed array, or null once they exceed `maxBytes`; reading
- * stops and the stream is cancelled at the cap. Uses a reader, not async iteration, so it compiles
- * under any consumer lib set (DOM included).
+ * stops and the stream is cancelled at the cap. The reader is released on every path (end, cap,
+ * stream error, cancel failure), as async iteration did. Uses a reader, not async iteration, so it
+ * compiles under any consumer lib set (DOM included).
  */
 export async function readCapped(stream: ByteStream | null, maxBytes: number): Promise<Uint8Array<ArrayBuffer> | null> {
   const reader = stream?.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
-  while (reader) {
-    const { done, value } = await reader.read();
-    if (done || !value) break;
-    total += value.byteLength;
-    if (total > maxBytes) {
-      await reader.cancel();
-      return null;
+  try {
+    while (reader) {
+      const { done, value } = await reader.read();
+      if (done || !value) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(value);
     }
-    chunks.push(value);
+  } finally {
+    try {
+      reader?.releaseLock();
+    } catch {
+      // Never let releasing the lock replace the result or the real error.
+    }
   }
   const bytes = new Uint8Array(total);
   let offset = 0;
@@ -111,4 +121,6 @@ export async function readCapped(stream: ByteStream | null, maxBytes: number): P
 }
 
 /** The part of a byte stream readCapped uses; the DOM, Node and Bun stream types all satisfy it. */
-type ByteStream = { getReader(): { read(): Promise<{ done: boolean; value?: Uint8Array }>; cancel(): Promise<void> } };
+type ByteStream = {
+  getReader(): { read(): Promise<{ done: boolean; value?: Uint8Array }>; cancel(): Promise<void>; releaseLock(): void };
+};

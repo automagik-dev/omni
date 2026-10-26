@@ -7,7 +7,7 @@
 import { beforeAll, describe, expect, test } from 'bun:test';
 import { type OidcSettings, createOidcClient } from '../src/oidc';
 import { createConnectCore, hashSecret } from '../src/sessions';
-import { TransactionStore } from '../src/transactions';
+import { TransactionStore, readBoundedText, readCapped } from '../src/transactions';
 import { FakeIssuer } from './fake-issuer';
 import { SESSION_DAYS } from './memory-store';
 import { SESSION, TX, type Wiring, cookie, finish, request, settings, signIn, wire } from './setup';
@@ -293,5 +293,113 @@ describe('transactions and limits', () => {
     expect((await finish(w, b)).status).toBe(503);
     release();
     expect((await pending).status).toBe(303);
+  });
+});
+
+describe('bounded body reads', () => {
+  const bytes = (...chunks: number[][]) => chunks.map((c) => new Uint8Array(c));
+  /** A pull stream that yields `chunks`, then closes, or errors with `fault` instead of closing. */
+  function source(chunks: Uint8Array[], fault?: Error) {
+    let next = 0;
+    let cancels = 0;
+    const stream = new ReadableStream<Uint8Array>(
+      {
+        pull(c) {
+          const chunk = chunks[next++];
+          if (chunk) c.enqueue(chunk);
+          else if (fault) c.error(fault);
+          else c.close();
+        },
+        cancel() {
+          cancels += 1;
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    return { stream, cancels: () => cancels };
+  }
+  const body = (stream: ReadableStream<Uint8Array>) =>
+    new Request('https://studio.test/auth/setup', { method: 'POST', body: stream });
+  const text = async (...chunks: number[][]) => {
+    const { stream } = source(bytes(...chunks));
+    return readBoundedText(body(stream), 64);
+  };
+  const codepoints = (s: string | null) => Array.from(s ?? '', (c) => c.codePointAt(0));
+
+  test('the reader is released after end of stream', async () => {
+    const { stream } = source(bytes([0x61, 0x62, 0x63]));
+    expect(await readCapped(stream, 3)).toEqual(new Uint8Array([0x61, 0x62, 0x63]));
+    expect(stream.locked).toBe(false);
+    const viaRequest = source(bytes([0x61, 0x62, 0x63]));
+    expect(await readBoundedText(body(viaRequest.stream), 3)).toBe('abc');
+    expect(viaRequest.stream.locked).toBe(false);
+  });
+
+  test('the reader is released after the cap cancels the stream', async () => {
+    const { stream, cancels } = source(bytes([0x61, 0x62, 0x63]));
+    expect(await readCapped(stream, 1)).toBeNull();
+    expect([stream.locked, cancels()]).toEqual([false, 1]);
+    const viaRequest = source(bytes([0x61, 0x62, 0x63]));
+    expect(await readBoundedText(body(viaRequest.stream), 1)).toBeNull();
+    expect([viaRequest.stream.locked, viaRequest.cancels()]).toEqual([false, 1]);
+  });
+
+  test('the reader is released after a stream error, which still rejects', async () => {
+    const fault = new Error('source fault');
+    const { stream } = source(bytes([0x61]), fault);
+    await expect(readCapped(stream, 8)).rejects.toBe(fault);
+    expect(stream.locked).toBe(false);
+    const viaRequest = source([], new Error('request fault'));
+    await expect(readBoundedText(body(viaRequest.stream), 8)).rejects.toThrow('request fault');
+    expect(viaRequest.stream.locked).toBe(false);
+  });
+
+  test('a cancel that rejects stays a rejection and the reader is still released', async () => {
+    const boom = new Error('cancel failure');
+    const stream = new ReadableStream<Uint8Array>(
+      {
+        pull(c) {
+          c.enqueue(new Uint8Array([0x61, 0x62, 0x63]));
+        },
+        cancel() {
+          throw boom;
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    await expect(readCapped(stream, 1)).rejects.toBe(boom);
+    expect(stream.locked).toBe(false);
+  });
+
+  test('a leading UTF-8 byte order mark is kept as U+FEFF', async () => {
+    expect(codepoints(await text([0xef, 0xbb, 0xbf, 0x61]))).toEqual([0xfeff, 0x61]);
+    expect(codepoints(await text([0xef, 0xbb, 0xbf]))).toEqual([0xfeff]);
+    expect(await text([0xef], [0xbb, 0xbf], [0x61])).toBe('\uFEFFa');
+    const fixed = new Request('https://studio.test/auth/setup', {
+      method: 'POST',
+      body: new Uint8Array([0xef, 0xbb, 0xbf, 0x61]),
+    });
+    expect(await readBoundedText(fixed, 4)).toBe('\uFEFFa');
+  });
+
+  test('a multi-byte character split across chunks decodes whole', async () => {
+    expect(await text([0x61, 0xc3], [0xa9, 0x62])).toBe('a\u00e9b');
+    expect(await text([0xe2], [0x82], [0xac])).toBe('\u20ac');
+    expect(await text([0xf0, 0x9f], [0x98, 0x80])).toBe('\u{1f600}');
+  });
+
+  test('invalid UTF-8 decodes to replacement characters exactly as Buffer does', async () => {
+    const cases = [
+      [0xff],
+      [0xc3],
+      [0x61, 0xe2, 0x82],
+      [0xe2, 0x28, 0xa1],
+      [0xed, 0xa0, 0x80],
+      [0xc0, 0xaf],
+      [0x80, 0x80],
+    ];
+    for (const c of cases) expect(await text(c)).toBe(Buffer.from(c).toString('utf8'));
+    expect(codepoints(await text([0xe2, 0x28, 0xa1]))).toEqual([0xfffd, 0x28, 0xfffd]);
+    expect(await text([0xf0, 0x9f], [0x98])).toBe('\ufffd');
   });
 });
