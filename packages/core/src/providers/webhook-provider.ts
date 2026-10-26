@@ -4,15 +4,23 @@
  * Supports two modes:
  * - round-trip: POST event → wait for response → return as AgentTriggerResult
  * - fire-and-forget: POST event → return null immediately (provider calls back via Omni API)
+ *
+ * WebhookAgentClient puts the same provider behind IAgentClient, for the agent
+ * runner (the `call_agent` automation action, #1262).
  */
 
 import { createLogger } from '../logger';
 import { buildOmniExecutionContext } from './execution-context';
 import {
+  type AgentHealthResult,
   type AgentTrigger,
   type AgentTriggerResult,
+  type IAgentClient,
   type IAgentProvider,
   ProviderError,
+  type ProviderRequest,
+  type ProviderResponse,
+  type StreamChunk,
   type WebhookPayload,
   type WebhookProviderConfig,
   type WebhookResponse,
@@ -22,6 +30,26 @@ const log = createLogger('provider:webhook');
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_RETRIES = 1;
+const REPLY_ENDPOINT = 'POST /api/v2/messages/send';
+
+/** The config an `agent_providers` row of schema `webhook` describes; `apiKey` already opened. */
+export function webhookProviderConfig(provider: {
+  baseUrl: string;
+  apiKey?: string | null;
+  defaultTimeout?: number | null;
+  schemaConfig?: unknown;
+}): WebhookProviderConfig {
+  const schemaConfig = (provider.schemaConfig ?? {}) as Record<string, unknown>;
+  return {
+    webhookUrl: provider.baseUrl,
+    apiKey: provider.apiKey ?? undefined,
+    mode: (schemaConfig.mode as 'round-trip' | 'fire-and-forget') ?? 'round-trip',
+    // #738 — aligned to the 600s provider default (was 30s) so webhook agents
+    // get the same budget as every other provider when no explicit timeout set.
+    timeoutMs: (provider.defaultTimeout ?? 600) * 1000,
+    retries: (schemaConfig.retries as number) ?? 1,
+  };
+}
 
 export class WebhookAgentProvider implements IAgentProvider {
   readonly schema = 'webhook' as const;
@@ -66,7 +94,7 @@ export class WebhookAgentProvider implements IAgentProvider {
       traceId: context.traceId,
       headers: context.headers,
       executionContext: buildOmniExecutionContext(context),
-      replyEndpoint: 'POST /api/v2/messages/send',
+      replyEndpoint: REPLY_ENDPOINT,
     };
 
     log.info('Sending webhook trigger', {
@@ -76,19 +104,8 @@ export class WebhookAgentProvider implements IAgentProvider {
       traceId: context.traceId,
     });
 
-    if (this.mode === 'fire-and-forget') {
-      // POST and don't wait for meaningful response
-      this.postWebhook(payload).catch((error) => {
-        log.error('Fire-and-forget webhook failed', {
-          error: String(error),
-          traceId: context.traceId,
-        });
-      });
-      return null;
-    }
-
-    // Round-trip: POST and wait for response
-    const response = await this.postWebhookWithRetry(payload);
+    const response = await this.deliver(payload);
+    if (this.mode === 'fire-and-forget') return null;
     const durationMs = Date.now() - startTime;
 
     if (!response) {
@@ -102,8 +119,7 @@ export class WebhookAgentProvider implements IAgentProvider {
       };
     }
 
-    // Parse response into parts
-    const parts = response.parts ?? (response.reply ? [response.reply] : []);
+    const parts = partsOf(response);
 
     return {
       parts,
@@ -114,6 +130,21 @@ export class WebhookAgentProvider implements IAgentProvider {
         ...(response.metadata ? {} : {}),
       },
     };
+  }
+
+  /**
+   * POSTs `payload`. Round-trip waits for the reply (retrying a 5xx);
+   * fire-and-forget returns null at once and the provider answers through Omni's API.
+   */
+  async deliver(payload: WebhookPayload): Promise<WebhookResponse | null> {
+    if (this.mode === 'round-trip') return this.postWebhookWithRetry(payload);
+    this.postWebhook(payload).catch((error) => {
+      log.error('Fire-and-forget webhook failed', {
+        error: String(error),
+        traceId: payload.traceId,
+      });
+    });
+    return null;
   }
 
   async checkHealth(): Promise<{ healthy: boolean; latencyMs: number; error?: string }> {
@@ -207,5 +238,60 @@ export class WebhookAgentProvider implements IAgentProvider {
     }
 
     throw lastError;
+  }
+}
+
+/** A reply's parts: pre-split, else the single reply, else none. */
+const partsOf = (response: WebhookResponse | null): string[] =>
+  response?.parts ?? (response?.reply ? [response.reply] : []);
+
+/**
+ * The payload a message trigger sends, made from an agent-runner request. The
+ * event type says an automation asked; a chatless run has no instance or chat,
+ * so those ids are empty.
+ */
+function payloadFor(request: ProviderRequest, runId: string): WebhookPayload {
+  const { platform } = request;
+  return {
+    event: { id: runId, type: 'automation.call_agent', timestamp: Date.now() },
+    instance: {
+      id: platform?.instanceId ?? '',
+      channelType: platform?.channel ?? '',
+      ...(platform?.instanceName ? { name: platform.instanceName } : {}),
+    },
+    chat: { id: request.chat?.id ?? '' },
+    sender: {
+      id: platform?.id ?? request.userId,
+      ...(request.sender?.displayName ? { name: request.sender.displayName } : {}),
+      ...(platform && request.userId !== platform.id ? { personId: request.userId } : {}),
+    },
+    content: { text: request.message },
+    traceId: runId,
+    replyEndpoint: REPLY_ENDPOINT,
+  };
+}
+
+/** A webhook provider behind IAgentClient (#1262): one POST per run, the reply as one chunk. */
+export class WebhookAgentClient implements IAgentClient {
+  constructor(private provider: WebhookAgentProvider) {}
+
+  async run(request: ProviderRequest): Promise<ProviderResponse> {
+    const runId = crypto.randomUUID();
+    const response = await this.provider.deliver(payloadFor(request, runId));
+    return {
+      content: partsOf(response).join('\n\n'),
+      runId,
+      sessionId: request.sessionId ?? runId,
+      status: 'completed',
+    };
+  }
+
+  async *stream(request: ProviderRequest): AsyncGenerator<StreamChunk> {
+    const { content, runId, sessionId } = await this.run(request);
+    yield { event: 'RunCompleted', content, isComplete: true, runId, sessionId };
+  }
+
+  checkHealth(): Promise<AgentHealthResult> {
+    return this.provider.checkHealth();
   }
 }

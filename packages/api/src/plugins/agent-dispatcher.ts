@@ -69,6 +69,7 @@ import {
   getHookRegistry,
   getJourneyTracker,
   runWithEventCausality,
+  webhookProviderConfig,
 } from '@omni/core';
 import type { AgentProvider, Database } from '@omni/db';
 import { agentSessions, agents, handoffLogs, instances } from '@omni/db';
@@ -4655,17 +4656,7 @@ function createClaudeCodeProviderInstance(
 
 /** Create a webhook-based agent provider */
 function createWebhookProvider(provider: AgentProvider): IAgentProvider {
-  const schemaConfig = (provider.schemaConfig ?? {}) as Record<string, unknown>;
-
-  return new WebhookAgentProvider(provider.id, provider.name, {
-    webhookUrl: provider.baseUrl,
-    apiKey: provider.apiKey ?? undefined,
-    mode: (schemaConfig.mode as 'round-trip' | 'fire-and-forget') ?? 'round-trip',
-    // #738 — aligned to the 600s provider default (was 30s) so webhook agents
-    // get the same budget as every other provider when no explicit timeout set.
-    timeoutMs: (provider.defaultTimeout ?? 600) * 1000,
-    retries: (schemaConfig.retries as number) ?? 1,
-  });
+  return new WebhookAgentProvider(provider.id, provider.name, webhookProviderConfig(provider));
 }
 
 /** Create an AG-UI agent provider */
