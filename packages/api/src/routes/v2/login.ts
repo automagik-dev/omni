@@ -27,7 +27,7 @@ import { PUBLIC_AUTH_PATHS } from '../../login/auth';
 import { DEVICE_CLIENTS, type DeviceClientId, claimTokenOf, isDeviceClient } from '../../login/config';
 import { GrantSchema, consumeConnectGrant, isLiveGrant } from '../../login/connect';
 import { deviceApprovedMessage } from '../../login/messages';
-import { claimForOperator } from '../../login/operator';
+import { claimWithToken } from '../../login/operator';
 import { pendingDeviceCode } from '../../login/operator';
 import { publicOrigin } from '../../login/origin';
 import { appPage, claimPage, devicePage, landingPage } from '../../login/pages';
@@ -199,12 +199,14 @@ export function loginApiRoutes(login: Login | null) {
   // ---- Claiming an unclaimed Omni (claim token from the boot log) ----
 
   // The token alone: whoever has the boot log runs this server. WhatsApp can be linked after.
+  // The answer carries a one-time link that opens Automagik connected to this Omni, as
+  // `omni connect` prints, so the claimer's app needs no second sign-in.
   app.post('/claim/token', loginRateLimitMiddleware, async (c) => {
     if (!(await claimable(c.req.header('x-omni-claim-token')))) return c.json(notFound, 404);
-    const { owner, claimed } = await claimForOperator(active, { via: 'claim-token' });
-    if (!claimed) return c.json(notFound, 404);
-    log.info('Omni claimed with the claim token', { userId: owner.id });
-    return c.json({ data: { claimed: true } }, 201);
+    const link = await claimWithToken(active, originOf(active, c));
+    if (!link) return c.json(notFound, 404);
+    log.info('Omni claimed with the claim token');
+    return c.json({ data: { claimed: true, ...link, expiresAt: link.expiresAt.toISOString() } }, 201);
   });
 
   app.get('/claim/accounts', loginRateLimitMiddleware, async (c) => {

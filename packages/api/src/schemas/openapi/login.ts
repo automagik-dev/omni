@@ -144,10 +144,20 @@ export function registerLoginSchemas(registry: OpenAPIRegistry): void {
     summary: 'Claim the Omni with the claim token alone (public, claim token)',
     description:
       'Whoever has the claim token from the boot log runs this server, so the token alone makes them the owner, ' +
-      'with no WhatsApp. They can link one after, with the claim steps below, to approve devices from their phone.',
+      'with no WhatsApp. They can link one after, with the claim steps below, to approve devices from their phone. ' +
+      'The answer carries a one-time connect link (as `omni connect` prints): `appLink` opens Automagik connected ' +
+      'to this Omni with no second sign-in; `url` is the same as a page. It works once, until `expiresAt`.',
     request: { headers: claimToken },
     responses: {
-      201: ok(z.object({ claimed: z.literal(true) }), 'Claimed'),
+      201: ok(
+        z.object({
+          claimed: z.literal(true),
+          url: z.string().url(),
+          appLink: z.string(),
+          expiresAt: z.string().datetime(),
+        }),
+        'Claimed',
+      ),
       404: error('Claimed already, wrong token, or login off'),
     },
   });
