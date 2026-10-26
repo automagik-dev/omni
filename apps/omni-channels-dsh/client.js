@@ -10799,6 +10799,32 @@ function updateBar(status, dismissed = null) {
       return null;
   }
 }
+function watchStatus(look, { every = 10 * 6e4, doc = globalThis.document, timers = globalThis } = {}) {
+  look();
+  const interval = timers.setInterval(look, every);
+  const onVisible = () => {
+    if (doc?.visibilityState === "visible") look();
+  };
+  doc?.addEventListener?.("visibilitychange", onVisible);
+  return () => {
+    timers.clearInterval(interval);
+    doc?.removeEventListener?.("visibilitychange", onVisible);
+  };
+}
+var stillOffers = (status, latest) => {
+  const bar = updateBar(status);
+  return bar?.kind === "available" && bar.latest === latest;
+};
+async function askUpdate(call2, latest) {
+  const now = await call2("omni-update-status", {});
+  if (!stillOffers(now, latest)) return { status: now };
+  try {
+    return { reply: await call2("omni-update-request", { version: latest }) };
+  } catch (error) {
+    const after = await call2("omni-update-status", {}).catch(() => null);
+    throw Object.assign(error, { status: after, stale: after !== null && !stillOffers(after, latest) });
+  }
+}
 var storage = () => {
   try {
     return globalThis.localStorage ?? null;
@@ -10880,12 +10906,10 @@ function UpdateBar({ origin }) {
   (0, import_react2.useEffect)(() => () => {
     alive.current = false;
   }, []);
-  (0, import_react2.useEffect)(() => {
-    call("omni-update-status", {}).then((reply) => {
-      if (alive.current) setStatus(reply);
-    }, () => {
-    });
-  }, [origin]);
+  (0, import_react2.useEffect)(() => watchStatus(() => call("omni-update-status", {}).then((reply) => {
+    if (alive.current) setStatus(reply);
+  }, () => {
+  })), [origin]);
   const bar = updateBar(status, dismissed);
   if (!bar) return null;
   const close = () => {
@@ -10895,11 +10919,19 @@ function UpdateBar({ origin }) {
   const ask = async () => {
     setBusy(true);
     setProblem(null);
+    const redraw = (next) => {
+      setStatus(next);
+      setSure(false);
+    };
     try {
-      const reply = await call("omni-update-request", { version: bar.latest });
-      if (alive.current) setAsked(reply?.state === "updating" ? "updating" : "awaiting-confirmation");
+      const result = await askUpdate(call, bar.latest);
+      if (!alive.current) return;
+      if (result.status) redraw(result.status);
+      else setAsked(result.reply?.state === "updating" ? "updating" : "awaiting-confirmation");
     } catch (error) {
-      if (alive.current) setProblem(error.message);
+      if (!alive.current) return;
+      if (error.stale) redraw(error.status);
+      else setProblem(error.message);
     } finally {
       if (alive.current) setBusy(false);
     }
