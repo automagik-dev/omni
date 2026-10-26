@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { DISCORD_PERMISSIONS, discordInviteUrl, install } from '../src/host/omni-channel-actions.js'
 import { install as installHooks } from '@automagik/bots-dsh/src/host/extend.js'
 import { ADD, ORDER, copiedTelegramToken, isTelegramToken, offered, telegramChat } from '../src/client/channel-add.js'
-import { dismiss, dismissedFor, updateBar } from '../src/client/update-bar.js'
+import { askUpdate, dismiss, dismissedFor, updateBar, watchStatus } from '../src/client/update-bar.js'
 import { CHANNEL_TYPES } from '../src/client/omni-store.js'
 
 const KEY = 'omni_sk_linked_secret'
@@ -182,6 +182,54 @@ test('the update bar: one action when this Omni can update, a note when its admi
   assert.deepEqual(updateBar({ state: 'updating', version: '2.261023.25' }), { kind: 'updating', version: '2.261023.25', action: 'none' })
   for (const state of ['current', 'unknown', 'unreachable', 'terminal', 'none']) assert.equal(updateBar({ state, latest: '2.261023.25' }), null, state)
   assert.equal(updateBar(null), null)
+})
+
+// The bar loaded while the Omni ran 2.261025.22; it was updated to 2.261026.11 meanwhile, and
+// asking then got ALREADY_CURRENT under a bar still offering it.
+test('the update bar looks again before it asks, and lets go when the Omni already runs it', async () => {
+  const available = { state: 'available', latest: '2.261026.11', current: '2.261025.22' }
+  const current = { state: 'current', latest: '2.261026.11', current: '2.261026.11' }
+  const calls = []
+  const answering = (looks, request) => async (endpoint, body) => {
+    calls.push(endpoint)
+    if (endpoint === 'omni-update-status') return looks.shift()
+    return request(body)
+  }
+  // Updated meanwhile: the fresh look says so, and nothing is asked.
+  assert.deepEqual(await askUpdate(answering([current], () => assert.fail('asked')), '2.261026.11'), { status: current })
+  assert.deepEqual(calls, ['omni-update-status'])
+  // Still out: it asks.
+  calls.length = 0
+  assert.deepEqual(await askUpdate(answering([available], (body) => ({ state: 'awaiting-confirmation', version: body.version })), '2.261026.11'), { reply: { state: 'awaiting-confirmation', version: '2.261026.11' } })
+  assert.deepEqual(calls, ['omni-update-status', 'omni-update-request'])
+  // Updated between the look and the ask: the refusal comes with the look after it, which no longer offers it.
+  const refusal = await askUpdate(answering([available, current], () => { throw new Error('This Omni is up to date.') }), '2.261026.11').catch(error => error)
+  assert.equal(refusal.message, 'This Omni is up to date.')
+  assert.deepEqual([refusal.stale, refusal.status], [true, current])
+  // A refusal that leaves it on offer (WhatsApp unreachable, say) is shown, not dropped.
+  const kept = await askUpdate(answering([available, available], () => { throw new Error('Omni could not send the confirmation to WhatsApp. Try again.') }), '2.261026.11').catch(error => error)
+  assert.equal(kept.stale, false)
+})
+
+test('the update bar looks now, when the window comes back, and every ten minutes, until it goes', () => {
+  let looks = 0
+  const listeners = new Map()
+  const doc = { visibilityState: 'hidden', addEventListener: (type, fn) => listeners.set(type, fn), removeEventListener: type => listeners.delete(type) }
+  const intervals = []
+  const timers = { setInterval: (fn, ms) => intervals.push({ fn, ms }) - 1, clearInterval: index => { intervals[index] = null } }
+  const stop = watchStatus(() => { looks += 1 }, { doc, timers })
+  assert.equal(looks, 1)
+  assert.equal(intervals[0].ms, 10 * 60_000)
+  intervals[0].fn()
+  assert.equal(looks, 2)
+  listeners.get('visibilitychange')()
+  assert.equal(looks, 2, 'hidden: no look')
+  doc.visibilityState = 'visible'
+  listeners.get('visibilitychange')()
+  assert.equal(looks, 3)
+  stop()
+  assert.equal(intervals[0], null)
+  assert.equal(listeners.size, 0)
 })
 
 test('a dismissed version stays hidden until the next one, per Omni', () => {

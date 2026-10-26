@@ -1,6 +1,6 @@
 import { createElement as h, Fragment, useEffect, useRef, useState } from 'react'
 import { call, t } from './core.js'
-import { dismiss, dismissedFor, updateBar } from './update-bar.js'
+import { askUpdate, dismiss, dismissedFor, updateBar, watchStatus } from './update-bar.js'
 
 // Updating an Omni (src/host/omni-update.js): the app asks, the Omni asks its owner on
 // WhatsApp, and the owner's reply there runs it. A sandboxed Omni on this computer takes the
@@ -61,21 +61,26 @@ export function UpdateBar({ origin }) {
   const [problem, setProblem] = useState(null)
   const alive = useRef(true)
   useEffect(() => () => { alive.current = false }, [])
-  useEffect(() => {
-    // The bar stays out of the way when the check itself fails.
-    call('omni-update-status', {}).then((reply) => { if (alive.current) setStatus(reply) }, () => {})
-  }, [origin])
+  // Looked at again while it is on screen: the Omni may move on meanwhile. The bar stays out of
+  // the way when a look itself fails.
+  useEffect(() => watchStatus(() => call('omni-update-status', {}).then((reply) => { if (alive.current) setStatus(reply) }, () => {})), [origin])
   const bar = updateBar(status, dismissed)
   if (!bar) return null
   const close = () => { dismiss(origin, bar.latest); setDismissed(bar.latest) }
   const ask = async () => {
     setBusy(true)
     setProblem(null)
+    // What a fresh look says replaces what the bar offered when it no longer offers it.
+    const redraw = (next) => { setStatus(next); setSure(false) }
     try {
-      const reply = await call('omni-update-request', { version: bar.latest })
-      if (alive.current) setAsked(reply?.state === 'updating' ? 'updating' : 'awaiting-confirmation')
+      const result = await askUpdate(call, bar.latest)
+      if (!alive.current) return
+      if (result.status) redraw(result.status)
+      else setAsked(result.reply?.state === 'updating' ? 'updating' : 'awaiting-confirmation')
     } catch (error) {
-      if (alive.current) setProblem(error.message)
+      if (!alive.current) return
+      if (error.stale) redraw(error.status)
+      else setProblem(error.message)
     } finally {
       if (alive.current) setBusy(false)
     }

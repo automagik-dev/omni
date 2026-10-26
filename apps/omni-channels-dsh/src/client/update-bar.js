@@ -27,6 +27,41 @@ export function updateBar(status, dismissed = null) {
   }
 }
 
+// A bar can sit on screen while its Omni moves on (updated elsewhere, or by itself), so what
+// it offers is looked at again: now, whenever the window comes back, and every few minutes.
+// Returns the stop.
+export function watchStatus(look, { every = 10 * 60_000, doc = globalThis.document, timers = globalThis } = {}) {
+  look()
+  const interval = timers.setInterval(look, every)
+  const onVisible = () => { if (doc?.visibilityState === 'visible') look() }
+  doc?.addEventListener?.('visibilitychange', onVisible)
+  return () => {
+    timers.clearInterval(interval)
+    doc?.removeEventListener?.('visibilitychange', onVisible)
+  }
+}
+
+// Whether a look still offers updating to `latest`.
+const stillOffers = (status, latest) => {
+  const bar = updateBar(status)
+  return bar?.kind === 'available' && bar.latest === latest
+}
+
+// Asking for the update to `latest`, after a fresh look: { status } when that look no longer
+// offers it (the bar redraws from it, and nothing is asked), else { reply }. A refusal throws
+// with the look taken after it as `error.status`, so one that says the Omni already runs it
+// (ALREADY_CURRENT) lets the bar go instead of offering it again.
+export async function askUpdate(call, latest) {
+  const now = await call('omni-update-status', {})
+  if (!stillOffers(now, latest)) return { status: now }
+  try {
+    return { reply: await call('omni-update-request', { version: latest }) }
+  } catch (error) {
+    const after = await call('omni-update-status', {}).catch(() => null)
+    throw Object.assign(error, { status: after, stale: after !== null && !stillOffers(after, latest) })
+  }
+}
+
 const storage = () => {
   try {
     return globalThis.localStorage ?? null
