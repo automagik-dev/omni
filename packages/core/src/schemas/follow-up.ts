@@ -42,6 +42,21 @@ export const DisarmReasonSchema = z.enum([
 export type DisarmReason = z.infer<typeof DisarmReasonSchema>;
 
 /**
+ * Optional random spread on every interval of a schedule (#1261), so chats armed
+ * together don't all fire on the same tick: on unofficial WhatsApp channels,
+ * outbound at fixed intervals and in bursts raises the risk of a ban. Each
+ * interval moves by a uniform random offset within `±minutes`, or within
+ * `±ratio` of the interval, and never drops below the smaller of the interval
+ * and one minute. Absent: the schedule is exact, as before.
+ */
+export const FollowUpJitterSchema = z.union([
+  z.object({ minutes: z.number().positive().finite() }).strict(),
+  z.object({ ratio: z.number().gt(0).max(1) }).strict(),
+]);
+
+export type FollowUpJitter = z.infer<typeof FollowUpJitterSchema>;
+
+/**
  * Fixed-list schedule: cycles through `intervalsMinutes` in order.
  * The first follow-up fires `intervalsMinutes[0]` after the agent reply;
  * the second fires `intervalsMinutes[1]` after the first, etc.
@@ -53,6 +68,7 @@ export const FixedScheduleSchema = z.object({
   intervalsMinutes: z
     .array(z.number().positive().finite())
     .min(1, 'intervalsMinutes must contain at least one interval'),
+  jitter: FollowUpJitterSchema.optional(),
 });
 
 export type FixedSchedule = z.infer<typeof FixedScheduleSchema>;
@@ -66,6 +82,7 @@ export const ExponentialScheduleSchema = z.object({
   initialMinutes: z.number().positive().finite(),
   factor: z.number().gt(1, 'factor must be greater than 1').finite(),
   maxMinutes: z.number().positive().finite(),
+  jitter: FollowUpJitterSchema.optional(),
 });
 
 export type ExponentialSchedule = z.infer<typeof ExponentialScheduleSchema>;

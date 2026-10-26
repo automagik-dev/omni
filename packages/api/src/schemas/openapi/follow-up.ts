@@ -12,6 +12,14 @@ import type { OpenAPIRegistry } from '@asteasolutions/zod-to-openapi';
 import { z } from '../../lib/zod-openapi';
 import { ErrorSchema, SuccessSchema } from './common';
 
+const JitterSchema = z
+  .union([z.object({ minutes: z.number().positive() }).strict(), z.object({ ratio: z.number().gt(0).max(1) }).strict()])
+  .openapi({
+    description:
+      'Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the ' +
+      'interval, never below the smaller of the interval and one minute. Absent: exact intervals.',
+  });
+
 const FixedScheduleSchema = z
   .object({
     kind: z.literal('fixed'),
@@ -19,6 +27,7 @@ const FixedScheduleSchema = z
       .array(z.number().positive())
       .min(1)
       .openapi({ description: 'Minutes between successive follow-ups, in order.' }),
+    jitter: JitterSchema.optional(),
   })
   .openapi({ description: 'Fixed-list schedule: each follow-up fires after the corresponding interval.' });
 
@@ -28,6 +37,7 @@ const ExponentialScheduleSchema = z
     initialMinutes: z.number().positive().openapi({ description: 'First interval (minutes).' }),
     factor: z.number().gt(1).openapi({ description: 'Multiplier applied each iteration.' }),
     maxMinutes: z.number().positive().openapi({ description: 'Upper bound on any single interval.' }),
+    jitter: JitterSchema.optional(),
   })
   .openapi({ description: 'Exponential schedule with a per-interval cap.' });
 
