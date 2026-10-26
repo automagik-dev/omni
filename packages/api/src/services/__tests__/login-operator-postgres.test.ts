@@ -276,8 +276,20 @@ postgresDescribe('pairing with nothing configured (real PostgreSQL)', () => {
     expect((await call('POST', '/api/v2/login/claim/token', undefined, { 'x-omni-claim-token': 'nope' })).status).toBe(
       404,
     );
-    expect((await call('POST', '/api/v2/login/claim/token', undefined, token)).status).toBe(201);
+    const claimed = await call('POST', '/api/v2/login/claim/token', undefined, token);
+    expect(claimed.status).toBe(201);
     expect((await ownerOf(login))?.phone).toBeNull();
+    // It hands back the link `omni connect` prints: Automagik connects with it, once, with no other sign-in.
+    const grant = new URL(String(claimed.data.url)).searchParams.get('grant') ?? '';
+    expect(String(claimed.data.url).startsWith(`${ORIGIN}/api/login/app?grant=`)).toBe(true);
+    expect(claimed.data.appLink).toBe(`omni://connect?url=${encodeURIComponent(ORIGIN)}&grant=${grant}`);
+    expect(Date.parse(String(claimed.data.expiresAt))).toBeGreaterThan(Date.now());
+    const connect = { grant, clientId: 'omni-dsh', deviceName: 'first laptop' };
+    expect((await call('POST', '/api/v2/login/connect', connect)).status).toBe(200);
+    expect((await call('POST', '/api/v2/login/connect', connect)).status).toBe(410);
+    expect(events.filter((event) => event.type === 'access.connect_link_issued').at(-1)?.payload).toMatchObject({
+      via: 'operator',
+    });
     expect((await call('POST', '/api/v2/login/claim/token', undefined, token)).status).toBe(404);
     expect((await call('POST', '/api/v2/owner/claim')).data).toEqual({ claimed: false, whatsapp: false });
   });

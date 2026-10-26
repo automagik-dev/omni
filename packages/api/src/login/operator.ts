@@ -135,18 +135,35 @@ export async function connectLinkForOperator(
     };
   }
   const { owner, claimed } = await claimForOperator(login, { via: 'operator', apiKeyId });
-  const { grant, expiresAt } = await mintConnectGrant(login, { userId: owner.id });
+  return { ok: true, ...(await operatorLink(login, owner.id, origin)), claimed };
+}
+
+/**
+ * Claims an unclaimed Omni with the claim token, and hands the claimer the link that opens
+ * Automagik connected to it (the claim page's last step), so the app needs no second sign-in:
+ * the token already proved they run this server, as an admin key does for `omni connect`.
+ * Null when someone owns the Omni already.
+ */
+export async function claimWithToken(
+  login: Login,
+  origin: string,
+): Promise<{ url: string; appLink: string; expiresAt: Date } | null> {
+  const { owner, claimed } = await claimForOperator(login, { via: 'claim-token' });
+  return claimed ? operatorLink(login, owner.id, origin) : null;
+}
+
+/** A one-time connect link for the owner, asked for by the operator (an admin key or the claim token). */
+async function operatorLink(login: Login, userId: string, origin: string) {
+  const { grant, expiresAt } = await mintConnectGrant(login, { userId });
   await login.eventBus?.publish('access.connect_link_issued', {
-    userId: owner.id,
+    userId,
     expiresAt: expiresAt.toISOString(),
     via: 'operator',
   });
   const base = login.config.publicUrl ?? origin;
   return {
-    ok: true,
     url: `${base}/api/login/app?grant=${grant}`,
     appLink: `omni://connect?url=${encodeURIComponent(base)}&grant=${grant}`,
     expiresAt,
-    claimed,
   };
 }

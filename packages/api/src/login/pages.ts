@@ -168,6 +168,7 @@ export function claimPage(options: PageOptions = {}): string {
 <section id="link" hidden><h1>Link your WhatsApp</h1><p>On your phone: WhatsApp → Settings → Linked devices → Link a device, and scan this.</p><div class="qr" id="qr"></div></section>
 <section id="code" hidden><h1>Check your WhatsApp</h1><p>I sent a 6-digit code to <strong id="sentTo"></strong>, in your chat with yourself.</p><input id="otp" inputmode="numeric" autocomplete="one-time-code" maxlength="6" aria-label="Code"><button class="primary" id="verify">Claim this Omni</button></section>
 <section id="done" hidden><h1>This Omni is yours</h1><p id="doneLede">Make signing in a touch: use this device's fingerprint or face instead of a code.</p><button class="primary" id="passkey">Use my fingerprint or face</button>
+<div id="openHere" hidden style="margin-top:18px"><a class="btn primary" id="openApp">Open in Automagik</a><p>On a computer with Automagik, this connects it to this Omni with no other sign-in. It works once, for 10 minutes.</p></div>
 <p style="margin-top:18px">That's all on this page. Next, open Automagik on your computer and connect it to <strong id="host"></strong>: open this Omni's <a id="appPage" href="app">app page</a> there and tap <em>Open in Automagik</em>.</p><code class="cmd">npx @automagik/omni desktop</code></section>`,
     `
 const token = new URLSearchParams(location.search).get('token') || '';
@@ -180,7 +181,10 @@ async function sendCode(id) {
   speak('Check your chat with yourself. Six digits, from me.');
 }
 let claimedByToken = false;
+// The one-time link the claim hands back: Automagik, connected to this Omni, with no other sign-in.
+let claimLink = null;
 function finish(viaPhone) {
+  if (claimLink) { $('openApp').href = claimLink; $('openHere').hidden = false; }
   say(''); show('done'); rail(1); glitch();
   speak("I'm yours! Now open me on your computer and give me a brain.");
   if (!viaPhone) $('doneLede').textContent = 'Approve new devices with omni approve on the server, or link WhatsApp later from this same link to approve them from your phone.';
@@ -215,7 +219,7 @@ async function start() {
   }
 }
 $('claimNow').onclick = async () => {
-  try { await claim('POST', '/token'); claimedByToken = true; glitch(); speak("I'm yours. Want approvals on your phone too?"); await pickPhone(); $('pickTitle').textContent = 'This Omni is yours. Approve from your phone too?'; }
+  try { claimLink = (await claim('POST', '/token')).appLink || null; claimedByToken = true; glitch(); speak("I'm yours. Want approvals on your phone too?"); await pickPhone(); $('pickTitle').textContent = 'This Omni is yours. Approve from your phone too?'; }
   catch (e) { say(e.message, true); }
 };
 $('withPhone').onclick = () => show('pick');
