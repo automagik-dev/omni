@@ -6,46 +6,51 @@
  * design. A webhook row now gets a `WebhookAgentClient`, configured the way the
  * dispatcher configures its `WebhookAgentProvider`: the same payload, the
  * reply's parts back as the run's text, and no key required.
+ *
+ * The webhook is this test's own `fetch`, installed per test and put back
+ * after: other files in the process replace `globalThis.fetch` too.
  */
 
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import type { WebhookPayload } from '@omni/core';
 import type { Database, Instance } from '@omni/db';
 import { AgentRunnerService } from '../agent-runner';
 
+const WEBHOOK_URL = 'https://hook.example/agent';
+
 interface Received {
+  url: string;
   payload: WebhookPayload;
   authorization: string | null;
 }
 
 const received: Received[] = [];
-let server: ReturnType<typeof Bun.serve>;
+let before: typeof fetch;
 
-beforeAll(() => {
-  server = Bun.serve({
-    hostname: '127.0.0.1',
-    port: 0,
-    async fetch(request) {
-      received.push({
-        payload: (await request.json()) as WebhookPayload,
-        authorization: request.headers.get('authorization'),
-      });
-      return Response.json({ parts: ['Still there?', 'Your order is ready.'] });
-    },
-  });
+beforeEach(() => {
+  received.length = 0;
+  before = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    received.push({
+      url: String(input),
+      payload: JSON.parse(String(init?.body)) as WebhookPayload,
+      authorization: new Headers(init?.headers).get('authorization'),
+    });
+    return Response.json({ parts: ['Still there?', 'Your order is ready.'] });
+  }) as typeof fetch;
 });
 
-afterAll(() => {
-  server.stop(true);
+afterEach(() => {
+  globalThis.fetch = before;
 });
 
-/** A one-row `agent_providers` stand-in: a webhook provider at the test server. */
+/** A one-row `agent_providers` stand-in: a webhook provider at WEBHOOK_URL. */
 function webhookDb(apiKey: string | null): Database {
   const row = {
     id: 'provider-hook',
     name: 'hook',
     schema: 'webhook',
-    baseUrl: `http://127.0.0.1:${server.port}/agent`,
+    baseUrl: WEBHOOK_URL,
     apiKey,
     defaultTimeout: 30,
     isActive: true,
@@ -61,7 +66,6 @@ function webhookDb(apiKey: string | null): Database {
 
 describe('agent-runner — webhook providers (#1262)', () => {
   test('a chatless call_agent posts the webhook payload and returns its reply', async () => {
-    received.length = 0;
     const service = new AgentRunnerService(webhookDb(null));
     const result = await service.runChatless({
       agentProviderId: 'provider-hook',
@@ -73,7 +77,8 @@ describe('agent-runner — webhook providers (#1262)', () => {
 
     expect(result.parts).toEqual(['Still there?\n\nYour order is ready.']);
     expect(received).toHaveLength(1);
-    const { payload, authorization } = received[0] as Received;
+    const { url, payload, authorization } = received[0] as Received;
+    expect(url).toBe(WEBHOOK_URL);
     expect(authorization).toBeNull();
     expect(payload.event.type).toBe('automation.call_agent');
     expect(payload.content.text).toBe('test 1');
@@ -82,7 +87,6 @@ describe('agent-runner — webhook providers (#1262)', () => {
   });
 
   test("a chat's call_agent carries the instance, chat and sender, and the provider's key", async () => {
-    received.length = 0;
     const service = new AgentRunnerService(webhookDb('hook-secret'));
     const instance = {
       id: 'inst-1',
