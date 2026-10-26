@@ -125,16 +125,16 @@ postgresDescribe('human login (real PostgreSQL)', () => {
       metadata: { correlationId: 'c', instanceId: OWNER.instanceId, channelType: 'whatsapp-baileys' },
     }) as TypedOmniEvent<'message.received'>;
 
-  async function startDevice() {
-    const code = await call('POST', '/api/auth/device/code', { client_id: 'omni-desktop' }, { origin: '' });
+  async function startDevice(clientId = 'omni-desktop') {
+    const code = await call('POST', '/api/auth/device/code', { client_id: clientId }, { origin: '' });
     expect(code.status).toBe(200);
     return code.json as unknown as { device_code: string; user_code: string; verification_uri_complete: string };
   }
-  const token = (deviceCode: string) =>
+  const token = (deviceCode: string, clientId = 'omni-desktop') =>
     call(
       'POST',
       '/api/auth/device/token',
-      { grant_type: DEVICE_GRANT, device_code: deviceCode, client_id: 'omni-desktop' },
+      { grant_type: DEVICE_GRANT, device_code: deviceCode, client_id: clientId },
       { origin: '' },
     );
 
@@ -275,6 +275,75 @@ postgresDescribe('human login (real PostgreSQL)', () => {
 
     // The device token works once.
     expect((await call('POST', '/api/v2/login/device-key', { deviceName: 'Again' }, bearer)).status).toBe(401);
+  });
+
+  test('Unfold gets its scopes under the ceiling, plus an agent key, in the same one-time exchange', async () => {
+    const device = await startDevice('unfold');
+    const approved = await handleDeviceLoginMessage(login, ownerSelfChat(`Omni ${device.user_code}`));
+    expect(approved).toMatchObject({ clientId: 'unfold' });
+    expect(sent.at(-1)?.text).toContain('Unfold is now connected to your Omni.');
+
+    await new Promise((done) => setTimeout(done, 2100));
+    const granted = await token(device.device_code, 'unfold');
+    expect(granted.status).toBe(200);
+    const bearer = { authorization: `Bearer ${String(granted.json.access_token)}`, cookie: '' };
+
+    const key = await call('POST', '/api/v2/login/device-key', { deviceName: 'Test Mac' }, bearer);
+    expect(key.status).toBe(200);
+    const minted = key.data as {
+      keyId: string;
+      scopes: string[];
+      companions: { name: string; apiKey: string; keyId: string; scopes: string[] }[];
+    };
+    // This suite's ceiling is instances:read,chats:read: Unfold's instances:* narrows to it.
+    expect(minted.scopes).toEqual(['instances:read', 'chats:read']);
+    expect(minted.companions).toHaveLength(1);
+    const agent = minted.companions[0];
+    expect(agent?.name).toBe('agent');
+    expect(agent?.apiKey).toMatch(/^omni_sk_/);
+    expect(agent?.keyId).not.toBe(minted.keyId);
+    expect(agent?.scopes).toEqual(['instances:read']);
+
+    const [row] = await db
+      .select()
+      .from(apiKeys)
+      .where(eq(apiKeys.id, agent?.keyId ?? ''));
+    expect(row?.scopes).toEqual(['instances:read']);
+    expect(row?.name).toBe('device: Test Mac (agent)');
+    expect(row?.description).toContain(minted.keyId);
+
+    // Spent: no second pair.
+    expect((await call('POST', '/api/v2/login/device-key', { deviceName: 'Again' }, bearer)).status).toBe(401);
+  });
+
+  test('a ceiling that leaves Unfold nothing is refused before the token is spent', async () => {
+    const device = await startDevice('unfold');
+    await handleDeviceLoginMessage(login, ownerSelfChat(`Omni ${device.user_code}`));
+    await new Promise((done) => setTimeout(done, 2100));
+    const granted = await token(device.device_code, 'unfold');
+    const bearer = { authorization: `Bearer ${String(granted.json.access_token)}`, cookie: '' };
+    const ceiling = login.config.deviceKeyScopes;
+    login.config.deviceKeyScopes = ['tts:synthesize'];
+    try {
+      const refused = await call('POST', '/api/v2/login/device-key', { deviceName: 'Mac' }, bearer);
+      expect(refused.status).toBe(403);
+      expect((refused.json.error as Json)?.code).toBe('NO_DEVICE_SCOPES');
+    } finally {
+      login.config.deviceKeyScopes = ceiling;
+    }
+    // The same token still works once the ceiling allows it.
+    expect((await call('POST', '/api/v2/login/device-key', { deviceName: 'Mac' }, bearer)).status).toBe(200);
+  });
+
+  test('an older client keeps its single key and gets no companions', async () => {
+    const device = await startDevice('omni-dsh');
+    await handleDeviceLoginMessage(login, ownerSelfChat(`Omni ${device.user_code}`));
+    await new Promise((done) => setTimeout(done, 2100));
+    const granted = await token(device.device_code, 'omni-dsh');
+    const bearer = { authorization: `Bearer ${String(granted.json.access_token)}`, cookie: '' };
+    const key = await call('POST', '/api/v2/login/device-key', { deviceName: 'DSH' }, bearer);
+    expect(key.status).toBe(200);
+    expect(key.data).toMatchObject({ scopes: ['instances:read', 'chats:read'], companions: [] });
   });
 
   /** The owner's "connect", or the same message changed by `change` (another chat, an old one...). */

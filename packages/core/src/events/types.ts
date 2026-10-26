@@ -581,10 +581,12 @@ export interface AccessDeviceCodeApprovedPayload {
 /** A device got its Omni key after its owner approved it. Never carries the key. */
 export interface AccessDeviceAuthorizedPayload {
   userId: string;
-  /** The device-flow client: omni-desktop, omni-dsh or omni-cli. */
+  /** The device-flow client: omni-desktop, omni-dsh, omni-cli or unfold. */
   clientId: string;
   deviceName: string;
   apiKeyId: string;
+  /** The companion keys minted with it, when its client declares any. */
+  companionKeyIds?: string[];
   /** How the owner let it in: a device code they approved, or a connect link they asked for. */
   via?: 'device-code' | 'connect-link';
 }

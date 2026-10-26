@@ -44,9 +44,64 @@ export const DEVICE_CLIENTS = {
   'omni-desktop': 'the Automagik app',
   'omni-dsh': 'the Omni plugin for DeepSeek Harness',
   'omni-cli': 'the omni command line',
+  unfold: 'Unfold',
 } as const satisfies Record<string, string>;
 export type DeviceClientId = keyof typeof DEVICE_CLIENTS;
 export const isDeviceClient = (value: string): value is DeviceClientId => Object.hasOwn(DEVICE_CLIENTS, value);
+
+/** A second key minted with a device key, for a part of that client that should hold less. */
+export interface CompanionKeySpec {
+  name: string;
+  scopes: readonly string[];
+}
+
+/**
+ * The keys a client asks for at sign-in, when it wants less than the operator allows or
+ * a companion key beside its own. The operator's device-key scopes stay the ceiling for
+ * every one of them (deviceKeysFor). A client not listed gets one key with those scopes.
+ */
+export const DEVICE_CLIENT_KEYS: Partial<
+  Record<DeviceClientId, { scopes: readonly string[]; companions?: readonly CompanionKeySpec[] }>
+> = {
+  // Unfold's Mac app pairs its own WhatsApp number (instances), and its agent process
+  // only sends and follows events: it never creates or connects an instance.
+  unfold: {
+    scopes: ['instances:*', 'chats:read', 'messages:read', 'events:read', 'system:read'],
+    companions: [{ name: 'agent', scopes: ['messages:send', 'events:read', 'events:write', 'instances:read'] }],
+  },
+};
+
+const namespaceOf = (scope: string) => scope.split(':')[0] ?? scope;
+
+/**
+ * `wanted` under `ceiling`: a scope the ceiling covers (by name or its namespace's `*`) is
+ * kept; a wanted `*` narrows to the ceiling's scopes in that namespace; the rest is dropped.
+ */
+function narrowScopes(wanted: readonly string[], ceiling: readonly string[]): string[] {
+  const kept: string[] = [];
+  for (const scope of wanted) {
+    const namespace = namespaceOf(scope);
+    const covered = ceiling.includes(scope) || ceiling.includes(`${namespace}:*`);
+    const granted = covered ? [scope] : scope.endsWith(':*') ? ceiling.filter((c) => namespaceOf(c) === namespace) : [];
+    for (const item of granted) if (!kept.includes(item)) kept.push(item);
+  }
+  return kept;
+}
+
+/** The scopes of a client's device key and of each companion key, under the operator's ceiling. */
+export function deviceKeysFor(
+  clientId: string,
+  ceiling: readonly string[],
+): { scopes: string[]; companions: { name: string; scopes: string[] }[] } {
+  const declared = isDeviceClient(clientId) ? DEVICE_CLIENT_KEYS[clientId] : undefined;
+  if (!declared) return { scopes: [...ceiling], companions: [] };
+  const scopes = narrowScopes(declared.scopes, ceiling);
+  if (scopes.length === 0) return { scopes, companions: [] };
+  const companions = (declared.companions ?? [])
+    .map((companion) => ({ name: companion.name, scopes: narrowScopes(companion.scopes, ceiling) }))
+    .filter((companion) => companion.scopes.length > 0);
+  return { scopes, companions };
+}
 
 const csv = (value: string | undefined) =>
   (value ?? '')

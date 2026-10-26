@@ -42,6 +42,20 @@ export const DeviceKeySchema = z
     scopes: z.array(z.string()),
     keyExpiresAt: z.string().datetime().nullable().openapi({ description: 'Null: never expires; revoke it instead' }),
     apiUrl: z.string().openapi({ description: 'The base URL the device should use' }),
+    companions: z
+      .array(
+        z.object({
+          name: z.string().openapi({ description: 'What the client uses it for, e.g. agent' }),
+          apiKey: z.string().openapi({ description: 'The companion’s Omni API key. Returned once.' }),
+          keyId: z.string().uuid(),
+          scopes: z.array(z.string()),
+        }),
+      )
+      .openapi({
+        description:
+          'Further keys minted with this one, when the client declares them (e.g. Unfold’s agent key), each ' +
+          'narrowed by this Omni’s device-key scopes. Empty for other clients.',
+      }),
   })
   .openapi('DeviceKey');
 
@@ -75,13 +89,14 @@ export function registerLoginSchemas(registry: OpenAPIRegistry): void {
     request: {
       headers: z.object({
         authorization: z.string().openapi({ description: 'Bearer <access_token from /api/auth/device/token>' }),
-        'x-omni-client': z.string().optional().openapi({ description: 'omni-desktop, omni-dsh or omni-cli' }),
+        'x-omni-client': z.string().optional().openapi({ description: 'omni-desktop, omni-dsh, omni-cli or unfold' }),
       }),
       ...json(z.object({ deviceName: z.string().min(1).max(80) })),
     },
     responses: {
       200: ok(DeviceKeySchema, 'The device key'),
       401: error('Missing, unknown or used device token'),
+      403: error('This Omni’s device-key scopes leave nothing for this client; the token is not spent'),
       404: error('Login is not enabled here'),
     },
   });
@@ -95,17 +110,18 @@ export function registerLoginSchemas(registry: OpenAPIRegistry): void {
     description:
       'The owner texts "connect" to themselves on WhatsApp and gets a link, /api/login/app?grant=…, that opens ' +
       'omni://connect?url=<this Omni>&grant=<grant>. The app sends that grant here and gets an Omni API key, ' +
-      'with no second sign-in. A grant works once, for ten minutes; any failure is the same 410.',
+      'with no second sign-in. A grant works once, for ten minutes; any failure of the grant is the same 410.',
     request: json(
       z.object({
         grant: z.string().regex(/^[A-Za-z0-9_-]{24}$/),
-        clientId: z.enum(['omni-desktop', 'omni-dsh', 'omni-cli']),
+        clientId: z.enum(['omni-desktop', 'omni-dsh', 'omni-cli', 'unfold']),
         deviceName: z.string().min(1).max(80),
       }),
     ),
     responses: {
       200: ok(DeviceKeySchema, 'The device key'),
       400: error('Malformed body'),
+      403: error('This Omni’s device-key scopes leave nothing for this client; the grant is not spent'),
       404: error('Login is not enabled here'),
       410: error('The link expired or was already used'),
     },

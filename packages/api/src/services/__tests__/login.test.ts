@@ -10,7 +10,14 @@ import type { TypedOmniEvent } from '@omni/core';
 import { Hono } from 'hono';
 import { phoneDigits } from '../../lib/phone';
 import type { Login } from '../../login';
-import { claimTokenOf, isDeviceClient, readLoginConfig } from '../../login/config';
+import {
+  DEFAULT_DEVICE_KEY_SCOPES,
+  DEVICE_CLIENT_KEYS,
+  claimTokenOf,
+  deviceKeysFor,
+  isDeviceClient,
+  readLoginConfig,
+} from '../../login/config';
 import { LINKS_PER_WINDOW, LINK_WINDOW_MS, allowConnectLink, isConnectRequest } from '../../login/connect';
 import { appPage } from '../../login/pages';
 import { maskPhone } from '../../login/whatsapp';
@@ -87,8 +94,49 @@ describe('readLoginConfig', () => {
   });
 
   test('only the known device clients', () => {
-    expect(['omni-desktop', 'omni-dsh', 'omni-cli'].every(isDeviceClient)).toBe(true);
+    expect(['omni-desktop', 'omni-dsh', 'omni-cli', 'unfold'].every(isDeviceClient)).toBe(true);
     expect(isDeviceClient('evil')).toBe(false);
+  });
+});
+
+describe('deviceKeysFor', () => {
+  const ceiling = [...DEFAULT_DEVICE_KEY_SCOPES];
+
+  test('a client that declares nothing gets the operator scopes and no companion', () => {
+    for (const client of ['omni-desktop', 'omni-dsh', 'omni-cli', 'evil']) {
+      expect(deviceKeysFor(client, ceiling)).toEqual({ scopes: ceiling, companions: [] });
+    }
+  });
+
+  test('Unfold gets its own scopes, and an agent key that sends but never runs instances', () => {
+    const keys = deviceKeysFor('unfold', ceiling);
+    expect(keys.scopes).toEqual(['instances:*', 'chats:read', 'messages:read', 'events:read', 'system:read']);
+    expect(keys.companions).toEqual([
+      { name: 'agent', scopes: ['messages:send', 'events:read', 'events:write', 'instances:read'] },
+    ]);
+    const agent = keys.companions[0]?.scopes ?? [];
+    expect(agent.some((scope) => scope === 'instances:*' || scope === 'instances:write')).toBe(false);
+  });
+
+  test("the operator's scopes are the ceiling for every key a client declares", () => {
+    const keys = deviceKeysFor('unfold', ['instances:read', 'messages:send', 'events:*']);
+    // A declared wildcard narrows to what the ceiling has in that namespace.
+    expect(keys.scopes).toEqual(['instances:read', 'events:read']);
+    expect(keys.companions).toEqual([
+      { name: 'agent', scopes: ['messages:send', 'events:read', 'events:write', 'instances:read'] },
+    ]);
+  });
+
+  test('a ceiling that leaves a key nothing: no device scopes, and the companion is dropped', () => {
+    expect(deviceKeysFor('unfold', ['tts:synthesize'])).toEqual({ scopes: [], companions: [] });
+  });
+
+  test('every scope a client declares is one a device key may carry', () => {
+    for (const [client, keys] of Object.entries(DEVICE_CLIENT_KEYS)) {
+      const declared = [...keys.scopes, ...(keys.companions ?? []).flatMap((companion) => companion.scopes)];
+      expect(isDeviceClient(client)).toBe(true);
+      expect(() => readLoginConfig({ ...ON, OMNI_DEVICE_KEY_SCOPES: declared.join(',') })).not.toThrow();
+    }
   });
 });
 
