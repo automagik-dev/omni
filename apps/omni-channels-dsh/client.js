@@ -10711,7 +10711,7 @@ async function skipConnect({ complete }, { omniAi = callOmniAi, storage: storage
 
 // src/client/core.js
 var import_client = require("@automagik/bots-dsh/client");
-var { call, t, addStrings, onShell, toolCards, nav, badges, botChildren, headerButtons, botSettings } = import_client.omni;
+var { call, t, addStrings, onShell, toolCards, nav, badges, botChildren, headerButtons, botSettings, chatSuggestions } = import_client.omni;
 var { OmniMark, BotMark, MAIN_LOOK, CHARACTERS, relativeShort, createSource } = import_client.omni.ui;
 var icons = import_client.omni.ui.icons;
 
@@ -14438,8 +14438,6 @@ var { AtIcon, FileIcon, KeywordIcon, MessageIcon, ShieldIcon, UnplugIcon, VoiceI
 var TRIGGER_ICONS = { message: MessageIcon, mention: AtIcon, keyword: KeywordIcon, voice: VoiceIcon, media: FileIcon, down: UnplugIcon };
 var FRESH_MS = 6e3;
 var isEventsBot = (roster, id) => Boolean(roster?.eventsBotId) && roster.byId?.[id]?.id === roster.eventsBotId;
-var omniLive = (omni2) => omni2?.source?.kind === "live";
-var boardOpensFor = ({ id, opened, roster, omni: omni2 }) => Boolean(id) && !opened.has(id) && isEventsBot(roster, id) && omniLive(omni2);
 var headCount = (roster) => (roster?.subscriptions ?? []).length || null;
 function workerOf(worker, roster) {
   if (worker.kind === "events" || worker.kind === "main") {
@@ -14601,12 +14599,13 @@ function SubscriptionsBoard({ bot, roster, actions, waiting }) {
     )
   );
 }
+var automationExamples = () => [
+  { id: "watch", label: t("Watch a channel for errors"), text: t("Watch #ci-alerts for “failed” or “error” and hand it to Ops"), icon: "KeywordIcon" },
+  { id: "pin", label: t("Save what I pin"), text: t("When I react 📌 to a message in any WhatsApp chat, save it to my notes"), icon: "PinIcon" },
+  { id: "voice", label: t("Send my voice notes on"), text: t("Voice notes in my own chat go to one ongoing session"), icon: "VoiceIcon" }
+];
 function Empty({ bot, live }) {
-  const examples = [
-    t("Watch #ci-alerts for “failed” or “error” and hand it to Ops"),
-    t("When I react 📌 to a message in any WhatsApp chat, save it to my notes"),
-    t("Voice notes in my own chat go to one ongoing session")
-  ];
+  const examples = automationExamples().map((example) => example.text);
   return (0, import_react11.createElement)(
     "div",
     { className: "os-empty-board" },
@@ -15303,6 +15302,9 @@ var STRINGS = {
   "Tell {name} what to watch": "告诉 {name} 要关注什么",
   "Test": "测试",
   "Voice notes in my own chat go to one ongoing session": "我自己聊天中的语音消息交给一个持续的会话",
+  "Watch a channel for errors": "关注一个频道里的错误",
+  "Save what I pin": "保存我标记 📌 的消息",
+  "Send my voice notes on": "转交我的语音消息",
   "Watch #ci-alerts for “failed” or “error” and hand it to Ops": "关注 #ci-alerts 中的“failed”或“error”，交给 Ops",
   "Watching 1 chat or channel.": "正在关注 1 个聊天或渠道。",
   "Watching {n} chats and channels.": "正在关注 {n} 个聊天和渠道。",
@@ -15800,7 +15802,6 @@ var import_react15 = require("react");
 var { ClockIcon: ClockIcon2 } = icons;
 var inject = ["slots"];
 var channels = Object.freeze({ Badge, KeyValue, LiveChannel, LiveChat, LiveQr, Table });
-var BOARD_OPENED = "omni.board.opened";
 var boardRight = null;
 function toggleBoard(reportError) {
   const right = boardRight;
@@ -15813,44 +15814,15 @@ function toggleBoard(reportError) {
   }
 }
 function installBoard(ctx, face) {
-  const roster = face().hooks.roster;
   const fiber = ctx.inject(["sidebarRight", "sidebarRightTabs"], (scope) => {
     scope.effect(() => scope.sidebarRightTabs.register(boardTabDefinition()), "ds-bot: subscriptions tab type");
     scope.effect(() => ctx.slots.inject("sidebar.right.pane.tab", () => ctx.slots.register({ name: "sidebar.right.pane.tab", key: BOARD_TAB_ID, inject: face }, BoardTab)), "ds-bot: subscriptions tab");
     scope.effect(() => {
-      const right = scope.sidebarRight;
-      boardRight = right;
-      let opened;
-      try {
-        opened = new Set(JSON.parse(localStorage.getItem(BOARD_OPENED) ?? "[]"));
-      } catch {
-        opened = /* @__PURE__ */ new Set();
-      }
-      const check = () => {
-        const id = right.mounted.getSnapshot();
-        if (!id || opened.has(id) || !isEventsBot(roster.getSnapshot(), id)) return;
-        startLive(call);
-        if (!boardOpensFor({ id, opened, roster: roster.getSnapshot(), omni: omniStore.getSnapshot() })) return;
-        opened.add(id);
-        try {
-          localStorage.setItem(BOARD_OPENED, JSON.stringify([...opened]));
-        } catch {
-        }
-        queueMicrotask(() => {
-          try {
-            right.openTab(BOARD_KIND);
-          } catch (error) {
-            console.warn("[ds-bot] board", error);
-          }
-        });
-      };
-      const offs = [right.mounted.subscribe(check), roster.subscribe(check), omniStore.subscribe(check)];
-      check();
+      boardRight = scope.sidebarRight;
       return () => {
         boardRight = null;
-        for (const off of offs) off();
       };
-    }, "ds-bot: open the automations board");
+    }, "ds-bot: the automations board for the header button");
   });
   return () => fiber.dispose();
 }
@@ -15894,6 +15866,7 @@ function apply(ctx) {
     id: "omni-board",
     Component: ({ bot, roster, actions, useWork }) => bot.id === roster.eventsBotId ? (0, import_react15.createElement)(SubscriptionsButton, { roster, useWork, onToggle: () => toggleBoard(actions.reportError) }) : null
   }), "ds-bot: automations button");
+  if (chatSuggestions?.register) ctx.effect(() => chatSuggestions.register({ id: "omni-automations", order: -10, when: ({ bot, roster }) => Boolean(bot?.id) && bot.id === roster?.eventsBotId, items: automationExamples }), "ds-bot: automation suggestions");
   ctx.effect(() => nav.register({ id: "automations", label: () => t("Automations"), icon: ClockIcon2, run: (actions) => actions.selectPanel(AUTOMATIONS_PANEL) }), "ds-bot: automations nav");
   ctx.effect(() => onShell(({ face, shadow, installCompiledStyles }) => [
     () => installCompiledStyles(CHANNELS_CSS + OMNI_TREE_CSS + SUBSCRIPTIONS_CSS + AUTOMATIONS_CSS + OMNI_LIVE_CSS + OMNI_PEEK_CSS + OMNI_CONNECT_CSS + PERMISSIONS_CSS, "channels"),

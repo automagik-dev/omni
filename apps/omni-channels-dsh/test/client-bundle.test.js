@@ -86,12 +86,30 @@ test('client.js requires React, ReactDOM and the team\'s client, and adds to the
   assert.deepEqual([...omni.badges.entries()].map(entry => entry.id), ['omni-events'])
   assert.deepEqual([...omni.botChildren.entries()].map(entry => entry.id), ['omni-channels'])
   assert.deepEqual([...omni.headerButtons.entries()].map(entry => entry.id), ['omni-board'])
+  // An empty chat with the events Bot, and only that Bot, offers what it can watch, on a team
+  // client that has chat suggestions; an older one has none and the plugin adds nothing there.
+  if (omni.chatSuggestions) {
+    const [suggest] = omni.chatSuggestions.entries()
+    assert.equal(suggest?.id, 'omni-automations')
+    assert.ok(suggest.order < 0)
+    const roster = { eventsBotId: 'echo', byId: { echo: { id: 'echo' }, ops: { id: 'ops' } } }
+    assert.equal(suggest.when({ bot: { id: 'echo' }, roster }), true)
+    assert.equal(suggest.when({ bot: { id: 'ops' }, roster }), false)
+    assert.equal(suggest.when({ bot: { id: 'echo' }, roster: {} }), false)
+    const items = suggest.items({ bot: { id: 'echo' }, roster })
+    assert.deepEqual([...items].map(item => item.id), ['watch', 'pin', 'voice'])
+    for (const item of items) {
+      assert.ok(item.label && item.text && item.label.length < item.text.length, item.id)
+      assert.equal(typeof omni.ui.icons[item.icon], 'function', item.icon)
+    }
+  }
   assert.equal(omni.t('Channels and their health'), 'Channels and their health')
   // Everything it added leaves with its effects.
   for (const dispose of disposers.reverse()) dispose()
   assert.equal(omni.toolCards.renderer('omni_call'), undefined)
   assert.equal(omni.nav.entries().length, 0)
   assert.equal(omni.botChildren.entries().length, 0)
+  if (omni.chatSuggestions) assert.equal(omni.chatSuggestions.entries().length, 0)
   assert.ok(effects.includes('ds-bot: channels copy'))
 })
 

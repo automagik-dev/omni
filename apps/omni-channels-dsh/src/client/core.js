@@ -6,6 +6,6 @@
 // (scripts/build-client.mjs).
 import { omni } from '@automagik/bots-dsh/client'
 
-export const { call, t, addStrings, onShell, toolCards, nav, badges, botChildren, headerButtons, botSettings } = omni
+export const { call, t, addStrings, onShell, toolCards, nav, badges, botChildren, headerButtons, botSettings, chatSuggestions } = omni
 export const { OmniMark, BotMark, MAIN_LOOK, CHARACTERS, relativeShort, createSource } = omni.ui
 export const icons = omni.ui.icons
