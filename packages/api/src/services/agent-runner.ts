@@ -17,7 +17,6 @@ import {
   type SessionStorage,
   type StreamChunk,
   WebhookAgentClient,
-  WebhookAgentProvider,
   createProviderClient,
   isProviderSchemaSupported,
   webhookProviderConfig,
@@ -468,9 +467,7 @@ export class AgentRunnerService {
     // the dispatcher builds them, so `call_agent` reaches them too (#1262).
     if (provider.schema === 'webhook') {
       const resolved: ResolvedProviderClient = {
-        client: new WebhookAgentClient(
-          new WebhookAgentProvider(provider.id, provider.name, webhookProviderConfig({ ...provider, apiKey })),
-        ),
+        client: new WebhookAgentClient(webhookProviderConfig({ ...provider, apiKey })),
         schema: provider.schema,
       };
       this.clientCache.set(cacheKey, resolved);

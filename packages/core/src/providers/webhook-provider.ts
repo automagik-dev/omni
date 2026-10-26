@@ -104,7 +104,7 @@ export class WebhookAgentProvider implements IAgentProvider {
       traceId: context.traceId,
     });
 
-    const response = await this.deliver(payload);
+    const response = await deliverWebhook(this.config, payload);
     if (this.mode === 'fire-and-forget') return null;
     const durationMs = Date.now() - startTime;
 
@@ -132,113 +132,123 @@ export class WebhookAgentProvider implements IAgentProvider {
     };
   }
 
-  /**
-   * POSTs `payload`. Round-trip waits for the reply (retrying a 5xx);
-   * fire-and-forget returns null at once and the provider answers through Omni's API.
-   */
-  async deliver(payload: WebhookPayload): Promise<WebhookResponse | null> {
-    if (this.mode === 'round-trip') return this.postWebhookWithRetry(payload);
-    this.postWebhook(payload).catch((error) => {
-      log.error('Fire-and-forget webhook failed', {
-        error: String(error),
-        traceId: payload.traceId,
-      });
+  checkHealth(): Promise<{ healthy: boolean; latencyMs: number; error?: string }> {
+    return checkWebhookHealth(this.config);
+  }
+}
+
+// The sending itself is module functions, not methods, so WebhookAgentClient
+// shares it without going through the WebhookAgentProvider class.
+
+/**
+ * POSTs `payload`. Round-trip waits for the reply (retrying a 5xx);
+ * fire-and-forget returns null at once and the provider answers through Omni's API.
+ */
+async function deliverWebhook(config: WebhookProviderConfig, payload: WebhookPayload): Promise<WebhookResponse | null> {
+  if (config.mode === 'round-trip') return postWebhookWithRetry(config, payload);
+  postWebhook(config, payload).catch((error) => {
+    log.error('Fire-and-forget webhook failed', {
+      error: String(error),
+      traceId: payload.traceId,
     });
-    return null;
-  }
+  });
+  return null;
+}
 
-  async checkHealth(): Promise<{ healthy: boolean; latencyMs: number; error?: string }> {
-    const startTime = Date.now();
-    try {
-      const response = await fetch(this.config.webhookUrl, {
-        method: 'HEAD',
-        headers: this.buildHeaders(),
-        signal: AbortSignal.timeout(5000),
-      });
-      return {
-        healthy: response.ok || response.status === 405, // HEAD might not be supported
-        latencyMs: Date.now() - startTime,
-      };
-    } catch (error) {
-      return {
-        healthy: false,
-        latencyMs: Date.now() - startTime,
-        error: String(error),
-      };
-    }
-  }
-
-  private buildHeaders(extraHeaders?: Record<string, string>): Record<string, string> {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      'X-Omni-Provider': 'webhook',
-      ...extraHeaders,
+async function checkWebhookHealth(config: WebhookProviderConfig): Promise<AgentHealthResult> {
+  const startTime = Date.now();
+  try {
+    const response = await fetch(config.webhookUrl, {
+      method: 'HEAD',
+      headers: buildHeaders(config),
+      signal: AbortSignal.timeout(5000),
+    });
+    return {
+      healthy: response.ok || response.status === 405, // HEAD might not be supported
+      latencyMs: Date.now() - startTime,
     };
-    if (this.config.apiKey) {
-      headers.Authorization = `Bearer ${this.config.apiKey}`;
-    }
-    return headers;
+  } catch (error) {
+    return {
+      healthy: false,
+      latencyMs: Date.now() - startTime,
+      error: String(error),
+    };
+  }
+}
+
+function buildHeaders(config: WebhookProviderConfig, extraHeaders?: Record<string, string>): Record<string, string> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'X-Omni-Provider': 'webhook',
+    ...extraHeaders,
+  };
+  if (config.apiKey) {
+    headers.Authorization = `Bearer ${config.apiKey}`;
+  }
+  return headers;
+}
+
+async function postWebhook(config: WebhookProviderConfig, payload: WebhookPayload): Promise<WebhookResponse | null> {
+  const timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+
+  const response = await fetch(config.webhookUrl, {
+    method: 'POST',
+    headers: buildHeaders(config, payload.headers),
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+
+  if (!response.ok) {
+    throw new ProviderError(
+      `Webhook returned ${response.status}: ${response.statusText}`,
+      response.status >= 500 ? 'SERVER_ERROR' : 'INVALID_RESPONSE',
+      response.status,
+    );
   }
 
-  private async postWebhook(payload: WebhookPayload): Promise<WebhookResponse | null> {
-    const timeoutMs = this.config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-
-    const response = await fetch(this.config.webhookUrl, {
-      method: 'POST',
-      headers: this.buildHeaders(payload.headers),
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-
-    if (!response.ok) {
-      throw new ProviderError(
-        `Webhook returned ${response.status}: ${response.statusText}`,
-        response.status >= 500 ? 'SERVER_ERROR' : 'INVALID_RESPONSE',
-        response.status,
-      );
-    }
-
-    // Try to parse JSON response
-    const contentType = response.headers.get('content-type') ?? '';
-    if (contentType.includes('application/json')) {
-      return (await response.json()) as WebhookResponse;
-    }
-
-    // Plain text response
-    const text = await response.text();
-    if (text.trim()) {
-      return { reply: text.trim() };
-    }
-
-    return null;
+  // Try to parse JSON response
+  const contentType = response.headers.get('content-type') ?? '';
+  if (contentType.includes('application/json')) {
+    return (await response.json()) as WebhookResponse;
   }
 
-  private async postWebhookWithRetry(payload: WebhookPayload): Promise<WebhookResponse | null> {
-    const maxRetries = this.config.retries ?? DEFAULT_RETRIES;
-    let lastError: unknown;
+  // Plain text response
+  const text = await response.text();
+  if (text.trim()) {
+    return { reply: text.trim() };
+  }
 
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
-      try {
-        return await this.postWebhook(payload);
-      } catch (error) {
-        lastError = error;
-        // Only retry on 5xx errors
-        if (error instanceof ProviderError && error.code === 'SERVER_ERROR' && attempt < maxRetries) {
-          log.warn('Webhook 5xx error, retrying', {
-            attempt: attempt + 1,
-            maxRetries,
-            error: String(error),
-          });
-          // Brief backoff before retry
-          await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
-          continue;
-        }
-        throw error;
+  return null;
+}
+
+async function postWebhookWithRetry(
+  config: WebhookProviderConfig,
+  payload: WebhookPayload,
+): Promise<WebhookResponse | null> {
+  const maxRetries = config.retries ?? DEFAULT_RETRIES;
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await postWebhook(config, payload);
+    } catch (error) {
+      lastError = error;
+      // Only retry on 5xx errors
+      if (error instanceof ProviderError && error.code === 'SERVER_ERROR' && attempt < maxRetries) {
+        log.warn('Webhook 5xx error, retrying', {
+          attempt: attempt + 1,
+          maxRetries,
+          error: String(error),
+        });
+        // Brief backoff before retry
+        await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
+        continue;
       }
+      throw error;
     }
-
-    throw lastError;
   }
+
+  throw lastError;
 }
 
 /** A reply's parts: pre-split, else the single reply, else none. */
@@ -273,11 +283,11 @@ function payloadFor(request: ProviderRequest, runId: string): WebhookPayload {
 
 /** A webhook provider behind IAgentClient (#1262): one POST per run, the reply as one chunk. */
 export class WebhookAgentClient implements IAgentClient {
-  constructor(private provider: WebhookAgentProvider) {}
+  constructor(private config: WebhookProviderConfig) {}
 
   async run(request: ProviderRequest): Promise<ProviderResponse> {
     const runId = crypto.randomUUID();
-    const response = await this.provider.deliver(payloadFor(request, runId));
+    const response = await deliverWebhook(this.config, payloadFor(request, runId));
     return {
       content: partsOf(response).join('\n\n'),
       runId,
@@ -292,6 +302,6 @@ export class WebhookAgentClient implements IAgentClient {
   }
 
   checkHealth(): Promise<AgentHealthResult> {
-    return this.provider.checkHealth();
+    return checkWebhookHealth(this.config);
   }
 }
