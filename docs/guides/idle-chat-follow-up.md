@@ -67,13 +67,27 @@ DELETE /v2/follow-up/{scope}/:id
 {
   enabled: boolean,                 // default: true
   schedule:
-    | { kind: 'fixed',    intervalsMinutes: number[] }
-    | { kind: 'exponential', initialMinutes: number, factor: number, maxMinutes: number },
+    | { kind: 'fixed',    intervalsMinutes: number[], jitter?: Jitter }
+    | { kind: 'exponential', initialMinutes: number, factor: number, maxMinutes: number, jitter?: Jitter },
   maxFollowUps: number,             // 1..50 — hard cap
   promptTemplate: string,           // placeholders below
   stopOutsideMessagingWindow: boolean, // default: true (WhatsApp BSP 24 h guard)
   showTypingIndicator: boolean,     // default: true
 }
+
+// Optional: { minutes: number } (±absolute) or { ratio: number } (±share of the interval, 0 < ratio ≤ 1)
+type Jitter = { minutes: number } | { ratio: number }
+```
+
+With `jitter`, every interval moves by a uniform random offset within the bound, and never drops below the
+smaller of the interval and one minute. Chats armed at the same time then don't all fire on the same tick, which
+matters on unofficial WhatsApp channels, where outbound at fixed intervals raises the risk of a ban. The chosen
+time is stored as `nextFireAt`, so the sweeper and the stale-event gate work as before. Without `jitter`,
+intervals are exact.
+
+```jsonc
+{ "kind": "fixed", "intervalsMinutes": [60, 240], "jitter": { "minutes": 10 } }
+{ "kind": "exponential", "initialMinutes": 60, "factor": 2, "maxMinutes": 1440, "jitter": { "ratio": 0.15 } }
 ```
 
 Template placeholders available to `promptTemplate` and to automation actions

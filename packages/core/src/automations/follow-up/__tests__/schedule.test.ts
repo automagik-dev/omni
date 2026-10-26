@@ -6,7 +6,8 @@
 
 import { describe, expect, test } from 'bun:test';
 import type { FollowUpSchedule, FollowUpSequenceConfig } from '../../../schemas/follow-up';
-import { computeInitialFireAt, computeNextFireAt, intervalMinutesForIndex } from '../schedule';
+import { FollowUpSequenceConfigSchema } from '../../../schemas/follow-up';
+import { computeInitialFireAt, computeNextFireAt, intervalMinutesForIndex, jitteredMinutes } from '../schedule';
 
 const fixed = (intervalsMinutes: number[]): FollowUpSchedule => ({ kind: 'fixed', intervalsMinutes });
 const exponential = (initialMinutes: number, factor: number, maxMinutes: number): FollowUpSchedule => ({
@@ -143,5 +144,56 @@ describe('computeNextFireAt', () => {
     expect(computeNextFireAt(config, 2, from)).toBe(from + 24 * MS_PER_MINUTE);
     expect(computeNextFireAt(config, 3, from)).toBe(from + 48 * MS_PER_MINUTE);
     expect(computeNextFireAt(config, 4, from)).toBeNull();
+  });
+});
+
+describe('jitter (#1261)', () => {
+  const at = (value: number) => () => value;
+  const from = 1_700_000_000_000;
+
+  test('absent: intervals stay exact, whatever random says', () => {
+    expect(jitteredMinutes(fixed([60]), 60, at(0))).toBe(60);
+    expect(computeInitialFireAt(baseConfig(), from, at(0.99))).toBe(from + 3 * MS_PER_MINUTE);
+  });
+
+  test('minutes: a uniform offset within ±minutes', () => {
+    const schedule: FollowUpSchedule = { kind: 'fixed', intervalsMinutes: [60, 240], jitter: { minutes: 10 } };
+    expect(jitteredMinutes(schedule, 60, at(0))).toBe(50);
+    expect(jitteredMinutes(schedule, 60, at(0.5))).toBe(60);
+    expect(jitteredMinutes(schedule, 60, at(0.75))).toBe(65);
+    const config = baseConfig({ schedule, maxFollowUps: 2 });
+    expect(computeInitialFireAt(config, from, at(0.75))).toBe(from + 65 * MS_PER_MINUTE);
+    expect(computeNextFireAt(config, 0, from, at(0))).toBe(from + 230 * MS_PER_MINUTE);
+  });
+
+  test('ratio: a share of each interval, so it grows with an exponential schedule', () => {
+    const schedule: FollowUpSchedule = {
+      kind: 'exponential',
+      initialMinutes: 60,
+      factor: 2,
+      maxMinutes: 1440,
+      jitter: { ratio: 0.15 },
+    };
+    const config = baseConfig({ schedule, maxFollowUps: 3 });
+    expect(computeInitialFireAt(config, from, at(0))).toBe(from + 51 * MS_PER_MINUTE);
+    expect(computeNextFireAt(config, 0, from, at(0))).toBe(from + 102 * MS_PER_MINUTE);
+  });
+
+  test('never below the smaller of the interval and one minute', () => {
+    expect(jitteredMinutes({ kind: 'fixed', intervalsMinutes: [5], jitter: { minutes: 30 } }, 5, at(0))).toBe(1);
+    expect(jitteredMinutes({ kind: 'fixed', intervalsMinutes: [0.25], jitter: { ratio: 1 } }, 0.25, at(0))).toBe(0.25);
+  });
+
+  test('the config accepts one bound, positive, and a ratio of at most 1', () => {
+    const withJitter = (jitter: unknown) =>
+      FollowUpSequenceConfigSchema.safeParse({
+        ...baseConfig(),
+        schedule: { kind: 'fixed', intervalsMinutes: [60], jitter },
+      }).success;
+    expect(withJitter({ minutes: 10 })).toBe(true);
+    expect(withJitter({ ratio: 0.15 })).toBe(true);
+    expect(withJitter({ ratio: 1.5 })).toBe(false);
+    expect(withJitter({ minutes: 0 })).toBe(false);
+    expect(withJitter({ minutes: 10, ratio: 0.1 })).toBe(false);
   });
 });
