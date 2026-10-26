@@ -302,11 +302,35 @@ test("an automation run's Main Bot only reads; another Bot's run asks before any
   assert.equal((await as('digest')('omni_send', { chat: GROUP, text: 'ok' })).concluded, false)
 })
 
-test('Bots other than a Main Bot get none of the Main Bot\'s omni tools', async (t) => {
+test('Bots other than an Omni Bot or a Main Bot get none of their omni tools', async (t) => {
   const { as } = setup(t)
   for (const [name, args] of [['omni_call', { method: 'GET', path: '/chats' }], ['omni_endpoints', { search: 'send' }], ['omni_channels', {}], ['omni_connect', { channel: 'wa-1' }]]) {
-    assert.match((await as('digest')(name, args)).text, /Only a Main Bot/, name)
+    assert.match((await as('digest')(name, args)).text, /Only an Omni Bot or a Main Bot/, name)
   }
+})
+
+test('an Omni Bot that is not a Main Bot operates all of Omni, as a Main Bot does', async (t) => {
+  const { as, pending } = setup(t, {
+    bots: {
+      m1: { id: 'm1', name: 'Sage', role: 'Orchestrator', instructions: '', createdAt: 1 },
+      keeper: { id: 'keeper', name: 'Channel keeper', role: 'Omni', kind: 'omni', instructions: '', createdAt: 2 },
+      digest: { id: 'digest', name: 'Digest', role: 'Digest', instructions: '', createdAt: 3 },
+    },
+  })
+  const keeper = as('keeper')
+  for (const [name, args] of [['omni_call', { method: 'GET', path: '/chats' }], ['omni_endpoints', { search: 'send' }], ['omni_channels', {}]]) {
+    assert.doesNotMatch((await keeper(name, args)).text, /Only an Omni Bot or a Main Bot/, name)
+  }
+  // No grant card: it reads and posts in a group straight away, and sees each chat's last message.
+  const read = await keeper('omni_messages', { chat: GROUP })
+  assert.equal(read.concluded, false)
+  assert.match(read.text, /hello from 🦞BuildWithFriends/)
+  assert.equal((await keeper('omni_send', { chat: GROUP, text: 'ok' })).concluded, false)
+  assert.deepEqual(await pending('keeper'), [])
+  assert.match((await keeper('omni_chats', {})).text, /"preview"/)
+  assert.doesNotMatch((await as('digest')('omni_chats', {})).text, /"preview"/)
+  // Sending as the user to a person still asks, as it does for a Main Bot.
+  assert.match((await keeper('omni_send', { chat: PERSON, text: 'oi' })).text, /^confirmation_required/)
 })
 
 test('a broadcast list is people: sending there confirms every time', async (t) => {

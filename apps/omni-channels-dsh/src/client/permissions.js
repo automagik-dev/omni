@@ -143,14 +143,15 @@ const ACTION_TEXT = { read: 'read', media: 'files', send: 'send', react: 'react'
 // On a Bot's settings page: what it may do on Omni.
 export function PermissionsCard({ bot, roster, run, Card, SwitchRow }) {
   if (!roster.omniGrants) return null
-  const main = (roster.mainBotIds ?? []).includes(bot.id)
+  // An Omni Bot or a Main Bot operates all of Omni (host/grants.js operatesOmni).
+  const main = bot.kind === 'omni' || (roster.mainBotIds ?? []).includes(bot.id)
   const grants = (roster.omniGrants ?? []).filter(grant => grant.botId === bot.id)
   const now = Date.now()
   if (main) {
     return h(Card, { title: t('On Omni') },
       h('div', { className: 'bt-set-row bt-bs-row' }, h('span', { className: 'bt-set-copy' },
         h('span', { className: 'bt-bs-label' }, t('All of Omni')),
-        h('span', { className: 'bt-set-hint' }, t('A Main Bot operates Omni. Messaging a person, deleting and disconnecting still ask you first.')))))
+        h('span', { className: 'bt-set-hint' }, t('Omni and Main Bots operate Omni. Messaging a person, deleting and disconnecting still ask you first.')))))
   }
   return h(Card, { title: t('On Omni') },
     grants.length === 0

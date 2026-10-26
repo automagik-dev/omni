@@ -3,7 +3,7 @@
 // (omni-link.js); without one, from the older profile settings: `config.omni.url` (the API,
 // https://omni.example.com, without /api/v2) and the OMNI_API_KEY credential in DSH's store,
 // both only read. Without either, the Channels view keeps its sample data. This file only
-// reads; the Main Bot changes omni through omni-api.js, with the same key.
+// reads; the Omni Bot or a Main Bot changes omni through omni-api.js, with the same key.
 
 import { OPERATOR_RULES } from './omni-rules.js'
 
@@ -151,6 +151,7 @@ export function install(rt) {
 
   // Reads, so a host that only reads the team still shows the channels.
   for (const name of ['omni-overview', 'omni-messages']) ctx.effect(() => rt.hooks.endpoint(name, body => rt.omniEndpoint(name, body), { read: true }), `ds-bot: ${name}`)
-  // With an Omni named here, the Main Bot operates it.
+  // With an Omni named here, a Main Bot operates it. A non-Main Omni Bot gets these rules once the
+  // Bot team gives plugin rules to kind 'omni' Bots too (bots-dsh prompt.js).
   ctx.effect(() => rt.hooks.mainRules(() => (rt.omniNamed() ? OPERATOR_RULES : null), { order: 100 }), 'ds-bot: operator rules')
 }

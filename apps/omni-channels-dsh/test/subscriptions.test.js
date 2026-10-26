@@ -41,7 +41,7 @@ function fakePresets({ names = ['read-only', 'workspace-write', 'danger-full-acc
 
 // A team with its Main Bot, the Autopilot it once had, and Ops, watching a fake omni.
 // `secrets` are saved for the team's secret store; `presets: null` is a DSH without presets.
-function setup(t, { presets = fakePresets(), secrets = [], opsPermission } = {}) {
+function setup(t, { presets = fakePresets(), secrets = [], opsPermission, bots = {} } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'ds-bot-subs-'))
   writeFileSync(join(home, 'state.json'), JSON.stringify({
     version: 1, mainBotIds: ['m1'], eventsBotId: 't1', eventsBotStored: true, revision: 1,
@@ -49,6 +49,7 @@ function setup(t, { presets = fakePresets(), secrets = [], opsPermission } = {})
       m1: { id: 'm1', name: 'Omni', role: 'Orchestrator', instructions: '', createdAt: 1 },
       t1: { id: 't1', name: 'Autopilot', role: 'Automations', instructions: '', createdAt: 2 },
       b2: { id: 'b2', name: 'Ops', role: 'Ops', instructions: '', createdAt: 3, ...(opsPermission ? { permission: opsPermission } : {}) },
+      ...bots,
     },
     rooms: {}, agents: {}, exchanges: [], exchangeTurns: {},
   }))
@@ -127,6 +128,22 @@ test('only the Main Bot manages automations; the Autopilot a team once had is an
   assert.match(await as('save_automation', 'b2')({ trigger: 'message', sources: 'chat:obras' }), /Only Omni/)
   assert.match(await as('find_chats', 't1')({}), /Only Omni/)
   assert.equal((await call('state', {})).value.eventsBotId, 'm1')
+})
+
+test('an Omni Bot that is not a Main Bot manages automations and handles their events', async (t) => {
+  const keeper = { id: 'k1', name: 'Channel keeper', role: 'Omni', kind: 'omni', instructions: '', createdAt: 4 }
+  const { as, call, sent } = setup(t, { bots: { k1: keeper } })
+  assert.equal((await call('state', {})).value.eventsBotId, 'k1')
+  assert.match(await as('save_automation', 'k1')({ sources: 'chat:obras', trigger: 'reaction', emoji: '📌', worker: 'me' }), /^Saved /)
+  const sub = (await call('state', {})).value.subscriptions[0]
+  assert.deepEqual(sub.worker, { kind: 'events' })
+  const run = (await call('automation-test', { id: sub.id })).value
+  assert.equal(run.botId, 'k1')
+  assert.equal(sent[0].sessionId, run.sessionId)
+  // The Main Bot still manages them, and a Main Bot named as the worker gets its own tasks.
+  assert.match(await as('save_automation', 'm1')({ sources: 'chat:obras', trigger: 'voice', worker: 'Omni' }), /^Saved /)
+  assert.deepEqual((await call('state', {})).value.subscriptions[1].worker, { kind: 'bot', botId: 'm1', mode: 'task' })
+  assert.match(await as('find_chats', 'b2')({}), /Only Channel keeper/)
 })
 
 test('Omni finds chats by name with the ids it saves with', async (t) => {
@@ -362,8 +379,8 @@ test('Omni finds any omni operation and calls it; other Bots cannot', async (t) 
   assert.match(await tool('omni_call')({ method: 'DELETE', path: '/instances' }), /not an omni API operation/)
   assert.match(await tool('omni_call')({ method: 'GET', path: 'https://evil.test/x' }), /must be an API path/)
   assert.match(await tool('omni_call')({ method: 'POST', path: '/instances', body: '{nope' }), /body must be JSON/)
-  assert.match(await as('omni_call', 'b2')({ method: 'GET', path: '/instances' }), /Only a Main Bot/)
-  assert.match(await as('omni_endpoints', 'b2')({ search: 'qr' }), /Only a Main Bot/)
+  assert.match(await as('omni_call', 'b2')({ method: 'GET', path: '/instances' }), /Only an Omni Bot or a Main Bot/)
+  assert.match(await as('omni_endpoints', 'b2')({ search: 'qr' }), /Only an Omni Bot or a Main Bot/)
 
   // The browser reads documented GET operations only.
   assert.equal((await call('omni-get', { path: '/instances/wa-1/qr' })).ok, true)
@@ -385,7 +402,7 @@ test('Omni lists chats and channels with their state, and has no shell', async (
   assert.match(await tool('omni_chats')({ channel: 'Nope' }), /No channel named .*Nope/)
   const channels = JSON.parse(await tool('omni_channels')({}))
   assert.deepEqual(channels.data.items, [{ id: 'wa-1', name: 'Sales', channel: 'whatsapp-baileys', state: 'connected', active: true }])
-  assert.match(await as('omni_channels', 'b2')({}), /Only a Main Bot/)
+  assert.match(await as('omni_channels', 'b2')({}), /Only an Omni Bot or a Main Bot/)
   // The computer tools are refused to the Main Bot that operates omni, not to other Bots.
   const refusals = name => ctx.guards.map(guard => guard({ name, agent: { id: 'm1' } })).filter(Boolean)
   assert.match(refusals('bash')[0], /start_task/)

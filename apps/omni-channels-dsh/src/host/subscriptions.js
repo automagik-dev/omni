@@ -6,6 +6,7 @@
 // state.subscriptions, the name they had first.)
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { operatesOmni } from './grants.js'
 import { output } from './output.js'
 
 export const TRIGGER_KINDS = ['reaction', 'message', 'mention', 'keyword', 'voice', 'media', 'down']
@@ -41,13 +42,13 @@ export function install(rt) {
   const { ctx, state } = rt
   const subs = () => (state.subscriptions ??= {})
   const runs = () => (state.subscriptionRuns ??= [])
-  // The Main Bot runs automations; it was a Bot of its own (Autopilot) before. Loads the team
-  // first: the check reads the Main Bot from the saved state.
-  const eventsBotId = () => state.mainBotIds.find(id => rt.botOf(id))
+  // The team's Omni Bot runs automations, else its first Main Bot; it was a Bot of its own
+  // (Autopilot) before. Any Bot that operates Omni manages them. Loads the team first: the
+  // check reads the Bots from the saved state.
+  const eventsBotId = () => Object.values(state.bots ?? {}).find(bot => bot?.kind === 'omni')?.id ?? state.mainBotIds.find(id => rt.botOf(id))
   const isEventsBot = async (exec) => {
     await rt.load()
-    const self = rt.selfOf(exec.agent?.id)
-    return self !== undefined && rt.isMain(self)
+    return operatesOmni(rt, rt.selfOf(exec.agent?.id))
   }
   const eventsName = () => rt.botOf(eventsBotId())?.name ?? 'Omni'
   const notEventsBot = () => `Only ${eventsName()} manages automations. Ask ${eventsName()} in its chat.`
@@ -87,7 +88,7 @@ export function install(rt) {
     if (lower === 'ongoing session') return { kind: 'session', mode: 'ongoing' }
     const bot = Object.values(state.bots).find(item => item.name.toLowerCase() === lower)
     if (!bot) throw invalid(`No Bot named "${value}". Use a name from list_bots, "${eventsName()}", "new session" or "ongoing session".`)
-    if (state.mainBotIds.includes(bot.id)) return { kind: 'events' }
+    if (bot.id === eventsBotId()) return { kind: 'events' }
     return { kind: 'bot', botId: bot.id, mode: as === 'chat' ? 'chat' : 'task' }
   }
 
@@ -308,7 +309,7 @@ export function install(rt) {
 
   ctx.tools.register(defineTool({
     name: 'find_chats',
-    description: 'Main Bot only. The omni channels and their recent chats and groups an automation can watch, with the ids save_automation takes.',
+    description: 'Omni and Main Bots only. The omni channels and their recent chats and groups an automation can watch, with the ids save_automation takes.',
     parameters: { search: { type: 'string', description: 'Part of a chat, group or channel name' } },
     output,
     async execute(args, exec) {
@@ -329,7 +330,7 @@ export function install(rt) {
 
   ctx.tools.register(defineTool({
     name: 'list_automations',
-    description: 'Main Bot only. The automations you run, with their ids.',
+    description: 'Omni and Main Bots only. The automations you run, with their ids.',
     parameters: {},
     output,
     async execute(_args, exec) {
@@ -342,7 +343,7 @@ export function install(rt) {
 
   ctx.tools.register(defineTool({
     name: 'save_automation',
-    description: 'Main Bot only. Create an automation, or change one by id. It shows in the Automations panel beside your chat at once. Ask the user for anything you do not know (which chats, which emoji, which words, who acts) instead of guessing.',
+    description: 'Omni and Main Bots only. Create an automation, or change one by id. It shows in the Automations panel beside your chat at once. Ask the user for anything you do not know (which chats, which emoji, which words, who acts) instead of guessing.',
     parameters: {
       id: { type: 'string', description: 'Only to change an existing automation' },
       name: { type: 'string', description: 'Short name the user would recognize' },
@@ -372,7 +373,7 @@ export function install(rt) {
 
   ctx.tools.register(defineTool({
     name: 'pause_automation',
-    description: 'Main Bot only. Pause or resume an automation by id.',
+    description: 'Omni and Main Bots only. Pause or resume an automation by id.',
     parameters: {
       id: { type: 'string', required: true, description: 'Subscription id' },
       on: { type: 'boolean', required: true, description: 'true to resume, false to pause' },
@@ -392,7 +393,7 @@ export function install(rt) {
 
   ctx.tools.register(defineTool({
     name: 'delete_automation',
-    description: 'Main Bot only. Delete an automation by id. Only when the user asks for it.',
+    description: 'Omni and Main Bots only. Delete an automation by id. Only when the user asks for it.',
     parameters: { id: { type: 'string', required: true, description: 'Subscription id' } },
     output,
     async execute(args, exec) {
