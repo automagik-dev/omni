@@ -260,9 +260,11 @@ describe('the market with a plugin lane', () => {
     expect(pluginLane.current()?.packages.map((pkg) => pkg.version)).toEqual(['3.24.0']);
   });
 
-  test("only Automagik's plugins, on its releases, at or past the floor", async () => {
+  test("only the floor's plugins, on Automagik's releases, at or past the floor", async () => {
     const lane = publisher();
     const below = bots('3.19.0');
+    const bridge = tarballOf(pluginPackage('@automagik/unfold-bridge-dsh', '3.24.0'));
+    const desktopOnly = lanePlugin('@automagik/unfold-bridge-dsh', '3.24.0', bridge);
     const welcome = tarballOf(pluginPackage('@automagik/welcome-dsh', '3.24.0'));
     const elsewhere = lanePlugin(
       '@automagik/welcome-dsh',
@@ -276,9 +278,10 @@ describe('the market with a plugin lane', () => {
       [below.plugin.url, below.bytes],
       [elsewhere.url, welcome],
       [notOurs.url, outsider],
+      [desktopOnly.url, bridge],
     ] as const)
       lane.put(url, bytes);
-    lane.publish(laneOf(240000, [below.plugin, elsewhere, notOurs]));
+    lane.publish(laneOf(240000, [below.plugin, elsewhere, notOurs, desktopOnly]));
     const pluginLane = createPluginLane({ keys, floor: FLOOR, dir, fetchImpl: lane.fetchImpl });
     expect(await pluginLane.refresh()).toBe(true);
     expect(pluginLane.current()?.packages).toEqual([]);
