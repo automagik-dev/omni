@@ -16,8 +16,10 @@ import {
   type ProviderSchema,
   type SessionStorage,
   type StreamChunk,
+  WebhookAgentClient,
   createProviderClient,
   isProviderSchemaSupported,
+  webhookProviderConfig,
 } from '@omni/core';
 import { createLogger } from '@omni/core';
 import type { AgentReplyFilter, AgentSessionStrategy, ChannelType, Instance } from '@omni/db';
@@ -455,6 +457,17 @@ export class AgentRunnerService {
           defaultTimeoutMs: (provider.defaultTimeout ?? 600) * 1000,
           schemaConfig: (provider.schemaConfig ?? {}) as Record<string, unknown>,
         }),
+        schema: provider.schema,
+      };
+      this.clientCache.set(cacheKey, resolved);
+      return resolved;
+    }
+
+    // Webhook providers speak their own protocol and may have no key: built as
+    // the dispatcher builds them, so `call_agent` reaches them too (#1262).
+    if (provider.schema === 'webhook') {
+      const resolved: ResolvedProviderClient = {
+        client: new WebhookAgentClient(webhookProviderConfig({ ...provider, apiKey })),
         schema: provider.schema,
       };
       this.clientCache.set(cacheKey, resolved);

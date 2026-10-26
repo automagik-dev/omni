@@ -4,15 +4,23 @@
  * Supports two modes:
  * - round-trip: POST event → wait for response → return as AgentTriggerResult
  * - fire-and-forget: POST event → return null immediately (provider calls back via Omni API)
+ *
+ * WebhookAgentClient puts the same provider behind IAgentClient, for the agent
+ * runner (the `call_agent` automation action, #1262).
  */
 
 import { createLogger } from '../logger';
 import { buildOmniExecutionContext } from './execution-context';
 import {
+  type AgentHealthResult,
   type AgentTrigger,
   type AgentTriggerResult,
+  type IAgentClient,
   type IAgentProvider,
   ProviderError,
+  type ProviderRequest,
+  type ProviderResponse,
+  type StreamChunk,
   type WebhookPayload,
   type WebhookProviderConfig,
   type WebhookResponse,
@@ -22,6 +30,26 @@ const log = createLogger('provider:webhook');
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_RETRIES = 1;
+const REPLY_ENDPOINT = 'POST /api/v2/messages/send';
+
+/** The config an `agent_providers` row of schema `webhook` describes; `apiKey` already opened. */
+export function webhookProviderConfig(provider: {
+  baseUrl: string;
+  apiKey?: string | null;
+  defaultTimeout?: number | null;
+  schemaConfig?: unknown;
+}): WebhookProviderConfig {
+  const schemaConfig = (provider.schemaConfig ?? {}) as Record<string, unknown>;
+  return {
+    webhookUrl: provider.baseUrl,
+    apiKey: provider.apiKey ?? undefined,
+    mode: (schemaConfig.mode as 'round-trip' | 'fire-and-forget') ?? 'round-trip',
+    // #738 — aligned to the 600s provider default (was 30s) so webhook agents
+    // get the same budget as every other provider when no explicit timeout set.
+    timeoutMs: (provider.defaultTimeout ?? 600) * 1000,
+    retries: (schemaConfig.retries as number) ?? 1,
+  };
+}
 
 export class WebhookAgentProvider implements IAgentProvider {
   readonly schema = 'webhook' as const;
@@ -66,7 +94,7 @@ export class WebhookAgentProvider implements IAgentProvider {
       traceId: context.traceId,
       headers: context.headers,
       executionContext: buildOmniExecutionContext(context),
-      replyEndpoint: 'POST /api/v2/messages/send',
+      replyEndpoint: REPLY_ENDPOINT,
     };
 
     log.info('Sending webhook trigger', {
@@ -76,19 +104,8 @@ export class WebhookAgentProvider implements IAgentProvider {
       traceId: context.traceId,
     });
 
-    if (this.mode === 'fire-and-forget') {
-      // POST and don't wait for meaningful response
-      this.postWebhook(payload).catch((error) => {
-        log.error('Fire-and-forget webhook failed', {
-          error: String(error),
-          traceId: context.traceId,
-        });
-      });
-      return null;
-    }
-
-    // Round-trip: POST and wait for response
-    const response = await this.postWebhookWithRetry(payload);
+    const response = await deliverWebhook(this.config, payload);
+    if (this.mode === 'fire-and-forget') return null;
     const durationMs = Date.now() - startTime;
 
     if (!response) {
@@ -102,8 +119,7 @@ export class WebhookAgentProvider implements IAgentProvider {
       };
     }
 
-    // Parse response into parts
-    const parts = response.parts ?? (response.reply ? [response.reply] : []);
+    const parts = partsOf(response);
 
     return {
       parts,
@@ -116,96 +132,176 @@ export class WebhookAgentProvider implements IAgentProvider {
     };
   }
 
-  async checkHealth(): Promise<{ healthy: boolean; latencyMs: number; error?: string }> {
-    const startTime = Date.now();
-    try {
-      const response = await fetch(this.config.webhookUrl, {
-        method: 'HEAD',
-        headers: this.buildHeaders(),
-        signal: AbortSignal.timeout(5000),
-      });
-      return {
-        healthy: response.ok || response.status === 405, // HEAD might not be supported
-        latencyMs: Date.now() - startTime,
-      };
-    } catch (error) {
-      return {
-        healthy: false,
-        latencyMs: Date.now() - startTime,
-        error: String(error),
-      };
-    }
+  checkHealth(): Promise<{ healthy: boolean; latencyMs: number; error?: string }> {
+    return checkWebhookHealth(this.config);
   }
+}
 
-  private buildHeaders(extraHeaders?: Record<string, string>): Record<string, string> {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      'X-Omni-Provider': 'webhook',
-      ...extraHeaders,
-    };
-    if (this.config.apiKey) {
-      headers.Authorization = `Bearer ${this.config.apiKey}`;
-    }
-    return headers;
-  }
+// The sending itself is module functions, not methods, so WebhookAgentClient
+// shares it without going through the WebhookAgentProvider class.
 
-  private async postWebhook(payload: WebhookPayload): Promise<WebhookResponse | null> {
-    const timeoutMs = this.config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-
-    const response = await fetch(this.config.webhookUrl, {
-      method: 'POST',
-      headers: this.buildHeaders(payload.headers),
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(timeoutMs),
+/**
+ * POSTs `payload`. Round-trip waits for the reply (retrying a 5xx);
+ * fire-and-forget returns null at once and the provider answers through Omni's API.
+ */
+async function deliverWebhook(config: WebhookProviderConfig, payload: WebhookPayload): Promise<WebhookResponse | null> {
+  if (config.mode === 'round-trip') return postWebhookWithRetry(config, payload);
+  postWebhook(config, payload).catch((error) => {
+    log.error('Fire-and-forget webhook failed', {
+      error: String(error),
+      traceId: payload.traceId,
     });
+  });
+  return null;
+}
 
-    if (!response.ok) {
-      throw new ProviderError(
-        `Webhook returned ${response.status}: ${response.statusText}`,
-        response.status >= 500 ? 'SERVER_ERROR' : 'INVALID_RESPONSE',
-        response.status,
-      );
-    }
+async function checkWebhookHealth(config: WebhookProviderConfig): Promise<AgentHealthResult> {
+  const startTime = Date.now();
+  try {
+    const response = await fetch(config.webhookUrl, {
+      method: 'HEAD',
+      headers: buildHeaders(config),
+      signal: AbortSignal.timeout(5000),
+    });
+    return {
+      healthy: response.ok || response.status === 405, // HEAD might not be supported
+      latencyMs: Date.now() - startTime,
+    };
+  } catch (error) {
+    return {
+      healthy: false,
+      latencyMs: Date.now() - startTime,
+      error: String(error),
+    };
+  }
+}
 
-    // Try to parse JSON response
-    const contentType = response.headers.get('content-type') ?? '';
-    if (contentType.includes('application/json')) {
-      return (await response.json()) as WebhookResponse;
-    }
+function buildHeaders(config: WebhookProviderConfig, extraHeaders?: Record<string, string>): Record<string, string> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'X-Omni-Provider': 'webhook',
+    ...extraHeaders,
+  };
+  if (config.apiKey) {
+    headers.Authorization = `Bearer ${config.apiKey}`;
+  }
+  return headers;
+}
 
-    // Plain text response
-    const text = await response.text();
-    if (text.trim()) {
-      return { reply: text.trim() };
-    }
+async function postWebhook(config: WebhookProviderConfig, payload: WebhookPayload): Promise<WebhookResponse | null> {
+  const timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
-    return null;
+  const response = await fetch(config.webhookUrl, {
+    method: 'POST',
+    headers: buildHeaders(config, payload.headers),
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+
+  if (!response.ok) {
+    throw new ProviderError(
+      `Webhook returned ${response.status}: ${response.statusText}`,
+      response.status >= 500 ? 'SERVER_ERROR' : 'INVALID_RESPONSE',
+      response.status,
+    );
   }
 
-  private async postWebhookWithRetry(payload: WebhookPayload): Promise<WebhookResponse | null> {
-    const maxRetries = this.config.retries ?? DEFAULT_RETRIES;
-    let lastError: unknown;
+  // Try to parse JSON response
+  const contentType = response.headers.get('content-type') ?? '';
+  if (contentType.includes('application/json')) {
+    return (await response.json()) as WebhookResponse;
+  }
 
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
-      try {
-        return await this.postWebhook(payload);
-      } catch (error) {
-        lastError = error;
-        // Only retry on 5xx errors
-        if (error instanceof ProviderError && error.code === 'SERVER_ERROR' && attempt < maxRetries) {
-          log.warn('Webhook 5xx error, retrying', {
-            attempt: attempt + 1,
-            maxRetries,
-            error: String(error),
-          });
-          // Brief backoff before retry
-          await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
-          continue;
-        }
-        throw error;
+  // Plain text response
+  const text = await response.text();
+  if (text.trim()) {
+    return { reply: text.trim() };
+  }
+
+  return null;
+}
+
+async function postWebhookWithRetry(
+  config: WebhookProviderConfig,
+  payload: WebhookPayload,
+): Promise<WebhookResponse | null> {
+  const maxRetries = config.retries ?? DEFAULT_RETRIES;
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await postWebhook(config, payload);
+    } catch (error) {
+      lastError = error;
+      // Only retry on 5xx errors
+      if (error instanceof ProviderError && error.code === 'SERVER_ERROR' && attempt < maxRetries) {
+        log.warn('Webhook 5xx error, retrying', {
+          attempt: attempt + 1,
+          maxRetries,
+          error: String(error),
+        });
+        // Brief backoff before retry
+        await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
+        continue;
       }
+      throw error;
     }
+  }
 
-    throw lastError;
+  throw lastError;
+}
+
+/** A reply's parts: pre-split, else the single reply, else none. */
+const partsOf = (response: WebhookResponse | null): string[] =>
+  response?.parts ?? (response?.reply ? [response.reply] : []);
+
+/**
+ * The payload a message trigger sends, made from an agent-runner request. The
+ * event type says an automation asked; a chatless run has no instance or chat,
+ * so those ids are empty.
+ */
+function payloadFor(request: ProviderRequest, runId: string): WebhookPayload {
+  const { platform } = request;
+  return {
+    event: { id: runId, type: 'automation.call_agent', timestamp: Date.now() },
+    instance: {
+      id: platform?.instanceId ?? '',
+      channelType: platform?.channel ?? '',
+      ...(platform?.instanceName ? { name: platform.instanceName } : {}),
+    },
+    chat: { id: request.chat?.id ?? '' },
+    sender: {
+      id: platform?.id ?? request.userId,
+      ...(request.sender?.displayName ? { name: request.sender.displayName } : {}),
+      ...(platform && request.userId !== platform.id ? { personId: request.userId } : {}),
+    },
+    content: { text: request.message },
+    traceId: runId,
+    replyEndpoint: REPLY_ENDPOINT,
+  };
+}
+
+/** A webhook provider behind IAgentClient (#1262): one POST per run, the reply as one chunk. */
+export class WebhookAgentClient implements IAgentClient {
+  constructor(private config: WebhookProviderConfig) {}
+
+  async run(request: ProviderRequest): Promise<ProviderResponse> {
+    const runId = crypto.randomUUID();
+    const response = await deliverWebhook(this.config, payloadFor(request, runId));
+    return {
+      content: partsOf(response).join('\n\n'),
+      runId,
+      sessionId: request.sessionId ?? runId,
+      status: 'completed',
+    };
+  }
+
+  async *stream(request: ProviderRequest): AsyncGenerator<StreamChunk> {
+    const { content, runId, sessionId } = await this.run(request);
+    yield { event: 'RunCompleted', content, isComplete: true, runId, sessionId };
+  }
+
+  checkHealth(): Promise<AgentHealthResult> {
+    return checkWebhookHealth(this.config);
   }
 }

@@ -55,7 +55,7 @@ export type { ClaudeCodeConfig, ClaudeCodeStreamConfig, StreamRunResult, StreamR
 export { AgnoAgentProvider } from './agno-provider';
 export { ClaudeCodeAgentProvider } from './claude-code-provider';
 export type { ClaudeCodeProviderOptions, SessionStorage } from './claude-code-provider';
-export { WebhookAgentProvider } from './webhook-provider';
+export { WebhookAgentClient, WebhookAgentProvider, webhookProviderConfig } from './webhook-provider';
 export {
   ED25519_PKCS8_PREFIX,
   OpenClawAgentProvider,
