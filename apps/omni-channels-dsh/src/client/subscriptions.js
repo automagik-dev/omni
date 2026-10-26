@@ -14,13 +14,6 @@ const TRIGGER_ICONS = { message: MessageIcon, mention: AtIcon, keyword: KeywordI
 const FRESH_MS = 6000
 
 export const isEventsBot = (roster, id) => Boolean(roster?.eventsBotId) && roster.byId?.[id]?.id === roster.eventsBotId
-// Whether the host reads a real omni (omni-store.js), rather than showing the sample.
-export const omniLive = omni => omni?.source?.kind === 'live'
-
-// The board opens by itself once per Omni chat, the first time that chat is on screen with
-// omni connected; before that it would only say there is nothing to watch, and the header's
-// Automations button is the way in.
-export const boardOpensFor = ({ id, opened, roster, omni }) => Boolean(id) && !opened.has(id) && isEventsBot(roster, id) && omniLive(omni)
 
 // The header button's count: the automations there are, none until there is one.
 export const headCount = roster => (roster?.subscriptions ?? []).length || null

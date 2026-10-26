@@ -14438,8 +14438,6 @@ var { AtIcon, FileIcon, KeywordIcon, MessageIcon, ShieldIcon, UnplugIcon, VoiceI
 var TRIGGER_ICONS = { message: MessageIcon, mention: AtIcon, keyword: KeywordIcon, voice: VoiceIcon, media: FileIcon, down: UnplugIcon };
 var FRESH_MS = 6e3;
 var isEventsBot = (roster, id) => Boolean(roster?.eventsBotId) && roster.byId?.[id]?.id === roster.eventsBotId;
-var omniLive = (omni2) => omni2?.source?.kind === "live";
-var boardOpensFor = ({ id, opened, roster, omni: omni2 }) => Boolean(id) && !opened.has(id) && isEventsBot(roster, id) && omniLive(omni2);
 var headCount = (roster) => (roster?.subscriptions ?? []).length || null;
 function workerOf(worker, roster) {
   if (worker.kind === "events" || worker.kind === "main") {
@@ -15800,7 +15798,6 @@ var import_react15 = require("react");
 var { ClockIcon: ClockIcon2 } = icons;
 var inject = ["slots"];
 var channels = Object.freeze({ Badge, KeyValue, LiveChannel, LiveChat, LiveQr, Table });
-var BOARD_OPENED = "omni.board.opened";
 var boardRight = null;
 function toggleBoard(reportError) {
   const right = boardRight;
@@ -15813,44 +15810,15 @@ function toggleBoard(reportError) {
   }
 }
 function installBoard(ctx, face) {
-  const roster = face().hooks.roster;
   const fiber = ctx.inject(["sidebarRight", "sidebarRightTabs"], (scope) => {
     scope.effect(() => scope.sidebarRightTabs.register(boardTabDefinition()), "ds-bot: subscriptions tab type");
     scope.effect(() => ctx.slots.inject("sidebar.right.pane.tab", () => ctx.slots.register({ name: "sidebar.right.pane.tab", key: BOARD_TAB_ID, inject: face }, BoardTab)), "ds-bot: subscriptions tab");
     scope.effect(() => {
-      const right = scope.sidebarRight;
-      boardRight = right;
-      let opened;
-      try {
-        opened = new Set(JSON.parse(localStorage.getItem(BOARD_OPENED) ?? "[]"));
-      } catch {
-        opened = /* @__PURE__ */ new Set();
-      }
-      const check = () => {
-        const id = right.mounted.getSnapshot();
-        if (!id || opened.has(id) || !isEventsBot(roster.getSnapshot(), id)) return;
-        startLive(call);
-        if (!boardOpensFor({ id, opened, roster: roster.getSnapshot(), omni: omniStore.getSnapshot() })) return;
-        opened.add(id);
-        try {
-          localStorage.setItem(BOARD_OPENED, JSON.stringify([...opened]));
-        } catch {
-        }
-        queueMicrotask(() => {
-          try {
-            right.openTab(BOARD_KIND);
-          } catch (error) {
-            console.warn("[ds-bot] board", error);
-          }
-        });
-      };
-      const offs = [right.mounted.subscribe(check), roster.subscribe(check), omniStore.subscribe(check)];
-      check();
+      boardRight = scope.sidebarRight;
       return () => {
         boardRight = null;
-        for (const off of offs) off();
       };
-    }, "ds-bot: open the automations board");
+    }, "ds-bot: the automations board for the header button");
   });
   return () => fiber.dispose();
 }

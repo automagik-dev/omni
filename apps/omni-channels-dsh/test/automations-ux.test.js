@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFileSync, readdirSync } from 'node:fs'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { runInNewContext } from 'node:vm'
@@ -8,7 +9,7 @@ import { omni } from './omni-client.js'
 // The automations board's quieter first run and the warning Omni's confirmation carries,
 // out of their React. Bundled as DSH bundles the client, with stand-in React.
 async function load() {
-  const entry = 'export { boardOpensFor, headCount, savedOf, savedNotice, SavedAutomationCard, SubscriptionsButton } from \'./subscriptions.js\''
+  const entry = 'export { headCount, savedOf, savedNotice, SavedAutomationCard, SubscriptionsButton } from \'./subscriptions.js\''
   const bundle = await build({
     stdin: { contents: entry, resolveDir: fileURLToPath(new URL('../src/client/', import.meta.url)), loader: 'js' },
     bundle: true, format: 'cjs', platform: 'node', write: false, logLevel: 'silent',
@@ -24,18 +25,22 @@ async function load() {
 const ui = await load()
 
 const roster = (subscriptions = []) => ({ eventsBotId: 'm1', byId: { m1: { id: 'm1', name: 'Omni' }, b2: { id: 'b2', name: 'Ops' } }, subscriptions })
-const live = { source: { kind: 'live' } }
-const preview = { source: { kind: 'preview', missing: ['url'] } }
 const textOf = node => (node === null || node === undefined ? '' : typeof node === 'string' ? node : (node.children ?? []).map(textOf).join(''))
 
-test('the board opens by itself once per Omni chat, and only with omni connected', () => {
-  const opened = new Set()
-  assert.equal(ui.boardOpensFor({ id: 'm1', opened, roster: roster(), omni: preview }), false, 'not connected: it would only say there is nothing to watch')
-  assert.equal(ui.boardOpensFor({ id: 'm1', opened, roster: roster(), omni: live }), true)
-  assert.equal(ui.boardOpensFor({ id: 'b2', opened, roster: roster(), omni: live }), false, 'only Omni\'s chat has the board')
-  assert.equal(ui.boardOpensFor({ id: undefined, opened, roster: roster(), omni: live }), false)
-  opened.add('m1')
-  assert.equal(ui.boardOpensFor({ id: 'm1', opened, roster: roster(), omni: live }), false, 'once')
+// The board took most of the window next to Omni's chat, by itself, again with each fresh part
+// of that chat. Only the header's Automations button opens it now.
+test('the board never opens by itself: only the header button opens it', () => {
+  const dir = new URL('../src/client/', import.meta.url)
+  const opens = []
+  for (const name of readdirSync(dir).filter(file => file.endsWith('.js'))) {
+    const text = readFileSync(new URL(name, dir), 'utf8')
+    for (const match of text.matchAll(/\.openTab\(/g)) opens.push(`${name}: ${text.slice(0, match.index).split('\n').length}`)
+  }
+  assert.equal(opens.length, 1, `the board opens from ${opens.join(', ')}`)
+  const index = readFileSync(new URL('index.js', dir), 'utf8')
+  const toggle = index.slice(index.indexOf('function toggleBoard('), index.indexOf('function installBoard('))
+  assert.match(toggle, /right\.openTab\(BOARD_KIND\)/)
+  assert.doesNotMatch(index, /omni\.board\.opened|localStorage/)
 })
 
 test('the header button counts automations only once there is one, and shows who waits', () => {
