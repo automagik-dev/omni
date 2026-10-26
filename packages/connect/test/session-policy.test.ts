@@ -371,6 +371,45 @@ describe('bounded body reads', () => {
     expect(stream.locked).toBe(false);
   });
 
+  test('a releaseLock that throws never replaces the result or the real error', async () => {
+    const releaseFault = new Error('release failure');
+    const readFault = new Error('read failure');
+    const cancelFault = new Error('cancel failure');
+    type Outcome = 'eof' | 'read-error' | 'cap' | 'cancel-rejects' | 'cancel-throws';
+    /** A reader over one 3-byte chunk whose releaseLock always throws; `outcome` picks the path. */
+    function stream(outcome: Outcome) {
+      let reads = 0;
+      const calls = { release: 0 };
+      const reader = {
+        async read() {
+          if (outcome === 'read-error') throw readFault;
+          return reads++ === 0 ? { done: false, value: new Uint8Array([0x61, 0x62, 0x63]) } : { done: true };
+        },
+        cancel(): Promise<void> {
+          if (outcome === 'cancel-throws') throw cancelFault;
+          return outcome === 'cancel-rejects' ? Promise.reject(cancelFault) : Promise.resolve();
+        },
+        releaseLock() {
+          calls.release += 1;
+          throw releaseFault;
+        },
+      };
+      return { stream: { getReader: () => reader }, calls };
+    }
+    const eof = stream('eof');
+    expect(await readCapped(eof.stream, 3)).toEqual(new Uint8Array([0x61, 0x62, 0x63]));
+    const cap = stream('cap');
+    expect(await readCapped(cap.stream, 1)).toBeNull();
+    const failed = stream('read-error');
+    await expect(readCapped(failed.stream, 3)).rejects.toBe(readFault);
+    const rejects = stream('cancel-rejects');
+    await expect(readCapped(rejects.stream, 1)).rejects.toBe(cancelFault);
+    const throws = stream('cancel-throws');
+    await expect(readCapped(throws.stream, 1)).rejects.toBe(cancelFault);
+    const released = [eof, cap, failed, rejects, throws].map((s) => s.calls.release);
+    expect(released).toEqual([1, 1, 1, 1, 1]);
+  });
+
   test('a leading UTF-8 byte order mark is kept as U+FEFF', async () => {
     expect(codepoints(await text([0xef, 0xbb, 0xbf, 0x61]))).toEqual([0xfeff, 0x61]);
     expect(codepoints(await text([0xef, 0xbb, 0xbf]))).toEqual([0xfeff]);
