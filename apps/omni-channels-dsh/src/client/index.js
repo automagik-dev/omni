@@ -4,12 +4,12 @@ import { registerSettings } from './omni-settings.js'
 import { WizardHost } from './wizard.js'
 import { CHANNELS_CSS, ChannelsFooter, ChannelsPage, ChatPage } from './channels.js'
 import { CHANNELS_PANEL, CHAT_PANEL } from './omni-store.js'
-import { BOARD_KIND, BOARD_TAB_ID, BoardTab, EventsBadge, SUBSCRIPTIONS_CSS, SavedAutomationCard, SubscriptionsButton, boardTabDefinition } from './subscriptions.js'
+import { BOARD_KIND, BOARD_TAB_ID, BoardTab, EventsBadge, SUBSCRIPTIONS_CSS, SavedAutomationCard, SubscriptionsButton, automationExamples, boardTabDefinition } from './subscriptions.js'
 import { AUTOMATIONS_CSS, AUTOMATIONS_PANEL, AutomationsPage } from './automations-page.js'
 import { Badge, KeyValue, LiveChannel, LiveChat, LiveQr, OMNI_LIVE_CSS, OmniCallCard, OmniToolCard, Table, parseCall } from './omni-live.js'
 import { OMNI_PEEK_CSS } from './omni-peek.js'
 import { OMNI_CONNECT_CSS, connectFromApp } from './omni-connect.js'
-import { addStrings, badges, botChildren, botSettings, headerButtons, nav, onShell, t, toolCards, icons } from './core.js'
+import { addStrings, badges, botChildren, botSettings, chatSuggestions, headerButtons, nav, onShell, t, toolCards, icons } from './core.js'
 import { OMNI_TREE_CSS, OmniTree } from './omni-tree.js'
 import { ASKING_TOOLS, ConsentDock, PERMISSIONS_CSS, PermissionsCard, withConsent } from './permissions.js'
 import { STRINGS } from './strings.js'
@@ -104,6 +104,9 @@ export function apply(ctx) {
     id: 'omni-board',
     Component: ({ bot, roster, actions, useWork }) => (bot.id === roster.eventsBotId ? h(SubscriptionsButton, { roster, useWork, onToggle: () => toggleBoard(actions.reportError) }) : null),
   }), 'ds-bot: automations button')
+  // An empty chat with the events Bot suggests what it can watch, where a panel used to open by
+  // itself. A team client older than this plugin has no chat suggestions.
+  if (chatSuggestions?.register) ctx.effect(() => chatSuggestions.register({ id: 'omni-automations', order: -10, when: ({ bot, roster }) => Boolean(bot?.id) && bot.id === roster?.eventsBotId, items: automationExamples }), 'ds-bot: automation suggestions')
   ctx.effect(() => nav.register({ id: 'automations', label: () => t('Automations'), icon: ClockIcon, run: actions => actions.selectPanel(AUTOMATIONS_PANEL) }), 'ds-bot: automations nav')
   // Omni chats and the Channels page are main panels, like the shell's Plugins page: they
   // replace the conversation in the center, and opening a Bot brings it back.

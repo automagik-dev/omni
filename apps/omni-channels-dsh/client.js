@@ -10711,7 +10711,7 @@ async function skipConnect({ complete }, { omniAi = callOmniAi, storage: storage
 
 // src/client/core.js
 var import_client = require("@automagik/bots-dsh/client");
-var { call, t, addStrings, onShell, toolCards, nav, badges, botChildren, headerButtons, botSettings } = import_client.omni;
+var { call, t, addStrings, onShell, toolCards, nav, badges, botChildren, headerButtons, botSettings, chatSuggestions } = import_client.omni;
 var { OmniMark, BotMark, MAIN_LOOK, CHARACTERS, relativeShort, createSource } = import_client.omni.ui;
 var icons = import_client.omni.ui.icons;
 
@@ -14599,12 +14599,13 @@ function SubscriptionsBoard({ bot, roster, actions, waiting }) {
     )
   );
 }
+var automationExamples = () => [
+  { id: "watch", label: t("Watch a channel for errors"), text: t("Watch #ci-alerts for “failed” or “error” and hand it to Ops"), icon: "KeywordIcon" },
+  { id: "pin", label: t("Save what I pin"), text: t("When I react 📌 to a message in any WhatsApp chat, save it to my notes"), icon: "PinIcon" },
+  { id: "voice", label: t("Send my voice notes on"), text: t("Voice notes in my own chat go to one ongoing session"), icon: "VoiceIcon" }
+];
 function Empty({ bot, live }) {
-  const examples = [
-    t("Watch #ci-alerts for “failed” or “error” and hand it to Ops"),
-    t("When I react 📌 to a message in any WhatsApp chat, save it to my notes"),
-    t("Voice notes in my own chat go to one ongoing session")
-  ];
+  const examples = automationExamples().map((example) => example.text);
   return (0, import_react11.createElement)(
     "div",
     { className: "os-empty-board" },
@@ -15301,6 +15302,9 @@ var STRINGS = {
   "Tell {name} what to watch": "告诉 {name} 要关注什么",
   "Test": "测试",
   "Voice notes in my own chat go to one ongoing session": "我自己聊天中的语音消息交给一个持续的会话",
+  "Watch a channel for errors": "关注一个频道里的错误",
+  "Save what I pin": "保存我标记 📌 的消息",
+  "Send my voice notes on": "转交我的语音消息",
   "Watch #ci-alerts for “failed” or “error” and hand it to Ops": "关注 #ci-alerts 中的“failed”或“error”，交给 Ops",
   "Watching 1 chat or channel.": "正在关注 1 个聊天或渠道。",
   "Watching {n} chats and channels.": "正在关注 {n} 个聊天和渠道。",
@@ -15862,6 +15866,7 @@ function apply(ctx) {
     id: "omni-board",
     Component: ({ bot, roster, actions, useWork }) => bot.id === roster.eventsBotId ? (0, import_react15.createElement)(SubscriptionsButton, { roster, useWork, onToggle: () => toggleBoard(actions.reportError) }) : null
   }), "ds-bot: automations button");
+  if (chatSuggestions?.register) ctx.effect(() => chatSuggestions.register({ id: "omni-automations", order: -10, when: ({ bot, roster }) => Boolean(bot?.id) && bot.id === roster?.eventsBotId, items: automationExamples }), "ds-bot: automation suggestions");
   ctx.effect(() => nav.register({ id: "automations", label: () => t("Automations"), icon: ClockIcon2, run: (actions) => actions.selectPanel(AUTOMATIONS_PANEL) }), "ds-bot: automations nav");
   ctx.effect(() => onShell(({ face, shadow, installCompiledStyles }) => [
     () => installCompiledStyles(CHANNELS_CSS + OMNI_TREE_CSS + SUBSCRIPTIONS_CSS + AUTOMATIONS_CSS + OMNI_LIVE_CSS + OMNI_PEEK_CSS + OMNI_CONNECT_CSS + PERMISSIONS_CSS, "channels"),

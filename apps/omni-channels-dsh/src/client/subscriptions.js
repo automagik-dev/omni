@@ -184,12 +184,16 @@ export function SubscriptionsBoard({ bot, roster, actions, waiting }) {
       h('span', null, t('Anyone in a watched chat can write text that tries to steer a Bot. Work started by an event reads on its own and asks you before any shell command, file change, web or connector call, or message, unless you tell {name} otherwise. What you allow runs with that Bot\'s keys.', { name: bot.name }))))
 }
 
+// What Omni's events Bot can watch: the board's empty state lists them, and an empty chat with
+// that Bot offers them as chips (the team's chatSuggestions) that fill the composer with `text`.
+export const automationExamples = () => [
+  { id: 'watch', label: t('Watch a channel for errors'), text: t('Watch #ci-alerts for “failed” or “error” and hand it to Ops'), icon: 'KeywordIcon' },
+  { id: 'pin', label: t('Save what I pin'), text: t('When I react 📌 to a message in any WhatsApp chat, save it to my notes'), icon: 'PinIcon' },
+  { id: 'voice', label: t('Send my voice notes on'), text: t('Voice notes in my own chat go to one ongoing session'), icon: 'VoiceIcon' },
+]
+
 function Empty({ bot, live }) {
-  const examples = [
-    t('Watch #ci-alerts for “failed” or “error” and hand it to Ops'),
-    t('When I react 📌 to a message in any WhatsApp chat, save it to my notes'),
-    t('Voice notes in my own chat go to one ongoing session'),
-  ]
+  const examples = automationExamples().map(example => example.text)
   return h('div', { className: 'os-empty-board' },
     h(BotMark, { bot, size: 48, live: true }),
     h('strong', null, t('Tell {name} what to watch', { name: bot.name })),
