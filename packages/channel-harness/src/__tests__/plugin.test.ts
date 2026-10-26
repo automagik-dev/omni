@@ -136,6 +136,13 @@ describe('HarnessChannelPlugin', () => {
     expect(rawPayload.outgoing.content.buttons).toHaveLength(2);
   });
 
+  it('puts the agent that sent a reply on message.sent, so the idle follow-up arms (#1263)', async () => {
+    await plugin.sendMessage(INSTANCE, buttonsMessage({ metadata: { senderAgentId: 'agent-1' } }));
+    await plugin.sendMessage(INSTANCE, buttonsMessage());
+    const sent = eventBus.calls.filter((c) => c.type === 'message.sent');
+    expect(sent.map((c) => c.payload.senderAgentId)).toEqual(['agent-1', undefined]);
+  });
+
   // ─── Capability profile ─────────────────────────────────────
 
   it('refuses buttons when the profile declares canSendButtons: false', async () => {
