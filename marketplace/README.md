@@ -32,7 +32,7 @@ https://<your-omni>/api/market/index.json
 | Route | What it is |
 |-------|------------|
 | `/market` | The catalog, and how to add the index to a DSH (`/api/market` redirects there) |
-| `/api/market/index.json` | The market index: Omni's own plugins, each at its own version (the Omni release of its last change), and Automagik's at the release Omni pins |
+| `/api/market/index.json` | The market index: Omni's own plugins, each at its own version (the Omni release of its last change), and Automagik's at the release Omni pins, or newer from Automagik's plugin lane |
 | `/api/market/npm/` | An npm registry for Omni's own plugins; any other package name redirects to registry.npmjs.org |
 
 A reverse proxy that passes only `/api/*` to Omni must pass `/market` too, unauthenticated, for the page.
@@ -46,6 +46,21 @@ an offline build). So an Omni serves the Bot team at the Automagik version it wa
 source has no packed plugins and lists Automagik's plugins, from their pinned commit, only;
 point `OMNI_MARKET_DIR` at a `bun scripts/pack-market.ts <dir>` output to serve them. The links use
 `OMNI_PUBLIC_URL` when it is set, else the address the request came in on.
+
+The release's Bot team and welcome are a floor, not a ceiling. Automagik publishes its plugins on a signed lane of
+their own (`plugin-lane` in automagik-dev/automagik, see its `plugin-lane/README.md`), and an Omni serves a newer one
+from there, the same way, without a new Omni release (`packages/api/src/market/lane.ts`). It looks a minute after it
+starts, then hourly, and takes a lane only when all of it checks out:
+
+- `lane.json` is signed by a key Omni pins (`LANE_KEYS`), and it is Automagik's;
+- its `sequence` is higher than the last lane taken's, so an older lane can't be replayed;
+- only `@automagik/*` plugins on Automagik's releases count, each at least the version `apps/automagik.json` names;
+- every tarball has the size, sha256 and sha512 the lane says, and a `package.json` of that name and version.
+
+Anything else keeps what the Omni serves. The release's own version, and any lane version served before in the run,
+stay installable beside the newest. The last lane taken is kept in `OMNI_PLUGIN_LANE_DIR` (default
+`$OMNI_UPDATE_STATE_DIR/plugin-lane`) and checked again on start, with no request. `OMNI_PLUGIN_LANE=off` turns
+the lane off, so the market makes no request at all. `engines.dsh` stays in each entry for DSH to read.
 
 
 ## Add it to your DSH
@@ -68,10 +83,10 @@ DSH asks before it installs anything, and installs exactly the version listed.
 
 | Plugin | Source | Notes |
 |--------|--------|-------|
-| `@automagik/bots-dsh` | [automagik-dev/automagik](https://github.com/automagik-dev/automagik), `apps/bots-dsh`, at the release `apps/automagik.json` pins | The Bot team the others build on (formerly `@automagik/omni-dsh`). Keeps its files in `~/.omni`, never in your DSH profile. |
+| `@automagik/bots-dsh` | [automagik-dev/automagik](https://github.com/automagik-dev/automagik), `apps/bots-dsh`, at the release `apps/automagik.json` pins, or newer from its plugin lane | The Bot team the others build on (formerly `@automagik/omni-dsh`). Keeps its files in `~/.omni`, never in your DSH profile. |
 | `@automagik/omni-channels-dsh` | this repository, `apps/omni-channels-dsh`, pinned to a commit | Omni channels: link your Omni, its channels, chats and automations. Needs the Bot team. |
 | `@automagik/omni-canvas-dsh` | this repository, `apps/omni-canvas-dsh`, pinned to a commit | Omni canvases: live UI in the chat, drawn from your Omni. Needs the Bot team and channels. |
-| `@automagik/welcome-dsh` | automagik-dev/automagik, `apps/welcome-dsh`, at the release `apps/automagik.json` pins | The welcome and Connect AI (formerly `@automagik/omni-ai-dsh`). |
+| `@automagik/welcome-dsh` | automagik-dev/automagik, `apps/welcome-dsh`, at the release `apps/automagik.json` pins, or newer from its plugin lane | The welcome and Connect AI (formerly `@automagik/omni-ai-dsh`). |
 
 The Claude Code provider and the AI subscriptions add-ons moved to Automagik's index with the rest of the
 outside plugins Automagik vets; `make marketplace-check` refuses any source other than a commit of this

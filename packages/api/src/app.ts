@@ -72,10 +72,12 @@ import { requireSignedInstanceMiddleware } from './middleware/require-signed-ins
 import { scopeEnforcerMiddleware } from './middleware/scope-enforcer';
 import { tenancyMiddleware } from './middleware/tenancy';
 
+import automagikPin from '../../../apps/automagik.json';
 import packageJson from '../package.json';
 import { SLACK_OAUTH_CALLBACK_PATH } from './constants/slack-app';
 import { type Login, createLogin } from './login';
 import type { LoginDefaults } from './login/config';
+import { type PluginLane, createPluginLane, readPluginLaneDir, readPluginLaneUrl } from './market/lane';
 import { marketPageRoutes, marketRoutes } from './market/routes';
 import { createMarket, readMarketPublicUrl } from './market/service';
 import { createContextMiddleware } from './middleware/context';
@@ -131,6 +133,8 @@ export interface CreateAppResult {
   login: Login | null;
   /** Updates the owner confirms; off unless the operator set OMNI_UPDATE_COMMAND. */
   updater: SystemUpdater;
+  /** Automagik's plugin lane for the market; null when OMNI_PLUGIN_LANE=off. The server starts it. */
+  pluginLane: PluginLane | null;
 }
 
 /** The JSON 404 every unknown path answers. */
@@ -601,7 +605,18 @@ export function createApp(
   // at /market. Public by contract, read-only, the same for every caller: no tenant, instance or
   // user data. Declared `public-by-contract` in tenancy/route-ownership.ts. Must be mounted
   // before protectedApp and the UI.
-  const market = createMarket({ publicUrl: login?.config.publicUrl ?? readMarketPublicUrl() });
+  // Automagik's plugin lane: newer Bot team releases than this one bundled, without a new Omni.
+  // apps/automagik.json is the floor. Nothing is asked of the network until index.ts starts it.
+  const laneUrl = readPluginLaneUrl();
+  const pluginLane = laneUrl
+    ? createPluginLane({
+        url: laneUrl,
+        floor: Object.fromEntries(Object.entries(automagikPin.packages).map(([name, pkg]) => [name, pkg.version])),
+        dir: readPluginLaneDir(),
+        eventBus,
+      })
+    : null;
+  const market = createMarket({ publicUrl: login?.config.publicUrl ?? readMarketPublicUrl(), lane: pluginLane });
   app.route('/api/market', marketRoutes(market));
   app.route('/market', marketPageRoutes(market));
 
@@ -655,7 +670,7 @@ export function createApp(
   // 404 handler
   app.notFound(endpointNotFound);
 
-  return { app, services, login, updater };
+  return { app, services, login, updater, pluginLane };
 }
 
 export type App = Hono<{ Variables: AppVariables }>;
