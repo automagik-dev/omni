@@ -1,6 +1,6 @@
 {
   "name": "@omni/channel-gupshup",
-  "version": "2.261026.21",
+  "version": "2.261026.22",
   "description": "Gupshup WhatsApp BSP channel plugin for Omni",
   "type": "module",
   "main": "src/index.ts",
