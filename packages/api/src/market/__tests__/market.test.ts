@@ -132,14 +132,17 @@ describe('market index', () => {
       ...THIRD_PARTY,
     ]);
     const [omni, fresh] = parsed.plugins;
+    // Its package declares no DSH range here, so the entry takes the static index's.
+    const listed = staticIndex.plugins.find((plugin) => plugin.name === omni?.name);
     expect(omni?.versions).toEqual([
       {
         version: VERSION,
         publishTimestamp: PACKED_AT,
         source: { type: 'npm', registry: `${PUBLIC}/api/market/npm/` },
-        engines: { dsh: '>=0.2.1-rc.2 <0.3.0' },
+        engines: { dsh: listed?.versions[0]?.engines?.dsh },
       },
     ]);
+    expect(listed?.versions[0]?.engines?.dsh).toBeTruthy();
     // The static index's presentation for a plugin it lists; derived from the package for one it does not.
     expect(omni?.title).toEqual(staticIndex.plugins.find((plugin) => plugin.name === omni?.name)?.title);
     expect(omni?.title).toBeTruthy();
