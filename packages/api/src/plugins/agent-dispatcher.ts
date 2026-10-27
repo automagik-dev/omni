@@ -6698,6 +6698,7 @@ export const __test__ = {
   sendResponseParts,
   awaitMediaProcessing,
   selectProcessableMedia,
+  collectProcessedMedia,
   // #914 cancel plumbing — exposed so tests can stage in-flight runs and
   // assert the thread-scoped lookup + requestedAt guard.
   activeRunAborts,

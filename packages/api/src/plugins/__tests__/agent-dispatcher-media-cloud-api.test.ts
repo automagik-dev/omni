@@ -10,7 +10,7 @@
 import { describe, expect, it } from 'bun:test';
 import { __test__ } from '../agent-dispatcher';
 
-const { selectProcessableMedia } = __test__;
+const { selectProcessableMedia, collectProcessedMedia } = __test__;
 
 type BufferedLike = Parameters<typeof selectProcessableMedia>[0][number];
 
@@ -38,5 +38,31 @@ describe('selectProcessableMedia', () => {
     const text = bufferedMessage({ type: 'text', text: 'oi' });
     const untyped = bufferedMessage({ mediaId: '42' });
     expect(selectProcessableMedia([text, untyped])).toEqual([]);
+  });
+});
+
+describe('collectProcessedMedia', () => {
+  it('waits on Cloud API audio by mediaId and hands its transcription to the agent', async () => {
+    const lookups: Array<[string, string]> = [];
+    const services = {
+      chats: { findByExternalIdSmart: async () => ({ id: 'chat-uuid' }) },
+      messages: {
+        getByExternalId: async (chatId: string, externalId: string) => {
+          lookups.push([chatId, externalId]);
+          return { id: 'msg-uuid', transcription: 'I want to book an appointment', mediaLocalPath: null };
+        },
+      },
+    } as unknown as Parameters<typeof collectProcessedMedia>[0];
+    const instance = {
+      id: 'inst-1',
+      agentSendMediaPath: false,
+      agentSendMediaPathTypes: null,
+    } as unknown as Parameters<typeof collectProcessedMedia>[1];
+    const cloudAudio = bufferedMessage({ type: 'audio', mediaId: '1479488557369270', mimeType: 'audio/ogg' });
+
+    const texts = await collectProcessedMedia(services, instance, [cloudAudio]);
+
+    expect(lookups).toEqual([['chat-uuid', 'ext-1']]);
+    expect(texts).toEqual(['\u{1F3B5}: I want to book an appointment']);
   });
 });
