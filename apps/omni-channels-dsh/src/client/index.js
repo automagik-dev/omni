@@ -11,6 +11,7 @@ import { OMNI_PEEK_CSS } from './omni-peek.js'
 import { OMNI_CONNECT_CSS, connectFromApp } from './omni-connect.js'
 import { addStrings, badges, botChildren, botSettings, chatSuggestions, headerButtons, nav, onShell, t, toolCards, icons } from './core.js'
 import { OMNI_TREE_CSS, OmniTree, ThreadDock } from './omni-tree.js'
+import { OMNI_PHONE_CSS, PhoneDock, installPhone } from './omni-phone.js'
 import { ASKING_TOOLS, ConsentDock, PERMISSIONS_CSS, PermissionsCard, withConsent } from './permissions.js'
 import { STRINGS } from './strings.js'
 const { ClockIcon } = icons
@@ -111,10 +112,13 @@ export function apply(ctx) {
   // Omni chats and the Channels page are main panels, like the shell's Plugins page: they
   // replace the conversation in the center, and opening a Bot brings it back.
   ctx.effect(() => onShell(({ face, shadow, installCompiledStyles }) => [
-    () => installCompiledStyles(CHANNELS_CSS + OMNI_TREE_CSS + SUBSCRIPTIONS_CSS + AUTOMATIONS_CSS + OMNI_LIVE_CSS + OMNI_PEEK_CSS + OMNI_CONNECT_CSS + PERMISSIONS_CSS, 'channels'),
+    () => installCompiledStyles(CHANNELS_CSS + OMNI_TREE_CSS + SUBSCRIPTIONS_CSS + AUTOMATIONS_CSS + OMNI_LIVE_CSS + OMNI_PEEK_CSS + OMNI_CONNECT_CSS + PERMISSIONS_CSS + OMNI_PHONE_CSS, 'channels'),
     () => shadow('conversation.input.dock', { id: 'omni-consent', order: -80, inject: face }, ConsentDock),
     // A chat thread's Session is not a Bot's: it marks the page so the Bot controls stay hidden there.
     () => shadow('conversation.input.dock', { id: 'omni-thread', order: -200, inject: face }, ThreadDock),
+    // In a thread's own Session, the button that opens its phone pane: the team's header draws
+    // its buttons in a Bot's Session only.
+    () => shadow('conversation.input.dock', { id: 'omni-phone', order: -190, inject: face }, PhoneDock),
     () => shadow('sidebar.footer.action', { id: 'bot-connect', order: -100, inject: face }, ChannelsFooter),
     // The Connect wizard opened on demand (settings, Channels, or once after install) mounts here.
     () => shadow('sidebar.footer.action', { id: 'omni-connect-wizard', order: 1000, inject: face }, WizardHost),
@@ -122,5 +126,7 @@ export function apply(ctx) {
     () => shadow('main', { key: CHAT_PANEL, inject: face }, ChatPage),
     () => shadow('main', { key: AUTOMATIONS_PANEL, inject: face }, AutomationsPage),
     () => installBoard(ctx, face),
+    // A thread's phone pane, a tab of the same column, opened only from the thread.
+    () => installPhone(ctx, face),
   ]), 'ds-bot: channels on the Bot surface')
 }

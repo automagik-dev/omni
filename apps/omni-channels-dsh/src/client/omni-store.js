@@ -215,7 +215,7 @@ export function omniActions(select, call) {
 // -------------------------------------------------------------------------
 // Live data: the host's omni endpoints (src/host/omni.js), polled while the page is shown.
 
-const POLL_MS = 15_000
+export const POLL_MS = 15_000
 let polling = null
 
 const markSeen = (seen, chats) => chats.map(chat => ((seen[chat.id] ?? -1) >= chat.at ? { ...chat, unread: 0 } : chat))

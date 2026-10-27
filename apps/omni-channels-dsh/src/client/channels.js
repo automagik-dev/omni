@@ -175,24 +175,17 @@ function MediaPart({ message, onSized }) {
   return h('img', { className: kind === 'sticker' ? 'oc-media-sticker' : 'oc-media-img', src: file.url, alt: message.mediaText ?? label, onLoad: onSized })
 }
 
-export function ChatPage({ actions }) {
-  const state = useOmni()
-  const omni = useActions(actions)
-  const chat = chatOf(state, state.chatId)
-  const channel = chat ? channelOf(state, chat.channelId) : undefined
-  const loaded = chat ? state.messages[chat.id] : undefined
-  const loading = chat !== undefined && loaded === undefined && !state.preview
-  const messages = chat ? loaded ?? (state.preview ? [{ id: 'preview', from: 'them', text: chat.preview, at: chat.at }] : []) : []
+// A chat's scroller, at its end when the chat or its number of messages changes. Whether
+// the reader is at the end: a file that loads and grows its row keeps them there, and leaves
+// a reader who scrolled up where they are.
+export function useStayAtEnd(chatId, count) {
   const scroller = useRef(null)
-  // Whether the reader is at the thread's end: a file that loads and grows its row keeps
-  // them there, and leaves a reader who scrolled up where they are.
   const atEnd = useRef(true)
-  const [draft, setDraft] = useState('')
   useLayoutEffect(() => {
     const node = scroller.current
     if (node) node.scrollTop = node.scrollHeight
     atEnd.current = true
-  }, [chat?.id, messages.length])
+  }, [chatId, count])
   const onScroll = () => {
     const node = scroller.current
     if (node) atEnd.current = node.scrollHeight - node.scrollTop - node.clientHeight < 32
@@ -201,6 +194,38 @@ export function ChatPage({ actions }) {
     const node = scroller.current
     if (node && atEnd.current) node.scrollTop = node.scrollHeight
   }
+  return { scroller, onScroll, onSized }
+}
+
+// A chat's messages, as the chat view and the phone pane (omni-phone.js) draw them: the day
+// over its first message, the sender over the first of a run, each file in its bubble with
+// Omni's text for it under it. Names and text from the chat are text only.
+export function ChatMessages({ messages, onSized }) {
+  return messages.map((message, index) => {
+    const mine = message.from !== 'them'
+    const newDay = index === 0 || dayKey(messages[index - 1].at) !== dayKey(message.at)
+    const first = newDay || messages[index - 1].from !== message.from || messages[index - 1].author !== message.author
+    return h(Fragment, { key: message.id }, newDay ? h('div', { className: 'oc-day' }, dayLabel(message.at)) : null, h('div', { className: `oc-msg oc-msg-${message.from}${first ? ' oc-msg-first' : ''}` },
+      first && !mine && message.author ? h('span', { className: 'oc-msg-author' }, message.author) : null,
+      first && message.from === 'omni' ? h('span', { className: 'oc-msg-author oc-msg-omni' }, h(OmniMark, { size: 12 }), 'Omni') : null,
+      h('div', { className: 'oc-bubble', 'data-sending': message.sending || undefined, 'data-media': drawnMedia(message) ? message.type : undefined },
+        drawnMedia(message) ? h(MediaPart, { message, onSized }) : null,
+        drawnMedia(message) ? (message.text ? h('span', { className: 'oc-media-caption' }, message.text) : null) : message.text,
+        drawnMedia(message) && message.mediaText ? h('span', { className: 'oc-media-text' }, message.mediaText) : null,
+        h('time', null, message.sending ? t('Sending…') : new Date(message.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })))))
+  })
+}
+
+export function ChatPage({ actions }) {
+  const state = useOmni()
+  const omni = useActions(actions)
+  const chat = chatOf(state, state.chatId)
+  const channel = chat ? channelOf(state, chat.channelId) : undefined
+  const loaded = chat ? state.messages[chat.id] : undefined
+  const loading = chat !== undefined && loaded === undefined && !state.preview
+  const messages = chat ? loaded ?? (state.preview ? [{ id: 'preview', from: 'them', text: chat.preview, at: chat.at }] : []) : []
+  const { scroller, onScroll, onSized } = useStayAtEnd(chat?.id, messages.length)
+  const [draft, setDraft] = useState('')
   useEffect(() => { setDraft('') }, [chat?.id])
   if (!chat || !channel) {
     return h('div', { className: 'oc-page oc-chat-empty' }, h(OmniMark, { size: 40 }), h('p', null, t('Pick a chat under your Bots.')))
@@ -223,19 +248,7 @@ export function ChatPage({ actions }) {
     h('div', { ref: scroller, className: 'oc-thread', onScroll, role: 'log', 'aria-label': t('Conversation with {name}', { name: chat.name }) },
       h('div', { className: 'oc-thread-in' },
         loading ? h('div', { className: 'oc-day' }, h('span', { className: 'oc-spinner', 'aria-hidden': true }), t('Loading messages…')) : null,
-        messages.map((message, index) => {
-          const mine = message.from !== 'them'
-          const newDay = index === 0 || dayKey(messages[index - 1].at) !== dayKey(message.at)
-          const first = newDay || messages[index - 1].from !== message.from || messages[index - 1].author !== message.author
-          return h(Fragment, { key: message.id }, newDay ? h('div', { className: 'oc-day' }, dayLabel(message.at)) : null, h('div', { className: `oc-msg oc-msg-${message.from}${first ? ' oc-msg-first' : ''}` },
-            first && !mine && message.author ? h('span', { className: 'oc-msg-author' }, message.author) : null,
-            first && message.from === 'omni' ? h('span', { className: 'oc-msg-author oc-msg-omni' }, h(OmniMark, { size: 12 }), 'Omni') : null,
-            h('div', { className: 'oc-bubble', 'data-sending': message.sending || undefined, 'data-media': drawnMedia(message) ? message.type : undefined },
-              drawnMedia(message) ? h(MediaPart, { message, onSized }) : null,
-              drawnMedia(message) ? (message.text ? h('span', { className: 'oc-media-caption' }, message.text) : null) : message.text,
-              drawnMedia(message) && message.mediaText ? h('span', { className: 'oc-media-text' }, message.mediaText) : null,
-              h('time', null, message.sending ? t('Sending…') : new Date(message.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })))))
-        }))),
+        h(ChatMessages, { messages, onSized }))),
     h('footer', { className: 'oc-compose-wrap' },
       failed ? h('button', { type: 'button', className: 'oc-compose-note oc-compose-fail', role: 'alert', onClick: () => setDraft(failed.text) }, t('Not sent: {reason}', { reason: failed.message }), ' ', h('u', null, t('Put it back'))) : null,
       !writable ? h('div', { className: 'oc-compose-note oc-compose-info' }, t('This device\'s key can\'t send messages; ask your Omni\'s owner.'))

@@ -479,21 +479,21 @@ function sl(s15, t2, e, i, r, n) {
   for (let l = 0; l < s15.length - 1; l++) {
     let a = l, u = s15.get(++a);
     if (!u.isWrapped) continue;
-    let h16 = [s15.get(l)];
-    for (; a < s15.length && u.isWrapped; ) h16.push(u), u = s15.get(++a);
+    let h18 = [s15.get(l)];
+    for (; a < s15.length && u.isWrapped; ) h18.push(u), u = s15.get(++a);
     if (!n && i >= l && i < a) {
-      l += h16.length - 1;
+      l += h18.length - 1;
       continue;
     }
-    let c = 0, d = ri(h16, c, t2), _ = 1, p = 0;
-    for (; _ < h16.length; ) {
-      let f = ri(h16, _, t2), A = f - p, R = e - d, O = Math.min(A, R);
-      h16[c].copyCellsFrom(h16[_], p, d, O, false), d += O, d === e && (c++, d = 0), p += O, p === f && (_++, p = 0), d === 0 && c !== 0 && h16[c - 1].getWidth(e - 1) === 2 && (h16[c].copyCellsFrom(h16[c - 1], e - 1, d++, 1, false), h16[c - 1].setCell(e - 1, r));
+    let c = 0, d = ri(h18, c, t2), _ = 1, p = 0;
+    for (; _ < h18.length; ) {
+      let f = ri(h18, _, t2), A = f - p, R = e - d, O = Math.min(A, R);
+      h18[c].copyCellsFrom(h18[_], p, d, O, false), d += O, d === e && (c++, d = 0), p += O, p === f && (_++, p = 0), d === 0 && c !== 0 && h18[c - 1].getWidth(e - 1) === 2 && (h18[c].copyCellsFrom(h18[c - 1], e - 1, d++, 1, false), h18[c - 1].setCell(e - 1, r));
     }
-    h16[c].replaceCells(d, e, r);
+    h18[c].replaceCells(d, e, r);
     let m = 0;
-    for (let f = h16.length - 1; f > 0 && (f > c || h16[f].getTrimmedLength() === 0); f--) m++;
-    m > 0 && (o.push(l + h16.length - m), o.push(m)), l += h16.length - 1;
+    for (let f = h18.length - 1; f > 0 && (f > c || h18[f].getTrimmedLength() === 0); f--) m++;
+    m > 0 && (o.push(l + h18.length - m), o.push(m)), l += h18.length - 1;
   }
   return o;
 }
@@ -523,8 +523,8 @@ function al(s15, t2, e) {
     n > a && (n -= a, o++);
     let u = s15[o].getWidth(n - 1) === 2;
     u && n--;
-    let h16 = u ? e - 1 : e;
-    i.push(h16), l += h16;
+    let h18 = u ? e - 1 : e;
+    i.push(h18), l += h18;
   }
   return i;
 }
@@ -813,23 +813,23 @@ var init_xterm = __esm({
       decode(t2, e) {
         let i = t2.length;
         if (!i) return 0;
-        let r = 0, n, o, l, a, u = 0, h16 = 0;
+        let r = 0, n, o, l, a, u = 0, h18 = 0;
         if (this.interim[0]) {
           let _ = false, p = this.interim[0];
           p &= (p & 224) === 192 ? 31 : (p & 240) === 224 ? 15 : 7;
           let m = 0, f;
           for (; (f = this.interim[++m] & 63) && m < 4; ) p <<= 6, p |= f;
           let A = (this.interim[0] & 224) === 192 ? 2 : (this.interim[0] & 240) === 224 ? 3 : 4, R = A - m;
-          for (; h16 < R; ) {
-            if (h16 >= i) return 0;
-            if (f = t2[h16++], (f & 192) !== 128) {
-              h16--, _ = true;
+          for (; h18 < R; ) {
+            if (h18 >= i) return 0;
+            if (f = t2[h18++], (f & 192) !== 128) {
+              h18--, _ = true;
               break;
             } else this.interim[m++] = f, p <<= 6, p |= f & 63;
           }
-          _ || (A === 2 ? p < 128 ? h16-- : e[r++] = p : A === 3 ? p < 2048 || p >= 55296 && p <= 57343 || p === 65279 || (e[r++] = p) : p < 65536 || p > 1114111 || (e[r++] = p)), this.interim.fill(0);
+          _ || (A === 2 ? p < 128 ? h18-- : e[r++] = p : A === 3 ? p < 2048 || p >= 55296 && p <= 57343 || p === 65279 || (e[r++] = p) : p < 65536 || p > 1114111 || (e[r++] = p)), this.interim.fill(0);
         }
-        let c = i - 4, d = h16;
+        let c = i - 4, d = h18;
         for (; d < i; ) {
           for (; d < c && !((n = t2[d]) & 128) && !((o = t2[d + 1]) & 128) && !((l = t2[d + 2]) & 128) && !((a = t2[d + 3]) & 128); ) e[r++] = n, e[r++] = o, e[r++] = l, e[r++] = a, d += 4;
           if (n = t2[d++], n < 128) e[r++] = n;
@@ -1114,17 +1114,17 @@ var init_xterm = __esm({
           e(void 0);
           return;
         }
-        let r = [], n = this._optionsService.rawOptions.linkHandler, o = new q(), l = i.getTrimmedLength(), a = -1, u = -1, h16 = false;
+        let r = [], n = this._optionsService.rawOptions.linkHandler, o = new q(), l = i.getTrimmedLength(), a = -1, u = -1, h18 = false;
         for (let c = 0; c < l; c++) if (!(u === -1 && !i.hasContent(c))) {
           if (i.loadCell(c, o), o.hasExtendedAttrs() && o.extended.urlId) if (u === -1) {
             u = c, a = o.extended.urlId;
             continue;
-          } else h16 = o.extended.urlId !== a;
-          else u !== -1 && (h16 = true);
-          if (h16 || u !== -1 && c === l - 1) {
+          } else h18 = o.extended.urlId !== a;
+          else u !== -1 && (h18 = true);
+          if (h18 || u !== -1 && c === l - 1) {
             let d = this._oscLinkService.getLinkData(a)?.uri;
             if (d) {
-              let _ = { start: { x: u + 1, y: t2 }, end: { x: c + (!h16 && c === l - 1 ? 1 : 0), y: t2 } }, p = false;
+              let _ = { start: { x: u + 1, y: t2 }, end: { x: c + (!h18 && c === l - 1 ? 1 : 0), y: t2 } }, p = false;
               if (!n?.allowNonHttpProtocols) try {
                 let m = new URL(d);
                 ["http:", "https:"].includes(m.protocol) || (p = true);
@@ -1133,7 +1133,7 @@ var init_xterm = __esm({
               }
               p || r.push({ text: d, range: _, activate: (m, f) => n ? n.activate(m, f, _) : Ol(m, f), hover: (m, f) => n?.hover?.(m, f, _), leave: (m, f) => n?.leave?.(m, f, _) });
             }
-            h16 = false, o.hasExtendedAttrs() && o.extended.urlId ? (u = c, a = o.extended.urlId) : (u = -1, a = -1);
+            h18 = false, o.hasExtendedAttrs() && o.extended.urlId ? (u = c, a = o.extended.urlId) : (u = -1, a = -1);
           }
         }
         e(r);
@@ -1376,10 +1376,10 @@ var init_xterm = __esm({
         return false;
       }
       O.some = u;
-      function h16(I, k) {
+      function h18(I, k) {
         for (let P of I) if (k(P)) return P;
       }
-      O.find = h16;
+      O.find = h18;
       function* c(I, k) {
         for (let P of I) k(P) && (yield P);
       }
@@ -1467,29 +1467,29 @@ var init_xterm = __esm({
         else {
           let a = /* @__PURE__ */ new Map(), u = [...this.livingDisposables.values()].filter((c) => c.source !== null && !this.getRootParent(c, a).isSingleton);
           if (u.length === 0) return;
-          let h16 = new Set(u.map((c) => c.value));
-          if (i = u.filter((c) => !(c.parent && h16.has(c.parent))), i.length === 0) throw new Error("There are cyclic diposable chains!");
+          let h18 = new Set(u.map((c) => c.value));
+          if (i = u.filter((c) => !(c.parent && h18.has(c.parent))), i.length === 0) throw new Error("There are cyclic diposable chains!");
         }
         if (!i) return;
         function r(a) {
           function u(c, d) {
             for (; c.length > 0 && d.some((_) => typeof _ == "string" ? _ === c[0] : c[0].match(_)); ) c.shift();
           }
-          let h16 = a.source.split(`
+          let h18 = a.source.split(`
 `).map((c) => c.trim().replace("at ", "")).filter((c) => c !== "");
-          return u(h16, ["Error", /^trackDisposable \(.*\)$/, /^DisposableTracker.trackDisposable \(.*\)$/]), h16.reverse();
+          return u(h18, ["Error", /^trackDisposable \(.*\)$/, /^DisposableTracker.trackDisposable \(.*\)$/]), h18.reverse();
         }
         let n = new ur();
         for (let a of i) {
           let u = r(a);
-          for (let h16 = 0; h16 <= u.length; h16++) n.add(u.slice(0, h16).join(`
+          for (let h18 = 0; h18 <= u.length; h18++) n.add(u.slice(0, h18).join(`
 `), a);
         }
         i.sort(no((a) => a.idx, so));
         let o = "", l = 0;
         for (let a of i.slice(0, t2)) {
           l++;
-          let u = r(a), h16 = [];
+          let u = r(a), h18 = [];
           for (let c = 0; c < u.length; c++) {
             let d = u[c];
             d = `(shared with ${n.get(u.slice(0, c + 1).join(`
@@ -1497,14 +1497,14 @@ var init_xterm = __esm({
             let p = n.get(u.slice(0, c).join(`
 `)), m = co([...p].map((f) => r(f)[c]), (f) => f);
             delete m[u[c]];
-            for (let [f, A] of Object.entries(m)) h16.unshift(`    - stacktraces of ${A.length} other leaks continue with ${f}`);
-            h16.unshift(d);
+            for (let [f, A] of Object.entries(m)) h18.unshift(`    - stacktraces of ${A.length} other leaks continue with ${f}`);
+            h18.unshift(d);
           }
           o += `
 
 
 ==================== Leaking disposable ${l}/${i.length}: ${a.value.constructor.name} ====================
-${h16.join(`
+${h18.join(`
 `)}
 ============================================================
 
@@ -1733,17 +1733,17 @@ ${h16.join(`
       }
       Qe.once = i;
       function r(y, T, g) {
-        return h16((w, E = null, x) => y((N) => w.call(E, T(N)), null, x), g);
+        return h18((w, E = null, x) => y((N) => w.call(E, T(N)), null, x), g);
       }
       Qe.map = r;
       function n(y, T, g) {
-        return h16((w, E = null, x) => y((N) => {
+        return h18((w, E = null, x) => y((N) => {
           T(N), w.call(E, N);
         }, null, x), g);
       }
       Qe.forEach = n;
       function o(y, T, g) {
-        return h16((w, E = null, x) => y((N) => T(N) && w.call(E, N), null, x), g);
+        return h18((w, E = null, x) => y((N) => T(N) && w.call(E, N), null, x), g);
       }
       Qe.filter = o;
       function l(y) {
@@ -1762,7 +1762,7 @@ ${h16.join(`
         return r(y, (x) => (E = T(E, x), E), w);
       }
       Qe.reduce = u;
-      function h16(y, T) {
+      function h18(y, T) {
         let g, w = { onWillAddFirstListener() {
           g = y(E.fire, E);
         }, onDidRemoveLastListener() {
@@ -2067,8 +2067,8 @@ ${h16.join(`
           if (this._leakageMon && this._size > this._leakageMon.threshold ** 2) {
             let a = `[${this._leakageMon.name}] REFUSES to accept new listeners because it exceeded its threshold by far (${this._size} vs ${this._leakageMon.threshold})`;
             console.warn(a);
-            let u = this._leakageMon.getMostFrequentStack() ?? ["UNKNOWN stack", -1], h16 = new Yn(`${a}. HINT: Stack shows most frequent listener (${u[1]}-times)`, u[0]);
-            return (this._options?.onListenerError || Lt)(h16), D.None;
+            let u = this._leakageMon.getMostFrequentStack() ?? ["UNKNOWN stack", -1], h18 = new Yn(`${a}. HINT: Stack shows most frequent listener (${u[1]}-times)`, u[0]);
+            return (this._options?.onListenerError || Lt)(h18), D.None;
           }
           if (this._disposed) return D.None;
           e && (t2 = t2.bind(e));
@@ -2688,8 +2688,8 @@ ${h16.join(`
         let t2 = Cr2._bigBlock32, e = this._buffDV;
         for (let c = 0; c < 64; c += 4) t2.setUint32(c, e.getUint32(c, false), false);
         for (let c = 64; c < 320; c += 4) t2.setUint32(c, rs(t2.getUint32(c - 12, false) ^ t2.getUint32(c - 32, false) ^ t2.getUint32(c - 56, false) ^ t2.getUint32(c - 64, false), 1), false);
-        let i = this._h0, r = this._h1, n = this._h2, o = this._h3, l = this._h4, a, u, h16;
-        for (let c = 0; c < 80; c++) c < 20 ? (a = r & n | ~r & o, u = 1518500249) : c < 40 ? (a = r ^ n ^ o, u = 1859775393) : c < 60 ? (a = r & n | r & o | n & o, u = 2400959708) : (a = r ^ n ^ o, u = 3395469782), h16 = rs(i, 5) + a + l + u + t2.getUint32(c * 4, false) & 4294967295, l = o, o = n, n = rs(r, 30), r = i, i = h16;
+        let i = this._h0, r = this._h1, n = this._h2, o = this._h3, l = this._h4, a, u, h18;
+        for (let c = 0; c < 80; c++) c < 20 ? (a = r & n | ~r & o, u = 1518500249) : c < 40 ? (a = r ^ n ^ o, u = 1859775393) : c < 60 ? (a = r & n | r & o | n & o, u = 2400959708) : (a = r ^ n ^ o, u = 3395469782), h18 = rs(i, 5) + a + l + u + t2.getUint32(c * 4, false) & 4294967295, l = o, o = n, n = rs(r, 30), r = i, i = h18;
         this._h0 = this._h0 + i & 4294967295, this._h1 = this._h1 + r & 4294967295, this._h2 = this._h2 + n & 4294967295, this._h3 = this._h3 + o & 4294967295, this._h4 = this._h4 + l & 4294967295;
       }
     };
@@ -2774,13 +2774,13 @@ ${h16.join(`
         i.set(n, false);
       };
       mt = (n, o, l = 0) => {
-        let a = Oo(n), u = new Di(o, l), h16 = s15.get(a);
-        return h16 || (h16 = [], s15.set(a, h16)), h16.push(u), e.get(a) || (e.set(a, true), n.requestAnimationFrame(() => r(a))), u;
+        let a = Oo(n), u = new Di(o, l), h18 = s15.get(a);
+        return h18 || (h18 = [], s15.set(a, h18)), h18.push(u), e.get(a) || (e.set(a, true), n.requestAnimationFrame(() => r(a))), u;
       }, wa = (n, o, l) => {
         let a = Oo(n);
         if (i.get(a)) {
-          let u = new Di(o, l), h16 = t2.get(a);
-          return h16 || (h16 = [], t2.set(a, h16)), h16.push(u), u;
+          let u = new Di(o, l), h18 = t2.get(a);
+          return h18 || (h18 = [], t2.set(a, h18)), h18.push(u), u;
         } else return mt(n, o, l);
       };
     })();
@@ -3067,11 +3067,11 @@ ${h16.join(`
             console.warn("move of an UNKNOWN touch", a);
             continue;
           }
-          let u = this.activeTouches[a.identifier], h16 = Date.now() - u.initialTimeStamp;
-          if (h16 < Q2.HOLD_DELAY && Math.abs(u.initialPageX - Se(u.rollingPageX)) < 30 && Math.abs(u.initialPageY - Se(u.rollingPageY)) < 30) {
+          let u = this.activeTouches[a.identifier], h18 = Date.now() - u.initialTimeStamp;
+          if (h18 < Q2.HOLD_DELAY && Math.abs(u.initialPageX - Se(u.rollingPageX)) < 30 && Math.abs(u.initialPageY - Se(u.rollingPageY)) < 30) {
             let c = this.newGestureEvent(He.Tap, u.initialTarget);
             c.pageX = Se(u.rollingPageX), c.pageY = Se(u.rollingPageY), this.dispatchEvent(c);
-          } else if (h16 >= Q2.HOLD_DELAY && Math.abs(u.initialPageX - Se(u.rollingPageX)) < 30 && Math.abs(u.initialPageY - Se(u.rollingPageY)) < 30) {
+          } else if (h18 >= Q2.HOLD_DELAY && Math.abs(u.initialPageX - Se(u.rollingPageX)) < 30 && Math.abs(u.initialPageY - Se(u.rollingPageY)) < 30) {
             let c = this.newGestureEvent(He.Contextmenu, u.initialTarget);
             c.pageX = Se(u.rollingPageX), c.pageY = Se(u.rollingPageY), this.dispatchEvent(c);
           } else if (n === 1) {
@@ -3103,12 +3103,12 @@ ${h16.join(`
           for (let [r, n] of i) n.dispatchEvent(e), this.dispatched = true;
         }
       }
-      inertia(e, i, r, n, o, l, a, u, h16) {
+      inertia(e, i, r, n, o, l, a, u, h18) {
         this.handle = mt(e, () => {
           let c = Date.now(), d = c - r, _ = 0, p = 0, m = true;
           n += Q2.SCROLL_FRICTION * d, a += Q2.SCROLL_FRICTION * d, n > 0 && (m = false, _ = o * n * d), a > 0 && (m = false, p = u * a * d);
           let f = this.newGestureEvent(He.Change);
-          f.translationX = _, f.translationY = p, i.forEach((A) => A.dispatchEvent(f)), m || this.inertia(e, i, c, n, o, l + _, a, u, h16 + p);
+          f.translationX = _, f.translationY = p, i.forEach((A) => A.dispatchEvent(f)), m || this.inertia(e, i, c, n, o, l + _, a, u, h18 + p);
         });
       }
       onTouchMove(e) {
@@ -3454,8 +3454,8 @@ ${h16.join(`
       static _computeValues(t2, e, i, r, n) {
         let o = Math.max(0, i - t2), l = Math.max(0, o - 2 * e), a = r > 0 && r > i;
         if (!a) return { computedAvailableSize: Math.round(o), computedIsNeeded: a, computedSliderSize: Math.round(l), computedSliderRatio: 0, computedSliderPosition: 0 };
-        let u = Math.round(Math.max(20, Math.floor(i * l / r))), h16 = (l - u) / (r - i), c = n * h16;
-        return { computedAvailableSize: Math.round(o), computedIsNeeded: a, computedSliderSize: Math.round(u), computedSliderRatio: h16, computedSliderPosition: Math.round(c) };
+        let u = Math.round(Math.max(20, Math.floor(i * l / r))), h18 = (l - u) / (r - i), c = n * h18;
+        return { computedAvailableSize: Math.round(o), computedIsNeeded: a, computedSliderSize: Math.round(u), computedSliderRatio: h18, computedSliderPosition: Math.round(c) };
       }
       _refreshComputedValues() {
         let t2 = s11._computeValues(this._oppositeScrollbarSize, this._arrowSize, this._visibleSize, this._scrollSize, this._scrollPosition);
@@ -3598,8 +3598,8 @@ ${h16.join(`
         if (Math.abs(t2.deltaX) > 0 && Math.abs(t2.deltaY) > 0) return 1;
         let i = 0.5;
         if ((!this._isAlmostInt(t2.deltaX) || !this._isAlmostInt(t2.deltaY)) && (i += 0.25), e) {
-          let r = Math.abs(t2.deltaX), n = Math.abs(t2.deltaY), o = Math.abs(e.deltaX), l = Math.abs(e.deltaY), a = Math.max(Math.min(r, o), 1), u = Math.max(Math.min(n, l), 1), h16 = Math.max(r, o), c = Math.max(n, l);
-          h16 % a === 0 && c % u === 0 && (i -= 0.5);
+          let r = Math.abs(t2.deltaX), n = Math.abs(t2.deltaY), o = Math.abs(e.deltaX), l = Math.abs(e.deltaY), a = Math.max(Math.min(r, o), 1), u = Math.max(Math.min(n, l), 1), h18 = Math.max(r, o), c = Math.max(n, l);
+          h18 % a === 0 && c % u === 0 && (i -= 0.5);
         }
         return Math.min(Math.max(i, 0), 1);
       }
@@ -3672,16 +3672,16 @@ ${h16.join(`
           this._options.scrollPredominantAxis && (this._options.scrollYToX && l + o === 0 ? l = o = 0 : Math.abs(o) >= Math.abs(l) ? l = 0 : o = 0), this._options.flipAxes && ([o, l] = [l, o]);
           let a = !Te && e.browserEvent && e.browserEvent.shiftKey;
           (this._options.scrollYToX || a) && !l && (l = o, o = 0), e.browserEvent && e.browserEvent.altKey && (l = l * this._options.fastScrollSensitivity, o = o * this._options.fastScrollSensitivity);
-          let u = this._scrollable.getFutureScrollPosition(), h16 = {};
+          let u = this._scrollable.getFutureScrollPosition(), h18 = {};
           if (o) {
             let c = Ko * o, d = u.scrollTop - (c < 0 ? Math.floor(c) : Math.ceil(c));
-            this._verticalScrollbar.writeScrollPosition(h16, d);
+            this._verticalScrollbar.writeScrollPosition(h18, d);
           }
           if (l) {
             let c = Ko * l, d = u.scrollLeft - (c < 0 ? Math.floor(c) : Math.ceil(c));
-            this._horizontalScrollbar.writeScrollPosition(h16, d);
+            this._horizontalScrollbar.writeScrollPosition(h18, d);
           }
-          h16 = this._scrollable.validateScrollPosition(h16), (u.scrollLeft !== h16.scrollLeft || u.scrollTop !== h16.scrollTop) && (zo && this._options.mouseWheelSmoothScroll && i.isPhysicalMouseWheel() ? this._scrollable.setScrollPositionSmooth(h16) : this._scrollable.setScrollPositionNow(h16), r = true);
+          h18 = this._scrollable.validateScrollPosition(h18), (u.scrollLeft !== h18.scrollLeft || u.scrollTop !== h18.scrollTop) && (zo && this._options.mouseWheelSmoothScroll && i.isPhysicalMouseWheel() ? this._scrollable.setScrollPositionSmooth(h18) : this._scrollable.setScrollPositionNow(h18), r = true);
         }
         let n = r;
         !n && this._options.alwaysConsumeMouseWheel && (n = true), !n && this._options.consumeMouseWheelIfScrollbarIsNeeded && (this._verticalScrollbar.isNeeded() || this._horizontalScrollbar.isNeeded()) && (n = true), n && (e.preventDefault(), e.stopPropagation());
@@ -3743,10 +3743,10 @@ ${h16.join(`
         this._isSyncing = false;
         this._isHandlingScroll = false;
         this._suppressOnScrollHandler = false;
-        let h16 = this._register(new Ri({ forceIntegerValues: false, smoothScrollDuration: this._optionsService.rawOptions.smoothScrollDuration, scheduleAtNextAnimationFrame: (c) => mt(n.window, c) }));
+        let h18 = this._register(new Ri({ forceIntegerValues: false, smoothScrollDuration: this._optionsService.rawOptions.smoothScrollDuration, scheduleAtNextAnimationFrame: (c) => mt(n.window, c) }));
         this._register(this._optionsService.onSpecificOptionChange("smoothScrollDuration", () => {
-          h16.setSmoothScrollDuration(this._optionsService.rawOptions.smoothScrollDuration);
-        })), this._scrollableElement = this._register(new Kr(i, { vertical: 1, horizontal: 2, useShadows: false, mouseWheelSmoothScroll: true, ...this._getChangeOptions() }, h16)), this._register(this._optionsService.onMultipleOptionChange(["scrollSensitivity", "fastScrollSensitivity", "overviewRuler"], () => this._scrollableElement.updateOptions(this._getChangeOptions()))), this._register(o.onProtocolChange((c) => {
+          h18.setSmoothScrollDuration(this._optionsService.rawOptions.smoothScrollDuration);
+        })), this._scrollableElement = this._register(new Kr(i, { vertical: 1, horizontal: 2, useShadows: false, mouseWheelSmoothScroll: true, ...this._getChangeOptions() }, h18)), this._register(this._optionsService.onMultipleOptionChange(["scrollSensitivity", "fastScrollSensitivity", "overviewRuler"], () => this._scrollableElement.updateOptions(this._getChangeOptions()))), this._register(o.onProtocolChange((c) => {
           this._scrollableElement.updateOptions({ handleMouseWheel: !(c & 16) });
         })), this._scrollableElement.setScrollDimensions({ height: 0, scrollHeight: 0 }), this._register($.runAndSubscribe(l.onChangeColors, () => {
           this._scrollableElement.getDomNode().style.backgroundColor = l.colors.background.css;
@@ -3898,8 +3898,8 @@ ${h16.join(`
         this._shouldUpdateAnchor = true;
         this._lastKnownBufferLength = 0;
         this._canvas = this._coreBrowserService.mainDocument.createElement("canvas"), this._canvas.classList.add("xterm-decoration-overview-ruler"), this._refreshCanvasDimensions(), this._viewportElement.parentElement?.insertBefore(this._canvas, this._viewportElement), this._register(C(() => this._canvas?.remove()));
-        let h16 = this._canvas.getContext("2d");
-        if (h16) this._ctx = h16;
+        let h18 = this._canvas.getContext("2d");
+        if (h18) this._ctx = h18;
         else throw new Error("Ctx cannot be null");
         this._register(this._decorationService.onDecorationRegistered(() => this._queueRefresh(void 0, true))), this._register(this._decorationService.onDecorationRemoved(() => this._queueRefresh(void 0, true))), this._register(this._renderService.onRenderedViewportChange(() => this._queueRefresh())), this._register(this._bufferService.buffers.onBufferActivate(() => {
           this._canvas.style.display = this._bufferService.buffer === this._bufferService.buffers.alt ? "none" : "block";
@@ -4040,8 +4040,8 @@ ${h16.join(`
     ((l) => {
       function s15(a, u) {
         if (J = (u.rgba & 255) / 255, J === 1) return { css: u.css, rgba: u.rgba };
-        let h16 = u.rgba >> 24 & 255, c = u.rgba >> 16 & 255, d = u.rgba >> 8 & 255, _ = a.rgba >> 24 & 255, p = a.rgba >> 16 & 255, m = a.rgba >> 8 & 255;
-        ue = _ + Math.round((h16 - _) * J), he = p + Math.round((c - p) * J), de = m + Math.round((d - m) * J);
+        let h18 = u.rgba >> 24 & 255, c = u.rgba >> 16 & 255, d = u.rgba >> 8 & 255, _ = a.rgba >> 24 & 255, p = a.rgba >> 16 & 255, m = a.rgba >> 8 & 255;
+        ue = _ + Math.round((h18 - _) * J), he = p + Math.round((c - p) * J), de = m + Math.round((d - m) * J);
         let f = j.toCss(ue, he, de), A = j.toRgba(ue, he, de);
         return { css: f, rgba: A };
       }
@@ -4050,8 +4050,8 @@ ${h16.join(`
         return (a.rgba & 255) === 255;
       }
       l.isOpaque = t2;
-      function e(a, u, h16) {
-        let c = $r.ensureContrastRatio(a.rgba, u.rgba, h16);
+      function e(a, u, h18) {
+        let c = $r.ensureContrastRatio(a.rgba, u.rgba, h18);
         if (c) return j.toColor(c >> 24 & 255, c >> 16 & 255, c >> 8 & 255);
       }
       l.ensureContrastRatio = e;
@@ -4108,22 +4108,22 @@ ${h16.join(`
       }
       e.relativeLuminance = s15;
       function t2(i, r, n) {
-        let o = i / 255, l = r / 255, a = n / 255, u = o <= 0.03928 ? o / 12.92 : Math.pow((o + 0.055) / 1.055, 2.4), h16 = l <= 0.03928 ? l / 12.92 : Math.pow((l + 0.055) / 1.055, 2.4), c = a <= 0.03928 ? a / 12.92 : Math.pow((a + 0.055) / 1.055, 2.4);
-        return u * 0.2126 + h16 * 0.7152 + c * 0.0722;
+        let o = i / 255, l = r / 255, a = n / 255, u = o <= 0.03928 ? o / 12.92 : Math.pow((o + 0.055) / 1.055, 2.4), h18 = l <= 0.03928 ? l / 12.92 : Math.pow((l + 0.055) / 1.055, 2.4), c = a <= 0.03928 ? a / 12.92 : Math.pow((a + 0.055) / 1.055, 2.4);
+        return u * 0.2126 + h18 * 0.7152 + c * 0.0722;
       }
       e.relativeLuminance2 = t2;
     })(ve ||= {});
     ((n) => {
       function s15(o, l) {
         if (J = (l & 255) / 255, J === 1) return l;
-        let a = l >> 24 & 255, u = l >> 16 & 255, h16 = l >> 8 & 255, c = o >> 24 & 255, d = o >> 16 & 255, _ = o >> 8 & 255;
-        return ue = c + Math.round((a - c) * J), he = d + Math.round((u - d) * J), de = _ + Math.round((h16 - _) * J), j.toRgba(ue, he, de);
+        let a = l >> 24 & 255, u = l >> 16 & 255, h18 = l >> 8 & 255, c = o >> 24 & 255, d = o >> 16 & 255, _ = o >> 8 & 255;
+        return ue = c + Math.round((a - c) * J), he = d + Math.round((u - d) * J), de = _ + Math.round((h18 - _) * J), j.toRgba(ue, he, de);
       }
       n.blend = s15;
       function t2(o, l, a) {
-        let u = ve.relativeLuminance(o >> 8), h16 = ve.relativeLuminance(l >> 8);
-        if (Xe(u, h16) < a) {
-          if (h16 < u) {
+        let u = ve.relativeLuminance(o >> 8), h18 = ve.relativeLuminance(l >> 8);
+        if (Xe(u, h18) < a) {
+          if (h18 < u) {
             let p = e(o, l, a), m = Xe(u, ve.relativeLuminance(p >> 8));
             if (m < a) {
               let f = i(o, l, a), A = Xe(u, ve.relativeLuminance(f >> 8));
@@ -4141,14 +4141,14 @@ ${h16.join(`
       }
       n.ensureContrastRatio = t2;
       function e(o, l, a) {
-        let u = o >> 24 & 255, h16 = o >> 16 & 255, c = o >> 8 & 255, d = l >> 24 & 255, _ = l >> 16 & 255, p = l >> 8 & 255, m = Xe(ve.relativeLuminance2(d, _, p), ve.relativeLuminance2(u, h16, c));
-        for (; m < a && (d > 0 || _ > 0 || p > 0); ) d -= Math.max(0, Math.ceil(d * 0.1)), _ -= Math.max(0, Math.ceil(_ * 0.1)), p -= Math.max(0, Math.ceil(p * 0.1)), m = Xe(ve.relativeLuminance2(d, _, p), ve.relativeLuminance2(u, h16, c));
+        let u = o >> 24 & 255, h18 = o >> 16 & 255, c = o >> 8 & 255, d = l >> 24 & 255, _ = l >> 16 & 255, p = l >> 8 & 255, m = Xe(ve.relativeLuminance2(d, _, p), ve.relativeLuminance2(u, h18, c));
+        for (; m < a && (d > 0 || _ > 0 || p > 0); ) d -= Math.max(0, Math.ceil(d * 0.1)), _ -= Math.max(0, Math.ceil(_ * 0.1)), p -= Math.max(0, Math.ceil(p * 0.1)), m = Xe(ve.relativeLuminance2(d, _, p), ve.relativeLuminance2(u, h18, c));
         return (d << 24 | _ << 16 | p << 8 | 255) >>> 0;
       }
       n.reduceLuminance = e;
       function i(o, l, a) {
-        let u = o >> 24 & 255, h16 = o >> 16 & 255, c = o >> 8 & 255, d = l >> 24 & 255, _ = l >> 16 & 255, p = l >> 8 & 255, m = Xe(ve.relativeLuminance2(d, _, p), ve.relativeLuminance2(u, h16, c));
-        for (; m < a && (d < 255 || _ < 255 || p < 255); ) d = Math.min(255, d + Math.ceil((255 - d) * 0.1)), _ = Math.min(255, _ + Math.ceil((255 - _) * 0.1)), p = Math.min(255, p + Math.ceil((255 - p) * 0.1)), m = Xe(ve.relativeLuminance2(d, _, p), ve.relativeLuminance2(u, h16, c));
+        let u = o >> 24 & 255, h18 = o >> 16 & 255, c = o >> 8 & 255, d = l >> 24 & 255, _ = l >> 16 & 255, p = l >> 8 & 255, m = Xe(ve.relativeLuminance2(d, _, p), ve.relativeLuminance2(u, h18, c));
+        for (; m < a && (d < 255 || _ < 255 || p < 255); ) d = Math.min(255, d + Math.ceil((255 - d) * 0.1)), _ = Math.min(255, _ + Math.ceil((255 - _) * 0.1)), p = Math.min(255, p + Math.ceil((255 - p) * 0.1)), m = Xe(ve.relativeLuminance2(d, _, p), ve.relativeLuminance2(u, h18, c));
         return (d << 24 | _ << 16 | p << 8 | 255) >>> 0;
       }
       n.increaseLuminance = i;
@@ -4202,19 +4202,19 @@ ${h16.join(`
         let e = this._bufferService.buffer.lines.get(t2);
         if (!e || e.length === 0) return [];
         let i = [], r = e.translateToString(true), n = 0, o = 0, l = 0, a = e.getFg(0), u = e.getBg(0);
-        for (let h16 = 0; h16 < e.getTrimmedLength(); h16++) if (e.loadCell(h16, this._workCell), this._workCell.getWidth() !== 0) {
+        for (let h18 = 0; h18 < e.getTrimmedLength(); h18++) if (e.loadCell(h18, this._workCell), this._workCell.getWidth() !== 0) {
           if (this._workCell.fg !== a || this._workCell.bg !== u) {
-            if (h16 - n > 1) {
+            if (h18 - n > 1) {
               let c = this._getJoinedRanges(r, l, o, e, n);
               for (let d = 0; d < c.length; d++) i.push(c[d]);
             }
-            n = h16, l = o, a = this._workCell.fg, u = this._workCell.bg;
+            n = h18, l = o, a = this._workCell.fg, u = this._workCell.bg;
           }
           o += this._workCell.getChars().length || we.length;
         }
         if (this._bufferService.cols - n > 1) {
-          let h16 = this._getJoinedRanges(r, l, o, e, n);
-          for (let c = 0; c < h16.length; c++) i.push(h16[c]);
+          let h18 = this._getJoinedRanges(r, l, o, e, n);
+          for (let c = 0; c < h18.length; c++) i.push(h18[c]);
         }
         return i;
       }
@@ -4227,7 +4227,7 @@ ${h16.join(`
         }
         for (let a = 1; a < this._characterJoiners.length; a++) try {
           let u = this._characterJoiners[a].handler(o);
-          for (let h16 = 0; h16 < u.length; h16++) ct._mergeRanges(l, u[h16]);
+          for (let h18 = 0; h18 < u.length; h18++) ct._mergeRanges(l, u[h18]);
         } catch (u) {
           console.error(u);
         }
@@ -4237,13 +4237,13 @@ ${h16.join(`
         let r = 0, n = false, o = 0, l = t2[r];
         if (l) {
           for (let a = i; a < this._bufferService.cols; a++) {
-            let u = e.getWidth(a), h16 = e.getString(a).length || we.length;
+            let u = e.getWidth(a), h18 = e.getString(a).length || we.length;
             if (u !== 0) {
               if (!n && l[0] <= o && (l[0] = a, n = true), l[1] <= o) {
                 if (l[1] = a, l = t2[++r], !l) break;
                 l[0] <= o ? (l[0] = a, n = true) : n = false;
               }
-              o += h16;
+              o += h18;
             }
           }
           l && (l[1] = this._bufferService.cols);
@@ -4284,10 +4284,10 @@ ${h16.join(`
       handleSelectionChanged(t2, e, i) {
         this._selectionStart = t2, this._selectionEnd = e, this._columnSelectMode = i;
       }
-      createRow(t2, e, i, r, n, o, l, a, u, h16, c) {
+      createRow(t2, e, i, r, n, o, l, a, u, h18, c) {
         let d = [], _ = this._characterJoinerService.getJoinedCharacters(e), p = this._themeService.colors, m = t2.getNoBgTrimmedLength();
         i && m < o + 1 && (m = o + 1);
-        let f, A = 0, R = "", O = 0, I = 0, k = 0, P = 0, oe = false, Me = 0, Pe = false, Ke = 0, di = 0, V = [], Qe = h16 !== -1 && c !== -1;
+        let f, A = 0, R = "", O = 0, I = 0, k = 0, P = 0, oe = false, Me = 0, Pe = false, Ke = 0, di = 0, V = [], Qe = h18 !== -1 && c !== -1;
         for (let y = 0; y < m; y++) {
           t2.loadCell(y, this._workCell);
           let T = this._workCell.getWidth();
@@ -4298,7 +4298,7 @@ ${h16.join(`
             for (O = W[0] + 1; O < W[1]; O++) w &&= An === this._isCellInSelection(O, e);
             w &&= !i || o < W[0] || o >= W[1], w ? (g = true, x = new Vr(this._workCell, t2.translateToString(true, W[0], W[1]), W[1] - W[0]), E = W[1] - 1, T = x.getWidth()) : di = W[1];
           }
-          let N = this._isCellInSelection(y, e), Z = i && y === o, te = Qe && y >= h16 && y <= c, Oe = false;
+          let N = this._isCellInSelection(y, e), Z = i && y === o, te = Qe && y >= h18 && y <= c, Oe = false;
           this._decorationService.forEachDecorationAtCell(y, e, void 0, (W) => {
             Oe = true;
           });
@@ -4467,7 +4467,7 @@ ${h16.join(`
       }
     };
     _s = "xterm-dom-renderer-owner-", Le = "xterm-rows", jr = "xterm-fg-", jo = "xterm-bg-", ki = "xterm-focus", Xr = "xterm-selection", Na = 1, Yt = class extends D {
-      constructor(e, i, r, n, o, l, a, u, h16, c, d, _, p, m) {
+      constructor(e, i, r, n, o, l, a, u, h18, c, d, _, p, m) {
         super();
         this._terminal = e;
         this._document = i;
@@ -4476,7 +4476,7 @@ ${h16.join(`
         this._viewportElement = o;
         this._helperContainer = l;
         this._linkifier2 = a;
-        this._charSizeService = h16;
+        this._charSizeService = h18;
         this._optionsService = c;
         this._bufferService = d;
         this._coreService = _;
@@ -4537,11 +4537,11 @@ ${h16.join(`
         if (this._selectionContainer.replaceChildren(), this._rowFactory.handleSelectionChanged(e, i, r), this.renderRows(0, this._bufferService.rows - 1), !e || !i || (this._selectionRenderModel.update(this._terminal, e, i, r), !this._selectionRenderModel.hasSelection)) return;
         let n = this._selectionRenderModel.viewportStartRow, o = this._selectionRenderModel.viewportEndRow, l = this._selectionRenderModel.viewportCappedStartRow, a = this._selectionRenderModel.viewportCappedEndRow, u = this._document.createDocumentFragment();
         if (r) {
-          let h16 = e[0] > i[0];
-          u.appendChild(this._createSelectionElement(l, h16 ? i[0] : e[0], h16 ? e[0] : i[0], a - l + 1));
+          let h18 = e[0] > i[0];
+          u.appendChild(this._createSelectionElement(l, h18 ? i[0] : e[0], h18 ? e[0] : i[0], a - l + 1));
         } else {
-          let h16 = n === l ? e[0] : 0, c = l === o ? i[0] : this._bufferService.cols;
-          u.appendChild(this._createSelectionElement(l, h16, c));
+          let h18 = n === l ? e[0] : 0, c = l === o ? i[0] : this._bufferService.cols;
+          u.appendChild(this._createSelectionElement(l, h18, c));
           let d = a - l - 1;
           if (u.appendChild(this._createSelectionElement(l + 1, 0, this._bufferService.cols, d)), l !== a) {
             let _ = o === a ? i[0] : this._bufferService.cols;
@@ -4564,8 +4564,8 @@ ${h16.join(`
       }
       renderRows(e, i) {
         let r = this._bufferService.buffer, n = r.ybase + r.y, o = Math.min(r.x, this._bufferService.cols - 1), l = this._coreService.decPrivateModes.cursorBlink ?? this._optionsService.rawOptions.cursorBlink, a = this._coreService.decPrivateModes.cursorStyle ?? this._optionsService.rawOptions.cursorStyle, u = this._optionsService.rawOptions.cursorInactiveStyle;
-        for (let h16 = e; h16 <= i; h16++) {
-          let c = h16 + r.ydisp, d = this._rowElements[h16], _ = r.lines.get(c);
+        for (let h18 = e; h18 <= i; h18++) {
+          let c = h18 + r.ydisp, d = this._rowElements[h18], _ = r.lines.get(c);
           if (!d || !_) break;
           d.replaceChildren(...this._rowFactory.createRow(_, c, c === n, a, u, o, l, this.dimensions.css.cell.width, this._widthCache, -1, -1));
         }
@@ -4583,11 +4583,11 @@ ${h16.join(`
         r < 0 && (e = 0), n < 0 && (i = 0);
         let a = this._bufferService.rows - 1;
         r = Math.max(Math.min(r, a), 0), n = Math.max(Math.min(n, a), 0), o = Math.min(o, this._bufferService.cols);
-        let u = this._bufferService.buffer, h16 = u.ybase + u.y, c = Math.min(u.x, o - 1), d = this._optionsService.rawOptions.cursorBlink, _ = this._optionsService.rawOptions.cursorStyle, p = this._optionsService.rawOptions.cursorInactiveStyle;
+        let u = this._bufferService.buffer, h18 = u.ybase + u.y, c = Math.min(u.x, o - 1), d = this._optionsService.rawOptions.cursorBlink, _ = this._optionsService.rawOptions.cursorStyle, p = this._optionsService.rawOptions.cursorInactiveStyle;
         for (let m = r; m <= n; ++m) {
           let f = m + u.ydisp, A = this._rowElements[m], R = u.lines.get(f);
           if (!A || !R) break;
-          A.replaceChildren(...this._rowFactory.createRow(R, f, f === h16, _, p, c, d, this.dimensions.css.cell.width, this._widthCache, l ? m === r ? e : 0 : -1, l ? (m === n ? i : o) - 1 : -1));
+          A.replaceChildren(...this._rowFactory.createRow(R, f, f === h18, _, p, c, d, this.dimensions.css.cell.width, this._widthCache, l ? m === r ? e : 0 : -1, l ? (m === n ? i : o) - 1 : -1));
         }
       }
     };
@@ -4820,7 +4820,7 @@ ${h16.join(`
       }
     };
     Qt = class extends D {
-      constructor(e, i, r, n, o, l, a, u, h16) {
+      constructor(e, i, r, n, o, l, a, u, h18) {
         super();
         this._rowCount = e;
         this._optionsService = r;
@@ -4847,7 +4847,7 @@ ${h16.join(`
         this.onRefreshRequest = this._onRefreshRequest.event;
         this._renderDebouncer = new en((c, d) => this._renderRows(c, d), this._coreBrowserService), this._register(this._renderDebouncer), this._syncOutputHandler = new xs(this._coreBrowserService, this._coreService, () => this._fullRefresh()), this._register(C(() => this._syncOutputHandler.dispose())), this._register(this._coreBrowserService.onDprChange(() => this.handleDevicePixelRatioChange())), this._register(a.onResize(() => this._fullRefresh())), this._register(a.buffers.onBufferActivate(() => this._renderer.value?.clear())), this._register(this._optionsService.onOptionChange(() => this._handleOptionsChanged())), this._register(this._charSizeService.onCharSizeChange(() => this.handleCharSizeChanged())), this._register(l.onDecorationRegistered(() => this._fullRefresh())), this._register(l.onDecorationRemoved(() => this._fullRefresh())), this._register(this._optionsService.onMultipleOptionChange(["customGlyphs", "drawBoldTextInBrightColors", "letterSpacing", "lineHeight", "fontFamily", "fontSize", "fontWeight", "fontWeightBold", "minimumContrastRatio", "rescaleOverlappingGlyphs"], () => {
           this.clear(), this.handleResize(a.cols, a.rows), this._fullRefresh();
-        })), this._register(this._optionsService.onMultipleOptionChange(["cursorBlink", "cursorStyle"], () => this.refreshRows(a.buffer.y, a.buffer.y, true))), this._register(h16.onChangeColors(() => this._fullRefresh())), this._registerIntersectionObserver(this._coreBrowserService.window, i), this._register(this._coreBrowserService.onWindowChange((c) => this._registerIntersectionObserver(c, i)));
+        })), this._register(this._optionsService.onMultipleOptionChange(["cursorBlink", "cursorStyle"], () => this.refreshRows(a.buffer.y, a.buffer.y, true))), this._register(h18.onChangeColors(() => this._fullRefresh())), this._registerIntersectionObserver(this._coreBrowserService.window, i), this._register(this._coreBrowserService.onWindowChange((c) => this._registerIntersectionObserver(c, i)));
       }
       get dimensions() {
         return this._renderer.value.dimensions;
@@ -4991,7 +4991,7 @@ ${h16.join(`
     };
     Ds = 50, Ya = 15, ja = 50, Xa = 500, Za = " ", Ja = new RegExp(Za, "g");
     ei = class extends D {
-      constructor(e, i, r, n, o, l, a, u, h16) {
+      constructor(e, i, r, n, o, l, a, u, h18) {
         super();
         this._element = e;
         this._screenElement = i;
@@ -5001,7 +5001,7 @@ ${h16.join(`
         this._mouseService = l;
         this._optionsService = a;
         this._renderService = u;
-        this._coreBrowserService = h16;
+        this._coreBrowserService = h18;
         this._dragScrollAmount = 0;
         this._enabled = true;
         this._workCell = new q();
@@ -5052,15 +5052,15 @@ ${h16.join(`
           if (e[0] === i[0]) return "";
           let l = e[0] < i[0] ? e[0] : i[0], a = e[0] < i[0] ? i[0] : e[0];
           for (let u = e[1]; u <= i[1]; u++) {
-            let h16 = r.translateBufferLineToString(u, true, l, a);
-            n.push(h16);
+            let h18 = r.translateBufferLineToString(u, true, l, a);
+            n.push(h18);
           }
         } else {
           let l = e[1] === i[1] ? i[0] : void 0;
           n.push(r.translateBufferLineToString(e[1], true, e[0], l));
           for (let a = e[1] + 1; a <= i[1] - 1; a++) {
-            let u = r.lines.get(a), h16 = r.translateBufferLineToString(a, true);
-            u?.isWrapped ? n[n.length - 1] += h16 : n.push(h16);
+            let u = r.lines.get(a), h18 = r.translateBufferLineToString(a, true);
+            u?.isWrapped ? n[n.length - 1] += h18 : n.push(h18);
           }
           if (e[1] !== i[1]) {
             let a = r.lines.get(i[1]), u = r.translateBufferLineToString(i[1], true, 0, i[0]);
@@ -5217,28 +5217,28 @@ ${h16.join(`
         if (e[0] >= this._bufferService.cols) return;
         let o = this._bufferService.buffer, l = o.lines.get(e[1]);
         if (!l) return;
-        let a = o.translateBufferLineToString(e[1], false), u = this._convertViewportColToCharacterIndex(l, e[0]), h16 = u, c = e[0] - u, d = 0, _ = 0, p = 0, m = 0;
+        let a = o.translateBufferLineToString(e[1], false), u = this._convertViewportColToCharacterIndex(l, e[0]), h18 = u, c = e[0] - u, d = 0, _ = 0, p = 0, m = 0;
         if (a.charAt(u) === " ") {
           for (; u > 0 && a.charAt(u - 1) === " "; ) u--;
-          for (; h16 < a.length && a.charAt(h16 + 1) === " "; ) h16++;
+          for (; h18 < a.length && a.charAt(h18 + 1) === " "; ) h18++;
         } else {
           let R = e[0], O = e[0];
           l.getWidth(R) === 0 && (d++, R--), l.getWidth(O) === 2 && (_++, O++);
           let I = l.getString(O).length;
-          for (I > 1 && (m += I - 1, h16 += I - 1); R > 0 && u > 0 && !this._isCharWordSeparator(l.loadCell(R - 1, this._workCell)); ) {
+          for (I > 1 && (m += I - 1, h18 += I - 1); R > 0 && u > 0 && !this._isCharWordSeparator(l.loadCell(R - 1, this._workCell)); ) {
             l.loadCell(R - 1, this._workCell);
             let k = this._workCell.getChars().length;
             this._workCell.getWidth() === 0 ? (d++, R--) : k > 1 && (p += k - 1, u -= k - 1), u--, R--;
           }
-          for (; O < l.length && h16 + 1 < a.length && !this._isCharWordSeparator(l.loadCell(O + 1, this._workCell)); ) {
+          for (; O < l.length && h18 + 1 < a.length && !this._isCharWordSeparator(l.loadCell(O + 1, this._workCell)); ) {
             l.loadCell(O + 1, this._workCell);
             let k = this._workCell.getChars().length;
-            this._workCell.getWidth() === 2 ? (_++, O++) : k > 1 && (m += k - 1, h16 += k - 1), h16++, O++;
+            this._workCell.getWidth() === 2 ? (_++, O++) : k > 1 && (m += k - 1, h18 += k - 1), h18++, O++;
           }
         }
-        h16++;
-        let f = u + c - d + p, A = Math.min(this._bufferService.cols, h16 - u + d + _ - p - m);
-        if (!(!i && a.slice(u, h16).trim() === "")) {
+        h18++;
+        let f = u + c - d + p, A = Math.min(this._bufferService.cols, h18 - u + d + _ - p - m);
+        if (!(!i && a.slice(u, h18).trim() === "")) {
           if (r && f === 0 && l.getCodePoint(0) !== 32) {
             let R = o.lines.get(e[1] - 1);
             if (R && l.isWrapped && R.getCodePoint(this._bufferService.cols - 1) !== 32) {
@@ -5849,7 +5849,7 @@ ${h16.join(`
             let I = this.ybase + this.y;
             if (I >= l && I < l + u.length) continue;
           }
-          let h16 = u[u.length - 1].getTrimmedLength(), c = al(u, this._cols, t2), d = c.length - u.length, _;
+          let h18 = u[u.length - 1].getTrimmedLength(), c = al(u, this._cols, t2), d = c.length - u.length, _;
           this.ybase === 0 && this.y !== this.lines.length - 1 ? _ = Math.max(0, this.y - this.lines.maxLength + d) : _ = Math.max(0, this.lines.length - this.lines.maxLength + d);
           let p = [];
           for (let I = 0; I < d; I++) {
@@ -5859,7 +5859,7 @@ ${h16.join(`
           p.length > 0 && (n.push({ start: l + u.length + o, newLines: p }), o += p.length), u.push(...p);
           let m = c.length - 1, f = c[m];
           f === 0 && (m--, f = c[m]);
-          let A = u.length - d - 1, R = h16;
+          let A = u.length - d - 1, R = h18;
           for (; A >= 0; ) {
             let I = Math.min(R, f);
             if (u[m] === void 0) break;
@@ -5877,13 +5877,13 @@ ${h16.join(`
         if (n.length > 0) {
           let l = [], a = [];
           for (let f = 0; f < this.lines.length; f++) a.push(this.lines.get(f));
-          let u = this.lines.length, h16 = u - 1, c = 0, d = n[c];
+          let u = this.lines.length, h18 = u - 1, c = 0, d = n[c];
           this.lines.length = Math.min(this.lines.maxLength, this.lines.length + o);
           let _ = 0;
-          for (let f = Math.min(this.lines.maxLength - 1, u + o - 1); f >= 0; f--) if (d && d.start > h16 + _) {
+          for (let f = Math.min(this.lines.maxLength - 1, u + o - 1); f >= 0; f--) if (d && d.start > h18 + _) {
             for (let A = d.newLines.length - 1; A >= 0; A--) this.lines.set(f--, d.newLines[A]);
-            f++, l.push({ index: h16 + 1, amount: d.newLines.length }), _ += d.newLines.length, d = n[++c];
-          } else this.lines.set(f, a[h16--]);
+            f++, l.push({ index: h18 + 1, amount: d.newLines.length }), _ += d.newLines.length, d = n[++c];
+          } else this.lines.set(f, a[h18--]);
           let p = 0;
           for (let f = l.length - 1; f >= 0; f--) l[f].index += p, this.lines.onInsertEmitter.fire(l[f]), p += l[f].amount;
           let m = Math.max(0, u + o - this.lines.maxLength);
@@ -6673,17 +6673,17 @@ ${h16.join(`
         if (this._parseStack.state) if (this._parseStack.state === 2) this._parseStack.state = 0, l = this._parseStack.chunkPos + 1;
         else {
           if (r === void 0 || this._parseStack.state === 1) throw this._parseStack.state = 1, new Error("improper continuation due to previous async handler, giving up parsing");
-          let u = this._parseStack.handlers, h16 = this._parseStack.handlerPos - 1;
+          let u = this._parseStack.handlers, h18 = this._parseStack.handlerPos - 1;
           switch (this._parseStack.state) {
             case 3:
-              if (r === false && h16 > -1) {
-                for (; h16 >= 0 && (a = u[h16](this._params), a !== true); h16--) if (a instanceof Promise) return this._parseStack.handlerPos = h16, a;
+              if (r === false && h18 > -1) {
+                for (; h18 >= 0 && (a = u[h18](this._params), a !== true); h18--) if (a instanceof Promise) return this._parseStack.handlerPos = h18, a;
               }
               this._parseStack.handlers = [];
               break;
             case 4:
-              if (r === false && h16 > -1) {
-                for (; h16 >= 0 && (a = u[h16](), a !== true); h16--) if (a instanceof Promise) return this._parseStack.handlerPos = h16, a;
+              if (r === false && h18 > -1) {
+                for (; h18 >= 0 && (a = u[h18](), a !== true); h18--) if (a instanceof Promise) return this._parseStack.handlerPos = h18, a;
               }
               this._parseStack.handlers = [];
               break;
@@ -6793,7 +6793,7 @@ ${h16.join(`
     dc = /^([\da-f])\/([\da-f])\/([\da-f])$|^([\da-f]{2})\/([\da-f]{2})\/([\da-f]{2})$|^([\da-f]{3})\/([\da-f]{3})\/([\da-f]{3})$|^([\da-f]{4})\/([\da-f]{4})\/([\da-f]{4})$/, fc = /^[\da-f]+$/;
     mc = { "(": 0, ")": 1, "*": 2, "+": 3, "-": 1, ".": 2 }, ut = 131072, _l = 10;
     vl = 5e3, gl = 0, vn = class extends D {
-      constructor(e, i, r, n, o, l, a, u, h16 = new bn()) {
+      constructor(e, i, r, n, o, l, a, u, h18 = new bn()) {
         super();
         this._bufferService = e;
         this._charsetService = i;
@@ -6803,7 +6803,7 @@ ${h16.join(`
         this._oscLinkService = l;
         this._coreMouseService = a;
         this._unicodeService = u;
-        this._parser = h16;
+        this._parser = h18;
         this._parseBuffer = new Uint32Array(4096);
         this._stringDecoder = new er();
         this._utf8Decoder = new tr();
@@ -6885,11 +6885,11 @@ ${h16.join(`
           if (r = this._parser.parse(this._parseBuffer, c)) return this._preserveStack(n, o, c, 0), this._logSlowResolvingAsync(r), r;
         }
         (this._activeBuffer.x !== n || this._activeBuffer.y !== o) && this._onCursorMove.fire();
-        let u = this._dirtyRowTracker.end + (this._bufferService.buffer.ybase - this._bufferService.buffer.ydisp), h16 = this._dirtyRowTracker.start + (this._bufferService.buffer.ybase - this._bufferService.buffer.ydisp);
-        h16 < this._bufferService.rows && this._onRequestRefreshRows.fire({ start: Math.min(h16, this._bufferService.rows - 1), end: Math.min(u, this._bufferService.rows - 1) });
+        let u = this._dirtyRowTracker.end + (this._bufferService.buffer.ybase - this._bufferService.buffer.ydisp), h18 = this._dirtyRowTracker.start + (this._bufferService.buffer.ybase - this._bufferService.buffer.ydisp);
+        h18 < this._bufferService.rows && this._onRequestRefreshRows.fire({ start: Math.min(h18, this._bufferService.rows - 1), end: Math.min(u, this._bufferService.rows - 1) });
       }
       print(e, i, r) {
-        let n, o, l = this._charsetService.charset, a = this._optionsService.rawOptions.screenReaderMode, u = this._bufferService.cols, h16 = this._coreService.decPrivateModes.wraparound, c = this._coreService.modes.insertMode, d = this._curAttrData, _ = this._activeBuffer.lines.get(this._activeBuffer.ybase + this._activeBuffer.y);
+        let n, o, l = this._charsetService.charset, a = this._optionsService.rawOptions.screenReaderMode, u = this._bufferService.cols, h18 = this._coreService.decPrivateModes.wraparound, c = this._coreService.modes.insertMode, d = this._curAttrData, _ = this._activeBuffer.lines.get(this._activeBuffer.ybase + this._activeBuffer.y);
         this._dirtyRowTracker.markDirty(this._activeBuffer.y), this._activeBuffer.x && r - i > 0 && _.getWidth(this._activeBuffer.x - 1) === 2 && _.setCellFromCodepoint(this._activeBuffer.x - 1, 0, 1, d);
         let p = this._parser.precedingJoinState;
         for (let m = i; m < r; ++m) {
@@ -6901,7 +6901,7 @@ ${h16.join(`
           o = Ae.extractWidth(f);
           let A = Ae.extractShouldJoin(f), R = A ? Ae.extractWidth(p) : 0;
           if (p = f, a && this._onA11yChar.fire(Ce(n)), this._getCurrentLinkId() && this._oscLinkService.addLineToLink(this._getCurrentLinkId(), this._activeBuffer.ybase + this._activeBuffer.y), this._activeBuffer.x + o - R > u) {
-            if (h16) {
+            if (h18) {
               let O = _, I = this._activeBuffer.x - R;
               for (this._activeBuffer.x = R, this._activeBuffer.y++, this._activeBuffer.y === this._activeBuffer.scrollBottom + 1 ? (this._activeBuffer.y--, this._bufferService.scroll(this._eraseAttrData(), true)) : (this._activeBuffer.y >= this._bufferService.rows && (this._activeBuffer.y = this._bufferService.rows - 1), this._activeBuffer.lines.get(this._activeBuffer.ybase + this._activeBuffer.y).isWrapped = true), _ = this._activeBuffer.lines.get(this._activeBuffer.ybase + this._activeBuffer.y), R > 0 && _ instanceof Ze && _.copyCellsFrom(O, I, 0, R, false); I < u; ) O.setCellFromCodepoint(I++, 0, 1, d);
             } else if (this._activeBuffer.x = u - 1, o === 2) continue;
@@ -7158,13 +7158,13 @@ ${h16.join(`
       repeatPrecedingCharacter(e) {
         let i = this._parser.precedingJoinState;
         if (!i) return true;
-        let r = e.params[0] || 1, n = Ae.extractWidth(i), o = this._activeBuffer.x - n, a = this._activeBuffer.lines.get(this._activeBuffer.ybase + this._activeBuffer.y).getString(o), u = new Uint32Array(a.length * r), h16 = 0;
+        let r = e.params[0] || 1, n = Ae.extractWidth(i), o = this._activeBuffer.x - n, a = this._activeBuffer.lines.get(this._activeBuffer.ybase + this._activeBuffer.y).getString(o), u = new Uint32Array(a.length * r), h18 = 0;
         for (let d = 0; d < a.length; ) {
           let _ = a.codePointAt(d) || 0;
-          u[h16++] = _, d += _ > 65535 ? 2 : 1;
+          u[h18++] = _, d += _ > 65535 ? 2 : 1;
         }
-        let c = h16;
-        for (let d = 1; d < r; ++d) u.copyWithin(c, 0, h16), c += h16;
+        let c = h18;
+        for (let d = 1; d < r; ++d) u.copyWithin(c, 0, h18), c += h18;
         return this.print(u, 0, c), true;
       }
       sendDeviceAttributesPrimary(e) {
@@ -7339,8 +7339,8 @@ ${h16.join(`
       requestMode(e, i) {
         let r;
         ((P) => (P[P.NOT_RECOGNIZED = 0] = "NOT_RECOGNIZED", P[P.SET = 1] = "SET", P[P.RESET = 2] = "RESET", P[P.PERMANENTLY_SET = 3] = "PERMANENTLY_SET", P[P.PERMANENTLY_RESET = 4] = "PERMANENTLY_RESET"))(r ||= {});
-        let n = this._coreService.decPrivateModes, { activeProtocol: o, activeEncoding: l } = this._coreMouseService, a = this._coreService, { buffers: u, cols: h16 } = this._bufferService, { active: c, alt: d } = u, _ = this._optionsService.rawOptions, p = (A, R) => (a.triggerDataEvent(`${b.ESC}[${i ? "" : "?"}${A};${R}$y`), true), m = (A) => A ? 1 : 2, f = e.params[0];
-        return i ? f === 2 ? p(f, 4) : f === 4 ? p(f, m(a.modes.insertMode)) : f === 12 ? p(f, 3) : f === 20 ? p(f, m(_.convertEol)) : p(f, 0) : f === 1 ? p(f, m(n.applicationCursorKeys)) : f === 3 ? p(f, _.windowOptions.setWinLines ? h16 === 80 ? 2 : h16 === 132 ? 1 : 0 : 0) : f === 6 ? p(f, m(n.origin)) : f === 7 ? p(f, m(n.wraparound)) : f === 8 ? p(f, 3) : f === 9 ? p(f, m(o === "X10")) : f === 12 ? p(f, m(_.cursorBlink)) : f === 25 ? p(f, m(!a.isCursorHidden)) : f === 45 ? p(f, m(n.reverseWraparound)) : f === 66 ? p(f, m(n.applicationKeypad)) : f === 67 ? p(f, 4) : f === 1e3 ? p(f, m(o === "VT200")) : f === 1002 ? p(f, m(o === "DRAG")) : f === 1003 ? p(f, m(o === "ANY")) : f === 1004 ? p(f, m(n.sendFocus)) : f === 1005 ? p(f, 4) : f === 1006 ? p(f, m(l === "SGR")) : f === 1015 ? p(f, 4) : f === 1016 ? p(f, m(l === "SGR_PIXELS")) : f === 1048 ? p(f, 1) : f === 47 || f === 1047 || f === 1049 ? p(f, m(c === d)) : f === 2004 ? p(f, m(n.bracketedPasteMode)) : f === 2026 ? p(f, m(n.synchronizedOutput)) : p(f, 0);
+        let n = this._coreService.decPrivateModes, { activeProtocol: o, activeEncoding: l } = this._coreMouseService, a = this._coreService, { buffers: u, cols: h18 } = this._bufferService, { active: c, alt: d } = u, _ = this._optionsService.rawOptions, p = (A, R) => (a.triggerDataEvent(`${b.ESC}[${i ? "" : "?"}${A};${R}$y`), true), m = (A) => A ? 1 : 2, f = e.params[0];
+        return i ? f === 2 ? p(f, 4) : f === 4 ? p(f, m(a.modes.insertMode)) : f === 12 ? p(f, 3) : f === 20 ? p(f, m(_.convertEol)) : p(f, 0) : f === 1 ? p(f, m(n.applicationCursorKeys)) : f === 3 ? p(f, _.windowOptions.setWinLines ? h18 === 80 ? 2 : h18 === 132 ? 1 : 0 : 0) : f === 6 ? p(f, m(n.origin)) : f === 7 ? p(f, m(n.wraparound)) : f === 8 ? p(f, 3) : f === 9 ? p(f, m(o === "X10")) : f === 12 ? p(f, m(_.cursorBlink)) : f === 25 ? p(f, m(!a.isCursorHidden)) : f === 45 ? p(f, m(n.reverseWraparound)) : f === 66 ? p(f, m(n.applicationKeypad)) : f === 67 ? p(f, 4) : f === 1e3 ? p(f, m(o === "VT200")) : f === 1002 ? p(f, m(o === "DRAG")) : f === 1003 ? p(f, m(o === "ANY")) : f === 1004 ? p(f, m(n.sendFocus)) : f === 1005 ? p(f, 4) : f === 1006 ? p(f, m(l === "SGR")) : f === 1015 ? p(f, 4) : f === 1016 ? p(f, m(l === "SGR_PIXELS")) : f === 1048 ? p(f, 1) : f === 47 || f === 1047 || f === 1049 ? p(f, m(c === d)) : f === 2004 ? p(f, m(n.bracketedPasteMode)) : f === 2026 ? p(f, m(n.synchronizedOutput)) : p(f, 0);
       }
       _updateAttrColor(e, i, r, n, o) {
         return i === 2 ? (e |= 50331648, e &= -16777216, e |= De.fromColorRGB([r, n, o])) : i === 5 && (e &= -50331904, e |= 33554432 | r & 255), e;
@@ -8010,8 +8010,8 @@ ${h16.join(`
       _renderRows(e, i) {
         let r = this._terminal.buffer, n = r.lines.length.toString();
         for (let o = e; o <= i; o++) {
-          let l = r.lines.get(r.ydisp + o), a = [], u = l?.translateToString(true, void 0, void 0, a) || "", h16 = (r.ydisp + o + 1).toString(), c = this._rowElements[o];
-          c && (u.length === 0 ? (c.textContent = " ", this._rowColumns.set(c, [0, 1])) : (c.textContent = u, this._rowColumns.set(c, a)), c.setAttribute("aria-posinset", h16), c.setAttribute("aria-setsize", n), this._alignRowWidth(c));
+          let l = r.lines.get(r.ydisp + o), a = [], u = l?.translateToString(true, void 0, void 0, a) || "", h18 = (r.ydisp + o + 1).toString(), c = this._rowElements[o];
+          c && (u.length === 0 ? (c.textContent = " ", this._rowColumns.set(c, [0, 1])) : (c.textContent = u, this._rowColumns.set(c, a)), c.setAttribute("aria-posinset", h18), c.setAttribute("aria-setsize", n), this._alignRowWidth(c));
         }
         this._announceCharacters();
       }
@@ -8023,11 +8023,11 @@ ${h16.join(`
         if (o === l || e.relatedTarget !== n) return;
         let a, u;
         if (i === 0 ? (a = r, u = this._rowElements.pop(), this._rowContainer.removeChild(u)) : (a = this._rowElements.shift(), u = r, this._rowContainer.removeChild(a)), a.removeEventListener("focus", this._topBoundaryFocusListener), u.removeEventListener("focus", this._bottomBoundaryFocusListener), i === 0) {
-          let h16 = this._createAccessibilityTreeNode();
-          this._rowElements.unshift(h16), this._rowContainer.insertAdjacentElement("afterbegin", h16);
+          let h18 = this._createAccessibilityTreeNode();
+          this._rowElements.unshift(h18), this._rowContainer.insertAdjacentElement("afterbegin", h18);
         } else {
-          let h16 = this._createAccessibilityTreeNode();
-          this._rowElements.push(h16), this._rowContainer.appendChild(h16);
+          let h18 = this._createAccessibilityTreeNode();
+          this._rowElements.push(h18), this._rowContainer.appendChild(h18);
         }
         this._rowElements[0].addEventListener("focus", this._topBoundaryFocusListener), this._rowElements[this._rowElements.length - 1].addEventListener("focus", this._bottomBoundaryFocusListener), this._terminal.scrollLines(i === 0 ? -1 : 1), this._rowElements[i === 0 ? 1 : this._rowElements.length - 2].focus(), e.preventDefault(), e.stopImmediatePropagation();
       }
@@ -8047,12 +8047,12 @@ ${h16.join(`
         if ((i.node.compareDocumentPosition(r.node) & Node.DOCUMENT_POSITION_PRECEDING || i.node === r.node && i.offset > r.offset) && ([i, r] = [r, i]), i.node.compareDocumentPosition(this._rowElements[0]) & (Node.DOCUMENT_POSITION_CONTAINED_BY | Node.DOCUMENT_POSITION_FOLLOWING) && (i = { node: this._rowElements[0].childNodes[0], offset: 0 }), !this._rowContainer.contains(i.node)) return;
         let n = this._rowElements.slice(-1)[0];
         if (r.node.compareDocumentPosition(n) & (Node.DOCUMENT_POSITION_CONTAINED_BY | Node.DOCUMENT_POSITION_PRECEDING) && (r = { node: n, offset: n.textContent?.length ?? 0 }), !this._rowContainer.contains(r.node)) return;
-        let o = ({ node: u, offset: h16 }) => {
+        let o = ({ node: u, offset: h18 }) => {
           let c = u instanceof Text ? u.parentNode : u, d = parseInt(c?.getAttribute("aria-posinset"), 10) - 1;
           if (isNaN(d)) return console.warn("row is invalid. Race condition?"), null;
           let _ = this._rowColumns.get(c);
           if (!_) return console.warn("columns is null. Race condition?"), null;
-          let p = h16 < _.length ? _[h16] : _.slice(-1)[0] + 1;
+          let p = h18 < _.length ? _[h18] : _.slice(-1)[0] + 1;
           return p >= this._terminal.cols && (++d, p = 0), { row: d, column: p };
         }, l = o(i), a = o(r);
         if (!(!l || !a)) {
@@ -8153,8 +8153,8 @@ ${h16.join(`
         for (let n = 0; n < i.size; n++) {
           let o = i.get(n);
           if (o) for (let l = 0; l < o.length; l++) {
-            let a = o[l], u = a.link.range.start.y < e ? 0 : a.link.range.start.x, h16 = a.link.range.end.y > e ? this._bufferService.cols : a.link.range.end.x;
-            for (let c = u; c <= h16; c++) {
+            let a = o[l], u = a.link.range.start.y < e ? 0 : a.link.range.start.x, h18 = a.link.range.end.y > e ? this._bufferService.cols : a.link.range.end.x;
+            for (let c = u; c <= h18; c++) {
               if (r.has(c)) {
                 o.splice(l--, 1);
                 break;
@@ -8395,27 +8395,27 @@ ${h16.join(`
         function r(l) {
           let a = e._mouseService.getMouseReportCoords(l, e.screenElement);
           if (!a) return false;
-          let u, h16;
+          let u, h18;
           switch (l.overrideType || l.type) {
             case "mousemove":
-              h16 = 32, l.buttons === void 0 ? (u = 3, l.button !== void 0 && (u = l.button < 3 ? l.button : 3)) : u = l.buttons & 1 ? 0 : l.buttons & 4 ? 1 : l.buttons & 2 ? 2 : 3;
+              h18 = 32, l.buttons === void 0 ? (u = 3, l.button !== void 0 && (u = l.button < 3 ? l.button : 3)) : u = l.buttons & 1 ? 0 : l.buttons & 4 ? 1 : l.buttons & 2 ? 2 : 3;
               break;
             case "mouseup":
-              h16 = 0, u = l.button < 3 ? l.button : 3;
+              h18 = 0, u = l.button < 3 ? l.button : 3;
               break;
             case "mousedown":
-              h16 = 1, u = l.button < 3 ? l.button : 3;
+              h18 = 1, u = l.button < 3 ? l.button : 3;
               break;
             case "wheel":
               if (e._customWheelEventHandler && e._customWheelEventHandler(l) === false) return false;
               let c = l.deltaY;
               if (c === 0 || e.coreMouseService.consumeWheelEvent(l, e._renderService?.dimensions?.device?.cell?.height, e._coreBrowserService?.dpr) === 0) return false;
-              h16 = c < 0 ? 0 : 1, u = 4;
+              h18 = c < 0 ? 0 : 1, u = 4;
               break;
             default:
               return false;
           }
-          return h16 === void 0 || u === void 0 || u > 4 ? false : e.coreMouseService.triggerMouseEvent({ col: a.col, row: a.row, x: a.x, y: a.y, button: u, action: h16, ctrl: l.ctrlKey, alt: l.altKey, shift: l.shiftKey });
+          return h18 === void 0 || u === void 0 || u > 4 ? false : e.coreMouseService.triggerMouseEvent({ col: a.col, row: a.row, x: a.x, y: a.y, button: u, action: h18, ctrl: l.ctrlKey, alt: l.altKey, shift: l.shiftKey });
         }
         let n = { mouseup: null, wheel: null, mousedrag: null, mousemove: null }, o = { mouseup: (l) => (r(l), l.buttons || (this._document.removeEventListener("mouseup", n.mouseup), n.mousedrag && this._document.removeEventListener("mousemove", n.mousedrag)), this.cancel(l)), wheel: (l) => (r(l), this.cancel(l, true)), mousedrag: (l) => {
           l.buttons && r(l);
@@ -8432,8 +8432,8 @@ ${h16.join(`
             if (!this.buffer.hasScrollback) {
               if (l.deltaY === 0) return false;
               if (e.coreMouseService.consumeWheelEvent(l, e._renderService?.dimensions?.device?.cell?.height, e._coreBrowserService?.dpr) === 0) return this.cancel(l, true);
-              let h16 = b.ESC + (this.coreService.decPrivateModes.applicationCursorKeys ? "O" : "[") + (l.deltaY < 0 ? "A" : "B");
-              return this.coreService.triggerDataEvent(h16, true), this.cancel(l, true);
+              let h18 = b.ESC + (this.coreService.decPrivateModes.applicationCursorKeys ? "O" : "[") + (l.deltaY < 0 ? "A" : "B");
+              return this.coreService.triggerDataEvent(h18, true), this.cancel(l, true);
             }
           }
         }, { passive: false }));
@@ -11962,22 +11962,14 @@ function MediaPart({ message, onSized }) {
   if (kind === "video") return (0, import_react4.createElement)("video", { className: "oc-media-img", controls: true, autoPlay: true, playsInline: true, src: file.url, onLoadedMetadata: onSized });
   return (0, import_react4.createElement)("img", { className: kind === "sticker" ? "oc-media-sticker" : "oc-media-img", src: file.url, alt: message.mediaText ?? label, onLoad: onSized });
 }
-function ChatPage({ actions }) {
-  const state = useOmni();
-  const omni2 = useActions(actions);
-  const chat = chatOf(state, state.chatId);
-  const channel = chat ? channelOf(state, chat.channelId) : void 0;
-  const loaded = chat ? state.messages[chat.id] : void 0;
-  const loading = chat !== void 0 && loaded === void 0 && !state.preview;
-  const messages = chat ? loaded ?? (state.preview ? [{ id: "preview", from: "them", text: chat.preview, at: chat.at }] : []) : [];
+function useStayAtEnd(chatId, count) {
   const scroller = (0, import_react4.useRef)(null);
   const atEnd = (0, import_react4.useRef)(true);
-  const [draft, setDraft] = (0, import_react4.useState)("");
   (0, import_react4.useLayoutEffect)(() => {
     const node = scroller.current;
     if (node) node.scrollTop = node.scrollHeight;
     atEnd.current = true;
-  }, [chat?.id, messages.length]);
+  }, [chatId, count]);
   const onScroll = () => {
     const node = scroller.current;
     if (node) atEnd.current = node.scrollHeight - node.scrollTop - node.clientHeight < 32;
@@ -11986,6 +11978,39 @@ function ChatPage({ actions }) {
     const node = scroller.current;
     if (node && atEnd.current) node.scrollTop = node.scrollHeight;
   };
+  return { scroller, onScroll, onSized };
+}
+function ChatMessages({ messages, onSized }) {
+  return messages.map((message, index) => {
+    const mine = message.from !== "them";
+    const newDay = index === 0 || dayKey(messages[index - 1].at) !== dayKey(message.at);
+    const first = newDay || messages[index - 1].from !== message.from || messages[index - 1].author !== message.author;
+    return (0, import_react4.createElement)(import_react4.Fragment, { key: message.id }, newDay ? (0, import_react4.createElement)("div", { className: "oc-day" }, dayLabel(message.at)) : null, (0, import_react4.createElement)(
+      "div",
+      { className: `oc-msg oc-msg-${message.from}${first ? " oc-msg-first" : ""}` },
+      first && !mine && message.author ? (0, import_react4.createElement)("span", { className: "oc-msg-author" }, message.author) : null,
+      first && message.from === "omni" ? (0, import_react4.createElement)("span", { className: "oc-msg-author oc-msg-omni" }, (0, import_react4.createElement)(OmniMark, { size: 12 }), "Omni") : null,
+      (0, import_react4.createElement)(
+        "div",
+        { className: "oc-bubble", "data-sending": message.sending || void 0, "data-media": drawnMedia(message) ? message.type : void 0 },
+        drawnMedia(message) ? (0, import_react4.createElement)(MediaPart, { message, onSized }) : null,
+        drawnMedia(message) ? message.text ? (0, import_react4.createElement)("span", { className: "oc-media-caption" }, message.text) : null : message.text,
+        drawnMedia(message) && message.mediaText ? (0, import_react4.createElement)("span", { className: "oc-media-text" }, message.mediaText) : null,
+        (0, import_react4.createElement)("time", null, message.sending ? t("Sending…") : new Date(message.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))
+      )
+    ));
+  });
+}
+function ChatPage({ actions }) {
+  const state = useOmni();
+  const omni2 = useActions(actions);
+  const chat = chatOf(state, state.chatId);
+  const channel = chat ? channelOf(state, chat.channelId) : void 0;
+  const loaded = chat ? state.messages[chat.id] : void 0;
+  const loading = chat !== void 0 && loaded === void 0 && !state.preview;
+  const messages = chat ? loaded ?? (state.preview ? [{ id: "preview", from: "them", text: chat.preview, at: chat.at }] : []) : [];
+  const { scroller, onScroll, onSized } = useStayAtEnd(chat?.id, messages.length);
+  const [draft, setDraft] = (0, import_react4.useState)("");
   (0, import_react4.useEffect)(() => {
     setDraft("");
   }, [chat?.id]);
@@ -12028,25 +12053,7 @@ function ChatPage({ actions }) {
         "div",
         { className: "oc-thread-in" },
         loading ? (0, import_react4.createElement)("div", { className: "oc-day" }, (0, import_react4.createElement)("span", { className: "oc-spinner", "aria-hidden": true }), t("Loading messages…")) : null,
-        messages.map((message, index) => {
-          const mine = message.from !== "them";
-          const newDay = index === 0 || dayKey(messages[index - 1].at) !== dayKey(message.at);
-          const first = newDay || messages[index - 1].from !== message.from || messages[index - 1].author !== message.author;
-          return (0, import_react4.createElement)(import_react4.Fragment, { key: message.id }, newDay ? (0, import_react4.createElement)("div", { className: "oc-day" }, dayLabel(message.at)) : null, (0, import_react4.createElement)(
-            "div",
-            { className: `oc-msg oc-msg-${message.from}${first ? " oc-msg-first" : ""}` },
-            first && !mine && message.author ? (0, import_react4.createElement)("span", { className: "oc-msg-author" }, message.author) : null,
-            first && message.from === "omni" ? (0, import_react4.createElement)("span", { className: "oc-msg-author oc-msg-omni" }, (0, import_react4.createElement)(OmniMark, { size: 12 }), "Omni") : null,
-            (0, import_react4.createElement)(
-              "div",
-              { className: "oc-bubble", "data-sending": message.sending || void 0, "data-media": drawnMedia(message) ? message.type : void 0 },
-              drawnMedia(message) ? (0, import_react4.createElement)(MediaPart, { message, onSized }) : null,
-              drawnMedia(message) ? message.text ? (0, import_react4.createElement)("span", { className: "oc-media-caption" }, message.text) : null : message.text,
-              drawnMedia(message) && message.mediaText ? (0, import_react4.createElement)("span", { className: "oc-media-text" }, message.mediaText) : null,
-              (0, import_react4.createElement)("time", null, message.sending ? t("Sending…") : new Date(message.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))
-            )
-          ));
-        })
+        (0, import_react4.createElement)(ChatMessages, { messages, onSized })
       )
     ),
     (0, import_react4.createElement)(
@@ -15144,8 +15151,226 @@ var AUTOMATIONS_CSS = `
 @media (max-width:720px){.oa-in{padding:20px 16px 40px}}
 `;
 
-// src/client/omni-tree.js
+// src/client/phone-frame.js
 var import_react13 = require("react");
+var FRAME_SHELL = 16;
+var FRAME_BORDER = 1;
+var SCREEN_RADIUS_RATIO = 55 / 390;
+var FRAME_MAX_WIDTH = 300;
+function frameMetrics(width) {
+  const screen = Math.max(0, width - 2 * (FRAME_SHELL + FRAME_BORDER));
+  const screenRadius = Math.round(screen * SCREEN_RADIUS_RATIO * 10) / 10;
+  return { screen, screenRadius, shellRadius: Math.round((screenRadius + FRAME_SHELL) * 10) / 10 };
+}
+var SIDE_BUTTONS = Object.freeze([
+  { id: "mute", side: "left", top: "21%", height: 16 },
+  { id: "volume-up", side: "left", top: "34%", height: 36 },
+  { id: "volume-down", side: "left", top: "47%", height: 36 },
+  { id: "power", side: "right", top: "36%", height: 52 }
+]);
+function PhoneFrame({ label, children }) {
+  return (0, import_react13.createElement)(
+    "div",
+    { className: "op-device" },
+    (0, import_react13.createElement)(
+      "div",
+      { className: "op-frame" },
+      SIDE_BUTTONS.map((button) => (0, import_react13.createElement)("span", { key: button.id, className: "op-button", "data-side": button.side, "aria-hidden": true, style: { [button.side]: -2, top: button.top, height: button.height } })),
+      (0, import_react13.createElement)("div", { className: "op-screen", role: "region", "aria-label": label }, children)
+    )
+  );
+}
+var PhoneGlyph = () => (0, import_react13.createElement)(
+  "svg",
+  { width: 14, height: 14, viewBox: "0 0 20 20", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true, focusable: "false" },
+  (0, import_react13.createElement)("path", { d: "M7 2.75h6A1.75 1.75 0 0 1 14.75 4.5v11A1.75 1.75 0 0 1 13 17.25H7a1.75 1.75 0 0 1-1.75-1.75v-11A1.75 1.75 0 0 1 7 2.75z" }),
+  (0, import_react13.createElement)("path", { d: "M8.75 4.75h2.5" })
+);
+var SCREEN_WIDTH = `(100cqi - ${2 * (FRAME_SHELL + FRAME_BORDER)}px)`;
+var SCREEN_RADIUS = `calc(${SCREEN_WIDTH} * 55 / 390)`;
+var SHELL_RADIUS = `calc(${SCREEN_WIDTH} * 55 / 390 + ${FRAME_SHELL}px)`;
+var PHONE_FRAME_CSS = `
+.op-device{container-type:inline-size;width:100%;max-width:${FRAME_MAX_WIDTH}px;margin:0 auto}
+.op-frame{position:relative;box-sizing:border-box;width:100%;padding:${FRAME_SHELL}px;border:${FRAME_BORDER}px solid rgba(0,0,0,.6);border-radius:${SHELL_RADIUS};background:linear-gradient(145deg,#2b2e35 0%,#101116 45%,#1c1e25 100%);box-shadow:inset 0 0 0 1px rgba(255,255,255,.12),0 18px 50px rgba(0,0,0,.55)}
+.op-button{position:absolute;width:3px;border-radius:2px;background:#3a3d44;box-shadow:0 1px 2px rgba(0,0,0,.5)}
+.op-screen{position:relative;box-sizing:border-box;width:100%;aspect-ratio:390/844;display:flex;flex-direction:column;overflow:hidden;border:1px solid rgba(255,255,255,.06);border-radius:${SCREEN_RADIUS};background:var(--bt-main, #fff);color:var(--bt-ink)}
+`;
+
+// src/client/omni-phone.js
+var import_react14 = require("react");
+var PHONE_KIND = "omni-phone";
+var PHONE_TAB_ID = "ds-bot/omni-phone";
+var phoneTabId = (threadId) => `${PHONE_TAB_ID}:${threadId}`;
+var phoneTabDefinition = () => ({ id: PHONE_TAB_ID, kind: PHONE_KIND, title: () => t("Phone pane") });
+var phoneParams = (thread) => ({ threadId: thread.id, chatId: thread.chatId });
+var threadsIn = (roster) => Array.isArray(roster?.omniThreads) ? roster.omniThreads : [];
+function phoneThreadOf(roster, params, sessionId) {
+  const threads = threadsIn(roster);
+  const pick = (field, value) => typeof value === "string" ? threads.find((thread) => thread[field] === value) : void 0;
+  const named = typeof params?.threadId === "string" || typeof params?.chatId === "string";
+  return (named ? pick("id", params.threadId) ?? pick("chatId", params.chatId) : pick("sessionId", sessionId)) ?? null;
+}
+var phoneRight = null;
+function installPhone(ctx, face) {
+  const fiber = ctx.inject(["sidebarRight", "sidebarRightTabs"], (scope) => {
+    scope.effect(() => scope.sidebarRightTabs.register(phoneTabDefinition()), "ds-bot: phone tab type");
+    scope.effect(() => ctx.slots.inject("sidebar.right.pane.tab", () => ctx.slots.register({ name: "sidebar.right.pane.tab", key: PHONE_TAB_ID, inject: face }, PhoneTab)), "ds-bot: phone tab");
+    scope.effect(() => {
+      phoneRight = scope.sidebarRight;
+      return () => {
+        phoneRight = null;
+      };
+    }, "ds-bot: the phone pane for the thread rows");
+  });
+  return () => fiber.dispose();
+}
+function openPhone(thread) {
+  const right = phoneRight;
+  if (!right) return t("The phone pane needs DSH's right column.");
+  if (typeof right.mounted?.getSnapshot === "function" && right.mounted.getSnapshot() === void 0) return t("Open a conversation first; the phone pane opens beside it.");
+  try {
+    right.openTab(PHONE_KIND, { params: phoneParams(thread) });
+    return null;
+  } catch (error) {
+    return error?.message ?? String(error);
+  }
+}
+function useChatPoll(chatId, on2) {
+  const [read, setRead] = (0, import_react14.useState)({ chatId: null, messages: null, error: null });
+  (0, import_react14.useEffect)(() => {
+    if (!chatId || !on2) return void 0;
+    let stopped = false;
+    let timer = 0;
+    const tick = async () => {
+      if (typeof document === "undefined" || !document.hidden) {
+        try {
+          const reply = await call("omni-messages", { chatId });
+          if (!stopped) setRead({ chatId, messages: Array.isArray(reply?.messages) ? reply.messages : [], error: null });
+        } catch (error) {
+          if (!stopped) setRead((before) => ({ chatId, messages: before.chatId === chatId ? before.messages : null, error: error?.message ?? String(error) }));
+        }
+      }
+      if (!stopped) timer = setTimeout(tick, POLL_MS);
+    };
+    void tick();
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  }, [chatId, on2]);
+  return read.chatId === chatId ? read : { chatId, messages: null, error: null };
+}
+function PhonePane({ params, sessionId, useRoster, visible = true }) {
+  const thread = useRoster((roster) => phoneThreadOf(roster, params, sessionId));
+  const read = useChatPoll(thread?.chatId ?? null, visible);
+  const messages = read.messages ?? [];
+  const { scroller, onScroll, onSized } = useStayAtEnd(thread?.chatId, messages.length);
+  if (!thread) {
+    const named = typeof params?.threadId === "string" || typeof params?.chatId === "string";
+    return (0, import_react14.createElement)("div", { className: "op-pane" }, (0, import_react14.createElement)("p", { className: "op-note" }, named ? t("This chat is no longer in the sidebar.") : t("Open the phone pane from a chat in the sidebar.")));
+  }
+  const loading = read.messages === null && read.error === null;
+  return (0, import_react14.createElement)(
+    "div",
+    { className: "op-pane", "data-thread-id": thread.id },
+    (0, import_react14.createElement)(
+      PhoneFrame,
+      { label: t("{name} on the phone", { name: thread.title }) },
+      (0, import_react14.createElement)(
+        "header",
+        { className: "op-head" },
+        (0, import_react14.createElement)("strong", null, thread.title),
+        thread.connected === false && thread.reason ? (0, import_react14.createElement)("span", null, hostText(thread.reason)) : null
+      ),
+      (0, import_react14.createElement)(
+        "div",
+        { ref: scroller, className: "oc-thread op-log", onScroll, role: "log", "aria-label": t("Conversation with {name}", { name: thread.title }) },
+        (0, import_react14.createElement)(
+          "div",
+          { className: "oc-thread-in" },
+          loading ? (0, import_react14.createElement)("div", { className: "oc-day" }, (0, import_react14.createElement)("span", { className: "oc-spinner", "aria-hidden": true }), t("Loading messages…")) : null,
+          read.error ? (0, import_react14.createElement)("p", { className: "op-note", role: "alert" }, hostText(read.error)) : null,
+          read.messages?.length === 0 ? (0, import_react14.createElement)("p", { className: "op-note" }, t("No messages yet")) : null,
+          (0, import_react14.createElement)(ChatMessages, { messages, onSized })
+        )
+      )
+    )
+  );
+}
+var KEPT_KEY = "omni.phone.tabs";
+var KEPT_TABS = 50;
+var readKept = () => {
+  try {
+    const kept = JSON.parse(localStorage.getItem(KEPT_KEY) ?? "{}");
+    return kept !== null && typeof kept === "object" && !Array.isArray(kept) ? kept : {};
+  } catch {
+    return {};
+  }
+};
+var keptParams = (where) => readKept()[where];
+function keepParams(where, params) {
+  const kept = { ...readKept() };
+  delete kept[where];
+  kept[where] = { threadId: params.threadId, chatId: params.chatId };
+  const all = Object.keys(kept);
+  for (const old of all.slice(0, Math.max(0, all.length - KEPT_TABS))) delete kept[old];
+  try {
+    localStorage.setItem(KEPT_KEY, JSON.stringify(kept));
+  } catch {
+  }
+}
+function PhoneTab({ useTabInfo, sessionId, useRoster }) {
+  const tab = typeof useTabInfo === "function" ? useTabInfo()?.tab : void 0;
+  const opened = tab?.navigation?.params;
+  const where = `${sessionId ?? ""}/${tab?.id ?? ""}`;
+  const params = (0, import_react14.useMemo)(() => opened ?? keptParams(where), [where, opened]);
+  (0, import_react14.useEffect)(() => {
+    if (opened && typeof opened.threadId === "string") keepParams(where, opened);
+  }, [where, opened]);
+  return (0, import_react14.createElement)(PhonePane, { key: phoneTabId(params?.threadId ?? ""), params, sessionId, useRoster, visible: tab?.visible !== false });
+}
+function PhoneDock({ sessionId, useRoster }) {
+  const thread = useRoster((roster) => threadsIn(roster).find((item) => item.sessionId === sessionId) ?? null);
+  const [problem, setProblem] = (0, import_react14.useState)(null);
+  if (!thread) return null;
+  return (0, import_react14.createElement)(
+    "div",
+    { className: "op-dock" },
+    problem ? (0, import_react14.createElement)("span", { className: "op-dock-problem", role: "alert" }, hostText(problem)) : null,
+    (0, import_react14.createElement)("button", {
+      type: "button",
+      className: "op-open",
+      "aria-label": t("Show {name} in the phone pane", { name: thread.title }),
+      title: t("Phone pane"),
+      onClick: () => setProblem(openPhone(thread))
+    }, (0, import_react14.createElement)(PhoneGlyph), t("Phone"))
+  );
+}
+var OMNI_PHONE_CSS = `${PHONE_FRAME_CSS}
+.op-pane{box-sizing:border-box;height:100%;overflow-y:auto;padding:20px 16px}
+.op-head{display:flex;flex-direction:column;align-items:center;gap:1px;padding:28px 12px 8px;border-bottom:1px solid var(--bt-line, rgba(127,127,127,.2));text-align:center}
+.op-head strong{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:600}
+.op-head span{font-size:11px;color:var(--bt-ink-3)}
+.op-screen .oc-thread-in{max-width:none;padding:8px 8px 14px}
+.op-screen .oc-msg{max-width:86%}
+.op-screen .oc-bubble{padding:6px 10px 5px;border-radius:16px;font-size:13px;line-height:18px}
+.op-screen .oc-bubble[data-media]{padding:3px 3px 6px}
+.op-screen .oc-bubble[data-media=sticker]{padding:0}
+.op-screen .oc-media-img{max-height:220px;border-radius:12px}
+.op-screen .oc-media-still,.op-screen .oc-media-wait{width:180px}
+.op-screen .oc-media-audio,.op-screen .oc-media-wait-audio{width:190px}
+.op-screen .oc-media-sticker,.op-screen .oc-media-wait-sticker{width:110px;height:110px}
+.op-screen .oc-media-doc{min-width:0;font-size:12.5px}
+.op-note{margin:12px 8px;font-size:12.5px;color:var(--bt-ink-3);text-align:center}
+.op-dock{display:flex;justify-content:flex-end;align-items:center;gap:8px;padding:0 4px 4px}
+.op-open{display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 10px;border:1px solid var(--bt-line, rgba(127,127,127,.25));border-radius:13px;background:none;color:var(--bt-ink-2);font:inherit;font-size:12px;cursor:pointer}
+.op-open:hover{background:var(--bt-hover);color:var(--bt-ink)}
+.op-open:focus-visible{outline:2px solid var(--bt-accent);outline-offset:1px}
+.op-dock-problem{font-size:11.5px;color:var(--bt-danger, #dc2626)}
+`;
+
+// src/client/omni-tree.js
+var import_react15 = require("react");
 var { ChevronRightIcon: ChevronRightIcon2, CloseIcon, PlusIcon: PlusIcon3 } = icons;
 var OPEN_KEY = "omni.tree.open";
 var SEARCH_DELAY_MS = 250;
@@ -15189,8 +15414,8 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
   const asking = useStatus((map) => map.get(id)?.pendingInteraction !== void 0);
   const running = useStatus((map) => map.get(id)?.running === true);
   const active = useRetain(id, (info) => (info?.retainedBy?.mainView ?? 0) > 0);
-  const [confirming, setConfirming] = (0, import_react13.useState)(false);
-  const [problem, setProblem] = (0, import_react13.useState)(null);
+  const [confirming, setConfirming] = (0, import_react15.useState)(false);
+  const [problem, setProblem] = (0, import_react15.useState)(null);
   const opens = teamReady(rowProps.roster);
   const state = threadState(thread, { running, asking });
   const reason = thread.connected === false || !opens ? hostText(thread.reason ?? t("Not connected")) : null;
@@ -15205,10 +15430,10 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
     setProblem(null);
     call("omni-thread-remove", { threadId: thread.id }).catch((error) => setProblem(error?.message ?? String(error)));
   };
-  return (0, import_react13.createElement)(
+  return (0, import_react15.createElement)(
     "div",
     { className: "ot-thread", "data-idle": state === "idle" || void 0 },
-    (0, import_react13.createElement)(
+    (0, import_react15.createElement)(
       "button",
       {
         type: "button",
@@ -15224,12 +15449,24 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
           if (opens) actions.openSession(id);
         }
       },
-      (0, import_react13.createElement)("span", { className: state === "waiting" ? "bt-thread-wait" : state === "working" ? "bt-thread-spin" : "ot-thread-idle", "aria-hidden": true }),
-      (0, import_react13.createElement)("span", { className: "bt-thread-title" }, thread.title),
-      reason ? (0, import_react13.createElement)("span", { className: "ot-thread-reason" }, reason) : null,
-      dot ? (0, import_react13.createElement)("span", { className: "bt-unread", "aria-hidden": true }) : null
+      (0, import_react15.createElement)("span", { className: state === "waiting" ? "bt-thread-wait" : state === "working" ? "bt-thread-spin" : "ot-thread-idle", "aria-hidden": true }),
+      (0, import_react15.createElement)("span", { className: "bt-thread-title" }, thread.title),
+      reason ? (0, import_react15.createElement)("span", { className: "ot-thread-reason" }, reason) : null,
+      dot ? (0, import_react15.createElement)("span", { className: "bt-unread", "aria-hidden": true }) : null
     ),
-    (0, import_react13.createElement)("button", {
+    confirming ? null : (0, import_react15.createElement)("button", {
+      type: "button",
+      className: "ot-thread-phone",
+      "aria-label": t("Show {name} in the phone pane", { name: thread.title }),
+      title: t("Phone pane"),
+      tabIndex: shown ? void 0 : -1,
+      // Only a reason is shown: an opened pane leaves a remove error where it is.
+      onClick: () => {
+        const reason2 = openPhone(thread);
+        if (reason2 !== null) setProblem(reason2);
+      }
+    }, (0, import_react15.createElement)(PhoneGlyph)),
+    (0, import_react15.createElement)("button", {
       type: "button",
       className: "ot-thread-remove",
       "data-confirm": confirming || void 0,
@@ -15238,25 +15475,25 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
       tabIndex: shown ? void 0 : -1,
       onClick: remove,
       onBlur: () => setConfirming(false)
-    }, confirming ? t("Remove") : (0, import_react13.createElement)(CloseIcon)),
-    problem ? (0, import_react13.createElement)("span", { className: "ot-thread-problem", role: "alert" }, hostText(problem)) : null
+    }, confirming ? t("Remove") : (0, import_react15.createElement)(CloseIcon)),
+    problem ? (0, import_react15.createElement)("span", { className: "ot-thread-problem", role: "alert" }, hostText(problem)) : null
   );
 }
 function ThreadPicker({ channel, onPick, onClose }) {
-  const [query, setQuery] = (0, import_react13.useState)("");
-  const [list, setList] = (0, import_react13.useState)({ status: "loading", chats: [], error: null });
-  const [busy, setBusy] = (0, import_react13.useState)(null);
-  const [problem, setProblem] = (0, import_react13.useState)(null);
-  const asked = (0, import_react13.useRef)(0);
-  const alive = (0, import_react13.useRef)(true);
-  (0, import_react13.useEffect)(() => {
+  const [query, setQuery] = (0, import_react15.useState)("");
+  const [list, setList] = (0, import_react15.useState)({ status: "loading", chats: [], error: null });
+  const [busy, setBusy] = (0, import_react15.useState)(null);
+  const [problem, setProblem] = (0, import_react15.useState)(null);
+  const asked = (0, import_react15.useRef)(0);
+  const alive = (0, import_react15.useRef)(true);
+  (0, import_react15.useEffect)(() => {
     alive.current = true;
     return () => {
       alive.current = false;
     };
   }, []);
   const words = query.trim();
-  (0, import_react13.useEffect)(() => {
+  (0, import_react15.useEffect)(() => {
     const ticket = ++asked.current;
     const load = () => call("omni-thread-chats", words ? { channelId: channel.id, query: words } : { channelId: channel.id }).then(
       (reply) => {
@@ -15292,13 +15529,13 @@ function ThreadPicker({ channel, onPick, onClose }) {
     onClose();
   };
   const empty = list.status === "ready" && list.chats.length === 0;
-  return (0, import_react13.createElement)(
+  return (0, import_react15.createElement)(
     "div",
     { className: "ot-picker", role: "group", "aria-label": t("Add a chat from {name}", { name: channel.name }), onKeyDown },
-    (0, import_react13.createElement)(
+    (0, import_react15.createElement)(
       "div",
       { className: "ot-picker-head" },
-      (0, import_react13.createElement)("input", {
+      (0, import_react15.createElement)("input", {
         type: "search",
         className: "ot-picker-search",
         value: query,
@@ -15307,16 +15544,16 @@ function ThreadPicker({ channel, onPick, onClose }) {
         autoFocus: true,
         onChange: (event) => setQuery(event.target.value)
       }),
-      (0, import_react13.createElement)("button", { type: "button", className: "ot-picker-close", "aria-label": t("Close"), title: t("Close"), onClick: onClose }, (0, import_react13.createElement)(CloseIcon))
+      (0, import_react15.createElement)("button", { type: "button", className: "ot-picker-close", "aria-label": t("Close"), title: t("Close"), onClick: onClose }, (0, import_react15.createElement)(CloseIcon))
     ),
-    problem ? (0, import_react13.createElement)("p", { className: "ot-picker-problem", role: "alert" }, hostText(problem)) : null,
-    list.status === "loading" ? (0, import_react13.createElement)("p", { className: "ot-picker-note" }, t("Loading…")) : null,
-    list.status === "failed" ? (0, import_react13.createElement)("p", { className: "ot-picker-problem", role: "alert" }, hostText(list.error)) : null,
-    empty ? (0, import_react13.createElement)("p", { className: "ot-picker-note" }, query.trim() ? t("No chats match.") : t("No chats yet")) : null,
-    list.chats.length > 0 ? (0, import_react13.createElement)(
+    problem ? (0, import_react15.createElement)("p", { className: "ot-picker-problem", role: "alert" }, hostText(problem)) : null,
+    list.status === "loading" ? (0, import_react15.createElement)("p", { className: "ot-picker-note" }, t("Loading…")) : null,
+    list.status === "failed" ? (0, import_react15.createElement)("p", { className: "ot-picker-problem", role: "alert" }, hostText(list.error)) : null,
+    empty ? (0, import_react15.createElement)("p", { className: "ot-picker-note" }, query.trim() ? t("No chats match.") : t("No chats yet")) : null,
+    list.chats.length > 0 ? (0, import_react15.createElement)(
       "div",
       { className: "ot-picker-list" },
-      list.chats.map((chat) => (0, import_react13.createElement)(
+      list.chats.map((chat) => (0, import_react15.createElement)(
         "button",
         {
           key: chat.id,
@@ -15330,15 +15567,15 @@ function ThreadPicker({ channel, onPick, onClose }) {
             void pick(chat);
           }
         },
-        (0, import_react13.createElement)("span", { className: "ot-picker-name" }, chat.name),
-        chat.added ? (0, import_react13.createElement)("span", { className: "ot-picker-tag" }, t("Added")) : busy === chat.id ? (0, import_react13.createElement)("span", { className: "ot-picker-tag" }, t("Adding…")) : null
+        (0, import_react15.createElement)("span", { className: "ot-picker-name" }, chat.name),
+        chat.added ? (0, import_react15.createElement)("span", { className: "ot-picker-tag" }, t("Added")) : busy === chat.id ? (0, import_react15.createElement)("span", { className: "ot-picker-tag" }, t("Adding…")) : null
       ))
     ) : null
   );
 }
 var addThread = (channelId, chat) => call("omni-thread-add", { channelId, chatId: chat.id });
 function ChannelItem({ channel, state, roster, rowProps, actions, omni: omni2, plus, open, picking, onToggle, onPlus, onClosePicker }) {
-  const plusButton = (0, import_react13.useRef)(null);
+  const plusButton = (0, import_react15.useRef)(null);
   const threads = threadsOf(roster, channel.id);
   const hasChats = state.chats.some((chat) => chat.channelId === channel.id);
   const unread = unreadOf(state, channel.id);
@@ -15352,13 +15589,13 @@ function ChannelItem({ channel, state, roster, rowProps, actions, omni: omni2, p
     if (result?.ok === true) closePicker();
     return result;
   });
-  return (0, import_react13.createElement)(
+  return (0, import_react15.createElement)(
     "div",
     { className: "ot-channel" },
-    (0, import_react13.createElement)(
+    (0, import_react15.createElement)(
       "div",
       { className: "ot-channel-head" },
-      (0, import_react13.createElement)(
+      (0, import_react15.createElement)(
         "button",
         {
           type: "button",
@@ -15368,12 +15605,12 @@ function ChannelItem({ channel, state, roster, rowProps, actions, omni: omni2, p
           title: `${type.label} · ${channel.name}`,
           onClick: onToggle
         },
-        (0, import_react13.createElement)("span", { className: "ot-chevron", "aria-hidden": true }, (0, import_react13.createElement)(ChevronRightIcon2)),
-        (0, import_react13.createElement)(Tile, { type: channel.type, size: 18 }),
-        (0, import_react13.createElement)("span", { className: "ot-channel-name" }, channel.name),
-        unread > 0 ? (0, import_react13.createElement)("span", { className: "ot-count", "aria-label": t("{n} unread", { n: unread }) }, unread) : (0, import_react13.createElement)(StatusDot, { status: channel.status })
+        (0, import_react15.createElement)("span", { className: "ot-chevron", "aria-hidden": true }, (0, import_react15.createElement)(ChevronRightIcon2)),
+        (0, import_react15.createElement)(Tile, { type: channel.type, size: 18 }),
+        (0, import_react15.createElement)("span", { className: "ot-channel-name" }, channel.name),
+        unread > 0 ? (0, import_react15.createElement)("span", { className: "ot-count", "aria-label": t("{n} unread", { n: unread }) }, unread) : (0, import_react15.createElement)(StatusDot, { status: channel.status })
       ),
-      plus.offered ? (0, import_react13.createElement)("button", {
+      plus.offered ? (0, import_react15.createElement)("button", {
         ref: plusButton,
         type: "button",
         className: "ot-plus",
@@ -15381,18 +15618,18 @@ function ChannelItem({ channel, state, roster, rowProps, actions, omni: omni2, p
         title: t("Add a chat"),
         "aria-expanded": picking,
         onClick: onPlus
-      }, (0, import_react13.createElement)(PlusIcon3)) : null
+      }, (0, import_react15.createElement)(PlusIcon3)) : null
     ),
-    (0, import_react13.createElement)(
+    (0, import_react15.createElement)(
       "div",
       { id: panelId, className: "ot-chats", "data-open": open || void 0 },
-      (0, import_react13.createElement)(
+      (0, import_react15.createElement)(
         "div",
         { className: "ot-chats-in" },
-        picking && plus.offered ? (0, import_react13.createElement)(ThreadPicker, { channel, onPick, onClose: closePicker }) : null,
-        !plus.offered && plus.reason ? (0, import_react13.createElement)("span", { className: "ot-empty" }, hostText(plus.reason)) : null,
-        threads.map((thread) => (0, import_react13.createElement)(ThreadRow, { key: rowKey(thread, rowProps), thread, actions, rowProps, shown: open })),
-        (0, import_react13.createElement)(
+        picking && plus.offered ? (0, import_react15.createElement)(ThreadPicker, { channel, onPick, onClose: closePicker }) : null,
+        !plus.offered && plus.reason ? (0, import_react15.createElement)("span", { className: "ot-empty" }, hostText(plus.reason)) : null,
+        threads.map((thread) => (0, import_react15.createElement)(ThreadRow, { key: rowKey(thread, rowProps), thread, actions, rowProps, shown: open })),
+        (0, import_react15.createElement)(
           "button",
           { type: "button", className: "ot-chat ot-all", tabIndex: open ? void 0 : -1, onClick: () => omni2.openChannels("channel", channel.id) },
           hasChats ? t("All chats") : t("Channel health")
@@ -15404,23 +15641,23 @@ function ChannelItem({ channel, state, roster, rowProps, actions, omni: omni2, p
 function OmniTree(props) {
   const { bot, actions, roster } = props;
   const state = useOmni();
-  const omni2 = (0, import_react13.useMemo)(() => omniActions((id) => actions.selectPanel(id), call), [actions]);
-  const [open, setOpen] = (0, import_react13.useState)(readOpen);
-  const [picking, setPicking] = (0, import_react13.useState)(null);
-  (0, import_react13.useEffect)(() => {
+  const omni2 = (0, import_react15.useMemo)(() => omniActions((id) => actions.selectPanel(id), call), [actions]);
+  const [open, setOpen] = (0, import_react15.useState)(readOpen);
+  const [picking, setPicking] = (0, import_react15.useState)(null);
+  (0, import_react15.useEffect)(() => {
     startLive(call);
   }, []);
   if (!isOmniBot(bot)) return null;
   const rowProps = rowPropsOf(props, roster?.omniRowProps);
   const threads = Array.isArray(roster?.omniThreads) ? roster.omniThreads : [];
-  const others = (list) => list.length === 0 ? null : (0, import_react13.createElement)(
+  const others = (list) => list.length === 0 ? null : (0, import_react15.createElement)(
     "div",
     { className: "ot-others", role: "group", "aria-label": t("Other chats") },
-    (0, import_react13.createElement)("span", { className: "ot-empty" }, t("Other chats")),
-    list.map((thread) => (0, import_react13.createElement)(ThreadRow, { key: rowKey(thread, rowProps), thread, actions, rowProps }))
+    (0, import_react15.createElement)("span", { className: "ot-empty" }, t("Other chats")),
+    list.map((thread) => (0, import_react15.createElement)(ThreadRow, { key: rowKey(thread, rowProps), thread, actions, rowProps }))
   );
   if (state.preview) {
-    return (0, import_react13.createElement)("div", { className: "ot-tree" }, (0, import_react13.createElement)("button", { type: "button", className: "ot-channel-row ot-link", onClick: openConnectWizard }, t("Connect Omni"), (0, import_react13.createElement)("span", { "aria-hidden": true }, " →")), others(threads));
+    return (0, import_react15.createElement)("div", { className: "ot-tree" }, (0, import_react15.createElement)("button", { type: "button", className: "ot-channel-row ot-link", onClick: openConnectWizard }, t("Connect Omni"), (0, import_react15.createElement)("span", { "aria-hidden": true }, " →")), others(threads));
   }
   const change = (id, show) => setOpen((before) => {
     const next = new Set(before);
@@ -15431,10 +15668,10 @@ function OmniTree(props) {
   });
   const plus = plusOf(roster, state);
   const listed = new Set(state.channels.map((channel) => channel.id));
-  return (0, import_react13.createElement)(
+  return (0, import_react15.createElement)(
     "div",
     { className: "ot-tree", role: "group", "aria-label": t("{name}'s channels", { name: bot.name }) },
-    state.channels.map((channel) => (0, import_react13.createElement)(ChannelItem, {
+    state.channels.map((channel) => (0, import_react15.createElement)(ChannelItem, {
       key: channel.id,
       channel,
       state,
@@ -15463,7 +15700,7 @@ function OmniTree(props) {
 var threadDocks = 0;
 function ThreadDock({ sessionId, useRoster }) {
   const thread = useRoster((roster) => isThreadSession(roster, sessionId));
-  (0, import_react13.useEffect)(() => {
+  (0, import_react15.useEffect)(() => {
     if (!thread || typeof document === "undefined") return void 0;
     threadDocks += 1;
     document.body.dataset.omniThread = "";
@@ -15506,7 +15743,10 @@ var OMNI_TREE_CSS = `
 .ot-thread-reason{flex:none;max-width:45%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;color:var(--bt-ink-3)}
 .ot-thread-remove{position:absolute;right:4px;display:grid;place-items:center;min-width:20px;height:20px;padding:0 4px;border:0;border-radius:6px;background:var(--bt-hover);color:var(--bt-ink-3);font:inherit;font-size:11px;cursor:pointer;opacity:0;transition:opacity .12s ease}
 .ot-thread-remove svg{width:11px;height:11px}
-.ot-thread:hover .ot-thread-remove,.ot-thread-remove:focus-visible,.ot-thread-remove[data-confirm]{opacity:1}
+.ot-thread-phone{position:absolute;right:28px;display:grid;place-items:center;width:20px;height:20px;padding:0;border:0;border-radius:6px;background:var(--bt-hover);color:var(--bt-ink-3);cursor:pointer;opacity:0;transition:opacity .12s ease}
+.ot-thread-phone svg{width:12px;height:12px}
+.ot-thread-phone:hover{color:var(--bt-ink)}
+.ot-thread:hover .ot-thread-remove,.ot-thread-remove:focus-visible,.ot-thread-remove[data-confirm],.ot-thread:hover .ot-thread-phone,.ot-thread-phone:focus-visible{opacity:1}
 .ot-thread-remove[data-confirm]{color:var(--bt-danger, #dc2626)}
 .ot-thread-problem{flex-basis:100%;padding:0 8px 3px 28px;font-size:11px;color:var(--bt-danger, #dc2626)}
 .ot-picker{display:grid;gap:4px;margin:2px 0 4px;padding:6px;border:1px solid var(--bt-line, rgba(127,127,127,.2));border-radius:10px;background:var(--bt-surface, transparent)}
@@ -15526,12 +15766,12 @@ var OMNI_TREE_CSS = `
 .ot-picker-problem{color:var(--bt-danger, #dc2626)}
 .ot-chats[data-open] .ot-thread{animation:ot-in .22s ease both}
 @keyframes ot-in{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}
-@media (prefers-reduced-motion:reduce){.ot-chats{transition:none}.ot-chats .ot-thread{animation:none}.ot-chevron{transition:none}.ot-thread-remove{transition:none}}
+@media (prefers-reduced-motion:reduce){.ot-chats{transition:none}.ot-chats .ot-thread{animation:none}.ot-chevron{transition:none}.ot-thread-remove,.ot-thread-phone{transition:none}}
 body[data-omni-thread] .bt-voice,body[data-omni-thread] .bt-plus,body[data-omni-thread] .bt-composer-model,body[data-omni-thread] .bt-mw-dock,body[data-omni-thread] .bt-btw-dock{display:none!important}
 `;
 
 // src/client/permissions.js
-var import_react14 = require("react");
+var import_react16 = require("react");
 var NONE = {};
 var ASKING_TOOLS = ["omni_messages", "omni_send", "omni_react", "omni_media", "omni_delete", "omni_call"];
 var KIND_OF = { chat: "chat", group: "group", self: "your own chat", channel: "channel" };
@@ -15564,17 +15804,17 @@ var CONFIRM_LABEL = { send: "Send", delete: "Delete", disconnect: "Disconnect", 
 function Preview({ entry }) {
   const preview = entry.preview ?? NONE;
   const lines = [];
-  if (entry.resource?.type === "call") lines.push((0, import_react14.createElement)("code", { key: "op", className: "om-perm-op" }, `${preview.method ?? ""} ${preview.path ?? ""}${preview.query ? ` ?${preview.query}` : ""}`.trim()));
-  if (preview.channel) lines.push((0, import_react14.createElement)("div", { key: "channel", className: "om-perm-to" }, t("From {channel}", { channel: preview.channel })));
-  if (preview.to) lines.push((0, import_react14.createElement)("div", { key: "to", className: "om-perm-to" }, t("To {to}", { to: preview.to })));
-  if (preview.emoji) lines.push((0, import_react14.createElement)("div", { key: "emoji", className: "om-perm-emoji" }, preview.emoji));
-  if (preview.text) lines.push((0, import_react14.createElement)("blockquote", { key: "text", className: "om-perm-text" }, preview.text));
-  if (preview.body) lines.push((0, import_react14.createElement)("pre", { key: "body", className: "om-perm-body" }, preview.body));
-  return lines.length === 0 ? null : (0, import_react14.createElement)("div", { className: "om-perm-preview" }, lines);
+  if (entry.resource?.type === "call") lines.push((0, import_react16.createElement)("code", { key: "op", className: "om-perm-op" }, `${preview.method ?? ""} ${preview.path ?? ""}${preview.query ? ` ?${preview.query}` : ""}`.trim()));
+  if (preview.channel) lines.push((0, import_react16.createElement)("div", { key: "channel", className: "om-perm-to" }, t("From {channel}", { channel: preview.channel })));
+  if (preview.to) lines.push((0, import_react16.createElement)("div", { key: "to", className: "om-perm-to" }, t("To {to}", { to: preview.to })));
+  if (preview.emoji) lines.push((0, import_react16.createElement)("div", { key: "emoji", className: "om-perm-emoji" }, preview.emoji));
+  if (preview.text) lines.push((0, import_react16.createElement)("blockquote", { key: "text", className: "om-perm-text" }, preview.text));
+  if (preview.body) lines.push((0, import_react16.createElement)("pre", { key: "body", className: "om-perm-body" }, preview.body));
+  return lines.length === 0 ? null : (0, import_react16.createElement)("div", { className: "om-perm-preview" }, lines);
 }
 function ConsentCard({ bot, entry }) {
-  const [busy, setBusy] = (0, import_react14.useState)("");
-  const [error, setError] = (0, import_react14.useState)("");
+  const [busy, setBusy] = (0, import_react16.useState)("");
+  const [error, setError] = (0, import_react16.useState)("");
   const answer = (choice) => {
     if (busy) return;
     setBusy(choice);
@@ -15583,37 +15823,37 @@ function ConsentCard({ bot, entry }) {
   };
   const running = entry.status === "running";
   const confirm2 = entry.kind === "confirm";
-  const button = (choice, label, primary = false) => (0, import_react14.createElement)("button", {
+  const button = (choice, label, primary = false) => (0, import_react16.createElement)("button", {
     type: "button",
     className: primary ? "bt-q-submit" : "bt-q-btn",
     disabled: Boolean(busy) || running,
     onClick: () => answer(choice)
   }, busy === choice ? "…" : label);
-  return (0, import_react14.createElement)(
+  return (0, import_react16.createElement)(
     "div",
     { className: "bt-q om-perm", role: "group", "aria-label": askTitle(bot, entry), "data-kind": entry.kind },
-    (0, import_react14.createElement)(
+    (0, import_react16.createElement)(
       "div",
       { className: "bt-q-head" },
-      (0, import_react14.createElement)("span", { className: "om-perm-who" }, (0, import_react14.createElement)(BotMark, { bot, size: 28 })),
-      (0, import_react14.createElement)(
+      (0, import_react16.createElement)("span", { className: "om-perm-who" }, (0, import_react16.createElement)(BotMark, { bot, size: 28 })),
+      (0, import_react16.createElement)(
         "div",
         { className: "bt-q-text" },
-        (0, import_react14.createElement)("p", { className: "bt-q-title" }, askTitle(bot, entry)),
-        (0, import_react14.createElement)("div", { className: "bt-q-detail" }, reachText(entry))
+        (0, import_react16.createElement)("p", { className: "bt-q-title" }, askTitle(bot, entry)),
+        (0, import_react16.createElement)("div", { className: "bt-q-detail" }, reachText(entry))
       )
     ),
-    (0, import_react14.createElement)(Preview, { entry }),
-    error ? (0, import_react14.createElement)("div", { className: "om-perm-error", role: "alert" }, error) : null,
-    (0, import_react14.createElement)(
+    (0, import_react16.createElement)(Preview, { entry }),
+    error ? (0, import_react16.createElement)("div", { className: "om-perm-error", role: "alert" }, error) : null,
+    (0, import_react16.createElement)(
       "div",
       { className: "bt-q-foot" },
-      running ? (0, import_react14.createElement)("span", { className: "om-perm-running" }, t("Running…")) : null,
-      confirm2 ? [(0, import_react14.createElement)("span", { key: "deny" }, button("deny", t("Cancel"))), (0, import_react14.createElement)("span", { key: "once" }, button("once", t(CONFIRM_LABEL[entry.action] ?? "Allow"), true))] : [
-        (0, import_react14.createElement)("span", { key: "deny" }, button("deny", t("No"))),
-        (0, import_react14.createElement)("span", { key: "once" }, button("once", t("Once"))),
-        entry.resource?.channelId && entry.resource.channelName ? (0, import_react14.createElement)("span", { key: "channel" }, button("channel", t("Always, all of {channel}", { channel: entry.resource.channelName }))) : null,
-        (0, import_react14.createElement)("span", { key: "always" }, button("always", t("Always"), true))
+      running ? (0, import_react16.createElement)("span", { className: "om-perm-running" }, t("Running…")) : null,
+      confirm2 ? [(0, import_react16.createElement)("span", { key: "deny" }, button("deny", t("Cancel"))), (0, import_react16.createElement)("span", { key: "once" }, button("once", t(CONFIRM_LABEL[entry.action] ?? "Allow"), true))] : [
+        (0, import_react16.createElement)("span", { key: "deny" }, button("deny", t("No"))),
+        (0, import_react16.createElement)("span", { key: "once" }, button("once", t("Once"))),
+        entry.resource?.channelId && entry.resource.channelName ? (0, import_react16.createElement)("span", { key: "channel" }, button("channel", t("Always, all of {channel}", { channel: entry.resource.channelName }))) : null,
+        (0, import_react16.createElement)("span", { key: "always" }, button("always", t("Always"), true))
       ]
     )
   );
@@ -15628,10 +15868,10 @@ var SETTLED = {
   replaced: "Asked again"
 };
 function Settled({ bot, entry }) {
-  return (0, import_react14.createElement)(
+  return (0, import_react16.createElement)(
     "div",
     { className: "bt-event om-perm-done", "data-status": entry.status },
-    (0, import_react14.createElement)(BotMark, { bot, size: 16 }),
+    (0, import_react16.createElement)(BotMark, { bot, size: 16 }),
     ` ${askTitle(bot, entry)} · ${t(SETTLED[entry.status] ?? entry.status)}`
   );
 }
@@ -15642,10 +15882,10 @@ function withConsent(render) {
     const callId = props.call?.callId;
     const entry = bot && callId ? entryAt(props.roster, bot, props.sessionId, callId) : void 0;
     if (entry === void 0) {
-      if (props.done && /^(consent|confirmation)_required:/.test(props.content ?? "")) return (0, import_react14.createElement)("div", { className: "bt-event" }, t("Asked you for permission in its chat"));
+      if (props.done && /^(consent|confirmation)_required:/.test(props.content ?? "")) return (0, import_react16.createElement)("div", { className: "bt-event" }, t("Asked you for permission in its chat"));
       return render ? render(props) : null;
     }
-    return (0, import_react14.createElement)("div", { className: "bt-q-inline" }, entry.status === "pending" || entry.status === "running" ? (0, import_react14.createElement)(ConsentCard, { bot, entry }) : (0, import_react14.createElement)(Settled, { bot, entry }));
+    return (0, import_react16.createElement)("div", { className: "bt-q-inline" }, entry.status === "pending" || entry.status === "running" ? (0, import_react16.createElement)(ConsentCard, { bot, entry }) : (0, import_react16.createElement)(Settled, { bot, entry }));
   };
 }
 function ConsentDock({ sessionId, useRoster, useCards }) {
@@ -15656,7 +15896,7 @@ function ConsentDock({ sessionId, useRoster, useCards }) {
   const drawn = (entry) => entry.callId && entry.sessionId === sessionId && shown[entry.callId] > 0;
   const waiting = (roster.omniConsents?.[bot.id] ?? []).filter((entry) => (entry.status === "pending" || entry.status === "running") && !drawn(entry));
   if (waiting.length === 0) return null;
-  return (0, import_react14.createElement)("div", { className: "bt-q-dock om-perm-dock" }, waiting.map((entry) => (0, import_react14.createElement)(ConsentCard, { key: entry.id, bot, entry })));
+  return (0, import_react16.createElement)("div", { className: "bt-q-dock om-perm-dock" }, waiting.map((entry) => (0, import_react16.createElement)(ConsentCard, { key: entry.id, bot, entry })));
 }
 var ACTION_TEXT = { read: "read", media: "files", send: "send", react: "react", delete: "delete" };
 function PermissionsCard({ bot, roster, run, Card, SwitchRow }) {
@@ -15665,35 +15905,35 @@ function PermissionsCard({ bot, roster, run, Card, SwitchRow }) {
   const grants = (roster.omniGrants ?? []).filter((grant) => grant.botId === bot.id);
   const now = Date.now();
   if (main) {
-    return (0, import_react14.createElement)(
+    return (0, import_react16.createElement)(
       Card,
       { title: t("On Omni") },
-      (0, import_react14.createElement)("div", { className: "bt-set-row bt-bs-row" }, (0, import_react14.createElement)(
+      (0, import_react16.createElement)("div", { className: "bt-set-row bt-bs-row" }, (0, import_react16.createElement)(
         "span",
         { className: "bt-set-copy" },
-        (0, import_react14.createElement)("span", { className: "bt-bs-label" }, t("All of Omni")),
-        (0, import_react14.createElement)("span", { className: "bt-set-hint" }, t("Omni and Main Bots operate Omni. Messaging a person, deleting and disconnecting still ask you first."))
+        (0, import_react16.createElement)("span", { className: "bt-bs-label" }, t("All of Omni")),
+        (0, import_react16.createElement)("span", { className: "bt-set-hint" }, t("Omni and Main Bots operate Omni. Messaging a person, deleting and disconnecting still ask you first."))
       ))
     );
   }
-  return (0, import_react14.createElement)(
+  return (0, import_react16.createElement)(
     Card,
     { title: t("On Omni") },
-    grants.length === 0 ? (0, import_react14.createElement)("div", { className: "bt-set-row bt-bs-row" }, (0, import_react14.createElement)(
+    grants.length === 0 ? (0, import_react16.createElement)("div", { className: "bt-set-row bt-bs-row" }, (0, import_react16.createElement)(
       "span",
       { className: "bt-set-copy" },
-      (0, import_react14.createElement)("span", { className: "bt-bs-label" }, t("Nothing yet")),
-      (0, import_react14.createElement)("span", { className: "bt-set-hint" }, t("When {bot} needs a chat, it asks you there, on a card.", { bot: bot.name }))
-    )) : grants.map((grant) => (0, import_react14.createElement)(
+      (0, import_react16.createElement)("span", { className: "bt-bs-label" }, t("Nothing yet")),
+      (0, import_react16.createElement)("span", { className: "bt-set-hint" }, t("When {bot} needs a chat, it asks you there, on a card.", { bot: bot.name }))
+    )) : grants.map((grant) => (0, import_react16.createElement)(
       "div",
       { key: grant.id, className: "om-grant" },
-      (0, import_react14.createElement)(SwitchRow, {
+      (0, import_react16.createElement)(SwitchRow, {
         label: `${grant.resource?.name ?? t("a chat")} · ${grant.actions.map((action) => t(ACTION_TEXT[action] ?? action)).join(", ")}`,
         hint: [kindText(grant.resource), typeof grant.expiresAt === "number" && grant.expiresAt <= now ? t("expired") : "", t("Ask each time")].filter(Boolean).join(" · "),
         on: grant.approval === "confirm",
         onChange: (on2) => run(call("omni-grant-approval", { id: grant.id, approval: on2 ? "confirm" : "auto" }))
       }),
-      (0, import_react14.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm om-grant-revoke", onClick: () => run(call("omni-grant-revoke", { id: grant.id })) }, t("Revoke"))
+      (0, import_react16.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm om-grant-revoke", onClick: () => run(call("omni-grant-revoke", { id: grant.id })) }, t("Revoke"))
     ))
   );
 }
@@ -16278,11 +16518,20 @@ var STRINGS = {
   "Document": "文档",
   "Sticker": "贴纸",
   "not available": "无法显示",
-  "Play video": "播放视频"
+  "Play video": "播放视频",
+  // The phone pane: a thread's chat in a drawn phone, in DSH's right column (omni-phone.js).
+  "Phone pane": "手机面板",
+  "Phone": "手机",
+  "Show {name} in the phone pane": "在手机面板中显示 {name}",
+  "{name} on the phone": "手机上的 {name}",
+  "The phone pane needs DSH's right column.": "手机面板需要 DSH 的右侧栏。",
+  "Open a conversation first; the phone pane opens beside it.": "请先打开一个对话；手机面板会在它旁边打开。",
+  "This chat is no longer in the sidebar.": "这个聊天已不在侧边栏中。",
+  "Open the phone pane from a chat in the sidebar.": "请从侧边栏中的聊天打开手机面板。"
 };
 
 // src/client/index.js
-var import_react15 = require("react");
+var import_react17 = require("react");
 var { ClockIcon: ClockIcon2 } = icons;
 var inject = ["slots"];
 var channels = Object.freeze({ Badge, KeyValue, LiveChannel, LiveChat, LiveQr, Table });
@@ -16324,8 +16573,8 @@ var PHRASES = {
   omni_media: () => ({ label: t("Opening a file"), state: "working" }),
   omni_delete: () => ({ label: t("Deleting a message"), state: "working" })
 };
-var callCard = ({ arg, content, done }) => (0, import_react15.createElement)(OmniCallCard, { ...parseCall(arg, content), done });
-var toolCard = ({ tool, arg, content, done }) => (0, import_react15.createElement)(OmniToolCard, { tool, arg, content, done });
+var callCard = ({ arg, content, done }) => (0, import_react17.createElement)(OmniCallCard, { ...parseCall(arg, content), done });
+var toolCard = ({ tool, arg, content, done }) => (0, import_react17.createElement)(OmniToolCard, { tool, arg, content, done });
 function apply(ctx) {
   ctx.effect(() => addStrings(STRINGS), "ds-bot: channels copy");
   registerConnectStep(ctx);
@@ -16343,27 +16592,32 @@ function apply(ctx) {
   }
   if (botSettings) ctx.effect(() => botSettings.register({ id: "omni-permissions", order: 0, Component: PermissionsCard }), "ds-bot: Omni permissions settings");
   for (const name of ["find_chats", "omni_endpoints"]) ctx.effect(() => toolCards.register(name, null, { phrase: PHRASES[name] }), `ds-bot: ${name} phrase`);
-  ctx.effect(() => toolCards.register("save_automation", (props) => (0, import_react15.createElement)(SavedAutomationCard, props), { phrase: PHRASES.save_automation }), "ds-bot: save_automation card");
-  ctx.effect(() => badges.register({ id: "omni-events", Component: ({ bot, roster, useWork }) => bot.id === roster.eventsBotId ? (0, import_react15.createElement)(EventsBadge, { roster, useWork }) : null }), "ds-bot: automations badge");
+  ctx.effect(() => toolCards.register("save_automation", (props) => (0, import_react17.createElement)(SavedAutomationCard, props), { phrase: PHRASES.save_automation }), "ds-bot: save_automation card");
+  ctx.effect(() => badges.register({ id: "omni-events", Component: ({ bot, roster, useWork }) => bot.id === roster.eventsBotId ? (0, import_react17.createElement)(EventsBadge, { roster, useWork }) : null }), "ds-bot: automations badge");
   if (botChildren) ctx.effect(() => botChildren.register({ id: "omni-channels", Component: OmniTree }), "ds-bot: Omni channels in the sidebar");
   ctx.effect(() => headerButtons.register({
     id: "omni-board",
-    Component: ({ bot, roster, actions, useWork }) => bot.id === roster.eventsBotId ? (0, import_react15.createElement)(SubscriptionsButton, { roster, useWork, onToggle: () => toggleBoard(actions.reportError) }) : null
+    Component: ({ bot, roster, actions, useWork }) => bot.id === roster.eventsBotId ? (0, import_react17.createElement)(SubscriptionsButton, { roster, useWork, onToggle: () => toggleBoard(actions.reportError) }) : null
   }), "ds-bot: automations button");
   if (chatSuggestions?.register) ctx.effect(() => chatSuggestions.register({ id: "omni-automations", order: -10, when: ({ bot, roster }) => Boolean(bot?.id) && bot.id === roster?.eventsBotId, items: automationExamples }), "ds-bot: automation suggestions");
   ctx.effect(() => nav.register({ id: "automations", label: () => t("Automations"), icon: ClockIcon2, run: (actions) => actions.selectPanel(AUTOMATIONS_PANEL) }), "ds-bot: automations nav");
   ctx.effect(() => onShell(({ face, shadow, installCompiledStyles }) => [
-    () => installCompiledStyles(CHANNELS_CSS + OMNI_TREE_CSS + SUBSCRIPTIONS_CSS + AUTOMATIONS_CSS + OMNI_LIVE_CSS + OMNI_PEEK_CSS + OMNI_CONNECT_CSS + PERMISSIONS_CSS, "channels"),
+    () => installCompiledStyles(CHANNELS_CSS + OMNI_TREE_CSS + SUBSCRIPTIONS_CSS + AUTOMATIONS_CSS + OMNI_LIVE_CSS + OMNI_PEEK_CSS + OMNI_CONNECT_CSS + PERMISSIONS_CSS + OMNI_PHONE_CSS, "channels"),
     () => shadow("conversation.input.dock", { id: "omni-consent", order: -80, inject: face }, ConsentDock),
     // A chat thread's Session is not a Bot's: it marks the page so the Bot controls stay hidden there.
     () => shadow("conversation.input.dock", { id: "omni-thread", order: -200, inject: face }, ThreadDock),
+    // In a thread's own Session, the button that opens its phone pane: the team's header draws
+    // its buttons in a Bot's Session only.
+    () => shadow("conversation.input.dock", { id: "omni-phone", order: -190, inject: face }, PhoneDock),
     () => shadow("sidebar.footer.action", { id: "bot-connect", order: -100, inject: face }, ChannelsFooter),
     // The Connect wizard opened on demand (settings, Channels, or once after install) mounts here.
     () => shadow("sidebar.footer.action", { id: "omni-connect-wizard", order: 1e3, inject: face }, WizardHost),
     () => shadow("main", { key: CHANNELS_PANEL, inject: face }, ChannelsPage),
     () => shadow("main", { key: CHAT_PANEL, inject: face }, ChatPage),
     () => shadow("main", { key: AUTOMATIONS_PANEL, inject: face }, AutomationsPage),
-    () => installBoard(ctx, face)
+    () => installBoard(ctx, face),
+    // A thread's phone pane, a tab of the same column, opened only from the thread.
+    () => installPhone(ctx, face)
   ]), "ds-bot: channels on the Bot surface");
 }
 /*! Bundled license information:

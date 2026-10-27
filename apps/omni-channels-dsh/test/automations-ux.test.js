@@ -28,19 +28,28 @@ const roster = (subscriptions = []) => ({ eventsBotId: 'm1', byId: { m1: { id: '
 const textOf = node => (node === null || node === undefined ? '' : typeof node === 'string' ? node : (node.children ?? []).map(textOf).join(''))
 
 // The board took most of the window next to Omni's chat, by itself, again with each fresh part
-// of that chat. Only the header's Automations button opens it now.
-test('the board never opens by itself: only the header button opens it', () => {
+// of that chat. Only the header's Automations button opens it now; the phone pane opens only
+// from a thread's row action and the thread's own button (omni-phone.js).
+test('the board never opens by itself: only the header button opens it; the phone pane only from the thread', () => {
   const dir = new URL('../src/client/', import.meta.url)
   const opens = []
+  const phoneCalls = []
   for (const name of readdirSync(dir).filter(file => file.endsWith('.js'))) {
     const text = readFileSync(new URL(name, dir), 'utf8')
     for (const match of text.matchAll(/\.openTab\(/g)) opens.push(`${name}: ${text.slice(0, match.index).split('\n').length}`)
+    for (const match of text.matchAll(/^.*\bopenPhone\(.*$/gm)) if (!/export function openPhone\(/.test(match[0])) phoneCalls.push(`${name}: ${match[0].trim()}`)
   }
-  assert.equal(opens.length, 1, `the board opens from ${opens.join(', ')}`)
+  assert.equal(opens.length, 2, `the column opens from ${opens.join(', ')}`)
   const index = readFileSync(new URL('index.js', dir), 'utf8')
   const toggle = index.slice(index.indexOf('function toggleBoard('), index.indexOf('function installBoard('))
   assert.match(toggle, /right\.openTab\(BOARD_KIND\)/)
   assert.doesNotMatch(index, /omni\.board\.opened|localStorage/)
+  const phone = readFileSync(new URL('omni-phone.js', dir), 'utf8')
+  const open = phone.slice(phone.indexOf('export function openPhone('), phone.indexOf('function useChatPoll('))
+  assert.match(open, /right\.openTab\(PHONE_KIND, \{ params: phoneParams\(thread\) \}\)/)
+  // Each call of openPhone is a click handler: the row's phone action and the thread's button.
+  assert.deepEqual(phoneCalls.map(line => line.split(':')[0]).sort(), ['omni-phone.js', 'omni-tree.js'])
+  for (const line of phoneCalls) assert.match(line, /onClick: \(\) => .*openPhone\(thread\)/, line)
 })
 
 test('the header button counts automations only once there is one, and shows who waits', () => {

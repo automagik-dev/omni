@@ -2,6 +2,8 @@ import { createElement as h, useEffect, useMemo, useRef, useState } from 'react'
 import { StatusDot, Tile, useOmni } from './channels.js'
 import { openConnectWizard } from './wizard.js'
 import { isOmniBot, omniActions, startLive, typeOf, unreadOf } from './omni-store.js'
+import { openPhone } from './omni-phone.js'
+import { PhoneGlyph } from './phone-frame.js'
 import { call, hostText, icons, t } from './core.js'
 const { ChevronRightIcon, CloseIcon, PlusIcon } = icons
 
@@ -61,8 +63,9 @@ export function threadState(thread, { running = false, asking = false } = {}) {
  * One thread under its channel. It opens its Session through the team's row action, the way a
  * Bot's own rows do; on a team without the hook it shows the reason in place and opens nothing,
  * so no conversation view takes a turn the thread cannot act on. A thread with no live key says
- * "Not connected" with its reason, and still opens. `shown` false: its channel is folded, so
- * the row is out of the tab order.
+ * "Not connected" with its reason, and still opens. Its phone action opens the thread's phone
+ * pane (omni-phone.js) beside the conversation on screen, on any team: the pane only reads, and
+ * opens no Session. `shown` false: its channel is folded, so the row is out of the tab order.
  */
 export function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
   const id = thread.sessionId
@@ -95,6 +98,12 @@ export function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
     h('span', { className: 'bt-thread-title' }, thread.title),
     reason ? h('span', { className: 'ot-thread-reason' }, reason) : null,
     dot ? h('span', { className: 'bt-unread', 'aria-hidden': true }) : null),
+    confirming ? null : h('button', {
+      type: 'button', className: 'ot-thread-phone', 'aria-label': t('Show {name} in the phone pane', { name: thread.title }), title: t('Phone pane'),
+      tabIndex: shown ? undefined : -1,
+      // Only a reason is shown: an opened pane leaves a remove error where it is.
+      onClick: () => { const reason = openPhone(thread); if (reason !== null) setProblem(reason) },
+    }, h(PhoneGlyph)),
     h('button', {
       type: 'button', className: 'ot-thread-remove', 'data-confirm': confirming || undefined,
       'aria-label': confirming ? t('Remove {name} from the sidebar? Click again', { name: thread.title }) : t('Remove {name}', { name: thread.title }),
@@ -315,7 +324,10 @@ export const OMNI_TREE_CSS = `
 .ot-thread-reason{flex:none;max-width:45%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;color:var(--bt-ink-3)}
 .ot-thread-remove{position:absolute;right:4px;display:grid;place-items:center;min-width:20px;height:20px;padding:0 4px;border:0;border-radius:6px;background:var(--bt-hover);color:var(--bt-ink-3);font:inherit;font-size:11px;cursor:pointer;opacity:0;transition:opacity .12s ease}
 .ot-thread-remove svg{width:11px;height:11px}
-.ot-thread:hover .ot-thread-remove,.ot-thread-remove:focus-visible,.ot-thread-remove[data-confirm]{opacity:1}
+.ot-thread-phone{position:absolute;right:28px;display:grid;place-items:center;width:20px;height:20px;padding:0;border:0;border-radius:6px;background:var(--bt-hover);color:var(--bt-ink-3);cursor:pointer;opacity:0;transition:opacity .12s ease}
+.ot-thread-phone svg{width:12px;height:12px}
+.ot-thread-phone:hover{color:var(--bt-ink)}
+.ot-thread:hover .ot-thread-remove,.ot-thread-remove:focus-visible,.ot-thread-remove[data-confirm],.ot-thread:hover .ot-thread-phone,.ot-thread-phone:focus-visible{opacity:1}
 .ot-thread-remove[data-confirm]{color:var(--bt-danger, #dc2626)}
 .ot-thread-problem{flex-basis:100%;padding:0 8px 3px 28px;font-size:11px;color:var(--bt-danger, #dc2626)}
 .ot-picker{display:grid;gap:4px;margin:2px 0 4px;padding:6px;border:1px solid var(--bt-line, rgba(127,127,127,.2));border-radius:10px;background:var(--bt-surface, transparent)}
@@ -335,6 +347,6 @@ export const OMNI_TREE_CSS = `
 .ot-picker-problem{color:var(--bt-danger, #dc2626)}
 .ot-chats[data-open] .ot-thread{animation:ot-in .22s ease both}
 @keyframes ot-in{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}
-@media (prefers-reduced-motion:reduce){.ot-chats{transition:none}.ot-chats .ot-thread{animation:none}.ot-chevron{transition:none}.ot-thread-remove{transition:none}}
+@media (prefers-reduced-motion:reduce){.ot-chats{transition:none}.ot-chats .ot-thread{animation:none}.ot-chevron{transition:none}.ot-thread-remove,.ot-thread-phone{transition:none}}
 body[data-omni-thread] .bt-voice,body[data-omni-thread] .bt-plus,body[data-omni-thread] .bt-composer-model,body[data-omni-thread] .bt-mw-dock,body[data-omni-thread] .bt-btw-dock{display:none!important}
 `

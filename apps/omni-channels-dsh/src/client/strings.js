@@ -567,4 +567,13 @@ export const STRINGS = {
   'Sticker': '贴纸',
   'not available': '无法显示',
   'Play video': '播放视频',
+  // The phone pane: a thread's chat in a drawn phone, in DSH's right column (omni-phone.js).
+  'Phone pane': '手机面板',
+  'Phone': '手机',
+  'Show {name} in the phone pane': '在手机面板中显示 {name}',
+  '{name} on the phone': '手机上的 {name}',
+  'The phone pane needs DSH\'s right column.': '手机面板需要 DSH 的右侧栏。',
+  'Open a conversation first; the phone pane opens beside it.': '请先打开一个对话；手机面板会在它旁边打开。',
+  'This chat is no longer in the sidebar.': '这个聊天已不在侧边栏中。',
+  'Open the phone pane from a chat in the sidebar.': '请从侧边栏中的聊天打开手机面板。',
 }
