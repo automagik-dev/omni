@@ -711,6 +711,33 @@ describe('the route reads the row the lock handed over', () => {
     expect(calls.getChatMessages).toEqual([handedId]);
   });
 
+  test('a locked key reads the chat row once: the lock reads it, the route reuses it', async () => {
+    const { app, calls } = mountLocked(chatKey(), null);
+
+    const res = await app.request(`/chats/${LOCKED_CHAT_ID}`);
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { data: { id: string; isGroup: boolean } };
+    expect(body.data.id).toBe(LOCKED_CHAT_ID);
+    expect(body.data.isGroup).toBe(false);
+    expect(calls.getById).toEqual([LOCKED_CHAT_ID]);
+  });
+
+  test('a locked key pinning by JID reads the chat row once, in the lock', async () => {
+    const writer = chatKey({ scopes: ['chats:write'], outboundRecipientAllowlist: [] });
+    const { app, calls } = mountLocked(writer, null);
+
+    const res = await app.request(`/chats/${encodeURIComponent(WHATSAPP_DM_JID)}/pin`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ instanceId: LOCKED_INSTANCE_ID }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(calls.findByExternalIdSmart).toEqual([{ instanceId: LOCKED_INSTANCE_ID, externalId: WHATSAPP_DM_JID }]);
+    expect(calls.getById).toHaveLength(0);
+  });
+
   test('for another raw id it resolves as before', async () => {
     const { app, calls } = mountLocked(chatKey(), LOCKED_INSTANCE_ID, { raw: WHATSAPP_GROUP_JID, chatId: VALID_UUID });
 

@@ -25,9 +25,11 @@ import { CORE_EVENT_TYPES, type EventBus, NotFoundError, STREAM_NAMES, getStream
 import { type ApiKey, type Database, type NewApiKey, apiKeys } from '@omni/db';
 import { Column, Param, SQL, StringChunk, getTableColumns, is } from 'drizzle-orm';
 import { Hono } from 'hono';
+import type { z } from 'zod';
 import { DEFAULT_DEVICE_KEY_SCOPES } from '../../../login/config';
 import { authMiddleware } from '../../../middleware/auth';
 import { scopeEnforcerMiddleware } from '../../../middleware/scope-enforcer';
+import type { ChildKeyRevokeResultSchema, ChildKeySchema } from '../../../schemas/openapi/keys';
 import type { Services } from '../../../services';
 import {
   ApiKeyService,
@@ -870,18 +872,8 @@ describe('PATCH /keys/:childId stays inside the parent', () => {
 /** A tenant credential's context; the route only needs to see that one is there. */
 const TENANT_CONTEXT = { credentialClass: 'tenant', tenantId: 'tenant-a' } as unknown as TenantAuthContext;
 
-interface ChildKeyAnswer {
-  id: string;
-  plainTextKey: string;
-  parentKeyId: string;
-  chatId: string;
-  chatExternalId: string;
-  instanceId: string;
-  scopes: string[];
-  expiresAt: string | null;
-  replacedKeyId: string | null;
-  status?: 'revoked' | 'already_revoked';
-}
+/** The mint answer, or (with `status`) a revoke answer. */
+type ChildKeyAnswer = z.infer<typeof ChildKeySchema> & Partial<z.infer<typeof ChildKeyRevokeResultSchema>>;
 
 interface RouteCall {
   status: number;

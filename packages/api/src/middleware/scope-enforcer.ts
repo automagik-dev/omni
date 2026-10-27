@@ -441,9 +441,9 @@ function headerInstanceMismatch(
   return headerMismatchResponse(c, header);
 }
 
-/** True when any name of the resolved chat (the raw `:id`, its UUID, its native id) is in the chat lock. */
-function chatAllowedByAnyName(apiKey: ApiKeyData, raw: string, chat: Chat): boolean {
-  return [raw, chat.id, chat.externalId].some((name) => enforceChatAllowlist(apiKey, name).allowed);
+/** The first name of the resolved chat (the raw `:id`, its UUID, its native id) the chat lock admits, or undefined. */
+function chatNameInLock(apiKey: ApiKeyData, raw: string, chat: Chat): string | undefined {
+  return [raw, chat.id, chat.externalId].find((name) => enforceChatAllowlist(apiKey, name).allowed);
 }
 
 /** A chat row with no instance is never inside an instance lock. */
@@ -460,40 +460,38 @@ function chatInsideInstanceLock(apiKey: ApiKeyData, instanceId: string | null): 
  * does (lib/resolve-chat-id.ts), inside the lock, and hand the row to the
  * route. A native id is looked up on the route's explicit `instanceId`, else
  * the key's context or active instance, and that instance must be inside the
- * lock BEFORE the lookup; no row, or a row outside the lock, is refused. The
- * row's instance becomes the request's instance target.
+ * lock BEFORE the lookup; an explicit `instanceId` must be inside it for a
+ * UUID too. No row, or a row outside the lock, is refused. Returns the row and
+ * the name of it the chat lock admits; the row's instance becomes the
+ * request's instance target.
  */
 async function lockChatRoute(
   c: Context<{ Variables: AppVariables }>,
   apiKey: ApiKeyData,
   raw: string,
-): Promise<{ deny: Response } | { chat: Chat }> {
+): Promise<{ deny: Response } | { chat: Chat; chatName: string }> {
   const refuseChat = () => ({
     deny: lockDenyResponse(c, 'chatAllowlist', { allowed: false, reason: 'not-in-allowlist', attempted: raw }),
   });
+  const native = !isChatUuid(raw);
   const explicit = await explicitChatInstance(c);
-  if (explicit) {
-    const explicitResult = enforceInstanceAllowlist(apiKey, explicit);
-    if (!explicitResult.allowed) return { deny: lockDenyResponse(c, 'instanceAllowlist', explicitResult) };
-  }
-
-  let lookupInstance: string | undefined;
-  if (!isChatUuid(raw)) {
-    const instanceId = explicit ?? (await getActiveInstanceId(c));
-    if (!instanceId) return refuseChat();
-    const instanceResult = enforceInstanceAllowlist(apiKey, instanceId);
+  // The instance a native id is looked up on; for a UUID, only the explicit one is checked.
+  const lookupInstance = explicit ?? (native ? await getActiveInstanceId(c) : null);
+  if (native && !lookupInstance) return refuseChat();
+  if (lookupInstance) {
+    const instanceResult = enforceInstanceAllowlist(apiKey, lookupInstance);
     if (!instanceResult.allowed) return { deny: lockDenyResponse(c, 'instanceAllowlist', instanceResult) };
-    lookupInstance = instanceId;
   }
 
-  const chat = await resolveChatRow(c, raw, lookupInstance);
+  const chat = await resolveChatRow(c, raw, lookupInstance ?? undefined);
   // A UUID row on an instance outside the lock is refused exactly like a
   // missing row, so the answer never tells which instance a row lives on.
   if (!chat || !chatInsideInstanceLock(apiKey, chat.instanceId)) return refuseChat();
-  if (!chatAllowedByAnyName(apiKey, raw, chat)) return refuseChat();
+  const chatName = chatNameInLock(apiKey, raw, chat);
+  if (chatName === undefined) return refuseChat();
 
   c.set('resolvedChat', { raw, chat });
-  return { chat };
+  return { chat, chatName };
 }
 
 /**
@@ -598,9 +596,7 @@ async function lockTargetsFor(
     return locked;
   }
   targets.instance = targets.instance ?? locked.chat.instanceId;
-  targets.chat =
-    [chatParam, locked.chat.id, locked.chat.externalId].find((name) => enforceChatAllowlist(apiKey, name).allowed) ??
-    chatParam;
+  targets.chat = locked.chatName;
   ownInstances.push(locked.chat.instanceId);
   return { targets, ownInstances };
 }

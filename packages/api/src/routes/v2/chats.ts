@@ -15,6 +15,7 @@ import { checkInstanceAccess, resolveChatIdParam } from '../../lib/resolve-chat-
 import { clearAgentSession } from '../../plugins/session-cleaner';
 import { optionalDateParam } from '../../schemas/date-query';
 import type { Services } from '../../services';
+import { withIsGroup } from '../../services/chats';
 import type { AppVariables } from '../../types';
 
 const chatsRoutes = new Hono<{ Variables: AppVariables }>();
@@ -22,6 +23,21 @@ const chatsRoutes = new Hono<{ Variables: AppVariables }>();
 // `:id` is resolved by lib/resolve-chat-id.ts, shared with the scope lock: for
 // a key with an instance lock the lock has already resolved it and handed the
 // row over (`c.get('resolvedChat')`), and `resolveChatIdParam` returns its id.
+
+/**
+ * The chat row for a resolved `:id`, as `services.chats.getById(id)` reads it
+ * (a hidden chat is not found). The row the lock handed over for the same
+ * `raw` is reused when it is not hidden; otherwise the row is read again. Only
+ * for a read before the route changes the chat: a read after a change must go
+ * to the database.
+ */
+async function chatForRoute(c: Context<{ Variables: AppVariables }>, raw: string, id: string) {
+  const handed = c.get('resolvedChat');
+  if (handed && handed.raw === raw && handed.chat.id === id && handed.chat.visibility !== 'hidden') {
+    return withIsGroup(handed.chat);
+  }
+  return c.get('services').chats.getById(id);
+}
 
 /**
  * Common 404 response for routes that couldn't resolve a `:id` to a chat —
@@ -232,9 +248,8 @@ chatsRoutes.get('/:id', async (c) => {
   const raw = c.req.param('id');
   const id = await resolveChatIdParam(c, raw);
   if (id === null) return chatNotFoundResponse(c, raw);
-  const services = c.get('services');
 
-  const chat = await services.chats.getById(id);
+  const chat = await chatForRoute(c, raw, id);
 
   return c.json({ data: chat });
 });
@@ -494,7 +509,7 @@ chatsRoutes.post('/:id/pin', zValidator('json', z.object({ instanceId: z.string(
 
   checkInstanceAccess(c.get('apiKey'), instanceId);
 
-  const chat = await services.chats.getById(id);
+  const chat = await chatForRoute(c, raw, id);
   await applyChatModifyOnChannel(services, channelRegistry, instanceId, chat.externalId, 'pin');
 
   return c.json({ success: true, data: { chatId: id, action: 'pin' } });
@@ -513,7 +528,7 @@ chatsRoutes.post('/:id/unpin', zValidator('json', z.object({ instanceId: z.strin
 
   checkInstanceAccess(c.get('apiKey'), instanceId);
 
-  const chat = await services.chats.getById(id);
+  const chat = await chatForRoute(c, raw, id);
   await applyChatModifyOnChannel(services, channelRegistry, instanceId, chat.externalId, 'unpin');
 
   return c.json({ success: true, data: { chatId: id, action: 'unpin' } });
@@ -532,7 +547,7 @@ chatsRoutes.post('/:id/mute', zValidator('json', muteActionSchema), async (c) =>
 
   checkInstanceAccess(c.get('apiKey'), instanceId);
 
-  const chat = await services.chats.getById(id);
+  const chat = await chatForRoute(c, raw, id);
   await applyChatModifyOnChannel(services, channelRegistry, instanceId, chat.externalId, 'mute', duration);
 
   return c.json({ success: true, data: { chatId: id, action: 'mute', duration } });
@@ -551,7 +566,7 @@ chatsRoutes.post('/:id/unmute', zValidator('json', z.object({ instanceId: z.stri
 
   checkInstanceAccess(c.get('apiKey'), instanceId);
 
-  const chat = await services.chats.getById(id);
+  const chat = await chatForRoute(c, raw, id);
   await applyChatModifyOnChannel(services, channelRegistry, instanceId, chat.externalId, 'unmute');
 
   return c.json({ success: true, data: { chatId: id, action: 'unmute' } });
@@ -677,7 +692,7 @@ chatsRoutes.post('/:id/read', zValidator('json', markChatReadSchema), async (c) 
   const channelRegistry = c.get('channelRegistry');
 
   // Get chat from our database
-  const chat = await services.chats.getById(chatId);
+  const chat = await chatForRoute(c, raw, chatId);
 
   // Verify instance matches
   if (chat.instanceId !== instanceId) {
@@ -777,7 +792,7 @@ chatsRoutes.post('/:id/disappearing', zValidator('json', disappearingSchema), as
   checkInstanceAccess(c.get('apiKey'), instanceId);
 
   // Get chat from database
-  const chat = await services.chats.getById(chatId);
+  const chat = await chatForRoute(c, raw, chatId);
 
   // Verify instance matches
   if (chat.instanceId !== instanceId) {
