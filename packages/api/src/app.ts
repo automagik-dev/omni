@@ -405,6 +405,18 @@ export function createApp(
   app.post('/api/v2/channels/asc/:instanceId/webhook', handleAscWebhook);
   app.get('/api/v2/channels/asc/:instanceId/webhook', handleAscWebhook);
 
+  // PROTOTYPE public webchat endpoints — auth-exempt (an anonymous site visitor
+  // has no API key). widget (GET demo page), events (GET Server-Sent Events),
+  // messages (POST visitor text). The plugin routes by path and refuses unknown
+  // or disconnected instances.
+  app.on(['GET', 'POST'], '/api/v2/channels/webchat/:instanceId/:action', async (c) => {
+    const plugin = c.get('channelRegistry')?.get('webchat');
+    if (!plugin?.handleWebhook) {
+      return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: 'Webchat plugin not loaded' } }, 503);
+    }
+    return plugin.handleWebhook(c.req.raw);
+  });
+
   // Public WhatsApp Business API (Meta) webhook endpoint — auth-exempt, signed by Meta with HMAC-SHA256.
   // Unlike Gupshup/Twilio, the URL is GLOBAL (no :instanceId in path): instance resolution
   // happens inside the plugin via `metadata.phone_number_id` from the payload.
