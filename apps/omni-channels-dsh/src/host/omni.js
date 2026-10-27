@@ -159,10 +159,11 @@ export function install(rt) {
   }
 
   // One omni API request for other host modules (omni-events.js), with this host's URL and
-  // key; `null` when omni is not set up here. The caller reads the response.
-  rt.omniRequest = async (method, path, { body, signal, headers = {} } = {}) => {
-    const url = base()
-    const apiKey = await key()
+  // key; `null` when omni is not set up here. The caller reads the response. A call that names
+  // its own `url` or `key` uses them and never falls back to the link's.
+  rt.omniRequest = async (method, path, { body, signal, headers = {}, url: callUrl, key: callKey } = {}) => {
+    const url = callUrl === undefined ? base() : callUrl
+    const apiKey = callKey === undefined ? await key() : callKey
     if (url === null || !apiKey) return null
     return fetch(`${url}/api/v2${path}`, {
       method,
@@ -178,8 +179,8 @@ export function install(rt) {
   // (omni-api.js) both fetch it here. Gives the file's response, unread, with the stored path
   // and Omni's answer for it (`stored`), or why there is none; a stored path that climbs out
   // of /media is refused before the key reaches any other route.
-  rt.omniMediaFile = async (messageId, { timeout } = {}) => {
-    const ask = (method, path, body) => rt.omniRequest(method, path, { body, signal: timeout ? AbortSignal.timeout(timeout) : undefined })
+  rt.omniMediaFile = async (messageId, { timeout, link } = {}) => {
+    const ask = (method, path, body) => rt.omniRequest(method, path, { ...link, body, signal: timeout ? AbortSignal.timeout(timeout) : undefined })
     const stored = await ask('POST', '/messages/media/download', { messageId })
     if (stored === null) return { ok: false, reason: 'Omni is not connected here.' }
     const answer = await stored.json().catch(() => null)
@@ -275,7 +276,9 @@ export function install(rt) {
     const url = base()
     const apiKey = await key()
     if (owner !== mediaOwner || url === null || !apiKey || ownerOf(url, apiKey) !== owner) return no('The link to omni changed')
-    const ask = (method, path, body) => rt.omniRequest(method, path, { body, signal: AbortSignal.timeout(MEDIA_TIMEOUT_MS) })
+    // Every request of this download goes to the link it began under, even if the link changes.
+    const link = { url, key: apiKey }
+    const ask = (method, path, body) => rt.omniRequest(method, path, { ...link, body, signal: AbortSignal.timeout(MEDIA_TIMEOUT_MS) })
     const read = response => response.json().catch(() => null)
     const found = await ask('GET', `/messages/${id}`)
     if (found === null) return no('omni is not set up here')
@@ -283,7 +286,7 @@ export function install(rt) {
     const message = MediaMessage.safeParse(await read(found))
     if (!message.success) return no('omni answered something else for that message')
     if (!message.data.data.hasMedia) return no('That message has no media')
-    const file = await rt.omniMediaFile(id, { timeout: MEDIA_TIMEOUT_MS })
+    const file = await rt.omniMediaFile(id, { timeout: MEDIA_TIMEOUT_MS, link })
     if (!file.ok) return no(file.reason)
     if (Number(file.response.headers.get('content-length')) > MEDIA_FILE_BYTES) return no('The file is too large to show here')
     const bytes = await bounded(file.response)

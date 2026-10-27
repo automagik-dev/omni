@@ -245,6 +245,22 @@ test('a download begun under an old link does not drop the new link\'s download 
   assert.equal(lookups.length, 1, 'the new link\'s download is still the one in flight')
 })
 
+test('a download begun under an old link sends its later requests on the old link only', async () => {
+  let open
+  const gate = new Promise(resolve => { open = resolve })
+  const answers = mediaAnswers()
+  const message = answers[`/messages/${MESSAGE}`]
+  answers[`/messages/${MESSAGE}`] = () => gate.then(() => new Response(JSON.stringify(message), { status: 200 }))
+  const { rt, asked } = runtime({ url: 'https://omni.test', key: 'omni_sk_test', answers })
+  const old = rt.omniMedia({ messageId: MESSAGE })
+  await new Promise(resolve => setTimeout(resolve, 20))
+  rt.omniLink = () => ({ url: 'https://omni.test', key: 'omni_sk_other' })
+  open()
+  await old
+  assert.deepEqual(asked.filter(call => call.key === 'omni_sk_other'), [], 'nothing of the old download went out on the new key')
+  assert.ok(asked.some(call => call.key === 'omni_sk_test' && call.address.includes('/media/')), 'the old download finished on its own key')
+})
+
 test('a download still waiting its turn when the link changes asks no Omni anything', async () => {
   const ids = Array.from({ length: 5 }, (_, index) => `0b6f3c1e-5a2d-4c8e-9f10-${String(index).padStart(12, '0')}`)
   let open
