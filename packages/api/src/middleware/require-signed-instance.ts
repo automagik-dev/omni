@@ -30,9 +30,8 @@
  */
 
 import { createLogger } from '@omni/core';
-import type { Context } from 'hono';
 import { createMiddleware } from 'hono/factory';
-import { isJsonContentType } from '../lib/resolve-chat-id';
+import { safeReadJsonBody } from '../lib/json-body';
 import type { AppVariables } from '../types';
 import { extractLockTargets, readHeaderTargets } from './scope-enforcer';
 
@@ -62,23 +61,6 @@ export function isUnlockOnlyBody(body: unknown): boolean {
   if (keys.length !== 1) return false;
   if (keys[0] !== 'requireGenieSignature') return false;
   return obj.requireGenieSignature === false;
-}
-
-/**
- * Safely parse a JSON request body. Returns null when there's no body
- * or it isn't JSON — matches scope-enforcer's behavior.
- */
-async function safeReadJsonBody(c: Context<{ Variables: AppVariables }>): Promise<unknown | null> {
-  const method = c.req.method.toUpperCase();
-  if (method === 'GET' || method === 'DELETE' || method === 'HEAD' || method === 'OPTIONS') return null;
-  // The same test as the route's `zValidator('json')`: a body it validates
-  // must never escape this gate (e.g. `application/merge-patch+json`).
-  if (!isJsonContentType(c.req.header('content-type'))) return null;
-  try {
-    return await c.req.json();
-  } catch {
-    return null;
-  }
 }
 
 export const requireSignedInstanceMiddleware = createMiddleware<{ Variables: AppVariables }>(async (c, next) => {

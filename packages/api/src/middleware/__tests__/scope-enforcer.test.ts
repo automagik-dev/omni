@@ -674,6 +674,16 @@ describe('the lock reads every body the route validator reads (application/*+jso
     });
     expect(res.status).toBe(403);
   });
+
+  test('an empty body that still names a content type is no unread body', async () => {
+    const key = mkKey({ scopes: ['chats:write'], profile: 'personal', instanceAllowlist: [OWN_INSTANCE] });
+    const { app } = mountLock(key);
+    const res = await app.request(`/api/v2/chats/${OWN_CHAT}/hide`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-length': '0' },
+    });
+    expect(res.status).toBe(200);
+  });
 });
 
 describe('chat key — POST /turns/close keeps its header targets', () => {

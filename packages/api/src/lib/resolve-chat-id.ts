@@ -20,6 +20,7 @@ import { eq } from 'drizzle-orm';
 import type { Context } from 'hono';
 import { ApiKeyService } from '../services/api-keys';
 import type { ApiKeyData, AppVariables } from '../types';
+import { isJsonContentType } from './json-body';
 
 type ChatContext = Context<{ Variables: AppVariables }>;
 
@@ -82,20 +83,6 @@ const EXPLICIT_INSTANCE_ROUTES: ReadonlySet<string> = new Set([
 ]);
 
 const CHAT_ACTION_PATH = /^(?:\/api\/v2)?\/chats\/[^/]+\/([^/]+)\/?$/;
-
-/**
- * Hono's own test for a JSON body (`hono/validator`, `zValidator('json')`):
- * `application/json` and every `application/*+json`. The lock must read every
- * body the route validator reads, or a body it skips could name a target the
- * lock never checked.
- */
-const HONO_JSON_CONTENT_TYPE = /^application\/([a-z-.]+\+)?json(;\s*[a-zA-Z0-9-]+=([^;]+))*$/;
-
-/** True when the route's JSON validator would parse a body with this content type (or the lock always has). */
-export function isJsonContentType(contentType: string | undefined): boolean {
-  if (!contentType) return false;
-  return HONO_JSON_CONTENT_TYPE.test(contentType) || contentType.toLowerCase().includes('application/json');
-}
 
 /**
  * The `instanceId` a `chats.ts` route takes from its JSON body for the chat

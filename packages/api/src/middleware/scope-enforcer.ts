@@ -26,13 +26,8 @@ import { createMiddleware } from 'hono/factory';
 import type { LockRequirement, ProfileName } from '../constants/profiles';
 import { PROFILES } from '../constants/profiles';
 import { SCOPE_MAP } from '../constants/scopes';
-import {
-  explicitChatInstance,
-  getActiveInstanceId,
-  isChatUuid,
-  isJsonContentType,
-  resolveChatRow,
-} from '../lib/resolve-chat-id';
+import { safeReadJsonBody } from '../lib/json-body';
+import { explicitChatInstance, getActiveInstanceId, isChatUuid, resolveChatRow } from '../lib/resolve-chat-id';
 import { readSignedHostScopeContext } from '../lib/signed-host-scope-context';
 import { ApiKeyService } from '../services/api-keys';
 import type { ApiKeyData, AppVariables } from '../types';
@@ -378,25 +373,6 @@ export function extractLockTargets(
   return { instance, chat, recipient, sourceChat };
 }
 
-/**
- * Safely parse a JSON request body. Returns null if the method has no body
- * or the body isn't JSON — enforcement then skips body-derived targets.
- */
-async function safeReadJsonBody(c: Context<{ Variables: AppVariables }>): Promise<unknown | null> {
-  const method = c.req.method.toUpperCase();
-  if (method === 'GET' || method === 'DELETE' || method === 'HEAD' || method === 'OPTIONS') return null;
-  // The same test as the route's `zValidator('json')`, so every body a route
-  // validates is a body the lock read.
-  if (!isJsonContentType(c.req.header('content-type'))) return null;
-  try {
-    // Hono caches parsed JSON on the request, so downstream handlers can call
-    // c.req.json() again without paying a second parse.
-    return await c.req.json();
-  } catch {
-    return null;
-  }
-}
-
 function lockDenyResponse(c: Context<{ Variables: AppVariables }>, lock: LockName, result: EnforcementResult) {
   const denyAll = result.reason === 'deny-all-profile-requires-lock';
   const message = denyAll
@@ -555,6 +531,8 @@ function recipientLockApplies(apiKey: ApiKeyData, method: string, cleanPath: str
 function hasUnreadBody(c: Context<{ Variables: AppVariables }>, method: string, body: unknown): boolean {
   if (method === 'GET' || method === 'DELETE' || method === 'HEAD' || method === 'OPTIONS') return false;
   if (body !== null && typeof body === 'object') return false;
+  // An empty body (a body-less POST that still names a content type) is no target.
+  if (c.req.header('content-length') === '0') return false;
   return c.req.header('content-type') !== undefined || (c.req.header('content-length') ?? '0') !== '0';
 }
 
