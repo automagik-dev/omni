@@ -177,6 +177,8 @@ test('apply registers its listeners, tools and effects after the team\'s, in a f
     'tool save_automation',
     'tool pause_automation',
     'tool delete_automation',
+    'on tools/pre-execute (prepend)',
+    'on session/event',
     'on agent/created',
     'tools guard',
     'tool omni_endpoints',

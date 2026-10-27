@@ -11,6 +11,7 @@
 import * as resumeHook from './src/host/resume-hook.js'
 import * as grants from './src/host/grants.js'
 import * as subscriptions from './src/host/subscriptions.js'
+import * as asks from './src/host/asks.js'
 import * as omniApi from './src/host/omni-api.js'
 import * as omniLink from './src/host/omni-link.js'
 import * as omniDiscover from './src/host/omni-discover.js'
@@ -33,11 +34,12 @@ export const inject = ['omniTeam', 'tools', 'sessions', 'settings', 'systemPromp
 // this plugin's Sessions (resume-hook.js). Then the team's install order, kept: automations
 // and Omni's tools first, the link (the Omnis found on this computer to link, one to run
 // here, the terminal that updates or sets one up, and updating them) and its events after.
-// Permissions come before the tools that check them. The threads' own keys come after omni.js,
-// whose requests they make, the threads after their keys, and the threads' own tools after
-// the threads, whose additions they restrict. Changing channels from the
-// Channels page comes last: it only calls omni through omni.js.
-const MODULES = [resumeHook, grants, subscriptions, omniApi, omniLink, omniDiscover, omniLocal, omniTerminal, omniUpdate, omni, threadKeys, threads, threadTools, omniEvents, omniChannelActions]
+// Asking the Omni Bot from a thread (asks.js) comes right after the automations, whose run
+// log it shares. Permissions come before the tools that check them. The threads' own keys
+// come after omni.js, whose requests they make, the threads after their keys, and the
+// threads' own tools after the threads, whose additions they restrict. Changing channels
+// from the Channels page comes last: it only calls omni through omni.js.
+const MODULES = [resumeHook, grants, subscriptions, asks, omniApi, omniLink, omniDiscover, omniLocal, omniTerminal, omniUpdate, omni, threadKeys, threads, threadTools, omniEvents, omniChannelActions]
 
 export function apply(ctx, config = {}) {
   ctx.provide('omniChannels', createRuntime(ctx, ctx.omniTeam, config))

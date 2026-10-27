@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { applyBoth, fakeContext } from './team.js'
+import { until } from './thread-fixture.js'
 
 const OMNI = 'https://omni.test'
 const omniAnswers = {
@@ -519,6 +520,9 @@ test('pruning keeps every working, queued and stopping record, drops ended asks,
 
 test('with 45 runs started while one works, its record and gate stay, an ask run\'s deny too, and ended automation runs cap at RUNS_KEPT (:202)', async (t) => {
   const { RUNS_KEPT } = await import('../src/host/subscriptions.js')
+  // The team's restart pass never runs here: on a slow machine it would end the stand-in ask
+  // below as cut, not picked up.
+  t.mock.timers.enable({ apis: ['setTimeout'] })
   const bench = setup(t)
   const { run: working } = await testRun(bench, { worker: 'Ops' })
   // An ask run of the Omni Bot's, working in its own Session.
@@ -527,7 +531,11 @@ test('with 45 runs started while one works, its record and gate stay, an ask run
     const { run } = await testRun(bench, { worker: 'Ops' })
     bench.emit(run.sessionId, { type: 'turn/end', data: { reason: { kind: 'completed' } } })
   }
-  await settle()
+  // Each run ends as its turn/end is heard, and its save is not waited for: wait for the
+  // log, then for the saves.
+  const done = () => bench.team.state.subscriptionRuns.filter(run => run.status === 'done').length
+  await until(() => done() === RUNS_KEPT)
+  await bench.team.save()
   const runs = bench.team.state.subscriptionRuns
   assert.equal(runs.find(run => run.id === working.id)?.status, 'working')
   assert.equal(runs.find(run => run.id === 'ask-1')?.status, 'working')

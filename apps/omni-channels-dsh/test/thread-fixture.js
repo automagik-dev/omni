@@ -19,6 +19,16 @@ export const resetFetch = () => { globalThis.fetch = realFetch }
 export const flush = async () => {
   for (let round = 0; round < 20; round += 1) await new Promise(resolve => setImmediate(resolve))
 }
+// Until `done()` holds, looking again after each turn of the event loop; throws once `ms` of
+// real time passed without it, so a slow machine waits longer and a broken run fails, rather
+// than either going on half done.
+export async function until(done, ms = 5000) {
+  const deadline = performance.now() + ms
+  while (!done()) {
+    if (performance.now() > deadline) throw new Error(`until: not done after ${ms} ms: ${String(done).slice(0, 200)}`)
+    await new Promise(resolve => setImmediate(resolve))
+  }
+}
 
 export const OMNI = 'https://omni.example.com'
 export const INSTANCE = '0b5f1c1e-6a51-4d5e-9a41-0c0d9b6f1a01'

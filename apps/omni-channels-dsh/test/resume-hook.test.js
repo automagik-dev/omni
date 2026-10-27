@@ -7,7 +7,7 @@ import { createRuntime as createTeam } from '@automagik/bots-dsh'
 import { createRuntime } from '../index.js'
 import { install, isResumeMessage, NEEDS_NEWER_TEAM, TEAM_CONTRACT } from '../src/host/resume-hook.js'
 import { fakeContext } from './team.js'
-import { boot, homeFor, record, teamState, flush as threadFlush } from './thread-fixture.js'
+import { boot, homeFor, record, teamState, flush as threadFlush, until } from './thread-fixture.js'
 
 const flush = async () => {
   for (let round = 0; round < 20; round += 1) await new Promise(resolve => setImmediate(resolve))
@@ -432,12 +432,6 @@ const askState = (status = 'working') => teamState({
 })
 const askRecord = run => (run.channels.state.subscriptionRuns ?? []).find(item => item.id === 'ask-1')
 const textsOf = (run, sessionId) => run.agentOf(sessionId).calls.map(message => message.content.map(block => block.text).join(''))
-// Until `done()` holds: an ask's end saves, posts and archives one step after another.
-async function until(done) {
-  for (let round = 0; round < 50 && !done(); round += 1) await threadFlush()
-  await threadFlush()
-}
-const archivedAsk = (run, sessionId = 'ask-session') => () => run.archiving.some(([id]) => id === sessionId)
 // The ask Session's turn answers and ends, as DSH ends a finished turn.
 async function answered(run, words, sessionId = 'ask-session') {
   run.emit(sessionId, 'turn/start', { turn: 2 }, Date.now())
@@ -539,7 +533,7 @@ test('a stopping ask is never resumed and never listed; on the signal it is arch
   run.cut('ask-session')
   t.mock.timers.tick(3000)
   const done = await run.team.resumesDone
-  await until(archivedAsk(run))
+  await until(() => askRecord(run) === undefined)
   assert.equal(done.resumed.includes('ask-session'), false)
   assert.deepEqual([run.agentOf('ask-session').calls, run.agentOf('thread-session').calls], [[], []])
   assert.deepEqual(run.archiving, [['ask-session', { stopActivity: true }]])
@@ -581,7 +575,9 @@ test('a stopping ask whose turn began before this start stays a tombstone while 
   run.agentOf('ask-session').status = 'running'
   t.mock.timers.tick(3000)
   await run.team.resumesDone
-  await until(archivedAsk(run))
+  // Archived, then its live agent read: it still runs, so the record stays.
+  await until(() => run.archiving.length > 0 && run.resolved.includes('ask-session'))
+  await threadFlush()
   assert.equal(askRecord(run)?.status, 'stopping')
   assert.equal((await run.channels.teamResume.running('ask-session')), false)
   // The turn ends: the stop holds now, and the record goes.
