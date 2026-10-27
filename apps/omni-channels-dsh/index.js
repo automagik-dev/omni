@@ -20,6 +20,7 @@ import * as omniUpdate from './src/host/omni-update.js'
 import * as omni from './src/host/omni.js'
 import * as omniEvents from './src/host/omni-events.js'
 import * as omniChannelActions from './src/host/omni-channel-actions.js'
+import * as threadKeys from './src/host/thread-keys.js'
 
 export const name = 'omni-channels'
 export const inject = ['omniTeam', 'tools', 'sessions', 'settings']
@@ -28,9 +29,10 @@ export const inject = ['omniTeam', 'tools', 'sessions', 'settings']
 // this plugin's Sessions (resume-hook.js). Then the team's install order, kept: automations
 // and Omni's tools first, the link (the Omnis found on this computer to link, one to run
 // here, the terminal that updates or sets one up, and updating them) and its events after.
-// Permissions come before the tools that check them. Changing channels from the Channels page
-// comes last: it only calls omni through omni.js.
-const MODULES = [resumeHook, grants, subscriptions, omniApi, omniLink, omniDiscover, omniLocal, omniTerminal, omniUpdate, omni, omniEvents, omniChannelActions]
+// Permissions come before the tools that check them. The threads' own keys come after omni.js,
+// whose requests they make. Changing channels from the Channels page comes last: it only calls
+// omni through omni.js.
+const MODULES = [resumeHook, grants, subscriptions, omniApi, omniLink, omniDiscover, omniLocal, omniTerminal, omniUpdate, omni, threadKeys, omniEvents, omniChannelActions]
 
 export function apply(ctx, config = {}) {
   ctx.provide('omniChannels', createRuntime(ctx, ctx.omniTeam, config))

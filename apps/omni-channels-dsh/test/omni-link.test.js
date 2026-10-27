@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { afterEach, test } from 'node:test'
 import { install as installOmni, KEY } from '../src/host/omni.js'
 import { cleanOmniUrl, install, LINK_FILE, marketUrlAllowed } from '../src/host/omni-link.js'
+import { install as installThreadKeys, KEYS_FILE, NOT_LINKED } from '../src/host/thread-keys.js'
 import { install as installHooks } from '@automagik/bots-dsh/src/host/extend.js'
 
 const realFetch = globalThis.fetch
@@ -22,10 +23,18 @@ test('an Omni address is cleaned to its API base', () => {
 
 // A fake Omni with human login: status, Better Auth's device flow, and the device-key
 // exchange. The device code is pending until `approve()` (or `deny()`); its token works once.
+// A sign-in started after one finished is a new round, with a new token and device key. It
+// also serves Group 4's chat-key routes and /auth/validate (`children`: id → { key, parent,
+// revoked }); a revoked key gets 401, as the auth middleware gives.
 function fakeOmni({ statusCode = 200, claimed = true, whatsapp = true, keyStatus = 200 } = {}) {
   const asked = []
   let state = 'pending'
   let keyed = false
+  let round = 1
+  const token = () => (round === 1 ? 'device-token' : `device-token-${round}`)
+  const deviceKey = () => (round === 1 ? 'omni_sk_device' : `omni_sk_device${round}`)
+  const children = new Map()
+  const childByKey = key => [...children.values()].find(child => child.key === key)
   globalThis.fetch = async (address, init = {}) => {
     const url = new URL(String(address))
     asked.push({ method: init.method ?? 'GET', path: url.pathname, bearer: init.headers?.authorization ?? null, key: init.headers?.['x-api-key'] ?? null, client: init.headers?.['x-omni-client'] ?? null, body: init.body ? JSON.parse(init.body) : undefined })
@@ -36,38 +45,76 @@ function fakeOmni({ statusCode = 200, claimed = true, whatsapp = true, keyStatus
       case '/api/v2/login/status':
         return statusCode === 200 ? json(200, { data: { claimed, whatsapp, deviceUrl: 'https://omni.example.com/api/login/device', whatsappUrl: 'https://omni.example.com/api/login/whatsapp' } }) : json(statusCode, { error: { code: 'X' } })
       case '/api/auth/device/code':
+        if (state === 'used') { round += 1; state = 'pending'; keyed = false }
         return json(200, { device_code: 'dev-1', user_code: 'K7Q4X9ZP', verification_uri: 'https://omni.example.com/login/device', verification_uri_complete: 'https://omni.example.com/login/device?user_code=K7Q4X9ZP', expires_in: 600, interval: 2 })
       case '/api/auth/device/token':
-        if (state === 'approved') { state = 'used'; return json(200, { access_token: 'device-token', token_type: 'Bearer' }) }
+        if (state === 'approved') { state = 'used'; return json(200, { access_token: token(), token_type: 'Bearer' }) }
         return json(400, { error: state === 'pending' ? 'authorization_pending' : state === 'denied' ? 'access_denied' : 'expired_token' })
       case '/api/v2/login/device-key':
         if (keyStatus !== 200) return json(keyStatus, { error: { code: 'X' } })
-        if (init.headers?.authorization !== 'Bearer device-token' || keyed) return json(401, { error: { code: 'UNAUTHORIZED' } })
+        if (init.headers?.authorization !== `Bearer ${token()}` || keyed) return json(401, { error: { code: 'UNAUTHORIZED' } })
         keyed = true
-        return json(200, { data: { apiKey: 'omni_sk_device', keyId: 'k1', scopes: ['instances:read'], keyExpiresAt: null, apiUrl: 'https://omni.example.com' } })
+        return json(200, { data: { apiKey: deviceKey(), keyId: `k${round}`, scopes: ['instances:read'], keyExpiresAt: null, apiUrl: 'https://omni.example.com' } })
+      case '/api/v2/keys/children': {
+        const id = `00000000-0000-4000-8000-${String(children.size + 1).padStart(12, '0')}`
+        const child = { id, key: `omni_sk_child${children.size + 1}`, parent: init.headers?.['x-api-key'], revoked: false }
+        children.set(id, child)
+        return json(201, { data: { id, plainTextKey: child.key, parentKeyId: child.parent, chatId: JSON.parse(init.body).chatId, chatExternalId: '5511988887777@s.whatsapp.net', instanceId: INSTANCE, scopes: ['chats:read'], expiresAt: null, replacedKeyId: null } })
+      }
+      case '/api/v2/keys/children/self/revoke': {
+        const child = childByKey(init.headers?.['x-api-key'])
+        if (!child || child.revoked) return json(401, { error: { code: 'UNAUTHORIZED' } })
+        child.revoked = true
+        return json(200, { data: { id: child.id, status: 'revoked' } })
+      }
+      case '/api/v2/auth/validate': {
+        const child = childByKey(init.headers?.['x-api-key'])
+        if (child) return child.revoked ? json(401, { error: { code: 'UNAUTHORIZED' } }) : json(403, { error: { code: 'FORBIDDEN' } })
+        return json(200, { data: { valid: true, scopes: ['instances:read'] } })
+      }
+      case `/api/v2/instances/${INSTANCE}`:
+        return json(200, { data: { id: INSTANCE, ownerIdentifier: '5511999990000:3@s.whatsapp.net' } })
       case '/api/v2/instances':
       case '/api/v2/chats':
         return json(200, { items: [] })
-      default:
-        return json(404, {})
+      default: {
+        const revoke = url.pathname.match(/^\/api\/v2\/keys\/children\/([^/]+)\/revoke$/)
+        const child = revoke && children.get(revoke[1])
+        if (!child) return json(404, {})
+        if (child.parent !== init.headers?.['x-api-key']) return json(403, { error: { code: 'FORBIDDEN', message: 'not one of your chat keys' } })
+        const status = child.revoked ? 'already_revoked' : 'revoked'
+        child.revoked = true
+        return json(200, { data: { id: child.id, status } })
+      }
     }
   }
-  return { asked, approve: () => { state = 'approved' }, deny: () => { state = 'denied' } }
+  return { asked, children, approve: () => { state = 'approved' }, deny: () => { state = 'denied' } }
 }
 
+const INSTANCE = '0b5f1c1e-6a51-4d5e-9a41-0c0d9b6f1a01'
+const CHAT = '1c6f2d2e-7b62-4e6f-8b52-1d1e0c7f2b02'
+
+// The link, Omni's requests and the threads' keys (thread-keys.js), as index.js installs them.
 function runtime({ omniUrl, profileKey, settings } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'omni-link-'))
   const synced = []
+  const disposers = []
   const rt = {
     home,
     config: omniUrl ? { omni: { url: omniUrl } } : {},
-    ctx: { effect: run => run(), settings, get: name => (name === 'credentials' ? { resolve: async ref => (ref === KEY && profileKey ? { value: profileKey } : undefined) } : undefined) },
+    ctx: { effect: (run) => { const dispose = run(); if (typeof dispose === 'function') disposers.push(dispose) }, settings, get: name => (name === 'credentials' ? { resolve: async ref => (ref === KEY && profileKey ? { value: profileKey } : undefined) } : undefined) },
+    teamResume: { ready: true, reason: null },
     syncOmniEvents: () => synced.push(Date.now()),
   }
   installHooks(rt)
   install(rt)
   installOmni(rt)
-  return { rt, home, synced, stop: () => rmSync(home, { recursive: true, force: true }) }
+  installThreadKeys(rt)
+  const stop = async () => {
+    await Promise.all(disposers.map(dispose => dispose()))
+    rmSync(home, { recursive: true, force: true })
+  }
+  return { rt, home, synced, stop }
 }
 
 test('signing in shows the WhatsApp QR and the approval link, then saves a device key of Omni\'s own', async (t) => {
@@ -311,4 +358,39 @@ test('a sign-in the desktop app started from an omni:// link finishes by itself 
   for (let waited = 0; waited < 8000 && !existsSync(join(home, LINK_FILE)); waited += 100) await new Promise(resolve => setTimeout(resolve, 100))
   assert.equal(JSON.parse(readFileSync(join(home, LINK_FILE), 'utf8')).key, 'omni_sk_device')
   assert.equal((await rt.omniLinkEndpoint('omni-pair-poll')).status, 'idle')
+})
+
+// Wish omni-chat-threads, criterion :188: every new link and Disconnect hand the threads' keys
+// over at the two choke points, saveOmniLink and disconnect.
+test('signing in again to the same Omni gives each thread a fresh child of the new key; Disconnect leaves none live', async (t) => {
+  const omni = fakeOmni()
+  const { rt, home, stop } = runtime()
+  t.after(stop)
+  const signIn = async () => {
+    await rt.omniLinkEndpoint('omni-pair-start', { url: 'omni.example.com' })
+    omni.approve()
+    assert.equal((await rt.omniLinkEndpoint('omni-pair-poll')).status, 'paired')
+  }
+  await signIn()
+  assert.deepEqual(await rt.threadKeys.mint('t1', CHAT), { ok: true, self: '5511999990000' })
+  const [first] = omni.children.values()
+  assert.equal(first.parent, 'omni_sk_device')
+
+  await signIn()
+  assert.equal(rt.omniLink().key, 'omni_sk_device2')
+  assert.equal(first.revoked, true)
+  // Cut with the old key, which was still the link then.
+  assert.deepEqual(omni.asked.find(call => call.path === `/api/v2/keys/children/${first.id}/revoke`)?.key, 'omni_sk_device')
+  const second = [...omni.children.values()].find(child => !child.revoked)
+  assert.equal(second.parent, 'omni_sk_device2')
+  assert.equal(rt.threadKeys.keyFor('t1'), second.key)
+
+  await rt.omniLinkEndpoint('omni-disconnect')
+  assert.equal(second.revoked, true)
+  assert.deepEqual(omni.asked.find(call => call.path === `/api/v2/keys/children/${second.id}/revoke`)?.key, 'omni_sk_device2')
+  assert.equal(rt.threadKeys.keyFor('t1'), null)
+  assert.equal(rt.threadKeys.reasonOf('t1'), NOT_LINKED)
+  assert.ok([...omni.children.values()].every(child => child.revoked))
+  const kept = readFileSync(join(home, KEYS_FILE), 'utf8')
+  for (const key of ['omni_sk_device', 'omni_sk_device2', first.key, second.key]) assert.ok(!kept.includes(key), key)
 })

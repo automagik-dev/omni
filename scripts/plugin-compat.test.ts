@@ -46,10 +46,14 @@ describe("Omni's plugins and the Omni they need", () => {
   });
 
   test('a minimum older than an API the plugin uses fails, naming the API', () => {
-    // POST /api/v2/login/connect (connect links) arrived in 2.261023.15.
+    // POST /api/v2/login/connect (connect links) arrived in 2.261023.15; the chat-key routes
+    // the threads' keys use (thread-keys.js), later still.
     const result = checkPlugin('apps/omni-channels-dsh', '>=2.261023.14', repoVersion, root);
     expect(result.against).toBe('v2.261023.14');
     expect(result.problems).toEqual([
+      'Omni 2.261023.14 serves no POST /api/v2/keys/children (src/host/thread-keys.js): raise engines.omni',
+      'Omni 2.261023.14 serves no POST /api/v2/keys/children/{}/revoke (src/host/thread-keys.js): raise engines.omni',
+      'Omni 2.261023.14 serves no POST /api/v2/keys/children/self/revoke (src/host/thread-keys.js): raise engines.omni',
       'Omni 2.261023.14 serves no POST /api/v2/login/connect (src/host/omni-link.js): raise engines.omni',
     ]);
   }, 60_000);
