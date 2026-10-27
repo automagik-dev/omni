@@ -48,7 +48,9 @@ export function fromTeam(rt, path) {
 
 // The team's answer: { resumed, resent } after its pass, { readOnly } when this host only
 // reads the team, { failed } with what was done before the pass threw or stopped.
-const ids = z.array(z.string()).catch([])
+// One bad entry drops only itself: a whole list thrown away would read as nothing resumed and
+// let a recovery resume a Session the team already did.
+const ids = z.array(z.unknown()).catch([]).transform(list => list.filter(id => typeof id === 'string' && id !== ''))
 const Outcome = z.object({ readOnly: z.string().optional(), failed: z.string().optional(), resumed: ids, [TEAM_CONTRACT.resentField]: ids })
 
 const outcomeOf = (answer) => {
@@ -57,6 +59,9 @@ const outcomeOf = (answer) => {
   const { readOnly, failed, resumed } = parsed.data
   return { readOnly: readOnly ?? null, failed: failed ?? null, resumed: new Set(resumed), resent: new Set(parsed.data[TEAM_CONTRACT.resentField]), late: false }
 }
+
+// An outcome that does not speak for this plugin's Sessions: none of them was resumed.
+const lateOf = given => ({ ...given, resumed: new Set(), resent: new Set(), late: true })
 
 export function install(rt) {
   const { ctx } = rt
@@ -106,11 +111,12 @@ export function install(rt) {
   }
 
   // The team's outcome once its pass is over; each recovery runs once, in the order added,
-  // one after another. Read-only runs none: this host changes nothing, whatever the outcome says.
+  // one after another, so a recovery never waits on anything without a time limit. Read-only
+  // runs none: this host changes nothing, whatever the outcome says.
   let outcome
   let stopped = false
   let queue = Promise.resolve()
-  const readsOnly = () => (outcome !== undefined && outcome.readOnly !== null) || (typeof rt.readOnly === 'function' && rt.readOnly() !== undefined)
+  const readsOnly = () => (outcome !== undefined && outcome.readOnly !== null) || rt.readOnly?.() !== undefined
   const recover = (fn, given) => {
     queue = queue.then(async () => {
       if (stopped || readsOnly()) return
@@ -140,7 +146,7 @@ export function install(rt) {
       .then((answer) => {
         if (stopped) return
         outcome = outcomeOf(answer)
-        if (!read) Object.assign(outcome, { resumed: new Set(), resent: new Set(), late: true })
+        if (!read) outcome = lateOf(outcome)
         if (readsOnly()) return
         for (const fn of recoveries) recover(fn, outcome)
       })
@@ -159,7 +165,7 @@ export function install(rt) {
     addRecovery(fn) {
       recoveries.push(fn)
       if (!hook.ready || outcome === undefined || readsOnly()) return
-      recover(fn, { ...outcome, resumed: new Set(), resent: new Set(), late: true })
+      recover(fn, lateOf(outcome))
     },
     pickedUp: (given, sessionId) => given.resumed.has(sessionId) || given.resent.has(sessionId),
     running: sessionId => turning.has(sessionId),

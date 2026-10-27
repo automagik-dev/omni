@@ -89,6 +89,15 @@ test('picked up means resumed or sent again; { failed } counts only those, like 
   assert.deepEqual(['a', 'b', 'c'].map(id => rt.teamResume.pickedUp(seen, id)), [true, true, false])
 })
 
+test('a bad entry in the team\'s lists drops only itself, so the Sessions it did resume stay picked up', async () => {
+  const { rt, settle } = standIn()
+  let seen
+  rt.teamResume.addRecovery((outcome) => { seen = outcome })
+  settle({ resumed: ['a', 7, '', null], resent: [{ id: 'x' }, 'b'] })
+  await flush()
+  assert.deepEqual(plain(seen), { readOnly: null, failed: null, resumed: ['a'], resent: ['b'], late: false })
+})
+
 test('{ readOnly } runs no recovery and writes nothing, also for one added later', async () => {
   const { rt, settle } = standIn()
   const state = { subscriptionRuns: [{ id: 'run', status: 'working', sessionId: 's' }] }
