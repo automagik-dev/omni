@@ -119,9 +119,10 @@ export function ThreadPicker({ channel, onPick, onClose }) {
     alive.current = true
     return () => { alive.current = false }
   }, [])
+  // Asked again only when the words change: a trailing space is no new search.
+  const words = query.trim()
   useEffect(() => {
     const ticket = ++asked.current
-    const words = query.trim()
     const load = () => call('omni-thread-chats', words ? { channelId: channel.id, query: words } : { channelId: channel.id }).then(
       (reply) => { if (alive.current && asked.current === ticket) setList({ status: 'ready', chats: Array.isArray(reply?.chats) ? reply.chats : [], error: null }) },
       (error) => { if (alive.current && asked.current === ticket) setList({ status: 'failed', chats: [], error: error?.message ?? String(error) }) },
@@ -132,7 +133,7 @@ export function ThreadPicker({ channel, onPick, onClose }) {
     }
     const timer = setTimeout(load, SEARCH_DELAY_MS)
     return () => clearTimeout(timer)
-  }, [channel.id, query])
+  }, [channel.id, words])
   const pick = async (chat) => {
     if (busy !== null || chat.added) return
     setBusy(chat.id)
@@ -266,12 +267,18 @@ export function OmniTree(props) {
  * controls the team draws for any Session (voice chat, and any Bot dock that would show) stay
  * hidden there. A thread is not a Bot.
  */
+// Thread docks mounted now: the page mark goes only when the last one does.
+let threadDocks = 0
 export function ThreadDock({ sessionId, useRoster }) {
   const thread = useRoster(roster => isThreadSession(roster, sessionId))
   useEffect(() => {
     if (!thread || typeof document === 'undefined') return undefined
+    threadDocks += 1
     document.body.dataset.omniThread = ''
-    return () => { delete document.body.dataset.omniThread }
+    return () => {
+      threadDocks -= 1
+      if (threadDocks === 0) delete document.body.dataset.omniThread
+    }
   }, [thread])
   return null
 }

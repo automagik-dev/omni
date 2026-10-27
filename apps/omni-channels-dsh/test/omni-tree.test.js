@@ -10,13 +10,6 @@ import { NEEDS_NEWER_TEAM, TEAM_CONTRACT } from '../src/host/resume-hook.js'
 import { BEING_CUT, NOT_LINKED, OTHER_OMNI, WAITING } from '../src/host/thread-keys.js'
 import { omni } from './omni-client.js'
 
-test('only the Bot of kind omni carries the channel tree', () => {
-  assert.equal(isOmniBot({ kind: 'omni' }), true)
-  assert.equal(isOmniBot({ name: 'Omni' }), false)
-  assert.equal(isOmniBot(undefined), false)
-})
-
-
 // -------------------------------------------------------------------------
 // A stand-in React that keeps hooks per component, so a click changes state and the next
 // draw shows it. Function components are drawn in place, each with its own hooks.
@@ -150,6 +143,12 @@ async function loadTree() {
   return module.exports
 }
 const ui = await loadTree()
+
+test('only the Bot of kind omni carries the channel tree', () => {
+  assert.equal(isOmniBot({ kind: 'omni' }), true)
+  assert.equal(isOmniBot({ name: 'Omni' }), false)
+  assert.equal(isOmniBot(undefined), false)
+})
 
 const CHANNEL_A = { id: '11111111-1111-4111-8111-111111111111', type: 'whatsapp-baileys', name: 'Sales', status: 'connected' }
 const CHANNEL_B = { id: '22222222-2222-4222-8222-222222222222', type: 'whatsapp-baileys', name: 'Personal', status: 'connected' }
@@ -612,7 +611,12 @@ test('first probe 3: a thread opens in the Bot skin with every other Bot dock em
   assert.match(ui.OMNI_TREE_CSS, /body\[data-omni-thread\] \.bt-voice/)
   // What never draws in a thread is not hidden there; dictation stays on purpose.
   for (const name of ['bt-head-details', 'bt-suggest', 'bt-mic']) assert.equal(ui.OMNI_TREE_CSS.includes(`body[data-omni-thread] .${name}`), false, name)
+  // Two thread panes: closing one keeps the mark for the other.
+  const other = mount(() => react.createElement(ui.ThreadDock, { sessionId: 's1', useRoster: select => select(roster) }))
+  other.draw()
   view.unmount()
+  assert.equal(document.body.dataset.omniThread, '')
+  other.unmount()
   assert.equal(Object.hasOwn(document.body.dataset, 'omniThread'), false)
   // Any other Session leaves the page as it was.
   mount(() => react.createElement(ui.ThreadDock, { sessionId: bot.id, useRoster: select => select(roster) })).draw()

@@ -15199,9 +15199,9 @@ function ThreadPicker({ channel, onPick, onClose }) {
       alive.current = false;
     };
   }, []);
+  const words = query.trim();
   (0, import_react13.useEffect)(() => {
     const ticket = ++asked.current;
-    const words = query.trim();
     const load = () => call("omni-thread-chats", words ? { channelId: channel.id, query: words } : { channelId: channel.id }).then(
       (reply) => {
         if (alive.current && asked.current === ticket) setList({ status: "ready", chats: Array.isArray(reply?.chats) ? reply.chats : [], error: null });
@@ -15216,7 +15216,7 @@ function ThreadPicker({ channel, onPick, onClose }) {
     }
     const timer = setTimeout(load, SEARCH_DELAY_MS);
     return () => clearTimeout(timer);
-  }, [channel.id, query]);
+  }, [channel.id, words]);
   const pick = async (chat) => {
     if (busy !== null || chat.added) return;
     setBusy(chat.id);
@@ -15404,13 +15404,16 @@ function OmniTree(props) {
     others(threads.filter((thread) => !listed.has(thread.channelId)))
   );
 }
+var threadDocks = 0;
 function ThreadDock({ sessionId, useRoster }) {
   const thread = useRoster((roster) => isThreadSession(roster, sessionId));
   (0, import_react13.useEffect)(() => {
     if (!thread || typeof document === "undefined") return void 0;
+    threadDocks += 1;
     document.body.dataset.omniThread = "";
     return () => {
-      delete document.body.dataset.omniThread;
+      threadDocks -= 1;
+      if (threadDocks === 0) delete document.body.dataset.omniThread;
     };
   }, [thread]);
   return null;
