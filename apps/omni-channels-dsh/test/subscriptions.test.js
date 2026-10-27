@@ -114,6 +114,8 @@ function setup(t, { presets = fakePresets(), secrets = [], opsPermission, bots =
 }
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 20))
+// A Bot team before DSH bots and the restart hook (below the floor). Every branch on it calls this.
+const beforeFloor = team => typeof team.dshBots?.list !== 'function'
 // An automation saved by Omni, then its Test run: the run as the board gets it.
 async function testRun({ tool, call }, args) {
   assert.match(await tool('save_automation')({ sources: 'chat:obras', trigger: 'voice', ...args }), /^Saved /)
@@ -233,6 +235,27 @@ test('a run gives a Bot the event as a single-run task in a Session of its own, 
   const [done] = (await call('state', {})).value.subscriptionRuns
   assert.equal(done.status, 'done')
   assert.equal(done.summary, 'Would add "renovar domínio" to Friday\'s list.')
+})
+
+test('a restart that cuts an Omni Bot or a Bot run leaves it working; a turn that really ends finishes it', async (t) => {
+  const { tool, call, emit } = setup(t)
+  const own = await testRun({ tool, call }, { worker: 'me' })
+  const ops = await testRun({ tool, call }, { worker: 'Ops' })
+  assert.deepEqual([own.run.botId, ops.run.botId], ['m1', 'b2'])
+  // DSH closes a turn a dying process left open as interrupted, and stops one as it shuts
+  // down as aborted by disposal: the team's restart pass resumes those, so neither is done.
+  emit(own.run.sessionId, { type: 'turn/end', data: { reason: { kind: 'interrupted' } } })
+  emit(ops.run.sessionId, { type: 'turn/end', data: { reason: { kind: 'aborted', reason: { kind: 'disposed' } } } })
+  await settle()
+  const status = async () => Object.fromEntries((await call('state', {})).value.subscriptionRuns.map(run => [run.sessionId, [run.status, run.summary]]))
+  const working = await status()
+  assert.deepEqual([working[own.run.sessionId][0], working[ops.run.sessionId][0]], ['working', 'working'])
+  emit(own.run.sessionId, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'Noted for Friday.' }] } } })
+  emit(own.run.sessionId, { type: 'turn/end', data: { reason: { kind: 'completed' } } })
+  emit(ops.run.sessionId, { type: 'turn/end', data: { reason: { kind: 'error', error: { message: 'model down' } } } })
+  await settle()
+  const ended = await status()
+  assert.deepEqual([ended[own.run.sessionId], ended[ops.run.sessionId]], [['done', 'Noted for Friday.'], ['failed', 'model down']])
 })
 
 test('"as chat" sends the event into the Bot\'s own chat instead', async (t) => {
@@ -424,13 +447,21 @@ test('Omni lists chats and channels with their state, and has no shell', async (
   assert.deepEqual(ctx.guards.map(guard => guard({ name: 'bash', agent: { id: 'b2' } })).filter(Boolean), [])
 })
 
-test('a task Omni starts runs under Tasks and reports back to Omni once', async (t) => {
-  const { as, call, sent, emit } = setup(t)
+test('a task Omni starts runs under Omni\'s row and reports back to Omni once', async (t) => {
+  const { as, call, sent, emit, team } = setup(t)
   const reply = await as('start_task', 'm1')({ title: 'Check the canvas Query', instructions: 'Find out why the stat stays 0.' })
-  assert.match(reply, /^Started task "Check the canvas Query" \((task-\d+)\) under Tasks/)
+  // The Bot team with DSH bots keeps a task under the Bot that started it; one before them
+  // (below the floor) listed it under Tasks.
+  assert.match(reply, beforeFloor(team) ? /^Started task "Check the canvas Query" \((task-\d+)\) under Tasks/ : /^Started task "Check the canvas Query" \((task-\d+)\) under your row/)
   const sessionId = /\((task-\d+)\)/.exec(reply)[1]
-  const team = (await call('state', {})).value
-  assert.deepEqual(team.agents.map(agent => [agent.name, agent.sessions]), [['Tasks', [sessionId]]])
+  const view = (await call('state', {})).value
+  assert.deepEqual(view.agents.map(agent => [agent.name, agent.sessions]), [['Tasks', [sessionId]]])
+  if (!beforeFloor(team)) {
+    // The tasks record, which is no DSH bot; the task is Omni's.
+    assert.equal(view.agents[0].kind, 'tasks')
+    assert.deepEqual(team.dshBots.list(), [])
+    assert.equal(view.tasks[sessionId].from, 'm1')
+  }
   assert.equal(sent.at(-1).sessionId, sessionId)
   assert.equal(sent.at(-1).message.content[0].text, 'Find out why the stat stays 0.')
   emit(sessionId, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'The field does not exist; nothing is broken.' }] } } })

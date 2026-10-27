@@ -8,6 +8,7 @@
 // this plugin's fiber, and they add to the team only through its hooks (rt.hooks), so
 // turning this plugin off takes all of it away. Its own runtime is provided as
 // omniChannels for the canvas plugin, which reads omni through it.
+import * as resumeHook from './src/host/resume-hook.js'
 import * as grants from './src/host/grants.js'
 import * as subscriptions from './src/host/subscriptions.js'
 import * as omniApi from './src/host/omni-api.js'
@@ -23,11 +24,13 @@ import * as omniChannelActions from './src/host/omni-channel-actions.js'
 export const name = 'omni-channels'
 export const inject = ['omniTeam', 'tools', 'sessions', 'settings']
 
-// The team's install order, kept: automations and Omni's tools first, the link (the Omnis
-// found on this computer to link, one to run here, the terminal that updates or sets one up,
-// and updating them) and its events after. Permissions come before the tools that check them.
-// Changing channels from the Channels page comes last: it only calls omni through omni.js.
-const MODULES = [grants, subscriptions, omniApi, omniLink, omniDiscover, omniLocal, omniTerminal, omniUpdate, omni, omniEvents, omniChannelActions]
+// The team's restart hook first, before any other work, so the team's restart pass hears of
+// this plugin's Sessions (resume-hook.js). Then the team's install order, kept: automations
+// and Omni's tools first, the link (the Omnis found on this computer to link, one to run
+// here, the terminal that updates or sets one up, and updating them) and its events after.
+// Permissions come before the tools that check them. Changing channels from the Channels page
+// comes last: it only calls omni through omni.js.
+const MODULES = [resumeHook, grants, subscriptions, omniApi, omniLink, omniDiscover, omniLocal, omniTerminal, omniUpdate, omni, omniEvents, omniChannelActions]
 
 export function apply(ctx, config = {}) {
   ctx.provide('omniChannels', createRuntime(ctx, ctx.omniTeam, config))

@@ -157,6 +157,8 @@ test('apply registers its listeners, tools and effects after the team\'s, in a f
   t.after(stop)
   const own = ctx.calls.slice(ctx.calls.indexOf('provide omniTeam') + 1)
   assert.deepEqual(own, [
+    'on session/event',
+    'effect ds-bot: restart resumes',
     'effect ds-bot: interrupted Omni permissions',
     'effect ds-bot: omni-consent-answer',
     'effect ds-bot: omni-grant-revoke',

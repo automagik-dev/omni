@@ -125,6 +125,9 @@ test('every literal this client translates has a Chinese entry, here or in the t
     }
   }
   assert.deepEqual(missing, [])
-  // The plugin's copy adds to the team's; it never restates a key the team has.
-  assert.deepEqual(Object.keys(STRINGS).filter(key => Object.hasOwn(DICTIONARY.zh, key)), [])
+  // The plugin's copy adds to the team's; it never restates a key the team has, but for
+  // the ones a Bot team below the floor lacks (addStrings skips a team key at runtime).
+  const BELOW_FLOOR = ['Not connected']
+  assert.deepEqual(BELOW_FLOOR.filter(key => !Object.hasOwn(STRINGS, key)), [])
+  assert.deepEqual(Object.keys(STRINGS).filter(key => Object.hasOwn(DICTIONARY.zh, key) && !BELOW_FLOOR.includes(key)), [])
 })
