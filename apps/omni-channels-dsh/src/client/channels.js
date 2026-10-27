@@ -92,6 +92,47 @@ function dayLabel(at) {
   return new Date(at).toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' })
 }
 
+// A message's file, drawn in its bubble with Omni's text for it under it. The host fetches
+// the file on its own key and keeps it (the omni-media endpoint, src/host/omni.js); a video
+// is fetched only once it is played.
+const DRAWN = { image: 'Picture', audio: 'Voice note', video: 'Video', document: 'Document', sticker: 'Sticker' }
+const drawnMedia = message => message.hasMedia === true && Object.hasOwn(DRAWN, message.type)
+
+function useMediaFile(id, wanted) {
+  const [file, setFile] = useState(null)
+  useEffect(() => {
+    if (!wanted) return undefined
+    let on = true
+    call('omni-media', { messageId: id }).then(
+      reply => { if (on) setFile(reply.ok ? { url: `data:${reply.mime};base64,${reply.data}` } : { failed: reply.reason }) },
+      error => { if (on) setFile({ failed: error.message }) })
+    return () => { on = false }
+  }, [id, wanted])
+  return file
+}
+
+const PlayMark = () => h('svg', { width: 22, height: 22, viewBox: '0 0 24 24', 'aria-hidden': true, focusable: 'false' }, h('path', { d: 'M8 5.5v13l10.5-6.5z', fill: 'currentColor' }))
+const DocMark = () => h('svg', { width: 22, height: 22, viewBox: '0 0 24 24', 'aria-hidden': true, focusable: 'false' },
+  h('path', { d: 'M7 3.5h6.5L18 8v11a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 19V5a1.5 1.5 0 0 1 1-1.5zM13.5 3.5V8H18', ...stroke }))
+
+function MediaPart({ message }) {
+  const kind = message.type
+  const [played, setPlayed] = useState(false)
+  const file = useMediaFile(message.id, kind === 'video' ? played : kind !== 'document')
+  const label = t(DRAWN[kind])
+  if (kind === 'document') {
+    return h('div', { className: 'oc-media-doc' }, h(DocMark), h('span', null, message.fileName ?? label))
+  }
+  if (file?.failed) return h('div', { className: 'oc-media-miss', title: file.failed }, label, ' · ', t('not available'))
+  if (kind === 'video' && !played) {
+    return h('button', { type: 'button', className: 'oc-media-still', 'aria-label': t('Play video'), onClick: () => setPlayed(true) }, h('span', { className: 'oc-media-play' }, h(PlayMark)))
+  }
+  if (!file) return h('div', { className: `oc-media-wait oc-media-wait-${kind}`, role: 'status', 'aria-label': t('Loading…') }, h('span', { className: 'oc-spinner', 'aria-hidden': true }))
+  if (kind === 'audio') return h('audio', { className: 'oc-media-audio', controls: true, preload: 'metadata', src: file.url })
+  if (kind === 'video') return h('video', { className: 'oc-media-img', controls: true, autoPlay: true, playsInline: true, src: file.url })
+  return h('img', { className: kind === 'sticker' ? 'oc-media-sticker' : 'oc-media-img', src: file.url, alt: message.mediaText ?? label })
+}
+
 export function ChatPage({ actions }) {
   const state = useOmni()
   const omni = useActions(actions)
@@ -135,7 +176,11 @@ export function ChatPage({ actions }) {
           return h(Fragment, { key: message.id }, newDay ? h('div', { className: 'oc-day' }, dayLabel(message.at)) : null, h('div', { className: `oc-msg oc-msg-${message.from}${first ? ' oc-msg-first' : ''}` },
             first && !mine && message.author ? h('span', { className: 'oc-msg-author' }, message.author) : null,
             first && message.from === 'omni' ? h('span', { className: 'oc-msg-author oc-msg-omni' }, h(OmniMark, { size: 12 }), 'Omni') : null,
-            h('div', { className: 'oc-bubble', 'data-sending': message.sending || undefined }, message.text, h('time', null, message.sending ? t('Sending…') : new Date(message.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })))))
+            h('div', { className: 'oc-bubble', 'data-sending': message.sending || undefined, 'data-media': drawnMedia(message) ? message.type : undefined },
+              drawnMedia(message) ? h(MediaPart, { message }) : null,
+              drawnMedia(message) ? (message.text ? h('span', { className: 'oc-media-caption' }, message.text) : null) : message.text,
+              drawnMedia(message) && message.mediaText ? h('span', { className: 'oc-media-text' }, message.mediaText) : null,
+              h('time', null, message.sending ? t('Sending…') : new Date(message.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })))))
         }))),
     h('footer', { className: 'oc-compose-wrap' },
       failed ? h('button', { type: 'button', className: 'oc-compose-note oc-compose-fail', role: 'alert', onClick: () => setDraft(failed.text) }, t('Not sent: {reason}', { reason: failed.message }), ' ', h('u', null, t('Put it back'))) : null,
@@ -518,6 +563,22 @@ body[data-ds-dark-theme] .oc-ava{background:hsl(var(--oc-hue) 30% 26%);color:hsl
 .oc-msg-them .oc-bubble{background:var(--bt-bubble);color:var(--bt-ink)}
 .oc-msg-omni .oc-bubble{background:color-mix(in srgb,var(--bt-accent) 14%,var(--bt-main));color:var(--bt-ink)}
 .oc-msg-you .oc-bubble{background:var(--bt-user);color:var(--bt-user-ink)}
+.oc-bubble[data-media]{padding:4px 4px 7px}
+.oc-media-caption,.oc-media-text{display:block;margin:2px 8px 0}
+.oc-bubble[data-media]>time{margin-right:8px}
+.oc-bubble[data-media=sticker]{background:none;padding:0}
+.oc-media-img{display:block;max-width:100%;max-height:340px;border-radius:14px;margin-bottom:4px}
+.oc-media-sticker{display:block;width:140px;height:140px;object-fit:contain}
+.oc-media-audio{display:block;width:260px;max-width:100%;height:40px;margin-top:4px;margin-bottom:4px}
+.oc-media-still{display:grid;place-items:center;width:240px;max-width:100%;aspect-ratio:16/10;margin-bottom:4px;border:0;border-radius:14px;background:linear-gradient(160deg,#2b2f36,#14161a);color:#fff;cursor:pointer}
+.oc-media-play{display:grid;place-items:center;width:48px;height:48px;border-radius:50%;background:rgba(0,0,0,.45);padding-left:3px;box-sizing:border-box}
+.oc-media-wait{display:grid;place-items:center;width:240px;max-width:100%;aspect-ratio:4/3;margin-bottom:4px;border-radius:14px;background:var(--bt-hover)}
+.oc-media-wait-audio{aspect-ratio:auto;height:40px;width:260px}
+.oc-media-wait-sticker{width:140px;aspect-ratio:1}
+.oc-media-doc{display:flex;align-items:center;gap:8px;min-width:180px;padding:8px 10px;border-radius:12px;background:var(--bt-hover);font-size:13.5px}
+.oc-media-doc span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.oc-media-miss{margin:6px 8px 2px;font-size:12.5px;color:var(--bt-ink-3)}
+.oc-media-text{font-size:13px;line-height:19px;opacity:.75}
 .oc-compose-wrap{padding:8px 24px 20px}
 .oc-compose-note{display:flex;align-items:center;gap:8px;max-width:var(--dsh-chat-content-width,748px);margin:0 auto 8px;width:100%;padding:8px 12px;border:0;border-radius:12px;background:color-mix(in srgb,#f59e0b 12%,transparent);color:var(--bt-ink);font:inherit;font-size:13px;text-align:left;cursor:pointer;box-sizing:border-box}
 .oc-compose{display:flex;align-items:flex-end;gap:8px;max-width:var(--dsh-chat-content-width,748px);margin:0 auto;padding:6px 6px 6px 16px;border-radius:24px;border:1px solid var(--bt-line-2);background:var(--bt-card);box-shadow:0 2px 8px -2px rgba(0,0,0,.06);box-sizing:border-box}
