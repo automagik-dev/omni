@@ -7,6 +7,7 @@ import { createRuntime as createTeam } from '@automagik/bots-dsh'
 import { createRuntime } from '../index.js'
 import { install, isResumeMessage, NEEDS_NEWER_TEAM, TEAM_CONTRACT } from '../src/host/resume-hook.js'
 import { fakeContext } from './team.js'
+import { boot, homeFor, record, teamState, flush as threadFlush } from './thread-fixture.js'
 
 const flush = async () => {
   for (let round = 0; round < 20; round += 1) await new Promise(resolve => setImmediate(resolve))
@@ -419,4 +420,173 @@ test('installed during the team\'s pass, after it asked for Sessions, the plugin
   assert.deepEqual(plugin.registrations.map(entry => entry.id), ['omni-channels'])
   assert.deepEqual(recovered.map(plain), [{ readOnly: null, failed: null, resumed: [], resent: [], late: true }])
   assert.equal(plugin.channels.teamResume.pickedUp(recovered[0], 'run-omni'), false)
+})
+
+// Asks (Group 10) across a restart, on the real Bot team's pass: a thread, and an ask run of
+// the Omni Bot's for it, as the last start left them.
+const ASK_AT = Date.now() - 60_000
+const askState = (status = 'working') => teamState({
+  omniThreads: { thr: record('thr', 'thread-session') },
+  subscriptions: {},
+  subscriptionRuns: [{ id: 'ask-1', ask: true, threadId: 'thr', sessionId: 'ask-session', botId: 'm1', task: true, status, at: ASK_AT }],
+})
+const askRecord = run => (run.channels.state.subscriptionRuns ?? []).find(item => item.id === 'ask-1')
+const textsOf = (run, sessionId) => run.agentOf(sessionId).calls.map(message => message.content.map(block => block.text).join(''))
+// Until `done()` holds: an ask's end saves, posts and archives one step after another.
+async function until(done) {
+  for (let round = 0; round < 50 && !done(); round += 1) await threadFlush()
+  await threadFlush()
+}
+const archivedAsk = (run, sessionId = 'ask-session') => () => run.archiving.some(([id]) => id === sessionId)
+// The ask Session's turn answers and ends, as DSH ends a finished turn.
+async function answered(run, words, sessionId = 'ask-session') {
+  run.emit(sessionId, 'turn/start', { turn: 2 }, Date.now())
+  run.emit(sessionId, 'assistant/message', { message: { content: [{ type: 'text', text: words }] } })
+  run.emit(sessionId, 'turn/end', { reason: { kind: 'completed' } })
+  await until(() => run.agentOf('thread-session').calls.length > 0)
+}
+
+test('an ask cut by a restart is resumed once as the Omni Bot through rt.deliver, never as a plain follow-up, though its Session is also in sessions(); its answer still arrives (:189, :193)', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const home = homeFor(t, undefined, askState())
+  const run = await boot(t, home)
+  // The team finds it itself, as the Omni Bot's run, and the plugin lists it too.
+  assert.deepEqual(run.registered[0].sessions(), ['ask-session'])
+  assert.deepEqual(run.team.taskOwners.get('ask-session'), { botId: 'm1' })
+  run.cut('ask-session')
+  t.mock.timers.tick(3000)
+  const done = await run.team.resumesDone
+  await threadFlush()
+  assert.equal(done.resumed.includes('ask-session'), true)
+  // Once, as a delivery to the Omni Bot in the ask's own Session, marked as the team's resume.
+  const posts = run.agentOf('ask-session').calls.map(message => message.source)
+  assert.equal(posts.length, 1)
+  assert.deepEqual([posts[0].kind, posts[0].role, isResumeMessage({ source: posts[0] })], ['bot', 'resume', true])
+  assert.deepEqual([run.agentOf('m1').calls, run.agentOf('thread-session').calls], [[], []])
+  assert.equal(askRecord(run).status, 'working')
+  // The resumed turn's end answers the thread, and the ask is gone.
+  await answered(run, 'Chegou ontem.')
+  assert.equal(textsOf(run, 'thread-session').length, 1)
+  assert.match(textsOf(run, 'thread-session')[0], /^\[Answer from Omni \(the Omni Bot\) · to the question you asked it with thread_ask_omni.*\]\nChegou ontem\.$/)
+  assert.equal(askRecord(run), undefined)
+  assert.deepEqual(run.archiving, [['ask-session', { stopActivity: true }]])
+})
+
+test('an ask cut and not picked up posts one "cut by a restart" message in its thread on the signal, and is archived and gone (:201)', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const home = homeFor(t, undefined, askState())
+  const run = await boot(t, home)
+  const flushed = []
+  run.ctx.sessions.flush = async (session) => { flushed.push(session.id) }
+  // Its Session's log shows no cut turn: the team does not resume it, and it is not running.
+  t.mock.timers.tick(3000)
+  const done = await run.team.resumesDone
+  await until(() => run.agentOf('thread-session').calls.length > 0)
+  assert.deepEqual([done.resumed.includes('ask-session'), done.resent.includes('ask-session')], [false, false])
+  assert.deepEqual(textsOf(run, 'thread-session'), ['[Answer from Omni (the Omni Bot) · your question was cut by a restart of DeepSeek Harness, and its answer is lost; ask again if it still matters]'])
+  assert.deepEqual(flushed, ['thread-session'])
+  assert.deepEqual(run.agentOf('ask-session').calls, [])
+  assert.deepEqual(run.archiving, [['ask-session', { stopActivity: true }]])
+  assert.equal(askRecord(run), undefined)
+  assert.deepEqual(run.registered[0].sessions(), [])
+  // Saved gone: the next start posts nothing more.
+  await run.channels.save()
+  await run.stop()
+  const next = await boot(t, home)
+  t.mock.timers.tick(3000)
+  await next.team.resumesDone
+  await threadFlush()
+  assert.deepEqual(next.agentOf('thread-session').calls, [])
+})
+
+test('MEDIUM-2: an ask whose Session is in resent and not in resumed is not ended as lost and posts no "cut" message; its answer still arrives', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const home = homeFor(t, undefined, teamState({ omniThreads: { thr: record('thr', 'thread-session') }, subscriptions: {} }))
+  const first = await boot(t, home)
+  // Asked; DSH goes down before any turn took the question.
+  assert.match(await first.channels.askOmni(first.channels.threads.byId('thr'), 'Quem mandou o orçamento?'), /^Asked Omni\./)
+  const sessionId = first.made.at(-1)
+  await first.channels.save()
+  await first.stop()
+  const run = await boot(t, home)
+  t.mock.timers.tick(3000)
+  const done = await run.team.resumesDone
+  await threadFlush()
+  // The team sent the dropped question again rather than resuming a turn.
+  assert.deepEqual([done.resumed.includes(sessionId), done.resent.includes(sessionId)], [false, true])
+  const sent = run.agentOf(sessionId).calls
+  assert.deepEqual(sent.map(message => [message.source.role, message.source.kind]), [['task', 'bot']])
+  assert.match(sent[0].content[0].text, /Quem mandou o orçamento\?/)
+  // Not ended as lost: no message in the thread, the record still works, its gate holds.
+  assert.deepEqual(run.agentOf('thread-session').calls, [])
+  const working = (run.channels.state.subscriptionRuns ?? []).find(item => item.sessionId === sessionId)
+  assert.equal(working.status, 'working')
+  assert.deepEqual(run.archiving, [])
+  // Its answer still arrives.
+  run.emit(sessionId, 'turn/start', { turn: 1 }, Date.now())
+  run.emit(sessionId, 'assistant/message', { message: { content: [{ type: 'text', text: 'A Marina.' }] } })
+  run.emit(sessionId, 'turn/end', { reason: { kind: 'completed' } })
+  await until(() => run.agentOf('thread-session').calls.length > 0)
+  assert.match(textsOf(run, 'thread-session')[0], /\nA Marina\.$/)
+  assert.equal((run.channels.state.subscriptionRuns ?? []).some(item => item.sessionId === sessionId), false)
+})
+
+test('a stopping ask is never resumed and never listed; on the signal it is archived and dropped, and its thread hears nothing (:201)', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const home = homeFor(t, undefined, askState('stopping'))
+  const run = await boot(t, home)
+  assert.deepEqual(run.registered[0].sessions(), [])
+  run.cut('ask-session')
+  t.mock.timers.tick(3000)
+  const done = await run.team.resumesDone
+  await until(archivedAsk(run))
+  assert.equal(done.resumed.includes('ask-session'), false)
+  assert.deepEqual([run.agentOf('ask-session').calls, run.agentOf('thread-session').calls], [[], []])
+  assert.deepEqual(run.archiving, [['ask-session', { stopActivity: true }]])
+  assert.equal(askRecord(run), undefined)
+})
+
+test('an ask ended after a restart that sent its question again leaves nothing to send: the next restart delivers nothing, and nothing reaches the Omni Bot\'s chat', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const home = homeFor(t, undefined, teamState({ omniThreads: { thr: record('thr', 'thread-session') }, subscriptions: {} }))
+  // First start: asked, and DSH goes down before a turn takes the question.
+  const first = await boot(t, home)
+  assert.match(await first.channels.askOmni(first.channels.threads.byId('thr'), 'Quem mandou o orçamento?'), /^Asked Omni\./)
+  const sessionId = first.made.at(-1)
+  await first.channels.save()
+  await first.stop()
+  // Second start: the team sends the question again; the chat is removed before a turn takes it.
+  const second = await boot(t, home)
+  t.mock.timers.tick(3000)
+  assert.equal((await second.team.resumesDone).resent.includes(sessionId), true)
+  await threadFlush()
+  await second.channels.threads.remove('thr')
+  await until(() => (second.channels.state.subscriptionRuns ?? []).length === 0)
+  assert.deepEqual(second.team.unreadOf(sessionId), [])
+  await second.channels.save()
+  await second.stop()
+  // Third start: nothing is sent again, to the ask's Session or the Omni Bot's own chat.
+  const third = await boot(t, home)
+  t.mock.timers.tick(3000)
+  const done = await third.team.resumesDone
+  await threadFlush()
+  assert.deepEqual([done.resent, third.agentOf('m1').calls, third.agentOf(sessionId).calls], [[], [], []])
+})
+
+test('a stopping ask whose turn began before this start stays a tombstone while its live agent runs, and settles when that turn ends', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const home = homeFor(t, undefined, askState('stopping'))
+  const run = await boot(t, home)
+  // DSH went on while the plugin reloaded: the ask Session's agent still runs its turn.
+  run.agentOf('ask-session').status = 'running'
+  t.mock.timers.tick(3000)
+  await run.team.resumesDone
+  await until(archivedAsk(run))
+  assert.equal(askRecord(run)?.status, 'stopping')
+  assert.equal((await run.channels.teamResume.running('ask-session')), false)
+  // The turn ends: the stop holds now, and the record goes.
+  run.agentOf('ask-session').status = 'idle'
+  run.emit('ask-session', 'turn/end', { reason: { kind: 'aborted', reason: { kind: 'user' } } })
+  await until(() => askRecord(run) === undefined)
+  assert.equal(askRecord(run), undefined)
 })

@@ -503,3 +503,38 @@ test('an event matches only the subscriptions that watch its chat or channel, fo
   assert.deepEqual(got.map(frame => [frame.event, frame.id]), [['connected', undefined], ['reaction.received', '7'], ['reconnect', '7']])
   assert.equal(JSON.parse(got[1].data).textContent, '📌')
 })
+
+test('pruning keeps every working, queued and stopping record, drops ended asks, and caps only ended automation runs (:202)', async () => {
+  const { isAskRun, pruneRuns, RUNS_KEPT } = await import('../src/host/subscriptions.js')
+  assert.equal(RUNS_KEPT, 40)
+  const ended = Array.from({ length: 50 }, (_, index) => ({ id: `done-${index}`, status: index % 2 ? 'done' : 'failed' }))
+  const live = [{ id: 'working', status: 'working' }, { id: 'queued', status: 'queued' }, { id: 'ask-working', ask: true, status: 'working' }, { id: 'ask-stopping', ask: true, status: 'stopping' }]
+  const asksEnded = [{ id: 'ask-done', ask: true, status: 'done' }, { id: 'ask-gone', ask: true, status: 'failed' }]
+  // Newest first, as the log is: live records and ended asks among the oldest ended runs.
+  const pruned = pruneRuns([...ended.slice(0, 10), ...asksEnded, ...ended.slice(10), ...live])
+  assert.deepEqual(pruned.map(run => run.id), [...ended.slice(0, RUNS_KEPT).map(run => run.id), ...live.map(run => run.id)])
+  assert.deepEqual(pruneRuns(ended, 3).map(run => run.id), ['done-0', 'done-1', 'done-2'])
+  assert.deepEqual([isAskRun({ ask: true }), isAskRun({ ask: 'yes' }), isAskRun(undefined)], [true, false, false])
+})
+
+test('with 45 runs started while one works, its record and gate stay, an ask run\'s deny too, and ended automation runs cap at RUNS_KEPT (:202)', async (t) => {
+  const { RUNS_KEPT } = await import('../src/host/subscriptions.js')
+  const bench = setup(t)
+  const { run: working } = await testRun(bench, { worker: 'Ops' })
+  // An ask run of the Omni Bot's, working in its own Session.
+  bench.team.state.subscriptionRuns.unshift({ id: 'ask-1', ask: true, threadId: 'thread-1', sessionId: 'ask-session', botId: 'm1', task: true, status: 'working', at: Date.now() })
+  for (let index = 0; index < 45; index += 1) {
+    const { run } = await testRun(bench, { worker: 'Ops' })
+    bench.emit(run.sessionId, { type: 'turn/end', data: { reason: { kind: 'completed' } } })
+  }
+  await settle()
+  const runs = bench.team.state.subscriptionRuns
+  assert.equal(runs.find(run => run.id === working.id)?.status, 'working')
+  assert.equal(runs.find(run => run.id === 'ask-1')?.status, 'working')
+  assert.equal(runs.filter(run => run.status === 'done').length, RUNS_KEPT)
+  assert.equal((await bench.gate('bash', working.sessionId)).kind, 'ask')
+  assert.equal((await bench.gate('bash', 'ask-session')).kind, 'deny')
+  // The board shows the automation runs only.
+  const board = (await bench.call('state', {})).value.subscriptionRuns
+  assert.deepEqual([board.length, board.some(run => run.ask)], [RUNS_KEPT + 1, false])
+})

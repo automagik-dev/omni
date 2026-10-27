@@ -231,6 +231,7 @@ test('apply registers its listeners, tools and effects after the team\'s, in a f
     'tool thread_history',
     'tool thread_picture',
     'tool thread_ask_omni',
+    'effect omni-channels: asks of removed threads',
     'on tools/pre-execute (prepend)',
     'effect omni-channels: thread tool lists',
     'on agent/created',

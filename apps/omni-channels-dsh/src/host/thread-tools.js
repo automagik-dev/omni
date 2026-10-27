@@ -44,8 +44,8 @@ export function withoutThreadTools(names) {
 }
 
 export const NOT_A_THREAD = 'This tool works only in an added chat\'s thread, on that chat.'
-export const ASK_NOT_YET = 'Asking the Omni Bot is not available yet.'
 const TEXT_MAX = 4096
+const QUESTION_MAX = 2000
 const HISTORY_DEFAULT = 20
 const HISTORY_TEXT_MAX = 1000
 const PICTURE_TIMEOUT_MS = 60_000
@@ -61,12 +61,14 @@ const HistoryArgs = z.object({
   before: z.string().trim().max(64).refine(value => Number.isFinite(Date.parse(value)), 'a time').optional(),
 })
 const PictureArgs = z.object({ messageId: z.string().trim().regex(ID) })
+const AskArgs = z.object({ question: z.string().trim().min(1).max(QUESTION_MAX) })
 // Each tool's arguments and what is said when they do not fit, checked before any card.
 const ARGS = {
   thread_say: [SayArgs, `text must be a message of 1 to ${TEXT_MAX} characters`],
   thread_react: [ReactArgs, 'Give a message id from thread_history and one emoji'],
   thread_history: [HistoryArgs, 'limit is 1 to 50, and before is a message\'s `at` time'],
   thread_picture: [PictureArgs, 'messageId must be a message id from thread_history'],
+  thread_ask_omni: [AskArgs, `question must be one self-contained question of 1 to ${QUESTION_MAX} characters`],
 }
 const CARD_TEXT_MAX = 1000
 // The owner's list: emoji only (a pictograph, a flag or a keycap), each once.
@@ -290,12 +292,17 @@ export function install(rt) {
     return { text: head.join('\n'), image: saved.image }
   }, pictureOutput, text => ({ text }))
 
-  // Group 10 gives it its body; until then it refuses, after the same gate as the others.
+  // The Omni Bot answers in a read-only run of its own (subscriptions.js rt.askOmni), and its
+  // answer comes back into this thread as a message that starts a turn. The ask goes through
+  // the same gate as the other four, chat key included: the run reads on the link key, but a
+  // thread that is not connected does nothing through Omni at all.
   tool({
     name: 'thread_ask_omni',
-    description: 'Asks the Omni Bot to look something up for this thread, in one self-contained question.',
-    parameters: { question: { type: 'string', required: true, description: 'The whole question, with what the Omni Bot needs to know' } },
-  }, async () => ASK_NOT_YET)
+    description: 'Asks the Omni Bot to look something up in Omni for this thread, in one self-contained question (it does not see this thread). It only reads; its answer arrives here later as a message.',
+    parameters: { question: { type: 'string', required: true, description: `The whole question, with what the Omni Bot needs to know (at most ${QUESTION_MAX} characters)` } },
+  }, async ({ question }, open, exec) => rt.askOmni(open.thread, question, exec?.signal))
+  // A removed thread's asks stop, and their answers are dropped.
+  ctx.effect(() => rt.threads.onRemoved(thread => rt.dropAsksOf(thread.id)), 'omni-channels: asks of removed threads')
 
   // A send always asks the user on DSH's card, groups included, and every time; a reaction asks
   // unless its emoji is free. A call its gate refuses (another Session, no hook, no key, bad
