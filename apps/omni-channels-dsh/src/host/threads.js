@@ -92,6 +92,8 @@ const following = new WeakMap()
  */
 export function followOmniModel(rt, sessionId) {
   const followers = following.get(rt)
+  // The threads module installs the follow; a module before it in MODULES would follow nothing.
+  if (followers === undefined) rt.warn('omni-channels: followOmniModel called before the threads module is installed')
   if (followers === undefined || typeof sessionId !== 'string' || sessionId === '') return () => {}
   followers.add(sessionId)
   void selectOmniModel(rt, sessionId).catch(error => rt.warn('omni-channels: the Omni Bot\'s model was not applied to %s: %s', sessionId, error?.message ?? error))
@@ -153,7 +155,9 @@ export function install(rt) {
       const key = route === undefined ? null : JSON.stringify(route)
       if (key === null || key === applied) return
       applied = key
+      const gone = archived()
       for (const sessionId of new Set([...list().map(thread => thread.sessionId), ...followers])) {
+        if (gone.has(sessionId)) continue
         await rt.selectSessionModel(sessionId, route).catch(error => rt.warn('omni-channels: the Omni Bot\'s model was not applied to %s: %s', sessionId, error?.message ?? error))
       }
     }).catch(error => rt.warn('omni-channels: the Omni Bot\'s model was not read: %s', error?.message ?? error))
@@ -170,6 +174,8 @@ export function install(rt) {
       if (sessionId === omniChat()) void refollow()
       return
     }
+    // Only a turn's start and end matter; every other event of every Session stops here.
+    if (event?.type !== 'turn/start' && event?.type !== 'turn/end') return
     const thread = bySession(sessionId)
     if (thread === undefined) return
     if (event?.type === 'turn/start') {
@@ -345,8 +351,21 @@ export function install(rt) {
     bySession,
     add,
     remove,
-    onAdded: (listener) => { added.push(listener) },
-    onRemoved: (listener) => { removed.push(listener) },
+    // Each returns its unsubscribe, as rt.threadKeys.onChange does.
+    onAdded: (listener) => {
+      added.push(listener)
+      return () => {
+        const at = added.indexOf(listener)
+        if (at !== -1) added.splice(at, 1)
+      }
+    },
+    onRemoved: (listener) => {
+      removed.push(listener)
+      return () => {
+        const at = removed.indexOf(listener)
+        if (at !== -1) removed.splice(at, 1)
+      }
+    },
   }
 
   // For the tree: the threads under their channels, whether a chat can be added, and the row

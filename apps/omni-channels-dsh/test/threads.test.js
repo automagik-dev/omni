@@ -654,6 +654,25 @@ test('the Omni Bot\'s chat selecting the model its threads already have moves no
   assert.equal(run.selected.some(([id]) => id === thread.sessionId), false)
 })
 
+test('a model change skips a thread DSH archived, and a listener that unsubscribed hears nothing', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const run = await boot(t, homeFor(t, fakeOmni()))
+  const heard = []
+  const stop = run.channels.threads.onAdded(thread => heard.push(thread.id))
+  const { thread: shelved } = await run.channels.threads.add(INSTANCE, CHAT)
+  stop()
+  const { thread: kept } = await run.channels.threads.add(INSTANCE, GROUP)
+  assert.deepEqual(heard, [shelved.id])
+  // The user archived one in DSH's own workspace list; its record stays.
+  run.archived.push(shelved.sessionId)
+  run.selected.length = 0
+  await run.team.updateBot('m1', { model: 'deepseek/pro' })
+  await flush()
+  const moved = run.selected.map(([id]) => id)
+  assert.equal(moved.includes(kept.sessionId), true)
+  assert.equal(moved.includes(shelved.sessionId), false)
+})
+
 test('looking a thread up by its Session or id never sorts the threads', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const omniThreads = { a: record('a', 'a-session'), b: record('b', 'b-session', { at: 2 }) }
