@@ -19,7 +19,7 @@
 // Each change holds a lock file beside it (omni-thread-keys.json.lock), so two DSH hosts on
 // one home, one of them only reading the team, never change it at once.
 import { randomUUID } from 'node:crypto'
-import { readFileSync } from 'node:fs'
+import { readFileSync, statSync } from 'node:fs'
 import { chmod, mkdir, open, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
@@ -90,13 +90,21 @@ export function install(rt) {
   const lockPath = `${path}.lock`
 
   // Read on every use, as omni.json is: the file is the one truth. `bad`: it is there but fails
-  // its check, which is said once, not on every use.
+  // its check, which is said once, not on every use. The last read is kept while the file on
+  // disk is the same one (inode, size, change time), so a lookup per tool call stays cheap.
   let warned = false
+  let last = null
   function readKeys() {
     let raw
+    let seen
     try {
+      const info = statSync(path)
+      seen = `${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`
+      // A copy: callers change what they read before they write it.
+      if (last?.seen === seen) return { file: structuredClone(last.file), bad: false }
       raw = readFileSync(path, 'utf8')
     } catch {
+      last = null
       return { file: empty(), bad: false }
     }
     let parsed
@@ -105,9 +113,13 @@ export function install(rt) {
     } catch {
       parsed = { success: false }
     }
-    if (parsed.success) return { file: parsed.data, bad: false }
+    if (parsed.success) {
+      last = { seen, file: structuredClone(parsed.data) }
+      return { file: parsed.data, bad: false }
+    }
     if (!warned) rt.warn?.('omni-channels: %s could not be read; its thread keys are not used', KEYS_FILE)
     warned = true
+    last = null
     return { file: empty(), bad: true }
   }
   const read = () => readKeys().file

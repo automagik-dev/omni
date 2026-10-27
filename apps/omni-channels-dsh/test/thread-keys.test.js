@@ -697,6 +697,18 @@ test('two hosts on one home change the key file one at a time', async (t) => {
   assert.equal(existsSync(join(one.home, `${KEYS_FILE}.lock`)), false, 'the lock is let go')
 })
 
+test('a host sees the keys another host on the same home kept, at its next lookup', async (t) => {
+  const omni = fakeOmni()
+  const one = runtime(t, { link: linked(omni.linkKey()) })
+  const two = runtime(t, { home: one.home })
+  assert.equal((await one.rt.threadKeys.mint('t1', CHAT)).ok, true)
+  assert.equal(two.rt.threadKeys.keyFor('t2'), null)
+  assert.equal((await two.rt.threadKeys.mint('t2', OWN_CHAT)).ok, true)
+  assert.notEqual(one.rt.threadKeys.keyFor('t2'), null)
+  await two.rt.threadKeys.revoke('t1')
+  assert.equal(one.rt.threadKeys.keyFor('t1'), null)
+})
+
 test('a lock whose holder is gone, or that is too old, is taken over', async (t) => {
   const omni = fakeOmni()
   const { rt, home } = runtime(t, { link: linked(omni.linkKey()) })
@@ -816,7 +828,9 @@ test('a lock file with no holder in it is taken over once it is old, not before'
   await delay(60)
   assert.equal(done, false, 'a fresh empty lock may be one being made')
   t.mock.timers.tick(11_000)
-  const answer = await Promise.race([minting, delay(3000).then(() => 'still waiting')])
+  let guard
+  const answer = await Promise.race([minting, new Promise((resolve) => { guard = setTimeout(resolve, 3000, 'still waiting') })])
+  clearTimeout(guard)
   // Let a stuck one go, so the plugin can stop.
   if (answer === 'still waiting') rmSync(lockOf(home), { force: true })
   assert.notEqual(answer, 'still waiting')
