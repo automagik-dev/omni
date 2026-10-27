@@ -14,7 +14,6 @@ const flush = async () => {
 
 // A Bot team before the hook (below the floor): the real-team tests then check the
 // not-ready path. Every such branch calls this.
-const beforeFloor = team => typeof team.resumable?.register !== 'function'
 
 // The adapter alone on a stand-in team: its hook records what registers, and `settle`
 // resolves resumesDone with an outcome the real pass cannot produce on demand, after asking
@@ -295,15 +294,13 @@ async function start(t, { mask = false, late = false, during } = {}) {
   const team = createTeam(ctx, { home })
   const callsOfTeam = ctx.calls.length
   const registrations = []
-  if (!beforeFloor(team)) {
-    const register = team.resumable.register
-    team.resumable.register = (entry) => {
-      registrations.push({ id: entry.id, callsBefore: ctx.calls.slice(callsOfTeam) })
-      return register(entry)
-    }
+  const register = team.resumable.register
+  team.resumable.register = (entry) => {
+    registrations.push({ id: entry.id, callsBefore: ctx.calls.slice(callsOfTeam) })
+    return register(entry)
   }
   const base = mask ? Object.create(team, { resumable: { value: undefined }, resumesDone: { value: undefined } }) : team
-  if (late && !beforeFloor(team)) {
+  if (late) {
     for (const id of ['run-omni', 'run-ops']) cut(id)
     t.mock.timers.tick(3000)
     await team.resumesDone
@@ -319,13 +316,28 @@ async function start(t, { mask = false, late = false, during } = {}) {
 }
 const runsOf = home => Object.fromEntries(JSON.parse(readFileSync(join(home, 'state.json'), 'utf8')).subscriptionRuns.map(run => [run.sessionId, run.status]))
 
-test('the plugin registers with the Bot team once, before any other work', async (t) => {
-  const { channels, team, registrations } = await start(t)
-  if (beforeFloor(team)) {
-    // A Bot team before the hook: the plugin loads, not ready, with its reason.
-    assert.deepEqual([channels.teamResume.ready, channels.teamResume.reason], [false, NEEDS_NEWER_TEAM])
-    return
+// The floor: the Bot team Omni pins is the release TEAM_CONTRACT names, the one this plugin's
+// peer range starts at, and it has the hook, so every test here runs the real one.
+test('the pinned Bot team is the release TEAM_CONTRACT names, and it has the hook', async (t) => {
+  const pin = JSON.parse(readFileSync(new URL('../../automagik.json', import.meta.url), 'utf8'))
+  const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+  assert.equal(TEAM_CONTRACT.release, pin.version)
+  assert.match(pkg.peerDependencies['@automagik/bots-dsh'], new RegExp(`^>=${TEAM_CONTRACT.release.replaceAll('.', '\\.')} `))
+  const ctx = fakeContext()
+  const home = mkdtempSync(join(tmpdir(), 'omni-floor-'))
+  t.after(async () => {
+    await ctx.dispose()
+    rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+  })
+  const team = createTeam(ctx, { home })
+  for (const path of [TEAM_CONTRACT.register, TEAM_CONTRACT.dshBotsList, TEAM_CONTRACT.dshBotsCreate, TEAM_CONTRACT.dshBotsChanged]) {
+    assert.equal(typeof path.split('.').reduce((value, key) => value?.[key], team), 'function', path)
   }
+  assert.equal(typeof team.resumesDone?.then, 'function')
+})
+
+test('the plugin registers with the Bot team once, before any other work', async (t) => {
+  const { channels, registrations } = await start(t)
   // Nothing of the plugin's came before it but the adapter's own listener and effect.
   assert.deepEqual(registrations, [{ id: 'omni-channels', callsBefore: ['on session/event', 'effect ds-bot: restart resumes'] }])
   assert.equal(channels.teamResume.ready, true)
@@ -339,13 +351,6 @@ test('a restart cuts an Omni Bot run, a Bot run and a thread: the team resumes e
   const { channels, team, home, agentOf, cut, emit } = await start(t)
   const recovered = []
   channels.teamResume.addRecovery(outcome => recovered.push(outcome))
-  if (beforeFloor(team)) {
-    // A Bot team before the hook resumes on its own; the plugin runs no recovery.
-    t.mock.timers.tick(3000)
-    await flush()
-    assert.deepEqual([channels.teamResume.ready, recovered], [false, []])
-    return
-  }
   const bound = []
   channels.teamResume.addSessions(() => ['thread'])
   channels.teamResume.addResumeBinder(sessionId => bound.push([sessionId, agentOf(sessionId).calls.length]))
@@ -385,7 +390,7 @@ test('on a team stand-in with no hook the whole plugin loads: not ready, nothing
   channels.teamResume.addRecovery(outcome => recovered.push(outcome))
   cut('thread')
   t.mock.timers.tick(3000)
-  if (!beforeFloor(team)) assert.deepEqual((await team.resumesDone).resumed.includes('thread'), false)
+  assert.deepEqual((await team.resumesDone).resumed.includes('thread'), false)
   await flush()
   assert.deepEqual([registrations, recovered], [[], []])
 })
@@ -396,10 +401,6 @@ test('registered after the team\'s pass, the plugin reads the runs the team resu
   const recovered = []
   channels.teamResume.addRecovery(outcome => recovered.push(outcome))
   await flush()
-  if (beforeFloor(team)) {
-    assert.deepEqual([channels.teamResume.ready, recovered], [false, []])
-    return
-  }
   // The team found and resumed the runs on its own, before the plugin was there to hear.
   assert.deepEqual([...(await team.resumesDone).resumed].sort(), ['run-omni', 'run-ops'])
   assert.equal(agentOf('run-omni').calls.length, 1)
@@ -412,11 +413,6 @@ test('installed during the team\'s pass, after it asked for Sessions, the plugin
   const plugin = await start(t, { during: channels => channels.teamResume.addRecovery(outcome => recovered.push(outcome)) })
   for (const id of ['run-omni', 'run-ops']) plugin.cut(id)
   t.mock.timers.tick(3000)
-  if (beforeFloor(plugin.team)) {
-    await flush()
-    assert.deepEqual(recovered, [])
-    return
-  }
   // The team resumed the runs it found itself; the plugin came in after it read the owners.
   assert.deepEqual([...(await plugin.team.resumesDone).resumed].sort(), ['run-omni', 'run-ops'])
   await flush()

@@ -6,6 +6,7 @@ import { afterEach, test } from 'node:test'
 import { candidates, discover, install, probe, sameOmni } from '../src/host/omni-discover.js'
 import { install as installLink, LINK_FILE } from '../src/host/omni-link.js'
 import { parseConnectLink } from '../src/client/connect-link.js'
+import { OMNI_MINIMUM } from '../src/host/version.js'
 import { install as installHooks } from '@automagik/bots-dsh/src/host/extend.js'
 
 const realFetch = globalThis.fetch
@@ -104,6 +105,23 @@ test('a config that does not parse is passed over, and an Omni that answers is s
     t.after(stop)
     const omnis = await discover({ env: {}, home, fetchImpl: loopback({ 8882: 'pairable' }) })
     assert.deepEqual(omnis.map(omni => [omni.source, omni.hasKey]), [['running', false]], raw)
+  }
+})
+
+// The floor is the Omni release with the chat keys this plugin's threads mint (engines.omni):
+// the one just before it shows as outdated in Connect, the floor itself does not.
+test('an Omni older than the plugin\'s minimum shows as outdated, and one at the minimum does not', async (t) => {
+  assert.equal(OMNI_MINIMUM, '2.261027.3')
+  const { home, stop } = homeWith({ cli: { apiUrl: 'http://localhost:8882' } })
+  t.after(stop)
+  for (const [version, outdated] of [['2.261027.2', true], [OMNI_MINIMUM, false]]) {
+    const answers = loopback({ 8882: 'pairable' })
+    const fetchImpl = async (address, init) => {
+      if (new URL(String(address)).pathname !== '/api/v2/health') return answers(address, init)
+      return new Response(JSON.stringify({ status: 'healthy', version }), { status: 200 })
+    }
+    const [omni] = await discover({ env: {}, home, fetchImpl })
+    assert.deepEqual([omni.version, omni.outdated], [version, outdated])
   }
 })
 

@@ -44,10 +44,10 @@
   },
   "engines": {
     "dsh": ">=0.2.1-rc.3 <0.2.2-0",
-    "omni": ">=2.261025.2"
+    "omni": ">=2.261027.3"
   },
   "peerDependencies": {
-    "@automagik/bots-dsh": ">=3.1.0 <3.261000.0",
+    "@automagik/bots-dsh": ">=3.32.1 <3.261000.0",
     "@automagik/omni-dsh": ">=2.261019.10",
     "@deepseek-ai/cordis": "*",
     "@deepseek-ai/dsh-llm": "*",

@@ -16,7 +16,7 @@ import { z } from 'zod'
 // plain follow-up `{ kind: 'user', resumed: true }`. `dshBotsChanged`: the roster signal,
 // `onChange(fn)` → disposer, `fn(list)`. `rowProps`: what each botChildren entry is drawn with.
 export const TEAM_CONTRACT = Object.freeze({
-  release: '3.N pending — automagik#94 0f9873ad9',
+  release: '3.32.1',
   register: 'resumable.register',
   resumesDone: 'resumesDone',
   resentField: 'resent',

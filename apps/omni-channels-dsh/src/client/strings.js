@@ -315,7 +315,6 @@ export const STRINGS = {
   'Set': '设置',
   'Changed': '修改',
   'Connecting': '连接中',
-  'Not connected': '未连接',
   'Changing omni': '正在修改 omni',
   'Checking your channels': '正在查看你的渠道',
   'Connect channel': '连接渠道',
