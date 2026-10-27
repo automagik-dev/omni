@@ -161,7 +161,9 @@ export interface Services {
  * Create all services
  */
 export function createServices(db: Database, eventBus: EventBus | null): Services {
-  const apiKeys = new ApiKeyService(db);
+  // Publishes the chat-key events itself: `update` is also called from the
+  // agent dispatcher and the instances route, whose child clamps must be events too.
+  const apiKeys = new ApiKeyService(db, { eventBus });
   const deadLetters = new DeadLetterService(db, eventBus);
   const payloadStore = new PayloadStoreService(db);
   const eventSchemas = new EventSchemaService(db);

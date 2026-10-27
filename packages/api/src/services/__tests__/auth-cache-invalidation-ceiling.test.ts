@@ -184,6 +184,8 @@ describe('apiKeyCache honours the ceiling in the tenant world (synthetic clock)'
         },
       }),
     });
+    // `revoke` runs in a transaction (it revokes the key's children with it).
+    (db as unknown as { transaction: (fn: (tx: Database) => unknown) => unknown }).transaction = (fn) => fn(db);
     (service as unknown as { db: Database }).db = db;
 
     expect(await service.validate(KEY)).not.toBeNull();

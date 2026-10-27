@@ -53,6 +53,10 @@ export const CORE_EVENT_TYPES = [
   'access.device_authorized',
   // The owner asked for a connect link in their self chat (texting "connect")
   'access.connect_link_issued',
+  // Chat keys: a child key minted from a parent for one chat, revoked, or clamped to its parent
+  'access.key_minted',
+  'access.key_revoked',
+  'access.key_updated',
   // Presence
   'presence.typing',
   'presence.online',
@@ -598,6 +602,51 @@ export interface AccessConnectLinkIssuedPayload {
   instanceId?: string;
   expiresAt: string;
   via?: 'self-chat' | 'operator';
+}
+
+/** Why a chat key (a child of another key) was revoked. */
+export type AccessKeyRevokeReason =
+  | 'remint' // a new key was minted for the same chat
+  | 'parent_revoked'
+  | 'parent_deleted'
+  | 'parent_narrowed' // the parent no longer covers a scope or instance the child holds
+  | 'own_child' // its parent revoked it
+  | 'self'; // it revoked itself
+
+/** A chat key was minted from a parent key, locked to one chat. Never carries the key. */
+export interface AccessKeyMintedPayload {
+  keyId: string;
+  parentKeyId: string;
+  /** The chat row's id. */
+  chatId: string;
+  /** The chat's id on its channel (a WhatsApp JID). */
+  chatExternalId: string;
+  instanceId: string;
+  scopes: string[];
+  /** Epoch ms; the parent's expiry, null when the parent never expires. */
+  expiresAt: number | null;
+  /** The previous key for this chat, revoked by this mint. */
+  replacedKeyId: string | null;
+}
+
+/** A chat key was revoked. */
+export interface AccessKeyRevokedPayload {
+  keyId: string;
+  parentKeyId: string;
+  chatId: string;
+  instanceId: string;
+  reason: AccessKeyRevokeReason;
+  revokedBy: string | null;
+}
+
+/** A chat key's expiry was clamped to its parent's shortened or newly set expiry. */
+export interface AccessKeyUpdatedPayload {
+  keyId: string;
+  parentKeyId: string;
+  chatId: string;
+  instanceId: string;
+  /** Epoch ms. */
+  expiresAt: number;
 }
 
 /**
@@ -1227,6 +1276,9 @@ export interface EventPayloadMap {
   'access.device_code_approved': AccessDeviceCodeApprovedPayload;
   'access.device_authorized': AccessDeviceAuthorizedPayload;
   'access.connect_link_issued': AccessConnectLinkIssuedPayload;
+  'access.key_minted': AccessKeyMintedPayload;
+  'access.key_revoked': AccessKeyRevokedPayload;
+  'access.key_updated': AccessKeyUpdatedPayload;
   'sync.started': SyncStartedPayload;
   'sync.progress': SyncProgressPayload;
   'sync.completed': SyncCompletedPayload;
