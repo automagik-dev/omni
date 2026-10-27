@@ -352,6 +352,17 @@ export function install(rt) {
   }
 
   const live = (entry, link) => entry !== undefined && entry.pending === null && link !== null && sameOmni(link.url, entry.origin)
+  // Why a thread is not connected, from a read of the file and the link; null when it is.
+  function reasonIn(file, link, threadId) {
+    const entry = file.threads[threadId]
+    if (live(entry, link)) return null
+    if (entry?.pending) return BEING_CUT
+    if (link === null) return NOT_LINKED
+    const waiting = file.waiting[threadId]
+    const origin = entry?.origin ?? waiting?.origin
+    if (origin === undefined) return NO_KEY
+    return sameOmni(link.url, origin) ? waiting?.reason ?? NO_KEY : OTHER_OMNI
+  }
 
   rt.threadKeys = {
     // A thread's key, made with the link key. On a failure nothing is written and the reason
@@ -388,17 +399,12 @@ export function install(rt) {
       return live(entry, rt.omniLink?.() ?? null) ? entry.key : null
     },
     connected: threadId => rt.threadKeys.keyFor(threadId) !== null,
-    reasonOf: (threadId) => {
-      const link = rt.omniLink?.() ?? null
+    reasonOf: threadId => reasonIn(read(), rt.omniLink?.() ?? null, threadId),
+    // Each thread's reason from one read of the file and the link, for a view of many threads.
+    reasonsOf: (threadIds) => {
       const file = read()
-      const entry = file.threads[threadId]
-      if (live(entry, link)) return null
-      if (entry?.pending) return BEING_CUT
-      if (link === null) return NOT_LINKED
-      const waiting = file.waiting[threadId]
-      const origin = entry?.origin ?? waiting?.origin
-      if (origin === undefined) return NO_KEY
-      return sameOmni(link.url, origin) ? waiting?.reason ?? NO_KEY : OTHER_OMNI
+      const link = rt.omniLink?.() ?? null
+      return new Map([...threadIds].map(threadId => [threadId, reasonIn(file, link, threadId)]))
     },
     // The thread is gone: its key is cut, or kept pending until a drain cuts it.
     revoke: threadId => serial(async () => {

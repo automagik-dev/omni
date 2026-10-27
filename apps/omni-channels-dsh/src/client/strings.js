@@ -186,6 +186,8 @@ export const STRINGS = {
   'Not answering right now.': '目前没有响应。',
   'Disconnect from {origin}? Your Bots stop seeing its channels until you connect again.': '要断开与 {origin} 的连接吗？在你重新连接之前，你的 Bot 将看不到它的渠道。',
   'Looking for your Omni…': '正在查找你的 Omni…',
+  'Reactions without asking': '无需询问的回应',
+  'In a chat thread, these reactions go without asking you first. Any other reaction, and every message, asks each time.': '在聊天线程中，这些回应会直接发出，不先询问你。其他回应以及每条消息，每次都会询问。',
   'This page shows sample data until this DSH is linked to your Omni.': '在这个 DSH 关联到你的 Omni 之前，此页面显示示例数据。',
   'Use it with an API key': '用 API 密钥使用它',
   'Older Omnis can\'t approve this app. Paste its API key instead; it stays on this computer.': '较旧的 Omni 无法批准这个应用。请改为粘贴它的 API 密钥；密钥只保存在这台电脑上。',

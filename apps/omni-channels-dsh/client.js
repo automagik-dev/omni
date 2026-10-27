@@ -14498,6 +14498,60 @@ async function runSettingsAction(id, { info, close = () => {
   }
   return null;
 }
+var parseReactions = (text) => String(text ?? "").split(/[\s,]+/).filter(Boolean);
+async function saveFreeReactions(text, { reset = false, defaults = [], request = call } = {}) {
+  return request("omni-free-reactions-save", { freeReactions: reset ? [...defaults] : parseReactions(text) });
+}
+function FreeReactionsCard() {
+  const [list, setList] = (0, import_react10.useState)(void 0);
+  const [text, setText] = (0, import_react10.useState)("");
+  const [busy, setBusy] = (0, import_react10.useState)(false);
+  const [note, setNote] = (0, import_react10.useState)(null);
+  const alive = (0, import_react10.useRef)(true);
+  (0, import_react10.useEffect)(() => () => {
+    alive.current = false;
+  }, []);
+  const show = (reply) => {
+    if (!alive.current) return;
+    setList(reply);
+    setText(reply.freeReactions.join(" "));
+  };
+  (0, import_react10.useEffect)(() => {
+    call("omni-free-reactions").then(show, () => {
+    });
+  }, []);
+  const save = async (reset) => {
+    setBusy(true);
+    setNote(null);
+    try {
+      show(await saveFreeReactions(text, { reset, defaults: list?.defaults }));
+      if (alive.current) setNote({ ok: true, text: t("Saved.") });
+    } catch (error) {
+      if (alive.current) setNote({ ok: false, text: error.message });
+    } finally {
+      if (alive.current) setBusy(false);
+    }
+  };
+  if (list === void 0) return null;
+  return (0, import_react10.createElement)(
+    "section",
+    { className: "oset-card" },
+    (0, import_react10.createElement)(
+      "div",
+      { className: "oset-text" },
+      (0, import_react10.createElement)("strong", null, t("Reactions without asking")),
+      (0, import_react10.createElement)("p", { className: "oset-muted" }, t("In a chat thread, these reactions go without asking you first. Any other reaction, and every message, asks each time.")),
+      (0, import_react10.createElement)("input", { className: "oset-input", value: text, disabled: busy, "aria-label": t("Reactions without asking"), onChange: (event) => setText(event.target.value) }),
+      note ? (0, import_react10.createElement)("p", { className: note.ok ? "oset-muted" : "oset-problem", role: note.ok ? "status" : "alert" }, note.text) : null
+    ),
+    (0, import_react10.createElement)(
+      "div",
+      { className: "oset-actions" },
+      (0, import_react10.createElement)("button", { type: "button", className: "oset-button oset-primary", disabled: busy, onClick: () => save(false) }, t("Save")),
+      (0, import_react10.createElement)("button", { type: "button", className: "oset-button", disabled: busy, onClick: () => save(true) }, t("Reset"))
+    )
+  );
+}
 function OmniSettingsSection({ close }) {
   const [info, setInfo] = (0, import_react10.useState)(void 0);
   const [confirming, setConfirming] = (0, import_react10.useState)(false);
@@ -14550,7 +14604,8 @@ function OmniSettingsSection({ close }) {
         onClick: () => act(action.id)
       }, action.label)))
     ),
-    problem ? (0, import_react10.createElement)("p", { className: "oset-problem", role: "alert" }, problem) : null
+    problem ? (0, import_react10.createElement)("p", { className: "oset-problem", role: "alert" }, problem) : null,
+    info?.linked ? (0, import_react10.createElement)(FreeReactionsCard) : null
   );
 }
 var OMNI_SETTINGS_CSS = `
@@ -14566,6 +14621,7 @@ var OMNI_SETTINGS_CSS = `
 .oset-primary{border:0;background:linear-gradient(135deg,#22d3ee,#ff3bd4);color:#06060f}
 .oset-danger{background:#e5484d;color:#fff}
 .oset-problem{margin:0;color:#e5484d;font-size:13px}
+.oset-input{margin-top:6px;height:36px;padding:0 12px;border-radius:10px;border:1px solid color-mix(in srgb,currentColor 22%,transparent);background:none;color:inherit;font:inherit;font-size:16px;letter-spacing:.12em}
 `;
 function registerSettings(ctx) {
   ctx.effect(() => {
@@ -15842,6 +15898,8 @@ var STRINGS = {
   "Not answering right now.": "目前没有响应。",
   "Disconnect from {origin}? Your Bots stop seeing its channels until you connect again.": "要断开与 {origin} 的连接吗？在你重新连接之前，你的 Bot 将看不到它的渠道。",
   "Looking for your Omni…": "正在查找你的 Omni…",
+  "Reactions without asking": "无需询问的回应",
+  "In a chat thread, these reactions go without asking you first. Any other reaction, and every message, asks each time.": "在聊天线程中，这些回应会直接发出，不先询问你。其他回应以及每条消息，每次都会询问。",
   "This page shows sample data until this DSH is linked to your Omni.": "在这个 DSH 关联到你的 Omni 之前，此页面显示示例数据。",
   "Use it with an API key": "用 API 密钥使用它",
   "Older Omnis can't approve this app. Paste its API key instead; it stays on this computer.": "较旧的 Omni 无法批准这个应用。请改为粘贴它的 API 密钥；密钥只保存在这台电脑上。",

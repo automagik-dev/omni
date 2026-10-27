@@ -65,6 +65,57 @@ export async function runSettingsAction(id, { info, close = () => {}, request = 
   return null
 }
 
+// The chat threads' free reactions (host thread-tools.js): the emojis a thread reacts with
+// without asking, shared by every thread. Typed as one line, separated by spaces or commas.
+export const parseReactions = text => String(text ?? '').split(/[\s,]+/).filter(Boolean)
+
+/**
+ * Saves the list typed in the card (`omni-free-reactions-save`), or the defaults with
+ * `reset`. Resolves the host's answer, `{ freeReactions, defaults }`.
+ */
+export async function saveFreeReactions(text, { reset = false, defaults = [], request = call } = {}) {
+  return request('omni-free-reactions-save', { freeReactions: reset ? [...defaults] : parseReactions(text) })
+}
+
+export function FreeReactionsCard() {
+  const [list, setList] = useState(undefined)
+  const [text, setText] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState(null)
+  const alive = useRef(true)
+  useEffect(() => () => { alive.current = false }, [])
+  const show = (reply) => {
+    if (!alive.current) return
+    setList(reply)
+    setText(reply.freeReactions.join(' '))
+  }
+  useEffect(() => {
+    call('omni-free-reactions').then(show, () => {})
+  }, [])
+  const save = async (reset) => {
+    setBusy(true)
+    setNote(null)
+    try {
+      show(await saveFreeReactions(text, { reset, defaults: list?.defaults }))
+      if (alive.current) setNote({ ok: true, text: t('Saved.') })
+    } catch (error) {
+      if (alive.current) setNote({ ok: false, text: error.message })
+    } finally {
+      if (alive.current) setBusy(false)
+    }
+  }
+  if (list === undefined) return null
+  return h('section', { className: 'oset-card' },
+    h('div', { className: 'oset-text' },
+      h('strong', null, t('Reactions without asking')),
+      h('p', { className: 'oset-muted' }, t('In a chat thread, these reactions go without asking you first. Any other reaction, and every message, asks each time.')),
+      h('input', { className: 'oset-input', value: text, disabled: busy, 'aria-label': t('Reactions without asking'), onChange: event => setText(event.target.value) }),
+      note ? h('p', { className: note.ok ? 'oset-muted' : 'oset-problem', role: note.ok ? 'status' : 'alert' }, note.text) : null),
+    h('div', { className: 'oset-actions' },
+      h('button', { type: 'button', className: 'oset-button oset-primary', disabled: busy, onClick: () => save(false) }, t('Save')),
+      h('button', { type: 'button', className: 'oset-button', disabled: busy, onClick: () => save(true) }, t('Reset'))))
+}
+
 export function OmniSettingsSection({ close }) {
   const [info, setInfo] = useState(undefined)
   const [confirming, setConfirming] = useState(false)
@@ -105,7 +156,8 @@ export function OmniSettingsSection({ close }) {
         disabled: busy,
         onClick: () => act(action.id),
       }, action.label)))),
-    problem ? h('p', { className: 'oset-problem', role: 'alert' }, problem) : null)
+    problem ? h('p', { className: 'oset-problem', role: 'alert' }, problem) : null,
+    info?.linked ? h(FreeReactionsCard) : null)
 }
 
 export const OMNI_SETTINGS_CSS = `
@@ -121,6 +173,7 @@ export const OMNI_SETTINGS_CSS = `
 .oset-primary{border:0;background:linear-gradient(135deg,#22d3ee,#ff3bd4);color:#06060f}
 .oset-danger{background:#e5484d;color:#fff}
 .oset-problem{margin:0;color:#e5484d;font-size:13px}
+.oset-input{margin-top:6px;height:36px;padding:0 12px;border-radius:10px;border:1px solid color-mix(in srgb,currentColor 22%,transparent);background:none;color:inherit;font:inherit;font-size:16px;letter-spacing:.12em}
 `
 
 // Registers the page on DSH's settings.section slot, which ui-settings declares in its own

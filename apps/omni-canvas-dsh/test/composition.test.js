@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { TEAM_TOOLS } from '@automagik/bots-dsh/src/host/constants.js'
+import { THREAD_TOOLS } from '@automagik/omni-channels-dsh/src/host/threads.js'
 import * as plugin from '../index.js'
 import { applyAll, composed, fakeContext, teamFile } from './team.js'
 
@@ -74,12 +75,13 @@ function services(ctx) {
   return ctx
 }
 
-test('with all three plugins, the team registers exactly the tools TEAM_TOOLS names', async (t) => {
+// The channels plugin's own tools, the chat threads' (THREAD_TOOLS), come on top.
+test('with all three plugins, the team registers exactly the tools TEAM_TOOLS names, plus the channels plugin\'s own', async (t) => {
   const ctx = services(fakeContext())
   const home = mkdtempSync(join(tmpdir(), 'omni-canvas-all-'))
   applyAll(ctx, { home, browser: true })
   t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
-  assert.deepEqual([...ctx.registeredTools.keys()].sort(), [...TEAM_TOOLS].sort())
+  assert.deepEqual([...ctx.registeredTools.keys()].sort(), [...TEAM_TOOLS, ...THREAD_TOOLS].sort())
   // This plugin's own come last, and it adds no llm/stream listener.
   const own = ctx.calls.slice(ctx.calls.indexOf('provide omniChannels') + 1)
   assert.deepEqual(own, ['effect ds-bot: canvas rules', 'tool show_canvas'])

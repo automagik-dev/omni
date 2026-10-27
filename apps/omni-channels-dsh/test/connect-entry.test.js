@@ -10,7 +10,7 @@ import { omni } from './omni-client.js'
 // install. Bundled as DSH bundles the client, with a React that builds plain element trees.
 async function load() {
   const entry = `
-    export { settingsView, runSettingsAction, registerSettings, OmniSettingsSection } from './omni-settings.js'
+    export { settingsView, runSettingsAction, registerSettings, OmniSettingsSection, parseReactions, saveFreeReactions } from './omni-settings.js'
     export { autoOpenOnce, openConnectWizard, closeConnectWizard, wizardOpen, ConnectPrompt, AUTO_OPENED } from './wizard.js'
     export { noteStepShown, stepShown } from './onboarding.js'
   `
@@ -85,6 +85,19 @@ test('Disconnect is asked first, then removes the link and shows the card unlink
   assert.deepEqual(asked, ['omni-disconnect', 'refresh', 'omni-link-info'])
   assert.deepEqual(done, { info: { linked: false, configured: false }, confirming: false })
   assert.equal(plain(ui.settingsView(done.info)).title, 'Connect your Omni')
+})
+
+test('the free reactions are typed as one line and saved through the host, or put back to the defaults', async () => {
+  assert.deepEqual(plain(ui.parseReactions(' 👍 ❤️,😂  🙏 ')), ['👍', '❤️', '😂', '🙏'])
+  assert.deepEqual(plain(ui.parseReactions('')), [])
+  const sent = []
+  const request = async (endpoint, body) => {
+    sent.push([endpoint, body])
+    return { freeReactions: body.freeReactions, defaults: ['👍'] }
+  }
+  assert.deepEqual(plain(await ui.saveFreeReactions('🔥, ❤', { request })), { freeReactions: ['🔥', '❤'], defaults: ['👍'] })
+  await ui.saveFreeReactions('🔥', { reset: true, defaults: ['👍', '🙏'], request })
+  assert.deepEqual(plain(sent), [['omni-free-reactions-save', { freeReactions: ['🔥', '❤'] }], ['omni-free-reactions-save', { freeReactions: ['👍', '🙏'] }]])
 })
 
 test('the Omni page registers on DSH\'s settings.section slot', () => {

@@ -1,8 +1,9 @@
 // Chat threads: each chat the owner adds under the Omni Bot is a thread, a plain DSH Session
 // this plugin makes (rt.createSession, in the team's workspace), never a Bot, a Tasks Session
 // or a run. It works on a chat key of its own (thread-keys.js), is held to its own chat tools
-// by one guard here, runs on the Omni Bot's model and follows it, and is drawn under the Omni
-// Bot from the records in state.omniThreads, which carry no key.
+// (thread-tools.js) by one guard here and by DSH's restrict() there, runs on the Omni Bot's
+// model and follows it, and is drawn under the Omni Bot from the records in
+// state.omniThreads, which carry no key.
 //
 // A restart that cuts a thread's turn is the Bot team's to resume, once, its own way: the
 // thread reaches its pass through the restart hook (resume-hook.js) only while a turn of it
@@ -231,7 +232,6 @@ export function install(rt) {
   })
 
   const ready = () => rt.teamResume?.ready === true
-  const reasonOf = thread => (ready() ? rt.threadKeys?.reasonOf(thread.id) ?? null : rt.teamResume?.reason ?? NEEDS_NEWER_TEAM)
 
   // Omni's answer, read with the link key; `null` when no Omni is linked here.
   async function ask(path) {
@@ -373,9 +373,12 @@ export function install(rt) {
   rt.threadsView = () => {
     const live = rt.readOnly?.() === undefined
     const linked = (rt.omniLink?.() ?? null) !== null
+    const threadList = list()
+    // Each thread's reason, from one read of the key file; the team's own on a team without the hook.
+    const reasons = ready() ? rt.threadKeys?.reasonsOf(threadList.map(thread => thread.id)) ?? new Map() : null
     return {
-      omniThreads: list().map((thread) => {
-        const reason = reasonOf(thread)
+      omniThreads: threadList.map((thread) => {
+        const reason = reasons === null ? rt.teamResume?.reason ?? NEEDS_NEWER_TEAM : reasons.get(thread.id) ?? null
         const status = live && rt.teamResume?.running?.(thread.sessionId) !== true ? 'idle' : thread.status ?? 'idle'
         return { id: thread.id, sessionId: thread.sessionId, chatId: thread.chatId, channelId: thread.channelId, title: thread.title, status, connected: reason === null, reason }
       }),

@@ -9,6 +9,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { operatesOmni } from './grants.js'
 import { output } from './output.js'
 import { SOURCE_ROUTES } from './omni-routes.js'
+import { THREAD_TOOLS } from './threads.js'
 
 const SPEC_TTL_MS = 10 * 60_000
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
@@ -168,21 +169,21 @@ export function install(rt) {
     const self = rt.selfOf(sessionId)
     return operatesOmni(rt, self)
   }
-  const trimmed = new WeakSet()
-  const trimComputer = (agent) => {
-    if (agent === undefined || trimmed.has(agent) || !operating(agent.session?.id) || typeof agent.ctx?.tools?.restrict !== 'function') return
-    // restrict() refuses a name that is not a global tool here (a scope-local `subagent`, a
-    // tool this dsh does not ship), and refuses the whole list for it. Restrictions
-    // intersect, so each tool is denied on its own and a refused one is skipped.
+  // restrict() refuses a name that is not a global tool here (a scope-local `subagent`, a
+  // tool this dsh does not ship), and refuses the whole list for it. Restrictions intersect,
+  // so each tool is denied on its own and a refused one is skipped. `trimmed`: the agents
+  // this list was trimmed from.
+  const trimFrom = (agent, names, trimmed, what) => {
+    if (trimmed.has(agent) || typeof agent.ctx?.tools?.restrict !== 'function') return
     let served
     try {
       served = new Set(ctx.tools.schemas(agent).map(schema => schema.name))
     } catch (error) {
-      rt.warn('ds-bot: the computer tools stay in the Main Bot session %s: %s', agent.session?.id, error)
+      rt.warn('ds-bot: the %s stay in the Main Bot session %s: %s', what, agent.session?.id, error)
       return
     }
     let denied = 0
-    for (const name of COMPUTER_TOOLS.filter(name => served.has(name))) {
+    for (const name of names.filter(name => served.has(name))) {
       try {
         agent.ctx.tools.restrict({ deny: [name] })
         denied += 1
@@ -191,10 +192,23 @@ export function install(rt) {
     // Nothing denied can mean the schemas are not up yet: the next refusal tries again.
     if (denied > 0) trimmed.add(agent)
   }
+  const trimmedComputer = new WeakSet()
+  const trimComputer = (agent) => {
+    if (agent === undefined || !operating(agent.session?.id)) return
+    trimFrom(agent, COMPUTER_TOOLS, trimmedComputer, 'computer tools')
+  }
+  // A chat thread's tools are for its own Session only (thread-tools.js): the Omni Bot's
+  // Sessions never list them, whether or not an Omni is named yet.
+  const trimmedThread = new WeakSet()
+  const trimThreadTools = (agent) => {
+    if (agent === undefined || !operatesOmni(rt, rt.selfOf(agent.session?.id))) return
+    trimFrom(agent, THREAD_TOOLS, trimmedThread, 'chat thread tools')
+  }
   ctx.on('agent/created', async ({ agent }) => {
     try {
       await rt.load()
       trimComputer(agent)
+      trimThreadTools(agent)
     } catch (error) {
       rt.warn('ds-bot: trimming the Main Bot tools failed: %s', error)
     }

@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { TEAM_TOOLS } from '@automagik/bots-dsh/src/host/constants.js'
 import * as plugin from '../index.js'
+import { THREAD_TOOLS } from '../src/host/threads.js'
 import { applyBoth, composed, fakeContext, teamFile } from './team.js'
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 20))
@@ -104,11 +105,12 @@ test('the Omni endpoints are this plugin\'s, served on the team\'s route, and go
   assert.equal((await call('omni-overview', {})).error.code, 'bot/not-found')
 })
 
-// show_canvas is the canvas plugin's, which checks the whole list.
-test('with this plugin, the team registers the tools TEAM_TOOLS names but show_canvas', async (t) => {
+// show_canvas is the canvas plugin's, which checks the whole list. The plugin's own tools,
+// the chat threads' (THREAD_TOOLS), come on top.
+test('with this plugin, the team registers the tools TEAM_TOOLS names but show_canvas, plus the plugin\'s own', async (t) => {
   const { ctx, stop } = start(undefined, { config: { browser: true } })
   t.after(stop)
-  assert.deepEqual([...ctx.registeredTools.keys()].sort(), TEAM_TOOLS.filter(name => name !== 'show_canvas').sort())
+  assert.deepEqual([...ctx.registeredTools.keys()].sort(), [...TEAM_TOOLS.filter(name => name !== 'show_canvas'), ...THREAD_TOOLS].sort())
 })
 
 // The text a Main Bot's prompt had when the Omni parts were part of the team's prompt.js
@@ -224,6 +226,16 @@ test('apply registers its listeners, tools and effects after the team\'s, in a f
     'effect omni-channels: omni-thread-chats',
     'effect omni-channels: omni-thread-add',
     'effect omni-channels: omni-thread-remove',
+    'tool thread_say',
+    'tool thread_react',
+    'tool thread_history',
+    'tool thread_picture',
+    'tool thread_ask_omni',
+    'on tools/pre-execute (prepend)',
+    'effect omni-channels: thread tool lists',
+    'on agent/created',
+    'effect omni-channels: omni-free-reactions',
+    'effect omni-channels: omni-free-reactions-save',
     'effect ds-bot: omni events view',
     'effect ds-bot: omni events',
     'effect omni-channels: omni-channel-abilities',
