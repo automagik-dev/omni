@@ -26,6 +26,22 @@ const invalid = message => Object.assign(new Error(message), { code: 'bot/invali
 export const COMPUTER_TOOLS = ['bash', 'read', 'write', 'edit', 'glob', 'grep', 'subagent', 'subagent_fork', 'workflow', 'job_kill', 'job_list', 'job_output', 'todo_write', 'working_directory']
 const COMPUTER_REFUSAL = 'Omni works through its own tools, not files or the shell. Hand this to a task with start_task.'
 
+// Chat keys (POST /keys/children…) answer with key text, which must never reach a model: the
+// host mints and revokes them itself, so omni_call refuses them before any request and
+// omni_endpoints never lists them.
+const KEY_ROUTE = /^\/keys\/children(\/|$)/
+export const KEY_ROUTE_REFUSAL = 'Chat keys are not an operation for a Bot: this app mints and revokes them itself, and their answers carry key text.'
+
+/** Whether a path, as fetch and omni would route it (percent-decoded, slashes collapsed, dot segments resolved), is a chat-key route. */
+export function isKeyRoute(path) {
+  let decoded = String(path ?? '')
+  try { decoded = decodeURIComponent(decoded) } catch { /* malformed: test it as written */ }
+  const collapsed = decoded.replace(/\/{2,}/g, '/')
+  let resolved = collapsed
+  try { resolved = new URL(collapsed, 'http://omni.invalid').pathname } catch { /* test it as collapsed */ }
+  return KEY_ROUTE.test(collapsed) || KEY_ROUTE.test(resolved)
+}
+
 // "/instances/{id}/qr" → /^\/instances\/[^/]+\/qr$/
 const patternOf = path => new RegExp(`^${path.replace(/[.*+?^$()|[\]\\]/g, '\\$&').replace(/\\?\{[^}]+\\?\}/g, '[^/]+')}$`)
 
@@ -196,7 +212,7 @@ export function install(rt) {
     const response = await rt.omniRequest('GET', '/openapi.json')
     if (response === null) throw invalid('Omni is not connected here: connect one on the Channels page (pair by code).')
     if (!response.ok) throw invalid(`omni answered ${response.status} for its API description`)
-    spec = { at: Date.now(), ops: withSourceRoutes(operationsOf(await response.json())) }
+    spec = { at: Date.now(), ops: withSourceRoutes(operationsOf(await response.json())).filter(op => !isKeyRoute(op.path)) }
     return spec.ops
   }
 
@@ -268,6 +284,7 @@ export function install(rt) {
         if (!METHODS.includes(method)) throw invalid(`method must be one of ${METHODS.join(', ')}`)
         const path = String(args.path ?? '').trim().replace(/^\/api\/v2(?=\/)/, '')
         if (!/^\/[A-Za-z0-9/_\-.~%:@]*$/.test(path)) throw invalid('path must be an API path such as /instances/<id>, without the host or a query string')
+        if (isKeyRoute(path)) throw invalid(KEY_ROUTE_REFUSAL)
         const op = findOperation(await operations(), method, path)
         if (!op) throw invalid(`${method} ${path} is not an omni API operation. Find it with omni_endpoints.`)
         const query = parse(args.query, 'query')
@@ -299,6 +316,8 @@ export function install(rt) {
     },
   }))
   async function runCall({ method, path, query, body }, op) {
+    // A confirmed card runs here too: it never reaches a chat-key route either.
+    if (isKeyRoute(path)) return fitted({ status: 0, error: KEY_ROUTE_REFUSAL })
     const qs = query && typeof query === 'object' ? new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined && value !== null).map(([key, value]) => [key, typeof value === 'object' ? JSON.stringify(value) : String(value)])).toString() : ''
     const result = await call(method, `${path}${qs ? `?${qs}` : ''}`, body)
     return fitted({ status: result.status, operation: op?.summary ?? `${method} ${path}`, data: result.data })
@@ -476,17 +495,16 @@ export function install(rt) {
         const { chat } = await chatResource(args.chat)
         const message = await messageIn(chat, args.message)
         if (!message.hasMedia) throw invalid('That message has no media')
-        const ready = await call('POST', '/messages/media/download', { messageId: message.id })
-        const where = ready.data?.data?.mediaLocalPath
-        if (!ok(ready) || typeof where !== 'string') throw invalid(ready.data?.error?.message ?? `omni answered ${ready.status} for that media`)
-        const response = await rt.omniRequest('GET', `/media/${where.split('/').map(encodeURIComponent).join('/')}`)
-        if (response === null || !response.ok) throw invalid(`omni answered ${response?.status ?? 'nothing'} for the file`)
+        // The same download as the chat view's (omni.js), refusing a path outside /media.
+        const media = await rt.omniMediaFile(message.id)
+        if (!media.ok) throw invalid(media.reason)
+        const { response, path: where } = media
         // Each Bot's files apart, under its own id.
         const dir = join(rt.home, 'media', String(args.bot ?? 'bot').replace(/[^\w-]/g, '_'))
         mkdirSync(dir, { recursive: true, mode: 0o700 })
         const file = join(dir, `${message.id}-${basename(where)}`)
         writeFileSync(file, Buffer.from(await response.arrayBuffer()), { mode: 0o600 })
-        return fitted({ status: 200, operation: 'Media', data: { path: file, type: message.messageType, mimeType: ready.data.data.mediaMimeType ?? null, text: message.transcription || undefined } })
+        return fitted({ status: 200, operation: 'Media', data: { path: file, type: message.messageType, mimeType: media.stored.mediaMimeType ?? null, text: message.transcription || undefined } })
       },
     },
     omni_delete: {

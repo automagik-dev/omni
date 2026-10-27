@@ -8,111 +8,35 @@ import { zValidator } from '@hono/zod-validator';
 import type { ChannelRegistry } from '@omni/channel-sdk';
 import { ChannelTypeSchema, ERROR_CODES, OmniError } from '@omni/core';
 import type { ChannelType } from '@omni/core/types';
-import { apiKeys } from '@omni/db/schema';
-import { eq } from 'drizzle-orm';
 import type { Context } from 'hono';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { checkInstanceAccess, resolveChatIdParam } from '../../lib/resolve-chat-id';
 import { clearAgentSession } from '../../plugins/session-cleaner';
 import { optionalDateParam } from '../../schemas/date-query';
 import type { Services } from '../../services';
-import { ApiKeyService } from '../../services/api-keys';
-import type { ApiKeyData, AppVariables } from '../../types';
+import { withIsGroup } from '../../services/chats';
+import type { AppVariables } from '../../types';
 
 const chatsRoutes = new Hono<{ Variables: AppVariables }>();
 
-/**
- * Standard UUID v1-v5 pattern. Mirrors the regex used in app.ts:148 and the
- * service-layer test suites — kept as a private const here so the route file
- * doesn't need a new shared util.
- */
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+// `:id` is resolved by lib/resolve-chat-id.ts, shared with the scope lock: for
+// a key with an instance lock the lock has already resolved it and handed the
+// row over (`c.get('resolvedChat')`), and `resolveChatIdParam` returns its id.
 
 /**
- * Verify API key has access to the given instance.
+ * The chat row for a resolved `:id`, as `services.chats.getById(id)` reads it
+ * (a hidden chat is not found). The row the lock handed over for the same
+ * `raw` is reused when it is not hidden; otherwise the row is read again. Only
+ * for a read before the route changes the chat: a read after a change must go
+ * to the database.
  */
-function checkInstanceAccess(apiKey: ApiKeyData | undefined, instanceId: string): void {
-  if (apiKey && !ApiKeyService.instanceAllowed(apiKey.instanceIds, instanceId)) {
-    throw new OmniError({
-      code: ERROR_CODES.VALIDATION,
-      message: 'API key does not have access to this instance',
-      context: { instanceId },
-      recoverable: false,
-    });
+async function chatForRoute(c: Context<{ Variables: AppVariables }>, raw: string, id: string) {
+  const handed = c.get('resolvedChat');
+  if (handed && handed.raw === raw && handed.chat.id === id && handed.chat.visibility !== 'hidden') {
+    return withIsGroup(handed.chat);
   }
-}
-
-/**
- * Resolve the active instance for an API key. Reads `contextInstanceId` first
- * (set via POST /context) then falls back to `activeInstanceId` (set via
- * POST /context/use). Returns null when neither is set — callers MUST 400
- * the request rather than guess across the API key's authorized instances.
- */
-async function getActiveInstanceId(c: Context<{ Variables: AppVariables }>): Promise<string | null> {
-  const keyData = c.get('apiKey');
-  if (!keyData) return null;
-  const db = c.get('db');
-  const [row] = await db
-    .select({
-      activeInstanceId: apiKeys.activeInstanceId,
-      contextInstanceId: apiKeys.contextInstanceId,
-    })
-    .from(apiKeys)
-    .where(eq(apiKeys.id, keyData.id))
-    .limit(1);
-  return row?.contextInstanceId ?? row?.activeInstanceId ?? null;
-}
-
-/**
- * Resolve a `:id` URL param to a chat's internal UUID.
- *
- * - If the param already looks like a UUID, return it unchanged. The caller's
- *   service layer will 404 if no chat exists with that UUID.
- * - Otherwise treat it as a platform-native id (WhatsApp JID like
- *   `120363...@g.us`, Telegram numeric id, Discord channel id, ...) and look
- *   it up via `findByExternalIdSmart`. Requires the API key to have an
- *   active instance set (via POST /context or POST /context/use), or an
- *   explicit `instanceId` to use for the lookup.
- *
- * Returns null when:
- *   - The param is not a UUID and no instance context is available.
- *   - The param is not a UUID and no chat with that external id exists in
- *     the resolved instance.
- *
- * History
- * -------
- * Before this helper, every `chatsRoutes.<verb>('/:id*')` passed the raw URL
- * param straight to a service method that called `eq(<uuid_col>, raw)`. When
- * a client (omni CLI's `omni history`, omni-mcp tools, custom integrations)
- * called with the platform-native id, postgres-js rejected with
- *   PostgresError: invalid input syntax for type uuid: "120363...@g.us"
- * → 500 Server error. Same shape as the LID fix in b5929040 — we just missed
- * the routes that didn't go through `getByExternalId`.
- */
-async function resolveChatIdParam(
-  c: Context<{ Variables: AppVariables }>,
-  raw: string,
-  explicitInstanceId?: string,
-): Promise<string | null> {
-  if (UUID_REGEX.test(raw)) return raw;
-  const instanceId = explicitInstanceId ?? (await getActiveInstanceId(c));
-  if (!instanceId) return null;
-
-  // Authorize BEFORE looking up the chat. Without this gate, a caller who
-  // can't access `instanceId` would observe two distinct responses:
-  //   - chat exists  → checkInstanceAccess later in the handler throws 403
-  //   - chat absent  → resolver returns null, route returns 404
-  // That's a cross-instance existence oracle. Throwing here makes both
-  // states return the same 403 (VALIDATION) before any DB lookup happens.
-  // The check is a no-op for API keys with no `instanceIds` restriction,
-  // and idempotent — handlers that ALSO call `checkInstanceAccess`
-  // afterward still work; the second call simply matches the same allow
-  // list and returns.
-  checkInstanceAccess(c.get('apiKey'), instanceId);
-
-  const services = c.get('services');
-  const chat = await services.chats.findByExternalIdSmart(instanceId, raw);
-  return chat?.id ?? null;
+  return c.get('services').chats.getById(id);
 }
 
 /**
@@ -324,9 +248,8 @@ chatsRoutes.get('/:id', async (c) => {
   const raw = c.req.param('id');
   const id = await resolveChatIdParam(c, raw);
   if (id === null) return chatNotFoundResponse(c, raw);
-  const services = c.get('services');
 
-  const chat = await services.chats.getById(id);
+  const chat = await chatForRoute(c, raw, id);
 
   return c.json({ data: chat });
 });
@@ -586,7 +509,7 @@ chatsRoutes.post('/:id/pin', zValidator('json', z.object({ instanceId: z.string(
 
   checkInstanceAccess(c.get('apiKey'), instanceId);
 
-  const chat = await services.chats.getById(id);
+  const chat = await chatForRoute(c, raw, id);
   await applyChatModifyOnChannel(services, channelRegistry, instanceId, chat.externalId, 'pin');
 
   return c.json({ success: true, data: { chatId: id, action: 'pin' } });
@@ -605,7 +528,7 @@ chatsRoutes.post('/:id/unpin', zValidator('json', z.object({ instanceId: z.strin
 
   checkInstanceAccess(c.get('apiKey'), instanceId);
 
-  const chat = await services.chats.getById(id);
+  const chat = await chatForRoute(c, raw, id);
   await applyChatModifyOnChannel(services, channelRegistry, instanceId, chat.externalId, 'unpin');
 
   return c.json({ success: true, data: { chatId: id, action: 'unpin' } });
@@ -624,7 +547,7 @@ chatsRoutes.post('/:id/mute', zValidator('json', muteActionSchema), async (c) =>
 
   checkInstanceAccess(c.get('apiKey'), instanceId);
 
-  const chat = await services.chats.getById(id);
+  const chat = await chatForRoute(c, raw, id);
   await applyChatModifyOnChannel(services, channelRegistry, instanceId, chat.externalId, 'mute', duration);
 
   return c.json({ success: true, data: { chatId: id, action: 'mute', duration } });
@@ -643,7 +566,7 @@ chatsRoutes.post('/:id/unmute', zValidator('json', z.object({ instanceId: z.stri
 
   checkInstanceAccess(c.get('apiKey'), instanceId);
 
-  const chat = await services.chats.getById(id);
+  const chat = await chatForRoute(c, raw, id);
   await applyChatModifyOnChannel(services, channelRegistry, instanceId, chat.externalId, 'unmute');
 
   return c.json({ success: true, data: { chatId: id, action: 'unmute' } });
@@ -769,7 +692,7 @@ chatsRoutes.post('/:id/read', zValidator('json', markChatReadSchema), async (c) 
   const channelRegistry = c.get('channelRegistry');
 
   // Get chat from our database
-  const chat = await services.chats.getById(chatId);
+  const chat = await chatForRoute(c, raw, chatId);
 
   // Verify instance matches
   if (chat.instanceId !== instanceId) {
@@ -869,7 +792,7 @@ chatsRoutes.post('/:id/disappearing', zValidator('json', disappearingSchema), as
   checkInstanceAccess(c.get('apiKey'), instanceId);
 
   // Get chat from database
-  const chat = await services.chats.getById(chatId);
+  const chat = await chatForRoute(c, raw, chatId);
 
   // Verify instance matches
   if (chat.instanceId !== instanceId) {

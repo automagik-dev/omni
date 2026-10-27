@@ -25,8 +25,11 @@
  */
 
 import { describe, expect, mock, test } from 'bun:test';
+import { NotFoundError } from '@omni/core';
 import { Hono } from 'hono';
-import type { AppVariables } from '../../../types';
+import { errorHandler } from '../../../middleware/error';
+import { scopeEnforcerMiddleware } from '../../../middleware/scope-enforcer';
+import type { ApiKeyData, AppVariables } from '../../../types';
 import { chatsRoutes } from '../chats';
 
 const VALID_UUID = '11111111-1111-1111-8111-111111111111';
@@ -533,5 +536,244 @@ describe('GET /chats/by-external — reachable, and scoped like the rest', () =>
     expect(res.status).not.toBe(200);
     expect(res.status).not.toBe(404);
     expect(calls.findByExternalIdSmart).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// One resolution: the scope lock resolves `:id` for a key with an instance
+// lock and hands the row to the route, which reads it instead of resolving
+// again — so the lock and the route always name the same chat.
+// ---------------------------------------------------------------------------
+
+const LOCKED_INSTANCE_ID = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+const LOCKED_CHAT_ID = '55555555-5555-4555-8555-555555555555';
+const MISSING_CHAT_ID = '66666666-6666-4666-8666-666666666666';
+
+interface LockedCalls {
+  getChatMessages: string[];
+  getById: string[];
+  findByExternalIdSmart: Array<{ instanceId: string; externalId: string }>;
+}
+
+function chatKey(overrides: Partial<ApiKeyData> = {}): ApiKeyData {
+  return {
+    id: 'chat-key',
+    name: `chat:${LOCKED_CHAT_ID}`,
+    scopes: ['messages:send', 'chats:read', 'context:write', 'turns:close'],
+    instanceIds: [LOCKED_INSTANCE_ID],
+    expiresAt: null,
+    profile: 'cs',
+    chatAllowlist: [LOCKED_CHAT_ID, WHATSAPP_DM_JID],
+    instanceAllowlist: [LOCKED_INSTANCE_ID],
+    outboundRecipientAllowlist: [WHATSAPP_DM_JID],
+    ...overrides,
+  };
+}
+
+function mountLocked(
+  key: ApiKeyData,
+  contextInstanceId: string | null,
+  handOver?: { raw: string; chatId: string },
+): { app: Hono<{ Variables: AppVariables }>; calls: LockedCalls } {
+  const calls: LockedCalls = { getChatMessages: [], getById: [], findByExternalIdSmart: [] };
+  const row = { id: LOCKED_CHAT_ID, instanceId: LOCKED_INSTANCE_ID, externalId: WHATSAPP_DM_JID };
+  const app = new Hono<{ Variables: AppVariables }>();
+  app.onError(errorHandler);
+  app.use('*', async (c, next) => {
+    c.set('apiKey', key);
+    c.set('db', {
+      select: () => ({
+        from: () => ({
+          where: () => ({ limit: async () => [{ activeInstanceId: null, contextInstanceId }] }),
+        }),
+      }),
+    } as never);
+    c.set('services', {
+      messages: {
+        getChatMessages: mock(async (chatId: string) => {
+          calls.getChatMessages.push(chatId);
+          return [];
+        }),
+      },
+      chats: {
+        getById: mock(async (id: string) => {
+          calls.getById.push(id);
+          if (id !== LOCKED_CHAT_ID) throw new NotFoundError('Chat', id);
+          return row;
+        }),
+        findByExternalIdSmart: mock(async (instanceId: string, externalId: string) => {
+          calls.findByExternalIdSmart.push({ instanceId, externalId });
+          return instanceId === LOCKED_INSTANCE_ID && externalId === WHATSAPP_DM_JID ? row : null;
+        }),
+        pin: mock(async () => row),
+      },
+      instances: {
+        getById: mock(async (id: string) => ({ id, channel: 'whatsapp-baileys' })),
+      },
+    } as never);
+    if (handOver) c.set('resolvedChat', { raw: handOver.raw, chat: { ...row, id: handOver.chatId } as never });
+    await next();
+  });
+  if (!handOver) app.use('*', scopeEnforcerMiddleware);
+  app.route('/chats', chatsRoutes);
+  return { app, calls };
+}
+
+describe('chat key — /chats/:id/messages resolves once, in the lock', () => {
+  test('a JID with a context instance inside the lock works and names the chat the lock resolved', async () => {
+    const { app, calls } = mountLocked(chatKey(), LOCKED_INSTANCE_ID);
+
+    const res = await app.request(`/chats/${encodeURIComponent(WHATSAPP_DM_JID)}/messages`);
+
+    expect(res.status).toBe(200);
+    // One lookup (the lock's); the route read the row it was handed.
+    expect(calls.findByExternalIdSmart).toEqual([{ instanceId: LOCKED_INSTANCE_ID, externalId: WHATSAPP_DM_JID }]);
+    expect(calls.getChatMessages).toEqual([LOCKED_CHAT_ID]);
+  });
+
+  test('a context instance outside the lock gets 403 before any lookup', async () => {
+    const { app, calls } = mountLocked(chatKey(), FORBIDDEN_INSTANCE_ID);
+
+    const res = await app.request(`/chats/${encodeURIComponent(WHATSAPP_DM_JID)}/messages`);
+
+    expect(res.status).toBe(403);
+    expect(calls.findByExternalIdSmart).toHaveLength(0);
+    expect(calls.getChatMessages).toHaveLength(0);
+  });
+
+  test('history by UUID works without x-omni-instance', async () => {
+    const { app, calls } = mountLocked(chatKey(), null);
+
+    const res = await app.request(`/chats/${LOCKED_CHAT_ID}/messages`);
+
+    expect(res.status).toBe(200);
+    expect(calls.getChatMessages).toEqual([LOCKED_CHAT_ID]);
+  });
+
+  test('history fails closed when the row is missing', async () => {
+    const { app, calls } = mountLocked(chatKey({ chatAllowlist: [MISSING_CHAT_ID, WHATSAPP_DM_JID] }), null);
+
+    const res = await app.request(`/chats/${MISSING_CHAT_ID}/messages`);
+
+    expect(res.status).toBe(403);
+    expect(calls.getChatMessages).toHaveLength(0);
+  });
+
+  test("another chat's history is refused", async () => {
+    const { app, calls } = mountLocked(chatKey(), LOCKED_INSTANCE_ID);
+
+    const res = await app.request(`/chats/${encodeURIComponent(WHATSAPP_GROUP_JID)}/messages`);
+
+    expect(res.status).toBe(403);
+    expect(calls.getChatMessages).toHaveLength(0);
+  });
+});
+
+describe('chat key — a chats.ts route with an explicit instanceId', () => {
+  // A chat- and instance-locked key with chats:write and no recipient lock.
+  const writer = () => chatKey({ scopes: ['chats:write'], outboundRecipientAllowlist: [] });
+
+  test('the lock resolves the JID on the body instanceId, and the route reuses that row', async () => {
+    const { app, calls } = mountLocked(writer(), FORBIDDEN_INSTANCE_ID);
+
+    await app.request(`/chats/${encodeURIComponent(WHATSAPP_DM_JID)}/pin`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ instanceId: LOCKED_INSTANCE_ID }),
+    });
+
+    expect(calls.findByExternalIdSmart).toEqual([{ instanceId: LOCKED_INSTANCE_ID, externalId: WHATSAPP_DM_JID }]);
+  });
+
+  test('a body instanceId outside the lock is refused before any lookup', async () => {
+    const { app, calls } = mountLocked(writer(), LOCKED_INSTANCE_ID);
+
+    const res = await app.request(`/chats/${encodeURIComponent(WHATSAPP_DM_JID)}/pin`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ instanceId: FORBIDDEN_INSTANCE_ID }),
+    });
+
+    expect(res.status).toBe(403);
+    expect(calls.findByExternalIdSmart).toHaveLength(0);
+  });
+});
+
+describe('the route reads the row the lock handed over', () => {
+  test('for the same raw id it does not resolve again', async () => {
+    const handedId = '77777777-7777-4777-8777-777777777777';
+    const { app, calls } = mountLocked(chatKey(), LOCKED_INSTANCE_ID, { raw: WHATSAPP_DM_JID, chatId: handedId });
+
+    const res = await app.request(`/chats/${encodeURIComponent(WHATSAPP_DM_JID)}/messages`);
+
+    expect(res.status).toBe(200);
+    expect(calls.findByExternalIdSmart).toHaveLength(0);
+    expect(calls.getChatMessages).toEqual([handedId]);
+  });
+
+  test('a locked key reads the chat row once: the lock reads it, the route reuses it', async () => {
+    const { app, calls } = mountLocked(chatKey(), null);
+
+    const res = await app.request(`/chats/${LOCKED_CHAT_ID}`);
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { data: { id: string; isGroup: boolean } };
+    expect(body.data.id).toBe(LOCKED_CHAT_ID);
+    expect(body.data.isGroup).toBe(false);
+    expect(calls.getById).toEqual([LOCKED_CHAT_ID]);
+  });
+
+  test('a locked key pinning by JID reads the chat row once, in the lock', async () => {
+    const writer = chatKey({ scopes: ['chats:write'], outboundRecipientAllowlist: [] });
+    const { app, calls } = mountLocked(writer, null);
+
+    const res = await app.request(`/chats/${encodeURIComponent(WHATSAPP_DM_JID)}/pin`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ instanceId: LOCKED_INSTANCE_ID }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(calls.findByExternalIdSmart).toEqual([{ instanceId: LOCKED_INSTANCE_ID, externalId: WHATSAPP_DM_JID }]);
+    expect(calls.getById).toHaveLength(0);
+  });
+
+  test('for another raw id it resolves as before', async () => {
+    const { app, calls } = mountLocked(chatKey(), LOCKED_INSTANCE_ID, { raw: WHATSAPP_GROUP_JID, chatId: VALID_UUID });
+
+    const res = await app.request(`/chats/${encodeURIComponent(WHATSAPP_DM_JID)}/messages`);
+
+    expect(res.status).toBe(200);
+    expect(calls.findByExternalIdSmart).toEqual([{ instanceId: LOCKED_INSTANCE_ID, externalId: WHATSAPP_DM_JID }]);
+    expect(calls.getChatMessages).toEqual([LOCKED_CHAT_ID]);
+  });
+});
+
+describe('a +json body (application/merge-patch+json) resolves as on the base', () => {
+  test('an unlocked key: the route looks the JID up on the validated body instanceId', async () => {
+    const { app, calls } = mountHarness({ apiKeyRow: null });
+
+    const res = await app.request(`/chats/${encodeURIComponent(WHATSAPP_GROUP_JID)}/pin`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/merge-patch+json' },
+      body: JSON.stringify({ instanceId: ACTIVE_INSTANCE_ID }),
+    });
+
+    expect(res.status).toBe(404);
+    expect(calls.findByExternalIdSmart).toEqual([{ instanceId: ACTIVE_INSTANCE_ID, externalId: WHATSAPP_GROUP_JID }]);
+  });
+
+  test('an instance-locked key: a body instanceId outside the lock is refused before any lookup', async () => {
+    const key = chatKey({ scopes: ['chats:write'], outboundRecipientAllowlist: [] });
+    const { app, calls } = mountLocked(key, LOCKED_INSTANCE_ID);
+
+    const res = await app.request(`/chats/${LOCKED_CHAT_ID}/pin`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/merge-patch+json' },
+      body: JSON.stringify({ instanceId: FORBIDDEN_INSTANCE_ID }),
+    });
+
+    expect(res.status).toBe(403);
+    expect(calls.getById).toHaveLength(0);
   });
 });

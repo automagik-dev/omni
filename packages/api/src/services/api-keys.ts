@@ -10,14 +10,30 @@
  * Caching:
  * - Validated API keys are cached with 60s TTL
  * - Cache is invalidated on key update/revoke/delete
+ *
+ * Chat keys (wish: omni-chat-threads):
+ * - A root key may mint `cs` children, each locked to one chat (`mintChild`)
+ * - A child is never wider or longer-lived than its parent: the parent's revoke,
+ *   delete and authority PATCH revoke or clamp its children in the same transaction
+ * - Every child change publishes `access.key_minted` / `access.key_revoked` /
+ *   `access.key_updated` when the service has an event bus
  */
 
-import { createLogger } from '@omni/core';
+import {
+  type AccessKeyRevokeReason,
+  ERROR_CODES,
+  type EventBus,
+  type EventPayloadMap,
+  OmniError,
+  createLogger,
+} from '@omni/core';
 import type { ApiKeyProfile, ApiKeyProfileOverrides, Database } from '@omni/db';
 import { type ApiKey, type NewApiKey, apiKeys } from '@omni/db';
-import { and, eq, gt, isNull, or, sql } from 'drizzle-orm';
+import { type SQL, and, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
+import { z } from 'zod';
 import { CacheKeys, CacheTTL, type CachedApiKey, apiKeyCache, authCacheTtlMs } from '../cache';
 import { SCOPE_IMPLIED_BY } from '../constants/scopes';
+import { resolveProfile } from '../lib/resolve-profile';
 
 const log = createLogger('api-keys');
 
@@ -98,8 +114,134 @@ export type GuardedApiKeyUpdateResult =
   | { status: 'not_found' }
   | { status: 'denied' };
 
+/** At most this many live children per parent key. */
+export const MAX_LIVE_CHILDREN = 500;
+
+/** The `cs` scopes a chat key gets, cut to what its parent holds. */
+export const CS_CHILD_SCOPES = ['messages:send', 'chats:read', 'context:write', 'turns:close'] as const;
+
+/** A chat key needs these to work at all; a parent that cannot grant both mints nothing. */
+const REQUIRED_CHILD_SCOPES: readonly string[] = ['messages:send', 'chats:read'];
+
+export type ChildRevokeReason = AccessKeyRevokeReason;
+
+/** The chat a child key is locked to. */
+export interface ChildChat {
+  /** The chat row's id. */
+  id: string;
+  /** The chat's id on its channel (a WhatsApp JID). */
+  externalId: string;
+  instanceId: string;
+}
+
+export type MintChildResult =
+  | { ok: true; child: ApiKey; plainTextKey: string; replacedKeyId: string | null }
+  | { ok: false; code: 'not_mintable' | 'missing_scope' | 'child_limit'; message: string };
+
+export type RevokeChildResult = { status: 'revoked' | 'already_revoked' | 'not_found' | 'not_own_child' };
+
+export type RevokeSelfResult = { status: 'revoked' | 'already_revoked' | 'not_a_child' };
+
+export interface ApiKeyServiceOptions {
+  /** Publishes the chat-key events; without one, children still cascade, silently. */
+  eventBus?: EventBus | null;
+}
+
+type Tx = Parameters<Parameters<Database['transaction']>[0]>[0];
+
+/** What a transaction did to child keys, settled (cache cleared, events published) after it commits. */
+type ChildChange =
+  | { kind: 'revoked'; child: ApiKey; reason: ChildRevokeReason }
+  | { kind: 'clamped'; child: ApiKey }
+  | { kind: 'minted'; child: ApiKey; chat: ChildChat; replacedKeyId: string | null };
+
+const KeyIdSchema = z.string().uuid();
+
+/** The chat a child is minted for; anything else mints nothing. */
+const ChildChatSchema = z.object({
+  id: z.string().uuid(),
+  externalId: z.string().min(1).max(256),
+  instanceId: z.string().uuid(),
+});
+
+/** Events published per batch when settling child changes. */
+const CHILD_EVENT_BATCH = 50;
+
+/** A PATCH that can narrow what a key covers, so its children must be checked. */
+function touchesChildAuthority(options: UpdateApiKeyOptions): boolean {
+  return options.scopes !== undefined || options.instanceIds !== undefined || options.expiresAt !== undefined;
+}
+
+function isLive(key: Pick<ApiKey, 'status' | 'expiresAt'>, now: number): boolean {
+  return key.status === 'active' && (key.expiresAt === null || key.expiresAt.getTime() > now);
+}
+
+/** Why a key cannot mint children, or null when it can. */
+function notMintableReason(parent: ApiKey | undefined): string | null {
+  if (!parent) return 'parent key not found';
+  if (!isLive(parent, Date.now())) return 'parent key is not active';
+  if (parent.parentKeyId !== null) return 'a child key cannot mint children';
+  if (parent.chatAllowlist.length > 0 || parent.instanceAllowlist.length > 0) {
+    return 'a chat- or instance-locked key cannot mint children';
+  }
+  if (parent.outboundRecipientAllowlist.length > 0) return 'a recipient-locked key cannot mint children';
+  return null;
+}
+
+/** The instances a child is locked to. */
+function childInstances(child: ApiKey): string[] {
+  return child.instanceIds ?? child.instanceAllowlist;
+}
+
+/** Whether the parent still covers every scope and instance the child holds. */
+function parentCoversChild(parent: ApiKey, child: ApiKey): boolean {
+  if (!child.scopes.every((scope) => ApiKeyService.scopeAllows(parent.scopes, scope))) return false;
+  // A child without a legacy instance list reaches every instance on the routes that read only that list.
+  if (child.instanceIds === null && parent.instanceIds !== null) return false;
+  return [...(child.instanceIds ?? []), ...child.instanceAllowlist].every((instanceId) =>
+    parentCoversInstance(parent, instanceId),
+  );
+}
+
+function parentCoversInstance(parent: ApiKey, instanceId: string): boolean {
+  return (
+    ApiKeyService.instanceAllowed(parent.instanceIds, instanceId) &&
+    (parent.instanceAllowlist.length === 0 || parent.instanceAllowlist.includes(instanceId))
+  );
+}
+
+/** Whether a child's post-update row stays inside its parent: scopes, instances and expiry. */
+function childWithinParent(parent: ApiKey | null, child: ApiKey): boolean {
+  if (!parent) return false;
+  if (!parentCoversChild(parent, child)) return false;
+  if (parent.expiresAt === null) return true;
+  return child.expiresAt !== null && child.expiresAt.getTime() <= parent.expiresAt.getTime();
+}
+
+/** A child outliving its parent's expiry is clamped to it; one already narrower is left alone. */
+function needsClamp(parent: ApiKey, child: ApiKey): boolean {
+  if (parent.expiresAt === null) return false;
+  return child.expiresAt === null || child.expiresAt.getTime() > parent.expiresAt.getTime();
+}
+
+function childEventBase(child: ApiKey): { keyId: string; parentKeyId: string; chatId: string; instanceId: string } {
+  return {
+    keyId: child.id,
+    parentKeyId: child.parentKeyId ?? '',
+    chatId: child.chatAllowlist[0] ?? '',
+    instanceId: childInstances(child)[0] ?? '',
+  };
+}
+
 export class ApiKeyService {
-  constructor(private db: Database) {}
+  private readonly eventBus: EventBus | null;
+
+  constructor(
+    private db: Database,
+    options: ApiKeyServiceOptions = {},
+  ) {
+    this.eventBus = options.eventBus ?? null;
+  }
 
   /**
    * Generate a secure random API key
@@ -320,14 +462,39 @@ export class ApiKeyService {
 
     const updates = this.buildUpdateValues(options);
 
-    const [updated] = await this.db.update(apiKeys).set(updates).where(eq(apiKeys.id, id)).returning();
+    if (!touchesChildAuthority(options)) {
+      const [updated] = await this.db.update(apiKeys).set(updates).where(eq(apiKeys.id, id)).returning();
+      if (updated) {
+        await apiKeyCache.delete(CacheKeys.apiKey(updated.keyHash));
+        log.info('API key updated', { id, fields: Object.keys(options) });
+      }
+      return updated ?? null;
+    }
+
+    // The key's row (and a child's parent before it) is locked first, so a
+    // concurrent mint waits for this transaction and then sees the narrowed parent.
+    const { updated, changes } = await this.db.transaction(async (tx) => {
+      const { current, parent } = await this.lockKeyForUpdate(tx, id);
+      if (!current) return { updated: null, changes: [] as ChildChange[] };
+      if (current.parentKeyId !== null && !childWithinParent(parent, { ...current, ...updates } as ApiKey)) {
+        throw new OmniError({
+          code: ERROR_CODES.FORBIDDEN,
+          message: 'A child key cannot exceed its parent key',
+          context: { keyId: id },
+        });
+      }
+      const [row] = await tx.update(apiKeys).set(updates).where(eq(apiKeys.id, id)).returning();
+      if (!row) return { updated: null, changes: [] as ChildChange[] };
+      return { updated: row, changes: await this.reconcileChildren(tx, row) };
+    });
 
     if (updated) {
       await apiKeyCache.delete(CacheKeys.apiKey(updated.keyHash));
       log.info('API key updated', { id, fields: Object.keys(options) });
     }
+    await this.settleChildChanges(changes);
 
-    return updated ?? null;
+    return updated;
   }
 
   /**
@@ -341,8 +508,9 @@ export class ApiKeyService {
     options: UpdateApiKeyOptions,
     guard: ApiKeyAuthorityGuard,
   ): Promise<GuardedApiKeyUpdateResult> {
+    const changes: ChildChange[] = [];
     const result = await this.db.transaction(async (tx): Promise<GuardedApiKeyUpdateResult> => {
-      const [current] = await tx.select().from(apiKeys).where(eq(apiKeys.id, id)).limit(1).for('update');
+      const { current, parent } = await this.lockKeyForUpdate(tx, id);
 
       if (!current) return { status: 'not_found' };
 
@@ -353,19 +521,43 @@ export class ApiKeyService {
       const updates = this.buildUpdateValues(options);
       const next = { ...current, ...updates } as ApiKey;
       if (!(await guard(current, next))) return { status: 'denied' };
+      // A child is never wider or longer-lived than its parent, whoever asks.
+      if (current.parentKeyId !== null && touchesChildAuthority(options) && !childWithinParent(parent, next)) {
+        return { status: 'denied' };
+      }
 
       const [updated] = await tx.update(apiKeys).set(updates).where(eq(apiKeys.id, id)).returning();
       if (!updated) return { status: 'not_found' };
 
+      if (touchesChildAuthority(options)) changes.push(...(await this.reconcileChildren(tx, updated)));
       return { status: 'updated', key: updated };
     });
 
     if (result.status === 'updated') {
       await apiKeyCache.delete(CacheKeys.apiKey(result.key.keyHash));
       log.info('API key updated', { id, fields: Object.keys(options) });
+      await this.settleChildChanges(changes);
     }
 
     return result;
+  }
+
+  /**
+   * Lock a key's row for an update; for a child, its parent's row first (the
+   * order every lineage path takes) and return it too.
+   */
+  private async lockKeyForUpdate(tx: Tx, id: string): Promise<{ current?: ApiKey; parent: ApiKey | null }> {
+    const [peek] = await tx
+      .select({ parentKeyId: apiKeys.parentKeyId })
+      .from(apiKeys)
+      .where(eq(apiKeys.id, id))
+      .limit(1);
+    if (!peek) return { parent: null };
+    const parent = peek.parentKeyId
+      ? ((await tx.select().from(apiKeys).where(eq(apiKeys.id, peek.parentKeyId)).limit(1).for('update'))[0] ?? null)
+      : null;
+    const [current] = await tx.select().from(apiKeys).where(eq(apiKeys.id, id)).limit(1).for('update');
+    return { current, parent };
   }
 
   private buildUpdateValues(options: UpdateApiKeyOptions): Record<string, unknown> {
@@ -416,25 +608,350 @@ export class ApiKeyService {
    * Revoke an API key
    */
   async revoke(id: string, reason?: string, revokedBy?: string): Promise<ApiKey | null> {
-    const [revoked] = await this.db
-      .update(apiKeys)
-      .set({
-        status: 'revoked',
-        revokedAt: new Date(),
-        revokedBy,
-        revokeReason: reason,
-        updatedAt: new Date(),
-      })
-      .where(eq(apiKeys.id, id))
-      .returning();
+    // The row is locked first, so a concurrent mint either lands before it (and
+    // its child is revoked below) or sees the parent revoked; the status read
+    // under that lock says whether a chat key named here was still live.
+    const { revoked, changes } = await this.db.transaction(async (tx) => {
+      const [before] = await tx
+        .select({ status: apiKeys.status })
+        .from(apiKeys)
+        .where(eq(apiKeys.id, id))
+        .limit(1)
+        .for('update');
+      const [row] = await tx
+        .update(apiKeys)
+        .set({
+          status: 'revoked',
+          revokedAt: new Date(),
+          revokedBy,
+          revokeReason: reason,
+          updatedAt: new Date(),
+        })
+        .where(eq(apiKeys.id, id))
+        .returning();
+      if (!row) return { revoked: null, changes: [] as ChildChange[] };
+      // A chat key named itself: its own event, as a cascade gives each child (once, while live).
+      const own: ChildChange[] =
+        row.parentKeyId !== null && before?.status === 'active'
+          ? [{ kind: 'revoked', child: row, reason: 'operator' }]
+          : [];
+      return {
+        revoked: row,
+        changes: [...own, ...(await this.revokeLiveChildren(tx, id, 'parent_revoked', revokedBy ?? null))],
+      };
+    });
 
     if (revoked) {
       // Invalidate cache using the stored keyHash
       await apiKeyCache.delete(CacheKeys.apiKey(revoked.keyHash));
       log.info('API key revoked', { id, reason });
     }
+    await this.settleChildChanges(changes);
 
-    return revoked ?? null;
+    return revoked;
+  }
+
+  // ==========================================================================
+  // Chat keys: children of a key, each locked to one chat
+  // ==========================================================================
+
+  /**
+   * Mint a `cs` child of `parentId` locked to one chat. The parent row is locked
+   * for the whole transaction, so the cap and the one-live-child-per-chat rule
+   * hold under concurrent mints; a re-mint for the same chat revokes the
+   * previous child first. The parent must be an active root key with no chat,
+   * instance or recipient lock; the caller's own checks (scope, tenancy,
+   * instance ceiling) belong to the route.
+   */
+  async mintChild(parentId: string, chat: ChildChat): Promise<MintChildResult> {
+    if (!ChildChatSchema.safeParse(chat).success) {
+      return { ok: false, code: 'not_mintable', message: 'invalid chat' };
+    }
+    const plainTextKey = this.generateKey();
+    const keyHash = await this.hashKey(plainTextKey);
+    const keyPrefix = this.getKeyPrefix(plainTextKey);
+    const changes: ChildChange[] = [];
+
+    const result = await this.db.transaction(async (tx): Promise<MintChildResult> => {
+      const [parent] = KeyIdSchema.safeParse(parentId).success
+        ? await tx.select().from(apiKeys).where(eq(apiKeys.id, parentId)).limit(1).for('update')
+        : [];
+      const refusal = notMintableReason(parent);
+      if (refusal || !parent) return { ok: false, code: 'not_mintable', message: refusal ?? 'parent key not found' };
+      // Read from the locked row, never from the caller's (possibly cached) view of it.
+      if (!parentCoversInstance(parent, chat.instanceId)) {
+        return {
+          ok: false,
+          code: 'not_mintable',
+          message: "the chat's instance is outside the parent key's instances",
+        };
+      }
+
+      const scopes: string[] = CS_CHILD_SCOPES.filter((scope) => ApiKeyService.scopeAllows(parent.scopes, scope));
+      const missing = REQUIRED_CHILD_SCOPES.filter((scope) => !scopes.includes(scope));
+      if (missing.length > 0) {
+        return { ok: false, code: 'missing_scope', message: `parent key lacks ${missing.join(' and ')}` };
+      }
+
+      const active = await tx
+        .select({
+          id: apiKeys.id,
+          chatAllowlist: apiKeys.chatAllowlist,
+          expiresAt: apiKeys.expiresAt,
+          status: apiKeys.status,
+        })
+        .from(apiKeys)
+        .where(and(eq(apiKeys.parentKeyId, parent.id), eq(apiKeys.status, 'active')));
+      const now = Date.now();
+      const sameChat = active.filter((child) => child.chatAllowlist.includes(chat.id));
+      const liveElsewhere = active.filter((child) => isLive(child, now) && !child.chatAllowlist.includes(chat.id));
+      if (liveElsewhere.length >= MAX_LIVE_CHILDREN) {
+        return {
+          ok: false,
+          code: 'child_limit',
+          message: `parent key already has ${MAX_LIVE_CHILDREN} live chat keys`,
+        };
+      }
+
+      const replaced = await this.revokeKeys(
+        tx,
+        sameChat.map((child) => child.id),
+        'remint',
+        null,
+      );
+      changes.push(...replaced);
+
+      const resolved = resolveProfile({
+        profile: 'cs',
+        chatAllowlist: [chat.id, chat.externalId],
+        instanceAllowlist: [chat.instanceId],
+        outboundRecipientAllowlist: [chat.externalId],
+      });
+      const [child] = await tx
+        .insert(apiKeys)
+        .values({
+          name: `chat:${chat.id}`,
+          description: `Chat key for ${chat.externalId}`,
+          keyPrefix,
+          keyHash,
+          scopes,
+          profile: resolved.profile,
+          profileOverrides: resolved.profileOverrides,
+          chatAllowlist: resolved.chatAllowlist,
+          instanceAllowlist: resolved.instanceAllowlist,
+          outboundRecipientAllowlist: resolved.outboundRecipientAllowlist,
+          instanceIds: [chat.instanceId],
+          rateLimit: parent.rateLimit,
+          expiresAt: parent.expiresAt,
+          parentKeyId: parent.id,
+          createdBy: parent.name,
+        })
+        .returning();
+      if (!child) throw new Error('Failed to create chat key');
+
+      const replacedKeyId = replaced[0]?.child.id ?? null;
+      changes.push({ kind: 'minted', child, chat, replacedKeyId });
+      return { ok: true, child, plainTextKey, replacedKeyId };
+    });
+
+    if (result.ok) log.info('Chat key minted', { id: result.child.id, parentKeyId: parentId, chatId: chat.id });
+    await this.settleChildChanges(changes);
+    return result;
+  }
+
+  /**
+   * Revoke one of the caller's own children. Ownership is the child's
+   * `parent_key_id`, never `createdBy`.
+   */
+  async revokeChild(callerId: string, childId: string, revokedBy: string): Promise<RevokeChildResult> {
+    if (!KeyIdSchema.safeParse(childId).success) return { status: 'not_found' };
+    if (!KeyIdSchema.safeParse(callerId).success) return { status: 'not_own_child' };
+    const changes: ChildChange[] = [];
+
+    const result = await this.db.transaction(async (tx): Promise<RevokeChildResult> => {
+      // Parent before child, the order every lineage path takes.
+      await tx.select({ id: apiKeys.id }).from(apiKeys).where(eq(apiKeys.id, callerId)).limit(1).for('update');
+      const [child] = await tx.select().from(apiKeys).where(eq(apiKeys.id, childId)).limit(1).for('update');
+      if (!child) return { status: 'not_found' };
+      if (child.parentKeyId !== callerId) return { status: 'not_own_child' };
+      if (child.status !== 'active') return { status: 'already_revoked' };
+      changes.push(...(await this.revokeKeys(tx, [child.id], 'own_child', revokedBy)));
+      return { status: 'revoked' };
+    });
+
+    await this.settleChildChanges(changes);
+    return result;
+  }
+
+  /** A child key revokes itself; it names no target, so it can never reach another key. */
+  async revokeSelf(child: Pick<ValidatedApiKey, 'id' | 'name'>): Promise<RevokeSelfResult> {
+    const changes: ChildChange[] = [];
+
+    const result = await this.db.transaction(async (tx): Promise<RevokeSelfResult> => {
+      const [row] = await tx
+        .select({ parentKeyId: apiKeys.parentKeyId })
+        .from(apiKeys)
+        .where(eq(apiKeys.id, child.id))
+        .limit(1);
+      if (!row?.parentKeyId) return { status: 'not_a_child' };
+      await tx.select({ id: apiKeys.id }).from(apiKeys).where(eq(apiKeys.id, row.parentKeyId)).limit(1).for('update');
+      const [locked] = await tx.select().from(apiKeys).where(eq(apiKeys.id, child.id)).limit(1).for('update');
+      // Gone meanwhile: its parent was deleted, and the key with it.
+      if (!locked || locked.status !== 'active') return { status: 'already_revoked' };
+      changes.push(...(await this.revokeKeys(tx, [locked.id], 'self', child.name)));
+      return { status: 'revoked' };
+    });
+
+    await this.settleChildChanges(changes);
+    return result;
+  }
+
+  /** Revoke every active child of `parentId`. */
+  private async revokeLiveChildren(
+    tx: Tx,
+    parentId: string,
+    reason: ChildRevokeReason,
+    revokedBy: string | null,
+  ): Promise<ChildChange[]> {
+    return this.revokeWhere(tx, eq(apiKeys.parentKeyId, parentId), reason, revokedBy);
+  }
+
+  /** Revoke the given keys, those still active. */
+  private async revokeKeys(
+    tx: Tx,
+    ids: string[],
+    reason: ChildRevokeReason,
+    revokedBy: string | null,
+  ): Promise<ChildChange[]> {
+    if (ids.length === 0) return [];
+    return this.revokeWhere(tx, inArray(apiKeys.id, ids), reason, revokedBy);
+  }
+
+  /** Revoke the still-active keys matching `target`. */
+  private async revokeWhere(
+    tx: Tx,
+    target: SQL,
+    reason: ChildRevokeReason,
+    revokedBy: string | null,
+  ): Promise<ChildChange[]> {
+    const now = new Date();
+    const revoked = await tx
+      .update(apiKeys)
+      .set({ status: 'revoked', revokedAt: now, revokedBy, revokeReason: reason, updatedAt: now })
+      .where(and(target, eq(apiKeys.status, 'active')))
+      .returning();
+    return revoked.map((child) => ({ kind: 'revoked', child, reason }));
+  }
+
+  /**
+   * After a parent changed: revoke each active child holding a scope or
+   * instance the parent no longer covers, and clamp the others' expiry to a
+   * shortened or newly set parent expiry. A lengthened or removed parent
+   * expiry changes no child: the children stay narrower.
+   */
+  private async reconcileChildren(tx: Tx, parent: ApiKey): Promise<ChildChange[]> {
+    // The parent row is locked by the caller's UPDATE; every path that changes a
+    // child takes that lock first, so the children need none of their own.
+    const children = await tx
+      .select()
+      .from(apiKeys)
+      .where(and(eq(apiKeys.parentKeyId, parent.id), eq(apiKeys.status, 'active')));
+    if (children.length === 0) return [];
+
+    const uncovered = children.filter((child) => !parentCoversChild(parent, child));
+    const changes = await this.revokeKeys(
+      tx,
+      uncovered.map((child) => child.id),
+      'parent_narrowed',
+      null,
+    );
+
+    const toClamp = children.filter((child) => !uncovered.includes(child) && needsClamp(parent, child));
+    if (toClamp.length > 0 && parent.expiresAt !== null) {
+      const clamped = await tx
+        .update(apiKeys)
+        .set({ expiresAt: parent.expiresAt, updatedAt: new Date() })
+        .where(
+          and(
+            inArray(
+              apiKeys.id,
+              toClamp.map((child) => child.id),
+            ),
+            eq(apiKeys.status, 'active'),
+          ),
+        )
+        .returning();
+      changes.push(...clamped.map((child): ChildChange => ({ kind: 'clamped', child })));
+    }
+    return changes;
+  }
+
+  /**
+   * Clear each touched child's cache entry on this process, then publish the
+   * events in batches. A mint publishes after the revokes and clamps it follows, so a
+   * re-mint's `access.key_revoked` precedes its `access.key_minted`. Runs after the
+   * commit; a failed publish is logged, never raised.
+   */
+  private async settleChildChanges(changes: ChildChange[]): Promise<void> {
+    for (const change of changes) {
+      await apiKeyCache.delete(CacheKeys.apiKey(change.child.keyHash));
+    }
+    await this.publishInBatches(changes.filter((change) => change.kind !== 'minted'));
+    await this.publishInBatches(changes.filter((change) => change.kind === 'minted'));
+  }
+
+  private async publishInBatches(changes: ChildChange[]): Promise<void> {
+    for (let i = 0; i < changes.length; i += CHILD_EVENT_BATCH) {
+      await Promise.allSettled(
+        changes.slice(i, i + CHILD_EVENT_BATCH).map((change) => this.publishChildChange(change)),
+      );
+    }
+  }
+
+  private async publishChildChange(change: ChildChange): Promise<void> {
+    const base = childEventBase(change.child);
+    if (change.kind === 'revoked') {
+      log.info('Chat key revoked', { id: change.child.id, parentKeyId: base.parentKeyId, reason: change.reason });
+      await this.publishChildEvent(
+        'access.key_revoked',
+        { ...base, reason: change.reason, revokedBy: change.child.revokedBy },
+        base.instanceId,
+      );
+    } else if (change.kind === 'clamped' && change.child.expiresAt) {
+      await this.publishChildEvent(
+        'access.key_updated',
+        { ...base, expiresAt: change.child.expiresAt.getTime() },
+        base.instanceId,
+      );
+    } else if (change.kind === 'minted') {
+      await this.publishChildEvent(
+        'access.key_minted',
+        {
+          ...base,
+          chatId: change.chat.id,
+          chatExternalId: change.chat.externalId,
+          instanceId: change.chat.instanceId,
+          scopes: change.child.scopes,
+          expiresAt: change.child.expiresAt?.getTime() ?? null,
+          replacedKeyId: change.replacedKeyId,
+        },
+        change.chat.instanceId,
+      );
+    }
+  }
+
+  private async publishChildEvent<T extends 'access.key_minted' | 'access.key_revoked' | 'access.key_updated'>(
+    type: T,
+    payload: EventPayloadMap[T],
+    instanceId: string,
+  ): Promise<void> {
+    if (!this.eventBus) return;
+    try {
+      await this.eventBus.publish(type, payload, instanceId ? { instanceId } : {});
+    } catch (error) {
+      // The change is committed; a lost event must not turn it into an error.
+      log.warn('Failed to publish chat key event', { type, keyId: payload.keyId, error: String(error) });
+    }
   }
 
   /**
@@ -556,12 +1073,27 @@ export class ApiKeyService {
       throw new Error('Cannot delete primary API key');
     }
 
-    const result = await this.db.delete(apiKeys).where(eq(apiKeys.id, id)).returning();
+    // Children are revoked first, each with its event and cache clear; the FK
+    // cascade then removes their rows with the parent's.
+    const { result, changes } = await this.db.transaction(async (tx) => {
+      await tx.select({ id: apiKeys.id }).from(apiKeys).where(eq(apiKeys.id, id)).limit(1).for('update');
+      const revoked = await this.revokeLiveChildren(tx, id, 'parent_deleted', null);
+      const deleted = await tx.delete(apiKeys).where(eq(apiKeys.id, id)).returning();
+      const [row] = deleted;
+      if (!row) return { result: deleted, changes: [] as ChildChange[] };
+      // A live chat key deleted by name: its own event, as a revoke gives it.
+      const own: ChildChange[] =
+        row.parentKeyId !== null && row.status === 'active'
+          ? [{ kind: 'revoked', child: { ...row, revokedBy: null }, reason: 'operator' }]
+          : [];
+      return { result: deleted, changes: [...own, ...revoked] };
+    });
 
     // Invalidate cache if we have the keyHash
     if (result.length > 0 && result[0]?.keyHash) {
       await apiKeyCache.delete(CacheKeys.apiKey(result[0].keyHash));
     }
+    await this.settleChildChanges(changes);
 
     return result.length > 0;
   }

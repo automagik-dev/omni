@@ -50,3 +50,30 @@ describe('openapi route coverage', () => {
     expect(KNOWN_UNDOCUMENTED.filter((route) => !served.has(route) || isDocumented.has(route))).toEqual([]);
   });
 });
+
+describe('chat-key routes (wish: omni-chat-threads)', () => {
+  const CHAT_KEY_ROUTES = [
+    ['post', '/keys/children', 'chats:keys'],
+    ['post', '/keys/children/self/revoke', 'chats:read'],
+    ['post', '/keys/children/{id}/revoke', 'chats:keys'],
+  ] as const;
+
+  it('are served, documented with their scope, and not on the grandfather list', () => {
+    for (const [method, path, scope] of CHAT_KEY_ROUTES) {
+      const route = `${method} ${path}`;
+      expect(served.has(route)).toBe(true);
+      expect(isDocumented.has(route)).toBe(true);
+      expect(grandfathered.has(route)).toBe(false);
+      const operation = (openApiSpec.paths?.[path] as Record<string, Record<string, unknown>>)[method];
+      expect(operation?.['x-omni-scope']).toBe(scope);
+    }
+  });
+
+  it('document the mint answers the route gives, and a body that takes nothing else', () => {
+    const mint = (openApiSpec.paths?.['/keys/children'] as Record<string, Record<string, unknown>>).post;
+    expect(Object.keys(mint?.responses as object).sort()).toEqual(['201', '400', '403', '404', '409']);
+    const schema = (openApiSpec.components?.schemas as Record<string, Record<string, unknown>>).MintChildKeyRequest;
+    expect(schema).toMatchObject({ additionalProperties: false, required: ['chatId'] });
+    expect(Object.keys(schema?.properties as object)).toEqual(['chatId']);
+  });
+});

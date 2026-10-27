@@ -544,4 +544,12 @@ export const STRINGS = {
   '{name} helps in this chat': '{name} 在这个聊天里帮忙',
   'All chats (+{n})': '全部聊天（+{n}）',
   '{name}\'s channels': '{name} 的渠道',
+  // A message's file in the chat view (channels.js).
+  'Picture': '图片',
+  'Voice note': '语音消息',
+  'Video': '视频',
+  'Document': '文档',
+  'Sticker': '贴纸',
+  'not available': '无法显示',
+  'Play video': '播放视频',
 }

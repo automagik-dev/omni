@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -30,17 +30,19 @@ const MESSAGES = {
 }
 
 // A fake omni answering the reads the tools make, and recording every change.
-function fakeOmni() {
+function fakeOmni({ mediaPath = 'wa-1/2026/photo.jpg' } = {}) {
   const changes = []
+  const reads = []
   const reply = (status, value) => new Response(value instanceof Uint8Array ? value : JSON.stringify(value), { status })
   const fetch = async (address, init = {}) => {
     const url = new URL(String(address))
     const path = url.pathname.replace('/api/v2', '')
     const method = init.method ?? 'GET'
+    if (method === 'GET') reads.push(path)
     if (method !== 'GET') {
       // The events module's own housekeeping (its consumers) is not what these tests watch.
       if (!path.startsWith('/events/consumers')) changes.push({ method, path, body: init.body ? JSON.parse(init.body) : undefined })
-      if (path === '/messages/media/download') return reply(200, { data: { mediaLocalPath: 'wa-1/2026/photo.jpg', mediaMimeType: 'image/jpeg' } })
+      if (path === '/messages/media/download') return reply(200, { data: { mediaLocalPath: mediaPath, mediaMimeType: 'image/jpeg' } })
       return reply(200, { data: { ok: true } })
     }
     if (path === '/openapi.json') return reply(200, { paths: {} })
@@ -55,11 +57,11 @@ function fakeOmni() {
     if (path === '/media/wa-1/2026/photo.jpg') return reply(200, new Uint8Array([0xff, 0xd8, 0xff]))
     return reply(404, { error: { message: 'Not found' } })
   }
-  return { fetch, changes }
+  return { fetch, changes, reads }
 }
 
 // The Main Bot Omni and Digest, a Bot of one group, on a DSH linked to the fake omni.
-function setup(t, extra = {}) {
+function setup(t, extra = {}, omniOptions = {}) {
   const home = mkdtempSync(join(tmpdir(), 'omni-grants-'))
   writeFileSync(join(home, 'state.json'), JSON.stringify({
     version: 1, mainBotIds: ['m1'], revision: 1,
@@ -71,7 +73,7 @@ function setup(t, extra = {}) {
     ...extra,
   }))
   const realFetch = globalThis.fetch
-  const omni = fakeOmni()
+  const omni = fakeOmni(omniOptions)
   globalThis.fetch = omni.fetch
   const ctx = fakeContext({ services: { credentials: { resolve: async ref => (ref === 'OMNI_API_KEY' ? { value: 'omni_sk_test' } : undefined) } } })
   const notes = []
@@ -285,6 +287,15 @@ test('opening media saves the file for the Bot to read', async (t) => {
   const path = /"path":"([^"]+)"/.exec(notes.at(-1).text)?.[1]
   assert.ok(path?.startsWith(join(home, 'media', 'digest')), `${path} | ${notes.at(-1).text.slice(0, 300)}`)
   assert.deepEqual([...readFileSync(path)], [0xff, 0xd8, 0xff])
+})
+
+test('opening media refuses a stored path that climbs out of /media, asking no other route', async (t) => {
+  const { as, answer, notes, home, omni } = setup(t, {}, { mediaPath: '../keys/x' })
+  await as('digest')('omni_media', { chat: GROUP, message: PHOTO })
+  await answer('digest', 'once')
+  assert.match(notes.at(-1).text, /omni named a file outside its media/)
+  assert.ok(!omni.reads.some(path => path.startsWith('/keys') || path.startsWith('/media')), omni.reads.join(' '))
+  assert.equal(existsSync(join(home, 'media', 'digest')), false)
 })
 
 test("an automation run's Main Bot only reads; another Bot's run asks before anything else, and asks in its own chat", async (t) => {

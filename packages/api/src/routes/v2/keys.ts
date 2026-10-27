@@ -6,13 +6,16 @@
  */
 
 import { zValidator } from '@hono/zod-validator';
+import { NotFoundError } from '@omni/core';
+import type { ApiKey, Chat } from '@omni/db';
 import { type Context, Hono } from 'hono';
 import { z } from 'zod';
 import { ProfileResolutionError, type ResolveProfileInput, resolveProfile } from '../../lib/resolve-profile';
 import { readSignedHostScopeContext } from '../../lib/signed-host-scope-context';
 import { isLockActive } from '../../middleware/scope-enforcer';
 import { optionalDateParam } from '../../schemas/date-query';
-import { ApiKeyService } from '../../services/api-keys';
+import { type ChildKeySchema, MintChildKeyBodySchema, RevokeChildKeyBodySchema } from '../../schemas/openapi/keys';
+import { ApiKeyService, CS_CHILD_SCOPES, type MintChildResult } from '../../services/api-keys';
 import type { TenantAuthContext } from '../../tenancy/auth-context';
 import { scopeCovered } from '../../tenancy/delegation';
 import { isTenantRole } from '../../tenancy/role-policies';
@@ -687,6 +690,179 @@ async function handleLegacyCreate(
 
   return c.json({ data: { ...result.key, plainTextKey: result.plainTextKey } }, 201);
 }
+
+// ============================================================================
+// CHAT KEYS (wish: omni-chat-threads)
+// ============================================================================
+
+/** What a caller must hold to mint or revoke chat keys, beyond the route's own `chats:keys`. */
+const CHAT_KEY_CALLER_SCOPES = ['chats:keys', 'chats:read', 'messages:send'] as const;
+
+function forbidden(c: Context<{ Variables: AppVariables }>, message: string): Response {
+  return c.json({ error: { code: 'FORBIDDEN', message } }, 403);
+}
+
+/**
+ * The caller check on mint and own-child revoke: a legacy key (no tenant
+ * context) with no chat, instance or recipient lock, holding `chats:keys`,
+ * `chats:read` and `messages:send`. Returns the caller's key, or the refusal. That the caller has no parent is checked
+ * by the service on its locked row (`not_mintable`); a child always carries
+ * locks, so it is turned away here first.
+ *
+ * The tenancy route gate already refuses a tenant credential on these
+ * control-plane routes before they run; the context check here is the second
+ * line, should the gate ever be bypassed.
+ */
+function chatKeyCaller(c: Context<{ Variables: AppVariables }>): { apiKey: ApiKeyData } | { response: Response } {
+  const refuse = (message: string) => ({ response: forbidden(c, message) });
+  if (c.get('authContext')) return refuse('a tenant credential cannot mint or revoke chat keys');
+  const apiKey = c.get('apiKey');
+  if (
+    !apiKey ||
+    !isStringArray(apiKey.chatAllowlist) ||
+    !isStringArray(apiKey.instanceAllowlist) ||
+    !isStringArray(apiKey.outboundRecipientAllowlist)
+  ) {
+    return refuse('this key cannot mint or revoke chat keys');
+  }
+  const profile = apiKey.profile ?? null;
+  if (
+    isLockActive(profile, 'chatAllowlist', apiKey.chatAllowlist) ||
+    isLockActive(profile, 'instanceAllowlist', apiKey.instanceAllowlist) ||
+    isLockActive(profile, 'outboundRecipientAllowlist', apiKey.outboundRecipientAllowlist)
+  ) {
+    return refuse('a chat-, instance- or recipient-locked key cannot mint or revoke chat keys');
+  }
+  const missing = CHAT_KEY_CALLER_SCOPES.filter((scope) => !ApiKeyService.scopeAllows(apiKey.scopes, scope));
+  if (missing.length > 0) return refuse(`chat keys need ${missing.join(', ')}`);
+  return { apiKey };
+}
+
+/** The chat row by its UUID, hidden ones included (the owner picks the chat). */
+async function chatById(services: CreateServices, chatId: string): Promise<Chat | null> {
+  try {
+    return await services.chats.getById(chatId, { includeHidden: true });
+  } catch (error) {
+    if (error instanceof NotFoundError) return null;
+    throw error;
+  }
+}
+
+function mintRefusal(c: Context<{ Variables: AppVariables }>, result: Extract<MintChildResult, { ok: false }>) {
+  if (result.code === 'child_limit') {
+    return c.json({ error: { code: 'CHILD_LIMIT', message: result.message } }, 409);
+  }
+  return forbidden(c, result.message);
+}
+
+/** The 201 answer's `data`, as the spec documents it; the route adds `replacedKeyId`. */
+type ChildKeyAnswer = Omit<z.infer<typeof ChildKeySchema>, 'replacedKeyId'>;
+
+/** An explicit projection, never the row: the row carries `keyHash`. */
+function childKeyAnswer(
+  child: ApiKey,
+  plainTextKey: string,
+  chat: Chat & { instanceId: string },
+  parentKeyId: string,
+): ChildKeyAnswer {
+  return {
+    id: child.id,
+    plainTextKey,
+    // mintChild sets the caller as every child's parent; never strand a key that is already minted.
+    parentKeyId: child.parentKeyId ?? parentKeyId,
+    chatId: chat.id,
+    chatExternalId: chat.externalId,
+    instanceId: chat.instanceId,
+    scopes: child.scopes,
+    expiresAt: child.expiresAt ? child.expiresAt.toISOString() : null,
+  };
+}
+
+/**
+ * POST /keys/children - Mint a cs key locked to one of the caller's chats
+ *
+ * The body names the chat row by its UUID and nothing else (strict). The
+ * child's scopes are the cs four cut to the caller's own, and they must be
+ * covered by a signing host too, as on every key write; its instance must be
+ * inside the caller's legacy, profile-aware and effective instance authority,
+ * and a chat outside it answers 404, as a missing chat does.
+ * The service then re-checks the caller's row under lock and holds the cap and
+ * the one-live-key-per-chat rule.
+ */
+keysRoutes.post('/children', zValidator('json', MintChildKeyBodySchema), async (c) => {
+  const caller = chatKeyCaller(c);
+  if ('response' in caller) return caller.response;
+  const { apiKey } = caller;
+  const { chatId } = c.req.valid('json');
+  const services = c.get('services');
+
+  const notFound = () => c.json({ error: { code: 'NOT_FOUND', message: 'Chat not found' } }, 404);
+  const chat = await chatById(services, chatId);
+  const instanceId = chat?.instanceId;
+  if (!chat || !instanceId) return notFound();
+  // A chat on an instance out of the caller's reach answers as a missing one, and before the
+  // scope ceiling, so no refusal tells the caller that the chat exists there.
+  if (enforceInstanceCeiling(c, { instanceIds: [instanceId], profile: 'cs', instanceAllowlist: [instanceId] })) {
+    return notFound();
+  }
+
+  const childScopes = CS_CHILD_SCOPES.filter((scope) => ApiKeyService.scopeAllows(apiKey.scopes, scope));
+  const ceilingDenied = enforceScopeCeiling(c, childScopes);
+  if (ceilingDenied) return ceilingDenied;
+
+  const result = await services.apiKeys.mintChild(apiKey.id, {
+    id: chat.id,
+    externalId: chat.externalId,
+    instanceId,
+  });
+  if (!result.ok) return mintRefusal(c, result);
+
+  return c.json(
+    {
+      data: {
+        ...childKeyAnswer(result.child, result.plainTextKey, { ...chat, instanceId }, apiKey.id),
+        replacedKeyId: result.replacedKeyId,
+      },
+    },
+    201,
+  );
+});
+
+/**
+ * POST /keys/children/self/revoke - A chat key revokes itself
+ *
+ * Registered before `/children/:id/revoke`, so `self` is never read as a key
+ * id. The scope enforcer lets a chat key through its locks on exactly this
+ * route (`isLockFreeRoute`); the service acts on the caller's own key only.
+ */
+keysRoutes.post('/children/self/revoke', async (c) => {
+  if (c.get('authContext')) return forbidden(c, 'a tenant credential has no chat key to revoke');
+  const apiKey = c.get('apiKey');
+  if (!apiKey) return forbidden(c, 'not a chat key');
+
+  const result = await c.get('services').apiKeys.revokeSelf(apiKey);
+  if (result.status === 'not_a_child') return forbidden(c, 'not a chat key');
+  return c.json({ data: { id: apiKey.id, status: result.status } });
+});
+
+/**
+ * POST /keys/children/:id/revoke - Revoke one of the caller's chat keys
+ *
+ * Ownership is the key's `parent_key_id`, never `createdBy`; `revokedBy` is
+ * the caller, never the body. The body's `reason` is validated and goes no
+ * further: the revoke is recorded as `own_child`.
+ */
+keysRoutes.post('/children/:id/revoke', zValidator('json', RevokeChildKeyBodySchema), async (c) => {
+  const caller = chatKeyCaller(c);
+  if ('response' in caller) return caller.response;
+  const { apiKey } = caller;
+  const id = c.req.param('id');
+
+  const result = await c.get('services').apiKeys.revokeChild(apiKey.id, id, apiKey.name);
+  if (result.status === 'not_found') return c.json({ error: { code: 'NOT_FOUND', message: 'API key not found' } }, 404);
+  if (result.status === 'not_own_child') return forbidden(c, 'not one of your chat keys');
+  return c.json({ data: { id, status: result.status } });
+});
 
 /**
  * GET /keys - List all API keys

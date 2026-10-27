@@ -645,6 +645,13 @@ export const apiKeys = pgTable(
     // Instance restrictions (null = all instances)
     instanceIds: uuid('instance_ids').array(),
 
+    // Lineage (wish: omni-chat-threads): the key this one was minted from, or null for
+    // a root key. A child is never wider or longer-lived than its parent: the parent's
+    // revoke, delete and PATCH revoke or clamp it in the same transaction
+    // (ApiKeyService). The cascade removes a deleted parent's children rows; the
+    // service revokes them first, so each leaves an event.
+    parentKeyId: uuid('parent_key_id').references((): AnyPgColumn => apiKeys.id, { onDelete: 'cascade' }),
+
     // Status
     status: varchar('status', { length: 20 }).notNull().default('active').$type<ApiKeyStatus>(),
 
@@ -681,6 +688,10 @@ export const apiKeys = pgTable(
     keyHashIdx: uniqueIndex('api_keys_key_hash_idx').on(table.keyHash),
     statusIdx: index('api_keys_status_idx').on(table.status),
     expiresAtIdx: index('api_keys_expires_at_idx').on(table.expiresAt),
+    parentKeyIdIdx: index('api_keys_parent_key_id_idx').on(table.parentKeyId),
+    parentKeyLiveIdx: index('api_keys_parent_key_live_idx')
+      .on(table.parentKeyId)
+      .where(sql`${table.status} = 'active'`),
   }),
 );
 

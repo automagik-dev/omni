@@ -95,6 +95,12 @@ const TIER_BY_VERB: Readonly<Record<string, ScopeTier>> = Object.freeze({
    */
   update: 'write',
   admin: 'admin',
+  /**
+   * `chats:keys` — mints and revokes a legacy key's own chat keys. Key
+   * machinery, so never `write`; its routes are control-plane, so it is not
+   * in `TENANT_ADDRESSABLE_SCOPES` and no tenant scope projects to it.
+   */
+  keys: 'admin',
 });
 
 const TIER_ORDER: readonly ScopeTier[] = ['read', 'write', 'admin'];

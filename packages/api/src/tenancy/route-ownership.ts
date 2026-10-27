@@ -995,6 +995,12 @@ const KEY_ROUTES: readonly RouteKey[] = [
   'PATCH /api/v2/keys/:id',
   'POST /api/v2/keys',
   'POST /api/v2/keys/:id/revoke',
+  // Chat keys (wish: omni-chat-threads): a legacy root key's own cs children.
+  // Control-plane and never tenant-addressable: a tenant credential is refused
+  // here before the route runs.
+  'POST /api/v2/keys/children',
+  'POST /api/v2/keys/children/self/revoke',
+  'POST /api/v2/keys/children/:id/revoke',
 ];
 
 const TRUST_ROUTES: readonly RouteKey[] = [

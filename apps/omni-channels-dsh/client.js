@@ -11881,6 +11881,81 @@ function dayLabel(at2) {
   if (dayKey(at2) === new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1).toDateString()) return t("Yesterday");
   return new Date(at2).toLocaleDateString([], { weekday: "long", day: "numeric", month: "long" });
 }
+var DRAWN = { image: "Picture", audio: "Voice note", video: "Video", document: "Document", sticker: "Sticker" };
+var drawnMedia = (message) => message.hasMedia === true && Object.hasOwn(DRAWN, message.type);
+var NEAR = "600px 0px";
+function useNear(ref, watching) {
+  const [near, setNear] = (0, import_react4.useState)(false);
+  (0, import_react4.useEffect)(() => {
+    const node = ref.current;
+    if (!watching || near || !node) return void 0;
+    if (typeof IntersectionObserver !== "function") {
+      setNear(true);
+      return void 0;
+    }
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) setNear(true);
+    }, { root: node.closest(".oc-thread"), rootMargin: NEAR });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [ref, watching, near]);
+  return near;
+}
+var blobOf = (data, mime) => {
+  const text = atob(data);
+  const bytes = new Uint8Array(text.length);
+  for (let index = 0; index < text.length; index += 1) bytes[index] = text.charCodeAt(index);
+  return new Blob([bytes], { type: mime });
+};
+function useMediaFile(id, wanted) {
+  const [file, setFile] = (0, import_react4.useState)(null);
+  (0, import_react4.useEffect)(() => {
+    if (!wanted) return void 0;
+    let on2 = true;
+    let url = null;
+    call("omni-media", { messageId: id }).then(
+      (reply) => {
+        if (!on2) return;
+        if (!reply.ok) return setFile({ failed: reply.reason });
+        url = URL.createObjectURL(blobOf(reply.data, reply.mime));
+        setFile({ url });
+      },
+      (error) => {
+        if (on2) setFile({ failed: error.message });
+      }
+    );
+    return () => {
+      on2 = false;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [id, wanted]);
+  return file;
+}
+var PlayMark = () => (0, import_react4.createElement)("svg", { width: 22, height: 22, viewBox: "0 0 24 24", "aria-hidden": true, focusable: "false" }, (0, import_react4.createElement)("path", { d: "M8 5.5v13l10.5-6.5z", fill: "currentColor" }));
+var DocMark = () => (0, import_react4.createElement)(
+  "svg",
+  { width: 22, height: 22, viewBox: "0 0 24 24", "aria-hidden": true, focusable: "false" },
+  (0, import_react4.createElement)("path", { d: "M7 3.5h6.5L18 8v11a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 19V5a1.5 1.5 0 0 1 1-1.5zM13.5 3.5V8H18", ...stroke })
+);
+function MediaPart({ message, onSized }) {
+  const kind = message.type;
+  const [played, setPlayed] = (0, import_react4.useState)(false);
+  const spot = (0, import_react4.useRef)(null);
+  const near = useNear(spot, kind !== "video" && kind !== "document");
+  const file = useMediaFile(message.id, kind === "video" ? played : kind !== "document" && near);
+  const label = t(DRAWN[kind]);
+  if (kind === "document") {
+    return (0, import_react4.createElement)("div", { className: "oc-media-doc" }, (0, import_react4.createElement)(DocMark), (0, import_react4.createElement)("span", null, message.fileName ?? label));
+  }
+  if (file?.failed) return (0, import_react4.createElement)("div", { className: "oc-media-miss", title: file.failed }, label, " · ", t("not available"));
+  if (kind === "video" && !played) {
+    return (0, import_react4.createElement)("button", { type: "button", className: "oc-media-still", "aria-label": t("Play video"), onClick: () => setPlayed(true) }, (0, import_react4.createElement)("span", { className: "oc-media-play" }, (0, import_react4.createElement)(PlayMark)));
+  }
+  if (!file) return (0, import_react4.createElement)("div", { ref: spot, className: `oc-media-wait oc-media-wait-${kind}`, role: "status", "aria-label": t("Loading…") }, (0, import_react4.createElement)("span", { className: "oc-spinner", "aria-hidden": true }));
+  if (kind === "audio") return (0, import_react4.createElement)("audio", { className: "oc-media-audio", controls: true, preload: "metadata", src: file.url, onLoadedMetadata: onSized });
+  if (kind === "video") return (0, import_react4.createElement)("video", { className: "oc-media-img", controls: true, autoPlay: true, playsInline: true, src: file.url, onLoadedMetadata: onSized });
+  return (0, import_react4.createElement)("img", { className: kind === "sticker" ? "oc-media-sticker" : "oc-media-img", src: file.url, alt: message.mediaText ?? label, onLoad: onSized });
+}
 function ChatPage({ actions }) {
   const state = useOmni();
   const omni2 = useActions(actions);
@@ -11890,11 +11965,21 @@ function ChatPage({ actions }) {
   const loading = chat !== void 0 && loaded === void 0 && !state.preview;
   const messages = chat ? loaded ?? (state.preview ? [{ id: "preview", from: "them", text: chat.preview, at: chat.at }] : []) : [];
   const scroller = (0, import_react4.useRef)(null);
+  const atEnd = (0, import_react4.useRef)(true);
   const [draft, setDraft] = (0, import_react4.useState)("");
   (0, import_react4.useLayoutEffect)(() => {
     const node = scroller.current;
     if (node) node.scrollTop = node.scrollHeight;
+    atEnd.current = true;
   }, [chat?.id, messages.length]);
+  const onScroll = () => {
+    const node = scroller.current;
+    if (node) atEnd.current = node.scrollHeight - node.scrollTop - node.clientHeight < 32;
+  };
+  const onSized = () => {
+    const node = scroller.current;
+    if (node && atEnd.current) node.scrollTop = node.scrollHeight;
+  };
   (0, import_react4.useEffect)(() => {
     setDraft("");
   }, [chat?.id]);
@@ -11932,7 +12017,7 @@ function ChatPage({ actions }) {
     ),
     (0, import_react4.createElement)(
       "div",
-      { ref: scroller, className: "oc-thread", role: "log", "aria-label": t("Conversation with {name}", { name: chat.name }) },
+      { ref: scroller, className: "oc-thread", onScroll, role: "log", "aria-label": t("Conversation with {name}", { name: chat.name }) },
       (0, import_react4.createElement)(
         "div",
         { className: "oc-thread-in" },
@@ -11946,7 +12031,14 @@ function ChatPage({ actions }) {
             { className: `oc-msg oc-msg-${message.from}${first ? " oc-msg-first" : ""}` },
             first && !mine && message.author ? (0, import_react4.createElement)("span", { className: "oc-msg-author" }, message.author) : null,
             first && message.from === "omni" ? (0, import_react4.createElement)("span", { className: "oc-msg-author oc-msg-omni" }, (0, import_react4.createElement)(OmniMark, { size: 12 }), "Omni") : null,
-            (0, import_react4.createElement)("div", { className: "oc-bubble", "data-sending": message.sending || void 0 }, message.text, (0, import_react4.createElement)("time", null, message.sending ? t("Sending…") : new Date(message.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })))
+            (0, import_react4.createElement)(
+              "div",
+              { className: "oc-bubble", "data-sending": message.sending || void 0, "data-media": drawnMedia(message) ? message.type : void 0 },
+              drawnMedia(message) ? (0, import_react4.createElement)(MediaPart, { message, onSized }) : null,
+              drawnMedia(message) ? message.text ? (0, import_react4.createElement)("span", { className: "oc-media-caption" }, message.text) : null : message.text,
+              drawnMedia(message) && message.mediaText ? (0, import_react4.createElement)("span", { className: "oc-media-text" }, message.mediaText) : null,
+              (0, import_react4.createElement)("time", null, message.sending ? t("Sending…") : new Date(message.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))
+            )
           ));
         })
       )
@@ -12448,6 +12540,22 @@ body[data-ds-dark-theme] .oc-ava{background:hsl(var(--oc-hue) 30% 26%);color:hsl
 .oc-msg-them .oc-bubble{background:var(--bt-bubble);color:var(--bt-ink)}
 .oc-msg-omni .oc-bubble{background:color-mix(in srgb,var(--bt-accent) 14%,var(--bt-main));color:var(--bt-ink)}
 .oc-msg-you .oc-bubble{background:var(--bt-user);color:var(--bt-user-ink)}
+.oc-bubble[data-media]{padding:4px 4px 7px}
+.oc-media-caption,.oc-media-text{display:block;margin:2px 8px 0}
+.oc-bubble[data-media]>time{margin-right:8px}
+.oc-bubble[data-media=sticker]{background:none;padding:0}
+.oc-media-img{display:block;max-width:100%;max-height:340px;border-radius:14px;margin-bottom:4px}
+.oc-media-sticker{display:block;width:140px;height:140px;object-fit:contain}
+.oc-media-audio{display:block;width:260px;max-width:100%;height:40px;margin-top:4px;margin-bottom:4px}
+.oc-media-still{display:grid;place-items:center;width:240px;max-width:100%;aspect-ratio:16/10;margin-bottom:4px;border:0;border-radius:14px;background:linear-gradient(160deg,#2b2f36,#14161a);color:#fff;cursor:pointer}
+.oc-media-play{display:grid;place-items:center;width:48px;height:48px;border-radius:50%;background:rgba(0,0,0,.45);padding-left:3px;box-sizing:border-box}
+.oc-media-wait{display:grid;place-items:center;width:240px;max-width:100%;aspect-ratio:4/3;margin-bottom:4px;border-radius:14px;background:var(--bt-hover)}
+.oc-media-wait-audio{aspect-ratio:auto;height:40px;width:260px}
+.oc-media-wait-sticker{width:140px;aspect-ratio:1}
+.oc-media-doc{display:flex;align-items:center;gap:8px;min-width:180px;padding:8px 10px;border-radius:12px;background:var(--bt-hover);font-size:13.5px}
+.oc-media-doc span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.oc-media-miss{margin:6px 8px 2px;font-size:12.5px;color:var(--bt-ink-3)}
+.oc-media-text{font-size:13px;line-height:19px;opacity:.75}
 .oc-compose-wrap{padding:8px 24px 20px}
 .oc-compose-note{display:flex;align-items:center;gap:8px;max-width:var(--dsh-chat-content-width,748px);margin:0 auto 8px;width:100%;padding:8px 12px;border:0;border-radius:12px;background:color-mix(in srgb,#f59e0b 12%,transparent);color:var(--bt-ink);font:inherit;font-size:13px;text-align:left;cursor:pointer;box-sizing:border-box}
 .oc-compose{display:flex;align-items:flex-end;gap:8px;max-width:var(--dsh-chat-content-width,748px);margin:0 auto;padding:6px 6px 6px 16px;border-radius:24px;border:1px solid var(--bt-line-2);background:var(--bt-card);box-shadow:0 2px 8px -2px rgba(0,0,0,.06);box-sizing:border-box}
@@ -15826,7 +15934,15 @@ var STRINGS = {
   "No chats yet": "还没有聊天",
   "{name} helps in this chat": "{name} 在这个聊天里帮忙",
   "All chats (+{n})": "全部聊天（+{n}）",
-  "{name}'s channels": "{name} 的渠道"
+  "{name}'s channels": "{name} 的渠道",
+  // A message's file in the chat view (channels.js).
+  "Picture": "图片",
+  "Voice note": "语音消息",
+  "Video": "视频",
+  "Document": "文档",
+  "Sticker": "贴纸",
+  "not available": "无法显示",
+  "Play video": "播放视频"
 };
 
 // src/client/index.js

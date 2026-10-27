@@ -5,6 +5,8 @@
 // both only read. Without either, the Channels view keeps its sample data. This file only
 // reads; the Omni Bot or a Main Bot changes omni through omni-api.js, with the same key.
 
+import { createHash } from 'node:crypto'
+import { z } from 'zod'
 import { OPERATOR_RULES } from './omni-rules.js'
 
 export const KEY = 'OMNI_API_KEY'
@@ -12,6 +14,33 @@ const TIMEOUT_MS = 10_000
 const CHATS_LIMIT = 100
 const MESSAGES_LIMIT = 80
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+// The media endpoint's cache: the files the chat view showed last, so its 15 s poll asks
+// Omni nothing for a file it has.
+const MEDIA_ENTRIES = 200
+const MEDIA_BYTES = 50 * 1024 * 1024
+// The cache counts the base64 it hands out; the largest file whose base64 fits it.
+export const MEDIA_FILE_BYTES = MEDIA_BYTES / 4 * 3
+// A file whose base64 passes this is served but not kept: one file never empties the cache.
+const MEDIA_KEPT_BYTES = MEDIA_BYTES / 8
+// Downloads from Omni at a time; a chat full of pictures waits its turn.
+const MEDIA_DOWNLOADS = 4
+const MEDIA_TIMEOUT_MS = 60_000
+// The kinds the chat view draws as media; any other media message keeps its "[type]" line.
+const DRAWN = new Set(['image', 'audio', 'video', 'document', 'sticker'])
+// Omni's own text for a file: the transcription of a voice note, the description of a
+// picture or video. A document's extracted text stays out: the whole file's text would ride
+// every poll.
+const OMNI_TEXT = ['transcription', 'imageDescription', 'videoDescription']
+const MediaPayload = z.object({ messageId: z.string().min(1) })
+const MediaMessage = z.object({ data: z.object({
+  hasMedia: z.boolean(),
+  mediaMimeType: z.string().max(200).nullish(),
+  mediaMetadata: z.object({ fileName: z.string().max(500).nullish() }).passthrough().nullish(),
+}).passthrough() })
+const MediaReady = z.object({ data: z.object({ mediaLocalPath: z.string().min(1).max(1000) }).passthrough() })
+const Mime = z.string().min(1).max(200)
+// Each part of the stored path names a file or folder under /media, never one above it.
+const PATH_PART = /^(?!\.{1,2}$)[\w.-]+$/
 
 const invalid = message => Object.assign(new Error(message), { code: 'bot/invalid' })
 const refused = message => Object.assign(new Error(message), { code: 'bot/refused' })
@@ -66,15 +95,36 @@ export function chatOf(chat) {
   }
 }
 
+// Omni writes "[error: …]" where processing failed: that is no text of the file's.
+const omniTextOf = (message) => {
+  for (const field of OMNI_TEXT) {
+    const value = message[field]
+    if (typeof value === 'string' && value.trim() !== '' && !value.startsWith('[error')) return value
+  }
+  return null
+}
+
 // From-me messages sent through the API are Omni's (an agent or an integration); the rest
-// of the from-me ones were typed on the phone.
+// of the from-me ones were typed on the phone. A drawn media message's text is its caption
+// alone: the view draws the file, and Omni's text for it apart.
 export function messageOf(message) {
   const mine = message.isFromMe === true
+  const hasMedia = message.hasMedia === true
+  const type = typeof message.messageType === 'string' && message.messageType !== '' ? message.messageType : 'text'
+  const drawn = hasMedia && DRAWN.has(type)
+  const fileName = message.mediaMetadata?.fileName
   return {
     id: message.id,
     from: mine ? (message.source === 'api' ? 'omni' : 'you') : 'them',
+    fromMe: mine,
     ...(mine || !message.senderDisplayName ? {} : { author: message.senderDisplayName }),
-    text: message.textContent || message.transcription || (message.hasMedia ? `[${message.messageType ?? 'media'}]` : ''),
+    text: drawn ? message.textContent || '' : message.textContent || message.transcription || (hasMedia ? `[${message.messageType || 'media'}]` : ''),
+    caption: hasMedia && message.textContent ? message.textContent : null,
+    type,
+    hasMedia,
+    mime: hasMedia && typeof message.mediaMimeType === 'string' && message.mediaMimeType !== '' ? message.mediaMimeType : null,
+    mediaText: hasMedia ? omniTextOf(message) : null,
+    fileName: hasMedia && typeof fileName === 'string' && fileName !== '' ? fileName : null,
     at: time(message.platformTimestamp) ?? time(message.createdAt) ?? 0,
   }
 }
@@ -109,10 +159,11 @@ export function install(rt) {
   }
 
   // One omni API request for other host modules (omni-events.js), with this host's URL and
-  // key; `null` when omni is not set up here. The caller reads the response.
-  rt.omniRequest = async (method, path, { body, signal, headers = {} } = {}) => {
-    const url = base()
-    const apiKey = await key()
+  // key; `null` when omni is not set up here. The caller reads the response. A call that names
+  // its own `url` or `key` uses them and never falls back to the link's.
+  rt.omniRequest = async (method, path, { body, signal, headers = {}, url: callUrl, key: callKey } = {}) => {
+    const url = callUrl === undefined ? base() : callUrl
+    const apiKey = callKey === undefined ? await key() : callKey
     if (url === null || !apiKey) return null
     return fetch(`${url}/api/v2${path}`, {
       method,
@@ -122,6 +173,25 @@ export function install(rt) {
     })
   }
   rt.omniConfigured = async () => base() !== null && Boolean(await key())
+
+  // A message's file through the routes `omni media download` uses: Omni stores it, then
+  // serves it under /media. The chat view's media endpoint and the omni_media tool
+  // (omni-api.js) both fetch it here. Gives the file's response, unread, with the stored path
+  // and Omni's answer for it (`stored`), or why there is none; a stored path that climbs out
+  // of /media is refused before the key reaches any other route.
+  rt.omniMediaFile = async (messageId, { timeout, link } = {}) => {
+    const ask = (method, path, body) => rt.omniRequest(method, path, { ...link, body, signal: timeout ? AbortSignal.timeout(timeout) : undefined })
+    const stored = await ask('POST', '/messages/media/download', { messageId })
+    if (stored === null) return { ok: false, reason: 'Omni is not connected here.' }
+    const answer = await stored.json().catch(() => null)
+    const ready = MediaReady.safeParse(stored.ok ? answer : null)
+    if (!ready.success) return { ok: false, reason: answer?.error?.message ?? `omni answered ${stored.status} for that media` }
+    const path = ready.data.data.mediaLocalPath
+    if (!path.split('/').every(part => PATH_PART.test(part))) return { ok: false, reason: 'omni named a file outside its media' }
+    const response = await ask('GET', `/media/${path}`)
+    if (response === null || !response.ok) return { ok: false, reason: `omni answered ${response?.status ?? 'nothing'} for the file` }
+    return { ok: true, response, path, stored: ready.data.data }
+  }
 
   rt.omniEndpoint = async (endpoint, body) => {
     const url = base()
@@ -149,8 +219,117 @@ export function install(rt) {
     throw invalid(`Unknown omni endpoint ${endpoint}`)
   }
 
+  // One message's file for the chat view, as base64, through the routes `omni media
+  // download` uses: Omni stores it, then serves it under /media. Kept here, most recently
+  // shown last, within MEDIA_ENTRIES files and MEDIA_BYTES; one download per file at a time,
+  // and MEDIA_DOWNLOADS at a time in all.
+  const media = new Map()
+  const loading = new Map()
+  let mediaBytes = 0
+  // Which Omni and key filled the cache, as a digest: a new link, a disconnect or a new key
+  // empties it.
+  let mediaOwner = null
+  const keep = (id, file) => {
+    media.set(id, file)
+    mediaBytes += file.data.length
+    for (const [oldest, kept] of media) {
+      if (media.size <= MEDIA_ENTRIES && mediaBytes <= MEDIA_BYTES) break
+      media.delete(oldest)
+      mediaBytes -= kept.data.length
+    }
+  }
+  const shown = ({ mime, data, name }) => ({ ok: true, mime, data, name })
+  // A finished download hands its turn to the next waiting one.
+  let downloading = 0
+  const waiting = []
+  async function inTurn(run) {
+    if (downloading < MEDIA_DOWNLOADS) downloading += 1
+    else await new Promise(resolve => waiting.push(resolve))
+    try {
+      return await run()
+    } finally {
+      const next = waiting.shift()
+      if (next) next()
+      else downloading -= 1
+    }
+  }
+  const no = reason => ({ ok: false, reason })
+  // The body, read until it passes MEDIA_FILE_BYTES (then null, the rest unread): a file
+  // without a Content-Length is refused as early as one with it.
+  async function bounded(response) {
+    if (!response.body) return Buffer.alloc(0)
+    const chunks = []
+    let size = 0
+    for await (const chunk of response.body) {
+      size += chunk.length
+      if (size > MEDIA_FILE_BYTES) {
+        await response.body.cancel().catch(() => {})
+        return null
+      }
+      chunks.push(chunk)
+    }
+    return Buffer.concat(chunks)
+  }
+  const ownerOf = (url, apiKey) => createHash('sha256').update(`${url}\n${apiKey}`).digest('hex')
+  async function download(id, owner) {
+    // A download that waited its turn under a link since changed asks no Omni anything.
+    const url = base()
+    const apiKey = await key()
+    if (owner !== mediaOwner || url === null || !apiKey || ownerOf(url, apiKey) !== owner) return no('The link to omni changed')
+    // Every request of this download goes to the link it began under, even if the link changes.
+    const link = { url, key: apiKey }
+    const ask = (method, path, body) => rt.omniRequest(method, path, { ...link, body, signal: AbortSignal.timeout(MEDIA_TIMEOUT_MS) })
+    const read = response => response.json().catch(() => null)
+    const found = await ask('GET', `/messages/${id}`)
+    if (found === null) return no('omni is not set up here')
+    if (!found.ok) return no(found.status === 404 ? 'omni has no such message' : `omni answered ${found.status} for that message`)
+    const message = MediaMessage.safeParse(await read(found))
+    if (!message.success) return no('omni answered something else for that message')
+    if (!message.data.data.hasMedia) return no('That message has no media')
+    const file = await rt.omniMediaFile(id, { timeout: MEDIA_TIMEOUT_MS, link })
+    if (!file.ok) return no(file.reason)
+    if (Number(file.response.headers.get('content-length')) > MEDIA_FILE_BYTES) return no('The file is too large to show here')
+    const bytes = await bounded(file.response)
+    if (bytes === null) return no('The file is too large to show here')
+    const mime = message.data.data.mediaMimeType || Mime.safeParse(file.stored.mediaMimeType).data || file.response.headers.get('content-type')?.split(';')[0] || 'application/octet-stream'
+    const kept = { mime, data: bytes.toString('base64'), name: message.data.data.mediaMetadata?.fileName || null }
+    // A download that began under another link stays out of this one's cache.
+    if (owner === mediaOwner && kept.data.length <= MEDIA_KEPT_BYTES) keep(id, kept)
+    return shown(kept)
+  }
+  rt.omniMedia = async (body) => {
+    const parsed = MediaPayload.safeParse(body)
+    if (!parsed.success) throw invalid('Unknown message')
+    const id = parsed.data.messageId
+    if (!ID.test(id)) return no('Unknown message')
+    const url = base()
+    const apiKey = await key()
+    if (url === null || !apiKey) return no('omni is not set up here')
+    const owner = ownerOf(url, apiKey)
+    if (owner !== mediaOwner) {
+      media.clear()
+      loading.clear()
+      mediaBytes = 0
+      mediaOwner = owner
+    }
+    const hit = media.get(id)
+    if (hit) {
+      media.delete(id)
+      media.set(id, hit)
+      return shown(hit)
+    }
+    if (loading.has(id)) return loading.get(id)
+    // Only its own entry: a new link may have started another download of this file.
+    const pending = inTurn(() => download(id, owner)).catch(() => no('Could not reach omni')).finally(() => {
+      if (loading.get(id) === pending) loading.delete(id)
+    })
+    loading.set(id, pending)
+    return pending
+  }
+
   // Reads, so a host that only reads the team still shows the channels.
   for (const name of ['omni-overview', 'omni-messages']) ctx.effect(() => rt.hooks.endpoint(name, body => rt.omniEndpoint(name, body), { read: true }), `ds-bot: ${name}`)
+  ctx.effect(() => rt.hooks.endpoint('omni-media', body => rt.omniMedia(body), { read: true }), 'ds-bot: omni-media')
   // With an Omni named here, a Main Bot operates it. A non-Main Omni Bot gets these rules once the
   // Bot team gives plugin rules to kind 'omni' Bots too (bots-dsh prompt.js).
   ctx.effect(() => rt.hooks.mainRules(() => (rt.omniNamed() ? OPERATOR_RULES : null), { order: 100 }), 'ds-bot: operator rules')

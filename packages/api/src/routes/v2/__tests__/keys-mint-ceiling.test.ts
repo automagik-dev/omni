@@ -34,11 +34,12 @@
  */
 
 import { describe, expect, mock, test } from 'bun:test';
+import { NotFoundError } from '@omni/core';
 import type { ApiKey } from '@omni/db';
 import { Hono } from 'hono';
 import { CONSOLE_ADMIN_SCOPES } from '../../../constants/profiles';
 import { scopeEnforcerMiddleware } from '../../../middleware/scope-enforcer';
-import type { ApiKeyAuthorityGuard, UpdateApiKeyOptions } from '../../../services/api-keys';
+import type { ApiKeyAuthorityGuard, MintChildResult, UpdateApiKeyOptions } from '../../../services/api-keys';
 import type { ApiKeyData, AppVariables } from '../../../types';
 import { keysRoutes } from '../keys';
 
@@ -98,6 +99,45 @@ interface MountOptions {
   targetChatAllowlist?: string[];
   /** Persisted target outbound-recipient restriction retained across PATCH. */
   targetOutboundRecipientAllowlist?: string[];
+  /** What `mintChild` answers (default: a minted child). */
+  mintResult?: MintChildResult;
+  /** Simulate a tenant credential reaching the route (the tenancy gate bypassed). */
+  tenantContext?: boolean;
+}
+
+interface MintedChild {
+  parentId: string;
+  chat: { id: string; externalId: string; instanceId: string };
+}
+
+const CHAT_A = { id: '33333333-3333-4333-8333-333333333333', instanceId: INSTANCE_A, externalId: 'a@s.whatsapp.net' };
+const CHAT_B = { id: '44444444-4444-4444-8444-444444444444', instanceId: INSTANCE_B, externalId: 'b@s.whatsapp.net' };
+
+/** The chat rows by UUID, as `ChatService.getById` answers. */
+async function fakeChatById(id: string) {
+  const row = [CHAT_A, CHAT_B].find((candidate) => candidate.id === id);
+  if (!row) throw new NotFoundError('Chat', id);
+  return row;
+}
+
+/** `mintChild` answering `result` (default: a minted child), recording each call. */
+function fakeMintChild(result: MintChildResult | undefined, minted: MintedChild[]) {
+  return mock(async (parentId: string, chat: MintedChild['chat']) => {
+    minted.push({ parentId, chat });
+    return (
+      result ?? {
+        ok: true,
+        child: {
+          id: '55555555-5555-4555-8555-555555555555',
+          parentKeyId: parentId,
+          scopes: ['messages:send', 'chats:read'],
+          expiresAt: null,
+        },
+        plainTextKey: 'omni_child_key',
+        replacedKeyId: null,
+      }
+    );
+  });
 }
 
 /**
@@ -113,9 +153,11 @@ function mount(
   app: Hono<{ Variables: AppVariables }>;
   created: CreatedKey[];
   updated: UpdatedKey[];
+  minted: MintedChild[];
 } {
   const created: CreatedKey[] = [];
   const updated: UpdatedKey[] = [];
+  const minted: MintedChild[] = [];
   const app = new Hono<{ Variables: AppVariables }>();
 
   app.use('*', async (c, next) => {
@@ -161,7 +203,9 @@ function mount(
           instanceAllowlist: options.targetInstanceAllowlist ?? [],
           outboundRecipientAllowlist: options.targetOutboundRecipientAllowlist ?? [],
         })),
+        mintChild: fakeMintChild(options.mintResult, minted),
       },
+      chats: { getById: fakeChatById },
     } as never);
     c.set('apiKey', {
       id: 'minter',
@@ -185,12 +229,16 @@ function mount(
     }
     await next();
   });
+  app.use('*', async (c, next) => {
+    if (options.tenantContext) c.set('authContext', { tenantId: 'tenant-a' } as never);
+    await next();
+  });
   if (options.withScopeEnforcer !== false) {
     app.use('*', scopeEnforcerMiddleware);
   }
   app.route('/keys', keysRoutes);
 
-  return { app, created, updated };
+  return { app, created, updated, minted };
 }
 
 async function postKey(
@@ -1154,5 +1202,123 @@ describe('PATCH /keys/:id — update scope ceiling', () => {
 
     expect(status).toBe(200);
     expect(updated).toEqual([{ id: 'target', name: 'renamed-key' }]);
+  });
+});
+
+interface MintAnswer {
+  data?: Record<string, unknown>;
+  error?: { code: string; message: string };
+}
+
+async function mintChat(
+  app: Hono<{ Variables: AppVariables }>,
+  chatId: string,
+): Promise<{ status: number; json: MintAnswer }> {
+  const res = await app.request('/keys/children', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chatId }),
+  });
+  return { status: res.status, json: (await res.json().catch(() => null)) as MintAnswer };
+}
+
+describe('POST /keys/children — the mint ceiling (wish: omni-chat-threads)', () => {
+  const SIGN_IN = ['chats:*', 'messages:*', 'context:*', 'turns:*'];
+
+  test('an unlocked caller mints for its chat; the chat comes from the row, never the body', async () => {
+    const { app, minted } = mount(SIGN_IN);
+    const res = await mintChat(app, CHAT_A.id);
+    expect(res.status).toBe(201);
+    expect(minted).toEqual([{ parentId: 'minter', chat: CHAT_A }]);
+    expect(res.json.data).toMatchObject({
+      chatId: CHAT_A.id,
+      chatExternalId: CHAT_A.externalId,
+      instanceId: INSTANCE_A,
+    });
+  });
+
+  test('a caller limited by instanceIds mints on its own instance; a chat on another reads as missing', async () => {
+    const { app, minted } = mount(SIGN_IN, undefined, { callerInstanceIds: [INSTANCE_A] });
+    const outside = await mintChat(app, CHAT_B.id);
+    const missing = await mintChat(app, '66666666-6666-4666-8666-666666666666');
+    expect(outside.status).toBe(404);
+    expect(outside.json).toEqual(missing.json);
+    expect(minted).toHaveLength(0);
+    expect((await mintChat(app, CHAT_A.id)).status).toBe(201);
+    expect(minted.map((entry) => entry.chat.instanceId)).toEqual([INSTANCE_A]);
+  });
+
+  test('a caller with an empty instanceIds list mints nothing, and every chat reads as missing', async () => {
+    const { app, minted } = mount(SIGN_IN, undefined, { callerInstanceIds: [] });
+    expect((await mintChat(app, CHAT_A.id)).status).toBe(404);
+    expect(minted).toHaveLength(0);
+  });
+
+  test('a chat out of instance reach is a 404 even when the scope ceiling would also refuse', async () => {
+    const { app, minted } = mount(SIGN_IN, ['chats:*'], { callerInstanceIds: [INSTANCE_A] });
+    expect((await mintChat(app, CHAT_B.id)).status).toBe(404);
+    expect((await mintChat(app, CHAT_A.id)).status).toBe(403);
+    expect(minted).toHaveLength(0);
+  });
+
+  test('a signing host narrower than the child it would mint is refused (no unsigned widening)', async () => {
+    const { app, minted } = mount(SIGN_IN, ['chats:*']);
+    const res = await mintChat(app, CHAT_A.id);
+    expect(res.status).toBe(403);
+    expect(res.json.error?.message).toContain('messages:send');
+    expect(minted).toHaveLength(0);
+  });
+
+  test('missing signing-host scope context fails closed', async () => {
+    const { app, minted } = mount(SIGN_IN, undefined, { signedBy: 'test-host', withScopeEnforcer: false });
+    expect((await mintChat(app, CHAT_A.id)).status).toBe(403);
+    expect(minted).toHaveLength(0);
+  });
+
+  test('the route itself turns away a locked or tenant caller, without the scope enforcer in front', async () => {
+    for (const options of [
+      { callerChatAllowlist: [CHAT_A.id] },
+      { callerInstanceAllowlist: [INSTANCE_A] },
+      { callerOutboundRecipientAllowlist: [CHAT_A.externalId] },
+      { callerProfile: 'cs' as const },
+      { omitCallerChatAllowlist: true },
+      { tenantContext: true },
+    ]) {
+      const { app, minted } = mount(['*'], undefined, { ...options, withScopeEnforcer: false });
+      expect((await mintChat(app, CHAT_A.id)).status).toBe(403);
+      expect(minted).toHaveLength(0);
+    }
+  });
+
+  test('the route itself needs chats:keys, chats:read and messages:send', async () => {
+    for (const scopes of [
+      ['chats:read', 'messages:send'],
+      ['chats:keys', 'chats:read'],
+      ['chats:keys', 'messages:*'],
+    ]) {
+      const { app, minted } = mount(scopes, undefined, { withScopeEnforcer: false });
+      expect((await mintChat(app, CHAT_A.id)).status).toBe(403);
+      expect(minted).toHaveLength(0);
+    }
+  });
+
+  test('the cap is a 409 CHILD_LIMIT; a parent the service will not mint from is a 403', async () => {
+    const limit = mount(SIGN_IN, undefined, {
+      mintResult: { ok: false, code: 'child_limit', message: 'parent key already has 500 live chat keys' },
+    });
+    const capped = await mintChat(limit.app, CHAT_A.id);
+    expect(capped.status).toBe(409);
+    expect(capped.json.error?.code).toBe('CHILD_LIMIT');
+
+    for (const code of ['not_mintable', 'missing_scope'] as const) {
+      const refused = mount(SIGN_IN, undefined, { mintResult: { ok: false, code, message: code } });
+      expect((await mintChat(refused.app, CHAT_A.id)).status).toBe(403);
+    }
+  });
+
+  test('no chat row is a 404, before any mint', async () => {
+    const { app, minted } = mount(SIGN_IN);
+    expect((await mintChat(app, '66666666-6666-4666-8666-666666666666')).status).toBe(404);
+    expect(minted).toHaveLength(0);
   });
 });
