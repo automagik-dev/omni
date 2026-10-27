@@ -1237,16 +1237,26 @@ describe('POST /keys/children — the mint ceiling (wish: omni-chat-threads)', (
     });
   });
 
-  test('a caller limited by instanceIds mints on its own instance and gets 403 on another', async () => {
+  test('a caller limited by instanceIds mints on its own instance; a chat on another reads as missing', async () => {
     const { app, minted } = mount(SIGN_IN, undefined, { callerInstanceIds: [INSTANCE_A] });
-    expect((await mintChat(app, CHAT_B.id)).status).toBe(403);
+    const outside = await mintChat(app, CHAT_B.id);
+    const missing = await mintChat(app, '66666666-6666-4666-8666-666666666666');
+    expect(outside.status).toBe(404);
+    expect(outside.json).toEqual(missing.json);
     expect(minted).toHaveLength(0);
     expect((await mintChat(app, CHAT_A.id)).status).toBe(201);
     expect(minted.map((entry) => entry.chat.instanceId)).toEqual([INSTANCE_A]);
   });
 
-  test('a caller with an empty instanceIds list mints nothing', async () => {
+  test('a caller with an empty instanceIds list mints nothing, and every chat reads as missing', async () => {
     const { app, minted } = mount(SIGN_IN, undefined, { callerInstanceIds: [] });
+    expect((await mintChat(app, CHAT_A.id)).status).toBe(404);
+    expect(minted).toHaveLength(0);
+  });
+
+  test('a chat out of instance reach is a 404 even when the scope ceiling would also refuse', async () => {
+    const { app, minted } = mount(SIGN_IN, ['chats:*'], { callerInstanceIds: [INSTANCE_A] });
+    expect((await mintChat(app, CHAT_B.id)).status).toBe(404);
     expect((await mintChat(app, CHAT_A.id)).status).toBe(403);
     expect(minted).toHaveLength(0);
   });

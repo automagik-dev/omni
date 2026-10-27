@@ -222,3 +222,47 @@ test('four downloads run at a time; a fifth waits, and cache hits and shared dow
   assert.ok(done.every(reply => reply.ok))
   assert.equal(lookups(), 1 + 5)
 })
+
+test('a download begun under an old link does not drop the new link\'s download of the same file', async () => {
+  let open
+  const gate = new Promise(resolve => { open = resolve })
+  const answers = mediaAnswers()
+  const message = answers[`/messages/${MESSAGE}`]
+  // The old link's lookup waits on the gate; the new link's waits for good.
+  answers[`/messages/${MESSAGE}`] = init => (init.headers['x-api-key'] === 'omni_sk_test' ? gate : new Promise(() => {})).then(() => new Response(JSON.stringify(message), { status: 200 }))
+  const { rt, asked } = runtime({ url: 'https://omni.test', key: 'omni_sk_test', answers })
+  const settle = () => new Promise(resolve => setTimeout(resolve, 20))
+  const old = rt.omniMedia({ messageId: MESSAGE })
+  await settle()
+  rt.omniLink = () => ({ url: 'https://omni.test', key: 'omni_sk_other' })
+  rt.omniMedia({ messageId: MESSAGE })
+  await settle()
+  open()
+  await old
+  rt.omniMedia({ messageId: MESSAGE })
+  await settle()
+  const lookups = asked.filter(call => call.key === 'omni_sk_other' && call.address.endsWith(`/messages/${MESSAGE}`))
+  assert.equal(lookups.length, 1, 'the new link\'s download is still the one in flight')
+})
+
+test('a download still waiting its turn when the link changes asks no Omni anything', async () => {
+  const ids = Array.from({ length: 5 }, (_, index) => `0b6f3c1e-5a2d-4c8e-9f10-${String(index).padStart(12, '0')}`)
+  let open
+  const gate = new Promise(resolve => { open = resolve })
+  const answers = Object.assign({}, ...ids.map((id) => {
+    const answer = mediaAnswers(id)
+    const message = answer[`/messages/${id}`]
+    return { ...answer, [`/messages/${id}`]: () => gate.then(() => new Response(JSON.stringify(message), { status: 200 })) }
+  }))
+  const { rt, asked } = runtime({ url: 'https://omni.test', key: 'omni_sk_test', answers })
+  const settle = () => new Promise(resolve => setTimeout(resolve, 20))
+  const pending = ids.map(id => rt.omniMedia({ messageId: id }))
+  await settle()
+  // The fifth waits its turn; then the link changes.
+  rt.omniLink = () => ({ url: 'https://omni.test', key: 'omni_sk_other' })
+  open()
+  const done = await Promise.all(pending)
+  assert.equal(done[4].ok, false)
+  assert.equal(typeof done[4].reason, 'string')
+  assert.deepEqual(asked.filter(call => call.address.endsWith(`/messages/${ids[4]}`)), [], 'the queued file reached no Omni')
+})

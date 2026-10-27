@@ -208,6 +208,24 @@ postgresDescribe('chat keys (real PostgreSQL)', () => {
     }
   });
 
+  test('a revoke or delete that names a chat key itself publishes its access.key_revoked, once', async () => {
+    const { key: root } = await parent();
+    const a = minted(await service.mintChild(root.id, chat(1)));
+    const b = minted(await service.mintChild(root.id, chat(2)));
+    events.length = 0;
+
+    await service.revoke(a.child.id, 'leaked', 'owner');
+    await service.revoke(a.child.id, 'again', 'owner');
+    expect(await service.delete(b.child.id)).toBe(true);
+    expect(await service.delete(a.child.id)).toBe(true);
+    expect(
+      events.map((event) => [event.type, event.payload.keyId, event.payload.reason, event.payload.revokedBy]),
+    ).toEqual([
+      ['access.key_revoked', a.child.id, 'operator', 'owner'],
+      ['access.key_revoked', b.child.id, 'operator', null],
+    ]);
+  });
+
   test('a guarded PATCH that shortens the expiry clamps every child; lengthening changes none', async () => {
     const week = new Date(Date.now() + 7 * 86_400_000);
     const { key: root } = await parent({ expiresAt: week });

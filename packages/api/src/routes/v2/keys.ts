@@ -774,7 +774,8 @@ function childKeyAnswer(child: ApiKey, plainTextKey: string, chat: Chat & { inst
  * The body names the chat row by its UUID and nothing else (strict). The
  * child's scopes are the cs four cut to the caller's own, and they must be
  * covered by a signing host too, as on every key write; its instance must be
- * inside the caller's legacy, profile-aware and effective instance authority.
+ * inside the caller's legacy, profile-aware and effective instance authority,
+ * and a chat outside it answers 404, as a missing chat does.
  * The service then re-checks the caller's row under lock and holds the cap and
  * the one-live-key-per-chat rule.
  */
@@ -785,14 +786,18 @@ keysRoutes.post('/children', zValidator('json', MintChildKeyBodySchema), async (
   const services = c.get('services');
   const apiKey = c.get('apiKey') as ApiKeyData;
 
+  const notFound = () => c.json({ error: { code: 'NOT_FOUND', message: 'Chat not found' } }, 404);
   const chat = await chatById(services, chatId);
   const instanceId = chat?.instanceId;
-  if (!chat || !instanceId) return c.json({ error: { code: 'NOT_FOUND', message: 'Chat not found' } }, 404);
+  if (!chat || !instanceId) return notFound();
+  // A chat on an instance out of the caller's reach answers as a missing one, and before the
+  // scope ceiling, so no refusal tells the caller that the chat exists there.
+  if (enforceInstanceCeiling(c, { instanceIds: [instanceId], profile: 'cs', instanceAllowlist: [instanceId] })) {
+    return notFound();
+  }
 
   const childScopes = CS_CHILD_SCOPES.filter((scope) => ApiKeyService.scopeAllows(apiKey.scopes, scope));
-  const ceilingDenied =
-    enforceScopeCeiling(c, childScopes) ??
-    enforceInstanceCeiling(c, { instanceIds: [instanceId], profile: 'cs', instanceAllowlist: [instanceId] });
+  const ceilingDenied = enforceScopeCeiling(c, childScopes);
   if (ceilingDenied) return ceilingDenied;
 
   const result = await services.apiKeys.mintChild(apiKey.id, {

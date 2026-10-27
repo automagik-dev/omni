@@ -57,9 +57,11 @@ function fakeKeyDb(row: Record<string, unknown> | null): { db: Database; reads: 
     select: () => ({
       from: () => ({
         where: () => ({
-          limit: async () => {
+          limit: () => {
             reads.count++;
-            return row ? [row] : [];
+            const rows = row ? [row] : [];
+            // `revoke` reads the row under `FOR UPDATE` first.
+            return Object.assign(Promise.resolve(rows), { for: async () => rows });
           },
         }),
       }),

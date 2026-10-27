@@ -649,6 +649,46 @@ describe("a parent's revoke, delete and PATCH reach its children", () => {
     });
   });
 
+  test('POST /keys/:id/revoke on a chat key itself publishes its access.key_revoked, once', async () => {
+    const { parent, a, b } = await family();
+    expect((await h.call('POST', `/keys/${a.child.id}/revoke`, { reason: 'leaked' })).status).toBe(200);
+    expect(await h.validates(a.plainTextKey)).toBe(401);
+    expect(await h.validates(b.plainTextKey)).toBe(200);
+    expect(h.ofType('access.key_revoked').map((event) => event.payload)).toEqual([
+      {
+        keyId: a.child.id,
+        parentKeyId: parent.id,
+        chatId: chat(1).id,
+        instanceId: INSTANCE,
+        reason: 'operator',
+        revokedBy: ADMIN.name,
+      },
+    ]);
+    // A second revoke of a revoked key publishes nothing more.
+    expect((await h.call('POST', `/keys/${a.child.id}/revoke`, {})).status).toBe(200);
+    expect(h.ofType('access.key_revoked')).toHaveLength(1);
+  });
+
+  test('DELETE /keys/:id on a chat key itself publishes its access.key_revoked; a revoked one publishes none', async () => {
+    const { parent, a, b } = await family();
+    expect((await h.call('DELETE', `/keys/${b.child.id}`)).status).toBe(200);
+    expect(await h.validates(b.plainTextKey)).toBe(401);
+    expect(h.ofType('access.key_revoked').map((event) => event.payload)).toEqual([
+      {
+        keyId: b.child.id,
+        parentKeyId: parent.id,
+        chatId: chat(2, OTHER_INSTANCE).id,
+        instanceId: OTHER_INSTANCE,
+        reason: 'operator',
+        revokedBy: null,
+      },
+    ]);
+    expect(await h.service.revokeChild(parent.id, a.child.id, 'sign-in')).toEqual({ status: 'revoked' });
+    h.events.length = 0;
+    expect((await h.call('DELETE', `/keys/${a.child.id}`)).status).toBe(200);
+    expect(h.events).toHaveLength(0);
+  });
+
   test('DELETE /keys/:id revokes the children first, then the cascade removes their rows', async () => {
     const { parent, a, b } = await family();
     const response = await h.call('DELETE', `/keys/${parent.id}`);
@@ -1060,9 +1100,13 @@ describe('POST /keys/children', () => {
     ]);
   });
 
-  test('a caller limited by instanceIds mints on its own instance and gets 403 on another', async () => {
+  test('a caller limited by instanceIds mints on its own instance; a chat on another reads as missing', async () => {
     const { key: parent, plainTextKey } = await r.parent(undefined, { instanceIds: [INSTANCE] });
-    expect((await r.mint(plainTextKey, chat(3, OTHER_INSTANCE).id)).status).toBe(403);
+    // The same 404 as no chat at all: the answer says nothing of chats out of reach.
+    const outside = await r.mint(plainTextKey, chat(3, OTHER_INSTANCE).id);
+    const missing = await r.mint(plainTextKey, crypto.randomUUID());
+    expect(outside.status).toBe(404);
+    expect(outside.json).toEqual(missing.json);
     expect(r.children(parent.id)).toHaveLength(0);
     const res = await r.mint(plainTextKey, chat(1).id);
     expect(res.status).toBe(201);

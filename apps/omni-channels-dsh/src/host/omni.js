@@ -269,7 +269,12 @@ export function install(rt) {
     }
     return Buffer.concat(chunks)
   }
+  const ownerOf = (url, apiKey) => createHash('sha256').update(`${url}\n${apiKey}`).digest('hex')
   async function download(id, owner) {
+    // A download that waited its turn under a link since changed asks no Omni anything.
+    const url = base()
+    const apiKey = await key()
+    if (owner !== mediaOwner || url === null || !apiKey || ownerOf(url, apiKey) !== owner) return no('The link to omni changed')
     const ask = (method, path, body) => rt.omniRequest(method, path, { body, signal: AbortSignal.timeout(MEDIA_TIMEOUT_MS) })
     const read = response => response.json().catch(() => null)
     const found = await ask('GET', `/messages/${id}`)
@@ -297,7 +302,7 @@ export function install(rt) {
     const url = base()
     const apiKey = await key()
     if (url === null || !apiKey) return no('omni is not set up here')
-    const owner = createHash('sha256').update(`${url}\n${apiKey}`).digest('hex')
+    const owner = ownerOf(url, apiKey)
     if (owner !== mediaOwner) {
       media.clear()
       loading.clear()
@@ -310,8 +315,13 @@ export function install(rt) {
       media.set(id, hit)
       return shown(hit)
     }
-    if (!loading.has(id)) loading.set(id, inTurn(() => download(id, owner)).catch(() => no('Could not reach omni')).finally(() => loading.delete(id)))
-    return loading.get(id)
+    if (loading.has(id)) return loading.get(id)
+    // Only its own entry: a new link may have started another download of this file.
+    const pending = inTurn(() => download(id, owner)).catch(() => no('Could not reach omni')).finally(() => {
+      if (loading.get(id) === pending) loading.delete(id)
+    })
+    loading.set(id, pending)
+    return pending
   }
 
   // Reads, so a host that only reads the team still shows the channels.

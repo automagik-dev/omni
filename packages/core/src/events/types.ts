@@ -611,7 +611,8 @@ export type AccessKeyRevokeReason =
   | 'parent_deleted'
   | 'parent_narrowed' // the parent no longer covers a scope or instance the child holds
   | 'own_child' // its parent revoked it
-  | 'self'; // it revoked itself
+  | 'self' // it revoked itself
+  | 'operator'; // POST /keys/:id/revoke or DELETE /keys/:id named the chat key itself
 
 /** A chat key was minted from a parent key, locked to one chat. Never carries the key. */
 export interface AccessKeyMintedPayload {

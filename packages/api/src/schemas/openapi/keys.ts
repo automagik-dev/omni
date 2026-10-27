@@ -84,8 +84,11 @@ export function registerKeySchemas(registry: OpenAPIRegistry): void {
         content: { 'application/json': { schema: z.object({ data: ChildKeySchema }) } },
       },
       400: { description: 'Invalid body (any field besides chatId)', content: ERROR_CONTENT },
-      403: { description: 'The caller may not mint chat keys, or not on that instance', content: ERROR_CONTENT },
-      404: { description: 'No chat row with that id', content: ERROR_CONTENT },
+      403: { description: 'The caller may not mint chat keys, or not with its scopes', content: ERROR_CONTENT },
+      404: {
+        description: "No chat row with that id, or the chat is on an instance outside the caller's reach",
+        content: ERROR_CONTENT,
+      },
       409: { description: 'CHILD_LIMIT: the caller already holds 500 live chat keys', content: ERROR_CONTENT },
     },
   });

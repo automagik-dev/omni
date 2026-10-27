@@ -608,9 +608,16 @@ export class ApiKeyService {
    * Revoke an API key
    */
   async revoke(id: string, reason?: string, revokedBy?: string): Promise<ApiKey | null> {
-    // The UPDATE locks the parent row first, so a concurrent mint either lands
-    // before it (and its child is revoked below) or sees the parent revoked.
+    // The row is locked first, so a concurrent mint either lands before it (and
+    // its child is revoked below) or sees the parent revoked; the status read
+    // under that lock says whether a chat key named here was still live.
     const { revoked, changes } = await this.db.transaction(async (tx) => {
+      const [before] = await tx
+        .select({ status: apiKeys.status })
+        .from(apiKeys)
+        .where(eq(apiKeys.id, id))
+        .limit(1)
+        .for('update');
       const [row] = await tx
         .update(apiKeys)
         .set({
@@ -623,7 +630,15 @@ export class ApiKeyService {
         .where(eq(apiKeys.id, id))
         .returning();
       if (!row) return { revoked: null, changes: [] as ChildChange[] };
-      return { revoked: row, changes: await this.revokeLiveChildren(tx, id, 'parent_revoked', revokedBy ?? null) };
+      // A chat key named itself: its own event, as a cascade gives each child (once, while live).
+      const own: ChildChange[] =
+        row.parentKeyId !== null && before?.status === 'active'
+          ? [{ kind: 'revoked', child: row, reason: 'operator' }]
+          : [];
+      return {
+        revoked: row,
+        changes: [...own, ...(await this.revokeLiveChildren(tx, id, 'parent_revoked', revokedBy ?? null))],
+      };
     });
 
     if (revoked) {
@@ -1064,7 +1079,14 @@ export class ApiKeyService {
       await tx.select({ id: apiKeys.id }).from(apiKeys).where(eq(apiKeys.id, id)).limit(1).for('update');
       const revoked = await this.revokeLiveChildren(tx, id, 'parent_deleted', null);
       const deleted = await tx.delete(apiKeys).where(eq(apiKeys.id, id)).returning();
-      return { result: deleted, changes: deleted.length > 0 ? revoked : [] };
+      const [row] = deleted;
+      if (!row) return { result: deleted, changes: [] as ChildChange[] };
+      // A live chat key deleted by name: its own event, as a revoke gives it.
+      const own: ChildChange[] =
+        row.parentKeyId !== null && row.status === 'active'
+          ? [{ kind: 'revoked', child: { ...row, revokedBy: null }, reason: 'operator' }]
+          : [];
+      return { result: deleted, changes: [...own, ...revoked] };
     });
 
     // Invalidate cache if we have the keyHash
