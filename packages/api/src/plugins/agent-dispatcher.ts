@@ -1662,6 +1662,15 @@ async function sendResponseParts(
 // ============================================================================
 
 /**
+ * Media messages whose processed text (transcription, description) the dispatcher waits for.
+ * Meta Cloud (`whatsapp-business`) defers the download: its inbound event carries only the
+ * channel-native `mediaId`, never a `mediaUrl`, and the media processor fetches the bytes later.
+ */
+function selectProcessableMedia(messages: BufferedMessage[]): BufferedMessage[] {
+  return messages.filter((m) => (m.payload.content?.mediaUrl || m.payload.content?.mediaId) && m.payload.content?.type);
+}
+
+/**
  * Wait for media processing on all media messages, returning formatted text.
  */
 async function collectProcessedMedia(
@@ -1670,7 +1679,7 @@ async function collectProcessedMedia(
   messages: BufferedMessage[],
 ): Promise<string[]> {
   const results: string[] = [];
-  const mediaMessages = messages.filter((m) => m.payload.content?.mediaUrl && m.payload.content?.type);
+  const mediaMessages = selectProcessableMedia(messages);
 
   for (const m of mediaMessages) {
     const contentType = m.payload.content?.type;
@@ -6688,6 +6697,7 @@ export const __test__ = {
   /** The one funnel every agent reply leaves through — pins the part stamping. */
   sendResponseParts,
   awaitMediaProcessing,
+  selectProcessableMedia,
   // #914 cancel plumbing — exposed so tests can stage in-flight runs and
   // assert the thread-scoped lookup + requestedAt guard.
   activeRunAborts,
