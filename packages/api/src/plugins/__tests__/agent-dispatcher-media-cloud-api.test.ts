@@ -13,6 +13,8 @@ import { __test__ } from '../agent-dispatcher';
 const { selectProcessableMedia } = __test__;
 
 type BufferedLike = Parameters<typeof selectProcessableMedia>[0][number];
+
+/** A buffered inbound message with the given `content`; only `content` matters to the selection. */
 function bufferedMessage(content: Record<string, unknown>): BufferedLike {
   return {
     payload: { externalId: 'ext-1', chatId: 'chat-1', from: 'user-1', content },
