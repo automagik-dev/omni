@@ -370,6 +370,15 @@ export const pluginMediaSchema = z.object({
 });
 
 /**
+ * The message row exists but its bytes could not be fetched. The dispatcher may be
+ * waiting on this message, so the caller still publishes a failed completion.
+ */
+interface MediaDownloadFailure {
+  messageId: string;
+  downloadError: string;
+}
+
+/**
  * Resolve media file path for a message
  * Handles both local paths and URL downloads
  */
@@ -382,7 +391,7 @@ async function resolveMediaPath(
   mimeType: string,
   channelType?: ChannelType,
   trustedTenantId?: string,
-): Promise<MediaResolution | null> {
+): Promise<MediaResolution | MediaDownloadFailure | null> {
   // Wait briefly for message-persistence to create the DB row (race condition:
   // both media-processor and message-persistence subscribe to message.received)
   const maxWaitMs = 5_000;
@@ -426,7 +435,7 @@ async function resolveMediaPath(
       channelType,
       trustedTenantId,
     );
-    if (!filePath) return null;
+    if (!filePath) return { messageId: message.id, downloadError: 'media download failed' };
   }
 
   // Channel-native deferred media (e.g. Meta Cloud `media_id`): no public URL,
@@ -442,7 +451,7 @@ async function resolveMediaPath(
       message.platformTimestamp ?? undefined,
       trustedTenantId,
     );
-    if (!filePath) return null;
+    if (!filePath) return { messageId: message.id, downloadError: 'media download failed' };
   }
 
   if (!filePath) {
@@ -658,6 +667,66 @@ async function publishTranscriptionSkipped(
 }
 
 /**
+ * Mark a media message as failed (DB error marker plus failure events), so the
+ * dispatcher resolves its media wait now instead of at the timeout.
+ */
+async function publishProcessingFailure(
+  ctx: MediaProcessorContext,
+  envelope: Pick<OmniEvent, 'metadata'>,
+  metadata: { instanceId: string; eventId?: string; channelType?: ChannelType },
+  messageId: string,
+  contentType: string | undefined,
+  failure: {
+    processingType: ReturnType<typeof inferProcessingType>;
+    reason: string;
+    provider?: string;
+    model?: string;
+  },
+): Promise<void> {
+  const { instanceId, eventId, channelType } = metadata;
+  const { processingType, reason } = failure;
+
+  // Write error marker so consumers can detect failures via DB check
+  const errorColumn = getContentFieldForType(processingType, contentType);
+  if (errorColumn) {
+    const marker = `[error: media processing failed — ${reason}]`;
+    await runConsumerInTenantContext(ctx.db, envelope, async () => {
+      await scopedHandle(ctx.db)
+        .update(messages)
+        .set({ [errorColumn]: marker })
+        .where(eq(messages.id, messageId));
+    });
+  }
+
+  // Publish media.processing.failed event (dedicated failure event)
+  await ctx.eventBus.publish(
+    'media.processing.failed',
+    {
+      eventId: eventId ?? messageId,
+      mediaId: messageId,
+      processingType,
+      error: reason,
+      provider: failure.provider,
+      model: failure.model,
+    },
+    { instanceId, channelType },
+  );
+
+  // Also publish media.processed with error so dispatcher resolves immediately
+  await ctx.eventBus.publish(
+    'media.processed',
+    {
+      eventId: eventId ?? messageId,
+      mediaId: messageId,
+      processingType,
+      content: '',
+      error: reason,
+    },
+    { instanceId, channelType },
+  );
+}
+
+/**
  * Process media for a received message
  */
 async function processMessageMedia(
@@ -694,6 +763,14 @@ async function processMessageMedia(
     trustedTenantId,
   );
   if (!media) return;
+  if ('downloadError' in media) {
+    log.warn('Media download failed', { messageId: media.messageId, externalId });
+    await publishProcessingFailure(ctx, envelope, metadata, media.messageId, content.type, {
+      processingType: inferProcessingType(content.type),
+      reason: media.downloadError,
+    });
+    return;
+  }
 
   // Opt-in per-instance switch (instances.audio_transcription): with 'off' the
   // audio stays stored (resolved above) but never reaches an STT provider.
@@ -725,46 +802,12 @@ async function processMessageMedia(
   if (!result.success) {
     const reason = result.errorMessage ?? 'unknown';
     log.warn('Media processing failed', { messageId: media.messageId, error: reason });
-
-    // Write error marker so consumers can detect failures via DB check
-    const processingType = result.processingType ?? inferProcessingType(content.type);
-    const errorColumn = getContentFieldForType(processingType, content.type);
-    if (errorColumn) {
-      const marker = `[error: media processing failed — ${reason}]`;
-      await runConsumerInTenantContext(ctx.db, envelope, async () => {
-        await scopedHandle(ctx.db)
-          .update(messages)
-          .set({ [errorColumn]: marker })
-          .where(eq(messages.id, media.messageId));
-      });
-    }
-
-    // Publish media.processing.failed event (dedicated failure event)
-    await ctx.eventBus.publish(
-      'media.processing.failed',
-      {
-        eventId: eventId ?? media.messageId,
-        mediaId: media.messageId,
-        processingType,
-        error: reason,
-        provider: result.provider,
-        model: result.model,
-      },
-      { instanceId, channelType: metadata.channelType },
-    );
-
-    // Also publish media.processed with error so dispatcher resolves immediately
-    await ctx.eventBus.publish(
-      'media.processed',
-      {
-        eventId: eventId ?? media.messageId,
-        mediaId: media.messageId,
-        processingType,
-        content: '',
-        error: reason,
-      },
-      { instanceId, channelType: metadata.channelType },
-    );
+    await publishProcessingFailure(ctx, envelope, metadata, media.messageId, content.type, {
+      processingType: result.processingType ?? inferProcessingType(content.type),
+      reason,
+      provider: result.provider,
+      model: result.model,
+    });
     return;
   }
 
