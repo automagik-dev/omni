@@ -11,6 +11,7 @@
         "scripts/marketplace.test.ts",
         "scripts/pack-market.ts",
         "scripts/pack-market.test.ts",
+        "scripts/plugin-lane.test.ts",
         "scripts/admin-ui-image.test.ts",
         "scripts/bun-version.test.ts",
         "scripts/package-managers.test.ts",
