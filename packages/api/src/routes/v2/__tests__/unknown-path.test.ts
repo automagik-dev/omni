@@ -21,10 +21,14 @@ describe('root automation lookup routing (#1400)', () => {
     const id = '12345678-1234-4234-8234-123456789abc';
     const lookedUp: string[] = [];
     app.use('*', async (c, next) => {
-      c.set('services', { automations: { getById: async (value: string) => {
-        lookedUp.push(value);
-        return { id: value };
-      } } } as unknown as AppVariables['services']);
+      c.set('services', {
+        automations: {
+          getById: async (value: string) => {
+            lookedUp.push(value);
+            return { id: value };
+          },
+        },
+      } as unknown as AppVariables['services']);
       await next();
     });
     app.route('/api/v2/automations', automationsRoutes);
