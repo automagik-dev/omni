@@ -22,7 +22,11 @@ export const MintChildKeyBodySchema = z
 /** `POST /keys/children/:id/revoke`. */
 export const RevokeChildKeyBodySchema = z
   .object({
-    reason: z.string().max(500).optional().openapi({ description: 'Why the chat key is cut' }),
+    reason: z
+      .string()
+      .max(500)
+      .optional()
+      .openapi({ description: 'Accepted for compatibility; not recorded (the revoke is recorded as own_child)' }),
   })
   .strict();
 
@@ -59,6 +63,7 @@ const ERROR_CONTENT = { 'application/json': { schema: ErrorSchema } };
 export function registerKeySchemas(registry: OpenAPIRegistry): void {
   registry.register('MintChildKeyRequest', MintChildKeyBodySchema);
   registry.register('ChildKey', ChildKeySchema);
+  registry.register('RevokeChildKeyRequest', RevokeChildKeyBodySchema);
   registry.register('ChildKeyRevokeResult', ChildKeyRevokeResultSchema);
 
   registry.registerPath({
