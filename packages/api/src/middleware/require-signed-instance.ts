@@ -32,6 +32,7 @@
 import { createLogger } from '@omni/core';
 import type { Context } from 'hono';
 import { createMiddleware } from 'hono/factory';
+import { isJsonContentType } from '../lib/resolve-chat-id';
 import type { AppVariables } from '../types';
 import { extractLockTargets, readHeaderTargets } from './scope-enforcer';
 
@@ -70,8 +71,9 @@ export function isUnlockOnlyBody(body: unknown): boolean {
 async function safeReadJsonBody(c: Context<{ Variables: AppVariables }>): Promise<unknown | null> {
   const method = c.req.method.toUpperCase();
   if (method === 'GET' || method === 'DELETE' || method === 'HEAD' || method === 'OPTIONS') return null;
-  const contentType = c.req.header('content-type') ?? '';
-  if (!contentType.toLowerCase().includes('application/json')) return null;
+  // The same test as the route's `zValidator('json')`: a body it validates
+  // must never escape this gate (e.g. `application/merge-patch+json`).
+  if (!isJsonContentType(c.req.header('content-type'))) return null;
   try {
     return await c.req.json();
   } catch {

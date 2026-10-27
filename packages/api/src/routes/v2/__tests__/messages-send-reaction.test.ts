@@ -2,7 +2,8 @@ import { describe, expect, mock, test } from 'bun:test';
 import { NotFoundError } from '@omni/core';
 import { Hono } from 'hono';
 import { errorHandler } from '../../../middleware/error';
-import type { AppVariables } from '../../../types';
+import { scopeEnforcerMiddleware } from '../../../middleware/scope-enforcer';
+import type { ApiKeyData, AppVariables } from '../../../types';
 import { messagesRoutes } from '../messages';
 
 const INSTANCE_ID = '11111111-1111-4111-8111-111111111111';
@@ -21,6 +22,8 @@ type MountOptions = {
   storedParticipant?: string;
   channel?: string;
   withErrorHandler?: boolean;
+  /** Runs the request through the real scope lock with this key instead of a wildcard one. */
+  lockedKey?: ApiKeyData;
 };
 
 function mountMessagesRoutes(options: MountOptions = {}): Hono<{ Variables: AppVariables }> {
@@ -93,19 +96,24 @@ function mountMessagesRoutes(options: MountOptions = {}): Hono<{ Variables: AppV
     } as never);
     c.set('channelRegistry', {
       get: mock(() => ({
-        capabilities: { canSendReaction: true },
+        capabilities: { canSendReaction: true, canForwardMessage: true },
         sendMessage,
       })),
     } as never);
-    c.set('apiKey', {
-      id: 'test',
-      name: 'test',
-      scopes: ['*'],
-      instanceIds: null,
-      expiresAt: null,
-    } as never);
+    c.set(
+      'apiKey',
+      options.lockedKey ??
+        ({
+          id: 'test',
+          name: 'test',
+          scopes: ['*'],
+          instanceIds: null,
+          expiresAt: null,
+        } as never),
+    );
     await next();
   });
+  if (options.lockedKey) app.use('*', scopeEnforcerMiddleware);
   app.route('/messages', messagesRoutes);
   return app;
 }
@@ -392,5 +400,130 @@ describe('POST /messages/send/reaction additive inputs (remove, targetKey)', () 
       content: { targetMessageId: 'EXTERNAL-NOT-IN-DB' },
       metadata: { fromMe: false, targetParticipant: '178035101794451@lid' },
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Through the real scope lock: a chat key (a `cs` child locked to one chat)
+// ---------------------------------------------------------------------------
+
+const OTHER_CHAT_JID = '5511888880000@s.whatsapp.net';
+
+function chatKey(): ApiKeyData {
+  return {
+    id: 'chat-key',
+    name: `chat:${CHAT_ID}`,
+    scopes: ['messages:send', 'chats:read', 'context:write', 'turns:close'],
+    instanceIds: [INSTANCE_ID],
+    expiresAt: null,
+    profile: 'cs',
+    chatAllowlist: [CHAT_ID, CHAT_EXTERNAL_ID],
+    instanceAllowlist: [INSTANCE_ID],
+    outboundRecipientAllowlist: [CHAT_EXTERNAL_ID],
+  };
+}
+
+function postJson(app: Hono<{ Variables: AppVariables }>, path: string, body: Record<string, unknown>) {
+  return app.request(path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+describe('chat key — reactions and forwards stay in its own chat', () => {
+  test('a reaction in its own chat, addressed by JID, is sent', async () => {
+    const sendMessage = okReactionSend();
+    const app = mountMessagesRoutes({ sendMessage, lockedKey: chatKey() });
+
+    const res = await postJson(app, '/messages/send/reaction', {
+      instanceId: INSTANCE_ID,
+      to: CHAT_EXTERNAL_ID,
+      messageId: OMNI_MESSAGE_ID,
+      emoji: '👍',
+    });
+
+    expect(res.status).toBe(200);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  test('a reaction to another chat is refused by the lock and nothing is sent', async () => {
+    const sendMessage = okReactionSend();
+    const app = mountMessagesRoutes({ sendMessage, lockedKey: chatKey() });
+
+    const res = await postJson(app, '/messages/send/reaction', {
+      instanceId: INSTANCE_ID,
+      to: OTHER_CHAT_JID,
+      messageId: MESSAGE_EXTERNAL_ID,
+      emoji: '👍',
+    });
+
+    expect(res.status).toBe(403);
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  test("a reaction in its own chat to another chat's Omni message id is refused and nothing is sent", async () => {
+    const sendMessage = okReactionSend();
+    const app = mountMessagesRoutes({ sendMessage, lockedKey: chatKey(), messageChatId: OTHER_CHAT_ID });
+
+    const res = await postJson(app, '/messages/send/reaction', {
+      instanceId: INSTANCE_ID,
+      to: CHAT_EXTERNAL_ID,
+      messageId: OMNI_MESSAGE_ID,
+      emoji: '👍',
+    });
+
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  test("a send addressed by the chat's UUID is refused: the recipient lock holds the JID (plan Decision 14)", async () => {
+    const sendMessage = okReactionSend();
+    const app = mountMessagesRoutes({ sendMessage, lockedKey: chatKey() });
+
+    const res = await postJson(app, '/messages/send/reaction', {
+      instanceId: INSTANCE_ID,
+      to: CHAT_ID,
+      messageId: MESSAGE_EXTERNAL_ID,
+      emoji: '👍',
+    });
+
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: { lock: string } }).error.lock).toBe('outboundRecipientAllowlist');
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  test('a forward from another chat into its own chat is refused and nothing is sent', async () => {
+    const sendMessage = okReactionSend();
+    const app = mountMessagesRoutes({ sendMessage, lockedKey: chatKey() });
+
+    const res = await postJson(app, '/messages/send/forward', {
+      instanceId: INSTANCE_ID,
+      to: CHAT_EXTERNAL_ID,
+      messageId: MESSAGE_EXTERNAL_ID,
+      fromChatId: OTHER_CHAT_JID,
+    });
+
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: { lock: string; attempted: string } }).error).toMatchObject({
+      lock: 'chatAllowlist',
+      attempted: OTHER_CHAT_JID,
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  test('a forward inside its own chat is sent', async () => {
+    const sendMessage = okReactionSend();
+    const app = mountMessagesRoutes({ sendMessage, lockedKey: chatKey() });
+
+    const res = await postJson(app, '/messages/send/forward', {
+      instanceId: INSTANCE_ID,
+      to: CHAT_EXTERNAL_ID,
+      messageId: MESSAGE_EXTERNAL_ID,
+      fromChatId: CHAT_EXTERNAL_ID,
+    });
+
+    expect(res.status).toBe(201);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 });

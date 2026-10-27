@@ -8,112 +8,20 @@ import { zValidator } from '@hono/zod-validator';
 import type { ChannelRegistry } from '@omni/channel-sdk';
 import { ChannelTypeSchema, ERROR_CODES, OmniError } from '@omni/core';
 import type { ChannelType } from '@omni/core/types';
-import { apiKeys } from '@omni/db/schema';
-import { eq } from 'drizzle-orm';
 import type { Context } from 'hono';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { checkInstanceAccess, resolveChatIdParam } from '../../lib/resolve-chat-id';
 import { clearAgentSession } from '../../plugins/session-cleaner';
 import { optionalDateParam } from '../../schemas/date-query';
 import type { Services } from '../../services';
-import { ApiKeyService } from '../../services/api-keys';
-import type { ApiKeyData, AppVariables } from '../../types';
+import type { AppVariables } from '../../types';
 
 const chatsRoutes = new Hono<{ Variables: AppVariables }>();
 
-/**
- * Standard UUID v1-v5 pattern. Mirrors the regex used in app.ts:148 and the
- * service-layer test suites — kept as a private const here so the route file
- * doesn't need a new shared util.
- */
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-/**
- * Verify API key has access to the given instance.
- */
-function checkInstanceAccess(apiKey: ApiKeyData | undefined, instanceId: string): void {
-  if (apiKey && !ApiKeyService.instanceAllowed(apiKey.instanceIds, instanceId)) {
-    throw new OmniError({
-      code: ERROR_CODES.VALIDATION,
-      message: 'API key does not have access to this instance',
-      context: { instanceId },
-      recoverable: false,
-    });
-  }
-}
-
-/**
- * Resolve the active instance for an API key. Reads `contextInstanceId` first
- * (set via POST /context) then falls back to `activeInstanceId` (set via
- * POST /context/use). Returns null when neither is set — callers MUST 400
- * the request rather than guess across the API key's authorized instances.
- */
-async function getActiveInstanceId(c: Context<{ Variables: AppVariables }>): Promise<string | null> {
-  const keyData = c.get('apiKey');
-  if (!keyData) return null;
-  const db = c.get('db');
-  const [row] = await db
-    .select({
-      activeInstanceId: apiKeys.activeInstanceId,
-      contextInstanceId: apiKeys.contextInstanceId,
-    })
-    .from(apiKeys)
-    .where(eq(apiKeys.id, keyData.id))
-    .limit(1);
-  return row?.contextInstanceId ?? row?.activeInstanceId ?? null;
-}
-
-/**
- * Resolve a `:id` URL param to a chat's internal UUID.
- *
- * - If the param already looks like a UUID, return it unchanged. The caller's
- *   service layer will 404 if no chat exists with that UUID.
- * - Otherwise treat it as a platform-native id (WhatsApp JID like
- *   `120363...@g.us`, Telegram numeric id, Discord channel id, ...) and look
- *   it up via `findByExternalIdSmart`. Requires the API key to have an
- *   active instance set (via POST /context or POST /context/use), or an
- *   explicit `instanceId` to use for the lookup.
- *
- * Returns null when:
- *   - The param is not a UUID and no instance context is available.
- *   - The param is not a UUID and no chat with that external id exists in
- *     the resolved instance.
- *
- * History
- * -------
- * Before this helper, every `chatsRoutes.<verb>('/:id*')` passed the raw URL
- * param straight to a service method that called `eq(<uuid_col>, raw)`. When
- * a client (omni CLI's `omni history`, omni-mcp tools, custom integrations)
- * called with the platform-native id, postgres-js rejected with
- *   PostgresError: invalid input syntax for type uuid: "120363...@g.us"
- * → 500 Server error. Same shape as the LID fix in b5929040 — we just missed
- * the routes that didn't go through `getByExternalId`.
- */
-async function resolveChatIdParam(
-  c: Context<{ Variables: AppVariables }>,
-  raw: string,
-  explicitInstanceId?: string,
-): Promise<string | null> {
-  if (UUID_REGEX.test(raw)) return raw;
-  const instanceId = explicitInstanceId ?? (await getActiveInstanceId(c));
-  if (!instanceId) return null;
-
-  // Authorize BEFORE looking up the chat. Without this gate, a caller who
-  // can't access `instanceId` would observe two distinct responses:
-  //   - chat exists  → checkInstanceAccess later in the handler throws 403
-  //   - chat absent  → resolver returns null, route returns 404
-  // That's a cross-instance existence oracle. Throwing here makes both
-  // states return the same 403 (VALIDATION) before any DB lookup happens.
-  // The check is a no-op for API keys with no `instanceIds` restriction,
-  // and idempotent — handlers that ALSO call `checkInstanceAccess`
-  // afterward still work; the second call simply matches the same allow
-  // list and returns.
-  checkInstanceAccess(c.get('apiKey'), instanceId);
-
-  const services = c.get('services');
-  const chat = await services.chats.findByExternalIdSmart(instanceId, raw);
-  return chat?.id ?? null;
-}
+// `:id` is resolved by lib/resolve-chat-id.ts, shared with the scope lock: for
+// a key with an instance lock the lock has already resolved it and handed the
+// row over (`c.get('resolvedChat')`), and `resolveChatIdParam` returns its id.
 
 /**
  * Common 404 response for routes that couldn't resolve a `:id` to a chat —
