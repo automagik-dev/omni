@@ -19,7 +19,11 @@ const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const MEDIA_ENTRIES = 200
 const MEDIA_BYTES = 50 * 1024 * 1024
 // The cache counts the base64 it hands out; the largest file whose base64 fits it.
-const MEDIA_FILE_BYTES = MEDIA_BYTES / 4 * 3
+export const MEDIA_FILE_BYTES = MEDIA_BYTES / 4 * 3
+// A file whose base64 passes this is served but not kept: one file never empties the cache.
+const MEDIA_KEPT_BYTES = MEDIA_BYTES / 8
+// Downloads from Omni at a time; a chat full of pictures waits its turn.
+const MEDIA_DOWNLOADS = 4
 const MEDIA_TIMEOUT_MS = 60_000
 // The kinds the chat view draws as media; any other media message keeps its "[type]" line.
 const DRAWN = new Set(['image', 'audio', 'video', 'document', 'sticker'])
@@ -33,7 +37,8 @@ const MediaMessage = z.object({ data: z.object({
   mediaMimeType: z.string().max(200).nullish(),
   mediaMetadata: z.object({ fileName: z.string().max(500).nullish() }).passthrough().nullish(),
 }).passthrough() })
-const MediaReady = z.object({ data: z.object({ mediaLocalPath: z.string().min(1).max(1000), mediaMimeType: z.string().max(200).nullish() }).passthrough() })
+const MediaReady = z.object({ data: z.object({ mediaLocalPath: z.string().min(1).max(1000) }).passthrough() })
+const Mime = z.string().min(1).max(200)
 // Each part of the stored path names a file or folder under /media, never one above it.
 const PATH_PART = /^(?!\.{1,2}$)[\w.-]+$/
 
@@ -168,6 +173,25 @@ export function install(rt) {
   }
   rt.omniConfigured = async () => base() !== null && Boolean(await key())
 
+  // A message's file through the routes `omni media download` uses: Omni stores it, then
+  // serves it under /media. The chat view's media endpoint and the omni_media tool
+  // (omni-api.js) both fetch it here. Gives the file's response, unread, with the stored path
+  // and Omni's answer for it (`stored`), or why there is none; a stored path that climbs out
+  // of /media is refused before the key reaches any other route.
+  rt.omniMediaFile = async (messageId, { timeout } = {}) => {
+    const ask = (method, path, body) => rt.omniRequest(method, path, { body, signal: timeout ? AbortSignal.timeout(timeout) : undefined })
+    const stored = await ask('POST', '/messages/media/download', { messageId })
+    if (stored === null) return { ok: false, reason: 'Omni is not connected here.' }
+    const answer = await stored.json().catch(() => null)
+    const ready = MediaReady.safeParse(stored.ok ? answer : null)
+    if (!ready.success) return { ok: false, reason: answer?.error?.message ?? `omni answered ${stored.status} for that media` }
+    const path = ready.data.data.mediaLocalPath
+    if (!path.split('/').every(part => PATH_PART.test(part))) return { ok: false, reason: 'omni named a file outside its media' }
+    const response = await ask('GET', `/media/${path}`)
+    if (response === null || !response.ok) return { ok: false, reason: `omni answered ${response?.status ?? 'nothing'} for the file` }
+    return { ok: true, response, path, stored: ready.data.data }
+  }
+
   rt.omniEndpoint = async (endpoint, body) => {
     const url = base()
     const apiKey = await key()
@@ -196,7 +220,8 @@ export function install(rt) {
 
   // One message's file for the chat view, as base64, through the routes `omni media
   // download` uses: Omni stores it, then serves it under /media. Kept here, most recently
-  // shown last, within MEDIA_ENTRIES files and MEDIA_BYTES; one download per file at a time.
+  // shown last, within MEDIA_ENTRIES files and MEDIA_BYTES; one download per file at a time,
+  // and MEDIA_DOWNLOADS at a time in all.
   const media = new Map()
   const loading = new Map()
   let mediaBytes = 0
@@ -213,6 +238,20 @@ export function install(rt) {
     }
   }
   const shown = ({ mime, data, name }) => ({ ok: true, mime, data, name })
+  // A finished download hands its turn to the next waiting one.
+  let downloading = 0
+  const waiting = []
+  async function inTurn(run) {
+    if (downloading < MEDIA_DOWNLOADS) downloading += 1
+    else await new Promise(resolve => waiting.push(resolve))
+    try {
+      return await run()
+    } finally {
+      const next = waiting.shift()
+      if (next) next()
+      else downloading -= 1
+    }
+  }
   const no = reason => ({ ok: false, reason })
   // The body, read until it passes MEDIA_FILE_BYTES (then null, the rest unread): a file
   // without a Content-Length is refused as early as one with it.
@@ -239,20 +278,15 @@ export function install(rt) {
     const message = MediaMessage.safeParse(await read(found))
     if (!message.success) return no('omni answered something else for that message')
     if (!message.data.data.hasMedia) return no('That message has no media')
-    const stored = await ask('POST', '/messages/media/download', { messageId: id })
-    const ready = MediaReady.safeParse(stored.ok ? await read(stored) : null)
-    if (!ready.success) return no(`omni answered ${stored.status} for that media`)
-    const parts = ready.data.data.mediaLocalPath.split('/')
-    if (!parts.every(part => PATH_PART.test(part))) return no('omni named a file outside its media')
-    const file = await ask('GET', `/media/${parts.join('/')}`)
-    if (!file.ok) return no(`omni answered ${file.status} for the file`)
-    if (Number(file.headers.get('content-length')) > MEDIA_FILE_BYTES) return no('The file is too large to show here')
-    const bytes = await bounded(file)
+    const file = await rt.omniMediaFile(id, { timeout: MEDIA_TIMEOUT_MS })
+    if (!file.ok) return no(file.reason)
+    if (Number(file.response.headers.get('content-length')) > MEDIA_FILE_BYTES) return no('The file is too large to show here')
+    const bytes = await bounded(file.response)
     if (bytes === null) return no('The file is too large to show here')
-    const mime = message.data.data.mediaMimeType || ready.data.data.mediaMimeType || file.headers.get('content-type')?.split(';')[0] || 'application/octet-stream'
+    const mime = message.data.data.mediaMimeType || Mime.safeParse(file.stored.mediaMimeType).data || file.response.headers.get('content-type')?.split(';')[0] || 'application/octet-stream'
     const kept = { mime, data: bytes.toString('base64'), name: message.data.data.mediaMetadata?.fileName || null }
     // A download that began under another link stays out of this one's cache.
-    if (owner === mediaOwner) keep(id, kept)
+    if (owner === mediaOwner && kept.data.length <= MEDIA_KEPT_BYTES) keep(id, kept)
     return shown(kept)
   }
   rt.omniMedia = async (body) => {
@@ -276,7 +310,7 @@ export function install(rt) {
       media.set(id, hit)
       return shown(hit)
     }
-    if (!loading.has(id)) loading.set(id, download(id, owner).catch(() => no('Could not reach omni')).finally(() => loading.delete(id)))
+    if (!loading.has(id)) loading.set(id, inTurn(() => download(id, owner)).catch(() => no('Could not reach omni')).finally(() => loading.delete(id)))
     return loading.get(id)
   }
 

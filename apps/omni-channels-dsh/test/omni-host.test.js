@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { KEY, channelOf, chatOf, initialsOf, install, messageOf, statusOf } from '../src/host/omni.js'
+import { KEY, MEDIA_FILE_BYTES, channelOf, chatOf, initialsOf, install, messageOf, statusOf } from '../src/host/omni.js'
 import { install as installHooks } from '@automagik/bots-dsh/src/host/extend.js'
 
 test('omni connection states fold into the four the view shows', () => {
@@ -178,5 +178,47 @@ test('a file with no stated size is refused once it passes the bound, the rest u
   const endless = () => new Response(new ReadableStream({ pull(controller) { pulls += 1; controller.enqueue(chunk) } }), { status: 200 })
   const { rt } = runtime({ url: 'https://omni.test', key: 'omni_sk_test', answers: { ...mediaAnswers(), [`/media/i1/2026-10/${MESSAGE}.jpg`]: endless } })
   assert.deepEqual(await rt.omniMedia({ messageId: MESSAGE }), { ok: false, reason: 'The file is too large to show here' })
-  assert.ok(pulls < 15, `read ${pulls} chunks`)
+  // The chunks that pass the bound, and the stream's one chunk read ahead.
+  const bound = Math.floor(MEDIA_FILE_BYTES / chunk.length) + 1
+  assert.ok(pulls <= bound + 1, `read ${pulls} chunks, bound ${bound}`)
+})
+
+test('a file past an eighth of the cache is served but not kept', async () => {
+  // 5 MiB: its base64 passes 50 MiB / 8.
+  const big = Buffer.alloc(5 * 1024 * 1024, 7)
+  const { rt, asked } = runtime({ url: 'https://omni.test', key: 'omni_sk_test', answers: { ...mediaAnswers(), [`/media/i1/2026-10/${MESSAGE}.jpg`]: () => new Response(big, { status: 200 }) } })
+  const first = await rt.omniMedia({ messageId: MESSAGE })
+  assert.equal(first.ok, true)
+  assert.equal(first.data.length, big.toString('base64').length)
+  assert.equal(asked.length, 3)
+  assert.equal((await rt.omniMedia({ messageId: MESSAGE })).ok, true)
+  assert.equal(asked.length, 6)
+})
+
+test('four downloads run at a time; a fifth waits, and cache hits and shared downloads do not', async () => {
+  const ids = Array.from({ length: 6 }, (_, index) => `0b6f3c1e-5a2d-4c8e-9f10-${String(index).padStart(12, '0')}`)
+  let open
+  const gate = new Promise(resolve => { open = resolve })
+  const answers = Object.assign({}, ...ids.map((id) => {
+    const answer = mediaAnswers(id)
+    const message = answer[`/messages/${id}`]
+    // The first id is cached before the gate closes; the others wait on it.
+    return { ...answer, [`/messages/${id}`]: () => (id === ids[0] ? Promise.resolve() : gate).then(() => new Response(JSON.stringify(message), { status: 200 })) }
+  }))
+  const { rt, asked } = runtime({ url: 'https://omni.test', key: 'omni_sk_test', answers })
+  assert.equal((await rt.omniMedia({ messageId: ids[0] })).ok, true)
+  const lookups = () => asked.filter(call => /\/messages\/0b6f/.test(call.address)).length
+  const settle = () => new Promise(resolve => setTimeout(resolve, 20))
+  const pending = ids.slice(1).map(id => rt.omniMedia({ messageId: id }))
+  await settle()
+  assert.equal(lookups(), 1 + 4, 'the fifth new download has not reached omni')
+  // A file in the cache and a file already on its way take no turn.
+  assert.equal((await rt.omniMedia({ messageId: ids[0] })).ok, true)
+  const shared = rt.omniMedia({ messageId: ids[1] })
+  await settle()
+  assert.equal(lookups(), 1 + 4)
+  open()
+  const done = await Promise.all([...pending, shared])
+  assert.ok(done.every(reply => reply.ok))
+  assert.equal(lookups(), 1 + 5)
 })

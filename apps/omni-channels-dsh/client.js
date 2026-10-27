@@ -11883,14 +11883,42 @@ function dayLabel(at2) {
 }
 var DRAWN = { image: "Picture", audio: "Voice note", video: "Video", document: "Document", sticker: "Sticker" };
 var drawnMedia = (message) => message.hasMedia === true && Object.hasOwn(DRAWN, message.type);
+var NEAR = "600px 0px";
+function useNear(ref, watching) {
+  const [near, setNear] = (0, import_react4.useState)(false);
+  (0, import_react4.useEffect)(() => {
+    const node = ref.current;
+    if (!watching || near || !node) return void 0;
+    if (typeof IntersectionObserver !== "function") {
+      setNear(true);
+      return void 0;
+    }
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) setNear(true);
+    }, { root: node.closest(".oc-thread"), rootMargin: NEAR });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [ref, watching, near]);
+  return near;
+}
+var blobOf = (data, mime) => {
+  const text = atob(data);
+  const bytes = new Uint8Array(text.length);
+  for (let index = 0; index < text.length; index += 1) bytes[index] = text.charCodeAt(index);
+  return new Blob([bytes], { type: mime });
+};
 function useMediaFile(id, wanted) {
   const [file, setFile] = (0, import_react4.useState)(null);
   (0, import_react4.useEffect)(() => {
     if (!wanted) return void 0;
     let on2 = true;
+    let url = null;
     call("omni-media", { messageId: id }).then(
       (reply) => {
-        if (on2) setFile(reply.ok ? { url: `data:${reply.mime};base64,${reply.data}` } : { failed: reply.reason });
+        if (!on2) return;
+        if (!reply.ok) return setFile({ failed: reply.reason });
+        url = URL.createObjectURL(blobOf(reply.data, reply.mime));
+        setFile({ url });
       },
       (error) => {
         if (on2) setFile({ failed: error.message });
@@ -11898,6 +11926,7 @@ function useMediaFile(id, wanted) {
     );
     return () => {
       on2 = false;
+      if (url) URL.revokeObjectURL(url);
     };
   }, [id, wanted]);
   return file;
@@ -11908,10 +11937,12 @@ var DocMark = () => (0, import_react4.createElement)(
   { width: 22, height: 22, viewBox: "0 0 24 24", "aria-hidden": true, focusable: "false" },
   (0, import_react4.createElement)("path", { d: "M7 3.5h6.5L18 8v11a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 19V5a1.5 1.5 0 0 1 1-1.5zM13.5 3.5V8H18", ...stroke })
 );
-function MediaPart({ message }) {
+function MediaPart({ message, onSized }) {
   const kind = message.type;
   const [played, setPlayed] = (0, import_react4.useState)(false);
-  const file = useMediaFile(message.id, kind === "video" ? played : kind !== "document");
+  const spot = (0, import_react4.useRef)(null);
+  const near = useNear(spot, kind !== "video" && kind !== "document");
+  const file = useMediaFile(message.id, kind === "video" ? played : kind !== "document" && near);
   const label = t(DRAWN[kind]);
   if (kind === "document") {
     return (0, import_react4.createElement)("div", { className: "oc-media-doc" }, (0, import_react4.createElement)(DocMark), (0, import_react4.createElement)("span", null, message.fileName ?? label));
@@ -11920,10 +11951,10 @@ function MediaPart({ message }) {
   if (kind === "video" && !played) {
     return (0, import_react4.createElement)("button", { type: "button", className: "oc-media-still", "aria-label": t("Play video"), onClick: () => setPlayed(true) }, (0, import_react4.createElement)("span", { className: "oc-media-play" }, (0, import_react4.createElement)(PlayMark)));
   }
-  if (!file) return (0, import_react4.createElement)("div", { className: `oc-media-wait oc-media-wait-${kind}`, role: "status", "aria-label": t("Loading…") }, (0, import_react4.createElement)("span", { className: "oc-spinner", "aria-hidden": true }));
-  if (kind === "audio") return (0, import_react4.createElement)("audio", { className: "oc-media-audio", controls: true, preload: "metadata", src: file.url });
-  if (kind === "video") return (0, import_react4.createElement)("video", { className: "oc-media-img", controls: true, autoPlay: true, playsInline: true, src: file.url });
-  return (0, import_react4.createElement)("img", { className: kind === "sticker" ? "oc-media-sticker" : "oc-media-img", src: file.url, alt: message.mediaText ?? label });
+  if (!file) return (0, import_react4.createElement)("div", { ref: spot, className: `oc-media-wait oc-media-wait-${kind}`, role: "status", "aria-label": t("Loading…") }, (0, import_react4.createElement)("span", { className: "oc-spinner", "aria-hidden": true }));
+  if (kind === "audio") return (0, import_react4.createElement)("audio", { className: "oc-media-audio", controls: true, preload: "metadata", src: file.url, onLoadedMetadata: onSized });
+  if (kind === "video") return (0, import_react4.createElement)("video", { className: "oc-media-img", controls: true, autoPlay: true, playsInline: true, src: file.url, onLoadedMetadata: onSized });
+  return (0, import_react4.createElement)("img", { className: kind === "sticker" ? "oc-media-sticker" : "oc-media-img", src: file.url, alt: message.mediaText ?? label, onLoad: onSized });
 }
 function ChatPage({ actions }) {
   const state = useOmni();
@@ -11934,11 +11965,21 @@ function ChatPage({ actions }) {
   const loading = chat !== void 0 && loaded === void 0 && !state.preview;
   const messages = chat ? loaded ?? (state.preview ? [{ id: "preview", from: "them", text: chat.preview, at: chat.at }] : []) : [];
   const scroller = (0, import_react4.useRef)(null);
+  const atEnd = (0, import_react4.useRef)(true);
   const [draft, setDraft] = (0, import_react4.useState)("");
   (0, import_react4.useLayoutEffect)(() => {
     const node = scroller.current;
     if (node) node.scrollTop = node.scrollHeight;
+    atEnd.current = true;
   }, [chat?.id, messages.length]);
+  const onScroll = () => {
+    const node = scroller.current;
+    if (node) atEnd.current = node.scrollHeight - node.scrollTop - node.clientHeight < 32;
+  };
+  const onSized = () => {
+    const node = scroller.current;
+    if (node && atEnd.current) node.scrollTop = node.scrollHeight;
+  };
   (0, import_react4.useEffect)(() => {
     setDraft("");
   }, [chat?.id]);
@@ -11976,7 +12017,7 @@ function ChatPage({ actions }) {
     ),
     (0, import_react4.createElement)(
       "div",
-      { ref: scroller, className: "oc-thread", role: "log", "aria-label": t("Conversation with {name}", { name: chat.name }) },
+      { ref: scroller, className: "oc-thread", onScroll, role: "log", "aria-label": t("Conversation with {name}", { name: chat.name }) },
       (0, import_react4.createElement)(
         "div",
         { className: "oc-thread-in" },
@@ -11993,7 +12034,7 @@ function ChatPage({ actions }) {
             (0, import_react4.createElement)(
               "div",
               { className: "oc-bubble", "data-sending": message.sending || void 0, "data-media": drawnMedia(message) ? message.type : void 0 },
-              drawnMedia(message) ? (0, import_react4.createElement)(MediaPart, { message }) : null,
+              drawnMedia(message) ? (0, import_react4.createElement)(MediaPart, { message, onSized }) : null,
               drawnMedia(message) ? message.text ? (0, import_react4.createElement)("span", { className: "oc-media-caption" }, message.text) : null : message.text,
               drawnMedia(message) && message.mediaText ? (0, import_react4.createElement)("span", { className: "oc-media-text" }, message.mediaText) : null,
               (0, import_react4.createElement)("time", null, message.sending ? t("Sending…") : new Date(message.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))

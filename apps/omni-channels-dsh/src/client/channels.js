@@ -93,20 +93,60 @@ function dayLabel(at) {
 }
 
 // A message's file, drawn in its bubble with Omni's text for it under it. The host fetches
-// the file on its own key and keeps it (the omni-media endpoint, src/host/omni.js); a video
-// is fetched only once it is played.
+// the file on its own key and keeps it (the omni-media endpoint, src/host/omni.js). A file is
+// fetched once its row comes near the screen, and a video only once it is played.
 const DRAWN = { image: 'Picture', audio: 'Voice note', video: 'Video', document: 'Document', sticker: 'Sticker' }
 const drawnMedia = message => message.hasMedia === true && Object.hasOwn(DRAWN, message.type)
+// How far beyond the thread's edges a row counts as near.
+const NEAR = '600px 0px'
+
+// Whether the node has come within NEAR of the thread's view; once near, it stays near.
+// Without IntersectionObserver every row is near.
+function useNear(ref, watching) {
+  const [near, setNear] = useState(false)
+  useEffect(() => {
+    const node = ref.current
+    if (!watching || near || !node) return undefined
+    if (typeof IntersectionObserver !== 'function') {
+      setNear(true)
+      return undefined
+    }
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some(entry => entry.isIntersecting)) setNear(true)
+    }, { root: node.closest('.oc-thread'), rootMargin: NEAR })
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [ref, watching, near])
+  return near
+}
+
+// The host's base64, decoded once into a Blob the page points at; the URL is let go with
+// the row.
+const blobOf = (data, mime) => {
+  const text = atob(data)
+  const bytes = new Uint8Array(text.length)
+  for (let index = 0; index < text.length; index += 1) bytes[index] = text.charCodeAt(index)
+  return new Blob([bytes], { type: mime })
+}
 
 function useMediaFile(id, wanted) {
   const [file, setFile] = useState(null)
   useEffect(() => {
     if (!wanted) return undefined
     let on = true
+    let url = null
     call('omni-media', { messageId: id }).then(
-      reply => { if (on) setFile(reply.ok ? { url: `data:${reply.mime};base64,${reply.data}` } : { failed: reply.reason }) },
-      error => { if (on) setFile({ failed: error.message }) })
-    return () => { on = false }
+      (reply) => {
+        if (!on) return
+        if (!reply.ok) return setFile({ failed: reply.reason })
+        url = URL.createObjectURL(blobOf(reply.data, reply.mime))
+        setFile({ url })
+      },
+      (error) => { if (on) setFile({ failed: error.message }) })
+    return () => {
+      on = false
+      if (url) URL.revokeObjectURL(url)
+    }
   }, [id, wanted])
   return file
 }
@@ -115,10 +155,12 @@ const PlayMark = () => h('svg', { width: 22, height: 22, viewBox: '0 0 24 24', '
 const DocMark = () => h('svg', { width: 22, height: 22, viewBox: '0 0 24 24', 'aria-hidden': true, focusable: 'false' },
   h('path', { d: 'M7 3.5h6.5L18 8v11a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 19V5a1.5 1.5 0 0 1 1-1.5zM13.5 3.5V8H18', ...stroke }))
 
-function MediaPart({ message }) {
+function MediaPart({ message, onSized }) {
   const kind = message.type
   const [played, setPlayed] = useState(false)
-  const file = useMediaFile(message.id, kind === 'video' ? played : kind !== 'document')
+  const spot = useRef(null)
+  const near = useNear(spot, kind !== 'video' && kind !== 'document')
+  const file = useMediaFile(message.id, kind === 'video' ? played : kind !== 'document' && near)
   const label = t(DRAWN[kind])
   if (kind === 'document') {
     return h('div', { className: 'oc-media-doc' }, h(DocMark), h('span', null, message.fileName ?? label))
@@ -127,10 +169,10 @@ function MediaPart({ message }) {
   if (kind === 'video' && !played) {
     return h('button', { type: 'button', className: 'oc-media-still', 'aria-label': t('Play video'), onClick: () => setPlayed(true) }, h('span', { className: 'oc-media-play' }, h(PlayMark)))
   }
-  if (!file) return h('div', { className: `oc-media-wait oc-media-wait-${kind}`, role: 'status', 'aria-label': t('Loading…') }, h('span', { className: 'oc-spinner', 'aria-hidden': true }))
-  if (kind === 'audio') return h('audio', { className: 'oc-media-audio', controls: true, preload: 'metadata', src: file.url })
-  if (kind === 'video') return h('video', { className: 'oc-media-img', controls: true, autoPlay: true, playsInline: true, src: file.url })
-  return h('img', { className: kind === 'sticker' ? 'oc-media-sticker' : 'oc-media-img', src: file.url, alt: message.mediaText ?? label })
+  if (!file) return h('div', { ref: spot, className: `oc-media-wait oc-media-wait-${kind}`, role: 'status', 'aria-label': t('Loading…') }, h('span', { className: 'oc-spinner', 'aria-hidden': true }))
+  if (kind === 'audio') return h('audio', { className: 'oc-media-audio', controls: true, preload: 'metadata', src: file.url, onLoadedMetadata: onSized })
+  if (kind === 'video') return h('video', { className: 'oc-media-img', controls: true, autoPlay: true, playsInline: true, src: file.url, onLoadedMetadata: onSized })
+  return h('img', { className: kind === 'sticker' ? 'oc-media-sticker' : 'oc-media-img', src: file.url, alt: message.mediaText ?? label, onLoad: onSized })
 }
 
 export function ChatPage({ actions }) {
@@ -142,11 +184,23 @@ export function ChatPage({ actions }) {
   const loading = chat !== undefined && loaded === undefined && !state.preview
   const messages = chat ? loaded ?? (state.preview ? [{ id: 'preview', from: 'them', text: chat.preview, at: chat.at }] : []) : []
   const scroller = useRef(null)
+  // Whether the reader is at the thread's end: a file that loads and grows its row keeps
+  // them there, and leaves a reader who scrolled up where they are.
+  const atEnd = useRef(true)
   const [draft, setDraft] = useState('')
   useLayoutEffect(() => {
     const node = scroller.current
     if (node) node.scrollTop = node.scrollHeight
+    atEnd.current = true
   }, [chat?.id, messages.length])
+  const onScroll = () => {
+    const node = scroller.current
+    if (node) atEnd.current = node.scrollHeight - node.scrollTop - node.clientHeight < 32
+  }
+  const onSized = () => {
+    const node = scroller.current
+    if (node && atEnd.current) node.scrollTop = node.scrollHeight
+  }
   useEffect(() => { setDraft('') }, [chat?.id])
   if (!chat || !channel) {
     return h('div', { className: 'oc-page oc-chat-empty' }, h(OmniMark, { size: 40 }), h('p', null, t('Pick a chat under your Bots.')))
@@ -166,7 +220,7 @@ export function ChatPage({ actions }) {
         channel.answeredBy === 'Omni' ? h(Fragment, null, h(OmniMark, { size: 14 }), t('Omni answers here')) : t('You answer here')),
       h('button', { type: 'button', className: 'oc-ghost', onClick: () => omni.openChannels('channel', channel.id) }, h(StatusDot, { status: channel.status }), t('Channel health')),
       h(PreviewChip)),
-    h('div', { ref: scroller, className: 'oc-thread', role: 'log', 'aria-label': t('Conversation with {name}', { name: chat.name }) },
+    h('div', { ref: scroller, className: 'oc-thread', onScroll, role: 'log', 'aria-label': t('Conversation with {name}', { name: chat.name }) },
       h('div', { className: 'oc-thread-in' },
         loading ? h('div', { className: 'oc-day' }, h('span', { className: 'oc-spinner', 'aria-hidden': true }), t('Loading messages…')) : null,
         messages.map((message, index) => {
@@ -177,7 +231,7 @@ export function ChatPage({ actions }) {
             first && !mine && message.author ? h('span', { className: 'oc-msg-author' }, message.author) : null,
             first && message.from === 'omni' ? h('span', { className: 'oc-msg-author oc-msg-omni' }, h(OmniMark, { size: 12 }), 'Omni') : null,
             h('div', { className: 'oc-bubble', 'data-sending': message.sending || undefined, 'data-media': drawnMedia(message) ? message.type : undefined },
-              drawnMedia(message) ? h(MediaPart, { message }) : null,
+              drawnMedia(message) ? h(MediaPart, { message, onSized }) : null,
               drawnMedia(message) ? (message.text ? h('span', { className: 'oc-media-caption' }, message.text) : null) : message.text,
               drawnMedia(message) && message.mediaText ? h('span', { className: 'oc-media-text' }, message.mediaText) : null,
               h('time', null, message.sending ? t('Sending…') : new Date(message.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })))))

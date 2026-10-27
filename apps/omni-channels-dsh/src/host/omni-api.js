@@ -476,17 +476,16 @@ export function install(rt) {
         const { chat } = await chatResource(args.chat)
         const message = await messageIn(chat, args.message)
         if (!message.hasMedia) throw invalid('That message has no media')
-        const ready = await call('POST', '/messages/media/download', { messageId: message.id })
-        const where = ready.data?.data?.mediaLocalPath
-        if (!ok(ready) || typeof where !== 'string') throw invalid(ready.data?.error?.message ?? `omni answered ${ready.status} for that media`)
-        const response = await rt.omniRequest('GET', `/media/${where.split('/').map(encodeURIComponent).join('/')}`)
-        if (response === null || !response.ok) throw invalid(`omni answered ${response?.status ?? 'nothing'} for the file`)
+        // The same download as the chat view's (omni.js), refusing a path outside /media.
+        const media = await rt.omniMediaFile(message.id)
+        if (!media.ok) throw invalid(media.reason)
+        const { response, path: where } = media
         // Each Bot's files apart, under its own id.
         const dir = join(rt.home, 'media', String(args.bot ?? 'bot').replace(/[^\w-]/g, '_'))
         mkdirSync(dir, { recursive: true, mode: 0o700 })
         const file = join(dir, `${message.id}-${basename(where)}`)
         writeFileSync(file, Buffer.from(await response.arrayBuffer()), { mode: 0o600 })
-        return fitted({ status: 200, operation: 'Media', data: { path: file, type: message.messageType, mimeType: ready.data.data.mediaMimeType ?? null, text: message.transcription || undefined } })
+        return fitted({ status: 200, operation: 'Media', data: { path: file, type: message.messageType, mimeType: media.stored.mediaMimeType ?? null, text: message.transcription || undefined } })
       },
     },
     omni_delete: {
