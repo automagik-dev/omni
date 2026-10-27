@@ -56,6 +56,7 @@ import { type TenantAuthContext, freezeContext } from '../auth-context';
 import {
   ROUTE_OWNERSHIP,
   type RouteOwnershipClass,
+  TENANT_ADDRESSABLE_SCOPES,
   isTenantAddressableRoute,
   resolveRouteOwnership,
 } from '../route-ownership';
@@ -118,6 +119,9 @@ const ROUTES: readonly { method: 'get' | 'post' | 'patch' | 'delete'; path: stri
   { method: 'post', path: '/keys' },
   { method: 'post', path: '/keys/:id/revoke' },
   { method: 'delete', path: '/keys/:id' },
+  { method: 'post', path: '/keys/children' },
+  { method: 'post', path: '/keys/children/self/revoke' },
+  { method: 'post', path: '/keys/children/:id/revoke' },
   { method: 'post', path: '/trust/handshake' },
   { method: 'patch', path: '/trust/hosts/:id' },
   { method: 'delete', path: '/trust/hosts/:id' },
@@ -255,6 +259,47 @@ describe('a tenant-admin credential cannot reach the legacy keys router', () => 
     const res = await h.request('POST', '/api/v2/keys');
     expect(res.status).toBe(200);
     expect(h.reached()).toEqual(['POST /keys']);
+  });
+});
+
+describe('a tenant credential cannot reach the chat-key routes (wish: omni-chat-threads)', () => {
+  const CHAT_KEY_ROUTES = [
+    'POST /api/v2/keys/children',
+    'POST /api/v2/keys/children/self/revoke',
+    'POST /api/v2/keys/children/:id/revoke',
+  ];
+
+  test('the three are declared control-plane and are not tenant-addressable', () => {
+    for (const route of CHAT_KEY_ROUTES) {
+      declaredAs(route, 'control-plane');
+      expect(isTenantAddressableRoute(route)).toBe(false);
+    }
+    // So no tenant scope projects to the scope they need.
+    expect(TENANT_ADDRESSABLE_SCOPES).not.toContain('chats:keys');
+  });
+
+  for (const context of [ADMIN, OPERATOR, VIEWER]) {
+    for (const path of ['/keys/children', '/keys/children/self/revoke', '/keys/children/abc/revoke']) {
+      test(`POST ${path} is refused for a ${context.actorRole} before the route runs`, async () => {
+        const h = harness(context);
+        const res = await h.request('POST', `/api/v2${path}`);
+        expect(res.status).toBe(403);
+        expect(h.reached()).toEqual([]);
+        expect(h.transactionsOpened()).toBe(0);
+      });
+    }
+  }
+
+  test('a legacy key still reaches them', async () => {
+    const h = harness(null);
+    for (const path of ['/keys/children', '/keys/children/self/revoke', '/keys/children/abc/revoke']) {
+      expect((await h.request('POST', `/api/v2${path}`)).status).toBe(200);
+    }
+    expect(h.reached()).toEqual([
+      'POST /keys/children',
+      'POST /keys/children/self/revoke',
+      'POST /keys/children/:id/revoke',
+    ]);
   });
 });
 

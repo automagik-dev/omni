@@ -288,6 +288,13 @@ export const SCOPE_MAP: Record<string, string> = {
   'GET /keys/:id': 'keys:read',
   'PATCH /keys/:id': 'keys:write',
   'POST /keys/:id/revoke': 'keys:write',
+  // Chat keys (wish: omni-chat-threads): `chats:keys` mints and revokes the
+  // caller's own cs children; it comes with `chats:*` or `*`, never `keys:*`.
+  // A child cuts itself with the `chats:read` it already holds. The exact self
+  // path stays ahead of the `:id` pattern.
+  'POST /keys/children': 'chats:keys',
+  'POST /keys/children/self/revoke': 'chats:read',
+  'POST /keys/children/:id/revoke': 'chats:keys',
   'DELETE /keys/:id': 'keys:write',
   'GET /keys/:id/audit': 'keys:read',
 

@@ -640,6 +640,46 @@ describe('chat key — the recipient lock binds what it delivers, not what it re
   });
 });
 
+describe('chat key — POST /keys/children/self/revoke is the one route past the locks', () => {
+  test('a cs child with its locks set reaches the self-revoke route', async () => {
+    const { app } = mountLock(chatKey());
+    expect((await call(app, 'POST', '/keys/children/self/revoke')).status).toBe(200);
+    // A body naming another chat changes nothing: the route names no target.
+    const withBody = await call(app, 'POST', '/keys/children/self/revoke', { chatId: OTHER_CHAT, to: OTHER_JID });
+    expect(withBody.status).toBe(200);
+  });
+
+  test('the scope check still runs first: no chats:read, no route', async () => {
+    const { app } = mountLock(chatKey({ scopes: ['messages:send'] }));
+    const res = await call(app, 'POST', '/keys/children/self/revoke');
+    expect(res.status).toBe(403);
+    expect(await errorOf(res)).toMatchObject({ message: 'Insufficient permissions. Required scope: chats:read' });
+  });
+
+  test('no other route skips the allowlist checks, even for a key whose scopes reach every route', async () => {
+    // '*' passes every scope check, so only the locks can refuse these.
+    const { app } = mountLock(chatKey({ scopes: ['*'] }));
+    expect((await call(app, 'POST', '/keys/children/self/revoke')).status).toBe(200);
+    for (const [method, path] of [
+      ['POST', '/keys/children/self/revoke/x'],
+      ['POST', '/keys/children/self/revoke/'],
+      ['POST', '/keys/children/self'],
+      ['GET', '/keys/children/self/revoke'],
+      ['DELETE', '/keys/children/self/revoke'],
+      ['POST', '/keys/children/child-key/revoke'],
+      ['POST', '/keys/children'],
+      ['POST', '/keys/child-key/revoke'],
+      ['POST', '/x/keys/children/self/revoke'],
+    ] as const) {
+      const res = await call(app, method, path);
+      expect({ method, path, status: res.status }).toEqual({ method, path, status: 403 });
+      expect(await errorOf(res)).toHaveProperty('lock');
+    }
+    const send = await call(app, 'POST', '/messages/send', { instanceId: OWN_INSTANCE, to: OTHER_JID, text: 'hi' });
+    expect(send.status).toBe(403);
+  });
+});
+
 describe('the lock reads every body the route validator reads (application/*+json)', () => {
   const MERGE_PATCH = { 'content-type': 'application/merge-patch+json' };
 

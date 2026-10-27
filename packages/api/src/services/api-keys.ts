@@ -769,7 +769,7 @@ export class ApiKeyService {
   }
 
   /** A child key revokes itself; it names no target, so it can never reach another key. */
-  async revokeSelf(child: ValidatedApiKey): Promise<RevokeSelfResult> {
+  async revokeSelf(child: Pick<ValidatedApiKey, 'id' | 'name'>): Promise<RevokeSelfResult> {
     const changes: ChildChange[] = [];
 
     const result = await this.db.transaction(async (tx): Promise<RevokeSelfResult> => {

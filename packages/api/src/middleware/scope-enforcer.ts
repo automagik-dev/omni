@@ -17,6 +17,9 @@
  *   - profile !== null and lock ∉ requiresLocks → empty [] means "no lock"
  *
  * 403 responses include the `lock` name and the `attempted` value to aid operator debugging.
+ *
+ * One route skips the allowlist checks after its scope check passes: a chat key
+ * revoking itself (`POST /keys/children/self/revoke`, see `isLockFreeRoute`).
  */
 
 import { createLogger } from '@omni/core';
@@ -536,6 +539,18 @@ function hasUnreadBody(c: Context<{ Variables: AppVariables }>, method: string, 
   return c.req.header('content-type') !== undefined || (c.req.header('content-length') ?? '0') !== '0';
 }
 
+/**
+ * The one route whose allowlist checks are skipped once its scope check has
+ * passed: a chat key cutting itself. It names no target and acts on the
+ * caller's own key only, and a chat key must be able to reach it whatever its
+ * locks say, so a re-paired app can drain the keys it no longer holds the
+ * parent of. Matched on the method and the exact path; a trailing slash, a
+ * longer path or `/keys/children/:id/revoke` keeps every lock.
+ */
+function isLockFreeRoute(method: string, path: string): boolean {
+  return method === 'POST' && path.replace(/^\/api\/v2/, '') === '/keys/children/self/revoke';
+}
+
 function invalidSignedHostScopeContextResponse(c: Context<{ Variables: AppVariables }>, hostId: string): Response {
   log.warn(`DENIED: signedBy=${hostId} route=${c.req.method.toUpperCase()} ${c.req.path} host-scopes=INVALID`);
   return c.json(
@@ -764,6 +779,7 @@ export const scopeEnforcerMiddleware = createMiddleware<{ Variables: AppVariable
   // Scope check passed (or wildcard). Apply profile-aware allowlist locks.
   // Admin (wildcard) keys still pass through locks because a profile key MAY
   // have been granted '*' via overrides; rely on the lock columns to decide.
+  if (isLockFreeRoute(method, path)) return next();
   const denied = await enforceLocks(c, apiKey, method, path);
   return denied ?? next();
 });

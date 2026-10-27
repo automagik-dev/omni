@@ -7,6 +7,11 @@
  * through the REAL `/keys` routes and each child is checked through the REAL
  * auth middleware on `POST /auth/validate`.
  *
+ * Group 4 (routes): `POST /keys/children`, `POST /keys/children/self/revoke`
+ * and `POST /keys/children/:id/revoke`, called with real keys through the REAL
+ * auth middleware and the REAL scope enforcer, and a minted child's sends held
+ * to its own chat by that same enforcer.
+ *
  * The database is an in-memory fake of the Drizzle surface `ApiKeyService`
  * uses, which evaluates the service's own `where` conditions (eq, and, or,
  * is null, comparisons, in) against its rows and applies the FK cascade, so the
@@ -16,12 +21,13 @@
  */
 
 import { afterEach, beforeEach, describe, expect, setSystemTime, test } from 'bun:test';
-import { CORE_EVENT_TYPES, type EventBus, STREAM_NAMES, getStreamForEventType } from '@omni/core';
+import { CORE_EVENT_TYPES, type EventBus, NotFoundError, STREAM_NAMES, getStreamForEventType } from '@omni/core';
 import { type ApiKey, type Database, type NewApiKey, apiKeys } from '@omni/db';
 import { Column, Param, SQL, StringChunk, getTableColumns, is } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { DEFAULT_DEVICE_KEY_SCOPES } from '../../../login/config';
 import { authMiddleware } from '../../../middleware/auth';
+import { scopeEnforcerMiddleware } from '../../../middleware/scope-enforcer';
 import type { Services } from '../../../services';
 import {
   ApiKeyService,
@@ -30,6 +36,7 @@ import {
   MAX_LIVE_CHILDREN,
   type MintChildResult,
 } from '../../../services/api-keys';
+import type { TenantAuthContext } from '../../../tenancy/auth-context';
 import type { ApiKeyData, AppVariables } from '../../../types';
 import { authRoutes } from '../auth';
 import { keysRoutes } from '../keys';
@@ -813,5 +820,405 @@ describe('PATCH /keys/:childId stays inside the parent', () => {
       message: 'A child key cannot exceed its parent key',
     });
     expect(h.row(row.id)?.instanceIds).toEqual([INSTANCE]);
+  });
+});
+
+// ============================================================================
+// The child-key routes (Group 4), through the real auth and scope enforcer
+// ============================================================================
+
+/** A tenant credential's context; the route only needs to see that one is there. */
+const TENANT_CONTEXT = { credentialClass: 'tenant', tenantId: 'tenant-a' } as unknown as TenantAuthContext;
+
+interface ChildKeyAnswer {
+  id: string;
+  plainTextKey: string;
+  parentKeyId: string;
+  chatId: string;
+  chatExternalId: string;
+  instanceId: string;
+  scopes: string[];
+  expiresAt: string | null;
+  replacedKeyId: string | null;
+  status?: 'revoked' | 'already_revoked';
+}
+
+interface RouteCall {
+  status: number;
+  json: { data: ChildKeyAnswer; error: { code: string; message: string; lock?: string } };
+}
+
+/**
+ * `/api/v2` as app.ts assembles it for a legacy key: the real auth middleware,
+ * then the real scope enforcer, then the real keys routes. The two send routes
+ * are stubs behind that same enforcer, so a 200 there means the lock let the
+ * send through (Decision 14: the thread tools send to the chat's JID).
+ */
+function routeHarness() {
+  const h = harness();
+  const chats = [chat(1), chat(2), chat(3, OTHER_INSTANCE)];
+  const sent: Array<{ path: string; body: unknown }> = [];
+
+  const app = new Hono<{ Variables: AppVariables }>();
+  app.use('*', async (c, next) => {
+    c.set('services', {
+      apiKeys: h.service,
+      chats: {
+        getById: async (id: string) => {
+          const row = chats.find((candidate) => candidate.id === id);
+          if (!row) throw new NotFoundError('Chat', id);
+          return { ...row, visibility: 'visible' };
+        },
+      },
+    } as unknown as Services);
+    await next();
+  });
+  const v2 = new Hono<{ Variables: AppVariables }>();
+  v2.use('*', authMiddleware);
+  v2.use('*', async (c, next) => {
+    if (c.req.header('x-test-tenant')) c.set('authContext', TENANT_CONTEXT);
+    await next();
+  });
+  v2.use('*', scopeEnforcerMiddleware);
+  v2.route('/keys', keysRoutes);
+  for (const path of ['/messages/send', '/messages/send/reaction']) {
+    v2.post(path, async (c) => {
+      sent.push({ path, body: await c.req.json() });
+      return c.json({ data: { sent: true } });
+    });
+  }
+  app.route('/api/v2', v2);
+
+  const as = async (
+    key: string,
+    method: string,
+    path: string,
+    body?: unknown,
+    headers: Record<string, string> = {},
+  ): Promise<RouteCall> => {
+    const res = await app.request(`/api/v2${path}`, {
+      method,
+      headers: {
+        'x-api-key': key,
+        ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+        ...headers,
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    return { status: res.status, json: (await res.json().catch(() => null)) as RouteCall['json'] };
+  };
+  const mint = (key: string, chatId: string, headers?: Record<string, string>) =>
+    as(key, 'POST', '/keys/children', { chatId }, headers);
+  const children = (parentId: string) => h.store.rows.filter((row) => row.parentKeyId === parentId);
+
+  return { ...h, as, mint, children, sent };
+}
+
+describe('POST /keys/children', () => {
+  let r: ReturnType<typeof routeHarness>;
+  beforeEach(() => {
+    r = routeHarness();
+  });
+
+  test("a sign-in key with today's default scopes mints a cs key locked to one chat and its instance", async () => {
+    const expiresAt = new Date(Date.now() + 86_400_000);
+    const { key: parent, plainTextKey } = await r.parent(undefined, { expiresAt });
+    const target = chat(1);
+
+    const res = await r.mint(plainTextKey, target.id);
+    expect(res.status).toBe(201);
+    expect(res.json.data).toEqual({
+      id: expect.any(String),
+      plainTextKey: expect.any(String),
+      parentKeyId: parent.id,
+      chatId: target.id,
+      chatExternalId: target.externalId,
+      instanceId: INSTANCE,
+      scopes: expect.any(Array),
+      expiresAt: expiresAt.toISOString(),
+      replacedKeyId: null,
+    });
+    expect([...res.json.data.scopes].sort()).toEqual(['chats:read', 'context:write', 'messages:send', 'turns:close']);
+    // The row, not just the answer: one chat (UUID and JID), its instance, its recipient.
+    expect(r.row(res.json.data.id)).toMatchObject({
+      profile: 'cs',
+      parentKeyId: parent.id,
+      chatAllowlist: [target.id, target.externalId],
+      instanceAllowlist: [INSTANCE],
+      outboundRecipientAllowlist: [target.externalId],
+      instanceIds: [INSTANCE],
+    });
+    expect(JSON.stringify(res.json)).not.toContain('keyHash');
+    expect(await r.validates(res.json.data.plainTextKey)).toBe(200);
+    expect(r.ofType('access.key_minted')).toHaveLength(1);
+  });
+
+  test('a linkWithKey key with DEVICE_SCOPES mints one with exactly messages:send and chats:read', async () => {
+    const { plainTextKey } = await r.parent(DEVICE_SCOPES);
+    const res = await r.mint(plainTextKey, chat(1).id);
+    expect(res.status).toBe(201);
+    expect([...res.json.data.scopes].sort()).toEqual(['chats:read', 'messages:send']);
+    expect(res.json.data.expiresAt).toBeNull();
+  });
+
+  test('no caller gains a keys:* scope (nor anything outside the cs set) from a wildcard parent', async () => {
+    const { plainTextKey } = await r.parent(['*']);
+    const res = await r.mint(plainTextKey, chat(1).id);
+    expect(res.status).toBe(201);
+    expect([...res.json.data.scopes].sort()).toEqual(['chats:read', 'context:write', 'messages:send', 'turns:close']);
+    expect(res.json.data.scopes.some((scope: string) => scope.startsWith('keys:') || scope === '*')).toBe(false);
+  });
+
+  test('a body field besides chatId is a 400, a profile among them; so is a JID for chatId', async () => {
+    const { key: parent, plainTextKey } = await r.parent();
+    for (const body of [
+      { chatId: chat(1).id, profile: 'admin' },
+      { chatId: chat(1).id, profile: 'cs' },
+      { chatId: chat(1).id, scopes: ['*'] },
+      { chatId: chat(1).id, instanceId: OTHER_INSTANCE },
+      { chatId: chat(1).externalId },
+      {},
+    ]) {
+      expect((await r.as(plainTextKey, 'POST', '/keys/children', body)).status).toBe(400);
+    }
+    expect(r.children(parent.id)).toHaveLength(0);
+  });
+
+  test('a chat id with no row is a 404', async () => {
+    const { key: parent, plainTextKey } = await r.parent();
+    const res = await r.mint(plainTextKey, crypto.randomUUID());
+    expect(res.status).toBe(404);
+    expect(r.children(parent.id)).toHaveLength(0);
+  });
+
+  test('a child, a chat-, instance- or recipient-locked key and a tenant-context caller get 403', async () => {
+    const { key: root, plainTextKey: rootKey } = await r.parent();
+    const child = await r.mint(rootKey, chat(1).id);
+    const callers = [
+      child.json.data.plainTextKey as string,
+      (await r.parent(undefined, { chatAllowlist: [chat(2).id] })).plainTextKey,
+      (await r.parent(undefined, { instanceAllowlist: [INSTANCE] })).plainTextKey,
+      (await r.parent(undefined, { outboundRecipientAllowlist: [chat(2).externalId] })).plainTextKey,
+    ];
+    for (const key of callers) expect((await r.mint(key, chat(2).id)).status).toBe(403);
+    expect((await r.mint(rootKey, chat(2).id, { 'x-test-tenant': '1' })).status).toBe(403);
+    expect(r.children(root.id)).toHaveLength(1);
+    expect(r.store.rows.filter((row) => row.parentKeyId !== null)).toHaveLength(1);
+  });
+
+  test('a caller without chats:keys, chats:read or messages:send gets 403', async () => {
+    for (const scopes of [
+      ['chats:read', 'chats:write', 'messages:send'],
+      ['chats:keys', 'messages:send'],
+      ['chats:keys', 'chats:read'],
+    ]) {
+      const { key: parent, plainTextKey } = await r.parent(scopes);
+      expect((await r.mint(plainTextKey, chat(1).id)).status).toBe(403);
+      expect(r.children(parent.id)).toHaveLength(0);
+    }
+    // chats:keys on its own, with the two it needs, is enough.
+    const { plainTextKey } = await r.parent(['chats:keys', 'chats:read', 'messages:send']);
+    expect((await r.mint(plainTextKey, chat(1).id)).status).toBe(201);
+  });
+
+  test(`a parent with ${MAX_LIVE_CHILDREN} live children gets 409 CHILD_LIMIT`, async () => {
+    const { key: parent, plainTextKey } = await r.parent();
+    for (let n = 1; n <= MAX_LIVE_CHILDREN; n++) {
+      const target = chat(1000 + n);
+      r.store.rows.push({
+        ...(r.row(parent.id) as Row),
+        id: crypto.randomUUID(),
+        keyHash: `hash-${n}`,
+        parentKeyId: parent.id,
+        chatAllowlist: [target.id, target.externalId],
+        scopes: ['messages:send', 'chats:read'],
+      });
+    }
+    const res = await r.mint(plainTextKey, chat(1).id);
+    expect(res.status).toBe(409);
+    expect(res.json.error.code).toBe('CHILD_LIMIT');
+    expect(r.children(parent.id)).toHaveLength(MAX_LIVE_CHILDREN);
+  });
+
+  test('a second mint for the same chat revokes the first and leaves one live child', async () => {
+    const { key: parent, plainTextKey } = await r.parent();
+    const first = await r.mint(plainTextKey, chat(1).id);
+    const second = await r.mint(plainTextKey, chat(1).id);
+    expect(second.status).toBe(201);
+    expect(second.json.data.replacedKeyId).toBe(first.json.data.id);
+
+    expect(await r.validates(first.json.data.plainTextKey)).toBe(401);
+    expect(await r.validates(second.json.data.plainTextKey)).toBe(200);
+    expect(
+      r
+        .children(parent.id)
+        .filter((row) => row.status === 'active')
+        .map((row) => row.id),
+    ).toEqual([second.json.data.id]);
+    expect(r.ofType('access.key_revoked').map((event) => [event.payload.keyId, event.payload.reason])).toEqual([
+      [first.json.data.id, 'remint'],
+    ]);
+  });
+
+  test('a caller limited by instanceIds mints on its own instance and gets 403 on another', async () => {
+    const { key: parent, plainTextKey } = await r.parent(undefined, { instanceIds: [INSTANCE] });
+    expect((await r.mint(plainTextKey, chat(3, OTHER_INSTANCE).id)).status).toBe(403);
+    expect(r.children(parent.id)).toHaveLength(0);
+    const res = await r.mint(plainTextKey, chat(1).id);
+    expect(res.status).toBe(201);
+    expect(res.json.data.instanceId).toBe(INSTANCE);
+  });
+});
+
+describe('POST /keys/children/:id/revoke and /keys/children/self/revoke', () => {
+  let r: ReturnType<typeof routeHarness>;
+  beforeEach(() => {
+    r = routeHarness();
+  });
+
+  test("revokes the caller's own child, then answers already_revoked; a revoked child is refused next call", async () => {
+    const { plainTextKey } = await r.parent();
+    const live = (await r.mint(plainTextKey, chat(2).id)).json.data;
+
+    const first = await r.as(plainTextKey, 'POST', `/keys/children/${live.id}/revoke`, { reason: 'chat removed' });
+    expect<unknown>(first).toEqual({ status: 200, json: { data: { id: live.id, status: 'revoked' } } });
+    expect(await r.validates(live.plainTextKey)).toBe(401);
+    expect((await r.as(live.plainTextKey, 'POST', '/messages/send', { to: chat(2).externalId })).status).toBe(401);
+
+    // No body at all is a revoke too.
+    const again = await r.as(plainTextKey, 'POST', `/keys/children/${live.id}/revoke`);
+    expect<unknown>(again).toEqual({ status: 200, json: { data: { id: live.id, status: 'already_revoked' } } });
+    expect(r.ofType('access.key_revoked').find((event) => event.payload.keyId === live.id)?.payload).toMatchObject({
+      reason: 'own_child',
+      revokedBy: 'sign-in',
+    });
+  });
+
+  test('revokedBy comes from the caller, never the body; any other body field is a 400', async () => {
+    const { plainTextKey } = await r.parent();
+    const child = (await r.mint(plainTextKey, chat(1).id)).json.data;
+    expect(
+      (await r.as(plainTextKey, 'POST', `/keys/children/${child.id}/revoke`, { revokedBy: 'someone-else' })).status,
+    ).toBe(400);
+    expect(await r.validates(child.plainTextKey)).toBe(200);
+    expect(
+      (await r.as(plainTextKey, 'POST', `/keys/children/${child.id}/revoke`, { reason: 'x'.repeat(501) })).status,
+    ).toBe(400);
+  });
+
+  test('a key whose parent is not the caller gets 403, a child of another link key among them', async () => {
+    const { key: mine, plainTextKey: mineKey } = await r.parent();
+    const { plainTextKey: otherKey } = await r.parent();
+    const foreign = (await r.mint(otherKey, chat(1).id)).json.data;
+
+    expect((await r.as(mineKey, 'POST', `/keys/children/${foreign.id}/revoke`)).status).toBe(403);
+    // A root key is nobody's child; the caller itself is not its own child.
+    expect((await r.as(mineKey, 'POST', `/keys/children/${mine.id}/revoke`)).status).toBe(403);
+    expect(await r.validates(foreign.plainTextKey)).toBe(200);
+    expect((await r.as(mineKey, 'POST', `/keys/children/${crypto.randomUUID()}/revoke`)).status).toBe(404);
+  });
+
+  test('a locked caller, a child among them, or a tenant-context caller gets 403 on own-child revoke', async () => {
+    const { plainTextKey } = await r.parent();
+    const child = (await r.mint(plainTextKey, chat(1).id)).json.data;
+    const sibling = (await r.mint(plainTextKey, chat(2).id)).json.data;
+    expect((await r.as(child.plainTextKey, 'POST', `/keys/children/${sibling.id}/revoke`)).status).toBe(403);
+    expect(
+      (await r.as(plainTextKey, 'POST', `/keys/children/${sibling.id}/revoke`, {}, { 'x-test-tenant': '1' })).status,
+    ).toBe(403);
+    expect(await r.validates(sibling.plainTextKey)).toBe(200);
+  });
+
+  test('a cs child with its locks set cuts itself through the lock, never a 403 or 404 from :id = self', async () => {
+    const { key: parent, plainTextKey } = await r.parent();
+    const child = (await r.mint(plainTextKey, chat(1).id)).json.data;
+    expect(r.row(child.id)?.chatAllowlist).toEqual([chat(1).id, chat(1).externalId]);
+
+    const res = await r.as(child.plainTextKey, 'POST', '/keys/children/self/revoke');
+    expect<unknown>(res).toEqual({ status: 200, json: { data: { id: child.id, status: 'revoked' } } });
+    expect(await r.validates(child.plainTextKey)).toBe(401);
+    expect(r.ofType('access.key_revoked').map((event) => event.payload)).toEqual([
+      expect.objectContaining({ keyId: child.id, parentKeyId: parent.id, reason: 'self' }),
+    ]);
+  });
+
+  test('a non-child is refused on the self route', async () => {
+    const { key: parent, plainTextKey } = await r.parent();
+    const res = await r.as(plainTextKey, 'POST', '/keys/children/self/revoke');
+    expect(res.status).toBe(403);
+    expect(r.row(parent.id)?.status).toBe('active');
+  });
+
+  test('after DELETE /keys/:id of a parent, an own-child revoke of one of its removed children answers 404', async () => {
+    const { key: parent, plainTextKey } = await r.parent();
+    const { plainTextKey: operatorKey } = await r.parent();
+    const child = (await r.mint(plainTextKey, chat(1).id)).json.data;
+    expect((await r.call('DELETE', `/keys/${parent.id}`)).status).toBe(200);
+
+    expect((await r.as(operatorKey, 'POST', `/keys/children/${child.id}/revoke`)).status).toBe(404);
+    // The parent itself is gone with it.
+    expect((await r.as(plainTextKey, 'POST', `/keys/children/${child.id}/revoke`)).status).toBe(401);
+  });
+
+  test('POST /keys/:id/revoke still needs keys:write', async () => {
+    const { plainTextKey } = await r.parent();
+    const child = (await r.mint(plainTextKey, chat(1).id)).json.data;
+    const res = await r.as(plainTextKey, 'POST', `/keys/${child.id}/revoke`, {});
+    expect(res.status).toBe(403);
+    expect(res.json.error.message).toContain('keys:write');
+    expect(await r.validates(child.plainTextKey)).toBe(200);
+  });
+});
+
+describe("a minted child's sends stay in its own chat (Decision 14: to is the chat's JID)", () => {
+  let r: ReturnType<typeof routeHarness>;
+  let childKey: string;
+  beforeEach(async () => {
+    r = routeHarness();
+    const { plainTextKey } = await r.parent();
+    childKey = (await r.mint(plainTextKey, chat(1).id)).json.data.plainTextKey;
+  });
+
+  const send = { instanceId: INSTANCE, text: 'hi' };
+  const reaction = { instanceId: INSTANCE, messageId: 'MSG-1', emoji: '👍' };
+
+  test('a send and a reaction to its own chat by JID pass the scope enforcer and the recipient lock', async () => {
+    expect((await r.as(childKey, 'POST', '/messages/send', { ...send, to: chat(1).externalId })).status).toBe(200);
+    expect(
+      (await r.as(childKey, 'POST', '/messages/send/reaction', { ...reaction, to: chat(1).externalId })).status,
+    ).toBe(200);
+    expect(r.sent.map((entry) => entry.path)).toEqual(['/messages/send', '/messages/send/reaction']);
+  });
+
+  test('the same calls to another chat get 403', async () => {
+    for (const [path, body] of [
+      ['/messages/send', send],
+      ['/messages/send/reaction', reaction],
+    ] as const) {
+      expect((await r.as(childKey, 'POST', path, { ...body, to: chat(2).externalId })).status).toBe(403);
+      expect((await r.as(childKey, 'POST', path, { ...body, to: chat(2).id })).status).toBe(403);
+    }
+    expect(r.sent).toEqual([]);
+  });
+
+  test('the same calls to its own chat by UUID get 403 from the recipient lock', async () => {
+    for (const [path, body] of [
+      ['/messages/send', send],
+      ['/messages/send/reaction', reaction],
+    ] as const) {
+      const res = await r.as(childKey, 'POST', path, { ...body, to: chat(1).id });
+      expect(res.status).toBe(403);
+      expect(res.json.error.lock).toBe('outboundRecipientAllowlist');
+    }
+    expect(r.sent).toEqual([]);
+  });
+
+  test('a send on another instance gets 403', async () => {
+    const res = await r.as(childKey, 'POST', '/messages/send', {
+      ...send,
+      instanceId: OTHER_INSTANCE,
+      to: chat(1).externalId,
+    });
+    expect(res.status).toBe(403);
   });
 });

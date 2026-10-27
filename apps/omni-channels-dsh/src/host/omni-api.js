@@ -26,6 +26,22 @@ const invalid = message => Object.assign(new Error(message), { code: 'bot/invali
 export const COMPUTER_TOOLS = ['bash', 'read', 'write', 'edit', 'glob', 'grep', 'subagent', 'subagent_fork', 'workflow', 'job_kill', 'job_list', 'job_output', 'todo_write', 'working_directory']
 const COMPUTER_REFUSAL = 'Omni works through its own tools, not files or the shell. Hand this to a task with start_task.'
 
+// Chat keys (POST /keys/children…) answer with key text, which must never reach a model: the
+// host mints and revokes them itself, so omni_call refuses them before any request and
+// omni_endpoints never lists them.
+const KEY_ROUTE = /^\/keys\/children(\/|$)/
+export const KEY_ROUTE_REFUSAL = 'Chat keys are not an operation for a Bot: this app mints and revokes them itself, and their answers carry key text.'
+
+/** Whether a path, as fetch and omni would route it (percent-decoded, slashes collapsed, dot segments resolved), is a chat-key route. */
+export function isKeyRoute(path) {
+  let decoded = String(path ?? '')
+  try { decoded = decodeURIComponent(decoded) } catch { /* malformed: test it as written */ }
+  const collapsed = decoded.replace(/\/{2,}/g, '/')
+  let resolved = collapsed
+  try { resolved = new URL(collapsed, 'http://omni.invalid').pathname } catch { /* test it as collapsed */ }
+  return KEY_ROUTE.test(collapsed) || KEY_ROUTE.test(resolved)
+}
+
 // "/instances/{id}/qr" → /^\/instances\/[^/]+\/qr$/
 const patternOf = path => new RegExp(`^${path.replace(/[.*+?^$()|[\]\\]/g, '\\$&').replace(/\\?\{[^}]+\\?\}/g, '[^/]+')}$`)
 
@@ -196,7 +212,7 @@ export function install(rt) {
     const response = await rt.omniRequest('GET', '/openapi.json')
     if (response === null) throw invalid('Omni is not connected here: connect one on the Channels page (pair by code).')
     if (!response.ok) throw invalid(`omni answered ${response.status} for its API description`)
-    spec = { at: Date.now(), ops: withSourceRoutes(operationsOf(await response.json())) }
+    spec = { at: Date.now(), ops: withSourceRoutes(operationsOf(await response.json())).filter(op => !isKeyRoute(op.path)) }
     return spec.ops
   }
 
@@ -268,6 +284,7 @@ export function install(rt) {
         if (!METHODS.includes(method)) throw invalid(`method must be one of ${METHODS.join(', ')}`)
         const path = String(args.path ?? '').trim().replace(/^\/api\/v2(?=\/)/, '')
         if (!/^\/[A-Za-z0-9/_\-.~%:@]*$/.test(path)) throw invalid('path must be an API path such as /instances/<id>, without the host or a query string')
+        if (isKeyRoute(path)) throw invalid(KEY_ROUTE_REFUSAL)
         const op = findOperation(await operations(), method, path)
         if (!op) throw invalid(`${method} ${path} is not an omni API operation. Find it with omni_endpoints.`)
         const query = parse(args.query, 'query')
@@ -299,6 +316,8 @@ export function install(rt) {
     },
   }))
   async function runCall({ method, path, query, body }, op) {
+    // A confirmed card runs here too: it never reaches a chat-key route either.
+    if (isKeyRoute(path)) return fitted({ status: 0, error: KEY_ROUTE_REFUSAL })
     const qs = query && typeof query === 'object' ? new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined && value !== null).map(([key, value]) => [key, typeof value === 'object' ? JSON.stringify(value) : String(value)])).toString() : ''
     const result = await call(method, `${path}${qs ? `?${qs}` : ''}`, body)
     return fitted({ status: result.status, operation: op?.summary ?? `${method} ${path}`, data: result.data })
