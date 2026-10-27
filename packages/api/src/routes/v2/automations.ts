@@ -343,8 +343,12 @@ automationsRoutes.get('/automation-metrics', async (c) => {
 /**
  * GET /automations/:id - Get automation by ID
  */
-automationsRoutes.get('/:id', async (c) => {
-  const id = c.req.param('id');
+automationsRoutes.get('/:id', async (c, next) => {
+  const parsed = z.string().uuid().safeParse(c.req.param('id'));
+  // This router is also mounted at the v2 root. Unknown path segments must
+  // fall through to the endpoint-not-found handler instead of reaching SQL.
+  if (!parsed.success) return next();
+  const id = parsed.data;
   const services = c.get('services');
 
   const automation = await services.automations.getById(id);

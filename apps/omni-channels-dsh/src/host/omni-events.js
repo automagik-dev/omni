@@ -13,7 +13,7 @@ const TEXT_MAX = 2_000
 // the owner flag one level down, so only the user's own reactions ever leave omni.
 export const STREAMS = [
   { suffix: 'own-reactions', eventType: 'reaction.received', kinds: ['reaction'], filters: [{ field: 'rawPayload.isFromMe', operator: 'eq', value: true }] },
-  { suffix: 'messages', eventType: 'message.received', kinds: ['message', 'keyword', 'voice', 'media'] },
+  { suffix: 'messages', eventType: 'message.received', kinds: ['message', 'mention', 'keyword', 'voice', 'media'] },
 ]
 
 // Emoji arrive with or without the variation selector (❤ vs ❤️); compare without it.
@@ -33,6 +33,7 @@ export function matches(sub, row) {
   if (row.eventType !== 'message.received' || row.direction !== 'inbound') return false
   const type = row.contentType ?? 'text'
   if (trigger.kind === 'message') return true
+  if (trigger.kind === 'mention') return row.rawPayload?.isMentioningInstance === true
   if (trigger.kind === 'voice') return type === 'audio'
   if (trigger.kind === 'media') return ['image', 'video', 'document', 'sticker'].includes(type)
   if (trigger.kind === 'keyword') {
