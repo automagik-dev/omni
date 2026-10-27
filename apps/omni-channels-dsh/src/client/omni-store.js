@@ -91,6 +91,9 @@ export const omniStore = createSource({
   // Chats opened here, with the newest message seen, so a poll does not bring the
   // unread count back for messages already read.
   seen: {},
+  // What the linked Omni runs, read once per link (omni-link-info): `outdated` when it is
+  // older than this plugin's minimum, so the sidebar offers no + on it.
+  link: null,
 })
 
 export const channelOf = (state, id) => state.channels.find(channel => channel.id === id)
@@ -103,12 +106,6 @@ export function visibleChats(state) {
 
 // The Omni Bot (kind omni, added by onboarding's team step) carries the channels in the sidebar.
 export const isOmniBot = bot => bot?.kind === 'omni'
-
-// One channel's chats, newest first, the first `shown` of them and how many more there are.
-export function chatsOf(state, channelId, shown) {
-  const all = state.chats.filter(chat => chat.channelId === channelId).toSorted((a, b) => b.at - a.at)
-  return { chats: all.slice(0, shown), more: Math.max(0, all.length - shown) }
-}
 
 export const unreadOf = (state, channelId) => state.chats
   .filter(chat => channelId === undefined || chat.channelId === channelId)
@@ -250,8 +247,20 @@ export async function refreshLive(call) {
     chats: markSeen(state.seen, reply.chats),
     filter: reply.channels.some(channel => channel.id === state.filter) ? state.filter : null,
   }))
+  // An outdated one, or one whose version is not known yet, is asked again each poll, so an
+  // update shows without a reload. The chat's messages do not wait for it.
+  const link = omniStore.getSnapshot().link
+  if (link?.origin !== reply.origin || link.outdated || link.version === null) void loadLink(call, reply.origin)
   const open = omniStore.getSnapshot().chatId
   if (open) await loadMessages(call, open)
+}
+
+// The linked Omni's version against this plugin's minimum. A failed read is asked again on
+// the next poll; an Omni whose version is not known is not called outdated.
+export async function loadLink(call, origin) {
+  const info = await call('omni-link-info').catch(() => null)
+  if (info === null || typeof info !== 'object') return
+  set({ link: { origin, version: typeof info.version === 'string' ? info.version : null, outdated: info.outdated === true } })
 }
 
 // Starts once per page; the returned function stops it.

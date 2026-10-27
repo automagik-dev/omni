@@ -195,6 +195,22 @@ test('Use it checks the key with that Omni and links it, and the key stays on th
   assert.equal(JSON.stringify(shown).includes(LOCAL_KEY), false)
 })
 
+// The sidebar's + reads this: a linked Omni older than the minimum is outdated, one at it is not,
+// and one whose version is unknown is not called outdated.
+test('the link info says when the linked Omni is older than the plugin\'s minimum', async (t) => {
+  const { rt } = host(t, json => json(200, { data: { valid: true, keyName: 'ui', scopes: ['instances:*', 'chats:*'], credential: { expiresAt: null } } }))
+  const { omnis } = await rt.omniDiscoverEndpoint('omni-discover')
+  await rt.omniDiscoverEndpoint('omni-discover-use', { id: omnis.find(omni => omni.local).id })
+  const linked = globalThis.fetch
+  for (const [version, outdated] of [['2.261027.2', true], [OMNI_MINIMUM, false], [null, false]]) {
+    globalThis.fetch = async (address, init) => (new URL(String(address)).pathname === '/api/v2/health'
+      ? new Response(JSON.stringify(version === null ? { status: 'healthy' } : { status: 'healthy', version }), { status: 200 })
+      : linked(address, init))
+    const info = await rt.omniDiscoverEndpoint('omni-link-info')
+    assert.deepEqual([info.linked, info.version, info.outdated], [true, version, outdated])
+  }
+})
+
 test('a key the Omni refuses, or no key at all, signs this device in there instead', async (t) => {
   const { rt } = host(t, json => json(401, { error: { code: 'UNAUTHORIZED' } }))
   const { omnis } = await rt.omniDiscoverEndpoint('omni-discover')

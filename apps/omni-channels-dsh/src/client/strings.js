@@ -538,11 +538,25 @@ export const STRINGS = {
   'Channels and DMs, as a bot or as yourself.': '频道和私信，以机器人或你自己的身份。',
   'A bot of yours, in chats and groups.': '你自己的机器人，用于私聊和群组。',
   'Servers, threads and DMs, through your bot.': '服务器、话题和私信，通过你的机器人。',
-  // The Omni Bot's channels and chats in the sidebar (omni-tree.js).
+  // The Omni Bot's channels and their chat threads in the sidebar (omni-tree.js).
   'No chats yet': '还没有聊天',
-  '{name} helps in this chat': '{name} 在这个聊天里帮忙',
-  'All chats (+{n})': '全部聊天（+{n}）',
   '{name}\'s channels': '{name} 的渠道',
+  'Add a chat': '添加聊天',
+  'Add a chat from {name}': '从 {name} 添加聊天',
+  'Search chats': '搜索聊天',
+  'No chats match.': '没有匹配的聊天。',
+  'Added': '已添加',
+  'Other chats': '其他聊天',
+  'Adding…': '正在添加…',
+  'The chat was not added.': '这个聊天没有添加。',
+  'Remove {name} from the sidebar? Click again': '要从侧边栏移除 {name} 吗？再点一次',
+  // Why a chat cannot be added, or a thread does not work (threads.js, thread-keys.js, omni-tree.js).
+  'Adding a chat needs a newer Bot team.': '添加聊天需要更新的 Bot 团队。',
+  'Adding a chat needs a newer Omni. Update it first.': '添加聊天需要更新的 Omni。请先更新它。',
+  'Not connected: this app is not linked to an Omni.': '未连接：这个应用没有关联 Omni。',
+  'Not connected: this app is linked to another Omni.': '未连接：这个应用关联的是另一个 Omni。',
+  'Not connected: its previous key is still being cut.': '未连接：它之前的密钥还在作废中。',
+  'Not connected: waiting for a key from the linked Omni.': '未连接：正在等待关联的 Omni 发来密钥。',
   // A message's file in the chat view (channels.js).
   'Picture': '图片',
   'Voice note': '语音消息',

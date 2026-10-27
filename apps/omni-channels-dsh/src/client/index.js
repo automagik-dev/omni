@@ -10,7 +10,7 @@ import { Badge, KeyValue, LiveChannel, LiveChat, LiveQr, OMNI_LIVE_CSS, OmniCall
 import { OMNI_PEEK_CSS } from './omni-peek.js'
 import { OMNI_CONNECT_CSS, connectFromApp } from './omni-connect.js'
 import { addStrings, badges, botChildren, botSettings, chatSuggestions, headerButtons, nav, onShell, t, toolCards, icons } from './core.js'
-import { OMNI_TREE_CSS, OmniTree } from './omni-tree.js'
+import { OMNI_TREE_CSS, OmniTree, ThreadDock } from './omni-tree.js'
 import { ASKING_TOOLS, ConsentDock, PERMISSIONS_CSS, PermissionsCard, withConsent } from './permissions.js'
 import { STRINGS } from './strings.js'
 const { ClockIcon } = icons
@@ -97,8 +97,8 @@ export function apply(ctx) {
   ctx.effect(() => toolCards.register('save_automation', props => h(SavedAutomationCard, props), { phrase: PHRASES.save_automation }), 'ds-bot: save_automation card')
   // Omni's row counts the automation runs waiting for you; its header opens their board.
   ctx.effect(() => badges.register({ id: 'omni-events', Component: ({ bot, roster, useWork }) => (bot.id === roster.eventsBotId ? h(EventsBadge, { roster, useWork }) : null) }), 'ds-bot: automations badge')
-  // The Omni Bot's channels hang under its sidebar row, each with its chats. A team client
-  // older than this plugin has no such place.
+  // The Omni Bot's channels hang under its sidebar row, each with its + and the chats added
+  // there as threads. A team client older than this plugin has no such place.
   if (botChildren) ctx.effect(() => botChildren.register({ id: 'omni-channels', Component: OmniTree }), 'ds-bot: Omni channels in the sidebar')
   ctx.effect(() => headerButtons.register({
     id: 'omni-board',
@@ -113,6 +113,8 @@ export function apply(ctx) {
   ctx.effect(() => onShell(({ face, shadow, installCompiledStyles }) => [
     () => installCompiledStyles(CHANNELS_CSS + OMNI_TREE_CSS + SUBSCRIPTIONS_CSS + AUTOMATIONS_CSS + OMNI_LIVE_CSS + OMNI_PEEK_CSS + OMNI_CONNECT_CSS + PERMISSIONS_CSS, 'channels'),
     () => shadow('conversation.input.dock', { id: 'omni-consent', order: -80, inject: face }, ConsentDock),
+    // A chat thread's Session is not a Bot's: it marks the page so the Bot controls stay hidden there.
+    () => shadow('conversation.input.dock', { id: 'omni-thread', order: -200, inject: face }, ThreadDock),
     () => shadow('sidebar.footer.action', { id: 'bot-connect', order: -100, inject: face }, ChannelsFooter),
     // The Connect wizard opened on demand (settings, Channels, or once after install) mounts here.
     () => shadow('sidebar.footer.action', { id: 'omni-connect-wizard', order: 1000, inject: face }, WizardHost),

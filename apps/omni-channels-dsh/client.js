@@ -10711,7 +10711,7 @@ async function skipConnect({ complete }, { omniAi = callOmniAi, storage: storage
 
 // src/client/core.js
 var import_client = require("@automagik/bots-dsh/client");
-var { call, t, addStrings, onShell, toolCards, nav, badges, botChildren, headerButtons, botSettings, chatSuggestions } = import_client.omni;
+var { call, t, hostText, addStrings, onShell, toolCards, nav, badges, botChildren, headerButtons, botSettings, chatSuggestions } = import_client.omni;
 var { OmniMark, BotMark, MAIN_LOOK, CHARACTERS, relativeShort, createSource } = import_client.omni.ui;
 var icons = import_client.omni.ui.icons;
 
@@ -11078,7 +11078,10 @@ var omniStore = createSource({
   source: { kind: "preview" },
   // Chats opened here, with the newest message seen, so a poll does not bring the
   // unread count back for messages already read.
-  seen: {}
+  seen: {},
+  // What the linked Omni runs, read once per link (omni-link-info): `outdated` when it is
+  // older than this plugin's minimum, so the sidebar offers no + on it.
+  link: null
 });
 var channelOf = (state, id) => state.channels.find((channel) => channel.id === id);
 var chatOf = (state, id) => state.chats.find((chat) => chat.id === id);
@@ -11087,10 +11090,6 @@ function visibleChats(state) {
   return [...chats].sort((a, b2) => b2.at - a.at);
 }
 var isOmniBot = (bot) => bot?.kind === "omni";
-function chatsOf(state, channelId, shown) {
-  const all = state.chats.filter((chat) => chat.channelId === channelId).toSorted((a, b2) => b2.at - a.at);
-  return { chats: all.slice(0, shown), more: Math.max(0, all.length - shown) };
-}
 var unreadOf = (state, channelId) => state.chats.filter((chat) => channelId === void 0 || chat.channelId === channelId).reduce((sum, chat) => sum + chat.unread, 0);
 function healthSummary(state) {
   const count = (status) => state.channels.filter((channel) => channel.status === status).length;
@@ -11222,8 +11221,15 @@ async function refreshLive(call2) {
     chats: markSeen(state.seen, reply.chats),
     filter: reply.channels.some((channel) => channel.id === state.filter) ? state.filter : null
   }));
+  const link = omniStore.getSnapshot().link;
+  if (link?.origin !== reply.origin || link.outdated || link.version === null) void loadLink(call2, reply.origin);
   const open = omniStore.getSnapshot().chatId;
   if (open) await loadMessages(call2, open);
+}
+async function loadLink(call2, origin) {
+  const info = await call2("omni-link-info").catch(() => null);
+  if (info === null || typeof info !== "object") return;
+  set({ link: { origin, version: typeof info.version === "string" ? info.version : null, outdated: info.outdated === true } });
 }
 function startLive(call2, every = POLL_MS) {
   if (polling) return polling;
@@ -15084,9 +15090,10 @@ var AUTOMATIONS_CSS = `
 
 // src/client/omni-tree.js
 var import_react13 = require("react");
-var { ChevronRightIcon: ChevronRightIcon2 } = icons;
-var SHOWN = 8;
+var { ChevronRightIcon: ChevronRightIcon2, CloseIcon, PlusIcon: PlusIcon3 } = icons;
 var OPEN_KEY = "omni.tree.open";
+var SEARCH_DELAY_MS = 250;
+var OMNI_OUTDATED = "Adding a chat needs a newer Omni. Update it first.";
 function readOpen() {
   try {
     return new Set(JSON.parse(localStorage.getItem(OPEN_KEY) ?? "[]"));
@@ -15100,28 +15107,225 @@ function saveOpen(open) {
   } catch {
   }
 }
-function ChannelItem({ channel, state, bot, omni: omni2, open, onToggle }) {
-  const { chats, more } = chatsOf(state, channel.id, SHOWN);
-  const unread = unreadOf(state, channel.id);
-  const type = typeOf(channel.type);
-  const panelId = `omni-tree-${channel.id}`;
+var teamReady = (roster) => Array.isArray(roster?.omniRowProps) && roster.omniRowProps.length > 0;
+var threadsOf = (roster, channelId) => (Array.isArray(roster?.omniThreads) ? roster.omniThreads : []).filter((thread) => thread.channelId === channelId);
+var isThreadSession = (roster, sessionId) => typeof sessionId === "string" && (Array.isArray(roster?.omniThreads) ? roster.omniThreads : []).some((thread) => thread.sessionId === sessionId);
+function plusOf(roster, state) {
+  if (roster?.omniThreadsOffered !== true) return { offered: false, reason: roster?.omniThreadsReason ?? null };
+  if (state?.link?.outdated === true) return { offered: false, reason: OMNI_OUTDATED };
+  return { offered: true, reason: null };
+}
+var rowPropsOf = (props, names) => Object.fromEntries((Array.isArray(names) ? names : []).filter((name) => props?.[name] !== void 0).map((name) => [name, props[name]]));
+var rowKey = (thread, rowProps) => `${thread.id}:${typeof rowProps.useSessionStatus}:${typeof rowProps.useSessionRetainInfo}`;
+var NO_STATUS = /* @__PURE__ */ new Map();
+var noStatus = (select) => select(NO_STATUS);
+var noRetain = (_id, select) => select(void 0);
+function threadState(thread, { running = false, asking = false } = {}) {
+  if (asking || thread.status === "waiting") return "waiting";
+  if (running || thread.status === "working") return "working";
+  return "idle";
+}
+function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
+  const id = thread.sessionId;
+  const useStatus = rowProps.useSessionStatus ?? noStatus;
+  const useRetain = rowProps.useSessionRetainInfo ?? noRetain;
+  const unread = useStatus((map) => map.get(id)?.completionUnread === true);
+  const asking = useStatus((map) => map.get(id)?.pendingInteraction !== void 0);
+  const running = useStatus((map) => map.get(id)?.running === true);
+  const active = useRetain(id, (info) => (info?.retainedBy?.mainView ?? 0) > 0);
+  const [confirming, setConfirming] = (0, import_react13.useState)(false);
+  const [problem, setProblem] = (0, import_react13.useState)(null);
+  const opens = teamReady(rowProps.roster);
+  const state = threadState(thread, { running, asking });
+  const reason = thread.connected === false || !opens ? hostText(thread.reason ?? t("Not connected")) : null;
+  const dot = typeof rowProps.useSessionStatus === "function" && unread && !active;
+  const label = [thread.title, state === "waiting" ? t("Waiting for you") : state === "working" ? t("Working") : "", reason ?? "", dot ? t("Unread activity") : ""].filter(Boolean).join(", ");
+  const remove = () => {
+    if (!confirming) {
+      setConfirming(true);
+      return;
+    }
+    setConfirming(false);
+    setProblem(null);
+    call("omni-thread-remove", { threadId: thread.id }).catch((error) => setProblem(error?.message ?? String(error)));
+  };
   return (0, import_react13.createElement)(
     "div",
-    { className: "ot-channel" },
+    { className: "ot-thread", "data-idle": state === "idle" || void 0 },
     (0, import_react13.createElement)(
       "button",
       {
         type: "button",
-        className: "ot-channel-row",
-        "aria-expanded": open,
-        "aria-controls": panelId,
-        title: `${type.label} · ${channel.name}`,
-        onClick: onToggle
+        className: "bt-thread",
+        "data-state": state,
+        "data-thread-id": thread.id,
+        "aria-label": label,
+        title: reason ?? thread.title,
+        "aria-current": active ? "page" : void 0,
+        "aria-disabled": opens ? void 0 : true,
+        tabIndex: shown ? void 0 : -1,
+        onClick: () => {
+          if (opens) actions.openSession(id);
+        }
       },
-      (0, import_react13.createElement)("span", { className: "ot-chevron", "aria-hidden": true }, (0, import_react13.createElement)(ChevronRightIcon2)),
-      (0, import_react13.createElement)(Tile, { type: channel.type, size: 18 }),
-      (0, import_react13.createElement)("span", { className: "ot-channel-name" }, channel.name),
-      unread > 0 ? (0, import_react13.createElement)("span", { className: "ot-count", "aria-label": t("{n} unread", { n: unread }) }, unread) : (0, import_react13.createElement)(StatusDot, { status: channel.status })
+      (0, import_react13.createElement)("span", { className: state === "waiting" ? "bt-thread-wait" : state === "working" ? "bt-thread-spin" : "ot-thread-idle", "aria-hidden": true }),
+      (0, import_react13.createElement)("span", { className: "bt-thread-title" }, thread.title),
+      reason ? (0, import_react13.createElement)("span", { className: "ot-thread-reason" }, reason) : null,
+      dot ? (0, import_react13.createElement)("span", { className: "bt-unread", "aria-hidden": true }) : null
+    ),
+    (0, import_react13.createElement)("button", {
+      type: "button",
+      className: "ot-thread-remove",
+      "data-confirm": confirming || void 0,
+      "aria-label": confirming ? t("Remove {name} from the sidebar? Click again", { name: thread.title }) : t("Remove {name}", { name: thread.title }),
+      title: confirming ? t("Click again to remove") : t("Remove"),
+      tabIndex: shown ? void 0 : -1,
+      onClick: remove,
+      onBlur: () => setConfirming(false)
+    }, confirming ? t("Remove") : (0, import_react13.createElement)(CloseIcon)),
+    problem ? (0, import_react13.createElement)("span", { className: "ot-thread-problem", role: "alert" }, hostText(problem)) : null
+  );
+}
+function ThreadPicker({ channel, onPick, onClose }) {
+  const [query, setQuery] = (0, import_react13.useState)("");
+  const [list, setList] = (0, import_react13.useState)({ status: "loading", chats: [], error: null });
+  const [busy, setBusy] = (0, import_react13.useState)(null);
+  const [problem, setProblem] = (0, import_react13.useState)(null);
+  const asked = (0, import_react13.useRef)(0);
+  const alive = (0, import_react13.useRef)(true);
+  (0, import_react13.useEffect)(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+  (0, import_react13.useEffect)(() => {
+    const ticket = ++asked.current;
+    const words = query.trim();
+    const load = () => call("omni-thread-chats", words ? { channelId: channel.id, query: words } : { channelId: channel.id }).then(
+      (reply) => {
+        if (alive.current && asked.current === ticket) setList({ status: "ready", chats: Array.isArray(reply?.chats) ? reply.chats : [], error: null });
+      },
+      (error) => {
+        if (alive.current && asked.current === ticket) setList({ status: "failed", chats: [], error: error?.message ?? String(error) });
+      }
+    );
+    if (words === "") {
+      void load();
+      return void 0;
+    }
+    const timer = setTimeout(load, SEARCH_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [channel.id, query]);
+  const pick = async (chat) => {
+    if (busy !== null || chat.added) return;
+    setBusy(chat.id);
+    setProblem(null);
+    try {
+      const result = await onPick(chat);
+      if (alive.current && result?.ok !== true) setProblem(result?.reason ?? t("The chat was not added."));
+    } catch (error) {
+      if (alive.current) setProblem(error?.message ?? String(error));
+    } finally {
+      if (alive.current) setBusy(null);
+    }
+  };
+  const onKeyDown = (event) => {
+    if (event.key !== "Escape") return;
+    event.stopPropagation();
+    onClose();
+  };
+  const empty = list.status === "ready" && list.chats.length === 0;
+  return (0, import_react13.createElement)(
+    "div",
+    { className: "ot-picker", role: "group", "aria-label": t("Add a chat from {name}", { name: channel.name }), onKeyDown },
+    (0, import_react13.createElement)(
+      "div",
+      { className: "ot-picker-head" },
+      (0, import_react13.createElement)("input", {
+        type: "search",
+        className: "ot-picker-search",
+        value: query,
+        placeholder: t("Search chats"),
+        "aria-label": t("Search chats"),
+        autoFocus: true,
+        onChange: (event) => setQuery(event.target.value)
+      }),
+      (0, import_react13.createElement)("button", { type: "button", className: "ot-picker-close", "aria-label": t("Close"), title: t("Close"), onClick: onClose }, (0, import_react13.createElement)(CloseIcon))
+    ),
+    problem ? (0, import_react13.createElement)("p", { className: "ot-picker-problem", role: "alert" }, hostText(problem)) : null,
+    list.status === "loading" ? (0, import_react13.createElement)("p", { className: "ot-picker-note" }, t("Loading…")) : null,
+    list.status === "failed" ? (0, import_react13.createElement)("p", { className: "ot-picker-problem", role: "alert" }, hostText(list.error)) : null,
+    empty ? (0, import_react13.createElement)("p", { className: "ot-picker-note" }, query.trim() ? t("No chats match.") : t("No chats yet")) : null,
+    list.chats.length > 0 ? (0, import_react13.createElement)(
+      "div",
+      { className: "ot-picker-list" },
+      list.chats.map((chat) => (0, import_react13.createElement)(
+        "button",
+        {
+          key: chat.id,
+          type: "button",
+          className: "ot-picker-chat",
+          "data-chat-id": chat.id,
+          disabled: chat.added === true || busy !== null,
+          "aria-busy": busy === chat.id || void 0,
+          title: chat.name,
+          onClick: () => {
+            void pick(chat);
+          }
+        },
+        (0, import_react13.createElement)("span", { className: "ot-picker-name" }, chat.name),
+        chat.added ? (0, import_react13.createElement)("span", { className: "ot-picker-tag" }, t("Added")) : busy === chat.id ? (0, import_react13.createElement)("span", { className: "ot-picker-tag" }, t("Adding…")) : null
+      ))
+    ) : null
+  );
+}
+var addThread = (channelId, chat) => call("omni-thread-add", { channelId, chatId: chat.id });
+function ChannelItem({ channel, state, roster, rowProps, actions, omni: omni2, plus, open, picking, onToggle, onPlus, onClosePicker }) {
+  const plusButton = (0, import_react13.useRef)(null);
+  const threads = threadsOf(roster, channel.id);
+  const hasChats = state.chats.some((chat) => chat.channelId === channel.id);
+  const unread = unreadOf(state, channel.id);
+  const type = typeOf(channel.type);
+  const panelId = `omni-tree-${channel.id}`;
+  const closePicker = () => {
+    onClosePicker();
+    plusButton.current?.focus?.();
+  };
+  const onPick = (chat) => addThread(channel.id, chat).then((result) => {
+    if (result?.ok === true) closePicker();
+    return result;
+  });
+  return (0, import_react13.createElement)(
+    "div",
+    { className: "ot-channel" },
+    (0, import_react13.createElement)(
+      "div",
+      { className: "ot-channel-head" },
+      (0, import_react13.createElement)(
+        "button",
+        {
+          type: "button",
+          className: "ot-channel-row",
+          "aria-expanded": open,
+          "aria-controls": panelId,
+          title: `${type.label} · ${channel.name}`,
+          onClick: onToggle
+        },
+        (0, import_react13.createElement)("span", { className: "ot-chevron", "aria-hidden": true }, (0, import_react13.createElement)(ChevronRightIcon2)),
+        (0, import_react13.createElement)(Tile, { type: channel.type, size: 18 }),
+        (0, import_react13.createElement)("span", { className: "ot-channel-name" }, channel.name),
+        unread > 0 ? (0, import_react13.createElement)("span", { className: "ot-count", "aria-label": t("{n} unread", { n: unread }) }, unread) : (0, import_react13.createElement)(StatusDot, { status: channel.status })
+      ),
+      plus.offered ? (0, import_react13.createElement)("button", {
+        ref: plusButton,
+        type: "button",
+        className: "ot-plus",
+        "aria-label": t("Add a chat"),
+        title: t("Add a chat"),
+        "aria-expanded": picking,
+        onClick: onPlus
+      }, (0, import_react13.createElement)(PlusIcon3)) : null
     ),
     (0, import_react13.createElement)(
       "div",
@@ -15129,60 +15333,92 @@ function ChannelItem({ channel, state, bot, omni: omni2, open, onToggle }) {
       (0, import_react13.createElement)(
         "div",
         { className: "ot-chats-in" },
-        chats.length === 0 ? (0, import_react13.createElement)("span", { className: "ot-empty" }, t("No chats yet")) : null,
-        chats.map((chat, index) => (0, import_react13.createElement)(
-          "button",
-          {
-            key: chat.id,
-            type: "button",
-            className: "ot-chat",
-            style: { "--i": index },
-            "aria-current": state.chatId === chat.id ? "page" : void 0,
-            title: chat.preview || chat.name,
-            tabIndex: open ? void 0 : -1,
-            onClick: () => omni2.openChat(chat.id)
-          },
-          (0, import_react13.createElement)(ChatAvatar, { chat, size: 22 }),
-          (0, import_react13.createElement)("span", { className: "ot-chat-name" }, chat.name),
-          chat.unread > 0 ? (0, import_react13.createElement)("span", { className: "ot-unread", "aria-hidden": true }) : (0, import_react13.createElement)("span", { className: "ot-time" }, relativeShort(chat.at)),
-          (0, import_react13.createElement)("span", { className: "ot-helper", title: t("{name} helps in this chat", { name: bot.name }) }, (0, import_react13.createElement)(BotMark, { bot, size: 16 }))
-        )),
+        picking && plus.offered ? (0, import_react13.createElement)(ThreadPicker, { channel, onPick, onClose: closePicker }) : null,
+        !plus.offered && plus.reason ? (0, import_react13.createElement)("span", { className: "ot-empty" }, hostText(plus.reason)) : null,
+        threads.map((thread) => (0, import_react13.createElement)(ThreadRow, { key: rowKey(thread, rowProps), thread, actions, rowProps, shown: open })),
         (0, import_react13.createElement)(
           "button",
           { type: "button", className: "ot-chat ot-all", tabIndex: open ? void 0 : -1, onClick: () => omni2.openChannels("channel", channel.id) },
-          more > 0 ? t("All chats (+{n})", { n: more }) : t("Channel health")
+          hasChats ? t("All chats") : t("Channel health")
         )
       )
     )
   );
 }
-function OmniTree({ bot, actions }) {
+function OmniTree(props) {
+  const { bot, actions, roster } = props;
   const state = useOmni();
   const omni2 = (0, import_react13.useMemo)(() => omniActions((id) => actions.selectPanel(id), call), [actions]);
   const [open, setOpen] = (0, import_react13.useState)(readOpen);
+  const [picking, setPicking] = (0, import_react13.useState)(null);
   (0, import_react13.useEffect)(() => {
     startLive(call);
   }, []);
   if (!isOmniBot(bot)) return null;
+  const rowProps = rowPropsOf(props, roster?.omniRowProps);
+  const threads = Array.isArray(roster?.omniThreads) ? roster.omniThreads : [];
+  const others = (list) => list.length === 0 ? null : (0, import_react13.createElement)(
+    "div",
+    { className: "ot-others", role: "group", "aria-label": t("Other chats") },
+    (0, import_react13.createElement)("span", { className: "ot-empty" }, t("Other chats")),
+    list.map((thread) => (0, import_react13.createElement)(ThreadRow, { key: rowKey(thread, rowProps), thread, actions, rowProps }))
+  );
   if (state.preview) {
-    return (0, import_react13.createElement)("div", { className: "ot-tree" }, (0, import_react13.createElement)("button", { type: "button", className: "ot-channel-row ot-link", onClick: openConnectWizard }, t("Connect Omni"), (0, import_react13.createElement)("span", { "aria-hidden": true }, " →")));
+    return (0, import_react13.createElement)("div", { className: "ot-tree" }, (0, import_react13.createElement)("button", { type: "button", className: "ot-channel-row ot-link", onClick: openConnectWizard }, t("Connect Omni"), (0, import_react13.createElement)("span", { "aria-hidden": true }, " →")), others(threads));
   }
-  const toggle = (id) => setOpen((before) => {
+  const change = (id, show) => setOpen((before) => {
     const next = new Set(before);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
+    if (show ?? !next.has(id)) next.add(id);
+    else next.delete(id);
     saveOpen(next);
     return next;
   });
+  const plus = plusOf(roster, state);
+  const listed = new Set(state.channels.map((channel) => channel.id));
   return (0, import_react13.createElement)(
     "div",
     { className: "ot-tree", role: "group", "aria-label": t("{name}'s channels", { name: bot.name }) },
-    state.channels.map((channel) => (0, import_react13.createElement)(ChannelItem, { key: channel.id, channel, state, bot, omni: omni2, open: open.has(channel.id), onToggle: () => toggle(channel.id) }))
+    state.channels.map((channel) => (0, import_react13.createElement)(ChannelItem, {
+      key: channel.id,
+      channel,
+      state,
+      roster,
+      rowProps,
+      actions,
+      omni: omni2,
+      plus,
+      open: open.has(channel.id),
+      picking: picking === channel.id,
+      // Folding a channel closes its picker.
+      onToggle: () => {
+        if (picking === channel.id && open.has(channel.id)) setPicking(null);
+        change(channel.id);
+      },
+      onPlus: () => {
+        const next = picking === channel.id ? null : channel.id;
+        setPicking(next);
+        if (next !== null) change(channel.id, true);
+      },
+      onClosePicker: () => setPicking(null)
+    })),
+    others(threads.filter((thread) => !listed.has(thread.channelId)))
   );
+}
+function ThreadDock({ sessionId, useRoster }) {
+  const thread = useRoster((roster) => isThreadSession(roster, sessionId));
+  (0, import_react13.useEffect)(() => {
+    if (!thread || typeof document === "undefined") return void 0;
+    document.body.dataset.omniThread = "";
+    return () => {
+      delete document.body.dataset.omniThread;
+    };
+  }, [thread]);
+  return null;
 }
 var OMNI_TREE_CSS = `
 .ot-tree{display:grid;gap:1px;margin:0 0 4px 26px;padding-left:10px;border-left:1px solid var(--bt-line, rgba(127,127,127,.2))}
-.ot-channel-row{display:flex;align-items:center;gap:7px;width:100%;padding:5px 8px 5px 4px;border:0;border-radius:8px;background:none;color:var(--bt-ink);font:inherit;font-size:13px;line-height:20px;text-align:left;cursor:pointer}
+.ot-channel-head{display:flex;align-items:center;gap:2px}
+.ot-channel-row{display:flex;align-items:center;gap:7px;width:100%;min-width:0;padding:5px 8px 5px 4px;border:0;border-radius:8px;background:none;color:var(--bt-ink);font:inherit;font-size:13px;line-height:20px;text-align:left;cursor:pointer}
 .ot-channel-row:hover{background:var(--bt-hover)}
 .ot-channel-row .oc-tile{flex:none}
 .ot-link{color:var(--bt-ink-2);font-size:12.5px}
@@ -15191,22 +15427,48 @@ var OMNI_TREE_CSS = `
 .ot-channel-row[aria-expanded=true] .ot-chevron{transform:rotate(90deg)}
 .ot-channel-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ot-count{flex:none;min-width:18px;padding:0 5px;border-radius:9px;background:var(--bt-accent, #22d3ee);color:#fff;font-size:11px;line-height:18px;text-align:center;font-weight:600}
+.ot-plus{display:grid;place-items:center;flex:none;width:24px;height:24px;padding:0;border:0;border-radius:7px;background:none;color:var(--bt-ink-3);cursor:pointer}
+.ot-plus svg{width:14px;height:14px}
+.ot-plus:hover,.ot-plus[aria-expanded=true]{background:var(--bt-hover);color:var(--bt-ink)}
+.ot-plus:focus-visible{outline:2px solid var(--bt-accent);outline-offset:-2px}
 .ot-chats{display:grid;grid-template-rows:0fr;transition:grid-template-rows .26s ease}
 .ot-chats[data-open]{grid-template-rows:1fr}
 .ot-chats-in{overflow:hidden;min-height:0;margin-left:14px}
 .ot-chat{display:flex;align-items:center;gap:7px;width:100%;padding:3px 6px 3px 4px;border:0;border-radius:8px;background:none;color:var(--bt-ink-2);font:inherit;font-size:12.5px;line-height:20px;text-align:left;cursor:pointer}
 .ot-chat:hover{background:var(--bt-hover);color:var(--bt-ink)}
-.ot-chat[aria-current=page]{background:var(--bt-active, var(--bt-hover));color:var(--bt-ink);font-weight:500}
-.ot-chat .oc-ava{flex:none}
-.ot-chat-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ot-time{flex:none;font-size:10.5px;color:var(--bt-ink-3)}
-.ot-unread{flex:none;width:7px;height:7px;border-radius:50%;background:var(--bt-accent, #22d3ee)}
-.ot-helper{flex:none;display:grid;place-items:center;width:18px;height:18px;opacity:.9}
-.ot-all{color:var(--bt-ink-3);font-size:12px;padding-left:33px}
-.ot-empty{display:block;padding:3px 6px 3px 33px;color:var(--bt-ink-3);font-size:12px}
-.ot-chats[data-open] .ot-chat{animation:ot-in .22s ease both;animation-delay:calc(var(--i, 0)*25ms)}
+.ot-all{color:var(--bt-ink-3);font-size:12px;padding-left:12px}
+.ot-empty{display:block;padding:3px 6px 3px 12px;color:var(--bt-ink-3);font-size:12px}
+.ot-others{display:grid;gap:1px;margin-top:4px}
+.ot-thread{position:relative;display:flex;align-items:center;flex-wrap:wrap}
+.ot-thread .bt-thread{flex:1;min-width:0}
+.ot-thread .bt-thread[aria-disabled=true]{cursor:default}
+.ot-thread[data-idle] .bt-thread-title{color:var(--bt-ink-2)}
+.ot-thread-idle{flex:none;width:8px;height:8px;margin:0 2px;box-sizing:border-box;border-radius:50%;border:1.5px solid var(--bt-ink-3);opacity:.6}
+.ot-thread-reason{flex:none;max-width:45%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;color:var(--bt-ink-3)}
+.ot-thread-remove{position:absolute;right:4px;display:grid;place-items:center;min-width:20px;height:20px;padding:0 4px;border:0;border-radius:6px;background:var(--bt-hover);color:var(--bt-ink-3);font:inherit;font-size:11px;cursor:pointer;opacity:0;transition:opacity .12s ease}
+.ot-thread-remove svg{width:11px;height:11px}
+.ot-thread:hover .ot-thread-remove,.ot-thread-remove:focus-visible,.ot-thread-remove[data-confirm]{opacity:1}
+.ot-thread-remove[data-confirm]{color:var(--bt-danger, #dc2626)}
+.ot-thread-problem{flex-basis:100%;padding:0 8px 3px 28px;font-size:11px;color:var(--bt-danger, #dc2626)}
+.ot-picker{display:grid;gap:4px;margin:2px 0 4px;padding:6px;border:1px solid var(--bt-line, rgba(127,127,127,.2));border-radius:10px;background:var(--bt-surface, transparent)}
+.ot-picker-head{display:flex;align-items:center;gap:4px}
+.ot-picker-search{flex:1;min-width:0;height:26px;padding:0 8px;border:1px solid var(--bt-line, rgba(127,127,127,.25));border-radius:7px;background:none;color:var(--bt-ink);font:inherit;font-size:12.5px}
+.ot-picker-search:focus-visible{outline:2px solid var(--bt-accent);outline-offset:-1px}
+.ot-picker-close{display:grid;place-items:center;flex:none;width:24px;height:24px;padding:0;border:0;border-radius:7px;background:none;color:var(--bt-ink-3);cursor:pointer}
+.ot-picker-close svg{width:12px;height:12px}
+.ot-picker-close:hover{background:var(--bt-hover);color:var(--bt-ink)}
+.ot-picker-list{display:grid;gap:1px;max-height:240px;overflow-y:auto}
+.ot-picker-chat{display:flex;align-items:center;gap:6px;width:100%;padding:4px 6px;border:0;border-radius:7px;background:none;color:var(--bt-ink);font:inherit;font-size:12.5px;line-height:18px;text-align:left;cursor:pointer}
+.ot-picker-chat:hover:not(:disabled){background:var(--bt-hover)}
+.ot-picker-chat:disabled{cursor:default;color:var(--bt-ink-3)}
+.ot-picker-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ot-picker-tag{flex:none;font-size:11px;color:var(--bt-ink-3)}
+.ot-picker-note,.ot-picker-problem{margin:0;padding:2px 6px;font-size:12px;color:var(--bt-ink-3)}
+.ot-picker-problem{color:var(--bt-danger, #dc2626)}
+.ot-chats[data-open] .ot-thread{animation:ot-in .22s ease both}
 @keyframes ot-in{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}
-@media (prefers-reduced-motion:reduce){.ot-chats{transition:none}.ot-chats .ot-chat{animation:none}.ot-chevron{transition:none}}
+@media (prefers-reduced-motion:reduce){.ot-chats{transition:none}.ot-chats .ot-thread{animation:none}.ot-chevron{transition:none}.ot-thread-remove{transition:none}}
+body[data-omni-thread] .bt-voice,body[data-omni-thread] .bt-plus,body[data-omni-thread] .bt-composer-model,body[data-omni-thread] .bt-mw-dock,body[data-omni-thread] .bt-btw-dock{display:none!important}
 `;
 
 // src/client/permissions.js
@@ -15929,11 +16191,25 @@ var STRINGS = {
   "Channels and DMs, as a bot or as yourself.": "频道和私信，以机器人或你自己的身份。",
   "A bot of yours, in chats and groups.": "你自己的机器人，用于私聊和群组。",
   "Servers, threads and DMs, through your bot.": "服务器、话题和私信，通过你的机器人。",
-  // The Omni Bot's channels and chats in the sidebar (omni-tree.js).
+  // The Omni Bot's channels and their chat threads in the sidebar (omni-tree.js).
   "No chats yet": "还没有聊天",
-  "{name} helps in this chat": "{name} 在这个聊天里帮忙",
-  "All chats (+{n})": "全部聊天（+{n}）",
   "{name}'s channels": "{name} 的渠道",
+  "Add a chat": "添加聊天",
+  "Add a chat from {name}": "从 {name} 添加聊天",
+  "Search chats": "搜索聊天",
+  "No chats match.": "没有匹配的聊天。",
+  "Added": "已添加",
+  "Other chats": "其他聊天",
+  "Adding…": "正在添加…",
+  "The chat was not added.": "这个聊天没有添加。",
+  "Remove {name} from the sidebar? Click again": "要从侧边栏移除 {name} 吗？再点一次",
+  // Why a chat cannot be added, or a thread does not work (threads.js, thread-keys.js, omni-tree.js).
+  "Adding a chat needs a newer Bot team.": "添加聊天需要更新的 Bot 团队。",
+  "Adding a chat needs a newer Omni. Update it first.": "添加聊天需要更新的 Omni。请先更新它。",
+  "Not connected: this app is not linked to an Omni.": "未连接：这个应用没有关联 Omni。",
+  "Not connected: this app is linked to another Omni.": "未连接：这个应用关联的是另一个 Omni。",
+  "Not connected: its previous key is still being cut.": "未连接：它之前的密钥还在作废中。",
+  "Not connected: waiting for a key from the linked Omni.": "未连接：正在等待关联的 Omni 发来密钥。",
   // A message's file in the chat view (channels.js).
   "Picture": "图片",
   "Voice note": "语音消息",
@@ -16018,6 +16294,8 @@ function apply(ctx) {
   ctx.effect(() => onShell(({ face, shadow, installCompiledStyles }) => [
     () => installCompiledStyles(CHANNELS_CSS + OMNI_TREE_CSS + SUBSCRIPTIONS_CSS + AUTOMATIONS_CSS + OMNI_LIVE_CSS + OMNI_PEEK_CSS + OMNI_CONNECT_CSS + PERMISSIONS_CSS, "channels"),
     () => shadow("conversation.input.dock", { id: "omni-consent", order: -80, inject: face }, ConsentDock),
+    // A chat thread's Session is not a Bot's: it marks the page so the Bot controls stay hidden there.
+    () => shadow("conversation.input.dock", { id: "omni-thread", order: -200, inject: face }, ThreadDock),
     () => shadow("sidebar.footer.action", { id: "bot-connect", order: -100, inject: face }, ChannelsFooter),
     // The Connect wizard opened on demand (settings, Channels, or once after install) mounts here.
     () => shadow("sidebar.footer.action", { id: "omni-connect-wizard", order: 1e3, inject: face }, WizardHost),
