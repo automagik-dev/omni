@@ -14654,12 +14654,17 @@ function workerOf(worker, roster) {
     return { name: bot2?.name ?? "Omni", bot: bot2, look: MAIN_LOOK };
   }
   if (worker.kind === "session") return { name: worker.mode === "ongoing" ? t("One ongoing session") : t("A new session each time"), session: true };
+  if (worker.kind === "thread") {
+    const thread = (Array.isArray(roster?.omniThreads) ? roster.omniThreads : []).find((item) => item.id === worker.threadId);
+    return thread ? { name: t("The thread of {name}", { name: thread.title }), chat: thread.title } : { name: t("A removed chat's thread"), session: true };
+  }
   const bot = roster?.byId?.[worker.botId];
   return { name: bot?.name ?? t("A deleted Bot"), bot, look: MAIN_LOOK };
 }
 function WorkerMark({ worker, roster, size = 24 }) {
   const info = workerOf(worker, roster);
   if (info.session) return (0, import_react11.createElement)("span", { className: "os-session", style: { width: size, height: size } }, (0, import_react11.createElement)(OmniMark, { size: Math.round(size * 0.62) }));
+  if (info.chat !== void 0) return (0, import_react11.createElement)(ChatAvatar, { chat: { name: info.chat, initials: initials(info.chat) }, size });
   return (0, import_react11.createElement)(BotMark, info.bot ? { bot: info.bot, size } : { look: info.look, size });
 }
 var TriggerBadge = ({ trigger, size = 36 }) => (0, import_react11.createElement)(
@@ -14710,6 +14715,8 @@ function Sentence({ sub, roster }) {
   );
 }
 var RUN_STATUS = {
+  // An event for a thread that waits for the run before it to end.
+  queued: { label: "Waiting its turn", tone: "off" },
   waiting: { label: "Needs you", tone: "warn" },
   working: { label: "Working", tone: "busy" },
   done: { label: "Done", tone: "ok" },
@@ -14864,6 +14871,8 @@ function AutomationRow({ sub, roster, runs, onOpen }) {
         { className: "os-row-foot" },
         (0, import_react11.createElement)("span", null, last ? t("last run {time}", { time: relativeShort(last.at) }) : t("not fired yet")),
         sub.askFirst ? null : (0, import_react11.createElement)("span", { className: "os-row-warn" }, t("acts without asking")),
+        // Paused by the host, with why (a thread whose chat was removed, a team without the hook).
+        !sub.on && sub.pausedReason ? (0, import_react11.createElement)("span", { className: "os-row-warn os-row-paused" }, sub.pausedReason) : null,
         (0, import_react11.createElement)(
           "span",
           { className: "os-row-actions" },
@@ -16036,6 +16045,9 @@ var STRINGS = {
   "A photo or file arrives": "收到照片或文件",
   "The channel disconnects": "渠道断开",
   "Did not finish": "未完成",
+  "Waiting its turn": "排队等候",
+  "The thread of {name}": "{name} 的聊天线程",
+  "A removed chat's thread": "已移除聊天的线程",
   "1 channel": "1 个渠道",
   "{n} channels": "{n} 个渠道",
   "1 group": "1 个群组",

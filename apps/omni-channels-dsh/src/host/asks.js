@@ -41,9 +41,23 @@ export function pruneRuns(runs, kept = RUNS_KEPT) {
   })
 }
 
-// The tools that only read; a GET omni_call reads too.
-export const READ_TOOLS = new Set(['read', 'read_image', 'glob', 'grep', 'todo_write', 'omni_channels', 'omni_chats', 'omni_messages', 'omni_endpoints', 'find_chats', 'list_automations'])
+// The tools that only read; a GET omni_call reads too. A chat thread's history and picture
+// tools read its own chat (thread-tools.js).
+export const READ_TOOLS = new Set(['read', 'read_image', 'glob', 'grep', 'todo_write', 'omni_channels', 'omni_chats', 'omni_messages', 'omni_endpoints', 'find_chats', 'list_automations', 'thread_history', 'thread_picture'])
 export const readsOnly = exec => READ_TOOLS.has(exec.name) || (exec.name === 'omni_call' && String(exec.arguments?.method ?? 'GET').toUpperCase() === 'GET')
+
+// The longest summary a run shows on the board, in characters.
+export const SUMMARY_MAX = 280
+
+/** An automation run ended: its status, its summary on one line, and when. */
+export function closeRun(run, status, summary) {
+  run.status = status
+  run.summary = String(summary || (status === 'done' ? 'Done.' : 'Did not finish.')).replace(/\s+/g, ' ').trim().slice(0, SUMMARY_MAX)
+  run.endedAt = Date.now()
+}
+
+/** Text set between <<< and >>> that cannot close its own fence: a run of < or > is spaced out. */
+export const fenced = text => String(text).replace(/<{3,}|>{3,}/g, run => run.split('').join(' '))
 
 /** A run record's id: `prefix-` and a short time-and-random tail. */
 export const runId = prefix => `${prefix}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`
@@ -67,8 +81,6 @@ export function install(rt) {
   const cutText = () => `[Answer from ${askName()} · your question was cut by a restart of DeepSeek Harness, and its answer is lost; ask again if it still matters]`
   // The chat's name is its members' words: one line, cut short, quoted as data.
   const chatLabel = thread => JSON.stringify(String(thread.chatName ?? thread.title ?? '').replace(/\s+/g, ' ').trim().slice(0, 80))
-  // The question cannot close its own fence: a run of < or > is spaced out.
-  const fenced = text => String(text).replace(/<{3,}|>{3,}/g, run => run.split('').join(' '))
   function askText(thread, question) {
     return [
       `A chat thread asks you one question: the thread of the chat ${chatLabel(thread)} (chat ${thread.chatId}, on channel ${thread.channelId}).`,

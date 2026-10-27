@@ -25,6 +25,11 @@ export function workerOf(worker, roster) {
     return { name: bot?.name ?? 'Omni', bot, look: MAIN_LOOK }
   }
   if (worker.kind === 'session') return { name: worker.mode === 'ongoing' ? t('One ongoing session') : t('A new session each time'), session: true }
+  // An added chat's thread, by its chat's name (the threads ride the team view).
+  if (worker.kind === 'thread') {
+    const thread = (Array.isArray(roster?.omniThreads) ? roster.omniThreads : []).find(item => item.id === worker.threadId)
+    return thread ? { name: t('The thread of {name}', { name: thread.title }), chat: thread.title } : { name: t('A removed chat\'s thread'), session: true }
+  }
   const bot = roster?.byId?.[worker.botId]
   return { name: bot?.name ?? t('A deleted Bot'), bot, look: MAIN_LOOK }
 }
@@ -32,6 +37,7 @@ export function workerOf(worker, roster) {
 export function WorkerMark({ worker, roster, size = 24 }) {
   const info = workerOf(worker, roster)
   if (info.session) return h('span', { className: 'os-session', style: { width: size, height: size } }, h(OmniMark, { size: Math.round(size * 0.62) }))
+  if (info.chat !== undefined) return h(ChatAvatar, { chat: { name: info.chat, initials: initials(info.chat) }, size })
   return h(BotMark, info.bot ? { bot: info.bot, size } : { look: info.look, size })
 }
 
@@ -78,6 +84,8 @@ function Sentence({ sub, roster }) {
 }
 
 const RUN_STATUS = {
+  // An event for a thread that waits for the run before it to end.
+  queued: { label: 'Waiting its turn', tone: 'off' },
   waiting: { label: 'Needs you', tone: 'warn' },
   working: { label: 'Working', tone: 'busy' },
   done: { label: 'Done', tone: 'ok' },
@@ -227,6 +235,8 @@ export function AutomationRow({ sub, roster, runs, onOpen }) {
       h('div', { className: 'os-row-foot' },
         h('span', null, last ? t('last run {time}', { time: relativeShort(last.at) }) : t('not fired yet')),
         sub.askFirst ? null : h('span', { className: 'os-row-warn' }, t('acts without asking')),
+        // Paused by the host, with why (a thread whose chat was removed, a team without the hook).
+        !sub.on && sub.pausedReason ? h('span', { className: 'os-row-warn os-row-paused' }, sub.pausedReason) : null,
         h('span', { className: 'os-row-actions' },
           h('button', { type: 'button', className: 'os-link', disabled: busy !== '', onClick: () => run('automation-test', { id: sub.id }) }, t('Test')),
           h('button', {
