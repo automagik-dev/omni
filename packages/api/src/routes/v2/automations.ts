@@ -467,7 +467,12 @@ automationsRoutes.post('/:id/execute', zValidator('json', testAutomationSchema),
   const services = c.get('services');
   const event = await resolveTestEvent(services, c.req.valid('json'));
 
-  const result = await services.automations.execute(id, event);
+  const result = await services.automations.execute(id, event, {
+    eventBus: services.eventBus,
+    // Manual execute is a first-class debugging path; `connector.call` must
+    // work there too, not only under the started engine.
+    callConnector: (request, trustedTenantId) => services.connectors.call(request, trustedTenantId),
+  });
 
   return c.json(result);
 });
