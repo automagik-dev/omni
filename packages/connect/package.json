@@ -1,6 +1,6 @@
 {
   "name": "@omni/connect",
-  "version": "2.261028.6",
+  "version": "2.261028.7",
   "private": true,
   "description": "Browser sign-in core: one owner bound from an external OpenID Connect issuer, durable opaque sessions behind an app-owned store port",
   "license": "Apache-2.0",
