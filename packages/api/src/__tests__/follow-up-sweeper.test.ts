@@ -581,6 +581,20 @@ describeWithDb('FollowUpSweeperService (integration)', () => {
     expect(await disarmReasonOf(staleId)).toBe('customer_replied');
   });
 
+  test('gupshup is bounded by the messaging window like the other WhatsApp BSPs', async () => {
+    const now = Date.now();
+    const [recentId, staleId] = await seedChats('gupshup', [{}, {}]);
+    const guarded = config({ stopOutsideMessagingWindow: true });
+    await seedCustomerReplied([recentId], new Date(now - 20 * 60 * MS_PER_MINUTE), guarded);
+    await seedCustomerReplied([staleId], new Date(now - 30 * 60 * MS_PER_MINUTE), guarded);
+
+    const stats = await service.sweep();
+
+    expect(stats.rearmed).toBe(1);
+    expect(await disarmReasonOf(recentId)).toBeNull();
+    expect(await disarmReasonOf(staleId)).toBe('customer_replied');
+  });
+
   test('the messaging-window bound follows stopOutsideMessagingWindow and the channel', async () => {
     const inboundAt = new Date(Date.now() - 30 * 60 * MS_PER_MINUTE);
     const [unguardedId] = await seedChats('whatsapp-business', [{}]);

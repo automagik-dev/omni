@@ -53,6 +53,7 @@ describe('channelHasMessagingWindow', () => {
     expect(channelHasMessagingWindow('hermes')).toBe(true);
     expect(channelHasMessagingWindow('asc')).toBe(true);
     expect(channelHasMessagingWindow('twilio-whatsapp')).toBe(true);
+    expect(channelHasMessagingWindow('gupshup')).toBe(true);
     expect(channelHasMessagingWindow('whatsapp-baileys')).toBe(false);
     expect(channelHasMessagingWindow('discord')).toBe(false);
     expect(channelHasMessagingWindow('telegram')).toBe(false);

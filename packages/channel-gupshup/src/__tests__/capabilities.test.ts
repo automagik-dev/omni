@@ -36,6 +36,10 @@ describe('GUPSHUP_CAPABILITIES', () => {
   });
 
   describe('limits', () => {
+    it('has the 24h WhatsApp messaging window', () => {
+      expect(GUPSHUP_CAPABILITIES.hasMessagingWindow).toBe(true);
+      expect(GUPSHUP_CAPABILITIES.messagingWindowMs).toBe(24 * 60 * 60 * 1000);
+    });
     it('maxMessageLength is 4096', () => expect(GUPSHUP_CAPABILITIES.maxMessageLength).toBe(4096));
     it('maxFileSize is 100MB', () => expect(GUPSHUP_CAPABILITIES.maxFileSize).toBe(100 * 1024 * 1024));
     it('supportedMediaTypes covers image, audio, video, application, and webp sticker', () => {
