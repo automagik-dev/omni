@@ -5,7 +5,8 @@
  * omni sandbox start     [--home <dir>] [--json]
  * omni sandbox stop      [--home <dir>] [--json]
  * omni sandbox uninstall [--home <dir>] [--purge] [--json]
- * omni sandbox run       [--home <dir>]          (the supervisor; launchd/systemd run this)
+ * omni sandbox run       [--home <dir>] [--embedded]
+ *                        (the supervisor; launchd/systemd, or an app that embeds Omni, run this)
  * omni sandbox update    [--home <dir>] [--to <version>] [--json]
  *                        (hands an update off; the sandbox's API runs this when the app asks)
  *
@@ -191,9 +192,11 @@ export function createSandboxCommand(): Command {
     .command('run')
     .description('Run the sandbox supervisor in the foreground (what launchd/systemd start)')
     .option('--home <dir>', 'Sandbox home (default: $OMNI_HOME/sandbox, else ~/.omni/sandbox)')
-    .action(async (options: SandboxCliOptions) => {
+    .option('--embedded', 'For an app that embeds this Omni: no crash reports, update checks or plugin lane')
+    .action(async (options: SandboxCliOptions & { embedded?: boolean }) => {
       try {
-        process.exit(await runSandboxSupervisor(resolveSandboxHome(options.home)));
+        const home = resolveSandboxHome(options.home);
+        process.exit(await runSandboxSupervisor(home, undefined, { embedded: options.embedded === true }));
       } catch (error) {
         const exitCode = error instanceof SandboxError ? error.exitCode : SANDBOX_EXIT.failed;
         output.error(error instanceof Error ? error.message : String(error), undefined, exitCode);

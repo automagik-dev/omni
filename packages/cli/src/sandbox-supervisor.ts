@@ -22,6 +22,7 @@ import {
   type SandboxChildSpec,
   SandboxError,
   type SandboxLayout,
+  type SandboxRunOptions,
   isLoopbackPortFree,
   processAlive,
   readPid,
@@ -304,10 +305,11 @@ export class SandboxSupervisor {
   }
 }
 
-/** Entry of `omni sandbox run`. */
+/** Entry of `omni sandbox run` (`--embedded`: {@link SandboxRunOptions}). */
 export async function runSandboxSupervisor(
   home: string,
   deps: SupervisorDeps = defaultSupervisorDeps(),
+  options: SandboxRunOptions = {},
 ): Promise<number> {
   const layout = sandboxLayout(home);
   const state = readSandboxState(layout);
@@ -320,6 +322,7 @@ export async function runSandboxSupervisor(
   // A supervisor that died hard (SIGKILL, a crash) leaves its children holding the ports.
   const swept = (await deps.sweepLeftovers?.(layout)) ?? 0;
   if (swept > 0) deps.log(`stopped ${swept} process(es) an earlier run left behind`);
-  const supervisor = new SandboxSupervisor(layout, sandboxChildSpecs(layout, state, apiKey, deps.env), deps);
+  const specs = sandboxChildSpecs(layout, state, apiKey, deps.env, options);
+  const supervisor = new SandboxSupervisor(layout, specs, deps);
   return supervisor.run();
 }
