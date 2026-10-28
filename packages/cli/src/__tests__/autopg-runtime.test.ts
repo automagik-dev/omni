@@ -61,10 +61,10 @@ function fixtureTarball(omit: string[] = []): { path: string; bytes: Uint8Array;
   return { path, bytes, sha256: createHash('sha256').update(bytes).digest('hex') };
 }
 
-const pinFor = (sha256: string): AutopgPin => ({
+const pinFor = (fixture: { sha256: string; bytes: Uint8Array }, size = fixture.bytes.length): AutopgPin => ({
   version: '3.3.0',
   pgRuntime: '18.3.0-beta.17',
-  platforms: { 'linux-arm64': { sha256, size: 1 } },
+  platforms: { 'linux-arm64': { sha256: fixture.sha256, size } },
 });
 
 const LINUX_ARM64 = { platform: 'linux', arch: 'arm64', libc: 'glibc' } as const;
@@ -103,8 +103,13 @@ describe('autopgTarget', () => {
     ] as const) {
       expect(autopgTarget(AUTOPG_PIN, host)).toBeNull();
     }
-    // A platform the pin leaves out has no target either.
-    expect(autopgTarget(pinFor('0'.repeat(64)), { platform: 'darwin', arch: 'arm64', libc: null })).toBeNull();
+  });
+
+  test('a platform autopg ships but the pin leaves out is refused, never sent to npm pgserve', () => {
+    const pin = pinFor({ sha256: '0'.repeat(64), bytes: new Uint8Array(1) });
+    expect(() => autopgTarget(pin, { platform: 'darwin', arch: 'arm64', libc: null })).toThrow(
+      /pin has no darwin-arm64 entry/,
+    );
   });
 
   test('libc: musl where its loader is, glibc on any other Linux, none elsewhere', () => {
@@ -120,7 +125,7 @@ describe('installAutopgRuntime', () => {
 
   test('unpacks the verified tarball and seeds autopg binary cache, so autopg downloads nothing', async () => {
     const fixture = fixtureTarball();
-    const target = autopgTarget(pinFor(fixture.sha256), LINUX_ARM64);
+    const target = autopgTarget(pinFor(fixture), LINUX_ARM64);
     if (!target) throw new Error('no target');
     const downloads: string[] = [];
     const binary = await installAutopgRuntime(paths(), target, {
@@ -147,7 +152,7 @@ describe('installAutopgRuntime', () => {
 
   test('a tarball whose sha256 is not the pin is refused, and nothing is written', async () => {
     const fixture = fixtureTarball();
-    const target = autopgTarget(pinFor(fixture.sha256), LINUX_ARM64);
+    const target = autopgTarget(pinFor(fixture), LINUX_ARM64);
     if (!target) throw new Error('no target');
     const flipped = new Uint8Array(fixture.bytes);
     flipped[100] = (flipped[100] ?? 0) ^ 1;
@@ -158,9 +163,19 @@ describe('installAutopgRuntime', () => {
     expect(existsSync(join(root, 'home', 'pgserve', 'bin', 'linux-arm64'))).toBe(false);
   });
 
+  test('a tarball whose size is not the pin is refused before it is hashed', async () => {
+    const fixture = fixtureTarball();
+    const target = autopgTarget(pinFor(fixture, fixture.bytes.length + 1), LINUX_ARM64);
+    if (!target) throw new Error('no target');
+    await expect(installAutopgRuntime(paths(), target, { download: async () => fixture.bytes })).rejects.toThrow(
+      /size \d+ is not the pinned \d+/,
+    );
+    expect(existsSync(join(root, 'home', 'autopg'))).toBe(false);
+  });
+
   test('a tarball without Postgres is refused', async () => {
     const fixture = fixtureTarball(['autopg/postgres/bin/initdb']);
-    const target = autopgTarget(pinFor(fixture.sha256), LINUX_ARM64);
+    const target = autopgTarget(pinFor(fixture), LINUX_ARM64);
     if (!target) throw new Error('no target');
     await expect(installAutopgRuntime(paths(), target, { download: async () => fixture.bytes })).rejects.toThrow(
       /has no postgres\/bin\/initdb/,
@@ -170,7 +185,7 @@ describe('installAutopgRuntime', () => {
 
   test('installs from a local tarball offline, and a runtime in place downloads nothing', async () => {
     const fixture = fixtureTarball();
-    const target = autopgTarget(pinFor(fixture.sha256), LINUX_ARM64);
+    const target = autopgTarget(pinFor(fixture), LINUX_ARM64);
     if (!target) throw new Error('no target');
     const offline = async (url: string): Promise<Uint8Array> => {
       throw new Error(`unexpected download of ${url}`);
@@ -182,7 +197,7 @@ describe('installAutopgRuntime', () => {
 
   test('a seed whose .version autopg would reject is not ready, and a reinstall restores it', async () => {
     const fixture = fixtureTarball();
-    const target = autopgTarget(pinFor(fixture.sha256), LINUX_ARM64);
+    const target = autopgTarget(pinFor(fixture), LINUX_ARM64);
     if (!target) throw new Error('no target');
     let downloads = 0;
     const download = async () => {
@@ -199,7 +214,7 @@ describe('installAutopgRuntime', () => {
 });
 
 describe('readPgPasswordFile', () => {
-  // Not a secret: a fixture of the length Unfold's files have at least.
+  // Not a secret: a fixture of the length an embedding app's files have at least.
   const PASSWORD = 'test-not-a-secret-pg-password';
   const write = (content: string, mode = 0o600): string => {
     const path = join(root, `pw-${Math.random().toString(36).slice(2)}`);

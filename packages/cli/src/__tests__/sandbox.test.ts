@@ -22,7 +22,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { AUTOPG_PIN, type AutopgPin } from '../autopg-runtime.js';
+import { AUTOPG_PIN, type AutopgPin, autopgTarget } from '../autopg-runtime.js';
 import { createInstallCommand } from '../commands/install.js';
 import { createSandboxCommand } from '../commands/sandbox.js';
 import {
@@ -902,6 +902,7 @@ describe('SandboxSupervisor', () => {
         events.push('ensure db');
         return true;
       },
+      autopgTarget: () => null,
       now: () => clock,
       sleep: async (ms) => {
         // The stop timeout races every child's exit; only backoff sleeps are recorded.
@@ -1105,7 +1106,7 @@ describe('CappedLog', () => {
 
 describe('autopg from its pinned release (darwin-arm64, linux-arm64, linux-x64-glibc)', () => {
   const RELEASE = 'https://github.com/automagik-dev/autopg/releases/download/v3.3.0';
-  // Not a secret: a fixture of the length Unfold's files have at least.
+  // Not a secret: a fixture of the length an embedding app's files have at least.
   const PG_PASSWORD = 'test-not-a-secret-pg-password';
 
   /** A tarball in the release layout, and a pin that matches it for linux-arm64. */
@@ -1302,10 +1303,9 @@ describe('autopg from its pinned release (darwin-arm64, linux-arm64, linux-x64-g
     ).rejects.toThrow(/no build for linux-x64/);
   });
 
-  test('omni sandbox run reads the password file each start and creates the database with it', async () => {
-    const passwordFile = writePasswordFile();
-    const { deps } = pinnedDeps();
-    await installSandbox({ home, defaultHome, start: false, pgPasswordFile: passwordFile }, deps);
+  /** Supervisor fakes for a sandbox installed from `release` on linux-arm64. */
+  function pinnedSupervisor(release: ReturnType<typeof fixtureRelease>) {
+    const spawned: string[] = [];
     const passwords: Array<string | undefined> = [];
     let next = 2000;
     let apiSpawned: () => void = () => {};
@@ -1313,8 +1313,9 @@ describe('autopg from its pinned release (darwin-arm64, linux-arm64, linux-x64-g
       apiSpawned = done;
     });
     let signal: (s: NodeJS.Signals) => void = () => {};
-    const supervisorDeps: SupervisorDeps = {
+    const deps: SupervisorDeps = {
       spawnChild: (spec) => {
+        spawned.push(spec.name);
         if (spec.name === 'api') apiSpawned();
         let exit: (code: number) => void = () => {};
         const exited = new Promise<number>((done) => {
@@ -1327,6 +1328,7 @@ describe('autopg from its pinned release (darwin-arm64, linux-arm64, linux-x64-g
         passwords.push(password);
         return true;
       },
+      autopgTarget: () => autopgTarget(release.pin, { platform: 'linux', arch: 'arm64', libc: 'glibc' }),
       now: () => 0,
       sleep: async () => {},
       log: () => {},
@@ -1337,14 +1339,70 @@ describe('autopg from its pinned release (darwin-arm64, linux-arm64, linux-x64-g
         signal = handler;
       },
     };
-    const done = runSandboxSupervisor(home, supervisorDeps);
-    await apiStarted;
-    signal('SIGTERM');
+    return { deps, spawned, passwords, apiStarted, stop: () => signal('SIGTERM') };
+  }
+
+  test('omni sandbox run reads the password file each start and creates the database with it', async () => {
+    const passwordFile = writePasswordFile();
+    const { deps, release } = pinnedDeps();
+    await installSandbox({ home, defaultHome, start: false, pgPasswordFile: passwordFile }, deps);
+    const supervisor = pinnedSupervisor(release);
+    const done = runSandboxSupervisor(home, supervisor.deps);
+    await supervisor.apiStarted;
+    supervisor.stop();
     expect(await done).toBe(0);
-    expect(passwords).toEqual([PG_PASSWORD]);
+    expect(supervisor.passwords).toEqual([PG_PASSWORD]);
 
     chmodSync(passwordFile, 0o644);
-    await expect(runSandboxSupervisor(home, supervisorDeps)).rejects.toThrow(/mode is 0644/);
+    await expect(runSandboxSupervisor(home, supervisor.deps)).rejects.toThrow(/mode is 0644/);
+  });
+
+  test('omni sandbox run refuses a half-installed autopg runtime before anything starts', async () => {
+    const { deps, release } = pinnedDeps();
+    await installSandbox({ home, defaultHome, start: false }, deps);
+    // An install killed while it seeded autopg's binary cache: the release is there, the seed is not.
+    const seed = join(home, 'pgserve', 'bin', 'linux-arm64');
+    rmSync(join(seed, '.version'));
+    rmSync(join(seed, 'lib'), { recursive: true });
+    const supervisor = pinnedSupervisor(release);
+    await expect(runSandboxSupervisor(home, supervisor.deps)).rejects.toThrow(/not fully installed/);
+    expect(supervisor.spawned).toEqual([]);
+    expect(existsSync(join(seed, 'bin', 'postgres'))).toBe(true);
+  });
+
+  test('a pinned platform missing from the pin is refused, with no fallback to npm pgserve', async () => {
+    const release = fixtureRelease();
+    const { deps } = pinnedDeps({ ...release, pin: { ...release.pin, platforms: {} } });
+    await expect(installSandbox({ home, defaultHome, start: false }, deps)).rejects.toThrow(
+      /pin has no linux-arm64 entry/,
+    );
+    expect(existsSync(join(home, 'runtime', 'package.json'))).toBe(false);
+    expect(readSandboxState(sandboxLayout(home))).toBeNull();
+  });
+
+  test('with no state, a data dir autopg never ran in password-file mode refuses the opt-in untouched', async () => {
+    const passwordFile = writePasswordFile();
+    const layout = sandboxLayout(home);
+    // What uninstall leaves of a legacy sandbox: its cluster, without sandbox.json.
+    mkdirSync(layout.pgDataDir, { recursive: true });
+    writeFileSync(join(layout.pgDataDir, 'PG_VERSION'), '18\n');
+    const hba = 'local all all trust\nhost all all 127.0.0.1/32 password\n';
+    writeFileSync(join(layout.pgDataDir, 'pg_hba.conf'), hba);
+    const { deps, downloads } = pinnedDeps();
+    await expect(
+      installSandbox({ home, defaultHome, start: false, pgPasswordFile: passwordFile }, deps),
+    ).rejects.toThrow(/made without a password file/);
+    expect(readFileSync(join(layout.pgDataDir, 'pg_hba.conf'), 'utf-8')).toBe(hba);
+    expect(readSandboxState(layout)).toBeNull();
+    expect(downloads).toEqual([]);
+
+    // A cluster autopg already ran with a password file keeps it across uninstall and reinstall.
+    writeFileSync(
+      join(layout.pgDataDir, 'pg_hba.conf'),
+      '# Written by pgserve at every start (--password-file).\nhost all all 127.0.0.1/32 scram-sha-256\n',
+    );
+    await installSandbox({ home, defaultHome, start: false, pgPasswordFile: passwordFile }, deps);
+    expect(readSandboxState(layout)?.pgPasswordFile).toBe(passwordFile);
   });
 
   test('uninstall removes the autopg runtime with the rest of the runtime', async () => {
