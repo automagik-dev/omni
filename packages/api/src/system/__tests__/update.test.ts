@@ -210,6 +210,23 @@ describe('update status', () => {
     const { updater } = setup({}, { version: '2.261024.1' });
     expect((await updater.status()).updateAvailable).toBe(false);
   });
+
+  test('OMNI_UPDATE_CHECK=false (an embedded sandbox): the registry is never read, and updates are off', async () => {
+    expect(readUpdateConfig(CURRENT, {}).check).toBe(true);
+    const off = readUpdateConfig(CURRENT, { OMNI_UPDATE_CHECK: 'false', OMNI_UPDATE_COMMAND: 'omni update --yes' });
+    expect(off.check).toBe(false);
+    expect(off.command).toBeNull();
+    const { updater } = setup({
+      OMNI_UPDATE_CHECK: 'false',
+      OMNI_UPDATE_COMMAND: 'omni update --yes',
+      OMNI_UPDATE_CONFIRM: 'app',
+      API_HOST: '127.0.0.1',
+    });
+    expect(await updater.status()).toMatchObject({ latest: null, updateAvailable: false, mode: 'off' });
+    expect(await updater.request(LATEST, 'key-1')).toMatchObject({ ok: false, code: 'UPDATE_NOT_CONFIGURED' });
+    expect(fetched).toEqual([]);
+    expect(spawned).toEqual([]);
+  });
 });
 
 describe('asking for an update', () => {

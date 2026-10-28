@@ -74,6 +74,11 @@ const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost']);
 export type UpdateConfirm = 'whatsapp' | 'app';
 
 export interface UpdateConfig {
+  /**
+   * False with OMNI_UPDATE_CHECK=false: the registry is never read and updates are off. An app
+   * that embeds this Omni (`omni sandbox run --embedded`) ships its updates itself.
+   */
+  check: boolean;
   /** The operator's update command as argv, or null when updates are off. */
   command: string[] | null;
   confirm: UpdateConfirm;
@@ -113,8 +118,10 @@ function confirmOf(env: NodeJS.ProcessEnv): UpdateConfirm {
 /** Read from the environment and nowhere else. A prerelease version follows `next`, a release `latest`. */
 export function readUpdateConfig(version: string, env: NodeJS.ProcessEnv = process.env): UpdateConfig {
   const channel = ChannelSchema.safeParse(env.OMNI_UPDATE_CHANNEL?.trim());
+  const check = env.OMNI_UPDATE_CHECK?.trim().toLowerCase() !== 'false';
   return {
-    command: commandOf(env.OMNI_UPDATE_COMMAND),
+    check,
+    command: check ? commandOf(env.OMNI_UPDATE_COMMAND) : null,
     confirm: confirmOf(env),
     channel: channel.success ? channel.data : version.includes('-') ? 'next' : 'latest',
     registry: (env.OMNI_UPDATE_REGISTRY?.trim() || DEFAULT_REGISTRY).replace(/\/+$/, ''),
@@ -216,6 +223,7 @@ export function createSystemUpdater(deps: SystemUpdaterDeps): SystemUpdater {
   let wrongCodes = 0;
 
   async function latest(): Promise<string | null> {
+    if (!config.check) return null;
     if (latestCache && now() - latestCache.at < latestCache.ttl) return latestCache.value;
     let value: string | null = null;
     try {
