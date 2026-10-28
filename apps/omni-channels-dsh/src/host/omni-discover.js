@@ -230,27 +230,22 @@ export async function discover({ env = process.env, home = homedir(), read = rea
 // The Omni found with this id, its key included (for this host only).
 export const foundOmni = id => merge(candidates()).find(entry => entry.id === id)
 
-// Links this host to an Omni by a key it already has: the key is checked with that Omni
-// first, then written to the link file a sign-in writes. `refused` when the Omni no longer
-// takes it.
-// What a key this plugin makes for itself carries: what it reads and acts on in Omni
-// (instances, chats, messages, media, events and their durable consumers), and seeing and
-// asking for updates. Never keys, settings, auth or platform.
-export const DEVICE_SCOPES = Object.freeze(['instances:*', 'chats:*', 'messages:*', 'media:*', 'events:*', 'system:read', 'system:update'])
 // A key that can do anything, or make keys, is never kept as found.
 const BROAD = new Set(['*', 'keys:*', 'keys:write'])
 export const isBroad = scopes => (scopes ?? []).some(scope => BROAD.has(scope))
 const Minted = z.object({ data: z.object({ id: text(200).optional(), plainTextKey: text(4096).min(1), scopes: z.array(text(200)).max(500).optional(), expiresAt: text(64).nullable().optional() }) })
 
 // A device key of this host's own, made once with a broad key (POST /api/v2/keys); null when
-// that key cannot make one.
-async function mintDeviceKey(url, key, deviceName) {
+// that key cannot make one. It carries everything the found key does, so the Omni Bot
+// administers the Omni this computer installed (automations, settings and the rest), as
+// the person who installed it can; it is still a key of its own, to be told apart and revoked.
+async function mintDeviceKey(url, key, deviceName, scopes) {
   let reply
   try {
     reply = await fetch(`${url}/api/v2/keys`, {
       method: 'POST',
       headers: { accept: 'application/json', 'content-type': 'application/json', 'x-api-key': key, 'x-omni-client': CLIENT_ID },
-      body: JSON.stringify({ name: `device: ${deviceName}`.slice(0, 255), scopes: [...DEVICE_SCOPES] }),
+      body: JSON.stringify({ name: `device: ${deviceName}`.slice(0, 255), scopes }),
       signal: AbortSignal.timeout(CHECK_TIMEOUT_MS),
     })
   } catch {
@@ -259,7 +254,7 @@ async function mintDeviceKey(url, key, deviceName) {
   if (reply.status !== 201 && reply.status !== 200) return null
   const minted = Minted.safeParse(await reply.json().catch(() => null))
   if (!minted.success) return null
-  return { key: minted.data.data.plainTextKey, keyId: minted.data.data.id ?? null, scopes: minted.data.data.scopes ?? [...DEVICE_SCOPES], keyExpiresAt: minted.data.data.expiresAt ?? null }
+  return { key: minted.data.data.plainTextKey, keyId: minted.data.data.id ?? null, scopes: minted.data.data.scopes ?? scopes, keyExpiresAt: minted.data.data.expiresAt ?? null }
 }
 
 // Links this host to an Omni by a key it already has: the key is checked with that Omni
@@ -279,12 +274,35 @@ export async function linkWithKey(rt, url, key, { deviceName = deviceNameOf() } 
   const valid = Validated.safeParse(await reply.json().catch(() => null))
   if (reply.status !== 200 || !valid.success) throw refused(`Omni answered ${reply.status} at ${new URL(url).host}`)
   const scopes = valid.data.data.scopes ?? []
-  const own = isBroad(scopes) ? await mintDeviceKey(url, key, deviceName) : null
+  const own = isBroad(scopes) ? await mintDeviceKey(url, key, deviceName, scopes) : null
   const kept = own ?? { key, keyId: null, scopes, keyExpiresAt: valid.data.data.credential?.expiresAt ?? null }
   await rt.saveOmniLink({ url, ...kept, pairedAt: new Date().toISOString() })
   rt.syncOmniEvents?.()
   const origin = new URL(url).host
   return isBroad(scopes) && own === null ? { status: 'paired', origin, notice: 'broad-key' } : { status: 'paired', origin }
+}
+
+// A key this plugin made for itself before it carried the found key's scopes holds part of
+// Omni only (no automations, no settings), and the Omni Bot meets 403s there. When the Omni
+// it links is on this computer and the key found for it can do more, that key widens this
+// one in place (PATCH /api/v2/keys/:id): the same key, nothing to pair again. The scopes it
+// now carries, or null when nothing changed.
+export async function widenOwnKey(rt, { find = candidates } = {}) {
+  const link = rt.omniLink?.()
+  if (!link?.keyId || !isLoopback(link.url)) return null
+  const found = merge(find()).find(entry => entry.key && sameOmni(entry.url) === sameOmni(link.url))
+  if (!found) return null
+  const headers = { accept: 'application/json', 'content-type': 'application/json', 'x-api-key': found.key, 'x-omni-client': CLIENT_ID }
+  const reply = await fetch(`${link.url}/api/v2/auth/validate`, { method: 'POST', headers, signal: AbortSignal.timeout(CHECK_TIMEOUT_MS) })
+  const valid = Validated.safeParse(await reply.json().catch(() => null))
+  const scopes = valid.success ? (valid.data.data.scopes ?? []) : []
+  if (reply.status !== 200 || !isBroad(scopes) || scopes.every(scope => link.scopes.includes(scope))) return null
+  const widened = await fetch(`${link.url}/api/v2/keys/${encodeURIComponent(link.keyId)}`, { method: 'PATCH', headers, body: JSON.stringify({ scopes }), signal: AbortSignal.timeout(CHECK_TIMEOUT_MS) })
+  if (widened.status !== 200) return null
+  // A pairing or a disconnect meanwhile wins over this.
+  const now = rt.omniLink()
+  if (now?.key === link.key) await rt.writeOmniLink({ ...now, scopes })
+  return scopes
 }
 
 export function install(rt) {
@@ -336,4 +354,8 @@ export function install(rt) {
   for (const [name, run] of Object.entries(endpoints)) {
     rt.ctx.effect(() => rt.hooks.endpoint(name, run, { read: true }), `omni-channels: ${name}`)
   }
+  rt.ctx.effect?.(() => {
+    void widenOwnKey(rt).catch(error => rt.warn?.("omni-channels: the Omni Bot's key was not widened: %s", error?.message ?? error))
+    return () => {}
+  }, "omni-channels: widen the Omni Bot's own key")
 }

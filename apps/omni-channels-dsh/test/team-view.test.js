@@ -225,6 +225,7 @@ test('apply registers its listeners, tools and effects after the team\'s, in a f
     'effect omni-channels: omni-link-info',
     'effect omni-channels: omni-discover-use',
     'effect omni-channels: omni-discover-key',
+    "effect omni-channels: widen the Omni Bot's own key",
     'effect omni-channels: omni-local-install',
     'effect omni-channels: omni-local-progress',
     'effect omni-channels: omni-terminal-open',
