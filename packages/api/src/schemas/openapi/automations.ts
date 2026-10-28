@@ -81,12 +81,30 @@ const CallAgentActionSchema = z.object({
   }),
 });
 
+const ConnectorCallActionSchema = z.object({
+  type: z.literal('connector.call'),
+  config: strictConfig({
+    connectorId: z.string().min(1).openapi({ description: 'Connector UUID (or a template resolving to one)' }),
+    action: z
+      .string()
+      .min(1)
+      .refine((value) => !value.includes('{{'), {
+        message: 'connector.call action must be a literal manifest action key, not a template',
+      })
+      .openapi({ description: 'Literal manifest action key, e.g. "add_comment"' }),
+    input: z.record(z.string(), z.unknown()).openapi({ description: 'Action input; string values may be templates' }),
+    timeoutMs: z.number().int().min(1000).max(120000).optional().openapi({ description: 'Call timeout in ms' }),
+    responseAs: z.string().optional().openapi({ description: 'Store the result as a variable' }),
+  }),
+});
+
 const ActionSchema = z.union([
   WebhookActionSchema,
   SendMessageActionSchema,
   EmitEventActionSchema,
   LogActionSchema,
   CallAgentActionSchema,
+  ConnectorCallActionSchema,
 ]);
 
 // Debounce schema

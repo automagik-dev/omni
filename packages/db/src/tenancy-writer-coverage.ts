@@ -200,4 +200,6 @@ export const REGISTERED_WRITERS: readonly RegisteredWriter[] = [
   { file: 'packages/db/scripts/consolidate-lid-chats.ts', table: 'chat_participants', coverage: 'db-derived' },
   { file: 'packages/db/scripts/consolidate-lid-chats.ts', table: 'chats', coverage: 'db-derived' },
   { file: 'packages/db/scripts/consolidate-lid-chats.ts', table: 'messages', coverage: 'db-derived' },
+  // Connectors: the delivery claim IS the journal row (same pattern as webhook ingress).
+  { file: 'packages/api/src/services/connectors.ts', table: 'omni_events', coverage: 'db-derived' },
 ];

@@ -55,6 +55,7 @@ export const DEFAULT_DEVICE_KEY_SCOPES = [
   'turns:*',
   'webhooks:*',
   'batch-jobs:*',
+  'connectors:*',
   'payloads:*',
   'dead-letters:*',
   'event-ops:*',

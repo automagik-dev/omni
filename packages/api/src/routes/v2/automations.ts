@@ -110,6 +110,26 @@ const callAgentActionSchema = z.object({
   }),
 });
 
+// Connector call action schema — ONE type for every provider. `action` is a
+// literal manifest key (templates are refused at save time); `connectorId` and
+// the values inside `input` may be templates.
+const connectorCallActionSchema = z.object({
+  type: z.literal('connector.call'),
+  config: strictConfig({
+    connectorId: z.string().min(1).describe('Connector UUID (or a template resolving to one)'),
+    action: z
+      .string()
+      .min(1)
+      .refine((value) => !value.includes('{{'), {
+        message: 'connector.call action must be a literal manifest action key, not a template',
+      })
+      .describe('Literal manifest action key, e.g. "add_comment"'),
+    input: z.record(z.string(), z.unknown()).describe('Action input; string values may be templates'),
+    timeoutMs: z.number().int().min(1000).max(120000).optional().describe('Call timeout in milliseconds'),
+    responseAs: z.string().optional().describe('Store the action result as a variable for later actions'),
+  }),
+});
+
 // Combined action schema
 const actionSchema = z.discriminatedUnion('type', [
   webhookActionSchema,
@@ -117,6 +137,7 @@ const actionSchema = z.discriminatedUnion('type', [
   emitEventActionSchema,
   logActionSchema,
   callAgentActionSchema,
+  connectorCallActionSchema,
 ]);
 
 // What the debounce window groups by (#1110): a template over the event
@@ -363,6 +384,8 @@ automationsRoutes.post('/', zValidator('json', createAutomationSchema, validatio
   const data = c.req.valid('json');
   const services = c.get('services');
 
+  // Save-time connector validation: a literal connector + action must resolve.
+  await services.connectors?.assertAutomationActions?.(data.actions);
   const automation = await services.automations.create(data);
 
   return c.json({ data: automation }, 201);
@@ -376,6 +399,7 @@ automationsRoutes.patch('/:id', zValidator('json', updateAutomationSchema, valid
   const data = c.req.valid('json');
   const services = c.get('services');
 
+  if (data.actions) await services.connectors?.assertAutomationActions?.(data.actions);
   const automation = await services.automations.update(id, data);
 
   return c.json({ data: automation });

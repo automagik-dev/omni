@@ -17,6 +17,7 @@ import type {
   ActionExecutionResult,
   AutomationAction,
   CallAgentActionConfig,
+  ConnectorCallActionConfig,
   EmitEventActionConfig,
   LogActionConfig,
   SendMessageActionConfig,
@@ -127,8 +128,25 @@ export interface EmitProvenance {
   automationId: string;
 }
 
+/**
+ * One `connector.call` invocation handed to the API. The core renders the
+ * templates; the API resolves the connector under the tenant, validates the
+ * rendered input against the manifest and performs the provider call.
+ */
+export interface ConnectorCallRequest {
+  connectorId: string;
+  action: string;
+  input: Record<string, unknown>;
+  timeoutMs?: number;
+}
+
 export interface ActionDependencies {
   eventBus: EventBus | null;
+  /**
+   * Run one typed connector action (#D6, one action type for all providers).
+   * Absent in tests/older wiring, in which case the action fails visibly.
+   */
+  callConnector?: (request: ConnectorCallRequest, trustedTenantId?: string | null) => Promise<unknown>;
   /**
    * Claim an emission's idempotency key BEFORE publishing (#958). Returns
    * true when this is the first claim (publish proceeds) and false when the
@@ -997,6 +1015,52 @@ function dispatchCallAgent(
 }
 
 /**
+ * Execute a connector.call action.
+ *
+ * The core renders templates and delegates; the manifest's inputSchema is
+ * re-parsed in the API after rendering, so a template that produces an invalid
+ * shape never reaches the provider. A failed action is a failed action: no
+ * automatic retry (retrying a non-idempotent create_task is worse).
+ */
+async function executeConnectorCallAction(
+  config: ConnectorCallActionConfig,
+  context: TemplateContext,
+  deps: ActionDependencies,
+  trustedTenantId?: string | null,
+): Promise<{ success: boolean; result?: unknown; error?: string }> {
+  try {
+    if (!deps.callConnector) {
+      return { success: false, error: 'callConnector dependency not provided' };
+    }
+    const connectorId = substituteTemplate(config.connectorId, context);
+    if (!connectorId) {
+      return { success: false, error: 'connector.call needs a connectorId' };
+    }
+    if (config.action.includes('{{')) {
+      return { success: false, error: 'connector.call action must be a literal manifest action key, not a template' };
+    }
+    const input = substituteTemplateObject(config.input, context);
+    const result = await deps.callConnector(
+      {
+        connectorId,
+        action: config.action,
+        input,
+        ...(config.timeoutMs !== undefined ? { timeoutMs: config.timeoutMs } : {}),
+      },
+      trustedTenantId,
+    );
+    if (config.responseAs) {
+      context.variables[config.responseAs] = result;
+    }
+    return { success: true, result };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    logger.error('Connector call action failed', { error: errorMessage });
+    return { success: false, error: errorMessage };
+  }
+}
+
+/**
  * Execute a single action
  */
 export async function executeAction(
@@ -1030,6 +1094,9 @@ export async function executeAction(
       break;
     case 'call_agent':
       result = await executeCallAgentAction(action.config, context, deps, trustedTenantId, provenance);
+      break;
+    case 'connector.call':
+      result = await executeConnectorCallAction(action.config, context, deps, trustedTenantId);
       break;
     default:
       // TypeScript should catch this, but just in case

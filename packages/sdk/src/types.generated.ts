@@ -140,6 +140,226 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/login/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Login status (public)
+         * @description Whether this Omni has an owner, and what a device needs to start signing in.
+         */
+        get: operations["getLoginStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/login/device-key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Trade a device token for an Omni key (public)
+         * @description A device that finished the RFC 8628 device flow at /api/auth/device/token, after its owner approved it on the approval page or by sending the code to themselves on WhatsApp, sends that access token here as a Bearer token and gets an Omni API key. The token works once.
+         */
+        post: operations["createDeviceKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/login/connect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Trade a connect link for an Omni key (public)
+         * @description The owner texts "connect" to themselves on WhatsApp and gets a link, /api/login/app?grant=…, that opens omni://connect?url=<this Omni>&grant=<grant>. The app sends that grant here and gets an Omni API key, with no second sign-in. A grant works once, for ten minutes; any failure of the grant is the same 410.
+         */
+        post: operations["connectWithLink"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/login/send-code": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send a login code to the owner's WhatsApp (public)
+         * @description A 6-digit code arrives in the owner's own self chat. The number is never taken from the request.
+         */
+        post: operations["sendOwnerLoginCode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/login/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sign in with that code (public)
+         * @description Sets the owner’s session cookie.
+         */
+        post: operations["verifyOwnerLoginCode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/login/claim/token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Claim the Omni with the claim token alone (public, claim token)
+         * @description Whoever has the claim token from the boot log runs this server, so the token alone makes them the owner, with no WhatsApp. They can link one after, with the claim steps below, to approve devices from their phone. The answer carries a one-time connect link (as `omni connect` prints): `appLink` opens Automagik connected to this Omni with no second sign-in; `url` is the same as a page. It works once, until `expiresAt`.
+         */
+        post: operations["claimWithToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/login/claim/accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * WhatsApp accounts this Omni can be claimed with (public, claim token)
+         * @description Only with the claim token from the boot log, while the Omni has no owner or its owner has no WhatsApp yet (then these steps link one); otherwise 404.
+         */
+        get: operations["listClaimAccounts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/login/claim/whatsapp": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Link a first WhatsApp to an unclaimed Omni (public, claim token)
+         * @description Only with the claim token from the boot log, while the Omni has no owner or its owner has no WhatsApp yet (then these steps link one); otherwise 404.
+         */
+        post: operations["connectClaimWhatsApp"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/login/claim/send-code": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send a claim code to that account's self chat (public, claim token)
+         * @description Only with the claim token from the boot log, while the Omni has no owner or its owner has no WhatsApp yet (then these steps link one); otherwise 404.
+         */
+        post: operations["sendClaimCode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/login/claim/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Claim the Omni with that code (public, claim token)
+         * @description Only with the claim token from the boot log, while the Omni has no owner or its owner has no WhatsApp yet (then these steps link one); otherwise 404.
+         */
+        post: operations["verifyClaimCode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/login/claim/whatsapp/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Linking state of the claim WhatsApp (public, claim token)
+         * @description The QR to scan (SVG) until linked, then the masked number.
+         */
+        get: operations["getClaimWhatsApp"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -194,6 +414,350 @@ export interface paths {
         get: operations["getInternalHealth"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/instances/{id}/self": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Verified bounded self capability */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Native self send accepted */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Identity changed or unverified */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/instances/{id}/self/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        expectedOwner: string;
+                        /** Format: uuid */
+                        expectedGeneration: string;
+                        /** Format: date-time */
+                        after: string;
+                        /** Format: date-time */
+                        before: string;
+                        /** Format: date-time */
+                        connectionStartedAt: string;
+                        excludeExternalIds: string[];
+                    };
+                };
+            };
+            responses: {
+                /** @description Verified bounded self capability */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Native self send accepted */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Identity changed or unverified */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/instances/{id}/self/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        expectedOwner: string;
+                        /** Format: uuid */
+                        expectedGeneration: string;
+                        /** Format: date-time */
+                        after: string;
+                        /** Format: date-time */
+                        before: string;
+                        /** Format: uuid */
+                        chatId: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Verified bounded self capability */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Native self send accepted */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Identity changed or unverified */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/instances/{id}/self/receipt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        expectedOwner: string;
+                        /** Format: uuid */
+                        expectedGeneration: string;
+                        externalId: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Verified bounded self capability */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Native self send accepted */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Identity changed or unverified */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/instances/{id}/self/chats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    cursor?: string;
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Verified bounded self capability */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Native self send accepted */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Identity changed or unverified */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/messages/send-self": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        instanceId: string;
+                        expectedOwner: string;
+                        /** Format: uuid */
+                        expectedGeneration: string;
+                        operationKey: string;
+                        text: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Verified bounded self capability */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Native self send accepted */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Identity changed or unverified */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;
@@ -499,7 +1063,81 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * List messages
+         * @description Stored messages across the chats the key can read, filtered by chat, source, type, status, sender, time or text.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    chatId?: string;
+                    source?: string;
+                    messageType?: string;
+                    status?: string;
+                    hasMedia?: boolean | null;
+                    senderPersonId?: string;
+                    externalId?: string;
+                    since?: string;
+                    until?: string;
+                    search?: string;
+                    includeHidden?: boolean | null;
+                    limit?: number;
+                    cursor?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description A page of messages */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                /**
+                                 * Format: uuid
+                                 * @description Message UUID
+                                 */
+                                id: string;
+                                /**
+                                 * Format: uuid
+                                 * @description Chat the message belongs to
+                                 */
+                                chatId: string;
+                                /** @description Platform-native message id */
+                                externalId: string;
+                                /** @description Where it came from (platform, api, agent, …) */
+                                source: string;
+                                /** @description text, audio, image, video, document, sticker, … */
+                                messageType: string;
+                                status: string | null;
+                                /** @description Sent by the instance owner */
+                                isFromMe: boolean;
+                                senderDisplayName: string | null;
+                                /** Format: uuid */
+                                senderPersonId: string | null;
+                                textContent: string | null;
+                                /** @description Transcript of a voice note */
+                                transcription: string | null;
+                                hasMedia: boolean;
+                                /** @description ISO time the platform reports */
+                                platformTimestamp: string | null;
+                                createdAt: string;
+                            }[];
+                            meta: {
+                                total: number;
+                                hasMore: boolean;
+                                cursor?: string | null;
+                            };
+                        };
+                    };
+                };
+            };
+        };
         put?: never;
         /**
          * Send text message
@@ -532,7 +1170,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/messages/reaction": {
+    "/messages/send/reaction": {
         parameters: {
             query?: never;
             header?: never;
@@ -552,7 +1190,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/messages/sticker": {
+    "/messages/send/sticker": {
         parameters: {
             query?: never;
             header?: never;
@@ -572,7 +1210,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/messages/contact": {
+    "/messages/send/contact": {
         parameters: {
             query?: never;
             header?: never;
@@ -592,7 +1230,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/messages/location": {
+    "/messages/send/location": {
         parameters: {
             query?: never;
             header?: never;
@@ -766,6 +1404,1113 @@ export interface paths {
          * @description Terminal close: logs the close in close_contact_logs, pauses the agent, sets closed (won/lost, or escalated after repeated soft closes) or a closeUntil cooldown (other outcomes, tunable per instance via closeContactConfig), and disarms follow-ups. Channels declaring canCloseContact send a native close with `text`. `text` is optional: without it the contact is classified/closed with no farewell — channels also declaring canCloseContactWithoutText still receive the native close event with empty text; other channels skip the channel send and only apply the side effects.
          */
         post: operations["sendCloseContact"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List chats
+         * @description Chats and groups across the instances the key can read, filtered by instance, channel, type, name, label or state. sort=activity lists the most recent first.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    instanceId?: string;
+                    channel?: string;
+                    chatType?: string;
+                    excludeChatTypes?: string;
+                    search?: string;
+                    includeArchived?: boolean | null;
+                    unreadOnly?: boolean | null;
+                    pendingOnly?: boolean | null;
+                    attentionOnly?: boolean | null;
+                    label?: string;
+                    includeHidden?: boolean | null;
+                    sort?: "activity" | "unread" | "name";
+                    limit?: number;
+                    cursor?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description A page of chats */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                /**
+                                 * Format: uuid
+                                 * @description Chat UUID
+                                 */
+                                id: string;
+                                /**
+                                 * Format: uuid
+                                 * @description Instance (channel) the chat lives on
+                                 */
+                                instanceId: string;
+                                /** @description Platform-native chat id (WhatsApp JID, Telegram id, …) */
+                                externalId: string;
+                                /** @description Canonical platform id when the platform has several */
+                                canonicalId: string | null;
+                                /**
+                                 * @description Kind of chat
+                                 * @enum {string}
+                                 */
+                                chatType: "dm" | "group" | "channel" | "thread" | "forum" | "voice" | "broadcast" | "community" | "announcement" | "stage";
+                                /** @description Channel type, e.g. whatsapp-baileys */
+                                channel: string;
+                                /** @description Display name */
+                                name: string | null;
+                                description: string | null;
+                                avatarUrl: string | null;
+                                /** Format: uuid */
+                                parentChatId: string | null;
+                                participantCount: number | null;
+                                messageCount: number | null;
+                                /** @description Messages not yet read */
+                                unreadCount: number | null;
+                                /** @description ISO time of the latest message */
+                                lastMessageAt: string | null;
+                                lastMessagePreview: string | null;
+                                lastMessageFromMe: boolean | null;
+                                isGroup: boolean;
+                                labels: string[] | null;
+                                settings: {
+                                    [key: string]: unknown;
+                                } | null;
+                                platformMetadata: {
+                                    [key: string]: unknown;
+                                } | null;
+                                archivedAt: string | null;
+                                createdAt: string;
+                                updatedAt: string;
+                            }[];
+                            meta: {
+                                hasMore: boolean;
+                                cursor?: string | null;
+                                total?: number;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Create a chat */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        instanceId: string;
+                        externalId: string;
+                        /** @enum {string} */
+                        chatType: "dm" | "group" | "channel" | "thread" | "forum" | "voice" | "broadcast" | "community" | "announcement" | "stage";
+                        /** @enum {string} */
+                        channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
+                        name?: string;
+                        description?: string;
+                        /** Format: uri */
+                        avatarUrl?: string;
+                        canonicalId?: string;
+                        /** Format: uuid */
+                        parentChatId?: string;
+                        settings?: {
+                            [key: string]: unknown;
+                        };
+                        platformMetadata?: {
+                            [key: string]: unknown;
+                        };
+                    };
+                };
+            };
+            responses: {
+                /** @description The created chat */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /**
+                                 * Format: uuid
+                                 * @description Chat UUID
+                                 */
+                                id: string;
+                                /**
+                                 * Format: uuid
+                                 * @description Instance (channel) the chat lives on
+                                 */
+                                instanceId: string;
+                                /** @description Platform-native chat id (WhatsApp JID, Telegram id, …) */
+                                externalId: string;
+                                /** @description Canonical platform id when the platform has several */
+                                canonicalId: string | null;
+                                /**
+                                 * @description Kind of chat
+                                 * @enum {string}
+                                 */
+                                chatType: "dm" | "group" | "channel" | "thread" | "forum" | "voice" | "broadcast" | "community" | "announcement" | "stage";
+                                /** @description Channel type, e.g. whatsapp-baileys */
+                                channel: string;
+                                /** @description Display name */
+                                name: string | null;
+                                description: string | null;
+                                avatarUrl: string | null;
+                                /** Format: uuid */
+                                parentChatId: string | null;
+                                participantCount: number | null;
+                                messageCount: number | null;
+                                /** @description Messages not yet read */
+                                unreadCount: number | null;
+                                /** @description ISO time of the latest message */
+                                lastMessageAt: string | null;
+                                lastMessagePreview: string | null;
+                                lastMessageFromMe: boolean | null;
+                                isGroup: boolean;
+                                labels: string[] | null;
+                                settings: {
+                                    [key: string]: unknown;
+                                } | null;
+                                platformMetadata: {
+                                    [key: string]: unknown;
+                                } | null;
+                                archivedAt: string | null;
+                                createdAt: string;
+                                updatedAt: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Invalid body */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chats/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a chat */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The chat */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /**
+                                 * Format: uuid
+                                 * @description Chat UUID
+                                 */
+                                id: string;
+                                /**
+                                 * Format: uuid
+                                 * @description Instance (channel) the chat lives on
+                                 */
+                                instanceId: string;
+                                /** @description Platform-native chat id (WhatsApp JID, Telegram id, …) */
+                                externalId: string;
+                                /** @description Canonical platform id when the platform has several */
+                                canonicalId: string | null;
+                                /**
+                                 * @description Kind of chat
+                                 * @enum {string}
+                                 */
+                                chatType: "dm" | "group" | "channel" | "thread" | "forum" | "voice" | "broadcast" | "community" | "announcement" | "stage";
+                                /** @description Channel type, e.g. whatsapp-baileys */
+                                channel: string;
+                                /** @description Display name */
+                                name: string | null;
+                                description: string | null;
+                                avatarUrl: string | null;
+                                /** Format: uuid */
+                                parentChatId: string | null;
+                                participantCount: number | null;
+                                messageCount: number | null;
+                                /** @description Messages not yet read */
+                                unreadCount: number | null;
+                                /** @description ISO time of the latest message */
+                                lastMessageAt: string | null;
+                                lastMessagePreview: string | null;
+                                lastMessageFromMe: boolean | null;
+                                isGroup: boolean;
+                                labels: string[] | null;
+                                settings: {
+                                    [key: string]: unknown;
+                                } | null;
+                                platformMetadata: {
+                                    [key: string]: unknown;
+                                } | null;
+                                archivedAt: string | null;
+                                createdAt: string;
+                                updatedAt: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Chat not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        /**
+         * Delete a chat
+         * @description Soft delete: the chat is hidden from lists and can be restored.
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Deleted */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Operation succeeded */
+                            success: boolean;
+                            /** @description Optional success message */
+                            message?: string;
+                        };
+                    };
+                };
+                /** @description Chat not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        /** Update a chat */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        name?: string;
+                        description?: string;
+                        /** Format: uri */
+                        avatarUrl?: string | null;
+                        canonicalId?: string | null;
+                        settings?: {
+                            [key: string]: unknown;
+                        } | null;
+                        platformMetadata?: {
+                            [key: string]: unknown;
+                        } | null;
+                    };
+                };
+            };
+            responses: {
+                /** @description The updated chat */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /**
+                                 * Format: uuid
+                                 * @description Chat UUID
+                                 */
+                                id: string;
+                                /**
+                                 * Format: uuid
+                                 * @description Instance (channel) the chat lives on
+                                 */
+                                instanceId: string;
+                                /** @description Platform-native chat id (WhatsApp JID, Telegram id, …) */
+                                externalId: string;
+                                /** @description Canonical platform id when the platform has several */
+                                canonicalId: string | null;
+                                /**
+                                 * @description Kind of chat
+                                 * @enum {string}
+                                 */
+                                chatType: "dm" | "group" | "channel" | "thread" | "forum" | "voice" | "broadcast" | "community" | "announcement" | "stage";
+                                /** @description Channel type, e.g. whatsapp-baileys */
+                                channel: string;
+                                /** @description Display name */
+                                name: string | null;
+                                description: string | null;
+                                avatarUrl: string | null;
+                                /** Format: uuid */
+                                parentChatId: string | null;
+                                participantCount: number | null;
+                                messageCount: number | null;
+                                /** @description Messages not yet read */
+                                unreadCount: number | null;
+                                /** @description ISO time of the latest message */
+                                lastMessageAt: string | null;
+                                lastMessagePreview: string | null;
+                                lastMessageFromMe: boolean | null;
+                                isGroup: boolean;
+                                labels: string[] | null;
+                                settings: {
+                                    [key: string]: unknown;
+                                } | null;
+                                platformMetadata: {
+                                    [key: string]: unknown;
+                                } | null;
+                                archivedAt: string | null;
+                                createdAt: string;
+                                updatedAt: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Chat not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/chats/{id}/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the messages of a chat
+         * @description Newest first, up to limit; before/after bound the time window and mediaOnly keeps media messages.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    limit?: number;
+                    before?: string;
+                    after?: string;
+                    mediaOnly?: string;
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Messages */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                [key: string]: unknown;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Chat not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chats/{id}/participants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the participants of a chat */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Participants */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                chatId: string;
+                                platformUserId: string;
+                                displayName: string | null;
+                                avatarUrl: string | null;
+                                role: string | null;
+                                /** Format: uuid */
+                                personId: string | null;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Chat not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Add a participant to a chat */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        platformUserId: string;
+                        displayName?: string;
+                        /** Format: uri */
+                        avatarUrl?: string;
+                        role?: string;
+                        /** Format: uuid */
+                        personId?: string;
+                        /** Format: uuid */
+                        platformIdentityId?: string;
+                        platformMetadata?: {
+                            [key: string]: unknown;
+                        };
+                    };
+                };
+            };
+            responses: {
+                /** @description The participant */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                chatId: string;
+                                platformUserId: string;
+                                displayName: string | null;
+                                avatarUrl: string | null;
+                                role: string | null;
+                                /** Format: uuid */
+                                personId: string | null;
+                            };
+                        };
+                    };
+                };
+                /** @description Chat not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/messages/send": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send a text message
+         * @description Plain text only; media goes to POST /messages/send/media (a media payload here answers 422 WRONG_ENDPOINT).
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /**
+                         * Format: uuid
+                         * @description Instance ID to send from
+                         */
+                        instanceId: string;
+                        /** @description Recipient (phone number or platform ID) */
+                        to: string;
+                        /** @description Message text */
+                        text: string;
+                        /** @description Message ID to reply to */
+                        replyTo?: string;
+                        /** @description Thread/topic ID (e.g. Telegram forum topic) */
+                        threadId?: string;
+                        /** @description Users/roles to mention */
+                        mentions?: {
+                            /** @description User/role ID to mention */
+                            id: string;
+                            /**
+                             * @description Mention type
+                             * @default user
+                             * @enum {string}
+                             */
+                            type?: "user" | "role" | "channel" | "everyone" | "here";
+                        }[];
+                        /** @description Inline buttons — channel maps them natively (WhatsApp Cloud: ≤3 reply buttons, 4-10 list; Telegram: inline keyboard) */
+                        buttons?: {
+                            /** @description Button label */
+                            text: string;
+                            /** @description Callback payload (reply button / list row id) */
+                            data?: string;
+                            /**
+                             * Format: uri
+                             * @description Link button URL (mutually exclusive with data)
+                             */
+                            url?: string;
+                            /** @description Secondary line under the option (WhatsApp Cloud list rows, ≤72 chars) */
+                            description?: string;
+                        }[];
+                        /** @description List presentation (WhatsApp Cloud) */
+                        list?: {
+                            /** @description Section header above the options (≤24 chars) */
+                            sectionTitle?: string;
+                            /** @description Label of the button that opens the list (≤20 chars) */
+                            buttonLabel?: string;
+                            /** @description Render a list even with ≤3 options (implied by any description/sectionTitle) */
+                            forceList?: boolean;
+                        };
+                        /** @description Ask the user to share their location (WhatsApp Cloud: native "Send location" button under the text) */
+                        requestLocation?: boolean;
+                        /**
+                         * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered (#912). The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
+                         * @enum {string}
+                         */
+                        sentBy?: "agent" | "user";
+                        /**
+                         * @description Outbound pacing for this send (WhatsApp Baileys): 'immediate' skips the humanized anti-ban delay and typing simulation; 'humanized' keeps them. Default: the instance's outboundPacing. 'immediate' on a humanized instance needs the instance's outboundPacingOverride (otherwise 403)
+                         * @enum {string}
+                         */
+                        pacing?: "humanized" | "immediate";
+                        /** @description Quoted key used only when replyTo is set and the replied-to message is not stored */
+                        replyToKey?: {
+                            /** @description Whether the quoted message was sent by this instance */
+                            fromMe: boolean;
+                            /** @description Sender JID of the quoted message (groups) */
+                            participant?: string;
+                        };
+                    };
+                };
+            };
+            responses: {
+                /** @description Filtered by the outbound rules; nothing was sent */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /**
+                                 * @description Empty: nothing was sent
+                                 * @enum {string}
+                                 */
+                                messageId: "";
+                                /** @enum {string} */
+                                status: "filtered";
+                                /** Format: uuid */
+                                instanceId: string;
+                                to: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Sent */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /** @description Internal message ID */
+                                messageId: string;
+                                /** @description External platform message ID */
+                                externalMessageId: string;
+                                /** @description Message status */
+                                status: string;
+                                /**
+                                 * Format: uuid
+                                 * @description Instance UUID
+                                 */
+                                instanceId?: string;
+                                /** @description Recipient */
+                                to?: string;
+                                /** @description Media type if applicable */
+                                mediaType?: string;
+                                /**
+                                 * Format: uuid
+                                 * @description Present when the request set sentBy: 'agent' — the agent the send was attributed to, or null when the instance has no configured agent (attribution did not happen)
+                                 */
+                                senderAgentId?: string | null;
+                                /** @description Platform send time (ms since epoch), when the channel reports one */
+                                timestamp?: number;
+                            };
+                        };
+                    };
+                };
+                /** @description Invalid JSON or body */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /** @description INVALID_JSON or VALIDATION_ERROR */
+                                code: string;
+                                message?: string;
+                                /** @description Validation issues, for VALIDATION_ERROR */
+                                issues?: {
+                                    [key: string]: unknown;
+                                }[];
+                            };
+                        };
+                    };
+                };
+                /** @description pacing 'immediate' refused: the instance's outboundPacing is 'humanized' and outboundPacingOverride is not set */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+                /** @description A media payload, which belongs to /messages/send/media */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/messages/by-external": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Find a message by its platform id */
+        get: {
+            parameters: {
+                query: {
+                    chatId: string;
+                    externalId: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The message, or data: null */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /**
+                                 * Format: uuid
+                                 * @description Message UUID
+                                 */
+                                id: string;
+                                /**
+                                 * Format: uuid
+                                 * @description Chat the message belongs to
+                                 */
+                                chatId: string;
+                                /** @description Platform-native message id */
+                                externalId: string;
+                                /** @description Where it came from (platform, api, agent, …) */
+                                source: string;
+                                /** @description text, audio, image, video, document, sticker, … */
+                                messageType: string;
+                                status: string | null;
+                                /** @description Sent by the instance owner */
+                                isFromMe: boolean;
+                                senderDisplayName: string | null;
+                                /** Format: uuid */
+                                senderPersonId: string | null;
+                                textContent: string | null;
+                                /** @description Transcript of a voice note */
+                                transcription: string | null;
+                                hasMedia: boolean;
+                                /** @description ISO time the platform reports */
+                                platformTimestamp: string | null;
+                                createdAt: string;
+                            } | null;
+                        };
+                    };
+                };
+                /** @description chatId and externalId are required */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/messages/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a message */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The message */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                /**
+                                 * Format: uuid
+                                 * @description Message UUID
+                                 */
+                                id: string;
+                                /**
+                                 * Format: uuid
+                                 * @description Chat the message belongs to
+                                 */
+                                chatId: string;
+                                /** @description Platform-native message id */
+                                externalId: string;
+                                /** @description Where it came from (platform, api, agent, …) */
+                                source: string;
+                                /** @description text, audio, image, video, document, sticker, … */
+                                messageType: string;
+                                status: string | null;
+                                /** @description Sent by the instance owner */
+                                isFromMe: boolean;
+                                senderDisplayName: string | null;
+                                /** Format: uuid */
+                                senderPersonId: string | null;
+                                textContent: string | null;
+                                /** @description Transcript of a voice note */
+                                transcription: string | null;
+                                hasMedia: boolean;
+                                /** @description ISO time the platform reports */
+                                platformTimestamp: string | null;
+                                createdAt: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Message not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                /**
+                                 * @description Error code
+                                 * @example NOT_FOUND
+                                 */
+                                code: string;
+                                /** @description Human-readable error message */
+                                message: string;
+                                /** @description Additional error details */
+                                details?: unknown;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1276,6 +3021,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/keys/children": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mint a chat key
+         * @description Mint a `cs` key locked to one chat (its UUID and JID), its instance and its recipient, with the caller's expiry. The caller must be a root key: no parent, no chat, instance or recipient lock, no tenant credential, holding chats:keys, chats:read and messages:send. A second mint for the same chat revokes the caller's previous key for it. A caller may hold 500 live chat keys.
+         */
+        post: operations["mintChildKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/keys/children/self/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * A chat key revokes itself
+         * @description The calling chat key cuts itself. It names no target, so it can reach no other key; the key's chat, instance and recipient locks do not apply to this one route.
+         */
+        post: operations["revokeOwnChatKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/keys/children/{id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke one of your chat keys
+         * @description Revoke a chat key the caller minted. Ownership is the key's parent, never who created it; the caller must pass the same checks as for a mint.
+         */
+        post: operations["revokeChildKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/settings": {
         parameters: {
             query?: never;
@@ -1342,6 +3147,90 @@ export interface paths {
         get: operations["getSettingHistory"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/owner/claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Claim this Omni as its operator
+         * @description Makes whoever holds this admin key the owner of an unclaimed Omni, with no WhatsApp. A WhatsApp number can be linked later from the claim link, to approve devices from a phone. Needs auth:admin.
+         */
+        post: operations["claimAsOperator"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/owner/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve a waiting device
+         * @description Approves the device showing this code, as the owner. On an unclaimed Omni it claims it first. Needs auth:admin.
+         */
+        post: operations["approveDeviceAsOperator"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/owner/connect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * A one-time connect link for one device
+         * @description The link a device opens to connect with no sign-in: the same one the owner gets by texting "connect" to themselves. Works once, for ten minutes. On an unclaimed Omni it claims it first. Needs auth:admin.
+         */
+        post: operations["connectLinkAsOperator"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/system/update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Version and update status
+         * @description What this Omni runs, what its update channel publishes, and any update waiting or running. Needs system:read (device keys carry it by default).
+         */
+        get: operations["getUpdateStatus"];
+        put?: never;
+        /**
+         * Ask for an update the owner confirms
+         * @description Asks this Omni to update to the version its channel publishes now. Nothing changes yet: the owner gets "Update Omni from X to Y? Reply update <CODE>" in their own WhatsApp self chat, and only that reply, within ten minutes, runs the operator's OMNI_UPDATE_COMMAND. On an Omni that listens only on loopback and whose operator set OMNI_UPDATE_CONFIRM=app (a sandbox), the request is the yes: the app asked the person on screen, and the update starts at once. Off unless the operator set OMNI_UPDATE_COMMAND. Needs system:update (device keys carry it by default) or system:admin.
+         */
+        post: operations["requestUpdate"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1784,6 +3673,182 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/connectors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List connectors */
+        get: operations["listConnectors"];
+        put?: never;
+        /**
+         * Connect an external account
+         * @description Validates synchronously through the provider manifest. A provider rejection still persists the row, returned with status "error" and a readable lastError — never a false "connected". Credentials are sealed and never returned.
+         */
+        post: operations["createConnector"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/connectors/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List connector providers (catalog) */
+        get: operations["listConnectorProviders"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/connectors/providers/{provider}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Provider detail with JSON Schema for every action input */
+        get: operations["getConnectorProvider"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/connectors/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a connector */
+        get: operations["getConnector"];
+        put?: never;
+        post?: never;
+        /** Delete a connector (subscriptions cascade) */
+        delete: operations["deleteConnector"];
+        options?: never;
+        head?: never;
+        /** Update a connector (revalidates when credentials change) */
+        patch: operations["updateConnector"];
+        trace?: never;
+    };
+    "/connectors/{id}/subscriptions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List event subscriptions */
+        get: operations["listConnectorSubscriptions"];
+        put?: never;
+        /**
+         * Create an event subscription
+         * @description The target automation must exist and its triggerEventType must be "connector.event". The verification secret is sealed and never returned.
+         */
+        post: operations["createConnectorSubscription"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/connectors/{id}/subscriptions/{subscriptionId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete an event subscription */
+        delete: operations["deleteConnectorSubscription"];
+        options?: never;
+        head?: never;
+        /**
+         * Pause, resume or re-point an event subscription
+         * @description Rotating verificationSecret takes effect immediately: the old secret stops verifying and the provider copy must be updated. Paused subscriptions still verify a delivery, then ack 202 ignored and publish nothing.
+         */
+        patch: operations["updateConnectorSubscription"];
+        trace?: never;
+    };
+    "/connectors/{id}/subscriptions/{subscriptionId}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send a test delivery through the real pipeline
+         * @description Uses the manifest sample or the caller payload, bypasses signature verification, and runs parse → filters → claim → publish → automation. The idempotency key is random, so repeated tests are not deduped.
+         */
+        post: operations["testConnectorSubscription"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/connectors/{id}/actions/{action}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Invoke a typed provider action
+         * @description Requires a connected connector. Input is validated against the manifest before any provider call; provider error text is redacted. A 401/403 from the provider moves the connector to "revoked".
+         */
+        post: operations["invokeConnectorAction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/connectors/events/{subscriptionId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Public connector event ingress
+         * @description Auth-exempt provider receiver. The raw body is verified against the subscription’s sealed secret before anything is parsed or published. Unknown subscription, unopenable secret and bad signature all collapse into the same 401, so the endpoint is not an existence oracle. A paused subscription acks 202 ignored after a valid signature. A duplicate provider redelivery acks 200 without a second journal row. A failing attempt releases the claim and returns 500, so the provider’s retry can claim again.
+         */
+        post: operations["receiveConnectorEvent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/events/schemas": {
         parameters: {
             query?: never;
@@ -1857,13 +3922,13 @@ export interface paths {
         };
         /**
          * List durable event consumers
-         * @description Every registered durable consumer with its filter, cursor, and live lag (journal head minus cursor).
+         * @description Every registered durable consumer with its filter, cursor, and live lag (journal head minus cursor). Scoped consumers are listed only to their owner key and to instance-unrestricted keys.
          */
         get: operations["listEventConsumers"];
         put?: never;
         /**
          * Register a durable event consumer
-         * @description Registers a named consumer over the event journal: a type filter (trailing-* prefix glob, the events-wait contract) plus optional payload conditions (the automation-trigger matcher), and a stored cursor. startFrom 'now' (default) begins at the journal head; 'beginning' replays the full journal (projections).
+         * @description Registers a named consumer over the event journal: a type filter (trailing-* prefix glob, the events-wait contract) plus optional payload conditions (the automation-trigger matcher), and a stored cursor. startFrom 'now' (default) begins at the journal head; 'beginning' replays the full journal (projections). Opt-in scoped: true binds the consumer to the calling key and an instance set (see instanceIds).
          */
         post: operations["createEventConsumer"];
         delete?: never;
@@ -1910,6 +3975,26 @@ export interface paths {
          * @description Pages journal events strictly after the stored cursor, in journal_seq order, pre-filtered by the type glob and payload conditions. Does NOT advance the cursor — ack the returned cursor to commit progress (at-least-once: a client that crashes mid-page re-pulls the same page). waitMs long-polls when no rows are available.
          */
         post: operations["pullEventConsumer"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/events/consumers/{name}/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream journal events for a consumer (SSE)
+         * @description Opt-in Server-Sent Events push over the same journal scan as pull (type glob, excludeTypes, payload conditions, journal_seq order), always behind the journal readiness gate: a claimed-but-unfilled row is held until it is filled or older than EVENT_CONSUMER_SETTLE_MS. Starts strictly after Last-Event-ID, else ?after, else the stored cursor; catches up, then follows live. Each matching row is one event (`id: <journal_seq>`, `event: <eventType>`, `data: <the row as pull returns it>`), after an initial `connected` event; a `: heartbeat` comment is sent every EVENT_STREAM_HEARTBEAT_MS (default 15000). READ-ONLY: the stream never moves the stored cursor and never takes a lease — keep acking with POST /events/consumers/{name}/ack. Fan-out consumers only: a shared consumer is refused with 400. A consumer deleted mid-stream ends the stream with an `error` event. Requires events:write (as pull) and resolves the consumer exactly as pull: a scoped consumer the key may not see is 404, a restricted owner streams only its narrowed instances, and an instance-restricted API key only receives rows of its own instances. An access-filtered consumer holds an unfilled row until its verdict lands. A stream lives at most EVENT_STREAM_MAX_LIFETIME_MS (default and maximum 30000, the revocation ceiling), then ends with a `reconnect` event carrying `retry:` and `id:` (the scanned position, past filtered-out rows) — reconnect with Last-Event-ID to resume and re-authenticate. Past EVENT_STREAM_MAX_PER_PROCESS open streams, or EVENT_STREAM_MAX_PER_KEY for the calling key, a new one is refused with 429.
+         */
+        get: operations["streamEventConsumer"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3314,6 +5399,40 @@ export interface components {
                 };
             };
         };
+        LoginStatus: {
+            /** @description Whether this Omni has an owner */
+            claimed: boolean;
+            /** @description The owner's own WhatsApp number (+E.164) while connected; a device's QR opens its self chat */
+            whatsapp: string | null;
+            /** @description The device-approval page (RFC 8628 verification_uri) */
+            deviceUrl: string;
+            /** @description Whether the approval page offers Face ID and fingerprints: only with a fixed public URL (OMNI_PUBLIC_URL) */
+            passkeys: boolean;
+        };
+        DeviceKey: {
+            /** @description The device’s Omni API key (x-api-key). Returned once. */
+            apiKey: string;
+            /** Format: uuid */
+            keyId: string;
+            scopes: string[];
+            /**
+             * Format: date-time
+             * @description Null: never expires; revoke it instead
+             */
+            keyExpiresAt: string | null;
+            /** @description The base URL the device should use */
+            apiUrl: string;
+            /** @description Further keys minted with this one, when the client declares them (e.g. Unfold’s agent key), each narrowed by this Omni’s device-key scopes. Empty for other clients. */
+            companions: {
+                /** @description What the client uses it for, e.g. agent */
+                name: string;
+                /** @description The companion’s Omni API key. Returned once. */
+                apiKey: string;
+                /** Format: uuid */
+                keyId: string;
+                scopes: string[];
+            }[];
+        };
         HealthCheck: {
             /**
              * @description Check status
@@ -3428,6 +5547,20 @@ export interface components {
             historyIdentity: "desktop" | "web";
             /** @description WhatsApp (Baileys): request full history on connect */
             syncFullHistory: boolean;
+            /**
+             * @description Outbound pacing (WhatsApp Baileys): 'humanized' keeps the anti-ban delay and typing simulation before each send; 'immediate' skips both. Send requests may ask for 'humanized' with `pacing`; asking for 'immediate' needs outboundPacingOverride on a humanized instance
+             * @enum {string}
+             */
+            outboundPacing?: "humanized" | "immediate";
+            /** @description Let send requests choose `pacing: 'immediate'` on a humanized instance. Default false: such requests are refused with 403. Setting it to true needs a full-access ('*') key; any other key gets 403 */
+            outboundPacingOverride?: boolean;
+            /**
+             * @description Server-side transcription of inbound audio: 'auto' (transcribed as always) or 'off' (stored but never sent to STT)
+             * @enum {string}
+             */
+            audioTranscription: "auto" | "off";
+            /** @description WhatsApp (Baileys): typed replyTo on message.received and target on reaction.received/removed (false = events unchanged) */
+            inboundReplyContext: boolean;
             /** @description Owner identifier */
             ownerIdentifier: string | null;
             /**
@@ -3559,6 +5692,12 @@ export interface components {
                     kind: "fixed";
                     /** @description Minutes between successive follow-ups, in order. */
                     intervalsMinutes: number[];
+                    /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
+                    jitter?: {
+                        minutes: number;
+                    } | {
+                        ratio: number;
+                    };
                 } | {
                     /** @enum {string} */
                     kind: "exponential";
@@ -3568,6 +5707,12 @@ export interface components {
                     factor: number;
                     /** @description Upper bound on any single interval. */
                     maxMinutes: number;
+                    /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
+                    jitter?: {
+                        minutes: number;
+                    } | {
+                        ratio: number;
+                    };
                 };
                 /** @description Hard cap on follow-ups fired per sequence. */
                 maxFollowUps: number;
@@ -3632,6 +5777,28 @@ export interface components {
              * @default false
              */
             syncFullHistory: boolean;
+            /**
+             * @description Outbound pacing (WhatsApp Baileys): 'humanized' keeps the anti-ban delay and typing simulation before each send; 'immediate' skips both. Send requests may ask for 'humanized' with `pacing`; asking for 'immediate' needs outboundPacingOverride on a humanized instance
+             * @default humanized
+             * @enum {string}
+             */
+            outboundPacing: "humanized" | "immediate";
+            /**
+             * @description Let send requests choose `pacing: 'immediate'` on a humanized instance. Default false: such requests are refused with 403. Setting it to true needs a full-access ('*') key; any other key gets 403
+             * @default false
+             */
+            outboundPacingOverride: boolean;
+            /**
+             * @description Server-side transcription of inbound audio (default: auto). 'auto' = transcribed as always; 'off' = stored but never sent to STT, and a skipped media.processed is emitted instead
+             * @default auto
+             * @enum {string}
+             */
+            audioTranscription: "auto" | "off";
+            /**
+             * @description WhatsApp (Baileys): add the typed replyTo to message.received and target to reaction.received/removed (default: false = events unchanged). Read at connect: restart the instance after changing it
+             * @default false
+             */
+            inboundReplyContext: boolean;
             /**
              * @description Gupshup HANDOFF routing defaults and customerFields template (gupshup instances only). Read by the plugin at connect: restart the instance after changing it. null clears it
              * @example {
@@ -3978,6 +6145,11 @@ export interface components {
              * @enum {string}
              */
             sentBy?: "agent" | "user";
+            /**
+             * @description Outbound pacing for this send (WhatsApp Baileys): 'immediate' skips the humanized anti-ban delay and typing simulation; 'humanized' keeps them. Default: the instance's outboundPacing. 'immediate' on a humanized instance needs the instance's outboundPacingOverride (otherwise 403)
+             * @enum {string}
+             */
+            pacing?: "humanized" | "immediate";
         };
         TTSVoice: {
             /** @description ElevenLabs voice ID */
@@ -4013,13 +6185,18 @@ export interface components {
             stability?: number;
             /** @description Similarity boost (0-1) */
             similarityBoost?: number;
-            /** @description Recording presence duration in ms */
+            /** @description Custom recording presence duration in ms (default: match audio duration, or 0 when pacing is 'immediate') */
             presenceDelay?: number;
             /**
              * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
              * @enum {string}
              */
             sentBy?: "agent" | "user";
+            /**
+             * @description Outbound pacing for this send (WhatsApp Baileys): 'immediate' skips the humanized anti-ban delay and typing simulation; 'humanized' keeps them. Default: the instance's outboundPacing. 'immediate' on a humanized instance needs the instance's outboundPacingOverride (otherwise 403)
+             * @enum {string}
+             */
+            pacing?: "humanized" | "immediate";
         };
         TtsResponse: {
             /** @description Internal message ID */
@@ -4076,6 +6253,11 @@ export interface components {
              * @enum {string}
              */
             sentBy?: "agent" | "user";
+            /**
+             * @description Outbound pacing for this send (WhatsApp Baileys): 'immediate' skips the humanized anti-ban delay and typing simulation; 'humanized' keeps them. Default: the instance's outboundPacing. 'immediate' on a humanized instance needs the instance's outboundPacingOverride (otherwise 403)
+             * @enum {string}
+             */
+            pacing?: "humanized" | "immediate";
         };
         SendReactionRequest: {
             /**
@@ -4089,6 +6271,11 @@ export interface components {
             messageId: string;
             /** @description Emoji to react with */
             emoji: string;
+            /**
+             * @description Outbound pacing for this send (WhatsApp Baileys): 'immediate' skips the humanized anti-ban delay and typing simulation; 'humanized' keeps them. Default: the instance's outboundPacing. 'immediate' on a humanized instance needs the instance's outboundPacingOverride (otherwise 403)
+             * @enum {string}
+             */
+            pacing?: "humanized" | "immediate";
         };
         SendStickerRequest: {
             /**
@@ -4181,6 +6368,13 @@ export interface components {
             loadingMessages?: string[];
             /** @description Duration in ms before auto-pause; omit for channel default, 0 = until paused */
             duration?: number;
+            /**
+             * @description Server-held presence (WhatsApp, opt-in): Omni re-sends typing/recording until a send or reaction to this chat, an explicit 'paused' hold, the max lifetime (holdMaxMs) or a disconnect. `duration` is ignored under hold
+             * @default false
+             */
+            hold: boolean;
+            /** @description Max lifetime in ms of a server-held presence (hold=true only); omit or 0 = server default (WHATSAPP_PRESENCE_MAX_LIFETIME_MS) */
+            holdMaxMs?: number;
         };
         PresenceResponse: {
             /**
@@ -4192,14 +6386,22 @@ export interface components {
             chatId: string;
             /** @description Presence type sent */
             type: string;
-            /** @description Duration in ms */
+            /** @description Duration in ms; with hold=true, the lifetime of the server-held presence */
             duration: number;
             /** @description Thread timestamp/id used by the presence renderer */
             threadId?: string;
             /** @description Whether the channel reported the status as delivered */
             delivered?: boolean;
-            /** @description Channel-specific presence method used */
+            /** @description Channel-specific presence method used ('presence_hold' for a server-held presence, hold=true) */
             method?: string;
+            /** @description Present only when the request set hold=true (method 'presence_hold') */
+            hold?: {
+                /**
+                 * Format: date-time
+                 * @description When the server-held presence ends at the latest (ISO 8601); null when no hold is running (type 'paused', or the hold was ended or replaced before its first frame went out)
+                 */
+                expiresAt: string | null;
+            };
             /** @description Reason when the channel no-opped or failed best-effort */
             reason?: string;
             /** @description Channel-specific status text sent */
@@ -4295,6 +6497,97 @@ export interface components {
             closeFields?: {
                 [key: string]: unknown;
             };
+        };
+        Chat: {
+            /**
+             * Format: uuid
+             * @description Chat UUID
+             */
+            id: string;
+            /**
+             * Format: uuid
+             * @description Instance (channel) the chat lives on
+             */
+            instanceId: string;
+            /** @description Platform-native chat id (WhatsApp JID, Telegram id, …) */
+            externalId: string;
+            /** @description Canonical platform id when the platform has several */
+            canonicalId: string | null;
+            /**
+             * @description Kind of chat
+             * @enum {string}
+             */
+            chatType: "dm" | "group" | "channel" | "thread" | "forum" | "voice" | "broadcast" | "community" | "announcement" | "stage";
+            /** @description Channel type, e.g. whatsapp-baileys */
+            channel: string;
+            /** @description Display name */
+            name: string | null;
+            description: string | null;
+            avatarUrl: string | null;
+            /** Format: uuid */
+            parentChatId: string | null;
+            participantCount: number | null;
+            messageCount: number | null;
+            /** @description Messages not yet read */
+            unreadCount: number | null;
+            /** @description ISO time of the latest message */
+            lastMessageAt: string | null;
+            lastMessagePreview: string | null;
+            lastMessageFromMe: boolean | null;
+            isGroup: boolean;
+            labels: string[] | null;
+            settings: {
+                [key: string]: unknown;
+            } | null;
+            platformMetadata: {
+                [key: string]: unknown;
+            } | null;
+            archivedAt: string | null;
+            createdAt: string;
+            updatedAt: string;
+        };
+        ChatParticipant: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            chatId: string;
+            platformUserId: string;
+            displayName: string | null;
+            avatarUrl: string | null;
+            role: string | null;
+            /** Format: uuid */
+            personId: string | null;
+        };
+        StoredMessage: {
+            /**
+             * Format: uuid
+             * @description Message UUID
+             */
+            id: string;
+            /**
+             * Format: uuid
+             * @description Chat the message belongs to
+             */
+            chatId: string;
+            /** @description Platform-native message id */
+            externalId: string;
+            /** @description Where it came from (platform, api, agent, …) */
+            source: string;
+            /** @description text, audio, image, video, document, sticker, … */
+            messageType: string;
+            status: string | null;
+            /** @description Sent by the instance owner */
+            isFromMe: boolean;
+            senderDisplayName: string | null;
+            /** Format: uuid */
+            senderPersonId: string | null;
+            textContent: string | null;
+            /** @description Transcript of a voice note */
+            transcription: string | null;
+            hasMedia: boolean;
+            /** @description ISO time the platform reports */
+            platformTimestamp: string | null;
+            createdAt: string;
         };
         Event: {
             /**
@@ -5310,6 +7603,67 @@ export interface components {
             /** @description Reason for decision */
             reason: string | null;
         };
+        MintChildKeyRequest: {
+            /**
+             * Format: uuid
+             * @description The chat row's UUID (not its JID)
+             */
+            chatId: string;
+        };
+        ChildKey: {
+            /**
+             * Format: uuid
+             * @description The chat key id
+             */
+            id: string;
+            /** @description The key itself. Returned once; never stored by Omni in clear. */
+            plainTextKey: string;
+            /**
+             * Format: uuid
+             * @description The key that minted it (the caller)
+             */
+            parentKeyId: string;
+            /**
+             * Format: uuid
+             * @description The chat row's UUID
+             */
+            chatId: string;
+            /** @description The chat's id on its channel (a WhatsApp JID) */
+            chatExternalId: string;
+            /**
+             * Format: uuid
+             * @description The chat's instance
+             */
+            instanceId: string;
+            /** @description The cs scopes the caller holds: messages:send and chats:read, plus context:write and turns:close when held */
+            scopes: string[];
+            /**
+             * Format: date-time
+             * @description The caller's own expiry; null when it never expires
+             */
+            expiresAt: string | null;
+            /**
+             * Format: uuid
+             * @description The caller's previous key for this chat, revoked by this mint
+             */
+            replacedKeyId: string | null;
+        };
+        RevokeChildKeyRequest: {
+            /** @description Accepted for compatibility; not recorded (the revoke is recorded as own_child) */
+            reason?: string;
+        };
+        ChildKeyRevokeResult: {
+            /**
+             * Format: uuid
+             * @description The chat key id
+             */
+            id: string;
+            /**
+             * @description What the call did
+             * @enum {string}
+             */
+            status: "revoked" | "already_revoked";
+        };
         Setting: {
             /** @description Setting key */
             key: string;
@@ -5360,6 +7714,40 @@ export interface components {
             changedAt: string;
             /** @description Reason for change */
             changeReason: string | null;
+        };
+        UpdateStatus: {
+            /** @description The version this Omni runs */
+            current: string;
+            /**
+             * @description The npm dist-tag this Omni follows
+             * @enum {string}
+             */
+            channel: "latest" | "next";
+            /** @description What the channel publishes now; null when the registry could not be read */
+            latest: string | null;
+            updateAvailable: boolean;
+            /**
+             * @description off: the operator has not set OMNI_UPDATE_COMMAND
+             * @enum {string}
+             */
+            mode: "off" | "command";
+            /**
+             * @description Who says yes: whatsapp, the owner's `update <CODE>`; app, the request itself (a loopback-only Omni whose operator set OMNI_UPDATE_CONFIRM=app, such as a sandbox)
+             * @enum {string}
+             */
+            confirm: "whatsapp" | "app";
+            /** @description An update waiting for the owner to confirm it on WhatsApp */
+            pending?: {
+                version: string;
+                /** Format: date-time */
+                expiresAt: string;
+            };
+            /** @description An update the owner confirmed that has not finished */
+            inFlight?: {
+                version: string;
+                /** Format: date-time */
+                startedAt: string;
+            };
         };
         Provider: {
             /**
@@ -6095,6 +8483,103 @@ export interface components {
             /** @description true/false as established from the channel's code; 'unknown' when undeclared */
             idempotency: boolean | "unknown";
         };
+        Connector: {
+            /** Format: uuid */
+            id: string;
+            provider: string;
+            name: string;
+            /** @enum {string} */
+            status: "connected" | "error" | "revoked";
+            config: {
+                [key: string]: unknown;
+            };
+            hasCredentials: boolean;
+            /** Format: date-time */
+            lastValidatedAt: string | null;
+            lastError: string | null;
+            lastErrorCode: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        EventSubscription: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            connectorId: string;
+            providerEventKey: string;
+            filters: {
+                [key: string]: unknown;
+            };
+            /** Format: uuid */
+            targetAutomationId: string;
+            /** @enum {string} */
+            status: "active" | "paused" | "error";
+            inboundUrl: string;
+            /** Format: date-time */
+            lastDeliveryAt: string | null;
+            /** Format: date-time */
+            lastFailureAt: string | null;
+            consecutiveFailures: number;
+            totalDeliveries: number;
+            totalDuplicates: number;
+            lastError: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        ProviderSummary: {
+            id: string;
+            label: string;
+            version: string;
+            events: {
+                key: string;
+                label: string;
+            }[];
+            actions: {
+                key: string;
+                label: string;
+            }[];
+        };
+        ProviderDetail: {
+            id: string;
+            label: string;
+            version: string;
+            credentialFields: {
+                key: string;
+                label: string;
+                secret: boolean;
+                optional?: boolean;
+                help?: string;
+            }[];
+            events: {
+                key: string;
+                label: string;
+                sample?: {
+                    [key: string]: unknown;
+                };
+            }[];
+            actions: {
+                key: string;
+                label: string;
+                description?: string;
+                inputSchema: {
+                    [key: string]: unknown;
+                };
+            }[];
+            guide: {
+                [key: string]: string;
+            };
+        };
+        DeliveryReceipt: {
+            received: boolean;
+            /** Format: uuid */
+            eventId?: string;
+            duplicate?: boolean;
+            ignored?: boolean;
+        };
         EventSchema: {
             /**
              * Format: uuid
@@ -6180,6 +8665,22 @@ export interface components {
             cursor: number;
             /** @description true = competing consumers (pullers on this name split the stream); false = own cursor (fan-out) */
             shared: boolean;
+            /**
+             * @description Access filter over the ingest access verdict: 'all' (default, every row) or only rows whose access_decision is 'allowed' / 'denied'
+             * @enum {string}
+             */
+            accessFilter: "all" | "allowed" | "denied";
+            /** @description true = opt-in journal readiness gate: claimed-but-unfilled rows are held (not delivered, cursor not moved past them) until filled or older than the settle window; false = today's behaviour */
+            waitForReady: boolean;
+            /** @description true = instance-scoped consumer (opt-in): pulls only its instanceIds, visible only to its owner key and to instance-unrestricted keys. false (default) = global consumer, unchanged behaviour */
+            scoped: boolean;
+            /** @description Scoped consumers: the instances whose journal rows it pages; null when unscoped */
+            instanceIds: string[] | null;
+            /**
+             * Format: uuid
+             * @description Scoped consumers: id of the API key that registered it; null when unscoped
+             */
+            ownerKeyId: string | null;
             /** @description Highest journal_seq currently in the journal */
             head: number;
             /** @description head - cursor (all journal rows past the cursor, not only matches) */
@@ -6223,6 +8724,18 @@ export interface components {
             startFrom?: "now" | "beginning";
             /** @description Competing consumers (#1188). false (default) = fan-out: every consumer name has its own cursor and sees every event. true = N pullers on THIS name split the stream: each pull leases a page to one puller, ack(leaseId) releases it, an unacked lease is redelivered after leaseMs (at-least-once). */
             shared?: boolean;
+            /**
+             * @description Opt-in access filter. 'all' (default) = every row, unchanged. 'allowed' / 'denied' = only rows whose ingest access verdict (omni_events.access_decision) equals it. The verdict is frozen at ingest; call the access check route for the current one. Requires OMNI_JOURNAL_ACCESS_DECISION=true (else 400). Without waitForReady a row whose fill lands late (verdict still unset) can be skipped; set waitForReady to hold the page until it lands.
+             * @default all
+             * @enum {string}
+             */
+            access: "all" | "allowed" | "denied";
+            /** @description Opt-in journal readiness gate. false (default) = today's behaviour: a row claimed at ingress but not yet filled is delivered as it is. true = pull and shared claims stop before such a row (journalReady false) until it is filled or older than the settle window (EVENT_CONSUMER_SETTLE_MS, default 5000 ms). */
+            waitForReady?: boolean;
+            /** @description Opt-in instance scoping. false (default) = global consumer, exactly the existing behaviour. true = the consumer is owned by the calling API key and pulls only journal rows of its instanceIds; only the owner key or an instance-unrestricted key can inspect, pull, ack, delete or list it (others get 404). */
+            scoped?: boolean;
+            /** @description Scoped consumers only (ignored without scoped: true, as before). Instance-restricted key: defaults to all of its instances; naming an instance outside the key is 403; an empty result or an unknown instance is 400. Instance-unrestricted key: required and non-empty. */
+            instanceIds?: string[];
         };
         ConsumerPullResult: {
             /** @description Consumer name */
@@ -6346,6 +8859,23 @@ export interface components {
                     responseAs?: string;
                     /** @description Await the agent run (default true). False = return the runId once dispatched; outcome published as system.agent.run_completed. Incompatible with responseAs */
                     waitForResponse?: boolean;
+                };
+            } | {
+                /** @enum {string} */
+                type: "connector.call";
+                config: {
+                    /** @description Connector UUID (or a template resolving to one) */
+                    connectorId: string;
+                    /** @description Literal manifest action key, e.g. "add_comment" */
+                    action: string;
+                    /** @description Action input; string values may be templates */
+                    input: {
+                        [key: string]: unknown;
+                    };
+                    /** @description Call timeout in ms */
+                    timeoutMs?: number;
+                    /** @description Store the result as a variable */
+                    responseAs?: string;
                 };
             })[];
             /** @description Debounce config */
@@ -6489,6 +9019,23 @@ export interface components {
                     responseAs?: string;
                     /** @description Await the agent run (default true). False = return the runId once dispatched; outcome published as system.agent.run_completed. Incompatible with responseAs */
                     waitForResponse?: boolean;
+                };
+            } | {
+                /** @enum {string} */
+                type: "connector.call";
+                config: {
+                    /** @description Connector UUID (or a template resolving to one) */
+                    connectorId: string;
+                    /** @description Literal manifest action key, e.g. "add_comment" */
+                    action: string;
+                    /** @description Action input; string values may be templates */
+                    input: {
+                        [key: string]: unknown;
+                    };
+                    /** @description Call timeout in ms */
+                    timeoutMs?: number;
+                    /** @description Store the result as a variable */
+                    responseAs?: string;
                 };
             })[];
             /** @description Debounce config */
@@ -6905,6 +9452,12 @@ export interface components {
                 kind: "fixed";
                 /** @description Minutes between successive follow-ups, in order. */
                 intervalsMinutes: number[];
+                /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
+                jitter?: {
+                    minutes: number;
+                } | {
+                    ratio: number;
+                };
             } | {
                 /** @enum {string} */
                 kind: "exponential";
@@ -6914,6 +9467,12 @@ export interface components {
                 factor: number;
                 /** @description Upper bound on any single interval. */
                 maxMinutes: number;
+                /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
+                jitter?: {
+                    minutes: number;
+                } | {
+                    ratio: number;
+                };
             };
             /** @description Hard cap on follow-ups fired per sequence. */
             maxFollowUps: number;
@@ -7434,6 +9993,62 @@ export interface components {
             consumers: string[];
             /** @description Enabled automations triggered by this type */
             automations: string[];
+        };
+        CreateConnectorBody: {
+            /** @description Provider manifest id */
+            provider: string;
+            /** @description Display name, unique per tenant */
+            name: string;
+            /** @description Provider credential values; sealed at rest and never returned */
+            credentials: {
+                [key: string]: string;
+            };
+            /** @description Non-secret provider config, validated against the manifest configSchema */
+            config?: {
+                [key: string]: unknown;
+            };
+        };
+        UpdateConnectorBody: {
+            name?: string;
+            /** @description Provider credential values; sealed at rest and never returned */
+            credentials?: {
+                [key: string]: string;
+            };
+            config?: {
+                [key: string]: unknown;
+            };
+        };
+        CreateSubscriptionBody: {
+            /** @description Manifest event key, e.g. "taskStatusUpdated" */
+            eventKey: string;
+            filters?: {
+                [key: string]: unknown;
+            };
+            /** Format: uuid */
+            targetAutomationId: string;
+            /** @description Provider HMAC secret; sealed at rest and never returned */
+            verificationSecret: string;
+        };
+        UpdateSubscriptionBody: {
+            /** @enum {string} */
+            status?: "active" | "paused";
+            filters?: {
+                [key: string]: unknown;
+            };
+            /** Format: uuid */
+            targetAutomationId?: string;
+            /** @description Provider HMAC secret; sealed at rest and never returned */
+            verificationSecret?: string;
+        };
+        TestDeliveryBody: {
+            payload?: {
+                [key: string]: unknown;
+            };
+        };
+        InvokeActionBody: {
+            input: {
+                [key: string]: unknown;
+            };
         };
     };
     responses: never;
@@ -8563,6 +11178,688 @@ export interface operations {
             };
         };
     };
+    getLoginStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["LoginStatus"];
+                    };
+                };
+            };
+            /** @description Login is not enabled here */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    createDeviceKey: {
+        parameters: {
+            query?: never;
+            header: {
+                authorization: string;
+                "x-omni-client"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    deviceName: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The device key */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["DeviceKey"];
+                    };
+                };
+            };
+            /** @description Missing, unknown or used device token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description This Omni’s device-key scopes leave nothing for this client; the token is not spent */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Login is not enabled here */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    connectWithLink: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    grant: string;
+                    /** @enum {string} */
+                    clientId: "omni-desktop" | "omni-dsh" | "omni-cli" | "unfold";
+                    deviceName: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The device key */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["DeviceKey"];
+                    };
+                };
+            };
+            /** @description Malformed body */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description This Omni’s device-key scopes leave nothing for this client; the grant is not spent */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Login is not enabled here */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description The link expired or was already used */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    sendOwnerLoginCode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Code sent */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /** @description The masked number the code went to */
+                            sentTo: string;
+                        };
+                    };
+                };
+            };
+            /** @description Login is not enabled here, or the Omni is unclaimed */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description The owner's WhatsApp is not connected */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    verifyOwnerLoginCode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    code: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Signed in */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            signedIn: boolean;
+                        };
+                    };
+                };
+            };
+            /** @description Wrong or expired code */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    claimWithToken: {
+        parameters: {
+            query?: never;
+            header: {
+                "x-omni-claim-token": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Claimed */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /** @enum {boolean} */
+                            claimed: true;
+                            /** Format: uri */
+                            url: string;
+                            appLink: string;
+                            /** Format: date-time */
+                            expiresAt: string;
+                        };
+                    };
+                };
+            };
+            /** @description Claimed already, wrong token, or login off */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    listClaimAccounts: {
+        parameters: {
+            query?: never;
+            header: {
+                "x-omni-claim-token": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Done */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /** Format: uuid */
+                            instanceId: string;
+                            name: string;
+                            phone: string;
+                        }[];
+                    };
+                };
+            };
+            /** @description Claimed already, wrong token, or login off */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    connectClaimWhatsApp: {
+        parameters: {
+            query?: never;
+            header: {
+                "x-omni-claim-token": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Done */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /** Format: uuid */
+                            instanceId: string;
+                        };
+                    };
+                };
+            };
+            /** @description Claimed already, wrong token, or login off */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    sendClaimCode: {
+        parameters: {
+            query?: never;
+            header: {
+                "x-omni-claim-token": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** Format: uuid */
+                    instanceId: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Done */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /** @description The masked number the code went to */
+                            sentTo: string;
+                        };
+                    };
+                };
+            };
+            /** @description Claimed already, wrong token, or login off */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    verifyClaimCode: {
+        parameters: {
+            query?: never;
+            header: {
+                "x-omni-claim-token": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** Format: uuid */
+                    instanceId: string;
+                    code: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Done */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            claimed: boolean;
+                        };
+                    };
+                };
+            };
+            /** @description Claimed already, wrong token, or login off */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    getClaimWhatsApp: {
+        parameters: {
+            query?: never;
+            header: {
+                "x-omni-claim-token": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description State */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            connected: boolean;
+                            phone: string | null;
+                            qrSvg: string | null;
+                        };
+                    };
+                };
+            };
+            /** @description Claimed already, wrong token, or login off */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
     getHealth: {
         parameters: {
             query?: never;
@@ -8796,6 +12093,20 @@ export interface operations {
                             historyIdentity: "desktop" | "web";
                             /** @description WhatsApp (Baileys): request full history on connect */
                             syncFullHistory: boolean;
+                            /**
+                             * @description Outbound pacing (WhatsApp Baileys): 'humanized' keeps the anti-ban delay and typing simulation before each send; 'immediate' skips both. Send requests may ask for 'humanized' with `pacing`; asking for 'immediate' needs outboundPacingOverride on a humanized instance
+                             * @enum {string}
+                             */
+                            outboundPacing?: "humanized" | "immediate";
+                            /** @description Let send requests choose `pacing: 'immediate'` on a humanized instance. Default false: such requests are refused with 403. Setting it to true needs a full-access ('*') key; any other key gets 403 */
+                            outboundPacingOverride?: boolean;
+                            /**
+                             * @description Server-side transcription of inbound audio: 'auto' (transcribed as always) or 'off' (stored but never sent to STT)
+                             * @enum {string}
+                             */
+                            audioTranscription: "auto" | "off";
+                            /** @description WhatsApp (Baileys): typed replyTo on message.received and target on reaction.received/removed (false = events unchanged) */
+                            inboundReplyContext: boolean;
                             /** @description Owner identifier */
                             ownerIdentifier: string | null;
                             /**
@@ -8927,6 +12238,12 @@ export interface operations {
                                     kind: "fixed";
                                     /** @description Minutes between successive follow-ups, in order. */
                                     intervalsMinutes: number[];
+                                    /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
+                                    jitter?: {
+                                        minutes: number;
+                                    } | {
+                                        ratio: number;
+                                    };
                                 } | {
                                     /** @enum {string} */
                                     kind: "exponential";
@@ -8936,6 +12253,12 @@ export interface operations {
                                     factor: number;
                                     /** @description Upper bound on any single interval. */
                                     maxMinutes: number;
+                                    /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
+                                    jitter?: {
+                                        minutes: number;
+                                    } | {
+                                        ratio: number;
+                                    };
                                 };
                                 /** @description Hard cap on follow-ups fired per sequence. */
                                 maxFollowUps: number;
@@ -9020,6 +12343,28 @@ export interface operations {
                      * @default false
                      */
                     syncFullHistory?: boolean;
+                    /**
+                     * @description Outbound pacing (WhatsApp Baileys): 'humanized' keeps the anti-ban delay and typing simulation before each send; 'immediate' skips both. Send requests may ask for 'humanized' with `pacing`; asking for 'immediate' needs outboundPacingOverride on a humanized instance
+                     * @default humanized
+                     * @enum {string}
+                     */
+                    outboundPacing?: "humanized" | "immediate";
+                    /**
+                     * @description Let send requests choose `pacing: 'immediate'` on a humanized instance. Default false: such requests are refused with 403. Setting it to true needs a full-access ('*') key; any other key gets 403
+                     * @default false
+                     */
+                    outboundPacingOverride?: boolean;
+                    /**
+                     * @description Server-side transcription of inbound audio (default: auto). 'auto' = transcribed as always; 'off' = stored but never sent to STT, and a skipped media.processed is emitted instead
+                     * @default auto
+                     * @enum {string}
+                     */
+                    audioTranscription?: "auto" | "off";
+                    /**
+                     * @description WhatsApp (Baileys): add the typed replyTo to message.received and target to reaction.received/removed (default: false = events unchanged). Read at connect: restart the instance after changing it
+                     * @default false
+                     */
+                    inboundReplyContext?: boolean;
                     /**
                      * @description Gupshup HANDOFF routing defaults and customerFields template (gupshup instances only). Read by the plugin at connect: restart the instance after changing it. null clears it
                      * @example {
@@ -9198,6 +12543,20 @@ export interface operations {
                             historyIdentity: "desktop" | "web";
                             /** @description WhatsApp (Baileys): request full history on connect */
                             syncFullHistory: boolean;
+                            /**
+                             * @description Outbound pacing (WhatsApp Baileys): 'humanized' keeps the anti-ban delay and typing simulation before each send; 'immediate' skips both. Send requests may ask for 'humanized' with `pacing`; asking for 'immediate' needs outboundPacingOverride on a humanized instance
+                             * @enum {string}
+                             */
+                            outboundPacing?: "humanized" | "immediate";
+                            /** @description Let send requests choose `pacing: 'immediate'` on a humanized instance. Default false: such requests are refused with 403. Setting it to true needs a full-access ('*') key; any other key gets 403 */
+                            outboundPacingOverride?: boolean;
+                            /**
+                             * @description Server-side transcription of inbound audio: 'auto' (transcribed as always) or 'off' (stored but never sent to STT)
+                             * @enum {string}
+                             */
+                            audioTranscription: "auto" | "off";
+                            /** @description WhatsApp (Baileys): typed replyTo on message.received and target on reaction.received/removed (false = events unchanged) */
+                            inboundReplyContext: boolean;
                             /** @description Owner identifier */
                             ownerIdentifier: string | null;
                             /**
@@ -9329,6 +12688,12 @@ export interface operations {
                                     kind: "fixed";
                                     /** @description Minutes between successive follow-ups, in order. */
                                     intervalsMinutes: number[];
+                                    /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
+                                    jitter?: {
+                                        minutes: number;
+                                    } | {
+                                        ratio: number;
+                                    };
                                 } | {
                                     /** @enum {string} */
                                     kind: "exponential";
@@ -9338,6 +12703,12 @@ export interface operations {
                                     factor: number;
                                     /** @description Upper bound on any single interval. */
                                     maxMinutes: number;
+                                    /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
+                                    jitter?: {
+                                        minutes: number;
+                                    } | {
+                                        ratio: number;
+                                    };
                                 };
                                 /** @description Hard cap on follow-ups fired per sequence. */
                                 maxFollowUps: number;
@@ -9364,6 +12735,27 @@ export interface operations {
             };
             /** @description Validation error */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Setting outboundPacingOverride to true requires a full-access ('*') API key */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9471,6 +12863,20 @@ export interface operations {
                             historyIdentity: "desktop" | "web";
                             /** @description WhatsApp (Baileys): request full history on connect */
                             syncFullHistory: boolean;
+                            /**
+                             * @description Outbound pacing (WhatsApp Baileys): 'humanized' keeps the anti-ban delay and typing simulation before each send; 'immediate' skips both. Send requests may ask for 'humanized' with `pacing`; asking for 'immediate' needs outboundPacingOverride on a humanized instance
+                             * @enum {string}
+                             */
+                            outboundPacing?: "humanized" | "immediate";
+                            /** @description Let send requests choose `pacing: 'immediate'` on a humanized instance. Default false: such requests are refused with 403. Setting it to true needs a full-access ('*') key; any other key gets 403 */
+                            outboundPacingOverride?: boolean;
+                            /**
+                             * @description Server-side transcription of inbound audio: 'auto' (transcribed as always) or 'off' (stored but never sent to STT)
+                             * @enum {string}
+                             */
+                            audioTranscription: "auto" | "off";
+                            /** @description WhatsApp (Baileys): typed replyTo on message.received and target on reaction.received/removed (false = events unchanged) */
+                            inboundReplyContext: boolean;
                             /** @description Owner identifier */
                             ownerIdentifier: string | null;
                             /**
@@ -9602,6 +13008,12 @@ export interface operations {
                                     kind: "fixed";
                                     /** @description Minutes between successive follow-ups, in order. */
                                     intervalsMinutes: number[];
+                                    /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
+                                    jitter?: {
+                                        minutes: number;
+                                    } | {
+                                        ratio: number;
+                                    };
                                 } | {
                                     /** @enum {string} */
                                     kind: "exponential";
@@ -9611,6 +13023,12 @@ export interface operations {
                                     factor: number;
                                     /** @description Upper bound on any single interval. */
                                     maxMinutes: number;
+                                    /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
+                                    jitter?: {
+                                        minutes: number;
+                                    } | {
+                                        ratio: number;
+                                    };
                                 };
                                 /** @description Hard cap on follow-ups fired per sequence. */
                                 maxFollowUps: number;
@@ -9760,6 +13178,28 @@ export interface operations {
                      * @default false
                      */
                     syncFullHistory?: boolean;
+                    /**
+                     * @description Outbound pacing (WhatsApp Baileys): 'humanized' keeps the anti-ban delay and typing simulation before each send; 'immediate' skips both. Send requests may ask for 'humanized' with `pacing`; asking for 'immediate' needs outboundPacingOverride on a humanized instance
+                     * @default humanized
+                     * @enum {string}
+                     */
+                    outboundPacing?: "humanized" | "immediate";
+                    /**
+                     * @description Let send requests choose `pacing: 'immediate'` on a humanized instance. Default false: such requests are refused with 403. Setting it to true needs a full-access ('*') key; any other key gets 403
+                     * @default false
+                     */
+                    outboundPacingOverride?: boolean;
+                    /**
+                     * @description Server-side transcription of inbound audio (default: auto). 'auto' = transcribed as always; 'off' = stored but never sent to STT, and a skipped media.processed is emitted instead
+                     * @default auto
+                     * @enum {string}
+                     */
+                    audioTranscription?: "auto" | "off";
+                    /**
+                     * @description WhatsApp (Baileys): add the typed replyTo to message.received and target to reaction.received/removed (default: false = events unchanged). Read at connect: restart the instance after changing it
+                     * @default false
+                     */
+                    inboundReplyContext?: boolean;
                     /**
                      * @description Gupshup HANDOFF routing defaults and customerFields template (gupshup instances only). Read by the plugin at connect: restart the instance after changing it. null clears it
                      * @example {
@@ -9938,6 +13378,20 @@ export interface operations {
                             historyIdentity: "desktop" | "web";
                             /** @description WhatsApp (Baileys): request full history on connect */
                             syncFullHistory: boolean;
+                            /**
+                             * @description Outbound pacing (WhatsApp Baileys): 'humanized' keeps the anti-ban delay and typing simulation before each send; 'immediate' skips both. Send requests may ask for 'humanized' with `pacing`; asking for 'immediate' needs outboundPacingOverride on a humanized instance
+                             * @enum {string}
+                             */
+                            outboundPacing?: "humanized" | "immediate";
+                            /** @description Let send requests choose `pacing: 'immediate'` on a humanized instance. Default false: such requests are refused with 403. Setting it to true needs a full-access ('*') key; any other key gets 403 */
+                            outboundPacingOverride?: boolean;
+                            /**
+                             * @description Server-side transcription of inbound audio: 'auto' (transcribed as always) or 'off' (stored but never sent to STT)
+                             * @enum {string}
+                             */
+                            audioTranscription: "auto" | "off";
+                            /** @description WhatsApp (Baileys): typed replyTo on message.received and target on reaction.received/removed (false = events unchanged) */
+                            inboundReplyContext: boolean;
                             /** @description Owner identifier */
                             ownerIdentifier: string | null;
                             /**
@@ -10069,6 +13523,12 @@ export interface operations {
                                     kind: "fixed";
                                     /** @description Minutes between successive follow-ups, in order. */
                                     intervalsMinutes: number[];
+                                    /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
+                                    jitter?: {
+                                        minutes: number;
+                                    } | {
+                                        ratio: number;
+                                    };
                                 } | {
                                     /** @enum {string} */
                                     kind: "exponential";
@@ -10078,6 +13538,12 @@ export interface operations {
                                     factor: number;
                                     /** @description Upper bound on any single interval. */
                                     maxMinutes: number;
+                                    /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
+                                    jitter?: {
+                                        minutes: number;
+                                    } | {
+                                        ratio: number;
+                                    };
                                 };
                                 /** @description Hard cap on follow-ups fired per sequence. */
                                 maxFollowUps: number;
@@ -10098,6 +13564,27 @@ export interface operations {
                              * @description Last update timestamp
                              */
                             updatedAt: string;
+                        };
+                    };
+                };
+            };
+            /** @description Setting outboundPacingOverride to true requires a full-access ('*') API key */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
                         };
                     };
                 };
@@ -11071,6 +14558,11 @@ export interface operations {
                      * @enum {string}
                      */
                     sentBy?: "agent" | "user";
+                    /**
+                     * @description Outbound pacing for this send (WhatsApp Baileys): 'immediate' skips the humanized anti-ban delay and typing simulation; 'humanized' keeps them. Default: the instance's outboundPacing. 'immediate' on a humanized instance needs the instance's outboundPacingOverride (otherwise 403)
+                     * @enum {string}
+                     */
+                    pacing?: "humanized" | "immediate";
                 };
             };
         };
@@ -11109,6 +14601,27 @@ export interface operations {
             };
             /** @description Validation error */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description pacing 'immediate' refused: the instance's outboundPacing is 'humanized' and outboundPacingOverride is not set */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11191,6 +14704,11 @@ export interface operations {
                      * @enum {string}
                      */
                     sentBy?: "agent" | "user";
+                    /**
+                     * @description Outbound pacing for this send (WhatsApp Baileys): 'immediate' skips the humanized anti-ban delay and typing simulation; 'humanized' keeps them. Default: the instance's outboundPacing. 'immediate' on a humanized instance needs the instance's outboundPacingOverride (otherwise 403)
+                     * @enum {string}
+                     */
+                    pacing?: "humanized" | "immediate";
                 };
             };
         };
@@ -11229,6 +14747,27 @@ export interface operations {
             };
             /** @description Validation error */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description pacing 'immediate' refused: the instance's outboundPacing is 'humanized' and outboundPacingOverride is not set */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11292,6 +14831,11 @@ export interface operations {
                     messageId: string;
                     /** @description Emoji to react with */
                     emoji: string;
+                    /**
+                     * @description Outbound pacing for this send (WhatsApp Baileys): 'immediate' skips the humanized anti-ban delay and typing simulation; 'humanized' keeps them. Default: the instance's outboundPacing. 'immediate' on a humanized instance needs the instance's outboundPacingOverride (otherwise 403)
+                     * @enum {string}
+                     */
+                    pacing?: "humanized" | "immediate";
                 };
             };
         };
@@ -11312,6 +14856,27 @@ export interface operations {
             };
             /** @description Validation error */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description pacing 'immediate' refused: the instance's outboundPacing is 'humanized' and outboundPacingOverride is not set */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11718,6 +15283,13 @@ export interface operations {
                     loadingMessages?: string[];
                     /** @description Duration in ms before auto-pause; omit for channel default, 0 = until paused */
                     duration?: number;
+                    /**
+                     * @description Server-held presence (WhatsApp, opt-in): Omni re-sends typing/recording until a send or reaction to this chat, an explicit 'paused' hold, the max lifetime (holdMaxMs) or a disconnect. `duration` is ignored under hold
+                     * @default false
+                     */
+                    hold?: boolean;
+                    /** @description Max lifetime in ms of a server-held presence (hold=true only); omit or 0 = server default (WHATSAPP_PRESENCE_MAX_LIFETIME_MS) */
+                    holdMaxMs?: number;
                 };
             };
         };
@@ -11740,14 +15312,22 @@ export interface operations {
                             chatId: string;
                             /** @description Presence type sent */
                             type: string;
-                            /** @description Duration in ms */
+                            /** @description Duration in ms; with hold=true, the lifetime of the server-held presence */
                             duration: number;
                             /** @description Thread timestamp/id used by the presence renderer */
                             threadId?: string;
                             /** @description Whether the channel reported the status as delivered */
                             delivered?: boolean;
-                            /** @description Channel-specific presence method used */
+                            /** @description Channel-specific presence method used ('presence_hold' for a server-held presence, hold=true) */
                             method?: string;
+                            /** @description Present only when the request set hold=true (method 'presence_hold') */
+                            hold?: {
+                                /**
+                                 * Format: date-time
+                                 * @description When the server-held presence ends at the latest (ISO 8601); null when no hold is running (type 'paused', or the hold was ended or replaced before its first frame went out)
+                                 */
+                                expiresAt: string | null;
+                            };
                             /** @description Reason when the channel no-opped or failed best-effort */
                             reason?: string;
                             /** @description Channel-specific status text sent */
@@ -12164,13 +15744,18 @@ export interface operations {
                     stability?: number;
                     /** @description Similarity boost (0-1) */
                     similarityBoost?: number;
-                    /** @description Recording presence duration in ms */
+                    /** @description Custom recording presence duration in ms (default: match audio duration, or 0 when pacing is 'immediate') */
                     presenceDelay?: number;
                     /**
                      * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered. The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
                      * @enum {string}
                      */
                     sentBy?: "agent" | "user";
+                    /**
+                     * @description Outbound pacing for this send (WhatsApp Baileys): 'immediate' skips the humanized anti-ban delay and typing simulation; 'humanized' keeps them. Default: the instance's outboundPacing. 'immediate' on a humanized instance needs the instance's outboundPacingOverride (otherwise 403)
+                     * @enum {string}
+                     */
+                    pacing?: "humanized" | "immediate";
                 };
             };
         };
@@ -12211,6 +15796,27 @@ export interface operations {
             };
             /** @description Validation error */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description pacing 'immediate' refused: the instance's outboundPacing is 'humanized' and outboundPacingOverride is not set */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -15677,6 +19283,318 @@ export interface operations {
             };
         };
     };
+    mintChildKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /**
+                     * Format: uuid
+                     * @description The chat row's UUID (not its JID)
+                     */
+                    chatId: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Chat key minted */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /**
+                             * Format: uuid
+                             * @description The chat key id
+                             */
+                            id: string;
+                            /** @description The key itself. Returned once; never stored by Omni in clear. */
+                            plainTextKey: string;
+                            /**
+                             * Format: uuid
+                             * @description The key that minted it (the caller)
+                             */
+                            parentKeyId: string;
+                            /**
+                             * Format: uuid
+                             * @description The chat row's UUID
+                             */
+                            chatId: string;
+                            /** @description The chat's id on its channel (a WhatsApp JID) */
+                            chatExternalId: string;
+                            /**
+                             * Format: uuid
+                             * @description The chat's instance
+                             */
+                            instanceId: string;
+                            /** @description The cs scopes the caller holds: messages:send and chats:read, plus context:write and turns:close when held */
+                            scopes: string[];
+                            /**
+                             * Format: date-time
+                             * @description The caller's own expiry; null when it never expires
+                             */
+                            expiresAt: string | null;
+                            /**
+                             * Format: uuid
+                             * @description The caller's previous key for this chat, revoked by this mint
+                             */
+                            replacedKeyId: string | null;
+                        };
+                    };
+                };
+            };
+            /** @description Invalid body (any field besides chatId) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description The caller may not mint chat keys, or not with its scopes */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description No chat row with that id, or the chat is on an instance outside the caller's reach */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description CHILD_LIMIT: the caller already holds 500 live chat keys */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    revokeOwnChatKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The calling key is revoked */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /**
+                             * Format: uuid
+                             * @description The chat key id
+                             */
+                            id: string;
+                            /**
+                             * @description What the call did
+                             * @enum {string}
+                             */
+                            status: "revoked" | "already_revoked";
+                        };
+                    };
+                };
+            };
+            /** @description The caller is not a chat key */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    revokeChildKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Accepted for compatibility; not recorded (the revoke is recorded as own_child) */
+                    reason?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Revoked, or already revoked */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /**
+                             * Format: uuid
+                             * @description The chat key id
+                             */
+                            id: string;
+                            /**
+                             * @description What the call did
+                             * @enum {string}
+                             */
+                            status: "revoked" | "already_revoked";
+                        };
+                    };
+                };
+            };
+            /** @description Invalid body */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description The caller may not revoke chat keys, or the key is not the caller's */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description No key with that id */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
     listSettings: {
         parameters: {
             query?: {
@@ -15980,6 +19898,381 @@ export interface operations {
                             /** @description Reason for change */
                             changeReason: string | null;
                         }[];
+                    };
+                };
+            };
+        };
+    };
+    claimAsOperator: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The owner, claimed now or before */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /** @description True when this call made the operator the owner */
+                            claimed: boolean;
+                            whatsapp: boolean;
+                        };
+                    };
+                };
+            };
+            /** @description Human login is off on this Omni (OMNI_LOGIN_ENABLED=false, or multitenancy) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    approveDeviceAsOperator: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    userCode: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Approved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /** @enum {boolean} */
+                            approved: true;
+                            client: string;
+                            clientId: string | null;
+                            /** @description True when this call made the operator the owner */
+                            claimed: boolean;
+                            requestedFrom: {
+                                ip: string | null;
+                                /** Format: date-time */
+                                at: string;
+                            } | null;
+                        };
+                    };
+                };
+            };
+            /** @description No device is waiting with that code */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Human login is off on this Omni (OMNI_LOGIN_ENABLED=false, or multitenancy) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    connectLinkAsOperator: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Where devices reach this Omni, when it differs from this request's own address */
+                    url?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The link */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            url: string;
+                            appLink: string;
+                            /** Format: date-time */
+                            expiresAt: string;
+                            /** @description True when this call made the operator the owner */
+                            claimed: boolean;
+                        };
+                    };
+                };
+            };
+            /** @description No address to put in the link */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Human login is off on this Omni (OMNI_LOGIN_ENABLED=false, or multitenancy) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Too many links; wait */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    getUpdateStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Update status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["UpdateStatus"];
+                    };
+                };
+            };
+        };
+    };
+    requestUpdate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Exactly the version the channel publishes now */
+                    version: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Waiting for the owner's yes on WhatsApp, or started (confirm: app) */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /** @enum {string} */
+                            status: "awaiting-confirmation";
+                            version: string;
+                            /** Format: date-time */
+                            expiresAt: string;
+                        } | {
+                            /** @enum {string} */
+                            status: "started";
+                            version: string;
+                            /** Format: date-time */
+                            startedAt: string;
+                        };
+                    };
+                };
+            };
+            /** @description Malformed body */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description UPDATE_NOT_CONFIGURED, CONFIRM_CHANNEL_MISSING, UPDATE_PENDING, UPDATE_IN_PROGRESS, VERSION_MISMATCH or ALREADY_CURRENT */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description CONFIRM_SEND_FAILED: the owner could not be reached on WhatsApp */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description REGISTRY_UNAVAILABLE: the update channel could not be read; UPDATE_START_FAILED: the command could not start */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
                     };
                 };
             };
@@ -18827,6 +23120,921 @@ export interface operations {
             };
         };
     };
+    listConnectors: {
+        parameters: {
+            query?: {
+                provider?: string;
+                status?: "connected" | "error" | "revoked";
+                limit?: number;
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Connectors */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["Connector"][];
+                        meta: {
+                            hasMore: boolean;
+                            cursor: string | null;
+                        };
+                    };
+                };
+            };
+            /** @description Instance-restricted key (connectors are tenant-wide) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    createConnector: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["CreateConnectorBody"];
+            };
+        };
+        responses: {
+            /** @description Connector created (status may be "error") */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["Connector"];
+                    };
+                };
+            };
+            /** @description Validation error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Instance-restricted key (connectors are tenant-wide) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Unknown provider */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    listConnectorProviders: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Providers */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ProviderSummary"][];
+                    };
+                };
+            };
+            /** @description Instance-restricted key (connectors are tenant-wide) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    getConnectorProvider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                provider: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Provider */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ProviderDetail"];
+                    };
+                };
+            };
+            /** @description Unknown provider */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    getConnector: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Connector */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["Connector"];
+                    };
+                };
+            };
+            /** @description Not found (including cross-tenant) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    deleteConnector: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description Operation succeeded */
+                        success: boolean;
+                        /** @description Optional success message */
+                        message?: string;
+                    };
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    updateConnector: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["UpdateConnectorBody"];
+            };
+        };
+        responses: {
+            /** @description Connector */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["Connector"];
+                    };
+                };
+            };
+            /** @description Validation error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    listConnectorSubscriptions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Subscriptions */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["EventSubscription"][];
+                    };
+                };
+            };
+            /** @description Connector not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    createConnectorSubscription: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["CreateSubscriptionBody"];
+            };
+        };
+        responses: {
+            /** @description Subscription created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["EventSubscription"];
+                    };
+                };
+            };
+            /** @description Validation error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Connector or automation not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    deleteConnectorSubscription: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                subscriptionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description Operation succeeded */
+                        success: boolean;
+                        /** @description Optional success message */
+                        message?: string;
+                    };
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    updateConnectorSubscription: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                subscriptionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["UpdateSubscriptionBody"];
+            };
+        };
+        responses: {
+            /** @description Subscription */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["EventSubscription"];
+                    };
+                };
+            };
+            /** @description Validation error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    testConnectorSubscription: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                subscriptionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["TestDeliveryBody"];
+            };
+        };
+        responses: {
+            /** @description Test delivery published */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /**
+                         * Format: uuid
+                         * @description Journal row published by the test delivery
+                         */
+                        eventId: string;
+                    };
+                };
+            };
+            /** @description Validation error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    invokeConnectorAction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                action: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["InvokeActionBody"];
+            };
+        };
+        responses: {
+            /** @description Action result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data?: unknown;
+                    };
+                };
+            };
+            /** @description Unknown action or invalid input */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Connector is not connected */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Provider rejected the call (redacted message) */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    receiveConnectorEvent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                subscriptionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Duplicate delivery already journaled */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeliveryReceipt"];
+                };
+            };
+            /** @description Accepted (or ignored: event key/filter mismatch or paused subscription) */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeliveryReceipt"];
+                };
+            };
+            /** @description Body is not a JSON object */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Verification failed (unknown subscription, unopenable secret or bad signature) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Processing failed; the claim was released so a retry can claim it */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
     listEventSchemas: {
         parameters: {
             query?: {
@@ -19166,6 +24374,22 @@ export interface operations {
                             cursor: number;
                             /** @description true = competing consumers (pullers on this name split the stream); false = own cursor (fan-out) */
                             shared: boolean;
+                            /**
+                             * @description Access filter over the ingest access verdict: 'all' (default, every row) or only rows whose access_decision is 'allowed' / 'denied'
+                             * @enum {string}
+                             */
+                            accessFilter: "all" | "allowed" | "denied";
+                            /** @description true = opt-in journal readiness gate: claimed-but-unfilled rows are held (not delivered, cursor not moved past them) until filled or older than the settle window; false = today's behaviour */
+                            waitForReady: boolean;
+                            /** @description true = instance-scoped consumer (opt-in): pulls only its instanceIds, visible only to its owner key and to instance-unrestricted keys. false (default) = global consumer, unchanged behaviour */
+                            scoped: boolean;
+                            /** @description Scoped consumers: the instances whose journal rows it pages; null when unscoped */
+                            instanceIds: string[] | null;
+                            /**
+                             * Format: uuid
+                             * @description Scoped consumers: id of the API key that registered it; null when unscoped
+                             */
+                            ownerKeyId: string | null;
                             /** @description Highest journal_seq currently in the journal */
                             head: number;
                             /** @description head - cursor (all journal rows past the cursor, not only matches) */
@@ -19223,6 +24447,18 @@ export interface operations {
                     startFrom?: "now" | "beginning";
                     /** @description Competing consumers (#1188). false (default) = fan-out: every consumer name has its own cursor and sees every event. true = N pullers on THIS name split the stream: each pull leases a page to one puller, ack(leaseId) releases it, an unacked lease is redelivered after leaseMs (at-least-once). */
                     shared?: boolean;
+                    /**
+                     * @description Opt-in access filter. 'all' (default) = every row, unchanged. 'allowed' / 'denied' = only rows whose ingest access verdict (omni_events.access_decision) equals it. The verdict is frozen at ingest; call the access check route for the current one. Requires OMNI_JOURNAL_ACCESS_DECISION=true (else 400). Without waitForReady a row whose fill lands late (verdict still unset) can be skipped; set waitForReady to hold the page until it lands.
+                     * @default all
+                     * @enum {string}
+                     */
+                    access?: "all" | "allowed" | "denied";
+                    /** @description Opt-in journal readiness gate. false (default) = today's behaviour: a row claimed at ingress but not yet filled is delivered as it is. true = pull and shared claims stop before such a row (journalReady false) until it is filled or older than the settle window (EVENT_CONSUMER_SETTLE_MS, default 5000 ms). */
+                    waitForReady?: boolean;
+                    /** @description Opt-in instance scoping. false (default) = global consumer, exactly the existing behaviour. true = the consumer is owned by the calling API key and pulls only journal rows of its instanceIds; only the owner key or an instance-unrestricted key can inspect, pull, ack, delete or list it (others get 404). */
+                    scoped?: boolean;
+                    /** @description Scoped consumers only (ignored without scoped: true, as before). Instance-restricted key: defaults to all of its instances; naming an instance outside the key is 403; an empty result or an unknown instance is 400. Instance-unrestricted key: required and non-empty. */
+                    instanceIds?: string[];
                 };
             };
         };
@@ -19262,6 +24498,22 @@ export interface operations {
                             cursor: number;
                             /** @description true = competing consumers (pullers on this name split the stream); false = own cursor (fan-out) */
                             shared: boolean;
+                            /**
+                             * @description Access filter over the ingest access verdict: 'all' (default, every row) or only rows whose access_decision is 'allowed' / 'denied'
+                             * @enum {string}
+                             */
+                            accessFilter: "all" | "allowed" | "denied";
+                            /** @description true = opt-in journal readiness gate: claimed-but-unfilled rows are held (not delivered, cursor not moved past them) until filled or older than the settle window; false = today's behaviour */
+                            waitForReady: boolean;
+                            /** @description true = instance-scoped consumer (opt-in): pulls only its instanceIds, visible only to its owner key and to instance-unrestricted keys. false (default) = global consumer, unchanged behaviour */
+                            scoped: boolean;
+                            /** @description Scoped consumers: the instances whose journal rows it pages; null when unscoped */
+                            instanceIds: string[] | null;
+                            /**
+                             * Format: uuid
+                             * @description Scoped consumers: id of the API key that registered it; null when unscoped
+                             */
+                            ownerKeyId: string | null;
                             /** @description Highest journal_seq currently in the journal */
                             head: number;
                             /** @description head - cursor (all journal rows past the cursor, not only matches) */
@@ -19278,6 +24530,48 @@ export interface operations {
                              * @description Last cursor/registry update timestamp
                              */
                             updatedAt: string;
+                        };
+                    };
+                };
+            };
+            /** @description A scoped consumer with invalid or no resolvable instanceIds */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Scoped consumer names an instance the API key cannot access */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
                         };
                     };
                 };
@@ -19351,6 +24645,22 @@ export interface operations {
                             cursor: number;
                             /** @description true = competing consumers (pullers on this name split the stream); false = own cursor (fan-out) */
                             shared: boolean;
+                            /**
+                             * @description Access filter over the ingest access verdict: 'all' (default, every row) or only rows whose access_decision is 'allowed' / 'denied'
+                             * @enum {string}
+                             */
+                            accessFilter: "all" | "allowed" | "denied";
+                            /** @description true = opt-in journal readiness gate: claimed-but-unfilled rows are held (not delivered, cursor not moved past them) until filled or older than the settle window; false = today's behaviour */
+                            waitForReady: boolean;
+                            /** @description true = instance-scoped consumer (opt-in): pulls only its instanceIds, visible only to its owner key and to instance-unrestricted keys. false (default) = global consumer, unchanged behaviour */
+                            scoped: boolean;
+                            /** @description Scoped consumers: the instances whose journal rows it pages; null when unscoped */
+                            instanceIds: string[] | null;
+                            /**
+                             * Format: uuid
+                             * @description Scoped consumers: id of the API key that registered it; null when unscoped
+                             */
+                            ownerKeyId: string | null;
                             /** @description Highest journal_seq currently in the journal */
                             head: number;
                             /** @description head - cursor (all journal rows past the cursor, not only matches) */
@@ -19371,7 +24681,7 @@ export interface operations {
                     };
                 };
             };
-            /** @description No such consumer */
+            /** @description No such consumer (or a scoped consumer this key cannot access) */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -19416,7 +24726,7 @@ export interface operations {
                     };
                 };
             };
-            /** @description No such consumer */
+            /** @description No such consumer (or a scoped consumer this key cannot access) */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -19480,8 +24790,97 @@ export interface operations {
                     };
                 };
             };
+            /** @description No such consumer (or a scoped consumer this key cannot access) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    streamEventConsumer: {
+        parameters: {
+            query?: {
+                after?: string;
+            };
+            header?: {
+                "last-event-id"?: string;
+            };
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description SSE stream of matching journal rows */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": string;
+                };
+            };
+            /** @description Invalid start position, or the consumer is shared */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
             /** @description No such consumer */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Too many open streams on this server or for this key (EVENT_STREAM_MAX_PER_PROCESS / _PER_KEY) */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -19561,6 +24960,22 @@ export interface operations {
                             cursor: number;
                             /** @description true = competing consumers (pullers on this name split the stream); false = own cursor (fan-out) */
                             shared: boolean;
+                            /**
+                             * @description Access filter over the ingest access verdict: 'all' (default, every row) or only rows whose access_decision is 'allowed' / 'denied'
+                             * @enum {string}
+                             */
+                            accessFilter: "all" | "allowed" | "denied";
+                            /** @description true = opt-in journal readiness gate: claimed-but-unfilled rows are held (not delivered, cursor not moved past them) until filled or older than the settle window; false = today's behaviour */
+                            waitForReady: boolean;
+                            /** @description true = instance-scoped consumer (opt-in): pulls only its instanceIds, visible only to its owner key and to instance-unrestricted keys. false (default) = global consumer, unchanged behaviour */
+                            scoped: boolean;
+                            /** @description Scoped consumers: the instances whose journal rows it pages; null when unscoped */
+                            instanceIds: string[] | null;
+                            /**
+                             * Format: uuid
+                             * @description Scoped consumers: id of the API key that registered it; null when unscoped
+                             */
+                            ownerKeyId: string | null;
                             /** @description Highest journal_seq currently in the journal */
                             head: number;
                             /** @description head - cursor (all journal rows past the cursor, not only matches) */
@@ -19602,7 +25017,7 @@ export interface operations {
                     };
                 };
             };
-            /** @description No such consumer */
+            /** @description No such consumer (or a scoped consumer this key cannot access) */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -19779,6 +25194,23 @@ export interface operations {
                                     /** @description Await the agent run (default true). False = return the runId once dispatched; outcome published as system.agent.run_completed. Incompatible with responseAs */
                                     waitForResponse?: boolean;
                                 };
+                            } | {
+                                /** @enum {string} */
+                                type: "connector.call";
+                                config: {
+                                    /** @description Connector UUID (or a template resolving to one) */
+                                    connectorId: string;
+                                    /** @description Literal manifest action key, e.g. "add_comment" */
+                                    action: string;
+                                    /** @description Action input; string values may be templates */
+                                    input: {
+                                        [key: string]: unknown;
+                                    };
+                                    /** @description Call timeout in ms */
+                                    timeoutMs?: number;
+                                    /** @description Store the result as a variable */
+                                    responseAs?: string;
+                                };
                             })[];
                             /** @description Debounce config */
                             debounce: {
@@ -19936,6 +25368,23 @@ export interface operations {
                             /** @description Await the agent run (default true). False = return the runId once dispatched; outcome published as system.agent.run_completed. Incompatible with responseAs */
                             waitForResponse?: boolean;
                         };
+                    } | {
+                        /** @enum {string} */
+                        type: "connector.call";
+                        config: {
+                            /** @description Connector UUID (or a template resolving to one) */
+                            connectorId: string;
+                            /** @description Literal manifest action key, e.g. "add_comment" */
+                            action: string;
+                            /** @description Action input; string values may be templates */
+                            input: {
+                                [key: string]: unknown;
+                            };
+                            /** @description Call timeout in ms */
+                            timeoutMs?: number;
+                            /** @description Store the result as a variable */
+                            responseAs?: string;
+                        };
                     })[];
                     /** @description Debounce config */
                     debounce?: {
@@ -20089,6 +25538,23 @@ export interface operations {
                                     responseAs?: string;
                                     /** @description Await the agent run (default true). False = return the runId once dispatched; outcome published as system.agent.run_completed. Incompatible with responseAs */
                                     waitForResponse?: boolean;
+                                };
+                            } | {
+                                /** @enum {string} */
+                                type: "connector.call";
+                                config: {
+                                    /** @description Connector UUID (or a template resolving to one) */
+                                    connectorId: string;
+                                    /** @description Literal manifest action key, e.g. "add_comment" */
+                                    action: string;
+                                    /** @description Action input; string values may be templates */
+                                    input: {
+                                        [key: string]: unknown;
+                                    };
+                                    /** @description Call timeout in ms */
+                                    timeoutMs?: number;
+                                    /** @description Store the result as a variable */
+                                    responseAs?: string;
                                 };
                             })[];
                             /** @description Debounce config */
@@ -20280,6 +25746,23 @@ export interface operations {
                                     responseAs?: string;
                                     /** @description Await the agent run (default true). False = return the runId once dispatched; outcome published as system.agent.run_completed. Incompatible with responseAs */
                                     waitForResponse?: boolean;
+                                };
+                            } | {
+                                /** @enum {string} */
+                                type: "connector.call";
+                                config: {
+                                    /** @description Connector UUID (or a template resolving to one) */
+                                    connectorId: string;
+                                    /** @description Literal manifest action key, e.g. "add_comment" */
+                                    action: string;
+                                    /** @description Action input; string values may be templates */
+                                    input: {
+                                        [key: string]: unknown;
+                                    };
+                                    /** @description Call timeout in ms */
+                                    timeoutMs?: number;
+                                    /** @description Store the result as a variable */
+                                    responseAs?: string;
                                 };
                             })[];
                             /** @description Debounce config */
@@ -20509,6 +25992,23 @@ export interface operations {
                             /** @description Await the agent run (default true). False = return the runId once dispatched; outcome published as system.agent.run_completed. Incompatible with responseAs */
                             waitForResponse?: boolean;
                         };
+                    } | {
+                        /** @enum {string} */
+                        type: "connector.call";
+                        config: {
+                            /** @description Connector UUID (or a template resolving to one) */
+                            connectorId: string;
+                            /** @description Literal manifest action key, e.g. "add_comment" */
+                            action: string;
+                            /** @description Action input; string values may be templates */
+                            input: {
+                                [key: string]: unknown;
+                            };
+                            /** @description Call timeout in ms */
+                            timeoutMs?: number;
+                            /** @description Store the result as a variable */
+                            responseAs?: string;
+                        };
                     })[];
                     /** @description Debounce config */
                     debounce?: {
@@ -20662,6 +26162,23 @@ export interface operations {
                                     responseAs?: string;
                                     /** @description Await the agent run (default true). False = return the runId once dispatched; outcome published as system.agent.run_completed. Incompatible with responseAs */
                                     waitForResponse?: boolean;
+                                };
+                            } | {
+                                /** @enum {string} */
+                                type: "connector.call";
+                                config: {
+                                    /** @description Connector UUID (or a template resolving to one) */
+                                    connectorId: string;
+                                    /** @description Literal manifest action key, e.g. "add_comment" */
+                                    action: string;
+                                    /** @description Action input; string values may be templates */
+                                    input: {
+                                        [key: string]: unknown;
+                                    };
+                                    /** @description Call timeout in ms */
+                                    timeoutMs?: number;
+                                    /** @description Store the result as a variable */
+                                    responseAs?: string;
                                 };
                             })[];
                             /** @description Debounce config */
@@ -20856,6 +26373,23 @@ export interface operations {
                                     /** @description Await the agent run (default true). False = return the runId once dispatched; outcome published as system.agent.run_completed. Incompatible with responseAs */
                                     waitForResponse?: boolean;
                                 };
+                            } | {
+                                /** @enum {string} */
+                                type: "connector.call";
+                                config: {
+                                    /** @description Connector UUID (or a template resolving to one) */
+                                    connectorId: string;
+                                    /** @description Literal manifest action key, e.g. "add_comment" */
+                                    action: string;
+                                    /** @description Action input; string values may be templates */
+                                    input: {
+                                        [key: string]: unknown;
+                                    };
+                                    /** @description Call timeout in ms */
+                                    timeoutMs?: number;
+                                    /** @description Store the result as a variable */
+                                    responseAs?: string;
+                                };
                             })[];
                             /** @description Debounce config */
                             debounce: {
@@ -21046,6 +26580,23 @@ export interface operations {
                                     responseAs?: string;
                                     /** @description Await the agent run (default true). False = return the runId once dispatched; outcome published as system.agent.run_completed. Incompatible with responseAs */
                                     waitForResponse?: boolean;
+                                };
+                            } | {
+                                /** @enum {string} */
+                                type: "connector.call";
+                                config: {
+                                    /** @description Connector UUID (or a template resolving to one) */
+                                    connectorId: string;
+                                    /** @description Literal manifest action key, e.g. "add_comment" */
+                                    action: string;
+                                    /** @description Action input; string values may be templates */
+                                    input: {
+                                        [key: string]: unknown;
+                                    };
+                                    /** @description Call timeout in ms */
+                                    timeoutMs?: number;
+                                    /** @description Store the result as a variable */
+                                    responseAs?: string;
                                 };
                             })[];
                             /** @description Debounce config */
@@ -22350,6 +27901,12 @@ export interface operations {
                                 kind: "fixed";
                                 /** @description Minutes between successive follow-ups, in order. */
                                 intervalsMinutes: number[];
+                                /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
+                                jitter?: {
+                                    minutes: number;
+                                } | {
+                                    ratio: number;
+                                };
                             } | {
                                 /** @enum {string} */
                                 kind: "exponential";
@@ -22359,6 +27916,12 @@ export interface operations {
                                 factor: number;
                                 /** @description Upper bound on any single interval. */
                                 maxMinutes: number;
+                                /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
+                                jitter?: {
+                                    minutes: number;
+                                } | {
+                                    ratio: number;
+                                };
                             };
                             /** @description Hard cap on follow-ups fired per sequence. */
                             maxFollowUps: number;
@@ -22414,6 +27977,12 @@ export interface operations {
                         kind: "fixed";
                         /** @description Minutes between successive follow-ups, in order. */
                         intervalsMinutes: number[];
+                        /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
+                        jitter?: {
+                            minutes: number;
+                        } | {
+                            ratio: number;
+                        };
                     } | {
                         /** @enum {string} */
                         kind: "exponential";
@@ -22423,6 +27992,12 @@ export interface operations {
                         factor: number;
                         /** @description Upper bound on any single interval. */
                         maxMinutes: number;
+                        /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
+                        jitter?: {
+                            minutes: number;
+                        } | {
+                            ratio: number;
+                        };
                     };
                     /** @description Hard cap on follow-ups fired per sequence. */
                     maxFollowUps: number;
@@ -22452,6 +28027,12 @@ export interface operations {
                                 kind: "fixed";
                                 /** @description Minutes between successive follow-ups, in order. */
                                 intervalsMinutes: number[];
+                                /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
+                                jitter?: {
+                                    minutes: number;
+                                } | {
+                                    ratio: number;
+                                };
                             } | {
                                 /** @enum {string} */
                                 kind: "exponential";
@@ -22461,6 +28042,12 @@ export interface operations {
                                 factor: number;
                                 /** @description Upper bound on any single interval. */
                                 maxMinutes: number;
+                                /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
+                                jitter?: {
+                                    minutes: number;
+                                } | {
+                                    ratio: number;
+                                };
                             };
                             /** @description Hard cap on follow-ups fired per sequence. */
                             maxFollowUps: number;
@@ -22593,6 +28180,12 @@ export interface operations {
                                 kind: "fixed";
                                 /** @description Minutes between successive follow-ups, in order. */
                                 intervalsMinutes: number[];
+                                /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
+                                jitter?: {
+                                    minutes: number;
+                                } | {
+                                    ratio: number;
+                                };
                             } | {
                                 /** @enum {string} */
                                 kind: "exponential";
@@ -22602,6 +28195,12 @@ export interface operations {
                                 factor: number;
                                 /** @description Upper bound on any single interval. */
                                 maxMinutes: number;
+                                /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
+                                jitter?: {
+                                    minutes: number;
+                                } | {
+                                    ratio: number;
+                                };
                             };
                             /** @description Hard cap on follow-ups fired per sequence. */
                             maxFollowUps: number;
@@ -22657,6 +28256,12 @@ export interface operations {
                         kind: "fixed";
                         /** @description Minutes between successive follow-ups, in order. */
                         intervalsMinutes: number[];
+                        /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
+                        jitter?: {
+                            minutes: number;
+                        } | {
+                            ratio: number;
+                        };
                     } | {
                         /** @enum {string} */
                         kind: "exponential";
@@ -22666,6 +28271,12 @@ export interface operations {
                         factor: number;
                         /** @description Upper bound on any single interval. */
                         maxMinutes: number;
+                        /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
+                        jitter?: {
+                            minutes: number;
+                        } | {
+                            ratio: number;
+                        };
                     };
                     /** @description Hard cap on follow-ups fired per sequence. */
                     maxFollowUps: number;
@@ -22695,6 +28306,12 @@ export interface operations {
                                 kind: "fixed";
                                 /** @description Minutes between successive follow-ups, in order. */
                                 intervalsMinutes: number[];
+                                /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
+                                jitter?: {
+                                    minutes: number;
+                                } | {
+                                    ratio: number;
+                                };
                             } | {
                                 /** @enum {string} */
                                 kind: "exponential";
@@ -22704,6 +28321,12 @@ export interface operations {
                                 factor: number;
                                 /** @description Upper bound on any single interval. */
                                 maxMinutes: number;
+                                /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
+                                jitter?: {
+                                    minutes: number;
+                                } | {
+                                    ratio: number;
+                                };
                             };
                             /** @description Hard cap on follow-ups fired per sequence. */
                             maxFollowUps: number;
@@ -22836,6 +28459,12 @@ export interface operations {
                                 kind: "fixed";
                                 /** @description Minutes between successive follow-ups, in order. */
                                 intervalsMinutes: number[];
+                                /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
+                                jitter?: {
+                                    minutes: number;
+                                } | {
+                                    ratio: number;
+                                };
                             } | {
                                 /** @enum {string} */
                                 kind: "exponential";
@@ -22845,6 +28474,12 @@ export interface operations {
                                 factor: number;
                                 /** @description Upper bound on any single interval. */
                                 maxMinutes: number;
+                                /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
+                                jitter?: {
+                                    minutes: number;
+                                } | {
+                                    ratio: number;
+                                };
                             };
                             /** @description Hard cap on follow-ups fired per sequence. */
                             maxFollowUps: number;
@@ -22900,6 +28535,12 @@ export interface operations {
                         kind: "fixed";
                         /** @description Minutes between successive follow-ups, in order. */
                         intervalsMinutes: number[];
+                        /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
+                        jitter?: {
+                            minutes: number;
+                        } | {
+                            ratio: number;
+                        };
                     } | {
                         /** @enum {string} */
                         kind: "exponential";
@@ -22909,6 +28550,12 @@ export interface operations {
                         factor: number;
                         /** @description Upper bound on any single interval. */
                         maxMinutes: number;
+                        /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
+                        jitter?: {
+                            minutes: number;
+                        } | {
+                            ratio: number;
+                        };
                     };
                     /** @description Hard cap on follow-ups fired per sequence. */
                     maxFollowUps: number;
@@ -22938,6 +28585,12 @@ export interface operations {
                                 kind: "fixed";
                                 /** @description Minutes between successive follow-ups, in order. */
                                 intervalsMinutes: number[];
+                                /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
+                                jitter?: {
+                                    minutes: number;
+                                } | {
+                                    ratio: number;
+                                };
                             } | {
                                 /** @enum {string} */
                                 kind: "exponential";
@@ -22947,6 +28600,12 @@ export interface operations {
                                 factor: number;
                                 /** @description Upper bound on any single interval. */
                                 maxMinutes: number;
+                                /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
+                                jitter?: {
+                                    minutes: number;
+                                } | {
+                                    ratio: number;
+                                };
                             };
                             /** @description Hard cap on follow-ups fired per sequence. */
                             maxFollowUps: number;

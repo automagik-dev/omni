@@ -669,6 +669,15 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
       durable: 'event-persistence-connector',
       startFrom: 'new',
     });
+    // Connector events published outside the ingress claim path (test deliveries,
+    // `emit_event`, operator publishes) get the same internal-journal shape. A
+    // real ingress delivery already claimed a row with this event id, so this
+    // insert no-ops on the id — one journal row, one identity (D9).
+    await eventBus.subscribePattern('connector.>', (event) => journalInternalEvent(db, event), {
+      ...CONSUMER_OPTIONS,
+      durable: 'event-persistence-connector-events',
+      startFrom: 'new',
+    });
     // #1163: dead-letter announcements were published but never journaled, so
     // `omni events list --type system.dead_letter` stayed empty while the DLQ grew.
     await eventBus.subscribePattern('system.dead_letter', (event) => journalInternalEvent(db, event), {

@@ -90,9 +90,10 @@ describe('derivation precedence', () => {
 });
 
 describe('trust boundary', () => {
-  test('instances is the only table that may accept a caller-provided tenant id', () => {
-    expect(OWNERSHIP_ROOT_TABLES).toEqual(['instances']);
+  test('instances and connectors are the only tables that may accept a caller-provided tenant id', () => {
+    expect(OWNERSHIP_ROOT_TABLES).toEqual(['instances', 'connectors']);
     expect(acceptsTrustedOwnership('instances')).toBe(true);
+    expect(acceptsTrustedOwnership('connectors')).toBe(true);
     for (const table of ['chats', 'messages', 'persons', 'agent_routes', 'processed_events']) {
       expect(acceptsTrustedOwnership(table)).toBe(false);
     }

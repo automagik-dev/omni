@@ -26,7 +26,7 @@ export type ConditionOperator = (typeof CONDITION_OPERATORS)[number];
 /**
  * Action types for automations.
  */
-export const ACTION_TYPES = ['webhook', 'send_message', 'emit_event', 'log', 'call_agent'] as const;
+export const ACTION_TYPES = ['webhook', 'send_message', 'emit_event', 'log', 'call_agent', 'connector.call'] as const;
 export type ActionType = (typeof ACTION_TYPES)[number];
 
 /**
@@ -154,6 +154,27 @@ export interface CallAgentActionConfig {
 }
 
 /**
+ * Connector call action configuration.
+ *
+ * One action type for every provider: the manifest action key is data, never an
+ * enum value. `connectorId` and the values inside `input` may be templates;
+ * `action` must be a literal (no `{{`), because the save-time validator resolves
+ * it against the manifest.
+ */
+export interface ConnectorCallActionConfig {
+  /** Connector UUID, or a template resolving to one. */
+  connectorId: string;
+  /** Literal manifest action key (e.g. `add_comment`). No templates. */
+  action: string;
+  /** Action input; string values may be templates and are rendered before validation. */
+  input: Record<string, unknown>;
+  /** Bounded call timeout; defaults to 30s. */
+  timeoutMs?: number;
+  /** Store the action result for later actions. */
+  responseAs?: string;
+}
+
+/**
  * Union type for action configurations.
  */
 export type AutomationAction =
@@ -161,7 +182,8 @@ export type AutomationAction =
   | { type: 'send_message'; config: SendMessageActionConfig }
   | { type: 'emit_event'; config: EmitEventActionConfig }
   | { type: 'log'; config: LogActionConfig }
-  | { type: 'call_agent'; config: CallAgentActionConfig };
+  | { type: 'call_agent'; config: CallAgentActionConfig }
+  | { type: 'connector.call'; config: ConnectorCallActionConfig };
 
 /**
  * Debounce configuration for message grouping.

@@ -151,9 +151,23 @@ export type CustomEventType = `custom.${string}`;
 export type SystemEventType = `system.${string}`;
 
 /**
- * All event types: core + custom + system
+ * Connector events — one literal for every provider.
+ *
+ * Deliberately NOT added to `CORE_EVENT_TYPES` (there is no typed channel
+ * payload to attach) and NOT a `connector.${string}` template (which would
+ * invite per-vendor values): one event type, one fixed envelope, and the
+ * manifest parses the provider data. `connector.event` is also deliberately not
+ * registered in the strict per-type schema registry (D10).
  */
-export type EventType = CoreEventType | CustomEventType | SystemEventType;
+export type ConnectorEventType = 'connector.event';
+
+/** The single trigger event type every connector subscription publishes. */
+export const CONNECTOR_EVENT_TYPE: ConnectorEventType = 'connector.event';
+
+/**
+ * All event types: core + custom + system + connector
+ */
+export type EventType = CoreEventType | CustomEventType | SystemEventType | ConnectorEventType;
 
 /**
  * Check if an event type is a core event
@@ -174,6 +188,11 @@ export function isCustomEvent(type: string): type is CustomEventType {
  */
 export function isSystemEvent(type: string): type is SystemEventType {
   return type.startsWith('system.');
+}
+
+/** Check if an event type is the single connector event. */
+export function isConnectorEvent(type: string): type is ConnectorEventType {
+  return type === CONNECTOR_EVENT_TYPE;
 }
 
 /**
@@ -217,6 +236,8 @@ export interface EventMetadata {
   platformIdentityId?: string;
   traceId?: string;
   source?: string;
+  /** Set on a connector "send test delivery" publish; never set by a real provider delivery. */
+  test?: boolean;
   /**
    * How the message entered the system.
    * - 'realtime': a live message received from the platform

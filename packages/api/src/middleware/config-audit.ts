@@ -20,6 +20,8 @@ import {
   apiKeys,
   automations,
   configAuditLogs,
+  connectorEventSubscriptions,
+  connectors,
   globalSettings,
   instances,
 } from '@omni/db';
@@ -48,6 +50,18 @@ interface Resource {
 
 // Order matters: routes live under /instances/:id/routes.
 const RESOURCES: Resource[] = [
+  {
+    type: 'connector_event_subscription',
+    pattern: /^\/connectors\/([^/]+)\/subscriptions(?:\/([^/]+))?(?:\/(.+))?$/,
+    table: connectorEventSubscriptions,
+    idColumn: connectorEventSubscriptions.id,
+  },
+  {
+    type: 'connector',
+    pattern: /^\/connectors(?:\/([^/]+))?(?:\/(.+))?$/,
+    table: connectors,
+    idColumn: connectors.id,
+  },
   {
     type: 'route',
     pattern: /^\/instances\/[^/]+\/routes(?:\/([^/]+))?(?:\/(.+))?$/,

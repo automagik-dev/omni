@@ -576,6 +576,23 @@ export function createApp(
     }
   });
 
+  // Public connector event ingress — auth-exempt, verified EXCLUSIVELY by the
+  // subscription's sealed provider secret over the raw body BEFORE anything is
+  // parsed or published (connectors-first-slice-clickup, D8). Unknown
+  // subscription, unopenable secret and bad signature collapse into one 401 so
+  // the endpoint is not an existence oracle. Paused subscriptions verify first,
+  // then ack 202 ignored. Must be mounted before protectedApp so the
+  // authenticated `/connectors/:id` match cannot shadow it. Declared
+  // `public-by-contract` in tenancy/route-ownership.ts.
+  app.post('/api/v2/connectors/events/:subscriptionId', webhookIngressRateLimitMiddleware, async (c) => {
+    const services = c.get('services');
+    const rawBody = await c.req.text();
+    const headers: Record<string, string> = {};
+    for (const [key, value] of Object.entries(c.req.header())) headers[key.toLowerCase()] = value ?? '';
+    const outcome = await services.connectors.receive(c.req.param('subscriptionId'), rawBody, headers);
+    return c.json(outcome.body, outcome.status);
+  });
+
   // Slack OAuth redirect target (wish: slack-personal-oauth). Auth-exempt
   // because Slack's redirect carries no Omni credential; rate-limited by IP
   // like the generic ingress above. The handler verifies the HMAC-signed

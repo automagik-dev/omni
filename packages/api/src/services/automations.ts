@@ -130,6 +130,11 @@ export class AutomationService {
       trustedTenantId?: string | null,
       emitterAgentId?: string | null,
     ) => Promise<{ valid: boolean; errors?: string[]; reason?: string }>;
+    /** One typed action for every provider (connector.call). */
+    callConnector?: (
+      request: { connectorId: string; action: string; input: Record<string, unknown>; timeoutMs?: number },
+      trustedTenantId?: string | null,
+    ) => Promise<unknown>;
   }): Promise<void> {
     if (!this.eventBus) {
       return;

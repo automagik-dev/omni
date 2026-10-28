@@ -333,6 +333,10 @@ describe('db-access guard', () => {
       // back-link shape. Consumer-only callers.
       'packages/api/src/services/agent-usage.ts',
       'packages/api/src/services/whatsapp-self.ts',
+      // Connectors: every query/claim in the service goes through `scopedHandle`
+      // (the request transaction when scoped, ambient for a legacy credential or
+      // the auth-exempt public ingress). The delivery claim is the journal row.
+      'packages/api/src/services/connectors.ts',
     ]);
     for (const entry of boundary) {
       expect(entry.file.startsWith('packages/api/src/tenancy/') || converted.has(entry.file)).toBe(true);

@@ -66,6 +66,7 @@ export function createOmniEvent(
       platformIdentityId: metadata?.platformIdentityId,
       traceId: metadata?.traceId ?? eventId,
       source: metadata?.source ?? serviceName,
+      ...(metadata?.test ? { test: true } : {}),
       ingestMode: metadata?.ingestMode,
       timings: metadata?.timings,
       ...(tenantId ? { envelopeVersion: CURRENT_ENVELOPE_VERSION, tenantId } : {}),

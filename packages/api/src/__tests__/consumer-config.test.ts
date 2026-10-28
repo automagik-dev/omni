@@ -138,6 +138,7 @@ describe('Consumer startFrom Configuration', () => {
       'event-persistence-connector',
       'event-persistence-dead-letter',
       'event-persistence-agent-run-completed',
+      'event-persistence-connector-events',
     ];
     for (const context of forwardOnly) {
       const entry = values.find((v) => v.context === context);
