@@ -9,6 +9,7 @@ import { syncBuiltinESMExports } from 'node:module'
 import { candidates, discover, install, managerOf, probe, readConfig, sameOmni } from '../src/host/omni-discover.js'
 import { install as installLink, LINK_FILE } from '../src/host/omni-link.js'
 import { parseConnectLink } from '../src/client/connect-link.js'
+import { OMNI_MINIMUM } from '../src/host/version.js'
 import { install as installHooks } from '@automagik/bots-dsh/src/host/extend.js'
 
 const realFetch = globalThis.fetch
@@ -107,6 +108,23 @@ test('a config that does not parse is passed over, and an Omni that answers is s
     t.after(stop)
     const omnis = await discover({ env: {}, home, fetchImpl: loopback({ 8882: 'pairable' }) })
     assert.deepEqual(omnis.map(omni => [omni.source, omni.hasKey]), [['running', false]], raw)
+  }
+})
+
+// The floor is the Omni release with the chat keys this plugin's threads mint (engines.omni):
+// the one just before it shows as outdated in Connect, the floor itself does not.
+test('an Omni older than the plugin\'s minimum shows as outdated, and one at the minimum does not', async (t) => {
+  assert.equal(OMNI_MINIMUM, '2.261027.3')
+  const { home, stop } = homeWith({ cli: { apiUrl: 'http://localhost:8882' } })
+  t.after(stop)
+  for (const [version, outdated] of [['2.261027.2', true], [OMNI_MINIMUM, false]]) {
+    const answers = loopback({ 8882: 'pairable' })
+    const fetchImpl = async (address, init) => {
+      if (new URL(String(address)).pathname !== '/api/v2/health') return answers(address, init)
+      return new Response(JSON.stringify({ status: 'healthy', version }), { status: 200 })
+    }
+    const [omni] = await discover({ env: {}, home, fetchImpl })
+    assert.deepEqual([omni.version, omni.outdated], [version, outdated])
   }
 })
 
@@ -307,6 +325,22 @@ test('Use it checks the key with that Omni and links it, and the key stays on th
   const shown = await rt.omniLinkEndpoint('omni-link')
   assert.equal(shown.linked, true)
   assert.equal(JSON.stringify(shown).includes(LOCAL_KEY), false)
+})
+
+// The sidebar's + reads this: a linked Omni older than the minimum is outdated, one at it is not,
+// and one whose version is unknown is not called outdated.
+test('the link info says when the linked Omni is older than the plugin\'s minimum', async (t) => {
+  const { rt } = host(t, json => json(200, { data: { valid: true, keyName: 'ui', scopes: ['instances:*', 'chats:*'], credential: { expiresAt: null } } }))
+  const { omnis } = await rt.omniDiscoverEndpoint('omni-discover')
+  await rt.omniDiscoverEndpoint('omni-discover-use', { id: omnis.find(omni => omni.local).id })
+  const linked = globalThis.fetch
+  for (const [version, outdated] of [['2.261027.2', true], [OMNI_MINIMUM, false], [null, false]]) {
+    globalThis.fetch = async (address, init) => (new URL(String(address)).pathname === '/api/v2/health'
+      ? new Response(JSON.stringify(version === null ? { status: 'healthy' } : { status: 'healthy', version }), { status: 200 })
+      : linked(address, init))
+    const info = await rt.omniDiscoverEndpoint('omni-link-info')
+    assert.deepEqual([info.linked, info.version, info.outdated], [true, version, outdated])
+  }
 })
 
 test('a key the Omni refuses, or no key at all, signs this device in there instead', async (t) => {

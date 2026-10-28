@@ -88,11 +88,18 @@ export function install(rt) {
   }
 
   // `typed` is the address the user typed: the market is offered there, not wherever the
-  // Omni's reply points.
+  // Omni's reply points. Every new link passes here (sign-in, a connect link, the sandbox,
+  // "Use it", a pasted key, a sandbox update's re-link): before it is written, the old link's
+  // thread keys are cut with the old key, and the same Omni gives each thread a fresh one of
+  // the new key (thread-keys.js).
   async function saveLink(link, typed = link.url) {
-    const offered = await addOmniMarket(typed)
-    await writeLink({ ...link, marketOffered: offered, marketUrl: offered ? typed : null })
+    await handOver(link, async () => {
+      const offered = await addOmniMarket(typed)
+      await writeLink({ ...link, marketOffered: offered, marketUrl: offered ? typed : null })
+    })
   }
+  // omni.json changes only inside the hand-over, which holds the thread keys' lock.
+  const handOver = (next, commit) => (rt.handOverThreadKeys ? rt.handOverThreadKeys(next, commit) : commit().then(() => ({ unreadable: null })))
 
   async function marketRow() {
     return rt.ctx.settings?.describe?.().find(entry => entry.ns === MARKET_ROW)
@@ -332,11 +339,12 @@ export function install(rt) {
 
   async function disconnect() {
     const link = rt.omniLink()
-    await rm(path, { force: true })
+    // The thread keys are cut with this key while it is still here.
+    const { unreadable } = await handOver(null, () => rm(path, { force: true }))
     // The market where it was added, which can differ from the Omni's own API address.
     if (link?.marketUrl) await removeOmniMarket(link.marketUrl)
     rt.syncOmniEvents?.()
-    return { status: 'disconnected' }
+    return unreadable ? { status: 'disconnected', notice: 'thread-keys-unreadable', message: unreadable } : { status: 'disconnected' }
   }
 
   // For omni-discover.js: an Omni found on this computer links the same way a sign-in does.

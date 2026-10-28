@@ -6,9 +6,11 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { operatesOmni } from './grants.js'
+import { operatesHere, operatesOmni } from './grants.js'
 import { output } from './output.js'
 import { SOURCE_ROUTES } from './omni-routes.js'
+import { HANDOFF_TOOL } from './omni-rules.js'
+import { THREAD_TOOLS } from './threads.js'
 
 const SPEC_TTL_MS = 10 * 60_000
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
@@ -20,11 +22,12 @@ const CARD_BODY_MAX = 12_000
 
 const invalid = message => Object.assign(new Error(message), { code: 'bot/invalid' })
 
-// Omni operates the platform through its tools; files and the shell belong to Tasks. With
-// an omni to operate, the Sessions of a Bot that operates it lose DSH's computer tools, and start_task hands
-// that work on.
+// Omni operates the platform through its tools; files and the shell belong to the sessions
+// it hands work to. With an omni to operate, the Sessions of a Bot that operates it lose DSH's
+// computer tools and the team's start_task, and its hand-off (HANDOFF_TOOL, handoff.js) hands
+// that work to a session under its row.
 export const COMPUTER_TOOLS = ['bash', 'read', 'write', 'edit', 'glob', 'grep', 'subagent', 'subagent_fork', 'workflow', 'job_kill', 'job_list', 'job_output', 'todo_write', 'working_directory']
-const COMPUTER_REFUSAL = 'Omni works through its own tools, not files or the shell. Hand this to a task with start_task.'
+const COMPUTER_REFUSAL = `Omni works through its own tools, not files or the shell. Hand this to a session under you with ${HANDOFF_TOOL}.`
 
 // Chat keys (POST /keys/children…) answer with key text, which must never reach a model: the
 // host mints and revokes them itself, so omni_call refuses them before any request and
@@ -140,6 +143,26 @@ export function withSourceRoutes(ops, routes = SOURCE_ROUTES) {
   return [...ops, ...extra]
 }
 
+/**
+ * Each of `names` that DSH serves this agent, denied on the agent's own scope one name at a
+ * time: restrict() refuses a name that is not a global tool here (a scope-local `subagent`, a
+ * tool this dsh does not ship) and refuses the whole list for it, and restrictions intersect,
+ * so a refused name is skipped and the others still go. Returns how many were denied; throws
+ * when DSH's list for the agent cannot be read.
+ */
+export function denyEach(ctx, agent, names) {
+  const served = new Set(ctx.tools.schemas(agent).map(schema => schema.name))
+  let denied = 0
+  for (const name of names) {
+    if (!served.has(name)) continue
+    try {
+      agent.ctx.tools.restrict({ deny: [name] })
+      denied += 1
+    } catch {}
+  }
+  return denied
+}
+
 // Large answers keep their shape: lists lose their tail (and say so) until the text fits.
 export function fitted(value, max = RESULT_MAX) {
   let text = JSON.stringify(value)
@@ -163,38 +186,37 @@ export function install(rt) {
   const { ctx, state } = rt
   let spec = null
 
-  const operating = (sessionId) => {
-    if (!(rt.omniNamed?.() ?? Boolean(rt.config?.omni?.url))) return false
-    const self = rt.selfOf(sessionId)
-    return operatesOmni(rt, self)
-  }
-  const trimmed = new WeakSet()
-  const trimComputer = (agent) => {
-    if (agent === undefined || trimmed.has(agent) || !operating(agent.session?.id) || typeof agent.ctx?.tools?.restrict !== 'function') return
-    // restrict() refuses a name that is not a global tool here (a scope-local `subagent`, a
-    // tool this dsh does not ship), and refuses the whole list for it. Restrictions
-    // intersect, so each tool is denied on its own and a refused one is skipped.
-    let served
+  const operating = sessionId => operatesHere(rt, sessionId)
+  // `trimmed`: the agents this list was trimmed from.
+  const trimFrom = (agent, names, trimmed, what) => {
+    if (trimmed.has(agent) || typeof agent.ctx?.tools?.restrict !== 'function') return
+    let denied
     try {
-      served = new Set(ctx.tools.schemas(agent).map(schema => schema.name))
+      denied = denyEach(ctx, agent, names)
     } catch (error) {
-      rt.warn('ds-bot: the computer tools stay in the Main Bot session %s: %s', agent.session?.id, error)
+      rt.warn('ds-bot: the %s stay in the Main Bot session %s: %s', what, agent.session?.id, error)
       return
-    }
-    let denied = 0
-    for (const name of COMPUTER_TOOLS.filter(name => served.has(name))) {
-      try {
-        agent.ctx.tools.restrict({ deny: [name] })
-        denied += 1
-      } catch {}
     }
     // Nothing denied can mean the schemas are not up yet: the next refusal tries again.
     if (denied > 0) trimmed.add(agent)
+  }
+  const trimmedComputer = new WeakSet()
+  const trimComputer = (agent) => {
+    if (agent === undefined || !operating(agent.session?.id)) return
+    trimFrom(agent, [...COMPUTER_TOOLS, 'start_task'], trimmedComputer, 'computer tools')
+  }
+  // A chat thread's tools are for its own Session only (thread-tools.js): the Omni Bot's
+  // Sessions never list them, whether or not an Omni is named yet.
+  const trimmedThread = new WeakSet()
+  const trimThreadTools = (agent) => {
+    if (agent === undefined || !operatesOmni(rt, rt.selfOf(agent.session?.id))) return
+    trimFrom(agent, THREAD_TOOLS, trimmedThread, 'chat thread tools')
   }
   ctx.on('agent/created', async ({ agent }) => {
     try {
       await rt.load()
       trimComputer(agent)
+      trimThreadTools(agent)
     } catch (error) {
       rt.warn('ds-bot: trimming the Main Bot tools failed: %s', error)
     }

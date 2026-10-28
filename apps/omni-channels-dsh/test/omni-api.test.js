@@ -148,3 +148,47 @@ test('the committed route index has the chat-key routes, and the tools still lea
   const keyRoutes = SOURCE_ROUTES.filter(route => isKeyRoute(route.path)).map(route => `${route.method} ${route.path}`).sort()
   assert.deepEqual(keyRoutes, ['POST /keys/children', 'POST /keys/children/self/revoke', 'POST /keys/children/{id}/revoke'])
 })
+
+// The chat threads' tools (wish omni-chat-threads, criterion :197) belong to a thread's own
+// Session: the Omni Bot's Sessions never list them, an Omni named or not, and each is denied
+// on its own, so a name DSH's restrict() refuses is skipped and the rest still go.
+test('the Omni Bot\'s Session has the thread tools trimmed one name at a time, with the computer tools and the team\'s start_task when an Omni is named', async (t) => {
+  const { THREAD_TOOLS } = await import('../src/host/threads.js')
+  const { COMPUTER_TOOLS } = await import('../src/host/omni-api.js')
+  for (const named of [false, true]) {
+    const home = mkdtempSync(join(tmpdir(), 'ds-bot-trim-'))
+    writeFileSync(join(home, 'state.json'), JSON.stringify({
+      version: 1, mainBotIds: ['m1'], revision: 1,
+      bots: { m1: { id: 'm1', name: 'Omni', role: 'Orchestrator', instructions: '', createdAt: 1, sessionId: 'omni-chat' }, w1: { id: 'w1', name: 'Dev', role: '', instructions: '', createdAt: 2, sessionId: 'dev-chat' } },
+      rooms: {}, agents: {}, exchanges: [], exchangeTurns: {},
+    }))
+    const ctx = fakeContext()
+    applyBoth(ctx, { home }, named ? { omni: { url: OMNI } } : {})
+    t.after(async () => {
+      await ctx.dispose()
+      rmSync(home, { recursive: true, force: true, maxRetries: 5 })
+    })
+    // Every tool is served here; DSH's restrict() refuses thread_picture, as it does a name it
+    // does not know.
+    ctx.tools.schemas = () => [...THREAD_TOOLS, ...COMPUTER_TOOLS, 'start_task', 'web_search'].map(name => ({ name }))
+    const agentFor = (sessionId) => {
+      const denied = []
+      const agent = { id: sessionId, session: { id: sessionId }, denied, ctx: { effect: () => {}, tools: { restrict: ({ deny }) => {
+        if (deny?.includes('thread_picture')) throw new Error('tools.restrict() names unknown global tool "thread_picture"')
+        denied.push(deny)
+        return () => {}
+      } } } }
+      return agent
+    }
+    const omniBot = agentFor('omni-chat')
+    const worker = agentFor('dev-chat')
+    for (const agent of [omniBot, worker]) for (const listener of ctx.listeners.get('agent/created') ?? []) await listener({ agent })
+    const ours = list => list.filter(([name]) => THREAD_TOOLS.includes(name) || COMPUTER_TOOLS.includes(name) || name === 'start_task')
+    assert.deepEqual(ours(omniBot.denied), [...(named ? [...COMPUTER_TOOLS, 'start_task'] : []), ...THREAD_TOOLS.filter(name => name !== 'thread_picture')].map(name => [name]), `named: ${named}`)
+    // Another Bot's Session lists them, and each refuses there.
+    assert.deepEqual(ours(worker.denied), [])
+    // A second agent/created of the same agent denies nothing again.
+    for (const listener of ctx.listeners.get('agent/created') ?? []) await listener({ agent: omniBot })
+    assert.equal(ours(omniBot.denied).length, (named ? COMPUTER_TOOLS.length + 1 : 0) + THREAD_TOOLS.length - 1)
+  }
+})

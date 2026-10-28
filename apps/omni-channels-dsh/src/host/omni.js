@@ -129,6 +129,25 @@ export function messageOf(message) {
   }
 }
 
+/**
+ * A response's body, read until it passes `max` bytes (then null, the rest unread): a file
+ * without a Content-Length is refused as early as one with it.
+ */
+export async function readBounded(response, max = MEDIA_FILE_BYTES) {
+  if (!response.body) return Buffer.alloc(0)
+  const chunks = []
+  let size = 0
+  for await (const chunk of response.body) {
+    size += chunk.length
+    if (size > max) {
+      await response.body.cancel().catch(() => {})
+      return null
+    }
+    chunks.push(chunk)
+  }
+  return Buffer.concat(chunks)
+}
+
 export function install(rt) {
   const { ctx } = rt
   const profileUrl = () => {
@@ -254,22 +273,6 @@ export function install(rt) {
     }
   }
   const no = reason => ({ ok: false, reason })
-  // The body, read until it passes MEDIA_FILE_BYTES (then null, the rest unread): a file
-  // without a Content-Length is refused as early as one with it.
-  async function bounded(response) {
-    if (!response.body) return Buffer.alloc(0)
-    const chunks = []
-    let size = 0
-    for await (const chunk of response.body) {
-      size += chunk.length
-      if (size > MEDIA_FILE_BYTES) {
-        await response.body.cancel().catch(() => {})
-        return null
-      }
-      chunks.push(chunk)
-    }
-    return Buffer.concat(chunks)
-  }
   const ownerOf = (url, apiKey) => createHash('sha256').update(`${url}\n${apiKey}`).digest('hex')
   async function download(id, owner) {
     // A download that waited its turn under a link since changed asks no Omni anything.
@@ -289,7 +292,7 @@ export function install(rt) {
     const file = await rt.omniMediaFile(id, { timeout: MEDIA_TIMEOUT_MS, link })
     if (!file.ok) return no(file.reason)
     if (Number(file.response.headers.get('content-length')) > MEDIA_FILE_BYTES) return no('The file is too large to show here')
-    const bytes = await bounded(file.response)
+    const bytes = await readBounded(file.response)
     if (bytes === null) return no('The file is too large to show here')
     const mime = message.data.data.mediaMimeType || Mime.safeParse(file.stored.mediaMimeType).data || file.response.headers.get('content-type')?.split(';')[0] || 'application/octet-stream'
     const kept = { mime, data: bytes.toString('base64'), name: message.data.data.mediaMetadata?.fileName || null }

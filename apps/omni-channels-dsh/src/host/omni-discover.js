@@ -320,7 +320,9 @@ export function install(rt) {
     const configured = link !== null || (await Promise.resolve(rt.omniConfigured?.()).catch(() => false)) === true
     if (link === null) return { linked: false, configured, origin: null, version: null, pairedAt: null }
     const answer = await probe(link.url, fetch, CHECK_TIMEOUT_MS / 5).catch(() => null)
-    return { linked: true, configured, origin: new URL(link.url).host, version: answer?.version ?? null, reachable: answer?.reachable ?? false, pairedAt: link.pairedAt ?? null }
+    const version = answer?.version ?? null
+    // Older than this plugin's minimum (`engines.omni`): the sidebar offers no + on it.
+    return { linked: true, configured, origin: new URL(link.url).host, version, outdated: newer(OMNI_MINIMUM, version), reachable: answer?.reachable ?? false, pairedAt: link.pairedAt ?? null }
   }
 
   const endpoints = {
