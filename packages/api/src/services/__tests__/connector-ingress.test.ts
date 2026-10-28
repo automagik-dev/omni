@@ -211,6 +211,26 @@ describe('connector inbound envelope', () => {
     expect(fakes.updates.some((update) => 'totalDeliveries' in update)).toBe(true);
   });
 
+  test('the verification secret is redacted from the published event surface', async () => {
+    // A provider payload can echo back the shared secret (task ids, comments,
+    // custom fields are operator-controlled). The receive path scrubs it before
+    // the event is built, so it can never land in the journal payload, the
+    // published event, or the automation trigger input.
+    const body = JSON.stringify({
+      event: 'taskStatusUpdated',
+      task_id: SECRET,
+      history_items: [{ id: 'history-secret', date: 1_780_000_000_000, field: 'status', after: 'done' }],
+    });
+    const fakes = makeFakes({ resolved: resolvedRow() });
+    const result = await service(fakes).receive(SUBSCRIPTION_ID, body, { 'x-signature': signature(body) });
+
+    expect(result.status).toBe(202);
+    expect(fakes.published).toHaveLength(1);
+    expect(fakes.published[0]?.payload).toMatchObject({ task_id: '[redacted]' });
+    expect(JSON.stringify(fakes.published[0])).not.toContain(SECRET);
+    expect(JSON.stringify(result)).not.toContain(SECRET);
+  });
+
   test('a provider redelivery is a duplicate 200 with no second publish', async () => {
     const fakes = makeFakes({ resolved: resolvedRow(), claimRows: [], originalId: 'original-event' });
     const result = await service(fakes).receive(SUBSCRIPTION_ID, BODY, { 'x-signature': signature() });
