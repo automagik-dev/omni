@@ -7,13 +7,20 @@
  */
 
 import { describe, expect, test } from 'bun:test';
+import { mock } from 'bun:test';
 import {
   ACTION_TYPES,
   type ConnectorCallRequest,
+  type EventBus,
+  type OmniEvent,
+  type SubscribeOptions,
+  type Subscription,
   connectorTargetMatches,
+  createAutomationEngine,
   createTemplateContext,
   executeAction,
 } from '@omni/core';
+import type { Automation } from '@omni/core';
 
 const AUTOMATION_A = '55555555-5555-5555-5555-555555555555';
 const AUTOMATION_B = '66666666-6666-6666-6666-666666666666';
@@ -134,5 +141,73 @@ describe('connector trigger gate', () => {
 
   test('there is exactly one connector action type and it names no vendor', () => {
     expect(ACTION_TYPES.filter((type) => type.includes('connector'))).toEqual(['connector.call']);
+  });
+});
+
+function connectorAutomation(id: string): Automation {
+  return {
+    id,
+    name: id,
+    enabled: true,
+    priority: 0,
+    triggerEventType: 'connector.event',
+    triggerConditions: [],
+    conditionLogic: 'and',
+    actions: [
+      {
+        type: 'connector.call',
+        config: { connectorId: 'connector-1', action: 'add_comment', input: { taskId: '{{payload.task_id}}' } },
+      },
+    ],
+    debounce: { mode: 'none' },
+  } as unknown as Automation;
+}
+
+function connectorEvent(targetAutomationId: string): OmniEvent {
+  return {
+    id: 'evt-connector-1',
+    type: 'connector.event',
+    payload: { targetAutomationId, task_id: 'task-1' },
+    metadata: { correlationId: 'corr-1', source: 'connector' },
+    timestamp: Date.now(),
+  } as unknown as OmniEvent;
+}
+
+describe('automation engine connector trigger', () => {
+  test('a connector.event runs only the automation named by the delivery', async () => {
+    let handler: ((event: OmniEvent) => Promise<void>) | null = null;
+    const subscription: Subscription = { id: 'sub', pattern: 'connector.event.>', unsubscribe: async () => {} };
+    const bus = {
+      connect: mock(async () => {}),
+      publish: mock(async () => ({ id: '', sequence: 0, stream: '' })),
+      publishGeneric: mock(async () => ({ id: '', sequence: 0, stream: '' })),
+      subscribe: mock(async () => subscription),
+      subscribePattern: mock(
+        async (_pattern: string, h: (event: OmniEvent) => Promise<void>, _options?: SubscribeOptions) => {
+          handler = h;
+          return subscription;
+        },
+      ),
+      subscribeMany: mock(async () => subscription),
+      subscribeAll: mock(async () => subscription),
+      close: mock(async () => {}),
+      isConnected: mock(() => true),
+    } as unknown as EventBus;
+
+    const engine = createAutomationEngine({ defaultConcurrency: 5 });
+    const calls: ConnectorCallRequest[] = [];
+    await engine.start(bus, [connectorAutomation(AUTOMATION_A), connectorAutomation(AUTOMATION_B)], {
+      async callConnector(request) {
+        calls.push(request);
+        return { id: 'comment-1' };
+      },
+    });
+
+    if (!handler) throw new Error('engine never subscribed');
+    await handler(connectorEvent(AUTOMATION_A));
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.connectorId).toBe('connector-1');
+    await engine.stop();
   });
 });
