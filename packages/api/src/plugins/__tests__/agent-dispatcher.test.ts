@@ -74,26 +74,9 @@ mock.module('@omni/core', () => {
     }
   }
 
-  class MockWebhookAgentProvider {
-    readonly schema = 'webhook' as const;
-    readonly mode: 'round-trip' | 'fire-and-forget';
-    constructor(
-      readonly id: string,
-      readonly name: string,
-      private config: { mode: string },
-    ) {
-      this.mode = config.mode as 'round-trip' | 'fire-and-forget';
-    }
-    canHandle() {
-      return true;
-    }
-    async trigger() {
-      return { parts: ['webhook response'], metadata: { runId: 'run-w', providerId: this.id, durationMs: 50 } };
-    }
-    async checkHealth() {
-      return { healthy: true, latencyMs: 20 };
-    }
-  }
+  // NOTE: WebhookAgentProvider is NOT mocked here either. No test in this file uses the
+  // webhook schema, and the stub, applied process-wide, replaced the real provider for
+  // agent-dispatch-fallback-identity.test.ts (#1408), which drives the real webhook path.
 
   // NOTE: OpenClawAgentProvider and OpenClawClient are NOT mocked here.
   // Bun's mock.module merges with the real module, so real classes pass through.
@@ -108,7 +91,6 @@ mock.module('@omni/core', () => {
     // this global module mock only overrides the provider surface below.
     ...omniCoreReal,
     AgnoAgentProvider: MockAgnoAgentProvider,
-    WebhookAgentProvider: MockWebhookAgentProvider,
     createProviderClient: mock(() => ({})),
     generateCorrelationId: (prefix?: string) => `${prefix ?? 'corr'}-test-${Date.now()}`,
   };
