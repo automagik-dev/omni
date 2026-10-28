@@ -49,7 +49,7 @@ an instance.
 
 The only public surface is `POST /api/v2/connectors/events/:subscriptionId`.
 It reads the raw body, resolves the subscription, opens the sealed secret and
-verifies the provider signature **before** parsing or publishing. Unknown
+verifies the provider signature **before** any journal row or publish. Unknown
 subscription, unopenable secret and bad signature all return the same `401`.
 
 ## Idempotency and replay

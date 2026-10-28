@@ -578,7 +578,7 @@ export function createApp(
 
   // Public connector event ingress — auth-exempt, verified EXCLUSIVELY by the
   // subscription's sealed provider secret over the raw body BEFORE anything is
-  // parsed or published (connectors-first-slice-clickup, D8). Unknown
+  // journaled or published (connectors-first-slice-clickup, D8). Unknown
   // subscription, unopenable secret and bad signature collapse into one 401 so
   // the endpoint is not an existence oracle. Paused subscriptions verify first,
   // then ack 202 ignored. Must be mounted before protectedApp so the

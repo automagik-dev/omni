@@ -514,7 +514,7 @@ const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
     justification:
       'Connector event ingress (connectors-first-slice-clickup, D8). Auth-exempt because the provider holds no Omni ' +
       'credential; authenticity is the per-subscription HMAC secret (ClickUp: X-Signature over the raw body) sealed ' +
-      'server-side and verified BEFORE anything is parsed or published. Unknown subscription, an unopenable secret ' +
+      'server-side and verified BEFORE anything is journaled or published. Unknown subscription, an unopenable secret ' +
       'and a bad signature all collapse into one 401 so the endpoint is not a subscription-existence oracle, and the ' +
       'surface is IP-rate-limited with a bounded body. The tenant comes from the resolved subscription row, never from ' +
       'a request claim. Responses carry only receipt flags and the generated event id — no tenant data, no resource ' +
