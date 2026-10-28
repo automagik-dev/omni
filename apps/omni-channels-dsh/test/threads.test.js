@@ -354,7 +354,10 @@ test('a thread whose record cannot be saved is undone: its key cut, its Session 
   assert.deepEqual(heard, [again.thread.id])
 })
 
-test('a key that can be neither cut nor marked keeps the thread, held by its guard, and a retry removes it', async (t) => {
+// Root ignores directory permissions, so a home it cannot write does not exist for it.
+const AS_ROOT = process.getuid?.() === 0 && 'root ignores directory permissions'
+
+test('a key that can be neither cut nor marked keeps the thread, held by its guard, and a retry removes it', { skip: AS_ROOT }, async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const omni = fakeOmni()
   const home = homeFor(t, omni)
@@ -376,7 +379,7 @@ test('a key that can be neither cut nor marked keeps the thread, held by its gua
   assert.equal(run.archiving.length, 2)
 })
 
-test('a thread that can be neither saved nor have its key cut stays, guarded and untold, until a remove ends it', async (t) => {
+test('a thread that can be neither saved nor have its key cut stays, guarded and untold, until a remove ends it', { skip: AS_ROOT }, async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const omni = fakeOmni()
   const home = homeFor(t, omni)

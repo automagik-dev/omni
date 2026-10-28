@@ -915,7 +915,10 @@ test('letting go of a lock never removes another holder\'s', { timeout: 10_000 }
   rmSync(lockOf(home))
 })
 
-test('on a home this host cannot write, a mint answers with the reason', { timeout: 10_000 }, async (t) => {
+// Root ignores directory permissions, so a home it cannot write does not exist for it.
+const AS_ROOT = process.getuid?.() === 0 && 'root ignores directory permissions'
+
+test('on a home this host cannot write, a mint answers with the reason', { timeout: 10_000, skip: AS_ROOT }, async (t) => {
   const omni = fakeOmni()
   const { rt, home } = runtime(t, { link: linked(omni.linkKey()) })
   chmodSync(home, 0o500)

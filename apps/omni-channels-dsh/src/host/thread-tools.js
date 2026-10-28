@@ -323,8 +323,9 @@ export function install(rt) {
   // refuses (another Session, no hook, no key, bad arguments) is denied here with the reason
   // and raises no card, even when a gate after this one asks: were it let through, a key that
   // came in before the tool's own gate would send without a card. DSH's card shows the reason,
-  // not these tools' arguments, so the reason carries what goes out. Ahead of DSH's own gates,
-  // so this only tightens their answer.
+  // not these tools' arguments, so the reason carries what goes out, also when a gate after
+  // this one (a preset, an ask rule) asks. Ahead of DSH's own gates, so this only tightens
+  // their answer.
   ctx.on('tools/pre-execute', async (exec, next) => {
     const decision = await next()
     if (exec.name !== 'thread_say' && exec.name !== 'thread_react') return decision
@@ -332,19 +333,19 @@ export function install(rt) {
     try { await rt.load() } catch { /* the threads in memory still count */ }
     const open = gate(exec)
     if (open.refusal) return { kind: 'deny', reason: open.refusal }
-    if (decision.kind === 'ask') return decision
+    const laterAsks = decision.kind === 'ask'
     // An automation's tagged turn that asks first; unknown is asking.
     const asksFirst = rt.standingRuns?.asksFirst?.(exec.agent?.id ?? exec.agent?.session?.id) ?? true
     const allowed = permissionsOf(open.thread, state.omniSettings)
     const where = JSON.stringify(open.thread.chatName)
     if (exec.name === 'thread_say') {
-      if (!asksFirst && allowed.sends === 'allow') return decision
+      if (!laterAsks && !asksFirst && allowed.sends === 'allow') return decision
       const { text } = open.args
       return { kind: 'ask', reason: `Send into ${where} as you?\n\n${text.slice(0, CARD_TEXT_MAX)}${text.length > CARD_TEXT_MAX ? '…' : ''}` }
     }
     const { emoji, messageId } = open.args
     const free = isFreeReaction(emoji, freeReactions()) || allowed.reactions === 'any'
-    if (!free) return { kind: 'ask', reason: `React ${emoji} in ${where} as you?\n\nTo message ${messageId}` }
+    if (!free || laterAsks) return { kind: 'ask', reason: `React ${emoji} in ${where} as you?\n\nTo message ${messageId}` }
     return asksFirst ? { kind: 'ask', reason: automationAsk(exec.name) } : decision
   }, { prepend: true })
 

@@ -793,8 +793,10 @@ test('a call the gate refuses is denied before any card even on an allowing thre
   }
   // From another Session, nothing an allowing thread allows reaches it.
   assert.deepEqual(await dsh(run, 'thread_say', 'm1', { text: 'oi' }), { card: false, result: `Error: ${NOT_A_THREAD}` })
-  // A gate after this one that asks keeps asking for a call this one would let go.
-  assert.deepEqual(await preExecute(run, 'thread_say', thread.sessionId, { text: 'oi' }, { kind: 'ask', reason: 'DSH asks' }), { kind: 'ask', reason: 'DSH asks' })
+  // A gate after this one that asks keeps asking for a call this one would let go, and its
+  // card still says what goes out (CodeRabbit, #1411).
+  assert.deepEqual(await preExecute(run, 'thread_say', thread.sessionId, { text: 'oi' }, { kind: 'ask', reason: 'DSH asks' }), { kind: 'ask', reason: 'Send into "Marina" as you?\n\noi' })
+  assert.deepEqual(await preExecute(run, 'thread_react', thread.sessionId, { messageId: MESSAGE_IDS.text, emoji: '🔥' }, { kind: 'ask', reason: 'DSH asks' }), { kind: 'ask', reason: `React 🔥 in "Marina" as you?\n\nTo message ${MESSAGE_IDS.text}` })
   assert.deepEqual(await preExecute(run, 'thread_say', thread.sessionId, { text: 'oi' }, { kind: 'deny', reason: 'no' }), { kind: 'deny', reason: 'no' })
   assert.deepEqual(omni.sent, [])
 })

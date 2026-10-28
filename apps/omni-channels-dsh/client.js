@@ -14983,7 +14983,7 @@ function AutomationRow({ sub, roster, runs, onOpen }) {
         (0, import_react11.createElement)("span", null, last ? t("last run {time}", { time: relativeShort(last.at) }) : t("not fired yet")),
         sub.askFirst ? null : (0, import_react11.createElement)("span", { className: "os-row-warn" }, t("acts without asking")),
         // Paused by the host, with why (a thread whose chat was removed, a team without the hook).
-        !sub.on && sub.pausedReason ? (0, import_react11.createElement)("span", { className: "os-row-warn os-row-paused" }, sub.pausedReason) : null,
+        !sub.on && sub.pausedReason ? (0, import_react11.createElement)("span", { className: "os-row-warn os-row-paused" }, hostText(sub.pausedReason)) : null,
         (0, import_react11.createElement)(
           "span",
           { className: "os-row-actions" },

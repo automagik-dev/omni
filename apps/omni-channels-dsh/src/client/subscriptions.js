@@ -244,7 +244,7 @@ export function AutomationRow({ sub, roster, runs, onOpen }) {
         h('span', null, last ? t('last run {time}', { time: relativeShort(last.at) }) : t('not fired yet')),
         sub.askFirst ? null : h('span', { className: 'os-row-warn' }, t('acts without asking')),
         // Paused by the host, with why (a thread whose chat was removed, a team without the hook).
-        !sub.on && sub.pausedReason ? h('span', { className: 'os-row-warn os-row-paused' }, sub.pausedReason) : null,
+        !sub.on && sub.pausedReason ? h('span', { className: 'os-row-warn os-row-paused' }, hostText(sub.pausedReason)) : null,
         h('span', { className: 'os-row-actions' },
           h('button', { type: 'button', className: 'os-link', disabled: busy !== '', onClick: () => run('automation-test', { id: sub.id }) }, t('Test')),
           h('button', {
