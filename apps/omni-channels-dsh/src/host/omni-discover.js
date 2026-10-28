@@ -61,6 +61,8 @@ const idOf = url => createHash('sha256').update(sameOmni(url)).digest('hex').sli
 
 // Unfold runs this host with an Omni of its own (OMNI_HOME in the instance).
 export const unfoldHost = (env = process.env) => env.AUTOMAGIK_HOST === 'unfold'
+// Why an install or an update from this host is refused there: Unfold installs and updates it.
+export const UNFOLD_RUNS_OMNI = 'Unfold runs its own Omni, so none is installed or updated from here.'
 
 export function readConfig(path) {
   try {
