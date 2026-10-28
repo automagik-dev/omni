@@ -6,8 +6,8 @@ set -euo pipefail
 # where the signature is checked, on every change to the pin.
 #
 # For each pinned platform: fetch the tarball, its .sig and its .cert from the GitHub release
-# (or take them from AUTOPG_ASSETS_DIR, a flat dir of release assets), check the pinned sha256,
-# and run cosign verify-blob against autopg's exact signing identity for the pinned tag.
+# (or take them from AUTOPG_ASSETS_DIR, a flat dir of release assets), check the pinned size and
+# sha256, and run cosign verify-blob against autopg's exact signing identity for the pinned tag.
 #
 # Two negative controls run on every platform and must fail: the same signature under a wrong
 # identity, and the tarball with one byte flipped. A control that passes fails the check, since
@@ -73,12 +73,15 @@ platforms="$(jq -er '.platforms | keys[]' "$PIN")"
 
 for platform in $platforms; do
   want="$(jq -er --arg p "$platform" '.platforms[$p].sha256' "$PIN")"
+  want_size="$(jq -er --arg p "$platform" '.platforms[$p].size' "$PIN")"
   name="autopg-${VERSION}-${platform}.tar.gz"
   dir="${WORK}/${platform}"
   mkdir "$dir"
   for asset in "$name" "${name}.sig" "${name}.cert"; do fetch "$asset" "$dir"; done
   tarball="${dir}/${name}"
 
+  got_size="$(wc -c <"$tarball" | tr -d ' ')"
+  [[ "$got_size" == "$want_size" ]] || fail "${platform}: size ${got_size} is not the pinned ${want_size}"
   got="$(sha256_of "$tarball")"
   [[ "$got" == "$want" ]] || fail "${platform}: sha256 ${got} is not the pinned ${want}"
   verify_blob "$tarball" "${tarball}.sig" "${tarball}.cert" "$IDENTITY" ||

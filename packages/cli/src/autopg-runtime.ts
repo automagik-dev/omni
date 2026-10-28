@@ -67,6 +67,7 @@ export interface AutopgTarget {
   platform: AutopgPlatform;
   cacheKey: string;
   sha256: string;
+  size: number;
   url: string;
 }
 
@@ -78,17 +79,22 @@ function releasePlatform(host: AutopgHost): AutopgPlatform | null {
   return host.arch === 'x64' ? 'linux-x64-glibc' : null;
 }
 
-/** The pinned tarball for this host, or null where the pin has none (npm pgserve then). */
+/**
+ * The pinned tarball for this host, or null where autopg ships no build (npm pgserve then). A
+ * platform autopg ships but the pin leaves out is refused: it never falls back to npm pgserve.
+ */
 export function autopgTarget(pinned: AutopgPin, host: AutopgHost): AutopgTarget | null {
   const platform = releasePlatform(host);
-  const asset = platform ? pinned.platforms[platform] : undefined;
-  if (!platform || !asset) return null;
+  if (!platform) return null;
+  const asset = pinned.platforms[platform];
+  if (!asset) throw new Error(`The autopg ${pinned.version} pin has no ${platform} entry; refusing to run without it`);
   return {
     version: pinned.version,
     pgRuntime: pinned.pgRuntime,
     platform,
     cacheKey: CACHE_KEYS[platform],
     sha256: asset.sha256,
+    size: asset.size,
     url: `${RELEASES}/v${pinned.version}/autopg-${pinned.version}-${platform}.tar.gz`,
   };
 }
@@ -173,6 +179,11 @@ export async function installAutopgRuntime(
   const binary = autopgBinary(paths.dir, target.version);
   if (autopgRuntimeReady(paths, target)) return binary;
   const bytes = source.tarball ? new Uint8Array(readFileSync(source.tarball)) : await source.download(target.url);
+  if (bytes.length !== target.size) {
+    throw new Error(
+      `autopg ${target.version} for ${target.platform}: size ${bytes.length} is not the pinned ${target.size}; refusing it`,
+    );
+  }
   const actual = createHash('sha256').update(bytes).digest('hex');
   if (actual !== target.sha256) {
     throw new Error(
@@ -204,7 +215,18 @@ export async function installAutopgRuntime(
   return binary;
 }
 
-/** Unfold writes 32 random bytes as URL-safe text; anything this short is a mistake. */
+/** The first line autopg writes to pg_hba.conf at every start of a password-file cluster. */
+const PASSWORD_FILE_HBA_HEADER = '# Written by pgserve at every start (--password-file).';
+
+/**
+ * True when autopg has started the cluster in `dataDir` with a password file: its pg_hba.conf
+ * starts with the line autopg writes then. A cluster made without one cannot take one later.
+ */
+export function clusterRanWithPasswordFile(dataDir: string): boolean {
+  return readTrimmed(join(dataDir, 'pg_hba.conf'))?.startsWith(`${PASSWORD_FILE_HBA_HEADER}\n`) === true;
+}
+
+/** An embedding app writes 32 random bytes as URL-safe text; anything this short is a mistake. */
 const MIN_PASSWORD_LENGTH = 16;
 
 /**

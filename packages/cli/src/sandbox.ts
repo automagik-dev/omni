@@ -59,6 +59,7 @@ import {
   autopgBinary,
   autopgRuntimeReady,
   autopgTarget,
+  clusterRanWithPasswordFile,
   detectLibc,
   downloadRelease,
   installAutopgRuntime,
@@ -1205,15 +1206,27 @@ function resolveSandboxPg(
       `--pg-password-file and --autopg-tarball need autopg ${deps.autopgPin.version}, which has no build for ${host}`,
     );
   }
-  // autopg cannot adopt a cluster initdb made without the file: refuse it here, not at every start.
-  // With no state (a reinstall after uninstall keeps the data), autopg's own start check decides.
-  const legacyCluster = previous !== null && !previous.pgPasswordFile;
+  // autopg cannot adopt a cluster initdb made without the file, and its start would rewrite that
+  // cluster's pg_hba.conf before it refuses: refuse here, before anything is written. With no state
+  // (uninstall keeps the data), the cluster's own pg_hba.conf says whether autopg ran it with one.
+  const legacyCluster = previous ? !previous.pgPasswordFile : !clusterRanWithPasswordFile(layout.pgDataDir);
   if (pgPasswordFile && legacyCluster && existsSync(join(layout.pgDataDir, 'PG_VERSION'))) {
     throw new SandboxError(
       `${layout.pgDataDir} holds a cluster made without a password file, which cannot take one; use a new --home`,
     );
   }
   return { target, pgPasswordFile };
+}
+
+/**
+ * True unless the sandbox runs autopg and its pinned release is not fully in place (an install
+ * killed while it seeded autopg's binary cache, say). autopg would then fetch Postgres itself,
+ * moving a `~/.pgserve` binary cache in first, so the supervisor refuses to start it.
+ */
+export function sandboxAutopgReady(layout: SandboxLayout, state: SandboxState, target: AutopgTarget | null): boolean {
+  if (!state.autopg) return true;
+  if (!target || target.version !== state.autopg) return false;
+  return autopgRuntimeReady(autopgPaths(layout), target);
 }
 
 /** A change to what runs Postgres, which must not happen under a running cluster. */
@@ -1232,12 +1245,12 @@ export async function installSandbox(
   deps: SandboxDeps = defaultSandboxDeps(),
 ): Promise<SandboxReport> {
   const layout = sandboxLayout(opts.home);
-  ensureLayout(layout);
   const previous = readSandboxState(layout);
   const packageSpec = opts.packageSpec?.trim() || VERSION;
   const atLogin = opts.atLogin ?? previous?.atLogin ?? false;
   const defaultHome = unitDefaultHome(previous, opts.defaultHome);
   const pg = resolveSandboxPg(layout, previous, opts, deps);
+  ensureLayout(layout);
   const running = livePid(layout, deps) !== null;
   // A supervisor runs either on its own or under its launchd/systemd unit. Switching
   // at-login restarts it under the other, or launchd/systemd would not bring it back.
