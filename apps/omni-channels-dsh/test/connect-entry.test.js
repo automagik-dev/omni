@@ -10,7 +10,7 @@ import { omni } from './omni-client.js'
 // install. Bundled as DSH bundles the client, with a React that builds plain element trees.
 async function load() {
   const entry = `
-    export { settingsView, runSettingsAction, registerSettings, OmniSettingsSection, parseReactions, saveFreeReactions } from './omni-settings.js'
+    export { settingsView, runSettingsAction, registerSettings, OmniSettingsSection, parseReactions, saveFreeReactions, threadDefaultsView, saveThreadDefault, ThreadDefaultsCard, ThreadDefaultsFields } from './omni-settings.js'
     export { autoOpenOnce, openConnectWizard, closeConnectWizard, wizardOpen, ConnectPrompt, AUTO_OPENED } from './wizard.js'
     export { noteStepShown, stepShown } from './onboarding.js'
   `
@@ -98,6 +98,46 @@ test('the free reactions are typed as one line and saved through the host, or pu
   assert.deepEqual(plain(await ui.saveFreeReactions('🔥, ❤', { request })), { freeReactions: ['🔥', '❤'], defaults: ['👍'] })
   await ui.saveFreeReactions('🔥', { reset: true, defaults: ['👍', '🙏'], request })
   assert.deepEqual(plain(sent), [['omni-free-reactions-save', { freeReactions: ['🔥', '❤'] }], ['omni-free-reactions-save', { freeReactions: ['👍', '🙏'] }]])
+})
+
+test('the asking-first card shows the owner\'s defaults in plain words, says what letting sends go allows, and saves one choice at a time', async () => {
+  const view = plain(ui.threadDefaultsView({ threadSends: 'ask', threadReactions: 'list', askFirstDefault: true }))
+  assert.equal(view.title, 'Asking you first')
+  assert.deepEqual(view.fields.map(field => [field.id, field.value, field.options.map(option => option.value)]), [
+    ['threadSends', 'ask', ['ask', 'allow']], ['threadReactions', 'list', ['list', 'any']], ['askFirstDefault', 'on', ['on', 'off']],
+  ])
+  assert.deepEqual(view.fields.map(field => field.label), ['Messages from a chat thread', 'Reactions from a chat thread', 'New automations'])
+  // Asking, nothing warns; letting sends go says what it lets someone in the chat do.
+  assert.equal(view.fields[0].note, null)
+  assert.match(view.fields[2].note, /^Only for automations made from now on/)
+  const open = plain(ui.threadDefaultsView({ threadSends: 'allow', threadReactions: 'any', askFirstDefault: false }))
+  assert.deepEqual(open.fields.map(field => field.value), ['allow', 'any', 'off'])
+  assert.match(open.fields[0].note, /without showing you first\. Someone in that chat could write a message that talks it into sending something\./)
+  // Asking first off says what it lets a message in a watched chat do.
+  assert.match(open.fields[2].note, /^New automations act on what other people write in your chats\. With this off, a message there could make a Bot run commands, change files or send as you without asking\./)
+  assert.match(view.lines[0], /before any reaction that is not on the list below/)
+  // On a host that only reads the team, every choice is shut and the reason shows.
+  assert.equal(view.readOnly, null)
+  const drawn = ui.ThreadDefaultsFields({ view: ui.threadDefaultsView({ threadSends: 'ask', readOnly: 'This window shows the team but cannot change it.' }) })
+  assert.deepEqual(findAll(drawn, node => node.type === 'select').map(node => node.props.disabled), [true, true, true])
+  assert.ok(findAll(drawn, node => node.props?.role === 'status').some(node => node.children.join('') === 'This window shows the team but cannot change it.'))
+  assert.deepEqual(findAll(ui.ThreadDefaultsFields({ view }), node => node.type === 'select').map(node => node.props.disabled), [false, false, false])
+  // Anything the host did not say allows reads as asking.
+  assert.deepEqual(plain(ui.threadDefaultsView(undefined)).fields.map(field => field.value), ['ask', 'list', 'on'])
+  const sent = []
+  const request = async (endpoint, body) => { sent.push([endpoint, body]); return { ok: true } }
+  await ui.saveThreadDefault('threadSends', 'allow', { request })
+  await ui.saveThreadDefault('threadReactions', 'any', { request })
+  await ui.saveThreadDefault('askFirstDefault', 'off', { request })
+  await ui.saveThreadDefault('askFirstDefault', 'on', { request })
+  assert.deepEqual(plain(sent), [
+    ['omni-thread-defaults-save', { threadSends: 'allow' }], ['omni-thread-defaults-save', { threadReactions: 'any' }],
+    ['omni-thread-defaults-save', { askFirstDefault: false }], ['omni-thread-defaults-save', { askFirstDefault: true }],
+  ])
+  await assert.rejects(ui.saveThreadDefault('freeReactions', ['🔥'], { request }), /Unknown setting/)
+  assert.equal(sent.length, 4)
+  // Before the host answers, the card draws nothing.
+  assert.equal(ui.ThreadDefaultsCard(), null)
 })
 
 test('the Omni page registers on DSH\'s settings.section slot', () => {

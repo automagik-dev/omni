@@ -8,9 +8,11 @@
 // Each tool works only in its own thread's Session, and the chat always comes from the
 // thread's record, never from the arguments. Sends and reactions go to the chat's JID on the
 // thread's channel: the key's recipient lock holds the JID and compares the raw `to` (Decision
-// 14); history reads the chat by its UUID. A send always asks the user on DSH's own card, every
-// time and groups included; a reaction asks unless its emoji is on the free list, one setting
-// the owner edits on the Omni settings page.
+// 14); history reads the chat by its UUID. By default a send asks the user on DSH's own card,
+// every time and groups included, and a reaction asks unless its emoji is on the free list, one
+// setting the owner edits on the Omni settings page. The owner may let sends, or any reaction,
+// go without a card, for every thread or for one (Decision 15, threads.js permissionsOf); an
+// automation event's turn that asks first still asks for both (standing-runs.js).
 //
 // A picture is the one thing read with the link key: a chat key holds no messages:read, so the
 // host reads the message's row, checks it is in the thread's chat and has media, and only then
@@ -23,7 +25,10 @@ import { MEDIA_FILE_BYTES, messageOf, readBounded } from './omni.js'
 import { output } from './output.js'
 import { NEEDS_NEWER_TEAM } from './resume-hook.js'
 import { NOT_LINKED } from './thread-keys.js'
-import { THREAD_TOOLS } from './threads.js'
+import { automationAsk } from './standing-runs.js'
+import { permissionsOf, THREAD_DEFAULTS, threadDefaultsOf, THREAD_TOOLS } from './threads.js'
+
+export { permissionsOf }
 
 // The reactions that go without a card, until the owner edits the list.
 export const FREE_REACTIONS_DEFAULT = Object.freeze(['👍', '❤️', '😂', '😮', '😢', '🙏'])
@@ -75,6 +80,12 @@ const CARD_TEXT_MAX = 1000
 const Emoji = z.string().trim().min(1).max(16).regex(/^(?=.*(\p{Extended_Pictographic}|\p{Regional_Indicator}|⃣))\S+$/u)
 const FreeReactions = z.array(Emoji).max(REACTIONS_MAX).transform(list => list.filter((item, index) => list.findIndex(other => bare(other) === bare(item)) === index))
 const SavePayload = z.object({ freeReactions: FreeReactions })
+// The owner's global defaults for every thread and for new automations; a field left out stays.
+const DefaultsPayload = z.object({
+  threadSends: z.enum(['ask', 'allow']).optional(),
+  threadReactions: z.enum(['list', 'any']).optional(),
+  askFirstDefault: z.boolean().optional(),
+}).strict()
 // The one message row the picture tool reads (routes/v2/messages.ts).
 const MessageRow = z.object({ data: z.object({ id: z.string(), chatId: z.string(), hasMedia: z.boolean() }).passthrough() })
 
@@ -170,7 +181,7 @@ export function install(rt) {
 
   tool({
     name: 'thread_say',
-    description: 'Sends one text message into this thread\'s chat, as the user. The user allows every send on a card first; send only what they asked for.',
+    description: 'Sends one text message into this thread\'s chat, as the user, possibly at once without a card. Send only what the user asked for.',
     parameters: { text: { type: 'string', required: true, description: `The message, exactly as it should arrive (at most ${TEXT_MAX} characters)` } },
   }, async ({ text }, open) => {
     const reply = await ask(open, 'POST', '/messages/send', { instanceId: open.thread.channelId, to: open.thread.chatJid, text })
@@ -304,26 +315,37 @@ export function install(rt) {
   // A removed thread's asks stop, and their answers are dropped.
   ctx.effect(() => rt.threads.onRemoved(thread => rt.dropAsksOf(thread.id)), 'omni-channels: asks of removed threads')
 
-  // A send always asks the user on DSH's card, groups included, and every time; a reaction asks
-  // unless its emoji is free. A call its gate refuses (another Session, no hook, no key, bad
-  // arguments) is denied here with the reason and raises no card: were it let through, a key
-  // that came in before the tool's own gate would send without a card. DSH's card shows the
-  // reason, not these tools' arguments, so the reason carries what goes out. Ahead of DSH's
-  // own gates, so this only tightens their answer.
+  // By default a send asks the user on DSH's card, groups included, and every time; a reaction
+  // asks unless its emoji is free. The owner may let a thread's sends, or any of its reactions,
+  // go without a card (permissionsOf); in an automation event's turn whose run asks first both
+  // ask whatever the thread allows. These two tools are this gate's alone (standing-runs.js
+  // leaves them here), so the answer is the same whichever gate DSH runs first. A call its gate
+  // refuses (another Session, no hook, no key, bad arguments) is denied here with the reason
+  // and raises no card, even when a gate after this one asks: were it let through, a key that
+  // came in before the tool's own gate would send without a card. DSH's card shows the reason,
+  // not these tools' arguments, so the reason carries what goes out. Ahead of DSH's own gates,
+  // so this only tightens their answer.
   ctx.on('tools/pre-execute', async (exec, next) => {
     const decision = await next()
-    if (decision?.kind !== 'allow' || (exec.name !== 'thread_say' && exec.name !== 'thread_react')) return decision
+    if (exec.name !== 'thread_say' && exec.name !== 'thread_react') return decision
+    if (decision?.kind !== 'allow' && decision?.kind !== 'ask') return decision
     try { await rt.load() } catch { /* the threads in memory still count */ }
     const open = gate(exec)
     if (open.refusal) return { kind: 'deny', reason: open.refusal }
+    if (decision.kind === 'ask') return decision
+    // An automation's tagged turn that asks first; unknown is asking.
+    const asksFirst = rt.standingRuns?.asksFirst?.(exec.agent?.id ?? exec.agent?.session?.id) ?? true
+    const allowed = permissionsOf(open.thread, state.omniSettings)
     const where = JSON.stringify(open.thread.chatName)
     if (exec.name === 'thread_say') {
+      if (!asksFirst && allowed.sends === 'allow') return decision
       const { text } = open.args
       return { kind: 'ask', reason: `Send into ${where} as you?\n\n${text.slice(0, CARD_TEXT_MAX)}${text.length > CARD_TEXT_MAX ? '…' : ''}` }
     }
     const { emoji, messageId } = open.args
-    if (isFreeReaction(emoji, freeReactions())) return decision
-    return { kind: 'ask', reason: `React ${emoji} in ${where} as you?\n\nTo message ${messageId}` }
+    const free = isFreeReaction(emoji, freeReactions()) || allowed.reactions === 'any'
+    if (!free) return { kind: 'ask', reason: `React ${emoji} in ${where} as you?\n\nTo message ${messageId}` }
+    return asksFirst ? { kind: 'ask', reason: automationAsk(exec.name) } : decision
   }, { prepend: true })
 
   // The thread's Session also sees no other global tool: DSH's restrict() keeps only the five,
@@ -365,18 +387,46 @@ export function install(rt) {
     void Promise.resolve(rt.load()).then(() => hold(agent)).catch(error => rt.warn('omni-channels: a thread\'s tool list was not restricted: %s', error?.message ?? error))
   })
 
-  // The free reactions on the Omni settings page: read anywhere, saved only on the host that
-  // holds the team.
+  // The free reactions and the thread defaults on the Omni settings page: read anywhere, saved
+  // only on the host that holds the team (a host that only reads it neither serves the saves
+  // nor runs them). No tool reaches these: only the owner's settings page calls them.
+  const refuseReadOnly = () => {
+    const readOnly = rt.readOnly?.()
+    if (readOnly !== undefined) throw Object.assign(new Error(readOnly), { code: 'bot/read-only' })
+  }
+  const keep = async (change) => {
+    await rt.load()
+    const before = state.omniSettings
+    state.omniSettings = { ...before, ...change }
+    try {
+      await rt.save()
+    } catch (error) {
+      state.omniSettings = before
+      throw error
+    }
+  }
   ctx.effect(() => rt.hooks.endpoint('omni-free-reactions', async () => {
     await rt.load()
     return { freeReactions: freeReactions(), defaults: [...FREE_REACTIONS_DEFAULT] }
   }, { read: true }), 'omni-channels: omni-free-reactions')
   ctx.effect(() => rt.hooks.endpoint('omni-free-reactions-save', async (body) => {
+    refuseReadOnly()
     const parsed = SavePayload.safeParse(body ?? {})
     if (!parsed.success) throw invalid(`Free reactions are up to ${REACTIONS_MAX} emojis.`)
-    await rt.load()
-    state.omniSettings = { ...state.omniSettings, freeReactions: parsed.data.freeReactions }
-    await rt.save()
+    await keep({ freeReactions: parsed.data.freeReactions })
     return { freeReactions: freeReactions(), defaults: [...FREE_REACTIONS_DEFAULT] }
   }), 'omni-channels: omni-free-reactions-save')
+  // With them, why this host cannot change them (it only reads the team), else null.
+  const threadDefaults = () => ({ ...threadDefaultsOf(state.omniSettings), defaults: { ...THREAD_DEFAULTS }, readOnly: rt.readOnly?.() ?? null })
+  ctx.effect(() => rt.hooks.endpoint('omni-thread-defaults', async () => {
+    await rt.load()
+    return threadDefaults()
+  }, { read: true }), 'omni-channels: omni-thread-defaults')
+  ctx.effect(() => rt.hooks.endpoint('omni-thread-defaults-save', async (body) => {
+    refuseReadOnly()
+    const parsed = DefaultsPayload.safeParse(body ?? {})
+    if (!parsed.success) throw invalid('Sends are ask or allow, reactions list or any, and ask-first on or off.')
+    await keep(parsed.data)
+    return threadDefaults()
+  }), 'omni-channels: omni-thread-defaults-save')
 }

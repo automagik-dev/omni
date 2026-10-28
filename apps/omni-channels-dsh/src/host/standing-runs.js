@@ -12,20 +12,43 @@
 // Session; the run is bound to the turn whose user/message carries its own tag, and only that
 // turn's end finishes it, with its last words.
 //
+// Every record here carries `standing: true`, the one way the log tells a standing Session's
+// record from another run's; a record saved before the marker is recognised by its shape and
+// marked as it is read (isStandingRun).
+//
 // The ask gate holds every turn that carries a tag, whatever its run's status, so a tagged
-// follow-up that runs after its run ended is still gated (and finishes nothing). The host
-// never sets a standing Session's preset: the owner's own turns there keep the thread's usual
+// follow-up that runs after its run ended is still gated (and finishes nothing). A thread's
+// send and reaction are thread-tools.js's to gate, with asksFirst from here. The host never
+// sets a standing Session's preset: the owner's own turns there keep the thread's usual
 // rules.
 import { z } from 'zod'
-import { closeRun, followupAndFlush, pruneRuns, readsOnly, runId } from './asks.js'
+import { closeRun, followupAndFlush, isAskRun, pruneRuns, readsOnly, runId } from './asks.js'
 
 /** The run a message was posted for: its `omni-run` tag's id, else null. */
 export const runTagOf = message => (message?.source?.kind === 'omni-run' ? message.source.runId : null)
-/** Whether a run log record is a standing Session's: an event waiting its turn, or a run bound by its turn. */
-export const isStandingRun = run => run?.status === 'queued' || (typeof run === 'object' && run !== null && Object.hasOwn(run, 'turnId'))
+// A record saved before the marker: an event waiting its turn (with its target), or a run
+// bound by its turn (a `turnId` key), never an ask's.
+const unmarkedStanding = run => run.standing === undefined && !isAskRun(run)
+  && (run.status === 'queued' ? typeof run.target === 'object' && run.target !== null : Object.hasOwn(run, 'turnId'))
+/**
+ * Whether a run log record is a standing Session's: marked `standing: true`. One saved before
+ * the marker is recognised by its shape and marked now, so the next save keeps the marker.
+ */
+export function isStandingRun(run) {
+  if (typeof run !== 'object' || run === null) return false
+  if (run.standing === true) return true
+  if (!unmarkedStanding(run)) return false
+  run.standing = true
+  return true
+}
+// The tools whose card thread-tools.js decides, tagged turn or not.
+const THREAD_CARDED = new Set(['thread_say', 'thread_react'])
+/** The card a tagged turn's call raises when its run asks first. */
+export const automationAsk = name => `An automation event is being handled here, and its text was written by other people. Allow ${name} this once?`
 // How many events wait for one standing Session at most; one more is not queued, and the
 // board says so. A run that waits on a card nobody answers must not grow the log forever.
 export const QUEUED_MAX = 20
+const notHandedOver = count => `Not handed over${count > 1 ? ` (×${count})` : ''}: ${QUEUED_MAX} events already wait for this thread.`
 
 const Target = z.object({ kind: z.enum(['thread', 'ongoing', 'dshbot']), id: z.string().min(1) }).strict()
 const sameTarget = (a, b) => a?.kind === b?.kind && a?.id === b?.id
@@ -55,8 +78,9 @@ export function install(rt) {
   // the bound run's own turn, so its gate holds and its end finishes the run. A turn that
   // begins after this start has its own entry.
   const adopted = (sessionId) => {
+    if (turns.has(sessionId)) return turns.get(sessionId)
     const run = working(sessionId)
-    if (turns.has(sessionId) || typeof run?.turnId !== 'string') return turns.get(sessionId)
+    if (typeof run?.turnId !== 'string') return undefined
     const turn = { turnId: run.turnId, runIds: [run.id], words: undefined, adopted: true }
     turns.set(sessionId, turn)
     return turn
@@ -117,7 +141,7 @@ export function install(rt) {
     }
     // The same record, now the run: it keeps its id, so the tag finds it.
     become({
-      ...rest, sessionId, status: 'working', turnId: null,
+      ...rest, standing: true, sessionId, status: 'working', turnId: null,
       from: event.chat ?? sub.sources[0]?.name ?? '', excerpt: event.text ? String(event.text).slice(0, 160) : '',
       summary: 'Handed to the thread.', askFirst: sub.askFirst !== false, ...(event.test ? { test: true } : {}),
     })
@@ -143,13 +167,23 @@ export function install(rt) {
   async function enqueue(target, sub, event) {
     const where = Target.parse(target)
     const waiting = runs().filter(run => run.status === 'queued' && sameTarget(run.target, where)).length
-    const base = { id: runId('run'), subId: sub.id, at: Date.now() }
+    const base = { id: runId('run'), subId: sub.id, standing: true, at: Date.now() }
     if (waiting >= QUEUED_MAX) {
-      // Omni has the event acked once this returns: the board says it was dropped.
+      // Omni has the event acked once this returns: the board says it was dropped. While the
+      // newest record for this target is already this automation's drop, it counts one more
+      // there instead of filling the log with copies.
+      const sessionId = sessionNow(where)
+      const newest = runs().find(run => isStandingRun(run) && (sameTarget(run.target, where) || (sessionId !== null && run.sessionId === sessionId)))
+      const excerpt = event?.text ? String(event.text).slice(0, 160) : ''
+      if (newest?.status === 'failed' && newest.subId === sub.id && Number.isInteger(newest.count)) {
+        newest.count += 1
+        Object.assign(newest, { endedAt: Date.now(), from: event?.chat ?? '', excerpt, summary: notHandedOver(newest.count) })
+        await rt.save()
+        return newest
+      }
       const dropped = {
-        ...base, sessionId: sessionNow(where), status: 'failed', turnId: null, endedAt: Date.now(),
-        from: event?.chat ?? '', excerpt: event?.text ? String(event.text).slice(0, 160) : '',
-        summary: `Not handed over: ${QUEUED_MAX} events already wait for this thread.`,
+        ...base, sessionId, status: 'failed', turnId: null, endedAt: Date.now(),
+        from: event?.chat ?? '', excerpt, summary: notHandedOver(1), count: 1,
       }
       state.subscriptionRuns = pruneRuns([dropped, ...runs()])
       await rt.save()
@@ -211,19 +245,24 @@ export function install(rt) {
     finish(tag, 'failed', 'DSH dropped this event before its turn started (the Session was stopped). Nothing ran.')
   })
 
-  // A tagged turn asks before anything but a read when its run asks first; a run whose record
-  // is gone asks too. A send already asks on its own card, with what it sends. Ahead of DSH's
-  // own gates, so their answer is the one this tightens.
+  // Whether the turn a Session runs now carries an automation's tag whose run asks first; a
+  // run whose record is gone asks too. A turn this start never saw begin is the bound run's
+  // (adopted), so a plugin reload keeps it gated.
+  const asksFirst = (sessionId) => {
+    const turn = adopted(sessionId)
+    return turn !== undefined && turn.runIds.length > 0 && turn.runIds.some(tag => record(tag)?.askFirst !== false)
+  }
+
+  // A tagged turn asks before anything but a read when its run asks first. A thread's send and
+  // reaction are left to thread-tools.js, which asks for them with what goes out. Ahead of
+  // DSH's own gates, so their answer is the one this tightens.
   ctx.on('tools/pre-execute', async (exec, next) => {
     const decision = await next()
-    if (decision?.kind !== 'allow' || readsOnly(exec) || exec.name === 'thread_say') return decision
+    if (decision?.kind !== 'allow' || readsOnly(exec) || THREAD_CARDED.has(exec.name)) return decision
     const sessionId = exec.agent?.id ?? exec.agent?.session?.id
     if (turns.get(sessionId)?.runIds.length === 0) return decision
     try { await rt.load() } catch { /* the runs in memory still count */ }
-    const turn = adopted(sessionId)
-    if (turn === undefined || turn.runIds.length === 0) return decision
-    if (!turn.runIds.some(tag => record(tag)?.askFirst !== false)) return decision
-    return { kind: 'ask', reason: `An automation event is being handled here, and its text was written by other people. Allow ${exec.name} this once?` }
+    return asksFirst(sessionId) ? { kind: 'ask', reason: automationAsk(exec.name) } : decision
   }, { prepend: true })
 
   // A removed chat's thread takes no more events: its automations pause, its queued events and
@@ -252,5 +291,6 @@ export function install(rt) {
     bind,
     finish,
     failQueued,
+    asksFirst,
   }
 }

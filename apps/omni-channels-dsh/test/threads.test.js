@@ -49,7 +49,7 @@ test('an added chat is a plain Session of the plugin\'s: outside the team\'s age
   run.emit(thread.sessionId, 'turn/end', { reason: { kind: 'completed' } })
   await run.channels.save()
   assert.deepEqual(saved(home).omniThreads[answer.threadId].status, 'idle')
-  assert.deepEqual(run.view().omniThreads, [{ id: answer.threadId, sessionId: thread.sessionId, chatId: CHAT, channelId: INSTANCE, title: 'Marina', status: 'idle', connected: true, reason: null }])
+  assert.deepEqual(run.view().omniThreads, [{ id: answer.threadId, sessionId: thread.sessionId, chatId: CHAT, channelId: INSTANCE, title: 'Marina', status: 'idle', connected: true, reason: null, permissions: { sends: 'ask', reactions: 'list' }, ownPermissions: {}, defaultPermissions: { sends: 'ask', reactions: 'list' } }])
   assert.deepEqual([run.view().omniThreadsOffered, run.view().omniThreadsReason, run.view().omniRowProps], [true, null, [...TEAM_CONTRACT.rowProps]])
   // A DSH restart: the next start has it, connected, and makes no Session for it.
   await run.stop()

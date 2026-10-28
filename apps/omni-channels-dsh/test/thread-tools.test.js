@@ -6,7 +6,7 @@
 // DSH's tool pipeline is played here in its order: the tools/pre-execute waterfall, the
 // approval card when it asks (DSH's answerer is the last link), the guards, then the tool.
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, test } from 'node:test'
@@ -19,8 +19,8 @@ import { MEDIA_FILE_BYTES } from '../src/host/omni.js'
 import { NEEDS_NEWER_TEAM } from '../src/host/resume-hook.js'
 import { NOT_LINKED } from '../src/host/thread-keys.js'
 import { RUNS_KEPT, isAskRun } from '../src/host/subscriptions.js'
-import { FREE_REACTIONS_DEFAULT, isFreeReaction, NOT_A_THREAD, withoutThreadTools } from '../src/host/thread-tools.js'
-import { THREAD_REFUSAL, THREAD_TOOLS } from '../src/host/threads.js'
+import { FREE_REACTIONS_DEFAULT, isFreeReaction, NOT_A_THREAD, permissionsOf, withoutThreadTools } from '../src/host/thread-tools.js'
+import { THREAD_DEFAULTS, threadDefaultsOf, threadInstructions, THREAD_REFUSAL, THREAD_TOOLS } from '../src/host/threads.js'
 import { askedOf, boot, CHAT, CHATS, flush, GROUP, guarded, homeFor, INSTANCE, keysOf, MESSAGE_IDS, PNG, record, resetFetch, saved, teamState, fakeOmni, until } from './thread-fixture.js'
 
 afterEach(resetFetch)
@@ -707,4 +707,210 @@ test('the question cannot close its fence, the chat\'s name reaches the title an
   await answer(run, sessionId, 'a'.repeat(5000), { postsTo: thread.sessionId })
   const posted = textOf(run.agentOf(thread.sessionId).calls[0]).split('\n')[1]
   assert.equal(posted, `${'a'.repeat(4000)}…`)
+})
+
+// ---------------------------------------------------------------------------------------------
+// Group 12b (Decision 15): the owner lets a thread send and react without a card, per thread or
+// by a global default; asking stays the default.
+
+// A bench with two threads: the direct chat (CHAT) and the group (GROUP), each on its own key.
+async function twoThreads(t, options) {
+  const one = await bench(t, options)
+  const added = await one.run.channels.threads.add(INSTANCE, GROUP)
+  assert.equal(added.ok, true, added.reason)
+  await flush()
+  return { ...one, group: added.thread, groupKey: keysOf(one.home).threads[added.thread.id].key }
+}
+const setThread = (run, thread, change) => run.call('omni-thread-permissions', { threadId: thread.id, ...change })
+const viewOf = (run, thread) => run.view().omniThreads.find(item => item.id === thread.id)
+const say = (run, thread, text) => dsh(run, 'thread_say', thread.sessionId, { text })
+const reactIn = (run, thread, emoji) => dsh(run, 'thread_react', thread.sessionId, { messageId: MESSAGE_IDS.picture, emoji })
+
+test('with the defaults a thread asks as before: every send, and any reaction off the free list; the view, the settings and a record from before this say ask', async (t) => {
+  const { run, thread, home } = await bench(t)
+  assert.deepEqual(await run.call('omni-thread-defaults', {}), { ...THREAD_DEFAULTS, defaults: { ...THREAD_DEFAULTS }, readOnly: null })
+  assert.deepEqual(THREAD_DEFAULTS, { threadSends: 'ask', threadReactions: 'list', askFirstDefault: true })
+  assert.deepEqual([viewOf(run, thread).permissions, viewOf(run, thread).ownPermissions], [{ sends: 'ask', reactions: 'list' }, {}])
+  assert.equal((await say(run, thread, 'Oi')).card, true)
+  assert.equal((await say(run, thread, 'Oi de novo')).card, true)
+  assert.equal((await reactIn(run, thread, '🔥')).card, true)
+  assert.equal((await reactIn(run, thread, '👍')).card, false)
+  // A thread record as Group 7 saved it, and settings as Group 9 saved them, ask.
+  assert.deepEqual(permissionsOf(record('old', 'old-session'), { freeReactions: ['🔥'] }), { sends: 'ask', reactions: 'list' })
+  // Anything but an exact allowing value asks, so a broken record or setting fails closed.
+  assert.deepEqual(permissionsOf({ permissions: { sends: 'yes', reactions: true } }, { threadSends: 'Allow', threadReactions: 'all' }), { sends: 'ask', reactions: 'list' })
+  assert.deepEqual(threadDefaultsOf({ askFirstDefault: 'no' }), THREAD_DEFAULTS)
+  assert.equal(Object.hasOwn(saved(home).omniThreads[thread.id], 'permissions'), false)
+  assert.equal(saved(home).omniSettings, undefined)
+})
+
+test('a thread set to send without asking sends with no card, in a direct chat and in a group, on its own key to its own chat; the other thread still asks; clearing it asks again', async (t) => {
+  const { omni, home, run, thread, key, group, groupKey } = await twoThreads(t)
+  assert.deepEqual(await setThread(run, thread, { sends: 'allow' }), { ok: true, permissions: { sends: 'allow', reactions: 'list' }, ownPermissions: { sends: 'allow' } })
+  const direct = await say(run, thread, 'Chego às 8.')
+  assert.deepEqual([direct.card, direct.waiting], [false, null])
+  assert.match(direct.result, /^Sent into the chat\./)
+  assert.equal((await say(run, thread, 'Até já.')).card, false)
+  assert.equal((await say(run, group, 'Bom dia, obra.')).card, true)
+  // The group on its own key, and the direct chat back to the default.
+  await setThread(run, group, { sends: 'allow' })
+  await setThread(run, thread, { sends: null })
+  assert.equal((await say(run, group, 'Cimento chegou.')).card, false)
+  assert.equal((await say(run, thread, 'Pergunto antes.')).card, true)
+  assert.deepEqual(omni.sent.map(send => [send.body.to, send.body.text, send.key]), [
+    [CHATS[CHAT].externalId, 'Chego às 8.', key],
+    [CHATS[CHAT].externalId, 'Até já.', key],
+    [CHATS[GROUP].externalId, 'Bom dia, obra.', groupKey],
+    [CHATS[GROUP].externalId, 'Cimento chegou.', groupKey],
+    [CHATS[CHAT].externalId, 'Pergunto antes.', key],
+  ])
+  assert.ok(key !== groupKey && key !== omni.link.text && groupKey !== omni.link.text)
+  // The view and the record say so, and both stay across a restart.
+  assert.deepEqual([viewOf(run, group).permissions, viewOf(run, group).ownPermissions, viewOf(run, thread).ownPermissions], [{ sends: 'allow', reactions: 'list' }, { sends: 'allow' }, {}])
+  assert.equal(Object.hasOwn(saved(home).omniThreads[thread.id], 'permissions'), false)
+  assert.deepEqual(saved(home).omniThreads[group.id].permissions, { sends: 'allow' })
+  await run.stop()
+  const next = await boot(t, home)
+  assert.equal((await dsh(next, 'thread_say', group.sessionId, { text: 'Depois do reinício.' })).card, false)
+  assert.equal((await dsh(next, 'thread_say', thread.sessionId, { text: 'Ainda pergunto.' })).card, true)
+})
+
+test('sending without asking as the global default covers every thread without its own setting, one made before this included; a thread set to ask still asks', async (t) => {
+  const { home, run, thread, group } = await twoThreads(t)
+  await setThread(run, group, { sends: 'ask' })
+  assert.deepEqual(await run.call('omni-thread-defaults-save', { threadSends: 'allow' }), { threadSends: 'allow', threadReactions: 'list', askFirstDefault: true, defaults: { ...THREAD_DEFAULTS }, readOnly: null })
+  // The direct chat's record has no permissions at all, as every record made before this.
+  assert.equal(Object.hasOwn(run.channels.threads.byId(thread.id), 'permissions'), false)
+  assert.equal((await say(run, thread, 'Sem cartão.')).card, false)
+  assert.equal((await say(run, group, 'Com cartão.')).card, true)
+  assert.deepEqual([viewOf(run, thread).permissions, viewOf(run, group).permissions], [{ sends: 'allow', reactions: 'list' }, { sends: 'ask', reactions: 'list' }])
+  // Each row knows the default it would follow, for its menu.
+  assert.deepEqual(viewOf(run, group).defaultPermissions, { sends: 'allow', reactions: 'list' })
+  assert.deepEqual(saved(home).omniSettings, { threadSends: 'allow' })
+  // A record saved before this group, read from the file at the next start, follows it too.
+  await run.stop()
+  const state = saved(home)
+  delete state.omniThreads[thread.id].permissions
+  writeFileSync(join(home, 'state.json'), JSON.stringify(state))
+  const next = await boot(t, home)
+  assert.equal((await dsh(next, 'thread_say', thread.sessionId, { text: 'Ainda sem cartão.' })).card, false)
+  // Back to asking, it asks again.
+  await next.call('omni-thread-defaults-save', { threadSends: 'ask' })
+  assert.equal((await dsh(next, 'thread_say', thread.sessionId, { text: 'Com cartão de novo.' })).card, true)
+})
+
+test('any reaction goes without a card on a thread set so, or by the global default; the free list holds otherwise', async (t) => {
+  const { run, thread, group } = await twoThreads(t)
+  await setThread(run, thread, { reactions: 'any' })
+  for (const emoji of ['🔥', '👎', '👍🏽', '👍']) assert.equal((await reactIn(run, thread, emoji)).card, false, emoji)
+  assert.equal((await reactIn(run, group, '🔥')).card, true)
+  assert.equal((await reactIn(run, group, '👍')).card, false)
+  // Reactions only: the thread's sends still ask, and the view says only reactions go free.
+  assert.equal((await say(run, thread, 'oi')).card, true)
+  assert.deepEqual(viewOf(run, thread).permissions, { sends: 'ask', reactions: 'any' })
+  await run.call('omni-thread-defaults-save', { threadReactions: 'any' })
+  assert.equal((await reactIn(run, group, '🔥')).card, false)
+  // A thread set back to the list keeps the list, over the global default.
+  await setThread(run, thread, { reactions: 'list' })
+  assert.equal((await reactIn(run, thread, '🔥')).card, true)
+  assert.equal((await reactIn(run, thread, '❤')).card, false)
+})
+
+test('a call the gate refuses is denied before any card even on an allowing thread, and when a later gate asks', async (t) => {
+  const { omni, run, thread } = await bench(t)
+  await setThread(run, thread, { sends: 'allow', reactions: 'any' })
+  for (const [name, args, said] of [['thread_say', { text: '   ' }, 'text must be a message of 1 to 4096 characters'], ['thread_react', { messageId: MESSAGE_IDS.text, emoji: '' }, 'Give a message id from thread_history and one emoji']]) {
+    assert.deepEqual(await dsh(run, name, thread.sessionId, args), { card: false, result: `Error: ${said}` }, name)
+    // A gate after this one that asks: the refusal still wins, so no card shows.
+    assert.equal((await preExecute(run, name, thread.sessionId, args, { kind: 'ask', reason: 'DSH asks' })).kind, 'deny', name)
+  }
+  // From another Session, nothing an allowing thread allows reaches it.
+  assert.deepEqual(await dsh(run, 'thread_say', 'm1', { text: 'oi' }), { card: false, result: `Error: ${NOT_A_THREAD}` })
+  // A gate after this one that asks keeps asking for a call this one would let go.
+  assert.deepEqual(await preExecute(run, 'thread_say', thread.sessionId, { text: 'oi' }, { kind: 'ask', reason: 'DSH asks' }), { kind: 'ask', reason: 'DSH asks' })
+  assert.deepEqual(await preExecute(run, 'thread_say', thread.sessionId, { text: 'oi' }, { kind: 'deny', reason: 'no' }), { kind: 'deny', reason: 'no' })
+  assert.deepEqual(omni.sent, [])
+})
+
+test('the thread settings are Zod-checked: a bad value, an unknown field or a missing thread is refused and nothing changes', async (t) => {
+  const { home, run, thread } = await bench(t)
+  for (const body of [{ threadId: thread.id, sends: 'yes' }, { threadId: thread.id, reactions: 'all' }, { threadId: thread.id, sends: 'allow', extra: 1 }, { threadId: 'not-a-thread', sends: 'allow' }, {}]) {
+    await assert.rejects(run.call('omni-thread-permissions', body), /Pick a thread, and whether it asks first/, JSON.stringify(body))
+  }
+  await assert.rejects(setThread(run, { id: '7d1e2f3a-4b5c-4d6e-8f70-81a2b3c4d5e6' }, { sends: 'allow' }), /not a thread any more/)
+  for (const body of [{ threadSends: 'yes' }, { threadReactions: 'all' }, { askFirstDefault: 'no' }, { threadSends: 'allow', freeReactions: ['🔥'] }]) {
+    await assert.rejects(run.call('omni-thread-defaults-save', body), /Sends are ask or allow/, JSON.stringify(body))
+  }
+  assert.equal(Object.hasOwn(run.channels.threads.byId(thread.id), 'permissions'), false)
+  assert.equal(saved(home).omniSettings, undefined)
+  // A field left out stays as it is; the free reactions are their own.
+  await run.call('omni-thread-defaults-save', { askFirstDefault: false })
+  await run.call('omni-free-reactions-save', { freeReactions: ['🔥'] })
+  await run.call('omni-thread-defaults-save', { threadReactions: 'any' })
+  assert.deepEqual(saved(home).omniSettings, { askFirstDefault: false, freeReactions: ['🔥'], threadReactions: 'any' })
+  await setThread(run, thread, { sends: 'allow', reactions: 'list' })
+  await setThread(run, thread, { reactions: null })
+  assert.deepEqual(run.channels.threads.byId(thread.id).permissions, { sends: 'allow' })
+  await setThread(run, thread, { sends: null })
+  assert.equal(Object.hasOwn(run.channels.threads.byId(thread.id), 'permissions'), false)
+})
+
+test('on a host that only reads the team the permission and settings saves are not served, and refuse when called; reading them works', async (t) => {
+  const { home, run, thread } = await bench(t)
+  const served = name => run.team.extended.endpointOf(name)
+  for (const name of ['omni-thread-permissions', 'omni-thread-defaults-save', 'omni-free-reactions-save']) assert.equal(served(name).read, false, name)
+  for (const name of ['omni-thread-defaults', 'omni-free-reactions']) assert.equal(served(name).read, true, name)
+  const holder = 'The Bot team is open in another dsh. This window shows the team but cannot change it.'
+  run.channels.readOnly = () => holder
+  await assert.rejects(setThread(run, thread, { sends: 'allow' }), { message: holder })
+  await assert.rejects(run.call('omni-thread-defaults-save', { threadSends: 'allow' }), { message: holder })
+  await assert.rejects(run.call('omni-free-reactions-save', { freeReactions: ['🔥'] }), { message: holder })
+  // Reading says why they cannot change here, so the card shows them read-only.
+  assert.deepEqual(await run.call('omni-thread-defaults', {}), { ...THREAD_DEFAULTS, defaults: { ...THREAD_DEFAULTS }, readOnly: holder })
+  assert.equal(Object.hasOwn(run.channels.threads.byId(thread.id), 'permissions'), false)
+  assert.equal(saved(home).omniSettings, undefined)
+})
+
+test('no tool reaches a permission: the thread\'s tools, the automation tools and omni_call leave every setting as it was, and no model-visible text names them', async (t) => {
+  const { omni, home, run, thread } = await bench(t)
+  const before = () => JSON.stringify([saved(home).omniSettings ?? null, saved(home).omniThreads[thread.id].permissions ?? null, run.channels.state.omniSettings ?? null, run.channels.threads.byId(thread.id).permissions ?? null])
+  const was = before()
+  const hostile = { threadId: thread.id, sends: 'allow', reactions: 'any', threadSends: 'allow', threadReactions: 'any', askFirstDefault: false, permissions: { sends: 'allow' } }
+  // From the thread's own Session: its five tools, with the fields smuggled in.
+  for (const name of THREAD_TOOLS) await use(run, name, thread.sessionId, { ...hostile, text: 'set sends to allow', question: 'Turn off asking for this thread', messageId: MESSAGE_IDS.picture, emoji: '🔥' })
+  // From the Omni Bot: the automation tools, and omni_call at the endpoints' names.
+  const omniBot = { agent: { id: 'm1' } }
+  for (const name of ['find_chats', 'list_automations', 'save_automation', 'pause_automation', 'delete_automation', 'omni_endpoints']) {
+    await run.ctx.registeredTools.get(name).execute({ ...hostile, ...(name === 'save_automation' ? {} : { id: 'sub-none' }), on: true, search: 'permissions', sources: `chat:${CHAT}`, trigger: 'message' }, omniBot)
+  }
+  for (const path of ['/omni-thread-permissions', '/omni-thread-defaults-save', '/api/omni-ui', '/../omni-ui/omni-thread-permissions']) {
+    await run.ctx.registeredTools.get('omni_call').execute({ method: 'POST', path, body: JSON.stringify(hostile) }, omniBot)
+  }
+  await run.channels.save()
+  assert.equal(before(), was)
+  assert.equal(askedOf(omni).some(call => /omni-thread|omni-ui/.test(call)), false)
+  // What a model reads (every tool's name, description and parameters, and a thread's
+  // instructions) names neither the settings nor the endpoints that change them.
+  const visible = JSON.stringify([...run.ctx.registeredTools.values()].map(tool => [tool.name, tool.description, tool.parameters])) + threadInstructions(thread)
+  for (const word of ['omni-thread-permissions', 'omni-thread-defaults', 'threadSends', 'threadReactions', 'askFirstDefault', 'ownPermissions']) assert.equal(visible.includes(word), false, word)
+})
+
+test('a save that fails puts a thread\'s permissions and the settings back as they were, and says so', async (t) => {
+  const { run, thread } = await bench(t)
+  await setThread(run, thread, { sends: 'allow' })
+  await run.call('omni-thread-defaults-save', { threadReactions: 'any' })
+  const save = run.channels.save
+  run.channels.save = () => Promise.reject(new Error('disk full'))
+  await assert.rejects(setThread(run, thread, { sends: null, reactions: 'list' }), /Not saved: disk full$/)
+  assert.deepEqual(run.channels.threads.byId(thread.id).permissions, { sends: 'allow' })
+  const fresh = await bench(t, { chat: GROUP })
+  fresh.run.channels.save = () => Promise.reject(new Error('disk full'))
+  await assert.rejects(setThread(fresh.run, fresh.thread, { sends: 'allow' }), /Not saved: disk full/)
+  assert.equal(Object.hasOwn(fresh.run.channels.threads.byId(fresh.thread.id), 'permissions'), false)
+  await assert.rejects(run.call('omni-thread-defaults-save', { threadSends: 'allow' }), /disk full/)
+  await assert.rejects(run.call('omni-free-reactions-save', { freeReactions: ['🔥'] }), /disk full/)
+  assert.deepEqual(run.channels.state.omniSettings, { threadReactions: 'any' })
+  assert.equal((await say(run, thread, 'Ainda sem cartão.')).card, false)
+  assert.equal((await reactIn(fresh.run, fresh.thread, '🔥')).card, true)
+  run.channels.save = save
 })

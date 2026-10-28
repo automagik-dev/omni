@@ -11,6 +11,7 @@ import { operatesOmni } from './grants.js'
 import { output } from './output.js'
 import { NEEDS_NEWER_TEAM } from './resume-hook.js'
 import { isStandingRun } from './standing-runs.js'
+import { threadDefaultsOf } from './threads.js'
 
 export const TRIGGER_KINDS = ['reaction', 'message', 'mention', 'keyword', 'voice', 'media', 'down']
 // Why a thread worker is not offered, and a saved one pauses, on a team without the hook.
@@ -164,8 +165,9 @@ export function install(rt) {
         react: args.react === undefined ? existing?.outputs.react ?? true : yes(args.react),
         replyToMe: args.reply_to_me === undefined ? existing?.outputs.replyToMe ?? false : yes(args.reply_to_me),
       },
-      // Event text comes from other people; asking first is on unless the user turns it off.
-      askFirst: args.ask_first === undefined ? existing?.askFirst ?? true : yes(args.ask_first),
+      // Event text comes from other people; asking first is on unless the user turns it off,
+      // here or, for a new automation, with the owner's default on the settings page.
+      askFirst: args.ask_first === undefined ? (existing ? existing.askFirst ?? true : threadDefaultsOf(state.omniSettings).askFirstDefault) : yes(args.ask_first),
       createdAt: existing?.createdAt ?? Date.now(),
       updatedAt: Date.now(),
     }
@@ -342,6 +344,35 @@ export function install(rt) {
     return { kind: 'ask', reason: `An automation event is being handled here, and its text was written by other people. Allow ${exec.name} this once?` }
   }, { prepend: true })
 
+  // Acting without asking is the owner's to allow: such an automation runs its Bot's task
+  // Sessions on the Bot's own preset, and its thread turns send as the thread allows (Decision
+  // 15). So a save_automation that turns asking first off, on an automation that asks (a new
+  // one too, while the owner's default asks), shows DSH's card first; so does a change to what
+  // an automation that acts without asking watches, fires on or hands to. The resulting choice
+  // is worked out as save() does. A save that keeps it asking, a new one under the owner's own
+  // "act without asking" default, or a rename goes as it is. Ahead of DSH's own gates, so this
+  // only tightens their answer.
+  const WIDENS = { sources: 'which chats it watches', trigger: 'what it fires on', emoji: 'what it fires on', words: 'what it fires on', worker: 'who acts', as: 'who acts' }
+  ctx.on('tools/pre-execute', async (exec, next) => {
+    const decision = await next()
+    if (decision?.kind !== 'allow' || exec.name !== 'save_automation') return decision
+    const args = exec.arguments ?? {}
+    const turnsOff = args.ask_first !== undefined && !yes(args.ask_first)
+    const changes = Object.keys(WIDENS).filter(field => args[field] !== undefined)
+    if (!turnsOff && changes.length === 0) return decision
+    try { await rt.load() } catch { /* the automations in memory still count */ }
+    const existing = typeof args.id === 'string' && args.id !== '' ? subs()[args.id] : undefined
+    const byDefault = threadDefaultsOf(state.omniSettings).askFirstDefault
+    const asksAfter = args.ask_first !== undefined ? yes(args.ask_first) : existing ? existing.askFirst ?? true : byDefault
+    if (asksAfter) return decision
+    const name = JSON.stringify(String(args.name ?? existing?.name ?? '').replace(/\s+/g, ' ').trim().slice(0, 60) || 'this automation')
+    const asksNow = existing ? existing.askFirst !== false : byDefault
+    if (turnsOff && asksNow) return { kind: 'ask', reason: `Let ${name} act without asking you first?\n\nIt then acts on what other people write in your chats: a message there could make a Bot run commands, change files or send as you, without a card.` }
+    if (existing === undefined || changes.length === 0) return decision
+    const what = changes.map(field => `${WIDENS[field]} (${field}: ${String(args[field]).replace(/\s+/g, ' ').slice(0, 120)})`)
+    return { kind: 'ask', reason: `Change ${name}, which acts without asking you?\n\nIt changes ${[...new Set(what)].join('; ')}.` }
+  }, { prepend: true })
+
   // One run ends, found by its record, never by whichever run its Session has first.
   function finish(run, status, summary) {
     if (run?.status !== 'working') return
@@ -457,7 +488,7 @@ export function install(rt) {
       as: { type: 'string', enum: ['task', 'chat'], description: 'For a Bot: "task" (the default) gives it each event as its own single-run task; "chat" sends events into its chat' },
       react: { type: 'boolean', description: 'React 👀 when work starts and ✅ when done, on the message. Default true' },
       reply_to_me: { type: 'boolean', description: 'Also reply to the user in their own chat. Default false' },
-      ask_first: { type: 'boolean', description: 'Ask the user before shell, file or network actions. Default true; only turn off when the user says so' },
+      ask_first: { type: 'boolean', description: 'Ask the user before shell, file or network actions. Leave it out to take the user\'s own default (asking, unless they changed it); only turn off when the user says so' },
     },
     output,
     async execute(args, exec) {

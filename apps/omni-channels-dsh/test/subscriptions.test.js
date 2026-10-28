@@ -792,9 +792,9 @@ test('an event queued behind a working run is a queued record, saved, before fir
   // The next event for that thread is queued, and saved, by the time fireSubscription returns.
   const queued = await fire(bench, sub, 'Segunda')
   const record = runById(bench, queued.id)
-  assert.deepEqual(Object.keys(record).sort(), ['at', 'event', 'id', 'status', 'subId', 'target'])
+  assert.deepEqual(Object.keys(record).sort(), ['at', 'event', 'id', 'standing', 'status', 'subId', 'target'])
   assert.deepEqual({ ...record, id: 'id', at: 0, event: { ...record.event, at: 0 } }, {
-    id: 'id', subId: sub.id, target: { kind: 'thread', id: thread.id }, status: 'queued', event: { ...eventFor('Segunda'), at: 0 }, at: 0,
+    id: 'id', subId: sub.id, standing: true, target: { kind: 'thread', id: thread.id }, status: 'queued', event: { ...eventFor('Segunda'), at: 0 }, at: 0,
   })
   assert.deepEqual(saved(bench.home).subscriptionRuns.find(item => item.id === queued.id), record)
   // The board gets where it came from, not the event itself.
@@ -839,7 +839,7 @@ test('a thread run record carries neither botId nor task, and the floor release\
   const queued = await fire(bench, sub, 'Dois')
   await until(() => postedTo(bench, thread.sessionId).length === 1)
   const record = runById(bench, working.id)
-  assert.deepEqual(Object.keys(record).sort(), ['askFirst', 'at', 'excerpt', 'from', 'id', 'sessionId', 'status', 'subId', 'summary', 'turnId'])
+  assert.deepEqual(Object.keys(record).sort(), ['askFirst', 'at', 'excerpt', 'from', 'id', 'sessionId', 'standing', 'status', 'subId', 'summary', 'turnId'])
   assert.deepEqual([record.status, record.sessionId, record.turnId], ['working', thread.sessionId, null])
   for (const item of [record, runById(bench, queued.id)]) assert.deepEqual([Object.hasOwn(item, 'botId'), Object.hasOwn(item, 'task')], [false, false])
   // The pinned Bot team's own index, run over the log as it is now: no owner for the thread.
@@ -1182,7 +1182,7 @@ test('a run is bound only in its own Session, a later turn carrying its tag neve
   const kept = await fire(bench, sub, 'Três')
   await until(() => saves >= 2)
   await flush()
-  assert.deepEqual(Object.keys(runById(bench, kept.id)).sort(), ['at', 'event', 'id', 'status', 'subId', 'target'])
+  assert.deepEqual(Object.keys(runById(bench, kept.id)).sort(), ['at', 'event', 'id', 'standing', 'status', 'subId', 'target'])
   assert.deepEqual([runById(bench, kept.id).status, runById(bench, kept.id).event.text, postedTo(bench, thread.sessionId).length], ['queued', 'Três', 2])
   run.channels.save = save
   await run.channels.standingRuns.handOver(thread.sessionId)
@@ -1198,6 +1198,8 @@ test('events that arrive together never queue past QUEUED_MAX', async (t) => {
   const all = await Promise.all(Array.from({ length: QUEUED_MAX + 5 }, (_, index) => fire(bench, sub, `together ${index}`)))
   assert.deepEqual([all.filter(item => item.status === 'queued').length, all.filter(item => item.status === 'failed').length], [QUEUED_MAX, 5])
   assert.equal(runsIn(bench).filter(item => item.status === 'queued').length, QUEUED_MAX)
+  // The five it could not queue are one record on the board, counted.
+  assert.deepEqual(runsIn(bench).filter(item => item.status === 'failed').map(item => item.count), [5])
 })
 
 test('after a plugin reload mid-turn, the bound turn\'s end alone, with no call or words heard since, finishes the run and the next event goes in', async (t) => {
@@ -1215,4 +1217,275 @@ test('after a plugin reload mid-turn, the bound turn\'s end alone, with no call 
   await until(() => runById(after, bound.id).status === 'done')
   await until(() => postedTo(after, thread.sessionId).length === 1)
   assert.equal(postedTo(after, thread.sessionId)[0].source.runId, next.id)
+})
+
+// ---------------------------------------------------------------------------------------------
+// Group 12b (Decision 15): sends and reactions an owner allows, in an automation's turns.
+
+const allowThread = (bench, thread, change) => bench.run.call('omni-thread-permissions', { threadId: thread.id, ...change })
+const SEND_CARD = /^Send into "Marina" as you\?/
+
+test('in an automation\'s tagged turn with ask-first on, a send and a reaction ask even on a thread that allows both; with it off they follow the thread; the owner\'s own turn follows the thread', async (t) => {
+  const bench = await threadBench(t)
+  const { thread } = bench
+  await allowThread(bench, thread, { sends: 'allow', reactions: 'any' })
+  const sub = await threadSub(bench)
+  assert.equal(sub.askFirst, true)
+  const first = await fire(bench, sub, 'Manda um oi?')
+  await until(() => postedTo(bench, thread.sessionId).length === 1)
+  startTurn(bench, thread.sessionId, postedTo(bench, thread.sessionId)[0])
+  assert.match(await cardOf(bench, 'thread_say', thread.sessionId, { text: 'Oi!' }), /^Send into "Marina" as you\?\n\nOi!$/)
+  assert.match(await cardOf(bench, 'thread_react', thread.sessionId, { messageId: MESSAGE_IDS.picture, emoji: '👍' }), AUTOMATION_CARD)
+  assert.match(await cardOf(bench, 'thread_react', thread.sessionId, { messageId: MESSAGE_IDS.picture, emoji: '🔥' }), AUTOMATION_CARD)
+  endTurn(bench, thread.sessionId, 'Perguntei antes.')
+  await until(() => runById(bench, first.id).status === 'done')
+  // The owner's own turn: the thread's own allowance.
+  startTurn(bench, thread.sessionId, ownerMessage('Manda oi'))
+  assert.equal(await cardOf(bench, 'thread_say', thread.sessionId, { text: 'Oi!' }), null)
+  assert.equal(await cardOf(bench, 'thread_react', thread.sessionId, { messageId: MESSAGE_IDS.picture, emoji: '🔥' }), null)
+  endTurn(bench, thread.sessionId, 'Feito.')
+  // Ask-first off: the run's turn follows the thread, both ways.
+  const free = await threadSub(bench, thread, { ask_first: false })
+  const second = await fire(bench, free, 'Outra')
+  await until(() => postedTo(bench, thread.sessionId).length === 2)
+  startTurn(bench, thread.sessionId, postedTo(bench, thread.sessionId)[1])
+  assert.equal(await cardOf(bench, 'thread_say', thread.sessionId, { text: 'Oi!' }), null)
+  assert.equal(await cardOf(bench, 'thread_react', thread.sessionId, { messageId: MESSAGE_IDS.picture, emoji: '🔥' }), null)
+  // A thread that asks keeps asking there.
+  await allowThread(bench, thread, { sends: null, reactions: null })
+  assert.match(await cardOf(bench, 'thread_say', thread.sessionId, { text: 'Oi!' }), SEND_CARD)
+  assert.match(await cardOf(bench, 'thread_react', thread.sessionId, { messageId: MESSAGE_IDS.picture, emoji: '🔥' }), /^React 🔥 in "Marina" as you\?/)
+  assert.equal(await cardOf(bench, 'thread_react', thread.sessionId, { messageId: MESSAGE_IDS.picture, emoji: '👍' }), null)
+  endTurn(bench, thread.sessionId, 'Ok.')
+  await until(() => runById(bench, second.id).status === 'done')
+})
+
+test('after a plugin reload mid-turn an ask-first run\'s turn still asks for a send and a reaction on a thread that allows both, and an ask-first-off run\'s turn still follows the thread', async (t) => {
+  for (const askFirst of [true, false]) {
+    const bench = await threadBench(t)
+    const { thread } = bench
+    await allowThread(bench, thread, { sends: 'allow', reactions: 'any' })
+    const sub = await threadSub(bench, thread, { ask_first: askFirst })
+    const bound = await fire(bench, sub, 'Um')
+    await until(() => postedTo(bench, thread.sessionId).length === 1)
+    const turn = startTurn(bench, thread.sessionId, postedTo(bench, thread.sessionId)[0])
+    await until(() => runById(bench, bound.id).turnId === String(turn))
+    await bench.run.channels.save()
+    await bench.run.stop()
+    // DSH goes on with the same turn; the new plugin never saw it begin.
+    const after = await threadBench(t, { home: bench.home })
+    const say = await cardOf(after, 'thread_say', thread.sessionId, { text: 'Oi!' })
+    const react = await cardOf(after, 'thread_react', thread.sessionId, { messageId: MESSAGE_IDS.picture, emoji: '🔥' })
+    if (askFirst) {
+      assert.match(say, /^Send into "Marina" as you\?\n\nOi!$/)
+      assert.match(react, AUTOMATION_CARD)
+    } else {
+      assert.deepEqual([say, react], [null, null])
+    }
+    after.run.emit(thread.sessionId, 'turn/end', { turn, reason: { kind: 'completed' } })
+    await until(() => runById(after, bound.id).status === 'done')
+    // The owner's turn after it follows the thread.
+    startTurn(after, thread.sessionId, ownerMessage('Oi'))
+    assert.equal(await cardOf(after, 'thread_say', thread.sessionId, { text: 'Oi!' }), null)
+    endTurn(after, thread.sessionId, 'Feito.')
+  }
+})
+
+test('a new automation saved without ask_first takes the owner\'s default; an existing one keeps its own; an explicit choice wins', async (t) => {
+  const bench = await threadBench(t)
+  const { run, thread } = bench
+  const kept = await threadSub(bench)
+  assert.equal(kept.askFirst, true)
+  await run.call('omni-thread-defaults-save', { askFirstDefault: false })
+  const fresh = await threadSub(bench, thread, { name: 'Sem perguntar' })
+  assert.equal(fresh.askFirst, false)
+  // A Bot's automation too: the default is for every new automation.
+  assert.match(await bench.tool('save_automation', { sources: `chat:${CHAT}`, trigger: 'message', name: 'Omni sem perguntar' }), /^Saved /)
+  assert.equal(subsIn(bench).at(-1).askFirst, false)
+  // Changed without ask_first, the existing one keeps asking; an explicit ask_first wins.
+  assert.match(await bench.tool('save_automation', { id: kept.id, name: 'Renomeada' }), /^Saved /)
+  assert.equal(run.channels.state.subscriptions[kept.id].askFirst, true)
+  assert.match(await bench.tool('save_automation', { sources: `chat:${CHAT}`, trigger: 'message', worker: `thread:${thread.id}`, ask_first: true, name: 'Pergunta' }), /^Saved /)
+  assert.equal(subsIn(bench).at(-1).askFirst, true)
+  // Its runs then follow the thread: an allowing thread sends without a card in their turns.
+  await allowThread(bench, thread, { sends: 'allow' })
+  const event = await fire(bench, fresh, 'Oi')
+  await until(() => postedTo(bench, thread.sessionId).length === 1)
+  startTurn(bench, thread.sessionId, postedTo(bench, thread.sessionId)[0])
+  assert.equal(runById(bench, event.id).askFirst, false)
+  assert.equal(await cardOf(bench, 'thread_say', thread.sessionId, { text: 'Oi!' }), null)
+  // Back on, new automations ask first again.
+  await run.call('omni-thread-defaults-save', { askFirstDefault: true })
+  assert.equal((await threadSub(bench, thread, { name: 'De novo' })).askFirst, true)
+})
+
+// Group 12 quality pass, folded in.
+
+test('past QUEUED_MAX one automation\'s further events raise a count on its newest "Not handed over" record, kept on the board, instead of adding records', async (t) => {
+  const { QUEUED_MAX } = await import('../src/host/standing-runs.js')
+  const bench = await threadBench(t)
+  const sub = await threadSub(bench)
+  const other = await threadSub(bench, bench.thread, { name: 'Outra' })
+  await fire(bench, sub, 'working')
+  await until(() => postedTo(bench, bench.thread.sessionId).length === 1)
+  for (let index = 0; index < QUEUED_MAX; index += 1) await fire(bench, sub, `queued ${index}`)
+  const failed = () => runsIn(bench).filter(item => item.status === 'failed')
+  const over = await fire(bench, sub, 'over 1')
+  assert.deepEqual([await fire(bench, sub, 'over 2'), await fire(bench, sub, 'over 3')].map(item => item.id), [over.id, over.id])
+  assert.deepEqual(failed().map(item => [item.id, item.count, item.summary, item.excerpt]), [[over.id, 3, `Not handed over (×3): ${QUEUED_MAX} events already wait for this thread.`, 'over 3']])
+  assert.equal(bench.run.view().subscriptionRuns.find(item => item.id === over.id).summary, `Not handed over (×3): ${QUEUED_MAX} events already wait for this thread.`)
+  // Another automation's event makes its own record; this one's next event a new one again.
+  const theirs = await fire(bench, other, 'theirs')
+  const again = await fire(bench, sub, 'over 4')
+  assert.deepEqual([theirs.count, again.count, new Set([over.id, theirs.id, again.id]).size], [1, 1, 3])
+  assert.equal(await fire(bench, sub, 'over 5'), again)
+  assert.equal(again.count, 2)
+  await bench.run.channels.save()
+  assert.equal(saved(bench.home).subscriptionRuns.find(item => item.id === over.id).count, 3)
+  assert.equal(runsIn(bench).filter(item => item.status === 'queued').length, QUEUED_MAX)
+})
+
+test('a turn this start saw begin is found without scanning the run log; one it never saw is looked up there', async (t) => {
+  const bench = await threadBench(t)
+  const { run, thread, group } = bench
+  // Every read of the run log, counted.
+  const { state } = run.channels
+  let log = state.subscriptionRuns ?? []
+  let reads = 0
+  Object.defineProperty(state, 'subscriptionRuns', { configurable: true, enumerable: true, get: () => { reads += 1; return log }, set: (value) => { log = value } })
+  t.after(() => { Object.defineProperty(state, 'subscriptionRuns', { configurable: true, enumerable: true, writable: true, value: log }) })
+  const readsFor = (sessionId) => {
+    const from = reads
+    for (let index = 0; index < 10; index += 1) run.emit(sessionId, 'assistant/message', { message: { content: [{ type: 'text', text: 'oi' }] } })
+    return reads - from
+  }
+  startTurn(bench, thread.sessionId, ownerMessage('oi'))
+  // The group's Session has no turn this start saw: each event looks for a bound run there too.
+  assert.ok(readsFor(thread.sessionId) < readsFor(group.sessionId), 'a seen turn costs no scan')
+})
+
+test('standing records carry standing: true; one saved before the marker is still recognised by its shape and marked as it is read, and other runs never are', async (t) => {
+  const { isStandingRun } = await import('../src/host/standing-runs.js')
+  // The shapes Group 12 saved, without the marker.
+  const legacyRun = { id: 'run-a', subId: 's', sessionId: 'x', status: 'working', turnId: null, at: 1 }
+  const legacyQueued = { id: 'run-b', subId: 's', target: { kind: 'thread', id: 't' }, status: 'queued', event: {}, at: 1 }
+  assert.deepEqual([isStandingRun(legacyRun), legacyRun.standing, isStandingRun(legacyQueued), legacyQueued.standing], [true, true, true, true])
+  for (const other of [{ id: 'ask', ask: true, status: 'working', turnId: 'x' }, { id: 'bot', botId: 'b', task: true, status: 'working' }, { status: 'queued' }, { standing: false, turnId: null }, null, 'run']) {
+    assert.equal(isStandingRun(other), false, JSON.stringify(other))
+    if (other && typeof other === 'object') assert.equal(other.standing === true, false)
+  }
+  // A home whose log a Group 12 build wrote: its working run holds the thread, its queued event
+  // waits behind it, and the next save keeps the marker on both.
+  const first = await threadBench(t)
+  const sub = await threadSub(first)
+  const bound = await fire(first, sub, 'Um')
+  await until(() => postedTo(first, first.thread.sessionId).length === 1)
+  const turn = startTurn(first, first.thread.sessionId, postedTo(first, first.thread.sessionId)[0])
+  await until(() => runById(first, bound.id).turnId === String(turn))
+  const waiting = await fire(first, sub, 'Dois')
+  await first.run.channels.save()
+  await first.run.stop()
+  const file = saved(first.home)
+  for (const item of file.subscriptionRuns) delete item.standing
+  writeFileSync(join(first.home, 'state.json'), JSON.stringify(file))
+  const after = await threadBench(t, { home: first.home })
+  assert.match(await cardOf(after, 'thread_react', first.thread.sessionId, { messageId: MESSAGE_IDS.picture, emoji: '👍' }), AUTOMATION_CARD)
+  assert.equal(runById(after, waiting.id).status, 'queued')
+  after.run.emit(first.thread.sessionId, 'turn/end', { turn, reason: { kind: 'completed' } })
+  await until(() => runById(after, bound.id).status === 'done')
+  await until(() => postedTo(after, first.thread.sessionId).length === 1)
+  assert.equal(postedTo(after, first.thread.sessionId)[0].source.runId, waiting.id)
+  await after.run.channels.save()
+  assert.deepEqual(saved(first.home).subscriptionRuns.map(item => [item.id, item.standing]), [[waiting.id, true], [bound.id, true]])
+})
+
+test('turning asking first off from a Bot\'s turn shows the owner a card; denied, the automation keeps asking; keeping or turning it on needs none', async (t) => {
+  const bench = await threadBench(t)
+  const { run, thread } = bench
+  const sub = await threadSub(bench, thread, { name: 'Obra' })
+  // save_automation through DSH's pipeline from the Omni Bot's turn: the card, answered `answer`.
+  const save = async (args, answer = 'allowed-once') => {
+    const decision = await preExecuteIn(bench, 'save_automation', 'm1', args)
+    let card = null
+    if (decision.kind === 'ask') {
+      card = decision.reason
+      const outcome = await approveIn(bench, { agent: run.agentOf('m1'), toolName: 'save_automation', reason: decision.reason }, () => answer)
+      if (outcome !== 'allowed-once') return { card, result: null }
+    }
+    return { card, result: await bench.tool('save_automation', args) }
+  }
+  const off = { id: sub.id, ask_first: false }
+  const denied = await save(off, 'rejected')
+  assert.match(denied.card, /^Let "Obra" act without asking you first\?\n\nIt then acts on what other people write in your chats: a message there could make a Bot run commands, change files or send as you, without a card\.$/)
+  assert.equal(denied.result, null)
+  assert.equal(run.channels.state.subscriptions[sub.id].askFirst, true)
+  // The string form a model may send counts too.
+  assert.match((await save({ id: sub.id, ask_first: 'false' }, 'rejected')).card, /^Let "Obra" act without asking/)
+  // Allowed on the card, it is off; off already, saving it off again, or turning it on, asks nothing.
+  const allowed = await save(off)
+  assert.match(allowed.result, /^Saved /)
+  assert.equal(run.channels.state.subscriptions[sub.id].askFirst, false)
+  assert.equal((await save(off)).card, null)
+  assert.equal((await save({ id: sub.id, ask_first: true })).card, null)
+  assert.equal(run.channels.state.subscriptions[sub.id].askFirst, true)
+  assert.equal((await save({ id: sub.id, name: 'Obra 2' })).card, null)
+  // A new one off asks while the owner's default asks, and not once the owner turned it off.
+  const fresh = { sources: `chat:${thread.chatId}`, trigger: 'message', worker: `thread:${thread.id}`, ask_first: false, name: 'Nova' }
+  assert.match((await save(fresh, 'rejected')).card, /^Let "Nova" act without asking/)
+  assert.equal(subsIn(bench).some(item => item.name === 'Nova'), false)
+  await run.call('omni-thread-defaults-save', { askFirstDefault: false })
+  assert.equal((await save(fresh)).card, null)
+  assert.equal(subsIn(bench).find(item => item.name === 'Nova').askFirst, false)
+  // A DSH gate that already denies keeps its answer.
+  const chain = [...run.ctx.listeners.get('tools/pre-execute')]
+  const exec = { name: 'save_automation', arguments: off, agent: run.agentOf('m1') }
+  const step = index => (index < chain.length ? chain[index](exec, () => step(index + 1)) : Promise.resolve({ kind: 'deny', reason: 'no' }))
+  assert.deepEqual(await step(0), { kind: 'deny', reason: 'no' })
+})
+
+test('changing what an automation that acts without asking watches, fires on or hands to shows the owner a card; denied, it stays as it was; a rename or one that asks needs none', async (t) => {
+  const bench = await threadBench(t)
+  const { run, thread, group } = bench
+  const sub = await threadSub(bench, thread, { name: 'Livre', ask_first: false })
+  const before = () => JSON.stringify({ ...run.channels.state.subscriptions[sub.id], updatedAt: 0 })
+  const kept = before()
+  // From the Omni Bot's turn, through DSH's card answered `answer`.
+  const save = async (args, answer = 'rejected') => {
+    const decision = await preExecuteIn(bench, 'save_automation', 'm1', { id: sub.id, ...args })
+    if (decision.kind !== 'ask') return { card: null, result: await bench.tool('save_automation', { id: sub.id, ...args }) }
+    const outcome = await approveIn(bench, { agent: run.agentOf('m1'), toolName: 'save_automation', reason: decision.reason }, () => answer)
+    return { card: decision.reason, result: outcome === 'allowed-once' ? await bench.tool('save_automation', { id: sub.id, ...args }) : null }
+  }
+  for (const [args, said] of [
+    [{ sources: `channel:${INSTANCE}` }, `which chats it watches (sources: channel:${INSTANCE})`],
+    [{ worker: `thread:${group.id}` }, `who acts (worker: thread:${group.id})`],
+    [{ worker: 'me', as: 'task' }, 'who acts (worker: me); who acts (as: task)'],
+    [{ trigger: 'keyword', words: 'urgente' }, 'what it fires on (trigger: keyword); what it fires on (words: urgente)'],
+    [{ trigger: 'reaction', emoji: '📌' }, 'what it fires on (trigger: reaction); what it fires on (emoji: 📌)'],
+    [{ ask_first: false, sources: `channel:${INSTANCE}` }, `which chats it watches (sources: channel:${INSTANCE})`],
+  ]) {
+    const { card, result } = await save(args)
+    assert.equal(card, `Change "Livre", which acts without asking you?\n\nIt changes ${said}.`, JSON.stringify(args))
+    assert.equal(result, null)
+    assert.equal(before(), kept, JSON.stringify(args))
+  }
+  // A rename, or a save that turns asking on, needs no card; one that asks after it changes freely.
+  assert.equal((await save({ name: 'Livre 2' })).card, null)
+  assert.equal((await save({ ask_first: true, trigger: 'mention' })).card, null)
+  assert.equal(run.channels.state.subscriptions[sub.id].askFirst, true)
+  assert.equal((await save({ trigger: 'message' })).card, null)
+  // Turned off again on the card, a change asks once more; allowed, it applies.
+  assert.match((await save({ ask_first: false }, 'allowed-once')).card, /^Let "Livre 2" act without asking you first\?/)
+  const allowed = await save({ trigger: 'mention' }, 'allowed-once')
+  assert.match(allowed.card, /^Change "Livre 2", which acts without asking you\?/)
+  assert.match(allowed.result, /^Saved /)
+  assert.equal(run.channels.state.subscriptions[sub.id].trigger.kind, 'mention')
+  // A new one under the owner's own "act without asking" default needs none.
+  await run.call('omni-thread-defaults-save', { askFirstDefault: false })
+  assert.equal(await preExecuteIn(bench, 'save_automation', 'm1', { sources: `chat:${thread.chatId}`, trigger: 'message', worker: `thread:${thread.id}` }).then(decision => decision.kind), 'allow')
+  // A deny from an earlier gate is kept.
+  const chain = [...run.ctx.listeners.get('tools/pre-execute')]
+  const exec = { name: 'save_automation', arguments: { id: sub.id, sources: `channel:${INSTANCE}` }, agent: run.agentOf('m1') }
+  const step = index => (index < chain.length ? chain[index](exec, () => step(index + 1)) : Promise.resolve({ kind: 'deny', reason: 'no' }))
+  assert.deepEqual(await step(0), { kind: 'deny', reason: 'no' })
 })

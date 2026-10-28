@@ -656,11 +656,14 @@ test('a mint asked while a new link is being saved waits for it, and is a child 
   const oldParent = omni.linkKey()
   const newParent = omni.linkKey()
   // Adding the Omni's market takes a while: omni.json is written after it.
-  const settings = { describe: () => [{ ns: 'plugin-market', value: { indexes: [] }, revision: 1 }], update: () => delay(40) }
+  let updating = false
+  const settings = { describe: () => [{ ns: 'plugin-market', value: { indexes: [] }, revision: 1 }], update: () => { updating = true; return delay(40) } }
   const { rt } = runtime(t, { link: linked(oldParent), settings })
   await rt.threadKeys.mint('t1', CHAT)
   const saving = rt.saveOmniLink(linked(newParent))
-  await delay(5)
+  // The save holds the hand-over (the keys' lock) once it is adding the market.
+  for (let waited = 0; waited < 1000 && !updating; waited += 5) await delay(5)
+  assert.ok(updating, 'the save is under way')
   const minting = rt.threadKeys.mint('t2', OWN_CHAT)
   await saving
   assert.equal((await minting).ok, true)
@@ -694,6 +697,8 @@ test('two hosts on one home change the key file one at a time', async (t) => {
   const [a, b] = await Promise.all([one.rt.threadKeys.mint('t1', CHAT), two.rt.threadKeys.mint('t2', OWN_CHAT)])
   assert.equal(a.ok && b.ok, true)
   assert.deepEqual(Object.keys(one.file().threads).sort(), ['t1', 't2'])
+  // Each host's start drain may still be taking its turn: once both are quiet, no lock is left.
+  await Promise.all([one.rt.threadKeys.drain(), two.rt.threadKeys.drain()])
   assert.equal(existsSync(join(one.home, `${KEYS_FILE}.lock`)), false, 'the lock is let go')
 })
 
@@ -743,7 +748,8 @@ test('an Omni that does not answer is asked once per drain, and a drain still ru
   const drainTimers = watchTimers(t)
   const { rt, file } = runtime(t, { link: linked(parent), keysFile })
   const [timer] = drainTimers()
-  await delay(10)
+  // The start drain's first request, however long a loaded machine takes to make it.
+  for (let waited = 0; waited < 1000 && omni.asked.length === 0; waited += 5) await delay(5)
   timer.run()
   timer.run()
   await delay(10)
@@ -859,15 +865,22 @@ test('a live holder renews its lock, so a long hand-over is not taken over', { t
   t.mock.timers.enable({ apis: ['setInterval', 'Date'], now: Date.now() })
   const one = runtime(t, { link: linked(parent) })
   const two = runtime(t, { home: one.home })
+  // Both hosts' start drains done first, so the only other holder is the second mint below.
+  await Promise.all([one.rt.threadKeys.drain(), two.rt.threadKeys.drain()])
   let release
   omni.gate = new Promise((resolve) => { release = resolve })
   const first = one.rt.threadKeys.mint('t1', CHAT)
-  for (let waited = 0; waited < 1000 && !existsSync(lockOf(one.home)); waited += 5) await delay(5)
+  // The lock is read once the mint holds it and has reached Omni: a lock seen earlier may be a
+  // drain's brief one, or one still being written.
+  const minting = () => omni.asked.some(call => call.method === 'POST' && call.path.startsWith('/keys/children'))
+  for (let waited = 0; waited < 1000 && !minting(); waited += 5) await delay(5)
+  assert.ok(minting(), 'the mint reached Omni')
   const { token } = holderIn(one.home)
-  // Three minutes of a slow Omni, renewed every 30 s.
+  // Three minutes of a slow Omni, renewed every 30 s: each beat's write lands before the next.
+  const heldAt = () => { try { return holderIn(one.home).at } catch { return null } }
   for (let beat = 0; beat < 6; beat += 1) {
     t.mock.timers.tick(30_000)
-    await delay(15)
+    for (let waited = 0; waited < 1000 && heldAt() !== Date.now(); waited += 5) await delay(5)
   }
   assert.equal(holderIn(one.home).token, token)
   assert.ok(Date.now() - holderIn(one.home).at < 60_000, 'renewed')
@@ -888,7 +901,10 @@ test('letting go of a lock never removes another holder\'s', { timeout: 10_000 }
   let release
   omni.gate = new Promise((resolve) => { release = resolve })
   const minting = rt.threadKeys.mint('t1', CHAT)
-  for (let waited = 0; waited < 1000 && !existsSync(lockOf(home)); waited += 5) await delay(5)
+  // The mint holds the lock once it has reached Omni; a lock seen earlier may be a drain's.
+  const asking = () => omni.asked.some(call => call.method === 'POST' && call.path.startsWith('/keys/children'))
+  for (let waited = 0; waited < 1000 && !asking(); waited += 5) await delay(5)
+  assert.ok(asking(), 'the mint reached Omni')
   // Taken over meanwhile (this one looked gone to another host).
   const other = JSON.stringify({ pid: process.pid, token: 'other', at: Date.now() })
   writeFileSync(lockOf(home), other)

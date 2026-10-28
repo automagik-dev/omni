@@ -116,7 +116,14 @@ const fakeCall = async (endpoint, body) => {
   if (reply instanceof Error) throw reply
   return reply
 }
-const document = { body: { dataset: {} } }
+// The page's pointer listeners, so a test can click outside a menu.
+const pointer = new Set()
+const document = {
+  body: { dataset: {} },
+  addEventListener: (type, listener) => { if (type === 'pointerdown') pointer.add(listener) },
+  removeEventListener: (type, listener) => { if (type === 'pointerdown') pointer.delete(listener) },
+}
+const pointerDown = target => { for (const listener of pointer) listener({ target }) }
 const storage = new Map()
 const localStorage = { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, String(value)) }
 
@@ -124,7 +131,7 @@ async function loadTree() {
   const bundle = await build({
     stdin: {
       contents: [
-        'export { OmniTree, ThreadRow, ThreadPicker, ThreadDock, plusOf, teamReady, threadsOf, rowPropsOf, isThreadSession, OMNI_OUTDATED, OMNI_TREE_CSS } from \'./omni-tree.js\'',
+        'export { OmniTree, ThreadRow, ThreadPicker, ThreadDock, plusOf, teamReady, threadsOf, rowPropsOf, isThreadSession, freeMarkOf, permissionMenuOf, OMNI_OUTDATED, OMNI_TREE_CSS } from \'./omni-tree.js\'',
         'export { openConnectWizard } from \'./wizard.js\'',
         'export { omniStore, startLive, loadLink, refreshLive } from \'./omni-store.js\'',
       ].join('\n'),
@@ -514,6 +521,80 @@ test('removing a thread asks once more, then asks the host', async () => {
   one(view.draw(), 'ot-thread-remove').props.onClick()
   await settle()
   assert.equal(text(one(view.draw(), 'ot-thread-problem')), 'The thread could not be removed: busy')
+})
+
+test('a thread row marks, with a title, when its sends or any of its reactions go without asking, from the view; asking as by default, it has no mark', () => {
+  const roster = hooked()
+  const rowProps = ui.rowPropsOf({ roster }, roster.omniRowProps)
+  const draw = permissions => mount(() => react.createElement(ui.ThreadRow, { thread: THREAD(1, CHANNEL_A, permissions === undefined ? {} : { permissions }), actions: {}, rowProps })).draw()
+  for (const permissions of [undefined, { sends: 'ask', reactions: 'list' }]) {
+    const root = draw(permissions)
+    assert.equal(one(root, 'ot-thread-free'), undefined)
+    assert.doesNotMatch(one(root, 'bt-thread').props['aria-label'], /without asking/)
+  }
+  for (const [permissions, title] of [
+    [{ sends: 'allow', reactions: 'list' }, 'Sends messages without asking you'],
+    [{ sends: 'ask', reactions: 'any' }, 'Reacts with any emoji without asking you'],
+    [{ sends: 'allow', reactions: 'any' }, 'Sends messages and any reaction without asking you'],
+  ]) {
+    const root = draw(permissions)
+    assert.equal(one(root, 'ot-thread-free').props.title, title)
+    assert.equal(plain(ui.freeMarkOf({ permissions })), title)
+    assert.match(one(root, 'bt-thread').props['aria-label'], new RegExp(title))
+  }
+})
+
+test('a thread row\'s menu sets the thread\'s own choice for its messages and its reactions, or clears it back to the default; a refusal shows on the row', async () => {
+  calls.length = 0
+  answer = () => ({ ok: true })
+  const roster = hooked()
+  const rowProps = ui.rowPropsOf({ roster }, roster.omniRowProps)
+  const thread = THREAD(1, CHANNEL_A, { permissions: { sends: 'allow', reactions: 'list' }, ownPermissions: { sends: 'allow' }, defaultPermissions: { sends: 'ask', reactions: 'list' } })
+  const view = mount(() => react.createElement(ui.ThreadRow, { thread, actions: {}, rowProps }))
+  const more = () => one(view.draw(), 'ot-thread-more')
+  assert.deepEqual([more().props['aria-label'], more().props['aria-expanded']], ['Asking first in Chat 1', false])
+  assert.equal(one(view.draw(), 'ot-thread-menu'), undefined)
+  more().props.onClick()
+  const menu = one(view.draw(), 'ot-thread-menu')
+  assert.equal(menu.props.role, 'menu')
+  const items = all(menu, 'ot-thread-menu-item')
+  assert.deepEqual(items.map(item => [item.props['data-field'], item.props['data-value'], item.props['aria-checked'], text(item)]), [
+    ['sends', 'default', false, 'Follow the default: Ask me each time'], ['sends', 'ask', false, 'Ask me each time'], ['sends', 'allow', true, 'Send without asking'],
+    ['reactions', 'default', true, 'Follow the default: Only the free reactions go without asking'], ['reactions', 'list', false, 'Only the free reactions go without asking'], ['reactions', 'any', false, 'Any reaction goes without asking'],
+  ])
+  // Choosing one asks the host and closes the menu; "follow the default" sends null.
+  items[0].props.onClick()
+  await settle()
+  assert.equal(one(view.draw(), 'ot-thread-menu'), undefined)
+  more().props.onClick()
+  all(one(view.draw(), 'ot-thread-menu'), 'ot-thread-menu-item')[5].props.onClick()
+  await settle()
+  assert.deepEqual(calls, [['omni-thread-permissions', { threadId: 't1', sends: null }], ['omni-thread-permissions', { threadId: 't1', reactions: 'any' }]])
+  // Escape closes it without a choice.
+  more().props.onClick()
+  let stopped = false
+  one(view.draw(), 'ot-thread-menu').props.onKeyDown({ key: 'Escape', stopPropagation: () => { stopped = true } })
+  assert.deepEqual([one(view.draw(), 'ot-thread-menu'), stopped, calls.length], [undefined, true, 2])
+  // A click inside the row keeps it open; one anywhere else closes it, choosing nothing.
+  more().props.onClick()
+  const rowNode = one(view.draw(), 'ot-thread')
+  rowNode.props.ref.current = { contains: target => target === 'inside' }
+  pointerDown('inside')
+  assert.ok(one(view.draw(), 'ot-thread-menu'))
+  pointerDown('elsewhere')
+  assert.equal(one(view.draw(), 'ot-thread-menu'), undefined)
+  view.draw()
+  assert.deepEqual([pointer.size, calls.length], [0, 2])
+  // The host's refusal (a host that only reads the team) says why on the row.
+  answer = () => new Error('This window shows the team but cannot change it.')
+  more().props.onClick()
+  all(one(view.draw(), 'ot-thread-menu'), 'ot-thread-menu-item')[1].props.onClick()
+  await settle()
+  assert.equal(text(one(view.draw(), 'ot-thread-problem')), 'This window shows the team but cannot change it.')
+  // A thread with no choices of its own follows the default for both.
+  assert.deepEqual(plain(ui.permissionMenuOf(THREAD(2))).map(group => group.items.filter(item => item.checked).map(item => item.value)), [[null], [null]])
+  // It names the default it follows now: sends and any reaction allowed by the owner.
+  assert.deepEqual(plain(ui.permissionMenuOf(THREAD(3, CHANNEL_A, { defaultPermissions: { sends: 'allow', reactions: 'any' } }))).map(group => group.items[0].label), ['Follow the default: Send without asking', 'Follow the default: Any reaction goes without asking'])
 })
 
 test('the reasons the host gives a thread or the + have Chinese copy here', () => {

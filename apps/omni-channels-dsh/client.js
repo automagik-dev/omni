@@ -14509,6 +14509,106 @@ var parseReactions = (text) => String(text ?? "").split(/[\s,]+/).filter(Boolean
 async function saveFreeReactions(text, { reset = false, defaults = [], request = call } = {}) {
   return request("omni-free-reactions-save", { freeReactions: reset ? [...defaults] : parseReactions(text) });
 }
+var THREAD_DEFAULT_FIELDS = Object.freeze(["threadSends", "threadReactions", "askFirstDefault"]);
+function threadDefaultsView(defaults) {
+  const sends = defaults?.threadSends === "allow" ? "allow" : "ask";
+  const reactions = defaults?.threadReactions === "any" ? "any" : "list";
+  const askFirst = defaults?.askFirstDefault === false ? "off" : "on";
+  return {
+    title: t("Asking you first"),
+    lines: [
+      t("Chat threads ask you before they send, and before any reaction that is not on the list below; new automations ask before they act. If you leave DeepSeek Harness running on its own, you can let them go without asking."),
+      t("Each thread can still choose for itself, from its menu in the sidebar.")
+    ],
+    fields: [
+      {
+        id: "threadSends",
+        label: t("Messages from a chat thread"),
+        value: sends,
+        options: [{ value: "ask", label: t("Ask me each time") }, { value: "allow", label: t("Send without asking") }],
+        note: sends === "allow" ? t("A thread sends into its own chat as you, without showing you first. Someone in that chat could write a message that talks it into sending something.") : null
+      },
+      {
+        id: "threadReactions",
+        label: t("Reactions from a chat thread"),
+        value: reactions,
+        options: [{ value: "list", label: t("Only the reactions below go without asking") }, { value: "any", label: t("Any reaction goes without asking") }],
+        note: null
+      },
+      {
+        id: "askFirstDefault",
+        label: t("New automations"),
+        value: askFirst,
+        options: [{ value: "on", label: t("Ask me before they act") }, { value: "off", label: t("Act without asking") }],
+        note: askFirst === "off" ? t("New automations act on what other people write in your chats. With this off, a message there could make a Bot run commands, change files or send as you without asking. Only for automations made from now on: each one you have keeps its own choice.") : t("Only for automations made from now on: each one you have keeps its own choice.")
+      }
+    ],
+    // A host that only reads the team shows them, and says why they cannot change here.
+    readOnly: typeof defaults?.readOnly === "string" && defaults.readOnly !== "" ? defaults.readOnly : null
+  };
+}
+async function saveThreadDefault(id, value, { request = call } = {}) {
+  if (!THREAD_DEFAULT_FIELDS.includes(id)) throw new Error(`Unknown setting ${id}`);
+  return request("omni-thread-defaults-save", { [id]: id === "askFirstDefault" ? value !== "off" : value });
+}
+function ThreadDefaultsCard() {
+  const [defaults, setDefaults] = (0, import_react10.useState)(void 0);
+  const [busy, setBusy] = (0, import_react10.useState)(false);
+  const [note, setNote] = (0, import_react10.useState)(null);
+  const alive = (0, import_react10.useRef)(true);
+  (0, import_react10.useEffect)(() => () => {
+    alive.current = false;
+  }, []);
+  (0, import_react10.useEffect)(() => {
+    call("omni-thread-defaults").then((reply) => {
+      if (alive.current) setDefaults(reply);
+    }, () => {
+    });
+  }, []);
+  const change = async (id, value) => {
+    setBusy(true);
+    setNote(null);
+    try {
+      const reply = await saveThreadDefault(id, value);
+      if (alive.current) {
+        setDefaults(reply);
+        setNote({ ok: true, text: t("Saved.") });
+      }
+    } catch (error) {
+      if (alive.current) setNote({ ok: false, text: error.message });
+    } finally {
+      if (alive.current) setBusy(false);
+    }
+  };
+  if (defaults === void 0) return null;
+  return (0, import_react10.createElement)(ThreadDefaultsFields, { view: threadDefaultsView(defaults), busy, note, onChange: change });
+}
+function ThreadDefaultsFields({ view, busy = false, note = null, onChange = () => {
+} }) {
+  return (0, import_react10.createElement)(
+    "section",
+    { className: "oset-card" },
+    (0, import_react10.createElement)(
+      "div",
+      { className: "oset-text" },
+      (0, import_react10.createElement)("strong", null, view.title),
+      view.lines.map((line) => (0, import_react10.createElement)("p", { key: line, className: "oset-muted" }, line)),
+      view.readOnly ? (0, import_react10.createElement)("p", { className: "oset-problem", role: "status" }, hostText(view.readOnly)) : null,
+      view.fields.map((field) => (0, import_react10.createElement)(
+        "label",
+        { key: field.id, className: "oset-field" },
+        (0, import_react10.createElement)("span", { className: "oset-label" }, field.label),
+        (0, import_react10.createElement)(
+          "select",
+          { className: "oset-select", value: field.value, disabled: busy || view.readOnly !== null, "data-setting": field.id, onChange: (event) => onChange(field.id, event.target.value) },
+          field.options.map((option) => (0, import_react10.createElement)("option", { key: option.value, value: option.value }, option.label))
+        ),
+        field.note ? (0, import_react10.createElement)("span", { className: "oset-muted" }, field.note) : null
+      )),
+      note ? (0, import_react10.createElement)("p", { className: note.ok ? "oset-muted" : "oset-problem", role: note.ok ? "status" : "alert" }, note.text) : null
+    )
+  );
+}
 function FreeReactionsCard() {
   const [list, setList] = (0, import_react10.useState)(void 0);
   const [text, setText] = (0, import_react10.useState)("");
@@ -14547,7 +14647,7 @@ function FreeReactionsCard() {
       "div",
       { className: "oset-text" },
       (0, import_react10.createElement)("strong", null, t("Reactions without asking")),
-      (0, import_react10.createElement)("p", { className: "oset-muted" }, t("In a chat thread, these reactions go without asking you first. Any other reaction, and every message, asks each time.")),
+      (0, import_react10.createElement)("p", { className: "oset-muted" }, t("In a chat thread, these reactions go without asking you first. Any other reaction asks, unless you let every reaction go above or in the thread's menu.")),
       (0, import_react10.createElement)("input", { className: "oset-input", value: text, disabled: busy, "aria-label": t("Reactions without asking"), onChange: (event) => setText(event.target.value) }),
       note ? (0, import_react10.createElement)("p", { className: note.ok ? "oset-muted" : "oset-problem", role: note.ok ? "status" : "alert" }, note.text) : null
     ),
@@ -14612,6 +14712,7 @@ function OmniSettingsSection({ close }) {
       }, action.label)))
     ),
     problem ? (0, import_react10.createElement)("p", { className: "oset-problem", role: "alert" }, problem) : null,
+    info?.linked ? (0, import_react10.createElement)(ThreadDefaultsCard) : null,
     info?.linked ? (0, import_react10.createElement)(FreeReactionsCard) : null
   );
 }
@@ -14628,6 +14729,10 @@ var OMNI_SETTINGS_CSS = `
 .oset-primary{border:0;background:linear-gradient(135deg,#22d3ee,#ff3bd4);color:#06060f}
 .oset-danger{background:#e5484d;color:#fff}
 .oset-problem{margin:0;color:#e5484d;font-size:13px}
+.oset-field{display:flex;flex-direction:column;gap:4px;margin-top:8px}
+.oset-label{font-size:13px;font-weight:600}
+.oset-select{height:34px;padding:0 10px;border-radius:10px;border:1px solid color-mix(in srgb,currentColor 22%,transparent);background:none;color:inherit;font:inherit;font-size:13.5px}
+.oset-select:disabled{opacity:.5}
 .oset-input{margin-top:6px;height:36px;padding:0 12px;border-radius:10px;border:1px solid color-mix(in srgb,currentColor 22%,transparent);background:none;color:inherit;font:inherit;font-size:16px;letter-spacing:.12em}
 `;
 function registerSettings(ctx) {
@@ -15380,7 +15485,7 @@ var OMNI_PHONE_CSS = `${PHONE_FRAME_CSS}
 
 // src/client/omni-tree.js
 var import_react15 = require("react");
-var { ChevronRightIcon: ChevronRightIcon2, CloseIcon, PlusIcon: PlusIcon3 } = icons;
+var { ChevronRightIcon: ChevronRightIcon2, CloseIcon, DotsIcon, PlusIcon: PlusIcon3, SparkIcon } = icons;
 var OPEN_KEY = "omni.tree.open";
 var SEARCH_DELAY_MS = 250;
 var OMNI_OUTDATED = "Adding a chat needs a newer Omni. Update it first.";
@@ -15415,6 +15520,25 @@ function threadState(thread, { running = false, asking = false } = {}) {
   if (running || thread.status === "working") return "working";
   return "idle";
 }
+function freeMarkOf(thread) {
+  const sends = thread?.permissions?.sends === "allow";
+  const any = thread?.permissions?.reactions === "any";
+  if (sends && any) return t("Sends messages and any reaction without asking you");
+  if (sends) return t("Sends messages without asking you");
+  if (any) return t("Reacts with any emoji without asking you");
+  return null;
+}
+function permissionMenuOf(thread) {
+  const own = thread?.ownPermissions ?? {};
+  const item = (field, value, label) => ({ field, value, label, checked: (own[field] ?? null) === value });
+  const sends = { ask: t("Ask me each time"), allow: t("Send without asking") };
+  const reactions = { list: t("Only the free reactions go without asking"), any: t("Any reaction goes without asking") };
+  const byDefault = (field, labels, fallback) => t("Follow the default: {choice}", { choice: labels[thread?.defaultPermissions?.[field]] ?? labels[fallback] });
+  return [
+    { field: "sends", label: t("Messages"), items: [item("sends", null, byDefault("sends", sends, "ask")), item("sends", "ask", sends.ask), item("sends", "allow", sends.allow)] },
+    { field: "reactions", label: t("Reactions"), items: [item("reactions", null, byDefault("reactions", reactions, "list")), item("reactions", "list", reactions.list), item("reactions", "any", reactions.any)] }
+  ];
+}
 function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
   const id = thread.sessionId;
   const useStatus = rowProps.useSessionStatus ?? noStatus;
@@ -15425,11 +15549,22 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
   const active = useRetain(id, (info) => (info?.retainedBy?.mainView ?? 0) > 0);
   const [confirming, setConfirming] = (0, import_react15.useState)(false);
   const [problem, setProblem] = (0, import_react15.useState)(null);
+  const [menu, setMenu] = (0, import_react15.useState)(false);
+  const row = (0, import_react15.useRef)(null);
+  (0, import_react15.useEffect)(() => {
+    if (!menu || typeof document === "undefined" || typeof document.addEventListener !== "function") return void 0;
+    const away = (event) => {
+      if (!row.current?.contains?.(event.target)) setMenu(false);
+    };
+    document.addEventListener("pointerdown", away, true);
+    return () => document.removeEventListener("pointerdown", away, true);
+  }, [menu]);
   const opens = teamReady(rowProps.roster);
+  const free = freeMarkOf(thread);
   const state = threadState(thread, { running, asking });
   const reason = thread.connected === false || !opens ? hostText(thread.reason ?? t("Not connected")) : null;
   const dot = typeof rowProps.useSessionStatus === "function" && unread && !active;
-  const label = [thread.title, state === "waiting" ? t("Waiting for you") : state === "working" ? t("Working") : "", reason ?? "", dot ? t("Unread activity") : ""].filter(Boolean).join(", ");
+  const label = [thread.title, state === "waiting" ? t("Waiting for you") : state === "working" ? t("Working") : "", reason ?? "", free ?? "", dot ? t("Unread activity") : ""].filter(Boolean).join(", ");
   const remove = () => {
     if (!confirming) {
       setConfirming(true);
@@ -15439,9 +15574,19 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
     setProblem(null);
     call("omni-thread-remove", { threadId: thread.id }).catch((error) => setProblem(error?.message ?? String(error)));
   };
+  const choose = (choice) => {
+    setMenu(false);
+    setProblem(null);
+    call("omni-thread-permissions", { threadId: thread.id, [choice.field]: choice.value }).catch((error) => setProblem(error?.message ?? String(error)));
+  };
+  const onMenuKey = (event) => {
+    if (event.key !== "Escape") return;
+    event.stopPropagation();
+    setMenu(false);
+  };
   return (0, import_react15.createElement)(
     "div",
-    { className: "ot-thread", "data-idle": state === "idle" || void 0 },
+    { ref: row, className: "ot-thread", "data-idle": state === "idle" || void 0 },
     (0, import_react15.createElement)(
       "button",
       {
@@ -15461,8 +15606,19 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
       (0, import_react15.createElement)("span", { className: state === "waiting" ? "bt-thread-wait" : state === "working" ? "bt-thread-spin" : "ot-thread-idle", "aria-hidden": true }),
       (0, import_react15.createElement)("span", { className: "bt-thread-title" }, thread.title),
       reason ? (0, import_react15.createElement)("span", { className: "ot-thread-reason" }, reason) : null,
+      free ? (0, import_react15.createElement)("span", { className: "ot-thread-free", title: free, "aria-hidden": true }, (0, import_react15.createElement)(SparkIcon)) : null,
       dot ? (0, import_react15.createElement)("span", { className: "bt-unread", "aria-hidden": true }) : null
     ),
+    confirming ? null : (0, import_react15.createElement)("button", {
+      type: "button",
+      className: "ot-thread-more",
+      "aria-label": t("Asking first in {name}", { name: thread.title }),
+      title: t("Asking first"),
+      "aria-haspopup": "menu",
+      "aria-expanded": menu,
+      tabIndex: shown ? void 0 : -1,
+      onClick: () => setMenu((open) => !open)
+    }, (0, import_react15.createElement)(DotsIcon)),
     confirming ? null : (0, import_react15.createElement)("button", {
       type: "button",
       className: "ot-thread-phone",
@@ -15485,6 +15641,25 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
       onClick: remove,
       onBlur: () => setConfirming(false)
     }, confirming ? t("Remove") : (0, import_react15.createElement)(CloseIcon)),
+    menu ? (0, import_react15.createElement)(
+      "div",
+      { className: "ot-thread-menu", role: "menu", "aria-label": t("Asking first in {name}", { name: thread.title }), onKeyDown: onMenuKey },
+      permissionMenuOf(thread).map((group) => (0, import_react15.createElement)(
+        "div",
+        { key: group.field, className: "ot-thread-menu-group", role: "group", "aria-label": group.label },
+        (0, import_react15.createElement)("span", { className: "ot-thread-menu-head" }, group.label),
+        group.items.map((choice) => (0, import_react15.createElement)("button", {
+          key: String(choice.value),
+          type: "button",
+          role: "menuitemradio",
+          className: "ot-thread-menu-item",
+          "aria-checked": choice.checked,
+          "data-field": choice.field,
+          "data-value": choice.value ?? "default",
+          onClick: () => choose(choice)
+        }, choice.label))
+      ))
+    ) : null,
     problem ? (0, import_react15.createElement)("span", { className: "ot-thread-problem", role: "alert" }, hostText(problem)) : null
   );
 }
@@ -15754,8 +15929,20 @@ var OMNI_TREE_CSS = `
 .ot-thread-remove svg{width:11px;height:11px}
 .ot-thread-phone{position:absolute;right:28px;display:grid;place-items:center;width:20px;height:20px;padding:0;border:0;border-radius:6px;background:var(--bt-hover);color:var(--bt-ink-3);cursor:pointer;opacity:0;transition:opacity .12s ease}
 .ot-thread-phone svg{width:12px;height:12px}
+.ot-thread-more{position:absolute;right:52px;display:grid;place-items:center;width:20px;height:20px;padding:0;border:0;border-radius:6px;background:var(--bt-hover);color:var(--bt-ink-3);cursor:pointer;opacity:0;transition:opacity .12s ease}
+.ot-thread-more svg{width:12px;height:12px}
+.ot-thread-more:hover,.ot-thread-more[aria-expanded=true]{color:var(--bt-ink);opacity:1}
+.ot-thread-free{display:grid;place-items:center;flex:none;width:14px;height:14px;color:var(--bt-accent, #22d3ee)}
+.ot-thread-free svg{width:11px;height:11px}
+.ot-thread-menu{flex-basis:100%;display:grid;gap:6px;margin:2px 4px 4px 22px;padding:6px;border:1px solid var(--bt-line, rgba(127,127,127,.2));border-radius:10px;background:var(--bt-surface, transparent)}
+.ot-thread-menu-group{display:grid;gap:1px}
+.ot-thread-menu-head{padding:0 6px;font-size:11px;color:var(--bt-ink-3)}
+.ot-thread-menu-item{display:block;width:100%;padding:3px 6px 3px 20px;border:0;border-radius:7px;background:none;color:var(--bt-ink-2);font:inherit;font-size:12px;line-height:18px;text-align:left;cursor:pointer;position:relative}
+.ot-thread-menu-item:hover{background:var(--bt-hover);color:var(--bt-ink)}
+.ot-thread-menu-item[aria-checked=true]{color:var(--bt-ink)}
+.ot-thread-menu-item[aria-checked=true]::before{content:'';position:absolute;left:8px;top:50%;width:6px;height:6px;margin-top:-3px;border-radius:50%;background:var(--bt-accent, #22d3ee)}
 .ot-thread-phone:hover{color:var(--bt-ink)}
-.ot-thread:hover .ot-thread-remove,.ot-thread-remove:focus-visible,.ot-thread-remove[data-confirm],.ot-thread:hover .ot-thread-phone,.ot-thread-phone:focus-visible{opacity:1}
+.ot-thread:hover .ot-thread-remove,.ot-thread-remove:focus-visible,.ot-thread-remove[data-confirm],.ot-thread:hover .ot-thread-phone,.ot-thread-phone:focus-visible,.ot-thread:hover .ot-thread-more,.ot-thread-more:focus-visible{opacity:1}
 .ot-thread-remove[data-confirm]{color:var(--bt-danger, #dc2626)}
 .ot-thread-problem{flex-basis:100%;padding:0 8px 3px 28px;font-size:11px;color:var(--bt-danger, #dc2626)}
 .ot-picker{display:grid;gap:4px;margin:2px 0 4px;padding:6px;border:1px solid var(--bt-line, rgba(127,127,127,.2));border-radius:10px;background:var(--bt-surface, transparent)}
@@ -15775,7 +15962,7 @@ var OMNI_TREE_CSS = `
 .ot-picker-problem{color:var(--bt-danger, #dc2626)}
 .ot-chats[data-open] .ot-thread{animation:ot-in .22s ease both}
 @keyframes ot-in{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}
-@media (prefers-reduced-motion:reduce){.ot-chats{transition:none}.ot-chats .ot-thread{animation:none}.ot-chevron{transition:none}.ot-thread-remove,.ot-thread-phone{transition:none}}
+@media (prefers-reduced-motion:reduce){.ot-chats{transition:none}.ot-chats .ot-thread{animation:none}.ot-chevron{transition:none}.ot-thread-remove,.ot-thread-phone,.ot-thread-more{transition:none}}
 body[data-omni-thread] .bt-voice,body[data-omni-thread] .bt-plus,body[data-omni-thread] .bt-composer-model,body[data-omni-thread] .bt-mw-dock,body[data-omni-thread] .bt-btw-dock{display:none!important}
 `;
 
@@ -16151,7 +16338,30 @@ var STRINGS = {
   "Disconnect from {origin}? Your Bots stop seeing its channels until you connect again.": "要断开与 {origin} 的连接吗？在你重新连接之前，你的 Bot 将看不到它的渠道。",
   "Looking for your Omni…": "正在查找你的 Omni…",
   "Reactions without asking": "无需询问的回应",
-  "In a chat thread, these reactions go without asking you first. Any other reaction, and every message, asks each time.": "在聊天线程中，这些回应会直接发出，不先询问你。其他回应以及每条消息，每次都会询问。",
+  "In a chat thread, these reactions go without asking you first. Any other reaction asks, unless you let every reaction go above or in the thread's menu.": "在聊天线程中，这些回应会直接发出，不先询问你。其他回应都会询问，除非你在上方或线程的菜单中允许所有回应。",
+  // Whether chat threads and new automations ask first (omni-settings.js, omni-tree.js).
+  "Asking you first": "先询问你",
+  "Chat threads ask you before they send, and before any reaction that is not on the list below; new automations ask before they act. If you leave DeepSeek Harness running on its own, you can let them go without asking.": "聊天线程在发送之前，以及发出不在下方列表中的回应之前，会先询问你；新的自动化在执行之前也会先询问你。如果你让 DeepSeek Harness 无人值守地运行，可以让它们不再询问。",
+  "New automations act on what other people write in your chats. With this off, a message there could make a Bot run commands, change files or send as you without asking. Only for automations made from now on: each one you have keeps its own choice.": "新的自动化会根据别人在你的聊天中写的内容行动。关闭询问后，那里的一条消息可能让 Bot 不经询问就运行命令、修改文件或以你的身份发送。只对今后新建的自动化生效：已有的每个自动化保留各自的选择。",
+  "Follow the default: {choice}": "跟随默认设置：{choice}",
+  "Each thread can still choose for itself, from its menu in the sidebar.": "每个线程仍可在侧边栏中它的菜单里自行选择。",
+  "Messages from a chat thread": "聊天线程发出的消息",
+  "Ask me each time": "每次都问我",
+  "Send without asking": "不询问直接发送",
+  "A thread sends into its own chat as you, without showing you first. Someone in that chat could write a message that talks it into sending something.": "线程会以你的身份直接在它自己的聊天中发送，不先给你看。那个聊天里的人可能写下一条消息，诱使它发送某些内容。",
+  "Reactions from a chat thread": "聊天线程发出的回应",
+  "Only the reactions below go without asking": "只有下方的回应无需询问",
+  "Any reaction goes without asking": "任何回应都无需询问",
+  "New automations": "新的自动化",
+  "Ask me before they act": "执行前先问我",
+  "Act without asking": "不询问直接执行",
+  "Only for automations made from now on: each one you have keeps its own choice.": "只对今后新建的自动化生效：已有的每个自动化保留各自的选择。",
+  "Sends messages and any reaction without asking you": "发送消息和任何回应都不询问你",
+  "Sends messages without asking you": "发送消息不询问你",
+  "Reacts with any emoji without asking you": "用任何表情回应都不询问你",
+  "Only the free reactions go without asking": "只有免询问的回应直接发出",
+  "Asking first in {name}": "{name} 中的先询问设置",
+  "Asking first": "先询问",
   "This page shows sample data until this DSH is linked to your Omni.": "在这个 DSH 关联到你的 Omni 之前，此页面显示示例数据。",
   "Use it with an API key": "用 API 密钥使用它",
   "Older Omnis can't approve this app. Paste its API key instead; it stays on this computer.": "较旧的 Omni 无法批准这个应用。请改为粘贴它的 API 密钥；密钥只保存在这台电脑上。",

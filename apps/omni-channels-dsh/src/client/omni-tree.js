@@ -5,7 +5,7 @@ import { isOmniBot, omniActions, startLive, typeOf, unreadOf } from './omni-stor
 import { openPhone } from './omni-phone.js'
 import { PhoneGlyph } from './phone-frame.js'
 import { call, hostText, icons, t } from './core.js'
-const { ChevronRightIcon, CloseIcon, PlusIcon } = icons
+const { ChevronRightIcon, CloseIcon, DotsIcon, PlusIcon, SparkIcon } = icons
 
 // Under the Omni Bot's sidebar row: one collapsible item per channel of the linked Omni, each
 // with a + that adds one of its chats, and under it the chats added there, each a thread: a
@@ -60,6 +60,36 @@ export function threadState(thread, { running = false, asking = false } = {}) {
 }
 
 /**
+ * What a thread does without asking you, as its view says (host threads.js permissionsOf):
+ * the mark's title, or null while it asks for both as it does by default.
+ */
+export function freeMarkOf(thread) {
+  const sends = thread?.permissions?.sends === 'allow'
+  const any = thread?.permissions?.reactions === 'any'
+  if (sends && any) return t('Sends messages and any reaction without asking you')
+  if (sends) return t('Sends messages without asking you')
+  if (any) return t('Reacts with any emoji without asking you')
+  return null
+}
+
+/**
+ * The thread's menu: for its messages and its reactions, follow the default (null) or its own
+ * choice, the one in force checked. Each item is what `omni-thread-permissions` is sent.
+ */
+export function permissionMenuOf(thread) {
+  const own = thread?.ownPermissions ?? {}
+  const item = (field, value, label) => ({ field, value, label, checked: (own[field] ?? null) === value })
+  const sends = { ask: t('Ask me each time'), allow: t('Send without asking') }
+  const reactions = { list: t('Only the free reactions go without asking'), any: t('Any reaction goes without asking') }
+  // "Follow the default" names the default it follows now, as the view gives it.
+  const byDefault = (field, labels, fallback) => t('Follow the default: {choice}', { choice: labels[thread?.defaultPermissions?.[field]] ?? labels[fallback] })
+  return [
+    { field: 'sends', label: t('Messages'), items: [item('sends', null, byDefault('sends', sends, 'ask')), item('sends', 'ask', sends.ask), item('sends', 'allow', sends.allow)] },
+    { field: 'reactions', label: t('Reactions'), items: [item('reactions', null, byDefault('reactions', reactions, 'list')), item('reactions', 'list', reactions.list), item('reactions', 'any', reactions.any)] },
+  ]
+}
+
+/**
  * One thread under its channel. It opens its Session through the team's row action, the way a
  * Bot's own rows do; on a team without the hook it shows the reason in place and opens nothing,
  * so no conversation view takes a turn the thread cannot act on. A thread with no live key says
@@ -77,18 +107,39 @@ export function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
   const active = useRetain(id, info => (info?.retainedBy?.mainView ?? 0) > 0)
   const [confirming, setConfirming] = useState(false)
   const [problem, setProblem] = useState(null)
+  const [menu, setMenu] = useState(false)
+  const row = useRef(null)
+  // An open menu closes on a click anywhere outside its row.
+  useEffect(() => {
+    if (!menu || typeof document === 'undefined' || typeof document.addEventListener !== 'function') return undefined
+    const away = (event) => { if (!row.current?.contains?.(event.target)) setMenu(false) }
+    document.addEventListener('pointerdown', away, true)
+    return () => document.removeEventListener('pointerdown', away, true)
+  }, [menu])
   const opens = teamReady(rowProps.roster)
+  const free = freeMarkOf(thread)
   const state = threadState(thread, { running, asking })
   const reason = thread.connected === false || !opens ? hostText(thread.reason ?? t('Not connected')) : null
   const dot = typeof rowProps.useSessionStatus === 'function' && unread && !active
-  const label = [thread.title, state === 'waiting' ? t('Waiting for you') : state === 'working' ? t('Working') : '', reason ?? '', dot ? t('Unread activity') : ''].filter(Boolean).join(', ')
+  const label = [thread.title, state === 'waiting' ? t('Waiting for you') : state === 'working' ? t('Working') : '', reason ?? '', free ?? '', dot ? t('Unread activity') : ''].filter(Boolean).join(', ')
   const remove = () => {
     if (!confirming) { setConfirming(true); return }
     setConfirming(false)
     setProblem(null)
     call('omni-thread-remove', { threadId: thread.id }).catch(error => setProblem(error?.message ?? String(error)))
   }
-  return h('div', { className: 'ot-thread', 'data-idle': state === 'idle' || undefined },
+  // The owner's choice for this thread; the row shows it on the team's next roster pull.
+  const choose = (choice) => {
+    setMenu(false)
+    setProblem(null)
+    call('omni-thread-permissions', { threadId: thread.id, [choice.field]: choice.value }).catch(error => setProblem(error?.message ?? String(error)))
+  }
+  const onMenuKey = (event) => {
+    if (event.key !== 'Escape') return
+    event.stopPropagation()
+    setMenu(false)
+  }
+  return h('div', { ref: row, className: 'ot-thread', 'data-idle': state === 'idle' || undefined },
     h('button', {
       type: 'button', className: 'bt-thread', 'data-state': state, 'data-thread-id': thread.id, 'aria-label': label, title: reason ?? thread.title,
       'aria-current': active ? 'page' : undefined, 'aria-disabled': opens ? undefined : true, tabIndex: shown ? undefined : -1,
@@ -97,7 +148,12 @@ export function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
     h('span', { className: state === 'waiting' ? 'bt-thread-wait' : state === 'working' ? 'bt-thread-spin' : 'ot-thread-idle', 'aria-hidden': true }),
     h('span', { className: 'bt-thread-title' }, thread.title),
     reason ? h('span', { className: 'ot-thread-reason' }, reason) : null,
+    free ? h('span', { className: 'ot-thread-free', title: free, 'aria-hidden': true }, h(SparkIcon)) : null,
     dot ? h('span', { className: 'bt-unread', 'aria-hidden': true }) : null),
+    confirming ? null : h('button', {
+      type: 'button', className: 'ot-thread-more', 'aria-label': t('Asking first in {name}', { name: thread.title }), title: t('Asking first'),
+      'aria-haspopup': 'menu', 'aria-expanded': menu, tabIndex: shown ? undefined : -1, onClick: () => setMenu(open => !open),
+    }, h(DotsIcon)),
     confirming ? null : h('button', {
       type: 'button', className: 'ot-thread-phone', 'aria-label': t('Show {name} in the phone pane', { name: thread.title }), title: t('Phone pane'),
       tabIndex: shown ? undefined : -1,
@@ -109,6 +165,13 @@ export function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
       'aria-label': confirming ? t('Remove {name} from the sidebar? Click again', { name: thread.title }) : t('Remove {name}', { name: thread.title }),
       title: confirming ? t('Click again to remove') : t('Remove'), tabIndex: shown ? undefined : -1, onClick: remove, onBlur: () => setConfirming(false),
     }, confirming ? t('Remove') : h(CloseIcon)),
+    menu ? h('div', { className: 'ot-thread-menu', role: 'menu', 'aria-label': t('Asking first in {name}', { name: thread.title }), onKeyDown: onMenuKey },
+      permissionMenuOf(thread).map(group => h('div', { key: group.field, className: 'ot-thread-menu-group', role: 'group', 'aria-label': group.label },
+        h('span', { className: 'ot-thread-menu-head' }, group.label),
+        group.items.map(choice => h('button', {
+          key: String(choice.value), type: 'button', role: 'menuitemradio', className: 'ot-thread-menu-item', 'aria-checked': choice.checked,
+          'data-field': choice.field, 'data-value': choice.value ?? 'default', onClick: () => choose(choice),
+        }, choice.label))))) : null,
     problem ? h('span', { className: 'ot-thread-problem', role: 'alert' }, hostText(problem)) : null)
 }
 
@@ -326,8 +389,20 @@ export const OMNI_TREE_CSS = `
 .ot-thread-remove svg{width:11px;height:11px}
 .ot-thread-phone{position:absolute;right:28px;display:grid;place-items:center;width:20px;height:20px;padding:0;border:0;border-radius:6px;background:var(--bt-hover);color:var(--bt-ink-3);cursor:pointer;opacity:0;transition:opacity .12s ease}
 .ot-thread-phone svg{width:12px;height:12px}
+.ot-thread-more{position:absolute;right:52px;display:grid;place-items:center;width:20px;height:20px;padding:0;border:0;border-radius:6px;background:var(--bt-hover);color:var(--bt-ink-3);cursor:pointer;opacity:0;transition:opacity .12s ease}
+.ot-thread-more svg{width:12px;height:12px}
+.ot-thread-more:hover,.ot-thread-more[aria-expanded=true]{color:var(--bt-ink);opacity:1}
+.ot-thread-free{display:grid;place-items:center;flex:none;width:14px;height:14px;color:var(--bt-accent, #22d3ee)}
+.ot-thread-free svg{width:11px;height:11px}
+.ot-thread-menu{flex-basis:100%;display:grid;gap:6px;margin:2px 4px 4px 22px;padding:6px;border:1px solid var(--bt-line, rgba(127,127,127,.2));border-radius:10px;background:var(--bt-surface, transparent)}
+.ot-thread-menu-group{display:grid;gap:1px}
+.ot-thread-menu-head{padding:0 6px;font-size:11px;color:var(--bt-ink-3)}
+.ot-thread-menu-item{display:block;width:100%;padding:3px 6px 3px 20px;border:0;border-radius:7px;background:none;color:var(--bt-ink-2);font:inherit;font-size:12px;line-height:18px;text-align:left;cursor:pointer;position:relative}
+.ot-thread-menu-item:hover{background:var(--bt-hover);color:var(--bt-ink)}
+.ot-thread-menu-item[aria-checked=true]{color:var(--bt-ink)}
+.ot-thread-menu-item[aria-checked=true]::before{content:'';position:absolute;left:8px;top:50%;width:6px;height:6px;margin-top:-3px;border-radius:50%;background:var(--bt-accent, #22d3ee)}
 .ot-thread-phone:hover{color:var(--bt-ink)}
-.ot-thread:hover .ot-thread-remove,.ot-thread-remove:focus-visible,.ot-thread-remove[data-confirm],.ot-thread:hover .ot-thread-phone,.ot-thread-phone:focus-visible{opacity:1}
+.ot-thread:hover .ot-thread-remove,.ot-thread-remove:focus-visible,.ot-thread-remove[data-confirm],.ot-thread:hover .ot-thread-phone,.ot-thread-phone:focus-visible,.ot-thread:hover .ot-thread-more,.ot-thread-more:focus-visible{opacity:1}
 .ot-thread-remove[data-confirm]{color:var(--bt-danger, #dc2626)}
 .ot-thread-problem{flex-basis:100%;padding:0 8px 3px 28px;font-size:11px;color:var(--bt-danger, #dc2626)}
 .ot-picker{display:grid;gap:4px;margin:2px 0 4px;padding:6px;border:1px solid var(--bt-line, rgba(127,127,127,.2));border-radius:10px;background:var(--bt-surface, transparent)}
@@ -347,6 +422,6 @@ export const OMNI_TREE_CSS = `
 .ot-picker-problem{color:var(--bt-danger, #dc2626)}
 .ot-chats[data-open] .ot-thread{animation:ot-in .22s ease both}
 @keyframes ot-in{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}
-@media (prefers-reduced-motion:reduce){.ot-chats{transition:none}.ot-chats .ot-thread{animation:none}.ot-chevron{transition:none}.ot-thread-remove,.ot-thread-phone{transition:none}}
+@media (prefers-reduced-motion:reduce){.ot-chats{transition:none}.ot-chats .ot-thread{animation:none}.ot-chevron{transition:none}.ot-thread-remove,.ot-thread-phone,.ot-thread-more{transition:none}}
 body[data-omni-thread] .bt-voice,body[data-omni-thread] .bt-plus,body[data-omni-thread] .bt-composer-model,body[data-omni-thread] .bt-mw-dock,body[data-omni-thread] .bt-btw-dock{display:none!important}
 `
