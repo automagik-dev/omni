@@ -75,7 +75,7 @@ export type UpdateConfirm = 'whatsapp' | 'app';
 
 export interface UpdateConfig {
   /**
-   * False with OMNI_UPDATE_CHECK=false: the registry is never read and updates are off. An app
+   * False with OMNI_UPDATE_CHECK=false, 0 or off: the registry is never read and updates are off. An app
    * that embeds this Omni (`omni sandbox run --embedded`) ships its updates itself.
    */
   check: boolean;
@@ -115,10 +115,13 @@ function confirmOf(env: NodeJS.ProcessEnv): UpdateConfirm {
   return 'whatsapp';
 }
 
+/** What OMNI_UPDATE_CHECK takes to turn the check off, as OMNI_TELEMETRY and OMNI_PLUGIN_LANE do. */
+const UPDATE_CHECK_OFF = new Set(['false', '0', 'off']);
+
 /** Read from the environment and nowhere else. A prerelease version follows `next`, a release `latest`. */
 export function readUpdateConfig(version: string, env: NodeJS.ProcessEnv = process.env): UpdateConfig {
   const channel = ChannelSchema.safeParse(env.OMNI_UPDATE_CHANNEL?.trim());
-  const check = env.OMNI_UPDATE_CHECK?.trim().toLowerCase() !== 'false';
+  const check = !UPDATE_CHECK_OFF.has(env.OMNI_UPDATE_CHECK?.trim().toLowerCase() ?? '');
   return {
     check,
     command: check ? commandOf(env.OMNI_UPDATE_COMMAND) : null,

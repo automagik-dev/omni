@@ -216,6 +216,9 @@ describe('update status', () => {
     const off = readUpdateConfig(CURRENT, { OMNI_UPDATE_CHECK: 'false', OMNI_UPDATE_COMMAND: 'omni update --yes' });
     expect(off.check).toBe(false);
     expect(off.command).toBeNull();
+    for (const value of ['0', 'off', ' OFF '])
+      expect(readUpdateConfig(CURRENT, { OMNI_UPDATE_CHECK: value }).check).toBe(false);
+    expect(readUpdateConfig(CURRENT, { OMNI_UPDATE_CHECK: 'true' }).check).toBe(true);
     const { updater } = setup({
       OMNI_UPDATE_CHECK: 'false',
       OMNI_UPDATE_COMMAND: 'omni update --yes',

@@ -96,8 +96,15 @@ the API gets:
   updates from the app are off;
 - `OMNI_PLUGIN_LANE=off`: no plugin lane is read.
 
-The database URL and Postgres are as in any sandbox: pgserve's postmaster listens on 127.0.0.1
-and its socket, with the `postgres`/`postgres` login, and the API dials it over TCP.
+The app also starts the supervisor itself with `OMNI_TELEMETRY=false` and
+`OMNI_SKIP_POSTINSTALL_PIN=1`. `--embedded` cannot do this, because the CLI acts before the
+`run` command does: without the first, a CLI error can send Omni's Sentry project an event with
+the command line (and so the `--home` path); without the second, the CLI may pin the user's own
+global `@automagik/omni` to the version the app ships.
+
+The database URL and Postgres are as in any sandbox. pgserve sets no listen address, so
+Postgres takes its default, `localhost`: 127.0.0.1, and `::1` where `localhost` resolves to it,
+plus its socket, with the `postgres`/`postgres` login. The API dials it over TCP.
 
 ## Requirements
 
