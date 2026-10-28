@@ -411,7 +411,9 @@ export class ConnectorService {
       .select()
       .from(connectors)
       .where(and(...conditions))
-      .orderBy(connectors.createdAt)
+      // The cursor is the last id, so the sort key must be the id too; ordering
+      // by createdAt with an id cursor skips and repeats rows across pages.
+      .orderBy(connectors.id)
       .limit(limit + 1);
 
     const hasMore = rows.length > limit;
@@ -1141,7 +1143,9 @@ export class ConnectorService {
 
   /** The automation `connector.call` implementation. */
   async call(request: ConnectorCallRequest, trustedTenantId?: string | null): Promise<unknown> {
-    const prepared = await this.resolveAction(request.connectorId, request.action, trustedTenantId ?? null);
-    return this.executePrepared(prepared, request.input, request.timeoutMs, trustedTenantId ?? null);
+    // Leave `undefined` alone: resolveAction/getRow then uses the active request
+    // scope; an explicit null is the legacy NULL-tenant world.
+    const prepared = await this.resolveAction(request.connectorId, request.action, trustedTenantId);
+    return this.executePrepared(prepared, request.input, request.timeoutMs, trustedTenantId);
   }
 }

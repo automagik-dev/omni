@@ -52,7 +52,9 @@ interface Resource {
 const RESOURCES: Resource[] = [
   {
     type: 'connector_event_subscription',
-    pattern: /^\/connectors\/([^/]+)\/subscriptions(?:\/([^/]+))?(?:\/(.+))?$/,
+    // The CONNECTOR id is deliberately non-capturing: the audit target is the
+    // subscription row, so its id must be group 1 (the `route` resource shape).
+    pattern: /^\/connectors\/[^/]+\/subscriptions(?:\/([^/]+))?(?:\/(.+))?$/,
     table: connectorEventSubscriptions,
     idColumn: connectorEventSubscriptions.id,
   },
