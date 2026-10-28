@@ -70,11 +70,13 @@ export const ONGOING_RENEWED = Object.freeze({
   archived: 'A new ongoing session was made for it: DSH archived the one before.',
 })
 
-/** The words of an assistant/message event, its text blocks joined; '' when it has none. */
-export function wordsOf(event) {
-  const content = event?.data?.message?.content
+/** A message's text blocks joined; '' when it has none. */
+export function textOf(message) {
+  const content = message?.content
   return Array.isArray(content) ? content.filter(block => block?.type === 'text').map(block => block.text).join('\n').trim() : ''
 }
+/** The words of an assistant/message event; '' when it has none. */
+export const wordsOf = event => textOf(event?.data?.message)
 /** How a run ends with its turn's end: failed on an error or a stop, else done with its words. */
 export function turnOutcome(reason, words) {
   if (reason?.kind === 'error') return { status: 'failed', summary: reason.error?.message }

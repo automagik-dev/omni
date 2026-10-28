@@ -107,6 +107,21 @@ function endedIn(session, turnId, cutByRestart) {
 }
 
 /**
+ * The message that opened the turn a Session runs now, from its log: the first user/message
+ * after the newest turn/start ({ content, source }); null when the newest turn has ended or
+ * the log shows none.
+ */
+export function turnOpening(session) {
+  let first = null
+  for (const event of newestFirst(session)) {
+    if (event.type === 'turn/end') return null
+    if (event.type === 'user/message') first = event.data ?? null
+    else if (event.type === 'turn/start') return first
+  }
+  return null
+}
+
+/**
  * The newest turn in a Session's log: whether a restart cut it (a turn the log shows begun and
  * never ended counts as cut), why it ended, and its last words; null when the log shows none.
  */

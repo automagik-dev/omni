@@ -87,8 +87,8 @@ export function install(rt) {
     const agent = Object.hasOwn(agents(), agentId) ? agents()[agentId] : undefined
     return agent?.kind === DSH_KIND && Array.isArray(agent.sessions) && agent.sessions.includes(sessionId)
   }
-  const takes = sessionId => typeof sessionId === 'string' && !archivedIds(ctx).has(sessionId)
-    && Object.keys(agents()).some(agentId => holds(agentId, sessionId))
+  const takes = sessionId => typeof sessionId === 'string' && Object.keys(agents()).some(agentId => holds(agentId, sessionId))
+    && !archivedIds(ctx).has(sessionId)
 
   // An "ongoing" automation's one Session under its DSH bot (ongoingSessions).
   const { of: ongoingOf, ensure: ensureOngoing } = ongoingSessions({

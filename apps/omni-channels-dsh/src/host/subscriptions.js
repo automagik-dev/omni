@@ -31,6 +31,9 @@ const THREAD_REF = /^thread:(.+)$/s
 // its own under that bot for each event ("new"), or one for all of them ("ongoing").
 const DshBotWorker = z.object({ kind: z.literal('dshbot'), agentId: z.string().min(1).max(200), mode: z.enum(['new', 'ongoing']) }).strict()
 const DSH_BOT_REF = /^dshbot:(.+)$/s
+// What `as` may be, by who acts: a mismatch is refused, never read as the default.
+const BOT_MODES = new Set(['task', 'chat'])
+const DSH_BOT_MODES = new Set(['new', 'ongoing'])
 
 // Event text comes from other people. While a run that asks first works, the tools that only
 // read (READ_TOOLS, asks.js) run as they are. Everything else (a shell, a file change, the
@@ -159,6 +162,7 @@ export function install(rt) {
       if (problem !== null) throw refused(problem)
       const bot = rt.omniDshBots.find(dsh[1])
       if (bot === undefined) throw invalid(`No DSH bot "${dsh[1].trim().slice(0, 60)}". Use a dshbot: name find_chats gives.`)
+      if (as !== undefined && !DSH_BOT_MODES.has(as)) throw invalid(`A DSH bot takes as "new" or "ongoing", not "${as}".`)
       return DshBotWorker.parse({ kind: 'dshbot', agentId: bot.id, mode: as === 'ongoing' ? 'ongoing' : 'new' })
     }
     if (value === '' || ['tentacall', 'autopilot', 'me', 'you'].includes(lower)) return { kind: 'events' }
@@ -167,6 +171,8 @@ export function install(rt) {
     const bot = Object.values(state.bots).find(item => item.name.toLowerCase() === lower)
     if (!bot) throw invalid(`No Bot named "${value}". Use a name from list_bots, "${eventsName()}"${teamReason() === null ? ', "new session" or "ongoing session"' : ''}.`)
     if (bot.id === eventsBotId()) return { kind: 'events' }
+    // Another Bot takes "task" or "chat" (`as` is ignored for you and the sessions under you).
+    if (as !== undefined && !BOT_MODES.has(as)) throw invalid(`A Bot takes as "task" or "chat", not "${as}".`)
     return { kind: 'bot', botId: bot.id, mode: as === 'chat' ? 'chat' : 'task' }
   }
 

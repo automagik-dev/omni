@@ -118,6 +118,10 @@ test('"new" makes one Session per event under that DSH bot, none under the Omni 
   assert.deepEqual([sessionsOf(run, 'coder'), sessionsOf(run, 'writer'), sessionsOf(run, 'tasks')], [[one, two], [], []])
   assert.deepEqual(run.channels.omniRows.list(), [])
   await until(() => postedTo(run, one).length === 1 && postedTo(run, two).length === 1)
+  // Ask-first holds the run's own tagged turn there too.
+  turn(run, one, 1, postedTo(run, one)[0], undefined, null)
+  assert.equal((await gateOf(run, 'bash', one)).kind, 'ask')
+  assert.deepEqual(await gateOf(run, 'read', one), { kind: 'allow' })
   assert.deepEqual([postedTo(run, one)[0].source, postedTo(run, two)[0].source], [{ kind: 'omni-run', runId: a.id }, { kind: 'omni-run', runId: b.id }])
   for (const record of [runById(run, a.id), runById(run, b.id)]) {
     assert.deepEqual([record.standing, record.status, Object.hasOwn(record, 'botId'), Object.hasOwn(record, 'task')], [true, 'working', false, false], record.id)
@@ -125,7 +129,8 @@ test('"new" makes one Session per event under that DSH bot, none under the Omni 
     assert.equal(run.team.selfOf(record.sessionId), undefined, record.id)
   }
   assert.equal(runById(run, a.id).summary, 'Handed to its session.')
-  turn(run, one, 1, postedTo(run, one)[0], 'Feito um.')
+  run.emit(one, 'assistant/message', { message: { content: [{ type: 'text', text: 'Feito um.' }] } })
+  run.emit(one, 'turn/end', { turn: 1, reason: { kind: 'completed' } })
   turn(run, two, 1, postedTo(run, two)[0], 'Feito dois.')
   await until(() => runById(run, b.id).status === 'done')
   assert.deepEqual([runById(run, a.id).summary, runById(run, b.id).summary], ['Feito um.', 'Feito dois.'])
@@ -208,4 +213,46 @@ test('losing the DSH bot pauses its automations, the board saying why, and their
   const made = without.made.length
   await assert.rejects(without.channels.fireSubscription({ ...codes, on: true }, eventFor('Três')), { message: `${codes.name} is paused: ${DSH_BOT_NEEDS_TEAM}` })
   assert.equal(without.made.length, made)
+})
+
+test('review 16, LOW-5: an `as` that does not fit who acts is refused, never read as the default; for you and the sessions under you it is ignored, as before (LOW-B)', async (t) => {
+  const omni = watchedOmni(t)
+  const bots = { ...teamState().bots, b2: { id: 'b2', name: 'Ops', role: 'Ops', instructions: '', createdAt: 2 } }
+  const { run } = await bench(t, { omni, home: homeFor(t, omni, teamState({ agents: agents(), bots })) })
+  for (const as of ['task', 'chat']) assert.equal(await save(run, { worker: 'dshbot:Coder', as }), `Not saved: A DSH bot takes as "new" or "ongoing", not "${as}".`, as)
+  for (const as of ['new', 'ongoing']) assert.equal(await save(run, { worker: 'Ops', as }), `Not saved: A Bot takes as "task" or "chat", not "${as}".`, as)
+  assert.deepEqual(subsOf(run), [])
+  for (const [worker, as, saved] of [['ongoing session', 'ongoing', { kind: 'session', mode: 'ongoing' }], ['new session', 'new', { kind: 'session', mode: 'new' }], ['me', 'new', { kind: 'events' }], ['Omni', 'ongoing', { kind: 'events' }]]) {
+    assert.match(await save(run, { worker, as }), /^Saved /, worker)
+    assert.deepEqual(subsOf(run).at(-1).worker, saved, worker)
+    await run.call('automation-delete', { id: subsOf(run).at(-1).id })
+  }
+  assert.deepEqual(subsOf(run), [])
+  // Changing only `as` on a saved one is checked the same way.
+  assert.match(await save(run, { worker: 'dshbot:Coder' }), /^Saved /)
+  assert.equal(await save(run, { id: subsOf(run)[0].id, as: 'chat' }), 'Not saved: A DSH bot takes as "new" or "ongoing", not "chat".')
+  assert.deepEqual(subsOf(run)[0].worker, { kind: 'dshbot', agentId: 'coder', mode: 'new' })
+})
+
+test('review 16, LOW-7: events waiting behind a run in an ongoing DSH-bot Session the owner archived go to a new one when that run ends, the board saying why; a Session taken out of its bot is renewed as removed', async (t) => {
+  const { run } = await bench(t)
+  assert.match(await save(run, { worker: 'dshbot:Writer', as: 'ongoing', ask_first: false }), /^Saved /)
+  const [sub] = subsOf(run)
+  const first = await fire(run, sub, 'Um')
+  const second = await fire(run, sub, 'Dois')
+  const sessionId = subsOf(run)[0].ongoingSessionId
+  await until(() => postedTo(run, sessionId).length === 1)
+  run.archived.push(sessionId)
+  turn(run, sessionId, 1, postedTo(run, sessionId)[0], 'Ok um.')
+  await until(() => subsOf(run)[0].ongoingSessionId !== sessionId && postedTo(run, subsOf(run)[0].ongoingSessionId).length === 1)
+  const renewed = subsOf(run)[0].ongoingSessionId
+  assert.deepEqual([runById(run, first.id).status, runById(run, second.id).sessionId, runById(run, second.id).note], ['done', renewed, ONGOING_RENEWED.archived])
+  assert.deepEqual(postedTo(run, sessionId).length, 1)
+  turn(run, renewed, 1, postedTo(run, renewed)[0], 'Ok dois.')
+  await until(() => runById(run, second.id).status === 'done')
+  // Out of its bot without an archive (the team's list no longer has it): removed.
+  sessionsOf(run, 'writer').splice(sessionsOf(run, 'writer').indexOf(renewed), 1)
+  const third = await fire(run, sub, 'Três')
+  assert.notEqual(subsOf(run)[0].ongoingSessionId, renewed)
+  assert.equal(runById(run, third.id).note, ONGOING_RENEWED.removed)
 })

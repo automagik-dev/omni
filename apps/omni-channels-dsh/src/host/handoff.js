@@ -28,9 +28,9 @@ import { operatesOmni } from './grants.js'
 import { archivedIds, createPlainSession } from './omni-rows.js'
 import { HANDOFF_TOOL } from './omni-rules.js'
 import { output } from './output.js'
-import { NEEDS_NEWER_TEAM } from './resume-hook.js'
-import { decideUnbound, lastTurnIn } from './standing-recovery.js'
-import { turnOutcome, wordsOf } from './standing-runs.js'
+import { isResumeMessage, NEEDS_NEWER_TEAM } from './resume-hook.js'
+import { decideUnbound, lastTurnIn, turnOpening } from './standing-recovery.js'
+import { textOf, turnOutcome, wordsOf } from './standing-runs.js'
 
 const TITLE_MAX = 80
 const INSTRUCTIONS_MAX = 8000
@@ -55,7 +55,13 @@ const OMNI_ONLY = 'Only the Omni Bot hands work off this way. Ask it in its chat
 export const HANDOFF_NEEDS_TEAM = 'Handing work to a session under you needs a newer Bot team.'
 const TO_YOU = 'Leave out dshBot to hand it to a session under you.'
 export const DSH_BOTS_NEED_TEAM = `Not handed off: ${DSH_BOT_NEEDS_TEAM} ${TO_YOU}`
-export const DSH_BOT_FROM_CHAT = `Not handed off: work goes to a DSH bot only from your own chat, when the user names that bot there, and never while an automation's event is handled there. ${TO_YOU}`
+export const DSH_BOT_FROM_CHAT = `Not handed off: work goes to a DSH bot only from your own chat, in a turn the user's own message started, and never while an automation's event is handled there. ${TO_YOU}`
+// A turn the Bot team resumed after a restart opens with its resume, not the user's words.
+export const DSH_BOT_RESUMED = `Not handed off: this turn was resumed after a restart, so it no longer starts with the user's message. Ask the user to name the DSH bot again. ${TO_YOU}`
+// Whether `text` names `name` as a word of its own, case aside: "fix the code" names no bot
+// called Code; the name is matched literally.
+export const names = (text, name) => new RegExp(`(?<![\\p{L}\\p{N}])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\p{L}\\p{N}])`, 'iu').test(text)
+const notNamed = name => `Not handed off: the user's message that started this turn does not name the DSH bot ${JSON.stringify(name)}. ${TO_YOU}`
 const noDshBot = name => `Not handed off: the user has no DSH bot ${JSON.stringify(name.slice(0, 60))}. ${TO_YOU}`
 
 // The reports a hand-off's turn did not give itself.
@@ -177,12 +183,24 @@ export function install(rt) {
   }
 
   // Why a DSH bot named for the work cannot take it from this turn; null when it can. Only the
-  // Omni Bot's own chat names one, and not while an automation's event works there (a Bot that
-  // takes events in its chat).
+  // Omni Bot's own chat names one, not while an automation's event works there (a Bot that
+  // takes events in its chat), and only in a turn the user's own plain message opened: never
+  // one a report, another Bot's message or a delivered event opened, never a resumed one. The
+  // caller checks that message names the bot.
   function dshBotProblem(self, sessionId) {
     if (!rt.omniDshBots.ready()) return DSH_BOTS_NEED_TEAM
     const eventHere = (state.subscriptionRuns ?? []).some(run => run?.sessionId === sessionId && run.status === 'working')
     return sessionId !== rt.chatOf(self) || eventHere ? DSH_BOT_FROM_CHAT : null
+  }
+  // The user's own words that opened the turn running in this Session, from its log; a
+  // resumed turn opens with the team's resume instead.
+  async function ownerOpening(exec, sessionId) {
+    const session = exec.agent?.session?.eventAt === undefined ? (await rt.resolveAgent(sessionId).catch(() => undefined))?.session : exec.agent.session
+    const opening = turnOpening(session)
+    if (isResumeMessage(opening)) return { problem: DSH_BOT_RESUMED }
+    const source = opening?.source
+    const plain = source?.kind === 'user' && source.role === undefined && source.handoff === undefined
+    return plain ? { text: textOf(opening) } : { problem: DSH_BOT_FROM_CHAT }
   }
 
   ctx.tools.register(defineTool({
@@ -207,8 +225,11 @@ export function install(rt) {
       if (dshBot !== undefined) {
         const problem = dshBotProblem(self, sessionId)
         if (problem !== null) return problem
+        const opening = await ownerOpening(exec, sessionId)
+        if (opening.problem !== undefined) return opening.problem
         bot = rt.omniDshBots.find(dshBot)
         if (bot === undefined) return noDshBot(dshBot)
+        if (!names(opening.text, bot.name)) return notNamed(bot.name)
       }
       const readOnly = rt.readOnly?.()
       if (readOnly !== undefined) return `Not handed off: ${readOnly}`
