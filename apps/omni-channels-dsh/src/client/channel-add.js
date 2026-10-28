@@ -10,11 +10,12 @@ export const ADD = {
   slack: { time: '1 min', how: 'Connect with Slack', steps: ['Choose how it joins', 'Approve in Slack', 'Done'] },
   telegram: { time: '2 min', how: 'Create a bot', steps: ['Create the bot', 'Paste its token', 'Say hi'] },
   discord: { time: '2 min', how: 'Add your bot', steps: ['Paste the bot token', 'Invite it to a server', 'Done'] },
+  clickup: { time: '2 min', how: 'Paste an API token', steps: ['Paste the token', 'Set the workspace', 'Done'] },
 }
 
 // The order of the cards, and which the linked Omni offers: `supported` is what it has
 // loaded (omni-channel-types), or null when it could not say, and then all are offered.
-export const ORDER = ['whatsapp-baileys', 'whatsapp-business', 'slack', 'telegram', 'discord']
+export const ORDER = ['whatsapp-baileys', 'whatsapp-business', 'slack', 'telegram', 'discord', 'clickup']
 export const offered = supported => ORDER.filter(type => supported === null || supported === undefined || supported.includes(type))
 
 // A Telegram bot token, as @BotFather sends it.

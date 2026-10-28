@@ -10,6 +10,7 @@ import {
   type AutomationAction,
   type AutomationEngine,
   type CallAgentActionConfig,
+  type ClickUpActionConfig,
   ConflictError,
   type Automation as CoreAutomation,
   type EventMetadata,
@@ -97,6 +98,9 @@ export class AutomationService {
   async startEngine(deps?: {
     sendMessage?: (instanceId: string, to: string, content: string) => Promise<void>;
     callAgent?: (context: AgentCallContext, config: CallAgentActionConfig) => Promise<AgentRunResult>;
+    // ClickUp task action (#1413) — instance/plugin resolution lives in the
+    // callback (automation-actions.ts), so this signature stays transport-free.
+    clickupAction?: (config: ClickUpActionConfig, trustedTenantId?: string | null) => Promise<unknown>;
     staleIdleTimeoutGate?: (
       chatId: string,
       instanceId: string,

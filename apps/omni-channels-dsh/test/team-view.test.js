@@ -226,6 +226,7 @@ test('apply registers its listeners, tools and effects after the team\'s, in a f
     'effect omni-channels: omni-slack-start',
     'effect omni-channels: omni-slack-result',
     'effect omni-channels: omni-wab-connect',
+    'effect omni-channels: omni-clickup-connect',
     'provide omniChannels',
   ])
   assert.ok(!own.includes('on llm/stream'))

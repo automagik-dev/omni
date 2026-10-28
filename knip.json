@@ -60,6 +60,9 @@
     "packages/channel-whatsapp": {
       "project": ["src/**/*.ts"]
     },
+    "packages/channel-clickup": {
+      "project": ["src/**/*.ts"]
+    },
     "packages/channel-gupshup": {
       "project": ["src/**/*.ts"]
     },

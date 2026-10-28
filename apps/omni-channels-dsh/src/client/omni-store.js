@@ -19,6 +19,7 @@ export const CHANNEL_TYPES = {
   slack: { label: 'Slack', tile: '#4A154B', glyph: 'slack', pairing: 'oauth', signIn: 'Slack', blurb: 'Channels and DMs, as a bot or as yourself.' },
   telegram: { label: 'Telegram', tile: '#229ED9', glyph: 'telegram', pairing: 'token', blurb: 'A bot of yours, in chats and groups.' },
   discord: { label: 'Discord', tile: '#5865F2', glyph: 'discord', pairing: 'token', blurb: 'Servers, threads and DMs, through your bot.' },
+  clickup: { label: 'ClickUp', tile: '#7B68EE', glyph: 'chat', pairing: 'token', blurb: 'Tasks and comments, through your ClickUp account.' },
 }
 
 // connected: working. connecting: pairing or reconnecting by itself. attention: needs the

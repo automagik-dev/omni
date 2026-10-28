@@ -26,7 +26,7 @@ export type ConditionOperator = (typeof CONDITION_OPERATORS)[number];
 /**
  * Action types for automations.
  */
-export const ACTION_TYPES = ['webhook', 'send_message', 'emit_event', 'log', 'call_agent'] as const;
+export const ACTION_TYPES = ['webhook', 'send_message', 'emit_event', 'log', 'call_agent', 'clickup'] as const;
 export type ActionType = (typeof ACTION_TYPES)[number];
 
 /**
@@ -99,6 +99,31 @@ export interface LogActionConfig {
 }
 
 /**
+ * ClickUp action configuration (issue #1413).
+ *
+ * ClickUp is a non-messaging channel, so this is a task-action config rather
+ * than a message. The API callback resolves `instanceId` to the channel plugin
+ * and runs `execute`; every string field accepts templates, and `listId`
+ * falls back to the instance's persisted default list when omitted.
+ */
+export interface ClickUpActionConfig {
+  /** ClickUp instance id (template) — must be a `clickup` instance. */
+  instanceId: string;
+  operation: 'create_task' | 'update_status' | 'add_comment' | 'list_tasks';
+  /** Target list (template); omitted = the instance's default list id. */
+  listId?: string;
+  taskId?: string;
+  name?: string;
+  description?: string;
+  assignees?: number[];
+  /** ISO 8601 string or a Unix millisecond timestamp. */
+  dueDate?: string | number;
+  status?: string;
+  comment?: string;
+  notifyAll?: boolean;
+}
+
+/**
  * Re-export types used by CallAgentActionConfig.
  * These are defined in other modules to avoid duplication.
  */
@@ -161,7 +186,8 @@ export type AutomationAction =
   | { type: 'send_message'; config: SendMessageActionConfig }
   | { type: 'emit_event'; config: EmitEventActionConfig }
   | { type: 'log'; config: LogActionConfig }
-  | { type: 'call_agent'; config: CallAgentActionConfig };
+  | { type: 'call_agent'; config: CallAgentActionConfig }
+  | { type: 'clickup'; config: ClickUpActionConfig };
 
 /**
  * Debounce configuration for message grouping.

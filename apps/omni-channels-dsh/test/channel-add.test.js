@@ -42,12 +42,12 @@ test('the grid offers what the Omni has loaded, or everything when it cannot say
   const { run } = host({
     'GET /instances/supported-channels': () => [200, { items: [
       { id: 'whatsapp-baileys', loaded: true }, { id: 'telegram', loaded: true }, { id: 'slack', loaded: true },
-      { id: 'whatsapp-business', loaded: false }, { id: 'a2a', loaded: true },
+      { id: 'whatsapp-business', loaded: false }, { id: 'a2a', loaded: true }, { id: 'clickup', loaded: true },
     ] }],
   })
   const { types } = await run('omni-channel-types')
-  assert.deepEqual(types, ['whatsapp-baileys', 'slack', 'telegram'])
-  assert.deepEqual(offered(types), ['whatsapp-baileys', 'slack', 'telegram'])
+  assert.deepEqual(types, ['whatsapp-baileys', 'slack', 'telegram', 'clickup'])
+  assert.deepEqual(offered(types), ['whatsapp-baileys', 'slack', 'telegram', 'clickup'])
   assert.deepEqual(await host({}).run('omni-channel-types'), { types: null })
   assert.deepEqual(offered(null), ORDER)
 })
@@ -123,6 +123,44 @@ test('WhatsApp Business details Meta refuses leave no channel behind, and say wh
   await assert.rejects(run('omni-wab-connect', META), /Invalid OAuth access token/)
   assert.deepEqual(calls.map(call => `${call.method} ${call.path}`), ['POST /instances', `POST /instances/${CHANNEL}/whatsapp-business/connect`, `DELETE /instances/${CHANNEL}`])
   await assert.rejects(run('omni-wab-connect', { ...META, phoneNumberId: 'abc' }), /phone number ID/)
+})
+
+// -------------------------------------------------------------------------
+// ClickUp
+
+const CLICKUP = { name: 'ClickUp', token: 'pk_clickup-secret-token-value', teamId: '9013012345', listId: '9013012346' }
+
+test('ClickUp: a personal token creates the channel and connects it, and the token never comes back', async () => {
+  const { run, calls } = host({
+    'POST /instances': body => [201, { data: { id: CHANNEL, name: body.name, channel: body.channel } }],
+    [`POST /instances/${CHANNEL}/connect`]: () => [200, { data: { instanceId: CHANNEL, status: 'connected', message: 'ClickUp connected' } }],
+  })
+  const made = await run('omni-clickup-connect', CLICKUP)
+  assert.deepEqual(made, { id: CHANNEL, type: 'clickup', name: 'ClickUp' })
+  assert.deepEqual(calls[0].body, { name: 'ClickUp', channel: 'clickup' })
+  assert.deepEqual(calls[1].body, { token: CLICKUP.token, clickupTeamId: CLICKUP.teamId, clickupListId: CLICKUP.listId })
+  assert.doesNotMatch(JSON.stringify(made), /pk_clickup/)
+})
+
+test('a ClickUp token ClickUp refuses leaves no channel behind, and says why without the token', async () => {
+  const failure = 'Failed to connect: ClickUp rejected this API token (401): Authorization header required (OAUTH_017)'
+  const { run, calls } = host({
+    'POST /instances': body => [201, { data: { id: CHANNEL, name: body.name, channel: body.channel } }],
+    [`POST /instances/${CHANNEL}/connect`]: () => [500, { error: { code: 'CONNECTION_FAILED', message: failure } }],
+    [`DELETE /instances/${CHANNEL}`]: () => [200, { data: { deleted: true } }],
+  })
+  const error = await run('omni-clickup-connect', CLICKUP).then(() => assert.fail('connected'), refusal => refusal)
+  assert.equal(error.message, failure)
+  assert.doesNotMatch(error.message, /pk_clickup/)
+  assert.deepEqual(calls.map(call => `${call.method} ${call.path}`), ['POST /instances', `POST /instances/${CHANNEL}/connect`, `DELETE /instances/${CHANNEL}`])
+})
+
+test('ClickUp refuses an invalid payload before asking Omni anything', async () => {
+  const { run, calls } = host({})
+  await assert.rejects(run('omni-clickup-connect', { token: 'short' }), /Paste the API token/)
+  await assert.rejects(run('omni-clickup-connect', {}), /Paste the API token/)
+  await assert.rejects(run('omni-clickup-connect', { token: CLICKUP.token, teamId: 'not-a-number' }), /Paste the API token/)
+  assert.deepEqual(calls, [])
 })
 
 // -------------------------------------------------------------------------
@@ -251,15 +289,17 @@ test('no endpoint here returns a key, token or access token to the page', async 
   const { run } = host({
     'POST /instances': body => [201, { data: { id: CHANNEL, name: body.name, channel: body.channel, token: body.token } }],
     [`POST /instances/${CHANNEL}/whatsapp-business/connect`]: () => [200, { data: { connected: true, accessToken: META.accessToken } }],
+    [`POST /instances/${CHANNEL}/connect`]: () => [200, { data: { instanceId: CHANNEL, status: 'connected', token: 'pk_clickup-secret' } }],
     'GET /slack/app': () => [200, { configured: true, clientSecret: 'slack-secret' }],
     'POST /slack/oauth/start': () => [200, { authorizeUrl: 'https://slack.com/oauth/v2/authorize?x=1', nonce: NONCE, clientSecret: 'slack-secret' }],
   })
   const replies = [
     await run('omni-channel-create', { type: 'telegram', name: 'Telegram', token: '7123456789:AAHk3vZ2-abcdefghijklmnopqrstuvwxyz12' }),
     await run('omni-wab-connect', META),
+    await run('omni-clickup-connect', CLICKUP),
     await run('omni-slack-app'),
     await run('omni-slack-start', { mode: 'bot' }),
   ]
   const text = JSON.stringify(replies)
-  for (const secret of [KEY, 'AAHk3vZ2', 'EAAG', 'slack-secret']) assert.doesNotMatch(text, new RegExp(secret))
+  for (const secret of [KEY, 'AAHk3vZ2', 'EAAG', 'pk_clickup', 'slack-secret']) assert.doesNotMatch(text, new RegExp(secret))
 })

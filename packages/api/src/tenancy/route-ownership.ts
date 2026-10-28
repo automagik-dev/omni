@@ -872,6 +872,7 @@ const TENANT_SCOPED_ROUTES: readonly RouteKey[] = [
   'POST /api/v2/instances/:id/block',
   'POST /api/v2/instances/:id/calls/reject',
   'POST /api/v2/instances/:id/check-number',
+  'POST /api/v2/instances/:id/clickup/actions',
   'POST /api/v2/instances/:id/connect',
   'POST /api/v2/instances/:id/disconnect',
   'POST /api/v2/instances/:id/groups',

@@ -149,6 +149,7 @@ export const SOURCE_ROUTES = [
   {"method":"POST","path":"/instances/{id}/calls/reject","summary":"Reject an incoming call","tag":"instances"},
   {"method":"GET","path":"/instances/{id}/chats/{chatId}/invite","summary":"Export (or retrieve) chat invite link","tag":"instances"},
   {"method":"POST","path":"/instances/{id}/check-number","summary":"Check if phone numbers are on WhatsApp","tag":"instances","body":"z.object({ phones: z.array(z.string().min(1)).min(1).max(100).describe('Phone numbers to check (e.g., [\"+5511999999999\"])'), })"},
+  {"method":"POST","path":"/instances/{id}/clickup/actions","summary":"Run a ClickUp action","tag":"clickup"},
   {"method":"POST","path":"/instances/{id}/connect","summary":"Connect instance","tag":"instances"},
   {"method":"GET","path":"/instances/{id}/contacts","summary":"List contacts for an instance","tag":"instances","query":"z.object({ limit: z.coerce.number().int().min(1).max(1000).default(100), cursor: z.string().optional(), guildId: z.string().optional().describe('Guild ID (required for Discord)'), search: z.string().optional(), excludeGroups: z.coerce.boolean().optional(), })"},
   {"method":"POST","path":"/instances/{id}/disconnect","summary":"Disconnect instance","tag":"instances"},

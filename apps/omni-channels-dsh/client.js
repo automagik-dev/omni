@@ -10986,7 +10986,8 @@ var CHANNEL_TYPES = {
   "whatsapp-business": { label: "WhatsApp Business", tile: "#128C7E", glyph: "whatsapp", pairing: "meta", signIn: "Meta", blurb: "The official Business API, through your Meta account." },
   slack: { label: "Slack", tile: "#4A154B", glyph: "slack", pairing: "oauth", signIn: "Slack", blurb: "Channels and DMs, as a bot or as yourself." },
   telegram: { label: "Telegram", tile: "#229ED9", glyph: "telegram", pairing: "token", blurb: "A bot of yours, in chats and groups." },
-  discord: { label: "Discord", tile: "#5865F2", glyph: "discord", pairing: "token", blurb: "Servers, threads and DMs, through your bot." }
+  discord: { label: "Discord", tile: "#5865F2", glyph: "discord", pairing: "token", blurb: "Servers, threads and DMs, through your bot." },
+  clickup: { label: "ClickUp", tile: "#7B68EE", glyph: "chat", pairing: "token", blurb: "Tasks and comments, through your ClickUp account." }
 };
 var STATUS = {
   connected: { label: "Connected", tone: "ok" },
@@ -11265,9 +11266,10 @@ var ADD = {
   "whatsapp-business": { time: "3 min", how: "Enter your Meta details", steps: ["Enter the details", "Done"] },
   slack: { time: "1 min", how: "Connect with Slack", steps: ["Choose how it joins", "Approve in Slack", "Done"] },
   telegram: { time: "2 min", how: "Create a bot", steps: ["Create the bot", "Paste its token", "Say hi"] },
-  discord: { time: "2 min", how: "Add your bot", steps: ["Paste the bot token", "Invite it to a server", "Done"] }
+  discord: { time: "2 min", how: "Add your bot", steps: ["Paste the bot token", "Invite it to a server", "Done"] },
+  clickup: { time: "2 min", how: "Paste an API token", steps: ["Paste the token", "Set the workspace", "Done"] }
 };
-var ORDER = ["whatsapp-baileys", "whatsapp-business", "slack", "telegram", "discord"];
+var ORDER = ["whatsapp-baileys", "whatsapp-business", "slack", "telegram", "discord", "clickup"];
 var offered = (supported) => ORDER.filter((type) => supported === null || supported === void 0 || supported.includes(type));
 var TELEGRAM_TOKEN = /^\d{6,12}:[A-Za-z0-9_-]{30,}$/;
 var isTelegramToken = (text) => typeof text === "string" && TELEGRAM_TOKEN.test(text.trim());
@@ -11317,6 +11319,7 @@ function LiveConnectFlow({ state, omni: omni2, Tile: Tile2, PreviewChip: Preview
   const props = { key: type, type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip2 };
   if (type === "slack") return (0, import_react3.createElement)(SlackFlow, props);
   if (type === "whatsapp-business") return (0, import_react3.createElement)(BusinessFlow, props);
+  if (type === "clickup") return (0, import_react3.createElement)(ClickUpFlow, props);
   if (type === "telegram" || type === "discord") return (0, import_react3.createElement)(TokenFlow, props);
   return (0, import_react3.createElement)(WhatsAppFlow, props);
 }
@@ -11800,6 +11803,76 @@ function BusinessFlow({ type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip
     ),
     (0, import_react3.createElement)(Problem, { text: problem })
   );
+}
+var CLICKUP_HELP = () => (0, import_react3.createElement)(
+  import_react3.Fragment,
+  null,
+  (0, import_react3.createElement)("h2", null, t("Connect your ClickUp workspace")),
+  (0, import_react3.createElement)("p", null, t("Omni uses ClickUp for tasks, not messages. Automations and agents can create tasks, move their status, comment and list them.")),
+  (0, import_react3.createElement)(
+    "ol",
+    { className: "oc-numbered" },
+    (0, import_react3.createElement)("li", null, rich("In ClickUp, open {settings} → Apps and copy your personal API Token", { settings: (0, import_react3.createElement)("a", { href: "https://app.clickup.com/settings/apps", target: "_blank", rel: "noreferrer" }, t("ClickUp settings")) })),
+    (0, import_react3.createElement)("li", null, t("The token belongs to you: it acts with your permissions in ClickUp, and it stops working if you leave the workspace. Omni stores it and never shows it again.")),
+    (0, import_react3.createElement)("li", null, t("Optional: the workspace (team) ID is the number in your ClickUp address, right after app.clickup.com/.")),
+    (0, import_react3.createElement)("li", null, t("Optional: a default List ID lets task actions leave the list out. Open a List and copy the number in its address."))
+  ),
+  (0, import_react3.createElement)("p", { className: "oc-fine" }, t("If connecting fails: 401 means the token is wrong or was revoked; 403 means it cannot open that workspace; a workspace ID the token cannot see is reported as unavailable; and a request that never arrives means this Omni cannot reach api.clickup.com."))
+);
+function ClickUpFlow({ type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip2 }) {
+  const [fields, setFields] = (0, import_react3.useState)({ token: "", teamId: "", listId: "" });
+  const [channel, setChannel] = (0, import_react3.useState)(null);
+  const [done, setDone] = (0, import_react3.useState)(null);
+  const [busy, setBusy] = (0, import_react3.useState)(false);
+  const [problem, setProblem] = (0, import_react3.useState)(null);
+  const { pairing, problem: pollProblem } = usePairing(channel, channel !== null && done === null, setDone);
+  const set2 = (key) => (event) => setFields((value) => ({ ...value, [key]: event.target.value }));
+  const ready = fields.token.trim().length >= 8;
+  const connect = async () => {
+    setBusy(true);
+    setProblem(null);
+    try {
+      const made = await call("omni-clickup-connect", {
+        token: fields.token.trim(),
+        ...fields.teamId.trim() ? { teamId: fields.teamId.trim() } : {},
+        ...fields.listId.trim() ? { listId: fields.listId.trim() } : {}
+      });
+      setFields((value) => ({ ...value, token: "" }));
+      setChannel(made);
+    } catch (error) {
+      setProblem(error.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const field = (key, label, extra) => (0, import_react3.createElement)("label", { className: "oc-field" }, (0, import_react3.createElement)("span", null, label), (0, import_react3.createElement)("input", { value: fields[key], onChange: set2(key), autoComplete: "off", ...extra }));
+  const at2 = done ? 2 : channel ? 1 : 0;
+  let body;
+  if (done) {
+    body = (0, import_react3.createElement)(
+      import_react3.Fragment,
+      null,
+      (0, import_react3.createElement)("h2", null, t("ClickUp is connected")),
+      (0, import_react3.createElement)("p", null, [done.detail ? t("Workspace {team}", { team: done.detail }) : null, t("No messages are sent: Omni can create and update tasks and comments in this workspace.")].filter(Boolean).join(" · ")),
+      (0, import_react3.createElement)("div", { className: "oc-row" }, (0, import_react3.createElement)("button", { type: "button", className: "oc-primary", onClick: () => omni2.finishConnect(type, channel.name, channel.id) }, t("See its health")))
+    );
+  } else if (channel) {
+    body = (0, import_react3.createElement)(import_react3.Fragment, null, (0, import_react3.createElement)("h2", null, t("Connecting…")), (0, import_react3.createElement)(Spinner, { text: pairing?.message ?? t("Waiting for Omni to say ClickUp is ready") }));
+  } else {
+    body = (0, import_react3.createElement)(
+      import_react3.Fragment,
+      null,
+      CLICKUP_HELP(),
+      field("token", t("API token"), { type: "password", required: true, autoFocus: true, placeholder: "pk_…", onKeyDown: (event) => {
+        if (event.key === "Enter" && ready && !busy) void connect();
+      } }),
+      field("teamId", t("Workspace / Team ID (optional)"), { inputMode: "numeric", placeholder: "9013…" }),
+      field("listId", t("Default List ID (optional)"), { inputMode: "numeric", placeholder: "9013…" }),
+      (0, import_react3.createElement)("div", { className: "oc-row" }, (0, import_react3.createElement)("button", { type: "button", className: "oc-primary", disabled: !ready || busy, onClick: connect }, busy ? t("Connecting…") : t("Connect"))),
+      (0, import_react3.createElement)("p", { className: "oc-fine" }, t("The token stays with your Omni. Nothing is sent to ClickUp until an automation or agent acts."))
+    );
+  }
+  return (0, import_react3.createElement)(FlowShell, { type, at: at2, Tile: Tile2, PreviewChip: PreviewChip2, onBack: () => omni2.showPage({ type: null, step: 0 }) }, body, (0, import_react3.createElement)(Problem, { text: problem ?? pollProblem }));
 }
 
 // src/client/channels.js
@@ -15909,6 +15982,27 @@ var STRINGS = {
   "Phone number ID": "电话号码 ID",
   "WhatsApp Business Account ID": "WhatsApp 企业账户 ID",
   "The token stays with your Omni. Omni only gets that number's messages.": "令牌只保存在你的 Omni 中。Omni 只会收到该号码的消息。",
+  // ClickUp: a personal API token for tasks, not messages.
+  "Connect your ClickUp workspace": "连接你的 ClickUp 工作区",
+  "Omni uses ClickUp for tasks, not messages. Automations and agents can create tasks, move their status, comment and list them.": "Omni 使用 ClickUp 处理任务，而不是消息。自动化和智能体可以创建任务、移动任务状态、发表评论并列出任务。",
+  "In ClickUp, open {settings} → Apps and copy your personal API Token": "在 ClickUp 中打开 {settings} → Apps，复制你的个人 API 令牌",
+  "ClickUp settings": "ClickUp 设置",
+  "The token belongs to you: it acts with your permissions in ClickUp, and it stops working if you leave the workspace. Omni stores it and never shows it again.": "令牌属于你：它以你的权限在 ClickUp 中操作，一旦你离开该工作区就会失效。Omni 会保存它，但不会再显示。",
+  "Optional: the workspace (team) ID is the number in your ClickUp address, right after app.clickup.com/.": "可选：工作区（团队）ID 是你 ClickUp 地址中 app.clickup.com/ 后面的那串数字。",
+  "Optional: a default List ID lets task actions leave the list out. Open a List and copy the number in its address.": "可选：设置默认列表 ID 后，任务操作可以省略列表。打开一个列表，复制其地址中的数字。",
+  "If connecting fails: 401 means the token is wrong or was revoked; 403 means it cannot open that workspace; a workspace ID the token cannot see is reported as unavailable; and a request that never arrives means this Omni cannot reach api.clickup.com.": "如果连接失败：401 表示令牌错误或已被撤销；403 表示无法打开该工作区；令牌看不到的工作区 ID 会显示为不可用；请求始终没有到达，表示这个 Omni 无法访问 api.clickup.com。",
+  "API token": "API 令牌",
+  "Workspace / Team ID (optional)": "工作区 / 团队 ID（可选）",
+  "Default List ID (optional)": "默认列表 ID（可选）",
+  "ClickUp is connected": "ClickUp 已连接",
+  "Workspace {team}": "工作区 {team}",
+  "No messages are sent: Omni can create and update tasks and comments in this workspace.": "不会发送任何消息：Omni 可以在这个工作区创建和更新任务、发表评论。",
+  "Waiting for Omni to say ClickUp is ready": "正在等待 Omni 确认 ClickUp 已就绪",
+  "The token stays with your Omni. Nothing is sent to ClickUp until an automation or agent acts.": "令牌只保存在你的 Omni 中。在自动化或智能体执行操作之前，不会向 ClickUp 发送任何内容。",
+  "Tasks and comments, through your ClickUp account.": "通过你的 ClickUp 账户处理任务和评论。",
+  "Paste an API token": "粘贴 API 令牌",
+  "Paste the token": "粘贴令牌",
+  "Set the workspace": "设置工作区",
   "{version} is available": "{version} 已发布",
   "{version} is available · you're on {current}": "{version} 已发布 · 你当前使用 {current}",
   "{version} is available. Its admin updates this Omni.": "{version} 已发布。由管理员更新这个 Omni。",

@@ -263,6 +263,23 @@ const createInstanceSchema = z.object({
     .optional()
     .nullable()
     .describe('cod_servico handed to /transferirHumano (the handoff queue) — service mode only'),
+  clickupApiToken: z
+    .string()
+    .optional()
+    .nullable()
+    .describe('ClickUp personal API token (also accepted as the generic `token` on create)'),
+  clickupTeamId: z
+    .string()
+    .regex(/^\d{1,25}$/, 'ClickUp team id must be a numeric id')
+    .optional()
+    .nullable()
+    .describe('ClickUp team (workspace) id; checked against the token on connect'),
+  clickupListId: z
+    .string()
+    .regex(/^\d{1,25}$/, 'ClickUp list id must be a numeric id')
+    .optional()
+    .nullable()
+    .describe('Default ClickUp list id for task actions that do not pass one'),
   force: z
     .boolean()
     .optional()
@@ -433,6 +450,17 @@ const updateInstanceSchema = createInstanceSchema
     messageSplitDelayMinMs: z.number().int().min(0).optional(),
     messageSplitDelayMaxMs: z.number().int().min(0).optional(),
     twilioValidateSignature: z.boolean().optional(),
+    clickupApiToken: z.string().nullable().optional(),
+    clickupTeamId: z
+      .string()
+      .regex(/^\d{1,25}$/, 'ClickUp team id must be a numeric id')
+      .nullable()
+      .optional(),
+    clickupListId: z
+      .string()
+      .regex(/^\d{1,25}$/, 'ClickUp list id must be a numeric id')
+      .nullable()
+      .optional(),
     // Strip the .default(false) from the create-time schema so a PATCH that
     // omits this key doesn't silently flip the stored value back to false.
     requireGenieSignature: z.boolean().optional(),
@@ -501,13 +529,23 @@ function resolveChannelToken(data: {
   discordBotToken?: string | null;
   slackBotToken?: string | null;
   twilioAuthToken?: string | null;
+  clickupApiToken?: string | null;
 }): string | undefined {
   // If a generic `token` was provided but no channel-specific field, persist it
-  if (data.token && !data.telegramBotToken && !data.discordBotToken && !data.slackBotToken && !data.twilioAuthToken) {
+  if (
+    data.token &&
+    !data.telegramBotToken &&
+    !data.discordBotToken &&
+    !data.slackBotToken &&
+    !data.twilioAuthToken &&
+    !data.clickupApiToken
+  ) {
     if (data.channel === 'telegram') data.telegramBotToken = data.token;
     else if (data.channel === 'discord') data.discordBotToken = data.token;
     else if (data.channel === 'slack') data.slackBotToken = data.token;
     else if (data.channel === 'twilio-whatsapp') data.twilioAuthToken = data.token;
+    // ClickUp has no chat transport; the generic `token` is its personal API token.
+    else if (data.channel === 'clickup') data.clickupApiToken = data.token;
   }
   return (
     data.token ??
@@ -515,6 +553,7 @@ function resolveChannelToken(data: {
     data.discordBotToken ??
     data.slackBotToken ??
     data.twilioAuthToken ??
+    data.clickupApiToken ??
     undefined
   );
 }
@@ -525,6 +564,7 @@ function persistedTokenForChannel(instance: {
   discordBotToken?: string | null;
   slackBotToken?: string | null;
   twilioAuthToken?: string | null;
+  clickupApiToken?: string | null;
 }): string | undefined {
   switch (instance.channel) {
     case 'telegram':
@@ -535,6 +575,8 @@ function persistedTokenForChannel(instance: {
       return instance.slackBotToken ?? undefined;
     case 'twilio-whatsapp':
       return instance.twilioAuthToken ?? undefined;
+    case 'clickup':
+      return instance.clickupApiToken ?? undefined;
     default:
       return undefined;
   }
@@ -555,6 +597,7 @@ const SENSITIVE_INSTANCE_FIELDS = [
   'hermesPassword',
   'ascToken',
   'ascFlowChave',
+  'clickupApiToken',
 ] as const;
 
 /**
@@ -583,7 +626,7 @@ function maskSecret(secret: string): string {
 }
 
 /** Strip secret tokens from an instance before returning it in API responses */
-function sanitizeInstance<T extends Record<string, unknown>>(
+export function sanitizeInstance<T extends Record<string, unknown>>(
   instance: T,
 ): Omit<T, (typeof SENSITIVE_INSTANCE_FIELDS)[number]> {
   const sanitized = { ...instance };
@@ -662,6 +705,8 @@ function channelTokenField(channel: string): string | undefined {
       return 'discordBotToken';
     case 'slack':
       return 'slackBotToken';
+    case 'clickup':
+      return 'clickupApiToken';
     default:
       return undefined;
   }
@@ -718,6 +763,8 @@ type InstanceConnectionOptionsInput = {
   ascFlowChave?: string | null;
   ascFlowHandoffMode?: 'flow' | 'service' | null;
   ascFlowHandoffServico?: number | null;
+  clickupTeamId?: string | null;
+  clickupListId?: string | null;
 };
 
 function applyTelegramConnectionOptions(options: Record<string, unknown>, input: InstanceConnectionOptionsInput): void {
@@ -832,6 +879,19 @@ function applyHarnessConnectionOptions(
   if (metadata?.harnessProfile) options.harnessProfile = metadata.harnessProfile;
 }
 
+/**
+ * ClickUp connection options (issue #1413). The caller sets `options.token`
+ * (generic `token` on create/connect, or the persisted column on restart); this
+ * maps the team/list ids to the names the plugin reads.
+ */
+function applyClickUpConnectionOptions(
+  options: Record<string, unknown>,
+  input: Pick<InstanceConnectionOptionsInput, 'clickupTeamId' | 'clickupListId'>,
+): void {
+  if (input.clickupTeamId) options.teamId = input.clickupTeamId;
+  if (input.clickupListId) options.listId = input.clickupListId;
+}
+
 function applyChannelSpecificConnectionOptions(
   options: Record<string, unknown>,
   input: InstanceConnectionOptionsInput,
@@ -863,6 +923,9 @@ function applyChannelSpecificConnectionOptions(
       return;
     case 'harness':
       applyHarnessConnectionOptions(options, input.profileMetadata);
+      return;
+    case 'clickup':
+      applyClickUpConnectionOptions(options, input);
       return;
   }
 }
@@ -990,14 +1053,21 @@ instancesRoutes.get('/supported-channels', async (c) => {
   // Get loaded plugins from registry
   const loadedPlugins = channelRegistry ? channelRegistry.getAll() : [];
 
-  // Build dynamic list from loaded plugins
-  const loadedChannels = loadedPlugins.map((plugin) => ({
-    id: plugin.id,
-    name: plugin.name,
-    version: plugin.version,
-    loaded: true as const,
-    capabilities: plugin.capabilities,
-  }));
+  // Build dynamic list from loaded plugins. A plugin with a non-messaging action
+  // surface (ClickUp, #1413) exposes `taskCapabilities`; the structural check
+  // avoids a runtime channel-package import in the API (its index self-registers
+  // and would short-circuit plugin discovery in dev).
+  const loadedChannels = loadedPlugins.map((plugin) => {
+    const taskCapabilities = (plugin as { taskCapabilities?: unknown }).taskCapabilities;
+    return {
+      id: plugin.id,
+      name: plugin.name,
+      version: plugin.version,
+      loaded: true as const,
+      capabilities: plugin.capabilities,
+      ...(taskCapabilities !== undefined ? { taskCapabilities } : {}),
+    };
+  });
 
   // Add static entries for channels that aren't loaded
   const loadedIds = new Set(loadedPlugins.map((p) => p.id));
@@ -1210,6 +1280,8 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
     ascFlowChave: instance.ascFlowChave,
     ascFlowHandoffMode: instance.ascFlowHandoffMode,
     ascFlowHandoffServico: instance.ascFlowHandoffServico,
+    clickupTeamId: instance.clickupTeamId,
+    clickupListId: instance.clickupListId,
   });
 
   // Wire: load guild config overrides into plugin before connection
@@ -1736,6 +1808,16 @@ const connectInstanceSchema = z.object({
       "Handoff destination: 'flow' (default, poll body → Genesys node) or 'service' (/transferirHumano → ASC queue)",
     ),
   ascFlowHandoffServico: z.number().int().optional().describe('cod_servico handed to /transferirHumano (service mode)'),
+  clickupTeamId: z
+    .string()
+    .regex(/^\d{1,25}$/, 'ClickUp team id must be a numeric id')
+    .optional()
+    .describe('ClickUp team (workspace) id; checked against the token'),
+  clickupListId: z
+    .string()
+    .regex(/^\d{1,25}$/, 'ClickUp list id must be a numeric id')
+    .optional()
+    .describe('Default ClickUp list id for task actions'),
   force: z
     .boolean()
     .optional()
@@ -1771,6 +1853,20 @@ function mergeAscFlowFields(
     ascFlowChave: body.ascFlowChave ?? instance.ascFlowChave,
     ascFlowHandoffMode: body.ascFlowHandoffMode ?? instance.ascFlowHandoffMode,
     ascFlowHandoffServico: body.ascFlowHandoffServico ?? instance.ascFlowHandoffServico,
+  };
+}
+
+/**
+ * ClickUp ids, body-over-persisted (issue #1413). Mirrors mergeAscFlowFields;
+ * the token itself is resolved separately as `options.token`.
+ */
+function mergeClickUpFields(
+  instance: Pick<InstanceRecord, 'clickupTeamId' | 'clickupListId'>,
+  body: Pick<ConnectInstanceBody, 'clickupTeamId' | 'clickupListId'>,
+) {
+  return {
+    clickupTeamId: body.clickupTeamId ?? instance.clickupTeamId,
+    clickupListId: body.clickupListId ?? instance.clickupListId,
   };
 }
 
@@ -1821,6 +1917,7 @@ function buildConnectConnectionOptions(
     metaDisplayPhoneNumber: instance.metaDisplayPhoneNumber,
     metaConnectionMethod: instance.metaConnectionMethod,
     ...mergeAscFlowFields(instance, body),
+    ...mergeClickUpFields(instance, body),
   });
 }
 
@@ -1908,6 +2005,10 @@ function buildConnectPersistUpdates(instance: InstanceRecord, body: ConnectInsta
 
   if (instance.channel === 'asc-flow') {
     return { ...updates, ...mergeAscFlowFields(instance, body) };
+  }
+
+  if (instance.channel === 'clickup') {
+    return { ...updates, ...mergeClickUpFields(instance, body) };
   }
 
   return updates;
@@ -2097,6 +2198,11 @@ instancesRoutes.post('/:id/restart', instanceAccess, async (c) => {
     }
     if (instance.channel === 'harness') {
       applyHarnessConnectionOptions(restartOptions, instance.profileMetadata);
+    }
+    if (instance.channel === 'clickup') {
+      // The token comes from persistedTokenForChannel (restartOptions.token);
+      // team/list ids keep their ClickUp names for the plugin.
+      applyClickUpConnectionOptions(restartOptions, instance);
     }
     // Persisted WhatsApp socket settings on restart (GH #310, #1211)
     applyWhatsAppBaileysOptions(restartOptions, instance);

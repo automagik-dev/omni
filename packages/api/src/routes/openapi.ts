@@ -31,6 +31,7 @@ import { registerAutomationSchemas } from '../schemas/openapi/automations';
 import { registerChannelHarnessSchemas } from '../schemas/openapi/channel-harness';
 import { registerChannelSchemas } from '../schemas/openapi/channels';
 import { registerChatSchemas } from '../schemas/openapi/chats';
+import { registerClickUpSchemas } from '../schemas/openapi/clickup';
 import { registerCommonSchemas } from '../schemas/openapi/common';
 import { registerConversationSchemas } from '../schemas/openapi/conversations';
 import { registerDeadLetterSchemas } from '../schemas/openapi/dead-letters';
@@ -96,6 +97,7 @@ registerFollowUpSchemas(registry);
 registerVoiceSchemas(registry);
 registerWhatsappFlowsSchemas(registry);
 registerChannelHarnessSchemas(registry);
+registerClickUpSchemas(registry);
 registerSlackSchemas(registry);
 // Flag-gated, but still documented: "no REST endpoints without OpenAPI docs"
 // has no exception for a surface that 404s when the flag is off.

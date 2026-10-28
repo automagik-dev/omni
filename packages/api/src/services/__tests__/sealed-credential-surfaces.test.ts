@@ -167,10 +167,11 @@ describe('(g) instances.* channel tokens', () => {
         gupshupAuthToken: 'gup-A',
         webhookVerifyToken: 'hook-A',
         twilioAuthToken: 'tw-A',
+        clickupApiToken: 'pk_secret-A',
       } as never),
     );
     const at = JSON.stringify(rows[0]);
-    for (const secret of ['xoxb-A', 'xapp-A', 'sign-A', 'tg-A', 'gup-A', 'hook-A', 'tw-A']) {
+    for (const secret of ['xoxb-A', 'xapp-A', 'sign-A', 'tg-A', 'gup-A', 'hook-A', 'tw-A', 'pk_secret-A']) {
       expect(at).not.toContain(secret);
     }
   });

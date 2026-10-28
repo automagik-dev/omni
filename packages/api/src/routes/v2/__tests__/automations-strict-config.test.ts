@@ -37,6 +37,11 @@ const VALID: Array<{ type: string; config: Record<string, unknown>; validKey: st
   { type: 'send_message', config: { contentTemplate: 'hi' }, validKey: 'contentTemplate' },
   { type: 'log', config: { level: 'info', message: 'hi' }, validKey: 'message' },
   { type: 'call_agent', config: { agentId: 'a1' }, validKey: 'agentId' },
+  {
+    type: 'clickup',
+    config: { instanceId: '11111111-1111-4111-8111-111111111111', operation: 'list_tasks' },
+    validKey: 'operation',
+  },
 ];
 
 describe('POST /automations action config strictness (#1117)', () => {

@@ -14,6 +14,8 @@ const { ChevronLeftIcon } = icons
 // - Slack: Omni signs in to Slack itself, as a bot or as the person (omni-slack-start), and the
 //   page waits for how it ended (omni-slack-result).
 // - WhatsApp Business: the Meta details, created and connected in one go (omni-wab-connect).
+// - ClickUp: a personal API token, created and connected in one go (omni-clickup-connect); it
+//   carries tasks, not messages.
 // A channel created here and left before it connects is deleted again (omni-channel-cancel).
 
 const POLL_MS = 2000
@@ -36,6 +38,7 @@ export function LiveConnectFlow({ state, omni, Tile, PreviewChip }) {
   const props = { key: type, type, omni, Tile, PreviewChip }
   if (type === 'slack') return h(SlackFlow, props)
   if (type === 'whatsapp-business') return h(BusinessFlow, props)
+  if (type === 'clickup') return h(ClickUpFlow, props)
   if (type === 'telegram' || type === 'discord') return h(TokenFlow, props)
   return h(WhatsAppFlow, props)
 }
@@ -403,4 +406,68 @@ function BusinessFlow({ type, omni, Tile, PreviewChip }) {
         h('div', { className: 'oc-row' }, h('button', { type: 'button', className: 'oc-primary', disabled: !ready || busy, onClick: connect }, busy ? t('Connecting…') : t('Connect'))),
         h('p', { className: 'oc-fine' }, t('The token stays with your Omni. Omni only gets that number\'s messages.'))),
     h(Problem, { text: problem }))
+}
+
+// -------------------------------------------------------------------------
+// ClickUp: a personal API token. Omni uses it for tasks, not messages, so its connected
+// block says so rather than talking about chats and contacts.
+
+const CLICKUP_HELP = () => h(Fragment, null,
+  h('h2', null, t('Connect your ClickUp workspace')),
+  h('p', null, t('Omni uses ClickUp for tasks, not messages. Automations and agents can create tasks, move their status, comment and list them.')),
+  h('ol', { className: 'oc-numbered' },
+    h('li', null, rich('In ClickUp, open {settings} → Apps and copy your personal API Token', { settings: h('a', { href: 'https://app.clickup.com/settings/apps', target: '_blank', rel: 'noreferrer' }, t('ClickUp settings')) })),
+    h('li', null, t('The token belongs to you: it acts with your permissions in ClickUp, and it stops working if you leave the workspace. Omni stores it and never shows it again.')),
+    h('li', null, t('Optional: the workspace (team) ID is the number in your ClickUp address, right after app.clickup.com/.')),
+    h('li', null, t('Optional: a default List ID lets task actions leave the list out. Open a List and copy the number in its address.'))),
+  h('p', { className: 'oc-fine' }, t('If connecting fails: 401 means the token is wrong or was revoked; 403 means it cannot open that workspace; a workspace ID the token cannot see is reported as unavailable; and a request that never arrives means this Omni cannot reach api.clickup.com.')))
+
+function ClickUpFlow({ type, omni, Tile, PreviewChip }) {
+  const [fields, setFields] = useState({ token: '', teamId: '', listId: '' })
+  const [channel, setChannel] = useState(null)
+  const [done, setDone] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [problem, setProblem] = useState(null)
+  // No useUnfinished here: omni-clickup-connect either leaves a connected channel or deletes
+  // the one it made, so there is nothing for this page to clean up when it is left.
+  const { pairing, problem: pollProblem } = usePairing(channel, channel !== null && done === null, setDone)
+  const set = key => event => setFields(value => ({ ...value, [key]: event.target.value }))
+  const ready = fields.token.trim().length >= 8
+  const connect = async () => {
+    setBusy(true)
+    setProblem(null)
+    try {
+      const made = await call('omni-clickup-connect', {
+        token: fields.token.trim(),
+        ...(fields.teamId.trim() ? { teamId: fields.teamId.trim() } : {}),
+        ...(fields.listId.trim() ? { listId: fields.listId.trim() } : {}),
+      })
+      setFields(value => ({ ...value, token: '' }))
+      setChannel(made)
+    } catch (error) {
+      setProblem(error.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  const field = (key, label, extra) => h('label', { className: 'oc-field' }, h('span', null, label), h('input', { value: fields[key], onChange: set(key), autoComplete: 'off', ...extra }))
+  const at = done ? 2 : channel ? 1 : 0
+  let body
+  if (done) {
+    body = h(Fragment, null,
+      h('h2', null, t('ClickUp is connected')),
+      h('p', null, [done.detail ? t('Workspace {team}', { team: done.detail }) : null, t('No messages are sent: Omni can create and update tasks and comments in this workspace.')].filter(Boolean).join(' · ')),
+      h('div', { className: 'oc-row' }, h('button', { type: 'button', className: 'oc-primary', onClick: () => omni.finishConnect(type, channel.name, channel.id) }, t('See its health'))))
+  } else if (channel) {
+    body = h(Fragment, null, h('h2', null, t('Connecting…')), h(Spinner, { text: pairing?.message ?? t('Waiting for Omni to say ClickUp is ready') }))
+  } else {
+    body = h(Fragment, null,
+      CLICKUP_HELP(),
+      field('token', t('API token'), { type: 'password', required: true, autoFocus: true, placeholder: 'pk_…', onKeyDown: (event) => { if (event.key === 'Enter' && ready && !busy) void connect() } }),
+      field('teamId', t('Workspace / Team ID (optional)'), { inputMode: 'numeric', placeholder: '9013…' }),
+      field('listId', t('Default List ID (optional)'), { inputMode: 'numeric', placeholder: '9013…' }),
+      h('div', { className: 'oc-row' }, h('button', { type: 'button', className: 'oc-primary', disabled: !ready || busy, onClick: connect }, busy ? t('Connecting…') : t('Connect'))),
+      h('p', { className: 'oc-fine' }, t('The token stays with your Omni. Nothing is sent to ClickUp until an automation or agent acts.')))
+  }
+  return h(FlowShell, { type, at, Tile, PreviewChip, onBack: () => omni.showPage({ type: null, step: 0 }) }, body, h(Problem, { text: problem ?? pollProblem }))
 }

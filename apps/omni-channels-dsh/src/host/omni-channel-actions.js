@@ -1,9 +1,10 @@
 // Changing Omni's channels from the Channels page, on the linked Omni: add one (WhatsApp by
 // its QR code or a phone-number code, Telegram and Discord by a bot token, Slack through
-// Slack's own sign-in as a bot or as the person, WhatsApp Business with its Meta details),
-// reconnect, pause and resume it, and reply in a chat. Every call goes through this host with
-// the linked key (rt.omniRequest, omni.js), so the key never reaches the page: the page gets
-// the channel, the code to scan, the connection state and Omni's own words when it refuses.
+// Slack's own sign-in as a bot or as the person, WhatsApp Business with its Meta details,
+// ClickUp by a personal API token for tasks), reconnect, pause and resume it, and reply in a
+// chat. Every call goes through this host with the linked key (rt.omniRequest, omni.js), so
+// the key never reaches the page: the page gets the channel, the code to scan, the connection
+// state and Omni's own words when it refuses.
 // A token or access token the person types goes from the page to here once and is not
 // returned.
 //
@@ -13,10 +14,11 @@
 import { z } from 'zod'
 
 // The channel types the page adds here, with how each pairs. Slack's sign-in creates its
-// channel on Omni's side (omni-slack-start), and WhatsApp Business is created and connected
-// in one call (omni-wab-connect), so neither goes through omni-channel-create.
+// channel on Omni's side (omni-slack-start), and WhatsApp Business and ClickUp are created
+// and connected in one call (omni-wab-connect, omni-clickup-connect), so none of the three
+// goes through omni-channel-create.
 export const LIVE_TYPES = { 'whatsapp-baileys': 'qr', telegram: 'token', discord: 'token' }
-export const ALL_TYPES = ['whatsapp-baileys', 'whatsapp-business', 'slack', 'telegram', 'discord']
+export const ALL_TYPES = ['whatsapp-baileys', 'whatsapp-business', 'slack', 'telegram', 'discord', 'clickup']
 
 // What Discord's invite gives the bot: view channels, send messages (also in threads), read
 // history, embed links, attach files and add reactions. The scopes add slash commands.
@@ -65,6 +67,13 @@ const WabPayload = z.object({
   accessToken: token,
   phoneNumberId: metaId,
   wabaId: metaId,
+})
+const clickupId = z.string().trim().regex(/^[0-9]{1,25}$/)
+const ClickUpPayload = z.object({
+  name: z.string().trim().min(1).max(80).optional(),
+  token,
+  teamId: clickupId.optional(),
+  listId: clickupId.optional(),
 })
 
 const Instance = z.object({ data: z.object({ id, name: z.string(), channel: z.string() }).passthrough() })
@@ -205,6 +214,26 @@ export function install(rt) {
     return { id: channelId, type: 'whatsapp-business', name: created.data.name }
   }
 
+  // ClickUp with a personal API token: the channel is created and connected in one go, and
+  // removed again when ClickUp refuses the token. The token only ever goes to Omni.
+  async function clickupConnect(body) {
+    const payload = parse(ClickUpPayload, body, 'Paste the API token, and the workspace or list ID when you have one')
+    const name = payload.name || (payload.teamId ? `ClickUp ${payload.teamId}` : 'ClickUp')
+    const created = parse(Instance, await must('POST', '/instances', { name, channel: 'clickup' }), 'Omni did not return the new channel')
+    const channelId = created.data.id
+    try {
+      await must('POST', `/instances/${channelId}/connect`, {
+        token: payload.token,
+        ...(payload.teamId ? { clickupTeamId: payload.teamId } : {}),
+        ...(payload.listId ? { clickupListId: payload.listId } : {}),
+      })
+    } catch (error) {
+      await request('DELETE', `/instances/${channelId}`).catch(() => {})
+      throw error
+    }
+    return { id: channelId, type: 'clickup', name: created.data.name }
+  }
+
   // Where pairing stands: the connection state and, while WhatsApp waits for a scan, the code.
   async function pairing(body) {
     const { id: channelId } = parse(ChannelPayload, body, 'Unknown channel')
@@ -258,6 +287,7 @@ export function install(rt) {
   const ENDPOINTS = {
     'omni-channel-create': create, 'omni-channel-phone-code': phoneCode, 'omni-channel-cancel': cancel, 'omni-channel-act': act, 'omni-send': send,
     'omni-slack-start': slackStart, 'omni-slack-result': slackResult, 'omni-wab-connect': wabConnect,
+    'omni-clickup-connect': clickupConnect,
   }
   const READS = { 'omni-channel-abilities': readAbilities, 'omni-channel-pairing': pairing, 'omni-channel-types': types, 'omni-slack-app': slackApp }
   rt.omniChannelEndpoint = (endpoint, body) => {

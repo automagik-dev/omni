@@ -81,12 +81,37 @@ const CallAgentActionSchema = z.object({
   }),
 });
 
+// ClickUp task action (issue #1413). ClickUp is a non-messaging channel, so
+// this config names a task operation rather than a message.
+const ClickUpActionSchema = z.object({
+  type: z.literal('clickup'),
+  config: strictConfig({
+    instanceId: z.string().min(1).openapi({ description: 'ClickUp instance ID (template)' }),
+    operation: z
+      .enum(['create_task', 'update_status', 'add_comment', 'list_tasks'])
+      .openapi({ description: 'ClickUp task operation' }),
+    listId: z.string().optional().openapi({ description: 'Target list (template); defaults to the instance list' }),
+    taskId: z.string().optional().openapi({ description: 'ClickUp task id (template)' }),
+    name: z.string().optional().openapi({ description: 'Task name (create_task)' }),
+    description: z.string().optional().openapi({ description: 'Task description (create_task)' }),
+    assignees: z.array(z.number().int().positive()).optional().openapi({ description: 'ClickUp user ids' }),
+    dueDate: z
+      .union([z.number(), z.string()])
+      .optional()
+      .openapi({ description: 'Unix ms timestamp or ISO 8601 date string (create_task)' }),
+    status: z.string().optional().openapi({ description: 'Status label (update_status)' }),
+    comment: z.string().optional().openapi({ description: 'Comment text (add_comment)' }),
+    notifyAll: z.boolean().optional().openapi({ description: 'Notify all watchers (add_comment)' }),
+  }),
+});
+
 const ActionSchema = z.union([
   WebhookActionSchema,
   SendMessageActionSchema,
   EmitEventActionSchema,
   LogActionSchema,
   CallAgentActionSchema,
+  ClickUpActionSchema,
 ]);
 
 // Debounce schema

@@ -26,6 +26,7 @@
         "@google/genai": "^1.0.0",
         "@hono/swagger-ui": "^0.4.1",
         "@hono/zod-validator": "^0.4.3",
+        "@omni/channel-clickup": "workspace:*",
         "@omni/channel-sdk": "workspace:*",
         "@omni/channel-slack": "workspace:*",
         "@omni/channel-whatsapp-business": "workspace:*",
@@ -102,6 +103,22 @@
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "1.4.2",
+        "typescript": "^5.7.3",
+      },
+      "peerDependencies": {
+        "typescript": "^5.0.0",
+      },
+    },
+    "packages/channel-clickup": {
+      "name": "@omni/channel-clickup",
+      "version": "2.261027.6",
+      "dependencies": {
+        "@omni/channel-sdk": "workspace:*",
+        "@omni/core": "workspace:*",
+        "zod": "^3.24.2",
       },
       "devDependencies": {
         "@types/bun": "1.4.2",
@@ -297,6 +314,7 @@
       },
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "^0.2.62",
+        "@omni/channel-clickup": "workspace:*",
         "@sentry/bun": "^10.43.0",
         "@snazzah/davey": "^0.1.11",
         "chalk": "^5.4.0",
@@ -753,6 +771,8 @@
     "@omni/channel-asc": ["@omni/channel-asc@workspace:packages/channel-asc"],
 
     "@omni/channel-asc-flow": ["@omni/channel-asc-flow@workspace:packages/channel-asc-flow"],
+
+    "@omni/channel-clickup": ["@omni/channel-clickup@workspace:packages/channel-clickup"],
 
     "@omni/channel-discord": ["@omni/channel-discord@workspace:packages/channel-discord"],
 

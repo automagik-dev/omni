@@ -229,6 +229,7 @@ export const SCOPE_MAP: Record<string, string> = {
   'POST /instances/:id/passkey/response': 'instances:write',
   'POST /instances/:id/passkey/confirm': 'instances:write',
   'POST /instances/:id/connect': 'instances:write',
+  'POST /instances/:id/clickup/actions': 'instances:write',
   'POST /instances/:id/disconnect': 'instances:write',
   'POST /instances/:id/restart': 'instances:write',
   'POST /instances/:id/logout': 'instances:write',

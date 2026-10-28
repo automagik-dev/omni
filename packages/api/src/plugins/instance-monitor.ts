@@ -237,6 +237,9 @@ export function buildInstanceConnectOptions(instance: {
   ascFlowChave?: string | null;
   ascFlowHandoffMode?: string | null;
   ascFlowHandoffServico?: number | null;
+  clickupApiToken?: string | null;
+  clickupTeamId?: string | null;
+  clickupListId?: string | null;
   downloadMediaOnSync?: boolean | null;
   inboundReplyContext?: boolean | null;
 }): Record<string, unknown> {
@@ -267,6 +270,13 @@ export function buildInstanceConnectOptions(instance: {
   }
   if (instance.channel === 'harness') {
     applyHarnessMetadata(options, instance.profileMetadata);
+  }
+  if (instance.channel === 'clickup') {
+    // ClickUp's connect() reads the token as options.token and the ids under
+    // their ClickUp names (issue #1413).
+    if (instance.clickupApiToken) options.token = instance.clickupApiToken;
+    if (instance.clickupTeamId) options.teamId = instance.clickupTeamId;
+    if (instance.clickupListId) options.listId = instance.clickupListId;
   }
   applyInboundReplyContextOption(options, instance);
   return options;
@@ -431,6 +441,9 @@ async function connectInstance(
     twilioStatusCallbackUrl?: string | null;
     twilioWebhookUrl?: string | null;
     twilioValidateSignature?: boolean | null;
+    clickupApiToken?: string | null;
+    clickupTeamId?: string | null;
+    clickupListId?: string | null;
     inboundReplyContext?: boolean | null;
   },
   registry: ChannelRegistry,

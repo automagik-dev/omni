@@ -624,6 +624,13 @@
       "when": 1788600000003,
       "tag": "0088_api_key_parent",
       "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "7",
+      "when": 1788700000000,
+      "tag": "0089_instances_clickup",
+      "breakpoints": true
     }
   ]
 }

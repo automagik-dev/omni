@@ -17,6 +17,7 @@ import type {
   ActionExecutionResult,
   AutomationAction,
   CallAgentActionConfig,
+  ClickUpActionConfig,
   EmitEventActionConfig,
   LogActionConfig,
   SendMessageActionConfig,
@@ -174,6 +175,13 @@ export interface ActionDependencies {
     config: CallAgentActionConfig,
     trustedTenantId?: string | null,
   ) => Promise<AgentRunResult>;
+  /**
+   * Run a ClickUp task action on a connected `clickup` instance (issue #1413).
+   * The callback owns instance/plugin resolution; the core layer only renders
+   * templates and validates the operation. The result is the plugin's
+   * normalized task/comment/list shape.
+   */
+  clickupAction?: (config: ClickUpActionConfig, trustedTenantId?: string | null) => Promise<unknown>;
   /**
    * Optional consumer-side stale-event gate. Invoked by the engine for
    * `chat.idle_timeout` events before matching automations execute.
@@ -996,6 +1004,103 @@ function dispatchCallAgent(
   return { success: true, result: { runId, accepted: true } };
 }
 
+/** Render every template field of a ClickUp action; ids included. */
+function renderClickUpConfig(config: ClickUpActionConfig, context: TemplateContext): ClickUpActionConfig {
+  return {
+    ...config,
+    instanceId: substituteTemplate(config.instanceId, context),
+    ...(config.listId !== undefined ? { listId: substituteTemplate(config.listId, context) } : {}),
+    ...(config.taskId !== undefined ? { taskId: substituteTemplate(config.taskId, context) } : {}),
+    ...(config.name !== undefined ? { name: substituteTemplate(config.name, context) } : {}),
+    ...(config.description !== undefined ? { description: substituteTemplate(config.description, context) } : {}),
+    ...(config.status !== undefined ? { status: substituteTemplate(config.status, context) } : {}),
+    ...(config.comment !== undefined ? { comment: substituteTemplate(config.comment, context) } : {}),
+  };
+}
+
+/**
+ * Execute a clickup action (issue #1413).
+ *
+ * ClickUp is a non-messaging channel: this runs a task action through the API
+ * callback, never a chat send. Templates are rendered first (then re-validated,
+ * because a template can render empty), and a thrown ClickUp error's message is
+ * returned verbatim as the action error so the automation log names what
+ * ClickUp actually refused.
+ */
+async function executeClickUpAction(
+  config: ClickUpActionConfig,
+  context: TemplateContext,
+  deps: ActionDependencies,
+  trustedTenantId?: string | null,
+): Promise<{ success: boolean; result?: unknown; error?: string }> {
+  if (!deps.clickupAction) {
+    return { success: false, error: 'clickupAction dependency not provided' };
+  }
+
+  const rendered = renderClickUpConfig(config, context);
+  if (!rendered.instanceId) {
+    return { success: false, error: 'clickup action needs an instanceId' };
+  }
+
+  switch (rendered.operation) {
+    case 'create_task':
+      if (!rendered.name) return { success: false, error: 'clickup create_task action needs a non-empty name' };
+      break;
+    case 'update_status':
+      if (!rendered.taskId) return { success: false, error: 'clickup update_status action needs a taskId' };
+      if (!rendered.status) return { success: false, error: 'clickup update_status action needs a status' };
+      break;
+    case 'add_comment':
+      if (!rendered.taskId) return { success: false, error: 'clickup add_comment action needs a taskId' };
+      if (!rendered.comment) return { success: false, error: 'clickup add_comment action needs a comment' };
+      break;
+    case 'list_tasks':
+      break;
+    default:
+      return { success: false, error: `Unknown clickup operation: ${String(rendered.operation)}` };
+  }
+
+  try {
+    const result = await deps.clickupAction(rendered, trustedTenantId);
+    return { success: true, result };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    logger.error('ClickUp action failed', { operation: rendered.operation, error: errorMessage });
+    return { success: false, error: errorMessage };
+  }
+}
+
+type ActionOutcome = { success: boolean; result?: unknown; error?: string };
+
+/**
+ * One executor per action type, keyed by the discriminant. A map instead of a
+ * growing switch keeps `executeAction` under the complexity ceiling as actions
+ * are added (clickup, #1413) and makes the exhaustiveness check automatic: a
+ * new `ActionType` without a handler fails typecheck.
+ */
+type ActionHandler<T extends AutomationAction['type']> = (
+  action: Extract<AutomationAction, { type: T }>,
+  context: TemplateContext,
+  deps: ActionDependencies,
+  trustedTenantId: string | null | undefined,
+  actionIndex: number,
+  provenance: EmitProvenance | undefined,
+) => Promise<ActionOutcome>;
+
+const ACTION_HANDLERS: { [T in AutomationAction['type']]: ActionHandler<T> } = {
+  webhook: (action, context, deps, trustedTenantId, actionIndex) =>
+    executeWebhookAction(action.config, context, deps, trustedTenantId, actionIndex),
+  send_message: (action, context, deps, trustedTenantId) =>
+    executeSendMessageAction(action.config, context, deps, trustedTenantId),
+  emit_event: (action, context, deps, trustedTenantId, actionIndex, provenance) =>
+    executeEmitEventAction(action.config, context, deps, trustedTenantId, actionIndex, provenance),
+  log: (action, context, deps) => executeLogAction(action.config, context, deps),
+  call_agent: (action, context, deps, trustedTenantId, _actionIndex, provenance) =>
+    executeCallAgentAction(action.config, context, deps, trustedTenantId, provenance),
+  clickup: (action, context, deps, trustedTenantId) =>
+    executeClickUpAction(action.config, context, deps, trustedTenantId),
+};
+
 /**
  * Execute a single action
  */
@@ -1013,28 +1118,21 @@ export async function executeAction(
 ): Promise<ActionExecutionResult> {
   const start = Date.now();
 
-  let result: { success: boolean; result?: unknown; error?: string };
+  const handler = ACTION_HANDLERS[action.type] as
+    | ((
+        action: AutomationAction,
+        context: TemplateContext,
+        deps: ActionDependencies,
+        trustedTenantId: string | null | undefined,
+        actionIndex: number,
+        provenance: EmitProvenance | undefined,
+      ) => Promise<ActionOutcome>)
+    | undefined;
 
-  switch (action.type) {
-    case 'webhook':
-      result = await executeWebhookAction(action.config, context, deps, trustedTenantId, actionIndex);
-      break;
-    case 'send_message':
-      result = await executeSendMessageAction(action.config, context, deps, trustedTenantId);
-      break;
-    case 'emit_event':
-      result = await executeEmitEventAction(action.config, context, deps, trustedTenantId, actionIndex, provenance);
-      break;
-    case 'log':
-      result = await executeLogAction(action.config, context, deps);
-      break;
-    case 'call_agent':
-      result = await executeCallAgentAction(action.config, context, deps, trustedTenantId, provenance);
-      break;
-    default:
-      // TypeScript should catch this, but just in case
-      result = { success: false, error: `Unknown action type: ${(action as { type: string }).type}` };
-  }
+  const result: ActionOutcome = handler
+    ? await handler(action, context, deps, trustedTenantId, actionIndex, provenance)
+    : // TypeScript should catch this, but a persisted unknown value can still reach here
+      { success: false, error: `Unknown action type: ${(action as { type: string }).type}` };
 
   const durationMs = Date.now() - start;
 

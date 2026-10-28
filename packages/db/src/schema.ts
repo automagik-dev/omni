@@ -51,6 +51,7 @@ export const channelTypes = [
   'twilio-whatsapp',
   'internal',
   'harness', // no-migration-needed: channel columns are varchar(50), not a pg enum — a new literal needs no DDL
+  'clickup', // no-migration-needed: channel columns are varchar(50), not a pg enum — a new literal needs no DDL
 ] as const;
 export type ChannelType = (typeof channelTypes)[number];
 
@@ -1005,6 +1006,17 @@ export const instances = pgTable(
     ascFlowHandoffMode: text('asc_flow_handoff_mode').$type<'flow' | 'service'>(),
     /** `cod_servico` handed to `/transferirHumano` — used only in `service` mode. */
     ascFlowHandoffServico: integer('asc_flow_handoff_servico'),
+
+    // ---- ClickUp Configuration (issue #1413) ----
+    // Non-messaging channel: ClickUp is an API surface for task actions, not a
+    // chat transport. The token is a per-user PERSONAL API token (ClickUp
+    // Settings → Apps → API Token) and is sealed at rest like the other
+    // channel credential columns (SEALED_CREDENTIAL_COLUMNS in @omni/api).
+    clickupApiToken: text('clickup_api_token'),
+    /** Numeric ClickUp team (workspace) id the token was scoped to. */
+    clickupTeamId: varchar('clickup_team_id', { length: 64 }),
+    /** Numeric ClickUp list id used when an action does not name its own. */
+    clickupListId: varchar('clickup_list_id', { length: 64 }),
 
     // ---- Agent Reference ----
     /** FK to agents table (phase 3: replaces legacy agentProviderId + agentId varchar). */
@@ -3269,7 +3281,7 @@ export type ConditionOperator = (typeof conditionOperators)[number];
 /**
  * Action types for automations.
  */
-export const actionTypes = ['webhook', 'send_message', 'emit_event', 'log', 'call_agent'] as const;
+export const actionTypes = ['webhook', 'send_message', 'emit_event', 'log', 'call_agent', 'clickup'] as const;
 export type ActionType = (typeof actionTypes)[number];
 
 /**
@@ -3326,6 +3338,26 @@ export interface LogActionConfig {
 }
 
 /**
+ * ClickUp action configuration (issue #1413). ClickUp is a non-messaging
+ * channel: create/update/comment/list tasks, never a chat message.
+ */
+// no-migration-needed: jsonb action config only
+export interface ClickUpActionConfig {
+  /** ClickUp instance id (template) — must be a `clickup` instance. */
+  instanceId: string;
+  operation: 'create_task' | 'update_status' | 'add_comment' | 'list_tasks';
+  listId?: string;
+  taskId?: string;
+  name?: string;
+  description?: string;
+  assignees?: number[];
+  dueDate?: string | number;
+  status?: string;
+  comment?: string;
+  notifyAll?: boolean;
+}
+
+/**
  * Call agent action configuration.
  * Invokes an AI agent and returns the response for use in subsequent actions.
  * This is a composable building block - use send_message to actually send the response.
@@ -3357,7 +3389,8 @@ export type AutomationAction =
   | { type: 'send_message'; config: SendMessageActionConfig }
   | { type: 'emit_event'; config: EmitEventActionConfig }
   | { type: 'log'; config: LogActionConfig }
-  | { type: 'call_agent'; config: CallAgentActionConfig };
+  | { type: 'call_agent'; config: CallAgentActionConfig }
+  | { type: 'clickup'; config: ClickUpActionConfig };
 
 /**
  * Debounce configuration for message grouping.

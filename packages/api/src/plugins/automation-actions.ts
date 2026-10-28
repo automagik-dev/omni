@@ -33,7 +33,14 @@
  * pin a pooled connection for the duration (the G4 leg-2 trap).
  */
 
-import type { AgentCallContext, AgentRunResult, CallAgentActionConfig, ProviderMetrics } from '@omni/core';
+import type { ClickUpActionRequest, ClickUpActionRunner } from '@omni/channel-clickup';
+import type {
+  AgentCallContext,
+  AgentRunResult,
+  CallAgentActionConfig,
+  ClickUpActionConfig,
+  ProviderMetrics,
+} from '@omni/core';
 import {
   PUBLISH_NOT_DECLARED,
   SCHEMA_NOT_REGISTERED,
@@ -301,6 +308,7 @@ export interface AutomationEngineDeps {
     config: CallAgentActionConfig,
     trustedTenantId?: string | null,
   ) => Promise<AgentRunResult>;
+  clickupAction: (config: ClickUpActionConfig, trustedTenantId?: string | null) => Promise<unknown>;
   staleIdleTimeoutGate: (
     chatId: string,
     instanceId: string,
@@ -449,6 +457,30 @@ export function buildAutomationEngineDeps(
         messages: ctx.messages,
       });
       return toCallAgentResult(db, ctx, result, trustedTenantId, instance);
+    },
+
+    // ClickUp task action (#1413). Resolution mirrors sendMessage/callAgent:
+    // the instance row is read in one short worker tenant scope, then the
+    // channel side effect (ClickUp's HTTP call) runs strictly AFTER that scope
+    // closed. The plugin is resolved through the same `resolvePlugin` seam, so
+    // tests inject a fake runner and production uses the registry. No token is
+    // read, logged or returned here: the plugin holds the credential.
+    clickupAction: async (config, trustedTenantId = null) => {
+      const instance = await runTenantWorkDb(db, trustedTenantId, () => services.instances.getById(config.instanceId));
+      if (!instance) throw new Error(`Instance not found: ${config.instanceId}`);
+      if (instance.channel !== 'clickup') {
+        throw new Error(
+          `Instance ${instance.id} is a ${instance.channel} instance; clickup actions need a clickup instance`,
+        );
+      }
+      const plugin = await resolvePlugin('clickup');
+      if (!plugin) throw new Error('ClickUp plugin is not registered');
+
+      const runner = plugin as unknown as ClickUpActionRunner;
+      // `instanceId` selects the instance; the clickup request itself is the
+      // rest of the flat config (the plugin schema is strict).
+      const { instanceId: _instanceId, ...request } = config;
+      return runner.execute(instance.id, request as ClickUpActionRequest);
     },
 
     // Consumer-side stale-event gate — see engine.handleEvent comment.

@@ -82,6 +82,7 @@ const SEALED_CREDENTIAL_COLUMNS = [
   'gupshupAuthToken',
   'webhookVerifyToken',
   'twilioAuthToken',
+  'clickupApiToken',
 ] as const satisfies readonly (keyof Instance)[];
 
 /**

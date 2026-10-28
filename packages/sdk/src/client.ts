@@ -99,7 +99,8 @@ export type Channel =
   | 'asc'
   | 'asc-flow'
   | 'internal'
-  | 'harness';
+  | 'harness'
+  | 'clickup';
 
 // Paginated response helper
 export interface PaginatedResponse<T> {

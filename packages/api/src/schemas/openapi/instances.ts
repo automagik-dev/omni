@@ -333,6 +333,10 @@ export const SupportedChannelSchema = z.object({
   description: z.string().optional().openapi({ description: 'Channel description' }),
   loaded: z.boolean().openapi({ description: 'Whether plugin is loaded' }),
   capabilities: z.record(z.string(), z.unknown()).optional().openapi({ description: 'Plugin capabilities' }),
+  taskCapabilities: z
+    .record(z.string(), z.unknown())
+    .optional()
+    .openapi({ description: 'Non-messaging action capabilities (ClickUp: canCreateTask, canUpdateTask, …)' }),
 });
 
 /**

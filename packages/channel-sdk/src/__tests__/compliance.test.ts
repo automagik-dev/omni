@@ -517,6 +517,7 @@ describe('channel coverage', () => {
           e.name !== 'channel-a2a' &&
           e.name !== 'channel-internal' &&
           e.name !== 'channel-harness' && // Transport-less E2E test harness (#953) — no webhooks/media/dedupe, same category as internal
+          e.name !== 'channel-clickup' && // Transport-less ClickUp API channel (#1413) — no messaging/webhooks/media/dedupe, same category as internal
           e.name !== 'channel-linkedin' && // Placeholder package — no source yet
           e.name !== 'channel-gupshup', // In progress — PR #334
       )

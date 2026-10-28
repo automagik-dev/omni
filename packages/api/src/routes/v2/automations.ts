@@ -110,6 +110,33 @@ const callAgentActionSchema = z.object({
   }),
 });
 
+// ClickUp task action (issue #1413). ClickUp is a non-messaging channel, so
+// there is no message here — only task operations.
+const clickupDueDate = z.union([
+  z.number().int().describe('Unix millisecond timestamp'),
+  z
+    .string()
+    .refine((value) => !Number.isNaN(Date.parse(value)), 'dueDate must be an ISO 8601 date string')
+    .describe('ISO 8601 date string'),
+]);
+
+const clickupActionSchema = z.object({
+  type: z.literal('clickup'),
+  config: strictConfig({
+    instanceId: z.string().min(1).describe('ClickUp instance ID (supports {{templates}})'),
+    operation: z.enum(['create_task', 'update_status', 'add_comment', 'list_tasks']).describe('ClickUp task operation'),
+    listId: z.string().min(1).optional().describe('Target list (template); defaults to the instance list'),
+    taskId: z.string().min(1).optional().describe('ClickUp task id (template)'),
+    name: z.string().optional().describe('Task name (create_task)'),
+    description: z.string().optional().describe('Task description (create_task)'),
+    assignees: z.array(z.number().int().positive()).optional().describe('ClickUp user ids to assign'),
+    dueDate: clickupDueDate.optional().describe('Task due date (create_task)'),
+    status: z.string().optional().describe('Status label (update_status)'),
+    comment: z.string().optional().describe('Comment text (add_comment)'),
+    notifyAll: z.boolean().optional().describe('Notify every watcher (add_comment)'),
+  }),
+});
+
 // Combined action schema
 const actionSchema = z.discriminatedUnion('type', [
   webhookActionSchema,
@@ -117,6 +144,7 @@ const actionSchema = z.discriminatedUnion('type', [
   emitEventActionSchema,
   logActionSchema,
   callAgentActionSchema,
+  clickupActionSchema,
 ]);
 
 // What the debounce window groups by (#1110): a template over the event
@@ -183,6 +211,30 @@ const createAutomationSchema = z.object({
             message:
               'call_agent responseAs cannot be combined with waitForResponse: false — there is no response to bind',
           });
+        }
+        // Operation-specific ClickUp requirements. Checked here, not on the
+        // action schema: z.discriminatedUnion only accepts ZodObjects, and a
+        // `.superRefine` turns the option into ZodEffects. This mirrors the
+        // call_agent cross-field check above.
+        if (action.type === 'clickup') {
+          const clickup = action.config;
+          const requireField = (field: 'name' | 'taskId' | 'status' | 'comment', message: string) => {
+            if (clickup[field]) return;
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [i, 'config', field],
+              message,
+            });
+          };
+          if (clickup.operation === 'create_task') {
+            requireField('name', 'clickup create_task requires a name');
+          } else if (clickup.operation === 'update_status') {
+            requireField('taskId', 'clickup update_status requires a taskId');
+            requireField('status', 'clickup update_status requires a status');
+          } else if (clickup.operation === 'add_comment') {
+            requireField('taskId', 'clickup add_comment requires a taskId');
+            requireField('comment', 'clickup add_comment requires a comment');
+          }
         }
       });
     })

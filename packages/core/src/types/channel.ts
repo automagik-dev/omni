@@ -16,6 +16,7 @@ export const CHANNEL_TYPES = [
   'twilio-whatsapp',
   'internal',
   'harness',
+  'clickup',
 ] as const;
 export type ChannelType = (typeof CHANNEL_TYPES)[number];
 
