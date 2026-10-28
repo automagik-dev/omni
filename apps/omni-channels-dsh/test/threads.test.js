@@ -9,6 +9,7 @@ import { chmodSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, test } from 'node:test'
 import { NEEDS_NEWER_TEAM, TEAM_CONTRACT } from '../src/host/resume-hook.js'
+import { NOT_LINKED } from '../src/host/thread-keys.js'
 import { CUT_WINDOW_MS, followOmniModel, THREAD_REFUSAL, THREAD_TOOLS } from '../src/host/threads.js'
 import { OMNI, INSTANCE, CHAT, GROUP, ELSEWHERE, OWNER, CHATS, askedOf, boot, fakeOmni, flush, guarded, homeFor, keysOf, record, resetFetch, saved, teamState } from './thread-fixture.js'
 
@@ -57,6 +58,23 @@ test('an added chat is a plain Session of the plugin\'s: outside the team\'s age
   assert.deepEqual(next.channels.threads.list().map(item => item.id), [answer.threadId])
   assert.deepEqual(next.view().omniThreads.map(item => [item.id, item.connected]), [[answer.threadId, true]])
   assert.deepEqual(next.made, [])
+})
+
+test('a link written or removed while DSH runs is a new team revision, so the page\'s + and its reason follow the link at once', async (t) => {
+  const omni = fakeOmni()
+  const run = await boot(t, homeFor(t, null))
+  const offered = () => [run.view().omniThreadsOffered, run.view().omniThreadsReason]
+  assert.deepEqual(offered(), [false, NOT_LINKED])
+  // The page asks the team with the revision it has; the same revision answers `unchanged`
+  // and keeps the page's old fields, so only a new revision brings the + to it.
+  const unlinked = run.team.state.revision
+  await run.channels.writeOmniLink({ url: OMNI, key: omni.link.text, keyId: omni.link.id, scopes: ['*'], pairedAt: '2026-10-28T00:00:00.000Z' })
+  assert.ok(run.team.state.revision > unlinked)
+  assert.deepEqual(offered(), [true, null])
+  const linked = run.team.state.revision
+  assert.equal((await run.call('omni-disconnect', {})).status, 'disconnected')
+  assert.ok(run.team.state.revision > linked)
+  assert.deepEqual(offered(), [false, NOT_LINKED])
 })
 
 test('a thread\'s Session runs only its own tools; every other Session is left to its own rules', async (t) => {
