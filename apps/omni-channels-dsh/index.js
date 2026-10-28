@@ -27,6 +27,7 @@ import * as threadTools from './src/host/thread-tools.js'
 import * as standingRecovery from './src/host/standing-recovery.js'
 import * as standingRuns from './src/host/standing-runs.js'
 import * as omniRows from './src/host/omni-rows.js'
+import * as handoff from './src/host/handoff.js'
 
 export const name = 'omni-channels'
 // The chat threads take their instructions from a prompt section and archive their Sessions in
@@ -44,9 +45,10 @@ export const inject = ['omniTeam', 'tools', 'sessions', 'settings', 'systemPromp
 // runs (automations that hand events to a thread or a session) after the threads, whose
 // removals they hear, their restart recovery right after them, then the session rows under
 // the Omni Bot (omni-rows.js), which follow the Omni Bot's model through the threads and hear
-// the standing runs end, and before the events, which queue for them. Changing channels
-// from the Channels page comes last: it only calls omni through omni.js.
-const MODULES = [resumeHook, grants, subscriptions, asks, omniApi, omniLink, omniDiscover, omniLocal, omniTerminal, omniUpdate, omni, threadKeys, threads, threadTools, standingRuns, standingRecovery, omniRows, omniEvents, omniChannelActions]
+// the standing runs end, and the Omni Bot's hand-off (handoff.js), whose Sessions are rows,
+// before the events, which queue for them. Changing channels from the Channels page comes
+// last: it only calls omni through omni.js.
+const MODULES = [resumeHook, grants, subscriptions, asks, omniApi, omniLink, omniDiscover, omniLocal, omniTerminal, omniUpdate, omni, threadKeys, threads, threadTools, standingRuns, standingRecovery, omniRows, handoff, omniEvents, omniChannelActions]
 
 export function apply(ctx, config = {}) {
   ctx.provide('omniChannels', createRuntime(ctx, ctx.omniTeam, config))

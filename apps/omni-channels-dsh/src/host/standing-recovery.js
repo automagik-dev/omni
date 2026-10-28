@@ -106,6 +106,32 @@ function endedIn(session, turnId, cutByRestart) {
   return end === undefined ? null : turnOutcome(end.data?.reason, words || undefined)
 }
 
+/**
+ * The newest turn in a Session's log: whether a restart cut it (a turn the log shows begun and
+ * never ended counts as cut), why it ended, and its last words; null when the log shows none.
+ */
+export function lastTurnIn(session, cutByRestart) {
+  let end
+  let words = ''
+  let seen = false
+  for (const event of newestFirst(session)) {
+    if (event.type === 'turn/start') {
+      seen = true
+      break
+    }
+    if (event.type === 'turn/end') {
+      // Two ends with no start between: the log was cut short there, and the newer one counts.
+      if (end !== undefined) break
+      end = event
+      seen = true
+    } else if (event.type === 'assistant/message' && words === '') {
+      words = wordsOf(event)
+    }
+  }
+  if (!seen) return null
+  return { cut: end === undefined || cutByRestart(end.data?.reason), reason: end?.data?.reason, words }
+}
+
 export function install(rt) {
   const { ctx, state } = rt
   const standing = rt.standingRuns

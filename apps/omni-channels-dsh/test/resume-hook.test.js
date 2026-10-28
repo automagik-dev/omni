@@ -739,3 +739,16 @@ test('against a team stand-in with no hook a saved "new session" or "ongoing ses
   // Its kept row still shows, so it can be removed.
   assert.deepEqual(run.view().omniRows.map(item => item.sessionId), ['kept'])
 })
+
+test('the hook lists every unreported hand-off\'s Session, also one whose open turn was never saved, and never a reported or archived one (:191, hand-off part)', async (t) => {
+  const home = homeFor(t, undefined, teamState({
+    omniRows: {
+      'handoff-open': row('handoff-open', 'handoff', { reportTo: 'm1', reported: false }),
+      'handoff-done': row('handoff-done', 'handoff', { reportTo: 'm1', reported: true }),
+      'handoff-gone': row('handoff-gone', 'handoff', { reportTo: 'm1', reported: false }),
+    },
+  }))
+  const run = await boot(t, home)
+  run.archived.push('handoff-gone')
+  assert.deepEqual(run.registered[0].sessions(), ['handoff-open'])
+})

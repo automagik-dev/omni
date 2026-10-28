@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { TEAM_TOOLS } from '@automagik/bots-dsh/src/host/constants.js'
 import * as plugin from '../index.js'
-import { OPERATOR_RULES } from '../src/host/omni-rules.js'
+import { HANDOFF_TOOL, OPERATOR_RULES } from '../src/host/omni-rules.js'
 import { THREAD_TOOLS } from '../src/host/threads.js'
 import { applyBoth, composed, fakeContext, teamFile } from './team.js'
 
@@ -107,11 +107,11 @@ test('the Omni endpoints are this plugin\'s, served on the team\'s route, and go
 })
 
 // show_canvas is the canvas plugin's, which checks the whole list. The plugin's own tools,
-// the chat threads' (THREAD_TOOLS), come on top.
+// the chat threads' (THREAD_TOOLS) and the Omni Bot's hand-off (HANDOFF_TOOL), come on top.
 test('with this plugin, the team registers the tools TEAM_TOOLS names but show_canvas, plus the plugin\'s own', async (t) => {
   const { ctx, stop } = start(undefined, { config: { browser: true } })
   t.after(stop)
-  assert.deepEqual([...ctx.registeredTools.keys()].sort(), [...TEAM_TOOLS.filter(name => name !== 'show_canvas'), ...THREAD_TOOLS].sort())
+  assert.deepEqual([...ctx.registeredTools.keys()].sort(), [...TEAM_TOOLS.filter(name => name !== 'show_canvas'), ...THREAD_TOOLS, HANDOFF_TOOL].sort())
 })
 
 // Omni's rules as the team's fixture has them, from their heading to their last line.
@@ -123,7 +123,8 @@ const rulesIn = text => text.slice(text.indexOf(RULES_START), text.indexOf(RULES
 // (the team keeps the fixture). With this plugin and an Omni named, it is that text without
 // the canvas part, which the canvas plugin adds back in its place (its tests check the whole),
 // and with Omni's rules as they are now: the lines that named Tasks say where the work runs
-// instead (wish omni-chat-threads, Group 14; criterion :205), and nothing else changed.
+// instead (wish omni-chat-threads, Group 14; criterion :205), the one that named start_task
+// names the hand-off (Group 15), and nothing else changed.
 test('a Main Bot\'s prompt with an Omni named is the text it was before the split, but its canvases and the rules that named Tasks', async (t) => {
   const team = { version: 1, mainBotIds: ['m1'], revision: 1, bots: { m1: { id: 'm1', name: 'Omni', role: 'Channel orchestrator', instructions: 'Keep it short.', createdAt: 1 } }, rooms: {}, exchanges: [], exchangeTurns: {} }
   const named = composed(team, { channelsConfig: { omni: { url: 'https://omni.example.com' } } })
@@ -140,7 +141,9 @@ test('a Main Bot\'s prompt with an Omni named is the text it was before the spli
   const changed = rules.split('\n').filter(line => !OPERATOR_RULES.split('\n').includes(line))
   assert.equal(changed.length, 3)
   for (const line of changed) assert.match(line, /\bTasks\b/)
-  assert.doesNotMatch(OPERATOR_RULES, /\bTasks\b/)
+  assert.doesNotMatch(OPERATOR_RULES, /\bTasks\b|start_task/)
+  assert.match(changed.find(line => line.includes('start_task')), /call start_task with/)
+  assert.match(OPERATOR_RULES, new RegExp(`call ${HANDOFF_TOOL} with a short title`))
   assert.match(OPERATOR_RULES, /a new session under you for each event, or one ongoing session under you/)
   assert.equal(prompt(plain), readFileSync(teamFile('test/fixtures/main-prompt.txt'), 'utf8'))
 })
@@ -156,11 +159,11 @@ test('with an omni to operate, the Main Bot alone learns the API tools and autom
   await Promise.all([named.team.load(), plain.team.load()])
   const prompt = (run, id) => run.ctx.sections.get('bot-identity').text({ agent: { id } })
   const main = prompt(named, 'm1')
-  for (const part of ['## You operate Omni for the user', 'omni_endpoints', 'omni_call', '## Automations', 'save_automation', 'start_task', 'You have no shell']) assert.ok(main.includes(part), part)
+  for (const part of ['## You operate Omni for the user', 'omni_endpoints', 'omni_call', '## Automations', 'save_automation', HANDOFF_TOOL, 'You have no shell']) assert.ok(main.includes(part), part)
   // Canvases are the canvas plugin's.
   assert.ok(!main.includes('show_canvas'))
   const worker = prompt(named, 'w1')
-  for (const part of ['omni_call', 'openui-lang', 'save_automation', 'start_task']) assert.ok(!worker.includes(part), part)
+  for (const part of ['omni_call', 'openui-lang', 'save_automation', 'start_task', HANDOFF_TOOL]) assert.ok(!worker.includes(part), part)
   // Without an omni, the Main Bot's prompt has none of it.
   assert.ok(!prompt(plain, 'm1').includes('omni_call'))
 })
@@ -180,6 +183,8 @@ test('apply registers its listeners, tools and effects after the team\'s, in a f
     'effect ds-bot: omni-grant-revoke',
     'effect ds-bot: omni-grant-approval',
     'effect ds-bot: Omni permissions view',
+    'on tools/pre-execute (prepend)',
+    'tools guard',
     'on tools/pre-execute (prepend)',
     'on tools/pre-execute (prepend)',
     'on session/event',
@@ -272,6 +277,9 @@ test('apply registers its listeners, tools and effects after the team\'s, in a f
     'effect omni-channels: session rows',
     'effect omni-channels: session rows view',
     'effect omni-channels: omni-row-remove',
+    'tool omni_handoff',
+    'on session/event',
+    'on agent/inbox/claimed',
     'effect ds-bot: omni events view',
     'effect ds-bot: omni events',
     'effect omni-channels: omni-channel-abilities',

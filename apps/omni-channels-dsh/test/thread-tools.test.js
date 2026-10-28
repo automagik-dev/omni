@@ -15,6 +15,7 @@ import LocalAttachmentStore from '@deepseek-ai/dsh-attachment-local'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { defineTool, ToolRuntime, validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
+import { START_TASK_REFUSAL } from '../src/host/grants.js'
 import { MEDIA_FILE_BYTES } from '../src/host/omni.js'
 import { NEEDS_NEWER_TEAM } from '../src/host/resume-hook.js'
 import { NOT_LINKED } from '../src/host/thread-keys.js'
@@ -537,12 +538,14 @@ test('in the ask run a read works; a send, a POST omni_call, start_task or messa
   const { sessionId } = await askFrom(run, thread)
   for (const name of ['read', 'grep', 'omni_chats', 'omni_messages', 'omni_channels', 'find_chats', 'list_automations']) assert.deepEqual(await preExecute(run, name, sessionId), { kind: 'allow' }, name)
   assert.deepEqual(await preExecute(run, 'omni_call', sessionId, { method: 'get', path: '/chats' }), { kind: 'allow' })
-  const denied = ['omni_send', 'omni_react', 'omni_delete', 'omni_media', 'omni_connect', 'start_task', 'message_bot', 'save_automation', 'bash', 'write', 'edit', 'web_fetch']
+  const denied = ['omni_send', 'omni_react', 'omni_delete', 'omni_media', 'omni_connect', 'message_bot', 'save_automation', 'bash', 'write', 'edit', 'web_fetch']
   for (const name of denied) {
     const { card, result } = await dsh(run, name, sessionId, name === 'omni_send' ? { to: 'Marina', text: 'oi' } : {})
     assert.equal(card, false, name)
     assert.match(result, new RegExp(`^Error: This Session answers a chat thread's question and only reads: ${name} is not allowed here`), name)
   }
+  // start_task is the Omni Bot's no longer: its deny names the hand-off, never start_task (review 15).
+  assert.deepEqual(await dsh(run, 'start_task', sessionId), { card: false, result: `Error: ${START_TASK_REFUSAL}` })
   const post = await dsh(run, 'omni_call', sessionId, { method: 'POST', path: '/messages/send', body: '{}' })
   assert.deepEqual([post.card, /only reads/.test(post.result)], [false, true])
   // A thread's own send is not its to make either.

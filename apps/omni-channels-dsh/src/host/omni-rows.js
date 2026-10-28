@@ -8,8 +8,8 @@
 //
 // A row is never capped and never dropped with its automation or its run: only its own menu
 // removes it, which archives its Session with its work stopped. Its Session runs on the Omni
-// Bot's model and follows it, keeps every DSH tool but the Bot team's (TEAM_TOOLS) and the
-// chat threads' (THREAD_TOOLS), each denied one name at a time, and while a "new session" run
+// Bot's model and follows it, keeps every DSH tool but the Bot team's (TEAM_TOOLS), the chat
+// threads' (THREAD_TOOLS) and the hand-off, each denied one name at a time, and while a "new session" run
 // that asks first works there it is on DSH's read-only preset, set back to the preset it was
 // made with when the run ends.
 //
@@ -18,6 +18,7 @@
 // (turnOpenAt within the team's window), so an idle row costs the pass nothing.
 import { z } from 'zod'
 import { denyEach } from './omni-api.js'
+import { HANDOFF_TOOL } from './omni-rules.js'
 import { isStandingRun } from './standing-runs.js'
 import { CUT_WINDOW_MS, followOmniModel, selectOmniModel, THREAD_TOOLS } from './threads.js'
 
@@ -35,8 +36,9 @@ export const TEAM_TOOLS = Object.freeze([
   'generate_image',
   'omni_endpoints', 'omni_call', 'omni_channels', 'omni_chats', 'omni_messages', 'omni_send', 'omni_react', 'omni_media', 'omni_delete', 'omni_connect', 'show_canvas', 'start_task',
 ])
-// What a row's Session never runs: the team's tools and the chat threads' own.
-export const ROW_DENIED = Object.freeze([...new Set([...TEAM_TOOLS, ...THREAD_TOOLS])])
+// What a row's Session never runs: the team's tools, the chat threads' own and the hand-off,
+// which is the Omni Bot's.
+export const ROW_DENIED = Object.freeze([...new Set([...TEAM_TOOLS, ...THREAD_TOOLS, HANDOFF_TOOL])])
 export const ROW_REFUSAL = 'A session under Omni has DSH\'s own tools, not the Bot team\'s or a chat thread\'s.'
 export const ROW_KINDS = Object.freeze(['run', 'ongoing', 'handoff'])
 // A run that worked in a Session whose row the owner removed.
@@ -112,6 +114,15 @@ export async function setReadOnly(rt, sessionId) {
   return before
 }
 
+/** The Sessions DSH archived, read without waiting; none before its registry is up. */
+export function archivedIds(ctx) {
+  try {
+    return new Set(ctx.workspaceRegistry?.archivedSessionIds ?? [])
+  } catch {
+    return new Set()
+  }
+}
+
 export function install(rt) {
   const { ctx, state } = rt
   const rows = () => (state.omniRows ??= {})
@@ -126,14 +137,7 @@ export function install(rt) {
     return valid(row) && row.sessionId === sessionId ? row : undefined
   }
   const list = () => Object.values(rows()).filter(valid).sort((a, b) => a.at - b.at)
-  // What DSH archived, read without waiting; none before its registry is up.
-  const archived = () => {
-    try {
-      return new Set(ctx.workspaceRegistry?.archivedSessionIds ?? [])
-    } catch {
-      return new Set()
-    }
-  }
+  const archived = () => archivedIds(ctx)
   const unfollows = new Map()
   // Rows being removed: from before their archive starts (DSH may end their turn inside it),
   // their Session takes no more events, and an ongoing automation's next one gets a new one.

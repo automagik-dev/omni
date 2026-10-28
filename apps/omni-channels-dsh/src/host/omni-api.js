@@ -6,9 +6,10 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { operatesOmni } from './grants.js'
+import { operatesHere, operatesOmni } from './grants.js'
 import { output } from './output.js'
 import { SOURCE_ROUTES } from './omni-routes.js'
+import { HANDOFF_TOOL } from './omni-rules.js'
 import { THREAD_TOOLS } from './threads.js'
 
 const SPEC_TTL_MS = 10 * 60_000
@@ -21,11 +22,12 @@ const CARD_BODY_MAX = 12_000
 
 const invalid = message => Object.assign(new Error(message), { code: 'bot/invalid' })
 
-// Omni operates the platform through its tools; files and the shell belong to Tasks. With
-// an omni to operate, the Sessions of a Bot that operates it lose DSH's computer tools, and start_task hands
-// that work on.
+// Omni operates the platform through its tools; files and the shell belong to the sessions
+// it hands work to. With an omni to operate, the Sessions of a Bot that operates it lose DSH's
+// computer tools and the team's start_task, and its hand-off (HANDOFF_TOOL, handoff.js) hands
+// that work to a session under its row.
 export const COMPUTER_TOOLS = ['bash', 'read', 'write', 'edit', 'glob', 'grep', 'subagent', 'subagent_fork', 'workflow', 'job_kill', 'job_list', 'job_output', 'todo_write', 'working_directory']
-const COMPUTER_REFUSAL = 'Omni works through its own tools, not files or the shell. Hand this to a task with start_task.'
+const COMPUTER_REFUSAL = `Omni works through its own tools, not files or the shell. Hand this to a session under you with ${HANDOFF_TOOL}.`
 
 // Chat keys (POST /keys/children…) answer with key text, which must never reach a model: the
 // host mints and revokes them itself, so omni_call refuses them before any request and
@@ -184,11 +186,7 @@ export function install(rt) {
   const { ctx, state } = rt
   let spec = null
 
-  const operating = (sessionId) => {
-    if (!(rt.omniNamed?.() ?? Boolean(rt.config?.omni?.url))) return false
-    const self = rt.selfOf(sessionId)
-    return operatesOmni(rt, self)
-  }
+  const operating = sessionId => operatesHere(rt, sessionId)
   // `trimmed`: the agents this list was trimmed from.
   const trimFrom = (agent, names, trimmed, what) => {
     if (trimmed.has(agent) || typeof agent.ctx?.tools?.restrict !== 'function') return
@@ -205,7 +203,7 @@ export function install(rt) {
   const trimmedComputer = new WeakSet()
   const trimComputer = (agent) => {
     if (agent === undefined || !operating(agent.session?.id)) return
-    trimFrom(agent, COMPUTER_TOOLS, trimmedComputer, 'computer tools')
+    trimFrom(agent, [...COMPUTER_TOOLS, 'start_task'], trimmedComputer, 'computer tools')
   }
   // A chat thread's tools are for its own Session only (thread-tools.js): the Omni Bot's
   // Sessions never list them, whether or not an Omni is named yet.
