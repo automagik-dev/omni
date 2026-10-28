@@ -73,9 +73,13 @@ function inMemoryBus(): {
         timestamp: Date.now(),
       } as unknown as OmniEvent;
       for (const { pattern, handler } of handlers) {
-        if (pattern.endsWith('.>') ? type.startsWith(pattern.slice(0, -1)) : pattern === type) {
-          await handler(event);
-        }
+        // NATS `foo.>` matches `foo` itself and every `foo.*` subject (the
+        // engine subscribes `connector.event.>` while the published type is
+        // exactly `connector.event`).
+        const matches = pattern.endsWith('.>')
+          ? type === pattern.slice(0, -2) || type.startsWith(`${pattern.slice(0, -2)}.`)
+          : pattern === type;
+        if (matches) await handler(event);
       }
       return { id, sequence: 0, stream: '' };
     },
