@@ -254,7 +254,7 @@
     },
     "packages/channel-webchat": {
       "name": "@omni/channel-webchat",
-      "version": "2.261023.26",
+      "version": "2.261027.8",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
