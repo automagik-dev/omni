@@ -20,7 +20,7 @@ import { homedir } from 'node:os'
 import { delimiter, dirname, isAbsolute, join, relative } from 'node:path'
 import { inflateRawSync } from 'node:zlib'
 import { z } from 'zod'
-import { linkWithKey, sandboxHome } from './omni-discover.js'
+import { linkWithKey, sandboxHome, UNFOLD_RUNS_OMNI, unfoldHost } from './omni-discover.js'
 import { installRelease } from './omni-release.js'
 import { PLUGIN_VERSION } from './version.js'
 
@@ -42,6 +42,7 @@ const MAX_OUTPUT = 64 * 1024
 const MAX_FILE = 1024 * 1024
 
 const invalid = message => Object.assign(new Error(message), { code: 'bot/invalid' })
+const refused = message => Object.assign(new Error(message), { code: 'bot/refused' })
 
 // The one line `--json` prints (packages/cli/src/sandbox.ts, SandboxReport).
 const Report = z.object({
@@ -252,8 +253,10 @@ export function install(rt, deps = {}) {
     }
   }
 
-  // Without `confirm`, only what the page should ask about: where it goes, which version.
+  // Without `confirm`, only what the page should ask about: where it goes, which version. Under
+  // Unfold nothing is installed here: no Bun download, no npm lookup, no login item.
   async function start(body) {
+    if (unfoldHost(env)) throw refused(UNFOLD_RUNS_OMNI)
     const parsed = InstallPayload.safeParse(body ?? undefined)
     if (!parsed.success) throw invalid('Confirm installing Omni on this computer first')
     const update = parsed.data?.update === true

@@ -263,15 +263,33 @@ export interface SandboxChildSpec {
   logPath: string;
 }
 
+export interface SandboxRunOptions {
+  /**
+   * Run for an app that embeds this Omni (`omni sandbox run --embedded`): the API sends no crash
+   * reports, checks for no updates and reads no plugin lane. The app ships Omni's updates itself.
+   */
+  embedded?: boolean;
+}
+
+/** What the API of an embedded sandbox gets in place of the update settings. */
+const EMBEDDED_API_ENV = {
+  // instrument.ts falls back to its hard-coded DSN when SENTRY_DSN is unset; empty turns it off.
+  SENTRY_DSN: '',
+  OMNI_UPDATE_CHECK: 'false',
+  OMNI_PLUGIN_LANE: 'off',
+} as const;
+
 /** The three children, in start order. */
 export function sandboxChildSpecs(
   layout: SandboxLayout,
   state: SandboxState,
   apiKey: string,
   parentEnv: Record<string, string | undefined> = process.env,
+  options: SandboxRunOptions = {},
 ): SandboxChildSpec[] {
   const base = sandboxBaseEnv(layout, parentEnv);
   const modules = join(layout.runtimeDir, 'node_modules');
+  const embedded = options.embedded === true;
   return [
     {
       name: 'pg',
@@ -313,7 +331,7 @@ export function sandboxChildSpecs(
         API_PORT: String(state.ports.api),
         API_HOST: '127.0.0.1',
         DATABASE_URL: sandboxDatabaseUrl(state),
-        // postgres.js dials the Unix socket in PGHOST (mode 0700) instead of TCP.
+        // For libpq tools only: postgres.js takes the URL's `localhost` over PGHOST and dials TCP.
         PGHOST: layout.pgSocketDir,
         PGPORT: String(state.ports.pg),
         OMNI_API_KEY: apiKey,
@@ -325,11 +343,17 @@ export function sandboxChildSpecs(
         NATS_URL: `nats://127.0.0.1:${state.ports.nats}`,
         NODE_ENV: 'production',
         LOG_LEVEL: 'info',
-        // Updates from the app (packages/api/src/system/update.ts): this API listens on loopback
-        // only, so the app's own yes confirms them, and the runtime's CLI hands the update off.
-        OMNI_UPDATE_COMMAND: JSON.stringify(sandboxUpdateCommand(layout, state)),
-        OMNI_UPDATE_CONFIRM: 'app',
+        // Where the API keeps update and plugin-lane state, embedded or not (else ./data of its cwd).
         OMNI_UPDATE_STATE_DIR: layout.dataDir,
+        ...(embedded
+          ? EMBEDDED_API_ENV
+          : {
+              // Updates from the app (packages/api/src/system/update.ts): this API listens on
+              // loopback only, so the app's own yes confirms them, and the runtime's CLI hands
+              // the update off.
+              OMNI_UPDATE_COMMAND: JSON.stringify(sandboxUpdateCommand(layout, state)),
+              OMNI_UPDATE_CONFIRM: 'app',
+            }),
       },
       readyPort: state.ports.api,
       logPath: join(layout.logsDir, 'api.log'),

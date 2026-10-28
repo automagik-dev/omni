@@ -170,7 +170,7 @@ test('the sandbox key is read only from a config file inside the sandbox home', 
 })
 
 // A host whose computer has a Bun in ~/.bun and whose install prints `report(home)`.
-function host(t, { report, code = 0, validate = 200 }) {
+function host(t, { report, code = 0, validate = 200, env = { PATH: '' } }) {
   const home = tempDir(t, 'omni-local-home-')
   const bun = join(home, '.bun', 'bin', 'bun')
   mkdirSync(dirname(bun), { recursive: true })
@@ -192,7 +192,7 @@ function host(t, { report, code = 0, validate = 200 }) {
   const rt = { home: join(home, 'plugin'), config: {}, ctx: { effect: run => run() }, syncOmniEvents: () => {} }
   installHooks(rt)
   installLink(rt)
-  install(rt, { env: { PATH: '' }, home, spawn: fake.spawn })
+  install(rt, { env, home, spawn: fake.spawn })
   return { rt, sandbox, calls: fake.calls, checked }
 }
 
@@ -270,4 +270,19 @@ test('a sandboxed Omni below this plugin\'s minimum is offered the release a new
   assert.equal(newer('2.261023.10', '2.261023.9'), true)
   assert.equal(newer('2.261023.6-labs.2', '2.261023.6'), false)
   assert.equal(newer('3.0.0', null), false)
+})
+
+test('under Unfold nothing is installed here: no Bun download, no npm lookup, no install, no login item', async (t) => {
+  const { rt, calls } = host(t, { report: okReport, env: { PATH: '', AUTOMAGIK_HOST: 'unfold', OMNI_HOME: '/instance/omni' } })
+  const asked = []
+  globalThis.fetch = async (address) => {
+    asked.push(String(address))
+    throw new TypeError('fetch failed')
+  }
+  for (const body of [{}, { confirm: true }, { confirm: true, update: true }]) {
+    await assert.rejects(rt.omniLocalEndpoint('omni-local-install', body), { code: 'bot/refused' })
+  }
+  assert.equal((await rt.omniLocalEndpoint('omni-local-progress')).status, 'idle')
+  assert.equal(calls.length, 0)
+  assert.deepEqual(asked, [])
 })

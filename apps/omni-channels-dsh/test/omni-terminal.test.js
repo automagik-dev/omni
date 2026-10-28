@@ -282,3 +282,11 @@ test('the install terminal names the newest Omni npm has that meets the minimum,
   await rt.omniTerminalReady(opened.terminal)
   assert.equal(subprocess.spawned[0].spec.env.OMNI_TERMINAL_COMMAND, 'bun x --bun @automagik/omni@2.999999.1 install --sandbox --at-login')
 })
+
+test('under Unfold no terminal installs or updates an Omni, and nothing is spawned', async (t) => {
+  const subprocess = fakeSubprocess()
+  const { call } = start(t, { subprocess, env: { PATH: '/usr/bin:/bin', AUTOMAGIK_HOST: 'unfold', OMNI_HOME: '/instance/omni' } })
+  await assert.rejects(call('omni-terminal-open', { kind: 'install' }), { code: 'bot/refused' })
+  await assert.rejects(call('omni-terminal-open', { kind: 'update', id: FOUND_ID }), { code: 'bot/refused' })
+  assert.equal(subprocess.spawned.length, 0)
+})

@@ -3,13 +3,16 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, test } from 'node:test'
-import { candidates, discover, install, probe, sameOmni } from '../src/host/omni-discover.js'
+import fs from 'node:fs'
+import { createServer } from 'node:http'
+import { syncBuiltinESMExports } from 'node:module'
+import { candidates, discover, install, managerOf, probe, readConfig, sameOmni } from '../src/host/omni-discover.js'
 import { install as installLink, LINK_FILE } from '../src/host/omni-link.js'
 import { parseConnectLink } from '../src/client/connect-link.js'
 import { install as installHooks } from '@automagik/bots-dsh/src/host/extend.js'
 
 const realFetch = globalThis.fetch
-const realEnv = { HOME: process.env.HOME, OMNI_CONFIG_DIR: process.env.OMNI_CONFIG_DIR, OMNI_HOME: process.env.OMNI_HOME }
+const realEnv = { HOME: process.env.HOME, OMNI_CONFIG_DIR: process.env.OMNI_CONFIG_DIR, OMNI_HOME: process.env.OMNI_HOME, AUTOMAGIK_HOST: process.env.AUTOMAGIK_HOST }
 afterEach(() => {
   globalThis.fetch = realFetch
   for (const [name, value] of Object.entries(realEnv)) {
@@ -122,6 +125,135 @@ test('OMNI_CONFIG_DIR and OMNI_HOME are where the CLI and the desktop app keep t
     ['running', 'http://127.0.0.1:8882'],
   ])
   assert.equal(sameOmni('http://localhost:9001'), sameOmni('http://127.0.0.1:9001/'))
+})
+
+// Unfold runs an Omni of its own for each instance (AUTOMAGIK_HOST=unfold, OMNI_HOME in the
+// instance): that one is the only Omni its host may find.
+const OWN_KEY = 'omni_sk_instance_secret'
+function unfoldHome(t) {
+  const { home, stop } = homeWith({
+    cli: { apiUrl: 'http://127.0.0.1:47300', apiKey: LOCAL_KEY, server: { port: 47300 } },
+    sandbox: { apiUrl: 'http://127.0.0.1:47301', apiKey: SANDBOX_KEY },
+  })
+  t.after(stop)
+  const own = join(home, 'instance', 'omni')
+  mkdirSync(join(own, 'sandbox', 'config'), { recursive: true })
+  writeFileSync(join(own, 'sandbox', 'config', 'config.json'), JSON.stringify({ apiUrl: 'http://127.0.0.1:47302', apiKey: OWN_KEY }))
+  const reads = []
+  const read = (path) => {
+    reads.push(path)
+    return readConfig(path)
+  }
+  return { home, own, reads, read }
+}
+
+test('under Unfold only the instance\'s own sandbox is found: no CLI config, no ~/.omni, no default port', async (t) => {
+  const { home, own, reads, read } = unfoldHome(t)
+  const env = { AUTOMAGIK_HOST: 'unfold', OMNI_HOME: own, OMNI_CONFIG_DIR: join(home, '.omni') }
+  const ownConfig = join(own, 'sandbox', 'config', 'config.json')
+  assert.deepEqual(candidates({ env, home, read }).map(entry => [entry.source, entry.url]), [['sandbox', 'http://127.0.0.1:47302']])
+  assert.deepEqual(reads, [ownConfig])
+
+  reads.length = 0
+  const asked = []
+  let released = 0
+  const omnis = await discover({
+    env,
+    home,
+    read,
+    fetchImpl: loopback({ 8882: 'pairable', 47300: 'old', 47301: 'old', 47302: 'old' }, { asked }),
+    manager: url => managerOf(url, { env, home, read }),
+    release: async () => {
+      released += 1
+      return { version: '9.9.9' }
+    },
+  })
+  assert.deepEqual(omnis.map(omni => [omni.source, omni.url, omni.manager, omni.updateTo]), [['sandbox', 'http://127.0.0.1:47302', 'sandbox', null]])
+  assert.deepEqual([...new Set(asked.map(entry => entry.port))], ['47302'])
+  assert.equal(released, 0, 'an Omni Unfold runs is never looked up on npm')
+  assert.ok(reads.every(path => path === ownConfig), `read outside the instance: ${reads}`)
+  assert.equal(managerOf('http://127.0.0.1:47300', { env, home, read }), 'other')
+  assert.ok(reads.every(path => path === ownConfig))
+})
+
+// Every path node:fs is asked about while `run` runs, whoever asks: once
+// syncBuiltinESMExports() runs, the plugin's own `import { readFileSync } from 'node:fs'`
+// bindings call these patches too, so a read that skips the injected reader is still seen.
+const FS_CALLS = ['readFileSync', 'statSync', 'lstatSync', 'existsSync', 'readdirSync', 'openSync', 'accessSync']
+async function fsTouches(run) {
+  const touched = []
+  const real = Object.fromEntries(FS_CALLS.map(name => [name, fs[name]]))
+  for (const name of FS_CALLS) {
+    fs[name] = (path, ...rest) => {
+      touched.push(String(path))
+      return real[name](path, ...rest)
+    }
+  }
+  syncBuiltinESMExports()
+  try {
+    await run()
+  } finally {
+    Object.assign(fs, real)
+    syncBuiltinESMExports()
+  }
+  return touched
+}
+
+test('under Unfold the planted ~/.omni and CLI config are never opened, whatever reads them (fs spy)', async (t) => {
+  const { home, own } = unfoldHome(t)
+  const planted = join(home, 'cli-config')
+  mkdirSync(planted)
+  writeFileSync(join(planted, 'config.json'), JSON.stringify({ apiUrl: 'http://127.0.0.1:47303', apiKey: LOCAL_KEY }))
+  const ownConfig = join(own, 'sandbox', 'config', 'config.json')
+  const fetchImpl = loopback({ 47302: 'pairable' })
+  const outside = path => path.startsWith(join(home, '.omni')) || path.startsWith(planted)
+
+  const unfold = { AUTOMAGIK_HOST: 'unfold', OMNI_HOME: own, OMNI_CONFIG_DIR: planted }
+  const touched = await fsTouches(async () => {
+    candidates({ env: unfold, home })
+    managerOf('http://127.0.0.1:47300', { env: unfold, home })
+    await discover({ env: unfold, home, fetchImpl, release: async () => ({ version: '9.9.9' }) })
+  })
+  assert.ok(touched.includes(ownConfig), 'the spy sees the reads it should (the instance config)')
+  assert.deepEqual(touched.filter(outside), [])
+
+  // Control: off Unfold the same spy sees the planted files read.
+  const plain = { OMNI_HOME: own, OMNI_CONFIG_DIR: planted }
+  const read = await fsTouches(async () => {
+    await discover({ env: plain, home, fetchImpl, release: async () => ({ version: '9.9.9' }) })
+  })
+  assert.ok(read.some(outside), 'control: off Unfold the planted configs are read')
+})
+
+test('under Unfold without OMNI_HOME nothing is found and nothing is read', async (t) => {
+  const { home, reads, read } = unfoldHome(t)
+  assert.deepEqual(candidates({ env: { AUTOMAGIK_HOST: 'unfold' }, home, read }), [])
+  assert.equal(managerOf('http://127.0.0.1:47300', { env: { AUTOMAGIK_HOST: 'unfold' }, home, read }), 'other')
+  assert.deepEqual(reads, [])
+})
+
+test('a listener on the default port is probed off Unfold (control) and sees no connection under Unfold', async (t) => {
+  const { home, stop } = homeWith()
+  t.after(stop)
+  let connections = 0
+  const server = createServer((request, response) => {
+    response.writeHead(404, { 'content-type': 'application/json' })
+    response.end('{}')
+  })
+  server.on('connection', () => {
+    connections += 1
+  })
+  await new Promise(ready => server.listen(0, '127.0.0.1', ready))
+  t.after(() => {
+    server.closeAllConnections()
+    server.close()
+  })
+  const port = server.address().port
+  await discover({ env: {}, home, port })
+  assert.ok(connections > 0, 'control: off Unfold the default port is probed')
+  connections = 0
+  assert.deepEqual(await discover({ env: { AUTOMAGIK_HOST: 'unfold' }, home, port }), [])
+  assert.equal(connections, 0)
 })
 
 test('a probe tells an Omni a device can sign in to from one that is too old, off, unclaimed or not there', async () => {

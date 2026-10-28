@@ -15,7 +15,7 @@ import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
 import { z } from 'zod'
-import { candidates, foundOmni, linkWithKey, managerOf, probe } from './omni-discover.js'
+import { candidates, foundOmni, linkWithKey, managerOf, probe, UNFOLD_RUNS_OMNI, unfoldHost } from './omni-discover.js'
 import { downloadBun, findBun } from './omni-local.js'
 import { installRelease } from './omni-release.js'
 
@@ -256,6 +256,8 @@ export function install(rt, deps = {}) {
   }
 
   async function open(body) {
+    // Under Unfold this host neither installs nor updates an Omni (omni-local.js says the same).
+    if (unfoldHost(env)) throw refused(UNFOLD_RUNS_OMNI)
     const payload = parse(OpenPayload, body, 'Pick what the terminal is for')
     if (payload.kind === 'update' && !payload.id) throw invalid('Pick the Omni to update')
     sweep()

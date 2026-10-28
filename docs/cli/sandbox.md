@@ -41,7 +41,7 @@ omni sandbox status    [--home <dir>] [--json]
 omni sandbox start     [--home <dir>] [--json]
 omni sandbox stop      [--home <dir>] [--json]
 omni sandbox uninstall [--home <dir>] [--purge] [--json]
-omni sandbox run       [--home <dir>]        # the supervisor; launchd/systemd start this
+omni sandbox run       [--home <dir>] [--embedded]   # the supervisor; launchd/systemd, or an app, start this
 omni sandbox update    [--home <dir>] [--to <version>] [--json]   # what its API runs to update it
 ```
 
@@ -83,6 +83,28 @@ When the API comes back on the new version, it records that the update finished.
 
 The update only takes a version npm publishes on the sandbox's channel (`latest`, or `next` for a
 prerelease), and only one update runs at a time.
+
+## Embedded in an app
+
+An app that ships Omni inside itself runs the supervisor with `omni sandbox run --embedded
+--home <dir>`. The app then owns Omni's updates and its network policy, so under `--embedded`
+the API gets:
+
+- `SENTRY_DSN=""`: no crash reports or traces (without it, the API reports to Omni's own
+  Sentry project);
+- `OMNI_UPDATE_CHECK=false` and no `OMNI_UPDATE_COMMAND`: the npm registry is never read and
+  updates from the app are off;
+- `OMNI_PLUGIN_LANE=off`: no plugin lane is read.
+
+The app also starts the supervisor itself with `OMNI_TELEMETRY=false` and
+`OMNI_SKIP_POSTINSTALL_PIN=1`. `--embedded` cannot do this, because the CLI acts before the
+`run` command does: without the first, a CLI error can send Omni's Sentry project an event with
+the command line (and so the `--home` path); without the second, the CLI may pin the user's own
+global `@automagik/omni` to the version the app ships.
+
+The database URL and Postgres are as in any sandbox. pgserve sets no listen address, so
+Postgres takes its default, `localhost`: 127.0.0.1, and `::1` where `localhost` resolves to it,
+plus its socket, with the `postgres`/`postgres` login. The API dials it over TCP.
 
 ## Requirements
 

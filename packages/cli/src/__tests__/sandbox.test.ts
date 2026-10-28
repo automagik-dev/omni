@@ -27,6 +27,7 @@ import {
   type ChildHandle,
   SandboxSupervisor,
   type SupervisorDeps,
+  runSandboxSupervisor,
   spawnChildProcess,
 } from '../sandbox-supervisor.js';
 import {
@@ -701,6 +702,29 @@ describe('sandboxChildSpecs', () => {
     expect(JSON.parse(api?.env.OMNI_UPDATE_COMMAND ?? '[]')).toEqual(command);
     expect(sandboxUpdateCommand(layout, state)).toEqual(command);
   });
+
+  test('without --embedded: crash reports, updates and the database URL stay as they were', () => {
+    const [pg, , api] = sandboxChildSpecs(sandboxLayout('/s'), state, 'omni_sk_test', LEAKY_ENV);
+    expect(api?.env.SENTRY_DSN).toBeUndefined();
+    expect(api?.env.OMNI_UPDATE_CHECK).toBeUndefined();
+    expect(api?.env.OMNI_PLUGIN_LANE).toBeUndefined();
+    expect(api?.env.DATABASE_URL).toBe('postgresql://postgres:postgres@localhost:15432/omni');
+    expect(pg?.cmd.slice(-2)).toEqual(['--socket-dir', '/s/run/pg']);
+  });
+
+  test('--embedded: no crash reports, no update check, no plugin lane; the database URL is unchanged', () => {
+    const layout = sandboxLayout('/s');
+    const [pg, nats, api] = sandboxChildSpecs(layout, state, 'omni_sk_test', LEAKY_ENV, { embedded: true });
+    expect(api?.env).toMatchObject({
+      SENTRY_DSN: '',
+      OMNI_UPDATE_CHECK: 'false',
+      OMNI_PLUGIN_LANE: 'off',
+      OMNI_UPDATE_STATE_DIR: '/s/data',
+    });
+    for (const key of ['OMNI_UPDATE_COMMAND', 'OMNI_UPDATE_CONFIRM']) expect(api?.env[key]).toBeUndefined();
+    expect(api?.env.DATABASE_URL).toBe('postgresql://postgres:postgres@localhost:15432/omni');
+    for (const spec of [pg, nats, api]) expect(spec?.env.OMNI_TELEMETRY).toBe('false');
+  });
 });
 
 describe('a reinstall from anywhere keeps its units', () => {
@@ -984,6 +1008,34 @@ describe('SandboxSupervisor', () => {
     expect(fake.events).toContain('kill pg SIGTERM');
     expect(fake.events).not.toContain('spawn api');
   });
+
+  test('omni sandbox run --embedded gives its children the embedded env', async () => {
+    const { deps: installDeps } = fakeDeps();
+    await installSandbox({ home, defaultHome, start: false }, installDeps);
+    for (const embedded of [false, true]) {
+      let apiSpawned: (spec: SandboxChildSpec) => void = () => {};
+      const apiSpec = new Promise<SandboxChildSpec>((done) => {
+        apiSpawned = done;
+      });
+      let next = 1000;
+      const fake = supervisorDeps({
+        spawnChild: (spec) => {
+          if (spec.name === 'api') apiSpawned(spec);
+          let exit: (code: number) => void = () => {};
+          const exited = new Promise<number>((done) => {
+            exit = done;
+          });
+          return { pid: next++, exited, kill: () => exit(0) };
+        },
+      });
+      const done = runSandboxSupervisor(home, fake.deps, { embedded });
+      const api = await apiSpec;
+      fake.signal('SIGTERM');
+      expect(await done).toBe(0);
+      expect(api.env.SENTRY_DSN).toBe(embedded ? '' : undefined);
+      expect(api.env.OMNI_UPDATE_COMMAND === undefined).toBe(embedded);
+    }
+  });
 });
 
 describe('CappedLog', () => {
@@ -1047,5 +1099,10 @@ describe('command wiring', () => {
   test('omni sandbox has status, start, stop, uninstall, update and run', () => {
     const names = createSandboxCommand().commands.map((command) => command.name());
     expect(names).toEqual(['status', 'start', 'stop', 'uninstall', 'update', 'run']);
+  });
+
+  test('omni sandbox run takes --home and --embedded', () => {
+    const run = createSandboxCommand().commands.find((command) => command.name() === 'run');
+    expect(run?.options.map((option) => option.long)).toEqual(['--home', '--embedded']);
   });
 });

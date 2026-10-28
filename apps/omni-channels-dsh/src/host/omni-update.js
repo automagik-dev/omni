@@ -7,9 +7,9 @@
 // An Omni from before that route answers 404, and is updated where it runs, with `omni update`.
 //
 // The key stays on this host; the page sees what the Omni runs, what is out, and where an
-// update stands.
+// update stands. Under Unfold (AUTOMAGIK_HOST=unfold) no Omni is asked: Unfold updates its own.
 import { z } from 'zod'
-import { foundOmni } from './omni-discover.js'
+import { foundOmni, unfoldHost } from './omni-discover.js'
 
 const TIMEOUT_MS = 10_000
 const CLIENT_ID = process.env.OMNI_CLIENT_ID === 'omni-desktop' ? 'omni-desktop' : 'omni-dsh'
@@ -52,6 +52,7 @@ export const REFUSALS = {
   CONFIRM_SEND_FAILED: 'Omni could not send the confirmation to WhatsApp. Try again.',
   UPDATE_START_FAILED: 'The update could not start on this Omni. Its logs say why.',
 }
+export const UNFOLD_UPDATES = 'Updates for this Omni come with Unfold.'
 export const FORBIDDEN = `This device may not update that Omni: its key lacks the system scopes. Update it where it runs: ${TERMINAL_COMMAND}`
 
 export function install(rt) {
@@ -87,6 +88,7 @@ export function install(rt) {
   // pending (waiting for the owner on WhatsApp), updating, current, forbidden, unreachable,
   // unknown, or none (nothing to ask).
   async function status(body) {
+    if (unfoldHost()) return { state: 'none' }
     const target = targetOf(body)
     if (target === null) return { state: 'none' }
     if (!target.key) return { state: 'terminal', command: TERMINAL_COMMAND }
@@ -108,6 +110,7 @@ export function install(rt) {
   }
 
   async function request(body) {
+    if (unfoldHost()) throw refused(UNFOLD_UPDATES)
     const parsed = RequestPayload.safeParse(body ?? {})
     if (!parsed.success) throw invalid('Pick the version to update to')
     const target = targetOf(parsed.data)
