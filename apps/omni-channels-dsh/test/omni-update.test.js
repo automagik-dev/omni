@@ -8,7 +8,7 @@ import { FORBIDDEN, install, REFUSALS, TERMINAL_COMMAND } from '../src/host/omni
 import { install as installHooks } from '@automagik/bots-dsh/src/host/extend.js'
 
 const realFetch = globalThis.fetch
-const realEnv = { HOME: process.env.HOME, OMNI_CONFIG_DIR: process.env.OMNI_CONFIG_DIR, OMNI_HOME: process.env.OMNI_HOME }
+const realEnv = { HOME: process.env.HOME, OMNI_CONFIG_DIR: process.env.OMNI_CONFIG_DIR, OMNI_HOME: process.env.OMNI_HOME, AUTOMAGIK_HOST: process.env.AUTOMAGIK_HOST }
 afterEach(() => {
   globalThis.fetch = realFetch
   for (const [name, value] of Object.entries(realEnv)) {
@@ -119,5 +119,13 @@ test('with nothing linked there is nothing to ask', async (t) => {
   const { rt, sent } = host(t, status({}))
   rt.omniLink = () => null
   assert.deepEqual(await rt.omniUpdateEndpoint('omni-update-status', {}), { state: 'none' })
+  assert.equal(sent.length, 0)
+})
+
+test('under Unfold no Omni is asked about updates, and asking for one is refused', async (t) => {
+  const { rt, sent } = host(t, status({}))
+  process.env.AUTOMAGIK_HOST = 'unfold'
+  assert.deepEqual(await rt.omniUpdateEndpoint('omni-update-status', {}), { state: 'none' })
+  await assert.rejects(rt.omniUpdateEndpoint('omni-update-request', { version: '2.261023.10' }), { code: 'bot/refused' })
   assert.equal(sent.length, 0)
 })

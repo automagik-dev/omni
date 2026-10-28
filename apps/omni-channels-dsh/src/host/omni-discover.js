@@ -3,6 +3,8 @@
 // knows), a sandboxed Omni's config (sandbox/config/config.json under $OMNI_HOME and under
 // ~/.omni), and an Omni answering on this computer's default port. Only these local files
 // and this computer's loopback are read, so finding them takes a moment and tells no one.
+// Under Unfold (AUTOMAGIK_HOST=unfold), which runs an Omni of its own for each instance, that
+// Omni is the only one: its sandbox under $OMNI_HOME, and nothing else is read or asked.
 //
 // The page sees each Omni's address, where it was found, its version and what it can do;
 // never a key. "Use it" links an Omni found with a key: the key is checked against that
@@ -57,7 +59,10 @@ export function sameOmni(url) {
 }
 const idOf = url => createHash('sha256').update(sameOmni(url)).digest('hex').slice(0, 16)
 
-function readConfig(path) {
+// Unfold runs this host with an Omni of its own (OMNI_HOME in the instance).
+export const unfoldHost = (env = process.env) => env.AUTOMAGIK_HOST === 'unfold'
+
+export function readConfig(path) {
   try {
     if (statSync(path).size > MAX_FILE) return null
     const parsed = CliConfig.safeParse(JSON.parse(readFileSync(path, 'utf8')))
@@ -114,37 +119,45 @@ const portOf = (url) => {
  * systemd unit is there), `other` for any other loopback Omni (another app runs it, so this
  * one cannot update it), null for an Omni elsewhere.
  */
-export function managerOf(url, { env = process.env, home = homedir(), exists = existsSync, list = readdirSync, readText = path => readFileSync(path, 'utf8'), isAlive = processAlive } = {}) {
+export function managerOf(url, { env = process.env, home = homedir(), exists = existsSync, list = readdirSync, readText = path => readFileSync(path, 'utf8'), isAlive = processAlive, read = readConfig } = {}) {
   if (!isLoopback(url)) return null
-  const sandbox = readConfig(join(sandboxHome({ env, home }), 'config', 'config.json'))
+  const unfold = unfoldHost(env)
+  const sandbox = unfold && !env.OMNI_HOME ? null : read(join(sandboxHome({ env, home }), 'config', 'config.json'))
   if (sandbox?.apiUrl && cleanOmniUrl(sandbox.apiUrl) && sameOmni(cleanOmniUrl(sandbox.apiUrl)) === sameOmni(url)) return 'sandbox'
-  const cli = readConfig(cliConfigPath({ env, home }))
+  if (unfold) return 'other'
+  const cli = read(cliConfigPath({ env, home }))
   if (cli === null) return 'other'
   const cliPort = cli.server?.port ?? (cli.apiUrl && isLoopback(cli.apiUrl) ? portOf(cli.apiUrl) : null) ?? DEFAULT_PORT
   if (portOf(url) !== cliPort) return 'other'
   return cliServiceRuns({ env, home, exists, list, readText, isAlive }) ? 'cli' : 'other'
 }
 
-// Every place that names an Omni, keys included; this stays on the host.
-export function candidates({ env = process.env, home = homedir() } = {}) {
+// Every place that names an Omni, keys included; this stays on the host. `port` is the one an
+// Omni answers on by default.
+export function candidates({ env = process.env, home = homedir(), read = readConfig, port = DEFAULT_PORT } = {}) {
   const found = []
   const add = (source, url, extra = {}) => {
     const clean = cleanOmniUrl(url)
     if (clean) found.push({ source, url: clean, ...extra })
   }
-  const cli = readConfig(cliConfigPath({ env, home }))
+  if (unfoldHost(env)) {
+    const own = env.OMNI_HOME ? read(join(env.OMNI_HOME, 'sandbox', 'config', 'config.json')) : null
+    if (own?.apiUrl) add('sandbox', own.apiUrl, { key: own.apiKey })
+    return found
+  }
+  const cli = read(cliConfigPath({ env, home }))
   if (cli) {
     // The CLI's own default when it names none: the API it installs on this computer.
-    add('cli', cli.apiUrl ?? `http://localhost:${cli.server?.port ?? DEFAULT_PORT}`, { key: cli.apiKey })
+    add('cli', cli.apiUrl ?? `http://localhost:${cli.server?.port ?? port}`, { key: cli.apiKey })
     if (cli.server?.port) add('running', `http://127.0.0.1:${cli.server.port}`)
     for (const [name, server] of Object.entries(cli.servers?.list ?? {})) add('cli-server', server.url, { name, key: server.apiKey })
   }
   const sandboxes = new Set([env.OMNI_HOME, join(home, '.omni')].filter(Boolean).map(dir => join(dir, 'sandbox', 'config', 'config.json')))
   for (const path of sandboxes) {
-    const sandbox = readConfig(path)
+    const sandbox = read(path)
     if (sandbox?.apiUrl) add('sandbox', sandbox.apiUrl, { key: sandbox.apiKey })
   }
-  add('running', `http://127.0.0.1:${DEFAULT_PORT}`)
+  add('running', `http://127.0.0.1:${port}`)
   return found
 }
 
@@ -193,13 +206,15 @@ export async function probe(url, fetchImpl = fetch, timeoutMs = PROBE_TIMEOUT_MS
 // nothing but the probe named them.
 // An Omni older than this plugin's minimum (`engines.omni`) is `outdated`: a sandboxed one is
 // reinstalled at the release a new one would get (`updateTo`, omni-release.js), one the Omni
-// CLI runs is updated with it, and any other says so.
-export async function discover({ env = process.env, home = homedir(), fetchImpl = fetch, manager = url => managerOf(url, { env, home }), release = () => installRelease({ env }), minimum = OMNI_MINIMUM } = {}) {
-  const omnis = merge(candidates({ env, home }))
+// CLI runs is updated with it, and any other says so. Under Unfold no release is looked up:
+// Unfold updates its own Omni.
+export async function discover({ env = process.env, home = homedir(), read = readConfig, port = DEFAULT_PORT, fetchImpl = fetch, manager = url => managerOf(url, { env, home, read }), release = () => installRelease({ env }), minimum = OMNI_MINIMUM } = {}) {
+  const omnis = merge(candidates({ env, home, read, port }))
   const answers = await Promise.all(omnis.map(omni => (isLoopback(omni.url) ? probe(omni.url, fetchImpl) : null)))
   const outdated = answers.map(answer => newer(minimum, answer?.version))
   // Asked only when a sandbox needs it, so discovery stays off the network otherwise.
-  const updateTo = omnis.some((omni, index) => omni.source === 'sandbox' && outdated[index]) ? (await release()).version : null
+  const looksUp = !unfoldHost(env) && omnis.some((omni, index) => omni.source === 'sandbox' && outdated[index])
+  const updateTo = looksUp ? (await release()).version : null
   return omnis
     .map((omni, index) => {
       const local = isLoopback(omni.url)
