@@ -349,6 +349,8 @@ export function install(rt) {
 
   // For omni-discover.js: an Omni found on this computer links the same way a sign-in does.
   rt.saveOmniLink = saveLink
+  // For omni-discover.js: the link as it is, with the scopes its key was widened to.
+  rt.writeOmniLink = writeLink
   rt.startOmniPairing = start
 
   rt.omniLinkEndpoint = async (endpoint, body) => {

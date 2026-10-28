@@ -6,7 +6,7 @@ import { afterEach, test } from 'node:test'
 import fs from 'node:fs'
 import { createServer } from 'node:http'
 import { syncBuiltinESMExports } from 'node:module'
-import { candidates, discover, install, managerOf, probe, readConfig, sameOmni } from '../src/host/omni-discover.js'
+import { candidates, discover, install, managerOf, probe, readConfig, sameOmni, widenOwnKey } from '../src/host/omni-discover.js'
 import { install as installLink, LINK_FILE } from '../src/host/omni-link.js'
 import { parseConnectLink } from '../src/client/connect-link.js'
 import { OMNI_MINIMUM } from '../src/host/version.js'
@@ -389,7 +389,7 @@ test('a pasted key the Omni refuses shows the Omni\'s own words, links nothing, 
 
 const MINTED_KEY = 'omni_sk_device_minted'
 
-test('a key that can do everything makes this device its own scoped key once, and only that one is kept', async (t) => {
+test('a key that can do everything makes this device its own key with everything it carries, once, and only that one is kept', async (t) => {
   const made = []
   const { rt, asked } = host(t, json => json(200, { data: { valid: true, scopes: ['*'], credential: { expiresAt: null } } }), {
     mint: (json, init) => {
@@ -403,8 +403,8 @@ test('a key that can do everything makes this device its own scoped key once, an
   assert.equal(made.length, 1)
   assert.equal(made[0].key, LOCAL_KEY)
   assert.match(made[0].body.name, /^device: /)
-  assert.deepEqual(made[0].body.scopes, ['instances:*', 'chats:*', 'messages:*', 'media:*', 'events:*', 'system:read', 'system:update'])
-  assert.equal(made[0].body.scopes.some(scope => /^(\*|keys|settings|auth|platform)/.test(scope)), false)
+  // The Omni Bot administers the Omni this computer installed: automations, settings and the rest.
+  assert.deepEqual(made[0].body.scopes, ['*'])
   const saved = readFileSync(join(rt.home, LINK_FILE), 'utf8')
   const link = JSON.parse(saved)
   assert.deepEqual({ key: link.key, keyId: link.keyId, scopes: link.scopes }, { key: MINTED_KEY, keyId: 'key-7', scopes: made[0].body.scopes })
@@ -423,6 +423,59 @@ test('a pasted key that can make keys is traded for a device key too', async (t)
   const saved = readFileSync(join(rt.home, LINK_FILE), 'utf8')
   assert.equal(JSON.parse(saved).key, MINTED_KEY)
   assert.equal(saved.includes(PASTED_KEY), false)
+})
+
+// A host whose link holds a key this plugin made before it carried the found key's scopes.
+function widening(t, { validate, patch, link = {} }) {
+  const { home: user, stop } = homeWith({ cli: { apiUrl: 'http://localhost:8882', apiKey: LOCAL_KEY } })
+  t.after(stop)
+  process.env.HOME = user
+  delete process.env.OMNI_CONFIG_DIR
+  delete process.env.OMNI_HOME
+  const asked = []
+  globalThis.fetch = async (address, init = {}) => {
+    const url = new URL(String(address))
+    asked.push({ method: init.method, path: url.pathname, key: init.headers?.['x-api-key'] ?? null, body: init.body ? JSON.parse(init.body) : null })
+    const json = (status, data) => new Response(JSON.stringify(data), { status })
+    if (url.pathname === '/api/v2/auth/validate') return validate(json)
+    if (url.pathname === '/api/v2/keys/key-7' && init.method === 'PATCH') return patch(json)
+    return json(404, {})
+  }
+  const rt = { home: mkdtempSync(join(tmpdir(), 'omni-widen-')), config: {}, ctx: { effect: () => {} } }
+  t.after(() => rmSync(rt.home, { recursive: true, force: true }))
+  installLink(rt)
+  const narrow = ['instances:*', 'chats:*', 'messages:*', 'media:*', 'events:*', 'system:read', 'system:update']
+  writeFileSync(join(rt.home, LINK_FILE), JSON.stringify({ url: 'http://localhost:8882', key: MINTED_KEY, keyId: 'key-7', scopes: narrow, pairedAt: null, keyExpiresAt: null, marketOffered: true, marketUrl: null, ...link }))
+  return { rt, asked }
+}
+
+test('a narrow key this plugin made is widened in place to what the found key carries', async (t) => {
+  const { rt, asked } = widening(t, { validate: json => json(200, { data: { valid: true, scopes: ['*'] } }), patch: json => json(200, { data: { id: 'key-7', scopes: ['*'] } }) })
+  assert.deepEqual(await widenOwnKey(rt), ['*'])
+  const patched = asked.find(entry => entry.method === 'PATCH')
+  assert.deepEqual({ key: patched.key, body: patched.body }, { key: LOCAL_KEY, body: { scopes: ['*'] } })
+  const link = JSON.parse(readFileSync(join(rt.home, LINK_FILE), 'utf8'))
+  // The same key, now with everything: nothing to pair again, and the found key is not kept.
+  assert.deepEqual({ key: link.key, keyId: link.keyId, scopes: link.scopes, marketOffered: link.marketOffered }, { key: MINTED_KEY, keyId: 'key-7', scopes: ['*'], marketOffered: true })
+  // Once widened, nothing more is asked.
+  asked.length = 0
+  assert.equal(await widenOwnKey(rt), null)
+  assert.equal(asked.some(entry => entry.method === 'PATCH'), false)
+})
+
+test('a key is not widened when the found key is not broad, the Omni refuses, or the key was not made here', async (t) => {
+  const scoped = widening(t, { validate: json => json(200, { data: { valid: true, scopes: ['instances:*', 'automations:*'] } }), patch: json => json(200, {}) })
+  assert.equal(await widenOwnKey(scoped.rt), null)
+  assert.equal(scoped.asked.some(entry => entry.method === 'PATCH'), false)
+  const refusedPatch = widening(t, { validate: json => json(200, { data: { valid: true, scopes: ['*'] } }), patch: json => json(403, {}) })
+  assert.equal(await widenOwnKey(refusedPatch.rt), null)
+  assert.equal(JSON.parse(readFileSync(join(refusedPatch.rt.home, LINK_FILE), 'utf8')).scopes.includes('*'), false)
+  const pasted = widening(t, { validate: json => json(200, { data: { valid: true, scopes: ['*'] } }), patch: json => json(200, {}), link: { keyId: null } })
+  assert.equal(await widenOwnKey(pasted.rt), null)
+  assert.deepEqual(pasted.asked, [])
+  const remote = widening(t, { validate: json => json(200, { data: { valid: true, scopes: ['*'] } }), patch: json => json(200, {}), link: { url: 'https://lab.example.com' } })
+  assert.equal(await widenOwnKey(remote.rt), null)
+  assert.deepEqual(remote.asked, [])
 })
 
 test('when a broad key cannot make one, it is kept with a note that it can do everything', async (t) => {
