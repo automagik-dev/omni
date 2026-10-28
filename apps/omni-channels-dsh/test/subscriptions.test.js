@@ -11,6 +11,7 @@ import { SessionStore } from '@deepseek-ai/dsh-session'
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
+import { NOT_PICKED_UP } from '../src/host/standing-recovery.js'
 import { applyBoth, fakeContext } from './team.js'
 import { boot, CHAT, CHATS, fakeOmni, flush, GROUP, homeFor, INSTANCE, MESSAGE_IDS, resetFetch, saved, until } from './thread-fixture.js'
 
@@ -559,9 +560,18 @@ test('with 45 runs started while one works, its record and gate stay, an ask run
 // under this plugin on a fake DSH (thread-fixture.js), two added chats (Marina and Obra), an
 // Omni that lists its chats for find_chats and save_automation, and DSH's permission presets,
 // which nothing here may touch.
+// The team's restart pass waits on a timer, mocked here: `signal` (the default) runs it at
+// once, as a start does once DSH has opened its workspaces, and waits until every recovery
+// ran, so events go in; `signal: false` leaves it waiting (signalOf runs it later).
+// `running`: Sessions whose turn DSH still runs, as on a plugin reload while DSH went on.
 const mockedTimers = new WeakSet()
-async function threadBench(t, { home: given, mask = false } = {}) {
-  // The team's restart pass waits on a timer; it never runs here.
+async function signalOf(t, run) {
+  let over = false
+  run.channels.teamResume.addRecovery(() => { over = true })
+  t.mock.timers.tick(3000)
+  await until(() => over)
+}
+async function threadBench(t, { home: given, mask = false, signal = true, running = [], resumesDone } = {}) {
   if (!mockedTimers.has(t)) t.mock.timers.enable({ apis: ['setTimeout'] })
   mockedTimers.add(t)
   const omni = fakeOmni()
@@ -578,7 +588,9 @@ async function threadBench(t, { home: given, mask = false } = {}) {
   }
   const home = given ?? homeFor(t, omni)
   const presets = fakePresets()
-  const run = await boot(t, home, { mask, services: { permissionPresets: presets } })
+  const run = await boot(t, home, { mask, resumesDone, services: { permissionPresets: presets } })
+  for (const sessionId of running) run.agentOf(sessionId).status = 'running'
+  if (signal && !mask) await signalOf(t, run)
   const bench = { omni, home, run, presets }
   if (given === undefined) {
     for (const [name, chat] of [['thread', CHAT], ['group', GROUP]]) {
@@ -1084,7 +1096,7 @@ test('after a plugin reload mid-turn the bound run\'s turn stays gated and its e
   await bench.run.channels.save()
   // The plugin reloads; DSH goes on with the same turn, whose start the new plugin never saw.
   await bench.run.stop()
-  const after = await threadBench(t, { home: bench.home })
+  const after = await threadBench(t, { home: bench.home, running: [thread.sessionId] })
   const react = { messageId: MESSAGE_IDS.picture, emoji: '👍' }
   assert.match(await cardOf(after, 'thread_react', thread.sessionId, react), AUTOMATION_CARD)
   // Another Session of the same DSH is not held by it.
@@ -1212,7 +1224,7 @@ test('after a plugin reload mid-turn, the bound turn\'s end alone, with no call 
   const turn = startTurn(bench, thread.sessionId, postedTo(bench, thread.sessionId)[0])
   await bench.run.channels.save()
   await bench.run.stop()
-  const after = await threadBench(t, { home: bench.home })
+  const after = await threadBench(t, { home: bench.home, running: [thread.sessionId] })
   after.run.emit(thread.sessionId, 'turn/end', { turn, reason: { kind: 'completed' } })
   await until(() => runById(after, bound.id).status === 'done')
   await until(() => postedTo(after, thread.sessionId).length === 1)
@@ -1273,7 +1285,7 @@ test('after a plugin reload mid-turn an ask-first run\'s turn still asks for a s
     await bench.run.channels.save()
     await bench.run.stop()
     // DSH goes on with the same turn; the new plugin never saw it begin.
-    const after = await threadBench(t, { home: bench.home })
+    const after = await threadBench(t, { home: bench.home, running: [thread.sessionId] })
     const say = await cardOf(after, 'thread_say', thread.sessionId, { text: 'Oi!' })
     const react = await cardOf(after, 'thread_react', thread.sessionId, { messageId: MESSAGE_IDS.picture, emoji: '🔥' })
     if (askFirst) {
@@ -1388,7 +1400,7 @@ test('standing records carry standing: true; one saved before the marker is stil
   const file = saved(first.home)
   for (const item of file.subscriptionRuns) delete item.standing
   writeFileSync(join(first.home, 'state.json'), JSON.stringify(file))
-  const after = await threadBench(t, { home: first.home })
+  const after = await threadBench(t, { home: first.home, running: [first.thread.sessionId] })
   assert.match(await cardOf(after, 'thread_react', first.thread.sessionId, { messageId: MESSAGE_IDS.picture, emoji: '👍' }), AUTOMATION_CARD)
   assert.equal(runById(after, waiting.id).status, 'queued')
   after.run.emit(first.thread.sessionId, 'turn/end', { turn, reason: { kind: 'completed' } })
@@ -1488,4 +1500,627 @@ test('changing what an automation that acts without asking watches, fires on or 
   const exec = { name: 'save_automation', arguments: { id: sub.id, sources: `channel:${INSTANCE}` }, agent: run.agentOf('m1') }
   const step = index => (index < chain.length ? chain[index](exec, () => step(index + 1)) : Promise.resolve({ kind: 'deny', reason: 'no' }))
   assert.deepEqual(await step(0), { kind: 'deny', reason: 'no' })
+})
+
+// ---------------------------------------------------------------------------------------------
+// Group 13 (D2): standing-Session runs across a DSH restart, on the real Bot team's pass
+// (healCutSessions). A next start boots on the same home with `signal: false`, its stand-in
+// Sessions are given what DSH reopens (their log, their kept inbox), then signalOf runs the
+// team's pass.
+
+// A Session's log as DSH keeps it: the team's pass reads it, and emitIn appends to it and hands
+// listeners the Session, as DSH's session/event does.
+function logIn(bench, sessionId, events = []) {
+  const log = [...events]
+  bench.run.agentOf(sessionId).session = { id: sessionId, log, get seq() { return log.length }, eventAt: seq => log[seq] }
+  return log
+}
+function emitIn(bench, sessionId, type, data) {
+  const session = bench.run.agentOf(sessionId).session
+  const event = { type, data, time: Date.now() }
+  session.log?.push(event)
+  for (const listener of bench.run.ctx.listeners.get('session/event') ?? []) if (listener.length >= 2) listener(session, event)
+}
+const turnIn = (bench, sessionId, turn, message) => {
+  emitIn(bench, sessionId, 'turn/start', { turn })
+  emitIn(bench, sessionId, 'user/message', message)
+}
+const endIn = (bench, sessionId, turn, words, reason = { kind: 'completed' }) => {
+  if (words !== undefined) emitIn(bench, sessionId, 'assistant/message', { message: { content: [{ type: 'text', text: words }] } })
+  emitIn(bench, sessionId, 'turn/end', { turn, reason })
+}
+// One turn of the last start, as its log holds it: `reason` is how it ended.
+const turnEvents = (turn, message, reason) => [
+  { type: 'turn/start', data: { turn }, time: Date.now() - 60_000 },
+  { type: 'user/message', data: message, time: Date.now() - 59_000 },
+  { type: 'turn/end', data: { turn, reason }, time: Date.now() - 1000 },
+]
+// The inbox DSH keeps over a hard stop: `remove` reports the message discarded, as DSH's does,
+// and a follow-up joins its end (the stand-in's driver never runs it; the test plays the turns).
+function keptInbox(bench, sessionId, messages) {
+  const agent = bench.run.agentOf(sessionId)
+  const post = agent.followup
+  agent.inbox = {
+    nextStep: [],
+    nextTurn: [...messages],
+    remove(id) {
+      const at = this.nextTurn.findIndex(message => message.id === id)
+      if (at === -1) return false
+      const [message] = this.nextTurn.splice(at, 1)
+      bench.run.ctx.emit('agent/inbox/discarded', { message, agent })
+      return true
+    },
+  }
+  agent.followup = (message) => {
+    agent.inbox.nextTurn.push(message)
+    post(message)
+  }
+  return agent.inbox
+}
+const THUMBS = { messageId: MESSAGE_IDS.picture, emoji: '👍' }
+// A thread automation's event handed over and still unbound, one more queued behind it, as the
+// last start left them; its tagged follow-up is `tagged`.
+async function handedOver(t, { owner = false } = {}) {
+  const bench = await threadBench(t)
+  const sessionId = bench.thread.sessionId
+  const sub = await threadSub(bench)
+  const ownerTurn = owner ? startTurn(bench, sessionId, ownerMessage('Faz uma lista')) : null
+  const first = await fire(bench, sub, 'Um')
+  await until(() => postedTo(bench, sessionId).length === 1)
+  const second = await fire(bench, sub, 'Dois')
+  return { bench, sessionId, sub, first, second, tagged: postedTo(bench, sessionId)[0], ownerTurn }
+}
+
+test('a run whose turn a restart cut: the team tells the plugin before it posts its resume; the turn carrying that resume, not an owner turn before it, is bound and gated; its end finishes the run with its words; then the next event goes in (:192)', async (t) => {
+  const { bench, sessionId, first, second, tagged } = await handedOver(t)
+  const turn = startTurn(bench, sessionId, tagged)
+  await until(() => runById(bench, first.id).turnId === String(turn))
+  await bench.run.channels.save()
+  await bench.run.stop()
+  // DSH died mid-turn: at the next start its log ends with that turn interrupted.
+  const after = await threadBench(t, { home: bench.home, signal: false })
+  logIn(after, sessionId, turnEvents(turn, tagged, { kind: 'interrupted' }))
+  const agent = after.run.agentOf(sessionId)
+  const marked = []
+  const post = agent.followup
+  agent.followup = (message) => {
+    marked.push(runById(after, first.id)?.resuming)
+    post(message)
+  }
+  await signalOf(t, after.run)
+  // Marked before the team's post, which is its plain follow-up marked as its resume.
+  assert.deepEqual(marked, [true])
+  const [resume] = postedTo(after, sessionId)
+  assert.deepEqual(resume.source, { kind: 'user', resumed: true })
+  // Picked up: it stays working, and the next event waits.
+  assert.deepEqual([runById(after, first.id).status, runById(after, second.id).status, postedTo(after, sessionId).length], ['working', 'queued', 1])
+  // An owner's message DSH runs first is the owner's turn, ungated.
+  turnIn(after, sessionId, turn + 1, ownerMessage('Oi'))
+  assert.equal(await cardOf(after, 'thread_react', sessionId, THUMBS), null)
+  endIn(after, sessionId, turn + 1, 'Oi!')
+  await flush()
+  assert.deepEqual([runById(after, first.id).status, runById(after, first.id).turnId], ['working', String(turn)])
+  // The turn carrying the team's resume is the run's: bound, gated, and its end finishes it.
+  turnIn(after, sessionId, turn + 2, resume)
+  assert.equal(runById(after, first.id).turnId, String(turn + 2))
+  assert.match(await cardOf(after, 'thread_react', sessionId, THUMBS), AUTOMATION_CARD)
+  assert.equal(await cardOf(after, 'thread_history', sessionId, {}), null)
+  endIn(after, sessionId, turn + 2, 'Anotado depois do restart.')
+  await until(() => runById(after, first.id).status === 'done')
+  assert.equal(after.run.view().subscriptionRuns.find(item => item.id === first.id).summary, 'Anotado depois do restart.')
+  await until(() => postedTo(after, sessionId).length === 2)
+  assert.deepEqual(postedTo(after, sessionId)[1].source, { kind: 'omni-run', runId: second.id })
+  await after.run.channels.save()
+  assert.deepEqual(saved(bench.home).subscriptionRuns.find(item => item.id === first.id).turnId, String(turn + 2))
+})
+
+test('on the signal with nothing resumed, a bound run whose Session is idle ends as failed "Stopped by a DSH restart and not picked up", on the board, and its next event goes in; one whose Session still runs stays working and ends with its turn; { failed } is the same; { readOnly } changes nothing; nothing runs before the signal (:192)', async (t) => {
+  const outcomes = [undefined, { failed: 'DS Bot stopped before the restart pass ended', resumed: [], resent: [] }, { readOnly: 'Omni is open in another dsh', resumed: [], resent: [] }]
+  for (const outcome of outcomes) {
+    const bench = await threadBench(t)
+    const { thread, group } = bench
+    const one = await threadSub(bench)
+    const two = await threadSub(bench, group)
+    const idle = await fire(bench, one, 'Um')
+    const busy = await fire(bench, two, 'Obra', 'Obra')
+    await until(() => postedTo(bench, thread.sessionId).length === 1 && postedTo(bench, group.sessionId).length === 1)
+    const waiting = await fire(bench, one, 'Dois')
+    startTurn(bench, thread.sessionId, postedTo(bench, thread.sessionId)[0])
+    const busyTurn = startTurn(bench, group.sessionId, postedTo(bench, group.sessionId)[0])
+    await until(() => runById(bench, idle.id).turnId !== null && runById(bench, busy.id).turnId !== null)
+    await bench.run.channels.save()
+    await bench.run.stop()
+    const kept = JSON.stringify(saved(bench.home).subscriptionRuns)
+    // The thread's turn is over (its end was lost), the group's still runs: the plugin reloaded
+    // while DSH went on.
+    const after = await threadBench(t, { home: bench.home, signal: false, running: [group.sessionId], resumesDone: outcome })
+    t.mock.timers.tick(2999)
+    await flush()
+    const now = () => [runById(after, idle.id).status, runById(after, busy.id).status, runById(after, waiting.id).status, postedTo(after, thread.sessionId).length]
+    assert.deepEqual(now(), ['working', 'working', 'queued', 0])
+    if (outcome?.readOnly) {
+      t.mock.timers.tick(1)
+      await after.run.team.resumesDone
+      await flush()
+      assert.deepEqual(now(), ['working', 'working', 'queued', 0])
+      await after.run.channels.save()
+      assert.equal(JSON.stringify(saved(bench.home).subscriptionRuns), kept)
+      continue
+    }
+    await signalOf(t, after.run)
+    assert.deepEqual([runById(after, idle.id).status, runById(after, idle.id).summary], ['failed', NOT_PICKED_UP])
+    assert.deepEqual(after.run.view().subscriptionRuns.filter(item => item.id === idle.id).map(item => [item.status, item.summary]), [['failed', NOT_PICKED_UP]])
+    await until(() => postedTo(after, thread.sessionId).length === 1)
+    assert.deepEqual(postedTo(after, thread.sessionId)[0].source, { kind: 'omni-run', runId: waiting.id })
+    // The group's run stays working, and its turn's end (the plugin never saw it begin) finishes it.
+    assert.equal(runById(after, busy.id).status, 'working')
+    after.run.emit(group.sessionId, 'assistant/message', { message: { content: [{ type: 'text', text: 'Obra anotada.' }] } })
+    after.run.emit(group.sessionId, 'turn/end', { turn: busyTurn, reason: { kind: 'completed' } })
+    await until(() => runById(after, busy.id).status === 'done')
+    assert.equal(runById(after, busy.id).summary, 'Obra anotada.')
+  }
+})
+
+test('MEDIUM-2: a bound run whose Session the team sent again what a shutdown dropped (in resent, not in resumed) is not failed by the signal, and ends with its turn (:194)', async (t) => {
+  const { bench, sessionId, first, second, tagged } = await handedOver(t)
+  const turn = startTurn(bench, sessionId, tagged)
+  await until(() => runById(bench, first.id).turnId === String(turn))
+  await bench.run.channels.save()
+  await bench.run.stop()
+  const after = await threadBench(t, { home: bench.home, resumesDone: { resumed: [], resent: [sessionId] } })
+  await flush()
+  assert.deepEqual([runById(after, first.id).status, runById(after, second.id).status, postedTo(after, sessionId).length], ['working', 'queued', 0])
+  after.run.emit(sessionId, 'turn/end', { turn, reason: { kind: 'completed' } })
+  await until(() => runById(after, first.id).status === 'done')
+  await until(() => postedTo(after, sessionId).length === 1)
+  assert.equal(postedTo(after, sessionId)[0].source.runId, second.id)
+})
+
+test('a clean shutdown while an owner turn runs drops the run\'s queued follow-up: seen or not, the run ends as failed on the signal with its reason, never done, its next event goes in, and the team\'s resume of the owner turn is never the run\'s (:194)', async (t) => {
+  for (const seen of [false, true]) {
+    const { bench, sessionId, first, second, tagged, ownerTurn } = await handedOver(t, { owner: true })
+    await bench.run.channels.save()
+    await bench.run.stop()
+    // DSH clears the inbox as it shuts down; the plugin may still hear it.
+    if (seen) bench.run.ctx.emit('agent/inbox/discarded', { message: tagged, agent: bench.run.agentOf(sessionId) })
+    const after = await threadBench(t, { home: bench.home, signal: false })
+    logIn(after, sessionId, turnEvents(ownerTurn, ownerMessage('Faz uma lista'), { kind: 'aborted', reason: { kind: 'disposed' } }))
+    await signalOf(t, after.run)
+    const [resume] = postedTo(after, sessionId)
+    assert.deepEqual(resume.source, { kind: 'user', resumed: true })
+    assert.deepEqual([runById(after, first.id).status, runById(after, first.id).summary], ['failed', 'Stopped by a DSH restart before its turn started: DSH dropped its event, so nothing ran.'])
+    assert.equal(after.run.view().subscriptionRuns.find(item => item.id === first.id).status, 'failed')
+    // The next event goes in behind the team's resume.
+    await until(() => postedTo(after, sessionId).length === 2)
+    assert.equal(postedTo(after, sessionId)[1].source.runId, second.id)
+    // The resumed owner turn is the owner's: ungated, and its end finishes nothing.
+    turnIn(after, sessionId, ownerTurn + 1, resume)
+    assert.equal(await cardOf(after, 'thread_react', sessionId, THUMBS), null)
+    endIn(after, sessionId, ownerTurn + 1, 'Lista feita.')
+    await flush()
+    assert.deepEqual([runById(after, first.id).status, runById(after, second.id).status, runById(after, second.id).turnId], ['failed', 'working', null])
+    // Nothing reported it done: nothing went to Omni.
+    assert.deepEqual(bench.omni.sent, [])
+  }
+})
+
+test('a hard stop keeps the inbox: the run\'s tagged follow-up waits for the team\'s resume to wake its Session, its own turn is the one bound and gated, not the resumed owner turn; ended first, its turn is still gated and finishes nothing (:194)', async (t) => {
+  for (const endedFirst of [false, true]) {
+    const { bench, sessionId, first, second, tagged, ownerTurn } = await handedOver(t, { owner: true })
+    await bench.run.channels.save()
+    await bench.run.stop()
+    const after = await threadBench(t, { home: bench.home, signal: false })
+    logIn(after, sessionId, turnEvents(ownerTurn, ownerMessage('Faz uma lista'), { kind: 'interrupted' }))
+    const inbox = keptInbox(after, sessionId, [tagged])
+    await signalOf(t, after.run)
+    // The team woke the Session with its resume; the plugin moved nothing and woke nothing.
+    const [resume] = postedTo(after, sessionId)
+    assert.deepEqual(resume.source, { kind: 'user', resumed: true })
+    assert.deepEqual([inbox.nextTurn, after.flushed], [[tagged, resume], [[sessionId, 1]]])
+    assert.deepEqual([runById(after, first.id).status, runById(after, second.id).status], ['working', 'queued'])
+    if (endedFirst) {
+      after.run.channels.standingRuns.finish(first.id, 'failed', 'Stopped by the owner.')
+      await until(() => postedTo(after, sessionId).length === 2)
+    }
+    // DSH runs its inbox in order: the tagged follow-up's own turn first.
+    inbox.nextTurn.shift()
+    turnIn(after, sessionId, ownerTurn + 1, tagged)
+    assert.match(await cardOf(after, 'thread_react', sessionId, THUMBS), AUTOMATION_CARD)
+    endIn(after, sessionId, ownerTurn + 1, 'Anotado.')
+    if (endedFirst) {
+      await flush()
+      assert.deepEqual([runById(after, first.id).status, runById(after, first.id).summary], ['failed', 'Stopped by the owner.'])
+      assert.deepEqual([runById(after, second.id).status, runById(after, second.id).turnId], ['working', null])
+      continue
+    }
+    await until(() => runById(after, first.id).status === 'done')
+    assert.deepEqual([runById(after, first.id).turnId, runById(after, first.id).summary], [String(ownerTurn + 1), 'Anotado.'])
+    await until(() => postedTo(after, sessionId).length === 2)
+    // Then the team's resume of the owner turn: the owner's, ungated; the next run stays unbound.
+    turnIn(after, sessionId, ownerTurn + 2, inbox.nextTurn.shift())
+    assert.equal(await cardOf(after, 'thread_react', sessionId, THUMBS), null)
+    endIn(after, sessionId, ownerTurn + 2, 'Lista feita.')
+    await flush()
+    assert.deepEqual([runById(after, second.id).status, runById(after, second.id).turnId], ['working', null])
+  }
+})
+
+test('MEDIUM-1: a follow-up still pending in an idle Session nothing picked up is woken once, moved in its inbox and flushed, with no message posted and no rt.deliver; its turn is bound and gated and its end finishes the run', async (t) => {
+  const { bench, sessionId, first, second, tagged } = await handedOver(t)
+  await bench.run.channels.save()
+  await bench.run.stop()
+  const after = await threadBench(t, { home: bench.home, signal: false })
+  const inbox = keptInbox(after, sessionId, [tagged])
+  const delivered = []
+  const deliver = after.run.team.deliver
+  after.run.team.deliver = (args) => {
+    delivered.push(args)
+    return deliver(args)
+  }
+  await signalOf(t, after.run)
+  // The very message, moved to the inbox's end (which wakes DSH's driver), then the Session
+  // flushed once; its move is not a drop.
+  assert.deepEqual(postedTo(after, sessionId), [tagged])
+  assert.equal(postedTo(after, sessionId)[0], tagged)
+  assert.deepEqual([inbox.nextTurn, after.flushed, delivered], [[tagged], [[sessionId, 1]], []])
+  assert.deepEqual([runById(after, first.id).status, runById(after, second.id).status], ['working', 'queued'])
+  await flush()
+  assert.equal(after.flushed.length, 1)
+  inbox.nextTurn.shift()
+  turnIn(after, sessionId, 7, tagged)
+  assert.equal(runById(after, first.id).turnId, '7')
+  assert.match(await cardOf(after, 'thread_react', sessionId, THUMBS), AUTOMATION_CARD)
+  endIn(after, sessionId, 7, 'Acordado e feito.')
+  await until(() => runById(after, first.id).status === 'done')
+  assert.equal(runById(after, first.id).summary, 'Acordado e feito.')
+  await until(() => postedTo(after, sessionId).length === 2)
+  assert.equal(postedTo(after, sessionId)[1].source.runId, second.id)
+})
+
+test('MEDIUM-1: a wake whose move throws, or a run whose Session was archived, ends as failed with its reason; a flush that throws after the move (storage only) is warned and the woken run goes on; in read-only nothing is flushed or moved', async (t) => {
+  for (const kind of ['move', 'flush', 'archived', 'readOnly']) {
+    const { bench, sessionId, first, second, tagged } = await handedOver(t)
+    await bench.run.channels.save()
+    await bench.run.stop()
+    const after = await threadBench(t, { home: bench.home, signal: false, ...(kind === 'readOnly' ? { resumesDone: { readOnly: 'Omni is open in another dsh', resumed: [], resent: [] } } : {}) })
+    const inbox = keptInbox(after, sessionId, [tagged])
+    const warned = []
+    after.run.channels.warn = (...args) => warned.push(args.join(' '))
+    if (kind === 'move') after.run.agentOf(sessionId).followup = () => { throw new Error('agent disposed') }
+    if (kind === 'flush') after.run.ctx.sessions.flush = async () => { throw new Error('disk full') }
+    if (kind === 'archived') after.run.archived.push(sessionId)
+    if (kind === 'readOnly') {
+      t.mock.timers.tick(3000)
+      await after.run.team.resumesDone
+      await flush()
+      assert.deepEqual([after.flushed, inbox.nextTurn, postedTo(after, sessionId), runById(after, first.id).status, runById(after, second.id).status], [[], [tagged], [], 'working', 'queued'])
+      continue
+    }
+    await signalOf(t, after.run)
+    if (kind === 'flush') {
+      assert.deepEqual([inbox.nextTurn, runById(after, first.id).status], [[tagged], 'working'])
+      assert.equal(warned.some(line => /flushing the Session .* after its wake failed.*disk full/.test(line)), true)
+      inbox.nextTurn.shift()
+      turnIn(after, sessionId, 9, tagged)
+      endIn(after, sessionId, 9, 'Feito mesmo assim.')
+      await until(() => runById(after, first.id).status === 'done')
+      continue
+    }
+    const reason = kind === 'move' ? 'Stopped by a DSH restart before its turn started: its event could not be started again (agent disposed).'
+      : 'Stopped by a DSH restart before its turn started: its Session was archived, so nothing ran.'
+    assert.deepEqual([runById(after, first.id).status, runById(after, first.id).summary], ['failed', reason])
+    // Its follow-up, if it ever runs, is still gated and finishes nothing.
+    turnIn(after, sessionId, 9, tagged)
+    assert.match(await cardOf(after, 'thread_react', sessionId, THUMBS), AUTOMATION_CARD)
+    endIn(after, sessionId, 9, 'Tarde demais.')
+    await flush()
+    assert.deepEqual([runById(after, first.id).status, runById(after, first.id).summary], ['failed', reason])
+  }
+})
+
+test('LOW-1: a discard seen while the plugin is torn down ends its run as failed and hands no queued event over; the next start\'s signal hands over the oldest one', async (t) => {
+  const { bench, sessionId, first, second, tagged } = await handedOver(t)
+  const third = await fire(bench, (await subsIn(bench))[0], 'Três')
+  await bench.run.channels.save()
+  await bench.run.stop()
+  assert.equal(bench.run.channels.standingRuns.stopping, true)
+  bench.run.ctx.emit('agent/inbox/discarded', { message: tagged, agent: bench.run.agentOf(sessionId) })
+  await flush()
+  assert.deepEqual([runById(bench, first.id).status, runById(bench, first.id).summary], ['failed', 'DSH dropped this event as it shut down, before its turn started. Nothing ran; the next start goes on with the events after it.'])
+  assert.deepEqual([postedTo(bench, sessionId).length, runById(bench, second.id).status, bench.flushed.length], [1, 'queued', 1])
+  const after = await threadBench(t, { home: bench.home, signal: false })
+  t.mock.timers.tick(2999)
+  await flush()
+  assert.deepEqual(postedTo(after, sessionId), [])
+  await signalOf(t, after.run)
+  await until(() => postedTo(after, sessionId).length === 1)
+  assert.deepEqual(postedTo(after, sessionId)[0].source, { kind: 'omni-run', runId: second.id })
+  assert.deepEqual([runById(after, first.id).status, runById(after, third.id).status], ['failed', 'queued'])
+})
+
+test('before the team\'s signal no event is handed over, neither a fired one nor one an automation turned on again had waiting; on the signal both go in', async (t) => {
+  const bench = await threadBench(t, { signal: false })
+  const { thread, group } = bench
+  const one = await threadSub(bench)
+  const two = await threadSub(bench, group)
+  await bench.run.call('automation-set-on', { id: two.id, on: false })
+  const fired = await fire(bench, one, 'Um')
+  const waited = await fire(bench, two, 'Obra', 'Obra')
+  await bench.run.call('automation-set-on', { id: two.id, on: true })
+  // Every timer but the team's pass, which is the signal.
+  t.mock.timers.tick(2999)
+  await flush()
+  assert.deepEqual([runById(bench, fired.id).status, runById(bench, waited.id).status, postedTo(bench, thread.sessionId).length, postedTo(bench, group.sessionId).length, bench.flushed], ['queued', 'queued', 0, 0, []])
+  await signalOf(t, bench.run)
+  await until(() => postedTo(bench, thread.sessionId).length === 1 && postedTo(bench, group.sessionId).length === 1)
+  assert.deepEqual([postedTo(bench, thread.sessionId)[0].source.runId, postedTo(bench, group.sessionId)[0].source.runId], [fired.id, waited.id])
+})
+
+test('a bind is saved before its turn can act: the turn\'s first call waits for that save, so a reload after it finds the run bound and its turn gated', async (t) => {
+  const { bench, sessionId, first, tagged } = await handedOver(t)
+  const { channels } = bench.run
+  const realSave = channels.save
+  const held = Promise.withResolvers()
+  channels.save = () => held.promise.then(() => realSave.call(channels))
+  const turn = startTurn(bench, sessionId, tagged)
+  let decided
+  const card = cardOf(bench, 'thread_react', sessionId, THUMBS).then((answer) => { decided = answer })
+  await flush()
+  assert.equal(decided, undefined)
+  held.resolve()
+  await card
+  assert.match(decided, AUTOMATION_CARD)
+  assert.equal(saved(bench.home).subscriptionRuns.find(item => item.id === first.id).turnId, String(turn))
+  channels.save = realSave
+  await bench.run.stop()
+  // The plugin reloads while DSH goes on with that turn.
+  const after = await threadBench(t, { home: bench.home, running: [sessionId] })
+  assert.match(await cardOf(after, 'thread_react', sessionId, THUMBS), AUTOMATION_CARD)
+  after.run.emit(sessionId, 'turn/end', { turn, reason: { kind: 'completed' } })
+  await until(() => runById(after, first.id).status === 'done')
+})
+
+test('on DSH\'s real agent loop (not run live): a Session reopened idle with a follow-up in its inbox runs nothing, ctx.sessions.flush alone starts no turn, and the recovery\'s wake does: the turn carries the run\'s tag, is bound, and its end finishes the run', async (t) => {
+  const { bench, sessionId, first, second, tagged } = await handedOver(t)
+  await bench.run.channels.save()
+  await bench.run.stop()
+  const after = await threadBench(t, { home: bench.home, signal: false })
+  const dsh = await realDsh(t)
+  const agent = await dsh.agent(sessionId)
+  const resolve = after.run.ctx.sessionController.resolveAgent
+  after.run.ctx.sessionController.resolveAgent = async id => (id === sessionId ? { agent } : resolve(id))
+  const flushed = []
+  after.run.ctx.sessions.flush = (session) => {
+    flushed.push(session.id)
+    return dsh.root.sessions.flush(session)
+  }
+  const seen = []
+  dsh.root.on('session/event', (session, event) => {
+    if (['turn/start', 'user/message', 'turn/end'].includes(event.type)) seen.push([event.type, event.type === 'user/message' ? event.data.source : event.data.turn])
+    for (const listener of after.run.ctx.listeners.get('session/event') ?? []) if (listener.length >= 2) listener(session, event)
+  })
+  for (const name of ['agent/inbox/discarded', 'agent/inbox/claimed']) dsh.root.on(name, payload => after.run.ctx.emit(name, payload))
+  // What DSH reopens after a hard stop: the follow-up waits in the inbox, and nothing woke it.
+  agent.send(tagged, 'next-turn', false)
+  await dsh.root.sessions.flush(agent.session)
+  await flush()
+  assert.deepEqual([agent.status, agent.inbox.nextTurn.map(message => message.id), seen], ['idle', [tagged.id], []])
+  await signalOf(t, after.run)
+  await until(() => runById(after, first.id).status === 'done')
+  assert.deepEqual(seen, [['turn/start', 1], ['user/message', { kind: 'omni-run', runId: first.id }], ['turn/end', 1]])
+  assert.deepEqual([runById(after, first.id).turnId, runById(after, first.id).summary, flushed.filter(id => id === sessionId).length], ['1', 'ok #1', 1])
+  // The move was not a drop, and the next event went in after it.
+  await until(() => runById(after, second.id).status === 'done')
+})
+
+test('a run whose tagged turn began but whose bind a crash lost is found in its Session\'s log: bound to that turn on the signal, then to the turn carrying the team\'s resume, gated, and finished by it', async (t) => {
+  const { bench, sessionId, first, second, tagged } = await handedOver(t)
+  await bench.run.channels.save()
+  await bench.run.stop()
+  // DSH took the follow-up into turn 5 and died before the bind was saved.
+  const after = await threadBench(t, { home: bench.home, signal: false })
+  logIn(after, sessionId, turnEvents(5, tagged, { kind: 'interrupted' }))
+  assert.equal(runById(after, first.id).turnId, null)
+  await signalOf(t, after.run)
+  assert.deepEqual([runById(after, first.id).status, runById(after, first.id).turnId], ['working', '5'])
+  const [resume] = postedTo(after, sessionId)
+  turnIn(after, sessionId, 6, resume)
+  assert.equal(runById(after, first.id).turnId, '6')
+  assert.match(await cardOf(after, 'thread_react', sessionId, THUMBS), AUTOMATION_CARD)
+  endIn(after, sessionId, 6, 'Retomado.')
+  await until(() => runById(after, first.id).status === 'done')
+  await until(() => postedTo(after, sessionId).length === 2)
+  assert.equal(postedTo(after, sessionId)[1].source.runId, second.id)
+})
+
+test('a follow-up a turn already took from the inbox, before its user/message, is taken: the signal waits for that turn, which binds and finishes the run', async (t) => {
+  const { bench, sessionId, first, second, tagged, ownerTurn } = await handedOver(t, { owner: true })
+  await bench.run.channels.save()
+  await bench.run.stop()
+  const after = await threadBench(t, { home: bench.home, signal: false })
+  logIn(after, sessionId, turnEvents(ownerTurn, ownerMessage('Faz uma lista'), { kind: 'interrupted' }))
+  const inbox = keptInbox(after, sessionId, [tagged])
+  // The team's resume wakes DSH's driver, which claims the follow-up at once and is still
+  // building the turn's request when the recovery reads the inbox.
+  const agent = after.run.agentOf(sessionId)
+  const post = agent.followup
+  agent.followup = (message) => {
+    post(message)
+    const [claimed] = inbox.nextTurn.splice(0, 1)
+    after.run.ctx.emit('agent/inbox/claimed', { message: claimed, turn: ownerTurn + 1, agent })
+  }
+  await signalOf(t, after.run)
+  assert.deepEqual([runById(after, first.id).status, runById(after, second.id).status], ['working', 'queued'])
+  turnIn(after, sessionId, ownerTurn + 1, tagged)
+  assert.match(await cardOf(after, 'thread_react', sessionId, THUMBS), AUTOMATION_CARD)
+  endIn(after, sessionId, ownerTurn + 1, 'Feito.')
+  await until(() => runById(after, first.id).status === 'done')
+  await until(() => postedTo(after, sessionId).length === 2)
+  assert.equal(postedTo(after, sessionId)[1].source.runId, second.id)
+})
+
+test('a cut owner turn is never bound to a run: a run still marked working for a turn that ended before it (its end lost) ends as its log says, and the owner turn\'s resume stays ungated and finishes nothing', async (t) => {
+  const { bench, sessionId, first, tagged } = await handedOver(t)
+  const turn = startTurn(bench, sessionId, tagged)
+  await until(() => runById(bench, first.id).turnId === String(turn))
+  await bench.run.channels.save()
+  await bench.run.stop()
+  // Turn `turn` ended (its end never reached the plugin), then an owner turn was cut.
+  const after = await threadBench(t, { home: bench.home, signal: false })
+  const [start, message, end] = turnEvents(turn, tagged, { kind: 'completed' })
+  const words = { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'Anotado antes do restart.' }] } } }
+  logIn(after, sessionId, [start, message, words, end, ...turnEvents(turn + 1, ownerMessage('Faz uma lista'), { kind: 'interrupted' })])
+  await signalOf(t, after.run)
+  // Its own turn's end is in the log: it ends as that turn did, with that turn's words.
+  assert.deepEqual([runById(after, first.id).status, runById(after, first.id).summary, runById(after, first.id).turnId], ['done', 'Anotado antes do restart.', String(turn)])
+  const [resume] = postedTo(after, sessionId)
+  assert.deepEqual(resume.source, { kind: 'user', resumed: true })
+  turnIn(after, sessionId, turn + 2, resume)
+  assert.equal(await cardOf(after, 'thread_react', sessionId, THUMBS), null)
+  endIn(after, sessionId, turn + 2, 'Lista feita.')
+  await flush()
+  assert.deepEqual([runById(after, first.id).status, runById(after, first.id).summary], ['done', 'Anotado antes do restart.'])
+})
+
+test('review 13, 1: a resumed turn that starts before the team\'s pass is over takes a run whose bind the crash lost, from the cut turn\'s tag: gated, and finished by it', async (t) => {
+  const { bench, sessionId, first, second, tagged } = await handedOver(t)
+  await bench.run.channels.save()
+  await bench.run.stop()
+  const after = await threadBench(t, { home: bench.home, signal: false })
+  logIn(after, sessionId, turnEvents(5, tagged, { kind: 'interrupted' }))
+  // DSH runs the team's resume at once, before resumesDone resolves and the recovery runs.
+  const agent = after.run.agentOf(sessionId)
+  const post = agent.followup
+  const cards = []
+  agent.followup = (message) => {
+    post(message)
+    assert.equal(runById(after, first.id).turnId, null)
+    turnIn(after, sessionId, 6, message)
+    cards.push(runById(after, first.id).turnId)
+  }
+  await signalOf(t, after.run)
+  assert.deepEqual(cards, ['6'])
+  assert.match(await cardOf(after, 'thread_react', sessionId, THUMBS), AUTOMATION_CARD)
+  endIn(after, sessionId, 6, 'Retomado cedo.')
+  await until(() => runById(after, first.id).status === 'done')
+  assert.equal(runById(after, first.id).summary, 'Retomado cedo.')
+  await until(() => postedTo(after, sessionId).length === 2)
+  assert.equal(postedTo(after, sessionId)[1].source.runId, second.id)
+})
+
+test('review 13, 2: a bound run whose turn ended unseen (the plugin reloaded at its end) ends on the signal as its log says: done with its last words, failed on an error; then the next event goes in', async (t) => {
+  for (const reason of [{ kind: 'completed' }, { kind: 'error', error: { message: 'model down' } }]) {
+    const { bench, sessionId, first, second, tagged } = await handedOver(t)
+    const turn = startTurn(bench, sessionId, tagged)
+    await until(() => runById(bench, first.id).turnId === String(turn))
+    await bench.run.channels.save()
+    await bench.run.stop()
+    const after = await threadBench(t, { home: bench.home, signal: false })
+    const [start, message, end] = turnEvents(turn, tagged, reason)
+    const said = text => ({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text }] } } })
+    logIn(after, sessionId, [start, message, said('Primeiro.'), said('Anotado.'), end])
+    await signalOf(t, after.run)
+    assert.deepEqual([runById(after, first.id).status, runById(after, first.id).summary], reason.kind === 'completed' ? ['done', 'Anotado.'] : ['failed', 'model down'])
+    await until(() => postedTo(after, sessionId).length === 1)
+    assert.equal(postedTo(after, sessionId)[0].source.runId, second.id)
+  }
+})
+
+test('review 13, 3: a run whose rebind a second restart lost: the cut turn that was the team\'s resume leads back to the run\'s own cut turn, so the next resume is still the run\'s', async (t) => {
+  const { bench, sessionId, first, tagged } = await handedOver(t)
+  const turn = startTurn(bench, sessionId, tagged)
+  await until(() => runById(bench, first.id).turnId === String(turn))
+  await bench.run.channels.save()
+  await bench.run.stop()
+  // Cut once; the team's resume ran as turn + 1 and was cut too, before its rebind was saved.
+  const after = await threadBench(t, { home: bench.home, signal: false })
+  const resumed = { id: 'resume-1', content: [{ type: 'text', text: 'Again' }], source: { kind: 'user', resumed: true } }
+  logIn(after, sessionId, [...turnEvents(turn, tagged, { kind: 'interrupted' }), ...turnEvents(turn + 1, resumed, { kind: 'interrupted' })])
+  await signalOf(t, after.run)
+  const [resume] = postedTo(after, sessionId)
+  turnIn(after, sessionId, turn + 2, resume)
+  assert.equal(runById(after, first.id).turnId, String(turn + 2))
+  assert.match(await cardOf(after, 'thread_react', sessionId, THUMBS), AUTOMATION_CARD)
+  endIn(after, sessionId, turn + 2, 'Enfim.')
+  await until(() => runById(after, first.id).status === 'done')
+})
+
+test('review 13, 4: a hand-over whose save ends after the plugin began to stop posts nothing and puts its event back in the queue', async (t) => {
+  const { bench, sessionId, first, second, tagged } = await handedOver(t)
+  const { channels } = bench.run
+  const realSave = channels.save
+  const held = Promise.withResolvers()
+  channels.save = () => held.promise.then(() => realSave.call(channels))
+  startTurn(bench, sessionId, tagged)
+  endTurn(bench, sessionId, 'Feito.')
+  await until(() => runById(bench, second.id).status === 'working')
+  await bench.run.stop()
+  held.resolve()
+  await until(() => runById(bench, second.id).status === 'queued')
+  await flush()
+  assert.deepEqual([runById(bench, first.id).status, postedTo(bench, sessionId).length, runById(bench, second.id).sessionId], ['done', 1, undefined])
+})
+
+test('review 13, 5: a Session whose log cannot be read keeps a bound run\'s gate on the resumed turn; a follow-up gone from the inbox when it is moved is not posted; the queue moves on only after every run is decided', async (t) => {
+  // The log the team reads shows the cut; the events the plugin hears carry no log.
+  const { bench, sessionId, first, second, tagged } = await handedOver(t)
+  const turn = startTurn(bench, sessionId, tagged)
+  await until(() => runById(bench, first.id).turnId === String(turn))
+  await bench.run.channels.save()
+  await bench.run.stop()
+  const after = await threadBench(t, { home: bench.home, signal: false })
+  logIn(after, sessionId, turnEvents(turn, tagged, { kind: 'interrupted' }))
+  await signalOf(t, after.run)
+  const [resume] = postedTo(after, sessionId)
+  startTurn(after, sessionId, resume)
+  assert.match(await cardOf(after, 'thread_react', sessionId, THUMBS), AUTOMATION_CARD)
+  assert.equal(runById(after, second.id).status, 'queued')
+
+  // A follow-up a turn took between the inbox read and the move: nothing posted, nothing woken.
+  const moved = await handedOver(t)
+  await moved.bench.run.channels.save()
+  await moved.bench.run.stop()
+  const later = await threadBench(t, { home: moved.bench.home, signal: false })
+  const inbox = keptInbox(later, moved.sessionId, [moved.tagged])
+  inbox.remove = () => false
+  await signalOf(t, later.run)
+  assert.deepEqual([postedTo(later, moved.sessionId), later.flushed, runById(later, moved.first.id).status], [[], [], 'working'])
+
+  // Released after the decisions: by then the idle bound run is already ended.
+  const third = await handedOver(t)
+  const thirdTurn = startTurn(third.bench, third.sessionId, third.tagged)
+  await until(() => runById(third.bench, third.first.id).turnId === String(thirdTurn))
+  await third.bench.run.channels.save()
+  await third.bench.run.stop()
+  const last = await threadBench(t, { home: third.bench.home, signal: false })
+  const { standingRuns } = last.run.channels
+  const release = standingRuns.release
+  const atRelease = []
+  standingRuns.release = () => {
+    atRelease.push(runById(last, third.first.id).status)
+    release()
+  }
+  await signalOf(t, last.run)
+  assert.deepEqual(atRelease, ['failed'])
+  await until(() => postedTo(last, third.sessionId).length === 1)
+})
+
+test('review 13, 6: a cut owner turn that was no resume ends the walk back: an older cut turn of a stale working run behind it does not make the owner\'s resumed turn the run\'s, which stays ungated and finishes nothing', async (t) => {
+  const { bench, sessionId, first, tagged } = await handedOver(t)
+  const turn = startTurn(bench, sessionId, tagged)
+  await until(() => runById(bench, first.id).turnId === String(turn))
+  await bench.run.channels.save()
+  await bench.run.stop()
+  // The run's turn was cut long ago and never picked up; then an owner turn was cut too.
+  const after = await threadBench(t, { home: bench.home, signal: false })
+  logIn(after, sessionId, [...turnEvents(turn, tagged, { kind: 'interrupted' }), ...turnEvents(turn + 1, ownerMessage('Faz uma lista'), { kind: 'interrupted' })])
+  await signalOf(t, after.run)
+  const [resume] = postedTo(after, sessionId)
+  assert.deepEqual(resume.source, { kind: 'user', resumed: true })
+  turnIn(after, sessionId, turn + 2, resume)
+  assert.equal(runById(after, first.id).turnId, String(turn))
+  assert.equal(await cardOf(after, 'thread_react', sessionId, THUMBS), null)
+  endIn(after, sessionId, turn + 2, 'Lista feita.')
+  await flush()
+  assert.deepEqual([runById(after, first.id).status, runById(after, first.id).turnId], ['working', String(turn)])
 })

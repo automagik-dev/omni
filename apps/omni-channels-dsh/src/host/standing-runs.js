@@ -16,6 +16,11 @@
 // record from another run's; a record saved before the marker is recognised by its shape and
 // marked as it is read (isStandingRun).
 //
+// A DSH restart: until the Bot team says its resumes are done, nothing is handed over; then
+// standing-recovery.js decides each run the last start left working, and only then does each
+// standing Session take its oldest queued event (release). While the plugin is torn down
+// nothing is handed over at all (`stopping`): the next start's signal does it.
+//
 // The ask gate holds every turn that carries a tag, whatever its run's status, so a tagged
 // follow-up that runs after its run ended is still gated (and finishes nothing). A thread's
 // send and reaction are thread-tools.js's to gate, with asksFirst from here. The host never
@@ -48,7 +53,21 @@ export const automationAsk = name => `An automation event is being handled here,
 // How many events wait for one standing Session at most; one more is not queued, and the
 // board says so. A run that waits on a card nobody answers must not grow the log forever.
 export const QUEUED_MAX = 20
+// A tagged follow-up DSH dropped while this plugin was being torn down.
+const DROPPED_STOPPING = 'DSH dropped this event as it shut down, before its turn started. Nothing ran; the next start goes on with the events after it.'
 const notHandedOver = count => `Not handed over${count > 1 ? ` (×${count})` : ''}: ${QUEUED_MAX} events already wait for this thread.`
+
+/** The words of an assistant/message event, its text blocks joined; '' when it has none. */
+export function wordsOf(event) {
+  const content = event?.data?.message?.content
+  return Array.isArray(content) ? content.filter(block => block?.type === 'text').map(block => block.text).join('\n').trim() : ''
+}
+/** How a run ends with its turn's end: failed on an error or a stop, else done with its words. */
+export function turnOutcome(reason, words) {
+  if (reason?.kind === 'error') return { status: 'failed', summary: reason.error?.message }
+  if (reason?.kind === 'aborted') return { status: 'failed', summary: `Stopped before it finished.${words ? ` Its last words: ${words}` : ''}` }
+  return { status: 'done', summary: words }
+}
 
 const Target = z.object({ kind: z.enum(['thread', 'ongoing', 'dshbot']), id: z.string().min(1) }).strict()
 const sameTarget = (a, b) => a?.kind === b?.kind && a?.id === b?.id
@@ -74,6 +93,8 @@ export function install(rt) {
     if (!turns.has(sessionId)) turns.set(sessionId, { turnId: `unseen-${Date.now().toString(36)}`, runIds: [], words: undefined })
     return turns.get(sessionId)
   }
+  // The tagged follow-ups a turn of this start took from an inbox, before its user/message.
+  const claimed = new Set()
   // A turn this start never saw begin (the plugin reloaded while DSH went on): it is taken for
   // the bound run's own turn, so its gate holds and its end finishes the run. A turn that
   // begins after this start has its own entry.
@@ -86,11 +107,32 @@ export function install(rt) {
     return turn
   }
 
+  // A bind's save, by Session: the turn's next call (and DSH's gates after this one) waits for
+  // it, so a reload or a crash never finds the run unbound while its turn acts.
+  const binding = new Map()
+  const keep = (sessionId) => {
+    const saved = persist()
+    binding.set(sessionId, saved)
+    void saved.finally(() => { if (binding.get(sessionId) === saved) binding.delete(sessionId) })
+  }
   function bind(id, turnId) {
     const run = record(id)
     if (run?.status !== 'working' || run.turnId !== null) return
     run.turnId = turnId
-    void persist()
+    keep(run.sessionId)
+  }
+  // A run whose turn a restart cut, bound to the turn its Session runs now, the one the team's
+  // resume opened (standing-recovery.js decides which): its gate holds there, and that turn's
+  // end finishes it.
+  function rebind(id, sessionId) {
+    const run = record(id)
+    const turn = turns.get(sessionId)
+    if (run?.status !== 'working' || run.sessionId !== sessionId || turn === undefined) return false
+    run.turnId = turn.turnId
+    delete run.resuming
+    if (!turn.runIds.includes(id)) turn.runIds.push(id)
+    keep(sessionId)
+    return true
   }
 
   // A queued event that will never be handed over: a failed record on the board, saying why,
@@ -113,10 +155,26 @@ export function install(rt) {
     const run = record(id)
     if (run?.status !== 'working') return
     closeRun(run, status, summary)
+    delete run.resuming
+    claimed.delete(id)
     state.subscriptionRuns = pruneRuns(runs())
     void persist()
     void handOver(run.sessionId)
   }
+
+  // Held until the team's restart pass is over (a team without the hook has none), and while
+  // the plugin is torn down.
+  let released = false
+  let stopping = false
+  const holding = () => stopping || (!released && rt.teamResume?.ready === true)
+  // The signal came and the runs the last start left are decided: every standing Session with
+  // a queued event and no working run takes its oldest one.
+  function release() {
+    released = true
+    const waiting = new Set(runs().filter(run => run.status === 'queued' && isStandingRun(run)).map(run => sessionNow(run.target)))
+    for (const sessionId of waiting) if (sessionId !== null) void handOver(sessionId)
+  }
+  ctx.effect(() => () => { stopping = true }, 'omni-channels: no hand-over while stopping')
 
   // One hand-over at a time per Session; a call while one runs follows it.
   const handing = new Map()
@@ -127,7 +185,7 @@ export function install(rt) {
     return next
   }
   async function handOverOnce(sessionId) {
-    if (typeof sessionId !== 'string' || working(sessionId) !== undefined) return
+    if (holding() || typeof sessionId !== 'string' || working(sessionId) !== undefined) return
     // The log is newest first: the oldest queued event for this Session is the last one.
     // An automation that is off hands over nothing; turned on again, it goes on (setOn).
     const pick = runs().findLast(run => run.status === 'queued' && subs()[run.subId]?.on === true && sessionNow(run.target) === sessionId)
@@ -152,6 +210,12 @@ export function install(rt) {
     } catch (error) {
       become(queued)
       warn(`the run ${pick.id} was not saved, its event waits`, error)
+      return
+    }
+    // Torn down while it saved: nothing is posted, and the event waits for the next start.
+    if (stopping) {
+      become(queued)
+      void persist()
       return
     }
     try {
@@ -212,8 +276,7 @@ export function install(rt) {
     } else if (event?.type === 'assistant/message') {
       const turn = adopted(id)
       if (turn === undefined || turn.runIds.length === 0) return
-      const content = event.data?.message?.content
-      const text = Array.isArray(content) ? content.filter(block => block?.type === 'text').map(block => block.text).join('\n').trim() : ''
+      const text = wordsOf(event)
       if (text) turn.words = text
     } else if (event?.type === 'turn/end') {
       const turn = adopted(id)
@@ -223,26 +286,46 @@ export function install(rt) {
       if (turn.adopted && String(event.data?.turn) !== turn.turnId) return
       // A restart cut the run's turn: it is not done (the Bot team resumes it).
       if (rt.cutByRestart?.(event.data?.reason)) return
-      const reason = event.data?.reason
-      const failed = reason?.kind === 'error' || reason?.kind === 'aborted'
-      const summary = reason?.kind === 'error' ? reason.error?.message : reason?.kind === 'aborted' ? `Stopped before it finished.${turn.words ? ` Its last words: ${turn.words}` : ''}` : turn.words
+      const { status, summary } = turnOutcome(event.data?.reason, turn.words)
       for (const tag of turn.runIds) {
         const run = record(tag)
         // Only the run's own turn finishes it; a late follow-up of an ended run finishes nothing.
         if (run?.status !== 'working' || run.sessionId !== id || run.turnId !== turn.turnId) continue
-        finish(tag, failed ? 'failed' : 'done', summary)
+        finish(tag, status, summary)
       }
     }
   })
 
+  // A tagged follow-up DSH still holds while nothing will run it (a Session reopened idle after
+  // a restart): the same message goes to the back of its inbox, which wakes the Session. DSH
+  // reports it discarded as it leaves its place; that is not a drop. False when no longer there.
+  const moving = new Set()
+  function requeue(agent, message) {
+    moving.add(message.id)
+    let moved
+    try {
+      moved = agent.inbox.remove(message.id)
+    } finally {
+      moving.delete(message.id)
+    }
+    if (moved) agent.followup(message)
+    return moved
+  }
+
   // DSH dropped a tagged follow-up before any turn took it (the user stopped the Session, or a
-  // clean shutdown cleared its inbox): its run ends as failed and the next event goes in.
+  // clean shutdown cleared its inbox): its run ends as failed and the next event goes in. While
+  // the plugin is torn down the run ends, saved as far as the store still saves, and nothing
+  // is handed over.
   ctx.on('agent/inbox/discarded', ({ message } = {}) => {
     const tag = runTagOf(message)
-    if (tag === null) return
+    if (tag === null || moving.has(message.id)) return
     const run = record(tag)
     if (run?.status !== 'working' || run.turnId !== null) return
-    finish(tag, 'failed', 'DSH dropped this event before its turn started (the Session was stopped). Nothing ran.')
+    finish(tag, 'failed', stopping ? DROPPED_STOPPING : 'DSH dropped this event before its turn started (the Session was stopped). Nothing ran.')
+  })
+  ctx.on('agent/inbox/claimed', ({ message } = {}) => {
+    const tag = runTagOf(message)
+    if (tag !== null) claimed.add(tag)
   })
 
   // Whether the turn a Session runs now carries an automation's tag whose run asks first; a
@@ -257,9 +340,10 @@ export function install(rt) {
   // reaction are left to thread-tools.js, which asks for them with what goes out. Ahead of
   // DSH's own gates, so their answer is the one this tightens.
   ctx.on('tools/pre-execute', async (exec, next) => {
+    const sessionId = exec.agent?.id ?? exec.agent?.session?.id
+    await binding.get(sessionId)
     const decision = await next()
     if (decision?.kind !== 'allow' || readsOnly(exec) || THREAD_CARDED.has(exec.name)) return decision
-    const sessionId = exec.agent?.id ?? exec.agent?.session?.id
     if (turns.get(sessionId)?.runIds.length === 0) return decision
     try { await rt.load() } catch { /* the runs in memory still count */ }
     return asksFirst(sessionId) ? { kind: 'ask', reason: automationAsk(exec.name) } : decision
@@ -289,8 +373,13 @@ export function install(rt) {
     sessionOf,
     working,
     bind,
+    rebind,
     finish,
     failQueued,
     asksFirst,
+    release,
+    requeue,
+    taken: id => claimed.has(id),
+    get stopping() { return stopping },
   }
 }

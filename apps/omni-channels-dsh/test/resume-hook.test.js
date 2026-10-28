@@ -6,6 +6,7 @@ import { test } from 'node:test'
 import { createRuntime as createTeam } from '@automagik/bots-dsh'
 import { createRuntime } from '../index.js'
 import { install, isResumeMessage, NEEDS_NEWER_TEAM, TEAM_CONTRACT } from '../src/host/resume-hook.js'
+import { decideUnbound, NOT_PICKED_UP } from '../src/host/standing-recovery.js'
 import { fakeContext } from './team.js'
 import { boot, homeFor, record, teamState, flush as threadFlush, until } from './thread-fixture.js'
 
@@ -585,4 +586,49 @@ test('a stopping ask whose turn began before this start stays a tombstone while 
   run.emit('ask-session', 'turn/end', { reason: { kind: 'aborted', reason: { kind: 'user' } } })
   await until(() => askRecord(run) === undefined)
   assert.equal(askRecord(run), undefined)
+})
+
+// Standing-Session runs across a restart (Group 13): the hook's source and binder on the real
+// Bot team's pass; the scenarios are in subscriptions.test.js.
+test('decideUnbound: taken waits for its turn; neither pending nor taken fails; pending waits while its Session is picked up or running, and is woken otherwise', () => {
+  const seen = []
+  for (const pending of [false, true]) for (const taken of [false, true]) for (const pickedUp of [false, true]) for (const running of [false, true]) {
+    seen.push([pending, taken, pickedUp, running, decideUnbound({ pending, taken, pickedUp, running })])
+  }
+  const expected = seen.map(([pending, taken, pickedUp, running]) => [pending, taken, pickedUp, running, taken ? 'wait' : !pending ? 'fail' : pickedUp || running ? 'wait' : 'wake'])
+  assert.deepEqual(seen, expected)
+  assert.equal(seen.filter(row => row[4] === 'wake').length, 1)
+  assert.equal(NOT_PICKED_UP, 'Stopped by a DSH restart and not picked up')
+})
+
+test('the hook lists the Session of every working standing run, never a queued, ended or archived one; the team\'s pass tells the plugin before it posts a resume there, and the run, picked up, stays working', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const at = Date.now() - 60_000
+  const home = homeFor(t, undefined, teamState({
+    subscriptions: {},
+    subscriptionRuns: [
+      { id: 'run-a', subId: 's', standing: true, sessionId: 'thread-a', status: 'working', turnId: '4', at },
+      { id: 'run-q', subId: 's', standing: true, target: { kind: 'thread', id: 'thr' }, status: 'queued', event: {}, at },
+      { id: 'run-b', subId: 's', standing: true, sessionId: 'thread-b', status: 'done', turnId: '2', at, endedAt: at },
+      { id: 'run-c', subId: 's', standing: true, sessionId: 'thread-c', status: 'working', turnId: null, at },
+    ],
+  }))
+  const run = await boot(t, home)
+  run.archived.push('thread-c')
+  assert.deepEqual(run.registered[0].sessions(), ['thread-a'])
+  const marked = []
+  for (const id of ['thread-a', 'thread-b']) {
+    run.cut(id)
+    const agent = run.agentOf(id)
+    const post = agent.followup
+    agent.followup = (message) => {
+      marked.push([id, run.channels.state.subscriptionRuns.find(item => item.sessionId === id)?.resuming, isResumeMessage(message)])
+      post(message)
+    }
+  }
+  t.mock.timers.tick(3000)
+  const done = await run.team.resumesDone
+  await threadFlush()
+  assert.deepEqual([done.resumed, marked], [['thread-a'], [['thread-a', true, true]]])
+  assert.equal(run.channels.state.subscriptionRuns.find(item => item.id === 'run-a').status, 'working')
 })

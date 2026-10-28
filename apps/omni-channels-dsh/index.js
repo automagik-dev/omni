@@ -24,6 +24,7 @@ import * as omniChannelActions from './src/host/omni-channel-actions.js'
 import * as threadKeys from './src/host/thread-keys.js'
 import * as threads from './src/host/threads.js'
 import * as threadTools from './src/host/thread-tools.js'
+import * as standingRecovery from './src/host/standing-recovery.js'
 import * as standingRuns from './src/host/standing-runs.js'
 
 export const name = 'omni-channels'
@@ -40,9 +41,10 @@ export const inject = ['omniTeam', 'tools', 'sessions', 'settings', 'systemPromp
 // come after omni.js, whose requests they make, the threads after their keys, and the
 // threads' own tools after the threads, whose additions they restrict. The standing-Session
 // runs (automations that hand events to a thread) after the threads, whose removals they
-// hear, and before the events, which queue for them. Changing channels
+// hear, their restart recovery right after them, and before the events, which queue for
+// them. Changing channels
 // from the Channels page comes last: it only calls omni through omni.js.
-const MODULES = [resumeHook, grants, subscriptions, asks, omniApi, omniLink, omniDiscover, omniLocal, omniTerminal, omniUpdate, omni, threadKeys, threads, threadTools, standingRuns, omniEvents, omniChannelActions]
+const MODULES = [resumeHook, grants, subscriptions, asks, omniApi, omniLink, omniDiscover, omniLocal, omniTerminal, omniUpdate, omni, threadKeys, threads, threadTools, standingRuns, standingRecovery, omniEvents, omniChannelActions]
 
 export function apply(ctx, config = {}) {
   ctx.provide('omniChannels', createRuntime(ctx, ctx.omniTeam, config))

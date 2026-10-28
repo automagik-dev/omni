@@ -179,7 +179,10 @@ export const record = (id, sessionId, extra = {}) => ({
 // restrictions are recorded (`restricts`), and runs on deepseek/flash. `mask` hides the restart
 // hook, as a Bot team before it has none. `fake.createError` makes the next Session fail to
 // be made. `services`: DSH services the plugin reads with ctx.get (llm, attachments).
-export async function boot(t, home, { mask = false, services = {} } = {}) {
+// `resumesDone`: the outcome the plugin is told, once the team's own pass is over, in place of
+// the pass's (one a pass cannot be made to give on demand: `{ failed }`, `{ readOnly }`, a
+// `resent` Session).
+export async function boot(t, home, { mask = false, services = {}, resumesDone } = {}) {
   const ctx = fakeContext({ services })
   const agents = new Map()
   const made = []
@@ -266,7 +269,8 @@ export async function boot(t, home, { mask = false, services = {} } = {}) {
     registered.push(entry)
     return register(entry)
   }
-  const base = mask ? Object.create(team, { resumable: { value: undefined }, resumesDone: { value: undefined } }) : team
+  const base = mask ? Object.create(team, { resumable: { value: undefined }, resumesDone: { value: undefined } })
+    : resumesDone === undefined ? team : Object.create(team, { resumesDone: { value: team.resumesDone.then(() => resumesDone) } })
   const channels = createRuntime(ctx, base)
   await channels.load()
   const call = (endpoint, body) => team.extended.endpointOf(endpoint).fn(body)
