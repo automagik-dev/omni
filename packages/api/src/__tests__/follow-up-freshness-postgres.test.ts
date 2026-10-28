@@ -29,6 +29,7 @@ import {
   releaseIdleTimeoutClaim,
   resetIdleTimeoutClaims,
 } from '../services/follow-up-lifecycle';
+import { FollowUpSweeperService } from '../services/follow-up-sweeper';
 
 const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
 const postgresDescribe = superUrl.length > 0 ? describe : describe.skip;
@@ -219,5 +220,71 @@ postgresDescribe('evaluateIdleTimeoutFreshness (real PostgreSQL)', () => {
 
     const redelivery = await service.evaluateIdleTimeoutFreshness(chatId, instanceId, 0);
     expect(redelivery.skip).toBe(false);
+  });
+
+  async function disarmAtIndex(
+    sequenceIndex: number,
+    disarmReason: 'sequence_complete' | 'customer_replied' | 'handoff',
+  ) {
+    await armAtIndex(sequenceIndex);
+    await db
+      .update(chatFollowUpState)
+      .set({ disarmReason, disarmedAt: new Date(), nextFireAt: null })
+      .where(and(eq(chatFollowUpState.chatId, chatId), eq(chatFollowUpState.instanceId, instanceId)));
+  }
+
+  test('the last step of a sequence runs although the sweeper already marked it complete', async () => {
+    await armAtIndex(2);
+    await db
+      .update(chatFollowUpState)
+      .set({ nextFireAt: new Date(Date.now() - 60_000) })
+      .where(and(eq(chatFollowUpState.chatId, chatId), eq(chatFollowUpState.instanceId, instanceId)));
+    const published: Array<{ type: string; payload: { sequenceIndex?: number } }> = [];
+    const sweeperBus = {
+      ...eventBus,
+      publish: async (type: string, payload: { sequenceIndex?: number }) => {
+        published.push({ type, payload });
+        return { id: 'evt', sequence: published.length };
+      },
+    } as unknown as EventBus;
+
+    await new FollowUpSweeperService(db, sweeperBus).sweep();
+
+    const lastStep = published.find((event) => event.type === 'chat.idle_timeout');
+    expect(lastStep?.payload.sequenceIndex).toBe(2);
+    const [row] = await db
+      .select({ disarmReason: chatFollowUpState.disarmReason, sequenceIndex: chatFollowUpState.sequenceIndex })
+      .from(chatFollowUpState)
+      .where(and(eq(chatFollowUpState.chatId, chatId), eq(chatFollowUpState.instanceId, instanceId)));
+    expect(row).toEqual({ disarmReason: 'sequence_complete', sequenceIndex: 3 });
+
+    const verdict = await service.evaluateIdleTimeoutFreshness(chatId, instanceId, 2);
+    expect(verdict.skip).toBe(false);
+    expect(verdict.claimToken).toBeString();
+
+    const redelivery = await service.evaluateIdleTimeoutFreshness(chatId, instanceId, 2);
+    expect(redelivery.skip).toBe(true);
+    expect(redelivery.reason).toBe('duplicate_delivery_event_2');
+  });
+
+  test('an earlier step of a completed sequence is still dropped', async () => {
+    await disarmAtIndex(3, 'sequence_complete');
+
+    const verdict = await service.evaluateIdleTimeoutFreshness(chatId, instanceId, 1);
+
+    expect(verdict.skip).toBe(true);
+    expect(verdict.reason).toBe('disarmed_sequence_complete');
+  });
+
+  test('any other disarm reason still drops the step right behind the row', async () => {
+    for (const reason of ['customer_replied', 'handoff'] as const) {
+      resetIdleTimeoutClaims();
+      await disarmAtIndex(3, reason);
+
+      const verdict = await service.evaluateIdleTimeoutFreshness(chatId, instanceId, 2);
+
+      expect(verdict.skip).toBe(true);
+      expect(verdict.reason).toBe(`disarmed_${reason}`);
+    }
   });
 });
