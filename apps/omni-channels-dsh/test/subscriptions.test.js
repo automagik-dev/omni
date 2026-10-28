@@ -14,7 +14,7 @@ import { createScope } from '@deepseek-ai/dsh-scope'
 import { defineTool, ToolRuntime } from '@deepseek-ai/dsh-tools'
 import { TEAM_TOOLS as PINNED_TEAM_TOOLS } from '@automagik/bots-dsh/src/host/constants.js'
 import { START_TASK_REFUSAL } from '../src/host/grants.js'
-import { createPlainSession, OmniRow, ROW_DENIED, ROW_REFUSAL, ROW_REMOVED, TEAM_TOOLS } from '../src/host/omni-rows.js'
+import { createPlainSession, LATER_TEAM_TOOLS, OmniRow, ROW_DENIED, ROW_REFUSAL, ROW_REMOVED, TEAM_TOOLS } from '../src/host/omni-rows.js'
 import { HANDOFF_TOOL, OPERATOR_RULES } from '../src/host/omni-rules.js'
 import { NOT_PICKED_UP } from '../src/host/standing-recovery.js'
 import { ONGOING_RENEWED, QUEUED_MAX } from '../src/host/standing-runs.js'
@@ -2384,7 +2384,33 @@ test('changing the Omni Bot\'s model moves every session-worker Session, ongoing
 
 test('the team tools a session worker is denied are the pinned Bot team\'s TEAM_TOOLS, copied name for name', () => {
   assert.deepEqual([...TEAM_TOOLS], [...PINNED_TEAM_TOOLS])
-  assert.deepEqual([...ROW_DENIED], [...new Set([...PINNED_TEAM_TOOLS, ...THREAD_TOOLS, HANDOFF_TOOL])])
+  assert.deepEqual([...ROW_DENIED], [...new Set([...PINNED_TEAM_TOOLS, ...LATER_TEAM_TOOLS, ...THREAD_TOOLS, HANDOFF_TOOL])])
+})
+
+test('on a Bot team 3.33 or later a session worker is denied the renamed list_bot_models and the team\'s browser tools, on DSH\'s real registry and by its guard', async (t) => {
+  const bench = await threadBench(t)
+  const { run } = bench
+  const fresh = await sessionSub(bench, 'new', { ask_first: false })
+  const sessionId = sessionOfRun(await fire(bench, fresh, 'Um'))
+  const root = new Context()
+  root.plugin(SystemPrompt, {})
+  root.plugin(ToolRuntime, { mode: 'native' })
+  const real = await new Promise((resolve) => { root.plugin({ inject: ['tools'], apply: resolve }) })
+  const stub = name => defineTool({ name, description: name, parameters: {}, output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] }, execute: async () => name })
+  const browser = ['browser_open', 'browser_click']
+  for (const name of ['bash', 'read', 'list_bot_models', ...browser]) real.tools.register(stub(name))
+  // The team names its browser's tools on itself; the plugin's runtime inherits them.
+  run.team.browserToolNames = browser
+  const agent = { id: sessionId, session: { id: sessionId } }
+  agent.ctx = createScope(real, agent).ctx
+  run.ctx.tools.schemas = scope => real.tools.schemas(scope)
+  run.ctx.emit('agent/created', { agent })
+  await flush()
+  assert.deepEqual([...real.tools.view(agent).visible.keys()].sort(), ['bash', 'read'])
+  for (const name of ['list_bot_models', ...browser]) assert.equal(guarded(run.ctx, sessionId, name), ROW_REFUSAL, name)
+  assert.equal(guarded(run.ctx, sessionId, 'bash'), undefined)
+  // Another Session, a Bot's own among them, keeps the browser: the team decides there.
+  assert.equal(guarded(run.ctx, 'some-session', 'browser_open'), undefined)
 })
 
 test('on DSH\'s real tool registry a session worker\'s Session lists none of the thread tools (withoutThreadTools) and none of the team\'s, keeps every other DSH tool, and its guard refuses them whatever DSH lists (:197)', async (t) => {

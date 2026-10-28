@@ -36,9 +36,14 @@ export const TEAM_TOOLS = Object.freeze([
   'generate_image',
   'omni_endpoints', 'omni_call', 'omni_channels', 'omni_chats', 'omni_messages', 'omni_send', 'omni_react', 'omni_media', 'omni_delete', 'omni_connect', 'show_canvas', 'start_task',
 ])
+// The team's tools under the names later Bot teams give them (3.33.0 renamed list_models).
+export const LATER_TEAM_TOOLS = Object.freeze(['list_bot_models'])
 // What a row's Session never runs: the team's tools, the chat threads' own and the hand-off,
 // which is the Omni Bot's.
-export const ROW_DENIED = Object.freeze([...new Set([...TEAM_TOOLS, ...THREAD_TOOLS, HANDOFF_TOOL])])
+export const ROW_DENIED = Object.freeze([...new Set([...TEAM_TOOLS, ...LATER_TEAM_TOOLS, ...THREAD_TOOLS, HANDOFF_TOOL])])
+// A Bot's own browser is the team's too (3.33.0 and later name its tools in
+// rt.browserToolNames, and deny them in its own DSH bot Sessions): a row never runs it.
+const rowDenied = rt => [...ROW_DENIED, ...(Array.isArray(rt.browserToolNames) ? rt.browserToolNames : [])]
 export const ROW_REFUSAL = 'A session under Omni has DSH\'s own tools, not the Bot team\'s or a chat thread\'s.'
 export const ROW_KINDS = Object.freeze(['run', 'ongoing', 'handoff'])
 // A run that worked in a Session whose row the owner removed.
@@ -75,7 +80,7 @@ function trimRow(rt, agent) {
   try {
     // Nothing denied can mean DSH's list is not up yet: the next agent/created tries again,
     // and the guard below refuses them meanwhile.
-    if (denyEach(rt.ctx, agent, ROW_DENIED) > 0) trimmed.add(agent)
+    if (denyEach(rt.ctx, agent, rowDenied(rt)) > 0) trimmed.add(agent)
   } catch (error) {
     rt.warn('omni-channels: the Session %s keeps the team\'s tools in its list (its guard still refuses them): %s', agent.session?.id ?? agent.id, error?.message ?? error)
   }
@@ -266,9 +271,8 @@ export function install(rt) {
       if (get(agent?.id ?? agent?.session?.id) !== undefined) trimRow(rt, agent)
     }).catch(error => warn('a session row\'s tool list was not trimmed', error))
   })
-  const denied = new Set(ROW_DENIED)
   ctx.tools.guard((exec) => {
-    if (!denied.has(exec.name) || get(exec.agent?.id ?? exec.agent?.session?.id) === undefined) return undefined
+    if (!rowDenied(rt).includes(exec.name) || get(exec.agent?.id ?? exec.agent?.session?.id) === undefined) return undefined
     // A refused call trims the list too, in case DSH's list was not up when the agent began.
     trimRow(rt, exec.agent)
     return ROW_REFUSAL
