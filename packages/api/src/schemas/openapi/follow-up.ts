@@ -43,6 +43,32 @@ const ExponentialScheduleSchema = z
 
 export const FollowUpScheduleOpenApiSchema = z.union([FixedScheduleSchema, ExponentialScheduleSchema]);
 
+const QuietHoursSchema = z
+  .object({
+    start: z
+      .string()
+      .openapi({ description: 'Local time the quiet period starts, HH:MM (24-hour).', example: '22:00' }),
+    end: z.string().openapi({ description: 'Local time the quiet period ends, HH:MM (24-hour).', example: '08:00' }),
+    timezone: z.string().openapi({ description: 'IANA time zone of start and end.', example: 'America/Sao_Paulo' }),
+    spreadMinutes: z
+      .number()
+      .int()
+      .nonnegative()
+      .optional()
+      .openapi({
+        description:
+          'Spread deferred follow-ups over this many minutes after end, at a fixed offset per chat. ' +
+          'Absent: every deferred follow-up is due at end. Must be shorter than the time between end and start.',
+      }),
+  })
+  .strict()
+  .openapi({
+    description:
+      'Optional local-time period in which no follow-up fires. A follow-up that falls due inside it is ' +
+      'rescheduled to the end of the period without consuming a step of the sequence. start after end ' +
+      'crosses midnight. Absent: follow-ups fire at any hour.',
+  });
+
 export const FollowUpSequenceConfigOpenApiSchema = z
   .object({
     enabled: z.boolean().openapi({ description: 'Master switch — false turns off follow-ups at this scope.' }),
@@ -63,6 +89,7 @@ export const FollowUpSequenceConfigOpenApiSchema = z
     showTypingIndicator: z
       .boolean()
       .openapi({ description: 'Emit a 2–3s typing/presence indicator before firing on supported channels.' }),
+    quietHours: QuietHoursSchema.optional(),
   })
   .openapi({ description: 'Follow-up sequence configuration.' });
 
