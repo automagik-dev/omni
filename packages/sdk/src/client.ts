@@ -679,7 +679,7 @@ export interface CreateAutomationBody {
   /** Condition logic: 'and' (all must match) or 'or' (any must match). Defaults to 'and'. */
   conditionLogic?: 'and' | 'or';
   actions: Array<{
-    type: 'webhook' | 'send_message' | 'emit_event' | 'log' | 'call_agent';
+    type: 'webhook' | 'send_message' | 'emit_event' | 'log' | 'call_agent' | 'clickup';
     config: Record<string, unknown>;
   }>;
   debounce?: Record<string, unknown>;

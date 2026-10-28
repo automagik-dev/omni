@@ -192,13 +192,15 @@ describe('ClickUpChannelPlugin', () => {
     expect(status.message).toBe('Connected to Acme');
 
     const connectedEvent = eventBus.calls.find((call) => call.type === 'instance.connected');
+    // The team travels as profileName/ownerIdentifier only: `teamId` in an
+    // instance.connected payload is Slack OAuth metadata and is not emitted here.
     expect(connectedEvent?.payload).toMatchObject({
       instanceId: INSTANCE,
       channelType: 'clickup',
       profileName: 'Acme',
       ownerIdentifier: '123',
-      teamId: '123',
     });
+    expect(connectedEvent?.payload).not.toHaveProperty('teamId');
 
     // The token must not appear in anything a caller/operator can observe.
     const observed = JSON.stringify({ status, events: eventBus.calls, logs: logCalls });
@@ -328,12 +330,31 @@ describe('ClickUpChannelPlugin', () => {
     expect(comment).toEqual({ id: 'comment-1', text: 'Looks good' });
 
     const update = requests.find((request) => request.url.endsWith('/task/task-1'));
-    expect(update?.method).toBe('POST');
+    // ClickUp API v2 documents PUT for task updates (including status moves), so
+    // this pins the documented method rather than whatever the client happens to send.
+    expect(update?.method).toBe('PUT');
     expect(JSON.parse(update?.body ?? '{}')).toEqual({ status: 'done' });
 
     const added = requests.find((request) => request.url.endsWith('/task/task-1/comment'));
     expect(added?.method).toBe('POST');
     expect(JSON.parse(added?.body ?? '{}')).toEqual({ comment_text: 'Looks good', notify_all: true });
+  });
+
+  it('add_comment always sends notify_all, false when left out', async () => {
+    const { requests } = await connected(() => jsonResponse({ id: 'comment-2', text: 'Quiet comment' }));
+
+    const comment = await plugin.execute(INSTANCE, {
+      operation: 'add_comment',
+      taskId: 'task-1',
+      comment: 'Quiet comment',
+    });
+    expect(comment).toEqual({ id: 'comment-2', text: 'Quiet comment' });
+
+    const added = requests.find((request) => request.url.endsWith('/task/task-1/comment'));
+    // ClickUp's Create Task Comment contract marks notify_all required, so it is
+    // always present: false rather than absent when no one asked to notify.
+    expect(added?.method).toBe('POST');
+    expect(JSON.parse(added?.body ?? '{}')).toEqual({ comment_text: 'Quiet comment', notify_all: false });
   });
 
   it('list_tasks GETs the list with archived=false and subtasks=false', async () => {

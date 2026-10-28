@@ -102,7 +102,6 @@ export class ClickUpChannelPlugin extends BaseChannelPlugin {
       await this.emitInstanceConnected(instanceId, {
         profileName: team.name,
         ownerIdentifier: team.id,
-        teamId: team.id,
       });
     } catch (error) {
       this.credentials.delete(instanceId);
@@ -187,7 +186,7 @@ export class ClickUpChannelPlugin extends BaseChannelPlugin {
         const comment = requireValue(action.comment, 'INVALID_REQUEST', 'ClickUp add comment needs a comment.');
         const created = await client.addComment(taskId, {
           comment_text: comment,
-          ...(action.notifyAll === true ? { notify_all: true } : {}),
+          notify_all: action.notifyAll === true,
         });
         return normalizeComment(created);
       }

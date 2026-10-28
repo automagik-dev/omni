@@ -12,7 +12,7 @@ channel, and this plugin does not use MCP.**
   | Operation       | ClickUp API                                   |
   | --------------- | --------------------------------------------- |
   | `create_task`   | `POST /list/{listId}/task`                    |
-  | `update_status` | `POST /task/{taskId}`                         |
+  | `update_status` | `PUT /task/{taskId}`                          |
   | `add_comment`   | `POST /task/{taskId}/comment`                 |
   | `list_tasks`    | `GET /list/{listId}/task?archived=false&subtasks=false` |
 

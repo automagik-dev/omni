@@ -534,7 +534,7 @@ export const STRINGS = {
   'Workspace {team}': '工作区 {team}',
   'No messages are sent: Omni can create and update tasks and comments in this workspace.': '不会发送任何消息：Omni 可以在这个工作区创建和更新任务、发表评论。',
   'Waiting for Omni to say ClickUp is ready': '正在等待 Omni 确认 ClickUp 已就绪',
-  'The token stays with your Omni. Nothing is sent to ClickUp until an automation or agent acts.': '令牌只保存在你的 Omni 中。在自动化或智能体执行操作之前，不会向 ClickUp 发送任何内容。',
+  'The token stays with your Omni. Omni checks it once when you connect; nothing else is sent until an automation or agent acts.': '令牌只保存在你的 Omni 中。连接时 Omni 会校验一次；在自动化或智能体执行操作之前，不会再发送任何内容。',
   'Tasks and comments, through your ClickUp account.': '通过你的 ClickUp 账户处理任务和评论。',
   'Paste an API token': '粘贴 API 令牌',
   'Paste the token': '粘贴令牌',

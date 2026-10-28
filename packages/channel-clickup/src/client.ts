@@ -42,7 +42,7 @@ export interface ClickUpClientOptions {
 }
 
 interface ClickUpRequest {
-  method: 'GET' | 'POST';
+  method: 'GET' | 'POST' | 'PUT';
   path: string;
   body?: unknown;
   operation: string;
@@ -83,11 +83,11 @@ export class ClickUpApiClient {
     return parsed.data;
   }
 
-  /** POST /task/{taskId} — ClickUp uses this both to update fields and to move status. */
+  /** PUT /task/{taskId} — ClickUp updates fields and moves status with PUT. */
   async updateTask(taskId: string, body: Record<string, unknown>): Promise<ClickUpApiTask> {
     const path = `/task/${encodeURIComponent(taskId)}`;
-    const operation = `POST ${path}`;
-    const res = await this.request({ method: 'POST', path, body, operation });
+    const operation = `PUT ${path}`;
+    const res = await this.request({ method: 'PUT', path, body, operation });
     const parsed = ClickUpTaskResponseSchema.safeParse(await this.readJson(res, operation));
     if (!parsed.success) throw this.invalidResponse(res, operation, parsed.error.message);
     return parsed.data;

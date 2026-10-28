@@ -444,7 +444,7 @@ function Pairing({ info, token, setToken, onDone }) {
     return h(Fragment, null,
       h('h1', null, t('Paste the {app} token', { app: info.label })),
       h('p', null, info.label === 'Telegram' ? t('Message @BotFather, send /newbot, and copy the token it gives you.') : t('Create the token in {app}\'s settings and paste it here.', { app: info.label })),
-      h('label', { className: 'oc-field' }, h('span', null, t('Token')), h('input', { type: 'password', value: token, onChange: event => setToken(event.target.value), placeholder: '123456:ABC-…', autoComplete: 'off' })),
+      h('label', { className: 'oc-field' }, h('span', null, t('Token')), h('input', { type: 'password', value: token, onChange: event => setToken(event.target.value), placeholder: info.label === 'ClickUp' ? 'pk_…' : '123456:ABC-…', autoComplete: 'off' })),
       h('button', { type: 'button', className: 'oc-primary', disabled: token.trim() === '', onClick: onDone }, t('Connect')))
   }
   return h(Fragment, null,
@@ -458,7 +458,7 @@ function TokenFix({ channel, type, omni }) {
   const [token, setToken] = useState('')
   return h('div', { className: 'oc-fix' },
     h('label', { className: 'oc-field' }, h('span', null, t('New {app} token', { app: type.label })),
-      h('input', { type: 'password', value: token, autoComplete: 'off', placeholder: '123456:ABC-…', onChange: event => setToken(event.target.value),
+      h('input', { type: 'password', value: token, autoComplete: 'off', placeholder: type.label === 'ClickUp' ? 'pk_…' : '123456:ABC-…', onChange: event => setToken(event.target.value),
         onKeyDown: (event) => { if (event.key === 'Enter' && token.trim() !== '') omni.reconnect(channel.id, token.trim()) } })),
     h('button', { type: 'button', className: 'oc-primary', disabled: token.trim() === '' || Boolean(channel.busy), onClick: () => omni.reconnect(channel.id, token.trim()) }, t('Reconnect')))
 }

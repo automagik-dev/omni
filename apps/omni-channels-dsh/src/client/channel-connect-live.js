@@ -467,7 +467,7 @@ function ClickUpFlow({ type, omni, Tile, PreviewChip }) {
       field('teamId', t('Workspace / Team ID (optional)'), { inputMode: 'numeric', placeholder: '9013…' }),
       field('listId', t('Default List ID (optional)'), { inputMode: 'numeric', placeholder: '9013…' }),
       h('div', { className: 'oc-row' }, h('button', { type: 'button', className: 'oc-primary', disabled: !ready || busy, onClick: connect }, busy ? t('Connecting…') : t('Connect'))),
-      h('p', { className: 'oc-fine' }, t('The token stays with your Omni. Nothing is sent to ClickUp until an automation or agent acts.')))
+      h('p', { className: 'oc-fine' }, t('The token stays with your Omni. Omni checks it once when you connect; nothing else is sent until an automation or agent acts.')))
   }
   return h(FlowShell, { type, at, Tile, PreviewChip, onBack: () => omni.showPage({ type: null, step: 0 }) }, body, h(Problem, { text: problem ?? pollProblem }))
 }

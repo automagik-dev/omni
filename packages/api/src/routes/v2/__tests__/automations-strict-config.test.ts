@@ -65,6 +65,32 @@ describe('POST /automations action config strictness (#1117)', () => {
   }
 });
 
+describe('clickup action config per-operation keys (#1413)', () => {
+  const instanceId = '11111111-1111-4111-8111-111111111111';
+
+  test('a key from another operation is rejected naming it', async () => {
+    const res = await create({
+      type: 'clickup',
+      config: { instanceId, operation: 'update_status', taskId: 't1', status: 'done', listId: '9' },
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { issues: Array<{ message: string; path: Array<string | number> }> } };
+    const issue = body.error.issues.find((entry) => entry.path.join('.') === 'actions.0.config.listId');
+    expect(issue?.message).toContain('clickup update_status does not take "listId"');
+  });
+
+  test('each operation accepts its own shape', async () => {
+    const shapes: Array<Record<string, unknown>> = [
+      { operation: 'create_task', name: 'Follow up', listId: '9' },
+      { operation: 'add_comment', taskId: 't1', comment: 'Looks good', notifyAll: true },
+      { operation: 'list_tasks', listId: '9' },
+    ];
+    for (const config of shapes) {
+      expect((await create({ type: 'clickup', config: { instanceId, ...config } })).status).toBe(201);
+    }
+  });
+});
+
 describe('call_agent waitForResponse (#1176)', () => {
   test('waitForResponse: false is accepted', async () => {
     expect((await create({ type: 'call_agent', config: { agentId: 'a1', waitForResponse: false } })).status).toBe(201);

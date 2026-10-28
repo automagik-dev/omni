@@ -137,6 +137,35 @@ const clickupActionSchema = z.object({
   }),
 });
 
+// Which config keys belong to which ClickUp operation. `strictConfig` only
+// rejects keys unknown to the whole action, so `update_status` + `listId` would
+// pass this route and then fail the plugin's strict per-operation union at
+// runtime; the check below closes that gap.
+const clickupKeysByOperation = {
+  create_task: ['instanceId', 'operation', 'listId', 'name', 'description', 'assignees', 'dueDate'],
+  update_status: ['instanceId', 'operation', 'taskId', 'status'],
+  add_comment: ['instanceId', 'operation', 'taskId', 'comment', 'notifyAll'],
+  list_tasks: ['instanceId', 'operation', 'listId'],
+} as const;
+
+/** Flag every ClickUp config key that belongs to a different operation. */
+function checkClickupOperationKeys(
+  action: z.infer<typeof clickupActionSchema>,
+  ctx: z.RefinementCtx,
+  index: number,
+): void {
+  const { config } = action;
+  const validKeys: readonly string[] = clickupKeysByOperation[config.operation];
+  for (const key of Object.keys(config)) {
+    if (validKeys.includes(key)) continue;
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [index, 'config', key],
+      message: `clickup ${config.operation} does not take "${key}". Valid keys: ${validKeys.join(', ')}`,
+    });
+  }
+}
+
 // Combined action schema
 const actionSchema = z.discriminatedUnion('type', [
   webhookActionSchema,
@@ -218,6 +247,7 @@ const createAutomationSchema = z.object({
         // call_agent cross-field check above.
         if (action.type === 'clickup') {
           const clickup = action.config;
+          checkClickupOperationKeys(action, ctx, i);
           const requireField = (field: 'name' | 'taskId' | 'status' | 'comment', message: string) => {
             if (clickup[field]) return;
             ctx.addIssue({

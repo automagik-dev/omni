@@ -305,7 +305,7 @@ export function createAutomationsCommand(): Command {
     .option('--trigger <event>', 'Trigger event type (e.g., message.received)')
     .option(
       '--action <type>',
-      'Action type (webhook, send_message, emit_event, log, call_agent); repeat for ordered multi-action',
+      'Action type (webhook, send_message, emit_event, log, call_agent, clickup); repeat for ordered multi-action',
       collectRepeated,
     )
     .option('--action-config <json>', 'Action config as JSON; the i-th pairs with the i-th --action', collectRepeated)

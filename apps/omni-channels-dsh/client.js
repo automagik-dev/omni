@@ -11869,7 +11869,7 @@ function ClickUpFlow({ type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip2
       field("teamId", t("Workspace / Team ID (optional)"), { inputMode: "numeric", placeholder: "9013…" }),
       field("listId", t("Default List ID (optional)"), { inputMode: "numeric", placeholder: "9013…" }),
       (0, import_react3.createElement)("div", { className: "oc-row" }, (0, import_react3.createElement)("button", { type: "button", className: "oc-primary", disabled: !ready || busy, onClick: connect }, busy ? t("Connecting…") : t("Connect"))),
-      (0, import_react3.createElement)("p", { className: "oc-fine" }, t("The token stays with your Omni. Nothing is sent to ClickUp until an automation or agent acts."))
+      (0, import_react3.createElement)("p", { className: "oc-fine" }, t("The token stays with your Omni. Omni checks it once when you connect; nothing else is sent until an automation or agent acts."))
     );
   }
   return (0, import_react3.createElement)(FlowShell, { type, at: at2, Tile: Tile2, PreviewChip: PreviewChip2, onBack: () => omni2.showPage({ type: null, step: 0 }) }, body, (0, import_react3.createElement)(Problem, { text: problem ?? pollProblem }));
@@ -12401,7 +12401,7 @@ function Pairing({ info, token, setToken, onDone }) {
       null,
       (0, import_react4.createElement)("h1", null, t("Paste the {app} token", { app: info.label })),
       (0, import_react4.createElement)("p", null, info.label === "Telegram" ? t("Message @BotFather, send /newbot, and copy the token it gives you.") : t("Create the token in {app}'s settings and paste it here.", { app: info.label })),
-      (0, import_react4.createElement)("label", { className: "oc-field" }, (0, import_react4.createElement)("span", null, t("Token")), (0, import_react4.createElement)("input", { type: "password", value: token, onChange: (event) => setToken(event.target.value), placeholder: "123456:ABC-…", autoComplete: "off" })),
+      (0, import_react4.createElement)("label", { className: "oc-field" }, (0, import_react4.createElement)("span", null, t("Token")), (0, import_react4.createElement)("input", { type: "password", value: token, onChange: (event) => setToken(event.target.value), placeholder: info.label === "ClickUp" ? "pk_…" : "123456:ABC-…", autoComplete: "off" })),
       (0, import_react4.createElement)("button", { type: "button", className: "oc-primary", disabled: token.trim() === "", onClick: onDone }, t("Connect"))
     );
   }
@@ -12426,7 +12426,7 @@ function TokenFix({ channel, type, omni: omni2 }) {
         type: "password",
         value: token,
         autoComplete: "off",
-        placeholder: "123456:ABC-…",
+        placeholder: type.label === "ClickUp" ? "pk_…" : "123456:ABC-…",
         onChange: (event) => setToken(event.target.value),
         onKeyDown: (event) => {
           if (event.key === "Enter" && token.trim() !== "") omni2.reconnect(channel.id, token.trim());
@@ -15998,7 +15998,7 @@ var STRINGS = {
   "Workspace {team}": "工作区 {team}",
   "No messages are sent: Omni can create and update tasks and comments in this workspace.": "不会发送任何消息：Omni 可以在这个工作区创建和更新任务、发表评论。",
   "Waiting for Omni to say ClickUp is ready": "正在等待 Omni 确认 ClickUp 已就绪",
-  "The token stays with your Omni. Nothing is sent to ClickUp until an automation or agent acts.": "令牌只保存在你的 Omni 中。在自动化或智能体执行操作之前，不会向 ClickUp 发送任何内容。",
+  "The token stays with your Omni. Omni checks it once when you connect; nothing else is sent until an automation or agent acts.": "令牌只保存在你的 Omni 中。连接时 Omni 会校验一次；在自动化或智能体执行操作之前，不会再发送任何内容。",
   "Tasks and comments, through your ClickUp account.": "通过你的 ClickUp 账户处理任务和评论。",
   "Paste an API token": "粘贴 API 令牌",
   "Paste the token": "粘贴令牌",
