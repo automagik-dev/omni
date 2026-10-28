@@ -26,6 +26,7 @@ import * as threads from './src/host/threads.js'
 import * as threadTools from './src/host/thread-tools.js'
 import * as standingRecovery from './src/host/standing-recovery.js'
 import * as standingRuns from './src/host/standing-runs.js'
+import * as omniRows from './src/host/omni-rows.js'
 
 export const name = 'omni-channels'
 // The chat threads take their instructions from a prompt section and archive their Sessions in
@@ -40,11 +41,12 @@ export const inject = ['omniTeam', 'tools', 'sessions', 'settings', 'systemPromp
 // log it shares. Permissions come before the tools that check them. The threads' own keys
 // come after omni.js, whose requests they make, the threads after their keys, and the
 // threads' own tools after the threads, whose additions they restrict. The standing-Session
-// runs (automations that hand events to a thread) after the threads, whose removals they
-// hear, their restart recovery right after them, and before the events, which queue for
-// them. Changing channels
+// runs (automations that hand events to a thread or a session) after the threads, whose
+// removals they hear, their restart recovery right after them, then the session rows under
+// the Omni Bot (omni-rows.js), which follow the Omni Bot's model through the threads and hear
+// the standing runs end, and before the events, which queue for them. Changing channels
 // from the Channels page comes last: it only calls omni through omni.js.
-const MODULES = [resumeHook, grants, subscriptions, asks, omniApi, omniLink, omniDiscover, omniLocal, omniTerminal, omniUpdate, omni, threadKeys, threads, threadTools, standingRuns, standingRecovery, omniEvents, omniChannelActions]
+const MODULES = [resumeHook, grants, subscriptions, asks, omniApi, omniLink, omniDiscover, omniLocal, omniTerminal, omniUpdate, omni, threadKeys, threads, threadTools, standingRuns, standingRecovery, omniRows, omniEvents, omniChannelActions]
 
 export function apply(ctx, config = {}) {
   ctx.provide('omniChannels', createRuntime(ctx, ctx.omniTeam, config))

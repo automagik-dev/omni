@@ -1,7 +1,7 @@
 import { createElement as h, Fragment, useEffect, useState } from 'react'
 import { ChatAvatar, Tile, useOmni } from './channels.js'
 import { TRIGGERS, runsOf, startLive, waitingRuns } from './omni-store.js'
-import { BotMark, call, MAIN_LOOK, OmniMark, relativeShort, t, icons } from './core.js'
+import { BotMark, call, hostText, MAIN_LOOK, OmniMark, relativeShort, t, icons } from './core.js'
 const { AtIcon, FileIcon, KeywordIcon, MessageIcon, ShieldIcon, UnplugIcon, VoiceIcon } = icons
 
 // Omni's board: what it actually does, beside its chat. The user never fills a form here;
@@ -259,6 +259,8 @@ function RunRow({ run, sub, roster, actions, asking = false }) {
         h('span', { className: 'os-run-status' }, run.test ? `${t('Test')} · ${t(status.label)}` : t(status.label)),
         h('time', null, relativeShort(run.at))),
       run.excerpt && !run.test ? h('span', { className: 'os-run-quote' }, run.from ? `${run.from}: ` : '', run.excerpt) : null,
+      // What the host says about where it ran (a new ongoing session after DSH archived the last).
+      run.note ? h('span', { className: 'os-run-note' }, hostText(run.note)) : null,
       h('span', { className: 'os-run-text' }, run.summary)))
 }
 
@@ -266,6 +268,7 @@ export const SUBSCRIPTIONS_CSS = `
 .os-trigger{display:inline-grid;place-items:center;flex:none;border-radius:30%;background:color-mix(in srgb,var(--bt-accent) 12%,var(--bt-card));box-shadow:inset 0 0 0 .5px var(--bt-line-2);line-height:1}
 .os-trigger:not([data-kind=reaction]){color:var(--bt-accent)}
 .os-trigger svg{width:var(--os-icon,18px);height:var(--os-icon,18px)}
+.os-run-note{font-size:11.5px;color:var(--bt-ink-3)}
 .os-session{display:inline-grid;place-items:center;flex:none;border-radius:30%;background:var(--bt-ink);color:var(--bt-main)}
 .os-stack{display:inline-flex;align-items:center;flex:none}
 .os-stack-item{display:inline-flex;margin-left:-4px;border-radius:50%;box-shadow:0 0 0 1.5px var(--bt-card)}

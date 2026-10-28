@@ -141,6 +141,26 @@ export function withSourceRoutes(ops, routes = SOURCE_ROUTES) {
   return [...ops, ...extra]
 }
 
+/**
+ * Each of `names` that DSH serves this agent, denied on the agent's own scope one name at a
+ * time: restrict() refuses a name that is not a global tool here (a scope-local `subagent`, a
+ * tool this dsh does not ship) and refuses the whole list for it, and restrictions intersect,
+ * so a refused name is skipped and the others still go. Returns how many were denied; throws
+ * when DSH's list for the agent cannot be read.
+ */
+export function denyEach(ctx, agent, names) {
+  const served = new Set(ctx.tools.schemas(agent).map(schema => schema.name))
+  let denied = 0
+  for (const name of names) {
+    if (!served.has(name)) continue
+    try {
+      agent.ctx.tools.restrict({ deny: [name] })
+      denied += 1
+    } catch {}
+  }
+  return denied
+}
+
 // Large answers keep their shape: lists lose their tail (and say so) until the text fits.
 export function fitted(value, max = RESULT_MAX) {
   let text = JSON.stringify(value)
@@ -169,25 +189,15 @@ export function install(rt) {
     const self = rt.selfOf(sessionId)
     return operatesOmni(rt, self)
   }
-  // restrict() refuses a name that is not a global tool here (a scope-local `subagent`, a
-  // tool this dsh does not ship), and refuses the whole list for it. Restrictions intersect,
-  // so each tool is denied on its own and a refused one is skipped. `trimmed`: the agents
-  // this list was trimmed from.
+  // `trimmed`: the agents this list was trimmed from.
   const trimFrom = (agent, names, trimmed, what) => {
     if (trimmed.has(agent) || typeof agent.ctx?.tools?.restrict !== 'function') return
-    let served
+    let denied
     try {
-      served = new Set(ctx.tools.schemas(agent).map(schema => schema.name))
+      denied = denyEach(ctx, agent, names)
     } catch (error) {
       rt.warn('ds-bot: the %s stay in the Main Bot session %s: %s', what, agent.session?.id, error)
       return
-    }
-    let denied = 0
-    for (const name of names.filter(name => served.has(name))) {
-      try {
-        agent.ctx.tools.restrict({ deny: [name] })
-        denied += 1
-      } catch {}
     }
     // Nothing denied can mean the schemas are not up yet: the next refusal tries again.
     if (denied > 0) trimmed.add(agent)

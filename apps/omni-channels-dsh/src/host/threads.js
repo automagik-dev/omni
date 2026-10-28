@@ -130,14 +130,17 @@ const following = new WeakMap()
 
 /**
  * Keeps a Session on the Omni Bot's model: selected now, and again whenever the Omni Bot's
- * own chat moves to another model. Returns the unfollow.
+ * own chat moves to another model. `select: false` only follows, selecting nothing now: a
+ * Session saved earlier is on that model already, and a start that selects it on every saved
+ * Session would open each of them. Returns the unfollow.
  */
-export function followOmniModel(rt, sessionId) {
+export function followOmniModel(rt, sessionId, { select = true } = {}) {
   const followers = following.get(rt)
   // The threads module installs the follow; a module before it in MODULES would follow nothing.
   if (followers === undefined) rt.warn('omni-channels: followOmniModel called before the threads module is installed')
   if (followers === undefined || typeof sessionId !== 'string' || sessionId === '') return () => {}
   followers.add(sessionId)
+  if (!select) return () => { followers.delete(sessionId) }
   void selectOmniModel(rt, sessionId).catch(error => rt.warn('omni-channels: the Omni Bot\'s model was not applied to %s: %s', sessionId, error?.message ?? error))
   return () => { followers.delete(sessionId) }
 }

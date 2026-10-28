@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { TEAM_TOOLS } from '@automagik/bots-dsh/src/host/constants.js'
+import { OPERATOR_RULES } from '@automagik/omni-channels-dsh/src/host/omni-rules.js'
 import { THREAD_TOOLS } from '@automagik/omni-channels-dsh/src/host/threads.js'
 import * as plugin from '../index.js'
 import { applyAll, composed, fakeContext, teamFile } from './team.js'
@@ -22,19 +23,28 @@ test('the plugin is the omni-canvas row, on the team and its channels', () => {
   assert.deepEqual(plugin.inject, ['omniTeam', 'omniChannels', 'tools'])
 })
 
+// Omni's rules as the team's fixture has them, from their heading to their last line.
+const RULES_START = '## You operate Omni for the user'
+const RULES_END = 'A task for an event only reads omni.'
+const rulesIn = text => text.slice(text.indexOf(RULES_START), text.indexOf(RULES_END) + RULES_END.length)
+
 // Written by the team's prompt before its Omni parts moved out (the team keeps the
 // fixture). With the channels plugin and this one, a Main Bot's prompt is that text, byte
-// for byte, or its provider's prompt cache starts over.
-test('with all three plugins, a Main Bot\'s prompt is the text it was before the split', async (t) => {
+// for byte, or its provider's prompt cache starts over; only Omni's rules are as the channels
+// plugin has them now, where the lines that named Tasks say where the work runs instead.
+test('with all three plugins, a Main Bot\'s prompt is the text it was before the split, with Omni\'s rules as they are now', async (t) => {
   const named = composed(TEAM, { channelsConfig: { omni: { url: 'https://omni.example.com' } } })
   const older = composed(TEAM, { config: { omni: { url: 'https://omni.example.com' } } })
   const plain = composed(TEAM)
   t.after(() => Promise.all([named.stop(), older.stop(), plain.stop()]))
   await Promise.all([named.team.load(), older.team.load(), plain.team.load()])
   const fixture = name => readFileSync(teamFile(`test/fixtures/${name}`), 'utf8')
-  assert.equal(prompt(named, 'm1'), fixture('main-prompt-omni.txt'))
+  const omni = fixture('main-prompt-omni.txt')
+  const now = omni.replace(rulesIn(omni), OPERATOR_RULES)
+  assert.notEqual(now, omni)
+  assert.equal(prompt(named, 'm1'), now)
   // An Omni named the older way, on the team's row, counts the same.
-  assert.equal(prompt(older, 'm1'), fixture('main-prompt-omni.txt'))
+  assert.equal(prompt(older, 'm1'), now)
   assert.equal(prompt(plain, 'm1'), fixture('main-prompt.txt'))
 })
 

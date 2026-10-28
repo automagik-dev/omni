@@ -7,6 +7,8 @@ import { createRuntime as createTeam } from '@automagik/bots-dsh'
 import { createRuntime } from '../index.js'
 import { install, isResumeMessage, NEEDS_NEWER_TEAM, TEAM_CONTRACT } from '../src/host/resume-hook.js'
 import { decideUnbound, NOT_PICKED_UP } from '../src/host/standing-recovery.js'
+import { SESSION_NEEDS_TEAM } from '../src/host/subscriptions.js'
+import { CUT_WINDOW_MS } from '../src/host/threads.js'
 import { fakeContext } from './team.js'
 import { boot, homeFor, record, teamState, flush as threadFlush, until } from './thread-fixture.js'
 
@@ -631,4 +633,109 @@ test('the hook lists the Session of every working standing run, never a queued, 
   await threadFlush()
   assert.deepEqual([done.resumed, marked], [['thread-a'], [['thread-a', true, true]]])
   assert.equal(run.channels.state.subscriptionRuns.find(item => item.id === 'run-a').status, 'working')
+})
+
+// Session rows under the Omni row (Group 14): the hook's row source on the real Bot team's pass.
+const sessionSub = (id, mode, extra = {}) => ({
+  id, name: `${mode} worker`, on: true, sources: [{ kind: 'chat', id: 'c1', name: 'Marina', type: 'whatsapp-baileys', chatKind: 'direct', channelId: 'i1' }],
+  trigger: { kind: 'message' }, worker: { kind: 'session', mode }, outputs: { react: false, replyToMe: false }, askFirst: true, createdAt: 1, updatedAt: 1, ...extra,
+})
+const row = (sessionId, kind, extra = {}) => ({ sessionId, kind, title: sessionId, turnOpenAt: null, at: 1, ...extra })
+
+test('a turn cut in an "ongoing session" Session and in a kept "new session" row whose run ended (an owner-written turn) is resumed exactly once by the team; the ongoing run is bound to its resumed turn and ends with it (:189)', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const at = Date.now() - 60_000
+  const home = homeFor(t, undefined, teamState({
+    subscriptions: { 'sub-on': sessionSub('sub-on', 'ongoing', { ongoingSessionId: 'ongoing-session' }) },
+    omniRows: {
+      'ongoing-session': row('ongoing-session', 'ongoing', { subId: 'sub-on', turnOpenAt: at }),
+      'kept-session': row('kept-session', 'run', { subId: 'sub-gone', turnOpenAt: at }),
+    },
+    subscriptionRuns: [
+      { id: 'run-on', subId: 'sub-on', standing: true, sessionId: 'ongoing-session', status: 'working', turnId: '4', at },
+      { id: 'run-kept', subId: 'sub-gone', standing: true, sessionId: 'kept-session', status: 'done', turnId: '2', at, endedAt: at },
+    ],
+  }))
+  const run = await boot(t, home)
+  // The ongoing run's own turn, cut; the kept row's last turn, the owner's, cut.
+  const log = [
+    { type: 'turn/start', time: at, data: { turn: 4 } },
+    { type: 'user/message', data: { content: [{ type: 'text', text: 'event' }], source: { kind: 'omni-run', runId: 'run-on' } } },
+    { type: 'turn/end', time: Date.now() - 1000, data: { turn: 4, reason: { kind: 'interrupted' } } },
+  ]
+  Object.assign(run.agentOf('ongoing-session').session, { seq: log.length, eventAt: seq => log[seq] })
+  run.cut('kept-session')
+  assert.deepEqual(run.registered[0].sessions().sort(), ['kept-session', 'ongoing-session'])
+  t.mock.timers.tick(3000)
+  const done = await run.team.resumesDone
+  await threadFlush()
+  assert.deepEqual([...done.resumed].sort(), ['kept-session', 'ongoing-session'])
+  // Once each, as a plain Session's resume; never through a Bot.
+  for (const id of ['kept-session', 'ongoing-session']) assert.deepEqual(run.agentOf(id).calls.map(message => message.source), [{ kind: 'user', resumed: true }], id)
+  assert.deepEqual(run.agentOf('m1').calls, [])
+  // The resumed turns run and end cleanly: the ongoing run is bound to its own and ends with
+  // it; the owner's turn finishes no run.
+  for (const [id, turn] of [['ongoing-session', 5], ['kept-session', 9]]) {
+    run.emit(id, 'turn/start', { turn }, Date.now())
+    run.emit(id, 'user/message', { content: run.agentOf(id).calls[0].content, source: run.agentOf(id).calls[0].source })
+    run.emit(id, 'assistant/message', { message: { content: [{ type: 'text', text: `${id} went on.` }] } })
+    run.emit(id, 'turn/end', { turn, reason: { kind: 'completed' } })
+  }
+  await threadFlush()
+  const runOf = id => run.channels.state.subscriptionRuns.find(item => item.id === id)
+  assert.deepEqual([runOf('run-on').status, runOf('run-on').turnId, runOf('run-on').summary], ['done', '5', 'ongoing-session went on.'])
+  assert.deepEqual([runOf('run-kept').status, runOf('run-kept').turnId], ['done', '2'])
+  assert.deepEqual(run.channels.omniRows.list().map(item => [item.sessionId, item.turnOpenAt]), [['ongoing-session', null], ['kept-session', null]])
+  await run.channels.save()
+  await run.stop()
+  // The next start lists neither and resumes nothing: once was all.
+  const next = await boot(t, home)
+  assert.deepEqual(next.registered[0].sessions(), [])
+  t.mock.timers.tick(3000)
+  const again = await next.team.resumesDone
+  await threadFlush()
+  assert.deepEqual([again.resumed, next.agentOf('ongoing-session').calls, next.agentOf('kept-session').calls], [[], [], []])
+})
+
+test('with 500 kept idle rows whose last turns ended cleanly or opened more than 24 h ago, the hook lists none and the team\'s pass resolves none of them; a row with a turn opened in the last 24 h and every working run\'s Session are listed (:191)', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const at = Date.now() - 60_000
+  const omniRows = {}
+  for (let index = 0; index < 500; index += 1) {
+    // Half ended their last turn cleanly; half opened one more than 24 h ago.
+    const turnOpenAt = index % 2 === 0 ? null : Date.now() - CUT_WINDOW_MS - 60_000
+    omniRows[`idle-${index}`] = row(`idle-${index}`, index % 3 === 0 ? 'ongoing' : 'run', { turnOpenAt, at: index })
+  }
+  omniRows['open-row'] = row('open-row', 'run', { turnOpenAt: at, at: 600 })
+  omniRows['working-row'] = row('working-row', 'run', { at: 601 })
+  const home = homeFor(t, undefined, teamState({
+    subscriptions: {},
+    omniRows,
+    subscriptionRuns: [{ id: 'run-w', subId: 'sub-gone', standing: true, sessionId: 'working-row', status: 'working', turnId: '1', at }],
+  }))
+  const run = await boot(t, home)
+  for (const id of Object.keys(omniRows)) run.cut(id)
+  assert.deepEqual(run.registered[0].sessions().sort(), ['open-row', 'working-row'])
+  t.mock.timers.tick(3000)
+  const done = await run.team.resumesDone
+  await threadFlush()
+  assert.equal(run.resolved.filter(id => id.startsWith('idle-')).length, 0)
+  // Following the Omni Bot's model again at start opened none of them either.
+  assert.equal(run.selected.filter(([id]) => id.startsWith('idle-')).length, 0)
+  assert.deepEqual([...done.resumed].sort(), ['open-row', 'working-row'])
+  assert.equal(run.channels.omniRows.list().length, 502)
+})
+
+test('against a team stand-in with no hook a saved "new session" or "ongoing session" automation pauses with the reason at start, and nothing registers (:195)', async (t) => {
+  const home = homeFor(t, undefined, teamState({
+    subscriptions: { 'sub-new': sessionSub('sub-new', 'new'), 'sub-on': sessionSub('sub-on', 'ongoing') },
+    omniRows: { kept: row('kept', 'run', { subId: 'sub-new', turnOpenAt: Date.now() - 60_000 }) },
+  }))
+  const run = await boot(t, home, { mask: true })
+  await until(() => Object.values(run.channels.state.subscriptions).every(sub => sub.on === false))
+  assert.deepEqual(Object.values(run.channels.state.subscriptions).map(sub => [sub.id, sub.pausedReason]), [['sub-new', SESSION_NEEDS_TEAM], ['sub-on', SESSION_NEEDS_TEAM]])
+  assert.deepEqual([run.registered, run.channels.teamResume.ready], [[], false])
+  assert.doesNotMatch(run.ctx.registeredTools.get('save_automation').parameters.properties.worker.description, /session/)
+  // Its kept row still shows, so it can be removed.
+  assert.deepEqual(run.view().omniRows.map(item => item.sessionId), ['kept'])
 })
