@@ -17,9 +17,9 @@
 // list. A run there is held by the ask gate of its own tagged turn only (standing-runs.js),
 // and the team's restart pass finds the Session through state.agents and through the hook.
 import { z } from 'zod'
-import { archivedIds } from './omni-rows.js'
 import { fromTeam, TEAM_CONTRACT } from './resume-hook.js'
 import { ongoingSessions } from './standing-runs.js'
+import { archivedIds } from './threads.js'
 
 // Why a DSH bot is not offered, and an automation or a hand-off naming one is refused or paused.
 export const DSH_BOT_NEEDS_TEAM = 'Handing work to a DSH bot needs a newer Bot team.'

@@ -32,7 +32,7 @@
 // sets a standing Session's preset: the owner's own turns there keep the thread's usual
 // rules.
 import { z } from 'zod'
-import { closeRun, followupAndFlush, isAskRun, pruneRuns, readsOnly, runId } from './asks.js'
+import { closeRun, excerptOf, followupAndFlush, isAskRun, pruneRuns, readsOnly, runId } from './asks.js'
 
 /** The run a message was posted for: its `omni-run` tag's id, else null. */
 export const runTagOf = message => (message?.source?.kind === 'omni-run' ? message.source.runId : null)
@@ -242,7 +242,7 @@ export function install(rt) {
     const { event = {}, target } = run
     delete run.event
     delete run.target
-    Object.assign(run, { sessionId: run.sessionId ?? (target?.kind === 'session' ? target.id : null), turnId: null, from: event.chat ?? '', excerpt: event.text ? String(event.text).slice(0, 160) : '' })
+    Object.assign(run, { sessionId: run.sessionId ?? (target?.kind === 'session' ? target.id : null), turnId: null, from: event.chat ?? '', excerpt: excerptOf(event) })
     closeRun(run, 'failed', summary)
     ended(run)
   }
@@ -308,7 +308,7 @@ export function install(rt) {
     // The same record, now the run: it keeps its id, so the tag finds it.
     become({
       ...rest, standing: true, sessionId, status: 'working', turnId: null,
-      from: event.chat ?? sub.sources[0]?.name ?? '', excerpt: event.text ? String(event.text).slice(0, 160) : '',
+      from: event.chat ?? sub.sources[0]?.name ?? '', excerpt: excerptOf(event),
       summary: `Handed to ${PLACE[pick.target?.kind] ?? 'the thread'}.`, askFirst: sub.askFirst !== false, ...(event.test ? { test: true } : {}),
     })
     // Not posted unless the run is saved: a restart would find the event still queued and hand
@@ -358,7 +358,7 @@ export function install(rt) {
       // there instead of filling the log with copies.
       const sessionId = sessionNow(where)
       const newest = runs().find(run => isStandingRun(run) && (sameTarget(run.target, where) || (sessionId !== null && run.sessionId === sessionId)))
-      const excerpt = event?.text ? String(event.text).slice(0, 160) : ''
+      const excerpt = excerptOf(event)
       if (newest?.status === 'failed' && newest.subId === sub.id && Number.isInteger(newest.count)) {
         newest.count += 1
         Object.assign(newest, { endedAt: Date.now(), from: event?.chat ?? '', excerpt, summary: notHandedOver(newest.count, where.kind) })

@@ -18,6 +18,7 @@
 // that starts carries the run's own tag.
 import { isResumeMessage } from './resume-hook.js'
 import { isStandingRun, runTagOf, turnOutcome, wordsOf } from './standing-runs.js'
+import { archivedIds } from './threads.js'
 
 export const NOT_PICKED_UP = 'Stopped by a DSH restart and not picked up'
 const DROPPED = 'Stopped by a DSH restart before its turn started: DSH dropped its event, so nothing ran.'
@@ -147,6 +148,23 @@ export function lastTurnIn(session, cutByRestart) {
   return { cut: end === undefined || cutByRestart(end.data?.reason), reason: end?.data?.reason, words }
 }
 
+/**
+ * The one wake (Decision 6), of a run here and of a hand-off (handoff.js): the pending message
+ * moved to the back of its Session's inbox, which starts the Session's turn (the move is the
+ * wake), then the Session flushed, which only writes it to storage. A message a turn took
+ * meanwhile waits for that turn; a move that throws hands its error to `failed`; a flush that
+ * throws is only warned of, as `flushing`.
+ */
+export async function wakeOnce(rt, agent, message, { failed, flushing }) {
+  try {
+    if (!rt.standingRuns.requeue(agent, message)) return
+  } catch (error) {
+    await failed(error)
+    return
+  }
+  await (async () => rt.ctx.sessions.flush(agent.session))().catch(error => rt.warn(`omni-channels: ${flushing}: %s`, error?.message ?? error))
+}
+
 export function install(rt) {
   const { ctx, state } = rt
   const standing = rt.standingRuns
@@ -155,17 +173,10 @@ export function install(rt) {
   const persist = () => Promise.resolve(rt.save()).catch(error => warn('saving a standing run failed', error))
   const cutByRestart = reason => rt.cutByRestart?.(reason) === true
   const workingIn = sessionId => runs().filter(run => run.sessionId === sessionId && run.status === 'working' && isStandingRun(run))
-  const archived = () => {
-    try {
-      return new Set(ctx.workspaceRegistry?.archivedSessionIds ?? [])
-    } catch {
-      return new Set()
-    }
-  }
 
   // The hook's Sessions: every working standing run's.
   rt.teamResume.addSessions(() => {
-    const gone = archived()
+    const gone = archivedIds(ctx)
     return runs().filter(run => run.status === 'working' && isStandingRun(run) && typeof run.sessionId === 'string' && !gone.has(run.sessionId)).map(run => run.sessionId)
   })
 
@@ -232,24 +243,12 @@ export function install(rt) {
       else if (!pickedUp && !running) standing.finish(run.id, 'failed', NOT_PICKED_UP)
       return
     }
-    if (archived().has(sessionId)) return standing.finish(run.id, 'failed', ARCHIVED)
+    if (archivedIds(ctx).has(sessionId)) return standing.finish(run.id, 'failed', ARCHIVED)
     if (agent === undefined) return standing.finish(run.id, 'failed', unreadable(failure))
     const message = [...(agent.inbox?.nextStep ?? []), ...(agent.inbox?.nextTurn ?? [])].find(item => runTagOf(item) === run.id)
     const choice = decideUnbound({ pending: message !== undefined, taken: standing.taken(run.id), pickedUp, running })
+    // Woken once (wakeOnce); a move that throws ends the run.
     if (choice === 'fail') standing.finish(run.id, 'failed', DROPPED)
-    else if (choice === 'wake') await wake(run, agent, message)
-  }
-
-  // Woken once: its follow-up moved to the back of the inbox, which starts the Session's turn
-  // (the move is the wake), then the Session flushed, which only writes it to storage. A
-  // follow-up a turn took meanwhile waits for that turn; a move that throws ends the run.
-  async function wake(run, agent, message) {
-    try {
-      if (!standing.requeue(agent, message)) return
-    } catch (error) {
-      standing.finish(run.id, 'failed', unwoken(error))
-      return
-    }
-    await (async () => ctx.sessions.flush(agent.session))().catch(error => warn(`flushing the Session ${run.sessionId} after its wake failed`, error))
+    else if (choice === 'wake') await wakeOnce(rt, agent, message, { failed: error => standing.finish(run.id, 'failed', unwoken(error)), flushing: `flushing the Session ${run.sessionId} after its wake failed` })
   }
 }

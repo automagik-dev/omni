@@ -145,6 +145,15 @@ export function followOmniModel(rt, sessionId, { select = true } = {}) {
   return () => { followers.delete(sessionId) }
 }
 
+/** The Sessions DSH archived, read without waiting; none before its registry is up. */
+export function archivedIds(ctx) {
+  try {
+    return new Set(ctx.workspaceRegistry?.archivedSessionIds ?? [])
+  } catch {
+    return new Set()
+  }
+}
+
 export function install(rt) {
   const { ctx, state } = rt
   const threads = () => (state.omniThreads ??= {})
@@ -157,14 +166,6 @@ export function install(rt) {
   }
   const bySession = sessionId => (typeof sessionId === 'string' ? Object.values(threads()).find(thread => valid(thread) && thread.sessionId === sessionId) : undefined)
   const persist = () => void Promise.resolve(rt.save()).catch(error => rt.warn('omni-channels: saving a thread failed: %s', error?.message ?? error))
-  // What DSH archived, read without waiting; none before its registry is up.
-  const archived = () => {
-    try {
-      return new Set(ctx.workspaceRegistry?.archivedSessionIds ?? [])
-    } catch {
-      return new Set()
-    }
-  }
 
   const added = []
   const removed = []
@@ -200,7 +201,7 @@ export function install(rt) {
       const key = route === undefined ? null : JSON.stringify(route)
       if (key === null || key === applied) return
       applied = key
-      const gone = archived()
+      const gone = archivedIds(ctx)
       for (const sessionId of new Set([...list().map(thread => thread.sessionId), ...followers])) {
         if (gone.has(sessionId)) continue
         await rt.selectSessionModel(sessionId, route).catch(error => rt.warn('omni-channels: the Omni Bot\'s model was not applied to %s: %s', sessionId, error?.message ?? error))
@@ -271,7 +272,7 @@ export function install(rt) {
   // not end cleanly. An idle thread, or one DSH archived, is never listed.
   rt.teamResume?.addSessions(() => {
     const now = Date.now()
-    const gone = archived()
+    const gone = archivedIds(ctx)
     return list().filter(thread => Number.isFinite(thread.turnOpenAt) && now - thread.turnOpenAt < CUT_WINDOW_MS && !gone.has(thread.sessionId)).map(thread => thread.sessionId)
   })
 

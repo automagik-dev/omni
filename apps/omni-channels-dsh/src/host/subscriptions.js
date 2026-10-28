@@ -6,7 +6,7 @@
 // state.subscriptions, the name they had first.)
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { z } from 'zod'
-import { closeRun, fenced, isAskRun, pruneRuns, readsOnly, RUNS_KEPT, runId, SUMMARY_MAX } from './asks.js'
+import { closeRun, excerptOf, fenced, isAskRun, pruneRuns, readsOnly, RUNS_KEPT, runId, SUMMARY_MAX } from './asks.js'
 import { DSH_BOT_NEEDS_TEAM } from './dsh-bots.js'
 import { operatesOmni } from './grants.js'
 import { createPlainSession, setReadOnly } from './omni-rows.js'
@@ -335,7 +335,7 @@ export function install(rt) {
     const task = worker.kind !== 'bot' || worker.mode !== 'chat'
     const run = {
       id: runId('run'), subId: sub.id, at: Date.now(), status: 'working',
-      from: event.chat ?? sub.sources[0]?.name ?? '', excerpt: event.text ? event.text.slice(0, 160) : '', summary: `Handing it to ${nameOfWorker(worker)}…`,
+      from: event.chat ?? sub.sources[0]?.name ?? '', excerpt: excerptOf(event), summary: `Handing it to ${nameOfWorker(worker)}…`,
       ...(event.test ? { test: true } : {}), ...(task ? { task: true } : {}), ...(botId ? { botId } : {}),
     }
     const text = taskText(sub, event)
@@ -395,7 +395,7 @@ export function install(rt) {
     if (failure === undefined) return rt.standingRuns.enqueue({ kind: 'session', id: sessionId }, sub, event)
     const run = {
       id: runId('run'), subId: sub.id, standing: true, sessionId: sessionId ?? null, status: 'failed', turnId: null, at: Date.now(), endedAt: Date.now(),
-      from: event.chat ?? sub.sources[0]?.name ?? '', excerpt: event.text ? String(event.text).slice(0, 160) : '', summary: failure,
+      from: event.chat ?? sub.sources[0]?.name ?? '', excerpt: excerptOf(event), summary: failure,
       ...(event.test ? { test: true } : {}),
     }
     state.subscriptionRuns = pruneRuns([run, ...runs()])
@@ -514,7 +514,7 @@ export function install(rt) {
   const boardRun = (run) => {
     if (run.status !== 'queued') return run
     const { event, ...rest } = run
-    return { ...rest, from: event?.chat ?? '', excerpt: event?.text ? String(event.text).slice(0, 160) : '', summary: 'Waiting for the run before it to end.', ...(event?.test ? { test: true } : {}) }
+    return { ...rest, from: event?.chat ?? '', excerpt: excerptOf(event), summary: 'Waiting for the run before it to end.', ...(event?.test ? { test: true } : {}) }
   }
   rt.subscriptionsView = () => ({
     subscriptions: Object.values(subs()).sort((a, b) => a.createdAt - b.createdAt),

@@ -25,12 +25,13 @@ import { z } from 'zod'
 import { followupAndFlush } from './asks.js'
 import { DSH_BOT_NEEDS_TEAM } from './dsh-bots.js'
 import { operatesOmni } from './grants.js'
-import { archivedIds, createPlainSession } from './omni-rows.js'
+import { createPlainSession } from './omni-rows.js'
 import { HANDOFF_TOOL } from './omni-rules.js'
 import { output } from './output.js'
 import { isResumeMessage, NEEDS_NEWER_TEAM } from './resume-hook.js'
-import { decideUnbound, lastTurnIn, turnOpening } from './standing-recovery.js'
+import { decideUnbound, lastTurnIn, turnOpening, wakeOnce } from './standing-recovery.js'
 import { textOf, turnOutcome, wordsOf } from './standing-runs.js'
+import { archivedIds } from './threads.js'
 
 const TITLE_MAX = 80
 const INSTRUCTIONS_MAX = 8000
@@ -303,19 +304,7 @@ export function install(rt) {
     const message = [...(agent.inbox?.nextStep ?? []), ...(agent.inbox?.nextTurn ?? [])].find(item => handoffOf(item) === sessionId)
     const choice = decideUnbound({ pending: message !== undefined, taken: claimed.has(sessionId), pickedUp, running })
     if (choice === 'fail') return report(sessionId, NOT_STARTED_REPORT)
-    if (choice === 'wake') await wake(sessionId, agent, message)
-  }
-
-  // Woken once, as standing-recovery.js wakes a run: its instructions moved to the back of
-  // the inbox, which starts its turn, then the Session flushed, which only writes it to
-  // storage. A move that throws reports that nothing ran.
-  async function wake(sessionId, agent, message) {
-    try {
-      if (!rt.standingRuns.requeue(agent, message)) return
-    } catch (error) {
-      await report(sessionId, unwoken(error))
-      return
-    }
-    await (async () => ctx.sessions.flush(agent.session))().catch(error => warn(`flushing the hand-off Session ${sessionId} after its wake failed`, error))
+    // Woken once, as a run is (wakeOnce); a move that throws reports that nothing ran.
+    if (choice === 'wake') await wakeOnce(rt, agent, message, { failed: error => report(sessionId, unwoken(error)), flushing: `flushing the hand-off Session ${sessionId} after its wake failed` })
   }
 }

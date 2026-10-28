@@ -13,7 +13,7 @@
 // subscriptions.js imports this module, never the reverse.
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { HANDOFF_TOOL } from './omni-rules.js'
-import { selectOmniModel } from './threads.js'
+import { archivedIds, selectOmniModel } from './threads.js'
 
 // How many ended automation runs the board keeps.
 export const RUNS_KEPT = 40
@@ -49,6 +49,9 @@ export const readsOnly = exec => READ_TOOLS.has(exec.name) || (exec.name === 'om
 
 // The longest summary a run shows on the board, in characters.
 export const SUMMARY_MAX = 280
+
+/** The start of an event's text a run shows on the board: its first 160 characters. */
+export const excerptOf = event => (event?.text ? String(event.text).slice(0, 160) : '')
 
 /** An automation run ended: its status, its summary on one line, and when. */
 export function closeRun(run, status, summary) {
@@ -218,15 +221,8 @@ export function install(rt) {
 
   // The restart hook lists every working ask's Session; the team found it already, as the
   // Omni Bot's run, and resumes it that way.
-  const archived = () => {
-    try {
-      return new Set(ctx.workspaceRegistry?.archivedSessionIds ?? [])
-    } catch {
-      return new Set()
-    }
-  }
   rt.teamResume?.addSessions(() => {
-    const gone = archived()
+    const gone = archivedIds(ctx)
     return runs().filter(run => isAskRun(run) && run.status === 'working' && !gone.has(run.sessionId)).map(run => run.sessionId)
   })
   // Once the team's resumes are done: an ask neither resumed nor sent again (Decision 7) and

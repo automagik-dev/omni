@@ -365,3 +365,43 @@ export const saved = home => JSON.parse(readFileSync(join(home, 'state.json'), '
 export const keysOf = home => (existsSync(join(home, KEYS_FILE)) ? JSON.parse(readFileSync(join(home, KEYS_FILE), 'utf8')) : null)
 // A guard's answer for one tool call in one Session: the first refusal, else undefined.
 export const guarded = (ctx, sessionId, name) => ctx.guards.map(guard => guard({ name, agent: { id: sessionId } })).find(answer => answer !== undefined)
+
+// DSH's tool pipeline, played in its order (test/thread-tools.test.js and the old-team sweep):
+// the tools/pre-execute waterfall, the approval card when it asks (DSH's answerer is the last
+// link), the guards, then the tool.
+// One tool's body in a Session, as DSH calls it once every gate let it through.
+export const use = (run, name, sessionId, args = {}) => run.ctx.registeredTools.get(name).execute(args, { agent: run.agentOf(sessionId) })
+// The tools/pre-execute waterfall for one call: every listener in order, then `last`.
+export const preExecute = (run, name, sessionId, args = {}, last = { kind: 'allow' }) => {
+  const chain = [...(run.ctx.listeners.get('tools/pre-execute') ?? [])]
+  const exec = { name, arguments: args, agent: run.agentOf(sessionId) }
+  const step = index => (index < chain.length ? chain[index](exec, () => step(index + 1)) : Promise.resolve(last))
+  return step(0)
+}
+// DSH's approval: the approval/request middleware (each prepended, so the last registered
+// runs first), ending in DSH's own card, which the user answers with `answer`.
+const approve = (run, request, card) => {
+  const chain = [...(run.ctx.listeners.get('approval/request') ?? [])].reverse()
+  const step = index => (index < chain.length ? Promise.resolve(chain[index](request, () => step(index + 1))) : Promise.resolve(card()))
+  return step(0)
+}
+// One call through DSH's pipeline: whether the card showed, and the tool's answer.
+export async function dsh(run, name, sessionId, args = {}, answer = 'allowed-once') {
+  const decision = await preExecute(run, name, sessionId, args)
+  let card = false
+  // The thread's status while its card is up.
+  let waiting = null
+  if (decision.kind === 'ask') {
+    const outcome = await approve(run, { agent: run.agentOf(sessionId), toolName: name, reason: decision.reason }, () => {
+      card = true
+      waiting = run.channels.threads.bySession(sessionId)?.status ?? null
+      return answer
+    })
+    if (outcome !== 'allowed-once') return { card, waiting, result: `Error: the user rejected tool "${name}"` }
+  } else if (decision.kind !== 'allow') {
+    return { card, result: `Error: ${decision.reason}` }
+  }
+  const refused = guarded(run.ctx, sessionId, name)
+  if (refused !== undefined) return { card, result: `Error: ${refused}` }
+  return { card, waiting, decision, result: await use(run, name, sessionId, args) }
+}

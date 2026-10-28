@@ -22,7 +22,7 @@ import { NOT_LINKED } from '../src/host/thread-keys.js'
 import { RUNS_KEPT, isAskRun } from '../src/host/subscriptions.js'
 import { FREE_REACTIONS_DEFAULT, isFreeReaction, NOT_A_THREAD, permissionsOf, withoutThreadTools } from '../src/host/thread-tools.js'
 import { THREAD_DEFAULTS, threadDefaultsOf, threadInstructions, THREAD_REFUSAL, THREAD_TOOLS } from '../src/host/threads.js'
-import { askedOf, boot, CHAT, CHATS, flush, GROUP, guarded, homeFor, INSTANCE, keysOf, MESSAGE_IDS, PNG, record, resetFetch, saved, teamState, fakeOmni, until } from './thread-fixture.js'
+import { askedOf, boot, CHAT, CHATS, dsh, flush, GROUP, guarded, homeFor, INSTANCE, keysOf, MESSAGE_IDS, PNG, preExecute, record, resetFetch, saved, teamState, fakeOmni, until, use } from './thread-fixture.js'
 
 afterEach(resetFetch)
 
@@ -62,42 +62,6 @@ async function bench(t, { chat = CHAT, sees = true, store = pictureStore(), mask
   return { omni, home, run: await boot(t, home, { mask: true, services }), thread, key, store }
 }
 
-// One tool's body in a Session, as DSH calls it once every gate let it through.
-const use = (run, name, sessionId, args = {}) => run.ctx.registeredTools.get(name).execute(args, { agent: run.agentOf(sessionId) })
-// The tools/pre-execute waterfall for one call: every listener in order, then `last`.
-const preExecute = (run, name, sessionId, args = {}, last = { kind: 'allow' }) => {
-  const chain = [...(run.ctx.listeners.get('tools/pre-execute') ?? [])]
-  const exec = { name, arguments: args, agent: run.agentOf(sessionId) }
-  const step = index => (index < chain.length ? chain[index](exec, () => step(index + 1)) : Promise.resolve(last))
-  return step(0)
-}
-// DSH's approval: the approval/request middleware (each prepended, so the last registered
-// runs first), ending in DSH's own card, which the user answers with `answer`.
-const approve = (run, request, card) => {
-  const chain = [...(run.ctx.listeners.get('approval/request') ?? [])].reverse()
-  const step = index => (index < chain.length ? Promise.resolve(chain[index](request, () => step(index + 1))) : Promise.resolve(card()))
-  return step(0)
-}
-// One call through DSH's pipeline: whether the card showed, and the tool's answer.
-async function dsh(run, name, sessionId, args = {}, answer = 'allowed-once') {
-  const decision = await preExecute(run, name, sessionId, args)
-  let card = false
-  // The thread's status while its card is up.
-  let waiting = null
-  if (decision.kind === 'ask') {
-    const outcome = await approve(run, { agent: run.agentOf(sessionId), toolName: name, reason: decision.reason }, () => {
-      card = true
-      waiting = run.channels.threads.bySession(sessionId)?.status ?? null
-      return answer
-    })
-    if (outcome !== 'allowed-once') return { card, waiting, result: `Error: the user rejected tool "${name}"` }
-  } else if (decision.kind !== 'allow') {
-    return { card, result: `Error: ${decision.reason}` }
-  }
-  const refused = guarded(run.ctx, sessionId, name)
-  if (refused !== undefined) return { card, result: `Error: ${refused}` }
-  return { card, waiting, decision, result: await use(run, name, sessionId, args) }
-}
 const asked = (omni, from) => askedOf(omni).slice(from)
 // The tools whose calls may raise a card: a refused call is denied before the card, so DSH
 // answers it as an error.

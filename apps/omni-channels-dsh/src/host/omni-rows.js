@@ -20,7 +20,7 @@ import { z } from 'zod'
 import { denyEach } from './omni-api.js'
 import { HANDOFF_TOOL } from './omni-rules.js'
 import { isStandingRun, ongoingSessions } from './standing-runs.js'
-import { CUT_WINDOW_MS, followOmniModel, selectOmniModel, THREAD_TOOLS } from './threads.js'
+import { archivedIds, CUT_WINDOW_MS, followOmniModel, selectOmniModel, THREAD_TOOLS } from './threads.js'
 
 // Every tool the Bot team registers for Bots, which its own DSH bot and task Sessions never
 // get (copied from @automagik/bots-dsh 3.32.1, src/host/constants.js TEAM_TOOLS; its agents.js
@@ -114,15 +114,6 @@ export async function setReadOnly(rt, sessionId) {
   return before
 }
 
-/** The Sessions DSH archived, read without waiting; none before its registry is up. */
-export function archivedIds(ctx) {
-  try {
-    return new Set(ctx.workspaceRegistry?.archivedSessionIds ?? [])
-  } catch {
-    return new Set()
-  }
-}
-
 export function install(rt) {
   const { ctx, state } = rt
   const rows = () => (state.omniRows ??= {})
@@ -137,7 +128,6 @@ export function install(rt) {
     return valid(row) && row.sessionId === sessionId ? row : undefined
   }
   const list = () => Object.values(rows()).filter(valid).sort((a, b) => a.at - b.at)
-  const archived = () => archivedIds(ctx)
   const unfollows = new Map()
   // Rows being removed: from before their archive starts (DSH may end their turn inside it),
   // their Session takes no more events, and an ongoing automation's next one gets a new one.
@@ -160,7 +150,7 @@ export function install(rt) {
   const { of: ongoingOf, ensure: ensureOngoing } = ongoingSessions({
     subs,
     fits: sub => sub?.worker?.kind === 'session' && sub.worker.mode === 'ongoing',
-    stateOf: sessionId => (!takes(sessionId) ? 'removed' : archived().has(sessionId) ? 'archived' : 'live'),
+    stateOf: sessionId => (!takes(sessionId) ? 'removed' : archivedIds(ctx).has(sessionId) ? 'archived' : 'live'),
     make: sub => createPlainSession(rt, sub.name),
     keep: (sessionId, sub) => add({ sessionId, kind: 'ongoing', title: sub.name, subId: sub.id, turnOpenAt: null, at: Date.now() }),
   })
@@ -265,7 +255,7 @@ export function install(rt) {
   // end cleanly. An idle row, or one DSH archived, is never listed.
   rt.teamResume?.addSessions(() => {
     const now = Date.now()
-    const gone = archived()
+    const gone = archivedIds(ctx)
     return list().filter(row => Number.isFinite(row.turnOpenAt) && now - row.turnOpenAt < CUT_WINDOW_MS && !gone.has(row.sessionId)).map(row => row.sessionId)
   })
 

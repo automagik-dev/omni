@@ -1,16 +1,22 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { createRuntime as createTeam } from '@automagik/bots-dsh'
 import { createRuntime } from '../index.js'
+import { DSH_BOT_NEEDS_TEAM } from '../src/host/dsh-bots.js'
+import { START_TASK_REFUSAL } from '../src/host/grants.js'
+import { HANDOFF_NEEDS_TEAM } from '../src/host/handoff.js'
+import { HANDOFF_TOOL } from '../src/host/omni-rules.js'
 import { install, isResumeMessage, NEEDS_NEWER_TEAM, TEAM_CONTRACT } from '../src/host/resume-hook.js'
 import { decideUnbound, NOT_PICKED_UP } from '../src/host/standing-recovery.js'
-import { SESSION_NEEDS_TEAM } from '../src/host/subscriptions.js'
-import { CUT_WINDOW_MS } from '../src/host/threads.js'
-import { fakeContext } from './team.js'
-import { boot, gateOf, homeFor, logOf, record, teamState, flush as threadFlush, turn, until } from './thread-fixture.js'
+import { SESSION_NEEDS_TEAM, THREAD_NEEDS_TEAM } from '../src/host/subscriptions.js'
+import { CUT_WINDOW_MS, THREAD_TOOLS } from '../src/host/threads.js'
+import { all, bundleClient, byLabel, column, mount, one, plain as asValue, react, text } from './client-stand-in.js'
+import { omni as teamClient } from './omni-client.js'
+import { fakeContext, teamFile } from './team.js'
+import { askedOf, boot, CHAT, dsh, eventFor, gateOf, guarded, homeFor, INSTANCE, logOf, MESSAGE_IDS, MESSAGES, record, restart, signal, teamState, flush as threadFlush, turn, until, watchedOmni } from './thread-fixture.js'
 
 const flush = async () => {
   for (let round = 0; round < 20; round += 1) await new Promise(resolve => setImmediate(resolve))
@@ -792,4 +798,250 @@ test('a cut DSH-bot run is bound after a restart: its Session is in state.agents
   await threadFlush()
   assert.deepEqual([runOf().status, runOf().summary], ['done', 'Went on.'])
   assert.equal(run.registered[0].sessions().includes('dsh-session'), false)
+})
+
+// Group 17: the old-team sweep (:195), every part at once on one home. A first start on the
+// floor release, with the hook, adds a chat and saves an automation of each kind that needs it;
+// the next start is on a stand-in of a team without the hook (`mask`). The host half runs
+// against the real team under this plugin; the client half draws this plugin's own tree and
+// phone pane (client-stand-in.js) from that start's real view, their `call` answered by that
+// start's own endpoints, so the rows the owner sees are the ones this host makes.
+test('the old-team sweep: on a team stand-in with no rt.resumable or rt.resumesDone, no + and the reason on the rows, a row that never opens its Session, the five thread tools refusing with no Omni request, no thread, session or DSH-bot worker and the saved ones paused, the hand-off refused, no Tasks agent, nothing registered, no recovery; the routes, the phone pane and an Omni Bot automation still work (:195)', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const omni = watchedOmni(t)
+  const coder = { id: 'coder', kind: 'dsh', name: 'Coder', workDir: import.meta.dirname, sessions: [], createdAt: 1 }
+  const home = homeFor(t, omni, teamState({ agents: { coder } }))
+  // DSH's permission presets, each Session's own.
+  const presetOf = new Map()
+  const presets = {
+    set: (session, name) => { presetOf.set(session.id, name) },
+    catalog: () => ({ options: ['read-only', 'workspace-write'].map(value => ({ value, name: value })), defaultPreset: 'workspace-write' }),
+    current: session => presetOf.get(session.id) ?? 'workspace-write',
+  }
+  const services = { permissionPresets: presets }
+  const tool = (run, name, args) => run.ctx.registeredTools.get(name).execute(args, { agent: { id: 'm1' } })
+  const save = (run, worker) => tool(run, 'save_automation', { sources: `chat:${CHAT}`, trigger: 'message', worker })
+  const NEEDS = { thread: THREAD_NEEDS_TEAM, 'new session': SESSION_NEEDS_TEAM, 'ongoing session': SESSION_NEEDS_TEAM, 'dshbot:Coder': DSH_BOT_NEEDS_TEAM }
+
+  const first = await boot(t, home, { services })
+  await signal(t, first)
+  const added = await first.channels.threads.add(INSTANCE, CHAT)
+  assert.equal(added.ok, true, added.reason)
+  const { thread } = added
+  for (const worker of Object.keys(NEEDS)) assert.match(await save(first, worker === 'thread' ? `thread:${thread.id}` : worker), /^Saved /, worker)
+  const saved = Object.values(first.channels.state.subscriptions)
+  // The thread's automation has a run working in the thread when DSH stops, its turn open.
+  const working = await first.channels.fireSubscription(saved[0], eventFor('Oi'))
+  await until(() => first.agentOf(thread.sessionId).calls.length === 1)
+  first.emit(thread.sessionId, 'turn/start', { turn: 1 }, Date.now())
+
+  const run = await restart(t, first, home, { mask: true, services })
+  const asked = askedOf(omni).length
+  const recovered = []
+  run.channels.teamResume.addRecovery(outcome => recovered.push(outcome))
+  run.cut(thread.sessionId)
+  await until(() => Object.values(run.channels.state.subscriptions).every(sub => sub.on === false))
+
+  // Not ready, with the one reason; nothing registers, and the team's pass, over, runs no
+  // recovery here: the run it left stays as it was, its Session posted nothing and not woken.
+  assert.deepEqual([run.channels.teamResume.ready, run.channels.teamResume.reason, run.registered], [false, NEEDS_NEWER_TEAM, []])
+  const flushed = []
+  run.ctx.sessions.flush = async session => flushed.push(session.id)
+  t.mock.timers.tick(24 * 60 * 60 * 1000)
+  assert.equal((await run.team.resumesDone).resumed.includes(thread.sessionId), false)
+  await threadFlush()
+  const runOf = id => run.channels.state.subscriptionRuns.find(item => item.id === id)
+  assert.deepEqual([recovered, flushed, runOf(working.id).status, run.agentOf(thread.sessionId).calls], [[], [], 'working', []])
+
+  // The worker list offers none of the four, a saved one is paused with its reason on the
+  // board, and saving one again is refused with it.
+  const board = run.view().subscriptions
+  assert.deepEqual(board.map(sub => [sub.id, sub.on, sub.pausedReason]), saved.map((sub, index) => [sub.id, false, Object.values(NEEDS)[index]]))
+  const offered = run.ctx.registeredTools.get('save_automation').parameters.properties.worker.description
+  assert.doesNotMatch(offered, /thread|session|dshbot/)
+  assert.doesNotMatch(await tool(run, 'find_chats', {}), /thread:|dshbot:/)
+  for (const [worker, reason] of Object.entries(NEEDS)) assert.equal(await save(run, worker === 'thread' ? `thread:${thread.id}` : worker), `Not saved: ${reason}`, worker)
+
+  // The hand-off refuses with its own reason, start_task stays refused, and nothing reaches Tasks.
+  assert.equal(await tool(run, HANDOFF_TOOL, { title: 'Fix the build', instructions: 'Run the tests.' }), `Not handed off: ${HANDOFF_NEEDS_TEAM}`)
+  assert.equal(guarded(run.ctx, 'm1', 'start_task'), START_TASK_REFUSAL)
+
+  // An automation whose worker is the Omni Bot still runs: its event reaches the Omni Bot.
+  assert.match(await save(run, 'me'), /^Saved /)
+  const omniBot = Object.values(run.channels.state.subscriptions).at(-1)
+  const ran = await run.channels.fireSubscription(omniBot, eventFor('Chegou'))
+  await until(() => run.agentOf(ran.sessionId).calls.length === 1)
+  assert.deepEqual([runOf(ran.id).status, runOf(ran.id).botId], ['working', 'm1'])
+  assert.match(run.agentOf(ran.sessionId).calls[0].content.map(block => block.text).join(''), /Chegou/)
+  assert.deepEqual(run.channels.state.agents, { coder })
+  // The Omni Bot still reads Omni's routes on the link key.
+  assert.match(await tool(run, 'find_chats', {}), new RegExp(`chat:${CHAT} · .*Marina`))
+
+  // Each thread tool, in the thread's Session, refuses with the reason and asks Omni nothing:
+  // every fetch is counted, also the routes watchedOmni answers itself.
+  const from = askedOf(omni).length
+  const fetched = []
+  const watched = globalThis.fetch
+  globalThis.fetch = (address, init) => {
+    fetched.push(String(address))
+    return watched(address, init)
+  }
+  const args = { thread_say: { text: 'oi' }, thread_react: { messageId: MESSAGE_IDS.text, emoji: '🔥' }, thread_history: {}, thread_picture: { messageId: MESSAGE_IDS.picture }, thread_ask_omni: { question: 'Oi?' } }
+  for (const name of THREAD_TOOLS) {
+    const { card, result } = await dsh(run, name, thread.sessionId, args[name])
+    assert.equal(card, false, name)
+    assert.equal(name === 'thread_picture' ? result.text : result, `${['thread_say', 'thread_react'].includes(name) ? 'Error: ' : ''}${NEEDS_NEWER_TEAM}`, name)
+  }
+  globalThis.fetch = watched
+  assert.deepEqual([fetched.filter(address => !address.includes('/events/')), askedOf(omni).slice(from), omni.sent], [[], [], []])
+
+  // The client: the tree on this start's own view and endpoints.
+  const calls = []
+  const call = async (endpoint, body) => {
+    calls.push(endpoint)
+    const known = run.team.extended.endpointOf(endpoint)
+    return known ? asValue(await known.fn(asValue(body))) : {}
+  }
+  const storage = new Map([['omni.tree.open', JSON.stringify([INSTANCE])]])
+  const localStorage = { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, String(value)), removeItem: key => storage.delete(key) }
+  const document = { hidden: false, body: { dataset: {} }, addEventListener: () => {}, removeEventListener: () => {} }
+  const ui = await bundleClient([
+    'export { OmniTree } from \'./omni-tree.js\'',
+    'export { omniStore } from \'./omni-store.js\'',
+    'export { installPhone } from \'./omni-phone.js\'',
+  ], { globals: { URL, URLSearchParams, setTimeout: () => 0, clearTimeout: () => {}, document, localStorage }, team: { omni: { ...teamClient, call } } })
+  const overview = await call('omni-overview', {})
+  ui.omniStore.set({ ...ui.omniStore.getSnapshot(), preview: false, source: { kind: 'live', origin: overview.origin }, channels: overview.channels, chats: overview.chats, link: { origin: overview.origin, version: '2.261027.3', outdated: false } })
+  const roster = asValue(run.view())
+  const opened = []
+  const actions = { selectPanel: () => {}, openSession: id => opened.push(id) }
+  const stand = column()
+  t.after(ui.installPhone(stand.ctx, () => ({})))
+  const tree = mount(() => react.createElement(ui.OmniTree, { bot: { id: 'm1', kind: 'omni', name: 'Omni' }, wide: true, roster, actions }), { effects: false })
+  t.after(() => tree.unmount())
+  const root = tree.draw()
+  // The channel row offers no + and says why; the thread row shows the reason in place.
+  assert.equal(byLabel(root, 'Add a chat'), undefined)
+  assert.deepEqual(all(root, 'ot-empty').map(text), [NEEDS_NEWER_TEAM])
+  const row = one(root, 'bt-thread')
+  assert.deepEqual([row.props['data-thread-id'], text(one(row, 'ot-thread-reason')), row.props['aria-disabled']], [thread.id, NEEDS_NEWER_TEAM, true])
+  row.props.onClick()
+  // The row's phone action still opens the pane, which shows the chat through the link key.
+  one(root, 'ot-thread-phone').props.onClick()
+  assert.deepEqual(stand.opened, [['omni-phone', { params: { threadId: thread.id, chatId: CHAT } }]])
+  const tab = { id: 'tab-1', visible: true, navigation: { address: 'sidebar://omni-phone', params: stand.opened[0][1].params, revision: 1 } }
+  const phone = mount(() => react.createElement(stand.bodies[0].component, { useTabInfo: () => ({ tab }), sessionId: 'm1', useRoster: select => select(roster) }), { refs: true })
+  t.after(() => phone.unmount())
+  phone.draw()
+  await until(() => calls.includes('omni-messages'))
+  await threadFlush()
+  const shown = phone.draw()
+  assert.equal(one(shown, 'op-pane').props['data-thread-id'], thread.id)
+  assert.match(text(one(shown, 'op-head')), /^Marina/)
+  assert.equal(all(shown, 'oc-bubble').length, Object.values(MESSAGES).filter(message => message.chatId === CHAT).length)
+  // Clicking the row never opened its Session; the pane read the chat with the link key only.
+  assert.deepEqual(opened, [])
+  assert.deepEqual(new Set(omni.askedWith.slice(asked).filter(ask => !ask.route.includes(' /events/')).map(ask => ask.key)), new Set([omni.link.text]))
+  // After all of it: still nothing registered, and no Tasks agent.
+  assert.deepEqual([run.registered, run.channels.state.agents], [[], { coder }])
+})
+
+// Group 17 (:189): no resume pass of the plugin's own, read from every host file. None of the
+// team's resume is copied (its healCutSessions, its "[DeepSeek Harness restarted]" follow-up,
+// its resume text, state.omniResumes), nothing writes the team's resume marker, no module that
+// touches a restart sets a timer, and no rt.deliver or follow-up resumes a cut turn. The only
+// restart-cut code: rt.cutByRestart read on a turn's end (live, or in a Session's log), the
+// signal recovery's inbox read, and the one wake (inbox.remove + agent.followup, then flush).
+test('the plugin has no resume pass of its own: no copy of the team\'s, no resume text, timer or resuming delivery; its only restart-cut code is cutByRestart on a turn end, the recovery\'s inbox read and the one wake (:189)', async () => {
+  const dir = new URL('../src/host/', import.meta.url)
+  const files = Object.fromEntries(readdirSync(dir).filter(name => name.endsWith('.js')).sort().map(name => [name, readFileSync(new URL(name, dir), 'utf8')]))
+  // A file's code, line for line: block comments and line comments blanked, never the code
+  // around them.
+  const codeOf = (source) => {
+    let open = false
+    return source.split('\n').map((line) => {
+      let out = ''
+      let rest = line
+      while (rest !== '') {
+        if (open) {
+          const end = rest.indexOf('*/')
+          if (end === -1) return out
+          rest = rest.slice(end + 2)
+          open = false
+          continue
+        }
+        const start = rest.indexOf('/*')
+        const slashes = /^\s*\/\//.test(rest) ? 0 : -1
+        if (slashes === 0) return out
+        if (start === -1) return out + rest
+        out += rest.slice(0, start)
+        rest = rest.slice(start + 2)
+        open = true
+      }
+      return out
+    })
+  }
+  // Per file, how many code lines match `pattern`.
+  const count = pattern => Object.fromEntries(Object.entries(files)
+    .map(([name, source]) => [name, codeOf(source).filter(line => pattern.test(line)).length]).filter(([, n]) => n > 0))
+  // Not even in a comment.
+  for (const text of ['healCutSessions', '[DeepSeek Harness restarted]', 'omniResumes']) {
+    assert.deepEqual(Object.keys(files).filter(name => files[name].includes(text)), [], text)
+  }
+  // No sentence of the team's own resume text, and nothing writes its resume marker.
+  const { resumeText } = await import(teamFile('src/host/resume.js'))
+  const sentences = resumeText({ approval: { tool: 'bash', reason: 'x' } }).split(/(?<=[.:;]) /).map(part => part.slice(0, 40)).filter(part => part.length >= 20)
+  assert.ok(sentences.length >= 4)
+  for (const sentence of sentences) assert.deepEqual(Object.keys(files).filter(name => files[name].includes(sentence)), [], sentence)
+  assert.deepEqual(count(/resumed\s*:\s*true/), {})
+  // Timers only where nothing restarts: the event stream's backoff and its 30 s sync, the local
+  // CLI's kill, the pairing poll, and the key file's lock wait, heartbeat and drain.
+  assert.deepEqual(count(/\bset(Timeout|Interval)\(/), { 'omni-events.js': 2, 'omni-link.js': 1, 'omni-local.js': 1, 'thread-keys.js': 4 })
+  // Every delivery and follow-up: an ask, a permission note, a hand-off's report, an
+  // automation's task; a handed-over event or instruction, an ask's answer; the wake. None
+  // carries the marker or the team's resume roles.
+  const delivered = Object.entries(files).flatMap(([name, source]) => codeOf(source).filter(line => line.includes('rt.deliver(')).map(line => [name, /role: '([^']+)'/.exec(line)?.[1]]))
+  assert.deepEqual(delivered, [['asks.js', 'task'], ['grants.js', 'permission'], ['handoff.js', 'task-done'], ['subscriptions.js', 'task']])
+  assert.deepEqual(count(/\.(followup|steer)\(/), { 'asks.js': 1, 'standing-runs.js': 1 })
+  assert.deepEqual(count(/createUserMessage\(/), { 'asks.js': 1 })
+  assert.deepEqual(count(/await followupAndFlush\(rt,/), { 'asks.js': 1, 'handoff.js': 1, 'standing-runs.js': 1 })
+  // cutByRestart is read only on a turn's end, live or in a log: from each read of a reason, the
+  // nearest line that names a turn's start or end (that line included) names its end, or is a
+  // turn/start branch that returned before the read.
+  const onTurnEnd = (lines, index) => {
+    for (let at = index; at >= Math.max(0, index - 20); at -= 1) {
+      const line = lines[at]
+      if (line.includes('\'turn/end\'')) return true
+      if (!line.includes('\'turn/start\'')) continue
+      const indent = /^\s*/.exec(line)[0]
+      const between = lines.slice(at + 1, index)
+      const returned = between.findIndex(inner => /^\s*return\b/.test(inner))
+      return returned !== -1 && between.slice(returned + 1).some(inner => inner === `${indent}}`)
+    }
+    return false
+  }
+  const reads = Object.entries(files).flatMap(([name, source]) => {
+    const lines = codeOf(source)
+    return lines.flatMap((line, index) => (/cutByRestart(\?\.)?\(\w+(\.data)?\?\.reason\)/.test(line) ? [[name, onTurnEnd(lines, index)]] : []))
+  })
+  assert.deepEqual(reads.filter(([, onEnd]) => !onEnd), [])
+  assert.deepEqual([...new Set(reads.map(([name]) => name))], ['asks.js', 'handoff.js', 'omni-rows.js', 'standing-recovery.js', 'standing-runs.js', 'subscriptions.js', 'threads.js'])
+  // The signal recovery's inbox read, once in each recovery that decides unbound work.
+  assert.deepEqual(count(/inbox\?\.nextStep/), { 'handoff.js': 1, 'standing-recovery.js': 1 })
+  // The one wake: wakeOnce's requeue (the inbox move) and its flush, beside the hand-over's own.
+  assert.deepEqual(count(/\.requeue\(/), { 'standing-recovery.js': 1 })
+  assert.deepEqual(count(/inbox\.remove\(/), { 'standing-runs.js': 1 })
+  assert.deepEqual(count(/sessions\.flush\(/), { 'asks.js': 1, 'standing-recovery.js': 1 })
+  assert.deepEqual(count(/await wakeOnce\(rt,/), { 'handoff.js': 1, 'standing-recovery.js': 1 })
+  // Any other spelling of the same things (optional calls, destructuring, an un-awaited call, a
+  // promise timer, a computed key) still names them: every raw line naming one, comments
+  // included, is counted per file, so a new one fails here until it is reviewed.
+  const raw = pattern => Object.fromEntries(Object.entries(files)
+    .map(([name, source]) => [name, source.split('\n').filter(line => pattern.test(line)).length]).filter(([, n]) => n > 0))
+  assert.deepEqual(raw(/\bdeliver\b/), { 'asks.js': 3, 'grants.js': 1, 'handoff.js': 2, 'standing-recovery.js': 1, 'subscriptions.js': 1 })
+  assert.deepEqual(raw(/\bfollowup(AndFlush)?\b|\bsteer\b/), { 'asks.js': 3, 'handoff.js': 2, 'standing-runs.js': 3 })
+  assert.deepEqual(raw(/cutByRestart/), { 'asks.js': 1, 'handoff.js': 4, 'omni-rows.js': 1, 'standing-recovery.js': 9, 'standing-runs.js': 1, 'subscriptions.js': 1, 'threads.js': 1 })
+  assert.deepEqual(raw(/\bset(Timeout|Interval|Immediate)\b|timers\/promises|queueMicrotask|\bsleep\b/), { 'omni-events.js': 2, 'omni-link.js': 1, 'omni-local.js': 1, 'thread-keys.js': 4 })
+  assert.deepEqual(raw(/\bresumed\b/), { 'asks.js': 1, 'handoff.js': 6, 'omni-rows.js': 1, 'resume-hook.js': 15, 'standing-recovery.js': 7, 'subscriptions.js': 1 })
+  assert.deepEqual(raw(/\brequeue\b|\bwakeOnce\b/), { 'handoff.js': 3, 'standing-recovery.js': 4, 'standing-runs.js': 2 })
 })

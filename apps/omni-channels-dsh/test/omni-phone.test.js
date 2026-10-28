@@ -1,106 +1,17 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
-import { fileURLToPath } from 'node:url'
-import { runInNewContext } from 'node:vm'
-import { build } from 'esbuild'
 import { NEEDS_NEWER_TEAM, TEAM_CONTRACT } from '../src/host/resume-hook.js'
+import { all, bundleClient, column, mount as mountWith, nodes, ofType, one, plain, react, settle, text } from './client-stand-in.js'
 import { omni } from './omni-client.js'
 
 // The phone pane (omni-phone.js, phone-frame.js): a thread's chat in a drawn phone, a tab of
 // DSH's right column opened only from the thread. Drawn with a stand-in React and a stand-in
 // right column; the host is a stand-in `call`, so nothing leaves the test and nothing is sent.
 
-// -------------------------------------------------------------------------
-// A stand-in React that keeps hooks per component (as test/omni-tree.test.js does). A host
-// element's ref gets a stand-in node, as the DOM would give it.
-
-let current = null
-const changed = (before, deps) => deps === undefined || before === undefined || deps.some((dep, index) => !Object.is(dep, before[index]))
-const slot = () => current.index++
-const react = {
-  Fragment: Symbol('Fragment'),
-  createElement: (type, props, ...children) => ({ type, props: props ?? {}, children: children.flat() }),
-  useState(initial) {
-    const at = slot()
-    const own = current
-    if (!(at in own.slots)) own.slots[at] = typeof initial === 'function' ? initial() : initial
-    return [own.slots[at], (next) => { own.slots[at] = typeof next === 'function' ? next(own.slots[at]) : next }]
-  },
-  useRef(value) {
-    const at = slot()
-    if (!(at in current.slots)) current.slots[at] = { current: value }
-    return current.slots[at]
-  },
-  useMemo(make, deps) {
-    const at = slot()
-    const before = current.slots[at]
-    if (before === undefined || changed(before.deps, deps)) current.slots[at] = { value: make(), deps }
-    return current.slots[at].value
-  },
-  useCallback: fn => fn,
-  useEffect(run, deps) {
-    const at = slot()
-    const own = current
-    const before = own.slots[at]
-    if (before !== undefined && !changed(before.deps, deps)) return
-    own.slots[at] = { deps, cleanup: before?.cleanup }
-    own.effects.push(() => {
-      before?.cleanup?.()
-      own.slots[at].cleanup = run()
-    })
-  },
-  useId: () => 'id',
-  useSyncExternalStore: (_subscribe, get) => get(),
-}
-react.useLayoutEffect = (run, deps) => react.useEffect(run, deps)
-
-const standInNode = () => ({ closest: () => null, scrollTop: 0, scrollHeight: 100, clientHeight: 100 })
-function mount(root) {
-  const hooks = new Map()
-  const draw = (node, path) => {
-    if (Array.isArray(node)) return node.map((child, index) => draw(child, `${path}/${child?.props?.key ?? index}`))
-    if (node === null || typeof node !== 'object') return node
-    if (typeof node.type === 'function') {
-      const id = `${path}<${node.type.name}:${node.props.key ?? ''}>`
-      if (!hooks.has(id)) hooks.set(id, { slots: [], effects: [] })
-      const own = hooks.get(id)
-      const before = current
-      current = own
-      own.index = 0
-      let out
-      try {
-        out = node.type({ ...node.props, children: node.children })
-      } finally {
-        current = before
-      }
-      const drawn = draw(out, id)
-      for (const effect of own.effects.splice(0)) effect()
-      return drawn
-    }
-    if (node.props.ref && typeof node.props.ref === 'object' && node.props.ref.current == null) node.props.ref.current = standInNode()
-    return { ...node, children: node.children.map((child, index) => draw(child, `${path}/${child?.props?.key ?? index}`)) }
-  }
-  return {
-    draw: () => draw(root(), ''),
-    unmount: () => { for (const own of hooks.values()) for (const kept of own.slots) kept?.cleanup?.() },
-  }
-}
-
-const nodes = (node, out = []) => {
-  if (Array.isArray(node)) { for (const child of node) nodes(child, out) } else if (node && typeof node === 'object') {
-    out.push(node)
-    for (const child of node.children ?? []) nodes(child, out)
-  }
-  return out
-}
-const classOf = node => String(node.props?.className ?? '').split(' ')
-const all = (root, className) => nodes(root).filter(node => classOf(node).includes(className))
-const one = (root, className) => all(root, className)[0]
-const ofType = (root, type) => nodes(root).filter(node => node.type === type)
-const text = node => (typeof node === 'string' || typeof node === 'number' ? String(node) : Array.isArray(node) ? node.map(text).join('') : (node?.children ?? []).map(text).join(''))
-const settle = () => new Promise(resolve => setTimeout(resolve, 0))
-const plain = value => (value !== null && typeof value === 'object' ? JSON.parse(JSON.stringify(value)) : value)
+// The stand-in React of client-stand-in.js; a host element's ref gets a stand-in node, as the
+// DOM would give it.
+const mount = root => mountWith(root, { refs: true })
 
 // -------------------------------------------------------------------------
 // The host and the page, stood in: `call` answers from `answer`, the poll's timers wait for
@@ -139,27 +50,11 @@ const localStorage = {
 }
 const document = { hidden: false, body: { dataset: {} } }
 
-const ui = await (async () => {
-  const bundle = await build({
-    stdin: {
-      contents: [
-        'export { PhonePane, PhoneTab, PhoneDock, installPhone, openPhone, phoneThreadOf, keepParams, keptParams, phoneTabDefinition, phoneTabId, PHONE_KIND, PHONE_TAB_ID, OMNI_PHONE_CSS } from \'./omni-phone.js\'',
-        'export { PhoneFrame, frameMetrics, SIDE_BUTTONS, PHONE_FRAME_CSS } from \'./phone-frame.js\'',
-        'export { ThreadRow, rowPropsOf } from \'./omni-tree.js\'',
-      ].join('\n'),
-      resolveDir: fileURLToPath(new URL('../src/client/', import.meta.url)), loader: 'js',
-    },
-    bundle: true, format: 'cjs', platform: 'node', write: false, logLevel: 'silent',
-    external: ['react', 'react-dom', '@automagik/bots-dsh/client'],
-    loader: { '.css': 'text' },
-  })
-  const module = { exports: {} }
-  runInNewContext(bundle.outputFiles[0].text, {
-    module, exports: module.exports, URL: BundleURL, URLSearchParams, Blob, atob, setTimeout: fakeSetTimeout, clearTimeout: fakeClearTimeout, document, localStorage, console,
-    require: name => ({ react, 'react-dom': { createPortal: node => node }, '@automagik/bots-dsh/client': { omni: { ...omni, call: fakeCall } } })[name],
-  })
-  return module.exports
-})()
+const ui = await bundleClient([
+  'export { PhonePane, PhoneTab, PhoneDock, installPhone, openPhone, phoneThreadOf, keepParams, keptParams, phoneTabDefinition, phoneTabId, PHONE_KIND, PHONE_TAB_ID, OMNI_PHONE_CSS } from \'./omni-phone.js\'',
+  'export { PhoneFrame, frameMetrics, SIDE_BUTTONS, PHONE_FRAME_CSS } from \'./phone-frame.js\'',
+  'export { ThreadRow, rowPropsOf } from \'./omni-tree.js\'',
+], { globals: { URL: BundleURL, URLSearchParams, Blob, atob, setTimeout: fakeSetTimeout, clearTimeout: fakeClearTimeout, document, localStorage }, team: { omni: { ...omni, call: fakeCall } } })
 
 // -------------------------------------------------------------------------
 // Threads as the host's view lists them (threads.js threadsView), and a chat's messages as
@@ -208,33 +103,6 @@ async function drawn(view, rounds = 4) {
   return root
 }
 
-// The stand-in right column, through the same two services DSH's sidebar-right plugin gives.
-function column() {
-  const types = []
-  const bodies = []
-  const opened = []
-  const state = { onScreen: 's-omni' }
-  const right = {
-    mounted: { getSnapshot: () => state.onScreen, subscribe: () => () => {} },
-    openTab: (kind, options) => {
-      if (!types.some(type => type.kind === kind)) throw new Error(`sidebarRight: no tab type is registered as "${kind}"`)
-      opened.push([kind, plain(options)])
-    },
-  }
-  const ctx = {
-    inject: (_names, install) => {
-      const disposers = []
-      install({
-        sidebarRight: right,
-        sidebarRightTabs: { register: (definition) => { types.push(definition); return () => types.splice(types.indexOf(definition), 1) } },
-        effect: (run) => { const dispose = run(); if (typeof dispose === 'function') disposers.push(dispose) },
-      })
-      return { dispose: () => { for (const dispose of disposers.reverse()) dispose() } }
-    },
-    slots: { inject: (_name, register) => register(), register: (options, component) => { bodies.push({ ...options, component }); return () => {} } },
-  }
-  return { ctx, types, bodies, opened, state }
-}
 function installed(t) {
   const stand = column()
   const dispose = ui.installPhone(stand.ctx, () => ({}))
