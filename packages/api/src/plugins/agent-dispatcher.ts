@@ -55,6 +55,7 @@ import {
   type OpenClawClientConfig,
   type OpenClawProviderConfig,
   type ProviderFile,
+  type ProviderOriginIdentity,
   type ReactionReceivedPayload,
   type SessionResetConfig,
   type StreamDelta,
@@ -2490,10 +2491,26 @@ function buildMessageTrigger(
   if (instance.bridgeTmuxSession) {
     env.GENIE_TMUX_SESSION = instance.bridgeTmuxSession;
   }
+  // #1408 — the buffered payload (MessageReceivedPayload) carries no envelope
+  // id, so stamp the inbound message's Omni event id onto the trigger. The
+  // native webhook POST then sends that stable `event.id`, and the legacy
+  // fallback reuses it instead of minting a fresh UUID, letting a receiver that
+  // deduplicates on the source message collapse the pair. Only the envelope's
+  // own fields are kept: the payload itself must not leak into `event`.
+  const originEventId = messages[0]?.metadata.eventId;
+  const event: AgentTrigger['event'] = originEventId
+    ? {
+        id: originEventId,
+        type: rawEvent.type,
+        timestamp: rawEvent.timestamp,
+        payload: rawEvent.payload,
+        metadata: rawEvent.metadata,
+      }
+    : rawEvent;
   return {
     traceId,
     type: triggerType,
-    event: rawEvent,
+    event,
     source: {
       channelType: channel,
       instanceId: instance.id,
@@ -3465,6 +3482,17 @@ async function dispatchViaLegacy(
     }),
   );
 
+  // #1408 — this run answers the same inbound message the native dispatch
+  // already POSTed. Carry its platform message id (e.g. the WhatsApp wamid) and
+  // originating event id into the runner so the fallback's webhook payload
+  // keeps the identity a deduplicating receiver keys on. No message id means
+  // no identity to preserve: the runner then invents nothing.
+  const firstMessage = messages[0];
+  const inboundMessageId = firstMessage?.payload.externalId;
+  const origin: ProviderOriginIdentity | undefined = inboundMessageId
+    ? { messageId: inboundMessageId, eventId: firstMessage?.metadata.eventId, traceId }
+    : undefined;
+
   const result = await withLifecycleSpan(
     'omni.dispatch_to_agno',
     buildLifecycleSpanAttributes({
@@ -3486,6 +3514,7 @@ async function dispatchViaLegacy(
         participantCount,
         messages: messageTexts,
         files: mediaFiles.length > 0 ? mediaFiles : undefined,
+        ...(origin ? { origin } : {}),
       }),
   );
 
@@ -6694,6 +6723,12 @@ export const setupAgentResponder = setupAgentDispatcher;
 /** @internal Exported for unit testing only — do not use in production code. */
 export const __test__ = {
   buildContextMessages,
+  /**
+   * #1408 — the native-failure → legacy-fallback funnel. Exported so a probe can
+   * force the native provider to fail and observe the fallback it produces
+   * (which is the only way to pin the identity threading across both attempts).
+   */
+  dispatchToAgent,
   /** The one funnel every agent reply leaves through — pins the part stamping. */
   sendResponseParts,
   awaitMediaProcessing,

@@ -114,4 +114,62 @@ describe('agent-runner — webhook providers (#1262)', () => {
     expect(payload.chat).toEqual({ id: 'chat-1' });
     expect(payload.sender).toEqual({ id: 'user-1', name: 'Ana', personId: 'person-1' });
   });
+
+  test('a run that carries an origin forwards it to the webhook payload (#1408)', async () => {
+    const service = new AgentRunnerService(webhookDb(null));
+    const instance = {
+      id: 'inst-1',
+      name: 'Harness',
+      channel: 'whatsapp',
+      agentProviderId: 'provider-hook',
+      agentInternalId: 'follow-up-agent',
+      agentPrefixSenderName: false,
+      enableAutoSplit: true,
+      tenantId: null,
+    } as unknown as Instance;
+
+    await service.run({
+      instance,
+      chatId: 'chat-1',
+      senderId: 'user-1',
+      senderName: 'Ana',
+      personId: 'person-1',
+      messages: ['test 2'],
+      origin: {
+        messageId: 'wamid.HBgMNTUxMTk5OTk5OTk5FQIAEhgg',
+        eventId: 'evt-inbound-1',
+        traceId: 'trc-dispatch-1',
+      },
+    } as Parameters<AgentRunnerService['run']>[0]);
+
+    const { payload } = received[0] as Received;
+    expect(payload.executionContext?.source.messageId).toBe('wamid.HBgMNTUxMTk5OTk5OTk5FQIAEhgg');
+    expect(payload.event.id).toBe('evt-inbound-1');
+    expect(payload.traceId).toBe('trc-dispatch-1');
+  });
+
+  test('a run without an origin still sends no executionContext (#1408)', async () => {
+    const service = new AgentRunnerService(webhookDb(null));
+    const instance = {
+      id: 'inst-1',
+      name: 'Harness',
+      channel: 'whatsapp',
+      agentProviderId: 'provider-hook',
+      agentInternalId: 'follow-up-agent',
+      agentPrefixSenderName: false,
+      enableAutoSplit: true,
+      tenantId: null,
+    } as unknown as Instance;
+
+    const result = await service.run({
+      instance,
+      chatId: 'chat-1',
+      senderId: 'user-1',
+      messages: ['test 2'],
+    } as Parameters<AgentRunnerService['run']>[0]);
+
+    const { payload } = received[0] as Received;
+    expect(payload.executionContext).toBeUndefined();
+    expect(payload.event.id).toBe(result.metadata.runId);
+  });
 });

@@ -13,6 +13,7 @@ import {
   ProviderError,
   type ProviderFile,
   type ProviderMetrics,
+  type ProviderOriginIdentity,
   type ProviderSchema,
   type SessionStorage,
   type StreamChunk,
@@ -79,6 +80,14 @@ export interface AgentRunContext {
   messages: string[];
   /** Optional file attachments (images, audio, documents) */
   files?: ProviderFile[];
+
+  /**
+   * Identity of the inbound message this run answers, when the caller has one
+   * (#1408). The legacy fallback dispatch sets it so the webhook payload keeps
+   * the same source-message identity as the native attempt that failed; runs
+   * with no inbound message (automations, chatless calls) leave it unset.
+   */
+  origin?: ProviderOriginIdentity;
 }
 
 /**
@@ -630,6 +639,7 @@ export class AgentRunnerService {
       participantCount,
       messages,
       files,
+      origin,
     } = context;
 
     if (!instance.agentProviderId) {
@@ -693,6 +703,10 @@ export class AgentRunnerService {
       },
       timeoutMs: (instance.agentTimeout ?? 600) * 1000,
       files,
+      // #1408 — preserve the inbound message identity on the fallback path, so
+      // a webhook receiver can collapse this run with the native POST it
+      // already answered instead of treating it as a second message.
+      ...(origin ? { origin } : {}),
       // Parity with the dispatcher's claude-code path: HTTP MCP servers get the
       // conversation identifier appended to their URL.
       ...(sessionStore && chatId ? { mcpUrlParams: { chat_id: chatId } } : {}),

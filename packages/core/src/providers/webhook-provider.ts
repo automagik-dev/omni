@@ -10,7 +10,7 @@
  */
 
 import { createLogger } from '../logger';
-import { buildOmniExecutionContext } from './execution-context';
+import { buildOmniExecutionContext, buildOriginExecutionContext } from './execution-context';
 import {
   type AgentHealthResult,
   type AgentTrigger,
@@ -259,11 +259,24 @@ const partsOf = (response: WebhookResponse | null): string[] =>
  * The payload a message trigger sends, made from an agent-runner request. The
  * event type says an automation asked; a chatless run has no instance or chat,
  * so those ids are empty.
+ *
+ * #1408 — when the run carries the identity of the inbound message it answers
+ * (the legacy fallback after a failed native dispatch), the payload reuses that
+ * identity instead of inventing one: `event.id` is the inbound event's id (or
+ * its platform message id), `traceId` continues the dispatch's trace, and
+ * `executionContext` reports the same `source.messageId` the native body sent.
+ * A receiver that deduplicates on the source message then collapses the two
+ * POSTs into one inference. With no origin identity the previous behavior is
+ * preserved: the run's own id is the only id there is, and no
+ * `executionContext` is claimed.
  */
 function payloadFor(request: ProviderRequest, runId: string): WebhookPayload {
-  const { platform } = request;
+  const { platform, origin } = request;
+  const eventId = origin?.eventId ?? origin?.messageId ?? runId;
+  const traceId = origin?.traceId ?? runId;
+  const executionContext = origin ? buildOriginExecutionContext(request, origin, traceId) : null;
   return {
-    event: { id: runId, type: 'automation.call_agent', timestamp: Date.now() },
+    event: { id: eventId, type: 'automation.call_agent', timestamp: Date.now() },
     instance: {
       id: platform?.instanceId ?? '',
       channelType: platform?.channel ?? '',
@@ -276,7 +289,8 @@ function payloadFor(request: ProviderRequest, runId: string): WebhookPayload {
       ...(platform && request.userId !== platform.id ? { personId: request.userId } : {}),
     },
     content: { text: request.message },
-    traceId: runId,
+    traceId,
+    ...(executionContext ? { executionContext } : {}),
     replyEndpoint: REPLY_ENDPOINT,
   };
 }

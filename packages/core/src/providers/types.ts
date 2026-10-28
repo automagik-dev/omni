@@ -10,6 +10,29 @@ import type { ProviderSchema } from '../types/agent';
 import type { ChannelType } from '../types/channel';
 
 /**
+ * Identity of the inbound message a run answers (#1408), as far as the caller
+ * knows it.
+ *
+ * The legacy fallback path carries it into the provider request so a transport
+ * that already POSTed the same message natively can preserve that message's
+ * identity instead of synthesizing a new one. Only callers that actually have
+ * an inbound message set it: no identifier is invented for automations,
+ * chatless runs or anything else without one.
+ */
+export interface ProviderOriginIdentity {
+  /** Platform message id (e.g. a WhatsApp wamid). */
+  messageId: string;
+  /**
+   * Id of the Omni event that carried the inbound message (`message.received`),
+   * when the caller knows it. This is the stable event id the native attempt
+   * sends, so the fallback reuses it verbatim rather than minting a fresh one.
+   */
+  eventId?: string;
+  /** Trace id of the dispatch that produced this run, when one exists. */
+  traceId?: string;
+}
+
+/**
  * Request to run an agent/team/workflow
  *
  * **Breaking Change (Semantic)**: The `userId` field now represents the internal
@@ -70,6 +93,15 @@ export interface ProviderRequest {
 
   /** External/platform message ID (for reply-to and reactions) */
   messageId?: string;
+
+  /**
+   * Identity of the inbound message this run answers, when the caller has one
+   * (#1408). The webhook payload builder reuses it on the legacy fallback path
+   * so the fallback POST keeps the same source-message identity as the native
+   * attempt and a deduplicating receiver collapses the pair. Omitted by callers
+   * with no inbound message identity.
+   */
+  origin?: ProviderOriginIdentity;
 
   /** External ID of the message being replied to */
   replyToMessageId?: string;

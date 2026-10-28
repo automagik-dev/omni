@@ -9,6 +9,7 @@
 export {
   type ProviderRequest,
   type ProviderFile,
+  type ProviderOriginIdentity,
   type ProviderResponse,
   type ProviderMetrics,
   type StreamChunk,
@@ -29,6 +30,7 @@ export {
   OMNI_EXECUTION_CONTEXT_EXTENSION_URI,
   buildOmniEnv,
   buildOmniExecutionContext,
+  buildOriginExecutionContext,
   buildProviderRequestContext,
 } from './execution-context';
 
