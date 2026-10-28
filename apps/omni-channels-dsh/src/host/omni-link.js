@@ -80,11 +80,17 @@ export function install(rt) {
     }
   }
 
+  // The team sends a plugin's view fields again only with a new revision (its state endpoint
+  // answers `unchanged` otherwise), so a link written or removed saves the team: the + under
+  // each channel, and its reason, follow the link at once instead of at the next team change.
+  const viewChanged = () => Promise.resolve(rt.save?.()).catch(error => rt.warn('omni-channels: the team view did not take the new link: %s', error?.message ?? error))
+
   async function writeLink(link) {
     await mkdir(rt.home, { recursive: true })
     const temp = `${path}.${process.pid}.${randomUUID()}.tmp`
     await writeFile(temp, `${JSON.stringify(link, null, 2)}\n`, { mode: 0o600 })
     await rename(temp, path)
+    await viewChanged()
   }
 
   // `typed` is the address the user typed: the market is offered there, not wherever the
@@ -341,6 +347,7 @@ export function install(rt) {
     const link = rt.omniLink()
     // The thread keys are cut with this key while it is still here.
     const { unreadable } = await handOver(null, () => rm(path, { force: true }))
+    await viewChanged()
     // The market where it was added, which can differ from the Omni's own API address.
     if (link?.marketUrl) await removeOmniMarket(link.marketUrl)
     rt.syncOmniEvents?.()
