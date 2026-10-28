@@ -22,7 +22,7 @@ import { SESSION_NEEDS_TEAM } from '../src/host/subscriptions.js'
 import { withoutThreadTools } from '../src/host/thread-tools.js'
 import { THREAD_TOOLS } from '../src/host/threads.js'
 import { applyBoth, fakeContext } from './team.js'
-import { boot, CHAT, CHATS, fakeOmni, flush, GROUP, guarded, homeFor, INSTANCE, MESSAGE_IDS, resetFetch, saved, until } from './thread-fixture.js'
+import { boot, CHAT, eventFor, flush, GROUP, guarded, homeFor, INSTANCE, MESSAGE_IDS, saved, until, watchedOmni } from './thread-fixture.js'
 
 const OMNI = 'https://omni.test'
 const omniAnswers = {
@@ -599,18 +599,7 @@ async function signalOf(t, run) {
 async function threadBench(t, { home: given, mask = false, signal = true, running = [], resumesDone } = {}) {
   if (!mockedTimers.has(t)) t.mock.timers.enable({ apis: ['setTimeout'] })
   mockedTimers.add(t)
-  const omni = fakeOmni()
-  t.after(resetFetch)
-  const inner = globalThis.fetch
-  globalThis.fetch = async (address, init = {}) => {
-    const url = new URL(String(address))
-    const path = url.pathname.replace(/^\/api\/v2/, '')
-    const json = body => new Response(JSON.stringify(body), { status: 200 })
-    if ((init.method ?? 'GET') === 'GET' && path === '/instances') return json({ items: [{ id: INSTANCE, channel: 'whatsapp-baileys', name: 'Pessoal', isActive: true }] })
-    if ((init.method ?? 'GET') === 'GET' && path === `/instances/${INSTANCE}/status`) return json({ data: { state: 'connected' } })
-    if ((init.method ?? 'GET') === 'GET' && path === '/chats' && !url.searchParams.has('instanceId')) return json({ items: Object.values(CHATS) })
-    return inner(address, init)
-  }
+  const omni = watchedOmni(t)
   const home = given ?? homeFor(t, omni)
   const presets = fakePresets()
   const run = await boot(t, home, { mask, resumesDone, services: { permissionPresets: presets } })
@@ -639,8 +628,6 @@ const threadSub = async (bench, thread = bench.thread, args = {}) => {
   assert.match(await bench.tool('save_automation', { sources: `chat:${thread.chatId}`, trigger: 'message', worker: `thread:${thread.id}`, ...args }), /^Saved /)
   return subsIn(bench).at(-1)
 }
-// One message the stream hands to fireSubscription, as omni-events.js's eventOf makes it.
-const eventFor = (text, chat = 'Marina') => ({ kind: 'message', who: chat, chat, channel: 'Pessoal', at: Date.now(), text, ref: `row-${text}` })
 const fire = (bench, sub, text, chat) => bench.run.channels.fireSubscription(sub, eventFor(text, chat))
 // DSH starts a Session's next turn on one message: a run's tagged follow-up or the owner's own.
 let turns = 0

@@ -19,7 +19,7 @@
 import { z } from 'zod'
 import { denyEach } from './omni-api.js'
 import { HANDOFF_TOOL } from './omni-rules.js'
-import { isStandingRun } from './standing-runs.js'
+import { isStandingRun, ongoingSessions } from './standing-runs.js'
 import { CUT_WINDOW_MS, followOmniModel, selectOmniModel, THREAD_TOOLS } from './threads.js'
 
 // Every tool the Bot team registers for Bots, which its own DSH bot and task Sessions never
@@ -155,38 +155,15 @@ export function install(rt) {
     return parsed
   }
 
-  // An "ongoing session" automation's Session, when it has a live one: a pure lookup.
-  const ongoing = sub => sub?.worker?.kind === 'session' && sub.worker.mode === 'ongoing'
-  function ongoingOf(subId) {
-    const sub = Object.hasOwn(subs(), subId) ? subs()[subId] : undefined
-    const sessionId = ongoing(sub) ? sub.ongoingSessionId : undefined
-    return typeof sessionId === 'string' && takes(sessionId) && !archived().has(sessionId) ? sessionId : null
-  }
-  // The same, made when it has none and made again when its row was removed or DSH archived
-  // it (`renewed`: 'removed' or 'archived'). One making per automation at a time: events that arrive together share it.
-  const making = new Map()
-  function ensureOngoing(subId) {
-    // A making under way is the answer, even once its row is in: every caller gets its
-    // `renewed`, so whichever hands over first still tells the board.
-    if (making.has(subId)) return making.get(subId)
-    const live = ongoingOf(subId)
-    if (live !== null) return Promise.resolve({ sessionId: live, renewed: false })
-    if (!ongoing(subs()[subId])) return Promise.resolve({ sessionId: null, renewed: false })
-    const made = (async () => {
-      const before = subs()[subId]
-      // Why the one before is gone: its row removed, or DSH archived it.
-      const renewed = typeof before.ongoingSessionId !== 'string' ? false : takes(before.ongoingSessionId) ? 'archived' : 'removed'
-      const sessionId = await createPlainSession(rt, before.name)
-      // Read again: the store may have reloaded while the Session was made.
-      const sub = subs()[subId]
-      if (sub !== undefined) sub.ongoingSessionId = sessionId
-      await add({ sessionId, kind: 'ongoing', title: before.name, subId, turnOpenAt: null, at: Date.now() })
-      return { sessionId, renewed }
-    })()
-    making.set(subId, made)
-    void made.finally(() => making.delete(subId)).catch(() => {})
-    return made
-  }
+  // An "ongoing session" automation's Session (ongoingSessions): a row of its own, gone once its
+  // row is removed or being removed, or DSH archived it; made again as a new row.
+  const { of: ongoingOf, ensure: ensureOngoing } = ongoingSessions({
+    subs,
+    fits: sub => sub?.worker?.kind === 'session' && sub.worker.mode === 'ongoing',
+    stateOf: sessionId => (!takes(sessionId) ? 'removed' : archived().has(sessionId) ? 'archived' : 'live'),
+    make: sub => createPlainSession(rt, sub.name),
+    keep: (sessionId, sub) => add({ sessionId, kind: 'ongoing', title: sub.name, subId: sub.id, turnOpenAt: null, at: Date.now() }),
+  })
 
   // A "new session" run that asks first: its Session on the read-only preset while it works,
   // the preset it was made with kept on its row to go back to.
@@ -220,17 +197,14 @@ export function install(rt) {
     }
     await persist()
   }
-  // An ongoing automation's events that waited behind a run in a Session DSH archived since go
-  // to a new one: the run's end hands over to the old Session only, which takes nothing more.
+  // An ongoing automation's events that waited for a row being removed go to a new Session
+  // (a run's end hands them on itself, standing-runs.js).
   const waitingFor = subId => runs().some(run => run.status === 'queued' && run.target?.kind === 'ongoing' && run.target.id === subId)
   const renewFor = (subId) => {
     void rt.standingRuns.renew({ kind: 'ongoing', id: subId }).catch(error => warn('handing waiting events to a new ongoing session failed', error))
   }
   ctx.effect(() => rt.standingRuns.onEnded((run) => {
-    const sessionId = run.sessionId
-    const row = get(sessionId)
-    if (row?.contained === true) void settle(sessionId)
-    if (row?.kind === 'ongoing' && typeof row.subId === 'string' && ongoingOf(row.subId) !== sessionId && waitingFor(row.subId)) renewFor(row.subId)
+    if (get(run.sessionId)?.contained === true) void settle(run.sessionId)
   }), 'omni-channels: session rows back on their preset')
 
   // Removing a row: its Session archived with its work stopped, then the row goes. One that

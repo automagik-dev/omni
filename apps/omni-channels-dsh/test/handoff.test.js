@@ -6,11 +6,11 @@ import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 import { COMPUTER_TOOLS } from '../src/host/omni-api.js'
 import { START_TASK_REFUSAL } from '../src/host/grants.js'
-import { CUT_REPORT, HANDOFF_NEEDS_TEAM, NO_DSH_BOT, NOT_STARTED_REPORT } from '../src/host/handoff.js'
+import { CUT_REPORT, DSH_BOT_FROM_CHAT, DSH_BOTS_NEED_TEAM, HANDOFF_NEEDS_TEAM, NOT_STARTED_REPORT } from '../src/host/handoff.js'
 import { ROW_DENIED, ROW_REFUSAL, TEAM_TOOLS } from '../src/host/omni-rows.js'
 import { HANDOFF_TOOL, OPERATOR_RULES } from '../src/host/omni-rules.js'
 import { THREAD_TOOLS } from '../src/host/threads.js'
-import { boot, fakeOmni, flush, guarded, homeFor, resetFetch, saved, teamState, until } from './thread-fixture.js'
+import { boot, fakeOmni, flush, gateOf, guarded, homeFor, logOf, resetFetch, restart, saved, signal, teamState, turn, until } from './thread-fixture.js'
 
 afterEach(resetFetch)
 
@@ -32,31 +32,7 @@ const head = `[Task "${TITLE}" finished · its last words follow; tell the user 
 function read(run) {
   for (const message of run.agentOf('m1').calls) run.emit('m1', 'user/message', { content: message.content, source: message.source })
 }
-// One turn in a Session, as DSH runs it: begun on `message`, its words, its end.
-function turn(run, sessionId, number, message, words, reason = { kind: 'completed' }) {
-  run.emit(sessionId, 'turn/start', { turn: number }, Date.now())
-  if (message !== undefined) run.emit(sessionId, 'user/message', { content: message.content, source: message.source })
-  if (words !== undefined) run.emit(sessionId, 'assistant/message', { message: { content: [{ type: 'text', text: words }] } })
-  if (reason !== null) run.emit(sessionId, 'turn/end', { turn: number, reason })
-}
 const DISPOSED = { kind: 'aborted', reason: { kind: 'disposed' } }
-// The team's pass, then every recovery of the plugin's, over.
-async function signal(t, run) {
-  let over = false
-  run.channels.teamResume.addRecovery(() => { over = true })
-  t.mock.timers.tick(3000)
-  const done = await run.team.resumesDone
-  await until(() => over)
-  await flush()
-  return done
-}
-async function restart(t, run, home, options) {
-  await run.channels.save()
-  await run.stop()
-  return boot(t, home, options)
-}
-// A Session whose log is `events`, newest last.
-const logOf = (run, sessionId, events) => Object.assign(run.agentOf(sessionId).session, { seq: events.length, eventAt: seq => events[seq] })
 // A kept hand-off row, unreported, whose first turn opened a minute ago.
 const AT = Date.now() - 60_000
 const handoffRow = (sessionId, extra = {}) => ({ sessionId, kind: 'handoff', title: TITLE, reportTo: 'm1', reported: false, turnOpenAt: AT, at: 1, ...extra })
@@ -263,7 +239,7 @@ test('a hand-off Session lists none of the thread tools, the team\'s or the hand
   run.ctx.tools.schemas = () => [...ROW_DENIED, 'bash', 'read'].map(name => ({ name }))
   await signal(t, run)
   const before = run.made.length
-  assert.equal(await handOff(run, { title: TITLE, instructions: INSTRUCTIONS, dshBot: 'Coder' }), NO_DSH_BOT)
+  assert.match(await handOff(run, { title: TITLE, instructions: INSTRUCTIONS, dshBot: 'Coder' }), /^Not handed off: the user has no DSH bot "Coder"\. Leave out dshBot/)
   assert.match(await handOff(run, { title: '', instructions: INSTRUCTIONS }), /^Not handed off: give a title of 1 to 80 characters/)
   assert.match(await handOff(run, { title: 'x'.repeat(81), instructions: INSTRUCTIONS }), /^Not handed off/)
   assert.match(await handOff(run, { title: TITLE, instructions: 'x'.repeat(8001) }), /^Not handed off/)
@@ -305,14 +281,6 @@ test('against a team stand-in with no hook the hand-off refuses with its own rea
   assert.deepEqual([run.made, run.channels.omniRows.list(), run.registered], [[], [], []])
   assert.equal(guarded(run.ctx, 'm1', 'start_task'), START_TASK_REFUSAL)
 })
-
-// DSH's tools/pre-execute waterfall for one call in a Session, ending in DSH's own allow.
-const gateOf = (run, name, sessionId) => {
-  const chain = [...(run.ctx.listeners.get('tools/pre-execute') ?? [])]
-  const exec = { name, arguments: {}, agent: { id: sessionId, session: { id: sessionId } } }
-  const step = index => (index < chain.length ? chain[index](exec, () => step(index + 1)) : Promise.resolve({ kind: 'allow' }))
-  return step(0)
-}
 
 test('review 15, MEDIUM-1: with no Omni named every Bot the team allows keeps start_task, the Omni Bot and a second Main Bot alike, and it runs; once an Omni is named they lose it', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
@@ -358,4 +326,77 @@ test('review 15, LOW-4: a turn whose words this plugin did not see (a reload mid
   run.emit(sessionId, 'turn/end', { turn: 1, reason: { kind: 'completed' } })
   await until(() => reportsOf(run).length === 1)
   assert.equal(textOf(reportsOf(run)[0]), `${head}\nFixed before the reload.`)
+})
+
+// Group 16 (design row 19, Decision 29): the hand-off names one of the owner's DSH bots only
+// from the Omni Bot's own chat; its Session is that bot's, no row, and it reports as a row's does.
+const DSH_AGENTS = () => ({
+  coder: { id: 'coder', kind: 'dsh', name: 'Coder', sessions: [], createdAt: 1 },
+  tasks: { id: 'tasks', kind: 'tasks', name: 'Tasks', sessions: [], createdAt: 2 },
+})
+const toCoder = { title: TITLE, instructions: INSTRUCTIONS, dshBot: 'Coder' }
+
+test('a hand-off naming a DSH bot works from the Omni Bot\'s own chat: a Session under that bot, no row, whose first turn reports once, after a restart too; from an event run, or while an event works in the chat, it is refused; naming a bot that does not exist makes nothing (:208)', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const home = homeFor(t, undefined, teamState({ agents: DSH_AGENTS() }))
+  const run = await boot(t, home)
+  await signal(t, run)
+  const before = run.made.length
+  const runs = () => (run.team.state.subscriptionRuns ??= [])
+  // An event run of the Omni Bot, in a task Session of its own.
+  runs().unshift({ id: 'run-1', subId: 'sub-x', botId: 'm1', task: true, sessionId: 'run-omni', status: 'working', askFirst: true, at: AT })
+  run.team.indexSessions()
+  assert.equal(await handOff(run, toCoder, 'run-omni'), DSH_BOT_FROM_CHAT)
+  // That run ended: its Session is still the Omni Bot's, and still not its own chat.
+  runs()[0].status = 'done'
+  assert.equal(run.team.selfOf('run-omni'), 'm1')
+  assert.equal(await handOff(run, toCoder, 'run-omni'), DSH_BOT_FROM_CHAT)
+  // An event a Bot takes in its chat, working in the Omni Bot's own chat.
+  runs().unshift({ id: 'run-2', subId: 'sub-y', botId: 'm1', sessionId: 'm1', status: 'working', askFirst: true, at: AT })
+  assert.equal(await handOff(run, toCoder, 'm1'), DSH_BOT_FROM_CHAT)
+  runs().splice(0, 2)
+  run.team.indexSessions()
+  for (const name of ['Nobody', 'Tasks']) {
+    assert.equal(await handOff(run, { ...toCoder, dshBot: name }), `Not handed off: the user has no DSH bot "${name}". Leave out dshBot to hand it to a session under you.`, name)
+  }
+  assert.deepEqual([run.made.length, run.team.state.agents.coder.sessions, run.team.state.agents.tasks.sessions, run.channels.state.omniHandoffs ?? {}], [before, [], [], {}])
+
+  assert.equal(await handOff(run, { ...toCoder, dshBot: 'coder' }), `Handed off "${TITLE}" to a session under the DSH bot "Coder". Its result comes back to you as a message; do not wait or poll.`)
+  const sessionId = run.made.at(-1)
+  assert.deepEqual([run.team.state.agents.coder.sessions, run.channels.omniRows.list(), Object.keys(run.channels.state.omniHandoffs)], [[sessionId], [], [sessionId]])
+  const [work] = run.agentOf(sessionId).calls
+  assert.deepEqual([textOf(work), work.source], [`${WORK_HEAD}\n${INSTRUCTIONS}`, { kind: 'user', handoff: sessionId }])
+  assert.ok(run.registered[0].sessions().includes(sessionId))
+  // DSH goes down mid-turn: nothing reports at the cut; the team resumes it once, its own way.
+  turn(run, sessionId, 1, work, 'Halfway.', DISPOSED)
+  await flush()
+  assert.deepEqual(reportsOf(run), [])
+  const next = await restart(t, run, home)
+  logOf(next, sessionId, cutLog('Halfway.'))
+  const done = await signal(t, next)
+  assert.deepEqual([done.resumed, next.agentOf(sessionId).calls.map(message => message.source)], [[sessionId], [{ kind: 'user', resumed: true }]])
+  assert.deepEqual(reportsOf(next), [])
+  turn(next, sessionId, 2, next.agentOf(sessionId).calls[0], 'Fixed.')
+  await until(() => reportsOf(next).length === 1)
+  assert.equal(textOf(reportsOf(next)[0]), `${head}\nFixed.`)
+  assert.equal(reportsOf(next)[0].source.taskSessionId, sessionId)
+  // Reported, it is dropped: its Session stays the bot's, and later turns report nothing.
+  assert.equal(Object.hasOwn(saved(home).omniHandoffs, sessionId), false)
+  assert.equal(next.registered[0].sessions().includes(sessionId), false)
+  turn(next, sessionId, 3, undefined, 'More.')
+  await flush()
+  assert.equal(reportsOf(next).length, 1)
+  assert.deepEqual(next.team.state.agents.coder.sessions, [sessionId])
+})
+
+test('a hand-off naming a DSH bot on a team without the DSH-bot calls is refused with its own reason and makes nothing; the tool says it is not offered there', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const run = await boot(t, homeFor(t, undefined, teamState({ agents: DSH_AGENTS() })), { dshBots: false })
+  await signal(t, run)
+  assert.equal(await handOff(run, toCoder), DSH_BOTS_NEED_TEAM)
+  assert.notEqual(DSH_BOTS_NEED_TEAM, `Not handed off: ${HANDOFF_NEEDS_TEAM}`)
+  assert.deepEqual([run.made, run.team.state.agents.coder.sessions], [[], []])
+  assert.equal(run.ctx.registeredTools.get(HANDOFF_TOOL).parameters.properties.dshBot.description, 'Not offered here: leave it out.')
+  // Without a name it still hands off under the Omni row.
+  assert.match(await handOff(run), /^Handed off "Fix the build" to a session under your row\./)
 })

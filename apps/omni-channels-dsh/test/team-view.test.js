@@ -178,6 +178,7 @@ test('apply registers its listeners, tools and effects after the team\'s, in a f
   assert.deepEqual(own, [
     'on session/event',
     'effect ds-bot: restart resumes',
+    'effect omni-channels: DSH bots changed',
     'effect ds-bot: interrupted Omni permissions',
     'effect ds-bot: omni-consent-answer',
     'effect ds-bot: omni-grant-revoke',

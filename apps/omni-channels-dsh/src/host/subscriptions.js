@@ -7,6 +7,7 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { z } from 'zod'
 import { closeRun, fenced, isAskRun, pruneRuns, readsOnly, RUNS_KEPT, runId, SUMMARY_MAX } from './asks.js'
+import { DSH_BOT_NEEDS_TEAM } from './dsh-bots.js'
 import { operatesOmni } from './grants.js'
 import { createPlainSession, setReadOnly } from './omni-rows.js'
 import { output } from './output.js'
@@ -26,6 +27,10 @@ const LIST_LIMIT = 40
 // A worker that hands its events to an added chat's thread (standing-runs.js).
 const ThreadWorker = z.object({ kind: z.literal('thread'), threadId: z.string().uuid() }).strict()
 const THREAD_REF = /^thread:(.+)$/s
+// A worker that hands its events to one of the owner's DSH bots (dsh-bots.js): a Session of
+// its own under that bot for each event ("new"), or one for all of them ("ongoing").
+const DshBotWorker = z.object({ kind: z.literal('dshbot'), agentId: z.string().min(1).max(200), mode: z.enum(['new', 'ongoing']) }).strict()
+const DSH_BOT_REF = /^dshbot:(.+)$/s
 
 // Event text comes from other people. While a run that asks first works, the tools that only
 // read (READ_TOOLS, asks.js) run as they are. Everything else (a shell, a file change, the
@@ -79,6 +84,10 @@ export function install(rt) {
       return thread === undefined ? 'a removed chat\'s thread' : `the thread of ${chatName(thread)}`
     }
     if (worker.kind === 'session') return worker.mode === 'ongoing' ? 'one ongoing session' : 'a new session each time'
+    if (worker.kind === 'dshbot') {
+      const bot = rt.omniDshBots.now().find(item => item.id === worker.agentId)
+      return `${bot === undefined ? 'a deleted DSH bot' : `the DSH bot ${JSON.stringify(bot.name)}`} (${worker.mode === 'ongoing' ? 'one ongoing session' : 'a new session each time'})`
+    }
     const name = rt.botOf(worker.botId)?.name ?? 'a deleted Bot'
     return worker.mode === 'chat' ? `${name} (in its chat)` : `${name} (one task per event)`
   }
@@ -112,20 +121,28 @@ export function install(rt) {
     return rt.threads?.byId(parsed.data.threadId) === undefined ? 'Its chat was removed, so the thread it hands events to is gone. Add the chat again and save the automation with the new thread.' : null
   }
   // Why a worker cannot take events now, for the workers that need the hook; null otherwise.
+  // A DSH bot's needs the team's DSH-bot calls too, and the bot.
   const workerProblem = (worker) => {
     if (worker?.kind === 'thread') return threadProblem(worker)
     if (worker?.kind === 'session') return teamReason(SESSION_NEEDS_TEAM)
+    if (worker?.kind === 'dshbot') return teamReason(DSH_BOT_NEEDS_TEAM) ?? rt.omniDshBots.problem(worker.agentId)
     return null
   }
-  // Where a standing worker's events go (standing-runs.js); null for the others.
+  // Whether DSH bots are offered as workers now: the hook and the team's two calls.
+  const dshBotsOffered = () => teamReason() === null && rt.omniDshBots.ready()
+  // Where a standing worker's events go (standing-runs.js); null for the others and for a
+  // "new session" one, whose every event gets a Session of its own.
   const targetOf = (sub) => {
     if (sub.worker.kind === 'thread') return { kind: 'thread', id: sub.worker.threadId }
     if (sub.worker.kind === 'session' && sub.worker.mode === 'ongoing') return { kind: 'ongoing', id: sub.id }
+    if (sub.worker.kind === 'dshbot' && sub.worker.mode === 'ongoing') return { kind: 'dshbot', id: sub.id }
     return null
   }
 
   // A Bot gets each event as its own single-run task unless `as` is "chat". "thread:<id>" is
-  // an added chat's thread, offered only on a team with the restart hook.
+  // an added chat's thread, offered only on a team with the restart hook; "dshbot:<name>" one
+  // of the owner's DSH bots, in a new Session for each event unless `as` is "ongoing", offered
+  // only on a team with the hook and the DSH-bot calls.
   function workerOf(text, as) {
     const value = String(text ?? '').trim()
     const lower = value.toLowerCase()
@@ -136,6 +153,14 @@ export function install(rt) {
       if (!worker.success || rt.threads?.byId(worker.data.threadId) === undefined) throw invalid(`No thread "${value}". Use a thread id find_chats gives.`)
       return worker.data
     }
+    const dsh = DSH_BOT_REF.exec(value)
+    if (dsh) {
+      const problem = teamReason(DSH_BOT_NEEDS_TEAM) ?? rt.omniDshBots.reason()
+      if (problem !== null) throw refused(problem)
+      const bot = rt.omniDshBots.find(dsh[1])
+      if (bot === undefined) throw invalid(`No DSH bot "${dsh[1].trim().slice(0, 60)}". Use a dshbot: name find_chats gives.`)
+      return DshBotWorker.parse({ kind: 'dshbot', agentId: bot.id, mode: as === 'ongoing' ? 'ongoing' : 'new' })
+    }
     if (value === '' || ['tentacall', 'autopilot', 'me', 'you'].includes(lower)) return { kind: 'events' }
     // A session under the Omni Bot's row; save() refuses it on a team without the hook.
     if (['session', 'new session', 'ongoing session'].includes(lower)) return { kind: 'session', mode: lower === 'ongoing session' ? 'ongoing' : 'new' }
@@ -144,6 +169,9 @@ export function install(rt) {
     if (bot.id === eventsBotId()) return { kind: 'events' }
     return { kind: 'bot', botId: bot.id, mode: as === 'chat' ? 'chat' : 'task' }
   }
+
+  // How save_automation names a saved worker again, for an edit that changes only `as`.
+  const refOf = worker => (worker.kind === 'dshbot' ? `dshbot:${worker.agentId}` : rt.botOf(worker.botId)?.name ?? eventsName())
 
   function triggerOf(args) {
     const kind = String(args.trigger ?? '')
@@ -175,8 +203,8 @@ export function install(rt) {
       on: existing?.pausedReason ? true : existing?.on ?? true,
       sources,
       trigger: args.trigger === undefined && existing ? existing.trigger : triggerOf(args),
-      // `as` is a Bot's only: it leaves a thread or session worker as it is.
-      worker: args.worker === undefined && (args.as === undefined || existing?.worker.kind === 'thread' || existing?.worker.kind === 'session') && existing ? existing.worker : workerOf(args.worker ?? (existing ? rt.botOf(existing.worker.botId)?.name ?? eventsName() : undefined), args.as),
+      // `as` is a Bot's or a DSH bot's only: it leaves a thread or session worker as it is.
+      worker: args.worker === undefined && (args.as === undefined || existing?.worker.kind === 'thread' || existing?.worker.kind === 'session') && existing ? existing.worker : workerOf(args.worker ?? (existing ? refOf(existing.worker) : undefined), args.as),
       outputs: {
         react: args.react === undefined ? existing?.outputs.react ?? true : yes(args.react),
         replyToMe: args.reply_to_me === undefined ? existing?.outputs.replyToMe ?? false : yes(args.reply_to_me),
@@ -186,12 +214,13 @@ export function install(rt) {
       askFirst: args.ask_first === undefined ? (existing ? existing.askFirst ?? true : threadDefaultsOf(state.omniSettings).askFirstDefault) : yes(args.ask_first),
       createdAt: existing?.createdAt ?? Date.now(),
       updatedAt: Date.now(),
-      // An "ongoing session" automation keeps its Session through an edit (omni-rows.js).
-      ...(typeof existing?.ongoingSessionId === 'string' ? { ongoingSessionId: existing.ongoingSessionId } : {}),
     }
-    // A session worker, new or kept through an edit, needs the hook.
-    const sessionProblem = sub.worker.kind === 'session' ? workerProblem(sub.worker) : null
-    if (sessionProblem !== null) throw refused(sessionProblem)
+    // An automation with one ongoing Session keeps it through an edit that keeps its worker
+    // (omni-rows.js, dsh-bots.js).
+    if (typeof existing?.ongoingSessionId === 'string' && existing.worker.kind === sub.worker.kind && existing.worker.agentId === sub.worker.agentId) sub.ongoingSessionId = existing.ongoingSessionId
+    // A session or DSH-bot worker, new or kept through an edit, needs the hook (and its bot).
+    const standingProblem = sub.worker.kind === 'session' || sub.worker.kind === 'dshbot' ? workerProblem(sub.worker) : null
+    if (standingProblem !== null) throw refused(standingProblem)
     if (sub.worker.kind === 'thread') {
       // A thread works on its own chat only: exactly that chat, never another or a channel.
       const thread = rt.threads?.byId(sub.worker.threadId)
@@ -242,8 +271,9 @@ export function install(rt) {
     rt.syncOmniEvents?.()
     return paused
   }
-  // The thread and session automations that cannot take events now (no hook, or a removed
-  // chat) pause with why; a read-only host changes nothing.
+  // The thread, session and DSH-bot automations that cannot take events now (no hook, a
+  // removed chat, a deleted DSH bot, lost DSH-bot calls) pause with why; a read-only host
+  // changes nothing.
   rt.pauseStrandedThreads = () => (rt.readOnly?.() !== undefined ? Promise.resolve(false)
     : rt.pauseAutomations(sub => workerProblem(sub.worker) !== null, sub => workerProblem(sub.worker)).then(paused => paused.length > 0))
   // Its Sessions under the Omni row stay: only a row's menu removes one.
@@ -293,7 +323,7 @@ export function install(rt) {
   async function startRun(sub, event) {
     const worker = sub.worker
     if (worker.kind === 'thread') return handToThread(sub, event)
-    if (worker.kind === 'session') return handToSession(sub, event)
+    if (worker.kind === 'session' || worker.kind === 'dshbot') return handToSession(sub, event)
     const botId = worker.kind === 'events' || worker.kind === 'main' ? eventsBotId() : worker.botId
     const bot = rt.botOf(botId)
     const task = worker.kind !== 'bot' || worker.mode !== 'chat'
@@ -327,25 +357,32 @@ export function install(rt) {
     return run
   }
 
-  // A session worker's event, under the Omni Bot's row (omni-rows.js): "ongoing" queues it
-  // for the automation's one Session, made when it has none; "new session" makes a Session
-  // and a row for it first, read-only while its run asks first, then queues it there. Either
-  // way the run is a standing-Session run (standing-runs.js): tagged, bound to its own turn,
-  // resumed by the team after a restart. One whose team has no hook pauses with why.
+  // A session worker's event, under the Omni Bot's row (omni-rows.js), or a DSH-bot worker's,
+  // under that bot (dsh-bots.js): "ongoing" queues it for the automation's one Session, made
+  // when it has none; "new session" makes a Session for it first (and a row, read-only while
+  // its run asks first; a DSH bot's keeps its own preset, its run held by the ask gate of its
+  // turn), then queues it there. Either way the run is a standing-Session run (standing-
+  // runs.js): tagged, bound to its own turn, resumed by the team after a restart. One whose
+  // team has no hook, or whose DSH bot is gone, pauses with why.
   async function handToSession(sub, event) {
     const problem = workerProblem(sub.worker)
     if (problem !== null) {
       await rt.pauseAutomations(other => other.id === sub.id, problem)
       throw refused(`${sub.name} is paused: ${problem}`)
     }
-    if (sub.worker.mode === 'ongoing') return rt.standingRuns.enqueue({ kind: 'ongoing', id: sub.id }, sub, event)
+    const target = targetOf(sub)
+    if (target !== null) return rt.standingRuns.enqueue(target, sub, event)
     const title = `${sub.name}${event.chat ? ` · ${event.chat}` : ''}`
     let sessionId
     let failure
     try {
-      sessionId = await createPlainSession(rt, title)
-      await rt.omniRows.add({ sessionId, kind: 'run', title, subId: sub.id, turnOpenAt: null, at: Date.now() })
-      if (sub.askFirst) await rt.omniRows.contain(sessionId).catch((error) => { failure = notStarted(sub, error) })
+      if (sub.worker.kind === 'dshbot') {
+        ({ sessionId } = await rt.omniDshBots.createSession(sub.worker.agentId, { title }))
+      } else {
+        sessionId = await createPlainSession(rt, title)
+        await rt.omniRows.add({ sessionId, kind: 'run', title, subId: sub.id, turnOpenAt: null, at: Date.now() })
+        if (sub.askFirst) await rt.omniRows.contain(sessionId).catch((error) => { failure = notStarted(sub, error) })
+      }
     } catch (error) {
       failure ??= `Not started: its session could not be made (${error?.message ?? error}). Nothing ran.`.slice(0, SUMMARY_MAX)
     }
@@ -496,7 +533,7 @@ export function install(rt) {
 
   ctx.tools.register(defineTool({
     name: 'find_chats',
-    description: 'Omni and Main Bots only. The omni channels and their recent chats and groups an automation can watch, with the ids save_automation takes.',
+    description: 'Omni and Main Bots only. The omni channels and their recent chats and groups an automation can watch, and the DSH bots that can act on them, with the ids save_automation takes.',
     parameters: { search: { type: 'string', description: 'Part of a chat, group or channel name' } },
     output,
     async execute(args, exec) {
@@ -513,6 +550,9 @@ export function install(rt) {
           const thread = threadOf.get(chat.id)
           lines.push(`chat:${chat.id} · ${chat.kind} · ${chat.name} · on ${channels.get(chat.channelId)?.name ?? '?'}${thread ? ` · its thread: thread:${thread.id}` : ''}`)
         }
+        // The owner's DSH bots, as workers: never the Tasks record, which the team does not list.
+        const dshBots = dshBotsOffered() ? rt.omniDshBots.now().filter(bot => !needle || bot.name.toLowerCase().includes(needle)) : []
+        for (const bot of dshBots) lines.push(`worker dshbot:${bot.name} · a DSH bot${bot.workDir ? ` working in ${bot.workDir}` : ''} · as "new" or "ongoing"`)
         return lines.length > 0 ? lines.join('\n') : `Nothing matches "${args.search}". Ask the user for another name.`
       } catch (error) {
         return error.message
@@ -543,8 +583,8 @@ export function install(rt) {
       trigger: { type: 'string', enum: TRIGGER_KINDS, description: 'reaction: the user reacts with an emoji. keyword: a message contains words. message, mention, voice, media (photo or file), down (channel disconnects)' },
       emoji: { type: 'string', description: 'For reaction: the one emoji' },
       words: { type: 'string', description: 'For keyword: comma-separated words' },
-      worker: { type: 'string', description: `Who acts: "me" (you; the default)${teamReason() === null ? ', a Bot name, "new session" (a session of its own for each event, under you), "ongoing session" (one session for every event, under you), or "thread:<id>" (the thread of an added chat, from find_chats; its sources must be exactly that chat)' : ', or a Bot name'}` },
-      as: { type: 'string', enum: ['task', 'chat'], description: 'For a Bot: "task" (the default) gives it each event as its own single-run task; "chat" sends events into its chat' },
+      worker: { type: 'string', description: `Who acts: "me" (you; the default)${teamReason() === null ? `, a Bot name, "new session" (a session of its own for each event, under you), "ongoing session" (one session for every event, under you), ${dshBotsOffered() ? '"dshbot:<name>" (one of the user\'s DSH bots, from find_chats; only when the user names it), ' : ''}or "thread:<id>" (the thread of an added chat, from find_chats; its sources must be exactly that chat)` : ', or a Bot name'}` },
+      as: { type: 'string', enum: ['task', 'chat', 'new', 'ongoing'], description: 'For a Bot: "task" (the default) gives it each event as its own single-run task; "chat" sends events into its chat. For a DSH bot: "new" (the default), a session of its own under it for each event; "ongoing", one session under it for every event' },
       react: { type: 'boolean', description: 'React 👀 when work starts and ✅ when done, on the message. Default true' },
       reply_to_me: { type: 'boolean', description: 'Also reply to the user in their own chat. Default false' },
       ask_first: { type: 'boolean', description: 'Ask the user before shell, file or network actions. Leave it out to take the user\'s own default (asking, unless they changed it); only turn off when the user says so' },

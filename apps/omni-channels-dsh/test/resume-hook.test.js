@@ -10,7 +10,7 @@ import { decideUnbound, NOT_PICKED_UP } from '../src/host/standing-recovery.js'
 import { SESSION_NEEDS_TEAM } from '../src/host/subscriptions.js'
 import { CUT_WINDOW_MS } from '../src/host/threads.js'
 import { fakeContext } from './team.js'
-import { boot, homeFor, record, teamState, flush as threadFlush, until } from './thread-fixture.js'
+import { boot, gateOf, homeFor, logOf, record, teamState, flush as threadFlush, turn, until } from './thread-fixture.js'
 
 const flush = async () => {
   for (let round = 0; round < 20; round += 1) await new Promise(resolve => setImmediate(resolve))
@@ -751,4 +751,45 @@ test('the hook lists every unreported hand-off\'s Session, also one whose open t
   const run = await boot(t, home)
   run.archived.push('handoff-gone')
   assert.deepEqual(run.registered[0].sessions(), ['handoff-open'])
+})
+
+// Group 16 (design row 19, Decision 39): a DSH bot's Session is the team's to find (through
+// state.agents) and the plugin's to list while its run works; it is one candidate, resumed
+// once, the team's way, and the plugin still binds its resumed turn through onResume.
+test('a cut DSH-bot run is bound after a restart: its Session is in state.agents and in the hook\'s list, the team resumes it once, its own way, onResume is still called for it, a non-read tool in that resumed turn asks with ask-first on, and the turn\'s end finishes the run (:193, :189 DSH-bot part)', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const at = Date.now() - 60_000
+  const home = homeFor(t, undefined, teamState({
+    agents: { coder: { id: 'coder', kind: 'dsh', name: 'Coder', sessions: ['dsh-session'], createdAt: 1 } },
+    subscriptions: { 'sub-dsh': sessionSub('sub-dsh', 'ongoing', { worker: { kind: 'dshbot', agentId: 'coder', mode: 'ongoing' }, ongoingSessionId: 'dsh-session' }) },
+    subscriptionRuns: [{ id: 'run-dsh', subId: 'sub-dsh', standing: true, sessionId: 'dsh-session', status: 'working', turnId: '4', askFirst: true, at }],
+  }))
+  const run = await boot(t, home)
+  // The run's own turn, cut by the restart.
+  logOf(run, 'dsh-session', [
+    { type: 'turn/start', time: at, data: { turn: 4 } },
+    { type: 'user/message', data: { content: [{ type: 'text', text: 'event' }], source: { kind: 'omni-run', runId: 'run-dsh' } } },
+    { type: 'turn/end', time: Date.now() - 1000, data: { turn: 4, reason: { kind: 'interrupted' } } },
+  ])
+  assert.deepEqual([run.team.state.agents.coder.sessions, run.registered[0].sessions()], [['dsh-session'], ['dsh-session']])
+  t.mock.timers.tick(3000)
+  const done = await run.team.resumesDone
+  await threadFlush()
+  // Once, as a plain Session's resume, never through a Bot; the plugin was told before it went.
+  assert.deepEqual(done.resumed, ['dsh-session'])
+  const [resume] = run.agentOf('dsh-session').calls
+  assert.deepEqual(run.agentOf('dsh-session').calls.map(message => message.source), [{ kind: 'user', resumed: true }])
+  assert.deepEqual(run.agentOf('m1').calls, [])
+  const runOf = () => run.channels.state.subscriptionRuns.find(item => item.id === 'run-dsh')
+  assert.deepEqual([runOf().status, runOf().resuming], ['working', true])
+  // The resumed turn is the run's: bound, and its non-read tools ask.
+  turn(run, 'dsh-session', 5, resume, undefined, null)
+  assert.deepEqual([runOf().turnId, runOf().resuming], ['5', undefined])
+  assert.equal((await gateOf(run, 'bash', 'dsh-session')).kind, 'ask')
+  assert.deepEqual(await gateOf(run, 'read', 'dsh-session'), { kind: 'allow' })
+  run.emit('dsh-session', 'assistant/message', { message: { content: [{ type: 'text', text: 'Went on.' }] } })
+  run.emit('dsh-session', 'turn/end', { turn: 5, reason: { kind: 'completed' } })
+  await threadFlush()
+  assert.deepEqual([runOf().status, runOf().summary], ['done', 'Went on.'])
+  assert.equal(run.registered[0].sessions().includes('dsh-session'), false)
 })

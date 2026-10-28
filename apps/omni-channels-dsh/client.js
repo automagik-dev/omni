@@ -14759,6 +14759,11 @@ function workerOf(worker, roster) {
     return { name: bot2?.name ?? "Omni", bot: bot2, look: MAIN_LOOK };
   }
   if (worker.kind === "session") return { name: worker.mode === "ongoing" ? t("One ongoing session") : t("A new session each time"), session: true };
+  if (worker.kind === "dshbot") {
+    const agent = roster?.agentsById?.[worker.agentId];
+    if (agent?.kind !== "dsh") return { name: t("A deleted DSH bot"), dsh: true };
+    return { name: worker.mode === "ongoing" ? t("{name} · one ongoing session", { name: agent.name }) : t("{name} · a new session each time", { name: agent.name }), dsh: true };
+  }
   if (worker.kind === "thread") {
     const thread = (Array.isArray(roster?.omniThreads) ? roster.omniThreads : []).find((item) => item.id === worker.threadId);
     return thread ? { name: t("The thread of {name}", { name: thread.title }), chat: thread.title } : { name: t("A removed chat's thread"), session: true };
@@ -14769,6 +14774,7 @@ function workerOf(worker, roster) {
 function WorkerMark({ worker, roster, size = 24 }) {
   const info = workerOf(worker, roster);
   if (info.session) return (0, import_react11.createElement)("span", { className: "os-session", style: { width: size, height: size } }, (0, import_react11.createElement)(OmniMark, { size: Math.round(size * 0.62) }));
+  if (info.dsh) return (0, import_react11.createElement)("span", { className: "os-session os-dsh", style: { width: size, height: size } }, icons.TerminalIcon ? (0, import_react11.createElement)(icons.TerminalIcon) : null);
   if (info.chat !== void 0) return (0, import_react11.createElement)(ChatAvatar, { chat: { name: info.chat, initials: initials(info.chat) }, size });
   return (0, import_react11.createElement)(BotMark, info.bot ? { bot: info.bot, size } : { look: info.look, size });
 }
@@ -15025,6 +15031,7 @@ var SUBSCRIPTIONS_CSS = `
 .os-trigger svg{width:var(--os-icon,18px);height:var(--os-icon,18px)}
 .os-run-note{font-size:11.5px;color:var(--bt-ink-3)}
 .os-session{display:inline-grid;place-items:center;flex:none;border-radius:30%;background:var(--bt-ink);color:var(--bt-main)}
+.os-dsh svg{width:62%;height:62%}
 .os-stack{display:inline-flex;align-items:center;flex:none}
 .os-stack-item{display:inline-flex;margin-left:-4px;border-radius:50%;box-shadow:0 0 0 1.5px var(--bt-card)}
 .os-stack-item:first-child{margin-left:0}
@@ -16328,6 +16335,9 @@ var STRINGS = {
   "Group": "群组",
   "{n} waiting for you": "{n} 项等待你",
   "One ongoing session": "一个持续的会话",
+  "A deleted DSH bot": "已删除的 DSH bot",
+  "{name} · one ongoing session": "{name} · 一个持续的会话",
+  "{name} · a new session each time": "{name} · 每次新建会话",
   " or ": " 或 ",
   "reacts 👀 then ✅": "回应 👀 然后 ✅",
   "replies to you": "回复你",

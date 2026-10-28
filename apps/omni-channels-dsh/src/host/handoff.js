@@ -13,9 +13,17 @@
 // the restart, with its last words. One whose instructions no turn took is decided by its
 // Session's inbox (decideUnbound, Decision 6): still pending, it is woken; gone, it reports
 // that nothing ran.
+//
+// The owner may name one of their DSH bots for the work (Decision 29): then its Session is a
+// Session under that bot (dsh-bots.js), in its folder with its profile, drawn under it and no
+// row of the Omni Bot's. Only a turn of the Omni Bot's own chat names one, and none while an
+// automation's event works there: event text never sends computer work to a DSH bot. Such a
+// hand-off is kept in state.omniHandoffs until it reports, the same way, then dropped: its
+// Session stays the bot's.
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { z } from 'zod'
 import { followupAndFlush } from './asks.js'
+import { DSH_BOT_NEEDS_TEAM } from './dsh-bots.js'
 import { operatesOmni } from './grants.js'
 import { archivedIds, createPlainSession } from './omni-rows.js'
 import { HANDOFF_TOOL } from './omni-rules.js'
@@ -32,12 +40,23 @@ const REPORT_MAX = 1500
 const HandoffArgs = z.object({
   title: z.string().trim().min(1).max(TITLE_MAX),
   instructions: z.string().trim().min(1).max(INSTRUCTIONS_MAX),
-  dshBot: z.string().max(200).optional(),
+  dshBot: z.string().trim().max(200).optional().transform(name => name || undefined),
 })
+// A hand-off to a DSH bot that has not reported yet, by its Session (state.omniHandoffs).
+const DshHandoff = z.object({
+  sessionId: z.string().min(1).max(200),
+  agentId: z.string().min(1).max(200),
+  title: z.string().max(TITLE_MAX),
+  reportTo: z.string().min(1).max(200),
+  at: z.number().finite(),
+}).strict()
 const NOT_ARGS = `Not handed off: give a title of 1 to ${TITLE_MAX} characters and instructions of 1 to ${INSTRUCTIONS_MAX} characters that stand on their own.`
 const OMNI_ONLY = 'Only the Omni Bot hands work off this way. Ask it in its chat.'
 export const HANDOFF_NEEDS_TEAM = 'Handing work to a session under you needs a newer Bot team.'
-export const NO_DSH_BOT = 'Not handed off: handing work to a named DSH bot is not offered yet. Leave out dshBot to hand it to a session under you.'
+const TO_YOU = 'Leave out dshBot to hand it to a session under you.'
+export const DSH_BOTS_NEED_TEAM = `Not handed off: ${DSH_BOT_NEEDS_TEAM} ${TO_YOU}`
+export const DSH_BOT_FROM_CHAT = `Not handed off: work goes to a DSH bot only from your own chat, when the user names that bot there, and never while an automation's event is handled there. ${TO_YOU}`
+const noDshBot = name => `Not handed off: the user has no DSH bot ${JSON.stringify(name.slice(0, 60))}. ${TO_YOU}`
 
 // The reports a hand-off's turn did not give itself.
 export const CUT_REPORT = 'It was cut by a restart of DeepSeek Harness and not picked up, so it did not finish.'
@@ -58,7 +77,7 @@ const sourceOf = sessionId => ({ kind: 'user', handoff: sessionId })
 const handoffOf = message => (message?.source?.kind === 'user' && typeof message.source.handoff === 'string' ? message.source.handoff : null)
 
 export function install(rt) {
-  const { ctx } = rt
+  const { ctx, state } = rt
   const warn = (what, error) => rt.warn(`omni-channels: ${what}: %s`, error?.message ?? error)
   const cutByRestart = reason => rt.cutByRestart?.(reason) === true
   // Why the team cannot take a hand-off: it has no restart hook, which its Session needs.
@@ -67,48 +86,84 @@ export function install(rt) {
     return typeof reason === 'string' && reason !== NEEDS_NEWER_TEAM ? reason : HANDOFF_NEEDS_TEAM
   }
   const open = row => row?.kind === 'handoff' && row.reported === false
-  // A hand-off row that has not reported yet, read without waiting.
+  // The hand-offs to a DSH bot that have not reported, by Session.
+  const toBots = () => (state.omniHandoffs ??= {})
+  const toBot = (sessionId) => {
+    const kept = typeof sessionId === 'string' && Object.hasOwn(toBots(), sessionId) ? toBots()[sessionId] : undefined
+    return kept?.sessionId === sessionId && DshHandoff.safeParse(kept).success ? kept : undefined
+  }
+  // A hand-off that has not reported yet, a row or a DSH bot's, read without waiting.
   const unreported = (sessionId) => {
     const row = rt.omniRows.get(sessionId)
-    return open(row) ? row : undefined
+    return open(row) ? row : toBot(sessionId)
+  }
+  const unreportedIds = () => [...rt.omniRows.list().filter(open), ...Object.values(toBots()).filter(kept => toBot(kept?.sessionId) === kept)].map(item => item.sessionId)
+  // Marked reported (a DSH bot's dropped); the undo, for a mark that was not saved.
+  const mark = (item) => {
+    if (open(item)) {
+      item.reported = true
+      return () => { item.reported = false }
+    }
+    delete toBots()[item.sessionId]
+    return () => { toBots()[item.sessionId] = item }
   }
 
   // Its report, once: marked and saved first. A mark that cannot be saved sends nothing; the
   // next start's recovery reads how the turn ended and reports then.
   async function report(sessionId, said) {
-    const row = unreported(sessionId)
-    if (row === undefined) return
-    row.reported = true
+    const item = unreported(sessionId)
+    if (item === undefined) return
+    const undo = mark(item)
     try {
       await rt.save()
     } catch (error) {
-      row.reported = false
+      undo()
       warn(`the hand-off ${sessionId} was not marked reported, so its report waits for the next start`, error)
       return
     }
-    if (rt.botOf(row.reportTo) === undefined) return
-    await rt.deliver({ toId: row.reportTo, text: said.slice(0, REPORT_MAX), role: 'task-done', note: row.title, taskSessionId: sessionId })
-      .catch(error => warn(`the report of the hand-off "${row.title}" did not reach its Bot`, error))
+    if (rt.botOf(item.reportTo) === undefined) return
+    await rt.deliver({ toId: item.reportTo, text: said.slice(0, REPORT_MAX), role: 'task-done', note: item.title, taskSessionId: sessionId })
+      .catch(error => warn(`the report of the hand-off "${item.title}" did not reach its Bot`, error))
   }
 
   // A Session that could not take the work: its row removed (which archives it), else the
-  // Session archived.
+  // Session archived and a DSH bot's hand-off dropped.
   async function discard(sessionId) {
     try {
-      if (rt.omniRows.get(sessionId) === undefined) await ctx.workspaceRegistry.archiveSession(sessionId, { stopActivity: true })
-      else await rt.omniRows.remove(sessionId)
+      if (rt.omniRows.get(sessionId) !== undefined) return await rt.omniRows.remove(sessionId)
+      await ctx.workspaceRegistry.archiveSession(sessionId, { stopActivity: true })
+      if (toBot(sessionId) === undefined) return
+      delete toBots()[sessionId]
+      await rt.save()
     } catch (error) {
       warn(`the hand-off Session ${sessionId} that took no work stays`, error)
     }
   }
 
-  async function handOff(botId, { title, instructions }) {
+  // Its Session made and kept: a row under the Omni row, or a Session under the DSH bot `bot`.
+  async function place(botId, title, bot) {
+    if (bot === undefined) {
+      const sessionId = await createPlainSession(rt, title)
+      await rt.omniRows.add({ sessionId, kind: 'handoff', title, reportTo: botId, reported: false, turnOpenAt: null, at: Date.now() }).catch(async (error) => {
+        await discard(sessionId)
+        throw error
+      })
+      return sessionId
+    }
+    const { sessionId } = await rt.omniDshBots.createSession(bot.id, { title })
+    toBots()[sessionId] = DshHandoff.parse({ sessionId, agentId: bot.id, title, reportTo: botId, at: Date.now() })
+    await rt.save().catch(async (error) => {
+      await discard(sessionId)
+      throw error
+    })
+    return sessionId
+  }
+
+  async function handOff(botId, { title, instructions }, bot) {
     let sessionId
     try {
-      sessionId = await createPlainSession(rt, title)
-      await rt.omniRows.add({ sessionId, kind: 'handoff', title, reportTo: botId, reported: false, turnOpenAt: null, at: Date.now() })
+      sessionId = await place(botId, title, bot)
     } catch (error) {
-      if (sessionId !== undefined) await discard(sessionId)
       return `Not handed off: its session could not be made (${error?.message ?? error}).`
     }
     try {
@@ -117,7 +172,17 @@ export function install(rt) {
       await discard(sessionId)
       return `Not handed off: its session did not take the work (${error?.message ?? error}).`
     }
-    return `Handed off "${title}" to a session under your row. Its result comes back to you as a message; do not wait or poll.`
+    const where = bot === undefined ? 'your row' : `the DSH bot ${JSON.stringify(bot.name)}`
+    return `Handed off "${title}" to a session under ${where}. Its result comes back to you as a message; do not wait or poll.`
+  }
+
+  // Why a DSH bot named for the work cannot take it from this turn; null when it can. Only the
+  // Omni Bot's own chat names one, and not while an automation's event works there (a Bot that
+  // takes events in its chat).
+  function dshBotProblem(self, sessionId) {
+    if (!rt.omniDshBots.ready()) return DSH_BOTS_NEED_TEAM
+    const eventHere = (state.subscriptionRuns ?? []).some(run => run?.sessionId === sessionId && run.status === 'working')
+    return sessionId !== rt.chatOf(self) || eventHere ? DSH_BOT_FROM_CHAT : null
   }
 
   ctx.tools.register(defineTool({
@@ -126,20 +191,28 @@ export function install(rt) {
     parameters: {
       title: { type: 'string', required: true, description: `A few words the user will see under your row (at most ${TITLE_MAX} characters)` },
       instructions: { type: 'string', required: true, description: `Everything the work needs: the goal, where to work, what to return (at most ${INSTRUCTIONS_MAX} characters)` },
-      dshBot: { type: 'string', description: 'Not offered yet: leave it out.' },
+      dshBot: { type: 'string', description: rt.omniDshBots.ready() ? 'Only when the user\'s own message in your chat names one of their DSH bots: its name, and the work runs in a session under that bot, in its folder. Leave it out otherwise.' : 'Not offered here: leave it out.' },
     },
     output,
     async execute(raw, exec) {
       await rt.load()
-      const self = rt.selfOf(exec.agent?.id ?? exec.agent?.session?.id)
+      const sessionId = exec.agent?.id ?? exec.agent?.session?.id
+      const self = rt.selfOf(sessionId)
       if (!operatesOmni(rt, self)) return OMNI_ONLY
       if (rt.teamResume?.ready !== true) return `Not handed off: ${teamReason()}`
       const args = HandoffArgs.safeParse(raw ?? {})
       if (!args.success) return NOT_ARGS
-      if (args.data.dshBot !== undefined) return NO_DSH_BOT
+      const { dshBot } = args.data
+      let bot
+      if (dshBot !== undefined) {
+        const problem = dshBotProblem(self, sessionId)
+        if (problem !== null) return problem
+        bot = rt.omniDshBots.find(dshBot)
+        if (bot === undefined) return noDshBot(dshBot)
+      }
       const readOnly = rt.readOnly?.()
       if (readOnly !== undefined) return `Not handed off: ${readOnly}`
-      return handOff(self, args.data)
+      return handOff(self, args.data, bot)
     },
   }))
 
@@ -179,17 +252,17 @@ export function install(rt) {
   })
 
   // The restart hook's Sessions: every unreported hand-off's, as for a working run, also when
-  // its open turn was never saved.
+  // its open turn was never saved (a DSH bot's the team also finds through state.agents).
   rt.teamResume.addSessions(() => {
     const gone = archivedIds(ctx)
-    return rt.omniRows.list().filter(row => open(row) && !gone.has(row.sessionId)).map(row => row.sessionId)
+    return unreportedIds().filter(sessionId => !gone.has(sessionId))
   })
 
   // Once the team's resumes are done: each unreported hand-off, one after another.
   rt.teamResume.addRecovery(async (given) => {
     await rt.load()
-    for (const row of rt.omniRows.list().filter(open)) {
-      await decide(row.sessionId, given).catch(error => warn(`deciding the hand-off ${row.sessionId} after a restart failed`, error))
+    for (const sessionId of unreportedIds()) {
+      await decide(sessionId, given).catch(error => warn(`deciding the hand-off ${sessionId} after a restart failed`, error))
     }
   })
 

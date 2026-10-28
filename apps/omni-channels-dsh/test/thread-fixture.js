@@ -181,8 +181,9 @@ export const record = (id, sessionId, extra = {}) => ({
 // be made. `services`: DSH services the plugin reads with ctx.get (llm, attachments).
 // `resumesDone`: the outcome the plugin is told, once the team's own pass is over, in place of
 // the pass's (one a pass cannot be made to give on demand: `{ failed }`, `{ readOnly }`, a
-// `resent` Session).
-export async function boot(t, home, { mask = false, services = {}, resumesDone } = {}) {
+// `resent` Session). `dshBots: false` hides the team's DSH-bot calls, as a Bot team without
+// them has none.
+export async function boot(t, home, { mask = false, services = {}, resumesDone, dshBots = true } = {}) {
   const ctx = fakeContext({ services })
   const agents = new Map()
   const made = []
@@ -269,8 +270,11 @@ export async function boot(t, home, { mask = false, services = {}, resumesDone }
     registered.push(entry)
     return register(entry)
   }
-  const base = mask ? Object.create(team, { resumable: { value: undefined }, resumesDone: { value: undefined } })
-    : resumesDone === undefined ? team : Object.create(team, { resumesDone: { value: team.resumesDone.then(() => resumesDone) } })
+  const hidden = {
+    ...(mask ? { resumable: { value: undefined }, resumesDone: { value: undefined } } : resumesDone === undefined ? {} : { resumesDone: { value: team.resumesDone.then(() => resumesDone) } }),
+    ...(dshBots ? {} : { dshBots: { value: undefined } }),
+  }
+  const base = Object.keys(hidden).length === 0 ? team : Object.create(team, hidden)
   const channels = createRuntime(ctx, base)
   await channels.load()
   const call = (endpoint, body) => team.extended.endpointOf(endpoint).fn(body)
@@ -301,6 +305,60 @@ export function homeFor(t, omni, state = teamState()) {
   })
   return home
 }
+// A fake Omni (fakeOmni) that also lists its channel and every chat, as find_chats and
+// save_automation read them; the real fetch comes back after the test.
+export function watchedOmni(t) {
+  const omni = fakeOmni()
+  t.after(resetFetch)
+  const inner = globalThis.fetch
+  globalThis.fetch = async (address, init = {}) => {
+    const url = new URL(String(address))
+    const path = url.pathname.replace(/^\/api\/v2/, '')
+    const json = body => new Response(JSON.stringify(body), { status: 200 })
+    if ((init.method ?? 'GET') === 'GET' && path === '/instances') return json({ items: [{ id: INSTANCE, channel: 'whatsapp-baileys', name: 'Pessoal', isActive: true }] })
+    if ((init.method ?? 'GET') === 'GET' && path === `/instances/${INSTANCE}/status`) return json({ data: { state: 'connected' } })
+    if ((init.method ?? 'GET') === 'GET' && path === '/chats' && !url.searchParams.has('instanceId')) return json({ items: Object.values(CHATS) })
+    return inner(address, init)
+  }
+  return omni
+}
+
+// One turn in a Session, as DSH runs it: begun on `message`, its words, its end (none when
+// `reason` is null).
+export function turn(run, sessionId, number, message, words, reason = { kind: 'completed' }) {
+  run.emit(sessionId, 'turn/start', { turn: number }, Date.now())
+  if (message !== undefined) run.emit(sessionId, 'user/message', { content: message.content, source: message.source })
+  if (words !== undefined) run.emit(sessionId, 'assistant/message', { message: { content: [{ type: 'text', text: words }] } })
+  if (reason !== null) run.emit(sessionId, 'turn/end', { turn: number, reason })
+}
+// The team's pass (its timer mocked), then every recovery of the plugin's, over; the outcome.
+export async function signal(t, run) {
+  let over = false
+  run.channels.teamResume.addRecovery(() => { over = true })
+  t.mock.timers.tick(3000)
+  const done = await run.team.resumesDone
+  await until(() => over)
+  await flush()
+  return done
+}
+// The next DSH start on the same home, after this one saved and stopped.
+export async function restart(t, run, home, options) {
+  await run.channels.save()
+  await run.stop()
+  return boot(t, home, options)
+}
+// One message the stream hands to fireSubscription, as omni-events.js's eventOf makes it.
+export const eventFor = (text, chat = 'Marina') => ({ kind: 'message', who: chat, chat, channel: 'Pessoal', at: Date.now(), text, ref: `row-${text}` })
+// DSH's tools/pre-execute waterfall for one call in a Session, ending in DSH's own allow.
+export const gateOf = (run, name, sessionId) => {
+  const chain = [...(run.ctx.listeners.get('tools/pre-execute') ?? [])]
+  const exec = { name, arguments: {}, agent: { id: sessionId, session: { id: sessionId } } }
+  const step = index => (index < chain.length ? chain[index](exec, () => step(index + 1)) : Promise.resolve({ kind: 'allow' }))
+  return step(0)
+}
+// A Session whose log is `events`, newest last.
+export const logOf = (run, sessionId, events) => Object.assign(run.agentOf(sessionId).session, { seq: events.length, eventAt: seq => events[seq] })
+
 // What this test asked Omni, leaving out the event stream the link starts (omni-events.js).
 export const askedOf = omni => omni.asked.filter(call => !call.includes(' /events/'))
 export const saved = home => JSON.parse(readFileSync(join(home, 'state.json'), 'utf8'))

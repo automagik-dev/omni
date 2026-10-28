@@ -25,6 +25,12 @@ export function workerOf(worker, roster) {
     return { name: bot?.name ?? 'Omni', bot, look: MAIN_LOOK }
   }
   if (worker.kind === 'session') return { name: worker.mode === 'ongoing' ? t('One ongoing session') : t('A new session each time'), session: true }
+  // One of the owner's DSH bots, by its name on the team's roster (a Tasks record never is one).
+  if (worker.kind === 'dshbot') {
+    const agent = roster?.agentsById?.[worker.agentId]
+    if (agent?.kind !== 'dsh') return { name: t('A deleted DSH bot'), dsh: true }
+    return { name: worker.mode === 'ongoing' ? t('{name} · one ongoing session', { name: agent.name }) : t('{name} · a new session each time', { name: agent.name }), dsh: true }
+  }
   // An added chat's thread, by its chat's name (the threads ride the team view).
   if (worker.kind === 'thread') {
     const thread = (Array.isArray(roster?.omniThreads) ? roster.omniThreads : []).find(item => item.id === worker.threadId)
@@ -37,6 +43,8 @@ export function workerOf(worker, roster) {
 export function WorkerMark({ worker, roster, size = 24 }) {
   const info = workerOf(worker, roster)
   if (info.session) return h('span', { className: 'os-session', style: { width: size, height: size } }, h(OmniMark, { size: Math.round(size * 0.62) }))
+  // A DSH bot, as the team draws one (a team before DSH bots has no such icon).
+  if (info.dsh) return h('span', { className: 'os-session os-dsh', style: { width: size, height: size } }, icons.TerminalIcon ? h(icons.TerminalIcon) : null)
   if (info.chat !== undefined) return h(ChatAvatar, { chat: { name: info.chat, initials: initials(info.chat) }, size })
   return h(BotMark, info.bot ? { bot: info.bot, size } : { look: info.look, size })
 }
@@ -270,6 +278,7 @@ export const SUBSCRIPTIONS_CSS = `
 .os-trigger svg{width:var(--os-icon,18px);height:var(--os-icon,18px)}
 .os-run-note{font-size:11.5px;color:var(--bt-ink-3)}
 .os-session{display:inline-grid;place-items:center;flex:none;border-radius:30%;background:var(--bt-ink);color:var(--bt-main)}
+.os-dsh svg{width:62%;height:62%}
 .os-stack{display:inline-flex;align-items:center;flex:none}
 .os-stack-item{display:inline-flex;margin-left:-4px;border-radius:50%;box-shadow:0 0 0 1.5px var(--bt-card)}
 .os-stack-item:first-child{margin-left:0}
