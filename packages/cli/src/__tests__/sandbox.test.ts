@@ -1365,6 +1365,11 @@ describe('autopg from its pinned release (darwin-arm64, linux-arm64, linux-x64-g
     rmSync(join(seed, '.version'));
     rmSync(join(seed, 'lib'), { recursive: true });
     const supervisor = pinnedSupervisor(release);
+    // A supervisor that got past the check would run until stopped; fail fast instead.
+    supervisor.deps.spawnChild = (spec) => {
+      supervisor.spawned.push(spec.name);
+      throw new Error(`${spec.name} started on a half-installed runtime`);
+    };
     await expect(runSandboxSupervisor(home, supervisor.deps)).rejects.toThrow(/not fully installed/);
     expect(supervisor.spawned).toEqual([]);
     expect(existsSync(join(seed, 'bin', 'postgres'))).toBe(true);
