@@ -175,7 +175,7 @@ function connectorEvent(targetAutomationId: string): OmniEvent {
 
 describe('automation engine connector trigger', () => {
   test('a connector.event runs only the automation named by the delivery', async () => {
-    let handler: ((event: OmniEvent) => Promise<void>) | null = null;
+    const handlers: Array<(event: OmniEvent) => Promise<void>> = [];
     const subscription: Subscription = { id: 'sub', pattern: 'connector.event.>', unsubscribe: async () => {} };
     const bus = {
       connect: mock(async () => {}),
@@ -184,7 +184,7 @@ describe('automation engine connector trigger', () => {
       subscribe: mock(async () => subscription),
       subscribePattern: mock(
         async (_pattern: string, h: (event: OmniEvent) => Promise<void>, _options?: SubscribeOptions) => {
-          handler = h;
+          handlers.push(h);
           return subscription;
         },
       ),
@@ -203,8 +203,9 @@ describe('automation engine connector trigger', () => {
       },
     });
 
-    if (!handler) throw new Error('engine never subscribed');
-    await handler(connectorEvent(AUTOMATION_A));
+    const deliver = handlers[0];
+    if (!deliver) throw new Error('engine never subscribed');
+    await deliver(connectorEvent(AUTOMATION_A));
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.connectorId).toBe('connector-1');

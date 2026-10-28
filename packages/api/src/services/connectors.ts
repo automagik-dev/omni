@@ -858,6 +858,7 @@ export class ConnectorService {
       data,
     });
 
+    const tenantId = subscription.tenantId ?? connector.tenantId ?? null;
     const metadata: Record<string, unknown> = {
       correlationId: eventId,
       source: 'connector',
@@ -866,6 +867,7 @@ export class ConnectorService {
       provider: connector.provider,
       fullEventType: CONNECTOR_EVENT_TYPE,
       ...(args.test ? { test: true } : {}),
+      ...(tenantId ? { tenantId } : {}),
     };
 
     const claimed = await this.db
@@ -903,6 +905,7 @@ export class ConnectorService {
         publishEventId: eventId,
         source: 'connector',
         correlationId: eventId,
+        ...(tenantId ? { tenantId } : {}),
         ...(args.test ? { test: true } : {}),
       });
     } catch (error) {

@@ -62,7 +62,7 @@ describe('connector.invoke', () => {
     const { service } = serviceWith((async () => {
       called = true;
       return jsonResponse({});
-    }) as typeof fetch);
+    }) as unknown as typeof fetch);
 
     await expect(
       service.executePrepared(prepared(), { taskId: 123, comment: 'no' }, 1_000, null),

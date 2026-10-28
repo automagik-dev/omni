@@ -201,7 +201,7 @@ describe('connector inbound envelope', () => {
       providerEventId: 'history-1',
       task_id: 'task-123',
     });
-    expect(fakes.published[0]?.metadata).toMatchObject({ source: 'connector' });
+    expect(fakes.published[0]?.metadata).toMatchObject({ source: 'connector', tenantId: TENANT_ID });
     // Only the journal is inserted; the subscription counters are updated.
     expect(fakes.touchedTables).toContain('omni_events');
     expect(fakes.touchedTables).toContain('connector_event_subscriptions');
