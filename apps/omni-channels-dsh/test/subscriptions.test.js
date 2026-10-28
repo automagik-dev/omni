@@ -13,7 +13,7 @@ import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import { defineTool, ToolRuntime } from '@deepseek-ai/dsh-tools'
 import { TEAM_TOOLS as PINNED_TEAM_TOOLS } from '@automagik/bots-dsh/src/host/constants.js'
-import { ROW_DENIED, ROW_REFUSAL, ROW_REMOVED, TEAM_TOOLS } from '../src/host/omni-rows.js'
+import { createPlainSession, OmniRow, ROW_DENIED, ROW_REFUSAL, ROW_REMOVED, TEAM_TOOLS } from '../src/host/omni-rows.js'
 import { OPERATOR_RULES } from '../src/host/omni-rules.js'
 import { NOT_PICKED_UP } from '../src/host/standing-recovery.js'
 import { ONGOING_RENEWED, QUEUED_MAX } from '../src/host/standing-runs.js'
@@ -2544,4 +2544,54 @@ test('review 14, LOW-6: an event that makes an ongoing automation\'s new Session
   const oldest = runsIn(bench).findLast(item => item.status === 'queued')
   assert.deepEqual([oldest.event.text, oldest.note], ['queued 0', ONGOING_RENEWED.archived])
   assert.equal(runsIn(bench).filter(item => item.note !== undefined).length, 1)
+})
+
+// Quality pass of Group 14.
+test('quality 14, H1: a "new session" run whose cut turn the team did not pick up ends failed, but its Session stays read-only, also through a later restart\'s untagged resume, until that turn ends cleanly', async (t) => {
+  const bench = await threadBench(t)
+  const fresh = await sessionSub(bench, 'new')
+  const working = await fire(bench, fresh, 'Um')
+  const sessionId = sessionOfRun(working)
+  await until(() => postedTo(bench, sessionId).length === 1)
+  startTurn(bench, sessionId, postedTo(bench, sessionId)[0])
+  endTurn(bench, sessionId, undefined, { kind: 'aborted', reason: { kind: 'disposed' } })
+  await bench.run.channels.save()
+  await bench.run.stop()
+  // The next start does not pick it up: its run ends failed, and the preset stays.
+  const second = await threadBench(t, { home: bench.home, resumesDone: { resumed: [], resent: [] } })
+  await until(() => runById(second, working.id)?.status === 'failed')
+  assert.equal(runById(second, working.id).summary, NOT_PICKED_UP)
+  await flush()
+  assert.deepEqual(switchedIn(second, sessionId), [])
+  assert.equal(second.run.channels.omniRows.get(sessionId).contained, true)
+  await second.run.channels.save()
+  await second.run.stop()
+  // A later start resumes the cut turn, untagged: still read-only until its clean end.
+  const third = await threadBench(t, { home: bench.home, signal: false })
+  third.run.cut(sessionId)
+  await signalOf(t, third.run)
+  await until(() => postedTo(third, sessionId).length === 1)
+  assert.deepEqual(postedTo(third, sessionId)[0].source, { kind: 'user', resumed: true })
+  assert.deepEqual(switchedIn(third, sessionId), [])
+  startTurn(third, sessionId, postedTo(third, sessionId)[0])
+  endTurn(third, sessionId, 'Feito.')
+  await until(() => switchedIn(third, sessionId).length === 1)
+  assert.deepEqual(switchedIn(third, sessionId), ['workspace-write'])
+})
+
+test('quality 14, L2 and L3: a plain Session never kept as a row follows no model change; a row saved while contained parses again', async (t) => {
+  const bench = await threadBench(t)
+  const orphan = await createPlainSession(bench.run.channels, 'Never kept')
+  assert.deepEqual(bench.run.selected.filter(([id]) => id === orphan).map(([, ref]) => ref), ['deepseek/flash'])
+  const fresh = await sessionSub(bench, 'new')
+  const sessionId = sessionOfRun(await fire(bench, fresh, 'Um'))
+  bench.run.selected.length = 0
+  await bench.run.team.updateBot('m1', { model: 'deepseek/pro' })
+  await flush()
+  const moved = id => bench.run.selected.filter(([selected]) => selected === id).map(([, ref]) => ref)
+  assert.deepEqual([moved(orphan), moved(sessionId)], [[], ['deepseek/pro']])
+  await bench.run.channels.save()
+  const kept = saved(bench.home).omniRows[sessionId]
+  assert.deepEqual([kept.contained, kept.preset], [true, 'workspace-write'])
+  assert.deepEqual(OmniRow.parse(kept), kept)
 })

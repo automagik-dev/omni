@@ -45,7 +45,7 @@ export const ROW_REMOVED = 'Stopped: its session was removed.'
 export const READ_PRESET = 'read-only'
 const TITLE_MAX = 80
 
-const OmniRow = z.object({
+export const OmniRow = z.object({
   sessionId: z.string().min(1).max(200),
   kind: z.enum(ROW_KINDS),
   title: z.string().max(TITLE_MAX),
@@ -54,6 +54,10 @@ const OmniRow = z.object({
   reported: z.boolean().optional(),
   turnOpenAt: z.number().finite().nullable(),
   at: z.number().finite(),
+  // While a "new session" run that asks first may still act there: on DSH's read-only preset,
+  // `preset` the one it was made with (contain).
+  contained: z.literal(true).optional(),
+  preset: z.string().min(1).max(200).optional(),
 }).strict()
 const RemovePayload = z.object({ sessionId: z.string().min(1).max(200) }).strict()
 
@@ -77,13 +81,13 @@ function trimRow(rt, agent) {
 
 /**
  * A plain Session for a row under the Omni Bot: rt.createSession (never createTaskSession), on
- * the Omni Bot's model before its first turn and following it, its live agent without the
- * team's and the threads' tools. The caller keeps it as a row (rt.omniRows.add).
+ * the Omni Bot's model before its first turn, its live agent without the team's and the
+ * threads' tools. The caller keeps it as a row (rt.omniRows.add), which follows the Omni Bot's
+ * model from then on; a Session never kept follows nothing.
  */
 export async function createPlainSession(rt, title) {
   const sessionId = await rt.createSession(titleOf(title))
   await selectOmniModel(rt, sessionId).catch(error => rt.warn('omni-channels: the Session %s keeps DSH\'s model, the Omni Bot\'s was not applied: %s', sessionId, error?.message ?? error))
-  followOmniModel(rt, sessionId, { select: false })
   // agent/created came before the Session was a row, so its list is trimmed here.
   try {
     trimRow(rt, await rt.resolveAgent(sessionId))
@@ -164,22 +168,20 @@ export function install(rt) {
     const live = ongoingOf(subId)
     if (live !== null) return Promise.resolve({ sessionId: live, renewed: false })
     if (!ongoing(subs()[subId])) return Promise.resolve({ sessionId: null, renewed: false })
-    if (!making.has(subId)) {
-      const made = (async () => {
-        const before = subs()[subId]
-        // Why the one before is gone: its row removed, or DSH archived it.
-        const renewed = typeof before.ongoingSessionId !== 'string' ? false : takes(before.ongoingSessionId) ? 'archived' : 'removed'
-        const sessionId = await createPlainSession(rt, before.name)
-        // Read again: the store may have reloaded while the Session was made.
-        const sub = subs()[subId]
-        if (sub !== undefined) sub.ongoingSessionId = sessionId
-        await add({ sessionId, kind: 'ongoing', title: before.name, subId, turnOpenAt: null, at: Date.now() })
-        return { sessionId, renewed }
-      })()
-      making.set(subId, made)
-      void made.finally(() => making.delete(subId)).catch(() => {})
-    }
-    return making.get(subId)
+    const made = (async () => {
+      const before = subs()[subId]
+      // Why the one before is gone: its row removed, or DSH archived it.
+      const renewed = typeof before.ongoingSessionId !== 'string' ? false : takes(before.ongoingSessionId) ? 'archived' : 'removed'
+      const sessionId = await createPlainSession(rt, before.name)
+      // Read again: the store may have reloaded while the Session was made.
+      const sub = subs()[subId]
+      if (sub !== undefined) sub.ongoingSessionId = sessionId
+      await add({ sessionId, kind: 'ongoing', title: before.name, subId, turnOpenAt: null, at: Date.now() })
+      return { sessionId, renewed }
+    })()
+    making.set(subId, made)
+    void made.finally(() => making.delete(subId)).catch(() => {})
+    return made
   }
 
   // A "new session" run that asks first: its Session on the read-only preset while it works,
@@ -194,10 +196,13 @@ export function install(rt) {
   // Back on the preset it was made with, once no run works or waits there.
   const live = sessionId => runs().some(run => (run.status === 'working' || run.status === 'queued') && isStandingRun(run)
     && (run.sessionId === sessionId || (run.target?.kind === 'session' && run.target.id === sessionId)))
-  // Taken off at once, so a run's end and its turn's end set it back once between them.
+  // Taken off at once, so a run's end and its turn's end set it back once between them. Never
+  // while its turn is open: a turn a restart cut (its run ended or not, picked up or not) may
+  // still be resumed by the team, untagged, so nothing else would gate it; its clean end sets
+  // the preset back (the turn/end handler clears turnOpenAt first).
   async function settle(sessionId) {
     const row = get(sessionId)
-    if (row?.contained !== true || live(sessionId)) return
+    if (row?.contained !== true || live(sessionId) || Number.isFinite(row.turnOpenAt)) return
     delete row.contained
     const presets = ctx.get?.('permissionPresets')
     try {
@@ -303,13 +308,12 @@ export function install(rt) {
 
   // At start: every saved row follows the Omni Bot's model again (they are on it already, so
   // none is opened for it), and a Session whose run ended while this host was away goes back
-  // on its preset. One whose turn a restart cut stays read-only: the team resumes that turn
-  // with no tag, so nothing else gates it, and its clean end sets the preset back.
+  // on its preset (settle: never while a turn a restart cut is still open).
   ctx.effect(() => {
     void Promise.resolve(rt.load()).then(() => {
       for (const row of list()) follow(row.sessionId)
       if (rt.readOnly?.() !== undefined) return
-      for (const row of list()) if (row.contained === true && !live(row.sessionId) && !Number.isFinite(row.turnOpenAt)) void settle(row.sessionId)
+      for (const row of list()) if (row.contained === true) void settle(row.sessionId)
     }).catch(error => warn('following the session rows failed', error))
   }, 'omni-channels: session rows')
 
