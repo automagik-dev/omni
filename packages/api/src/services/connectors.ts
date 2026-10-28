@@ -51,6 +51,7 @@ const log = createLogger('connector-service');
 /** Longest idempotency key stored as-is; longer keys collapse to a hash. */
 const MAX_KEY_LENGTH = 512;
 const MAX_ERROR_TEXT = 500;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export const CONNECTOR_RESERVED_KEYS = [
   'connectorId',
@@ -427,6 +428,9 @@ export class ConnectorService {
   }
 
   async getRow(id: string): Promise<Connector> {
+    // A template can render to anything; a non-UUID must be NOT_FOUND, not a
+    // PostgreSQL cast error (500).
+    if (!UUID_RE.test(id)) throw new NotFoundError('Connector', id);
     const [row] = await this.db
       .select()
       .from(connectors)
