@@ -3,7 +3,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, test } from 'node:test'
+import fs from 'node:fs'
 import { createServer } from 'node:http'
+import { syncBuiltinESMExports } from 'node:module'
 import { candidates, discover, install, managerOf, probe, readConfig, sameOmni } from '../src/host/omni-discover.js'
 import { install as installLink, LINK_FILE } from '../src/host/omni-link.js'
 import { parseConnectLink } from '../src/client/connect-link.js'
@@ -172,6 +174,55 @@ test('under Unfold only the instance\'s own sandbox is found: no CLI config, no 
   assert.ok(reads.every(path => path === ownConfig), `read outside the instance: ${reads}`)
   assert.equal(managerOf('http://127.0.0.1:47300', { env, home, read }), 'other')
   assert.ok(reads.every(path => path === ownConfig))
+})
+
+// Every path node:fs is asked about while `run` runs, whoever asks: once
+// syncBuiltinESMExports() runs, the plugin's own `import { readFileSync } from 'node:fs'`
+// bindings call these patches too, so a read that skips the injected reader is still seen.
+const FS_CALLS = ['readFileSync', 'statSync', 'lstatSync', 'existsSync', 'readdirSync', 'openSync', 'accessSync']
+async function fsTouches(run) {
+  const touched = []
+  const real = Object.fromEntries(FS_CALLS.map(name => [name, fs[name]]))
+  for (const name of FS_CALLS) {
+    fs[name] = (path, ...rest) => {
+      touched.push(String(path))
+      return real[name](path, ...rest)
+    }
+  }
+  syncBuiltinESMExports()
+  try {
+    await run()
+  } finally {
+    Object.assign(fs, real)
+    syncBuiltinESMExports()
+  }
+  return touched
+}
+
+test('under Unfold the planted ~/.omni and CLI config are never opened, whatever reads them (fs spy)', async (t) => {
+  const { home, own } = unfoldHome(t)
+  const planted = join(home, 'cli-config')
+  mkdirSync(planted)
+  writeFileSync(join(planted, 'config.json'), JSON.stringify({ apiUrl: 'http://127.0.0.1:47303', apiKey: LOCAL_KEY }))
+  const ownConfig = join(own, 'sandbox', 'config', 'config.json')
+  const fetchImpl = loopback({ 47302: 'pairable' })
+  const outside = path => path.startsWith(join(home, '.omni')) || path.startsWith(planted)
+
+  const unfold = { AUTOMAGIK_HOST: 'unfold', OMNI_HOME: own, OMNI_CONFIG_DIR: planted }
+  const touched = await fsTouches(async () => {
+    candidates({ env: unfold, home })
+    managerOf('http://127.0.0.1:47300', { env: unfold, home })
+    await discover({ env: unfold, home, fetchImpl, release: async () => ({ version: '9.9.9' }) })
+  })
+  assert.ok(touched.includes(ownConfig), 'the spy sees the reads it should (the instance config)')
+  assert.deepEqual(touched.filter(outside), [])
+
+  // Control: off Unfold the same spy sees the planted files read.
+  const plain = { OMNI_HOME: own, OMNI_CONFIG_DIR: planted }
+  const read = await fsTouches(async () => {
+    await discover({ env: plain, home, fetchImpl, release: async () => ({ version: '9.9.9' }) })
+  })
+  assert.ok(read.some(outside), 'control: off Unfold the planted configs are read')
 })
 
 test('under Unfold without OMNI_HOME nothing is found and nothing is read', async (t) => {
