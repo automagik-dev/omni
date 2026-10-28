@@ -705,7 +705,25 @@ export class ConnectorService {
     if (!event) {
       throw new ValidationError(`Subscription references unknown event key "${subscription.providerEventKey}"`);
     }
-    const data = payload ?? event.sample ?? { event: event.key };
+    const rawPayload = payload ?? event.sample ?? { event: event.key };
+    let data = rawPayload;
+    if (manifest.parseDelivery) {
+      let parsed: ConnectorParsedDelivery;
+      try {
+        parsed = manifest.parseDelivery(JSON.stringify(rawPayload), {});
+      } catch (error) {
+        throw new ValidationError(`Test payload is not a valid ${manifest.label} delivery: ${asErrorText(error)}`);
+      }
+      if (parsed.eventKey !== subscription.providerEventKey) {
+        throw new ValidationError(
+          `Test payload event key "${parsed.eventKey}" does not match subscription key "${subscription.providerEventKey}"`,
+        );
+      }
+      if (!matchesFilters(parsed.data, subscription.filters ?? {})) {
+        throw new ValidationError('Test payload does not match the subscription filters');
+      }
+      data = parsed.data;
+    }
     const result = await this.deliver({
       connector,
       subscription,
