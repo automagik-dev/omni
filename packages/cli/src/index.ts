@@ -316,7 +316,7 @@ const COMMANDS: CommandDef[] = [
     create: createConnectorsCommand,
     category: 'advanced',
     helpGroup: 'Management',
-    helpDescription: 'Integration accounts (ClickUp), event subscriptions, typed actions',
+    helpDescription: 'Integration accounts, event subscriptions, typed actions',
   },
   {
     create: createFollowUpCommand,
