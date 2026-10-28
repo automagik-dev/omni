@@ -13,7 +13,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, mock, test } from '
 import type { EventBus, FollowUpSequenceConfig } from '@omni/core';
 import type { Database } from '@omni/db';
 import { chatFollowUpState, chats, instances } from '@omni/db';
-import { eq, sql } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import { FollowUpLifecycleService } from '../services/follow-up-lifecycle';
 import { FollowUpSweeperService } from '../services/follow-up-sweeper';
 import { describeWithDb, getTestDb } from './db-helper';
@@ -37,6 +37,59 @@ describeWithDb('FollowUpSweeperService (integration)', () => {
   let testChatId: string;
   let publishedEvents: Array<{ type: string; payload: Record<string, unknown> }>;
   let eventBus: EventBus;
+  const extraInstanceIds: string[] = [];
+
+  async function seedChats(channel: string, settingsList: Array<Record<string, unknown>>): Promise<string[]> {
+    const [instance] = await db
+      .insert(instances)
+      .values({ name: `test-follow-up-rearm-${crypto.randomUUID()}`, channel })
+      .returning();
+    extraInstanceIds.push(instance.id);
+    const created = await db
+      .insert(chats)
+      .values(
+        settingsList.map((settings) => ({
+          instanceId: instance.id,
+          externalId: `chat-${crypto.randomUUID()}`,
+          chatType: 'dm' as const,
+          channel,
+          name: 'Rearm Test',
+          settings,
+        })),
+      )
+      .returning();
+    return created.map((chat) => chat.id);
+  }
+
+  async function seedCustomerReplied(chatIds: string[], inboundAt: Date, cfg: FollowUpSequenceConfig): Promise<void> {
+    const rows = await db
+      .select({ id: chats.id, instanceId: chats.instanceId })
+      .from(chats)
+      .where(inArray(chats.id, chatIds));
+    await db.insert(chatFollowUpState).values(
+      rows.map((chat) => ({
+        chatId: chat.id,
+        instanceId: chat.instanceId,
+        agentId: null,
+        sequenceConfig: cfg,
+        sequenceIndex: 1,
+        lastAgentMessageAt: inboundAt,
+        nextFireAt: null,
+        disarmReason: 'customer_replied' as const,
+        disarmedAt: inboundAt,
+        lastInboundCustomerMessageAt: inboundAt,
+      })),
+    );
+  }
+
+  async function disarmReasonOf(chatId: string): Promise<string | null> {
+    const [row] = await db
+      .select({ disarmReason: chatFollowUpState.disarmReason })
+      .from(chatFollowUpState)
+      .where(eq(chatFollowUpState.chatId, chatId))
+      .limit(1);
+    return row.disarmReason;
+  }
 
   beforeAll(async () => {
     db = getTestDb();
@@ -87,6 +140,12 @@ describeWithDb('FollowUpSweeperService (integration)', () => {
   });
 
   afterEach(async () => {
+    if (extraInstanceIds.length > 0) {
+      await db.delete(chatFollowUpState).where(inArray(chatFollowUpState.instanceId, extraInstanceIds));
+      await db.delete(chats).where(inArray(chats.instanceId, extraInstanceIds));
+      await db.delete(instances).where(inArray(instances.id, extraInstanceIds));
+      extraInstanceIds.length = 0;
+    }
     await db.delete(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId));
     // Defensive cleanup — if a test wrote `settings.agentPaused`, strip only
     // that key. Runs unconditionally so a failed test can't leak paused
@@ -473,5 +532,66 @@ describeWithDb('FollowUpSweeperService (integration)', () => {
     expect(row.disarmReason).toBe('customer_replied');
     expect(row.nextFireAt).toBeNull();
     // `afterEach` strips agentPaused.
+  });
+
+  test('chats in an active close-contact state do not hold back an eligible row behind them', async () => {
+    const cfg = config();
+    const now = Date.now();
+    const cooldownEnd = new Date(now + 24 * 60 * MS_PER_MINUTE).toISOString();
+    const closedIds = await seedChats(
+      'whatsapp-baileys',
+      Array.from({ length: 100 }, (_, i) => (i % 2 === 0 ? { closed: true } : { closeUntil: cooldownEnd })),
+    );
+    await seedCustomerReplied(closedIds, new Date(now - 60 * MS_PER_MINUTE), cfg);
+    const [eligibleId] = await seedChats('whatsapp-baileys', [{}]);
+    await seedCustomerReplied([eligibleId], new Date(now - 30 * MS_PER_MINUTE), cfg);
+
+    const stats = await service.sweep();
+
+    expect(stats.rearmed).toBe(1);
+    expect(await disarmReasonOf(eligibleId)).toBeNull();
+    expect(await disarmReasonOf(closedIds[0])).toBe('customer_replied');
+    expect(await disarmReasonOf(closedIds[1])).toBe('customer_replied');
+  });
+
+  test('a close-contact cooldown that already ended does not block the re-arm', async () => {
+    const now = Date.now();
+    const [chatId] = await seedChats('whatsapp-baileys', [
+      { closeUntil: new Date(now - MS_PER_MINUTE).toISOString(), closeOutcome: 'no_response' },
+    ]);
+    await seedCustomerReplied([chatId], new Date(now - 30 * MS_PER_MINUTE), config());
+
+    const stats = await service.sweep();
+
+    expect(stats.rearmed).toBe(1);
+    expect(await disarmReasonOf(chatId)).toBeNull();
+  });
+
+  test('on a channel with a messaging window, a reply older than the window is not re-armed', async () => {
+    const now = Date.now();
+    const [recentId, staleId] = await seedChats('whatsapp-business', [{}, {}]);
+    const guarded = config({ stopOutsideMessagingWindow: true });
+    await seedCustomerReplied([recentId], new Date(now - 20 * 60 * MS_PER_MINUTE), guarded);
+    await seedCustomerReplied([staleId], new Date(now - 30 * 60 * MS_PER_MINUTE), guarded);
+
+    const stats = await service.sweep();
+
+    expect(stats.rearmed).toBe(1);
+    expect(await disarmReasonOf(recentId)).toBeNull();
+    expect(await disarmReasonOf(staleId)).toBe('customer_replied');
+  });
+
+  test('the messaging-window bound follows stopOutsideMessagingWindow and the channel', async () => {
+    const inboundAt = new Date(Date.now() - 30 * 60 * MS_PER_MINUTE);
+    const [unguardedId] = await seedChats('whatsapp-business', [{}]);
+    await seedCustomerReplied([unguardedId], inboundAt, config({ stopOutsideMessagingWindow: false }));
+    const [noWindowId] = await seedChats('whatsapp-baileys', [{}]);
+    await seedCustomerReplied([noWindowId], inboundAt, config({ stopOutsideMessagingWindow: true }));
+
+    const stats = await service.sweep();
+
+    expect(stats.rearmed).toBe(2);
+    expect(await disarmReasonOf(unguardedId)).toBeNull();
+    expect(await disarmReasonOf(noWindowId)).toBeNull();
   });
 });
