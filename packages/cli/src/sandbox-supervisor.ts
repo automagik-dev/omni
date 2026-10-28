@@ -15,6 +15,7 @@
 
 import { type ChildProcess, spawn } from 'node:child_process';
 import { closeSync, fstatSync, openSync, renameSync, rmSync, writeFileSync, writeSync } from 'node:fs';
+import { readPgPasswordFile } from './autopg-runtime.js';
 import { ensureOmniDatabaseExists, waitForCanonicalReady } from './lib/canonical-pgserve.js';
 import {
   SANDBOX_EXIT,
@@ -95,8 +96,8 @@ export interface SupervisorDeps {
   spawnChild(spec: SandboxChildSpec): ChildHandle;
   /** Resolves true once the child's loopback port answers. */
   waitReady(spec: SandboxChildSpec, timeoutMs: number): Promise<boolean>;
-  /** Creates the `omni` database on the sandbox's Postgres if it is missing. */
-  ensureDatabase(port: number): Promise<boolean>;
+  /** Creates the `omni` database on the sandbox's Postgres if it is missing; `password` for a password-file cluster. */
+  ensureDatabase(port: number, password?: string): Promise<boolean>;
   now(): number;
   sleep(ms: number): Promise<void>;
   log(line: string): void;
@@ -151,7 +152,8 @@ function defaultSupervisorDeps(): SupervisorDeps {
   return {
     spawnChild: spawnChildProcess,
     waitReady: waitPortAnswers,
-    ensureDatabase: async (port) => (await waitForCanonicalReady(port, 60)) && ensureOmniDatabaseExists(port),
+    ensureDatabase: async (port, password) =>
+      (await waitForCanonicalReady(port, 60, password)) && ensureOmniDatabaseExists(port, password),
     now: () => Date.now(),
     sleep: (ms) => Bun.sleep(ms),
     // biome-ignore lint/suspicious/noConsole: the supervisor's log is its stdout
@@ -236,7 +238,7 @@ export class SandboxSupervisor {
       this.writeStatus();
       return false;
     }
-    if (spec.name === 'pg' && !(await this.deps.ensureDatabase(spec.readyPort))) {
+    if (spec.name === 'pg' && !(await this.deps.ensureDatabase(spec.readyPort, spec.superuserPassword))) {
       this.deps.log('could not create the omni database');
       child.state = 'failed';
       this.writeStatus();
@@ -322,7 +324,9 @@ export async function runSandboxSupervisor(
   // A supervisor that died hard (SIGKILL, a crash) leaves its children holding the ports.
   const swept = (await deps.sweepLeftovers?.(layout)) ?? 0;
   if (swept > 0) deps.log(`stopped ${swept} process(es) an earlier run left behind`);
-  const specs = sandboxChildSpecs(layout, state, apiKey, deps.env, options);
+  // Read at every start, so a file that is no longer safe (a symlink, readable by others) stops it.
+  const pgPassword = state.pgPasswordFile ? readPgPasswordFile(state.pgPasswordFile) : null;
+  const specs = sandboxChildSpecs(layout, state, apiKey, deps.env, options, pgPassword);
   const supervisor = new SandboxSupervisor(layout, specs, deps);
   return supervisor.run();
 }

@@ -93,6 +93,8 @@ export interface SandboxInstallFlags extends SandboxCliOptions {
   atLogin?: boolean;
   start?: boolean;
   package?: string;
+  pgPasswordFile?: string;
+  autopgTarball?: string;
 }
 
 /**
@@ -106,6 +108,11 @@ export function withSandboxInstall<T extends object>(command: Command, plain: (o
     .option('--at-login', 'With --sandbox: start it at login (launchd agent / systemd --user unit, no sudo)')
     .option('--no-start', 'With --sandbox: install without starting it')
     .option('--package <spec>', 'With --sandbox: @automagik/omni version or spec for its runtime (default: this CLI)')
+    .option(
+      '--pg-password-file <file>',
+      'With --sandbox: Postgres takes scram logins on 127.0.0.1 only, with the password in this file (0600, one line)',
+    )
+    .option('--autopg-tarball <file>', "With --sandbox: install autopg's pinned release from this local tarball")
     .option('--json', 'With --sandbox: print one JSON report')
     .action(async (options: T & SandboxInstallFlags) => {
       if (!(await runSandboxInstallIfAsked(options))) await plain(options);
@@ -122,9 +129,18 @@ async function runSandboxInstallIfAsked(options: SandboxInstallFlags): Promise<b
     await runSandboxInstall(options);
     return true;
   }
-  const stray = [options.home, options.atLogin, options.package, options.json].some((value) => value !== undefined);
+  const stray = [
+    options.home,
+    options.atLogin,
+    options.package,
+    options.pgPasswordFile,
+    options.autopgTarball,
+    options.json,
+  ].some((value) => value !== undefined);
   if (stray || options.start === false) {
-    output.error('--home, --at-login, --no-start, --package and --json need --sandbox');
+    output.error(
+      '--home, --at-login, --no-start, --package, --pg-password-file, --autopg-tarball and --json need --sandbox',
+    );
   }
   return false;
 }
@@ -137,6 +153,8 @@ function runSandboxInstall(options: SandboxInstallFlags): Promise<void> {
     packageSpec: options.package,
     atLogin: options.atLogin,
     start: options.start,
+    pgPasswordFile: options.pgPasswordFile,
+    autopgTarball: options.autopgTarball,
   };
   if (!wantsJson(options))
     output.raw(`Installing a sandboxed Omni at ${home} (first start downloads Postgres; give it a minute)…`);
