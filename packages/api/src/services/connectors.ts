@@ -20,6 +20,7 @@ import type { ConnectorManifest, ConnectorParsedDelivery, ConnectorRegistry } fr
 import { providerDetail, providerSummary, redactSecrets, redactValue, verifyDelivery } from '@omni/connector-sdk';
 import {
   CONNECTOR_EVENT_TYPE,
+  CURRENT_ENVELOPE_VERSION,
   type EventBus,
   NotFoundError,
   OmniError,
@@ -42,6 +43,7 @@ import type {
   UpdateConnectorBody,
   UpdateSubscriptionBody,
 } from '../schemas/connectors';
+import { connectorIngressLookupActive, resolveConnectorIngressTenant } from '../tenancy/connector-ingress';
 import { openCredentialField, sealCredentialField } from '../tenancy/sealed-credentials';
 import { currentTenantScope, scopedHandle } from '../tenancy/tenant-scope';
 import { runTenantWorkDb } from '../tenancy/worker-tenant-context';
@@ -753,61 +755,16 @@ export class ConnectorService {
    * unopenable and badly signed all return the same 401.
    */
   async receive(subscriptionId: string, rawBody: string, headers: Record<string, string>): Promise<DeliveryOutcome> {
-    try {
-      const value = rawBody.trim().length === 0 ? {} : JSON.parse(rawBody);
-      if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-        return { status: 400, body: { error: { code: 'VALIDATION_ERROR', message: 'Body must be a JSON object' } } };
-      }
-    } catch {
-      return { status: 400, body: { error: { code: 'VALIDATION_ERROR', message: 'Body must be JSON' } } };
-    }
+    const bodyError = this.parseRawBody(rawBody);
+    if (bodyError) return bodyError;
 
-    const [resolved] = await this.db
-      .select({ subscription: connectorEventSubscriptions, connector: connectors })
-      .from(connectorEventSubscriptions)
-      .innerJoin(connectors, eq(connectors.id, connectorEventSubscriptions.connectorId))
-      .where(eq(connectorEventSubscriptions.id, subscriptionId))
-      .limit(1);
+    const resolution = await this.resolveIngressDelivery(subscriptionId);
+    if (!resolution) return this.unauthorized();
 
-    if (!resolved) return this.unauthorized();
-    const { subscription, connector } = resolved;
-    const manifest = this.registry.get(connector.provider);
-    if (!manifest) return this.unauthorized();
-
-    const secret = openCredentialField(
-      subscription.tenantId ?? connector.tenantId ?? null,
-      subscription.verificationSecret,
-    );
-    if (!secret) {
-      log.warn('Connector subscription has no usable verification secret', { subscriptionId });
-      return this.unauthorized();
-    }
-
-    if (!(await verifyDelivery(manifest.verification, rawBody, headers, secret))) {
-      log.warn('Connector delivery signature rejected', { subscriptionId });
-      return this.unauthorized();
-    }
-
-    if (subscription.status === 'paused') {
-      return { status: 202, body: { received: true, ignored: true } };
-    }
-
-    let parsed: ConnectorParsedDelivery;
-    try {
-      if (!manifest.parseDelivery) {
-        return await this.failDelivery(subscription, 'Provider manifest cannot parse deliveries');
-      }
-      parsed = manifest.parseDelivery(rawBody, headers);
-    } catch (error) {
-      return await this.failDelivery(subscription, redactSecrets(asErrorText(error), [secret]));
-    }
-
-    if (parsed.eventKey !== subscription.providerEventKey) {
-      return { status: 202, body: { received: true, ignored: true } };
-    }
-    if (!matchesFilters(parsed.data, subscription.filters ?? {})) {
-      return { status: 202, body: { received: true, ignored: true } };
-    }
+    const { subscription, connector, trustedTenantId } = resolution;
+    const verified = await this.verifyAndParseDelivery(connector, subscription, rawBody, headers);
+    if ('outcome' in verified) return verified.outcome;
+    const { parsed, secret } = verified;
 
     const idempotencyKey = this.idempotencyKey(subscription.id, parsed.providerEventId, rawBody);
     try {
@@ -820,6 +777,9 @@ export class ConnectorService {
         data: redactValue(parsed.data, [secret]),
         idempotencyKey,
         test: false,
+        // Only the enforced path opens worker scopes. Legacy keeps `undefined`
+        // so its queries stay on the ambient pool exactly as before.
+        ...(trustedTenantId ? { tenantId: trustedTenantId } : {}),
       });
       if (result.duplicate) {
         return {
@@ -840,6 +800,117 @@ export class ConnectorService {
         body: { error: { code: 'DELIVERY_FAILED', message: 'Connector delivery could not be processed' } },
       };
     }
+  }
+
+  /** Raw-body gate: HMAC is over bytes, but the envelope must be a JSON object. */
+  private parseRawBody(rawBody: string): DeliveryOutcome | null {
+    try {
+      const value = rawBody.trim().length === 0 ? {} : JSON.parse(rawBody);
+      if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+        return {
+          status: 400,
+          body: { error: { code: 'VALIDATION_ERROR', message: 'Body must be a JSON object' } },
+        };
+      }
+      return null;
+    } catch {
+      return { status: 400, body: { error: { code: 'VALIDATION_ERROR', message: 'Body must be JSON' } } };
+    }
+  }
+
+  /**
+   * Resolve the persisted owner BEFORE any subscription detail is trusted.
+   *
+   * Under enforcement the table is RLS-protected and a scope-less read would
+   * raise, so the narrow ingress lookup returns the tenant id alone; every
+   * other column is then read inside that tenant's transaction. In legacy mode
+   * (no lookup function installed) this is the pre-F3 read unchanged.
+   */
+  private async resolveIngressDelivery(subscriptionId: string): Promise<
+    | {
+        subscription: ConnectorEventSubscription;
+        connector: Connector;
+        trustedTenantId?: string;
+      }
+    | undefined
+  > {
+    const enforced = await connectorIngressLookupActive(this.pool);
+    if (!enforced) return this.readIngressRows(subscriptionId);
+
+    const tenantId = await resolveConnectorIngressTenant(this.pool, subscriptionId);
+    if (!tenantId) return undefined;
+    const resolved = await runTenantWorkDb(this.pool, tenantId, () => this.readIngressRows(subscriptionId));
+    if (!resolved) return undefined;
+    // Defence in depth: the scoped read can only return this tenant's row, but
+    // a corrupt cross-tenant join must never proceed.
+    if (resolved.subscription.tenantId !== tenantId) return undefined;
+    if (resolved.connector.tenantId !== null && resolved.connector.tenantId !== tenantId) return undefined;
+    return { ...resolved, trustedTenantId: tenantId };
+  }
+
+  /**
+   * Manifest lookup → open the sealed secret → verify the raw body → paused ack
+   * → parse/filter. No side effect runs before the signature is valid.
+   */
+  private async verifyAndParseDelivery(
+    connector: Connector,
+    subscription: ConnectorEventSubscription,
+    rawBody: string,
+    headers: Record<string, string>,
+  ): Promise<{ parsed: ConnectorParsedDelivery; secret: string } | { outcome: DeliveryOutcome }> {
+    const manifest = this.registry.get(connector.provider);
+    if (!manifest) return { outcome: this.unauthorized() };
+
+    const secret = openCredentialField(
+      subscription.tenantId ?? connector.tenantId ?? null,
+      subscription.verificationSecret,
+    );
+    if (!secret) {
+      log.warn('Connector subscription has no usable verification secret', { subscriptionId: subscription.id });
+      return { outcome: this.unauthorized() };
+    }
+
+    if (!(await verifyDelivery(manifest.verification, rawBody, headers, secret))) {
+      log.warn('Connector delivery signature rejected', { subscriptionId: subscription.id });
+      return { outcome: this.unauthorized() };
+    }
+
+    if (subscription.status === 'paused') {
+      return { outcome: { status: 202, body: { received: true, ignored: true } } };
+    }
+
+    let parsed: ConnectorParsedDelivery;
+    try {
+      if (!manifest.parseDelivery) {
+        return { outcome: await this.failDelivery(subscription, 'Provider manifest cannot parse deliveries') };
+      }
+      parsed = manifest.parseDelivery(rawBody, headers);
+    } catch (error) {
+      return {
+        outcome: await this.failDelivery(subscription, redactSecrets(asErrorText(error), [secret])),
+      };
+    }
+
+    if (parsed.eventKey !== subscription.providerEventKey) {
+      return { outcome: { status: 202, body: { received: true, ignored: true } } };
+    }
+    if (!matchesFilters(parsed.data, subscription.filters ?? {})) {
+      return { outcome: { status: 202, body: { received: true, ignored: true } } };
+    }
+    return { parsed, secret };
+  }
+
+  /** The one subscription+connector read the delivery needs, inside whatever scope is active. */
+  private async readIngressRows(
+    subscriptionId: string,
+  ): Promise<{ subscription: ConnectorEventSubscription; connector: Connector } | undefined> {
+    const [resolved] = await this.db
+      .select({ subscription: connectorEventSubscriptions, connector: connectors })
+      .from(connectorEventSubscriptions)
+      .innerJoin(connectors, eq(connectors.id, connectorEventSubscriptions.connectorId))
+      .where(eq(connectorEventSubscriptions.id, subscriptionId))
+      .limit(1);
+    return resolved;
   }
 
   private unauthorized(): DeliveryOutcome {
@@ -867,8 +938,15 @@ export class ConnectorService {
     data: Record<string, unknown>;
     idempotencyKey: string;
     test: boolean;
+    /**
+     * Trusted tenant from the ingress resolution. Present only on the enforced
+     * public path; absent on the authenticated test/manual path, which already
+     * runs inside a request scope (or legacy).
+     */
+    tenantId?: string;
   }): Promise<{ eventId: string; duplicate: boolean }> {
     const { connector, subscription, eventKey, providerEventId, occurredAt, data } = args;
+    const trustedTenantId = args.tenantId ?? null;
     const eventId = randomUUID();
 
     const payload = buildConnectorEventPayload({
@@ -891,34 +969,48 @@ export class ConnectorService {
       provider: connector.provider,
       fullEventType: CONNECTOR_EVENT_TYPE,
       ...(args.test ? { test: true } : {}),
-      ...(tenantId ? { tenantId } : {}),
+      // A tenant-stamped envelope must carry the version contract, or a
+      // consumer classifies it as quarantined (`malformed_envelope`). The real
+      // NATS factory stamps this too; doing it here keeps the in-memory test
+      // bus byte-equivalent to production.
+      ...(tenantId ? { tenantId, envelopeVersion: CURRENT_ENVELOPE_VERSION } : {}),
     };
 
-    const claimed = await this.db
-      .insert(omniEvents)
-      .values({
-        id: eventId,
-        channel: 'internal',
-        direction: 'internal',
-        eventType: CONNECTOR_EVENT_TYPE,
-        status: 'received',
-        idempotencyKey: args.idempotencyKey,
-        rawPayload: payload,
-        metadata,
-        receivedAt: new Date(),
-        tenantId: subscription.tenantId ?? connector.tenantId ?? null,
-      })
-      .onConflictDoNothing({ target: omniEvents.idempotencyKey })
-      .returning({ id: omniEvents.id });
+    // Each DB block gets its own short worker scope on the enforced path; the
+    // publish happens BETWEEN blocks, never inside one, so a provider/consumer
+    // side effect cannot ride an uncommitted claim.
+    const claim = async () => {
+      const claimed = await this.db
+        .insert(omniEvents)
+        .values({
+          id: eventId,
+          channel: 'internal',
+          direction: 'internal',
+          eventType: CONNECTOR_EVENT_TYPE,
+          status: 'received',
+          idempotencyKey: args.idempotencyKey,
+          rawPayload: payload,
+          metadata,
+          receivedAt: new Date(),
+          tenantId: subscription.tenantId ?? connector.tenantId ?? null,
+        })
+        .onConflictDoNothing({ target: omniEvents.idempotencyKey })
+        .returning({ id: omniEvents.id });
+      return claimed;
+    };
+
+    const claimed = await runTenantWorkDb(this.pool, trustedTenantId, claim);
 
     if (claimed.length === 0) {
-      const [original] = await this.db
-        .select({ id: omniEvents.id })
-        .from(omniEvents)
-        .where(eq(omniEvents.idempotencyKey, args.idempotencyKey))
-        .limit(1);
-      await this.recordDuplicate(subscription);
-      return { eventId: original?.id ?? eventId, duplicate: true };
+      return await runTenantWorkDb(this.pool, trustedTenantId, async () => {
+        const [original] = await this.db
+          .select({ id: omniEvents.id })
+          .from(omniEvents)
+          .where(eq(omniEvents.idempotencyKey, args.idempotencyKey))
+          .limit(1);
+        await this.recordDuplicate(subscription);
+        return { eventId: original?.id ?? eventId, duplicate: true };
+      });
     }
 
     try {
@@ -929,25 +1021,27 @@ export class ConnectorService {
         publishEventId: eventId,
         source: 'connector',
         correlationId: eventId,
-        ...(tenantId ? { tenantId } : {}),
+        ...(tenantId ? { tenantId, envelopeVersion: CURRENT_ENVELOPE_VERSION } : {}),
         ...(args.test ? { test: true } : {}),
       });
     } catch (error) {
-      await this.db
-        .delete(omniEvents)
-        .where(eq(omniEvents.id, eventId))
-        .catch((releaseError: unknown) => {
-          log.error('Failed to release connector delivery claim after publish failure', {
-            subscriptionId: subscription.id,
-            eventId,
-            error: asErrorText(releaseError),
+      await runTenantWorkDb(this.pool, trustedTenantId, async () => {
+        await this.db
+          .delete(omniEvents)
+          .where(eq(omniEvents.id, eventId))
+          .catch((releaseError: unknown) => {
+            log.error('Failed to release connector delivery claim after publish failure', {
+              subscriptionId: subscription.id,
+              eventId,
+              error: asErrorText(releaseError),
+            });
           });
-        });
-      await this.recordFailure(subscription, redactSecrets(asErrorText(error), [subscription.verificationSecret]));
+        await this.recordFailure(subscription, redactSecrets(asErrorText(error), [subscription.verificationSecret]));
+      });
       throw error;
     }
 
-    await this.recordSuccess(subscription);
+    await runTenantWorkDb(this.pool, trustedTenantId, () => this.recordSuccess(subscription));
     return { eventId, duplicate: false };
   }
 

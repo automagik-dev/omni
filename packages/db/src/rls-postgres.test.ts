@@ -30,7 +30,13 @@ import { join } from 'node:path';
 import postgres from 'postgres';
 import { type Database, createDbHandle } from './client';
 import { provisionMigratedDatabase } from './pg-migrated-template';
-import { DEFAULT_ROLE_NAMES, RLS_TENANT_TABLES, applyTenantRlsEnforcement, readEnforcementState } from './tenancy-rls';
+import {
+  CONNECTOR_INGRESS_ROLE,
+  DEFAULT_ROLE_NAMES,
+  RLS_TENANT_TABLES,
+  applyTenantRlsEnforcement,
+  readEnforcementState,
+} from './tenancy-rls';
 import { applyTenancyRoles, readRoleAttributes, roleAttributeViolations } from './tenancy-roles';
 import { EnforcementStartupError, assertEnforcedRuntimeIdentity } from './tenancy-startup';
 
@@ -871,6 +877,18 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE O
       const present =
         await provisioner.raw`SELECT rolname::text AS name FROM pg_roles WHERE rolname = ANY(${provisioned})`;
       expect(present).toHaveLength(provisioned.length);
+    });
+
+    test('the connector-ingress role is NOLOGIN and holds no bypass attribute', async () => {
+      const [row] = await provisioner.raw`
+        SELECT rolname::text AS name, rolcanlogin, rolbypassrls, rolsuper, rolcreatedb, rolcreaterole
+        FROM pg_roles WHERE rolname = ${CONNECTOR_INGRESS_ROLE}`;
+      expect(row).toBeDefined();
+      expect(row?.rolcanlogin).toBe(false);
+      expect(row?.rolbypassrls).toBe(false);
+      expect(row?.rolsuper).toBe(false);
+      expect(row?.rolcreatedb).toBe(false);
+      expect(row?.rolcreaterole).toBe(false);
     });
   });
 });
