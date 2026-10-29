@@ -204,17 +204,18 @@ function buildUrlButton(body: string, button: InteractiveButton): Record<string,
 }
 
 /**
- * A line the URL button replaces: the URL alone, or the button's label leading
- * into it (`Ver Política de Privacidade: <url>`, the `label: url` shape
+ * A line the URL button replaces: the URL alone, or the button's label and
+ * nothing else leading into it (`Ver Política: <url>`, the `label: url` shape
  * `planInteractive` folds a URL button into). Any other line with the URL is
- * prose, and it stays whole: cutting it would drop what it says.
+ * prose, even one that opens with the label, and it stays whole: cutting it
+ * would drop what it says.
  */
 function isLinkLine(line: string, label: string, url: string): boolean {
   const at = line.indexOf(url);
   if (at < 0) return false;
   let rest = `${line.slice(0, at)}${line.slice(at + url.length)}`.trim();
   if (rest.endsWith(':')) rest = rest.slice(0, -1).trim();
-  return !rest || foldTitle(rest).startsWith(foldTitle(encodeAscEmoji(label)));
+  return !rest || foldTitle(rest) === foldTitle(encodeAscEmoji(label));
 }
 
 /**

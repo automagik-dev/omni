@@ -149,7 +149,7 @@ describe('buildInteractive with a sole URL button (tipo 3)', () => {
   const link = (text = 'Ver Política') => [{ text, url }];
 
   it('maps it onto url_button and cuts the line that carries the URL', () => {
-    const body = `Ao continuar, você declara estar ciente da nossa *Política de Privacidade*.\nVer Política de Privacidade: ${url}`;
+    const body = `Ao continuar, você declara estar ciente da nossa *Política de Privacidade*.\nVer Política: ${url}`;
     expect(buildInteractive(body, link())).toEqual({
       tipo: 3,
       mensagem: 'Ao continuar, você declara estar ciente da nossa *Política de Privacidade*.',
@@ -175,6 +175,11 @@ describe('buildInteractive with a sole URL button (tipo 3)', () => {
 
   it('keeps whole a line of prose that carries the URL', () => {
     const body = `Ao continuar, você aceita a política: ${url}\nOutro parágrafo.`;
+    expect(buildInteractive(body, link())).toMatchObject({ tipo: 3, mensagem: body });
+  });
+
+  it('keeps whole a line that opens with the label but says more', () => {
+    const body = `Leia antes.\nVer política é obrigatório antes de continuar: ${url}`;
     expect(buildInteractive(body, link())).toMatchObject({ tipo: 3, mensagem: body });
   });
 
