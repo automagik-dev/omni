@@ -26,6 +26,8 @@ test('an added chat is a plain Session of the plugin\'s: outside the team\'s age
   const answer = await run.call('omni-thread-add', { channelId: INSTANCE, chatId: CHAT })
   assert.equal(answer.ok, true)
   const thread = run.channels.threads.byId(answer.threadId)
+  // The page opens the new thread with it.
+  assert.equal(answer.sessionId, thread.sessionId)
   assert.deepEqual(heard, [answer.threadId])
   assert.equal(run.made.length, 1)
   assert.deepEqual(thread, {
@@ -65,6 +67,9 @@ test('a link written or removed while DSH runs is a new team revision, so the pa
   const run = await boot(t, homeFor(t, null))
   const offered = () => [run.view().omniThreadsOffered, run.view().omniThreadsReason]
   assert.deepEqual(offered(), [false, NOT_LINKED])
+  // They travel with every state answer (live), not only with a new revision's view.
+  assert.deepEqual(Object.keys(run.team.extended.live()).filter(key => key.startsWith('omniThreads')), ['omniThreadsOffered', 'omniThreadsReason'])
+  assert.equal('omniThreadsOffered' in run.team.extended.view(), false)
   // The page asks the team with the revision it has; the same revision answers `unchanged`
   // and keeps the page's old fields, so only a new revision brings the + to it.
   const unlinked = run.team.state.revision

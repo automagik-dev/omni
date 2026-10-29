@@ -597,6 +597,7 @@ export const STRINGS = {
   // Why a chat cannot be added, or a thread does not work (threads.js, thread-keys.js, omni-tree.js).
   'Adding a chat needs a newer Bot team.': '添加聊天需要更新的 Bot 团队。',
   'Adding a chat needs a newer Omni. Update it first.': '添加聊天需要更新的 Omni。请先更新它。',
+  'Adding a chat is not ready yet. Reload the window if this stays.': '还不能添加聊天。如果一直这样，请重新加载窗口。',
   'Not connected: this app is not linked to an Omni.': '未连接：这个应用没有关联 Omni。',
   'Not connected: this app is linked to another Omni.': '未连接：这个应用关联的是另一个 Omni。',
   'Not connected: its previous key is still being cut.': '未连接：它之前的密钥还在作废中。',

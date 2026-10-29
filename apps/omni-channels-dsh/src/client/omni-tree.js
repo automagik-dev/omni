@@ -24,6 +24,8 @@ const { ChevronRightIcon, CloseIcon, DotsIcon, PlusIcon, SparkIcon } = icons
 const OPEN_KEY = 'omni.tree.open'
 const SEARCH_DELAY_MS = 250
 export const OMNI_OUTDATED = 'Adding a chat needs a newer Omni. Update it first.'
+// The host has not said yet whether a chat can be added: the + stays off, and says so.
+export const OFFER_UNKNOWN = 'Adding a chat is not ready yet. Reload the window if this stays.'
 
 function readOpen() {
   try { return new Set(JSON.parse(localStorage.getItem(OPEN_KEY) ?? '[]')) } catch { return new Set() }
@@ -40,9 +42,10 @@ export const rowsOf = roster => (Array.isArray(roster?.omniRows) ? roster.omniRo
 export const isThreadSession = (roster, sessionId) => typeof sessionId === 'string' && (Array.isArray(roster?.omniThreads) ? roster.omniThreads : []).some(thread => thread.sessionId === sessionId)
 
 // Whether the channel rows offer the +, and the reason when they do not: a team without the
-// hook, no linked Omni (both the host's), or a linked Omni older than this plugin's minimum.
+// hook, no linked Omni (both the host's), a linked Omni older than this plugin's minimum, or
+// no answer from the host yet. A row is never left with neither a + nor a reason.
 export function plusOf(roster, state) {
-  if (roster?.omniThreadsOffered !== true) return { offered: false, reason: roster?.omniThreadsReason ?? null }
+  if (roster?.omniThreadsOffered !== true) return { offered: false, reason: roster?.omniThreadsReason ?? OFFER_UNKNOWN }
   if (state?.link?.outdated === true) return { offered: false, reason: OMNI_OUTDATED }
   return { offered: true, reason: null }
 }
@@ -334,8 +337,11 @@ function ChannelItem({ channel, state, roster, rowProps, actions, omni, plus, op
     onClosePicker()
     plusButton.current?.focus?.()
   }
+  // A pick is the owner's own click, so it opens the new thread (no panel opens by itself).
   const onPick = chat => addThread(channel.id, chat).then((result) => {
-    if (result?.ok === true) closePicker()
+    if (result?.ok !== true) return result
+    closePicker()
+    if (typeof result.sessionId === 'string' && teamReady(roster)) actions.openSession(result.sessionId)
     return result
   })
   return h('div', { className: 'ot-channel' },
@@ -448,7 +454,10 @@ export const OMNI_TREE_CSS = `
 .ot-channel-row[aria-expanded=true] .ot-chevron{transform:rotate(90deg)}
 .ot-channel-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ot-count{flex:none;min-width:18px;padding:0 5px;border-radius:9px;background:var(--bt-accent, #22d3ee);color:#fff;font-size:11px;line-height:18px;text-align:center;font-weight:600}
-.ot-plus{display:grid;place-items:center;flex:none;width:24px;height:24px;padding:0;border:0;border-radius:7px;background:none;color:var(--bt-ink-3);cursor:pointer}
+.ot-plus{display:grid;place-items:center;flex:none;width:24px;height:24px;padding:0;border:0;border-radius:7px;background:none;color:var(--bt-ink-3);cursor:pointer;opacity:0;transition:opacity .12s}
+/* The + shows on a channel's hover or focus, and stays while its picker is open. */
+.ot-channel-head:hover .ot-plus,.ot-channel-head:focus-within .ot-plus,.ot-plus[aria-expanded=true]{opacity:1}
+@media (hover:none){.ot-plus{opacity:1}}
 .ot-plus svg{width:14px;height:14px}
 .ot-plus:hover,.ot-plus[aria-expanded=true]{background:var(--bt-hover);color:var(--bt-ink)}
 .ot-plus:focus-visible{outline:2px solid var(--bt-accent);outline-offset:-2px}

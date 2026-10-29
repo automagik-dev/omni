@@ -278,7 +278,8 @@ export async function boot(t, home, { mask = false, services = {}, resumesDone, 
   const channels = createRuntime(ctx, base)
   await channels.load()
   const call = (endpoint, body) => team.extended.endpointOf(endpoint).fn(body)
-  const view = () => team.extended.view()
+  // What the team's state endpoint sends: its view fields, then the live ones.
+  const view = () => ({ ...team.extended.view(), ...team.extended.live() })
   let stopped = false
   const stop = async () => {
     if (stopped) return
