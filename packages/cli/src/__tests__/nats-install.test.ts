@@ -130,7 +130,6 @@ describe('installNatsBinary', () => {
     expect(urls).toEqual([]);
     expect(existsSync(target)).toBe(false);
   });
-
 });
 
 describe('installNatsBinary over a nats-server installed earlier', () => {

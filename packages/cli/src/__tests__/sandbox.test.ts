@@ -828,9 +828,7 @@ describe('a nats-server that is not the pinned release', () => {
     await installSandbox({ home, defaultHome, packageSpec: '2.261023.7' }, deps);
     deps.installNats = async () => 'failed';
 
-    await expect(installSandbox({ home, defaultHome, packageSpec: '2.261023.8' }, deps)).rejects.toThrow(
-      'nats-server',
-    );
+    await expect(installSandbox({ home, defaultHome, packageSpec: '2.261023.8' }, deps)).rejects.toThrow('nats-server');
     expect(kills).toEqual([]);
     expect(runs.filter((call) => call.cmd[1] === 'install')).toHaveLength(1);
     expect(readSandboxState(sandboxLayout(home))?.version).toBe('2.261023.7');
