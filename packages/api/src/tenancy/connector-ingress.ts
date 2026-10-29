@@ -39,6 +39,8 @@ import type { Database } from '@omni/db';
 import { sql } from 'drizzle-orm';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+/** Path-segment shape only: a valid-shaped id that does not exist resolves null. */
+const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const activeCache = new WeakMap<Database, Promise<boolean>>();
 
@@ -79,7 +81,7 @@ export async function connectorIngressLookupActive(db: Database): Promise<boolea
 export async function resolveConnectorIngressTenant(db: Database, subscriptionId: string): Promise<string | null> {
   // The function's parameter is uuid; a malformed path segment must be the
   // uniform 401, not a database cast error (500).
-  if (typeof subscriptionId !== 'string' || !UUID.test(subscriptionId)) return null;
+  if (typeof subscriptionId !== 'string' || !UUID_SHAPE.test(subscriptionId)) return null;
 
   const rows = (await db.execute(sql`
     SELECT public.omni_connector_ingress_tenant(${subscriptionId}::uuid) AS tenant_id

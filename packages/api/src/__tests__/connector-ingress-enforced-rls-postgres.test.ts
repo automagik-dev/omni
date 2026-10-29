@@ -48,7 +48,7 @@ import {
   omniEvents,
 } from '@omni/db';
 import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { buildAutomationEngineDeps } from '../plugins/automation-actions';
 import { createServices } from '../services';
 import { ConnectorService } from '../services/connectors';
@@ -77,6 +77,7 @@ const BODY_B = JSON.stringify({
   task_id: 'task-b',
   history_items: [{ id: 'history-enforced-b', date: 1_780_000_000_001, field: 'status', after: 'done' }],
 });
+const BODY_MALFORMED = JSON.stringify({ task_id: 'task-malformed' });
 const BODY_PAUSED = JSON.stringify({
   event: 'taskStatusUpdated',
   task_id: 'task-paused',
@@ -420,6 +421,31 @@ postgresDescribe('connector ingress under enforced RLS (real PostgreSQL)', () =>
     expect(await journalFor(TENANT_B, `connector:${ids.subscriptionB}:history-enforced-b`)).toHaveLength(0);
   });
 
+  test('a signed but unparseable delivery is a structured 500 and records one failure', async () => {
+    const beforeComments = commentRequests.length;
+    const result = await deliver(ids.subscriptionA, BODY_MALFORMED, SECRET_A);
+    expect(result.status).toBe(500);
+    expect(result.body).toEqual({
+      error: { code: 'DELIVERY_FAILED', message: 'Connector delivery could not be processed' },
+    });
+
+    const [subscription] = await inTenant(TENANT_A, () =>
+      scopedHandle(db)
+        .select()
+        .from(connectorEventSubscriptions)
+        .where(eq(connectorEventSubscriptions.id, ids.subscriptionA)),
+    );
+    expect(subscription?.consecutiveFailures).toBe(1);
+    expect(subscription?.lastError).toContain('not a webhook payload');
+    // The failure counter moved; the delivery counter and the journal did not.
+    expect(subscription?.totalDeliveries).toBe(1);
+    const journal = await inTenant(TENANT_A, () =>
+      scopedHandle(db).select().from(omniEvents).where(eq(omniEvents.eventType, CONNECTOR_EVENT_TYPE)),
+    );
+    expect(journal).toHaveLength(1);
+    expect(commentRequests).toHaveLength(beforeComments);
+  });
+
   test('a paused subscription verifies, acks ignored, and publishes nothing', async () => {
     const before = commentRequests.length;
     const result = await deliver(ids.subscriptionPaused, BODY_PAUSED, SECRET_A);
@@ -438,6 +464,23 @@ postgresDescribe('connector ingress under enforced RLS (real PostgreSQL)', () =>
       expect(result.body).toEqual(badSignature.body);
     }
     expect(await journalFor(TENANT_B, `connector:${ids.subscriptionB}:history-enforced-b`)).toHaveLength(0);
+  });
+
+  test('the runtime role is not a member of the ingress role and cannot read without context', async () => {
+    const [membership] = (await db.execute(sql`
+      SELECT pg_has_role(current_user, 'omni_connector_ingress', 'USAGE') AS member
+    `)) as unknown as { member: boolean }[];
+    expect(membership?.member).toBe(false);
+
+    let caught: unknown;
+    try {
+      await db.select().from(connectorEventSubscriptions).limit(1).execute();
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeDefined();
+    const cause = (caught as { cause?: unknown }).cause;
+    expect(String(cause ?? caught)).toMatch(/app\.tenant_id|insufficient|row-level security/i);
   });
 
   test('tenant A cannot read tenant B subscription, connector or journal', async () => {

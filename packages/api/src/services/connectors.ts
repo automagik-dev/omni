@@ -54,6 +54,8 @@ const log = createLogger('connector-service');
 const MAX_KEY_LENGTH = 512;
 const MAX_ERROR_TEXT = 500;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+/** Path-segment shape only: the DB cast/row lookup decides existence; this just prevents a uuid-cast 500. */
+const INGRESS_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export const CONNECTOR_RESERVED_KEYS = [
   'connectorId',
@@ -762,7 +764,7 @@ export class ConnectorService {
     if (!resolution) return this.unauthorized();
 
     const { subscription, connector, trustedTenantId } = resolution;
-    const verified = await this.verifyAndParseDelivery(connector, subscription, rawBody, headers);
+    const verified = await this.verifyAndParseDelivery(connector, subscription, rawBody, headers, trustedTenantId);
     if ('outcome' in verified) return verified.outcome;
     const { parsed, secret } = verified;
 
@@ -834,6 +836,11 @@ export class ConnectorService {
       }
     | undefined
   > {
+    // A subscription id is a UUID. Reject a malformed path segment before any
+    // query in both worlds, so the response is the uniform 401 rather than a
+    // postgres uuid-cast 500 on the legacy path.
+    if (typeof subscriptionId !== 'string' || !INGRESS_ID_RE.test(subscriptionId)) return undefined;
+
     const enforced = await connectorIngressLookupActive(this.pool);
     if (!enforced) return this.readIngressRows(subscriptionId);
 
@@ -857,6 +864,7 @@ export class ConnectorService {
     subscription: ConnectorEventSubscription,
     rawBody: string,
     headers: Record<string, string>,
+    trustedTenantId?: string,
   ): Promise<{ parsed: ConnectorParsedDelivery; secret: string } | { outcome: DeliveryOutcome }> {
     const manifest = this.registry.get(connector.provider);
     if (!manifest) return { outcome: this.unauthorized() };
@@ -882,12 +890,14 @@ export class ConnectorService {
     let parsed: ConnectorParsedDelivery;
     try {
       if (!manifest.parseDelivery) {
-        return { outcome: await this.failDelivery(subscription, 'Provider manifest cannot parse deliveries') };
+        return {
+          outcome: await this.failDelivery(subscription, 'Provider manifest cannot parse deliveries', trustedTenantId),
+        };
       }
       parsed = manifest.parseDelivery(rawBody, headers);
     } catch (error) {
       return {
-        outcome: await this.failDelivery(subscription, redactSecrets(asErrorText(error), [secret])),
+        outcome: await this.failDelivery(subscription, redactSecrets(asErrorText(error), [secret]), trustedTenantId),
       };
     }
 
@@ -1045,8 +1055,15 @@ export class ConnectorService {
     return { eventId, duplicate: false };
   }
 
-  private async failDelivery(subscription: ConnectorEventSubscription, message: string): Promise<DeliveryOutcome> {
-    await this.recordFailure(subscription, message);
+  private async failDelivery(
+    subscription: ConnectorEventSubscription,
+    message: string,
+    trustedTenantId?: string,
+  ): Promise<DeliveryOutcome> {
+    // A manifest parse failure still has to be recorded on the subscription;
+    // under enforcement that write needs the delivery's tenant scope, exactly
+    // like the claim/counter blocks in `deliver`.
+    await runTenantWorkDb(this.pool, trustedTenantId ?? null, () => this.recordFailure(subscription, message));
     log.warn('Connector delivery failed', { subscriptionId: subscription.id, error: message.slice(0, 200) });
     return {
       status: 500,
