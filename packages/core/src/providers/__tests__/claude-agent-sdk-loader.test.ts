@@ -24,7 +24,7 @@ afterEach(() => {
 });
 
 /** An importer for which the SDK is not installed. */
-function absentSdk(): () => Promise<never> {
+function absentSdk() {
   const probe = join(dir, 'probe.mjs');
   writeFileSync(probe, "export * from '@anthropic-ai/claude-agent-sdk';\n");
   return () => import(pathToFileURL(probe).href);
