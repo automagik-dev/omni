@@ -47,7 +47,7 @@ report() {
 
 [[ -d "$CLI/dist" ]] && report 'dist/' "$CLI/dist"
 [[ -d "$CLI/db" ]] && report 'db/' "$CLI/db"
-for tarball in "${tarballs[@]}"; do
+for tarball in ${tarballs[@]+"${tarballs[@]}"}; do
   name="$(basename "$tarball" .tgz)"
   mkdir -p "$WORK/$name"
   if tar -xzf "$tarball" -C "$WORK/$name"; then
