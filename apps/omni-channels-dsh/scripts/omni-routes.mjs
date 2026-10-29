@@ -19,7 +19,7 @@ function schemaText(text, name) {
     const char = text[at]
     if ('({['.includes(char)) depth += 1
     else if (')}]'.includes(char)) depth -= 1
-    else if ((char === ';' || char === '\n') && depth === 0 && at > text.indexOf('(', start)) { end = at; break }
+    else if ((char === ';' || (char === '\n' && !/^\s*\./.test(text.slice(at + 1)))) && depth === 0 && at > text.indexOf('(', start)) { end = at; break }
     end = at + 1
   }
   const body = text.slice(text.indexOf('=', start) + 1, end).replace(/\/\/[^\n]*/g, '').replace(/\s+/g, ' ').trim()

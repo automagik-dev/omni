@@ -4,7 +4,13 @@
 
 import { zValidator } from '@hono/zod-validator';
 import type { ChannelPlugin, ChannelRegistry, GroupParticipantUpdateResult } from '@omni/channel-sdk';
-import { AccessModeSchema, ChannelTypeSchema, NotFoundError, createLogger } from '@omni/core';
+import {
+  AccessModeSchema,
+  ChannelTypeSchema,
+  FollowUpSequenceConfigSchema,
+  NotFoundError,
+  createLogger,
+} from '@omni/core';
 import type { GupshupHandoffOptions } from '@omni/db';
 import { type Context, Hono } from 'hono';
 import { z } from 'zod';
@@ -20,6 +26,7 @@ import { getQrCode } from '../../plugins/qr-store';
 import {
   CloseContactConfigSchema,
   GupshupHandoffOptionsSchema,
+  InstanceSettingsSchema,
   SelfChatsSchema,
   SelfHistorySchema,
   SelfMessagesSchema,
@@ -440,6 +447,14 @@ const updateInstanceSchema = createInstanceSchema
     // Strip the .default('humanized') so a PATCH that omits it never resets the stored pacing.
     outboundPacing: z.enum(['humanized', 'immediate']).optional(),
     outboundPacingOverride: z.boolean().optional(),
+  })
+  .extend(InstanceSettingsSchema.shape)
+  .extend({
+    agentReplyFilter: agentReplyFilterSchema.nullable().optional(),
+    followUpConfig: FollowUpSequenceConfigSchema.nullable().optional(),
+    metaConnectedAt: InstanceSettingsSchema.shape.metaConnectedAt.transform((value) =>
+      typeof value === 'string' ? new Date(value) : value,
+    ),
   })
   // #1211: reject unknown fields (400 naming the key) instead of silently stripping them.
   .strict();
