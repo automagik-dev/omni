@@ -16004,6 +16004,38 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
     problem ? (0, import_react15.createElement)("span", { className: "ot-thread-problem", role: "alert" }, hostText(problem)) : null
   );
 }
+function PickerChat({ chat, busy, onPick }) {
+  const name = chat.name ?? t("Group");
+  const tag = chat.added ? t("Added") : busy === chat.id ? t("Adding…") : null;
+  return (0, import_react15.createElement)(
+    "button",
+    {
+      type: "button",
+      className: "ot-picker-chat",
+      "data-chat-id": chat.id,
+      disabled: chat.added === true || busy !== null,
+      "aria-busy": busy === chat.id || void 0,
+      "aria-label": [name, chat.number, tag].filter(Boolean).join(", "),
+      title: chat.number ? `${name} · ${chat.number}` : name,
+      onClick: () => {
+        void onPick(chat);
+      }
+    },
+    (0, import_react15.createElement)(ChatAvatar, { chat: { ...chat, name }, size: 30 }),
+    (0, import_react15.createElement)(
+      "span",
+      { className: "ot-picker-body" },
+      (0, import_react15.createElement)(
+        "span",
+        { className: "ot-picker-top" },
+        (0, import_react15.createElement)("span", { className: "ot-picker-name" }, name),
+        tag ? (0, import_react15.createElement)("span", { className: "ot-picker-tag" }, tag) : chat.at > 0 ? (0, import_react15.createElement)("span", { className: "ot-picker-at" }, relativeShort(chat.at)) : null
+      ),
+      chat.number ? (0, import_react15.createElement)("span", { className: "ot-picker-number" }, chat.number) : null,
+      chat.preview ? (0, import_react15.createElement)("span", { className: "ot-picker-preview" }, chat.preview) : null
+    )
+  );
+}
 function ThreadPicker({ channel, onPick, onClose }) {
   const [query, setQuery] = (0, import_react15.useState)("");
   const [list, setList] = (0, import_react15.useState)({ status: "loading", chats: [], error: null });
@@ -16064,8 +16096,8 @@ function ThreadPicker({ channel, onPick, onClose }) {
         type: "search",
         className: "ot-picker-search",
         value: query,
-        placeholder: t("Search chats"),
-        "aria-label": t("Search chats"),
+        placeholder: t("Search chats or numbers"),
+        "aria-label": t("Search chats or numbers"),
         autoFocus: true,
         onChange: (event) => setQuery(event.target.value)
       }),
@@ -16078,23 +16110,7 @@ function ThreadPicker({ channel, onPick, onClose }) {
     list.chats.length > 0 ? (0, import_react15.createElement)(
       "div",
       { className: "ot-picker-list" },
-      list.chats.map((chat) => (0, import_react15.createElement)(
-        "button",
-        {
-          key: chat.id,
-          type: "button",
-          className: "ot-picker-chat",
-          "data-chat-id": chat.id,
-          disabled: chat.added === true || busy !== null,
-          "aria-busy": busy === chat.id || void 0,
-          title: chat.name,
-          onClick: () => {
-            void pick(chat);
-          }
-        },
-        (0, import_react15.createElement)("span", { className: "ot-picker-name" }, chat.name),
-        chat.added ? (0, import_react15.createElement)("span", { className: "ot-picker-tag" }, t("Added")) : busy === chat.id ? (0, import_react15.createElement)("span", { className: "ot-picker-tag" }, t("Adding…")) : null
-      ))
+      list.chats.map((chat) => (0, import_react15.createElement)(PickerChat, { key: chat.id, chat, busy, onPick: pick }))
     ) : null
   );
 }
@@ -16298,12 +16314,17 @@ var OMNI_TREE_CSS = `
 .ot-picker-close{display:grid;place-items:center;flex:none;width:24px;height:24px;padding:0;border:0;border-radius:7px;background:none;color:var(--bt-ink-3);cursor:pointer}
 .ot-picker-close svg{width:12px;height:12px}
 .ot-picker-close:hover{background:var(--bt-hover);color:var(--bt-ink)}
-.ot-picker-list{display:grid;gap:1px;max-height:240px;overflow-y:auto}
-.ot-picker-chat{display:flex;align-items:center;gap:6px;width:100%;padding:4px 6px;border:0;border-radius:7px;background:none;color:var(--bt-ink);font:inherit;font-size:12.5px;line-height:18px;text-align:left;cursor:pointer}
+.ot-picker-list{display:grid;gap:1px;max-height:320px;overflow-y:auto}
+.ot-picker-chat{display:flex;align-items:center;gap:8px;width:100%;padding:5px 6px;border:0;border-radius:8px;background:none;color:var(--bt-ink);font:inherit;font-size:12.5px;line-height:17px;text-align:left;cursor:pointer}
 .ot-picker-chat:hover:not(:disabled){background:var(--bt-hover)}
-.ot-picker-chat:disabled{cursor:default;color:var(--bt-ink-3)}
-.ot-picker-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ot-picker-tag{flex:none;font-size:11px;color:var(--bt-ink-3)}
+.ot-picker-chat:disabled{cursor:default}
+.ot-picker-chat:disabled .ot-picker-body{opacity:.6}
+.ot-picker-body{display:flex;flex-direction:column;flex:1;min-width:0}
+.ot-picker-top{display:flex;align-items:baseline;gap:6px;min-width:0}
+.ot-picker-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.ot-picker-at,.ot-picker-tag{flex:none;font-size:11px;color:var(--bt-ink-3)}
+.ot-picker-number,.ot-picker-preview{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;color:var(--bt-ink-3)}
+.ot-picker-number{font-variant-numeric:tabular-nums}
 .ot-picker-note,.ot-picker-problem{margin:0;padding:2px 6px;font-size:12px;color:var(--bt-ink-3)}
 .ot-picker-problem{color:var(--bt-danger, #dc2626)}
 .ot-chats[data-open] .ot-thread{animation:ot-in .22s ease both}
@@ -17106,7 +17127,7 @@ var STRINGS = {
   "{name}'s channels": "{name} 的渠道",
   "Add a chat": "添加聊天",
   "Add a chat from {name}": "从 {name} 添加聊天",
-  "Search chats": "搜索聊天",
+  "Search chats or numbers": "搜索聊天或号码",
   "No chats match.": "没有匹配的聊天。",
   "Added": "已添加",
   "Other chats": "其他聊天",

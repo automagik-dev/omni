@@ -13,6 +13,7 @@
 // chat again makes a new thread with a new key.
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
+import { chatOf } from './omni.js'
 import { NEEDS_NEWER_TEAM, TEAM_CONTRACT } from './resume-hook.js'
 import { NOT_LINKED } from './thread-keys.js'
 
@@ -29,8 +30,9 @@ export const AUTOMATION_THREADS_MAX = 50
 export const THREADS_FULL = `Not run: automations already made ${AUTOMATION_THREADS_MAX} chat threads. Remove some, or add this chat with +.`
 const ALREADY = 'This chat is a thread already.'
 const TITLE_MAX = 80
-// How much of a chat's name its thread is told.
+// How much of a chat's name its thread is told, and how much of it is kept from Omni.
 const NAME_MAX = 80
+const NAME_KEPT = 500
 const PROMPT_ORDER = 650
 
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -45,8 +47,20 @@ const PermissionsPayload = z.object({
   sends: z.enum(['ask', 'allow']).nullable().optional(),
   reactions: z.enum(['list', 'any']).nullable().optional(),
 }).strict()
-// Omni's chat rows (routes/v2/chats.ts), as far as a thread needs them.
-const ChatRow = z.object({ id, instanceId: id, externalId: z.string().min(1).max(500), name: z.string().max(500).nullish() }).passthrough()
+// What only draws a chat in the picker: one that Omni sends unreadable draws without it (the
+// initials for its picture), and never takes the list down with it.
+const shown = schema => schema.nullish().catch(null)
+// Omni's chat rows (routes/v2/chats.ts), as far as a thread and the picker need them.
+const ChatRow = z.object({
+  // A long name is cut, so one chat's name never takes the list down.
+  id, instanceId: id, externalId: z.string().min(1).max(500), name: z.string().nullish().transform(name => name?.slice(0, NAME_KEPT)),
+  canonicalId: shown(z.string().max(500)),
+  chatType: shown(z.string().max(50)),
+  avatarUrl: shown(z.string().max(2000).regex(/^https?:\/\//i)),
+  lastMessagePreview: shown(z.string().max(2000)),
+  lastMessageFromMe: shown(z.boolean()),
+  lastMessageAt: shown(z.string().max(100)),
+}).passthrough()
 const ChatAnswer = z.object({ data: ChatRow })
 const ChatList = z.object({ items: z.array(ChatRow) }).passthrough()
 
@@ -54,6 +68,17 @@ const invalid = message => Object.assign(new Error(message), { code: 'bot/invali
 const refused = message => Object.assign(new Error(message), { code: 'bot/refused' })
 // A WhatsApp id's number: "5511999990000@s.whatsapp.net" → "+5511999990000".
 const numberOf = jid => String(jid ?? '').replace(/[:@].*$/, '').replace(/^(\d{6,})$/, '+$1')
+// A direct chat's phone number, as digits: from its WhatsApp id, or from the phone id Omni
+// resolved a LID chat to (canonicalId). None for any other id.
+const PHONE_JID = /^(\d{6,})(?::\d+)?@s\.whatsapp\.net$/
+const phoneOf = chat => [chat.externalId, chat.canonicalId].map(jid => PHONE_JID.exec(jid ?? '')?.[1]).find(Boolean)
+// A search that reads as a phone number ("+55 (11) 98888-7777", "11.98888.7777") goes to Omni as its digits,
+// the way a WhatsApp id writes them, so it finds the chat by its id; any other goes as typed.
+const PHONE_QUERY = /^\+?[\d\s().-]+$/
+export const searchOf = (query) => {
+  const digits = query.replace(/\D/g, '')
+  return PHONE_QUERY.test(query) && digits.length >= 6 ? digits : query
+}
 
 // Whether a thread's sends and reactions go without a card (Decision 15, the owner's
 // amendment of design row 11): a global default in state.omniSettings, which each thread may
@@ -464,19 +489,28 @@ export function install(rt) {
     if (!parsed.success) throw invalid(what)
     return parsed.data
   }
+  // A chat as the Channels page draws it (omni.js chatOf), with a direct chat's number under
+  // its name when the name is not that number. A nameless direct chat is named by its number
+  // (never by a LID), and a nameless group by no name: the page calls it "Group" in its own
+  // language, and its initials are that word's.
+  const pickerRow = (chat, added) => {
+    const dm = chat.chatType === 'dm'
+    const phone = dm ? phoneOf(chat) : undefined
+    const own = (chat.name ?? '').trim()
+    const { id, name, initials, kind, preview, at, avatarUrl } = chatOf({ ...chat, name: own || (phone ? `+${phone}` : dm ? null : 'Group') })
+    const number = phone !== undefined && name.replace(/\D/g, '') !== phone ? `+${phone}` : null
+    return { id, name: own || dm ? name : null, initials, kind, preview, at, avatarUrl, number, jid: chat.externalId, added }
+  }
   // The picker: a channel's chats, each marked when it is a thread already.
   async function chats(body) {
     const payload = parse(ChatsPayload, body, 'Pick a channel')
     await rt.load()
     const query = new URLSearchParams({ instanceId: payload.channelId, limit: String(CHATS_LIMIT), sort: 'activity' })
-    if (payload.query) query.set('search', payload.query)
+    if (payload.query) query.set('search', searchOf(payload.query))
     const answer = ChatList.safeParse(await ask(`/chats?${query}`))
     if (!answer.success) throw refused('Omni answered something else for its chats.')
     const taken = new Set(list().map(thread => thread.chatId))
-    return {
-      chats: answer.data.items.filter(chat => chat.instanceId === payload.channelId)
-        .map(chat => ({ id: chat.id, name: (chat.name ?? '').trim() || numberOf(chat.externalId) || 'Chat', jid: chat.externalId, added: taken.has(chat.id) })),
-    }
+    return { chats: answer.data.items.filter(chat => chat.instanceId === payload.channelId).map(chat => pickerRow(chat, taken.has(chat.id))) }
   }
   const ENDPOINTS = {
     'omni-thread-add': async (body) => {

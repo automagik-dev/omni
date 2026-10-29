@@ -36,6 +36,7 @@ const loadTree = () => bundleClient([
   'export { OmniTree, ThreadRow, ThreadPicker, ThreadDock, plusOf, teamReady, threadsOf, rowPropsOf, isThreadSession, freeMarkOf, permissionMenuOf, OMNI_OUTDATED, OFFER_UNKNOWN, OMNI_TREE_CSS } from \'./omni-tree.js\'',
   'export { openConnectWizard } from \'./wizard.js\'',
   'export { omniStore, startLive, loadLink, refreshLive } from \'./omni-store.js\'',
+  'export { relativeShort } from \'./core.js\'',
 ], { globals: { URL, URLSearchParams, setTimeout, clearTimeout, document, localStorage }, team: { omni: { ...omni, call: fakeCall } } })
 const ui = await loadTree()
 
@@ -235,7 +236,7 @@ test('the + lists that channel\'s chats; a chat that is a thread already cannot 
   assert.ok(picker)
   assert.equal(all(channelOf(root, CHANNEL_B), 'ot-picker').length, 0)
   const [taken, free] = all(picker, 'ot-picker-chat')
-  assert.deepEqual([taken.props['data-chat-id'], taken.props.disabled, text(taken)], ['c1', true, 'Chat 1Added'])
+  assert.deepEqual([taken.props['data-chat-id'], taken.props.disabled, text(one(taken, 'ot-picker-tag'))], ['c1', true, 'Added'])
   assert.deepEqual([free.props['data-chat-id'], free.props.disabled], ['c2', false])
   // A search asks the host again, once the typing stops.
   one(picker, 'ot-picker-search').props.onChange({ target: { value: ' Mar ' } })
@@ -244,6 +245,36 @@ test('the + lists that channel\'s chats; a chat that is a thread already cannot 
   assert.equal(calls.filter(([endpoint]) => endpoint === 'omni-thread-chats').length, 1, 'nothing is asked while the typing goes on')
   await new Promise(resolve => setTimeout(resolve, 300))
   assert.deepEqual(calls.filter(([endpoint]) => endpoint === 'omni-thread-chats').at(-1), ['omni-thread-chats', { channelId: CHANNEL_A.id, query: 'Mar' }])
+})
+
+test('the picker draws each chat as the chat list does: picture or initials, name, time, a direct chat\'s number and its last message', async (t) => {
+  linked()
+  const { view } = tree(t, { roster: hooked({ omniThreads: [THREAD(1)] }) })
+  const at = Date.now() - 5 * 60_000
+  answer = endpoint => (endpoint === 'omni-thread-chats'
+    ? { chats: [
+      { id: 'c1', name: 'Marina', initials: 'MA', kind: 'direct', preview: 'Pode mandar o orçamento?', at, avatarUrl: 'https://pps.whatsapp.net/marina.jpg', number: '+5511988887777', jid: '5511988887777@s.whatsapp.net', added: true },
+      { id: 'c2', name: 'Obra', initials: 'OB', kind: 'group', preview: 'You: fotos no drive', at, avatarUrl: null, number: null, jid: '120363000000000000@g.us', added: false },
+      { id: 'c3', name: null, initials: 'GR', kind: 'group', preview: '', at, avatarUrl: null, number: null, jid: '120363000000000001@g.us', added: false },
+    ] }
+    : {})
+  byLabel(channelOf(view.draw(), CHANNEL_A), 'Add a chat').props.onClick()
+  view.draw()
+  await settle()
+  const [dm, group, nameless] = all(view.draw(), 'ot-picker-chat')
+  // The picture, loaded as the Channels page loads it, over the initials it falls back to.
+  const picture = one(dm, 'oc-ava-img')
+  assert.deepEqual([picture.props.src, picture.props.referrerPolicy, text(one(dm, 'oc-ava-face'))], ['https://pps.whatsapp.net/marina.jpg', 'no-referrer', 'MA'])
+  assert.deepEqual([one(group, 'oc-ava-img'), text(one(group, 'oc-ava-face'))], [undefined, 'OB'])
+  assert.deepEqual([text(one(dm, 'ot-picker-name')), text(one(dm, 'ot-picker-number')), text(one(dm, 'ot-picker-preview'))], ['Marina', '+5511988887777', 'Pode mandar o orçamento?'])
+  // An added chat says so where its time would be; the others show the time.
+  assert.deepEqual([text(one(dm, 'ot-picker-tag')), one(dm, 'ot-picker-at')], ['Added', undefined])
+  assert.equal(text(one(group, 'ot-picker-at')), ui.relativeShort(at))
+  assert.deepEqual([one(group, 'ot-picker-number'), text(one(group, 'ot-picker-preview'))], [undefined, 'You: fotos no drive'])
+  // A group with no name is called one.
+  assert.deepEqual([text(one(nameless, 'ot-picker-name')), one(nameless, 'ot-picker-preview')], ['Group', undefined])
+  // Each button is named by its chat's name, number and state, not by the initials or preview.
+  assert.deepEqual([dm, group, nameless].map(row => row.props['aria-label']), ['Marina, +5511988887777, Added', 'Obra', 'Group'])
 })
 
 test('picking a chat adds it on the host and closes the picker; a failed mint shows the reason and adds no row (:187)', async (t) => {
