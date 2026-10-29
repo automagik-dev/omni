@@ -15583,6 +15583,7 @@ var { ChevronRightIcon: ChevronRightIcon2, CloseIcon, DotsIcon, PlusIcon: PlusIc
 var OPEN_KEY = "omni.tree.open";
 var SEARCH_DELAY_MS = 250;
 var OMNI_OUTDATED = "Adding a chat needs a newer Omni. Update it first.";
+var OFFER_UNKNOWN = "Adding a chat is not ready yet. Reload the window if this stays.";
 function readOpen() {
   try {
     return new Set(JSON.parse(localStorage.getItem(OPEN_KEY) ?? "[]"));
@@ -15601,7 +15602,7 @@ var threadsOf = (roster, channelId) => (Array.isArray(roster?.omniThreads) ? ros
 var rowsOf = (roster) => (Array.isArray(roster?.omniRows) ? roster.omniRows : []).filter((row) => typeof row?.sessionId === "string");
 var isThreadSession = (roster, sessionId) => typeof sessionId === "string" && (Array.isArray(roster?.omniThreads) ? roster.omniThreads : []).some((thread) => thread.sessionId === sessionId);
 function plusOf(roster, state) {
-  if (roster?.omniThreadsOffered !== true) return { offered: false, reason: roster?.omniThreadsReason ?? null };
+  if (roster?.omniThreadsOffered !== true) return { offered: false, reason: roster?.omniThreadsReason ?? OFFER_UNKNOWN };
   if (state?.link?.outdated === true) return { offered: false, reason: OMNI_OUTDATED };
   return { offered: true, reason: null };
 }
@@ -15958,7 +15959,9 @@ function ChannelItem({ channel, state, roster, rowProps, actions, omni: omni2, p
     plusButton.current?.focus?.();
   };
   const onPick = (chat) => addThread(channel.id, chat).then((result) => {
-    if (result?.ok === true) closePicker();
+    if (result?.ok !== true) return result;
+    closePicker();
+    if (typeof result.sessionId === "string" && teamReady(roster)) actions.openSession(result.sessionId);
     return result;
   });
   return (0, import_react15.createElement)(
@@ -16103,7 +16106,10 @@ var OMNI_TREE_CSS = `
 .ot-channel-row[aria-expanded=true] .ot-chevron{transform:rotate(90deg)}
 .ot-channel-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ot-count{flex:none;min-width:18px;padding:0 5px;border-radius:9px;background:var(--bt-accent, #22d3ee);color:#fff;font-size:11px;line-height:18px;text-align:center;font-weight:600}
-.ot-plus{display:grid;place-items:center;flex:none;width:24px;height:24px;padding:0;border:0;border-radius:7px;background:none;color:var(--bt-ink-3);cursor:pointer}
+.ot-plus{display:grid;place-items:center;flex:none;width:24px;height:24px;padding:0;border:0;border-radius:7px;background:none;color:var(--bt-ink-3);cursor:pointer;opacity:0;transition:opacity .12s}
+/* The + shows on a channel's hover or focus, and stays while its picker is open. */
+.ot-channel-head:hover .ot-plus,.ot-channel-head:focus-within .ot-plus,.ot-plus[aria-expanded=true]{opacity:1}
+@media (hover:none){.ot-plus{opacity:1}}
 .ot-plus svg{width:14px;height:14px}
 .ot-plus:hover,.ot-plus[aria-expanded=true]{background:var(--bt-hover);color:var(--bt-ink)}
 .ot-plus:focus-visible{outline:2px solid var(--bt-accent);outline-offset:-2px}
@@ -16945,6 +16951,7 @@ var STRINGS = {
   // Why a chat cannot be added, or a thread does not work (threads.js, thread-keys.js, omni-tree.js).
   "Adding a chat needs a newer Bot team.": "添加聊天需要更新的 Bot 团队。",
   "Adding a chat needs a newer Omni. Update it first.": "添加聊天需要更新的 Omni。请先更新它。",
+  "Adding a chat is not ready yet. Reload the window if this stays.": "还不能添加聊天。如果一直这样，请重新加载窗口。",
   "Not connected: this app is not linked to an Omni.": "未连接：这个应用没有关联 Omni。",
   "Not connected: this app is linked to another Omni.": "未连接：这个应用关联的是另一个 Omni。",
   "Not connected: its previous key is still being cut.": "未连接：它之前的密钥还在作废中。",

@@ -247,6 +247,7 @@ test('apply registers its listeners, tools and effects after the team\'s, in a f
     'effect omni-channels: thread instructions',
     'prompt omni-thread 650',
     'effect omni-channels: threads view',
+    'effect omni-channels: threads offer',
     'effect omni-channels: omni-thread-chats',
     'effect omni-channels: omni-thread-add',
     'effect omni-channels: omni-thread-remove',
