@@ -12,7 +12,7 @@ import { describe, expect, it } from 'bun:test';
 import type { InteractiveButton } from '@omni/channel-sdk';
 
 import { encodeAscEmoji, nonLatin1Left } from '../utils/emoji';
-import { buildInteractive, foldTitle, splitBubbles } from '../utils/interactive';
+import { buildFlowInteractive, buildInteractive, foldTitle, splitBubbles } from '../utils/interactive';
 
 const options = (n: number, label = (i: number) => `Opção ${i}`): InteractiveButton[] =>
   Array.from({ length: n }, (_, i) => ({ text: label(i + 1), data: String(i + 1) }));
@@ -157,5 +157,39 @@ describe('o que a plataforma latin-1 não carrega', () => {
     expect(nonLatin1Left('tudo certo')).toEqual([]);
     expect(nonLatin1Left('café')).toEqual([]);
     expect(nonLatin1Left('≥ 5 e ≥ 6')).toEqual(['≥']);
+  });
+});
+
+describe('buildFlowInteractive', () => {
+  const flow = { flowId: '1', cta: 'Escolher 3 horários', data: { opcoes: [{ id: 's1', title: 'ter 04/11 08:00' }] } };
+
+  it('maps the descriptor onto tipo 5 with fluxo_id, texto_botao and payload', () => {
+    expect(buildFlowInteractive('Escolha 3 horários:', flow)).toEqual({
+      tipo: 5,
+      mensagem: 'Escolha 3 horários:',
+      fluxo: { texto_botao: 'Escolher 3 horários', fluxo_id: '1', payload: flow.data },
+    });
+  });
+
+  it('carries the header and footer when given', () => {
+    const p = buildFlowInteractive('Corpo', { ...flow, headerText: 'Agenda', footerText: 'Hapvida' });
+    expect(p).toMatchObject({ cabecalho_tipo: 'text', cabecalho_texto: 'Agenda', rodape: 'Hapvida' });
+  });
+
+  it('sends an empty payload when the flow has no data', () => {
+    expect(buildFlowInteractive('Corpo', { flowId: '1', cta: 'Abrir' })?.fluxo).toEqual({
+      texto_botao: 'Abrir',
+      fluxo_id: '1',
+      payload: {},
+    });
+  });
+
+  it('degrades to text without a flowId, without a CTA, or past the limits', () => {
+    expect(buildFlowInteractive('Corpo', undefined)).toBeNull();
+    expect(buildFlowInteractive('Corpo', { cta: 'Abrir' })).toBeNull();
+    expect(buildFlowInteractive('Corpo', { flowId: '1' })).toBeNull();
+    expect(buildFlowInteractive('Corpo', { flowId: '1', cta: 'x'.repeat(31) })).toBeNull();
+    expect(buildFlowInteractive('x'.repeat(1025), flow)).toBeNull();
+    expect(buildFlowInteractive('   ', flow)).toBeNull();
   });
 });

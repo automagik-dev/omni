@@ -4,6 +4,7 @@
 
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import { inboundShapeOf } from '../handlers/webhook';
 import { AscFlowPlugin } from '../plugin';
 import { MockEventBus, connectPlugin, createContext, instanceId, stubPlatform } from './helpers';
 
@@ -242,5 +243,23 @@ describe('handleWebhook', () => {
     await boot();
     const response = await plugin.handleWebhook(new Request(url(), { method: 'GET' }));
     expect(response.status).toBe(405);
+  });
+});
+
+describe('inboundShapeOf', () => {
+  it('names the keys of a JSON-shaped input and of extra body fields, never the values', () => {
+    const shape = inboundShapeOf({
+      codAtendimento: '42',
+      chatInput: '{"escolhas":["s1","s3","s4"],"flow_token":"x"}',
+      message: 'Enviado',
+      resposta_fluxo: 'qualquer coisa',
+    });
+    expect(shape).toEqual({ extraFields: ['resposta_fluxo'], chatInputKeys: ['escolhas', 'flow_token'] });
+    expect(JSON.stringify(shape)).not.toContain('s1');
+  });
+
+  it('logs nothing for an ordinary turn, even with extra fields', () => {
+    expect(inboundShapeOf({ codAtendimento: '42', chatInput: 'oi', message: 'oi', outro: 'x' })).toBeNull();
+    expect(inboundShapeOf({ codAtendimento: '42', chatInput: '{não é json' })).toBeNull();
   });
 });

@@ -31,9 +31,12 @@ import type { InteractiveButton, InteractiveListOptions } from '@omni/channel-sd
 const MAX_OPTIONS = 10;
 const MAX_BODY_TEXT = 1024;
 
-/** `msg_interativa_parametros.tipo` — 1 is a list, 2 reply buttons. */
+/** `msg_interativa_parametros.tipo` — 1 is a list, 2 reply buttons, 5 a Meta WhatsApp Flow. */
 const TIPO_LISTA = 1;
 const TIPO_BOTOES = 2;
+const TIPO_FLUXO = 5;
+/** Meta's limit for the CTA that opens a flow. */
+const MAX_FLOW_CTA = 30;
 /** Label on the button that opens the list, when the caller sets none. */
 const LIST_BUTTON_LABEL = 'Opções';
 /** Meta's limit for the list button text; a longer label falls back to the default. */
@@ -164,5 +167,49 @@ export function buildInteractive(
         },
       ],
     },
+  };
+}
+
+/** The part of Omni's flow descriptor (`metadata.flow`) the ASC platform can carry. */
+export interface AscFlowDescriptor {
+  flowId?: string;
+  cta?: string;
+  bodyText?: string;
+  headerText?: string;
+  footerText?: string;
+  data?: Record<string, unknown>;
+}
+
+/**
+ * `msg_interativa_parametros` for a Meta WhatsApp Flow (`tipo: 5`) on
+ * `POST /sendMsgInterativaAvancado`, from the descriptor the
+ * `/instances/:id/whatsapp-flows/send` route puts in `metadata.flow`.
+ *
+ * The platform's schema (`interactive_flow`) is `{texto_botao, fluxo_id,
+ * payload}`. `fluxo_id` passes through as the caller gave it, because the spec
+ * does not say whether it is the platform's `FluxoWhatsapp.id` or the Meta id
+ * (`cod_id_meta`). `payload` carries `data`, the first screen's input.
+ *
+ * Only `flowId` is supported: the platform has no field for a flow NAME, and
+ * `screen`/`flowAction`/`draft` have no counterpart in its schema either.
+ *
+ * `null` means "send the bubble as plain text", the same contract as
+ * `buildInteractive`: the text the caller wrote is the canonical path.
+ */
+export function buildFlowInteractive(
+  body: string,
+  flow: AscFlowDescriptor | undefined,
+): Record<string, unknown> | null {
+  const trimmed = body.trim();
+  const flowId = flow?.flowId?.trim();
+  const cta = flow?.cta?.trim();
+  if (!trimmed || trimmed.length > MAX_BODY_TEXT || !flowId || !cta || cta.length > MAX_FLOW_CTA) return null;
+
+  return {
+    tipo: TIPO_FLUXO,
+    mensagem: trimmed,
+    ...(flow?.headerText ? { cabecalho_tipo: 'text', cabecalho_texto: flow.headerText } : {}),
+    ...(flow?.footerText ? { rodape: flow.footerText } : {}),
+    fluxo: { texto_botao: cta, fluxo_id: flowId, payload: flow?.data ?? {} },
   };
 }

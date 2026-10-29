@@ -171,6 +171,64 @@ async function isReenvioDoFlow(
   return plugin.isStaleFlowReplay(instanceId, turn);
 }
 
+/** The body fields the flow's `api_rest` node is expected to send. */
+const KNOWN_INBOUND_FIELDS = new Set([
+  'codAtendimento',
+  'cod_atendimento',
+  'chatInput',
+  'message',
+  'phone',
+  'telefone',
+  'messageId',
+  'idMensagem',
+]);
+
+/** Top-level keys of a JSON object string, or `null` when it is not one. */
+function jsonObjectKeys(value: unknown): string[] | null {
+  if (typeof value !== 'string' || !value.trim().startsWith('{')) return null;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? Object.keys(parsed) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * What a Meta WhatsApp Flow answer looks like when the platform hands it to the
+ * flow, as KEY NAMES only — values can carry personal data and never reach the
+ * log.
+ *
+ * The platform does not document where a flow completion (Meta's `nfm_reply`
+ * with its `response_json`) lands: in `{#entrada}` as the JSON string, in a
+ * variable of its own, or nowhere. Until it is measured, the text goes to the
+ * agent unchanged and this line records the shape, plus the names of any body
+ * fields beyond the known ones. `null` for an ordinary turn, so nothing is
+ * logged for it.
+ */
+export function inboundShapeOf(body: Record<string, unknown>): Record<string, unknown> | null {
+  const extraFields = Object.keys(body).filter((k) => !KNOWN_INBOUND_FIELDS.has(k));
+  const chatInputKeys = jsonObjectKeys(body.chatInput);
+  const messageKeys = jsonObjectKeys(body.message);
+  // Only a JSON-shaped input is logged: the extra fields alone are whatever the
+  // flow designer added, and logging them would fire on every turn.
+  if (!chatInputKeys && !messageKeys) return null;
+  return {
+    extraFields,
+    ...(chatInputKeys ? { chatInputKeys } : {}),
+    ...(messageKeys ? { messageKeys } : {}),
+  };
+}
+
+function logStructuredInput(
+  logger: ReturnType<AscFlowPlugin['getLogger']>,
+  instanceId: string,
+  body: Record<string, unknown>,
+): void {
+  const shape = inboundShapeOf(body);
+  if (shape) logger.info('[asc-flow] inbound carries structured input — shape only', { instanceId, ...shape });
+}
+
 /**
  * Full HTTP entry point used by `plugin.handleWebhook`.
  */
@@ -225,6 +283,8 @@ export async function handleAscFlowWebhookRequest(
     logger.warn('[asc-flow] webhook body is not a JSON object', { instanceId });
     return pending();
   }
+
+  logStructuredInput(logger, instanceId, parsedJson as Record<string, unknown>);
 
   const turn = parseInboundTurn(parsedJson as AscFlowInboundBody);
   if (!turn) {

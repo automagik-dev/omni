@@ -295,6 +295,50 @@ describe('outbound interactive through /sendMsgInterativaAvancado', () => {
   });
 });
 
+describe('outbound WhatsApp Flow through /sendMsgInterativaAvancado', () => {
+  const flow = { flowId: '1', cta: 'Escolher 3 horários', bodyText: 'Escolha 3 horários:', data: { a: 'b' } };
+  const sendFlow = (metaFlow: Record<string, unknown> | undefined, text = 'Escolha 3 horários:') =>
+    send({ type: 'flow', text }, { metadata: metaFlow ? { flow: metaFlow } : {} });
+
+  it('sends the flow as tipo 5 inside the running atendimento', async () => {
+    await boot();
+    const result = await sendFlow(flow);
+
+    expect(result.success).toBe(true);
+    expect(of('/sendMsgInterativaAvancado')[0]?.body).toMatchObject({
+      cod_conta: '18',
+      tipo_envio: '1',
+      bol_incluir_atual: '1',
+      contato: { telefone: '5551999999999' },
+      msg_interativa_parametros: {
+        tipo: '5',
+        mensagem: 'Escolha 3 horários:',
+        fluxo: { texto_botao: 'Escolher 3 horários', fluxo_id: '1', payload: { a: 'b' } },
+      },
+    });
+    // The component carried the bubble: nothing else repeats it.
+    expect(of('/callbackFlowMsg')).toHaveLength(0);
+    expect(ready('42')).toMatchObject({ resposta: '' });
+  });
+
+  it('sends the body as text when the descriptor has no flowId', async () => {
+    await boot();
+    const result = await sendFlow({ cta: 'Abrir' });
+
+    expect(result.success).toBe(true);
+    expect(of('/sendMsgInterativaAvancado')).toHaveLength(0);
+    expect(of('/callbackFlowMsg')[0]?.body.msg_usuario).toBe('Escolha 3 horários:');
+  });
+
+  it('falls back to the text when the platform refuses the flow', async () => {
+    await boot({ '/sendMsgInterativaAvancado': () => jsonResponse({ cod_error: 1, msg: 'nao' }, 400) });
+    const result = await sendFlow(flow);
+
+    expect(result.success).toBe(true);
+    expect(of('/callbackFlowMsg')[0]?.body.msg_usuario).toBe('Escolha 3 horários:');
+  });
+});
+
 describe('the plain text turn is untouched', () => {
   it('pushes every bubble and answers empty', async () => {
     await boot();
