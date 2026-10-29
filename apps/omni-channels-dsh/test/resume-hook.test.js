@@ -6,12 +6,10 @@ import { test } from 'node:test'
 import { createRuntime as createTeam } from '@automagik/bots-dsh'
 import { createRuntime } from '../index.js'
 import { START_TASK_REFUSAL } from '../src/host/grants.js'
-import { HANDOFF_NEEDS_TEAM } from '../src/host/handoff.js'
-import { HANDOFF_TOOL } from '../src/host/omni-rules.js'
 import { install, isResumeMessage, NEEDS_NEWER_TEAM, TEAM_CONTRACT } from '../src/host/resume-hook.js'
 import { decideUnbound, NOT_PICKED_UP } from '../src/host/standing-recovery.js'
 import { THREAD_NEEDS_TEAM, WORKER_MOVED } from '../src/host/subscriptions.js'
-import { CUT_WINDOW_MS, THREAD_TOOLS } from '../src/host/threads.js'
+import { THREAD_TOOLS } from '../src/host/threads.js'
 import { all, bundleClient, byLabel, column, mount, one, plain as asValue, react, text } from './client-stand-in.js'
 import { omni as teamClient } from './omni-client.js'
 import { fakeContext, teamFile } from './team.js'
@@ -339,7 +337,7 @@ test('the pinned Bot team is the release TEAM_CONTRACT names, and it has the hoo
     rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
   })
   const team = createTeam(ctx, { home })
-  for (const path of [TEAM_CONTRACT.register, TEAM_CONTRACT.dshBotsList, TEAM_CONTRACT.dshBotsCreate]) {
+  for (const path of [TEAM_CONTRACT.register]) {
     assert.equal(typeof path.split('.').reduce((value, key) => value?.[key], team), 'function', path)
   }
   assert.equal(typeof team.resumesDone?.then, 'function')
@@ -351,7 +349,7 @@ test('the plugin registers with the Bot team once, before any other work', async
   assert.deepEqual(registrations, [{ id: 'omni-channels', callsBefore: ['on session/event', 'effect ds-bot: restart resumes'] }])
   assert.equal(channels.teamResume.ready, true)
   // The adapter is the plugin's own, not the team's.
-  for (const name of ['teamResume', 'threadKeys', 'threads', 'omniRows', 'standingRuns', 'omniDshBots']) assert.equal(name in Object.getPrototypeOf(channels), false, name)
+  for (const name of ['teamResume', 'threadKeys', 'threads', 'standingRuns']) assert.equal(name in Object.getPrototypeOf(channels), false, name)
   assert.equal(typeof Object.getPrototypeOf(channels).createTaskSession, 'function')
 })
 
@@ -648,33 +646,28 @@ const sessionSub = (id, mode, extra = {}) => ({
 })
 const row = (sessionId, kind, extra = {}) => ({ sessionId, kind, title: sessionId, turnOpenAt: null, at: 1, ...extra })
 
-test('with 500 kept idle rows whose last turns ended cleanly or opened more than 24 h ago, the hook lists none and the team\'s pass resolves none of them; a row with a turn opened in the last 24 h and every working run\'s Session are listed (:191)', async (t) => {
+test('500 rows left from before, idle or with a turn cut a minute ago, one with a run still working, are archived at start and never reach the team\'s pass: it resolves none of them, and their run ends (:191)', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const at = Date.now() - 60_000
   const omniRows = {}
   for (let index = 0; index < 500; index += 1) {
-    // Half ended their last turn cleanly; half opened one more than 24 h ago.
-    const turnOpenAt = index % 2 === 0 ? null : Date.now() - CUT_WINDOW_MS - 60_000
-    omniRows[`idle-${index}`] = row(`idle-${index}`, 'handoff', { reportTo: 'm1', reported: true, turnOpenAt, at: index })
+    const turnOpenAt = index % 2 === 0 ? null : at
+    omniRows[`row-${index}`] = row(`row-${index}`, ['run', 'ongoing', 'handoff'][index % 3], { reportTo: 'm1', reported: index % 4 === 0, turnOpenAt, at: index })
   }
-  omniRows['open-row'] = row('open-row', 'handoff', { reportTo: 'm1', reported: true, turnOpenAt: at, at: 600 })
-  omniRows['working-row'] = row('working-row', 'handoff', { reportTo: 'm1', reported: true, at: 601 })
   const home = homeFor(t, undefined, teamState({
     subscriptions: {},
     omniRows,
-    subscriptionRuns: [{ id: 'run-w', subId: 'sub-gone', standing: true, sessionId: 'working-row', status: 'working', turnId: '1', at }],
+    subscriptionRuns: [{ id: 'run-w', subId: 'sub-gone', standing: true, sessionId: 'row-7', status: 'working', turnId: '1', at }],
   }))
   const run = await boot(t, home)
   for (const id of Object.keys(omniRows)) run.cut(id)
-  assert.deepEqual(run.registered[0].sessions().sort(), ['open-row', 'working-row'])
+  await until(() => run.archived.length === 500)
+  assert.deepEqual(run.registered[0].sessions(), [])
   t.mock.timers.tick(3000)
   const done = await run.team.resumesDone
   await threadFlush()
-  assert.equal(run.resolved.filter(id => id.startsWith('idle-')).length, 0)
-  // Following the Omni Bot's model again at start opened none of them either.
-  assert.equal(run.selected.filter(([id]) => id.startsWith('idle-')).length, 0)
-  assert.deepEqual([...done.resumed].sort(), ['open-row', 'working-row'])
-  assert.equal(run.channels.omniRows.list().length, 502)
+  assert.deepEqual([done.resumed, run.resolved.filter(id => id.startsWith('row-')), run.selected.filter(([id]) => id.startsWith('row-'))], [[], [], []])
+  assert.deepEqual([Object.hasOwn(run.channels.state, 'omniRows'), run.channels.state.subscriptionRuns[0].status], [false, 'failed'])
 })
 
 test('against a team stand-in with no hook a saved "new session" or "ongoing session" automation moves to its chat\'s thread and pauses with the thread\'s reason at start; its row is archived, never resumed, and nothing registers (:195)', async (t) => {
@@ -690,20 +683,7 @@ test('against a team stand-in with no hook a saved "new session" or "ongoing ses
   ])
   assert.deepEqual([run.registered, run.channels.teamResume.ready], [[], false])
   assert.doesNotMatch(run.ctx.registeredTools.get('save_automation').parameters.properties.worker.description, /session|thread/)
-  assert.deepEqual([run.view().omniRows, Object.keys(run.channels.state.omniRows)], [[], []])
-})
-
-test('the hook lists every unreported hand-off\'s Session, also one whose open turn was never saved, and never a reported or archived one (:191, hand-off part)', async (t) => {
-  const home = homeFor(t, undefined, teamState({
-    omniRows: {
-      'handoff-open': row('handoff-open', 'handoff', { reportTo: 'm1', reported: false }),
-      'handoff-done': row('handoff-done', 'handoff', { reportTo: 'm1', reported: true }),
-      'handoff-gone': row('handoff-gone', 'handoff', { reportTo: 'm1', reported: false }),
-    },
-  }))
-  const run = await boot(t, home)
-  run.archived.push('handoff-gone')
-  assert.deepEqual(run.registered[0].sessions(), ['handoff-open'])
+  assert.deepEqual([run.view().omniRows, Object.hasOwn(run.channels.state, 'omniRows')], [undefined, false])
 })
 
 // Group 16 (design row 19, Decision 39): a DSH bot's Session is the team's to find (through
@@ -753,7 +733,7 @@ test('a cut DSH-bot run is bound after a restart: its Session is in state.agents
 // against the real team under this plugin; the client half draws this plugin's own tree and
 // phone pane (client-stand-in.js) from that start's real view, their `call` answered by that
 // start's own endpoints, so the rows the owner sees are the ones this host makes.
-test('the old-team sweep: on a team stand-in with no rt.resumable or rt.resumesDone, no + and the reason on the rows, a row that never opens its Session, the five thread tools refusing with no Omni request, no thread, session or DSH-bot worker and the saved ones paused, the hand-off refused, no Tasks agent, nothing registered, no recovery; the routes, the phone pane and an Omni Bot automation still work (:195)', async (t) => {
+test('the old-team sweep: on a team stand-in with no rt.resumable or rt.resumesDone, no + and the reason on the rows, a row that never opens its Session, the five thread tools refusing with no Omni request, no thread, session or DSH-bot worker and the saved ones paused, no hand-off, no Tasks agent, nothing registered, no recovery; the routes, the phone pane and an Omni Bot automation still work (:195)', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const omni = watchedOmni(t)
   const coder = { id: 'coder', kind: 'dsh', name: 'Coder', workDir: import.meta.dirname, sessions: [], createdAt: 1 }
@@ -808,8 +788,8 @@ test('the old-team sweep: on a team stand-in with no rt.resumable or rt.resumesD
   assert.doesNotMatch(await tool(run, 'find_chats', {}), /thread:|dshbot:/)
   assert.equal(await save(run, 'thread'), `Not saved: ${THREAD_NEEDS_TEAM}`)
 
-  // The hand-off refuses with its own reason, start_task stays refused, and nothing reaches Tasks.
-  assert.equal(await tool(run, HANDOFF_TOOL, { title: 'Fix the build', instructions: 'Run the tests.' }), `Not handed off: ${HANDOFF_NEEDS_TEAM}`)
+  // There is no hand-off, start_task stays refused, and nothing reaches Tasks.
+  assert.equal(run.ctx.registeredTools.has('omni_handoff'), false)
   assert.equal(guarded(run.ctx, 'm1', 'start_task'), START_TASK_REFUSAL)
 
   // An automation whose worker is the Omni Bot still runs: its event reaches the Omni Bot.
@@ -943,14 +923,14 @@ test('the plugin has no resume pass of its own: no copy of the team\'s, no resum
   // Timers only where nothing restarts: the event stream's backoff and its 30 s sync, the local
   // CLI's kill, the pairing poll, and the key file's lock wait, heartbeat and drain.
   assert.deepEqual(count(/\bset(Timeout|Interval)\(/), { 'omni-events.js': 2, 'omni-link.js': 1, 'omni-local.js': 1, 'thread-keys.js': 4 })
-  // Every delivery and follow-up: an ask, a permission note, a hand-off's report, an
-  // automation's task; a handed-over event or instruction, an ask's answer; the wake. None
-  // carries the marker or the team's resume roles.
+  // Every delivery and follow-up: an ask, a permission note, an automation's task; a
+  // handed-over event, an ask's answer; the wake. None carries the marker or the team's resume
+  // roles.
   const delivered = Object.entries(files).flatMap(([name, source]) => codeOf(source).filter(line => line.includes('rt.deliver(')).map(line => [name, /role: '([^']+)'/.exec(line)?.[1]]))
-  assert.deepEqual(delivered, [['asks.js', 'task'], ['grants.js', 'permission'], ['handoff.js', 'task-done'], ['subscriptions.js', 'task']])
+  assert.deepEqual(delivered, [['asks.js', 'task'], ['grants.js', 'permission'], ['subscriptions.js', 'task']])
   assert.deepEqual(count(/\.(followup|steer)\(/), { 'asks.js': 1, 'standing-runs.js': 1 })
   assert.deepEqual(count(/createUserMessage\(/), { 'asks.js': 1 })
-  assert.deepEqual(count(/await followupAndFlush\(rt,/), { 'asks.js': 1, 'handoff.js': 1, 'standing-runs.js': 1 })
+  assert.deepEqual(count(/await followupAndFlush\(rt,/), { 'asks.js': 1, 'standing-runs.js': 1 })
   // cutByRestart is read only on a turn's end, live or in a log: from each read of a reason, the
   // nearest line that names a turn's start or end (that line included) names its end, or is a
   // turn/start branch that returned before the read.
@@ -971,23 +951,23 @@ test('the plugin has no resume pass of its own: no copy of the team\'s, no resum
     return lines.flatMap((line, index) => (/cutByRestart(\?\.)?\(\w+(\.data)?\?\.reason\)/.test(line) ? [[name, onTurnEnd(lines, index)]] : []))
   })
   assert.deepEqual(reads.filter(([, onEnd]) => !onEnd), [])
-  assert.deepEqual([...new Set(reads.map(([name]) => name))], ['asks.js', 'handoff.js', 'omni-rows.js', 'standing-recovery.js', 'standing-runs.js', 'subscriptions.js', 'threads.js'])
+  assert.deepEqual([...new Set(reads.map(([name]) => name))], ['asks.js', 'standing-recovery.js', 'standing-runs.js', 'subscriptions.js', 'threads.js'])
   // The signal recovery's inbox read, once in each recovery that decides unbound work.
-  assert.deepEqual(count(/inbox\?\.nextStep/), { 'handoff.js': 1, 'standing-recovery.js': 1 })
+  assert.deepEqual(count(/inbox\?\.nextStep/), { 'standing-recovery.js': 1 })
   // The one wake: wakeOnce's requeue (the inbox move) and its flush, beside the hand-over's own.
   assert.deepEqual(count(/\.requeue\(/), { 'standing-recovery.js': 1 })
   assert.deepEqual(count(/inbox\.remove\(/), { 'standing-runs.js': 1 })
   assert.deepEqual(count(/sessions\.flush\(/), { 'asks.js': 1, 'standing-recovery.js': 1 })
-  assert.deepEqual(count(/await wakeOnce\(rt,/), { 'handoff.js': 1, 'standing-recovery.js': 1 })
+  assert.deepEqual(count(/await wakeOnce\(rt,/), { 'standing-recovery.js': 1 })
   // Any other spelling of the same things (optional calls, destructuring, an un-awaited call, a
   // promise timer, a computed key) still names them: every raw line naming one, comments
   // included, is counted per file, so a new one fails here until it is reviewed.
   const raw = pattern => Object.fromEntries(Object.entries(files)
     .map(([name, source]) => [name, source.split('\n').filter(line => pattern.test(line)).length]).filter(([, n]) => n > 0))
-  assert.deepEqual(raw(/\bdeliver\b/), { 'asks.js': 3, 'grants.js': 1, 'handoff.js': 2, 'standing-recovery.js': 1, 'subscriptions.js': 1 })
-  assert.deepEqual(raw(/\bfollowup(AndFlush)?\b|\bsteer\b/), { 'asks.js': 3, 'handoff.js': 2, 'standing-runs.js': 3 })
-  assert.deepEqual(raw(/cutByRestart/), { 'asks.js': 1, 'handoff.js': 4, 'omni-rows.js': 1, 'standing-recovery.js': 9, 'standing-runs.js': 1, 'subscriptions.js': 1, 'threads.js': 1 })
+  assert.deepEqual(raw(/\bdeliver\b/), { 'asks.js': 3, 'grants.js': 1, 'standing-recovery.js': 1, 'subscriptions.js': 1 })
+  assert.deepEqual(raw(/\bfollowup(AndFlush)?\b|\bsteer\b/), { 'asks.js': 3, 'standing-runs.js': 3 })
+  assert.deepEqual(raw(/cutByRestart/), { 'asks.js': 1, 'standing-recovery.js': 7, 'standing-runs.js': 1, 'subscriptions.js': 1, 'threads.js': 1 })
   assert.deepEqual(raw(/\bset(Timeout|Interval|Immediate)\b|timers\/promises|queueMicrotask|\bsleep\b/), { 'omni-events.js': 2, 'omni-link.js': 1, 'omni-local.js': 1, 'thread-keys.js': 4 })
-  assert.deepEqual(raw(/\bresumed\b/), { 'asks.js': 1, 'handoff.js': 6, 'resume-hook.js': 15, 'standing-recovery.js': 7 })
-  assert.deepEqual(raw(/\brequeue\b|\bwakeOnce\b/), { 'handoff.js': 3, 'standing-recovery.js': 4, 'standing-runs.js': 2 })
+  assert.deepEqual(raw(/\bresumed\b/), { 'asks.js': 1, 'resume-hook.js': 15, 'standing-recovery.js': 7 })
+  assert.deepEqual(raw(/\brequeue\b|\bwakeOnce\b/), { 'standing-recovery.js': 4, 'standing-runs.js': 2 })
 })

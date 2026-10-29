@@ -15845,7 +15845,6 @@ function saveOpen(open) {
 }
 var teamReady = (roster) => Array.isArray(roster?.omniRowProps) && roster.omniRowProps.length > 0;
 var threadsOf = (roster, channelId) => (Array.isArray(roster?.omniThreads) ? roster.omniThreads : []).filter((thread) => thread.channelId === channelId);
-var rowsOf = (roster) => (Array.isArray(roster?.omniRows) ? roster.omniRows : []).filter((row) => typeof row?.sessionId === "string");
 var isThreadSession = (roster, sessionId) => typeof sessionId === "string" && (Array.isArray(roster?.omniThreads) ? roster.omniThreads : []).some((thread) => thread.sessionId === sessionId);
 function plusOf(roster, state) {
   if (roster?.omniThreadsOffered !== true) return { offered: false, reason: roster?.omniThreadsReason ?? OFFER_UNKNOWN };
@@ -16001,97 +16000,6 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
           onClick: () => choose(choice)
         }, choice.label))
       ))
-    ) : null,
-    problem ? (0, import_react15.createElement)("span", { className: "ot-thread-problem", role: "alert" }, hostText(problem)) : null
-  );
-}
-function SessionRow({ row, actions, rowProps = {} }) {
-  const id = row.sessionId;
-  const useStatus = rowProps.useSessionStatus ?? noStatus;
-  const useRetain = rowProps.useSessionRetainInfo ?? noRetain;
-  const unread = useStatus((map) => map.get(id)?.completionUnread === true);
-  const asking = useStatus((map) => map.get(id)?.pendingInteraction !== void 0);
-  const running = useStatus((map) => map.get(id)?.running === true);
-  const active = useRetain(id, (info) => (info?.retainedBy?.mainView ?? 0) > 0);
-  const [menu, setMenu] = (0, import_react15.useState)(false);
-  const [confirming, setConfirming] = (0, import_react15.useState)(false);
-  const [problem, setProblem] = (0, import_react15.useState)(null);
-  const node = (0, import_react15.useRef)(null);
-  (0, import_react15.useEffect)(() => {
-    if (!menu || typeof document === "undefined" || typeof document.addEventListener !== "function") return void 0;
-    const away = (event) => {
-      if (node.current?.contains?.(event.target)) return;
-      setMenu(false);
-      setConfirming(false);
-    };
-    document.addEventListener("pointerdown", away, true);
-    return () => document.removeEventListener("pointerdown", away, true);
-  }, [menu]);
-  const opens = teamReady(rowProps.roster);
-  const state = threadState(row, { running, asking });
-  const dot = typeof rowProps.useSessionStatus === "function" && unread && !active;
-  const label = [row.title, state === "waiting" ? t("Waiting for you") : state === "working" ? t("Working") : "", dot ? t("Unread activity") : ""].filter(Boolean).join(", ");
-  const remove = () => {
-    if (!confirming) {
-      setConfirming(true);
-      return;
-    }
-    setConfirming(false);
-    setMenu(false);
-    setProblem(null);
-    call("omni-row-remove", { sessionId: id }).catch((error) => setProblem(error?.message ?? String(error)));
-  };
-  const onMenuKey = (event) => {
-    if (event.key !== "Escape") return;
-    event.stopPropagation();
-    setMenu(false);
-    setConfirming(false);
-  };
-  return (0, import_react15.createElement)(
-    "div",
-    { ref: node, className: "ot-thread ot-row", "data-idle": state === "idle" || void 0, "data-kind": row.kind },
-    (0, import_react15.createElement)(
-      "button",
-      {
-        type: "button",
-        className: "bt-thread",
-        "data-state": state,
-        "data-session-id": id,
-        "aria-label": label,
-        title: row.title,
-        "aria-current": active ? "page" : void 0,
-        "aria-disabled": opens ? void 0 : true,
-        onClick: () => {
-          if (opens) actions.openSession(id);
-        }
-      },
-      (0, import_react15.createElement)("span", { className: state === "waiting" ? "bt-thread-wait" : state === "working" ? "bt-thread-spin" : "ot-thread-idle", "aria-hidden": true }),
-      (0, import_react15.createElement)("span", { className: "bt-thread-title" }, row.title),
-      dot ? (0, import_react15.createElement)("span", { className: "bt-unread", "aria-hidden": true }) : null
-    ),
-    (0, import_react15.createElement)("button", {
-      type: "button",
-      className: "ot-thread-more ot-row-more",
-      "aria-label": t("Actions for {name}", { name: row.title }),
-      title: t("More"),
-      "aria-haspopup": "menu",
-      "aria-expanded": menu,
-      onClick: () => {
-        setMenu((open) => !open);
-        setConfirming(false);
-      }
-    }, (0, import_react15.createElement)(DotsIcon)),
-    menu ? (0, import_react15.createElement)(
-      "div",
-      { className: "ot-thread-menu", role: "menu", "aria-label": t("Actions for {name}", { name: row.title }), onKeyDown: onMenuKey },
-      (0, import_react15.createElement)("button", {
-        type: "button",
-        role: "menuitem",
-        className: "ot-thread-menu-item ot-row-remove",
-        "data-confirm": confirming || void 0,
-        "aria-label": confirming ? t("Remove {name} from the sidebar? Click again", { name: row.title }) : t("Remove {name}", { name: row.title }),
-        onClick: remove
-      }, confirming ? t("Click again to remove") : t("Remove"))
     ) : null,
     problem ? (0, import_react15.createElement)("span", { className: "ot-thread-problem", role: "alert" }, hostText(problem)) : null
   );
@@ -16269,13 +16177,6 @@ function OmniTree(props) {
   if (!isOmniBot(bot)) return null;
   const rowProps = rowPropsOf(props, roster?.omniRowProps);
   const threads = Array.isArray(roster?.omniThreads) ? roster.omniThreads : [];
-  const kept = rowsOf(roster);
-  const sessions = kept.length === 0 ? null : (0, import_react15.createElement)(
-    "div",
-    { className: "ot-others ot-rows", role: "group", "aria-label": t("Sessions") },
-    (0, import_react15.createElement)("span", { className: "ot-empty" }, t("Sessions")),
-    kept.map((row) => (0, import_react15.createElement)(SessionRow, { key: `${row.sessionId}:${typeof rowProps.useSessionStatus}:${typeof rowProps.useSessionRetainInfo}`, row, actions, rowProps }))
-  );
   const others = (list) => list.length === 0 ? null : (0, import_react15.createElement)(
     "div",
     { className: "ot-others", role: "group", "aria-label": t("Other chats") },
@@ -16283,7 +16184,7 @@ function OmniTree(props) {
     list.map((thread) => (0, import_react15.createElement)(ThreadRow, { key: rowKey(thread, rowProps), thread, actions, rowProps }))
   );
   if (state.preview) {
-    return (0, import_react15.createElement)("div", { className: "ot-tree" }, (0, import_react15.createElement)("button", { type: "button", className: "ot-channel-row ot-link", onClick: openConnectWizard }, t("Connect Omni"), (0, import_react15.createElement)("span", { "aria-hidden": true }, " →")), others(threads), sessions);
+    return (0, import_react15.createElement)("div", { className: "ot-tree" }, (0, import_react15.createElement)("button", { type: "button", className: "ot-channel-row ot-link", onClick: openConnectWizard }, t("Connect Omni"), (0, import_react15.createElement)("span", { "aria-hidden": true }, " →")), others(threads));
   }
   const change = (id, show) => setOpen((before) => {
     const next = new Set(before);
@@ -16320,8 +16221,7 @@ function OmniTree(props) {
       },
       onClosePicker: () => setPicking(null)
     })),
-    others(threads.filter((thread) => !listed.has(thread.channelId))),
-    sessions
+    others(threads.filter((thread) => !listed.has(thread.channelId)))
   );
 }
 var threadDocks = 0;
@@ -16390,9 +16290,6 @@ var OMNI_TREE_CSS = `
 .ot-thread-phone:hover{color:var(--bt-ink)}
 .ot-thread:hover .ot-thread-remove,.ot-thread-remove:focus-visible,.ot-thread-remove[data-confirm],.ot-thread:hover .ot-thread-phone,.ot-thread-phone:focus-visible,.ot-thread:hover .ot-thread-more,.ot-thread-more:focus-visible{opacity:1}
 .ot-thread-remove[data-confirm]{color:var(--bt-danger, #dc2626)}
-.ot-row .ot-row-more{right:4px}
-.ot-row:hover .ot-row-more{opacity:1}
-.ot-row-remove[data-confirm]{color:var(--bt-danger, #dc2626)}
 .ot-thread-problem{flex-basis:100%;padding:0 8px 3px 28px;font-size:11px;color:var(--bt-danger, #dc2626)}
 .ot-picker{display:grid;gap:4px;margin:2px 0 4px;padding:6px;border:1px solid var(--bt-line, rgba(127,127,127,.2));border-radius:10px;background:var(--bt-surface, transparent)}
 .ot-picker-head{display:flex;align-items:center;gap:4px}
@@ -17213,8 +17110,6 @@ var STRINGS = {
   "No chats match.": "没有匹配的聊天。",
   "Added": "已添加",
   "Other chats": "其他聊天",
-  "Sessions": "会话",
-  "Actions for {name}": "{name} 的操作",
   "Adding…": "正在添加…",
   "The chat was not added.": "这个聊天没有添加。",
   "Remove {name} from the sidebar? Click again": "要从侧边栏移除 {name} 吗？再点一次",

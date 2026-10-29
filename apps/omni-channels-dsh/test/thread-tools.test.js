@@ -518,7 +518,7 @@ test('in the ask run a read works; a send, a POST omni_call, start_task or messa
   assert.equal((await preExecute(run, 'bash', sessionId, {}, { kind: 'ask', reason: 'shell?' })).kind, 'deny')
   assert.deepEqual(await preExecute(run, 'bash', sessionId, {}, { kind: 'deny', reason: 'no' }), { kind: 'deny', reason: 'no' })
   // The Omni Bot's own computer-tool guard refuses the shell there too.
-  assert.match(guarded(run.ctx, sessionId, 'bash'), /not files or the shell/)
+  assert.match(guarded(run.ctx, sessionId, 'bash'), /^Omni has no computer/)
   assert.deepEqual(omni.sent, [])
 })
 

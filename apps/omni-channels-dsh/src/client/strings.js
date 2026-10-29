@@ -616,8 +616,6 @@ export const STRINGS = {
   'No chats match.': '没有匹配的聊天。',
   'Added': '已添加',
   'Other chats': '其他聊天',
-  'Sessions': '会话',
-  'Actions for {name}': '{name} 的操作',
   'Adding…': '正在添加…',
   'The chat was not added.': '这个聊天没有添加。',
   'Remove {name} from the sidebar? Click again': '要从侧边栏移除 {name} 吗？再点一次',

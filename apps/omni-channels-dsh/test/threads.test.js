@@ -10,7 +10,7 @@ import { join } from 'node:path'
 import { afterEach, test } from 'node:test'
 import { NEEDS_NEWER_TEAM, TEAM_CONTRACT } from '../src/host/resume-hook.js'
 import { NOT_LINKED } from '../src/host/thread-keys.js'
-import { CUT_WINDOW_MS, followOmniModel, THREAD_REFUSAL, THREAD_TOOLS } from '../src/host/threads.js'
+import { CUT_WINDOW_MS, THREAD_REFUSAL, THREAD_TOOLS } from '../src/host/threads.js'
 import { OMNI, INSTANCE, CHAT, GROUP, ELSEWHERE, OWNER, CHATS, askedOf, boot, fakeOmni, flush, guarded, homeFor, keysOf, record, resetFetch, saved, teamState } from './thread-fixture.js'
 
 afterEach(resetFetch)
@@ -248,28 +248,26 @@ test('the hook never lists an archived Session, so the team does not resume it (
   assert.equal(run.resolved.includes('shelved-session'), false)
 })
 
-test('changing the Omni Bot\'s model moves every thread, and every Session another module follows, to it (:189)', async (t) => {
+test('changing the Omni Bot\'s model moves every thread to it, and nothing else (:189)', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const omni = fakeOmni()
   const run = await boot(t, homeFor(t, omni))
   const one = (await run.channels.threads.add(INSTANCE, CHAT)).thread
   const two = (await run.channels.threads.add(INSTANCE, GROUP)).thread
-  const unfollow = followOmniModel(run.channels, 'row-session')
   await flush()
   run.selected.length = 0
   await run.team.updateBot('m1', { model: 'deepseek/pro' })
   await flush()
   const moved = id => run.selected.filter(([sessionId]) => sessionId === id).map(([, ref]) => ref)
-  assert.deepEqual([moved('m1'), moved(one.sessionId), moved(two.sessionId), moved('row-session')], [['deepseek/pro'], ['deepseek/pro'], ['deepseek/pro'], ['deepseek/pro']])
-  // A Session's own model change moves nothing else; an unfollowed Session stays.
-  unfollow()
+  assert.deepEqual([moved('m1'), moved(one.sessionId), moved(two.sessionId)], [['deepseek/pro'], ['deepseek/pro'], ['deepseek/pro']])
+  assert.deepEqual([...new Set(run.selected.map(([sessionId]) => sessionId))].sort(), ['m1', one.sessionId, two.sessionId].sort())
+  // A Session's own model change moves nothing else.
   run.selected.length = 0
   await run.ctx.sessionController.selectModel({ sessionId: one.sessionId, provider: 'deepseek', model: 'flash' })
   await flush()
   assert.deepEqual(run.selected, [[one.sessionId, 'deepseek/flash']])
   await run.team.updateBot('m1', { model: 'deepseek/flash' })
   await flush()
-  assert.deepEqual(moved('row-session'), [])
   assert.deepEqual(moved(two.sessionId), ['deepseek/flash'])
 })
 
