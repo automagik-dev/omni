@@ -2,6 +2,11 @@
  * Gupshup channel capabilities declaration
  *
  * Defines what features the Gupshup Custom Integration plugin supports.
+ *
+ * Buttons, lists and WhatsApp Flows are sent as Custom Integration events
+ * (`msg_type` BUTTONS / LIST / FLOW); the partner's Journey maps each one to
+ * the matching Bot Studio node (Reply, List, WhatsApp Flow). A Journey that
+ * does not branch on those types will not deliver them — see RUNBOOK.md.
  */
 
 import { DEFAULT_CAPABILITIES } from '@omni/channel-sdk';
@@ -25,7 +30,8 @@ export const GUPSHUP_CAPABILITIES: ChannelCapabilities = {
   canSendContact: false,
   canSendLocation: true,
   canSendSticker: true,
-  canSendButtons: false,
+  canSendButtons: true,
+  canSendFlow: true,
   canHandleGroups: false,
   canHandleBroadcast: false,
   canHandleDMs: true,

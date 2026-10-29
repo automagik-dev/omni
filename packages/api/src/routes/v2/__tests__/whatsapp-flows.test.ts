@@ -22,6 +22,8 @@ afterEach(() => {
 
 type MountOptions = {
   channel?: string;
+  /** What the instance's plugin declares — default true (whatsapp-business does). */
+  canSendFlow?: boolean;
   metaAccessToken?: string | null;
   sendMessage?: ReturnType<typeof mock>;
 };
@@ -29,6 +31,7 @@ type MountOptions = {
 function mountFlowsRoutes(options: MountOptions = {}): {
   app: Hono<{ Variables: AppVariables }>;
   sendMessage: ReturnType<typeof mock>;
+  registryGet: ReturnType<typeof mock>;
 } {
   const sendMessage =
     options.sendMessage ??
@@ -38,6 +41,7 @@ function mountFlowsRoutes(options: MountOptions = {}): {
       timestamp: 123,
     }));
 
+  const registryGet = mock(() => ({ sendMessage, capabilities: { canSendFlow: options.canSendFlow ?? true } }));
   const app = new Hono<{ Variables: AppVariables }>();
   app.use('*', async (c, next) => {
     c.set('services', {
@@ -52,9 +56,7 @@ function mountFlowsRoutes(options: MountOptions = {}): {
         })),
       },
     } as never);
-    c.set('channelRegistry', {
-      get: mock(() => ({ sendMessage })),
-    } as never);
+    c.set('channelRegistry', { get: registryGet } as never);
     c.set('apiKey', {
       id: 'test',
       name: 'test',
@@ -65,7 +67,7 @@ function mountFlowsRoutes(options: MountOptions = {}): {
     await next();
   });
   app.route('/', whatsappFlowsRoutes);
-  return { app, sendMessage };
+  return { app, sendMessage, registryGet };
 }
 
 /** Stub globalThis.fetch, capturing requests and replying with canned JSON. */
@@ -310,5 +312,25 @@ describe('POST /instances/:id/whatsapp-flows/send', () => {
     const json = (await res.json()) as { error: { code: string; message: string } };
     expect(json.error.code).toBe('OMNI_OUTSIDE_24H_WINDOW');
     expect(json.error.message).toBe('outside 24h window');
+  });
+  test("dispatches through the instance's own plugin when its channel declares canSendFlow (BSP, e.g. gupshup)", async () => {
+    const { app, sendMessage, registryGet } = mountFlowsRoutes({ channel: 'gupshup', metaAccessToken: null });
+
+    const res = await postSend(app, { to: '5511999998888', flowId: 'FLOW-1', cta: 'Go', bodyText: 'Body' });
+
+    expect(res.status).toBe(201);
+    expect(registryGet).toHaveBeenCalledWith('gupshup');
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  test('rejects a channel that cannot send flows', async () => {
+    const { app, sendMessage } = mountFlowsRoutes({ channel: 'telegram', canSendFlow: false });
+
+    const res = await postSend(app, { to: '123', flowId: 'FLOW-1', cta: 'Go', bodyText: 'Body' });
+
+    expect(res.status).toBe(400);
+    const json = (await res.json()) as { error: { code: string } };
+    expect(json.error.code).toBe('WRONG_CHANNEL');
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 });
