@@ -313,13 +313,17 @@ Or manually:
 NATS_VERSION=v2.12.15
 NATS_RELEASE="https://github.com/nats-io/nats-server/releases/download/${NATS_VERSION}"
 ARCHIVE="nats-server-${NATS_VERSION}-linux-amd64.tar.gz"
-curl -fLO "${NATS_RELEASE}/${ARCHIVE}"
 # The size and sha256 Omni pins are in packages/cli/src/nats-pin.json; the release lists the sha256 too.
-curl -fsL "${NATS_RELEASE}/SHA256SUMS" | grep " ${ARCHIVE}$" | sha256sum -c -
-tar xzf "${ARCHIVE}"
-mv nats-server-*/nats-server ~/.omni/nats-server
-chmod +x ~/.omni/nats-server
+# Each step runs only if the one before it succeeded: nothing is unpacked unless the checksum matches.
+curl -fLO "${NATS_RELEASE}/${ARCHIVE}" &&
+  curl -fsL "${NATS_RELEASE}/SHA256SUMS" | grep " ${ARCHIVE}$" | sha256sum -c - &&
+  tar xzf "${ARCHIVE}" &&
+  mv nats-server-*/nats-server ~/.omni/nats-server &&
+  chmod +x ~/.omni/nats-server
 ```
+
+A binary installed this way has no `~/.omni/nats-server.pin` marker, so the next `omni install` or
+`omni start` downloads the pinned release over it through the same size and sha256 checks.
 
 ### OpenClaw provider health check fails after delete/recreate
 
