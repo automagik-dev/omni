@@ -18,33 +18,30 @@ export const isEventsBot = (roster, id) => Boolean(roster?.eventsBotId) && roste
 // The header button's count: the automations there are, none until there is one.
 export const headCount = roster => (roster?.subscriptions ?? []).length || null
 
-export function workerOf(worker, roster) {
+// Who acts, as the board names it. A chat-thread worker runs each event in the thread of its
+// chat: `where` names the one it ran in (a run's Session), else the automation's one chat
+// (its sources); one over many chats is each chat's own thread.
+export function workerOf(worker, roster, where = {}) {
   // The Main Bot runs the automations it handles itself (it was Autopilot's job once).
   if (worker.kind === 'events' || worker.kind === 'main') {
     const bot = roster?.byId?.[roster.eventsBotId ?? roster.mainBotId]
     return { name: bot?.name ?? 'Omni', bot, look: MAIN_LOOK }
   }
-  if (worker.kind === 'session') return { name: worker.mode === 'ongoing' ? t('One ongoing session') : t('A new session each time'), session: true }
-  // One of the owner's DSH bots, by its name on the team's roster (a Tasks record never is one).
-  if (worker.kind === 'dshbot') {
-    const agent = roster?.agentsById?.[worker.agentId]
-    if (agent?.kind !== 'dsh') return { name: t('A deleted DSH bot'), dsh: true }
-    return { name: worker.mode === 'ongoing' ? t('{name} · one ongoing session', { name: agent.name }) : t('{name} · a new session each time', { name: agent.name }), dsh: true }
-  }
-  // An added chat's thread, by its chat's name (the threads ride the team view).
+  // A chat's thread, by its chat's name (the threads ride the team view).
   if (worker.kind === 'thread') {
-    const thread = (Array.isArray(roster?.omniThreads) ? roster.omniThreads : []).find(item => item.id === worker.threadId)
-    return thread ? { name: t('The thread of {name}', { name: thread.title }), chat: thread.title } : { name: t('A removed chat\'s thread'), session: true }
+    const threads = Array.isArray(roster?.omniThreads) ? roster.omniThreads : []
+    const only = where.sources?.length === 1 && where.sources[0].kind === 'chat' ? where.sources[0] : undefined
+    const thread = where.sessionId ? threads.find(item => item.sessionId === where.sessionId) : only ? threads.find(item => item.chatId === only.id) : undefined
+    const title = thread?.title ?? only?.name
+    return title ? { name: t('The thread of {name}', { name: title }), chat: title } : { name: t('Each chat\'s own thread'), session: true }
   }
   const bot = roster?.byId?.[worker.botId]
   return { name: bot?.name ?? t('A deleted Bot'), bot, look: MAIN_LOOK }
 }
 
-export function WorkerMark({ worker, roster, size = 24 }) {
-  const info = workerOf(worker, roster)
+export function WorkerMark({ worker, roster, where, size = 24 }) {
+  const info = workerOf(worker, roster, where)
   if (info.session) return h('span', { className: 'os-session', style: { width: size, height: size } }, h(OmniMark, { size: Math.round(size * 0.62) }))
-  // A DSH bot, as the team draws one (a team before DSH bots has no such icon).
-  if (info.dsh) return h('span', { className: 'os-session os-dsh', style: { width: size, height: size } }, icons.TerminalIcon ? h(icons.TerminalIcon) : null)
   if (info.chat !== undefined) return h(ChatAvatar, { chat: { name: info.chat, initials: initials(info.chat) }, size })
   return h(BotMark, info.bot ? { bot: info.bot, size } : { look: info.look, size })
 }
@@ -86,7 +83,7 @@ function Sentence({ sub, roster }) {
     h('span', { className: 'os-w' }, t('in')), ' ',
     h('span', { className: 'os-chip' }, h(SourceStack, { sources: sub.sources }), sourcesText(sub.sources)), ' ',
     h('span', { className: 'os-w' }, '→'), ' ',
-    h('span', { className: 'os-chip os-chip-worker' }, h(WorkerMark, { worker: sub.worker, roster, size: 18 }), workerOf(sub.worker, roster).name),
+    h('span', { className: 'os-chip os-chip-worker' }, h(WorkerMark, { worker: sub.worker, roster, where: sub, size: 18 }), workerOf(sub.worker, roster, sub).name),
     sub.outputs.react ? h(Fragment, null, ' ', h('span', { className: 'os-chip os-chip-soft' }, t('reacts 👀 then ✅'))) : null,
     sub.outputs.replyToMe ? h(Fragment, null, ' ', h('span', { className: 'os-chip os-chip-soft' }, t('replies to you'))) : null)
 }
@@ -205,7 +202,7 @@ export function SubscriptionsBoard({ bot, roster, actions, waiting }) {
 export const automationExamples = () => [
   { id: 'watch', label: t('Watch a channel for errors'), text: t('Watch #ci-alerts for “failed” or “error” and hand it to Ops'), icon: 'KeywordIcon' },
   { id: 'pin', label: t('Save what I pin'), text: t('When I react 📌 to a message in any WhatsApp chat, save it to my notes'), icon: 'PinIcon' },
-  { id: 'voice', label: t('Send my voice notes on'), text: t('Voice notes in my own chat go to one ongoing session'), icon: 'VoiceIcon' },
+  { id: 'voice', label: t('Send my voice notes on'), text: t('Voice notes in my own chat go to my chat\'s thread'), icon: 'VoiceIcon' },
 ]
 
 function Empty({ bot, live }) {
@@ -243,8 +240,10 @@ export function AutomationRow({ sub, roster, runs, onOpen }) {
       h('div', { className: 'os-row-foot' },
         h('span', null, last ? t('last run {time}', { time: relativeShort(last.at) }) : t('not fired yet')),
         sub.askFirst ? null : h('span', { className: 'os-row-warn' }, t('acts without asking')),
-        // Paused by the host, with why (a thread whose chat was removed, a team without the hook).
+        // Paused by the host, with why (a team without the hook, a worker it does not know).
         !sub.on && sub.pausedReason ? h('span', { className: 'os-row-warn os-row-paused' }, hostText(sub.pausedReason)) : null,
+        // What the host says about it, once (its worker moved to its chats' threads).
+        sub.note ? h('span', { className: 'os-row-note' }, hostText(sub.note)) : null,
         h('span', { className: 'os-row-actions' },
           h('button', { type: 'button', className: 'os-link', disabled: busy !== '', onClick: () => run('automation-test', { id: sub.id }) }, t('Test')),
           h('button', {
@@ -259,16 +258,15 @@ function RunRow({ run, sub, roster, actions, asking = false }) {
   if (!sub) return null
   const status = RUN_STATUS[asking ? 'waiting' : run.status]
   const open = run.sessionId ? () => actions.openSession(run.sessionId) : undefined
+  const where = { sources: sub.sources, sessionId: run.sessionId ?? undefined }
   return h('button', { type: 'button', className: 'os-run', 'data-tone': status.tone, disabled: !open, onClick: open, title: open ? t('Open this run') : undefined },
-    h(WorkerMark, { worker: sub.worker, roster, size: 22 }),
+    h(WorkerMark, { worker: sub.worker, roster, where, size: 22 }),
     h('span', { className: 'os-run-body' },
       h('span', { className: 'os-run-top' },
-        h('span', { className: 'os-run-name' }, workerOf(sub.worker, roster).name),
+        h('span', { className: 'os-run-name' }, workerOf(sub.worker, roster, where).name),
         h('span', { className: 'os-run-status' }, run.test ? `${t('Test')} · ${t(status.label)}` : t(status.label)),
         h('time', null, relativeShort(run.at))),
       run.excerpt && !run.test ? h('span', { className: 'os-run-quote' }, run.from ? `${run.from}: ` : '', run.excerpt) : null,
-      // What the host says about where it ran (a new ongoing session after DSH archived the last).
-      run.note ? h('span', { className: 'os-run-note' }, hostText(run.note)) : null,
       h('span', { className: 'os-run-text' }, run.summary)))
 }
 
@@ -276,9 +274,7 @@ export const SUBSCRIPTIONS_CSS = `
 .os-trigger{display:inline-grid;place-items:center;flex:none;border-radius:30%;background:color-mix(in srgb,var(--bt-accent) 12%,var(--bt-card));box-shadow:inset 0 0 0 .5px var(--bt-line-2);line-height:1}
 .os-trigger:not([data-kind=reaction]){color:var(--bt-accent)}
 .os-trigger svg{width:var(--os-icon,18px);height:var(--os-icon,18px)}
-.os-run-note{font-size:11.5px;color:var(--bt-ink-3)}
 .os-session{display:inline-grid;place-items:center;flex:none;border-radius:30%;background:var(--bt-ink);color:var(--bt-main)}
-.os-dsh svg{width:62%;height:62%}
 .os-stack{display:inline-flex;align-items:center;flex:none}
 .os-stack-item{display:inline-flex;margin-left:-4px;border-radius:50%;box-shadow:0 0 0 1.5px var(--bt-card)}
 .os-stack-item:first-child{margin-left:0}
@@ -314,6 +310,7 @@ export const SUBSCRIPTIONS_CSS = `
 .os-row-open:hover{text-decoration:underline}
 .os-row-foot{display:flex;align-items:center;gap:10px;font-size:11.5px;color:var(--bt-ink-3)}
 .os-row-warn{color:#d97706}
+.os-row-note{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .os-row-actions{display:inline-flex;gap:10px;margin-left:auto;opacity:0;transition:opacity .12s ease}
 .os-row:hover .os-row-actions,.os-row:focus-within .os-row-actions{opacity:1}
 .os-empty-board{display:flex;flex-direction:column;align-items:center;gap:8px;padding:28px 12px 8px;text-align:center}

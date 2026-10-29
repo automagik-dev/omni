@@ -18,8 +18,8 @@ const { ChevronRightIcon, CloseIcon, DotsIcon, PlusIcon, SparkIcon } = icons
 // there: without them a thread still shows and opens, with no unread dot.
 //
 // Beside the threads, the Sessions this plugin keeps under the Omni Bot (src/host/
-// omni-rows.js, roster.omniRows): an automation's "new session" runs, its one ongoing
-// Session, Omni's hand-offs. Each stays until its own menu removes it, which archives it.
+// omni-rows.js, roster.omniRows): Omni's hand-offs. Each stays until its own menu removes it,
+// which archives it.
 
 const OPEN_KEY = 'omni.tree.open'
 const SEARCH_DELAY_MS = 250
@@ -181,7 +181,7 @@ export function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
 }
 
 /**
- * One Session kept under the Omni Bot (a run's, an ongoing automation's, a hand-off's). It
+ * One Session kept under the Omni Bot (a hand-off's). It
  * opens its Session through the team's row action, on a team with the hook; its menu's one
  * item removes it, asking once more, and the host archives its Session.
  */
@@ -211,8 +211,7 @@ export function SessionRow({ row, actions, rowProps = {} }) {
   const opens = teamReady(rowProps.roster)
   const state = threadState(row, { running, asking })
   const dot = typeof rowProps.useSessionStatus === 'function' && unread && !active
-  const ongoing = row.kind === 'ongoing'
-  const label = [row.title, ongoing ? t('Ongoing') : '', state === 'waiting' ? t('Waiting for you') : state === 'working' ? t('Working') : '', dot ? t('Unread activity') : ''].filter(Boolean).join(', ')
+  const label = [row.title, state === 'waiting' ? t('Waiting for you') : state === 'working' ? t('Working') : '', dot ? t('Unread activity') : ''].filter(Boolean).join(', ')
   const remove = () => {
     if (!confirming) { setConfirming(true); return }
     setConfirming(false)
@@ -234,7 +233,6 @@ export function SessionRow({ row, actions, rowProps = {} }) {
     },
     h('span', { className: state === 'waiting' ? 'bt-thread-wait' : state === 'working' ? 'bt-thread-spin' : 'ot-thread-idle', 'aria-hidden': true }),
     h('span', { className: 'bt-thread-title' }, row.title),
-    ongoing ? h('span', { className: 'ot-row-tag' }, t('Ongoing')) : null,
     dot ? h('span', { className: 'bt-unread', 'aria-hidden': true }) : null),
     h('button', {
       type: 'button', className: 'ot-thread-more ot-row-more', 'aria-label': t('Actions for {name}', { name: row.title }), title: t('More'),
@@ -485,7 +483,6 @@ export const OMNI_TREE_CSS = `
 .ot-thread-phone:hover{color:var(--bt-ink)}
 .ot-thread:hover .ot-thread-remove,.ot-thread-remove:focus-visible,.ot-thread-remove[data-confirm],.ot-thread:hover .ot-thread-phone,.ot-thread-phone:focus-visible,.ot-thread:hover .ot-thread-more,.ot-thread-more:focus-visible{opacity:1}
 .ot-thread-remove[data-confirm]{color:var(--bt-danger, #dc2626)}
-.ot-row-tag{flex:none;font-size:11px;color:var(--bt-ink-3)}
 .ot-row .ot-row-more{right:4px}
 .ot-row:hover .ot-row-more{opacity:1}
 .ot-row-remove[data-confirm]{color:var(--bt-danger, #dc2626)}

@@ -144,7 +144,8 @@ test('a Main Bot\'s prompt with an Omni named is the text it was before the spli
   assert.doesNotMatch(OPERATOR_RULES, /\bTasks\b|start_task/)
   assert.match(changed.find(line => line.includes('start_task')), /call start_task with/)
   assert.match(OPERATOR_RULES, new RegExp(`call ${HANDOFF_TOOL} with a short title`))
-  assert.match(OPERATOR_RULES, /a new session under you for each event, or one ongoing session under you/)
+  assert.match(OPERATOR_RULES, /or the thread of each event's own chat \(made for that chat when it has none, one thread per chat\)/)
+  assert.doesNotMatch(OPERATOR_RULES, /ongoing session|DSH bots that the user names/)
   assert.equal(prompt(plain), readFileSync(teamFile('test/fixtures/main-prompt.txt'), 'utf8'))
 })
 
@@ -178,7 +179,6 @@ test('apply registers its listeners, tools and effects after the team\'s, in a f
   assert.deepEqual(own, [
     'on session/event',
     'effect ds-bot: restart resumes',
-    'effect omni-channels: DSH bots changed',
     'effect ds-bot: interrupted Omni permissions',
     'effect ds-bot: omni-consent-answer',
     'effect ds-bot: omni-grant-revoke',
@@ -272,7 +272,6 @@ test('apply registers its listeners, tools and effects after the team\'s, in a f
     'effect omni-channels: automations of removed threads',
     'effect omni-channels: stranded thread automations',
     'on session/event',
-    'effect omni-channels: session rows back on their preset',
     'on session/event',
     'on agent/created',
     'tools guard',

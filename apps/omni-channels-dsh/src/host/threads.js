@@ -23,6 +23,11 @@ export const THREAD_REFUSAL = `A chat thread works only through its own chat too
 // this was not cut by the last restart, so the team does not resume it.
 export const CUT_WINDOW_MS = 24 * 60 * 60 * 1000
 const CHATS_LIMIT = 100
+// How many live threads automations may make for themselves (ensure): past it a chat's event
+// makes none and asks Omni for no key. The threads the owner adds with + never count.
+export const AUTOMATION_THREADS_MAX = 50
+export const THREADS_FULL = `Not run: automations already made ${AUTOMATION_THREADS_MAX} chat threads. Remove some, or add this chat with +.`
+const ALREADY = 'This chat is a thread already.'
 const TITLE_MAX = 80
 // How much of a chat's name its thread is told.
 const NAME_MAX = 80
@@ -165,6 +170,7 @@ export function install(rt) {
     return valid(thread) && thread.id === threadId ? thread : undefined
   }
   const bySession = sessionId => (typeof sessionId === 'string' ? Object.values(threads()).find(thread => valid(thread) && thread.sessionId === sessionId) : undefined)
+  const byChat = chatId => (typeof chatId === 'string' ? Object.values(threads()).find(thread => valid(thread) && thread.chatId === chatId) : undefined)
   const persist = () => void Promise.resolve(rt.save()).catch(error => rt.warn('omni-channels: saving a thread failed: %s', error?.message ?? error))
 
   const added = []
@@ -293,69 +299,99 @@ export function install(rt) {
     return json
   }
 
-  // A chat being added now, so a second add of it waits for none and makes nothing.
-  const adding = new Set()
+  // The chats being added now, each with its making: a second add of one waits for it and makes
+  // nothing, so an event that comes while the owner's + adds its chat finds the thread after.
+  const adding = new Map()
 
   // Adding a chat: its key first, so a failed mint makes nothing at all; then its Session, on
   // the Omni Bot's model before its first turn; then the record. Listeners hear of it once it
   // is saved; a record that cannot be saved is undone, its key cut and its Session archived.
-  async function add(channelId, chatId) {
+  // `madeBy: 'automation'` marks one an automation's event made (ensure), which the cap counts.
+  async function add(channelId, chatId, { madeBy } = {}) {
     if (!ready()) return { ok: false, reason: rt.teamResume?.reason ?? NEEDS_NEWER_TEAM }
     const readOnly = rt.readOnly?.()
     if (readOnly !== undefined) return { ok: false, reason: readOnly }
     if (!ID.test(String(channelId)) || !ID.test(String(chatId))) return { ok: false, reason: 'Pick a chat of this channel.' }
     await rt.load()
-    if (list().some(thread => thread.chatId === chatId) || adding.has(chatId)) return { ok: false, reason: 'This chat is a thread already.' }
-    adding.add(chatId)
-    try {
-      let chat
-      try {
-        const answer = ChatAnswer.safeParse(await ask(`/chats/${chatId}`))
-        if (!answer.success) return { ok: false, reason: 'Omni answered something else for that chat.' }
-        chat = answer.data.data
-      } catch (error) {
-        return { ok: false, reason: error.message }
-      }
-      if (chat.id !== chatId || chat.instanceId !== channelId) return { ok: false, reason: 'That chat is not on this channel.' }
-      const link = rt.omniLink?.() ?? null
-      const threadId = randomUUID()
-      const minted = await rt.threadKeys.mint(threadId, chatId)
-      if (!minted.ok) return { ok: false, reason: minted.reason }
-      const chatName = (chat.name ?? '').trim() || numberOf(chat.externalId) || 'Chat'
-      let sessionId
-      try {
-        sessionId = await rt.createSession(chatName.slice(0, TITLE_MAX))
-      } catch (error) {
-        await rt.threadKeys.revoke(threadId).catch(cut => rt.warn('omni-channels: the key minted for %s could not be cut: %s', chatName, cut?.message ?? cut))
-        return { ok: false, reason: `The thread's Session could not be made: ${error?.message ?? error}` }
-      }
-      const thread = {
-        id: threadId, sessionId, chatId, chatJid: chat.externalId, chatName, channelId, origin: link?.url ?? '',
-        self: minted.self ?? null, title: chatName.slice(0, TITLE_MAX), status: 'idle', turnOpenAt: null, at: Date.now(),
-      }
-      await selectOmniModel(rt, sessionId).catch(error => rt.warn('omni-channels: the thread %s keeps DSH\'s model, the Omni Bot\'s was not applied: %s', chatName, error?.message ?? error))
-      threads()[threadId] = thread
-      try {
-        await rt.save()
-      } catch (error) {
-        // Undone: the Session archived with its work stopped, then the key cut. A key that can be
-        // neither cut nor marked keeps the record (in memory), so the guard still holds the
-        // Session and a remove finishes it.
-        await ctx.workspaceRegistry.archiveSession(sessionId, { stopActivity: true })
-          .catch(failed => rt.warn('omni-channels: the Session of %s could not be archived: %s', chatName, failed?.message ?? failed))
-        try {
-          await rt.threadKeys.revoke(threadId)
-        } catch (cut) {
-          return { ok: false, reason: `The thread could not be kept, and its chat key could not be cut, so it stays until it is removed: ${cut?.message ?? cut}` }
-        }
-        delete threads()[threadId]
-        return { ok: false, reason: `The thread could not be kept: ${error?.message ?? error}` }
-      }
-      await tell(added, thread, 'added')
-      return { ok: true, thread }
-    } finally {
-      adding.delete(chatId)
+    if (adding.has(chatId)) {
+      const running = await adding.get(chatId)
+      return running.ok ? { ok: false, reason: ALREADY } : running
     }
+    if (list().some(thread => thread.chatId === chatId)) return { ok: false, reason: ALREADY }
+    const making = make(channelId, chatId, madeBy === 'automation').finally(() => adding.delete(chatId))
+    adding.set(chatId, making)
+    return making
+  }
+  async function make(channelId, chatId, byAutomation) {
+    let chat
+    try {
+      const answer = ChatAnswer.safeParse(await ask(`/chats/${chatId}`))
+      if (!answer.success) return { ok: false, reason: 'Omni answered something else for that chat.' }
+      chat = answer.data.data
+    } catch (error) {
+      return { ok: false, reason: error.message }
+    }
+    if (chat.id !== chatId || chat.instanceId !== channelId) return { ok: false, reason: 'That chat is not on this channel.' }
+    const link = rt.omniLink?.() ?? null
+    const threadId = randomUUID()
+    const minted = await rt.threadKeys.mint(threadId, chatId)
+    if (!minted.ok) return { ok: false, reason: minted.reason }
+    const chatName = (chat.name ?? '').trim() || numberOf(chat.externalId) || 'Chat'
+    let sessionId
+    try {
+      sessionId = await rt.createSession(chatName.slice(0, TITLE_MAX))
+    } catch (error) {
+      await rt.threadKeys.revoke(threadId).catch(cut => rt.warn('omni-channels: the key minted for %s could not be cut: %s', chatName, cut?.message ?? cut))
+      return { ok: false, reason: `The thread's Session could not be made: ${error?.message ?? error}` }
+    }
+    const thread = {
+      id: threadId, sessionId, chatId, chatJid: chat.externalId, chatName, channelId, origin: link?.url ?? '',
+      self: minted.self ?? null, title: chatName.slice(0, TITLE_MAX), status: 'idle', turnOpenAt: null, at: Date.now(),
+      ...(byAutomation ? { madeBy: 'automation' } : {}),
+    }
+    await selectOmniModel(rt, sessionId).catch(error => rt.warn('omni-channels: the thread %s keeps DSH\'s model, the Omni Bot\'s was not applied: %s', chatName, error?.message ?? error))
+    threads()[threadId] = thread
+    try {
+      await rt.save()
+    } catch (error) {
+      // Undone: the Session archived with its work stopped, then the key cut. A key that can be
+      // neither cut nor marked keeps the record (in memory), so the guard still holds the
+      // Session and a remove finishes it.
+      await ctx.workspaceRegistry.archiveSession(sessionId, { stopActivity: true })
+        .catch(failed => rt.warn('omni-channels: the Session of %s could not be archived: %s', chatName, failed?.message ?? failed))
+      try {
+        await rt.threadKeys.revoke(threadId)
+      } catch (cut) {
+        return { ok: false, reason: `The thread could not be kept, and its chat key could not be cut, so it stays until it is removed: ${cut?.message ?? cut}` }
+      }
+      delete threads()[threadId]
+      return { ok: false, reason: `The thread could not be kept: ${error?.message ?? error}` }
+    }
+    await tell(added, thread, 'added')
+    return { ok: true, thread }
+  }
+
+  // A chat's thread for an automation's event (subscriptions.js): the one it has, else one made
+  // now the way the + makes it (add), marked as an automation's. Events of one chat that arrive
+  // together share one making, so the second never reads the first's add as a thread already
+  // there. Once automations have AUTOMATION_THREADS_MAX live threads of their own (those being
+  // made count too), a chat with none is refused before anything is asked of Omni, unless the
+  // owner's + is adding it now: that making is waited for.
+  const ensuring = new Map()
+  const madeByAutomations = () => list().filter(thread => thread.madeBy === 'automation').length + ensuring.size
+  function ensure(channelId, chatId) {
+    const have = byChat(chatId)
+    if (have !== undefined) return Promise.resolve({ ok: true, thread: have })
+    if (ensuring.has(chatId)) return ensuring.get(chatId)
+    if (!adding.has(chatId) && madeByAutomations() >= AUTOMATION_THREADS_MAX) return Promise.resolve({ ok: false, reason: THREADS_FULL })
+    const making = (async () => {
+      const result = await add(channelId, chatId, { madeBy: 'automation' })
+      // The owner's + made it meanwhile.
+      const now = result.ok ? undefined : byChat(chatId)
+      return now === undefined ? result : { ok: true, thread: now }
+    })().finally(() => ensuring.delete(chatId))
+    ensuring.set(chatId, making)
+    return making
   }
 
   // Removing a thread: its Session is archived with its work stopped, then its key is cut (or
@@ -394,7 +430,9 @@ export function install(rt) {
     list,
     byId,
     bySession,
+    byChat,
     add,
+    ensure,
     remove,
     // Each returns its unsubscribe, as rt.threadKeys.onChange does.
     onAdded: (listener) => {

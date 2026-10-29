@@ -7,7 +7,7 @@ import { isOmniBot } from '../src/client/omni-store.js'
 import { STRINGS } from '../src/client/strings.js'
 import { NEEDS_NEWER_TEAM, TEAM_CONTRACT } from '../src/host/resume-hook.js'
 import { BEING_CUT, NOT_LINKED, OTHER_OMNI, WAITING } from '../src/host/thread-keys.js'
-import { ONGOING_RENEWED } from '../src/host/standing-runs.js'
+import { WORKER_MOVED } from '../src/host/subscriptions.js'
 import { all, bundleClient, byLabel, classOf, mount, nodes, one, plain, react, settle, text } from './client-stand-in.js'
 import { omni } from './omni-client.js'
 
@@ -51,7 +51,7 @@ const CHAT = (n, channel = CHANNEL_A) => ({ id: `c${n}`, channelId: channel.id, 
 const THREAD = (n, channel = CHANNEL_A, extra = {}) => ({ id: `t${n}`, sessionId: `s${n}`, chatId: `c${n}`, channelId: channel.id, title: `Chat ${n}`, status: 'idle', connected: true, reason: null, ...extra })
 const BOT = { id: 'omni-bot', kind: 'omni', name: 'Omni' }
 // A Session the host keeps under the Omni row (omni-rows.js omniRowsView).
-const ROW = (n, kind = 'run', extra = {}) => ({ sessionId: `r${n}`, kind, title: `Session ${n}`, subId: 'sub-1', at: n, status: 'idle', ...extra })
+const ROW = (n, kind = 'handoff', extra = {}) => ({ sessionId: `r${n}`, kind, title: `Session ${n}`, at: n, status: 'idle', ...extra })
 
 // The roster as the host's view makes it (threads.js threadsView): a team with the hook names
 // the row props; one without names none and says why.
@@ -597,7 +597,7 @@ test('first probe 3: a thread opens in the Bot skin with every other Bot dock em
 // Session rows under the Omni row (wish omni-chat-threads, Group 14; criterion :206).
 test('the Omni row draws its kept Session rows beside the threads, linked or not; a row opens its Session on a team with the hook and never on one without (:206)', (t) => {
   linked()
-  const roster = hooked({ omniThreads: [THREAD(1)], omniRows: [ROW(1), ROW(2, 'ongoing', { status: 'working' })] })
+  const roster = hooked({ omniThreads: [THREAD(1)], omniRows: [ROW(1), ROW(2, 'handoff', { status: 'working' })] })
   const { view, opened } = tree(t, { roster })
   const root = view.draw()
   const group = byLabel(root, 'Sessions')
@@ -606,10 +606,8 @@ test('the Omni row draws its kept Session rows beside the threads, linked or not
   assert.deepEqual(all(channelOf(root, CHANNEL_A), 'bt-thread').map(item => item.props['data-thread-id']), ['t1'])
   assert.equal(all(channelOf(root, CHANNEL_A), 'ot-row').length, 0)
   const [first, second] = all(group, 'ot-row')
-  assert.deepEqual([first.props['data-kind'], second.props['data-kind']], ['run', 'ongoing'])
-  assert.equal(text(one(second, 'ot-row-tag')), 'Ongoing')
-  assert.equal(one(first, 'ot-row-tag'), undefined)
-  assert.deepEqual([one(second, 'bt-thread').props['data-state'], one(second, 'bt-thread').props['aria-label']], ['working', 'Session 2, Ongoing, Working'])
+  assert.deepEqual([first.props['data-kind'], second.props['data-kind']], ['handoff', 'handoff'])
+  assert.deepEqual([one(second, 'bt-thread').props['data-state'], one(second, 'bt-thread').props['aria-label']], ['working', 'Session 2, Working'])
   one(first, 'bt-thread').props.onClick()
   assert.deepEqual(opened, ['r1'])
   // No rows, no group.
@@ -626,7 +624,7 @@ test('the Omni row draws its kept Session rows beside the threads, linked or not
   assert.equal(disabled.props['aria-disabled'], true)
   disabled.props.onClick()
   assert.deepEqual(none, [])
-  assert.deepEqual(plain(ui.rowsOf({ omniRows: [ROW(1), { kind: 'run' }, null] })).map(item => item.sessionId), ['r1'])
+  assert.deepEqual(plain(ui.rowsOf({ omniRows: [ROW(1), { kind: 'handoff' }, null] })).map(item => item.sessionId), ['r1'])
 })
 
 test('only a Session row\'s menu removes it: its one item asks once more, then asks the host; a refusal shows on the row, and Escape or a click away closes it asking again next time', async () => {
@@ -675,6 +673,6 @@ test('only a Session row\'s menu removes it: its one item asks once more, then a
   assert.equal(calls.length, 2)
 })
 
-test('the Session rows\' words and the board\'s notes on a new ongoing session have Chinese copy here', () => {
-  for (const key of ['Sessions', 'Ongoing', 'Actions for {name}', ...Object.values(ONGOING_RENEWED)]) assert.ok(Object.hasOwn(STRINGS, key), key)
+test('the Session rows\' words and the board\'s notes on an automation whose worker moved to its chats\' threads have Chinese copy here', () => {
+  for (const key of ['Sessions', 'Actions for {name}', ...Object.values(WORKER_MOVED)]) assert.ok(Object.hasOwn(STRINGS, key), key)
 })

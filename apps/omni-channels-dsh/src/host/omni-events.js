@@ -116,23 +116,25 @@ export function install(rt) {
   }
 
   // What the worker gets: the message (for a reaction, the one reacted to), who wrote it,
-  // and where.
+  // and where, with the ids of that chat and its channel (a chat-thread worker's thread is
+  // that chat's).
   async function eventOf(row) {
     const chat = row.chatUuid ? await lookup(`/chats/${row.chatUuid}`, nameReplySchema, reply => reply.data?.name) : undefined
     const channel = row.instanceId ? await lookup(`/instances/${row.instanceId}`, nameReplySchema, reply => reply.data?.name) : undefined
+    const ids = { ...(row.chatUuid ? { chatId: row.chatUuid } : {}), ...(row.instanceId ? { instanceId: row.instanceId } : {}) }
     if (row.eventType === 'reaction.received') {
       const message = row.chatUuid && row.externalId
         ? await lookup(`/messages/by-external?chatId=${encodeURIComponent(row.chatUuid)}&externalId=${encodeURIComponent(row.externalId)}`, messageReplySchema, reply => reply.data)
         : undefined
       return {
-        kind: `reaction ${row.textContent ?? ''}`.trim(), who: 'the user', chat, channel, at: Date.parse(row.receivedAt) || Date.now(),
+        kind: `reaction ${row.textContent ?? ''}`.trim(), who: 'the user', chat, channel, ...ids, at: Date.parse(row.receivedAt) || Date.now(),
         text: String(message?.textContent || message?.transcription || '').slice(0, TEXT_MAX),
         author: message?.senderDisplayName ?? undefined,
       }
     }
     return {
       kind: row.contentType === 'audio' ? 'voice note' : row.contentType && row.contentType !== 'text' ? row.contentType : 'message',
-      who: row.metadata?.from ?? undefined, chat, channel, at: Date.parse(row.receivedAt) || Date.now(),
+      who: row.metadata?.from ?? undefined, chat, channel, ...ids, at: Date.parse(row.receivedAt) || Date.now(),
       text: String(row.textContent ?? '').slice(0, TEXT_MAX),
     }
   }
