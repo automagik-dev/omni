@@ -16250,10 +16250,9 @@ var OMNI_TREE_CSS = `
 .ot-channel-row[aria-expanded=true] .ot-chevron{transform:rotate(90deg)}
 .ot-channel-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ot-count{flex:none;min-width:18px;padding:0 5px;border-radius:9px;background:var(--bt-accent, #22d3ee);color:#fff;font-size:11px;line-height:18px;text-align:center;font-weight:600}
-.ot-plus{display:grid;place-items:center;flex:none;width:24px;height:24px;padding:0;border:0;border-radius:7px;background:none;color:var(--bt-ink-3);cursor:pointer;opacity:0;transition:opacity .12s}
-/* The + shows on a channel's hover or focus, and stays while its picker is open. */
+.ot-plus{display:grid;place-items:center;flex:none;width:24px;height:24px;padding:0;border:0;border-radius:7px;background:none;color:var(--bt-ink-2);cursor:pointer;opacity:.55;transition:opacity .12s}
+/* The + is always there, faint, so it can be found; it is full on a channel's hover or focus and while its picker is open. */
 .ot-channel-head:hover .ot-plus,.ot-channel-head:focus-within .ot-plus,.ot-plus[aria-expanded=true]{opacity:1}
-@media (hover:none){.ot-plus{opacity:1}}
 .ot-plus svg{width:14px;height:14px}
 .ot-plus:hover,.ot-plus[aria-expanded=true]{background:var(--bt-hover);color:var(--bt-ink)}
 .ot-plus:focus-visible{outline:2px solid var(--bt-accent);outline-offset:-2px}

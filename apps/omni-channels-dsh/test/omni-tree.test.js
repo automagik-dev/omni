@@ -201,10 +201,13 @@ test('a roster that does not say whether a chat can be added shows no + and says
   assert.deepEqual(plain(ui.plusOf({}, { link: null })), { offered: false, reason: ui.OFFER_UNKNOWN })
 })
 
-test('the + shows on a channel\'s hover or keyboard focus and stays while its picker is open', () => {
-  assert.match(ui.OMNI_TREE_CSS, /\.ot-plus\{[^}]*opacity:0/)
+test('the + is always visible, faint, and full on a channel\'s hover or keyboard focus and while its picker is open', () => {
+  // Never hidden: in the app a hover on the channel name did not reach the row (owner, 2026-10-29).
+  const base = ui.OMNI_TREE_CSS.match(/\.ot-plus\{([^}]*)\}/)[1]
+  const opacity = Number(base.match(/opacity:([0-9.]+)/)?.[1] ?? 1)
+  assert.ok(opacity >= 0.5, `the + at rest has opacity ${opacity}`)
+  assert.doesNotMatch(base, /visibility:hidden|display:none/)
   assert.match(ui.OMNI_TREE_CSS, /\.ot-channel-head:hover \.ot-plus,\.ot-channel-head:focus-within \.ot-plus,\.ot-plus\[aria-expanded=true\]\{opacity:1\}/)
-  assert.match(ui.OMNI_TREE_CSS, /@media \(hover:none\)\{\.ot-plus\{opacity:1\}\}/)
 })
 
 test('a folded channel keeps its thread rows out of the tab order', (t) => {
