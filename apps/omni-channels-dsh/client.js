@@ -11079,6 +11079,8 @@ var omniStore = createSource({
   // Chats opened here, with the newest message seen, so a poll does not bring the
   // unread count back for messages already read.
   seen: {},
+  // Ownership for retained chat data even when a bounded overview omits that chat.
+  chatChannels: {},
   // What the linked Omni runs, read once per link (omni-link-info): `outdated` when it is
   // older than this plugin's minimum, so the sidebar offers no + on it.
   link: null
@@ -11107,13 +11109,22 @@ var patchChannel = (id, patch) => set((state) => ({ channels: state.channels.map
 var deleting = /* @__PURE__ */ new Set();
 var dataGeneration = 0;
 var withoutChats = (values, ids) => Object.fromEntries(Object.entries(values).filter(([id]) => !ids.has(id)));
+var retainedChatChannels = (state, chats) => {
+  const retained = /* @__PURE__ */ new Set([...Object.keys(state.messages), ...Object.keys(state.seen), state.chatId, state.sendError?.chatId, ...chats.map((chat) => chat.id)]);
+  const owners = { ...state.chatChannels, ...Object.fromEntries([...state.chats, ...chats].map((chat) => [chat.id, chat.channelId])) };
+  return Object.fromEntries(Object.entries(owners).filter(([id]) => retained.has(id)));
+};
 var forgetChannel = (channelId) => set((state) => {
-  const ids = new Set(state.chats.filter((chat) => chat.channelId === channelId).map((chat) => chat.id));
+  const ids = /* @__PURE__ */ new Set([
+    ...state.chats.filter((chat) => chat.channelId === channelId).map((chat) => chat.id),
+    ...Object.entries(state.chatChannels ?? {}).filter(([, owner]) => owner === channelId).map(([id]) => id)
+  ]);
   return {
     channels: state.channels.filter((channel) => channel.id !== channelId),
     chats: state.chats.filter((chat) => chat.channelId !== channelId),
     messages: withoutChats(state.messages, ids),
     seen: withoutChats(state.seen, ids),
+    chatChannels: withoutChats(state.chatChannels ?? {}, ids),
     chatId: ids.has(state.chatId) ? null : state.chatId,
     filter: state.filter === channelId ? null : state.filter,
     sendError: ids.has(state.sendError?.chatId) ? null : state.sendError,
@@ -11149,6 +11160,8 @@ function omniActions(select, call2) {
       if (body === "" || !canSend(before)) return;
       const at2 = Date.now();
       const localId = `local-${at2}`;
+      const channelId = chatOf(before, chatId)?.channelId ?? before.chatChannels?.[chatId];
+      const stillExists = () => channelId ? Boolean(channelOf(omniStore.getSnapshot(), channelId)) : Boolean(chatOf(omniStore.getSnapshot(), chatId));
       set((state) => ({
         messages: { ...state.messages, [chatId]: [...state.messages[chatId] ?? [], { id: localId, from: "you", text: body, at: at2, ...state.preview ? {} : { sending: true } }] },
         chats: state.chats.map((chat) => chat.id === chatId ? { ...chat, preview: `You: ${body}`, at: at2 } : chat),
@@ -11157,14 +11170,18 @@ function omniActions(select, call2) {
       if (before.preview || !call2) return;
       call2("omni-send", { chatId, text: body }).then(
         () => {
+          if (!stillExists()) return;
           set((state) => ({ messages: { ...state.messages, [chatId]: (state.messages[chatId] ?? []).map((message) => message.id === localId ? { ...message, sending: false } : message) } }));
           void loadMessages(call2, chatId);
         },
-        (error) => set((state) => ({
-          messages: { ...state.messages, [chatId]: (state.messages[chatId] ?? []).filter((message) => message.id !== localId) },
-          chats: state.chats.map((chat) => chat.id === chatId ? chatOf(before, chatId) ?? chat : chat),
-          sendError: { chatId, text: body, message: error.message }
-        }))
+        (error) => {
+          if (!stillExists()) return;
+          set((state) => ({
+            messages: { ...state.messages, [chatId]: (state.messages[chatId] ?? []).filter((message) => message.id !== localId) },
+            chats: state.chats.map((chat) => chat.id === chatId ? chatOf(before, chatId) ?? chat : chat),
+            sendError: { chatId, text: body, message: error.message }
+          }));
+        }
       );
     },
     setAnsweredBy: (channelId, answeredBy) => patchChannel(channelId, { answeredBy }),
@@ -11263,6 +11280,7 @@ async function refreshLive(call2) {
       return kept?.busy || kept?.actionError || kept?.deleteError ? { ...channel, busy: kept.busy, actionError: kept.actionError, deleteError: kept.deleteError } : channel;
     }),
     chats: markSeen(state.seen, reply.chats),
+    chatChannels: retainedChatChannels(state.preview ? { chats: [], messages: {}, seen: {} } : state, reply.chats),
     filter: reply.channels.some((channel) => channel.id === state.filter) ? state.filter : null
   }));
   const link = omniStore.getSnapshot().link;
@@ -16332,7 +16350,6 @@ var PERMISSIONS_CSS = `
 
 // src/client/strings.js
 var STRINGS = {
-  "Cancel": "取消",
   "Delete instance": "删除实例",
   "Delete instance {name} ({id})?": "删除实例 {name}（{id}）？",
   "Permanently delete instance": "永久删除实例",

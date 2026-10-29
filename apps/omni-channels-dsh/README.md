@@ -110,7 +110,11 @@ rows retain their data with a null instance reference
 
 The page keeps the instance and its chats until the delete succeeds. Failure keeps its
 details and gives an error with a retry; success clears only its cached chats/messages,
-seen state and matching selection. Navigation to another channel is preserved. Duplicate
+seen state and matching selection, including cached chats omitted by the recent-chat overview.
+A bounded ownership map remembers only current chats or IDs with retained data/selection;
+late send callbacks from the deleted instance cannot recreate caches or errors. Sends from
+other instances still finish even if their chats leave the recent list.
+Navigation to another channel is preserved. Duplicate
 submissions are blocked across redraws, and a generation guard discards reads overlapping
 deletion so stale polls cannot restore removed data. A refresh failure after successful
 deletion is reported separately, without treating deletion as failed

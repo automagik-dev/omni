@@ -91,6 +91,8 @@ export const omniStore = createSource({
   // Chats opened here, with the newest message seen, so a poll does not bring the
   // unread count back for messages already read.
   seen: {},
+  // Ownership for retained chat data even when a bounded overview omits that chat.
+  chatChannels: {},
   // What the linked Omni runs, read once per link (omni-link-info): `outdated` when it is
   // older than this plugin's minimum, so the sidebar offers no + on it.
   link: null,
@@ -135,13 +137,24 @@ const deleting = new Set()
 let dataGeneration = 0
 
 const withoutChats = (values, ids) => Object.fromEntries(Object.entries(values).filter(([id]) => !ids.has(id)))
+// Record owners before replacing the overview. Do not retain an owner once there is no
+// current row, cache, seen marker, selection or send error left for that chat.
+const retainedChatChannels = (state, chats) => {
+  const retained = new Set([...Object.keys(state.messages), ...Object.keys(state.seen), state.chatId, state.sendError?.chatId, ...chats.map(chat => chat.id)])
+  const owners = { ...state.chatChannels, ...Object.fromEntries([...state.chats, ...chats].map(chat => [chat.id, chat.channelId])) }
+  return Object.fromEntries(Object.entries(owners).filter(([id]) => retained.has(id)))
+}
 const forgetChannel = channelId => set(state => {
-  const ids = new Set(state.chats.filter(chat => chat.channelId === channelId).map(chat => chat.id))
+  const ids = new Set([
+    ...state.chats.filter(chat => chat.channelId === channelId).map(chat => chat.id),
+    ...Object.entries(state.chatChannels ?? {}).filter(([, owner]) => owner === channelId).map(([id]) => id),
+  ])
   return {
     channels: state.channels.filter(channel => channel.id !== channelId),
     chats: state.chats.filter(chat => chat.channelId !== channelId),
     messages: withoutChats(state.messages, ids),
     seen: withoutChats(state.seen, ids),
+    chatChannels: withoutChats(state.chatChannels ?? {}, ids),
     chatId: ids.has(state.chatId) ? null : state.chatId,
     filter: state.filter === channelId ? null : state.filter,
     sendError: ids.has(state.sendError?.chatId) ? null : state.sendError,
@@ -184,6 +197,10 @@ export function omniActions(select, call) {
       if (body === '' || !canSend(before)) return
       const at = Date.now()
       const localId = `local-${at}`
+      const channelId = chatOf(before, chatId)?.channelId ?? before.chatChannels?.[chatId]
+      // A send may finish after deletion. Bound the callback to its originating instance,
+      // not overview visibility: an unrelated chat can merely fall outside the recent list.
+      const stillExists = () => channelId ? Boolean(channelOf(omniStore.getSnapshot(), channelId)) : Boolean(chatOf(omniStore.getSnapshot(), chatId))
       set(state => ({
         messages: { ...state.messages, [chatId]: [...(state.messages[chatId] ?? []), { id: localId, from: 'you', text: body, at, ...(state.preview ? {} : { sending: true }) }] },
         chats: state.chats.map(chat => (chat.id === chatId ? { ...chat, preview: `You: ${body}`, at } : chat)),
@@ -193,12 +210,19 @@ export function omniActions(select, call) {
       // Shown at once; a refusal takes it back and says why. A sent one stays until the
       // chat's messages come back from omni with it.
       call('omni-send', { chatId, text: body }).then(
-        () => { set(state => ({ messages: { ...state.messages, [chatId]: (state.messages[chatId] ?? []).map(message => (message.id === localId ? { ...message, sending: false } : message)) } })); void loadMessages(call, chatId) },
-        error => set(state => ({
-          messages: { ...state.messages, [chatId]: (state.messages[chatId] ?? []).filter(message => message.id !== localId) },
-          chats: state.chats.map(chat => (chat.id === chatId ? chatOf(before, chatId) ?? chat : chat)),
-          sendError: { chatId, text: body, message: error.message },
-        })),
+        () => {
+          if (!stillExists()) return
+          set(state => ({ messages: { ...state.messages, [chatId]: (state.messages[chatId] ?? []).map(message => (message.id === localId ? { ...message, sending: false } : message)) } }))
+          void loadMessages(call, chatId)
+        },
+        error => {
+          if (!stillExists()) return
+          set(state => ({
+            messages: { ...state.messages, [chatId]: (state.messages[chatId] ?? []).filter(message => message.id !== localId) },
+            chats: state.chats.map(chat => (chat.id === chatId ? chatOf(before, chatId) ?? chat : chat)),
+            sendError: { chatId, text: body, message: error.message },
+          }))
+        },
       )
     },
     setAnsweredBy: (channelId, answeredBy) => patchChannel(channelId, { answeredBy }),
@@ -294,6 +318,7 @@ export async function refreshLive(call) {
     source: { kind: 'live', origin: reply.origin, at: Date.now() },
     channels: reply.channels.map(channel => { const kept = channelOf(state, channel.id); return kept?.busy || kept?.actionError || kept?.deleteError ? { ...channel, busy: kept.busy, actionError: kept.actionError, deleteError: kept.deleteError } : channel }),
     chats: markSeen(state.seen, reply.chats),
+    chatChannels: retainedChatChannels(state.preview ? { chats: [], messages: {}, seen: {} } : state, reply.chats),
     filter: reply.channels.some(channel => channel.id === state.filter) ? state.filter : null,
   }))
   // An outdated one, or one whose version is not known yet, is asked again each poll, so an

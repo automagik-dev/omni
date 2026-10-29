@@ -2,7 +2,6 @@
 // (omni-ui) through addStrings, so the team's `t` translates them; the keys are the English
 // text. Words the team shows too (Channels, connected, Plugins…) are in its own copy.
 export const STRINGS = {
-  'Cancel': '取消',
   'Delete instance': '删除实例',
   'Delete instance {name} ({id})?': '删除实例 {name}（{id}）？',
   'Permanently delete instance': '永久删除实例',

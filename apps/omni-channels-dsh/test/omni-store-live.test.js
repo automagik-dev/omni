@@ -225,6 +225,89 @@ test('overview and message reads started before deletion cannot resurrect data a
   assert.equal(omniStore.getSnapshot().messages[CHAT.id], undefined)
 })
 
+for (const outcome of ['success', 'failure']) {
+  test(`pending send ${outcome} after deletion does not restore messages, errors or load messages`, async () => {
+    deletingState()
+    const send = deferred()
+    const calls = []
+    const call = async endpoint => {
+      calls.push(endpoint)
+      if (endpoint === 'omni-send') return send.promise
+      if (endpoint === 'omni-messages') return { messages: [{ id: 'stale-send' }] }
+      return endpoint === 'omni-overview' ? overview() : { ok: true }
+    }
+    const omni = omniActions(() => {}, call)
+    omni.sendText(CHAT.id, 'Pending reply')
+    await omni.deleteInstance(CHANNEL.id)
+    if (outcome === 'success') send.resolve({ sent: true })
+    else send.reject(new Error('Send failed after delete'))
+    await settle()
+    const state = omniStore.getSnapshot()
+    assert.equal(Object.hasOwn(state.messages, CHAT.id), false)
+    assert.equal(state.sendError, null)
+    assert.equal(calls.includes('omni-messages'), false)
+    assert.deepEqual(state.messages, { other: [] })
+  })
+}
+
+for (const outcome of ['success', 'failure']) {
+  test(`unrelated pending send ${outcome} still completes when overview omits its chat`, async () => {
+    deletingState()
+    const otherChannel = { ...CHANNEL, id: 'other-channel' }
+    const otherChat = { ...CHAT, id: 'other-chat', channelId: otherChannel.id }
+    omniStore.set(state => ({ ...state, channels: [...state.channels, otherChannel], chats: [...state.chats, otherChat], chatId: null }))
+    const send = deferred()
+    const calls = []
+    const omni = omniActions(() => {}, async endpoint => {
+      calls.push(endpoint)
+      if (endpoint === 'omni-send') return send.promise
+      if (endpoint === 'omni-messages') return { messages: [] }
+      return endpoint === 'omni-overview' ? overview([otherChannel], []) : { ok: true }
+    })
+    omni.sendText(otherChat.id, 'Unrelated reply')
+    await omni.deleteInstance(CHANNEL.id)
+    assert.equal(omniStore.getSnapshot().chats.length, 0)
+    if (outcome === 'success') send.resolve({ sent: true })
+    else send.reject(new Error('Unrelated send failure'))
+    await settle()
+    const state = omniStore.getSnapshot()
+    if (outcome === 'success') {
+      assert.equal(state.messages[otherChat.id][0].sending, false)
+      assert.equal(calls.includes('omni-messages'), true)
+      assert.equal(state.sendError, null)
+    } else {
+      assert.deepEqual(state.messages[otherChat.id], [])
+      assert.deepEqual(state.sendError, { chatId: otherChat.id, text: 'Unrelated reply', message: 'Unrelated send failure' })
+    }
+  })
+}
+
+test('deleting clears an omitted cached chat by owner while preserving unrelated omitted data', async () => {
+  deletingState()
+  const otherChannel = { ...CHANNEL, id: 'other-channel' }
+  const otherChat = { ...CHAT, id: 'other-chat', channelId: otherChannel.id }
+  const transientChat = { ...CHAT, id: 'transient-chat' }
+  omniStore.set(state => ({ ...state, channels: [...state.channels, otherChannel], chats: [...state.chats, otherChat, transientChat], messages: { ...state.messages, [otherChat.id]: [{ id: 'other-message' }] }, seen: { ...state.seen, [otherChat.id]: 2 } }))
+  const call = async endpoint => {
+    if (endpoint === 'omni-overview') return overview([CHANNEL, otherChannel], [])
+    if (endpoint === 'omni-messages') return { messages: [] }
+    return { ok: true }
+  }
+  await refreshLive(call)
+  assert.equal(omniStore.getSnapshot().chats.length, 0)
+  assert.equal(omniStore.getSnapshot().chatId, CHAT.id)
+  assert.deepEqual(omniStore.getSnapshot().chatChannels, { [CHAT.id]: CHANNEL.id, [otherChat.id]: otherChannel.id })
+  assert.equal(Object.hasOwn(omniStore.getSnapshot().chatChannels, transientChat.id), false)
+  await omniActions(() => {}, async endpoint => endpoint === 'omni-overview' ? overview([otherChannel], []) : { ok: true }).deleteInstance(CHANNEL.id)
+  const state = omniStore.getSnapshot()
+  assert.equal(Object.hasOwn(state.messages, CHAT.id), false)
+  assert.equal(Object.hasOwn(state.seen, CHAT.id), false)
+  assert.equal(state.chatId, null)
+  assert.deepEqual(state.messages, { other: [], [otherChat.id]: [{ id: 'other-message' }] })
+  assert.deepEqual(state.seen, { other: 2, [otherChat.id]: 2 })
+  assert.deepEqual(state.chatChannels, { [otherChat.id]: otherChannel.id })
+})
+
 test('the preview still changes only its sample, without the host', () => {
   omniStore.set(fresh)
   const calls = []
