@@ -11,7 +11,10 @@ set -euo pipefail
 #   check-shipped-strings.sh <packages/cli>
 
 CLI="${1:?usage: check-shipped-strings.sh <packages/cli>}"
-PATTERN='lembr\.ai|juice|felipe'
+# Substrings, plus one personal name as a whole word. That name is also a city, so the IANA
+# timezone id Europe/<city> is matched as one token and then dropped: timezone data never trips it.
+PATTERN='lembr\.ai|juice|felipe|(europe/)?\bsofia\b'
+TIMEZONE='^europe/sofia$'
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -33,16 +36,17 @@ fi
 
 # report <label> <dir>: every file under <dir> that matches, with the matching words.
 report() {
-  local hits
-  hits="$(grep -rliE --exclude='*.tgz' "$PATTERN" "$2" 2>/dev/null || true)"
-  if [[ -z "$hits" ]]; then
-    ok "$1 names no private host, person or internal service"
-    return
-  fi
+  local files file words found=0
+  files="$(grep -rliE --exclude='*.tgz' "$PATTERN" "$2" 2>/dev/null || true)"
   while IFS= read -r file; do
-    words="$(grep -oiE "$PATTERN" "$file" | tr '[:upper:]' '[:lower:]' | sort | uniq -c | tr -s ' ' | tr '\n' ',')"
+    [[ -n "$file" ]] || continue
+    words="$(grep -oiE "$PATTERN" "$file" | tr '[:upper:]' '[:lower:]' | grep -vE "$TIMEZONE" | sort | uniq -c |
+      tr -s ' ' | tr '\n' ',' || true)"
+    [[ -n "$words" ]] || continue
     bad "$1: ${file#"$2"/} ($words)"
-  done <<<"$hits"
+    found=1
+  done <<<"$files"
+  [[ "$found" -eq 1 ]] || ok "$1 names no private host, person or internal service"
 }
 
 [[ -d "$CLI/dist" ]] && report 'dist/' "$CLI/dist"
