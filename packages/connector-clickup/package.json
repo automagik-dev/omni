@@ -1,6 +1,6 @@
 {
   "name": "@omni/connector-clickup",
-  "version": "2.261027.6",
+  "version": "2.261029.7",
   "description": "ClickUp connector: personal-token validation, task actions and the taskStatusUpdated webhook, declared as a code manifest",
   "license": "Apache-2.0",
   "type": "module",
