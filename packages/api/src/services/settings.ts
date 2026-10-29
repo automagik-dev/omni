@@ -252,7 +252,7 @@ const DEFAULT_SETTINGS: Array<{
     category: 'providers',
     valueType: 'string',
     isSecret: false,
-    description: 'Default Felipe-style Gemini TTS voice-note prompt.',
+    description: 'Default Gemini TTS voice-note prompt.',
     defaultValue:
       'Fale em português brasileiro, como uma nota de WhatsApp natural: direto, quente, sem voz de locutor, com pausas curtas quando fizer sentido.',
   },

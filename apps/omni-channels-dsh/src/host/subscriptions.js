@@ -504,7 +504,7 @@ export function install(rt) {
   const test = async (id) => {
     const sub = subs()[id]
     if (!sub) throw invalid(`No subscription ${id}`)
-    const sample = sub.trigger.kind === 'keyword' ? `Heads up: ${sub.trigger.words[0]} on the dev build` : 'Lembrar de renovar o domínio lembr.ai na sexta'
+    const sample = sub.trigger.kind === 'keyword' ? `Heads up: ${sub.trigger.words[0]} on the dev build` : 'Lembrar de pagar a conta de luz na sexta'
     return startRun(sub, { kind: sub.trigger.kind === 'reaction' ? `reaction ${sub.trigger.emoji}` : sub.trigger.kind, who: 'the user', text: sample, test: true, at: Date.now() })
   }
   rt.fireSubscription = startRun
