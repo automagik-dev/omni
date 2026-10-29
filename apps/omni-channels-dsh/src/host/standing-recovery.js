@@ -107,55 +107,11 @@ function endedIn(session, turnId, cutByRestart) {
   return end === undefined ? null : turnOutcome(end.data?.reason, words || undefined)
 }
 
-/**
- * The message that opened the turn a Session runs now, from its log: the first user/message
- * after the newest turn/start ({ content, source }); null when the newest turn has ended or
- * the log shows none.
- */
-export function turnOpening(session) {
-  let first = null
-  for (const event of newestFirst(session)) {
-    if (event.type === 'turn/end') return null
-    if (event.type === 'user/message') first = event.data ?? null
-    else if (event.type === 'turn/start') return first
-  }
-  return null
-}
-
-/**
- * The newest turn in a Session's log: whether a restart cut it (a turn the log shows begun and
- * never ended counts as cut), why it ended, and its last words; null when the log shows none.
- */
-export function lastTurnIn(session, cutByRestart) {
-  let end
-  let words = ''
-  let seen = false
-  for (const event of newestFirst(session)) {
-    if (event.type === 'turn/start') {
-      seen = true
-      break
-    }
-    if (event.type === 'turn/end') {
-      // Two ends with no start between: the log was cut short there, and the newer one counts.
-      if (end !== undefined) break
-      end = event
-      seen = true
-    } else if (event.type === 'assistant/message' && words === '') {
-      words = wordsOf(event)
-    }
-  }
-  if (!seen) return null
-  return { cut: end === undefined || cutByRestart(end.data?.reason), reason: end?.data?.reason, words }
-}
-
-/**
- * The one wake (Decision 6), of a run here and of a hand-off (handoff.js): the pending message
- * moved to the back of its Session's inbox, which starts the Session's turn (the move is the
- * wake), then the Session flushed, which only writes it to storage. A message a turn took
- * meanwhile waits for that turn; a move that throws hands its error to `failed`; a flush that
- * throws is only warned of, as `flushing`.
- */
-export async function wakeOnce(rt, agent, message, { failed, flushing }) {
+// The one wake (Decision 6): the pending message moved to the back of its Session's inbox,
+// which starts the Session's turn (the move is the wake), then the Session flushed, which only
+// writes it to storage. A message a turn took meanwhile waits for that turn; a move that throws
+// hands its error to `failed`; a flush that throws is only warned of, as `flushing`.
+async function wakeOnce(rt, agent, message, { failed, flushing }) {
   try {
     if (!rt.standingRuns.requeue(agent, message)) return
   } catch (error) {

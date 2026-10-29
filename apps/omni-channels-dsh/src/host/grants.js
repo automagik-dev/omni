@@ -11,7 +11,6 @@
 // deleting, disconnecting a channel. Their card shows the destination and the exact text, and
 // confirming runs that call, nothing else.
 import { randomUUID } from 'node:crypto'
-import { HANDOFF_TOOL } from './omni-rules.js'
 
 export const ACTIONS = ['read', 'media', 'send', 'react', 'delete']
 // Always for the whole channel ('channel') grants what was asked on every chat of that channel.
@@ -22,9 +21,9 @@ const TOLD_MAX = 6000
 const invalid = message => Object.assign(new Error(message), { code: 'bot/invalid' })
 
 // The Bot team's start_task is refused to a Bot that operates the Omni named here, which has
-// no computer: that work goes to its own hand-off (handoff.js), which reports back once, after
-// a restart too. Every other Bot, and every Bot while no Omni is named, keeps the team's tool.
-export const START_TASK_REFUSAL = `Work that needs a computer goes to ${HANDOFF_TOOL}: it runs in a session under your row, and its result comes back to you as a message.`
+// no computer: a task would give it one by another door. Every other Bot, and every Bot while
+// no Omni is named, keeps the team's tool.
+export const START_TASK_REFUSAL = 'Omni has no computer: it works only through its own tools. Tell the user what the work needs, so they can give it to a Bot that has one.'
 
 /**
  * Whether `botId` operates Omni: a Main Bot, or an Omni Bot (kind 'omni') whether it is a Main
@@ -34,7 +33,7 @@ export const operatesOmni = (rt, botId) => botId !== undefined && (rt.isMain(bot
 
 /**
  * Whether a Session is a Bot that operates the Omni named here: such a Bot has lost DSH's
- * computer tools (omni-api.js), and hands that work to a session under its row.
+ * computer tools (omni-api.js) and the team's start_task.
  */
 export const operatesHere = (rt, sessionId) => (rt.omniNamed?.() ?? Boolean(rt.config?.omni?.url)) && operatesOmni(rt, rt.selfOf(sessionId))
 
@@ -249,8 +248,8 @@ export function install(rt) {
   for (const name of Object.keys(endpoints)) ctx.effect(() => rt.hooks.endpoint(name, body => rt.grantEndpoint(name, body)), `ds-bot: ${name}`)
   ctx.effect(() => rt.hooks.view(() => ({ omniGrants: state.omniGrants ?? [], omniConsents: state.omniConsents ?? {} })), 'ds-bot: Omni permissions view')
 
-  // A Bot that operates the Omni named here hands work off with its own tool, never the team's
-  // start_task: denied before any card asks for it (DSH's gates run before its guards), and
+  // A Bot that operates the Omni named here has no computer, so never the team's start_task:
+  // denied before any card asks for it (DSH's gates run before its guards), and
   // refused by the guard whatever a gate said.
   const refusesStartTask = exec => exec.name === 'start_task' && operatesHere(rt, exec.agent?.id ?? exec.agent?.session?.id)
   ctx.on('tools/pre-execute', (exec, next) => (refusesStartTask(exec) ? { kind: 'deny', reason: START_TASK_REFUSAL } : next()), { prepend: true })

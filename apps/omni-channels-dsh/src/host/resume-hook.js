@@ -21,8 +21,6 @@ export const TEAM_CONTRACT = Object.freeze({
   resumesDone: 'resumesDone',
   resentField: 'resent',
   resumeMarker: source => source?.resumed === true,
-  dshBotsList: 'dshBots.list',
-  dshBotsCreate: 'dshBots.createSession',
   rowProps: Object.freeze(['bot', 'roster', 'actions', 'wide', 'useSessions', 'useUi', 'useSessionStatus', 'useSessionRetainInfo', 'useActivity', 'useWork']),
 })
 
@@ -35,7 +33,7 @@ const HOOK_ID = 'omni-channels'
 
 // A member of the team's runtime by its TEAM_CONTRACT name; a function comes bound to the
 // object that holds it.
-export function fromTeam(rt, path) {
+function fromTeam(rt, path) {
   let owner
   let value = rt
   for (const key of path.split('.')) {

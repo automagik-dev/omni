@@ -58,8 +58,8 @@ export const QUEUED_MAX = 20
 const DROPPED_STOPPING = 'DSH dropped this event as it shut down, before its turn started. Nothing ran; the next start goes on with the events after it.'
 const notHandedOver = count => `Not handed over${count > 1 ? ` (×${count})` : ''}: ${QUEUED_MAX} events already wait for this thread.`
 
-/** A message's text blocks joined; '' when it has none. */
-export function textOf(message) {
+// A message's text blocks joined; '' when it has none.
+function textOf(message) {
   const content = message?.content
   return Array.isArray(content) ? content.filter(block => block?.type === 'text').map(block => block.text).join('\n').trim() : ''
 }

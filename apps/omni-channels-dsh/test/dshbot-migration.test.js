@@ -1,7 +1,7 @@
-// The owner's DSH bots (wish omni-chat-threads, Group 16; design row 19), against the real Bot
-// team (the release apps/automagik.json pins) on a fake DSH, and against a stand-in of it
-// without the DSH-bot calls. They are hand-off targets only (handoff.test.js): an automation
-// that handed its events to one runs each event in the thread of its chat now.
+// Saved DSH-bot automations (wish omni-chat-threads, Group 16; design row 19), against the real
+// Bot team (the release apps/automagik.json pins) on a fake DSH, and against a stand-in of it
+// without the restart hook. This plugin no longer hands anything to the owner's DSH bots: an
+// automation that handed its events to one runs each event in the thread of its chat now.
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 import { RETIRED_QUEUED, THREAD_NEEDS_TEAM, WORKER_MOVED } from '../src/host/subscriptions.js'
@@ -31,27 +31,13 @@ const tool = (run, name, args, agentId = 'm1') => run.ctx.registeredTools.get(na
 const subsOf = run => Object.values(run.channels.state.subscriptions ?? {})
 const runById = (run, id) => (run.channels.state.subscriptionRuns ?? []).find(item => item.id === id)
 
-test('the adapter reads the team\'s DSH bots from the team itself, never the Tasks record; without the team\'s calls none is found; no automation offers one (:208)', async (t) => {
-  const omni = watchedOmni(t)
-  const home = homeFor(t, omni, teamState({ agents: agents() }))
-  const without = await bench(t, { home, omni, dshBots: false })
-  assert.deepEqual([without.run.channels.omniDshBots.ready(), without.run.channels.omniDshBots.find('Coder')], [false, undefined])
-  await without.run.stop()
-
-  const { run } = await bench(t, { home, omni })
-  assert.equal(run.channels.omniDshBots.ready(), true)
-  assert.deepEqual([run.channels.omniDshBots.find('coder')?.name, run.channels.omniDshBots.find('WRITER')?.id, run.channels.omniDshBots.find('Tasks')], ['Coder', 'writer', undefined])
-  // The calls are read from the team itself: a property of this plugin's runtime (whose
-  // prototype is the team) never hides them.
-  Object.defineProperty(run.channels, 'dshBots', { value: undefined, configurable: true })
-  assert.equal(run.channels.omniDshBots.ready(), true)
-  assert.equal(run.channels.omniDshBots.find('Writer')?.id, 'writer')
-  delete run.channels.dshBots
-  // No worker names one.
+test('no automation offers or takes one of the owner\'s DSH bots (:208)', async (t) => {
+  const { run } = await bench(t)
   assert.doesNotMatch(await tool(run, 'find_chats', {}), /dshbot|DSH bot/)
   assert.doesNotMatch(run.ctx.registeredTools.get('save_automation').parameters.properties.worker.description, /dshbot|DSH bot/)
   assert.match(await tool(run, 'save_automation', { sources: `chat:${CHAT}`, trigger: 'message', worker: 'dshbot:Coder' }), /^Not saved: No Bot named "dshbot:Coder"/)
   assert.deepEqual(subsOf(run), [])
+  assert.equal('omniDshBots' in run.channels, false)
 })
 
 // A saved DSH-bot automation of each mode, from before: its worker, its one ongoing Session,
@@ -104,10 +90,10 @@ test('saved DSH-bot automations, new and ongoing, move to their chat\'s thread a
   assert.deepEqual(saved(home).subscriptions['sub-on'].worker, { kind: 'thread' })
 })
 
-test('on a team stand-in without the DSH-bot calls or the hook, a saved DSH-bot automation still moves; with no hook it then pauses with the thread\'s reason', async (t) => {
+test('on a team stand-in without the hook, a saved DSH-bot automation still moves, then pauses with the thread\'s reason', async (t) => {
   const omni = watchedOmni(t)
   const home = homeFor(t, omni, teamState({ agents: agents(), ...before() }))
-  const { run } = await bench(t, { home, omni, mask: true, dshBots: false })
+  const { run } = await bench(t, { home, omni, mask: true })
   await until(() => subsOf(run).every(sub => sub.worker.kind === 'thread' && sub.on === false))
   assert.deepEqual(subsOf(run).map(sub => [sub.note, sub.pausedReason ?? null]), [[WORKER_MOVED.dshbot, THREAD_NEEDS_TEAM], [WORKER_MOVED.dshbot, THREAD_NEEDS_TEAM], [WORKER_MOVED.dshbot, null]])
 })
