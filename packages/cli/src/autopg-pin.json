@@ -1,0 +1,18 @@
+{
+  "version": "3.3.0",
+  "pgRuntime": "18.3.0-beta.17",
+  "platforms": {
+    "darwin-arm64": {
+      "sha256": "d2c08e5add721185ee5c3d0c59bbf14532c39ec87eed4e7830a09d452b1d8fe7",
+      "size": 75691093
+    },
+    "linux-arm64": {
+      "sha256": "08f5e5b399988dd0b2f6bbbe634300e5747f600d8d86ecd5461252d8bffc09d7",
+      "size": 60278501
+    },
+    "linux-x64-glibc": {
+      "sha256": "8693912328b1f814f0b73f38da347380e2a05ef0d64c236a404a51a817dca67e",
+      "size": 61305918
+    }
+  }
+}

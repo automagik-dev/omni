@@ -7,7 +7,7 @@ runs Omni, autopg/pgserve or PM2.
 | | Normal `omni install` | `omni install --sandbox` |
 |---|---|---|
 | Config | `~/.omni/config.json` | `<home>/config/config.json` (mode 0600) |
-| Postgres | the shared autopg/pgserve on 5432 | its own cluster (pgserve `postmaster`), own socket dir |
+| Postgres | the shared autopg/pgserve on 5432 | its own cluster (autopg or pgserve `postmaster`), own socket dir |
 | NATS | `~/.omni/nats-server` on 4222 | `<home>/bin/nats-server` on its own port |
 | API | 8882 | its own port, bound to 127.0.0.1 |
 | Supervisor | PM2 | `omni sandbox run` (one process, no PM2, no node) |
@@ -36,7 +36,8 @@ a detached child instead. `omni sandbox stop` stops whichever it is.
 ## Commands
 
 ```sh
-omni install --sandbox [--home <dir>] [--at-login] [--no-start] [--package <spec>] [--json]
+omni install --sandbox [--home <dir>] [--at-login] [--no-start] [--package <spec>]
+                       [--pg-password-file <file>] [--autopg-tarball <file>] [--json]
 omni sandbox status    [--home <dir>] [--json]
 omni sandbox start     [--home <dir>] [--json]
 omni sandbox stop      [--home <dir>] [--json]
@@ -102,17 +103,53 @@ The app also starts the supervisor itself with `OMNI_TELEMETRY=false` and
 the command line (and so the `--home` path); without the second, the CLI may pin the user's own
 global `@automagik/omni` to the version the app ships.
 
-The database URL and Postgres are as in any sandbox. pgserve sets no listen address, so
-Postgres takes its default, `localhost`: 127.0.0.1, and `::1` where `localhost` resolves to it,
-plus its socket, with the `postgres`/`postgres` login. The API dials it over TCP.
+The database URL and Postgres are as in any sandbox, unless the app asks for a password file
+(below). Without one, autopg and pgserve set no listen address, so Postgres takes its default,
+`localhost`: 127.0.0.1, and `::1` where `localhost` resolves to it, plus its socket, with the
+`postgres`/`postgres` login. The API dials it over TCP.
+
+## Postgres
+
+On the platforms autopg ships a build for (darwin-arm64, linux-arm64 and linux-x64, glibc),
+Postgres comes from autopg's GitHub release, the version Omni pins in
+`packages/cli/src/autopg-pin.json` with the sha256 of each platform's tarball. The install:
+
+- downloads the tarball, or takes `--autopg-tarball <file>` without the network;
+- checks its sha256 against the pin, and refuses anything else (there is no fallback);
+- unpacks it to `<home>/autopg/<version>/`;
+- moves its Postgres into autopg's binary cache, `<home>/pgserve/bin/<platform>`, so autopg
+  downloads nothing on its first start.
+
+Omni's CI checks every pinned tarball's cosign signature against autopg's release workflow
+whenever the pin changes (`scripts/ci/verify-autopg-pin.sh`).
+
+On every other platform (darwin-x64, Linux with musl), the runtime carries npm `pgserve` 2.6.10,
+as before, and pgserve fetches Postgres on its first start.
+
+### Password file (opt-in)
+
+`--pg-password-file <file>` runs autopg's password-file cluster, and the sandbox keeps the path
+across reinstalls and updates. Under it:
+
+- Postgres takes scram logins on 127.0.0.1 only and makes no Unix socket;
+- the API's `DATABASE_URL` carries the password with `127.0.0.1`, and the API gets no `PGHOST`;
+- `config.json` gets the URL without the password.
+
+The supervisor reads the file at every start and refuses one that is not an absolute path to a
+regular file, owned by the user, mode 0600 or stricter, one line of at least 16 characters.
+
+Nothing turns it on by default. An existing cluster made without the file cannot take one, so
+asking for it there is refused: use a new `--home`. It needs autopg, so it is refused on the
+other platforms too.
 
 ## Requirements
 
 - macOS or Linux (WSL included; `--at-login` on WSL needs systemd enabled).
 - `bun`, since the CLI itself runs on it.
-- Network on the first install: bun fetches `@automagik/omni` and `pgserve`
-  into `<home>/runtime`, nats-server comes from its GitHub release, and pgserve
-  fetches the Postgres binaries into `<home>/pgserve`.
+- Network on the first install: bun fetches `@automagik/omni` (and `pgserve`
+  off the autopg platforms) into `<home>/runtime`, and nats-server comes from
+  its GitHub release. Postgres comes from autopg's GitHub release (see
+  Postgres), or else pgserve fetches it into `<home>/pgserve`.
 
 ## Relation to omnid
 

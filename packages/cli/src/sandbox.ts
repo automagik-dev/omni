@@ -10,11 +10,12 @@
  *
  *   <home>/sandbox.json        ports, version, runtime (no secrets)
  *   <home>/config/config.json  CLI config for this Omni (API key, mode 0600)
- *   <home>/runtime/            @automagik/omni + pgserve, installed with bun
+ *   <home>/runtime/            @automagik/omni (+ pgserve off the autopg platforms), installed with bun
+ *   <home>/autopg/<version>/   autopg's pinned release, where it has a build (autopg-runtime.ts)
  *   <home>/cache/              bun's package cache for that install
  *   <home>/bin/nats-server     its own NATS binary
  *   <home>/data/{pg,nats,media,packages}
- *   <home>/pgserve/            pgserve's config dir and Postgres binaries
+ *   <home>/pgserve/            autopg/pgserve's config dir and Postgres binaries
  *   <home>/run/                supervisor pid, status, Postgres socket dir
  *   <home>/logs/               one log per process
  *
@@ -50,13 +51,29 @@ import { createConnection } from 'node:net';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
+import {
+  AUTOPG_PIN,
+  type AutopgPaths,
+  type AutopgPin,
+  type AutopgTarget,
+  autopgBinary,
+  autopgRuntimeReady,
+  autopgTarget,
+  clusterRanWithPasswordFile,
+  detectLibc,
+  downloadRelease,
+  installAutopgRuntime,
+} from './autopg-runtime.js';
 import { quoteSystemdArg } from './install-helpers.js';
 import { installNatsBinary } from './nats-install.js';
 import { buildNatsServerArgs } from './nats-server-args.js';
 import { generateApiKey } from './utils/keys.js';
 import { VERSION } from './version.js';
 
-/** pgserve release whose `postmaster` runs the sandbox's own Postgres cluster. */
+/**
+ * pgserve release whose `postmaster` runs the sandbox's own Postgres cluster, on the platforms
+ * autopg's pinned release has no build for (autopg-runtime.ts).
+ */
 export const SANDBOX_PGSERVE_VERSION = '2.6.10';
 /** Ports tried first; the next free one up is taken when a port is in use. */
 export const SANDBOX_PREFERRED_PORTS = { api: 18882, pg: 15432, nats: 14222 } as const;
@@ -87,6 +104,7 @@ export interface SandboxLayout {
   pgDataDir: string;
   natsDataDir: string;
   pgserveConfigDir: string;
+  autopgDir: string;
   runDir: string;
   pgSocketDir: string;
   pidPath: string;
@@ -121,6 +139,7 @@ export function sandboxLayout(home: string): SandboxLayout {
     pgDataDir: join(dataDir, 'pg'),
     natsDataDir: join(dataDir, 'nats'),
     pgserveConfigDir: join(home, 'pgserve'),
+    autopgDir: join(home, 'autopg'),
     runDir,
     pgSocketDir: join(runDir, 'pg'),
     pidPath: join(runDir, 'supervisor.pid'),
@@ -147,6 +166,13 @@ export const SandboxStateSchema = z.object({
    * without the OMNI_HOME of whoever installed it. Absent in sandboxes from before it was kept.
    */
   defaultHome: z.string().min(1).optional(),
+  /** autopg release whose binary runs Postgres; absent where npm pgserve does. */
+  autopg: z.string().min(1).optional(),
+  /**
+   * Opt-in (`--pg-password-file`): the superuser password file of a password-file cluster, which
+   * takes scram logins on 127.0.0.1 only. Absent: the `postgres`/`postgres` login, as before.
+   */
+  pgPasswordFile: z.string().min(1).optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -212,8 +238,15 @@ function writeSandboxConfig(layout: SandboxLayout, state: SandboxState, apiKey: 
 }
 
 const sandboxApiUrl = (state: SandboxState): string => `http://127.0.0.1:${state.ports.api}`;
-const sandboxDatabaseUrl = (state: SandboxState): string =>
-  `postgresql://postgres:postgres@localhost:${state.ports.pg}/omni`;
+/**
+ * A password-file cluster takes 127.0.0.1 only (`localhost` can resolve to ::1), and its password
+ * goes only into the API's env: config.json gets the URL without it.
+ */
+function sandboxDatabaseUrl(state: SandboxState, password: string | null = null): string {
+  if (!state.pgPasswordFile) return `postgresql://postgres:postgres@localhost:${state.ports.pg}/omni`;
+  const login = password === null ? 'postgres' : `postgres:${encodeURIComponent(password)}`;
+  return `postgresql://${login}@127.0.0.1:${state.ports.pg}/omni`;
+}
 
 // ----------------------------------------------------------------------------
 // Processes
@@ -261,6 +294,8 @@ export interface SandboxChildSpec {
   /** Loopback TCP port that answers once the child is ready. */
   readyPort: number;
   logPath: string;
+  /** pg of a password-file cluster: the superuser password, to create the `omni` database. */
+  superuserPassword?: string;
 }
 
 export interface SandboxRunOptions {
@@ -279,37 +314,47 @@ const EMBEDDED_API_ENV = {
   OMNI_PLUGIN_LANE: 'off',
 } as const;
 
-/** The three children, in start order. */
+/**
+ * autopg's (or pgserve's) postmaster: a plain Postgres cluster with its own data dir and socket
+ * dir. The socket dir must be ours: the default is the shared `$XDG_RUNTIME_DIR/pgserve`, where it
+ * would overwrite runtime.json. A password-file cluster makes no socket at all.
+ */
+function pgCommand(layout: SandboxLayout, state: SandboxState): string[] {
+  const args = ['postmaster', '--port', String(state.ports.pg), '--data', layout.pgDataDir];
+  args.push('--socket-dir', layout.pgSocketDir);
+  if (!state.autopg) {
+    return [state.bun, join(layout.runtimeDir, 'node_modules', 'pgserve', 'bin', 'postgres-server.js'), ...args];
+  }
+  if (state.pgPasswordFile) args.push('--password-file', state.pgPasswordFile);
+  return [autopgBinary(layout.autopgDir, state.autopg), ...args];
+}
+
+/**
+ * The three children, in start order. A password-file sandbox needs `pgPassword`, read from its
+ * file (readPgPasswordFile) by the supervisor.
+ */
 export function sandboxChildSpecs(
   layout: SandboxLayout,
   state: SandboxState,
   apiKey: string,
   parentEnv: Record<string, string | undefined> = process.env,
   options: SandboxRunOptions = {},
+  pgPassword: string | null = null,
 ): SandboxChildSpec[] {
+  if (state.pgPasswordFile && pgPassword === null) {
+    throw new SandboxError(`The sandbox at ${layout.home} needs the password in ${state.pgPasswordFile}`);
+  }
   const base = sandboxBaseEnv(layout, parentEnv);
   const modules = join(layout.runtimeDir, 'node_modules');
   const embedded = options.embedded === true;
   return [
     {
       name: 'pg',
-      // pgserve's postmaster: a plain Postgres cluster with its own data dir and
-      // socket dir. The socket dir must be ours: pgserve's default is the shared
-      // `$XDG_RUNTIME_DIR/pgserve`, where it would overwrite runtime.json.
-      cmd: [
-        state.bun,
-        join(modules, 'pgserve', 'bin', 'postgres-server.js'),
-        'postmaster',
-        '--port',
-        String(state.ports.pg),
-        '--data',
-        layout.pgDataDir,
-        '--socket-dir',
-        layout.pgSocketDir,
-      ],
+      cmd: pgCommand(layout, state),
       env: base,
       readyPort: state.ports.pg,
       logPath: join(layout.logsDir, 'pg.log'),
+      ...(pgPassword === null ? {} : { superuserPassword: pgPassword }),
     },
     {
       name: 'nats',
@@ -330,9 +375,10 @@ export function sandboxChildSpecs(
         ...base,
         API_PORT: String(state.ports.api),
         API_HOST: '127.0.0.1',
-        DATABASE_URL: sandboxDatabaseUrl(state),
+        DATABASE_URL: sandboxDatabaseUrl(state, pgPassword),
         // For libpq tools only: postgres.js takes the URL's `localhost` over PGHOST and dials TCP.
-        PGHOST: layout.pgSocketDir,
+        // A password-file cluster has no socket.
+        ...(state.pgPasswordFile ? {} : { PGHOST: layout.pgSocketDir }),
         PGPORT: String(state.ports.pg),
         OMNI_API_KEY: apiKey,
         MEDIA_STORAGE_PATH: join(layout.dataDir, 'media'),
@@ -548,6 +594,13 @@ export interface RunResult {
 
 export interface SandboxDeps {
   platform: NodeJS.Platform;
+  arch: string;
+  /** The C library on Linux (autopg builds against glibc only); null elsewhere. */
+  libc: 'glibc' | 'musl' | null;
+  /** The autopg release Postgres comes from where it has a build (autopg-pin.json). */
+  autopgPin: AutopgPin;
+  /** Fetches a release asset: the autopg tarball. */
+  download(url: string): Promise<Uint8Array>;
   uid: number;
   /** The user's home, where launchd agents and systemd user units live. */
   userHome: string;
@@ -640,6 +693,10 @@ export function processAlive(pid: number): boolean {
 function defaultSandboxDeps(): SandboxDeps {
   return {
     platform: process.platform,
+    arch: process.arch,
+    libc: detectLibc(),
+    autopgPin: AUTOPG_PIN,
+    download: downloadRelease,
     uid: process.getuid?.() ?? 0,
     userHome: homedir(),
     bun: process.execPath,
@@ -749,6 +806,10 @@ export interface SandboxInstallOptions {
   atLogin?: boolean;
   start?: boolean;
   healthTimeoutMs?: number;
+  /** Opt-in: run a password-file cluster with the password in this file (kept on reinstall). */
+  pgPasswordFile?: string;
+  /** The pinned autopg tarball as a local file, for an install without the network. */
+  autopgTarball?: string;
 }
 
 async function pickPort(preferred: number, taken: Set<number>, deps: SandboxDeps): Promise<number> {
@@ -790,13 +851,15 @@ function ensureLayout(layout: SandboxLayout): void {
   }
 }
 
-/** The runtime's package.json: this Omni and the pgserve that runs its Postgres. */
-function buildRuntimeManifest(packageSpec: string): string {
+/** The runtime's package.json: this Omni, and the pgserve that runs its Postgres where autopg does not. */
+function buildRuntimeManifest(packageSpec: string, withPgserve: boolean): string {
+  const dependencies: Record<string, string> = { '@automagik/omni': packageSpec };
+  if (withPgserve) dependencies.pgserve = SANDBOX_PGSERVE_VERSION;
   return `${JSON.stringify(
     {
       name: 'omni-sandbox-runtime',
       private: true,
-      dependencies: { '@automagik/omni': packageSpec, pgserve: SANDBOX_PGSERVE_VERSION },
+      dependencies,
     },
     null,
     2,
@@ -813,12 +876,18 @@ function installedVersion(layout: SandboxLayout, name: string): string | null {
 }
 
 /** Installs the runtime with bun, unless it already carries exactly this manifest. */
-async function ensureRuntime(layout: SandboxLayout, packageSpec: string, deps: SandboxDeps): Promise<string> {
+async function ensureRuntime(
+  layout: SandboxLayout,
+  packageSpec: string,
+  withPgserve: boolean,
+  deps: SandboxDeps,
+): Promise<string> {
   const manifestPath = join(layout.runtimeDir, 'package.json');
-  const manifest = buildRuntimeManifest(packageSpec);
+  const manifest = buildRuntimeManifest(packageSpec, withPgserve);
   const current = existsSync(manifestPath) ? readFileSync(manifestPath, 'utf-8') : null;
   const omniVersion = installedVersion(layout, '@automagik/omni');
-  if (current === manifest && omniVersion && installedVersion(layout, 'pgserve') === SANDBOX_PGSERVE_VERSION) {
+  const pgserveReady = !withPgserve || installedVersion(layout, 'pgserve') === SANDBOX_PGSERVE_VERSION;
+  if (current === manifest && omniVersion && pgserveReady) {
     return omniVersion;
   }
   writeFileSync(manifestPath, manifest, { mode: 0o600 });
@@ -910,13 +979,14 @@ async function removeAtLoginUnit(layout: SandboxLayout, defaultHome: string, dep
 
 /**
  * Command-line fragments that mark a process as one of this sandbox's children:
- * pgserve's postmaster wrapper, the postgres it runs, NATS and the API. Every
+ * autopg's binary or pgserve's postmaster wrapper, the postgres it runs, NATS and the API. Every
  * one is a path inside the home, so nothing else on the machine matches.
  */
 function sandboxChildMarkers(layout: SandboxLayout): string[] {
   const modules = join(layout.runtimeDir, 'node_modules');
   return [
     join(modules, 'pgserve', 'bin', 'postgres-server.js'),
+    `${layout.autopgDir}/`,
     `${join(layout.pgserveConfigDir, 'bin')}/`,
     layout.natsBinary,
     join(modules, '@automagik', 'omni', 'dist', 'server', 'index.js'),
@@ -1109,6 +1179,63 @@ export async function sandboxStatus(
   return report(sandboxLayout(opts.home), deps);
 }
 
+/** What runs the sandbox's Postgres: autopg's pinned release where it has a build, else npm pgserve. */
+interface SandboxPg {
+  target: AutopgTarget | null;
+  /** The opt-in password file: asked for now, else the one the sandbox already has. */
+  pgPasswordFile: string | undefined;
+}
+
+const autopgPaths = (layout: SandboxLayout): AutopgPaths => ({
+  dir: layout.autopgDir,
+  configDir: layout.pgserveConfigDir,
+});
+
+function resolveSandboxPg(
+  layout: SandboxLayout,
+  previous: SandboxState | null,
+  opts: SandboxInstallOptions,
+  deps: SandboxDeps,
+): SandboxPg {
+  const target = autopgTarget(deps.autopgPin, deps);
+  const asked = opts.pgPasswordFile?.trim();
+  const pgPasswordFile = asked ? resolve(asked) : previous?.pgPasswordFile;
+  if (!target && (pgPasswordFile || opts.autopgTarball)) {
+    const host = `${deps.platform}-${deps.arch}${deps.libc === 'musl' ? ' (musl)' : ''}`;
+    throw new SandboxError(
+      `--pg-password-file and --autopg-tarball need autopg ${deps.autopgPin.version}, which has no build for ${host}`,
+    );
+  }
+  // autopg cannot adopt a cluster initdb made without the file, and its start would rewrite that
+  // cluster's pg_hba.conf before it refuses: refuse here, before anything is written. With no state
+  // (uninstall keeps the data), the cluster's own pg_hba.conf says whether autopg ran it with one.
+  const legacyCluster = previous ? !previous.pgPasswordFile : !clusterRanWithPasswordFile(layout.pgDataDir);
+  if (pgPasswordFile && legacyCluster && existsSync(join(layout.pgDataDir, 'PG_VERSION'))) {
+    throw new SandboxError(
+      `${layout.pgDataDir} holds a cluster made without a password file, which cannot take one; use a new --home`,
+    );
+  }
+  return { target, pgPasswordFile };
+}
+
+/**
+ * True unless the sandbox runs autopg and its pinned release is not fully in place (an install
+ * killed while it seeded autopg's binary cache, say). autopg would then fetch Postgres itself,
+ * moving a `~/.pgserve` binary cache in first, so the supervisor refuses to start it.
+ */
+export function sandboxAutopgReady(layout: SandboxLayout, state: SandboxState, target: AutopgTarget | null): boolean {
+  if (!state.autopg) return true;
+  if (!target || target.version !== state.autopg) return false;
+  return autopgRuntimeReady(autopgPaths(layout), target);
+}
+
+/** A change to what runs Postgres, which must not happen under a running cluster. */
+function pgChanged(layout: SandboxLayout, previous: SandboxState, pg: SandboxPg): boolean {
+  if (previous.pgPasswordFile !== pg.pgPasswordFile) return true;
+  if (!pg.target) return previous.autopg !== undefined;
+  return previous.autopg !== pg.target.version || !autopgRuntimeReady(autopgPaths(layout), pg.target);
+}
+
 /**
  * Install or reinstall. Ports, the API key and all data survive a reinstall;
  * a CLI of another version moves the runtime to its own version.
@@ -1118,22 +1245,34 @@ export async function installSandbox(
   deps: SandboxDeps = defaultSandboxDeps(),
 ): Promise<SandboxReport> {
   const layout = sandboxLayout(opts.home);
-  ensureLayout(layout);
   const previous = readSandboxState(layout);
   const packageSpec = opts.packageSpec?.trim() || VERSION;
   const atLogin = opts.atLogin ?? previous?.atLogin ?? false;
   const defaultHome = unitDefaultHome(previous, opts.defaultHome);
+  const pg = resolveSandboxPg(layout, previous, opts, deps);
+  ensureLayout(layout);
   const running = livePid(layout, deps) !== null;
   // A supervisor runs either on its own or under its launchd/systemd unit. Switching
   // at-login restarts it under the other, or launchd/systemd would not bring it back.
   const restart =
-    previous && (previous.packageSpec !== packageSpec || previous.bun !== deps.bun || previous.atLogin !== atLogin);
+    previous &&
+    (previous.packageSpec !== packageSpec ||
+      previous.bun !== deps.bun ||
+      previous.atLogin !== atLogin ||
+      pgChanged(layout, previous, pg));
   const stopped = Boolean(running && restart);
   if (stopped) await stopSandbox({ home: opts.home, defaultHome }, deps);
 
   let version: string;
   try {
-    version = await ensureRuntime(layout, packageSpec, deps);
+    // Before the runtime: a tarball that is not the pinned one is refused with nothing changed.
+    if (pg.target) {
+      await installAutopgRuntime(autopgPaths(layout), pg.target, {
+        tarball: opts.autopgTarball,
+        download: deps.download,
+      });
+    }
+    version = await ensureRuntime(layout, packageSpec, pg.target === null, deps);
     if (!existsSync(layout.natsBinary) && !(await deps.installNats(layout.natsBinary))) {
       throw new SandboxError(`Could not install nats-server at ${layout.natsBinary}`);
     }
@@ -1152,6 +1291,8 @@ export async function installSandbox(
     ports: previous?.ports ?? (await pickPorts(deps)),
     atLogin,
     defaultHome,
+    autopg: pg.target?.version,
+    pgPasswordFile: pg.pgPasswordFile,
     createdAt: previous?.createdAt ?? now,
     updatedAt: now,
   };
@@ -1183,7 +1324,7 @@ export async function uninstallSandbox(
     if (home === '/' || home === resolve(deps.userHome)) throw new SandboxError(`Refusing to delete ${home}`);
     rmSync(home, { recursive: true, force: true });
   } else {
-    for (const path of [layout.statePath, layout.runtimeDir, layout.cacheDir, layout.runDir]) {
+    for (const path of [layout.statePath, layout.runtimeDir, layout.autopgDir, layout.cacheDir, layout.runDir]) {
       rmSync(path, { recursive: true, force: true });
     }
   }

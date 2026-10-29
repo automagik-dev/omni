@@ -232,13 +232,13 @@ function buildOmniDatabaseUrl(port: number): string {
  * ~30s). Closes the post-`pgserve install` startup race so db/role provisioning
  * doesn't connect before the server is listening.
  */
-export async function waitForCanonicalReady(port: number, attempts = 30): Promise<boolean> {
+export async function waitForCanonicalReady(port: number, attempts = 30, password = 'postgres'): Promise<boolean> {
   for (let i = 0; i < attempts; i++) {
     const sql = postgres({
       host: '127.0.0.1',
       port,
       user: 'postgres',
-      password: 'postgres',
+      password,
       database: 'postgres',
       max: 1,
       idle_timeout: 2,
@@ -258,12 +258,12 @@ export async function waitForCanonicalReady(port: number, attempts = 30): Promis
   return false;
 }
 
-export async function ensureOmniDatabaseExists(port: number): Promise<boolean> {
+export async function ensureOmniDatabaseExists(port: number, password = 'postgres'): Promise<boolean> {
   const sql = postgres({
     host: '127.0.0.1',
     port,
     user: 'postgres',
-    password: 'postgres',
+    password,
     database: 'postgres',
     max: 1,
     idle_timeout: 5,
