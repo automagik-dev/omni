@@ -7,6 +7,8 @@ import type { ChannelPlugin, ChannelRegistry, GroupParticipantUpdateResult } fro
 import {
   AccessModeSchema,
   ChannelTypeSchema,
+  ExponentialScheduleSchema,
+  FixedScheduleSchema,
   FollowUpSequenceConfigSchema,
   NotFoundError,
   createLogger,
@@ -452,7 +454,12 @@ const updateInstanceSchema = createInstanceSchema
   .extend(InstanceSettingsSchema.shape)
   .extend({
     agentReplyFilter: agentReplyFilterSchema.nullable().optional(),
-    followUpConfig: FollowUpSequenceConfigSchema.nullable().optional(),
+    // #1403: core's rules (quiet hours included), with unknown schedule keys rejected, not stripped.
+    followUpConfig: FollowUpSequenceConfigSchema.extend({
+      schedule: z.discriminatedUnion('kind', [FixedScheduleSchema.strict(), ExponentialScheduleSchema.strict()]),
+    })
+      .nullable()
+      .optional(),
     metaConnectedAt: InstanceSettingsSchema.shape.metaConnectedAt.transform((value) =>
       typeof value === 'string' ? new Date(value) : value,
     ),
@@ -1248,11 +1255,15 @@ async function denyInstanceUpdate(c: Context<{ Variables: AppVariables }>, data:
   if (pacingDenied) return pacingDenied;
   if (!data.agentChainToInstanceId && (!data.chainMode || data.chainMode === 'off')) return;
   const services = c.get('services');
+  const id = c.req.param('id') ?? '';
   const targetId =
     data.agentChainToInstanceId !== undefined
       ? data.agentChainToInstanceId
-      : (await services.instances.getById(c.req.param('id') ?? '')).agentChainToInstanceId;
+      : (await services.instances.getById(id)).agentChainToInstanceId;
   if (!targetId) return;
+  if (targetId.toLowerCase() === id.toLowerCase()) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'An instance cannot chain to itself' } }, 400);
+  }
   const key = c.get('apiKey');
   const denied = () => c.json({ error: { code: 'FORBIDDEN', message: 'Chain target is not accessible' } }, 403);
   if (!key || !ApiKeyService.instanceAllowed(key.instanceIds, targetId)) return denied();

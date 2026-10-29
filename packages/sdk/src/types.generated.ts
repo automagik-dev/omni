@@ -13041,7 +13041,28 @@ export interface operations {
                     };
                 };
             };
-            /** @description Setting outboundPacingOverride to true requires a full-access ('*') API key */
+            /** @description Validation error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Setting outboundPacingOverride to true requires a full-access ('*') API key, or the chain target is not accessible */
             403: {
                 headers: {
                     [name: string]: unknown;

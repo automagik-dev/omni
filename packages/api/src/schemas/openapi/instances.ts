@@ -169,7 +169,8 @@ export const InstanceSettingsSchema = z
       .strict()
       .nullable()
       .optional(),
-    inboundMaxAgeMinutes: z.number().int().nonnegative().optional(),
+    // Postgres integer column: larger values would fail the write instead of a 400.
+    inboundMaxAgeMinutes: z.number().int().nonnegative().max(2_147_483_647).optional(),
     replayEnabled: z.boolean().optional(),
     inboundReplyContext: z.boolean().optional(),
     messageDebounceMode: z.enum(['disabled', 'fixed', 'randomized', 'presence']).optional(),
@@ -678,7 +679,12 @@ export function registerInstanceSchemas(registry: OpenAPIRegistry): void {
           },
         },
       },
-      403: PacingOverrideForbiddenResponse,
+      400: { description: 'Validation error', content: { 'application/json': { schema: ErrorSchema } } },
+      403: {
+        description:
+          "Setting outboundPacingOverride to true requires a full-access ('*') API key, or the chain target is not accessible",
+        content: { 'application/json': { schema: ErrorSchema } },
+      },
       404: {
         description: 'Instance not found',
         content: {
