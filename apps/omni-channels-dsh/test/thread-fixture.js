@@ -181,9 +181,9 @@ export const record = (id, sessionId, extra = {}) => ({
 // be made. `services`: DSH services the plugin reads with ctx.get (llm, attachments).
 // `resumesDone`: the outcome the plugin is told, once the team's own pass is over, in place of
 // the pass's (one a pass cannot be made to give on demand: `{ failed }`, `{ readOnly }`, a
-// `resent` Session). `dshBots: false` hides the team's DSH-bot calls, as a Bot team without
-// them has none.
-export async function boot(t, home, { mask = false, services = {}, resumesDone, dshBots = true } = {}) {
+// `resent` Session). `archiveError`: every archive throws it from the start, before the
+// plugin's own start pass runs (`fake.archiveError` sets it later).
+export async function boot(t, home, { mask = false, services = {}, resumesDone, archiveError = null } = {}) {
   const ctx = fakeContext({ services })
   const agents = new Map()
   const made = []
@@ -192,7 +192,7 @@ export async function boot(t, home, { mask = false, services = {}, resumesDone, 
   const archived = []
   const archiving = []
   const restricts = []
-  const fake = { archiveError: null, createError: null, restrictError: null }
+  const fake = { archiveError, createError: null, restrictError: null }
   const emit = (id, type, data, time) => {
     for (const listener of ctx.listeners.get('session/event') ?? []) if (listener.length >= 2) listener({ id }, { type, data, ...(time === undefined ? {} : { time }) })
   }
@@ -270,10 +270,7 @@ export async function boot(t, home, { mask = false, services = {}, resumesDone, 
     registered.push(entry)
     return register(entry)
   }
-  const hidden = {
-    ...(mask ? { resumable: { value: undefined }, resumesDone: { value: undefined } } : resumesDone === undefined ? {} : { resumesDone: { value: team.resumesDone.then(() => resumesDone) } }),
-    ...(dshBots ? {} : { dshBots: { value: undefined } }),
-  }
+  const hidden = mask ? { resumable: { value: undefined }, resumesDone: { value: undefined } } : resumesDone === undefined ? {} : { resumesDone: { value: team.resumesDone.then(() => resumesDone) } }
   const base = Object.keys(hidden).length === 0 ? team : Object.create(team, hidden)
   const channels = createRuntime(ctx, base)
   await channels.load()

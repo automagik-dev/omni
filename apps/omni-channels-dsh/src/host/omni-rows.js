@@ -1,25 +1,21 @@
 // Session rows under the Omni Bot's row (wish omni-chat-threads, design rows 16 and 17): the
-// plain Sessions this plugin makes for work that is not a chat thread, one per piece of work
-// Omni's computer hand-off gives (`handoff`, Group 15). None is a Bot, a Tasks Session or a
-// DSH bot's: each is rt.createSession in the team's workspace, kept in state.omniRows and drawn
-// under the Omni Bot beside the threads, never in state.agents.
+// plain Sessions this plugin once made for work that was not a chat thread, kept in
+// state.omniRows and drawn under the Omni Bot beside the threads. This plugin makes none any
+// more: automations run in their chats' threads, and Omni has no hand-offs. A row left from
+// before (`run`, `ongoing`, `handoff`) is archived and dropped at start (retire), and so are
+// the DSH-bot hand-offs kept in state.omniHandoffs, whose Sessions stay their bots'.
 //
-// A row is never capped: only its own menu removes it, which archives its Session with its
-// work stopped. Its Session runs on the Omni Bot's model and follows it, and keeps every DSH
-// tool but the Bot team's (TEAM_TOOLS), the chat threads' (THREAD_TOOLS) and the hand-off,
-// each denied one name at a time.
-//
-// Automations once made rows of their own (`run`, `ongoing`); they run in their chats' threads
-// now, and a row of either kind left from before is archived and dropped at start (retire).
+// While a row is still there its Session follows the Omni Bot's model and keeps every DSH tool
+// but the Bot team's (TEAM_TOOLS) and the chat threads' (THREAD_TOOLS), each denied one name
+// at a time; its menu removes it, which archives its Session with its work stopped.
 //
 // A restart that cuts a row's turn is the Bot team's to resume, once, its own way: the row
 // reaches the team's pass through the restart hook only while a turn of it could have been cut
 // (turnOpenAt within the team's window), so an idle row costs the pass nothing.
 import { z } from 'zod'
 import { denyEach } from './omni-api.js'
-import { HANDOFF_TOOL } from './omni-rules.js'
 import { isStandingRun } from './standing-runs.js'
-import { archivedIds, CUT_WINDOW_MS, followOmniModel, selectOmniModel, THREAD_TOOLS } from './threads.js'
+import { archivedIds, CUT_WINDOW_MS, followOmniModel, THREAD_TOOLS } from './threads.js'
 
 // Every tool the Bot team registers for Bots, which its own DSH bot and task Sessions never
 // get (copied from @automagik/bots-dsh 3.32.1, src/host/constants.js TEAM_TOOLS; its agents.js
@@ -37,37 +33,27 @@ export const TEAM_TOOLS = Object.freeze([
 ])
 // The team's tools under the names later Bot teams give them (3.33.0 renamed list_models).
 export const LATER_TEAM_TOOLS = Object.freeze(['list_bot_models'])
-// What a row's Session never runs: the team's tools, the chat threads' own and the hand-off,
-// which is the Omni Bot's.
-export const ROW_DENIED = Object.freeze([...new Set([...TEAM_TOOLS, ...LATER_TEAM_TOOLS, ...THREAD_TOOLS, HANDOFF_TOOL])])
+// What a row's Session never runs: the team's tools and the chat threads' own.
+export const ROW_DENIED = Object.freeze([...new Set([...TEAM_TOOLS, ...LATER_TEAM_TOOLS, ...THREAD_TOOLS])])
 // A Bot's own browser is the team's too (3.33.0 and later name its tools in
 // rt.browserToolNames, and deny them in its own DSH bot Sessions): a row never runs it.
 const rowDenied = rt => [...ROW_DENIED, ...(Array.isArray(rt.browserToolNames) ? rt.browserToolNames : [])]
 export const ROW_REFUSAL = 'A session under Omni has DSH\'s own tools, not the Bot team\'s or a chat thread\'s.'
+// A row the tree still draws, until retire archives it (or its menu removes it, when the archive
+// failed at start).
 export const ROW_KINDS = Object.freeze(['handoff'])
-// The kinds of row the retired automation workers made ("a new session each time", "one
-// ongoing session"): archived and dropped at start.
-const RETIRED_KINDS = new Set(['run', 'ongoing'])
+// The kinds of row this plugin made before (the retired automation workers' "a new session
+// each time" and "one ongoing session", Omni's hand-offs): archived and dropped at start.
+const RETIRED_KINDS = new Set(['run', 'ongoing', 'handoff'])
 // A run still working in a retired row's Session when it goes.
 export const ROW_RETIRED = 'Stopped: automations now run in their chats\' threads, so its session was archived.'
 // DSH's read-only preset: no file changes, and a wider retry waits for the user.
 export const READ_PRESET = 'read-only'
-const TITLE_MAX = 80
 
-export const OmniRow = z.object({
-  sessionId: z.string().min(1).max(200),
-  kind: z.enum(ROW_KINDS),
-  title: z.string().max(TITLE_MAX),
-  reportTo: z.string().min(1).max(200).optional(),
-  reported: z.boolean().optional(),
-  turnOpenAt: z.number().finite().nullable(),
-  at: z.number().finite(),
-}).strict()
 const RemovePayload = z.object({ sessionId: z.string().min(1).max(200) }).strict()
 
 const refused = message => Object.assign(new Error(message), { code: 'bot/refused' })
 const invalid = message => Object.assign(new Error(message), { code: 'bot/invalid' })
-const titleOf = title => String(title ?? '').replace(/\s+/g, ' ').trim().slice(0, TITLE_MAX) || 'Session'
 
 // The agents whose list was trimmed: a restriction belongs to one live agent.
 const trimmed = new WeakSet()
@@ -81,24 +67,6 @@ function trimRow(rt, agent) {
   } catch (error) {
     rt.warn('omni-channels: the Session %s keeps the team\'s tools in its list (its guard still refuses them): %s', agent.session?.id ?? agent.id, error?.message ?? error)
   }
-}
-
-/**
- * A plain Session for a row under the Omni Bot: rt.createSession (never createTaskSession), on
- * the Omni Bot's model before its first turn, its live agent without the team's and the
- * threads' tools. The caller keeps it as a row (rt.omniRows.add), which follows the Omni Bot's
- * model from then on; a Session never kept follows nothing.
- */
-export async function createPlainSession(rt, title) {
-  const sessionId = await rt.createSession(titleOf(title))
-  await selectOmniModel(rt, sessionId).catch(error => rt.warn('omni-channels: the Session %s keeps DSH\'s model, the Omni Bot\'s was not applied: %s', sessionId, error?.message ?? error))
-  // agent/created came before the Session was a row, so its list is trimmed here.
-  try {
-    trimRow(rt, await rt.resolveAgent(sessionId))
-  } catch (error) {
-    rt.warn('omni-channels: the Session %s was not trimmed: %s', sessionId, error?.message ?? error)
-  }
-  return sessionId
 }
 
 /**
@@ -132,14 +100,6 @@ export function install(rt) {
   const unfollows = new Map()
   const follow = (sessionId) => {
     if (!unfollows.has(sessionId)) unfollows.set(sessionId, followOmniModel(rt, sessionId, { select: false }))
-  }
-
-  async function add(row) {
-    const parsed = OmniRow.parse({ ...row, title: titleOf(row?.title) })
-    rows()[parsed.sessionId] = parsed
-    follow(parsed.sessionId)
-    await rt.save()
-    return parsed
   }
 
   // A Session archived with its work stopped; one DSH no longer has needs no archive. Throws
@@ -193,10 +153,12 @@ export function install(rt) {
 
   // The restart hook's Sessions: a row whose turn opened in the team's cut window and did not
   // end cleanly. An idle row, or one DSH archived, is never listed.
+  // A row of a kind retire() archives is never listed, even before it runs or when its archive
+  // failed: the team's pass must not resume a Session that is going.
   rt.teamResume?.addSessions(() => {
     const now = Date.now()
     const gone = archivedIds(ctx)
-    return list().filter(row => Number.isFinite(row.turnOpenAt) && now - row.turnOpenAt < CUT_WINDOW_MS && !gone.has(row.sessionId)).map(row => row.sessionId)
+    return list().filter(row => !RETIRED_KINDS.has(row.kind) && Number.isFinite(row.turnOpenAt) && now - row.turnOpenAt < CUT_WINDOW_MS && !gone.has(row.sessionId)).map(row => row.sessionId)
   })
 
   // A later agent of a row's Session (a resume, a clear, a compaction) is trimmed again; the
@@ -213,10 +175,13 @@ export function install(rt) {
     return ROW_REFUSAL
   })
 
-  // A row the retired automation workers left: its Session archived with its work stopped (its
-  // files and log stay on disk), then the row dropped, and a run still working there ends as
-  // failed, saying why. One that cannot be archived stays for the next start.
+  // A row left from before: its Session archived with its work stopped (its files and log stay
+  // on disk), then the row dropped, and a run still working there ends as failed, saying why.
+  // One that cannot be archived stays for the next start. The DSH-bot hand-offs that had not
+  // reported are dropped: their Sessions are their bots', the owner's own.
   async function retire() {
+    const handoffs = Object.hasOwn(state, 'omniHandoffs')
+    delete state.omniHandoffs
     const left = Object.entries(rows()).filter(([, row]) => RETIRED_KINDS.has(row?.kind))
     for (const [key, row] of left) {
       const sessionId = typeof row.sessionId === 'string' ? row.sessionId : key
@@ -231,11 +196,11 @@ export function install(rt) {
         rt.standingRuns.finish(run.id, 'failed', ROW_RETIRED)
       }
     }
-    if (left.length > 0) await persist()
+    if (left.length > 0 || handoffs) await persist()
   }
 
   // At start: every saved row follows the Omni Bot's model again (they are on it already, so
-  // none is opened for it), and the rows the retired automation workers left go.
+  // none is opened for it), and the rows left from before go.
   ctx.effect(() => {
     void Promise.resolve(rt.load()).then(() => {
       for (const row of list()) follow(row.sessionId)
@@ -244,7 +209,7 @@ export function install(rt) {
     }).catch(error => warn('following the session rows failed', error))
   }, 'omni-channels: session rows')
 
-  rt.omniRows = { add, remove, get, list }
+  rt.omniRows = { remove, get, list }
 
   // For the tree: each row with its title and whether its turn runs now (a turn this start
   // has not seen is not running).

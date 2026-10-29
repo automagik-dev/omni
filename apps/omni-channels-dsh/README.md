@@ -22,16 +22,16 @@ runtime is the same `omniTeam` service.
 - **Omni's tools**, for a Main Bot only: `omni_channels`, `omni_chats`, `omni_messages`,
   `omni_connect`, and `omni_endpoints` and `omni_call` for any other operation of the Omni
   API. Each call is drawn in the chat as a card. With an Omni named, a Main Bot's Sessions
-  lose DSH's shell and file tools; `start_task` (the team's) hands that work to Tasks.
+  lose DSH's shell and file tools and the team's `start_task`: Omni has no computer, and
+  says what such work needs so the user can give it to a Bot that has one.
 - **Automations**: `find_chats`, `list_automations`, `save_automation`, `pause_automation`
   and `delete_automation`; Omni's event streams start a run for each match. The board is a
   tab of DSH's right sidebar beside Omni's chat, and the account menu opens the Automations
   page. A run for an event only reads omni. A "thread" worker runs each event in the thread
   of the chat it came from, making that chat a thread first when it is none, so an
   automation over many chats works in one thread per chat, drawn under the Omni Bot's row.
-- **Omni's rules**: how to operate Omni, hand work that needs a computer to a session under
-  the Omni Bot, and run automations, as a part
-  of the Main Bot's rules inside the team's prompt section.
+- **Omni's rules**: how to operate Omni, that it has no computer, and how to run automations,
+  as a part of the Main Bot's rules inside the team's prompt section.
 - **Connect Omni**, the onboarding step `omni-connect` (order −250), between the Omni AI
   plugin's welcome (−300) and Connect AI (−200). A skip is kept by `@automagik/welcome-dsh`
   when it is installed, else in this browser.

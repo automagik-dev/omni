@@ -18,8 +18,8 @@ const { ChevronRightIcon, CloseIcon, DotsIcon, PlusIcon, SparkIcon } = icons
 // there: without them a thread still shows and opens, with no unread dot.
 //
 // Beside the threads, the Sessions this plugin keeps under the Omni Bot (src/host/
-// omni-rows.js, roster.omniRows): Omni's hand-offs. Each stays until its own menu removes it,
-// which archives it.
+// omni-rows.js, roster.omniRows): only rows left from before, which the host archives at start;
+// one it could not archive stays until its own menu removes it.
 
 const OPEN_KEY = 'omni.tree.open'
 const SEARCH_DELAY_MS = 250
@@ -181,7 +181,7 @@ export function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
 }
 
 /**
- * One Session kept under the Omni Bot (a hand-off's). It
+ * One Session kept under the Omni Bot from before (a hand-off's, say). It
  * opens its Session through the team's row action, on a team with the hook; its menu's one
  * item removes it, asking once more, and the host archives its Session.
  */
