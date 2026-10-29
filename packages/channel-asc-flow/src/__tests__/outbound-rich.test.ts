@@ -324,6 +324,15 @@ describe('outbound URL button through /sendMsgInterativaAvancado', () => {
       `Ao continuar, você aceita a Política.\nVer Política: ${url}`,
     ]);
   });
+
+  it('keeps the link when the platform refuses a button whose bubble does not write the URL', async () => {
+    await boot({
+      '/sendMsgInterativaAvancado': () => jsonResponse({ cod_error: 1, msg: 'nao' }, 400),
+    });
+    await send({ type: 'text', text: 'Leia a Política.', buttons: [{ text: 'Ver Política', url }] });
+
+    expect(of('/callbackFlowMsg').map((c) => c.body.msg_usuario)).toEqual([`Leia a Política.\n\nVer Política: ${url}`]);
+  });
 });
 
 describe('outbound WhatsApp Flow through /sendMsgInterativaAvancado', () => {

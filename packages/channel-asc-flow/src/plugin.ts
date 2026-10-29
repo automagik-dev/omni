@@ -77,7 +77,13 @@ import type { AscFlowConfig } from './types';
 import { encodeAscEmoji, nonLatin1Left } from './utils/emoji';
 import { AscFlowApiError, AscFlowErrorCode, isRetryable } from './utils/errors';
 import { type AscFlowHandoffMode, type HandoffPlan, planHandoff } from './utils/handoff';
-import { type AscFlowDescriptor, buildFlowInteractive, buildInteractive, splitBubbles } from './utils/interactive';
+import {
+  type AscFlowDescriptor,
+  buildFlowInteractive,
+  buildInteractive,
+  splitBubbles,
+  textFallbackOf,
+} from './utils/interactive';
 import { isAscMediaFilename, mediaFallbackText, resolveAscInboundMedia } from './utils/media';
 import { OUTBOUND_MEDIA_FALLBACK_TEXT, buildReplyField, buildRichFields, isRichContent } from './utils/outbound';
 import { isStaleFlowReplay } from './utils/turn-freshness';
@@ -993,7 +999,9 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       // any other, never left to `resposta` (which the flow reads a cycle
       // late). Without this the beneficiary reads the lead-up and never the
       // question itself.
-      return { delivered: (await this.pushBubbles(state, cod, [turn.lastBubble])) > 0 };
+      return {
+        delivered: (await this.pushBubbles(state, cod, [textFallbackOf(turn.lastBubble, turn.interativa)])) > 0,
+      };
     }
 
     // EVERY bubble is pushed, and `resposta` goes back empty.

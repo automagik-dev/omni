@@ -12,7 +12,7 @@ import { describe, expect, it } from 'bun:test';
 import type { InteractiveButton } from '@omni/channel-sdk';
 
 import { encodeAscEmoji, nonLatin1Left } from '../utils/emoji';
-import { buildFlowInteractive, buildInteractive, foldTitle, splitBubbles } from '../utils/interactive';
+import { buildFlowInteractive, buildInteractive, foldTitle, splitBubbles, textFallbackOf } from '../utils/interactive';
 
 const options = (n: number, label = (i: number) => `Opção ${i}`): InteractiveButton[] =>
   Array.from({ length: n }, (_, i) => ({ text: label(i + 1), data: String(i + 1) }));
@@ -169,8 +169,18 @@ describe('buildInteractive with a sole URL button (tipo 3)', () => {
     );
   });
 
+  it('cuts a line with the URL alone too', () => {
+    expect(buildInteractive(`Leia a Política.\n${url}`, link())).toMatchObject({ mensagem: 'Leia a Política.' });
+  });
+
+  it('keeps whole a line of prose that carries the URL', () => {
+    const body = `Ao continuar, você aceita a política: ${url}\nOutro parágrafo.`;
+    expect(buildInteractive(body, link())).toMatchObject({ tipo: 3, mensagem: body });
+  });
+
   it('degrades to text when nothing but the URL is left to show', () => {
-    expect(buildInteractive(`Política: ${url}`, link())).toBeNull();
+    expect(buildInteractive(`Ver Política: ${url}`, link())).toBeNull();
+    expect(buildInteractive(url, link())).toBeNull();
   });
 });
 
@@ -247,5 +257,19 @@ describe('buildFlowInteractive', () => {
     expect(buildFlowInteractive('Corpo', { flowId: '1', cta: 'x'.repeat(31) })).toBeNull();
     expect(buildFlowInteractive('x'.repeat(1025), flow)).toBeNull();
     expect(buildFlowInteractive('   ', flow)).toBeNull();
+  });
+});
+
+describe('textFallbackOf', () => {
+  const url = 'https://example.test/politica';
+  const params = { tipo: 3, mensagem: 'Leia a Política.', url_button: { texto_botao: 'Ver Política', url } };
+
+  it('adds the URL of a refused URL button to a bubble that does not write it', () => {
+    expect(textFallbackOf('Leia a Política.', params)).toBe(`Leia a Política.\n\nVer Política: ${url}`);
+  });
+
+  it('leaves the bubble alone when it already has the URL, or for any other component', () => {
+    expect(textFallbackOf(`Leia: ${url}`, params)).toBe(`Leia: ${url}`);
+    expect(textFallbackOf('Escolha:', { tipo: 2, mensagem: 'Escolha:', button: ['a'] })).toBe('Escolha:');
   });
 });

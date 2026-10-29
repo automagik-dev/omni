@@ -182,9 +182,9 @@ export function buildInteractive(
  * the label is cut where whatsapp-business and hermes cut it.
  *
  * The caller may also write the URL in the text, so that a plugin which still
- * drops URL buttons delivers the link anyway. The lines carrying it leave the
- * body here, where the button takes their place; the bubble pushed when the
- * platform refuses the button keeps them, link included.
+ * drops URL buttons delivers the link anyway. A line that is only that link
+ * (see `isLinkLine`) leaves the body here, where the button takes its place;
+ * the bubble pushed when the platform refuses the button keeps it.
  */
 function buildUrlButton(body: string, button: InteractiveButton): Record<string, unknown> | null {
   const url = button.url ?? '';
@@ -193,7 +193,7 @@ function buildUrlButton(body: string, button: InteractiveButton): Record<string,
   const label = action?.parameters?.display_text?.trim();
   const mensagem = body
     .split('\n')
-    .filter((line) => !line.includes(url))
+    .filter((line) => !isLinkLine(line, button.text, url))
     .join('\n')
     .trim();
   if (!mensagem || !label) return null;
@@ -201,6 +201,32 @@ function buildUrlButton(body: string, button: InteractiveButton): Record<string,
   // The body arrives already encoded (`resolveOutboundText`); the label comes
   // straight from the button, so it is encoded here. See `emoji.ts`.
   return { tipo: TIPO_BOTAO_URL, mensagem, url_button: { texto_botao: encodeAscEmoji(label), url } };
+}
+
+/**
+ * A line the URL button replaces: the URL alone, or the button's label leading
+ * into it (`Ver Política de Privacidade: <url>`, the `label: url` shape
+ * `planInteractive` folds a URL button into). Any other line with the URL is
+ * prose, and it stays whole: cutting it would drop what it says.
+ */
+function isLinkLine(line: string, label: string, url: string): boolean {
+  const at = line.indexOf(url);
+  if (at < 0) return false;
+  let rest = `${line.slice(0, at)}${line.slice(at + url.length)}`.trim();
+  if (rest.endsWith(':')) rest = rest.slice(0, -1).trim();
+  return !rest || foldTitle(rest).startsWith(foldTitle(encodeAscEmoji(label)));
+}
+
+/**
+ * The bubble pushed when the platform refuses the component. A URL button whose
+ * bubble does not write its URL takes it along as `label: url`, the shape
+ * `planInteractive` folds a URL button into, so the link still reaches the
+ * handset. Every other component falls back to its bubble as it is.
+ */
+export function textFallbackOf(bubble: string, params: Record<string, unknown>): string {
+  const button = params.url_button as { texto_botao?: string; url?: string } | undefined;
+  if (params.tipo !== TIPO_BOTAO_URL || !button?.url || bubble.includes(button.url)) return bubble;
+  return `${bubble}\n\n${button.texto_botao}: ${button.url}`;
 }
 
 /** The part of Omni's flow descriptor (`metadata.flow`) the ASC platform can carry. */
