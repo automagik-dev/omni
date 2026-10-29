@@ -54,9 +54,11 @@ pin_json() { # <size> <sha256>, or no arguments for a pin without this platform
 }
 
 # installed_earlier <name> [marker]: a nats-server already in the row's bin/, with that .pin marker.
+# The script runs `nats-server --version` on a binary it keeps, so the stand-in is a script too.
+printf '#!/bin/sh\necho "nats-server: installed earlier"\n' >"$WORK/old-nats-server"
 installed_earlier() {
   mkdir -p "$WORK/$1/bin"
-  printf 'old nats-server\n' >"$WORK/$1/bin/nats-server"
+  cp "$WORK/old-nats-server" "$WORK/$1/bin/nats-server"
   chmod +x "$WORK/$1/bin/nats-server"
   if [[ $# -gt 1 ]]; then printf '%s\n' "$2" >"$WORK/$1/bin/nats-server.pin"; fi
 }
@@ -117,7 +119,7 @@ replaced 'a binary whose marker names another release is replaced'
 
 installed_earlier kept "$MARKER"
 run_row kept "$WORK/empty" "$(pin_json "$SIZE" "$SHA256")"
-if [[ "$CODE" -eq 0 && "$(cat "$PROJECT/bin/nats-server")" == 'old nats-server' && "$OUT" != *'Downloading from'* ]]; then
+if [[ "$CODE" -eq 0 && "$OUT" != *'Downloading from'* ]] && cmp -s "$PROJECT/bin/nats-server" "$WORK/old-nats-server"; then
   ok 'a binary whose marker is the pin is kept, with no download'
 else
   bad "a binary whose marker is the pin is kept: exit ${CODE} (output: ${OUT//$'\n'/ | })"
@@ -125,8 +127,8 @@ fi
 
 installed_earlier refused-upgrade "$OLD_MARKER"
 run_row refused-upgrade "$WORK/tampered" "$(pin_json "$SIZE" "$SHA256")"
-if [[ "$CODE" -ne 0 && "$(cat "$PROJECT/bin/nats-server")" == 'old nats-server' &&
-  "$(cat "$PROJECT/bin/nats-server.pin")" == "$OLD_MARKER" && -z "$(ls -A "$PROJECT/tmp")" ]]; then
+if [[ "$CODE" -ne 0 && "$(cat "$PROJECT/bin/nats-server.pin")" == "$OLD_MARKER" && -z "$(ls -A "$PROJECT/tmp")" ]] &&
+  cmp -s "$PROJECT/bin/nats-server" "$WORK/old-nats-server"; then
   ok 'a refused upgrade leaves the old binary and its marker as they were'
 else
   bad "a refused upgrade: exit ${CODE}, bin/ holds $(find "$PROJECT/bin" -mindepth 1 -exec basename {} \; | tr '\n' ' ') (output: ${OUT//$'\n'/ | })"
