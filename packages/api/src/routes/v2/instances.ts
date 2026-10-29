@@ -1229,21 +1229,29 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
   return c.json({ data: sanitizeInstance(instance) }, 201);
 });
 
-/** Validate a supplied chain reference before the generic persistence path. */
+/** Validate a supplied or newly activated chain reference before persistence. */
 async function validateChainTarget(
   c: Context<{ Variables: AppVariables }>,
   sourceId: string,
   targetId: string | null | undefined,
+  chainMode: z.infer<typeof updateInstanceSchema>['chainMode'],
 ): Promise<Response | undefined> {
-  if (!targetId) return;
-  if (targetId === sourceId) {
+  // A mode-only write can activate an existing reference. Authorize that
+  // effective target too, but do not reauthorize an old target when disabling
+  // chaining, changing unrelated settings, or explicitly clearing the reference.
+  const effectiveTarget =
+    targetId === undefined && chainMode !== undefined && chainMode !== 'off'
+      ? (await c.get('services').instances.getById(sourceId)).agentChainToInstanceId
+      : targetId;
+  if (!effectiveTarget) return;
+  if (effectiveTarget === sourceId) {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'An instance cannot chain to itself' } }, 400);
   }
   // Reuse the same access guard as /:id before looking up the target. The
   // real service lookup uses the request's existing tenant-scoped handle.
-  const denied = await requireInstanceAccess(() => targetId)(c, async () => {});
+  const denied = await requireInstanceAccess(() => effectiveTarget)(c, async () => {});
   if (denied) return denied;
-  await c.get('services').instances.getById(targetId);
+  await c.get('services').instances.getById(effectiveTarget);
 }
 
 /**
@@ -1254,7 +1262,8 @@ instancesRoutes.patch(
   instanceAccess,
   zValidator('json', updateInstanceSchema),
   async (c, next) => {
-    const denied = await validateChainTarget(c, c.req.param('id'), c.req.valid('json').agentChainToInstanceId);
+    const data = c.req.valid('json');
+    const denied = await validateChainTarget(c, c.req.param('id'), data.agentChainToInstanceId, data.chainMode);
     if (denied) return denied;
     await next();
   },

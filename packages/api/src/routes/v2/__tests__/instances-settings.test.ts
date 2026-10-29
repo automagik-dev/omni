@@ -357,6 +357,70 @@ describe('channel settings PATCH (#1403)', () => {
     expect(h.publish).not.toHaveBeenCalled();
   });
 
+  test.each(['forward', 'bidirectional'])(
+    'mode-only %s cannot activate a stored target outside the key access',
+    async (chainMode) => {
+      const h = mount({ allowed: [ID] });
+      h.rows.set(ID, { ...h.rows.get(ID), chainMode: 'off' });
+      expect((await h.patch({ chainMode })).status).toBe(403);
+      expect(h.rows.get(ID)?.chainMode).toBe('off');
+      expect(h.reads).toContain(ID);
+      expect(h.reads).not.toContain(TARGET);
+      expect(h.writes).toHaveLength(0);
+      expect(h.publish).not.toHaveBeenCalled();
+    },
+  );
+
+  test.each(['forward', 'bidirectional'])(
+    'mode-only %s checks and activates an accessible stored target',
+    async (chainMode) => {
+      const h = mount({ allowed: [ID, TARGET], tenant: TENANT });
+      h.rows.set(ID, { ...h.rows.get(ID), chainMode: 'off' });
+      expect((await h.patch({ chainMode })).status).toBe(200);
+      expect(h.scopedReads).toEqual([ID, TARGET]);
+      expect(await data(await h.get())).toMatchObject({ id: ID, chainMode, agentChainToInstanceId: TARGET });
+      expect(h.writes).toHaveLength(1);
+      expect(h.writes[0]?.id).toBe(ID);
+      expect(h.publish.mock.calls).toEqual([
+        ['instance.updated', { instanceId: ID, channelType: 'whatsapp-baileys', changedKeys: ['chainMode'] }],
+      ]);
+    },
+  );
+
+  test.each(['forward', 'bidirectional'])(
+    'mode-only %s rejects a tenant-invisible stored target',
+    async (chainMode) => {
+      const h = mount({ tenant: TENANT, targetTenant: OTHER_TENANT });
+      h.rows.set(ID, { ...h.rows.get(ID), chainMode: 'off' });
+      expect((await h.patch({ chainMode })).status).toBe(404);
+      expect(h.scopedReads).toEqual([ID, TARGET]);
+      expect(h.rows.get(ID)?.chainMode).toBe('off');
+      expect(h.writes).toHaveLength(0);
+      expect(h.publish).not.toHaveBeenCalled();
+    },
+  );
+
+  test.each([
+    ['missing', MISSING, 404],
+    ['self', ID, 400],
+  ] as const)('mode-only activation rejects a %s stored target', async (_name, target, status) => {
+    const h = mount();
+    h.rows.set(ID, { ...h.rows.get(ID), chainMode: 'off', agentChainToInstanceId: target });
+    expect((await h.patch({ chainMode: 'forward' })).status).toBe(status);
+    expect(h.writes).toHaveLength(0);
+    expect(h.publish).not.toHaveBeenCalled();
+  });
+
+  test.each([{ chainMode: 'off' }, { replayEnabled: true }, { chainMode: 'forward', agentChainToInstanceId: null }])(
+    'disabling, unrelated settings and explicit target clearing do not reauthorize the old target (%j)',
+    async (body) => {
+      const h = mount({ allowed: [ID] });
+      expect((await h.patch(body)).status).toBe(200);
+      expect(h.reads).not.toContain(TARGET);
+      expect(await data(await h.get())).toMatchObject({ id: ID, ...body });
+    },
+  );
+
   test('allowed chain target uses existing tenant-scoped service lookup', async () => {
     const h = mount({ allowed: [ID, TARGET], tenant: TENANT });
     expect((await h.patch({ agentChainToInstanceId: TARGET })).status).toBe(200);

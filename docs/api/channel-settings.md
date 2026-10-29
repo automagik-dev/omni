@@ -55,7 +55,12 @@ A non-null target must exist and pass the same instance access guard as the
 source. An unauthorized target returns **403** before lookup; a missing target
 (or one invisible through the existing tenant-scoped service lookup) returns
 **404**. Self-chaining returns **400**. These failures perform no update. Setting
-`chainMode` does not create a reciprocal link or implicitly select a target.
+`chainMode` to `forward` or `bidirectional` without sending a target validates
+the existing stored target with those same access, existence, tenant and
+self-chain checks before activating it. Setting `chainMode` to `off`, changing
+unrelated settings, or explicitly clearing the target with `null` does not
+reauthorize the old target. No mode creates a reciprocal link or implicitly
+selects a new target.
 
 ### Session reset configuration
 
