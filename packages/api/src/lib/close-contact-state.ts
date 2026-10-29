@@ -27,6 +27,8 @@
  */
 
 import type { ChatSettings } from '@omni/db';
+import { type SQL, sql } from 'drizzle-orm';
+import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 
 export function isChatInActiveCloseState(settings: ChatSettings | null | undefined): boolean {
   if (!settings) return false;
@@ -37,4 +39,8 @@ export function isChatInActiveCloseState(settings: ChatSettings | null | undefin
     if (Number.isFinite(ms) && Date.now() < ms) return true;
   }
   return false;
+}
+
+export function notInActiveCloseStateSql(settings: AnyPgColumn, now: Date): SQL {
+  return sql`((${settings}->'closed') IS DISTINCT FROM 'true'::jsonb AND coalesce(${settings}->>'closeUntil', '') <= ${now.toISOString()})`;
 }

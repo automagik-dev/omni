@@ -15,6 +15,7 @@
 
 import {
   type AdvanceInput,
+  CHANNELS_WITH_MESSAGING_WINDOW,
   type ChannelType,
   type EventBus,
   type FollowUpDisarmReason,
@@ -22,6 +23,7 @@ import {
   type FollowUpStateRepo,
   type FollowUpStateRow,
   type Logger,
+  MESSAGING_WINDOW_MS,
   type MessagingWindowProbe,
   createLogger,
   createMessagingWindowProbe,
@@ -29,7 +31,8 @@ import {
 } from '@omni/core';
 import type { Database } from '@omni/db';
 import { chatFollowUpState, chats, instances, resolveEnforcementMode } from '@omni/db';
-import { type SQL, and, eq, gt, isNull, lt, lte, sql } from 'drizzle-orm';
+import { type SQL, and, eq, gt, isNull, lt, lte, notInArray, or, sql } from 'drizzle-orm';
+import { notInActiveCloseStateSql } from '../lib/close-contact-state';
 import { isMultitenancyEnabled } from '../tenancy/feature-flag';
 import { enumerateActiveWorkTenants } from '../tenancy/periodic-tenant-work';
 import { scopedHandle } from '../tenancy/tenant-scope';
@@ -296,6 +299,7 @@ export class FollowUpSweeperService {
     const now = new Date();
     const minBoundary = new Date(now.getTime() - STALE_PAUSE_MAX_AGE_MS);
     const maxBoundary = new Date(now.getTime() - STALE_PAUSE_MIN_AGE_MS);
+    const windowBoundary = new Date(now.getTime() - MESSAGING_WINDOW_MS);
 
     // Wrap the SELECT in a transaction with `FOR UPDATE SKIP LOCKED` to
     // mirror `findAndLockDue` (line ~100). Two reasons:
@@ -329,6 +333,7 @@ export class FollowUpSweeperService {
             })
             .from(chatFollowUpState)
             .leftJoin(chats, eq(chatFollowUpState.chatId, chats.id))
+            .leftJoin(instances, eq(chatFollowUpState.instanceId, instances.id))
             .where(
               and(
                 eq(chatFollowUpState.disarmReason, 'customer_replied'),
@@ -337,6 +342,13 @@ export class FollowUpSweeperService {
                 // Same null-safe agentPaused gate as `findAndLockDue` —
                 // preserves the #528 race fix for the re-arm path.
                 sql`(${chats.settings}->>'agentPaused') IS DISTINCT FROM 'true'`,
+                notInActiveCloseStateSql(chats.settings, now),
+                or(
+                  isNull(instances.channel),
+                  notInArray(instances.channel, [...CHANNELS_WITH_MESSAGING_WINDOW]),
+                  sql`(${chatFollowUpState.sequenceConfig}->'stopOutsideMessagingWindow') = 'false'::jsonb`,
+                  gt(chatFollowUpState.lastInboundCustomerMessageAt, windowBoundary),
+                ),
                 ...worldPredicate,
               ),
             )
