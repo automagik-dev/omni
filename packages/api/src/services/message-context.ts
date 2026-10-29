@@ -12,6 +12,16 @@ export function extractPhoneFromJid(jid: string): string {
   return jid.replace(/:.*$/, '').replace(/@.*$/, '').replace(/^@/, '');
 }
 
+/**
+ * Check if a chat is a self-chat (user messaging themselves).
+ * Compares chatId against the instance's ownerIdentifier (connected account JID).
+ * Normalizes JIDs by stripping device suffix (e.g., ":0" in "5511999@s.whatsapp.net:0").
+ */
+export function isSelfChat(chatId: string, ownerIdentifier: string | null | undefined): boolean {
+  if (!ownerIdentifier) return false;
+  return extractPhoneFromJid(chatId) === extractPhoneFromJid(ownerIdentifier);
+}
+
 /** Build message context for WhatsApp / default channels */
 export function buildWhatsAppMessageContext(
   rawPayload: Record<string, unknown>,
