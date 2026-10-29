@@ -1,0 +1,44 @@
+name: Shipped Strings
+
+# What @automagik/omni ships (the CLI, server, SDK, migrations and the plugin market that
+# `prepack` builds) must not name a private host, a person or an internal service. This builds the
+# package as prepack does and runs scripts/ci/check-shipped-strings.sh over the result.
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+concurrency:
+  group: shipped-strings-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: shipped package names no private host or person
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.2
+
+      - name: Install dependencies (frozen lockfile)
+        run: bun install --frozen-lockfile
+
+      - name: Build the package as prepack does
+        working-directory: packages/cli
+        run: bun run prepack
+
+      - name: Check the built package
+        run: bash scripts/ci/check-shipped-strings.sh packages/cli
