@@ -73,10 +73,14 @@ DELETE /v2/follow-up/{scope}/:id
   promptTemplate: string,           // placeholders below
   stopOutsideMessagingWindow: boolean, // default: true (WhatsApp BSP 24 h guard)
   showTypingIndicator: boolean,     // default: true
+  quietHours?: QuietHours,          // optional, see below
 }
 
 // Optional: { minutes: number } (±absolute) or { ratio: number } (±share of the interval, 0 < ratio ≤ 1)
 type Jitter = { minutes: number } | { ratio: number }
+
+// Optional: local-time period in which no follow-up fires
+type QuietHours = { start: 'HH:MM', end: 'HH:MM', timezone: string /* IANA */, spreadMinutes?: number }
 ```
 
 With `jitter`, every interval moves by a uniform random offset within the bound, and never drops below the
@@ -88,6 +92,19 @@ intervals are exact.
 ```jsonc
 { "kind": "fixed", "intervalsMinutes": [60, 240], "jitter": { "minutes": 10 } }
 { "kind": "exponential", "initialMinutes": 60, "factor": 2, "maxMinutes": 1440, "jitter": { "ratio": 0.15 } }
+```
+
+With `quietHours`, a follow-up that falls due inside the period is not fired. The sweeper moves its `nextFireAt`
+to the end of the period and emits `follow_up.armed` with the new time; `sequenceIndex` does not move, so the
+step is not consumed. Times are read in `timezone`, daylight-saving changes included, and `start` later than
+`end` crosses midnight. `spreadMinutes` spreads the deferred follow-ups over that many minutes after `end`, each
+chat at its own fixed offset, so a busy instance doesn't fire the whole night's backlog on one tick. Without
+`spreadMinutes`, they are all due at `end`. Without `quietHours`, follow-ups fire at any hour, as before. The
+24 h messaging-window guard still runs first: a row whose window has expired is disarmed, not deferred. Like the
+rest of the config, `quietHours` is captured when the sequence is armed.
+
+```jsonc
+{ "quietHours": { "start": "22:00", "end": "08:00", "timezone": "America/Sao_Paulo", "spreadMinutes": 90 } }
 ```
 
 Template placeholders available to `promptTemplate` and to automation actions
@@ -126,7 +143,7 @@ Every state transition emits a structured event for observability.
 
 | Event                    | When                                                | Key payload fields                                           |
 |--------------------------|-----------------------------------------------------|--------------------------------------------------------------|
-| `follow_up.armed`        | Sequence armed or re-armed after a fire             | `chatId, instanceId, agentId, sequenceIndex, nextFireAt`     |
+| `follow_up.armed`        | Sequence armed, re-armed after a fire, or deferred by quiet hours | `chatId, instanceId, agentId, sequenceIndex, nextFireAt`     |
 | `chat.idle_timeout`      | Sweeper fires — consumed by user-space automations  | `chatId, instanceId, agentId, sequenceIndex, attemptNumber, totalAttempts, syntheticPrompt, minutesSinceLastAgentReply, chatName?` |
 | `follow_up.fired`        | Sweeper successfully fired a follow-up              | `chatId, instanceId, agentId, sequenceIndex, firedAt, syntheticPrompt` |
 | `follow_up.skipped`      | Sweeper encountered an error processing a row       | `chatId, instanceId, agentId, sequenceIndex, reason`         |

@@ -141,6 +141,43 @@ describe('follow-up schemas', () => {
       });
       expect(parsed.schedule.kind).toBe('exponential');
     });
+
+    test('quietHours is optional and absent by default', () => {
+      expect(FollowUpSequenceConfigSchema.parse(validConfig).quietHours).toBeUndefined();
+    });
+
+    test('accepts quietHours with an optional spread', () => {
+      const quietHours = { start: '22:00', end: '08:00', timezone: 'America/Sao_Paulo', spreadMinutes: 90 };
+      expect(FollowUpSequenceConfigSchema.parse({ ...validConfig, quietHours }).quietHours).toEqual(quietHours);
+      expect(
+        FollowUpSequenceConfigSchema.safeParse({
+          ...validConfig,
+          quietHours: { start: '12:00', end: '14:00', timezone: 'UTC' },
+        }).success,
+      ).toBe(true);
+    });
+
+    test('rejects malformed quietHours', () => {
+      const base = { start: '22:00', end: '08:00', timezone: 'America/Sao_Paulo' };
+      for (const quietHours of [
+        { ...base, start: '24:00' },
+        { ...base, end: '8:00' },
+        { ...base, timezone: 'Mars/Olympus_Mons' },
+        { ...base, end: '22:00' },
+        { ...base, spreadMinutes: -1 },
+        { ...base, spreadMinutes: 1.5 },
+        { ...base, spreadMinutes: 840 },
+        { ...base, extra: true },
+        { start: '22:00', end: '08:00' },
+      ]) {
+        expect(FollowUpSequenceConfigSchema.safeParse({ ...validConfig, quietHours }).success).toBe(false);
+      }
+    });
+
+    test('accepts the longest spread that still ends before the next quiet period', () => {
+      const quietHours = { start: '22:00', end: '08:00', timezone: 'America/Sao_Paulo', spreadMinutes: 839 };
+      expect(FollowUpSequenceConfigSchema.safeParse({ ...validConfig, quietHours }).success).toBe(true);
+    });
   });
 
   describe('DisarmReasonSchema', () => {

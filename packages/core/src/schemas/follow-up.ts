@@ -91,6 +91,50 @@ export const FollowUpScheduleSchema = z.discriminatedUnion('kind', [FixedSchedul
 
 export type FollowUpSchedule = z.infer<typeof FollowUpScheduleSchema>;
 
+const TIME_OF_DAY_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
+const MINUTES_PER_DAY = 24 * 60;
+
+export function timeOfDayToMinutes(time: string): number {
+  const [hours, minutes] = time.split(':');
+  return Number(hours) * 60 + Number(minutes);
+}
+
+function isTimeZone(value: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: value });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export const FollowUpQuietHoursSchema = z
+  .object({
+    start: z.string().regex(TIME_OF_DAY_PATTERN, 'start must be HH:MM (24-hour)'),
+    end: z.string().regex(TIME_OF_DAY_PATTERN, 'end must be HH:MM (24-hour)'),
+    timezone: z.string().refine(isTimeZone, 'timezone must be an IANA time zone, e.g. America/Sao_Paulo'),
+    spreadMinutes: z.number().int().nonnegative().optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (!TIME_OF_DAY_PATTERN.test(value.start) || !TIME_OF_DAY_PATTERN.test(value.end)) return;
+    const quietMinutes =
+      (timeOfDayToMinutes(value.end) - timeOfDayToMinutes(value.start) + MINUTES_PER_DAY) % MINUTES_PER_DAY;
+    if (quietMinutes === 0) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['end'], message: 'start and end must differ' });
+      return;
+    }
+    if ((value.spreadMinutes ?? 0) >= MINUTES_PER_DAY - quietMinutes) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['spreadMinutes'],
+        message: 'spreadMinutes must be shorter than the time between end and start',
+      });
+    }
+  });
+
+export type FollowUpQuietHours = z.infer<typeof FollowUpQuietHoursSchema>;
+
 /**
  * Full follow-up sequence configuration.
  *
@@ -128,6 +172,7 @@ export const FollowUpSequenceConfigSchema = z
      * Default: true.
      */
     showTypingIndicator: z.boolean().default(true),
+    quietHours: FollowUpQuietHoursSchema.optional(),
   })
   .strict();
 

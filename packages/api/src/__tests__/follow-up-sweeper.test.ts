@@ -326,6 +326,36 @@ describeWithDb('FollowUpSweeperService (integration)', () => {
     expect(stats.scanned).toBe(0);
   });
 
+  test('quiet hours move a due row to the end of the period without advancing it', async () => {
+    const now = Date.now();
+    const hhmm = (ms: number) => new Date(ms).toISOString().slice(11, 16);
+    const reopensAt = now - (now % MS_PER_MINUTE) + 60 * MS_PER_MINUTE;
+    const quietHours = { start: hhmm(now - 60 * MS_PER_MINUTE), end: hhmm(reopensAt), timezone: 'UTC' };
+
+    await db.insert(chatFollowUpState).values({
+      chatId: testChatId,
+      instanceId: testInstanceId,
+      agentId: null,
+      sequenceConfig: config({ quietHours }),
+      sequenceIndex: 1,
+      lastAgentMessageAt: new Date(now - 10 * MS_PER_MINUTE),
+      nextFireAt: new Date(now - MS_PER_MINUTE),
+    });
+
+    const stats = await service.sweep();
+    expect(stats).toMatchObject({ scanned: 1, fired: 0, deferred: 1 });
+    expect(publishedEvents.map((e) => e.type)).toEqual(['follow_up.armed']);
+    expect(publishedEvents[0]?.payload).toMatchObject({ sequenceIndex: 1, nextFireAt: reopensAt });
+
+    const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    expect(row.sequenceIndex).toBe(1);
+    expect(row.disarmReason).toBeNull();
+    expect(row.nextFireAt.getTime()).toBe(reopensAt);
+
+    const again = await service.sweep();
+    expect(again.scanned).toBe(0);
+  });
+
   test('sweep is a no-op when eventBus is null', async () => {
     const past = new Date(Date.now() - 60_000);
     await db.insert(chatFollowUpState).values({
@@ -340,7 +370,7 @@ describeWithDb('FollowUpSweeperService (integration)', () => {
 
     const noBusService = new FollowUpSweeperService(db, null);
     const stats = await noBusService.sweep();
-    expect(stats).toEqual({ scanned: 0, fired: 0, disarmed: 0, skipped: 0, rearmed: 0 });
+    expect(stats).toEqual({ scanned: 0, fired: 0, disarmed: 0, skipped: 0, deferred: 0, rearmed: 0 });
   });
 
   // ──────────────────────────────────────────────────────────────────────────

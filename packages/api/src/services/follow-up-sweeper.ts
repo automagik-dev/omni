@@ -88,6 +88,7 @@ export interface SweepStats {
   fired: number;
   disarmed: number;
   skipped: number;
+  deferred: number;
   rearmed: number;
   // Index signature so this satisfies `Record<string, unknown>` for the
   // logger's structured-context parameter without a cast at the call site.
@@ -145,6 +146,8 @@ export class FollowUpSweeperService {
       recordFired: async (input) => runTenantWorkDb(this.pool, tenantId, () => this.recordFired(input)),
       recordDisarmed: async (id, reason, at) =>
         runTenantWorkDb(this.pool, tenantId, () => this.recordDisarmed(id, reason, at)),
+      recordDeferred: async (id, sequenceIndex, nextFireAt, at) =>
+        runTenantWorkDb(this.pool, tenantId, () => this.recordDeferred(id, sequenceIndex, nextFireAt, at)),
     };
   }
 
@@ -172,6 +175,19 @@ export class FollowUpSweeperService {
       .where(eq(chatFollowUpState.id, id));
   }
 
+  private async recordDeferred(id: string, sequenceIndex: number, nextFireAt: Date, at: Date): Promise<void> {
+    await this.db
+      .update(chatFollowUpState)
+      .set({ nextFireAt, updatedAt: at })
+      .where(
+        and(
+          eq(chatFollowUpState.id, id),
+          eq(chatFollowUpState.sequenceIndex, sequenceIndex),
+          isNull(chatFollowUpState.disarmReason),
+        ),
+      );
+  }
+
   /**
    * Inject the lifecycle service after construction. Required for the
    * stale-pause re-arm pass introduced in #624 — wired by `services/index.ts`
@@ -194,7 +210,7 @@ export class FollowUpSweeperService {
    */
   async sweep(): Promise<SweepStats> {
     if (!this.eventBus) {
-      return { scanned: 0, fired: 0, disarmed: 0, skipped: 0, rearmed: 0 };
+      return { scanned: 0, fired: 0, disarmed: 0, skipped: 0, deferred: 0, rearmed: 0 };
     }
 
     // Flag-off: the single pre-G5 pass, byte-identical — no enumeration, no
@@ -208,7 +224,7 @@ export class FollowUpSweeperService {
     // transitional NULL-tenant pass outside enforcement. A suspended/archived
     // tenant drops out of the enumeration, so its periodic work stops at the
     // next tick — dequeue-time revalidation at cron cadence.
-    const totals: SweepStats = { scanned: 0, fired: 0, disarmed: 0, skipped: 0, rearmed: 0 };
+    const totals: SweepStats = { scanned: 0, fired: 0, disarmed: 0, skipped: 0, deferred: 0, rearmed: 0 };
     if (this.authPlaneDb) {
       const tenantIds = await enumerateActiveWorkTenants(this.authPlaneDb);
       for (const tenantId of tenantIds) {
@@ -235,7 +251,7 @@ export class FollowUpSweeperService {
   }
 
   private accumulate(totals: SweepStats, pass: SweepStats): void {
-    for (const key of ['scanned', 'fired', 'disarmed', 'skipped', 'rearmed'] as const) {
+    for (const key of ['scanned', 'fired', 'disarmed', 'skipped', 'deferred', 'rearmed'] as const) {
       totals[key] = (totals[key] ?? 0) + (pass[key] ?? 0);
     }
   }
