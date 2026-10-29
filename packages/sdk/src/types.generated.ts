@@ -1528,7 +1528,7 @@ export interface paths {
                         /** @enum {string} */
                         chatType: "dm" | "group" | "channel" | "thread" | "forum" | "voice" | "broadcast" | "community" | "announcement" | "stage";
                         /** @enum {string} */
-                        channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness";
+                        channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness" | "webchat";
                         name?: string;
                         description?: string;
                         /** Format: uri */
@@ -5522,6 +5522,275 @@ export interface components {
         Instance: {
             /**
              * Format: uuid
+             * @description Agent UUID (agents table)
+             */
+            agentId?: string | null;
+            agentReplyFilter?: {
+                /** @enum {string} */
+                mode: "all" | "filtered";
+                conditions?: {
+                    onDm?: boolean;
+                    onMention?: boolean;
+                    onReply?: boolean;
+                    onNameMatch?: boolean;
+                    namePatterns?: string[];
+                };
+            } | null;
+            /** @enum {string} */
+            agentSessionStrategy?: "per_user" | "per_chat" | "per_thread";
+            agentPrefixSenderName?: boolean;
+            agentGateEnabled?: boolean;
+            agentGateModel?: string | null;
+            agentGatePrompt?: string | null;
+            agentWaitForMedia?: boolean;
+            agentSendMediaPath?: boolean;
+            agentSendMediaPathTypes?: string[] | null;
+            agentStalledTimeoutMs?: number;
+            /** @enum {string} */
+            messageSupersedeMode?: "off" | "discard";
+            enableAutoSplit?: boolean;
+            /** @enum {string} */
+            messageFormatMode?: "convert" | "passthrough";
+            disableUsernamePrefix?: boolean;
+            triggerEvents?: string[] | null;
+            triggerReactions?: string[] | null;
+            triggerMentionPatterns?: string[] | null;
+            /** @enum {string} */
+            triggerMode?: "round-trip" | "fire-and-forget";
+            /** Format: uuid */
+            agentChainToInstanceId?: string | null;
+            /** @enum {string} */
+            chainMode?: "off" | "forward" | "bidirectional";
+            sessionReset?: {
+                default?: {
+                    /** @enum {string} */
+                    mode: "none";
+                } | {
+                    /** @enum {string} */
+                    mode: "daily";
+                    hour?: number;
+                } | {
+                    /** @enum {string} */
+                    mode: "idle";
+                    minutes?: number;
+                };
+                dm?: {
+                    /** @enum {string} */
+                    mode: "none";
+                } | {
+                    /** @enum {string} */
+                    mode: "daily";
+                    hour?: number;
+                } | {
+                    /** @enum {string} */
+                    mode: "idle";
+                    minutes?: number;
+                };
+                group?: {
+                    /** @enum {string} */
+                    mode: "none";
+                } | {
+                    /** @enum {string} */
+                    mode: "daily";
+                    hour?: number;
+                } | {
+                    /** @enum {string} */
+                    mode: "idle";
+                    minutes?: number;
+                };
+                thread?: {
+                    /** @enum {string} */
+                    mode: "none";
+                } | {
+                    /** @enum {string} */
+                    mode: "daily";
+                    hour?: number;
+                } | {
+                    /** @enum {string} */
+                    mode: "idle";
+                    minutes?: number;
+                };
+            } | null;
+            inboundMaxAgeMinutes?: number;
+            replayEnabled?: boolean;
+            /** @description WhatsApp (Baileys): typed replyTo on message.received and target on reaction.received/removed (false = events unchanged) */
+            inboundReplyContext: boolean;
+            /** @enum {string} */
+            messageDebounceMode?: "disabled" | "fixed" | "randomized" | "presence";
+            messageDebounceMinMs?: number;
+            messageDebounceGroupMs?: number | null;
+            messageDebounceMaxMs?: number;
+            messageDebounceRestartOnTyping?: boolean;
+            messageDebounceMaxWaitMs?: number | null;
+            /** @enum {string} */
+            messageSplitDelayMode?: "disabled" | "fixed" | "randomized";
+            messageSplitDelayFixedMs?: number;
+            messageSplitDelayMinMs?: number;
+            messageSplitDelayMaxMs?: number;
+            /** @enum {string} */
+            reactionAck?: "on" | "off";
+            reactionAckEmoji?: {
+                [key: string]: string;
+            } | null;
+            ackTimeoutMs?: number;
+            agentAckMessage?: string | null;
+            /** @enum {string} */
+            readReceipts?: "on" | "off" | "exclude-self";
+            markOnlineOnConnect?: boolean;
+            processAudio?: boolean;
+            processImages?: boolean;
+            processVideo?: boolean;
+            processDocuments?: boolean;
+            processMediaOnBlocked?: boolean;
+            downloadMediaOnSync?: boolean;
+            /**
+             * @description Server-side transcription of inbound audio: 'auto' (transcribed as always) or 'off' (stored but never sent to STT)
+             * @enum {string}
+             */
+            audioTranscription: "auto" | "off";
+            /** @enum {string} */
+            accessMode?: "disabled" | "blocklist" | "allowlist";
+            groupHistorySize?: number;
+            /**
+             * @description WhatsApp (Baileys) pairing identity: 'desktop' (macOS Desktop + group history) or 'web' (Ubuntu/Chrome)
+             * @enum {string}
+             */
+            historyIdentity: "desktop" | "web";
+            /** @description WhatsApp (Baileys): request full history on connect */
+            syncFullHistory: boolean;
+            ttsVoiceId?: string | null;
+            ttsModelId?: string | null;
+            /** @description Instance-scope follow-up sequence config */
+            followUpConfig?: {
+                /** @description Master switch — false turns off follow-ups at this scope. */
+                enabled: boolean;
+                schedule: {
+                    /** @enum {string} */
+                    kind: "fixed";
+                    /** @description Minutes between successive follow-ups, in order. */
+                    intervalsMinutes: number[];
+                    /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
+                    jitter?: {
+                        minutes: number;
+                    } | {
+                        ratio: number;
+                    };
+                } | {
+                    /** @enum {string} */
+                    kind: "exponential";
+                    /** @description First interval (minutes). */
+                    initialMinutes: number;
+                    /** @description Multiplier applied each iteration. */
+                    factor: number;
+                    /** @description Upper bound on any single interval. */
+                    maxMinutes: number;
+                    /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
+                    jitter?: {
+                        minutes: number;
+                    } | {
+                        ratio: number;
+                    };
+                };
+                /** @description Hard cap on follow-ups fired per sequence. */
+                maxFollowUps: number;
+                /** @description Template rendered into the synthetic prompt sent to the agent. */
+                promptTemplate: string;
+                /** @description On WhatsApp BSP/Cloud, disarm when last inbound is > 24h old. */
+                stopOutsideMessagingWindow: boolean;
+                /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
+                showTypingIndicator: boolean;
+                /** @description Optional local-time period in which no follow-up fires. A follow-up that falls due inside it is rescheduled to the end of the period without consuming a step of the sequence. start after end crosses midnight. Absent: follow-ups fire at any hour. */
+                quietHours?: {
+                    /**
+                     * @description Local time the quiet period starts, HH:MM (24-hour).
+                     * @example 22:00
+                     */
+                    start: string;
+                    /**
+                     * @description Local time the quiet period ends, HH:MM (24-hour).
+                     * @example 08:00
+                     */
+                    end: string;
+                    /**
+                     * @description IANA time zone of start and end.
+                     * @example America/Sao_Paulo
+                     */
+                    timezone: string;
+                    /** @description Spread deferred follow-ups over this many minutes after end, at a fixed offset per chat. Absent: every deferred follow-up is due at end. Must be shorter than the time between end and start. */
+                    spreadMinutes?: number;
+                };
+            } | null;
+            /** @description Per-outcome close-contact cooldown/escalation overrides (null = defaults) */
+            closeContactConfig?: {
+                won?: {
+                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                    cooldownMs?: number | null;
+                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                    escalationThreshold?: number | null;
+                    /** @description Window in ms in which repeated closes are counted */
+                    escalationWindowMs?: number | null;
+                };
+                lost?: {
+                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                    cooldownMs?: number | null;
+                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                    escalationThreshold?: number | null;
+                    /** @description Window in ms in which repeated closes are counted */
+                    escalationWindowMs?: number | null;
+                };
+                redirected_sac?: {
+                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                    cooldownMs?: number | null;
+                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                    escalationThreshold?: number | null;
+                    /** @description Window in ms in which repeated closes are counted */
+                    escalationWindowMs?: number | null;
+                };
+                unqualified?: {
+                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                    cooldownMs?: number | null;
+                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                    escalationThreshold?: number | null;
+                    /** @description Window in ms in which repeated closes are counted */
+                    escalationWindowMs?: number | null;
+                };
+                no_response?: {
+                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                    cooldownMs?: number | null;
+                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                    escalationThreshold?: number | null;
+                    /** @description Window in ms in which repeated closes are counted */
+                    escalationWindowMs?: number | null;
+                };
+                other?: {
+                    /** @description Soft-close cooldown in ms (null = no cooldown) */
+                    cooldownMs?: number | null;
+                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
+                    escalationThreshold?: number | null;
+                    /** @description Window in ms in which repeated closes are counted */
+                    escalationWindowMs?: number | null;
+                };
+            } | null;
+            /**
+             * @description Outbound pacing (WhatsApp Baileys): 'humanized' keeps the anti-ban delay and typing simulation before each send; 'immediate' skips both. Send requests may ask for 'humanized' with `pacing`; asking for 'immediate' needs outboundPacingOverride on a humanized instance
+             * @enum {string}
+             */
+            outboundPacing?: "humanized" | "immediate";
+            /** @description Let send requests choose `pacing: 'immediate'` on a humanized instance. Default false: such requests are refused with 403. Setting it to true needs a full-access ('*') key; any other key gets 403 */
+            outboundPacingOverride?: boolean;
+            metaPhoneNumberId?: string | null;
+            metaWabaId?: string | null;
+            metaAppId?: string | null;
+            metaBusinessId?: string | null;
+            /** @description Provisioning snapshot; runtime environment version takes precedence */
+            metaApiVersion?: string;
+            /** @enum {string|null} */
+            metaConnectionMethod?: "manual" | "embedded_signup" | null;
+            /** Format: date-time */
+            metaConnectedAt?: string | null;
+            metaDisplayPhoneNumber?: string | null;
+            /**
+             * Format: uuid
              * @description Instance UUID
              */
             id: string;
@@ -5540,34 +5809,8 @@ export interface components {
             profileName: string | null;
             /** @description Profile picture URL */
             profilePicUrl: string | null;
-            /**
-             * @description WhatsApp (Baileys) pairing identity: 'desktop' (macOS Desktop + group history) or 'web' (Ubuntu/Chrome)
-             * @enum {string}
-             */
-            historyIdentity: "desktop" | "web";
-            /** @description WhatsApp (Baileys): request full history on connect */
-            syncFullHistory: boolean;
-            /**
-             * @description Outbound pacing (WhatsApp Baileys): 'humanized' keeps the anti-ban delay and typing simulation before each send; 'immediate' skips both. Send requests may ask for 'humanized' with `pacing`; asking for 'immediate' needs outboundPacingOverride on a humanized instance
-             * @enum {string}
-             */
-            outboundPacing?: "humanized" | "immediate";
-            /** @description Let send requests choose `pacing: 'immediate'` on a humanized instance. Default false: such requests are refused with 403. Setting it to true needs a full-access ('*') key; any other key gets 403 */
-            outboundPacingOverride?: boolean;
-            /**
-             * @description Server-side transcription of inbound audio: 'auto' (transcribed as always) or 'off' (stored but never sent to STT)
-             * @enum {string}
-             */
-            audioTranscription: "auto" | "off";
-            /** @description WhatsApp (Baileys): typed replyTo on message.received and target on reaction.received/removed (false = events unchanged) */
-            inboundReplyContext: boolean;
             /** @description Owner identifier */
             ownerIdentifier: string | null;
-            /**
-             * Format: uuid
-             * @description Agent UUID (agents table)
-             */
-            agentId?: string | null;
             /**
              * Format: uuid
              * @description Provider ID of the assigned agent (read-only; set via the agent)
@@ -5631,97 +5874,6 @@ export interface components {
                     /** @description Resolved handoff field to copy the value from; mutually exclusive with `value` */
                     from?: string;
                 }[];
-            } | null;
-            /** @description Per-outcome close-contact cooldown/escalation overrides (null = defaults) */
-            closeContactConfig?: {
-                won?: {
-                    /** @description Soft-close cooldown in ms (null = no cooldown) */
-                    cooldownMs?: number | null;
-                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
-                    escalationThreshold?: number | null;
-                    /** @description Window in ms in which repeated closes are counted */
-                    escalationWindowMs?: number | null;
-                };
-                lost?: {
-                    /** @description Soft-close cooldown in ms (null = no cooldown) */
-                    cooldownMs?: number | null;
-                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
-                    escalationThreshold?: number | null;
-                    /** @description Window in ms in which repeated closes are counted */
-                    escalationWindowMs?: number | null;
-                };
-                redirected_sac?: {
-                    /** @description Soft-close cooldown in ms (null = no cooldown) */
-                    cooldownMs?: number | null;
-                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
-                    escalationThreshold?: number | null;
-                    /** @description Window in ms in which repeated closes are counted */
-                    escalationWindowMs?: number | null;
-                };
-                unqualified?: {
-                    /** @description Soft-close cooldown in ms (null = no cooldown) */
-                    cooldownMs?: number | null;
-                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
-                    escalationThreshold?: number | null;
-                    /** @description Window in ms in which repeated closes are counted */
-                    escalationWindowMs?: number | null;
-                };
-                no_response?: {
-                    /** @description Soft-close cooldown in ms (null = no cooldown) */
-                    cooldownMs?: number | null;
-                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
-                    escalationThreshold?: number | null;
-                    /** @description Window in ms in which repeated closes are counted */
-                    escalationWindowMs?: number | null;
-                };
-                other?: {
-                    /** @description Soft-close cooldown in ms (null = no cooldown) */
-                    cooldownMs?: number | null;
-                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
-                    escalationThreshold?: number | null;
-                    /** @description Window in ms in which repeated closes are counted */
-                    escalationWindowMs?: number | null;
-                };
-            } | null;
-            /** @description Instance-scope follow-up sequence config */
-            followUpConfig?: {
-                /** @description Master switch — false turns off follow-ups at this scope. */
-                enabled: boolean;
-                schedule: {
-                    /** @enum {string} */
-                    kind: "fixed";
-                    /** @description Minutes between successive follow-ups, in order. */
-                    intervalsMinutes: number[];
-                    /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
-                    jitter?: {
-                        minutes: number;
-                    } | {
-                        ratio: number;
-                    };
-                } | {
-                    /** @enum {string} */
-                    kind: "exponential";
-                    /** @description First interval (minutes). */
-                    initialMinutes: number;
-                    /** @description Multiplier applied each iteration. */
-                    factor: number;
-                    /** @description Upper bound on any single interval. */
-                    maxMinutes: number;
-                    /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
-                    jitter?: {
-                        minutes: number;
-                    } | {
-                        ratio: number;
-                    };
-                };
-                /** @description Hard cap on follow-ups fired per sequence. */
-                maxFollowUps: number;
-                /** @description Template rendered into the synthetic prompt sent to the agent. */
-                promptTemplate: string;
-                /** @description On WhatsApp BSP/Cloud, disarm when last inbound is > 24h old. */
-                stopOutsideMessagingWindow: boolean;
-                /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
-                showTypingIndicator: boolean;
             } | null;
             /**
              * Format: date-time
@@ -9482,6 +9634,26 @@ export interface components {
             stopOutsideMessagingWindow: boolean;
             /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
             showTypingIndicator: boolean;
+            /** @description Optional local-time period in which no follow-up fires. A follow-up that falls due inside it is rescheduled to the end of the period without consuming a step of the sequence. start after end crosses midnight. Absent: follow-ups fire at any hour. */
+            quietHours?: {
+                /**
+                 * @description Local time the quiet period starts, HH:MM (24-hour).
+                 * @example 22:00
+                 */
+                start: string;
+                /**
+                 * @description Local time the quiet period ends, HH:MM (24-hour).
+                 * @example 08:00
+                 */
+                end: string;
+                /**
+                 * @description IANA time zone of start and end.
+                 * @example America/Sao_Paulo
+                 */
+                timezone: string;
+                /** @description Spread deferred follow-ups over this many minutes after end, at a fixed offset per chat. Absent: every deferred follow-up is due at end. Must be shorter than the time between end and start. */
+                spreadMinutes?: number;
+            };
         };
         VoiceSession: {
             /** @description Voice session ID */
@@ -12065,221 +12237,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        items: {
-                            /**
-                             * Format: uuid
-                             * @description Instance UUID
-                             */
-                            id: string;
-                            /** @description Instance name */
-                            name: string;
-                            /**
-                             * @description Channel type
-                             * @enum {string}
-                             */
-                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness" | "webchat";
-                            /** @description Whether instance is active */
-                            isActive: boolean;
-                            /** @description Whether this is the default instance for channel */
-                            isDefault: boolean;
-                            /** @description Connected profile name */
-                            profileName: string | null;
-                            /** @description Profile picture URL */
-                            profilePicUrl: string | null;
-                            /**
-                             * @description WhatsApp (Baileys) pairing identity: 'desktop' (macOS Desktop + group history) or 'web' (Ubuntu/Chrome)
-                             * @enum {string}
-                             */
-                            historyIdentity: "desktop" | "web";
-                            /** @description WhatsApp (Baileys): request full history on connect */
-                            syncFullHistory: boolean;
-                            /**
-                             * @description Outbound pacing (WhatsApp Baileys): 'humanized' keeps the anti-ban delay and typing simulation before each send; 'immediate' skips both. Send requests may ask for 'humanized' with `pacing`; asking for 'immediate' needs outboundPacingOverride on a humanized instance
-                             * @enum {string}
-                             */
-                            outboundPacing?: "humanized" | "immediate";
-                            /** @description Let send requests choose `pacing: 'immediate'` on a humanized instance. Default false: such requests are refused with 403. Setting it to true needs a full-access ('*') key; any other key gets 403 */
-                            outboundPacingOverride?: boolean;
-                            /**
-                             * @description Server-side transcription of inbound audio: 'auto' (transcribed as always) or 'off' (stored but never sent to STT)
-                             * @enum {string}
-                             */
-                            audioTranscription: "auto" | "off";
-                            /** @description WhatsApp (Baileys): typed replyTo on message.received and target on reaction.received/removed (false = events unchanged) */
-                            inboundReplyContext: boolean;
-                            /** @description Owner identifier */
-                            ownerIdentifier: string | null;
-                            /**
-                             * Format: uuid
-                             * @description Agent UUID (agents table)
-                             */
-                            agentId?: string | null;
-                            /**
-                             * Format: uuid
-                             * @description Provider ID of the assigned agent (read-only; set via the agent)
-                             */
-                            agentProviderId?: string | null;
-                            /** @description Agent timeout in seconds */
-                            agentTimeout: number;
-                            /** @description Customer-facing replies sent when agent dispatch fails; one is picked at random per failure (null/empty = env/default fallback) */
-                            agentErrorMessages?: string[] | null;
-                            /** @description Whether streaming is enabled */
-                            agentStreamMode: boolean;
-                            /** @description Gupshup HANDOFF routing options */
-                            gupshupHandoffOptions?: {
-                                /**
-                                 * @description Routing fields merged under whatever the emitter sent; explicit handoff fields always win, so system-initiated handoffs (dispatch error, silence watchdog) still land in a queue
-                                 * @example {
-                                 *       "queue": "SALES"
-                                 *     }
-                                 */
-                                defaultFields?: {
-                                    [key: string]: string;
-                                };
-                                /** @description Prefix rules layered over defaultFields; the first matching rule wins */
-                                fieldsByPhonePrefix?: {
-                                    /**
-                                     * @description Digit-only phone prefixes (country code first, no +)
-                                     * @example [
-                                     *       "5511",
-                                     *       "5521"
-                                     *     ]
-                                     */
-                                    prefixes: string[];
-                                    /**
-                                     * @description Routing fields applied when the customer phone starts with one of the prefixes
-                                     * @example {
-                                     *       "queue": "SALES-SOUTHEAST"
-                                     *     }
-                                     */
-                                    fields: {
-                                        [key: string]: string;
-                                    };
-                                }[];
-                                /**
-                                 * @description Ordered template for the Custom Integration customerFields array. Entries whose source resolves empty are dropped; the array is only sent when non-empty
-                                 * @example [
-                                 *       {
-                                 *         "apiKey": "Queue",
-                                 *         "from": "queue"
-                                 *       },
-                                 *       {
-                                 *         "apiKey": "Handled By",
-                                 *         "value": "assistant"
-                                 *       }
-                                 *     ]
-                                 */
-                                customerFields?: {
-                                    /** @description customerFields apiKey your Gupshup Journey reads */
-                                    apiKey: string;
-                                    /** @description Literal value to send; mutually exclusive with `from` */
-                                    value?: string;
-                                    /** @description Resolved handoff field to copy the value from; mutually exclusive with `value` */
-                                    from?: string;
-                                }[];
-                            } | null;
-                            /** @description Per-outcome close-contact cooldown/escalation overrides (null = defaults) */
-                            closeContactConfig?: {
-                                won?: {
-                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
-                                    cooldownMs?: number | null;
-                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
-                                    escalationThreshold?: number | null;
-                                    /** @description Window in ms in which repeated closes are counted */
-                                    escalationWindowMs?: number | null;
-                                };
-                                lost?: {
-                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
-                                    cooldownMs?: number | null;
-                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
-                                    escalationThreshold?: number | null;
-                                    /** @description Window in ms in which repeated closes are counted */
-                                    escalationWindowMs?: number | null;
-                                };
-                                redirected_sac?: {
-                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
-                                    cooldownMs?: number | null;
-                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
-                                    escalationThreshold?: number | null;
-                                    /** @description Window in ms in which repeated closes are counted */
-                                    escalationWindowMs?: number | null;
-                                };
-                                unqualified?: {
-                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
-                                    cooldownMs?: number | null;
-                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
-                                    escalationThreshold?: number | null;
-                                    /** @description Window in ms in which repeated closes are counted */
-                                    escalationWindowMs?: number | null;
-                                };
-                                no_response?: {
-                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
-                                    cooldownMs?: number | null;
-                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
-                                    escalationThreshold?: number | null;
-                                    /** @description Window in ms in which repeated closes are counted */
-                                    escalationWindowMs?: number | null;
-                                };
-                                other?: {
-                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
-                                    cooldownMs?: number | null;
-                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
-                                    escalationThreshold?: number | null;
-                                    /** @description Window in ms in which repeated closes are counted */
-                                    escalationWindowMs?: number | null;
-                                };
-                            } | null;
-                            /** @description Instance-scope follow-up sequence config */
-                            followUpConfig?: {
-                                /** @description Master switch — false turns off follow-ups at this scope. */
-                                enabled: boolean;
-                                schedule: {
-                                    /** @enum {string} */
-                                    kind: "fixed";
-                                    /** @description Minutes between successive follow-ups, in order. */
-                                    intervalsMinutes: number[];
-                                    /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
-                                    jitter?: {
-                                        minutes: number;
-                                    } | {
-                                        ratio: number;
-                                    };
-                                } | {
-                                    /** @enum {string} */
-                                    kind: "exponential";
-                                    /** @description First interval (minutes). */
-                                    initialMinutes: number;
-                                    /** @description Multiplier applied each iteration. */
-                                    factor: number;
-                                    /** @description Upper bound on any single interval. */
-                                    maxMinutes: number;
-                                    /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
-                                    jitter?: {
-                                        minutes: number;
-                                    } | {
-                                        ratio: number;
-                                    };
-                                };
-                                /** @description Hard cap on follow-ups fired per sequence. */
-                                maxFollowUps: number;
-                                /** @description Template rendered into the synthetic prompt sent to the agent. */
-                                promptTemplate: string;
-                                /** @description On WhatsApp BSP/Cloud, disarm when last inbound is > 24h old. */
-                                stopOutsideMessagingWindow: boolean;
-                                /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
-                                showTypingIndicator: boolean;
-                            } | null;
-                            /**
-                             * Format: date-time
-                             * @description Creation timestamp
-                             */
-                            createdAt: string;
-                            /**
-                             * Format: date-time
-                             * @description Last update timestamp
-                             */
-                            updatedAt: string;
-                        }[];
+                        items: components["schemas"]["Instance"][];
                         meta: {
                             /** @description Whether there are more items */
                             hasMore: boolean;
@@ -12515,221 +12473,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        data: {
-                            /**
-                             * Format: uuid
-                             * @description Instance UUID
-                             */
-                            id: string;
-                            /** @description Instance name */
-                            name: string;
-                            /**
-                             * @description Channel type
-                             * @enum {string}
-                             */
-                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness" | "webchat";
-                            /** @description Whether instance is active */
-                            isActive: boolean;
-                            /** @description Whether this is the default instance for channel */
-                            isDefault: boolean;
-                            /** @description Connected profile name */
-                            profileName: string | null;
-                            /** @description Profile picture URL */
-                            profilePicUrl: string | null;
-                            /**
-                             * @description WhatsApp (Baileys) pairing identity: 'desktop' (macOS Desktop + group history) or 'web' (Ubuntu/Chrome)
-                             * @enum {string}
-                             */
-                            historyIdentity: "desktop" | "web";
-                            /** @description WhatsApp (Baileys): request full history on connect */
-                            syncFullHistory: boolean;
-                            /**
-                             * @description Outbound pacing (WhatsApp Baileys): 'humanized' keeps the anti-ban delay and typing simulation before each send; 'immediate' skips both. Send requests may ask for 'humanized' with `pacing`; asking for 'immediate' needs outboundPacingOverride on a humanized instance
-                             * @enum {string}
-                             */
-                            outboundPacing?: "humanized" | "immediate";
-                            /** @description Let send requests choose `pacing: 'immediate'` on a humanized instance. Default false: such requests are refused with 403. Setting it to true needs a full-access ('*') key; any other key gets 403 */
-                            outboundPacingOverride?: boolean;
-                            /**
-                             * @description Server-side transcription of inbound audio: 'auto' (transcribed as always) or 'off' (stored but never sent to STT)
-                             * @enum {string}
-                             */
-                            audioTranscription: "auto" | "off";
-                            /** @description WhatsApp (Baileys): typed replyTo on message.received and target on reaction.received/removed (false = events unchanged) */
-                            inboundReplyContext: boolean;
-                            /** @description Owner identifier */
-                            ownerIdentifier: string | null;
-                            /**
-                             * Format: uuid
-                             * @description Agent UUID (agents table)
-                             */
-                            agentId?: string | null;
-                            /**
-                             * Format: uuid
-                             * @description Provider ID of the assigned agent (read-only; set via the agent)
-                             */
-                            agentProviderId?: string | null;
-                            /** @description Agent timeout in seconds */
-                            agentTimeout: number;
-                            /** @description Customer-facing replies sent when agent dispatch fails; one is picked at random per failure (null/empty = env/default fallback) */
-                            agentErrorMessages?: string[] | null;
-                            /** @description Whether streaming is enabled */
-                            agentStreamMode: boolean;
-                            /** @description Gupshup HANDOFF routing options */
-                            gupshupHandoffOptions?: {
-                                /**
-                                 * @description Routing fields merged under whatever the emitter sent; explicit handoff fields always win, so system-initiated handoffs (dispatch error, silence watchdog) still land in a queue
-                                 * @example {
-                                 *       "queue": "SALES"
-                                 *     }
-                                 */
-                                defaultFields?: {
-                                    [key: string]: string;
-                                };
-                                /** @description Prefix rules layered over defaultFields; the first matching rule wins */
-                                fieldsByPhonePrefix?: {
-                                    /**
-                                     * @description Digit-only phone prefixes (country code first, no +)
-                                     * @example [
-                                     *       "5511",
-                                     *       "5521"
-                                     *     ]
-                                     */
-                                    prefixes: string[];
-                                    /**
-                                     * @description Routing fields applied when the customer phone starts with one of the prefixes
-                                     * @example {
-                                     *       "queue": "SALES-SOUTHEAST"
-                                     *     }
-                                     */
-                                    fields: {
-                                        [key: string]: string;
-                                    };
-                                }[];
-                                /**
-                                 * @description Ordered template for the Custom Integration customerFields array. Entries whose source resolves empty are dropped; the array is only sent when non-empty
-                                 * @example [
-                                 *       {
-                                 *         "apiKey": "Queue",
-                                 *         "from": "queue"
-                                 *       },
-                                 *       {
-                                 *         "apiKey": "Handled By",
-                                 *         "value": "assistant"
-                                 *       }
-                                 *     ]
-                                 */
-                                customerFields?: {
-                                    /** @description customerFields apiKey your Gupshup Journey reads */
-                                    apiKey: string;
-                                    /** @description Literal value to send; mutually exclusive with `from` */
-                                    value?: string;
-                                    /** @description Resolved handoff field to copy the value from; mutually exclusive with `value` */
-                                    from?: string;
-                                }[];
-                            } | null;
-                            /** @description Per-outcome close-contact cooldown/escalation overrides (null = defaults) */
-                            closeContactConfig?: {
-                                won?: {
-                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
-                                    cooldownMs?: number | null;
-                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
-                                    escalationThreshold?: number | null;
-                                    /** @description Window in ms in which repeated closes are counted */
-                                    escalationWindowMs?: number | null;
-                                };
-                                lost?: {
-                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
-                                    cooldownMs?: number | null;
-                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
-                                    escalationThreshold?: number | null;
-                                    /** @description Window in ms in which repeated closes are counted */
-                                    escalationWindowMs?: number | null;
-                                };
-                                redirected_sac?: {
-                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
-                                    cooldownMs?: number | null;
-                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
-                                    escalationThreshold?: number | null;
-                                    /** @description Window in ms in which repeated closes are counted */
-                                    escalationWindowMs?: number | null;
-                                };
-                                unqualified?: {
-                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
-                                    cooldownMs?: number | null;
-                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
-                                    escalationThreshold?: number | null;
-                                    /** @description Window in ms in which repeated closes are counted */
-                                    escalationWindowMs?: number | null;
-                                };
-                                no_response?: {
-                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
-                                    cooldownMs?: number | null;
-                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
-                                    escalationThreshold?: number | null;
-                                    /** @description Window in ms in which repeated closes are counted */
-                                    escalationWindowMs?: number | null;
-                                };
-                                other?: {
-                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
-                                    cooldownMs?: number | null;
-                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
-                                    escalationThreshold?: number | null;
-                                    /** @description Window in ms in which repeated closes are counted */
-                                    escalationWindowMs?: number | null;
-                                };
-                            } | null;
-                            /** @description Instance-scope follow-up sequence config */
-                            followUpConfig?: {
-                                /** @description Master switch — false turns off follow-ups at this scope. */
-                                enabled: boolean;
-                                schedule: {
-                                    /** @enum {string} */
-                                    kind: "fixed";
-                                    /** @description Minutes between successive follow-ups, in order. */
-                                    intervalsMinutes: number[];
-                                    /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
-                                    jitter?: {
-                                        minutes: number;
-                                    } | {
-                                        ratio: number;
-                                    };
-                                } | {
-                                    /** @enum {string} */
-                                    kind: "exponential";
-                                    /** @description First interval (minutes). */
-                                    initialMinutes: number;
-                                    /** @description Multiplier applied each iteration. */
-                                    factor: number;
-                                    /** @description Upper bound on any single interval. */
-                                    maxMinutes: number;
-                                    /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
-                                    jitter?: {
-                                        minutes: number;
-                                    } | {
-                                        ratio: number;
-                                    };
-                                };
-                                /** @description Hard cap on follow-ups fired per sequence. */
-                                maxFollowUps: number;
-                                /** @description Template rendered into the synthetic prompt sent to the agent. */
-                                promptTemplate: string;
-                                /** @description On WhatsApp BSP/Cloud, disarm when last inbound is > 24h old. */
-                                stopOutsideMessagingWindow: boolean;
-                                /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
-                                showTypingIndicator: boolean;
-                            } | null;
-                            /**
-                             * Format: date-time
-                             * @description Creation timestamp
-                             */
-                            createdAt: string;
-                            /**
-                             * Format: date-time
-                             * @description Last update timestamp
-                             */
-                            updatedAt: string;
-                        };
+                        data: components["schemas"]["Instance"];
                     };
                 };
             };
@@ -12835,221 +12579,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        data: {
-                            /**
-                             * Format: uuid
-                             * @description Instance UUID
-                             */
-                            id: string;
-                            /** @description Instance name */
-                            name: string;
-                            /**
-                             * @description Channel type
-                             * @enum {string}
-                             */
-                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness" | "webchat";
-                            /** @description Whether instance is active */
-                            isActive: boolean;
-                            /** @description Whether this is the default instance for channel */
-                            isDefault: boolean;
-                            /** @description Connected profile name */
-                            profileName: string | null;
-                            /** @description Profile picture URL */
-                            profilePicUrl: string | null;
-                            /**
-                             * @description WhatsApp (Baileys) pairing identity: 'desktop' (macOS Desktop + group history) or 'web' (Ubuntu/Chrome)
-                             * @enum {string}
-                             */
-                            historyIdentity: "desktop" | "web";
-                            /** @description WhatsApp (Baileys): request full history on connect */
-                            syncFullHistory: boolean;
-                            /**
-                             * @description Outbound pacing (WhatsApp Baileys): 'humanized' keeps the anti-ban delay and typing simulation before each send; 'immediate' skips both. Send requests may ask for 'humanized' with `pacing`; asking for 'immediate' needs outboundPacingOverride on a humanized instance
-                             * @enum {string}
-                             */
-                            outboundPacing?: "humanized" | "immediate";
-                            /** @description Let send requests choose `pacing: 'immediate'` on a humanized instance. Default false: such requests are refused with 403. Setting it to true needs a full-access ('*') key; any other key gets 403 */
-                            outboundPacingOverride?: boolean;
-                            /**
-                             * @description Server-side transcription of inbound audio: 'auto' (transcribed as always) or 'off' (stored but never sent to STT)
-                             * @enum {string}
-                             */
-                            audioTranscription: "auto" | "off";
-                            /** @description WhatsApp (Baileys): typed replyTo on message.received and target on reaction.received/removed (false = events unchanged) */
-                            inboundReplyContext: boolean;
-                            /** @description Owner identifier */
-                            ownerIdentifier: string | null;
-                            /**
-                             * Format: uuid
-                             * @description Agent UUID (agents table)
-                             */
-                            agentId?: string | null;
-                            /**
-                             * Format: uuid
-                             * @description Provider ID of the assigned agent (read-only; set via the agent)
-                             */
-                            agentProviderId?: string | null;
-                            /** @description Agent timeout in seconds */
-                            agentTimeout: number;
-                            /** @description Customer-facing replies sent when agent dispatch fails; one is picked at random per failure (null/empty = env/default fallback) */
-                            agentErrorMessages?: string[] | null;
-                            /** @description Whether streaming is enabled */
-                            agentStreamMode: boolean;
-                            /** @description Gupshup HANDOFF routing options */
-                            gupshupHandoffOptions?: {
-                                /**
-                                 * @description Routing fields merged under whatever the emitter sent; explicit handoff fields always win, so system-initiated handoffs (dispatch error, silence watchdog) still land in a queue
-                                 * @example {
-                                 *       "queue": "SALES"
-                                 *     }
-                                 */
-                                defaultFields?: {
-                                    [key: string]: string;
-                                };
-                                /** @description Prefix rules layered over defaultFields; the first matching rule wins */
-                                fieldsByPhonePrefix?: {
-                                    /**
-                                     * @description Digit-only phone prefixes (country code first, no +)
-                                     * @example [
-                                     *       "5511",
-                                     *       "5521"
-                                     *     ]
-                                     */
-                                    prefixes: string[];
-                                    /**
-                                     * @description Routing fields applied when the customer phone starts with one of the prefixes
-                                     * @example {
-                                     *       "queue": "SALES-SOUTHEAST"
-                                     *     }
-                                     */
-                                    fields: {
-                                        [key: string]: string;
-                                    };
-                                }[];
-                                /**
-                                 * @description Ordered template for the Custom Integration customerFields array. Entries whose source resolves empty are dropped; the array is only sent when non-empty
-                                 * @example [
-                                 *       {
-                                 *         "apiKey": "Queue",
-                                 *         "from": "queue"
-                                 *       },
-                                 *       {
-                                 *         "apiKey": "Handled By",
-                                 *         "value": "assistant"
-                                 *       }
-                                 *     ]
-                                 */
-                                customerFields?: {
-                                    /** @description customerFields apiKey your Gupshup Journey reads */
-                                    apiKey: string;
-                                    /** @description Literal value to send; mutually exclusive with `from` */
-                                    value?: string;
-                                    /** @description Resolved handoff field to copy the value from; mutually exclusive with `value` */
-                                    from?: string;
-                                }[];
-                            } | null;
-                            /** @description Per-outcome close-contact cooldown/escalation overrides (null = defaults) */
-                            closeContactConfig?: {
-                                won?: {
-                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
-                                    cooldownMs?: number | null;
-                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
-                                    escalationThreshold?: number | null;
-                                    /** @description Window in ms in which repeated closes are counted */
-                                    escalationWindowMs?: number | null;
-                                };
-                                lost?: {
-                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
-                                    cooldownMs?: number | null;
-                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
-                                    escalationThreshold?: number | null;
-                                    /** @description Window in ms in which repeated closes are counted */
-                                    escalationWindowMs?: number | null;
-                                };
-                                redirected_sac?: {
-                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
-                                    cooldownMs?: number | null;
-                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
-                                    escalationThreshold?: number | null;
-                                    /** @description Window in ms in which repeated closes are counted */
-                                    escalationWindowMs?: number | null;
-                                };
-                                unqualified?: {
-                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
-                                    cooldownMs?: number | null;
-                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
-                                    escalationThreshold?: number | null;
-                                    /** @description Window in ms in which repeated closes are counted */
-                                    escalationWindowMs?: number | null;
-                                };
-                                no_response?: {
-                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
-                                    cooldownMs?: number | null;
-                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
-                                    escalationThreshold?: number | null;
-                                    /** @description Window in ms in which repeated closes are counted */
-                                    escalationWindowMs?: number | null;
-                                };
-                                other?: {
-                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
-                                    cooldownMs?: number | null;
-                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
-                                    escalationThreshold?: number | null;
-                                    /** @description Window in ms in which repeated closes are counted */
-                                    escalationWindowMs?: number | null;
-                                };
-                            } | null;
-                            /** @description Instance-scope follow-up sequence config */
-                            followUpConfig?: {
-                                /** @description Master switch — false turns off follow-ups at this scope. */
-                                enabled: boolean;
-                                schedule: {
-                                    /** @enum {string} */
-                                    kind: "fixed";
-                                    /** @description Minutes between successive follow-ups, in order. */
-                                    intervalsMinutes: number[];
-                                    /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
-                                    jitter?: {
-                                        minutes: number;
-                                    } | {
-                                        ratio: number;
-                                    };
-                                } | {
-                                    /** @enum {string} */
-                                    kind: "exponential";
-                                    /** @description First interval (minutes). */
-                                    initialMinutes: number;
-                                    /** @description Multiplier applied each iteration. */
-                                    factor: number;
-                                    /** @description Upper bound on any single interval. */
-                                    maxMinutes: number;
-                                    /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
-                                    jitter?: {
-                                        minutes: number;
-                                    } | {
-                                        ratio: number;
-                                    };
-                                };
-                                /** @description Hard cap on follow-ups fired per sequence. */
-                                maxFollowUps: number;
-                                /** @description Template rendered into the synthetic prompt sent to the agent. */
-                                promptTemplate: string;
-                                /** @description On WhatsApp BSP/Cloud, disarm when last inbound is > 24h old. */
-                                stopOutsideMessagingWindow: boolean;
-                                /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
-                                showTypingIndicator: boolean;
-                            } | null;
-                            /**
-                             * Format: date-time
-                             * @description Creation timestamp
-                             */
-                            createdAt: string;
-                            /**
-                             * Format: date-time
-                             * @description Last update timestamp
-                             */
-                            updatedAt: string;
-                        };
+                        data: components["schemas"]["Instance"];
                     };
                 };
             };
@@ -13143,10 +12673,7 @@ export interface operations {
                      * @enum {string}
                      */
                     channel?: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness" | "webchat";
-                    /**
-                     * Format: uuid
-                     * @description Agent UUID (agents table)
-                     */
+                    /** Format: uuid */
                     agentId?: string | null;
                     /**
                      * @description Agent timeout in seconds
@@ -13167,38 +12694,14 @@ export interface operations {
                     isDefault?: boolean;
                     /** @description Bot token for Discord instances */
                     token?: string;
-                    /**
-                     * @description WhatsApp (Baileys) pairing identity (default: desktop). 'desktop' = macOS Desktop + group history, shows as "Mac OS" in Linked Devices; 'web' = Ubuntu/Chrome. Applies on next pairing
-                     * @default desktop
-                     * @enum {string}
-                     */
+                    /** @enum {string} */
                     historyIdentity?: "desktop" | "web";
-                    /**
-                     * @description WhatsApp (Baileys): request full message history on connect (default: false)
-                     * @default false
-                     */
                     syncFullHistory?: boolean;
-                    /**
-                     * @description Outbound pacing (WhatsApp Baileys): 'humanized' keeps the anti-ban delay and typing simulation before each send; 'immediate' skips both. Send requests may ask for 'humanized' with `pacing`; asking for 'immediate' needs outboundPacingOverride on a humanized instance
-                     * @default humanized
-                     * @enum {string}
-                     */
+                    /** @enum {string} */
                     outboundPacing?: "humanized" | "immediate";
-                    /**
-                     * @description Let send requests choose `pacing: 'immediate'` on a humanized instance. Default false: such requests are refused with 403. Setting it to true needs a full-access ('*') key; any other key gets 403
-                     * @default false
-                     */
                     outboundPacingOverride?: boolean;
-                    /**
-                     * @description Server-side transcription of inbound audio (default: auto). 'auto' = transcribed as always; 'off' = stored but never sent to STT, and a skipped media.processed is emitted instead
-                     * @default auto
-                     * @enum {string}
-                     */
+                    /** @enum {string} */
                     audioTranscription?: "auto" | "off";
-                    /**
-                     * @description WhatsApp (Baileys): add the typed replyTo to message.received and target to reaction.received/removed (default: false = events unchanged). Read at connect: restart the instance after changing it
-                     * @default false
-                     */
                     inboundReplyContext?: boolean;
                     /**
                      * @description Gupshup HANDOFF routing defaults and customerFields template (gupshup instances only). Read by the plugin at connect: restart the instance after changing it. null clears it
@@ -13281,14 +12784,6 @@ export interface operations {
                             from?: string;
                         }[];
                     } | null;
-                    /**
-                     * @description Per-outcome overrides for POST /messages/send/close-contact cooldown and escalation. Omitted outcomes/keys use the defaults; null clears it
-                     * @example {
-                     *       "no_response": {
-                     *         "escalationThreshold": null
-                     *       }
-                     *     }
-                     */
                     closeContactConfig?: {
                         won?: {
                             /** @description Soft-close cooldown in ms (null = no cooldown) */
@@ -13339,6 +12834,198 @@ export interface operations {
                             escalationWindowMs?: number | null;
                         };
                     } | null;
+                    agentReplyFilter?: {
+                        /** @enum {string} */
+                        mode: "all" | "filtered";
+                        conditions?: {
+                            onDm?: boolean;
+                            onMention?: boolean;
+                            onReply?: boolean;
+                            onNameMatch?: boolean;
+                            namePatterns?: string[];
+                        };
+                    } | null;
+                    /** @enum {string} */
+                    agentSessionStrategy?: "per_user" | "per_chat" | "per_thread";
+                    agentPrefixSenderName?: boolean;
+                    agentGateEnabled?: boolean;
+                    agentGateModel?: string | null;
+                    agentGatePrompt?: string | null;
+                    agentWaitForMedia?: boolean;
+                    agentSendMediaPath?: boolean;
+                    agentSendMediaPathTypes?: string[] | null;
+                    agentStalledTimeoutMs?: number;
+                    /** @enum {string} */
+                    messageSupersedeMode?: "off" | "discard";
+                    enableAutoSplit?: boolean;
+                    /** @enum {string} */
+                    messageFormatMode?: "convert" | "passthrough";
+                    disableUsernamePrefix?: boolean;
+                    triggerEvents?: string[] | null;
+                    triggerReactions?: string[] | null;
+                    triggerMentionPatterns?: string[] | null;
+                    /** @enum {string} */
+                    triggerMode?: "round-trip" | "fire-and-forget";
+                    /** Format: uuid */
+                    agentChainToInstanceId?: string | null;
+                    /** @enum {string} */
+                    chainMode?: "off" | "forward" | "bidirectional";
+                    sessionReset?: {
+                        default?: {
+                            /** @enum {string} */
+                            mode: "none";
+                        } | {
+                            /** @enum {string} */
+                            mode: "daily";
+                            hour?: number;
+                        } | {
+                            /** @enum {string} */
+                            mode: "idle";
+                            minutes?: number;
+                        };
+                        dm?: {
+                            /** @enum {string} */
+                            mode: "none";
+                        } | {
+                            /** @enum {string} */
+                            mode: "daily";
+                            hour?: number;
+                        } | {
+                            /** @enum {string} */
+                            mode: "idle";
+                            minutes?: number;
+                        };
+                        group?: {
+                            /** @enum {string} */
+                            mode: "none";
+                        } | {
+                            /** @enum {string} */
+                            mode: "daily";
+                            hour?: number;
+                        } | {
+                            /** @enum {string} */
+                            mode: "idle";
+                            minutes?: number;
+                        };
+                        thread?: {
+                            /** @enum {string} */
+                            mode: "none";
+                        } | {
+                            /** @enum {string} */
+                            mode: "daily";
+                            hour?: number;
+                        } | {
+                            /** @enum {string} */
+                            mode: "idle";
+                            minutes?: number;
+                        };
+                    } | null;
+                    inboundMaxAgeMinutes?: number;
+                    replayEnabled?: boolean;
+                    /** @enum {string} */
+                    messageDebounceMode?: "disabled" | "fixed" | "randomized" | "presence";
+                    messageDebounceMinMs?: number;
+                    messageDebounceGroupMs?: number | null;
+                    messageDebounceMaxMs?: number;
+                    messageDebounceRestartOnTyping?: boolean;
+                    messageDebounceMaxWaitMs?: number | null;
+                    /** @enum {string} */
+                    messageSplitDelayMode?: "disabled" | "fixed" | "randomized";
+                    messageSplitDelayFixedMs?: number;
+                    messageSplitDelayMinMs?: number;
+                    messageSplitDelayMaxMs?: number;
+                    /** @enum {string} */
+                    reactionAck?: "on" | "off";
+                    reactionAckEmoji?: {
+                        [key: string]: string;
+                    } | null;
+                    ackTimeoutMs?: number;
+                    agentAckMessage?: string | null;
+                    /** @enum {string} */
+                    readReceipts?: "on" | "off" | "exclude-self";
+                    markOnlineOnConnect?: boolean;
+                    processAudio?: boolean;
+                    processImages?: boolean;
+                    processVideo?: boolean;
+                    processDocuments?: boolean;
+                    processMediaOnBlocked?: boolean;
+                    downloadMediaOnSync?: boolean;
+                    /** @enum {string} */
+                    accessMode?: "disabled" | "blocklist" | "allowlist";
+                    groupHistorySize?: number;
+                    ttsVoiceId?: string | null;
+                    ttsModelId?: string | null;
+                    /** @description Follow-up sequence configuration. */
+                    followUpConfig?: {
+                        /** @description Master switch — false turns off follow-ups at this scope. */
+                        enabled: boolean;
+                        schedule: {
+                            /** @enum {string} */
+                            kind: "fixed";
+                            /** @description Minutes between successive follow-ups, in order. */
+                            intervalsMinutes: number[];
+                            /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
+                            jitter?: {
+                                minutes: number;
+                            } | {
+                                ratio: number;
+                            };
+                        } | {
+                            /** @enum {string} */
+                            kind: "exponential";
+                            /** @description First interval (minutes). */
+                            initialMinutes: number;
+                            /** @description Multiplier applied each iteration. */
+                            factor: number;
+                            /** @description Upper bound on any single interval. */
+                            maxMinutes: number;
+                            /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
+                            jitter?: {
+                                minutes: number;
+                            } | {
+                                ratio: number;
+                            };
+                        };
+                        /** @description Hard cap on follow-ups fired per sequence. */
+                        maxFollowUps: number;
+                        /** @description Template rendered into the synthetic prompt sent to the agent. */
+                        promptTemplate: string;
+                        /** @description On WhatsApp BSP/Cloud, disarm when last inbound is > 24h old. */
+                        stopOutsideMessagingWindow: boolean;
+                        /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
+                        showTypingIndicator: boolean;
+                        /** @description Optional local-time period in which no follow-up fires. A follow-up that falls due inside it is rescheduled to the end of the period without consuming a step of the sequence. start after end crosses midnight. Absent: follow-ups fire at any hour. */
+                        quietHours?: {
+                            /**
+                             * @description Local time the quiet period starts, HH:MM (24-hour).
+                             * @example 22:00
+                             */
+                            start: string;
+                            /**
+                             * @description Local time the quiet period ends, HH:MM (24-hour).
+                             * @example 08:00
+                             */
+                            end: string;
+                            /**
+                             * @description IANA time zone of start and end.
+                             * @example America/Sao_Paulo
+                             */
+                            timezone: string;
+                            /** @description Spread deferred follow-ups over this many minutes after end, at a fixed offset per chat. Absent: every deferred follow-up is due at end. Must be shorter than the time between end and start. */
+                            spreadMinutes?: number;
+                        };
+                    } | null;
+                    metaPhoneNumberId?: string | null;
+                    metaWabaId?: string | null;
+                    metaAppId?: string | null;
+                    metaBusinessId?: string | null;
+                    /** @description Provisioning snapshot; runtime environment version takes precedence */
+                    metaApiVersion?: string;
+                    /** @enum {string|null} */
+                    metaConnectionMethod?: "manual" | "embedded_signup" | null;
+                    /** Format: date-time */
+                    metaConnectedAt?: string | null;
+                    metaDisplayPhoneNumber?: string | null;
                 };
             };
         };
@@ -13350,221 +13037,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        data: {
-                            /**
-                             * Format: uuid
-                             * @description Instance UUID
-                             */
-                            id: string;
-                            /** @description Instance name */
-                            name: string;
-                            /**
-                             * @description Channel type
-                             * @enum {string}
-                             */
-                            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness" | "webchat";
-                            /** @description Whether instance is active */
-                            isActive: boolean;
-                            /** @description Whether this is the default instance for channel */
-                            isDefault: boolean;
-                            /** @description Connected profile name */
-                            profileName: string | null;
-                            /** @description Profile picture URL */
-                            profilePicUrl: string | null;
-                            /**
-                             * @description WhatsApp (Baileys) pairing identity: 'desktop' (macOS Desktop + group history) or 'web' (Ubuntu/Chrome)
-                             * @enum {string}
-                             */
-                            historyIdentity: "desktop" | "web";
-                            /** @description WhatsApp (Baileys): request full history on connect */
-                            syncFullHistory: boolean;
-                            /**
-                             * @description Outbound pacing (WhatsApp Baileys): 'humanized' keeps the anti-ban delay and typing simulation before each send; 'immediate' skips both. Send requests may ask for 'humanized' with `pacing`; asking for 'immediate' needs outboundPacingOverride on a humanized instance
-                             * @enum {string}
-                             */
-                            outboundPacing?: "humanized" | "immediate";
-                            /** @description Let send requests choose `pacing: 'immediate'` on a humanized instance. Default false: such requests are refused with 403. Setting it to true needs a full-access ('*') key; any other key gets 403 */
-                            outboundPacingOverride?: boolean;
-                            /**
-                             * @description Server-side transcription of inbound audio: 'auto' (transcribed as always) or 'off' (stored but never sent to STT)
-                             * @enum {string}
-                             */
-                            audioTranscription: "auto" | "off";
-                            /** @description WhatsApp (Baileys): typed replyTo on message.received and target on reaction.received/removed (false = events unchanged) */
-                            inboundReplyContext: boolean;
-                            /** @description Owner identifier */
-                            ownerIdentifier: string | null;
-                            /**
-                             * Format: uuid
-                             * @description Agent UUID (agents table)
-                             */
-                            agentId?: string | null;
-                            /**
-                             * Format: uuid
-                             * @description Provider ID of the assigned agent (read-only; set via the agent)
-                             */
-                            agentProviderId?: string | null;
-                            /** @description Agent timeout in seconds */
-                            agentTimeout: number;
-                            /** @description Customer-facing replies sent when agent dispatch fails; one is picked at random per failure (null/empty = env/default fallback) */
-                            agentErrorMessages?: string[] | null;
-                            /** @description Whether streaming is enabled */
-                            agentStreamMode: boolean;
-                            /** @description Gupshup HANDOFF routing options */
-                            gupshupHandoffOptions?: {
-                                /**
-                                 * @description Routing fields merged under whatever the emitter sent; explicit handoff fields always win, so system-initiated handoffs (dispatch error, silence watchdog) still land in a queue
-                                 * @example {
-                                 *       "queue": "SALES"
-                                 *     }
-                                 */
-                                defaultFields?: {
-                                    [key: string]: string;
-                                };
-                                /** @description Prefix rules layered over defaultFields; the first matching rule wins */
-                                fieldsByPhonePrefix?: {
-                                    /**
-                                     * @description Digit-only phone prefixes (country code first, no +)
-                                     * @example [
-                                     *       "5511",
-                                     *       "5521"
-                                     *     ]
-                                     */
-                                    prefixes: string[];
-                                    /**
-                                     * @description Routing fields applied when the customer phone starts with one of the prefixes
-                                     * @example {
-                                     *       "queue": "SALES-SOUTHEAST"
-                                     *     }
-                                     */
-                                    fields: {
-                                        [key: string]: string;
-                                    };
-                                }[];
-                                /**
-                                 * @description Ordered template for the Custom Integration customerFields array. Entries whose source resolves empty are dropped; the array is only sent when non-empty
-                                 * @example [
-                                 *       {
-                                 *         "apiKey": "Queue",
-                                 *         "from": "queue"
-                                 *       },
-                                 *       {
-                                 *         "apiKey": "Handled By",
-                                 *         "value": "assistant"
-                                 *       }
-                                 *     ]
-                                 */
-                                customerFields?: {
-                                    /** @description customerFields apiKey your Gupshup Journey reads */
-                                    apiKey: string;
-                                    /** @description Literal value to send; mutually exclusive with `from` */
-                                    value?: string;
-                                    /** @description Resolved handoff field to copy the value from; mutually exclusive with `value` */
-                                    from?: string;
-                                }[];
-                            } | null;
-                            /** @description Per-outcome close-contact cooldown/escalation overrides (null = defaults) */
-                            closeContactConfig?: {
-                                won?: {
-                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
-                                    cooldownMs?: number | null;
-                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
-                                    escalationThreshold?: number | null;
-                                    /** @description Window in ms in which repeated closes are counted */
-                                    escalationWindowMs?: number | null;
-                                };
-                                lost?: {
-                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
-                                    cooldownMs?: number | null;
-                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
-                                    escalationThreshold?: number | null;
-                                    /** @description Window in ms in which repeated closes are counted */
-                                    escalationWindowMs?: number | null;
-                                };
-                                redirected_sac?: {
-                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
-                                    cooldownMs?: number | null;
-                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
-                                    escalationThreshold?: number | null;
-                                    /** @description Window in ms in which repeated closes are counted */
-                                    escalationWindowMs?: number | null;
-                                };
-                                unqualified?: {
-                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
-                                    cooldownMs?: number | null;
-                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
-                                    escalationThreshold?: number | null;
-                                    /** @description Window in ms in which repeated closes are counted */
-                                    escalationWindowMs?: number | null;
-                                };
-                                no_response?: {
-                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
-                                    cooldownMs?: number | null;
-                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
-                                    escalationThreshold?: number | null;
-                                    /** @description Window in ms in which repeated closes are counted */
-                                    escalationWindowMs?: number | null;
-                                };
-                                other?: {
-                                    /** @description Soft-close cooldown in ms (null = no cooldown) */
-                                    cooldownMs?: number | null;
-                                    /** @description Closes with the same outcome within the window that promote to terminal (null = never) */
-                                    escalationThreshold?: number | null;
-                                    /** @description Window in ms in which repeated closes are counted */
-                                    escalationWindowMs?: number | null;
-                                };
-                            } | null;
-                            /** @description Instance-scope follow-up sequence config */
-                            followUpConfig?: {
-                                /** @description Master switch — false turns off follow-ups at this scope. */
-                                enabled: boolean;
-                                schedule: {
-                                    /** @enum {string} */
-                                    kind: "fixed";
-                                    /** @description Minutes between successive follow-ups, in order. */
-                                    intervalsMinutes: number[];
-                                    /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
-                                    jitter?: {
-                                        minutes: number;
-                                    } | {
-                                        ratio: number;
-                                    };
-                                } | {
-                                    /** @enum {string} */
-                                    kind: "exponential";
-                                    /** @description First interval (minutes). */
-                                    initialMinutes: number;
-                                    /** @description Multiplier applied each iteration. */
-                                    factor: number;
-                                    /** @description Upper bound on any single interval. */
-                                    maxMinutes: number;
-                                    /** @description Optional random spread on every interval: a uniform offset within ±minutes, or within ±ratio of the interval, never below the smaller of the interval and one minute. Absent: exact intervals. */
-                                    jitter?: {
-                                        minutes: number;
-                                    } | {
-                                        ratio: number;
-                                    };
-                                };
-                                /** @description Hard cap on follow-ups fired per sequence. */
-                                maxFollowUps: number;
-                                /** @description Template rendered into the synthetic prompt sent to the agent. */
-                                promptTemplate: string;
-                                /** @description On WhatsApp BSP/Cloud, disarm when last inbound is > 24h old. */
-                                stopOutsideMessagingWindow: boolean;
-                                /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
-                                showTypingIndicator: boolean;
-                            } | null;
-                            /**
-                             * Format: date-time
-                             * @description Creation timestamp
-                             */
-                            createdAt: string;
-                            /**
-                             * Format: date-time
-                             * @description Last update timestamp
-                             */
-                            updatedAt: string;
-                        };
+                        data: components["schemas"]["Instance"];
                     };
                 };
             };
@@ -27931,6 +27404,26 @@ export interface operations {
                             stopOutsideMessagingWindow: boolean;
                             /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
                             showTypingIndicator: boolean;
+                            /** @description Optional local-time period in which no follow-up fires. A follow-up that falls due inside it is rescheduled to the end of the period without consuming a step of the sequence. start after end crosses midnight. Absent: follow-ups fire at any hour. */
+                            quietHours?: {
+                                /**
+                                 * @description Local time the quiet period starts, HH:MM (24-hour).
+                                 * @example 22:00
+                                 */
+                                start: string;
+                                /**
+                                 * @description Local time the quiet period ends, HH:MM (24-hour).
+                                 * @example 08:00
+                                 */
+                                end: string;
+                                /**
+                                 * @description IANA time zone of start and end.
+                                 * @example America/Sao_Paulo
+                                 */
+                                timezone: string;
+                                /** @description Spread deferred follow-ups over this many minutes after end, at a fixed offset per chat. Absent: every deferred follow-up is due at end. Must be shorter than the time between end and start. */
+                                spreadMinutes?: number;
+                            };
                         } | null;
                     };
                 };
@@ -28007,6 +27500,26 @@ export interface operations {
                     stopOutsideMessagingWindow: boolean;
                     /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
                     showTypingIndicator: boolean;
+                    /** @description Optional local-time period in which no follow-up fires. A follow-up that falls due inside it is rescheduled to the end of the period without consuming a step of the sequence. start after end crosses midnight. Absent: follow-ups fire at any hour. */
+                    quietHours?: {
+                        /**
+                         * @description Local time the quiet period starts, HH:MM (24-hour).
+                         * @example 22:00
+                         */
+                        start: string;
+                        /**
+                         * @description Local time the quiet period ends, HH:MM (24-hour).
+                         * @example 08:00
+                         */
+                        end: string;
+                        /**
+                         * @description IANA time zone of start and end.
+                         * @example America/Sao_Paulo
+                         */
+                        timezone: string;
+                        /** @description Spread deferred follow-ups over this many minutes after end, at a fixed offset per chat. Absent: every deferred follow-up is due at end. Must be shorter than the time between end and start. */
+                        spreadMinutes?: number;
+                    };
                 };
             };
         };
@@ -28057,6 +27570,26 @@ export interface operations {
                             stopOutsideMessagingWindow: boolean;
                             /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
                             showTypingIndicator: boolean;
+                            /** @description Optional local-time period in which no follow-up fires. A follow-up that falls due inside it is rescheduled to the end of the period without consuming a step of the sequence. start after end crosses midnight. Absent: follow-ups fire at any hour. */
+                            quietHours?: {
+                                /**
+                                 * @description Local time the quiet period starts, HH:MM (24-hour).
+                                 * @example 22:00
+                                 */
+                                start: string;
+                                /**
+                                 * @description Local time the quiet period ends, HH:MM (24-hour).
+                                 * @example 08:00
+                                 */
+                                end: string;
+                                /**
+                                 * @description IANA time zone of start and end.
+                                 * @example America/Sao_Paulo
+                                 */
+                                timezone: string;
+                                /** @description Spread deferred follow-ups over this many minutes after end, at a fixed offset per chat. Absent: every deferred follow-up is due at end. Must be shorter than the time between end and start. */
+                                spreadMinutes?: number;
+                            };
                         } | null;
                     };
                 };
@@ -28210,6 +27743,26 @@ export interface operations {
                             stopOutsideMessagingWindow: boolean;
                             /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
                             showTypingIndicator: boolean;
+                            /** @description Optional local-time period in which no follow-up fires. A follow-up that falls due inside it is rescheduled to the end of the period without consuming a step of the sequence. start after end crosses midnight. Absent: follow-ups fire at any hour. */
+                            quietHours?: {
+                                /**
+                                 * @description Local time the quiet period starts, HH:MM (24-hour).
+                                 * @example 22:00
+                                 */
+                                start: string;
+                                /**
+                                 * @description Local time the quiet period ends, HH:MM (24-hour).
+                                 * @example 08:00
+                                 */
+                                end: string;
+                                /**
+                                 * @description IANA time zone of start and end.
+                                 * @example America/Sao_Paulo
+                                 */
+                                timezone: string;
+                                /** @description Spread deferred follow-ups over this many minutes after end, at a fixed offset per chat. Absent: every deferred follow-up is due at end. Must be shorter than the time between end and start. */
+                                spreadMinutes?: number;
+                            };
                         } | null;
                     };
                 };
@@ -28286,6 +27839,26 @@ export interface operations {
                     stopOutsideMessagingWindow: boolean;
                     /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
                     showTypingIndicator: boolean;
+                    /** @description Optional local-time period in which no follow-up fires. A follow-up that falls due inside it is rescheduled to the end of the period without consuming a step of the sequence. start after end crosses midnight. Absent: follow-ups fire at any hour. */
+                    quietHours?: {
+                        /**
+                         * @description Local time the quiet period starts, HH:MM (24-hour).
+                         * @example 22:00
+                         */
+                        start: string;
+                        /**
+                         * @description Local time the quiet period ends, HH:MM (24-hour).
+                         * @example 08:00
+                         */
+                        end: string;
+                        /**
+                         * @description IANA time zone of start and end.
+                         * @example America/Sao_Paulo
+                         */
+                        timezone: string;
+                        /** @description Spread deferred follow-ups over this many minutes after end, at a fixed offset per chat. Absent: every deferred follow-up is due at end. Must be shorter than the time between end and start. */
+                        spreadMinutes?: number;
+                    };
                 };
             };
         };
@@ -28336,6 +27909,26 @@ export interface operations {
                             stopOutsideMessagingWindow: boolean;
                             /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
                             showTypingIndicator: boolean;
+                            /** @description Optional local-time period in which no follow-up fires. A follow-up that falls due inside it is rescheduled to the end of the period without consuming a step of the sequence. start after end crosses midnight. Absent: follow-ups fire at any hour. */
+                            quietHours?: {
+                                /**
+                                 * @description Local time the quiet period starts, HH:MM (24-hour).
+                                 * @example 22:00
+                                 */
+                                start: string;
+                                /**
+                                 * @description Local time the quiet period ends, HH:MM (24-hour).
+                                 * @example 08:00
+                                 */
+                                end: string;
+                                /**
+                                 * @description IANA time zone of start and end.
+                                 * @example America/Sao_Paulo
+                                 */
+                                timezone: string;
+                                /** @description Spread deferred follow-ups over this many minutes after end, at a fixed offset per chat. Absent: every deferred follow-up is due at end. Must be shorter than the time between end and start. */
+                                spreadMinutes?: number;
+                            };
                         } | null;
                     };
                 };
@@ -28489,6 +28082,26 @@ export interface operations {
                             stopOutsideMessagingWindow: boolean;
                             /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
                             showTypingIndicator: boolean;
+                            /** @description Optional local-time period in which no follow-up fires. A follow-up that falls due inside it is rescheduled to the end of the period without consuming a step of the sequence. start after end crosses midnight. Absent: follow-ups fire at any hour. */
+                            quietHours?: {
+                                /**
+                                 * @description Local time the quiet period starts, HH:MM (24-hour).
+                                 * @example 22:00
+                                 */
+                                start: string;
+                                /**
+                                 * @description Local time the quiet period ends, HH:MM (24-hour).
+                                 * @example 08:00
+                                 */
+                                end: string;
+                                /**
+                                 * @description IANA time zone of start and end.
+                                 * @example America/Sao_Paulo
+                                 */
+                                timezone: string;
+                                /** @description Spread deferred follow-ups over this many minutes after end, at a fixed offset per chat. Absent: every deferred follow-up is due at end. Must be shorter than the time between end and start. */
+                                spreadMinutes?: number;
+                            };
                         } | null;
                     };
                 };
@@ -28565,6 +28178,26 @@ export interface operations {
                     stopOutsideMessagingWindow: boolean;
                     /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
                     showTypingIndicator: boolean;
+                    /** @description Optional local-time period in which no follow-up fires. A follow-up that falls due inside it is rescheduled to the end of the period without consuming a step of the sequence. start after end crosses midnight. Absent: follow-ups fire at any hour. */
+                    quietHours?: {
+                        /**
+                         * @description Local time the quiet period starts, HH:MM (24-hour).
+                         * @example 22:00
+                         */
+                        start: string;
+                        /**
+                         * @description Local time the quiet period ends, HH:MM (24-hour).
+                         * @example 08:00
+                         */
+                        end: string;
+                        /**
+                         * @description IANA time zone of start and end.
+                         * @example America/Sao_Paulo
+                         */
+                        timezone: string;
+                        /** @description Spread deferred follow-ups over this many minutes after end, at a fixed offset per chat. Absent: every deferred follow-up is due at end. Must be shorter than the time between end and start. */
+                        spreadMinutes?: number;
+                    };
                 };
             };
         };
@@ -28615,6 +28248,26 @@ export interface operations {
                             stopOutsideMessagingWindow: boolean;
                             /** @description Emit a 2–3s typing/presence indicator before firing on supported channels. */
                             showTypingIndicator: boolean;
+                            /** @description Optional local-time period in which no follow-up fires. A follow-up that falls due inside it is rescheduled to the end of the period without consuming a step of the sequence. start after end crosses midnight. Absent: follow-ups fire at any hour. */
+                            quietHours?: {
+                                /**
+                                 * @description Local time the quiet period starts, HH:MM (24-hour).
+                                 * @example 22:00
+                                 */
+                                start: string;
+                                /**
+                                 * @description Local time the quiet period ends, HH:MM (24-hour).
+                                 * @example 08:00
+                                 */
+                                end: string;
+                                /**
+                                 * @description IANA time zone of start and end.
+                                 * @example America/Sao_Paulo
+                                 */
+                                timezone: string;
+                                /** @description Spread deferred follow-ups over this many minutes after end, at a fixed offset per chat. Absent: every deferred follow-up is due at end. Must be shorter than the time between end and start. */
+                                spreadMinutes?: number;
+                            };
                         } | null;
                     };
                 };

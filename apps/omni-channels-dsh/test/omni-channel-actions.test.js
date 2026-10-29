@@ -147,6 +147,44 @@ test('a reply goes to the chat\'s own instance and address; refusals say why', a
   await assert.rejects(taken.run('omni-channel-create', { type: 'whatsapp-baileys', name: 'Sales' }), { message: 'An instance named Sales exists' })
 })
 
+test('settings whitelist reads and PATCH only validated dirty fields on the same id', async () => {
+  const { run, calls } = host({
+    [`GET /instances/${CHANNEL}`]: () => [200, { data: { id: CHANNEL, name: 'Existing', channel: 'whatsapp-business', processAudio: false, metaAppId: '12345678', agentId: null, agentProviderId: null, metaAccessToken: 'must-not-return', unknown: 'ignored' } }],
+    [`PATCH /instances/${CHANNEL}`]: () => [200, { data: { metaAccessToken: 'must-not-return' } }],
+    'GET /agents?limit=200': () => [200, { items: [{ id: CHAT, name: 'Helper', apiKey: 'must-not-return' }] }],
+  })
+  assert.deepEqual(await run('omni-channel-settings', { id: CHANNEL }), { settings: { processAudio: false, metaAppId: '12345678', agentId: null, agentProviderId: null } })
+  const patch = { processAudio: false, inboundMaxAgeMinutes: 0, triggerReactions: [], sessionReset: null, agentId: CHAT }
+  assert.deepEqual(await run('omni-channel-settings-save', { id: CHANNEL, patch }), { ok: true })
+  assert.deepEqual(calls[1], { method: 'PATCH', path: `/instances/${CHANNEL}`, body: patch, key: KEY })
+  assert.deepEqual(await run('omni-channel-agents'), { items: [{ id: CHAT, name: 'Helper' }] })
+  for (const patch of [{ surprise: 1 }, { agentProviderId: CHAT }, { metaAccessToken: 'secret' }, { processAudio: null }, { agentId: 'wrong' }]) {
+    await assert.rejects(run('omni-channel-settings-save', { id: CHANNEL, patch }), { code: 'bot/invalid' })
+  }
+  assert.equal(calls.length, 3)
+})
+
+test('Business repair uses the existing id without creating or deleting even on failure', async () => {
+  const fields = { id: CHANNEL, accessToken: 'fixture-reentered-token', phoneNumberId: '12345678', wabaId: '23456789', appId: '34567890' }
+  for (const status of [200, 500, 403]) {
+    const { run, calls } = host({ [`POST /instances/${CHANNEL}/whatsapp-business/connect`]: () => [status, { error: { message: fields.accessToken }, data: { token: fields.accessToken } }] })
+    if (status === 200) assert.deepEqual(await run('omni-wab-repair', fields), { ok: true })
+    else await assert.rejects(run('omni-wab-repair', fields), error => !error.message.includes(fields.accessToken) && (status !== 403 || error.message === FORBIDDEN_CHANGE))
+    const { id: ignored, ...expected } = fields
+    assert.deepEqual(calls, [{ method: 'POST', path: `/instances/${CHANNEL}/whatsapp-business/connect`, body: expected, key: KEY }])
+    await assert.rejects(run('omni-wab-repair', { ...fields, accessToken: '' }), { code: 'bot/invalid' })
+    assert.equal(calls.length, 1)
+  }
+})
+
+test('settings preserve permission refusals and explain unsupported or invalid API fields', async () => {
+  for (const status of [401, 403, 400, 404]) {
+    const { run } = host({ [`PATCH /instances/${CHANNEL}`]: () => [status, { error: { message: 'Check the settings' } }] })
+    await assert.rejects(run('omni-channel-settings-save', { id: CHANNEL, patch: { processAudio: false } }), error =>
+      status === 400 ? /processAudio.*types.*update Omni/.test(error.message) : error.message === (status === 404 ? 'Check the settings' : FORBIDDEN_CHANGE))
+  }
+})
+
 test('nothing the page gets back carries the key', async () => {
   const { run } = host({
     'POST /auth/validate': () => [200, { data: { scopes: ['*'], keyPrefix: 'omni_sk_1234…' } }],

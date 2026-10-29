@@ -38,6 +38,67 @@ runtime is the same `omniTeam` service.
   plugin's welcome (−300) and Connect AI (−200). A skip is kept by `@automagik/welcome-dsh`
   when it is installed, else in this browser.
 
+## Existing channel settings
+
+Open an existing channel to read its configuration groups, derived provider and assigned
+agent. Changes use the linked key and the existing `instances:write`/`canWrite` gate;
+read-only devices can inspect settings but cannot save or reconnect. The agent picker
+lists up to 200 agents; the UUID field also accepts another accessible agent or an empty
+value to unassign it. Agent assignment keeps Omni's existing routing/key provisioning.
+
+Settings load with `GET /instances/{id}` and save only edited fields with `PATCH` on that
+same id. JSON fields accept structured values; **Clear override** sends null only for
+nullable fields. Provider is derived from the agent, never written here. Some transport
+settings apply at next connection. Older Omni versions may reject newly added fields;
+update Omni rather than recreating a channel when it reports an unsupported setting.
+
+For WhatsApp Business, repair the Meta identifiers and re-enter the access token under
+**Repair and reconnect**. This calls the existing instance's Business connect route,
+never creates/deletes an instance, and never reads back or persists a token in the browser.
+Save any identifier clears first. Connection failure may still have saved credentials;
+retry on the same channel. Meta display-number lookup is best effort, so it can stay null.
+The Meta API version is a provisioning snapshot; runtime environment takes precedence.
+
+### Reproduce the scoped SDK update for #1403
+
+The base SDK predates unrelated auth routes. Refresh only the five affected members below,
+using **exact bytes** from a full OpenAPI generation, rather than pulling that drift into
+this feature. Run from the repository root with installed dependencies. This keeps every
+old request key and response requirement; `audioTranscription` and `inboundReplyContext`
+become required in SDK responses because they were already required in the base API
+(the stale SDK had 14 required fields, the API has 16). No types are handwritten.
+
+```sh
+mkdir -p .git/local-isolation/sdk-scope
+bun -e 'import {openApiSpec} from "./packages/api/src/routes/openapi"; await Bun.write(".git/local-isolation/sdk-scope/openapi.json", JSON.stringify(openApiSpec))'
+bunx openapi-typescript@7.13.0 .git/local-isolation/sdk-scope/openapi.json -o .git/local-isolation/sdk-scope/full.ts
+node --input-type=module <<'JS'
+import fs from 'node:fs'; import cp from 'node:child_process'; import assert from 'node:assert/strict'; import ts from 'typescript';
+const file = 'packages/sdk/src/types.generated.ts', scratch = '.git/local-isolation/sdk-scope/';
+const base = cp.execFileSync('git', ['show', '5443fb744c9b022530360b23dc49f8988906eb0e:' + file], {encoding:'utf8', maxBuffer:16*1024*1024});
+const full = fs.readFileSync(scratch + 'full.ts', 'utf8');
+const parse = text => ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+const iface = (s,n) => s.statements.find(x => ts.isInterfaceDeclaration(x) && x.name.text === n);
+const prop = (s,n) => s.members.find(x => x.name?.getText().replace(/^["']|["']$/g,'') === n);
+const selectors = [s => prop(prop(iface(s,'components'),'schemas').type,'Instance'), ...['listInstances','createInstance','getInstance','updateInstance'].map(n => s => prop(iface(s,'operations'),n))];
+const before = parse(base), after = parse(full), bytes = (text,node) => text.slice(node.getFullStart(),node.end);
+const edits = selectors.map(get => ({old:get(before), next:get(after)}));
+let scoped = base;
+for (const e of [...edits].sort((a,b) => b.old.pos-a.old.pos)) scoped = scoped.slice(0,e.old.getFullStart()) + bytes(full,e.next) + scoped.slice(e.old.end);
+const result = parse(scoped); assert.equal(result.parseDiagnostics.length,0);
+for (const get of selectors) assert.equal(bytes(scoped,get(result)),bytes(full,get(after)));
+const outside = (text,s) => { for (const n of selectors.map(get => get(s)).sort((a,b) => b.pos-a.pos)) text = text.slice(0,n.getFullStart()) + '<selected>' + text.slice(n.end); return text; };
+assert.equal(outside(scoped,result),outside(base,before));
+for (const ref of scoped.matchAll(/components\["([^"]+)"\]\["([^"]+)"\]/g)) assert.ok(prop(prop(iface(result,'components'),ref[1]).type,ref[2]));
+fs.writeFileSync(file,scoped);
+JS
+```
+
+Repeat the pinned full-generation command and AST splice: the SDK SHA-256 must stay
+identical. The API settings test checks the 16 required response fields and documented
+field coverage; run it plus SDK typecheck/build/tests and the normal repository gates.
+The AST oracle checks dependency closure and unchanged bytes outside the five selectors.
+
 ## Install
 
 The plugin needs DSH `>=0.2.1-rc.3 <0.2.2-0` (the DSH its tests run on, up to the next patch;

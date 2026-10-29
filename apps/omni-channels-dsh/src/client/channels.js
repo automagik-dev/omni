@@ -3,6 +3,7 @@ import { ConnectPrompt, openConnectWizard } from './wizard.js'
 import { UpdateBar } from './omni-update.js'
 import { AddGrid, LiveConnectFlow } from './channel-connect-live.js'
 import { ORDER } from './channel-add.js'
+import { ChannelSettings } from './channel-settings.js'
 import {
   CHANNEL_TYPES, CHANNELS_PANEL, STATUS, canSend, canWrite, channelOf, chatOf, healthSummary, omniActions, omniStore, startLive, typeOf, unreadOf, visibleChats,
 } from './omni-store.js'
@@ -338,6 +339,7 @@ const replyText = seconds => (seconds === null ? '–' : seconds < 60 ? t('{n} s
 
 function ChannelDetail({ channel, state, omni }) {
   const [confirming, setConfirming] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   useEffect(() => { setConfirming(false) }, [channel.id])
   const type = typeOf(channel.type)
   const writable = canWrite(state)
@@ -381,6 +383,8 @@ function ChannelDetail({ channel, state, omni }) {
         : h(Stat, { value: replyText(health.replyMedianSec), label: t('typical reply') }),
       h(Stat, { value: health.lastEventAt ? relativeShort(health.lastEventAt) : '–', label: t('last message') })),
     health.week ? h(WeekChart, { week: health.week }) : null,
+    !state.preview ? h('details', { open: settingsOpen, onToggle: event => setSettingsOpen(event.currentTarget.open) }, h('summary', null, t('Channel settings')),
+      settingsOpen ? h(ChannelSettings, { key: channel.id, channel, writable: writable && !channel.busy }) : null) : null,
     h('h2', { className: 'oc-section' }, t('Who answers')),
     // Who answers is the agent omni routes a channel to; on a live Omni, Omni changes that by talking.
     state.preview
