@@ -6,8 +6,9 @@ set -euo pipefail
 # Each row copies the script into a scratch project with its own nats pin and points it at a
 # fixture release (NATS_RELEASE_BASE=file://…), so nothing is downloaded; any network request
 # goes to a closed local port and fails. A refused archive must make the script exit non-zero,
-# say why, and leave nothing behind: no bin/nats-server and nothing in its temp dir. No row runs
-# the installed binary.
+# say why, and leave nothing behind: no bin/nats-server and nothing in its temp dir. A verified
+# install leaves bin/nats-server.pin; a binary already there is kept only when that marker is the
+# pin, and a refused upgrade leaves the old binary and marker as they were.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WORK="$(mktemp -d)"
@@ -52,6 +53,16 @@ pin_json() { # <size> <sha256>, or no arguments for a pin without this platform
   fi
 }
 
+# installed_earlier <name> [marker]: a nats-server already in the row's bin/, with that .pin marker.
+installed_earlier() {
+  mkdir -p "$WORK/$1/bin"
+  printf 'old nats-server\n' >"$WORK/$1/bin/nats-server"
+  chmod +x "$WORK/$1/bin/nats-server"
+  if [[ $# -gt 1 ]]; then printf '%s\n' "$2" >"$WORK/$1/bin/nats-server.pin"; fi
+}
+MARKER="2.12.15 ${SHA256}"
+OLD_MARKER="2.12.4 $(printf '0%.0s' {1..64})"
+
 # run_row <name> <release dir> <pin json>: runs the script in a scratch project; sets CODE and OUT.
 run_row() {
   local project="$WORK/$1"
@@ -79,10 +90,46 @@ refused() {
 }
 
 run_row pinned "$WORK/release" "$(pin_json "$SIZE" "$SHA256")"
-if [[ "$CODE" -eq 0 ]] && cmp -s "$PROJECT/bin/nats-server" "$WORK/stage/nats-server-v2.12.15-${PLATFORM}/nats-server"; then
-  ok 'the pinned archive installs'
+if [[ "$CODE" -eq 0 ]] && cmp -s "$PROJECT/bin/nats-server" "$WORK/stage/nats-server-v2.12.15-${PLATFORM}/nats-server" &&
+  [[ "$(cat "$PROJECT/bin/nats-server.pin" 2>/dev/null)" == "$MARKER" ]]; then
+  ok 'the pinned archive installs, with its marker'
 else
-  bad "the pinned archive installs: exit ${CODE} (output: ${OUT//$'\n'/ | })"
+  bad "the pinned archive installs, with its marker: exit ${CODE} (output: ${OUT//$'\n'/ | })"
+fi
+
+# replaced <row>: exit 0, the fixture binary in place of the old one, and the pin's marker.
+replaced() {
+  if [[ "$CODE" -eq 0 ]] && cmp -s "$PROJECT/bin/nats-server" "$WORK/stage/nats-server-v2.12.15-${PLATFORM}/nats-server" &&
+    [[ "$(cat "$PROJECT/bin/nats-server.pin")" == "$MARKER" ]]; then
+    ok "$1"
+  else
+    bad "$1: exit ${CODE}, bin/nats-server $(head -c 40 "$PROJECT/bin/nats-server" | tr '\n' ' ') (output: ${OUT//$'\n'/ | })"
+  fi
+}
+
+installed_earlier no-marker
+run_row no-marker "$WORK/release" "$(pin_json "$SIZE" "$SHA256")"
+replaced 'a binary with no marker is replaced by the pinned release'
+
+installed_earlier old-marker "$OLD_MARKER"
+run_row old-marker "$WORK/release" "$(pin_json "$SIZE" "$SHA256")"
+replaced 'a binary whose marker names another release is replaced'
+
+installed_earlier kept "$MARKER"
+run_row kept "$WORK/empty" "$(pin_json "$SIZE" "$SHA256")"
+if [[ "$CODE" -eq 0 && "$(cat "$PROJECT/bin/nats-server")" == 'old nats-server' && "$OUT" != *'Downloading from'* ]]; then
+  ok 'a binary whose marker is the pin is kept, with no download'
+else
+  bad "a binary whose marker is the pin is kept: exit ${CODE} (output: ${OUT//$'\n'/ | })"
+fi
+
+installed_earlier refused-upgrade "$OLD_MARKER"
+run_row refused-upgrade "$WORK/tampered" "$(pin_json "$SIZE" "$SHA256")"
+if [[ "$CODE" -ne 0 && "$(cat "$PROJECT/bin/nats-server")" == 'old nats-server' &&
+  "$(cat "$PROJECT/bin/nats-server.pin")" == "$OLD_MARKER" && -z "$(ls -A "$PROJECT/tmp")" ]]; then
+  ok 'a refused upgrade leaves the old binary and its marker as they were'
+else
+  bad "a refused upgrade: exit ${CODE}, bin/ holds $(find "$PROJECT/bin" -mindepth 1 -exec basename {} \; | tr '\n' ' ') (output: ${OUT//$'\n'/ | })"
 fi
 
 run_row tampered "$WORK/tampered" "$(pin_json "$SIZE" "$SHA256")"

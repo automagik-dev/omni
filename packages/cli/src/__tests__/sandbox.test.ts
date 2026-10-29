@@ -157,9 +157,11 @@ function fakeDeps(overrides: Partial<SandboxDeps> = {}, { serviceManager = false
     },
     isPortFree: async (port) => !busyPorts.has(port),
     health: async () => alive.size > 0,
+    // A binary already in place is the pinned one; the real installer decides that from its marker.
     installNats: async (target) => {
+      if (existsSync(target)) return 'kept';
       writeFileSync(target, '#!/bin/sh\n');
-      return true;
+      return 'installed';
     },
     isAlive: (pid) => alive.has(pid),
     kill: (pid, signal) => {
@@ -779,6 +781,77 @@ describe('a reinstall from anywhere keeps its units', () => {
     deps.run = run;
     await installSandbox({ home, defaultHome, packageSpec: OTHER_RELEASE }, deps);
     expect(readSandboxState(sandboxLayout(home))?.version).toBe(OTHER_RELEASE);
+  });
+});
+
+describe('a nats-server that is not the pinned release', () => {
+  /** The real installer replacing it: the verified binary is renamed over the old one. */
+  const upgrades: SandboxDeps['installNats'] = async (target) => {
+    writeFileSync(target, 'pinned nats-server\n');
+    return 'installed';
+  };
+
+  test('is replaced, and only then the running sandbox restarts onto it, once', async () => {
+    const { deps, kills, detached } = fakeDeps();
+    await installSandbox({ home, defaultHome }, deps);
+    const natsBinary = sandboxLayout(home).natsBinary;
+    let killsBeforeUpgrade = -1;
+    deps.installNats = async (target) => {
+      killsBeforeUpgrade = kills.length;
+      return upgrades(target);
+    };
+
+    const result = await installSandbox({ home, defaultHome }, deps);
+    expect(killsBeforeUpgrade).toBe(0);
+    expect(readFileSync(natsBinary, 'utf-8')).toBe('pinned nats-server\n');
+    expect(kills).toEqual([[4242, 'SIGTERM']]);
+    expect(detached).toHaveLength(2);
+    expect(result.running).toBe(true);
+  });
+
+  test('a refused upgrade fails the install with the old binary in place and the sandbox still running', async () => {
+    const { deps, kills, detached, alive } = fakeDeps();
+    await installSandbox({ home, defaultHome }, deps);
+    const natsBinary = sandboxLayout(home).natsBinary;
+    const before = readFileSync(natsBinary);
+    deps.installNats = async () => 'failed';
+
+    await expect(installSandbox({ home, defaultHome }, deps)).rejects.toThrow(natsBinary);
+    expect(readFileSync(natsBinary)).toEqual(before);
+    expect(kills).toEqual([]);
+    expect(alive.has(4242)).toBe(true);
+    expect(detached).toHaveLength(1);
+  });
+
+  test('a refused upgrade with a new CLI version stops nothing and leaves the runtime on its version', async () => {
+    const { deps, runs, kills } = fakeDeps();
+    await installSandbox({ home, defaultHome, packageSpec: '2.261023.7' }, deps);
+    deps.installNats = async () => 'failed';
+
+    await expect(installSandbox({ home, defaultHome, packageSpec: '2.261023.8' }, deps)).rejects.toThrow(
+      'nats-server',
+    );
+    expect(kills).toEqual([]);
+    expect(runs.filter((call) => call.cmd[1] === 'install')).toHaveLength(1);
+    expect(readSandboxState(sandboxLayout(home))?.version).toBe('2.261023.7');
+  });
+
+  test('an upgrade together with a new CLI version restarts the sandbox once', async () => {
+    const { deps, kills, detached } = fakeDeps();
+    await installSandbox({ home, defaultHome, packageSpec: '2.261023.7' }, deps);
+    deps.installNats = upgrades;
+
+    await installSandbox({ home, defaultHome, packageSpec: '2.261023.8' }, deps);
+    expect(kills).toEqual([[4242, 'SIGTERM']]);
+    expect(detached).toHaveLength(2);
+  });
+
+  test('a binary that is already the pin restarts nothing', async () => {
+    const { deps, kills, detached } = fakeDeps();
+    await installSandbox({ home, defaultHome }, deps);
+    await installSandbox({ home, defaultHome }, deps);
+    expect(kills).toEqual([]);
+    expect(detached).toHaveLength(1);
   });
 });
 

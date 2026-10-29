@@ -2,14 +2,26 @@
  * The nats-server installer: the pinned release, checked by size and sha256 before it is unpacked.
  *
  * No network: fetch is a spy that serves a real archive built with tar in a temp dir and records
- * every URL. The archive is unpacked for real, so what lands on disk is checked on disk.
+ * every URL. The archive is unpacked for real, so what lands on disk is checked on disk. A verified
+ * install leaves `<target>.pin` beside the binary; a binary without the pinned one is replaced.
  */
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  readSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { installNatsBinary } from '../nats-install.js';
 
 let root: string;
@@ -54,29 +66,48 @@ function serve(bytes: Uint8Array): void {
 
 const pinFor = (sha256: string, size: number) => ({ version: '2.12.15', platforms: { [HOST]: { sha256, size } } });
 
+/** The marker a verified install of this archive leaves beside the binary. */
+const markerFor = (sha256: string) => `2.12.15 ${sha256}\n`;
+const OLD_MARKER = `2.12.4 ${'0'.repeat(64)}\n`;
+
+/** An archive with one byte flipped: same size, another sha256. */
+function flippedBytes(bytes: Uint8Array): Uint8Array {
+  const flipped = new Uint8Array(bytes);
+  flipped[bytes.length - 20] = (flipped[bytes.length - 20] ?? 0) ^ 1;
+  return flipped;
+}
+
+/** A nats-server installed earlier at home/bin, with `marker` as its .pin file (none when undefined). */
+function installedEarlier(marker?: string): string {
+  const target = join(root, 'home', 'bin', 'nats-server');
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, 'old nats-server', { mode: 0o755 });
+  if (marker !== undefined) writeFileSync(`${target}.pin`, marker);
+  return target;
+}
+
 /** Everything under the install's directory, the target's own dir. */
 const left = (dir: string): string[] => (existsSync(dir) ? readdirSync(dir, { recursive: true }).map(String) : []);
 
 describe('installNatsBinary', () => {
-  test('installs the pinned version once its size and sha256 match, leaving only the binary', async () => {
+  test('installs the pinned version once its size and sha256 match, leaving the binary and its marker', async () => {
     const archive = fixtureArchive();
     serve(archive.bytes);
     const target = join(root, 'home', 'bin', 'nats-server');
 
-    expect(await installNatsBinary(target, pinFor(archive.sha256, archive.bytes.length))).toBe(true);
+    expect(await installNatsBinary(target, pinFor(archive.sha256, archive.bytes.length))).toBe('installed');
     expect(urls).toEqual([`${RELEASE}/nats-server-v2.12.15-${HOST}.tar.gz`]);
     expect(readFileSync(target, 'utf-8')).toBe('#!/bin/sh\n');
-    expect(left(join(root, 'home', 'bin'))).toEqual(['nats-server']);
+    expect(readFileSync(`${target}.pin`, 'utf-8')).toBe(markerFor(archive.sha256));
+    expect(left(join(root, 'home', 'bin')).sort()).toEqual(['nats-server', 'nats-server.pin']);
   });
 
   test('an archive whose sha256 is not the pin is refused before it is unpacked, and nothing is written', async () => {
     const archive = fixtureArchive();
-    const flipped = new Uint8Array(archive.bytes);
-    flipped[archive.bytes.length - 20] = (flipped[archive.bytes.length - 20] ?? 0) ^ 1;
-    serve(flipped);
+    serve(flippedBytes(archive.bytes));
     const target = join(root, 'home', 'bin', 'nats-server');
 
-    expect(await installNatsBinary(target, pinFor(archive.sha256, archive.bytes.length))).toBe(false);
+    expect(await installNatsBinary(target, pinFor(archive.sha256, archive.bytes.length))).toBe('failed');
     expect(existsSync(target)).toBe(false);
     expect(left(join(root, 'home', 'bin'))).toEqual([]);
   });
@@ -86,7 +117,7 @@ describe('installNatsBinary', () => {
     serve(archive.bytes);
     const target = join(root, 'home', 'bin', 'nats-server');
 
-    expect(await installNatsBinary(target, pinFor(archive.sha256, archive.bytes.length + 1))).toBe(false);
+    expect(await installNatsBinary(target, pinFor(archive.sha256, archive.bytes.length + 1))).toBe('failed');
     expect(existsSync(target)).toBe(false);
     expect(left(join(root, 'home', 'bin'))).toEqual([]);
   });
@@ -95,20 +126,81 @@ describe('installNatsBinary', () => {
     serve(fixtureArchive().bytes);
     const target = join(root, 'home', 'bin', 'nats-server');
 
-    expect(await installNatsBinary(target, { version: '2.12.15', platforms: {} })).toBe(false);
+    expect(await installNatsBinary(target, { version: '2.12.15', platforms: {} })).toBe('failed');
     expect(urls).toEqual([]);
     expect(existsSync(target)).toBe(false);
   });
 
-  test('a binary already in place is kept, with no download', async () => {
-    serve(fixtureArchive().bytes);
-    const target = join(root, 'bin', 'nats-server');
-    mkdirSync(join(root, 'bin'));
-    writeFileSync(target, 'existing');
+});
 
-    expect(await installNatsBinary(target)).toBe(true);
+describe('installNatsBinary over a nats-server installed earlier', () => {
+  test('one with no marker is replaced by the pinned release', async () => {
+    const archive = fixtureArchive();
+    serve(archive.bytes);
+    const target = installedEarlier();
+
+    expect(await installNatsBinary(target, pinFor(archive.sha256, archive.bytes.length))).toBe('installed');
+    expect(urls).toEqual([`${RELEASE}/nats-server-v2.12.15-${HOST}.tar.gz`]);
+    expect(readFileSync(target, 'utf-8')).toBe('#!/bin/sh\n');
+    expect(readFileSync(`${target}.pin`, 'utf-8')).toBe(markerFor(archive.sha256));
+  });
+
+  test('one whose marker names another release is replaced', async () => {
+    const archive = fixtureArchive();
+    serve(archive.bytes);
+    const target = installedEarlier(OLD_MARKER);
+
+    expect(await installNatsBinary(target, pinFor(archive.sha256, archive.bytes.length))).toBe('installed');
+    expect(urls).toHaveLength(1);
+    expect(readFileSync(target, 'utf-8')).toBe('#!/bin/sh\n');
+    expect(readFileSync(`${target}.pin`, 'utf-8')).toBe(markerFor(archive.sha256));
+    expect(left(dirname(target)).sort()).toEqual(['nats-server', 'nats-server.pin']);
+  });
+
+  test('one whose marker is the pin is kept, with nothing fetched', async () => {
+    const archive = fixtureArchive();
+    serve(archive.bytes);
+    const target = installedEarlier(markerFor(archive.sha256));
+
+    expect(await installNatsBinary(target, pinFor(archive.sha256, archive.bytes.length))).toBe('kept');
     expect(urls).toEqual([]);
-    expect(readFileSync(target, 'utf-8')).toBe('existing');
+    expect(readFileSync(target, 'utf-8')).toBe('old nats-server');
+  });
+
+  test('a refused upgrade leaves the old binary and its marker byte for byte, and nothing beside them', async () => {
+    const archive = fixtureArchive();
+    serve(flippedBytes(archive.bytes));
+    const target = installedEarlier(OLD_MARKER);
+
+    expect(await installNatsBinary(target, pinFor(archive.sha256, archive.bytes.length))).toBe('failed');
+    expect(urls).toHaveLength(1);
+    expect(readFileSync(target, 'utf-8')).toBe('old nats-server');
+    expect(readFileSync(`${target}.pin`, 'utf-8')).toBe(OLD_MARKER);
+    expect(left(dirname(target)).sort()).toEqual(['nats-server', 'nats-server.pin']);
+  });
+
+  test('an upgrade renames the new binary over the old one: a process holding the old file still reads it whole', async () => {
+    const archive = fixtureArchive();
+    serve(archive.bytes);
+    const target = installedEarlier();
+    const running = openSync(target, 'r');
+    try {
+      expect(await installNatsBinary(target, pinFor(archive.sha256, archive.bytes.length))).toBe('installed');
+      const seen = Buffer.alloc(64);
+      expect(seen.subarray(0, readSync(running, seen, 0, 64, 0)).toString()).toBe('old nats-server');
+      expect(readFileSync(target, 'utf-8')).toBe('#!/bin/sh\n');
+    } finally {
+      closeSync(running);
+    }
+  });
+
+  test('on a platform the pin has no checksum for, a binary installed by hand is kept', async () => {
+    serve(fixtureArchive().bytes);
+    const target = installedEarlier();
+
+    expect(await installNatsBinary(target, { version: '2.12.15', platforms: {} })).toBe('kept');
+    expect(urls).toEqual([]);
+    expect(readFileSync(target, 'utf-8')).toBe('old nats-server');
   });
 });
 
