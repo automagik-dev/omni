@@ -33,7 +33,35 @@ reported as the account.
 - A personal token acts as the person who created it. If that person leaves or
   rotates the token, reconnect — Omni does not refresh it.
 
-## 2. Make an automation in Omni
+## 2. Discover space, folder and list ids
+
+If you do not already have a `listId`, the discovery actions return one:
+
+```bash
+# Every space in the configured team; with no teamId, every space in every
+# Workspace the token can see (each node carries its teamId).
+omni connectors invoke <connector-id> list_spaces --input-json '{}'
+
+# Folders in a space (subfolders are returned flat with parentFolderId).
+omni connectors invoke <connector-id> list_folders --input-json '{"spaceId":"789"}'
+
+# Lists: folderless lists in a space, or the lists of one folder.
+omni connectors invoke <connector-id> list_lists --input-json '{"spaceId":"789"}'
+omni connectors invoke <connector-id> list_lists --input-json '{"spaceId":"789","folderId":"456"}'
+```
+
+All three return the same node shape — `id`, `name`, `archived` and the parent
+ids that are known (`teamId`, `spaceId`, `folderId`, `parentFolderId`) — under
+`spaces`, `folders` or `lists`. Feed the resulting `id` into `create_task` /
+`list_tasks` as `listId`.
+
+`list_spaces` resolves its team from the action input, then the connector's
+configured `teamId`, then `GET /team`: with no explicit team and several
+Workspaces, it returns all of their spaces rather than guessing one. A 401 means
+the token is invalid or expired, 403 means it lacks permission for that scope,
+and 404 means the id is wrong or does not exist there.
+
+## 3. Make an automation in Omni
 
 ```bash
 omni automations create --name "Comment on done tasks" \
@@ -48,7 +76,7 @@ omni automations create --name "Comment on done tasks" \
 The trigger is always the single literal `connector.event`; the subscription
 decides which delivery runs which automation.
 
-## 3. Create the event subscription
+## 4. Create the event subscription
 
 1. Create a ClickUp webhook in ClickUp (or with ClickUp's API) for
    `taskStatusUpdated` (and any other event you need).
@@ -71,7 +99,7 @@ ClickUp signs the raw body with HMAC-SHA256 in `X-Signature` (bare lowercase
 hex, no prefix). The secret is sealed and never returned; rotating it is the
 same PATCH/`update` and takes effect immediately, so update the ClickUp copy too.
 
-## 4. Prove the loop
+## 5. Prove the loop
 
 ```bash
 omni connectors test <connector-id> <subscription-id>
@@ -107,4 +135,5 @@ with ClickUp, so delete the ClickUp webhook yourself.
 | `409 CONNECTOR_NOT_CONNECTED` on an action | status is `error` or `revoked` | revalidate the credential |
 | `400 ACTION_INPUT_INVALID` | the rendered input failed the manifest schema | check the `connector.call` input/templates |
 | `502 PROVIDER_REJECTED` | ClickUp rejected the action; the message is redacted | read the message; a 401/403 also revokes the connector |
+| `401`/`403`/`404` on a discovery action | token invalid or expired, permission missing for that team/space/folder, or the id is wrong in that scope | the message names the scope; fix the credential or the id |
 | `500` on delivery | processing failed; the claim was released | ClickUp retries; inspect `lastError` on the subscription |

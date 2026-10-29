@@ -181,9 +181,9 @@ export const record = (id, sessionId, extra = {}) => ({
 // be made. `services`: DSH services the plugin reads with ctx.get (llm, attachments).
 // `resumesDone`: the outcome the plugin is told, once the team's own pass is over, in place of
 // the pass's (one a pass cannot be made to give on demand: `{ failed }`, `{ readOnly }`, a
-// `resent` Session). `dshBots: false` hides the team's DSH-bot calls, as a Bot team without
-// them has none.
-export async function boot(t, home, { mask = false, services = {}, resumesDone, dshBots = true } = {}) {
+// `resent` Session). `archiveError`: every archive throws it from the start, before the
+// plugin's own start pass runs (`fake.archiveError` sets it later).
+export async function boot(t, home, { mask = false, services = {}, resumesDone, archiveError = null } = {}) {
   const ctx = fakeContext({ services })
   const agents = new Map()
   const made = []
@@ -192,7 +192,7 @@ export async function boot(t, home, { mask = false, services = {}, resumesDone, 
   const archived = []
   const archiving = []
   const restricts = []
-  const fake = { archiveError: null, createError: null, restrictError: null }
+  const fake = { archiveError, createError: null, restrictError: null }
   const emit = (id, type, data, time) => {
     for (const listener of ctx.listeners.get('session/event') ?? []) if (listener.length >= 2) listener({ id }, { type, data, ...(time === undefined ? {} : { time }) })
   }
@@ -270,15 +270,13 @@ export async function boot(t, home, { mask = false, services = {}, resumesDone, 
     registered.push(entry)
     return register(entry)
   }
-  const hidden = {
-    ...(mask ? { resumable: { value: undefined }, resumesDone: { value: undefined } } : resumesDone === undefined ? {} : { resumesDone: { value: team.resumesDone.then(() => resumesDone) } }),
-    ...(dshBots ? {} : { dshBots: { value: undefined } }),
-  }
+  const hidden = mask ? { resumable: { value: undefined }, resumesDone: { value: undefined } } : resumesDone === undefined ? {} : { resumesDone: { value: team.resumesDone.then(() => resumesDone) } }
   const base = Object.keys(hidden).length === 0 ? team : Object.create(team, hidden)
   const channels = createRuntime(ctx, base)
   await channels.load()
   const call = (endpoint, body) => team.extended.endpointOf(endpoint).fn(body)
-  const view = () => team.extended.view()
+  // What the team's state endpoint sends: its view fields, then the live ones.
+  const view = () => ({ ...team.extended.view(), ...team.extended.live() })
   let stopped = false
   const stop = async () => {
     if (stopped) return
@@ -347,8 +345,12 @@ export async function restart(t, run, home, options) {
   await run.stop()
   return boot(t, home, options)
 }
-// One message the stream hands to fireSubscription, as omni-events.js's eventOf makes it.
-export const eventFor = (text, chat = 'Marina') => ({ kind: 'message', who: chat, chat, channel: 'Pessoal', at: Date.now(), text, ref: `row-${text}` })
+// One message the stream hands to fireSubscription, as omni-events.js's eventOf makes it: from
+// the chat of that name, with its id and its channel's (none for a chat Omni does not hold).
+export const eventFor = (text, chat = 'Marina') => {
+  const held = Object.values(CHATS).find(item => item.name === chat)
+  return { kind: 'message', who: chat, chat, channel: 'Pessoal', ...(held ? { chatId: held.id, instanceId: held.instanceId } : {}), at: Date.now(), text, ref: `row-${text}` }
+}
 // DSH's tools/pre-execute waterfall for one call in a Session, ending in DSH's own allow.
 export const gateOf = (run, name, sessionId) => {
   const chain = [...(run.ctx.listeners.get('tools/pre-execute') ?? [])]

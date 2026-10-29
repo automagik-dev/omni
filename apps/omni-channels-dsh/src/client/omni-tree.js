@@ -17,13 +17,14 @@ const { ChevronRightIcon, CloseIcon, DotsIcon, PlusIcon, SparkIcon } = icons
 // its own rows with, sent only by a team with the restart hook. A row uses only the props named
 // there: without them a thread still shows and opens, with no unread dot.
 //
-// Beside the threads, the Sessions this plugin keeps under the Omni Bot (src/host/
-// omni-rows.js, roster.omniRows): an automation's "new session" runs, its one ongoing
-// Session, Omni's hand-offs. Each stays until its own menu removes it, which archives it.
+// Nothing else is drawn under the Omni Bot: its channels with their threads, and the threads
+// of no channel listed here under "Other chats".
 
 const OPEN_KEY = 'omni.tree.open'
 const SEARCH_DELAY_MS = 250
 export const OMNI_OUTDATED = 'Adding a chat needs a newer Omni. Update it first.'
+// The host has not said yet whether a chat can be added: the + stays off, and says so.
+export const OFFER_UNKNOWN = 'Adding a chat is not ready yet. Reload the window if this stays.'
 
 function readOpen() {
   try { return new Set(JSON.parse(localStorage.getItem(OPEN_KEY) ?? '[]')) } catch { return new Set() }
@@ -36,13 +37,13 @@ function saveOpen(open) {
 // row props only then (threads.js threadsView).
 export const teamReady = roster => Array.isArray(roster?.omniRowProps) && roster.omniRowProps.length > 0
 export const threadsOf = (roster, channelId) => (Array.isArray(roster?.omniThreads) ? roster.omniThreads : []).filter(thread => thread.channelId === channelId)
-export const rowsOf = roster => (Array.isArray(roster?.omniRows) ? roster.omniRows : []).filter(row => typeof row?.sessionId === 'string')
 export const isThreadSession = (roster, sessionId) => typeof sessionId === 'string' && (Array.isArray(roster?.omniThreads) ? roster.omniThreads : []).some(thread => thread.sessionId === sessionId)
 
 // Whether the channel rows offer the +, and the reason when they do not: a team without the
-// hook, no linked Omni (both the host's), or a linked Omni older than this plugin's minimum.
+// hook, no linked Omni (both the host's), a linked Omni older than this plugin's minimum, or
+// no answer from the host yet. A row is never left with neither a + nor a reason.
 export function plusOf(roster, state) {
-  if (roster?.omniThreadsOffered !== true) return { offered: false, reason: roster?.omniThreadsReason ?? null }
+  if (roster?.omniThreadsOffered !== true) return { offered: false, reason: roster?.omniThreadsReason ?? OFFER_UNKNOWN }
   if (state?.link?.outdated === true) return { offered: false, reason: OMNI_OUTDATED }
   return { offered: true, reason: null }
 }
@@ -181,75 +182,6 @@ export function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
 }
 
 /**
- * One Session kept under the Omni Bot (a run's, an ongoing automation's, a hand-off's). It
- * opens its Session through the team's row action, on a team with the hook; its menu's one
- * item removes it, asking once more, and the host archives its Session.
- */
-export function SessionRow({ row, actions, rowProps = {} }) {
-  const id = row.sessionId
-  const useStatus = rowProps.useSessionStatus ?? noStatus
-  const useRetain = rowProps.useSessionRetainInfo ?? noRetain
-  const unread = useStatus(map => map.get(id)?.completionUnread === true)
-  const asking = useStatus(map => map.get(id)?.pendingInteraction !== undefined)
-  const running = useStatus(map => map.get(id)?.running === true)
-  const active = useRetain(id, info => (info?.retainedBy?.mainView ?? 0) > 0)
-  const [menu, setMenu] = useState(false)
-  const [confirming, setConfirming] = useState(false)
-  const [problem, setProblem] = useState(null)
-  const node = useRef(null)
-  // An open menu closes on a click anywhere outside its row, and asks again next time.
-  useEffect(() => {
-    if (!menu || typeof document === 'undefined' || typeof document.addEventListener !== 'function') return undefined
-    const away = (event) => {
-      if (node.current?.contains?.(event.target)) return
-      setMenu(false)
-      setConfirming(false)
-    }
-    document.addEventListener('pointerdown', away, true)
-    return () => document.removeEventListener('pointerdown', away, true)
-  }, [menu])
-  const opens = teamReady(rowProps.roster)
-  const state = threadState(row, { running, asking })
-  const dot = typeof rowProps.useSessionStatus === 'function' && unread && !active
-  const ongoing = row.kind === 'ongoing'
-  const label = [row.title, ongoing ? t('Ongoing') : '', state === 'waiting' ? t('Waiting for you') : state === 'working' ? t('Working') : '', dot ? t('Unread activity') : ''].filter(Boolean).join(', ')
-  const remove = () => {
-    if (!confirming) { setConfirming(true); return }
-    setConfirming(false)
-    setMenu(false)
-    setProblem(null)
-    call('omni-row-remove', { sessionId: id }).catch(error => setProblem(error?.message ?? String(error)))
-  }
-  const onMenuKey = (event) => {
-    if (event.key !== 'Escape') return
-    event.stopPropagation()
-    setMenu(false)
-    setConfirming(false)
-  }
-  return h('div', { ref: node, className: 'ot-thread ot-row', 'data-idle': state === 'idle' || undefined, 'data-kind': row.kind },
-    h('button', {
-      type: 'button', className: 'bt-thread', 'data-state': state, 'data-session-id': id, 'aria-label': label, title: row.title,
-      'aria-current': active ? 'page' : undefined, 'aria-disabled': opens ? undefined : true,
-      onClick: () => { if (opens) actions.openSession(id) },
-    },
-    h('span', { className: state === 'waiting' ? 'bt-thread-wait' : state === 'working' ? 'bt-thread-spin' : 'ot-thread-idle', 'aria-hidden': true }),
-    h('span', { className: 'bt-thread-title' }, row.title),
-    ongoing ? h('span', { className: 'ot-row-tag' }, t('Ongoing')) : null,
-    dot ? h('span', { className: 'bt-unread', 'aria-hidden': true }) : null),
-    h('button', {
-      type: 'button', className: 'ot-thread-more ot-row-more', 'aria-label': t('Actions for {name}', { name: row.title }), title: t('More'),
-      'aria-haspopup': 'menu', 'aria-expanded': menu, onClick: () => { setMenu(open => !open); setConfirming(false) },
-    }, h(DotsIcon)),
-    menu ? h('div', { className: 'ot-thread-menu', role: 'menu', 'aria-label': t('Actions for {name}', { name: row.title }), onKeyDown: onMenuKey },
-      h('button', {
-        type: 'button', role: 'menuitem', className: 'ot-thread-menu-item ot-row-remove', 'data-confirm': confirming || undefined,
-        'aria-label': confirming ? t('Remove {name} from the sidebar? Click again', { name: row.title }) : t('Remove {name}', { name: row.title }),
-        onClick: remove,
-      }, confirming ? t('Click again to remove') : t('Remove'))) : null,
-    problem ? h('span', { className: 'ot-thread-problem', role: 'alert' }, hostText(problem)) : null)
-}
-
-/**
  * A channel's chats to add, searched on the host (omni-thread-chats). `onPick(chat)` adds one
  * and resolves with the host's answer: a refusal (a failed mint among them) shows here, and
  * nothing is added. A chat that is a thread already is marked and cannot be picked again.
@@ -334,8 +266,11 @@ function ChannelItem({ channel, state, roster, rowProps, actions, omni, plus, op
     onClosePicker()
     plusButton.current?.focus?.()
   }
+  // A pick is the owner's own click, so it opens the new thread (no panel opens by itself).
   const onPick = chat => addThread(channel.id, chat).then((result) => {
-    if (result?.ok === true) closePicker()
+    if (result?.ok !== true) return result
+    closePicker()
+    if (typeof result.sessionId === 'string' && teamReady(roster)) actions.openSession(result.sessionId)
     return result
   })
   return h('div', { className: 'ot-channel' },
@@ -370,12 +305,6 @@ export function OmniTree(props) {
   if (!isOmniBot(bot)) return null
   const rowProps = rowPropsOf(props, roster?.omniRowProps)
   const threads = Array.isArray(roster?.omniThreads) ? roster.omniThreads : []
-  // The Sessions kept under the Omni Bot, after its chats; shown linked or not, so they can be
-  // opened or removed.
-  const kept = rowsOf(roster)
-  const sessions = kept.length === 0 ? null : h('div', { className: 'ot-others ot-rows', role: 'group', 'aria-label': t('Sessions') },
-    h('span', { className: 'ot-empty' }, t('Sessions')),
-    kept.map(row => h(SessionRow, { key: `${row.sessionId}:${typeof rowProps.useSessionStatus}:${typeof rowProps.useSessionRetainInfo}`, row, actions, rowProps })))
   // Threads of no channel shown here (none linked now, a channel removed, another Omni linked
   // since) still show, so they can be opened or removed: removing needs no link.
   const others = list => (list.length === 0 ? null : h('div', { className: 'ot-others', role: 'group', 'aria-label': t('Other chats') },
@@ -384,7 +313,7 @@ export function OmniTree(props) {
   // Not linked yet: one quiet way into the Connect wizard, so the screen does not say
   // "not connected" a second time here.
   if (state.preview) {
-    return h('div', { className: 'ot-tree' }, h('button', { type: 'button', className: 'ot-channel-row ot-link', onClick: openConnectWizard }, t('Connect Omni'), h('span', { 'aria-hidden': true }, ' →')), others(threads), sessions)
+    return h('div', { className: 'ot-tree' }, h('button', { type: 'button', className: 'ot-channel-row ot-link', onClick: openConnectWizard }, t('Connect Omni'), h('span', { 'aria-hidden': true }, ' →')), others(threads))
   }
   const change = (id, show) => setOpen((before) => {
     const next = new Set(before)
@@ -410,8 +339,7 @@ export function OmniTree(props) {
       },
       onClosePicker: () => setPicking(null),
     })),
-    others(threads.filter(thread => !listed.has(thread.channelId))),
-    sessions)
+    others(threads.filter(thread => !listed.has(thread.channelId))))
 }
 
 /**
@@ -448,7 +376,10 @@ export const OMNI_TREE_CSS = `
 .ot-channel-row[aria-expanded=true] .ot-chevron{transform:rotate(90deg)}
 .ot-channel-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ot-count{flex:none;min-width:18px;padding:0 5px;border-radius:9px;background:var(--bt-accent, #22d3ee);color:#fff;font-size:11px;line-height:18px;text-align:center;font-weight:600}
-.ot-plus{display:grid;place-items:center;flex:none;width:24px;height:24px;padding:0;border:0;border-radius:7px;background:none;color:var(--bt-ink-3);cursor:pointer}
+.ot-plus{display:grid;place-items:center;flex:none;width:24px;height:24px;padding:0;border:0;border-radius:7px;background:none;color:var(--bt-ink-3);cursor:pointer;opacity:0;transition:opacity .12s}
+/* The + shows on a channel's hover or focus, and stays while its picker is open. */
+.ot-channel-head:hover .ot-plus,.ot-channel-head:focus-within .ot-plus,.ot-plus[aria-expanded=true]{opacity:1}
+@media (hover:none){.ot-plus{opacity:1}}
 .ot-plus svg{width:14px;height:14px}
 .ot-plus:hover,.ot-plus[aria-expanded=true]{background:var(--bt-hover);color:var(--bt-ink)}
 .ot-plus:focus-visible{outline:2px solid var(--bt-accent);outline-offset:-2px}
@@ -485,10 +416,6 @@ export const OMNI_TREE_CSS = `
 .ot-thread-phone:hover{color:var(--bt-ink)}
 .ot-thread:hover .ot-thread-remove,.ot-thread-remove:focus-visible,.ot-thread-remove[data-confirm],.ot-thread:hover .ot-thread-phone,.ot-thread-phone:focus-visible,.ot-thread:hover .ot-thread-more,.ot-thread-more:focus-visible{opacity:1}
 .ot-thread-remove[data-confirm]{color:var(--bt-danger, #dc2626)}
-.ot-row-tag{flex:none;font-size:11px;color:var(--bt-ink-3)}
-.ot-row .ot-row-more{right:4px}
-.ot-row:hover .ot-row-more{opacity:1}
-.ot-row-remove[data-confirm]{color:var(--bt-danger, #dc2626)}
 .ot-thread-problem{flex-basis:100%;padding:0 8px 3px 28px;font-size:11px;color:var(--bt-danger, #dc2626)}
 .ot-picker{display:grid;gap:4px;margin:2px 0 4px;padding:6px;border:1px solid var(--bt-line, rgba(127,127,127,.2));border-radius:10px;background:var(--bt-surface, transparent)}
 .ot-picker-head{display:flex;align-items:center;gap:4px}

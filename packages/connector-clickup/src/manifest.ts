@@ -2,8 +2,10 @@
  * ClickUp connector manifest.
  *
  * One code manifest declares the whole provider: the personal-token connect
- * validation (`GET /team`), the four task actions, the webhook signature scheme
- * and the event keys. Nothing in the core knows ClickUp exists.
+ * validation (`GET /team`), the four task actions, the three hierarchy
+ * discovery actions (`list_spaces` → `list_folders` → `list_lists`), the
+ * webhook signature scheme and the event keys. Nothing in the core knows
+ * ClickUp exists.
  *
  * ClickUp webhooks are configured in ClickUp itself (token-auth providers do
  * not need OAuth); the operator pastes ClickUp's generated secret into the
@@ -21,10 +23,15 @@ import { ClickUpApiClient } from './client';
 import { ClickUpApiError, ClickUpError } from './errors';
 import {
   AddCommentInputSchema,
+  type ClickUpApiNavItem,
   type ClickUpApiTask,
   ClickUpDeliverySchema,
+  type ClickUpNavItem,
   type ClickUpTask,
   CreateTaskInputSchema,
+  ListFoldersInputSchema,
+  ListListsInputSchema,
+  ListSpacesInputSchema,
   ListTasksInputSchema,
   UpdateTaskInputSchema,
 } from './types';
@@ -103,6 +110,88 @@ function normalizeTask(task: ClickUpApiTask, fallbackListId: string): ClickUpTas
     ...(status ? { status } : {}),
     listId: task.list?.id ?? fallbackListId,
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Discovery
+// ─────────────────────────────────────────────────────────────────────────────
+
+type DiscoveryScope = 'team' | 'space' | 'folder' | 'teams';
+
+/**
+ * 401/403/404 become a fixed, payload-free sentence naming the scope that
+ * failed: ClickUp's own body is never echoed for discovery, so a caller can act
+ * on the message without parsing provider text or leaking the token.
+ */
+function rejectDiscoveryError(error: unknown, scope: DiscoveryScope, id: string | undefined): never {
+  if (error instanceof ClickUpApiError) {
+    const label = scope === 'teams' ? "the token's teams" : id ? `${scope} ${id}` : scope;
+    if (error.status === 401) {
+      throw new ClickUpApiError(
+        401,
+        'ClickUp rejected the API token (401): the token is invalid or expired. Reconnect the connector with a fresh personal API token.',
+      );
+    }
+    if (error.status === 403) {
+      throw new ClickUpApiError(403, `ClickUp denied access (403): the token is missing permission to view ${label}.`);
+    }
+    if (error.status === 404) {
+      throw new ClickUpApiError(
+        404,
+        `ClickUp found no ${label} (404): the id is wrong or does not exist in that scope.`,
+      );
+    }
+  }
+  throw error;
+}
+
+async function withDiscoveryScope<T>(scope: DiscoveryScope, id: string | undefined, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (error) {
+    rejectDiscoveryError(error, scope, id);
+  }
+}
+
+/** One stable node shape for all three discovery actions. */
+function normalizeNavItem(
+  item: ClickUpApiNavItem,
+  parent: { teamId?: string; spaceId?: string; folderId?: string },
+): ClickUpNavItem {
+  const parentFolderId = item.parent_folder == null ? undefined : String(item.parent_folder);
+  return {
+    id: item.id,
+    name: item.name,
+    archived: item.archived === true,
+    ...(parent.teamId ? { teamId: parent.teamId } : {}),
+    ...(parent.spaceId ? { spaceId: parent.spaceId } : {}),
+    ...(parent.folderId ? { folderId: parent.folderId } : {}),
+    ...(parentFolderId ? { parentFolderId } : {}),
+  };
+}
+
+/**
+ * The team ids `list_spaces` walks: the action input, then the connector's
+ * configured default, then — when neither is set — every Workspace
+ * `GET /team` returns for this token. That last path is token-derived
+ * discovery: it needs no out-of-band id and each returned space still carries
+ * its `teamId`, so the caller never has to guess which Workspace it saw.
+ */
+async function teamIdsFor(
+  context: ConnectorActionContext,
+  client: ClickUpApiClient,
+  inputTeamId: unknown,
+): Promise<string[]> {
+  const explicit = asString(inputTeamId) ?? asString(context.config.teamId);
+  if (explicit) return [explicit];
+  const teams = await withDiscoveryScope('teams', undefined, () => client.getTeams());
+  if (teams.length === 0) {
+    throw new ClickUpError(
+      'TEAM_NOT_FOUND',
+      'ClickUp returned no teams for this API token. The token must belong to a ClickUp Workspace with access.',
+    );
+  }
+  return teams.map((team) => team.id);
 }
 
 export const clickupManifest: ConnectorManifest = {
@@ -258,6 +347,63 @@ export const clickupManifest: ConnectorManifest = {
           return { tasks: tasks.map((task) => normalizeTask(task, listId)) };
         }),
     },
+    {
+      key: 'list_spaces',
+      label: 'List spaces',
+      description:
+        'GET /team/{teamId}/space?archived=false — uses the configured team by default; without one, every team GET /team returns',
+      inputSchema: ListSpacesInputSchema,
+      run: (context) =>
+        guarded(context, async () => {
+          const input = ListSpacesInputSchema.parse(context.input);
+          const client = clientFor(context);
+          const teamIds = await teamIdsFor(context, client, input.teamId);
+          const spaces: ClickUpNavItem[] = [];
+          for (const teamId of teamIds) {
+            const items = await withDiscoveryScope('team', teamId, () => client.listSpaces(teamId));
+            spaces.push(...items.map((item) => normalizeNavItem(item, { teamId })));
+          }
+          return { spaces };
+        }),
+    },
+    {
+      key: 'list_folders',
+      label: 'List folders',
+      description: 'GET /space/{spaceId}/folder?archived=false',
+      inputSchema: ListFoldersInputSchema,
+      run: (context) =>
+        guarded(context, async () => {
+          const input = ListFoldersInputSchema.parse(context.input);
+          const items = await withDiscoveryScope('space', input.spaceId, () =>
+            clientFor(context).listFolders(input.spaceId),
+          );
+          return { folders: items.map((item) => normalizeNavItem(item, { spaceId: input.spaceId })) };
+        }),
+    },
+    {
+      key: 'list_lists',
+      label: 'List lists',
+      description:
+        'GET /space/{spaceId}/list?archived=false, or GET /folder/{folderId}/list?archived=false when folderId is set',
+      inputSchema: ListListsInputSchema,
+      run: (context) =>
+        guarded(context, async () => {
+          const input = ListListsInputSchema.parse(context.input);
+          const folderId = input.folderId;
+          if (folderId) {
+            const items = await withDiscoveryScope('folder', folderId, () =>
+              clientFor(context).listListsInFolder(folderId),
+            );
+            return {
+              lists: items.map((item) => normalizeNavItem(item, { spaceId: input.spaceId, folderId })),
+            };
+          }
+          const items = await withDiscoveryScope('space', input.spaceId, () =>
+            clientFor(context).listListsInSpace(input.spaceId),
+          );
+          return { lists: items.map((item) => normalizeNavItem(item, { spaceId: input.spaceId })) };
+        }),
+    },
   ],
 
   verification: {
@@ -309,6 +455,8 @@ export const clickupManifest: ConnectorManifest = {
     team: 'Optional Team ID. When set, it must appear in GET /team for this token; otherwise the token’s first team is used.',
     personalToken:
       'A personal token is bound to a person. If that person leaves or rotates the token, reconnect the connector — Omni does not refresh it.',
+    discovery:
+      'Discovery actions walk ClickUp without out-of-band ids: list_spaces (optionally scoped to a team), then list_folders(spaceId), then list_lists(spaceId) or list_lists(spaceId, folderId). Their results share one shape — id, name, archived and the known parent ids — so the listId the task actions need is returned by the connector itself.',
     webhook:
       'Create a ClickUp webhook for the task events you need, point it at the subscription inbound URL, and paste ClickUp’s generated secret into the subscription. ClickUp retries failed deliveries; Omni dedupes redeliveries by history id.',
     error401: '401 means ClickUp rejected the token. Check the token and the account’s team access.',

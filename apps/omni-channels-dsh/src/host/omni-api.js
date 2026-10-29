@@ -9,7 +9,6 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { operatesHere, operatesOmni } from './grants.js'
 import { output } from './output.js'
 import { SOURCE_ROUTES } from './omni-routes.js'
-import { HANDOFF_TOOL } from './omni-rules.js'
 import { THREAD_TOOLS } from './threads.js'
 
 const SPEC_TTL_MS = 10 * 60_000
@@ -22,12 +21,11 @@ const CARD_BODY_MAX = 12_000
 
 const invalid = message => Object.assign(new Error(message), { code: 'bot/invalid' })
 
-// Omni operates the platform through its tools; files and the shell belong to the sessions
-// it hands work to. With an omni to operate, the Sessions of a Bot that operates it lose DSH's
-// computer tools and the team's start_task, and its hand-off (HANDOFF_TOOL, handoff.js) hands
-// that work to a session under its row.
+// Omni operates the platform through its tools and has no computer. With an omni to operate,
+// the Sessions of a Bot that operates it lose DSH's computer tools and the team's start_task
+// (grants.js): that work belongs to a Bot that has a computer, which the user picks.
 export const COMPUTER_TOOLS = ['bash', 'read', 'write', 'edit', 'glob', 'grep', 'subagent', 'subagent_fork', 'workflow', 'job_kill', 'job_list', 'job_output', 'todo_write', 'working_directory']
-const COMPUTER_REFUSAL = `Omni works through its own tools, not files or the shell. Hand this to a session under you with ${HANDOFF_TOOL}.`
+const COMPUTER_REFUSAL = 'Omni has no computer: it works only through its own tools. Tell the user what the work needs, so they can give it to a Bot that has one.'
 
 // Chat keys (POST /keys/children…) answer with key text, which must never reach a model: the
 // host mints and revokes them itself, so omni_call refuses them before any request and

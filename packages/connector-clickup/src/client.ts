@@ -14,8 +14,12 @@ import { ClickUpApiError, ClickUpError } from './errors';
 import {
   CLICKUP_DEFAULT_BASE_URL,
   type ClickUpApiComment,
+  type ClickUpApiNavItem,
   type ClickUpApiTask,
   ClickUpCommentResponseSchema,
+  ClickUpFoldersResponseSchema,
+  ClickUpListsResponseSchema,
+  ClickUpSpacesResponseSchema,
   ClickUpTaskResponseSchema,
   ClickUpTasksResponseSchema,
   type ClickUpTeam,
@@ -103,6 +107,46 @@ export class ClickUpApiClient {
     const parsed = ClickUpTasksResponseSchema.safeParse(await this.readJson(res, operation));
     if (!parsed.success) throw this.invalidResponse(res, operation, parsed.error.message);
     return parsed.data.tasks;
+  }
+
+  /** GET /team/{teamId}/space — active spaces in one Workspace. */
+  async listSpaces(teamId: string): Promise<ClickUpApiNavItem[]> {
+    const path = `/team/${encodeURIComponent(teamId)}/space?archived=false`;
+    const operation = `GET ${path}`;
+    const res = await this.request({ method: 'GET', path, operation });
+    const parsed = ClickUpSpacesResponseSchema.safeParse(await this.readJson(res, operation));
+    if (!parsed.success) throw this.invalidResponse(res, operation, parsed.error.message);
+    return parsed.data.spaces;
+  }
+
+  /** GET /space/{spaceId}/folder — active folders in one space (subfolders flat). */
+  async listFolders(spaceId: string): Promise<ClickUpApiNavItem[]> {
+    const path = `/space/${encodeURIComponent(spaceId)}/folder?archived=false`;
+    const operation = `GET ${path}`;
+    const res = await this.request({ method: 'GET', path, operation });
+    const parsed = ClickUpFoldersResponseSchema.safeParse(await this.readJson(res, operation));
+    if (!parsed.success) throw this.invalidResponse(res, operation, parsed.error.message);
+    return parsed.data.folders;
+  }
+
+  /** GET /folder/{folderId}/list — active lists inside one folder. */
+  async listListsInFolder(folderId: string): Promise<ClickUpApiNavItem[]> {
+    const path = `/folder/${encodeURIComponent(folderId)}/list?archived=false`;
+    const operation = `GET ${path}`;
+    const res = await this.request({ method: 'GET', path, operation });
+    const parsed = ClickUpListsResponseSchema.safeParse(await this.readJson(res, operation));
+    if (!parsed.success) throw this.invalidResponse(res, operation, parsed.error.message);
+    return parsed.data.lists;
+  }
+
+  /** GET /space/{spaceId}/list — active lists in a space that sit in no folder. */
+  async listListsInSpace(spaceId: string): Promise<ClickUpApiNavItem[]> {
+    const path = `/space/${encodeURIComponent(spaceId)}/list?archived=false`;
+    const operation = `GET ${path}`;
+    const res = await this.request({ method: 'GET', path, operation });
+    const parsed = ClickUpListsResponseSchema.safeParse(await this.readJson(res, operation));
+    if (!parsed.success) throw this.invalidResponse(res, operation, parsed.error.message);
+    return parsed.data.lists;
   }
 
   private async request({ method, path, body, operation }: ClickUpRequest): Promise<Response> {

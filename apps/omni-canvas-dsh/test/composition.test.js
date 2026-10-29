@@ -4,9 +4,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { TEAM_TOOLS } from '@automagik/bots-dsh/src/host/constants.js'
-import { HANDOFF_TOOL, OPERATOR_RULES } from '@automagik/omni-channels-dsh/src/host/omni-rules.js'
+import { OPERATOR_RULES } from '@automagik/omni-channels-dsh/src/host/omni-rules.js'
 import { THREAD_TOOLS } from '@automagik/omni-channels-dsh/src/host/threads.js'
 import * as plugin from '../index.js'
+import { CANVAS_RULES } from '../src/host/canvas.js'
+import { CLICKUP_PROGRAM } from './fixtures/clickup.js'
 import { applyAll, composed, fakeContext, teamFile } from './team.js'
 
 const TEAM = {
@@ -32,7 +34,7 @@ const rulesIn = text => text.slice(text.indexOf(RULES_START), text.indexOf(RULES
 // fixture). With the channels plugin and this one, a Main Bot's prompt is that text, byte
 // for byte, or its provider's prompt cache starts over; only Omni's rules are as the channels
 // plugin has them now, where the lines that named Tasks and start_task say where the work
-// runs instead and name the hand-off.
+// runs instead, or that Omni has no computer.
 test('with all three plugins, a Main Bot\'s prompt is the text it was before the split, with Omni\'s rules as they are now', async (t) => {
   const named = composed(TEAM, { channelsConfig: { omni: { url: 'https://omni.example.com' } } })
   const older = composed(TEAM, { config: { omni: { url: 'https://omni.example.com' } } })
@@ -43,9 +45,16 @@ test('with all three plugins, a Main Bot\'s prompt is the text it was before the
   const omni = fixture('main-prompt-omni.txt')
   const now = omni.replace(rulesIn(omni), OPERATOR_RULES)
   assert.notEqual(now, omni)
-  assert.equal(prompt(named, 'm1'), now)
+  // The team text around the canvas section stays byte for byte; the canvas section itself
+  // is generated here and grows with the catalogue.
+  const canvasStart = now.indexOf('\n\n## Showing things: canvases\n')
+  const afterCanvas = now.indexOf('\n\n## How your Bot team works\n')
+  assert.ok(canvasStart > 0, 'the fixture still carries the canvas section')
+  assert.ok(afterCanvas > canvasStart, 'the fixture still carries the text after the canvas section')
+  const expected = `${now.slice(0, canvasStart + 2)}${CANVAS_RULES}${now.slice(afterCanvas)}`
+  assert.equal(prompt(named, 'm1'), expected)
   // An Omni named the older way, on the team's row, counts the same.
-  assert.equal(prompt(older, 'm1'), now)
+  assert.equal(prompt(older, 'm1'), expected)
   assert.equal(prompt(plain, 'm1'), fixture('main-prompt.txt'))
 })
 
@@ -70,6 +79,8 @@ test('show_canvas shows only canvases that pass, and only for a Main Bot', async
   const tool = run.ctx.registeredTools.get('show_canvas')
   const as = id => args => tool.execute(args, { agent: { id } })
   assert.equal(await as('m1')({ program: 'root = Stack([a])\na = Text("hi")' }), 'Shown.')
+  // The host serializes the new catalogue entries: a full 82-row Board/Section/Tree program.
+  assert.equal(await as('m1')({ program: CLICKUP_PROGRAM }), 'Shown.')
   assert.match(await as('m1')({ program: 'root = Stack([a])\na = Text("hi"' }), /^Not shown: Line 2 does not close its brackets .* call show_canvas again\.$/)
   assert.match(await as('w1')({ program: 'root = Stack([a])\na = Text("hi")' }), /Only a Main Bot/)
 })
@@ -86,14 +97,15 @@ function services(ctx) {
   return ctx
 }
 
-// The channels plugin's own tools, the chat threads' (THREAD_TOOLS) and the Omni Bot's
-// hand-off (HANDOFF_TOOL), come on top.
+// The channels plugin's own tools and the chat threads' (THREAD_TOOLS) come on top: the Omni
+// Bot has no hand-off tool.
 test('with all three plugins, the team registers exactly the tools TEAM_TOOLS names, plus the channels plugin\'s own', async (t) => {
   const ctx = services(fakeContext())
   const home = mkdtempSync(join(tmpdir(), 'omni-canvas-all-'))
   applyAll(ctx, { home, browser: true })
   t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
-  assert.deepEqual([...ctx.registeredTools.keys()].sort(), [...TEAM_TOOLS, ...THREAD_TOOLS, HANDOFF_TOOL].sort())
+  assert.deepEqual([...ctx.registeredTools.keys()].sort(), [...TEAM_TOOLS, ...THREAD_TOOLS].sort())
+  assert.equal(ctx.registeredTools.has('omni_handoff'), false)
   // This plugin's own come last, and it adds no llm/stream listener.
   const own = ctx.calls.slice(ctx.calls.indexOf('provide omniChannels') + 1)
   assert.deepEqual(own, ['effect ds-bot: canvas rules', 'tool show_canvas'])

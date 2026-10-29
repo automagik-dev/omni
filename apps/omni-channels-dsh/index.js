@@ -9,7 +9,6 @@
 // turning this plugin off takes all of it away. Its own runtime is provided as
 // omniChannels for the canvas plugin, which reads omni through it.
 import * as resumeHook from './src/host/resume-hook.js'
-import * as dshBots from './src/host/dsh-bots.js'
 import * as grants from './src/host/grants.js'
 import * as subscriptions from './src/host/subscriptions.js'
 import * as asks from './src/host/asks.js'
@@ -27,8 +26,6 @@ import * as threads from './src/host/threads.js'
 import * as threadTools from './src/host/thread-tools.js'
 import * as standingRecovery from './src/host/standing-recovery.js'
 import * as standingRuns from './src/host/standing-runs.js'
-import * as omniRows from './src/host/omni-rows.js'
-import * as handoff from './src/host/handoff.js'
 
 export const name = 'omni-channels'
 // The chat threads take their instructions from a prompt section and archive their Sessions in
@@ -36,22 +33,18 @@ export const name = 'omni-channels'
 export const inject = ['omniTeam', 'tools', 'sessions', 'settings', 'systemPrompt', 'workspaceRegistry']
 
 // The team's restart hook first, before any other work, so the team's restart pass hears of
-// this plugin's Sessions (resume-hook.js), then the adapter over the team's DSH bots
-// (dsh-bots.js), which the automations' tools offer as they register. Then the team's
-// install order, kept: automations and Omni's tools first, the link (the Omnis found on
-// this computer to link, one to run here, the terminal that updates or sets one up, and
-// updating them) and its events after.
+// this plugin's Sessions (resume-hook.js). Then the team's install order, kept: automations
+// and Omni's tools first, the link (the Omnis found on this computer to link, one to run here,
+// the terminal that updates or sets one up, and updating them) and its events after.
 // Asking the Omni Bot from a thread (asks.js) comes right after the automations, whose run
 // log it shares. Permissions come before the tools that check them. The threads' own keys
 // come after omni.js, whose requests they make, the threads after their keys, and the
 // threads' own tools after the threads, whose additions they restrict. The standing-Session
-// runs (automations that hand events to a thread or a session) after the threads, whose
-// removals they hear, their restart recovery right after them, then the session rows under
-// the Omni Bot (omni-rows.js), which follow the Omni Bot's model through the threads and hear
-// the standing runs end, and the Omni Bot's hand-off (handoff.js), whose Sessions are rows,
-// before the events, which queue for them. Changing channels from the Channels page comes
-// last: it only calls omni through omni.js.
-const MODULES = [resumeHook, dshBots, grants, subscriptions, asks, omniApi, omniLink, omniDiscover, omniLocal, omniTerminal, omniUpdate, omni, threadKeys, threads, threadTools, standingRuns, standingRecovery, omniRows, handoff, omniEvents, omniChannelActions]
+// runs (automations that run each event in its chat's thread) after the threads, whose
+// removals they hear, and their restart recovery right after them, before the events, which
+// queue for them.
+// Changing channels from the Channels page comes last: it only calls omni through omni.js.
+const MODULES = [resumeHook, grants, subscriptions, asks, omniApi, omniLink, omniDiscover, omniLocal, omniTerminal, omniUpdate, omni, threadKeys, threads, threadTools, standingRuns, standingRecovery, omniEvents, omniChannelActions]
 
 export function apply(ctx, config = {}) {
   ctx.provide('omniChannels', createRuntime(ctx, ctx.omniTeam, config))

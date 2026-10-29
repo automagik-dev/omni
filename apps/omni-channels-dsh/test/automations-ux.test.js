@@ -9,7 +9,7 @@ import { omni } from './omni-client.js'
 // The automations board's quieter first run and the warning Omni's confirmation carries,
 // out of their React. Bundled as DSH bundles the client, with stand-in React.
 async function load() {
-  const entry = 'export { headCount, savedOf, savedNotice, SavedAutomationCard, SubscriptionsButton } from \'./subscriptions.js\''
+  const entry = 'export { AutomationRow, headCount, savedOf, savedNotice, SavedAutomationCard, SubscriptionsButton, workerOf } from \'./subscriptions.js\''
   const bundle = await build({
     stdin: { contents: entry, resolveDir: fileURLToPath(new URL('../src/client/', import.meta.url)), loader: 'js' },
     bundle: true, format: 'cjs', platform: 'node', write: false, logLevel: 'silent',
@@ -93,4 +93,28 @@ test('Omni\'s confirmation of a saved automation carries the steering warning, l
   assert.match(textOf(acting), /acts without asking you/)
   assert.equal(ui.SavedAutomationCard({ done: false, content: '', roster: roster() }), null)
   assert.equal(ui.SavedAutomationCard({ done: true, content: 'Not saved: Which chats?', roster: roster() }).props.className, 'bt-event')
+})
+
+// A chat-thread worker runs each event in the thread of its chat: the board names the thread a
+// run went to, the one chat an automation watches, or each chat's own thread; a moved
+// automation's one line from the host shows on its row.
+test('the board names a chat-thread worker by its thread, its one chat, or each chat\'s own; a moved automation says so on its row', () => {
+  const threads = { ...roster(), omniThreads: [{ id: 't1', sessionId: 's1', chatId: 'c1', title: 'Marina' }, { id: 't2', sessionId: 's2', chatId: 'c2', title: 'Obra' }] }
+  const chat = (id, name) => ({ kind: 'chat', id, name, chatKind: 'direct' })
+  const worker = { kind: 'thread' }
+  assert.deepEqual([ui.workerOf(worker, threads, { sources: [chat('c1', 'Marina')] }).name, ui.workerOf(worker, threads, { sources: [chat('c1', 'Marina')] }).chat], ['The thread of Marina', 'Marina'])
+  // A chat with no thread yet goes by its own name.
+  assert.equal(ui.workerOf(worker, threads, { sources: [chat('c9', 'Ana')] }).name, 'The thread of Ana')
+  const many = { sources: [chat('c1', 'Marina'), { kind: 'channel', id: 'i1', name: 'Pessoal' }] }
+  assert.deepEqual([ui.workerOf(worker, threads, many).name, ui.workerOf(worker, threads, many).session], ['Each chat\'s own thread', true])
+  // A run names the thread it went to.
+  assert.equal(ui.workerOf(worker, threads, { ...many, sessionId: 's2' }).name, 'The thread of Obra')
+  const sub = { id: 'sub-a', name: 'Moved', on: true, askFirst: true, sources: [chat('c1', 'Marina')], trigger: { kind: 'message' }, worker, outputs: {}, updatedAt: 0 }
+  const notes = row => (function walk(node) {
+    if (node === null || node === undefined || typeof node !== 'object') return []
+    return [...(node.props?.className === 'os-row-note' ? [textOf(node)] : []), ...(node.children ?? []).flatMap(walk)]
+  })(row)
+  const note = 'It handed every event to one ongoing session; now each event runs in the thread of its chat.'
+  assert.deepEqual(notes(ui.AutomationRow({ sub: { ...sub, note }, roster: threads, runs: [] })), [note])
+  assert.deepEqual(notes(ui.AutomationRow({ sub, roster: threads, runs: [] })), [])
 })

@@ -38,6 +38,46 @@ const Stat = ({ props }) => h('div', { className: 'ou-stat' },
 const TableNode = ({ props, renderNode }) => h(Table, { columns: props.columns, rows: (props.rows ?? []).map(row => (Array.isArray(row) ? row : [row]).map(value => (value && typeof value === 'object' && 'typeName' in value ? renderNode(value) : value))) })
 const KeyValueNode = ({ props }) => h(KeyValue, { pairs: props.pairs ?? [] })
 
+// A bucket longer than this starts closed, so a 30-task column does not flood the reply.
+export const BOARD_COLLAPSE_AFTER = 8
+const countOf = (count, fallback) => (Number.isInteger(count) ? count : fallback)
+const rowsOf = (rows, renderNode) => (rows ?? []).map((row, index) => h(Fragment, { key: index }, nodeOf(row, renderNode)))
+
+function BoardColumn({ column, renderNode }) {
+  const rows = column.rows ?? []
+  const count = countOf(column.count, rows.length)
+  const head = h('span', { className: 'ou-board-column-head' }, h('strong', null, column.title), h('span', { className: 'ou-count' }, count))
+  const body = h('div', { className: 'ou-board-rows' }, rowsOf(rows, renderNode))
+  return rows.length > BOARD_COLLAPSE_AFTER
+    ? h('details', { className: 'ou-board-column' }, h('summary', null, head), body)
+    : h('section', { className: 'ou-board-column' }, head, body)
+}
+
+function Board({ props, renderNode }) {
+  return h('section', { className: 'ou-board' },
+    props.title ? h('strong', { className: 'ou-board-title' }, props.title) : null,
+    h('div', { className: 'ou-board-columns' }, (props.columns ?? []).map((column, index) => h(BoardColumn, { key: index, column, renderNode }))))
+}
+
+function Section({ props, renderNode }) {
+  const children = props.children ?? []
+  return h('details', { className: 'ou-disclosure' },
+    h('summary', null, h('span', { className: 'ou-disclosure-title' }, props.title), h('span', { className: 'ou-count' }, countOf(props.count, children.length))),
+    h('div', { className: 'ou-disclosure-body' }, rowsOf(children, renderNode)))
+}
+
+function treeList(items, depth = 0) {
+  return h('ul', { className: 'ou-tree', 'data-depth': depth }, (items ?? []).map((node, index) => h('li', { key: index, className: 'ou-tree-node' },
+    h('span', { className: 'ou-tree-label' }, h('span', null, node.label), node.meta ? h('span', { className: 'ou-count' }, node.meta) : null),
+    node.children?.length ? treeList(node.children, depth + 1) : null)))
+}
+
+function Tree({ props }) {
+  return h('section', { className: 'ou-tree-wrap' },
+    props.title ? h('strong', { className: 'ou-board-title' }, props.title) : null,
+    treeList(props.items ?? []))
+}
+
 function Chart({ props }) {
   const data = (props.data ?? []).filter(point => Number.isFinite(point?.value))
   if (data.length === 0) return h('span', { className: 'ou-muted' }, t('No data to chart.'))
@@ -89,8 +129,8 @@ function Button({ props }) {
   return h('button', { type: 'button', className: 'ou-button', 'data-tone': props.tone ?? 'normal', onClick: () => trigger(props.label, undefined, props.action) }, props.label)
 }
 
-const RENDER = {
-  Stack, Row, Card, Heading, Text, Badge: BadgeNode, Stat, Table: TableNode, Chart, KeyValue: KeyValueNode, Select, Button,
+export const RENDER = {
+  Stack, Row, Card, Heading, Text, Badge: BadgeNode, Stat, Table: TableNode, Board, Section, Tree, Chart, KeyValue: KeyValueNode, Select, Button,
   Channel: ({ props }) => h(LiveChannel, { id: props.id }),
   QrCode: ({ props }) => h(LiveQr, { channelId: props.channelId }),
   Chat: ({ props }) => h(LiveChat, { id: props.id, limit: props.limit }),
@@ -162,6 +202,32 @@ export const OMNI_UI_CSS = `
 .ou-stat{display:flex;flex-direction:column;gap:2px;padding:12px 14px;border:1px solid var(--bt-line);border-radius:14px;background:var(--bt-card)}
 .ou-stat-label{font-size:12.5px;color:var(--bt-ink-3)}
 .ou-stat-value{font-size:22px;line-height:28px;font-weight:600;font-variant-numeric:tabular-nums}
+.ou-board{display:flex;flex-direction:column;gap:10px;min-width:0}
+.ou-board-title{font-size:13px;font-weight:600}
+.ou-board-columns{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;align-items:start}
+.ou-board-column{display:flex;flex-direction:column;gap:6px;min-width:0;padding:10px 12px;border:1px solid var(--bt-line);border-radius:14px;background:var(--bt-card)}
+.ou-board-column>summary{list-style:none;cursor:pointer}
+.ou-board-column>summary::-webkit-details-marker{display:none}
+.ou-board-column>summary .ou-board-column-head::before{content:'▸';margin-right:2px;color:var(--bt-ink-3);transition:transform .15s}
+.ou-board-column[open]>summary .ou-board-column-head::before{transform:rotate(90deg)}
+.ou-board-column-head{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:13px}
+.ou-board-column-head strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ou-board-rows{display:flex;flex-direction:column;gap:6px;min-width:0}
+.ou-board-rows>*{min-width:0}
+.ou-disclosure{padding:10px 12px;border:1px solid var(--bt-line);border-radius:14px;background:var(--bt-card)}
+.ou-disclosure>summary{display:flex;align-items:center;gap:8px;list-style:none;cursor:pointer;font-size:13.5px;font-weight:600}
+.ou-disclosure>summary::-webkit-details-marker{display:none}
+.ou-disclosure>summary::before{content:'▸';color:var(--bt-ink-3);transition:transform .15s}
+.ou-disclosure[open]>summary::before{transform:rotate(90deg)}
+.ou-disclosure-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ou-disclosure-body{display:flex;flex-direction:column;gap:8px;margin-top:10px}
+.ou-count{display:inline-flex;flex:0 0 auto;align-items:center;justify-content:center;min-width:22px;height:20px;padding:0 7px;border-radius:999px;background:var(--bt-hover);color:var(--bt-ink-2);font-size:12px;font-weight:500;font-variant-numeric:tabular-nums}
+.ou-tree-wrap{display:flex;flex-direction:column;gap:8px;min-width:0}
+.ou-tree{display:flex;flex-direction:column;gap:6px;margin:0;padding:0;list-style:none;min-width:0}
+.ou-tree .ou-tree{margin:6px 0 0 12px;padding-left:12px;border-left:1px solid var(--bt-line)}
+.ou-tree-node{min-width:0}
+.ou-tree-label{display:flex;align-items:center;gap:8px;min-width:0;font-size:13px}
+.ou-tree-label>span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ou-chart{margin:0;display:flex;flex-direction:column;gap:8px;padding:12px 14px;border:1px solid var(--bt-line);border-radius:14px;background:var(--bt-card)}
 .ou-chart-title{font-size:13px;font-weight:600}
 .ou-bars{display:flex;flex-direction:column;gap:6px}

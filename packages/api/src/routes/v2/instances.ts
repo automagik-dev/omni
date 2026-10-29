@@ -4,7 +4,15 @@
 
 import { zValidator } from '@hono/zod-validator';
 import type { ChannelPlugin, ChannelRegistry, GroupParticipantUpdateResult } from '@omni/channel-sdk';
-import { AccessModeSchema, ChannelTypeSchema, NotFoundError, createLogger } from '@omni/core';
+import {
+  AccessModeSchema,
+  ChannelTypeSchema,
+  ExponentialScheduleSchema,
+  FixedScheduleSchema,
+  FollowUpSequenceConfigSchema,
+  NotFoundError,
+  createLogger,
+} from '@omni/core';
 import type { GupshupHandoffOptions } from '@omni/db';
 import { type Context, Hono } from 'hono';
 import { z } from 'zod';
@@ -18,9 +26,9 @@ import { filterByInstanceAccess, requireInstanceAccess } from '../../middleware/
 import { invalidateProviderCacheForInstance } from '../../plugins/agent-dispatcher';
 import { getQrCode } from '../../plugins/qr-store';
 import {
-  ChannelSettingsShape,
   CloseContactConfigSchema,
   GupshupHandoffOptionsSchema,
+  InstanceSettingsSchema,
   SelfChatsSchema,
   SelfHistorySchema,
   SelfMessagesSchema,
@@ -29,6 +37,7 @@ import {
 import type { Services } from '../../services';
 import { PairingRequestConsumedError, PairingRequestExpiredError } from '../../services/access';
 import { AgentReplayService } from '../../services/agent-replay';
+import { ApiKeyService } from '../../services/api-keys';
 import {
   readOwnedChats,
   readOwnedHistory,
@@ -372,7 +381,6 @@ const AGENT_PROVIDER_READ_ONLY_MESSAGE =
 const updateInstanceSchema = createInstanceSchema
   .partial()
   .extend({
-    ...ChannelSettingsShape,
     /**
      * Channel-specific connection config (#889).
      *
@@ -442,6 +450,19 @@ const updateInstanceSchema = createInstanceSchema
     // Strip the .default('humanized') so a PATCH that omits it never resets the stored pacing.
     outboundPacing: z.enum(['humanized', 'immediate']).optional(),
     outboundPacingOverride: z.boolean().optional(),
+  })
+  .extend(InstanceSettingsSchema.shape)
+  .extend({
+    agentReplyFilter: agentReplyFilterSchema.nullable().optional(),
+    // #1403: core's rules (quiet hours included), with unknown schedule keys rejected, not stripped.
+    followUpConfig: FollowUpSequenceConfigSchema.extend({
+      schedule: z.discriminatedUnion('kind', [FixedScheduleSchema.strict(), ExponentialScheduleSchema.strict()]),
+    })
+      .nullable()
+      .optional(),
+    metaConnectedAt: InstanceSettingsSchema.shape.metaConnectedAt.transform((value) =>
+      typeof value === 'string' ? new Date(value) : value,
+    ),
   })
   // #1211: reject unknown fields (400 naming the key) instead of silently stripping them.
   .strict();
@@ -1229,40 +1250,29 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
   return c.json({ data: sanitizeInstance(instance) }, 201);
 });
 
-/** Validate a supplied or newly activated chain reference before persistence. */
-async function validateChainTarget(
-  c: Context<{ Variables: AppVariables }>,
-  sourceId: string,
-  targetId: string | null | undefined,
-  chainMode: z.infer<typeof updateInstanceSchema>['chainMode'],
-): Promise<Response | undefined> {
-  // A mode-only write can activate an existing reference. Authorize that
-  // effective target too, but do not reauthorize an old target when disabling
-  // chaining, changing unrelated settings, or explicitly clearing the reference.
-  const effectiveTarget =
-    targetId === undefined && chainMode !== undefined && chainMode !== 'off'
-      ? (await c.get('services').instances.getById(sourceId)).agentChainToInstanceId
-      : targetId;
-  if (!effectiveTarget) return;
-  if (effectiveTarget === sourceId) {
+async function denyInstanceUpdate(c: Context<{ Variables: AppVariables }>, data: z.infer<typeof updateInstanceSchema>) {
+  const pacingDenied = denyPacingOverrideForScopedKey(c, data.outboundPacingOverride);
+  if (pacingDenied) return pacingDenied;
+  if (!data.agentChainToInstanceId && (!data.chainMode || data.chainMode === 'off')) return;
+  const services = c.get('services');
+  const id = c.req.param('id') ?? '';
+  const targetId =
+    data.agentChainToInstanceId !== undefined
+      ? data.agentChainToInstanceId
+      : (await services.instances.getById(id)).agentChainToInstanceId;
+  if (!targetId) return;
+  if (targetId.toLowerCase() === id.toLowerCase()) {
     return c.json({ error: { code: 'VALIDATION_ERROR', message: 'An instance cannot chain to itself' } }, 400);
   }
-  // Reuse the same access guard as /:id before looking up the target. The
-  // real service lookup uses the request's existing tenant-scoped handle.
-  const denied = await requireInstanceAccess(() => effectiveTarget)(c, async () => {});
-  if (denied) return denied;
-  await c.get('services').instances.getById(effectiveTarget);
-}
-
-/** Keep update validation ordered before the generic persistence path. */
-async function validateInstanceUpdate(
-  c: Context<{ Variables: AppVariables }>,
-  id: string,
-  data: z.infer<typeof updateInstanceSchema>,
-): Promise<Response | null | undefined> {
-  const chainDenied = await validateChainTarget(c, id, data.agentChainToInstanceId, data.chainMode);
-  if (chainDenied) return chainDenied;
-  return denyPacingOverrideForScopedKey(c, data.outboundPacingOverride);
+  const key = c.get('apiKey');
+  const denied = () => c.json({ error: { code: 'FORBIDDEN', message: 'Chain target is not accessible' } }, 403);
+  if (!key || !ApiKeyService.instanceAllowed(key.instanceIds, targetId)) return denied();
+  try {
+    await services.instances.getById(targetId);
+  } catch (error) {
+    if (!(error instanceof NotFoundError)) throw error;
+    return denied();
+  }
 }
 
 /**
@@ -1271,8 +1281,8 @@ async function validateInstanceUpdate(
 instancesRoutes.patch('/:id', instanceAccess, zValidator('json', updateInstanceSchema), async (c) => {
   const id = c.req.param('id');
   const { force, ...data } = c.req.valid('json');
-  const validationDenied = await validateInstanceUpdate(c, id, data);
-  if (validationDenied) return validationDenied;
+  const denied = await denyInstanceUpdate(c, data);
+  if (denied) return denied;
   const services = c.get('services');
 
   // The conflict is keyed on the PAIR (app token, bot mode), so either field

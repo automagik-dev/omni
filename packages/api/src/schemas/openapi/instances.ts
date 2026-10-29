@@ -3,81 +3,10 @@
  */
 
 import type { OpenAPIRegistry } from '@asteasolutions/zod-to-openapi';
-import {
-  ChannelTypeSchema,
-  ExponentialScheduleSchema,
-  FixedScheduleSchema,
-  FollowUpSequenceConfigSchema,
-} from '@omni/core';
+import { ChannelTypeSchema } from '@omni/core';
 import { z } from '../../lib/zod-openapi';
 import { ErrorSchema, PaginationMetaSchema, SuccessSchema } from './common';
-
-/** Shared #1403 PATCH/GET field definitions; no PATCH defaults or coercion. */
-const sessionResetModeSchema = z.discriminatedUnion('mode', [
-  z.object({ mode: z.literal('none') }).strict(),
-  z.object({ mode: z.literal('daily'), hour: z.number().int().min(0).max(23).optional() }).strict(),
-  z.object({ mode: z.literal('idle'), minutes: z.number().finite().positive().optional() }).strict(),
-]);
-const sessionResetSchema = z
-  .object({
-    default: sessionResetModeSchema.optional(),
-    dm: sessionResetModeSchema.optional(),
-    group: sessionResetModeSchema.optional(),
-    thread: sessionResetModeSchema.optional(),
-  })
-  .strict();
-// Keep core defaults, quiet-hours refinements and schedule constraints. The API
-// additionally rejects unknown schedule keys rather than silently dropping them.
-const channelFollowUpSchema = FollowUpSequenceConfigSchema.extend({
-  schedule: z.discriminatedUnion('kind', [FixedScheduleSchema.strict(), ExponentialScheduleSchema.strict()]),
-});
-export const ChannelSettingsShape = {
-  agentChainToInstanceId: z
-    .string()
-    .uuid()
-    .nullable()
-    .optional()
-    .describe('Chain target instance UUID; null clears. Must exist and be accessible; cannot target itself'),
-  chainMode: z.enum(['off', 'forward', 'bidirectional']).optional().describe('Agent chaining mode'),
-  triggerMode: z.enum(['round-trip', 'fire-and-forget']).optional().describe('Agent trigger execution mode'),
-  triggerReactions: z
-    .array(z.string())
-    .nullable()
-    .optional()
-    .describe('Reaction emojis that trigger the agent; null means all when reaction.received is enabled'),
-  triggerMentionPatterns: z
-    .array(z.string())
-    .nullable()
-    .optional()
-    .describe('Custom mention trigger patterns; null clears'),
-  disableUsernamePrefix: z.boolean().optional().describe('Disable username prefix'),
-  agentAckMessage: z.string().nullable().optional().describe('Pre-dispatch acknowledgement text; null disables'),
-  processAudio: z
-    .boolean()
-    .optional()
-    .describe('Stored audio-processing flag; server transcription uses audioTranscription'),
-  processImages: z.boolean().optional().describe('Stored image-processing flag'),
-  processVideo: z.boolean().optional().describe('Stored video-processing flag'),
-  processDocuments: z.boolean().optional().describe('Stored document-processing flag'),
-  processMediaOnBlocked: z.boolean().optional().describe('Media-processing preference for blocked messages'),
-  downloadMediaOnSync: z.boolean().optional().describe('Download media during history sync'),
-  inboundMaxAgeMinutes: z
-    .number()
-    .int()
-    .min(0)
-    .max(2147483647)
-    .optional()
-    .describe('Maximum inbound message age in minutes; zero disables age filtering'),
-  replayEnabled: z.boolean().optional().describe('Automatically replay missed messages on reconnect'),
-  sessionReset: sessionResetSchema
-    .nullable()
-    .optional()
-    .describe('Per-chat-type reset strategies; daily hour is UTC (default 3), idle minutes default 60; null clears'),
-  followUpConfig: channelFollowUpSchema
-    .nullable()
-    .optional()
-    .describe('Instance-scope follow-up config; replaces the whole object; null falls back to the agent scope'),
-};
+import { FollowUpSequenceConfigOpenApiSchema } from './follow-up';
 
 /**
  * Gupshup HANDOFF options (instances.gupshup_handoff_options). This is the ONE
@@ -186,56 +115,168 @@ const PacingOverrideForbiddenResponse = {
   content: { 'application/json': { schema: ErrorSchema } },
 };
 
+// No defaults: omitted PATCH settings must never reset stored overrides.
+const sessionResetRule = z.discriminatedUnion('mode', [
+  z.object({ mode: z.literal('none') }).strict(),
+  z.object({ mode: z.literal('daily'), hour: z.number().int().min(0).max(23).optional() }).strict(),
+  z.object({ mode: z.literal('idle'), minutes: z.number().int().positive().optional() }).strict(),
+]);
+const metaIdentifier = z.string().min(1).max(64).nullable().optional();
+export const InstanceSettingsSchema = z
+  .object({
+    agentId: z.string().uuid().nullable().optional(),
+    agentReplyFilter: z
+      .object({
+        mode: z.enum(['all', 'filtered']),
+        conditions: z
+          .object({
+            onDm: z.boolean().optional(),
+            onMention: z.boolean().optional(),
+            onReply: z.boolean().optional(),
+            onNameMatch: z.boolean().optional(),
+            namePatterns: z.array(z.string()).optional(),
+          })
+          .optional(),
+      })
+      .nullable()
+      .optional(),
+    agentSessionStrategy: z.enum(['per_user', 'per_chat', 'per_thread']).optional(),
+    agentPrefixSenderName: z.boolean().optional(),
+    agentGateEnabled: z.boolean().optional(),
+    agentGateModel: z.string().max(120).nullable().optional(),
+    agentGatePrompt: z.string().nullable().optional(),
+    agentWaitForMedia: z.boolean().optional(),
+    agentSendMediaPath: z.boolean().optional(),
+    agentSendMediaPathTypes: z.array(z.string()).nullable().optional(),
+    agentStalledTimeoutMs: z.number().int().nonnegative().optional(),
+    messageSupersedeMode: z.enum(['off', 'discard']).optional(),
+    enableAutoSplit: z.boolean().optional(),
+    messageFormatMode: z.enum(['convert', 'passthrough']).optional(),
+    disableUsernamePrefix: z.boolean().optional(),
+    triggerEvents: z.array(z.string()).nullable().optional(),
+    triggerReactions: z.array(z.string()).nullable().optional(),
+    triggerMentionPatterns: z.array(z.string()).nullable().optional(),
+    triggerMode: z.enum(['round-trip', 'fire-and-forget']).optional(),
+    agentChainToInstanceId: z.string().uuid().nullable().optional(),
+    chainMode: z.enum(['off', 'forward', 'bidirectional']).optional(),
+    sessionReset: z
+      .object({
+        default: sessionResetRule.optional(),
+        dm: sessionResetRule.optional(),
+        group: sessionResetRule.optional(),
+        thread: sessionResetRule.optional(),
+      })
+      .strict()
+      .nullable()
+      .optional(),
+    // Postgres integer column: larger values would fail the write instead of a 400.
+    inboundMaxAgeMinutes: z.number().int().nonnegative().max(2_147_483_647).optional(),
+    replayEnabled: z.boolean().optional(),
+    inboundReplyContext: z.boolean().optional(),
+    messageDebounceMode: z.enum(['disabled', 'fixed', 'randomized', 'presence']).optional(),
+    messageDebounceMinMs: z.number().int().nonnegative().optional(),
+    messageDebounceGroupMs: z.number().int().nonnegative().nullable().optional(),
+    messageDebounceMaxMs: z.number().int().nonnegative().optional(),
+    messageDebounceRestartOnTyping: z.boolean().optional(),
+    messageDebounceMaxWaitMs: z.number().int().nonnegative().nullable().optional(),
+    messageSplitDelayMode: z.enum(['disabled', 'fixed', 'randomized']).optional(),
+    messageSplitDelayFixedMs: z.number().int().nonnegative().optional(),
+    messageSplitDelayMinMs: z.number().int().nonnegative().optional(),
+    messageSplitDelayMaxMs: z.number().int().nonnegative().optional(),
+    reactionAck: z.enum(['on', 'off']).optional(),
+    reactionAckEmoji: z.record(z.string()).nullable().optional(),
+    ackTimeoutMs: z.number().int().min(0).max(120000).optional(),
+    agentAckMessage: z.string().nullable().optional(),
+    readReceipts: z.enum(['on', 'off', 'exclude-self']).optional(),
+    markOnlineOnConnect: z.boolean().optional(),
+    processAudio: z.boolean().optional(),
+    processImages: z.boolean().optional(),
+    processVideo: z.boolean().optional(),
+    processDocuments: z.boolean().optional(),
+    processMediaOnBlocked: z.boolean().optional(),
+    downloadMediaOnSync: z.boolean().optional(),
+    audioTranscription: z.enum(['auto', 'off']).optional(),
+    accessMode: z.enum(['disabled', 'blocklist', 'allowlist']).optional(),
+    groupHistorySize: z.number().int().min(0).max(200).optional(),
+    historyIdentity: z.enum(['desktop', 'web']).optional(),
+    syncFullHistory: z.boolean().optional(),
+    ttsVoiceId: z.string().nullable().optional(),
+    ttsModelId: z.string().nullable().optional(),
+    followUpConfig: FollowUpSequenceConfigOpenApiSchema.nullable().optional(),
+    closeContactConfig: CloseContactConfigSchema.nullable().optional(),
+    outboundPacing: z.enum(['humanized', 'immediate']).optional(),
+    outboundPacingOverride: z.boolean().optional(),
+    metaPhoneNumberId: metaIdentifier,
+    metaWabaId: metaIdentifier,
+    metaAppId: metaIdentifier,
+    metaBusinessId: metaIdentifier,
+    metaApiVersion: z
+      .string()
+      .regex(/^v\d+\.\d+$/)
+      .max(16)
+      .optional()
+      .describe('Provisioning snapshot; runtime environment version takes precedence'),
+    metaConnectionMethod: z.enum(['manual', 'embedded_signup']).nullable().optional(),
+    metaConnectedAt: z.string().datetime({ offset: true }).nullable().optional(),
+    metaDisplayPhoneNumber: z.string().max(32).nullable().optional(),
+  })
+  .strict();
+
 /**
- * Instance response schema
+ * Instance response schema. Existing required fields win over optional PATCH leaves.
  */
-export const InstanceSchema = z.object({
-  ...ChannelSettingsShape,
-  id: z.string().uuid().openapi({ description: 'Instance UUID' }),
-  name: z.string().openapi({ description: 'Instance name' }),
-  channel: ChannelTypeSchema.openapi({ description: 'Channel type' }),
-  isActive: z.boolean().openapi({ description: 'Whether instance is active' }),
-  isDefault: z.boolean().openapi({ description: 'Whether this is the default instance for channel' }),
-  profileName: z.string().nullable().openapi({ description: 'Connected profile name' }),
-  profilePicUrl: z.string().nullable().openapi({ description: 'Profile picture URL' }),
-  historyIdentity: z.enum(['desktop', 'web']).openapi({
-    description:
-      "WhatsApp (Baileys) pairing identity: 'desktop' (macOS Desktop + group history) or 'web' (Ubuntu/Chrome)",
-  }),
-  syncFullHistory: z.boolean().openapi({ description: 'WhatsApp (Baileys): request full history on connect' }),
-  outboundPacing: z.enum(['humanized', 'immediate']).optional().openapi({ description: OUTBOUND_PACING_DESCRIPTION }),
-  outboundPacingOverride: z.boolean().optional().openapi({ description: OUTBOUND_PACING_OVERRIDE_DESCRIPTION }),
-  audioTranscription: z.enum(['auto', 'off']).openapi({
-    description:
-      "Server-side transcription of inbound audio: 'auto' (transcribed as always) or 'off' (stored but never sent to STT)",
-  }),
-  inboundReplyContext: z.boolean().openapi({
-    description:
-      'WhatsApp (Baileys): typed replyTo on message.received and target on reaction.received/removed (false = events unchanged)',
-  }),
-  ownerIdentifier: z.string().nullable().openapi({ description: 'Owner identifier' }),
-  agentId: z.string().uuid().nullable().optional().openapi({ description: 'Agent UUID (agents table)' }),
-  agentProviderId: z
-    .string()
-    .uuid()
-    .nullable()
-    .optional()
-    .openapi({ description: 'Provider ID of the assigned agent (read-only; set via the agent)' }),
-  agentTimeout: z.number().openapi({ description: 'Agent timeout in seconds' }),
-  agentErrorMessages: z.array(z.string()).nullable().optional().openapi({
-    description:
-      'Customer-facing replies sent when agent dispatch fails; one is picked at random per failure (null/empty = env/default fallback)',
-  }),
-  agentStreamMode: z.boolean().openapi({ description: 'Whether streaming is enabled' }),
-  gupshupHandoffOptions: GupshupHandoffOptionsSchema.nullable()
-    .optional()
-    .openapi({ description: 'Gupshup HANDOFF routing options' }),
-  closeContactConfig: CloseContactConfigSchema.nullable()
-    .optional()
-    .openapi({ description: 'Per-outcome close-contact cooldown/escalation overrides (null = defaults)' }),
-  createdAt: z.string().datetime().openapi({ description: 'Creation timestamp' }),
-  updatedAt: z.string().datetime().openapi({ description: 'Last update timestamp' }),
-});
+export const InstanceSchema = z
+  .object({
+    ...InstanceSettingsSchema.shape,
+    id: z.string().uuid().openapi({ description: 'Instance UUID' }),
+    name: z.string().openapi({ description: 'Instance name' }),
+    channel: ChannelTypeSchema.openapi({ description: 'Channel type' }),
+    isActive: z.boolean().openapi({ description: 'Whether instance is active' }),
+    isDefault: z.boolean().openapi({ description: 'Whether this is the default instance for channel' }),
+    profileName: z.string().nullable().openapi({ description: 'Connected profile name' }),
+    profilePicUrl: z.string().nullable().openapi({ description: 'Profile picture URL' }),
+    historyIdentity: z.enum(['desktop', 'web']).openapi({
+      description:
+        "WhatsApp (Baileys) pairing identity: 'desktop' (macOS Desktop + group history) or 'web' (Ubuntu/Chrome)",
+    }),
+    syncFullHistory: z.boolean().openapi({ description: 'WhatsApp (Baileys): request full history on connect' }),
+    outboundPacing: z.enum(['humanized', 'immediate']).optional().openapi({ description: OUTBOUND_PACING_DESCRIPTION }),
+    outboundPacingOverride: z.boolean().optional().openapi({ description: OUTBOUND_PACING_OVERRIDE_DESCRIPTION }),
+    audioTranscription: z.enum(['auto', 'off']).openapi({
+      description:
+        "Server-side transcription of inbound audio: 'auto' (transcribed as always) or 'off' (stored but never sent to STT)",
+    }),
+    inboundReplyContext: z.boolean().openapi({
+      description:
+        'WhatsApp (Baileys): typed replyTo on message.received and target on reaction.received/removed (false = events unchanged)',
+    }),
+    ownerIdentifier: z.string().nullable().openapi({ description: 'Owner identifier' }),
+    agentId: z.string().uuid().nullable().optional().openapi({ description: 'Agent UUID (agents table)' }),
+    agentProviderId: z
+      .string()
+      .uuid()
+      .nullable()
+      .optional()
+      .openapi({ description: 'Provider ID of the assigned agent (read-only; set via the agent)' }),
+    agentTimeout: z.number().openapi({ description: 'Agent timeout in seconds' }),
+    agentErrorMessages: z.array(z.string()).nullable().optional().openapi({
+      description:
+        'Customer-facing replies sent when agent dispatch fails; one is picked at random per failure (null/empty = env/default fallback)',
+    }),
+    agentStreamMode: z.boolean().openapi({ description: 'Whether streaming is enabled' }),
+    gupshupHandoffOptions: GupshupHandoffOptionsSchema.nullable()
+      .optional()
+      .openapi({ description: 'Gupshup HANDOFF routing options' }),
+    closeContactConfig: CloseContactConfigSchema.nullable()
+      .optional()
+      .openapi({ description: 'Per-outcome close-contact cooldown/escalation overrides (null = defaults)' }),
+    followUpConfig: FollowUpSequenceConfigOpenApiSchema.nullable()
+      .optional()
+      .openapi({ description: 'Instance-scope follow-up sequence config' }),
+    createdAt: z.string().datetime().openapi({ description: 'Creation timestamp' }),
+    updatedAt: z.string().datetime().openapi({ description: 'Last update timestamp' }),
+  })
+  .openapi('Instance');
 
 /**
  * Create instance request schema
@@ -618,15 +659,14 @@ export function registerInstanceSchemas(registry: OpenAPIRegistry): void {
     operationId: 'updateInstance',
     tags: ['Instances'],
     summary: 'Update instance',
-    description:
-      'Update supplied fields only. Nullable settings accept null to clear; nested settings replace the entire object. Chain targets must exist and pass existing instance access and tenant checks.',
+    description: 'Update an existing channel instance.',
     request: {
       params: z.object({
         id: z.string().uuid().openapi({ description: 'Instance UUID' }),
       }),
       body: {
         content: {
-          'application/json': { schema: CreateInstanceSchema.partial().extend(ChannelSettingsShape).strict() },
+          'application/json': { schema: CreateInstanceSchema.partial().extend(InstanceSettingsSchema.shape).strict() },
         },
       },
     },
@@ -639,12 +679,10 @@ export function registerInstanceSchemas(registry: OpenAPIRegistry): void {
           },
         },
       },
-      400: {
-        description: 'Invalid, unknown or read-only field, or self-chain target; no update performed',
-        content: { 'application/json': { schema: ErrorSchema } },
-      },
+      400: { description: 'Validation error', content: { 'application/json': { schema: ErrorSchema } } },
       403: {
-        description: 'Instance or chain target access denied, or full-access key required for pacing override',
+        description:
+          "Setting outboundPacingOverride to true requires a full-access ('*') API key, or the chain target is not accessible",
         content: { 'application/json': { schema: ErrorSchema } },
       },
       404: {

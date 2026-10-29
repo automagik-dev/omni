@@ -8,21 +8,26 @@ restart an instance.
 ## PATCH semantics
 
 Send only the fields to change. Omitted fields retain their stored values;
-`false`, `0` and empty arrays are explicit values, not omissions. Only the six
-nullable fields marked below accept `null`. Arrays and nested objects replace
+`false`, `0` and empty arrays are explicit values, not omissions. Of the
+settings below, only the six marked nullable accept `null`. Arrays and nested objects replace
 the whole stored value; they are not merged. A successful update emits the
 existing `instance.updated` event with the instance ID, channel type and changed
 **key names**, never setting values.
 
-Malformed values, unknown fields and the read-only `agentProviderId` return
-**400** before any update. Update the assigned agent, not its instance, to change
+Malformed JSON, malformed values, unknown fields and the read-only
+`agentProviderId` (even as `null`) return **400** before any update. Update the assigned agent, not its instance, to change
 its provider. Existing authentication, instance access restrictions and tenant
 scoping still apply.
 
-## Settings exposed by this slice
+## The 17 settings from #1403
 
-These same 17 definitions are shared by runtime PATCH validation and the
-published PATCH/GET OpenAPI schemas. No setting in this table has a PATCH default.
+The same PATCH also accepts the instance's other settings; this page covers
+the 17 that #1403 asked for. The runtime PATCH validator extends the published
+settings schema, so the published PATCH/GET OpenAPI definitions match it, with
+one exception: `followUpConfig` is checked at runtime by the core follow-up
+validator (see below), whose defaults and quiet-hours rules the published
+`FollowUpSequenceConfig` component does not express. No setting in this table
+has a PATCH default.
 
 | Field | Accepted value | Nullable | Meaning |
 | --- | --- | --- | --- |
@@ -52,12 +57,15 @@ and connect-time configuration lifecycles are unchanged.
 ### Chain target checks
 
 A non-null target must exist and pass the same instance access guard as the
-source. An unauthorized target returns **403** before lookup; a missing target
-(or one invisible through the existing tenant-scoped service lookup) returns
-**404**. Self-chaining returns **400**. These failures perform no update. Setting
-`chainMode` to `forward` or `bidirectional` without sending a target validates
-the existing stored target with those same access, existence, tenant and
-self-chain checks before activating it. Setting `chainMode` to `off`, changing
+source. Naming the instance itself as its target returns **400**
+(`VALIDATION_ERROR`). A target outside the API key's instance access returns
+**403** before any lookup, and a missing target, or one invisible through the
+tenant-scoped instance lookup, returns the same **403**
+(`FORBIDDEN`, "Chain target is not accessible"), so the answer never reveals
+whether an invisible instance exists. These failures perform no update. Setting
+`chainMode` to `forward` or `bidirectional` without sending a target applies
+those same self-chain, access, existence and tenant checks to the stored target
+before activating it. Setting `chainMode` to `off`, changing
 unrelated settings, or explicitly clearing the target with `null` does not
 reauthorize the old target. No mode creates a reciprocal link or implicitly
 selects a new target.
@@ -69,7 +77,7 @@ value must be exactly one of:
 
 - `{ "mode": "none" }`
 - `{ "mode": "daily", "hour": 3 }` — optional integer `hour`, 0–23 UTC; runtime default is 3.
-- `{ "mode": "idle", "minutes": 60 }` — optional positive finite number of minutes; runtime default is 60.
+- `{ "mode": "idle", "minutes": 60 }` — optional positive integer number of minutes; runtime default is 60.
 
 Unknown keys, modes and mode-inappropriate properties are rejected. For example:
 
@@ -85,9 +93,12 @@ Unknown keys, modes and mode-inappropriate properties are rejected. For example:
 
 ### Follow-up configuration
 
-Uses the core follow-up domain validator, including quiet-hours validation:
+The instances PATCH validates this with core's follow-up validator, including its
+quiet-hours rules, with unknown schedule keys rejected rather than stripped:
 
 - Required: `schedule`, integer `maxFollowUps` (1–50), non-empty `promptTemplate`.
+  (The published component also lists the three booleans below as required;
+  sending them is always valid.)
 - Optional booleans `enabled`, `stopOutsideMessagingWindow`, and
   `showTypingIndicator` default to `true` **inside an explicitly supplied config**.
 - `schedule`: either `{ "kind": "fixed", "intervalsMinutes": [15, 30] }`
@@ -120,9 +131,9 @@ Check `data.id`, `data.replayEnabled`, `data.inboundMaxAgeMinutes`, and
 `data.agentAckMessage` in the GET response, rather than assuming a successful
 HTTP status alone proves persistence.
 
-## Explicitly deferred
+## Scope
 
-The product already has a UI. UI wiring/repair, Meta credentials, token handling,
-and business-channel repair are **not** implemented here. This slice also does
-not change the database schema, generic instance persistence, channel consumers,
-or other instance creation/deletion behavior.
+This page documents the API contract only. The dashboard's channel-settings UI
+and the WhatsApp Business repair shipped separately (#1437). None of this
+changes the database schema, generic instance persistence, channel consumers,
+or instance creation and deletion.

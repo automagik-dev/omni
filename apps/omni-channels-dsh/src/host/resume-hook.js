@@ -13,17 +13,14 @@ import { z } from 'zod'
 // The Bot team release that ships the hook, and its names, as dotted paths on the team's
 // runtime. `resentField`: the outcome's list of Sessions sent again what a shutdown dropped.
 // `resumeMarker`: whether a message's source is a resume the team posted, a delivery's or the
-// plain follow-up `{ kind: 'user', resumed: true }`. `dshBotsChanged`: the roster signal,
-// `onChange(fn)` → disposer, `fn(list)`. `rowProps`: what each botChildren entry is drawn with.
+// plain follow-up `{ kind: 'user', resumed: true }`. `rowProps`: what each botChildren entry
+// is drawn with.
 export const TEAM_CONTRACT = Object.freeze({
   release: '3.32.1',
   register: 'resumable.register',
   resumesDone: 'resumesDone',
   resentField: 'resent',
   resumeMarker: source => source?.resumed === true,
-  dshBotsList: 'dshBots.list',
-  dshBotsCreate: 'dshBots.createSession',
-  dshBotsChanged: 'dshBots.onChange',
   rowProps: Object.freeze(['bot', 'roster', 'actions', 'wide', 'useSessions', 'useUi', 'useSessionStatus', 'useSessionRetainInfo', 'useActivity', 'useWork']),
 })
 
@@ -36,7 +33,7 @@ const HOOK_ID = 'omni-channels'
 
 // A member of the team's runtime by its TEAM_CONTRACT name; a function comes bound to the
 // object that holds it.
-export function fromTeam(rt, path) {
+function fromTeam(rt, path) {
   let owner
   let value = rt
   for (const key of path.split('.')) {

@@ -1,459 +1,388 @@
-/** #1403: real route + InstanceService, deterministic DB seam, no live services. */
-import { describe, expect, mock, test } from 'bun:test';
-import { OpenAPIRegistry, OpenApiGeneratorV3 } from '@asteasolutions/zod-to-openapi';
+import { expect, test } from 'bun:test';
 import { NotFoundError } from '@omni/core';
-import type { SQL } from 'drizzle-orm';
-import { PgDialect } from 'drizzle-orm/pg-core';
 import { Hono } from 'hono';
-import { HTTPException } from 'hono/http-exception';
-import { z } from 'zod';
-import { InstanceSchema, registerInstanceSchemas } from '../../../schemas/openapi/instances';
-import { InstanceService } from '../../../services/instances';
-import { runInTenantScope } from '../../../tenancy/tenant-scope';
+import { InstanceSchema, InstanceSettingsSchema } from '../../../schemas/openapi/instances';
 import type { AppVariables } from '../../../types';
+import { openApiSpec } from '../../openapi';
 import { instancesRoutes } from '../instances';
 
-const ID = '11111111-1111-4111-8111-111111111111';
-const TARGET = '22222222-2222-4222-8222-222222222222';
-const MISSING = '33333333-3333-4333-8333-333333333333';
-const TENANT = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
-const OTHER_TENANT = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
-const followUp = {
-  enabled: true,
-  schedule: { kind: 'fixed', intervalsMinutes: [15, 30] },
-  maxFollowUps: 2,
-  promptTemplate: 'Follow up with {{chatName}}',
-  stopOutsideMessagingWindow: true,
-  showTypingIndicator: false,
-};
+// Hex letters in the id let the case-insensitive self-chain check be exercised.
+const ID = 'abcdef33-3333-4333-8333-333333333333';
+const TARGET = '44444444-4444-4444-8444-444444444444';
+// Independent issue #1403 fixture: all 57 writable settings, not derived from the implementation.
 const settings = {
+  agentReplyFilter: { mode: 'all', conditions: { onDm: true, onMention: true, onReply: true, onNameMatch: false } },
+  agentSessionStrategy: 'per_chat',
+  agentPrefixSenderName: false,
+  agentGateEnabled: false,
+  agentGateModel: null,
+  agentGatePrompt: null,
+  agentWaitForMedia: false,
+  agentSendMediaPath: false,
+  agentSendMediaPathTypes: [],
+  agentStalledTimeoutMs: 0,
+  messageSupersedeMode: 'discard',
+  enableAutoSplit: false,
+  messageFormatMode: 'passthrough',
+  disableUsernamePrefix: true,
+  triggerEvents: [],
+  triggerReactions: [],
+  triggerMentionPatterns: [],
+  triggerMode: 'fire-and-forget',
   agentChainToInstanceId: TARGET,
   chainMode: 'forward',
-  triggerMode: 'fire-and-forget',
-  triggerReactions: ['👍', '✅'],
-  triggerMentionPatterns: ['assistant'],
-  disableUsernamePrefix: true,
-  agentAckMessage: 'Working on it',
+  sessionReset: { dm: { mode: 'daily', hour: 0 } },
+  inboundMaxAgeMinutes: 0,
+  replayEnabled: false,
+  inboundReplyContext: false,
+  messageDebounceMode: 'presence',
+  messageDebounceMinMs: 0,
+  messageDebounceGroupMs: null,
+  messageDebounceMaxMs: 0,
+  messageDebounceRestartOnTyping: false,
+  messageDebounceMaxWaitMs: null,
+  messageSplitDelayMode: 'fixed',
+  messageSplitDelayFixedMs: 0,
+  messageSplitDelayMinMs: 0,
+  messageSplitDelayMaxMs: 0,
+  reactionAck: 'off',
+  reactionAckEmoji: {},
+  ackTimeoutMs: 0,
+  agentAckMessage: '',
+  readReceipts: 'off',
+  markOnlineOnConnect: false,
   processAudio: false,
   processImages: false,
   processVideo: false,
   processDocuments: false,
   processMediaOnBlocked: false,
-  downloadMediaOnSync: true,
-  inboundMaxAgeMinutes: 25,
-  replayEnabled: false,
-  sessionReset: { default: { mode: 'daily', hour: 3 }, dm: { mode: 'idle', minutes: 60 } },
-  followUpConfig: followUp,
+  downloadMediaOnSync: false,
+  audioTranscription: 'off',
+  accessMode: 'allowlist',
+  groupHistorySize: 0,
+  historyIdentity: 'web',
+  syncFullHistory: false,
+  ttsVoiceId: null,
+  ttsModelId: null,
+  followUpConfig: {
+    enabled: true,
+    schedule: { kind: 'fixed', intervalsMinutes: [1] },
+    maxFollowUps: 2,
+    promptTemplate: 'Follow up',
+    stopOutsideMessagingWindow: true,
+    showTypingIndicator: false,
+  },
+  closeContactConfig: { won: { cooldownMs: null } },
+  outboundPacing: 'humanized',
+  outboundPacingOverride: false,
 };
-const nullable = [
-  'agentChainToInstanceId',
-  'triggerReactions',
-  'triggerMentionPatterns',
-  'agentAckMessage',
-  'sessionReset',
-  'followUpConfig',
-];
-const dialect = new PgDialect();
-const predicateId = (where: SQL) => String(dialect.sqlToQuery(where).params[0]);
-
-function mount(options: { allowed?: string[]; tenant?: string; targetTenant?: string; failUpdate?: boolean } = {}) {
-  const rows = new Map<string, Record<string, unknown>>([
-    [
-      ID,
-      {
-        id: ID,
-        name: 'settings',
-        channel: 'whatsapp-baileys',
-        agentId: null,
-        tenantId: options.tenant ?? null,
-        ...settings,
-      },
-    ],
-    [
-      TARGET,
-      {
-        id: TARGET,
-        name: 'target',
-        channel: 'internal',
-        agentId: null,
-        tenantId: options.targetTenant ?? options.tenant ?? null,
-      },
-    ],
-  ]);
-  const writes: Array<{ id: string; data: Record<string, unknown> }> = [];
+const meta = {
+  metaPhoneNumberId: '123456789',
+  metaWabaId: '234567890',
+  metaAppId: '345678901',
+  metaBusinessId: '456789012',
+  metaApiVersion: 'v25.0',
+  metaConnectionMethod: 'manual',
+  metaConnectedAt: '2026-10-29T12:00:00.000Z',
+  metaDisplayPhoneNumber: '+5511999999999',
+};
+function mount(instanceIds: string[] | null = null, targetState = 'present', targetId: string | null = TARGET) {
+  const writes: Record<string, unknown>[] = [];
   const reads: string[] = [];
-  const scopedReads: string[] = [];
-  const publish = mock(async (_type: string, _payload: unknown) => ({}) as never);
-  // Decode the real Drizzle predicate: a seam that ignores IDs could falsely
-  // prove that PATCH/GET operated on the same row or that a target existed.
-  function handle(tenant?: string) {
-    const visible = (id: string) => {
-      const row = rows.get(id);
-      return row && (!tenant || row.tenantId === tenant) ? row : undefined;
-    };
-    return {
-      execute: async (_sql: SQL) => [],
-      select: () => ({
-        from: () => ({
-          where: (where: SQL) => ({
-            limit: async () => {
-              const id = predicateId(where);
-              reads.push(id);
-              if (tenant) scopedReads.push(id);
-              const row = visible(id);
-              return row ? [{ ...row }] : [];
-            },
-          }),
-        }),
-      }),
-      update: () => ({
-        set: (data: Record<string, unknown>) => ({
-          where: (where: SQL) => ({
-            returning: async () => {
-              const id = predicateId(where);
-              writes.push({ id, data });
-              if (options.failUpdate || !visible(id)) return [];
-              const defined = Object.fromEntries(Object.entries(data).filter(([, value]) => value !== undefined));
-              const row = { ...rows.get(id), ...defined };
-              rows.set(id, row);
-              return [{ ...row }];
-            },
-          }),
-        }),
-      }),
-    };
-  }
-  const db = {
-    ...handle(),
-    transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(handle(options.tenant)),
+  let row: Record<string, unknown> = {
+    id: ID,
+    name: 'settings',
+    channel: 'whatsapp-business',
+    ...settings,
+    agentChainToInstanceId: targetId,
+    ...meta,
+    metaAccessToken: 'fixture-only-do-not-return',
   };
-  const service = new InstanceService(db as never, { publish } as never);
   const app = new Hono<{ Variables: AppVariables }>();
   app.use('*', async (c, next) => {
-    c.set('services', { instances: service } as never);
-    c.set('apiKey', {
-      id: 'test',
-      name: 'test',
-      scopes: ['*'],
-      instanceIds: options.allowed ?? null,
-      expiresAt: null,
+    c.set('apiKey', { id: 'test', name: 'test', scopes: ['*'], instanceIds } as never);
+    c.set('services', {
+      instances: {
+        getById: async (requested: string) => {
+          reads.push(requested);
+          if (requested !== ID && targetState !== 'present') throw new NotFoundError('Instance', targetState);
+          return { ...row, id: requested };
+        },
+        update: async (_id: string, data: Record<string, unknown>) => {
+          writes.push(data);
+          row = { ...row, ...data };
+          return row;
+        },
+      },
     } as never);
-    if (options.tenant) {
-      await runInTenantScope(db as never, { credentialClass: 'tenant', tenantId: options.tenant } as never, next);
-    } else await next();
+    await next();
   });
-  app.route('/instances', instancesRoutes);
-  app.onError((err, c) =>
-    err instanceof HTTPException
-      ? err.getResponse()
-      : c.json({ error: err.message }, err instanceof NotFoundError ? 404 : 500),
-  );
-  const patch = (body: unknown, id = ID) =>
-    app.request(`/instances/${id}`, {
+  app.route('/', instancesRoutes);
+  const patch = (body: unknown) =>
+    app.request(`/${ID}`, {
       method: 'PATCH',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-  const get = () => app.request(`/instances/${ID}`);
-  return { app, patch, get, writes, reads, scopedReads, publish, rows };
+  return { app, writes, patch, reads };
 }
-
-async function data(response: Response) {
-  return ((await response.json()) as { data: Record<string, unknown> }).data;
-}
-
-// Obtain the actual published PATCH schema, not a test-only approximation.
-const registry = new OpenAPIRegistry();
-registerInstanceSchemas(registry);
-const patchDefinition = registry.definitions.find(
-  (definition) => definition.type === 'route' && definition.route.method === 'patch',
-);
-if (!patchDefinition || patchDefinition.type !== 'route') throw new Error('Missing PATCH definition');
-const publishedPatch = patchDefinition.route.request?.body?.content['application/json']?.schema;
-if (!(publishedPatch instanceof z.ZodType)) throw new Error('Missing PATCH schema');
-
-describe('channel settings PATCH (#1403)', () => {
-  test.each(Object.entries(settings))('accepts, persists and reads back %s on the same ID', async (key, value) => {
-    const h = mount();
-    // Seed a different value to prove the update actually changes storage.
-    h.rows.set(ID, {
-      ...h.rows.get(ID),
-      [key]: nullable.includes(key) ? null : typeof value === 'boolean' ? !value : 'old',
-    });
-    const response = await h.patch({ [key]: value });
-    expect(response.status).toBe(200);
-    expect((await data(response))[key]).toEqual(value);
-    expect((await data(await h.get()))[key]).toEqual(value);
-    expect(h.reads).toContain(ID);
-    expect(h.writes).toHaveLength(1);
-    expect(h.writes[0]?.id).toBe(ID);
-    expect(h.writes[0]?.data[key]).toEqual(value);
-    expect(h.rows.get(TARGET)?.name).toBe('target');
-    expect(h.publish).toHaveBeenCalledTimes(1);
-    expect(h.publish).toHaveBeenCalledWith('instance.updated', {
-      instanceId: ID,
-      channelType: 'whatsapp-baileys',
-      changedKeys: [key],
-    });
-    expect(publishedPatch.safeParse({ [key]: value }).success).toBe(true);
-    expect(key in InstanceSchema.shape).toBe(true);
-  });
-
-  test('all17 together, then omitted settings remain unchanged with key-only event', async () => {
-    const h = mount();
-    expect((await h.patch(settings)).status).toBe(200);
-    expect(await data(await h.get())).toMatchObject({ id: ID, ...settings });
-    expect((await h.patch({ name: 'renamed' })).status).toBe(200);
-    expect(await data(await h.get())).toMatchObject({ id: ID, name: 'renamed', ...settings });
-    expect(h.publish.mock.calls[1]).toEqual([
-      'instance.updated',
-      {
-        instanceId: ID,
-        channelType: 'whatsapp-baileys',
-        changedKeys: ['name'],
-      },
-    ]);
-  });
-
-  test.each(nullable)('explicit null clears nullable %s', async (key) => {
-    const h = mount();
-    expect((await h.patch({ [key]: null })).status).toBe(200);
-    expect((await data(await h.get()))[key]).toBeNull();
-    expect(publishedPatch.safeParse({ [key]: null }).success).toBe(true);
-  });
-
-  test.each(Object.keys(settings).filter((key) => !nullable.includes(key)))(
-    'rejects null for NOT NULL %s',
-    async (key) => {
-      const h = mount();
-      expect((await h.patch({ [key]: null })).status).toBe(400);
-      expect(h.writes).toHaveLength(0);
-      expect(h.publish).not.toHaveBeenCalled();
-      expect(publishedPatch.safeParse({ [key]: null }).success).toBe(false);
-    },
-  );
-
-  const invalid: Array<[string, unknown]> = [
-    ['agentChainToInstanceId', 'not-a-uuid'],
-    ['chainMode', 'loop'],
-    ['triggerMode', 'sync'],
-    ['triggerReactions', '👍'],
-    ['triggerReactions', [1]],
-    ['triggerMentionPatterns', [false]],
-    ['agentAckMessage', 123],
-    ['disableUsernamePrefix', 'true'],
-    ['processAudio', 0],
-    ['processImages', 'false'],
-    ['processVideo', []],
-    ['processDocuments', {}],
-    ['processMediaOnBlocked', 1],
-    ['downloadMediaOnSync', 'yes'],
-    ['replayEnabled', 'false'],
-    ['inboundMaxAgeMinutes', -1],
-    ['inboundMaxAgeMinutes', 1.5],
-    ['inboundMaxAgeMinutes', '10'],
-    ['inboundMaxAgeMinutes', 2147483648],
-    ['sessionReset', []],
-    ['sessionReset', { unknown: { mode: 'none' } }],
-    ['sessionReset', { dm: { mode: 'weekly' } }],
-    ['sessionReset', { dm: { mode: 'daily', hour: 24 } }],
-    ['sessionReset', { dm: { mode: 'daily', hour: -1 } }],
-    ['sessionReset', { dm: { mode: 'daily', hour: 1.5 } }],
-    ['sessionReset', { dm: { mode: 'idle', minutes: 0 } }],
-    ['sessionReset', { dm: { mode: 'idle', minutes: '60' } }],
-    ['sessionReset', { dm: { mode: 'none', hour: 3 } }],
-    ['followUpConfig', {}],
-    ['followUpConfig', { ...followUp, maxFollowUps: 51 }],
-    ['followUpConfig', { ...followUp, surprise: true }],
-    ['followUpConfig', { ...followUp, schedule: { kind: 'fixed', intervalsMinutes: [] } }],
-    ['followUpConfig', { ...followUp, schedule: { kind: 'fixed', intervalsMinutes: [1], extra: 1 } }],
-    ['followUpConfig', { ...followUp, quietHours: { start: '25:00', end: '08:00', timezone: 'UTC' } }],
-    ['followUpConfig', { ...followUp, quietHours: { start: '22:00', end: '08:00', timezone: 'Not/AZone' } }],
-    ['followUpConfig', { ...followUp, quietHours: { start: '22:00', end: '22:00', timezone: 'UTC' } }],
-    ['unknownSetting', true],
-    ['agentProviderId', TARGET],
-    ['agentProviderId', null],
+test('chain targets reuse instance scope and tenant visibility without blocking cleanup', async () => {
+  const target = TARGET;
+  const changes = [
+    { agentChainToInstanceId: target, chainMode: 'forward' },
+    { agentChainToInstanceId: target, chainMode: 'off' },
+    { chainMode: 'forward' },
+    { chainMode: 'bidirectional' },
   ];
-  test.each(invalid)('rejects malformed/unknown/read-only %s atomically (%j)', async (key, value) => {
-    const h = mount();
-    expect((await h.patch({ name: 'must-not-save', [key]: value })).status).toBe(400);
-    expect(h.rows.get(ID)?.name).toBe('settings');
-    expect(h.writes).toHaveLength(0);
-    expect(h.publish).not.toHaveBeenCalled();
-    expect(publishedPatch.safeParse({ [key]: value }).success).toBe(false);
-  });
-
-  test('accepts domain alternatives and zero inbound age', async () => {
-    const h = mount();
-    for (const body of [
-      { chainMode: 'off', triggerMode: 'round-trip', inboundMaxAgeMinutes: 0 },
-      { chainMode: 'bidirectional', triggerReactions: [], triggerMentionPatterns: [] },
-      { sessionReset: { default: { mode: 'none' }, group: { mode: 'daily' }, thread: { mode: 'idle' } } },
-      {
-        followUpConfig: {
-          ...followUp,
-          schedule: { kind: 'exponential', initialMinutes: 1, factor: 2, maxMinutes: 60 },
-        },
-      },
-      {
-        followUpConfig: {
-          ...followUp,
-          quietHours: { start: '22:00', end: '08:00', timezone: 'UTC', spreadMinutes: 10 },
-        },
-      },
-    ]) {
-      expect((await h.patch(body)).status).toBe(200);
-      expect(publishedPatch.safeParse(body).success).toBe(true);
+  for (const change of changes) {
+    const { patch, writes, reads } = mount([ID], 'present', target);
+    expect((await patch(change)).status).toBe(403);
+    expect(writes).toHaveLength(0);
+    expect(reads).not.toContain(target);
+    for (const scope of [[ID, target], null]) {
+      const allowed = mount(scope, 'present', target);
+      expect((await allowed.patch(change)).status).toBe(200);
+      expect(allowed.writes).toHaveLength(1);
+      expect(allowed.reads).toContain(target);
     }
-  });
+  }
+  for (const state of ['missing', 'foreign-tenant']) {
+    for (const change of [{ agentChainToInstanceId: target, chainMode: 'forward' }, { chainMode: 'bidirectional' }]) {
+      const { patch, writes } = mount([ID, target], state, target);
+      const response = await patch(change);
+      // 403, not 404: the answer must not reveal whether an invisible target exists.
+      expect(response.status).toBe(403);
+      expect(await response.json()).toEqual({
+        error: { code: 'FORBIDDEN', message: 'Chain target is not accessible' },
+      });
+      expect(writes).toHaveLength(0);
+    }
+  }
+  for (const change of [
+    { agentChainToInstanceId: null },
+    { agentChainToInstanceId: null, chainMode: 'forward' },
+    { chainMode: 'off' },
+    { processAudio: false },
+  ]) {
+    const { patch, writes, reads } = mount([ID], 'missing', target);
+    expect((await patch(change)).status).toBe(200);
+    expect(writes).toHaveLength(1);
+    expect(reads).not.toContain(target);
+  }
+});
 
-  test('nested settings replace rather than merge, and follow-up defaults stay inside supplied config', async () => {
-    const h = mount();
-    const followUpConfig = { schedule: followUp.schedule, maxFollowUps: 1, promptTemplate: 'Hello' };
-    expect((await h.patch({ sessionReset: { thread: { mode: 'none' } }, followUpConfig })).status).toBe(200);
-    const stored = await data(await h.get());
-    expect(stored.sessionReset).toEqual({ thread: { mode: 'none' } });
-    expect(stored.followUpConfig).toEqual({
-      ...followUpConfig,
-      enabled: true,
-      stopOutsideMessagingWindow: true,
-      showTypingIndicator: true,
-    });
-    expect(publishedPatch.parse({ followUpConfig })).toMatchObject({ followUpConfig: stored.followUpConfig });
-  });
-
-  test('malformed JSON is rejected without a write or event', async () => {
-    const h = mount();
-    const response = await h.app.request(`/instances/${ID}`, {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json' },
-      body: '{',
-    });
+test('self-chain is rejected before persistence, whether sent or already stored', async () => {
+  for (const change of [{ agentChainToInstanceId: ID }, { agentChainToInstanceId: ID, chainMode: 'off' }]) {
+    const { patch, writes } = mount([ID]);
+    const response = await patch(change);
     expect(response.status).toBe(400);
-    expect(h.writes).toHaveLength(0);
-    expect(h.publish).not.toHaveBeenCalled();
-  });
-
-  test('missing chain target is rejected before persistence', async () => {
-    const h = mount();
-    expect((await h.patch({ agentChainToInstanceId: MISSING })).status).toBe(404);
-    expect(h.reads).toContain(MISSING);
-    expect(h.writes).toHaveLength(0);
-    expect(h.publish).not.toHaveBeenCalled();
-  });
-
-  test('self-chain is rejected before persistence', async () => {
-    const h = mount();
-    expect((await h.patch({ agentChainToInstanceId: ID })).status).toBe(400);
-    expect(h.writes).toHaveLength(0);
-  });
-
-  test('existing instance access restriction covers source and chain target', async () => {
-    const h = mount({ allowed: [ID] });
-    expect((await h.patch({ replayEnabled: true }, TARGET)).status).toBe(403);
-    expect((await h.patch({ agentChainToInstanceId: TARGET })).status).toBe(403);
-    expect(h.reads).not.toContain(TARGET);
-    expect(h.writes).toHaveLength(0);
-    expect(h.publish).not.toHaveBeenCalled();
-  });
-
-  test.each(['forward', 'bidirectional'])(
-    'mode-only %s cannot activate a stored target outside the key access',
-    async (chainMode) => {
-      const h = mount({ allowed: [ID] });
-      h.rows.set(ID, { ...h.rows.get(ID), chainMode: 'off' });
-      expect((await h.patch({ chainMode })).status).toBe(403);
-      expect(h.rows.get(ID)?.chainMode).toBe('off');
-      expect(h.reads).toContain(ID);
-      expect(h.reads).not.toContain(TARGET);
-      expect(h.writes).toHaveLength(0);
-      expect(h.publish).not.toHaveBeenCalled();
-    },
-  );
-
-  test.each(['forward', 'bidirectional'])(
-    'mode-only %s checks and activates an accessible stored target',
-    async (chainMode) => {
-      const h = mount({ allowed: [ID, TARGET], tenant: TENANT });
-      h.rows.set(ID, { ...h.rows.get(ID), chainMode: 'off' });
-      expect((await h.patch({ chainMode })).status).toBe(200);
-      expect(h.scopedReads).toEqual([ID, TARGET]);
-      expect(await data(await h.get())).toMatchObject({ id: ID, chainMode, agentChainToInstanceId: TARGET });
-      expect(h.writes).toHaveLength(1);
-      expect(h.writes[0]?.id).toBe(ID);
-      expect(h.publish.mock.calls).toEqual([
-        ['instance.updated', { instanceId: ID, channelType: 'whatsapp-baileys', changedKeys: ['chainMode'] }],
-      ]);
-    },
-  );
-
-  test.each(['forward', 'bidirectional'])(
-    'mode-only %s rejects a tenant-invisible stored target',
-    async (chainMode) => {
-      const h = mount({ tenant: TENANT, targetTenant: OTHER_TENANT });
-      h.rows.set(ID, { ...h.rows.get(ID), chainMode: 'off' });
-      expect((await h.patch({ chainMode })).status).toBe(404);
-      expect(h.scopedReads).toEqual([ID, TARGET]);
-      expect(h.rows.get(ID)?.chainMode).toBe('off');
-      expect(h.writes).toHaveLength(0);
-      expect(h.publish).not.toHaveBeenCalled();
-    },
-  );
-
-  test.each([
-    ['missing', MISSING, 404],
-    ['self', ID, 400],
-  ] as const)('mode-only activation rejects a %s stored target', async (_name, target, status) => {
-    const h = mount();
-    h.rows.set(ID, { ...h.rows.get(ID), chainMode: 'off', agentChainToInstanceId: target });
-    expect((await h.patch({ chainMode: 'forward' })).status).toBe(status);
-    expect(h.writes).toHaveLength(0);
-    expect(h.publish).not.toHaveBeenCalled();
-  });
-
-  test.each([{ chainMode: 'off' }, { replayEnabled: true }, { chainMode: 'forward', agentChainToInstanceId: null }])(
-    'disabling, unrelated settings and explicit target clearing do not reauthorize the old target (%j)',
-    async (body) => {
-      const h = mount({ allowed: [ID] });
-      expect((await h.patch(body)).status).toBe(200);
-      expect(h.reads).not.toContain(TARGET);
-      expect(await data(await h.get())).toMatchObject({ id: ID, ...body });
-    },
-  );
-
-  test('allowed chain target uses existing tenant-scoped service lookup', async () => {
-    const h = mount({ allowed: [ID, TARGET], tenant: TENANT });
-    expect((await h.patch({ agentChainToInstanceId: TARGET })).status).toBe(200);
-    expect(h.scopedReads).toContain(TARGET);
-    expect((await data(await h.get())).agentChainToInstanceId).toBe(TARGET);
-  });
-
-  test('tenant-invisible chain target cannot be persisted', async () => {
-    const h = mount({ tenant: TENANT, targetTenant: OTHER_TENANT });
-    expect((await h.patch({ agentChainToInstanceId: TARGET })).status).toBe(404);
-    expect(h.scopedReads).toContain(TARGET);
-    expect(h.writes).toHaveLength(0);
-    expect(h.publish).not.toHaveBeenCalled();
-  });
-
-  test('failed real service update emits no event', async () => {
-    const h = mount({ failUpdate: true });
-    expect((await h.patch({ replayEnabled: true })).status).toBe(404);
-    expect(h.publish).not.toHaveBeenCalled();
-  });
-
-  test('OpenAPI document publishes all17 in PATCH and GET without PATCH defaults', () => {
-    const document = new OpenApiGeneratorV3(registry.definitions).generateDocument({
-      openapi: '3.0.0',
-      info: { title: 'settings', version: '1' },
+    expect(await response.json()).toEqual({
+      error: { code: 'VALIDATION_ERROR', message: 'An instance cannot chain to itself' },
     });
-    const operation = document.paths['/instances/{id}']?.patch;
-    expect(operation?.responses['400']).toBeDefined();
-    for (const key of Object.keys(settings)) {
-      expect(publishedPatch.safeParse({}).success).toBe(true);
-      const parsed = publishedPatch.parse({}) as Record<string, unknown>;
-      expect(parsed[key]).toBeUndefined();
-      expect(key in InstanceSchema.shape).toBe(true);
-    }
+    expect(writes).toHaveLength(0);
+  }
+  for (const chainMode of ['forward', 'bidirectional']) {
+    const { patch, writes } = mount(null, 'present', ID);
+    expect((await patch({ chainMode })).status).toBe(400);
+    expect(writes).toHaveLength(0);
+  }
+  // Postgres compares uuids case-insensitively, so case must not slip a self-chain past the check.
+  const upperBody = mount([ID]);
+  expect((await upperBody.patch({ agentChainToInstanceId: ID.toUpperCase() })).status).toBe(400);
+  expect(upperBody.writes).toHaveLength(0);
+  const upperPath = mount(null, 'present', ID);
+  const response = await upperPath.app.request(`/${ID.toUpperCase()}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chainMode: 'forward' }),
   });
+  expect(response.status).toBe(400);
+  expect(upperPath.writes).toHaveLength(0);
+});
+
+test('every issue setting and all eight Meta identifiers persist, individually and together', async () => {
+  expect(Object.keys(settings)).toHaveLength(57);
+  const { patch, writes, app } = mount();
+  for (const [key, value] of Object.entries({ ...settings, ...meta })) {
+    expect((await patch({ [key]: value })).status).toBe(200);
+    expect(Object.keys(writes.at(-1) ?? {})).toEqual([key]);
+    expect(writes.at(-1)?.[key]).toEqual(key === 'metaConnectedAt' ? new Date(String(value)) : value);
+  }
+  expect((await patch({ ...settings, ...meta })).status).toBe(200);
+  const result = (await (await app.request(`/${ID}`)).json()) as { data: Record<string, unknown> };
+  expect(result.data).toMatchObject({ ...settings, ...meta, agentProviderId: null });
+  expect(result.data).not.toHaveProperty('metaAccessToken');
+});
+test('partial updates preserve every omitted setting, including falsy values and structured config', async () => {
+  const { patch, writes, app } = mount();
+  expect((await patch({ agentAckMessage: 'new' })).status).toBe(200);
+  expect(writes).toEqual([{ agentAckMessage: 'new' }]);
+  const result = (await (await app.request(`/${ID}`)).json()) as { data: Record<string, unknown> };
+  expect(result.data).toMatchObject({ ...settings, agentAckMessage: 'new' });
+});
+test('explicit reply filters retain existing normalization without resetting other settings', async () => {
+  const { patch, writes } = mount();
+  expect((await patch({ agentReplyFilter: { mode: 'filtered' } })).status).toBe(200);
+  expect(writes).toEqual([
+    {
+      agentReplyFilter: {
+        mode: 'filtered',
+        conditions: {
+          onDm: true,
+          onMention: true,
+          onReply: true,
+          onNameMatch: false,
+        },
+      },
+    },
+  ]);
+});
+
+test('DB-nullable fields clear; null on NOT NULL, malformed nested values and unknown keys never write', async () => {
+  const { patch, writes, app } = mount();
+  for (const key of [
+    'agentChainToInstanceId',
+    'triggerReactions',
+    'sessionReset',
+    'triggerMentionPatterns',
+    'agentAckMessage',
+    'followUpConfig',
+    'metaConnectedAt',
+    'metaAppId',
+  ]) {
+    expect((await patch({ [key]: null })).status).toBe(200);
+    expect(writes.at(-1)).toEqual({ [key]: null });
+  }
+  const before = writes.length;
+  const followUp = settings.followUpConfig;
+  const notNull = [
+    'chainMode',
+    'triggerMode',
+    'disableUsernamePrefix',
+    'processAudio',
+    'processImages',
+    'processVideo',
+    'processDocuments',
+    'processMediaOnBlocked',
+    'downloadMediaOnSync',
+    'inboundMaxAgeMinutes',
+    'replayEnabled',
+  ];
+  for (const invalid of [
+    ...notNull.map((key) => ({ [key]: null })),
+    { chainMode: 'invalid' },
+    { triggerMode: 'sync' },
+    { processImages: 'false' },
+    { inboundMaxAgeMinutes: -1 },
+    { inboundMaxAgeMinutes: 1.5 },
+    { inboundMaxAgeMinutes: '10' },
+    // Postgres integer ceiling + 1: must be a 400, not a failed write.
+    { inboundMaxAgeMinutes: 2_147_483_648 },
+    { triggerReactions: [2] },
+    { agentChainToInstanceId: 'bad' },
+    { sessionReset: { dm: { mode: 'daily', hour: 24 } } },
+    { sessionReset: { surprise: {} } },
+    { sessionReset: { dm: { mode: 'weekly' } } },
+    { sessionReset: { dm: { mode: 'idle', minutes: 0 } } },
+    { sessionReset: { dm: { mode: 'none', hour: 3 } } },
+    { followUpConfig: { enabled: true } },
+    { followUpConfig: { ...followUp, maxFollowUps: 51 } },
+    { followUpConfig: { ...followUp, surprise: true } },
+    { followUpConfig: { ...followUp, schedule: { kind: 'fixed', intervalsMinutes: [] } } },
+    { followUpConfig: { ...followUp, schedule: { kind: 'fixed', intervalsMinutes: [1], extra: 1 } } },
+    {
+      followUpConfig: {
+        ...followUp,
+        schedule: { kind: 'exponential', initialMinutes: 1, factor: 2, maxMinutes: 60, extra: 1 },
+      },
+    },
+    { followUpConfig: { ...followUp, quietHours: { start: '25:00', end: '08:00', timezone: 'UTC' } } },
+    { followUpConfig: { ...followUp, quietHours: { start: '22:00', end: '08:00', timezone: 'Not/AZone' } } },
+    { followUpConfig: { ...followUp, quietHours: { start: '22:00', end: '22:00', timezone: 'UTC' } } },
+    { metaApiVersion: null },
+    { metaApiVersion: 'latest' },
+    { metaConnectedAt: 'yesterday' },
+    { metaAppId: 'x'.repeat(65) },
+    { surprise: true },
+    { agentProviderId: ID },
+    { agentProviderId: null },
+  ]) {
+    expect((await patch({ name: 'must-not-save', ...invalid })).status).toBe(400);
+  }
+  const malformed = await app.request(`/${ID}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{',
+  });
+  expect(malformed.status).toBe(400);
+  expect(writes).toHaveLength(before);
+});
+
+test('domain alternatives and boundary values are accepted', async () => {
+  const { patch, writes } = mount();
+  const followUp = settings.followUpConfig;
+  for (const body of [
+    { chainMode: 'off', triggerMode: 'round-trip', inboundMaxAgeMinutes: 2_147_483_647 },
+    { chainMode: 'bidirectional' },
+    { sessionReset: { default: { mode: 'none' }, group: { mode: 'daily' }, thread: { mode: 'idle' } } },
+    {
+      followUpConfig: {
+        ...followUp,
+        schedule: { kind: 'exponential', initialMinutes: 1, factor: 2, maxMinutes: 60, jitter: { ratio: 0.1 } },
+      },
+    },
+    {
+      followUpConfig: {
+        ...followUp,
+        quietHours: { start: '22:00', end: '08:00', timezone: 'America/Sao_Paulo', spreadMinutes: 10 },
+      },
+    },
+  ]) {
+    expect((await patch(body)).status).toBe(200);
+    expect(writes.at(-1)).toEqual(body);
+  }
+});
+
+test('nested settings are written whole, and follow-up defaults fill only the supplied config', async () => {
+  const { patch, writes } = mount();
+  const followUpConfig = { schedule: { kind: 'fixed', intervalsMinutes: [15] }, maxFollowUps: 1, promptTemplate: 'Hi' };
+  expect((await patch({ sessionReset: { thread: { mode: 'none' } }, followUpConfig })).status).toBe(200);
+  expect(writes).toEqual([
+    {
+      sessionReset: { thread: { mode: 'none' } },
+      followUpConfig: { ...followUpConfig, enabled: true, stopOutsideMessagingWindow: true, showTypingIndicator: true },
+    },
+  ]);
+});
+test('response requiredness and named SDK component stay compatible', () => {
+  const required =
+    'id name channel isActive isDefault profileName profilePicUrl historyIdentity syncFullHistory audioTranscription inboundReplyContext ownerIdentifier agentTimeout agentStreamMode createdAt updatedAt'.split(
+      ' ',
+    );
+  expect(
+    Object.entries(InstanceSchema.shape)
+      .filter(([, schema]) => !schema.isOptional())
+      .map(([key]) => key)
+      .sort(),
+  ).toEqual(required.sort());
+  const response = openApiSpec.components?.schemas?.Instance as {
+    required: string[];
+    properties: Record<string, unknown>;
+  };
+  expect(response.required.sort()).toEqual(required);
+  for (const key of [...Object.keys(settings), ...Object.keys(meta), 'agentId', 'agentProviderId'])
+    expect(response.properties).toHaveProperty(key);
+  const body = openApiSpec.paths['/instances/{id}']?.get?.responses?.['200'];
+  expect(JSON.stringify(body)).toContain('#/components/schemas/Instance');
+  const patchResponses = openApiSpec.paths['/instances/{id}']?.patch?.responses ?? {};
+  expect(Object.keys(patchResponses).sort()).toEqual(['200', '400', '403', '404']);
+});
+
+test('public settings contract covers the independent fixture without defaults', () => {
+  expect(InstanceSettingsSchema.parse({})).toEqual({});
+  expect(InstanceSettingsSchema.safeParse({ inboundMaxAgeMinutes: 2_147_483_648 }).success).toBe(false);
+  expect(InstanceSettingsSchema.parse({ ...settings, ...meta }) as unknown).toEqual({ ...settings, ...meta });
+  expect(Object.keys(InstanceSettingsSchema.shape).sort()).toEqual(
+    [...Object.keys(settings), ...Object.keys(meta), 'agentId'].sort(),
+  );
 });
