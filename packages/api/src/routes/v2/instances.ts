@@ -35,6 +35,7 @@ import {
 import type { Services } from '../../services';
 import { PairingRequestConsumedError, PairingRequestExpiredError } from '../../services/access';
 import { AgentReplayService } from '../../services/agent-replay';
+import { ApiKeyService } from '../../services/api-keys';
 import {
   readOwnedChats,
   readOwnedHistory,
@@ -1242,14 +1243,35 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
   return c.json({ data: sanitizeInstance(instance) }, 201);
 });
 
+async function denyInstanceUpdate(c: Context<{ Variables: AppVariables }>, data: z.infer<typeof updateInstanceSchema>) {
+  const pacingDenied = denyPacingOverrideForScopedKey(c, data.outboundPacingOverride);
+  if (pacingDenied) return pacingDenied;
+  if (!data.agentChainToInstanceId && (!data.chainMode || data.chainMode === 'off')) return;
+  const services = c.get('services');
+  const targetId =
+    data.agentChainToInstanceId !== undefined
+      ? data.agentChainToInstanceId
+      : (await services.instances.getById(c.req.param('id') ?? '')).agentChainToInstanceId;
+  if (!targetId) return;
+  const key = c.get('apiKey');
+  const denied = () => c.json({ error: { code: 'FORBIDDEN', message: 'Chain target is not accessible' } }, 403);
+  if (!key || !ApiKeyService.instanceAllowed(key.instanceIds, targetId)) return denied();
+  try {
+    await services.instances.getById(targetId);
+  } catch (error) {
+    if (!(error instanceof NotFoundError)) throw error;
+    return denied();
+  }
+}
+
 /**
  * PATCH /instances/:id - Update instance
  */
 instancesRoutes.patch('/:id', instanceAccess, zValidator('json', updateInstanceSchema), async (c) => {
   const id = c.req.param('id');
   const { force, ...data } = c.req.valid('json');
-  const pacingDenied = denyPacingOverrideForScopedKey(c, data.outboundPacingOverride);
-  if (pacingDenied) return pacingDenied;
+  const denied = await denyInstanceUpdate(c, data);
+  if (denied) return denied;
   const services = c.get('services');
 
   // The conflict is keyed on the PAIR (app token, bot mode), so either field

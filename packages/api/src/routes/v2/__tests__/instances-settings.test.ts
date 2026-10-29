@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { NotFoundError } from '@omni/core';
 import { Hono } from 'hono';
 import { InstanceSchema, InstanceSettingsSchema } from '../../../schemas/openapi/instances';
 import type { AppVariables } from '../../../types';
@@ -83,22 +84,28 @@ const meta = {
   metaConnectedAt: '2026-10-29T12:00:00.000Z',
   metaDisplayPhoneNumber: '+5511999999999',
 };
-function mount() {
+function mount(instanceIds: string[] | null = null, targetState = 'present', targetId = ID) {
   const writes: Record<string, unknown>[] = [];
+  const reads: string[] = [];
   let row: Record<string, unknown> = {
     id: ID,
     name: 'settings',
     channel: 'whatsapp-business',
     ...settings,
+    agentChainToInstanceId: targetId,
     ...meta,
     metaAccessToken: 'fixture-only-do-not-return',
   };
   const app = new Hono<{ Variables: AppVariables }>();
   app.use('*', async (c, next) => {
-    c.set('apiKey', { id: 'test', name: 'test', scopes: ['*'], instanceIds: null } as never);
+    c.set('apiKey', { id: 'test', name: 'test', scopes: ['*'], instanceIds } as never);
     c.set('services', {
       instances: {
-        getById: async () => row,
+        getById: async (requested: string) => {
+          reads.push(requested);
+          if (requested !== ID && targetState !== 'present') throw new NotFoundError('Instance', targetState);
+          return { ...row, id: requested };
+        },
         update: async (_id: string, data: Record<string, unknown>) => {
           writes.push(data);
           row = { ...row, ...data };
@@ -115,8 +122,48 @@ function mount() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-  return { app, writes, patch };
+  return { app, writes, patch, reads };
 }
+test('chain targets reuse instance scope and tenant visibility without blocking cleanup', async () => {
+  const target = '44444444-4444-4444-8444-444444444444';
+  const changes = [
+    { agentChainToInstanceId: target, chainMode: 'forward' },
+    { agentChainToInstanceId: target, chainMode: 'off' },
+    { chainMode: 'forward' },
+    { chainMode: 'bidirectional' },
+  ];
+  for (const change of changes) {
+    const { patch, writes, reads } = mount([ID], 'present', target);
+    expect((await patch(change)).status).toBe(403);
+    expect(writes).toHaveLength(0);
+    expect(reads).not.toContain(target);
+    for (const scope of [[ID, target], null]) {
+      const allowed = mount(scope, 'present', target);
+      expect((await allowed.patch(change)).status).toBe(200);
+      expect(allowed.writes).toHaveLength(1);
+      expect(allowed.reads).toContain(target);
+    }
+  }
+  for (const state of ['missing', 'foreign-tenant']) {
+    const { patch, writes } = mount([ID, target], state, target);
+    const response = await patch({ agentChainToInstanceId: target, chainMode: 'forward' });
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ error: { code: 'FORBIDDEN', message: 'Chain target is not accessible' } });
+    expect(writes).toHaveLength(0);
+  }
+  for (const change of [
+    { agentChainToInstanceId: null },
+    { agentChainToInstanceId: null, chainMode: 'forward' },
+    { chainMode: 'off' },
+    { processAudio: false },
+  ]) {
+    const { patch, writes, reads } = mount([ID], 'missing', target);
+    expect((await patch(change)).status).toBe(200);
+    expect(writes).toHaveLength(1);
+    expect(reads).not.toContain(target);
+  }
+});
+
 test('every issue setting and all eight Meta identifiers persist, individually and together', async () => {
   expect(Object.keys(settings)).toHaveLength(57);
   const { patch, writes, app } = mount();
