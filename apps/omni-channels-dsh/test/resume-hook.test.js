@@ -349,7 +349,7 @@ test('the plugin registers with the Bot team once, before any other work', async
   assert.deepEqual(registrations, [{ id: 'omni-channels', callsBefore: ['on session/event', 'effect ds-bot: restart resumes'] }])
   assert.equal(channels.teamResume.ready, true)
   // The adapter is the plugin's own, not the team's.
-  for (const name of ['teamResume', 'threadKeys', 'threads', 'omniRows', 'standingRuns']) assert.equal(name in Object.getPrototypeOf(channels), false, name)
+  for (const name of ['teamResume', 'threadKeys', 'threads', 'standingRuns']) assert.equal(name in Object.getPrototypeOf(channels), false, name)
   assert.equal(typeof Object.getPrototypeOf(channels).createTaskSession, 'function')
 })
 
@@ -667,7 +667,7 @@ test('500 rows left from before, idle or with a turn cut a minute ago, one with 
   const done = await run.team.resumesDone
   await threadFlush()
   assert.deepEqual([done.resumed, run.resolved.filter(id => id.startsWith('row-')), run.selected.filter(([id]) => id.startsWith('row-'))], [[], [], []])
-  assert.deepEqual([run.channels.state.omniRows, run.channels.state.subscriptionRuns[0].status], [{}, 'failed'])
+  assert.deepEqual([Object.hasOwn(run.channels.state, 'omniRows'), run.channels.state.subscriptionRuns[0].status], [false, 'failed'])
 })
 
 test('against a team stand-in with no hook a saved "new session" or "ongoing session" automation moves to its chat\'s thread and pauses with the thread\'s reason at start; its row is archived, never resumed, and nothing registers (:195)', async (t) => {
@@ -683,7 +683,7 @@ test('against a team stand-in with no hook a saved "new session" or "ongoing ses
   ])
   assert.deepEqual([run.registered, run.channels.teamResume.ready], [[], false])
   assert.doesNotMatch(run.ctx.registeredTools.get('save_automation').parameters.properties.worker.description, /session|thread/)
-  assert.deepEqual([run.view().omniRows, Object.keys(run.channels.state.omniRows)], [[], []])
+  assert.deepEqual([run.view().omniRows, Object.hasOwn(run.channels.state, 'omniRows')], [undefined, false])
 })
 
 // Group 16 (design row 19, Decision 39): a DSH bot's Session is the team's to find (through
@@ -951,7 +951,7 @@ test('the plugin has no resume pass of its own: no copy of the team\'s, no resum
     return lines.flatMap((line, index) => (/cutByRestart(\?\.)?\(\w+(\.data)?\?\.reason\)/.test(line) ? [[name, onTurnEnd(lines, index)]] : []))
   })
   assert.deepEqual(reads.filter(([, onEnd]) => !onEnd), [])
-  assert.deepEqual([...new Set(reads.map(([name]) => name))], ['asks.js', 'omni-rows.js', 'standing-recovery.js', 'standing-runs.js', 'subscriptions.js', 'threads.js'])
+  assert.deepEqual([...new Set(reads.map(([name]) => name))], ['asks.js', 'standing-recovery.js', 'standing-runs.js', 'subscriptions.js', 'threads.js'])
   // The signal recovery's inbox read, once in each recovery that decides unbound work.
   assert.deepEqual(count(/inbox\?\.nextStep/), { 'standing-recovery.js': 1 })
   // The one wake: wakeOnce's requeue (the inbox move) and its flush, beside the hand-over's own.
@@ -966,7 +966,7 @@ test('the plugin has no resume pass of its own: no copy of the team\'s, no resum
     .map(([name, source]) => [name, source.split('\n').filter(line => pattern.test(line)).length]).filter(([, n]) => n > 0))
   assert.deepEqual(raw(/\bdeliver\b/), { 'asks.js': 3, 'grants.js': 1, 'standing-recovery.js': 1, 'subscriptions.js': 1 })
   assert.deepEqual(raw(/\bfollowup(AndFlush)?\b|\bsteer\b/), { 'asks.js': 3, 'standing-runs.js': 3 })
-  assert.deepEqual(raw(/cutByRestart/), { 'asks.js': 1, 'omni-rows.js': 1, 'standing-recovery.js': 7, 'standing-runs.js': 1, 'subscriptions.js': 1, 'threads.js': 1 })
+  assert.deepEqual(raw(/cutByRestart/), { 'asks.js': 1, 'standing-recovery.js': 7, 'standing-runs.js': 1, 'subscriptions.js': 1, 'threads.js': 1 })
   assert.deepEqual(raw(/\bset(Timeout|Interval|Immediate)\b|timers\/promises|queueMicrotask|\bsleep\b/), { 'omni-events.js': 2, 'omni-link.js': 1, 'omni-local.js': 1, 'thread-keys.js': 4 })
   assert.deepEqual(raw(/\bresumed\b/), { 'asks.js': 1, 'resume-hook.js': 15, 'standing-recovery.js': 7 })
   assert.deepEqual(raw(/\brequeue\b|\bwakeOnce\b/), { 'standing-recovery.js': 4, 'standing-runs.js': 2 })

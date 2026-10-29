@@ -33,7 +33,7 @@ const storage = new Map()
 const localStorage = { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, String(value)) }
 
 const loadTree = () => bundleClient([
-  'export { OmniTree, ThreadRow, SessionRow, rowsOf, ThreadPicker, ThreadDock, plusOf, teamReady, threadsOf, rowPropsOf, isThreadSession, freeMarkOf, permissionMenuOf, OMNI_OUTDATED, OMNI_TREE_CSS } from \'./omni-tree.js\'',
+  'export { OmniTree, ThreadRow, ThreadPicker, ThreadDock, plusOf, teamReady, threadsOf, rowPropsOf, isThreadSession, freeMarkOf, permissionMenuOf, OMNI_OUTDATED, OMNI_TREE_CSS } from \'./omni-tree.js\'',
   'export { openConnectWizard } from \'./wizard.js\'',
   'export { omniStore, startLive, loadLink, refreshLive } from \'./omni-store.js\'',
 ], { globals: { URL, URLSearchParams, setTimeout, clearTimeout, document, localStorage }, team: { omni: { ...omni, call: fakeCall } } })
@@ -50,8 +50,6 @@ const CHANNEL_B = { id: '22222222-2222-4222-8222-222222222222', type: 'whatsapp-
 const CHAT = (n, channel = CHANNEL_A) => ({ id: `c${n}`, channelId: channel.id, name: `Chat ${n}`, at: n, unread: 0 })
 const THREAD = (n, channel = CHANNEL_A, extra = {}) => ({ id: `t${n}`, sessionId: `s${n}`, chatId: `c${n}`, channelId: channel.id, title: `Chat ${n}`, status: 'idle', connected: true, reason: null, ...extra })
 const BOT = { id: 'omni-bot', kind: 'omni', name: 'Omni' }
-// A Session the host keeps under the Omni row (omni-rows.js omniRowsView).
-const ROW = (n, kind = 'handoff', extra = {}) => ({ sessionId: `r${n}`, kind, title: `Session ${n}`, at: n, status: 'idle', ...extra })
 
 // The roster as the host's view makes it (threads.js threadsView): a team with the hook names
 // the row props; one without names none and says why.
@@ -594,85 +592,23 @@ test('first probe 3: a thread opens in the Bot skin with every other Bot dock em
   assert.equal(Object.hasOwn(document.body.dataset, 'omniThread'), false)
 })
 
-// Session rows under the Omni row (wish omni-chat-threads, Group 14; criterion :206).
-test('the Omni row draws its kept Session rows beside the threads, linked or not; a row opens its Session on a team with the hook and never on one without (:206)', (t) => {
+// Nothing but channels and their threads is drawn under the Omni Bot (the owner, 2026-10-29):
+// the Sessions list went with the hand-offs and the session workers.
+test('the Omni row draws no Sessions list, even from a view an older host still sends rows in; the threads of no listed channel stay under Other chats', (t) => {
   linked()
-  const roster = hooked({ omniThreads: [THREAD(1)], omniRows: [ROW(1), ROW(2, 'handoff', { status: 'working' })] })
-  const { view, opened } = tree(t, { roster })
-  const root = view.draw()
-  const group = byLabel(root, 'Sessions')
-  assert.deepEqual(all(group, 'bt-thread').map(item => item.props['data-session-id']), ['r1', 'r2'])
-  // Beside the threads: the thread stays under its channel, the rows after the channels.
-  assert.deepEqual(all(channelOf(root, CHANNEL_A), 'bt-thread').map(item => item.props['data-thread-id']), ['t1'])
-  assert.equal(all(channelOf(root, CHANNEL_A), 'ot-row').length, 0)
-  const [first, second] = all(group, 'ot-row')
-  assert.deepEqual([first.props['data-kind'], second.props['data-kind']], ['handoff', 'handoff'])
-  assert.deepEqual([one(second, 'bt-thread').props['data-state'], one(second, 'bt-thread').props['aria-label']], ['working', 'Session 2, Working'])
-  one(first, 'bt-thread').props.onClick()
-  assert.deepEqual(opened, ['r1'])
-  // No rows, no group.
-  const { view: bare } = tree(t, { roster: hooked({ omniThreads: [THREAD(1)] }) })
-  assert.equal(byLabel(bare.draw(), 'Sessions'), undefined)
-  // With no Omni linked the rows still show, so they can be opened or removed.
-  ui.omniStore.set({ ...ui.omniStore.getSnapshot(), preview: true })
-  const { view: unlinked } = tree(t, { roster: hooked({ omniThreadsOffered: false, omniThreadsReason: NOT_LINKED, omniRows: [ROW(1)] }) })
-  assert.deepEqual(all(byLabel(unlinked.draw(), 'Sessions'), 'bt-thread').map(item => item.props['data-session-id']), ['r1'])
-  ui.omniStore.set({ ...ui.omniStore.getSnapshot(), preview: false })
-  // On a team without the hook a row shows and opens nothing.
-  const { view: older, opened: none } = tree(t, { roster: oldTeam({ omniRows: [ROW(3)] }) })
-  const disabled = one(byLabel(older.draw(), 'Sessions'), 'bt-thread')
-  assert.equal(disabled.props['aria-disabled'], true)
-  disabled.props.onClick()
-  assert.deepEqual(none, [])
-  assert.deepEqual(plain(ui.rowsOf({ omniRows: [ROW(1), { kind: 'handoff' }, null] })).map(item => item.sessionId), ['r1'])
+  const stale = [{ sessionId: 'r1', kind: 'handoff', title: 'Session 1', at: 1, status: 'idle' }]
+  const elsewhere = THREAD(9, { id: '99999999-9999-4999-8999-999999999999' })
+  for (const roster of [hooked({ omniThreads: [THREAD(1), elsewhere], omniRows: stale }), oldTeam({ omniRows: stale })]) {
+    const root = tree(t, { roster }).view.draw()
+    assert.equal(byLabel(root, 'Sessions'), undefined)
+    assert.deepEqual([all(root, 'ot-row'), all(root, 'bt-thread').filter(item => item.props['data-session-id'] === 'r1')], [[], []])
+  }
+  const root = tree(t, { roster: hooked({ omniThreads: [THREAD(1), elsewhere], omniRows: stale }) }).view.draw()
+  assert.deepEqual(all(byLabel(root, 'Other chats'), 'bt-thread').map(item => item.props['data-thread-id']), ['t9'])
+  assert.equal('SessionRow' in ui || 'rowsOf' in ui, false)
 })
 
-test('only a Session row\'s menu removes it: its one item asks once more, then asks the host; a refusal shows on the row, and Escape or a click away closes it asking again next time', async () => {
-  calls.length = 0
-  answer = () => ({ ok: true })
-  const roster = hooked()
-  const view = mount(() => react.createElement(ui.SessionRow, { row: ROW(1), actions: { openSession: () => {} }, rowProps: ui.rowPropsOf({ roster }, roster.omniRowProps) }))
-  const more = () => one(view.draw(), 'ot-row-more')
-  const item = () => one(view.draw(), 'ot-row-remove')
-  assert.deepEqual([more().props['aria-label'], more().props['aria-expanded'], item()], ['Actions for Session 1', false, undefined])
-  // The row itself has no remove button outside its menu.
-  assert.equal(one(view.draw(), 'ot-thread-remove'), undefined)
-  more().props.onClick()
-  assert.equal(one(view.draw(), 'ot-thread-menu').props.role, 'menu')
-  assert.deepEqual([text(item()), item().props['aria-label']], ['Remove', 'Remove Session 1'])
-  item().props.onClick()
-  assert.deepEqual([text(item()), item().props['data-confirm'], calls], ['Click again to remove', true, []])
-  item().props.onClick()
-  await settle()
-  assert.deepEqual(calls, [['omni-row-remove', { sessionId: 'r1' }]])
-  assert.equal(one(view.draw(), 'ot-thread-menu'), undefined)
-  // A refusal says why on the row.
-  answer = () => new Error('The session could not be removed: busy')
-  more().props.onClick()
-  item().props.onClick()
-  item().props.onClick()
-  await settle()
-  assert.equal(text(one(view.draw(), 'ot-thread-problem')), 'The session could not be removed: busy')
-  // Escape closes it, and the next open asks again.
-  more().props.onClick()
-  item().props.onClick()
-  let stopped = false
-  one(view.draw(), 'ot-thread-menu').props.onKeyDown({ key: 'Escape', stopPropagation: () => { stopped = true } })
-  assert.deepEqual([one(view.draw(), 'ot-thread-menu'), stopped], [undefined, true])
-  more().props.onClick()
-  assert.equal(text(item()), 'Remove')
-  // A click away closes it too.
-  item().props.onClick()
-  one(view.draw(), 'ot-row').props.ref.current = { contains: target => target === 'inside' }
-  pointerDown('inside')
-  assert.ok(one(view.draw(), 'ot-thread-menu'))
-  pointerDown('elsewhere')
-  assert.equal(one(view.draw(), 'ot-thread-menu'), undefined)
-  more().props.onClick()
-  assert.equal(text(item()), 'Remove')
-  assert.equal(calls.length, 2)
-})
-
-test('the Session rows\' words and the board\'s notes on an automation whose worker moved to its chats\' threads have Chinese copy here', () => {
-  for (const key of ['Sessions', 'Actions for {name}', ...Object.values(WORKER_MOVED)]) assert.ok(Object.hasOwn(STRINGS, key), key)
+test('the board\'s notes on an automation whose worker moved to its chats\' threads have Chinese copy here; the Sessions list\'s words are gone', () => {
+  for (const key of Object.values(WORKER_MOVED)) assert.ok(Object.hasOwn(STRINGS, key), key)
+  for (const key of ['Sessions', 'Actions for {name}']) assert.equal(Object.hasOwn(STRINGS, key), false, key)
 })

@@ -11,11 +11,9 @@ import { SessionStore } from '@deepseek-ai/dsh-session'
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
-import { TEAM_TOOLS as PINNED_TEAM_TOOLS } from '@automagik/bots-dsh/src/host/constants.js'
-import { LATER_TEAM_TOOLS, ROW_DENIED, ROW_RETIRED, TEAM_TOOLS } from '../src/host/omni-rows.js'
 import { NOT_PICKED_UP } from '../src/host/standing-recovery.js'
-import { NO_CHAT, RETIRED_QUEUED, UNKNOWN_WORKER, WORKER_MOVED } from '../src/host/subscriptions.js'
-import { AUTOMATION_THREADS_MAX, THREAD_TOOLS, THREADS_FULL } from '../src/host/threads.js'
+import { NO_CHAT, RETIRED_QUEUED, ROW_RETIRED, UNKNOWN_WORKER, WORKER_MOVED } from '../src/host/subscriptions.js'
+import { AUTOMATION_THREADS_MAX, THREADS_FULL } from '../src/host/threads.js'
 import { applyBoth, fakeContext } from './team.js'
 import { boot, CHAT, ELSEWHERE, eventFor, flush, GROUP, homeFor, INSTANCE, MESSAGE_IDS, saved, teamState, until, watchedOmni } from './thread-fixture.js'
 
@@ -2160,7 +2158,6 @@ test('review 13, 6: a cut owner turn that was no resume ends the walk back: an o
   assert.deepEqual([runById(after, first.id).status, runById(after, first.id).turnId], ['working', String(turn)])
 })
 
-const rowsOf = bench => bench.run.channels.omniRows.list()
 test('a chat-thread run in a thread its event made asks first like any thread run, and a restart that cuts its turn is resumed by the team and bound to it, its end finishing the run (:192, :204)', async (t) => {
   const bench = await threadBench(t, { threads: false })
   assert.match(await bench.tool('save_automation', { sources: `channel:${INSTANCE}`, trigger: 'message', worker: 'thread' }), /^Saved /)
@@ -2229,7 +2226,7 @@ test('saved "new session" and "ongoing session" automations move to their chat\'
   }))
   const bench = await threadBench(t, { home, omni, signal: false })
   const { run } = bench
-  await until(() => Object.keys(run.channels.state.omniRows).length === 0 && runById(bench, 'run-w').status === 'failed')
+  await until(() => !Object.hasOwn(run.channels.state, 'omniRows') && runById(bench, 'run-w').status === 'failed')
   await signalOf(t, run)
   await flush()
   const subs = run.channels.state.subscriptions
@@ -2242,7 +2239,7 @@ test('saved "new session" and "ongoing session" automations move to their chat\'
   ])
   // Each retired row's Session archived with its work stopped.
   assert.deepEqual(run.archiving.map(([id, options]) => [id, options]).sort(), [['ongoing-session', { stopActivity: true }], ['run-session', { stopActivity: true }]])
-  assert.deepEqual([rowsOf(bench), run.view().omniRows], [[], []])
+  assert.equal(run.view().omniRows, undefined)
   assert.deepEqual([runById(bench, 'run-w').status, runById(bench, 'run-w').summary], ['failed', ROW_RETIRED])
   for (const id of ['run-q1', 'run-q2']) {
     assert.deepEqual([runById(bench, id).status, runById(bench, id).summary, runById(bench, id).event, runById(bench, id).target], ['failed', RETIRED_QUEUED, undefined, undefined], id)
@@ -2254,7 +2251,7 @@ test('saved "new session" and "ongoing session" automations move to their chat\'
   assert.deepEqual(run.view().subscriptions.map(sub => sub.note ?? null), [WORKER_MOVED.session, WORKER_MOVED.ongoing, WORKER_MOVED.session, null])
   assert.match(await bench.tool('list_automations', {}), new RegExp(`sub-on · sub-on worker: when any new message in Marina → the thread of "Marina" \\(${WORKER_MOVED.ongoing.replace(/[.;]/g, '\\$&')}\\)`))
   const disk = saved(home)
-  assert.deepEqual([disk.subscriptions['sub-on'].worker, disk.subscriptions['sub-on'].note, Object.keys(disk.omniRows)], [{ kind: 'thread' }, WORKER_MOVED.ongoing, []])
+  assert.deepEqual([disk.subscriptions['sub-on'].worker, disk.subscriptions['sub-on'].note, Object.hasOwn(disk, 'omniRows')], [{ kind: 'thread' }, WORKER_MOVED.ongoing, false])
 
   // Its next event runs in the chat's thread, made for it now.
   const ran = await fire(bench, subs['sub-new'], 'Oi')
@@ -2313,11 +2310,6 @@ test('the old "session", "new session", "ongoing session", "dshbot:" and "thread
     assert.equal(await bench.tool('save_automation', { sources: `chat:${CHAT}`, trigger: 'message', worker }), `Not saved: No Bot named "${worker}". Use a name from list_bots, "Omni" or "thread".`, worker)
   }
   assert.deepEqual(subsIn(bench), [])
-})
-
-test('the team tools a row\'s Session is denied are the pinned Bot team\'s TEAM_TOOLS, copied name for name', () => {
-  assert.deepEqual([...TEAM_TOOLS], [...PINNED_TEAM_TOOLS])
-  assert.deepEqual([...ROW_DENIED], [...new Set([...PINNED_TEAM_TOOLS, ...LATER_TEAM_TOOLS, ...THREAD_TOOLS])])
 })
 
 // Review 1 of the chat-thread worker: a cap on the threads automations make, the owner's +

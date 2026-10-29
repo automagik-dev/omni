@@ -5,6 +5,7 @@
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 import { START_TASK_REFUSAL } from '../src/host/grants.js'
+import { ROW_UNARCHIVED } from '../src/host/subscriptions.js'
 import { COMPUTER_TOOLS } from '../src/host/omni-api.js'
 import { OPERATOR_RULES } from '../src/host/omni-rules.js'
 import { boot, fakeOmni, gateOf, guarded, homeFor, resetFetch, saved, signal, teamState, until } from './thread-fixture.js'
@@ -94,29 +95,53 @@ test('the hand-offs a start finds from before go once: each row\'s Session archi
   assert.deepEqual(done.resumed, [])
   assert.deepEqual(run.archiving.map(([id, options]) => [id, options]).sort(), Object.keys(omniRows).sort().map(id => [id, { stopActivity: true }]))
   for (const id of Object.keys(omniRows)) assert.deepEqual(run.agentOf(id).calls, [], id)
-  assert.deepEqual([run.channels.state.omniRows, Object.hasOwn(run.channels.state, 'omniHandoffs'), run.view().omniRows], [{}, false, []])
+  assert.deepEqual([Object.hasOwn(run.channels.state, 'omniRows'), Object.hasOwn(run.channels.state, 'omniHandoffs'), run.view().omniRows], [false, false, undefined])
   // The DSH bot keeps its Session; nothing reported to the Omni Bot.
   assert.deepEqual([run.team.state.agents.coder.sessions, run.archived.includes('dsh-handoff'), run.agentOf('m1').calls], [['dsh-handoff'], false, []])
   await run.channels.save()
   const disk = saved(home)
-  assert.deepEqual([disk.omniRows, Object.hasOwn(disk, 'omniHandoffs')], [{}, false])
+  assert.deepEqual([Object.hasOwn(disk, 'omniRows'), Object.hasOwn(disk, 'omniHandoffs')], [false, false])
   await run.stop()
   const again = await boot(t, home)
   assert.deepEqual([again.archiving, again.registered[0].sessions()], [[], []])
 })
 
-test('a hand-off row left from before never reaches the team\'s restart pass: not before the start pass archives it, nor when its archive fails, though the tree still draws it so its menu can remove it', async (t) => {
+test('a row left from before whose archive fails stays only on the record: nothing draws it, the team\'s restart pass never gets it, and the next start archives it and drops state.omniRows', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
-  const home = homeFor(t, fakeOmni(), teamState({ omniRows: { 'handoff-cut': handoffRow('handoff-cut') } }))
+  const home = homeFor(t, fakeOmni(), teamState({ omniRows: { 'handoff-cut': handoffRow('handoff-cut'), 'run-kept': handoffRow('run-kept', { kind: 'run', turnOpenAt: null }) } }))
   const run = await boot(t, home, { archiveError: new Error('DSH is busy') })
   run.cut('handoff-cut')
-  await until(() => run.archiving.length === 1)
-  assert.deepEqual([run.channels.omniRows.list().map(row => row.sessionId), run.view().omniRows.map(row => row.sessionId)], [['handoff-cut'], ['handoff-cut']])
-  assert.deepEqual(run.registered[0].sessions(), [])
+  await until(() => run.archiving.length === 2)
+  assert.deepEqual([Object.keys(run.channels.state.omniRows).sort(), run.view().omniRows, run.registered[0].sessions()], [['handoff-cut', 'run-kept'], undefined, []])
   const done = await signal(t, run)
   assert.deepEqual([done.resumed, run.agentOf('handoff-cut').calls], [[], []])
-  // The menu removes it once DSH archives again.
-  run.fake.archiveError = null
-  await run.call('omni-row-remove', { sessionId: 'handoff-cut' })
-  assert.deepEqual([run.archived, run.channels.omniRows.list()], [['handoff-cut'], []])
+  await run.channels.save()
+  await run.stop()
+  // DSH archives again: the next start finishes the pass, and the one after has nothing to do.
+  const next = await boot(t, home)
+  await until(() => !Object.hasOwn(next.channels.state, 'omniRows'))
+  assert.deepEqual(next.archived.sort(), ['handoff-cut', 'run-kept'])
+  await next.channels.save()
+  assert.equal(Object.hasOwn(saved(home), 'omniRows'), false)
+  await next.stop()
+  const third = await boot(t, home)
+  await signal(t, third)
+  assert.deepEqual(third.archiving, [])
+})
+
+test('a run still working in a leftover row whose archive fails ends as failed, saying why, so the team\'s restart pass is never handed that Session', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const home = homeFor(t, fakeOmni(), teamState({
+    subscriptions: {},
+    omniRows: { 'run-kept': handoffRow('run-kept', { kind: 'run' }) },
+    subscriptionRuns: [{ id: 'run-w', subId: 'sub-gone', standing: true, sessionId: 'run-kept', status: 'working', turnId: '1', askFirst: true, at: AT }],
+  }))
+  const run = await boot(t, home, { archiveError: new Error('DSH is busy') })
+  run.cut('run-kept')
+  const runOf = () => run.channels.state.subscriptionRuns.find(item => item.id === 'run-w')
+  await until(() => runOf().status === 'failed')
+  assert.equal(runOf().summary, ROW_UNARCHIVED)
+  assert.deepEqual([Object.keys(run.channels.state.omniRows), run.registered[0].sessions()], [['run-kept'], []])
+  const done = await signal(t, run)
+  assert.deepEqual([done.resumed, run.agentOf('run-kept').calls], [[], []])
 })
