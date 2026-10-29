@@ -1,258 +1,113 @@
-// The DSH-bot worker (wish omni-chat-threads, Group 16; design row 19), against the real Bot
+// The owner's DSH bots (wish omni-chat-threads, Group 16; design row 19), against the real Bot
 // team (the release apps/automagik.json pins) on a fake DSH, and against a stand-in of it
-// without the DSH-bot calls: an automation hands its events to one of the owner's DSH bots,
-// in a new Session under it for each event or in one ongoing Session, only while the team
-// offers DSH bots.
+// without the DSH-bot calls. They are hand-off targets only (handoff.test.js): an automation
+// that handed its events to one runs each event in the thread of its chat now.
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
-import { DSH_BOT_GONE, DSH_BOT_NEEDS_TEAM } from '../src/host/dsh-bots.js'
-import { ONGOING_RENEWED } from '../src/host/standing-runs.js'
-import { SESSION_NEEDS_TEAM, THREAD_NEEDS_TEAM } from '../src/host/subscriptions.js'
-import { boot, CHAT, eventFor, gateOf, homeFor, resetFetch, restart, signal, teamState, turn, until, watchedOmni } from './thread-fixture.js'
+import { RETIRED_QUEUED, THREAD_NEEDS_TEAM, WORKER_MOVED } from '../src/host/subscriptions.js'
+import { boot, CHAT, eventFor, gateOf, homeFor, INSTANCE, resetFetch, saved, signal, teamState, until, watchedOmni } from './thread-fixture.js'
 
 afterEach(resetFetch)
 
 // Two DSH bots and the tasks record, as the team keeps them in state.agents.
 const agents = () => ({
-  coder: { id: 'coder', kind: 'dsh', name: 'Coder', workDir: import.meta.dirname, sessions: [], createdAt: 1 },
+  coder: { id: 'coder', kind: 'dsh', name: 'Coder', workDir: import.meta.dirname, sessions: ['dsh-session'], createdAt: 1 },
   writer: { id: 'writer', kind: 'dsh', name: 'Writer', sessions: [], createdAt: 2 },
   tasks: { id: 'tasks', kind: 'tasks', name: 'Tasks', sessions: [], createdAt: 3 },
 })
-// DSH's permission presets, recording every switch: nothing here may make one.
-function presets() {
-  const switched = []
-  return {
-    switched,
-    set: (session, name) => { switched.push([session.id, name]) },
-    catalog: () => ({ options: ['read-only', 'workspace-write'].map(value => ({ value, name: value })), defaultPreset: 'workspace-write' }),
-    current: () => 'workspace-write',
-  }
-}
 // One DSH start on a home linked to a fake Omni that lists its chats, with the DSH bots; the
 // team's restart pass (its timer mocked, once per test) over unless `signal` is false.
 const mocked = new WeakSet()
-async function bench(t, { home, omni, signal: over = true, ...options } = {}) {
+async function bench(t, { home, omni, signal: over = true, state = {}, ...options } = {}) {
   if (!mocked.has(t)) t.mock.timers.enable({ apis: ['setTimeout'] })
   mocked.add(t)
   const linked = omni ?? watchedOmni(t)
-  const place = home ?? homeFor(t, linked, teamState({ agents: agents() }))
-  const preset = presets()
-  const run = await boot(t, place, { services: { permissionPresets: preset }, ...options })
+  const place = home ?? homeFor(t, linked, teamState({ agents: agents(), ...state }))
+  const run = await boot(t, place, options)
   if (over && !options.mask) await signal(t, run)
-  return { run, home: place, omni: linked, presets: preset }
+  return { run, home: place, omni: linked }
 }
 const tool = (run, name, args, agentId = 'm1') => run.ctx.registeredTools.get(name).execute(args, { agent: { id: agentId } })
-const save = (run, args) => tool(run, 'save_automation', { sources: `chat:${CHAT}`, trigger: 'message', ...args })
 const subsOf = run => Object.values(run.channels.state.subscriptions ?? {})
 const runById = (run, id) => (run.channels.state.subscriptionRuns ?? []).find(item => item.id === id)
-const fire = (run, sub, text) => run.channels.fireSubscription(sub, eventFor(text))
-const postedTo = (run, sessionId) => run.agentOf(sessionId).calls
-const sessionsOf = (run, agentId) => run.team.state.agents[agentId].sessions
-const workerText = run => run.ctx.registeredTools.get('save_automation').parameters.properties.worker.description
-const ownerMessage = text => ({ content: [{ type: 'text', text }], source: { kind: 'user' } })
 
-test('without the DSH-bot calls no DSH bot is offered and a dshbot worker is refused with its own reason; with the floor release\'s calls, two DSH bots and the Tasks record, only the two bots are offered (:208)', async (t) => {
+test('the adapter reads the team\'s DSH bots from the team itself, never the Tasks record; without the team\'s calls none is found; no automation offers one (:208)', async (t) => {
   const omni = watchedOmni(t)
   const home = homeFor(t, omni, teamState({ agents: agents() }))
   const without = await bench(t, { home, omni, dshBots: false })
-  assert.equal(without.run.channels.omniDshBots.ready(), false)
-  assert.doesNotMatch(await tool(without.run, 'find_chats', {}), /dshbot/)
-  assert.doesNotMatch(workerText(without.run), /dshbot/)
-  for (const worker of ['dshbot:Coder', 'dshbot:coder', 'dshbot:Nobody']) {
-    assert.equal(await save(without.run, { worker }), `Not saved: ${DSH_BOT_NEEDS_TEAM}`, worker)
-  }
-  // Its reason is its own, not the thread's or the session worker's.
-  assert.equal(new Set([DSH_BOT_NEEDS_TEAM, THREAD_NEEDS_TEAM, SESSION_NEEDS_TEAM]).size, 3)
-  assert.deepEqual(subsOf(without.run), [])
+  assert.deepEqual([without.run.channels.omniDshBots.ready(), without.run.channels.omniDshBots.find('Coder')], [false, undefined])
   await without.run.stop()
 
   const { run } = await bench(t, { home, omni })
-  const offered = (await tool(run, 'find_chats', {})).split('\n').filter(line => line.includes('dshbot:'))
-  assert.deepEqual(offered, [
-    `worker dshbot:Coder · a DSH bot working in ${import.meta.dirname} · as "new" or "ongoing"`,
-    'worker dshbot:Writer · a DSH bot · as "new" or "ongoing"',
-  ])
-  assert.deepEqual((await tool(run, 'find_chats', { search: 'writ' })).split('\n').filter(line => line.includes('dshbot:')), ['worker dshbot:Writer · a DSH bot · as "new" or "ongoing"'])
-  assert.match(workerText(run), /"dshbot:<name>"/)
-  // The Tasks record is no DSH bot.
-  assert.match(await save(run, { worker: 'dshbot:Tasks' }), /^Not saved: No DSH bot "Tasks"\./)
-  assert.match(await save(run, { worker: 'dshbot:coder' }), /^Saved .*→ the DSH bot "Coder" \(a new session each time\)/)
-  const [sub] = subsOf(run)
-  assert.deepEqual(sub.worker, { kind: 'dshbot', agentId: 'coder', mode: 'new' })
-  // `as` alone switches its mode, by the saved bot.
-  assert.match(await save(run, { id: sub.id, as: 'ongoing' }), /→ the DSH bot "Coder" \(one ongoing session\)/)
-  assert.deepEqual(subsOf(run)[0].worker, { kind: 'dshbot', agentId: 'coder', mode: 'ongoing' })
-  assert.match(await save(run, { worker: 'dshbot:Writer', as: 'ongoing' }), /^Saved /)
-  assert.deepEqual(subsOf(run)[1].worker, { kind: 'dshbot', agentId: 'writer', mode: 'ongoing' })
-  assert.match(await tool(run, 'list_automations', {}), /any new message in Marina → the DSH bot "Writer" \(one ongoing session\)/)
+  assert.equal(run.channels.omniDshBots.ready(), true)
+  assert.deepEqual([run.channels.omniDshBots.find('coder')?.name, run.channels.omniDshBots.find('WRITER')?.id, run.channels.omniDshBots.find('Tasks')], ['Coder', 'writer', undefined])
   // The calls are read from the team itself: a property of this plugin's runtime (whose
   // prototype is the team) never hides them.
   Object.defineProperty(run.channels, 'dshBots', { value: undefined, configurable: true })
   assert.equal(run.channels.omniDshBots.ready(), true)
-  assert.deepEqual(run.channels.omniDshBots.now().map(bot => bot.name), ['Coder', 'Writer'])
-  assert.deepEqual((await run.channels.omniDshBots.list()).map(bot => bot.id), ['coder', 'writer'])
+  assert.equal(run.channels.omniDshBots.find('Writer')?.id, 'writer')
   delete run.channels.dshBots
-})
-
-test('on a team stand-in without the hook a DSH bot is not offered either, and a saved dshbot automation pauses with the reason (:195, DSH-bot part)', async (t) => {
-  const omni = watchedOmni(t)
-  const home = homeFor(t, omni, teamState({ agents: agents() }))
-  const first = await bench(t, { home, omni })
-  assert.match(await save(first.run, { worker: 'dshbot:Coder' }), /^Saved /)
-  const masked = await restart(t, first.run, home, { mask: true })
-  await until(() => subsOf(masked).every(sub => sub.on === false))
-  assert.deepEqual(subsOf(masked).map(sub => sub.pausedReason), [DSH_BOT_NEEDS_TEAM])
-  assert.doesNotMatch(workerText(masked), /dshbot/)
-  assert.equal(await save(masked, { worker: 'dshbot:Coder' }), `Not saved: ${DSH_BOT_NEEDS_TEAM}`)
-  assert.doesNotMatch(await tool(masked, 'find_chats', {}), /dshbot/)
-})
-
-test('"new" makes one Session per event under that DSH bot, none under the Omni row or in Tasks; each run is a standing run with no botId or task that ends with its own turn\'s words, and its Session keeps its bot\'s preset and model (:208, :192 record part)', async (t) => {
-  const { run, presets: preset } = await bench(t)
-  assert.match(await save(run, { worker: 'dshbot:Coder' }), /^Saved /)
-  const [sub] = subsOf(run)
-  const a = await fire(run, sub, 'Um')
-  const b = await fire(run, sub, 'Dois')
-  const [one, two] = [a.sessionId ?? a.target.id, b.sessionId ?? b.target.id]
-  assert.notEqual(one, two)
-  assert.deepEqual([sessionsOf(run, 'coder'), sessionsOf(run, 'writer'), sessionsOf(run, 'tasks')], [[one, two], [], []])
-  assert.deepEqual(run.channels.omniRows.list(), [])
-  await until(() => postedTo(run, one).length === 1 && postedTo(run, two).length === 1)
-  // Ask-first holds the run's own tagged turn there too.
-  turn(run, one, 1, postedTo(run, one)[0], undefined, null)
-  assert.equal((await gateOf(run, 'bash', one)).kind, 'ask')
-  assert.deepEqual(await gateOf(run, 'read', one), { kind: 'allow' })
-  assert.deepEqual([postedTo(run, one)[0].source, postedTo(run, two)[0].source], [{ kind: 'omni-run', runId: a.id }, { kind: 'omni-run', runId: b.id }])
-  for (const record of [runById(run, a.id), runById(run, b.id)]) {
-    assert.deepEqual([record.standing, record.status, Object.hasOwn(record, 'botId'), Object.hasOwn(record, 'task')], [true, 'working', false, false], record.id)
-    // The floor release's indexSessions maps no such Session to the Omni Bot.
-    assert.equal(run.team.selfOf(record.sessionId), undefined, record.id)
-  }
-  assert.equal(runById(run, a.id).summary, 'Handed to its session.')
-  run.emit(one, 'assistant/message', { message: { content: [{ type: 'text', text: 'Feito um.' }] } })
-  run.emit(one, 'turn/end', { turn: 1, reason: { kind: 'completed' } })
-  turn(run, two, 1, postedTo(run, two)[0], 'Feito dois.')
-  await until(() => runById(run, b.id).status === 'done')
-  assert.deepEqual([runById(run, a.id).summary, runById(run, b.id).summary], ['Feito um.', 'Feito dois.'])
-  assert.deepEqual([preset.switched, run.selected.filter(([id]) => id === one || id === two)], [[], []])
-})
-
-test('"ongoing" puts every event in one Session under that DSH bot, one after another, and ask-first makes non-read tools ask in their turns only; once the owner archives it the next event gets a new Session and the board says so (:208)', async (t) => {
-  const { run, presets: preset } = await bench(t)
-  assert.match(await save(run, { worker: 'dshbot:Writer', as: 'ongoing' }), /^Saved /)
-  const [sub] = subsOf(run)
-  const first = await fire(run, sub, 'Um')
-  const second = await fire(run, sub, 'Dois')
-  const sessionId = subsOf(run)[0].ongoingSessionId
-  assert.deepEqual(sessionsOf(run, 'writer'), [sessionId])
-  assert.deepEqual([runById(run, first.id).sessionId, runById(run, second.id).status], [sessionId, 'queued'])
-  await until(() => postedTo(run, sessionId).length === 1)
-  turn(run, sessionId, 1, postedTo(run, sessionId)[0], undefined, null)
-  assert.equal((await gateOf(run, 'bash', sessionId)).kind, 'ask')
-  assert.deepEqual(await gateOf(run, 'read', sessionId), { kind: 'allow' })
-  run.emit(sessionId, 'assistant/message', { message: { content: [{ type: 'text', text: 'Anotado.' }] } })
-  run.emit(sessionId, 'turn/end', { turn: 1, reason: { kind: 'completed' } })
-  await until(() => postedTo(run, sessionId).length === 2)
-  assert.equal(postedTo(run, sessionId)[1].source.runId, second.id)
-  turn(run, sessionId, 2, postedTo(run, sessionId)[1], 'Ela traz.')
-  await until(() => runById(run, second.id).status === 'done')
-  assert.deepEqual([runById(run, first.id).summary, runById(run, second.id).summary], ['Anotado.', 'Ela traz.'])
-  // The owner's own turn there keeps the bot's rules: nothing asks.
-  turn(run, sessionId, 3, ownerMessage('and the docs?'), undefined, null)
-  assert.deepEqual(await gateOf(run, 'bash', sessionId), { kind: 'allow' })
-  run.emit(sessionId, 'turn/end', { turn: 3, reason: { kind: 'completed' } })
-  assert.deepEqual(preset.switched, [])
-
-  // The owner archived it: a new Session under the same bot, the board told why.
-  run.archived.push(sessionId)
-  const third = await fire(run, sub, 'Três')
-  const renewed = subsOf(run)[0].ongoingSessionId
-  assert.notEqual(renewed, sessionId)
-  assert.deepEqual(sessionsOf(run, 'writer'), [sessionId, renewed])
-  assert.equal(runById(run, third.id).note, ONGOING_RENEWED.archived)
-  await until(() => postedTo(run, renewed).length === 1)
-  assert.equal(runById(run, third.id).summary, 'Handed to the DSH bot\'s ongoing session.')
-  assert.equal(run.view().subscriptionRuns.find(item => item.id === third.id).note, ONGOING_RENEWED.archived)
-
-  // With ask-first off, its tagged turns follow the bot's own rules.
-  assert.match(await save(run, { id: sub.id, ask_first: false }), /^Saved /)
-  turn(run, renewed, 1, postedTo(run, renewed)[0], 'Ok.')
-  await until(() => runById(run, third.id).status === 'done')
-  const fourth = await fire(run, subsOf(run)[0], 'Quatro')
-  await until(() => postedTo(run, renewed).length === 2)
-  turn(run, renewed, 2, postedTo(run, renewed)[1], undefined, null)
-  assert.deepEqual(await gateOf(run, 'bash', renewed), { kind: 'allow' })
-  assert.equal(runById(run, fourth.id).askFirst, false)
-})
-
-test('losing the DSH bot pauses its automations, the board saying why, and their waiting events end; losing the team\'s calls pauses them at the next start; neither takes an event or turns on again (:208)', async (t) => {
-  const omni = watchedOmni(t)
-  const home = homeFor(t, omni, teamState({ agents: agents() }))
-  const { run } = await bench(t, { home, omni, signal: false })
-  assert.match(await save(run, { worker: 'dshbot:Writer', as: 'ongoing' }), /^Saved /)
-  assert.match(await save(run, { worker: 'dshbot:Coder' }), /^Saved /)
-  const [writes, codes] = subsOf(run)
-  // Before the team's pass is over the event waits.
-  const waiting = await fire(run, writes, 'Um')
-  assert.equal(runById(run, waiting.id).status, 'queued')
-  // The owner deletes Writer: the team says its DSH bots changed.
-  delete run.team.state.agents.writer
-  await run.team.save()
-  await until(() => subsOf(run).find(sub => sub.id === writes.id).on === false)
-  assert.deepEqual(subsOf(run).map(sub => [sub.on, sub.pausedReason]), [[false, DSH_BOT_GONE], [true, undefined]])
-  assert.deepEqual([runById(run, waiting.id).status, runById(run, waiting.id).summary], ['failed', `Not handed over: ${DSH_BOT_GONE}`])
-  assert.equal(run.view().subscriptions.find(sub => sub.id === writes.id).pausedReason, DSH_BOT_GONE)
-  await assert.rejects(fire(run, { ...writes, on: true }, 'Dois'), { message: `${writes.name} is paused: ${DSH_BOT_GONE}` })
-  assert.equal((await run.call('automation-set-on', { id: writes.id, on: true }).catch(error => error)).message, `${writes.name} stays paused: ${DSH_BOT_GONE}`)
-  assert.match(await save(run, { worker: 'dshbot:Writer' }), /^Not saved: No DSH bot "Writer"\./)
-
-  // The next start's team has no DSH-bot calls.
-  const without = await restart(t, run, home, { dshBots: false })
-  await until(() => subsOf(without).find(sub => sub.id === codes.id).on === false)
-  assert.equal(subsOf(without).find(sub => sub.id === codes.id).pausedReason, DSH_BOT_NEEDS_TEAM)
-  const made = without.made.length
-  await assert.rejects(without.channels.fireSubscription({ ...codes, on: true }, eventFor('Três')), { message: `${codes.name} is paused: ${DSH_BOT_NEEDS_TEAM}` })
-  assert.equal(without.made.length, made)
-})
-
-test('review 16, LOW-5: an `as` that does not fit who acts is refused, never read as the default; for you and the sessions under you it is ignored, as before (LOW-B)', async (t) => {
-  const omni = watchedOmni(t)
-  const bots = { ...teamState().bots, b2: { id: 'b2', name: 'Ops', role: 'Ops', instructions: '', createdAt: 2 } }
-  const { run } = await bench(t, { omni, home: homeFor(t, omni, teamState({ agents: agents(), bots })) })
-  for (const as of ['task', 'chat']) assert.equal(await save(run, { worker: 'dshbot:Coder', as }), `Not saved: A DSH bot takes as "new" or "ongoing", not "${as}".`, as)
-  for (const as of ['new', 'ongoing']) assert.equal(await save(run, { worker: 'Ops', as }), `Not saved: A Bot takes as "task" or "chat", not "${as}".`, as)
+  // No worker names one.
+  assert.doesNotMatch(await tool(run, 'find_chats', {}), /dshbot|DSH bot/)
+  assert.doesNotMatch(run.ctx.registeredTools.get('save_automation').parameters.properties.worker.description, /dshbot|DSH bot/)
+  assert.match(await tool(run, 'save_automation', { sources: `chat:${CHAT}`, trigger: 'message', worker: 'dshbot:Coder' }), /^Not saved: No Bot named "dshbot:Coder"/)
   assert.deepEqual(subsOf(run), [])
-  for (const [worker, as, saved] of [['ongoing session', 'ongoing', { kind: 'session', mode: 'ongoing' }], ['new session', 'new', { kind: 'session', mode: 'new' }], ['me', 'new', { kind: 'events' }], ['Omni', 'ongoing', { kind: 'events' }]]) {
-    assert.match(await save(run, { worker, as }), /^Saved /, worker)
-    assert.deepEqual(subsOf(run).at(-1).worker, saved, worker)
-    await run.call('automation-delete', { id: subsOf(run).at(-1).id })
-  }
-  assert.deepEqual(subsOf(run), [])
-  // Changing only `as` on a saved one is checked the same way.
-  assert.match(await save(run, { worker: 'dshbot:Coder' }), /^Saved /)
-  assert.equal(await save(run, { id: subsOf(run)[0].id, as: 'chat' }), 'Not saved: A DSH bot takes as "new" or "ongoing", not "chat".')
-  assert.deepEqual(subsOf(run)[0].worker, { kind: 'dshbot', agentId: 'coder', mode: 'new' })
 })
 
-test('review 16, LOW-7: events waiting behind a run in an ongoing DSH-bot Session the owner archived go to a new one when that run ends, the board saying why; a Session taken out of its bot is renewed as removed', async (t) => {
-  const { run } = await bench(t)
-  assert.match(await save(run, { worker: 'dshbot:Writer', as: 'ongoing', ask_first: false }), /^Saved /)
-  const [sub] = subsOf(run)
-  const first = await fire(run, sub, 'Um')
-  const second = await fire(run, sub, 'Dois')
-  const sessionId = subsOf(run)[0].ongoingSessionId
-  await until(() => postedTo(run, sessionId).length === 1)
-  run.archived.push(sessionId)
-  turn(run, sessionId, 1, postedTo(run, sessionId)[0], 'Ok um.')
-  await until(() => subsOf(run)[0].ongoingSessionId !== sessionId && postedTo(run, subsOf(run)[0].ongoingSessionId).length === 1)
-  const renewed = subsOf(run)[0].ongoingSessionId
-  assert.deepEqual([runById(run, first.id).status, runById(run, second.id).sessionId, runById(run, second.id).note], ['done', renewed, ONGOING_RENEWED.archived])
-  assert.deepEqual(postedTo(run, sessionId).length, 1)
-  turn(run, renewed, 1, postedTo(run, renewed)[0], 'Ok dois.')
-  await until(() => runById(run, second.id).status === 'done')
-  // Out of its bot without an archive (the team's list no longer has it): removed.
-  sessionsOf(run, 'writer').splice(sessionsOf(run, 'writer').indexOf(renewed), 1)
-  const third = await fire(run, sub, 'Três')
-  assert.notEqual(subsOf(run)[0].ongoingSessionId, renewed)
-  assert.equal(runById(run, third.id).note, ONGOING_RENEWED.removed)
+// A saved DSH-bot automation of each mode, from before: its worker, its one ongoing Session,
+// a run working there and an event waiting for it.
+const at = Date.now() - 60_000
+const dshSub = (id, mode, extra = {}) => ({
+  id, name: `${mode} on Coder`, on: true, sources: [{ kind: 'chat', id: CHAT, name: 'Marina', type: 'whatsapp-baileys', chatKind: 'direct', channelId: INSTANCE }],
+  trigger: { kind: 'message' }, worker: { kind: 'dshbot', agentId: 'coder', mode }, outputs: { react: false, replyToMe: false }, askFirst: true, createdAt: 1, updatedAt: 1, ...extra,
+})
+const before = () => ({
+  subscriptions: {
+    'sub-new': dshSub('sub-new', 'new'),
+    'sub-on': dshSub('sub-on', 'ongoing', { ongoingSessionId: 'dsh-session' }),
+    'sub-gone': dshSub('sub-gone', 'new', { on: false, pausedReason: 'Its DSH bot was deleted. Save the automation with another DSH bot.' }),
+  },
+  subscriptionRuns: [
+    { id: 'run-dsh', subId: 'sub-on', standing: true, sessionId: 'dsh-session', status: 'working', turnId: '4', askFirst: true, at },
+    { id: 'run-wait', subId: 'sub-on', standing: true, target: { kind: 'dshbot', id: 'sub-on' }, status: 'queued', event: eventFor('Esperando'), at },
+  ],
+})
+
+test('saved DSH-bot automations, new and ongoing, move to their chat\'s thread at start, saying so once; the DSH bot keeps its Session, never archived; a run working there still ends with its own turn, gated; the event waiting for it ends, saying why; the next event runs in the chat\'s thread (:208)', async (t) => {
+  // Before the team's pass is over: the run's turn, begun before this start, still runs.
+  const { run, home } = await bench(t, { state: before(), signal: false })
+  await until(() => subsOf(run).every(sub => sub.worker.kind === 'thread'))
+  assert.deepEqual(subsOf(run).map(sub => [sub.id, sub.worker, sub.note, sub.on, sub.pausedReason, Object.hasOwn(sub, 'ongoingSessionId')]), [
+    ['sub-new', { kind: 'thread' }, WORKER_MOVED.dshbot, true, undefined, false],
+    ['sub-on', { kind: 'thread' }, WORKER_MOVED.dshbot, true, undefined, false],
+    ['sub-gone', { kind: 'thread' }, WORKER_MOVED.dshbot, false, undefined, false],
+  ])
+  // The DSH bot's Session is the owner's: still the bot's, never archived.
+  assert.deepEqual([run.team.state.agents.coder.sessions, run.archiving], [['dsh-session'], []])
+  assert.deepEqual([runById(run, 'run-wait').status, runById(run, 'run-wait').summary, runById(run, 'run-wait').event], ['failed', RETIRED_QUEUED, undefined])
+  // The run working in it goes on: its own turn is gated, and its end finishes it.
+  assert.equal(runById(run, 'run-dsh').status, 'working')
+  assert.equal((await gateOf(run, 'bash', 'dsh-session')).kind, 'ask')
+  assert.deepEqual(await gateOf(run, 'read', 'dsh-session'), { kind: 'allow' })
+  run.emit('dsh-session', 'assistant/message', { message: { content: [{ type: 'text', text: 'Went on.' }] } })
+  run.emit('dsh-session', 'turn/end', { turn: 4, reason: { kind: 'completed' } })
+  await until(() => runById(run, 'run-dsh').status === 'done')
+  assert.equal(runById(run, 'run-dsh').summary, 'Went on.')
+  await signal(t, run)
+  // Its next event runs in Marina's thread, made for it; nothing goes to the DSH bot.
+  const event = await run.channels.fireSubscription(subsOf(run)[0], eventFor('Oi'))
+  const marina = run.channels.threads.byChat(CHAT)
+  await until(() => run.agentOf(marina.sessionId).calls.length === 1)
+  assert.deepEqual([run.agentOf(marina.sessionId).calls[0].source, runById(run, event.id).sessionId], [{ kind: 'omni-run', runId: event.id }, marina.sessionId])
+  assert.deepEqual(run.team.state.agents.coder.sessions, ['dsh-session'])
+  await run.channels.save()
+  assert.deepEqual(saved(home).subscriptions['sub-on'].worker, { kind: 'thread' })
+})
+
+test('on a team stand-in without the DSH-bot calls or the hook, a saved DSH-bot automation still moves; with no hook it then pauses with the thread\'s reason', async (t) => {
+  const omni = watchedOmni(t)
+  const home = homeFor(t, omni, teamState({ agents: agents(), ...before() }))
+  const { run } = await bench(t, { home, omni, mask: true, dshBots: false })
+  await until(() => subsOf(run).every(sub => sub.worker.kind === 'thread' && sub.on === false))
+  assert.deepEqual(subsOf(run).map(sub => [sub.note, sub.pausedReason ?? null]), [[WORKER_MOVED.dshbot, THREAD_NEEDS_TEAM], [WORKER_MOVED.dshbot, THREAD_NEEDS_TEAM], [WORKER_MOVED.dshbot, null]])
 })

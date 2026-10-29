@@ -1,11 +1,7 @@
-// Standing-Session runs (wish omni-chat-threads, design row 15): an automation that hands its
-// events to a Session that stays, where the owner's own turns go on too. A target names where:
-// an added chat's thread (`thread`, by the thread's id), the one Session an "ongoing session"
-// automation keeps on its record (`ongoing`, by the automation's id; made, or made again
-// when DSH archived it, by sessionOf before the event is counted and written), the same for
-// an automation's DSH bot in its "ongoing" mode (`dshbot`, by the automation's id), and the
-// Session a "new session" run was made for (`session`, by that Session's id), a row or a
-// Session under a DSH bot. The rows are omni-rows.js's, the DSH bots' Sessions dsh-bots.js's.
+// Standing-Session runs (wish omni-chat-threads, design row 15): an automation runs each event
+// in the thread of the chat it came from, a Session that stays, where the owner's own turns go
+// on too. A target names where: that chat's thread (`thread`, by the thread's id), made before
+// the event is queued when the chat had none (subscriptions.js).
 //
 // An event is a `queued` record in the run log, `{ id, subId, target, status, event, at }`,
 // written before fireSubscription returns, so before the events stream acks it to Omni. Each
@@ -60,15 +56,7 @@ export const automationAsk = name => `An automation event is being handled here,
 export const QUEUED_MAX = 20
 // A tagged follow-up DSH dropped while this plugin was being torn down.
 const DROPPED_STOPPING = 'DSH dropped this event as it shut down, before its turn started. Nothing ran; the next start goes on with the events after it.'
-// What the board calls each target's Session.
-const PLACE = { thread: 'the thread', ongoing: 'the ongoing session', session: 'its session', dshbot: 'the DSH bot\'s ongoing session' }
-const notHandedOver = (count, kind) => `Not handed over${count > 1 ? ` (×${count})` : ''}: ${QUEUED_MAX} events already wait for ${kind === 'thread' ? 'this thread' : 'this session'}.`
-// Said on the board by the first event an "ongoing session" automation's new Session takes,
-// by why the one before is gone: the owner removed its row, or DSH archived it.
-export const ONGOING_RENEWED = Object.freeze({
-  removed: 'A new ongoing session was made for it: the one before was removed.',
-  archived: 'A new ongoing session was made for it: DSH archived the one before.',
-})
+const notHandedOver = count => `Not handed over${count > 1 ? ` (×${count})` : ''}: ${QUEUED_MAX} events already wait for this thread.`
 
 /** A message's text blocks joined; '' when it has none. */
 export function textOf(message) {
@@ -84,48 +72,7 @@ export function turnOutcome(reason, words) {
   return { status: 'done', summary: words }
 }
 
-/**
- * An automation's one ongoing Session, kept on its record (sub.ongoingSessionId): `of(subId)`
- * is the live one or null, a pure lookup; `ensure(subId)` resolves with it, or with one made
- * now, or made again when the one before is gone (`renewed`: 'removed' or 'archived'). One
- * making per automation at a time: events that arrive together share it. `fits(sub)`: whether
- * the automation keeps one; `stateOf(sessionId, sub)`: 'live', 'removed' or 'archived';
- * `make(sub)`: a new Session's id; `keep(sessionId, sub)`: kept, once it is on the record.
- */
-export function ongoingSessions({ subs, fits, stateOf, make, keep }) {
-  const subOf = subId => (Object.hasOwn(subs(), subId) ? subs()[subId] : undefined)
-  function of(subId) {
-    const sub = subOf(subId)
-    const sessionId = fits(sub) ? sub.ongoingSessionId : undefined
-    return typeof sessionId === 'string' && stateOf(sessionId, sub) === 'live' ? sessionId : null
-  }
-  const making = new Map()
-  function ensure(subId) {
-    // A making under way is the answer, even once its Session is kept: every caller gets its
-    // `renewed`, so whichever hands over first still tells the board.
-    if (making.has(subId)) return making.get(subId)
-    const live = of(subId)
-    if (live !== null) return Promise.resolve({ sessionId: live, renewed: false })
-    const before = subOf(subId)
-    if (!fits(before)) return Promise.resolve({ sessionId: null, renewed: false })
-    const made = (async () => {
-      // Why the one before is gone.
-      const renewed = typeof before.ongoingSessionId === 'string' ? stateOf(before.ongoingSessionId, before) : false
-      const sessionId = await make(before)
-      // Read again: the store may have reloaded while the Session was made.
-      const sub = subOf(subId)
-      if (sub !== undefined) sub.ongoingSessionId = sessionId
-      await keep(sessionId, before)
-      return { sessionId, renewed }
-    })()
-    making.set(subId, made)
-    void made.finally(() => making.delete(subId)).catch(() => {})
-    return made
-  }
-  return { of, ensure }
-}
-
-const Target = z.object({ kind: z.enum(['thread', 'ongoing', 'session', 'dshbot']), id: z.string().min(1) }).strict()
+const Target = z.object({ kind: z.literal('thread'), id: z.string().min(1) }).strict()
 const sameTarget = (a, b) => a?.kind === b?.kind && a?.id === b?.id
 
 export function install(rt) {
@@ -137,42 +84,10 @@ export function install(rt) {
 
   const record = id => runs().find(run => run.id === id && isStandingRun(run))
   const working = sessionId => runs().find(run => run.sessionId === sessionId && run.status === 'working' && isStandingRun(run))
-  // Who keeps the one Session of a target keyed by its automation (ongoingSessions).
-  const keeperOf = kind => (kind === 'ongoing' ? rt.omniRows : kind === 'dshbot' ? rt.omniDshBots : undefined)
-  // Where a target's events go now; null when it has no Session. A pure lookup, read without
-  // waiting, so no reload of the log comes between finding a record and changing it.
-  const sessionNow = (target) => {
-    if (target?.kind === 'thread') return rt.threads?.byId(target.id)?.sessionId ?? null
-    if (target?.kind === 'ongoing' || target?.kind === 'dshbot') return keeperOf(target.kind)?.ongoingOf(target.id) ?? null
-    if (target?.kind === 'session') return rt.omniRows?.takes(target.id) === true || rt.omniDshBots?.takes(target.id) === true ? target.id : null
-    return null
-  }
-  // The same, once an automation that keeps one ongoing Session has a live one: made when it
-  // has none, made again when it is gone (`renewed`: 'removed' or 'archived'). Concurrent
-  // calls for one automation share one making (ongoingSessions).
-  const placeOf = async (target) => {
-    const keeper = keeperOf(target?.kind)
-    if (keeper === undefined) return { sessionId: sessionNow(target), renewed: false }
-    return keeper.ensureOngoing(target.id)
-  }
-  const sessionOf = async target => (await placeOf(target)).sessionId
-  // A new Session's note, once, on the target's oldest queued event: the first it takes.
-  // Synchronous, so it lands in the same step as the write before it.
-  const tell = (target, place) => {
-    if (!place?.renewed || place.told === true) return
-    const first = runs().findLast(run => run.status === 'queued' && sameTarget(run.target, target))
-    if (first === undefined) return
-    place.told = true
-    first.note = ONGOING_RENEWED[place.renewed] ?? ONGOING_RENEWED.archived
-  }
-  // Events an automation that keeps one ongoing Session has waiting go to it, made again first
-  // when the one before is gone (its row removed, DSH archived it), the board told why.
-  async function renew(target) {
-    const place = await placeOf(target)
-    tell(target, place)
-    if (place.told === true) await persist()
-    if (place.sessionId !== null) await handOver(place.sessionId)
-  }
+  // Where a target's events go now: its thread's Session; null when the thread is gone. A pure
+  // lookup, read without waiting, so no reload of the log comes between finding a record and
+  // changing it.
+  const sessionNow = target => (target?.kind === 'thread' ? rt.threads?.byId(target.id)?.sessionId ?? null : null)
 
   // The turn each Session runs now, as its events say: its id, the runs whose tags reached
   // it, and their last words.
@@ -223,28 +138,14 @@ export function install(rt) {
     return true
   }
 
-  // Told of every standing record that ended, a run or a queued event dropped, after it ended
-  // (omni-rows.js sets a "new session" Session back on its own preset).
-  const endedListeners = []
-  const ended = (run) => {
-    for (const listener of endedListeners) {
-      try {
-        listener(run)
-      } catch (error) {
-        warn('a standing run\'s end listener failed', error)
-      }
-    }
-  }
-
   // A queued event that will never be handed over: a failed record on the board, saying why,
-  // without the event. A "new session" event keeps the Session made for it, which the board opens.
+  // without the event.
   function dropQueued(run, summary) {
-    const { event = {}, target } = run
+    const { event = {} } = run
     delete run.event
     delete run.target
-    Object.assign(run, { sessionId: run.sessionId ?? (target?.kind === 'session' ? target.id : null), turnId: null, from: event.chat ?? '', excerpt: excerptOf(event) })
+    Object.assign(run, { sessionId: run.sessionId ?? null, turnId: null, from: event.chat ?? '', excerpt: excerptOf(event) })
     closeRun(run, 'failed', summary)
-    ended(run)
   }
   // Every queued event `which` picks ends so; the caller saves.
   function failQueued(which, summary) {
@@ -252,9 +153,7 @@ export function install(rt) {
     state.subscriptionRuns = pruneRuns(runs())
   }
 
-  // A run ends; its Session then takes the next queued event. Its automation's events that
-  // waited behind it for an ongoing Session gone since (DSH archived it, its row was removed)
-  // go to a new one: the hand-over to this Session does not reach them.
+  // A run ends; its Session then takes the next queued event.
   function finish(id, status, summary) {
     const run = record(id)
     if (run?.status !== 'working') return
@@ -262,11 +161,8 @@ export function install(rt) {
     delete run.resuming
     claimed.delete(id)
     state.subscriptionRuns = pruneRuns(runs())
-    ended(run)
     void persist()
     void handOver(run.sessionId)
-    const moved = runs().findLast(other => other.status === 'queued' && other.subId === run.subId && keeperOf(other.target?.kind) !== undefined && sessionNow(other.target) !== run.sessionId)
-    if (moved !== undefined) void renew(moved.target).catch(error => warn('handing waiting events to a new ongoing session failed', error))
   }
 
   // Held until the team's restart pass is over (a team without the hook has none), and while
@@ -274,13 +170,16 @@ export function install(rt) {
   let released = false
   let stopping = false
   const holding = () => stopping || (!released && rt.teamResume?.ready === true)
-  // The signal came and the runs the last start left are decided: every standing Session with
-  // a queued event and no working run takes its oldest one.
-  // An "ongoing session" automation whose Session DSH archived meanwhile gets its new one first.
+  // Every standing Session with a queued event `which` picks and no working run takes its
+  // oldest one.
+  function handOverQueued(which = () => true) {
+    const sessions = new Set(runs().filter(run => run.status === 'queued' && isStandingRun(run) && which(run)).map(run => sessionNow(run.target)))
+    for (const sessionId of sessions) if (sessionId !== null) void handOver(sessionId)
+  }
+  // The signal came and the runs the last start left are decided: the queues move on.
   function release() {
     released = true
-    const targets = new Map(runs().filter(run => run.status === 'queued' && isStandingRun(run)).map(run => [`${run.target?.kind}:${run.target?.id}`, run.target]))
-    for (const target of targets.values()) void renew(target).catch(error => warn('finding where queued events go failed', error))
+    handOverQueued()
   }
   ctx.effect(() => () => { stopping = true }, 'omni-channels: no hand-over while stopping')
 
@@ -309,7 +208,7 @@ export function install(rt) {
     become({
       ...rest, standing: true, sessionId, status: 'working', turnId: null,
       from: event.chat ?? sub.sources[0]?.name ?? '', excerpt: excerptOf(event),
-      summary: `Handed to ${PLACE[pick.target?.kind] ?? 'the thread'}.`, askFirst: sub.askFirst !== false, ...(event.test ? { test: true } : {}),
+      summary: 'Handed to the thread.', askFirst: sub.askFirst !== false, ...(event.test ? { test: true } : {}),
     })
     // Not posted unless the run is saved: a restart would find the event still queued and hand
     // it over a second time. It waits queued for the next hand-over instead.
@@ -334,25 +233,13 @@ export function install(rt) {
   }
 
   // The event, kept before this returns; its Session is then asked to take it, without waiting.
-  // An automation's ongoing Session is made (or made again) first, before the count:
-  // the count and the write share one step with no wait between, so events arriving together
-  // never queue past QUEUED_MAX. A Session that cannot be made keeps the event queued for the
-  // next one.
+  // The count and the write share one step with no wait between, so events arriving together
+  // never queue past QUEUED_MAX.
   async function enqueue(target, sub, event) {
     const where = Target.parse(target)
-    let place
-    if (keeperOf(where.kind) !== undefined) {
-      try {
-        place = await placeOf(where)
-      } catch (error) {
-        warn(`the ongoing session of ${sub.name} could not be made, its event waits`, error)
-      }
-    }
     const waiting = runs().filter(run => run.status === 'queued' && sameTarget(run.target, where)).length
     const base = { id: runId('run'), subId: sub.id, standing: true, at: Date.now() }
     if (waiting >= QUEUED_MAX) {
-      // A new Session made for this automation still says so, on the first event it takes.
-      tell(where, place)
       // Omni has the event acked once this returns: the board says it was dropped. While the
       // newest record for this target is already this automation's drop, it counts one more
       // there instead of filling the log with copies.
@@ -361,13 +248,13 @@ export function install(rt) {
       const excerpt = excerptOf(event)
       if (newest?.status === 'failed' && newest.subId === sub.id && Number.isInteger(newest.count)) {
         newest.count += 1
-        Object.assign(newest, { endedAt: Date.now(), from: event?.chat ?? '', excerpt, summary: notHandedOver(newest.count, where.kind) })
+        Object.assign(newest, { endedAt: Date.now(), from: event?.chat ?? '', excerpt, summary: notHandedOver(newest.count) })
         await rt.save()
         return newest
       }
       const dropped = {
         ...base, sessionId, status: 'failed', turnId: null, endedAt: Date.now(),
-        from: event?.chat ?? '', excerpt, summary: notHandedOver(1, where.kind), count: 1,
+        from: event?.chat ?? '', excerpt, summary: notHandedOver(1), count: 1,
       }
       state.subscriptionRuns = pruneRuns([dropped, ...runs()])
       await rt.save()
@@ -375,7 +262,6 @@ export function install(rt) {
     }
     const queued = { ...base, target: { kind: where.kind, id: where.id }, status: 'queued', event: { ...event }, at: base.at }
     state.subscriptionRuns = pruneRuns([queued, ...runs()])
-    tell(where, place)
     await rt.save()
     const sessionId = sessionNow(where)
     if (sessionId !== null) void handOver(sessionId)
@@ -470,20 +356,18 @@ export function install(rt) {
     return asksFirst(sessionId) ? { kind: 'ask', reason: automationAsk(exec.name) } : decision
   }, { prepend: true })
 
-  // A removed chat's thread takes no more events: its automations pause, its queued events and
-  // its working run end as failed, saying why.
+  // A removed chat's thread takes no more events: its queued events and its working run end as
+  // failed, saying why. Its automations go on: the chat's next event makes it a thread again.
   ctx.effect(() => rt.threads.onRemoved(async (thread) => {
     const target = { kind: 'thread', id: thread.id }
-    const reason = 'Its chat was removed, so the thread it hands events to is gone. Add the chat again and save the automation with the new thread.'
     failQueued(run => sameTarget(run.target, target), 'Not handed over: the chat was removed.')
     for (const run of runs()) if (run.status === 'working' && run.sessionId === thread.sessionId && isStandingRun(run)) closeRun(run, 'failed', 'Stopped: the chat was removed.')
     state.subscriptionRuns = pruneRuns(runs())
-    await rt.pauseAutomations(sub => sub.worker?.kind === 'thread' && sub.worker.threadId === thread.id, reason)
     await persist()
   }), 'omni-channels: automations of removed threads')
 
-  // At start, a thread automation that cannot take events (a team without the hook, a chat
-  // removed meanwhile) pauses with why.
+  // At start, an automation that cannot take events (a team without the hook, a worker this
+  // plugin does not know) pauses with why, once the retired workers moved (subscriptions.js).
   ctx.effect(() => {
     void Promise.resolve(rt.load()).then(() => rt.pauseStrandedThreads()).catch(error => warn('pausing the thread automations that cannot run failed', error))
   }, 'omni-channels: stranded thread automations')
@@ -491,20 +375,12 @@ export function install(rt) {
   rt.standingRuns = {
     enqueue,
     handOver,
-    sessionOf,
-    renew,
+    handOverQueued,
     working,
     bind,
     rebind,
     finish,
     failQueued,
-    onEnded: (listener) => {
-      endedListeners.push(listener)
-      return () => {
-        const at = endedListeners.indexOf(listener)
-        if (at !== -1) endedListeners.splice(at, 1)
-      }
-    },
     asksFirst,
     release,
     requeue,

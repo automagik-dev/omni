@@ -5,13 +5,12 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { createRuntime as createTeam } from '@automagik/bots-dsh'
 import { createRuntime } from '../index.js'
-import { DSH_BOT_NEEDS_TEAM } from '../src/host/dsh-bots.js'
 import { START_TASK_REFUSAL } from '../src/host/grants.js'
 import { HANDOFF_NEEDS_TEAM } from '../src/host/handoff.js'
 import { HANDOFF_TOOL } from '../src/host/omni-rules.js'
 import { install, isResumeMessage, NEEDS_NEWER_TEAM, TEAM_CONTRACT } from '../src/host/resume-hook.js'
 import { decideUnbound, NOT_PICKED_UP } from '../src/host/standing-recovery.js'
-import { SESSION_NEEDS_TEAM, THREAD_NEEDS_TEAM } from '../src/host/subscriptions.js'
+import { THREAD_NEEDS_TEAM, WORKER_MOVED } from '../src/host/subscriptions.js'
 import { CUT_WINDOW_MS, THREAD_TOOLS } from '../src/host/threads.js'
 import { all, bundleClient, byLabel, column, mount, one, plain as asValue, react, text } from './client-stand-in.js'
 import { omni as teamClient } from './omni-client.js'
@@ -340,7 +339,7 @@ test('the pinned Bot team is the release TEAM_CONTRACT names, and it has the hoo
     rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
   })
   const team = createTeam(ctx, { home })
-  for (const path of [TEAM_CONTRACT.register, TEAM_CONTRACT.dshBotsList, TEAM_CONTRACT.dshBotsCreate, TEAM_CONTRACT.dshBotsChanged]) {
+  for (const path of [TEAM_CONTRACT.register, TEAM_CONTRACT.dshBotsList, TEAM_CONTRACT.dshBotsCreate]) {
     assert.equal(typeof path.split('.').reduce((value, key) => value?.[key], team), 'function', path)
   }
   assert.equal(typeof team.resumesDone?.then, 'function')
@@ -642,66 +641,12 @@ test('the hook lists the Session of every working standing run, never a queued, 
 })
 
 // Session rows under the Omni row (Group 14): the hook's row source on the real Bot team's pass.
+// An automation of a worker since retired ("a new session each time", "one ongoing session").
 const sessionSub = (id, mode, extra = {}) => ({
   id, name: `${mode} worker`, on: true, sources: [{ kind: 'chat', id: 'c1', name: 'Marina', type: 'whatsapp-baileys', chatKind: 'direct', channelId: 'i1' }],
   trigger: { kind: 'message' }, worker: { kind: 'session', mode }, outputs: { react: false, replyToMe: false }, askFirst: true, createdAt: 1, updatedAt: 1, ...extra,
 })
 const row = (sessionId, kind, extra = {}) => ({ sessionId, kind, title: sessionId, turnOpenAt: null, at: 1, ...extra })
-
-test('a turn cut in an "ongoing session" Session and in a kept "new session" row whose run ended (an owner-written turn) is resumed exactly once by the team; the ongoing run is bound to its resumed turn and ends with it (:189)', async (t) => {
-  t.mock.timers.enable({ apis: ['setTimeout'] })
-  const at = Date.now() - 60_000
-  const home = homeFor(t, undefined, teamState({
-    subscriptions: { 'sub-on': sessionSub('sub-on', 'ongoing', { ongoingSessionId: 'ongoing-session' }) },
-    omniRows: {
-      'ongoing-session': row('ongoing-session', 'ongoing', { subId: 'sub-on', turnOpenAt: at }),
-      'kept-session': row('kept-session', 'run', { subId: 'sub-gone', turnOpenAt: at }),
-    },
-    subscriptionRuns: [
-      { id: 'run-on', subId: 'sub-on', standing: true, sessionId: 'ongoing-session', status: 'working', turnId: '4', at },
-      { id: 'run-kept', subId: 'sub-gone', standing: true, sessionId: 'kept-session', status: 'done', turnId: '2', at, endedAt: at },
-    ],
-  }))
-  const run = await boot(t, home)
-  // The ongoing run's own turn, cut; the kept row's last turn, the owner's, cut.
-  const log = [
-    { type: 'turn/start', time: at, data: { turn: 4 } },
-    { type: 'user/message', data: { content: [{ type: 'text', text: 'event' }], source: { kind: 'omni-run', runId: 'run-on' } } },
-    { type: 'turn/end', time: Date.now() - 1000, data: { turn: 4, reason: { kind: 'interrupted' } } },
-  ]
-  Object.assign(run.agentOf('ongoing-session').session, { seq: log.length, eventAt: seq => log[seq] })
-  run.cut('kept-session')
-  assert.deepEqual(run.registered[0].sessions().sort(), ['kept-session', 'ongoing-session'])
-  t.mock.timers.tick(3000)
-  const done = await run.team.resumesDone
-  await threadFlush()
-  assert.deepEqual([...done.resumed].sort(), ['kept-session', 'ongoing-session'])
-  // Once each, as a plain Session's resume; never through a Bot.
-  for (const id of ['kept-session', 'ongoing-session']) assert.deepEqual(run.agentOf(id).calls.map(message => message.source), [{ kind: 'user', resumed: true }], id)
-  assert.deepEqual(run.agentOf('m1').calls, [])
-  // The resumed turns run and end cleanly: the ongoing run is bound to its own and ends with
-  // it; the owner's turn finishes no run.
-  for (const [id, turn] of [['ongoing-session', 5], ['kept-session', 9]]) {
-    run.emit(id, 'turn/start', { turn }, Date.now())
-    run.emit(id, 'user/message', { content: run.agentOf(id).calls[0].content, source: run.agentOf(id).calls[0].source })
-    run.emit(id, 'assistant/message', { message: { content: [{ type: 'text', text: `${id} went on.` }] } })
-    run.emit(id, 'turn/end', { turn, reason: { kind: 'completed' } })
-  }
-  await threadFlush()
-  const runOf = id => run.channels.state.subscriptionRuns.find(item => item.id === id)
-  assert.deepEqual([runOf('run-on').status, runOf('run-on').turnId, runOf('run-on').summary], ['done', '5', 'ongoing-session went on.'])
-  assert.deepEqual([runOf('run-kept').status, runOf('run-kept').turnId], ['done', '2'])
-  assert.deepEqual(run.channels.omniRows.list().map(item => [item.sessionId, item.turnOpenAt]), [['ongoing-session', null], ['kept-session', null]])
-  await run.channels.save()
-  await run.stop()
-  // The next start lists neither and resumes nothing: once was all.
-  const next = await boot(t, home)
-  assert.deepEqual(next.registered[0].sessions(), [])
-  t.mock.timers.tick(3000)
-  const again = await next.team.resumesDone
-  await threadFlush()
-  assert.deepEqual([again.resumed, next.agentOf('ongoing-session').calls, next.agentOf('kept-session').calls], [[], [], []])
-})
 
 test('with 500 kept idle rows whose last turns ended cleanly or opened more than 24 h ago, the hook lists none and the team\'s pass resolves none of them; a row with a turn opened in the last 24 h and every working run\'s Session are listed (:191)', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
@@ -710,10 +655,10 @@ test('with 500 kept idle rows whose last turns ended cleanly or opened more than
   for (let index = 0; index < 500; index += 1) {
     // Half ended their last turn cleanly; half opened one more than 24 h ago.
     const turnOpenAt = index % 2 === 0 ? null : Date.now() - CUT_WINDOW_MS - 60_000
-    omniRows[`idle-${index}`] = row(`idle-${index}`, index % 3 === 0 ? 'ongoing' : 'run', { turnOpenAt, at: index })
+    omniRows[`idle-${index}`] = row(`idle-${index}`, 'handoff', { reportTo: 'm1', reported: true, turnOpenAt, at: index })
   }
-  omniRows['open-row'] = row('open-row', 'run', { turnOpenAt: at, at: 600 })
-  omniRows['working-row'] = row('working-row', 'run', { at: 601 })
+  omniRows['open-row'] = row('open-row', 'handoff', { reportTo: 'm1', reported: true, turnOpenAt: at, at: 600 })
+  omniRows['working-row'] = row('working-row', 'handoff', { reportTo: 'm1', reported: true, at: 601 })
   const home = homeFor(t, undefined, teamState({
     subscriptions: {},
     omniRows,
@@ -732,18 +677,20 @@ test('with 500 kept idle rows whose last turns ended cleanly or opened more than
   assert.equal(run.channels.omniRows.list().length, 502)
 })
 
-test('against a team stand-in with no hook a saved "new session" or "ongoing session" automation pauses with the reason at start, and nothing registers (:195)', async (t) => {
+test('against a team stand-in with no hook a saved "new session" or "ongoing session" automation moves to its chat\'s thread and pauses with the thread\'s reason at start; its row is archived, never resumed, and nothing registers (:195)', async (t) => {
   const home = homeFor(t, undefined, teamState({
     subscriptions: { 'sub-new': sessionSub('sub-new', 'new'), 'sub-on': sessionSub('sub-on', 'ongoing') },
     omniRows: { kept: row('kept', 'run', { subId: 'sub-new', turnOpenAt: Date.now() - 60_000 }) },
   }))
   const run = await boot(t, home, { mask: true })
-  await until(() => Object.values(run.channels.state.subscriptions).every(sub => sub.on === false))
-  assert.deepEqual(Object.values(run.channels.state.subscriptions).map(sub => [sub.id, sub.pausedReason]), [['sub-new', SESSION_NEEDS_TEAM], ['sub-on', SESSION_NEEDS_TEAM]])
+  await until(() => Object.values(run.channels.state.subscriptions).every(sub => sub.on === false) && run.archived.includes('kept'))
+  assert.deepEqual(Object.values(run.channels.state.subscriptions).map(sub => [sub.id, sub.worker, sub.note, sub.pausedReason]), [
+    ['sub-new', { kind: 'thread' }, WORKER_MOVED.session, THREAD_NEEDS_TEAM],
+    ['sub-on', { kind: 'thread' }, WORKER_MOVED.ongoing, THREAD_NEEDS_TEAM],
+  ])
   assert.deepEqual([run.registered, run.channels.teamResume.ready], [[], false])
-  assert.doesNotMatch(run.ctx.registeredTools.get('save_automation').parameters.properties.worker.description, /session/)
-  // Its kept row still shows, so it can be removed.
-  assert.deepEqual(run.view().omniRows.map(item => item.sessionId), ['kept'])
+  assert.doesNotMatch(run.ctx.registeredTools.get('save_automation').parameters.properties.worker.description, /session|thread/)
+  assert.deepEqual([run.view().omniRows, Object.keys(run.channels.state.omniRows)], [[], []])
 })
 
 test('the hook lists every unreported hand-off\'s Session, also one whose open turn was never saved, and never a reported or archived one (:191, hand-off part)', async (t) => {
@@ -821,14 +768,13 @@ test('the old-team sweep: on a team stand-in with no rt.resumable or rt.resumesD
   const services = { permissionPresets: presets }
   const tool = (run, name, args) => run.ctx.registeredTools.get(name).execute(args, { agent: { id: 'm1' } })
   const save = (run, worker) => tool(run, 'save_automation', { sources: `chat:${CHAT}`, trigger: 'message', worker })
-  const NEEDS = { thread: THREAD_NEEDS_TEAM, 'new session': SESSION_NEEDS_TEAM, 'ongoing session': SESSION_NEEDS_TEAM, 'dshbot:Coder': DSH_BOT_NEEDS_TEAM }
 
   const first = await boot(t, home, { services })
   await signal(t, first)
   const added = await first.channels.threads.add(INSTANCE, CHAT)
   assert.equal(added.ok, true, added.reason)
   const { thread } = added
-  for (const worker of Object.keys(NEEDS)) assert.match(await save(first, worker === 'thread' ? `thread:${thread.id}` : worker), /^Saved /, worker)
+  assert.match(await save(first, 'thread'), /^Saved /)
   const saved = Object.values(first.channels.state.subscriptions)
   // The thread's automation has a run working in the thread when DSH stops, its turn open.
   const working = await first.channels.fireSubscription(saved[0], eventFor('Oi'))
@@ -853,14 +799,14 @@ test('the old-team sweep: on a team stand-in with no rt.resumable or rt.resumesD
   const runOf = id => run.channels.state.subscriptionRuns.find(item => item.id === id)
   assert.deepEqual([recovered, flushed, runOf(working.id).status, run.agentOf(thread.sessionId).calls], [[], [], 'working', []])
 
-  // The worker list offers none of the four, a saved one is paused with its reason on the
-  // board, and saving one again is refused with it.
+  // The worker list does not offer the chat thread, the saved one is paused with its reason on
+  // the board, and saving one again is refused with it.
   const board = run.view().subscriptions
-  assert.deepEqual(board.map(sub => [sub.id, sub.on, sub.pausedReason]), saved.map((sub, index) => [sub.id, false, Object.values(NEEDS)[index]]))
+  assert.deepEqual(board.map(sub => [sub.id, sub.on, sub.pausedReason]), saved.map(sub => [sub.id, false, THREAD_NEEDS_TEAM]))
   const offered = run.ctx.registeredTools.get('save_automation').parameters.properties.worker.description
   assert.doesNotMatch(offered, /thread|session|dshbot/)
   assert.doesNotMatch(await tool(run, 'find_chats', {}), /thread:|dshbot:/)
-  for (const [worker, reason] of Object.entries(NEEDS)) assert.equal(await save(run, worker === 'thread' ? `thread:${thread.id}` : worker), `Not saved: ${reason}`, worker)
+  assert.equal(await save(run, 'thread'), `Not saved: ${THREAD_NEEDS_TEAM}`)
 
   // The hand-off refuses with its own reason, start_task stays refused, and nothing reaches Tasks.
   assert.equal(await tool(run, HANDOFF_TOOL, { title: 'Fix the build', instructions: 'Run the tests.' }), `Not handed off: ${HANDOFF_NEEDS_TEAM}`)
@@ -1042,6 +988,6 @@ test('the plugin has no resume pass of its own: no copy of the team\'s, no resum
   assert.deepEqual(raw(/\bfollowup(AndFlush)?\b|\bsteer\b/), { 'asks.js': 3, 'handoff.js': 2, 'standing-runs.js': 3 })
   assert.deepEqual(raw(/cutByRestart/), { 'asks.js': 1, 'handoff.js': 4, 'omni-rows.js': 1, 'standing-recovery.js': 9, 'standing-runs.js': 1, 'subscriptions.js': 1, 'threads.js': 1 })
   assert.deepEqual(raw(/\bset(Timeout|Interval|Immediate)\b|timers\/promises|queueMicrotask|\bsleep\b/), { 'omni-events.js': 2, 'omni-link.js': 1, 'omni-local.js': 1, 'thread-keys.js': 4 })
-  assert.deepEqual(raw(/\bresumed\b/), { 'asks.js': 1, 'handoff.js': 6, 'omni-rows.js': 1, 'resume-hook.js': 15, 'standing-recovery.js': 7, 'subscriptions.js': 1 })
+  assert.deepEqual(raw(/\bresumed\b/), { 'asks.js': 1, 'handoff.js': 6, 'resume-hook.js': 15, 'standing-recovery.js': 7 })
   assert.deepEqual(raw(/\brequeue\b|\bwakeOnce\b/), { 'handoff.js': 3, 'standing-recovery.js': 4, 'standing-runs.js': 2 })
 })

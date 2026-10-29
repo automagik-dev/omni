@@ -37,7 +37,7 @@ export const inject = ['omniTeam', 'tools', 'sessions', 'settings', 'systemPromp
 
 // The team's restart hook first, before any other work, so the team's restart pass hears of
 // this plugin's Sessions (resume-hook.js), then the adapter over the team's DSH bots
-// (dsh-bots.js), which the automations' tools offer as they register. Then the team's
+// (dsh-bots.js), which the hand-off's tool offers as it registers. Then the team's
 // install order, kept: automations and Omni's tools first, the link (the Omnis found on
 // this computer to link, one to run here, the terminal that updates or sets one up, and
 // updating them) and its events after.
@@ -45,12 +45,12 @@ export const inject = ['omniTeam', 'tools', 'sessions', 'settings', 'systemPromp
 // log it shares. Permissions come before the tools that check them. The threads' own keys
 // come after omni.js, whose requests they make, the threads after their keys, and the
 // threads' own tools after the threads, whose additions they restrict. The standing-Session
-// runs (automations that hand events to a thread or a session) after the threads, whose
+// runs (automations that run each event in its chat's thread) after the threads, whose
 // removals they hear, their restart recovery right after them, then the session rows under
-// the Omni Bot (omni-rows.js), which follow the Omni Bot's model through the threads and hear
-// the standing runs end, and the Omni Bot's hand-off (handoff.js), whose Sessions are rows,
-// before the events, which queue for them. Changing channels from the Channels page comes
-// last: it only calls omni through omni.js.
+// the Omni Bot (omni-rows.js), which follow the Omni Bot's model through the threads and end
+// the standing runs of the rows they retire, and the Omni Bot's hand-off (handoff.js), whose
+// Sessions are rows, before the events, which queue for them. Changing channels from the
+// Channels page comes last: it only calls omni through omni.js.
 const MODULES = [resumeHook, dshBots, grants, subscriptions, asks, omniApi, omniLink, omniDiscover, omniLocal, omniTerminal, omniUpdate, omni, threadKeys, threads, threadTools, standingRuns, standingRecovery, omniRows, handoff, omniEvents, omniChannelActions]
 
 export function apply(ctx, config = {}) {

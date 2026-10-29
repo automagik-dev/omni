@@ -26,11 +26,9 @@ runtime is the same `omniTeam` service.
 - **Automations**: `find_chats`, `list_automations`, `save_automation`, `pause_automation`
   and `delete_automation`; Omni's event streams start a run for each match. The board is a
   tab of DSH's right sidebar beside Omni's chat, and the account menu opens the Automations
-  page. A run for an event only reads omni. A "new session" worker makes a plain Session for
-  each event and an "ongoing session" worker keeps one for all of them; both are drawn under
-  the Omni Bot's row beside its chat threads, never under Tasks, and stay until their row's
-  menu removes them. On a Bot team with DSH bots, a "dshbot:<name>" worker hands each event
-  to one of the owner's DSH bots, in a new Session under it or one ongoing Session there.
+  page. A run for an event only reads omni. A "thread" worker runs each event in the thread
+  of the chat it came from, making that chat a thread first when it is none, so an
+  automation over many chats works in one thread per chat, drawn under the Omni Bot's row.
 - **Omni's rules**: how to operate Omni, hand work that needs a computer to a session under
   the Omni Bot, and run automations, as a part
   of the Main Bot's rules inside the team's prompt section.

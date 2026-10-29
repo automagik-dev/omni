@@ -348,8 +348,12 @@ export async function restart(t, run, home, options) {
   await run.stop()
   return boot(t, home, options)
 }
-// One message the stream hands to fireSubscription, as omni-events.js's eventOf makes it.
-export const eventFor = (text, chat = 'Marina') => ({ kind: 'message', who: chat, chat, channel: 'Pessoal', at: Date.now(), text, ref: `row-${text}` })
+// One message the stream hands to fireSubscription, as omni-events.js's eventOf makes it: from
+// the chat of that name, with its id and its channel's (none for a chat Omni does not hold).
+export const eventFor = (text, chat = 'Marina') => {
+  const held = Object.values(CHATS).find(item => item.name === chat)
+  return { kind: 'message', who: chat, chat, channel: 'Pessoal', ...(held ? { chatId: held.id, instanceId: held.instanceId } : {}), at: Date.now(), text, ref: `row-${text}` }
+}
 // DSH's tools/pre-execute waterfall for one call in a Session, ending in DSH's own allow.
 export const gateOf = (run, name, sessionId) => {
   const chain = [...(run.ctx.listeners.get('tools/pre-execute') ?? [])]

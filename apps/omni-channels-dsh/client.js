@@ -15087,28 +15087,24 @@ var TRIGGER_ICONS = { message: MessageIcon, mention: AtIcon, keyword: KeywordIco
 var FRESH_MS = 6e3;
 var isEventsBot = (roster, id) => Boolean(roster?.eventsBotId) && roster.byId?.[id]?.id === roster.eventsBotId;
 var headCount = (roster) => (roster?.subscriptions ?? []).length || null;
-function workerOf(worker, roster) {
+function workerOf(worker, roster, where = {}) {
   if (worker.kind === "events" || worker.kind === "main") {
     const bot2 = roster?.byId?.[roster.eventsBotId ?? roster.mainBotId];
     return { name: bot2?.name ?? "Omni", bot: bot2, look: MAIN_LOOK };
   }
-  if (worker.kind === "session") return { name: worker.mode === "ongoing" ? t("One ongoing session") : t("A new session each time"), session: true };
-  if (worker.kind === "dshbot") {
-    const agent = roster?.agentsById?.[worker.agentId];
-    if (agent?.kind !== "dsh") return { name: t("A deleted DSH bot"), dsh: true };
-    return { name: worker.mode === "ongoing" ? t("{name} · one ongoing session", { name: agent.name }) : t("{name} · a new session each time", { name: agent.name }), dsh: true };
-  }
   if (worker.kind === "thread") {
-    const thread = (Array.isArray(roster?.omniThreads) ? roster.omniThreads : []).find((item) => item.id === worker.threadId);
-    return thread ? { name: t("The thread of {name}", { name: thread.title }), chat: thread.title } : { name: t("A removed chat's thread"), session: true };
+    const threads = Array.isArray(roster?.omniThreads) ? roster.omniThreads : [];
+    const only = where.sources?.length === 1 && where.sources[0].kind === "chat" ? where.sources[0] : void 0;
+    const thread = where.sessionId ? threads.find((item) => item.sessionId === where.sessionId) : only ? threads.find((item) => item.chatId === only.id) : void 0;
+    const title = thread?.title ?? only?.name;
+    return title ? { name: t("The thread of {name}", { name: title }), chat: title } : { name: t("Each chat's own thread"), session: true };
   }
   const bot = roster?.byId?.[worker.botId];
   return { name: bot?.name ?? t("A deleted Bot"), bot, look: MAIN_LOOK };
 }
-function WorkerMark({ worker, roster, size = 24 }) {
-  const info = workerOf(worker, roster);
+function WorkerMark({ worker, roster, where, size = 24 }) {
+  const info = workerOf(worker, roster, where);
   if (info.session) return (0, import_react11.createElement)("span", { className: "os-session", style: { width: size, height: size } }, (0, import_react11.createElement)(OmniMark, { size: Math.round(size * 0.62) }));
-  if (info.dsh) return (0, import_react11.createElement)("span", { className: "os-session os-dsh", style: { width: size, height: size } }, icons.TerminalIcon ? (0, import_react11.createElement)(icons.TerminalIcon) : null);
   if (info.chat !== void 0) return (0, import_react11.createElement)(ChatAvatar, { chat: { name: info.chat, initials: initials(info.chat) }, size });
   return (0, import_react11.createElement)(BotMark, info.bot ? { bot: info.bot, size } : { look: info.look, size });
 }
@@ -15154,7 +15150,7 @@ function Sentence({ sub, roster }) {
     " ",
     (0, import_react11.createElement)("span", { className: "os-w" }, "→"),
     " ",
-    (0, import_react11.createElement)("span", { className: "os-chip os-chip-worker" }, (0, import_react11.createElement)(WorkerMark, { worker: sub.worker, roster, size: 18 }), workerOf(sub.worker, roster).name),
+    (0, import_react11.createElement)("span", { className: "os-chip os-chip-worker" }, (0, import_react11.createElement)(WorkerMark, { worker: sub.worker, roster, where: sub, size: 18 }), workerOf(sub.worker, roster, sub).name),
     sub.outputs.react ? (0, import_react11.createElement)(import_react11.Fragment, null, " ", (0, import_react11.createElement)("span", { className: "os-chip os-chip-soft" }, t("reacts 👀 then ✅"))) : null,
     sub.outputs.replyToMe ? (0, import_react11.createElement)(import_react11.Fragment, null, " ", (0, import_react11.createElement)("span", { className: "os-chip os-chip-soft" }, t("replies to you"))) : null
   );
@@ -15263,7 +15259,7 @@ function SubscriptionsBoard({ bot, roster, actions, waiting }) {
 var automationExamples = () => [
   { id: "watch", label: t("Watch a channel for errors"), text: t("Watch #ci-alerts for “failed” or “error” and hand it to Ops"), icon: "KeywordIcon" },
   { id: "pin", label: t("Save what I pin"), text: t("When I react 📌 to a message in any WhatsApp chat, save it to my notes"), icon: "PinIcon" },
-  { id: "voice", label: t("Send my voice notes on"), text: t("Voice notes in my own chat go to one ongoing session"), icon: "VoiceIcon" }
+  { id: "voice", label: t("Send my voice notes on"), text: t("Voice notes in my own chat go to my chat's thread"), icon: "VoiceIcon" }
 ];
 function Empty({ bot, live }) {
   const examples2 = automationExamples().map((example) => example.text);
@@ -15316,8 +15312,10 @@ function AutomationRow({ sub, roster, runs, onOpen }) {
         { className: "os-row-foot" },
         (0, import_react11.createElement)("span", null, last ? t("last run {time}", { time: relativeShort(last.at) }) : t("not fired yet")),
         sub.askFirst ? null : (0, import_react11.createElement)("span", { className: "os-row-warn" }, t("acts without asking")),
-        // Paused by the host, with why (a thread whose chat was removed, a team without the hook).
+        // Paused by the host, with why (a team without the hook, a worker it does not know).
         !sub.on && sub.pausedReason ? (0, import_react11.createElement)("span", { className: "os-row-warn os-row-paused" }, hostText(sub.pausedReason)) : null,
+        // What the host says about it, once (its worker moved to its chats' threads).
+        sub.note ? (0, import_react11.createElement)("span", { className: "os-row-note" }, hostText(sub.note)) : null,
         (0, import_react11.createElement)(
           "span",
           { className: "os-row-actions" },
@@ -15338,23 +15336,22 @@ function RunRow({ run, sub, roster, actions, asking = false }) {
   if (!sub) return null;
   const status = RUN_STATUS[asking ? "waiting" : run.status];
   const open = run.sessionId ? () => actions.openSession(run.sessionId) : void 0;
+  const where = { sources: sub.sources, sessionId: run.sessionId ?? void 0 };
   return (0, import_react11.createElement)(
     "button",
     { type: "button", className: "os-run", "data-tone": status.tone, disabled: !open, onClick: open, title: open ? t("Open this run") : void 0 },
-    (0, import_react11.createElement)(WorkerMark, { worker: sub.worker, roster, size: 22 }),
+    (0, import_react11.createElement)(WorkerMark, { worker: sub.worker, roster, where, size: 22 }),
     (0, import_react11.createElement)(
       "span",
       { className: "os-run-body" },
       (0, import_react11.createElement)(
         "span",
         { className: "os-run-top" },
-        (0, import_react11.createElement)("span", { className: "os-run-name" }, workerOf(sub.worker, roster).name),
+        (0, import_react11.createElement)("span", { className: "os-run-name" }, workerOf(sub.worker, roster, where).name),
         (0, import_react11.createElement)("span", { className: "os-run-status" }, run.test ? `${t("Test")} · ${t(status.label)}` : t(status.label)),
         (0, import_react11.createElement)("time", null, relativeShort(run.at))
       ),
       run.excerpt && !run.test ? (0, import_react11.createElement)("span", { className: "os-run-quote" }, run.from ? `${run.from}: ` : "", run.excerpt) : null,
-      // What the host says about where it ran (a new ongoing session after DSH archived the last).
-      run.note ? (0, import_react11.createElement)("span", { className: "os-run-note" }, hostText(run.note)) : null,
       (0, import_react11.createElement)("span", { className: "os-run-text" }, run.summary)
     )
   );
@@ -15363,9 +15360,7 @@ var SUBSCRIPTIONS_CSS = `
 .os-trigger{display:inline-grid;place-items:center;flex:none;border-radius:30%;background:color-mix(in srgb,var(--bt-accent) 12%,var(--bt-card));box-shadow:inset 0 0 0 .5px var(--bt-line-2);line-height:1}
 .os-trigger:not([data-kind=reaction]){color:var(--bt-accent)}
 .os-trigger svg{width:var(--os-icon,18px);height:var(--os-icon,18px)}
-.os-run-note{font-size:11.5px;color:var(--bt-ink-3)}
 .os-session{display:inline-grid;place-items:center;flex:none;border-radius:30%;background:var(--bt-ink);color:var(--bt-main)}
-.os-dsh svg{width:62%;height:62%}
 .os-stack{display:inline-flex;align-items:center;flex:none}
 .os-stack-item{display:inline-flex;margin-left:-4px;border-radius:50%;box-shadow:0 0 0 1.5px var(--bt-card)}
 .os-stack-item:first-child{margin-left:0}
@@ -15401,6 +15396,7 @@ var SUBSCRIPTIONS_CSS = `
 .os-row-open:hover{text-decoration:underline}
 .os-row-foot{display:flex;align-items:center;gap:10px;font-size:11.5px;color:var(--bt-ink-3)}
 .os-row-warn{color:#d97706}
+.os-row-note{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .os-row-actions{display:inline-flex;gap:10px;margin-left:auto;opacity:0;transition:opacity .12s ease}
 .os-row:hover .os-row-actions,.os-row:focus-within .os-row-actions{opacity:1}
 .os-empty-board{display:flex;flex-direction:column;align-items:center;gap:8px;padding:28px 12px 8px;text-align:center}
@@ -16034,8 +16030,7 @@ function SessionRow({ row, actions, rowProps = {} }) {
   const opens = teamReady(rowProps.roster);
   const state = threadState(row, { running, asking });
   const dot = typeof rowProps.useSessionStatus === "function" && unread && !active;
-  const ongoing = row.kind === "ongoing";
-  const label = [row.title, ongoing ? t("Ongoing") : "", state === "waiting" ? t("Waiting for you") : state === "working" ? t("Working") : "", dot ? t("Unread activity") : ""].filter(Boolean).join(", ");
+  const label = [row.title, state === "waiting" ? t("Waiting for you") : state === "working" ? t("Working") : "", dot ? t("Unread activity") : ""].filter(Boolean).join(", ");
   const remove = () => {
     if (!confirming) {
       setConfirming(true);
@@ -16072,7 +16067,6 @@ function SessionRow({ row, actions, rowProps = {} }) {
       },
       (0, import_react15.createElement)("span", { className: state === "waiting" ? "bt-thread-wait" : state === "working" ? "bt-thread-spin" : "ot-thread-idle", "aria-hidden": true }),
       (0, import_react15.createElement)("span", { className: "bt-thread-title" }, row.title),
-      ongoing ? (0, import_react15.createElement)("span", { className: "ot-row-tag" }, t("Ongoing")) : null,
       dot ? (0, import_react15.createElement)("span", { className: "bt-unread", "aria-hidden": true }) : null
     ),
     (0, import_react15.createElement)("button", {
@@ -16396,7 +16390,6 @@ var OMNI_TREE_CSS = `
 .ot-thread-phone:hover{color:var(--bt-ink)}
 .ot-thread:hover .ot-thread-remove,.ot-thread-remove:focus-visible,.ot-thread-remove[data-confirm],.ot-thread:hover .ot-thread-phone,.ot-thread-phone:focus-visible,.ot-thread:hover .ot-thread-more,.ot-thread-more:focus-visible{opacity:1}
 .ot-thread-remove[data-confirm]{color:var(--bt-danger, #dc2626)}
-.ot-row-tag{flex:none;font-size:11px;color:var(--bt-ink-3)}
 .ot-row .ot-row-more{right:4px}
 .ot-row:hover .ot-row-more{opacity:1}
 .ot-row-remove[data-confirm]{color:var(--bt-danger, #dc2626)}
@@ -16693,7 +16686,7 @@ var STRINGS = {
   "Say it in the chat. {name} finds the chats, asks what is missing, and the subscription shows up here.": "在聊天中说出来。{name} 会找到对应的聊天，询问缺少的信息，订阅就会出现在这里。",
   "Tell {name} what to watch": "告诉 {name} 要关注什么",
   "Test": "测试",
-  "Voice notes in my own chat go to one ongoing session": "我自己聊天中的语音消息交给一个持续的会话",
+  "Voice notes in my own chat go to my chat's thread": "我自己聊天中的语音消息交给我这个聊天的线程",
   "Watch a channel for errors": "关注一个频道里的错误",
   "Save what I pin": "保存我标记 📌 的消息",
   "Send my voice notes on": "转交我的语音消息",
@@ -16709,14 +16702,9 @@ var STRINGS = {
   "disconnect": "断开",
   "All": "全部",
   "a message says {words}": "消息包含 {words}",
-  "A new session each time": "每次新建会话",
   "anywhere on {name}": "{name} 上的任何地方",
   "Group": "群组",
   "{n} waiting for you": "{n} 项等待你",
-  "One ongoing session": "一个持续的会话",
-  "A deleted DSH bot": "已删除的 DSH bot",
-  "{name} · one ongoing session": "{name} · 一个持续的会话",
-  "{name} · a new session each time": "{name} · 每次新建会话",
   " or ": " 或 ",
   "reacts 👀 then ✅": "回应 👀 然后 ✅",
   "replies to you": "回复你",
@@ -16732,7 +16720,14 @@ var STRINGS = {
   "Did not finish": "未完成",
   "Waiting its turn": "排队等候",
   "The thread of {name}": "{name} 的聊天线程",
-  "A removed chat's thread": "已移除聊天的线程",
+  "Each chat's own thread": "每个聊天自己的线程",
+  // An automation whose worker moved to its chats' threads, or that this plugin cannot run
+  // (subscriptions.js).
+  "It handed each event to a new session; now each event runs in the thread of its chat.": "它曾把每个事件交给一个新会话；现在每个事件都在其聊天的线程中运行。",
+  "It handed every event to one ongoing session; now each event runs in the thread of its chat.": "它曾把所有事件交给一个持续的会话；现在每个事件都在其聊天的线程中运行。",
+  "It handed events to a DSH bot; now each event runs in the thread of its chat.": "它曾把事件交给一个 DSH bot；现在每个事件都在其聊天的线程中运行。",
+  "It handed events to one chat's thread; now each event runs in the thread of its own chat.": "它曾把事件交给一个聊天的线程；现在每个事件都在它自己聊天的线程中运行。",
+  "Its worker is not one this plugin knows. Save it again with who acts.": "这个插件不认识它的执行者。请重新保存它，并说明由谁执行。",
   "1 channel": "1 个渠道",
   "{n} channels": "{n} 个渠道",
   "1 group": "1 个群组",
@@ -17014,7 +17009,6 @@ var STRINGS = {
   "Add a word, then Enter": "输入一个词后按回车",
   "Add a word to look for.": "添加一个要查找的词。",
   "All of {name}": "{name} 全部",
-  "a new session each time": "每次新建会话",
   "A plain agent session, no Bot": "普通的智能体会话，不使用 Bot",
   "Ask me first": "先问我",
   "Chats, groups, whole channels, or a mix.": "聊天、群组、整个渠道，或它们的组合。",
@@ -17040,7 +17034,6 @@ var STRINGS = {
   "no chats yet": "还没有聊天",
   "Nothing fired yet. Test it to see what {name} gets.": "还没有触发过。测试一下，看看 {name} 会收到什么。",
   "On": "开启",
-  "one ongoing session": "一个持续的会话",
   "On · fired {n} times today": "已开启 · 今天触发 {n} 次",
   "Only to your own number: the key Omni uses cannot message anyone else.": "只发给你自己的号码：Omni 使用的密钥无法给其他人发消息。",
   "Pick at least one chat, group or channel.": "至少选择一个聊天、群组或渠道。",
@@ -17064,7 +17057,6 @@ var STRINGS = {
   "Your reaction on any message in these chats hands it over:": "在这些聊天中对任意消息做出此回应，就会把它交出去：",
   "Your subscriptions": "你的订阅",
   "You see progress in the chat you are already in.": "你在所在的聊天中就能看到进度。",
-  "a new session": "新会话",
   "Or scan with the phone camera": "或用手机相机扫描",
   "All chats": "全部聊天",
   "Connect a channel": "连接渠道",
@@ -17222,10 +17214,7 @@ var STRINGS = {
   "Added": "已添加",
   "Other chats": "其他聊天",
   "Sessions": "会话",
-  "Ongoing": "持续",
   "Actions for {name}": "{name} 的操作",
-  "A new ongoing session was made for it: the one before was removed.": "已为它新建一个持续会话：之前的会话已被移除。",
-  "A new ongoing session was made for it: DSH archived the one before.": "已为它新建一个持续会话：DSH 已归档之前的会话。",
   "Adding…": "正在添加…",
   "The chat was not added.": "这个聊天没有添加。",
   "Remove {name} from the sidebar? Click again": "要从侧边栏移除 {name} 吗？再点一次",

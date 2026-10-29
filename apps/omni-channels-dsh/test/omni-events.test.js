@@ -219,6 +219,17 @@ test('active path dispatches and acks, preserving dispatch-error policy', { time
   assert.equal(f.rt.state.omniEventCursors.messages, '1')
 })
 
+// A chat-thread worker runs each event in its chat's thread (subscriptions.js): the event
+// names that chat and its channel by id, beside their names.
+test('an event carries the ids of its chat and its channel, when the row has them', { timeout: 5000 }, async t => {
+  const saved = deferred()
+  const events = []
+  const f = fixture(t, { rows: [{ ...row(), instanceId: 'instance-1' }], fire: async (_subscription, event) => { events.push(event) }, save: async () => saved.resolve() })
+  await saved.promise
+  await f.rt.quiesceOmniEvents()
+  assert.deepEqual(events.map(event => [event.chatId, event.instanceId, event.chat, event.ref]), [['chat-1', 'instance-1', 'chat', 'event-1']])
+})
+
 test('rejected ack leaves local cursor unchanged and abort interrupts backoff', { timeout: 5000 }, async t => {
   // Backoff cannot expire on its own: only abort may release it.
   t.mock.timers.enable({ apis: ['setTimeout'] })

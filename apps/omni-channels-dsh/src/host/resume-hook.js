@@ -13,8 +13,8 @@ import { z } from 'zod'
 // The Bot team release that ships the hook, and its names, as dotted paths on the team's
 // runtime. `resentField`: the outcome's list of Sessions sent again what a shutdown dropped.
 // `resumeMarker`: whether a message's source is a resume the team posted, a delivery's or the
-// plain follow-up `{ kind: 'user', resumed: true }`. `dshBotsChanged`: the roster signal,
-// `onChange(fn)` → disposer, `fn(list)`. `rowProps`: what each botChildren entry is drawn with.
+// plain follow-up `{ kind: 'user', resumed: true }`. `rowProps`: what each botChildren entry
+// is drawn with.
 export const TEAM_CONTRACT = Object.freeze({
   release: '3.32.1',
   register: 'resumable.register',
@@ -23,7 +23,6 @@ export const TEAM_CONTRACT = Object.freeze({
   resumeMarker: source => source?.resumed === true,
   dshBotsList: 'dshBots.list',
   dshBotsCreate: 'dshBots.createSession',
-  dshBotsChanged: 'dshBots.onChange',
   rowProps: Object.freeze(['bot', 'roster', 'actions', 'wide', 'useSessions', 'useUi', 'useSessionStatus', 'useSessionRetainInfo', 'useActivity', 'useWork']),
 })
 
