@@ -176,6 +176,20 @@ describe('buildFlowInteractive', () => {
     expect(p).toMatchObject({ cabecalho_tipo: 'text', cabecalho_texto: 'Agenda', rodape: 'Hapvida' });
   });
 
+  it('encodes the CTA, header and footer for the latin-1 platform, as it does the body', () => {
+    const p = buildFlowInteractive('Corpo', {
+      flowId: '1',
+      cta: 'Abrir 👋',
+      headerText: 'Agenda — hoje',
+      footerText: '✅ Hapvida',
+    });
+    expect(p).toMatchObject({
+      cabecalho_texto: 'Agenda - hoje',
+      rodape: '##2705## Hapvida',
+      fluxo: { texto_botao: 'Abrir ##1f44b##' },
+    });
+  });
+
   it('sends an empty payload when the flow has no data', () => {
     expect(buildFlowInteractive('Corpo', { flowId: '1', cta: 'Abrir' })?.fluxo).toEqual({
       texto_botao: 'Abrir',

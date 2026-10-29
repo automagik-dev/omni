@@ -82,7 +82,10 @@ export const FlowMutationResponseSchema = z.object({
 });
 
 export const SendFlowRequestSchema = z.object({
-  to: z.string().min(1).openapi({ description: 'Recipient phone (E.164 or digits)' }),
+  to: z.string().min(1).openapi({
+    description:
+      'whatsapp-business: recipient phone (E.164 or digits). asc-flow: the cod_atendimento of the open conversation (digits), not a phone',
+  }),
   flowId: z.string().optional().openapi({ description: 'Meta flow id (exactly one of flowId/flowName)' }),
   flowName: z.string().optional(),
   cta: z.string().min(1).max(30).openapi({ description: 'Button label that opens the flow' }),

@@ -27,6 +27,7 @@
 
 import { planInteractive } from '@omni/channel-sdk';
 import type { InteractiveButton, InteractiveListOptions } from '@omni/channel-sdk';
+import { encodeAscEmoji } from './emoji';
 
 const MAX_OPTIONS = 10;
 const MAX_BODY_TEXT = 1024;
@@ -203,13 +204,17 @@ export function buildFlowInteractive(
   const trimmed = body.trim();
   const flowId = flow?.flowId?.trim();
   const cta = flow?.cta?.trim();
+  // The limit is Meta's, on what the handset shows, so it is checked before the
+  // emoji become `##codepoint##` markers.
   if (!trimmed || trimmed.length > MAX_BODY_TEXT || !flowId || !cta || cta.length > MAX_FLOW_CTA) return null;
 
+  // The body arrives already encoded (`resolveOutboundText`); these come
+  // straight from the descriptor, so they are encoded here. See `emoji.ts`.
   return {
     tipo: TIPO_FLUXO,
     mensagem: trimmed,
-    ...(flow?.headerText ? { cabecalho_tipo: 'text', cabecalho_texto: flow.headerText } : {}),
-    ...(flow?.footerText ? { rodape: flow.footerText } : {}),
-    fluxo: { texto_botao: cta, fluxo_id: flowId, payload: flow?.data ?? {} },
+    ...(flow?.headerText ? { cabecalho_tipo: 'text', cabecalho_texto: encodeAscEmoji(flow.headerText) } : {}),
+    ...(flow?.footerText ? { rodape: encodeAscEmoji(flow.footerText) } : {}),
+    fluxo: { texto_botao: encodeAscEmoji(cta), fluxo_id: flowId, payload: flow?.data ?? {} },
   };
 }

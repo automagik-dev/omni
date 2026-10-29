@@ -183,6 +183,9 @@ const KNOWN_INBOUND_FIELDS = new Set([
   'idMensagem',
 ]);
 
+/** What a flow field name looks like (`flow_token`, `screen_0_TextInput_0`). */
+const FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+
 /** Top-level keys of a JSON object string, or `null` when it is not one. */
 function jsonObjectKeys(value: unknown): string[] | null {
   if (typeof value !== 'string' || !value.trim().startsWith('{')) return null;
@@ -207,16 +210,27 @@ function jsonObjectKeys(value: unknown): string[] | null {
  * logged for it.
  */
 export function inboundShapeOf(body: Record<string, unknown>): Record<string, unknown> | null {
-  const extraFields = Object.keys(body).filter((k) => !KNOWN_INBOUND_FIELDS.has(k));
   const chatInputKeys = jsonObjectKeys(body.chatInput);
   const messageKeys = jsonObjectKeys(body.message);
   // Only a JSON-shaped input is logged: the extra fields alone are whatever the
   // flow designer added, and logging them would fire on every turn.
   if (!chatInputKeys && !messageKeys) return null;
+  // A key is only NAMED when it looks like a field name. `chatInput` is what
+  // the person typed, so a key can be an e-mail, a phone or a name: those are
+  // counted, never written. The redactor would not catch them — it masks
+  // tokens, not personal data.
+  let unnamedKeys = 0;
+  const named = (keys: string[]): string[] => {
+    const ok = keys.filter((k) => FIELD_NAME.test(k));
+    unnamedKeys += keys.length - ok.length;
+    return ok;
+  };
+  const extraFields = named(Object.keys(body).filter((k) => !KNOWN_INBOUND_FIELDS.has(k)));
   return {
     extraFields,
-    ...(chatInputKeys ? { chatInputKeys } : {}),
-    ...(messageKeys ? { messageKeys } : {}),
+    ...(chatInputKeys ? { chatInputKeys: named(chatInputKeys) } : {}),
+    ...(messageKeys ? { messageKeys: named(messageKeys) } : {}),
+    ...(unnamedKeys > 0 ? { unnamedKeys } : {}),
   };
 }
 

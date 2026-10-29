@@ -271,6 +271,17 @@ describe('POST /instances/:id/whatsapp-flows/send', () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  test('rejects a whitespace-only flowId or cta instead of sending the bubble as text', async () => {
+    const { app, sendMessage } = mountFlowsRoutes({ channel: 'asc-flow' });
+
+    const blankId = await postSend(app, { to: '22344480', flowId: '   ', cta: 'Escolher', bodyText: 'Escolha 3:' });
+    const blankCta = await postSend(app, { to: '22344480', flowId: '1', cta: '   ', bodyText: 'Escolha 3:' });
+
+    expect(blankId.status).toBe(400);
+    expect(blankCta.status).toBe(400);
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   test('still refuses a channel that renders no flow', async () => {
     const { app, sendMessage } = mountFlowsRoutes({ channel: 'whatsapp' });
 
