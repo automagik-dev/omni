@@ -38,8 +38,8 @@ export const GROUP = '2d7a3e3f-8c73-4f7a-9c63-2e2f1d8a3c03'
 export const ELSEWHERE = '4f9c5a51-ae95-4b9c-9e85-4a4b3fac5e05'
 export const OWNER = '5511999990000'
 export const CHATS = {
-  [CHAT]: { id: CHAT, instanceId: INSTANCE, externalId: '5511988887777@s.whatsapp.net', chatType: 'dm', name: 'Marina' },
-  [GROUP]: { id: GROUP, instanceId: INSTANCE, externalId: '120363000000000000@g.us', chatType: 'group', name: 'Obra' },
+  [CHAT]: { id: CHAT, instanceId: INSTANCE, externalId: '5511988887777@s.whatsapp.net', chatType: 'dm', name: 'Marina', avatarUrl: 'https://pps.whatsapp.net/marina.jpg', lastMessagePreview: 'Pode mandar o orçamento?', lastMessageFromMe: false, lastMessageAt: '2026-10-29T12:00:00.000Z' },
+  [GROUP]: { id: GROUP, instanceId: INSTANCE, externalId: '120363000000000000@g.us', chatType: 'group', name: 'Obra', avatarUrl: null, lastMessagePreview: 'fotos no drive', lastMessageFromMe: true, lastMessageAt: '2026-10-29T11:00:00.000Z' },
   [ELSEWHERE]: { id: ELSEWHERE, instanceId: OTHER_INSTANCE, externalId: '5511977776666@s.whatsapp.net', chatType: 'dm', name: 'Other line' },
 }
 // The smallest PNG there is (1×1), the bytes a picture message serves.

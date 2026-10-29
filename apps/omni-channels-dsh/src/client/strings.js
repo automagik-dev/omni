@@ -612,7 +612,7 @@ export const STRINGS = {
   '{name}\'s channels': '{name} 的渠道',
   'Add a chat': '添加聊天',
   'Add a chat from {name}': '从 {name} 添加聊天',
-  'Search chats': '搜索聊天',
+  'Search chats or numbers': '搜索聊天或号码',
   'No chats match.': '没有匹配的聊天。',
   'Added': '已添加',
   'Other chats': '其他聊天',

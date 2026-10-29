@@ -1,10 +1,10 @@
 import { createElement as h, useEffect, useMemo, useRef, useState } from 'react'
-import { StatusDot, Tile, useOmni } from './channels.js'
+import { ChatAvatar, StatusDot, Tile, useOmni } from './channels.js'
 import { openConnectWizard } from './wizard.js'
 import { isOmniBot, omniActions, startLive, typeOf, unreadOf } from './omni-store.js'
 import { openPhone } from './omni-phone.js'
 import { PhoneGlyph } from './phone-frame.js'
-import { call, hostText, icons, t } from './core.js'
+import { call, hostText, icons, relativeShort, t } from './core.js'
 const { ChevronRightIcon, CloseIcon, DotsIcon, PlusIcon, SparkIcon } = icons
 
 // Under the Omni Bot's sidebar row: one collapsible item per channel of the linked Omni, each
@@ -182,9 +182,33 @@ export function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
 }
 
 /**
- * A channel's chats to add, searched on the host (omni-thread-chats). `onPick(chat)` adds one
- * and resolves with the host's answer: a refusal (a failed mint among them) shows here, and
- * nothing is added. A chat that is a thread already is marked and cannot be picked again.
+ * One chat in the picker, drawn as the chat list draws it: its picture (or initials), name and
+ * time, a direct chat's number when its name is not that number, and its last message. A
+ * group with no name is called "Group". Its button is named by the chat's name, number and
+ * whether it is added, not by every word in the row.
+ */
+function PickerChat({ chat, busy, onPick }) {
+  const name = chat.name ?? t('Group')
+  const tag = chat.added ? t('Added') : busy === chat.id ? t('Adding…') : null
+  return h('button', {
+    type: 'button', className: 'ot-picker-chat', 'data-chat-id': chat.id, disabled: chat.added === true || busy !== null,
+    'aria-busy': busy === chat.id || undefined, 'aria-label': [name, chat.number, tag].filter(Boolean).join(', '),
+    title: chat.number ? `${name} · ${chat.number}` : name, onClick: () => { void onPick(chat) },
+  },
+  h(ChatAvatar, { chat: { ...chat, name }, size: 30 }),
+  h('span', { className: 'ot-picker-body' },
+    h('span', { className: 'ot-picker-top' },
+      h('span', { className: 'ot-picker-name' }, name),
+      tag ? h('span', { className: 'ot-picker-tag' }, tag) : chat.at > 0 ? h('span', { className: 'ot-picker-at' }, relativeShort(chat.at)) : null),
+    chat.number ? h('span', { className: 'ot-picker-number' }, chat.number) : null,
+    chat.preview ? h('span', { className: 'ot-picker-preview' }, chat.preview) : null))
+}
+
+/**
+ * A channel's chats to add, searched on the host (omni-thread-chats; a number is searched by
+ * its digits there). `onPick(chat)` adds one and resolves with the host's answer: a refusal (a
+ * failed mint among them) shows here, and nothing is added. A chat that is a thread already is
+ * marked and cannot be picked again.
  */
 export function ThreadPicker({ channel, onPick, onClose }) {
   const [query, setQuery] = useState('')
@@ -234,7 +258,7 @@ export function ThreadPicker({ channel, onPick, onClose }) {
   return h('div', { className: 'ot-picker', role: 'group', 'aria-label': t('Add a chat from {name}', { name: channel.name }), onKeyDown },
     h('div', { className: 'ot-picker-head' },
       h('input', {
-        type: 'search', className: 'ot-picker-search', value: query, placeholder: t('Search chats'), 'aria-label': t('Search chats'),
+        type: 'search', className: 'ot-picker-search', value: query, placeholder: t('Search chats or numbers'), 'aria-label': t('Search chats or numbers'),
         autoFocus: true, onChange: event => setQuery(event.target.value),
       }),
       h('button', { type: 'button', className: 'ot-picker-close', 'aria-label': t('Close'), title: t('Close'), onClick: onClose }, h(CloseIcon))),
@@ -243,12 +267,7 @@ export function ThreadPicker({ channel, onPick, onClose }) {
     list.status === 'failed' ? h('p', { className: 'ot-picker-problem', role: 'alert' }, hostText(list.error)) : null,
     empty ? h('p', { className: 'ot-picker-note' }, query.trim() ? t('No chats match.') : t('No chats yet')) : null,
     list.chats.length > 0 ? h('div', { className: 'ot-picker-list' },
-      list.chats.map(chat => h('button', {
-        key: chat.id, type: 'button', className: 'ot-picker-chat', 'data-chat-id': chat.id, disabled: chat.added === true || busy !== null,
-        'aria-busy': busy === chat.id || undefined, title: chat.name, onClick: () => { void pick(chat) },
-      },
-      h('span', { className: 'ot-picker-name' }, chat.name),
-      chat.added ? h('span', { className: 'ot-picker-tag' }, t('Added')) : busy === chat.id ? h('span', { className: 'ot-picker-tag' }, t('Adding…')) : null))) : null)
+      list.chats.map(chat => h(PickerChat, { key: chat.id, chat, busy, onPick: pick }))) : null)
 }
 
 // The host adds the chat; the row shows on the team's next roster pull.
@@ -423,12 +442,17 @@ export const OMNI_TREE_CSS = `
 .ot-picker-close{display:grid;place-items:center;flex:none;width:24px;height:24px;padding:0;border:0;border-radius:7px;background:none;color:var(--bt-ink-3);cursor:pointer}
 .ot-picker-close svg{width:12px;height:12px}
 .ot-picker-close:hover{background:var(--bt-hover);color:var(--bt-ink)}
-.ot-picker-list{display:grid;gap:1px;max-height:240px;overflow-y:auto}
-.ot-picker-chat{display:flex;align-items:center;gap:6px;width:100%;padding:4px 6px;border:0;border-radius:7px;background:none;color:var(--bt-ink);font:inherit;font-size:12.5px;line-height:18px;text-align:left;cursor:pointer}
+.ot-picker-list{display:grid;gap:1px;max-height:320px;overflow-y:auto}
+.ot-picker-chat{display:flex;align-items:center;gap:8px;width:100%;padding:5px 6px;border:0;border-radius:8px;background:none;color:var(--bt-ink);font:inherit;font-size:12.5px;line-height:17px;text-align:left;cursor:pointer}
 .ot-picker-chat:hover:not(:disabled){background:var(--bt-hover)}
-.ot-picker-chat:disabled{cursor:default;color:var(--bt-ink-3)}
-.ot-picker-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ot-picker-tag{flex:none;font-size:11px;color:var(--bt-ink-3)}
+.ot-picker-chat:disabled{cursor:default}
+.ot-picker-chat:disabled .ot-picker-body{opacity:.6}
+.ot-picker-body{display:flex;flex-direction:column;flex:1;min-width:0}
+.ot-picker-top{display:flex;align-items:baseline;gap:6px;min-width:0}
+.ot-picker-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.ot-picker-at,.ot-picker-tag{flex:none;font-size:11px;color:var(--bt-ink-3)}
+.ot-picker-number,.ot-picker-preview{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;color:var(--bt-ink-3)}
+.ot-picker-number{font-variant-numeric:tabular-nums}
 .ot-picker-note,.ot-picker-problem{margin:0;padding:2px 6px;font-size:12px;color:var(--bt-ink-3)}
 .ot-picker-problem{color:var(--bt-danger, #dc2626)}
 .ot-chats[data-open] .ot-thread{animation:ot-in .22s ease both}

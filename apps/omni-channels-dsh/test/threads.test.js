@@ -166,14 +166,58 @@ test('the picker lists one channel\'s chats and marks the added ones; a chat of 
   const omni = fakeOmni()
   const run = await boot(t, homeFor(t, omni))
   await run.channels.threads.add(INSTANCE, CHAT)
+  // Each drawn as the chat list draws it: picture, initials, last message and its time, and a
+  // direct chat's number.
   assert.deepEqual(await run.call('omni-thread-chats', { channelId: INSTANCE }), { chats: [
-    { id: CHAT, name: 'Marina', jid: CHATS[CHAT].externalId, added: true },
-    { id: GROUP, name: 'Obra', jid: CHATS[GROUP].externalId, added: false },
+    { id: CHAT, name: 'Marina', initials: 'MA', kind: 'direct', preview: 'Pode mandar o orçamento?', at: Date.parse('2026-10-29T12:00:00.000Z'), avatarUrl: 'https://pps.whatsapp.net/marina.jpg', number: '+5511988887777', jid: CHATS[CHAT].externalId, added: true },
+    { id: GROUP, name: 'Obra', initials: 'OB', kind: 'group', preview: 'You: fotos no drive', at: Date.parse('2026-10-29T11:00:00.000Z'), avatarUrl: null, number: null, jid: CHATS[GROUP].externalId, added: false },
   ] })
   assert.deepEqual(await run.call('omni-thread-add', { channelId: INSTANCE, chatId: CHAT }), { ok: false, reason: 'This chat is a thread already.' })
   assert.deepEqual(await run.call('omni-thread-add', { channelId: INSTANCE, chatId: ELSEWHERE }), { ok: false, reason: 'That chat is not on this channel.' })
   await assert.rejects(run.call('omni-thread-add', { channelId: INSTANCE, chatId: 'not-a-chat' }), /Pick a chat/)
   assert.equal(run.made.length, 1)
+})
+
+test('the picker searches a number by its digits, so it matches the chat\'s WhatsApp id; any other search goes as typed', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const omni = fakeOmni()
+  const run = await boot(t, homeFor(t, omni))
+  const searched = () => new URLSearchParams(omni.askedWith.filter(call => call.route === 'GET /chats').at(-1).query).get('search')
+  for (const [typed, sent] of [['+55 (11) 98888-7777', '5511988887777'], ['98888-7777', '988887777'], ['11.98888.7777', '11988887777'], ['Marina', 'Marina'], ['12345', '12345'], ['Obra 2026', 'Obra 2026']]) {
+    await run.call('omni-thread-chats', { channelId: INSTANCE, query: typed })
+    assert.equal(searched(), sent, typed)
+  }
+})
+
+test('the picker shows a direct chat\'s number only when its name is not that number, and draws a chat whose picture Omni sent unreadable with its initials', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const omni = fakeOmni()
+  const run = await boot(t, homeFor(t, omni))
+  const saved = { ...CHATS[CHAT] }
+  t.after(() => { CHATS[CHAT] = saved })
+  // A LID chat Omni resolved to a phone id, named by its number.
+  CHATS[CHAT] = { ...saved, externalId: '208718228250828@lid', canonicalId: '5511988887777@s.whatsapp.net', name: '+55 11 98888-7777', avatarUrl: 'javascript:alert(1)', lastMessageAt: 42 }
+  const pick = answer => answer.chats.map(chat => [chat.name, chat.number, chat.initials])
+  const [chat] = (await run.call('omni-thread-chats', { channelId: INSTANCE })).chats
+  assert.deepEqual([chat.name, chat.number, chat.avatarUrl, chat.at], ['+55 11 98888-7777', null, null, 0])
+  CHATS[CHAT] = { ...CHATS[CHAT], name: 'Marina' }
+  assert.equal((await run.call('omni-thread-chats', { channelId: INSTANCE })).chats[0].number, '+5511988887777')
+  // Nameless, it is named by its phone number, never by its LID, and needs no number line.
+  CHATS[CHAT] = { ...CHATS[CHAT], name: null }
+  assert.deepEqual(pick(await run.call('omni-thread-chats', { channelId: INSTANCE }))[0], ['+5511988887777', null, '+5'])
+})
+
+test('the picker leaves a nameless group without a name, never its id, and cuts a long name instead of refusing the list', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const omni = fakeOmni()
+  const run = await boot(t, homeFor(t, omni))
+  const saved = { ...CHATS[CHAT] }
+  const group = { ...CHATS[GROUP] }
+  t.after(() => { CHATS[CHAT] = saved; CHATS[GROUP] = group })
+  CHATS[GROUP] = { ...group, name: '' }
+  CHATS[CHAT] = { ...saved, name: 'M'.repeat(600) }
+  const chats = (await run.call('omni-thread-chats', { channelId: INSTANCE })).chats
+  assert.deepEqual(chats.map(chat => [chat.id, chat.name?.length ?? null, chat.initials]), [[CHAT, 500, 'MM'], [GROUP, null, 'GR']])
 })
 
 test('a thread waits while a tool waits on DSH\'s card; a status saved before this start shows idle', async (t) => {
