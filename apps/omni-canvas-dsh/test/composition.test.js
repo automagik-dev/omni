@@ -7,6 +7,8 @@ import { TEAM_TOOLS } from '@automagik/bots-dsh/src/host/constants.js'
 import { HANDOFF_TOOL, OPERATOR_RULES } from '@automagik/omni-channels-dsh/src/host/omni-rules.js'
 import { THREAD_TOOLS } from '@automagik/omni-channels-dsh/src/host/threads.js'
 import * as plugin from '../index.js'
+import { CANVAS_RULES } from '../src/host/canvas.js'
+import { CLICKUP_PROGRAM } from './fixtures/clickup.js'
 import { applyAll, composed, fakeContext, teamFile } from './team.js'
 
 const TEAM = {
@@ -43,9 +45,16 @@ test('with all three plugins, a Main Bot\'s prompt is the text it was before the
   const omni = fixture('main-prompt-omni.txt')
   const now = omni.replace(rulesIn(omni), OPERATOR_RULES)
   assert.notEqual(now, omni)
-  assert.equal(prompt(named, 'm1'), now)
+  // The team text around the canvas section stays byte for byte; the canvas section itself
+  // is generated here and grows with the catalogue.
+  const canvasStart = now.indexOf('\n\n## Showing things: canvases\n')
+  const afterCanvas = now.indexOf('\n\n## How your Bot team works\n')
+  assert.ok(canvasStart > 0, 'the fixture still carries the canvas section')
+  assert.ok(afterCanvas > canvasStart, 'the fixture still carries the text after the canvas section')
+  const expected = `${now.slice(0, canvasStart + 2)}${CANVAS_RULES}${now.slice(afterCanvas)}`
+  assert.equal(prompt(named, 'm1'), expected)
   // An Omni named the older way, on the team's row, counts the same.
-  assert.equal(prompt(older, 'm1'), now)
+  assert.equal(prompt(older, 'm1'), expected)
   assert.equal(prompt(plain, 'm1'), fixture('main-prompt.txt'))
 })
 
@@ -70,6 +79,8 @@ test('show_canvas shows only canvases that pass, and only for a Main Bot', async
   const tool = run.ctx.registeredTools.get('show_canvas')
   const as = id => args => tool.execute(args, { agent: { id } })
   assert.equal(await as('m1')({ program: 'root = Stack([a])\na = Text("hi")' }), 'Shown.')
+  // The host serializes the new catalogue entries: a full 82-row Board/Section/Tree program.
+  assert.equal(await as('m1')({ program: CLICKUP_PROGRAM }), 'Shown.')
   assert.match(await as('m1')({ program: 'root = Stack([a])\na = Text("hi"' }), /^Not shown: Line 2 does not close its brackets .* call show_canvas again\.$/)
   assert.match(await as('w1')({ program: 'root = Stack([a])\na = Text("hi")' }), /Only a Main Bot/)
 })
