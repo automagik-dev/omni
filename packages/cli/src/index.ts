@@ -25,6 +25,7 @@ import { createCloseCommand } from './commands/close.js';
 import { createCompletionsCommand } from './commands/completions.js';
 import { createConfigCommand } from './commands/config.js';
 import { createConnectCommand } from './commands/connect.js';
+import { createConnectorsCommand } from './commands/connectors.js';
 import { createDeadLettersCommand } from './commands/dead-letters.js';
 import { createDesktopCommand } from './commands/desktop.js';
 import { createDoctorCommand } from './commands/doctor.js';
@@ -310,6 +311,12 @@ const COMMANDS: CommandDef[] = [
     category: 'advanced',
     helpGroup: 'Management',
     helpDescription: 'Event-driven workflows',
+  },
+  {
+    create: createConnectorsCommand,
+    category: 'advanced',
+    helpGroup: 'Management',
+    helpDescription: 'Integration accounts, event subscriptions, typed actions',
   },
   {
     create: createFollowUpCommand,

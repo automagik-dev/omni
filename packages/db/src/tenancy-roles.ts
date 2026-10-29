@@ -39,12 +39,17 @@ import { sql } from 'drizzle-orm';
 import type { Database } from './client';
 import {
   AUTH_PLANE_READABLE_TABLES,
+  CONNECTOR_INGRESS_ROLE,
   DEFAULT_ROLE_NAMES,
   QUALIFIED_AUTH_PLANE_FUNCTION,
   QUALIFIED_AUTH_PLANE_ROW_FUNCTION,
+  QUALIFIED_CONNECTOR_INGRESS_MEMBER_FUNCTION,
+  QUALIFIED_CONNECTOR_INGRESS_ROW_FUNCTION,
+  QUALIFIED_CONNECTOR_INGRESS_TENANT_FUNCTION,
   QUALIFIED_TENANT_CONTEXT_FUNCTION,
   RUNTIME_DENIED_TABLES,
   type TenancyRoleNames,
+  connectorIngressRoleStatements,
 } from './tenancy-rls';
 
 const SAFE_IDENT = /^[a-z_][a-z0-9_]*$/;
@@ -123,6 +128,10 @@ END
 $omni$;`;
 
   statements.push(
+    // The connector-ingress identity is NOLOGIN by construction: it owns one
+    // SECURITY DEFINER lookup and nothing else, and no login identity is a
+    // member of it.
+    ...connectorIngressRoleStatements(),
     role(ddl, `WITH LOGIN PASSWORD '${passwords.ddl}' ${CONSTRAINED_ATTRIBUTES}`),
     role(runtime, `WITH LOGIN PASSWORD '${passwords.runtime}' ${CONSTRAINED_ATTRIBUTES}`),
     role(authPlane, `WITH LOGIN PASSWORD '${passwords.authPlane}' ${CONSTRAINED_ATTRIBUTES}`),
@@ -136,6 +145,13 @@ $omni$;`;
     // ignore warnings from this script.
     revokeMembership(authPlaneMarker, runtime),
     revokeMembership(authPlaneMarker, ddl),
+    // The ingress role is a capability owner, not a group to join. Runtime may
+    // EXECUTE its one function; membership would hand over the whole
+    // role, including its SELECT grant, so it is explicitly refused.
+    revokeMembership(CONNECTOR_INGRESS_ROLE, runtime),
+    revokeMembership(CONNECTOR_INGRESS_ROLE, ddl),
+    revokeMembership(CONNECTOR_INGRESS_ROLE, authPlane),
+    `GRANT SELECT ON TABLE "connector_event_subscriptions" TO "${CONNECTOR_INGRESS_ROLE}";`,
   );
 
   // --- 2. ownership --------------------------------------------------------
@@ -233,6 +249,12 @@ $omni$;`,
     `GRANT EXECUTE ON FUNCTION ${QUALIFIED_TENANT_CONTEXT_FUNCTION}() TO "${runtime}", "${authPlane}", "${ddl}";`,
     `GRANT EXECUTE ON FUNCTION ${QUALIFIED_AUTH_PLANE_FUNCTION}(text) TO "${runtime}", "${authPlane}", "${ddl}";`,
     `GRANT EXECUTE ON FUNCTION ${QUALIFIED_AUTH_PLANE_ROW_FUNCTION}(uuid, text) TO "${runtime}", "${authPlane}", "${ddl}";`,
+    // Connector ingress: the runtime may call the bounded lookup and evaluate
+    // the SELECT policy helper. It is NOT a member of the owning role, so it
+    // cannot read the table itself without a tenant context.
+    `GRANT EXECUTE ON FUNCTION ${QUALIFIED_CONNECTOR_INGRESS_TENANT_FUNCTION}(uuid) TO "${runtime}";`,
+    `GRANT EXECUTE ON FUNCTION ${QUALIFIED_CONNECTOR_INGRESS_ROW_FUNCTION}(uuid, uuid) TO "${runtime}";`,
+    `GRANT EXECUTE ON FUNCTION ${QUALIFIED_CONNECTOR_INGRESS_MEMBER_FUNCTION}() TO "${runtime}";`,
   );
 
   // --- 5. control-plane denial --------------------------------------------

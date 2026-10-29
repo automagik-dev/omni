@@ -40,6 +40,16 @@ const drizzleDir = join(here, '..', 'drizzle');
 const MIGRATION_0041 = '0041_tenant_ownership_columns.sql';
 const g2Sql = readFileSync(join(drizzleDir, MIGRATION_0041), 'utf-8');
 
+/**
+ * The connector tables arrive AFTER G2 but are part of the same ownership
+ * contract: `connectors` is a second ownership root and a composite-FK target.
+ * The upgrade fixture must replay that migration too, or the catalog assertion
+ * below would check a schema this branch never ships — and would "pass" only by
+ * forgetting the target it is supposed to prove.
+ */
+const MIGRATION_0089 = '0089_connectors.sql';
+const connectorsSql = readFileSync(join(drizzleDir, MIGRATION_0089), 'utf-8');
+
 /** Every committed migration up to and including 0040 — the real pre-G2 state. */
 const throughG1Sql = readdirSync(drizzleDir)
   .filter((f) => f.endsWith('.sql') && f < MIGRATION_0041)
@@ -157,7 +167,8 @@ VALUES ('${TENANT_A}', 'g2-tenant-a', 'G2 Tenant A', 'active', 3600, 100, 1000),
 postgresDescribe('G2 ownership schema — real PostgreSQL', () => {
   beforeAll(() => {
     // UPGRADE PATH: build the real committed pre-G2 state, seed legacy
-    // NULL-owner rows, and only then apply G2 on top.
+    // NULL-owner rows, and only then apply G2 (0041) plus the later connector
+    // migration (0089) that extends the ownership contract on top.
     main = createDatabase();
     runOrThrow(`${LEGACY_ROWS}\n${TENANTS}`);
   });
@@ -171,9 +182,12 @@ postgresDescribe('G2 ownership schema — real PostgreSQL', () => {
   // -------------------------------------------------------------------------
 
   describe('upgrade from the real committed 0040 schema', () => {
-    test('legacy NULL-owner rows exist before G2 and G2 applies cleanly over them', () => {
+    test('legacy NULL-owner rows exist before G2 and the upgrade applies cleanly over them', () => {
       expect(scalar('SELECT count(*) FROM instances;')).toBe('1');
-      const applied = runSql(inSchema(g2Sql));
+      // Replay the branch's real upgrade tail: G2 then the connector migration.
+      // 0089 is what creates the second ownership root and its `(tenant_id, id)`
+      // unique index; without it this fixture is a schema the branch never ships.
+      const applied = runSql(inSchema(`${g2Sql}\n${connectorsSql}`));
       expect(applied.stderr).not.toContain('ERROR');
       expect(applied.exitCode).toBe(0);
       // No composite FK was skipped for want of its parent unique index.
@@ -186,11 +200,11 @@ postgresDescribe('G2 ownership schema — real PostgreSQL', () => {
       expect(scalar('SELECT count(*) FROM instances WHERE tenant_id IS NULL;')).toBe('1');
     });
 
-    test('re-applying the migration is a no-op (idempotent)', () => {
+    test('re-applying the migrations is a no-op (idempotent)', () => {
       const before = scalar(
         `SELECT count(*) FROM pg_constraint WHERE connamespace = '${schemaName}'::regnamespace AND contype = 'f';`,
       );
-      const again = runSql(inSchema(g2Sql));
+      const again = runSql(inSchema(`${g2Sql}\n${connectorsSql}`));
       expect(again.exitCode).toBe(0);
       expect(again.stderr).not.toContain('ERROR');
       const after = scalar(

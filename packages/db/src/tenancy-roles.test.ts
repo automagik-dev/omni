@@ -10,7 +10,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { DEFAULT_ROLE_NAMES, RUNTIME_DENIED_TABLES } from './tenancy-rls';
+import { CONNECTOR_INGRESS_ROLE, DEFAULT_ROLE_NAMES, RUNTIME_DENIED_TABLES } from './tenancy-rls';
 import {
   AUTH_PLANE_TABLES,
   type RoleAttributes,
@@ -158,6 +158,20 @@ describe('provisioning plan', () => {
   test('nothing in the plan grants BYPASSRLS or SUPERUSER to anyone', () => {
     expect(plan).not.toMatch(/(?<!NO)BYPASSRLS/);
     expect(plan).not.toMatch(/(?<!NO)SUPERUSER/);
+  });
+
+  test('the connector-ingress role is NOLOGIN, SELECT-only, and not a group anyone joins', () => {
+    expect(plan).toContain(`rolname = '${CONNECTOR_INGRESS_ROLE}'`);
+    expect(plan).toContain('WITH NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS');
+    expect(plan).toContain(`GRANT SELECT ON TABLE "connector_event_subscriptions" TO "${CONNECTOR_INGRESS_ROLE}";`);
+    for (const member of [DEFAULT_ROLE_NAMES.runtime, DEFAULT_ROLE_NAMES.ddl, DEFAULT_ROLE_NAMES.authPlane]) {
+      expect(plan).toContain(`EXECUTE 'REVOKE "${CONNECTOR_INGRESS_ROLE}" FROM "${member}"'`);
+    }
+    // Runtime may execute the bounded lookup, never read the table as the role.
+    expect(plan).toContain(
+      `GRANT EXECUTE ON FUNCTION public.omni_connector_ingress_tenant(uuid) TO "${DEFAULT_ROLE_NAMES.runtime}";`,
+    );
+    expect(plan).not.toContain(`GRANT "${CONNECTOR_INGRESS_ROLE}" TO "${DEFAULT_ROLE_NAMES.runtime}"`);
   });
 
   test('the revoke of the control plane comes after the blanket grant', () => {

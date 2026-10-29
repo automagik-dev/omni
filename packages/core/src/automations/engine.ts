@@ -12,6 +12,7 @@
 import type { EventBus, Subscription } from '../events/bus';
 import { runWithEventCausality } from '../events/causality';
 import { classifyEnvelope } from '../events/envelope';
+import { CONNECTOR_EVENT_TYPE } from '../events/types';
 import type { EventType, GenericEventPayload, OmniEvent } from '../events/types';
 import { generateId } from '../ids';
 import { createLogger } from '../logger';
@@ -35,6 +36,20 @@ const logger = createLogger('automations:engine');
  * engine queue (up to `maxQueueDepth`) with its NATS message unacked.
  */
 const TRIGGER_DELIVERY_WINDOW = 50;
+
+/**
+ * Connector binding gate (D7): a delivery names exactly one target automation,
+ * so every other `connector.event` automation in the tenant must not react.
+ * A hand-made/test connector event with no `targetAutomationId` is not narrowed
+ * (there is nothing to narrow on). Exported for the trigger-wiring test.
+ */
+export function connectorTargetMatches(automationId: string, event: Pick<OmniEvent, 'type' | 'payload'>): boolean {
+  if (event.type !== CONNECTOR_EVENT_TYPE) return true;
+  const payload = (event.payload ?? {}) as Record<string, unknown>;
+  const target = payload.targetAutomationId;
+  if (typeof target !== 'string' || target.length === 0) return true;
+  return automationId === target;
+}
 
 /**
  * A queue with bounded concurrency.
@@ -166,6 +181,8 @@ export class AutomationEngine {
       // #959 gate — threaded here so engine executions validate too; without
       // this line the dep is provided by the API but silently dropped.
       validateEmitEvent: deps.validateEmitEvent,
+      // One typed action for every provider; the API resolves and runs it.
+      callConnector: deps.callConnector,
     };
     this.automations = automations.filter((a) => a.enabled);
 
@@ -482,7 +499,10 @@ export class AutomationEngine {
     // disabled; the shared durable consumer still delivers them on re-enable,
     // so drop them here instead of acting retroactively (#1147).
     const matchingAutomations = this.automations.filter(
-      (a) => a.triggerEventType === eventType && !(a.enabledAt && event.timestamp < new Date(a.enabledAt).getTime()),
+      (a) =>
+        a.triggerEventType === eventType &&
+        !(a.enabledAt && event.timestamp < new Date(a.enabledAt).getTime()) &&
+        this.matchesConnectorTarget(a, event),
     );
 
     if (matchingAutomations.length === 0) {
@@ -520,6 +540,17 @@ export class AutomationEngine {
       if (gate.claimToken) await this.releaseIdleTimeoutClaim(gate.claimToken, event);
       throw err;
     }
+  }
+
+  /**
+   * Connector binding gate (D7): a delivery names exactly one target automation
+   * in its payload, so every other `connector.event` automation in the tenant
+   * must not react. Without this gate one subscription would fan out to every
+   * connector automation. A hand-made/test connector event with no
+   * `targetAutomationId` is not narrowed (there is nothing to narrow on).
+   */
+  private matchesConnectorTarget(automation: Automation, event: OmniEvent): boolean {
+    return connectorTargetMatches(automation.id, event);
   }
 
   /**

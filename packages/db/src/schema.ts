@@ -182,7 +182,7 @@ export const eventTypes = CORE_EVENT_TYPES;
  * emit_event hops) are journaled into omni_events since #957 so
  * `omni events trace` can walk a chain back to its root.
  */
-export type EventType = CoreEventType | `custom.${string}` | `system.${string}`;
+export type EventType = CoreEventType | `custom.${string}` | `system.${string}` | 'connector.event';
 
 // Derived from core CONTENT_TYPES (same no-drift rule as eventTypes above) —
 // this local tuple had fallen behind by ten content types.
@@ -3270,7 +3270,7 @@ export type ConditionOperator = (typeof conditionOperators)[number];
 /**
  * Action types for automations.
  */
-export const actionTypes = ['webhook', 'send_message', 'emit_event', 'log', 'call_agent'] as const;
+export const actionTypes = ['webhook', 'send_message', 'emit_event', 'log', 'call_agent', 'connector.call'] as const;
 export type ActionType = (typeof actionTypes)[number];
 
 /**
@@ -3351,6 +3351,17 @@ export interface CallAgentActionConfig {
 }
 
 /**
+ * Connector call action configuration (one action type for every provider).
+ */
+export interface ConnectorCallActionConfig {
+  connectorId: string;
+  action: string;
+  input: Record<string, unknown>;
+  timeoutMs?: number;
+  responseAs?: string;
+}
+
+/**
  * Union type for action configurations.
  */
 export type AutomationAction =
@@ -3358,7 +3369,8 @@ export type AutomationAction =
   | { type: 'send_message'; config: SendMessageActionConfig }
   | { type: 'emit_event'; config: EmitEventActionConfig }
   | { type: 'log'; config: LogActionConfig }
-  | { type: 'call_agent'; config: CallAgentActionConfig };
+  | { type: 'call_agent'; config: CallAgentActionConfig }
+  | { type: 'connector.call'; config: ConnectorCallActionConfig };
 
 /**
  * Debounce configuration for message grouping.
@@ -3479,6 +3491,122 @@ export const automations = pgTable(
 
 export type Automation = typeof automations.$inferSelect;
 export type NewAutomation = Omit<typeof automations.$inferInsert, 'tenantId'>;
+
+// ============================================================================
+// CONNECTORS
+// ============================================================================
+
+/**
+ * One connected external account.
+ *
+ * A connector is a tenant-owned integration account, NOT a channel and NOT an
+ * `instances` row: it has no chats, no messages, no agent routing and no reply
+ * path. `credentials` is a sealed JSON blob (the codec in
+ * `packages/api/src/tenancy/sealed-credentials.ts`); `config` is non-secret and
+ * validated against the provider manifest's `configSchema`.
+ *
+ * `provider` is the manifest id (`clickup`), not a closed enum — adding a
+ * provider is a code manifest, never a migration.
+ */
+export const connectors = pgTable(
+  'connectors',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    /** Manifest id (`clickup`, `github`). */
+    provider: varchar('provider', { length: 64 }).notNull(),
+    /** Display name, unique per tenant. */
+    name: varchar('name', { length: 255 }).notNull(),
+    /** Sealed JSON object of credential values. Never selected into a response. */
+    credentials: text('credentials').notNull(),
+    /** Non-secret manifest config. */
+    config: jsonb('config').$type<Record<string, unknown>>().notNull().default({}),
+    /** connected | error | revoked */
+    status: varchar('status', { length: 20 }).notNull(),
+    lastValidatedAt: timestamp('last_validated_at', { withTimezone: true }),
+    lastError: text('last_error'),
+    lastErrorCode: varchar('last_error_code', { length: 64 }),
+    /** API key name or X-Omni-Actor at creation, as the config audit records it. */
+    createdBy: varchar('created_by', { length: 255 }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    /** G2 additive tenant ownership. Nullable through the additive phase. */
+    tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
+  },
+  (t) => ({
+    tenantIdx: index('connectors_tenant_idx').on(t.tenantId),
+    // Composite-FK target for `connector_event_subscriptions (tenant_id, connector_id)`.
+    tenantIdUq: uniqueIndex('connectors_tenant_id_uq').on(t.tenantId, t.id),
+    tenantProviderIdx: index('connectors_tenant_provider_idx').on(t.tenantId, t.provider),
+    tenantNameUq: uniqueIndex('connectors_tenant_name_uq').on(t.tenantId, t.name),
+  }),
+);
+
+export type Connector = typeof connectors.$inferSelect;
+export type NewConnector = Omit<typeof connectors.$inferInsert, 'tenantId'>;
+
+/**
+ * The inbound binding: connector → provider event key → target automation.
+ *
+ * The journal (`omni_events`) is the delivery log; there is no third table for
+ * deliveries. `verification_secret` is sealed. `status` is `active | paused |
+ * error`; `error` is advisory (the next delivery still processes and a success
+ * resets it), only `paused` stops publication.
+ */
+export const connectorEventSubscriptions = pgTable(
+  'connector_event_subscriptions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    connectorId: uuid('connector_id')
+      .notNull()
+      .references(() => connectors.id, { onDelete: 'cascade' }),
+    /** Manifest event key (`taskStatusUpdated`). */
+    providerEventKey: varchar('provider_event_key', { length: 100 }).notNull(),
+    /** Exact-match filters over the parsed provider data, evaluated before the automation. */
+    filters: jsonb('filters').$type<Record<string, unknown>>().notNull().default({}),
+    /** Authoritative binding: this delivery runs only this automation. */
+    targetAutomationId: uuid('target_automation_id')
+      .notNull()
+      .references(() => automations.id, { onDelete: 'cascade' }),
+    /** Sealed HMAC secret the provider holds. Never returned. */
+    verificationSecret: text('verification_secret').notNull(),
+    /** active | paused | error */
+    status: varchar('status', { length: 20 }).notNull().default('active'),
+    lastDeliveryAt: timestamp('last_delivery_at', { withTimezone: true }),
+    lastFailureAt: timestamp('last_failure_at', { withTimezone: true }),
+    consecutiveFailures: integer('consecutive_failures').notNull().default(0),
+    totalDeliveries: integer('total_deliveries').notNull().default(0),
+    totalDuplicates: integer('total_duplicates').notNull().default(0),
+    lastError: text('last_error'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    /** G2 additive tenant ownership. Nullable through the additive phase. */
+    tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
+  },
+  (t) => ({
+    // Both FKs are deliberate: the single-column FK above owns ON DELETE CASCADE
+    // (a NULL tenant_id disables a composite FK), while this composite FK
+    // enforces same-tenant references once ownership is stamped.
+    connectorTenantFk: foreignKey({
+      columns: [t.tenantId, t.connectorId],
+      foreignColumns: [connectors.tenantId, connectors.id],
+      name: 'connector_event_subscriptions_connector_tenant_fk',
+    }),
+    connectorIdx: index('connector_event_subscriptions_connector_idx').on(t.connectorId),
+    automationIdx: index('connector_event_subscriptions_automation_idx').on(t.targetAutomationId),
+    tenantIdx: index('connector_event_subscriptions_tenant_idx').on(t.tenantId),
+    tenantIdUq: uniqueIndex('connector_event_subscriptions_tenant_id_uq').on(t.tenantId, t.id),
+    // One binding per (connector, event key, automation): a duplicate would
+    // silently double-run an automation that touches an external system.
+    bindingUq: uniqueIndex('connector_event_subscriptions_binding_uq').on(
+      t.connectorId,
+      t.providerEventKey,
+      t.targetAutomationId,
+    ),
+  }),
+);
+
+export type ConnectorEventSubscription = typeof connectorEventSubscriptions.$inferSelect;
+export type NewConnectorEventSubscription = Omit<typeof connectorEventSubscriptions.$inferInsert, 'tenantId'>;
 
 /**
  * Automation execution status.

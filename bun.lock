@@ -29,6 +29,8 @@
         "@omni/channel-sdk": "workspace:*",
         "@omni/channel-slack": "workspace:*",
         "@omni/channel-whatsapp-business": "workspace:*",
+        "@omni/connector-clickup": "workspace:*",
+        "@omni/connector-sdk": "workspace:*",
         "@omni/core": "workspace:*",
         "@omni/db": "workspace:*",
         "@omni/media-processing": "workspace:*",
@@ -358,6 +360,30 @@
       "version": "2.261029.6",
       "dependencies": {
         "openid-client": "6.8.8",
+      },
+      "devDependencies": {
+        "@types/bun": "1.4.2",
+        "typescript": "^5.7.3",
+      },
+    },
+    "packages/connector-clickup": {
+      "name": "@omni/connector-clickup",
+      "version": "2.261027.6",
+      "dependencies": {
+        "@omni/connector-sdk": "workspace:*",
+        "zod": "^3.25.76",
+      },
+      "devDependencies": {
+        "@types/bun": "1.4.2",
+        "typescript": "^5.7.3",
+      },
+    },
+    "packages/connector-sdk": {
+      "name": "@omni/connector-sdk",
+      "version": "2.261027.6",
+      "dependencies": {
+        "zod": "^3.25.76",
+        "zod-to-json-schema": "^3.25.1",
       },
       "devDependencies": {
         "@types/bun": "1.4.2",
@@ -798,6 +824,10 @@
     "@omni/channel-whatsapp-business": ["@omni/channel-whatsapp-business@workspace:packages/channel-whatsapp-business"],
 
     "@omni/connect": ["@omni/connect@workspace:packages/connect"],
+
+    "@omni/connector-clickup": ["@omni/connector-clickup@workspace:packages/connector-clickup"],
+
+    "@omni/connector-sdk": ["@omni/connector-sdk@workspace:packages/connector-sdk"],
 
     "@omni/core": ["@omni/core@workspace:packages/core"],
 

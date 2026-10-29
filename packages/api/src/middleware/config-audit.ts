@@ -20,6 +20,8 @@ import {
   apiKeys,
   automations,
   configAuditLogs,
+  connectorEventSubscriptions,
+  connectors,
   globalSettings,
   instances,
 } from '@omni/db';
@@ -48,6 +50,20 @@ interface Resource {
 
 // Order matters: routes live under /instances/:id/routes.
 const RESOURCES: Resource[] = [
+  {
+    type: 'connector_event_subscription',
+    // The CONNECTOR id is deliberately non-capturing: the audit target is the
+    // subscription row, so its id must be group 1 (the `route` resource shape).
+    pattern: /^\/connectors\/[^/]+\/subscriptions(?:\/([^/]+))?(?:\/(.+))?$/,
+    table: connectorEventSubscriptions,
+    idColumn: connectorEventSubscriptions.id,
+  },
+  {
+    type: 'connector',
+    pattern: /^\/connectors(?:\/([^/]+))?(?:\/(.+))?$/,
+    table: connectors,
+    idColumn: connectors.id,
+  },
   {
     type: 'route',
     pattern: /^\/instances\/[^/]+\/routes(?:\/([^/]+))?(?:\/(.+))?$/,

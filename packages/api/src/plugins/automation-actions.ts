@@ -33,7 +33,13 @@
  * pin a pooled connection for the duration (the G4 leg-2 trap).
  */
 
-import type { AgentCallContext, AgentRunResult, CallAgentActionConfig, ProviderMetrics } from '@omni/core';
+import type {
+  AgentCallContext,
+  AgentRunResult,
+  CallAgentActionConfig,
+  ConnectorCallRequest,
+  ProviderMetrics,
+} from '@omni/core';
 import {
   PUBLISH_NOT_DECLARED,
   SCHEMA_NOT_REGISTERED,
@@ -327,6 +333,7 @@ export interface AutomationEngineDeps {
     trustedTenantId?: string | null,
     emitterAgentId?: string | null,
   ) => Promise<{ valid: boolean; errors?: string[]; reason?: string }>;
+  callConnector: (request: ConnectorCallRequest, trustedTenantId?: string | null) => Promise<unknown>;
 }
 
 /** Injectable seams (tests only — production uses the module defaults). */
@@ -526,6 +533,17 @@ export function buildAutomationEngineDeps(
     // bus. Best-effort ambient delete (additive tenancy phase).
     releaseEmittedEventClaim: async (eventId) => {
       await scopedHandle(db).delete(omniEvents).where(eq(omniEvents.id, eventId));
+    },
+
+    // One typed action for every provider (connector.call). Resolve + open the
+    // credential in a short worker scope (tenant world), then run the provider
+    // call strictly OUTSIDE it — a worker transaction must never span network
+    // I/O. A failed action is a failed action: no automatic retry in v1.
+    callConnector: async (request, trustedTenantId = null) => {
+      const prepared = await runTenantWorkDb(db, trustedTenantId, () =>
+        services.connectors.resolveAction(request.connectorId, request.action, trustedTenantId),
+      );
+      return services.connectors.executePrepared(prepared, request.input, request.timeoutMs, trustedTenantId);
     },
 
     // Emission gates for emit_event, in order (per issue #987):

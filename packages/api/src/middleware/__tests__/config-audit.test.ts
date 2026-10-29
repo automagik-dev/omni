@@ -4,6 +4,7 @@ import type { AppVariables } from '../../types';
 import { configAuditMiddleware, diffRows, fingerprint, redactSecrets, resolveTarget } from '../config-audit';
 
 const ID = '11111111-1111-1111-1111-111111111111';
+const SUBSCRIPTION_ID = '22222222-2222-2222-2222-222222222222';
 
 describe('config audit helpers', () => {
   test('resolveTarget maps config paths and skips others', () => {
@@ -18,6 +19,24 @@ describe('config audit helpers', () => {
     expect(resolveTarget('DELETE', `/api/v2/instances/${ID}/routes/r1`)?.resource.type).toBe('route');
     expect(resolveTarget('PUT', '/api/v2/settings/foo')).toMatchObject({ targetId: 'foo', action: 'setting.update' });
     expect(resolveTarget('POST', '/api/v2/messages/send')).toBeNull();
+  });
+
+  test('connector subscription mutations target the subscription row, not the connector', () => {
+    // Regression: capture group 1 must be the subscription id, otherwise the
+    // audit loader queries connector_event_subscriptions.id = <connector id>
+    // and every subscription diff is empty (including secret rotation).
+    expect(resolveTarget('PATCH', `/api/v2/connectors/${ID}/subscriptions/${SUBSCRIPTION_ID}`)).toMatchObject({
+      targetId: SUBSCRIPTION_ID,
+      action: 'connector_event_subscription.update',
+    });
+    expect(resolveTarget('DELETE', `/api/v2/connectors/${ID}/subscriptions/${SUBSCRIPTION_ID}`)).toMatchObject({
+      targetId: SUBSCRIPTION_ID,
+      action: 'connector_event_subscription.delete',
+    });
+    expect(resolveTarget('POST', `/api/v2/connectors/${ID}/subscriptions`)).toMatchObject({
+      targetId: undefined,
+      action: 'connector_event_subscription.create',
+    });
   });
 
   test('secrets become stable fingerprints, never the value', () => {
