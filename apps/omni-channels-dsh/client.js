@@ -11104,8 +11104,25 @@ var canWrite = (state) => state.preview || state.source.kind === "live" && state
 var canSend = (state) => state.preview || state.source.kind === "live" && state.abilities?.send === true;
 var set = (patch) => omniStore.set((state) => ({ ...state, ...typeof patch === "function" ? patch(state) : patch }));
 var patchChannel = (id, patch) => set((state) => ({ channels: state.channels.map((channel) => channel.id === id ? { ...channel, ...patch } : channel) }));
+var deleting = /* @__PURE__ */ new Set();
+var dataGeneration = 0;
+var withoutChats = (values, ids) => Object.fromEntries(Object.entries(values).filter(([id]) => !ids.has(id)));
+var forgetChannel = (channelId) => set((state) => {
+  const ids = new Set(state.chats.filter((chat) => chat.channelId === channelId).map((chat) => chat.id));
+  return {
+    channels: state.channels.filter((channel) => channel.id !== channelId),
+    chats: state.chats.filter((chat) => chat.channelId !== channelId),
+    messages: withoutChats(state.messages, ids),
+    seen: withoutChats(state.seen, ids),
+    chatId: ids.has(state.chatId) ? null : state.chatId,
+    filter: state.filter === channelId ? null : state.filter,
+    sendError: ids.has(state.sendError?.chatId) ? null : state.sendError,
+    page: state.page.view === "channel" && state.page.channelId === channelId ? { view: "overview", channelId: null, type: null, step: 0 } : state.page
+  };
+});
 function omniActions(select, call2) {
   const liveAct = (channelId, action, local, token) => {
+    if (deleting.has(channelId)) return;
     if (omniStore.getSnapshot().preview || !call2) return local();
     patchChannel(channelId, { busy: action, actionError: void 0 });
     call2("omni-channel-act", { id: channelId, action, ...token ? { token } : {} }).then(() => refreshLive(call2)).then(() => patchChannel(channelId, { busy: void 0 }), (error) => patchChannel(channelId, { busy: void 0, actionError: error.message }));
@@ -11182,32 +11199,59 @@ function omniActions(select, call2) {
         page: { view: "channel", channelId: id, type: null, step: 0 }
       }));
     },
-    remove: (channelId) => set((state) => ({
-      channels: state.channels.filter((channel) => channel.id !== channelId),
-      chats: state.chats.filter((chat) => chat.channelId !== channelId),
-      filter: state.filter === channelId ? null : state.filter,
-      page: { view: "overview", channelId: null, type: null, step: 0 }
-    }))
+    // Disconnect remains a local-only sample action.
+    remove(channelId) {
+      if (omniStore.getSnapshot().preview) forgetChannel(channelId);
+    },
+    async deleteInstance(channelId) {
+      const before = omniStore.getSnapshot();
+      const channel = channelOf(before, channelId);
+      if (before.preview || !canWrite(before) || !call2 || !channel || channel.busy || deleting.has(channelId)) return;
+      deleting.add(channelId);
+      dataGeneration += 1;
+      patchChannel(channelId, { busy: "delete", deleteError: void 0, actionError: void 0 });
+      try {
+        await call2("omni-channel-act", { id: channelId, action: "delete" });
+      } catch (error) {
+        patchChannel(channelId, { busy: void 0, deleteError: error.message });
+        return;
+      } finally {
+        deleting.delete(channelId);
+        dataGeneration += 1;
+      }
+      forgetChannel(channelId);
+      try {
+        await refreshLive(call2);
+      } catch (error) {
+        set((state) => ({ source: { ...state.source, error: t("Instance deleted, but refresh failed: {reason}. Refresh or wait for the next update.", { reason: error.message }) } }));
+      }
+    }
   };
 }
 var POLL_MS = 15e3;
 var polling = null;
 var markSeen = (seen, chats) => chats.map((chat) => (seen[chat.id] ?? -1) >= chat.at ? { ...chat, unread: 0 } : chat);
 async function loadMessages(call2, chatId) {
+  const generation = dataGeneration;
   try {
     const { messages } = await call2("omni-messages", { chatId });
+    if (generation !== dataGeneration || deleting.size || !chatOf(omniStore.getSnapshot(), chatId)) return;
     set((state) => ({ messages: { ...state.messages, [chatId]: messages } }));
   } catch (error) {
+    if (generation !== dataGeneration || deleting.size || !chatOf(omniStore.getSnapshot(), chatId)) return;
     set((state) => ({ messages: { ...state.messages, [chatId]: state.messages[chatId] ?? [] }, source: { ...state.source, error: error.message } }));
   }
 }
 async function refreshLive(call2) {
+  const generation = dataGeneration;
   const reply = await call2("omni-overview");
+  if (generation !== dataGeneration || deleting.size) return;
   if (!reply.configured) {
     set((state) => state.preview ? { source: { kind: "preview", missing: reply.missing } } : {});
     return;
   }
   const abilities = omniStore.getSnapshot().abilities ?? await call2("omni-channel-abilities").catch(() => ({ changeChannels: false, send: false }));
+  if (generation !== dataGeneration || deleting.size) return;
   set((state) => ({
     // The first live answer drops every sample: their chats and messages are not omni's.
     ...state.preview ? { messages: {}, chatId: null, page: { view: "overview", channelId: null, type: null, step: 0 } } : {},
@@ -11216,7 +11260,7 @@ async function refreshLive(call2) {
     source: { kind: "live", origin: reply.origin, at: Date.now() },
     channels: reply.channels.map((channel) => {
       const kept = channelOf(state, channel.id);
-      return kept?.busy || kept?.actionError ? { ...channel, busy: kept.busy, actionError: kept.actionError } : channel;
+      return kept?.busy || kept?.actionError || kept?.deleteError ? { ...channel, busy: kept.busy, actionError: kept.actionError, deleteError: kept.deleteError } : channel;
     }),
     chats: markSeen(state.seen, reply.chats),
     filter: reply.channels.some((channel) => channel.id === state.filter) ? state.filter : null
@@ -12099,7 +12143,7 @@ function ChannelsPage({ actions }) {
     (0, import_react4.createElement)(
       "div",
       { className: "oc-channels-in" },
-      page.view === "connect" ? (0, import_react4.createElement)(ConnectFlow, { state, omni: omni2 }) : channel ? (0, import_react4.createElement)(ChannelDetail, { channel, state, omni: omni2 }) : (0, import_react4.createElement)(Overview, { state, omni: omni2 })
+      page.view === "connect" ? (0, import_react4.createElement)(ConnectFlow, { state, omni: omni2 }) : channel ? (0, import_react4.createElement)(ChannelDetail, { key: channel.id, channel, state, omni: omni2 }) : (0, import_react4.createElement)(Overview, { state, omni: omni2 })
     )
   );
 }
@@ -12265,7 +12309,28 @@ function ChannelDetail({ channel, state, omni: omni2 }) {
         onClick: () => confirming ? omni2.remove(channel.id) : setConfirming(true),
         onBlur: () => setConfirming(false)
       }, confirming ? t("Click again to disconnect") : t("Disconnect"))
-    ) : null
+    ) : (0, import_react4.createElement)(
+      "section",
+      { className: "oc-danger", "aria-label": t("Delete instance") },
+      (0, import_react4.createElement)(
+        "div",
+        null,
+        (0, import_react4.createElement)("strong", null, confirming ? t("Delete instance {name} ({id})?", { name: channel.name, id: channel.id }) : t("Delete instance")),
+        (0, import_react4.createElement)("span", null, t("Permanently deletes this instance configuration and its local chats and messages.")),
+        (0, import_react4.createElement)("span", null, t("Disconnect, logout and session cleanup are best effort. External token revocation or account unlinking is not guaranteed. Events are not all erased.")),
+        channel.deleteError ? (0, import_react4.createElement)("p", { className: "oc-problem", role: "alert" }, t("Could not delete instance: {reason}. Check your access or connection, then try again.", { reason: channel.deleteError })) : null
+      ),
+      confirming ? (0, import_react4.createElement)(
+        import_react4.Fragment,
+        null,
+        (0, import_react4.createElement)("button", { type: "button", className: "oc-secondary", disabled: channel.busy === "delete", onClick: () => setConfirming(false) }, t("Cancel")),
+        (0, import_react4.createElement)("button", { type: "button", className: "oc-danger-go oc-danger-armed", disabled: !writable || Boolean(channel.busy), onClick: () => {
+          if (writable && !channel.busy) void omni2.deleteInstance(channel.id);
+        } }, channel.busy === "delete" ? t("Deleting instance…") : t("Permanently delete instance"))
+      ) : (0, import_react4.createElement)("button", { type: "button", className: "oc-danger-go", disabled: !writable || Boolean(channel.busy), title: writable ? void 0 : t("This device's key can't change channels; ask your Omni's owner."), onClick: () => {
+        if (writable && !channel.busy) setConfirming(true);
+      } }, t("Delete instance"))
+    )
   );
 }
 function WeekChart({ week }) {
@@ -12629,11 +12694,12 @@ body[data-ds-dark-theme] .oc-ava{background:hsl(var(--oc-hue) 30% 26%);color:hsl
 .oc-seg-opt strong{display:inline-flex;align-items:center;gap:6px;font-size:14px;font-weight:600}
 .oc-seg-opt span{font-size:12.5px;line-height:18px;color:var(--bt-ink-2)}
 .oc-seg-opt[aria-checked=true]{border-color:var(--bt-accent);background:color-mix(in srgb,var(--bt-accent) 8%,var(--bt-card));box-shadow:0 0 0 3px color-mix(in srgb,var(--bt-accent) 14%,transparent)}
-.oc-danger{display:flex;align-items:center;gap:16px;margin-top:14px;padding:16px;border-radius:14px;border:1px solid color-mix(in srgb,var(--bt-danger) 25%,transparent)}
+.oc-danger{display:flex;flex-wrap:wrap;align-items:center;gap:16px;margin-top:14px;padding:16px;border-radius:14px;border:1px solid color-mix(in srgb,var(--bt-danger) 25%,transparent)}
 .oc-danger div{display:flex;flex-direction:column;gap:2px;flex:1;font-size:12.5px;color:var(--bt-ink-2)}
 .oc-danger strong{font-size:14px;color:var(--bt-ink)}
 .oc-danger-go{height:34px;padding:0 14px;border-radius:999px;border:1px solid color-mix(in srgb,var(--bt-danger) 40%,transparent);background:none;color:var(--bt-danger);font:inherit;font-size:13px;font-weight:500;cursor:pointer;white-space:nowrap}
 .oc-danger-armed{background:var(--bt-danger);color:#fff;border-color:transparent}
+.oc-danger button:disabled{opacity:.45;cursor:default}
 .oc-types{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;align-items:stretch}
 .oc-type{display:flex;flex-direction:column;align-items:stretch;gap:10px;min-height:184px;padding:18px;border-radius:18px;border:.5px solid var(--bt-line-2);background:var(--bt-card);color:var(--bt-ink);font:inherit;text-align:left;cursor:pointer;transition:transform .14s ease,box-shadow .14s ease,border-color .14s ease}
 .oc-type:hover:not(:disabled){transform:translateY(-2px);border-color:var(--bt-line);box-shadow:0 12px 28px -12px rgba(0,0,0,.18)}
@@ -16266,6 +16332,15 @@ var PERMISSIONS_CSS = `
 
 // src/client/strings.js
 var STRINGS = {
+  "Cancel": "取消",
+  "Delete instance": "删除实例",
+  "Delete instance {name} ({id})?": "删除实例 {name}（{id}）？",
+  "Permanently delete instance": "永久删除实例",
+  "Deleting instance…": "正在删除实例…",
+  "Permanently deletes this instance configuration and its local chats and messages.": "永久删除此实例的配置及其本地聊天和消息。",
+  "Disconnect, logout and session cleanup are best effort. External token revocation or account unlinking is not guaranteed. Events are not all erased.": "将尽力断开连接、退出登录并清理会话，但不保证撤销外部令牌或解除账号关联，也不会清除所有事件。",
+  "Could not delete instance: {reason}. Check your access or connection, then try again.": "无法删除实例：{reason}。请检查权限或连接，然后重试。",
+  "Instance deleted, but refresh failed: {reason}. Refresh or wait for the next update.": "实例已删除，但刷新失败：{reason}。请刷新或等待下次更新。",
   "Every {n} days": "每 {n} 天",
   "Every {n} hours": "每 {n} 小时",
   "Every {n} min": "每 {n} 分钟",

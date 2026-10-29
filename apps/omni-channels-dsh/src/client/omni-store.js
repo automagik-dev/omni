@@ -1,4 +1,4 @@
-import { createSource } from './core.js'
+import { createSource, t } from './core.js'
 
 // The Omni channels state the sidebar's Chats section and the two main panels share:
 // connected channels with their health, their chats, and each chat's messages. This is
@@ -129,11 +129,33 @@ export const canSend = state => state.preview || (state.source.kind === 'live' &
 const set = patch => omniStore.set(state => ({ ...state, ...(typeof patch === 'function' ? patch(state) : patch) }))
 const patchChannel = (id, patch) => set(state => ({ channels: state.channels.map(channel => (channel.id === id ? { ...channel, ...patch } : channel)) }))
 
+// Shared across action objects and redraws. A deletion freezes overview updates until the
+// result, and invalidates older overview/message reads so they cannot restore deleted data.
+const deleting = new Set()
+let dataGeneration = 0
+
+const withoutChats = (values, ids) => Object.fromEntries(Object.entries(values).filter(([id]) => !ids.has(id)))
+const forgetChannel = channelId => set(state => {
+  const ids = new Set(state.chats.filter(chat => chat.channelId === channelId).map(chat => chat.id))
+  return {
+    channels: state.channels.filter(channel => channel.id !== channelId),
+    chats: state.chats.filter(chat => chat.channelId !== channelId),
+    messages: withoutChats(state.messages, ids),
+    seen: withoutChats(state.seen, ids),
+    chatId: ids.has(state.chatId) ? null : state.chatId,
+    filter: state.filter === channelId ? null : state.filter,
+    sendError: ids.has(state.sendError?.chatId) ? null : state.sendError,
+    page: state.page.view === 'channel' && state.page.channelId === channelId
+      ? { view: 'overview', channelId: null, type: null, step: 0 } : state.page,
+  }
+})
+
 // `select` is ctx.layout.selectPanel: chats and the Channels page are DSH main panels.
 export function omniActions(select, call) {
   // On a linked Omni, a channel change goes through the host and the overview is read again;
   // the preview changes its sample (`local`). A refusal shows on the channel.
   const liveAct = (channelId, action, local, token) => {
+    if (deleting.has(channelId)) return
     if (omniStore.getSnapshot().preview || !call) return local()
     patchChannel(channelId, { busy: action, actionError: undefined })
     call('omni-channel-act', { id: channelId, action, ...(token ? { token } : {}) })
@@ -203,12 +225,33 @@ export function omniActions(select, call) {
         page: { view: 'channel', channelId: id, type: null, step: 0 },
       }))
     },
-    remove: channelId => set(state => ({
-      channels: state.channels.filter(channel => channel.id !== channelId),
-      chats: state.chats.filter(chat => chat.channelId !== channelId),
-      filter: state.filter === channelId ? null : state.filter,
-      page: { view: 'overview', channelId: null, type: null, step: 0 },
-    })),
+    // Disconnect remains a local-only sample action.
+    remove(channelId) {
+      if (omniStore.getSnapshot().preview) forgetChannel(channelId)
+    },
+    async deleteInstance(channelId) {
+      const before = omniStore.getSnapshot()
+      const channel = channelOf(before, channelId)
+      if (before.preview || !canWrite(before) || !call || !channel || channel.busy || deleting.has(channelId)) return
+      deleting.add(channelId)
+      dataGeneration += 1
+      patchChannel(channelId, { busy: 'delete', deleteError: undefined, actionError: undefined })
+      try {
+        await call('omni-channel-act', { id: channelId, action: 'delete' })
+      } catch (error) {
+        patchChannel(channelId, { busy: undefined, deleteError: error.message })
+        return
+      } finally {
+        deleting.delete(channelId)
+        dataGeneration += 1
+      }
+      forgetChannel(channelId)
+      try {
+        await refreshLive(call)
+      } catch (error) {
+        set(state => ({ source: { ...state.source, error: t('Instance deleted, but refresh failed: {reason}. Refresh or wait for the next update.', { reason: error.message }) } }))
+      }
+    },
   }
 }
 
@@ -221,29 +264,35 @@ let polling = null
 const markSeen = (seen, chats) => chats.map(chat => ((seen[chat.id] ?? -1) >= chat.at ? { ...chat, unread: 0 } : chat))
 
 export async function loadMessages(call, chatId) {
+  const generation = dataGeneration
   try {
     const { messages } = await call('omni-messages', { chatId })
+    if (generation !== dataGeneration || deleting.size || !chatOf(omniStore.getSnapshot(), chatId)) return
     set(state => ({ messages: { ...state.messages, [chatId]: messages } }))
   } catch (error) {
+    if (generation !== dataGeneration || deleting.size || !chatOf(omniStore.getSnapshot(), chatId)) return
     set(state => ({ messages: { ...state.messages, [chatId]: state.messages[chatId] ?? [] }, source: { ...state.source, error: error.message } }))
   }
 }
 
 export async function refreshLive(call) {
+  const generation = dataGeneration
   const reply = await call('omni-overview')
+  if (generation !== dataGeneration || deleting.size) return
   if (!reply.configured) {
     set(state => (state.preview ? { source: { kind: 'preview', missing: reply.missing } } : {}))
     return
   }
   // What this device's key may change, read once per page (the host keeps it a minute).
   const abilities = omniStore.getSnapshot().abilities ?? await call('omni-channel-abilities').catch(() => ({ changeChannels: false, send: false }))
+  if (generation !== dataGeneration || deleting.size) return
   set(state => ({
     // The first live answer drops every sample: their chats and messages are not omni's.
     ...(state.preview ? { messages: {}, chatId: null, page: { view: 'overview', channelId: null, type: null, step: 0 } } : {}),
     abilities,
     preview: false,
     source: { kind: 'live', origin: reply.origin, at: Date.now() },
-    channels: reply.channels.map(channel => { const kept = channelOf(state, channel.id); return kept?.busy || kept?.actionError ? { ...channel, busy: kept.busy, actionError: kept.actionError } : channel }),
+    channels: reply.channels.map(channel => { const kept = channelOf(state, channel.id); return kept?.busy || kept?.actionError || kept?.deleteError ? { ...channel, busy: kept.busy, actionError: kept.actionError, deleteError: kept.deleteError } : channel }),
     chats: markSeen(state.seen, reply.chats),
     filter: reply.channels.some(channel => channel.id === state.filter) ? state.filter : null,
   }))

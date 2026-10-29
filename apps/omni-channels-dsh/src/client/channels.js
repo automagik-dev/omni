@@ -276,7 +276,7 @@ export function ChannelsPage({ actions }) {
   return h('div', { className: 'oc-page oc-channels' },
     h('div', { className: 'oc-channels-in' },
       page.view === 'connect' ? h(ConnectFlow, { state, omni })
-        : channel ? h(ChannelDetail, { channel, state, omni })
+        : channel ? h(ChannelDetail, { key: channel.id, channel, state, omni })
           : h(Overview, { state, omni })))
 }
 
@@ -400,7 +400,16 @@ function ChannelDetail({ channel, state, omni }) {
           onClick: () => (confirming ? omni.remove(channel.id) : setConfirming(true)),
           onBlur: () => setConfirming(false),
         }, confirming ? t('Click again to disconnect') : t('Disconnect')))
-      : null)
+      : h('section', { className: 'oc-danger', 'aria-label': t('Delete instance') },
+        h('div', null,
+          h('strong', null, confirming ? t('Delete instance {name} ({id})?', { name: channel.name, id: channel.id }) : t('Delete instance')),
+          h('span', null, t('Permanently deletes this instance configuration and its local chats and messages.')),
+          h('span', null, t('Disconnect, logout and session cleanup are best effort. External token revocation or account unlinking is not guaranteed. Events are not all erased.')),
+          channel.deleteError ? h('p', { className: 'oc-problem', role: 'alert' }, t('Could not delete instance: {reason}. Check your access or connection, then try again.', { reason: channel.deleteError })) : null),
+        confirming ? h(Fragment, null,
+          h('button', { type: 'button', className: 'oc-secondary', disabled: channel.busy === 'delete', onClick: () => setConfirming(false) }, t('Cancel')),
+          h('button', { type: 'button', className: 'oc-danger-go oc-danger-armed', disabled: !writable || Boolean(channel.busy), onClick: () => { if (writable && !channel.busy) void omni.deleteInstance(channel.id) } }, channel.busy === 'delete' ? t('Deleting instance…') : t('Permanently delete instance')))
+          : h('button', { type: 'button', className: 'oc-danger-go', disabled: !writable || Boolean(channel.busy), title: writable ? undefined : t('This device\'s key can\'t change channels; ask your Omni\'s owner.'), onClick: () => { if (writable && !channel.busy) setConfirming(true) } }, t('Delete instance'))))
 }
 
 function WeekChart({ week }) {
@@ -706,11 +715,12 @@ body[data-ds-dark-theme] .oc-ava{background:hsl(var(--oc-hue) 30% 26%);color:hsl
 .oc-seg-opt strong{display:inline-flex;align-items:center;gap:6px;font-size:14px;font-weight:600}
 .oc-seg-opt span{font-size:12.5px;line-height:18px;color:var(--bt-ink-2)}
 .oc-seg-opt[aria-checked=true]{border-color:var(--bt-accent);background:color-mix(in srgb,var(--bt-accent) 8%,var(--bt-card));box-shadow:0 0 0 3px color-mix(in srgb,var(--bt-accent) 14%,transparent)}
-.oc-danger{display:flex;align-items:center;gap:16px;margin-top:14px;padding:16px;border-radius:14px;border:1px solid color-mix(in srgb,var(--bt-danger) 25%,transparent)}
+.oc-danger{display:flex;flex-wrap:wrap;align-items:center;gap:16px;margin-top:14px;padding:16px;border-radius:14px;border:1px solid color-mix(in srgb,var(--bt-danger) 25%,transparent)}
 .oc-danger div{display:flex;flex-direction:column;gap:2px;flex:1;font-size:12.5px;color:var(--bt-ink-2)}
 .oc-danger strong{font-size:14px;color:var(--bt-ink)}
 .oc-danger-go{height:34px;padding:0 14px;border-radius:999px;border:1px solid color-mix(in srgb,var(--bt-danger) 40%,transparent);background:none;color:var(--bt-danger);font:inherit;font-size:13px;font-weight:500;cursor:pointer;white-space:nowrap}
 .oc-danger-armed{background:var(--bt-danger);color:#fff;border-color:transparent}
+.oc-danger button:disabled{opacity:.45;cursor:default}
 .oc-types{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;align-items:stretch}
 .oc-type{display:flex;flex-direction:column;align-items:stretch;gap:10px;min-height:184px;padding:18px;border-radius:18px;border:.5px solid var(--bt-line-2);background:var(--bt-card);color:var(--bt-ink);font:inherit;text-align:left;cursor:pointer;transition:transform .14s ease,box-shadow .14s ease,border-color .14s ease}
 .oc-type:hover:not(:disabled){transform:translateY(-2px);border-color:var(--bt-line);box-shadow:0 12px 28px -12px rgba(0,0,0,.18)}

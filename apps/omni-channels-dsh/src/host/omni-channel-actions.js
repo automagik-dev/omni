@@ -39,8 +39,8 @@ export const FORBIDDEN_CHANGE = 'This device\'s key can\'t change channels; ask 
 export const FORBIDDEN_SEND = 'This device\'s key can\'t send messages; ask your Omni\'s owner.'
 
 const ABILITIES_TTL_MS = 60_000
-// A channel this page created and that has not connected yet; cancelling deletes it, and
-// only such a channel can be deleted from here.
+// Cancelling pairing deletes only a channel this page created that has not connected yet.
+// Explicit instance deletion is a separate action, available for existing channels too.
 const PENDING_TTL_MS = 30 * 60_000
 
 const invalid = message => Object.assign(new Error(message), { code: 'bot/invalid' })
@@ -55,7 +55,7 @@ const CreatePayload = z.object({
 })
 const ChannelPayload = z.object({ id })
 const PhonePayload = z.object({ id, phone: z.string().trim().regex(/^\+?[\d\s().-]{8,24}$/) })
-const ActPayload = z.object({ id, action: z.enum(['reconnect', 'pause', 'resume', 'token']), token: token.optional() })
+const ActPayload = z.object({ id, action: z.enum(['reconnect', 'pause', 'resume', 'token', 'delete']), token: token.optional() })
 const SendPayload = z.object({ chatId: id, text: z.string().min(1).max(4000).refine(text => text.trim() !== '') })
 const SlackStartPayload = z.object({ mode: z.enum(['bot', 'user']) })
 const SlackResultPayload = z.object({ nonce: z.string().regex(/^[A-Za-z0-9_-]{8,128}$/) })
@@ -67,6 +67,7 @@ const WabPayload = z.object({
   wabaId: metaId,
 })
 
+const Deleted = z.object({ success: z.literal(true) })
 const Instance = z.object({ data: z.object({ id, name: z.string(), channel: z.string() }).passthrough() })
 const Status = z.object({ data: z.object({ state: z.string().max(40), isConnected: z.boolean().optional(), message: z.string().max(500).nullish(), profileName: z.string().max(200).nullish(), ownerIdentifier: z.string().max(200).nullish() }).passthrough() })
 const Qr = z.object({ data: z.object({ qr: z.string().max(2048).nullable(), expiresAt: z.string().max(64).nullable() }).passthrough() })
@@ -240,7 +241,10 @@ export function install(rt) {
   async function act(body) {
     const payload = parse(ActPayload, body, 'Pick what to do with the channel')
     const path = `/instances/${payload.id}`
-    if (payload.action === 'pause') await must('POST', `${path}/disconnect`)
+    if (payload.action === 'delete') {
+      parse(Deleted, await must('DELETE', path), 'Omni did not confirm instance deletion')
+      pending.delete(payload.id)
+    } else if (payload.action === 'pause') await must('POST', `${path}/disconnect`)
     else if (payload.action === 'token') {
       if (!payload.token) throw invalid('Paste the new token')
       await must('POST', `${path}/connect`, { token: payload.token })
