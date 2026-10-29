@@ -116,7 +116,7 @@ function validateCreateOptions(options: {
   const urlError = validateUrlScheme(options.schema, options.baseUrl);
   if (urlError) return urlError;
   if (options.schema === 'openclaw' && !options.defaultAgentId) {
-    return 'OpenClaw providers require --default-agent-id.\nExample: omni providers create --schema openclaw --default-agent-id sofia ...';
+    return 'OpenClaw providers require --default-agent-id.\nExample: omni providers create --schema openclaw --default-agent-id my-agent ...';
   }
   if (options.schema === 'claude-code' && !options.projectPath) {
     return 'Claude Code providers require --project-path.\nExample: omni providers create --name "My Project" --schema claude-code --base-url http://localhost:8882 --project-path /home/user/myproject';

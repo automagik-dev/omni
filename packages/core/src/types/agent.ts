@@ -40,7 +40,7 @@ export interface AgnoConfig {
 }
 
 export interface OpenClawConfig {
-  /** Default agent ID (e.g. 'sofia') */
+  /** Default agent ID (e.g. 'my-agent') */
   defaultAgentId: string;
   /** Agent timeout in seconds (default: 120) */
   agentTimeoutMs?: number;
