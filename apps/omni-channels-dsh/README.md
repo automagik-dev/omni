@@ -139,6 +139,42 @@ deletion is reported separately, without treating deletion as failed
   `omniEventCursors`) stay in the team's `state.json`, saved through the team's lock; a DSH
   that only reads the team does not change them.
 
+## Quiesce automation ingress before unloading
+
+The `omniChannels` host runtime exposes `await rt.quiesceOmniEvents()`. Call and await
+this **before** initiating plugin unload or a controlled host restart, while the rest of
+the plugin (including subscription permission hooks) remains installed. It permanently
+stops this runtime's Omni event ingress; resuming requires a new runtime installation.
+It does not disable subscriptions or delete server consumers.
+
+Stopping is synchronous; the returned promise settles after pending load/configuration,
+sync, stream and enrichment operations, entered subscription dispatches, acknowledgments
+and cursor saves have settled. Repeated calls and the event effect's disposer return the
+same promise. Whole-plugin unload may dispose other hooks concurrently: the async event
+disposer alone is **not** the safe ingress-only boundary. `omniEventsView().listening: []`
+means no active listeners, **not** that pending ingress work has drained.
+
+Rows cancelled before their first subscription dispatch are not acknowledged and do not
+advance the local cursor. Buffered rows are discarded and that stream exits. Once a row
+has entered its first dispatch, it finishes its captured matching subscriptions (retaining
+the existing warn-and-continue dispatch-error policy), then acknowledges and saves before
+drain completes. Replacement listeners wait for the previous run of the same consumer to
+settle. Failed acknowledgments do not advance the local cursor; a rejected local save
+restores its previous in-memory cursor, allowing replay even if the server ack succeeded.
+Drain completion means these operations settled, not that persistence succeeded.
+The server's validated
+monotonic-cursor 400 (this exact row is already behind its durable cursor) is treated as
+already acknowledged, allowing a stale local cursor to catch up one processed row at a
+time; generic 400s and other HTTP failures are not. Delivery is **at least once**, not
+exactly once: cancellation or a failure before acknowledgment can replay a
+row, including subscriptions that already dispatched. SSE reads alone do not acknowledge
+rows; reconnects use the last locally acknowledged cursor via `Last-Event-ID`.
+
+This is an ingress boundary, **not** a drain of downstream worker turns, bot tasks or
+session followups already enqueued by a dispatch. It provides no forced-exit guarantee.
+An external request or stream implementation that ignores abort must settle before the
+promise can resolve; no deadline silently declares such work drained.
+
 ## Develop
 
 ```sh
