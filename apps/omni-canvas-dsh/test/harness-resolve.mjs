@@ -50,6 +50,10 @@ const anchor = pathToFileURL(existsSync(base) ? base : resolve(harness, 'package
 const owners = [plugin, core, channels].map(dir => `${pathToFileURL(dir).href}/`)
 const SIBLINGS = { '@automagik/bots-dsh': core, '@automagik/omni-dsh': core, '@automagik/omni-channels-dsh': channels }
 const clientShim = pathToFileURL(join(plugin, 'test', 'omni-client.js')).href
+// omni-ui.js imports React and react-lang for the browser renderer; tests that inspect the
+// renderer map use small stand-ins rather than a second React install.
+const reactShim = pathToFileURL(join(plugin, 'test', 'react-shim.js')).href
+const reactLangShim = pathToFileURL(join(plugin, 'test', 'react-lang-shim.js')).href
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -58,6 +62,10 @@ registerHooks({
     // The other plugins' client bundles as DSH hands them over (omni-client.js); their
     // entries, or any file of theirs, by path rather than exports.
     if (['@automagik/bots-dsh/client', '@automagik/omni-dsh/client', '@automagik/omni-channels-dsh/client'].includes(specifier)) return nextResolve(clientShim, context)
+    // Only this plugin's renderer source gets the stand-ins, not a dependency that might
+    // have its own React expectations.
+    if (context.parentURL?.startsWith(`${pathToFileURL(plugin).href}/`) && specifier === 'react') return nextResolve(reactShim, context)
+    if (context.parentURL?.startsWith(`${pathToFileURL(plugin).href}/`) && specifier === '@openuidev/react-lang') return nextResolve(reactLangShim, context)
     for (const [name, dir] of Object.entries(SIBLINGS)) {
       const url = `${pathToFileURL(dir).href}/`
       if (specifier === name) return nextResolve(`${url}index.js`, context)

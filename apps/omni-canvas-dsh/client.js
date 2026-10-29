@@ -18258,6 +18258,16 @@ var ActionExpression = external_exports.any();
 tagSchemaId(ActionExpression, "ActionExpression");
 var tone = external_exports.enum(["ok", "warn", "bad", "info", "muted"]);
 var point = external_exports.object({ label: external_exports.string().max(200), value: external_exports.number().finite() });
+var boardColumn = external_exports.object({
+  title: external_exports.string().max(200),
+  count: external_exports.number().int().min(0).max(1e4).optional(),
+  rows: external_exports.array(external_exports.any()).max(50)
+});
+var treeNode = external_exports.lazy(() => external_exports.object({
+  label: external_exports.string().max(200),
+  meta: external_exports.string().max(80).optional(),
+  children: external_exports.array(treeNode).max(20).optional()
+}));
 var SPECS = [
   ["Stack", 'Vertical group; the root of every canvas. gap: "s" | "m" | "l".', external_exports.object({ children: external_exports.array(external_exports.any()).max(40), gap: external_exports.enum(["s", "m", "l"]).optional() })],
   ["Row", "Side-by-side group that wraps on narrow screens (stats, buttons, cards).", external_exports.object({ children: external_exports.array(external_exports.any()).max(12), gap: external_exports.enum(["s", "m", "l"]).optional() })],
@@ -18266,7 +18276,10 @@ var SPECS = [
   ["Text", 'A paragraph. tone "muted" for secondary text.', external_exports.object({ content: external_exports.string().max(4e3), tone: external_exports.enum(["normal", "muted"]).optional() })],
   ["Badge", "A short status label.", external_exports.object({ text: external_exports.string().max(80), tone: tone.optional() })],
   ["Stat", "A key number with its label and an optional hint.", external_exports.object({ label: external_exports.string().max(120), value: external_exports.union([external_exports.number().finite(), external_exports.string().max(120)]), hint: external_exports.string().max(200).optional() })],
-  ["Table", "Rows of values under column titles. Each row is an array in column order.", external_exports.object({ columns: external_exports.array(external_exports.string().max(80)).min(1).max(10), rows: external_exports.array(external_exports.array(external_exports.any()).max(10)).max(200) })],
+  ["Table", "Rows of values under column titles, for a small flat matrix only (at most 12 rows, no buckets). For grouped rows use Board; long groups, Section; hierarchies, Tree.", external_exports.object({ columns: external_exports.array(external_exports.string().max(80)).min(1).max(10), rows: external_exports.array(external_exports.array(external_exports.any()).max(10)).max(200) })],
+  ["Board", "Ordered columns of bucketed rows, for tasks by status, deals by stage or tickets by assignee. Each column is {title, count?, rows}; a bucket with more than 8 rows starts collapsed with its count. Prefer it to Table for grouped rows.", external_exports.object({ columns: external_exports.array(boardColumn).min(1).max(12), title: external_exports.string().max(200).optional() })],
+  ["Section", "A collapsible group that starts closed and shows its count, for a long list or bucket. count defaults to the number of children; use it when more than 8 rows would flood the reply.", external_exports.object({ title: external_exports.string().max(200), children: external_exports.array(external_exports.any()).max(60), count: external_exports.number().int().min(0).max(1e4).optional() })],
+  ["Tree", "A hierarchy of {label, meta?, children?} nodes, for connector structure such as team → space → folder → list. meta is a short kind (team, space, folder, list).", external_exports.object({ items: external_exports.array(treeNode).min(1).max(20), title: external_exports.string().max(200).optional() })],
   ["Chart", "Bars, a line or a donut from {label, value} points (at most 50).", external_exports.object({ kind: external_exports.enum(["bars", "line", "donut"]), data: external_exports.array(point).max(50), title: external_exports.string().max(200).optional() })],
   ["KeyValue", "Label/value pairs, for the fields of one record.", external_exports.object({ pairs: external_exports.array(external_exports.object({ label: external_exports.string().max(120), value: external_exports.any() })).max(40) })],
   ["Select", "A choice bound to a $variable; changing it only changes what the canvas shows.", external_exports.object({ name: external_exports.string().max(100), label: external_exports.string().max(200), options: external_exports.array(external_exports.string().max(200)).min(1).max(30), value: external_exports.string().max(200) })],
@@ -18298,11 +18311,14 @@ var PROMPT_OPTIONS = {
     "Channel, QrCode and Chat fetch and refresh their own data from an id: prefer them to rebuilding those views from a Query. A channel's live state is what Channel shows; /instances items carry no connection state.",
     "Use only fields you have seen in a real record (read one with omni_call first). Instances carry name, channel, isActive and profileName; whether one is connected comes from /instances/{id}/status, which Channel already shows.",
     'A @Each loop variable exists only inside its template: write @Each(inst.items, "i", Channel(i.id)), never i.name in another statement.',
+    'Connector results often arrive as many rows. Bucket first: tasks by status, deals by stage, tickets by assignee → Board([{title: "To do", count: 31, rows: [task1, task2]}, …], "Tasks by status"). A bucket longer than 8 rows starts collapsed with its count; a standalone long group is Section("Recently updated", [row1, row2], 30), which also starts closed. A hierarchy (team → space → folder → list) is Tree([{label: "Team", meta: "team", children: […]}], "Structure").',
+    "Keep Table for a small flat matrix (12 rows or fewer, no buckets). Never paste a connector result as markdown, one line per row, or a wall of Text: use Board, Section or Tree so the reply stays readable.",
     "A canvas cannot read secrets, call other services or run code."
   ],
   examples: [
     'root = Stack([title, row, list])\ntitle = Heading("Channels")\nrow = Row([Stat("Connected", @Count(@Filter(ch.items, "state", "==", "connected"))), Stat("Total", @Count(ch.items))])\nch = Query("omni_channels", {}, {items: []}, 10)\nlist = Stack(@Each(ch.items, "c", Channel(c.id)))',
-    'root = Stack([qr, again])\nqr = QrCode("5f0c1d2e-…")\nagain = Button("Get a new code", Action([@ToAssistant("Restart the connection of that channel")]))'
+    'root = Stack([qr, again])\nqr = QrCode("5f0c1d2e-…")\nagain = Button("Get a new code", Action([@ToAssistant("Restart the connection of that channel")]))',
+    'root = Stack([heading, board, recent, tree])\nheading = Heading("ClickUp: Q4 launch")\nboard = Board([{title: "To do", count: 31, rows: [t1, t2]}, {title: "In progress", count: 14, rows: [t3]}, {title: "Complete", count: 28, rows: [t4]}], "Tasks by status")\nrecent = Section("Recently updated", [t5, t6], 12)\ntree = Tree([{label: "Acme team", meta: "team", children: [{label: "Product", meta: "space", children: [{label: "Q4 launch", meta: "list"}]}]}], "ClickUp structure")\nt1 = Text("Draft launch brief")\nt2 = Text("Collect pricing approvals")\nt3 = Text("Build the onboarding flow")\nt4 = Text("Publish the release notes")\nt5 = Text("Customer note from Acme")\nt6 = Text("Design review moved to Friday")'
   ]
 };
 
@@ -18319,7 +18335,37 @@ var library = libraryOf({ createLibrary, defineComponent, reactive: (schema) => 
 } });
 var parser = createParser(library.toJSONSchema(), library.root);
 var ALLOWED = /* @__PURE__ */ new Set([...SPECS.map(([name]) => name), ...BUILTIN_NAMES, "Query"]);
+var PROPS = new Map(SPECS.map(([name, , props]) => [name, props]));
 var say = (text, params) => params ? { text, params } : { text };
+var isExpression = (value) => value !== null && typeof value === "object" && typeof value.k === "string";
+function hasExpression(value) {
+  if (isExpression(value)) return true;
+  if (Array.isArray(value)) return value.some(hasExpression);
+  if (value !== null && typeof value === "object") return Object.values(value).some(hasExpression);
+  return false;
+}
+function checkProps(root) {
+  const seen = /* @__PURE__ */ new WeakSet();
+  const pending = [root];
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (value === null || typeof value !== "object" || seen.has(value)) continue;
+    seen.add(value);
+    if (value.type === "element" && PROPS.has(value.typeName) && !hasExpression(value.props)) {
+      const result = PROPS.get(value.typeName).safeParse(value.props);
+      if (!result.success) {
+        const issue2 = result.error.issues[0];
+        return say("{name} has an invalid {field}: {reason}", {
+          name: value.typeName,
+          field: issue2.path.join(".") || "arguments",
+          reason: issue2.message
+        });
+      }
+    }
+    for (const child of Object.values(value)) pending.push(child);
+  }
+  return null;
+}
 function unclosedLine(program) {
   const lines = program.split("\n");
   for (const [index, line] of lines.entries()) {
@@ -18383,6 +18429,8 @@ function checkProgram(program) {
     const errors = result.meta.errors.filter((error2) => error2.code !== "excess-args");
     if (errors.length > 0) return say(errors.slice(0, 3).map((error2) => error2.message).join(" "));
     if (result.meta.unresolved.length > 0) return say("The canvas names something it never defines: {names}.", { names: result.meta.unresolved.slice(0, 3).join(", ") });
+    const props = checkProps(result.root);
+    if (props) return props;
     const open2 = unclosedLine(source);
     if (open2) return say("Line {line} does not close its brackets or quotes: {text}", open2);
     return null;
@@ -18427,6 +18475,49 @@ var Stat = ({ props }) => (0, import_react3.createElement)(
 );
 var TableNode = ({ props, renderNode }) => (0, import_react3.createElement)(Table, { columns: props.columns, rows: (props.rows ?? []).map((row) => (Array.isArray(row) ? row : [row]).map((value) => value && typeof value === "object" && "typeName" in value ? renderNode(value) : value)) });
 var KeyValueNode = ({ props }) => (0, import_react3.createElement)(KeyValue, { pairs: props.pairs ?? [] });
+var BOARD_COLLAPSE_AFTER = 8;
+var countOf = (count, fallback) => Number.isInteger(count) ? count : fallback;
+var rowsOf = (rows, renderNode) => (rows ?? []).map((row, index) => (0, import_react3.createElement)(import_react3.Fragment, { key: index }, nodeOf(row, renderNode)));
+function BoardColumn({ column, renderNode }) {
+  const rows = column.rows ?? [];
+  const count = countOf(column.count, rows.length);
+  const head = (0, import_react3.createElement)("span", { className: "ou-board-column-head" }, (0, import_react3.createElement)("strong", null, column.title), (0, import_react3.createElement)("span", { className: "ou-count" }, count));
+  const body = (0, import_react3.createElement)("div", { className: "ou-board-rows" }, rowsOf(rows, renderNode));
+  return rows.length > BOARD_COLLAPSE_AFTER ? (0, import_react3.createElement)("details", { className: "ou-board-column" }, (0, import_react3.createElement)("summary", null, head), body) : (0, import_react3.createElement)("section", { className: "ou-board-column" }, head, body);
+}
+function Board({ props, renderNode }) {
+  return (0, import_react3.createElement)(
+    "section",
+    { className: "ou-board" },
+    props.title ? (0, import_react3.createElement)("strong", { className: "ou-board-title" }, props.title) : null,
+    (0, import_react3.createElement)("div", { className: "ou-board-columns" }, (props.columns ?? []).map((column, index) => (0, import_react3.createElement)(BoardColumn, { key: index, column, renderNode })))
+  );
+}
+function Section({ props, renderNode }) {
+  const children = props.children ?? [];
+  return (0, import_react3.createElement)(
+    "details",
+    { className: "ou-disclosure" },
+    (0, import_react3.createElement)("summary", null, (0, import_react3.createElement)("span", { className: "ou-disclosure-title" }, props.title), (0, import_react3.createElement)("span", { className: "ou-count" }, countOf(props.count, children.length))),
+    (0, import_react3.createElement)("div", { className: "ou-disclosure-body" }, rowsOf(children, renderNode))
+  );
+}
+function treeList(items, depth = 0) {
+  return (0, import_react3.createElement)("ul", { className: "ou-tree", "data-depth": depth }, (items ?? []).map((node2, index) => (0, import_react3.createElement)(
+    "li",
+    { key: index, className: "ou-tree-node" },
+    (0, import_react3.createElement)("span", { className: "ou-tree-label" }, (0, import_react3.createElement)("span", null, node2.label), node2.meta ? (0, import_react3.createElement)("span", { className: "ou-count" }, node2.meta) : null),
+    node2.children?.length ? treeList(node2.children, depth + 1) : null
+  )));
+}
+function Tree({ props }) {
+  return (0, import_react3.createElement)(
+    "section",
+    { className: "ou-tree-wrap" },
+    props.title ? (0, import_react3.createElement)("strong", { className: "ou-board-title" }, props.title) : null,
+    treeList(props.items ?? [])
+  );
+}
 function Chart({ props }) {
   const data = (props.data ?? []).filter((point2) => Number.isFinite(point2?.value));
   if (data.length === 0) return (0, import_react3.createElement)("span", { className: "ou-muted" }, t("No data to chart."));
@@ -18517,6 +18608,9 @@ var RENDER = {
   Badge: BadgeNode,
   Stat,
   Table: TableNode,
+  Board,
+  Section,
+  Tree,
   Chart,
   KeyValue: KeyValueNode,
   Select,
@@ -18600,6 +18694,32 @@ var OMNI_UI_CSS = `
 .ou-stat{display:flex;flex-direction:column;gap:2px;padding:12px 14px;border:1px solid var(--bt-line);border-radius:14px;background:var(--bt-card)}
 .ou-stat-label{font-size:12.5px;color:var(--bt-ink-3)}
 .ou-stat-value{font-size:22px;line-height:28px;font-weight:600;font-variant-numeric:tabular-nums}
+.ou-board{display:flex;flex-direction:column;gap:10px;min-width:0}
+.ou-board-title{font-size:13px;font-weight:600}
+.ou-board-columns{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;align-items:start}
+.ou-board-column{display:flex;flex-direction:column;gap:6px;min-width:0;padding:10px 12px;border:1px solid var(--bt-line);border-radius:14px;background:var(--bt-card)}
+.ou-board-column>summary{list-style:none;cursor:pointer}
+.ou-board-column>summary::-webkit-details-marker{display:none}
+.ou-board-column>summary .ou-board-column-head::before{content:'▸';margin-right:2px;color:var(--bt-ink-3);transition:transform .15s}
+.ou-board-column[open]>summary .ou-board-column-head::before{transform:rotate(90deg)}
+.ou-board-column-head{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:13px}
+.ou-board-column-head strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ou-board-rows{display:flex;flex-direction:column;gap:6px;min-width:0}
+.ou-board-rows>*{min-width:0}
+.ou-disclosure{padding:10px 12px;border:1px solid var(--bt-line);border-radius:14px;background:var(--bt-card)}
+.ou-disclosure>summary{display:flex;align-items:center;gap:8px;list-style:none;cursor:pointer;font-size:13.5px;font-weight:600}
+.ou-disclosure>summary::-webkit-details-marker{display:none}
+.ou-disclosure>summary::before{content:'▸';color:var(--bt-ink-3);transition:transform .15s}
+.ou-disclosure[open]>summary::before{transform:rotate(90deg)}
+.ou-disclosure-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ou-disclosure-body{display:flex;flex-direction:column;gap:8px;margin-top:10px}
+.ou-count{display:inline-flex;flex:0 0 auto;align-items:center;justify-content:center;min-width:22px;height:20px;padding:0 7px;border-radius:999px;background:var(--bt-hover);color:var(--bt-ink-2);font-size:12px;font-weight:500;font-variant-numeric:tabular-nums}
+.ou-tree-wrap{display:flex;flex-direction:column;gap:8px;min-width:0}
+.ou-tree{display:flex;flex-direction:column;gap:6px;margin:0;padding:0;list-style:none;min-width:0}
+.ou-tree .ou-tree{margin:6px 0 0 12px;padding-left:12px;border-left:1px solid var(--bt-line)}
+.ou-tree-node{min-width:0}
+.ou-tree-label{display:flex;align-items:center;gap:8px;min-width:0;font-size:13px}
+.ou-tree-label>span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ou-chart{margin:0;display:flex;flex-direction:column;gap:8px;padding:12px 14px;border:1px solid var(--bt-line);border-radius:14px;background:var(--bt-card)}
 .ou-chart-title{font-size:13px;font-weight:600}
 .ou-bars{display:flex;flex-direction:column;gap:6px}
@@ -18645,6 +18765,7 @@ var STRINGS = {
   "The canvas is too long.": "画布太长了。",
   "The canvas must start with root = Stack(...).": "画布必须以 root = Stack(...) 开头。",
   "The canvas names something it never defines: {names}.": "画布引用了未定义的内容：{names}。",
+  "{name} has an invalid {field}: {reason}": "{name} 的 {field} 不合法：{reason}",
   "This view could not be drawn: {reason}": "无法绘制这个视图：{reason}",
   "Unknown component {name}.": "未知组件 {name}。",
   "Ask to fix it": "让它修正",

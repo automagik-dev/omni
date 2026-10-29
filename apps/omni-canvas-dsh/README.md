@@ -21,6 +21,23 @@ both: a canvas reads omni through Omni's own reads. The team's
   block are drawn live. A canvas may only read omni (`Query` with Omni's read tools or
   `omni_get`); it cannot change anything.
 
+### Connector results
+
+Connector answers tend to be wide: 82 tasks, grouped by status, with a team → space →
+folder → list path beside them. The catalogue has three shapes for that data, all drawn from
+the same `SPECS` definitions as the prompt:
+
+- `Board(columns, title?)` — ordered buckets; each column is `{title, count?, rows}`. A bucket
+  longer than 8 rows starts collapsed with its count.
+- `Section(title, children, count?)` — a collapsed group with its count, for a long list that
+  is not a board column.
+- `Tree(items, title?)` — `{label, meta?, children?}` nodes, for connector hierarchies such as
+  team → space → folder → list.
+
+The generated prompt tells Omni to use these instead of `Table` for bucketed or hierarchical
+results, and keeps `Table` for small flat matrices (12 rows or fewer). Connector actions still
+return JSON: this is an authoring convention for the canvas, not a change to the connectors.
+
 ## Install
 
 The plugin needs DSH `>=0.2.1-rc.3 <0.2.2-0` (the DSH its tests run on, up to the next patch;
