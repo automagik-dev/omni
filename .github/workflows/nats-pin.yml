@@ -1,0 +1,68 @@
+name: nats Pin
+
+# nats-server is pinned by the size and sha256 of each platform archive in
+# packages/cli/src/nats-pin.json, which the CLI installer and scripts/ensure-nats.sh both check
+# before they unpack it. On every change to the pin or to either check, this re-derives the pin
+# from nats' release (SHA256SUMS and the asset list), with a negative control, and runs the
+# ensure-nats.sh rows against a fixture release. nats publishes no signature, so there is no
+# cosign step. See scripts/ci/verify-nats-pin.sh and scripts/ci/test-ensure-nats.sh.
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - 'packages/cli/src/nats-pin.json'
+      - 'scripts/ensure-nats.sh'
+      - 'scripts/ci/verify-nats-pin.sh'
+      - 'scripts/ci/test-ensure-nats.sh'
+      - '.github/workflows/nats-pin.yml'
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'packages/cli/src/nats-pin.json'
+      - 'scripts/ensure-nats.sh'
+      - 'scripts/ci/verify-nats-pin.sh'
+      - 'scripts/ci/test-ensure-nats.sh'
+      - '.github/workflows/nats-pin.yml'
+
+concurrency:
+  group: nats-pin-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: verify-nats-pin (release SHA256SUMS + asset digests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Re-derive the pin from the nats release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/verify-nats-pin.sh
+
+  ensure-nats:
+    name: ensure-nats.sh rows (fixture release, no network)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.2
+
+      - name: Run the ensure-nats.sh rows
+        run: bash scripts/ci/test-ensure-nats.sh
