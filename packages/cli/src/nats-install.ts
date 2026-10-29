@@ -10,10 +10,16 @@
  * match, before anything is written or unpacked; a platform the pin has no
  * checksum for gets no download. nats publishes no signature, only SHA256SUMS
  * next to the archives, so the pin is the check.
+ *
+ * A verified install leaves `<target>.pin` (the version and the archive's
+ * sha256) beside the binary. A binary already in place counts as installed only
+ * when that marker is the pin; any other is replaced through the same checks.
+ * The new binary is renamed over the old one, so a running nats-server keeps its
+ * file, and a refused upgrade leaves the old binary and marker as they were.
  */
 
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import ora from 'ora';
@@ -31,6 +37,9 @@ interface NatsPin {
 
 const NATS_PIN: NatsPin = natsPin;
 
+/** What installing nats-server at a target did. */
+export type NatsInstall = 'installed' | 'kept' | 'failed';
+
 function platformInfo(): { os: string; arch: string } | null {
   const platform = process.platform;
   const arch = process.arch;
@@ -46,6 +55,25 @@ function archiveMismatch(bytes: Uint8Array, pinned: { sha256: string; size: numb
   if (bytes.length !== pinned.size) return `size ${bytes.length} is not the pinned ${pinned.size}`;
   const sha256 = createHash('sha256').update(bytes).digest('hex');
   return sha256 === pinned.sha256 ? null : `sha256 ${sha256} is not the pinned ${pinned.sha256}`;
+}
+
+/** The marker a verified install of `sha256` leaves at `<target>.pin`. */
+const pinMarker = (pin: NatsPin, sha256: string) => `${pin.version} ${sha256}\n`;
+
+/**
+ * Whether the binary at `target` is the pinned release, by its marker. On a platform the pin has
+ * no checksum for, nothing can be downloaded, so a binary installed by hand is kept.
+ */
+function natsBinaryPinned(target: string, pin: NatsPin): boolean {
+  if (!existsSync(target)) return false;
+  const info = platformInfo();
+  const pinned = info ? pin.platforms[`${info.os}-${info.arch}`] : undefined;
+  if (!pinned) return true;
+  try {
+    return readFileSync(`${target}.pin`, 'utf-8') === pinMarker(pin, pinned.sha256);
+  } catch {
+    return false;
+  }
 }
 
 /** Download the NATS binary to `target` (default `~/.omni/nats-server`). Returns true on success. */
@@ -106,8 +134,13 @@ async function downloadNats(target: string = NATS_BINARY_PATH, pin: NatsPin = NA
       return false;
     }
 
-    await Bun.spawn({ cmd: ['mv', binPath, target] }).exited;
-    chmodSync(target, 0o755);
+    // The binary first, then its marker: a crash in between leaves no pinned marker, so the next
+    // run installs again.
+    chmodSync(binPath, 0o755);
+    renameSync(binPath, target);
+    const marker = join(tmpDir, 'nats-server.pin');
+    writeFileSync(marker, pinMarker(pin, pinned.sha256));
+    renameSync(marker, `${target}.pin`);
 
     spinner.succeed(`NATS ${version} installed to ${target}`);
     return true;
@@ -120,18 +153,23 @@ async function downloadNats(target: string = NATS_BINARY_PATH, pin: NatsPin = NA
   }
 }
 
-/** Ensure NATS is installed. No-op if the binary already exists. */
+/** Ensure the pinned NATS is installed at `~/.omni/nats-server`, replacing one that is not the pin. */
 export async function ensureNats(): Promise<void> {
-  if (existsSync(NATS_BINARY_PATH)) {
+  if (natsBinaryPinned(NATS_BINARY_PATH, NATS_PIN)) {
     output.raw(`  ✓ NATS binary found at ${NATS_BINARY_PATH}`);
     return;
   }
-  output.raw('  NATS binary not found — downloading...');
-  await downloadNats();
+  const found = existsSync(NATS_BINARY_PATH);
+  output.raw(
+    found
+      ? `  NATS binary at ${NATS_BINARY_PATH} is not the pinned v${NATS_PIN.version} — replacing it...`
+      : '  NATS binary not found — downloading...',
+  );
+  if (!(await downloadNats()) && found) output.warn(`Kept the NATS binary already at ${NATS_BINARY_PATH}`);
 }
 
-/** Download nats-server to `target` (a sandbox's own bin dir). No-op if it is already there. */
-export async function installNatsBinary(target: string, pin: NatsPin = NATS_PIN): Promise<boolean> {
-  if (existsSync(target)) return true;
-  return downloadNats(target, pin);
+/** Install the pinned nats-server at `target` (a sandbox's own bin dir), unless it is already there. */
+export async function installNatsBinary(target: string, pin: NatsPin = NATS_PIN): Promise<NatsInstall> {
+  if (natsBinaryPinned(target, pin)) return 'kept';
+  return (await downloadNats(target, pin)) ? 'installed' : 'failed';
 }

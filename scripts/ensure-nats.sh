@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Download NATS server binary if not present
+# Download the pinned NATS server binary unless it is already installed
 #
 # Usage: ./scripts/ensure-nats.sh
 #
@@ -8,6 +8,8 @@
 # (packages/cli/src/nats-pin.json), the same one `omni install` uses. The archive
 # is checked, size first, then sha256, before it is unpacked; a mismatch or a
 # platform the pin has no checksum for exits non-zero and leaves nothing behind.
+# A verified install leaves bin/nats-server.pin; a binary without the pinned
+# marker is replaced, renamed over, so a refused archive leaves it as it was.
 #
 # NATS_RELEASE_BASE overrides where the archive comes from (a mirror, or a test).
 #
@@ -37,13 +39,6 @@ case "$ARCH" in
     ;;
 esac
 
-# Check if already exists and is executable
-if [[ -x "$NATS_BINARY" ]]; then
-  echo "NATS server already installed at $NATS_BINARY"
-  "$NATS_BINARY" --version
-  exit 0
-fi
-
 # version, size and sha256 for this platform, from the pin (empty when it has none)
 # shellcheck disable=SC2016 # the quoted text is JavaScript, not shell
 read -r NATS_VERSION PINNED_SIZE PINNED_SHA256 < <(
@@ -58,6 +53,14 @@ if [[ -z "$PINNED_SHA256" ]]; then
   exit 1
 fi
 
+# A binary already there is kept only when its marker says it is the pinned release.
+MARKER="${NATS_VERSION#v} ${PINNED_SHA256}"
+if [[ -x "$NATS_BINARY" && "$(cat "$NATS_BINARY.pin" 2>/dev/null)" == "$MARKER" ]]; then
+  echo "NATS server ${NATS_VERSION} already installed at $NATS_BINARY"
+  "$NATS_BINARY" --version
+  exit 0
+fi
+
 echo "Installing NATS server ${NATS_VERSION} for ${OS}/${ARCH}..."
 
 ARCHIVE="nats-server-${NATS_VERSION}-${OS}-${ARCH}.tar.gz"
@@ -68,7 +71,7 @@ echo "Downloading from: $DOWNLOAD_URL"
 
 # Download, check, and extract
 TEMP_DIR=$(mktemp -d)
-trap 'rm -rf "$TEMP_DIR"' EXIT
+trap 'rm -rf "$TEMP_DIR" "$BIN_DIR/.nats-server.new" "$BIN_DIR/.nats-server.pin.new"' EXIT
 
 curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 --connect-timeout 10 "$DOWNLOAD_URL" -o "$TEMP_DIR/nats-server.tar.gz"
 
@@ -93,8 +96,12 @@ if [[ -z "$EXTRACTED_BINARY" ]]; then
 fi
 
 mkdir -p "$BIN_DIR"
-mv "$EXTRACTED_BINARY" "$NATS_BINARY"
-chmod +x "$NATS_BINARY"
+chmod +x "$EXTRACTED_BINARY"
+# Beside the target first, so the rename over it stays on one file system.
+mv "$EXTRACTED_BINARY" "$BIN_DIR/.nats-server.new"
+mv -f "$BIN_DIR/.nats-server.new" "$NATS_BINARY"
+printf '%s\n' "$MARKER" >"$BIN_DIR/.nats-server.pin.new"
+mv -f "$BIN_DIR/.nats-server.pin.new" "$NATS_BINARY.pin"
 
 echo "NATS server installed successfully!"
 "$NATS_BINARY" --version
