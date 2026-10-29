@@ -130,26 +130,6 @@ export async function selectOmniModel(rt, sessionId) {
   if (route !== undefined) await rt.selectSessionModel(sessionId, route)
 }
 
-// The Sessions other modules keep on the Omni Bot's model, per runtime (threads.js install).
-const following = new WeakMap()
-
-/**
- * Keeps a Session on the Omni Bot's model: selected now, and again whenever the Omni Bot's
- * own chat moves to another model. `select: false` only follows, selecting nothing now: a
- * Session saved earlier is on that model already, and a start that selects it on every saved
- * Session would open each of them. Returns the unfollow.
- */
-export function followOmniModel(rt, sessionId, { select = true } = {}) {
-  const followers = following.get(rt)
-  // The threads module installs the follow; a module before it in MODULES would follow nothing.
-  if (followers === undefined) rt.warn('omni-channels: followOmniModel called before the threads module is installed')
-  if (followers === undefined || typeof sessionId !== 'string' || sessionId === '') return () => {}
-  followers.add(sessionId)
-  if (!select) return () => { followers.delete(sessionId) }
-  void selectOmniModel(rt, sessionId).catch(error => rt.warn('omni-channels: the Omni Bot\'s model was not applied to %s: %s', sessionId, error?.message ?? error))
-  return () => { followers.delete(sessionId) }
-}
-
 /** The Sessions DSH archived, read without waiting; none before its registry is up. */
 export function archivedIds(ctx) {
   try {
@@ -185,12 +165,10 @@ export function install(rt) {
     }
   }
 
-  // The model: the threads and every Session another module follows (followOmniModel) take
-  // the Omni Bot's again when its own chat moves (DSH writes model/selection there when the
-  // team applies a Bot's model). One pass at a time, each Session on its own; selections that
-  // come while one waits make one pass, and a pass to the model the last one applied is none.
-  const followers = new Set()
-  following.set(rt, followers)
+  // The model: the threads take the Omni Bot's again when its own chat moves (DSH writes
+  // model/selection there when the team applies a Bot's model). One pass at a time, each
+  // Session on its own; selections that come while one waits make one pass, and a pass to the
+  // model the last one applied is none.
   let refollowing = Promise.resolve()
   let queued = false
   let applied = null
@@ -208,7 +186,7 @@ export function install(rt) {
       if (key === null || key === applied) return
       applied = key
       const gone = archivedIds(ctx)
-      for (const sessionId of new Set([...list().map(thread => thread.sessionId), ...followers])) {
+      for (const { sessionId } of list()) {
         if (gone.has(sessionId)) continue
         await rt.selectSessionModel(sessionId, route).catch(error => rt.warn('omni-channels: the Omni Bot\'s model was not applied to %s: %s', sessionId, error?.message ?? error))
       }
@@ -414,7 +392,6 @@ export function install(rt) {
     } catch (error) {
       throw refused(`The thread's chat key could not be cut, so the thread stays: ${error?.message ?? error}`)
     }
-    followers.delete(thread.sessionId)
     delete threads()[thread.id]
     await rt.save()
     await tell(removed, thread, 'removed')

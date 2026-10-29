@@ -8,7 +8,6 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { z } from 'zod'
 import { closeRun, excerptOf, fenced, isAskRun, pruneRuns, readsOnly, RUNS_KEPT, runId, SUMMARY_MAX } from './asks.js'
 import { operatesOmni } from './grants.js'
-import { setReadOnly } from './omni-rows.js'
 import { output } from './output.js'
 import { NEEDS_NEWER_TEAM } from './resume-hook.js'
 import { isStandingRun } from './standing-runs.js'
@@ -29,6 +28,12 @@ const ThreadWorker = z.object({ kind: z.literal('thread') }).strict()
 const THREAD_WORDS = new Set(['thread', 'chat thread', 'the chat thread', 'the chat\'s thread', 'its chat\'s thread', 'its thread'])
 // The chat an event came from and its channel, as the events stream gives them (omni-events.js).
 const EventChat = z.object({ instanceId: z.string().uuid(), chatId: z.string().uuid() })
+// DSH's read-only preset: no file changes, and a wider retry waits for the user.
+export const READ_PRESET = 'read-only'
+// A run still working in a leftover row's Session when it goes (retireRows), or when that
+// Session could not be archived yet and so takes no more work.
+export const ROW_RETIRED = 'Stopped: automations now run in their chats\' threads, so its session was archived.'
+export const ROW_UNARCHIVED = 'Stopped: automations now run in their chats\' threads, so its session takes no more work; it is archived at the next start.'
 // What `as` may be for a Bot: a mismatch is refused, never read as the default.
 const BOT_MODES = new Set(['task', 'chat'])
 // The workers retired once automations ran in their chats' threads: "a new session each time"
@@ -68,6 +73,21 @@ const refused = message => Object.assign(new Error(message), { code: 'bot/refuse
 const invalid = message => Object.assign(new Error(message), { code: 'bot/invalid' })
 const split = text => String(text ?? '').split(',').map(part => part.trim()).filter(Boolean)
 const yes = value => value === true || value === 'true' || value === 'yes'
+
+/**
+ * The Session put on DSH's read-only preset; resolves with the preset it was on. Throws when
+ * that cannot be set, so the work it was for does not start rather than start with more.
+ */
+export async function setReadOnly(rt, sessionId) {
+  const presets = rt.ctx.get?.('permissionPresets')
+  if (presets === undefined) throw new Error('this DeepSeek Harness has no permission presets')
+  if (!presets.catalog().options.some(option => option.value === READ_PRESET)) throw new Error(`this DeepSeek Harness offers no ${READ_PRESET} preset`)
+  const { session } = await rt.resolveAgent(sessionId)
+  const before = typeof presets.current === 'function' ? presets.current(session) : presets.catalog().defaultPreset
+  presets.set(session, READ_PRESET)
+  if (typeof presets.current === 'function' && presets.current(session) !== READ_PRESET) throw new Error(`the Session is on ${presets.current(session)}, not ${READ_PRESET}`)
+  return before
+}
 
 // One line a person can read: "when you react 📌 in Grupo Obras → Ops".
 export function sentenceOf(sub, nameOfWorker) {
@@ -239,11 +259,12 @@ export function install(rt) {
   // Saved automations whose worker was retired, or named one chat's thread, run each event in
   // the thread of its chat now (WORKER_MOVED): moved in memory at once, each with its one line
   // for the board (kept until it is saved again), its one ongoing Session's id dropped (the
-  // Session itself is the row's, retired by omni-rows.js, or its DSH bot's, which keeps it), and
-  // a host pause that named the old worker lifted (it stays off until the user turns it on). A
-  // chat-thread worker an older plugin paused, not knowing it (a downgrade, then this plugin
-  // again), is on again once it can take events. An event still queued for a retired worker's
-  // Session ends, saying why. Idempotent: true when anything moved, for the caller to save.
+  // Session itself is a leftover row's, archived by retireRows, or its DSH bot's, which keeps
+  // it), and a host pause that named the old worker lifted (it stays off until the user turns
+  // it on). A chat-thread worker an older plugin paused, not knowing it (a downgrade, then this
+  // plugin again), is on again once it can take events. An event still queued for a retired
+  // worker's Session ends, saying why. Idempotent: true when anything moved, for the caller to
+  // save.
   function moveRetiredWorkers() {
     let moved = false
     for (const sub of Object.values(subs())) {
@@ -267,12 +288,55 @@ export function install(rt) {
     }
     return moved
   }
-  // At start (standing-runs.js): the retired workers move, then the automations that cannot
-  // take events now (no hook, a worker this plugin does not know) pause with why; a read-only
-  // host changes nothing.
+  // The Sessions this plugin once kept under the Omni Bot's row (state.omniRows: an
+  // automation's "new session" or "ongoing session", Omni's hand-offs) and the DSH-bot
+  // hand-offs that had not reported (state.omniHandoffs), from before chat threads were all
+  // it draws there. Each row's Session is archived with its work stopped (its files and log
+  // stay on disk), then the row dropped; a run still working there ends as failed, saying why.
+  // A row whose Session cannot be archived stays for the next start, and its working runs end
+  // all the same, so the team's restart pass is never handed that Session (standing-
+  // recovery.js lists a working run's); nothing draws it meanwhile. The DSH-bot hand-offs are
+  // dropped: their Sessions are their bots', the owner's own. True when anything changed, for
+  // the caller to save.
+  async function retireRows() {
+    const handoffs = Object.hasOwn(state, 'omniHandoffs')
+    delete state.omniHandoffs
+    const rows = state.omniRows
+    if (typeof rows !== 'object' || rows === null) {
+      const had = Object.hasOwn(state, 'omniRows')
+      delete state.omniRows
+      return handoffs || had
+    }
+    const endRuns = (sessionId, summary) => {
+      for (const run of runs().filter(other => other.status === 'working' && other.sessionId === sessionId && isStandingRun(other))) {
+        rt.standingRuns?.finish(run.id, 'failed', summary)
+      }
+    }
+    for (const [key, row] of Object.entries(rows)) {
+      const sessionId = typeof row?.sessionId === 'string' ? row.sessionId : key
+      try {
+        await rt.ctx.workspaceRegistry.archiveSession(sessionId, { stopActivity: true })
+      } catch (error) {
+        // A Session DSH no longer has needs no archive.
+        if (error?.name !== 'WorkspaceUnknownSessionError') {
+          rt.warn('omni-channels: the leftover session %s was not archived, it waits for the next start: %s', sessionId, error?.message ?? error)
+          endRuns(sessionId, ROW_UNARCHIVED)
+          continue
+        }
+      }
+      delete rows[key]
+      endRuns(sessionId, ROW_RETIRED)
+    }
+    if (Object.keys(rows).length === 0) delete state.omniRows
+    return true
+  }
+  // At start (standing-runs.js): the leftover rows go, the retired workers move, then the
+  // automations that cannot take events now (no hook, a worker this plugin does not know)
+  // pause with why; a read-only host changes nothing.
   rt.pauseStrandedThreads = async () => {
     if (rt.readOnly?.() !== undefined) return false
-    const moved = moveRetiredWorkers()
+    const retired = await retireRows()
+    const moved = moveRetiredWorkers() || retired
     const paused = await rt.pauseAutomations(sub => workerProblem(sub.worker) !== null, sub => workerProblem(sub.worker))
     if (moved && paused.length === 0) {
       await rt.save()
