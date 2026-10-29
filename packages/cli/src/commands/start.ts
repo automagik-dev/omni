@@ -11,7 +11,7 @@ import { loadLocalRuntimeConfig, loadServerConfig } from '../config.js';
 import { getHealthCheckUrl, waitForHealth } from '../health.js';
 import { resolveManagedNatsHost, startManagedNats } from '../install-helpers.js';
 import { EMBEDDED_PGSERVE_DATA_DIR, readDataDirMajor } from '../lib/embedded-canonical-migration.js';
-import { NATS_BINARY_PATH } from '../nats-install.js';
+import { NATS_BINARY_PATH, ensureNats } from '../nats-install.js';
 import * as output from '../output.js';
 import { PM2_PROCESSES, buildPm2StartArgs, getPm2LogDir, isPm2Available, pm2NotFoundError, runPm2 } from '../pm2.js';
 import { buildRuntimeEnv } from '../runtime-env.js';
@@ -100,8 +100,10 @@ async function runStart(): Promise<void> {
   }
 
   // 4. (Re)create omni-nats if the binary exists — recreated, not restarted,
-  // so the current server.natsHost applies even to an older process.
+  // so the current server.natsHost applies even to an older process. A binary
+  // that is not the pinned release is replaced first (ensureNats).
   if (existsSync(NATS_BINARY_PATH)) {
+    await ensureNats();
     output.info(`Starting ${PM2_PROCESSES.nats} (bind address ${natsHost})...`);
     const natsCode = await startManagedNats({ dataDir: serverConfig.dataDir, host: natsHost });
     if (natsCode !== 0) {

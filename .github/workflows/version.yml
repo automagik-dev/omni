@@ -166,7 +166,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: bin/
-          key: nats-${{ runner.os }}-${{ hashFiles('scripts/ensure-nats.sh') }}
+          key: nats-${{ runner.os }}-${{ hashFiles('scripts/ensure-nats.sh', 'packages/cli/src/nats-pin.json') }}
 
       - name: Download NATS
         run: ./scripts/ensure-nats.sh

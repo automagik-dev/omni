@@ -13,7 +13,7 @@
  *   <home>/runtime/            @automagik/omni (+ pgserve off the autopg platforms), installed with bun
  *   <home>/autopg/<version>/   autopg's pinned release, where it has a build (autopg-runtime.ts)
  *   <home>/cache/              bun's package cache for that install
- *   <home>/bin/nats-server     its own NATS binary
+ *   <home>/bin/nats-server     its own NATS binary (nats-server.pin: the release it was verified as)
  *   <home>/data/{pg,nats,media,packages}
  *   <home>/pgserve/            autopg/pgserve's config dir and Postgres binaries
  *   <home>/run/                supervisor pid, status, Postgres socket dir
@@ -65,7 +65,7 @@ import {
   installAutopgRuntime,
 } from './autopg-runtime.js';
 import { quoteSystemdArg } from './install-helpers.js';
-import { installNatsBinary } from './nats-install.js';
+import { type NatsInstall, installNatsBinary } from './nats-install.js';
 import { buildNatsServerArgs } from './nats-server-args.js';
 import { generateApiKey } from './utils/keys.js';
 import { VERSION } from './version.js';
@@ -611,7 +611,8 @@ export interface SandboxDeps {
   spawnDetached(cmd: string[], opts: { cwd: string; env: Record<string, string>; logPath: string }): number;
   isPortFree(port: number): Promise<boolean>;
   health(apiUrl: string, timeoutMs: number): Promise<boolean>;
-  installNats(target: string): Promise<boolean>;
+  /** Installs the pinned nats-server at `target`, or keeps the one there when it is the pin. */
+  installNats(target: string): Promise<NatsInstall>;
   isAlive(pid: number): boolean;
   kill(pid: number, signal: NodeJS.Signals): void;
   now(): Date;
@@ -1251,6 +1252,10 @@ export async function installSandbox(
   const defaultHome = unitDefaultHome(previous, opts.defaultHome);
   const pg = resolveSandboxPg(layout, previous, opts, deps);
   ensureLayout(layout);
+  // Before anything stops: a nats-server that is not the pinned one is replaced only by a verified
+  // binary, renamed over it, and a refused one fails the install with the sandbox untouched.
+  const nats = await deps.installNats(layout.natsBinary);
+  if (nats === 'failed') throw new SandboxError(`Could not install the pinned nats-server at ${layout.natsBinary}`);
   const running = livePid(layout, deps) !== null;
   // A supervisor runs either on its own or under its launchd/systemd unit. Switching
   // at-login restarts it under the other, or launchd/systemd would not bring it back.
@@ -1259,6 +1264,7 @@ export async function installSandbox(
     (previous.packageSpec !== packageSpec ||
       previous.bun !== deps.bun ||
       previous.atLogin !== atLogin ||
+      nats === 'installed' ||
       pgChanged(layout, previous, pg));
   const stopped = Boolean(running && restart);
   if (stopped) await stopSandbox({ home: opts.home, defaultHome }, deps);
@@ -1273,9 +1279,6 @@ export async function installSandbox(
       });
     }
     version = await ensureRuntime(layout, packageSpec, pg.target === null, deps);
-    if (!existsSync(layout.natsBinary) && !(await deps.installNats(layout.natsBinary))) {
-      throw new SandboxError(`Could not install nats-server at ${layout.natsBinary}`);
-    }
   } catch (error) {
     // Nobody may be watching (an update from the app): bring back the sandbox that was running.
     if (stopped) await startSandbox({ home: opts.home, defaultHome }, deps).catch(() => undefined);
