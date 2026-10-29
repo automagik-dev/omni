@@ -60,15 +60,20 @@ describe('pack contract', () => {
     expect(checkEntries(entries)).toEqual([]);
   });
 
-  test('the sources typecheck under a consumer config with DOM libs and bun-types', () => {
-    const tsc = join(PACKAGE_DIR, 'node_modules/typescript/bin/tsc');
-    const run = spawnSync(process.execPath, [tsc, '-p', 'tsconfig.consumer.json'], {
-      cwd: PACKAGE_DIR,
-      encoding: 'utf8',
-    });
-    expect(`${run.stdout}${run.stderr}`.trim()).toBe('');
-    expect(run.status).toBe(0);
-  });
+  // A full typecheck in a subprocess needs more headroom than a fast unit test.
+  test(
+    'the sources typecheck under a consumer config with DOM libs and bun-types',
+    () => {
+      const tsc = join(PACKAGE_DIR, 'node_modules/typescript/bin/tsc');
+      const run = spawnSync(process.execPath, [tsc, '-p', 'tsconfig.consumer.json'], {
+        cwd: PACKAGE_DIR,
+        encoding: 'utf8',
+      });
+      expect(`${run.stdout}${run.stderr}`.trim()).toBe('');
+      expect(run.status).toBe(0);
+    },
+    { timeout: 20000 },
+  );
 
   test('the workspace manifest claims Bun 1.4.2 only, private, Apache-2.0', () => {
     const pkg = JSON.parse(readFileSync(join(PACKAGE_DIR, 'package.json'), 'utf8'));
