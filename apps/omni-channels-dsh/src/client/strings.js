@@ -2,6 +2,14 @@
 // (omni-ui) through addStrings, so the team's `t` translates them; the keys are the English
 // text. Words the team shows too (Channels, connected, Plugins…) are in its own copy.
 export const STRINGS = {
+  'Delete instance': '删除实例',
+  'Delete instance {name} ({id})?': '删除实例 {name}（{id}）？',
+  'Permanently delete instance': '永久删除实例',
+  'Deleting instance…': '正在删除实例…',
+  'Permanently deletes this instance configuration and its local chats and messages.': '永久删除此实例的配置及其本地聊天和消息。',
+  'Disconnect, logout and session cleanup are best effort. External token revocation or account unlinking is not guaranteed. Events are not all erased.': '将尽力断开连接、退出登录并清理会话，但不保证撤销外部令牌或解除账号关联，也不会清除所有事件。',
+  'Could not delete instance: {reason}. Check your access or connection, then try again.': '无法删除实例：{reason}。请检查权限或连接，然后重试。',
+  'Instance deleted, but refresh failed: {reason}. Refresh or wait for the next update.': '实例已删除，但刷新失败：{reason}。请刷新或等待下次更新。',
   'Every {n} days': '每 {n} 天',
   'Every {n} hours': '每 {n} 小时',
   'Every {n} min': '每 {n} 分钟',

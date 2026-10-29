@@ -83,6 +83,43 @@ this row's config, or on the team's `omni-ui` row where it lived before this plu
       url: https://omni.example.com
 ```
 
+## Delete an instance
+
+A live channel's detail page offers **Delete instance** for every channel type and state.
+It uses the existing channel-write ability (read-only keys see a disabled action). The first
+click names the instance and its ID and offers **Cancel**; only **Permanently delete instance**
+sends a request. Preview **Disconnect** stays local and never calls the API.
+
+The host's standard write endpoint, `omni-channel-act` with `action: 'delete'`, calls the
+supported `DELETE /api/v2/instances/{id}` through `rt.omniRequest('DELETE', '/instances/{id}')`.
+It does not add a backend permission or deletion policy. Pairing's `omni-channel-cancel`
+remains limited to channels created by that unfinished flow
+([host actions](<src/host/omni-channel-actions.js>)).
+
+Verified backend semantics: the route attempts runtime disconnect, deletes the instance,
+then attempts plugin logout/session cleanup; disconnect and logout failures are best effort
+([API route](<../../packages/api/src/routes/v2/instances.ts#L1390-L1420>)). The instance
+configuration and its local chats/messages are permanently deleted through the database
+cascades ([chats](<../../packages/db/src/schema.ts#L1608-L1612>),
+[messages](<../../packages/db/src/schema.ts#L1809-L1815>)). This does **not** guarantee
+external token revocation or external account unlinking. Events are not all erased: event
+rows retain their data with a null instance reference
+([events](<../../packages/db/src/schema.ts#L1981-L1987>)), and the service publishes
+`instance.disconnected` with reason `deleted`
+([instance service](<../../packages/api/src/services/instances.ts#L489-L516>)).
+
+The page keeps the instance and its chats until the delete succeeds. Failure keeps its
+details and gives an error with a retry; success clears only its cached chats/messages,
+seen state and matching selection, including cached chats omitted by the recent-chat overview.
+A bounded ownership map remembers only current chats or IDs with retained data/selection;
+late send callbacks from the deleted instance cannot recreate caches or errors. Sends from
+other instances still finish even if their chats leave the recent list.
+Navigation to another channel is preserved. Duplicate
+submissions are blocked across redraws, and a generation guard discards reads overlapping
+deletion so stale polls cannot restore removed data. A refresh failure after successful
+deletion is reported separately, without treating deletion as failed
+([client store](<src/client/omni-store.js>), [detail view](<src/client/channels.js>)).
+
 ## How it plugs into the team
 
 - **Host**: it injects the team's runtime (`omniTeam`) and installs `subscriptions`,

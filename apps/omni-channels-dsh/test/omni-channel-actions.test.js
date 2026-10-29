@@ -101,7 +101,33 @@ test('reconnect, resume, pause and a new token call omni\'s own routes', async (
     ['POST', `/instances/${CHANNEL}/disconnect`, undefined],
     ['POST', `/instances/${CHANNEL}/connect`, { token: '123456:NEW-token' }],
   ])
-  await assert.rejects(run('omni-channel-act', { id: CHANNEL, action: 'delete' }), { code: 'bot/invalid' })
+  await assert.rejects(run('omni-channel-act', { id: CHANNEL, action: 'unknown' }), { code: 'bot/invalid' })
+})
+
+test('explicit delete uses the standard write endpoint for an existing instance, not pending cancellation', async () => {
+  const { run, calls, rt } = host({ [`DELETE /instances/${CHANNEL}`]: () => [200, { success: true }] })
+  assert.deepEqual(await run('omni-channel-cancel', { id: CHANNEL }), { removed: false })
+  assert.deepEqual(await run('omni-channel-act', { id: CHANNEL, action: 'delete' }), { ok: true })
+  assert.deepEqual(calls.map(({ method, path, body }) => [method, path, body]), [['DELETE', `/instances/${CHANNEL}`, undefined]])
+  // The same registration as pause/create: not a read and no custom permission bypass.
+  assert.equal(rt.extended.endpointOf('omni-channel-act').read, false)
+  assert.equal(rt.extended.endpointOf('omni-channel-cancel').read, false)
+  assert.equal(rt.extended.endpointOf('omni-channel-abilities').read, true)
+  await assert.rejects(run('omni-channel-act', { id: '../bad', action: 'delete' }), { code: 'bot/invalid' })
+  assert.equal(calls.length, 1)
+})
+
+test('delete propagates API failures and the existing permission model', async () => {
+  const malformed = host({ [`DELETE /instances/${CHANNEL}`]: () => [200, { success: false }] })
+  await assert.rejects(malformed.run('omni-channel-act', { id: CHANNEL, action: 'delete' }), { code: 'bot/invalid', message: 'Omni did not confirm instance deletion' })
+  const unreachable = host({ [`DELETE /instances/${CHANNEL}`]: () => { throw new Error('Offline') } })
+  await assert.rejects(unreachable.run('omni-channel-act', { id: CHANNEL, action: 'delete' }), { code: 'bot/refused', message: 'Could not reach your Omni. Try again in a moment.' })
+  for (const status of [401, 403, 404, 500]) {
+    const { run } = host({ [`DELETE /instances/${CHANNEL}`]: () => [status, { error: { message: 'Try again later' } }] })
+    await assert.rejects(run('omni-channel-act', { id: CHANNEL, action: 'delete' }), {
+      code: 'bot/refused', message: status === 401 || status === 403 ? FORBIDDEN_CHANGE : 'Try again later',
+    })
+  }
 })
 
 test('a reply goes to the chat\'s own instance and address; refusals say why', async () => {
