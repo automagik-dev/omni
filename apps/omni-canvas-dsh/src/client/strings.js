@@ -17,6 +17,7 @@ export const STRINGS = {
   'The canvas is too long.': '画布太长了。',
   'The canvas must start with root = Stack(...).': '画布必须以 root = Stack(...) 开头。',
   'The canvas names something it never defines: {names}.': '画布引用了未定义的内容：{names}。',
+  '{name} has an invalid {field}: {reason}': '{name} 的 {field} 不合法：{reason}',
   'This view could not be drawn: {reason}': '无法绘制这个视图：{reason}',
   'Unknown component {name}.': '未知组件 {name}。',
   'Ask to fix it': '让它修正',

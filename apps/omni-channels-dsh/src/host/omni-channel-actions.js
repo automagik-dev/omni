@@ -11,6 +11,8 @@
 // stays read-only for channels, without messages:send for replies. An Omni from before that
 // route is tried, and a 403 says the key cannot.
 import { z } from 'zod'
+import { settingsSchemas } from './channel-settings.js'
+const Settings = settingsSchemas(z)
 
 // The channel types the page adds here, with how each pairs. Slack's sign-in creates its
 // channel on Omni's side (omni-slack-start), and WhatsApp Business is created and connected
@@ -252,6 +254,38 @@ export function install(rt) {
     return { ok: true }
   }
 
+  async function settings(body) {
+    const { id: channelId } = parse(ChannelPayload.strict(), body, 'Unknown channel')
+    const instance = parse(Instance, await must('GET', `/instances/${channelId}`), 'Omni did not return the channel')
+    return { settings: parse(Settings.read, instance.data, 'Omni returned invalid settings') }
+  }
+  async function saveSettings(body) {
+    const payload = parse(z.object({ id, patch: Settings.patch }).strict(), body, 'Check the channel settings')
+    const reply = await request('PATCH', `/instances/${payload.id}`, payload.patch)
+    if (reply.status === 401 || reply.status === 403) throw refused(FORBIDDEN_CHANGE)
+    if (!reply.ok) throw refused(reply.status === 400
+      ? `Settings rejected (${Object.keys(payload.patch).join(', ')}). Check types, limits and JSON shapes; update Omni if fields are unsupported.`
+      : reply.message ?? `Omni answered ${reply.status}`)
+    return { ok: true }
+  }
+  async function agents() {
+    return parse(z.object({ items: z.array(z.object({ id, name: z.string().max(255) })) }),
+      await must('GET', '/agents?limit=200'), 'Omni did not return the agents')
+  }
+  async function wabRepair(body) {
+    const payload = parse(z.object({ id, accessToken: token, phoneNumberId: metaId, wabaId: metaId,
+      appId: metaId.optional(), businessId: metaId.optional() }).strict(), body, 'Re-enter the token and Meta identifiers')
+    const { id: channelId, ...credentials } = payload
+    // Never reuse wabConnect: its create/cleanup lifecycle must not own an existing channel.
+    try {
+      await must('POST', `/instances/${channelId}/whatsapp-business/connect`, credentials)
+    } catch (error) {
+      // A provider error can quote credentials. The server persists them before connecting.
+      throw refused(error.message === FORBIDDEN_CHANGE ? FORBIDDEN_CHANGE : 'Could not reconnect. Credentials may have been saved; check the token and identifiers and retry.')
+    }
+    return { ok: true }
+  }
+
   async function send(body) {
     const payload = parse(SendPayload, body, 'Type a message')
     const chat = parse(Chat, await must('GET', `/chats/${payload.chatId}`, undefined, FORBIDDEN_SEND), 'Omni does not know that chat')
@@ -262,8 +296,10 @@ export function install(rt) {
   const ENDPOINTS = {
     'omni-channel-create': create, 'omni-channel-phone-code': phoneCode, 'omni-channel-cancel': cancel, 'omni-channel-act': act, 'omni-send': send,
     'omni-slack-start': slackStart, 'omni-slack-result': slackResult, 'omni-wab-connect': wabConnect,
+    'omni-channel-settings-save': saveSettings, 'omni-wab-repair': wabRepair,
   }
-  const READS = { 'omni-channel-abilities': readAbilities, 'omni-channel-pairing': pairing, 'omni-channel-types': types, 'omni-slack-app': slackApp }
+  const READS = { 'omni-channel-abilities': readAbilities, 'omni-channel-pairing': pairing, 'omni-channel-types': types, 'omni-slack-app': slackApp,
+    'omni-channel-settings': settings, 'omni-channel-agents': agents }
   rt.omniChannelEndpoint = (endpoint, body) => {
     const run = READS[endpoint] ?? ENDPOINTS[endpoint]
     if (!run) throw invalid(`Unknown endpoint ${endpoint}`)

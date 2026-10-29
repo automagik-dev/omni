@@ -428,11 +428,10 @@ export function install(rt) {
     },
   }
 
-  // For the tree: the threads under their channels, whether a chat can be added, and the row
-  // props the team draws a thread row with. A turn this start has not seen is not running.
+  // For the tree: the threads under their channels and the row props the team draws a thread
+  // row with. A turn this start has not seen is not running.
   rt.threadsView = () => {
     const live = rt.readOnly?.() === undefined
-    const linked = (rt.omniLink?.() ?? null) !== null
     const threadList = list()
     // Each thread's reason, from one read of the key file; the team's own on a team without the hook.
     const reasons = ready() ? rt.threadKeys?.reasonsOf(threadList.map(thread => thread.id)) ?? new Map() : null
@@ -445,12 +444,20 @@ export function install(rt) {
           permissions: permissionsOf(thread, state.omniSettings), ownPermissions: ownPermissionsOf(thread), defaultPermissions: permissionsOf(undefined, state.omniSettings),
         }
       }),
-      omniThreadsOffered: ready() && linked,
-      omniThreadsReason: ready() ? (linked ? null : NOT_LINKED) : rt.teamResume?.reason ?? NEEDS_NEWER_TEAM,
       omniRowProps: ready() ? [...TEAM_CONTRACT.rowProps] : [],
     }
   }
+  // Whether a chat can be added, and why not: with every state answer (live), not only with a
+  // new team revision, so the + under each channel follows the link and the team at once.
+  rt.threadsOffer = () => {
+    const linked = (rt.omniLink?.() ?? null) !== null
+    return {
+      omniThreadsOffered: ready() && linked,
+      omniThreadsReason: ready() ? (linked ? null : NOT_LINKED) : rt.teamResume?.reason ?? NEEDS_NEWER_TEAM,
+    }
+  }
   ctx.effect(() => rt.hooks.view(() => rt.threadsView()), 'omni-channels: threads view')
+  ctx.effect(() => rt.hooks.live(() => rt.threadsOffer()), 'omni-channels: threads offer')
 
   const parse = (schema, value, what) => {
     const parsed = schema.safeParse(value ?? {})
@@ -475,7 +482,7 @@ export function install(rt) {
     'omni-thread-add': async (body) => {
       const payload = parse(AddPayload, body, 'Pick a chat of this channel')
       const result = await add(payload.channelId, payload.chatId)
-      return result.ok ? { ok: true, threadId: result.thread.id } : result
+      return result.ok ? { ok: true, threadId: result.thread.id, sessionId: result.thread.sessionId } : result
     },
     'omni-thread-remove': async (body) => {
       const payload = parse(RemovePayload, body, 'Pick a thread')

@@ -33,7 +33,7 @@ const storage = new Map()
 const localStorage = { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, String(value)) }
 
 const loadTree = () => bundleClient([
-  'export { OmniTree, ThreadRow, ThreadPicker, ThreadDock, plusOf, teamReady, threadsOf, rowPropsOf, isThreadSession, freeMarkOf, permissionMenuOf, OMNI_OUTDATED, OMNI_TREE_CSS } from \'./omni-tree.js\'',
+  'export { OmniTree, ThreadRow, ThreadPicker, ThreadDock, plusOf, teamReady, threadsOf, rowPropsOf, isThreadSession, freeMarkOf, permissionMenuOf, OMNI_OUTDATED, OFFER_UNKNOWN, OMNI_TREE_CSS } from \'./omni-tree.js\'',
   'export { openConnectWizard } from \'./wizard.js\'',
   'export { omniStore, startLive, loadLink, refreshLive } from \'./omni-store.js\'',
 ], { globals: { URL, URLSearchParams, setTimeout, clearTimeout, document, localStorage }, team: { omni: { ...omni, call: fakeCall } } })
@@ -167,6 +167,44 @@ test('the + gets the focus back when its picker closes, and folding a channel cl
   assert.equal(all(view.draw(), 'ot-picker').length, 0)
   one(channelOf(view.draw(), CHANNEL_A), 'ot-channel-row').props.onClick()
   assert.equal(all(view.draw(), 'ot-picker').length, 0)
+})
+
+test('picking a chat opens its new thread, the owner\'s own click; a refused add opens nothing', async (t) => {
+  linked()
+  const { view, opened } = tree(t, { roster: hooked() })
+  let added = { ok: false, reason: 'Could not reach Omni. Try again in a moment.' }
+  answer = endpoint => (endpoint === 'omni-thread-chats' ? { chats: [{ id: 'c2', name: 'Chat 2', jid: '2@s.whatsapp.net', added: false }] } : endpoint === 'omni-thread-add' ? added : {})
+  const pick = async () => {
+    byLabel(channelOf(view.draw(), CHANNEL_A), 'Add a chat').props.onClick()
+    view.draw()
+    await settle()
+    one(view.draw(), 'ot-picker-chat').props.onClick()
+    await settle()
+    await settle()
+  }
+  await pick()
+  assert.deepEqual(opened, [])
+  added = { ok: true, threadId: 't2', sessionId: 's2' }
+  one(view.draw(), 'ot-picker-chat').props.onClick()
+  await settle()
+  await settle()
+  assert.deepEqual(opened, ['s2'])
+  assert.equal(all(view.draw(), 'ot-picker').length, 0)
+})
+
+test('a roster that does not say whether a chat can be added shows no + and says it is not ready, never a bare row', (t) => {
+  linked()
+  const { view } = tree(t, { roster: { omniThreads: [], omniRowProps: [...TEAM_CONTRACT.rowProps] } })
+  const root = view.draw()
+  assert.equal(byLabel(root, 'Add a chat'), undefined)
+  assert.deepEqual(all(root, 'ot-empty').map(text), [ui.OFFER_UNKNOWN, ui.OFFER_UNKNOWN])
+  assert.deepEqual(plain(ui.plusOf({}, { link: null })), { offered: false, reason: ui.OFFER_UNKNOWN })
+})
+
+test('the + shows on a channel\'s hover or keyboard focus and stays while its picker is open', () => {
+  assert.match(ui.OMNI_TREE_CSS, /\.ot-plus\{[^}]*opacity:0/)
+  assert.match(ui.OMNI_TREE_CSS, /\.ot-channel-head:hover \.ot-plus,\.ot-channel-head:focus-within \.ot-plus,\.ot-plus\[aria-expanded=true\]\{opacity:1\}/)
+  assert.match(ui.OMNI_TREE_CSS, /@media \(hover:none\)\{\.ot-plus\{opacity:1\}\}/)
 })
 
 test('a folded channel keeps its thread rows out of the tab order', (t) => {

@@ -4,7 +4,13 @@
 
 import { zValidator } from '@hono/zod-validator';
 import type { ChannelPlugin, ChannelRegistry, GroupParticipantUpdateResult } from '@omni/channel-sdk';
-import { AccessModeSchema, ChannelTypeSchema, NotFoundError, createLogger } from '@omni/core';
+import {
+  AccessModeSchema,
+  ChannelTypeSchema,
+  FollowUpSequenceConfigSchema,
+  NotFoundError,
+  createLogger,
+} from '@omni/core';
 import type { GupshupHandoffOptions } from '@omni/db';
 import { type Context, Hono } from 'hono';
 import { z } from 'zod';
@@ -20,6 +26,7 @@ import { getQrCode } from '../../plugins/qr-store';
 import {
   CloseContactConfigSchema,
   GupshupHandoffOptionsSchema,
+  InstanceSettingsSchema,
   SelfChatsSchema,
   SelfHistorySchema,
   SelfMessagesSchema,
@@ -28,6 +35,7 @@ import {
 import type { Services } from '../../services';
 import { PairingRequestConsumedError, PairingRequestExpiredError } from '../../services/access';
 import { AgentReplayService } from '../../services/agent-replay';
+import { ApiKeyService } from '../../services/api-keys';
 import {
   readOwnedChats,
   readOwnedHistory,
@@ -440,6 +448,14 @@ const updateInstanceSchema = createInstanceSchema
     // Strip the .default('humanized') so a PATCH that omits it never resets the stored pacing.
     outboundPacing: z.enum(['humanized', 'immediate']).optional(),
     outboundPacingOverride: z.boolean().optional(),
+  })
+  .extend(InstanceSettingsSchema.shape)
+  .extend({
+    agentReplyFilter: agentReplyFilterSchema.nullable().optional(),
+    followUpConfig: FollowUpSequenceConfigSchema.nullable().optional(),
+    metaConnectedAt: InstanceSettingsSchema.shape.metaConnectedAt.transform((value) =>
+      typeof value === 'string' ? new Date(value) : value,
+    ),
   })
   // #1211: reject unknown fields (400 naming the key) instead of silently stripping them.
   .strict();
@@ -1227,14 +1243,35 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
   return c.json({ data: sanitizeInstance(instance) }, 201);
 });
 
+async function denyInstanceUpdate(c: Context<{ Variables: AppVariables }>, data: z.infer<typeof updateInstanceSchema>) {
+  const pacingDenied = denyPacingOverrideForScopedKey(c, data.outboundPacingOverride);
+  if (pacingDenied) return pacingDenied;
+  if (!data.agentChainToInstanceId && (!data.chainMode || data.chainMode === 'off')) return;
+  const services = c.get('services');
+  const targetId =
+    data.agentChainToInstanceId !== undefined
+      ? data.agentChainToInstanceId
+      : (await services.instances.getById(c.req.param('id') ?? '')).agentChainToInstanceId;
+  if (!targetId) return;
+  const key = c.get('apiKey');
+  const denied = () => c.json({ error: { code: 'FORBIDDEN', message: 'Chain target is not accessible' } }, 403);
+  if (!key || !ApiKeyService.instanceAllowed(key.instanceIds, targetId)) return denied();
+  try {
+    await services.instances.getById(targetId);
+  } catch (error) {
+    if (!(error instanceof NotFoundError)) throw error;
+    return denied();
+  }
+}
+
 /**
  * PATCH /instances/:id - Update instance
  */
 instancesRoutes.patch('/:id', instanceAccess, zValidator('json', updateInstanceSchema), async (c) => {
   const id = c.req.param('id');
   const { force, ...data } = c.req.valid('json');
-  const pacingDenied = denyPacingOverrideForScopedKey(c, data.outboundPacingOverride);
-  if (pacingDenied) return pacingDenied;
+  const denied = await denyInstanceUpdate(c, data);
+  if (denied) return denied;
   const services = c.get('services');
 
   // The conflict is keyed on the PAIR (app token, bot mode), so either field

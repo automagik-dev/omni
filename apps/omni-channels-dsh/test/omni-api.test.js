@@ -55,6 +55,17 @@ test('routes omni declares but leaves out of its API description are found and c
   assert.equal(search(ops, 'unread chats')[0].path, '/chats')
 })
 
+test('source route descriptions retain multiline PATCH extensions', async () => {
+  const { sourceRoutes } = await import('../scripts/omni-routes.mjs')
+  const home = mkdtempSync(join(tmpdir(), 'omni-routes-'))
+  const { mkdirSync } = await import('node:fs')
+  mkdirSync(join(home, 'src/routes/v2'), { recursive: true })
+  writeFileSync(join(home, 'src/routes/v2/index.ts'), "import { instancesRoutes } from './instances';\nv2Routes.route('/instances', instancesRoutes)")
+  writeFileSync(join(home, 'src/routes/v2/instances.ts'), "const updateInstanceSchema = createInstanceSchema\n.partial()\n.extend(InstanceSettingsSchema.shape)\n.strict();\ninstancesRoutes.patch('/:id', zValidator('json', updateInstanceSchema), () => {})")
+  try { assert.match(sourceRoutes(home)[0].body, /InstanceSettingsSchema\.shape.*strict/) }
+  finally { rmSync(home, { recursive: true, force: true }) }
+})
+
 test('routes of a router mounted at the root keep their own full path', async () => {
   const { SOURCE_ROUTES } = await import('../src/host/omni-routes.js')
   assert.ok(SOURCE_ROUTES.some(route => route.method === 'GET' && route.path === '/events/consumers'))

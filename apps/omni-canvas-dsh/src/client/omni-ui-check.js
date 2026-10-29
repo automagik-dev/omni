@@ -15,7 +15,42 @@ const DEPTH_MAX = 48
 const library = libraryOf({ createLibrary, defineComponent, reactive: (schema) => { markReactive(schema); return schema } })
 const parser = createParser(library.toJSONSchema(), library.root)
 const ALLOWED = new Set([...SPECS.map(([name]) => name), ...BUILTIN_NAMES, 'Query'])
+const PROPS = new Map(SPECS.map(([name, , props]) => [name, props]))
 const say = (text, params) => (params ? { text, params } : { text })
+
+// OpenUI validates the argument types it knows, but not every bound in the JSON schema (a
+// 61-item Section or 13-column Board would otherwise pass). Validate the resolved element
+// tree against the same Zod schemas the library is built from, skipping a component whose
+// props are still expressions (@Each, a $binding, a Query field): those resolve at run time.
+const isExpression = value => value !== null && typeof value === 'object' && typeof value.k === 'string'
+function hasExpression(value) {
+  if (isExpression(value)) return true
+  if (Array.isArray(value)) return value.some(hasExpression)
+  if (value !== null && typeof value === 'object') return Object.values(value).some(hasExpression)
+  return false
+}
+function checkProps(root) {
+  const seen = new WeakSet()
+  const pending = [root]
+  while (pending.length > 0) {
+    const value = pending.pop()
+    if (value === null || typeof value !== 'object' || seen.has(value)) continue
+    seen.add(value)
+    if (value.type === 'element' && PROPS.has(value.typeName) && !hasExpression(value.props)) {
+      const result = PROPS.get(value.typeName).safeParse(value.props)
+      if (!result.success) {
+        const issue = result.error.issues[0]
+        return say('{name} has an invalid {field}: {reason}', {
+          name: value.typeName,
+          field: issue.path.join('.') || 'arguments',
+          reason: issue.message,
+        })
+      }
+    }
+    for (const child of Object.values(value)) pending.push(child)
+  }
+  return null
+}
 
 // The first line whose brackets or quotes do not close, for an incomplete program.
 export function unclosedLine(program) {
@@ -82,6 +117,8 @@ export function checkProgram(program) {
     const errors = result.meta.errors.filter(error => error.code !== 'excess-args')
     if (errors.length > 0) return say(errors.slice(0, 3).map(error => error.message).join(' '))
     if (result.meta.unresolved.length > 0) return say('The canvas names something it never defines: {names}.', { names: result.meta.unresolved.slice(0, 3).join(', ') })
+    const props = checkProps(result.root)
+    if (props) return props
     const open = unclosedLine(source)
     if (open) return say('Line {line} does not close its brackets or quotes: {text}', open)
     return null

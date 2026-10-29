@@ -11,6 +11,8 @@ const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.
 
 test('client.js is the build of src/client', async () => {
   assert.equal(await bundleClient(), committed(), 'client.js is stale: run `npm run build` and commit it')
+  assert.match(committed(), /omni-channel-settings-save/)
+  assert.match(committed(), /omni-wab-repair/)
 })
 
 test('the team\'s client bundle is named in dsh.client.external, so DSH loads it first and shares it', () => {

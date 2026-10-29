@@ -252,6 +252,7 @@ test('apply registers its listeners, tools and effects after the team\'s, in a f
     'effect omni-channels: thread instructions',
     'prompt omni-thread 650',
     'effect omni-channels: threads view',
+    'effect omni-channels: threads offer',
     'effect omni-channels: omni-thread-chats',
     'effect omni-channels: omni-thread-add',
     'effect omni-channels: omni-thread-remove',
@@ -283,6 +284,8 @@ test('apply registers its listeners, tools and effects after the team\'s, in a f
     'effect omni-channels: omni-channel-pairing',
     'effect omni-channels: omni-channel-types',
     'effect omni-channels: omni-slack-app',
+    'effect omni-channels: omni-channel-settings',
+    'effect omni-channels: omni-channel-agents',
     'effect omni-channels: omni-channel-create',
     'effect omni-channels: omni-channel-phone-code',
     'effect omni-channels: omni-channel-cancel',
@@ -291,6 +294,8 @@ test('apply registers its listeners, tools and effects after the team\'s, in a f
     'effect omni-channels: omni-slack-start',
     'effect omni-channels: omni-slack-result',
     'effect omni-channels: omni-wab-connect',
+    'effect omni-channels: omni-channel-settings-save',
+    'effect omni-channels: omni-wab-repair',
     'provide omniChannels',
   ])
   assert.ok(!own.includes('on llm/stream'))

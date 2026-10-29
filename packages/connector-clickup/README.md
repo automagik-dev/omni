@@ -28,10 +28,49 @@ messages.
 | `update_task`     | `PUT /task/{taskId}` (fields and status)                |
 | `add_comment`     | `POST /task/{taskId}/comment`                           |
 | `list_tasks`      | `GET /list/{listId}/task?archived=false&subtasks=false` |
+| `list_spaces`     | `GET /team/{teamId}/space?archived=false`               |
+| `list_folders`    | `GET /space/{spaceId}/folder?archived=false`            |
+| `list_lists`      | `GET /space/{spaceId}/list?archived=false` (or `/folder/{folderId}/list?archived=false`) |
 
 Actions run through `connector.call` in an automation
 (`{ "type": "connector.call", "config": { "connectorId": "...", "action": "add_comment", "input": { "taskId": "{{payload.task_id}}", "comment": "Done" } } }`)
 or directly through `POST /api/v2/connectors/:id/actions/:action`.
+
+### Discovery
+
+The three discovery actions let a caller walk spaces → folders → lists and find
+the `listId` the task actions need; no id has to be obtained out of band.
+
+- `list_spaces` takes an optional `teamId`. It resolves in this order: the
+  action input, the connector's configured `teamId`, then every Workspace
+  `GET /team` returns for the token. The last path is token-derived discovery:
+  when a token can see several Workspaces, their spaces are returned together,
+  each tagged with its `teamId` — Omni does not pick one arbitrarily.
+- `list_folders` requires `spaceId`.
+- `list_lists` requires `spaceId` and takes an optional `folderId`. With a
+  folder it reads that folder's lists; without one it reads the space's
+  folderless lists.
+
+Every action returns the same node shape:
+
+```json
+{
+  "spaces": [
+    { "id": "789", "name": "Product", "teamId": "123", "archived": false },
+    { "id": "790", "name": "Marketing", "teamId": "123", "archived": false }
+  ]
+}
+```
+
+`folders` and `lists` replace `spaces` as the collection key. Each node always
+has `id`, `name` and `archived` (`archived` is `false` when ClickUp omits it),
+plus the parent ids that are known: `teamId` on spaces, `spaceId` on folders and
+lists, `folderId` on lists read through a folder, and `parentFolderId` on a
+subfolder returned in the flat folder list.
+
+Discovery failures use fixed, payload-free messages: `401` invalid or expired
+token, `403` missing permission for that team/space/folder, `404` wrong or
+nonexistent id in that scope.
 
 ## Events
 

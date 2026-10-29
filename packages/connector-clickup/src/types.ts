@@ -3,8 +3,9 @@
  *
  * Two boundaries live here:
  *   - the ACTION INPUT schemas (`create_task`, `update_task`, `add_comment`,
- *     `list_tasks`), validated after template rendering and before any
- *     provider call;
+ *     `list_tasks` and the `list_spaces`/`list_folders`/`list_lists` discovery
+ *     pairings), validated after template rendering and before any provider
+ *     call;
  *   - the API RESPONSE schemas, validated before anything else sees provider
  *     JSON.
  *
@@ -63,6 +64,32 @@ export const ListTasksInputSchema = z
   .object({
     /** Target list; falls back to the connector's configured default list id. */
     listId: clickUpId.optional(),
+  })
+  .strict();
+
+/**
+ * Discovery inputs. `teamId` is optional because the connector config may carry
+ * a default team id; with neither, `list_spaces` uses GET /team (the token's
+ * own workspaces) instead of inventing one. `spaceId` is required for the
+ * folder/list walks, and `folderId` switches `list_lists` from the space's
+ * folderless lists to a folder's lists.
+ */
+export const ListSpacesInputSchema = z
+  .object({
+    teamId: clickUpId.optional(),
+  })
+  .strict();
+
+export const ListFoldersInputSchema = z
+  .object({
+    spaceId: clickUpId,
+  })
+  .strict();
+
+export const ListListsInputSchema = z
+  .object({
+    spaceId: clickUpId,
+    folderId: clickUpId.optional(),
   })
   .strict();
 
@@ -140,9 +167,35 @@ export const ClickUpTasksResponseSchema = z
   })
   .passthrough();
 
+/**
+ * The hierarchy fields a Space, Folder and List have in common. ClickUp returns
+ * `archived` only for some collections and nests the parent space/folder as an
+ * object; both are normalized by the manifest before the result leaves.
+ */
+export const ClickUpNavItemResponseSchema = z
+  .object({
+    id: apiId,
+    name: z.string(),
+    archived: z.boolean().nullish(),
+    /** Set on a subfolder returned by GET /space/{id}/folder (flat list). */
+    parent_folder: z.union([z.string(), z.number()]).nullish(),
+    // Metadata we do not read, accepted leniently: ClickUp sends `{}` for a
+    // list with no folder, and the id can be absent there.
+    space: z.object({ id: apiId.optional() }).passthrough().nullish(),
+    folder: z.object({ id: apiId.optional() }).passthrough().nullish(),
+  })
+  .passthrough();
+
+export const ClickUpSpacesResponseSchema = z.object({ spaces: z.array(ClickUpNavItemResponseSchema) }).passthrough();
+
+export const ClickUpFoldersResponseSchema = z.object({ folders: z.array(ClickUpNavItemResponseSchema) }).passthrough();
+
+export const ClickUpListsResponseSchema = z.object({ lists: z.array(ClickUpNavItemResponseSchema) }).passthrough();
+
 export type ClickUpTeam = z.infer<typeof ClickUpTeamsResponseSchema>['teams'][number];
 export type ClickUpApiTask = z.infer<typeof ClickUpTaskResponseSchema>;
 export type ClickUpApiComment = z.infer<typeof ClickUpCommentResponseSchema>;
+export type ClickUpApiNavItem = z.infer<typeof ClickUpNavItemResponseSchema>;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Normalized results (what the API/automations see — never raw ClickUp JSON)
@@ -165,4 +218,41 @@ export interface ClickUpTaskList {
   tasks: ClickUpTask[];
 }
 
-export type ClickUpActionResult = ClickUpTask | ClickUpComment | ClickUpTaskList;
+/**
+ * One navigable node: a Space, Folder or List. The shape is identical across
+ * the discovery actions; a parent field is present only when that parent is
+ * known. `archived` is always a boolean (ClickUp omits it for active nodes).
+ */
+export interface ClickUpNavItem {
+  id: string;
+  name: string;
+  archived: boolean;
+  /** Present on `list_spaces` results. */
+  teamId?: string;
+  /** Present on `list_folders` and `list_lists` results. */
+  spaceId?: string;
+  /** Present on `list_lists` results queried through a folder. */
+  folderId?: string;
+  /** Present on `list_folders` results for a subfolder. */
+  parentFolderId?: string;
+}
+
+export interface ClickUpSpacesResult {
+  spaces: ClickUpNavItem[];
+}
+
+export interface ClickUpFoldersResult {
+  folders: ClickUpNavItem[];
+}
+
+export interface ClickUpListsResult {
+  lists: ClickUpNavItem[];
+}
+
+export type ClickUpActionResult =
+  | ClickUpTask
+  | ClickUpComment
+  | ClickUpTaskList
+  | ClickUpSpacesResult
+  | ClickUpFoldersResult
+  | ClickUpListsResult;
