@@ -83,6 +83,7 @@ const EGRESS_SCAN_ROOTS = [
   'packages/channel-twilio-whatsapp/src',
   'packages/channel-whatsapp/src',
   'packages/channel-sdk/src',
+  'packages/connector-clickup/src',
 ] as const;
 
 function isTestFile(path: string): boolean {

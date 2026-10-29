@@ -86,6 +86,8 @@ const TIER_BY_VERB: Readonly<Record<string, ScopeTier>> = Object.freeze({
   /** `auth:validate` — a credential describing itself. Strictly observation. */
   validate: 'read',
   write: 'write',
+  /** `connectors:invoke` — an external side effect, a write-tier power. */
+  invoke: 'write',
   send: 'write',
   close: 'write',
   synthesize: 'write',

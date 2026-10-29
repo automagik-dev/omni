@@ -473,24 +473,64 @@ export const TENANT_OWNERSHIP_SPECS: readonly TenantOwnershipSpec[] = [
   },
 ];
 
+/**
+ * Connector tables (wish: connectors-first-slice-clickup).
+ *
+ * These are NEW tenant tables, not part of the frozen G0 29-table inventory, so
+ * they live in their own list: migration 0041's parity assertions and the
+ * generated DDL builders stay pinned to the legacy inventory, while the RLS
+ * contract and the runtime lookups below see the union. `connectors` is a second
+ * ownership root (a connector is created from authenticated tenant context);
+ * `connector_event_subscriptions` is derived from it through the single-column
+ * FK and the composite `(tenant_id, connector_id)` FK.
+ */
+const CONNECTOR_OWNERSHIP_SPECS: readonly TenantOwnershipSpec[] = [
+  {
+    table: 'connectors',
+    drizzle: 'connectors',
+    derivation: 'root',
+    volume: 'low',
+    parents: [],
+    compositeFkTarget: true,
+    g0Rule:
+      'tenant_id assigned at connector creation from authenticated tenant context; the ownership root connector_event_subscriptions derives from',
+  },
+  {
+    table: 'connector_event_subscriptions',
+    drizzle: 'connectorEventSubscriptions',
+    derivation: 'derived',
+    volume: 'low',
+    parents: [{ column: 'connector_id', parentTable: 'connectors', required: true }],
+    compositeFkTarget: false,
+    g0Rule: 'tenant_id derived from the owning connector',
+  },
+];
+
+/** The frozen G0 inventory plus the connector tables. */
+const ALL_TENANT_OWNERSHIP_SPECS: readonly TenantOwnershipSpec[] = [
+  ...TENANT_OWNERSHIP_SPECS,
+  ...CONNECTOR_OWNERSHIP_SPECS,
+];
+
 // ---------------------------------------------------------------------------
 // Derived lookups
 // ---------------------------------------------------------------------------
 
-export const TENANT_TABLES: readonly string[] = TENANT_OWNERSHIP_SPECS.map((s) => s.table);
+/** Every tenant table that receives the ownership/RLS contract. */
+export const TENANT_TABLES: readonly string[] = ALL_TENANT_OWNERSHIP_SPECS.map((s) => s.table);
 
-export const OWNERSHIP_ROOT_TABLES: readonly string[] = TENANT_OWNERSHIP_SPECS.filter(
+export const OWNERSHIP_ROOT_TABLES: readonly string[] = ALL_TENANT_OWNERSHIP_SPECS.filter(
   (s) => s.derivation === 'root',
 ).map((s) => s.table);
 
 export function getOwnershipSpec(table: string): TenantOwnershipSpec | undefined {
-  return TENANT_OWNERSHIP_SPECS.find((s) => s.table === table);
+  return ALL_TENANT_OWNERSHIP_SPECS.find((s) => s.table === table);
 }
 
 /** Tables that back a composite FK and therefore need `(tenant_id, id)` unique. */
-export const COMPOSITE_FK_TARGETS: readonly string[] = TENANT_OWNERSHIP_SPECS.filter((s) => s.compositeFkTarget).map(
-  (s) => s.table,
-);
+export const COMPOSITE_FK_TARGETS: readonly string[] = ALL_TENANT_OWNERSHIP_SPECS.filter(
+  (s) => s.compositeFkTarget,
+).map((s) => s.table);
 
 /** Deterministic constraint name for a composite same-tenant foreign key. */
 export function compositeFkName(table: string, column: string): string {

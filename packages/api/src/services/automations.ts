@@ -33,7 +33,7 @@ import {
   automations,
 } from '@omni/db';
 import { and, desc, eq, gte, sql } from 'drizzle-orm';
-import { scopedHandle } from '../tenancy/tenant-scope';
+import { currentTenantScope, scopedHandle } from '../tenancy/tenant-scope';
 
 /**
  * An event to test/execute an automation against. Either hand-written (the
@@ -130,6 +130,11 @@ export class AutomationService {
       trustedTenantId?: string | null,
       emitterAgentId?: string | null,
     ) => Promise<{ valid: boolean; errors?: string[]; reason?: string }>;
+    /** One typed action for every provider (connector.call). */
+    callConnector?: (
+      request: { connectorId: string; action: string; input: Record<string, unknown>; timeoutMs?: number },
+      trustedTenantId?: string | null,
+    ) => Promise<unknown>;
   }): Promise<void> {
     if (!this.eventBus) {
       return;
@@ -444,7 +449,10 @@ export class AutomationService {
       automation.actions as AutomationAction[],
       context,
       actionDeps,
-      undefined,
+      // Manual execute runs inside the caller's request scope; thread its
+      // tenant so connector.call resolves a tenant-owned connector (the
+      // engine threads the envelope tenant the same way).
+      currentTenantScope()?.tenantId,
       undefined,
       {
         transactionalEmissions: automation.transactionalEmissions,

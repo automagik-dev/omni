@@ -1,6 +1,6 @@
 {
   "name": "@omni/api",
-  "version": "2.261029.6",
+  "version": "2.261029.10",
   "private": true,
   "type": "module",
   "exports": {
@@ -37,6 +37,8 @@
     "@omni/channel-sdk": "workspace:*",
     "@omni/channel-slack": "workspace:*",
     "@omni/channel-whatsapp-business": "workspace:*",
+    "@omni/connector-clickup": "workspace:*",
+    "@omni/connector-sdk": "workspace:*",
     "@omni/core": "workspace:*",
     "@omni/db": "workspace:*",
     "@omni/media-processing": "workspace:*",

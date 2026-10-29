@@ -78,6 +78,7 @@ export const apiTags = [
   { name: 'Metrics', description: 'System metrics and statistics' },
   { name: 'Logs', description: 'Application logs' },
   { name: 'Automations', description: 'Workflow automations' },
+  { name: 'Connectors', description: 'Integration accounts, event subscriptions and typed actions' },
   { name: 'Payloads', description: 'Event payload management' },
   { name: 'Conversations', description: 'Cross-channel conversation continuity' },
   { name: 'Voice', description: 'Voice channel sessions and streaming' },

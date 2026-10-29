@@ -1,0 +1,25 @@
+{
+  "name": "@omni/connector-sdk",
+  "version": "2.261029.10",
+  "description": "Code-declared connector manifests: credentials, events, actions, verification and the boot-validated registry",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "zod": "^3.25.76",
+    "zod-to-json-schema": "^3.25.1"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.2",
+    "typescript": "^5.7.3"
+  }
+}

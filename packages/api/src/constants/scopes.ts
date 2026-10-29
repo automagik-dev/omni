@@ -103,6 +103,21 @@ export const SCOPE_MAP: Record<string, string> = {
   'GET /automation-logs': 'automations:read',
   'GET /automation-metrics': 'automations:read',
 
+  // --- connectors (tenant-wide integration accounts, NOT channels) ---
+  'GET /connectors': 'connectors:read',
+  'GET /connectors/providers': 'connectors:read',
+  'GET /connectors/providers/:provider': 'connectors:read',
+  'GET /connectors/:id': 'connectors:read',
+  'POST /connectors': 'connectors:write',
+  'PATCH /connectors/:id': 'connectors:write',
+  'DELETE /connectors/:id': 'connectors:write',
+  'GET /connectors/:id/subscriptions': 'connectors:read',
+  'POST /connectors/:id/subscriptions': 'connectors:write',
+  'PATCH /connectors/:id/subscriptions/:subscriptionId': 'connectors:write',
+  'DELETE /connectors/:id/subscriptions/:subscriptionId': 'connectors:write',
+  'POST /connectors/:id/subscriptions/:subscriptionId/test': 'connectors:write',
+  'POST /connectors/:id/actions/:action': 'connectors:invoke',
+
   // --- batch-jobs ---
   'POST /batch-jobs': 'batch-jobs:write',
   'GET /batch-jobs': 'batch-jobs:read',

@@ -32,6 +32,7 @@ import { registerChannelHarnessSchemas } from '../schemas/openapi/channel-harnes
 import { registerChannelSchemas } from '../schemas/openapi/channels';
 import { registerChatSchemas } from '../schemas/openapi/chats';
 import { registerCommonSchemas } from '../schemas/openapi/common';
+import { registerConnectorSchemas } from '../schemas/openapi/connectors';
 import { registerConversationSchemas } from '../schemas/openapi/conversations';
 import { registerDeadLetterSchemas } from '../schemas/openapi/dead-letters';
 import { registerEventConsumerSchemas } from '../schemas/openapi/event-consumers';
@@ -85,6 +86,7 @@ registerLogSchemas(registry);
 registerDeadLetterSchemas(registry);
 registerEventOpsSchemas(registry);
 registerChannelSchemas(registry);
+registerConnectorSchemas(registry);
 registerEventSchemaSchemas(registry);
 registerEventConsumerSchemas(registry);
 registerMetricsSchemas(registry);

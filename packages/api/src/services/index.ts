@@ -35,6 +35,8 @@ import { AuthBootstrapService } from './auth-bootstrap';
 import { AutomationService } from './automations';
 import { BatchJobService } from './batch-jobs';
 import { ChatService } from './chats';
+import { connectorRegistry } from './connector-registry';
+import { ConnectorService } from './connectors';
 import { ConsumerOffsetService } from './consumer-offsets';
 import { ConversationService } from './conversations';
 import { DeadLetterService } from './dead-letters';
@@ -94,6 +96,8 @@ export interface Services {
    */
   eventConsumers: EventConsumerService;
   webhooks: WebhookService;
+  /** Integration accounts (connectors), never channels and never agent tools. */
+  connectors: ConnectorService;
   automations: AutomationService;
   /**
    * G4b manifest compiler (RFC #925, #986): compiles `agents.event_manifest`
@@ -264,6 +268,7 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
     eventSchemas,
     eventConsumers: new EventConsumerService(db, eventBus),
     webhooks: new WebhookService(db, eventBus, eventSchemas, deadLetters),
+    connectors: new ConnectorService(db, eventBus, connectorRegistry),
     automations: automationsService,
     manifestCompiler,
     chats: new ChatService(db, eventBus),

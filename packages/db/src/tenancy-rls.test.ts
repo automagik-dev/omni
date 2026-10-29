@@ -20,15 +20,23 @@ import { TENANT_TABLES } from './tenancy-ownership';
 import {
   AUTH_PLANE_READABLE_TABLES,
   AUTH_PLANE_ROW_FUNCTION,
+  CONNECTOR_INGRESS_READABLE_TABLES,
+  CONNECTOR_INGRESS_ROLE,
   G1_TENANT_PLANE_TABLES,
   POLICY_COMMANDS,
   QUALIFIED_AUTH_PLANE_FUNCTION,
   QUALIFIED_AUTH_PLANE_ROW_FUNCTION,
+  QUALIFIED_CONNECTOR_INGRESS_MEMBER_FUNCTION,
+  QUALIFIED_CONNECTOR_INGRESS_ROW_FUNCTION,
+  QUALIFIED_CONNECTOR_INGRESS_TENANT_FUNCTION,
   QUALIFIED_TENANT_CONTEXT_FUNCTION,
   RLS_EXCLUSIONS,
   RLS_TENANT_TABLES,
   RUNTIME_DENIED_TABLES,
+  connectorIngressFunctionStatements,
+  connectorIngressRoleStatements,
   contextFunctionStatements,
+  dropConnectorIngressFunctionStatements,
   dropContextFunctionStatements,
   dropPolicyStatements,
   policyName,
@@ -157,6 +165,48 @@ describe('policy shape', () => {
     }
   });
 
+  test('the connector-ingress exemption is SELECT only and one table', () => {
+    expect(CONNECTOR_INGRESS_READABLE_TABLES).toEqual(['connector_event_subscriptions']);
+    for (const table of CONNECTOR_INGRESS_READABLE_TABLES) {
+      const statements = tablePolicyStatements(table);
+      const select = statements.find((s) => s.startsWith(`CREATE POLICY "${policyName(table, 'select')}"`)) ?? '';
+      expect(select).toContain(QUALIFIED_CONNECTOR_INGRESS_ROW_FUNCTION);
+      for (const command of ['insert', 'update', 'delete'] as const) {
+        const policy = statements.find((s) => s.startsWith(`CREATE POLICY "${policyName(table, command)}"`)) ?? '';
+        expect(policy).not.toContain(QUALIFIED_CONNECTOR_INGRESS_ROW_FUNCTION);
+      }
+    }
+    // No other tenant table gains the disjunct.
+    const exempt = new Set(CONNECTOR_INGRESS_READABLE_TABLES);
+    for (const table of RLS_TENANT_TABLES) {
+      if (exempt.has(table)) continue;
+      expect(tablePolicyStatements(table).join('\n')).not.toContain(QUALIFIED_CONNECTOR_INGRESS_ROW_FUNCTION);
+    }
+  });
+
+  test('the connector-ingress lookup is bounded, SECURITY DEFINER, and returns only the tenant', () => {
+    const functions = connectorIngressFunctionStatements().join('\n');
+    expect(functions).toContain(`CREATE OR REPLACE FUNCTION ${QUALIFIED_CONNECTOR_INGRESS_TENANT_FUNCTION}`);
+    expect(functions).toContain('SECURITY DEFINER');
+    expect(functions).toContain(`WHERE s."id" = p_subscription_id`);
+    expect(functions).toContain(`s."status" IN ('active', 'paused', 'error')`);
+    expect(functions).toContain(`s."tenant_id" IS NOT NULL`);
+    expect(functions).toContain('RETURN v_tenant;');
+    // The row policy binds to one transaction-local id and falls back to tenant
+    // equality for every non-member.
+    expect(functions).toContain(`current_setting('app.connector_ingress_subscription_id', true)`);
+    expect(functions).toContain(`RETURN row_tenant = ${QUALIFIED_TENANT_CONTEXT_FUNCTION}();`);
+    expect(functions).not.toContain('BYPASSRLS');
+  });
+
+  test('the ingress role is NOLOGIN and never a bypass identity', () => {
+    const role = connectorIngressRoleStatements().join('\n');
+    expect(role).toContain('WITH NOLOGIN');
+    expect(role).toContain('NOBYPASSRLS');
+    expect(role).toContain(`rolname = '${CONNECTOR_INGRESS_ROLE}'`);
+    expect(role).not.toContain('LOGIN PASSWORD');
+  });
+
   test('the helpers are created in public and called as public — no search_path can split them', () => {
     const created = contextFunctionStatements();
     for (const qualified of [
@@ -182,6 +232,7 @@ describe('policy shape', () => {
     expect(plan).toContain(`${QUALIFIED_TENANT_CONTEXT_FUNCTION}()`);
     expect(plan).not.toMatch(/[^.]\bomni_current_tenant_id\(\)/);
     expect(plan).not.toMatch(/[^.]\bomni_auth_plane_row_visible\(/);
+    expect(plan).not.toMatch(/[^.]\bomni_connector_ingress_row_visible\(/);
   });
 
   test('the auth-plane exemption is a role-membership predicate, never BYPASSRLS', () => {
@@ -196,6 +247,10 @@ describe('policy shape', () => {
       expect(drops).toContain(`ALTER TABLE "${table}" NO FORCE ROW LEVEL SECURITY;`);
       expect(drops).toContain(`ALTER TABLE "${table}" DISABLE ROW LEVEL SECURITY;`);
     }
+    const helperDrops = dropConnectorIngressFunctionStatements().join('\n');
+    expect(helperDrops).toContain(`DROP FUNCTION IF EXISTS ${QUALIFIED_CONNECTOR_INGRESS_TENANT_FUNCTION}(uuid)`);
+    expect(helperDrops).toContain(`DROP FUNCTION IF EXISTS ${QUALIFIED_CONNECTOR_INGRESS_ROW_FUNCTION}(uuid, uuid)`);
+    expect(helperDrops).toContain(`DROP FUNCTION IF EXISTS ${QUALIFIED_CONNECTOR_INGRESS_MEMBER_FUNCTION}()`);
   });
 
   test('an unsafe table identifier is rejected rather than interpolated', () => {

@@ -528,6 +528,18 @@ const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
       'must treat deliveries as at-least-once, exactly as they already must for provider-side webhook retries.',
   },
   {
+    route: 'POST /api/v2/connectors/events/:subscriptionId',
+    class: 'public-by-contract',
+    justification:
+      'Connector event ingress (connectors-first-slice-clickup, D8). Auth-exempt because the provider holds no Omni ' +
+      'credential; authenticity is the per-subscription HMAC secret (ClickUp: X-Signature over the raw body) sealed ' +
+      'server-side and verified BEFORE anything is journaled or published. Unknown subscription, an unopenable secret ' +
+      'and a bad signature all collapse into one 401 so the endpoint is not a subscription-existence oracle, and the ' +
+      'surface is IP-rate-limited with a bounded body. The tenant comes from the resolved subscription row, never from ' +
+      'a request claim. Responses carry only receipt flags and the generated event id — no tenant data, no resource ' +
+      'listing. Paused subscriptions verify first, then ack 202 ignored and publish nothing.',
+  },
+  {
     route: 'GET /api/v2/channels/whatsapp-business/webhook',
     class: 'public-by-contract',
     justification:
@@ -710,6 +722,19 @@ const TENANT_SCOPED_ROUTES: readonly RouteKey[] = [
   'GET /api/v2/chats/:id/participants',
   'GET /api/v2/chats/by-external',
   'GET /api/v2/context',
+  'DELETE /api/v2/connectors/:id',
+  'DELETE /api/v2/connectors/:id/subscriptions/:subscriptionId',
+  'GET /api/v2/connectors',
+  'GET /api/v2/connectors/:id',
+  'GET /api/v2/connectors/:id/subscriptions',
+  'GET /api/v2/connectors/providers',
+  'GET /api/v2/connectors/providers/:provider',
+  'PATCH /api/v2/connectors/:id',
+  'PATCH /api/v2/connectors/:id/subscriptions/:subscriptionId',
+  'POST /api/v2/connectors',
+  'POST /api/v2/connectors/:id/actions/:action',
+  'POST /api/v2/connectors/:id/subscriptions',
+  'POST /api/v2/connectors/:id/subscriptions/:subscriptionId/test',
   'GET /api/v2/conversations',
   'GET /api/v2/conversations/:id',
   'GET /api/v2/conversations/:id/chats',

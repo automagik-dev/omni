@@ -124,6 +124,31 @@ export const G1_TENANT_PLANE_TABLES: readonly string[] = [
 export const AUTH_PLANE_READABLE_TABLES: readonly string[] = ['tenant_memberships', 'tenant_key_lineage'];
 
 /**
+ * The one table the public connector ingress must read BEFORE a tenant context
+ * exists (connectors-first-slice-clickup, F3).
+ *
+ * `POST /api/v2/connectors/events/:subscriptionId` is unauthenticated, so it
+ * has no credential to derive a tenant from. The subscription row itself is the
+ * persisted owner: its `tenant_id` is what the rest of the delivery must run
+ * under. A plain tenant-equality policy cannot express "read exactly the
+ * subscription whose UUID the provider already holds", so this table's SELECT
+ * policy carries a second, narrow disjunct — a NOLOGIN marker role that only a
+ * SECURITY DEFINER lookup executes as, bound to the one requested id by a
+ * transaction-local GUC.
+ *
+ * It is SELECT only, one table, and the lookup returns the tenant id alone.
+ * There is no general bypass: the runtime role is not a member of the marker,
+ * and no write policy is relaxed.
+ */
+export const CONNECTOR_INGRESS_READABLE_TABLES: readonly string[] = ['connector_event_subscriptions'];
+
+/** NOLOGIN marker/owner of the connector-ingress lookup. Never a login identity. */
+export const CONNECTOR_INGRESS_ROLE = 'omni_connector_ingress';
+
+/** Transaction-local GUC the lookup sets to bind its SELECT to one subscription id. */
+const CONNECTOR_INGRESS_SETTING = 'app.connector_ingress_subscription_id';
+
+/**
  * Tables that carry a `tenant_id` column but are deliberately NOT tenant-RLS
  * tables. Every entry needs a control-plane justification, per the wish.
  *
@@ -214,6 +239,10 @@ export const QUALIFIED_TENANT_CONTEXT_FUNCTION = `${TENANCY_FUNCTION_SCHEMA}.${T
 export const QUALIFIED_AUTH_PLANE_FUNCTION = `${TENANCY_FUNCTION_SCHEMA}.${AUTH_PLANE_FUNCTION}`;
 export const QUALIFIED_AUTH_PLANE_ROW_FUNCTION = `${TENANCY_FUNCTION_SCHEMA}.${AUTH_PLANE_ROW_FUNCTION}`;
 
+export const QUALIFIED_CONNECTOR_INGRESS_MEMBER_FUNCTION = `${TENANCY_FUNCTION_SCHEMA}.omni_connector_ingress_is_member`;
+export const QUALIFIED_CONNECTOR_INGRESS_ROW_FUNCTION = `${TENANCY_FUNCTION_SCHEMA}.omni_connector_ingress_row_visible`;
+export const QUALIFIED_CONNECTOR_INGRESS_TENANT_FUNCTION = `${TENANCY_FUNCTION_SCHEMA}.omni_connector_ingress_tenant`;
+
 /** The transaction-local GUC every tenant transaction sets. */
 export const TENANT_SETTING = 'app.tenant_id';
 
@@ -303,6 +332,106 @@ export function dropContextFunctionStatements(): string[] {
   ];
 }
 
+/**
+ * The connector-ingress role and its bounded read capability.
+ *
+ * This mirrors the auth-plane mechanism rather than inventing a second one:
+ * a NOLOGIN role that no login identity is a member of, one SECURITY DEFINER
+ * function whose SQL is fixed to `id = $1 AND status IN (...)`, and a SELECT
+ * policy disjunct that admits the role only for the row id the function put in
+ * the transaction-local GUC. The runtime role can EXECUTE the function but is
+ * not a member, so it still cannot read the table without a tenant context.
+ */
+export function connectorIngressRoleStatements(role: string = CONNECTOR_INGRESS_ROLE): string[] {
+  assertSafeIdent('connector ingress role', role);
+  return [
+    `DO $omni$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${role}') THEN
+    EXECUTE 'CREATE ROLE "${role}" WITH NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS';
+  ELSE
+    EXECUTE 'ALTER ROLE "${role}" WITH NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS';
+  END IF;
+END
+$omni$;`,
+    `GRANT USAGE ON SCHEMA public TO "${role}";`,
+  ];
+}
+
+/** The three helper functions plus the one-table SELECT grant they run under. */
+export function connectorIngressFunctionStatements(role: string = CONNECTOR_INGRESS_ROLE): string[] {
+  assertSafeIdent('connector ingress role', role);
+  return [
+    `CREATE OR REPLACE FUNCTION ${QUALIFIED_CONNECTOR_INGRESS_MEMBER_FUNCTION}() RETURNS boolean
+LANGUAGE sql
+STABLE
+SET search_path = pg_catalog
+AS $omni$
+  SELECT EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_roles r
+    WHERE r.rolname = '${role}'
+      AND pg_catalog.pg_has_role(current_user, r.oid, 'USAGE')
+  );
+$omni$;`,
+    `CREATE OR REPLACE FUNCTION ${QUALIFIED_CONNECTOR_INGRESS_ROW_FUNCTION}(row_id uuid, row_tenant uuid) RETURNS boolean
+LANGUAGE plpgsql
+STABLE
+SET search_path = pg_catalog
+AS $omni$
+DECLARE
+  raw text;
+BEGIN
+  IF ${QUALIFIED_CONNECTOR_INGRESS_MEMBER_FUNCTION}() THEN
+    raw := current_setting('${CONNECTOR_INGRESS_SETTING}', true);
+    IF raw IS NULL OR raw = '' THEN
+      RETURN false;
+    END IF;
+    RETURN row_id = raw::uuid;
+  END IF;
+  RETURN row_tenant = ${QUALIFIED_TENANT_CONTEXT_FUNCTION}();
+END;
+$omni$;`,
+    `CREATE OR REPLACE FUNCTION ${QUALIFIED_CONNECTOR_INGRESS_TENANT_FUNCTION}(p_subscription_id uuid) RETURNS uuid
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $omni$
+DECLARE
+  v_tenant uuid;
+BEGIN
+  IF p_subscription_id IS NULL THEN
+    RETURN NULL;
+  END IF;
+  PERFORM set_config('${CONNECTOR_INGRESS_SETTING}', p_subscription_id::text, true);
+  SELECT s."tenant_id" INTO v_tenant
+  FROM public."connector_event_subscriptions" s
+  WHERE s."id" = p_subscription_id
+    AND s."status" IN ('active', 'paused', 'error')
+    AND s."tenant_id" IS NOT NULL;
+  RETURN v_tenant;
+END;
+$omni$;`,
+    `ALTER FUNCTION ${QUALIFIED_CONNECTOR_INGRESS_TENANT_FUNCTION}(uuid) OWNER TO "${role}";`,
+    `GRANT SELECT ON TABLE "connector_event_subscriptions" TO "${role}";`,
+    `REVOKE ALL ON FUNCTION ${QUALIFIED_CONNECTOR_INGRESS_TENANT_FUNCTION}(uuid) FROM PUBLIC;`,
+    `REVOKE ALL ON FUNCTION ${QUALIFIED_CONNECTOR_INGRESS_ROW_FUNCTION}(uuid, uuid) FROM PUBLIC;`,
+    `REVOKE ALL ON FUNCTION ${QUALIFIED_CONNECTOR_INGRESS_MEMBER_FUNCTION}() FROM PUBLIC;`,
+    `GRANT EXECUTE ON FUNCTION ${QUALIFIED_CONNECTOR_INGRESS_TENANT_FUNCTION}(uuid) TO "${role}";`,
+    `GRANT EXECUTE ON FUNCTION ${QUALIFIED_CONNECTOR_INGRESS_ROW_FUNCTION}(uuid, uuid) TO "${role}";`,
+    `GRANT EXECUTE ON FUNCTION ${QUALIFIED_CONNECTOR_INGRESS_MEMBER_FUNCTION}() TO "${role}";`,
+  ];
+}
+
+/** Reverse of {@link connectorIngressFunctionStatements}; the role itself stays (grants may reference it). */
+export function dropConnectorIngressFunctionStatements(): string[] {
+  return [
+    `DROP FUNCTION IF EXISTS ${QUALIFIED_CONNECTOR_INGRESS_TENANT_FUNCTION}(uuid);`,
+    `DROP FUNCTION IF EXISTS ${QUALIFIED_CONNECTOR_INGRESS_ROW_FUNCTION}(uuid, uuid);`,
+    `DROP FUNCTION IF EXISTS ${QUALIFIED_CONNECTOR_INGRESS_MEMBER_FUNCTION}();`,
+  ];
+}
+
 /** `tenant_id = omni_current_tenant_id()`, plus the auth-plane disjunct where earned. */
 function predicate(table: string, command: PolicyCommand, marker: string): string {
   // Qualified: a policy expression is resolved at CREATE POLICY time against
@@ -310,7 +439,13 @@ function predicate(table: string, command: PolicyCommand, marker: string): strin
   // schema keeps the stored reference independent of who applied it.
   const equality = `"tenant_id" = ${QUALIFIED_TENANT_CONTEXT_FUNCTION}()`;
   const authPlaneRead = command === 'select' && AUTH_PLANE_READABLE_TABLES.includes(table);
-  return authPlaneRead ? `(${QUALIFIED_AUTH_PLANE_ROW_FUNCTION}("tenant_id", '${marker}'))` : `(${equality})`;
+  if (authPlaneRead) return `(${QUALIFIED_AUTH_PLANE_ROW_FUNCTION}("tenant_id", '${marker}'))`;
+  // The connector-ingress lookup is id-bound, not row-tenant-bound: the helper
+  // falls back to tenant equality for every non-member, so ordinary scoped
+  // reads are unchanged.
+  const connectorIngressRead = command === 'select' && CONNECTOR_INGRESS_READABLE_TABLES.includes(table);
+  if (connectorIngressRead) return `(${QUALIFIED_CONNECTOR_INGRESS_ROW_FUNCTION}("id", "tenant_id"))`;
+  return `(${equality})`;
 }
 
 /**
@@ -459,7 +594,14 @@ export async function applyTenantRlsEnforcement(
   db: Database,
   roles: TenancyRoleNames = DEFAULT_ROLE_NAMES,
 ): Promise<RlsEnforcementReport> {
-  const statements = [...contextFunctionStatements(), ...policyStatements(roles)];
+  // Role → functions → policies: the SECURITY DEFINER lookup is owned by the
+  // NOLOGIN ingress role, so that role must exist before the function does.
+  const statements = [
+    ...connectorIngressRoleStatements(),
+    ...contextFunctionStatements(),
+    ...connectorIngressFunctionStatements(),
+    ...policyStatements(roles),
+  ];
   for (const statement of statements) {
     await db.execute(sql.raw(statement));
   }
@@ -468,7 +610,13 @@ export async function applyTenantRlsEnforcement(
 
 /** Remove the enforcement objects. Test/rehearsal only — see the module header. */
 export async function revertTenantRlsEnforcement(db: Database): Promise<void> {
-  for (const statement of [...dropPolicyStatements(), ...dropContextFunctionStatements()]) {
+  // Policies first (they reference the helpers), then the ingress helpers
+  // (which reference the tenant-context helper), then the tenant-context one.
+  for (const statement of [
+    ...dropPolicyStatements(),
+    ...dropConnectorIngressFunctionStatements(),
+    ...dropContextFunctionStatements(),
+  ]) {
     await db.execute(sql.raw(statement));
   }
 }

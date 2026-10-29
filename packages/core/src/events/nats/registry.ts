@@ -8,7 +8,7 @@
 
 import { type ZodSchema, z } from 'zod';
 import { createLogger } from '../../logger';
-import { isCoreEvent, isCustomEvent, isSystemEvent } from '../types';
+import { isConnectorEvent, isCoreEvent, isCustomEvent, isSystemEvent } from '../types';
 import type { StreamName } from './streams';
 
 const log = createLogger('nats:registry');
@@ -120,6 +120,12 @@ export class EventRegistry {
 
       if (isSystemEvent(eventType)) {
         // System events without schema are allowed (internal use)
+        return { success: true, data: payload };
+      }
+
+      if (isConnectorEvent(eventType)) {
+        // One type spans providers, so a strict per-type payload schema cannot
+        // exist; the manifest's parseDelivery is the boundary validator (D10).
         return { success: true, data: payload };
       }
 

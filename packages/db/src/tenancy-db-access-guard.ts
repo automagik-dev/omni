@@ -1984,4 +1984,14 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     justification:
       'Migration/backfill/schema tooling. Invoked explicitly by an operator under the DDL identity, never from a request; the runtime role holds no privilege it needs.',
   },
+  // Connectors (wish: connectors-first-slice-clickup): the service queries every
+  // table through `scopedHandle`, so these are boundary sites, not pending debt.
+  { file: 'packages/api/src/services/connectors.ts', table: 'connectors', class: 'tenant-boundary' },
+  {
+    file: 'packages/api/src/services/connectors.ts',
+    table: 'connector_event_subscriptions',
+    class: 'tenant-boundary',
+  },
+  { file: 'packages/api/src/services/connectors.ts', table: 'omni_events', class: 'tenant-boundary' },
+  { file: 'packages/api/src/services/connectors.ts', table: 'automations', class: 'tenant-boundary' },
 ];

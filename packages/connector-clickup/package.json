@@ -1,0 +1,25 @@
+{
+  "name": "@omni/connector-clickup",
+  "version": "2.261029.10",
+  "description": "ClickUp connector: personal-token validation, task actions and the taskStatusUpdated webhook, declared as a code manifest",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@omni/connector-sdk": "workspace:*",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.2",
+    "typescript": "^5.7.3"
+  }
+}
