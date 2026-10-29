@@ -3,10 +3,81 @@
  */
 
 import type { OpenAPIRegistry } from '@asteasolutions/zod-to-openapi';
-import { ChannelTypeSchema } from '@omni/core';
+import {
+  ChannelTypeSchema,
+  ExponentialScheduleSchema,
+  FixedScheduleSchema,
+  FollowUpSequenceConfigSchema,
+} from '@omni/core';
 import { z } from '../../lib/zod-openapi';
 import { ErrorSchema, PaginationMetaSchema, SuccessSchema } from './common';
-import { FollowUpSequenceConfigOpenApiSchema } from './follow-up';
+
+/** Shared #1403 PATCH/GET field definitions; no PATCH defaults or coercion. */
+const sessionResetModeSchema = z.discriminatedUnion('mode', [
+  z.object({ mode: z.literal('none') }).strict(),
+  z.object({ mode: z.literal('daily'), hour: z.number().int().min(0).max(23).optional() }).strict(),
+  z.object({ mode: z.literal('idle'), minutes: z.number().finite().positive().optional() }).strict(),
+]);
+const sessionResetSchema = z
+  .object({
+    default: sessionResetModeSchema.optional(),
+    dm: sessionResetModeSchema.optional(),
+    group: sessionResetModeSchema.optional(),
+    thread: sessionResetModeSchema.optional(),
+  })
+  .strict();
+// Keep core defaults, quiet-hours refinements and schedule constraints. The API
+// additionally rejects unknown schedule keys rather than silently dropping them.
+const channelFollowUpSchema = FollowUpSequenceConfigSchema.extend({
+  schedule: z.discriminatedUnion('kind', [FixedScheduleSchema.strict(), ExponentialScheduleSchema.strict()]),
+});
+export const ChannelSettingsShape = {
+  agentChainToInstanceId: z
+    .string()
+    .uuid()
+    .nullable()
+    .optional()
+    .describe('Chain target instance UUID; null clears. Must exist and be accessible; cannot target itself'),
+  chainMode: z.enum(['off', 'forward', 'bidirectional']).optional().describe('Agent chaining mode'),
+  triggerMode: z.enum(['round-trip', 'fire-and-forget']).optional().describe('Agent trigger execution mode'),
+  triggerReactions: z
+    .array(z.string())
+    .nullable()
+    .optional()
+    .describe('Reaction emojis that trigger the agent; null means all when reaction.received is enabled'),
+  triggerMentionPatterns: z
+    .array(z.string())
+    .nullable()
+    .optional()
+    .describe('Custom mention trigger patterns; null clears'),
+  disableUsernamePrefix: z.boolean().optional().describe('Disable username prefix'),
+  agentAckMessage: z.string().nullable().optional().describe('Pre-dispatch acknowledgement text; null disables'),
+  processAudio: z
+    .boolean()
+    .optional()
+    .describe('Stored audio-processing flag; server transcription uses audioTranscription'),
+  processImages: z.boolean().optional().describe('Stored image-processing flag'),
+  processVideo: z.boolean().optional().describe('Stored video-processing flag'),
+  processDocuments: z.boolean().optional().describe('Stored document-processing flag'),
+  processMediaOnBlocked: z.boolean().optional().describe('Media-processing preference for blocked messages'),
+  downloadMediaOnSync: z.boolean().optional().describe('Download media during history sync'),
+  inboundMaxAgeMinutes: z
+    .number()
+    .int()
+    .min(0)
+    .max(2147483647)
+    .optional()
+    .describe('Maximum inbound message age in minutes; zero disables age filtering'),
+  replayEnabled: z.boolean().optional().describe('Automatically replay missed messages on reconnect'),
+  sessionReset: sessionResetSchema
+    .nullable()
+    .optional()
+    .describe('Per-chat-type reset strategies; daily hour is UTC (default 3), idle minutes default 60; null clears'),
+  followUpConfig: channelFollowUpSchema
+    .nullable()
+    .optional()
+    .describe('Instance-scope follow-up config; replaces the whole object; null falls back to the agent scope'),
+};
 
 /**
  * Gupshup HANDOFF options (instances.gupshup_handoff_options). This is the ONE
@@ -119,6 +190,7 @@ const PacingOverrideForbiddenResponse = {
  * Instance response schema
  */
 export const InstanceSchema = z.object({
+  ...ChannelSettingsShape,
   id: z.string().uuid().openapi({ description: 'Instance UUID' }),
   name: z.string().openapi({ description: 'Instance name' }),
   channel: ChannelTypeSchema.openapi({ description: 'Channel type' }),
@@ -161,9 +233,6 @@ export const InstanceSchema = z.object({
   closeContactConfig: CloseContactConfigSchema.nullable()
     .optional()
     .openapi({ description: 'Per-outcome close-contact cooldown/escalation overrides (null = defaults)' }),
-  followUpConfig: FollowUpSequenceConfigOpenApiSchema.nullable()
-    .optional()
-    .openapi({ description: 'Instance-scope follow-up sequence config' }),
   createdAt: z.string().datetime().openapi({ description: 'Creation timestamp' }),
   updatedAt: z.string().datetime().openapi({ description: 'Last update timestamp' }),
 });
@@ -549,14 +618,15 @@ export function registerInstanceSchemas(registry: OpenAPIRegistry): void {
     operationId: 'updateInstance',
     tags: ['Instances'],
     summary: 'Update instance',
-    description: 'Update an existing channel instance.',
+    description:
+      'Update supplied fields only. Nullable settings accept null to clear; nested settings replace the entire object. Chain targets must exist and pass existing instance access and tenant checks.',
     request: {
       params: z.object({
         id: z.string().uuid().openapi({ description: 'Instance UUID' }),
       }),
       body: {
         content: {
-          'application/json': { schema: CreateInstanceSchema.partial() },
+          'application/json': { schema: CreateInstanceSchema.partial().extend(ChannelSettingsShape).strict() },
         },
       },
     },
@@ -569,7 +639,14 @@ export function registerInstanceSchemas(registry: OpenAPIRegistry): void {
           },
         },
       },
-      403: PacingOverrideForbiddenResponse,
+      400: {
+        description: 'Invalid, unknown or read-only field, or self-chain target; no update performed',
+        content: { 'application/json': { schema: ErrorSchema } },
+      },
+      403: {
+        description: 'Instance or chain target access denied, or full-access key required for pacing override',
+        content: { 'application/json': { schema: ErrorSchema } },
+      },
       404: {
         description: 'Instance not found',
         content: {

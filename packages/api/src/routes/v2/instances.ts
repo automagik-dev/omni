@@ -18,6 +18,7 @@ import { filterByInstanceAccess, requireInstanceAccess } from '../../middleware/
 import { invalidateProviderCacheForInstance } from '../../plugins/agent-dispatcher';
 import { getQrCode } from '../../plugins/qr-store';
 import {
+  ChannelSettingsShape,
   CloseContactConfigSchema,
   GupshupHandoffOptionsSchema,
   SelfChatsSchema,
@@ -371,6 +372,7 @@ const AGENT_PROVIDER_READ_ONLY_MESSAGE =
 const updateInstanceSchema = createInstanceSchema
   .partial()
   .extend({
+    ...ChannelSettingsShape,
     /**
      * Channel-specific connection config (#889).
      *
@@ -1227,92 +1229,119 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
   return c.json({ data: sanitizeInstance(instance) }, 201);
 });
 
+/** Validate a supplied chain reference before the generic persistence path. */
+async function validateChainTarget(
+  c: Context<{ Variables: AppVariables }>,
+  sourceId: string,
+  targetId: string | null | undefined,
+): Promise<Response | undefined> {
+  if (!targetId) return;
+  if (targetId === sourceId) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'An instance cannot chain to itself' } }, 400);
+  }
+  // Reuse the same access guard as /:id before looking up the target. The
+  // real service lookup uses the request's existing tenant-scoped handle.
+  const denied = await requireInstanceAccess(() => targetId)(c, async () => {});
+  if (denied) return denied;
+  await c.get('services').instances.getById(targetId);
+}
+
 /**
  * PATCH /instances/:id - Update instance
  */
-instancesRoutes.patch('/:id', instanceAccess, zValidator('json', updateInstanceSchema), async (c) => {
-  const id = c.req.param('id');
-  const { force, ...data } = c.req.valid('json');
-  const pacingDenied = denyPacingOverrideForScopedKey(c, data.outboundPacingOverride);
-  if (pacingDenied) return pacingDenied;
-  const services = c.get('services');
+instancesRoutes.patch(
+  '/:id',
+  instanceAccess,
+  zValidator('json', updateInstanceSchema),
+  async (c, next) => {
+    const denied = await validateChainTarget(c, c.req.param('id'), c.req.valid('json').agentChainToInstanceId);
+    if (denied) return denied;
+    await next();
+  },
+  async (c) => {
+    const id = c.req.param('id');
+    const { force, ...data } = c.req.valid('json');
+    const pacingDenied = denyPacingOverrideForScopedKey(c, data.outboundPacingOverride);
+    if (pacingDenied) return pacingDenied;
+    const services = c.get('services');
 
-  // The conflict is keyed on the PAIR (app token, bot mode), so either field
-  // can create it: switching an existing row to bot mode on a token another
-  // bot-mode instance already holds is exactly as much of a collision as
-  // moving that token onto the row. Guarding only on the token would store a
-  // row the connect path then refuses for ever, instead of answering 409 the
-  // moment the impossible state was asked for.
-  if (!force && (data.slackAppToken || data.slackAuthMode)) {
-    const current = await services.instances.getById(id);
-    const conflict =
-      current.channel === 'slack'
-        ? await findSlackBotModeConflict(
-            services,
-            {
-              appToken: data.slackAppToken ?? current.slackAppToken,
-              teamId: current.slackTeamId,
-              authMode: data.slackAuthMode ?? current.slackAuthMode,
-            },
-            id,
-          )
-        : null;
-    if (conflict) return c.json(slackAppTokenConflictBody(conflict), 409);
-  }
-
-  // Detect agent assignment changes for auto-key provisioning + auto reply-filter (omni#443)
-  let oldAgentId: string | null | undefined;
-  let currentReplyFilter: unknown = null;
-  if (data.agentId !== undefined) {
-    try {
+    // The conflict is keyed on the PAIR (app token, bot mode), so either field
+    // can create it: switching an existing row to bot mode on a token another
+    // bot-mode instance already holds is exactly as much of a collision as
+    // moving that token onto the row. Guarding only on the token would store a
+    // row the connect path then refuses for ever, instead of answering 409 the
+    // moment the impossible state was asked for.
+    if (!force && (data.slackAppToken || data.slackAuthMode)) {
       const current = await services.instances.getById(id);
-      oldAgentId = current.agentId;
-      currentReplyFilter = current.agentReplyFilter;
-    } catch {
-      // Instance not found — update will throw
+      const conflict =
+        current.channel === 'slack'
+          ? await findSlackBotModeConflict(
+              services,
+              {
+                appToken: data.slackAppToken ?? current.slackAppToken,
+                teamId: current.slackTeamId,
+                authMode: data.slackAuthMode ?? current.slackAuthMode,
+              },
+              id,
+            )
+          : null;
+      if (conflict) return c.json(slackAppTokenConflictBody(conflict), 409);
     }
-  }
 
-  // omni#443: Auto-set reply filter when an agent is being assigned to this instance
-  // and neither the request nor the existing row provides one. Prevents silent drops.
-  if (
-    shouldApplyDefaultReplyFilter({
-      newAgentId: data.agentId,
-      currentAgentId: oldAgentId,
-      explicitReplyFilter: data.agentReplyFilter,
-      currentReplyFilter,
-      agentIdTouched: data.agentId !== undefined,
-    })
-  ) {
-    (data as { agentReplyFilter?: typeof DEFAULT_AGENT_REPLY_FILTER }).agentReplyFilter = DEFAULT_AGENT_REPLY_FILTER;
-    log.info('Agent assigned without reply filter — defaulting to mode:all onDm:true (omni#443)', {
-      instanceId: id,
-      agentId: data.agentId,
-      defaultFilter: DEFAULT_AGENT_REPLY_FILTER,
-    });
-  }
+    // Detect agent assignment changes for auto-key provisioning + auto reply-filter (omni#443)
+    let oldAgentId: string | null | undefined;
+    let currentReplyFilter: unknown = null;
+    if (data.agentId !== undefined) {
+      try {
+        const current = await services.instances.getById(id);
+        oldAgentId = current.agentId;
+        currentReplyFilter = current.agentReplyFilter;
+      } catch {
+        // Instance not found — update will throw
+      }
+    }
 
-  const instance = await services.instances.update(id, data);
+    // omni#443: Auto-set reply filter when an agent is being assigned to this instance
+    // and neither the request nor the existing row provides one. Prevents silent drops.
+    if (
+      shouldApplyDefaultReplyFilter({
+        newAgentId: data.agentId,
+        currentAgentId: oldAgentId,
+        explicitReplyFilter: data.agentReplyFilter,
+        currentReplyFilter,
+        agentIdTouched: data.agentId !== undefined,
+      })
+    ) {
+      (data as { agentReplyFilter?: typeof DEFAULT_AGENT_REPLY_FILTER }).agentReplyFilter = DEFAULT_AGENT_REPLY_FILTER;
+      log.info('Agent assigned without reply filter — defaulting to mode:all onDm:true (omni#443)', {
+        instanceId: id,
+        agentId: data.agentId,
+        defaultFilter: DEFAULT_AGENT_REPLY_FILTER,
+      });
+    }
 
-  // Invalidate access cache when access mode changes
-  if (data.accessMode !== undefined) {
-    await accessCache.clear();
-  }
+    const instance = await services.instances.update(id, data);
 
-  // Auto-provision/update scoped API key on agent assignment change
-  if (data.agentId !== undefined && data.agentId !== oldAgentId) {
-    const authContext = c.get('authContext');
-    await handleAgentKeyProvisioning(
-      services,
-      id,
-      data.agentId,
-      oldAgentId ?? null,
-      authContext?.credentialClass === 'tenant' ? authContext.tenantId : null,
-    );
-  }
+    // Invalidate access cache when access mode changes
+    if (data.accessMode !== undefined) {
+      await accessCache.clear();
+    }
 
-  return c.json({ data: sanitizeInstance(await withAgentProviderId(services, instance)) });
-});
+    // Auto-provision/update scoped API key on agent assignment change
+    if (data.agentId !== undefined && data.agentId !== oldAgentId) {
+      const authContext = c.get('authContext');
+      await handleAgentKeyProvisioning(
+        services,
+        id,
+        data.agentId,
+        oldAgentId ?? null,
+        authContext?.credentialClass === 'tenant' ? authContext.tenantId : null,
+      );
+    }
+
+    return c.json({ data: sanitizeInstance(await withAgentProviderId(services, instance)) });
+  },
+);
 
 /**
  * Auto-provision or update a scoped API key when an agent is assigned to an instance.
