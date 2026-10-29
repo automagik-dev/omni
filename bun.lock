@@ -313,7 +313,6 @@
         "omni": "./bin/omni",
       },
       "dependencies": {
-        "@anthropic-ai/claude-agent-sdk": "^0.2.62",
         "@sentry/bun": "^10.43.0",
         "@snazzah/davey": "^0.1.11",
         "chalk": "^5.4.0",
@@ -349,6 +348,9 @@
         "@types/node": "^22.10.3",
         "@types/qrcode-terminal": "^0.12.2",
         "typescript": "^5.7.3",
+      },
+      "optionalDependencies": {
+        "@anthropic-ai/claude-agent-sdk": "^0.2.62",
       },
     },
     "packages/connect": {

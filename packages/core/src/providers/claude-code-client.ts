@@ -19,6 +19,33 @@ import type {
 
 const log = createLogger('provider:claude-code');
 
+const CLAUDE_AGENT_SDK = '@anthropic-ai/claude-agent-sdk';
+type ClaudeAgentSdk = typeof import('@anthropic-ai/claude-agent-sdk');
+
+/**
+ * Load the Claude agent SDK, which only this provider needs. The published CLI keeps it out of
+ * its bundle and lists it as an optional dependency, so it can be absent: that fails with an
+ * error naming this provider and how to install the SDK. Other load errors pass through.
+ */
+export async function loadClaudeAgentSdk(
+  load: () => Promise<ClaudeAgentSdk> = () => import('@anthropic-ai/claude-agent-sdk'),
+): Promise<ClaudeAgentSdk> {
+  try {
+    return await load();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const notFound =
+      (error as { code?: string } | null)?.code === 'ERR_MODULE_NOT_FOUND' ||
+      /Cannot find (module|package)/.test(message);
+    if (!notFound || !message.includes(CLAUDE_AGENT_SDK)) throw error;
+    throw new Error(
+      `The claude-code provider needs ${CLAUDE_AGENT_SDK}, which is not installed. It is an optional ` +
+        `dependency of @automagik/omni: reinstall without --omit=optional, or add ${CLAUDE_AGENT_SDK} ` +
+        `next to it. (${message})`,
+    );
+  }
+}
+
 /**
  * Configuration for a Claude Code provider instance.
  * Lives in `schemaConfig` JSON column when `schema = 'claude-code'`.
@@ -700,7 +727,7 @@ async function* generateStream(
   abortSignal: AbortSignal | undefined,
   state: StreamRunState,
 ): AsyncGenerator<StreamDelta> {
-  const { query } = await import('@anthropic-ai/claude-agent-sdk');
+  const { query } = await loadClaudeAgentSdk();
   const startTime = Date.now();
   const acc: StreamAccumulator = {
     content: '',
@@ -785,7 +812,7 @@ export class ClaudeCodeClient implements IAgentClient {
   }
 
   async run(request: ProviderRequest): Promise<ProviderResponse> {
-    const { query } = await import('@anthropic-ai/claude-agent-sdk');
+    const { query } = await loadClaudeAgentSdk();
     const startTime = Date.now();
     const acc: RunAccumulator = { content: '', sessionId: '', costUsd: 0, inputTokens: 0, outputTokens: 0 };
 
@@ -875,7 +902,7 @@ export class ClaudeCodeClient implements IAgentClient {
   }
 
   async *stream(request: ProviderRequest): AsyncGenerator<StreamChunk> {
-    const { query } = await import('@anthropic-ai/claude-agent-sdk');
+    const { query } = await loadClaudeAgentSdk();
     let sessionId = '';
 
     log.info('Streaming Claude Code agent', {

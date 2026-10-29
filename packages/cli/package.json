@@ -45,7 +45,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "bun run build:sdk-subpath && bun build ./src/index.ts --outdir ./dist --target bun && bun run build:types",
+    "build": "bun run build:sdk-subpath && bun build ./src/index.ts --outdir ./dist --target bun --external @anthropic-ai/claude-agent-sdk && bun run build:types",
     "build:sdk-subpath": "cd ../sdk && bun run build && cd ../cli && mkdir -p ./dist/sdk && cp -r ../sdk/dist/. ./dist/sdk/",
     "build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
     "dev": "echo 'CLI package - no dev server (use: bun run ./src/index.ts <command>)'",
@@ -60,7 +60,6 @@
     "prepack": "bun run build && bun run build:server && bun run build:migrations && bun run build:market"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.62",
     "@sentry/bun": "^10.43.0",
     "@snazzah/davey": "^0.1.11",
     "chalk": "^5.4.0",
@@ -96,5 +95,8 @@
     "@types/node": "^22.10.3",
     "@types/qrcode-terminal": "^0.12.2",
     "typescript": "^5.7.3"
+  },
+  "optionalDependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.62"
   }
 }
