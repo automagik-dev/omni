@@ -359,10 +359,11 @@ function interactiveOf(
   return buildInteractive(lastBubble, content.buttons, listOptionsOf(content));
 }
 
-/** `'buttons' | 'list' | 'flow' | 'text'`, for the `message.sent` payload. */
+/** `'buttons' | 'list' | 'url' | 'flow' | 'text'`, for the `message.sent` payload. */
 function interactiveKindOf(params: Record<string, unknown> | null): string {
   if (!params) return 'text';
   if (params.tipo === 5) return 'flow';
+  if (params.tipo === 3) return 'url';
   return params.tipo === 2 ? 'buttons' : 'list';
 }
 

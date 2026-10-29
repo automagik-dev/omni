@@ -124,11 +124,53 @@ describe('buildInteractive', () => {
     ).toBeNull();
   });
 
-  it('degrades with no options, no body, or only URL buttons', () => {
+  it('degrades with no options, no body, or more than one URL button', () => {
     expect(params('Escolha:', [])).toBeNull();
     expect(params('Escolha:', undefined)).toBeNull();
     expect(params('   ', options(3))).toBeNull();
-    expect(params('Escolha:', [{ text: 'Abrir', url: 'https://example.test' }])).toBeNull();
+    expect(
+      params('Escolha:', [
+        { text: 'Abrir', url: 'https://example.test' },
+        { text: 'Outro', url: 'https://example.test/2' },
+      ]),
+    ).toBeNull();
+  });
+
+  it('keeps the reply buttons and drops a URL button that comes with them', () => {
+    expect(params('Escolha:', [...options(2), { text: 'Abrir', url: 'https://example.test' }])).toMatchObject({
+      tipo: 2,
+      button: ['Opção 1', 'Opção 2'],
+    });
+  });
+});
+
+describe('buildInteractive with a sole URL button (tipo 3)', () => {
+  const url = 'https://www2.hapvida.com.br/portal-da-privacidade/politica-privacidade';
+  const link = (text = 'Ver Política') => [{ text, url }];
+
+  it('maps it onto url_button and cuts the line that carries the URL', () => {
+    const body = `Ao continuar, você declara estar ciente da nossa *Política de Privacidade*.\nVer Política de Privacidade: ${url}`;
+    expect(buildInteractive(body, link())).toEqual({
+      tipo: 3,
+      mensagem: 'Ao continuar, você declara estar ciente da nossa *Política de Privacidade*.',
+      url_button: { texto_botao: 'Ver Política', url },
+    });
+  });
+
+  it('keeps a body that does not carry the URL as it is', () => {
+    expect(buildInteractive('Leia a Política.', link())).toMatchObject({ tipo: 3, mensagem: 'Leia a Política.' });
+  });
+
+  it('cuts the label where the other channels cut it, and encodes it for the latin-1 platform', () => {
+    const p = buildInteractive('Corpo', link('Ver Política de Privacidade 👋'));
+    expect((p?.url_button as { texto_botao: string }).texto_botao.startsWith('Ver Política de Pri')).toBe(true);
+    expect((buildInteractive('Corpo', link('Abrir 👋'))?.url_button as { texto_botao: string }).texto_botao).toBe(
+      'Abrir ##1f44b##',
+    );
+  });
+
+  it('degrades to text when nothing but the URL is left to show', () => {
+    expect(buildInteractive(`Política: ${url}`, link())).toBeNull();
   });
 });
 

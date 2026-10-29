@@ -32,9 +32,10 @@ import { encodeAscEmoji } from './emoji';
 const MAX_OPTIONS = 10;
 const MAX_BODY_TEXT = 1024;
 
-/** `msg_interativa_parametros.tipo` — 1 is a list, 2 reply buttons, 5 a Meta WhatsApp Flow. */
+/** `msg_interativa_parametros.tipo` — 1 is a list, 2 reply buttons, 3 a URL button, 5 a Meta WhatsApp Flow. */
 const TIPO_LISTA = 1;
 const TIPO_BOTOES = 2;
+const TIPO_BOTAO_URL = 3;
 const TIPO_FLUXO = 5;
 /** Meta's limit for the CTA that opens a flow. */
 const MAX_FLOW_CTA = 30;
@@ -125,6 +126,9 @@ export function buildInteractive(
   if (!trimmed || trimmed.length > MAX_BODY_TEXT) return null;
 
   const replyButtons = (buttons ?? []).filter((b) => !b.url && b.text?.trim());
+  const urlButtons = (buttons ?? []).filter((b) => b.url && b.text?.trim());
+  const [soleUrl] = urlButtons;
+  if (replyButtons.length === 0 && urlButtons.length === 1 && soleUrl) return buildUrlButton(trimmed, soleUrl);
   if (replyButtons.length === 0 || replyButtons.length > MAX_OPTIONS) return null;
 
   const buttonLabel = listButtonLabelOf(listOptions.buttonLabel);
@@ -169,6 +173,34 @@ export function buildInteractive(
       ],
     },
   };
+}
+
+/**
+ * `msg_interativa_parametros` for the platform's URL button (`tipo: 3`,
+ * `url_button {texto_botao, url}`): Meta's `cta_url`, the one way a link rides
+ * a button in session. It is the shape the SDK plans for a sole URL button, so
+ * the label is cut where whatsapp-business and hermes cut it.
+ *
+ * The caller may also write the URL in the text, so that a plugin which still
+ * drops URL buttons delivers the link anyway. The lines carrying it leave the
+ * body here, where the button takes their place; the bubble pushed when the
+ * platform refuses the button keeps them, link included.
+ */
+function buildUrlButton(body: string, button: InteractiveButton): Record<string, unknown> | null {
+  const url = button.url ?? '';
+  const plan = planInteractive(body, [button], LIST_BUTTON_LABEL);
+  const action = plan.interactive?.action as { parameters?: { display_text?: string } } | undefined;
+  const label = action?.parameters?.display_text?.trim();
+  const mensagem = body
+    .split('\n')
+    .filter((line) => !line.includes(url))
+    .join('\n')
+    .trim();
+  if (!mensagem || !label) return null;
+
+  // The body arrives already encoded (`resolveOutboundText`); the label comes
+  // straight from the button, so it is encoded here. See `emoji.ts`.
+  return { tipo: TIPO_BOTAO_URL, mensagem, url_button: { texto_botao: encodeAscEmoji(label), url } };
 }
 
 /** The part of Omni's flow descriptor (`metadata.flow`) the ASC platform can carry. */

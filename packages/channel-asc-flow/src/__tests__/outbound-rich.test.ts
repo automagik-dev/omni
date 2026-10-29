@@ -295,6 +295,37 @@ describe('outbound interactive through /sendMsgInterativaAvancado', () => {
   });
 });
 
+describe('outbound URL button through /sendMsgInterativaAvancado', () => {
+  const url = 'https://example.test/politica';
+  const text = `Boas-vindas.\n\nAo continuar, você aceita a Política.\nVer Política: ${url}`;
+
+  it('pushes the bubbles before it and sends the one with the URL as tipo 3, without the URL line', async () => {
+    await boot();
+    await send({ type: 'text', text, buttons: [{ text: 'Ver Política', url }] });
+
+    expect(of('/callbackFlowMsg').map((c) => c.body.msg_usuario)).toEqual(['Boas-vindas.']);
+    expect(of('/sendMsgInterativaAvancado')[0]?.body.msg_interativa_parametros).toMatchObject({
+      tipo: '3',
+      mensagem: 'Ao continuar, você aceita a Política.',
+      url_button: { texto_botao: 'Ver Política', url },
+    });
+    expect(ready('42')).toMatchObject({ resposta: '' });
+  });
+
+  it('pushes the bubble with the URL still written when the platform refuses the button', async () => {
+    await boot({
+      '/sendMsgInterativaAvancado': () => jsonResponse({ cod_error: 1, msg: 'nao' }, 400),
+    });
+    const result = await send({ type: 'text', text, buttons: [{ text: 'Ver Política', url }] });
+
+    expect(result.success).toBe(true);
+    expect(of('/callbackFlowMsg').map((c) => c.body.msg_usuario)).toEqual([
+      'Boas-vindas.',
+      `Ao continuar, você aceita a Política.\nVer Política: ${url}`,
+    ]);
+  });
+});
+
 describe('outbound WhatsApp Flow through /sendMsgInterativaAvancado', () => {
   const flow = { flowId: '1', cta: 'Escolher 3 horários', bodyText: 'Escolha 3 horários:', data: { a: 'b' } };
   const sendFlow = (metaFlow: Record<string, unknown> | undefined, text = 'Escolha 3 horários:') =>
