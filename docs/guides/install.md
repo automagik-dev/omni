@@ -310,8 +310,13 @@ omni install --non-interactive
 
 Or manually:
 ```bash
-NATS_VERSION=v2.12.4
-curl -L "https://github.com/nats-io/nats-server/releases/download/${NATS_VERSION}/nats-server-${NATS_VERSION}-linux-amd64.tar.gz" | tar xz
+NATS_VERSION=v2.12.15
+NATS_RELEASE="https://github.com/nats-io/nats-server/releases/download/${NATS_VERSION}"
+ARCHIVE="nats-server-${NATS_VERSION}-linux-amd64.tar.gz"
+curl -fLO "${NATS_RELEASE}/${ARCHIVE}"
+# The size and sha256 Omni pins are in packages/cli/src/nats-pin.json; the release lists the sha256 too.
+curl -fsL "${NATS_RELEASE}/SHA256SUMS" | grep " ${ARCHIVE}$" | sha256sum -c -
+tar xzf "${ARCHIVE}"
 mv nats-server-*/nats-server ~/.omni/nats-server
 chmod +x ~/.omni/nats-server
 ```
