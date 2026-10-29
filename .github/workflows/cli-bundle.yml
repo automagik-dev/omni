@@ -1,0 +1,56 @@
+name: CLI Bundle
+
+# The published CLI's bundle (packages/cli/dist) must not inline @anthropic-ai/claude-agent-sdk:
+# only the claude-code provider needs it, and it is loaded at run time, from an optional
+# dependency. This builds the CLI from a frozen lockfile and runs scripts/ci/test-cli-bundle.sh,
+# which matches the SDK on markers of its own code and runs the CLI with the SDK absent.
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - 'packages/cli/**'
+      - 'packages/core/**'
+      - 'bun.lock'
+      - 'scripts/ci/test-cli-bundle.sh'
+      - '.github/workflows/cli-bundle.yml'
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'packages/cli/**'
+      - 'packages/core/**'
+      - 'bun.lock'
+      - 'scripts/ci/test-cli-bundle.sh'
+      - '.github/workflows/cli-bundle.yml'
+
+concurrency:
+  group: cli-bundle-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  bundle:
+    name: CLI bundle keeps the Claude agent SDK external
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.2
+
+      - name: Install dependencies (frozen lockfile)
+        run: bun install --frozen-lockfile
+
+      - name: Build the CLI
+        run: bunx turbo build --filter=@automagik/omni
+
+      - name: Run the CLI bundle rows
+        run: bash scripts/ci/test-cli-bundle.sh packages/cli/dist
