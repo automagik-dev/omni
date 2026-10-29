@@ -2250,6 +2250,8 @@ test('saved "new session" and "ongoing session" automations move to their chat\'
   // The board and Omni's list say it once, on each.
   assert.deepEqual(run.view().subscriptions.map(sub => sub.note ?? null), [WORKER_MOVED.session, WORKER_MOVED.ongoing, WORKER_MOVED.session, null])
   assert.match(await bench.tool('list_automations', {}), new RegExp(`sub-on · sub-on worker: when any new message in Marina → the thread of "Marina" \\(${WORKER_MOVED.ongoing.replace(/[.;]/g, '\\$&')}\\)`))
+  // The move reaches state.json by itself; its save may land after the state in memory.
+  await until(() => saved(home).subscriptions['sub-on'].worker.kind === 'thread' && !Object.hasOwn(saved(home), 'omniRows'))
   const disk = saved(home)
   assert.deepEqual([disk.subscriptions['sub-on'].worker, disk.subscriptions['sub-on'].note, Object.hasOwn(disk, 'omniRows')], [{ kind: 'thread' }, WORKER_MOVED.ongoing, false])
 
