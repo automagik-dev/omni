@@ -546,7 +546,7 @@ export function install(rt) {
   // none here: the page calls it "Group" or "Chat" in its own language, and its initials are
   // that word's.
   // A chat as the picker names it. Omni's by-id read answers some chats' raw WhatsApp id as
-  // their name ("54958418317348@lid") where its list resolves the contact's ("Felipe Rosa"), so
+  // their name ("54958418317348@lid") where its list resolves the contact's name, so
   // a chat named by an id is read again from the channel's list: the thread is then named as
   // the picker showed it, never by the LID, and by the number only when nothing names it.
   async function namedChat(chat, channelId) {
