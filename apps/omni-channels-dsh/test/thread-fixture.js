@@ -42,6 +42,9 @@ export const CHATS = {
   [GROUP]: { id: GROUP, instanceId: INSTANCE, externalId: '120363000000000000@g.us', chatType: 'group', name: 'Obra', avatarUrl: null, lastMessagePreview: 'fotos no drive', lastMessageFromMe: true, lastMessageAt: '2026-10-29T11:00:00.000Z' },
   [ELSEWHERE]: { id: ELSEWHERE, instanceId: OTHER_INSTANCE, externalId: '5511977776666@s.whatsapp.net', chatType: 'dm', name: 'Other line' },
 }
+// Contact names Omni's chat list resolves by the chat's WhatsApp id, where its by-id read
+// answers the raw LID the chat's row was written with (Bug 2 of the 3.50.0 dogfood).
+export const CONTACT_NAMES = {}
 // The smallest PNG there is (1×1), the bytes a picture message serves.
 export const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64')
 // Messages Omni holds, by id: a picture and a text in CHAT, a voice note, a picture whose
@@ -92,7 +95,15 @@ export function fakeOmni() {
     if (method === 'GET' && path === '/chats') {
       if (child) return locked()
       const instanceId = url.searchParams.get('instanceId')
-      return json(200, { items: Object.values(CHATS).filter(chat => chat.instanceId === instanceId) })
+      const search = url.searchParams.get('search')
+      // As Omni: the list names a chat by its contact where the by-id read answers the LID,
+      // and its search is a plain substring of the name or the id (so words out of the
+      // order the name has them in find nothing).
+      const items = Object.values(CHATS)
+        .filter(chat => chat.instanceId === instanceId)
+        .map(chat => (CONTACT_NAMES[chat.externalId] === undefined ? chat : { ...chat, name: CONTACT_NAMES[chat.externalId] }))
+        .filter(chat => search === null || `${chat.name ?? ''} ${chat.externalId}`.toLowerCase().includes(search.toLowerCase()))
+      return json(200, { items })
     }
     const history = path.match(/^\/chats\/([^/]+)\/messages$/)?.[1]
     if (method === 'GET' && history !== undefined) {
