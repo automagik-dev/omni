@@ -116,8 +116,9 @@ export function apply(ctx) {
     () => shadow('conversation.input.dock', { id: 'omni-consent', order: -80, inject: face }, ConsentDock),
     // A chat thread's Session is not a Bot's: it marks the page so the Bot controls stay hidden there.
     () => shadow('conversation.input.dock', { id: 'omni-thread', order: -200, inject: face }, ThreadDock),
-    // In a thread's own Session, the button that opens its phone pane: the team's header draws
-    // its buttons in a Bot's Session only.
+    // In a thread's own Session, the opener of its phone pane: a click on the thread's row
+    // asks for it and this mounts inside that Session, where DSH has the Session's store. The
+    // team's header draws its buttons in a Bot's Session only, hence a dock of our own.
     () => shadow('conversation.input.dock', { id: 'omni-phone', order: -190, inject: face }, PhoneDock),
     () => shadow('sidebar.footer.action', { id: 'bot-connect', order: -100, inject: face }, ChannelsFooter),
     // The Connect wizard opened on demand (settings, Channels, or once after install) mounts here.

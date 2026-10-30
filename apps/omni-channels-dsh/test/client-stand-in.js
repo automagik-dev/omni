@@ -110,16 +110,34 @@ export function column() {
   const bodies = []
   const opened = []
   const state = { onScreen: 's-omni' }
+  // DSH's two steps, kept apart as they are: the store is minted and adopted with the render
+  // that brings a Session's seat (openTab needs that and nothing more, require() checks
+  // actionsFor), and `screen()`'s committed `bySession` is materialized by the seat's own
+  // effect, which may run after a dock inside that Session opened.
+  const adopted = new Set(['s-omni'])
+  const surfaces = new Set(['s-omni'])
   // `put(sessionId)` brings a Session on screen, as DSH names it before React draws it.
   const watching = new Set()
   const put = (sessionId) => {
     state.onScreen = sessionId
     for (const listener of watching) listener()
   }
+  // `adopt(sessionId)` mints and adopts that Session's store, as its seat does in render.
+  const adopt = (sessionId) => { adopted.add(sessionId) }
+  // `materialize(sessionId)` commits its surface, as the seat's effect does afterwards.
+  const materialize = (sessionId) => { surfaces.add(sessionId) }
   const right = {
     mounted: { getSnapshot: () => state.onScreen, subscribe: (listener) => { watching.add(listener); return () => watching.delete(listener) } },
+    // DSH's own answer: the Session on screen with its surface committed, or undefined between.
+    screen: () => {
+      const sessionId = state.onScreen
+      return sessionId === undefined || !surfaces.has(sessionId) ? undefined : { sessionId, surface: {} }
+    },
     openTab: (kind, options) => {
       if (!types.some(type => type.kind === kind)) throw new Error(`sidebarRight: no tab type is registered as "${kind}"`)
+      // As DSH's controller: openTab needs the Session on screen and its adopted store
+      // (require() → actionsFor), not a committed surface — place() takes it undefined.
+      if (state.onScreen === undefined || !adopted.has(state.onScreen)) throw new Error('sidebarRight: no session surface is mounted')
       opened.push([kind, plain(options)])
     },
   }
@@ -135,7 +153,7 @@ export function column() {
     },
     slots: { inject: (_name, register) => register(), register: (options, component) => { bodies.push({ ...options, component }); return () => {} } },
   }
-  return { ctx, types, bodies, opened, state, put, watching }
+  return { ctx, types, bodies, opened, state, put, watching, adopt, materialize, adopted, surfaces, right }
 }
 
 // This plugin's client modules (`lines`: export lines, read from src/client/) bundled as DSH

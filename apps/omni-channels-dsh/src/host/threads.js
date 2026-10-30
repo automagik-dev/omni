@@ -81,6 +81,21 @@ const ownNameOf = (chat) => {
   const user = NOT_A_NUMBER.exec(chat.externalId ?? '')?.[1].replace(/\D/g, '')
   return RAW_ID.test(own) || (user !== undefined && own.replace(/\D/g, '') === user) ? '' : own
 }
+// A thread title that is only a phone number: a chat Omni's by-id read names by its raw LID
+// falls back to the number, where the channel's chat list has the contact's name (namedChat).
+const BARE_PHONE = /^\+\d{6,}$/
+// A name or a number as the picker searches it: accents and case folded away.
+const folded = value => String(value ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+/** Whether a chat answers a typed query: every word of its name (any order), or part of its number. */
+export function matchesChat(chat, query) {
+  const text = folded(query).trim()
+  if (text === '') return true
+  const name = folded(chatNameOf(chat) ?? '')
+  const words = text.split(/\s+/).filter(Boolean)
+  const digits = text.replace(/\D/g, '')
+  const phone = phoneOf(chat)
+  return words.every(word => name.includes(word)) || (digits.length >= 3 && phone !== undefined && phone.includes(digits))
+}
 /**
  * A chat's name as the picker and the thread rows show it: its own name, else a direct chat's
  * `+<number>`, else null, which the page calls "Group" or "Chat" in its own language. Never a
@@ -99,8 +114,10 @@ const kindOf = thread => (thread.kind === 'direct' || thread.kind === 'group' ? 
 // picker's rules; its WhatsApp id gives a direct chat's number.
 const chatOfRecord = thread => ({ name: thread.title, externalId: thread.chatJid, chatType: kindOf(thread) === 'direct' ? 'dm' : 'group' })
 // A thread whose record keeps no name of its chat (one added before the rules above, under a
-// raw id), which the start's naming pass reads again.
-const unnamed = thread => ownNameOf(chatOfRecord(thread)) === ''
+// raw id, or named from a by-id read that answers the raw LID), which the start's naming pass
+// reads again. A direct chat with no name at all keeps its `+<number>`, so it is read once
+// each start and left as it is when the name did not change.
+const unnamed = thread => ownNameOf(chatOfRecord(thread)) === '' || (kindOf(thread) === 'direct' && BARE_PHONE.test(thread.title ?? ''))
 // What a thread is told it works on, and its DSH Session's title: its name, else the word.
 const labelOf = (name, kind) => name ?? (kind === 'group' ? 'Group' : 'Chat')
 // A search that reads as a phone number ("+55 (11) 98888-7777", "11.98888.7777") goes to Omni as its digits,
@@ -366,6 +383,7 @@ export function install(rt) {
       return { ok: false, reason: error.message }
     }
     if (chat.id !== chatId || chat.instanceId !== channelId) return { ok: false, reason: 'That chat is not on this channel.' }
+    chat = await namedChat(chat, channelId)
     const link = rt.omniLink?.() ?? null
     const threadId = randomUUID()
     const minted = await rt.threadKeys.mint(threadId, chatId)
@@ -527,6 +545,24 @@ export function install(rt) {
   // chat's number under its name when the name is not that number. A chat with no name has
   // none here: the page calls it "Group" or "Chat" in its own language, and its initials are
   // that word's.
+  // A chat as the picker names it. Omni's by-id read answers some chats' raw WhatsApp id as
+  // their name ("54958418317348@lid") where its list resolves the contact's ("Felipe Rosa"), so
+  // a chat named by an id is read again from the channel's list: the thread is then named as
+  // the picker showed it, never by the LID, and by the number only when nothing names it.
+  async function namedChat(chat, channelId) {
+    if (ownNameOf(chat) !== '') return chat
+    const phone = phoneOf(chat)
+    const query = new URLSearchParams({ instanceId: channelId, limit: String(CHATS_LIMIT), sort: 'activity', search: phone ?? chat.externalId })
+    try {
+      const answer = ChatList.safeParse(await ask(`/chats?${query}`))
+      if (!answer.success) return chat
+      // The list's row of this same chat, never another chat that shares its number.
+      const row = answer.data.items.find(item => item.id === chat.id)
+      return row === undefined ? chat : { ...chat, name: row.name ?? chat.name, avatarUrl: row.avatarUrl ?? chat.avatarUrl }
+    } catch {
+      return chat
+    }
+  }
   const pickerRow = (chat, added) => {
     const name = chatNameOf(chat)
     const phone = chat.chatType === 'dm' ? phoneOf(chat) : undefined
@@ -538,12 +574,20 @@ export function install(rt) {
   async function chats(body) {
     const payload = parse(ChatsPayload, body, 'Pick a channel')
     await rt.load()
-    const query = new URLSearchParams({ instanceId: payload.channelId, limit: String(CHATS_LIMIT), sort: 'activity' })
-    if (payload.query) query.set('search', searchOf(payload.query))
-    const answer = ChatList.safeParse(await ask(`/chats?${query}`))
-    if (!answer.success) throw refused('Omni answered something else for its chats.')
+    const ofChannel = async (search) => {
+      const query = new URLSearchParams({ instanceId: payload.channelId, limit: String(CHATS_LIMIT), sort: 'activity' })
+      if (search) query.set('search', search)
+      const answer = ChatList.safeParse(await ask(`/chats?${query}`))
+      if (!answer.success) throw refused('Omni answered something else for its chats.')
+      return answer.data.items.filter(chat => chat.instanceId === payload.channelId)
+    }
+    let found = await ofChannel(payload.query ? searchOf(payload.query) : null)
+    // Omni's search misses a name typed in parts ("Guga Alv", where "Guga" alone answers), so a
+    // query it answers nothing for is read again over the channel's chats and matched here, by
+    // any part of the name or of the number.
+    if (payload.query && found.length === 0) found = (await ofChannel(null)).filter(chat => matchesChat(chat, payload.query))
     const taken = new Set(list().map(thread => thread.chatId))
-    return { chats: answer.data.items.filter(chat => chat.instanceId === payload.channelId).map(chat => pickerRow(chat, taken.has(chat.id))) }
+    return { chats: found.map(chat => pickerRow(chat, taken.has(chat.id))) }
   }
   const ENDPOINTS = {
     'omni-thread-add': async (body) => {
@@ -596,7 +640,7 @@ export function install(rt) {
   async function rename(thread) {
     const answer = ChatAnswer.safeParse(await ask(`/chats/${thread.chatId}`))
     if (!answer.success || answer.data.data.id !== thread.chatId) return
-    const chat = answer.data.data
+    const chat = await namedChat(answer.data.data, thread.channelId)
     const name = chatNameOf(chat)
     const title = name?.slice(0, TITLE_MAX) ?? null
     const kind = chat.chatType === 'dm' ? 'direct' : 'group'

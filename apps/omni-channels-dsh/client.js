@@ -15141,8 +15141,24 @@ function phoneThreadOf(roster, params, sessionId) {
   return (named ? pick("id", params.threadId) ?? pick("chatId", params.chatId) : pick("sessionId", sessionId)) ?? null;
 }
 var phoneRight = null;
-var phoneWait = null;
-var PHONE_WAIT_MS = 3e3;
+var INTENTS_MAX = 8;
+var intents = /* @__PURE__ */ new Map();
+var noteIntent = (threadId) => {
+  intents.delete(threadId);
+  intents.set(threadId, true);
+  while (intents.size > INTENTS_MAX) intents.delete(intents.keys().next().value);
+};
+function hasPhoneIntent(threadId) {
+  return intents.has(threadId);
+}
+function takePhoneIntent(threadId) {
+  return intents.delete(threadId);
+}
+function phoneSurfaceIs(right, thread) {
+  if (typeof right?.screen !== "function") return false;
+  const screen = right.screen();
+  return screen !== void 0 && screen.sessionId === thread.sessionId;
+}
 function installPhone(ctx, face) {
   const fiber = ctx.inject(["sidebarRight", "sidebarRightTabs"], (scope) => {
     scope.effect(() => scope.sidebarRightTabs.register(phoneTabDefinition()), "ds-bot: phone tab type");
@@ -15151,7 +15167,7 @@ function installPhone(ctx, face) {
       phoneRight = scope.sidebarRight;
       return () => {
         phoneRight = null;
-        phoneWait?.stop();
+        intents.clear();
       };
     }, "ds-bot: the phone pane for the thread rows");
   });
@@ -15168,25 +15184,11 @@ function openPhone(thread) {
     return error?.message ?? String(error);
   }
 }
-function openPhoneBeside(thread) {
-  const before = phoneWait;
-  before?.stop();
-  const mounted = phoneRight?.mounted;
-  if (typeof mounted?.subscribe !== "function" || mounted.getSnapshot() === thread.sessionId) return openPhone(thread);
-  const passed = /* @__PURE__ */ new Set([...before?.passed ?? [], before?.sessionId, mounted.getSnapshot()]);
-  const off = mounted.subscribe(() => {
-    const now = mounted.getSnapshot();
-    if (now === void 0 || now !== thread.sessionId && passed.has(now)) return;
-    stop();
-    if (now === thread.sessionId) setTimeout(() => openPhone(thread), 0);
-  });
-  const timer = setTimeout(() => stop(), PHONE_WAIT_MS);
-  const stop = () => {
-    off();
-    clearTimeout(timer);
-    if (phoneWait?.stop === stop) phoneWait = null;
-  };
-  phoneWait = { stop, sessionId: thread.sessionId, passed };
+function requestPhone(thread) {
+  const right = phoneRight;
+  if (!right) return t("The phone pane needs DSH's right column.");
+  if (phoneSurfaceIs(right, thread)) return openPhone(thread);
+  noteIntent(thread.id);
   return null;
 }
 function useChatPoll(chatId, on2) {
@@ -15287,19 +15289,16 @@ function PhoneTab({ useTabInfo, sessionId, useRoster }) {
 function PhoneDock({ sessionId, useRoster }) {
   const thread = useRoster((roster) => threadsIn(roster).find((item) => item.sessionId === sessionId) ?? null);
   const [problem, setProblem] = (0, import_react12.useState)(null);
-  if (!thread) return null;
-  return (0, import_react12.createElement)(
-    "div",
-    { className: "op-dock" },
-    problem ? (0, import_react12.createElement)("span", { className: "op-dock-problem", role: "alert" }, hostText(problem)) : null,
-    (0, import_react12.createElement)("button", {
-      type: "button",
-      className: "op-open",
-      "aria-label": t("Show {name} in the phone pane", { name: threadName(thread) }),
-      title: t("Phone pane"),
-      onClick: () => setProblem(openPhone(thread))
-    }, (0, import_react12.createElement)(PhoneGlyph), t("Phone"))
-  );
+  const id = thread?.id ?? null;
+  (0, import_react12.useEffect)(() => {
+    if (id === null || !hasPhoneIntent(id)) return;
+    const mounted = phoneRight?.mounted;
+    if (typeof mounted?.getSnapshot === "function" && mounted.getSnapshot() !== thread.sessionId) return;
+    takePhoneIntent(id);
+    setProblem(openPhone(thread));
+  }, [id]);
+  if (problem === null) return null;
+  return (0, import_react12.createElement)("div", { className: "op-dock" }, (0, import_react12.createElement)("span", { className: "op-dock-problem", role: "alert" }, hostText(problem)));
 }
 var OMNI_PHONE_CSS = `${PHONE_FRAME_CSS}
 .op-pane{box-sizing:border-box;height:100%;overflow-y:auto;padding:20px 16px}
@@ -15318,10 +15317,7 @@ var OMNI_PHONE_CSS = `${PHONE_FRAME_CSS}
 .op-screen .oc-media-doc{min-width:0;font-size:12.5px}
 .op-note{margin:12px 8px;font-size:12.5px;color:var(--bt-ink-3);text-align:center}
 .op-dock{display:flex;justify-content:flex-end;align-items:center;gap:8px;padding:0 4px 4px}
-.op-open{display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 10px;border:1px solid var(--bt-line, rgba(127,127,127,.25));border-radius:13px;background:none;color:var(--bt-ink-2);font:inherit;font-size:12px;cursor:pointer}
-.op-open:hover{background:var(--bt-hover);color:var(--bt-ink)}
-.op-open:focus-visible{outline:2px solid var(--bt-accent);outline-offset:1px}
-.op-dock-problem{font-size:11.5px;color:var(--bt-danger, #dc2626)}
+.op-dock-problem{margin:0 8px 4px;font-size:11.5px;color:var(--bt-danger, #dc2626)}
 `;
 
 // src/client/subscriptions.js
@@ -15911,7 +15907,7 @@ function permissionMenuOf(thread) {
 function openThread(thread, actions, onProblem) {
   onProblem(null);
   actions.openSession(thread.sessionId);
-  const reason = openPhoneBeside(thread);
+  const reason = requestPhone(thread);
   if (reason !== null) onProblem(reason);
 }
 function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
@@ -17281,8 +17277,9 @@ function apply(ctx) {
     () => shadow("conversation.input.dock", { id: "omni-consent", order: -80, inject: face }, ConsentDock),
     // A chat thread's Session is not a Bot's: it marks the page so the Bot controls stay hidden there.
     () => shadow("conversation.input.dock", { id: "omni-thread", order: -200, inject: face }, ThreadDock),
-    // In a thread's own Session, the button that opens its phone pane: the team's header draws
-    // its buttons in a Bot's Session only.
+    // In a thread's own Session, the opener of its phone pane: a click on the thread's row
+    // asks for it and this mounts inside that Session, where DSH has the Session's store. The
+    // team's header draws its buttons in a Bot's Session only, hence a dock of our own.
     () => shadow("conversation.input.dock", { id: "omni-phone", order: -190, inject: face }, PhoneDock),
     () => shadow("sidebar.footer.action", { id: "bot-connect", order: -100, inject: face }, ChannelsFooter),
     // The Connect wizard opened on demand (settings, Channels, or once after install) mounts here.

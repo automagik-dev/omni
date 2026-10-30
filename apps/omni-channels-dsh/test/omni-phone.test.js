@@ -51,7 +51,7 @@ const localStorage = {
 const document = { hidden: false, body: { dataset: {} } }
 
 const ui = await bundleClient([
-  'export { PhonePane, PhoneTab, PhoneDock, installPhone, openPhone, openPhoneBeside, threadName, PHONE_WAIT_MS, phoneThreadOf, keepParams, keptParams, phoneTabDefinition, phoneTabId, PHONE_KIND, PHONE_TAB_ID, OMNI_PHONE_CSS } from \'./omni-phone.js\'',
+  'export { PhonePane, PhoneTab, PhoneDock, installPhone, openPhone, requestPhone, hasPhoneIntent, takePhoneIntent, phoneSurfaceIs, threadName, phoneThreadOf, keepParams, keptParams, phoneTabDefinition, phoneTabId, PHONE_KIND, PHONE_TAB_ID, OMNI_PHONE_CSS } from \'./omni-phone.js\'',
   'export { PhoneFrame, frameMetrics, SIDE_BUTTONS, PHONE_FRAME_CSS } from \'./phone-frame.js\'',
   'export { ThreadRow, rowPropsOf } from \'./omni-tree.js\'',
 ], { globals: { URL: BundleURL, URLSearchParams, Blob, atob, setTimeout: fakeSetTimeout, clearTimeout: fakeClearTimeout, document, localStorage }, team: { omni: { ...omni, call: fakeCall } } })
@@ -255,14 +255,17 @@ test('names and text from the chat are drawn as text only', async (t) => {
   assert.equal(ofType(root, 'img').length + ofType(root, 'script').length + ofType(root, 'b').length, 0)
 })
 
-// The column's timers due now (openPhoneBeside opens after the render that brings a column).
-const runDue = () => {
-  const due = timers.filter(timer => timer.on && timer.ms === 0)
-  timers = timers.filter(timer => !due.includes(timer))
-  for (const timer of due) timer.run()
-}
+// The regression for Bug 1 of the 3.50.0 dogfood: a row's click opened the pane while the
+// Session it had just switched to had no surface yet, so DSH's openTab threw
+// "sidebarRight: no session surface is mounted" and the row showed it in red. The click now
+// asks (requestPhone) and the thread's own dock opens the pane from the render that brings
+// the Session, where openTab is allowed — and DSH's committed surface may be materialized
+// one effect after that dock, which must not cost the open (the seat's own effect order).
 
-test('the tab type registers, and nothing opens it by itself; a click on the thread\'s row opens its Session and the pane beside it, and the thread\'s button opens it', async (t) => {
+const threadRow = (thread, actions, roster) => mount(() => react.createElement(ui.ThreadRow, { thread, actions, rowProps: ui.rowPropsOf({ roster, actions }, roster.omniRowProps) }))
+const dockOf = (sessionId, roster) => mount(() => react.createElement(ui.PhoneDock, { sessionId, useRoster: useRosterOf(roster) }))
+
+test('a row\'s click opens its Session and asks for the pane, which its own dock opens once the Session has a surface', async (t) => {
   reset()
   // Before DSH's right column is there, the action says so and throws nothing.
   assert.equal(ui.openPhone(THREAD(1)), 'The phone pane needs DSH\'s right column.')
@@ -271,68 +274,84 @@ test('the tab type registers, and nothing opens it by itself; a click on the thr
   assert.deepEqual([ui.PHONE_KIND, ui.PHONE_TAB_ID, ui.phoneTabId('t1')], ['omni-phone', 'ds-bot/omni-phone', 'ds-bot/omni-phone:t1'])
   assert.deepEqual(stand.bodies.map(body => [body.name, body.key, body.component === ui.PhoneTab]), [['sidebar.right.pane.tab', ui.PHONE_TAB_ID, true]])
   assert.deepEqual(stand.opened, [], 'installing opens nothing')
-  // The thread row, on a team with the hook: one click opens the Session, and the pane once
-  // that Session is on screen, after the render that brings its column. The row has no
-  // phone button of its own.
   const thread = THREAD(1)
   const roster = hooked([thread])
   const sessions = []
   const actions = { openSession: id => sessions.push(id) }
-  const row = mount(() => react.createElement(ui.ThreadRow, { thread, actions, rowProps: ui.rowPropsOf({ roster, actions }, roster.omniRowProps) }))
+  const row = threadRow(thread, actions, roster)
   assert.equal(one(row.draw(), 'ot-thread-phone'), undefined)
   one(row.draw(), 'bt-thread').props.onClick()
   assert.deepEqual(sessions, ['s1'])
   assert.deepEqual(stand.opened, [], 'not in the column of the Session still on screen')
+  assert.equal(one(row.draw(), 'ot-thread-problem'), undefined)
+  // The Session is on screen but its seat has not minted its surface yet: still nothing, and
+  // no error on the row (this is where the 3.50.0 build threw and showed the DSH message).
   stand.put('s1')
+  assert.equal(stand.right.screen(), undefined, 'control: mounted without a surface')
+  assert.equal(one(row.draw(), 'ot-thread-problem'), undefined)
   assert.deepEqual(stand.opened, [])
-  runDue()
-  assert.deepEqual(stand.opened, [['omni-phone', { params: { threadId: 't1', chatId: CHAT_1 } }]])
-  assert.equal(stand.watching.size, 0, 'the wait ended')
-  // Clicked again while its Session is on screen: the pane opens there at once.
-  one(row.draw(), 'bt-thread').props.onClick()
-  assert.equal(stand.opened.length, 2)
-  // Another Session coming on screen first ends the wait; so does a newer click.
-  stand.put('s-omni')
-  one(row.draw(), 'bt-thread').props.onClick()
-  stand.put('s-other')
-  stand.put('s1')
-  runDue()
-  assert.equal(stand.opened.length, 2)
-  const other = THREAD(2, CHAT_2)
-  stand.put('s-omni')
-  one(row.draw(), 'bt-thread').props.onClick()
-  one(mount(() => react.createElement(ui.ThreadRow, { thread: other, actions, rowProps: ui.rowPropsOf({ roster, actions }, roster.omniRowProps) })).draw(), 'bt-thread').props.onClick()
-  assert.equal(stand.watching.size, 1, 'the first click\'s wait was dropped')
-  stand.put('s2')
-  runDue()
-  assert.deepEqual(stand.opened.slice(2), [['omni-phone', { params: { threadId: 't2', chatId: CHAT_2 } }]])
-  assert.deepEqual(sessions, ['s1', 's1', 's1', 's1', 's2'])
-  // The button in the thread's own Session, and in no other.
-  const dock = sessionId => mount(() => react.createElement(ui.PhoneDock, { sessionId, useRoster: useRosterOf(roster) })).draw()
-  assert.equal(dock('s-omni'), null)
-  const button = one(dock('s1'), 'op-open')
-  assert.equal(button.props['aria-label'], 'Show Chat 1 in the phone pane')
-  button.props.onClick()
-  assert.equal(stand.opened.length, 4)
-  // On a team without the hook the row opens the pane beside the Session on screen; with
-  // none on screen there is no column to open in: it says so.
-  stand.put(undefined)
-  const problemRow = mount(() => react.createElement(ui.ThreadRow, { thread, actions, rowProps: {} }))
-  one(problemRow.draw(), 'bt-thread').props.onClick()
-  assert.equal(text(one(problemRow.draw(), 'ot-thread-problem')), 'Open a conversation first; the phone pane opens beside it.')
-  assert.equal(stand.opened.length, 4)
-  // A remove that failed keeps its error when the pane then opens.
-  stand.put('s-omni')
-  answer = endpoint => (endpoint === 'omni-thread-remove' ? new Error('Could not reach Omni. Try again in a moment.') : {})
-  const removing = mount(() => react.createElement(ui.ThreadRow, { thread, actions, rowProps: {} }))
-  one(removing.draw(), 'ot-thread-remove').props.onClick()
-  one(removing.draw(), 'ot-thread-remove').props.onClick()
+  // The row left the open to the dock, and the dock is what opens it: no throw at click time.
+  assert.equal(ui.hasPhoneIntent('t1'), true, 'the open is still owed')
+  // Its Session's seat mints and adopts its store, as the render that brings it does; its
+  // committed surface (screen()) comes a moment later, in the seat's own effect. The dock must
+  // open in that gap: openTab lands on the adopted Session, place() takes the absent surface.
+  stand.adopt('s1')
+  assert.equal(stand.right.screen(), undefined, 'control: adopted, surface not committed yet')
+  const dock = dockOf('s1', roster)
+  assert.equal(dock.draw(), null, 'the dock draws no control')
   await settle()
-  assert.equal(text(one(removing.draw(), 'ot-thread-problem')), 'Could not reach Omni. Try again in a moment.')
-  one(removing.draw(), 'bt-thread').props.onClick()
-  assert.equal(stand.opened.length, 5)
-  assert.equal(text(one(removing.draw(), 'ot-thread-problem')), 'Could not reach Omni. Try again in a moment.')
-  assert.deepEqual(sessions, ['s1', 's1', 's1', 's1', 's2'], 'a row on a team without the hook opens no Session')
+  assert.deepEqual(stand.opened, [['omni-phone', { params: { threadId: 't1', chatId: CHAT_1 } }]])
+  assert.equal(ui.hasPhoneIntent('t1'), false, 'the intent is spent once')
+  // Rendered again with nothing owed, it opens nothing more.
+  dock.draw()
+  await settle()
+  assert.equal(stand.opened.length, 1)
+  // Clicked again while its Session is on screen with its surface committed: it opens at once.
+  stand.materialize('s1')
+  one(row.draw(), 'bt-thread').props.onClick()
+  assert.equal(stand.opened.length, 2)
+  assert.deepEqual(sessions, ['s1', 's1'])
+})
+
+test('a row\'s click while another Session is on screen leaves the open to the thread\'s dock, and a newer click wins', async (t) => {
+  reset()
+  const stand = installed(t)
+  const roster = hooked([THREAD(1), THREAD(2, CHAT_2)])
+  const actions = { openSession: () => {} }
+  const one1 = threadRow(THREAD(1), actions, roster)
+  one(one1.draw(), 'bt-thread').props.onClick()
+  stand.put('s1')
+  stand.adopt('s1')
+  const dock = dockOf('s1', roster)
+  dock.draw()
+  await settle()
+  assert.deepEqual(stand.opened, [['omni-phone', { params: { threadId: 't1', chatId: CHAT_1 } }]])
+  // The other thread's row clicked while the first is on screen: its own dock opens its pane.
+  const two = threadRow(THREAD(2, CHAT_2), actions, roster)
+  one(two.draw(), 'bt-thread').props.onClick()
+  assert.equal(stand.opened.length, 1)
+  stand.put('s2')
+  stand.adopt('s2')
+  dockOf('s2', roster).draw()
+  await settle()
+  assert.deepEqual(stand.opened.slice(1), [['omni-phone', { params: { threadId: 't2', chatId: CHAT_2 } }]])
+})
+
+test('on a stand-in team without the hook, or with no conversation on screen, a row says why the pane cannot open', async (t) => {
+  reset()
+  const stand = installed(t)
+  const thread = THREAD(1)
+  const actions = { openSession: () => {} }
+  // No Session on screen at all: no column to open in, and the row says so.
+  stand.put(undefined)
+  const row = mount(() => react.createElement(ui.ThreadRow, { thread, actions, rowProps: {} }))
+  one(row.draw(), 'bt-thread').props.onClick()
+  assert.equal(text(one(row.draw(), 'ot-thread-problem')), 'Open a conversation first; the phone pane opens beside it.')
+  assert.equal(stand.opened.length, 0)
+  // A team without the hook opens the pane beside the Session on screen, as before.
+  stand.put('s-omni')
+  one(row.draw(), 'bt-thread').props.onClick()
+  assert.deepEqual(stand.opened, [['omni-phone', { params: { threadId: 't1', chatId: CHAT_1 } }]])
 })
 
 test('on a stand-in Bot team without the hook, a click on the row opens the pane and the row never calls actions.openSession (:195)', async (t) => {
@@ -446,37 +465,29 @@ test('the pane\'s header names a thread by its chat, never a raw id: "Chat" or "
   assert.equal(ui.threadName({ title: '+5511988887777', kind: 'direct' }), '+5511988887777')
 })
 
-test('a quick second click still gets its pane when the first click\'s Session comes on screen first; a wait ends after PHONE_WAIT_MS', (t) => {
+test('two rows clicked quickly each open their own pane, the later one last', async (t) => {
   reset()
   const stand = installed(t)
   const roster = hooked([THREAD(1), THREAD(2, CHAT_2)])
   const actions = { openSession: () => {} }
-  const click = thread => one(mount(() => react.createElement(ui.ThreadRow, { thread, actions, rowProps: ui.rowPropsOf({ roster, actions }, roster.omniRowProps) })).draw(), 'bt-thread').props.onClick()
-  // A then B; DSH shows A's Session on the way to B's.
-  click(THREAD(1))
-  click(THREAD(2, CHAT_2))
+  const rowOf = thread => threadRow(thread, actions, roster)
+  // A then B before either Session is on screen: each click leaves its own intent, so the
+  // Session that arrives first still gets its pane, and the one after gets its own.
+  one(rowOf(THREAD(1)).draw(), 'bt-thread').props.onClick()
+  one(rowOf(THREAD(2, CHAT_2)).draw(), 'bt-thread').props.onClick()
   stand.put('s1')
-  runDue()
-  assert.deepEqual(stand.opened, [], 'not beside A: B was asked for last')
-  assert.equal(stand.watching.size, 1, 'B still waits')
+  stand.adopt('s1')
+  dockOf('s1', roster).draw()
+  await settle()
+  assert.deepEqual(stand.opened, [['omni-phone', { params: { threadId: 't1', chatId: CHAT_1 } }]])
   stand.put('s2')
-  runDue()
-  assert.deepEqual(stand.opened, [['omni-phone', { params: { threadId: 't2', chatId: CHAT_2 } }]])
-  // A wait that DSH never ends is dropped after PHONE_WAIT_MS: a much later visit opens nothing.
-  stand.put('s-omni')
-  click(THREAD(1))
-  const late = timers.filter(timer => timer.on && timer.ms === ui.PHONE_WAIT_MS)
-  assert.deepEqual([ui.PHONE_WAIT_MS, late.length], [3000, 1])
-  late[0].run()
-  assert.equal(stand.watching.size, 0)
-  stand.put('s1')
-  runDue()
-  assert.equal(stand.opened.length, 1)
-  // A wait that opened its pane cancels its timer.
-  stand.put('s-omni')
-  click(THREAD(2, CHAT_2))
-  stand.put('s2')
-  runDue()
+  stand.adopt('s2')
+  dockOf('s2', roster).draw()
+  await settle()
+  assert.deepEqual(stand.opened.slice(1), [['omni-phone', { params: { threadId: 't2', chatId: CHAT_2 } }]])
+  // Each intent is spent once: a dock drawn again opens nothing.
+  dockOf('s1', roster).draw()
+  dockOf('s2', roster).draw()
+  await settle()
   assert.equal(stand.opened.length, 2)
-  assert.equal(timers.filter(timer => timer.on && timer.ms === ui.PHONE_WAIT_MS).length, 0)
 })

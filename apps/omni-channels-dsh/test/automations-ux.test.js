@@ -29,8 +29,8 @@ const textOf = node => (node === null || node === undefined ? '' : typeof node =
 
 // The board took most of the window next to Omni's chat, by itself, again with each fresh part
 // of that chat. Only the header's Automations button opens it now; the phone pane opens only
-// from a click on a thread's row (or the pick that added it) and the thread's own button
-// (omni-phone.js).
+// from a click on a thread's row (or the pick that added it), which the thread's own dock then
+// opens from inside that Session (omni-phone.js).
 test('the board never opens by itself: only the header button opens it; the phone pane only from the thread', () => {
   const dir = new URL('../src/client/', import.meta.url)
   const opens = []
@@ -48,17 +48,21 @@ test('the board never opens by itself: only the header button opens it; the phon
   const phone = readFileSync(new URL('omni-phone.js', dir), 'utf8')
   const open = phone.slice(phone.indexOf('export function openPhone('), phone.indexOf('function useChatPoll('))
   assert.match(open, /right\.openTab\(PHONE_KIND, \{ params: phoneParams\(thread\) \}\)/)
-  // Each way to the pane starts at a click: the thread's button; a row's click on a team
-  // without the hook; and openPhoneBeside, which only openThread calls, itself run by the row's
-  // click or, for a thread the picker just added, by the pick itself through the row's own
-  // opener (rowOpeners), or by its row's arrival, which only the pick marks.
+  // Each way to the pane starts at a click: requestPhone, which only openThread calls, opens it
+  // now or leaves the intent the thread's own dock (setProblem(openPhone(thread))) opens from
+  // the render that brings its surface; and a row's click on a team without the hook opens it
+  // beside the Session on screen. openThread is run by the row's click or, for a thread the
+  // picker just added, by the pick itself through the row's own opener (rowOpeners), or by its
+  // row's arrival, which only the pick marks.
   assert.deepEqual(phoneCalls, [
-    'omni-phone.js: if (typeof mounted?.subscribe !== \'function\' || mounted.getSnapshot() === thread.sessionId) return openPhone(thread)',
-    'omni-phone.js: if (now === thread.sessionId) setTimeout(() => openPhone(thread), 0)',
-    'omni-phone.js: onClick: () => setProblem(openPhone(thread)),',
+    'omni-phone.js: if (phoneSurfaceIs(right, thread)) return openPhone(thread)',
+    'omni-phone.js: setProblem(openPhone(thread))',
     'omni-tree.js: const why = openPhone(thread)',
   ])
-  assert.deepEqual(calls(/^.*\bopenPhoneBeside\(.*$/gm).filter(line => !line.includes('export function')), ['omni-tree.js: const reason = openPhoneBeside(thread)'])
+  assert.deepEqual(calls(/^.*\brequestPhone\(.*$/gm).filter(line => !line.includes('export function')), ['omni-tree.js: const reason = requestPhone(thread)'])
+  // Nothing waits on a timer for the pane any more: the dock opens it from the Session's own
+  // render, and the only timer left in the module is the chat poll.
+  assert.deepEqual(calls(/^.*setTimeout\(.*$/gm).filter(line => line.includes('openPhone') || line.includes('PHONE_WAIT')), [])
   assert.deepEqual(calls(/^.*\bopenThread\(.*$/gm).filter(line => !line.includes('function openThread(')).map(line => line.split(': ')[1]), [
     'if (opens && openOnArrival.delete(thread.id)) openThread(thread, actions, setProblem)',
     'const opener = () => openThread(thread, actions, setProblem)',

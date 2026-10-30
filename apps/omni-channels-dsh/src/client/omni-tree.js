@@ -2,7 +2,7 @@ import { createElement as h, useEffect, useMemo, useRef, useState } from 'react'
 import { ChatAvatar, StatusDot, Tile, useOmni } from './channels.js'
 import { openConnectWizard } from './wizard.js'
 import { isOmniBot, omniActions, startLive, typeOf, unreadOf } from './omni-store.js'
-import { openPhone, openPhoneBeside, threadName } from './omni-phone.js'
+import { openPhone, requestPhone, threadName } from './omni-phone.js'
 import { call, hostText, icons, relativeShort, t } from './core.js'
 const { ChevronRightIcon, CloseIcon, DotsIcon, PlusIcon, SparkIcon } = icons
 
@@ -104,7 +104,7 @@ export function permissionMenuOf(thread) {
 
 /**
  * Opens a thread the owner clicked: its Session, through the team's row action as a Bot's own
- * rows open theirs, then its phone pane beside it (omni-phone.js openPhoneBeside).
+ * rows open theirs, then its phone pane beside it (omni-phone.js requestPhone).
  *
  * The Bot team leaves a main view that holds no Bot, group or DSH bot for the Main Bot while
  * DSH lists its Session as blank, one with no turn yet (bots-dsh sidebar.js useLandOnMainBot),
@@ -114,7 +114,7 @@ export function permissionMenuOf(thread) {
 function openThread(thread, actions, onProblem) {
   onProblem(null)
   actions.openSession(thread.sessionId)
-  const reason = openPhoneBeside(thread)
+  const reason = requestPhone(thread)
   if (reason !== null) onProblem(reason)
 }
 

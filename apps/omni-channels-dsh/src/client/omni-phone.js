@@ -1,17 +1,17 @@
 import { createElement as h, useEffect, useMemo, useState } from 'react'
 import { ChatMessages, useStayAtEnd } from './channels.js'
 import { POLL_MS } from './omni-store.js'
-import { PHONE_FRAME_CSS, PhoneFrame, PhoneGlyph } from './phone-frame.js'
+import { PHONE_FRAME_CSS, PhoneFrame } from './phone-frame.js'
 import { call, hostText, t } from './core.js'
 
 // The phone pane: a tab of DSH's right column that shows one thread's chat in a drawn iPhone
 // (phone-frame.js), files and Omni's text for them included. It is the owner's own view: it
 // reads on the host's link key, polling as the chat view does, and has no composer.
 //
-// It opens only from the thread, never by itself: a click on the thread's row, which opens it
-// beside the thread's own Session, and the phone button in that Session. On a Bot team without
-// the restart hook, where the row opens no Session, the row's click opens it beside the
-// Session on screen. The tab carries the thread and its chat
+// It opens only from the thread, never by itself: a click on the thread's row or a pick in
+// the picker, which opens it beside the thread's own Session. On a Bot team without the
+// restart hook, where the row opens no Session, the row's click opens it beside the Session
+// on screen. The tab carries the thread and its chat
 // in its params. DSH keeps a column's tabs over a reload but not their params (it saves the
 // layout alone, dsh.sidebar-right.v1), so this page keeps each tab's last params itself, and
 // a tab with neither shows the thread whose Session it is in.
@@ -42,12 +42,44 @@ export function phoneThreadOf(roster, params, sessionId) {
   return (named ? pick('id', params.threadId) ?? pick('chatId', params.chatId) : pick('sessionId', sessionId)) ?? null
 }
 
-// DSH's right column, once its plugin is there: the row and the button open the pane in it.
+// DSH's right column, once its plugin is there: the row, the picker and the thread's own
+// dock open the pane in it.
 let phoneRight = null
-// The pane a row's click waits to open beside its thread's Session, `{ stop, sessionId,
-// passed }`; a newer click drops it. How long a wait lasts: past it the click is history.
-let phoneWait = null
-export const PHONE_WAIT_MS = 3000
+// A thread whose pane is to open once its Session is on screen with its surface there (the
+// row's click, the picker's pick). The Session's own dock takes it and opens the pane from
+// that render's effects: sidebarRight opens a tab on the Session the seat has adopted, and
+// adoption is minted with the render that brings the Session, not when the click asks. A
+// click while another Session is on screen therefore leaves the intent, never a timer; the
+// oldest goes when it grows past INTENTS_MAX, so clicking rows over and over cannot grow it.
+const INTENTS_MAX = 8
+const intents = new Map()
+const noteIntent = (threadId) => {
+  intents.delete(threadId)
+  intents.set(threadId, true)
+  while (intents.size > INTENTS_MAX) intents.delete(intents.keys().next().value)
+}
+/** Whether a thread's open is still owed. */
+export function hasPhoneIntent(threadId) {
+  return intents.has(threadId)
+}
+/** Takes a thread's pending open, if it has one: true once, false after. */
+export function takePhoneIntent(threadId) {
+  return intents.delete(threadId)
+}
+
+/**
+ * Whether `thread`'s Session is on screen with its surface already committed: sidebarRight's
+ * `screen()`, whose `bySession` the seat materializes in its own effect — which may run after
+ * the thread's dock does. It answers the row's fast path only; the dock opens on `mounted`
+ * alone, because `openTab` lands in a Session whose store is adopted even when its surface is
+ * not there yet (place() takes `surface === undefined`). A DSH with no `screen()` answers
+ * false, so the open is left to the dock and never thrown at click time.
+ */
+export function phoneSurfaceIs(right, thread) {
+  if (typeof right?.screen !== 'function') return false
+  const screen = right.screen()
+  return screen !== undefined && screen.sessionId === thread.sessionId
+}
 
 export function installPhone(ctx, face) {
   const fiber = ctx.inject(['sidebarRight', 'sidebarRightTabs'], (scope) => {
@@ -57,7 +89,7 @@ export function installPhone(ctx, face) {
       phoneRight = scope.sidebarRight
       return () => {
         phoneRight = null
-        phoneWait?.stop()
+        intents.clear()
       }
     }, 'ds-bot: the phone pane for the thread rows')
   })
@@ -65,8 +97,9 @@ export function installPhone(ctx, face) {
 }
 
 /**
- * Opens the pane on `thread` in the right column of the Session on screen. Returns null when
- * it opened, else why not. It opens no Session.
+ * Opens the pane on `thread` in the right column, whose Session must be the one on screen
+ * with its surface there. Returns null when it opened, else why not. It opens no Session.
+ * Called when that surface is not there it changes nothing: requestPhone waits instead.
  */
 export function openPhone(thread) {
   const right = phoneRight
@@ -81,31 +114,15 @@ export function openPhone(thread) {
 }
 
 /**
- * Opens the pane on `thread` beside the thread's own Session: now when it is on screen, else
- * once DSH puts it there (the row's click opened it), after the render that brings its column.
- * A wait ends when another Session comes on screen first (the Sessions of the clicks it took
- * over pass by, so a quick second click still gets its pane), when another pane is asked
- * for, or after PHONE_WAIT_MS. Returns null when it opened or waits, else why not.
+ * Asks for the pane on `thread`: opens it now when its Session is the one on screen with its
+ * surface there, else leaves the intent its own Session's dock opens (takePhoneIntent), and
+ * returns null. Returns why not when there is no right column or no Session on screen at all.
  */
-export function openPhoneBeside(thread) {
-  const before = phoneWait
-  before?.stop()
-  const mounted = phoneRight?.mounted
-  if (typeof mounted?.subscribe !== 'function' || mounted.getSnapshot() === thread.sessionId) return openPhone(thread)
-  const passed = new Set([...(before?.passed ?? []), before?.sessionId, mounted.getSnapshot()])
-  const off = mounted.subscribe(() => {
-    const now = mounted.getSnapshot()
-    if (now === undefined || (now !== thread.sessionId && passed.has(now))) return
-    stop()
-    if (now === thread.sessionId) setTimeout(() => openPhone(thread), 0)
-  })
-  const timer = setTimeout(() => stop(), PHONE_WAIT_MS)
-  const stop = () => {
-    off()
-    clearTimeout(timer)
-    if (phoneWait?.stop === stop) phoneWait = null
-  }
-  phoneWait = { stop, sessionId: thread.sessionId, passed }
+export function requestPhone(thread) {
+  const right = phoneRight
+  if (!right) return t('The phone pane needs DSH\'s right column.')
+  if (phoneSurfaceIs(right, thread)) return openPhone(thread)
+  noteIntent(thread.id)
   return null
 }
 
@@ -196,17 +213,28 @@ export function PhoneTab({ useTabInfo, sessionId, useRoster }) {
   return h(PhonePane, { key: phoneTabId(params?.threadId ?? ''), params, sessionId, useRoster, visible: tab?.visible !== false })
 }
 
-/** Above a thread's composer: the button that opens its phone pane. Nothing in other Sessions. */
+/**
+ * In a thread's own Session: opens the pane its row asked for, from this render's effects.
+ * That is where DSH has minted the Session's surface (sidebarRight's own rule: a command acts
+ * on the arriving Session from that commit's effects), so no wait and no timer is needed. It
+ * draws no control of its own; a pane that could not open says why, in place.
+ */
 export function PhoneDock({ sessionId, useRoster }) {
   const thread = useRoster(roster => threadsIn(roster).find(item => item.sessionId === sessionId) ?? null)
   const [problem, setProblem] = useState(null)
-  if (!thread) return null
-  return h('div', { className: 'op-dock' },
-    problem ? h('span', { className: 'op-dock-problem', role: 'alert' }, hostText(problem)) : null,
-    h('button', {
-      type: 'button', className: 'op-open', 'aria-label': t('Show {name} in the phone pane', { name: threadName(thread) }), title: t('Phone pane'),
-      onClick: () => setProblem(openPhone(thread)),
-    }, h(PhoneGlyph), t('Phone')))
+  const id = thread?.id ?? null
+  useEffect(() => {
+    if (id === null || !hasPhoneIntent(id)) return
+    // This dock renders inside the thread's Session, so DSH has minted and adopted that
+    // Session's store in the render that brought it: openTab lands here. Its committed surface
+    // may arrive one effect later (the seat's own), which openTab takes as it is.
+    const mounted = phoneRight?.mounted
+    if (typeof mounted?.getSnapshot === 'function' && mounted.getSnapshot() !== thread.sessionId) return
+    takePhoneIntent(id)
+    setProblem(openPhone(thread))
+  }, [id])
+  if (problem === null) return null
+  return h('div', { className: 'op-dock' }, h('span', { className: 'op-dock-problem', role: 'alert' }, hostText(problem)))
 }
 
 export const OMNI_PHONE_CSS = `${PHONE_FRAME_CSS}
@@ -226,8 +254,5 @@ export const OMNI_PHONE_CSS = `${PHONE_FRAME_CSS}
 .op-screen .oc-media-doc{min-width:0;font-size:12.5px}
 .op-note{margin:12px 8px;font-size:12.5px;color:var(--bt-ink-3);text-align:center}
 .op-dock{display:flex;justify-content:flex-end;align-items:center;gap:8px;padding:0 4px 4px}
-.op-open{display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 10px;border:1px solid var(--bt-line, rgba(127,127,127,.25));border-radius:13px;background:none;color:var(--bt-ink-2);font:inherit;font-size:12px;cursor:pointer}
-.op-open:hover{background:var(--bt-hover);color:var(--bt-ink)}
-.op-open:focus-visible{outline:2px solid var(--bt-accent);outline-offset:1px}
-.op-dock-problem{font-size:11.5px;color:var(--bt-danger, #dc2626)}
+.op-dock-problem{margin:0 8px 4px;font-size:11.5px;color:var(--bt-danger, #dc2626)}
 `

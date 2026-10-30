@@ -10,8 +10,8 @@ import { join } from 'node:path'
 import { afterEach, test } from 'node:test'
 import { NEEDS_NEWER_TEAM, TEAM_CONTRACT } from '../src/host/resume-hook.js'
 import { NOT_LINKED } from '../src/host/thread-keys.js'
-import { CUT_WINDOW_MS, THREAD_REFUSAL, THREAD_TOOLS } from '../src/host/threads.js'
-import { OMNI, INSTANCE, CHAT, GROUP, ELSEWHERE, OWNER, CHATS, askedOf, boot, fakeOmni, flush, guarded, homeFor, keysOf, record, resetFetch, saved, teamState, until } from './thread-fixture.js'
+import { CUT_WINDOW_MS, matchesChat, THREAD_REFUSAL, THREAD_TOOLS } from '../src/host/threads.js'
+import { OMNI, INSTANCE, CHAT, GROUP, ELSEWHERE, OWNER, CHATS, CONTACT_NAMES, askedOf, boot, fakeOmni, flush, guarded, homeFor, keysOf, record, resetFetch, saved, teamState, until } from './thread-fixture.js'
 
 afterEach(resetFetch)
 
@@ -182,10 +182,13 @@ test('the picker searches a number by its digits, so it matches the chat\'s What
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const omni = fakeOmni()
   const run = await boot(t, homeFor(t, omni))
-  const searched = () => new URLSearchParams(omni.askedWith.filter(call => call.route === 'GET /chats').at(-1).query).get('search')
+  const reads = () => omni.askedWith.filter(call => call.route === 'GET /chats')
   for (const [typed, sent] of [['+55 (11) 98888-7777', '5511988887777'], ['98888-7777', '988887777'], ['11.98888.7777', '11988887777'], ['Marina', 'Marina'], ['12345', '12345'], ['Obra 2026', 'Obra 2026']]) {
+    // The query as typed goes to Omni first; a query it answers nothing for is read again
+    // without one, and matched here (chats()).
+    const before = reads().length
     await run.call('omni-thread-chats', { channelId: INSTANCE, query: typed })
-    assert.equal(searched(), sent, typed)
+    assert.equal(new URLSearchParams(reads()[before].query).get('search'), sent, typed)
   }
 })
 
@@ -612,11 +615,12 @@ test('a thread is never named by a raw id: the picker\'s rules name it, and one 
   assert.deepEqual(chatReads().sort(), [`GET /chats/${GROUP}`, `GET /chats/${LID_CHAT}`, `GET /chats/${NAMELESS_GROUP}`, `GET /chats/${UNKNOWN}`, `GET /chats/${UNKNOWN}`].sort())
   for (let i = 0; i < 5; i += 1) run.view()
   assert.equal(chatReads().length, 5)
-  // The next start reads only those Omni gave no name: the nameless group and the two it lost.
+  // The next start reads only those Omni gave no name: the nameless group, the two it lost,
+  // and the thread whose name is only a number (read once more, in case a contact names it).
   await run.stop()
   const before = chatReads().length
   const next = await boot(t, home)
-  await until(() => chatReads().length === before + 3)
+  await until(() => chatReads().length === before + 4)
   await flush()
   assert.deepEqual(next.titled, [])
 })
@@ -663,4 +667,75 @@ test('an old title that only spells a group id or a LID with its device is no na
   await flush()
   assert.deepEqual(next.titled, [['plus-session', 'Obra'], ['dashed-session', 'Obra'], ['device-session', 'Marina']])
   assert.deepEqual(['plus', 'dashed', 'device'].map(id => saved(home).omniThreads[id].title), ['Obra', 'Obra', 'Marina'])
+})
+
+
+// --- Bug 2 of the 3.50.0 dogfood: thread rows and the phone header showed bare numbers -----
+// Omni's by-id read of a chat answers the raw LID it was written with, where its chat list
+// resolves the contact's name; the plugin named threads from the by-id read alone.
+
+test('a chat whose by-id read answers a LID is a thread named as the picker names it, never by the id (Bug 2)', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const externalId = '5511984612783@s.whatsapp.net'
+  CHATS[LID_CHAT] = { id: LID_CHAT, instanceId: INSTANCE, externalId, chatType: 'dm', name: '69003213045769@lid' }
+  CONTACT_NAMES[externalId] = 'Guga Alves'
+  t.after(() => { delete CHATS[LID_CHAT]; delete CONTACT_NAMES[externalId] })
+  const run = await boot(t, homeFor(t, fakeOmni()))
+  const { thread } = await run.channels.threads.add(INSTANCE, LID_CHAT)
+  assert.deepEqual([thread.title, thread.chatName, thread.kind], ['Guga Alves', 'Guga Alves', 'direct'])
+  assert.doesNotMatch(String(thread.title), /@lid/i)
+  // The Session is named first, so the conversation header says the name too.
+  assert.deepEqual(run.titled.filter(([id]) => id === thread.sessionId), [[thread.sessionId, 'Guga Alves']])
+})
+
+test('a thread titled by its number only is renamed to the contact\'s name at the next start (Bug 2)', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const externalId = '5511984612783@s.whatsapp.net'
+  CHATS[LID_CHAT] = { id: LID_CHAT, instanceId: INSTANCE, externalId, chatType: 'dm', name: '69003213045769@lid' }
+  CONTACT_NAMES[externalId] = 'Guga Alves'
+  t.after(() => { delete CHATS[LID_CHAT]; delete CONTACT_NAMES[externalId] })
+  const home = homeFor(t, fakeOmni(), teamState({ omniThreads: {
+    titled: record('titled', 'titled-session', { chatId: LID_CHAT, chatJid: externalId, chatName: '+5511984612783', title: '+5511984612783', kind: 'direct' }),
+  } }))
+  const run = await boot(t, home)
+  await until(() => run.channels.threads.byId('titled').title === 'Guga Alves')
+  assert.deepEqual([run.channels.threads.byId('titled').title, run.channels.threads.byId('titled').chatName], ['Guga Alves', 'Guga Alves'])
+  assert.deepEqual(run.titled.filter(([id]) => id === 'titled-session'), [['titled-session', 'Guga Alves']])
+  // Named once: the next start writes nothing.
+  await run.stop()
+  const next = await boot(t, home)
+  await next.startPass
+  assert.deepEqual(next.titled, [])
+})
+
+test('the picker finds a name typed in parts, which Omni\'s own search misses, by matching it over the channel\'s chats', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const externalId = '5511984612783@s.whatsapp.net'
+  CHATS[LID_CHAT] = { id: LID_CHAT, instanceId: INSTANCE, externalId, chatType: 'dm', name: '69003213045769@lid' }
+  CONTACT_NAMES[externalId] = 'Guga Alves'
+  t.after(() => { delete CHATS[LID_CHAT]; delete CONTACT_NAMES[externalId] })
+  const omni = fakeOmni()
+  const run = await boot(t, homeFor(t, omni))
+  // Omni answers nothing for the words out of order; the picker asks again without a search
+  // and matches them here, by every word of the name.
+  const answer = await run.call('omni-thread-chats', { channelId: INSTANCE, query: 'Alves Guga' })
+  assert.deepEqual(answer.chats.filter(chat => chat.id === LID_CHAT).map(chat => [chat.name, chat.jid]), [['Guga Alves', externalId]])
+  assert.equal(omni.askedWith.filter(entry => entry.route === 'GET /chats').length, 2)
+  // A query Omni answers is not read twice.
+  await run.call('omni-thread-chats', { channelId: INSTANCE, query: 'Marina' })
+  assert.equal(omni.askedWith.filter(entry => entry.route === 'GET /chats').length, 3)
+})
+
+test('matchesChat: every word of a name in any order and case, and any three digits of a number', () => {
+  const guga = { id: 'c1', instanceId: INSTANCE, externalId: '5511984612783@s.whatsapp.net', chatType: 'dm', name: 'Guga Alves' }
+  const jogador = { id: 'c2', instanceId: INSTANCE, externalId: '5511984612783@s.whatsapp.net', chatType: 'dm', name: 'Guga Alves Jogador' }
+  assert.deepEqual(['Guga', 'guga', 'GA', 'Alves Guga', 'guga  alv'].map(query => matchesChat(guga, query)), [true, true, true, true, true])
+  assert.equal(matchesChat(jogador, 'Alves Guga'), true)
+  assert.equal(matchesChat(jogador, 'Guga Silva'), false)
+  // Part of the number, never its LID: the number comes from the chat's WhatsApp id.
+  assert.deepEqual(['984612783', '+55 11 98461-2783', '55 (11) 98461'].map(query => matchesChat(guga, query)), [true, true, true])
+  assert.equal(matchesChat(guga, '55'), false, 'too short to be a number')
+  assert.equal(matchesChat(guga, '69003213045769'), false)
+  assert.equal(matchesChat({ ...guga, name: 'José Àvila' }, 'jose avila'), true, 'accents folded')
+  assert.equal(matchesChat(guga, '  '), true)
 })
