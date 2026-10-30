@@ -1,5 +1,5 @@
 /**
- * POST /chats/sync-names and ChatService.list() DM enrichment against real
+ * POST /chats/sync-names and GET /chats DM enrichment against real
  * PostgreSQL — the owner's own name must neither show nor block the repair.
  *
  * History sync named contacts' DMs after the account owner, and stored the
@@ -181,8 +181,10 @@ postgresDescribe('POST /chats/sync-names over stored names (real PostgreSQL)', (
     expect(await storedName('marina')).toBe('Marina');
   });
 
-  test('list() never shows the owner name on a cleared DM, and still enriches a real one', async () => {
-    const { items } = await chatService.list({ instanceId, chatType: ['dm'], limit: 100 });
+  test('GET /chats never shows the owner name on a cleared DM, and still enriches a real one', async () => {
+    const res = await app().request(`/chats?instanceId=${instanceId}&chatType=dm&limit=100`);
+    expect(res.status).toBe(200);
+    const { items } = (await res.json()) as { items: Array<{ id: string; name: string | null }> };
     const nameOf = (key: string) => items.find((chat) => chat.id === ids[key])?.name ?? null;
 
     expect(nameOf('unknown')).toBeNull();

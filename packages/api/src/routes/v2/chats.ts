@@ -15,7 +15,7 @@ import { checkInstanceAccess, resolveChatIdParam } from '../../lib/resolve-chat-
 import { clearAgentSession } from '../../plugins/session-cleaner';
 import { optionalDateParam } from '../../schemas/date-query';
 import type { Services } from '../../services';
-import { withIsGroup } from '../../services/chats';
+import { type InstanceOwner, withIsGroup } from '../../services/chats';
 import { isSelfChat } from '../../services/message-context';
 import type { AppVariables } from '../../types';
 
@@ -181,6 +181,16 @@ const updateParticipantRoleSchema = z.object({
 });
 
 /**
+ * Owners of the listed chats' instances, read through the request-scoped instances
+ * service, so DM name enrichment can skip the account's own name. A missing
+ * instance contributes nothing.
+ */
+async function loadInstanceOwners(services: Services, instanceIds: string[]): Promise<InstanceOwner[]> {
+  const rows = await Promise.all(instanceIds.map((id) => services.instances.getById(id).catch(() => null)));
+  return rows.filter((row): row is NonNullable<typeof row> => row !== null);
+}
+
+/**
  * GET /chats - List chats
  */
 chatsRoutes.get('/', zValidator('query', listQuerySchema), async (c) => {
@@ -189,7 +199,7 @@ chatsRoutes.get('/', zValidator('query', listQuerySchema), async (c) => {
   const apiKey = c.get('apiKey');
 
   const queryWithAccess = apiKey?.instanceIds ? { ...query, instanceIds: apiKey.instanceIds } : query;
-  const result = await services.chats.list(queryWithAccess);
+  const result = await services.chats.list(queryWithAccess, (ids) => loadInstanceOwners(services, ids));
 
   return c.json({
     items: result.items,

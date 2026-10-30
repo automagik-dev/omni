@@ -12,12 +12,12 @@ import {
   type Chat,
   type ChatParticipant,
   type ChatType,
+  type Instance,
   type NewChat,
   type NewChatParticipant,
   chatIdMappings,
   chatParticipants,
   chats,
-  instances,
   omniGroups,
   unwrapDbError,
 } from '@omni/db';
@@ -69,6 +69,15 @@ function isOwnerParticipant(
     extractPhoneFromJid(participant.platformUserId) === extractPhoneFromJid(owner.ownerIdentifier)
   );
 }
+
+/** The account behind an instance, as DM name enrichment needs it. */
+export type InstanceOwner = Pick<Instance, 'id' | 'profileName' | 'ownerIdentifier'>;
+
+/**
+ * Loads the owners of the given instances. Supplied by the caller (through its own
+ * scoped instances service) so this service opens no direct `instances` read.
+ */
+export type InstanceOwnerLookup = (instanceIds: string[]) => Promise<InstanceOwner[]>;
 
 export interface ChatWithParticipants extends ChatWithIsGroup<Chat> {
   participants: ChatParticipant[];
@@ -230,9 +239,15 @@ export class ChatService {
   }
 
   /**
-   * List chats with filtering and pagination
+   * List chats with filtering and pagination.
+   *
+   * `instanceOwners`, when given, lets DM name enrichment skip the account owner's own
+   * name (see `enrichDmNames`); without it enrichment behaves as before.
    */
-  async list(options: ListChatsOptions = {}): Promise<{
+  async list(
+    options: ListChatsOptions = {},
+    instanceOwners?: InstanceOwnerLookup,
+  ): Promise<{
     items: ChatWithIsGroup<Chat>[];
     hasMore: boolean;
     cursor?: string;
@@ -267,7 +282,7 @@ export class ChatService {
     await this.enrichGroupNames(items);
 
     // Enrich DM chats that have no name or a raw JID as name with participant display names
-    await this.enrichDmNames(items);
+    await this.enrichDmNames(items, instanceOwners);
 
     // Deduplicate chats that share the same canonicalId (e.g., LID + phone JID)
     this.deduplicateByCanonicalId(items);
@@ -335,7 +350,7 @@ export class ChatService {
    * the instance's profileName are skipped: they carry the owner's pushName (live and
    * history messages we sent), never the contact's, so the UI falls back to the number.
    */
-  private async enrichDmNames(items: Chat[]): Promise<void> {
+  private async enrichDmNames(items: Chat[], instanceOwners?: InstanceOwnerLookup): Promise<void> {
     const needsName = items.filter((c) => {
       if (c.chatType !== 'dm') return false;
       if (!c.name) return true;
@@ -355,12 +370,7 @@ export class ChatService {
       .orderBy(asc(chatParticipants.chatId));
 
     const instanceIds = [...new Set(needsName.map((c) => c.instanceId).filter((id): id is string => !!id))];
-    const owners = instanceIds.length
-      ? await this.db
-          .select({ id: instances.id, profileName: instances.profileName, ownerIdentifier: instances.ownerIdentifier })
-          .from(instances)
-          .where(inArray(instances.id, instanceIds))
-      : [];
+    const owners = instanceOwners && instanceIds.length ? await instanceOwners(instanceIds) : [];
     const ownerOf = new Map(owners.map((o) => [o.id, o]));
     const chatById = new Map(needsName.map((c) => [c.id, c]));
 
