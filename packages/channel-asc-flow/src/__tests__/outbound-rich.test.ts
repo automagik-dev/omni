@@ -295,6 +295,90 @@ describe('outbound interactive through /sendMsgInterativaAvancado', () => {
   });
 });
 
+describe('outbound URL button through /sendMsgInterativaAvancado', () => {
+  const url = 'https://example.test/politica';
+  const text = `Boas-vindas.\n\nAo continuar, você aceita a Política.\nVer Política: ${url}`;
+
+  it('pushes the bubbles before it and sends the one with the URL as tipo 3, without the URL line', async () => {
+    await boot();
+    await send({ type: 'text', text, buttons: [{ text: 'Ver Política', url }] });
+
+    expect(of('/callbackFlowMsg').map((c) => c.body.msg_usuario)).toEqual(['Boas-vindas.']);
+    expect(of('/sendMsgInterativaAvancado')[0]?.body.msg_interativa_parametros).toMatchObject({
+      tipo: '3',
+      mensagem: 'Ao continuar, você aceita a Política.',
+      url_button: { texto_botao: 'Ver Política', url },
+    });
+    expect(ready('42')).toMatchObject({ resposta: '' });
+  });
+
+  it('pushes the bubble with the URL still written when the platform refuses the button', async () => {
+    await boot({
+      '/sendMsgInterativaAvancado': () => jsonResponse({ cod_error: 1, msg: 'nao' }, 400),
+    });
+    const result = await send({ type: 'text', text, buttons: [{ text: 'Ver Política', url }] });
+
+    expect(result.success).toBe(true);
+    expect(of('/callbackFlowMsg').map((c) => c.body.msg_usuario)).toEqual([
+      'Boas-vindas.',
+      `Ao continuar, você aceita a Política.\nVer Política: ${url}`,
+    ]);
+  });
+
+  it('keeps the link when the platform refuses a button whose bubble does not write the URL', async () => {
+    await boot({
+      '/sendMsgInterativaAvancado': () => jsonResponse({ cod_error: 1, msg: 'nao' }, 400),
+    });
+    await send({ type: 'text', text: 'Leia a Política.', buttons: [{ text: 'Ver Política', url }] });
+
+    expect(of('/callbackFlowMsg').map((c) => c.body.msg_usuario)).toEqual([`Leia a Política.\n\nVer Política: ${url}`]);
+  });
+});
+
+describe('outbound WhatsApp Flow through /sendMsgInterativaAvancado', () => {
+  const flow = { flowId: '1', cta: 'Escolher 3 horários', bodyText: 'Escolha 3 horários:', data: { a: 'b' } };
+  const sendFlow = (metaFlow: Record<string, unknown> | undefined, text = 'Escolha 3 horários:') =>
+    send({ type: 'flow', text }, { metadata: metaFlow ? { flow: metaFlow } : {} });
+
+  it('sends the flow as tipo 5 inside the running atendimento', async () => {
+    await boot();
+    const result = await sendFlow(flow);
+
+    expect(result.success).toBe(true);
+    expect(of('/sendMsgInterativaAvancado')[0]?.body).toMatchObject({
+      cod_conta: '18',
+      tipo_envio: '1',
+      bol_incluir_atual: '1',
+      contato: { telefone: '5551999999999' },
+      msg_interativa_parametros: {
+        tipo: '5',
+        mensagem: 'Escolha 3 horários:',
+        fluxo: { texto_botao: 'Escolher 3 horários', fluxo_id: '1', payload: { a: 'b' } },
+      },
+    });
+    // The component carried the bubble: nothing else repeats it.
+    expect(of('/callbackFlowMsg')).toHaveLength(0);
+    expect(ready('42')).toMatchObject({ resposta: '' });
+  });
+
+  it('sends the body as text when the descriptor has no flowId', async () => {
+    await boot();
+    const result = await sendFlow({ cta: 'Abrir' });
+
+    expect(result.success).toBe(true);
+    expect(of('/sendMsgInterativaAvancado')).toHaveLength(0);
+    expect(of('/callbackFlowMsg')[0]?.body.msg_usuario).toBe('Escolha 3 horários:');
+  });
+
+  it('falls back to the text when the platform refuses the flow', async () => {
+    await boot({ '/sendMsgInterativaAvancado': () => jsonResponse({ cod_error: 1, msg: 'nao' }, 400) });
+    const result = await sendFlow(flow);
+
+    expect(result.success).toBe(true);
+    expect(of('/callbackFlowMsg')[0]?.body.msg_usuario).toBe('Escolha 3 horários:');
+  });
+});
+
 describe('the plain text turn is untouched', () => {
   it('pushes every bubble and answers empty', async () => {
     await boot();

@@ -27,13 +27,18 @@
 
 import { planInteractive } from '@omni/channel-sdk';
 import type { InteractiveButton, InteractiveListOptions } from '@omni/channel-sdk';
+import { encodeAscEmoji } from './emoji';
 
 const MAX_OPTIONS = 10;
 const MAX_BODY_TEXT = 1024;
 
-/** `msg_interativa_parametros.tipo` — 1 is a list, 2 reply buttons. */
+/** `msg_interativa_parametros.tipo` — 1 is a list, 2 reply buttons, 3 a URL button, 5 a Meta WhatsApp Flow. */
 const TIPO_LISTA = 1;
 const TIPO_BOTOES = 2;
+const TIPO_BOTAO_URL = 3;
+const TIPO_FLUXO = 5;
+/** Meta's limit for the CTA that opens a flow. */
+const MAX_FLOW_CTA = 30;
 /** Label on the button that opens the list, when the caller sets none. */
 const LIST_BUTTON_LABEL = 'Opções';
 /** Meta's limit for the list button text; a longer label falls back to the default. */
@@ -121,6 +126,9 @@ export function buildInteractive(
   if (!trimmed || trimmed.length > MAX_BODY_TEXT) return null;
 
   const replyButtons = (buttons ?? []).filter((b) => !b.url && b.text?.trim());
+  const urlButtons = (buttons ?? []).filter((b) => b.url && b.text?.trim());
+  const [soleUrl] = urlButtons;
+  if (replyButtons.length === 0 && urlButtons.length === 1 && soleUrl) return buildUrlButton(trimmed, soleUrl);
   if (replyButtons.length === 0 || replyButtons.length > MAX_OPTIONS) return null;
 
   const buttonLabel = listButtonLabelOf(listOptions.buttonLabel);
@@ -164,5 +172,108 @@ export function buildInteractive(
         },
       ],
     },
+  };
+}
+
+/**
+ * `msg_interativa_parametros` for the platform's URL button (`tipo: 3`,
+ * `url_button {texto_botao, url}`): Meta's `cta_url`, the one way a link rides
+ * a button in session. It is the shape the SDK plans for a sole URL button, so
+ * the label is cut where whatsapp-business and hermes cut it.
+ *
+ * The caller may also write the URL in the text, so that a plugin which still
+ * drops URL buttons delivers the link anyway. A line that is only that link
+ * (see `isLinkLine`) leaves the body here, where the button takes its place;
+ * the bubble pushed when the platform refuses the button keeps it.
+ */
+function buildUrlButton(body: string, button: InteractiveButton): Record<string, unknown> | null {
+  const url = button.url ?? '';
+  const plan = planInteractive(body, [button], LIST_BUTTON_LABEL);
+  const action = plan.interactive?.action as { parameters?: { display_text?: string } } | undefined;
+  const label = action?.parameters?.display_text?.trim();
+  const mensagem = body
+    .split('\n')
+    .filter((line) => !isLinkLine(line, button.text, url))
+    .join('\n')
+    .trim();
+  if (!mensagem || !label) return null;
+
+  // The body arrives already encoded (`resolveOutboundText`); the label comes
+  // straight from the button, so it is encoded here. See `emoji.ts`.
+  return { tipo: TIPO_BOTAO_URL, mensagem, url_button: { texto_botao: encodeAscEmoji(label), url } };
+}
+
+/**
+ * A line the URL button replaces: the URL alone, or the button's label and
+ * nothing else leading into it (`Ver Política: <url>`, the `label: url` shape
+ * `planInteractive` folds a URL button into). Any other line with the URL is
+ * prose, even one that opens with the label, and it stays whole: cutting it
+ * would drop what it says.
+ */
+function isLinkLine(line: string, label: string, url: string): boolean {
+  const at = line.indexOf(url);
+  if (at < 0) return false;
+  let rest = `${line.slice(0, at)}${line.slice(at + url.length)}`.trim();
+  if (rest.endsWith(':')) rest = rest.slice(0, -1).trim();
+  return !rest || foldTitle(rest) === foldTitle(encodeAscEmoji(label));
+}
+
+/**
+ * The bubble pushed when the platform refuses the component. A URL button whose
+ * bubble does not write its URL takes it along as `label: url`, the shape
+ * `planInteractive` folds a URL button into, so the link still reaches the
+ * handset. Every other component falls back to its bubble as it is.
+ */
+export function textFallbackOf(bubble: string, params: Record<string, unknown>): string {
+  const button = params.url_button as { texto_botao?: string; url?: string } | undefined;
+  if (params.tipo !== TIPO_BOTAO_URL || !button?.url || bubble.includes(button.url)) return bubble;
+  return `${bubble}\n\n${button.texto_botao}: ${button.url}`;
+}
+
+/** The part of Omni's flow descriptor (`metadata.flow`) the ASC platform can carry. */
+export interface AscFlowDescriptor {
+  flowId?: string;
+  cta?: string;
+  bodyText?: string;
+  headerText?: string;
+  footerText?: string;
+  data?: Record<string, unknown>;
+}
+
+/**
+ * `msg_interativa_parametros` for a Meta WhatsApp Flow (`tipo: 5`) on
+ * `POST /sendMsgInterativaAvancado`, from the descriptor the
+ * `/instances/:id/whatsapp-flows/send` route puts in `metadata.flow`.
+ *
+ * The platform's schema (`interactive_flow`) is `{texto_botao, fluxo_id,
+ * payload}`. `fluxo_id` passes through as the caller gave it, because the spec
+ * does not say whether it is the platform's `FluxoWhatsapp.id` or the Meta id
+ * (`cod_id_meta`). `payload` carries `data`, the first screen's input.
+ *
+ * Only `flowId` is supported: the platform has no field for a flow NAME, and
+ * `screen`/`flowAction`/`draft` have no counterpart in its schema either.
+ *
+ * `null` means "send the bubble as plain text", the same contract as
+ * `buildInteractive`: the text the caller wrote is the canonical path.
+ */
+export function buildFlowInteractive(
+  body: string,
+  flow: AscFlowDescriptor | undefined,
+): Record<string, unknown> | null {
+  const trimmed = body.trim();
+  const flowId = flow?.flowId?.trim();
+  const cta = flow?.cta?.trim();
+  // The limit is Meta's, on what the handset shows, so it is checked before the
+  // emoji become `##codepoint##` markers.
+  if (!trimmed || trimmed.length > MAX_BODY_TEXT || !flowId || !cta || cta.length > MAX_FLOW_CTA) return null;
+
+  // The body arrives already encoded (`resolveOutboundText`); these come
+  // straight from the descriptor, so they are encoded here. See `emoji.ts`.
+  return {
+    tipo: TIPO_FLUXO,
+    mensagem: trimmed,
+    ...(flow?.headerText ? { cabecalho_tipo: 'text', cabecalho_texto: encodeAscEmoji(flow.headerText) } : {}),
+    ...(flow?.footerText ? { rodape: encodeAscEmoji(flow.footerText) } : {}),
+    fluxo: { texto_botao: encodeAscEmoji(cta), fluxo_id: flowId, payload: flow?.data ?? {} },
   };
 }

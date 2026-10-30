@@ -29,6 +29,7 @@ type MountOptions = {
 function mountFlowsRoutes(options: MountOptions = {}): {
   app: Hono<{ Variables: AppVariables }>;
   sendMessage: ReturnType<typeof mock>;
+  registryGet: ReturnType<typeof mock>;
 } {
   const sendMessage =
     options.sendMessage ??
@@ -38,6 +39,7 @@ function mountFlowsRoutes(options: MountOptions = {}): {
       timestamp: 123,
     }));
 
+  const registryGet = mock((_channel: string) => ({ sendMessage }));
   const app = new Hono<{ Variables: AppVariables }>();
   app.use('*', async (c, next) => {
     c.set('services', {
@@ -53,7 +55,7 @@ function mountFlowsRoutes(options: MountOptions = {}): {
       },
     } as never);
     c.set('channelRegistry', {
-      get: mock(() => ({ sendMessage })),
+      get: registryGet,
     } as never);
     c.set('apiKey', {
       id: 'test',
@@ -65,7 +67,7 @@ function mountFlowsRoutes(options: MountOptions = {}): {
     await next();
   });
   app.route('/', whatsappFlowsRoutes);
-  return { app, sendMessage };
+  return { app, sendMessage, registryGet };
 }
 
 /** Stub globalThis.fetch, capturing requests and replying with canned JSON. */
@@ -246,6 +248,47 @@ describe('POST /instances/:id/whatsapp-flows/send', () => {
       screen: 'WELCOME',
       flowToken: json.flowToken,
     });
+  });
+
+  test('dispatches an asc-flow instance through the asc-flow plugin', async () => {
+    const { app, sendMessage, registryGet } = mountFlowsRoutes({ channel: 'asc-flow' });
+
+    const res = await postSend(app, { to: '22344480', flowId: '1', cta: 'Escolher', bodyText: 'Escolha 3:' });
+
+    expect(res.status).toBe(201);
+    expect(registryGet).toHaveBeenCalledWith('asc-flow');
+    const [, message] = sendMessage.mock.calls[0] as [string, { to: string; content: { type: string } }];
+    expect(message.to).toBe('22344480');
+    expect(message.content.type).toBe('flow');
+  });
+
+  test('refuses a flowName on asc-flow, which addresses flows by id only', async () => {
+    const { app, sendMessage } = mountFlowsRoutes({ channel: 'asc-flow' });
+
+    const res = await postSend(app, { to: '22344480', flowName: 'tres', cta: 'Escolher', bodyText: 'Escolha 3:' });
+
+    expect(res.status).toBe(400);
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  test('rejects a whitespace-only flowId or cta instead of sending the bubble as text', async () => {
+    const { app, sendMessage } = mountFlowsRoutes({ channel: 'asc-flow' });
+
+    const blankId = await postSend(app, { to: '22344480', flowId: '   ', cta: 'Escolher', bodyText: 'Escolha 3:' });
+    const blankCta = await postSend(app, { to: '22344480', flowId: '1', cta: '   ', bodyText: 'Escolha 3:' });
+
+    expect(blankId.status).toBe(400);
+    expect(blankCta.status).toBe(400);
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  test('still refuses a channel that renders no flow', async () => {
+    const { app, sendMessage } = mountFlowsRoutes({ channel: 'whatsapp' });
+
+    const res = await postSend(app, { to: '5511999998888', flowId: '1', cta: 'Go', bodyText: 'Body' });
+
+    expect(res.status).toBe(400);
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   test('honors a caller-provided flowToken', async () => {

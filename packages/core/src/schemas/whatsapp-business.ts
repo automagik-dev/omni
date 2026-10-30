@@ -362,10 +362,10 @@ export const WhatsAppBusinessConnectRequestSchema = z
  */
 export const WhatsAppFlowSendSchema = z
   .object({
-    flowId: z.string().min(1).optional(),
+    flowId: z.string().trim().min(1).optional(),
     flowName: z.string().min(1).optional(),
     /** Button label that opens the flow. */
-    cta: z.string().min(1).max(30),
+    cta: z.string().trim().min(1).max(30),
     bodyText: z.string().min(1).max(1024),
     headerText: z.string().max(60).optional(),
     footerText: z.string().max(60).optional(),
