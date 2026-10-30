@@ -2,8 +2,7 @@ import { createElement as h, useEffect, useMemo, useRef, useState } from 'react'
 import { ChatAvatar, StatusDot, Tile, useOmni } from './channels.js'
 import { openConnectWizard } from './wizard.js'
 import { isOmniBot, omniActions, startLive, typeOf, unreadOf } from './omni-store.js'
-import { openPhone } from './omni-phone.js'
-import { PhoneGlyph } from './phone-frame.js'
+import { openPhone, openPhoneBeside, threadName } from './omni-phone.js'
 import { call, hostText, icons, relativeShort, t } from './core.js'
 const { ChevronRightIcon, CloseIcon, DotsIcon, PlusIcon, SparkIcon } = icons
 
@@ -48,7 +47,10 @@ export function plusOf(roster, state) {
   return { offered: true, reason: null }
 }
 
-// The row props a thread row may use: the ones the host names that the team passed.
+// The row props a thread row may use: the ones the host names that the team passed. The
+// Bot team's BotChildren hands every entry the props of the Bot's own rows and `wide`
+// (bots-dsh 3.32.1 and 3.47 sidebar.js), so on a team with the hook all the named ones are
+// there.
 export const rowPropsOf = (props, names) => Object.fromEntries((Array.isArray(names) ? names : []).filter(name => props?.[name] !== undefined).map(name => [name, props[name]]))
 // A row's key: its thread, and which status hooks it calls, so a team that starts or stops
 // passing them remounts the row instead of changing its hooks under it.
@@ -57,6 +59,11 @@ export const rowKey = (thread, rowProps) => `${thread.id}:${typeof rowProps.useS
 const NO_STATUS = new Map()
 const noStatus = select => select(NO_STATUS)
 const noRetain = (_id, select) => select(undefined)
+// Threads just added from the picker, by id: each opens once its row is drawn (the team's next
+// roster pull), as a click on that row would open it. A row drawn before the add answered is
+// opened through `rowOpeners`, which every row that can open lists itself in.
+const openOnArrival = new Set()
+const rowOpeners = new Map()
 
 // Working, waiting or idle: the host's word, with DSH's own when the team passed it.
 export function threadState(thread, { running = false, asking = false } = {}) {
@@ -96,15 +103,33 @@ export function permissionMenuOf(thread) {
 }
 
 /**
- * One thread under its channel. It opens its Session through the team's row action, the way a
- * Bot's own rows do; on a team without the hook it shows the reason in place and opens nothing,
- * so no conversation view takes a turn the thread cannot act on. A thread with no live key says
- * "Not connected" with its reason, and still opens. Its phone action opens the thread's phone
- * pane (omni-phone.js) beside the conversation on screen, on any team: the pane only reads, and
- * opens no Session. `shown` false: its channel is folded, so the row is out of the tab order.
+ * Opens a thread the owner clicked: its Session, through the team's row action as a Bot's own
+ * rows open theirs, then its phone pane beside it (omni-phone.js openPhoneBeside).
+ *
+ * The Bot team leaves a main view that holds no Bot, group or DSH bot for the Main Bot while
+ * DSH lists its Session as blank, one with no turn yet (bots-dsh sidebar.js useLandOnMainBot),
+ * so a thread that never ran stays open only on a team that counts the threads' Sessions
+ * (roster.omniThreads) as its own destinations. That exemption is the team's to make.
+ */
+function openThread(thread, actions, onProblem) {
+  onProblem(null)
+  actions.openSession(thread.sessionId)
+  const reason = openPhoneBeside(thread)
+  if (reason !== null) onProblem(reason)
+}
+
+/**
+ * One thread under its channel, named by its chat (threadName). A click opens the thread (its
+ * Session and its phone pane, openThread); on a team without the hook it opens only the
+ * phone pane, beside the conversation on screen, and shows the reason in place, so no
+ * conversation view takes a turn the thread cannot act on. A thread with no live key says "Not
+ * connected" with its reason, and still opens. Its menu and its remove button show on hover
+ * and focus, after the title, which ends in an ellipsis before them. `shown` false: its
+ * channel is folded, so the row is out of the tab order.
  */
 export function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
   const id = thread.sessionId
+  const name = threadName(thread)
   const useStatus = rowProps.useSessionStatus ?? noStatus
   const useRetain = rowProps.useSessionRetainInfo ?? noRetain
   const unread = useStatus(map => map.get(id)?.completionUnread === true)
@@ -115,6 +140,7 @@ export function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
   const [problem, setProblem] = useState(null)
   const [menu, setMenu] = useState(false)
   const row = useRef(null)
+  const opens = teamReady(rowProps.roster)
   // An open menu closes on a click anywhere outside its row.
   useEffect(() => {
     if (!menu || typeof document === 'undefined' || typeof document.addEventListener !== 'function') return undefined
@@ -122,12 +148,30 @@ export function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
     document.addEventListener('pointerdown', away, true)
     return () => document.removeEventListener('pointerdown', away, true)
   }, [menu])
-  const opens = teamReady(rowProps.roster)
+  // A thread just added from the picker opens as soon as its row is drawn.
+  useEffect(() => {
+    if (opens && openOnArrival.delete(thread.id)) openThread(thread, actions, setProblem)
+  }, [opens, thread.id])
+  useEffect(() => {
+    if (!opens) return undefined
+    const opener = () => openThread(thread, actions, setProblem)
+    rowOpeners.set(thread.id, opener)
+    return () => { if (rowOpeners.get(thread.id) === opener) rowOpeners.delete(thread.id) }
+  })
   const free = freeMarkOf(thread)
   const state = threadState(thread, { running, asking })
   const reason = thread.connected === false || !opens ? hostText(thread.reason ?? t('Not connected')) : null
   const dot = typeof rowProps.useSessionStatus === 'function' && unread && !active
-  const label = [thread.title, state === 'waiting' ? t('Waiting for you') : state === 'working' ? t('Working') : '', reason ?? '', free ?? '', dot ? t('Unread activity') : ''].filter(Boolean).join(', ')
+  const label = [name, state === 'waiting' ? t('Waiting for you') : state === 'working' ? t('Working') : '', reason ?? '', free ?? '', dot ? t('Unread activity') : ''].filter(Boolean).join(', ')
+  const onClick = () => {
+    if (opens) {
+      openThread(thread, actions, setProblem)
+      return
+    }
+    // Only a reason is shown: an opened pane leaves a remove error where it is.
+    const why = openPhone(thread)
+    if (why !== null) setProblem(why)
+  }
   const remove = () => {
     if (!confirming) { setConfirming(true); return }
     setConfirming(false)
@@ -147,31 +191,25 @@ export function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
   }
   return h('div', { ref: row, className: 'ot-thread', 'data-idle': state === 'idle' || undefined },
     h('button', {
-      type: 'button', className: 'bt-thread', 'data-state': state, 'data-thread-id': thread.id, 'aria-label': label, title: reason ?? thread.title,
-      'aria-current': active ? 'page' : undefined, 'aria-disabled': opens ? undefined : true, tabIndex: shown ? undefined : -1,
-      onClick: () => { if (opens) actions.openSession(id) },
+      type: 'button', className: 'bt-thread', 'data-state': state, 'data-thread-id': thread.id, 'aria-label': label, title: reason ?? name,
+      'aria-current': active ? 'page' : undefined, tabIndex: shown ? undefined : -1, onClick,
     },
     h('span', { className: state === 'waiting' ? 'bt-thread-wait' : state === 'working' ? 'bt-thread-spin' : 'ot-thread-idle', 'aria-hidden': true }),
-    h('span', { className: 'bt-thread-title' }, thread.title),
+    h('span', { className: 'bt-thread-title' }, name),
     reason ? h('span', { className: 'ot-thread-reason' }, reason) : null,
     free ? h('span', { className: 'ot-thread-free', title: free, 'aria-hidden': true }, h(SparkIcon)) : null,
     dot ? h('span', { className: 'bt-unread', 'aria-hidden': true }) : null),
-    confirming ? null : h('button', {
-      type: 'button', className: 'ot-thread-more', 'aria-label': t('Asking first in {name}', { name: thread.title }), title: t('Asking first'),
-      'aria-haspopup': 'menu', 'aria-expanded': menu, tabIndex: shown ? undefined : -1, onClick: () => setMenu(open => !open),
-    }, h(DotsIcon)),
-    confirming ? null : h('button', {
-      type: 'button', className: 'ot-thread-phone', 'aria-label': t('Show {name} in the phone pane', { name: thread.title }), title: t('Phone pane'),
-      tabIndex: shown ? undefined : -1,
-      // Only a reason is shown: an opened pane leaves a remove error where it is.
-      onClick: () => { const reason = openPhone(thread); if (reason !== null) setProblem(reason) },
-    }, h(PhoneGlyph)),
-    h('button', {
-      type: 'button', className: 'ot-thread-remove', 'data-confirm': confirming || undefined,
-      'aria-label': confirming ? t('Remove {name} from the sidebar? Click again', { name: thread.title }) : t('Remove {name}', { name: thread.title }),
-      title: confirming ? t('Click again to remove') : t('Remove'), tabIndex: shown ? undefined : -1, onClick: remove, onBlur: () => setConfirming(false),
-    }, confirming ? t('Remove') : h(CloseIcon)),
-    menu ? h('div', { className: 'ot-thread-menu', role: 'menu', 'aria-label': t('Asking first in {name}', { name: thread.title }), onKeyDown: onMenuKey },
+    h('span', { className: 'ot-thread-acts', 'data-on': confirming || menu || undefined },
+      confirming ? null : h('button', {
+        type: 'button', className: 'ot-thread-more', 'aria-label': t('Asking first in {name}', { name }), title: t('Asking first'),
+        'aria-haspopup': 'menu', 'aria-expanded': menu, tabIndex: shown ? undefined : -1, onClick: () => setMenu(open => !open),
+      }, h(DotsIcon)),
+      h('button', {
+        type: 'button', className: 'ot-thread-remove', 'data-confirm': confirming || undefined,
+        'aria-label': confirming ? t('Remove {name} from the sidebar? Click again', { name }) : t('Remove {name}', { name }),
+        title: confirming ? t('Click again to remove') : t('Remove'), tabIndex: shown ? undefined : -1, onClick: remove, onBlur: () => setConfirming(false),
+      }, confirming ? t('Remove') : h(CloseIcon))),
+    menu ? h('div', { className: 'ot-thread-menu', role: 'menu', 'aria-label': t('Asking first in {name}', { name }), onKeyDown: onMenuKey },
       permissionMenuOf(thread).map(group => h('div', { key: group.field, className: 'ot-thread-menu-group', role: 'group', 'aria-label': group.label },
         h('span', { className: 'ot-thread-menu-head' }, group.label),
         group.items.map(choice => h('button', {
@@ -184,11 +222,11 @@ export function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
 /**
  * One chat in the picker, drawn as the chat list draws it: its picture (or initials), name and
  * time, a direct chat's number when its name is not that number, and its last message. A
- * group with no name is called "Group". Its button is named by the chat's name, number and
+ * chat with no name is called "Group" or "Chat". Its button is named by the chat's name, number and
  * whether it is added, not by every word in the row.
  */
 function PickerChat({ chat, busy, onPick }) {
-  const name = chat.name ?? t('Group')
+  const name = chat.name ?? (chat.kind === 'group' ? t('Group') : t('Chat'))
   const tag = chat.added ? t('Added') : busy === chat.id ? t('Adding…') : null
   return h('button', {
     type: 'button', className: 'ot-picker-chat', 'data-chat-id': chat.id, disabled: chat.added === true || busy !== null,
@@ -285,11 +323,15 @@ function ChannelItem({ channel, state, roster, rowProps, actions, omni, plus, op
     onClosePicker()
     plusButton.current?.focus?.()
   }
-  // A pick is the owner's own click, so it opens the new thread (no panel opens by itself).
+  // A pick is the owner's own click, so it opens the new thread, Session and phone pane, once
+  // its row is drawn (no panel opens by itself).
   const onPick = chat => addThread(channel.id, chat).then((result) => {
     if (result?.ok !== true) return result
     closePicker()
-    if (typeof result.sessionId === 'string' && teamReady(roster)) actions.openSession(result.sessionId)
+    if (typeof result.threadId !== 'string' || !teamReady(roster)) return result
+    const opener = rowOpeners.get(result.threadId)
+    if (opener) opener()
+    else openOnArrival.add(result.threadId)
     return result
   })
   return h('div', { className: 'ot-channel' },
@@ -409,19 +451,20 @@ export const OMNI_TREE_CSS = `
 .ot-all{color:var(--bt-ink-3);font-size:12px;padding-left:12px}
 .ot-empty{display:block;padding:3px 6px 3px 12px;color:var(--bt-ink-3);font-size:12px}
 .ot-others{display:grid;gap:1px;margin-top:4px}
-.ot-thread{position:relative;display:flex;align-items:center;flex-wrap:wrap}
+.ot-thread{display:flex;align-items:center;flex-wrap:wrap}
 .ot-thread .bt-thread{flex:1;min-width:0}
-.ot-thread .bt-thread[aria-disabled=true]{cursor:default}
+.ot-thread .bt-thread-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ot-thread[data-idle] .bt-thread-title{color:var(--bt-ink-2)}
 .ot-thread-idle{flex:none;width:8px;height:8px;margin:0 2px;box-sizing:border-box;border-radius:50%;border:1.5px solid var(--bt-ink-3);opacity:.6}
 .ot-thread-reason{flex:none;max-width:45%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;color:var(--bt-ink-3)}
-.ot-thread-remove{position:absolute;right:4px;display:grid;place-items:center;min-width:20px;height:20px;padding:0 4px;border:0;border-radius:6px;background:var(--bt-hover);color:var(--bt-ink-3);font:inherit;font-size:11px;cursor:pointer;opacity:0;transition:opacity .12s ease}
+/* The menu and remove buttons sit after the row, never over it: they take no room until the row is hovered or holds focus, and the title then ends in an ellipsis before them. They are never display:none, so they stay in the tab order. */
+.ot-thread-acts{display:flex;align-items:center;gap:4px;flex:none;max-width:0;overflow:hidden;opacity:0;transition:max-width .12s ease,opacity .12s ease}
+.ot-thread:hover .ot-thread-acts,.ot-thread:focus-within .ot-thread-acts,.ot-thread-acts[data-on]{max-width:120px;padding-right:4px;opacity:1}
+.ot-thread-remove,.ot-thread-more{display:grid;place-items:center;flex:none;min-width:20px;height:20px;padding:0;border:0;border-radius:6px;background:var(--bt-hover);color:var(--bt-ink-3);font:inherit;font-size:11px;cursor:pointer}
+.ot-thread-remove{padding:0 4px}
 .ot-thread-remove svg{width:11px;height:11px}
-.ot-thread-phone{position:absolute;right:28px;display:grid;place-items:center;width:20px;height:20px;padding:0;border:0;border-radius:6px;background:var(--bt-hover);color:var(--bt-ink-3);cursor:pointer;opacity:0;transition:opacity .12s ease}
-.ot-thread-phone svg{width:12px;height:12px}
-.ot-thread-more{position:absolute;right:52px;display:grid;place-items:center;width:20px;height:20px;padding:0;border:0;border-radius:6px;background:var(--bt-hover);color:var(--bt-ink-3);cursor:pointer;opacity:0;transition:opacity .12s ease}
 .ot-thread-more svg{width:12px;height:12px}
-.ot-thread-more:hover,.ot-thread-more[aria-expanded=true]{color:var(--bt-ink);opacity:1}
+.ot-thread-more:hover,.ot-thread-more[aria-expanded=true],.ot-thread-remove:hover{color:var(--bt-ink)}
 .ot-thread-free{display:grid;place-items:center;flex:none;width:14px;height:14px;color:var(--bt-accent, #22d3ee)}
 .ot-thread-free svg{width:11px;height:11px}
 .ot-thread-menu{flex-basis:100%;display:grid;gap:6px;margin:2px 4px 4px 22px;padding:6px;border:1px solid var(--bt-line, rgba(127,127,127,.2));border-radius:10px;background:var(--bt-surface, transparent)}
@@ -431,8 +474,6 @@ export const OMNI_TREE_CSS = `
 .ot-thread-menu-item:hover{background:var(--bt-hover);color:var(--bt-ink)}
 .ot-thread-menu-item[aria-checked=true]{color:var(--bt-ink)}
 .ot-thread-menu-item[aria-checked=true]::before{content:'';position:absolute;left:8px;top:50%;width:6px;height:6px;margin-top:-3px;border-radius:50%;background:var(--bt-accent, #22d3ee)}
-.ot-thread-phone:hover{color:var(--bt-ink)}
-.ot-thread:hover .ot-thread-remove,.ot-thread-remove:focus-visible,.ot-thread-remove[data-confirm],.ot-thread:hover .ot-thread-phone,.ot-thread-phone:focus-visible,.ot-thread:hover .ot-thread-more,.ot-thread-more:focus-visible{opacity:1}
 .ot-thread-remove[data-confirm]{color:var(--bt-danger, #dc2626)}
 .ot-thread-problem{flex-basis:100%;padding:0 8px 3px 28px;font-size:11px;color:var(--bt-danger, #dc2626)}
 .ot-picker{display:grid;gap:4px;margin:2px 0 4px;padding:6px;border:1px solid var(--bt-line, rgba(127,127,127,.2));border-radius:10px;background:var(--bt-surface, transparent)}
@@ -457,6 +498,6 @@ export const OMNI_TREE_CSS = `
 .ot-picker-problem{color:var(--bt-danger, #dc2626)}
 .ot-chats[data-open] .ot-thread{animation:ot-in .22s ease both}
 @keyframes ot-in{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}
-@media (prefers-reduced-motion:reduce){.ot-chats{transition:none}.ot-chats .ot-thread{animation:none}.ot-chevron{transition:none}.ot-thread-remove,.ot-thread-phone,.ot-thread-more{transition:none}}
+@media (prefers-reduced-motion:reduce){.ot-chats{transition:none}.ot-chats .ot-thread{animation:none}.ot-chevron{transition:none}.ot-thread-acts{transition:none}}
 body[data-omni-thread] .bt-voice,body[data-omni-thread] .bt-plus,body[data-omni-thread] .bt-composer-model,body[data-omni-thread] .bt-mw-dock,body[data-omni-thread] .bt-btw-dock{display:none!important}
 `

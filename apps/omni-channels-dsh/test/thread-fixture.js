@@ -183,7 +183,7 @@ export const record = (id, sessionId, extra = {}) => ({
 // the pass's (one a pass cannot be made to give on demand: `{ failed }`, `{ readOnly }`, a
 // `resent` Session). `archiveError`: every archive throws it from the start, before the
 // plugin's own start pass runs (`fake.archiveError` sets it later).
-export async function boot(t, home, { mask = false, services = {}, resumesDone, archiveError = null } = {}) {
+export async function boot(t, home, { mask = false, services = {}, resumesDone, archiveError = null, renameError = null } = {}) {
   const ctx = fakeContext({ services })
   const agents = new Map()
   const made = []
@@ -192,7 +192,10 @@ export async function boot(t, home, { mask = false, services = {}, resumesDone, 
   const archived = []
   const archiving = []
   const restricts = []
-  const fake = { archiveError, createError: null, restrictError: null }
+  // Each DSH Session title set, [sessionId, title]: the team's when it makes a Session, and
+  // this plugin's when it names a thread again.
+  const titled = []
+  const fake = { archiveError, renameError, createError: null, restrictError: null }
   const emit = (id, type, data, time) => {
     for (const listener of ctx.listeners.get('session/event') ?? []) if (listener.length >= 2) listener({ id }, { type, data, ...(time === undefined ? {} : { time }) })
   }
@@ -260,7 +263,10 @@ export async function boot(t, home, { mask = false, services = {}, resumesDone, 
         return { selected: selection }
       },
     },
-    sessionTitle: { rename: async () => {} },
+    sessionTitle: { rename: async (session, title) => {
+      if (fake.renameError) throw fake.renameError
+      titled.push([session.id, title])
+    } },
     sessions: { flush: async () => {} },
   })
   const team = createTeam(ctx, { home })
@@ -286,7 +292,7 @@ export async function boot(t, home, { mask = false, services = {}, resumesDone, 
   // Stopped before its home goes (homeFor).
   if (stopsOf.has(home)) stopsOf.get(home).push(stop)
   else t.after(stop)
-  return { ctx, team, channels, call, view, emit, cut, agentOf, freshAgent, made, resolved, selected, archived, archiving, restricts, registered, fake, stop }
+  return { ctx, team, channels, call, view, emit, cut, agentOf, freshAgent, made, resolved, selected, archived, archiving, restricts, registered, titled, fake, stop }
 }
 
 // A fresh home linked to `omni`, with the team in it; removed once every start on it stopped.

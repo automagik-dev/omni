@@ -11,7 +11,7 @@ import { afterEach, test } from 'node:test'
 import { NEEDS_NEWER_TEAM, TEAM_CONTRACT } from '../src/host/resume-hook.js'
 import { NOT_LINKED } from '../src/host/thread-keys.js'
 import { CUT_WINDOW_MS, THREAD_REFUSAL, THREAD_TOOLS } from '../src/host/threads.js'
-import { OMNI, INSTANCE, CHAT, GROUP, ELSEWHERE, OWNER, CHATS, askedOf, boot, fakeOmni, flush, guarded, homeFor, keysOf, record, resetFetch, saved, teamState } from './thread-fixture.js'
+import { OMNI, INSTANCE, CHAT, GROUP, ELSEWHERE, OWNER, CHATS, askedOf, boot, fakeOmni, flush, guarded, homeFor, keysOf, record, resetFetch, saved, teamState, until } from './thread-fixture.js'
 
 afterEach(resetFetch)
 
@@ -32,7 +32,7 @@ test('an added chat is a plain Session of the plugin\'s: outside the team\'s age
   assert.equal(run.made.length, 1)
   assert.deepEqual(thread, {
     id: answer.threadId, sessionId: run.made[0], chatId: CHAT, chatJid: CHATS[CHAT].externalId, chatName: 'Marina', channelId: INSTANCE, origin: OMNI,
-    self: OWNER, title: 'Marina', status: 'idle', turnOpenAt: null, at: thread.at,
+    self: OWNER, title: 'Marina', kind: 'direct', status: 'idle', turnOpenAt: null, at: thread.at,
   })
   // Not the team's: no agent and no task holds it, and the team owns it as nothing.
   const state = saved(home)
@@ -52,7 +52,7 @@ test('an added chat is a plain Session of the plugin\'s: outside the team\'s age
   run.emit(thread.sessionId, 'turn/end', { reason: { kind: 'completed' } })
   await run.channels.save()
   assert.deepEqual(saved(home).omniThreads[answer.threadId].status, 'idle')
-  assert.deepEqual(run.view().omniThreads, [{ id: answer.threadId, sessionId: thread.sessionId, chatId: CHAT, channelId: INSTANCE, title: 'Marina', status: 'idle', connected: true, reason: null, permissions: { sends: 'ask', reactions: 'list' }, ownPermissions: {}, defaultPermissions: { sends: 'ask', reactions: 'list' } }])
+  assert.deepEqual(run.view().omniThreads, [{ id: answer.threadId, sessionId: thread.sessionId, chatId: CHAT, channelId: INSTANCE, title: 'Marina', kind: 'direct', status: 'idle', connected: true, reason: null, permissions: { sends: 'ask', reactions: 'list' }, ownPermissions: {}, defaultPermissions: { sends: 'ask', reactions: 'list' } }])
   assert.deepEqual([run.view().omniThreadsOffered, run.view().omniThreadsReason, run.view().omniRowProps], [true, null, [...TEAM_CONTRACT.rowProps]])
   // A DSH restart: the next start has it, connected, and makes no Session for it.
   await run.stop()
@@ -569,4 +569,98 @@ test('the tree\'s view reads the threads\' key reasons once, not once per thread
   assert.deepEqual(reads, [[thread.id, again.thread.id]])
   // The same reasons as one read each would give.
   assert.deepEqual([...reasonsOf(['nobody'])], [['nobody', 'Not connected: this thread has no key.']])
+})
+
+// Omni keeps some chats' raw WhatsApp ids as their names; a thread added under one before
+// chatNameOf kept it as its title (the owner's "134248514244695@lid").
+const LID_CHAT = '7d7d7d7d-7d7d-4d7d-8d7d-7d7d7d7d7d7d'
+const NAMELESS_GROUP = '8e8e8e8e-8e8e-4e8e-8e8e-8e8e8e8e8e8e'
+const UNKNOWN = '9f9f9f9f-9f9f-4f9f-8f9f-9f9f9f9f9f9f'
+
+test('a thread is never named by a raw id: the picker\'s rules name it, and one stored under a raw id is named again from Omni once at start, its DSH Session too', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const lid = '134248514244695@lid'
+  CHATS[LID_CHAT] = { id: LID_CHAT, instanceId: INSTANCE, externalId: lid, canonicalId: '5511988887777@s.whatsapp.net', chatType: 'dm', name: lid }
+  CHATS[NAMELESS_GROUP] = { id: NAMELESS_GROUP, instanceId: INSTANCE, externalId: '120363111111111111@g.us', chatType: 'group', name: '120363111111111111@g.us' }
+  t.after(() => { delete CHATS[LID_CHAT]; delete CHATS[NAMELESS_GROUP] })
+  const omni = fakeOmni()
+  const raw = (id, chatId, chatJid) => record(id, `${id}-session`, { chatId, chatJid, chatName: chatJid, title: chatJid })
+  const home = homeFor(t, omni, teamState({ omniThreads: {
+    lid: raw('lid', LID_CHAT, lid),
+    group: raw('group', GROUP, CHATS[GROUP].externalId),
+    nameless: raw('nameless', NAMELESS_GROUP, CHATS[NAMELESS_GROUP].externalId),
+    // Omni no longer has it: its number, from its WhatsApp id, until Omni answers.
+    gone: raw('gone', UNKNOWN, '5511966665555@s.whatsapp.net'),
+    // A LID's digits written as a number by an older add are no name either.
+    digits: record('digits', 'digits-session', { chatId: UNKNOWN, chatJid: lid, chatName: '+134248514244695', title: '+134248514244695' }),
+    named: record('named', 'named-session'),
+  } }))
+  const run = await boot(t, home)
+  await until(() => run.channels.threads.byId('lid').title === '+5511988887777' && run.channels.threads.byId('nameless').kind === 'group')
+  await run.channels.save()
+  const titles = () => Object.fromEntries(run.view().omniThreads.map(thread => [thread.id, [thread.title, thread.kind]]))
+  assert.deepEqual(titles(), {
+    lid: ['+5511988887777', 'direct'], group: ['Obra', 'group'], nameless: [null, 'group'],
+    gone: ['+5511966665555', 'direct'], digits: [null, 'direct'], named: ['Marina', 'direct'],
+  })
+  assert.equal(JSON.stringify(run.view()).includes('@'), false, 'no raw id reaches the page')
+  // Saved, its prompt told the new name, and the conversation header's title follows.
+  assert.deepEqual(['lid', 'group', 'nameless'].map(id => [saved(home).omniThreads[id].title, saved(home).omniThreads[id].chatName]), [['+5511988887777', '+5511988887777'], ['Obra', 'Obra'], [null, 'Group']])
+  assert.deepEqual(run.titled, [['lid-session', '+5511988887777'], ['group-session', 'Obra'], ['nameless-session', 'Group']])
+  // Only the unnamed threads were read, once each; the view asked nothing.
+  const chatReads = () => askedOf(omni).filter(route => /^GET \/chats\/[^/]+$/.test(route))
+  assert.deepEqual(chatReads().sort(), [`GET /chats/${GROUP}`, `GET /chats/${LID_CHAT}`, `GET /chats/${NAMELESS_GROUP}`, `GET /chats/${UNKNOWN}`, `GET /chats/${UNKNOWN}`].sort())
+  for (let i = 0; i < 5; i += 1) run.view()
+  assert.equal(chatReads().length, 5)
+  // The next start reads only those Omni gave no name: the nameless group and the two it lost.
+  await run.stop()
+  const before = chatReads().length
+  const next = await boot(t, home)
+  await until(() => chatReads().length === before + 3)
+  await flush()
+  assert.deepEqual(next.titled, [])
+})
+
+test('a chat added under a raw-id name is a thread named by its number, its Session too; a nameless direct chat by none', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  CHATS[LID_CHAT] = { id: LID_CHAT, instanceId: INSTANCE, externalId: '134248514244695@lid', canonicalId: '5511988887777@s.whatsapp.net', chatType: 'dm', name: '134248514244695@lid' }
+  t.after(() => { delete CHATS[LID_CHAT] })
+  const run = await boot(t, homeFor(t, fakeOmni()))
+  const { thread } = await run.channels.threads.add(INSTANCE, LID_CHAT)
+  assert.deepEqual([thread.title, thread.chatName, thread.kind], ['+5511988887777', '+5511988887777', 'direct'])
+  assert.deepEqual(run.titled.filter(([id]) => id === thread.sessionId), [[thread.sessionId, '+5511988887777']])
+  const listed = () => run.call('omni-thread-chats', { channelId: INSTANCE }).then(answer => answer.chats.find(chat => chat.id === LID_CHAT))
+  assert.deepEqual(await listed().then(chat => [chat.name, chat.number, chat.initials]), ['+5511988887777', null, '+5'])
+  // With no phone id resolved, a LID is never a number: no name, and "Chat" for the page.
+  CHATS[LID_CHAT] = { ...CHATS[LID_CHAT], canonicalId: null }
+  assert.deepEqual(await listed().then(chat => [chat.name, chat.number, chat.initials]), [null, null, 'CH'])
+  await run.call('omni-thread-remove', { threadId: thread.id })
+  const again = (await run.channels.threads.add(INSTANCE, LID_CHAT)).thread
+  assert.deepEqual([again.title, again.chatName], [null, 'Chat'])
+  assert.deepEqual(run.view().omniThreads.map(item => [item.title, item.kind]), [[null, 'direct']])
+})
+
+test('an old title that only spells a group id or a LID with its device is no name either; a failed Session rename is tried again at the next start', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const omni = fakeOmni()
+  const home = homeFor(t, omni, teamState({ omniThreads: {
+    // What an older add wrote for nameless groups: a group id's user part, as a number or not.
+    plus: record('plus', 'plus-session', { chatId: GROUP, chatJid: '120363401234567890@g.us', chatName: '+120363401234567890', title: '+120363401234567890', kind: 'group' }),
+    dashed: record('dashed', 'dashed-session', { chatId: GROUP, chatJid: '5511999990000-1600000000@g.us', chatName: '5511999990000-1600000000', title: '5511999990000-1600000000' }),
+    device: record('device', 'device-session', { chatId: CHAT, chatJid: '134248514244695:12@lid', chatName: '+134248514244695', title: '+134248514244695' }),
+  } }))
+  const first = await boot(t, home, { renameError: new Error('session busy') })
+  // Shown by their words meanwhile, never by the ids.
+  assert.deepEqual(first.view().omniThreads.map(thread => [thread.id, thread.title, thread.kind]), [['plus', null, 'group'], ['dashed', null, 'group'], ['device', null, 'direct']])
+  await until(() => askedOf(omni).filter(route => route.startsWith('GET /chats/')).length === 3)
+  await flush()
+  // The Session could not be named: the record stays as it was, for the next start.
+  assert.deepEqual(first.titled, [])
+  assert.deepEqual(['plus', 'dashed', 'device'].map(id => saved(home).omniThreads[id].title), ['+120363401234567890', '5511999990000-1600000000', '+134248514244695'])
+  await first.stop()
+  const next = await boot(t, home)
+  await until(() => next.titled.length === 3)
+  await flush()
+  assert.deepEqual(next.titled, [['plus-session', 'Obra'], ['dashed-session', 'Obra'], ['device-session', 'Marina']])
+  assert.deepEqual(['plus', 'dashed', 'device'].map(id => saved(home).omniThreads[id].title), ['Obra', 'Obra', 'Marina'])
 })

@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'node:test'
+import { pathToFileURL } from 'node:url'
 import { runInNewContext } from 'node:vm'
 import { build } from 'esbuild'
 import { isOmniBot } from '../src/client/omni-store.js'
@@ -170,9 +172,10 @@ test('the + gets the focus back when its picker closes, and folding a channel cl
   assert.equal(all(view.draw(), 'ot-picker').length, 0)
 })
 
-test('picking a chat opens its new thread, the owner\'s own click; a refused add opens nothing', async (t) => {
+test('picking a chat opens its new thread once its row comes, the owner\'s own click; a refused add opens nothing', async (t) => {
   linked()
-  const { view, opened } = tree(t, { roster: hooked() })
+  const props = { roster: hooked() }
+  const { view, opened } = tree(t, props)
   let added = { ok: false, reason: 'Could not reach Omni. Try again in a moment.' }
   answer = endpoint => (endpoint === 'omni-thread-chats' ? { chats: [{ id: 'c2', name: 'Chat 2', jid: '2@s.whatsapp.net', added: false }] } : endpoint === 'omni-thread-add' ? added : {})
   const pick = async () => {
@@ -189,8 +192,32 @@ test('picking a chat opens its new thread, the owner\'s own click; a refused add
   one(view.draw(), 'ot-picker-chat').props.onClick()
   await settle()
   await settle()
-  assert.deepEqual(opened, ['s2'])
   assert.equal(all(view.draw(), 'ot-picker').length, 0)
+  assert.deepEqual(opened, [], 'not before its row is drawn')
+  // The team's next roster brings the row, which opens it, once; a thread no pick added does not.
+  props.roster = hooked({ omniThreads: [THREAD(2), THREAD(3)] })
+  view.draw()
+  view.draw()
+  assert.deepEqual(opened, ['s2'])
+  // The other order: the roster with the new row comes before the add answers. The row is
+  // there already, so the answer opens it, once.
+  let answerAdd
+  answer = endpoint => (endpoint === 'omni-thread-chats' ? { chats: [{ id: 'c4', name: 'Chat 4', added: false }] } : endpoint === 'omni-thread-add' ? new Promise((resolve) => { answerAdd = resolve }) : {})
+  byLabel(channelOf(view.draw(), CHANNEL_A), 'Add a chat').props.onClick()
+  view.draw()
+  await settle()
+  one(view.draw(), 'ot-picker-chat').props.onClick()
+  await settle()
+  props.roster = hooked({ omniThreads: [THREAD(2), THREAD(3), THREAD(4)] })
+  view.draw()
+  view.draw()
+  assert.deepEqual(opened, ['s2'], 'not before the add answered')
+  answerAdd({ ok: true, threadId: 't4', sessionId: 's4' })
+  await settle()
+  await settle()
+  view.draw()
+  view.draw()
+  assert.deepEqual(opened, ['s2', 's4'])
 })
 
 test('a roster that does not say whether a chat can be added shows no + and says it is not ready, never a bare row', (t) => {
@@ -397,10 +424,11 @@ test('on a team without the hook: no +, the channels say a newer Bot team is nee
   assert.deepEqual(all(root, 'ot-empty').map(text), [NEEDS_NEWER_TEAM, NEEDS_NEWER_TEAM])
   const row = one(root, 'bt-thread')
   assert.equal(text(one(row, 'ot-thread-reason')), NEEDS_NEWER_TEAM)
-  assert.equal(row.props['aria-disabled'], true)
   assert.match(row.props['aria-label'], /Adding a chat needs a newer Bot team/)
+  // Its click opens only the phone pane (omni-phone.test.js), never the Session.
   row.props.onClick()
   assert.deepEqual(opened, [])
+  assert.deepEqual(calls.filter(([endpoint]) => endpoint === 'omni-thread-open'), [])
 })
 
 test('a thread row has the bt-thread look: working, waiting and idle from the view, and "not connected" with its reason in place', () => {
@@ -683,4 +711,93 @@ test('the Omni row draws no Sessions list, even from a view an older host still 
 test('the board\'s notes on an automation whose worker moved to its chats\' threads have Chinese copy here; the Sessions list\'s words are gone', () => {
   for (const key of Object.values(WORKER_MOVED)) assert.ok(Object.hasOwn(STRINGS, key), key)
   for (const key of ['Sessions', 'Actions for {name}']) assert.equal(Object.hasOwn(STRINGS, key), false, key)
+})
+
+// The Bot team's sidebar (bots-dsh sidebar.js, the same in the pinned 3.32.1 and in 3.47.0):
+// BotChildren hands each entry the props of the Bot's own rows and `wide`. Its landing rule
+// (useLandOnMainBot) sends a main view that holds no Bot, group or DSH bot back to the Main
+// Bot while DSH lists that Session as blank (no turn yet): a thread that never ran stays open
+// only once the team counts the threads' Sessions as its own destinations, which is the
+// team's change to make. This pins the rule as the pinned team has it, so a team that changes
+// it shows here.
+const teamSidebar = readFileSync(new URL('src/client/sidebar.js', `${pathToFileURL(process.env.OMNI_DSH_CORE).href}/`), 'utf8')
+
+test('the pinned Bot team passes BotChildren entries the row props and wide; its landing rule, which a never-run thread depends on, is as documented', () => {
+  assert.match(teamSidebar, /const rowProps = \{ roster, actions: rowActions, useSessions, useUi, useSessionStatus: props\.useSessionStatus, useSessionRetainInfo: props\.useSessionRetainInfo, useActivity: props\.useActivity, useWork: props\.useWork, wide \}/)
+  assert.match(teamSidebar, /function BotChildren\(\{ wide, \.\.\.props \}\) \{[^}]*h\(entry\.Component, \{ key: entry\.id, \.\.\.props, wide \}\)/)
+  assert.match(teamSidebar, /roster\.roomsById\[id\] \|\| \(actions\.isAgentSession\?\.\(id\) \?\? roster\.agentOf\[id\] !== undefined\) \|\| blank !== '1'/)
+})
+
+test('on the props the Bot team passes, a click on a thread row opens its Session at once, through the team\'s row action', (t) => {
+  linked()
+  calls.length = 0
+  const roster = hooked({ omniThreads: [THREAD(1), THREAD(2)] })
+  const opened = []
+  const actions = { selectPanel: () => {}, openSession: id => opened.push(id) }
+  // The team's TeamSidebar rowProps, and its BotChildren's spread.
+  const rowProps = {
+    roster, actions, useSessions: select => select({ byId: { s1: { id: 's1', blank: true } } }), useUi: select => select({}),
+    useSessionStatus: select => select(new Map()), useSessionRetainInfo: (_id, select) => select(undefined),
+    useActivity: select => select({}), useWork: select => select({}), wide: true,
+  }
+  const BotChildren = ({ wide, ...props }) => [{ id: 'omni-channels', Component: ui.OmniTree }].map(entry => react.createElement(entry.Component, { key: entry.id, ...props, wide }))
+  const view = mount(() => react.createElement(BotChildren, { ...rowProps, bot: BOT }))
+  t.after(() => { view.unmount(); ui.startLive(fakeCall)?.() })
+  const row = id => nodes(view.draw()).find(node => node.props?.['data-thread-id'] === id)
+  // Every name the host lists is there, so the rows open.
+  assert.equal(ui.teamReady(roster), true)
+  assert.deepEqual(Object.keys(ui.rowPropsOf({ ...rowProps, bot: BOT }, roster.omniRowProps)).sort(), [...TEAM_CONTRACT.rowProps].sort())
+  assert.equal(row('t1').props['aria-disabled'], undefined)
+  row('t1').props.onClick()
+  row('t2').props.onClick()
+  assert.deepEqual(opened, ['s1', 's2'])
+  // Nothing is asked of the host, and nothing is posted into the thread.
+  assert.deepEqual(calls.filter(([endpoint]) => endpoint.startsWith('omni-thread')), [])
+})
+
+test('a thread\'s row is named by its chat, never a raw id: its number or name from the host, else "Chat" or "Group"', () => {
+  const roster = hooked()
+  const draw = thread => mount(() => react.createElement(ui.ThreadRow, { thread, actions: { openSession: () => {} }, rowProps: ui.rowPropsOf({ roster }, roster.omniRowProps) })).draw()
+  const named = (thread) => {
+    const root = draw(thread)
+    return [text(one(root, 'bt-thread-title')), one(root, 'bt-thread').props.title, one(root, 'ot-thread-remove').props['aria-label']]
+  }
+  assert.deepEqual(named(THREAD(1, CHANNEL_A, { title: '+5511988887777', kind: 'direct' })), ['+5511988887777', '+5511988887777', 'Remove +5511988887777'])
+  assert.deepEqual(named(THREAD(1, CHANNEL_A, { title: null, kind: 'direct' })), ['Chat', 'Chat', 'Remove Chat'])
+  assert.deepEqual(named(THREAD(1, CHANNEL_A, { title: null, kind: 'group' })), ['Group', 'Group', 'Remove Group'])
+  assert.match(one(draw(THREAD(1, CHANNEL_A, { title: null, kind: 'group' })), 'bt-thread').props['aria-label'], /^Group/)
+})
+
+test('a chat the picker lists with no name is "Chat", or "Group" for a group', async (t) => {
+  linked()
+  const { view } = tree(t, { roster: hooked() })
+  answer = endpoint => (endpoint === 'omni-thread-chats' ? { chats: [{ id: 'c7', name: null, kind: 'direct', initials: 'CH', number: null, added: false }, { id: 'c8', name: null, kind: 'group', initials: 'GR', number: null, added: false }] } : {})
+  byLabel(channelOf(view.draw(), CHANNEL_A), 'Add a chat').props.onClick()
+  view.draw()
+  await settle()
+  assert.deepEqual(all(view.draw(), 'ot-picker-name').map(text), ['Chat', 'Group'])
+})
+
+test('a thread row\'s menu and remove button sit after its title, never over it: the title ends in an ellipsis before them, and no phone button is left', () => {
+  const roster = hooked()
+  const root = mount(() => react.createElement(ui.ThreadRow, { thread: THREAD(1), actions: { openSession: () => {} }, rowProps: ui.rowPropsOf({ roster }, roster.omniRowProps) })).draw()
+  // In the row, after its button: the two actions, in their own box, in that order.
+  const row = one(root, 'ot-thread')
+  assert.deepEqual(row.children.filter(Boolean).map(child => classOf(child)[0]), ['bt-thread', 'ot-thread-acts'])
+  assert.deepEqual(one(row, 'ot-thread-acts').children.filter(Boolean).map(child => classOf(child)[0]), ['ot-thread-more', 'ot-thread-remove'])
+  assert.equal(one(root, 'ot-thread-phone'), undefined)
+  const css = ui.OMNI_TREE_CSS
+  const rule = selector => css.match(new RegExp(`(?:^|\\n)${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\{([^}]*)\\}`))?.[1]
+  // Nothing of the row is laid over it (the menu, which opens below the row, aside).
+  const rules = [...css.matchAll(/([^{}]+)\{([^}]*)\}/g)].map(([, selector, body]) => [selector.trim(), body])
+  const rowRules = rules.filter(([selector]) => /\.(ot-thread|bt-thread)(?!-menu)/.test(selector))
+  assert.ok(rowRules.length >= 8)
+  assert.deepEqual(rowRules.filter(([, body]) => /position:absolute/.test(body)), [])
+  assert.match(rule('.ot-thread .bt-thread'), /flex:1;min-width:0/)
+  assert.match(rule('.ot-thread .bt-thread-title'), /min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap/)
+  // The actions take room only on hover or focus, and stay focusable (never display:none).
+  assert.match(rule('.ot-thread-acts'), /flex:none;max-width:0;overflow:hidden;opacity:0/)
+  assert.equal(/\.ot-thread-acts[^{]*\{[^}]*display:none/.test(css), false)
+  assert.match(rule('.ot-thread:hover .ot-thread-acts,.ot-thread:focus-within .ot-thread-acts,.ot-thread-acts[data-on]'), /max-width:120px;padding-right:4px;opacity:1/)
+  assert.equal(css.includes('ot-thread-phone'), false)
 })

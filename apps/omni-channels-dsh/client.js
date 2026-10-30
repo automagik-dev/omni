@@ -15080,8 +15080,252 @@ function registerSettings(ctx) {
   ctx.slots.inject("settings.section", () => ctx.slots.register({ name: "settings.section", id: SETTINGS_SECTION.id, order: SETTINGS_SECTION.order, label: "Omni" }, OmniSettingsSection));
 }
 
-// src/client/subscriptions.js
+// src/client/phone-frame.js
 var import_react11 = require("react");
+var FRAME_SHELL = 16;
+var FRAME_BORDER = 1;
+var SCREEN_RADIUS_RATIO = 55 / 390;
+var FRAME_MAX_WIDTH = 300;
+function frameMetrics(width) {
+  const screen = Math.max(0, width - 2 * (FRAME_SHELL + FRAME_BORDER));
+  const screenRadius = Math.round(screen * SCREEN_RADIUS_RATIO * 10) / 10;
+  return { screen, screenRadius, shellRadius: Math.round((screenRadius + FRAME_SHELL) * 10) / 10 };
+}
+var SIDE_BUTTONS = Object.freeze([
+  { id: "mute", side: "left", top: "21%", height: 16 },
+  { id: "volume-up", side: "left", top: "34%", height: 36 },
+  { id: "volume-down", side: "left", top: "47%", height: 36 },
+  { id: "power", side: "right", top: "36%", height: 52 }
+]);
+function PhoneFrame({ label, children }) {
+  return (0, import_react11.createElement)(
+    "div",
+    { className: "op-device" },
+    (0, import_react11.createElement)(
+      "div",
+      { className: "op-frame" },
+      SIDE_BUTTONS.map((button) => (0, import_react11.createElement)("span", { key: button.id, className: "op-button", "data-side": button.side, "aria-hidden": true, style: { [button.side]: -2, top: button.top, height: button.height } })),
+      (0, import_react11.createElement)("div", { className: "op-screen", role: "region", "aria-label": label }, children)
+    )
+  );
+}
+var PhoneGlyph = () => (0, import_react11.createElement)(
+  "svg",
+  { width: 14, height: 14, viewBox: "0 0 20 20", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true, focusable: "false" },
+  (0, import_react11.createElement)("path", { d: "M7 2.75h6A1.75 1.75 0 0 1 14.75 4.5v11A1.75 1.75 0 0 1 13 17.25H7a1.75 1.75 0 0 1-1.75-1.75v-11A1.75 1.75 0 0 1 7 2.75z" }),
+  (0, import_react11.createElement)("path", { d: "M8.75 4.75h2.5" })
+);
+var SCREEN_WIDTH = `(100cqi - ${2 * (FRAME_SHELL + FRAME_BORDER)}px)`;
+var SCREEN_RADIUS = `calc(${SCREEN_WIDTH} * 55 / 390)`;
+var SHELL_RADIUS = `calc(${SCREEN_WIDTH} * 55 / 390 + ${FRAME_SHELL}px)`;
+var PHONE_FRAME_CSS = `
+.op-device{container-type:inline-size;width:100%;max-width:${FRAME_MAX_WIDTH}px;margin:0 auto}
+.op-frame{position:relative;box-sizing:border-box;width:100%;padding:${FRAME_SHELL}px;border:${FRAME_BORDER}px solid rgba(0,0,0,.6);border-radius:${SHELL_RADIUS};background:linear-gradient(145deg,#2b2e35 0%,#101116 45%,#1c1e25 100%);box-shadow:inset 0 0 0 1px rgba(255,255,255,.12),0 18px 50px rgba(0,0,0,.55)}
+.op-button{position:absolute;width:3px;border-radius:2px;background:#3a3d44;box-shadow:0 1px 2px rgba(0,0,0,.5)}
+.op-screen{position:relative;box-sizing:border-box;width:100%;aspect-ratio:390/844;display:flex;flex-direction:column;overflow:hidden;border:1px solid rgba(255,255,255,.06);border-radius:${SCREEN_RADIUS};background:var(--bt-main, #fff);color:var(--bt-ink)}
+`;
+
+// src/client/omni-phone.js
+var import_react12 = require("react");
+var PHONE_KIND = "omni-phone";
+var PHONE_TAB_ID = "ds-bot/omni-phone";
+var phoneTabId = (threadId) => `${PHONE_TAB_ID}:${threadId}`;
+var phoneTabDefinition = () => ({ id: PHONE_TAB_ID, kind: PHONE_KIND, title: () => t("Phone pane") });
+var phoneParams = (thread) => ({ threadId: thread.id, chatId: thread.chatId });
+var threadsIn = (roster) => Array.isArray(roster?.omniThreads) ? roster.omniThreads : [];
+var threadName = (thread) => thread.title || (thread.kind === "group" ? t("Group") : t("Chat"));
+function phoneThreadOf(roster, params, sessionId) {
+  const threads = threadsIn(roster);
+  const pick = (field, value) => typeof value === "string" ? threads.find((thread) => thread[field] === value) : void 0;
+  const named = typeof params?.threadId === "string" || typeof params?.chatId === "string";
+  return (named ? pick("id", params.threadId) ?? pick("chatId", params.chatId) : pick("sessionId", sessionId)) ?? null;
+}
+var phoneRight = null;
+var phoneWait = null;
+var PHONE_WAIT_MS = 3e3;
+function installPhone(ctx, face) {
+  const fiber = ctx.inject(["sidebarRight", "sidebarRightTabs"], (scope) => {
+    scope.effect(() => scope.sidebarRightTabs.register(phoneTabDefinition()), "ds-bot: phone tab type");
+    scope.effect(() => ctx.slots.inject("sidebar.right.pane.tab", () => ctx.slots.register({ name: "sidebar.right.pane.tab", key: PHONE_TAB_ID, inject: face }, PhoneTab)), "ds-bot: phone tab");
+    scope.effect(() => {
+      phoneRight = scope.sidebarRight;
+      return () => {
+        phoneRight = null;
+        phoneWait?.stop();
+      };
+    }, "ds-bot: the phone pane for the thread rows");
+  });
+  return () => fiber.dispose();
+}
+function openPhone(thread) {
+  const right = phoneRight;
+  if (!right) return t("The phone pane needs DSH's right column.");
+  if (typeof right.mounted?.getSnapshot === "function" && right.mounted.getSnapshot() === void 0) return t("Open a conversation first; the phone pane opens beside it.");
+  try {
+    right.openTab(PHONE_KIND, { params: phoneParams(thread) });
+    return null;
+  } catch (error) {
+    return error?.message ?? String(error);
+  }
+}
+function openPhoneBeside(thread) {
+  const before = phoneWait;
+  before?.stop();
+  const mounted = phoneRight?.mounted;
+  if (typeof mounted?.subscribe !== "function" || mounted.getSnapshot() === thread.sessionId) return openPhone(thread);
+  const passed = /* @__PURE__ */ new Set([...before?.passed ?? [], before?.sessionId, mounted.getSnapshot()]);
+  const off = mounted.subscribe(() => {
+    const now = mounted.getSnapshot();
+    if (now === void 0 || now !== thread.sessionId && passed.has(now)) return;
+    stop();
+    if (now === thread.sessionId) setTimeout(() => openPhone(thread), 0);
+  });
+  const timer = setTimeout(() => stop(), PHONE_WAIT_MS);
+  const stop = () => {
+    off();
+    clearTimeout(timer);
+    if (phoneWait?.stop === stop) phoneWait = null;
+  };
+  phoneWait = { stop, sessionId: thread.sessionId, passed };
+  return null;
+}
+function useChatPoll(chatId, on2) {
+  const [read, setRead] = (0, import_react12.useState)({ chatId: null, messages: null, error: null });
+  (0, import_react12.useEffect)(() => {
+    if (!chatId || !on2) return void 0;
+    let stopped = false;
+    let timer = 0;
+    const tick = async () => {
+      if (typeof document === "undefined" || !document.hidden) {
+        try {
+          const reply = await call("omni-messages", { chatId });
+          if (!stopped) setRead({ chatId, messages: Array.isArray(reply?.messages) ? reply.messages : [], error: null });
+        } catch (error) {
+          if (!stopped) setRead((before) => ({ chatId, messages: before.chatId === chatId ? before.messages : null, error: error?.message ?? String(error) }));
+        }
+      }
+      if (!stopped) timer = setTimeout(tick, POLL_MS);
+    };
+    void tick();
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  }, [chatId, on2]);
+  return read.chatId === chatId ? read : { chatId, messages: null, error: null };
+}
+function PhonePane({ params, sessionId, useRoster, visible = true }) {
+  const thread = useRoster((roster) => phoneThreadOf(roster, params, sessionId));
+  const read = useChatPoll(thread?.chatId ?? null, visible);
+  const messages = read.messages ?? [];
+  const { scroller, onScroll, onSized } = useStayAtEnd(thread?.chatId, messages.length);
+  if (!thread) {
+    const named = typeof params?.threadId === "string" || typeof params?.chatId === "string";
+    return (0, import_react12.createElement)("div", { className: "op-pane" }, (0, import_react12.createElement)("p", { className: "op-note" }, named ? t("This chat is no longer in the sidebar.") : t("Open the phone pane from a chat in the sidebar.")));
+  }
+  const loading = read.messages === null && read.error === null;
+  const name = threadName(thread);
+  return (0, import_react12.createElement)(
+    "div",
+    { className: "op-pane", "data-thread-id": thread.id },
+    (0, import_react12.createElement)(
+      PhoneFrame,
+      { label: t("{name} on the phone", { name }) },
+      (0, import_react12.createElement)(
+        "header",
+        { className: "op-head" },
+        (0, import_react12.createElement)("strong", null, name),
+        thread.connected === false && thread.reason ? (0, import_react12.createElement)("span", null, hostText(thread.reason)) : null
+      ),
+      (0, import_react12.createElement)(
+        "div",
+        { ref: scroller, className: "oc-thread op-log", onScroll, role: "log", "aria-label": t("Conversation with {name}", { name }) },
+        (0, import_react12.createElement)(
+          "div",
+          { className: "oc-thread-in" },
+          loading ? (0, import_react12.createElement)("div", { className: "oc-day" }, (0, import_react12.createElement)("span", { className: "oc-spinner", "aria-hidden": true }), t("Loading messages…")) : null,
+          read.error ? (0, import_react12.createElement)("p", { className: "op-note", role: "alert" }, hostText(read.error)) : null,
+          read.messages?.length === 0 ? (0, import_react12.createElement)("p", { className: "op-note" }, t("No messages yet")) : null,
+          (0, import_react12.createElement)(ChatMessages, { messages, onSized })
+        )
+      )
+    )
+  );
+}
+var KEPT_KEY = "omni.phone.tabs";
+var KEPT_TABS = 50;
+var readKept = () => {
+  try {
+    const kept = JSON.parse(localStorage.getItem(KEPT_KEY) ?? "{}");
+    return kept !== null && typeof kept === "object" && !Array.isArray(kept) ? kept : {};
+  } catch {
+    return {};
+  }
+};
+var keptParams = (where) => readKept()[where];
+function keepParams(where, params) {
+  const kept = { ...readKept() };
+  delete kept[where];
+  kept[where] = { threadId: params.threadId, chatId: params.chatId };
+  const all = Object.keys(kept);
+  for (const old of all.slice(0, Math.max(0, all.length - KEPT_TABS))) delete kept[old];
+  try {
+    localStorage.setItem(KEPT_KEY, JSON.stringify(kept));
+  } catch {
+  }
+}
+function PhoneTab({ useTabInfo, sessionId, useRoster }) {
+  const tab = typeof useTabInfo === "function" ? useTabInfo()?.tab : void 0;
+  const opened = tab?.navigation?.params;
+  const where = `${sessionId ?? ""}/${tab?.id ?? ""}`;
+  const params = (0, import_react12.useMemo)(() => opened ?? keptParams(where), [where, opened]);
+  (0, import_react12.useEffect)(() => {
+    if (opened && typeof opened.threadId === "string") keepParams(where, opened);
+  }, [where, opened]);
+  return (0, import_react12.createElement)(PhonePane, { key: phoneTabId(params?.threadId ?? ""), params, sessionId, useRoster, visible: tab?.visible !== false });
+}
+function PhoneDock({ sessionId, useRoster }) {
+  const thread = useRoster((roster) => threadsIn(roster).find((item) => item.sessionId === sessionId) ?? null);
+  const [problem, setProblem] = (0, import_react12.useState)(null);
+  if (!thread) return null;
+  return (0, import_react12.createElement)(
+    "div",
+    { className: "op-dock" },
+    problem ? (0, import_react12.createElement)("span", { className: "op-dock-problem", role: "alert" }, hostText(problem)) : null,
+    (0, import_react12.createElement)("button", {
+      type: "button",
+      className: "op-open",
+      "aria-label": t("Show {name} in the phone pane", { name: threadName(thread) }),
+      title: t("Phone pane"),
+      onClick: () => setProblem(openPhone(thread))
+    }, (0, import_react12.createElement)(PhoneGlyph), t("Phone"))
+  );
+}
+var OMNI_PHONE_CSS = `${PHONE_FRAME_CSS}
+.op-pane{box-sizing:border-box;height:100%;overflow-y:auto;padding:20px 16px}
+.op-head{display:flex;flex-direction:column;align-items:center;gap:1px;padding:28px 12px 8px;border-bottom:1px solid var(--bt-line, rgba(127,127,127,.2));text-align:center}
+.op-head strong{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:600}
+.op-head span{font-size:11px;color:var(--bt-ink-3)}
+.op-screen .oc-thread-in{max-width:none;padding:8px 8px 14px}
+.op-screen .oc-msg{max-width:86%}
+.op-screen .oc-bubble{padding:6px 10px 5px;border-radius:16px;font-size:13px;line-height:18px}
+.op-screen .oc-bubble[data-media]{padding:3px 3px 6px}
+.op-screen .oc-bubble[data-media=sticker]{padding:0}
+.op-screen .oc-media-img{max-height:220px;border-radius:12px}
+.op-screen .oc-media-still,.op-screen .oc-media-wait{width:180px}
+.op-screen .oc-media-audio,.op-screen .oc-media-wait-audio{width:190px}
+.op-screen .oc-media-sticker,.op-screen .oc-media-wait-sticker{width:110px;height:110px}
+.op-screen .oc-media-doc{min-width:0;font-size:12.5px}
+.op-note{margin:12px 8px;font-size:12.5px;color:var(--bt-ink-3);text-align:center}
+.op-dock{display:flex;justify-content:flex-end;align-items:center;gap:8px;padding:0 4px 4px}
+.op-open{display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 10px;border:1px solid var(--bt-line, rgba(127,127,127,.25));border-radius:13px;background:none;color:var(--bt-ink-2);font:inherit;font-size:12px;cursor:pointer}
+.op-open:hover{background:var(--bt-hover);color:var(--bt-ink)}
+.op-open:focus-visible{outline:2px solid var(--bt-accent);outline-offset:1px}
+.op-dock-problem{font-size:11.5px;color:var(--bt-danger, #dc2626)}
+`;
+
+// src/client/subscriptions.js
+var import_react13 = require("react");
 var { AtIcon, FileIcon, KeywordIcon, MessageIcon, ShieldIcon, UnplugIcon, VoiceIcon } = icons;
 var TRIGGER_ICONS = { message: MessageIcon, mention: AtIcon, keyword: KeywordIcon, voice: VoiceIcon, media: FileIcon, down: UnplugIcon };
 var FRESH_MS = 6e3;
@@ -15096,7 +15340,7 @@ function workerOf(worker, roster, where = {}) {
     const threads = Array.isArray(roster?.omniThreads) ? roster.omniThreads : [];
     const only = where.sources?.length === 1 && where.sources[0].kind === "chat" ? where.sources[0] : void 0;
     const thread = where.sessionId ? threads.find((item) => item.sessionId === where.sessionId) : only ? threads.find((item) => item.chatId === only.id) : void 0;
-    const title = thread?.title ?? only?.name;
+    const title = thread ? threadName(thread) : only?.name;
     return title ? { name: t("The thread of {name}", { name: title }), chat: title } : { name: t("Each chat's own thread"), session: true };
   }
   const bot = roster?.byId?.[worker.botId];
@@ -15104,14 +15348,14 @@ function workerOf(worker, roster, where = {}) {
 }
 function WorkerMark({ worker, roster, where, size = 24 }) {
   const info = workerOf(worker, roster, where);
-  if (info.session) return (0, import_react11.createElement)("span", { className: "os-session", style: { width: size, height: size } }, (0, import_react11.createElement)(OmniMark, { size: Math.round(size * 0.62) }));
-  if (info.chat !== void 0) return (0, import_react11.createElement)(ChatAvatar, { chat: { name: info.chat, initials: initials(info.chat) }, size });
-  return (0, import_react11.createElement)(BotMark, info.bot ? { bot: info.bot, size } : { look: info.look, size });
+  if (info.session) return (0, import_react13.createElement)("span", { className: "os-session", style: { width: size, height: size } }, (0, import_react13.createElement)(OmniMark, { size: Math.round(size * 0.62) }));
+  if (info.chat !== void 0) return (0, import_react13.createElement)(ChatAvatar, { chat: { name: info.chat, initials: initials(info.chat) }, size });
+  return (0, import_react13.createElement)(BotMark, info.bot ? { bot: info.bot, size } : { look: info.look, size });
 }
-var TriggerBadge = ({ trigger, size = 36 }) => (0, import_react11.createElement)(
+var TriggerBadge = ({ trigger, size = 36 }) => (0, import_react13.createElement)(
   "span",
   { className: "os-trigger", "data-kind": trigger.kind, style: { width: size, height: size, fontSize: Math.round(size * 0.5), "--os-icon": `${Math.round(size * 0.52)}px` } },
-  trigger.kind === "reaction" ? trigger.emoji : (0, import_react11.createElement)(TRIGGER_ICONS[trigger.kind])
+  trigger.kind === "reaction" ? trigger.emoji : (0, import_react13.createElement)(TRIGGER_ICONS[trigger.kind])
 );
 function triggerText(trigger) {
   if (trigger.kind === "reaction") return t("you react");
@@ -15127,32 +15371,32 @@ function sourcesText(sources) {
   return [count(channels2, "1 channel", "{n} channels"), count(groups, "1 group", "{n} groups"), count(chats, "1 chat", "{n} chats")].filter(Boolean).join(" + ");
 }
 var initials = (name) => name.startsWith("#") ? "#" : name.split(/\s+/).filter(Boolean).slice(0, 2).map((word) => word[0]).join("").toUpperCase() || "?";
-var SourceMark = ({ source, size }) => source.kind === "channel" ? (0, import_react11.createElement)(Tile, { type: source.type, size }) : (0, import_react11.createElement)(ChatAvatar, { chat: { name: source.name, initials: initials(source.name) }, size });
+var SourceMark = ({ source, size }) => source.kind === "channel" ? (0, import_react13.createElement)(Tile, { type: source.type, size }) : (0, import_react13.createElement)(ChatAvatar, { chat: { name: source.name, initials: initials(source.name) }, size });
 function SourceStack({ sources, size = 16 }) {
-  return (0, import_react11.createElement)(
+  return (0, import_react13.createElement)(
     "span",
     { className: "os-stack" },
-    sources.slice(0, 3).map((source) => (0, import_react11.createElement)("span", { key: `${source.kind}-${source.id}`, className: "os-stack-item" }, (0, import_react11.createElement)(SourceMark, { source, size }))),
-    sources.length > 3 ? (0, import_react11.createElement)("span", { className: "os-stack-more" }, `+${sources.length - 3}`) : null
+    sources.slice(0, 3).map((source) => (0, import_react13.createElement)("span", { key: `${source.kind}-${source.id}`, className: "os-stack-item" }, (0, import_react13.createElement)(SourceMark, { source, size }))),
+    sources.length > 3 ? (0, import_react13.createElement)("span", { className: "os-stack-more" }, `+${sources.length - 3}`) : null
   );
 }
 function Sentence({ sub, roster }) {
-  return (0, import_react11.createElement)(
+  return (0, import_react13.createElement)(
     "p",
     { className: "os-sentence" },
-    (0, import_react11.createElement)("span", { className: "os-w" }, t("When")),
+    (0, import_react13.createElement)("span", { className: "os-w" }, t("When")),
     " ",
-    (0, import_react11.createElement)("span", { className: "os-chip os-chip-trigger" }, sub.trigger.kind === "reaction" ? (0, import_react11.createElement)("b", { className: "os-emoji" }, sub.trigger.emoji) : null, triggerText(sub.trigger)),
+    (0, import_react13.createElement)("span", { className: "os-chip os-chip-trigger" }, sub.trigger.kind === "reaction" ? (0, import_react13.createElement)("b", { className: "os-emoji" }, sub.trigger.emoji) : null, triggerText(sub.trigger)),
     " ",
-    (0, import_react11.createElement)("span", { className: "os-w" }, t("in")),
+    (0, import_react13.createElement)("span", { className: "os-w" }, t("in")),
     " ",
-    (0, import_react11.createElement)("span", { className: "os-chip" }, (0, import_react11.createElement)(SourceStack, { sources: sub.sources }), sourcesText(sub.sources)),
+    (0, import_react13.createElement)("span", { className: "os-chip" }, (0, import_react13.createElement)(SourceStack, { sources: sub.sources }), sourcesText(sub.sources)),
     " ",
-    (0, import_react11.createElement)("span", { className: "os-w" }, "→"),
+    (0, import_react13.createElement)("span", { className: "os-w" }, "→"),
     " ",
-    (0, import_react11.createElement)("span", { className: "os-chip os-chip-worker" }, (0, import_react11.createElement)(WorkerMark, { worker: sub.worker, roster, where: sub, size: 18 }), workerOf(sub.worker, roster, sub).name),
-    sub.outputs.react ? (0, import_react11.createElement)(import_react11.Fragment, null, " ", (0, import_react11.createElement)("span", { className: "os-chip os-chip-soft" }, t("reacts 👀 then ✅"))) : null,
-    sub.outputs.replyToMe ? (0, import_react11.createElement)(import_react11.Fragment, null, " ", (0, import_react11.createElement)("span", { className: "os-chip os-chip-soft" }, t("replies to you"))) : null
+    (0, import_react13.createElement)("span", { className: "os-chip os-chip-worker" }, (0, import_react13.createElement)(WorkerMark, { worker: sub.worker, roster, where: sub, size: 18 }), workerOf(sub.worker, roster, sub).name),
+    sub.outputs.react ? (0, import_react13.createElement)(import_react13.Fragment, null, " ", (0, import_react13.createElement)("span", { className: "os-chip os-chip-soft" }, t("reacts 👀 then ✅"))) : null,
+    sub.outputs.replyToMe ? (0, import_react13.createElement)(import_react13.Fragment, null, " ", (0, import_react13.createElement)("span", { className: "os-chip os-chip-soft" }, t("replies to you"))) : null
   );
 }
 var RUN_STATUS = {
@@ -15166,17 +15410,17 @@ var RUN_STATUS = {
 var useWaiting = (useWork) => new Set((useWork ? useWork((work) => (work.approvals ?? []).map((entry) => entry.sessionId).join(",")) : "").split(",").filter(Boolean));
 function EventsBadge({ roster, useWork }) {
   const waiting = waitingRuns(roster, useWaiting(useWork));
-  return waiting > 0 ? (0, import_react11.createElement)("span", { className: "os-pending", title: t("{n} waiting for you", { n: waiting }) }, String(waiting)) : null;
+  return waiting > 0 ? (0, import_react13.createElement)("span", { className: "os-pending", title: t("{n} waiting for you", { n: waiting }) }, String(waiting)) : null;
 }
 function SubscriptionsButton({ roster, onToggle, useWork }) {
   const count = headCount(roster);
   const waiting = waitingRuns(roster, useWaiting(useWork));
-  return (0, import_react11.createElement)(
+  return (0, import_react13.createElement)(
     "button",
     { type: "button", className: "os-head-btn", onClick: onToggle },
     t("Automations"),
-    count === null ? null : (0, import_react11.createElement)("span", { className: "os-head-count" }, String(count)),
-    waiting > 0 ? (0, import_react11.createElement)("span", { className: "os-pending" }, String(waiting)) : null
+    count === null ? null : (0, import_react13.createElement)("span", { className: "os-head-count" }, String(count)),
+    waiting > 0 ? (0, import_react13.createElement)("span", { className: "os-pending" }, String(waiting)) : null
   );
 }
 var SAVED = /^Saved (sub-[a-z0-9]+) · (.*?): when /;
@@ -15193,19 +15437,19 @@ function savedNotice({ askFirst, main }) {
 function SavedAutomationCard({ argValue, content, done, roster }) {
   if (!done) return null;
   const saved = savedOf(content, roster, argValue?.("ask_first"));
-  if (saved === null) return (0, import_react11.createElement)("div", { className: "bt-event", title: content }, String(content ?? "").slice(0, 160));
+  if (saved === null) return (0, import_react13.createElement)("div", { className: "bt-event", title: content }, String(content ?? "").slice(0, 160));
   const notice = savedNotice({ askFirst: saved.askFirst, main: roster?.byId?.[roster.eventsBotId]?.name ?? "Omni" });
-  return (0, import_react11.createElement)(
+  return (0, import_react13.createElement)(
     "div",
     { className: "os-saved", "data-loud": notice.loud || void 0 },
-    (0, import_react11.createElement)(
+    (0, import_react13.createElement)(
       "div",
       { className: "os-saved-top" },
-      saved.sub ? (0, import_react11.createElement)(TriggerBadge, { trigger: saved.sub.trigger, size: 22 }) : null,
-      (0, import_react11.createElement)("span", null, t("Saved automation")),
-      (0, import_react11.createElement)("strong", null, saved.name)
+      saved.sub ? (0, import_react13.createElement)(TriggerBadge, { trigger: saved.sub.trigger, size: 22 }) : null,
+      (0, import_react13.createElement)("span", null, t("Saved automation")),
+      (0, import_react13.createElement)("strong", null, saved.name)
     ),
-    (0, import_react11.createElement)("p", { className: "os-saved-note", role: notice.loud ? "alert" : void 0 }, (0, import_react11.createElement)(ShieldIcon), (0, import_react11.createElement)("span", null, notice.text))
+    (0, import_react13.createElement)("p", { className: "os-saved-note", role: notice.loud ? "alert" : void 0 }, (0, import_react13.createElement)(ShieldIcon), (0, import_react13.createElement)("span", null, notice.text))
   );
 }
 var BOARD_KIND = "omni-subscriptions";
@@ -15215,44 +15459,44 @@ function BoardTab({ useRoster, useWork, actions }) {
   const roster = useRoster((value) => value);
   const waiting = useWaiting(useWork);
   const bot = roster.byId?.[roster.eventsBotId];
-  if (!bot) return (0, import_react11.createElement)("div", { className: "os-board" }, (0, import_react11.createElement)("p", { className: "os-board-note" }, t("Automations belong to the Main Bot, which this team does not have.")));
-  return (0, import_react11.createElement)(SubscriptionsBoard, { bot, roster, actions, waiting });
+  if (!bot) return (0, import_react13.createElement)("div", { className: "os-board" }, (0, import_react13.createElement)("p", { className: "os-board-note" }, t("Automations belong to the Main Bot, which this team does not have.")));
+  return (0, import_react13.createElement)(SubscriptionsBoard, { bot, roster, actions, waiting });
 }
 function SubscriptionsBoard({ bot, roster, actions, waiting }) {
   const omni2 = useOmni();
-  (0, import_react11.useEffect)(() => {
+  (0, import_react13.useEffect)(() => {
     startLive(call);
   }, []);
   const subs = roster.subscriptions ?? [];
   const runs = runsOf(roster);
   const watched = new Set(subs.filter((sub) => sub.on).flatMap((sub) => sub.sources.map((source) => `${source.kind}:${source.id}`))).size;
   const listening = (roster.omniEvents?.listening ?? []).length > 0;
-  return (0, import_react11.createElement)(
+  return (0, import_react13.createElement)(
     "div",
     { className: "os-board" },
-    subs.length === 0 ? (0, import_react11.createElement)(Empty, { bot, live: omni2.source.kind === "live" }) : (0, import_react11.createElement)(
-      import_react11.Fragment,
+    subs.length === 0 ? (0, import_react13.createElement)(Empty, { bot, live: omni2.source.kind === "live" }) : (0, import_react13.createElement)(
+      import_react13.Fragment,
       null,
-      (0, import_react11.createElement)(
+      (0, import_react13.createElement)(
         "div",
         { className: "os-board-status" },
-        (0, import_react11.createElement)("span", { className: "oc-live-dot", "data-on": listening || void 0, "aria-hidden": true }),
+        (0, import_react13.createElement)("span", { className: "oc-live-dot", "data-on": listening || void 0, "aria-hidden": true }),
         !subs.some((sub) => sub.on) ? t("Everything is paused.") : `${watched === 1 ? t("Watching 1 chat or channel.") : t("Watching {n} chats and channels.", { n: watched })} ${listening ? t("Listening to omni.") : t("Connecting to omni…")}`
       ),
-      subs.some((sub) => sub.on && (sub.outputs.react || sub.outputs.replyToMe)) ? (0, import_react11.createElement)("div", { className: "os-board-note os-board-pending" }, t("Reactions and replies to you are not sent yet. Results stay in the runs below.")) : null,
-      (0, import_react11.createElement)("div", { className: "os-list" }, subs.map((sub) => (0, import_react11.createElement)(AutomationRow, { key: sub.id, sub, roster, runs: runs.filter((run) => run.subId === sub.id) }))),
-      runs.length > 0 ? (0, import_react11.createElement)(
-        import_react11.Fragment,
+      subs.some((sub) => sub.on && (sub.outputs.react || sub.outputs.replyToMe)) ? (0, import_react13.createElement)("div", { className: "os-board-note os-board-pending" }, t("Reactions and replies to you are not sent yet. Results stay in the runs below.")) : null,
+      (0, import_react13.createElement)("div", { className: "os-list" }, subs.map((sub) => (0, import_react13.createElement)(AutomationRow, { key: sub.id, sub, roster, runs: runs.filter((run) => run.subId === sub.id) }))),
+      runs.length > 0 ? (0, import_react13.createElement)(
+        import_react13.Fragment,
         null,
-        (0, import_react11.createElement)("div", { className: "os-board-h" }, t("Runs")),
-        (0, import_react11.createElement)("div", { className: "os-list" }, runs.slice(0, 20).map((run) => (0, import_react11.createElement)(RunRow, { key: run.id, run, sub: subs.find((sub) => sub.id === run.subId), roster, actions, asking: waiting?.has(run.sessionId) && run.status === "working" })))
+        (0, import_react13.createElement)("div", { className: "os-board-h" }, t("Runs")),
+        (0, import_react13.createElement)("div", { className: "os-list" }, runs.slice(0, 20).map((run) => (0, import_react13.createElement)(RunRow, { key: run.id, run, sub: subs.find((sub) => sub.id === run.subId), roster, actions, asking: waiting?.has(run.sessionId) && run.status === "working" })))
       ) : null
     ),
-    (0, import_react11.createElement)(
+    (0, import_react13.createElement)(
       "div",
       { className: "os-safety" },
-      (0, import_react11.createElement)(ShieldIcon),
-      (0, import_react11.createElement)("span", null, t("Anyone in a watched chat can write text that tries to steer a Bot. Work started by an event reads on its own and asks you before any shell command, file change, web or connector call, or message, unless you tell {name} otherwise. What you allow runs with that Bot's keys.", { name: bot.name }))
+      (0, import_react13.createElement)(ShieldIcon),
+      (0, import_react13.createElement)("span", null, t("Anyone in a watched chat can write text that tries to steer a Bot. Work started by an event reads on its own and asks you before any shell command, file change, web or connector call, or message, unless you tell {name} otherwise. What you allow runs with that Bot's keys.", { name: bot.name }))
     )
   );
 }
@@ -15263,18 +15507,18 @@ var automationExamples = () => [
 ];
 function Empty({ bot, live }) {
   const examples2 = automationExamples().map((example) => example.text);
-  return (0, import_react11.createElement)(
+  return (0, import_react13.createElement)(
     "div",
     { className: "os-empty-board" },
-    (0, import_react11.createElement)(BotMark, { bot, size: 48, live: true }),
-    (0, import_react11.createElement)("strong", null, t("Tell {name} what to watch", { name: bot.name })),
-    (0, import_react11.createElement)("span", null, live ? t("Say it in the chat. {name} finds the chats, asks what is missing, and the subscription shows up here.", { name: bot.name }) : t("Omni is not connected to this DSH yet, so there is nothing to watch.")),
-    (0, import_react11.createElement)("ul", { className: "os-examples" }, examples2.map((text) => (0, import_react11.createElement)("li", { key: text }, text)))
+    (0, import_react13.createElement)(BotMark, { bot, size: 48, live: true }),
+    (0, import_react13.createElement)("strong", null, t("Tell {name} what to watch", { name: bot.name })),
+    (0, import_react13.createElement)("span", null, live ? t("Say it in the chat. {name} finds the chats, asks what is missing, and the subscription shows up here.", { name: bot.name }) : t("Omni is not connected to this DSH yet, so there is nothing to watch.")),
+    (0, import_react13.createElement)("ul", { className: "os-examples" }, examples2.map((text) => (0, import_react13.createElement)("li", { key: text }, text)))
   );
 }
 function AutomationRow({ sub, roster, runs, onOpen }) {
-  const [confirming, setConfirming] = (0, import_react11.useState)(false);
-  const [busy, setBusy] = (0, import_react11.useState)("");
+  const [confirming, setConfirming] = (0, import_react13.useState)(false);
+  const [busy, setBusy] = (0, import_react13.useState)("");
   const fresh = Date.now() - (sub.updatedAt ?? 0) < FRESH_MS;
   const run = async (endpoint, payload) => {
     setBusy(endpoint);
@@ -15285,18 +15529,18 @@ function AutomationRow({ sub, roster, runs, onOpen }) {
     }
   };
   const last = runs[0];
-  return (0, import_react11.createElement)(
+  return (0, import_react13.createElement)(
     "div",
     { className: "os-row", "data-off": sub.on ? void 0 : true, "data-fresh": fresh || void 0 },
-    (0, import_react11.createElement)(TriggerBadge, { trigger: sub.trigger, size: 28 }),
-    (0, import_react11.createElement)(
+    (0, import_react13.createElement)(TriggerBadge, { trigger: sub.trigger, size: 28 }),
+    (0, import_react13.createElement)(
       "div",
       { className: "os-row-body" },
-      (0, import_react11.createElement)(
+      (0, import_react13.createElement)(
         "div",
         { className: "os-row-top" },
-        onOpen ? (0, import_react11.createElement)("button", { type: "button", className: "os-row-name os-row-open", onClick: onOpen }, sub.name) : (0, import_react11.createElement)("span", { className: "os-row-name" }, sub.name),
-        (0, import_react11.createElement)("button", {
+        onOpen ? (0, import_react13.createElement)("button", { type: "button", className: "os-row-name os-row-open", onClick: onOpen }, sub.name) : (0, import_react13.createElement)("span", { className: "os-row-name" }, sub.name),
+        (0, import_react13.createElement)("button", {
           type: "button",
           role: "switch",
           "aria-checked": sub.on,
@@ -15304,23 +15548,23 @@ function AutomationRow({ sub, roster, runs, onOpen }) {
           disabled: busy !== "",
           "aria-label": sub.on ? t("Pause {name}", { name: sub.name }) : t("Resume {name}", { name: sub.name }),
           onClick: () => run("automation-set-on", { id: sub.id, on: !sub.on })
-        }, (0, import_react11.createElement)("span"))
+        }, (0, import_react13.createElement)("span"))
       ),
-      (0, import_react11.createElement)(Sentence, { sub, roster }),
-      (0, import_react11.createElement)(
+      (0, import_react13.createElement)(Sentence, { sub, roster }),
+      (0, import_react13.createElement)(
         "div",
         { className: "os-row-foot" },
-        (0, import_react11.createElement)("span", null, last ? t("last run {time}", { time: relativeShort(last.at) }) : t("not fired yet")),
-        sub.askFirst ? null : (0, import_react11.createElement)("span", { className: "os-row-warn" }, t("acts without asking")),
+        (0, import_react13.createElement)("span", null, last ? t("last run {time}", { time: relativeShort(last.at) }) : t("not fired yet")),
+        sub.askFirst ? null : (0, import_react13.createElement)("span", { className: "os-row-warn" }, t("acts without asking")),
         // Paused by the host, with why (a team without the hook, a worker it does not know).
-        !sub.on && sub.pausedReason ? (0, import_react11.createElement)("span", { className: "os-row-warn os-row-paused" }, hostText(sub.pausedReason)) : null,
+        !sub.on && sub.pausedReason ? (0, import_react13.createElement)("span", { className: "os-row-warn os-row-paused" }, hostText(sub.pausedReason)) : null,
         // What the host says about it, once (its worker moved to its chats' threads).
-        sub.note ? (0, import_react11.createElement)("span", { className: "os-row-note" }, hostText(sub.note)) : null,
-        (0, import_react11.createElement)(
+        sub.note ? (0, import_react13.createElement)("span", { className: "os-row-note" }, hostText(sub.note)) : null,
+        (0, import_react13.createElement)(
           "span",
           { className: "os-row-actions" },
-          (0, import_react11.createElement)("button", { type: "button", className: "os-link", disabled: busy !== "", onClick: () => run("automation-test", { id: sub.id }) }, t("Test")),
-          (0, import_react11.createElement)("button", {
+          (0, import_react13.createElement)("button", { type: "button", className: "os-link", disabled: busy !== "", onClick: () => run("automation-test", { id: sub.id }) }, t("Test")),
+          (0, import_react13.createElement)("button", {
             type: "button",
             className: confirming ? "os-link os-link-danger" : "os-link",
             disabled: busy !== "",
@@ -15337,22 +15581,22 @@ function RunRow({ run, sub, roster, actions, asking = false }) {
   const status = RUN_STATUS[asking ? "waiting" : run.status];
   const open = run.sessionId ? () => actions.openSession(run.sessionId) : void 0;
   const where = { sources: sub.sources, sessionId: run.sessionId ?? void 0 };
-  return (0, import_react11.createElement)(
+  return (0, import_react13.createElement)(
     "button",
     { type: "button", className: "os-run", "data-tone": status.tone, disabled: !open, onClick: open, title: open ? t("Open this run") : void 0 },
-    (0, import_react11.createElement)(WorkerMark, { worker: sub.worker, roster, where, size: 22 }),
-    (0, import_react11.createElement)(
+    (0, import_react13.createElement)(WorkerMark, { worker: sub.worker, roster, where, size: 22 }),
+    (0, import_react13.createElement)(
       "span",
       { className: "os-run-body" },
-      (0, import_react11.createElement)(
+      (0, import_react13.createElement)(
         "span",
         { className: "os-run-top" },
-        (0, import_react11.createElement)("span", { className: "os-run-name" }, workerOf(sub.worker, roster, where).name),
-        (0, import_react11.createElement)("span", { className: "os-run-status" }, run.test ? `${t("Test")} · ${t(status.label)}` : t(status.label)),
-        (0, import_react11.createElement)("time", null, relativeShort(run.at))
+        (0, import_react13.createElement)("span", { className: "os-run-name" }, workerOf(sub.worker, roster, where).name),
+        (0, import_react13.createElement)("span", { className: "os-run-status" }, run.test ? `${t("Test")} · ${t(status.label)}` : t(status.label)),
+        (0, import_react13.createElement)("time", null, relativeShort(run.at))
       ),
-      run.excerpt && !run.test ? (0, import_react11.createElement)("span", { className: "os-run-quote" }, run.from ? `${run.from}: ` : "", run.excerpt) : null,
-      (0, import_react11.createElement)("span", { className: "os-run-text" }, run.summary)
+      run.excerpt && !run.test ? (0, import_react13.createElement)("span", { className: "os-run-quote" }, run.from ? `${run.from}: ` : "", run.excerpt) : null,
+      (0, import_react13.createElement)("span", { className: "os-run-text" }, run.summary)
     )
   );
 }
@@ -15478,15 +15722,15 @@ function whenText(task) {
 }
 
 // src/client/automations-page.js
-var import_react12 = require("react");
+var import_react14 = require("react");
 var { ClockIcon, PlusIcon: PlusIcon2, SearchIcon } = icons;
 var AUTOMATIONS_PANEL = "omni-automations";
 function AutomationsPage({ useRoster, actions }) {
   const roster = useRoster((value) => value);
-  const [filter, setFilter] = (0, import_react12.useState)("all");
-  const [query, setQuery] = (0, import_react12.useState)("");
-  const [schedules, setSchedules] = (0, import_react12.useState)({ available: false, tasks: [] });
-  (0, import_react12.useEffect)(() => {
+  const [filter, setFilter] = (0, import_react14.useState)("all");
+  const [query, setQuery] = (0, import_react14.useState)("");
+  const [schedules, setSchedules] = (0, import_react14.useState)({ available: false, tasks: [] });
+  (0, import_react14.useEffect)(() => {
     let live = true;
     const load = () => call("schedules").then((value) => {
       if (live) setSchedules(value);
@@ -15503,7 +15747,7 @@ function AutomationsPage({ useRoster, actions }) {
   const runs = runsOf(roster);
   const autopilot = roster.byId?.[roster.eventsBotId];
   const needle = query.trim().toLowerCase();
-  const rows = (0, import_react12.useMemo)(() => {
+  const rows = (0, import_react14.useMemo)(() => {
     const list = [
       ...events.map((sub) => ({ kind: "event", id: sub.id, on: sub.on, title: sub.name, sort: sub.createdAt, sub })),
       ...schedules.tasks.map((task) => ({ kind: "schedule", id: `${task.sessionId}:${task.id}`, on: task.status === "active", title: task.title, sort: Date.parse(task.scheduledAt) || 0, task }))
@@ -15513,23 +15757,23 @@ function AutomationsPage({ useRoster, actions }) {
   const talk = () => {
     if (autopilot) actions.openSession(autopilot.id);
   };
-  return (0, import_react12.createElement)(
+  return (0, import_react14.createElement)(
     "div",
     { className: "oa-page" },
-    (0, import_react12.createElement)(
+    (0, import_react14.createElement)(
       "div",
       { className: "oa-in" },
-      (0, import_react12.createElement)(
+      (0, import_react14.createElement)(
         "header",
         { className: "oa-head" },
-        (0, import_react12.createElement)("h1", null, t("Automations")),
-        (0, import_react12.createElement)("button", { type: "button", className: "oa-new", disabled: !autopilot, onClick: talk, title: autopilot ? t("Tell {name} what to automate", { name: autopilot.name }) : void 0 }, (0, import_react12.createElement)(PlusIcon2), t("New"))
+        (0, import_react14.createElement)("h1", null, t("Automations")),
+        (0, import_react14.createElement)("button", { type: "button", className: "oa-new", disabled: !autopilot, onClick: talk, title: autopilot ? t("Tell {name} what to automate", { name: autopilot.name }) : void 0 }, (0, import_react14.createElement)(PlusIcon2), t("New"))
       ),
-      (0, import_react12.createElement)("p", { className: "oa-lede" }, autopilot ? t("Things that run on their own: when something happens in your chats, or on a schedule. Say what you want to {name}; it sets it up and it shows here.", { name: autopilot.name }) : t("Things that run on their own, on a schedule or when something happens in your chats.")),
-      (0, import_react12.createElement)(
+      (0, import_react14.createElement)("p", { className: "oa-lede" }, autopilot ? t("Things that run on their own: when something happens in your chats, or on a schedule. Say what you want to {name}; it sets it up and it shows here.", { name: autopilot.name }) : t("Things that run on their own, on a schedule or when something happens in your chats.")),
+      (0, import_react14.createElement)(
         "div",
         { className: "oa-filters", role: "radiogroup", "aria-label": t("Show") },
-        [["all", t("All")], ["enabled", t("Enabled")], ["inactive", t("Inactive")]].map(([value, label]) => (0, import_react12.createElement)("button", {
+        [["all", t("All")], ["enabled", t("Enabled")], ["inactive", t("Inactive")]].map(([value, label]) => (0, import_react14.createElement)("button", {
           key: value,
           type: "button",
           role: "radio",
@@ -15537,14 +15781,14 @@ function AutomationsPage({ useRoster, actions }) {
           onClick: () => setFilter(value)
         }, label))
       ),
-      (0, import_react12.createElement)("label", { className: "oa-search" }, (0, import_react12.createElement)(SearchIcon), (0, import_react12.createElement)("input", { value: query, placeholder: t("Search automations"), "aria-label": t("Search automations"), onChange: (event) => setQuery(event.target.value) })),
-      rows.length === 0 ? (0, import_react12.createElement)(
+      (0, import_react14.createElement)("label", { className: "oa-search" }, (0, import_react14.createElement)(SearchIcon), (0, import_react14.createElement)("input", { value: query, placeholder: t("Search automations"), "aria-label": t("Search automations"), onChange: (event) => setQuery(event.target.value) })),
+      rows.length === 0 ? (0, import_react14.createElement)(
         "div",
         { className: "oa-empty" },
-        (0, import_react12.createElement)(ClockIcon),
-        (0, import_react12.createElement)("span", null, events.length + schedules.tasks.length === 0 ? t("Nothing runs on its own yet.") : t("No automations match.")),
-        autopilot ? (0, import_react12.createElement)("button", { type: "button", className: "oa-empty-go", onClick: talk }, t("Tell {name} what to automate", { name: autopilot.name })) : null
-      ) : (0, import_react12.createElement)("div", { className: "oa-list" }, rows.map((row) => row.kind === "event" ? (0, import_react12.createElement)(AutomationRow, { key: row.id, sub: row.sub, roster, runs: runs.filter((run) => run.subId === row.id), onOpen: talk }) : (0, import_react12.createElement)(ScheduleRow, { key: row.id, task: row.task, roster, actions })))
+        (0, import_react14.createElement)(ClockIcon),
+        (0, import_react14.createElement)("span", null, events.length + schedules.tasks.length === 0 ? t("Nothing runs on its own yet.") : t("No automations match.")),
+        autopilot ? (0, import_react14.createElement)("button", { type: "button", className: "oa-empty-go", onClick: talk }, t("Tell {name} what to automate", { name: autopilot.name })) : null
+      ) : (0, import_react14.createElement)("div", { className: "oa-list" }, rows.map((row) => row.kind === "event" ? (0, import_react14.createElement)(AutomationRow, { key: row.id, sub: row.sub, roster, runs: runs.filter((run) => run.subId === row.id), onOpen: talk }) : (0, import_react14.createElement)(ScheduleRow, { key: row.id, task: row.task, roster, actions })))
     )
   );
 }
@@ -15552,30 +15796,30 @@ function ScheduleRow({ task, roster, actions }) {
   const owner = roster.byId?.[task.botId];
   const room = roster.roomsById?.[task.roomId];
   const active = task.status === "active";
-  return (0, import_react12.createElement)(
+  return (0, import_react14.createElement)(
     "button",
     { type: "button", className: "os-row oa-schedule", "data-off": active ? void 0 : true, onClick: () => actions.selectPanel("schedules"), title: t("Edit the timing in Automation tasks") },
-    (0, import_react12.createElement)("span", { className: "os-trigger", "data-kind": "schedule", style: { width: 28, height: 28, "--os-icon": "15px" } }, (0, import_react12.createElement)(ClockIcon)),
-    (0, import_react12.createElement)(
+    (0, import_react14.createElement)("span", { className: "os-trigger", "data-kind": "schedule", style: { width: 28, height: 28, "--os-icon": "15px" } }, (0, import_react14.createElement)(ClockIcon)),
+    (0, import_react14.createElement)(
       "span",
       { className: "os-row-body" },
-      (0, import_react12.createElement)(
+      (0, import_react14.createElement)(
         "span",
         { className: "os-row-top" },
-        (0, import_react12.createElement)("span", { className: "os-row-name" }, task.title),
-        (0, import_react12.createElement)("span", { className: "oa-tag" }, active ? t("Scheduled") : t("Inactive"))
+        (0, import_react14.createElement)("span", { className: "os-row-name" }, task.title),
+        (0, import_react14.createElement)("span", { className: "oa-tag" }, active ? t("Scheduled") : t("Inactive"))
       ),
-      (0, import_react12.createElement)(
+      (0, import_react14.createElement)(
         "span",
         { className: "os-sentence" },
-        (0, import_react12.createElement)("span", { className: "os-chip" }, whenText(task)),
-        (0, import_react12.createElement)("span", { className: "os-w" }, "→"),
-        (0, import_react12.createElement)("span", { className: "os-chip" }, owner ? (0, import_react12.createElement)(import_react12.Fragment, null, (0, import_react12.createElement)(BotMark, { bot: owner, size: 16 }), owner.name) : room?.name ?? t("a chat"))
+        (0, import_react14.createElement)("span", { className: "os-chip" }, whenText(task)),
+        (0, import_react14.createElement)("span", { className: "os-w" }, "→"),
+        (0, import_react14.createElement)("span", { className: "os-chip" }, owner ? (0, import_react14.createElement)(import_react14.Fragment, null, (0, import_react14.createElement)(BotMark, { bot: owner, size: 16 }), owner.name) : room?.name ?? t("a chat"))
       ),
-      (0, import_react12.createElement)(
+      (0, import_react14.createElement)(
         "span",
         { className: "os-row-foot" },
-        (0, import_react12.createElement)("span", null, active && task.scheduledAt ? t("next run {time}", { time: new Date(task.scheduledAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) }) : task.lastDelivery ? t("last run {time}", { time: relativeShort(Date.parse(task.lastDelivery.deliveredAt ?? task.lastDelivery) || Date.now()) }) : t("not run yet"))
+        (0, import_react14.createElement)("span", null, active && task.scheduledAt ? t("next run {time}", { time: new Date(task.scheduledAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) }) : task.lastDelivery ? t("last run {time}", { time: relativeShort(Date.parse(task.lastDelivery.deliveredAt ?? task.lastDelivery) || Date.now()) }) : t("not run yet"))
       )
     )
   );
@@ -15603,224 +15847,6 @@ var AUTOMATIONS_CSS = `
 .oa-empty svg{width:28px;height:28px}
 .oa-empty-go{height:38px;padding:0 16px;border-radius:12px;border:1px solid var(--bt-line-2);background:var(--bt-card);color:var(--bt-ink);font:inherit;font-size:14px;cursor:pointer}
 @media (max-width:720px){.oa-in{padding:20px 16px 40px}}
-`;
-
-// src/client/phone-frame.js
-var import_react13 = require("react");
-var FRAME_SHELL = 16;
-var FRAME_BORDER = 1;
-var SCREEN_RADIUS_RATIO = 55 / 390;
-var FRAME_MAX_WIDTH = 300;
-function frameMetrics(width) {
-  const screen = Math.max(0, width - 2 * (FRAME_SHELL + FRAME_BORDER));
-  const screenRadius = Math.round(screen * SCREEN_RADIUS_RATIO * 10) / 10;
-  return { screen, screenRadius, shellRadius: Math.round((screenRadius + FRAME_SHELL) * 10) / 10 };
-}
-var SIDE_BUTTONS = Object.freeze([
-  { id: "mute", side: "left", top: "21%", height: 16 },
-  { id: "volume-up", side: "left", top: "34%", height: 36 },
-  { id: "volume-down", side: "left", top: "47%", height: 36 },
-  { id: "power", side: "right", top: "36%", height: 52 }
-]);
-function PhoneFrame({ label, children }) {
-  return (0, import_react13.createElement)(
-    "div",
-    { className: "op-device" },
-    (0, import_react13.createElement)(
-      "div",
-      { className: "op-frame" },
-      SIDE_BUTTONS.map((button) => (0, import_react13.createElement)("span", { key: button.id, className: "op-button", "data-side": button.side, "aria-hidden": true, style: { [button.side]: -2, top: button.top, height: button.height } })),
-      (0, import_react13.createElement)("div", { className: "op-screen", role: "region", "aria-label": label }, children)
-    )
-  );
-}
-var PhoneGlyph = () => (0, import_react13.createElement)(
-  "svg",
-  { width: 14, height: 14, viewBox: "0 0 20 20", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true, focusable: "false" },
-  (0, import_react13.createElement)("path", { d: "M7 2.75h6A1.75 1.75 0 0 1 14.75 4.5v11A1.75 1.75 0 0 1 13 17.25H7a1.75 1.75 0 0 1-1.75-1.75v-11A1.75 1.75 0 0 1 7 2.75z" }),
-  (0, import_react13.createElement)("path", { d: "M8.75 4.75h2.5" })
-);
-var SCREEN_WIDTH = `(100cqi - ${2 * (FRAME_SHELL + FRAME_BORDER)}px)`;
-var SCREEN_RADIUS = `calc(${SCREEN_WIDTH} * 55 / 390)`;
-var SHELL_RADIUS = `calc(${SCREEN_WIDTH} * 55 / 390 + ${FRAME_SHELL}px)`;
-var PHONE_FRAME_CSS = `
-.op-device{container-type:inline-size;width:100%;max-width:${FRAME_MAX_WIDTH}px;margin:0 auto}
-.op-frame{position:relative;box-sizing:border-box;width:100%;padding:${FRAME_SHELL}px;border:${FRAME_BORDER}px solid rgba(0,0,0,.6);border-radius:${SHELL_RADIUS};background:linear-gradient(145deg,#2b2e35 0%,#101116 45%,#1c1e25 100%);box-shadow:inset 0 0 0 1px rgba(255,255,255,.12),0 18px 50px rgba(0,0,0,.55)}
-.op-button{position:absolute;width:3px;border-radius:2px;background:#3a3d44;box-shadow:0 1px 2px rgba(0,0,0,.5)}
-.op-screen{position:relative;box-sizing:border-box;width:100%;aspect-ratio:390/844;display:flex;flex-direction:column;overflow:hidden;border:1px solid rgba(255,255,255,.06);border-radius:${SCREEN_RADIUS};background:var(--bt-main, #fff);color:var(--bt-ink)}
-`;
-
-// src/client/omni-phone.js
-var import_react14 = require("react");
-var PHONE_KIND = "omni-phone";
-var PHONE_TAB_ID = "ds-bot/omni-phone";
-var phoneTabId = (threadId) => `${PHONE_TAB_ID}:${threadId}`;
-var phoneTabDefinition = () => ({ id: PHONE_TAB_ID, kind: PHONE_KIND, title: () => t("Phone pane") });
-var phoneParams = (thread) => ({ threadId: thread.id, chatId: thread.chatId });
-var threadsIn = (roster) => Array.isArray(roster?.omniThreads) ? roster.omniThreads : [];
-function phoneThreadOf(roster, params, sessionId) {
-  const threads = threadsIn(roster);
-  const pick = (field, value) => typeof value === "string" ? threads.find((thread) => thread[field] === value) : void 0;
-  const named = typeof params?.threadId === "string" || typeof params?.chatId === "string";
-  return (named ? pick("id", params.threadId) ?? pick("chatId", params.chatId) : pick("sessionId", sessionId)) ?? null;
-}
-var phoneRight = null;
-function installPhone(ctx, face) {
-  const fiber = ctx.inject(["sidebarRight", "sidebarRightTabs"], (scope) => {
-    scope.effect(() => scope.sidebarRightTabs.register(phoneTabDefinition()), "ds-bot: phone tab type");
-    scope.effect(() => ctx.slots.inject("sidebar.right.pane.tab", () => ctx.slots.register({ name: "sidebar.right.pane.tab", key: PHONE_TAB_ID, inject: face }, PhoneTab)), "ds-bot: phone tab");
-    scope.effect(() => {
-      phoneRight = scope.sidebarRight;
-      return () => {
-        phoneRight = null;
-      };
-    }, "ds-bot: the phone pane for the thread rows");
-  });
-  return () => fiber.dispose();
-}
-function openPhone(thread) {
-  const right = phoneRight;
-  if (!right) return t("The phone pane needs DSH's right column.");
-  if (typeof right.mounted?.getSnapshot === "function" && right.mounted.getSnapshot() === void 0) return t("Open a conversation first; the phone pane opens beside it.");
-  try {
-    right.openTab(PHONE_KIND, { params: phoneParams(thread) });
-    return null;
-  } catch (error) {
-    return error?.message ?? String(error);
-  }
-}
-function useChatPoll(chatId, on2) {
-  const [read, setRead] = (0, import_react14.useState)({ chatId: null, messages: null, error: null });
-  (0, import_react14.useEffect)(() => {
-    if (!chatId || !on2) return void 0;
-    let stopped = false;
-    let timer = 0;
-    const tick = async () => {
-      if (typeof document === "undefined" || !document.hidden) {
-        try {
-          const reply = await call("omni-messages", { chatId });
-          if (!stopped) setRead({ chatId, messages: Array.isArray(reply?.messages) ? reply.messages : [], error: null });
-        } catch (error) {
-          if (!stopped) setRead((before) => ({ chatId, messages: before.chatId === chatId ? before.messages : null, error: error?.message ?? String(error) }));
-        }
-      }
-      if (!stopped) timer = setTimeout(tick, POLL_MS);
-    };
-    void tick();
-    return () => {
-      stopped = true;
-      clearTimeout(timer);
-    };
-  }, [chatId, on2]);
-  return read.chatId === chatId ? read : { chatId, messages: null, error: null };
-}
-function PhonePane({ params, sessionId, useRoster, visible = true }) {
-  const thread = useRoster((roster) => phoneThreadOf(roster, params, sessionId));
-  const read = useChatPoll(thread?.chatId ?? null, visible);
-  const messages = read.messages ?? [];
-  const { scroller, onScroll, onSized } = useStayAtEnd(thread?.chatId, messages.length);
-  if (!thread) {
-    const named = typeof params?.threadId === "string" || typeof params?.chatId === "string";
-    return (0, import_react14.createElement)("div", { className: "op-pane" }, (0, import_react14.createElement)("p", { className: "op-note" }, named ? t("This chat is no longer in the sidebar.") : t("Open the phone pane from a chat in the sidebar.")));
-  }
-  const loading = read.messages === null && read.error === null;
-  return (0, import_react14.createElement)(
-    "div",
-    { className: "op-pane", "data-thread-id": thread.id },
-    (0, import_react14.createElement)(
-      PhoneFrame,
-      { label: t("{name} on the phone", { name: thread.title }) },
-      (0, import_react14.createElement)(
-        "header",
-        { className: "op-head" },
-        (0, import_react14.createElement)("strong", null, thread.title),
-        thread.connected === false && thread.reason ? (0, import_react14.createElement)("span", null, hostText(thread.reason)) : null
-      ),
-      (0, import_react14.createElement)(
-        "div",
-        { ref: scroller, className: "oc-thread op-log", onScroll, role: "log", "aria-label": t("Conversation with {name}", { name: thread.title }) },
-        (0, import_react14.createElement)(
-          "div",
-          { className: "oc-thread-in" },
-          loading ? (0, import_react14.createElement)("div", { className: "oc-day" }, (0, import_react14.createElement)("span", { className: "oc-spinner", "aria-hidden": true }), t("Loading messages…")) : null,
-          read.error ? (0, import_react14.createElement)("p", { className: "op-note", role: "alert" }, hostText(read.error)) : null,
-          read.messages?.length === 0 ? (0, import_react14.createElement)("p", { className: "op-note" }, t("No messages yet")) : null,
-          (0, import_react14.createElement)(ChatMessages, { messages, onSized })
-        )
-      )
-    )
-  );
-}
-var KEPT_KEY = "omni.phone.tabs";
-var KEPT_TABS = 50;
-var readKept = () => {
-  try {
-    const kept = JSON.parse(localStorage.getItem(KEPT_KEY) ?? "{}");
-    return kept !== null && typeof kept === "object" && !Array.isArray(kept) ? kept : {};
-  } catch {
-    return {};
-  }
-};
-var keptParams = (where) => readKept()[where];
-function keepParams(where, params) {
-  const kept = { ...readKept() };
-  delete kept[where];
-  kept[where] = { threadId: params.threadId, chatId: params.chatId };
-  const all = Object.keys(kept);
-  for (const old of all.slice(0, Math.max(0, all.length - KEPT_TABS))) delete kept[old];
-  try {
-    localStorage.setItem(KEPT_KEY, JSON.stringify(kept));
-  } catch {
-  }
-}
-function PhoneTab({ useTabInfo, sessionId, useRoster }) {
-  const tab = typeof useTabInfo === "function" ? useTabInfo()?.tab : void 0;
-  const opened = tab?.navigation?.params;
-  const where = `${sessionId ?? ""}/${tab?.id ?? ""}`;
-  const params = (0, import_react14.useMemo)(() => opened ?? keptParams(where), [where, opened]);
-  (0, import_react14.useEffect)(() => {
-    if (opened && typeof opened.threadId === "string") keepParams(where, opened);
-  }, [where, opened]);
-  return (0, import_react14.createElement)(PhonePane, { key: phoneTabId(params?.threadId ?? ""), params, sessionId, useRoster, visible: tab?.visible !== false });
-}
-function PhoneDock({ sessionId, useRoster }) {
-  const thread = useRoster((roster) => threadsIn(roster).find((item) => item.sessionId === sessionId) ?? null);
-  const [problem, setProblem] = (0, import_react14.useState)(null);
-  if (!thread) return null;
-  return (0, import_react14.createElement)(
-    "div",
-    { className: "op-dock" },
-    problem ? (0, import_react14.createElement)("span", { className: "op-dock-problem", role: "alert" }, hostText(problem)) : null,
-    (0, import_react14.createElement)("button", {
-      type: "button",
-      className: "op-open",
-      "aria-label": t("Show {name} in the phone pane", { name: thread.title }),
-      title: t("Phone pane"),
-      onClick: () => setProblem(openPhone(thread))
-    }, (0, import_react14.createElement)(PhoneGlyph), t("Phone"))
-  );
-}
-var OMNI_PHONE_CSS = `${PHONE_FRAME_CSS}
-.op-pane{box-sizing:border-box;height:100%;overflow-y:auto;padding:20px 16px}
-.op-head{display:flex;flex-direction:column;align-items:center;gap:1px;padding:28px 12px 8px;border-bottom:1px solid var(--bt-line, rgba(127,127,127,.2));text-align:center}
-.op-head strong{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:600}
-.op-head span{font-size:11px;color:var(--bt-ink-3)}
-.op-screen .oc-thread-in{max-width:none;padding:8px 8px 14px}
-.op-screen .oc-msg{max-width:86%}
-.op-screen .oc-bubble{padding:6px 10px 5px;border-radius:16px;font-size:13px;line-height:18px}
-.op-screen .oc-bubble[data-media]{padding:3px 3px 6px}
-.op-screen .oc-bubble[data-media=sticker]{padding:0}
-.op-screen .oc-media-img{max-height:220px;border-radius:12px}
-.op-screen .oc-media-still,.op-screen .oc-media-wait{width:180px}
-.op-screen .oc-media-audio,.op-screen .oc-media-wait-audio{width:190px}
-.op-screen .oc-media-sticker,.op-screen .oc-media-wait-sticker{width:110px;height:110px}
-.op-screen .oc-media-doc{min-width:0;font-size:12.5px}
-.op-note{margin:12px 8px;font-size:12.5px;color:var(--bt-ink-3);text-align:center}
-.op-dock{display:flex;justify-content:flex-end;align-items:center;gap:8px;padding:0 4px 4px}
-.op-open{display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 10px;border:1px solid var(--bt-line, rgba(127,127,127,.25));border-radius:13px;background:none;color:var(--bt-ink-2);font:inherit;font-size:12px;cursor:pointer}
-.op-open:hover{background:var(--bt-hover);color:var(--bt-ink)}
-.op-open:focus-visible{outline:2px solid var(--bt-accent);outline-offset:1px}
-.op-dock-problem{font-size:11.5px;color:var(--bt-danger, #dc2626)}
 `;
 
 // src/client/omni-tree.js
@@ -15856,6 +15882,8 @@ var rowKey = (thread, rowProps) => `${thread.id}:${typeof rowProps.useSessionSta
 var NO_STATUS = /* @__PURE__ */ new Map();
 var noStatus = (select) => select(NO_STATUS);
 var noRetain = (_id, select) => select(void 0);
+var openOnArrival = /* @__PURE__ */ new Set();
+var rowOpeners = /* @__PURE__ */ new Map();
 function threadState(thread, { running = false, asking = false } = {}) {
   if (asking || thread.status === "waiting") return "waiting";
   if (running || thread.status === "working") return "working";
@@ -15880,8 +15908,15 @@ function permissionMenuOf(thread) {
     { field: "reactions", label: t("Reactions"), items: [item("reactions", null, byDefault("reactions", reactions, "list")), item("reactions", "list", reactions.list), item("reactions", "any", reactions.any)] }
   ];
 }
+function openThread(thread, actions, onProblem) {
+  onProblem(null);
+  actions.openSession(thread.sessionId);
+  const reason = openPhoneBeside(thread);
+  if (reason !== null) onProblem(reason);
+}
 function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
   const id = thread.sessionId;
+  const name = threadName(thread);
   const useStatus = rowProps.useSessionStatus ?? noStatus;
   const useRetain = rowProps.useSessionRetainInfo ?? noRetain;
   const unread = useStatus((map) => map.get(id)?.completionUnread === true);
@@ -15892,6 +15927,7 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
   const [problem, setProblem] = (0, import_react15.useState)(null);
   const [menu, setMenu] = (0, import_react15.useState)(false);
   const row = (0, import_react15.useRef)(null);
+  const opens = teamReady(rowProps.roster);
   (0, import_react15.useEffect)(() => {
     if (!menu || typeof document === "undefined" || typeof document.addEventListener !== "function") return void 0;
     const away = (event) => {
@@ -15900,12 +15936,30 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
     document.addEventListener("pointerdown", away, true);
     return () => document.removeEventListener("pointerdown", away, true);
   }, [menu]);
-  const opens = teamReady(rowProps.roster);
+  (0, import_react15.useEffect)(() => {
+    if (opens && openOnArrival.delete(thread.id)) openThread(thread, actions, setProblem);
+  }, [opens, thread.id]);
+  (0, import_react15.useEffect)(() => {
+    if (!opens) return void 0;
+    const opener = () => openThread(thread, actions, setProblem);
+    rowOpeners.set(thread.id, opener);
+    return () => {
+      if (rowOpeners.get(thread.id) === opener) rowOpeners.delete(thread.id);
+    };
+  });
   const free = freeMarkOf(thread);
   const state = threadState(thread, { running, asking });
   const reason = thread.connected === false || !opens ? hostText(thread.reason ?? t("Not connected")) : null;
   const dot = typeof rowProps.useSessionStatus === "function" && unread && !active;
-  const label = [thread.title, state === "waiting" ? t("Waiting for you") : state === "working" ? t("Working") : "", reason ?? "", free ?? "", dot ? t("Unread activity") : ""].filter(Boolean).join(", ");
+  const label = [name, state === "waiting" ? t("Waiting for you") : state === "working" ? t("Working") : "", reason ?? "", free ?? "", dot ? t("Unread activity") : ""].filter(Boolean).join(", ");
+  const onClick = () => {
+    if (opens) {
+      openThread(thread, actions, setProblem);
+      return;
+    }
+    const why = openPhone(thread);
+    if (why !== null) setProblem(why);
+  };
   const remove = () => {
     if (!confirming) {
       setConfirming(true);
@@ -15936,55 +15990,44 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
         "data-state": state,
         "data-thread-id": thread.id,
         "aria-label": label,
-        title: reason ?? thread.title,
+        title: reason ?? name,
         "aria-current": active ? "page" : void 0,
-        "aria-disabled": opens ? void 0 : true,
         tabIndex: shown ? void 0 : -1,
-        onClick: () => {
-          if (opens) actions.openSession(id);
-        }
+        onClick
       },
       (0, import_react15.createElement)("span", { className: state === "waiting" ? "bt-thread-wait" : state === "working" ? "bt-thread-spin" : "ot-thread-idle", "aria-hidden": true }),
-      (0, import_react15.createElement)("span", { className: "bt-thread-title" }, thread.title),
+      (0, import_react15.createElement)("span", { className: "bt-thread-title" }, name),
       reason ? (0, import_react15.createElement)("span", { className: "ot-thread-reason" }, reason) : null,
       free ? (0, import_react15.createElement)("span", { className: "ot-thread-free", title: free, "aria-hidden": true }, (0, import_react15.createElement)(SparkIcon)) : null,
       dot ? (0, import_react15.createElement)("span", { className: "bt-unread", "aria-hidden": true }) : null
     ),
-    confirming ? null : (0, import_react15.createElement)("button", {
-      type: "button",
-      className: "ot-thread-more",
-      "aria-label": t("Asking first in {name}", { name: thread.title }),
-      title: t("Asking first"),
-      "aria-haspopup": "menu",
-      "aria-expanded": menu,
-      tabIndex: shown ? void 0 : -1,
-      onClick: () => setMenu((open) => !open)
-    }, (0, import_react15.createElement)(DotsIcon)),
-    confirming ? null : (0, import_react15.createElement)("button", {
-      type: "button",
-      className: "ot-thread-phone",
-      "aria-label": t("Show {name} in the phone pane", { name: thread.title }),
-      title: t("Phone pane"),
-      tabIndex: shown ? void 0 : -1,
-      // Only a reason is shown: an opened pane leaves a remove error where it is.
-      onClick: () => {
-        const reason2 = openPhone(thread);
-        if (reason2 !== null) setProblem(reason2);
-      }
-    }, (0, import_react15.createElement)(PhoneGlyph)),
-    (0, import_react15.createElement)("button", {
-      type: "button",
-      className: "ot-thread-remove",
-      "data-confirm": confirming || void 0,
-      "aria-label": confirming ? t("Remove {name} from the sidebar? Click again", { name: thread.title }) : t("Remove {name}", { name: thread.title }),
-      title: confirming ? t("Click again to remove") : t("Remove"),
-      tabIndex: shown ? void 0 : -1,
-      onClick: remove,
-      onBlur: () => setConfirming(false)
-    }, confirming ? t("Remove") : (0, import_react15.createElement)(CloseIcon)),
+    (0, import_react15.createElement)(
+      "span",
+      { className: "ot-thread-acts", "data-on": confirming || menu || void 0 },
+      confirming ? null : (0, import_react15.createElement)("button", {
+        type: "button",
+        className: "ot-thread-more",
+        "aria-label": t("Asking first in {name}", { name }),
+        title: t("Asking first"),
+        "aria-haspopup": "menu",
+        "aria-expanded": menu,
+        tabIndex: shown ? void 0 : -1,
+        onClick: () => setMenu((open) => !open)
+      }, (0, import_react15.createElement)(DotsIcon)),
+      (0, import_react15.createElement)("button", {
+        type: "button",
+        className: "ot-thread-remove",
+        "data-confirm": confirming || void 0,
+        "aria-label": confirming ? t("Remove {name} from the sidebar? Click again", { name }) : t("Remove {name}", { name }),
+        title: confirming ? t("Click again to remove") : t("Remove"),
+        tabIndex: shown ? void 0 : -1,
+        onClick: remove,
+        onBlur: () => setConfirming(false)
+      }, confirming ? t("Remove") : (0, import_react15.createElement)(CloseIcon))
+    ),
     menu ? (0, import_react15.createElement)(
       "div",
-      { className: "ot-thread-menu", role: "menu", "aria-label": t("Asking first in {name}", { name: thread.title }), onKeyDown: onMenuKey },
+      { className: "ot-thread-menu", role: "menu", "aria-label": t("Asking first in {name}", { name }), onKeyDown: onMenuKey },
       permissionMenuOf(thread).map((group) => (0, import_react15.createElement)(
         "div",
         { key: group.field, className: "ot-thread-menu-group", role: "group", "aria-label": group.label },
@@ -16005,7 +16048,7 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
   );
 }
 function PickerChat({ chat, busy, onPick }) {
-  const name = chat.name ?? t("Group");
+  const name = chat.name ?? (chat.kind === "group" ? t("Group") : t("Chat"));
   const tag = chat.added ? t("Added") : busy === chat.id ? t("Adding…") : null;
   return (0, import_react15.createElement)(
     "button",
@@ -16129,7 +16172,10 @@ function ChannelItem({ channel, state, roster, rowProps, actions, omni: omni2, p
   const onPick = (chat) => addThread(channel.id, chat).then((result) => {
     if (result?.ok !== true) return result;
     closePicker();
-    if (typeof result.sessionId === "string" && teamReady(roster)) actions.openSession(result.sessionId);
+    if (typeof result.threadId !== "string" || !teamReady(roster)) return result;
+    const opener = rowOpeners.get(result.threadId);
+    if (opener) opener();
+    else openOnArrival.add(result.threadId);
     return result;
   });
   return (0, import_react15.createElement)(
@@ -16280,19 +16326,20 @@ var OMNI_TREE_CSS = `
 .ot-all{color:var(--bt-ink-3);font-size:12px;padding-left:12px}
 .ot-empty{display:block;padding:3px 6px 3px 12px;color:var(--bt-ink-3);font-size:12px}
 .ot-others{display:grid;gap:1px;margin-top:4px}
-.ot-thread{position:relative;display:flex;align-items:center;flex-wrap:wrap}
+.ot-thread{display:flex;align-items:center;flex-wrap:wrap}
 .ot-thread .bt-thread{flex:1;min-width:0}
-.ot-thread .bt-thread[aria-disabled=true]{cursor:default}
+.ot-thread .bt-thread-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ot-thread[data-idle] .bt-thread-title{color:var(--bt-ink-2)}
 .ot-thread-idle{flex:none;width:8px;height:8px;margin:0 2px;box-sizing:border-box;border-radius:50%;border:1.5px solid var(--bt-ink-3);opacity:.6}
 .ot-thread-reason{flex:none;max-width:45%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;color:var(--bt-ink-3)}
-.ot-thread-remove{position:absolute;right:4px;display:grid;place-items:center;min-width:20px;height:20px;padding:0 4px;border:0;border-radius:6px;background:var(--bt-hover);color:var(--bt-ink-3);font:inherit;font-size:11px;cursor:pointer;opacity:0;transition:opacity .12s ease}
+/* The menu and remove buttons sit after the row, never over it: they take no room until the row is hovered or holds focus, and the title then ends in an ellipsis before them. They are never display:none, so they stay in the tab order. */
+.ot-thread-acts{display:flex;align-items:center;gap:4px;flex:none;max-width:0;overflow:hidden;opacity:0;transition:max-width .12s ease,opacity .12s ease}
+.ot-thread:hover .ot-thread-acts,.ot-thread:focus-within .ot-thread-acts,.ot-thread-acts[data-on]{max-width:120px;padding-right:4px;opacity:1}
+.ot-thread-remove,.ot-thread-more{display:grid;place-items:center;flex:none;min-width:20px;height:20px;padding:0;border:0;border-radius:6px;background:var(--bt-hover);color:var(--bt-ink-3);font:inherit;font-size:11px;cursor:pointer}
+.ot-thread-remove{padding:0 4px}
 .ot-thread-remove svg{width:11px;height:11px}
-.ot-thread-phone{position:absolute;right:28px;display:grid;place-items:center;width:20px;height:20px;padding:0;border:0;border-radius:6px;background:var(--bt-hover);color:var(--bt-ink-3);cursor:pointer;opacity:0;transition:opacity .12s ease}
-.ot-thread-phone svg{width:12px;height:12px}
-.ot-thread-more{position:absolute;right:52px;display:grid;place-items:center;width:20px;height:20px;padding:0;border:0;border-radius:6px;background:var(--bt-hover);color:var(--bt-ink-3);cursor:pointer;opacity:0;transition:opacity .12s ease}
 .ot-thread-more svg{width:12px;height:12px}
-.ot-thread-more:hover,.ot-thread-more[aria-expanded=true]{color:var(--bt-ink);opacity:1}
+.ot-thread-more:hover,.ot-thread-more[aria-expanded=true],.ot-thread-remove:hover{color:var(--bt-ink)}
 .ot-thread-free{display:grid;place-items:center;flex:none;width:14px;height:14px;color:var(--bt-accent, #22d3ee)}
 .ot-thread-free svg{width:11px;height:11px}
 .ot-thread-menu{flex-basis:100%;display:grid;gap:6px;margin:2px 4px 4px 22px;padding:6px;border:1px solid var(--bt-line, rgba(127,127,127,.2));border-radius:10px;background:var(--bt-surface, transparent)}
@@ -16302,8 +16349,6 @@ var OMNI_TREE_CSS = `
 .ot-thread-menu-item:hover{background:var(--bt-hover);color:var(--bt-ink)}
 .ot-thread-menu-item[aria-checked=true]{color:var(--bt-ink)}
 .ot-thread-menu-item[aria-checked=true]::before{content:'';position:absolute;left:8px;top:50%;width:6px;height:6px;margin-top:-3px;border-radius:50%;background:var(--bt-accent, #22d3ee)}
-.ot-thread-phone:hover{color:var(--bt-ink)}
-.ot-thread:hover .ot-thread-remove,.ot-thread-remove:focus-visible,.ot-thread-remove[data-confirm],.ot-thread:hover .ot-thread-phone,.ot-thread-phone:focus-visible,.ot-thread:hover .ot-thread-more,.ot-thread-more:focus-visible{opacity:1}
 .ot-thread-remove[data-confirm]{color:var(--bt-danger, #dc2626)}
 .ot-thread-problem{flex-basis:100%;padding:0 8px 3px 28px;font-size:11px;color:var(--bt-danger, #dc2626)}
 .ot-picker{display:grid;gap:4px;margin:2px 0 4px;padding:6px;border:1px solid var(--bt-line, rgba(127,127,127,.2));border-radius:10px;background:var(--bt-surface, transparent)}
@@ -16328,7 +16373,7 @@ var OMNI_TREE_CSS = `
 .ot-picker-problem{color:var(--bt-danger, #dc2626)}
 .ot-chats[data-open] .ot-thread{animation:ot-in .22s ease both}
 @keyframes ot-in{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}
-@media (prefers-reduced-motion:reduce){.ot-chats{transition:none}.ot-chats .ot-thread{animation:none}.ot-chevron{transition:none}.ot-thread-remove,.ot-thread-phone,.ot-thread-more{transition:none}}
+@media (prefers-reduced-motion:reduce){.ot-chats{transition:none}.ot-chats .ot-thread{animation:none}.ot-chevron{transition:none}.ot-thread-acts{transition:none}}
 body[data-omni-thread] .bt-voice,body[data-omni-thread] .bt-plus,body[data-omni-thread] .bt-composer-model,body[data-omni-thread] .bt-mw-dock,body[data-omni-thread] .bt-btw-dock{display:none!important}
 `;
 

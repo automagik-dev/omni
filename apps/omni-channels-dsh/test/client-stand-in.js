@@ -110,8 +110,14 @@ export function column() {
   const bodies = []
   const opened = []
   const state = { onScreen: 's-omni' }
+  // `put(sessionId)` brings a Session on screen, as DSH names it before React draws it.
+  const watching = new Set()
+  const put = (sessionId) => {
+    state.onScreen = sessionId
+    for (const listener of watching) listener()
+  }
   const right = {
-    mounted: { getSnapshot: () => state.onScreen, subscribe: () => () => {} },
+    mounted: { getSnapshot: () => state.onScreen, subscribe: (listener) => { watching.add(listener); return () => watching.delete(listener) } },
     openTab: (kind, options) => {
       if (!types.some(type => type.kind === kind)) throw new Error(`sidebarRight: no tab type is registered as "${kind}"`)
       opened.push([kind, plain(options)])
@@ -129,7 +135,7 @@ export function column() {
     },
     slots: { inject: (_name, register) => register(), register: (options, component) => { bodies.push({ ...options, component }); return () => {} } },
   }
-  return { ctx, types, bodies, opened, state }
+  return { ctx, types, bodies, opened, state, put, watching }
 }
 
 // This plugin's client modules (`lines`: export lines, read from src/client/) bundled as DSH

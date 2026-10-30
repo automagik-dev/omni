@@ -28,9 +28,10 @@ import * as standingRecovery from './src/host/standing-recovery.js'
 import * as standingRuns from './src/host/standing-runs.js'
 
 export const name = 'omni-channels'
-// The chat threads take their instructions from a prompt section and archive their Sessions in
-// DSH's workspaces; the team needs both too, so they are there wherever it runs.
-export const inject = ['omniTeam', 'tools', 'sessions', 'settings', 'systemPrompt', 'workspaceRegistry']
+// The chat threads take their instructions from a prompt section, archive their Sessions in
+// DSH's workspaces and name them again (sessionTitle); the team needs all three too, so they
+// are there wherever it runs.
+export const inject = ['omniTeam', 'tools', 'sessions', 'sessionTitle', 'settings', 'systemPrompt', 'workspaceRegistry']
 
 // The team's restart hook first, before any other work, so the team's restart pass hears of
 // this plugin's Sessions (resume-hook.js). Then the team's install order, kept: automations

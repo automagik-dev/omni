@@ -29,15 +29,16 @@ const textOf = node => (node === null || node === undefined ? '' : typeof node =
 
 // The board took most of the window next to Omni's chat, by itself, again with each fresh part
 // of that chat. Only the header's Automations button opens it now; the phone pane opens only
-// from a thread's row action and the thread's own button (omni-phone.js).
+// from a click on a thread's row (or the pick that added it) and the thread's own button
+// (omni-phone.js).
 test('the board never opens by itself: only the header button opens it; the phone pane only from the thread', () => {
   const dir = new URL('../src/client/', import.meta.url)
   const opens = []
-  const phoneCalls = []
+  const calls = pattern => readdirSync(dir).filter(file => file.endsWith('.js')).sort().flatMap(name => [...readFileSync(new URL(name, dir), 'utf8').matchAll(pattern)].map(match => `${name}: ${match[0].trim()}`))
+  const phoneCalls = calls(/^.*\bopenPhone\(.*$/gm).filter(line => !line.includes('export function openPhone('))
   for (const name of readdirSync(dir).filter(file => file.endsWith('.js'))) {
     const text = readFileSync(new URL(name, dir), 'utf8')
     for (const match of text.matchAll(/\.openTab\(/g)) opens.push(`${name}: ${text.slice(0, match.index).split('\n').length}`)
-    for (const match of text.matchAll(/^.*\bopenPhone\(.*$/gm)) if (!/export function openPhone\(/.test(match[0])) phoneCalls.push(`${name}: ${match[0].trim()}`)
   }
   assert.equal(opens.length, 2, `the column opens from ${opens.join(', ')}`)
   const index = readFileSync(new URL('index.js', dir), 'utf8')
@@ -47,9 +48,30 @@ test('the board never opens by itself: only the header button opens it; the phon
   const phone = readFileSync(new URL('omni-phone.js', dir), 'utf8')
   const open = phone.slice(phone.indexOf('export function openPhone('), phone.indexOf('function useChatPoll('))
   assert.match(open, /right\.openTab\(PHONE_KIND, \{ params: phoneParams\(thread\) \}\)/)
-  // Each call of openPhone is a click handler: the row's phone action and the thread's button.
-  assert.deepEqual(phoneCalls.map(line => line.split(':')[0]).sort(), ['omni-phone.js', 'omni-tree.js'])
-  for (const line of phoneCalls) assert.match(line, /onClick: \(\) => .*openPhone\(thread\)/, line)
+  // Each way to the pane starts at a click: the thread's button; a row's click on a team
+  // without the hook; and openPhoneBeside, which only openThread calls, itself run by the row's
+  // click or, for a thread the picker just added, by the pick itself through the row's own
+  // opener (rowOpeners), or by its row's arrival, which only the pick marks.
+  assert.deepEqual(phoneCalls, [
+    'omni-phone.js: if (typeof mounted?.subscribe !== \'function\' || mounted.getSnapshot() === thread.sessionId) return openPhone(thread)',
+    'omni-phone.js: if (now === thread.sessionId) setTimeout(() => openPhone(thread), 0)',
+    'omni-phone.js: onClick: () => setProblem(openPhone(thread)),',
+    'omni-tree.js: const why = openPhone(thread)',
+  ])
+  assert.deepEqual(calls(/^.*\bopenPhoneBeside\(.*$/gm).filter(line => !line.includes('export function')), ['omni-tree.js: const reason = openPhoneBeside(thread)'])
+  assert.deepEqual(calls(/^.*\bopenThread\(.*$/gm).filter(line => !line.includes('function openThread(')).map(line => line.split(': ')[1]), [
+    'if (opens && openOnArrival.delete(thread.id)) openThread(thread, actions, setProblem)',
+    'const opener = () => openThread(thread, actions, setProblem)',
+    'openThread(thread, actions, setProblem)',
+  ])
+  assert.deepEqual(calls(/^.*\browOpeners\.get\(.*$/gm), ['omni-tree.js: return () => { if (rowOpeners.get(thread.id) === opener) rowOpeners.delete(thread.id) }', 'omni-tree.js: const opener = rowOpeners.get(result.threadId)'])
+  const tree = readFileSync(new URL('omni-tree.js', dir), 'utf8')
+  const row = tree.slice(tree.indexOf('export function ThreadRow('), tree.indexOf('function PickerChat('))
+  assert.match(row.slice(row.indexOf('const onClick = () => {')), /^const onClick = \(\) => \{\n {4}if \(opens\) \{\n {6}openThread\(thread, actions, setProblem\)\n {6}return\n {4}\}\n.*\n {4}const why = openPhone\(thread\)/)
+  assert.deepEqual(calls(/^.*\bopenOnArrival\.(add|delete)\(.*$/gm), [
+    'omni-tree.js: if (opens && openOnArrival.delete(thread.id)) openThread(thread, actions, setProblem)',
+    'omni-tree.js: else openOnArrival.add(result.threadId)',
+  ])
 })
 
 test('the header button counts automations only once there is one, and shows who waits', () => {
@@ -109,6 +131,9 @@ test('the board names a chat-thread worker by its thread, its one chat, or each 
   assert.deepEqual([ui.workerOf(worker, threads, many).name, ui.workerOf(worker, threads, many).session], ['Each chat\'s own thread', true])
   // A run names the thread it went to.
   assert.equal(ui.workerOf(worker, threads, { ...many, sessionId: 's2' }).name, 'The thread of Obra')
+  // A thread whose chat has no name goes by the word its row shows, never by none.
+  const nameless = { ...roster(), omniThreads: [{ id: 't3', sessionId: 's3', chatId: 'c3', title: null, kind: 'group' }] }
+  assert.equal(ui.workerOf(worker, nameless, { ...many, sessionId: 's3' }).name, 'The thread of Group')
   const sub = { id: 'sub-a', name: 'Moved', on: true, askFirst: true, sources: [chat('c1', 'Marina')], trigger: { kind: 'message' }, worker, outputs: {}, updatedAt: 0 }
   const notes = row => (function walk(node) {
     if (node === null || node === undefined || typeof node !== 'object') return []
