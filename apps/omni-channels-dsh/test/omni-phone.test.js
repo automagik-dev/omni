@@ -51,7 +51,7 @@ const localStorage = {
 const document = { hidden: false, body: { dataset: {} } }
 
 const ui = await bundleClient([
-  'export { PhonePane, PhoneTab, PhoneDock, installPhone, openPhone, phoneThreadOf, keepParams, keptParams, phoneTabDefinition, phoneTabId, PHONE_KIND, PHONE_TAB_ID, OMNI_PHONE_CSS } from \'./omni-phone.js\'',
+  'export { PhonePane, PhoneTab, PhoneDock, installPhone, openPhone, openPhoneBeside, threadName, PHONE_WAIT_MS, phoneThreadOf, keepParams, keptParams, phoneTabDefinition, phoneTabId, PHONE_KIND, PHONE_TAB_ID, OMNI_PHONE_CSS } from \'./omni-phone.js\'',
   'export { PhoneFrame, frameMetrics, SIDE_BUTTONS, PHONE_FRAME_CSS } from \'./phone-frame.js\'',
   'export { ThreadRow, rowPropsOf } from \'./omni-tree.js\'',
 ], { globals: { URL: BundleURL, URLSearchParams, Blob, atob, setTimeout: fakeSetTimeout, clearTimeout: fakeClearTimeout, document, localStorage }, team: { omni: { ...omni, call: fakeCall } } })
@@ -255,7 +255,14 @@ test('names and text from the chat are drawn as text only', async (t) => {
   assert.equal(ofType(root, 'img').length + ofType(root, 'script').length + ofType(root, 'b').length, 0)
 })
 
-test('the tab type registers, and nothing opens it by itself; the thread row\'s action and the thread\'s button open it with the thread and its chat', async (t) => {
+// The column's timers due now (openPhoneBeside opens after the render that brings a column).
+const runDue = () => {
+  const due = timers.filter(timer => timer.on && timer.ms === 0)
+  timers = timers.filter(timer => !due.includes(timer))
+  for (const timer of due) timer.run()
+}
+
+test('the tab type registers, and nothing opens it by itself; a click on the thread\'s row opens its Session and the pane beside it, and the thread\'s button opens it', async (t) => {
   reset()
   // Before DSH's right column is there, the action says so and throws nothing.
   assert.equal(ui.openPhone(THREAD(1)), 'The phone pane needs DSH\'s right column.')
@@ -264,42 +271,71 @@ test('the tab type registers, and nothing opens it by itself; the thread row\'s 
   assert.deepEqual([ui.PHONE_KIND, ui.PHONE_TAB_ID, ui.phoneTabId('t1')], ['omni-phone', 'ds-bot/omni-phone', 'ds-bot/omni-phone:t1'])
   assert.deepEqual(stand.bodies.map(body => [body.name, body.key, body.component === ui.PhoneTab]), [['sidebar.right.pane.tab', ui.PHONE_TAB_ID, true]])
   assert.deepEqual(stand.opened, [], 'installing opens nothing')
-  // The thread row, on a team with the hook: the row opens the Session, the action the pane.
+  // The thread row, on a team with the hook: one click opens the Session, and the pane once
+  // that Session is on screen, after the render that brings its column. The row has no
+  // phone button of its own.
   const thread = THREAD(1)
   const roster = hooked([thread])
   const sessions = []
   const actions = { openSession: id => sessions.push(id) }
   const row = mount(() => react.createElement(ui.ThreadRow, { thread, actions, rowProps: ui.rowPropsOf({ roster, actions }, roster.omniRowProps) }))
-  one(row.draw(), 'ot-thread-phone').props.onClick()
+  assert.equal(one(row.draw(), 'ot-thread-phone'), undefined)
+  one(row.draw(), 'bt-thread').props.onClick()
+  assert.deepEqual(sessions, ['s1'])
+  assert.deepEqual(stand.opened, [], 'not in the column of the Session still on screen')
+  stand.put('s1')
+  assert.deepEqual(stand.opened, [])
+  runDue()
   assert.deepEqual(stand.opened, [['omni-phone', { params: { threadId: 't1', chatId: CHAT_1 } }]])
-  assert.deepEqual(sessions, [])
+  assert.equal(stand.watching.size, 0, 'the wait ended')
+  // Clicked again while its Session is on screen: the pane opens there at once.
+  one(row.draw(), 'bt-thread').props.onClick()
+  assert.equal(stand.opened.length, 2)
+  // Another Session coming on screen first ends the wait; so does a newer click.
+  stand.put('s-omni')
+  one(row.draw(), 'bt-thread').props.onClick()
+  stand.put('s-other')
+  stand.put('s1')
+  runDue()
+  assert.equal(stand.opened.length, 2)
+  const other = THREAD(2, CHAT_2)
+  stand.put('s-omni')
+  one(row.draw(), 'bt-thread').props.onClick()
+  one(mount(() => react.createElement(ui.ThreadRow, { thread: other, actions, rowProps: ui.rowPropsOf({ roster, actions }, roster.omniRowProps) })).draw(), 'bt-thread').props.onClick()
+  assert.equal(stand.watching.size, 1, 'the first click\'s wait was dropped')
+  stand.put('s2')
+  runDue()
+  assert.deepEqual(stand.opened.slice(2), [['omni-phone', { params: { threadId: 't2', chatId: CHAT_2 } }]])
+  assert.deepEqual(sessions, ['s1', 's1', 's1', 's1', 's2'])
   // The button in the thread's own Session, and in no other.
   const dock = sessionId => mount(() => react.createElement(ui.PhoneDock, { sessionId, useRoster: useRosterOf(roster) })).draw()
   assert.equal(dock('s-omni'), null)
   const button = one(dock('s1'), 'op-open')
   assert.equal(button.props['aria-label'], 'Show Chat 1 in the phone pane')
   button.props.onClick()
-  assert.equal(stand.opened.length, 2)
-  // With no Session on screen there is no column to open in: it says so.
-  stand.state.onScreen = undefined
+  assert.equal(stand.opened.length, 4)
+  // On a team without the hook the row opens the pane beside the Session on screen; with
+  // none on screen there is no column to open in: it says so.
+  stand.put(undefined)
   const problemRow = mount(() => react.createElement(ui.ThreadRow, { thread, actions, rowProps: {} }))
-  one(problemRow.draw(), 'ot-thread-phone').props.onClick()
+  one(problemRow.draw(), 'bt-thread').props.onClick()
   assert.equal(text(one(problemRow.draw(), 'ot-thread-problem')), 'Open a conversation first; the phone pane opens beside it.')
-  assert.equal(stand.opened.length, 2)
+  assert.equal(stand.opened.length, 4)
   // A remove that failed keeps its error when the pane then opens.
-  stand.state.onScreen = 's-omni'
+  stand.put('s-omni')
   answer = endpoint => (endpoint === 'omni-thread-remove' ? new Error('Could not reach Omni. Try again in a moment.') : {})
   const removing = mount(() => react.createElement(ui.ThreadRow, { thread, actions, rowProps: {} }))
   one(removing.draw(), 'ot-thread-remove').props.onClick()
   one(removing.draw(), 'ot-thread-remove').props.onClick()
   await settle()
   assert.equal(text(one(removing.draw(), 'ot-thread-problem')), 'Could not reach Omni. Try again in a moment.')
-  one(removing.draw(), 'ot-thread-phone').props.onClick()
-  assert.equal(stand.opened.length, 3)
+  one(removing.draw(), 'bt-thread').props.onClick()
+  assert.equal(stand.opened.length, 5)
   assert.equal(text(one(removing.draw(), 'ot-thread-problem')), 'Could not reach Omni. Try again in a moment.')
+  assert.deepEqual(sessions, ['s1', 's1', 's1', 's1', 's2'], 'a row on a team without the hook opens no Session')
 })
 
-test('on a stand-in Bot team without the hook, the row action still opens the pane and the row never calls actions.openSession (:195)', async (t) => {
+test('on a stand-in Bot team without the hook, a click on the row opens the pane and the row never calls actions.openSession (:195)', async (t) => {
   reset()
   const stand = installed(t)
   const thread = THREAD(1, CHAT_1, { connected: false, reason: NEEDS_NEWER_TEAM })
@@ -309,9 +345,8 @@ test('on a stand-in Bot team without the hook, the row action still opens the pa
   // An older team passes BotChildren no row props this plugin names.
   const row = mount(() => react.createElement(ui.ThreadRow, { thread, actions, rowProps: ui.rowPropsOf({ roster, actions }, roster.omniRowProps) }))
   let root = row.draw()
-  assert.equal(one(root, 'bt-thread').props['aria-disabled'], true)
+  assert.equal(text(one(root, 'ot-thread-reason')), NEEDS_NEWER_TEAM)
   one(root, 'bt-thread').props.onClick()
-  one(root, 'ot-thread-phone').props.onClick()
   root = row.draw()
   assert.equal(one(root, 'ot-thread-problem'), undefined)
   assert.deepEqual(stand.opened, [['omni-phone', { params: { threadId: 't1', chatId: CHAT_1 } }]])
@@ -334,7 +369,7 @@ test('first probe 4 (not run live): the tab\'s params round-trip, a reload that 
   const stand = installed(t)
   const roster = hooked([THREAD(1), THREAD(2, CHAT_2)])
   const useRoster = useRosterOf(roster)
-  one(mount(() => react.createElement(ui.ThreadRow, { thread: THREAD(2, CHAT_2), actions: { openSession: () => {} }, rowProps: {} })).draw(), 'ot-thread-phone').props.onClick()
+  one(mount(() => react.createElement(ui.ThreadRow, { thread: THREAD(2, CHAT_2), actions: { openSession: () => {} }, rowProps: {} })).draw(), 'bt-thread').props.onClick()
   const { params } = stand.opened[0][1]
   // JSON-shaped, as the column's params are by contract.
   assert.deepEqual(JSON.parse(JSON.stringify(params)), { threadId: 't2', chatId: CHAT_2 })
@@ -398,4 +433,50 @@ test('NOTICE carries the dsh-ios MIT notice, with the copyright line of its LICE
   for (const words of ['Permission is hereby granted, free of charge', 'The above copyright notice and this permission notice shall be included in all', 'THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND']) assert.ok(block.includes(words), words)
   const source = readFileSync(new URL('../src/client/phone-frame.js', import.meta.url), 'utf8')
   assert.match(source, /automagik-genie\/dsh-ios.*MIT; see\s*\n?\/\/ NOTICE/s)
+})
+
+test('the pane\'s header names a thread by its chat, never a raw id: "Chat" or "Group" when it has no name', async (t) => {
+  reset()
+  const thread = THREAD(1, CHAT_1, { title: null, kind: 'group' })
+  const view = pane({ params: { threadId: 't1', chatId: CHAT_1 }, useRoster: useRosterOf(hooked([thread])) }, t)
+  const shown = await drawn(view)
+  assert.equal(text(one(shown, 'op-head')), 'Group')
+  assert.equal(nodes(shown).find(node => node.props?.role === 'log').props['aria-label'], 'Conversation with Group')
+  assert.equal(ui.threadName({ title: null, kind: 'direct' }), 'Chat')
+  assert.equal(ui.threadName({ title: '+5511988887777', kind: 'direct' }), '+5511988887777')
+})
+
+test('a quick second click still gets its pane when the first click\'s Session comes on screen first; a wait ends after PHONE_WAIT_MS', (t) => {
+  reset()
+  const stand = installed(t)
+  const roster = hooked([THREAD(1), THREAD(2, CHAT_2)])
+  const actions = { openSession: () => {} }
+  const click = thread => one(mount(() => react.createElement(ui.ThreadRow, { thread, actions, rowProps: ui.rowPropsOf({ roster, actions }, roster.omniRowProps) })).draw(), 'bt-thread').props.onClick()
+  // A then B; DSH shows A's Session on the way to B's.
+  click(THREAD(1))
+  click(THREAD(2, CHAT_2))
+  stand.put('s1')
+  runDue()
+  assert.deepEqual(stand.opened, [], 'not beside A: B was asked for last')
+  assert.equal(stand.watching.size, 1, 'B still waits')
+  stand.put('s2')
+  runDue()
+  assert.deepEqual(stand.opened, [['omni-phone', { params: { threadId: 't2', chatId: CHAT_2 } }]])
+  // A wait that DSH never ends is dropped after PHONE_WAIT_MS: a much later visit opens nothing.
+  stand.put('s-omni')
+  click(THREAD(1))
+  const late = timers.filter(timer => timer.on && timer.ms === ui.PHONE_WAIT_MS)
+  assert.deepEqual([ui.PHONE_WAIT_MS, late.length], [3000, 1])
+  late[0].run()
+  assert.equal(stand.watching.size, 0)
+  stand.put('s1')
+  runDue()
+  assert.equal(stand.opened.length, 1)
+  // A wait that opened its pane cancels its timer.
+  stand.put('s-omni')
+  click(THREAD(2, CHAT_2))
+  stand.put('s2')
+  runDue()
+  assert.equal(stand.opened.length, 2)
+  assert.equal(timers.filter(timer => timer.on && timer.ms === ui.PHONE_WAIT_MS).length, 0)
 })

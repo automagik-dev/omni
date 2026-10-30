@@ -1,6 +1,7 @@
 import { createElement as h, Fragment, useEffect, useState } from 'react'
 import { ChatAvatar, Tile, useOmni } from './channels.js'
 import { TRIGGERS, runsOf, startLive, waitingRuns } from './omni-store.js'
+import { threadName } from './omni-phone.js'
 import { BotMark, call, hostText, MAIN_LOOK, OmniMark, relativeShort, t, icons } from './core.js'
 const { AtIcon, FileIcon, KeywordIcon, MessageIcon, ShieldIcon, UnplugIcon, VoiceIcon } = icons
 
@@ -32,7 +33,7 @@ export function workerOf(worker, roster, where = {}) {
     const threads = Array.isArray(roster?.omniThreads) ? roster.omniThreads : []
     const only = where.sources?.length === 1 && where.sources[0].kind === 'chat' ? where.sources[0] : undefined
     const thread = where.sessionId ? threads.find(item => item.sessionId === where.sessionId) : only ? threads.find(item => item.chatId === only.id) : undefined
-    const title = thread?.title ?? only?.name
+    const title = thread ? threadName(thread) : only?.name
     return title ? { name: t('The thread of {name}', { name: title }), chat: title } : { name: t('Each chat\'s own thread'), session: true }
   }
   const bot = roster?.byId?.[worker.botId]

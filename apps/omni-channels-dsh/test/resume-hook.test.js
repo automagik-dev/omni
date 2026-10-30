@@ -850,10 +850,9 @@ test('the old-team sweep: on a team stand-in with no rt.resumable or rt.resumesD
   assert.equal(byLabel(root, 'Add a chat'), undefined)
   assert.deepEqual(all(root, 'ot-empty').map(text), [NEEDS_NEWER_TEAM])
   const row = one(root, 'bt-thread')
-  assert.deepEqual([row.props['data-thread-id'], text(one(row, 'ot-thread-reason')), row.props['aria-disabled']], [thread.id, NEEDS_NEWER_TEAM, true])
+  assert.deepEqual([row.props['data-thread-id'], text(one(row, 'ot-thread-reason'))], [thread.id, NEEDS_NEWER_TEAM])
+  // The row's click still opens the pane, which shows the chat through the link key.
   row.props.onClick()
-  // The row's phone action still opens the pane, which shows the chat through the link key.
-  one(root, 'ot-thread-phone').props.onClick()
   assert.deepEqual(stand.opened, [['omni-phone', { params: { threadId: thread.id, chatId: CHAT } }]])
   const tab = { id: 'tab-1', visible: true, navigation: { address: 'sidebar://omni-phone', params: stand.opened[0][1].params, revision: 1 } }
   const phone = mount(() => react.createElement(stand.bodies[0].component, { useTabInfo: () => ({ tab }), sessionId: 'm1', useRoster: select => select(roster) }), { refs: true })

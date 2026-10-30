@@ -39,7 +39,7 @@ const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const id = z.string().regex(ID)
 const ChatsPayload = z.object({ channelId: id, query: z.string().trim().max(100).optional() })
 const AddPayload = z.object({ channelId: id, chatId: id })
-const RemovePayload = z.object({ threadId: id })
+const ThreadPayload = z.object({ threadId: id })
 // A thread's own choice for each, or null to follow the global default again; a field left
 // out stays as it is.
 const PermissionsPayload = z.object({
@@ -66,12 +66,43 @@ const ChatList = z.object({ items: z.array(ChatRow) }).passthrough()
 
 const invalid = message => Object.assign(new Error(message), { code: 'bot/invalid' })
 const refused = message => Object.assign(new Error(message), { code: 'bot/refused' })
-// A WhatsApp id's number: "5511999990000@s.whatsapp.net" → "+5511999990000".
-const numberOf = jid => String(jid ?? '').replace(/[:@].*$/, '').replace(/^(\d{6,})$/, '+$1')
 // A direct chat's phone number, as digits: from its WhatsApp id, or from the phone id Omni
 // resolved a LID chat to (canonicalId). None for any other id.
 const PHONE_JID = /^(\d{6,})(?::\d+)?@s\.whatsapp\.net$/
 const phoneOf = chat => [chat.externalId, chat.canonicalId].map(jid => PHONE_JID.exec(jid ?? '')?.[1]).find(Boolean)
+// Omni keeps some chats' raw WhatsApp ids as their names ("…@lid", "…@s.whatsapp.net",
+// "…@g.us"), and an older thread wrote the id's user part, or its digits as if they were a
+// number ("+120363401234567890", "5511999990000-1600000000"): none of them is a name. A phone
+// id's digits are its number, which is a name of sorts, so only the other ids are compared.
+const RAW_ID = /^\S+@(?:lid|s\.whatsapp\.net|g\.us|c\.us)$/i
+const NOT_A_NUMBER = /^([\d-]+)(?::\d+)?@(?:lid|g\.us)$/i
+const ownNameOf = (chat) => {
+  const own = String(chat.name ?? '').trim()
+  const user = NOT_A_NUMBER.exec(chat.externalId ?? '')?.[1].replace(/\D/g, '')
+  return RAW_ID.test(own) || (user !== undefined && own.replace(/\D/g, '') === user) ? '' : own
+}
+/**
+ * A chat's name as the picker and the thread rows show it: its own name, else a direct chat's
+ * `+<number>`, else null, which the page calls "Group" or "Chat" in its own language. Never a
+ * raw id or a LID.
+ */
+export function chatNameOf(chat) {
+  const own = ownNameOf(chat)
+  if (own !== '') return own
+  const phone = chat.chatType === 'dm' ? phoneOf(chat) : undefined
+  return phone === undefined ? null : `+${phone}`
+}
+// A thread's chat, direct or a group: as Omni said when it was added or named again, else (a
+// record from before) as its WhatsApp id says.
+const kindOf = thread => (thread.kind === 'direct' || thread.kind === 'group' ? thread.kind : /@g\.us$/i.test(thread.chatJid ?? '') ? 'group' : 'direct')
+// What a thread's record holds of its chat, read as a chat row, so a record is named by the
+// picker's rules; its WhatsApp id gives a direct chat's number.
+const chatOfRecord = thread => ({ name: thread.title, externalId: thread.chatJid, chatType: kindOf(thread) === 'direct' ? 'dm' : 'group' })
+// A thread whose record keeps no name of its chat (one added before the rules above, under a
+// raw id), which the start's naming pass reads again.
+const unnamed = thread => ownNameOf(chatOfRecord(thread)) === ''
+// What a thread is told it works on, and its DSH Session's title: its name, else the word.
+const labelOf = (name, kind) => name ?? (kind === 'group' ? 'Group' : 'Chat')
 // A search that reads as a phone number ("+55 (11) 98888-7777", "11.98888.7777") goes to Omni as its digits,
 // the way a WhatsApp id writes them, so it finds the chat by its id; any other goes as typed.
 const PHONE_QUERY = /^\+?[\d\s().-]+$/
@@ -339,7 +370,9 @@ export function install(rt) {
     const threadId = randomUUID()
     const minted = await rt.threadKeys.mint(threadId, chatId)
     if (!minted.ok) return { ok: false, reason: minted.reason }
-    const chatName = (chat.name ?? '').trim() || numberOf(chat.externalId) || 'Chat'
+    const name = chatNameOf(chat)
+    const kind = chat.chatType === 'dm' ? 'direct' : 'group'
+    const chatName = labelOf(name, kind)
     let sessionId
     try {
       sessionId = await rt.createSession(chatName.slice(0, TITLE_MAX))
@@ -349,7 +382,7 @@ export function install(rt) {
     }
     const thread = {
       id: threadId, sessionId, chatId, chatJid: chat.externalId, chatName, channelId, origin: link?.url ?? '',
-      self: minted.self ?? null, title: chatName.slice(0, TITLE_MAX), status: 'idle', turnOpenAt: null, at: Date.now(),
+      self: minted.self ?? null, title: name?.slice(0, TITLE_MAX) ?? null, kind, status: 'idle', turnOpenAt: null, at: Date.now(),
       ...(byAutomation ? { madeBy: 'automation' } : {}),
     }
     await selectOmniModel(rt, sessionId).catch(error => rt.warn('omni-channels: the thread %s keeps DSH\'s model, the Omni Bot\'s was not applied: %s', chatName, error?.message ?? error))
@@ -465,7 +498,8 @@ export function install(rt) {
         const reason = reasons === null ? rt.teamResume?.reason ?? NEEDS_NEWER_TEAM : reasons.get(thread.id) ?? null
         const status = live && rt.teamResume?.running?.(thread.sessionId) !== true ? 'idle' : thread.status ?? 'idle'
         return {
-          id: thread.id, sessionId: thread.sessionId, chatId: thread.chatId, channelId: thread.channelId, title: thread.title, status, connected: reason === null, reason,
+          id: thread.id, sessionId: thread.sessionId, chatId: thread.chatId, channelId: thread.channelId, title: chatNameOf(chatOfRecord(thread)), kind: kindOf(thread),
+          status, connected: reason === null, reason,
           permissions: permissionsOf(thread, state.omniSettings), ownPermissions: ownPermissionsOf(thread), defaultPermissions: permissionsOf(undefined, state.omniSettings),
         }
       }),
@@ -489,17 +523,16 @@ export function install(rt) {
     if (!parsed.success) throw invalid(what)
     return parsed.data
   }
-  // A chat as the Channels page draws it (omni.js chatOf), with a direct chat's number under
-  // its name when the name is not that number. A nameless direct chat is named by its number
-  // (never by a LID), and a nameless group by no name: the page calls it "Group" in its own
-  // language, and its initials are that word's.
+  // A chat as the Channels page draws it (omni.js chatOf), named by chatNameOf, with a direct
+  // chat's number under its name when the name is not that number. A chat with no name has
+  // none here: the page calls it "Group" or "Chat" in its own language, and its initials are
+  // that word's.
   const pickerRow = (chat, added) => {
-    const dm = chat.chatType === 'dm'
-    const phone = dm ? phoneOf(chat) : undefined
-    const own = (chat.name ?? '').trim()
-    const { id, name, initials, kind, preview, at, avatarUrl } = chatOf({ ...chat, name: own || (phone ? `+${phone}` : dm ? null : 'Group') })
-    const number = phone !== undefined && name.replace(/\D/g, '') !== phone ? `+${phone}` : null
-    return { id, name: own || dm ? name : null, initials, kind, preview, at, avatarUrl, number, jid: chat.externalId, added }
+    const name = chatNameOf(chat)
+    const phone = chat.chatType === 'dm' ? phoneOf(chat) : undefined
+    const { id, initials, kind, preview, at, avatarUrl } = chatOf({ ...chat, name: labelOf(name, chat.chatType === 'dm' ? 'direct' : 'group') })
+    const number = phone !== undefined && name !== null && name.replace(/\D/g, '') !== phone ? `+${phone}` : null
+    return { id, name, initials, kind, preview, at, avatarUrl, number, jid: chat.externalId, added }
   }
   // The picker: a channel's chats, each marked when it is a thread already.
   async function chats(body) {
@@ -519,7 +552,7 @@ export function install(rt) {
       return result.ok ? { ok: true, threadId: result.thread.id, sessionId: result.thread.sessionId } : result
     },
     'omni-thread-remove': async (body) => {
-      const payload = parse(RemovePayload, body, 'Pick a thread')
+      const payload = parse(ThreadPayload, body, 'Pick a thread')
       await rt.load()
       await remove(payload.threadId)
       return { ok: true }
@@ -555,4 +588,43 @@ export function install(rt) {
   // host that only reads the team does not serve them.
   ctx.effect(() => rt.hooks.endpoint('omni-thread-chats', chats, { read: true }), 'omni-channels: omni-thread-chats')
   for (const [name, run] of Object.entries(ENDPOINTS)) ctx.effect(() => rt.hooks.endpoint(name, run), `omni-channels: ${name}`)
+
+  // A thread's name again, from Omni: its record, the view's title and its DSH Session's title
+  // (the conversation header's) follow the chat as Omni has it now; nothing is written when
+  // the record already names it so. The Session is named first, so a failed rename leaves the
+  // record as it was, and the next start tries again.
+  async function rename(thread) {
+    const answer = ChatAnswer.safeParse(await ask(`/chats/${thread.chatId}`))
+    if (!answer.success || answer.data.data.id !== thread.chatId) return
+    const chat = answer.data.data
+    const name = chatNameOf(chat)
+    const title = name?.slice(0, TITLE_MAX) ?? null
+    const kind = chat.chatType === 'dm' ? 'direct' : 'group'
+    const still = byId(thread.id)
+    if (still === undefined || (title === (still.title ?? null) && kind === still.kind)) return
+    const chatName = labelOf(name, kind)
+    const agent = await rt.resolveAgent(still.sessionId)
+    await ctx.sessionTitle.rename(agent.session, chatName.slice(0, TITLE_MAX))
+    Object.assign(still, { title, kind, chatName })
+    await rt.save()
+  }
+  // At start, on the host that holds the team and with an Omni linked: each thread whose
+  // record keeps no name of its chat (one added under a raw id, before chatNameOf) is read
+  // once from Omni and named again. Only those, once per start: building the view asks Omni
+  // nothing, and shows such a thread by its word ("Chat", "Group") until then.
+  ctx.effect(() => {
+    let stopped = false
+    const pass = (async () => {
+      await rt.load()
+      if (rt.readOnly?.() !== undefined || (rt.omniLink?.() ?? null) === null) return
+      for (const thread of list().filter(unnamed)) {
+        if (stopped) return
+        await rename(thread).catch(error => rt.warn('omni-channels: the thread %s was not named again: %s', thread.id, error?.message ?? error))
+      }
+    })().catch(error => rt.warn('omni-channels: naming the threads again failed: %s', error?.message ?? error))
+    return async () => {
+      stopped = true
+      await pass
+    }
+  }, 'omni-channels: thread names')
 }

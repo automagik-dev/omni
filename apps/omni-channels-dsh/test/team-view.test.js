@@ -60,7 +60,7 @@ function start(team, { models = ['deepseek-v4-flash'], config = {}, channelsConf
 
 test('the plugin is the omni-channels row, on the team it injects', () => {
   assert.equal(plugin.name, 'omni-channels')
-  assert.deepEqual(plugin.inject, ['omniTeam', 'tools', 'sessions', 'settings', 'systemPrompt', 'workspaceRegistry'])
+  assert.deepEqual(plugin.inject, ['omniTeam', 'tools', 'sessions', 'sessionTitle', 'settings', 'systemPrompt', 'workspaceRegistry'])
 })
 
 test('with an omni to operate, the Main Bot runs the automations and no second Bot is made', async (t) => {
@@ -257,6 +257,7 @@ test('apply registers its listeners, tools and effects after the team\'s, in a f
     'effect omni-channels: omni-thread-add',
     'effect omni-channels: omni-thread-remove',
     'effect omni-channels: omni-thread-permissions',
+    'effect omni-channels: thread names',
     'tool thread_say',
     'tool thread_react',
     'tool thread_history',

@@ -8,9 +8,10 @@ import { call, hostText, t } from './core.js'
 // (phone-frame.js), files and Omni's text for them included. It is the owner's own view: it
 // reads on the host's link key, polling as the chat view does, and has no composer.
 //
-// It opens only from the thread, never by itself: the thread row's phone action, and the
-// phone button in the thread's own Session. The row action works on a Bot team without the
-// restart hook too, where the row opens no Session. The tab carries the thread and its chat
+// It opens only from the thread, never by itself: a click on the thread's row, which opens it
+// beside the thread's own Session, and the phone button in that Session. On a Bot team without
+// the restart hook, where the row opens no Session, the row's click opens it beside the
+// Session on screen. The tab carries the thread and its chat
 // in its params. DSH keeps a column's tabs over a reload but not their params (it saves the
 // layout alone, dsh.sidebar-right.v1), so this page keeps each tab's last params itself, and
 // a tab with neither shows the thread whose Session it is in.
@@ -25,6 +26,9 @@ export const phoneParams = thread => ({ threadId: thread.id, chatId: thread.chat
 
 const threadsIn = roster => (Array.isArray(roster?.omniThreads) ? roster.omniThreads : [])
 
+/** A thread's name: its chat's (host threads.js chatNameOf), else "Group" or "Chat". */
+export const threadName = thread => thread.title || (thread.kind === 'group' ? t('Group') : t('Chat'))
+
 /**
  * The thread a pane shows, from the threads listed now: the one its params name, else the
  * thread of the chat they name (the chat added again since); params that name nothing: the
@@ -38,8 +42,12 @@ export function phoneThreadOf(roster, params, sessionId) {
   return (named ? pick('id', params.threadId) ?? pick('chatId', params.chatId) : pick('sessionId', sessionId)) ?? null
 }
 
-// DSH's right column, once its plugin is there: the row action and the button open the pane in it.
+// DSH's right column, once its plugin is there: the row and the button open the pane in it.
 let phoneRight = null
+// The pane a row's click waits to open beside its thread's Session, `{ stop, sessionId,
+// passed }`; a newer click drops it. How long a wait lasts: past it the click is history.
+let phoneWait = null
+export const PHONE_WAIT_MS = 3000
 
 export function installPhone(ctx, face) {
   const fiber = ctx.inject(['sidebarRight', 'sidebarRightTabs'], (scope) => {
@@ -47,7 +55,10 @@ export function installPhone(ctx, face) {
     scope.effect(() => ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register({ name: 'sidebar.right.pane.tab', key: PHONE_TAB_ID, inject: face }, PhoneTab)), 'ds-bot: phone tab')
     scope.effect(() => {
       phoneRight = scope.sidebarRight
-      return () => { phoneRight = null }
+      return () => {
+        phoneRight = null
+        phoneWait?.stop()
+      }
     }, 'ds-bot: the phone pane for the thread rows')
   })
   return () => fiber.dispose()
@@ -67,6 +78,35 @@ export function openPhone(thread) {
   } catch (error) {
     return error?.message ?? String(error)
   }
+}
+
+/**
+ * Opens the pane on `thread` beside the thread's own Session: now when it is on screen, else
+ * once DSH puts it there (the row's click opened it), after the render that brings its column.
+ * A wait ends when another Session comes on screen first (the Sessions of the clicks it took
+ * over pass by, so a quick second click still gets its pane), when another pane is asked
+ * for, or after PHONE_WAIT_MS. Returns null when it opened or waits, else why not.
+ */
+export function openPhoneBeside(thread) {
+  const before = phoneWait
+  before?.stop()
+  const mounted = phoneRight?.mounted
+  if (typeof mounted?.subscribe !== 'function' || mounted.getSnapshot() === thread.sessionId) return openPhone(thread)
+  const passed = new Set([...(before?.passed ?? []), before?.sessionId, mounted.getSnapshot()])
+  const off = mounted.subscribe(() => {
+    const now = mounted.getSnapshot()
+    if (now === undefined || (now !== thread.sessionId && passed.has(now))) return
+    stop()
+    if (now === thread.sessionId) setTimeout(() => openPhone(thread), 0)
+  })
+  const timer = setTimeout(() => stop(), PHONE_WAIT_MS)
+  const stop = () => {
+    off()
+    clearTimeout(timer)
+    if (phoneWait?.stop === stop) phoneWait = null
+  }
+  phoneWait = { stop, sessionId: thread.sessionId, passed }
+  return null
 }
 
 // The chat's messages from the host, now and every POLL_MS while `on`; a hidden page skips
@@ -108,12 +148,13 @@ export function PhonePane({ params, sessionId, useRoster, visible = true }) {
     return h('div', { className: 'op-pane' }, h('p', { className: 'op-note' }, named ? t('This chat is no longer in the sidebar.') : t('Open the phone pane from a chat in the sidebar.')))
   }
   const loading = read.messages === null && read.error === null
+  const name = threadName(thread)
   return h('div', { className: 'op-pane', 'data-thread-id': thread.id },
-    h(PhoneFrame, { label: t('{name} on the phone', { name: thread.title }) },
+    h(PhoneFrame, { label: t('{name} on the phone', { name }) },
       h('header', { className: 'op-head' },
-        h('strong', null, thread.title),
+        h('strong', null, name),
         thread.connected === false && thread.reason ? h('span', null, hostText(thread.reason)) : null),
-      h('div', { ref: scroller, className: 'oc-thread op-log', onScroll, role: 'log', 'aria-label': t('Conversation with {name}', { name: thread.title }) },
+      h('div', { ref: scroller, className: 'oc-thread op-log', onScroll, role: 'log', 'aria-label': t('Conversation with {name}', { name }) },
         h('div', { className: 'oc-thread-in' },
           loading ? h('div', { className: 'oc-day' }, h('span', { className: 'oc-spinner', 'aria-hidden': true }), t('Loading messages…')) : null,
           read.error ? h('p', { className: 'op-note', role: 'alert' }, hostText(read.error)) : null,
@@ -163,7 +204,7 @@ export function PhoneDock({ sessionId, useRoster }) {
   return h('div', { className: 'op-dock' },
     problem ? h('span', { className: 'op-dock-problem', role: 'alert' }, hostText(problem)) : null,
     h('button', {
-      type: 'button', className: 'op-open', 'aria-label': t('Show {name} in the phone pane', { name: thread.title }), title: t('Phone pane'),
+      type: 'button', className: 'op-open', 'aria-label': t('Show {name} in the phone pane', { name: threadName(thread) }), title: t('Phone pane'),
       onClick: () => setProblem(openPhone(thread)),
     }, h(PhoneGlyph), t('Phone')))
 }
