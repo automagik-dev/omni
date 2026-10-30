@@ -126,3 +126,6 @@ apps/.automagik/
 # Backups Genie's installer leaves beside the configs it edits
 .mcp.json.genie-backup-*
 .codex/config.toml.genie-backup-*
+
+# compiled CLI binary (built by install-client.sh into $TMPDIR)
+packages/cli/omni-bin
