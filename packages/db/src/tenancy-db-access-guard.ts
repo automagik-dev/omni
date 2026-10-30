@@ -1414,7 +1414,7 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     justification:
       'CONVERTED. The participant methods (`findOrCreateParticipant`, `recordParticipantActivity`, ' +
       '`addParticipant`, `getParticipants`, `removeParticipant`, `updateParticipantRole`, ' +
-      '`linkParticipantToPerson`, and `list` via `enrichDmNames`) are reached from exactly two places: the ' +
+      '`linkParticipantToPerson`, and `list` and `nameForRead` via `enrichDmNames`) are reached from exactly two places: the ' +
       'routes, inside the request tenant transaction, and `message-persistence`, converted this leg. No other ' +
       'worker calls a participant method — verified caller-by-caller across every plugin, the scheduler and ' +
       '`index.ts`.',
