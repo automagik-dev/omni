@@ -259,8 +259,12 @@ chatsRoutes.get('/:id', async (c) => {
   const raw = c.req.param('id');
   const id = await resolveChatIdParam(c, raw);
   if (id === null) return chatNotFoundResponse(c, raw);
+  const services = c.get('services');
 
-  const chat = await chatForRoute(c, raw, id);
+  // Named as GET /chats names it: a DM stored under a raw JID or LID answers its contact's name.
+  const [chat] = await services.chats.nameForRead([await chatForRoute(c, raw, id)], (ids) =>
+    loadInstanceOwners(services, ids),
+  );
 
   return c.json({ data: chat });
 });

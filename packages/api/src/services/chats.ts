@@ -278,11 +278,7 @@ export class ChatService {
       items.pop();
     }
 
-    // Enrich group chats with names from omni_groups when chat name is missing
-    await this.enrichGroupNames(items);
-
-    // Enrich DM chats that have no name or a raw JID as name with participant display names
-    await this.enrichDmNames(items, instanceOwners);
+    await this.nameForRead(items, instanceOwners);
 
     // Deduplicate chats that share the same canonicalId (e.g., LID + phone JID)
     this.deduplicateByCanonicalId(items);
@@ -314,6 +310,17 @@ export class ChatService {
       .where(and(eq(chats.instanceId, instanceId), eq(chats.chatType, 'dm'), isNull(chats.deletedAt)))
       .orderBy(desc(chats.lastMessageAt))
       .limit(limit);
+  }
+
+  /**
+   * Names chats for a read as `list` names them, in place: a nameless group from omni_groups,
+   * a DM with no name or a raw JID as name from its participants (`enrichDmNames`, which
+   * `instanceOwners` lets skip the account owner's name). The stored rows are not changed.
+   */
+  async nameForRead<T extends Chat>(items: T[], instanceOwners?: InstanceOwnerLookup): Promise<T[]> {
+    await this.enrichGroupNames(items);
+    await this.enrichDmNames(items, instanceOwners);
+    return items;
   }
 
   /**

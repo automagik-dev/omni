@@ -109,6 +109,7 @@ function mountHarness(options: HarnessOptions = {}): {
           calls.findByExternalIdSmart.push({ instanceId, externalId });
           return options.resolvedChat ?? null;
         }),
+        nameForRead: mock(async <T>(items: T[]) => items),
       },
     } as never);
     c.set('apiKey', {
@@ -606,6 +607,7 @@ function mountLocked(
           return instanceId === LOCKED_INSTANCE_ID && externalId === WHATSAPP_DM_JID ? row : null;
         }),
         pin: mock(async () => row),
+        nameForRead: mock(async <T>(items: T[]) => items),
       },
       instances: {
         getById: mock(async (id: string) => ({ id, channel: 'whatsapp-baileys' })),
