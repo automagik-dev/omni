@@ -12,6 +12,7 @@ import {
   type Chat,
   type ChatParticipant,
   type ChatType,
+  type Instance,
   type NewChat,
   type NewChatParticipant,
   chatIdMappings,
@@ -23,6 +24,7 @@ import {
 import { and, asc, desc, eq, gt, ilike, inArray, isNull, or, sql } from 'drizzle-orm';
 import { scopedHandle } from '../tenancy/tenant-scope';
 import { sanitizeText } from '../utils/utf8';
+import { extractPhoneFromJid, isSelfChat } from './message-context';
 
 const log = createLogger('chats');
 
@@ -50,6 +52,32 @@ export type ChatWithIsGroup<T extends Pick<Chat, 'chatType' | 'externalId'>> = T
 export function withIsGroup<T extends Pick<Chat, 'chatType' | 'externalId'>>(chat: T): ChatWithIsGroup<T> {
   return { ...chat, isGroup: isChatGroup(chat) };
 }
+
+/**
+ * True when a DM participant row carries the account's own name: the owner's own row,
+ * or any displayName equal to the instance's profileName. Never inside the self-chat.
+ */
+function isOwnerParticipant(
+  chat: Pick<Chat, 'externalId'>,
+  participant: { platformUserId: string; displayName: string | null },
+  owner: { profileName: string | null; ownerIdentifier: string | null },
+): boolean {
+  if (isSelfChat(chat.externalId, owner.ownerIdentifier)) return false;
+  if (owner.profileName && participant.displayName === owner.profileName) return true;
+  return (
+    !!owner.ownerIdentifier &&
+    extractPhoneFromJid(participant.platformUserId) === extractPhoneFromJid(owner.ownerIdentifier)
+  );
+}
+
+/** The account behind an instance, as DM name enrichment needs it. */
+export type InstanceOwner = Pick<Instance, 'id' | 'profileName' | 'ownerIdentifier'>;
+
+/**
+ * Loads the owners of the given instances. Supplied by the caller (through its own
+ * scoped instances service) so this service opens no direct `instances` read.
+ */
+export type InstanceOwnerLookup = (instanceIds: string[]) => Promise<InstanceOwner[]>;
 
 export interface ChatWithParticipants extends ChatWithIsGroup<Chat> {
   participants: ChatParticipant[];
@@ -211,9 +239,15 @@ export class ChatService {
   }
 
   /**
-   * List chats with filtering and pagination
+   * List chats with filtering and pagination.
+   *
+   * `instanceOwners`, when given, lets DM name enrichment skip the account owner's own
+   * name (see `enrichDmNames`); without it enrichment behaves as before.
    */
-  async list(options: ListChatsOptions = {}): Promise<{
+  async list(
+    options: ListChatsOptions = {},
+    instanceOwners?: InstanceOwnerLookup,
+  ): Promise<{
     items: ChatWithIsGroup<Chat>[];
     hasMore: boolean;
     cursor?: string;
@@ -248,7 +282,7 @@ export class ChatService {
     await this.enrichGroupNames(items);
 
     // Enrich DM chats that have no name or a raw JID as name with participant display names
-    await this.enrichDmNames(items);
+    await this.enrichDmNames(items, instanceOwners);
 
     // Deduplicate chats that share the same canonicalId (e.g., LID + phone JID)
     this.deduplicateByCanonicalId(items);
@@ -263,6 +297,23 @@ export class ChatService {
       cursor: lastItem?.lastMessageAt?.toISOString(),
       total: items.length + (hasMore ? 1 : 0),
     };
+  }
+
+  /**
+   * The STORED names of an instance's DM chats: no read-time enrichment, no
+   * canonical dedupe (both chats of an @lid/phone pair are returned), hidden
+   * and archived included. For repairs that must judge what is in the row.
+   */
+  async listStoredDmNames(
+    instanceId: string,
+    limit = 1000,
+  ): Promise<Array<Pick<Chat, 'id' | 'externalId' | 'canonicalId' | 'name'>>> {
+    return this.db
+      .select({ id: chats.id, externalId: chats.externalId, canonicalId: chats.canonicalId, name: chats.name })
+      .from(chats)
+      .where(and(eq(chats.instanceId, instanceId), eq(chats.chatType, 'dm'), isNull(chats.deletedAt)))
+      .orderBy(desc(chats.lastMessageAt))
+      .limit(limit);
   }
 
   /**
@@ -294,8 +345,12 @@ export class ChatService {
   /**
    * Enrich DM chats that have no name (or a raw JID as name) with participant display names.
    * Looks up the most recently active participant's displayName for each nameless DM chat.
+   *
+   * Outside the self-chat, the account's own participant row and any displayName equal to
+   * the instance's profileName are skipped: they carry the owner's pushName (live and
+   * history messages we sent), never the contact's, so the UI falls back to the number.
    */
-  private async enrichDmNames(items: Chat[]): Promise<void> {
+  private async enrichDmNames(items: Chat[], instanceOwners?: InstanceOwnerLookup): Promise<void> {
     const needsName = items.filter((c) => {
       if (c.chatType !== 'dm') return false;
       if (!c.name) return true;
@@ -305,15 +360,26 @@ export class ChatService {
 
     const chatIds = needsName.map((c) => c.id);
     const participants = await this.db
-      .select({ chatId: chatParticipants.chatId, displayName: chatParticipants.displayName })
+      .select({
+        chatId: chatParticipants.chatId,
+        platformUserId: chatParticipants.platformUserId,
+        displayName: chatParticipants.displayName,
+      })
       .from(chatParticipants)
       .where(and(inArray(chatParticipants.chatId, chatIds), sql`${chatParticipants.displayName} IS NOT NULL`))
       .orderBy(asc(chatParticipants.chatId));
 
-    // Pick first non-null displayName per chat
+    const instanceIds = [...new Set(needsName.map((c) => c.instanceId).filter((id): id is string => !!id))];
+    const owners = instanceOwners && instanceIds.length ? await instanceOwners(instanceIds) : [];
+    const ownerOf = new Map(owners.map((o) => [o.id, o]));
+    const chatById = new Map(needsName.map((c) => [c.id, c]));
+
+    // Pick first non-null displayName per chat that is not the owner's
     const nameMap = new Map<string, string>();
     for (const p of participants) {
-      if (p.displayName && !nameMap.has(p.chatId)) {
+      const chat = chatById.get(p.chatId);
+      const owner = chat?.instanceId ? ownerOf.get(chat.instanceId) : undefined;
+      if (p.displayName && !nameMap.has(p.chatId) && !(chat && owner && isOwnerParticipant(chat, p, owner))) {
         nameMap.set(p.chatId, p.displayName);
       }
     }

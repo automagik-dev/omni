@@ -96,7 +96,7 @@ import {
 import { resolveKhalSessionId } from '../services/agent-session-identity';
 import { stampAgentUsage } from '../services/agent-usage';
 import type { MediaStorageService } from '../services/media-storage';
-import { buildWhatsAppMessageContext, extractPhoneFromJid } from '../services/message-context';
+import { buildWhatsAppMessageContext, extractPhoneFromJid, isSelfChat } from '../services/message-context';
 import { resolveGateModel, resolveGateProvider, runGateCall } from '../services/response-gate';
 import type { ResolvedRoute } from '../services/route-resolver';
 import { publishTurnOpen } from '../services/turn-events';
@@ -1584,16 +1584,6 @@ export async function resolveQuotedMessage(
 
 /** Bot prefix for self-chat replies so the user can distinguish bot messages from their own */
 const BOT_PREFIX = '\u{1F916} ';
-
-/**
- * Check if a chat is a self-chat (user messaging themselves).
- * Compares chatId against the instance's ownerIdentifier (connected account JID).
- * Normalizes JIDs by stripping device suffix (e.g., ":0" in "5511999@s.whatsapp.net:0").
- */
-function isSelfChat(chatId: string, ownerIdentifier: string | null | undefined): boolean {
-  if (!ownerIdentifier) return false;
-  return extractPhoneFromJid(chatId) === extractPhoneFromJid(ownerIdentifier);
-}
 
 // ============================================================================
 // Response Sending

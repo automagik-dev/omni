@@ -15,7 +15,8 @@ import { checkInstanceAccess, resolveChatIdParam } from '../../lib/resolve-chat-
 import { clearAgentSession } from '../../plugins/session-cleaner';
 import { optionalDateParam } from '../../schemas/date-query';
 import type { Services } from '../../services';
-import { withIsGroup } from '../../services/chats';
+import { type InstanceOwner, withIsGroup } from '../../services/chats';
+import { isSelfChat } from '../../services/message-context';
 import type { AppVariables } from '../../types';
 
 const chatsRoutes = new Hono<{ Variables: AppVariables }>();
@@ -180,6 +181,16 @@ const updateParticipantRoleSchema = z.object({
 });
 
 /**
+ * Owners of the listed chats' instances, read through the request-scoped instances
+ * service, so DM name enrichment can skip the account's own name. A missing
+ * instance contributes nothing.
+ */
+async function loadInstanceOwners(services: Services, instanceIds: string[]): Promise<InstanceOwner[]> {
+  const rows = await Promise.all(instanceIds.map((id) => services.instances.getById(id).catch(() => null)));
+  return rows.filter((row): row is NonNullable<typeof row> => row !== null);
+}
+
+/**
  * GET /chats - List chats
  */
 chatsRoutes.get('/', zValidator('query', listQuerySchema), async (c) => {
@@ -188,7 +199,7 @@ chatsRoutes.get('/', zValidator('query', listQuerySchema), async (c) => {
   const apiKey = c.get('apiKey');
 
   const queryWithAccess = apiKey?.instanceIds ? { ...query, instanceIds: apiKey.instanceIds } : query;
-  const result = await services.chats.list(queryWithAccess);
+  const result = await services.chats.list(queryWithAccess, (ids) => loadInstanceOwners(services, ids));
 
   return c.json({
     items: result.items,
@@ -878,7 +889,11 @@ function resolveContactName(
  * POST /chats/sync-names - Backfill DM chat names from WhatsApp contacts cache
  *
  * Reads the in-memory contacts from the WhatsApp plugin and updates any DM chats
- * that are missing a name (or have a stale JID as name).
+ * that are missing a name, have a stale JID as name, or carry the account's own
+ * profile name (the owner's pushName leaked in by history sync). It judges the
+ * STORED names, so both chats of an @lid/phone pair are seen and a read-time
+ * participant name never hides an owner-named row. An owner-named DM with no
+ * contact name is cleared so the UI falls back to the number.
  */
 chatsRoutes.post('/sync-names', zValidator('json', syncNamesSchema), async (c) => {
   const { instanceId } = c.req.valid('json');
@@ -887,7 +902,7 @@ chatsRoutes.post('/sync-names', zValidator('json', syncNamesSchema), async (c) =
 
   checkInstanceAccess(c.get('apiKey'), instanceId);
 
-  const { plugin } = await getPluginForInstance(services, channelRegistry, instanceId);
+  const { instance, plugin } = await getPluginForInstance(services, channelRegistry, instanceId);
 
   if (!('fetchContacts' in plugin) || typeof plugin.fetchContacts !== 'function') {
     throw new OmniError({
@@ -905,26 +920,36 @@ chatsRoutes.post('/sync-names', zValidator('json', syncNamesSchema), async (c) =
   };
   const { contacts } = await pluginWithContacts.fetchContacts(instanceId);
 
+  // The account's own profile name. A DM never takes it: it would be the owner's pushName.
+  const ownName = instance.profileName;
+
   // Build a map of JID → contact name (DMs only)
   const contactNames = new Map<string, string>();
   for (const contact of contacts) {
-    if (!contact.isGroup && contact.name) {
+    if (!contact.isGroup && contact.name && contact.name !== ownName) {
       contactNames.set(contact.platformUserId, contact.name);
     }
   }
 
-  // Get all DM chats for this instance that are missing names or have stale JID names
-  const allChats = await services.chats.list({ instanceId, chatType: ['dm'], limit: 1000 });
+  // Stored names of every DM chat: missing, stale JID, or the owner's name get repaired
+  const storedChats = await services.chats.listStoredDmNames(instanceId);
 
   let updated = 0;
-  for (const chat of allChats.items) {
+  let cleared = 0;
+  for (const chat of storedChats) {
     const hasStaleJidName = chat.name?.endsWith('@s.whatsapp.net') || chat.name?.endsWith('@lid');
-    if (!chat.name || hasStaleJidName) {
-      const contactName = resolveContactName(chat, contactNames);
-      if (contactName) {
-        await services.chats.update(chat.id, { name: contactName });
-        updated++;
-      }
+    const selfChat =
+      isSelfChat(chat.externalId, instance.ownerIdentifier) ||
+      (!!chat.canonicalId && isSelfChat(chat.canonicalId, instance.ownerIdentifier));
+    const hasOwnName = !!ownName && chat.name === ownName && !selfChat;
+    if (chat.name && !hasStaleJidName && !hasOwnName) continue;
+    const contactName = resolveContactName(chat, contactNames);
+    if (contactName) {
+      await services.chats.update(chat.id, { name: contactName });
+      updated++;
+    } else if (hasOwnName) {
+      await services.chats.update(chat.id, { name: null });
+      cleared++;
     }
   }
 
@@ -934,6 +959,7 @@ chatsRoutes.post('/sync-names', zValidator('json', syncNamesSchema), async (c) =
       instanceId,
       contactsLoaded: contactNames.size,
       chatsUpdated: updated,
+      chatsCleared: cleared,
     },
   });
 });

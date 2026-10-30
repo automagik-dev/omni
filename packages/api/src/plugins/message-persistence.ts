@@ -131,8 +131,8 @@ function isInternalWhatsAppJid(chatId: string): boolean {
  * Resolve the effective chat name for a message based on chat type and direction.
  *
  * For DMs:
- * - Inbound (!isFromMe): chatName > pushName (sender's display name)
- * - Outbound (isFromMe): chatName > recipientName > verifiedBizName
+ * - Inbound: chatName > pushName (sender's display name)
+ * - Outbound (isFromMe, or rawPayload.key.fromMe): chatName > recipientName > verifiedBizName
  *   (pushName is the bot's own name, not the contact's — so we skip it for outbound)
  *
  * For groups/channels: always chatName (group subject)
@@ -150,7 +150,11 @@ export function resolveEffectiveChatName(params: {
   const { chatType, isFromMe, chatName, pushName, rawPayload } = params;
 
   if (chatType === 'dm') {
-    if (!isFromMe) {
+    // History-sync events carry no `isFromMe`: their only direction marker is the
+    // WhatsApp key. Trusting the flag alone named the contact's chat after the
+    // owner, whose pushName the history messages we sent carry.
+    const fromMe = isFromMe || (rawPayload?.key as { fromMe?: unknown } | undefined)?.fromMe === true;
+    if (!fromMe) {
       // Inbound: chatName > pushName (sender's display name)
       return chatName || pushName;
     }
@@ -575,7 +579,7 @@ async function persistLidMappings(
 async function postProcessChat(
   services: Services,
   chat: { id: string; canonicalId?: string | null; name?: string | null },
-  _chatCreated: boolean,
+  chatCreated: boolean,
   chatExternalId: string,
   chatType: ChatType,
   pushName: string | undefined,
@@ -607,10 +611,49 @@ async function postProcessChat(
       pushName,
       rawPayload,
     });
-    if (effectiveNameLocal && shouldUpdateChatName(chat.name, effectiveNameLocal)) {
-      await services.chats.update(chat.id, { name: effectiveNameLocal });
-      chat.name = effectiveNameLocal;
+    if (effectiveNameLocal) {
+      await applyChatName(services, chat, chatCreated, instanceId, chatType, effectiveNameLocal);
     }
+  }
+}
+
+/**
+ * Write a resolved chat name when it is missing, stale, or changed. A DM is never
+ * named after the account itself (the instance's profileName): the write is skipped,
+ * and a chat just created with that name is cleared. Exported for unit testing.
+ */
+export async function applyChatName(
+  services: Services,
+  chat: { id: string; name?: string | null },
+  chatCreated: boolean,
+  instanceId: string,
+  chatType: ChatType,
+  name: string,
+): Promise<void> {
+  const writesName = chatCreated || shouldUpdateChatName(chat.name, name);
+  if (writesName && chatType === 'dm' && (await isOwnProfileName(services, instanceId, name))) {
+    if (chatCreated && chat.name === name) {
+      await services.chats.update(chat.id, { name: null });
+      chat.name = null;
+    }
+    return;
+  }
+  if (shouldUpdateChatName(chat.name, name)) {
+    await services.chats.update(chat.id, { name });
+    chat.name = name;
+  }
+}
+
+/**
+ * True when `name` is the instance's own profile name — the owner's pushName, or a
+ * verifiedBizName that is the owner's. Read only when a DM name is about to be written.
+ */
+async function isOwnProfileName(services: Services, instanceId: string, name: string): Promise<boolean> {
+  try {
+    const instance = await services.instances.getById(instanceId);
+    return !!instance.profileName && instance.profileName === name;
+  } catch {
+    return false;
   }
 }
 
