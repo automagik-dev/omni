@@ -4,6 +4,29 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
 
+const isFailure = (line: string) => /^(?:\(fail\)|✗)(?:\s|$)/.test(line);
+const isError = (line: string) => /^(?:error:|\w*Error:)/.test(line);
+
+function failureDetails(lines: string[]): string[] {
+  const details: string[] = [];
+  let lastError = -1;
+  for (const [index, line] of lines.entries()) {
+    if (isError(line)) lastError = index;
+    let error = -1;
+    let end = index + 1;
+    if (isFailure(line)) error = lastError;
+    else if (line.startsWith('# Unhandled error between tests')) {
+      const nextError = lines.slice(index + 1).findIndex(isError);
+      if (nextError >= 0) error = index + 1 + nextError;
+      end = error + 4;
+    } else continue;
+    const context = error < 0 ? [line] : lines.slice(error, end).filter((entry) => entry.trim());
+    details.push(...context.slice(0, 4).map((entry) => `    ${entry.trim().slice(0, 300)}`));
+    lastError = -1;
+  }
+  return details;
+}
+
 /** Bun reports hook failures as unnamed tests, and load failures as unhandled errors. */
 export function formatPgGateFailure(output: string, suites: string[], problems: string[], logPath: string): string {
   const sections: { file: string; lines: string[] }[] = [];
@@ -20,29 +43,34 @@ export function formatPgGateFailure(output: string, suites: string[], problems: 
       current?.lines.push(line);
     }
   }
-  const failures = sections.filter(({ lines }) =>
-    lines.some((line) => line.startsWith('(fail)') || line.startsWith('# Unhandled error between tests')),
-  );
   const summary = ['pg-gate: FAILED', ...problems.map((problem) => `  - ${problem}`)];
-  for (const { file, lines } of failures) {
-    summary.push(`  ${file}`);
-    const error = lines.findIndex((line) => /^(?:error:|\w*Error:)/.test(line));
-    const details =
-      error < 0
-        ? lines.filter((line) => line.startsWith('(fail)') || line.startsWith('# Unhandled error'))
-        : lines.slice(error).filter((line) => line.trim());
-    summary.push(...details.slice(0, 4).map((line) => `    ${line.trim().slice(0, 300)}`));
+  let failures = 0;
+  for (const { file, lines } of sections) {
+    const details = failureDetails(lines);
+    if (details.length === 0) continue;
+    failures++;
+    summary.push(`  ${file}`, ...details);
   }
-  if (failures.length === 0) summary.push('  No suite failure marker found; inspect the full child output.');
+  if (failures === 0) summary.push('  No suite failure marker found; inspect the full child output.');
   summary.push(`pg-gate: full child output: ${logPath}`);
   return `${summary.join('\n')}\n`;
 }
 
-/** Keep diagnostics outside cluster/spool cleanup; synchronous stderr survives process.exit. */
+/** Keep diagnostics outside cleanup; natural exit drains stdout/stderr even on a shared slow pipe. */
 function reportPgGateFailure(output: string, suites: string[], problems: string[]): void {
   const logPath = join(tmpdir(), `omni-pg-gate-failure-${randomUUID()}.log`);
-  writeFileSync(logPath, output, { mode: 0o600, flag: 'wx' });
-  writeFileSync(2, formatPgGateFailure(output, suites, problems, logPath));
+  process.stderr.write(formatPgGateFailure(output, suites, problems, logPath));
+  try {
+    writeFileSync(logPath, output, { mode: 0o600, flag: 'wx' });
+  } catch (error) {
+    process.stderr.write(`pg-gate: could not retain full output: ${error instanceof Error ? error.message : error}\n`);
+  }
+  const tail = stripVTControlCharacters(output)
+    .split('\n')
+    .filter((line) => !line.includes('NOTICE'))
+    .slice(-200)
+    .map((line) => line.slice(0, 500));
+  process.stderr.write(`pg-gate: child output tail (up to 200 non-NOTICE lines):\n${tail.join('\n')}\n`);
 }
 
 /** Preserve the gate's zero-skip, nonempty and discovered-file-count contract. */
@@ -59,6 +87,6 @@ export function reportPgGateResult(output: string, suites: string[], exitCode: n
     reportPgGateFailure(output, suites, problems);
     return 1;
   }
-  writeFileSync(1, `\npg-gate: PASSED — ${passCount} assertions across ${suites.length} suites, 0 skipped\n`);
+  process.stdout.write(`\npg-gate: PASSED — ${passCount} assertions across ${suites.length} suites, 0 skipped\n`);
   return 0;
 }
