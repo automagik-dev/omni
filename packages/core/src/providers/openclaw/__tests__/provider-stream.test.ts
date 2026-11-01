@@ -3,7 +3,7 @@ import type { AgentTrigger, StreamDelta } from '../../types';
 import { OpenClawClient } from '../client';
 import { OpenClawAgentProvider } from '../provider';
 import type { AgentEventPayload, OpenClawClientConfig, OpenClawProviderConfig, ReqFrame, ResFrame } from '../types';
-import { test, waitForCondition } from './mock-waits';
+import { test, waitForCondition, waitForMockServer } from './mock-waits';
 
 const clients = new Set<OpenClawClient>();
 
@@ -23,10 +23,11 @@ interface MockWs {
 
 let onClientFrame: ((frame: ReqFrame, ws: MockWs) => void) | null = null;
 
-function startMockServer() {
+async function startMockServer() {
   serverConnections = new Set();
 
   const srv = Bun.serve({
+    hostname: '127.0.0.1',
     port: 0,
     fetch(req, server) {
       // @ts-ignore — Bun upgrade signature varies by version
@@ -72,6 +73,7 @@ function startMockServer() {
 
   server = srv;
   serverPort = srv.port ?? 0;
+  await waitForMockServer(new URL(`http://127.0.0.1:${serverPort}`));
 }
 
 async function stopMockServer() {
@@ -171,9 +173,9 @@ async function collectDeltas(stream: AsyncGenerator<StreamDelta>): Promise<Strea
 }
 
 describe('OpenClawAgentProvider triggerStream', () => {
-  beforeEach(() => {
-    startMockServer();
-  });
+  beforeEach(async () => {
+    await startMockServer();
+  }, 15_000);
 
   afterEach(async () => {
     await stopMockServer();

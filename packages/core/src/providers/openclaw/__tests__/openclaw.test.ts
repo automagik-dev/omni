@@ -20,7 +20,7 @@ import type {
   ResFrame,
 } from '../types';
 
-import { test, waitForCondition } from './mock-waits';
+import { test, waitForCondition, waitForMockServer } from './mock-waits';
 
 // === Mock WebSocket Server ===
 
@@ -45,11 +45,12 @@ interface MockWs {
 }
 let onClientFrame: ((frame: ReqFrame, ws: MockWs) => void) | null = null;
 
-function startMockServer() {
+async function startMockServer() {
   receivedFrames = [];
   serverConnections = new Set();
 
   const srv = Bun.serve({
+    hostname: '127.0.0.1',
     port: 0,
     fetch(req, server) {
       // @ts-ignore — Bun upgrade signature varies by version
@@ -102,6 +103,7 @@ function startMockServer() {
   });
   server = srv;
   serverPort = srv.port ?? 0;
+  await waitForMockServer(new URL(`http://127.0.0.1:${serverPort}`));
   return srv;
 }
 
@@ -198,9 +200,9 @@ function createMockTrigger(overrides?: Partial<AgentTrigger>): AgentTrigger {
 // === Tests ===
 
 describe('OpenClawClient', () => {
-  beforeEach(() => {
-    startMockServer();
-  });
+  beforeEach(async () => {
+    await startMockServer();
+  }, 15_000);
 
   afterEach(async () => {
     await stopMockServer();
@@ -407,9 +409,9 @@ describe('OpenClawClient', () => {
 });
 
 describe('OpenClawAgentProvider', () => {
-  beforeEach(() => {
-    startMockServer();
-  });
+  beforeEach(async () => {
+    await startMockServer();
+  }, 15_000);
 
   afterEach(async () => {
     await stopMockServer();
