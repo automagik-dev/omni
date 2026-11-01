@@ -103,7 +103,7 @@ async function readChatParticipant(
 
 /**
  * Clear agent session for the given user and chat.
- * Tries IAgentProvider.resetSession() first (supports OpenClaw, Webhook, etc.),
+ * Tries IAgentProvider.resetSession() first (supports Webhook, Agno, etc.),
  * falls back to direct AgnoOS client for legacy.
  */
 async function resolveCleanupPersonId(
@@ -209,9 +209,8 @@ export async function clearAgentSession(
     throw new Error('Canonical KHAL session resolution failed; refusing blind legacy Agno reset');
   }
 
-  // Try IAgentProvider.resetSession() first (covers OpenClaw, Agno, Claude, etc.)
-  // Pass chatId so providers that build their own key format (e.g. OpenClaw)
-  // can reconstruct the correct session key instead of using the generic sessionId.
+  // Try IAgentProvider.resetSession() first (covers Agno, Claude, etc.)
+  // Pass chatId so providers can reconstruct their session key.
   // Pass instanceId for providers that persist session state scoped by instance.
   // Extend instance with transient dispatch fields required by resolveProvider.
   // applyAgentFkOverrides stamps agentInternalId / agentType / agentProviderId from the
@@ -221,13 +220,7 @@ export async function clearAgentSession(
   // applyAgentFkOverrides threads the trusted tenant into its own discrete DB
   // block (via runDispatchDb); no extra wrap here.
   await applyAgentFkOverrides(db, agentId, dispatchInstance, trustedTenantId ?? undefined);
-  // `providerRecord`'s secrets were opened inside the worker scope above; this
-  // resolution deliberately runs OUTSIDE it (a worker transaction must not span
-  // the provider call), so the tenant is threaded rather than read from the
-  // ambient scope — otherwise the shared OpenClaw client built with THIS
-  // tenant's device key would be pooled in the scope-less bucket and reused by
-  // the next tenant (G5; ADR-0008).
-  const agentProvider = resolveProvider(providerRecord, dispatchInstance, db, trustedTenantId ?? null);
+  const agentProvider = resolveProvider(providerRecord, dispatchInstance, db);
   if (agentProvider?.resetSession) {
     await agentProvider.resetSession(sessionId, chatId, instanceId);
     if (legacySessionId !== sessionId) {

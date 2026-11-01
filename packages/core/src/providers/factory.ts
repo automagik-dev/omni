@@ -2,7 +2,7 @@
  * Provider Client Factory
  *
  * Creates provider clients based on schema type.
- * Only Agno is created here — Webhook and OpenClaw use their own constructors.
+ * Webhook and NATS Genie providers use their own constructors.
  */
 
 import type { ProviderSchema } from '../types/agent';
@@ -10,6 +10,7 @@ import { createA2AClient } from './a2a-client';
 import { createAgUiClient } from './ag-ui-client';
 import { createAgnoClient } from './agno-client';
 import { type ClaudeCodeConfig, createClaudeCodeClient } from './claude-code-client';
+import { assertProviderAvailable } from './removed-providers';
 import { type IAgentClient, ProviderError } from './types';
 
 /**
@@ -35,6 +36,7 @@ export type ProviderClient = IAgentClient;
  * @throws ProviderError if schema is not supported
  */
 export function createProviderClient(config: ProviderClientConfig): ProviderClient {
+  assertProviderAvailable(config.schema);
   switch (config.schema) {
     case 'agno':
       return createAgnoClient({
@@ -51,16 +53,6 @@ export function createProviderClient(config: ProviderClientConfig): ProviderClie
         'NOT_FOUND',
         400,
         { schema: 'webhook', hint: 'Use new WebhookAgentProvider(id, name, config) instead' },
-      );
-
-    case 'openclaw':
-      // OpenClaw providers are created via OpenClawAgentProvider + OpenClawClient,
-      // not through the legacy createProviderClient factory.
-      throw new ProviderError(
-        'OpenClaw providers should be created via OpenClawAgentProvider, not createProviderClient',
-        'NOT_FOUND',
-        400,
-        { schema: 'openclaw', hint: 'Use createOpenClawProvider(id, name, clientConfig, providerConfig) instead' },
       );
 
     case 'ag-ui':
@@ -114,7 +106,6 @@ export function isProviderSchemaSupported(schema: ProviderSchema): boolean {
   return (
     schema === 'agno' ||
     schema === 'webhook' ||
-    schema === 'openclaw' ||
     schema === 'claude-code' ||
     schema === 'ag-ui' ||
     schema === 'a2a' ||
@@ -126,5 +117,5 @@ export function isProviderSchemaSupported(schema: ProviderSchema): boolean {
  * Get list of currently supported provider schemas
  */
 export function getSupportedProviderSchemas(): ProviderSchema[] {
-  return ['agno', 'webhook', 'openclaw', 'claude-code', 'ag-ui', 'a2a', 'nats-genie'];
+  return ['agno', 'webhook', 'claude-code', 'ag-ui', 'a2a', 'nats-genie'];
 }

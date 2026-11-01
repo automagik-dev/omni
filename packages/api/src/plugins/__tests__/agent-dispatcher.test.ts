@@ -78,12 +78,6 @@ mock.module('@omni/core', () => {
   // webhook schema, and the stub, applied process-wide, replaced the real provider for
   // agent-dispatch-fallback-identity.test.ts (#1408), which drives the real webhook path.
 
-  // NOTE: OpenClawAgentProvider and OpenClawClient are NOT mocked here.
-  // Bun's mock.module merges with the real module, so real classes pass through.
-  // Mocking them would contaminate openclaw.test.ts (which imports from relative
-  // paths but shares the module graph via Bun's deduplication).
-  // No dispatcher test exercises the OpenClaw code path (all use schema: 'agno').
-
   // createLogger is NOT mocked — the real implementation passes through via
   // bun's merge behavior, keeping logger.test.ts and other test files working.
   return {

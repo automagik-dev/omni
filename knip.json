@@ -90,9 +90,6 @@
     },
     "packages/media-processing": {
       "project": ["src/**/*.ts"]
-    },
-    "packages/plugin-openclaw": {
-      "project": ["src/**/*.ts"]
     }
   },
   "ignoreWorkspaces": ["packages/sdk", "packages/sdk-go", "packages/sdk-python", "packages/audio-decode-shim"],

@@ -39,7 +39,7 @@ expected_paths = {
             "channel-hermes", "channel-internal", "channel-sdk", "channel-slack",
             "channel-telegram", "channel-twilio-whatsapp", "channel-whatsapp",
             "channel-whatsapp-business", "cli", "core", "db", "media-processing",
-            "plugin-openclaw", "sdk", "voice-client",
+            "sdk", "voice-client",
         )
     },
 }
