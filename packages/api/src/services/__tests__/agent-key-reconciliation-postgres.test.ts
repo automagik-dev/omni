@@ -14,8 +14,12 @@ import {
 } from '@omni/db';
 import { assertPgTestRole, pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { eq, sql } from 'drizzle-orm';
+import { Hono } from 'hono';
+import { CacheKeys, apiKeyCache } from '../../cache';
 import { DEFAULT_TURN_SCOPES } from '../../constants/scopes';
+import { authMiddleware } from '../../middleware/auth';
 import { __test__ as dispatcher } from '../../plugins/agent-dispatcher';
+import type { AppVariables } from '../../types';
 import { reconcileAgentKeys } from '../agent-key-reconciliation';
 import { ApiKeyService } from '../api-keys';
 
@@ -104,6 +108,71 @@ postgresDescribe('agent key startup reconciliation (real PostgreSQL)', () => {
   function seed(name: string, instanceIds?: string[], createdBy = 'system:auto-provision') {
     return keys.create({ name, instanceIds, scopes: [...DEFAULT_TURN_SCOPES], createdBy });
   }
+
+  function authenticate(secret: string) {
+    const app = new Hono<{ Variables: AppVariables }>();
+    app.use('*', async (c, next) => {
+      c.set('services', { apiKeys: keys } as AppVariables['services']);
+      await next();
+    });
+    app.use('*', authMiddleware);
+    app.get('/probe', (c) => c.json({ keyId: c.get('apiKey')?.id }));
+    return app.request('/probe', { headers: { 'x-api-key': secret } });
+  }
+
+  for (const instanceIds of [undefined, []]) {
+    test(`a ${JSON.stringify(instanceIds) ?? 'NULL'}-list auto agent key cannot authenticate, including cached entries`, async () => {
+      const result = await seed(`agent:auth-${crypto.randomUUID()}`, instanceIds);
+      expect(result.key.status).toBe('active');
+      expect((await authenticate(result.plainTextKey)).status).toBe(401);
+      const cacheKey = CacheKeys.apiKey(result.key.keyHash);
+      // Exercise both current provenance-bearing entries and pre-upgrade cache entries.
+      for (const provenance of [{ createdBy: 'system:auto-provision' }, {}]) {
+        await apiKeyCache.set(cacheKey, {
+          id: result.key.id,
+          name: result.key.name,
+          status: result.key.status,
+          scopes: result.key.scopes,
+          instanceIds: result.key.instanceIds,
+          expiresAt: result.key.expiresAt,
+          ...provenance,
+        });
+        expect((await authenticate(result.plainTextKey)).status).toBe(401);
+        expect(await apiKeyCache.get(cacheKey)).toBeNull();
+      }
+      expect((await keys.getById(result.key.id))?.status).toBe('active');
+    });
+  }
+
+  test('a narrow auto agent key authenticates on both database and cached paths', async () => {
+    const { instance } = await binding();
+    const result = await seed(`agent:auth-${crypto.randomUUID()}`, [instance.id]);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const response = await authenticate(result.plainTextKey);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ keyId: result.key.id });
+    }
+  });
+
+  test('unrestricted operator/admin keys and non-agent system keys keep authenticating', async () => {
+    for (const instanceIds of [undefined, []]) {
+      for (const scopes of [['messages:send'], ['*']]) {
+        const result = await keys.create({
+          name: `agent:operator-${crypto.randomUUID()}`,
+          createdBy: 'operator',
+          scopes,
+          instanceIds,
+        });
+        for (let attempt = 0; attempt < 2; attempt++) {
+          expect((await authenticate(result.plainTextKey)).status).toBe(200);
+        }
+        await apiKeyCache.set(CacheKeys.apiKey(result.key.keyHash), { ...result.key, createdBy: undefined });
+        expect((await authenticate(result.plainTextKey)).status).toBe(200);
+      }
+    }
+    const unrelated = await seed('unrelated-system-key');
+    expect((await authenticate(unrelated.plainTextKey)).status).toBe(200);
+  });
 
   async function dispatch(instance: Awaited<ReturnType<typeof instanceFor>>) {
     const open = mock(async (_options: { apiKeyId: string }) => ({ id: 'turn' }));
