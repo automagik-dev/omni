@@ -106,6 +106,26 @@ test('the install terminal waits at a prompt with the command typed, and runs no
   assert.deepEqual(handle.writes, ['\r'])
 })
 
+test('the install terminal downloads the pinned Bun when an existing Bun has another version', async (t) => {
+  const subprocess = fakeSubprocess()
+  let downloaded = null
+  const { call, rt, home } = start(t, {
+    subprocess,
+    findBun: undefined,
+    downloadBun: async ({ home }) => {
+      downloaded = join(home, '.omni/runtime/bun/bun')
+      return downloaded
+    },
+  })
+  mkdirSync(join(home, '.bun/bin'), { recursive: true })
+  writeFileSync(join(home, '.bun/bin/bun'), "#!/bin/sh\nprintf '1.3.14\\n'\n", { mode: 0o755 })
+  const opened = await call('omni-terminal-open', { kind: 'install' })
+  await rt.omniTerminalReady(opened.terminal)
+  assert.equal(downloaded, join(home, '.omni/runtime/bun/bun'))
+  assert.equal(subprocess.spawned[0].spec.env.PATH.split(':')[0], join(home, '.omni/runtime/bun'))
+  assert.equal((await call('omni-terminal-read', { terminal: opened.terminal })).state, 'ready')
+})
+
 test('exit 0 links this host with the new Omni\'s own key, and the key never reaches the page', async (t) => {
   const subprocess = fakeSubprocess()
   const { call, rt, home, links } = start(t, { subprocess })

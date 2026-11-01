@@ -18,6 +18,7 @@
 #   4. Compiles a standalone binary to ~/.omni/bin/omni
 #   5. Preserves existing ~/.omni/config.json
 # ============================================================================
+# Set OMNI_ALLOW_BUN_DOWNGRADE=1 only to consent to replacing a newer Bun.
 set -euo pipefail
 
 REPO="https://github.com/automagik-dev/omni.git"
@@ -98,6 +99,33 @@ if [[ -f "$BIN_DIR/omni" ]] && [[ "$FORCE" != "true" ]]; then
   info "Updating from ${BRANCH}..."
 fi
 
+# These entrypoints also run directly from curl, so keep the replacement guard standalone.
+# An explicit opt-in is required before replacing a newer machine-wide Bun.
+prepare_bun_install() {
+  local candidate found previous=""
+  for candidate in "$(command -v bun || true)" "$HOME/.bun/bin/bun"; do
+    [[ -x "$candidate" && "$candidate" != "$previous" ]] || continue
+    previous="$candidate"
+    found="$("$candidate" --version)" || { echo "Cannot read Bun version at $candidate; nothing replaced."; return 1; }
+    printf 'Found Bun %s at %s; installation will replace %s with Bun 1.4.4.\n' "$found" "$candidate" "$HOME/.bun/bin/bun"
+    if [[ ! "$found" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+      echo "Cannot compare Bun version '$found'; nothing replaced."
+      return 1
+    fi
+    if awk -v found="$found" 'BEGIN {
+      split(found, v, "."); split("1.4.4", required, ".");
+      for (i = 1; i <= 3; i++) {
+        if (v[i]+0 > required[i]+0) exit 0;
+        if (v[i]+0 < required[i]+0) exit 1;
+      }
+      exit 1;
+    }' && [[ "${OMNI_ALLOW_BUN_DOWNGRADE:-}" != "1" ]]; then
+      echo "Refusing to downgrade Bun $found. Re-run with OMNI_ALLOW_BUN_DOWNGRADE=1 to consent; nothing replaced."
+      return 1
+    fi
+  done
+}
+
 # ============================================================================
 # Ensure dependencies
 # ============================================================================
@@ -112,21 +140,18 @@ else
 fi
 
 # bun
-if has_cmd bun; then
+if has_cmd bun && [[ "$(bun --version)" == "1.4.4" ]]; then
   ok "bun $(bun --version)"
 else
-  info "Installing bun..."
-  curl -fsSL https://bun.sh/install | bash -s "bun-v1.4.2" >/dev/null 2>&1
+  prepare_bun_install || exit 1
+  info "Installing bun 1.4.4..."
+  curl -fsSL https://bun.sh/install | bash -s "bun-v1.4.4" >/dev/null 2>&1 || fail "Bun download/install failed; install Bun 1.4.4 manually and re-run."
   export BUN_INSTALL="$HOME/.bun"
   export PATH="$BUN_INSTALL/bin:$PATH"
-  # Source shell config to pick up bun
-  for rc in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
-    [[ -f "$rc" ]] && source "$rc" 2>/dev/null || true
-  done
-  if has_cmd bun; then
+  if has_cmd bun && [[ "$(bun --version)" == "1.4.4" ]]; then
     ok "bun $(bun --version) installed"
   else
-    fail "Failed to install bun. Install manually: https://bun.sh"
+    fail "Bun 1.4.4 is required; found $(command -v bun || echo no-bun). Check $BUN_INSTALL/bin/bun and PATH."
   fi
 fi
 

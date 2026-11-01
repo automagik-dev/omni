@@ -118,7 +118,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
 
       - name: Turbo remote cache
         uses: rharkor/caching-for-turbo@35a1f2e1570392a7fc1c03552acaf6340f0c5eef # v2.2.1
@@ -155,7 +155,7 @@ jobs:
           VERSION_BASE_BRANCH: ${{ github.base_ref || 'dev' }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
-          bun test scripts/verify-versions.test.ts scripts/plugin-versions.test.ts
+          bun test scripts/verify-versions.test.ts scripts/plugin-versions.test.ts scripts/bun-version.test.ts scripts/bun-installers.test.ts
           if [ "${EVENT_NAME}" = "push" ]; then
             bun scripts/verify-versions.ts
           else
@@ -377,7 +377,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
 
       - name: Cache bun packages
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
@@ -460,7 +460,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
 
       - name: Cache bun packages
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
@@ -544,7 +544,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
 
       - name: Cache the pinned DSH harness
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
@@ -599,7 +599,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
 
       - name: Cache the pinned DSH harness
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
@@ -637,7 +637,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
 
       - name: Turbo remote cache
         uses: rharkor/caching-for-turbo@35a1f2e1570392a7fc1c03552acaf6340f0c5eef # v2.2.1

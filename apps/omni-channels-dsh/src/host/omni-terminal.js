@@ -122,7 +122,7 @@ export function install(rt, deps = {}) {
   async function planFor(entry) {
     const bunFolders = [env.BUN_INSTALL ? join(env.BUN_INSTALL, 'bin') : null, join(home, '.bun', 'bin')]
     if (entry.kind === 'install') {
-      let bun = (deps.findBun ?? findBun)({ env, home })
+      let bun = await (deps.findBun ?? findBun)({ env, home })
       if (bun === null) {
         entry.step = 'download-bun'
         bun = await (deps.downloadBun ?? downloadBun)({ env, home, fetchImpl })

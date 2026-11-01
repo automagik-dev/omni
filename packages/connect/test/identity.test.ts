@@ -6,7 +6,7 @@
  */
 import { beforeAll, describe, expect, spyOn, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ConnectConfigError, type OidcSettings, createOidcClient, readClientSecret } from '../src/oidc';
@@ -194,8 +194,10 @@ describe('identity: configuration and provider bounds', () => {
     const dir = mkdtempSync(join(tmpdir(), 'connect-tls-'));
     const [key, cert] = [join(dir, 'key.pem'), join(dir, 'cert.pem')];
     const subject = ['-subj', '/CN=localhost', '-addext', 'subjectAltName=DNS:localhost', '-days', '1', '-nodes'];
-    const ec = ['-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-keyout', key, '-out', cert];
-    expect(spawnSync('openssl', ['req', '-x509', ...ec, ...subject]).status).toBe(0);
+    // macOS LibreSSL's EC key encoding is rejected by Bun's TLS server. This fixture
+    // tests certificate trust, so use an RSA key supported by both TLS implementations.
+    const rsa = ['-newkey', 'rsa:2048', '-keyout', key, '-out', cert];
+    expect(spawnSync('openssl', ['req', '-x509', ...rsa, ...subject]).status).toBe(0);
     const tls = { key: readFileSync(key, 'utf8'), cert: readFileSync(cert, 'utf8') };
     let base = '';
     const doc = () => ({
@@ -206,6 +208,7 @@ describe('identity: configuration and provider bounds', () => {
     });
     const server = Bun.serve({ port: 0, hostname: '127.0.0.1', tls, fetch: () => Response.json(doc()) });
     base = `https://localhost:${server.port}`;
+    const previousTls = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
     process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
     try {
       expect((await fetch(`${base}/.well-known/openid-configuration`)).status).toBe(200);
@@ -227,8 +230,10 @@ describe('identity: configuration and provider bounds', () => {
       for (; error instanceof Error; error = error.cause) chain.push(`${error.name}: ${error.message}`);
       expect(chain.join(' | ')).toMatch(/ProviderUnavailableError.*self.signed certificate/i);
     } finally {
-      Reflect.deleteProperty(process.env, 'NODE_TLS_REJECT_UNAUTHORIZED');
+      if (previousTls === undefined) Reflect.deleteProperty(process.env, 'NODE_TLS_REJECT_UNAUTHORIZED');
+      else process.env.NODE_TLS_REJECT_UNAUTHORIZED = previousTls;
       server.stop(true);
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });

@@ -34,6 +34,7 @@ import {
   spawnChildProcess,
 } from '../sandbox-supervisor.js';
 import {
+  SANDBOX_BUN_VERSION,
   SANDBOX_PGSERVE_VERSION,
   SANDBOX_PREFERRED_PORTS,
   type SandboxChildSpec,
@@ -122,6 +123,7 @@ function fakeDeps(overrides: Partial<SandboxDeps> = {}, { serviceManager = false
     uid: 501,
     userHome,
     bun: BUN,
+    bunVersion: SANDBOX_BUN_VERSION,
     env: LEAKY_ENV,
     run: async (cmd, opts) => {
       runs.push({ cmd, cwd: opts.cwd, env: opts.env });
@@ -192,6 +194,14 @@ describe('resolveSandboxHome', () => {
 });
 
 describe('installSandbox', () => {
+  test('refuses a different host Bun before writing state or changing services', async () => {
+    const { deps, runs, detached } = fakeDeps({ bunVersion: '1.3.14' });
+    await expect(installSandbox({ home, defaultHome }, deps)).rejects.toThrow(`requires Bun ${SANDBOX_BUN_VERSION}`);
+    expect(runs).toEqual([]);
+    expect(detached).toEqual([]);
+    expect(readSandboxState(sandboxLayout(home))).toBeNull();
+  });
+
   test('installs the runtime, picks ports, writes a 0600 config and starts the supervisor', async () => {
     const { deps, runs, detached } = fakeDeps();
     const result = await installSandbox({ home, defaultHome, packageSpec: '2.261023.8' }, deps);
@@ -220,6 +230,7 @@ describe('installSandbox', () => {
     });
 
     const layout = sandboxLayout(home);
+    expect(readSandboxState(layout)).toMatchObject({ bun: BUN, bunVersion: SANDBOX_BUN_VERSION });
     const apiKey = readSandboxApiKey(layout);
     expect(apiKey).toMatch(/^omni_sk_/);
     expect(statSync(layout.configPath).mode & 0o777).toBe(0o600);

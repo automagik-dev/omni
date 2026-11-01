@@ -76,6 +76,12 @@ describe('the Bun version', () => {
       expect(installs.map(([, version]) => version)).toEqual(installs.map(() => BUN));
     }
   });
+
+  test('sandbox and app bootstrap pins follow the same runtime', () => {
+    expect(read('packages/cli/src/sandbox.ts').match(/SANDBOX_BUN_VERSION = '([^']+)'/)?.[1]).toBe(BUN);
+    expect(read('apps/omni-channels-dsh/src/host/omni-local.js').match(/BUN_VERSION = '([^']+)'/)?.[1]).toBe(BUN);
+    expect(JSON.parse(read('packages/connect/package.json')).engines.bun).toBe(BUN);
+  });
 });
 
 describe('what Bun 1.4 changed', () => {

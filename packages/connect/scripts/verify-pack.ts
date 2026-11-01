@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * Pack contract for @omni/connect, run under the claimed runtime only (Bun 1.4.2):
+ * Pack contract for @omni/connect, run under the claimed runtime only (Bun 1.4.4):
  *
  *   bun packages/connect/scripts/verify-pack.ts [--archive <file.tgz>]
  *
@@ -11,7 +11,7 @@
  * lifecycle scripts) and sources that import only node: builtins, each other and declared
  * dependencies, with no secret-shaped content. The installed dependency closure must match
  * DEPENDENCY_CLOSURE with permissive licenses and no install scripts. Finally the archive is
- * extracted outside the workspace and imported by Bun 1.4.2. Exit 0 pass, 1 fail, 2 usage.
+ * extracted outside the workspace and imported by Bun 1.4.4. Exit 0 pass, 1 fail, 2 usage.
  */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -28,7 +28,7 @@ import {
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 
-export const REQUIRED_BUN = '1.4.2';
+export const REQUIRED_BUN = '1.4.4';
 /** The closed list of files the archive may carry: sources (which are also the types), manifest, license. */
 export const FILES = [
   'LICENSE',

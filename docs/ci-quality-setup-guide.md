@@ -35,7 +35,7 @@ bun init -y
     "clean": "turbo clean && rm -rf node_modules",
     "prepare": "husky"
   },
-  "packageManager": "bun@1.4.2",
+  "packageManager": "bun@1.4.4",
   "engines": { "node": ">=20" }
 }
 ```
