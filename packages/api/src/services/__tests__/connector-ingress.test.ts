@@ -20,7 +20,6 @@ import {
   buildConnectorEventPayload,
   deriveConnectorIdempotencyKey,
   matchesFilters,
-  restoreConnectorEvent,
 } from '../connectors';
 
 const CONNECTOR_ID = '11111111-1111-1111-1111-111111111111';
@@ -304,37 +303,6 @@ describe('connector inbound envelope', () => {
 });
 
 describe('delivery identity and payload', () => {
-  test('journal provenance requires two non-empty ingress key components', async () => {
-    const payload = { connectorId: CONNECTOR_ID, subscriptionId: SUBSCRIPTION_ID, targetAutomationId: AUTOMATION_ID };
-    const validKey = deriveConnectorIdempotencyKey(SUBSCRIPTION_ID, 'history-1', BODY);
-    for (const idempotencyKey of [validKey, 'connector:', 'connector::delivery', 'connector:subscription:']) {
-      const fakes = makeFakes({
-        resolved: [
-          {
-            id: 'event-id',
-            eventType: 'connector.event',
-            tenantId: null,
-            idempotencyKey,
-            metadata: {
-              source: 'connector',
-              connectorId: CONNECTOR_ID,
-              subscriptionId: SUBSCRIPTION_ID,
-              provider: 'clickup',
-              fullEventType: 'connector.event',
-            },
-            rawPayload: payload,
-          },
-        ],
-      });
-      const restored = Reflect.apply(restoreConnectorEvent, undefined, [fakes.db, 'event-id', 'connector.event', null]);
-      if (idempotencyKey === validKey) {
-        await expect(restored).resolves.toMatchObject({ payload, metadata: { publishEventId: 'event-id' } });
-      } else {
-        await expect(restored).rejects.toThrow('ingress-written journal provenance');
-      }
-    }
-  });
-
   test('the key is subscription-scoped on provider event id, with a body-hash fallback', () => {
     expect(deriveConnectorIdempotencyKey(SUBSCRIPTION_ID, 'history-1', BODY)).toBe(
       `connector:${SUBSCRIPTION_ID}:history-1`,

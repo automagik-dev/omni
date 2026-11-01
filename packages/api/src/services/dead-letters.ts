@@ -25,7 +25,7 @@ import { deadLetterEvents } from '@omni/db';
 import { and, desc, eq, gte, inArray, lte, or, sql } from 'drizzle-orm';
 import { scopedHandle } from '../tenancy/tenant-scope';
 import { runTenantWorkDb } from '../tenancy/worker-tenant-context';
-import { restoreConnectorEvent } from './connectors';
+import { ConnectorProvenanceError, restoreConnectorEvent } from './connectors';
 
 const log = createLogger('dead-letters');
 
@@ -326,7 +326,8 @@ export class DeadLetterService {
             status: 'pending',
             error: `${deadLetter.error}\n[Manual-retry]: ${String(err)}`,
             manualRetryCount: deadLetter.manualRetryCount + 1,
-            nextAutoRetryAt: calculateNextAutoRetryAt(newAutoRetryCount),
+            nextAutoRetryAt:
+              err instanceof ConnectorProvenanceError ? null : calculateNextAutoRetryAt(newAutoRetryCount),
           })
           .where(eq(deadLetterEvents.id, id));
 
@@ -439,26 +440,7 @@ export class DeadLetterService {
           succeeded++;
           log.info('Auto-retry succeeded', { deadLetterId: deadLetter.id });
         } catch (err) {
-          // Failed - increment retry count and schedule next
-          const newRetryCount = deadLetter.autoRetryCount + 1;
-          const nextRetry = calculateNextAutoRetryAt(newRetryCount, now);
-
-          await this.db
-            .update(deadLetterEvents)
-            .set({
-              status: 'pending',
-              autoRetryCount: newRetryCount,
-              nextAutoRetryAt: nextRetry,
-              error: `${deadLetter.error}\n[Auto-retry ${newRetryCount}]: ${String(err)}`,
-            })
-            .where(eq(deadLetterEvents.id, deadLetter.id));
-
-          failed++;
-          log.warn('Auto-retry failed', {
-            deadLetterId: deadLetter.id,
-            retryCount: newRetryCount,
-            nextRetryAt: nextRetry?.toISOString() ?? 'manual-only',
-          });
+          failed += await this.recordAutoRetryFailure(deadLetter, err, now);
         }
       }
     }
@@ -468,6 +450,31 @@ export class DeadLetterService {
     }
 
     return { processed, succeeded, failed };
+  }
+
+  private async recordAutoRetryFailure(
+    deadLetter: { id: string; autoRetryCount: number; error: string },
+    error: unknown,
+    now: Date,
+  ): Promise<0 | 1> {
+    const provenanceRefused = error instanceof ConnectorProvenanceError;
+    const retryCount = deadLetter.autoRetryCount + (provenanceRefused ? 0 : 1);
+    const nextRetry = provenanceRefused ? null : calculateNextAutoRetryAt(retryCount, now);
+    await this.db
+      .update(deadLetterEvents)
+      .set({
+        status: 'pending',
+        autoRetryCount: retryCount,
+        nextAutoRetryAt: nextRetry,
+        error: `${deadLetter.error}\n[Auto-retry ${provenanceRefused ? 'skipped' : retryCount}]: ${String(error)}`,
+      })
+      .where(eq(deadLetterEvents.id, deadLetter.id));
+    log.warn(provenanceRefused ? 'Auto-retry skipped' : 'Auto-retry failed', {
+      deadLetterId: deadLetter.id,
+      retryCount,
+      nextRetryAt: nextRetry?.toISOString() ?? 'manual-only',
+    });
+    return provenanceRefused ? 0 : 1;
   }
 
   /**

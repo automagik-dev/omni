@@ -27,6 +27,7 @@ import {
   createAutomationEngine,
   createTemplateContext,
   executeAction,
+  isConnectorEventType,
 } from '@omni/core';
 import {
   type Database,
@@ -81,38 +82,33 @@ function inMemoryBus(): {
 } {
   const journal: OmniEvent[] = [];
   const handlers: Array<{ pattern: string; handler: GenericEventHandler }> = [];
+  const publishInternal: EventBus['publishGeneric'] = async (type, payload, metadata) => {
+    const id = (metadata?.publishEventId as string | undefined) ?? randomUUID();
+    const event = { id, type, payload, metadata: { correlationId: id, ...metadata }, timestamp: Date.now() };
+    journal.push(event);
+    for (const { pattern, handler } of handlers) {
+      const matches = pattern.endsWith('.>')
+        ? type === pattern.slice(0, -2) || type.startsWith(`${pattern.slice(0, -2)}.`)
+        : pattern === type;
+      if (matches) await handler(event);
+    }
+    return { id, sequence: 0, stream: '' };
+  };
   const bus: EventBus & ConnectorEventPublisher = {
     async connect() {},
     async publish() {
       return { id: '', sequence: 0, stream: '' };
     },
     async publishGeneric(type, payload, metadata) {
-      const id = (metadata?.publishEventId as string | undefined) ?? randomUUID();
-      const event = {
-        id,
-        type,
-        payload,
-        metadata: { correlationId: id, ...metadata },
-        timestamp: Date.now(),
-      };
-      journal.push(event);
-      for (const { pattern, handler } of handlers) {
-        // NATS `foo.>` matches `foo` itself and every `foo.*` subject (the
-        // engine subscribes `connector.event.>` while the published type is
-        // exactly `connector.event`).
-        const matches = pattern.endsWith('.>')
-          ? type === pattern.slice(0, -2) || type.startsWith(`${pattern.slice(0, -2)}.`)
-          : pattern === type;
-        if (matches) await handler(event);
-      }
-      return { id, sequence: 0, stream: '' };
+      if (isConnectorEventType(type)) throw new Error('Connector events require publishConnector');
+      return publishInternal(type, payload, metadata);
     },
     async publishConnector(
       type: `connector.${string}`,
       payload: Record<string, unknown>,
       metadata: { publishEventId: string },
     ) {
-      return this.publishGeneric(type, payload, metadata);
+      return publishInternal(type, payload, metadata);
     },
     async subscribe() {
       return { id: randomUUID(), pattern: '', unsubscribe: async () => {} };
@@ -391,13 +387,16 @@ postgresDescribe('ClickUp connector acceptance loop (real PostgreSQL)', () => {
         expect(manual.success).toBe(false);
         expect(manual.error).toContain('ingress-written journal provenance');
         expect((await services.deadLetters.getById(forged.id)).error).toContain('[Manual-retry]');
+        expect((await services.deadLetters.getById(forged.id)).nextAutoRetryAt).toBeNull();
         await db
           .update(deadLetterEvents)
           .set({ nextAutoRetryAt: new Date(0) })
           .where(eq(deadLetterEvents.id, forged.id));
         const auto = await services.deadLetters.processAutoRetries();
         expect(auto.succeeded).toBe(0);
+        expect(auto.failed).toBe(0);
         expect((await services.deadLetters.getById(forged.id)).error).toContain('[Auto-retry');
+        expect((await services.deadLetters.getById(forged.id)).nextAutoRetryAt).toBeNull();
       }
       expect(fired).toEqual([]);
       expect(journal.filter((event) => event.type.startsWith('connector.'))).toEqual([]);

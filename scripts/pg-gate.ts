@@ -102,6 +102,7 @@ let dataDir: string | null = null;
 let outputDir: string | null = null;
 let childProcess: ReturnType<typeof Bun.spawn> | null = null;
 const keep = process.argv.includes('--keep');
+let keptReported = false;
 const binaries = resolvePgBinaries();
 const cleanup = () => {
   childProcess?.kill();
@@ -112,6 +113,9 @@ const cleanup = () => {
   if (dataDir && !keep) {
     destroyDisposableCluster(dataDir, binaries);
     dataDir = null;
+  } else if (dataDir && !keptReported) {
+    process.stdout.write(`pg-gate: cluster KEPT at ${dataDir} (destroy it yourself)\n`);
+    keptReported = true;
   }
 };
 const release = onDisposableExit(cleanup);
@@ -217,8 +221,6 @@ try {
   release();
   if (destroyed) {
     process.stdout.write('pg-gate: disposable cluster destroyed\n');
-  } else if (dataDir) {
-    process.stdout.write(`pg-gate: cluster KEPT at ${dataDir} (destroy it yourself)\n`);
   }
 }
 

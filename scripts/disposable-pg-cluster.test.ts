@@ -1,12 +1,24 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDisposableCluster, isDisposablePgPort } from './disposable-pg-cluster';
+import { createDisposableCluster, destroyDisposableCluster, isDisposablePgPort } from './disposable-pg-cluster';
 
 const scratch: string[] = [];
+const parentTmpDir = tmpdir();
+let privateTmpDir: string;
+let originalTmpDir: string | undefined;
+beforeEach(() => {
+  originalTmpDir = process.env.TMPDIR;
+  privateTmpDir = mkdtempSync(join(parentTmpDir, 'omni-pg-test-'));
+  process.env.TMPDIR = privateTmpDir;
+  expect(tmpdir()).toBe(privateTmpDir);
+});
 afterEach(() => {
+  if (originalTmpDir === undefined) Reflect.deleteProperty(process.env, 'TMPDIR');
+  else process.env.TMPDIR = originalTmpDir;
   for (const dir of scratch.splice(0)) rmSync(dir, { recursive: true, force: true });
+  rmSync(privateTmpDir, { recursive: true, force: true });
 });
 function fixture(source: string): string {
   const dir = mkdtempSync(join(tmpdir(), 'omni-pg-fixture-'));
@@ -16,7 +28,7 @@ function fixture(source: string): string {
   return path;
 }
 function clusterDirs(): string[] {
-  return readdirSync(tmpdir())
+  return readdirSync(privateTmpDir)
     .filter((name) => name.startsWith('omni-g3-pg-') || name.startsWith('omni-pg-gate-output-'))
     .sort();
 }
@@ -83,6 +95,44 @@ describe('disposable PostgreSQL isolation', () => {
     expect(clusterDirs()).toEqual(before);
   }, 20000);
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
+    test(`gate ${signal} with --keep reports the retained directory`, async () => {
+      const initdb = fixture(
+        `const { mkdirSync } = await import('node:fs'); mkdirSync(process.argv[process.argv.indexOf('--pgdata') + 1], { recursive: true });`,
+      );
+      const pgCtl = fixture('process.exit(0);');
+      const child = Bun.spawn(['bun', 'scripts/pg-gate.ts', '--keep'], {
+        env: { ...process.env, OMNI_PG_INITDB_BIN: initdb, OMNI_PG_CTL_BIN: pgCtl },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      try {
+        const reader = child.stdout.getReader();
+        let output = '';
+        while (!output.includes('disposable cluster on')) {
+          const next = await reader.read();
+          if (next.done) throw new Error('gate exited before creating cluster');
+          output += new TextDecoder().decode(next.value);
+        }
+        child.kill(signal);
+        expect(await child.exited).not.toBe(0);
+        for (;;) {
+          const next = await reader.read();
+          if (next.done) break;
+          output += new TextDecoder().decode(next.value);
+        }
+        const retained = /cluster KEPT at (.+) \(destroy it yourself\)/.exec(output)?.[1];
+        if (!retained) throw new Error(`missing kept cluster breadcrumb: ${output}`);
+        expect(retained.startsWith(privateTmpDir)).toBe(true);
+        expect(existsSync(retained)).toBe(true);
+        expect(output.match(/cluster KEPT at/g)).toHaveLength(1);
+        destroyDisposableCluster(retained, { initdb, pgCtl, psql: pgCtl });
+        expect(clusterDirs()).toEqual([]);
+      } finally {
+        child.kill();
+        await child.exited;
+      }
+    }, 20000);
+
     test(`gate ${signal} stops its cluster and deletes output and data directories`, async () => {
       const before = clusterDirs();
       const initdb = fixture(
