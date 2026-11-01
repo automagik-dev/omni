@@ -211,8 +211,9 @@ export const APPLICATION_SCOPED_TENANT_TABLES: readonly RlsExclusion[] = [
     table: 'agent_source_grants',
     justification:
       'Paired-agents slice 2 registers nullable tenant provenance alongside durable_consumers. ' +
-      'The agent-owned journal scan checks authenticated tenant and stored agent ownership before ' +
-      'matching active grants. There is no grant writer until slice 6, which must authorize writes. ' +
+      'No reader or writer exists in slice 2 group 1. The group 4 agent-owned scan must check the ' +
+      'authenticated tenant and stored agent ownership before matching active grants; ' +
+      "slice 6's writer must authorize writes. " +
       'The paired-agent flag refuses multitenancy; generic FORCE RLS would break the legacy boundary.',
   },
 ];

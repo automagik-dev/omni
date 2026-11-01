@@ -39,20 +39,24 @@ These operations still need brief catalog locks; schedule them accordingly.
 
 ## Verify definitions before starting the candidate
 
-With the authorized DDL identity, inspect definitions, not just names:
+With the authorized DDL identity, inspect definitions and validity, not just names:
 
 ```sql
-SELECT indexname, indexdef
-FROM pg_indexes
-WHERE schemaname = 'public' AND tablename = 'omni_events'
-  AND indexname IN (
+SELECT c.relname AS indexname, pg_get_indexdef(c.oid) AS indexdef,
+       i.indisvalid, i.indisready
+FROM pg_class c
+JOIN pg_index i ON i.indexrelid = c.oid
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = 'public' AND i.indrelid = 'public.omni_events'::regclass
+  AND c.relname IN (
     'omni_events_instance_type_seq_idx', 'omni_events_source_type_seq_idx',
     'omni_events_agent_type_seq_idx', 'omni_events_producing_key_idx'
   )
 ORDER BY indexname;
 ```
 
-All four rows must match these expected definitions (PostgreSQL's rendering):
+All four rows must have `indisvalid = t` and `indisready = t`, and match these
+expected definitions (PostgreSQL's rendering):
 
 ```sql
 CREATE INDEX omni_events_instance_type_seq_idx ON public.omni_events USING btree (instance_id, event_type, journal_seq) WHERE (instance_id IS NOT NULL)
@@ -61,7 +65,10 @@ CREATE INDEX omni_events_agent_type_seq_idx ON public.omni_events USING btree (a
 CREATE INDEX omni_events_producing_key_idx ON public.omni_events USING btree (producing_key_id) WHERE (producing_key_id IS NOT NULL)
 ```
 
-The final `--check` also checks that required indexes are valid and ready. Once
+The final `--check` reports missing, invalid or not-ready indexes as blockers
+only when the table reaches the 1,000,000-row estimate threshold (or its bounded
+probe reaches that threshold). Below it, exit 0 does not prove index readiness;
+require both validity columns above to be `t` regardless of the estimate. Once
 preparation and verification succeed, replace the serving binary and start the
 candidate. Its ordinary `CREATE INDEX IF NOT EXISTS` migrations no-op over the
 prepared indexes. Fresh or small databases can migrate in-band normally.

@@ -41,6 +41,16 @@
  *     finds every column and index present and only adds `NOT VALID`
  *     constraints and triggers, taking no long lock.
  *
+ * BOOT GUARD
+ * ----------
+ * The preflight uses pg_class.reltuples planner estimates and blocks pending
+ * high-volume indexes at DEFAULT_LARGE_TABLE_ROWS (1,000,000) rows or above.
+ * Never-analyzed tables (reltuples < 0) get a bounded probe; no exact count is
+ * taken. A stale low estimate can pass and allow an in-band blocking build.
+ * OMNI_ALLOW_BLOCKING_INDEX_BUILD=on skips the guard and accepts the downtime;
+ * this override is operator-only. Prepare before upgrading even with the
+ * paired-agent flag unset: docs/deployment/paired-agent-journal-indexes.md.
+ *
  * This is a repository-local, non-production mechanism. It reads no ambient
  * `DATABASE_URL`; the caller passes the target explicitly.
  */
