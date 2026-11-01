@@ -452,7 +452,7 @@ describe('doctor connector unmatched counters', () => {
     ['2026-11-01T17:00:00.000Z', 'WARN'],
     ['2026-10-31T18:00:00.000Z', 'WARN'],
     ['2026-10-31T17:59:59.999Z', 'OK'],
-    ['2026-11-01T18:00:00.001Z', 'OK'],
+    ['2026-11-01T18:00:00.001Z', 'WARN'],
     [null, 'OK'],
   ]) {
     test(`uses the injected 24h window for ${lastUnmatchedAt}`, async () => {

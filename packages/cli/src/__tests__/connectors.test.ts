@@ -286,7 +286,6 @@ describe('connector ingress CLI', () => {
     const secret = 'fake-stdin-pipe-secret';
     const script = `
       import { createOmniClient } from '@omni/sdk';
-import { z } from 'zod';
       import { createConnectorsCommand } from ${JSON.stringify(join(import.meta.dir, '..', 'commands/connectors.ts'))};
       const client = createOmniClient({ baseUrl: 'https://omni.test.invalid', apiKey: 'mock-only' });
       client.raw.use({ async onRequest({request}) {

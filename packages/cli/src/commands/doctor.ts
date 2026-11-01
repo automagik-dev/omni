@@ -1298,7 +1298,7 @@ export async function checkConnectorUnmatched(
           connector.lastUnmatchedAt === null ? Number.POSITIVE_INFINITY : now - Date.parse(connector.lastUnmatchedAt);
         checks.push({
           id: 'connector-unmatched',
-          level: connector.totalUnmatched > 0 && age >= 0 && age <= 24 * 60 * 60 * 1000 ? 'WARN' : 'OK',
+          level: connector.totalUnmatched > 0 && age <= 24 * 60 * 60 * 1000 ? 'WARN' : 'OK',
           detail: `${connector.name} (${connector.id}): total_unmatched=${connector.totalUnmatched} last_unmatched_at=${connector.lastUnmatchedAt ?? '-'} last_unmatched_event_type=${connector.lastUnmatchedEventType ?? '-'}`,
         });
       }
