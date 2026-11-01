@@ -29,7 +29,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import postgres from 'postgres';
 import { type Database, createDbHandle } from './client';
-import { provisionMigratedDatabase } from './pg-migrated-template';
+import { assertPgTestRole, pgRoleUrl, provisionMigratedDatabase } from './pg-migrated-template';
 import {
   CONNECTOR_INGRESS_ROLE,
   DEFAULT_ROLE_NAMES,
@@ -80,16 +80,6 @@ function runSqlOn(url: string, script: string): SqlResult {
   } finally {
     rmSync(file, { force: true });
   }
-}
-
-function urlFor(base: string, database: string, user?: { name: string; password: string }): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  if (user) {
-    url.username = user.name;
-    url.password = user.password;
-  }
-  return url.toString();
 }
 
 /** A private, fully migrated database — file-level clone of the template (#967). */
@@ -196,7 +186,7 @@ postgresDescribe('G3 enforcement (real PostgreSQL)', () => {
   beforeAll(async () => {
     // ---- enforced world -------------------------------------------------
     createMigratedDatabase(enforcedDbName);
-    const enforcedSuperUrl = urlFor(superUrl, enforcedDbName);
+    const enforcedSuperUrl = pgRoleUrl(superUrl, enforcedDbName);
     const seeded = runSqlOn(enforcedSuperUrl, SEED);
     if (seeded.exitCode !== 0) throw new Error(`seed failed: ${seeded.stderr}`);
 
@@ -230,25 +220,26 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE O
     await applyTenantRlsEnforcement(provisioner.db);
     await applyTenancyRoles(provisioner.db, passwords, DEFAULT_ROLE_NAMES, enforcedDbName, [LEGACY_SCOPED_ROLE]);
     legacyScoped = connect(
-      urlFor(superUrl, enforcedDbName, { name: LEGACY_SCOPED_ROLE, password: legacyScopedPassword }),
+      pgRoleUrl(superUrl, enforcedDbName, { name: LEGACY_SCOPED_ROLE, password: legacyScopedPassword }),
       1,
     );
 
-    ddl = connect(urlFor(superUrl, enforcedDbName, { name: DEFAULT_ROLE_NAMES.ddl, password: passwords.ddl }));
+    ddl = connect(pgRoleUrl(superUrl, enforcedDbName, { name: DEFAULT_ROLE_NAMES.ddl, password: passwords.ddl }));
     runtime = connect(
-      urlFor(superUrl, enforcedDbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }),
+      pgRoleUrl(superUrl, enforcedDbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }),
     );
+    await assertPgTestRole(runtime.db, DEFAULT_ROLE_NAMES.runtime);
     pooledRuntime = connect(
-      urlFor(superUrl, enforcedDbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }),
+      pgRoleUrl(superUrl, enforcedDbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }),
       1,
     );
     authPlane = connect(
-      urlFor(superUrl, enforcedDbName, { name: DEFAULT_ROLE_NAMES.authPlane, password: passwords.authPlane }),
+      pgRoleUrl(superUrl, enforcedDbName, { name: DEFAULT_ROLE_NAMES.authPlane, password: passwords.authPlane }),
     );
 
     // ---- legacy world ---------------------------------------------------
     createMigratedDatabase(legacyDbName);
-    const legacySuperUrl = urlFor(superUrl, legacyDbName);
+    const legacySuperUrl = pgRoleUrl(superUrl, legacyDbName);
     const legacySeeded = runSqlOn(legacySuperUrl, SEED);
     if (legacySeeded.exitCode !== 0) throw new Error(`legacy seed failed: ${legacySeeded.stderr}`);
     legacy = connect(legacySuperUrl);

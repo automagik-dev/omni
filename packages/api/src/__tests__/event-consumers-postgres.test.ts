@@ -40,7 +40,7 @@ import {
   instances,
   omniEvents,
 } from '@omni/db';
-import { driverRejection, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { assertPgTestRole, driverRejection, pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { errorHandler } from '../middleware/error';
@@ -62,19 +62,6 @@ const TENANT_A = '11111111-1111-4111-8111-1111111111aa';
 const TENANT_B = '22222222-2222-4222-8222-2222222222bb';
 const INSTANCE_A = '55555555-5555-4555-8555-5555555555aa';
 const INSTANCE_B = '55555555-5555-4555-8555-5555555555bb';
-
-function urlFor(base: string, database: string, user?: { name: string; password: string }): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  if (user) {
-    url.username = user.name;
-    url.password = user.password;
-    // Hostless URLs use PGHOST/PGPORT for disposable Unix sockets. URL setters
-    // cannot add credentials without a host; both drivers accept startup user.
-    if (!url.hostname) url.searchParams.set('user', user.name);
-  }
-  return url.toString();
-}
 
 function password(): string {
   const bytes = new Uint8Array(24);
@@ -160,7 +147,7 @@ postgresDescribe('durable event consumers (#989, real PostgreSQL)', () => {
 
   beforeAll(async () => {
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    db = openDb(urlFor(superUrl, dbName), 3);
+    db = openDb(pgRoleUrl(superUrl, dbName), 3);
     handler = await captureCustomHandler(db);
 
     published = [];
@@ -1157,7 +1144,7 @@ postgresDescribe('durable event consumers (#989, real PostgreSQL)', () => {
 
     beforeAll(async () => {
       const seeded = runSqlOn(
-        urlFor(superUrl, dbName),
+        pgRoleUrl(superUrl, dbName),
         `
         INSERT INTO tenants (id, slug, display_name, max_key_ttl_seconds, max_key_rate_limit, max_key_budget) VALUES
           ('${tenantA}', 'consumer-owner-a', 'Consumer A', 86400, 100, 100),
@@ -1347,7 +1334,7 @@ postgresDescribe('durable event consumers (#989, real PostgreSQL)', () => {
     let eventA: string;
 
     beforeAll(async () => {
-      const superDbUrl = urlFor(superUrl, dbName);
+      const superDbUrl = pgRoleUrl(superUrl, dbName);
       eventA = randomUUID();
 
       // Seed both tenants + an owning instance each (superuser bypasses RLS).
@@ -1395,9 +1382,10 @@ postgresDescribe('durable event consumers (#989, real PostgreSQL)', () => {
       await applyTenancyRoles(provisioner, passwords, DEFAULT_ROLE_NAMES, dbName);
 
       runtimeDb = openDb(
-        urlFor(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }),
+        pgRoleUrl(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }),
         1,
       );
+      await assertPgTestRole(runtimeDb, DEFAULT_ROLE_NAMES.runtime);
       runtimeService = new EventConsumerService(runtimeDb, null);
     }, 120_000);
 

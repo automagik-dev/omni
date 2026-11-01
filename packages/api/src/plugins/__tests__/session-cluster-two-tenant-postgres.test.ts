@@ -36,7 +36,7 @@ import {
   applyTenantRlsEnforcement,
   createDbHandle,
 } from '@omni/db';
-import { driverRejection, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { assertPgTestRole, driverRejection, pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { AgentRunnerService } from '../../services/agent-runner';
 import { runInWorkerTenantScope } from '../../tenancy/worker-tenant-context';
 import { __test__ as sessionCleanerTest } from '../session-cleaner';
@@ -80,16 +80,6 @@ function runSqlOn(url: string, script: string): { exitCode: number; stdout: stri
   }
 }
 
-function urlFor(base: string, database: string, user?: { name: string; password: string }): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  if (user) {
-    url.username = user.name;
-    url.password = user.password;
-  }
-  return url.toString();
-}
-
 postgresDescribe('two-tenant session/dispatch-backend containment (real PostgreSQL)', () => {
   const dbName = `omni_g5_sess_${crypto.randomUUID().replaceAll('-', '')}`;
   const passwords = { ddl: password(), runtime: password(), authPlane: password() };
@@ -105,7 +95,7 @@ postgresDescribe('two-tenant session/dispatch-backend containment (real PostgreS
 
   beforeAll(async () => {
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    superDbUrl = urlFor(superUrl, dbName);
+    superDbUrl = pgRoleUrl(superUrl, dbName);
 
     const seeded = runSqlOn(
       superDbUrl,
@@ -149,7 +139,11 @@ postgresDescribe('two-tenant session/dispatch-backend containment (real PostgreS
     // pool access (the un-converted state) takes the OTHER, where no
     // `app.tenant_id` is set and `omni_current_tenant_id()` RAISES. The pre-G5
     // failure therefore surfaces as a loud error, not a silent leak.
-    runtimeDb = openDb(urlFor(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }), 2);
+    runtimeDb = openDb(
+      pgRoleUrl(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }),
+      2,
+    );
+    await assertPgTestRole(runtimeDb, DEFAULT_ROLE_NAMES.runtime);
   }, 180_000);
 
   afterAll(async () => {
