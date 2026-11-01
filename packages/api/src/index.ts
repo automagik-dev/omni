@@ -92,6 +92,7 @@ import { buildAutomationEngineDeps } from './plugins/automation-actions';
 import { setupDeviceLogin } from './plugins/device-login';
 import { setupScheduler, stopScheduler } from './scheduler';
 import { closeAgentHeartbeat, initAgentHeartbeat } from './services/agent-heartbeat';
+import { reconcileAgentKeys } from './services/agent-key-reconciliation';
 import { ApiKeyService } from './services/api-keys';
 import { closeAllConsumerStreams } from './services/event-consumer-stream';
 import { closeTurnEvents, getTurnEventsConnection, initTurnEvents } from './services/turn-events';
@@ -1040,6 +1041,10 @@ async function main() {
   } catch (error) {
     log.error('Failed to initialize primary API key', { error: String(error) });
   }
+
+  // Repair pre-upgrade agent bindings before any turn-based dispatch can run.
+  // Fail startup on repair errors instead of serving a partially repaired world.
+  await reconcileAgentKeys(db, services.authPlane.db, enforcementMode);
 
   // Set up event bus related services (persistence, agent responder, sync worker)
   await setupEventBusServices(eventBus, services, db, login, updater);

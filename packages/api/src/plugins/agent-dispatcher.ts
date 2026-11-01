@@ -2933,10 +2933,20 @@ async function dispatchViaTurnBasedProvider(
   // wins where it exists, and an untenanted instance performs the same single
   // lookup it always has.
   const keyNames = agentKeyNameCandidates(agentRecord.name, instance.tenantId);
-  let scopedKey: Awaited<ReturnType<typeof services.apiKeys.findByName>> = null;
-  for (const candidate of keyNames) {
-    scopedKey = await services.apiKeys.findByName(candidate);
-    if (scopedKey) break;
+  let scopedKey: Awaited<ReturnType<typeof services.apiKeys.findAgentKeyByName>> = null;
+  if (!instance.tenantId) {
+    // Preserve the legacy single lookup by name, without a membership check.
+    scopedKey = await services.apiKeys.findAgentKeyByName(`agent:${agentRecord.name}`);
+  } else {
+    for (const candidate of keyNames) {
+      const keys = await services.apiKeys.findAgentKeysByNames([candidate]);
+      const key = keys.find((key) => key.instanceIds?.includes(instance.id));
+      // A global bare fallback must explicitly grant this tenant's instance.
+      if (key) {
+        scopedKey = key;
+        break;
+      }
+    }
   }
   if (!scopedKey) {
     log.error('Turn-based dispatch: scoped API key not found', {
@@ -6712,6 +6722,7 @@ export const setupAgentResponder = setupAgentDispatcher;
 
 /** @internal Exported for unit testing only — do not use in production code. */
 export const __test__ = {
+  dispatchViaTurnBasedProvider,
   buildContextMessages,
   /**
    * #1408 — the native-failure → legacy-fallback funnel. Exported so a probe can

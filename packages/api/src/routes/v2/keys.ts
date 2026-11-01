@@ -59,9 +59,19 @@ const profileOverridesSchema = z
   })
   .strict();
 
+// Agent names address deployment-wide system credentials. HTTP callers must
+// never impersonate that namespace, including by renaming an existing key.
+const keyNameSchema = z
+  .string()
+  .min(1)
+  .max(255)
+  .refine((name) => !name.startsWith('agent:'), {
+    message: 'The agent: prefix is reserved for system-provisioned keys',
+  });
+
 const createKeySchema = z
   .object({
-    name: z.string().min(1).max(255).describe('Human-readable key name'),
+    name: keyNameSchema.describe('Human-readable key name'),
     description: z.string().optional().describe('Key description'),
     scopes: z
       .array(z.string())
@@ -94,7 +104,7 @@ const createKeySchema = z
   .passthrough();
 
 const updateKeySchema = z.object({
-  name: z.string().min(1).max(255).optional().describe('Human-readable key name'),
+  name: keyNameSchema.optional().describe('Human-readable key name'),
   description: z.string().nullable().optional().describe('Key description'),
   scopes: z.array(z.string()).min(1).optional().describe('Permission scopes'),
   instanceIds: z.array(z.string().uuid()).nullable().optional().describe('Instance ID restrictions (null = all)'),

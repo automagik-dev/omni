@@ -597,11 +597,41 @@ export class ApiKeyService {
   }
 
   /**
-   * Find an API key by name
+   * Find an active system-provisioned agent key by name. Revoked rows remain for audit, but must
+   * not hide a replacement key during agent provisioning or dispatch.
    */
-  async findByName(name: string): Promise<ApiKey | null> {
-    const [result] = await this.db.select().from(apiKeys).where(eq(apiKeys.name, name)).limit(1);
+  async findAgentKeyByName(name: string): Promise<ApiKey | null> {
+    const [result] = await this.db
+      .select()
+      .from(apiKeys)
+      .where(and(eq(apiKeys.name, name), eq(apiKeys.status, 'active'), eq(apiKeys.createdBy, 'system:auto-provision')))
+      .limit(1);
     return result ?? null;
+  }
+
+  /** All active system keys for canonical and legacy candidate names. */
+  async findAgentKeysByNames(names: string[]): Promise<ApiKey[]> {
+    return this.db
+      .select()
+      .from(apiKeys)
+      .where(
+        and(inArray(apiKeys.name, names), eq(apiKeys.status, 'active'), eq(apiKeys.createdBy, 'system:auto-provision')),
+      );
+  }
+
+  /** Unsafe agent credentials from releases that widened the final unbind. */
+  async findWidenedAgentKeys(): Promise<ApiKey[]> {
+    return this.db
+      .select()
+      .from(apiKeys)
+      .where(
+        and(
+          eq(apiKeys.status, 'active'),
+          eq(apiKeys.createdBy, 'system:auto-provision'),
+          sql`${apiKeys.name} LIKE 'agent:%'`,
+          or(isNull(apiKeys.instanceIds), sql`cardinality(${apiKeys.instanceIds}) = 0`),
+        ),
+      );
   }
 
   /**

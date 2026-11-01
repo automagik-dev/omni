@@ -18,7 +18,7 @@ import { type Context, Hono } from 'hono';
 import { z } from 'zod';
 import { accessCache } from '../../cache/cache-keys';
 import { DEFAULT_TURN_SCOPES } from '../../constants/scopes';
-import { agentKeyName } from '../../lib/agent-key-name';
+import { agentKeyName, agentKeyNameCandidates } from '../../lib/agent-key-name';
 import { applyInboundReplyContextOption } from '../../lib/inbound-reply-context';
 import { readSignedHostScopeContext } from '../../lib/signed-host-scope-context';
 import { applyWhatsAppBusinessConnectionOptions } from '../../lib/whatsapp-business-connection';
@@ -1193,6 +1193,9 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
 
   // Create the database record first
   const instance = await services.instances.create(data);
+  if (instance.agentId) {
+    await handleAgentKeyProvisioning(services, instance.id, instance.agentId, null, instance.tenantId);
+  }
 
   const connectionOptions = buildInstanceConnectionOptions({
     channel: data.channel,
@@ -1349,14 +1352,7 @@ instancesRoutes.patch('/:id', instanceAccess, zValidator('json', updateInstanceS
 
   // Auto-provision/update scoped API key on agent assignment change
   if (data.agentId !== undefined && data.agentId !== oldAgentId) {
-    const authContext = c.get('authContext');
-    await handleAgentKeyProvisioning(
-      services,
-      id,
-      data.agentId,
-      oldAgentId ?? null,
-      authContext?.credentialClass === 'tenant' ? authContext.tenantId : null,
-    );
+    await handleAgentKeyProvisioning(services, id, data.agentId, oldAgentId ?? null, instance.tenantId);
   }
 
   return c.json({ data: sanitizeInstance(await withAgentProviderId(services, instance)) });
@@ -1365,9 +1361,9 @@ instancesRoutes.patch('/:id', instanceAccess, zValidator('json', updateInstanceS
 /**
  * Auto-provision or update a scoped API key when an agent is assigned to an instance.
  * - Assign: creates or updates key `agent:<name>` with instanceIds including this instance
- * - Unassign: removes instanceId from the old agent's key
+ * - Unassign: removes instanceId, revoking the old key when its last instance leaves
  *
- * `tenantId` is the calling credential's tenant, or null for a legacy request;
+ * `tenantId` is the stored instance's tenant, or null for a legacy instance;
  * see `agentKeyName` for why it participates in the key name.
  */
 async function handleAgentKeyProvisioning(
@@ -1381,15 +1377,7 @@ async function handleAgentKeyProvisioning(
   if (oldAgentId) {
     try {
       const oldAgent = await services.agents.getById(oldAgentId);
-      const keyName = agentKeyName(oldAgent.name, tenantId);
-      const existingKey = await services.apiKeys.findByName(keyName);
-      if (existingKey?.instanceIds) {
-        const updated = existingKey.instanceIds.filter((id) => id !== instanceId);
-        await services.apiKeys.update(existingKey.id, {
-          instanceIds: updated.length > 0 ? updated : null,
-        });
-        log.info('Removed instance from agent key', { keyName, instanceId });
-      }
+      await removeInstanceFromAgentKeys(services, instanceId, oldAgent.name, tenantId);
     } catch (err) {
       log.error('Failed to remove instance from old agent key', { oldAgentId, instanceId, error: String(err) });
     }
@@ -1400,7 +1388,7 @@ async function handleAgentKeyProvisioning(
     try {
       const agent = await services.agents.getById(newAgentId);
       const keyName = agentKeyName(agent.name, tenantId);
-      const existingKey = await services.apiKeys.findByName(keyName);
+      const existingKey = await services.apiKeys.findAgentKeyByName(keyName);
 
       if (existingKey) {
         // Add instanceId to existing key's instanceIds
@@ -1428,6 +1416,31 @@ async function handleAgentKeyProvisioning(
       }
     } catch (err) {
       log.error('Failed to provision agent key', { newAgentId, instanceId, error: String(err) });
+    }
+  }
+}
+
+/** Remove every matching scoped grant, including legacy names and duplicate rows. */
+async function removeInstanceFromAgentKeys(
+  services: Services,
+  instanceId: string,
+  agentName: string,
+  tenantId: string | null,
+): Promise<void> {
+  const keys = await services.apiKeys.findAgentKeysByNames(agentKeyNameCandidates(agentName, tenantId));
+  for (const key of keys) {
+    if (!key.instanceIds?.includes(instanceId)) continue;
+    try {
+      const updated = key.instanceIds.filter((id) => id !== instanceId);
+      if (updated.length === 0) {
+        await services.apiKeys.revoke(key.id, 'Agent has no assigned instances', 'system:auto-provision');
+        log.info('Revoked agent key after its last instance was removed', { keyName: key.name, instanceId });
+      } else {
+        await services.apiKeys.update(key.id, { instanceIds: updated });
+        log.info('Removed instance from agent key', { keyName: key.name, instanceId });
+      }
+    } catch (err) {
+      log.error('Failed to remove instance from agent key', { keyId: key.id, instanceId, error: String(err) });
     }
   }
 }
