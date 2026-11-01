@@ -657,14 +657,19 @@ test('an old title that only spells a group id or a LID with its device is no na
   // Shown by their words meanwhile, never by the ids.
   assert.deepEqual(first.view().omniThreads.map(thread => [thread.id, thread.title, thread.kind]), [['plus', null, 'group'], ['dashed', null, 'group'], ['device', null, 'direct']])
   await until(() => askedOf(omni).filter(route => route.startsWith('GET /chats/')).length === 3)
-  await flush()
+  // All three renames have started; stopping awaits their completion before we inspect
+  // the failed pass or start another runtime on the same home.
+  await first.stop()
   // The Session could not be named: the record stays as it was, for the next start.
   assert.deepEqual(first.titled, [])
   assert.deepEqual(['plus', 'dashed', 'device'].map(id => saved(home).omniThreads[id].title), ['+120363401234567890', '5511999990000-1600000000', '+134248514244695'])
-  await first.stop()
   const next = await boot(t, home)
-  await until(() => next.titled.length === 3)
-  await flush()
+  // A Session rename happens before the record is saved. Wait for all persisted titles,
+  // rather than a count of calls followed by a fixed number of event-loop turns.
+  await until(() => {
+    const threads = saved(home).omniThreads
+    return threads.plus.title === 'Obra' && threads.dashed.title === 'Obra' && threads.device.title === 'Marina'
+  })
   assert.deepEqual(next.titled, [['plus-session', 'Obra'], ['dashed-session', 'Obra'], ['device-session', 'Marina']])
   assert.deepEqual(['plus', 'dashed', 'device'].map(id => saved(home).omniThreads[id].title), ['Obra', 'Obra', 'Marina'])
 })

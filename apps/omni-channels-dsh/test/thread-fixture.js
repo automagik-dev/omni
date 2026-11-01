@@ -11,6 +11,9 @@ import { createRuntime } from '../index.js'
 import { LINK_FILE } from '../src/host/omni-link.js'
 import { KEYS_FILE } from '../src/host/thread-keys.js'
 import { fakeContext } from './team.js'
+import { until } from './until.js'
+
+export { until } from './until.js'
 
 const realFetch = globalThis.fetch
 // Each test file puts the real fetch back after each test (afterEach(resetFetch)).
@@ -19,17 +22,6 @@ export const resetFetch = () => { globalThis.fetch = realFetch }
 export const flush = async () => {
   for (let round = 0; round < 20; round += 1) await new Promise(resolve => setImmediate(resolve))
 }
-// Until `done()` holds, looking again after each turn of the event loop; throws once `ms` of
-// real time passed without it, so a slow machine waits longer and a broken run fails, rather
-// than either going on half done.
-export async function until(done, ms = 5000) {
-  const deadline = performance.now() + ms
-  while (!done()) {
-    if (performance.now() > deadline) throw new Error(`until: not done after ${ms} ms: ${String(done).slice(0, 200)}`)
-    await new Promise(resolve => setImmediate(resolve))
-  }
-}
-
 export const OMNI = 'https://omni.example.com'
 export const INSTANCE = '0b5f1c1e-6a51-4d5e-9a41-0c0d9b6f1a01'
 export const OTHER_INSTANCE = '3e8b4f40-9d84-4a8b-8d74-3f3a2e9b4d04'
