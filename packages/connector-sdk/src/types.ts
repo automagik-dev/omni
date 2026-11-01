@@ -73,6 +73,8 @@ export type ConnectorValidationResult =
 
 /** A parsed inbound delivery, before idempotency and journaling. */
 export interface ConnectorParsedDelivery {
+  /** Optional typed name under connector.{provider}.; used only by connector ingress. */
+  readonly eventType?: string;
   /** Provider event key; must match the subscription's `provider_event_key`. */
   readonly eventKey: string;
   /**

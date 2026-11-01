@@ -669,10 +669,9 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
       durable: 'event-persistence-connector',
       startFrom: 'new',
     });
-    // Connector events published outside the ingress claim path (test deliveries,
-    // `emit_event`, operator publishes) get the same internal-journal shape. A
-    // real ingress delivery already claimed a row with this event id, so this
-    // insert no-ops on the id — one journal row, one identity (D9).
+    // Only connector ingress and retries/replays with journal provenance may
+    // publish connector events. Ingress already claimed this event id; this
+    // insert no-ops on that id, preserving one journal row and identity (D9).
     await eventBus.subscribePattern('connector.>', (event) => journalInternalEvent(db, event), {
       ...CONSUMER_OPTIONS,
       durable: 'event-persistence-connector-events',

@@ -612,6 +612,16 @@ export function createApp(
     return c.json(outcome.body, outcome.status);
   });
 
+  // Public provider hook: the connector's sealed secret is its credential.
+  app.post('/api/v2/connectors/hooks/:connectorId', webhookIngressRateLimitMiddleware, async (c) => {
+    const services = c.get('services');
+    const rawBody = await c.req.text();
+    const headers: Record<string, string> = {};
+    for (const [key, value] of Object.entries(c.req.header())) headers[key.toLowerCase()] = value ?? '';
+    const outcome = await services.connectors.receiveForConnector(c.req.param('connectorId'), rawBody, headers);
+    return c.json(outcome.body, outcome.status);
+  });
+
   // Slack OAuth redirect target (wish: slack-personal-oauth). Auth-exempt
   // because Slack's redirect carries no Omni credential; rate-limited by IP
   // like the generic ingress above. The handler verifies the HMAC-signed
