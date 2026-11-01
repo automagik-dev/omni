@@ -215,7 +215,7 @@ export class ProviderService {
 
     this.invalidateCaches(id);
 
-    return openProviderSecrets(tenantId, updated);
+    return providerReadState(openProviderSecrets(tenantId, updated));
   }
 
   /**
@@ -243,7 +243,7 @@ export class ProviderService {
     const start = Date.now();
 
     try {
-      const baseUrl = provider.baseUrl;
+      const baseUrl = provider.baseUrl.replace(/^ws:\/\//, 'http://').replace(/^wss:\/\//, 'https://');
       const healthUrl = new URL('/health', baseUrl).toString();
       const response = await fetch(healthUrl, {
         method: 'GET',

@@ -1,7 +1,12 @@
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it, mock } from 'bun:test';
 import type { TypedOmniEvent } from '@omni/core';
+import { REMOVED_OPENCLAW_MESSAGE } from '@omni/core';
 import type { Database } from '@omni/db';
+import { Hono } from 'hono';
+import { errorHandler } from '../../middleware/error';
+import { chatsRoutes } from '../../routes/v2/chats';
 import { currentTenantScope, requireTenantScope } from '../../tenancy/tenant-scope';
+import type { AppVariables } from '../../types';
 import { clearAgentSession, runTrashEmojiCleanup } from '../session-cleaner';
 
 function makeDbWithAgentProvider(providerId: string) {
@@ -212,7 +217,11 @@ function webhookAgentDb(): Database {
   } as unknown as Database;
 }
 
-function makeWebhookServices(probe: WebhookProbe, settings: Record<string, unknown>) {
+function makeWebhookServices(
+  probe: WebhookProbe,
+  settings: Record<string, unknown>,
+  schema: 'webhook' | 'openclaw' = 'webhook',
+) {
   return {
     agentRunner: {
       getInstanceWithProvider: async () => ({
@@ -225,7 +234,7 @@ function makeWebhookServices(probe: WebhookProbe, settings: Record<string, unkno
     providers: {
       getById: async () => ({
         id: 'provider-webhook-resume',
-        schema: 'webhook',
+        schema,
         baseUrl: 'http://webhook.invalid/hook',
         apiKey: '',
         defaultTimeout: 1,
@@ -263,6 +272,54 @@ function makeWebhookEvent(): TypedOmniEvent<'message.received'> {
 }
 
 describe('session-cleaner on providers that cannot reset sessions', () => {
+  it('silently resumes a removed-provider chat and disarms follow-ups without an outbound call', async () => {
+    const probe: WebhookProbe = { updates: [], disarmCalls: 0, sendCalls: 0 };
+    const services = makeWebhookServices(probe, { agentPaused: true, muted: true }, 'openclaw');
+    const previousFetch = globalThis.fetch;
+    const fetch = mock(async () => {
+      throw new Error('Unexpected outbound request');
+    });
+    globalThis.fetch = fetch as unknown as typeof globalThis.fetch;
+    try {
+      await runTrashEmojiCleanup(services, webhookAgentDb(), makeWebhookEvent());
+
+      expect(probe.disarmCalls).toBe(1);
+      expect(probe.updates).toHaveLength(1);
+      expect(probe.updates[0]).toMatchObject({ agentPaused: false, muted: true });
+      expect(typeof probe.updates[0]?.agentResumedAt).toBe('string');
+      // Neither an error nor a confirmation is sent for an unavailable provider.
+      expect(probe.sendCalls).toBe(0);
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+  });
+
+  it('POST /chats/clear-session returns the versioned 410 through the real error handler', async () => {
+    const probe: WebhookProbe = { updates: [], disarmCalls: 0, sendCalls: 0 };
+    const services = makeWebhookServices(probe, { agentPaused: true }, 'openclaw');
+    const app = new Hono<{ Variables: AppVariables }>();
+    app.onError(errorHandler);
+    app.use('*', async (c, next) => {
+      c.set('services', services);
+      c.set('db', webhookAgentDb());
+      await next();
+    });
+    app.route('/chats', chatsRoutes);
+
+    const response = await app.request('/chats/clear-session', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ instanceId: 'b74a5ecb-4303-49c5-8d46-481c20b343d2', chatId: 'chat-ext-w' }),
+    });
+
+    expect(response.status).toBe(410);
+    expect(await response.json()).toEqual({
+      error: { code: 'NOT_FOUND', message: REMOVED_OPENCLAW_MESSAGE, details: { schema: 'openclaw' } },
+    });
+    expect(probe.sendCalls).toBe(0);
+  });
+
   it('resumes a paused agent and keeps the other chat settings', async () => {
     const probe: WebhookProbe = { updates: [], disarmCalls: 0, sendCalls: 0 };
     const services = makeWebhookServices(probe, { agentPaused: true, muted: true });
