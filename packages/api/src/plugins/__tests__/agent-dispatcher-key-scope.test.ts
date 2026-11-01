@@ -1,4 +1,5 @@
-import { describe, expect, mock, test } from 'bun:test';
+import { afterEach, describe, expect, mock, test } from 'bun:test';
+import { runStartupAgentKeyRepair } from '../../agent-key-repair-state';
 import { __test__ } from '../agent-dispatcher';
 
 const INSTANCE = 'instance-b';
@@ -58,7 +59,11 @@ function harness(keys: Record<string, Key>, tenantId: string | null = TENANT) {
   return { run, lookup, legacyLookup, open, update, triggerProvider, trigger };
 }
 
-describe('tenant dispatch requires instance grants; no-tenant dispatch retains legacy lookup', () => {
+afterEach(async () => {
+  await runStartupAgentKeyRepair(async () => {});
+});
+
+describe('dispatch rejects widened keys even if startup repair fails', () => {
   for (const instanceIds of [null, [], [OTHER_INSTANCE]]) {
     test(`refuses foreign bare fallback ${JSON.stringify(instanceIds)} after qualified key revocation`, async () => {
       // Active lookup no longer sees the revoked qualified row. The remaining
@@ -82,7 +87,7 @@ describe('tenant dispatch requires instance grants; no-tenant dispatch retains l
     expect(h.open.mock.calls[0]?.[0].apiKeyId).toBe('own-key');
   });
 
-  for (const instanceIds of [null, [], [OTHER_INSTANCE], [INSTANCE]]) {
+  for (const instanceIds of [[OTHER_INSTANCE], [INSTANCE]]) {
     test(`C7 no-tenant dispatch preserves the legacy name lookup and payload (${JSON.stringify(instanceIds)})`, async () => {
       const h = harness({ 'agent:support': { id: 'legacy-key', instanceIds } }, null);
       const original = structuredClone(h.trigger);
@@ -124,6 +129,23 @@ describe('tenant dispatch requires instance grants; no-tenant dispatch retains l
       expect(h.triggerProvider.mock.calls).toEqual([[expected]]);
       expect(JSON.stringify(h.trigger)).toBe(JSON.stringify(expected));
     });
+  }
+
+  for (const tenantId of [null, TENANT]) {
+    for (const instanceIds of [null, []]) {
+      test(`failed pre-revoke repair never permits widened dispatch (${tenantId ?? 'legacy'}, ${JSON.stringify(instanceIds)})`, async () => {
+        const repair = mock(async () => {
+          throw new Error('revoke transaction rolled back');
+        });
+        await runStartupAgentKeyRepair(repair, { reportFailure: () => {} });
+        const h = harness({ 'agent:support': { id: 'still-active-wide-key', instanceIds } }, tenantId);
+        expect(await h.run()).toBe(false);
+        expect(repair).toHaveBeenCalledTimes(1);
+        expect(h.open).not.toHaveBeenCalled();
+        expect(h.update).not.toHaveBeenCalled();
+        expect(h.triggerProvider).not.toHaveBeenCalled();
+      });
+    }
   }
 
   test('rejects a qualified candidate without an explicit instance grant too', async () => {

@@ -627,6 +627,15 @@ export const TOTAL_PENDING_CEILING = 21;
 export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
   {
     file: 'packages/api/src/services/agent-key-reconciliation.ts',
+    table: 'agents',
+    class: 'control-plane',
+    justification:
+      'Failure-only startup coverage snapshot counts agents without usable system keys, including route-only agents. ' +
+      'Legacy mode reads on the ambient database; enforcement enumerates tenant IDs only on the auth plane and reads ' +
+      'each tenant through runInWorkerTenantScope. Names stay in the single startup failure log; public health receives only a count.',
+  },
+  {
+    file: 'packages/api/src/services/agent-key-reconciliation.ts',
     table: 'instances',
     class: 'control-plane',
     justification:

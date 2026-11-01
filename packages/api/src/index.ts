@@ -65,6 +65,7 @@ const natsLog = createLogger('api:nats');
 const pluginLog = createLogger('api:plugins');
 const shutdownLog = createLogger('api:shutdown');
 import packageJson from '../package.json';
+import { runStartupAgentKeyRepair } from './agent-key-repair-state';
 import { type App, createApp } from './app';
 import { type Login, announceClaim } from './login';
 import { resolveLoginDefaults } from './login/secret';
@@ -92,7 +93,7 @@ import { buildAutomationEngineDeps } from './plugins/automation-actions';
 import { setupDeviceLogin } from './plugins/device-login';
 import { setupScheduler, stopScheduler } from './scheduler';
 import { closeAgentHeartbeat, initAgentHeartbeat } from './services/agent-heartbeat';
-import { reconcileAgentKeys } from './services/agent-key-reconciliation';
+import { findAgentsWithoutKeys, reconcileAgentKeys } from './services/agent-key-reconciliation';
 import { ApiKeyService } from './services/api-keys';
 import { closeAllConsumerStreams } from './services/event-consumer-stream';
 import { closeTurnEvents, getTurnEventsConnection, initTurnEvents } from './services/turn-events';
@@ -1043,8 +1044,11 @@ async function main() {
   }
 
   // Repair pre-upgrade agent bindings before any turn-based dispatch can run.
-  // Fail startup on repair errors instead of serving a partially repaired world.
-  await reconcileAgentKeys(db, services.authPlane.db, enforcementMode);
+  // A failed repair degrades health but must not prevent Omni from starting.
+  // The next boot retries the same idempotent repair.
+  await runStartupAgentKeyRepair(() => reconcileAgentKeys(db, services.authPlane.db, enforcementMode), {
+    inspectMissingAgents: () => findAgentsWithoutKeys(db, services.authPlane.db, enforcementMode),
+  });
 
   // Set up event bus related services (persistence, agent responder, sync worker)
   await setupEventBusServices(eventBus, services, db, login, updater);
