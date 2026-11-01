@@ -22,7 +22,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } fr
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createOmniClient } from '@omni/sdk';
+import { OmniApiError, createOmniClient } from '@omni/sdk';
 import { type DoctorDeps, checkConnectorUnmatched, runDoctor } from '../commands/doctor.js';
 import type { Config, ServerConfig } from '../config.js';
 import type { MigrationResult } from '../lib/embedded-canonical-migration.js';
@@ -392,6 +392,96 @@ function mkDeps(state: HarnessState): DoctorDeps {
 // ---------------------------------------------------------------------------
 
 describe('doctor connector unmatched counters', () => {
+  for (const [name, error] of [
+    ['401', new OmniApiError('Unauthorized', 'UNAUTHORIZED', undefined, 401)],
+    ['403', new OmniApiError('Forbidden', 'FORBIDDEN', undefined, 403)],
+    ['missing key', new OmniApiError('Authenticated connectors:read is required', 'UNAUTHORIZED', undefined, 401)],
+  ]) {
+    test(`reports the access hint for ${name}`, async () => {
+      const checks = await checkConnectorUnmatched({
+        listConnectors: async () => {
+          throw error;
+        },
+      });
+      expect(checks[0]?.detail).toBe(
+        'Connector counters unavailable; authenticated connectors:read access is required.',
+      );
+    });
+  }
+
+  for (const [name, error, reason] of [
+    ['network failure', new Error('\u001b[31mConnection refused\u001b[0m\n\u0085\u202e'), 'Connection refused'],
+    [
+      'server failure',
+      new OmniApiError('Service unavailable', 'INTERNAL_ERROR', undefined, 502),
+      'Service unavailable',
+    ],
+    ['unknown failure', null, 'Unknown error'],
+    ['long failure', new Error('x'.repeat(250)), 'x'.repeat(200)],
+  ]) {
+    test(`reports a short sanitized reason for ${name}`, async () => {
+      const checks = await checkConnectorUnmatched({
+        listConnectors: async () => {
+          throw error;
+        },
+      });
+      expect(checks[0]?.detail).toBe(`Connector counters unavailable: ${reason}`);
+    });
+  }
+
+  test('reports malformed connector data as an invalid response', async () => {
+    const client = createOmniClient({ baseUrl: 'https://omni.test.invalid', apiKey: 'mock-doctor-key' });
+    client.raw.use({
+      onRequest: () => Response.json({ data: [{ id: 'connector-1', name: 'GitLab' }], meta: { hasMore: false } }),
+    });
+    const checks = await checkConnectorUnmatched({ listConnectors: client.connectors.list });
+    expect(checks[0]?.detail).toContain('Connector counters unavailable: Invalid connector response: totalUnmatched:');
+    expect(checks[0]?.detail).not.toContain('access is required');
+  });
+
+  for (const cursor of [null, 'repeated-cursor']) {
+    test(`reports an invalid pagination cursor (${cursor})`, async () => {
+      const client = createOmniClient({ baseUrl: 'https://omni.test.invalid', apiKey: 'mock-doctor-key' });
+      client.raw.use({ onRequest: () => Response.json({ data: [], meta: { hasMore: true, cursor } }) });
+      const checks = await checkConnectorUnmatched({ listConnectors: client.connectors.list });
+      expect(checks[0]?.detail).toBe('Connector counters unavailable: Invalid connector pagination cursor');
+    });
+  }
+
+  for (const [lastUnmatchedAt, level] of [
+    ['2026-11-01T17:00:00.000Z', 'WARN'],
+    ['2026-10-31T18:00:00.000Z', 'WARN'],
+    ['2026-10-31T17:59:59.999Z', 'OK'],
+    ['2026-11-01T18:00:00.001Z', 'OK'],
+    [null, 'OK'],
+  ]) {
+    test(`uses the injected 24h window for ${lastUnmatchedAt}`, async () => {
+      const client = createOmniClient({ baseUrl: 'https://omni.test.invalid', apiKey: 'mock-doctor-key' });
+      client.raw.use({
+        onRequest: () =>
+          Response.json({
+            data: [
+              {
+                id: 'connector-1',
+                name: 'GitLab',
+                totalUnmatched: 17,
+                lastUnmatchedAt,
+                lastUnmatchedEventType: 'unparsed',
+              },
+            ],
+            meta: { hasMore: false },
+          }),
+      });
+      const checks = await checkConnectorUnmatched({
+        listConnectors: client.connectors.list,
+        now: () => Date.parse('2026-11-01T18:00:00.000Z'),
+      });
+      expect(checks[0]?.level).toBe(level);
+      expect(checks[0]?.detail).toContain('total_unmatched=17');
+      expect(checks[0]?.detail).toContain(`last_unmatched_at=${lastUnmatchedAt ?? '-'}`);
+    });
+  }
+
   test('strips ANSI escapes and ASCII controls from unparsed provider names', async () => {
     const client = createOmniClient({ baseUrl: 'https://omni.test.invalid', apiKey: 'mock-doctor-key' });
     client.raw.use({
@@ -445,7 +535,11 @@ describe('doctor connector unmatched counters', () => {
         });
       },
     });
-    const deps = { ...mkDeps(mkHarness()), listConnectors: client.connectors.list };
+    const deps = {
+      ...mkDeps(mkHarness()),
+      listConnectors: client.connectors.list,
+      now: () => Date.parse('2026-11-01T18:00:00.000Z'),
+    };
     const report = await runDoctor({ fix: false }, deps);
     const checks = report.checks.filter((check) => check.id === 'connector-unmatched');
     expect(checks).toEqual([

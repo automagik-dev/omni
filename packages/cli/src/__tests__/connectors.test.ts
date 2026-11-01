@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createOmniClient } from '@omni/sdk';
+import { z } from 'zod';
 import { createConnectorsCommand } from '../commands/connectors';
 import * as output from '../output';
 
@@ -70,7 +71,9 @@ describe('omni connectors --help', () => {
 const CONNECTOR_ID = '11111111-1111-4111-8111-111111111111';
 const AUTOMATION_ID = '33333333-3333-4333-8333-333333333333';
 
-function commandFixture(options: { secret?: string; reject?: boolean; lastEvent?: string } = {}) {
+function commandFixture(
+  options: { secret?: string; reject?: boolean; lastEvent?: string; hasHookSecret?: boolean } = {},
+) {
   const client = createOmniClient({ baseUrl: 'https://omni.test.invalid', apiKey: 'mock-only' });
   const requests: Array<{ method: string; path: string; body: unknown }> = [];
   const messages: string[] = [];
@@ -90,7 +93,7 @@ function commandFixture(options: { secret?: string; reject?: boolean; lastEvent?
         id: CONNECTOR_ID,
         name: 'GitLab',
         status: 'connected',
-        hasHookSecret: true,
+        hasHookSecret: options.hasHookSecret ?? true,
         lastUnmatchedEventType: options.lastEvent ?? null,
         inboundUrl: `https://omni.test.invalid/api/v2/connectors/hooks/${CONNECTOR_ID}`,
       };
@@ -122,6 +125,26 @@ function commandFixture(options: { secret?: string; reject?: boolean; lastEvent?
 }
 
 describe('connector ingress CLI', () => {
+  for (const hasHookSecret of [true, false]) {
+    test(`create/update show the hook URL only with a configured secret (${hasHookSecret})`, async () => {
+      const fixture = commandFixture({ hasHookSecret });
+      await fixture.command().parseAsync(['create', '--provider', 'gitlab', '--name', 'GitLab'], { from: 'user' });
+      await fixture.command().parseAsync(['update', CONNECTOR_ID, '--name', 'GitLab'], { from: 'user' });
+      expect(fixture.messages).toHaveLength(2);
+      for (const entry of fixture.messages) {
+        const { message } = z.object({ message: z.string() }).parse(JSON.parse(entry));
+        if (hasHookSecret) {
+          expect(message).toContain(`https://omni.test.invalid/api/v2/connectors/hooks/${CONNECTOR_ID}`);
+          expect(message).toContain('CLI API URL');
+          expect(message).toContain('provider needs public URL');
+        } else {
+          expect(message).toContain('--hook-secret-stdin');
+          expect(message).not.toContain('/api/v2/connectors/hooks/');
+        }
+      }
+    });
+  }
+
   test('list/get/create/update remove terminal controls from the last unmatched provider name', async () => {
     const lastEvent = '\u001b[31mUnparsed provider name\u001b[0m\n\r\t\u0000\u007f';
     const fixture = commandFixture({ lastEvent });
@@ -263,6 +286,7 @@ describe('connector ingress CLI', () => {
     const secret = 'fake-stdin-pipe-secret';
     const script = `
       import { createOmniClient } from '@omni/sdk';
+import { z } from 'zod';
       import { createConnectorsCommand } from ${JSON.stringify(join(import.meta.dir, '..', 'commands/connectors.ts'))};
       const client = createOmniClient({ baseUrl: 'https://omni.test.invalid', apiKey: 'mock-only' });
       client.raw.use({ async onRequest({request}) {

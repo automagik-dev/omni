@@ -74,6 +74,12 @@ function hookUrl(connectorId: string): string {
   return `${baseUrl}/api/v2/connectors/hooks/${encodeURIComponent(connectorId)}`;
 }
 
+function connectorHookHint(connector: Pick<Connector, 'id' | 'hasHookSecret'>): string {
+  return connector.hasHookSecret
+    ? `hook URL relative to CLI API URL (provider needs public URL): ${hookUrl(connector.id)}`
+    : 'set --hook-secret-stdin to enable connector hooks';
+}
+
 function connectorOutput(connector: Connector): Connector {
   const lastEvent = connector.lastUnmatchedEventType;
   return {
@@ -191,7 +197,7 @@ export function createConnectorsCommand(
             }),
           );
           output.success(
-            `Connector ${connector.name} is ${connector.status}; hook URL: ${hookUrl(connector.id)}`,
+            `Connector ${connector.name} is ${connector.status}; ${connectorHookHint(connector)}`,
             connector,
           );
         } catch (error) {
@@ -236,7 +242,7 @@ export function createConnectorsCommand(
             }),
           );
           output.success(
-            `Connector ${connector.name} is ${connector.status}; hook URL: ${hookUrl(connector.id)}`,
+            `Connector ${connector.name} is ${connector.status}; ${connectorHookHint(connector)}`,
             connector,
           );
         } catch (error) {

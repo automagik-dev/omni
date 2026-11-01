@@ -47,7 +47,7 @@
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { type OmniClient, createOmniClient } from '@omni/sdk';
+import { OmniApiError, type OmniClient, createOmniClient } from '@omni/sdk';
 import { Command } from 'commander';
 import { z } from 'zod';
 import {
@@ -195,6 +195,8 @@ function readPm2EnvKey(entry: Pm2Entry, key: string): string | undefined {
 export interface DoctorDeps {
   /** Authenticated connectors list; counters must never come from public health. */
   listConnectors: OmniClient['connectors']['list'];
+  /** Clock for the recent-unmatched window; defaults to Date.now. */
+  now?: () => number;
   /** Return all pm2 processes (or null on error). */
   getPm2Processes: () => Promise<Pm2Entry[] | null>;
   /** Return true if a TCP connect to localhost:port succeeds. */
@@ -302,7 +304,8 @@ function productionDeps(): DoctorDeps {
   return {
     listConnectors: async (params) => {
       const cliConfig = loadLocalRuntimeConfig();
-      if (!cliConfig.apiKey) throw new Error('Authenticated connectors:read is required');
+      if (!cliConfig.apiKey)
+        throw new OmniApiError('Authenticated connectors:read is required', 'UNAUTHORIZED', undefined, 401);
       const baseUrl = cliConfig.apiUrl ?? `http://localhost:${loadServerConfig().port}`;
       return createOmniClient({ baseUrl, apiKey: cliConfig.apiKey, cliVersion: VERSION }).connectors.list(params);
     },
@@ -1279,18 +1282,23 @@ const UnmatchedConnectorSchema = z.object({
 });
 
 /** One line per connector, including zero counts, through the authenticated list only. */
-export async function checkConnectorUnmatched(deps: Pick<DoctorDeps, 'listConnectors'>): Promise<CheckResult[]> {
+export async function checkConnectorUnmatched(
+  deps: Pick<DoctorDeps, 'listConnectors' | 'now'>,
+): Promise<CheckResult[]> {
   try {
     const checks: CheckResult[] = [];
+    const now = (deps.now ?? Date.now)();
     let cursor: string | undefined;
     const seen = new Set<string>();
     while (true) {
       const page = await deps.listConnectors({ limit: 100, cursor });
       for (const item of page.items) {
         const connector = UnmatchedConnectorSchema.parse(item);
+        const age =
+          connector.lastUnmatchedAt === null ? Number.POSITIVE_INFINITY : now - Date.parse(connector.lastUnmatchedAt);
         checks.push({
           id: 'connector-unmatched',
-          level: connector.totalUnmatched > 0 ? 'WARN' : 'OK',
+          level: connector.totalUnmatched > 0 && age >= 0 && age <= 24 * 60 * 60 * 1000 ? 'WARN' : 'OK',
           detail: `${connector.name} (${connector.id}): total_unmatched=${connector.totalUnmatched} last_unmatched_at=${connector.lastUnmatchedAt ?? '-'} last_unmatched_event_type=${connector.lastUnmatchedEventType ?? '-'}`,
         });
       }
@@ -1299,15 +1307,28 @@ export async function checkConnectorUnmatched(deps: Pick<DoctorDeps, 'listConnec
       cursor = page.meta.cursor;
       seen.add(cursor);
     }
-  } catch {
+  } catch (error) {
     return [
       {
         id: 'connector-unmatched',
         level: 'WARN',
-        detail: 'Connector counters unavailable; authenticated connectors:read access is required.',
+        detail: connectorCountersError(error),
       },
     ];
   }
+}
+
+function connectorCountersError(error: unknown): string {
+  if (error instanceof OmniApiError && (error.status === 401 || error.status === 403)) {
+    return 'Connector counters unavailable; authenticated connectors:read access is required.';
+  }
+  const reason =
+    error instanceof z.ZodError
+      ? `Invalid connector response: ${error.issues[0]?.path.join('.')}: ${error.issues[0]?.message}`
+      : error instanceof Error
+        ? error.message
+        : 'Unknown error';
+  return `Connector counters unavailable: ${stripTerminalControls(reason).slice(0, 200).trim() || 'Unknown error'}`;
 }
 
 /** Run the full check battery sequentially. */
