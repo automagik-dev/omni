@@ -47,7 +47,9 @@ import { errorHandler } from '../middleware/error';
 import { createPluginContext } from '../plugins/context';
 import { setupEventPersistence } from '../plugins/event-persistence';
 import { eventConsumersRoutes } from '../routes/v2/event-consumers';
+import { eventsRoutes } from '../routes/v2/events';
 import { type ConsumerCaller, EventConsumerService } from '../services/event-consumers';
+import { EventService } from '../services/events';
 import { runInWorkerTenantScope } from '../tenancy/worker-tenant-context';
 import type { AppVariables } from '../types';
 
@@ -1135,15 +1137,21 @@ postgresDescribe('durable event consumers (#989, real PostgreSQL)', () => {
     // Exercise the real routes + service + SQL. The auth edge supplies this
     // trusted context; the projected keys deliberately have NO instance limit.
     function appFor(tenantId: string | null) {
+      const keyId = randomUUID();
       const app = new Hono<{ Variables: AppVariables }>();
       app.onError(errorHandler);
       app.use('*', async (c, next) => {
-        c.set('services', { eventConsumers: service } as AppVariables['services']);
-        c.set('apiKey', { id: randomUUID(), name: 'tenant-test', scopes: ['*'], instanceIds: null, expiresAt: null });
+        c.set('services', {
+          eventConsumers: service,
+          events: new EventService(db),
+          automations: { list: async () => [] },
+        } as unknown as AppVariables['services']);
+        c.set('apiKey', { id: keyId, name: 'tenant-test', scopes: ['*'], instanceIds: null, expiresAt: null });
         if (tenantId) c.set('authContext', { tenantId } as AppVariables['authContext']);
         await next();
       });
       app.route('/', eventConsumersRoutes);
+      app.route('/events', eventsRoutes);
       return app;
     }
 
@@ -1258,6 +1266,33 @@ postgresDescribe('durable event consumers (#989, real PostgreSQL)', () => {
         }
       });
     }
+
+    test('event type inventory exposes only the caller tenant consumer names, with legacy access preserved', async () => {
+      const callers = [tenantA, tenantB, null];
+      const names = ['inventory-tenant-a', 'inventory-tenant-b', 'inventory-legacy'];
+      for (let i = 0; i < callers.length; i++) {
+        await service.create(
+          { name: names[i]!, eventType: 'custom.consumer-tenant.*' },
+          { tenantId: callers[i], keyId: randomUUID(), instanceIds: null },
+        );
+      }
+      try {
+        for (let i = 0; i < callers.length; i++) {
+          const response = await appFor(callers[i]!).request('/events/types');
+          expect(response.status).toBe(200);
+          const { items } = (await response.json()) as {
+            items: Array<{ eventType: string; consumers: string[] }>;
+          };
+          const observed = items.filter((row) => row.eventType.startsWith('custom.consumer-tenant.'));
+          expect(observed).toHaveLength(2);
+          for (const row of observed) {
+            expect(row.consumers.sort()).toEqual(i === 2 ? [...names].sort() : [names[i]!]);
+          }
+        }
+      } finally {
+        for (const name of names) await service.delete(name);
+      }
+    });
 
     test('unstamped consumers are hidden from tenant keys and remain operable by legacy keys', async () => {
       const legacy = appFor(null);

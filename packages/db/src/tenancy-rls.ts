@@ -198,7 +198,8 @@ export const APPLICATION_SCOPED_TENANT_TABLES: readonly RlsExclusion[] = [
       '0091 preserves legacy consumer credentials and unstamped registrations. EventConsumerService stamps ' +
       'authenticated creators and checks tenant equality on list/get/pull/ack/delete/stream, including SQL ' +
       'mutation predicates and journal scans, independently of OMNI_DB_ENFORCEMENT. Generic tenant-only RLS ' +
-      'would break the required legacy-key access to unstamped consumers. Evidence: the 43-test ' +
+      'would break the required legacy-key access to unstamped consumers. EventService.getTypes filters ' +
+      'consumer names by the authenticated tenant. Evidence: ' +
       'packages/api/src/__tests__/event-consumers-postgres.test.ts suite, including its two-tenant ownership ' +
       'regression with DB enforcement off, plus services/__tests__/event-consumers.test.ts. ' +
       'Follow-up: legacy-aware RLS for durable consumers.',
