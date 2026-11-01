@@ -45,6 +45,33 @@ describe('disposable PostgreSQL role URLs', () => {
 });
 
 describe('PostgreSQL test target guard', () => {
+  test('G1 rejects a hostless target at load before its direct psql hooks can run', () => {
+    const result = Bun.spawnSync({
+      cmd: [process.execPath, 'test', new URL('./multitenancy-postgres.test.ts', import.meta.url).pathname],
+      env: {
+        PATH: process.env.PATH ?? '',
+        HOME: process.env.HOME ?? '',
+        OMNI_G1_POSTGRES_URL: 'postgresql:///postgres',
+        OMNI_G1_PSQL_BIN: 'must-never-run',
+        PGPORT: '7777',
+      },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr.toString()).toContain('hostless URLs require PGHOST');
+    expect(result.stderr.toString()).not.toContain('ENOENT');
+  });
+
+  test.each([
+    'postgresql://u:x@localhost:5432,127.0.0.1:7777/db',
+    'postgresql://u:x@localhost:5432,y@127.0.0.1:7777/db',
+    'postgresql://u:x@y@127.0.0.1:7777/db',
+  ])('refuses ambiguous raw authorities before parsing: %s', (url) => {
+    expect(() => assertPgTestTarget(url, gateEnv)).toThrow('single-host URLs');
+    expect(() => pgRoleUrl(url, 'test_db', role, gateEnv)).toThrow('single-host URLs');
+  });
+
   test.each([
     'OMNI_G1_POSTGRES_URL',
     'OMNI_G2_POSTGRES_URL',

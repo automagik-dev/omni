@@ -198,10 +198,16 @@ export const driverRejection = <T>(p: Promise<T>): Promise<T> =>
 
 /** Refuse ambiguous or shared targets before either postgres.js or psql opens a connection. */
 export function assertPgTestTarget(url: string, env: Record<string, string | undefined> = process.env): void {
-  const parsed = new URL(url);
   const refuse = (reason: string): never => {
     throw new Error(`Unsafe PostgreSQL test target: ${reason}`);
   };
+  // Inspect the raw authority first: WHATWG and PostgreSQL drivers disagree
+  // about comma host lists and whether the first or last @ ends user info.
+  const authority = url.match(/^[a-z][a-z\d+.-]*:\/\/([^/?#]*)/i)?.[1] ?? '';
+  if (authority.includes(',') || url.split('@').length > 2) {
+    refuse('single-host URLs with at most one raw @ separator are required');
+  }
+  const parsed = new URL(url);
   if (!['postgres:', 'postgresql:'].includes(parsed.protocol)) refuse('expected a PostgreSQL URL');
   if (['host', 'hostaddr', 'port', 'service'].some((key) => parsed.searchParams.has(key))) {
     refuse('query host/port/service selectors differ between drivers; use PGHOST/PGPORT or an explicit gate URL');
