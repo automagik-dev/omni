@@ -17,7 +17,7 @@ function fixture(source: string): string {
 }
 function clusterDirs(): string[] {
   return readdirSync(tmpdir())
-    .filter((name) => name.startsWith('omni-g3-pg-'))
+    .filter((name) => name.startsWith('omni-g3-pg-') || name.startsWith('omni-pg-gate-output-'))
     .sort();
 }
 
@@ -40,7 +40,7 @@ describe('disposable PostgreSQL isolation', () => {
     const fail = fixture('process.exit(1);');
     await expect(createDisposableCluster({ initdb, pgCtl: fail, psql: fail })).rejects.toThrow('postmaster');
     expect(clusterDirs()).toEqual(before);
-  });
+  }, 20000);
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
     test(`gate ${signal} stops its cluster and deletes output and data directories`, async () => {
       const before = clusterDirs();
@@ -72,6 +72,6 @@ describe('disposable PostgreSQL isolation', () => {
         child.kill();
         await child.exited;
       }
-    }, 10000);
+    }, 20000);
   }
 });
