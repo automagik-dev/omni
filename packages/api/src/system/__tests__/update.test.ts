@@ -119,6 +119,18 @@ function setup(env: Record<string, string> = {}, options: { version?: string; cl
   return { updater, requests, clock };
 }
 
+async function waitForFailedUpdate(): Promise<void> {
+  const deadline = performance.now() + 3_000;
+  while (
+    existsSync(stateFile()) ||
+    events.at(-1)?.type !== 'system.update.finished' ||
+    !sent.at(-1)?.includes('did not complete')
+  ) {
+    if (performance.now() >= deadline) throw new Error('Timed out waiting for the failed update to settle');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+}
+
 const stateFile = () => join(dir, 'system-update.json');
 const lastCode = () => sent.at(-1)?.match(/^update ([A-Z0-9]{6})$/m)?.[1] ?? '';
 
@@ -335,7 +347,7 @@ describe("the owner's yes", () => {
     await updater.request(LATEST, 'key-1');
     await updater.confirm(lastCode(), OWNER);
     spawned[0]?.child.exitListener?.(1, null);
-    await Bun.sleep(20);
+    await waitForFailedUpdate();
     expect(existsSync(stateFile())).toBe(false);
     expect(events.at(-1)).toMatchObject({
       type: 'system.update.finished',
@@ -344,7 +356,8 @@ describe("the owner's yes", () => {
     expect(sent.at(-1)).toBe(`🐙 The update to ${LATEST} did not complete; Omni is still on ${CURRENT}.`);
     // Settled once: a late error from the same child changes nothing.
     spawned[0]?.child.errorListener?.(new Error('late'));
-    await Bun.sleep(20);
+    // Read the settled state through the public API before checking idempotence.
+    expect(await updater.reconcile()).toBeNull();
     expect(events.filter((event) => event.type === 'system.update.finished').length).toBe(1);
   });
 
@@ -353,7 +366,7 @@ describe("the owner's yes", () => {
     await updater.request(LATEST, 'key-1');
     await updater.confirm(lastCode(), OWNER);
     spawned[0]?.child.errorListener?.(new Error('ENOENT'));
-    await Bun.sleep(20);
+    await waitForFailedUpdate();
     expect(existsSync(stateFile())).toBe(false);
     expect(events.at(-1)?.payload).toMatchObject({ ok: false });
   });
