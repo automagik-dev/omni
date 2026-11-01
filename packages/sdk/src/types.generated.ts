@@ -3685,7 +3685,7 @@ export interface paths {
         put?: never;
         /**
          * Connect an external account
-         * @description Validates synchronously through the provider manifest. A provider rejection still persists the row, returned with status "error" and a readable lastError — never a false "connected". Credentials are sealed and never returned.
+         * @description Validates synchronously through the provider manifest. A provider rejection still persists the row, returned with status "error" and a readable lastError — never a false "connected". Credentials are sealed and never returned. The optional hookSecret is also write-only and sealed per tenant; only hasHookSecret is returned. Unmatched delivery counters are available in connector views.
          */
         post: operations["createConnector"];
         delete?: never;
@@ -3743,7 +3743,10 @@ export interface paths {
         delete: operations["deleteConnector"];
         options?: never;
         head?: never;
-        /** Update a connector (revalidates when credentials change) */
+        /**
+         * Update a connector (revalidates when credentials change)
+         * @description Set or rotate the write-only hookSecret without revalidating credentials. Responses expose only hasHookSecret.
+         */
         patch: operations["updateConnector"];
         trace?: never;
     };
@@ -3759,7 +3762,7 @@ export interface paths {
         put?: never;
         /**
          * Create an event subscription
-         * @description The target automation must exist and its triggerEventType must be "connector.event". The verification secret is sealed and never returned.
+         * @description With ingress omitted or "subscription", targetAutomationId and verificationSecret are required; the target trigger is connector.event and the secret is sealed and never returned. With ingress "connector", eventKey is under connector.{provider}., targetAutomationId is optional and no subscription secret is accepted. A target requires one exact event name matching its trigger; trailing-* prefix globs are allowed only without a target.
          */
         post: operations["createConnectorSubscription"];
         delete?: never;
@@ -3784,7 +3787,7 @@ export interface paths {
         head?: never;
         /**
          * Pause, resume or re-point an event subscription
-         * @description Rotating verificationSecret takes effect immediately: the old secret stops verifying and the provider copy must be updated. Paused subscriptions still verify a delivery, then ack 202 ignored and publish nothing.
+         * @description Rotating verificationSecret takes effect immediately: the old secret stops verifying and the provider copy must be updated. Paused subscriptions still verify a delivery, then ack 202 ignored and publish nothing. Ingress cannot be changed. Connector ingress rejects verificationSecret. Except for a pause-only change, it rechecks that a target holds the exact event name; a glob subscription must remain target-less.
          */
         patch: operations["updateConnectorSubscription"];
         trace?: never;
@@ -3800,7 +3803,7 @@ export interface paths {
         put?: never;
         /**
          * Send a test delivery through the real pipeline
-         * @description Uses the manifest sample or the caller payload, bypasses signature verification, and runs parse → filters → claim → publish → automation. The idempotency key is random, so repeated tests are not deduped.
+         * @description Uses the manifest sample or the caller payload, bypasses signature verification, and runs parse → filters → claim → publish → automation. The idempotency key is random, so repeated tests are not deduped. Connector-ingress subscriptions return 409 CONNECTOR_INGRESS_TEST_UNSUPPORTED without journaling.
          */
         post: operations["testConnectorSubscription"];
         delete?: never;
@@ -3843,6 +3846,26 @@ export interface paths {
          * @description Auth-exempt provider receiver. The raw body is verified against the subscription’s sealed secret before anything is parsed or published. Unknown subscription, unopenable secret and bad signature all collapse into the same 401, so the endpoint is not an existence oracle. A paused subscription acks 202 ignored after a valid signature. A duplicate provider redelivery acks 200 without a second journal row. A failing attempt releases the claim and returns 500, so the provider’s retry can claim again.
          */
         post: operations["receiveConnectorEvent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/connectors/hooks/{connectorId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Public per-connector provider hook
+         * @description Verifies the raw body with the sealed connector hook secret. Active connector-ingress subscriptions match typed names and exact filters. Matches share one journal claim and publish; duplicates return 200. Unmatched or invalid names and unparseable signed bodies return 202 and update counters without storing the body. Parser failures use connector.{provider}.unparsed. Counter names are capped at 200 characters. Oversized event envelopes return 413; database/transport outages return 500. Publish failures release the claim.
+         */
+        post: operations["receiveConnectorHook"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4736,7 +4759,7 @@ export interface paths {
         put?: never;
         /**
          * Send flow message
-         * @description Send an interactive flow message through the channel plugin. Returns the flowToken echoed back on the completion webhook (nfm_reply). Use flowAction 'data_exchange' for endpoint-backed flows.
+         * @description Send an interactive flow message through the channel plugin. Returns the flowToken echoed back on the completion webhook (nfm_reply). Use flowAction 'data_exchange' for endpoint-backed flows. On an asc-flow instance the flow goes out as msg_interativa_parametros.tipo 5 by flowId only, passed through as fluxo_id; screen, flowAction and draft are not carried, and the completion is not correlated by flowToken.
          */
         post: operations["sendWhatsappFlow"];
         delete?: never;
@@ -8662,6 +8685,11 @@ export interface components {
                 [key: string]: unknown;
             };
             hasCredentials: boolean;
+            hasHookSecret: boolean;
+            totalUnmatched: number;
+            /** Format: date-time */
+            lastUnmatchedAt: string | null;
+            lastUnmatchedEventType: string | null;
             /** Format: date-time */
             lastValidatedAt: string | null;
             lastError: string | null;
@@ -8677,11 +8705,13 @@ export interface components {
             /** Format: uuid */
             connectorId: string;
             providerEventKey: string;
+            /** @enum {string} */
+            ingress: "subscription" | "connector";
             filters: {
                 [key: string]: unknown;
             };
             /** Format: uuid */
-            targetAutomationId: string;
+            targetAutomationId: string | null;
             /** @enum {string} */
             status: "active" | "paused" | "error";
             inboundUrl: string;
@@ -9781,7 +9811,7 @@ export interface components {
             dynamic?: boolean;
         };
         SendFlowRequest: {
-            /** @description Recipient phone (E.164 or digits) */
+            /** @description whatsapp-business: recipient phone (E.164 or digits). asc-flow: the cod_atendimento of the open conversation (digits), not a phone */
             to: string;
             /** @description Meta flow id (exactly one of flowId/flowName) */
             flowId?: string;
@@ -10196,6 +10226,8 @@ export interface components {
             credentials: {
                 [key: string]: string;
             };
+            /** @description Connector delivery secret; sealed per tenant, write-only. PATCH rotates it. */
+            hookSecret?: string;
             /** @description Non-secret provider config, validated against the manifest configSchema */
             config?: {
                 [key: string]: unknown;
@@ -10207,11 +10239,15 @@ export interface components {
             credentials?: {
                 [key: string]: string;
             };
+            /** @description Connector delivery secret; sealed per tenant, write-only. PATCH rotates it. */
+            hookSecret?: string;
             config?: {
                 [key: string]: unknown;
             };
         };
         CreateSubscriptionBody: {
+            /** @enum {string} */
+            ingress?: "subscription";
             /** @description Manifest event key, e.g. "taskStatusUpdated" */
             eventKey: string;
             filters?: {
@@ -10221,6 +10257,16 @@ export interface components {
             targetAutomationId: string;
             /** @description Provider HMAC secret; sealed at rest and never returned */
             verificationSecret: string;
+        } | {
+            /** @enum {string} */
+            ingress: "connector";
+            /** @description Exact connector.{provider}. event name, or a trailing-* prefix glob without a target */
+            eventKey: string;
+            filters?: {
+                [key: string]: unknown;
+            };
+            /** Format: uuid */
+            targetAutomationId?: string;
         };
         UpdateSubscriptionBody: {
             /** @enum {string} */
@@ -23367,6 +23413,27 @@ export interface operations {
                     };
                 };
             };
+            /** @description CONNECTOR_INGRESS_TEST_UNSUPPORTED: provider delivery required for connector ingress */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
         };
     };
     invokeConnectorAction: {
@@ -23560,6 +23627,106 @@ export interface operations {
                 };
             };
             /** @description Processing failed; the claim was released so a retry can claim it */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    receiveConnectorHook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                connectorId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Duplicate delivery */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeliveryReceipt"];
+                };
+            };
+            /** @description Accepted or unmatched */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeliveryReceipt"];
+                };
+            };
+            /** @description Uniform verification refusal: unknown connector, missing secret or bad signature */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Provider delivery exceeds the event bus payload limit */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Processing failed; retry may claim again */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -29323,7 +29490,7 @@ export interface operations {
         requestBody?: {
             content: {
                 "application/json": {
-                    /** @description Recipient phone (E.164 or digits) */
+                    /** @description whatsapp-business: recipient phone (E.164 or digits). asc-flow: the cod_atendimento of the open conversation (digits), not a phone */
                     to: string;
                     /** @description Meta flow id (exactly one of flowId/flowName) */
                     flowId?: string;

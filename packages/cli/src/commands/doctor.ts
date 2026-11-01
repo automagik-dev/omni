@@ -47,8 +47,9 @@
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { createOmniClient } from '@omni/sdk';
+import { OmniApiError, type OmniClient, createOmniClient } from '@omni/sdk';
 import { Command } from 'commander';
+import { z } from 'zod';
 import {
   type Config,
   type ServerConfig,
@@ -77,6 +78,7 @@ import { buildRuntimeEnv, resolvePgservePort } from '../runtime-env.js';
 import { getServerLauncherPath } from '../server-bundle.js';
 import { loadSigningContext } from '../signing.js';
 import { generateApiKey } from '../utils/keys.js';
+import { stripTerminalControls } from '../utils/terminal.js';
 import { VERSION } from '../version.js';
 
 // ============================================================================
@@ -101,7 +103,8 @@ export type CheckId =
   | 'pgserve-canonical'
   | 'port-canonical-owner'
   | 'embedded-data-orphaned'
-  | 'nats-bind-address';
+  | 'nats-bind-address'
+  | 'connector-unmatched';
 
 export interface CheckResult {
   id: CheckId;
@@ -190,6 +193,10 @@ function readPm2EnvKey(entry: Pm2Entry, key: string): string | undefined {
 
 /** Shape injected by the test harness to mock slow/external inputs. */
 export interface DoctorDeps {
+  /** Authenticated connectors list; counters must never come from public health. */
+  listConnectors: OmniClient['connectors']['list'];
+  /** Clock for the recent-unmatched window; defaults to Date.now. */
+  now?: () => number;
   /** Return all pm2 processes (or null on error). */
   getPm2Processes: () => Promise<Pm2Entry[] | null>;
   /** Return true if a TCP connect to localhost:port succeeds. */
@@ -295,6 +302,13 @@ export interface DoctorDeps {
 /** Default production deps — each is a thin shim around the real call. */
 function productionDeps(): DoctorDeps {
   return {
+    listConnectors: async (params) => {
+      const cliConfig = loadLocalRuntimeConfig();
+      if (!cliConfig.apiKey)
+        throw new OmniApiError('Authenticated connectors:read is required', 'UNAUTHORIZED', undefined, 401);
+      const baseUrl = cliConfig.apiUrl ?? `http://localhost:${loadServerConfig().port}`;
+      return createOmniClient({ baseUrl, apiKey: cliConfig.apiKey, cliVersion: VERSION }).connectors.list(params);
+    },
     getPm2Processes,
     canConnect: async (port: number) => {
       try {
@@ -1259,6 +1273,64 @@ async function checkNatsBindAddress(deps: DoctorDeps): Promise<CheckResult> {
 // MAIN
 // ============================================================================
 
+const UnmatchedConnectorSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  totalUnmatched: z.number().int().nonnegative(),
+  lastUnmatchedAt: z.string().datetime().nullable(),
+  lastUnmatchedEventType: z.string().transform(stripTerminalControls).nullable(),
+});
+
+/** One line per connector, including zero counts, through the authenticated list only. */
+export async function checkConnectorUnmatched(
+  deps: Pick<DoctorDeps, 'listConnectors' | 'now'>,
+): Promise<CheckResult[]> {
+  try {
+    const checks: CheckResult[] = [];
+    const now = (deps.now ?? Date.now)();
+    let cursor: string | undefined;
+    const seen = new Set<string>();
+    while (true) {
+      const page = await deps.listConnectors({ limit: 100, cursor });
+      for (const item of page.items) {
+        const connector = UnmatchedConnectorSchema.parse(item);
+        const age =
+          connector.lastUnmatchedAt === null ? Number.POSITIVE_INFINITY : now - Date.parse(connector.lastUnmatchedAt);
+        checks.push({
+          id: 'connector-unmatched',
+          level: connector.totalUnmatched > 0 && age <= 24 * 60 * 60 * 1000 ? 'WARN' : 'OK',
+          detail: `${connector.name} (${connector.id}): total_unmatched=${connector.totalUnmatched} last_unmatched_at=${connector.lastUnmatchedAt ?? '-'} last_unmatched_event_type=${connector.lastUnmatchedEventType ?? '-'}`,
+        });
+      }
+      if (!page.meta.hasMore) return checks;
+      if (!page.meta.cursor || seen.has(page.meta.cursor)) throw new Error('Invalid connector pagination cursor');
+      cursor = page.meta.cursor;
+      seen.add(cursor);
+    }
+  } catch (error) {
+    return [
+      {
+        id: 'connector-unmatched',
+        level: 'WARN',
+        detail: connectorCountersError(error),
+      },
+    ];
+  }
+}
+
+function connectorCountersError(error: unknown): string {
+  if (error instanceof OmniApiError && (error.status === 401 || error.status === 403)) {
+    return 'Connector counters unavailable; authenticated connectors:read access is required.';
+  }
+  const reason =
+    error instanceof z.ZodError
+      ? `Invalid connector response: ${error.issues[0]?.path.join('.')}: ${error.issues[0]?.message}`
+      : error instanceof Error
+        ? error.message
+        : 'Unknown error';
+  return `Connector counters unavailable: ${stripTerminalControls(reason).slice(0, 200).trim() || 'Unknown error'}`;
+}
+
 /** Run the full check battery sequentially. */
 async function runAllChecks(deps: DoctorDeps): Promise<CheckResult[]> {
   return [
@@ -1276,6 +1348,7 @@ async function runAllChecks(deps: DoctorDeps): Promise<CheckResult[]> {
     await checkPortCanonicalOwner(deps),
     await checkEmbeddedDataOrphaned(deps),
     await checkNatsBindAddress(deps),
+    ...(await checkConnectorUnmatched(deps)),
   ];
 }
 
@@ -1441,6 +1514,7 @@ Checks:
   pm2-logrotate-installed  pm2-logrotate module installed with expected settings
   pgserve-canonical        using canonical pgserve@^2.1.0 (shared backbone) vs. embedded
   port-canonical-owner     canonical ports (NATS, API) owned by pm2-managed PIDs
+  connector-unmatched      per-connector unmatched counters (authenticated connectors:read)
 
 Safety:
   --fix NEVER touches ~/.omni/data/pgserve — it only operates on the pm2

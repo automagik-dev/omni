@@ -35,6 +35,15 @@ export {
 
 // Types
 export type {
+  Connector,
+  ConnectorEventSubscription,
+  ConnectorProviderSummary,
+  ConnectorProviderDetail,
+  CreateConnectorBody,
+  UpdateConnectorBody,
+  CreateConnectorSubscriptionBody,
+  UpdateConnectorSubscriptionBody,
+  ListConnectorsParams,
   Instance,
   Person,
   Event,
