@@ -54,8 +54,8 @@ export const DurableConsumerSchema = z.object({
   }),
   scoped: z.boolean().openapi({
     description:
-      'true = instance-scoped consumer (opt-in): pulls only its instanceIds, visible only to its owner key and to ' +
-      'instance-unrestricted keys. false (default) = global consumer, unchanged behaviour',
+      'true = instance-scoped consumer: pulls only its instanceIds, visible only to its owner key and to ' +
+      'instance-unrestricted keys. Restricted keys always create scoped consumers; false = global consumer for unrestricted keys',
   }),
   instanceIds: z
     .array(z.string().uuid())
@@ -136,12 +136,13 @@ export const CreateConsumerSchema = z.object({
     .optional()
     .openapi({
       description:
-        'Opt-in instance scoping. false (default) = global consumer, exactly the existing behaviour. true = the ' +
+        'Instance-restricted keys always create scoped consumers, even with false. For unrestricted keys, false ' +
+        '(default) creates a global consumer. true = the ' +
         'consumer is owned by the calling API key and pulls only journal rows of its instanceIds; only the owner ' +
         'key or an instance-unrestricted key can inspect, pull, ack, delete or list it (others get 404).',
     }),
   // Typed loosely on purpose: before 0082 an unknown `instanceIds` was stripped, so a legacy client that
-  // sends one (any shape) without `scoped: true` must keep being accepted and ignored. The service
+  // sends one (any shape) on an unrestricted unscoped create keeps it ignored. The service
   // validates it (array of up to 100 UUIDs) only for scoped consumers.
   instanceIds: z
     .unknown()
@@ -151,7 +152,7 @@ export const CreateConsumerSchema = z.object({
       items: { type: 'string', format: 'uuid' },
       maxItems: 100,
       description:
-        'Scoped consumers only (ignored without scoped: true, as before). Instance-restricted key: defaults to all ' +
+        'Scoped consumers only (ignored on unrestricted unscoped creates). Instance-restricted key: defaults to all ' +
         'of its instances; naming an instance outside the key is 403; an empty result or an unknown instance is 400. ' +
         'Instance-unrestricted key: required and non-empty.',
     }),
@@ -187,7 +188,8 @@ export const AckConsumerSchema = z
       description: 'The journal_seq to advance to (a pull result\'s "cursor"). Monotonic: equal = no-op, lower = 400',
     }),
     leaseId: z.string().uuid().optional().openapi({
-      description: "Shared consumers: the pull result's leaseId (required instead of cursor)",
+      description:
+        "Shared consumers: the pull result's leaseId (required instead of cursor); ack with the key that pulled it",
     }),
   })
   .refine((body) => body.cursor !== undefined || body.leaseId !== undefined, {
@@ -263,7 +265,8 @@ export function registerEventConsumerSchemas(registry: OpenAPIRegistry): void {
       'Registers a named consumer over the event journal: a type filter (trailing-* prefix glob, the events-wait ' +
       'contract) plus optional payload conditions (the automation-trigger matcher), and a stored cursor. ' +
       "startFrom 'now' (default) begins at the journal head; 'beginning' replays the full journal (projections). " +
-      'Opt-in scoped: true binds the consumer to the calling key and an instance set (see instanceIds).',
+      'scoped: true binds the consumer to the calling key and an instance set (see instanceIds). ' +
+      'Instance-restricted keys always create scoped consumers, including when scoped is false or omitted.',
     request: { body: { content: { 'application/json': { schema: CreateConsumerSchema } } } },
     responses: {
       201: {
@@ -318,6 +321,11 @@ export function registerEventConsumerSchemas(registry: OpenAPIRegistry): void {
         description: 'Deleted',
         content: { 'application/json': { schema: z.object({ success: z.boolean() }) } },
       },
+      403: {
+        description:
+          'Restricted key on an unscoped consumer, or a lease claimed by another key; create a scoped consumer and ack your own lease',
+        content: { 'application/json': { schema: ErrorSchema } },
+      },
       404: {
         description: 'No such consumer (or a scoped consumer this key cannot access)',
         content: { 'application/json': { schema: ErrorSchema } },
@@ -334,13 +342,19 @@ export function registerEventConsumerSchemas(registry: OpenAPIRegistry): void {
     description:
       'Pages journal events strictly after the stored cursor, in journal_seq order, pre-filtered by the type glob ' +
       'and payload conditions. Does NOT advance the cursor — ack the returned cursor to commit progress ' +
-      '(at-least-once: a client that crashes mid-page re-pulls the same page). waitMs long-polls when no rows are available.',
+      '(at-least-once: a client that crashes mid-page re-pulls the same page). waitMs long-polls when no rows are available. ' +
+      'Instance-restricted keys cannot pull or lease unscoped consumers; create a scoped consumer instead.',
     request: {
       params: z.object({ name: z.string().openapi({ description: 'Consumer name' }) }),
       query: PullConsumerQuerySchema,
     },
     responses: {
       200: { description: 'One page of events', content: { 'application/json': { schema: PullResultSchema } } },
+      403: {
+        description:
+          'Restricted key on an unscoped consumer, or a lease claimed by another key; create a scoped consumer and ack your own lease',
+        content: { 'application/json': { schema: ErrorSchema } },
+      },
       404: {
         description: 'No such consumer (or a scoped consumer this key cannot access)',
         content: { 'application/json': { schema: ErrorSchema } },
@@ -364,9 +378,10 @@ export function registerEventConsumerSchemas(registry: OpenAPIRegistry): void {
       'READ-ONLY: the stream never moves the stored cursor and never takes a lease — keep acking with ' +
       'POST /events/consumers/{name}/ack. Fan-out consumers only: a shared consumer is refused with 400. A ' +
       'consumer deleted mid-stream ends the stream with an `error` event. Requires events:write (as pull) and ' +
-      'resolves the consumer exactly as pull: a scoped consumer the key may not see is 404, a restricted owner ' +
+      'a scoped consumer the key may not see is 404, a restricted owner ' +
       'streams only its narrowed instances, and an instance-restricted API key only receives rows of its own ' +
-      'instances. An access-filtered consumer holds an unfilled row until its verdict lands. A stream lives at most ' +
+      'instances. A restricted key cannot stream an unscoped consumer (403); create a scoped consumer instead. ' +
+      'An access-filtered consumer holds an unfilled row until its verdict lands. A stream lives at most ' +
       'EVENT_STREAM_MAX_LIFETIME_MS (default and maximum 30000, the revocation ceiling), then ends with a ' +
       '`reconnect` event carrying `retry:` and `id:` (the scanned position, past filtered-out rows) — reconnect ' +
       'with Last-Event-ID to resume and re-authenticate. Past ' +
@@ -386,6 +401,10 @@ export function registerEventConsumerSchemas(registry: OpenAPIRegistry): void {
         description: 'Invalid start position, or the consumer is shared',
         content: { 'application/json': { schema: ErrorSchema } },
       },
+      403: {
+        description: 'Instance-restricted key on an unscoped consumer; create a scoped consumer',
+        content: { 'application/json': { schema: ErrorSchema } },
+      },
       404: { description: 'No such consumer', content: { 'application/json': { schema: ErrorSchema } } },
       429: {
         description: 'Too many open streams on this server or for this key (EVENT_STREAM_MAX_PER_PROCESS / _PER_KEY)',
@@ -402,7 +421,9 @@ export function registerEventConsumerSchemas(registry: OpenAPIRegistry): void {
     summary: 'Advance the consumer cursor (monotonic)',
     description:
       "Commits progress up to a pull result's cursor. Monotonic: an ack equal to the stored cursor is an " +
-      'idempotent no-op, an ack behind it is refused with 400 — a durable cursor never moves backwards.',
+      'idempotent no-op, an ack behind it is refused with 400 — a durable cursor never moves backwards. ' +
+      'Restricted keys cannot ack unscoped consumers (including stream positions); create a scoped consumer. ' +
+      'Shared leases must be acked by the key that pulled them.',
     request: {
       params: z.object({ name: z.string().openapi({ description: 'Consumer name' }) }),
       body: { content: { 'application/json': { schema: AckConsumerSchema } } },
@@ -413,6 +434,11 @@ export function registerEventConsumerSchemas(registry: OpenAPIRegistry): void {
         content: { 'application/json': { schema: z.object({ data: DurableConsumerSchema }) } },
       },
       400: { description: 'Ack behind the stored cursor', content: { 'application/json': { schema: ErrorSchema } } },
+      403: {
+        description:
+          'Restricted key on an unscoped consumer, or a lease claimed by another key; create a scoped consumer and ack your own lease',
+        content: { 'application/json': { schema: ErrorSchema } },
+      },
       404: {
         description: 'No such consumer (or a scoped consumer this key cannot access)',
         content: { 'application/json': { schema: ErrorSchema } },

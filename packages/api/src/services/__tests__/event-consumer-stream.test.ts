@@ -595,9 +595,11 @@ describe('instance restriction (B1)', () => {
 
   test("the stream scan carries the key's instance predicate; a full key's scan does not", async () => {
     const wheres: unknown[] = [];
-    const service = new EventConsumerService(fakePool(consumer(), () => [row(8)], wheres));
-    await service.scanForStream('vox', 7, { tenantId: null, caller: { keyId: null, instanceIds: ['inst-a'] } });
-    await service.scanForStream('vox', 7, FULL_ACCESS);
+    const keyId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const scoped = consumer({ scoped: true, ownerKeyId: keyId, instanceIds: ['inst-a'] });
+    const service = new EventConsumerService(fakePool(scoped, () => [row(8)], wheres));
+    await service.scanForStream('vox', 7, { tenantId: null, caller: { keyId, instanceIds: ['inst-a'] } });
+    await new EventConsumerService(fakePool(consumer(), () => [row(8)], wheres)).scanForStream('vox', 7, FULL_ACCESS);
     const [restricted, full] = wheres.map((w) => render(w as Parameters<PgDialect['sqlToQuery']>[0]));
     expect(restricted?.sql).toContain('"instance_id" in');
     expect(restricted?.params).toContain('inst-a');
