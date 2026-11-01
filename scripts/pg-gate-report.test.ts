@@ -45,9 +45,12 @@ for (const githubActions of [false, true]) {
         FORCE_COLOR,
         GITHUB_ACTIONS: githubActions ? 'true' : undefined,
         CI: githubActions ? 'true' : undefined,
+        CLAUDECODE: undefined,
       });
       expect(child.code).toBe(1);
-      const summary = formatPgGateFailure(child.stdout + child.stderr, suites, ['bun test exited 1'], '/tmp/full.log');
+      const output = child.stdout + child.stderr;
+      if (githubActions) expect(output).toContain('::group::');
+      const summary = formatPgGateFailure(output, suites, ['bun test exited 1'], '/tmp/full.log');
       for (const name of ['before', 'after', 'load', 'test']) expect(summary).toContain(join(dir, `${name}.test.ts`));
       for (const error of ['beforeAll proof', 'afterAll proof', 'load proof', 'test proof'])
         expect(summary).toContain(`error: ${error}`);
@@ -63,6 +66,9 @@ error: beforeAll proof
       at <anonymous> (./packages/before-postgres.test.ts:1:90)
 ::error file=./packages/before-postgres.test.ts,line=1,col=90,title=error: beforeAll proof::%0A      at <anonymous> (./packages/before-postgres.test.ts:1:90)
 ::warning::annotation distraction
+::notice::annotation distraction
+::debug file=./packages/before-postgres.test.ts::annotation distraction
+::add-mask::annotation distraction
 (fail) (unnamed) [0.19ms]
 ::endgroup::
 ::group::packages/passed-postgres.test.ts:
@@ -147,11 +153,13 @@ error: second proof
 Error: load noise
 # Unhandled error between tests
 SyntaxError: load proof
+-------------------------------
 `;
   const summary = formatPgGateFailure(output, ['proof.test.ts'], ['bun test exited 1'], '/tmp/full.log');
   for (const error of ['TypeError: first proof', 'error: second proof', 'SyntaxError: load proof'])
     expect(summary).toContain(error);
   expect(summary).not.toContain('noise');
+  expect(summary).not.toContain('-------------------------------');
 });
 
 for (const marker of ['(fail)', '✗']) {
@@ -255,7 +263,8 @@ test('CI context tail keeps at most 200 lines, filters NOTICE and bounds individ
   const reporter = new URL('./pg-gate-report.ts', import.meta.url).href;
   const source = `
     import { reportPgGateResult } from ${JSON.stringify(reporter)};
-    const output = Array.from({length: 500}, (_, i) => 'context-' + i + '\\nNOTICE noisy').join('\\n')
+    const output = Array.from({length: 500}, (_, i) => 'context-' + i
+      + '\\nNOTICE noisy\\n::group::wrapped\\n::error::annotation\\n::debug::annotation\\n::endgroup::').join('\\n')
       + '\\n' + 'x'.repeat(4000) + '\\nproof.test.ts:\\nerror: tail proof\\n(fail) failed';
     process.exitCode = reportPgGateResult(output, ['proof.test.ts'], 1);
   `;
@@ -266,6 +275,7 @@ test('CI context tail keeps at most 200 lines, filters NOTICE and bounds individ
   if (!tail) throw new Error('Missing CI context tail');
   expect(tail.trimEnd().split('\n')).toHaveLength(200);
   expect(tail).not.toContain('NOTICE');
+  expect(tail.split('\n').some((line) => line.startsWith('::'))).toBe(false);
   expect(tail).not.toContain('context-0\n');
   expect(tail).toContain('context-499\n');
   expect(tail).toContain(`${'x'.repeat(500)}\n`);

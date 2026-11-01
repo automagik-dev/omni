@@ -27,7 +27,7 @@ function failureDetails(lines: string[]): string[] {
         ? [line, timeout]
         : error < 0
           ? [line]
-          : lines.slice(error, end).filter((entry) => entry.trim());
+          : lines.slice(error, end).filter((entry) => entry.trim() && !/^-+$/.test(entry.trim()));
     failures++;
     if (failures <= 3) details.push(...context.slice(0, 4).map((entry) => `    ${entry.trim().slice(0, 300)}`));
     lastError = -1;
@@ -42,12 +42,12 @@ export function formatPgGateFailure(output: string, suites: string[], problems: 
   let current: (typeof sections)[number] | undefined;
   for (const rawLine of stripVTControlCharacters(output).split('\n')) {
     // Bun wraps file sections and repeats errors as annotations under GITHUB_ACTIONS.
-    if (/^::(?:error|warning)(?:\s|::)/.test(rawLine)) continue;
     if (rawLine === '::endgroup::') {
       current = undefined;
       continue;
     }
     const line = rawLine.startsWith('::group::') ? rawLine.slice('::group::'.length) : rawLine;
+    if (/^::[a-z-]+(?:\s|::)/.test(line)) continue;
     // Bun repeats failed test names after the final suite; that footer belongs to no file.
     if (/^\d+ tests? failed:$|^\s*\d+ (?:pass|fail|skip|error)\s*$/.test(line)) {
       current = undefined;
@@ -83,7 +83,7 @@ function reportPgGateFailure(output: string, suites: string[], problems: string[
   }
   const tail = stripVTControlCharacters(output)
     .split('\n')
-    .filter((line) => !line.includes('NOTICE'))
+    .filter((line) => !line.includes('NOTICE') && !line.startsWith('::'))
     .slice(-200)
     .map((line) => line.slice(0, 500));
   process.stderr.write(`pg-gate: child output tail (up to 200 non-NOTICE lines):\n${tail.join('\n')}\n`);
