@@ -45,7 +45,7 @@ describe('connector OpenAPI paths', () => {
       z
         .object({
           properties: z.record(z.string(), z.unknown()).optional(),
-          anyOf: z
+          oneOf: z
             .array(
               z.object({
                 properties: z.record(z.string(), z.unknown()),
@@ -59,7 +59,8 @@ describe('connector OpenAPI paths', () => {
     for (const name of ['CreateConnectorBody', 'UpdateConnectorBody']) {
       expect(schema(name).properties?.hookSecret).toMatchObject({ writeOnly: true, minLength: 8 });
     }
-    const variants = schema('CreateSubscriptionBody').anyOf;
+    expect(openApiSpec.components?.schemas?.CreateSubscriptionBody).not.toHaveProperty('discriminator');
+    const variants = schema('CreateSubscriptionBody').oneOf;
     expect(variants).toHaveLength(2);
     expect(variants?.[0]?.required).toEqual(['eventKey', 'targetAutomationId', 'verificationSecret']);
     expect(variants?.[1]?.required).toEqual(['ingress', 'eventKey']);

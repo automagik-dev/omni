@@ -713,7 +713,10 @@ export class ConnectorService {
       }
       this.assertConnectorEventKey(connector.provider, existing.providerEventKey);
       const target = input.targetAutomationId ?? existing.targetAutomationId;
-      if (target !== null) await this.assertTargetAutomation(target, existing.ingress, existing.providerEventKey);
+      const pauseOnly = input.status === 'paused' && Object.keys(input).length === 1;
+      if (target !== null && !pauseOnly) {
+        await this.assertTargetAutomation(target, existing.ingress, existing.providerEventKey);
+      }
     }
 
     if (input.status !== undefined) patch.status = input.status;

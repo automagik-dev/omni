@@ -316,6 +316,20 @@ async function problemMessage(res: Response): Promise<string> {
   return z.object({ error: z.object({ message: z.string() }) }).parse(await res.json()).error.message;
 }
 
+async function driftedTargetFixture() {
+  const fixture = await managementFixture();
+  const created = await fixture.app.request(
+    fixture.path,
+    requestBody('POST', { ingress: 'connector', eventKey: TYPED_EVENT, targetAutomationId: TYPED_TARGET }),
+  );
+  expect(created.status).toBe(201);
+  const { data } = SubscriptionResponseSchema.parse(await created.json());
+  const target = fixture.tables.automations.find((row) => row.id === TYPED_TARGET);
+  if (!target) throw new Error('missing automation fixture');
+  target.triggerEventType = 'connector.event';
+  return { ...fixture, subscriptionPath: `${fixture.path}/${data.id}` };
+}
+
 describe('connector ingress subscription management', () => {
   test('target-less globs are accepted with a nullable target and no subscription secret', async () => {
     const { app, tables, path } = await managementFixture();
@@ -429,21 +443,56 @@ describe('connector ingress subscription management', () => {
   });
 
   test('PATCH revalidates a persisted target even when only filters change', async () => {
-    const { app, tables, path } = await managementFixture();
-    const created = await app.request(
-      path,
-      requestBody('POST', { ingress: 'connector', eventKey: TYPED_EVENT, targetAutomationId: TYPED_TARGET }),
-    );
-    const { data } = SubscriptionResponseSchema.parse(await created.json());
-    const target = tables.automations.find((row) => row.id === TYPED_TARGET);
-    if (!target) throw new Error('missing automation fixture');
-    target.triggerEventType = 'connector.event';
+    const { app, tables, subscriptionPath } = await driftedTargetFixture();
+    for (const patch of [
+      { filters: { project: 1 } },
+      { status: 'paused', filters: { project: 1 } },
+      { status: 'paused', targetAutomationId: TYPED_TARGET },
+    ]) {
+      const message = await problemMessage(await app.request(subscriptionPath, requestBody('PATCH', patch)));
+      expect(message).toContain(TYPED_EVENT);
+      expect(message).toContain('connector.event');
+    }
+    expect(tables.connector_event_subscriptions[0]?.filters).toEqual({});
+    expect(tables.connector_event_subscriptions[0]?.status).toBe('active');
+  });
+
+  test('pause-only PATCH succeeds after the persisted target trigger drifts', async () => {
+    const { app, tables, subscriptionPath } = await driftedTargetFixture();
+    const paused = await app.request(subscriptionPath, requestBody('PATCH', { status: 'paused' }));
+    expect(paused.status).toBe(200);
+    expect(SubscriptionResponseSchema.parse(await paused.json()).data.status).toBe('paused');
+    expect(tables.connector_event_subscriptions[0]).toMatchObject({
+      status: 'paused',
+      targetAutomationId: TYPED_TARGET,
+      providerEventKey: TYPED_EVENT,
+    });
+  });
+
+  test('resume PATCH refuses a paused subscription whose target trigger drifted', async () => {
+    const { app, tables, subscriptionPath } = await driftedTargetFixture();
+    expect((await app.request(subscriptionPath, requestBody('PATCH', { status: 'paused' }))).status).toBe(200);
     const message = await problemMessage(
-      await app.request(`${path}/${data.id}`, requestBody('PATCH', { filters: { project: 1 } })),
+      await app.request(subscriptionPath, requestBody('PATCH', { status: 'active' })),
     );
     expect(message).toContain(TYPED_EVENT);
     expect(message).toContain('connector.event');
-    expect(tables.connector_event_subscriptions[0]?.filters).toEqual({});
+    expect(tables.connector_event_subscriptions[0]?.status).toBe('paused');
+  });
+
+  test('legacy subscription errors still name each missing field with ingress omitted or explicit', async () => {
+    const { app, tables, path } = await managementFixture();
+    for (const ingress of [undefined, 'subscription']) {
+      for (const input of [
+        { eventKey: 'taskCreated', targetAutomationId: LEGACY_TARGET, field: 'verificationSecret' },
+        { eventKey: 'taskCreated', verificationSecret: SECRET, field: 'targetAutomationId' },
+      ]) {
+        const { field, ...body } = input;
+        const message = await problemMessage(await app.request(path, requestBody('POST', { ...body, ingress })));
+        expect(message).toBe(`${field}: Required`);
+      }
+    }
+    expect(tables.connector_event_subscriptions).toHaveLength(0);
   });
 
   test('wrong namespaces, malformed or overlong names and per-subscription secrets are refused', async () => {

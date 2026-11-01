@@ -225,8 +225,8 @@ export function registerConnectorSchemas(registry: OpenAPIRegistry): void {
     description:
       'Rotating verificationSecret takes effect immediately: the old secret stops verifying and the provider copy ' +
       'must be updated. Paused subscriptions still verify a delivery, then ack 202 ignored and publish nothing. ' +
-      'Ingress cannot be changed. Connector ingress rejects verificationSecret and rechecks that a target holds ' +
-      'the exact event name; a glob subscription must remain target-less.',
+      'Ingress cannot be changed. Connector ingress rejects verificationSecret. Except for a pause-only change, ' +
+      'it rechecks that a target holds the exact event name; a glob subscription must remain target-less.',
     request: {
       params: SubscriptionParams,
       body: { content: { 'application/json': { schema: UpdateSubscriptionBodySchema } } },
