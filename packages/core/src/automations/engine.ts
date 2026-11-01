@@ -538,11 +538,9 @@ export class AutomationEngine {
   }
 
   /**
-   * Connector binding gate (D7): a delivery names exactly one target automation
-   * in its payload, so every other `connector.event` automation in the tenant
-   * must not react. Without this gate one subscription would fan out to every
-   * connector automation. A hand-made/test connector event with no
-   * `targetAutomationId` is not narrowed (there is nothing to narrow on).
+   * Connector binding gate (D7): a legacy delivery names one target automation;
+   * typed deliveries name a target list. Only those targets may react, and a
+   * connector event without explicit targets fires nothing.
    */
   private matchesConnectorTarget(automation: Automation, event: OmniEvent): boolean {
     return connectorTargetMatches(automation.id, event);

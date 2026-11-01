@@ -34,13 +34,15 @@ try {
   });
   const published = [];
   for (const type of ['connector.event', 'connector.x.y'] as const) {
-    let refused = false;
-    try {
-      await bus.publishGeneric(type, {});
-    } catch {
-      refused = true;
+    for (const publish of [bus.publish, bus.publishGeneric]) {
+      let refused = false;
+      try {
+        await Reflect.apply(publish, bus, [type, {}]);
+      } catch (error) {
+        refused = error instanceof Error && error.message.includes('publishConnector');
+      }
+      if (!refused) throw new Error(`${publish.name} accepted connector namespace`);
     }
-    if (!refused) throw new Error('publishGeneric accepted connector namespace');
     published.push(
       await bus.publishConnector(
         type,

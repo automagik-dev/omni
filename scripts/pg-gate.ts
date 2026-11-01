@@ -77,8 +77,12 @@ function findPostgresSuites(dir: string, out: string[] = []): string[] {
 }
 
 function option(name: string): string | undefined {
-  const index = process.argv.indexOf(`--${name}`);
-  return index === -1 ? undefined : process.argv[index + 1];
+  const flag = `--${name}`;
+  const argument = process.argv.find((arg) => arg === flag || arg.startsWith(`${flag}=`));
+  if (argument === undefined) return undefined;
+  const value = argument === flag ? process.argv[process.argv.indexOf(flag) + 1] : argument.slice(flag.length + 1);
+  if (!value || value.startsWith('--')) throw new Error(`pg-gate: ${flag} requires a value`);
+  return value;
 }
 
 const suites = [...findPostgresSuites(packagesDir), ...findPostgresSuites(releaseTestsDir)].sort();
@@ -115,7 +119,7 @@ let exitCode = 1;
 try {
   if (explicitUrl) {
     const parsed = new URL(explicitUrl);
-    if (parsed.hostname !== '127.0.0.1' || !isDisposablePgPort(Number(parsed.port))) {
+    if (explicitUrl.includes('?') || parsed.hostname !== '127.0.0.1' || !isDisposablePgPort(Number(parsed.port))) {
       throw new Error('pg-gate: requires 127.0.0.1 on a disposable port (never 5432 or 15432)');
     }
   }

@@ -1308,7 +1308,7 @@ export async function restoreConnectorEvent(
   const payload = connectorJournalPayload.safeParse(row?.rawPayload);
   if (
     !row ||
-    !row.idempotencyKey?.startsWith('connector:') ||
+    !/^connector:[^:]+:.+$/.test(row.idempotencyKey ?? '') ||
     row.eventType !== eventType ||
     (tenantId !== null && row.tenantId !== tenantId) ||
     !meta.success ||

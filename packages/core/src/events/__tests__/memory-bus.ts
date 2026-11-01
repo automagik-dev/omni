@@ -57,6 +57,7 @@ export class InMemoryEventBus implements EventBus, ConnectorEventPublisher {
     payload: EventPayloadMap[T],
     metadata?: Partial<OmniEvent['metadata']>,
   ): Promise<PublishResult> {
+    if (isConnectorEventType(type)) throw new Error('Connector events require publishConnector');
     return this.publishInternal(type, payload, metadata);
   }
 

@@ -287,6 +287,7 @@ describe('connector target membership across two tenants', () => {
 test('in-memory bus reserves connector publication and preserves ingress identity', async () => {
   const bus = new InMemoryEventBus();
   for (const type of ['connector.event', 'connector.x.y'] as const) {
+    await expect(Reflect.apply(bus.publish, bus, [type, {}])).rejects.toThrow('publishConnector');
     await expect(bus.publishGeneric(type, {})).rejects.toThrow('publishConnector');
     const id = crypto.randomUUID();
     const result = await bus.publishConnector(type, { targetAutomationIds: [] }, { publishEventId: id });

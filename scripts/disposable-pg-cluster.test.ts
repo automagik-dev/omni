@@ -22,6 +22,47 @@ function clusterDirs(): string[] {
 }
 
 describe('disposable PostgreSQL isolation', () => {
+  for (const args of [
+    ['--url', 'postgres://u:p@127.0.0.1:5432/db'],
+    ['--url=postgres://u:p@127.0.0.1:5432/db'],
+    ['--url=postgres://u:p@127.0.0.1:15432/db'],
+    ['--url', 'postgres://u:p@127.0.0.1:65432/db?port=5432'],
+    ['--url=postgres://u:p@127.0.0.1:65432/db?host=10.1.2.3'],
+    ['--url', 'postgres://u:p@127.0.0.1:65432/db?host=127.0.0.1&port=15432'],
+    ['--url', 'postgres://u:p@127.0.0.1:65432/db?'],
+    ['--url', 'host=10.1.2.3 port=5432 dbname=postgres'],
+    ['--url'],
+    ['--url='],
+    ['--url', '--keep'],
+  ]) {
+    test(`refuses unsafe or missing URL: ${args.join(' ')}`, async () => {
+      const before = clusterDirs();
+      const fail = fixture('process.exit(1);');
+      const child = Bun.spawn([process.execPath, 'scripts/pg-gate.ts', ...args], {
+        env: {
+          ...process.env,
+          // Even a regressed validator cannot launch tests or connect to a DB.
+          PATH: '/usr/bin:/bin',
+          OMNI_PG_INITDB_BIN: fail,
+          OMNI_PG_CTL_BIN: fail,
+          OMNI_PG_PSQL_BIN: fail,
+        },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      const [stdout, stderr, code] = await Promise.all([
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+        child.exited,
+      ]);
+      const output = stdout + stderr;
+      expect(code).not.toBe(0);
+      expect(output).toMatch(/requires 127\.0\.0\.1 on a disposable port|requires a value|Invalid URL/);
+      expect(output).not.toContain('disposable cluster on');
+      expect(clusterDirs()).toEqual(before);
+    });
+  }
+
   test('refuses both shared ports and invalid ports', () => {
     for (const port of [0, 5432, 15432, -1, 65536, 1.5]) expect(isDisposablePgPort(port)).toBe(false);
     expect(isDisposablePgPort(49152)).toBe(true);

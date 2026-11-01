@@ -405,6 +405,9 @@ postgresDescribe('ClickUp connector acceptance loop (real PostgreSQL)', () => {
       // Even complete-looking metadata cannot bless a non-ingress row or another tenant.
       for (const mutation of [
         { idempotencyKey: 'emit:forged' },
+        { idempotencyKey: 'connector:' },
+        { idempotencyKey: 'connector::delivery' },
+        { idempotencyKey: 'connector:subscription:' },
         { eventType: 'custom.forged' as const },
         { metadata: { ...row.metadata, source: 'automation' } },
         { metadata: { ...row.metadata, fullEventType: 'connector.other' } },
