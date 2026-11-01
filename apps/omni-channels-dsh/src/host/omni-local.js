@@ -1,5 +1,5 @@
 // Running Omni on this computer: a sandboxed Omni (`omni install --sandbox`, packages/cli)
-// in a home of its own, sharing nothing with another install. It runs on Bun: the one this
+// in a home of its own, sharing nothing with another install. It runs on Bun: a matching one this
 // computer has, else one this plugin downloads once from Bun's own releases and checks
 // against the release's SHASUMS256.txt before unpacking it. `bun x` then installs and starts
 // @automagik/omni at the newest release this plugin works with (omni-release.js: one exact
@@ -12,12 +12,13 @@
 // it lives in memory, and a restart drops it (the CLI's install is safe to run again).
 // The Connect step runs the same install in a terminal the person watches instead
 // (omni-terminal.js), with this module's Bun.
-import { spawn as spawnProcess } from 'node:child_process'
+import { execFile, spawn as spawnProcess } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { accessSync, constants, readFileSync, statSync } from 'node:fs'
 import { chmod, mkdir, rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { delimiter, dirname, isAbsolute, join, relative } from 'node:path'
+import { promisify } from 'node:util'
 import { inflateRawSync } from 'node:zlib'
 import { z } from 'zod'
 import { linkWithKey, sandboxHome, UNFOLD_RUNS_OMNI, unfoldHost } from './omni-discover.js'
@@ -26,7 +27,7 @@ import { PLUGIN_VERSION } from './version.js'
 
 export { sandboxHome }
 
-// The Bun this plugin downloads when the computer has none, and where its release lives.
+// The Bun this plugin needs, downloaded privately when no matching runtime is found.
 export const BUN_VERSION = '1.4.4'
 const BUN_RELEASE = `https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}`
 const BUN_ASSETS = {
@@ -40,6 +41,7 @@ const DOWNLOAD_TIMEOUT_MS = 5 * 60_000
 const INSTALL_TIMEOUT_MS = 15 * 60_000
 const MAX_OUTPUT = 64 * 1024
 const MAX_FILE = 1024 * 1024
+const execFileAsync = promisify(execFile)
 
 const invalid = message => Object.assign(new Error(message), { code: 'bot/invalid' })
 const refused = message => Object.assign(new Error(message), { code: 'bot/refused' })
@@ -72,15 +74,25 @@ function executable(path) {
 }
 
 // The Bun to run Omni with, in this order: $BUN_INSTALL's, ~/.bun's, the first on PATH, then
-// the one this plugin downloaded. Null when there is none.
-export function findBun({ env = process.env, home = homedir(), isExecutable = executable } = {}) {
+// the one this plugin downloaded. Only the pinned version can install a sandbox.
+export async function findBun({ env = process.env, home = homedir(), isExecutable = executable, readVersion } = {}) {
+  const versionOf = readVersion ?? (async path => {
+    const { stdout } = await execFileAsync(path, ['--version'], { env, timeout: 5000, maxBuffer: 1024, windowsHide: true })
+    return stdout.trim()
+  })
   const places = [
     env.BUN_INSTALL ? join(env.BUN_INSTALL, 'bin', 'bun') : null,
     join(home, '.bun', 'bin', 'bun'),
     ...String(env.PATH ?? '').split(delimiter).filter(dir => isAbsolute(dir)).map(dir => join(dir, 'bun')),
     ownBun({ env, home }),
   ]
-  return places.find(path => path !== null && isExecutable(path)) ?? null
+  for (const path of new Set(places)) {
+    if (path === null || !isExecutable(path)) continue
+    try {
+      if (await versionOf(path) === BUN_VERSION) return path
+    } catch {} // An unusable runtime must not prevent trying the private download.
+  }
+  return null
 }
 
 // One file out of a zip archive (stored or deflated, no zip64: Bun's release zips are
@@ -124,7 +136,7 @@ async function download(url, fetchImpl) {
   return body
 }
 
-// Bun, downloaded into this plugin's runtime folder when the computer has none. The zip
+// Bun, downloaded into this plugin's runtime folder when no matching version exists. The zip
 // must match the release's published checksum, or nothing is unpacked.
 export async function downloadBun({ env = process.env, home = homedir(), platform = process.platform, arch = process.arch, fetchImpl = fetch } = {}) {
   const asset = BUN_ASSETS[`${platform}-${arch}`]
@@ -231,10 +243,10 @@ export function install(rt, deps = {}) {
 
   async function run(current, version) {
     try {
-      let bun = findBun({ env, home })
+      let bun = await findBun({ env, home })
       if (bun === null) {
         current.step = 'download-bun'
-        bun = await downloadBun({ env, home, fetchImpl, platform: deps.platform, arch: deps.arch })
+        bun = await (deps.downloadBun ?? downloadBun)({ env, home, fetchImpl, platform: deps.platform, arch: deps.arch })
       }
       current.step = 'install'
       const report = await runInstall({ bun, version, env, spawn })

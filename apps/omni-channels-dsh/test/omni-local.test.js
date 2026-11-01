@@ -61,17 +61,28 @@ function zipOf(entries) {
   return Buffer.concat([...locals, directory, end])
 }
 
-test('Bun is looked for in BUN_INSTALL, then ~/.bun, then PATH, then the one this plugin downloaded', () => {
+test('Bun is looked for in BUN_INSTALL, then ~/.bun, then PATH, then the one this plugin downloaded', async () => {
   const env = { BUN_INSTALL: '/opt/bun', PATH: ['relative/bin', '/usr/one', '/usr/two'].join(':') }
   const all = ['/opt/bun/bin/bun', '/h/.bun/bin/bun', '/usr/two/bun', '/h/.omni/runtime/bun/bun']
-  const pick = present => findBun({ env, home: '/h', isExecutable: path => present.includes(path) })
-  assert.equal(pick(all), '/opt/bun/bin/bun')
-  assert.equal(pick(all.slice(1)), '/h/.bun/bin/bun')
-  assert.equal(pick(all.slice(2)), '/usr/two/bun')
-  assert.equal(pick(all.slice(3)), '/h/.omni/runtime/bun/bun')
-  assert.equal(pick(['relative/bin/bun']), null, 'a relative PATH entry is never used')
-  assert.equal(pick([]), null)
-  assert.equal(findBun({ env: { OMNI_HOME: '/h/.omni/desktop' }, home: '/h', isExecutable: path => path === '/h/.omni/desktop/runtime/bun/bun' }), '/h/.omni/desktop/runtime/bun/bun')
+  const pick = present => findBun({ env, home: '/h', isExecutable: path => present.includes(path), readVersion: () => BUN_VERSION })
+  assert.equal(await pick(all), '/opt/bun/bin/bun')
+  assert.equal(await pick(all.slice(1)), '/h/.bun/bin/bun')
+  assert.equal(await pick(all.slice(2)), '/usr/two/bun')
+  assert.equal(await pick(all.slice(3)), '/h/.omni/runtime/bun/bun')
+  assert.equal(await pick(['relative/bin/bun']), null, 'a relative PATH entry is never used')
+  assert.equal(await pick([]), null)
+  assert.equal(await findBun({ env: { OMNI_HOME: '/h/.omni/desktop' }, home: '/h', isExecutable: path => path === '/h/.omni/desktop/runtime/bun/bun', readVersion: () => BUN_VERSION }), '/h/.omni/desktop/runtime/bun/bun')
+})
+
+test('Bun candidates with another version or a failed version probe are skipped', async () => {
+  const env = { BUN_INSTALL: '/old', PATH: '/new:/broken:/matching' }
+  const versions = { '/old/bin/bun': '1.3.14', '/h/.bun/bin/bun': '1.4.2', '/new/bun': '1.5.0', '/matching/bun': BUN_VERSION }
+  const readVersion = path => {
+    if (!(path in versions)) throw new Error('not runnable')
+    return versions[path]
+  }
+  assert.equal(await findBun({ env, home: '/h', isExecutable: () => true, readVersion }), '/matching/bun')
+  assert.equal(await findBun({ env: { PATH: '/new:/broken' }, home: '/h', isExecutable: () => true, readVersion }), null)
 })
 
 function bunRelease({ zip, sums }) {
@@ -170,11 +181,11 @@ test('the sandbox key is read only from a config file inside the sandbox home', 
 })
 
 // A host whose computer has a Bun in ~/.bun and whose install prints `report(home)`.
-function host(t, { report, code = 0, validate = 200, env = { PATH: '' } }) {
+function host(t, { report, code = 0, validate = 200, env = { PATH: '' }, bunVersion = BUN_VERSION, downloadBun }) {
   const home = tempDir(t, 'omni-local-home-')
   const bun = join(home, '.bun', 'bin', 'bun')
   mkdirSync(dirname(bun), { recursive: true })
-  writeFileSync(bun, '')
+  writeFileSync(bun, `#!/bin/sh\nprintf '%s\\n' '${bunVersion}'\n`)
   chmodSync(bun, 0o755)
   const sandbox = join(home, '.omni', 'sandbox')
   mkdirSync(join(sandbox, 'config'), { recursive: true })
@@ -192,7 +203,7 @@ function host(t, { report, code = 0, validate = 200, env = { PATH: '' } }) {
   const rt = { home: join(home, 'plugin'), config: {}, ctx: { effect: run => run() }, syncOmniEvents: () => {} }
   installHooks(rt)
   installLink(rt)
-  install(rt, { env, home, spawn: fake.spawn })
+  install(rt, { env, home, spawn: fake.spawn, downloadBun })
   return { rt, sandbox, calls: fake.calls, checked }
 }
 
@@ -221,6 +232,23 @@ test('running Omni here asks first, then installs, links it, and the key never r
   const shown = JSON.stringify([asked, started, done, await rt.omniLinkEndpoint('omni-link')])
   assert.equal(shown.includes(SANDBOX_KEY), false)
   await assert.rejects(rt.omniLocalEndpoint('omni-local-install', { confirm: 'yes' }), { code: 'bot/invalid' })
+})
+
+test('an installed Bun with the wrong version uses a private download before installing', async (t) => {
+  let downloaded = null
+  const { rt, calls } = host(t, {
+    report: okReport,
+    bunVersion: '1.3.14',
+    downloadBun: async ({ home }) => {
+      downloaded = join(home, '.omni/runtime/bun/bun')
+      return downloaded
+    },
+  })
+  await rt.omniLocalEndpoint('omni-local-install', { confirm: true })
+  await rt.omniLocalJob()
+  assert.ok(downloaded)
+  assert.equal(calls[0].command, downloaded)
+  assert.equal((await rt.omniLocalEndpoint('omni-local-progress')).status, 'paired')
 })
 
 test('a failed install says why and where its logs are, and links nothing', async (t) => {

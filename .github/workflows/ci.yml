@@ -155,7 +155,7 @@ jobs:
           VERSION_BASE_BRANCH: ${{ github.base_ref || 'dev' }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
-          bun test scripts/verify-versions.test.ts scripts/plugin-versions.test.ts
+          bun test scripts/verify-versions.test.ts scripts/plugin-versions.test.ts scripts/bun-version.test.ts scripts/bun-installers.test.ts
           if [ "${EVENT_NAME}" = "push" ]; then
             bun scripts/verify-versions.ts
           else
