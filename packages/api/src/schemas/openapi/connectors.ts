@@ -353,7 +353,9 @@ export function registerConnectorSchemas(registry: OpenAPIRegistry): void {
     description:
       'Verifies the raw body with the sealed connector hook secret. Active connector-ingress subscriptions ' +
       'match typed names and exact filters. Matches share one journal claim and publish; duplicates return 200. ' +
-      'Unmatched deliveries return 202 and update counters without storing the body. Publish failures release the claim.',
+      'Unmatched or invalid names and unparseable signed bodies return 202 and update counters without storing the body. ' +
+      'Parser failures use connector.{provider}.unparsed. Counter names are capped at 200 characters. ' +
+      'Oversized event envelopes return 413; database/transport outages return 500. Publish failures release the claim.',
     security: [],
     request: {
       params: z.object({ connectorId: z.string().uuid() }),
@@ -362,9 +364,12 @@ export function registerConnectorSchemas(registry: OpenAPIRegistry): void {
     responses: {
       200: { description: 'Duplicate delivery', content: { 'application/json': { schema: DeliveryReceiptSchema } } },
       202: { description: 'Accepted or unmatched', content: { 'application/json': { schema: DeliveryReceiptSchema } } },
-      400: { description: 'Invalid JSON object', content: { 'application/json': { schema: ErrorSchema } } },
       401: {
         description: 'Uniform verification refusal: unknown connector, missing secret or bad signature',
+        content: { 'application/json': { schema: ErrorSchema } },
+      },
+      413: {
+        description: 'Provider delivery exceeds the event bus payload limit',
         content: { 'application/json': { schema: ErrorSchema } },
       },
       500: {

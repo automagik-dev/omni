@@ -116,8 +116,20 @@ try {
   }
   await connection.flush();
   if (delivered.length !== 2) throw new Error('Durable consumer missed delivery');
+  const oversizedId = crypto.randomUUID();
+  const oversizedBody = JSON.stringify({ id: oversizedId, eventType: TYPED_EVENT, text: 'x'.repeat(maxPayload) });
+  const oversized = await service.receiveForConnector(connectorId, oversizedBody, signHook(oversizedBody));
+  const oversizedRows = await runTenantWorkDb(db, config?.tenantId ?? null, () =>
+    scopedHandle(db)
+      .select()
+      .from(omniEvents)
+      .where(eq(omniEvents.idempotencyKey, `connector:${connectorId}:${oversizedId}`))
+      .limit(1),
+  );
+  if (oversized.status !== 413 || oversizedRows.length !== 0)
+    throw new Error('Oversized provider payload must return 413 and release its claim');
   process.stdout.write(
-    `${JSON.stringify({ delivered, maxPayload, bodyBytes: Buffer.byteLength(typed), realPostgres: !!config })}\n`,
+    `${JSON.stringify({ delivered, maxPayload, bodyBytes: Buffer.byteLength(typed), realPostgres: !!config, oversizedStatus: oversized.status, oversizedRows: oversizedRows.length })}\n`,
   );
 } finally {
   setTenantSecretMasterKey(null);

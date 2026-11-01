@@ -95,7 +95,7 @@ describe('connector OpenAPI paths', () => {
   test('per-connector hook is public and documents verification, matching and retry receipts', () => {
     const hook = operation('/connectors/hooks/{connectorId}', 'post');
     expect(hook.security).toEqual([]);
-    expect(Object.keys(hook.responses ?? {}).sort()).toEqual(['200', '202', '400', '401', '500']);
+    expect(Object.keys(hook.responses ?? {}).sort()).toEqual(['200', '202', '401', '413', '500']);
     expect(hook.operationId).toBe('receiveConnectorHook');
   });
 

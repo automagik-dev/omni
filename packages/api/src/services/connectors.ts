@@ -23,6 +23,7 @@ import {
   CURRENT_ENVELOPE_VERSION,
   type ConnectorEventPublisher,
   type ConnectorEventType,
+  ERROR_CODES,
   type EventBus,
   NotFoundError,
   OmniError,
@@ -115,7 +116,7 @@ export interface EventSubscriptionView {
 }
 
 export interface DeliveryOutcome {
-  status: 200 | 202 | 400 | 401 | 500;
+  status: 200 | 202 | 400 | 401 | 413 | 500;
   body: Record<string, unknown>;
 }
 
@@ -899,24 +900,20 @@ export class ConnectorService {
     ) {
       return this.unauthorized();
     }
-    const bodyError = this.parseRawBody(rawBody);
-    if (bodyError) return bodyError;
-
     try {
-      if (!manifest.parseDelivery) throw new Error('Provider manifest cannot parse deliveries');
-      const parsed = z
-        .object({
-          eventKey: z.string().min(1),
-          eventType: z.string().optional(),
-          providerEventId: z.string().optional(),
-          occurredAt: z.string().optional(),
-          data: z.record(z.string(), z.unknown()),
-        })
-        .parse(manifest.parseDelivery(rawBody, headers));
+      const parsed = this.parseConnectorHookDelivery(manifest, rawBody, headers);
+      if (!parsed) {
+        log.warn('Connector hook delivery could not be parsed', { connectorId });
+        return await this.recordUnmatchedConnectorDelivery(
+          connector,
+          tenantId,
+          `connector.${connector.provider}.unparsed`,
+        );
+      }
       const prefix = `connector.${connector.provider}.`;
       const name = parsed.eventType?.startsWith(prefix) ? parsed.eventType : `${prefix}${parsed.eventKey}`;
-      if (!isConnectorEvent(name)) {
-        throw new Error('Provider returned an invalid connector event name');
+      if (!name.startsWith(prefix) || name.length > 255 || !isConnectorEvent(name)) {
+        return await this.recordUnmatchedConnectorDelivery(connector, tenantId, name);
       }
       const subscriptions = await runTenantWorkDb(this.pool, tenantId, async () => {
         const rows = await this.db
@@ -939,18 +936,7 @@ export class ConnectorService {
         });
       });
       if (subscriptions.length === 0) {
-        await runTenantWorkDb(this.pool, tenantId, async () => {
-          await this.db
-            .update(connectors)
-            .set({
-              totalUnmatched: sql`${connectors.totalUnmatched} + 1`,
-              lastUnmatchedAt: new Date(),
-              lastUnmatchedEventType: name,
-              updatedAt: new Date(),
-            })
-            .where(eq(connectors.id, connector.id));
-        });
-        return { status: 202, body: { received: true, ignored: true } };
+        return await this.recordUnmatchedConnectorDelivery(connector, tenantId, name);
       }
       const result = await this.deliverForConnector({
         connector,
@@ -962,6 +948,17 @@ export class ConnectorService {
       });
       return { status: result.duplicate ? 200 : 202, body: { received: true, ...result } };
     } catch (error) {
+      if (error instanceof OmniError && error.code === ERROR_CODES.PAYLOAD_TOO_LARGE) {
+        return {
+          status: 413,
+          body: {
+            error: {
+              code: ERROR_CODES.PAYLOAD_TOO_LARGE,
+              message: 'Connector delivery exceeds the event bus payload limit',
+            },
+          },
+        };
+      }
       log.warn('Connector hook delivery failed', {
         connectorId,
         error: redactSecrets(asErrorText(error), [secret]).slice(0, 200),
@@ -971,6 +968,46 @@ export class ConnectorService {
         body: { error: { code: 'DELIVERY_FAILED', message: 'Connector delivery could not be processed' } },
       };
     }
+  }
+
+  private parseConnectorHookDelivery(
+    manifest: ConnectorManifest,
+    rawBody: string,
+    headers: Record<string, string>,
+  ): ConnectorParsedDelivery | null {
+    if (this.parseRawBody(rawBody) || !manifest.parseDelivery) return null;
+    try {
+      return z
+        .object({
+          eventKey: z.string().min(1),
+          eventType: z.string().optional(),
+          providerEventId: z.string().optional(),
+          occurredAt: z.string().optional(),
+          data: z.record(z.string(), z.unknown()),
+        })
+        .parse(manifest.parseDelivery(rawBody, headers));
+    } catch {
+      return null;
+    }
+  }
+
+  private async recordUnmatchedConnectorDelivery(
+    connector: Connector,
+    tenantId: string | null,
+    name: string,
+  ): Promise<DeliveryOutcome> {
+    await runTenantWorkDb(this.pool, tenantId, async () => {
+      await this.db
+        .update(connectors)
+        .set({
+          totalUnmatched: sql`${connectors.totalUnmatched} + 1`,
+          lastUnmatchedAt: new Date(),
+          lastUnmatchedEventType: name.slice(0, 200),
+          updatedAt: new Date(),
+        })
+        .where(eq(connectors.id, connector.id));
+    });
+    return { status: 202, body: { received: true, ignored: true } };
   }
 
   private async resolveConnectorHook(connectorId: string): Promise<
@@ -1035,7 +1072,8 @@ export class ConnectorService {
           receivedAt: new Date(),
           tenantId: connector.tenantId,
         })
-        .onConflictDoNothing({ target: omniEvents.idempotencyKey })
+        // Both the global and tenant-scoped idempotency indexes must arbitrate concurrent retries.
+        .onConflictDoNothing()
         .returning({ id: omniEvents.id }),
     );
     if (claimed.length === 0) {

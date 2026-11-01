@@ -78,3 +78,55 @@ test('publish and claim-release failures still record every matched failure and 
     remove.mockRestore();
   }
 });
+
+test('a signed parser throw is unmatched unparsed 202, logged at warn with connectorId only', async () => {
+  const connectorId = crypto.randomUUID();
+  const fixture = createConnectorTestDb({
+    connectors: [{ id: connectorId, provider: 'gitlab', hookSecret: HOOK_SECRET, tenantId: null }],
+  });
+  const transport = connectorHookBus();
+  const service = new ConnectorService(
+    fixture.db,
+    transport.bus,
+    new ConnectorRegistry([
+      {
+        ...eventsOnlyConnector,
+        parseDelivery: () => {
+          throw new Error(HOOK_SECRET);
+        },
+      },
+    ]),
+  );
+  const config = getLogConfig();
+  const logs: LogEntry[] = [];
+  const unsubscribe = getLogBuffer().subscribe(
+    (entry) => {
+      logs.push(entry);
+    },
+    { modules: ['connector-service'] },
+  );
+  try {
+    configureLogging({ level: 'warn', format: 'json', modules: '*' });
+    const body = JSON.stringify({ id: crypto.randomUUID() });
+    expect(await service.receiveForConnector(connectorId, body, signHook(body))).toEqual({
+      status: 202,
+      body: { received: true, ignored: true },
+    });
+    expect(fixture.tables.connectors[0]?.lastUnmatchedEventType).toBe('connector.gitlab.unparsed');
+    expect(fixture.tables.omni_events).toHaveLength(0);
+    expect(transport.events).toHaveLength(0);
+    expect(logs).toEqual([
+      {
+        level: 'warn',
+        time: expect.any(Number),
+        module: 'connector-service',
+        msg: 'Connector hook delivery could not be parsed',
+        connectorId,
+      },
+    ]);
+    expect(JSON.stringify(logs)).not.toContain(HOOK_SECRET);
+  } finally {
+    unsubscribe();
+    configureLogging(config);
+  }
+});

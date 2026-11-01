@@ -99,9 +99,13 @@ postgresDescribe('per-connector hook acceptance (real PostgreSQL)', () => {
   async function journal() {
     return tenant(() => scopedHandle(db).select().from(omniEvents));
   }
-  async function post(body: Record<string, unknown>, id = connectorId) {
+  async function post(body: Record<string, unknown>, id = connectorId, clientIp = '192.0.2.44') {
     const raw = JSON.stringify(body);
-    return app.request(`/api/v2/connectors/hooks/${id}`, { method: 'POST', body: raw, headers: signHook(raw) });
+    return app.request(
+      `/api/v2/connectors/hooks/${id}`,
+      { method: 'POST', body: raw, headers: signHook(raw) },
+      { remoteAddr: clientIp },
+    );
   }
   async function loadAutomation(
     owner: Database,
@@ -473,12 +477,12 @@ postgresDescribe('per-connector hook acceptance (real PostgreSQL)', () => {
     ).toHaveLength(1);
   });
 
-  test('signed malformed JSON is 400; parser failure releases no row; filters and paused rows do not match', async () => {
+  test('signed malformed JSON and parser-invalid input are unmatched 202; filters and paused rows do not match', async () => {
     const count = (await journal()).length;
     const raw = '{';
-    expect((await service.receiveForConnector(connectorId, raw, signHook(raw))).status).toBe(400);
+    expect((await service.receiveForConnector(connectorId, raw, signHook(raw))).status).toBe(202);
     const invalid = JSON.stringify({ event: 42 });
-    expect((await service.receiveForConnector(connectorId, invalid, signHook(invalid))).status).toBe(500);
+    expect((await service.receiveForConnector(connectorId, invalid, signHook(invalid))).status).toBe(202);
     expect((await journal()).length).toBe(count);
     const before = fired.length;
     expect((await post({ id: randomUUID(), project: { id: 8 } })).status).toBe(202);
@@ -490,7 +494,7 @@ postgresDescribe('per-connector hook acceptance (real PostgreSQL)', () => {
     expect(fired.length).toBe(before);
   });
 
-  test('real PostgreSQL plus real NATS durable delivery and large-body journal agree under the runtime role', async () => {
+  test('real PG and NATS agree on durable large bodies; provider oversize is 413 with its claim released', async () => {
     const child = Bun.spawn(
       [
         'bun',
@@ -520,10 +524,115 @@ postgresDescribe('per-connector hook acceptance (real PostgreSQL)', () => {
         delivered: z.array(z.object({ type: z.string() })),
         maxPayload: z.number(),
         bodyBytes: z.number(),
+        oversizedStatus: z.number(),
+        oversizedRows: z.number(),
       })
       .parse(JSON.parse(stdout.trim().split('\n').pop() ?? ''));
     expect(result.realPostgres).toBe(true);
+    expect(result.oversizedStatus).toBe(413);
+    expect(result.oversizedRows).toBe(0);
     expect(result.delivered.map((event) => event.type).sort()).toEqual(['connector.event', TYPED_EVENT].sort());
     expect(result.bodyBytes).toBeGreaterThan(result.maxPayload / 2);
   }, 30_000);
+  test('concurrent duplicate hooks arbitrate both idempotency indexes: one claim and one fire per target', async () => {
+    for (let round = 0; round < 10; round++) {
+      const providerEventId = randomUUID();
+      const beforeFired = fired.length;
+      const beforePublished = transport.events.length;
+      const responses = await Promise.all(
+        Array.from({ length: 8 }, () =>
+          // Each retry burst has its own peer bucket, isolated from other gate suites.
+          post(
+            { id: providerEventId, eventType: TYPED_EVENT, project: { id: 7 } },
+            connectorId,
+            `192.0.2.${100 + round}`,
+          ),
+        ),
+      );
+      expect(responses.map((response) => response.status).sort()).toEqual([200, 200, 200, 200, 200, 200, 200, 202]);
+      const receipts = await Promise.all(responses.map((response) => response.json()));
+      expect(new Set(receipts.map((receipt) => z.object({ eventId: z.string() }).parse(receipt).eventId)).size).toBe(1);
+      expect(
+        (await journal()).filter((row) => row.idempotencyKey === `connector:${connectorId}:${providerEventId}`),
+      ).toHaveLength(1);
+      expect(fired.slice(beforeFired)).toEqual(['first', 'second']);
+      expect(transport.events.length - beforePublished).toBe(1);
+    }
+  });
+
+  const prefix = 'connector.gitlab.';
+  const invalidNames = [
+    { label: '256-character explicit typed name', eventType: `${prefix}${'a'.repeat(256 - prefix.length)}` },
+    { label: '256-character fallback typed name', event: 'b'.repeat(256 - prefix.length) },
+    { label: 'dangling provider prefix', eventType: prefix },
+    { label: 'unicode name', eventType: `${prefix}ünïcode` },
+    { label: 'wildcard name', eventType: `${prefix}*` },
+    { label: 'name containing a space', eventType: `${prefix}merge request` },
+  ];
+  for (const { label, ...fields } of invalidNames) {
+    test(`${label} is unmatched 202 before glob matching, with a bounded counter name`, async () => {
+      const beforeRows = (await journal()).length;
+      const beforePublished = transport.events.length;
+      const beforeFired = fired.length;
+      const [before] = await tenant(() =>
+        scopedHandle(db).select().from(connectors).where(eq(connectors.id, connectorId)),
+      );
+      const response = await post({ id: randomUUID(), ...fields });
+      expect(response.status).toBe(202);
+      expect(await response.json()).toEqual({ received: true, ignored: true });
+      const [after] = await tenant(() =>
+        scopedHandle(db).select().from(connectors).where(eq(connectors.id, connectorId)),
+      );
+      const expectedName = 'eventType' in fields ? fields.eventType : `${prefix}${fields.event}`;
+      expect(after).toMatchObject({
+        totalUnmatched: (before?.totalUnmatched ?? 0) + 1,
+        lastUnmatchedEventType: expectedName?.slice(0, 200),
+      });
+      expect(after?.lastUnmatchedAt).toBeInstanceOf(Date);
+      expect((await journal()).length).toBe(beforeRows);
+      expect(transport.events.length).toBe(beforePublished);
+      expect(fired.length).toBe(beforeFired);
+    });
+  }
+
+  for (const length of [201, 255, 400]) {
+    test(`${length}-character unmatched name counts once and stores only the first 200 characters, 202`, async () => {
+      const name = `${prefix}${'u'.repeat(length - prefix.length)}`;
+      const [before] = await tenant(() =>
+        scopedHandle(db).select().from(connectors).where(eq(connectors.id, natsConnectorId)),
+      );
+      const beforeRows = (await journal()).length;
+      const beforePublished = transport.events.length;
+      expect((await post({ id: randomUUID(), eventType: name }, natsConnectorId)).status).toBe(202);
+      const [after] = await tenant(() =>
+        scopedHandle(db).select().from(connectors).where(eq(connectors.id, natsConnectorId)),
+      );
+      expect(after).toMatchObject({
+        totalUnmatched: (before?.totalUnmatched ?? 0) + 1,
+        lastUnmatchedEventType: name.slice(0, 200),
+      });
+      expect((await journal()).length).toBe(beforeRows);
+      expect(transport.events.length).toBe(beforePublished);
+    });
+  }
+
+  test('empty and parser-invalid signed bodies are unmatched unparsed 202 with no row or publish', async () => {
+    for (const raw of ['', '{', '[]', 'null', JSON.stringify({ event: 42 })]) {
+      const [before] = await tenant(() =>
+        scopedHandle(db).select().from(connectors).where(eq(connectors.id, connectorId)),
+      );
+      const beforeRows = (await journal()).length;
+      const beforePublished = transport.events.length;
+      expect((await service.receiveForConnector(connectorId, raw, signHook(raw))).status).toBe(202);
+      const [after] = await tenant(() =>
+        scopedHandle(db).select().from(connectors).where(eq(connectors.id, connectorId)),
+      );
+      expect(after).toMatchObject({
+        totalUnmatched: (before?.totalUnmatched ?? 0) + 1,
+        lastUnmatchedEventType: `${prefix}unparsed`,
+      });
+      expect((await journal()).length).toBe(beforeRows);
+      expect(transport.events.length).toBe(beforePublished);
+    }
+  });
 });

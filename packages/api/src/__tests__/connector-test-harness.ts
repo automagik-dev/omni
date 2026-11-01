@@ -262,18 +262,20 @@ export function createConnectorTestDb(
   };
 
   const remove = (table: unknown) => {
-    const state: { where?: unknown } = {};
+    const state: { where?: unknown; removed?: ConnectorTestRow[] } = {};
     const chain = {
       where(condition: unknown) {
         state.where = condition;
         if (faults.deleteError) return Promise.reject(faults.deleteError);
-        return chain;
+        return Object.assign(chain.returning(), chain);
       },
       returning() {
-        const rows = rowsOf(table);
-        const removed = rows.filter((row) => matchesWhere(state.where, row));
-        for (const row of removed) rows.splice(rows.indexOf(row), 1);
-        return Promise.resolve(removed.map((row) => ({ id: row.id })));
+        if (!state.removed) {
+          const rows = rowsOf(table);
+          state.removed = rows.filter((row) => matchesWhere(state.where, row));
+          for (const row of state.removed) rows.splice(rows.indexOf(row), 1);
+        }
+        return Promise.resolve(state.removed.map((row) => ({ id: row.id })));
       },
     };
     return chain;
