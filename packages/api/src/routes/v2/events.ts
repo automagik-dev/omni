@@ -169,7 +169,7 @@ eventsRoutes.get('/types', zValidator('query', z.object({ since: optionalDatePar
   const { since } = c.req.valid('query');
   const services = c.get('services');
   const automations = await services.automations.list({ enabled: true });
-  const items = await services.events.getTypes({ since, automations });
+  const items = await services.events.getTypes({ since, automations, tenantId: c.get('authContext')?.tenantId });
   return c.json({ items, meta: { since: since?.toISOString() ?? null } });
 });
 

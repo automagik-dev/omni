@@ -31,6 +31,10 @@ const CONSUMER_ACCESS_FILTERS = ['all', 'allowed', 'denied'] as const;
 
 export const DurableConsumerSchema = z.object({
   id: z.string().uuid().openapi({ description: 'Consumer UUID' }),
+  tenantId: z.string().uuid().nullable().openapi({
+    description:
+      'Authenticated creator tenant. Tenant keys see only their own stamped consumers; unstamped legacy rows are hidden from tenant keys.',
+  }),
   name: z.string().openapi({ description: 'Unique consumer name (the follow/ack handle)' }),
   eventType: z.string().openapi({ description: 'Type filter: exact event type or trailing-* prefix glob' }),
   excludeTypes: z
@@ -55,7 +59,7 @@ export const DurableConsumerSchema = z.object({
   scoped: z.boolean().openapi({
     description:
       'true = instance-scoped consumer: pulls only its instanceIds, visible only to its owner key and to ' +
-      'instance-unrestricted keys. Restricted keys always create scoped consumers; false = global consumer for unrestricted keys',
+      'instance-unrestricted keys within its tenant. Restricted keys always create scoped consumers; false = no instance restriction for unrestricted keys; tenant ownership still applies',
   }),
   instanceIds: z
     .array(z.string().uuid())
@@ -137,7 +141,7 @@ export const CreateConsumerSchema = z.object({
     .openapi({
       description:
         'Instance-restricted keys always create scoped consumers, even with false. For unrestricted keys, false ' +
-        '(default) creates a global consumer. true = the ' +
+        '(default) creates a consumer without instance restrictions within the caller tenant. true = the ' +
         'consumer is owned by the calling API key and pulls only journal rows of its instanceIds; only the owner ' +
         'key or an instance-unrestricted key can inspect, pull, ack, delete or list it (others get 404).',
     }),

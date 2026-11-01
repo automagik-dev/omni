@@ -42,10 +42,16 @@ import {
 } from '@omni/db';
 import { driverRejection, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { eq } from 'drizzle-orm';
+import { Hono } from 'hono';
+import { errorHandler } from '../middleware/error';
 import { createPluginContext } from '../plugins/context';
 import { setupEventPersistence } from '../plugins/event-persistence';
+import { eventConsumersRoutes } from '../routes/v2/event-consumers';
+import { eventsRoutes } from '../routes/v2/events';
 import { type ConsumerCaller, EventConsumerService } from '../services/event-consumers';
+import { EventService } from '../services/events';
 import { runInWorkerTenantScope } from '../tenancy/worker-tenant-context';
+import type { AppVariables } from '../types';
 
 const superUrl = process.env.OMNI_G3_POSTGRES_URL ?? '';
 const postgresDescribe = superUrl.length > 0 ? describe : describe.skip;
@@ -63,6 +69,9 @@ function urlFor(base: string, database: string, user?: { name: string; password:
   if (user) {
     url.username = user.name;
     url.password = user.password;
+    // Hostless URLs use PGHOST/PGPORT for disposable Unix sockets. URL setters
+    // cannot add credentials without a host; both drivers accept startup user.
+    if (!url.hostname) url.searchParams.set('user', user.name);
   }
   return url.toString();
 }
@@ -1113,6 +1122,221 @@ postgresDescribe('durable event consumers (#989, real PostgreSQL)', () => {
       }
       await service.delete('scoped-0082', unrestricted);
       await expect(service.inspect('scoped-0082', owner)).rejects.toThrow(/not found/i);
+    });
+  });
+
+  describe('tenant consumer ownership without DB enforcement', () => {
+    const tenantA = randomUUID();
+    const tenantB = randomUUID();
+    const instanceA = randomUUID();
+    const instanceB = randomUUID();
+    const eventA = randomUUID();
+    const eventB = randomUUID();
+    const json = { 'Content-Type': 'application/json' };
+
+    // Exercise the real routes + service + SQL. The auth edge supplies this
+    // trusted context; the projected keys deliberately have NO instance limit.
+    function appFor(tenantId: string | null) {
+      const keyId = randomUUID();
+      const app = new Hono<{ Variables: AppVariables }>();
+      app.onError(errorHandler);
+      app.use('*', async (c, next) => {
+        c.set('services', {
+          eventConsumers: service,
+          events: new EventService(db),
+          automations: { list: async () => [] },
+        } as unknown as AppVariables['services']);
+        c.set('apiKey', { id: keyId, name: 'tenant-test', scopes: ['*'], instanceIds: null, expiresAt: null });
+        if (tenantId) c.set('authContext', { tenantId } as AppVariables['authContext']);
+        await next();
+      });
+      app.route('/', eventConsumersRoutes);
+      app.route('/events', eventsRoutes);
+      return app;
+    }
+
+    beforeAll(async () => {
+      const seeded = runSqlOn(
+        urlFor(superUrl, dbName),
+        `
+        INSERT INTO tenants (id, slug, display_name, max_key_ttl_seconds, max_key_rate_limit, max_key_budget) VALUES
+          ('${tenantA}', 'consumer-owner-a', 'Consumer A', 86400, 100, 100),
+          ('${tenantB}', 'consumer-owner-b', 'Consumer B', 86400, 100, 100);
+        INSERT INTO instances (id, name, channel, tenant_id) VALUES
+          ('${instanceA}', 'consumer-inst-a', 'whatsapp-baileys', '${tenantA}'),
+          ('${instanceB}', 'consumer-inst-b', 'whatsapp-baileys', '${tenantB}');
+      `,
+      );
+      if (seeded.exitCode !== 0) throw new Error(seeded.stderr);
+      await db.insert(omniEvents).values([
+        {
+          id: eventA,
+          channel: 'internal',
+          instanceId: instanceA,
+          eventType: 'custom.consumer-tenant.a',
+          direction: 'internal',
+          status: 'completed',
+        },
+        {
+          id: eventB,
+          channel: 'internal',
+          instanceId: instanceB,
+          eventType: 'custom.consumer-tenant.b',
+          direction: 'internal',
+          status: 'completed',
+        },
+      ]);
+    });
+
+    for (const shared of [false, true]) {
+      test(`two unrestricted tenant keys cannot list/get/ack/delete/pull each other's ${shared ? 'shared' : 'fan-out'} consumers`, async () => {
+        const apps = [appFor(tenantA), appFor(tenantB)];
+        const tenantIds = [tenantA, tenantB];
+        const eventIds = [eventA, eventB];
+        const names = [`tenant-a-${shared}`, `tenant-b-${shared}`];
+        for (let i = 0; i < 2; i++) {
+          const created = await apps[i]!.request('/events/consumers', {
+            method: 'POST',
+            headers: json,
+            // An untrusted body cannot override the authenticated tenant stamp.
+            body: JSON.stringify({
+              name: names[i],
+              eventType: 'custom.consumer-tenant.*',
+              startFrom: 'beginning',
+              shared,
+              tenantId: tenantIds[1 - i],
+            }),
+          });
+          expect(created.status).toBe(201);
+          const { data } = (await created.json()) as { data: { tenantId: string } };
+          expect(data.tenantId).toBe(tenantIds[i]!);
+        }
+        for (let i = 0; i < 2; i++) {
+          const own = `/events/consumers/${names[i]}`;
+          const foreign = `/events/consumers/${names[1 - i]}`;
+          const app = apps[i]!;
+          const list = (await (await app.request('/events/consumers')).json()) as {
+            items: Array<{ name: string; tenantId: string }>;
+          };
+          expect(list.items.map((row) => row.name)).toContain(names[i]!);
+          expect(list.items.map((row) => row.name)).not.toContain(names[1 - i]);
+          expect(list.items.every((row) => row.tenantId === tenantIds[i]!)).toBe(true);
+          expect((await app.request(own)).status).toBe(200);
+          expect((await app.request(foreign)).status).toBe(404);
+          await expect(
+            service.getStreamable(names[1 - i]!, { tenantId: tenantIds[i], keyId: randomUUID(), instanceIds: null }),
+          ).rejects.toThrow(/not found/i);
+          expect((await app.request(`${foreign}/pull`, { method: 'POST' })).status).toBe(404);
+          expect(
+            (
+              await app.request(`${foreign}/ack`, {
+                method: 'POST',
+                headers: json,
+                body: JSON.stringify({ cursor: 999999 }),
+              })
+            ).status,
+          ).toBe(404);
+          expect(
+            (
+              await app.request(`${foreign}/ack`, {
+                method: 'POST',
+                headers: json,
+                body: JSON.stringify({ leaseId: randomUUID() }),
+              })
+            ).status,
+          ).toBe(404);
+          expect((await app.request(foreign, { method: 'DELETE' })).status).toBe(404);
+          const pulled = await app.request(`${own}/pull`, { method: 'POST' });
+          expect(pulled.status).toBe(200);
+          const page = (await pulled.json()) as { items: Array<{ id: string }>; cursor: number; leaseId?: string };
+          expect(page.items.map((row) => row.id)).toEqual([eventIds[i]!]);
+          expect(
+            (
+              await app.request(`${own}/ack`, {
+                method: 'POST',
+                headers: json,
+                body: JSON.stringify({ cursor: page.cursor, leaseId: page.leaseId }),
+              })
+            ).status,
+          ).toBe(200);
+        }
+        // Foreign attempts did not delete either consumer or advance its cursor.
+        for (let i = 0; i < 2; i++) {
+          expect((await apps[i]!.request(`/events/consumers/${names[i]}`, { method: 'DELETE' })).status).toBe(200);
+        }
+      });
+    }
+
+    test('event type inventory exposes only the caller tenant consumer names, with legacy access preserved', async () => {
+      const callers = [tenantA, tenantB, null];
+      const names = ['inventory-tenant-a', 'inventory-tenant-b', 'inventory-legacy'];
+      for (let i = 0; i < callers.length; i++) {
+        await service.create(
+          { name: names[i]!, eventType: 'custom.consumer-tenant.*' },
+          { tenantId: callers[i], keyId: randomUUID(), instanceIds: null },
+        );
+      }
+      try {
+        for (let i = 0; i < callers.length; i++) {
+          const response = await appFor(callers[i]!).request('/events/types');
+          expect(response.status).toBe(200);
+          const { items } = (await response.json()) as {
+            items: Array<{ eventType: string; consumers: string[] }>;
+          };
+          const observed = items.filter((row) => row.eventType.startsWith('custom.consumer-tenant.'));
+          expect(observed).toHaveLength(2);
+          for (const row of observed) {
+            expect(row.consumers.sort()).toEqual(i === 2 ? [...names].sort() : [names[i]!]);
+          }
+        }
+      } finally {
+        for (const name of names) await service.delete(name);
+      }
+    });
+
+    test('unstamped consumers are hidden from tenant keys and remain operable by legacy keys', async () => {
+      const legacy = appFor(null);
+      const tenant = appFor(tenantA);
+      const name = 'unstamped-legacy-tenant';
+      const created = await legacy.request('/events/consumers', {
+        method: 'POST',
+        headers: json,
+        body: JSON.stringify({ name, eventType: 'custom.consumer-tenant.*' }),
+      });
+      expect(created.status).toBe(201);
+      expect(((await created.json()) as { data: { tenantId: null } }).data.tenantId).toBeNull();
+      const url = `/events/consumers/${name}`;
+      const list = (await (await tenant.request('/events/consumers')).json()) as { items: Array<{ name: string }> };
+      expect(list.items.map((row) => row.name)).not.toContain(name);
+      expect((await tenant.request(url)).status).toBe(404);
+      expect((await tenant.request(`${url}/pull`, { method: 'POST' })).status).toBe(404);
+      expect(
+        (
+          await tenant.request(`${url}/ack`, {
+            method: 'POST',
+            headers: json,
+            body: JSON.stringify({ cursor: 999999 }),
+          })
+        ).status,
+      ).toBe(404);
+      expect((await tenant.request(url, { method: 'DELETE' })).status).toBe(404);
+      await expect(
+        service.getStreamable(name, { tenantId: tenantA, keyId: randomUUID(), instanceIds: null }),
+      ).rejects.toThrow(/not found/i);
+      expect((await legacy.request(url)).status).toBe(200);
+      const pulled = await legacy.request(`${url}/pull`, { method: 'POST' });
+      expect(pulled.status).toBe(200);
+      const page = (await pulled.json()) as { cursor: number };
+      expect(
+        (
+          await legacy.request(`${url}/ack`, {
+            method: 'POST',
+            headers: json,
+            body: JSON.stringify({ cursor: page.cursor }),
+          })
+        ).status,
+      ).toBe(200);
+      expect((await legacy.request(url, { method: 'DELETE' })).status).toBe(200);
     });
   });
 

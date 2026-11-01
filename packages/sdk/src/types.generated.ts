@@ -3928,7 +3928,7 @@ export interface paths {
         put?: never;
         /**
          * Register a durable event consumer
-         * @description Registers a named consumer over the event journal: a type filter (trailing-* prefix glob, the events-wait contract) plus optional payload conditions (the automation-trigger matcher), and a stored cursor. startFrom 'now' (default) begins at the journal head; 'beginning' replays the full journal (projections). Opt-in scoped: true binds the consumer to the calling key and an instance set (see instanceIds).
+         * @description Registers a named consumer over the event journal: a type filter (trailing-* prefix glob, the events-wait contract) plus optional payload conditions (the automation-trigger matcher), and a stored cursor. startFrom 'now' (default) begins at the journal head; 'beginning' replays the full journal (projections). scoped: true binds the consumer to the calling key and an instance set (see instanceIds). Instance-restricted keys always create scoped consumers, including when scoped is false or omitted.
          */
         post: operations["createEventConsumer"];
         delete?: never;
@@ -3972,7 +3972,7 @@ export interface paths {
         put?: never;
         /**
          * Pull journal events from the stored cursor
-         * @description Pages journal events strictly after the stored cursor, in journal_seq order, pre-filtered by the type glob and payload conditions. Does NOT advance the cursor — ack the returned cursor to commit progress (at-least-once: a client that crashes mid-page re-pulls the same page). waitMs long-polls when no rows are available.
+         * @description Pages journal events strictly after the stored cursor, in journal_seq order, pre-filtered by the type glob and payload conditions. Does NOT advance the cursor — ack the returned cursor to commit progress (at-least-once: a client that crashes mid-page re-pulls the same page). waitMs long-polls when no rows are available. Instance-restricted keys cannot pull or lease unscoped consumers; create a scoped consumer instead.
          */
         post: operations["pullEventConsumer"];
         delete?: never;
@@ -3990,7 +3990,7 @@ export interface paths {
         };
         /**
          * Stream journal events for a consumer (SSE)
-         * @description Opt-in Server-Sent Events push over the same journal scan as pull (type glob, excludeTypes, payload conditions, journal_seq order), always behind the journal readiness gate: a claimed-but-unfilled row is held until it is filled or older than EVENT_CONSUMER_SETTLE_MS. Starts strictly after Last-Event-ID, else ?after, else the stored cursor; catches up, then follows live. Each matching row is one event (`id: <journal_seq>`, `event: <eventType>`, `data: <the row as pull returns it>`), after an initial `connected` event; a `: heartbeat` comment is sent every EVENT_STREAM_HEARTBEAT_MS (default 15000). READ-ONLY: the stream never moves the stored cursor and never takes a lease — keep acking with POST /events/consumers/{name}/ack. Fan-out consumers only: a shared consumer is refused with 400. A consumer deleted mid-stream ends the stream with an `error` event. Requires events:write (as pull) and resolves the consumer exactly as pull: a scoped consumer the key may not see is 404, a restricted owner streams only its narrowed instances, and an instance-restricted API key only receives rows of its own instances. An access-filtered consumer holds an unfilled row until its verdict lands. A stream lives at most EVENT_STREAM_MAX_LIFETIME_MS (default and maximum 30000, the revocation ceiling), then ends with a `reconnect` event carrying `retry:` and `id:` (the scanned position, past filtered-out rows) — reconnect with Last-Event-ID to resume and re-authenticate. Past EVENT_STREAM_MAX_PER_PROCESS open streams, or EVENT_STREAM_MAX_PER_KEY for the calling key, a new one is refused with 429.
+         * @description Opt-in Server-Sent Events push over the same journal scan as pull (type glob, excludeTypes, payload conditions, journal_seq order), always behind the journal readiness gate: a claimed-but-unfilled row is held until it is filled or older than EVENT_CONSUMER_SETTLE_MS. Starts strictly after Last-Event-ID, else ?after, else the stored cursor; catches up, then follows live. Each matching row is one event (`id: <journal_seq>`, `event: <eventType>`, `data: <the row as pull returns it>`), after an initial `connected` event; a `: heartbeat` comment is sent every EVENT_STREAM_HEARTBEAT_MS (default 15000). READ-ONLY: the stream never moves the stored cursor and never takes a lease — keep acking with POST /events/consumers/{name}/ack. Fan-out consumers only: a shared consumer is refused with 400. A consumer deleted mid-stream ends the stream with an `error` event. Requires events:write (as pull) and a scoped consumer the key may not see is 404, a restricted owner streams only its narrowed instances, and an instance-restricted API key only receives rows of its own instances. A restricted key cannot stream an unscoped consumer (403); create a scoped consumer instead. An access-filtered consumer holds an unfilled row until its verdict lands. A stream lives at most EVENT_STREAM_MAX_LIFETIME_MS (default and maximum 30000, the revocation ceiling), then ends with a `reconnect` event carrying `retry:` and `id:` (the scanned position, past filtered-out rows) — reconnect with Last-Event-ID to resume and re-authenticate. Past EVENT_STREAM_MAX_PER_PROCESS open streams, or EVENT_STREAM_MAX_PER_KEY for the calling key, a new one is refused with 429.
          */
         get: operations["streamEventConsumer"];
         put?: never;
@@ -4012,7 +4012,7 @@ export interface paths {
         put?: never;
         /**
          * Advance the consumer cursor (monotonic)
-         * @description Commits progress up to a pull result's cursor. Monotonic: an ack equal to the stored cursor is an idempotent no-op, an ack behind it is refused with 400 — a durable cursor never moves backwards.
+         * @description Commits progress up to a pull result's cursor. Monotonic: an ack equal to the stored cursor is an idempotent no-op, an ack behind it is refused with 400 — a durable cursor never moves backwards. Restricted keys cannot ack unscoped consumers (including stream positions); create a scoped consumer. Shared leases must be acked by the key that pulled them.
          */
         post: operations["ackEventConsumer"];
         delete?: never;
@@ -8795,6 +8795,11 @@ export interface components {
              * @description Consumer UUID
              */
             id: string;
+            /**
+             * Format: uuid
+             * @description Authenticated creator tenant. Tenant keys see only their own stamped consumers; unstamped legacy rows are hidden from tenant keys.
+             */
+            tenantId: string | null;
             /** @description Unique consumer name (the follow/ack handle) */
             name: string;
             /** @description Type filter: exact event type or trailing-* prefix glob */
@@ -8824,7 +8829,7 @@ export interface components {
             accessFilter: "all" | "allowed" | "denied";
             /** @description true = opt-in journal readiness gate: claimed-but-unfilled rows are held (not delivered, cursor not moved past them) until filled or older than the settle window; false = today's behaviour */
             waitForReady: boolean;
-            /** @description true = instance-scoped consumer (opt-in): pulls only its instanceIds, visible only to its owner key and to instance-unrestricted keys. false (default) = global consumer, unchanged behaviour */
+            /** @description true = instance-scoped consumer: pulls only its instanceIds, visible only to its owner key and to instance-unrestricted keys within its tenant. Restricted keys always create scoped consumers; false = no instance restriction for unrestricted keys; tenant ownership still applies */
             scoped: boolean;
             /** @description Scoped consumers: the instances whose journal rows it pages; null when unscoped */
             instanceIds: string[] | null;
@@ -8884,9 +8889,9 @@ export interface components {
             access: "all" | "allowed" | "denied";
             /** @description Opt-in journal readiness gate. false (default) = today's behaviour: a row claimed at ingress but not yet filled is delivered as it is. true = pull and shared claims stop before such a row (journalReady false) until it is filled or older than the settle window (EVENT_CONSUMER_SETTLE_MS, default 5000 ms). */
             waitForReady?: boolean;
-            /** @description Opt-in instance scoping. false (default) = global consumer, exactly the existing behaviour. true = the consumer is owned by the calling API key and pulls only journal rows of its instanceIds; only the owner key or an instance-unrestricted key can inspect, pull, ack, delete or list it (others get 404). */
+            /** @description Instance-restricted keys always create scoped consumers, even with false. For unrestricted keys, false (default) creates a consumer without instance restrictions within the caller tenant. true = the consumer is owned by the calling API key and pulls only journal rows of its instanceIds; only the owner key or an instance-unrestricted key can inspect, pull, ack, delete or list it (others get 404). */
             scoped?: boolean;
-            /** @description Scoped consumers only (ignored without scoped: true, as before). Instance-restricted key: defaults to all of its instances; naming an instance outside the key is 403; an empty result or an unknown instance is 400. Instance-unrestricted key: required and non-empty. */
+            /** @description Scoped consumers only (ignored on unrestricted unscoped creates). Instance-restricted key: defaults to all of its instances; naming an instance outside the key is 403; an empty result or an unknown instance is 400. Instance-unrestricted key: required and non-empty. */
             instanceIds?: string[];
         };
         ConsumerPullResult: {
@@ -23846,6 +23851,11 @@ export interface operations {
                              * @description Consumer UUID
                              */
                             id: string;
+                            /**
+                             * Format: uuid
+                             * @description Authenticated creator tenant. Tenant keys see only their own stamped consumers; unstamped legacy rows are hidden from tenant keys.
+                             */
+                            tenantId: string | null;
                             /** @description Unique consumer name (the follow/ack handle) */
                             name: string;
                             /** @description Type filter: exact event type or trailing-* prefix glob */
@@ -23875,7 +23885,7 @@ export interface operations {
                             accessFilter: "all" | "allowed" | "denied";
                             /** @description true = opt-in journal readiness gate: claimed-but-unfilled rows are held (not delivered, cursor not moved past them) until filled or older than the settle window; false = today's behaviour */
                             waitForReady: boolean;
-                            /** @description true = instance-scoped consumer (opt-in): pulls only its instanceIds, visible only to its owner key and to instance-unrestricted keys. false (default) = global consumer, unchanged behaviour */
+                            /** @description true = instance-scoped consumer: pulls only its instanceIds, visible only to its owner key and to instance-unrestricted keys within its tenant. Restricted keys always create scoped consumers; false = no instance restriction for unrestricted keys; tenant ownership still applies */
                             scoped: boolean;
                             /** @description Scoped consumers: the instances whose journal rows it pages; null when unscoped */
                             instanceIds: string[] | null;
@@ -23949,9 +23959,9 @@ export interface operations {
                     access?: "all" | "allowed" | "denied";
                     /** @description Opt-in journal readiness gate. false (default) = today's behaviour: a row claimed at ingress but not yet filled is delivered as it is. true = pull and shared claims stop before such a row (journalReady false) until it is filled or older than the settle window (EVENT_CONSUMER_SETTLE_MS, default 5000 ms). */
                     waitForReady?: boolean;
-                    /** @description Opt-in instance scoping. false (default) = global consumer, exactly the existing behaviour. true = the consumer is owned by the calling API key and pulls only journal rows of its instanceIds; only the owner key or an instance-unrestricted key can inspect, pull, ack, delete or list it (others get 404). */
+                    /** @description Instance-restricted keys always create scoped consumers, even with false. For unrestricted keys, false (default) creates a consumer without instance restrictions within the caller tenant. true = the consumer is owned by the calling API key and pulls only journal rows of its instanceIds; only the owner key or an instance-unrestricted key can inspect, pull, ack, delete or list it (others get 404). */
                     scoped?: boolean;
-                    /** @description Scoped consumers only (ignored without scoped: true, as before). Instance-restricted key: defaults to all of its instances; naming an instance outside the key is 403; an empty result or an unknown instance is 400. Instance-unrestricted key: required and non-empty. */
+                    /** @description Scoped consumers only (ignored on unrestricted unscoped creates). Instance-restricted key: defaults to all of its instances; naming an instance outside the key is 403; an empty result or an unknown instance is 400. Instance-unrestricted key: required and non-empty. */
                     instanceIds?: string[];
                 };
             };
@@ -23970,6 +23980,11 @@ export interface operations {
                              * @description Consumer UUID
                              */
                             id: string;
+                            /**
+                             * Format: uuid
+                             * @description Authenticated creator tenant. Tenant keys see only their own stamped consumers; unstamped legacy rows are hidden from tenant keys.
+                             */
+                            tenantId: string | null;
                             /** @description Unique consumer name (the follow/ack handle) */
                             name: string;
                             /** @description Type filter: exact event type or trailing-* prefix glob */
@@ -23999,7 +24014,7 @@ export interface operations {
                             accessFilter: "all" | "allowed" | "denied";
                             /** @description true = opt-in journal readiness gate: claimed-but-unfilled rows are held (not delivered, cursor not moved past them) until filled or older than the settle window; false = today's behaviour */
                             waitForReady: boolean;
-                            /** @description true = instance-scoped consumer (opt-in): pulls only its instanceIds, visible only to its owner key and to instance-unrestricted keys. false (default) = global consumer, unchanged behaviour */
+                            /** @description true = instance-scoped consumer: pulls only its instanceIds, visible only to its owner key and to instance-unrestricted keys within its tenant. Restricted keys always create scoped consumers; false = no instance restriction for unrestricted keys; tenant ownership still applies */
                             scoped: boolean;
                             /** @description Scoped consumers: the instances whose journal rows it pages; null when unscoped */
                             instanceIds: string[] | null;
@@ -24117,6 +24132,11 @@ export interface operations {
                              * @description Consumer UUID
                              */
                             id: string;
+                            /**
+                             * Format: uuid
+                             * @description Authenticated creator tenant. Tenant keys see only their own stamped consumers; unstamped legacy rows are hidden from tenant keys.
+                             */
+                            tenantId: string | null;
                             /** @description Unique consumer name (the follow/ack handle) */
                             name: string;
                             /** @description Type filter: exact event type or trailing-* prefix glob */
@@ -24146,7 +24166,7 @@ export interface operations {
                             accessFilter: "all" | "allowed" | "denied";
                             /** @description true = opt-in journal readiness gate: claimed-but-unfilled rows are held (not delivered, cursor not moved past them) until filled or older than the settle window; false = today's behaviour */
                             waitForReady: boolean;
-                            /** @description true = instance-scoped consumer (opt-in): pulls only its instanceIds, visible only to its owner key and to instance-unrestricted keys. false (default) = global consumer, unchanged behaviour */
+                            /** @description true = instance-scoped consumer: pulls only its instanceIds, visible only to its owner key and to instance-unrestricted keys within its tenant. Restricted keys always create scoped consumers; false = no instance restriction for unrestricted keys; tenant ownership still applies */
                             scoped: boolean;
                             /** @description Scoped consumers: the instances whose journal rows it pages; null when unscoped */
                             instanceIds: string[] | null;
@@ -24220,6 +24240,27 @@ export interface operations {
                     };
                 };
             };
+            /** @description Restricted key on an unscoped consumer, or a lease claimed by another key; create a scoped consumer and ack your own lease */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
             /** @description No such consumer (or a scoped consumer this key cannot access) */
             404: {
                 headers: {
@@ -24284,6 +24325,27 @@ export interface operations {
                     };
                 };
             };
+            /** @description Restricted key on an unscoped consumer, or a lease claimed by another key; create a scoped consumer and ack your own lease */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
             /** @description No such consumer (or a scoped consumer this key cannot access) */
             404: {
                 headers: {
@@ -24333,6 +24395,27 @@ export interface operations {
             };
             /** @description Invalid start position, or the consumer is shared */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Instance-restricted key on an unscoped consumer; create a scoped consumer */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -24412,7 +24495,7 @@ export interface operations {
                     cursor?: number | null;
                     /**
                      * Format: uuid
-                     * @description Shared consumers: the pull result's leaseId (required instead of cursor)
+                     * @description Shared consumers: the pull result's leaseId (required instead of cursor); ack with the key that pulled it
                      */
                     leaseId?: string;
                 };
@@ -24432,6 +24515,11 @@ export interface operations {
                              * @description Consumer UUID
                              */
                             id: string;
+                            /**
+                             * Format: uuid
+                             * @description Authenticated creator tenant. Tenant keys see only their own stamped consumers; unstamped legacy rows are hidden from tenant keys.
+                             */
+                            tenantId: string | null;
                             /** @description Unique consumer name (the follow/ack handle) */
                             name: string;
                             /** @description Type filter: exact event type or trailing-* prefix glob */
@@ -24461,7 +24549,7 @@ export interface operations {
                             accessFilter: "all" | "allowed" | "denied";
                             /** @description true = opt-in journal readiness gate: claimed-but-unfilled rows are held (not delivered, cursor not moved past them) until filled or older than the settle window; false = today's behaviour */
                             waitForReady: boolean;
-                            /** @description true = instance-scoped consumer (opt-in): pulls only its instanceIds, visible only to its owner key and to instance-unrestricted keys. false (default) = global consumer, unchanged behaviour */
+                            /** @description true = instance-scoped consumer: pulls only its instanceIds, visible only to its owner key and to instance-unrestricted keys within its tenant. Restricted keys always create scoped consumers; false = no instance restriction for unrestricted keys; tenant ownership still applies */
                             scoped: boolean;
                             /** @description Scoped consumers: the instances whose journal rows it pages; null when unscoped */
                             instanceIds: string[] | null;
@@ -24492,6 +24580,27 @@ export interface operations {
             };
             /** @description Ack behind the stored cursor */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Restricted key on an unscoped consumer, or a lease claimed by another key; create a scoped consumer and ack your own lease */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

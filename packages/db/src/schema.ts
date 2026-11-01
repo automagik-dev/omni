@@ -3736,6 +3736,8 @@ export const durableConsumers = pgTable(
   'durable_consumers',
   {
     id: uuid('id').primaryKey().defaultRandom(),
+    /** Authenticated creator tenant. Unstamped pre-0091 rows are hidden from tenant credentials. */
+    tenantId: uuid('tenant_id'),
     /** User-facing handle (`omni events follow --consumer <name>`). */
     name: varchar('name', { length: 100 }).notNull(),
     /** Type filter: exact event type, or trailing-* prefix glob (#966 contract). */
@@ -3765,11 +3767,13 @@ export const durableConsumers = pgTable(
     /** Shared consumers only: claimed watermark + outstanding page leases. */
     leaseState: jsonb('lease_state').$type<SharedLeaseState>(),
     /**
-     * Opt-in instance scoping (0082). false (default) = today's global
-     * consumer: every key with events:* may read and move it, and it pages
-     * every instance's rows. true = pull only pages rows whose instance_id is
-     * in `instance_ids`, and only the owner key (or an instance-unrestricted
-     * key) may see, pull, ack or delete it.
+     * Opt-in instance scoping (0082), within the mandatory tenant boundary
+     * for tenant credentials (0091). Restricted keys always create scoped
+     * consumers. false pages every instance within the tenant boundary and
+     * permits only instance-unrestricted keys to pull, stream, ack or delete.
+     * true limits pull to `instance_ids` and access to the owner key or an
+     * instance-unrestricted key. Legacy keys retain cross-tenant access
+     * subject to these instance access rules.
      */
     scoped: boolean('scoped').notNull().default(false),
     /** Scoped consumers only: instance UUIDs this consumer may page. Null when unscoped. */

@@ -15,6 +15,7 @@
  * Every handler passes the caller's key (id + instance restriction, read
  * the same way as the /events routes) to the service. Restricted keys need a
  * scoped consumer to pull, stream, ack or delete; scoped streams apply their instance filter.
+ * Tenant ownership always applies.
  */
 
 import { zValidator } from '@hono/zod-validator';
@@ -53,7 +54,11 @@ const eventConsumersRoutes = new Hono<{ Variables: AppVariables }>();
 /** The request's key as the consumer access rules see it; no key = unrestricted (events.ts rule). */
 function consumerCaller(c: Context<{ Variables: AppVariables }>): ConsumerCaller {
   const apiKey = c.get('apiKey');
-  return { keyId: apiKey?.id ?? null, instanceIds: apiKey?.instanceIds ?? null };
+  return {
+    keyId: apiKey?.id ?? null,
+    instanceIds: apiKey?.instanceIds ?? null,
+    tenantId: c.get('authContext')?.tenantId ?? null,
+  };
 }
 
 /**
