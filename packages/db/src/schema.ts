@@ -3518,6 +3518,11 @@ export const connectors = pgTable(
     name: varchar('name', { length: 255 }).notNull(),
     /** Sealed JSON object of credential values. Never selected into a response. */
     credentials: text('credentials').notNull(),
+    /** Sealed per-connector delivery secret. Never selected into a response. */
+    hookSecret: text('hook_secret'),
+    totalUnmatched: integer('total_unmatched').notNull().default(0),
+    lastUnmatchedAt: timestamp('last_unmatched_at', { withTimezone: true }),
+    lastUnmatchedEventType: varchar('last_unmatched_event_type', { length: 200 }),
     /** Non-secret manifest config. */
     config: jsonb('config').$type<Record<string, unknown>>().notNull().default({}),
     /** connected | error | revoked */
@@ -3561,14 +3566,16 @@ export const connectorEventSubscriptions = pgTable(
       .references(() => connectors.id, { onDelete: 'cascade' }),
     /** Manifest event key (`taskStatusUpdated`). */
     providerEventKey: varchar('provider_event_key', { length: 100 }).notNull(),
+    /** Immutable route discriminator; existing bindings use the subscription route. */
+    ingress: varchar('ingress', { length: 20, enum: ['subscription', 'connector'] })
+      .notNull()
+      .default('subscription'),
     /** Exact-match filters over the parsed provider data, evaluated before the automation. */
     filters: jsonb('filters').$type<Record<string, unknown>>().notNull().default({}),
     /** Authoritative binding: this delivery runs only this automation. */
-    targetAutomationId: uuid('target_automation_id')
-      .notNull()
-      .references(() => automations.id, { onDelete: 'cascade' }),
+    targetAutomationId: uuid('target_automation_id').references(() => automations.id, { onDelete: 'cascade' }),
     /** Sealed HMAC secret the provider holds. Never returned. */
-    verificationSecret: text('verification_secret').notNull(),
+    verificationSecret: text('verification_secret'),
     /** active | paused | error */
     status: varchar('status', { length: 20 }).notNull().default('active'),
     lastDeliveryAt: timestamp('last_delivery_at', { withTimezone: true }),
@@ -3601,6 +3608,14 @@ export const connectorEventSubscriptions = pgTable(
       t.connectorId,
       t.providerEventKey,
       t.targetAutomationId,
+    ),
+    untargetedUq: uniqueIndex('connector_event_subscriptions_untargeted_uq')
+      .on(t.connectorId, t.providerEventKey)
+      .where(sql`${t.targetAutomationId} IS NULL`),
+    ingressSecretCheck: check(
+      'connector_event_subscriptions_ingress_secret_check',
+      sql`(${t.ingress} = 'subscription' AND ${t.verificationSecret} IS NOT NULL)
+        OR (${t.ingress} = 'connector' AND ${t.verificationSecret} IS NULL)`,
     ),
   }),
 );

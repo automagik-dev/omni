@@ -647,6 +647,13 @@
       "breakpoints": true
     },
     {
+      "idx": 92,
+      "version": "7",
+      "when": 1789000000000,
+      "tag": "0092_connector_ingress",
+      "breakpoints": true
+    },
+    {
       "idx": 93,
       "version": "7",
       "when": 1789100000000,

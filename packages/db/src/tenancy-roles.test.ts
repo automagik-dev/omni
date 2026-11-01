@@ -164,12 +164,19 @@ describe('provisioning plan', () => {
     expect(plan).toContain(`rolname = '${CONNECTOR_INGRESS_ROLE}'`);
     expect(plan).toContain('WITH NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS');
     expect(plan).toContain(`GRANT SELECT ON TABLE "connector_event_subscriptions" TO "${CONNECTOR_INGRESS_ROLE}";`);
+    expect(plan).toContain(`GRANT SELECT ON TABLE "connectors" TO "${CONNECTOR_INGRESS_ROLE}";`);
     for (const member of [DEFAULT_ROLE_NAMES.runtime, DEFAULT_ROLE_NAMES.ddl, DEFAULT_ROLE_NAMES.authPlane]) {
       expect(plan).toContain(`EXECUTE 'REVOKE "${CONNECTOR_INGRESS_ROLE}" FROM "${member}"'`);
     }
     // Runtime may execute the bounded lookup, never read the table as the role.
     expect(plan).toContain(
       `GRANT EXECUTE ON FUNCTION public.omni_connector_ingress_tenant(uuid) TO "${DEFAULT_ROLE_NAMES.runtime}";`,
+    );
+    expect(plan).toContain(
+      `GRANT EXECUTE ON FUNCTION public.omni_connector_ingress_tenant_by_connector(uuid) TO "${DEFAULT_ROLE_NAMES.runtime}";`,
+    );
+    expect(plan).toContain(
+      `GRANT EXECUTE ON FUNCTION public.omni_connector_ingress_connector_row_visible(uuid, uuid) TO "${DEFAULT_ROLE_NAMES.runtime}";`,
     );
     expect(plan).not.toContain(`GRANT "${CONNECTOR_INGRESS_ROLE}" TO "${DEFAULT_ROLE_NAMES.runtime}"`);
   });
