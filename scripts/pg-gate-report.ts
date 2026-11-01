@@ -40,7 +40,14 @@ function failureDetails(lines: string[]): string[] {
 export function formatPgGateFailure(output: string, suites: string[], problems: string[], logPath: string): string {
   const sections: { file: string; lines: string[] }[] = [];
   let current: (typeof sections)[number] | undefined;
-  for (const line of stripVTControlCharacters(output).split('\n')) {
+  for (const rawLine of stripVTControlCharacters(output).split('\n')) {
+    // Bun wraps file sections and repeats errors as annotations under GITHUB_ACTIONS.
+    if (/^::(?:error|warning)(?:\s|::)/.test(rawLine)) continue;
+    if (rawLine === '::endgroup::') {
+      current = undefined;
+      continue;
+    }
+    const line = rawLine.startsWith('::group::') ? rawLine.slice('::group::'.length) : rawLine;
     // Bun repeats failed test names after the final suite; that footer belongs to no file.
     if (/^\d+ tests? failed:$|^\s*\d+ (?:pass|fail|skip|error)\s*$/.test(line)) {
       current = undefined;

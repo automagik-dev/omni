@@ -23,32 +23,66 @@ async function run(cmd: string[], env = process.env) {
   return { stdout, stderr, code };
 }
 
-test('names beforeAll, afterAll, load and test failures with their first errors', async () => {
-  const dir = temporaryDirectory();
-  const sources = {
-    before: 'beforeAll(() => { throw new Error("beforeAll proof"); }); test("blocked", () => {});',
-    after: 'afterAll(() => { throw new Error("afterAll proof"); }); test("passed", () => {});',
-    load: 'throw new Error("load proof");',
-    test: `test("ok", () => { console.error("Error: noise from a passing test"); });
+for (const githubActions of [false, true]) {
+  test(`names hook, load and test failures ${githubActions ? 'under GitHub Actions' : 'without CI wrappers'}`, async () => {
+    const dir = temporaryDirectory();
+    const sources = {
+      before: 'beforeAll(() => { throw new Error("beforeAll proof"); }); test("blocked", () => {});',
+      after: 'afterAll(() => { throw new Error("afterAll proof"); }); test("passed", () => {});',
+      load: 'throw new Error("load proof");',
+      test: `test("ok", () => { console.error("Error: noise from a passing test"); });
       test("failed", () => { throw new Error("test proof"); });`,
-    pass: 'test("passed", () => {});',
-  };
-  const suites = Object.entries(sources).map(([name, source]) => {
-    const file = join(dir, `${name}.test.ts`);
-    writeFileSync(file, `import { beforeAll, afterAll, test } from 'bun:test';\n${source}\n`);
-    return file;
-  });
-  for (const FORCE_COLOR of ['0', '1']) {
-    const child = await run([process.execPath, 'test', ...suites], { ...process.env, FORCE_COLOR });
-    expect(child.code).toBe(1);
-    const summary = formatPgGateFailure(child.stdout + child.stderr, suites, ['bun test exited 1'], '/tmp/full.log');
-    for (const name of ['before', 'after', 'load', 'test']) expect(summary).toContain(join(dir, `${name}.test.ts`));
-    for (const error of ['beforeAll proof', 'afterAll proof', 'load proof', 'test proof'])
-      expect(summary).toContain(`error: ${error}`);
-    expect(summary).not.toContain(join(dir, 'pass.test.ts'));
-    expect(summary).not.toContain('Error: noise from a passing test');
-  }
-}, 30_000);
+      pass: 'test("passed", () => {});',
+    };
+    const suites = Object.entries(sources).map(([name, source]) => {
+      const file = join(dir, `${name}.test.ts`);
+      writeFileSync(file, `import { beforeAll, afterAll, test } from 'bun:test';\n${source}\n`);
+      return file;
+    });
+    for (const FORCE_COLOR of ['0', '1']) {
+      const child = await run([process.execPath, 'test', ...suites], {
+        ...process.env,
+        FORCE_COLOR,
+        GITHUB_ACTIONS: githubActions ? 'true' : undefined,
+        CI: githubActions ? 'true' : undefined,
+      });
+      expect(child.code).toBe(1);
+      const summary = formatPgGateFailure(child.stdout + child.stderr, suites, ['bun test exited 1'], '/tmp/full.log');
+      for (const name of ['before', 'after', 'load', 'test']) expect(summary).toContain(join(dir, `${name}.test.ts`));
+      for (const error of ['beforeAll proof', 'afterAll proof', 'load proof', 'test proof'])
+        expect(summary).toContain(`error: ${error}`);
+      expect(summary).not.toContain(join(dir, 'pass.test.ts'));
+      expect(summary).not.toContain('Error: noise from a passing test');
+    }
+  }, 30_000);
+}
+
+test('captured GitHub Actions file groups ignore annotations and end before the next group', () => {
+  const output = `::group::./packages/before-postgres.test.ts:
+error: beforeAll proof
+      at <anonymous> (./packages/before-postgres.test.ts:1:90)
+::error file=./packages/before-postgres.test.ts,line=1,col=90,title=error: beforeAll proof::%0A      at <anonymous> (./packages/before-postgres.test.ts:1:90)
+::warning::annotation distraction
+(fail) (unnamed) [0.19ms]
+::endgroup::
+::group::packages/passed-postgres.test.ts:
+(pass) okay
+::endgroup::
+::error::annotation outside a group
+(fail) recap outside a group
+`;
+  const summary = formatPgGateFailure(
+    output,
+    ['packages/before-postgres.test.ts', 'packages/passed-postgres.test.ts'],
+    ['bun test exited 1'],
+    '/tmp/full.log',
+  );
+  expect(summary).toContain('packages/before-postgres.test.ts\n    error: beforeAll proof');
+  expect(summary).toContain('(fail) (unnamed)');
+  expect(summary).not.toContain('packages/passed-postgres.test.ts');
+  for (const noise of ['::group::', '::endgroup::', '::error', '::warning', 'annotation', 'recap outside'])
+    expect(summary).not.toContain(noise);
+});
 
 test('large diagnostics stay intact while the summary precedes bounded context and stderr drains naturally', async () => {
   const dir = temporaryDirectory();
