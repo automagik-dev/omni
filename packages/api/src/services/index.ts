@@ -207,6 +207,7 @@ export function createServices(db: Database, eventBus: (EventBus & ConnectorEven
   // identities.
   const authPlane = resolveAuthPlaneConnection(db);
   const authBootstrap = new AuthBootstrapService(authPlane.db);
+  deadLetters.setAuthPlane(authPlane.db);
 
   const followUpLifecycle = new FollowUpLifecycleService(db, eventBus);
   const followUpSweeper = new FollowUpSweeperService(db, eventBus);

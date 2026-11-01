@@ -25,12 +25,21 @@ import { rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { executeAction } from '@omni/core';
-import { type Database, createDbHandle, deadLetterEvents } from '@omni/db';
+import { type Database, createDbHandle, deadLetterEvents, instances, omniEvents, tenants } from '@omni/db';
 import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { eq } from 'drizzle-orm';
+import { Hono } from 'hono';
+import { authMiddleware } from '../../middleware/auth';
+import { errorHandler } from '../../middleware/error';
+import { scopeEnforcerMiddleware } from '../../middleware/scope-enforcer';
+import { tenancyMiddleware } from '../../middleware/tenancy';
 import { buildAutomationEngineDeps } from '../../plugins/automation-actions';
+import { webhooksRoutes } from '../../routes/v2/webhooks';
+import { MULTITENANCY_FLAG_ENV } from '../../tenancy/feature-flag';
+import type { AppVariables } from '../../types';
 import { DeadLetterService } from '../dead-letters';
 import { EventSchemaService } from '../event-schemas';
-import type { Services } from '../index';
+import { type Services, createServices } from '../index';
 import { WebhookService } from '../webhooks';
 
 const superUrl = process.env.OMNI_G1_POSTGRES_URL ?? '';
@@ -300,4 +309,70 @@ postgresDescribe('event schema registry gates (real PostgreSQL)', () => {
       eventSchemas.register({ eventType: 'custom.broken.type', schema: { type: 'string', pattern: '[' } }),
     ).rejects.toThrow(/not a valid JSON Schema/);
   });
+
+  test.each(['correlationId', 'causationId'] as const)(
+    'legacy-key schema refusal keeps an independent unowned event ID with %s',
+    async (field) => {
+      const previousFlag = process.env[MULTITENANCY_FLAG_ENV];
+      process.env[MULTITENANCY_FLAG_ENV] = 'true';
+      try {
+        const services = createServices(db, recordingBus(journal));
+        const { plainTextKey } = await services.apiKeys.create({ name: `refusal-${field}`, scopes: ['*'] });
+        const [tenant] = await db
+          .insert(tenants)
+          .values({
+            slug: `refusal-${field.toLowerCase()}`,
+            displayName: 'Foreign owner',
+            maxKeyTtlSeconds: 3600,
+            maxKeyRateLimit: 100,
+            maxKeyBudget: 100,
+          })
+          .returning();
+        if (!tenant) throw new Error('missing foreign tenant');
+        const [instance] = await db
+          .insert(instances)
+          .values({ name: `refusal-${field}`, channel: 'internal', tenantId: tenant.id })
+          .returning();
+        if (!instance) throw new Error('missing foreign instance');
+        const foreignId = crypto.randomUUID();
+        await db.insert(omniEvents).values({
+          id: foreignId,
+          instanceId: instance.id,
+          channel: 'internal',
+          direction: 'internal',
+          eventType: 'custom.foreign-parent',
+          metadata: { correlationId: foreignId },
+        });
+        const [foreign] = await db.select().from(omniEvents).where(eq(omniEvents.id, foreignId));
+        expect(foreign?.tenantId).toBe(tenant.id);
+        const eventType = `custom.refusal-${field.toLowerCase()}` as const;
+        await services.eventSchemas.register({ eventType, schema: { type: 'object', required: ['requiredValue'] } });
+        const app = new Hono<{ Variables: AppVariables }>();
+        app.onError(errorHandler);
+        app.use('*', async (c, next) => {
+          c.set('db', db);
+          c.set('services', services);
+          await next();
+        });
+        app.use('*', tenancyMiddleware);
+        app.use('*', authMiddleware);
+        app.use('*', scopeEnforcerMiddleware);
+        app.route('/api/v2', webhooksRoutes);
+        const response = await app.request('/api/v2/events/trigger', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-api-key': plainTextKey },
+          body: JSON.stringify({ eventType, payload: {}, [field]: foreignId }),
+        });
+        expect(response.status).toBe(400);
+        const rows = await db.select().from(deadLetterEvents).where(eq(deadLetterEvents.eventType, eventType));
+        expect(rows).toHaveLength(1);
+        expect(rows[0]?.eventId).not.toBe(foreignId);
+        expect(rows[0]?.tenantId).toBeNull();
+        expect(journalOf(eventType)).toEqual([]);
+      } finally {
+        if (previousFlag === undefined) Reflect.deleteProperty(process.env, MULTITENANCY_FLAG_ENV);
+        else process.env[MULTITENANCY_FLAG_ENV] = previousFlag;
+      }
+    },
+  );
 });
