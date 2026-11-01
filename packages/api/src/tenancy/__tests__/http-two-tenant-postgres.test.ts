@@ -41,20 +41,25 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { zValidator } from '@hono/zod-validator';
+import { CURRENT_ENVELOPE_VERSION, type OmniEvent } from '@omni/core';
 import {
   DEFAULT_ROLE_NAMES,
   type Database,
   applyTenancyRoles,
   applyTenantRlsEnforcement,
+  assertEnforcedRuntimeIdentity,
   createDbHandle,
 } from '@omni/db';
 import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { Hono } from 'hono';
+import { z } from 'zod';
 import { authMiddleware } from '../../middleware/auth';
 import { errorHandler } from '../../middleware/error';
 import { scopeEnforcerMiddleware } from '../../middleware/scope-enforcer';
 import { tenancyMiddleware } from '../../middleware/tenancy';
 import { chatsRoutes } from '../../routes/v2/chats';
+import { deadLettersRoutes } from '../../routes/v2/dead-letters';
 import { instancesRoutes } from '../../routes/v2/instances';
 import { keysRoutes } from '../../routes/v2/keys';
 import { messagesRoutes } from '../../routes/v2/messages';
@@ -64,6 +69,7 @@ import type { Services } from '../../services';
 import { ApiKeyService } from '../../services/api-keys';
 import { AuthBootstrapService } from '../../services/auth-bootstrap';
 import { ChatService } from '../../services/chats';
+import { DeadLetterService } from '../../services/dead-letters';
 import { EventService } from '../../services/events';
 import { InstanceService } from '../../services/instances';
 import { MessageService } from '../../services/messages';
@@ -148,6 +154,9 @@ function urlFor(base: string, database: string, user?: { name: string; password:
   if (user) {
     url.username = user.name;
     url.password = user.password;
+    // Hostless unix-socket URLs cannot retain URL.username. postgres.js and
+    // libpq both accept the startup user query parameter on disposable trust sockets.
+    if (!url.hostname) url.searchParams.set('user', user.name);
   }
   return url.toString();
 }
@@ -338,6 +347,8 @@ postgresDescribe('two-tenant containment over HTTP (real PostgreSQL)', () => {
       urlFor(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }),
       1,
     );
+    const runtimeIdentity = await assertEnforcedRuntimeIdentity(runtimeDb);
+    expect(runtimeIdentity.currentUser).toBe(DEFAULT_ROLE_NAMES.runtime);
     // The auth plane on its own SELECT-only identity, which is how
     // `resolveAuthPlaneConnection` wires it under enforcement — the runtime role
     // is REVOKEd on `auth_credentials`, so the lookup could not run on it.
@@ -353,6 +364,7 @@ postgresDescribe('two-tenant containment over HTTP (real PostgreSQL)', () => {
       messages: new MessageService(runtimeDb, null),
       persons: new PersonService(runtimeDb, null),
       events: new EventService(runtimeDb),
+      deadLetters: new DeadLetterService(runtimeDb, null),
       apiKeys: new ApiKeyService(runtimeDb),
       authBootstrap,
       requestAuthenticator: new RequestAuthenticator(authBootstrap, new MembershipSelectionService(authPlaneDb)),
@@ -389,6 +401,30 @@ postgresDescribe('two-tenant containment over HTTP (real PostgreSQL)', () => {
     app.route('/api/v2/messages', messagesRoutes);
     app.route('/api/v2/persons', personsRoutes);
     app.route('/api/v2/keys', keysRoutes);
+    app.route('/api/v2/dead-letters', deadLettersRoutes);
+    // Test-only producer adapter behind the REAL credential middleware. Inject
+    // an adversarial envelope to prove DLQ ownership never trusts its metadata,
+    // even if an internal publisher hands it an explicit foreign tenant stamp.
+    app.post('/api/v2/events/trigger', zValidator('json', z.object({ tenantId: z.string().uuid() })), async (c) => {
+      const event: OmniEvent = {
+        id: crypto.randomUUID(),
+        type: 'custom.dlq-ownership',
+        payload: {},
+        timestamp: Date.now(),
+        metadata: {
+          correlationId: crypto.randomUUID(),
+          envelopeVersion: CURRENT_ENVELOPE_VERSION,
+          ...c.req.valid('json'),
+        },
+      };
+      const dead = await services.deadLetters.create({
+        event,
+        subject: event.type,
+        error: new Error('test consumer failed'),
+        retryCount: 0,
+      });
+      return c.json({ data: dead }, 201);
+    });
 
     // Mint the tenant credentials through the REAL issuance path — over HTTP,
     // through `POST /platform/tenants/:id/keys/root` (#979), with the seeded
@@ -450,6 +486,25 @@ postgresDescribe('two-tenant containment over HTTP (real PostgreSQL)', () => {
       expect(res.status).toBe(200);
       expect(((await res.json()) as { data: { id: string } }).data.id).toBe(INSTANCE_A);
     });
+  });
+
+  test('a producer envelope claiming B under a real A key is dead-lettered as A', async () => {
+    const response = await app.request('/api/v2/events/trigger', {
+      method: 'POST',
+      headers: { 'x-api-key': keys.a, 'content-type': 'application/json' },
+      body: JSON.stringify({ tenantId: TENANT_B }),
+    });
+    expect(response.status).toBe(201);
+    const { data } = (await response.json()) as { data: { id: string; tenantId: string; payload: unknown } };
+    expect(data.tenantId).toBe(TENANT_A);
+    expect(data.payload).toMatchObject({ metadata: { tenantId: TENANT_B } });
+    expect((await get(`/api/v2/dead-letters/${data.id}`, keys.a)).status).toBe(200);
+    expect((await get(`/api/v2/dead-letters/${data.id}`, keys.b)).status).toBe(404);
+    const retry = await app.request(`/api/v2/dead-letters/${data.id}/retry`, {
+      method: 'POST',
+      headers: { 'x-api-key': keys.b },
+    });
+    expect(retry.status).toBe(404);
   });
 
   describe('lists return only same-tenant rows', () => {

@@ -645,6 +645,13 @@
       "when": 1788900000000,
       "tag": "0091_durable_consumers_tenant_scope",
       "breakpoints": true
+    },
+    {
+      "idx": 93,
+      "version": "7",
+      "when": 1789100000000,
+      "tag": "0093_dead_letter_tenant_scope",
+      "breakpoints": true
     }
   ]
 }

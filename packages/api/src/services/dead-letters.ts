@@ -21,9 +21,11 @@ import {
   prepareDeadLetterInsert,
 } from '@omni/core';
 import type { Database, DeadLetterStatus } from '@omni/db';
-import { deadLetterEvents } from '@omni/db';
-import { and, desc, eq, gte, inArray, lte, or, sql } from 'drizzle-orm';
-import { scopedHandle } from '../tenancy/tenant-scope';
+import { deadLetterEvents, resolveEnforcementMode } from '@omni/db';
+import { and, desc, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
+import { isMultitenancyEnabled } from '../tenancy/feature-flag';
+import { enumerateActiveWorkTenants } from '../tenancy/periodic-tenant-work';
+import { currentTenantScope, scopedHandle } from '../tenancy/tenant-scope';
 import { runTenantWorkDb } from '../tenancy/worker-tenant-context';
 import { ConnectorProvenanceError, restoreConnectorEvent } from './connectors';
 
@@ -67,6 +69,33 @@ export class DeadLetterService {
   }
 
   private warnedNoBus = false;
+  private authPlaneDb: Database | null = null;
+
+  setAuthPlane(authPlaneDb: Database): void {
+    this.authPlaneDb = authPlaneDb;
+  }
+
+  /** Request work never fans out; periodic work discovers owners on the auth plane. */
+  private async workTenants(): Promise<Array<string | null>> {
+    const caller = currentTenantScope()?.tenantId;
+    if (caller || !isMultitenancyEnabled()) return [caller ?? null];
+    const tenants = await enumerateActiveWorkTenants(this.authPlaneDb ?? this.pool);
+    return resolveEnforcementMode() === 'enforced' ? tenants : [...tenants, null];
+  }
+
+  private workDb<T>(tenantId: string | null, work: () => Promise<T>): Promise<T> {
+    // Reuse an active request transaction; worker DB blocks commit before publish.
+    if (currentTenantScope()?.tenantId === tenantId) return work();
+    return runTenantWorkDb(this.pool, tenantId, work);
+  }
+
+  private workPredicate(tenantId: string | null) {
+    return tenantId
+      ? eq(deadLetterEvents.tenantId, tenantId)
+      : isMultitenancyEnabled()
+        ? isNull(deadLetterEvents.tenantId)
+        : undefined;
+  }
 
   constructor(
     private readonly pool: Database,
@@ -251,6 +280,7 @@ export class DeadLetterService {
         { ...systemPayload },
         {
           source: 'dead-letter-service',
+          ...(result.tenantId ? { tenantId: result.tenantId } : {}),
         },
       );
     } catch (err) {
@@ -271,7 +301,10 @@ export class DeadLetterService {
       );
       await this.eventBus.publishConnector(entry.eventType, restored.payload, { ...restored.metadata, source });
     } else {
-      await this.eventBus.publishGeneric(entry.eventType as EventType, payload, { source });
+      await this.eventBus.publishGeneric(entry.eventType as EventType, payload, {
+        source,
+        ...(entry.tenantId ? { tenantId: entry.tenantId } : {}),
+      });
     }
   }
 
@@ -405,42 +438,48 @@ export class DeadLetterService {
     let succeeded = 0;
     let failed = 0;
 
-    // Find pending dead letters with due auto-retry
-    const dueForRetry = await this.db
-      .select()
-      .from(deadLetterEvents)
-      .where(and(eq(deadLetterEvents.status, 'pending'), lte(deadLetterEvents.nextAutoRetryAt, now)))
-      .limit(100); // Process in batches
+    for (const tenantId of await this.workTenants()) {
+      const dueForRetry = await this.workDb(tenantId, () =>
+        this.db
+          .select()
+          .from(deadLetterEvents)
+          .where(
+            and(
+              eq(deadLetterEvents.status, 'pending'),
+              lte(deadLetterEvents.nextAutoRetryAt, now),
+              this.workPredicate(tenantId),
+            ),
+          )
+          .limit(100),
+      );
 
-    for (const deadLetter of dueForRetry) {
-      processed++;
-
-      // Mark as retrying
-      await this.db
-        .update(deadLetterEvents)
-        .set({ status: 'retrying', lastRetryAt: now })
-        .where(eq(deadLetterEvents.id, deadLetter.id));
-
-      // Try to republish
-      if (this.eventBus) {
-        try {
-          const originalEvent = deadLetter.payload as Record<string, unknown>;
-          await this.republish(deadLetter, originalEvent, 'dead-letter-auto-retry');
-
-          // Success - mark as resolved
-          await this.db
+      for (const deadLetter of dueForRetry) {
+        processed++;
+        await this.workDb(tenantId, () =>
+          this.db
             .update(deadLetterEvents)
-            .set({
-              status: 'resolved',
-              resolvedAt: now,
-              resolvedBy: `auto-retry-${deadLetter.autoRetryCount + 1}`,
-            })
-            .where(eq(deadLetterEvents.id, deadLetter.id));
+            .set({ status: 'retrying', lastRetryAt: now })
+            .where(eq(deadLetterEvents.id, deadLetter.id)),
+        );
 
-          succeeded++;
-          log.info('Auto-retry succeeded', { deadLetterId: deadLetter.id });
-        } catch (err) {
-          failed += await this.recordAutoRetryFailure(deadLetter, err, now);
+        if (this.eventBus) {
+          try {
+            await this.republish(deadLetter, deadLetter.payload, 'dead-letter-auto-retry');
+            await this.workDb(tenantId, () =>
+              this.db
+                .update(deadLetterEvents)
+                .set({
+                  status: 'resolved',
+                  resolvedAt: now,
+                  resolvedBy: `auto-retry-${deadLetter.autoRetryCount + 1}`,
+                })
+                .where(eq(deadLetterEvents.id, deadLetter.id)),
+            );
+            succeeded++;
+            log.info('Auto-retry succeeded', { deadLetterId: deadLetter.id });
+          } catch (err) {
+            failed += await this.workDb(tenantId, () => this.recordAutoRetryFailure(deadLetter, err, now));
+          }
         }
       }
     }
@@ -481,12 +520,17 @@ export class DeadLetterService {
    * Get count of pending dead letters (for metrics)
    */
   async getPendingCount(): Promise<number> {
-    const [result] = await this.db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(deadLetterEvents)
-      .where(eq(deadLetterEvents.status, 'pending'));
-
-    return result?.count ?? 0;
+    let pending = 0;
+    for (const tenantId of await this.workTenants()) {
+      pending += await this.workDb(tenantId, async () => {
+        const [result] = await this.db
+          .select({ count: sql<number>`count(*)::int` })
+          .from(deadLetterEvents)
+          .where(and(eq(deadLetterEvents.status, 'pending'), this.workPredicate(tenantId)));
+        return result?.count ?? 0;
+      });
+    }
+    return pending;
   }
 
   /** Pending depth and oldest pending row, for the /health DLQ check (#1163). */

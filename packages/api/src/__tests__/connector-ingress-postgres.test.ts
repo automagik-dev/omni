@@ -135,8 +135,8 @@ async function assertForeignTenantRetryRefused(
   eventId: string,
   tenantIds: string[],
 ): Promise<void> {
-  // Both INSERT triggers clear caller ownership. Seed persisted DLQ ownership
-  // by UPDATE, as the enforced-RLS fixtures do, leaving the journal unchanged.
+  // Simulate a corrupt historical DLQ owner by UPDATE, leaving the source
+  // journal unchanged. Connector provenance must still refuse the mismatch.
   for (const tenantId of tenantIds) {
     const [dead] = await db
       .insert(deadLetterEvents)
@@ -560,7 +560,32 @@ postgresDescribe('ClickUp connector acceptance loop (real PostgreSQL)', () => {
     }
   }, 30000);
 
-  test('a real NULL-tenant dead letter retries tenant-owned ingress; a different tenant is refused', async () => {
+  test('a legacy source-less dead letter stays unowned and retries without tenant enumeration', async () => {
+    const { bus: retryBus, journal } = inMemoryBus();
+    const services = createServices(db, retryBus);
+    const dead = await services.deadLetters.create({
+      event: {
+        id: randomUUID(),
+        type: 'custom.legacy-retry',
+        payload: { value: 'legacy' },
+        metadata: { correlationId: randomUUID() },
+        timestamp: Date.now(),
+      },
+      subject: 'custom.legacy-retry',
+      error: new Error('legacy failure'),
+      retryCount: 0,
+    });
+    expect(dead.tenantId).toBeNull();
+    await db
+      .update(deadLetterEvents)
+      .set({ nextAutoRetryAt: new Date(0) })
+      .where(eq(deadLetterEvents.id, dead.id));
+    expect(await services.deadLetters.processAutoRetries()).toEqual({ processed: 1, succeeded: 1, failed: 0 });
+    expect(journal.at(-1)).toMatchObject({ type: 'custom.legacy-retry' });
+    expect(journal.at(-1)?.metadata.tenantId).toBeUndefined();
+  });
+
+  test('a real dead letter inherits its persisted source tenant and retries tenant-owned ingress; a different tenant is refused', async () => {
     const [owner, other] = await db
       .insert(tenants)
       .values(
@@ -620,7 +645,7 @@ postgresDescribe('ClickUp connector acceptance loop (real PostgreSQL)', () => {
       });
     const manual = await createRealDeadLetter();
     const [stored] = await db.select().from(deadLetterEvents).where(eq(deadLetterEvents.id, manual.id));
-    expect(stored?.tenantId).toBeNull();
+    expect(stored?.tenantId).toBe(owner.id);
     expect((await services.deadLetters.retry(manual.id)).success).toBe(true);
     expect(journal.at(-1)).toMatchObject({
       id: row.id,

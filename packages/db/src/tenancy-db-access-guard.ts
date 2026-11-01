@@ -1473,11 +1473,11 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     table: 'dead_letter_events',
     class: 'pending-G4-conversion',
     justification:
-      'G2 classifies this table as `unowned` (tenancy-ownership.ts): its G0 rule names a parent that is not a ' +
-      'column in the live schema, so tenant_id stays NULL until the G6 backfill decides ownership. The route path ' +
-      'runs inside the tenant transaction, but under forced RLS the tenant-equality predicate matches no row at ' +
-      'all, so the site cannot be called converted. OPEN QUESTION for G6, proven by the unowned-tables block in ' +
-      'two-tenant-adversarial-postgres.test.ts.',
+      '0093 derives new rows from authenticated scope or persisted source ownership (#1467). Requests use ' +
+      'scopedHandle; auto-retry and its scheduler pending count enumerate active tenants on the auth plane ' +
+      'and scope discrete DB blocks. Enforced coverage: connector-ingress-enforced-rls-postgres.test.ts and ' +
+      'http-two-tenant-postgres.test.ts. Still pending: legacy NULL-row backfill, ambient health summaries ' +
+      'and retention cleanup; those reads fail closed under enforcement rather than bypassing RLS.',
   },
   {
     // G5-CONVERTED. Both paths now reach a tenant transaction. The route-facing

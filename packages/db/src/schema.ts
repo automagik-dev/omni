@@ -2883,7 +2883,7 @@ export const deadLetterEvents = pgTable(
     lastRetryAt: timestamp('last_retry_at', { withTimezone: true }),
     resolvedAt: timestamp('resolved_at', { withTimezone: true }),
     resolvedBy: varchar('resolved_by', { length: 100 }), // manual resolution note
-    /** G2 additive tenant ownership. Nullable through the additive phase. */
+    /** Derived by the INSERT trigger from authenticated scope or persisted source event; never payload metadata. */
     tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
   },
   (table) => ({
