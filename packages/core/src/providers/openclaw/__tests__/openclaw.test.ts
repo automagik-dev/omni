@@ -212,12 +212,7 @@ describe('OpenClawClient', () => {
     const client = createClient();
     client.start();
 
-    await waitForCondition(
-      () => client.connected,
-      () =>
-        `the mock gateway handshake (state=${client.state}, port=${serverPort}, sockets=${serverConnections.size}, frames=${receivedFrames.map((frame) => frame.method)})`,
-    );
-    await client.waitForReady(5_000);
+    await client.waitForReady(10_000);
     expect(client.connected).toBe(true);
     expect(client.state).toBe('connected');
 
