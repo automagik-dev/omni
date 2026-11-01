@@ -34,7 +34,7 @@ postgresDescribe('agent key assignment lifecycle (real PostgreSQL)', () => {
     const handle = createDbHandle({ url: url.toString(), maxConnections: 3 });
     db = handle.db;
     close = handle.close;
-  });
+  }, 180_000);
 
   afterAll(async () => {
     await close?.();
@@ -56,7 +56,7 @@ postgresDescribe('agent key assignment lifecycle (real PostgreSQL)', () => {
     if (result.exitCode !== 0) throw new Error(result.stderr.toString());
   });
 
-  function harness() {
+  function harness(tenantId: string | null = null) {
     const service = new ApiKeyService(db);
     const issued: Awaited<ReturnType<ApiKeyService['create']>>[] = [];
     const create = service.create.bind(service);
@@ -76,11 +76,20 @@ postgresDescribe('agent key assignment lifecycle (real PostgreSQL)', () => {
       c.set('services', {
         apiKeys: service,
         instances: {
-          getById: async (id: string) => ({ id, agentId: assignments.get(id) ?? null, agentReplyFilter: null }),
+          create: async (data: { agentId?: string }) => {
+            if (data.agentId) assignments.set(INSTANCE_B, data.agentId);
+            return { ...data, id: INSTANCE_B, tenantId };
+          },
+          getById: async (id: string) => ({
+            id,
+            agentId: assignments.get(id) ?? null,
+            agentReplyFilter: null,
+            tenantId,
+          }),
           update: async (id: string, patch: { agentId?: string | null }) => {
             if (patch.agentId === null) assignments.delete(id);
             else if (patch.agentId !== undefined) assignments.set(id, patch.agentId);
-            return { id, channel: 'whatsapp-baileys' };
+            return { id, channel: 'whatsapp-baileys', tenantId };
           },
         },
         agents: { getById: async (id: string) => ({ id, name: names[id], metadata: null }) },
@@ -95,9 +104,48 @@ postgresDescribe('agent key assignment lifecycle (real PostgreSQL)', () => {
         body: JSON.stringify({ agentId }),
       });
     const seed = (instanceIds: string[]) =>
-      service.create({ name: `agent:${names[AGENT_A]}`, instanceIds, scopes: [...DEFAULT_TURN_SCOPES] });
-    return { service, issued, names, assign, seed };
+      service.create({
+        name: tenantId ? `agent:${tenantId}:${names[AGENT_A]}` : `agent:${names[AGENT_A]}`,
+        instanceIds,
+        scopes: [...DEFAULT_TURN_SCOPES],
+        createdBy: 'system:auto-provision',
+      });
+    return { app, service, issued, names, assign, seed };
   }
+
+  for (const tenantId of [null, '11111111-1111-4111-8111-111111111111']) {
+    test(`POST extends the key before PATCH unbinds the first instance (${tenantId ?? 'legacy'})`, async () => {
+      const h = harness(tenantId);
+      const old = await h.seed([INSTANCE_A]);
+      await h.service.validate(old.plainTextKey);
+      const res = await h.app.request('/instances', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'second', channel: 'whatsapp-baileys', agentId: AGENT_A }),
+      });
+      expect(res.status).toBe(201);
+      expect((await h.service.validate(old.plainTextKey))?.instanceIds).toEqual([INSTANCE_A, INSTANCE_B]);
+      expect((await h.assign(INSTANCE_A, null)).status).toBe(200);
+      expect((await h.service.getById(old.key.id))?.status).toBe('active');
+      expect((await h.service.validate(old.plainTextKey))?.instanceIds).toEqual([INSTANCE_B]);
+    });
+  }
+
+  test('agent lookup ignores user-created names and audited revoked system keys', async () => {
+    const h = harness();
+    const name = `agent:${h.names[AGENT_A]}`;
+    await h.service.create({
+      name,
+      instanceIds: [INSTANCE_A],
+      scopes: [...DEFAULT_TURN_SCOPES],
+      createdBy: 'operator',
+    });
+    expect(await h.service.findAgentKeyByName(name)).toBeNull();
+    const system = await h.seed([INSTANCE_A]);
+    expect((await h.service.findAgentKeyByName(name))?.id).toBe(system.key.id);
+    await h.service.revoke(system.key.id);
+    expect(await h.service.findAgentKeyByName(name)).toBeNull();
+  });
 
   test('unbinding the last instance revokes the key and invalidates cached authentication', async () => {
     const h = harness();
@@ -108,7 +156,7 @@ postgresDescribe('agent key assignment lifecycle (real PostgreSQL)', () => {
     expect(stored?.status).toBe('revoked');
     expect(stored?.instanceIds).toEqual([INSTANCE_A]);
     expect(await h.service.validate(old.plainTextKey)).toBeNull();
-    expect(await h.service.findByName(old.key.name)).toBeNull();
+    expect(await h.service.findAgentKeyByName(old.key.name)).toBeNull();
   });
 
   test('reassigning an instance preserves the old key for only its other instance', async () => {
@@ -122,7 +170,7 @@ postgresDescribe('agent key assignment lifecycle (real PostgreSQL)', () => {
     const replacement = h.issued[0];
     if (!replacement) throw new Error('new agent key was not provisioned');
     expect((await h.service.validate(replacement.plainTextKey))?.instanceIds).toEqual([INSTANCE_A]);
-    expect(await h.service.findByName(`agent:${h.names[AGENT_B]}`)).toMatchObject({ id: replacement.key.id });
+    expect(await h.service.findAgentKeyByName(`agent:${h.names[AGENT_B]}`)).toMatchObject({ id: replacement.key.id });
   });
 
   test('rebind creates a fresh working key; subsequent binds select it instead of the revoked row', async () => {
@@ -143,7 +191,7 @@ postgresDescribe('agent key assignment lifecycle (real PostgreSQL)', () => {
     expect(ApiKeyService.instanceAllowed(validated?.instanceIds ?? [], INSTANCE_B)).toBe(false);
     expect((await h.assign(INSTANCE_B, AGENT_A)).status).toBe(200);
     expect(h.issued).toHaveLength(1);
-    expect((await h.service.findByName(old.key.name))?.id).toBe(fresh.key.id);
+    expect((await h.service.findAgentKeyByName(old.key.name))?.id).toBe(fresh.key.id);
     expect((await h.service.validate(fresh.plainTextKey))?.instanceIds).toEqual([INSTANCE_A, INSTANCE_B]);
     expect((await h.service.getById(old.key.id))?.status).toBe('revoked');
     expect((await h.service.getById(old.key.id))?.instanceIds).toEqual([INSTANCE_A]);

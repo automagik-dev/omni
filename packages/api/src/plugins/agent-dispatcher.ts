@@ -2933,10 +2933,15 @@ async function dispatchViaTurnBasedProvider(
   // wins where it exists, and an untenanted instance performs the same single
   // lookup it always has.
   const keyNames = agentKeyNameCandidates(agentRecord.name, instance.tenantId);
-  let scopedKey: Awaited<ReturnType<typeof services.apiKeys.findByName>> = null;
+  let scopedKey: Awaited<ReturnType<typeof services.apiKeys.findAgentKeyByName>> = null;
   for (const candidate of keyNames) {
-    scopedKey = await services.apiKeys.findByName(candidate);
-    if (scopedKey) break;
+    const key = await services.apiKeys.findAgentKeyByName(candidate);
+    // A bare legacy fallback is global. Its name alone is no proof that it
+    // belongs to this instance, and null/empty grants must never dispatch.
+    if (key?.instanceIds?.includes(instance.id)) {
+      scopedKey = key;
+      break;
+    }
   }
   if (!scopedKey) {
     log.error('Turn-based dispatch: scoped API key not found', {
@@ -6712,6 +6717,7 @@ export const setupAgentResponder = setupAgentDispatcher;
 
 /** @internal Exported for unit testing only — do not use in production code. */
 export const __test__ = {
+  dispatchViaTurnBasedProvider,
   buildContextMessages,
   /**
    * #1408 — the native-failure → legacy-fallback funnel. Exported so a probe can

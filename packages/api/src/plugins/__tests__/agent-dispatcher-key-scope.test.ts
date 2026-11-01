@@ -1,0 +1,86 @@
+import { describe, expect, mock, test } from 'bun:test';
+import { __test__ } from '../agent-dispatcher';
+
+const INSTANCE = 'instance-b';
+const OTHER_INSTANCE = 'instance-a';
+const TENANT = 'tenant-b';
+type Dispatch = typeof __test__.dispatchViaTurnBasedProvider;
+type DispatchServices = Parameters<Dispatch>[0];
+type Key = { id: string; instanceIds: string[] | null };
+
+function harness(keys: Record<string, Key>, tenantId: string | null = TENANT) {
+  const lookup = mock(async (name: string) => keys[name] ?? null);
+  const open = mock(async (_options: Parameters<DispatchServices['turns']['open']>[0]) => ({ id: 'turn-b' }));
+  const update = mock(async (_id: string, _patch: Parameters<DispatchServices['apiKeys']['update']>[1]) => undefined);
+  const triggerProvider = mock(async () => undefined);
+  const services = {
+    apiKeys: { findAgentKeyByName: lookup, update },
+    turns: { open },
+    chats: { findByExternalIdSmart: async () => ({ id: 'chat-b' }) },
+    messages: { getByExternalId: async () => ({ id: 'message-b' }) },
+  } as unknown as Parameters<Dispatch>[0];
+  const db = {
+    select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ id: 'agent-b', name: 'support' }] }) }) }),
+  } as unknown as Parameters<Dispatch>[7];
+  const trigger = { content: { text: 'hello' }, sessionId: 'session-b' } as Parameters<Dispatch>[3];
+  const run = () =>
+    __test__.dispatchViaTurnBasedProvider(
+      services,
+      { id: INSTANCE, tenantId, agentId: 'agent-b', channel: 'whatsapp-baileys' } as Parameters<Dispatch>[1],
+      { id: 'provider-b', schema: 'genie', trigger: triggerProvider } as unknown as Parameters<Dispatch>[2],
+      trigger,
+      [{ payload: { externalId: 'external-message-b' }, metadata: {} }] as Parameters<Dispatch>[4],
+      'external-chat-b',
+      'trace-b',
+      db,
+    );
+  return { run, lookup, open, update, triggerProvider, trigger };
+}
+
+describe('turn dispatch requires the candidate key to grant this instance', () => {
+  for (const instanceIds of [null, [], [OTHER_INSTANCE]]) {
+    test(`refuses foreign bare fallback ${JSON.stringify(instanceIds)} after qualified key revocation`, async () => {
+      // Active lookup no longer sees the revoked qualified row. The remaining
+      // bare key can belong to another tenant, despite having the same name.
+      const h = harness({ 'agent:support': { id: 'foreign-key', instanceIds } });
+      expect(await h.run()).toBe(false);
+      expect(h.lookup.mock.calls.map(([name]) => name)).toEqual([`agent:${TENANT}:support`, 'agent:support']);
+      expect(h.open).not.toHaveBeenCalled();
+      expect(h.update).not.toHaveBeenCalled();
+      expect(h.triggerProvider).not.toHaveBeenCalled();
+    });
+  }
+
+  test('rejects a qualified candidate without an explicit instance grant too', async () => {
+    const h = harness({ [`agent:${TENANT}:support`]: { id: 'wide-key', instanceIds: null } });
+    expect(await h.run()).toBe(false);
+    expect(h.open).not.toHaveBeenCalled();
+    expect(h.update).not.toHaveBeenCalled();
+  });
+
+  for (const tenantId of [null, TENANT]) {
+    test(`legacy I2 bare key with this instance still dispatches (${tenantId ?? 'legacy'})`, async () => {
+      const h = harness({ 'agent:support': { id: 'legacy-key', instanceIds: [INSTANCE] } }, tenantId);
+      expect(await h.run()).toBe(true);
+      expect(h.open.mock.calls[0]).toEqual([
+        {
+          instanceId: INSTANCE,
+          chatId: 'external-chat-b',
+          messageId: 'external-message-b',
+          agentId: 'agent-b',
+          apiKeyId: 'legacy-key',
+        },
+      ]);
+      expect(h.update.mock.calls[0]).toEqual([
+        'legacy-key',
+        {
+          contextInstanceId: INSTANCE,
+          contextChatId: 'chat-b',
+          contextMessageId: 'message-b',
+        },
+      ]);
+      expect(h.triggerProvider).toHaveBeenCalledTimes(1);
+      expect(h.trigger.env?.OMNI_TURN_ID).toBe('turn-b');
+    });
+  }
+});

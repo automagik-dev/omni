@@ -5,7 +5,7 @@
  * THE COLLISION
  * -------------
  * Assigning an agent to an instance auto-provisions a scoped API key addressed
- * by NAME, and finds it again with `ApiKeyService.findByName` — a name-only
+ * by NAME, and finds it again with `ApiKeyService.findAgentKeyByName` — an active system-key
  * predicate over `api_keys`, a legacy table with no `tenant_id` column and no
  * RLS. The name was `agent:<agentName>`, a single global namespace.
  *
@@ -93,6 +93,8 @@ function harness(options: {
   agentName?: string;
   agentNames?: Record<string, string>;
   agentAssignments?: [string, string][];
+  instanceTenantId?: string | null;
+  revokeFails?: boolean;
 }): Harness {
   const keys: ExistingKey[] = options.existingKeys ?? [];
   const lookups: string[] = [];
@@ -101,24 +103,35 @@ function harness(options: {
   const agentName = options.agentName ?? SHARED_AGENT_NAME;
   const assignments = new Map(options.agentAssignments);
   const revoked: string[] = [];
+  const tenantId =
+    options.instanceTenantId !== undefined ? options.instanceTenantId : (options.authContext?.tenantId ?? null);
 
   const app = new Hono<{ Variables: AppVariables }>();
   app.use('*', async (c, next) => {
     if (options.authContext) c.set('authContext', options.authContext);
     c.set('services', {
       instances: {
-        getById: mock(async (id: string) => ({ id, agentId: assignments.get(id) ?? null, agentReplyFilter: null })),
+        create: mock(async (data: { agentId?: string }) => {
+          if (data.agentId) assignments.set(INSTANCE_B, data.agentId);
+          return { ...data, id: INSTANCE_B, tenantId };
+        }),
+        getById: mock(async (id: string) => ({
+          id,
+          agentId: assignments.get(id) ?? null,
+          agentReplyFilter: null,
+          tenantId,
+        })),
         update: mock(async (id: string, patch: { agentId?: string | null }) => {
           if (patch.agentId === null) assignments.delete(id);
           else if (patch.agentId !== undefined) assignments.set(id, patch.agentId);
-          return { id, channel: 'whatsapp-baileys' };
+          return { id, channel: 'whatsapp-baileys', tenantId };
         }),
       },
       agents: {
         getById: mock(async (id: string) => ({ id, name: options.agentNames?.[id] ?? agentName, metadata: null })),
       },
       apiKeys: {
-        findByName: mock(async (name: string) => {
+        findAgentKeyByName: mock(async (name: string) => {
           lookups.push(name);
           return keys.find((k) => k.name === name && k.status !== 'revoked') ?? null;
         }),
@@ -129,6 +142,7 @@ function harness(options: {
           return row;
         }),
         revoke: mock(async (id: string) => {
+          if (options.revokeFails) throw new Error('revoke failed');
           revoked.push(id);
           const row = keys.find((key) => key.id === id);
           if (row) row.status = 'revoked';
@@ -236,6 +250,32 @@ for (const [label, context, keyName] of [
   ['tenant', tenantContext(TENANT_A), `agent:${TENANT_A}:${SHARED_AGENT_NAME}`],
 ] as const) {
   describe(`${label} agent key removal never widens authority`, () => {
+    test('POST with an agent provisions a new scoped key', async () => {
+      const h = harness({ authContext: context });
+      const res = await h.app.request('/instances', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'first', channel: 'whatsapp-baileys', agentId: AGENT_A }),
+      });
+      expect(res.status).toBe(201);
+      expect(h.created).toEqual([{ name: keyName, instanceIds: [INSTANCE_B] }]);
+    });
+
+    test('POST binds a second instance before PATCH unbinds the first, preserving the second key grant', async () => {
+      const key: ExistingKey = { id: 'old', name: keyName, instanceIds: [INSTANCE_A] };
+      const h = harness({ authContext: context, existingKeys: [key], agentAssignments: [[INSTANCE_A, AGENT_A]] });
+      const created = await h.app.request('/instances', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'second', channel: 'whatsapp-baileys', agentId: AGENT_A }),
+      });
+      expect(created.status).toBe(201);
+      expect(key.instanceIds).toEqual([INSTANCE_A, INSTANCE_B]);
+      expect((await assignAgent(h, INSTANCE_A, null)).status).toBe(200);
+      expect(h.revoked).toEqual([]);
+      expect(key.instanceIds).toEqual([INSTANCE_B]);
+    });
+
     test('unbinding the last instance revokes the key without writing null or an empty list', async () => {
       const key: ExistingKey = { id: 'old', name: keyName, instanceIds: [INSTANCE_A] };
       const h = harness({ authContext: context, existingKeys: [key], agentAssignments: [[INSTANCE_A, AGENT_A]] });
@@ -279,3 +319,28 @@ for (const [label, context, keyName] of [
     });
   });
 }
+
+for (const context of [undefined, tenantContext(TENANT_B)]) {
+  test(`instance tenant controls bind and unbind naming for ${context ? 'foreign tenant' : 'legacy'} credentials`, async () => {
+    const keyName = `agent:${TENANT_A}:${SHARED_AGENT_NAME}`;
+    const h = harness({ authContext: context, instanceTenantId: TENANT_A });
+    expect((await assignAgent(h, INSTANCE_A, AGENT_A)).status).toBe(200);
+    expect(h.created).toEqual([{ name: keyName, instanceIds: [INSTANCE_A] }]);
+    expect((await assignAgent(h, INSTANCE_A, null)).status).toBe(200);
+    expect(h.lookups).toEqual([keyName, keyName]);
+    expect(h.revoked).toEqual(['k_1']);
+  });
+}
+
+test('a failed revoke remains best effort and the PATCH returns 200', async () => {
+  const key: ExistingKey = {
+    id: 'old',
+    name: `agent:${SHARED_AGENT_NAME}`,
+    instanceIds: [INSTANCE_A],
+    status: 'active',
+  };
+  const h = harness({ existingKeys: [key], agentAssignments: [[INSTANCE_A, AGENT_A]], revokeFails: true });
+  expect((await assignAgent(h, INSTANCE_A, null)).status).toBe(200);
+  expect(key.status).toBe('active');
+  expect(key.instanceIds).toEqual([INSTANCE_A]);
+});
