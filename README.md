@@ -153,7 +153,7 @@ omni providers create \
 omni instances update <id> --agent-provider <provider-id>
 ```
 
-Provider schemas: `agno` · `webhook` · `openclaw` · `ag-ui` · `claude-code` · `a2a` · `nats-genie`
+Provider schemas: `agno` · `webhook` · `ag-ui` · `claude-code` · `a2a` · `nats-genie`
 
 | Trigger | When | Use Case |
 |---------|------|----------|
@@ -254,7 +254,6 @@ packages/
 ├── channel-internal/        # In-process agent-to-agent routing
 ├── cli/                     # `omni` command
 ├── media-processing/        # Media sync and extraction
-├── plugin-openclaw/         # Omni as a channel inside OpenClaw
 ├── voice-client/            # Voice transport/codec library (Discord voice)
 ├── sdk/                     # TypeScript SDK
 ├── sdk-go/                  # Go SDK
@@ -342,7 +341,7 @@ omni providers list
 omni providers test <id>
 ```
 
-Schemas: `agno` · `webhook` · `openclaw` · `ag-ui` · `claude-code` · `a2a` · `nats-genie`
+Schemas: `agno` · `webhook` · `ag-ui` · `claude-code` · `a2a` · `nats-genie`
 
 #### `automations` — Event-driven workflows
 

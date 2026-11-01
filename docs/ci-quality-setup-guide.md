@@ -429,7 +429,6 @@ Biome and TypeScript analyze one file or one project at a time. Knip traces the 
     },
     "packages/db": { "project": ["src/**/*.ts"] },
     "packages/media-processing": { "project": ["src/**/*.ts"] },
-    "packages/plugin-openclaw": { "project": ["src/**/*.ts"] },
     "apps/ui": {
       "entry": [
         "src/pages/*.tsx",

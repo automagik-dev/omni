@@ -5,8 +5,6 @@
  * Designed for caching thread-starter data (e.g., conversations.replies results)
  * keyed by `channelId:threadTs`.
  *
- * Inspired by OpenClaw's thread-resolution.ts pattern.
- *
  * Defaults:
  *   - TTL: 6 hours (thread roots rarely change)
  *   - Max entries: 2000

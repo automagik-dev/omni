@@ -529,13 +529,12 @@ export interface ListProvidersParams {
  * Provider schema type
  * - agno: Agno AI orchestration platform
  * - webhook: Webhook-based agent provider
- * - openclaw: OpenClaw Gateway (WebSocket session-based agent runtime)
  * - ag-ui: AG-UI protocol
  * - claude-code: Claude Code agent provider
  * - a2a: Agent-to-Agent protocol provider
  * - nats-genie: NATS-based Genie provider (publishes to NATS topics)
  */
-export type ProviderSchema = 'agno' | 'webhook' | 'openclaw' | 'ag-ui' | 'claude-code' | 'a2a' | 'nats-genie';
+export type ProviderSchema = 'agno' | 'webhook' | 'ag-ui' | 'claude-code' | 'a2a' | 'nats-genie';
 
 /**
  * Body for creating a provider

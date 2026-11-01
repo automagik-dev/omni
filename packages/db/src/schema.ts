@@ -323,17 +323,18 @@ export type JobStatus = (typeof jobStatuses)[number];
 export const providerSchemas = [
   'agno',
   'webhook',
-  'openclaw',
   'ag-ui',
   'claude-code',
   'a2a',
   'nats-genie',
 ] as const satisfies readonly CoreProviderSchema[];
-export type ProviderSchema = (typeof providerSchemas)[number];
+// no-migration-needed: Types only; schema remains varchar(20), with retained rows and no DDL change.
+// Read-only compatibility for retained rows; new provider inputs use the supported schema list.
+export type ProviderSchema = (typeof providerSchemas)[number] | 'openclaw';
 
 /**
  * Reusable agent provider configurations.
- * Supports multiple API schemas: Agno, Webhook, OpenClaw, AG-UI, Claude Code.
+ * Supports multiple API schemas: Agno, Webhook, AG-UI, Claude Code.
  *
  * @see v1: omni_agent_providers table
  * @see docs/architecture/provider-system.md
@@ -353,7 +354,6 @@ export const agentProviders = pgTable(
 
     // Schema-specific configuration (JSON)
     // For Agno: { agentId, teamId, timeout }
-    // For OpenClaw: { defaultAgentId, agentTimeoutMs, origin }
     schemaConfig: jsonb('schema_config').$type<Record<string, unknown>>(),
 
     // Default settings

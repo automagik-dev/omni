@@ -1,7 +1,7 @@
 /**
  * Stream Integration Test
  *
- * E2E test wiring: mock OpenClaw provider → dispatcher → StreamSender
+ * E2E test wiring: mock streaming provider → dispatcher → StreamSender
  * Verifies the full streaming pipeline from provider deltas to channel edits.
  */
 
@@ -46,7 +46,7 @@ function createMockStreamProvider(deltas: StreamDelta[]): IAgentProvider & {
   return {
     id: 'test-provider',
     name: 'Test Provider',
-    schema: 'openclaw',
+    schema: 'agno',
     mode: 'round-trip',
     canHandle: () => true,
     trigger: async () => null,

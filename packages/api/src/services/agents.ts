@@ -148,9 +148,7 @@ export class AgentService {
     }
 
     // omni#906: evict cached providers built from the pre-update agent row —
-    // per-instance (not invalidateProviderCache) so the provider's shared
-    // OpenClaw WS clients, whose connection config an agent row can't affect,
-    // stay up.
+    // per-instance so sibling instances retain their own cached configuration.
     if (PROVIDER_BAKED_AGENT_COLUMNS.some((column) => column in data)) {
       // Both reference paths: the instance-level agentId FK and per-chat/user
       // agent routes (mergeRouteOverrides stamps route agents onto the same

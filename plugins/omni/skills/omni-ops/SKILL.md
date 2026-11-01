@@ -16,7 +16,7 @@ Install, channel pairing, agent plugging (`omni connect`), and bridge troublesho
 |----------|-----------|
 | instances, connect, disconnect, QR, pair, sync, resync, contacts, groups, profile, debounce, access, allowlist | [references/instances.md](references/instances.md) |
 | routes, routing, agent route, reply filter, gate, scope, priority | [references/routes.md](references/routes.md) |
-| providers, agent providers, create provider, schema, genie, claude-code, a2a, ag-ui, agno, openclaw, webhook provider | [references/providers.md](references/providers.md) |
+| providers, agent providers, create provider, schema, genie, claude-code, a2a, ag-ui, agno, webhook provider | [references/providers.md](references/providers.md) |
 | config, settings, API keys, server, auth, logs, dead letters, payloads, service, doctor | [references/config.md](references/config.md) |
 | events, analytics, timeline, replay, trace, journey, metrics | [references/events.md](references/events.md) |
 | automations, triggers, workflows, conditions, enable, disable | [references/automations.md](references/automations.md) |
