@@ -1365,7 +1365,7 @@ instancesRoutes.patch('/:id', instanceAccess, zValidator('json', updateInstanceS
 /**
  * Auto-provision or update a scoped API key when an agent is assigned to an instance.
  * - Assign: creates or updates key `agent:<name>` with instanceIds including this instance
- * - Unassign: removes instanceId from the old agent's key
+ * - Unassign: removes instanceId, revoking the old key when its last instance leaves
  *
  * `tenantId` is the calling credential's tenant, or null for a legacy request;
  * see `agentKeyName` for why it participates in the key name.
@@ -1385,10 +1385,15 @@ async function handleAgentKeyProvisioning(
       const existingKey = await services.apiKeys.findByName(keyName);
       if (existingKey?.instanceIds) {
         const updated = existingKey.instanceIds.filter((id) => id !== instanceId);
-        await services.apiKeys.update(existingKey.id, {
-          instanceIds: updated.length > 0 ? updated : null,
-        });
-        log.info('Removed instance from agent key', { keyName, instanceId });
+        if (updated.length === 0) {
+          // null means ALL instances, and some consumers also treat [] as
+          // unrestricted. A key with no remaining assignment must stop working.
+          await services.apiKeys.revoke(existingKey.id, 'Agent has no assigned instances', 'system:auto-provision');
+          log.info('Revoked agent key after its last instance was removed', { keyName, instanceId });
+        } else {
+          await services.apiKeys.update(existingKey.id, { instanceIds: updated });
+          log.info('Removed instance from agent key', { keyName, instanceId });
+        }
       }
     } catch (err) {
       log.error('Failed to remove instance from old agent key', { oldAgentId, instanceId, error: String(err) });

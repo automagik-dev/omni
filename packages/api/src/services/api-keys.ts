@@ -597,10 +597,15 @@ export class ApiKeyService {
   }
 
   /**
-   * Find an API key by name
+   * Find an active API key by name. Revoked rows remain for audit, but must
+   * not hide a replacement key during agent provisioning or dispatch.
    */
   async findByName(name: string): Promise<ApiKey | null> {
-    const [result] = await this.db.select().from(apiKeys).where(eq(apiKeys.name, name)).limit(1);
+    const [result] = await this.db
+      .select()
+      .from(apiKeys)
+      .where(and(eq(apiKeys.name, name), eq(apiKeys.status, 'active')))
+      .limit(1);
     return result ?? null;
   }
 

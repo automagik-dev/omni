@@ -48,6 +48,7 @@ interface ExistingKey {
   id: string;
   name: string;
   instanceIds: string[] | null;
+  status?: 'active' | 'revoked';
 }
 
 interface Harness {
@@ -56,6 +57,7 @@ interface Harness {
   lookups: string[];
   created: { name: string; instanceIds: string[] }[];
   updated: { id: string; instanceIds: string[] | null }[];
+  revoked: string[];
 }
 
 function tenantContext(tenantId: string): TenantAuthContext {
@@ -89,34 +91,48 @@ function harness(options: {
   authContext?: TenantAuthContext;
   existingKeys?: ExistingKey[];
   agentName?: string;
+  agentNames?: Record<string, string>;
+  agentAssignments?: [string, string][];
 }): Harness {
   const keys: ExistingKey[] = options.existingKeys ?? [];
   const lookups: string[] = [];
   const created: { name: string; instanceIds: string[] }[] = [];
   const updated: { id: string; instanceIds: string[] | null }[] = [];
   const agentName = options.agentName ?? SHARED_AGENT_NAME;
+  const assignments = new Map(options.agentAssignments);
+  const revoked: string[] = [];
 
   const app = new Hono<{ Variables: AppVariables }>();
   app.use('*', async (c, next) => {
     if (options.authContext) c.set('authContext', options.authContext);
     c.set('services', {
       instances: {
-        getById: mock(async (id: string) => ({ id, agentId: null, agentReplyFilter: null })),
-        update: mock(async (id: string) => ({ id, channel: 'whatsapp-baileys' })),
+        getById: mock(async (id: string) => ({ id, agentId: assignments.get(id) ?? null, agentReplyFilter: null })),
+        update: mock(async (id: string, patch: { agentId?: string | null }) => {
+          if (patch.agentId === null) assignments.delete(id);
+          else if (patch.agentId !== undefined) assignments.set(id, patch.agentId);
+          return { id, channel: 'whatsapp-baileys' };
+        }),
       },
       agents: {
-        getById: mock(async (id: string) => ({ id, name: agentName, metadata: null })),
+        getById: mock(async (id: string) => ({ id, name: options.agentNames?.[id] ?? agentName, metadata: null })),
       },
       apiKeys: {
         findByName: mock(async (name: string) => {
           lookups.push(name);
-          return keys.find((k) => k.name === name) ?? null;
+          return keys.find((k) => k.name === name && k.status !== 'revoked') ?? null;
         }),
         update: mock(async (id: string, patch: { instanceIds: string[] | null }) => {
           updated.push({ id, instanceIds: patch.instanceIds });
           const row = keys.find((k) => k.id === id);
           if (row) row.instanceIds = patch.instanceIds;
           return row;
+        }),
+        revoke: mock(async (id: string) => {
+          revoked.push(id);
+          const row = keys.find((key) => key.id === id);
+          if (row) row.status = 'revoked';
+          return row ?? null;
         }),
         create: mock(async (opts: { name: string; instanceIds: string[] }) => {
           created.push({ name: opts.name, instanceIds: opts.instanceIds });
@@ -130,10 +146,10 @@ function harness(options: {
   });
   app.route('/instances', instancesRoutes);
 
-  return { app, keys, lookups, created, updated };
+  return { app, keys, lookups, created, updated, revoked };
 }
 
-function assignAgent(h: Harness, instanceId: string, agentId: string): Promise<Response> {
+function assignAgent(h: Harness, instanceId: string, agentId: string | null): Promise<Response> {
   return h.app.request(`/instances/${instanceId}`, {
     method: 'PATCH',
     headers: { 'content-type': 'application/json' },
@@ -214,3 +230,52 @@ describe('legacy invariance', () => {
     expect(h.updated).toEqual([{ id: 'k_old', instanceIds: [INSTANCE_A, INSTANCE_B] }]);
   });
 });
+
+for (const [label, context, keyName] of [
+  ['legacy', undefined, `agent:${SHARED_AGENT_NAME}`],
+  ['tenant', tenantContext(TENANT_A), `agent:${TENANT_A}:${SHARED_AGENT_NAME}`],
+] as const) {
+  describe(`${label} agent key removal never widens authority`, () => {
+    test('unbinding the last instance revokes the key without writing null or an empty list', async () => {
+      const key: ExistingKey = { id: 'old', name: keyName, instanceIds: [INSTANCE_A] };
+      const h = harness({ authContext: context, existingKeys: [key], agentAssignments: [[INSTANCE_A, AGENT_A]] });
+      expect((await assignAgent(h, INSTANCE_A, null)).status).toBe(200);
+      expect(h.revoked).toEqual(['old']);
+      expect(h.updated).toEqual([]);
+      expect(key.instanceIds).toEqual([INSTANCE_A]);
+      expect(key.status).toBe('revoked');
+    });
+
+    test('reassignment removes only that instance from the old key and provisions the new agent', async () => {
+      const key: ExistingKey = { id: 'old', name: keyName, instanceIds: [INSTANCE_A, INSTANCE_B] };
+      const h = harness({
+        authContext: context,
+        existingKeys: [key],
+        agentAssignments: [[INSTANCE_A, AGENT_A]],
+        agentNames: { [AGENT_B]: 'replacement' },
+      });
+      expect((await assignAgent(h, INSTANCE_A, AGENT_B)).status).toBe(200);
+      expect(h.revoked).toEqual([]);
+      expect(h.updated).toEqual([{ id: 'old', instanceIds: [INSTANCE_B] }]);
+      expect(h.created).toEqual([
+        { name: keyName.replace(SHARED_AGENT_NAME, 'replacement'), instanceIds: [INSTANCE_A] },
+      ]);
+    });
+
+    test('a later bind creates a fresh key and further binds extend that active key', async () => {
+      const old: ExistingKey = { id: 'old', name: keyName, instanceIds: [INSTANCE_A] };
+      const h = harness({ authContext: context, existingKeys: [old], agentAssignments: [[INSTANCE_A, AGENT_A]] });
+      expect((await assignAgent(h, INSTANCE_A, null)).status).toBe(200);
+      expect((await assignAgent(h, INSTANCE_A, AGENT_A)).status).toBe(200);
+      expect(h.created).toEqual([{ name: keyName, instanceIds: [INSTANCE_A] }]);
+      const fresh = h.keys.find((key) => key.id !== old.id);
+      if (!fresh) throw new Error('fresh key was not provisioned');
+      expect(fresh.id).not.toBe(old.id);
+      expect(old.status).toBe('revoked');
+      expect((await assignAgent(h, INSTANCE_B, AGENT_A)).status).toBe(200);
+      expect(h.created).toHaveLength(1);
+      expect(h.updated).toEqual([{ id: fresh.id, instanceIds: [INSTANCE_A, INSTANCE_B] }]);
+      expect(old.instanceIds).toEqual([INSTANCE_A]);
+    });
+  });
+}
