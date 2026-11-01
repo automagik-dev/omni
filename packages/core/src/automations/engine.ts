@@ -12,7 +12,7 @@
 import type { EventBus, Subscription } from '../events/bus';
 import { runWithEventCausality } from '../events/causality';
 import { classifyEnvelope } from '../events/envelope';
-import { CONNECTOR_EVENT_TYPE } from '../events/types';
+import { CONNECTOR_EVENT_TYPE, isConnectorEventType } from '../events/types';
 import type { EventType, GenericEventPayload, OmniEvent } from '../events/types';
 import { generateId } from '../ids';
 import { createLogger } from '../logger';
@@ -37,18 +37,13 @@ const logger = createLogger('automations:engine');
  */
 const TRIGGER_DELIVERY_WINDOW = 50;
 
-/**
- * Connector binding gate (D7): a delivery names exactly one target automation,
- * so every other `connector.event` automation in the tenant must not react.
- * A hand-made/test connector event with no `targetAutomationId` is not narrowed
- * (there is nothing to narrow on). Exported for the trigger-wiring test.
- */
+/** Connector deliveries authorize only their explicitly journaled targets (D7). */
 export function connectorTargetMatches(automationId: string, event: Pick<OmniEvent, 'type' | 'payload'>): boolean {
-  if (event.type !== CONNECTOR_EVENT_TYPE) return true;
+  if (!isConnectorEventType(event.type)) return true;
   const payload = (event.payload ?? {}) as Record<string, unknown>;
-  const target = payload.targetAutomationId;
-  if (typeof target !== 'string' || target.length === 0) return true;
-  return automationId === target;
+  if (event.type === CONNECTOR_EVENT_TYPE) return payload.targetAutomationId === automationId;
+  const targets = payload.targetAutomationIds;
+  return Array.isArray(targets) && targets.includes(automationId);
 }
 
 /**
@@ -543,11 +538,9 @@ export class AutomationEngine {
   }
 
   /**
-   * Connector binding gate (D7): a delivery names exactly one target automation
-   * in its payload, so every other `connector.event` automation in the tenant
-   * must not react. Without this gate one subscription would fan out to every
-   * connector automation. A hand-made/test connector event with no
-   * `targetAutomationId` is not narrowed (there is nothing to narrow on).
+   * Connector binding gate (D7): a legacy delivery names one target automation;
+   * typed deliveries name a target list. Only those targets may react, and a
+   * connector event without explicit targets fires nothing.
    */
   private matchesConnectorTarget(automation: Automation, event: OmniEvent): boolean {
     return connectorTargetMatches(automation.id, event);

@@ -13,7 +13,7 @@
  *
  *   1. NEVER touches an existing server. The cluster is `initdb`-ed into a
  *      fresh directory under the system temp dir and listens on a RANDOM
- *      loopback port. Port 5432 is refused outright.
+ *      loopback port. Ports 5432 and 15432 are refused outright.
  *   2. NEVER reads an ambient `DATABASE_URL`, `.env*`, Vault, or any other
  *      credential store. The superuser password is generated here, from
  *      `crypto.getRandomValues`, and exists only for this cluster's lifetime.
@@ -102,6 +102,28 @@ async function randomFreePort(): Promise<number> {
   });
 }
 
+export function isDisposablePgPort(port: number): boolean {
+  return Number.isInteger(port) && port > 0 && port <= 65535 && port !== 5432 && port !== 15432;
+}
+
+/** Synchronous teardown also covers failures before a caller reaches its try. */
+export function onDisposableExit(cleanup: () => void): () => void {
+  const signals = { SIGINT: 130, SIGTERM: 143, SIGHUP: 129 } as const;
+  const handlers = Object.entries(signals).map(([signal, code]) => {
+    const handler = () => {
+      cleanup();
+      process.exit(code);
+    };
+    process.on(signal, handler);
+    return { signal, handler };
+  });
+  process.on('exit', cleanup);
+  return () => {
+    for (const { signal, handler } of handlers) process.off(signal, handler);
+    process.off('exit', cleanup);
+  };
+}
+
 /** Synthetic, single-use, alphanumeric. Never derived from an existing secret. */
 function generatePassword(): string {
   const bytes = new Uint8Array(32);
@@ -132,85 +154,93 @@ function run(cmd: string, args: string[], label: string): void {
  */
 export async function createDisposableCluster(bins: PgBinaries = resolvePgBinaries()): Promise<DisposableCluster> {
   const dataDir = mkdtempSync(join(tmpdir(), 'omni-g3-pg-'));
-  const superuser = 'omni_disposable_superuser';
-  const password = generatePassword();
-  const pwFile = join(dataDir, '.initdb-pw');
-
+  const cleanup = () => destroyDisposableCluster(dataDir, bins);
+  const release = onDisposableExit(cleanup);
   try {
-    writeFileSync(pwFile, password, { mode: 0o600 });
-    run(
-      bins.initdb,
-      [
-        '--pgdata',
-        join(dataDir, 'data'),
-        '--username',
-        superuser,
-        '--pwfile',
-        pwFile,
-        '--auth-local',
-        'trust',
-        '--auth-host',
-        'scram-sha-256',
-        '--encoding',
-        'UTF8',
-        '--no-sync',
-      ],
-      'disposable-pg initdb',
-    );
-  } finally {
-    rmSync(pwFile, { force: true });
-  }
+    const superuser = 'omni_disposable_superuser';
+    const password = generatePassword();
+    const pwFile = join(dataDir, '.initdb-pw');
 
-  const pgData = join(dataDir, 'data');
-  // Loopback only. An `initdb` default already omits listen_addresses, but
-  // being explicit means a stray postgresql.conf template cannot widen it.
-  // The socket lives in the data dir: distribution builds (Debian/Ubuntu
-  // pgdg) default unix_socket_directories to /var/run/postgresql, which an
-  // unprivileged CI runner cannot write — the postmaster then dies on its
-  // lock file before ever listening.
-  writeFileSync(
-    join(pgData, 'postgresql.auto.conf'),
-    [
-      "listen_addresses = '127.0.0.1'",
-      `unix_socket_directories = '${pgData}'`,
-      'fsync = off',
-      'synchronous_commit = off',
-      'full_page_writes = off',
-      '',
-    ].join('\n'),
-  );
-
-  let started: { port: number } | null = null;
-  let lastError = '';
-  for (let attempt = 0; attempt < 8 && started === null; attempt += 1) {
-    const port = await randomFreePort();
-    if (port === 5432) continue; // never impersonate the shared cluster
-    const result = spawnSync(
-      bins.pgCtl,
-      ['-D', pgData, '-l', join(dataDir, 'server.log'), '-w', '-o', `-p ${port}`, 'start'],
-      { encoding: 'utf-8' },
-    );
-    if (result.status === 0) {
-      started = { port };
-    } else {
-      lastError = `${result.stderr ?? ''}${result.stdout ?? ''}`;
-    }
-  }
-  if (started === null) {
-    // pg_ctl's stderr only says "could not start server" — the reason lives
-    // in server.log, so capture it before the data dir is destroyed.
-    let serverLog = '';
     try {
-      serverLog = readFileSync(join(dataDir, 'server.log'), 'utf-8');
-    } catch {
-      serverLog = '(no server.log was written)';
+      writeFileSync(pwFile, password, { mode: 0o600 });
+      run(
+        bins.initdb,
+        [
+          '--pgdata',
+          join(dataDir, 'data'),
+          '--username',
+          superuser,
+          '--pwfile',
+          pwFile,
+          '--auth-local',
+          'trust',
+          '--auth-host',
+          'scram-sha-256',
+          '--encoding',
+          'UTF8',
+          '--no-sync',
+        ],
+        'disposable-pg initdb',
+      );
+    } finally {
+      rmSync(pwFile, { force: true });
     }
-    rmSync(dataDir, { recursive: true, force: true });
-    throw new Error(`disposable-pg: postmaster would not start after 8 attempts\n${lastError}\n${serverLog}`);
-  }
 
-  const url = `postgres://${superuser}:${encodeURIComponent(password)}@127.0.0.1:${started.port}/postgres`;
-  return { dataDir, port: started.port, superuser, url };
+    const pgData = join(dataDir, 'data');
+    // Loopback only. An `initdb` default already omits listen_addresses, but
+    // being explicit means a stray postgresql.conf template cannot widen it.
+    // The socket lives in the data dir: distribution builds (Debian/Ubuntu
+    // pgdg) default unix_socket_directories to /var/run/postgresql, which an
+    // unprivileged CI runner cannot write — the postmaster then dies on its
+    // lock file before ever listening.
+    writeFileSync(
+      join(pgData, 'postgresql.auto.conf'),
+      [
+        "listen_addresses = '127.0.0.1'",
+        `unix_socket_directories = '${pgData}'`,
+        'fsync = off',
+        'synchronous_commit = off',
+        'full_page_writes = off',
+        '',
+      ].join('\n'),
+    );
+
+    let started: { port: number } | null = null;
+    let lastError = '';
+    for (let attempt = 0; attempt < 8 && started === null; attempt += 1) {
+      const port = await randomFreePort();
+      if (!isDisposablePgPort(port)) continue;
+      const result = spawnSync(
+        bins.pgCtl,
+        ['-D', pgData, '-l', join(dataDir, 'server.log'), '-w', '-o', `-p ${port}`, 'start'],
+        { encoding: 'utf-8' },
+      );
+      if (result.status === 0) {
+        started = { port };
+      } else {
+        lastError = `${result.stderr ?? ''}${result.stdout ?? ''}`;
+      }
+    }
+    if (started === null) {
+      // pg_ctl's stderr only says "could not start server" — the reason lives
+      // in server.log, so capture it before the data dir is destroyed.
+      let serverLog = '';
+      try {
+        serverLog = readFileSync(join(dataDir, 'server.log'), 'utf-8');
+      } catch {
+        serverLog = '(no server.log was written)';
+      }
+      throw new Error(`disposable-pg: postmaster would not start after 8 attempts\n${lastError}\n${serverLog}`);
+    }
+
+    const url = `postgres://${superuser}:${encodeURIComponent(password)}@127.0.0.1:${started.port}/postgres`;
+    return { dataDir, port: started.port, superuser, url };
+  } catch (error) {
+    cleanup();
+    throw error;
+  } finally {
+    release();
+  }
 }
 
 /** Stop the postmaster and remove the data directory (and its credential). */

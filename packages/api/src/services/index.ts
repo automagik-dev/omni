@@ -5,7 +5,7 @@
  * They are injected into routes via middleware.
  */
 
-import type { EventBus } from '@omni/core';
+import type { ConnectorEventPublisher, EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
 import { accessCache } from '../cache/cache-keys';
 import { DeepSeekVisionProvider } from '../providers/deepseek/vision';
@@ -164,7 +164,7 @@ export interface Services {
 /**
  * Create all services
  */
-export function createServices(db: Database, eventBus: EventBus | null): Services {
+export function createServices(db: Database, eventBus: (EventBus & ConnectorEventPublisher) | null): Services {
   // Publishes the chat-key events itself: `update` is also called from the
   // agent dispatcher and the instances route, whose child clamps must be events too.
   const apiKeys = new ApiKeyService(db, { eventBus });

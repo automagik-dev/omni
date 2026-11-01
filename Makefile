@@ -297,7 +297,7 @@ verify-versions:
 # works with the oldest Omni it declares (engines.omni, against that release's API), and the signed
 # plugin lane the desktop app updates Omni's plugins from (scripts/plugin-lane.ts).
 marketplace-check:
-	bun test scripts/marketplace.test.ts scripts/pack-market.test.ts scripts/plugin-lane.test.ts scripts/admin-ui-image.test.ts scripts/package-managers.test.ts scripts/plugin-compat.test.ts
+	bun test scripts/marketplace.test.ts scripts/pack-market.test.ts scripts/plugin-lane.test.ts scripts/admin-ui-image.test.ts scripts/package-managers.test.ts scripts/plugin-compat.test.ts scripts/disposable-pg-cluster.test.ts
 	bun scripts/marketplace.ts check
 	bun scripts/plugin-compat.ts
 

@@ -21,6 +21,7 @@ import {
   executeAction,
 } from '@omni/core';
 import type { Automation } from '@omni/core';
+import { InMemoryEventBus } from '../../events/__tests__/memory-bus';
 
 const AUTOMATION_A = '55555555-5555-5555-5555-555555555555';
 const AUTOMATION_B = '66666666-6666-6666-6666-666666666666';
@@ -134,9 +135,9 @@ describe('connector trigger gate', () => {
     expect(connectorTargetMatches(AUTOMATION_B, event)).toBe(false);
   });
 
-  test('non-connector events and connector events without a target are not narrowed', () => {
+  test('non-connector events are unaffected; connector events without a target are refused', () => {
     expect(connectorTargetMatches(AUTOMATION_B, { type: 'message.received', payload: {} })).toBe(true);
-    expect(connectorTargetMatches(AUTOMATION_A, { type: 'connector.event', payload: {} })).toBe(true);
+    expect(connectorTargetMatches(AUTOMATION_A, { type: 'connector.event', payload: {} })).toBe(false);
   });
 
   test('there is exactly one connector action type and it names no vendor', () => {
@@ -211,4 +212,86 @@ describe('automation engine connector trigger', () => {
     expect(calls[0]?.connectorId).toBe('connector-1');
     await engine.stop();
   });
+});
+
+describe('connector target membership across two tenants', () => {
+  for (const type of ['connector.event', 'connector.gitlab.merge_request.merged'] as const) {
+    test(`${type} never fans out without explicit targets`, async () => {
+      const bus = new InMemoryEventBus();
+      const engine = createAutomationEngine({ reconcileIntervalMs: 0 });
+      const fired: string[] = [];
+      const automations = [AUTOMATION_A, AUTOMATION_B].map((id, index) => ({
+        ...connectorAutomation(id),
+        triggerEventType: type,
+        tenantId: `tenant-${index}`,
+        actions: [{ type: 'log' as const, config: { message: id, level: 'info' as const } }],
+      }));
+      engine.setLogger(async (entry) => {
+        fired.push(entry.automationId);
+      });
+      await engine.start(bus, automations, {});
+      try {
+        for (const payload of [{}, { targetAutomationIds: [] }, { targetAutomationId: null }]) {
+          await bus.publishConnector(type, payload, { publishEventId: crypto.randomUUID() });
+          await bus.idle();
+        }
+        expect(fired).toEqual([]);
+        await bus.publishConnector(
+          type,
+          type === 'connector.event'
+            ? { targetAutomationId: AUTOMATION_A, targetAutomationIds: [AUTOMATION_B] }
+            : { targetAutomationIds: [AUTOMATION_A] },
+          { publishEventId: crypto.randomUUID() },
+        );
+        await bus.idle();
+        expect(fired).toEqual([AUTOMATION_A]);
+        if (type !== 'connector.event') {
+          await bus.publishConnector(
+            type,
+            { targetAutomationIds: [AUTOMATION_A, AUTOMATION_B] },
+            { publishEventId: crypto.randomUUID() },
+          );
+          await bus.idle();
+          expect(fired).toEqual([AUTOMATION_A, AUTOMATION_A, AUTOMATION_B]);
+        }
+      } finally {
+        await engine.stop();
+      }
+    });
+  }
+  for (const type of ['connector.event', 'connector.gitlab.merge_request.merged']) {
+    test(`templated emit_event refuses ${type} before gates or claims`, async () => {
+      const bus = new InMemoryEventBus();
+      const gate = mock(async () => ({ valid: true }));
+      const claim = mock(async () => true);
+      const result = await executeAction(
+        {
+          type: 'emit_event',
+          config: {
+            eventType: '{{payload.type}}',
+            payloadTemplate: { targetAutomationId: AUTOMATION_B, targetAutomationIds: [AUTOMATION_B] },
+          },
+        },
+        createTemplateContext({ type }),
+        { eventBus: bus, validateEmitEvent: gate, claimEmittedEvent: claim },
+      );
+      expect(result.status).toBe('failed');
+      expect(result.error).toContain('connector ingress');
+      expect(bus.journal).toEqual([]);
+      expect(gate).not.toHaveBeenCalled();
+      expect(claim).not.toHaveBeenCalled();
+    });
+  }
+});
+
+test('in-memory bus reserves connector publication and preserves ingress identity', async () => {
+  const bus = new InMemoryEventBus();
+  for (const type of ['connector.event', 'connector.x.y'] as const) {
+    await expect(Reflect.apply(bus.publish, bus, [type, {}])).rejects.toThrow('publishConnector');
+    await expect(bus.publishGeneric(type, {})).rejects.toThrow('publishConnector');
+    const id = crypto.randomUUID();
+    const result = await bus.publishConnector(type, { targetAutomationIds: [] }, { publishEventId: id });
+    expect(result.id).toBe(id);
+  }
+  expect(bus.journal).toHaveLength(2);
 });

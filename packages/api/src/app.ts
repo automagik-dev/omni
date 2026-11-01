@@ -4,7 +4,14 @@
 
 import type { ChannelRegistry } from '@omni/channel-sdk';
 import type { WhatsAppBusinessPlugin } from '@omni/channel-whatsapp-business';
-import { type EventBus, NotFoundError, OmniError, ValidationError, createLogger } from '@omni/core';
+import {
+  type ConnectorEventPublisher,
+  type EventBus,
+  NotFoundError,
+  OmniError,
+  ValidationError,
+  createLogger,
+} from '@omni/core';
 import { type Database, type Instance, whatsappFlowKeys } from '@omni/db';
 import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
@@ -145,7 +152,7 @@ const endpointNotFound = (c: Context) =>
  */
 export function createApp(
   db: Database,
-  eventBus: EventBus | null = null,
+  eventBus: (EventBus & ConnectorEventPublisher) | null = null,
   channelRegistry: ChannelRegistry | null = null,
   givenLogin?: Login | null,
   loginDefaults: LoginDefaults = {},

@@ -38,7 +38,13 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createDisposableCluster, destroyDisposableCluster, resolvePgBinaries } from './disposable-pg-cluster';
+import {
+  createDisposableCluster,
+  destroyDisposableCluster,
+  isDisposablePgPort,
+  onDisposableExit,
+  resolvePgBinaries,
+} from './disposable-pg-cluster';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, '..');
@@ -71,8 +77,12 @@ function findPostgresSuites(dir: string, out: string[] = []): string[] {
 }
 
 function option(name: string): string | undefined {
-  const index = process.argv.indexOf(`--${name}`);
-  return index === -1 ? undefined : process.argv[index + 1];
+  const flag = `--${name}`;
+  const argument = process.argv.find((arg) => arg === flag || arg.startsWith(`${flag}=`));
+  if (argument === undefined) return undefined;
+  const value = argument === flag ? process.argv[process.argv.indexOf(flag) + 1] : argument.slice(flag.length + 1);
+  if (!value || value.startsWith('--')) throw new Error(`pg-gate: ${flag} requires a value`);
+  return value;
 }
 
 const suites = [...findPostgresSuites(packagesDir), ...findPostgresSuites(releaseTestsDir)].sort();
@@ -89,62 +99,91 @@ const explicitUrl = option('url');
 let url = explicitUrl ?? '';
 let dataDir: string | null = null;
 
-if (!explicitUrl) {
-  try {
-    const cluster = await createDisposableCluster();
-    url = cluster.url;
-    dataDir = cluster.dataDir;
-    process.stdout.write(`pg-gate: disposable cluster on 127.0.0.1:${cluster.port}\n`);
-  } catch (error) {
-    // LOUD, not skipped. This is the exact failure mode the gate exists for.
-    process.stderr.write(
-      `pg-gate: FAILED — no PostgreSQL server is available and none could be created.\n  ${error instanceof Error ? error.message : String(error)}\n  Install a PostgreSQL SERVER build (initdb + postgres in the same directory),\n  set OMNI_PG_BIN_DIR to it, or pass --url pointing at a DISPOSABLE database.\n  The gate does not skip.\n`,
-    );
-    process.exit(1);
-  }
-}
-
+let outputDir: string | null = null;
+let childProcess: ReturnType<typeof Bun.spawn> | null = null;
+const keep = process.argv.includes('--keep');
+let keptReported = false;
 const binaries = resolvePgBinaries();
-const env: Record<string, string> = { ...(process.env as Record<string, string>) };
-for (const variable of POSTGRES_URL_VARS) env[variable] = url;
-// Mute the app logger under the gate unless the caller asked for logs (#967):
-// the suites intentionally exercise warn/error paths and the JSON flood is
-// pure I/O on green runs. bun test's own failure diagnostics are unaffected.
-if (!env.LOG_LEVEL) env.LOG_LEVEL = 'silent';
-// The suites shell out to psql; point them at whichever client we resolved.
-for (const variable of [
-  'OMNI_G1_PSQL_BIN',
-  'OMNI_G2_PSQL_BIN',
-  'OMNI_G3_PSQL_BIN',
-  'OMNI_G4_PSQL_BIN',
-  'OMNI_G6_PSQL_BIN',
-])
-  env[variable] = binaries.psql;
-
+const cleanup = () => {
+  childProcess?.kill();
+  if (outputDir) {
+    rmSync(outputDir, { recursive: true, force: true });
+    outputDir = null;
+  }
+  if (dataDir && !keep) {
+    destroyDisposableCluster(dataDir, binaries);
+    dataDir = null;
+  } else if (dataDir && !keptReported) {
+    process.stdout.write(`pg-gate: cluster KEPT at ${dataDir} (destroy it yourself)\n`);
+    keptReported = true;
+  }
+};
+const release = onDisposableExit(cleanup);
 let exitCode = 1;
 try {
+  if (explicitUrl) {
+    const parsed = new URL(explicitUrl);
+    if (explicitUrl.includes('?') || parsed.hostname !== '127.0.0.1' || !isDisposablePgPort(Number(parsed.port))) {
+      throw new Error('pg-gate: requires 127.0.0.1 on a disposable port (never 5432 or 15432)');
+    }
+  }
+  if (!explicitUrl) {
+    try {
+      const cluster = await createDisposableCluster();
+      url = cluster.url;
+      dataDir = cluster.dataDir;
+      process.stdout.write(`pg-gate: disposable cluster on 127.0.0.1:${cluster.port}\n`);
+    } catch (error) {
+      // LOUD, not skipped. This is the exact failure mode the gate exists for.
+      process.stderr.write(
+        `pg-gate: FAILED — no PostgreSQL server is available and none could be created.\n  ${error instanceof Error ? error.message : String(error)}\n  Install a PostgreSQL SERVER build (initdb + postgres in the same directory),\n  set OMNI_PG_BIN_DIR to it, or pass --url pointing at a DISPOSABLE database.\n  The gate does not skip.\n`,
+      );
+      throw error;
+    }
+  }
+
+  const env: Record<string, string> = { ...(process.env as Record<string, string>) };
+  for (const variable of POSTGRES_URL_VARS) env[variable] = url;
+  // Mute the app logger under the gate unless the caller asked for logs (#967):
+  // the suites intentionally exercise warn/error paths and the JSON flood is
+  // pure I/O on green runs. bun test's own failure diagnostics are unaffected.
+  if (!env.LOG_LEVEL) env.LOG_LEVEL = 'silent';
+  // The suites shell out to psql; point them at whichever client we resolved.
+  for (const variable of [
+    'OMNI_G1_PSQL_BIN',
+    'OMNI_G2_PSQL_BIN',
+    'OMNI_G3_PSQL_BIN',
+    'OMNI_G4_PSQL_BIN',
+    'OMNI_G6_PSQL_BIN',
+  ])
+    env[variable] = binaries.psql;
+
   // The PostgreSQL suites can emit several MiB of NOTICE output. Bun's
   // synchronous in-memory pipe has a fixed capacity and kills the child when
   // it fills, so spool both streams to disposable files before parsing the
   // summary. The longer timeout covers integration-scale index assertions.
-  const outputDir = mkdtempSync(join(tmpdir(), 'omni-pg-gate-output-'));
-  const { child, output } = (() => {
+  outputDir = mkdtempSync(join(tmpdir(), 'omni-pg-gate-output-'));
+  const { child, output } = await (async () => {
     try {
       const stdoutPath = join(outputDir, 'stdout');
       const stderrPath = join(outputDir, 'stderr');
-      const child = Bun.spawnSync({
+      const child = Bun.spawn({
         cmd: ['bun', 'test', '--timeout', '30000', ...suites],
         cwd: repoRoot,
         env,
         stdout: Bun.file(stdoutPath),
         stderr: Bun.file(stderrPath),
       });
+      childProcess = child;
+      await child.exited;
+      childProcess = null;
       return {
         child,
         output: `${readFileSync(stdoutPath, 'utf-8')}${readFileSync(stderrPath, 'utf-8')}`,
       };
     } finally {
-      rmSync(outputDir, { recursive: true, force: true });
+      if (outputDir) rmSync(outputDir, { recursive: true, force: true });
+      outputDir = null;
     }
   })();
 
@@ -177,11 +216,11 @@ try {
     exitCode = 0;
   }
 } finally {
-  if (dataDir && !process.argv.includes('--keep')) {
-    destroyDisposableCluster(dataDir);
+  const destroyed = dataDir && !keep;
+  cleanup();
+  release();
+  if (destroyed) {
     process.stdout.write('pg-gate: disposable cluster destroyed\n');
-  } else if (dataDir) {
-    process.stdout.write(`pg-gate: cluster KEPT at ${dataDir} (destroy it yourself)\n`);
   }
 }
 

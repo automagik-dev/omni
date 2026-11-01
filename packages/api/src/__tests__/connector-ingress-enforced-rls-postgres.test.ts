@@ -30,10 +30,13 @@ import { clickupManifest } from '@omni/connector-clickup';
 import { ConnectorRegistry } from '@omni/connector-sdk';
 import {
   CONNECTOR_EVENT_TYPE,
+  CURRENT_ENVELOPE_VERSION,
+  type ConnectorEventPublisher,
   type Automation as CoreAutomation,
   type EventBus,
-  type OmniEvent,
+  type GenericEventHandler,
   createAutomationEngine,
+  isConnectorEventType,
 } from '@omni/core';
 import {
   DEFAULT_ROLE_NAMES,
@@ -45,6 +48,7 @@ import {
   connectorEventSubscriptions,
   connectors,
   createDbHandle,
+  deadLetterEvents,
   omniEvents,
 } from '@omni/db';
 import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
@@ -52,6 +56,7 @@ import { eq, sql } from 'drizzle-orm';
 import { buildAutomationEngineDeps } from '../plugins/automation-actions';
 import { createServices } from '../services';
 import { ConnectorService } from '../services/connectors';
+import { DeadLetterService } from '../services/dead-letters';
 import { connectorIngressLookupActive, resolveConnectorIngressTenant } from '../tenancy/connector-ingress';
 import { scopedHandle } from '../tenancy/tenant-scope';
 import { runTenantWorkDb } from '../tenancy/worker-tenant-context';
@@ -111,36 +116,41 @@ function password(): string {
 
 /** Minimal in-memory pub/sub: publish awaits every matching subscriber, like NATS ack-after-handle. */
 function inMemoryBus(): {
-  bus: EventBus;
-  handlers: Array<{ pattern: string; handler: (event: OmniEvent) => Promise<void> }>;
+  bus: EventBus & ConnectorEventPublisher;
+  handlers: Array<{ pattern: string; handler: GenericEventHandler }>;
 } {
-  const handlers: Array<{ pattern: string; handler: (event: OmniEvent) => Promise<void> }> = [];
-  const bus = {
+  const handlers: Array<{ pattern: string; handler: GenericEventHandler }> = [];
+  const publishInternal: EventBus['publishGeneric'] = async (type, payload, metadata) => {
+    const id = (metadata?.publishEventId as string | undefined) ?? randomUUID();
+    const event = { id, type, payload, metadata: { correlationId: id, ...metadata }, timestamp: Date.now() };
+    for (const { pattern, handler } of handlers) {
+      const matches = pattern.endsWith('.>')
+        ? type === pattern.slice(0, -2) || type.startsWith(`${pattern.slice(0, -2)}.`)
+        : pattern === type;
+      if (matches) await handler(event);
+    }
+    return { id, sequence: 0, stream: '' };
+  };
+  const bus: EventBus & ConnectorEventPublisher = {
     async connect() {},
     async publish() {
       return { id: '', sequence: 0, stream: '' };
     },
-    async publishGeneric(type: string, payload: Record<string, unknown>, metadata?: Record<string, unknown>) {
-      const id = (metadata?.publishEventId as string | undefined) ?? randomUUID();
-      const event = {
-        id,
-        type,
-        payload,
-        metadata: { correlationId: id, ...metadata },
-        timestamp: Date.now(),
-      } as unknown as OmniEvent;
-      for (const { pattern, handler } of handlers) {
-        const matches = pattern.endsWith('.>')
-          ? type === pattern.slice(0, -2) || type.startsWith(`${pattern.slice(0, -2)}.`)
-          : pattern === type;
-        if (matches) await handler(event);
-      }
-      return { id, sequence: 0, stream: '' };
+    async publishGeneric(type, payload, metadata) {
+      if (isConnectorEventType(type)) throw new Error('Connector events require publishConnector');
+      return publishInternal(type, payload, metadata);
+    },
+    async publishConnector(
+      type: `connector.${string}`,
+      payload: Record<string, unknown>,
+      metadata: { publishEventId: string },
+    ) {
+      return publishInternal(type, payload, metadata);
     },
     async subscribe() {
       return { id: randomUUID(), pattern: '', unsubscribe: async () => {} };
     },
-    async subscribePattern(pattern: string, handler: (event: OmniEvent) => Promise<void>) {
+    async subscribePattern(pattern: string, handler: GenericEventHandler) {
       handlers.push({ pattern, handler });
       return { id: randomUUID(), pattern, unsubscribe: async () => {} };
     },
@@ -152,7 +162,7 @@ function inMemoryBus(): {
     },
     async close() {},
     isConnected: () => true,
-  } as unknown as EventBus;
+  };
   return { bus, handlers };
 }
 
@@ -162,7 +172,7 @@ postgresDescribe('connector ingress under enforced RLS (real PostgreSQL)', () =>
   let handle: ReturnType<typeof createDbHandle> | null = null;
   let db: Database;
   const commentRequests: CommentRequest[] = [];
-  let bus: EventBus;
+  let bus: EventBus & ConnectorEventPublisher;
   let engine: ReturnType<typeof createAutomationEngine> | null = null;
   let services: ReturnType<typeof createServices>;
   let ids: {
@@ -526,5 +536,56 @@ postgresDescribe('connector ingress under enforced RLS (real PostgreSQL)', () =>
     expect(result.body).toMatchObject({ received: true, duplicate: true });
     expect(commentRequests).toHaveLength(before);
     expect(await journalFor(TENANT_A, `connector:${ids.subscriptionA}:history-enforced-a`)).toHaveLength(1);
+  });
+
+  test('scheduler fails closed on the pre-existing NULL-DLQ visibility gap under RLS (tenancy G6)', async () => {
+    const [row] = await journalFor(TENANT_A, `connector:${ids.subscriptionA}:history-enforced-a`);
+    if (!row || !handle) throw new Error('missing enforced ingress fixture');
+    // Seed through the real writer on the fixture handle: the INSERT trigger
+    // clears ownership. All scheduler reads/retry work use the runtime role.
+    const writer = new DeadLetterService(handle.db, bus);
+    const dead = await writer.create({
+      event: {
+        id: row.id,
+        type: CONNECTOR_EVENT_TYPE,
+        payload: row.rawPayload ?? {},
+        metadata: { correlationId: row.id, tenantId: TENANT_A, envelopeVersion: CURRENT_ENVELOPE_VERSION },
+        timestamp: Date.now(),
+      },
+      subject: CONNECTOR_EVENT_TYPE,
+      error: new Error('consumer failed'),
+      retryCount: 0,
+    });
+    const [stored] = await handle.db
+      .update(deadLetterEvents)
+      .set({ nextAutoRetryAt: new Date(0) })
+      .where(eq(deadLetterEvents.id, dead.id))
+      .returning();
+    expect(stored?.tenantId).toBeNull();
+    expect(stored?.payload).toMatchObject({ metadata: { tenantId: TENANT_A } });
+    const before = commentRequests.length;
+    const runsBefore = await inTenant(TENANT_A, () =>
+      scopedHandle(db).select().from(automationLogs).where(eq(automationLogs.automationId, ids.automationA)),
+    );
+    let published = 0;
+    const subscription = await bus.subscribePattern(CONNECTOR_EVENT_TYPE, async () => {
+      published++;
+    });
+    try {
+      // Documented pre-existing gap, owner: tenancy G6. The ambient scheduler's
+      // NULL-owned DLQ scan is denied before G1's journal read is reachable.
+      await expect(services.deadLetters.processAutoRetries()).rejects.toMatchObject({ cause: { code: '42501' } });
+      expect(published).toBe(0);
+      expect(commentRequests).toHaveLength(before);
+      expect(
+        await inTenant(TENANT_A, () =>
+          scopedHandle(db).select().from(automationLogs).where(eq(automationLogs.automationId, ids.automationA)),
+        ),
+      ).toEqual(runsBefore);
+      const [after] = await handle.db.select().from(deadLetterEvents).where(eq(deadLetterEvents.id, dead.id));
+      expect(after).toEqual(stored);
+    } finally {
+      await subscription.unsubscribe();
+    }
   });
 });

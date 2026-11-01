@@ -150,19 +150,15 @@ export type CustomEventType = `custom.${string}`;
  */
 export type SystemEventType = `system.${string}`;
 
-/**
- * Connector events — one literal for every provider.
- *
- * Deliberately NOT added to `CORE_EVENT_TYPES` (there is no typed channel
- * payload to attach) and NOT a `connector.${string}` template (which would
- * invite per-vendor values): one event type, one fixed envelope, and the
- * manifest parses the provider data. `connector.event` is also deliberately not
- * registered in the strict per-type schema registry (D10).
- */
-export type ConnectorEventType = 'connector.event';
+/** Connector namespace; only connector ingress and proven retries may publish. */
+export type ConnectorEventType = `connector.${string}`;
 
-/** The single trigger event type every connector subscription publishes. */
-export const CONNECTOR_EVENT_TYPE: ConnectorEventType = 'connector.event';
+/** The legacy per-subscription trigger remains a literal. */
+export const CONNECTOR_EVENT_TYPE = 'connector.event' as const;
+
+export function isConnectorEventType(type: string): type is ConnectorEventType {
+  return type.startsWith('connector.');
+}
 
 /**
  * All event types: core + custom + system + connector
@@ -191,7 +187,7 @@ export function isSystemEvent(type: string): type is SystemEventType {
 }
 
 /** Check if an event type is the single connector event. */
-export function isConnectorEvent(type: string): type is ConnectorEventType {
+export function isConnectorEvent(type: string): type is typeof CONNECTOR_EVENT_TYPE {
   return type === CONNECTOR_EVENT_TYPE;
 }
 

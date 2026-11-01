@@ -5,7 +5,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
-import { type EventBus, configureLogging, getLogConfig } from '@omni/core';
+import { configureLogging, getLogConfig } from '@omni/core';
 import type { Database } from '@omni/db';
 import { DeadLetterService } from '../dead-letters';
 
@@ -32,8 +32,23 @@ describe('DeadLetterService system.dead_letter announcement', () => {
   afterEach(() => configureLogging({ level: previousLevel }));
 
   test('publishes system.dead_letter when the bus is present', async () => {
-    const publishGeneric = mock(async () => undefined);
-    const service = new DeadLetterService(fakeDb(), { publishGeneric } as unknown as EventBus);
+    const publishGeneric = mock(async () => ({ id: 'announced', sequence: 0, stream: 'memory' }));
+    const service = new DeadLetterService(fakeDb(), {
+      connect: async () => {},
+      close: async () => {},
+      isConnected: () => true,
+      publish: async () => {
+        throw new Error('unexpected core publish');
+      },
+      publishConnector: async () => {
+        throw new Error('unexpected connector publish');
+      },
+      subscribe: async () => ({ id: 'sub', pattern: '', unsubscribe: async () => {} }),
+      subscribePattern: async () => ({ id: 'sub', pattern: '', unsubscribe: async () => {} }),
+      subscribeMany: async () => ({ id: 'sub', pattern: '', unsubscribe: async () => {} }),
+      subscribeAll: async () => ({ id: 'sub', pattern: '', unsubscribe: async () => {} }),
+      publishGeneric,
+    });
 
     await service.createSchemaValidationFailure(input);
 

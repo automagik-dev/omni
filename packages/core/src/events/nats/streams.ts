@@ -98,7 +98,7 @@ export const STREAM_CONFIGS: Record<StreamName, Partial<StreamConfig>> = {
   },
   [STREAM_NAMES.CUSTOM]: {
     name: STREAM_NAMES.CUSTOM,
-    subjects: ['custom.>'],
+    subjects: ['custom.>', 'connector.>'],
     max_age: daysToNs(7),
     storage: NATS_STORAGE_FILE,
     retention: NATS_RETENTION_LIMITS,

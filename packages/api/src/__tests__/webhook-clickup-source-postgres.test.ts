@@ -1,3 +1,4 @@
+import type { ConnectorEventPublisher } from '@omni/core';
 /**
  * The ClickUp source recipe, end-to-end over the REAL HTTP ingress and real
  * PostgreSQL (issue #984, RFC #925 Phase 3 — source 2 of 2).
@@ -90,13 +91,31 @@ interface PublishedEvent {
 }
 
 /** An EventBus fake that records generic publishes (all this path uses). */
-function recordingBus(events: PublishedEvent[]): EventBus {
+function recordingBus(events: PublishedEvent[]): EventBus & ConnectorEventPublisher {
   return {
+    connect: async () => {},
+    close: async () => {},
+    isConnected: () => true,
+    publish: async () => {
+      throw new Error('unexpected core publish');
+    },
+    publishConnector: async () => {
+      throw new Error('unexpected connector publish');
+    },
+    subscribe: async () => ({ id: 'sub', pattern: '', unsubscribe: async () => {} }),
+    subscribePattern: async () => ({ id: 'sub', pattern: '', unsubscribe: async () => {} }),
+    subscribeMany: async () => ({ id: 'sub', pattern: '', unsubscribe: async () => {} }),
+    subscribeAll: async () => ({ id: 'sub', pattern: '', unsubscribe: async () => {} }),
+
     publishGeneric: async (type: string, payload: Record<string, unknown>, metadata?: Record<string, unknown>) => {
       events.push({ type, payload });
-      return { id: crypto.randomUUID(), type, timestamp: Date.now(), payload, metadata };
+      return {
+        id: typeof metadata?.publishEventId === 'string' ? metadata.publishEventId : crypto.randomUUID(),
+        sequence: 0,
+        stream: 'memory',
+      };
     },
-  } as unknown as EventBus;
+  };
 }
 
 /** Sign a raw body exactly the way ClickUp does: bare hex digest, no prefix. */

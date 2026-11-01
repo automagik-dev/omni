@@ -1,3 +1,4 @@
+import type { ConnectorEventPublisher, EventBus } from '@omni/core';
 /**
  * Event schema registry gates over real PostgreSQL (issue #959, RFC #925 G1).
  *
@@ -23,7 +24,6 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { EventBus } from '@omni/core';
 import { executeAction } from '@omni/core';
 import { type Database, createDbHandle, deadLetterEvents } from '@omni/db';
 import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
@@ -64,13 +64,27 @@ interface PublishedEvent {
 }
 
 /** An EventBus fake that records publishes — the journal, for assertions. */
-function recordingBus(events: PublishedEvent[]): EventBus {
+function recordingBus(events: PublishedEvent[]): EventBus & ConnectorEventPublisher {
   return {
+    connect: async () => {},
+    close: async () => {},
+    isConnected: () => true,
+    publish: async () => {
+      throw new Error('unexpected core publish');
+    },
+    publishConnector: async () => {
+      throw new Error('unexpected connector publish');
+    },
+    subscribe: async () => ({ id: 'sub', pattern: '', unsubscribe: async () => {} }),
+    subscribePattern: async () => ({ id: 'sub', pattern: '', unsubscribe: async () => {} }),
+    subscribeMany: async () => ({ id: 'sub', pattern: '', unsubscribe: async () => {} }),
+    subscribeAll: async () => ({ id: 'sub', pattern: '', unsubscribe: async () => {} }),
+
     publishGeneric: async (type: string, payload: Record<string, unknown>) => {
       events.push({ type, payload });
-      return { id: crypto.randomUUID(), ok: true };
+      return { id: crypto.randomUUID(), sequence: 0, stream: 'memory' };
     },
-  } as unknown as EventBus;
+  };
 }
 
 /** The schema every custom.github.push payload must satisfy in this suite. */
