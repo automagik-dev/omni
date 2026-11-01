@@ -7,6 +7,7 @@ import { askText, covers, decide, sensitive } from '../src/host/grants.js'
 import { sensitiveCall } from '../src/host/omni-api.js'
 import { SOURCE_ROUTES } from '../src/host/omni-routes.js'
 import { applyBoth, fakeContext } from './team.js'
+import { until } from './until.js'
 
 const OMNI = 'https://omni.example.com'
 const GROUP = '11111111-1111-4111-8111-111111111111'
@@ -366,7 +367,7 @@ test('Always on the whole channel covers its other chats; limit is kept', async 
 test('a card answered just before a restart is settled as interrupted, and its Bot is told', async (t) => {
   const running = { id: 'c1', sessionId: 'digest', botId: 'digest', kind: 'grant', action: 'send', resource: { type: 'group', id: GROUP, name: '🦞BuildWithFriends' }, call: { tool: 'omni_send', args: {} }, preview: { text: 'x' }, status: 'running', askedAt: 1 }
   const { view, notes } = setup(t, { omniConsents: { digest: [running] } })
-  await new Promise(resolve => setTimeout(resolve, 20))
+  await until(() => notes.some(note => note.sessionId === 'digest'))
   assert.equal((await view()).omniConsents.digest[0].status, 'interrupted')
   assert.match(notes.at(-1).text, /restarted while it ran what the user allowed: send "x" to "🦞BuildWithFriends"\. It may or may not have happened/)
 })
