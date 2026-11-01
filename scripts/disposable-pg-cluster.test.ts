@@ -48,6 +48,8 @@ describe('disposable PostgreSQL isolation', () => {
     ['--url', 'postgresql://u:x@y@127.0.0.1:7777/db'],
     ['--url', 'postgresql://127.0.0.1:7777#,localhost:5432/db'],
     ['--url', 'postgresql://127.0.0.1:65432#,localhost:5432/db'],
+    ['--url', 'postgresql://?@localhost:5432/db?user=postgres'],
+    ['--url', 'postgresql://127.0.0.1:7777?@localhost:5432/db'],
     ['--url'],
     ['--url='],
     ['--url', '--keep'],

@@ -204,9 +204,13 @@ export function assertPgTestTarget(url: string, env: Record<string, string | und
   if (url.includes('#')) refuse('URL fragments are not allowed');
   // Inspect the raw authority first: WHATWG and PostgreSQL drivers disagree
   // about comma host lists and whether the first or last @ ends user info.
-  const authority = url.match(/^[a-z][a-z\d+.-]*:\/\/([^/?#]*)/i)?.[1] ?? '';
-  if (authority.includes(',') || url.split('@').length > 2) {
-    refuse('single-host URLs with at most one raw @ separator are required');
+  const authorityMatch = url.match(/^[a-z][a-z\d+.-]*:\/\/([^/?]*)/i);
+  const authority = authorityMatch?.[1] ?? '';
+  const authorityEnd = authorityMatch?.[0].length ?? 0;
+  // libpq searches for userinfo before splitting on '?', unlike postgres.js.
+  // A raw @ anywhere outside the authority can therefore select another host.
+  if (authority.includes(',') || url.split('@').length > 2 || url.indexOf('@', authorityEnd) !== -1) {
+    refuse('single-host URLs with at most one raw @ separator inside the authority are required');
   }
   const parsed = new URL(url);
   if (!['postgres:', 'postgresql:'].includes(parsed.protocol)) refuse('expected a PostgreSQL URL');

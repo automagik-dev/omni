@@ -82,6 +82,14 @@ describe('PostgreSQL test target guard', () => {
   });
 
   test.each([
+    { url: 'postgresql://?@localhost:5432/db?user=postgres', env: socketEnv },
+    { url: 'postgresql://127.0.0.1:7777?@localhost:5432/db', env: gateEnv },
+  ])('refuses a raw @ outside the authority before libpq can choose another host: $url', ({ url, env }) => {
+    expect(() => assertPgTestTarget(url, env)).toThrow('inside the authority');
+    expect(() => pgRoleUrl(url, 'test_db', role, env)).toThrow('inside the authority');
+  });
+
+  test.each([
     'OMNI_G1_POSTGRES_URL',
     'OMNI_G2_POSTGRES_URL',
     'OMNI_G3_POSTGRES_URL',
