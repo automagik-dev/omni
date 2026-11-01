@@ -14,9 +14,10 @@ import {
 } from '@omni/db';
 import { assertPgTestRole, pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { eq, sql } from 'drizzle-orm';
+import { getAgentKeyRepairHealth, runStartupAgentKeyRepair } from '../../agent-key-repair-state';
 import { DEFAULT_TURN_SCOPES } from '../../constants/scopes';
 import { __test__ as dispatcher } from '../../plugins/agent-dispatcher';
-import { reconcileAgentKeys } from '../agent-key-reconciliation';
+import { findAgentsWithoutKeys, reconcileAgentKeys } from '../agent-key-reconciliation';
 import { ApiKeyService } from '../api-keys';
 
 const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
@@ -290,6 +291,54 @@ postgresDescribe('agent key startup reconciliation (real PostgreSQL)', () => {
     }
   });
 
+  test('failure after widened-key revocation commits keeps boot open and counts agents left without a key', async () => {
+    const baseline = await findAgentsWithoutKeys(db, db, 'legacy');
+    const { agent, instance } = await binding();
+    const secondInstance = await instanceFor(agent.id, null);
+    const [routeOnly] = await db
+      .insert(agents)
+      .values({ name: `route-only-${crypto.randomUUID()}`, provider: 'claude' })
+      .returning();
+    if (!routeOnly) throw new Error('route-only fixture missing');
+    const routeKey = await seed(`agent:${routeOnly.name}`);
+    const name = `agent:${agent.name}`;
+    const widened = await seed(name);
+    const originalCreate = ApiKeyService.prototype.create;
+    const failure = Object.assign(new Error('replacement denied'), { code: '42501' });
+    const create = spyOn(ApiKeyService.prototype, 'create').mockImplementation(async function (
+      this: ApiKeyService,
+      options,
+    ) {
+      if (options.name === name) throw failure;
+      return originalCreate.call(this, options);
+    });
+    const reported = mock((_error: unknown, _missing: unknown) => {});
+    try {
+      await runStartupAgentKeyRepair(() => reconcileAgentKeys(db, db, 'legacy'), {
+        inspectMissingAgents: () => findAgentsWithoutKeys(db, db, 'legacy'),
+        reportFailure: reported,
+      });
+      expect((await keys.getById(widened.key.id))?.status).toBe('revoked');
+      expect(await keys.findAgentKeyByName(name)).toBeNull();
+      expect((await keys.getById(routeKey.key.id))?.status).toBe('revoked');
+      expect((await dispatch(instance)).success).toBe(false);
+      expect((await dispatch(secondInstance)).success).toBe(false);
+      expect(getAgentKeyRepairHealth()).toMatchObject({
+        status: 'error',
+        details: { agentsWithoutKey: baseline.length + 2 },
+      });
+      expect(JSON.stringify(getAgentKeyRepairHealth())).not.toContain(agent.name);
+      expect(reported).toHaveBeenCalledTimes(1);
+      expect(reported.mock.calls[0]?.[1]).toContainEqual({ id: agent.id, name: agent.name });
+      expect(reported.mock.calls[0]?.[1]).toContainEqual({ id: routeOnly.id, name: routeOnly.name });
+    } finally {
+      create.mockRestore();
+      await runStartupAgentKeyRepair(() => reconcileAgentKeys(db, db, 'legacy'));
+    }
+    expect((await dispatch(instance)).success).toBe(true);
+    expect((await dispatch(secondInstance)).success).toBe(true);
+  });
+
   test('enforced startup enumerates tenants on the auth plane and repairs under runtime RLS scopes', async () => {
     const { agent, instance: first } = await binding(crypto.randomUUID());
     const second = await instanceFor(agent.id, first.tenantId);
@@ -313,6 +362,7 @@ postgresDescribe('agent key startup reconciliation (real PostgreSQL)', () => {
     await reconcileAgentKeys(runtime, authPlane, 'enforced');
     expect((await keys.getById(widened.key.id))?.status).toBe('revoked');
     expect(new Set((await keys.getById(key.key.id))?.instanceIds)).toEqual(new Set([first.id, second.id]));
+    expect((await findAgentsWithoutKeys(runtime, authPlane, 'enforced')).map((row) => row.id)).not.toContain(agent.id);
     const snapshot = await keys.getById(key.key.id);
     await reconcileAgentKeys(runtime, authPlane, 'enforced');
     expect(await keys.getById(key.key.id)).toEqual(snapshot);
