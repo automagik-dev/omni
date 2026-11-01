@@ -630,7 +630,7 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     table: 'instances',
     class: 'control-plane',
     justification:
-      'Idempotent startup upgrade repair before dispatch starts. Legacy mode reads bound instances and agents ' +
+      'Read-only coverage probe skips healthy startup repair; needed repairs batch key reads under instance locks. Legacy mode reads bound instances and agents ' +
       'on the ambient database; enforcement reads each persisted tenant under ' +
       'runInWorkerTenantScope. The runtime revokes widened legacy global agent keys; the auth plane enumerates tenant IDs only. Key updates require existing ' +
       'bindings and proven bare-key ownership; replacement keys always have explicit instance grants.',

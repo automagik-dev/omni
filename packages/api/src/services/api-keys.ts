@@ -29,7 +29,7 @@ import {
 } from '@omni/core';
 import type { ApiKeyProfile, ApiKeyProfileOverrides, Database } from '@omni/db';
 import { type ApiKey, type NewApiKey, apiKeys } from '@omni/db';
-import { type SQL, and, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
+import { type SQL, and, desc, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { CacheKeys, CacheTTL, type CachedApiKey, apiKeyCache, authCacheTtlMs } from '../cache';
 import { SCOPE_IMPLIED_BY } from '../constants/scopes';
@@ -598,13 +598,14 @@ export class ApiKeyService {
 
   /**
    * Find an active system-provisioned agent key by name. Revoked rows remain for audit, but must
-   * not hide a replacement key during agent provisioning or dispatch.
+   * not hide a replacement key during agent provisioning or dispatch. Newest first, with an ID tie-breaker.
    */
   async findAgentKeyByName(name: string): Promise<ApiKey | null> {
     const [result] = await this.db
       .select()
       .from(apiKeys)
       .where(and(eq(apiKeys.name, name), eq(apiKeys.status, 'active'), eq(apiKeys.createdBy, 'system:auto-provision')))
+      .orderBy(desc(apiKeys.createdAt), desc(apiKeys.id))
       .limit(1);
     return result ?? null;
   }
@@ -616,7 +617,8 @@ export class ApiKeyService {
       .from(apiKeys)
       .where(
         and(inArray(apiKeys.name, names), eq(apiKeys.status, 'active'), eq(apiKeys.createdBy, 'system:auto-provision')),
-      );
+      )
+      .orderBy(desc(apiKeys.createdAt), desc(apiKeys.id));
   }
 
   /** Unsafe agent credentials from releases that widened the final unbind. */
