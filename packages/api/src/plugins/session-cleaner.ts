@@ -8,7 +8,7 @@
  */
 
 import type { EventBus, OmniEvent, TypedOmniEvent } from '@omni/core';
-import { ProviderError, classifyEnvelope, createAgnoClient, createLogger } from '@omni/core';
+import { classifyEnvelope, createAgnoClient, createLogger, isRemovedProviderError } from '@omni/core';
 import type { ChannelType, Database } from '@omni/db';
 import { agents, chatParticipants } from '@omni/db';
 import { and, eq } from 'drizzle-orm';
@@ -415,7 +415,7 @@ export async function runTrashEmojiCleanup(
       'Agent has no provider',
       UNSUPPORTED_SESSION_CLEAR,
     ];
-    const removedProvider = error instanceof ProviderError && error.statusCode === 410;
+    const removedProvider = isRemovedProviderError(error);
     if (removedProvider || skippableErrors.some((e) => errorMessage.includes(e))) {
       log.debug('Session clearing skipped', { instanceId, reason: errorMessage });
       // The agent exists but its provider was removed or cannot reset sessions:

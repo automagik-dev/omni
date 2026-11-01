@@ -73,4 +73,9 @@ export {
   getSupportedProviderSchemas,
 } from './factory';
 
-export { REMOVED_OPENCLAW_MESSAGE, assertProviderAvailable, removedProviderMessage } from './removed-providers';
+export {
+  REMOVED_OPENCLAW_MESSAGE,
+  assertProviderAvailable,
+  isRemovedProviderError,
+  removedProviderMessage,
+} from './removed-providers';

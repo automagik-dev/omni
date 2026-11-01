@@ -6,7 +6,8 @@ import {
   getSupportedProviderSchemas,
   isProviderSchemaSupported,
 } from '../factory';
-import { REMOVED_OPENCLAW_MESSAGE } from '../removed-providers';
+import { REMOVED_OPENCLAW_MESSAGE, assertProviderAvailable, isRemovedProviderError } from '../removed-providers';
+import { ProviderError } from '../types';
 
 describe('removed provider factory compatibility', () => {
   test('a retained legacy schema is refused with the versioned error before a client is built', () => {
@@ -20,6 +21,23 @@ describe('removed provider factory compatibility', () => {
       createProviderClient(config);
     } catch (error) {
       expect(error).toMatchObject({ message: REMOVED_OPENCLAW_MESSAGE, statusCode: 410 });
+      expect(isRemovedProviderError(error)).toBe(true);
+    }
+  });
+
+  test('only a removed-provider marker with NOT_FOUND/410 is classified as removal', () => {
+    expect(() => assertProviderAvailable('openclaw')).toThrow(REMOVED_OPENCLAW_MESSAGE);
+    for (const error of [
+      new ProviderError('upstream gone', 'SERVER_ERROR', 410),
+      new ProviderError('upstream gone', 'INVALID_RESPONSE', 410),
+      new ProviderError('upstream gone', 'NOT_FOUND', 410),
+      new ProviderError('upstream gone', 'NOT_FOUND', 410, { schema: 'agno' }),
+      new ProviderError('upstream gone', 'SERVER_ERROR', 410, { schema: 'openclaw' }),
+      new ProviderError('upstream missing', 'NOT_FOUND', 404, { schema: 'openclaw' }),
+      { code: 'NOT_FOUND', statusCode: 410, details: { schema: 'openclaw' } },
+      null,
+    ]) {
+      expect(isRemovedProviderError(error)).toBe(false);
     }
   });
 
