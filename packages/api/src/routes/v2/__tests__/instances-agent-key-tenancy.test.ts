@@ -94,6 +94,7 @@ function harness(options: {
   agentNames?: Record<string, string>;
   agentAssignments?: [string, string][];
   instanceTenantId?: string | null;
+  instanceTenants?: Record<string, string | null>;
   revokeFails?: boolean;
 }): Harness {
   const keys: ExistingKey[] = options.existingKeys ?? [];
@@ -119,7 +120,7 @@ function harness(options: {
           id,
           agentId: assignments.get(id) ?? null,
           agentReplyFilter: null,
-          tenantId,
+          tenantId: options.instanceTenants?.[id] ?? tenantId,
         })),
         update: mock(async (id: string, patch: { agentId?: string | null }) => {
           if (patch.agentId === null) assignments.delete(id);
@@ -236,11 +237,30 @@ describe('legacy invariance', () => {
     expect(h.created).toEqual([{ name: `agent:${SHARED_AGENT_NAME}`, instanceIds: [INSTANCE_A] }]);
   });
 
+  for (const [label, agentId, tenantId] of [
+    ['foreign tenant', AGENT_A, TENANT_A],
+    ['other agent', AGENT_B, null],
+    ['unbound', null, null],
+  ] as const) {
+    test(`no-tenant PATCH leaves a bare key with ${label} grants untouched`, async () => {
+      const existing: ExistingKey = { id: 'ambiguous', name: `agent:${SHARED_AGENT_NAME}`, instanceIds: [INSTANCE_A] };
+      const h = harness({
+        existingKeys: [existing],
+        instanceTenants: { [INSTANCE_A]: tenantId },
+        agentAssignments: agentId ? [[INSTANCE_A, agentId]] : [],
+      });
+      expect((await assignAgent(h, INSTANCE_B, AGENT_A)).status).toBe(200);
+      expect(h.updated).toEqual([]);
+      expect(existing.instanceIds).toEqual([INSTANCE_A]);
+      expect(h.created).toEqual([{ name: `agent:${SHARED_AGENT_NAME}`, instanceIds: [INSTANCE_B] }]);
+    });
+  }
+
   test('a legacy request still finds and extends a pre-existing bare-named key', async () => {
     // The upgrade case: keys provisioned before this change must keep working
     // on a deployment that never turns multitenancy on.
     const existing: ExistingKey = { id: 'k_old', name: `agent:${SHARED_AGENT_NAME}`, instanceIds: [INSTANCE_A] };
-    const h = harness({ existingKeys: [existing] });
+    const h = harness({ existingKeys: [existing], agentAssignments: [[INSTANCE_A, AGENT_A]] });
 
     await assignAgent(h, INSTANCE_B, AGENT_A);
 

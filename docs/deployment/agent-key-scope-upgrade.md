@@ -14,8 +14,14 @@ agent's declared scopes (or the existing turn defaults).
 
 Both tenant-qualified and legacy candidate names are considered. A bare legacy
 key is extended only when its existing instance grants prove the same agent and
-tenant; a foreign tenant's key is never extended. Concurrent repairs serialize,
-and bound instance rows stay locked while repairing grants. Repeated startups
+tenant; a foreign tenant's key is never extended. No-tenant instance assignment
+uses this same ownership proof before extending an existing bare key. Lookup of
+duplicate active system keys selects the newest creation time, then the highest
+key ID when creation times tie.
+
+Healthy startup uses read-only coverage checks and takes no repair advisory or
+instance row locks. Needed repairs batch candidate-key reads, serialize concurrent
+repairs, and keep bound instance rows locked while repairing grants. Repeated startups
 change neither revoked keys nor already-correct replacements.
 
 A route-only agent with no instance binding may stop answering after its widened

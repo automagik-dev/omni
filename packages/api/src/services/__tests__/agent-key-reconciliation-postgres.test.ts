@@ -5,6 +5,7 @@ import {
   DEFAULT_ROLE_NAMES,
   type Database,
   agents,
+  apiKeys,
   applyTenancyRoles,
   applyTenantRlsEnforcement,
   createDbHandle,
@@ -245,6 +246,71 @@ postgresDescribe('agent key startup reconciliation (real PostgreSQL)', () => {
     expect(await keys.findAgentKeysByNames([bName])).toHaveLength(1);
   });
 
+  test('agent lookup selects the newest active system key and deterministically breaks timestamp ties', async () => {
+    const name = `agent:duplicate-${crypto.randomUUID()}`;
+    const first = await seed(name, [crypto.randomUUID()]);
+    const second = await seed(name, [crypto.randomUUID()]);
+    await db
+      .update(apiKeys)
+      .set({ createdAt: new Date('2025-01-01') })
+      .where(eq(apiKeys.id, first.key.id));
+    await db
+      .update(apiKeys)
+      .set({ createdAt: new Date('2025-01-02') })
+      .where(eq(apiKeys.id, second.key.id));
+    expect((await keys.findAgentKeyByName(name))?.id).toBe(second.key.id);
+    await db
+      .update(apiKeys)
+      .set({ createdAt: new Date('2025-01-02') })
+      .where(eq(apiKeys.id, first.key.id));
+    const ordered = [first.key.id, second.key.id].sort().reverse();
+    expect((await keys.findAgentKeyByName(name))?.id).toBe(ordered[0]);
+    expect((await keys.findAgentKeysByNames([name])).map((key) => key.id)).toEqual(ordered);
+    const operator = await seed(name, [crypto.randomUUID()], 'operator');
+    const revoked = await seed(name, [crypto.randomUUID()]);
+    await keys.revoke(revoked.key.id);
+    expect((await keys.findAgentKeyByName(name))?.id).not.toBe(operator.key.id);
+    expect((await keys.findAgentKeyByName(name))?.id).toBe(ordered[0]);
+  });
+
+  test('a mixed bare key is not considered healthy even when it already grants the bound instance', async () => {
+    const own = await binding();
+    const foreign = await binding(crypto.randomUUID());
+    const stale = await seed(`agent:${own.agent.name}`, [own.instance.id, foreign.instance.id]);
+    await reconcileAgentKeys(db, db, 'legacy');
+    const replacement = await keys.findAgentKeyByName(stale.key.name);
+    expect(replacement?.id).not.toBe(stale.key.id);
+    expect(replacement?.instanceIds).toEqual([own.instance.id]);
+    expect(await keys.getById(stale.key.id)).toEqual(stale.key);
+    const snapshot = await keys.list();
+    await reconcileAgentKeys(db, db, 'legacy');
+    expect(await keys.list()).toEqual(snapshot);
+  });
+
+  test('repair batches key reads; healthy startup takes no repair transaction or per-binding key reads', async () => {
+    const { agent, instance } = await binding();
+    const bound = [instance.id];
+    for (let i = 0; i < 8; i++) bound.push((await instanceFor(agent.id, null)).id);
+    const reads = spyOn(ApiKeyService.prototype, 'findAgentKeysByNames');
+    try {
+      await reconcileAgentKeys(db, db, 'legacy');
+      expect(reads).toHaveBeenCalledTimes(1);
+      const repaired = await keys.findAgentKeyByName(`agent:${agent.name}`);
+      expect(new Set(repaired?.instanceIds)).toEqual(new Set(bound));
+      reads.mockClear();
+      const transaction = spyOn(db, 'transaction');
+      try {
+        await reconcileAgentKeys(db, db, 'legacy');
+        expect(transaction).not.toHaveBeenCalled();
+        expect(reads).not.toHaveBeenCalled();
+      } finally {
+        transaction.mockRestore();
+      }
+    } finally {
+      reads.mockRestore();
+    }
+  });
+
   test('enforced startup enumerates tenants on the auth plane and repairs under runtime RLS scopes', async () => {
     const { agent, instance: first } = await binding(crypto.randomUUID());
     const second = await instanceFor(agent.id, first.tenantId);
@@ -259,8 +325,11 @@ postgresDescribe('agent key startup reconciliation (real PostgreSQL)', () => {
     await applyTenancyRoles(db, passwords, DEFAULT_ROLE_NAMES, dbName);
     const runtime = openDb({ name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime });
     const authPlane = openDb({ name: DEFAULT_ROLE_NAMES.authPlane, password: passwords.authPlane });
-    const [identity] = await runtime.execute(sql`SELECT current_user AS name`);
-    expect(identity?.name).toBe(DEFAULT_ROLE_NAMES.runtime);
+    const [identity] = await runtime.execute(sql`
+      SELECT current_user AS name, rolsuper, rolbypassrls
+      FROM pg_roles WHERE rolname = current_user
+    `);
+    expect(identity).toMatchObject({ name: DEFAULT_ROLE_NAMES.runtime, rolsuper: false, rolbypassrls: false });
     await reconcileAgentKeys(runtime, authPlane, 'enforced');
     expect((await keys.getById(widened.key.id))?.status).toBe('revoked');
     expect(new Set((await keys.getById(key.key.id))?.instanceIds)).toEqual(new Set([first.id, second.id]));
