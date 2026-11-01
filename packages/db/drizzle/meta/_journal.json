@@ -638,6 +638,13 @@
       "when": 1788800000000,
       "tag": "0090_connector_event_ownership",
       "breakpoints": true
+    },
+    {
+      "idx": 91,
+      "version": "7",
+      "when": 1788900000000,
+      "tag": "0091_durable_consumers_tenant_scope",
+      "breakpoints": true
     }
   ]
 }

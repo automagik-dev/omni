@@ -3736,6 +3736,8 @@ export const durableConsumers = pgTable(
   'durable_consumers',
   {
     id: uuid('id').primaryKey().defaultRandom(),
+    /** Authenticated creator tenant. Unstamped pre-0091 rows are hidden from tenant credentials. */
+    tenantId: uuid('tenant_id'),
     /** User-facing handle (`omni events follow --consumer <name>`). */
     name: varchar('name', { length: 100 }).notNull(),
     /** Type filter: exact event type, or trailing-* prefix glob (#966 contract). */

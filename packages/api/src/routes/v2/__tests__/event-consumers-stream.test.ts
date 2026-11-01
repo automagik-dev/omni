@@ -200,13 +200,16 @@ describe('GET /api/v2/events/consumers/:name/stream', () => {
     const journal = [row(11, 'inst-a'), row(12, 'inst-b'), row(13, 'inst-a')];
     const restricted = buildApp({ journal, instanceIds: ['inst-a'] });
     const mine = await readUntil(await restricted.app.request('/api/v2/events/consumers/vox/stream'), /id: 13\n/);
-    expect(restricted.accesses[0]).toEqual({ tenantId: null, caller: { keyId: null, instanceIds: ['inst-a'] } });
+    expect(restricted.accesses[0]).toEqual({
+      tenantId: null,
+      caller: { keyId: null, instanceIds: ['inst-a'], tenantId: null },
+    });
     expect(mine).toContain('id: 11\n');
     expect(mine).not.toContain('id: 12\n');
 
     const full = buildApp({ journal, instanceIds: null });
     const all = await readUntil(await full.app.request('/api/v2/events/consumers/vox/stream'), /id: 13\n/);
-    expect(full.accesses[0]).toEqual({ tenantId: null, caller: { keyId: null, instanceIds: null } });
+    expect(full.accesses[0]).toEqual({ tenantId: null, caller: { keyId: null, instanceIds: null, tenantId: null } });
     expect(all).toContain('id: 12\n');
   });
 
@@ -272,7 +275,7 @@ describe('GET /api/v2/events/consumers/:name/stream', () => {
     const res = await app.request('/api/v2/events/consumers/vox/stream');
     expect(res.status).toBe(404);
     expect(await res.text()).not.toContain('connected');
-    expect(seen).toEqual([{ keyId: 'key-other', instanceIds: ['inst-z'] }]);
+    expect(seen).toEqual([{ keyId: 'key-other', instanceIds: ['inst-z'], tenantId: null }]);
     expect(scans).toEqual([]);
   });
 
