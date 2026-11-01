@@ -42,7 +42,7 @@ import {
   applyTenantRlsEnforcement,
   createDbHandle,
 } from '@omni/db';
-import { driverRejection, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { assertPgTestRole, driverRejection, pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { ChatService } from '../../services/chats';
 import { ConversationService } from '../../services/conversations';
 import { InstanceService } from '../../services/instances';
@@ -96,16 +96,6 @@ function runSqlOn(url: string, script: string): { exitCode: number; stderr: stri
   }
 }
 
-function urlFor(base: string, database: string, user?: { name: string; password: string }): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  if (user) {
-    url.username = user.name;
-    url.password = user.password;
-  }
-  return url.toString();
-}
-
 function contextFor(tenantId: string): TenantAuthContext {
   return freezeContext({
     credentialClass: 'tenant',
@@ -152,7 +142,7 @@ postgresDescribe('two-tenant adversarial containment (real PostgreSQL)', () => {
 
   beforeAll(async () => {
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    const superDbUrl = urlFor(superUrl, dbName);
+    const superDbUrl = pgRoleUrl(superUrl, dbName);
 
     const seeded = runSqlOn(
       superDbUrl,
@@ -200,7 +190,11 @@ postgresDescribe('two-tenant adversarial containment (real PostgreSQL)', () => {
 
     // ONE physical connection, shared by both tenants' requests: any bleed
     // between them shows up here rather than being hidden by pool luck.
-    runtimeDb = openDb(urlFor(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }), 1);
+    runtimeDb = openDb(
+      pgRoleUrl(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }),
+      1,
+    );
+    await assertPgTestRole(runtimeDb, DEFAULT_ROLE_NAMES.runtime);
 
     // The services are constructed exactly as `createServices` builds them —
     // with the POOL. Nothing about them is test-specific; the scope is what

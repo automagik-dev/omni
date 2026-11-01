@@ -18,6 +18,7 @@
 
 import { describe, expect, test } from 'bun:test';
 import { createDbHandle } from '../client';
+import { assertPgTestRole, pgRoleUrl } from '../pg-migrated-template';
 import { DEFAULT_ROLE_NAMES, applyTenantRlsEnforcement } from '../tenancy-rls';
 import { applyTenancyRoles } from '../tenancy-roles';
 import { openToolingConnection } from './db';
@@ -25,7 +26,7 @@ import type { ToolingSql } from './db';
 import { runBackfill } from './engine';
 import type { InstanceTenantMap } from './mapping-engine';
 import { personCloneId, runPersonCloning } from './person-clone';
-import { connect, dropDatabase, provisionDatabase, superUrl, urlFor } from './pg-testing';
+import { connect, dropDatabase, provisionDatabase, superUrl } from './pg-testing';
 import { assertZeroUnresolved, reconcile } from './reconciliation';
 import { assertTenantUniquesPresent, replacePreservedGlobalUniques } from './rehearsal';
 import { driveValidateOrdering } from './validate-ordering';
@@ -103,10 +104,7 @@ async function runPipeline(sql: ToolingSql): Promise<void> {
 }
 
 function roleUrl(name: string, password: string, database: string): string {
-  const url = new URL(urlFor(base, database));
-  url.username = name;
-  url.password = password;
-  return url.toString();
+  return pgRoleUrl(base, database, { name, password });
 }
 
 function pw(): string {
@@ -190,6 +188,7 @@ maybe('G6 zero-unresolved rehearsal — real PostgreSQL', () => {
       await applyTenancyRoles(provisioner.db, passwords, DEFAULT_ROLE_NAMES, database);
 
       runtime = openToolingConnection(roleUrl(DEFAULT_ROLE_NAMES.runtime, passwords.runtime, database));
+      await assertPgTestRole(runtime, DEFAULT_ROLE_NAMES.runtime);
 
       // Tenant A sees only its own assigned rows; tenant B's are invisible.
       const seenByA = async (table: string): Promise<number> => {

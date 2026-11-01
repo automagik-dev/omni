@@ -53,7 +53,7 @@ import {
   omniEvents,
   unwrapDbError,
 } from '@omni/db';
-import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { assertPgTestRole, pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { eq, sql } from 'drizzle-orm';
 import { buildAutomationEngineDeps } from '../plugins/automation-actions';
 import { createServices } from '../services';
@@ -98,19 +98,6 @@ interface CommentRequest {
 
 function sign(secret: string, body: string): string {
   return createHmac('sha256', secret).update(body).digest('hex');
-}
-
-function urlFor(base: string, database: string, user?: { name: string; password: string }): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  if (user) {
-    url.username = user.name;
-    url.password = user.password;
-    // Hostless unix-socket URLs cannot retain URL.username. postgres.js and
-    // libpq both accept the startup user query parameter on disposable trust sockets.
-    if (!url.hostname) url.searchParams.set('user', user.name);
-  }
-  return url.toString();
 }
 
 function password(): string {
@@ -214,7 +201,7 @@ postgresDescribe('connector ingress under enforced RLS (real PostgreSQL)', () =>
 
   beforeAll(async () => {
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    handle = createDbHandle({ url: urlFor(superUrl, dbName), maxConnections: 4 });
+    handle = createDbHandle({ url: pgRoleUrl(superUrl, dbName), maxConnections: 4 });
     const superDb = handle.db;
 
     // Seed BEFORE enforcement: the ownership triggers null tenant_id on insert,
@@ -363,19 +350,20 @@ postgresDescribe('connector ingress under enforced RLS (real PostgreSQL)', () =>
     await applyTenancyRoles(superDb, passwords, DEFAULT_ROLE_NAMES, dbName);
 
     const runtimeHandle = createDbHandle({
-      url: urlFor(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }),
+      url: pgRoleUrl(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }),
       maxConnections: 4,
     });
     db = runtimeHandle.db;
     const runtimeIdentity = await assertEnforcedRuntimeIdentity(db);
     expect(runtimeIdentity.currentUser).toBe(DEFAULT_ROLE_NAMES.runtime);
 
+    await assertPgTestRole(db, DEFAULT_ROLE_NAMES.runtime);
     const inMemory = inMemoryBus();
     bus = inMemory.bus;
 
     services = createServices(db, bus);
     authHandle = createDbHandle({
-      url: urlFor(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.authPlane, password: passwords.authPlane }),
+      url: pgRoleUrl(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.authPlane, password: passwords.authPlane }),
       maxConnections: 2,
     });
     services.deadLetters.setAuthPlane(authHandle.db);
@@ -409,7 +397,7 @@ postgresDescribe('connector ingress under enforced RLS (real PostgreSQL)', () =>
     await engine?.stop().catch(() => undefined);
     await authHandle?.close().catch(() => undefined);
     await handle?.close().catch(() => undefined);
-    const dbUrl = urlFor(superUrl, 'postgres');
+    const dbUrl = pgRoleUrl(superUrl, 'postgres');
     const { spawnSync } = await import('node:child_process');
     spawnSync(psqlBin, ['-X', '--no-psqlrc', '-c', `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`, dbUrl], {
       stdio: 'ignore',

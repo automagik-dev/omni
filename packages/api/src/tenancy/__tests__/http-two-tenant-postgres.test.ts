@@ -51,7 +51,7 @@ import {
   assertEnforcedRuntimeIdentity,
   createDbHandle,
 } from '@omni/db';
-import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { assertPgTestRole, pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { authMiddleware } from '../../middleware/auth';
@@ -148,19 +148,6 @@ function runSqlOn(url: string, script: string): { exitCode: number; stderr: stri
   }
 }
 
-function urlFor(base: string, database: string, user?: { name: string; password: string }): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  if (user) {
-    url.username = user.name;
-    url.password = user.password;
-    // Hostless unix-socket URLs cannot retain URL.username. postgres.js and
-    // libpq both accept the startup user query parameter on disposable trust sockets.
-    if (!url.hostname) url.searchParams.set('user', user.name);
-  }
-  return url.toString();
-}
-
 const sqlArray = (values: readonly string[]) => `ARRAY[${values.map((v) => `'${v}'`).join(',')}]::text[]`;
 
 postgresDescribe('two-tenant containment over HTTP (real PostgreSQL)', () => {
@@ -185,7 +172,7 @@ postgresDescribe('two-tenant containment over HTTP (real PostgreSQL)', () => {
 
   beforeAll(async () => {
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    const superDbUrl = urlFor(superUrl, dbName);
+    const superDbUrl = pgRoleUrl(superUrl, dbName);
 
     // The platform actor that ISSUES the tenant root keys. Its credential and
     // its source key must agree field-for-field or
@@ -344,16 +331,17 @@ postgresDescribe('two-tenant containment over HTTP (real PostgreSQL)', () => {
     // ONE physical runtime connection, shared by every request: cross-request
     // scope bleed shows up here rather than being hidden by pool luck.
     const runtimeDb = openDb(
-      urlFor(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }),
+      pgRoleUrl(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }),
       1,
     );
     const runtimeIdentity = await assertEnforcedRuntimeIdentity(runtimeDb);
     expect(runtimeIdentity.currentUser).toBe(DEFAULT_ROLE_NAMES.runtime);
+    await assertPgTestRole(runtimeDb, DEFAULT_ROLE_NAMES.runtime);
     // The auth plane on its own SELECT-only identity, which is how
     // `resolveAuthPlaneConnection` wires it under enforcement — the runtime role
     // is REVOKEd on `auth_credentials`, so the lookup could not run on it.
     const authPlaneDb = openDb(
-      urlFor(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.authPlane, password: passwords.authPlane }),
+      pgRoleUrl(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.authPlane, password: passwords.authPlane }),
       2,
     );
 
@@ -839,7 +827,7 @@ postgresDescribe('two-tenant containment over HTTP (real PostgreSQL)', () => {
      * if the role model changes underneath it.
      */
     test('the runtime role cannot write the credential index', async () => {
-      const url = urlFor(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime });
+      const url = pgRoleUrl(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime });
       const attempt = runSqlOn(
         url,
         `INSERT INTO auth_credentials (credential_class, key_hash, key_prefix, principal_id, platform_api_key_id, scopes)
@@ -850,7 +838,7 @@ postgresDescribe('two-tenant containment over HTTP (real PostgreSQL)', () => {
     });
 
     test('the auth-plane role cannot write it either', async () => {
-      const url = urlFor(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.authPlane, password: passwords.authPlane });
+      const url = pgRoleUrl(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.authPlane, password: passwords.authPlane });
       const attempt = runSqlOn(
         url,
         `INSERT INTO auth_credentials (credential_class, key_hash, key_prefix, principal_id, platform_api_key_id, scopes)

@@ -39,7 +39,7 @@ import {
   chatFollowUpState,
   createDbHandle,
 } from '@omni/db';
-import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { assertPgTestRole, pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { eq } from 'drizzle-orm';
 import { MULTITENANCY_FLAG_ENV } from '../../tenancy/feature-flag';
 import { scopedHandle } from '../../tenancy/tenant-scope';
@@ -97,16 +97,6 @@ function runSqlOn(url: string, script: string): { exitCode: number; stderr: stri
   } finally {
     rmSync(file, { force: true });
   }
-}
-
-function urlFor(base: string, database: string, user?: { name: string; password: string }): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  if (user) {
-    url.username = user.name;
-    url.password = user.password;
-  }
-  return url.toString();
 }
 
 interface PublishedEvent {
@@ -173,7 +163,7 @@ postgresDescribe('two-tenant follow-up sweeper fan-out (real PostgreSQL)', () =>
     }
 
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    superDbUrl = urlFor(superUrl, dbName);
+    superDbUrl = pgRoleUrl(superUrl, dbName);
 
     const seeded = runSqlOn(
       superDbUrl,
@@ -271,11 +261,12 @@ postgresDescribe('two-tenant follow-up sweeper fan-out (real PostgreSQL)', () =>
     seedDueRows(superDbUrl);
 
     const runtimeDb = openDb(
-      urlFor(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }),
+      pgRoleUrl(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }),
       1,
     );
+    await assertPgTestRole(runtimeDb, DEFAULT_ROLE_NAMES.runtime);
     const authPlaneDb = openDb(
-      urlFor(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.authPlane, password: passwords.authPlane }),
+      pgRoleUrl(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.authPlane, password: passwords.authPlane }),
       1,
     );
 
@@ -314,11 +305,12 @@ postgresDescribe('two-tenant follow-up sweeper fan-out (real PostgreSQL)', () =>
     if (suspended.exitCode !== 0) throw new Error(`suspend failed: ${suspended.stderr}`);
 
     const runtimeDb = openDb(
-      urlFor(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }),
+      pgRoleUrl(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }),
       1,
     );
+    await assertPgTestRole(runtimeDb, DEFAULT_ROLE_NAMES.runtime);
     const authPlaneDb = openDb(
-      urlFor(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.authPlane, password: passwords.authPlane }),
+      pgRoleUrl(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.authPlane, password: passwords.authPlane }),
       1,
     );
 
