@@ -124,6 +124,7 @@ export interface HealthResponse {
     database: HealthCheck;
     nats: HealthCheck;
     plugins?: HealthCheck;
+    agentKeyRepair?: HealthCheck;
     deadLetters?: HealthCheck;
   };
   // Instance inventory is deliberately absent — /health is unauthenticated and

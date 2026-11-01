@@ -26,6 +26,10 @@ export const HealthResponseSchema = z.object({
   checks: z.object({
     database: HealthCheckSchema,
     nats: HealthCheckSchema,
+    agentKeyRepair: HealthCheckSchema.optional().openapi({
+      description:
+        'Startup agent key repair status; a repair-only failure returns HTTP 200 with degraded status and retries next boot',
+    }),
   }),
   // No `instances` block: /health is unauthenticated, and instance totals /
   // per-channel inventory on an unauthenticated endpoint are tenant inventory
