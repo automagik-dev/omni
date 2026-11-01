@@ -88,9 +88,9 @@ async function hitEveryRoute(app: Hono<{ Variables: AppVariables }>): Promise<nu
 
 describe('consumer routes forward the caller', () => {
   for (const [label, key, expected] of [
-    ['restricted key', RESTRICTED_KEY, { keyId: RESTRICTED_KEY.id, instanceIds: [INST_A, INST_B] }],
-    ['unrestricted key', UNRESTRICTED_KEY, { keyId: UNRESTRICTED_KEY.id, instanceIds: null }],
-    ['no key context', undefined, { keyId: null, instanceIds: null }],
+    ['restricted key', RESTRICTED_KEY, { keyId: RESTRICTED_KEY.id, instanceIds: [INST_A, INST_B], tenantId: null }],
+    ['unrestricted key', UNRESTRICTED_KEY, { keyId: UNRESTRICTED_KEY.id, instanceIds: null, tenantId: null }],
+    ['no key context', undefined, { keyId: null, instanceIds: null, tenantId: null }],
   ] as const) {
     test(`${label}: every route reaches the service with the original arguments plus the caller`, async () => {
       const service = mockService();

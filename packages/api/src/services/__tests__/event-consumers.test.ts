@@ -162,6 +162,7 @@ function consumerRow(overrides: Partial<DurableConsumer> = {}): DurableConsumer 
   return {
     id: '00000000-0000-4000-8000-000000000001',
     name: 'c1',
+    tenantId: null,
     eventType: 'message.received',
     excludeTypes: null,
     filters: null,
@@ -447,6 +448,24 @@ describe('resolveConsumerSettleMs', () => {
   });
 });
 
+describe('tenant ownership is independent of instance scoping', () => {
+  test('tenant keys see only matching stamps, while legacy keys keep existing access', () => {
+    const tenantA = '11111111-1111-4111-8111-111111111111';
+    const tenantB = '22222222-2222-4222-8222-222222222222';
+    const keyId = '33333333-3333-4333-8333-333333333333';
+    for (const scoped of [false, true]) {
+      for (const instanceIds of [null, []]) {
+        const caller = { tenantId: tenantA, keyId, instanceIds };
+        const row = consumerRow({ scoped, ownerKeyId: keyId, tenantId: tenantA });
+        expect(canAccessConsumer(row, caller)).toBe(true);
+        expect(canAccessConsumer({ ...row, tenantId: tenantB }, caller)).toBe(false);
+        expect(canAccessConsumer({ ...row, tenantId: null }, caller)).toBe(false);
+        expect(canAccessConsumer(row, { keyId, instanceIds })).toBe(true);
+      }
+    }
+  });
+});
+
 describe('instance-scoped consumers (opt-in, 0082)', () => {
   const INST_A = '11111111-1111-4111-8111-1111111111aa';
   const INST_B = '11111111-1111-4111-8111-1111111111bb';
@@ -480,7 +499,7 @@ describe('instance-scoped consumers (opt-in, 0082)', () => {
   });
 
   test('unscoped consumers remain visible for read-only inspection', () => {
-    const consumer = { scoped: false, ownerKeyId: null };
+    const consumer = { tenantId: null, scoped: false, ownerKeyId: null };
     for (const caller of [...Object.values(callers), undefined]) {
       expect(canAccessConsumer(consumer, caller)).toBe(true);
     }
@@ -590,14 +609,16 @@ describe('instance-scoped consumers (opt-in, 0082)', () => {
   });
 
   test('a scoped consumer is visible to its owner and unrestricted keys only', () => {
-    const consumer = { scoped: true, ownerKeyId: KEY_RESTRICTED };
+    const consumer = { tenantId: null, scoped: true, ownerKeyId: KEY_RESTRICTED };
     expect(canAccessConsumer(consumer, restricted)).toBe(true);
     expect(canAccessConsumer(consumer, unrestricted)).toBe(true);
     expect(canAccessConsumer(consumer, otherRestricted)).toBe(false);
     expect(canAccessConsumer(consumer, { keyId: null, instanceIds: [INST_A] })).toBe(false);
     // An orphaned scoped consumer (owner key gone) stays reachable by unrestricted keys only.
-    expect(canAccessConsumer({ scoped: true, ownerKeyId: null }, unrestricted)).toBe(true);
-    expect(canAccessConsumer({ scoped: true, ownerKeyId: null }, { keyId: null, instanceIds: [] })).toBe(false);
+    expect(canAccessConsumer({ tenantId: null, scoped: true, ownerKeyId: null }, unrestricted)).toBe(true);
+    expect(
+      canAccessConsumer({ tenantId: null, scoped: true, ownerKeyId: null }, { keyId: null, instanceIds: [] }),
+    ).toBe(false);
   });
 });
 

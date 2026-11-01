@@ -178,8 +178,8 @@ describe('db-access guard', () => {
       // #989: durable consumers. The `omni_events` pull/head reads run through
       // the service's `scopedHandle` getter — request transaction when scoped
       // (RLS-policed pages), ambient for a legacy credential (the accepted
-      // dual world). The registry table itself (`durable_consumers`) is
-      // global, following the event_schemas precedent.
+      // dual world). The mixed legacy/tenant registry (`durable_consumers`)
+      // enforces tenant ownership in its service predicates (0091).
       'packages/api/src/services/event-consumers.ts',
       'packages/api/src/services/agent-tasks.ts',
       'packages/api/src/services/agents.ts',

@@ -41,6 +41,8 @@
  * instance-unrestricted keys: sharing their cursor with a restricted reader
  * would discard rows that reader never received. Restricted keys always
  * create scoped consumers. Scoped streams also apply the caller filter.
+ * Tenant credentials additionally require a matching tenant stamp, even without
+ * database enforcement; unstamped pre-0091 registrations are hidden from them.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -104,6 +106,8 @@ export interface CreateConsumerInput {
  * unrestricted behaviour.
  */
 export interface ConsumerCaller {
+  /** Trusted authenticated tenant; absent/null keeps legacy key access rules. */
+  tenantId?: string | null;
   /** api_keys.id of the caller; null when the request carried no key. */
   keyId: string | null;
   /** The key's instance restriction; null = every instance (ApiKeyService.instanceAllowed's rule). */
@@ -117,7 +121,7 @@ export type ConsumerScope =
 
 /** A consumer row plus its live lag (journal head minus cursor). */
 export interface ConsumerWithLag extends DurableConsumer {
-  /** Highest journal_seq currently in the journal (0 when empty). */
+  /** Highest journal_seq visible to this consumer (0 when empty). */
   head: number;
   /** head - cursor, floored at 0. Counts ALL journal rows past the cursor, not only matching ones. */
   lag: number;
@@ -350,25 +354,31 @@ export function resolveConsumerScope(
 }
 
 /**
- * Whether `caller` may see `consumer`. Delivery and mutations additionally require getMutable.
- * Unscoped consumers and
- * callers with no key context are unrestricted (legacy behaviour); a scoped
+ * Tenant callers can access only stamped consumers of their own tenant;
+ * unstamped legacy rows fail closed. Legacy callers keep their access rules.
+ * Delivery and mutations additionally require getMutable. Within the tenant
+ * boundary, unscoped consumers are visible to every caller; a scoped
  * consumer is visible to its owner key and to instance-unrestricted keys.
  * Exported for unit tests.
  */
 export function canAccessConsumer(
-  consumer: Pick<DurableConsumer, 'scoped' | 'ownerKeyId'>,
+  consumer: Pick<DurableConsumer, 'tenantId' | 'scoped' | 'ownerKeyId'>,
   caller?: ConsumerCaller,
 ): boolean {
+  if (caller?.tenantId && consumer.tenantId !== caller.tenantId) return false;
   if (!consumer.scoped || !caller || caller.instanceIds === null) return true;
   return consumer.ownerKeyId !== null && consumer.ownerKeyId === caller.keyId;
 }
 
 /** Mutations by restricted keys require a scoped consumer they own, also in SQL. */
 function consumerAccessClause(caller?: ConsumerCaller): SQL | undefined {
-  if (!caller || caller.instanceIds === null) return undefined;
+  const tenant = caller?.tenantId ? eq(durableConsumers.tenantId, caller.tenantId) : undefined;
+  if (!caller || caller.instanceIds === null) return tenant;
   const keyId = ownerKeyOf(caller);
-  return keyId ? and(eq(durableConsumers.scoped, true), eq(durableConsumers.ownerKeyId, keyId)) : sql`false`;
+  return and(
+    tenant,
+    keyId ? and(eq(durableConsumers.scoped, true), eq(durableConsumers.ownerKeyId, keyId)) : sql`false`,
+  );
 }
 
 /**
@@ -482,18 +492,23 @@ export class EventConsumerService {
   ) {}
 
   /** Highest journal_seq in the journal, 0 when empty. Cheap (backward index scan). */
-  async head(): Promise<number> {
-    const [row] = await this.db
+  async head(tenantId?: string | null): Promise<number> {
+    const query = this.db
       .select({ head: sql<number>`coalesce(max(${omniEvents.journalSeq}), 0)::bigint` })
       .from(omniEvents);
+    const [row] = await (tenantId ? query.where(eq(omniEvents.tenantId, tenantId)) : query);
     return Number(row?.head ?? 0);
   }
 
   /** Every consumer the caller may see (all of them without a caller), with live lag. */
   async list(caller?: ConsumerCaller): Promise<ConsumerWithLag[]> {
     const [rows, head] = await Promise.all([
-      this.db.select().from(durableConsumers).orderBy(asc(durableConsumers.name)),
-      this.head(),
+      this.db
+        .select()
+        .from(durableConsumers)
+        .where(caller?.tenantId ? eq(durableConsumers.tenantId, caller.tenantId) : undefined)
+        .orderBy(asc(durableConsumers.name)),
+      this.head(caller?.tenantId),
     ]);
     const visible = rows.filter((row) => canAccessConsumer(row, caller));
     return Promise.all(visible.map((row) => this.withLag(row, head, caller)));
@@ -515,7 +530,7 @@ export class EventConsumerService {
   /** getByName plus live head/lag — the `inspect` surface. */
   async inspect(name: string, caller?: ConsumerCaller): Promise<ConsumerWithLag> {
     const row = await this.getVisible(name, caller);
-    return this.withLag(row, await this.head(), caller);
+    return this.withLag(row, await this.head(row.tenantId), caller);
   }
 
   /** Delivery and mutations fail closed for restricted callers on unscoped consumers. */
@@ -570,13 +585,15 @@ export class EventConsumerService {
     assertAccessFilterAvailable(input.access);
     const scope = resolveConsumerScope(input, caller);
     if (scope.scoped) await this.assertInstancesResolve(scope.instanceIds);
-    const head = await this.head();
+    const tenantId = caller?.tenantId ?? null;
+    const head = await this.head(tenantId);
     const cursor = resolveInitialCursor(input.startFrom ?? 'now', head);
 
     const [created] = await this.db
       .insert(durableConsumers)
       .values({
         name: input.name,
+        tenantId,
         eventType: input.eventType,
         excludeTypes: input.excludeTypes?.length ? input.excludeTypes : null,
         filters: input.filters ?? null,
@@ -673,7 +690,7 @@ export class EventConsumerService {
           and(eq(durableConsumers.id, consumer.id), lte(durableConsumers.cursor, cursor), consumerAccessClause(caller)),
         );
     }
-    const head = await this.head();
+    const head = await this.head(consumer.tenantId);
     const hasMore = scanned.length === limit;
     return {
       consumer: consumer.name,
@@ -723,7 +740,7 @@ export class EventConsumerService {
       );
     }
 
-    return this.withLag(updated, await this.head(), caller);
+    return this.withLag(updated, await this.head(updated.tenantId), caller);
   }
 
   /**
@@ -820,7 +837,7 @@ export class EventConsumerService {
       consumer: consumer.name,
       items,
       cursor: lease?.to ?? consumer.cursor,
-      head: await this.head(),
+      head: await this.head(consumer.tenantId),
       hasMore,
       scanExhausted: hasMore && items.length === 0,
       ...(lease && items.length > 0 ? { leaseId: lease.id } : {}),
@@ -890,7 +907,7 @@ export class EventConsumerService {
         );
       }
       const updated = await this.casLeaseState(consumer, released.state, Math.max(consumer.cursor, released.cursor));
-      if (updated) return this.withLag(updated, await this.head(), caller);
+      if (updated) return this.withLag(updated, await this.head(updated.tenantId), caller);
     }
     throw new ConflictError('DurableConsumer', `too much contention acking '${name}', retry`, { name });
   }
@@ -959,6 +976,7 @@ export class EventConsumerService {
           gt(omniEvents.journalSeq, after),
           through === undefined ? undefined : lte(omniEvents.journalSeq, through),
           typeClause,
+          consumer.tenantId ? eq(omniEvents.tenantId, consumer.tenantId) : undefined,
           instanceScopeClause(consumer),
           accessFilterClause(consumer.accessFilter, consumer.waitForReady),
           extra,

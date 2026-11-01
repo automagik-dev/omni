@@ -534,7 +534,11 @@ export class EventService {
    * through AutomationService so this service adds no `automations` db site).
    */
   async getTypes(
-    options: { since?: Date; automations?: Array<{ name: string; triggerEventType: string }> } = {},
+    options: {
+      since?: Date;
+      tenantId?: string | null;
+      automations?: Array<{ name: string; triggerEventType: string }>;
+    } = {},
   ): Promise<EventTypeInventoryRow[]> {
     const autos = options.automations ?? [];
     const [observed, schemas, consumers] = await Promise.all([
@@ -551,7 +555,10 @@ export class EventService {
       this.db
         .select({ eventType: eventSchemas.eventType, version: eventSchemas.version, enabled: eventSchemas.enabled })
         .from(eventSchemas),
-      this.db.select({ name: durableConsumers.name, eventType: durableConsumers.eventType }).from(durableConsumers),
+      this.db
+        .select({ name: durableConsumers.name, eventType: durableConsumers.eventType })
+        .from(durableConsumers)
+        .where(options.tenantId ? eq(durableConsumers.tenantId, options.tenantId) : undefined),
     ]);
 
     const schemaByType = new Map(schemas.map((s) => [s.eventType, s]));

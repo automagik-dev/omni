@@ -185,6 +185,27 @@ export const RLS_EXCLUSIONS: readonly RlsExclusion[] = [
   },
 ];
 
+/**
+ * Mixed legacy/tenant registries whose tenant boundary is enforced by their
+ * service even with DB enforcement off. These remain runtime-accessible:
+ * applying the generic tenant-only policy would remove legacy key access.
+ * Keep this class separate from the runtime-denied control-plane exclusions.
+ */
+export const APPLICATION_SCOPED_TENANT_TABLES: readonly RlsExclusion[] = [
+  {
+    table: 'durable_consumers',
+    justification:
+      '0091 preserves legacy consumer credentials and unstamped registrations. EventConsumerService stamps ' +
+      'authenticated creators and checks tenant equality on list/get/pull/ack/delete/stream, including SQL ' +
+      'mutation predicates and journal scans, independently of OMNI_DB_ENFORCEMENT. Generic tenant-only RLS ' +
+      'would break the required legacy-key access to unstamped consumers. EventService.getTypes filters ' +
+      'consumer names by the authenticated tenant. Evidence: ' +
+      'packages/api/src/__tests__/event-consumers-postgres.test.ts suite, including its two-tenant ownership ' +
+      'regression with DB enforcement off, plus services/__tests__/event-consumers.test.ts. ' +
+      'Follow-up: legacy-aware RLS for durable consumers.',
+  },
+];
+
 /** Every table that receives ENABLE + FORCE ROW LEVEL SECURITY. */
 export const RLS_TENANT_TABLES: readonly string[] = [...TENANT_TABLES, ...G1_TENANT_PLANE_TABLES];
 

@@ -18,6 +18,7 @@ import { PgTable, getTableConfig } from 'drizzle-orm/pg-core';
 import * as schema from './schema';
 import { TENANT_TABLES } from './tenancy-ownership';
 import {
+  APPLICATION_SCOPED_TENANT_TABLES,
   AUTH_PLANE_READABLE_TABLES,
   AUTH_PLANE_ROW_FUNCTION,
   CONNECTOR_INGRESS_READABLE_TABLES,
@@ -63,11 +64,14 @@ const SCHEMA_TENANT_TABLES: string[] = (Object.values(schema) as unknown[])
   .sort();
 
 describe('RLS coverage', () => {
-  test('every schema table carrying tenant_id is either covered or explicitly excluded', () => {
+  test('every schema table carrying tenant_id has an explicit isolation classification', () => {
     expect(SCHEMA_TENANT_TABLES.length).toBeGreaterThan(0);
     const covered = new Set(RLS_TENANT_TABLES);
     const excluded = new Set(RLS_EXCLUSIONS.map((e) => e.table));
-    const unaccounted = SCHEMA_TENANT_TABLES.filter((t) => !covered.has(t) && !excluded.has(t));
+    const applicationScoped = new Set(APPLICATION_SCOPED_TENANT_TABLES.map((entry) => entry.table));
+    const unaccounted = SCHEMA_TENANT_TABLES.filter(
+      (t) => !covered.has(t) && !excluded.has(t) && !applicationScoped.has(t),
+    );
     expect(unaccounted).toEqual([]);
   });
 
@@ -94,6 +98,17 @@ describe('RLS coverage', () => {
       expect(exclusion.justification.length).toBeGreaterThan(60);
       expect(RLS_TENANT_TABLES).not.toContain(exclusion.table);
       expect(RUNTIME_DENIED_TABLES).toContain(exclusion.table);
+    }
+  });
+
+  test('only the durable consumer legacy registry uses application scoping, with a documented boundary', () => {
+    expect(APPLICATION_SCOPED_TENANT_TABLES.map((entry) => entry.table)).toEqual(['durable_consumers']);
+    for (const entry of APPLICATION_SCOPED_TENANT_TABLES) {
+      expect(SCHEMA_TENANT_TABLES).toContain(entry.table);
+      expect(entry.justification.length).toBeGreaterThan(60);
+      expect(RLS_TENANT_TABLES).not.toContain(entry.table);
+      expect(RLS_EXCLUSIONS.map((exclusion) => exclusion.table)).not.toContain(entry.table);
+      expect(RUNTIME_DENIED_TABLES).not.toContain(entry.table);
     }
   });
 
