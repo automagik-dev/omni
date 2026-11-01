@@ -2948,7 +2948,9 @@ async function dispatchViaTurnBasedProvider(
       }
     }
   }
-  if (!scopedKey) {
+  // Startup repair is best-effort. Never dispatch with an unrepaired global key,
+  // including legacy no-tenant lookups when revocation did not commit.
+  if (!scopedKey?.instanceIds?.length) {
     log.error('Turn-based dispatch: scoped API key not found', {
       keyName: keyNames[0],
       instanceId: instance.id,
