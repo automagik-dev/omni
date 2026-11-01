@@ -43,6 +43,7 @@ import {
   type Database,
   applyTenancyRoles,
   applyTenantRlsEnforcement,
+  assertEnforcedRuntimeIdentity,
   automationLogs,
   automations,
   connectorEventSubscriptions,
@@ -50,8 +51,9 @@ import {
   createDbHandle,
   deadLetterEvents,
   omniEvents,
+  unwrapDbError,
 } from '@omni/db';
-import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { assertPgTestRole, pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { eq, sql } from 'drizzle-orm';
 import { buildAutomationEngineDeps } from '../plugins/automation-actions';
 import { createServices } from '../services';
@@ -96,16 +98,6 @@ interface CommentRequest {
 
 function sign(secret: string, body: string): string {
   return createHmac('sha256', secret).update(body).digest('hex');
-}
-
-function urlFor(base: string, database: string, user?: { name: string; password: string }): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  if (user) {
-    url.username = user.name;
-    url.password = user.password;
-  }
-  return url.toString();
 }
 
 function password(): string {
@@ -171,6 +163,8 @@ postgresDescribe('connector ingress under enforced RLS (real PostgreSQL)', () =>
   const passwords = { ddl: password(), runtime: password(), authPlane: password() };
   let handle: ReturnType<typeof createDbHandle> | null = null;
   let db: Database;
+  let authHandle: ReturnType<typeof createDbHandle> | null = null;
+  let unownedDeadLetterId: string;
   const commentRequests: CommentRequest[] = [];
   let bus: EventBus & ConnectorEventPublisher;
   let engine: ReturnType<typeof createAutomationEngine> | null = null;
@@ -207,7 +201,7 @@ postgresDescribe('connector ingress under enforced RLS (real PostgreSQL)', () =>
 
   beforeAll(async () => {
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    handle = createDbHandle({ url: urlFor(superUrl, dbName), maxConnections: 4 });
+    handle = createDbHandle({ url: pgRoleUrl(superUrl, dbName), maxConnections: 4 });
     const superDb = handle.db;
 
     // Seed BEFORE enforcement: the ownership triggers null tenant_id on insert,
@@ -333,20 +327,46 @@ postgresDescribe('connector ingress under enforced RLS (real PostgreSQL)', () =>
       automationB: automationB.id,
     };
 
+    // A pre-tenancy row has no persisted source; payload claims cannot recover
+    // ownership. G6 backfill owns its repair, so it must remain fail-closed.
+    const [unowned] = await superDb
+      .insert(deadLetterEvents)
+      .values({
+        eventId: randomUUID(),
+        eventType: 'custom.unowned',
+        subject: 'custom.unowned',
+        payload: { metadata: { tenantId: TENANT_A } },
+        error: 'pre-tenancy failure',
+        nextAutoRetryAt: new Date(0),
+      })
+      .returning();
+    if (!unowned) throw new Error('unowned dead-letter seed failed');
+    expect(unowned.tenantId).toBeNull();
+    unownedDeadLetterId = unowned.id;
+
     // REAL enforcement: the runtime handle below is a non-owning NOBYPASSRLS
     // role, and every tenant table is FORCE RLS.
     await applyTenantRlsEnforcement(superDb);
     await applyTenancyRoles(superDb, passwords, DEFAULT_ROLE_NAMES, dbName);
 
     const runtimeHandle = createDbHandle({
-      url: urlFor(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }),
+      url: pgRoleUrl(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }),
       maxConnections: 4,
     });
     db = runtimeHandle.db;
+    const runtimeIdentity = await assertEnforcedRuntimeIdentity(db);
+    expect(runtimeIdentity.currentUser).toBe(DEFAULT_ROLE_NAMES.runtime);
+
+    await assertPgTestRole(db, DEFAULT_ROLE_NAMES.runtime);
     const inMemory = inMemoryBus();
     bus = inMemory.bus;
 
     services = createServices(db, bus);
+    authHandle = createDbHandle({
+      url: pgRoleUrl(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.authPlane, password: passwords.authPlane }),
+      maxConnections: 2,
+    });
+    services.deadLetters.setAuthPlane(authHandle.db);
     // Inject the fake ClickUp transport into the real service.
     (services as unknown as { connectors: ConnectorService }).connectors = new ConnectorService(
       db,
@@ -375,8 +395,9 @@ postgresDescribe('connector ingress under enforced RLS (real PostgreSQL)', () =>
 
   afterAll(async () => {
     await engine?.stop().catch(() => undefined);
+    await authHandle?.close().catch(() => undefined);
     await handle?.close().catch(() => undefined);
-    const dbUrl = urlFor(superUrl, 'postgres');
+    const dbUrl = pgRoleUrl(superUrl, 'postgres');
     const { spawnSync } = await import('node:child_process');
     spawnSync(psqlBin, ['-X', '--no-psqlrc', '-c', `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`, dbUrl], {
       stdio: 'ignore',
@@ -538,18 +559,48 @@ postgresDescribe('connector ingress under enforced RLS (real PostgreSQL)', () =>
     expect(await journalFor(TENANT_A, `connector:${ids.subscriptionA}:history-enforced-a`)).toHaveLength(1);
   });
 
-  test('scheduler fails closed on the pre-existing NULL-DLQ visibility gap under RLS (tenancy G6)', async () => {
+  test('an existing NULL-owned dead letter is invisible to every tenant', async () => {
+    for (const tenantId of [TENANT_A, TENANT_B]) {
+      await expect(inTenant(tenantId, () => services.deadLetters.getById(unownedDeadLetterId))).rejects.toThrow(
+        'not found',
+      );
+      await expect(inTenant(tenantId, () => services.deadLetters.retry(unownedDeadLetterId))).rejects.toThrow(
+        'not found',
+      );
+      expect(
+        (await inTenant(tenantId, () => services.deadLetters.list({ eventType: ['custom.unowned'] }))).items,
+      ).toEqual([]);
+    }
+  });
+
+  test('a source-less schema refusal inherits authenticated scope under enforced RLS', async () => {
+    const dead = await inTenant(TENANT_A, () =>
+      services.deadLetters.createSchemaValidationFailure({
+        eventId: randomUUID(),
+        eventType: 'custom.refused',
+        subject: 'custom.refused',
+        payload: { metadata: { tenantId: TENANT_B } },
+        errors: ['invalid schema'],
+      }),
+    );
+    expect(dead.tenantId).toBe(TENANT_A);
+    expect(await inTenant(TENANT_A, () => services.deadLetters.getById(dead.id))).toMatchObject({ tenantId: TENANT_A });
+    await expect(inTenant(TENANT_B, () => services.deadLetters.getById(dead.id))).rejects.toThrow('not found');
+    await inTenant(TENANT_A, () => services.deadLetters.abandon(dead.id));
+  });
+
+  test('scheduler retries tenant-owned dead letters in scope while tenant B cannot see or retry them', async () => {
     const [row] = await journalFor(TENANT_A, `connector:${ids.subscriptionA}:history-enforced-a`);
     if (!row || !handle) throw new Error('missing enforced ingress fixture');
-    // Seed through the real writer on the fixture handle: the INSERT trigger
-    // clears ownership. All scheduler reads/retry work use the runtime role.
+    // Off-request creation derives ownership from the persisted source event,
+    // ignoring the forged envelope tenant. Scheduler work uses the runtime role.
     const writer = new DeadLetterService(handle.db, bus);
     const dead = await writer.create({
       event: {
         id: row.id,
         type: CONNECTOR_EVENT_TYPE,
         payload: row.rawPayload ?? {},
-        metadata: { correlationId: row.id, tenantId: TENANT_A, envelopeVersion: CURRENT_ENVELOPE_VERSION },
+        metadata: { correlationId: row.id, tenantId: TENANT_B, envelopeVersion: CURRENT_ENVELOPE_VERSION },
         timestamp: Date.now(),
       },
       subject: CONNECTOR_EVENT_TYPE,
@@ -561,8 +612,16 @@ postgresDescribe('connector ingress under enforced RLS (real PostgreSQL)', () =>
       .set({ nextAutoRetryAt: new Date(0) })
       .where(eq(deadLetterEvents.id, dead.id))
       .returning();
-    expect(stored?.tenantId).toBeNull();
-    expect(stored?.payload).toMatchObject({ metadata: { tenantId: TENANT_A } });
+    expect(stored?.tenantId).toBe(TENANT_A);
+    expect(stored?.payload).toMatchObject({ metadata: { tenantId: TENANT_B } });
+    expect(await inTenant(TENANT_B, () => services.deadLetters.list())).toMatchObject({ items: [] });
+    await expect(inTenant(TENANT_B, () => services.deadLetters.getById(dead.id))).rejects.toThrow('not found');
+    await expect(inTenant(TENANT_B, () => services.deadLetters.retry(dead.id))).rejects.toThrow('not found');
+    expect(await inTenant(TENANT_B, () => services.deadLetters.processAutoRetries())).toEqual({
+      processed: 0,
+      succeeded: 0,
+      failed: 0,
+    });
     const before = commentRequests.length;
     const runsBefore = await inTenant(TENANT_A, () =>
       scopedHandle(db).select().from(automationLogs).where(eq(automationLogs.automationId, ids.automationA)),
@@ -572,20 +631,54 @@ postgresDescribe('connector ingress under enforced RLS (real PostgreSQL)', () =>
       published++;
     });
     try {
-      // Documented pre-existing gap, owner: tenancy G6. The ambient scheduler's
-      // NULL-owned DLQ scan is denied before G1's journal read is reachable.
-      await expect(services.deadLetters.processAutoRetries()).rejects.toMatchObject({ cause: { code: '42501' } });
-      expect(published).toBe(0);
-      expect(commentRequests).toHaveLength(before);
-      expect(
-        await inTenant(TENANT_A, () =>
-          scopedHandle(db).select().from(automationLogs).where(eq(automationLogs.automationId, ids.automationA)),
-        ),
-      ).toEqual(runsBefore);
+      const previousFlag = process.env.OMNI_MULTITENANCY_ENABLED;
+      const previousMode = process.env.OMNI_DB_ENFORCEMENT;
+      try {
+        process.env.OMNI_MULTITENANCY_ENABLED = 'true';
+        process.env.OMNI_DB_ENFORCEMENT = 'on';
+        expect(await services.deadLetters.processAutoRetries()).toEqual({ processed: 1, succeeded: 1, failed: 0 });
+        expect(await services.deadLetters.getPendingCount()).toBe(0);
+      } finally {
+        if (previousFlag === undefined) Reflect.deleteProperty(process.env, 'OMNI_MULTITENANCY_ENABLED');
+        else process.env.OMNI_MULTITENANCY_ENABLED = previousFlag;
+        if (previousMode === undefined) Reflect.deleteProperty(process.env, 'OMNI_DB_ENFORCEMENT');
+        else process.env.OMNI_DB_ENFORCEMENT = previousMode;
+      }
+      expect(published).toBe(1);
+      expect(commentRequests).toHaveLength(before + 1);
+      expect(commentRequests.at(-1)?.url).toContain('/task/task-a/comment');
+      const runsAfter = await inTenant(TENANT_A, () =>
+        scopedHandle(db).select().from(automationLogs).where(eq(automationLogs.automationId, ids.automationA)),
+      );
+      expect(runsAfter).toHaveLength(runsBefore.length + 1);
       const [after] = await handle.db.select().from(deadLetterEvents).where(eq(deadLetterEvents.id, dead.id));
-      expect(after).toEqual(stored);
+      expect(after).toMatchObject({ tenantId: TENANT_A, status: 'resolved', resolvedBy: 'auto-retry-1' });
+      const [unowned] = await handle.db
+        .select()
+        .from(deadLetterEvents)
+        .where(eq(deadLetterEvents.id, unownedDeadLetterId));
+      expect(unowned).toMatchObject({ tenantId: null, status: 'pending', autoRetryCount: 0, lastRetryAt: null });
     } finally {
       await subscription.unsubscribe();
+    }
+  });
+
+  test('ambient summary and retention reads propagate missing-scope failures', async () => {
+    if (!handle) throw new Error('missing enforcement fixture');
+    // Keep a matching retention row so the DELETE must evaluate its RLS policy.
+    await handle.db
+      .update(deadLetterEvents)
+      .set({
+        status: 'resolved',
+        createdAt: new Date(0),
+      })
+      .where(eq(deadLetterEvents.id, unownedDeadLetterId));
+    for (const read of ['getPendingSummary', 'getStats', 'cleanupExpired'] as const) {
+      await expect(
+        services.deadLetters[read]().catch((error) => {
+          throw unwrapDbError(error);
+        }),
+      ).rejects.toMatchObject({ code: '42501' });
     }
   });
 });

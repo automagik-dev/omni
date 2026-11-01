@@ -12,7 +12,7 @@ import {
   instances,
   tenants,
 } from '@omni/db';
-import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { assertPgTestRole, pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { eq, sql } from 'drizzle-orm';
 import { DEFAULT_TURN_SCOPES } from '../../constants/scopes';
 import { __test__ as dispatcher } from '../../plugins/agent-dispatcher';
@@ -30,28 +30,7 @@ postgresDescribe('agent key startup reconciliation (real PostgreSQL)', () => {
   let keys: ApiKeyService;
 
   function openDb(role?: { name: string; password: string }): Database {
-    const url = new URL(superUrl);
-    url.pathname = `/${dbName}`;
-    const previousUser = process.env.PGUSER;
-    const previousPassword = process.env.PGPASSWORD;
-    // A hostless URL cannot carry URL.username. postgres.js captures these
-    // options synchronously; restore the process environment before returning.
-    let handle: ReturnType<typeof createDbHandle>;
-    try {
-      if (role && url.hostname) {
-        url.username = role.name;
-        url.password = role.password;
-      } else if (role) {
-        process.env.PGUSER = role.name;
-        process.env.PGPASSWORD = role.password;
-      }
-      handle = createDbHandle({ url: url.toString(), maxConnections: 3 });
-    } finally {
-      if (previousUser === undefined) Reflect.deleteProperty(process.env, 'PGUSER');
-      else process.env.PGUSER = previousUser;
-      if (previousPassword === undefined) Reflect.deleteProperty(process.env, 'PGPASSWORD');
-      else process.env.PGPASSWORD = previousPassword;
-    }
+    const handle = createDbHandle({ url: pgRoleUrl(superUrl, dbName, role), maxConnections: 3 });
     closers.push(handle.close);
     return handle.db;
   }
@@ -324,6 +303,7 @@ postgresDescribe('agent key startup reconciliation (real PostgreSQL)', () => {
     await applyTenantRlsEnforcement(db);
     await applyTenancyRoles(db, passwords, DEFAULT_ROLE_NAMES, dbName);
     const runtime = openDb({ name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime });
+    await assertPgTestRole(runtime, DEFAULT_ROLE_NAMES.runtime);
     const authPlane = openDb({ name: DEFAULT_ROLE_NAMES.authPlane, password: passwords.authPlane });
     const [identity] = await runtime.execute(sql`
       SELECT current_user AS name, rolsuper, rolbypassrls

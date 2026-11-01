@@ -45,7 +45,7 @@ import {
   createDbHandle,
   messages,
 } from '@omni/db';
-import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { assertPgTestRole, pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { and, eq } from 'drizzle-orm';
 import { createServices } from '../../services';
 import { scopedHandle } from '../../tenancy/tenant-scope';
@@ -85,16 +85,6 @@ function runSqlOn(url: string, script: string): { exitCode: number; stderr: stri
   } finally {
     rmSync(file, { force: true });
   }
-}
-
-function urlFor(base: string, database: string, user?: { name: string; password: string }): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  if (user) {
-    url.username = user.name;
-    url.password = user.password;
-  }
-  return url.toString();
 }
 
 /** Capture the handlers `setupMessagePersistence` registers on the bus. */
@@ -190,7 +180,7 @@ postgresDescribe('two-tenant message-persistence containment (real PostgreSQL)',
         '-A',
         '-t',
         '--dbname',
-        urlFor(superUrl, dbName),
+        pgRoleUrl(superUrl, dbName),
         '-c',
         `SELECT (SELECT count(*) FROM chats WHERE external_id = '${SHARED_JID}') || ' ' ||
                 (SELECT count(*) FROM messages WHERE external_id = '${SHARED_EXTERNAL_ID}')`,
@@ -204,7 +194,7 @@ postgresDescribe('two-tenant message-persistence containment (real PostgreSQL)',
 
   beforeAll(async () => {
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    const superDbUrl = urlFor(superUrl, dbName);
+    const superDbUrl = pgRoleUrl(superUrl, dbName);
 
     // Only the tenants and their instances are seeded. The chats, messages,
     // participants and identities under test are created BY the consumer.
@@ -227,7 +217,11 @@ postgresDescribe('two-tenant message-persistence containment (real PostgreSQL)',
     await applyTenancyRoles(provisioner, passwords, DEFAULT_ROLE_NAMES, dbName);
 
     // ONE physical connection shared by both tenants' workers: any bleed shows here.
-    runtimeDb = openDb(urlFor(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }), 1);
+    runtimeDb = openDb(
+      pgRoleUrl(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }),
+      1,
+    );
+    await assertPgTestRole(runtimeDb, DEFAULT_ROLE_NAMES.runtime);
 
     const captured = captureBus();
     fire = captured.fire;

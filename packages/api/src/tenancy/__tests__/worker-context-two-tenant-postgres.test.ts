@@ -30,7 +30,7 @@ import {
   createDbHandle,
   omniEvents,
 } from '@omni/db';
-import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { assertPgTestRole, pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { eq } from 'drizzle-orm';
 import { setupEventPersistence } from '../../plugins/event-persistence';
 import { InstanceService } from '../../services/instances';
@@ -70,16 +70,6 @@ function runSqlOn(url: string, script: string): { exitCode: number; stderr: stri
   } finally {
     rmSync(file, { force: true });
   }
-}
-
-function urlFor(base: string, database: string, user?: { name: string; password: string }): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  if (user) {
-    url.username = user.name;
-    url.password = user.password;
-  }
-  return url.toString();
 }
 
 /** A message.received envelope for `instanceId`, optionally stamped for a tenant. */
@@ -134,7 +124,7 @@ postgresDescribe('two-tenant worker-context containment (real PostgreSQL)', () =
 
   beforeAll(async () => {
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    const superDbUrl = urlFor(superUrl, dbName);
+    const superDbUrl = pgRoleUrl(superUrl, dbName);
 
     const seeded = runSqlOn(
       superDbUrl,
@@ -164,7 +154,11 @@ postgresDescribe('two-tenant worker-context containment (real PostgreSQL)', () =
 
     // ONE physical connection shared by both tenants' workers: any bleed shows
     // here rather than being hidden by pool luck.
-    runtimeDb = openDb(urlFor(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }), 1);
+    runtimeDb = openDb(
+      pgRoleUrl(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }),
+      1,
+    );
+    await assertPgTestRole(runtimeDb, DEFAULT_ROLE_NAMES.runtime);
     instances = new InstanceService(runtimeDb, null);
 
     // Capture the real consumer handlers exactly as the NATS bus would.

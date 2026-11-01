@@ -31,6 +31,9 @@ import { readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { sql } from 'drizzle-orm';
+import type { Sql } from 'postgres';
+import type { Database } from './client';
 import { unwrapDbError } from './errors';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -178,3 +181,37 @@ export const driverRejection = <T>(p: Promise<T>): Promise<T> =>
   p.catch((error) => {
     throw unwrapDbError(error);
   });
+
+/** Test-only role URLs shared by the disposable PostgreSQL suites (#1470).
+ * Hostless runs use trust-authenticated Unix sockets; PGHOST/PGPORT select the
+ * socket, and the startup user parameter works in both postgres.js and libpq.
+ */
+export function pgRoleUrl(base: string, database: string, role?: { name: string; password: string }): string {
+  const url = new URL(base);
+  url.pathname = `/${database}`;
+  if (role) {
+    if (url.hostname) {
+      url.username = role.name;
+      url.password = role.password;
+      url.searchParams.delete('user');
+    } else {
+      // URL.username silently refuses credentials when the authority is empty.
+      url.searchParams.set('user', role.name);
+    }
+  }
+  return url.toString();
+}
+
+/** Prove the CONNECTED identity, not merely that a named role was provisioned. */
+export async function assertPgTestRole(db: Database | Pick<Sql, 'unsafe'>, expected: string): Promise<void> {
+  const query = `SELECT current_user::text AS name, rolsuper, rolbypassrls
+    FROM pg_catalog.pg_roles WHERE rolname = current_user`;
+  const rows = 'unsafe' in db ? await db.unsafe(query) : await db.execute(sql.raw(query));
+  const row = rows[0];
+  if (row?.name !== expected || row?.rolsuper !== false || row?.rolbypassrls !== false) {
+    throw new Error(
+      `PostgreSQL test role mismatch: expected ${expected} with SUPERUSER=false and BYPASSRLS=false; ` +
+        `got ${row?.name ?? 'no row'} (SUPERUSER=${row?.rolsuper}, BYPASSRLS=${row?.rolbypassrls})`,
+    );
+  }
+}

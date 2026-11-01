@@ -39,7 +39,7 @@ import {
   applyTenantRlsEnforcement,
   createDbHandle,
 } from '@omni/db';
-import { driverRejection, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { assertPgTestRole, driverRejection, pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { createServices } from '../../services';
 import { buildAutomationEngineDeps } from '../automation-actions';
 
@@ -76,16 +76,6 @@ function runSqlOn(url: string, script: string): { exitCode: number; stderr: stri
   }
 }
 
-function urlFor(base: string, database: string, user?: { name: string; password: string }): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  if (user) {
-    url.username = user.name;
-    url.password = user.password;
-  }
-  return url.toString();
-}
-
 postgresDescribe('two-tenant automation-actions containment (real PostgreSQL)', () => {
   const dbName = `omni_g5_autoactions_${crypto.randomUUID().replaceAll('-', '')}`;
   const passwords = { ddl: password(), runtime: password(), authPlane: password() };
@@ -101,7 +91,7 @@ postgresDescribe('two-tenant automation-actions containment (real PostgreSQL)', 
 
   beforeAll(async () => {
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    const superDbUrl = urlFor(superUrl, dbName);
+    const superDbUrl = pgRoleUrl(superUrl, dbName);
 
     // Seed: both tenants own an instance and a chat. The agent row is
     // deliberately NULL-tenant — that IS production's shape until the G6
@@ -133,9 +123,10 @@ postgresDescribe('two-tenant automation-actions containment (real PostgreSQL)', 
 
     // ONE physical connection shared by every probe: any bleed shows here.
     const runtimeDb = openDb(
-      urlFor(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }),
+      pgRoleUrl(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }),
       1,
     );
+    await assertPgTestRole(runtimeDb, DEFAULT_ROLE_NAMES.runtime);
 
     sent = [];
     const capture = sent;

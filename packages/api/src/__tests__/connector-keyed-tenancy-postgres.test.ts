@@ -16,9 +16,11 @@ import {
   omniEvents,
 } from '@omni/db';
 import {
+  assertPgTestRole,
   createDatabaseFromTemplate,
   driverRejection,
   ensureSqlTemplate,
+  pgRoleUrl,
   sqlTemplateName,
 } from '@omni/db/pg-migrated-template';
 import { eq, sql } from 'drizzle-orm';
@@ -45,13 +47,7 @@ const SECRET = 'existing-clickup-secret';
 const TYPE = 'connector.gitlab.merge_request.merged';
 
 function urlFor(database: string, user?: { name: string; password: string }): string {
-  const url = new URL(superUrl);
-  url.pathname = `/${database}`;
-  if (user) {
-    url.username = user.name;
-    url.password = user.password;
-  }
-  return url.toString();
+  return pgRoleUrl(superUrl, database, user);
 }
 
 // Raw SQL fixtures exercise the database contract before G4 widens EventType.
@@ -138,6 +134,7 @@ postgresDescribe('connector-keyed ingress schema and tenancy', () => {
     const passwords = { ddl: crypto.randomUUID(), runtime: crypto.randomUUID(), authPlane: crypto.randomUUID() };
     await applyTenancyRoles(owner, passwords, DEFAULT_ROLE_NAMES, dbName);
     runtime = open(urlFor(dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }));
+    await assertPgTestRole(runtime, DEFAULT_ROLE_NAMES.runtime);
     authPlane = open(urlFor(dbName, { name: DEFAULT_ROLE_NAMES.authPlane, password: passwords.authPlane }));
   }, 180_000);
 

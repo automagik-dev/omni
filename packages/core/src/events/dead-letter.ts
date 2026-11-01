@@ -31,6 +31,8 @@ export const MAX_AUTO_RETRIES = 3;
  * Dead letter entry structure (matches database schema)
  */
 export interface DeadLetterEntry {
+  /** Persisted ownership; never inferred from the stored payload. */
+  tenantId?: string | null;
   id: string;
   eventId: string;
   eventType: string;
