@@ -150,7 +150,10 @@ function compareRows(key: string, direction: 'asc' | 'desc') {
   };
 }
 
-export function createConnectorTestDb(seed: Partial<ConnectorTestTables> = {}): ConnectorTestDb {
+export function createConnectorTestDb(
+  seed: Partial<ConnectorTestTables> = {},
+  faults: { deleteError?: Error } = {},
+): ConnectorTestDb {
   const tables: ConnectorTestTables = {
     connectors: [],
     connector_event_subscriptions: [],
@@ -167,20 +170,36 @@ export function createConnectorTestDb(seed: Partial<ConnectorTestTables> = {}): 
   };
 
   const select = () => {
-    const state: { table?: string; where?: unknown; order?: { key: string; direction: 'asc' | 'desc' } } = {};
+    const state: {
+      table?: string;
+      join?: string;
+      where?: unknown;
+      order?: { key: string; direction: 'asc' | 'desc' };
+    } = {};
     const rowsNow = (): ConnectorTestRow[] => {
       const filtered = (tables[state.table ?? ''] ?? []).filter((row) => matchesWhere(state.where, row));
       const ordered = state.order ? [...filtered].sort(compareRows(state.order.key, state.order.direction)) : filtered;
-      return ordered.map((row) => ({ ...row }));
+      return ordered.map((row) =>
+        state.join
+          ? {
+              subscription: { ...row },
+              connector: { ...tables.connectors.find((connector) => connector.id === row.connectorId) },
+            }
+          : { ...row },
+      );
     };
     const chain = {
       from(table: unknown) {
         state.table = getTableName(table as never);
         return chain;
       },
+      innerJoin(table: Parameters<typeof getTableName>[0]) {
+        state.join = getTableName(table);
+        return chain;
+      },
       where(condition: unknown) {
         state.where = condition;
-        return chain;
+        return Object.assign(Promise.resolve(rowsNow()), chain);
       },
       /**
        * Drizzle returns a thenable builder: `.orderBy(...)` can be awaited
@@ -231,7 +250,7 @@ export function createConnectorTestDb(seed: Partial<ConnectorTestTables> = {}): 
       },
       where(condition: unknown) {
         state.where = condition;
-        return chain;
+        return Object.assign(chain.returning(), chain);
       },
       returning() {
         const rows = rowsOf(table).filter((row) => matchesWhere(state.where, row));
@@ -243,17 +262,20 @@ export function createConnectorTestDb(seed: Partial<ConnectorTestTables> = {}): 
   };
 
   const remove = (table: unknown) => {
-    const state: { where?: unknown } = {};
+    const state: { where?: unknown; removed?: ConnectorTestRow[] } = {};
     const chain = {
       where(condition: unknown) {
         state.where = condition;
-        return chain;
+        if (faults.deleteError) return Promise.reject(faults.deleteError);
+        return Object.assign(chain.returning(), chain);
       },
       returning() {
-        const rows = rowsOf(table);
-        const removed = rows.filter((row) => matchesWhere(state.where, row));
-        for (const row of removed) rows.splice(rows.indexOf(row), 1);
-        return Promise.resolve(removed.map((row) => ({ id: row.id })));
+        if (!state.removed) {
+          const rows = rowsOf(table);
+          state.removed = rows.filter((row) => matchesWhere(state.where, row));
+          for (const row of state.removed) rows.splice(rows.indexOf(row), 1);
+        }
+        return Promise.resolve(state.removed.map((row) => ({ id: row.id })));
       },
     };
     return chain;

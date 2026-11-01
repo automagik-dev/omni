@@ -93,7 +93,7 @@ import { buildAutomationEngineDeps } from './plugins/automation-actions';
 import { setupDeviceLogin } from './plugins/device-login';
 import { setupScheduler, stopScheduler } from './scheduler';
 import { closeAgentHeartbeat, initAgentHeartbeat } from './services/agent-heartbeat';
-import { reconcileAgentKeys } from './services/agent-key-reconciliation';
+import { findAgentsWithoutKeys, reconcileAgentKeys } from './services/agent-key-reconciliation';
 import { ApiKeyService } from './services/api-keys';
 import { closeAllConsumerStreams } from './services/event-consumer-stream';
 import { closeTurnEvents, getTurnEventsConnection, initTurnEvents } from './services/turn-events';
@@ -1046,7 +1046,9 @@ async function main() {
   // Repair pre-upgrade agent bindings before any turn-based dispatch can run.
   // A failed repair degrades health but must not prevent Omni from starting.
   // The next boot retries the same idempotent repair.
-  await runStartupAgentKeyRepair(() => reconcileAgentKeys(db, services.authPlane.db, enforcementMode));
+  await runStartupAgentKeyRepair(() => reconcileAgentKeys(db, services.authPlane.db, enforcementMode), {
+    inspectMissingAgents: () => findAgentsWithoutKeys(db, services.authPlane.db, enforcementMode),
+  });
 
   // Set up event bus related services (persistence, agent responder, sync worker)
   await setupEventBusServices(eventBus, services, db, login, updater);

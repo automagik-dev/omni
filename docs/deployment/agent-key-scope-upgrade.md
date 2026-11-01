@@ -2,7 +2,8 @@
 
 Tenant-owned turn-based dispatch now requires an active, system-provisioned
 agent key with an explicit grant for its instance. No-tenant instances retain
-the legacy single lookup by name without a membership check.
+the legacy single lookup by name without a membership check, but every dispatch
+refuses NULL or empty instance grants even if startup repair failed.
 
 On every API startup, before dispatch starts, an idempotent repair revokes active
 `system:auto-provision` keys whose names start with `agent:` and whose
@@ -33,8 +34,16 @@ system key.
 This is a startup step rather than a schema migration so it can reuse key hashing,
 scopes, and cache invalidation from the key service. The runtime revokes unsafe
 legacy global keys; under database enforcement each tenant's bindings are read
-through its own runtime scope. No schema change or migration number is needed. Repair
-failure stops startup before dispatch begins.
+through its own runtime scope. No schema change or migration number is needed. A repair
+failure is logged once with its driver error code/message and the names of agents
+left without a usable key. Omni keeps serving; `/health` returns HTTP 200 with
+`status: "degraded"` for a repair-only failure. `checks.agentKeyRepair.details.agentsWithoutKey`
+is a startup snapshot counting affected agents (including route-only agents),
+without names or secrets; it is `null` if the coverage read also failed. Existing
+dependency failures retain HTTP 503. The next boot retries the idempotent repair.
+Until repair succeeds, dispatch refuses every key with NULL or empty instance
+grants, even on the no-tenant path. Use the recovery steps below or restart Omni
+after correcting the logged cause.
 
 ## Detect bindings without an explicit scoped system key
 

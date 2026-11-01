@@ -8,7 +8,7 @@ import { type Agent, type ApiKey, type Database, type DbEnforcementMode, agents,
 import { eq, sql } from 'drizzle-orm';
 import { DEFAULT_TURN_SCOPES } from '../constants/scopes';
 import { agentKeyName, agentKeyNameCandidates } from '../lib/agent-key-name';
-import { agentKeyBelongsToBinding } from '../lib/agent-key-ownership';
+import { type AgentKeyOwner, agentKeyBelongsToBinding } from '../lib/agent-key-ownership';
 import { scopedHandle } from '../tenancy/tenant-scope';
 import { runInWorkerTenantScope } from '../tenancy/worker-tenant-context';
 import { ApiKeyService } from './api-keys';
@@ -159,4 +159,84 @@ export async function reconcileAgentKeys(
       });
     }
   }
+}
+
+/** Failure-only diagnostic: never runs on healthy boots or from public health probes. */
+export type AgentWithoutKey = { id: string; name: string };
+
+type CoverageRow = {
+  id: string;
+  name: string;
+  tenantId: string | null;
+  instanceId: string | null;
+  instanceTenantId: string | null;
+};
+
+function hasDispatchKey(row: CoverageRow, byName: Map<string, ApiKey[]>, owners: Map<string, AgentKeyOwner>): boolean {
+  const tenantId = row.instanceId ? row.instanceTenantId : row.tenantId;
+  const names = agentKeyNameCandidates(row.name, tenantId);
+  if (row.instanceId && !tenantId) {
+    // Match the legacy dispatcher's newest-key lookup, including its universal
+    // rejection of NULL/empty grants, without adding a membership requirement.
+    return Boolean(byName.get(names[0] ?? '')?.[0]?.instanceIds?.length);
+  }
+  const keys = names.flatMap((name) => byName.get(name) ?? []);
+  const instanceId = row.instanceId;
+  if (instanceId) return keys.some((key) => key.instanceIds?.includes(instanceId));
+  // Route-only agents count too; a foreign tenant's bare key is not coverage.
+  return keys.some(
+    (key) =>
+      Boolean(key.instanceIds?.length) &&
+      agentKeyBelongsToBinding(key, { agentId: row.id, tenantId, name: row.name }, owners),
+  );
+}
+
+async function agentsWithoutKeysInScope(db: Database): Promise<AgentWithoutKey[]> {
+  const rows = await db
+    .select({
+      id: agents.id,
+      name: agents.name,
+      tenantId: agents.tenantId,
+      instanceId: instances.id,
+      instanceTenantId: instances.tenantId,
+    })
+    .from(agents)
+    .leftJoin(instances, eq(instances.agentId, agents.id));
+  const names = [
+    ...new Set(
+      rows.flatMap((row) => agentKeyNameCandidates(row.name, row.instanceId ? row.instanceTenantId : row.tenantId)),
+    ),
+  ];
+  if (names.length === 0) return [];
+  const byName = new Map<string, ApiKey[]>();
+  for (const key of await new ApiKeyService(db).findAgentKeysByNames(names)) {
+    byName.set(key.name, [...(byName.get(key.name) ?? []), key]);
+  }
+  const owners = new Map<string, AgentKeyOwner>();
+  for (const row of rows) {
+    if (row.instanceId)
+      owners.set(row.instanceId, {
+        agentId: row.id,
+        tenantId: row.instanceTenantId,
+      });
+  }
+  const missing = new Map<string, AgentWithoutKey>();
+  for (const row of rows) {
+    if (!hasDispatchKey(row, byName, owners)) missing.set(row.id, { id: row.id, name: row.name });
+  }
+  return [...missing.values()];
+}
+
+export async function findAgentsWithoutKeys(
+  db: Database,
+  authPlaneDb: Database,
+  enforcementMode: DbEnforcementMode,
+): Promise<AgentWithoutKey[]> {
+  if (enforcementMode !== 'enforced') return agentsWithoutKeysInScope(db);
+  const missing = new Map<string, AgentWithoutKey>();
+  for (const tenant of await authPlaneDb.select({ id: tenants.id }).from(tenants)) {
+    const rows = await runInWorkerTenantScope(db, tenant.id, () => agentsWithoutKeysInScope(scopedHandle(db)));
+    for (const row of rows) missing.set(row.id, row);
+  }
+  return [...missing.values()];
 }
