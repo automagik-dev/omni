@@ -18,10 +18,13 @@
 
 import { describe, expect, test } from 'bun:test';
 import { clickupManifest } from '@omni/connector-clickup';
-import { ConnectorRegistry } from '@omni/connector-sdk';
+import { type ConnectorManifest, ConnectorRegistry } from '@omni/connector-sdk';
+import { AgentEventManifestSchema } from '@omni/core';
 import { Hono } from 'hono';
+import { z } from 'zod';
 import { connectorTenantContext, createConnectorTestDb } from '../../../__tests__/connector-test-harness';
 import { errorHandler } from '../../../middleware/error';
+import { SubscriptionResponseSchema } from '../../../schemas/connectors';
 import { ConnectorService } from '../../../services/connectors';
 import { runInTenantScope } from '../../../tenancy/tenant-scope';
 import type { AppVariables } from '../../../types';
@@ -59,10 +62,11 @@ interface MountOptions {
   tenantId?: string;
   instanceIds?: string[] | null;
   fetchImpl: typeof fetch;
+  registry?: ConnectorRegistry;
 }
 
 function mount(opts: MountOptions) {
-  const service = new ConnectorService(opts.db, null, new ConnectorRegistry([clickupManifest]), {
+  const service = new ConnectorService(opts.db, null, opts.registry ?? new ConnectorRegistry([clickupManifest]), {
     fetch: opts.fetchImpl,
   });
   const app = new Hono<{ Variables: AppVariables }>();
@@ -258,5 +262,256 @@ describe('responses never carry the credential', () => {
     const problem = await subscription.text();
     expect(problem).not.toContain(SECRET);
     expect(problem).not.toContain(TOKEN);
+  });
+});
+
+const TYPED_EVENT = 'connector.fixture-provider.item.created';
+const OTHER_EVENT = 'connector.fixture-provider.item.deleted';
+const GLOB = 'connector.fixture-provider.*';
+const TYPED_TARGET = '33333333-3333-4333-8333-333333333333';
+const LEGACY_TARGET = '44444444-4444-4444-8444-444444444444';
+const OTHER_TARGET = '55555555-5555-4555-8555-555555555555';
+
+const eventsOnlyManifest: ConnectorManifest = {
+  id: 'fixture-provider',
+  label: 'Fixture provider',
+  version: '1',
+  credentialFields: [{ key: 'token', label: 'Optional token', secret: true, optional: true }],
+  configSchema: z.object({}),
+  async validate() {
+    return { ok: true };
+  },
+  events: [{ key: 'item.created', label: 'Item created' }],
+  actions: [],
+  verification: { kind: 'hmac-sha256', header: 'X-Signature', encoding: 'hex' },
+  guide: {},
+};
+
+function requestBody(method: string, body: unknown): RequestInit {
+  return { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) };
+}
+
+async function managementFixture() {
+  const { db, tables } = createConnectorTestDb({
+    automations: [
+      { id: TYPED_TARGET, triggerEventType: TYPED_EVENT, tenantId: TENANT_A },
+      { id: LEGACY_TARGET, triggerEventType: 'connector.event', tenantId: TENANT_A },
+      { id: OTHER_TARGET, triggerEventType: OTHER_EVENT, tenantId: TENANT_A },
+    ],
+  });
+  const app = mount({
+    db,
+    tenantId: TENANT_A,
+    fetchImpl: fetch,
+    registry: new ConnectorRegistry([eventsOnlyManifest]),
+  });
+  const res = await postConnector(app, { provider: eventsOnlyManifest.id, name: 'Events only', credentials: {} });
+  expect(res.status).toBe(201);
+  const connector = z.object({ data: z.object({ id: z.string().uuid() }) }).parse(await res.json());
+  return { app, tables, path: `/connectors/${connector.data.id}/subscriptions` };
+}
+
+async function problemMessage(res: Response): Promise<string> {
+  expect(res.status).toBe(400);
+  return z.object({ error: z.object({ message: z.string() }) }).parse(await res.json()).error.message;
+}
+
+describe('connector ingress subscription management', () => {
+  test('target-less globs are accepted with a nullable target and no subscription secret', async () => {
+    const { app, tables, path } = await managementFixture();
+    const res = await app.request(
+      path,
+      requestBody('POST', { ingress: 'connector', eventKey: GLOB, filters: { project: 7 } }),
+    );
+    expect(res.status).toBe(201);
+    const { data } = SubscriptionResponseSchema.parse(await res.json());
+    expect(data).toMatchObject({
+      ingress: 'connector',
+      providerEventKey: GLOB,
+      targetAutomationId: null,
+      filters: { project: 7 },
+    });
+    expect(data.inboundUrl).toBe(`/api/v2/connectors/hooks/${data.connectorId}`);
+    expect(data).not.toHaveProperty('verificationSecret');
+    expect(tables.connector_event_subscriptions[0]?.verificationSecret).toBeNull();
+    expect(tables.omni_events).toHaveLength(0);
+  });
+
+  test('targeted glob creation refuses with the subscription key and automation trigger', async () => {
+    const { app, tables, path } = await managementFixture();
+    const message = await problemMessage(
+      await app.request(
+        path,
+        requestBody('POST', {
+          ingress: 'connector',
+          eventKey: GLOB,
+          targetAutomationId: TYPED_TARGET,
+        }),
+      ),
+    );
+    expect(message).toContain(GLOB);
+    expect(message).toContain(TYPED_EVENT);
+    expect(tables.connector_event_subscriptions).toHaveLength(0);
+  });
+
+  test('create refuses legacy and other typed triggers naming the required and actual types', async () => {
+    const { app, tables, path } = await managementFixture();
+    for (const target of [
+      { id: LEGACY_TARGET, type: 'connector.event' },
+      { id: OTHER_TARGET, type: OTHER_EVENT },
+    ]) {
+      const message = await problemMessage(
+        await app.request(
+          path,
+          requestBody('POST', {
+            ingress: 'connector',
+            eventKey: TYPED_EVENT,
+            targetAutomationId: target.id,
+          }),
+        ),
+      );
+      expect(message).toContain(TYPED_EVENT);
+      expect(message).toContain(target.type);
+    }
+    expect(tables.connector_event_subscriptions).toHaveLength(0);
+  });
+
+  test('exact typed targets create and PATCH, while mismatched PATCH targets are refused with both types', async () => {
+    const { app, tables, path } = await managementFixture();
+    const created = await app.request(
+      path,
+      requestBody('POST', {
+        ingress: 'connector',
+        eventKey: TYPED_EVENT,
+        targetAutomationId: TYPED_TARGET,
+      }),
+    );
+    expect(created.status).toBe(201);
+    const { data } = SubscriptionResponseSchema.parse(await created.json());
+    expect(data.targetAutomationId).toBe(TYPED_TARGET);
+    for (const target of [
+      { id: LEGACY_TARGET, type: 'connector.event' },
+      { id: OTHER_TARGET, type: OTHER_EVENT },
+    ]) {
+      const message = await problemMessage(
+        await app.request(`${path}/${data.id}`, requestBody('PATCH', { targetAutomationId: target.id })),
+      );
+      expect(message).toContain(TYPED_EVENT);
+      expect(message).toContain(target.type);
+      expect(tables.connector_event_subscriptions[0]?.targetAutomationId).toBe(TYPED_TARGET);
+    }
+    const patched = await app.request(
+      `${path}/${data.id}`,
+      requestBody('PATCH', { status: 'paused', targetAutomationId: TYPED_TARGET }),
+    );
+    expect(patched.status).toBe(200);
+    expect(SubscriptionResponseSchema.parse(await patched.json()).data.status).toBe('paused');
+  });
+
+  test('PATCH refuses a target on a glob, secrets, and changes to ingress without writing', async () => {
+    const { app, tables, path } = await managementFixture();
+    const created = await app.request(path, requestBody('POST', { ingress: 'connector', eventKey: GLOB }));
+    const { data } = SubscriptionResponseSchema.parse(await created.json());
+    const message = await problemMessage(
+      await app.request(`${path}/${data.id}`, requestBody('PATCH', { targetAutomationId: TYPED_TARGET })),
+    );
+    expect(message).toContain(GLOB);
+    expect(message).toContain(TYPED_EVENT);
+    for (const patch of [{ verificationSecret: SECRET }, { ingress: 'subscription', status: 'paused' }]) {
+      await problemMessage(await app.request(`${path}/${data.id}`, requestBody('PATCH', patch)));
+      expect(tables.connector_event_subscriptions[0]).toMatchObject({
+        ingress: 'connector',
+        targetAutomationId: null,
+        status: 'active',
+        verificationSecret: null,
+      });
+    }
+  });
+
+  test('PATCH revalidates a persisted target even when only filters change', async () => {
+    const { app, tables, path } = await managementFixture();
+    const created = await app.request(
+      path,
+      requestBody('POST', { ingress: 'connector', eventKey: TYPED_EVENT, targetAutomationId: TYPED_TARGET }),
+    );
+    const { data } = SubscriptionResponseSchema.parse(await created.json());
+    const target = tables.automations.find((row) => row.id === TYPED_TARGET);
+    if (!target) throw new Error('missing automation fixture');
+    target.triggerEventType = 'connector.event';
+    const message = await problemMessage(
+      await app.request(`${path}/${data.id}`, requestBody('PATCH', { filters: { project: 1 } })),
+    );
+    expect(message).toContain(TYPED_EVENT);
+    expect(message).toContain('connector.event');
+    expect(tables.connector_event_subscriptions[0]?.filters).toEqual({});
+  });
+
+  test('wrong namespaces, malformed or overlong names and per-subscription secrets are refused', async () => {
+    const { app, tables, path } = await managementFixture();
+    for (const input of [
+      { eventKey: 'connector.other-provider.item.created' },
+      { eventKey: 'connector.fixture-provider..created' },
+      { eventKey: 'custom.fixture-provider.item.created' },
+      { eventKey: `connector.fixture-provider.${'a'.repeat(100)}` },
+      { eventKey: TYPED_EVENT, verificationSecret: SECRET },
+    ]) {
+      const res = await app.request(path, requestBody('POST', { ingress: 'connector', ...input }));
+      expect(res.status).toBe(400);
+      expect(await res.text()).not.toContain(SECRET);
+    }
+    expect(tables.connector_event_subscriptions).toHaveLength(0);
+  });
+
+  test('a connector-ingress test returns 409 without a journal row or subscription change', async () => {
+    const { app, tables, path } = await managementFixture();
+    const res = await app.request(path, requestBody('POST', { ingress: 'connector', eventKey: GLOB }));
+    const { data } = SubscriptionResponseSchema.parse(await res.json());
+    const before = structuredClone(tables.connector_event_subscriptions);
+    const testResponse = await app.request(`${path}/${data.id}/test`, requestBody('POST', { payload: { project: 7 } }));
+    expect(testResponse.status).toBe(409);
+    expect(z.object({ error: z.object({ code: z.string() }) }).parse(await testResponse.json()).error.code).toBe(
+      'CONNECTOR_INGRESS_TEST_UNSUPPORTED',
+    );
+    expect(tables.omni_events).toHaveLength(0);
+    expect(tables.connector_event_subscriptions).toEqual(before);
+  });
+
+  test('ClickUp creation keeps requiring its target and secret with ingress omitted or explicit', async () => {
+    const { db, tables } = createConnectorTestDb({
+      automations: [{ id: LEGACY_TARGET, triggerEventType: 'connector.event', tenantId: TENANT_A }],
+    });
+    const app = mount({ db, tenantId: TENANT_A, fetchImpl: clickupFetch({ valid: true }).fetch });
+    const created = z.object({ data: z.object({ id: z.string() }) }).parse(await (await postConnector(app)).json());
+    const path = `/connectors/${created.data.id}/subscriptions`;
+    for (const input of [
+      { eventKey: 'taskStatusUpdated', targetAutomationId: LEGACY_TARGET, verificationSecret: SECRET },
+      {
+        ingress: 'subscription',
+        eventKey: 'taskCreated',
+        targetAutomationId: LEGACY_TARGET,
+        verificationSecret: SECRET,
+      },
+    ]) {
+      const res = await app.request(path, requestBody('POST', input));
+      expect(res.status).toBe(201);
+      const { data } = SubscriptionResponseSchema.parse(await res.json());
+      expect(data.ingress).toBe('subscription');
+      expect(data.targetAutomationId).toBe(LEGACY_TARGET);
+      expect(data.inboundUrl).toBe(`/api/v2/connectors/events/${data.id}`);
+    }
+    for (const input of [
+      { eventKey: 'taskCreated', verificationSecret: SECRET },
+      { eventKey: 'taskCreated', targetAutomationId: LEGACY_TARGET },
+    ]) {
+      expect((await app.request(path, requestBody('POST', input))).status).toBe(400);
+    }
+    expect(tables.connector_event_subscriptions).toHaveLength(2);
+  });
+
+  test('agent manifests still refuse every connector namespace in accepts and publishes', () => {
+    for (const type of ['connector.event', TYPED_EVENT, GLOB]) {
+      expect(AgentEventManifestSchema.safeParse({ accepts: [{ event: type }] }).success).toBe(false);
+      expect(AgentEventManifestSchema.safeParse({ publishes: [{ event: type }] }).success).toBe(false);
+    }
   });
 });

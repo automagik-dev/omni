@@ -9,6 +9,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
+import { z } from 'zod';
 import { openApiSpec } from '../routes/openapi';
 
 type Operation = Record<string, unknown> & {
@@ -39,6 +40,45 @@ const AUTHENTICATED: Array<[string, string, string]> = [
 ];
 
 describe('connector OpenAPI paths', () => {
+  test('management schemas publish write-only hook secrets and both subscription ingress contracts', () => {
+    const schema = (name: string) =>
+      z
+        .object({
+          properties: z.record(z.string(), z.unknown()).optional(),
+          anyOf: z
+            .array(
+              z.object({
+                properties: z.record(z.string(), z.unknown()),
+                required: z.array(z.string()),
+              }),
+            )
+            .optional(),
+          additionalProperties: z.boolean().optional(),
+        })
+        .parse(openApiSpec.components?.schemas?.[name]);
+    for (const name of ['CreateConnectorBody', 'UpdateConnectorBody']) {
+      expect(schema(name).properties?.hookSecret).toMatchObject({ writeOnly: true, minLength: 8 });
+    }
+    const variants = schema('CreateSubscriptionBody').anyOf;
+    expect(variants).toHaveLength(2);
+    expect(variants?.[0]?.required).toEqual(['eventKey', 'targetAutomationId', 'verificationSecret']);
+    expect(variants?.[1]?.required).toEqual(['ingress', 'eventKey']);
+    expect(variants?.[1]?.properties.ingress).toMatchObject({ enum: ['connector'] });
+    expect(variants?.[1]?.properties.eventKey).toMatchObject({ maxLength: 100 });
+    expect(variants?.[1]?.properties).not.toHaveProperty('verificationSecret');
+    expect(schema('UpdateSubscriptionBody').properties).not.toHaveProperty('ingress');
+    expect(schema('UpdateSubscriptionBody').additionalProperties).toBe(false);
+    expect(schema('EventSubscription').properties?.targetAutomationId).toMatchObject({ nullable: true });
+    expect(schema('EventSubscription').properties?.ingress).toMatchObject({ enum: ['subscription', 'connector'] });
+    expect(schema('Connector').properties).toMatchObject({
+      hasHookSecret: { type: 'boolean' },
+      totalUnmatched: { type: 'integer' },
+      lastUnmatchedAt: { nullable: true },
+      lastUnmatchedEventType: { nullable: true },
+    });
+    expect(operation('/connectors/{id}/subscriptions/{subscriptionId}/test', 'post').responses).toHaveProperty('409');
+  });
+
   test('every authenticated route is documented with its scope', () => {
     for (const [path, method, scope] of AUTHENTICATED) {
       expect(operation(path, method)['x-omni-scope']).toBe(scope);
@@ -59,7 +99,7 @@ describe('connector OpenAPI paths', () => {
     expect(connectorSchemas.length).toBeGreaterThanOrEqual(5);
     // `hasCredentials` (a boolean) and `credentialFields` (labels + a secret
     // FLAG) are metadata, not material. Anything else matching is a leak.
-    const metadata = new Set(['hasCredentials', 'credentialFields']);
+    const metadata = new Set(['hasCredentials', 'hasHookSecret', 'credentialFields']);
     for (const [name, schema] of connectorSchemas) {
       const suspicious = Object.keys((schema.properties ?? {}) as Record<string, unknown>).filter(
         (property) => !metadata.has(property) && /credential|secret|token/i.test(property),

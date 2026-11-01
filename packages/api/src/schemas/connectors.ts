@@ -3,11 +3,11 @@
  *
  * ONE definition serves both the route validator and the OpenAPI document, so
  * the published contract cannot drift from what the route accepts. The two
- * secret values (`credentials`, `verificationSecret`) are WRITE-ONLY: no
- * response schema has them, and `Connector.hasCredentials` is the only derived
- * fact exposed.
+ * secret values (`credentials`, `verificationSecret`, `hookSecret`) are
+ * write-only: responses expose availability flags rather than secret material.
  */
 
+import { EVENT_TYPE_TOKEN_PATTERN } from '@omni/core';
 import { z } from '../lib/zod-openapi';
 
 /** Provider manifest id; unknown ids are refused by the catalog, not by shape. */
@@ -25,12 +25,26 @@ const VerificationSecretSchema = z
 
 const ConnectorStatusSchema = z.enum(['connected', 'error', 'revoked']);
 const SubscriptionStatusSchema = z.enum(['active', 'paused', 'error']);
+const HookSecretSchema = z.string().min(8).max(512).openapi({
+  description: 'Connector delivery secret; sealed per tenant, write-only. PATCH rotates it.',
+  writeOnly: true,
+});
+const TypedConnectorEventKeySchema = z
+  .string()
+  .min(1)
+  .max(100)
+  .regex(/^connector\.[a-z][a-z0-9-]{1,63}\./, 'Event key must be under connector.{provider}.')
+  .refine((key) => EVENT_TYPE_TOKEN_PATTERN.test(key.endsWith('*') ? `${key.slice(0, -1)}wildcard` : key), {
+    message: 'Event key must be a typed name or a trailing-* prefix glob',
+  })
+  .openapi({ description: 'Exact connector.{provider}. event name, or a trailing-* prefix glob without a target' });
 
 export const CreateConnectorBodySchema = z
   .object({
     provider: ProviderIdSchema.openapi({ description: 'Provider manifest id' }),
     name: z.string().min(1).max(255).openapi({ description: 'Display name, unique per tenant' }),
     credentials: CredentialsSchema,
+    hookSecret: HookSecretSchema.optional(),
     config: z
       .record(z.string(), z.unknown())
       .optional()
@@ -42,9 +56,12 @@ export const UpdateConnectorBodySchema = z
   .object({
     name: z.string().min(1).max(255).optional(),
     credentials: CredentialsSchema.optional(),
+    hookSecret: HookSecretSchema.optional(),
     config: z.record(z.string(), z.unknown()).optional(),
   })
-  .refine((body) => Object.keys(body).length > 0, { message: 'Provide at least one of name, credentials or config' })
+  .refine((body) => Object.keys(body).length > 0, {
+    message: 'Provide at least one of name, credentials, config or hookSecret',
+  })
   .openapi('UpdateConnectorBody');
 
 export const ConnectorSchema = z
@@ -56,6 +73,10 @@ export const ConnectorSchema = z
     config: z.record(z.string(), z.unknown()),
     /** True when a sealed credential exists AND opens under the row's tenant. */
     hasCredentials: z.boolean(),
+    hasHookSecret: z.boolean(),
+    totalUnmatched: z.number().int(),
+    lastUnmatchedAt: z.string().datetime().nullable(),
+    lastUnmatchedEventType: z.string().nullable(),
     lastValidatedAt: z.string().datetime().nullable(),
     lastError: z.string().nullable(),
     lastErrorCode: z.string().nullable(),
@@ -69,8 +90,9 @@ export const EventSubscriptionSchema = z
     id: z.string().uuid(),
     connectorId: z.string().uuid(),
     providerEventKey: z.string(),
+    ingress: z.enum(['subscription', 'connector']),
     filters: z.record(z.string(), z.unknown()),
-    targetAutomationId: z.string().uuid(),
+    targetAutomationId: z.string().uuid().nullable(),
     status: SubscriptionStatusSchema,
     inboundUrl: z.string(),
     lastDeliveryAt: z.string().datetime().nullable(),
@@ -84,13 +106,25 @@ export const EventSubscriptionSchema = z
   })
   .openapi('EventSubscription');
 
-export const CreateSubscriptionBodySchema = z
+const SubscriptionIngressBodySchema = z.object({
+  ingress: z.literal('subscription').optional(),
+  eventKey: z.string().min(1).max(100).openapi({ description: 'Manifest event key, e.g. "taskStatusUpdated"' }),
+  filters: z.record(z.string(), z.unknown()).optional(),
+  targetAutomationId: z.string().uuid(),
+  verificationSecret: VerificationSecretSchema,
+});
+
+const ConnectorIngressBodySchema = z
   .object({
-    eventKey: z.string().min(1).max(100).openapi({ description: 'Manifest event key, e.g. "taskStatusUpdated"' }),
+    ingress: z.literal('connector'),
+    eventKey: TypedConnectorEventKeySchema,
     filters: z.record(z.string(), z.unknown()).optional(),
-    targetAutomationId: z.string().uuid(),
-    verificationSecret: VerificationSecretSchema,
+    targetAutomationId: z.string().uuid().optional(),
   })
+  .strict();
+
+export const CreateSubscriptionBodySchema = z
+  .union([SubscriptionIngressBodySchema, ConnectorIngressBodySchema])
   .openapi('CreateSubscriptionBody');
 
 export const UpdateSubscriptionBodySchema = z
@@ -100,6 +134,7 @@ export const UpdateSubscriptionBodySchema = z
     targetAutomationId: z.string().uuid().optional(),
     verificationSecret: VerificationSecretSchema.optional(),
   })
+  .strict()
   .refine((body) => Object.keys(body).length > 0, {
     message: 'Provide at least one of status, filters, targetAutomationId or verificationSecret',
   })
