@@ -51,6 +51,7 @@ import {
   createDbHandle,
   deadLetterEvents,
   omniEvents,
+  unwrapDbError,
 } from '@omni/db';
 import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { eq, sql } from 'drizzle-orm';
@@ -671,6 +672,25 @@ postgresDescribe('connector ingress under enforced RLS (real PostgreSQL)', () =>
       expect(unowned).toMatchObject({ tenantId: null, status: 'pending', autoRetryCount: 0, lastRetryAt: null });
     } finally {
       await subscription.unsubscribe();
+    }
+  });
+
+  test('ambient summary and retention reads propagate missing-scope failures', async () => {
+    if (!handle) throw new Error('missing enforcement fixture');
+    // Keep a matching retention row so the DELETE must evaluate its RLS policy.
+    await handle.db
+      .update(deadLetterEvents)
+      .set({
+        status: 'resolved',
+        createdAt: new Date(0),
+      })
+      .where(eq(deadLetterEvents.id, unownedDeadLetterId));
+    for (const read of ['getPendingSummary', 'getStats', 'cleanupExpired'] as const) {
+      await expect(
+        services.deadLetters[read]().catch((error) => {
+          throw unwrapDbError(error);
+        }),
+      ).rejects.toMatchObject({ code: '42501' });
     }
   });
 });

@@ -1476,8 +1476,8 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
       '0093 derives new rows from authenticated scope or persisted source ownership (#1467). Requests use ' +
       'scopedHandle; auto-retry and its scheduler pending count enumerate active tenants on the auth plane ' +
       'and scope discrete DB blocks. Enforced coverage: connector-ingress-enforced-rls-postgres.test.ts and ' +
-      'http-two-tenant-postgres.test.ts. Still pending: legacy NULL-row backfill, ambient health summaries ' +
-      'and retention cleanup; those reads fail closed under enforcement rather than bypassing RLS.',
+      'http-two-tenant-postgres.test.ts. Still pending: legacy NULL-row backfill, getPendingSummary, getStats, ' +
+      'and cleanupExpired; ambient RLS errors must propagate rather than report an empty queue.',
   },
   {
     // G5-CONVERTED. Both paths now reach a tenant transaction. The route-facing

@@ -60,7 +60,10 @@ export interface TenantOwnershipSpec {
   readonly table: string;
   /** Drizzle export name in `schema.ts`. */
   readonly drizzle: string;
+  /** Frozen G2 derivation; later migrations may supply the insert rule below. */
   readonly derivation: OwnershipDerivation;
+  /** Post-G2 insert ownership installed by an additive migration. */
+  readonly insertOwnership?: 'context-or-event';
   readonly volume: TableVolume;
   /**
    * FK-covered owning parents. G2 adds one `NOT VALID` composite foreign key
@@ -115,7 +118,8 @@ export interface TenantUniqueIndexSpec {
  * owns. Guessing a root rule for them would let authenticated context stamp
  * ownership onto rows G0 never authorised, so they are `unowned` in G2 and their
  * ownership stays NULL until the G6 backfill resolves it. This is the
- * fail-closed reading of the G2 boundary, not an omission.
+ * fail-closed reading of the G2 boundary, not an omission. Post-G2 insert
+ * rules are recorded separately; 0093 gives dead letters context/event ownership.
  */
 export const TENANT_OWNERSHIP_SPECS: readonly TenantOwnershipSpec[] = [
   {
@@ -343,13 +347,14 @@ export const TENANT_OWNERSHIP_SPECS: readonly TenantOwnershipSpec[] = [
   {
     table: 'dead_letter_events',
     drizzle: 'deadLetterEvents',
-    derivation: 'unowned',
+    derivation: 'unowned', // Frozen 0041 baseline; 0093 installs the rule below.
+    insertOwnership: 'context-or-event',
     volume: 'high',
     parents: [],
     compositeFkTarget: false,
     g0Rule: "tenant_id captured from the failed event's trusted context",
     parentExclusions: [
-      'event_id is a varchar NATS event identifier with no foreign key to omni_events, so no composite FK can cover it. G6 resolves ownership from the source event.',
+      'event_id is a varchar NATS event identifier with no foreign key to omni_events, so no composite FK can cover it. 0093 stamps new inserts from authenticated scope or a visible persisted source event; otherwise ownership remains NULL. G6 must not derive schema-refusal ownership from caller-chosen historical event_ids.',
     ],
   },
   {

@@ -425,9 +425,8 @@ export class WebhookService {
       ...payload,
     };
 
-    // Provisional id: referenced by the schema gate's dead-letter entry and
-    // returned when no bus is wired; the publish path below replaces it with
-    // the PUBLISHED event's id (#956).
+    // Fallback identity when no bus is wired; the publish path below returns
+    // the PUBLISHED event's id (#956). Schema refusals have their own identity.
     const eventId = generateId();
 
     // Schema-registry gate (issue #959): a registered type's payload must
@@ -436,13 +435,7 @@ export class WebhookService {
     // never enters the journal; unregistered types pass through (opt-in) —
     // unless the source enforces strict schemas (issue #1000), in which case
     // an unregistered type is refused with reason `schema_not_registered`.
-    await this.enforceRegisteredSchema(
-      eventType,
-      eventPayload,
-      eventId,
-      `webhook '${sourceName}'`,
-      source.strictSchemas,
-    );
+    await this.enforceRegisteredSchema(eventType, eventPayload, `webhook '${sourceName}'`, source.strictSchemas);
 
     // Ingress idempotency (#958): derive the delivery-identity key from the
     // source's template and CLAIM it by inserting the journal row — the
@@ -632,7 +625,6 @@ export class WebhookService {
   private async enforceRegisteredSchema(
     eventType: CustomEventType,
     payload: Record<string, unknown>,
-    eventId: string,
     origin: string,
     strict = false,
   ): Promise<void> {
@@ -640,11 +632,12 @@ export class WebhookService {
       return;
     }
     const verdict = await this.eventSchemas.validate(eventType, payload);
-
+    // Refusals have no persisted source event. Correlation and causation IDs
+    // belong to the producer's flow, so they cannot identify a DLQ owner.
     if (strict && !verdict.registered) {
       const errors = [`no enabled schema is registered for event type '${eventType}'`];
       await this.deadLetters?.createSchemaValidationFailure({
-        eventId,
+        eventId: generateId(),
         eventType,
         subject: eventType,
         payload,
@@ -665,7 +658,7 @@ export class WebhookService {
     }
 
     await this.deadLetters?.createSchemaValidationFailure({
-      eventId,
+      eventId: generateId(),
       eventType,
       subject: eventType,
       payload,
@@ -696,13 +689,13 @@ export class WebhookService {
     rawMetadata?: TriggerEventMetadata,
   ): Promise<TriggerEventResult> {
     const metadata = await this.inheritParentCorrelation(rawMetadata);
-    // Provisional id for the schema gate's dead-letter reference and the
-    // no-bus fallback; the publish path returns the PUBLISHED event's id (#956).
-    const provisionalId = metadata?.correlationId ?? generateId();
+    // Fallback identity when no bus is wired. Flow metadata never supplies
+    // an event identity; publishing returns the PUBLISHED event's id (#956).
+    const provisionalId = generateId();
 
     // Same gate as the webhook ingress: a registered type's contract holds on
     // every publish path into the journal (issue #959).
-    await this.enforceRegisteredSchema(eventType, payload, provisionalId, 'manual trigger');
+    await this.enforceRegisteredSchema(eventType, payload, 'manual trigger');
 
     const bus = this.eventBus;
     if (!bus) {
