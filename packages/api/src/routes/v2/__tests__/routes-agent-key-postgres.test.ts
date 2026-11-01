@@ -193,6 +193,28 @@ postgresDescribe('routed agent key lifecycle (real PostgreSQL)', () => {
     });
   }
 
+  for (const tenantId of [null, crypto.randomUUID()]) {
+    test(`replacing a mixed key on a route write restores all of its live bindings (${tenantId ?? 'legacy'})`, async () => {
+      const owner = await agent(tenantId);
+      const bound = await instance(tenantId, owner.id);
+      const stale = await instance(tenantId);
+      const routed = await instance(tenantId);
+      const mixed = await keys.create({
+        name: keyName(owner),
+        instanceIds: [bound.id, stale.id],
+        scopes: ['messages:send'],
+        createdBy: 'system:auto-provision',
+      });
+      await keys.validate(mixed.plainTextKey);
+      const route = await createRoute(routed, owner);
+      expect((await keys.getById(mixed.key.id))?.status).toBe('revoked');
+      expect(await keys.validate(mixed.plainTextKey)).toBeNull();
+      const fresh = await keys.findAgentKeyByName(keyName(owner));
+      expect(new Set(fresh?.instanceIds)).toEqual(new Set([bound.id, routed.id]));
+      expect(await dispatch(routed, route.chatId)).toBe(fresh?.id);
+    });
+  }
+
   test('retarget and clear revoke emptied keys; rebind provisions a fresh key', async () => {
     const first = await agent();
     const second = await agent();
@@ -211,6 +233,21 @@ postgresDescribe('routed agent key lifecycle (real PostgreSQL)', () => {
     expect(fresh?.instanceIds).toEqual([target.id]);
     expect(await dispatch(target, route.chatId)).toBe(fresh?.id);
   });
+
+  for (const tenantId of [null, crypto.randomUUID()]) {
+    test(`a second route alone retains the grant until the final route is deleted (${tenantId ?? 'legacy'})`, async () => {
+      const owner = await agent(tenantId);
+      const target = await instance(tenantId);
+      const first = await createRoute(target, owner);
+      const second = await createRoute(target, owner);
+      const key = await keys.findAgentKeyByName(keyName(owner));
+      expect((await app.request(first.path, { method: 'DELETE' })).status).toBe(200);
+      expect((await keys.getById(key?.id ?? ''))?.status).toBe('active');
+      expect((await keys.getById(key?.id ?? ''))?.instanceIds).toEqual([target.id]);
+      expect((await app.request(second.path, { method: 'DELETE' })).status).toBe(200);
+      expect((await keys.getById(key?.id ?? ''))?.status).toBe('revoked');
+    });
+  }
 
   test('another route or the default binding retains the grant until the final removal', async () => {
     const owner = await agent();
@@ -240,6 +277,9 @@ postgresDescribe('routed agent key lifecycle (real PostgreSQL)', () => {
     expect((await keys.getById(key?.id ?? ''))?.instanceIds).toEqual([target.id]);
     expect((await keys.findAgentKeyByName(keyName(next)))?.instanceIds).toEqual([target.id]);
     expect(await dispatch(target, route.chatId)).toBe(key?.id);
+    expect((await app.request(route.path, { method: 'DELETE' })).status).toBe(200);
+    expect((await keys.getById(key?.id ?? ''))?.status).toBe('revoked');
+    expect((await keys.findAgentKeyByName(keyName(next)))?.instanceIds).toEqual([target.id]);
   });
 
   test('a later default binding extends the proven legacy key of a route-only agent', async () => {

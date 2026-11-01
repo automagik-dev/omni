@@ -657,9 +657,9 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     table: 'agent_routes',
     class: 'control-plane',
     justification:
-      'Failure-only startup coverage snapshot counts agents without usable system keys, including route-only agents. ' +
-      'Legacy mode reads on the ambient database; enforcement enumerates tenant IDs only on the auth plane and reads ' +
-      'each tenant through runInWorkerTenantScope. Names stay in the single startup failure log; public health receives only a count.',
+      'Startup repair stabilizes existing route rows while rebuilding agent key grants from the shared default/route graph. ' +
+      'Legacy mode uses the ambient database; enforcement enumerates tenant IDs only on the auth plane and locks ' +
+      'each tenant through runInWorkerTenantScope. Healthy startup takes no repair transaction or row locks.',
   },
   {
     file: 'packages/api/src/services/agent-key-reconciliation.ts',

@@ -142,12 +142,11 @@ export async function syncRouteAgentKey(pool: Database, instanceId: string, agen
     const stale = staleBindingKeys(graph, active);
     for (const key of stale)
       await keys.revoke(key.id, 'Agent key contains grants without a live binding', 'system:auto-provision');
-    await grantBindingKey(
-      keys,
-      graph,
-      active.filter((key) => !stale.includes(key)),
-      binding,
-    );
+    const usable = active.filter((key) => !stale.includes(key));
+    // Replacing a mixed credential must also restore its other live bindings,
+    // not silence those instances until the next startup repair.
+    const bindings = stale.length > 0 ? graph.bindings.filter((row) => row.agentId === agentId) : [binding];
+    for (const current of bindings) await grantBindingKey(keys, graph, usable, current);
     return;
   }
   for (const key of active) {
