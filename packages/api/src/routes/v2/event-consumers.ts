@@ -13,8 +13,8 @@
  * — same invariant as eventSchemasRoutes (#959).
  *
  * Every handler passes the caller's key (id + instance restriction, read
- * the same way as the /events routes) to the service. Delivery always respects
- * the key's instance restriction, including for unscoped consumers.
+ * the same way as the /events routes) to the service. Restricted keys need a
+ * scoped consumer to pull, ack or delete; read-only streams apply their instance filter.
  */
 
 import { zValidator } from '@hono/zod-validator';
@@ -143,7 +143,7 @@ eventConsumersRoutes.get(
     const services = c.get('services');
     const caller = consumerCaller(c);
     // 404 (missing, or scoped and not visible to this key) / 400 (shared)
-    // while a JSON error can still be returned; resolved exactly as pull.
+    // while a JSON error can still be returned. Streams never mutate the cursor.
     const consumer = await services.eventConsumers.getStreamable(name, caller);
     const start = resolveStreamStart({
       lastEventId: lastEventId === undefined ? undefined : Number(lastEventId),

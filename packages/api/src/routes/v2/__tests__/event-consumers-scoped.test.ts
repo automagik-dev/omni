@@ -86,7 +86,7 @@ async function hitEveryRoute(app: Hono<{ Variables: AppVariables }>): Promise<nu
   return responses.map((r) => r.status);
 }
 
-describe('consumer routes forward the caller (no new option: identical behaviour)', () => {
+describe('consumer routes forward the caller', () => {
   for (const [label, key, expected] of [
     ['restricted key', RESTRICTED_KEY, { keyId: RESTRICTED_KEY.id, instanceIds: [INST_A, INST_B] }],
     ['unrestricted key', UNRESTRICTED_KEY, { keyId: UNRESTRICTED_KEY.id, instanceIds: null }],
@@ -218,7 +218,7 @@ describe('POST /events/consumers resolves scoped instance ids (fake database)', 
     return {
       status: res.status,
       body: (await res.json()) as {
-        data?: { instanceIds?: string[] };
+        data?: { scoped?: boolean; instanceIds?: string[]; ownerKeyId?: string };
         error?: { code?: string; message?: string; details?: unknown };
       },
     };
@@ -250,6 +250,20 @@ describe('POST /events/consumers resolves scoped instance ids (fake database)', 
     expect(calls).toEqual({ instanceReads: 1, inserts: 1 });
   });
 
+  test('restricted keys automatically create scoped consumers, including scoped: false', async () => {
+    for (const body of [{}, { scoped: false }]) {
+      const { db, calls } = fakeDb([INST_A, INST_B]);
+      const res = await create(db, body, { ...RESTRICTED_KEY, scopes: ['events:write'] });
+      expect(res.status).toBe(201);
+      expect(res.body.data).toMatchObject({
+        scoped: true,
+        instanceIds: [INST_A, INST_B],
+        ownerKeyId: RESTRICTED_KEY.id,
+      });
+      expect(calls).toEqual({ instanceReads: 1, inserts: 1 });
+    }
+  });
+
   test('an uppercase id still resolves against the lowercase column value', async () => {
     const { db } = fakeDb([INST_C]);
     const res = await create(db, { scoped: true, instanceIds: [INST_C.toUpperCase()] }, UNRESTRICTED_KEY);
@@ -264,4 +278,31 @@ describe('POST /events/consumers resolves scoped instance ids (fake database)', 
       expect(calls).toEqual({ instanceReads: 0, inserts: 1 });
     }
   });
+});
+
+// A restricted events:write key must receive a useful 403 before any scan or mutation,
+// even when it guesses a valid unscoped name or submits an SSE position to /ack.
+describe('unscoped consumer mutations fail closed over HTTP', () => {
+  const db = {
+    select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ name: 'legacy', scoped: false }] }) }) }),
+  } as unknown as Database;
+  const app = mount(new EventConsumerService(db), { ...RESTRICTED_KEY, scopes: ['events:write'] });
+  for (const [method, path, body] of [
+    ['POST', '/events/consumers/legacy/pull', undefined],
+    ['POST', '/events/consumers/legacy/ack', { cursor: 100 }],
+    ['POST', '/events/consumers/legacy/ack', { leaseId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd' }],
+    ['DELETE', '/events/consumers/legacy', undefined],
+  ] as const) {
+    test(`${method} ${path} ${JSON.stringify(body)}`, async () => {
+      const res = await app.request(path, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({
+        error: { code: 'FORBIDDEN', message: expect.stringContaining('Create a scoped consumer') },
+      });
+    });
+  }
 });

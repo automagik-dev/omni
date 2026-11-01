@@ -12,7 +12,7 @@ import { ValidationError } from '@omni/core';
 import type { EventBus } from '@omni/core';
 import type { ConsumerAccessFilter, Database, DurableConsumer, OmniEvent, SharedLeaseState } from '@omni/db';
 import { durableConsumers, omniEvents } from '@omni/db';
-import { type SQL, and, gt } from 'drizzle-orm';
+import { type SQL, and, gt, inArray } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import {
   type ConsumerCaller,
@@ -260,14 +260,55 @@ describe('scanPage access predicate (via pull)', () => {
     expect(render(pool.scanWheres[0])).toEqual(expectedWhere());
   });
 
-  test('an unscoped consumer scan always carries the restricted caller instance clause', async () => {
+  test('restricted keys cannot pull or lease unscoped consumers, including empty allow-lists', async () => {
     for (const shared of [false, true]) {
       for (const instanceIds of [['11111111-1111-4111-8111-1111111111aa'], []]) {
         const pool = mockPool(consumerRow({ shared }));
-        await new EventConsumerService(pool.db).pull('c1', {}, { keyId: 'restricted', instanceIds });
-        expect(pool.scanWheres).toHaveLength(1);
-        expect(render(pool.scanWheres[0])).toEqual(expectedWhere(instanceIds));
+        await expect(
+          new EventConsumerService(pool.db).pull('c1', {}, { keyId: 'restricted', instanceIds }),
+        ).rejects.toMatchObject({ code: 'FORBIDDEN', message: expect.stringContaining('Create a scoped consumer') });
+        expect(pool.scanWheres).toEqual([]);
+        expect(pool.cursorUpdates).toEqual([]);
       }
+    }
+  });
+
+  test('scoped pulls keep both the consumer and caller instance predicates', async () => {
+    const instanceId = '11111111-1111-4111-8111-1111111111aa';
+    const keyId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const pool = mockPool(consumerRow({ scoped: true, ownerKeyId: keyId, instanceIds: [instanceId] }));
+    await new EventConsumerService(pool.db).pull('c1', {}, { keyId, instanceIds: [instanceId] });
+    expect(render(pool.scanWheres[0])).toEqual(
+      render(
+        and(
+          gt(omniEvents.journalSeq, 0),
+          eventTypeFilterClause(['message.received'], undefined),
+          inArray(omniEvents.instanceId, [instanceId]),
+          streamInstanceClause([instanceId]),
+        ),
+      ),
+    );
+  });
+
+  test('restricted unscoped ack, lease-ack and delete fail before any mutation', async () => {
+    const pool = mockPool(consumerRow());
+    const service = new EventConsumerService(pool.db);
+    const caller = { keyId: 'restricted', instanceIds: [] };
+    await expect(service.ack('c1', 100, undefined, caller)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(service.ack('c1', 100, 'lease', caller)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(service.delete('c1', caller)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(pool.cursorUpdates).toEqual([]);
+  });
+
+  test('inspect and list caughtUp use the caller filter, including an empty allow-list', async () => {
+    for (const instanceIds of [['11111111-1111-4111-8111-1111111111aa'], []]) {
+      const pool = mockPool(consumerRow(), 10);
+      const service = new EventConsumerService(pool.db);
+      const caller = { keyId: 'restricted', instanceIds };
+      expect((await service.inspect('c1', caller)).caughtUp).toBe(true);
+      expect((await service.list(caller))[0]?.caughtUp).toBe(true);
+      expect(pool.scanWheres).toHaveLength(2);
+      for (const clause of pool.scanWheres) expect(render(clause)).toEqual(expectedWhere(instanceIds));
     }
   });
 
@@ -427,8 +468,8 @@ describe('instance-scoped consumers (opt-in, 0082)', () => {
     }
   }
 
-  test('no new option: identical behaviour — an unscoped create resolves to the legacy columns for every key', () => {
-    for (const caller of [...Object.values(callers), undefined]) {
+  test('unrestricted callers keep legacy unscoped creates', () => {
+    for (const caller of [unrestricted, callers.keyless, undefined]) {
       expect(resolveConsumerScope({}, caller)).toEqual({ scoped: false, instanceIds: null, ownerKeyId: null });
       expect(resolveConsumerScope({ scoped: false }, caller)).toEqual({
         scoped: false,
@@ -438,19 +479,23 @@ describe('instance-scoped consumers (opt-in, 0082)', () => {
     }
   });
 
-  test('an unscoped consumer is visible to every caller; delivery is restricted separately', () => {
+  test('unscoped consumers remain visible for read-only inspection and streaming', () => {
     const consumer = { scoped: false, ownerKeyId: null };
     for (const caller of [...Object.values(callers), undefined]) {
       expect(canAccessConsumer(consumer, caller)).toBe(true);
     }
   });
 
-  test('no new option: instanceIds without scoped: true is ignored, as an unknown field was before', () => {
+  test('unrestricted unscoped creates ignore instanceIds; restricted creates always validate it', () => {
     const unscoped = { scoped: false, instanceIds: null, ownerKeyId: null } as const;
-    expect(resolveConsumerScope({ instanceIds: [INST_A] }, restricted)).toEqual(unscoped);
+    expect(resolveConsumerScope({ instanceIds: [INST_A] }, restricted)).toEqual({
+      scoped: true,
+      instanceIds: [INST_A],
+      ownerKeyId: KEY_RESTRICTED,
+    });
     expect(resolveConsumerScope({ scoped: false, instanceIds: [INST_A] }, unrestricted)).toEqual(unscoped);
     expect(resolveConsumerScope({ instanceIds: ['not-a-uuid', 42] }, undefined)).toEqual(unscoped);
-    expect(resolveConsumerScope({ instanceIds: 'anything' }, restricted)).toEqual(unscoped);
+    expect(codeOf(() => resolveConsumerScope({ instanceIds: 'anything' }, restricted))).toBe('VALIDATION');
   });
 
   test('scoped: malformed instanceIds is a 400', () => {
@@ -470,6 +515,17 @@ describe('instance-scoped consumers (opt-in, 0082)', () => {
     expect(narrowToCaller(base, undefined)).toBe(base);
     const unscopedConsumer = { scoped: false, instanceIds: null, ownerKeyId: null } as DurableConsumer;
     expect(narrowToCaller(unscopedConsumer, restricted)).toBe(unscopedConsumer);
+  });
+
+  test('restricted creates are scoped automatically, even when explicitly opting out', () => {
+    for (const input of [{}, { scoped: false }]) {
+      expect(resolveConsumerScope(input, restricted)).toEqual({
+        scoped: true,
+        instanceIds: [INST_A, INST_B],
+        ownerKeyId: KEY_RESTRICTED,
+      });
+      expect(codeOf(() => resolveConsumerScope(input, { ...restricted, instanceIds: [] }))).toBe('VALIDATION');
+    }
   });
 
   test('restricted key: omitted instanceIds = all of the key instances; owner = calling key', () => {

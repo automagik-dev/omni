@@ -879,7 +879,7 @@ postgresDescribe('durable event consumers (#989, real PostgreSQL)', () => {
       owner = { keyId: randomUUID(), instanceIds: [instA] };
       otherRestricted = { keyId: randomUUID(), instanceIds: [instA] };
 
-      await service.create({ name: 'legacy-0082', eventType: 'custom.dc0082.*', startFrom: 'beginning' }, owner);
+      await service.create({ name: 'legacy-0082', eventType: 'custom.dc0082.*', startFrom: 'beginning' }, unrestricted);
       await service.create(
         { name: 'scoped-0082', eventType: 'custom.dc0082.*', startFrom: 'beginning', scoped: true },
         owner,
@@ -896,30 +896,62 @@ postgresDescribe('durable event consumers (#989, real PostgreSQL)', () => {
       }
     });
 
-    test('an unscoped consumer is visible to every key but pull respects the caller instances', async () => {
+    test('unscoped consumers remain inspectable, but restricted keys cannot move their cursor or delete them', async () => {
       const stored = await service.getByName('legacy-0082');
       expect([stored.scoped, stored.instanceIds, stored.ownerKeyId]).toEqual([false, null, null]);
       expect(published.find((p) => p.payload.name === 'legacy-0082')?.payload).not.toHaveProperty('scoped');
-
       for (const caller of [owner, otherRestricted, unrestricted, undefined]) {
         expect((await service.inspect('legacy-0082', caller)).name).toBe('legacy-0082');
         expect((await service.list(caller)).map((c) => c.name)).toContain('legacy-0082');
-        const page = await service.pull('legacy-0082', { limit: 100 }, caller);
-        const labels = caller?.instanceIds ? ['a1', 'a2'] : ['a1', 'b1', 'none', 'b2', 'a2', 'b3'];
-        expect(page.items.map((e) => e.id)).toEqual(labels.map(idOf));
       }
-      const page = await service.pull('legacy-0082', { limit: 2 }, otherRestricted);
-      expect((await service.ack('legacy-0082', page.cursor, undefined, otherRestricted)).cursor).toBe(page.cursor);
-      await service.delete('legacy-0082', otherRestricted);
-      await expect(service.inspect('legacy-0082')).rejects.toThrow(/not found/i);
+      const page = await service.scanForStream('legacy-0082', 0, { tenantId: null, caller: owner });
+      expect(page.items.map((e) => e.id)).toEqual(['a1', 'a2'].map(idOf));
+      await expect(service.ack('legacy-0082', page.through ?? 0, undefined, owner)).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+      await expect(service.delete('legacy-0082', otherRestricted)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect((await service.getByName('legacy-0082')).cursor).toBe(stored.cursor);
     });
 
     for (const shared of [false, true]) {
-      test(`restricted key creating an unscoped consumer cannot pull other instances or NULL rows (shared=${shared})`, async () => {
+      test(`restricted unscoped pull/ack/lease attempts preserve every row for an unrestricted reader (shared=${shared})`, async () => {
+        const name = `refuse-unscoped-${shared}`;
+        await service.create({ name, eventType: 'custom.dc0082.*', startFrom: 'beginning', shared }, unrestricted);
+        const before = await service.getByName(name);
+        for (const caller of [owner, otherRestricted, { ...owner, instanceIds: [] }]) {
+          await expect(service.pull(name, { limit: 1 }, caller)).rejects.toMatchObject({
+            code: 'FORBIDDEN',
+            message: expect.stringContaining('Create a scoped consumer'),
+          });
+          await expect(service.ack(name, await service.head(), undefined, caller)).rejects.toMatchObject({
+            code: 'FORBIDDEN',
+          });
+          await expect(service.ack(name, 0, randomUUID(), caller)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+          await expect(service.delete(name, caller)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        }
+        expect(await service.getByName(name)).toEqual(before);
+        const full = await service.pull(name, { limit: 100 }, unrestricted);
+        expect(full.items.map((e) => e.id)).toEqual(['a1', 'b1', 'none', 'b2', 'a2', 'b3'].map(idOf));
+        if (shared) {
+          await expect(service.ack(name, full.cursor, full.leaseId, owner)).rejects.toMatchObject({
+            code: 'FORBIDDEN',
+          });
+        }
+        await service.ack(name, full.cursor, full.leaseId, unrestricted);
+        expect((await service.pull(name, {}, unrestricted)).items).toEqual([]);
+      });
+
+      test(`restricted creates are scoped automatically and keep scoped delivery (shared=${shared})`, async () => {
         const name = `pull-caller-scope-${shared}`;
-        await service.create({ name, eventType: 'custom.dc0082.*', startFrom: 'beginning', shared }, owner);
-        expect((await service.getByName(name)).scoped).toBe(false);
-        // Even an empty allow-list must match nothing, for fan-out and fresh shared scans.
+        await service.create(
+          { name, eventType: 'custom.dc0082.*', startFrom: 'beginning', shared, scoped: false },
+          owner,
+        );
+        expect(await service.getByName(name)).toMatchObject({
+          scoped: true,
+          instanceIds: [instA],
+          ownerKeyId: owner.keyId,
+        });
         expect((await service.pull(name, {}, { ...owner, instanceIds: [] })).items).toEqual([]);
         const first = await service.pull(name, { limit: 1 }, owner);
         expect(first.items.map((e) => e.id)).toEqual([idOf('a1')]);
@@ -929,12 +961,35 @@ postgresDescribe('durable event consumers (#989, real PostgreSQL)', () => {
       });
     }
 
-    test('a restricted shared pull cannot reclaim other instances or NULL rows from an expired unrestricted lease', async () => {
+    for (const shared of [false, true]) {
+      test(`a refused restricted pull cannot auto-advance an all-filtered page (shared=${shared})`, async () => {
+        const name = `filtered-unscoped-${shared}`;
+        await service.create(
+          {
+            name,
+            eventType: 'custom.dc0082.*',
+            startFrom: 'beginning',
+            shared,
+            filters: [{ field: 'label', operator: 'eq', value: 'never' }],
+          },
+          unrestricted,
+        );
+        const before = await service.getByName(name);
+        await expect(service.pull(name, {}, owner)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        expect(await service.getByName(name)).toEqual(before);
+        const page = await service.pull(name, { limit: 100 }, unrestricted);
+        expect(page.items).toEqual([]);
+        expect((await service.getByName(name)).cursor).toBe(page.cursor);
+        expect(page.cursor).toBeGreaterThan(before.cursor);
+      });
+    }
+
+    test('a refused restricted pull cannot reclaim or discard an expired unrestricted lease', async () => {
       const name = 'pull-caller-scope-reclaim';
       await service.create({ name, eventType: 'custom.dc0082.*', startFrom: 'beginning', shared: true });
-      const first = await service.pull(name, { limit: 100, leaseMs: 1 }, unrestricted);
-      expect(first.items.map((e) => e.id)).toEqual(['a1', 'b1', 'none', 'b2', 'a2', 'b3'].map(idOf));
-      // Expire deterministically rather than depending on wall-clock sleeps.
+      const first = await service.pull(name, { limit: 100 }, unrestricted);
+      const labels = ['a1', 'b1', 'none', 'b2', 'a2', 'b3'].map(idOf);
+      expect(first.items.map((e) => e.id)).toEqual(labels);
       const stored = await service.getByName(name);
       if (!stored.leaseState) throw new Error('missing lease state');
       await db
@@ -946,9 +1001,45 @@ postgresDescribe('durable event consumers (#989, real PostgreSQL)', () => {
           },
         })
         .where(eq(durableConsumers.name, name));
-      const retry = await service.pull(name, { limit: 100 }, owner);
-      expect(retry.items.map((e) => e.id)).toEqual(['a1', 'a2'].map(idOf));
-      expect(retry.leaseId).toBeDefined();
+      const expired = await service.getByName(name);
+      await expect(service.pull(name, {}, owner)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(await service.getByName(name)).toEqual(expired);
+      const nextKey: ConsumerCaller = { keyId: randomUUID(), instanceIds: null };
+      const retry = await service.pull(name, { limit: 100 }, nextKey);
+      expect(retry.items.map((e) => e.id)).toEqual(labels);
+      expect(retry.leaseId).not.toBe(first.leaseId);
+      await expect(service.ack(name, retry.cursor, retry.leaseId, unrestricted)).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+      await service.ack(name, retry.cursor, retry.leaseId, nextKey);
+    });
+
+    test("even an unrestricted key cannot ack another key's scoped shared lease", async () => {
+      const name = 'lease-key-binding';
+      await service.create({ name, eventType: 'custom.dc0082.*', startFrom: 'beginning', shared: true }, owner);
+      const page = await service.pull(name, { limit: 1 }, owner);
+      const before = await service.getByName(name);
+      expect(before.leaseState?.leases[0]).toMatchObject({ keyId: owner.keyId });
+      await expect(service.ack(name, page.cursor, page.leaseId, unrestricted)).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+      expect(await service.getByName(name)).toEqual(before);
+      await service.ack(name, page.cursor, page.leaseId, owner);
+      expect((await service.getByName(name)).cursor).toBe(page.cursor);
+    });
+
+    test('caughtUp uses the current caller instance filter after its key narrows', async () => {
+      const name = 'lag-caller-scope';
+      await service.create(
+        { name, eventType: 'custom.dc0082.*', startFrom: 'beginning' },
+        { ...owner, instanceIds: [instA, instB] },
+      );
+      const page = await service.pull(name, { limit: 100 }, owner);
+      expect(page.items.map((e) => e.id)).toEqual(['a1', 'a2'].map(idOf));
+      await service.ack(name, page.cursor, undefined, owner);
+      expect((await service.inspect(name, owner)).caughtUp).toBe(true);
+      expect((await service.inspect(name, unrestricted)).caughtUp).toBe(false);
+      expect((await service.list(owner)).find((c) => c.name === name)?.caughtUp).toBe(true);
     });
 
     test('a scoped create naming an instance that does not exist is refused (400) and stores nothing', async () => {
