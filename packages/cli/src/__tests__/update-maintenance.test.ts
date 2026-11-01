@@ -239,6 +239,7 @@ describe('runDoctor dryRun contract', () => {
     const cliConfig: Config = { apiKey: 'k', apiUrl: 'http://localhost:8882' } as Config;
     return {
       getPm2Processes: async () => [],
+      listConnectors: async () => ({ items: [], meta: { hasMore: false, cursor: null } }),
       canConnect: async () => true,
       omniDbExists: async () => true,
       findOrphanedDataDirs: () => [],

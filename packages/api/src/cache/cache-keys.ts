@@ -95,6 +95,8 @@ export interface CachedApiKey {
   expiresAt: Date | null;
   scopes: string[];
   instanceIds: string[] | null;
+  /** Missing on older entries; reload provenance before trusting their grants. */
+  createdBy?: string | null;
   profile?: string | null;
   chatAllowlist?: string[];
   instanceAllowlist?: string[];
