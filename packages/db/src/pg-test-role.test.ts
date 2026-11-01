@@ -73,6 +73,15 @@ describe('PostgreSQL test target guard', () => {
   });
 
   test.each([
+    'postgresql://127.0.0.1:7777#,localhost:5432/db',
+    'postgresql://127.0.0.1:65432#,localhost:5432/db',
+    'postgresql:///postgres#ignored',
+  ])('refuses URL fragments before either driver can interpret them: %s', (url) => {
+    expect(() => assertPgTestTarget(url, gateEnv)).toThrow('URL fragments');
+    expect(() => pgRoleUrl(url, 'test_db', role, gateEnv)).toThrow('URL fragments');
+  });
+
+  test.each([
     'OMNI_G1_POSTGRES_URL',
     'OMNI_G2_POSTGRES_URL',
     'OMNI_G3_POSTGRES_URL',
@@ -98,6 +107,13 @@ describe('PostgreSQL test target guard', () => {
   test('accepts only an explicit temporary socket target or gate-registered loopback target', () => {
     expect(() => assertPgTestTarget('postgresql:///postgres', socketEnv)).not.toThrow();
     expect(() => assertPgTestTarget('postgresql://127.0.0.1:7777/postgres', gateEnv)).not.toThrow();
+  });
+
+  test('the actual driver must resolve only the declared socket target', () => {
+    const ambiguousSocket = mkdtempSync(join(socketDir, 'driver,localhost-'));
+    expect(() => assertPgTestTarget('postgresql:///postgres', { ...socketEnv, PGHOST: ambiguousSocket })).toThrow(
+      'postgres.js resolved a different host, port or socket path',
+    );
   });
 
   test.each(['5432', '15432'])('refuses shared port %s on both transports even when registered', (port) => {

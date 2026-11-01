@@ -32,7 +32,7 @@ import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sql } from 'drizzle-orm';
-import type { Sql } from 'postgres';
+import postgres, { type Sql } from 'postgres';
 import type { Database } from './client';
 import { unwrapDbError } from './errors';
 
@@ -201,6 +201,7 @@ export function assertPgTestTarget(url: string, env: Record<string, string | und
   const refuse = (reason: string): never => {
     throw new Error(`Unsafe PostgreSQL test target: ${reason}`);
   };
+  if (url.includes('#')) refuse('URL fragments are not allowed');
   // Inspect the raw authority first: WHATWG and PostgreSQL drivers disagree
   // about comma host lists and whether the first or last @ ends user info.
   const authority = url.match(/^[a-z][a-z\d+.-]*:\/\/([^/?#]*)/i)?.[1] ?? '';
@@ -220,10 +221,35 @@ export function assertPgTestTarget(url: string, env: Record<string, string | und
   if (!parsed.hostname) {
     if (!isTemporarySocketDirectory(env.PGHOST ?? ''))
       refuse('hostless URLs require PGHOST under a temporary directory');
-    return;
-  }
-  if (parsed.hostname !== '127.0.0.1' || !parsed.port || parsed.host !== env.OMNI_PG_TEST_TARGET) {
+  } else if (parsed.hostname !== '127.0.0.1' || !parsed.port || parsed.host !== env.OMNI_PG_TEST_TARGET) {
     refuse('TCP must match the gate-registered 127.0.0.1:port target');
+  }
+  assertDriverTarget(url, parsed, env, port);
+}
+
+/** Parse with the actual driver without issuing a query or opening a socket.
+ * Only supply hostless env fallbacks; overriding a URL's host/port would hide
+ * precisely the parser disagreements this check must detect.
+ */
+function assertDriverTarget(url: string, parsed: URL, env: Record<string, string | undefined>, port: string): void {
+  const client = postgres(url, {
+    ...(!parsed.hostname ? { host: env.PGHOST } : {}),
+    ...(!parsed.port ? { port: Number(env.PGPORT) } : {}),
+  });
+  try {
+    const expectedHost = parsed.hostname || env.PGHOST;
+    const options = client.options;
+    const matches =
+      options.host.length > 0 &&
+      options.host.length === options.port.length &&
+      options.host.every((host, index) => host === expectedHost && options.port[index] === Number(port));
+    const expectedPath = parsed.hostname ? undefined : `${expectedHost}/.s.PGSQL.${Number(port)}`;
+    if (!matches || (options.path || undefined) !== expectedPath) {
+      throw new Error('Unsafe PostgreSQL test target: postgres.js resolved a different host, port or socket path');
+    }
+  } finally {
+    // postgres.js is lazy: no query means no connection to close.
+    void client.end({ timeout: 0 });
   }
 }
 
