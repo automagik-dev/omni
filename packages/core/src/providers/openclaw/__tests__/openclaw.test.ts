@@ -7,7 +7,7 @@
  * Uses mock WebSocket server via Bun's native WebSocket support.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect } from 'bun:test';
 import type { AgentTrigger } from '../../types';
 import { OpenClawClient } from '../client';
 import { OpenClawAgentProvider } from '../provider';
@@ -20,7 +20,17 @@ import type {
   ResFrame,
 } from '../types';
 
+import { test, waitForCondition } from './mock-waits';
+
 // === Mock WebSocket Server ===
+
+const clients = new Set<OpenClawClient>();
+
+function createClient(): OpenClawClient {
+  const client = new OpenClawClient(createClientConfig());
+  clients.add(client);
+  return client;
+}
 
 let server: ReturnType<typeof Bun.serve> | null = null;
 let serverPort = 0;
@@ -95,9 +105,11 @@ function startMockServer() {
   return srv;
 }
 
-function stopMockServer() {
+async function stopMockServer() {
+  for (const client of clients) client.stop();
+  clients.clear();
   if (server) {
-    server.stop(true);
+    await server.stop(true);
     server = null;
   }
   onClientFrame = null;
@@ -137,9 +149,9 @@ function createProviderConfig(overrides?: Partial<OpenClawProviderConfig>): Open
 }
 
 async function createConnectedClient(): Promise<OpenClawClient> {
-  const client = new OpenClawClient(createClientConfig());
+  const client = createClient();
   client.start();
-  await client.waitForReady(5_000);
+  await waitForCondition(() => client.connected, 'the mock gateway handshake');
   return client;
 }
 
@@ -186,14 +198,15 @@ describe('OpenClawClient', () => {
     startMockServer();
   });
 
-  afterEach(() => {
-    stopMockServer();
+  afterEach(async () => {
+    await stopMockServer();
   });
 
   test('should connect and complete handshake', async () => {
-    const client = new OpenClawClient(createClientConfig());
+    const client = createClient();
     client.start();
 
+    await waitForCondition(() => client.connected, 'the mock gateway handshake');
     await client.waitForReady(5_000);
     expect(client.connected).toBe(true);
     expect(client.state).toBe('connected');
@@ -260,8 +273,7 @@ describe('OpenClawClient', () => {
       message: { role: 'assistant', content: 'Hello from Sofia!' },
     });
 
-    // Give events time to arrive
-    await new Promise((r) => setTimeout(r, 200));
+    await waitForCondition(() => events.length >= 2, 'both routed chat events');
 
     expect(events.length).toBe(2);
     expect(events[0]?.state).toBe('delta');
@@ -280,6 +292,13 @@ describe('OpenClawClient', () => {
       events.push(event);
     });
 
+    // Raw listeners run after runId routing. Observing this exact frame proves
+    // the negative assertion is checked after it was processed, not after a sleep.
+    let receivedOther = false;
+    const removeListener = client.addEventListener((event) => {
+      if (event.event === 'chat' && (event.payload as ChatEvent)?.runId === 'run-other') receivedOther = true;
+    });
+
     // Send event for different runId
     sendServerEvent('chat', {
       state: 'delta',
@@ -288,7 +307,8 @@ describe('OpenClawClient', () => {
       message: { role: 'assistant', content: 'Wrong' },
     });
 
-    await new Promise((r) => setTimeout(r, 200));
+    await waitForCondition(() => receivedOther, 'the unregistered chat frame to be processed');
+    removeListener();
     expect(events.length).toBe(0);
 
     client.unregisterAccumulation('run-abc');
@@ -316,12 +336,12 @@ describe('OpenClawClient', () => {
   });
 
   test('should report connection state', async () => {
-    const client = new OpenClawClient(createClientConfig());
+    const client = createClient();
     expect(client.state).toBe('disconnected');
     expect(client.connected).toBe(false);
 
     client.start();
-    await client.waitForReady(5_000);
+    await waitForCondition(() => client.connected, 'the mock gateway handshake');
     expect(client.state).toBe('connected');
     expect(client.connected).toBe(true);
 
@@ -331,7 +351,7 @@ describe('OpenClawClient', () => {
   });
 
   test('should reject requests when not connected', async () => {
-    const client = new OpenClawClient(createClientConfig());
+    const client = createClient();
     // Don't start
 
     await expect(client.request('test')).rejects.toThrow('Not connected to gateway');
@@ -379,12 +399,12 @@ describe('OpenClawAgentProvider', () => {
     startMockServer();
   });
 
-  afterEach(() => {
-    stopMockServer();
+  afterEach(async () => {
+    await stopMockServer();
   });
 
   test('should validate agentId format', () => {
-    const client = new OpenClawClient(createClientConfig());
+    const client = createClient();
 
     // Valid
     expect(

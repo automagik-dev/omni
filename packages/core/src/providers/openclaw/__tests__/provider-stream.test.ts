@@ -1,8 +1,17 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect } from 'bun:test';
 import type { AgentTrigger, StreamDelta } from '../../types';
 import { OpenClawClient } from '../client';
 import { OpenClawAgentProvider } from '../provider';
 import type { AgentEventPayload, OpenClawClientConfig, OpenClawProviderConfig, ReqFrame, ResFrame } from '../types';
+import { test, waitForCondition } from './mock-waits';
+
+const clients = new Set<OpenClawClient>();
+
+function createClient(): OpenClawClient {
+  const client = new OpenClawClient(createClientConfig());
+  clients.add(client);
+  return client;
+}
 
 let server: ReturnType<typeof Bun.serve> | null = null;
 let serverPort = 0;
@@ -65,9 +74,11 @@ function startMockServer() {
   serverPort = srv.port ?? 0;
 }
 
-function stopMockServer() {
+async function stopMockServer() {
+  for (const client of clients) client.stop();
+  clients.clear();
   if (server) {
-    server.stop(true);
+    await server.stop(true);
     server = null;
   }
   onClientFrame = null;
@@ -111,9 +122,9 @@ function createProviderConfig(overrides?: Partial<OpenClawProviderConfig>): Open
 async function createConnectedProvider(
   overrides?: Partial<OpenClawProviderConfig>,
 ): Promise<{ provider: OpenClawAgentProvider; client: OpenClawClient }> {
-  const client = new OpenClawClient(createClientConfig());
+  const client = createClient();
   client.start();
-  await client.waitForReady(5_000);
+  await waitForCondition(() => client.connected, 'the mock gateway handshake');
   const provider = new OpenClawAgentProvider(
     'stream-provider',
     'Stream Provider',
@@ -164,8 +175,8 @@ describe('OpenClawAgentProvider triggerStream', () => {
     startMockServer();
   });
 
-  afterEach(() => {
-    stopMockServer();
+  afterEach(async () => {
+    await stopMockServer();
   });
 
   test('basic thinking → content → final sequence', async () => {
