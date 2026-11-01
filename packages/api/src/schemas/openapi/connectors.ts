@@ -344,4 +344,33 @@ export function registerConnectorSchemas(registry: OpenAPIRegistry): void {
       },
     },
   });
+  registry.registerPath({
+    method: 'post',
+    path: '/connectors/hooks/{connectorId}',
+    operationId: 'receiveConnectorHook',
+    tags: ['Connectors'],
+    summary: 'Public per-connector provider hook',
+    description:
+      'Verifies the raw body with the sealed connector hook secret. Active connector-ingress subscriptions ' +
+      'match typed names and exact filters. Matches share one journal claim and publish; duplicates return 200. ' +
+      'Unmatched deliveries return 202 and update counters without storing the body. Publish failures release the claim.',
+    security: [],
+    request: {
+      params: z.object({ connectorId: z.string().uuid() }),
+      body: { content: { 'application/json': { schema: z.record(z.string(), z.unknown()) } } },
+    },
+    responses: {
+      200: { description: 'Duplicate delivery', content: { 'application/json': { schema: DeliveryReceiptSchema } } },
+      202: { description: 'Accepted or unmatched', content: { 'application/json': { schema: DeliveryReceiptSchema } } },
+      400: { description: 'Invalid JSON object', content: { 'application/json': { schema: ErrorSchema } } },
+      401: {
+        description: 'Uniform verification refusal: unknown connector, missing secret or bad signature',
+        content: { 'application/json': { schema: ErrorSchema } },
+      },
+      500: {
+        description: 'Processing failed; retry may claim again',
+        content: { 'application/json': { schema: ErrorSchema } },
+      },
+    },
+  });
 }

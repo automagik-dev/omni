@@ -186,9 +186,11 @@ export function isSystemEvent(type: string): type is SystemEventType {
   return type.startsWith('system.');
 }
 
-/** Check if an event type is the single connector event. */
-export function isConnectorEvent(type: string): type is typeof CONNECTOR_EVENT_TYPE {
-  return type === CONNECTOR_EVENT_TYPE;
+/** Legacy envelope or a typed provider event accepted by the connector registry. */
+export function isConnectorEvent(type: string): type is ConnectorEventType {
+  return (
+    type === CONNECTOR_EVENT_TYPE || /^connector\.[a-z][a-z0-9-]*\.[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*$/.test(type)
+  );
 }
 
 /**

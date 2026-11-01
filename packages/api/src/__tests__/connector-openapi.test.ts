@@ -91,6 +91,13 @@ describe('connector OpenAPI paths', () => {
     expect(Object.keys(ingress.responses ?? {}).sort()).toEqual(['200', '202', '400', '401', '500']);
   });
 
+  test('per-connector hook is public and documents verification, matching and retry receipts', () => {
+    const hook = operation('/connectors/hooks/{connectorId}', 'post');
+    expect(hook.security).toEqual([]);
+    expect(Object.keys(hook.responses ?? {}).sort()).toEqual(['200', '202', '400', '401', '500']);
+    expect(hook.operationId).toBe('receiveConnectorHook');
+  });
+
   test('no connector schema has a credential, secret or token property', () => {
     const schemas = (openApiSpec.components?.schemas ?? {}) as Record<string, Record<string, unknown>>;
     const connectorSchemas = Object.entries(schemas).filter(([name]) =>

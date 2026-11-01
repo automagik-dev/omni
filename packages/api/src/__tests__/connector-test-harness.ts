@@ -167,20 +167,36 @@ export function createConnectorTestDb(seed: Partial<ConnectorTestTables> = {}): 
   };
 
   const select = () => {
-    const state: { table?: string; where?: unknown; order?: { key: string; direction: 'asc' | 'desc' } } = {};
+    const state: {
+      table?: string;
+      join?: string;
+      where?: unknown;
+      order?: { key: string; direction: 'asc' | 'desc' };
+    } = {};
     const rowsNow = (): ConnectorTestRow[] => {
       const filtered = (tables[state.table ?? ''] ?? []).filter((row) => matchesWhere(state.where, row));
       const ordered = state.order ? [...filtered].sort(compareRows(state.order.key, state.order.direction)) : filtered;
-      return ordered.map((row) => ({ ...row }));
+      return ordered.map((row) =>
+        state.join
+          ? {
+              subscription: { ...row },
+              connector: { ...tables.connectors.find((connector) => connector.id === row.connectorId) },
+            }
+          : { ...row },
+      );
     };
     const chain = {
       from(table: unknown) {
         state.table = getTableName(table as never);
         return chain;
       },
+      innerJoin(table: Parameters<typeof getTableName>[0]) {
+        state.join = getTableName(table);
+        return chain;
+      },
       where(condition: unknown) {
         state.where = condition;
-        return chain;
+        return Object.assign(Promise.resolve(rowsNow()), chain);
       },
       /**
        * Drizzle returns a thenable builder: `.orderBy(...)` can be awaited

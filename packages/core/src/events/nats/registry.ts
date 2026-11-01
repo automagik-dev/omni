@@ -124,7 +124,7 @@ export class EventRegistry {
       }
 
       if (isConnectorEvent(eventType)) {
-        // One type spans providers, so a strict per-type payload schema cannot
+        // Connector types span provider payloads; a strict shared schema cannot
         // exist; the manifest's parseDelivery is the boundary validator (D10).
         return { success: true, data: payload };
       }

@@ -28,6 +28,7 @@ import {
   OmniError,
   ValidationError,
   createLogger,
+  isConnectorEvent,
   isConnectorEventType,
 } from '@omni/core';
 import type { Database } from '@omni/db';
@@ -47,7 +48,11 @@ import type {
   UpdateConnectorBody,
   UpdateSubscriptionBody,
 } from '../schemas/connectors';
-import { connectorIngressLookupActive, resolveConnectorIngressTenant } from '../tenancy/connector-ingress';
+import {
+  connectorIngressLookupActive,
+  resolveConnectorIngressTenant,
+  resolveConnectorTenantByConnectorId,
+} from '../tenancy/connector-ingress';
 import { openCredentialField, sealCredentialField } from '../tenancy/sealed-credentials';
 import { currentTenantScope, scopedHandle } from '../tenancy/tenant-scope';
 import { runTenantWorkDb } from '../tenancy/worker-tenant-context';
@@ -171,10 +176,9 @@ export function matchesFilters(data: Record<string, unknown>, filters: Record<st
 }
 
 /**
- * Delivery identity key: `connector:{subscriptionId}:{providerEventId}`, with
- * the body hash as the fallback when the provider sends no stable event id.
- * Subscription-scoped on purpose: two subscriptions may legitimately receive
- * one provider fact for two automations.
+ * Delivery identity key: `connector:{routeId}:{providerEventId}`, with the
+ * body hash as fallback when the provider sends no stable event id. Legacy
+ * ingress passes a subscription id; typed ingress passes the connector id.
  */
 export function deriveConnectorIdempotencyKey(
   subscriptionId: string,
@@ -872,6 +876,191 @@ export class ConnectorService {
         body: { error: { code: 'DELIVERY_FAILED', message: 'Connector delivery could not be processed' } },
       };
     }
+  }
+
+  /** One verified provider hook fans out through its persisted connector subscriptions. */
+  async receiveForConnector(
+    connectorId: string,
+    rawBody: string,
+    headers: Record<string, string>,
+  ): Promise<DeliveryOutcome> {
+    const resolved = await this.resolveConnectorHook(connectorId);
+    if (!resolved) return this.unauthorized();
+    const { connector, tenantId } = resolved;
+    const manifest = this.registry.get(connector.provider);
+    const secret = openCredentialField(connector.tenantId, connector.hookSecret);
+    if (
+      !manifest ||
+      !secret ||
+      !(await verifyDelivery(manifest.verification, rawBody, headers, secret).catch(() => false))
+    ) {
+      return this.unauthorized();
+    }
+    const bodyError = this.parseRawBody(rawBody);
+    if (bodyError) return bodyError;
+
+    try {
+      if (!manifest.parseDelivery) throw new Error('Provider manifest cannot parse deliveries');
+      const parsed = z
+        .object({
+          eventKey: z.string().min(1),
+          eventType: z.string().optional(),
+          providerEventId: z.string().optional(),
+          occurredAt: z.string().optional(),
+          data: z.record(z.string(), z.unknown()),
+        })
+        .parse(manifest.parseDelivery(rawBody, headers));
+      const prefix = `connector.${connector.provider}.`;
+      const name = parsed.eventType?.startsWith(prefix) ? parsed.eventType : `${prefix}${parsed.eventKey}`;
+      if (!isConnectorEvent(name)) {
+        throw new Error('Provider returned an invalid connector event name');
+      }
+      const subscriptions = await runTenantWorkDb(this.pool, tenantId, async () => {
+        const rows = await this.db
+          .select()
+          .from(connectorEventSubscriptions)
+          .where(
+            and(
+              eq(connectorEventSubscriptions.connectorId, connector.id),
+              eq(connectorEventSubscriptions.ingress, 'connector'),
+            ),
+          );
+        return rows.filter((row) => {
+          // Error is advisory: retry it and let recordSuccess recover it, as on legacy ingress.
+          if (row.status !== 'active' && row.status !== 'error') return false;
+          const key = row.providerEventKey;
+          return (
+            (key.endsWith('*') ? name.startsWith(key.slice(0, -1)) : key === name) &&
+            matchesFilters(parsed.data, row.filters ?? {})
+          );
+        });
+      });
+      if (subscriptions.length === 0) {
+        await runTenantWorkDb(this.pool, tenantId, async () => {
+          await this.db
+            .update(connectors)
+            .set({
+              totalUnmatched: sql`${connectors.totalUnmatched} + 1`,
+              lastUnmatchedAt: new Date(),
+              lastUnmatchedEventType: name,
+              updatedAt: new Date(),
+            })
+            .where(eq(connectors.id, connector.id));
+        });
+        return { status: 202, body: { received: true, ignored: true } };
+      }
+      const result = await this.deliverForConnector({
+        connector,
+        subscriptions,
+        eventType: name,
+        tenantId,
+        data: redactValue(parsed.data, [secret]),
+        idempotencyKey: deriveConnectorIdempotencyKey(connector.id, parsed.providerEventId, rawBody),
+      });
+      return { status: result.duplicate ? 200 : 202, body: { received: true, ...result } };
+    } catch (error) {
+      log.warn('Connector hook delivery failed', {
+        connectorId,
+        error: redactSecrets(asErrorText(error), [secret]).slice(0, 200),
+      });
+      return {
+        status: 500,
+        body: { error: { code: 'DELIVERY_FAILED', message: 'Connector delivery could not be processed' } },
+      };
+    }
+  }
+
+  private async resolveConnectorHook(connectorId: string): Promise<
+    | {
+        connector: Connector;
+        tenantId: string | null;
+      }
+    | undefined
+  > {
+    if (!INGRESS_ID_RE.test(connectorId)) return undefined;
+    const enforced = await connectorIngressLookupActive(this.pool);
+    const tenantId = enforced ? await resolveConnectorTenantByConnectorId(this.pool, connectorId) : null;
+    if (enforced && !tenantId) return undefined;
+    return runTenantWorkDb(this.pool, tenantId, async () => {
+      const [connector] = await this.db.select().from(connectors).where(eq(connectors.id, connectorId)).limit(1);
+      if (!connector || (tenantId && connector.tenantId !== tenantId)) return undefined;
+      return { connector, tenantId };
+    });
+  }
+
+  private async deliverForConnector(args: {
+    connector: Connector;
+    subscriptions: ConnectorEventSubscription[];
+    eventType: ConnectorEventType;
+    tenantId: string | null;
+    data: Record<string, unknown>;
+    idempotencyKey: string;
+  }): Promise<{ eventId: string; duplicate: boolean }> {
+    const { connector, subscriptions, eventType, tenantId } = args;
+    const eventId = randomUUID();
+    const subscriptionIds = subscriptions.map((row) => row.id);
+    const targetAutomationIds = [
+      ...new Set(subscriptions.flatMap((row) => (row.targetAutomationId ? [row.targetAutomationId] : []))),
+    ];
+    const payload: Record<string, unknown> = {
+      ...Object.fromEntries(Object.entries(args.data).filter(([key]) => key !== 'rawPayload')),
+      connectorId: connector.id,
+      subscriptionIds,
+      targetAutomationIds,
+    };
+    const metadata = {
+      correlationId: eventId,
+      source: 'connector',
+      connectorId: connector.id,
+      provider: connector.provider,
+      fullEventType: eventType,
+      subscriptionIds,
+      ...(connector.tenantId ? { tenantId: connector.tenantId, envelopeVersion: CURRENT_ENVELOPE_VERSION } : {}),
+    };
+    const claimed = await runTenantWorkDb(this.pool, tenantId, async () =>
+      this.db
+        .insert(omniEvents)
+        .values({
+          id: eventId,
+          channel: 'internal',
+          direction: 'internal',
+          eventType,
+          status: 'received',
+          idempotencyKey: args.idempotencyKey,
+          rawPayload: payload,
+          metadata,
+          receivedAt: new Date(),
+          tenantId: connector.tenantId,
+        })
+        .onConflictDoNothing({ target: omniEvents.idempotencyKey })
+        .returning({ id: omniEvents.id }),
+    );
+    if (claimed.length === 0) {
+      return runTenantWorkDb(this.pool, tenantId, async () => {
+        const [original] = await this.db
+          .select({ id: omniEvents.id })
+          .from(omniEvents)
+          .where(eq(omniEvents.idempotencyKey, args.idempotencyKey))
+          .limit(1);
+        for (const subscription of subscriptions) await this.recordDuplicate(subscription);
+        return { eventId: original?.id ?? eventId, duplicate: true };
+      });
+    }
+    try {
+      if (!this.eventBus) throw new Error('Event bus is not available');
+      await this.eventBus.publishConnector(eventType, payload, { ...metadata, publishEventId: eventId });
+    } catch (error) {
+      await runTenantWorkDb(this.pool, tenantId, async () => {
+        await this.db.delete(omniEvents).where(eq(omniEvents.id, eventId));
+        for (const subscription of subscriptions)
+          await this.recordFailure(subscription, 'Connector delivery publish failed');
+      });
+      throw error;
+    }
+    await runTenantWorkDb(this.pool, tenantId, async () => {
+      for (const subscription of subscriptions) await this.recordSuccess(subscription);
+    });
+    return { eventId, duplicate: false };
   }
 
   /** Raw-body gate: HMAC is over bytes, but the envelope must be a JSON object. */

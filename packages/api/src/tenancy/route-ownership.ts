@@ -528,6 +528,12 @@ const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
       'must treat deliveries as at-least-once, exactly as they already must for provider-side webhook retries.',
   },
   {
+    route: 'POST /api/v2/connectors/hooks/:connectorId',
+    class: 'public-by-contract',
+    justification:
+      'Provider hook authenticated by the sealed connector hook secret; persisted owner resolves tenant scope.',
+  },
+  {
     route: 'POST /api/v2/connectors/events/:subscriptionId',
     class: 'public-by-contract',
     justification:
