@@ -75,6 +75,8 @@ import { VERSION } from './version.js';
  * autopg's pinned release has no build for (autopg-runtime.ts).
  */
 export const SANDBOX_PGSERVE_VERSION = '2.6.10';
+/** Bun release used to install and run a sandbox (kept aligned with .bun-version). */
+export const SANDBOX_BUN_VERSION = '1.4.4';
 /** Ports tried first; the next free one up is taken when a port is in use. */
 export const SANDBOX_PREFERRED_PORTS = { api: 18882, pg: 15432, nats: 14222 } as const;
 const PORT_SEARCH_SPAN = 200;
@@ -158,6 +160,8 @@ export const SandboxStateSchema = z.object({
   packageSpec: z.string().min(1),
   /** Absolute path of the bun that runs every process. */
   bun: z.string().min(1),
+  /** Recorded on install; absent in sandboxes created before runtime version checks. */
+  bunVersion: z.string().min(1).optional(),
   ports: z.object({ api: PortSchema, pg: PortSchema, nats: PortSchema }),
   atLogin: z.boolean(),
   /**
@@ -606,6 +610,7 @@ export interface SandboxDeps {
   userHome: string;
   /** Absolute path of the bun running this CLI. */
   bun: string;
+  bunVersion: string;
   env: Record<string, string | undefined>;
   run(cmd: string[], opts: { cwd?: string; env: Record<string, string> }): Promise<RunResult>;
   spawnDetached(cmd: string[], opts: { cwd: string; env: Record<string, string>; logPath: string }): number;
@@ -701,6 +706,7 @@ function defaultSandboxDeps(): SandboxDeps {
     uid: process.getuid?.() ?? 0,
     userHome: homedir(),
     bun: process.execPath,
+    bunVersion: Bun.version,
     env: process.env,
     run: runCommand,
     spawnDetached: spawnDetachedProcess,
@@ -860,6 +866,8 @@ function buildRuntimeManifest(packageSpec: string, withPgserve: boolean): string
     {
       name: 'omni-sandbox-runtime',
       private: true,
+      packageManager: `bun@${SANDBOX_BUN_VERSION}`,
+      engines: { bun: SANDBOX_BUN_VERSION },
       dependencies,
     },
     null,
@@ -1245,6 +1253,11 @@ export async function installSandbox(
   opts: SandboxInstallOptions,
   deps: SandboxDeps = defaultSandboxDeps(),
 ): Promise<SandboxReport> {
+  if (deps.bunVersion !== SANDBOX_BUN_VERSION) {
+    throw new SandboxError(
+      `Sandbox install requires Bun ${SANDBOX_BUN_VERSION}; ${deps.bun} runs ${deps.bunVersion}. Run this CLI with Bun ${SANDBOX_BUN_VERSION} and retry.`,
+    );
+  }
   const layout = sandboxLayout(opts.home);
   const previous = readSandboxState(layout);
   const packageSpec = opts.packageSpec?.trim() || VERSION;
@@ -1263,6 +1276,7 @@ export async function installSandbox(
     previous &&
     (previous.packageSpec !== packageSpec ||
       previous.bun !== deps.bun ||
+      previous.bunVersion !== deps.bunVersion ||
       previous.atLogin !== atLogin ||
       nats === 'installed' ||
       pgChanged(layout, previous, pg));
@@ -1291,6 +1305,7 @@ export async function installSandbox(
     version,
     packageSpec,
     bun: deps.bun,
+    bunVersion: deps.bunVersion,
     ports: previous?.ports ?? (await pickPorts(deps)),
     atLogin,
     defaultHome,

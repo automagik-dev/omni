@@ -1,6 +1,6 @@
 /**
  * QA matrix row Recovery/package (Group 2 share): the exact `bun pm pack` archive passes the pack
- * contract under Bun 1.4.2, and each negative control fails for its own reason.
+ * contract under Bun 1.4.4, and each negative control fails for its own reason.
  * Test names are stable acceptance ids that run-required --require matches; rename them only with
  * the wish's evidence record.
  */
@@ -51,7 +51,7 @@ const source = (name: string, extra: string) =>
   edit(`package/src/${name}`, (e) => ({ ...e, data: encode(`${text(e)}\n${extra}\n`) }));
 
 describe('pack contract', () => {
-  test('the bun pm pack archive passes under Bun 1.4.2 and holds exactly the allowlist', () => {
+  test('the bun pm pack archive passes under Bun 1.4.4 and holds exactly the allowlist', () => {
     expect(Bun.version).toBe(REQUIRED_BUN);
     const report = verify();
     expect(report.errors).toEqual([]);
@@ -75,10 +75,10 @@ describe('pack contract', () => {
     { timeout: 20000 },
   );
 
-  test('the workspace manifest claims Bun 1.4.2 only, private, Apache-2.0', () => {
+  test('the workspace manifest claims Bun 1.4.4 only, private, Apache-2.0', () => {
     const pkg = JSON.parse(readFileSync(join(PACKAGE_DIR, 'package.json'), 'utf8'));
     expect(checkManifest(pkg)).toEqual([]);
-    expect(pkg.engines).toEqual({ bun: '1.4.2' });
+    expect(pkg.engines).toEqual({ bun: '1.4.4' });
     expect(pkg.private).toBe(true);
   });
 
@@ -120,7 +120,7 @@ describe('pack contract', () => {
     ],
     [
       'a Node engine claim',
-      () => manifest((p) => Object.assign(p, { engines: { bun: '1.4.2', node: '>=20' } })),
+      () => manifest((p) => Object.assign(p, { engines: { bun: '1.4.4', node: '>=20' } })),
       'package.json engines',
     ],
     ['a public package', () => manifest((p) => Object.assign(p, { private: false })), 'package.json private'],

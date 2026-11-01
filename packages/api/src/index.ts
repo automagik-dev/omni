@@ -321,7 +321,7 @@ function withWebchatVoice(handler: WebSocketHandler<WsData>): WebSocketHandler<W
     },
     message(ws, message) {
       const webchat = ws.data.webchat;
-      if (!webchat) return handler.message(ws, message);
+      if (!webchat) return handler.message?.(ws, message);
       if (webchat.sessionId) webchatVoicePlugin()?.voiceSocketMessage(webchat.sessionId, message);
     },
     close(ws, code, reason) {

@@ -92,15 +92,15 @@ check_and_install_command "make" "true" "Build system" "make"
 check_and_install_command "curl" "true" "Download tool (for NATS setup)" "curl"
 
 # Special handling for bun (requires curl-based install)
-if command -v bun >/dev/null 2>&1; then
+if command -v bun >/dev/null 2>&1 && [ "$(bun --version)" = "1.4.4" ]; then
   version=$(bun --version 2>&1)
   printf "${GREEN}✓${NC} %-15s bun $version\n" "bun"
 else
-  printf "${RED}✗${NC} %-15s REQUIRED - Not installed\n" "bun"
+  printf "${RED}✗${NC} %-15s REQUIRED - Bun 1.4.4 is not on PATH\n" "bun"
   MISSING_REQUIRED=$((MISSING_REQUIRED + 1))
   if [ "$AUTO_INSTALL" = "true" ]; then
     echo "  Installing bun..."
-    curl -fsSL https://bun.sh/install | bash -s "bun-v1.4.2" 2>/dev/null && echo "  ✓ bun installed" || echo "  ⚠ Could not auto-install bun. Please install from https://bun.sh"
+    curl -fsSL https://bun.sh/install | bash -s "bun-v1.4.4" 2>/dev/null && echo "  ✓ bun installed" || echo "  ⚠ Could not auto-install bun. Please install from https://bun.sh"
   fi
 fi
 
@@ -156,17 +156,17 @@ if [ $MISSING_REQUIRED -gt 0 ]; then
     echo ""
     echo "  Ubuntu/Debian:"
     echo "    sudo apt-get install make curl ffmpeg postgresql-client"
-    echo "    curl -fsSL https://bun.sh/install | bash -s bun-v1.4.2"
+    echo "    curl -fsSL https://bun.sh/install | bash -s bun-v1.4.4"
     echo "    npm install -g pm2  (or: bun add -g pm2)"
     echo ""
     echo "  macOS (requires Homebrew):"
     echo "    brew install make curl ffmpeg postgresql"
-    echo "    curl -fsSL https://bun.sh/install | bash -s bun-v1.4.2"
+    echo "    curl -fsSL https://bun.sh/install | bash -s bun-v1.4.4"
     echo "    npm install -g pm2  (or: bun add -g pm2)"
     echo ""
     echo "  Windows (WSL2 recommended):"
     echo "    sudo apt-get install make curl ffmpeg postgresql-client"
-    echo "    curl -fsSL https://bun.sh/install | bash -s bun-v1.4.2"
+    echo "    curl -fsSL https://bun.sh/install | bash -s bun-v1.4.4"
     echo "    npm install -g pm2  (or: bun add -g pm2)"
     echo ""
   fi

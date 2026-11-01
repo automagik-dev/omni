@@ -1,7 +1,7 @@
 /**
  * @omni/connect: browser sign-in for an app that binds one owner identity from an external
  * OpenID Connect issuer and keeps durable opaque sessions behind an app-owned store port.
- * Runtime claim: Bun 1.4.2 only. Private; adopters consume a reviewed packed archive.
+ * Runtime claim: Bun 1.4.4 only. Private; adopters consume a reviewed packed archive.
  */
 export {
   CALLBACK_PATH,

@@ -27,7 +27,7 @@ import { PLUGIN_VERSION } from './version.js'
 export { sandboxHome }
 
 // The Bun this plugin downloads when the computer has none, and where its release lives.
-export const BUN_VERSION = '1.4.2'
+export const BUN_VERSION = '1.4.4'
 const BUN_RELEASE = `https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}`
 const BUN_ASSETS = {
   'darwin-arm64': 'bun-darwin-aarch64.zip',

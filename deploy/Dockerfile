@@ -19,7 +19,7 @@
 
 # The repository's one Bun (.bun-version; scripts/bun-version.test.ts keeps this in step):
 # the toolchain that writes bun.lock and that CI tests on. Override with --build-arg.
-ARG BUN_VERSION=1.4.2
+ARG BUN_VERSION=1.4.4
 
 # ---- manifests: prune the context to workspace package.json files ------------
 # Throwaway stage that extracts ONLY the lockfile + every workspace manifest.

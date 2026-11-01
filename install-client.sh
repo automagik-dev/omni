@@ -112,18 +112,18 @@ else
 fi
 
 # bun
-if has_cmd bun; then
+if has_cmd bun && [[ "$(bun --version)" == "1.4.4" ]]; then
   ok "bun $(bun --version)"
 else
   info "Installing bun..."
-  curl -fsSL https://bun.sh/install | bash -s "bun-v1.4.2" >/dev/null 2>&1
+  curl -fsSL https://bun.sh/install | bash -s "bun-v1.4.4" >/dev/null 2>&1
   export BUN_INSTALL="$HOME/.bun"
   export PATH="$BUN_INSTALL/bin:$PATH"
   # Source shell config to pick up bun
   for rc in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
     [[ -f "$rc" ]] && source "$rc" 2>/dev/null || true
   done
-  if has_cmd bun; then
+  if has_cmd bun && [[ "$(bun --version)" == "1.4.4" ]]; then
     ok "bun $(bun --version) installed"
   else
     fail "Failed to install bun. Install manually: https://bun.sh"

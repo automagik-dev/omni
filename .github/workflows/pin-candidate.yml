@@ -180,7 +180,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
 
       # The market index lists Omni's own plugins at the version their package.json
       # files carry at the tag (the Omni release of each one's last change), so it

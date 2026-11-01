@@ -11,7 +11,8 @@
  * other suites mock the `nats` module process-wide.
  *
  * Binary: $NATS_SERVER_BIN, else repo `bin/nats-server` (scripts/ensure-nats.sh,
- * which CI runs), else `~/.omni/nats-server`. Missing binary fails — no skip.
+ * which CI runs), else `~/.omni/nats-server`. A missing binary skips locally
+ * with setup instructions; CI and an explicit NATS_SERVER_BIN still fail.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
@@ -23,15 +24,24 @@ import type { Subprocess } from 'bun';
 const ACTION_MS = 300;
 const BURST = join(import.meta.dir, 'fixtures/nats-trigger-burst.ts');
 
-function findNatsServer(): string {
-  const candidates = [
-    process.env.NATS_SERVER_BIN,
-    join(import.meta.dir, '../../../../../bin/nats-server'),
-    join(homedir(), '.omni/nats-server'),
-  ];
+function findNatsServer(): string | null {
+  if (process.env.NATS_SERVER_BIN) {
+    if (!existsSync(process.env.NATS_SERVER_BIN)) throw new Error('NATS_SERVER_BIN does not exist');
+    return process.env.NATS_SERVER_BIN;
+  }
+  const candidates = [join(import.meta.dir, '../../../../../bin/nats-server'), join(homedir(), '.omni/nats-server')];
   const found = candidates.find((c): c is string => !!c && existsSync(c));
-  if (!found) throw new Error('nats-server not found: run scripts/ensure-nats.sh or set NATS_SERVER_BIN');
-  return found;
+  if (!found && process.env.CI)
+    throw new Error('nats-server not found: run scripts/ensure-nats.sh or set NATS_SERVER_BIN');
+  return found ?? null;
+}
+
+const natsBinary = findNatsServer();
+const natsDescribe = natsBinary ? describe : describe.skip;
+if (!natsBinary) {
+  process.stderr.write(
+    'Skipping real JetStream trigger tests: nats-server not found; run scripts/ensure-nats.sh or set NATS_SERVER_BIN\n',
+  );
 }
 
 function freePort(): number {
@@ -44,22 +54,6 @@ function freePort(): number {
 let server: Subprocess;
 let storeDir: string;
 let url: string;
-
-beforeAll(() => {
-  const port = freePort();
-  storeDir = mkdtempSync(join(tmpdir(), 'omni-nats-1206-'));
-  server = Bun.spawn([findNatsServer(), '-js', '-a', '127.0.0.1', '-p', String(port), '-sd', storeDir], {
-    stdout: 'ignore',
-    stderr: 'ignore',
-  });
-  url = `nats://127.0.0.1:${port}`;
-});
-
-afterAll(async () => {
-  server?.kill();
-  await server?.exited;
-  rmSync(storeDir, { recursive: true, force: true });
-});
 
 async function runBurst(
   maxConcurrency: number,
@@ -80,7 +74,24 @@ async function runBurst(
   return JSON.parse(last);
 }
 
-describe('AutomationEngine over real JetStream — trigger parallelism (#1206)', () => {
+natsDescribe('AutomationEngine over real JetStream — trigger parallelism (#1206)', () => {
+  beforeAll(() => {
+    if (!natsBinary) throw new Error('nats-server not found');
+    const port = freePort();
+    storeDir = mkdtempSync(join(tmpdir(), 'omni-nats-1206-'));
+    server = Bun.spawn([natsBinary, '-js', '-a', '127.0.0.1', '-p', String(port), '-sd', storeDir], {
+      stdout: 'ignore',
+      stderr: 'ignore',
+    });
+    url = `nats://127.0.0.1:${port}`;
+  });
+
+  afterAll(async () => {
+    server?.kill();
+    await server?.exited;
+    if (storeDir) rmSync(storeDir, { recursive: true, force: true });
+  });
+
   test('maxConcurrency 4: four concurrent deliveries overlap', async () => {
     const { elapsedMs, queueWaits } = await runBurst(4, 'custom.parallel.four');
     expect(elapsedMs).toBeLessThan(ACTION_MS * 2);
