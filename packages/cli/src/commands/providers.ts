@@ -5,10 +5,8 @@
  * omni providers get <id>
  * omni providers create --name <name> --schema <schema> --base-url <url> [--api-key <key>]
  *   Claude Code: --project-path <path> [--max-turns <n>] [--permission-mode <mode>]
- *   OpenClaw: --default-agent-id <id>
  *   nats-genie: --agent-name <name> --target-agent <name> [--team-name <template>]
  * omni providers update <id> [--name <name>] [--base-url <url>] [--api-key <key>] [--schema-config <json>]
- * omni providers setup openclaw --gateway-url <url> --gateway-token <token> --agent-id <id>
  * omni providers agents <id>
  * omni providers teams <id>
  * omni providers workflows <id>
@@ -22,7 +20,6 @@ import { Command } from 'commander';
 import { getClient } from '../client.js';
 import * as output from '../output.js';
 import { resolveProviderId } from '../resolve.js';
-import { createSetupCommand } from './providers-setup.js';
 
 /**
  * Map agno 2.5+ (`id`) and pre-2.5 (`agent_id`) agent shapes to the list row.
@@ -85,22 +82,6 @@ export const __testables = {
 // Single source of truth: derive VALID_SCHEMAS from @omni/core (DEC-12)
 const VALID_SCHEMAS: readonly string[] = PROVIDER_SCHEMAS;
 
-// Schemas that require ws:// or wss:// URLs
-const WS_ONLY_SCHEMAS: ProviderSchema[] = ['openclaw'];
-
-/**
- * Validate URL scheme for a given schema.
- * OpenClaw requires ws:// or wss://.
- */
-function validateUrlScheme(schema: string, baseUrl: string): string | null {
-  if (WS_ONLY_SCHEMAS.includes(schema as ProviderSchema)) {
-    if (!baseUrl.startsWith('ws://') && !baseUrl.startsWith('wss://')) {
-      return `OpenClaw requires ws:// or wss:// URL scheme. Got: ${baseUrl}\nExample: --base-url ws://127.0.0.1:18789 or --base-url wss://gateway.example.com`;
-    }
-  }
-  return null;
-}
-
 /** Validate create provider options, returning an error message or null */
 function validateCreateOptions(options: {
   schema: string;
@@ -112,11 +93,6 @@ function validateCreateOptions(options: {
 }): string | null {
   if (!VALID_SCHEMAS.includes(options.schema)) {
     return `Invalid schema: ${options.schema}. Valid: ${[...VALID_SCHEMAS].join(', ')}`;
-  }
-  const urlError = validateUrlScheme(options.schema, options.baseUrl);
-  if (urlError) return urlError;
-  if (options.schema === 'openclaw' && !options.defaultAgentId) {
-    return 'OpenClaw providers require --default-agent-id.\nExample: omni providers create --schema openclaw --default-agent-id my-agent ...';
   }
   if (options.schema === 'claude-code' && !options.projectPath) {
     return 'Claude Code providers require --project-path.\nExample: omni providers create --name "My Project" --schema claude-code --base-url http://localhost:8882 --project-path /home/user/myproject';
@@ -140,12 +116,6 @@ interface SchemaConfigOptions {
   teamName?: string;
 }
 
-function buildOpenClawConfig(options: SchemaConfigOptions): Record<string, unknown> {
-  const config: Record<string, unknown> = {};
-  if (options.defaultAgentId) config.defaultAgentId = options.defaultAgentId;
-  return config;
-}
-
 function buildClaudeCodeConfig(options: SchemaConfigOptions): Record<string, unknown> {
   const config: Record<string, unknown> = { projectPath: options.projectPath };
   if (options.maxTurns) config.maxTurns = options.maxTurns;
@@ -166,7 +136,6 @@ function buildNatsGenieConfig(options: SchemaConfigOptions): Record<string, unkn
 /** Build schema-specific config from CLI options */
 function buildSchemaConfig(options: SchemaConfigOptions): Record<string, unknown> | undefined {
   const builders: Record<string, (opts: SchemaConfigOptions) => Record<string, unknown>> = {
-    openclaw: buildOpenClawConfig,
     'claude-code': buildClaudeCodeConfig,
     'nats-genie': buildNatsGenieConfig,
   };
@@ -413,7 +382,6 @@ export function createProvidersCommand(): Command {
   const providers = new Command('providers').description('Manage AI/agent providers');
 
   // omni providers setup <schema>
-  providers.addCommand(createSetupCommand());
 
   // omni providers list
   providers
@@ -431,13 +399,12 @@ export function createProvidersCommand(): Command {
     .description('Create a new AI provider')
     .requiredOption('--name <name>', 'Provider name (unique)')
     .requiredOption('--schema <schema>', `Provider schema (${VALID_SCHEMAS.join(', ')})`)
-    .requiredOption('--base-url <url>', 'API base URL (ws:// or wss:// for openclaw)')
+    .requiredOption('--base-url <url>', 'API base URL')
     .option('--api-key <key>', 'API key (optional for claude-code if using env ANTHROPIC_API_KEY)')
     .option('--description <desc>', 'Provider description')
     .option('--timeout <seconds>', 'Default timeout in seconds', (v) => Number.parseInt(v, 10), 60)
     .option('--stream', 'Enable streaming by default')
-    // OpenClaw options
-    .option('--default-agent-id <agentId>', 'Default agent ID (required for openclaw)')
+    .option('--default-agent-id <agentId>', 'Default agent ID')
     // Claude Code options
     .option('--project-path <path>', 'Project directory path (required for claude-code)')
     .option('--max-turns <number>', 'Max conversation turns (claude-code)', Number.parseInt)

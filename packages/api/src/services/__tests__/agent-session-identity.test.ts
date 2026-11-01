@@ -45,7 +45,7 @@ describe('agent session identity', () => {
 
   it('preserves legacy computed ids for non-KHAL/non-Agno providers', () => {
     const resolved = resolveKhalSessionId({
-      providerSchema: 'openclaw',
+      providerSchema: 'webhook',
       sessionStrategy: 'per_chat',
       from: '5511999999999',
       chatId: '5511999999999',

@@ -13,7 +13,7 @@ paths=(
   package.json bun.lock apps/ui/package.json deploy/helm/omni/Chart.yaml
   .claude-plugin/marketplace.json plugins/omni/.claude-plugin/plugin.json
 )
-for name in api channel-a2a channel-discord channel-gupshup channel-hermes channel-internal channel-sdk channel-slack channel-telegram channel-twilio-whatsapp channel-whatsapp channel-whatsapp-business cli core db media-processing plugin-openclaw sdk voice-client; do
+for name in api channel-a2a channel-discord channel-gupshup channel-hermes channel-internal channel-sdk channel-slack channel-telegram channel-twilio-whatsapp channel-whatsapp channel-whatsapp-business cli core db media-processing sdk voice-client; do
   paths+=("packages/${name}/package.json")
 done
 for path in "${paths[@]}"; do

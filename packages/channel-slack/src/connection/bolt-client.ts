@@ -17,7 +17,7 @@ import { WebClient } from '@slack/web-api';
 import type { SlackConnectionOptions } from '../types';
 import { SlackError, SlackErrorCode } from '../types';
 
-/** Maximum body size for HTTP mode (1 MB, aligned with OpenClaw) */
+/** Maximum body size for HTTP mode (1 MB) */
 const HTTP_MAX_BODY_BYTES = 1024 * 1024;
 
 /**

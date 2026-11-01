@@ -12,7 +12,7 @@ export const ProviderSchema = z.object({
   name: z.string().openapi({ description: 'Provider name' }),
   schema: z
     .enum(['agno', 'webhook', 'openclaw', 'ag-ui', 'claude-code', 'a2a', 'nats-genie'])
-    .openapi({ description: 'Provider schema type' }),
+    .openapi({ description: 'Stored provider schema; openclaw is read-only legacy data and cannot execute.' }),
   baseUrl: z.string().url().openapi({ description: 'Base URL' }),
   apiKey: z.string().nullable().openapi({ description: 'API key (masked)' }),
   schemaConfig: z
@@ -22,11 +22,6 @@ export const ProviderSchema = z.object({
       description:
         'Schema-specific configuration. Shape depends on schema type:\n' +
         '- **agno**: `{ agentId, teamId?, timeout? }`\n' +
-        '- **openclaw**: `{ defaultAgentId (required), agentTimeoutMs?, origin?, deviceId?, devicePublicKey?, devicePrivateKey?, deviceToken? }`\n' +
-        '  - `deviceId`: SHA256 hex of the raw Ed25519 public key bytes — set automatically by `omni providers setup openclaw`\n' +
-        '  - `devicePublicKey`: base64url-encoded raw 32-byte Ed25519 public key\n' +
-        '  - `devicePrivateKey`: base64url-encoded raw 32-byte Ed25519 private key\n' +
-        '  - `deviceToken`: gateway-issued device token granting `operator.write` scope — obtained during device pairing\n' +
         '- **claude-code**: `{ projectPath, apiKey?, model?, systemPrompt?, maxTurns?, permissionMode?, allowedTools?, mcpServers? }`\n' +
         '  - `apiKey` in schemaConfig overrides the provider-level apiKey\n' +
         '- **webhook**: `{ mode?, retries? }`\n' +
@@ -44,6 +39,8 @@ export const ProviderSchema = z.object({
   description: z.string().nullable().openapi({ description: 'Description' }),
   tags: z.array(z.string()).nullable().openapi({ description: 'Tags' }),
   isActive: z.boolean().openapi({ description: 'Whether active' }),
+  lastHealthStatus: z.string().nullable().optional().openapi({ description: 'Last provider health status' }),
+  lastHealthError: z.string().nullable().optional().openapi({ description: 'Health or provider removal error' }),
   createdAt: z.string().datetime().openapi({ description: 'Creation timestamp' }),
   updatedAt: z.string().datetime().openapi({ description: 'Last update timestamp' }),
 });
@@ -52,7 +49,7 @@ export const ProviderSchema = z.object({
 export const CreateProviderSchema = z.object({
   name: z.string().min(1).max(255).openapi({ description: 'Provider name' }),
   schema: z
-    .enum(['agno', 'webhook', 'openclaw', 'ag-ui', 'claude-code', 'a2a', 'nats-genie'])
+    .enum(['agno', 'webhook', 'ag-ui', 'claude-code', 'a2a', 'nats-genie'])
     .default('agno')
     .openapi({ description: 'Schema type' }),
   baseUrl: z.string().url().openapi({ description: 'Base URL' }),
@@ -64,12 +61,6 @@ export const CreateProviderSchema = z.object({
       description:
         'Schema-specific configuration. Required fields vary by schema:\n' +
         '- **agno**: `{ agentId }` (required)\n' +
-        '- **openclaw**: `{ defaultAgentId }` (required), plus optional device pairing fields:\n' +
-        '  - `agentTimeoutMs?`, `origin?`\n' +
-        '  - `deviceId?`: SHA256 hex of Ed25519 public key — set by `omni providers setup openclaw`\n' +
-        '  - `devicePublicKey?`: base64url raw 32-byte Ed25519 public key\n' +
-        '  - `devicePrivateKey?`: base64url raw 32-byte Ed25519 private key\n' +
-        '  - `deviceToken?`: gateway-issued device token for `operator.write` scope\n' +
         '- **claude-code**: `{ projectPath }` (required) — agent spawns rooted here, reads CLAUDE.md\n' +
         '  - Optional: `apiKey` (overrides provider-level), `model`, `systemPrompt`, `maxTurns`, `permissionMode`, `allowedTools`, `mcpServers`\n' +
         '- **webhook**: optional `{ mode, retries }`\n' +

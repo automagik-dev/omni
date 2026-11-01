@@ -18,6 +18,7 @@ import {
   type SessionStorage,
   type StreamChunk,
   WebhookAgentClient,
+  assertProviderAvailable,
   createProviderClient,
   isProviderSchemaSupported,
   webhookProviderConfig,
@@ -394,7 +395,7 @@ export class AgentRunnerService {
    *
    * `openedForTenantId` is the tenant the provider's credential is opened (and
    * the client cached) under, when the caller threads one — the same
-   * threaded-over-ambient rule the dispatcher's `openclawPoolKey` applies.
+   * threaded-over-ambient rule used to open provider credentials.
    * run()/stream() thread the instance's persisted `tenantId` because the
    * `call_agent` automation path deliberately runs the agent call OUTSIDE every
    * tenant scope (see `plugins/automation-actions.ts`): with only the ambient
@@ -419,6 +420,7 @@ export class AgentRunnerService {
       throw new ProviderError(`Provider not found: ${providerId}`, 'NOT_FOUND', 404);
     }
 
+    assertProviderAvailable(provider.schema);
     if (!isProviderSchemaSupported(provider.schema)) {
       throw new ProviderError(`Provider schema not supported: ${provider.schema}`, 'NOT_FOUND', 501, {
         schema: provider.schema,

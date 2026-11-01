@@ -496,7 +496,6 @@ omni providers create ...                 # Create provider
 omni providers update <id> ...            # Update
 omni providers delete <id>               # Delete
 omni providers test <id>                 # Connectivity/health test
-omni providers setup openclaw ...        # Guided OpenClaw setup wizard (the only wizard today)
 omni providers agents <id>               # List provider agents
 omni providers teams <id>                # List provider teams
 omni providers workflows <id>            # List provider workflows

@@ -5,7 +5,7 @@
 export const AGENT_TYPES = ['agent', 'team', 'workflow'] as const;
 export type AgentType = (typeof AGENT_TYPES)[number];
 
-export const PROVIDER_SCHEMAS = ['agno', 'webhook', 'openclaw', 'ag-ui', 'claude-code', 'a2a', 'nats-genie'] as const;
+export const PROVIDER_SCHEMAS = ['agno', 'webhook', 'ag-ui', 'claude-code', 'a2a', 'nats-genie'] as const;
 export type ProviderSchema = (typeof PROVIDER_SCHEMAS)[number];
 
 export const JOB_STATUSES = ['pending', 'running', 'completed', 'failed', 'cancelled'] as const;
@@ -20,7 +20,7 @@ export interface AgentProviderConfig {
   schema: ProviderSchema;
   baseUrl: string;
   apiKey?: string;
-  schemaConfig?: AgnoConfig | OpenClawConfig | NatsGenieConfig | Record<string, unknown>;
+  schemaConfig?: AgnoConfig | NatsGenieConfig | Record<string, unknown>;
   defaultStream: boolean;
   defaultTimeout: number;
   capabilities: AgentCapabilities;
@@ -37,15 +37,6 @@ export interface AgnoConfig {
   agentId: string;
   teamId?: string;
   timeout?: number;
-}
-
-export interface OpenClawConfig {
-  /** Default agent ID (e.g. 'my-agent') */
-  defaultAgentId: string;
-  /** Agent timeout in seconds (default: 120) */
-  agentTimeoutMs?: number;
-  /** Origin header for WS connection */
-  origin?: string;
 }
 
 export interface NatsGenieConfig {
