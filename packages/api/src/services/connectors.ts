@@ -79,6 +79,10 @@ export interface ConnectorView {
   status: string;
   config: Record<string, unknown>;
   hasCredentials: boolean;
+  hasHookSecret: boolean;
+  totalUnmatched: number;
+  lastUnmatchedAt: Date | null;
+  lastUnmatchedEventType: string | null;
   lastValidatedAt: Date | null;
   lastError: string | null;
   lastErrorCode: string | null;
@@ -90,6 +94,7 @@ export interface EventSubscriptionView {
   id: string;
   connectorId: string;
   providerEventKey: string;
+  ingress: 'subscription' | 'connector';
   filters: Record<string, unknown>;
   targetAutomationId: string | null;
   status: string;
@@ -297,6 +302,10 @@ export class ConnectorService {
       status: unopenable ? 'error' : row.status,
       config: row.config ?? {},
       hasCredentials: hasCredentials ?? opened !== null,
+      hasHookSecret: Boolean(openCredentialField(row.tenantId, row.hookSecret)),
+      totalUnmatched: row.totalUnmatched,
+      lastUnmatchedAt: row.lastUnmatchedAt,
+      lastUnmatchedEventType: row.lastUnmatchedEventType,
       lastValidatedAt: row.lastValidatedAt,
       lastError: unopenable ? 'credential unavailable' : row.lastError,
       lastErrorCode: unopenable ? 'CREDENTIAL_UNAVAILABLE' : row.lastErrorCode,
@@ -310,10 +319,14 @@ export class ConnectorService {
       id: row.id,
       connectorId: row.connectorId,
       providerEventKey: row.providerEventKey,
+      ingress: row.ingress,
       filters: row.filters ?? {},
       targetAutomationId: row.targetAutomationId,
       status: row.status,
-      inboundUrl: this.inboundUrl(row.id),
+      inboundUrl:
+        row.ingress === 'connector'
+          ? `${this.publicBaseUrl}/api/v2/connectors/hooks/${row.connectorId}`
+          : this.inboundUrl(row.id),
       lastDeliveryAt: row.lastDeliveryAt,
       lastFailureAt: row.lastFailureAt,
       consecutiveFailures: row.consecutiveFailures,
@@ -363,6 +376,7 @@ export class ConnectorService {
     provider: string;
     name: string;
     credentials: string;
+    hookSecret: string | null;
     config: Record<string, unknown>;
     status: string;
     lastValidatedAt: Date | null;
@@ -389,12 +403,13 @@ export class ConnectorService {
     await this.assertNameFree(input.name);
 
     const tenantId = this.tenantId;
-    const validation = await this.runValidation(manifest, input.credentials, config);
+    const validation = await this.runValidation(manifest, input.credentials, config, input.hookSecret);
     const sealed = sealCredentialField(tenantId, JSON.stringify(input.credentials)) as string;
     const row = await this.insertConnector({
       provider: manifest.id,
       name: input.name,
       credentials: sealed,
+      hookSecret: input.hookSecret === undefined ? null : sealCredentialField(tenantId, input.hookSecret),
       config,
       status: validation.ok ? 'connected' : 'error',
       lastValidatedAt: validation.ok ? new Date() : null,
@@ -463,13 +478,21 @@ export class ConnectorService {
 
     const patch: Partial<typeof connectors.$inferInsert> = { updatedAt: new Date() };
     if (input.name !== undefined) patch.name = input.name;
+    if (input.hookSecret !== undefined) {
+      patch.hookSecret = sealCredentialField(existing.tenantId, input.hookSecret);
+    }
 
     const config = input.config !== undefined ? this.parseConfig(manifest, input.config) : (existing.config ?? {});
     if (input.config !== undefined) patch.config = config;
 
     if (input.credentials !== undefined) {
       this.assertCredentialKeys(manifest, input.credentials);
-      const validation = await this.runValidation(manifest, input.credentials, config);
+      const validation = await this.runValidation(
+        manifest,
+        input.credentials,
+        config,
+        input.hookSecret ?? openCredentialField(existing.tenantId, existing.hookSecret),
+      );
       // Seal under the tenant the PERSISTED ROW presents back, never the
       // active scope: a row with a NULL tenant cannot be opened by a
       // scope-sealed envelope.
@@ -523,20 +546,22 @@ export class ConnectorService {
     manifest: ConnectorManifest,
     credentials: Record<string, string>,
     config: Record<string, unknown>,
+    hookSecret?: string | null,
   ) {
+    const secrets = [...this.secretValues(credentials), hookSecret ?? ''];
     try {
       const result = await manifest.validate({ credentials, config, fetch: this.fetchImpl });
       if (result.ok) return result;
       return {
         ok: false as const,
         code: result.code,
-        message: redactSecrets(result.message, this.secretValues(credentials)).slice(0, MAX_ERROR_TEXT),
+        message: redactSecrets(result.message, secrets).slice(0, MAX_ERROR_TEXT),
       };
     } catch (error) {
       return {
         ok: false as const,
         code: 'VALIDATION_FAILED',
-        message: redactSecrets(asErrorText(error), this.secretValues(credentials)).slice(0, MAX_ERROR_TEXT),
+        message: redactSecrets(asErrorText(error), secrets).slice(0, MAX_ERROR_TEXT),
       };
     }
   }
@@ -553,7 +578,12 @@ export class ConnectorService {
     return this.getRow(connectorId);
   }
 
-  private async assertTargetAutomation(targetAutomationId: string): Promise<void> {
+  private async assertTargetAutomation(
+    targetAutomationId: string,
+    ingress: 'subscription' | 'connector',
+    eventKey: string,
+  ): Promise<void> {
+    const requiredType = ingress === 'subscription' ? CONNECTOR_EVENT_TYPE : eventKey;
     const [automation] = await this.db
       .select({ id: automations.id, triggerEventType: automations.triggerEventType })
       .from(automations)
@@ -562,9 +592,14 @@ export class ConnectorService {
     if (!automation) {
       throw new ValidationError(`Target automation ${targetAutomationId} was not found`);
     }
-    if (automation.triggerEventType !== CONNECTOR_EVENT_TYPE) {
+    if (ingress === 'connector' && eventKey.includes('*')) {
       throw new ValidationError(
-        `Target automation triggerEventType must be "${CONNECTOR_EVENT_TYPE}" (got "${automation.triggerEventType}")`,
+        `Targeted subscription event key "${eventKey}" must be exact, not a glob (automation trigger "${automation.triggerEventType}")`,
+      );
+    }
+    if (automation.triggerEventType !== requiredType) {
+      throw new ValidationError(
+        `Target automation triggerEventType must be "${requiredType}" (got "${automation.triggerEventType}")`,
       );
     }
   }
@@ -578,27 +613,39 @@ export class ConnectorService {
         message: `Connector references unknown provider: ${connector.provider}`,
       });
     }
+    const ingress = input.ingress ?? 'subscription';
     const event = manifest.events.find((candidate) => candidate.key === input.eventKey);
-    if (!event) {
+    if (ingress === 'subscription' && !event) {
       throw new ValidationError(`Unknown event key "${input.eventKey}" for provider ${manifest.id}`);
     }
-    const filters = this.parseFilters(event.filterSchema, input.filters ?? {});
-    await this.assertTargetAutomation(input.targetAutomationId);
+    if (ingress === 'connector') this.assertConnectorEventKey(connector.provider, input.eventKey);
+    const filters = this.parseFilters(event?.filterSchema, input.filters ?? {});
+    if (input.targetAutomationId !== undefined) {
+      await this.assertTargetAutomation(input.targetAutomationId, ingress, input.eventKey);
+    }
 
     const [created] = await this.db
       .insert(connectorEventSubscriptions)
       .values({
         connectorId,
         providerEventKey: input.eventKey,
+        ingress,
         filters,
-        targetAutomationId: input.targetAutomationId,
-        verificationSecret: sealCredentialField(connector.tenantId ?? null, input.verificationSecret) as string,
+        targetAutomationId: input.targetAutomationId ?? null,
+        verificationSecret:
+          input.ingress === 'connector' ? null : sealCredentialField(connector.tenantId, input.verificationSecret),
         status: 'active',
         tenantId: connector.tenantId ?? null,
       })
       .returning();
     if (!created) throw new Error('Failed to create connector event subscription');
     return this.sanitizeSubscription(created);
+  }
+
+  private assertConnectorEventKey(provider: string, eventKey: string): void {
+    if (!eventKey.startsWith(`connector.${provider}.`)) {
+      throw new ValidationError(`Event key "${eventKey}" must be under "connector.${provider}."`);
+    }
   }
 
   private parseFilters(
@@ -658,13 +705,29 @@ export class ConnectorService {
     const manifest = this.registry.get(connector.provider);
     const patch: Partial<typeof connectorEventSubscriptions.$inferInsert> = { updatedAt: new Date() };
 
+    if (existing.ingress === 'connector') {
+      if (input.verificationSecret !== undefined) {
+        throw new ValidationError(
+          'Connector ingress uses the connector hook secret; a subscription secret is not allowed',
+        );
+      }
+      this.assertConnectorEventKey(connector.provider, existing.providerEventKey);
+      const target = input.targetAutomationId ?? existing.targetAutomationId;
+      const pauseOnly = input.status === 'paused' && Object.keys(input).length === 1;
+      if (target !== null && !pauseOnly) {
+        await this.assertTargetAutomation(target, existing.ingress, existing.providerEventKey);
+      }
+    }
+
     if (input.status !== undefined) patch.status = input.status;
     if (input.filters !== undefined) {
       const event = manifest?.events.find((candidate) => candidate.key === existing.providerEventKey);
       patch.filters = this.parseFilters(event?.filterSchema, input.filters);
     }
     if (input.targetAutomationId !== undefined) {
-      await this.assertTargetAutomation(input.targetAutomationId);
+      if (existing.ingress === 'subscription') {
+        await this.assertTargetAutomation(input.targetAutomationId, existing.ingress, existing.providerEventKey);
+      }
       patch.targetAutomationId = input.targetAutomationId;
     }
     if (input.verificationSecret !== undefined) {
@@ -708,6 +771,12 @@ export class ConnectorService {
   ): Promise<{ eventId: string }> {
     const connector = await this.getConnectorRow(connectorId);
     const subscription = await this.getSubscriptionRow(connectorId, subscriptionId);
+    if (subscription.ingress === 'connector') {
+      throw new OmniError({
+        code: 'CONNECTOR_INGRESS_TEST_UNSUPPORTED',
+        message: 'Test delivery is unavailable for connector ingress subscriptions; send a provider delivery instead.',
+      });
+    }
     const manifest = this.registry.get(connector.provider);
     if (!manifest) {
       throw new OmniError({

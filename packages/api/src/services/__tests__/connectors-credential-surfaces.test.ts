@@ -17,11 +17,12 @@
  *   * an audit row fingerprints both secrets instead of storing them.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { clickupManifest } from '@omni/connector-clickup';
 import { ConnectorRegistry } from '@omni/connector-sdk';
-import { CONNECTOR_EVENT_TYPE, setTenantSecretMasterKey } from '@omni/core';
+import { CONNECTOR_EVENT_TYPE, configureLogging, getLogConfig, setTenantSecretMasterKey } from '@omni/core';
 import { Hono } from 'hono';
+import { z } from 'zod';
 import { connectorTenantContext, createConnectorTestDb } from '../../__tests__/connector-test-harness';
 import { configAuditMiddleware } from '../../middleware/config-audit';
 import { errorHandler } from '../../middleware/error';
@@ -259,6 +260,68 @@ function jsonRequest(method: string, body: unknown): RequestInit {
 }
 
 describe('audit surface', () => {
+  test('hook-secret responses, request logs and create/rotation audits contain no secret material', async () => {
+    const { db, tables } = createConnectorTestDb();
+    const app = mountAuditedApp(db);
+    const secret = 'audit-hook-secret-original';
+    const rotated = 'audit-hook-secret-rotated';
+    const config = getLogConfig();
+    const output: string[] = [];
+    const writer = spyOn(process.stdout, 'write').mockImplementation((data) => {
+      output.push(String(data));
+      return true;
+    });
+    try {
+      configureLogging({ level: 'debug', format: 'json', modules: 'api:error' });
+      const body = { provider: 'clickup', name: 'Audited hook', credentials: { token: TOKEN }, hookSecret: secret };
+      const created = await app.request('/api/v2/connectors', jsonRequest('POST', body));
+      expect(created.status).toBe(201);
+      const createdText = await created.text();
+      const { data } = z
+        .object({ data: z.object({ id: z.string(), hasHookSecret: z.boolean() }) })
+        .parse(JSON.parse(createdText));
+      expect(data.hasHookSecret).toBe(true);
+      const updated = await app.request(`/api/v2/connectors/${data.id}`, jsonRequest('PATCH', { hookSecret: rotated }));
+      expect(updated.status).toBe(200);
+      const updatedText = await updated.text();
+      const duplicate = await app.request('/api/v2/connectors', jsonRequest('POST', body));
+      expect(duplicate.status).toBe(400);
+      const invalid = await app.request(`/api/v2/connectors/${data.id}`, jsonRequest('PATCH', { hookSecret: 'short' }));
+      expect(invalid.status).toBe(400);
+      const read = await app.request(`/api/v2/connectors/${data.id}`);
+      const list = await app.request('/api/v2/connectors');
+      await Bun.sleep(0);
+      expect(output.length).toBeGreaterThan(0);
+      const auditSchema = z.object({ changes: z.object({ hookSecret: z.object({ after: z.string() }) }) });
+      const audits = tables.config_audit_logs.filter((entry) => auditSchema.safeParse(entry).success);
+      expect(audits).toHaveLength(2);
+      for (const entry of audits) {
+        expect(auditSchema.parse(entry).changes.hookSecret.after).toMatch(/^sha256:[0-9a-f]{12}$/);
+      }
+      const surfaces = [
+        createdText,
+        updatedText,
+        await duplicate.text(),
+        await invalid.text(),
+        await read.text(),
+        await list.text(),
+        ...output,
+        JSON.stringify(audits),
+      ];
+      for (const surface of surfaces) {
+        expect(surface).not.toContain(secret);
+        expect(surface).not.toContain(rotated);
+        expect(surface).not.toContain('{"v":');
+      }
+      const stored = tables.connectors[0]?.hookSecret;
+      if (typeof stored !== 'string') throw new Error('expected stored hook secret');
+      expect(openCredentialField(TENANT_A, stored)).toBe(rotated);
+    } finally {
+      configureLogging(config);
+      writer.mockRestore();
+    }
+  });
+
   test('a connector create writes fingerprints, never the credential', async () => {
     const { db, tables } = createConnectorTestDb();
     const app = mountAuditedApp(db);

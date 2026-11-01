@@ -52,7 +52,8 @@ export function registerConnectorSchemas(registry: OpenAPIRegistry): void {
     description:
       'Validates synchronously through the provider manifest. A provider rejection still persists the row, ' +
       'returned with status "error" and a readable lastError — never a false "connected". Credentials are sealed ' +
-      'and never returned.',
+      'and never returned. The optional hookSecret is also write-only and sealed per tenant; only hasHookSecret ' +
+      'is returned. Unmatched delivery counters are available in connector views.',
     request: { body: { content: { 'application/json': { schema: CreateConnectorBodySchema } } } },
     responses: {
       201: {
@@ -145,6 +146,8 @@ export function registerConnectorSchemas(registry: OpenAPIRegistry): void {
     operationId: 'updateConnector',
     tags: ['Connectors'],
     summary: 'Update a connector (revalidates when credentials change)',
+    description:
+      'Set or rotate the write-only hookSecret without revalidating credentials. Responses expose only hasHookSecret.',
     request: {
       params: IdParams,
       body: { content: { 'application/json': { schema: UpdateConnectorBodySchema } } },
@@ -176,8 +179,10 @@ export function registerConnectorSchemas(registry: OpenAPIRegistry): void {
     tags: ['Connectors'],
     summary: 'Create an event subscription',
     description:
-      'The target automation must exist and its triggerEventType must be "connector.event". The verification ' +
-      'secret is sealed and never returned.',
+      'With ingress omitted or "subscription", targetAutomationId and verificationSecret are required; the target ' +
+      'trigger is connector.event and the secret is sealed and never returned. With ingress "connector", eventKey ' +
+      'is under connector.{provider}., targetAutomationId is optional and no subscription secret is accepted. A target ' +
+      'requires one exact event name matching its trigger; trailing-* prefix globs are allowed only without a target.',
     request: {
       params: IdParams,
       body: { content: { 'application/json': { schema: CreateSubscriptionBodySchema } } },
@@ -219,7 +224,9 @@ export function registerConnectorSchemas(registry: OpenAPIRegistry): void {
     summary: 'Pause, resume or re-point an event subscription',
     description:
       'Rotating verificationSecret takes effect immediately: the old secret stops verifying and the provider copy ' +
-      'must be updated. Paused subscriptions still verify a delivery, then ack 202 ignored and publish nothing.',
+      'must be updated. Paused subscriptions still verify a delivery, then ack 202 ignored and publish nothing. ' +
+      'Ingress cannot be changed. Connector ingress rejects verificationSecret. Except for a pause-only change, ' +
+      'it rechecks that a target holds the exact event name; a glob subscription must remain target-less.',
     request: {
       params: SubscriptionParams,
       body: { content: { 'application/json': { schema: UpdateSubscriptionBodySchema } } },
@@ -252,7 +259,8 @@ export function registerConnectorSchemas(registry: OpenAPIRegistry): void {
     summary: 'Send a test delivery through the real pipeline',
     description:
       'Uses the manifest sample or the caller payload, bypasses signature verification, and runs parse → filters → ' +
-      'claim → publish → automation. The idempotency key is random, so repeated tests are not deduped.',
+      'claim → publish → automation. The idempotency key is random, so repeated tests are not deduped. ' +
+      'Connector-ingress subscriptions return 409 CONNECTOR_INGRESS_TEST_UNSUPPORTED without journaling.',
     request: {
       params: SubscriptionParams,
       body: { content: { 'application/json': { schema: TestDeliveryBodySchema } } },
@@ -261,6 +269,10 @@ export function registerConnectorSchemas(registry: OpenAPIRegistry): void {
       200: {
         description: 'Test delivery published',
         content: { 'application/json': { schema: TestDeliveryResponseSchema } },
+      },
+      409: {
+        description: 'CONNECTOR_INGRESS_TEST_UNSUPPORTED: provider delivery required for connector ingress',
+        content: { 'application/json': { schema: ErrorSchema } },
       },
       400: { description: 'Validation error', content: { 'application/json': { schema: ErrorSchema } } },
       404: { description: 'Not found', content: { 'application/json': { schema: ErrorSchema } } },

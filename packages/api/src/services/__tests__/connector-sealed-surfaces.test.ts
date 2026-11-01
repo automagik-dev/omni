@@ -89,6 +89,95 @@ describe('connector credential sealing', () => {
     expect(openCredentialField(null, sealed)).toBeNull();
   });
 
+  test('hook secrets seal on create and rotation, flip availability, and never enter views', async () => {
+    const { db, tables } = createConnectorTestDb();
+    const registry = new ConnectorRegistry([
+      {
+        ...clickupManifest,
+        async validate() {
+          return { ok: true };
+        },
+      },
+    ]);
+    const connectorService = new ConnectorService(db, null, registry);
+    const scope = <T>(fn: () => Promise<T>) => runInTenantScope(db, connectorTenantContext(TENANT_A), fn);
+    const secret = 'connector-hook-secret-original';
+    const rotated = 'connector-hook-secret-rotated';
+    const created = await scope(() =>
+      connectorService.create({
+        provider: 'clickup',
+        name: 'Hook lifecycle',
+        credentials: { token: TOKEN },
+      }),
+    );
+    expect(created.hasHookSecret).toBe(false);
+    const views = [created];
+    for (const hookSecret of [secret, rotated]) {
+      const updated = await scope(() => connectorService.update(created.id, { hookSecret }));
+      expect(updated.hasHookSecret).toBe(true);
+      const stored = tables.connectors[0]?.hookSecret;
+      if (typeof stored !== 'string') throw new Error('expected sealed hook secret');
+      expect(stored).not.toContain(hookSecret);
+      expect(openCredentialField(TENANT_A, stored)).toBe(hookSecret);
+      expect(openCredentialField(TENANT_B, stored)).toBeNull();
+      views.push(updated, await scope(() => connectorService.getById(created.id)));
+    }
+    const withSecret = await scope(() =>
+      connectorService.create({
+        provider: 'clickup',
+        name: 'Hook on create',
+        credentials: { token: TOKEN },
+        hookSecret: secret,
+      }),
+    );
+    expect(withSecret.hasHookSecret).toBe(true);
+    const stored = tables.connectors[1]?.hookSecret;
+    if (typeof stored !== 'string') throw new Error('expected hook secret sealed on create');
+    expect(stored).not.toContain(secret);
+    expect(openCredentialField(TENANT_A, stored)).toBe(secret);
+    views.push(withSecret, ...(await scope(() => connectorService.list())).items);
+    setTenantSecretMasterKey(null);
+    const unavailable = await scope(() => connectorService.getById(created.id));
+    expect(unavailable.hasHookSecret).toBe(false);
+    views.push(unavailable);
+    for (const view of views) {
+      expect(view).not.toHaveProperty('hookSecret');
+      expect(JSON.stringify(view)).not.toContain(secret);
+      expect(JSON.stringify(view)).not.toContain(rotated);
+      expect(JSON.stringify(view)).not.toContain('{"v":');
+    }
+  });
+
+  test('provider validation errors redact the hook secret on create and credential PATCH', async () => {
+    const { db } = createConnectorTestDb();
+    const secret = 'hook-secret-in-provider-error';
+    let throws = false;
+    const registry = new ConnectorRegistry([
+      {
+        ...clickupManifest,
+        async validate() {
+          if (throws) throw new Error(`provider echoed ${secret}`);
+          return { ok: false, code: 'AUTH_FAILED', message: `provider echoed ${secret}` };
+        },
+      },
+    ]);
+    const connectorService = new ConnectorService(db, null, registry);
+    await runInTenantScope(db, connectorTenantContext(TENANT_A), async () => {
+      const created = await connectorService.create({
+        provider: 'clickup',
+        name: 'Redaction',
+        credentials: { token: TOKEN },
+        hookSecret: secret,
+      });
+      expect(created.lastError).toContain('provider echoed');
+      expect(JSON.stringify(created)).not.toContain(secret);
+      throws = true;
+      const updated = await connectorService.update(created.id, { credentials: { token: TOKEN } });
+      expect(updated.lastError).toContain('provider echoed');
+      expect(JSON.stringify(updated)).not.toContain(secret);
+    });
+  });
+
   test('the sanitized connector never returns the secret or its ciphertext', () => {
     const sealed = sealCredentialField(TENANT_A, JSON.stringify({ token: TOKEN })) as string;
     const view = service().sanitizeConnector(row(TENANT_A, sealed));
