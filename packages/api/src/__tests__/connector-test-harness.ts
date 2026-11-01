@@ -150,7 +150,10 @@ function compareRows(key: string, direction: 'asc' | 'desc') {
   };
 }
 
-export function createConnectorTestDb(seed: Partial<ConnectorTestTables> = {}): ConnectorTestDb {
+export function createConnectorTestDb(
+  seed: Partial<ConnectorTestTables> = {},
+  faults: { deleteError?: Error } = {},
+): ConnectorTestDb {
   const tables: ConnectorTestTables = {
     connectors: [],
     connector_event_subscriptions: [],
@@ -247,7 +250,7 @@ export function createConnectorTestDb(seed: Partial<ConnectorTestTables> = {}): 
       },
       where(condition: unknown) {
         state.where = condition;
-        return chain;
+        return Object.assign(chain.returning(), chain);
       },
       returning() {
         const rows = rowsOf(table).filter((row) => matchesWhere(state.where, row));
@@ -263,6 +266,7 @@ export function createConnectorTestDb(seed: Partial<ConnectorTestTables> = {}): 
     const chain = {
       where(condition: unknown) {
         state.where = condition;
+        if (faults.deleteError) return Promise.reject(faults.deleteError);
         return chain;
       },
       returning() {

@@ -1054,7 +1054,16 @@ export class ConnectorService {
       await this.eventBus.publishConnector(eventType, payload, { ...metadata, publishEventId: eventId });
     } catch (error) {
       await runTenantWorkDb(this.pool, tenantId, async () => {
-        await this.db.delete(omniEvents).where(eq(omniEvents.id, eventId));
+        await this.db
+          .delete(omniEvents)
+          .where(eq(omniEvents.id, eventId))
+          .catch((releaseError: unknown) => {
+            log.error('Failed to release connector delivery claim after publish failure', {
+              connectorId: connector.id,
+              eventId,
+              error: asErrorText(releaseError),
+            });
+          });
         for (const subscription of subscriptions)
           await this.recordFailure(subscription, 'Connector delivery publish failed');
       });
