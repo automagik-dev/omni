@@ -1,17 +1,8 @@
-import { afterEach, beforeEach, describe, expect } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import type { AgentTrigger, StreamDelta } from '../../types';
 import { OpenClawClient } from '../client';
 import { OpenClawAgentProvider } from '../provider';
 import type { AgentEventPayload, OpenClawClientConfig, OpenClawProviderConfig, ReqFrame, ResFrame } from '../types';
-import { test, waitForCondition, waitForMockServer } from './mock-waits';
-
-const clients = new Set<OpenClawClient>();
-
-function createClient(): OpenClawClient {
-  const client = new OpenClawClient(createClientConfig());
-  clients.add(client);
-  return client;
-}
 
 let server: ReturnType<typeof Bun.serve> | null = null;
 let serverPort = 0;
@@ -23,11 +14,10 @@ interface MockWs {
 
 let onClientFrame: ((frame: ReqFrame, ws: MockWs) => void) | null = null;
 
-async function startMockServer() {
+function startMockServer() {
   serverConnections = new Set();
 
   const srv = Bun.serve({
-    hostname: '127.0.0.1',
     port: 0,
     fetch(req, server) {
       // @ts-ignore — Bun upgrade signature varies by version
@@ -73,14 +63,11 @@ async function startMockServer() {
 
   server = srv;
   serverPort = srv.port ?? 0;
-  await waitForMockServer(new URL(`http://127.0.0.1:${serverPort}`));
 }
 
-async function stopMockServer() {
-  for (const client of clients) client.stop();
-  clients.clear();
+function stopMockServer() {
   if (server) {
-    await server.stop(true);
+    server.stop(true);
     server = null;
   }
   onClientFrame = null;
@@ -124,9 +111,9 @@ function createProviderConfig(overrides?: Partial<OpenClawProviderConfig>): Open
 async function createConnectedProvider(
   overrides?: Partial<OpenClawProviderConfig>,
 ): Promise<{ provider: OpenClawAgentProvider; client: OpenClawClient }> {
-  const client = createClient();
+  const client = new OpenClawClient(createClientConfig());
   client.start();
-  await waitForCondition(() => client.connected, 'the mock gateway handshake');
+  await client.waitForReady(5_000);
   const provider = new OpenClawAgentProvider(
     'stream-provider',
     'Stream Provider',
@@ -173,12 +160,12 @@ async function collectDeltas(stream: AsyncGenerator<StreamDelta>): Promise<Strea
 }
 
 describe('OpenClawAgentProvider triggerStream', () => {
-  beforeEach(async () => {
-    await startMockServer();
-  }, 15_000);
+  beforeEach(() => {
+    startMockServer();
+  });
 
-  afterEach(async () => {
-    await stopMockServer();
+  afterEach(() => {
+    stopMockServer();
   });
 
   test('basic thinking → content → final sequence', async () => {
