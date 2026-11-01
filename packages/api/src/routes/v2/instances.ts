@@ -13,12 +13,13 @@ import {
   NotFoundError,
   createLogger,
 } from '@omni/core';
-import type { GupshupHandoffOptions } from '@omni/db';
+import type { ApiKey, GupshupHandoffOptions } from '@omni/db';
 import { type Context, Hono } from 'hono';
 import { z } from 'zod';
 import { accessCache } from '../../cache/cache-keys';
 import { DEFAULT_TURN_SCOPES } from '../../constants/scopes';
 import { agentKeyName, agentKeyNameCandidates } from '../../lib/agent-key-name';
+import { type AgentKeyBinding, type AgentKeyOwner, agentKeyBelongsToBinding } from '../../lib/agent-key-ownership';
 import { applyInboundReplyContextOption } from '../../lib/inbound-reply-context';
 import { readSignedHostScopeContext } from '../../lib/signed-host-scope-context';
 import { applyWhatsAppBusinessConnectionOptions } from '../../lib/whatsapp-business-connection';
@@ -1388,7 +1389,7 @@ async function handleAgentKeyProvisioning(
     try {
       const agent = await services.agents.getById(newAgentId);
       const keyName = agentKeyName(agent.name, tenantId);
-      const existingKey = await services.apiKeys.findAgentKeyByName(keyName);
+      const existingKey = await findOwnedBindingKey(services, { agentId: agent.id, name: agent.name, tenantId });
 
       if (existingKey) {
         // Add instanceId to existing key's instanceIds
@@ -1418,6 +1419,27 @@ async function handleAgentKeyProvisioning(
       log.error('Failed to provision agent key', { newAgentId, instanceId, error: String(err) });
     }
   }
+}
+
+/** A legacy bare key may be extended only with the startup repair's ownership proof. */
+async function findOwnedBindingKey(services: Services, binding: AgentKeyBinding): Promise<ApiKey | null> {
+  const name = agentKeyName(binding.name, binding.tenantId);
+  if (binding.tenantId) return services.apiKeys.findAgentKeyByName(name);
+  const candidates = await services.apiKeys.findAgentKeysByNames([name]);
+  const ids = new Set(candidates.flatMap((key) => key.instanceIds ?? []));
+  const owners = new Map<string, AgentKeyOwner>();
+  await Promise.all(
+    [...ids].map(async (id) => {
+      try {
+        const instance = await services.instances.getById(id);
+        owners.set(id, { agentId: instance.agentId, tenantId: instance.tenantId });
+      } catch {
+        // A missing or invisible grant cannot prove ownership. Provision a new
+        // narrow key instead of adding authority to this ambiguous credential.
+      }
+    }),
+  );
+  return candidates.find((key) => agentKeyBelongsToBinding(key, binding, owners)) ?? null;
 }
 
 /** Remove every matching scoped grant, including legacy names and duplicate rows. */

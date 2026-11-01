@@ -124,7 +124,7 @@ const ConnectorIngressBodySchema = z
   .strict();
 
 export const CreateSubscriptionBodySchema = z
-  .union([SubscriptionIngressBodySchema, ConnectorIngressBodySchema])
+  .discriminatedUnion('ingress', [SubscriptionIngressBodySchema, ConnectorIngressBodySchema])
   .openapi('CreateSubscriptionBody');
 
 export const UpdateSubscriptionBodySchema = z
