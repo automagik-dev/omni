@@ -380,8 +380,8 @@ export function registerEventConsumerSchemas(registry: OpenAPIRegistry): void {
       'consumer deleted mid-stream ends the stream with an `error` event. Requires events:write (as pull) and ' +
       'a scoped consumer the key may not see is 404, a restricted owner ' +
       'streams only its narrowed instances, and an instance-restricted API key only receives rows of its own ' +
-      'instances. A restricted key can read an unscoped stream but cannot ack its position; use a scoped consumer ' +
-      'for durable progress. An access-filtered consumer holds an unfilled row until its verdict lands. A stream lives at most ' +
+      'instances. A restricted key cannot stream an unscoped consumer (403); create a scoped consumer instead. ' +
+      'An access-filtered consumer holds an unfilled row until its verdict lands. A stream lives at most ' +
       'EVENT_STREAM_MAX_LIFETIME_MS (default and maximum 30000, the revocation ceiling), then ends with a ' +
       '`reconnect` event carrying `retry:` and `id:` (the scanned position, past filtered-out rows) — reconnect ' +
       'with Last-Event-ID to resume and re-authenticate. Past ' +
@@ -399,6 +399,10 @@ export function registerEventConsumerSchemas(registry: OpenAPIRegistry): void {
       },
       400: {
         description: 'Invalid start position, or the consumer is shared',
+        content: { 'application/json': { schema: ErrorSchema } },
+      },
+      403: {
+        description: 'Instance-restricted key on an unscoped consumer; create a scoped consumer',
         content: { 'application/json': { schema: ErrorSchema } },
       },
       404: { description: 'No such consumer', content: { 'application/json': { schema: ErrorSchema } } },

@@ -280,15 +280,16 @@ describe('POST /events/consumers resolves scoped instance ids (fake database)', 
   });
 });
 
-// A restricted events:write key must receive a useful 403 before any scan or mutation,
+// A restricted events:write key must receive a useful 403 before any stream, scan or mutation,
 // even when it guesses a valid unscoped name or submits an SSE position to /ack.
-describe('unscoped consumer mutations fail closed over HTTP', () => {
+describe('unscoped consumer delivery and mutations fail closed over HTTP', () => {
   const db = {
     select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ name: 'legacy', scoped: false }] }) }) }),
   } as unknown as Database;
   const app = mount(new EventConsumerService(db), { ...RESTRICTED_KEY, scopes: ['events:write'] });
   for (const [method, path, body] of [
     ['POST', '/events/consumers/legacy/pull', undefined],
+    ['GET', '/events/consumers/legacy/stream', undefined],
     ['POST', '/events/consumers/legacy/ack', { cursor: 100 }],
     ['POST', '/events/consumers/legacy/ack', { leaseId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd' }],
     ['DELETE', '/events/consumers/legacy', undefined],

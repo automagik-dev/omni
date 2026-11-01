@@ -479,7 +479,7 @@ describe('instance-scoped consumers (opt-in, 0082)', () => {
     }
   });
 
-  test('unscoped consumers remain visible for read-only inspection and streaming', () => {
+  test('unscoped consumers remain visible for read-only inspection', () => {
     const consumer = { scoped: false, ownerKeyId: null };
     for (const caller of [...Object.values(callers), undefined]) {
       expect(canAccessConsumer(consumer, caller)).toBe(true);

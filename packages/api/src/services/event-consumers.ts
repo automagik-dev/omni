@@ -37,10 +37,10 @@
  * the empty-page advance still move past filtered rows), and only the owner
  * key or an instance-unrestricted key can see, pull, ack or delete it —
  * anyone else gets the same 404 as a missing name. Unscoped consumers (the
- * default for unrestricted keys) can only be pulled, acked or deleted by
+ * default for unrestricted keys) can only be pulled, streamed, acked or deleted by
  * instance-unrestricted keys: sharing their cursor with a restricted reader
  * would discard rows that reader never received. Restricted keys always
- * create scoped consumers. Read-only streams still apply the caller filter.
+ * create scoped consumers. Scoped streams also apply the caller filter.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -350,7 +350,7 @@ export function resolveConsumerScope(
 }
 
 /**
- * Whether `caller` may see `consumer`. Mutations additionally require getMutable.
+ * Whether `caller` may see `consumer`. Delivery and mutations additionally require getMutable.
  * Unscoped consumers and
  * callers with no key context are unrestricted (legacy behaviour); a scoped
  * consumer is visible to its owner key and to instance-unrestricted keys.
@@ -518,13 +518,13 @@ export class EventConsumerService {
     return this.withLag(row, await this.head(), caller);
   }
 
-  /** Refuse operations that can move a shared cursor past rows the caller cannot read. */
+  /** Delivery and mutations fail closed for restricted callers on unscoped consumers. */
   private async getMutable(name: string, caller?: ConsumerCaller): Promise<DurableConsumer> {
     const row = await this.getVisible(name, caller);
     if (!row.scoped && caller && caller.instanceIds !== null) {
       throw new OmniError({
         code: ERROR_CODES.FORBIDDEN,
-        message: `Instance-restricted API keys cannot pull, ack or delete unscoped consumer '${name}'. Create a scoped consumer (scoped: true) for this key.`,
+        message: `Instance-restricted API keys cannot pull, stream, ack or delete unscoped consumer '${name}'. Create a scoped consumer (scoped: true) for this key.`,
         context: { name },
         recoverable: false,
       });
@@ -732,9 +732,9 @@ export class EventConsumerService {
    * job and the stream never takes or acks one.
    */
   async getStreamable(name: string, caller?: ConsumerCaller): Promise<DurableConsumer> {
-    // Read-only: a scoped consumer the caller may not see is a 404, and
-    // a restricted owner pages only the stored instances its key still has.
-    const consumer = narrowToCaller(await this.getVisible(name, caller), caller);
+    // Match pull: restricted keys need a scoped consumer, and an owner
+    // pages only the stored instances its key still has.
+    const consumer = await this.getMutable(name, caller);
     if (consumer.shared) {
       throw new ValidationError(
         `consumer '${name}' is shared — streams serve fan-out consumers only; pull and ack with the leaseId`,

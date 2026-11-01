@@ -632,7 +632,7 @@ postgresDescribe('durable event consumers (#989, real PostgreSQL)', () => {
       await expect(service.scanForStream('jr-stream-shared', 0, FULL_ACCESS)).rejects.toThrow(/shared/);
     });
 
-    test('(h) SSE stream scan: an instance-restricted key only receives its instances; a full key receives all', async () => {
+    test('(h) SSE stream scan: restricted keys are refused on unscoped consumers; a full key receives all', async () => {
       const [other] = await db
         .insert(instances)
         .values({ name: `inst-stream-other-${randomUUID()}`, channel: 'whatsapp-baileys' })
@@ -651,21 +651,22 @@ postgresDescribe('durable event consumers (#989, real PostgreSQL)', () => {
       const theirs = await seed(other.id);
       const mine2 = await seed(instanceId);
 
-      const restricted = await service.scanForStream('jr-stream-instances', consumer.cursor, {
-        tenantId: null,
-        caller: { keyId: null, instanceIds: [instanceId] },
-      });
-      expect(restricted.items.map((e) => e.id)).toEqual([mine1.id, mine2.id]);
-      expect(restricted.through).toBe(mine2.seq);
+      await expect(
+        service.scanForStream('jr-stream-instances', consumer.cursor, {
+          tenantId: null,
+          caller: { keyId: null, instanceIds: [instanceId] },
+        }),
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
 
       const all = await service.scanForStream('jr-stream-instances', consumer.cursor, FULL_ACCESS);
       expect(all.items.map((e) => e.id)).toEqual([mine1.id, theirs.id, mine2.id]);
 
-      const none = await service.scanForStream('jr-stream-instances', consumer.cursor, {
-        tenantId: null,
-        caller: { keyId: null, instanceIds: [] },
-      });
-      expect(none.items).toEqual([]);
+      await expect(
+        service.scanForStream('jr-stream-instances', consumer.cursor, {
+          tenantId: null,
+          caller: { keyId: null, instanceIds: [] },
+        }),
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
       expect((await service.getByName('jr-stream-instances')).cursor).toBe(consumer.cursor);
     });
 
@@ -904,9 +905,10 @@ postgresDescribe('durable event consumers (#989, real PostgreSQL)', () => {
         expect((await service.inspect('legacy-0082', caller)).name).toBe('legacy-0082');
         expect((await service.list(caller)).map((c) => c.name)).toContain('legacy-0082');
       }
-      const page = await service.scanForStream('legacy-0082', 0, { tenantId: null, caller: owner });
-      expect(page.items.map((e) => e.id)).toEqual(['a1', 'a2'].map(idOf));
-      await expect(service.ack('legacy-0082', page.through ?? 0, undefined, owner)).rejects.toMatchObject({
+      await expect(service.scanForStream('legacy-0082', 0, { tenantId: null, caller: owner })).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+      await expect(service.ack('legacy-0082', stored.cursor + 100, undefined, owner)).rejects.toMatchObject({
         code: 'FORBIDDEN',
       });
       await expect(service.delete('legacy-0082', otherRestricted)).rejects.toMatchObject({ code: 'FORBIDDEN' });

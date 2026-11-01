@@ -14,7 +14,7 @@
  *
  * Every handler passes the caller's key (id + instance restriction, read
  * the same way as the /events routes) to the service. Restricted keys need a
- * scoped consumer to pull, ack or delete; read-only streams apply their instance filter.
+ * scoped consumer to pull, stream, ack or delete; scoped streams apply their instance filter.
  */
 
 import { zValidator } from '@hono/zod-validator';
@@ -127,8 +127,8 @@ eventConsumersRoutes.post('/events/consumers/:name/ack', zValidator('json', AckC
  * Read-only w.r.t. the consumer: the position lives in memory, the stored
  * cursor is never written and no lease is taken (shared consumers are
  * refused). Clients keep acking with POST /events/consumers/:name/ack.
- * events:write like pull; an instance-restricted key only streams its own
- * instances' rows (the GET /events rule). Each stream lives at most
+ * events:write like pull; an instance-restricted key needs a scoped consumer
+ * and only streams its own instances' rows. Each stream lives at most
  * EVENT_STREAM_MAX_LIFETIME_MS (the revocation ceiling), then asks the client
  * to reconnect, which re-authenticates.
  */
@@ -142,7 +142,7 @@ eventConsumersRoutes.get(
     const lastEventId = c.req.valid('header')['last-event-id'];
     const services = c.get('services');
     const caller = consumerCaller(c);
-    // 404 (missing, or scoped and not visible to this key) / 400 (shared)
+    // 403 (restricted key on unscoped) / 404 (missing or invisible) / 400 (shared)
     // while a JSON error can still be returned. Streams never mutate the cursor.
     const consumer = await services.eventConsumers.getStreamable(name, caller);
     const start = resolveStreamStart({
