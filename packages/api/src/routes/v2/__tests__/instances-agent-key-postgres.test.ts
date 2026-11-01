@@ -131,6 +131,29 @@ postgresDescribe('agent key assignment lifecycle (real PostgreSQL)', () => {
     });
   }
 
+  test('unbind removes all canonical and legacy system grants without touching user keys', async () => {
+    const tenantId = '11111111-1111-4111-8111-111111111111';
+    const h = harness(tenantId);
+    const qualified = await h.seed([INSTANCE_A]);
+    const name = `agent:${h.names[AGENT_A]}`;
+    const legacy = await h.service.create({
+      name,
+      instanceIds: [INSTANCE_A, INSTANCE_B],
+      scopes: [...DEFAULT_TURN_SCOPES],
+      createdBy: 'system:auto-provision',
+    });
+    const user = await h.service.create({
+      name,
+      instanceIds: [INSTANCE_A],
+      scopes: [...DEFAULT_TURN_SCOPES],
+      createdBy: 'operator',
+    });
+    expect((await h.assign(INSTANCE_A, null)).status).toBe(200);
+    expect((await h.service.getById(qualified.key.id))?.status).toBe('revoked');
+    expect((await h.service.getById(legacy.key.id))?.instanceIds).toEqual([INSTANCE_B]);
+    expect(await h.service.getById(user.key.id)).toEqual(user.key);
+  });
+
   test('agent lookup ignores user-created names and audited revoked system keys', async () => {
     const h = harness();
     const name = `agent:${h.names[AGENT_A]}`;

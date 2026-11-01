@@ -9,12 +9,13 @@ type DispatchServices = Parameters<Dispatch>[0];
 type Key = { id: string; instanceIds: string[] | null };
 
 function harness(keys: Record<string, Key>, tenantId: string | null = TENANT) {
-  const lookup = mock(async (name: string) => keys[name] ?? null);
+  const lookup = mock(async (names: string[]) => names.flatMap((name) => (keys[name] ? [keys[name]] : [])));
+  const legacyLookup = mock(async (name: string) => keys[name] ?? null);
   const open = mock(async (_options: Parameters<DispatchServices['turns']['open']>[0]) => ({ id: 'turn-b' }));
   const update = mock(async (_id: string, _patch: Parameters<DispatchServices['apiKeys']['update']>[1]) => undefined);
-  const triggerProvider = mock(async () => undefined);
+  const triggerProvider = mock(async (_trigger: Parameters<Dispatch>[3]) => undefined);
   const services = {
-    apiKeys: { findAgentKeyByName: lookup, update },
+    apiKeys: { findAgentKeysByNames: lookup, findAgentKeyByName: legacyLookup, update },
     turns: { open },
     chats: { findByExternalIdSmart: async () => ({ id: 'chat-b' }) },
     messages: { getByExternalId: async () => ({ id: 'message-b' }) },
@@ -22,7 +23,27 @@ function harness(keys: Record<string, Key>, tenantId: string | null = TENANT) {
   const db = {
     select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ id: 'agent-b', name: 'support' }] }) }) }),
   } as unknown as Parameters<Dispatch>[7];
-  const trigger = { content: { text: 'hello' }, sessionId: 'session-b' } as Parameters<Dispatch>[3];
+  const trigger: Parameters<Dispatch>[3] = {
+    traceId: 'trace-b',
+    type: 'dm',
+    event: {
+      id: 'event-b',
+      type: 'message.received',
+      payload: { text: 'hello' },
+      metadata: { correlationId: 'trace-b' },
+      timestamp: 1,
+    },
+    source: {
+      channelType: 'whatsapp-baileys',
+      instanceId: INSTANCE,
+      chatId: 'external-chat-b',
+      messageId: 'external-message-b',
+    },
+    sender: { platformUserId: 'sender-b' },
+    content: { text: 'hello' },
+    sessionId: 'session-b',
+    env: { GENIE_TMUX_SESSION: 'existing' },
+  };
   const run = () =>
     __test__.dispatchViaTurnBasedProvider(
       services,
@@ -34,20 +55,74 @@ function harness(keys: Record<string, Key>, tenantId: string | null = TENANT) {
       'trace-b',
       db,
     );
-  return { run, lookup, open, update, triggerProvider, trigger };
+  return { run, lookup, legacyLookup, open, update, triggerProvider, trigger };
 }
 
-describe('turn dispatch requires the candidate key to grant this instance', () => {
+describe('tenant dispatch requires instance grants; no-tenant dispatch retains legacy lookup', () => {
   for (const instanceIds of [null, [], [OTHER_INSTANCE]]) {
     test(`refuses foreign bare fallback ${JSON.stringify(instanceIds)} after qualified key revocation`, async () => {
       // Active lookup no longer sees the revoked qualified row. The remaining
       // bare key can belong to another tenant, despite having the same name.
       const h = harness({ 'agent:support': { id: 'foreign-key', instanceIds } });
       expect(await h.run()).toBe(false);
-      expect(h.lookup.mock.calls.map(([name]) => name)).toEqual([`agent:${TENANT}:support`, 'agent:support']);
+      expect(h.lookup.mock.calls.flatMap(([names]) => names)).toEqual([`agent:${TENANT}:support`, 'agent:support']);
       expect(h.open).not.toHaveBeenCalled();
       expect(h.update).not.toHaveBeenCalled();
       expect(h.triggerProvider).not.toHaveBeenCalled();
+    });
+  }
+
+  test('duplicate system names do not hide a key that explicitly grants this instance', async () => {
+    const h = harness({});
+    h.lookup.mockImplementation(async () => [
+      { id: 'foreign-key', instanceIds: [OTHER_INSTANCE] },
+      { id: 'own-key', instanceIds: [INSTANCE] },
+    ]);
+    expect(await h.run()).toBe(true);
+    expect(h.open.mock.calls[0]?.[0].apiKeyId).toBe('own-key');
+  });
+
+  for (const instanceIds of [null, [], [OTHER_INSTANCE], [INSTANCE]]) {
+    test(`C7 no-tenant dispatch preserves the legacy name lookup and payload (${JSON.stringify(instanceIds)})`, async () => {
+      const h = harness({ 'agent:support': { id: 'legacy-key', instanceIds } }, null);
+      const original = structuredClone(h.trigger);
+      expect(await h.run()).toBe(true);
+      expect(h.lookup).not.toHaveBeenCalled();
+      expect(h.legacyLookup.mock.calls).toEqual([['agent:support']]);
+      expect(Buffer.from(h.legacyLookup.mock.calls[0]![0])).toEqual(Buffer.from('agent:support'));
+      expect(h.open.mock.calls).toEqual([
+        [
+          {
+            instanceId: INSTANCE,
+            chatId: 'external-chat-b',
+            messageId: 'external-message-b',
+            agentId: 'agent-b',
+            apiKeyId: 'legacy-key',
+          },
+        ],
+      ]);
+      expect(h.update.mock.calls).toEqual([
+        [
+          'legacy-key',
+          {
+            contextInstanceId: INSTANCE,
+            contextChatId: 'chat-b',
+            contextMessageId: 'message-b',
+          },
+        ],
+      ]);
+      const expected = {
+        ...original,
+        env: {
+          GENIE_TMUX_SESSION: 'existing',
+          OMNI_INSTANCE: INSTANCE,
+          OMNI_CHAT: 'external-chat-b',
+          OMNI_MESSAGE: 'external-message-b',
+          OMNI_TURN_ID: 'turn-b',
+        },
+      };
+      expect(h.triggerProvider.mock.calls).toEqual([[expected]]);
+      expect(JSON.stringify(h.trigger)).toBe(JSON.stringify(expected));
     });
   }
 

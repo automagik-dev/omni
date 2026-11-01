@@ -609,6 +609,31 @@ export class ApiKeyService {
     return result ?? null;
   }
 
+  /** All active system keys for canonical and legacy candidate names. */
+  async findAgentKeysByNames(names: string[]): Promise<ApiKey[]> {
+    return this.db
+      .select()
+      .from(apiKeys)
+      .where(
+        and(inArray(apiKeys.name, names), eq(apiKeys.status, 'active'), eq(apiKeys.createdBy, 'system:auto-provision')),
+      );
+  }
+
+  /** Unsafe agent credentials from releases that widened the final unbind. */
+  async findWidenedAgentKeys(): Promise<ApiKey[]> {
+    return this.db
+      .select()
+      .from(apiKeys)
+      .where(
+        and(
+          eq(apiKeys.status, 'active'),
+          eq(apiKeys.createdBy, 'system:auto-provision'),
+          sql`${apiKeys.name} LIKE 'agent:%'`,
+          or(isNull(apiKeys.instanceIds), sql`cardinality(${apiKeys.instanceIds}) = 0`),
+        ),
+      );
+  }
+
   /**
    * Revoke an API key
    */

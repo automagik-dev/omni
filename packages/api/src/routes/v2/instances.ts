@@ -18,7 +18,7 @@ import { type Context, Hono } from 'hono';
 import { z } from 'zod';
 import { accessCache } from '../../cache/cache-keys';
 import { DEFAULT_TURN_SCOPES } from '../../constants/scopes';
-import { agentKeyName } from '../../lib/agent-key-name';
+import { agentKeyName, agentKeyNameCandidates } from '../../lib/agent-key-name';
 import { applyInboundReplyContextOption } from '../../lib/inbound-reply-context';
 import { readSignedHostScopeContext } from '../../lib/signed-host-scope-context';
 import { applyWhatsAppBusinessConnectionOptions } from '../../lib/whatsapp-business-connection';
@@ -1377,20 +1377,7 @@ async function handleAgentKeyProvisioning(
   if (oldAgentId) {
     try {
       const oldAgent = await services.agents.getById(oldAgentId);
-      const keyName = agentKeyName(oldAgent.name, tenantId);
-      const existingKey = await services.apiKeys.findAgentKeyByName(keyName);
-      if (existingKey?.instanceIds) {
-        const updated = existingKey.instanceIds.filter((id) => id !== instanceId);
-        if (updated.length === 0) {
-          // null means ALL instances, and some consumers also treat [] as
-          // unrestricted. A key with no remaining assignment must stop working.
-          await services.apiKeys.revoke(existingKey.id, 'Agent has no assigned instances', 'system:auto-provision');
-          log.info('Revoked agent key after its last instance was removed', { keyName, instanceId });
-        } else {
-          await services.apiKeys.update(existingKey.id, { instanceIds: updated });
-          log.info('Removed instance from agent key', { keyName, instanceId });
-        }
-      }
+      await removeInstanceFromAgentKeys(services, instanceId, oldAgent.name, tenantId);
     } catch (err) {
       log.error('Failed to remove instance from old agent key', { oldAgentId, instanceId, error: String(err) });
     }
@@ -1429,6 +1416,31 @@ async function handleAgentKeyProvisioning(
       }
     } catch (err) {
       log.error('Failed to provision agent key', { newAgentId, instanceId, error: String(err) });
+    }
+  }
+}
+
+/** Remove every matching scoped grant, including legacy names and duplicate rows. */
+async function removeInstanceFromAgentKeys(
+  services: Services,
+  instanceId: string,
+  agentName: string,
+  tenantId: string | null,
+): Promise<void> {
+  const keys = await services.apiKeys.findAgentKeysByNames(agentKeyNameCandidates(agentName, tenantId));
+  for (const key of keys) {
+    if (!key.instanceIds?.includes(instanceId)) continue;
+    try {
+      const updated = key.instanceIds.filter((id) => id !== instanceId);
+      if (updated.length === 0) {
+        await services.apiKeys.revoke(key.id, 'Agent has no assigned instances', 'system:auto-provision');
+        log.info('Revoked agent key after its last instance was removed', { keyName: key.name, instanceId });
+      } else {
+        await services.apiKeys.update(key.id, { instanceIds: updated });
+        log.info('Removed instance from agent key', { keyName: key.name, instanceId });
+      }
+    } catch (err) {
+      log.error('Failed to remove instance from agent key', { keyId: key.id, instanceId, error: String(err) });
     }
   }
 }

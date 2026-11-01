@@ -2934,13 +2934,18 @@ async function dispatchViaTurnBasedProvider(
   // lookup it always has.
   const keyNames = agentKeyNameCandidates(agentRecord.name, instance.tenantId);
   let scopedKey: Awaited<ReturnType<typeof services.apiKeys.findAgentKeyByName>> = null;
-  for (const candidate of keyNames) {
-    const key = await services.apiKeys.findAgentKeyByName(candidate);
-    // A bare legacy fallback is global. Its name alone is no proof that it
-    // belongs to this instance, and null/empty grants must never dispatch.
-    if (key?.instanceIds?.includes(instance.id)) {
-      scopedKey = key;
-      break;
+  if (!instance.tenantId) {
+    // Preserve the legacy single lookup by name, without a membership check.
+    scopedKey = await services.apiKeys.findAgentKeyByName(`agent:${agentRecord.name}`);
+  } else {
+    for (const candidate of keyNames) {
+      const keys = await services.apiKeys.findAgentKeysByNames([candidate]);
+      const key = keys.find((key) => key.instanceIds?.includes(instance.id));
+      // A global bare fallback must explicitly grant this tenant's instance.
+      if (key) {
+        scopedKey = key;
+        break;
+      }
     }
   }
   if (!scopedKey) {

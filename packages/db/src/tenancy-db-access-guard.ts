@@ -626,6 +626,16 @@ export const TOTAL_PENDING_CEILING = 21;
  */
 export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
   {
+    file: 'packages/api/src/services/agent-key-reconciliation.ts',
+    table: 'instances',
+    class: 'control-plane',
+    justification:
+      'Idempotent startup upgrade repair before dispatch starts. Legacy mode reads bound instances and agents ' +
+      'on the ambient database; enforcement reads each persisted tenant under ' +
+      'runInWorkerTenantScope. The runtime revokes widened legacy global agent keys; the auth plane enumerates tenant IDs only. Key updates require existing ' +
+      'bindings and proven bare-key ownership; replacement keys always have explicit instance grants.',
+  },
+  {
     file: 'packages/api/scripts/fix-person-duplicates.ts',
     table: '*',
     class: 'migration-ddl',

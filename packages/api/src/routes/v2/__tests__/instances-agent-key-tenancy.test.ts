@@ -135,6 +135,10 @@ function harness(options: {
           lookups.push(name);
           return keys.find((k) => k.name === name && k.status !== 'revoked') ?? null;
         }),
+        findAgentKeysByNames: mock(async (names: string[]) => {
+          lookups.push(...names);
+          return keys.filter((key) => names.includes(key.name) && key.status !== 'revoked');
+        }),
         update: mock(async (id: string, patch: { instanceIds: string[] | null }) => {
           updated.push({ id, instanceIds: patch.instanceIds });
           const row = keys.find((k) => k.id === id);
@@ -327,7 +331,7 @@ for (const context of [undefined, tenantContext(TENANT_B)]) {
     expect((await assignAgent(h, INSTANCE_A, AGENT_A)).status).toBe(200);
     expect(h.created).toEqual([{ name: keyName, instanceIds: [INSTANCE_A] }]);
     expect((await assignAgent(h, INSTANCE_A, null)).status).toBe(200);
-    expect(h.lookups).toEqual([keyName, keyName]);
+    expect(h.lookups).toEqual([keyName, keyName, `agent:${SHARED_AGENT_NAME}`]);
     expect(h.revoked).toEqual(['k_1']);
   });
 }
@@ -343,4 +347,22 @@ test('a failed revoke remains best effort and the PATCH returns 200', async () =
   expect((await assignAgent(h, INSTANCE_A, null)).status).toBe(200);
   expect(key.status).toBe('active');
   expect(key.instanceIds).toEqual([INSTANCE_A]);
+});
+
+test('unbind removes the instance from every canonical and legacy system key that lists it', async () => {
+  const qualified = `agent:${TENANT_A}:${SHARED_AGENT_NAME}`;
+  const bare = `agent:${SHARED_AGENT_NAME}`;
+  const keys: ExistingKey[] = [
+    { id: 'qualified', name: qualified, instanceIds: [INSTANCE_A] },
+    { id: 'legacy', name: bare, instanceIds: [INSTANCE_A, INSTANCE_B] },
+    { id: 'duplicate', name: bare, instanceIds: [INSTANCE_A] },
+    { id: 'unrelated', name: bare, instanceIds: [INSTANCE_B] },
+    { id: 'widened', name: bare, instanceIds: null },
+  ];
+  const h = harness({ instanceTenantId: TENANT_A, existingKeys: keys, agentAssignments: [[INSTANCE_A, AGENT_A]] });
+  expect((await assignAgent(h, INSTANCE_A, null)).status).toBe(200);
+  expect(h.revoked).toEqual(['qualified', 'duplicate']);
+  expect(h.updated).toEqual([{ id: 'legacy', instanceIds: [INSTANCE_B] }]);
+  expect(keys[3]?.instanceIds).toEqual([INSTANCE_B]);
+  expect(keys[4]?.instanceIds).toBeNull();
 });

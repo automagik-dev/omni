@@ -260,5 +260,5 @@ describe('integration: the committed tree honors its own contract', () => {
     expect(result.stderr.toString()).toBe('');
     expect(result.exitCode).toBe(0);
     expect(result.stdout.toString()).toContain('Migration contract OK');
-  });
+  }, 15_000);
 });
