@@ -3,7 +3,7 @@
  *
  * Compound one-step command that wires an AI agent to a channel instance.
  * Generalizes the `omni connect` pattern across every provider schema:
- *   agno | webhook | openclaw | ag-ui | claude-code | a2a | nats-genie
+ *   agno | webhook | ag-ui | claude-code | a2a | nats-genie
  *
  * Steps:
  *   1. Resolve instance by name or UUID
@@ -81,21 +81,6 @@ function buildWebhookConfig(opts: SetupAgentOptions): ProviderBuildResult | { er
   return { baseUrl: url, apiKey: opts.apiKey };
 }
 
-function buildOpenClawConfig(opts: SetupAgentOptions): ProviderBuildResult | { error: string } {
-  if (!opts.baseUrl) return { error: 'openclaw provider requires --base-url (ws:// or wss://).' };
-  if (!opts.baseUrl.startsWith('ws://') && !opts.baseUrl.startsWith('wss://')) {
-    return { error: `openclaw requires ws:// or wss:// URL. Got: ${opts.baseUrl}` };
-  }
-  if (!opts.defaultAgentId) {
-    return { error: 'openclaw provider requires --default-agent-id.' };
-  }
-  return {
-    baseUrl: opts.baseUrl,
-    apiKey: opts.apiKey,
-    schemaConfig: { defaultAgentId: opts.defaultAgentId },
-  };
-}
-
 function buildAgUiConfig(opts: SetupAgentOptions): ProviderBuildResult | { error: string } {
   if (!opts.baseUrl) return { error: 'ag-ui provider requires --base-url.' };
   return { baseUrl: opts.baseUrl, apiKey: opts.apiKey };
@@ -137,8 +122,6 @@ function buildProviderConfig(opts: SetupAgentOptions): ProviderBuildResult | { e
       return buildAgnoConfig(opts);
     case 'webhook':
       return buildWebhookConfig(opts);
-    case 'openclaw':
-      return buildOpenClawConfig(opts);
     case 'ag-ui':
       return buildAgUiConfig(opts);
     case 'claude-code':
@@ -171,7 +154,7 @@ export function createTopLevelSetupCommand(): Command {
     .option('--mode <mode>', 'Trigger mode: turn-based (round-trip) or fire-and-forget', 'turn-based')
     .option('--reply-filter <filter>', 'Reply filter: all | filtered', 'all')
     // Schema-specific
-    .option('--default-agent-id <id>', 'Default agent ID (agno, openclaw)')
+    .option('--default-agent-id <id>', 'Default agent ID (agno)')
     .option('--project-path <path>', 'Project directory (claude-code)')
     .option('--max-turns <n>', 'Max conversation turns (claude-code)', Number.parseInt)
     .option('--permission-mode <mode>', 'Permission mode (claude-code)')

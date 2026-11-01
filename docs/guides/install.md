@@ -162,35 +162,6 @@ and `harness` (E2E agent-testing). List them with
 `omni channels list`, and see `omni instances create --help` for
 channel-specific flags.
 
-## Post-Install: Connect an OpenClaw Agent
-
-```bash
-omni providers setup openclaw \
-  --gateway-url ws://127.0.0.1:18789 \
-  --gateway-token <YOUR_GATEWAY_TOKEN> \
-  --agent-id <YOUR_AGENT_ID>
-```
-
-Expected output:
-```
-✓ Generated device keypair
-✓ Registered device with gateway
-✓ Created provider: <name>
-✓ Provider is healthy
-```
-
-Then assign the provider to a channel instance:
-```bash
-omni instances update <instance-id> \
-  --agent-provider <provider-id> \
-  --agent <YOUR_AGENT_ID>
-```
-
-Verify the provider is healthy:
-```bash
-omni providers test <provider-id>
-# → Provider is healthy (latency: Nms)
-```
 
 ## Service Management
 
@@ -325,30 +296,6 @@ curl -fLO "${NATS_RELEASE}/${ARCHIVE}" &&
 A binary installed this way has no `~/.omni/nats-server.pin` marker, so the next `omni install` or
 `omni start` downloads the pinned release over it through the same size and sha256 checks.
 
-### OpenClaw provider health check fails after delete/recreate
-
-After deleting and recreating an OpenClaw provider, the API client pool may hold a stale connection. Restart the API to flush it:
-```bash
-omni restart
-omni providers test <new-provider-id>
-# → Provider is healthy
-```
-
-### OpenClaw error: `operator.write` scope missing
-
-```
-Error: gateway rejected message — missing scope: operator.write
-```
-
-The device has not been paired with the gateway. Run the setup wizard to generate a keypair and register the device:
-```bash
-omni providers setup openclaw \
-  --gateway-url ws://127.0.0.1:18789 \
-  --gateway-token <YOUR_GATEWAY_TOKEN> \
-  --agent-id <YOUR_AGENT_ID>
-```
-
-This creates a new provider with a device token that has `operator.write` scope. If you already have a provider and want to re-pair only, delete the old one and run setup again.
 
 ## One-Liner (Full Setup from Zero)
 

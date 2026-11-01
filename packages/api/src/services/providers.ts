@@ -4,7 +4,7 @@
  * TENANT-BOUND SEALING OF PROVIDER CREDENTIALS (G5 deliverable (g); ADR-0008)
  * ---------------------------------------------------------------------------
  * `agent_providers` holds two kinds of secret: the bearer `api_key` used against
- * the provider's HTTP/WS endpoint, and — for the OpenClaw schema — the device
+ * the provider's HTTP/WS endpoint, and — for retained legacy rows — the device
  * identity in `schema_config`, whose `devicePrivateKey` is a raw Ed25519 private
  * key and whose `deviceToken` is its bearer companion. ADR-0008 puts both in the
  * "channel/provider/webhook credentials" class that must be encrypted with
@@ -31,7 +31,7 @@
  * is enabled, because G5 ships no credential backfill.
  */
 
-import { NotFoundError } from '@omni/core';
+import { NotFoundError, assertProviderAvailable, removedProviderMessage } from '@omni/core';
 import type { Database } from '@omni/db';
 import { type AgentProvider, type NewAgentProvider, agentProviders } from '@omni/db';
 import { eq } from 'drizzle-orm';
@@ -91,6 +91,11 @@ function openProviderSecrets<T extends Record<string, unknown>>(tenantId: string
   return mapProviderSecrets(row, (value) => openCredentialField(tenantId, value) ?? null);
 }
 
+function providerReadState(provider: AgentProvider): AgentProvider {
+  const error = removedProviderMessage(provider.schema);
+  return error ? { ...provider, lastHealthStatus: 'error', lastHealthError: error } : provider;
+}
+
 export class ProviderService {
   /**
    * Extra per-provider cache evictions wired by the service container — the
@@ -148,7 +153,7 @@ export class ProviderService {
 
     const rows = await query.orderBy(agentProviders.name);
     const tenantId = this.tenantId;
-    return rows.map((row) => openProviderSecrets(tenantId, row));
+    return rows.map((row) => providerReadState(openProviderSecrets(tenantId, row)));
   }
 
   /**
@@ -161,7 +166,7 @@ export class ProviderService {
       throw new NotFoundError('AgentProvider', id);
     }
 
-    return openProviderSecrets(this.tenantId, result);
+    return providerReadState(openProviderSecrets(this.tenantId, result));
   }
 
   /**
@@ -174,13 +179,14 @@ export class ProviderService {
       throw new NotFoundError('AgentProvider', name);
     }
 
-    return openProviderSecrets(this.tenantId, result);
+    return providerReadState(openProviderSecrets(this.tenantId, result));
   }
 
   /**
    * Create a new provider
    */
   async create(data: NewAgentProvider): Promise<AgentProvider> {
+    if (data.schema) assertProviderAvailable(data.schema);
     const tenantId = this.tenantId;
     const [created] = await this.db.insert(agentProviders).values(sealProviderSecrets(tenantId, data)).returning();
 
@@ -195,6 +201,7 @@ export class ProviderService {
    * Update a provider
    */
   async update(id: string, data: Partial<NewAgentProvider>): Promise<AgentProvider> {
+    if (data.schema) assertProviderAvailable(data.schema);
     const tenantId = this.tenantId;
     const [updated] = await this.db
       .update(agentProviders)
@@ -230,11 +237,13 @@ export class ProviderService {
   async checkHealth(id: string): Promise<ProviderHealthResult> {
     const provider = await this.getById(id);
 
+    const removed = removedProviderMessage(provider.schema);
+    if (removed) return { healthy: false, latency: 0, error: removed };
+
     const start = Date.now();
 
     try {
-      // For WebSocket-based providers (openclaw schema), convert ws:// → http:// for health probe
-      const baseUrl = provider.baseUrl.replace(/^ws:\/\//, 'http://').replace(/^wss:\/\//, 'https://');
+      const baseUrl = provider.baseUrl;
       const healthUrl = new URL('/health', baseUrl).toString();
       const response = await fetch(healthUrl, {
         method: 'GET',

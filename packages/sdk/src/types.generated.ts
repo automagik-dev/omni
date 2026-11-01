@@ -7949,7 +7949,7 @@ export interface components {
             /** @description Provider name */
             name: string;
             /**
-             * @description Provider schema type
+             * @description Stored provider schema; openclaw is read-only legacy data and cannot execute.
              * @enum {string}
              */
             schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code" | "a2a" | "nats-genie";
@@ -7963,11 +7963,6 @@ export interface components {
             /**
              * @description Schema-specific configuration. Shape depends on schema type:
              *     - **agno**: `{ agentId, teamId?, timeout? }`
-             *     - **openclaw**: `{ defaultAgentId (required), agentTimeoutMs?, origin?, deviceId?, devicePublicKey?, devicePrivateKey?, deviceToken? }`
-             *       - `deviceId`: SHA256 hex of the raw Ed25519 public key bytes — set automatically by `omni providers setup openclaw`
-             *       - `devicePublicKey`: base64url-encoded raw 32-byte Ed25519 public key
-             *       - `devicePrivateKey`: base64url-encoded raw 32-byte Ed25519 private key
-             *       - `deviceToken`: gateway-issued device token granting `operator.write` scope — obtained during device pairing
              *     - **claude-code**: `{ projectPath, apiKey?, model?, systemPrompt?, maxTurns?, permissionMode?, allowedTools?, mcpServers? }`
              *       - `apiKey` in schemaConfig overrides the provider-level apiKey
              *     - **webhook**: `{ mode?, retries? }`
@@ -8001,6 +7996,10 @@ export interface components {
             tags: string[] | null;
             /** @description Whether active */
             isActive: boolean;
+            /** @description Last provider health status */
+            lastHealthStatus?: string | null;
+            /** @description Health or provider removal error */
+            lastHealthError?: string | null;
             /**
              * Format: date-time
              * @description Creation timestamp
@@ -8020,7 +8019,7 @@ export interface components {
              * @default agno
              * @enum {string}
              */
-            schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code" | "a2a" | "nats-genie";
+            schema: "agno" | "webhook" | "ag-ui" | "claude-code" | "a2a" | "nats-genie";
             /**
              * Format: uri
              * @description Base URL
@@ -8031,12 +8030,6 @@ export interface components {
             /**
              * @description Schema-specific configuration. Required fields vary by schema:
              *     - **agno**: `{ agentId }` (required)
-             *     - **openclaw**: `{ defaultAgentId }` (required), plus optional device pairing fields:
-             *       - `agentTimeoutMs?`, `origin?`
-             *       - `deviceId?`: SHA256 hex of Ed25519 public key — set by `omni providers setup openclaw`
-             *       - `devicePublicKey?`: base64url raw 32-byte Ed25519 public key
-             *       - `devicePrivateKey?`: base64url raw 32-byte Ed25519 private key
-             *       - `deviceToken?`: gateway-issued device token for `operator.write` scope
              *     - **claude-code**: `{ projectPath }` (required) — agent spawns rooted here, reads CLAUDE.md
              *       - Optional: `apiKey` (overrides provider-level), `model`, `systemPrompt`, `maxTurns`, `permissionMode`, `allowedTools`, `mcpServers`
              *     - **webhook**: optional `{ mode, retries }`
@@ -19898,7 +19891,7 @@ export interface operations {
                             /** @description Provider name */
                             name: string;
                             /**
-                             * @description Provider schema type
+                             * @description Stored provider schema; openclaw is read-only legacy data and cannot execute.
                              * @enum {string}
                              */
                             schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code" | "a2a" | "nats-genie";
@@ -19912,11 +19905,6 @@ export interface operations {
                             /**
                              * @description Schema-specific configuration. Shape depends on schema type:
                              *     - **agno**: `{ agentId, teamId?, timeout? }`
-                             *     - **openclaw**: `{ defaultAgentId (required), agentTimeoutMs?, origin?, deviceId?, devicePublicKey?, devicePrivateKey?, deviceToken? }`
-                             *       - `deviceId`: SHA256 hex of the raw Ed25519 public key bytes — set automatically by `omni providers setup openclaw`
-                             *       - `devicePublicKey`: base64url-encoded raw 32-byte Ed25519 public key
-                             *       - `devicePrivateKey`: base64url-encoded raw 32-byte Ed25519 private key
-                             *       - `deviceToken`: gateway-issued device token granting `operator.write` scope — obtained during device pairing
                              *     - **claude-code**: `{ projectPath, apiKey?, model?, systemPrompt?, maxTurns?, permissionMode?, allowedTools?, mcpServers? }`
                              *       - `apiKey` in schemaConfig overrides the provider-level apiKey
                              *     - **webhook**: `{ mode?, retries? }`
@@ -19950,6 +19938,10 @@ export interface operations {
                             tags: string[] | null;
                             /** @description Whether active */
                             isActive: boolean;
+                            /** @description Last provider health status */
+                            lastHealthStatus?: string | null;
+                            /** @description Health or provider removal error */
+                            lastHealthError?: string | null;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -19983,7 +19975,7 @@ export interface operations {
                      * @default agno
                      * @enum {string}
                      */
-                    schema?: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code" | "a2a" | "nats-genie";
+                    schema?: "agno" | "webhook" | "ag-ui" | "claude-code" | "a2a" | "nats-genie";
                     /**
                      * Format: uri
                      * @description Base URL
@@ -19994,12 +19986,6 @@ export interface operations {
                     /**
                      * @description Schema-specific configuration. Required fields vary by schema:
                      *     - **agno**: `{ agentId }` (required)
-                     *     - **openclaw**: `{ defaultAgentId }` (required), plus optional device pairing fields:
-                     *       - `agentTimeoutMs?`, `origin?`
-                     *       - `deviceId?`: SHA256 hex of Ed25519 public key — set by `omni providers setup openclaw`
-                     *       - `devicePublicKey?`: base64url raw 32-byte Ed25519 public key
-                     *       - `devicePrivateKey?`: base64url raw 32-byte Ed25519 private key
-                     *       - `deviceToken?`: gateway-issued device token for `operator.write` scope
                      *     - **claude-code**: `{ projectPath }` (required) — agent spawns rooted here, reads CLAUDE.md
                      *       - Optional: `apiKey` (overrides provider-level), `model`, `systemPrompt`, `maxTurns`, `permissionMode`, `allowedTools`, `mcpServers`
                      *     - **webhook**: optional `{ mode, retries }`
@@ -20066,7 +20052,7 @@ export interface operations {
                             /** @description Provider name */
                             name: string;
                             /**
-                             * @description Provider schema type
+                             * @description Stored provider schema; openclaw is read-only legacy data and cannot execute.
                              * @enum {string}
                              */
                             schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code" | "a2a" | "nats-genie";
@@ -20080,11 +20066,6 @@ export interface operations {
                             /**
                              * @description Schema-specific configuration. Shape depends on schema type:
                              *     - **agno**: `{ agentId, teamId?, timeout? }`
-                             *     - **openclaw**: `{ defaultAgentId (required), agentTimeoutMs?, origin?, deviceId?, devicePublicKey?, devicePrivateKey?, deviceToken? }`
-                             *       - `deviceId`: SHA256 hex of the raw Ed25519 public key bytes — set automatically by `omni providers setup openclaw`
-                             *       - `devicePublicKey`: base64url-encoded raw 32-byte Ed25519 public key
-                             *       - `devicePrivateKey`: base64url-encoded raw 32-byte Ed25519 private key
-                             *       - `deviceToken`: gateway-issued device token granting `operator.write` scope — obtained during device pairing
                              *     - **claude-code**: `{ projectPath, apiKey?, model?, systemPrompt?, maxTurns?, permissionMode?, allowedTools?, mcpServers? }`
                              *       - `apiKey` in schemaConfig overrides the provider-level apiKey
                              *     - **webhook**: `{ mode?, retries? }`
@@ -20118,6 +20099,10 @@ export interface operations {
                             tags: string[] | null;
                             /** @description Whether active */
                             isActive: boolean;
+                            /** @description Last provider health status */
+                            lastHealthStatus?: string | null;
+                            /** @description Health or provider removal error */
+                            lastHealthError?: string | null;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -20182,7 +20167,7 @@ export interface operations {
                             /** @description Provider name */
                             name: string;
                             /**
-                             * @description Provider schema type
+                             * @description Stored provider schema; openclaw is read-only legacy data and cannot execute.
                              * @enum {string}
                              */
                             schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code" | "a2a" | "nats-genie";
@@ -20196,11 +20181,6 @@ export interface operations {
                             /**
                              * @description Schema-specific configuration. Shape depends on schema type:
                              *     - **agno**: `{ agentId, teamId?, timeout? }`
-                             *     - **openclaw**: `{ defaultAgentId (required), agentTimeoutMs?, origin?, deviceId?, devicePublicKey?, devicePrivateKey?, deviceToken? }`
-                             *       - `deviceId`: SHA256 hex of the raw Ed25519 public key bytes — set automatically by `omni providers setup openclaw`
-                             *       - `devicePublicKey`: base64url-encoded raw 32-byte Ed25519 public key
-                             *       - `devicePrivateKey`: base64url-encoded raw 32-byte Ed25519 private key
-                             *       - `deviceToken`: gateway-issued device token granting `operator.write` scope — obtained during device pairing
                              *     - **claude-code**: `{ projectPath, apiKey?, model?, systemPrompt?, maxTurns?, permissionMode?, allowedTools?, mcpServers? }`
                              *       - `apiKey` in schemaConfig overrides the provider-level apiKey
                              *     - **webhook**: `{ mode?, retries? }`
@@ -20234,6 +20214,10 @@ export interface operations {
                             tags: string[] | null;
                             /** @description Whether active */
                             isActive: boolean;
+                            /** @description Last provider health status */
+                            lastHealthStatus?: string | null;
+                            /** @description Health or provider removal error */
+                            lastHealthError?: string | null;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -20338,7 +20322,7 @@ export interface operations {
                      * @default agno
                      * @enum {string}
                      */
-                    schema?: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code" | "a2a" | "nats-genie";
+                    schema?: "agno" | "webhook" | "ag-ui" | "claude-code" | "a2a" | "nats-genie";
                     /**
                      * Format: uri
                      * @description Base URL
@@ -20349,12 +20333,6 @@ export interface operations {
                     /**
                      * @description Schema-specific configuration. Required fields vary by schema:
                      *     - **agno**: `{ agentId }` (required)
-                     *     - **openclaw**: `{ defaultAgentId }` (required), plus optional device pairing fields:
-                     *       - `agentTimeoutMs?`, `origin?`
-                     *       - `deviceId?`: SHA256 hex of Ed25519 public key — set by `omni providers setup openclaw`
-                     *       - `devicePublicKey?`: base64url raw 32-byte Ed25519 public key
-                     *       - `devicePrivateKey?`: base64url raw 32-byte Ed25519 private key
-                     *       - `deviceToken?`: gateway-issued device token for `operator.write` scope
                      *     - **claude-code**: `{ projectPath }` (required) — agent spawns rooted here, reads CLAUDE.md
                      *       - Optional: `apiKey` (overrides provider-level), `model`, `systemPrompt`, `maxTurns`, `permissionMode`, `allowedTools`, `mcpServers`
                      *     - **webhook**: optional `{ mode, retries }`
@@ -20421,7 +20399,7 @@ export interface operations {
                             /** @description Provider name */
                             name: string;
                             /**
-                             * @description Provider schema type
+                             * @description Stored provider schema; openclaw is read-only legacy data and cannot execute.
                              * @enum {string}
                              */
                             schema: "agno" | "webhook" | "openclaw" | "ag-ui" | "claude-code" | "a2a" | "nats-genie";
@@ -20435,11 +20413,6 @@ export interface operations {
                             /**
                              * @description Schema-specific configuration. Shape depends on schema type:
                              *     - **agno**: `{ agentId, teamId?, timeout? }`
-                             *     - **openclaw**: `{ defaultAgentId (required), agentTimeoutMs?, origin?, deviceId?, devicePublicKey?, devicePrivateKey?, deviceToken? }`
-                             *       - `deviceId`: SHA256 hex of the raw Ed25519 public key bytes — set automatically by `omni providers setup openclaw`
-                             *       - `devicePublicKey`: base64url-encoded raw 32-byte Ed25519 public key
-                             *       - `devicePrivateKey`: base64url-encoded raw 32-byte Ed25519 private key
-                             *       - `deviceToken`: gateway-issued device token granting `operator.write` scope — obtained during device pairing
                              *     - **claude-code**: `{ projectPath, apiKey?, model?, systemPrompt?, maxTurns?, permissionMode?, allowedTools?, mcpServers? }`
                              *       - `apiKey` in schemaConfig overrides the provider-level apiKey
                              *     - **webhook**: `{ mode?, retries? }`
@@ -20473,6 +20446,10 @@ export interface operations {
                             tags: string[] | null;
                             /** @description Whether active */
                             isActive: boolean;
+                            /** @description Last provider health status */
+                            lastHealthStatus?: string | null;
+                            /** @description Health or provider removal error */
+                            lastHealthError?: string | null;
                             /**
                              * Format: date-time
                              * @description Creation timestamp

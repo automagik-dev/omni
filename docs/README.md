@@ -87,8 +87,6 @@ docs/
 | [[streaming-responses\|Streaming Responses]] | Streaming agent replies into channels | ✅ current |
 | [[typing-debounce\|Typing & Debounce]] | Presence and message debouncing behavior | ✅ current |
 | [[idle-chat-follow-up\|Idle Chat Follow-Up]] | Automated follow-ups on idle conversations | ✅ current |
-| [[openclaw-integration\|OpenClaw Integration]] | Connecting OpenClaw as an agent provider | ✅ current |
-| [[openclaw-from-scratch\|OpenClaw From Scratch]] | Full OpenClaw + Omni walkthrough | ✅ current |
 
 ### Runbooks
 
@@ -158,7 +156,6 @@ Release/upgrade runbooks (`upgrade-*.md`, `public-launch-readiness.md`) also liv
 | [[SQUAD\|Research Squad]] | Research squad roster and mission | ✅ current |
 | [[jid-mentions-groups\|Baileys: JIDs, Mentions, Groups]] | WhatsApp identity and messaging reference via Baileys | ✅ current |
 | [[openclaw-whatsapp-analysis\|OpenClaw WhatsApp Analysis]] | OpenClaw ↔ WhatsApp integration analysis | ✅ current |
-| [[openclaw-integration-design\|OpenClaw Integration Design]] | OpenClaw ↔ Omni architecture design | ✅ current |
 | [[openclaw-telegram-analysis\|OpenClaw Telegram Analysis]] | Telegram channel plugin deep analysis | ✅ current |
 
 ### Templates

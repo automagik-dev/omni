@@ -4,7 +4,7 @@
  * Create, archive, and manage Discord threads programmatically.
  * Supports public/private threads, forum posts, and member management.
  *
- * Defaults to PublicThread for standalone threads (matching OpenClaw fix).
+ * Defaults to PublicThread for standalone threads.
  */
 
 import { createLogger } from '@omni/core';

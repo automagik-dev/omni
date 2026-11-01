@@ -277,14 +277,6 @@ export const REGISTERED_EGRESS: readonly RegisteredEgress[] = [
       'tenant-configured `config.baseUrl`, and one path fetches a request-supplied `file.url`. Pending broker routing.',
   },
   {
-    file: 'packages/core/src/providers/openclaw/client.ts',
-    class: 'pending-egress-broker',
-    sites: 1,
-    justification:
-      'ADR-0009 tenant-controlled egress: a `new WebSocket(config.url)` to the tenant-configured Openclaw endpoint. ' +
-      'A long-lived socket rather than a fetch; broker WebSocket support is pending.',
-  },
-  {
     file: 'packages/api/src/services/providers.ts',
     class: 'pending-egress-broker',
     sites: 1,
