@@ -27,14 +27,27 @@
  */
 
 import { createHash } from 'node:crypto';
-import { readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sql } from 'drizzle-orm';
 import type { Sql } from 'postgres';
 import type { Database } from './client';
 import { unwrapDbError } from './errors';
+
+// Refuse unsafe suite configuration before setup OR teardown hooks register.
+// Some suites invoke psql directly during cleanup even if their setup failed.
+for (const variable of [
+  'OMNI_G1_POSTGRES_URL',
+  'OMNI_G2_POSTGRES_URL',
+  'OMNI_G3_POSTGRES_URL',
+  'OMNI_G4_POSTGRES_URL',
+  'OMNI_G6_POSTGRES_URL',
+]) {
+  const url = process.env[variable];
+  if (url) assertPgTestTarget(url);
+}
 
 const here = dirname(fileURLToPath(import.meta.url));
 const drizzleDir = join(here, '..', 'drizzle');
@@ -54,6 +67,7 @@ interface SqlResult {
 }
 
 function runSql(access: PgSuperAccess, url: string, script: string): SqlResult {
+  assertPgTestTarget(url);
   const file = join(tmpdir(), `omni-pg-template-${crypto.randomUUID()}.sql`);
   writeFileSync(file, script);
   try {
@@ -182,11 +196,55 @@ export const driverRejection = <T>(p: Promise<T>): Promise<T> =>
     throw unwrapDbError(error);
   });
 
+/** Refuse ambiguous or shared targets before either postgres.js or psql opens a connection. */
+export function assertPgTestTarget(url: string, env: Record<string, string | undefined> = process.env): void {
+  const parsed = new URL(url);
+  const refuse = (reason: string): never => {
+    throw new Error(`Unsafe PostgreSQL test target: ${reason}`);
+  };
+  if (!['postgres:', 'postgresql:'].includes(parsed.protocol)) refuse('expected a PostgreSQL URL');
+  if (['host', 'hostaddr', 'port', 'service'].some((key) => parsed.searchParams.has(key))) {
+    refuse('query host/port/service selectors differ between drivers; use PGHOST/PGPORT or an explicit gate URL');
+  }
+  if (env.PGHOSTADDR || env.PGSERVICE) refuse('PGHOSTADDR and PGSERVICE overrides are not allowed');
+  const port = parsed.port || env.PGPORT || '';
+  if (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535 || [5432, 15432].includes(Number(port))) {
+    refuse('an explicit disposable port is required; 5432 and 15432 are forbidden');
+  }
+  if (!parsed.hostname) {
+    if (!isTemporarySocketDirectory(env.PGHOST ?? ''))
+      refuse('hostless URLs require PGHOST under a temporary directory');
+    return;
+  }
+  if (parsed.hostname !== '127.0.0.1' || !parsed.port || parsed.host !== env.OMNI_PG_TEST_TARGET) {
+    refuse('TCP must match the gate-registered 127.0.0.1:port target');
+  }
+}
+
+function isTemporarySocketDirectory(host: string): boolean {
+  if (!isAbsolute(host)) return false;
+  try {
+    const target = realpathSync(host);
+    return [tmpdir(), '/tmp'].some((root) => {
+      const path = relative(realpathSync(root), target);
+      return path !== '' && path !== '..' && !path.startsWith('../') && !isAbsolute(path);
+    });
+  } catch {
+    return false;
+  }
+}
+
 /** Test-only role URLs shared by the disposable PostgreSQL suites (#1470).
  * Hostless runs use trust-authenticated Unix sockets; PGHOST/PGPORT select the
  * socket, and the startup user parameter works in both postgres.js and libpq.
  */
-export function pgRoleUrl(base: string, database: string, role?: { name: string; password: string }): string {
+export function pgRoleUrl(
+  base: string,
+  database: string,
+  role?: { name: string; password: string },
+  env: Record<string, string | undefined> = process.env,
+): string {
+  assertPgTestTarget(base, env);
   const url = new URL(base);
   url.pathname = `/${database}`;
   if (role) {

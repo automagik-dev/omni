@@ -144,6 +144,8 @@ try {
 
   const env: Record<string, string> = { ...(process.env as Record<string, string>) };
   for (const variable of POSTGRES_URL_VARS) env[variable] = url;
+  // Test helpers accept TCP only at this gate's explicitly acquired target.
+  env.OMNI_PG_TEST_TARGET = new URL(url).host;
   // Mute the app logger under the gate unless the caller asked for logs (#967):
   // the suites intentionally exercise warn/error paths and the JSON flood is
   // pure I/O on green runs. bun test's own failure diagnostics are unaffected.
