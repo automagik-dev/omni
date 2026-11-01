@@ -134,6 +134,7 @@ function resolvedRow(
         id: SUBSCRIPTION_ID,
         connectorId: CONNECTOR_ID,
         providerEventKey: 'taskStatusUpdated',
+        ingress: 'subscription',
         filters: {},
         targetAutomationId: AUTOMATION_ID,
         verificationSecret: SECRET,
@@ -274,6 +275,23 @@ describe('connector inbound envelope', () => {
     expect(result.body).toEqual({ received: true, ignored: true });
     expect(fakes.published).toHaveLength(0);
     expect(fakes.updates).toHaveLength(0);
+  });
+
+  test('wrong-route and incomplete subscription rows are unknown before any write or publish', async () => {
+    for (const subscription of [
+      { ingress: 'connector', verificationSecret: null, targetAutomationId: null },
+      { ingress: 'connector' },
+      { targetAutomationId: null },
+      { verificationSecret: null },
+    ]) {
+      const fakes = makeFakes({ resolved: resolvedRow({ subscription }) });
+      const result = await service(fakes).receive(SUBSCRIPTION_ID, BODY, { 'x-signature': signature() });
+      expect(result.status).toBe(401);
+      expect(result.body).toEqual({ error: { code: 'UNAUTHORIZED', message: 'Connector verification failed' } });
+      expect(fakes.published).toHaveLength(0);
+      expect(fakes.touchedTables).toHaveLength(0);
+      expect(fakes.updates).toHaveLength(0);
+    }
   });
 
   test('a mismatched event key or filter is acked 202 ignored', async () => {

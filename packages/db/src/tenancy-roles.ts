@@ -43,6 +43,8 @@ import {
   DEFAULT_ROLE_NAMES,
   QUALIFIED_AUTH_PLANE_FUNCTION,
   QUALIFIED_AUTH_PLANE_ROW_FUNCTION,
+  QUALIFIED_CONNECTOR_INGRESS_CONNECTOR_ROW_FUNCTION,
+  QUALIFIED_CONNECTOR_INGRESS_CONNECTOR_TENANT_FUNCTION,
   QUALIFIED_CONNECTOR_INGRESS_MEMBER_FUNCTION,
   QUALIFIED_CONNECTOR_INGRESS_ROW_FUNCTION,
   QUALIFIED_CONNECTOR_INGRESS_TENANT_FUNCTION,
@@ -128,8 +130,8 @@ END
 $omni$;`;
 
   statements.push(
-    // The connector-ingress identity is NOLOGIN by construction: it owns one
-    // SECURITY DEFINER lookup and nothing else, and no login identity is a
+    // The connector-ingress identity is NOLOGIN by construction: it owns the
+    // SECURITY DEFINER lookups and nothing else, and no login identity is a
     // member of it.
     ...connectorIngressRoleStatements(),
     role(ddl, `WITH LOGIN PASSWORD '${passwords.ddl}' ${CONSTRAINED_ATTRIBUTES}`),
@@ -146,12 +148,13 @@ $omni$;`;
     revokeMembership(authPlaneMarker, runtime),
     revokeMembership(authPlaneMarker, ddl),
     // The ingress role is a capability owner, not a group to join. Runtime may
-    // EXECUTE its one function; membership would hand over the whole
+    // EXECUTE its bounded lookups; membership would hand over the whole
     // role, including its SELECT grant, so it is explicitly refused.
     revokeMembership(CONNECTOR_INGRESS_ROLE, runtime),
     revokeMembership(CONNECTOR_INGRESS_ROLE, ddl),
     revokeMembership(CONNECTOR_INGRESS_ROLE, authPlane),
     `GRANT SELECT ON TABLE "connector_event_subscriptions" TO "${CONNECTOR_INGRESS_ROLE}";`,
+    `GRANT SELECT ON TABLE "connectors" TO "${CONNECTOR_INGRESS_ROLE}";`,
   );
 
   // --- 2. ownership --------------------------------------------------------
@@ -253,6 +256,8 @@ $omni$;`,
     // the SELECT policy helper. It is NOT a member of the owning role, so it
     // cannot read the table itself without a tenant context.
     `GRANT EXECUTE ON FUNCTION ${QUALIFIED_CONNECTOR_INGRESS_TENANT_FUNCTION}(uuid) TO "${runtime}";`,
+    `GRANT EXECUTE ON FUNCTION ${QUALIFIED_CONNECTOR_INGRESS_CONNECTOR_TENANT_FUNCTION}(uuid) TO "${runtime}";`,
+    `GRANT EXECUTE ON FUNCTION ${QUALIFIED_CONNECTOR_INGRESS_CONNECTOR_ROW_FUNCTION}(uuid, uuid) TO "${runtime}";`,
     `GRANT EXECUTE ON FUNCTION ${QUALIFIED_CONNECTOR_INGRESS_ROW_FUNCTION}(uuid, uuid) TO "${runtime}";`,
     `GRANT EXECUTE ON FUNCTION ${QUALIFIED_CONNECTOR_INGRESS_MEMBER_FUNCTION}() TO "${runtime}";`,
   );

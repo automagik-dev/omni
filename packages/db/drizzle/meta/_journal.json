@@ -645,6 +645,13 @@
       "when": 1788900000000,
       "tag": "0091_durable_consumers_tenant_scope",
       "breakpoints": true
+    },
+    {
+      "idx": 92,
+      "version": "7",
+      "when": 1789000000000,
+      "tag": "0092_connector_ingress",
+      "breakpoints": true
     }
   ]
 }
