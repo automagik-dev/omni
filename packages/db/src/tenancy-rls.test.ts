@@ -27,6 +27,8 @@ import {
   POLICY_COMMANDS,
   QUALIFIED_AUTH_PLANE_FUNCTION,
   QUALIFIED_AUTH_PLANE_ROW_FUNCTION,
+  QUALIFIED_CONNECTOR_INGRESS_CONNECTOR_ROW_FUNCTION,
+  QUALIFIED_CONNECTOR_INGRESS_CONNECTOR_TENANT_FUNCTION,
   QUALIFIED_CONNECTOR_INGRESS_MEMBER_FUNCTION,
   QUALIFIED_CONNECTOR_INGRESS_ROW_FUNCTION,
   QUALIFIED_CONNECTOR_INGRESS_TENANT_FUNCTION,
@@ -180,15 +182,19 @@ describe('policy shape', () => {
     }
   });
 
-  test('the connector-ingress exemption is SELECT only and one table', () => {
-    expect(CONNECTOR_INGRESS_READABLE_TABLES).toEqual(['connector_event_subscriptions']);
+  test('the connector-ingress exemption is SELECT only and separately id-bound on its two tables', () => {
+    expect(CONNECTOR_INGRESS_READABLE_TABLES).toEqual(['connector_event_subscriptions', 'connectors']);
     for (const table of CONNECTOR_INGRESS_READABLE_TABLES) {
       const statements = tablePolicyStatements(table);
       const select = statements.find((s) => s.startsWith(`CREATE POLICY "${policyName(table, 'select')}"`)) ?? '';
-      expect(select).toContain(QUALIFIED_CONNECTOR_INGRESS_ROW_FUNCTION);
+      const helper =
+        table === 'connectors'
+          ? QUALIFIED_CONNECTOR_INGRESS_CONNECTOR_ROW_FUNCTION
+          : QUALIFIED_CONNECTOR_INGRESS_ROW_FUNCTION;
+      expect(select).toContain(helper);
       for (const command of ['insert', 'update', 'delete'] as const) {
         const policy = statements.find((s) => s.startsWith(`CREATE POLICY "${policyName(table, command)}"`)) ?? '';
-        expect(policy).not.toContain(QUALIFIED_CONNECTOR_INGRESS_ROW_FUNCTION);
+        expect(policy).not.toContain(helper);
       }
     }
     // No other tenant table gains the disjunct.
@@ -196,6 +202,7 @@ describe('policy shape', () => {
     for (const table of RLS_TENANT_TABLES) {
       if (exempt.has(table)) continue;
       expect(tablePolicyStatements(table).join('\n')).not.toContain(QUALIFIED_CONNECTOR_INGRESS_ROW_FUNCTION);
+      expect(tablePolicyStatements(table).join('\n')).not.toContain(QUALIFIED_CONNECTOR_INGRESS_CONNECTOR_ROW_FUNCTION);
     }
   });
 
@@ -206,12 +213,30 @@ describe('policy shape', () => {
     expect(functions).toContain(`WHERE s."id" = p_subscription_id`);
     expect(functions).toContain(`s."status" IN ('active', 'paused', 'error')`);
     expect(functions).toContain(`s."tenant_id" IS NOT NULL`);
+    expect(functions).toContain(`s."ingress" = 'subscription'`);
+    expect(functions).toContain(`s."verification_secret" IS NOT NULL`);
+    expect(functions).toContain(`s."target_automation_id" IS NOT NULL`);
     expect(functions).toContain('RETURN v_tenant;');
     // The row policy binds to one transaction-local id and falls back to tenant
     // equality for every non-member.
     expect(functions).toContain(`current_setting('app.connector_ingress_subscription_id', true)`);
     expect(functions).toContain(`RETURN row_tenant = ${QUALIFIED_TENANT_CONTEXT_FUNCTION}();`);
     expect(functions).not.toContain('BYPASSRLS');
+  });
+
+  test('connector lookup has a separate id binding, constrained owner and no PUBLIC execution', () => {
+    const functions = connectorIngressFunctionStatements().join('\n');
+    expect(functions).toContain(`WHERE c."id" = p_connector_id`);
+    expect(functions).toContain(`current_setting('app.connector_ingress_connector_id', true)`);
+    expect(functions).toContain(
+      `ALTER FUNCTION ${QUALIFIED_CONNECTOR_INGRESS_CONNECTOR_TENANT_FUNCTION}(uuid) OWNER TO "${CONNECTOR_INGRESS_ROLE}"`,
+    );
+    expect(functions).toContain(
+      `REVOKE ALL ON FUNCTION ${QUALIFIED_CONNECTOR_INGRESS_CONNECTOR_TENANT_FUNCTION}(uuid) FROM PUBLIC`,
+    );
+    expect(dropConnectorIngressFunctionStatements().join('\n')).toContain(
+      `DROP FUNCTION IF EXISTS ${QUALIFIED_CONNECTOR_INGRESS_CONNECTOR_ROW_FUNCTION}(uuid, uuid)`,
+    );
   });
 
   test('the ingress role is NOLOGIN and never a bypass identity', () => {

@@ -35,6 +35,21 @@ function fixtureManifest(id = 'fixture'): ConnectorManifest {
 }
 
 describe('ConnectorRegistry', () => {
+  test('events-only manifests register with optional credentials and required empty actions', () => {
+    const manifest: ConnectorManifest = {
+      ...fixtureManifest(),
+      credentialFields: [{ key: 'token', label: 'Optional token', secret: true, optional: true }],
+      actions: [],
+    };
+    const registry = new ConnectorRegistry([manifest]);
+    expect(registry.get(manifest.id)).toBe(manifest);
+    expect(providerSummary(manifest).actions).toEqual([]);
+    expect(registry.assertValid()).toEqual([]);
+    expect(() => new ConnectorRegistry([{ ...manifest, events: [] }])).toThrow(/at least one event/);
+    const missingActions = { ...manifest };
+    Reflect.deleteProperty(missingActions, 'actions');
+    expect(() => new ConnectorRegistry([missingActions])).toThrow(/actions must be an array/);
+  });
   test('registers valid manifests and lists them sorted by id', () => {
     const registry = new ConnectorRegistry([fixtureManifest('zeta'), fixtureManifest('alpha')]);
     expect(registry.list().map((manifest) => manifest.id)).toEqual(['alpha', 'zeta']);

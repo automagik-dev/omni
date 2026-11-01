@@ -37,10 +37,13 @@
 
 import type { Database } from '@omni/db';
 import { sql } from 'drizzle-orm';
+import { z } from 'zod';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 /** Path-segment shape only: a valid-shaped id that does not exist resolves null. */
 const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const IngressIdSchema = z.string().regex(UUID_SHAPE);
+const TenantRowsSchema = z.array(z.object({ tenant_id: z.string().regex(UUID).nullable() }));
 
 const activeCache = new WeakMap<Database, Promise<boolean>>();
 
@@ -53,12 +56,14 @@ export async function connectorIngressLookupActive(db: Database): Promise<boolea
   // builder methods. Those tests describe the legacy world by construction, so
   // "no raw execute" means "no enforcement lookup installed" rather than an
   // error. A real pool always exposes execute.
-  if (typeof (db as { execute?: unknown }).execute !== 'function') return false;
+  if (typeof db.execute !== 'function') return false;
 
   const probe = (async () => {
-    const rows = (await db.execute(sql`
+    const rows = z.array(z.object({ present: z.boolean() })).parse(
+      await db.execute(sql`
       SELECT to_regprocedure('public.omni_connector_ingress_tenant(uuid)') IS NOT NULL AS present
-    `)) as unknown as { present: boolean }[];
+    `),
+    );
     return Boolean(rows[0]?.present);
   })();
   activeCache.set(db, probe);
@@ -81,11 +86,24 @@ export async function connectorIngressLookupActive(db: Database): Promise<boolea
 export async function resolveConnectorIngressTenant(db: Database, subscriptionId: string): Promise<string | null> {
   // The function's parameter is uuid; a malformed path segment must be the
   // uniform 401, not a database cast error (500).
-  if (typeof subscriptionId !== 'string' || !UUID_SHAPE.test(subscriptionId)) return null;
+  if (!IngressIdSchema.safeParse(subscriptionId).success) return null;
 
-  const rows = (await db.execute(sql`
+  const rows = TenantRowsSchema.safeParse(
+    await db.execute(sql`
     SELECT public.omni_connector_ingress_tenant(${subscriptionId}::uuid) AS tenant_id
-  `)) as unknown as { tenant_id: string | null }[];
-  const tenantId = rows[0]?.tenant_id ?? null;
-  return typeof tenantId === 'string' && UUID.test(tenantId) ? tenantId : null;
+  `),
+  );
+  return rows.success ? (rows.data[0]?.tenant_id ?? null) : null;
+}
+
+/** Resolve one persisted connector owner before opening its delivery's tenant scope. */
+export async function resolveConnectorTenantByConnectorId(db: Database, connectorId: string): Promise<string | null> {
+  if (!IngressIdSchema.safeParse(connectorId).success) return null;
+
+  const rows = TenantRowsSchema.safeParse(
+    await db.execute(sql`
+    SELECT public.omni_connector_ingress_tenant_by_connector(${connectorId}::uuid) AS tenant_id
+  `),
+  );
+  return rows.success ? (rows.data[0]?.tenant_id ?? null) : null;
 }

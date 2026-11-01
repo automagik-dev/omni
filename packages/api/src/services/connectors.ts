@@ -91,7 +91,7 @@ export interface EventSubscriptionView {
   connectorId: string;
   providerEventKey: string;
   filters: Record<string, unknown>;
-  targetAutomationId: string;
+  targetAutomationId: string | null;
   status: string;
   inboundUrl: string;
   lastDeliveryAt: Date | null;
@@ -924,6 +924,13 @@ export class ConnectorService {
       .innerJoin(connectors, eq(connectors.id, connectorEventSubscriptions.connectorId))
       .where(eq(connectorEventSubscriptions.id, subscriptionId))
       .limit(1);
+    if (
+      !resolved ||
+      resolved.subscription.ingress !== 'subscription' ||
+      resolved.subscription.targetAutomationId === null ||
+      resolved.subscription.verificationSecret === null
+    )
+      return undefined;
     return resolved;
   }
 
@@ -960,6 +967,12 @@ export class ConnectorService {
     tenantId?: string;
   }): Promise<{ eventId: string; duplicate: boolean }> {
     const { connector, subscription, eventKey, providerEventId, occurredAt, data } = args;
+    if (
+      subscription.ingress !== 'subscription' ||
+      subscription.targetAutomationId === null ||
+      subscription.verificationSecret === null
+    )
+      throw new NotFoundError('ConnectorEventSubscription', subscription.id);
     const trustedTenantId = args.tenantId ?? null;
     const eventId = randomUUID();
 

@@ -108,6 +108,7 @@ export interface ConnectorManifest {
   readonly label: string;
   /** Advisory in v1; a breaking input change takes a new action key or version. */
   readonly version: string;
+  /** May all be optional when only a delivery hook secret is needed. */
   readonly credentialFields: readonly ConnectorCredentialField[];
   /** Non-secret config. A manifest that needs a private value puts it in credentials. */
   readonly configSchema: z.ZodType<Record<string, unknown>>;
@@ -118,6 +119,7 @@ export interface ConnectorManifest {
     readonly fetch: typeof fetch;
   }): Promise<ConnectorValidationResult>;
   readonly events: readonly ConnectorEventDefinition[];
+  /** Required, but may be empty for an events-only connector. */
   readonly actions: readonly ConnectorActionDefinition[];
   readonly verification: ConnectorVerification;
   /**

@@ -80,8 +80,8 @@ function validateEvents(manifest: ConnectorManifest, where: string): string[] {
 }
 
 function validateActions(manifest: ConnectorManifest, where: string): string[] {
-  if (!Array.isArray(manifest?.actions) || manifest.actions.length === 0) {
-    return [`${where}: at least one action is required`];
+  if (!Array.isArray(manifest?.actions)) {
+    return [`${where}: actions must be an array (empty for events-only connectors)`];
   }
   const issues: string[] = [];
   const keys = new Set<string>();

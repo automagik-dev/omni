@@ -12,7 +12,9 @@ import { clickupManifest } from '@omni/connector-clickup';
 import { ConnectorRegistry } from '@omni/connector-sdk';
 import { setTenantSecretMasterKey } from '@omni/core';
 import type { Connector } from '@omni/db';
+import { connectorTenantContext, createConnectorTestDb } from '../../__tests__/connector-test-harness';
 import { openCredentialField, sealCredentialField } from '../../tenancy/sealed-credentials';
+import { runInTenantScope } from '../../tenancy/tenant-scope';
 import { ConnectorService } from '../connectors';
 
 const TENANT_A = '11111111-1111-4111-8111-111111111111';
@@ -26,6 +28,10 @@ function row(tenantId: string | null, credentials: string): Connector {
     provider: 'clickup',
     name: 'ClickUp',
     credentials,
+    hookSecret: null,
+    totalUnmatched: 0,
+    lastUnmatchedAt: null,
+    lastUnmatchedEventType: null,
     config: {},
     status: 'connected',
     lastValidatedAt: null,
@@ -45,6 +51,31 @@ function service(): ConnectorService {
 describe('connector credential sealing', () => {
   beforeEach(() => setTenantSecretMasterKey(MASTER_KEY));
   afterEach(() => setTenantSecretMasterKey(null));
+
+  test('empty credentials seal on create for an events-only connector with optional credentials', async () => {
+    const { db, tables } = createConnectorTestDb();
+    const registry = new ConnectorRegistry([
+      {
+        ...clickupManifest,
+        credentialFields: [{ key: 'token', label: 'Optional token', secret: true, optional: true }],
+        actions: [],
+        async validate() {
+          return { ok: true };
+        },
+      },
+    ]);
+    const connectorService = new ConnectorService(db, null, registry);
+    const view = await runInTenantScope(db, connectorTenantContext(TENANT_A), () =>
+      connectorService.create({ provider: 'clickup', name: 'Events only', credentials: {} }),
+    );
+    const sealed = tables.connectors[0]?.credentials;
+    if (typeof sealed !== 'string') throw new Error('expected stored credentials');
+    expect(sealed).not.toBe('{}');
+    expect(sealed.startsWith('{"v":')).toBe(true);
+    expect(openCredentialField(TENANT_A, sealed)).toBe('{}');
+    expect(openCredentialField(TENANT_B, sealed)).toBeNull();
+    expect(view.status).toBe('connected');
+  });
 
   test('seals on write, opens under the row tenant, and fails closed cross-tenant', () => {
     const sealed = sealCredentialField(TENANT_A, JSON.stringify({ token: TOKEN }));
