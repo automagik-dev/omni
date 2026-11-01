@@ -182,7 +182,7 @@ export const eventTypes = CORE_EVENT_TYPES;
  * emit_event hops) are journaled into omni_events since #957 so
  * `omni events trace` can walk a chain back to its root.
  */
-export type EventType = CoreEventType | `custom.${string}` | `system.${string}` | 'connector.event';
+export type EventType = CoreEventType | `custom.${string}` | `system.${string}` | `connector.${string}`; // no-migration-needed: type-only widening of the eventType union for typed connector rows
 
 // Derived from core CONTENT_TYPES (same no-drift rule as eventTypes above) —
 // this local tuple had fallen behind by ten content types.
