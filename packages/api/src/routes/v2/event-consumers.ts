@@ -13,8 +13,8 @@
  * — same invariant as eventSchemasRoutes (#959).
  *
  * Every handler passes the caller's key (id + instance restriction, read
- * the same way as the /events routes) to the service. It only matters for
- * consumers created with `scoped: true`; unscoped consumers ignore it.
+ * the same way as the /events routes) to the service. Delivery always respects
+ * the key's instance restriction, including for unscoped consumers.
  */
 
 import { zValidator } from '@hono/zod-validator';

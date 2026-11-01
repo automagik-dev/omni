@@ -181,7 +181,7 @@ export interface StreamAccess {
 }
 
 /**
- * The instance restriction for a stream page: none for a full-access key,
+ * The caller's instance restriction for a pull or stream page: none for a full-access key,
  * otherwise `instance_id IN (...)` (rows with no instance excluded, as in
  * `GET /events`), and a match-nothing predicate for an empty allow-list.
  */
@@ -616,8 +616,9 @@ export class EventConsumerService {
     const deadline = Date.now() + waitMs;
     // Readiness gate (opt-in): a page cut to empty keeps long-polling.
     const settleMs = consumer.waitForReady ? resolveConsumerSettleMs() : 0;
+    const keyInstances = streamInstanceClause(caller?.instanceIds ?? null);
     const scan = async (): Promise<OmniEvent[]> => {
-      const page = await this.scanPage(consumer, limit);
+      const page = await this.scanPage(consumer, limit, undefined, undefined, keyInstances);
       return consumer.waitForReady ? truncateAtUnready(page, true, settleMs, Date.now()) : page;
     };
     let scanned = await scan();
@@ -765,10 +766,16 @@ export class EventConsumerService {
     caller?: ConsumerCaller,
   ): Promise<PullResult> {
     const deadline = Date.now() + waitMs;
-    let claim = await this.claimShared(initial, limit, leaseMs);
+    const keyInstances = streamInstanceClause(caller?.instanceIds ?? null);
+    let claim = await this.claimShared(initial, limit, leaseMs, keyInstances);
     while (!claim.lease && Date.now() < deadline) {
       await new Promise<void>((resolve) => setTimeout(resolve, PULL_POLL_INTERVAL_MS));
-      claim = await this.claimShared(narrowToCaller(await this.getByName(initial.name), caller), limit, leaseMs);
+      claim = await this.claimShared(
+        narrowToCaller(await this.getByName(initial.name), caller),
+        limit,
+        leaseMs,
+        keyInstances,
+      );
     }
 
     const { consumer, lease, scanned } = claim;
@@ -793,6 +800,7 @@ export class EventConsumerService {
     start: DurableConsumer,
     limit: number,
     leaseMs: number,
+    keyInstances?: SQL,
   ): Promise<{ consumer: DurableConsumer; lease: ConsumerLease | null; scanned: OmniEvent[] }> {
     let consumer = start;
     for (let attempt = 0; attempt < SHARED_CAS_ATTEMPTS; attempt++) {
@@ -800,8 +808,8 @@ export class EventConsumerService {
       const now = Date.now();
       const plan = planSharedPull(state, now);
       const scanned = plan.reclaim
-        ? await this.scanPage(consumer, PULL_MAX_LIMIT, plan.reclaim.from, plan.reclaim.to)
-        : await this.scanFresh(consumer, limit, plan.after);
+        ? await this.scanPage(consumer, PULL_MAX_LIMIT, plan.reclaim.from, plan.reclaim.to, keyInstances)
+        : await this.scanFresh(consumer, limit, plan.after, keyInstances);
       const last = scanned[scanned.length - 1];
       if (!plan.reclaim && !last) return { consumer, lease: null, scanned };
 
@@ -862,8 +870,13 @@ export class EventConsumerService {
    * cut before a held row, so a fresh lease never spans one (an expired
    * lease's reclaim keeps its fixed range and does not come through here).
    */
-  private async scanFresh(consumer: DurableConsumer, limit: number, after: number): Promise<OmniEvent[]> {
-    const page = await this.scanPage(consumer, limit, after);
+  private async scanFresh(
+    consumer: DurableConsumer,
+    limit: number,
+    after: number,
+    keyInstances?: SQL,
+  ): Promise<OmniEvent[]> {
+    const page = await this.scanPage(consumer, limit, after, undefined, keyInstances);
     if (!consumer.waitForReady) return page;
     return truncateAtUnready(page, true, resolveConsumerSettleMs(), Date.now());
   }
@@ -886,7 +899,7 @@ export class EventConsumerService {
     limit: number,
     after = consumer.cursor,
     through?: number,
-    /** Extra predicate (the stream's instance restriction); pull never passes one. */
+    /** The caller's instance restriction for pull and stream delivery. */
     extra?: SQL,
   ): Promise<OmniEvent[]> {
     const typeClause = eventTypeFilterClause([consumer.eventType], consumer.excludeTypes ?? undefined);

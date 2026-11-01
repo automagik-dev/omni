@@ -30,6 +30,7 @@ import {
   resolveConsumerScope,
   resolveConsumerSettleMs,
   resolveInitialCursor,
+  streamInstanceClause,
   truncateAtUnready,
 } from '../event-consumers';
 import { eventTypeFilterClause } from '../events';
@@ -242,10 +243,13 @@ describe('accessFilterClause', () => {
 });
 
 describe('scanPage access predicate (via pull)', () => {
-  function todaysWhere(): { sql: string; params: unknown[] } {
-    // The pre-0083 scanPage WHERE: journal_seq bound + type clause, nothing else.
+  function expectedWhere(instanceIds: string[] | null = null): { sql: string; params: unknown[] } {
     return render(
-      and(gt(omniEvents.journalSeq, 0), undefined, eventTypeFilterClause(['message.received'], undefined)) as SQL,
+      and(
+        gt(omniEvents.journalSeq, 0),
+        eventTypeFilterClause(['message.received'], undefined),
+        streamInstanceClause(instanceIds),
+      ) as SQL,
     );
   }
 
@@ -253,7 +257,18 @@ describe('scanPage access predicate (via pull)', () => {
     const pool = mockPool(consumerRow({ accessFilter: 'all' }));
     await new EventConsumerService(pool.db).pull('c1');
     expect(pool.scanWheres).toHaveLength(1);
-    expect(render(pool.scanWheres[0])).toEqual(todaysWhere());
+    expect(render(pool.scanWheres[0])).toEqual(expectedWhere());
+  });
+
+  test('an unscoped consumer scan always carries the restricted caller instance clause', async () => {
+    for (const shared of [false, true]) {
+      for (const instanceIds of [['11111111-1111-4111-8111-1111111111aa'], []]) {
+        const pool = mockPool(consumerRow({ shared }));
+        await new EventConsumerService(pool.db).pull('c1', {}, { keyId: 'restricted', instanceIds });
+        expect(pool.scanWheres).toHaveLength(1);
+        expect(render(pool.scanWheres[0])).toEqual(expectedWhere(instanceIds));
+      }
+    }
   });
 
   test("an 'allowed' / 'denied' consumer gets the eq predicate in SQL", async () => {
@@ -262,8 +277,8 @@ describe('scanPage access predicate (via pull)', () => {
       await new EventConsumerService(pool.db).pull('c1');
       const { sql, params } = render(pool.scanWheres[0]);
       expect(sql).toContain('"omni_events"."access_decision" = $');
-      expect(sql.startsWith(todaysWhere().sql.slice(0, -1))).toBe(true);
-      expect(params).toEqual([...todaysWhere().params, filter]);
+      expect(sql.startsWith(expectedWhere().sql.slice(0, -1))).toBe(true);
+      expect(params).toEqual([...expectedWhere().params, filter]);
     }
   });
 });
@@ -423,7 +438,7 @@ describe('instance-scoped consumers (opt-in, 0082)', () => {
     }
   });
 
-  test('no new option: identical behaviour — an unscoped consumer is accessible to every caller', () => {
+  test('an unscoped consumer is visible to every caller; delivery is restricted separately', () => {
     const consumer = { scoped: false, ownerKeyId: null };
     for (const caller of [...Object.values(callers), undefined]) {
       expect(canAccessConsumer(consumer, caller)).toBe(true);

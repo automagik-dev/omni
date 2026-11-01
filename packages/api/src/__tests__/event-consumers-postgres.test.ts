@@ -14,7 +14,7 @@
  *  - lag = journal head minus cursor;
  *  - opt-in instance scoping (0082): a scoped consumer pages only its
  *    instances' rows (cursor still moves past the others) and is invisible
- *    (404) to non-owner restricted keys; unscoped consumers stay global; a
+ *    (404) to non-owner restricted keys; all delivery respects key instances; a
  *    scoped create naming a nonexistent instance is refused;
  *  - two-tenant containment: under RLS enforcement a tenant-scoped pull only
  *    ever pages its own tenant's journal rows (automation-actions two-tenant
@@ -896,7 +896,7 @@ postgresDescribe('durable event consumers (#989, real PostgreSQL)', () => {
       }
     });
 
-    test('no new option: identical behaviour — an unscoped consumer is global for every key', async () => {
+    test('an unscoped consumer is visible to every key but pull respects the caller instances', async () => {
       const stored = await service.getByName('legacy-0082');
       expect([stored.scoped, stored.instanceIds, stored.ownerKeyId]).toEqual([false, null, null]);
       expect(published.find((p) => p.payload.name === 'legacy-0082')?.payload).not.toHaveProperty('scoped');
@@ -904,14 +904,51 @@ postgresDescribe('durable event consumers (#989, real PostgreSQL)', () => {
       for (const caller of [owner, otherRestricted, unrestricted, undefined]) {
         expect((await service.inspect('legacy-0082', caller)).name).toBe('legacy-0082');
         expect((await service.list(caller)).map((c) => c.name)).toContain('legacy-0082');
-        // Every instance's rows (and instance-less rows) — the key's restriction does not apply.
         const page = await service.pull('legacy-0082', { limit: 100 }, caller);
-        expect(page.items.map((e) => e.id)).toEqual(['a1', 'b1', 'none', 'b2', 'a2', 'b3'].map(idOf));
+        const labels = caller?.instanceIds ? ['a1', 'a2'] : ['a1', 'b1', 'none', 'b2', 'a2', 'b3'];
+        expect(page.items.map((e) => e.id)).toEqual(labels.map(idOf));
       }
       const page = await service.pull('legacy-0082', { limit: 2 }, otherRestricted);
       expect((await service.ack('legacy-0082', page.cursor, undefined, otherRestricted)).cursor).toBe(page.cursor);
       await service.delete('legacy-0082', otherRestricted);
       await expect(service.inspect('legacy-0082')).rejects.toThrow(/not found/i);
+    });
+
+    for (const shared of [false, true]) {
+      test(`restricted key creating an unscoped consumer cannot pull other instances or NULL rows (shared=${shared})`, async () => {
+        const name = `pull-caller-scope-${shared}`;
+        await service.create({ name, eventType: 'custom.dc0082.*', startFrom: 'beginning', shared }, owner);
+        expect((await service.getByName(name)).scoped).toBe(false);
+        // Even an empty allow-list must match nothing, for fan-out and fresh shared scans.
+        expect((await service.pull(name, {}, { ...owner, instanceIds: [] })).items).toEqual([]);
+        const first = await service.pull(name, { limit: 1 }, owner);
+        expect(first.items.map((e) => e.id)).toEqual([idOf('a1')]);
+        await service.ack(name, first.cursor, first.leaseId, owner);
+        const second = await service.pull(name, { limit: 1 }, owner);
+        expect(second.items.map((e) => e.id)).toEqual([idOf('a2')]);
+      });
+    }
+
+    test('a restricted shared pull cannot reclaim other instances or NULL rows from an expired unrestricted lease', async () => {
+      const name = 'pull-caller-scope-reclaim';
+      await service.create({ name, eventType: 'custom.dc0082.*', startFrom: 'beginning', shared: true });
+      const first = await service.pull(name, { limit: 100, leaseMs: 1 }, unrestricted);
+      expect(first.items.map((e) => e.id)).toEqual(['a1', 'b1', 'none', 'b2', 'a2', 'b3'].map(idOf));
+      // Expire deterministically rather than depending on wall-clock sleeps.
+      const stored = await service.getByName(name);
+      if (!stored.leaseState) throw new Error('missing lease state');
+      await db
+        .update(durableConsumers)
+        .set({
+          leaseState: {
+            ...stored.leaseState,
+            leases: stored.leaseState.leases.map((lease) => ({ ...lease, expiresAt: 0 })),
+          },
+        })
+        .where(eq(durableConsumers.name, name));
+      const retry = await service.pull(name, { limit: 100 }, owner);
+      expect(retry.items.map((e) => e.id)).toEqual(['a1', 'a2'].map(idOf));
+      expect(retry.leaseId).toBeDefined();
     });
 
     test('a scoped create naming an instance that does not exist is refused (400) and stores nothing', async () => {
