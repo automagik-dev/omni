@@ -80,9 +80,9 @@ postgresDescribe('connector-keyed ingress schema and tenancy', () => {
     return handle.db;
   }
 
-  function applyMigration() {
+  function applyMigration(file: string = migration) {
     const result = Bun.spawnSync({
-      cmd: [psqlBin, '-X', '--no-psqlrc', '--set', 'ON_ERROR_STOP=1', '--dbname', urlFor(dbName), '-f', migration],
+      cmd: [psqlBin, '-X', '--no-psqlrc', '--set', 'ON_ERROR_STOP=1', '--dbname', urlFor(dbName), '-f', file],
       stdout: 'pipe',
       stderr: 'pipe',
     });
@@ -123,6 +123,13 @@ postgresDescribe('connector-keyed ingress schema and tenancy', () => {
     `);
     applyMigration();
     applyMigration();
+    // Keep the pre-0092 upgrade proof above, then bring its ORM fixture to the
+    // current schema (select/returning includes later additive columns).
+    for (const name of readdirSync(drizzleDir)
+      .filter((name) => name.endsWith('.sql') && name > '0092_connector_ingress.sql')
+      .sort()) {
+      applyMigration(join(drizzleDir, name));
+    }
     await owner.insert(connectorEventSubscriptions).values({
       id: typedSubscriptionId,
       connectorId: connectorA,

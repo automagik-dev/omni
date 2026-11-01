@@ -1977,6 +1977,7 @@ export const messages = pgTable(
  */
 /** Ingest-time access verdict journaled on omni_events.access_decision (opt-in). */
 export type EventAccessDecision = 'disabled' | 'allowed' | 'denied';
+export type EventSourceKind = 'connector' | 'connector_subscription' | 'webhook_source';
 
 export const omniEvents = pgTable(
   'omni_events',
@@ -2016,6 +2017,11 @@ export const omniEvents = pgTable(
     chatUuid: uuid('chat_uuid').references(() => chats.id, { onDelete: 'set null' }),
     agentId: uuid('agent_id').references(() => agents.id, { onDelete: 'set null' }),
     conversationId: uuid('conversation_id').references(() => conversations.id, { onDelete: 'set null' }),
+
+    // ---- Trusted provenance (paired-agents slice 2; forward-only) ----
+    producingKeyId: uuid('producing_key_id'),
+    sourceKind: varchar('source_kind', { length: 32 }).$type<EventSourceKind>(),
+    sourceId: uuid('source_id'),
 
     // ---- Processing Status ----
     status: varchar('status', { length: 20 }).notNull().default('received'), // 'received' | 'processing' | 'completed' | 'failed'
@@ -2093,6 +2099,23 @@ export const omniEvents = pgTable(
     tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
   },
   (table) => ({
+    sourceRefCheck: check(
+      'omni_events_source_ref_ck',
+      sql`(${table.sourceKind} IS NULL) = (${table.sourceId} IS NULL)
+        AND (${table.sourceKind} IS NULL OR ${table.sourceKind} IN ('connector','connector_subscription','webhook_source'))`,
+    ),
+    instanceTypeSeqIdx: index('omni_events_instance_type_seq_idx')
+      .on(table.instanceId, table.eventType, table.journalSeq)
+      .where(sql`${table.instanceId} IS NOT NULL`),
+    sourceTypeSeqIdx: index('omni_events_source_type_seq_idx')
+      .on(table.sourceKind, table.sourceId, table.eventType, table.journalSeq)
+      .where(sql`${table.sourceKind} IS NOT NULL`),
+    agentTypeSeqIdx: index('omni_events_agent_type_seq_idx')
+      .on(table.agentId, table.eventType, table.journalSeq)
+      .where(sql`${table.agentId} IS NOT NULL`),
+    producingKeyIdx: index('omni_events_producing_key_idx')
+      .on(table.producingKeyId)
+      .where(sql`${table.producingKeyId} IS NOT NULL`),
     /** Children lookup for `omni events trace` (descendants = causation_id = :id). */
     causationIdx: index('omni_events_causation_idx').on(table.causationId),
     /** Cursor paging for durable consumers (#989): WHERE journal_seq > :cursor ORDER BY journal_seq. */
@@ -3793,6 +3816,8 @@ export const durableConsumers = pgTable(
     scoped: boolean('scoped').notNull().default(false),
     /** Scoped consumers only: instance UUIDs this consumer may page. Null when unscoped. */
     instanceIds: jsonb('instance_ids').$type<string[]>(),
+    /** No FK: deleted agents leave ownership intact (admin-only recovery). */
+    agentId: uuid('agent_id'),
     /** Scoped consumers only: the api_keys.id that registered it. Null when unscoped. No FK (see 0082). */
     ownerKeyId: uuid('owner_key_id'),
     /**
@@ -3805,11 +3830,45 @@ export const durableConsumers = pgTable(
   },
   (table) => ({
     nameUq: uniqueIndex('durable_consumers_name_uq').on(table.name),
+    agentIdx: index('durable_consumers_agent_idx').on(table.agentId).where(sql`${table.agentId} IS NOT NULL`),
   }),
 );
 
 export type DurableConsumer = typeof durableConsumers.$inferSelect;
 export type NewDurableConsumer = typeof durableConsumers.$inferInsert;
+
+export const agentGrantSourceKinds = ['connector', 'connector_subscription', 'webhook_source', 'agent'] as const;
+export type AgentGrantSourceKind = (typeof agentGrantSourceKinds)[number];
+
+/** Slice 6 owns the only runtime grant writer; slice 2 supplies the schema. */
+export const agentSourceGrants = pgTable(
+  'agent_source_grants',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    sourceKind: varchar('source_kind', { length: 32 }).notNull().$type<AgentGrantSourceKind>(),
+    sourceId: uuid('source_id').notNull(),
+    approvedByKeyId: uuid('approved_by_key_id').notNull(),
+    approvedAt: timestamp('approved_at', { withTimezone: true }).notNull().defaultNow(),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    tenantId: uuid('tenant_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    kindCheck: check(
+      'agent_source_grants_kind_ck',
+      sql`${table.sourceKind} IN ('connector','connector_subscription','webhook_source','agent')`,
+    ),
+    activeUq: uniqueIndex('agent_source_grants_active_uq')
+      .on(table.agentId, table.sourceKind, table.sourceId)
+      .where(sql`${table.revokedAt} IS NULL`),
+  }),
+);
+
+export type AgentSourceGrant = typeof agentSourceGrants.$inferSelect;
+export type NewAgentSourceGrant = typeof agentSourceGrants.$inferInsert;
 
 // Relations for webhook sources and automations
 export const automationsRelations = relations(automations, ({ many }) => ({

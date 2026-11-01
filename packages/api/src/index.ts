@@ -101,6 +101,7 @@ import { TurnMonitor } from './services/turn-monitor';
 import type { SystemUpdater } from './system/update';
 import { resolveAuthPlaneConnection } from './tenancy/auth-plane-connection';
 import { warnOnMixedTenancyState } from './tenancy/enforcement-posture';
+import { pairedAgentFlagState } from './tenancy/feature-flag';
 import { installInstanceOwnerResolver } from './tenancy/instance-owner-registry';
 import { currentTenantScope } from './tenancy/tenant-scope';
 import { startStreamRevocationSweeper } from './tenancy/tenant-stream-subscriptions';
@@ -849,11 +850,22 @@ async function verifyEnforcedRuntimeIdentity(db: Database, mode: DbEnforcementMo
   }
 }
 
+function warnPairedAgentConsumerFlag(): void {
+  const pairedConsumers = pairedAgentFlagState('consumers');
+  if (pairedConsumers.reason === 'multitenancy_enabled') {
+    log.warn(`${pairedConsumers.flag} is OFF because OMNI_MULTITENANCY_ENABLED=true`, {
+      reason: pairedConsumers.reason,
+    });
+  }
+}
+
 /**
  * Main entry point
  */
 async function main() {
   log.info('Starting Omni API v2');
+
+  warnPairedAgentConsumerFlag();
 
   // Enable default Node.js metrics (CPU, memory, event loop)
   enableDefaultMetrics();

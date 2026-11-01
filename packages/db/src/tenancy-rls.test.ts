@@ -104,7 +104,10 @@ describe('RLS coverage', () => {
   });
 
   test('only the durable consumer legacy registry uses application scoping, with a documented boundary', () => {
-    expect(APPLICATION_SCOPED_TENANT_TABLES.map((entry) => entry.table)).toEqual(['durable_consumers']);
+    expect(APPLICATION_SCOPED_TENANT_TABLES.map((entry) => entry.table)).toEqual([
+      'durable_consumers',
+      'agent_source_grants',
+    ]);
     for (const entry of APPLICATION_SCOPED_TENANT_TABLES) {
       expect(SCHEMA_TENANT_TABLES).toContain(entry.table);
       expect(entry.justification.length).toBeGreaterThan(60);
