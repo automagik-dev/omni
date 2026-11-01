@@ -30,9 +30,10 @@ import { clickupManifest } from '@omni/connector-clickup';
 import { ConnectorRegistry } from '@omni/connector-sdk';
 import {
   CONNECTOR_EVENT_TYPE,
+  type ConnectorEventPublisher,
   type Automation as CoreAutomation,
   type EventBus,
-  type OmniEvent,
+  type GenericEventHandler,
   createAutomationEngine,
 } from '@omni/core';
 import {
@@ -111,16 +112,16 @@ function password(): string {
 
 /** Minimal in-memory pub/sub: publish awaits every matching subscriber, like NATS ack-after-handle. */
 function inMemoryBus(): {
-  bus: EventBus;
-  handlers: Array<{ pattern: string; handler: (event: OmniEvent) => Promise<void> }>;
+  bus: EventBus & ConnectorEventPublisher;
+  handlers: Array<{ pattern: string; handler: GenericEventHandler }>;
 } {
-  const handlers: Array<{ pattern: string; handler: (event: OmniEvent) => Promise<void> }> = [];
-  const bus = {
+  const handlers: Array<{ pattern: string; handler: GenericEventHandler }> = [];
+  const bus: EventBus & ConnectorEventPublisher = {
     async connect() {},
     async publish() {
       return { id: '', sequence: 0, stream: '' };
     },
-    async publishGeneric(type: string, payload: Record<string, unknown>, metadata?: Record<string, unknown>) {
+    async publishGeneric(type, payload, metadata) {
       const id = (metadata?.publishEventId as string | undefined) ?? randomUUID();
       const event = {
         id,
@@ -128,7 +129,7 @@ function inMemoryBus(): {
         payload,
         metadata: { correlationId: id, ...metadata },
         timestamp: Date.now(),
-      } as unknown as OmniEvent;
+      };
       for (const { pattern, handler } of handlers) {
         const matches = pattern.endsWith('.>')
           ? type === pattern.slice(0, -2) || type.startsWith(`${pattern.slice(0, -2)}.`)
@@ -137,10 +138,17 @@ function inMemoryBus(): {
       }
       return { id, sequence: 0, stream: '' };
     },
+    async publishConnector(
+      type: `connector.${string}`,
+      payload: Record<string, unknown>,
+      metadata: { publishEventId: string },
+    ) {
+      return this.publishGeneric(type, payload, metadata);
+    },
     async subscribe() {
       return { id: randomUUID(), pattern: '', unsubscribe: async () => {} };
     },
-    async subscribePattern(pattern: string, handler: (event: OmniEvent) => Promise<void>) {
+    async subscribePattern(pattern: string, handler: GenericEventHandler) {
       handlers.push({ pattern, handler });
       return { id: randomUUID(), pattern, unsubscribe: async () => {} };
     },
@@ -152,7 +160,7 @@ function inMemoryBus(): {
     },
     async close() {},
     isConnected: () => true,
-  } as unknown as EventBus;
+  };
   return { bus, handlers };
 }
 
@@ -162,7 +170,7 @@ postgresDescribe('connector ingress under enforced RLS (real PostgreSQL)', () =>
   let handle: ReturnType<typeof createDbHandle> | null = null;
   let db: Database;
   const commentRequests: CommentRequest[] = [];
-  let bus: EventBus;
+  let bus: EventBus & ConnectorEventPublisher;
   let engine: ReturnType<typeof createAutomationEngine> | null = null;
   let services: ReturnType<typeof createServices>;
   let ids: {

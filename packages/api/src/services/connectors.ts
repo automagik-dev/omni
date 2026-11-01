@@ -21,11 +21,14 @@ import { providerDetail, providerSummary, redactSecrets, redactValue, verifyDeli
 import {
   CONNECTOR_EVENT_TYPE,
   CURRENT_ENVELOPE_VERSION,
+  type ConnectorEventPublisher,
+  type ConnectorEventType,
   type EventBus,
   NotFoundError,
   OmniError,
   ValidationError,
   createLogger,
+  isConnectorEventType,
 } from '@omni/core';
 import type { Database } from '@omni/db';
 import {
@@ -37,6 +40,7 @@ import {
   omniEvents,
 } from '@omni/db';
 import { type AnyColumn, and, eq, gt, isNull, sql } from 'drizzle-orm';
+import { z } from 'zod';
 import type {
   CreateConnectorBody,
   CreateSubscriptionBody,
@@ -225,7 +229,7 @@ export class ConnectorService {
 
   constructor(
     private readonly pool: Database,
-    private readonly eventBus: EventBus | null,
+    private readonly eventBus: (EventBus & ConnectorEventPublisher) | null,
     private readonly registry: ConnectorRegistry,
     options: ConnectorServiceOptions = {},
   ) {
@@ -1027,7 +1031,7 @@ export class ConnectorService {
       if (!this.eventBus) throw new Error('Event bus is not available');
       // Published UNDER the claim's id so the journal row and the bus event
       // share one identity.
-      await this.eventBus.publishGeneric(CONNECTOR_EVENT_TYPE, payload, {
+      await this.eventBus.publishConnector(CONNECTOR_EVENT_TYPE, payload, {
         publishEventId: eventId,
         source: 'connector',
         correlationId: eventId,
@@ -1259,4 +1263,88 @@ export class ConnectorService {
     const prepared = await this.resolveAction(request.connectorId, request.action, trustedTenantId);
     return this.executePrepared(prepared, request.input, request.timeoutMs, trustedTenantId);
   }
+}
+
+// ── Journal provenance for dead-letter retries and operator replay ─────────────
+// Callers keep the retry/replay handle's tenant scope. Routing comes
+// only from the ingress claim; current subscriptions and DLQ payloads are ignored.
+
+const connectorJournalProvenance = z.object({
+  source: z.literal('connector'),
+  connectorId: z.string().min(1),
+  provider: z.string().min(1),
+  fullEventType: z.string(),
+  tenantId: z.string().nullable().optional(),
+});
+const connectorLegacyRouting = z.object({
+  connectorId: z.string().min(1),
+  subscriptionId: z.string().min(1),
+  targetAutomationId: z.string().min(1).nullable(),
+});
+const connectorTypedRouting = z.object({
+  connectorId: z.string().min(1),
+  subscriptionIds: z.array(z.string().min(1)).min(1),
+  targetAutomationIds: z.array(z.string().min(1)),
+});
+const connectorJournalPayload = z.record(z.string(), z.unknown());
+
+export class ConnectorProvenanceError extends Error {
+  constructor() {
+    super('Connector retry refused: no matching ingress-written journal provenance');
+  }
+}
+
+export async function restoreConnectorEvent(
+  db: Database,
+  eventId: string,
+  eventType: ConnectorEventType,
+  tenantId: string | null,
+): Promise<{
+  payload: Record<string, unknown>;
+  metadata: { publishEventId: string; tenantId?: string; envelopeVersion?: number };
+}> {
+  const [row] = await db.select().from(omniEvents).where(eq(omniEvents.id, eventId)).limit(1);
+  const meta = connectorJournalProvenance.safeParse(row?.metadata);
+  const payload = connectorJournalPayload.safeParse(row?.rawPayload);
+  if (
+    !row ||
+    !row.idempotencyKey?.startsWith('connector:') ||
+    row.eventType !== eventType ||
+    (tenantId !== null && row.tenantId !== tenantId) ||
+    !meta.success ||
+    !payload.success ||
+    (meta.data.tenantId ?? null) !== row.tenantId ||
+    !isConnectorEventType(meta.data.fullEventType) ||
+    meta.data.fullEventType !== eventType
+  ) {
+    throw new ConnectorProvenanceError();
+  }
+  if (eventType === CONNECTOR_EVENT_TYPE) {
+    const route = connectorLegacyRouting.safeParse(payload.data);
+    const subscription = z.object({ subscriptionId: z.string() }).safeParse(row.metadata);
+    if (
+      !route.success ||
+      !subscription.success ||
+      route.data.connectorId !== meta.data.connectorId ||
+      route.data.subscriptionId !== subscription.data.subscriptionId
+    )
+      throw new ConnectorProvenanceError();
+  } else {
+    const route = connectorTypedRouting.safeParse(payload.data);
+    const subscriptions = z.object({ subscriptionIds: z.array(z.string()) }).safeParse(row.metadata);
+    if (
+      !route.success ||
+      !subscriptions.success ||
+      route.data.connectorId !== meta.data.connectorId ||
+      JSON.stringify(route.data.subscriptionIds) !== JSON.stringify(subscriptions.data.subscriptionIds)
+    )
+      throw new ConnectorProvenanceError();
+  }
+  return {
+    payload: payload.data,
+    metadata: {
+      publishEventId: row.id,
+      ...(row.tenantId ? { tenantId: row.tenantId, envelopeVersion: CURRENT_ENVELOPE_VERSION } : {}),
+    },
+  };
 }

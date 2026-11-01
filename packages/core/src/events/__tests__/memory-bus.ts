@@ -15,9 +15,18 @@
  * and `idle()` awaits the whole cascade.
  */
 
-import type { EventBus, GenericEventHandler, PublishResult, SubscribeOptions, Subscription } from '../bus';
-import { createOmniEvent } from '../factory';
 import type {
+  ConnectorEventPublisher,
+  EventBus,
+  GenericEventHandler,
+  PublishResult,
+  SubscribeOptions,
+  Subscription,
+} from '../bus';
+import { createOmniEvent } from '../factory';
+import { isConnectorEventType } from '../types';
+import type {
+  ConnectorEventType,
   CoreEventType,
   EventPayloadMap,
   EventType,
@@ -32,7 +41,7 @@ interface PatternSubscription {
   handler: GenericEventHandler;
 }
 
-export class InMemoryEventBus implements EventBus {
+export class InMemoryEventBus implements EventBus, ConnectorEventPublisher {
   /** Every event published through this bus, in publish order. */
   readonly journal: OmniEvent[] = [];
   private readonly patternSubs: PatternSubscription[] = [];
@@ -56,6 +65,16 @@ export class InMemoryEventBus implements EventBus {
     payload: GenericEventPayload,
     metadata?: Partial<OmniEvent['metadata']>,
   ): Promise<PublishResult> {
+    if (isConnectorEventType(type)) throw new Error('Connector events require publishConnector');
+    return this.publishInternal(type, payload, metadata);
+  }
+
+  async publishConnector(
+    type: ConnectorEventType,
+    payload: Record<string, unknown>,
+    metadata: Partial<OmniEvent['metadata']> & { publishEventId: string },
+  ): Promise<PublishResult> {
+    if (!isConnectorEventType(type) || !metadata.publishEventId) throw new Error('Invalid connector publish');
     return this.publishInternal(type, payload, metadata);
   }
 

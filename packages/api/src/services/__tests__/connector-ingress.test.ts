@@ -13,7 +13,7 @@ import { describe, expect, test } from 'bun:test';
 import { createHmac } from 'node:crypto';
 import { clickupManifest } from '@omni/connector-clickup';
 import { ConnectorRegistry } from '@omni/connector-sdk';
-import type { EventBus } from '@omni/core';
+import type { ConnectorEventPublisher, EventBus } from '@omni/core';
 import { getTableName } from 'drizzle-orm';
 import {
   ConnectorService,
@@ -173,14 +173,27 @@ function service(fakes: Fakes): ConnectorService {
   return new ConnectorService(fakes.db as never, makeBus(fakes), new ConnectorRegistry([clickupManifest]));
 }
 
-function makeBus(fakes: Fakes): EventBus {
+function makeBus(fakes: Fakes): EventBus & ConnectorEventPublisher {
   return {
-    async publishGeneric(type: string, payload: Record<string, unknown>, metadata?: Record<string, unknown>) {
+    connect: async () => {},
+    close: async () => {},
+    isConnected: () => true,
+    publish: async () => {
+      throw new Error('unexpected core publish');
+    },
+    publishGeneric: async () => {
+      throw new Error('connector ingress must use publishConnector');
+    },
+    subscribe: async () => ({ id: 'sub', pattern: '', unsubscribe: async () => {} }),
+    subscribePattern: async () => ({ id: 'sub', pattern: '', unsubscribe: async () => {} }),
+    subscribeMany: async () => ({ id: 'sub', pattern: '', unsubscribe: async () => {} }),
+    subscribeAll: async () => ({ id: 'sub', pattern: '', unsubscribe: async () => {} }),
+    async publishConnector(type, payload, metadata) {
       if (fakes.publishError) throw fakes.publishError;
       fakes.published.push({ type, payload, metadata });
-      return { id: metadata?.publishEventId ?? 'event', type, timestamp: Date.now(), payload, metadata };
+      return { id: metadata.publishEventId, sequence: 0, stream: 'test' };
     },
-  } as unknown as EventBus;
+  };
 }
 
 describe('connector inbound envelope', () => {

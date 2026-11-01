@@ -8,6 +8,7 @@ import { brokeredFetch } from '../egress';
 import type { EventBus } from '../events/bus';
 import { resolveAmbientTenantId } from '../events/envelope';
 import { SCHEMA_VALIDATION_FAILED } from '../events/schema-registry';
+import { isConnectorEventType } from '../events/types';
 import type { CustomEventType, GenericEventPayload } from '../events/types';
 import { generateId } from '../ids';
 import { createLogger } from '../logger';
@@ -567,6 +568,8 @@ async function prepareEmitEvent(
   }
 
   const eventType = substituteTemplate(config.eventType, context) as CustomEventType;
+
+  if (isConnectorEventType(eventType)) return { error: 'Connector events may only be emitted by connector ingress' };
 
   // Emission gates (publish allowlist #987, schema registry #959, strict
   // switch #1000) — see `enforceEmitEventGates`.

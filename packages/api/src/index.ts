@@ -25,6 +25,7 @@ import './tracing';
 
 import { type ChannelRegistry, isVoiceCapable } from '@omni/channel-sdk';
 import {
+  type ConnectorEventPublisher,
   type EventBus,
   configureLogging,
   connectEventBus,
@@ -150,7 +151,7 @@ export function getInstanceMonitor(): InstanceMonitor | null {
 /**
  * Connect to NATS event bus and set up listeners
  */
-async function connectToNats(db: Database): Promise<EventBus | null> {
+async function connectToNats(db: Database): Promise<(EventBus & ConnectorEventPublisher) | null> {
   try {
     natsLog.info('Connecting to NATS', { url: NATS_URL });
     const eventBus = await connectEventBus({
