@@ -5494,6 +5494,22 @@ export interface components {
                         [key: string]: unknown;
                     };
                 };
+                /** @description Startup agent key repair status; a repair-only failure returns HTTP 200 with degraded status and retries next boot */
+                agentKeyRepair?: {
+                    /**
+                     * @description Check status
+                     * @enum {string}
+                     */
+                    status: "ok" | "error";
+                    /** @description Latency in milliseconds */
+                    latency?: number;
+                    /** @description Error message if status is error */
+                    error?: string;
+                    /** @description Additional details */
+                    details?: {
+                        [key: string]: unknown;
+                    };
+                };
             };
         };
         InfoResponse: {
@@ -12098,6 +12114,22 @@ export interface operations {
                                     [key: string]: unknown;
                                 };
                             };
+                            /** @description Startup agent key repair status; a repair-only failure returns HTTP 200 with degraded status and retries next boot */
+                            agentKeyRepair?: {
+                                /**
+                                 * @description Check status
+                                 * @enum {string}
+                                 */
+                                status: "ok" | "error";
+                                /** @description Latency in milliseconds */
+                                latency?: number;
+                                /** @description Error message if status is error */
+                                error?: string;
+                                /** @description Additional details */
+                                details?: {
+                                    [key: string]: unknown;
+                                };
+                            };
                         };
                     };
                 };
@@ -12140,6 +12172,22 @@ export interface operations {
                                 };
                             };
                             nats: {
+                                /**
+                                 * @description Check status
+                                 * @enum {string}
+                                 */
+                                status: "ok" | "error";
+                                /** @description Latency in milliseconds */
+                                latency?: number;
+                                /** @description Error message if status is error */
+                                error?: string;
+                                /** @description Additional details */
+                                details?: {
+                                    [key: string]: unknown;
+                                };
+                            };
+                            /** @description Startup agent key repair status; a repair-only failure returns HTTP 200 with degraded status and retries next boot */
+                            agentKeyRepair?: {
                                 /**
                                  * @description Check status
                                  * @enum {string}
