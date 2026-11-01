@@ -176,6 +176,15 @@ function isLive(key: Pick<ApiKey, 'status' | 'expiresAt'>, now: number): boolean
   return key.status === 'active' && (key.expiresAt === null || key.expiresAt.getTime() > now);
 }
 
+function isWidenedAgentKey(key: Pick<CachedApiKey, 'name' | 'createdBy' | 'instanceIds'>): boolean {
+  return key.createdBy === 'system:auto-provision' && key.name.startsWith('agent:') && !key.instanceIds?.length;
+}
+
+function isValidCachedKey(key: CachedApiKey): boolean {
+  const expired = key.expiresAt && new Date(key.expiresAt) < new Date();
+  return key.status === 'active' && !expired && !isWidenedAgentKey(key);
+}
+
 /** Why a key cannot mint children, or null when it can. */
 function notMintableReason(parent: ApiKey | undefined): string | null {
   if (!parent) return 'parent key not found';
@@ -293,13 +302,11 @@ export class ApiKeyService {
 
     // Check cache first
     const cached = await apiKeyCache.get<CachedApiKey>(cacheKey);
-    if (cached) {
-      // Verify cached key is still valid (status and expiration)
-      if (cached.status !== 'active') {
-        await apiKeyCache.delete(cacheKey);
-        return null;
-      }
-      if (cached.expiresAt && new Date(cached.expiresAt) < new Date()) {
+    if (cached && cached.createdBy === undefined) {
+      // Old entries cannot distinguish operator keys from system agent keys.
+      await apiKeyCache.delete(cacheKey);
+    } else if (cached) {
+      if (!isValidCachedKey(cached)) {
         await apiKeyCache.delete(cacheKey);
         return null;
       }
@@ -334,7 +341,7 @@ export class ApiKeyService {
       )
       .limit(1);
 
-    if (!apiKey) {
+    if (!apiKey || isWidenedAgentKey(apiKey)) {
       log.debug('Key not found or invalid');
       return null;
     }
@@ -347,6 +354,7 @@ export class ApiKeyService {
       expiresAt: apiKey.expiresAt,
       scopes: apiKey.scopes,
       instanceIds: apiKey.instanceIds,
+      createdBy: apiKey.createdBy ?? null,
       profile: apiKey.profile,
       chatAllowlist: apiKey.chatAllowlist,
       instanceAllowlist: apiKey.instanceAllowlist,
