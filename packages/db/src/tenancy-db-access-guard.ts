@@ -626,8 +626,35 @@ export const TOTAL_PENDING_CEILING = 21;
  */
 export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
   {
-    file: 'packages/api/src/services/agent-key-reconciliation.ts',
+    file: 'packages/api/src/services/agent-key-bindings.ts',
     table: 'agents',
+    class: 'control-plane',
+    justification:
+      'Shared agent-key authority graph reads scopedHandle for route requests and startup repair. ' +
+      'Enforced startup enumerates tenant IDs on the auth plane and calls this only in each tenant runtime scope; ' +
+      'legacy callers retain ambient reads. Stored agent/instance tenants must match and every existing grant needs a live default or route binding.',
+  },
+  {
+    file: 'packages/api/src/services/agent-key-bindings.ts',
+    table: 'instances',
+    class: 'control-plane',
+    justification:
+      'Shared agent-key authority graph reads scopedHandle for route requests and startup repair. ' +
+      'Enforced startup enumerates tenant IDs on the auth plane and calls this only in each tenant runtime scope; ' +
+      'legacy callers retain ambient reads. Stored agent/instance tenants must match and every existing grant needs a live default or route binding.',
+  },
+  {
+    file: 'packages/api/src/services/agent-key-bindings.ts',
+    table: 'agent_routes',
+    class: 'control-plane',
+    justification:
+      'Shared agent-key authority graph reads scopedHandle for route requests and startup repair. ' +
+      'Enforced startup enumerates tenant IDs on the auth plane and calls this only in each tenant runtime scope; ' +
+      'legacy callers retain ambient reads. Stored agent/instance tenants must match and every existing grant needs a live default or route binding.',
+  },
+  {
+    file: 'packages/api/src/services/agent-key-reconciliation.ts',
+    table: 'agent_routes',
     class: 'control-plane',
     justification:
       'Failure-only startup coverage snapshot counts agents without usable system keys, including route-only agents. ' +

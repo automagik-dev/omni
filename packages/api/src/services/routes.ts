@@ -2,14 +2,17 @@
  * Route service - manages agent routes
  */
 
-import { ConflictError, NotFoundError } from '@omni/core';
+import { ConflictError, NotFoundError, createLogger } from '@omni/core';
 import type { CreateAgentRoute, ListAgentRoutesQuery, UpdateAgentRoute } from '@omni/core';
 import type { Database } from '@omni/db';
 import { type AgentRoute, type NewAgentRoute, agentRoutes, unwrapDbError } from '@omni/db';
 import { and, desc, eq } from 'drizzle-orm';
 import { invalidateProviderCacheForInstance } from '../plugins/agent-dispatcher';
 import { runAfterTenantCommit, scopedHandle } from '../tenancy/tenant-scope';
+import { syncRouteAgentKey } from './agent-key-bindings';
 import type { RouteResolver } from './route-resolver';
+
+const log = createLogger('route-agent-key');
 
 export class RouteService {
   /**
@@ -142,6 +145,8 @@ export class RouteService {
       throw rawError;
     }
 
+    await this.syncAgentKey(created.instanceId, created.agentId);
+
     // Best-effort cache invalidation outside try-catch
     // This ensures cache failures don't mask successful creation
     try {
@@ -152,6 +157,16 @@ export class RouteService {
     this.evictCachedProvider(instanceId);
 
     return created;
+  }
+
+  private async syncAgentKey(instanceId: string, agentId: string | null): Promise<void> {
+    if (!agentId) return;
+    try {
+      await syncRouteAgentKey(this.db, instanceId, agentId);
+    } catch (error) {
+      // Same best-effort contract as instance writes; startup retries repair.
+      log.error('Failed to synchronize routed agent key', { instanceId, agentId, error: String(error) });
+    }
   }
 
   /**
@@ -184,6 +199,9 @@ export class RouteService {
       throw new NotFoundError('AgentRoute', id);
     }
 
+    if (route.agentId !== updated.agentId) await this.syncAgentKey(route.instanceId, route.agentId);
+    await this.syncAgentKey(updated.instanceId, updated.agentId);
+
     // Best-effort cache invalidation - don't fail update if cache fails
     try {
       this.routeResolver.invalidateInstance(route.instanceId);
@@ -207,6 +225,8 @@ export class RouteService {
     if (!result.length) {
       throw new NotFoundError('AgentRoute', id);
     }
+
+    await this.syncAgentKey(route.instanceId, route.agentId);
 
     // Best-effort cache invalidation - don't fail deletion if cache fails
     try {

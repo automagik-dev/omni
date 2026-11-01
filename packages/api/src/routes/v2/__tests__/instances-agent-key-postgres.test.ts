@@ -75,6 +75,7 @@ postgresDescribe('agent key assignment lifecycle (real PostgreSQL)', () => {
       c.set('apiKey', { id: 'operator', name: 'operator', scopes: ['*'], instanceIds: null, expiresAt: null });
       c.set('services', {
         apiKeys: service,
+        routes: { list: async () => [] },
         instances: {
           create: async (data: { agentId?: string }) => {
             if (data.agentId) assignments.set(INSTANCE_B, data.agentId);
