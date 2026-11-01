@@ -120,34 +120,82 @@ SyntaxError: load proof
   expect(summary).not.toContain('noise');
 });
 
+for (const marker of ['(fail)', '✗']) {
+  test(`${marker} timeout shows its reason instead of an earlier passing test's error`, () => {
+    const output = `proof.test.ts:\nError: passing noise\n(pass) okay\n${marker} slow [50ms]\n  ^ this test timed out after 50ms.\n`;
+    const summary = formatPgGateFailure(output, ['proof.test.ts'], ['bun test exited 1'], '/tmp/full.log');
+    expect(summary).toContain(`${marker} slow [50ms]\n    ^ this test timed out after 50ms.`);
+    expect(summary).not.toContain('passing noise');
+  });
+}
+
+test('each suite shows only its first three failures and counts the omitted failures', () => {
+  const output = ['first.test.ts', 'second.test.ts']
+    .map((file) => `${file}:\n${Array.from({ length: 5 }, (_, i) => `error: proof-${i}\n(fail) test-${i}`).join('\n')}`)
+    .join('\n');
+  const summary = formatPgGateFailure(
+    output,
+    ['first.test.ts', 'second.test.ts'],
+    ['bun test exited 1'],
+    '/tmp/full.log',
+  );
+  expect(summary.match(/… and 2 more failures \(see full child output\)/g)).toHaveLength(2);
+  for (const index of [0, 1, 2]) expect(summary.match(new RegExp(`error: proof-${index}`, 'g'))).toHaveLength(2);
+  for (const index of [3, 4]) expect(summary).not.toContain(`proof-${index}`);
+});
+
 test('stdout and stderr sharing a slow pipe drain completely on natural exit', async () => {
-  const dir = temporaryDirectory();
+  // A P in the path must never affect the payload count.
+  const dir = mkdtempSync(join(temporaryDirectory(), 'with-P-'));
   const reporter = new URL('./pg-gate-report.ts', import.meta.url).href;
   const source = `
     import { reportPgGateResult } from ${JSON.stringify(reporter)};
-    process.stdout.write('P'.repeat(2 * 1024 * 1024));
-    process.exitCode = reportPgGateResult('proof.test.ts:\\nerror: shared proof\\n(fail) shared\\n', ['proof.test.ts'], 1);
+    const suites = Array.from({length: 300}, (_, i) => 'suite-' + i + '-postgres.test.ts');
+    const output = suites.map(file => file + ':\\nerror: shared proof ' + 'e'.repeat(260)
+      + '\\n  at ' + 's'.repeat(260) + '\\n(fail) shared\\n').join('\\n');
+    process.stdout.write('\\x01'.repeat(2 * 1024 * 1024));
+    process.exitCode = reportPgGateResult(output, suites, 1);
     process.stderr.write('tail-sentinel\\n');
   `;
-  const child = Bun.spawn(['bash', '-c', 'exec "$@" 2>&1', 'pg-report-shared', process.execPath, '-e', source], {
-    env: { ...process.env, TMPDIR: dir },
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
-  const chunks: Uint8Array[] = [];
-  const stderr = new Response(child.stderr).text();
-  for await (const chunk of child.stdout) {
-    chunks.push(chunk);
-    await Bun.sleep(2);
-  }
-  const output = Buffer.concat(chunks).toString();
-  expect(await child.exited).toBe(1);
-  expect(await stderr).toBe('');
-  expect(output.match(/P/g)?.length).toBe(2 * 1024 * 1024);
-  expect(output).toContain('proof.test.ts\n    error: shared proof');
-  expect(output).toContain('pg-gate: full child output:');
-  expect(output).toContain('tail-sentinel\n');
-  expect(output).not.toContain('EAGAIN');
+  // Raw fd reads prevent Bun's piped ReadableStream from eagerly draining the kernel pipe.
+  const reader = `
+    import { readSync, writeFileSync, appendFileSync } from 'node:fs';
+    const target = process.argv.at(-1);
+    if (!target) throw new Error('Missing capture path');
+    writeFileSync(target, '');
+    await Bun.sleep(1500);
+    const buffer = Buffer.alloc(4096);
+    for (;;) {
+      const count = readSync(0, buffer, 0, buffer.length, null);
+      if (count === 0) break;
+      appendFileSync(target, buffer.subarray(0, count));
+      await Bun.sleep(2);
+    }
+  `;
+  const capture = join(dir, 'shared-pipe.log');
+  const child = await run(
+    [
+      'bash',
+      '-c',
+      'set -o pipefail; "$1" -e "$2" 2>&1 | "$1" -e "$3" "$4"',
+      'pg-report-shared',
+      process.execPath,
+      source,
+      reader,
+      capture,
+    ],
+    { ...process.env, TMPDIR: dir },
+  );
+  const bytes = readFileSync(capture);
+  const output = bytes.toString();
+  expect(child.code).toBe(1);
+  expect(child.stderr).toBe('');
+  expect(output.includes('EAGAIN')).toBe(false);
+  expect(bytes.reduce((count, byte) => count + Number(byte === 1), 0)).toBe(2 * 1024 * 1024);
+  expect(output.includes('suite-299-postgres.test.ts\n    error: shared proof')).toBe(true);
+  expect(output.includes('pg-gate: full child output:')).toBe(true);
+  expect(output.includes('tail-sentinel\n')).toBe(true);
+  expect(output.indexOf('pg-gate: full child output:') - output.indexOf('pg-gate: FAILED')).toBeGreaterThan(64 * 1024);
 }, 30_000);
 
 test('an unwritable retained log still prints the summary, warning and context', async () => {

@@ -10,6 +10,7 @@ const isError = (line: string) => /^(?:error:|\w*Error:)/.test(line);
 function failureDetails(lines: string[]): string[] {
   const details: string[] = [];
   let lastError = -1;
+  let failures = 0;
   for (const [index, line] of lines.entries()) {
     if (isError(line)) lastError = index;
     let error = -1;
@@ -20,10 +21,18 @@ function failureDetails(lines: string[]): string[] {
       if (nextError >= 0) error = index + 1 + nextError;
       end = error + 4;
     } else continue;
-    const context = error < 0 ? [line] : lines.slice(error, end).filter((entry) => entry.trim());
-    details.push(...context.slice(0, 4).map((entry) => `    ${entry.trim().slice(0, 300)}`));
+    const timeout = lines[index + 1];
+    const context =
+      isFailure(line) && timeout?.trimStart().startsWith('^ this test timed out')
+        ? [line, timeout]
+        : error < 0
+          ? [line]
+          : lines.slice(error, end).filter((entry) => entry.trim());
+    failures++;
+    if (failures <= 3) details.push(...context.slice(0, 4).map((entry) => `    ${entry.trim().slice(0, 300)}`));
     lastError = -1;
   }
+  if (failures > 3) details.push(`    … and ${failures - 3} more failures (see full child output)`);
   return details;
 }
 
