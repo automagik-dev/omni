@@ -1374,6 +1374,20 @@ async function handleAgentKeyProvisioning(
   oldAgentId: string | null,
   tenantId: string | null,
 ) {
+  const agentIds = [oldAgentId, newAgentId].filter((id): id is string => id !== null);
+  await services.apiKeys.withAgentKeyLock(agentIds, async (apiKeys) => {
+    await provisionLockedAgentKey({ ...services, apiKeys }, instanceId, newAgentId, oldAgentId, tenantId);
+  });
+}
+
+/** Reads and updates below share the route writer's per-agent transaction lock. */
+async function provisionLockedAgentKey(
+  services: Services,
+  instanceId: string,
+  newAgentId: string | null,
+  oldAgentId: string | null,
+  tenantId: string | null,
+) {
   // Remove instance from old agent's key
   if (oldAgentId) {
     try {

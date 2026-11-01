@@ -14,7 +14,7 @@ import {
   tenants,
 } from '@omni/db';
 import { assertPgTestRole, pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { __test__ as dispatcher } from '../../../plugins/agent-dispatcher';
 import { syncRouteAgentKey } from '../../../services/agent-key-bindings';
@@ -40,6 +40,7 @@ postgresDescribe('routed agent key lifecycle (real PostgreSQL)', () => {
   let resolver: RouteResolver;
   let routes: RouteService;
   let app: Hono<{ Variables: AppVariables }>;
+  let runtimeRole: { name: string; password: string } | undefined;
 
   function openDb(role?: { name: string; password: string }) {
     const handle = createDbHandle({ url: pgRoleUrl(superUrl, dbName, role), maxConnections: 3 });
@@ -327,10 +328,7 @@ postgresDescribe('routed agent key lifecycle (real PostgreSQL)', () => {
       createdBy: 'system:auto-provision',
     });
     const conversation = await chat(target.id);
-    const passwords = { ddl: crypto.randomUUID(), runtime: crypto.randomUUID(), authPlane: crypto.randomUUID() };
-    await applyTenantRlsEnforcement(db);
-    await applyTenancyRoles(db, passwords, DEFAULT_ROLE_NAMES, dbName);
-    const runtime = openDb({ name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime });
+    const runtime = openDb(await enforcedRole());
     await assertPgTestRole(runtime, DEFAULT_ROLE_NAMES.runtime);
     const scopedRoutes = new RouteService(runtime, new RouteResolver(runtime));
     const route = await runInWorkerTenantScope(runtime, localTenant, () =>
@@ -350,4 +348,135 @@ postgresDescribe('routed agent key lifecycle (real PostgreSQL)', () => {
     await runInWorkerTenantScope(runtime, localTenant, () => syncRouteAgentKey(runtime, target.id, foreign.id));
     expect(await keys.getById(foreignKey.key.id)).toEqual(foreignKey.key);
   }, 15_000);
+
+  async function enforcedRole() {
+    if (!runtimeRole) {
+      const passwords = { ddl: crypto.randomUUID(), runtime: crypto.randomUUID(), authPlane: crypto.randomUUID() };
+      await applyTenantRlsEnforcement(db);
+      await applyTenancyRoles(db, passwords, DEFAULT_ROLE_NAMES, dbName);
+      runtimeRole = { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime };
+    }
+    return runtimeRole;
+  }
+
+  function barrier() {
+    let release = () => {};
+    const promise = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return { promise, release };
+  }
+
+  async function waitForAdvisoryWait(agentId: string) {
+    // Observe the real server lock, not a timing assumption or a mocked query.
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      const waiting = await db.execute(sql`
+        SELECT 1 FROM pg_locks
+        WHERE locktype = 'advisory' AND NOT granted
+          AND objid = (hashtext(${`omni:agent-key:${agentId}`})::bigint & 4294967295)::oid
+      `);
+      if (waiting.length > 0) return;
+      await Bun.sleep(10);
+    }
+    throw new Error('Second route writer never waited for the per-agent advisory lock');
+  }
+
+  // Pause AFTER the real xact lock and BEFORE the graph read. This proves
+  // legacy locking is transactional rather than released by autocommit.
+  function pauseLegacyTransaction(
+    firstPool: Database,
+    firstLocked: ReturnType<typeof barrier>,
+    releaseFirst: ReturnType<typeof barrier>,
+  ): Database {
+    return new Proxy(firstPool, {
+      get(target, property) {
+        if (property !== 'transaction') return Reflect.get(target, property);
+        return (fn: (tx: unknown) => Promise<unknown>) =>
+          target.transaction(async (tx) => {
+            const pausedTx = new Proxy(tx, {
+              get(handle, key) {
+                if (key !== 'execute') return Reflect.get(handle, key);
+                return async (...args: Parameters<typeof tx.execute>) => {
+                  const result = await tx.execute(...args);
+                  firstLocked.release();
+                  await releaseFirst.promise;
+                  return result;
+                };
+              },
+            });
+            return fn(pausedTx);
+          });
+      },
+    });
+  }
+
+  async function concurrentRouteWrites(enforced: boolean, firstMutation: 'delete' | 'create') {
+    const tenantId = enforced ? crypto.randomUUID() : null;
+    const owner = await agent(tenantId);
+    const removed = await instance(tenantId);
+    const added = await instance(tenantId);
+    const retained = await instance(tenantId);
+    const removedRoute = await createRoute(removed, owner);
+    await createRoute(retained, owner);
+    const conversation = await chat(added.id);
+    const role = enforced ? await enforcedRole() : undefined;
+    const firstPool = openDb(role);
+    const secondPool = openDb(role);
+    if (enforced) {
+      await assertPgTestRole(firstPool, DEFAULT_ROLE_NAMES.runtime);
+      await assertPgTestRole(secondPool, DEFAULT_ROLE_NAMES.runtime);
+    }
+    const firstLocked = barrier();
+    const releaseFirst = barrier();
+    const mutate = async (pool: Database, kind: 'delete' | 'create'): Promise<void> => {
+      const service = new RouteService(pool, new RouteResolver(pool));
+      await (kind === 'delete'
+        ? service.delete(removedRoute.id)
+        : service.create(added.id, {
+            scope: 'chat',
+            chatId: conversation.id,
+            agentId: owner.id,
+            priority: 0,
+            isActive: true,
+          }));
+    };
+    const first = enforced
+      ? runInWorkerTenantScope(firstPool, tenantId as string, async () => {
+          await mutate(firstPool, firstMutation);
+          firstLocked.release();
+          await releaseFirst.promise;
+        })
+      : mutate(pauseLegacyTransaction(firstPool, firstLocked, releaseFirst), firstMutation);
+    let second: Promise<unknown> | undefined;
+    try {
+      await Promise.race([
+        firstLocked.promise,
+        first.then(() => {
+          throw new Error('First writer finished without holding its lock');
+        }),
+      ]);
+      const secondMutation = firstMutation === 'delete' ? 'create' : 'delete';
+      second = enforced
+        ? runInWorkerTenantScope(secondPool, tenantId as string, () => mutate(secondPool, secondMutation))
+        : mutate(secondPool, secondMutation);
+      await waitForAdvisoryWait(owner.id);
+    } finally {
+      releaseFirst.release();
+      await Promise.all([first, second]);
+    }
+    const active = await keys.findAgentKeysByNames([keyName(owner)]);
+    expect(active).toHaveLength(1);
+    expect(new Set(active[0]?.instanceIds)).toEqual(new Set([retained.id, added.id]));
+  }
+
+  for (const enforced of [false, true]) {
+    for (const firstMutation of ['delete', 'create'] as const) {
+      test(
+        `concurrent route ${firstMutation} first keeps exact grants (${enforced ? 'enforced RLS' : 'legacy autocommit'})`,
+        () => concurrentRouteWrites(enforced, firstMutation),
+        15_000,
+      );
+    }
+  }
 });

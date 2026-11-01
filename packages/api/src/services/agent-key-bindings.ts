@@ -131,11 +131,21 @@ export async function grantBindingKey(
  * default or any remaining route names this agent, otherwise narrow/revoke.
  */
 export async function syncRouteAgentKey(pool: Database, instanceId: string, agentId: string): Promise<void> {
-  const graph = await readAgentKeyGraph(pool);
+  await new ApiKeyService(scopedHandle(pool)).withAgentKeyLock([agentId], async (keys, db) => {
+    await syncLockedRouteAgentKey(keys, db, instanceId, agentId);
+  });
+}
+
+async function syncLockedRouteAgentKey(
+  keys: ApiKeyService,
+  db: Database,
+  instanceId: string,
+  agentId: string,
+): Promise<void> {
+  const graph = await readAgentKeyGraph(db);
   const agent = graph.agents.find((row) => row.agentId === agentId);
   const owner = graph.owners.get(instanceId);
   if (!agent || !owner || agent.tenantId !== owner.tenantId) return;
-  const keys = new ApiKeyService(scopedHandle(pool));
   const active = await keys.findAgentKeysByNames(agentKeyNameCandidates(agent.name, agent.tenantId));
   const binding = graph.bindings.find((row) => row.instanceId === instanceId && row.agentId === agentId);
   if (binding) {

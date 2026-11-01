@@ -59,12 +59,21 @@ postgresDescribe('agent key assignment lifecycle (real PostgreSQL)', () => {
   function harness(tenantId: string | null = null) {
     const service = new ApiKeyService(db);
     const issued: Awaited<ReturnType<ApiKeyService['create']>>[] = [];
-    const create = service.create.bind(service);
-    service.create = async (options) => {
-      const result = await create(options);
-      issued.push(result);
-      return result;
-    };
+    function captureIssued(keys: ApiKeyService) {
+      const create = keys.create.bind(keys);
+      keys.create = async (options) => {
+        const result = await create(options);
+        issued.push(result);
+        return result;
+      };
+    }
+    captureIssued(service);
+    const lock = service.withAgentKeyLock.bind(service);
+    service.withAgentKeyLock = (ids, fn) =>
+      lock(ids, async (keys, tx) => {
+        captureIssued(keys);
+        return fn(keys, tx);
+      });
     const names: Record<string, string> = {
       [AGENT_A]: `old-${crypto.randomUUID()}`,
       [AGENT_B]: `new-${crypto.randomUUID()}`,

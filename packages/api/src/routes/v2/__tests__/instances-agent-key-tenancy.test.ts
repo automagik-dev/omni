@@ -134,6 +134,9 @@ function harness(options: {
         getById: mock(async (id: string) => ({ id, name: options.agentNames?.[id] ?? agentName, metadata: null })),
       },
       apiKeys: {
+        async withAgentKeyLock(_ids: string[], fn: (keys: unknown) => Promise<unknown>) {
+          return fn(this);
+        },
         findAgentKeyByName: mock(async (name: string) => {
           lookups.push(name);
           return keys.find((k) => k.name === name && k.status !== 'revoked') ?? null;
