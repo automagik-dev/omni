@@ -6,10 +6,11 @@ export function test(name: string, run: () => void | Promise<void>) {
   return bunTest(name, run, 15_000);
 }
 
-export async function waitForCondition(done: () => boolean, description: string): Promise<void> {
+export async function waitForCondition(done: () => boolean, description: string | (() => string)): Promise<void> {
   const deadline = performance.now() + 10_000;
   while (!done()) {
-    if (performance.now() >= deadline) throw new Error(`Timed out waiting for ${description}`);
+    if (performance.now() >= deadline)
+      throw new Error(`Timed out waiting for ${typeof description === 'function' ? description() : description}`);
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
 }

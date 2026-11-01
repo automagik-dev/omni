@@ -151,7 +151,11 @@ function createProviderConfig(overrides?: Partial<OpenClawProviderConfig>): Open
 async function createConnectedClient(): Promise<OpenClawClient> {
   const client = createClient();
   client.start();
-  await waitForCondition(() => client.connected, 'the mock gateway handshake');
+  await waitForCondition(
+    () => client.connected,
+    () =>
+      `the mock gateway handshake (state=${client.state}, port=${serverPort}, sockets=${serverConnections.size}, frames=${receivedFrames.map((frame) => frame.method)})`,
+  );
   return client;
 }
 
@@ -206,7 +210,11 @@ describe('OpenClawClient', () => {
     const client = createClient();
     client.start();
 
-    await waitForCondition(() => client.connected, 'the mock gateway handshake');
+    await waitForCondition(
+      () => client.connected,
+      () =>
+        `the mock gateway handshake (state=${client.state}, port=${serverPort}, sockets=${serverConnections.size}, frames=${receivedFrames.map((frame) => frame.method)})`,
+    );
     await client.waitForReady(5_000);
     expect(client.connected).toBe(true);
     expect(client.state).toBe('connected');
@@ -341,7 +349,11 @@ describe('OpenClawClient', () => {
     expect(client.connected).toBe(false);
 
     client.start();
-    await waitForCondition(() => client.connected, 'the mock gateway handshake');
+    await waitForCondition(
+      () => client.connected,
+      () =>
+        `the mock gateway handshake (state=${client.state}, port=${serverPort}, sockets=${serverConnections.size}, frames=${receivedFrames.map((frame) => frame.method)})`,
+    );
     expect(client.state).toBe('connected');
     expect(client.connected).toBe(true);
 
