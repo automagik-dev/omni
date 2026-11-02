@@ -38,9 +38,10 @@ test('whole-packages local urlFor inventory equals the shrinking acknowledged se
       return entry.isFile() && file.endsWith('-postgres.test.ts') ? [file] : [];
     });
   }
-  const actual = suites('packages')
-    .filter((file) => /function urlFor\(/.test(readFileSync(resolve(root, file), 'utf8')))
-    .sort();
+  const scanned = suites('packages');
+  for (const file of TWO_TENANT_PROOFS) expect(scanned).toContain(file);
+  expect(scanned.length).toBeGreaterThan(60);
+  const actual = scanned.filter((file) => /function urlFor\(/.test(readFileSync(resolve(root, file), 'utf8'))).sort();
   expect(actual).toEqual(LOCAL_URLFOR_ACKNOWLEDGED);
   expect(LOCAL_URLFOR_ACKNOWLEDGED.length).toBeLessThanOrEqual(LOCAL_URLFOR_CEILING);
 });
