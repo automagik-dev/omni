@@ -65,6 +65,9 @@ interface UpdatedKey {
 }
 
 interface MountOptions {
+  targetName?: string;
+  targetCreatedBy?: string;
+
   /** Simulate a verified signing host even when its scope context is missing. */
   signedBy?: string;
   /** Disable the general scope enforcer to exercise the route ceiling directly. */
@@ -176,7 +179,8 @@ function mount(
           async (id: string, updateOptions: UpdateApiKeyOptions, guard: ApiKeyAuthorityGuard) => {
             const current = {
               id,
-              name: 'target',
+              name: options.targetName ?? 'target',
+              createdBy: options.targetCreatedBy ?? 'operator',
               scopes: options.targetScopes ?? ['keys:write'],
               instanceIds: options.targetInstanceIds ?? null,
               profile: options.targetProfile ?? null,
@@ -1320,5 +1324,43 @@ describe('POST /keys/children — the mint ceiling (wish: omni-chat-threads)', (
     const { app, minted } = mount(SIGN_IN);
     expect((await mintChat(app, '66666666-6666-4666-8666-666666666666')).status).toBe(404);
     expect(minted).toHaveLength(0);
+  });
+});
+
+describe('auto-provisioned agent key renames', () => {
+  for (const targetName of ['agent:support', 'agent:tenant:support']) {
+    for (const targetInstanceIds of [null, [], [INSTANCE_A]]) {
+      test(`refuses renaming ${targetName} with ${JSON.stringify(targetInstanceIds)} grants`, async () => {
+        const { app, updated } = mount(['*'], undefined, {
+          targetName,
+          targetInstanceIds,
+          targetCreatedBy: 'system:auto-provision',
+        });
+        const { status, json } = await patchKey(app, 'target', { name: 'renamed-key' });
+        expect(status).toBe(403);
+        expect(JSON.stringify(json)).toContain('Cannot rename an auto-provisioned agent API key');
+        expect(updated).toHaveLength(0);
+      });
+    }
+  }
+  for (const [targetName, targetCreatedBy] of [
+    ['agent:historical-manual', 'operator'],
+    ['manual-key', 'operator'],
+    ['other-system-key', 'system:auto-provision'],
+  ]) {
+    test(`preserves renames for ${targetName}`, async () => {
+      const { app, updated } = mount(['*'], undefined, { targetName, targetCreatedBy });
+      expect((await patchKey(app, 'target', { name: 'renamed-key' })).status).toBe(200);
+      expect(updated).toEqual([{ id: 'target', name: 'renamed-key' }]);
+    });
+  }
+  test('auto keys still allow non-name metadata updates', async () => {
+    const { app, updated } = mount(['*'], undefined, {
+      targetName: 'agent:support',
+      targetCreatedBy: 'system:auto-provision',
+      targetInstanceIds: [INSTANCE_A],
+    });
+    expect((await patchKey(app, 'target', { description: 'updated' })).status).toBe(200);
+    expect(updated).toHaveLength(1);
   });
 });

@@ -37,6 +37,13 @@ import { resolveProfile } from '../lib/resolve-profile';
 import { scopedHandle } from '../tenancy/tenant-scope';
 
 const log = createLogger('api-keys');
+const warnedWidenedAgentKeyIds = new Set<string>();
+
+function warnRefusedWidenedAgentKey(keyId: string): void {
+  if (warnedWidenedAgentKeyIds.has(keyId)) return;
+  warnedWidenedAgentKeyIds.add(keyId);
+  log.warn('Refused auto-provisioned agent key without instance grants', { keyId });
+}
 
 /**
  * API key prefix
@@ -177,13 +184,16 @@ function isLive(key: Pick<ApiKey, 'status' | 'expiresAt'>, now: number): boolean
   return key.status === 'active' && (key.expiresAt === null || key.expiresAt.getTime() > now);
 }
 
-function isWidenedAgentKey(key: Pick<CachedApiKey, 'name' | 'createdBy' | 'instanceIds'>): boolean {
-  return key.createdBy === 'system:auto-provision' && key.name.startsWith('agent:') && !key.instanceIds?.length;
+function rejectWidenedAgentKey(key: Pick<CachedApiKey, 'id' | 'name' | 'createdBy' | 'instanceIds'>): boolean {
+  const widened =
+    key.createdBy === 'system:auto-provision' && key.name.startsWith('agent:') && !key.instanceIds?.length;
+  if (widened) warnRefusedWidenedAgentKey(key.id);
+  return widened;
 }
 
 function isValidCachedKey(key: CachedApiKey): boolean {
   const expired = key.expiresAt && new Date(key.expiresAt) < new Date();
-  return key.status === 'active' && !expired && !isWidenedAgentKey(key);
+  return key.status === 'active' && !expired && !rejectWidenedAgentKey(key);
 }
 
 /** Why a key cannot mint children, or null when it can. */
@@ -358,7 +368,7 @@ export class ApiKeyService {
       )
       .limit(1);
 
-    if (!apiKey || isWidenedAgentKey(apiKey)) {
+    if (!apiKey || rejectWidenedAgentKey(apiKey)) {
       log.debug('Key not found or invalid');
       return null;
     }
