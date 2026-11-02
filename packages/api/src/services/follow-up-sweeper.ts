@@ -260,7 +260,7 @@ export class FollowUpSweeperService {
   private async sweepWorld(world: SweepWorld): Promise<SweepStats> {
     // Pass 1 — re-arm stale customer_replied pauses (#624).
     // Runs before the fire-due pass so any row that newly transitions back
-    // to armed is eligible immediately on the next tick.
+    // to armed is eligible to fire later in this same sweep.
     const rearmed = await this.sweepStaleCustomerReplied(world);
     // Pass 2 — original fire-due sweep.
     const fireStats = await sweepFollowUps({

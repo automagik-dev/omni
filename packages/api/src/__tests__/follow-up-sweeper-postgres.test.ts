@@ -8,7 +8,6 @@
  * @see issue #404 — Configurable Idle-Chat Follow-Up Sequences
  */
 
-// @ts-nocheck — integration test with dynamic db row shapes
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { EventBus, FollowUpSequenceConfig } from '@omni/core';
 import type { Database } from '@omni/db';
@@ -407,7 +406,7 @@ postgresDescribe('FollowUpSweeperService (integration)', () => {
   //   5. agentPaused chat → DO NOT re-arm (parity with #528 race fix).
   // ──────────────────────────────────────────────────────────────────────────
 
-  test('#624 customer_replied row aged past first interval is re-armed by the sweeper', async () => {
+  test('#624 customer_replied row aged past first interval is re-armed and fired in the same sweep', async () => {
     const cfg = config({ schedule: { kind: 'fixed', intervalsMinutes: [3, 5, 30] } });
     // Inbound 10 min ago — past the 3-min first interval.
     const inboundAt = new Date(Date.now() - 10 * MS_PER_MINUTE);
@@ -427,19 +426,22 @@ postgresDescribe('FollowUpSweeperService (integration)', () => {
 
     const stats = await service.sweep();
     expect(stats.rearmed).toBe(1);
+    expect(stats.fired).toBe(1);
 
-    // Row was reset: disarm cleared, sequence back to 0, nextFireAt anchored
-    // on the inbound timestamp + first interval.
+    // Re-arm clears the disarm; the overdue first step then fires in this
+    // same sweep and advances the sequence to its second interval.
     const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    if (!row) throw new Error('Expected the seeded follow-up row');
     expect(row.disarmReason).toBeNull();
     expect(row.disarmedAt).toBeNull();
-    expect(row.sequenceIndex).toBe(0);
+    expect(row.sequenceIndex).toBe(1);
     expect(row.nextFireAt).not.toBeNull();
-    // First fire = inbound + 3 min — already in the past, so the next sweep
-    // tick will pick it up via the original fire-due pass.
-    const expectedFire = inboundAt.getTime() + 3 * MS_PER_MINUTE;
-    expect(row.nextFireAt.getTime()).toBeGreaterThanOrEqual(expectedFire - 2000);
-    expect(row.nextFireAt.getTime()).toBeLessThanOrEqual(expectedFire + 2000);
+    // Production schedules index 1's five-minute interval from the fire time,
+    // not from the original inbound or the overdue first-step deadline.
+    const firedAt = publishedEvents.find((event) => event.type === 'follow_up.fired')?.payload.firedAt;
+    if (typeof firedAt !== 'number' || !row.nextFireAt) throw new Error('Expected the fired follow-up and next step');
+    const expectedFire = firedAt + 5 * MS_PER_MINUTE;
+    expect(row.nextFireAt.getTime()).toBe(expectedFire);
 
     // follow_up.armed event was emitted by the lifecycle service.
     const types = publishedEvents.map((e) => e.type);
