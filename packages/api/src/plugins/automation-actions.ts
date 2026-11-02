@@ -46,7 +46,6 @@ import {
   agentUsageFromResult,
   checkPublishAllowed,
   createLogger,
-  generateId,
 } from '@omni/core';
 import type { Database, EventType } from '@omni/db';
 import { agents, omniEvents, processedEvents } from '@omni/db';
@@ -253,7 +252,6 @@ async function deadLetterRefusedEmission(
   try {
     await runTenantWorkDb(db, trustedTenantId, () =>
       services.deadLetters.createSchemaValidationFailure({
-        eventId: generateId(),
         eventType: input.eventType,
         subject: input.eventType,
         payload: input.payload,

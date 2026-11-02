@@ -345,6 +345,24 @@ postgresDescribe('event schema registry gates (real PostgreSQL)', () => {
         });
         const [foreign] = await db.select().from(omniEvents).where(eq(omniEvents.id, foreignId));
         expect(foreign?.tenantId).toBe(tenant.id);
+        // Runtime callers may still carry an extra source ID; the service must ignore it.
+        const refusalInput = {
+          eventId: foreignId,
+          eventType: `custom.refusal-service-${field.toLowerCase()}`,
+          subject: 'schema-refusal',
+          payload: {},
+          errors: ['invalid schema'],
+        };
+        const directRefusal = await services.deadLetters.createSchemaValidationFailure(refusalInput);
+        expect(directRefusal.eventId).not.toBe(foreignId);
+        expect(directRefusal.tenantId).toBeNull();
+        expect(directRefusal.nextAutoRetryAt).toBeNull();
+        const [storedRefusal] = await db
+          .select()
+          .from(deadLetterEvents)
+          .where(eq(deadLetterEvents.id, directRefusal.id));
+        expect(storedRefusal?.eventId).toBe(directRefusal.eventId);
+        expect(storedRefusal?.tenantId).toBeNull();
         const eventType = `custom.refusal-${field.toLowerCase()}` as const;
         await services.eventSchemas.register({ eventType, schema: { type: 'object', required: ['requiredValue'] } });
         const app = new Hono<{ Variables: AppVariables }>();

@@ -17,6 +17,7 @@ import {
   calculateNextAutoRetryAt,
   createDeadLetterSystemPayload,
   createLogger,
+  generateId,
   isConnectorEventType,
   prepareDeadLetterInsert,
 } from '@omni/core';
@@ -220,7 +221,6 @@ export class DeadLetterService {
    * never succeed, so these rows are manual-intervention only.
    */
   async createSchemaValidationFailure(input: {
-    eventId: string;
     eventType: string;
     subject: string;
     payload: Record<string, unknown>;
@@ -235,7 +235,8 @@ export class DeadLetterService {
     const [result] = await this.db
       .insert(deadLetterEvents)
       .values({
-        eventId: input.eventId,
+        // Refusals have no journaled source event; generate their identity here.
+        eventId: generateId(),
         eventType: input.eventType,
         subject: input.subject,
         payload: input.payload,
