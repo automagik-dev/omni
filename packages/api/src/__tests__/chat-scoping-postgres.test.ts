@@ -124,10 +124,9 @@ postgresDescribe('Chat scoping — instanceIds filter', () => {
     expect(result.items[0]!.name).toBe('User D (inst3)');
   });
 
-  test('instanceIds: [] (empty array) returns all chats (no filter applied)', async () => {
-    // Empty array should not add an IN() clause
+  test('instanceIds: [] (empty array) denies all chats', async () => {
+    // An empty instance scope denies all chats.
     const result = await chatService.list({ instanceIds: [] });
-    const testChats = result.items.filter((c) => c.name?.includes('(inst'));
-    expect(testChats.length).toBeGreaterThanOrEqual(4);
+    expect(result.items.length).toBe(0);
   });
 });
