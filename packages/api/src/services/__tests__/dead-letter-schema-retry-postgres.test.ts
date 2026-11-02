@@ -634,12 +634,47 @@ for (const enforced of [false, true]) {
           expect((await read(row.id)).autoRetryCount).toBe(0);
           expect(await worker.service.processAutoRetries()).toEqual({ processed: 0, succeeded: 0, failed: 0 });
           expect(published.length).toBe(countBefore + 1);
-        } finally {
-          onRetryPublish = undefined;
+
           await admin.execute(
             'DROP TRIGGER fail_retry_resolution ON dead_letter_events; DROP FUNCTION fail_retry_resolution()',
           );
-          await inWorld(() => service.abandon(row.id));
+          // Crash recovery cannot know the first publication succeeded. Expire
+          // this lease deterministically, then make its backoff due: delivery
+          // is at-least-once and may duplicate that successful publication.
+          await inWorld(() =>
+            scopedHandle(db)
+              .update(deadLetterEvents)
+              .set({
+                lastRetryAt: new Date(Date.now() - 16 * 60_000),
+              })
+              .where(eq(deadLetterEvents.id, row.id)),
+          );
+          expect(await worker.service.processAutoRetries()).toEqual({ processed: 0, succeeded: 0, failed: 0 });
+          const recovered = await read(row.id);
+          expect(recovered.status).toBe('pending');
+          expect(recovered.autoRetryCount).toBe(1);
+          expect(recovered.nextAutoRetryAt?.getTime()).toBeGreaterThan(Date.now());
+          expect(published.length).toBe(countBefore + 1);
+          await inWorld(() =>
+            scopedHandle(db)
+              .update(deadLetterEvents)
+              .set({
+                nextAutoRetryAt: new Date(0),
+              })
+              .where(eq(deadLetterEvents.id, row.id)),
+          );
+          expect(await worker.service.processAutoRetries()).toEqual({ processed: 1, succeeded: 1, failed: 0 });
+          expect((await read(row.id)).status).toBe('resolved');
+          expect(published.slice(countBefore)).toEqual([
+            { type: row.eventType, payload: row.payload, tenantId: enforced ? TENANT_A : undefined },
+            { type: row.eventType, payload: row.payload, tenantId: enforced ? TENANT_A : undefined },
+          ]);
+        } finally {
+          onRetryPublish = undefined;
+          await admin.execute(
+            'DROP TRIGGER IF EXISTS fail_retry_resolution ON dead_letter_events; DROP FUNCTION IF EXISTS fail_retry_resolution()',
+          );
+          if ((await read(row.id)).status !== 'resolved') await inWorld(() => service.abandon(row.id));
         }
       });
     }
