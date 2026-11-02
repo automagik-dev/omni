@@ -503,11 +503,11 @@ export const PENDING_G4_CEILING = 7;
  * would spin to its deadline every time, and the transaction would outlive its
  * work item. Each poll ATTEMPT therefore opens and closes its own short scope.
  *
- * `persons.ts::platform_identities` did NOT convert, and its entry now says why
- * precisely: every async caller is scoped, and the only thing still holding it
- * is `trpc/router.ts` — a second synchronous edge with no tenant boundary at
- * all. That is G4-surface debt wearing a G5 label; the entry carries it as an
- * open question rather than silently reclassifying it.
+ * At this audit, `persons.ts::platform_identities` remained pending even though
+ * every async caller was scoped: `trpc/router.ts` was a second synchronous edge
+ * without a tenant boundary. #1498 removed that router and its package export.
+ * The historical blocker is resolved; the pending classification is retained
+ * until this site's own boundary verification, rather than silently relabelled.
  *
  * 12 after run15 (was 20). EIGHT sites were CONVERTED by scoping their callers,
  * not relabelled: `instance-monitor.ts::instances` (health sweep + boot
@@ -520,20 +520,21 @@ export const PENDING_G4_CEILING = 7;
  * No site moved between the two pending classes and no new pending site was
  * opened.
  *
- * The REMAINING 12 are the honest floor, and none of them is unconverted G5
- * async work:
+ * At the end of run15, the remaining 12 were the recorded floor; none was
+ * unconverted G5 async work:
  *   * 8 G6-GATED — the table's tenant derives through a G2-`unowned` root, so a
  *     scoped read finds nothing until the G6 backfill:
  *     `idempotency.ts::processed_events`, `agent-runner.ts::persons`,
  *     `automations.ts::automation_logs`, the four `agents` sites
  *     (`agent-dispatcher`, `automation-actions`, `session-cleaner`,
  *     `follow-up-lifecycle`) and `turns.ts::turns`. All are converted IN CODE.
- *   * 4 DECISION-HELD — `connection-gauge.ts::instances` (control-plane
- *     reclassification vs a G8A deployment credential), and
+ *   * 4 DECISION-HELD at that audit — `connection-gauge.ts::instances`
+ *     (control-plane reclassification vs a G8A deployment credential), and
  *     `instances.ts::instances`, `persons.ts::platform_identities` and
- *     `access.ts::access_rules`, each held by `trpc/router.ts` alone.
- *     `access.ts::access_rules` joined this group in run15: its two consumer
- *     callers were converted, and the caller trace then found the tRPC edge.
+ *     `access.ts::access_rules`, formerly held by `trpc/router.ts` alone.
+ *     #1498 retired the router; those three classifications remain pending
+ *     their own boundary verification. `access.ts::access_rules` joined this
+ *     group in run15 after its two consumer callers were converted.
  */
 // 13 after #1031: the automation engine's per-(event, automation) execution
 // claim is a genuinely new `processed_events` write in
@@ -602,8 +603,9 @@ export const PENDING_G5_CEILING = 14;
  * honesty: a consumer read no longer wears a bootstrap exemption.
  *
  * STILL 26 after G5 run14 (6 + 20): that leg shipped deliverable (g) and closed
- * the async side of `instances.ts::instances`, but the site is held by
- * `trpc/router.ts` alone, so nothing could be ratcheted honestly.
+ * the async side of `instances.ts::instances`, but the site was then held by
+ * `trpc/router.ts` alone. #1498 retired that edge; the classification and ceiling
+ * remain unchanged pending this site's own boundary verification.
  *
  * 18 after G5 run15 (6 + 12): eight sites were CONVERTED by scoping their
  * callers — see PENDING_G5_CEILING for the itemisation and for why the
@@ -1086,7 +1088,7 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
       'their tenant from the instance-owner registry — persisted instances.tenant_id this process already loaded, ' +
       "never a caller value — through runTenantWorkDb. Callers: the monitor's own timers plus index.ts, which wires " +
       'services.authPlane.db via setAuthPlane and resolves a short-lived auth-plane handle for the boot reconnect ' +
-      '(services do not exist yet at that point). No tRPC caller. All four query sites issue on scopedHandle (the ' +
+      '(services do not exist yet at that point). All four query sites issue on scopedHandle (the ' +
       'class getter over the injected pool, and scopedHandle(db) in reconnectWithPool) — the run16 fix: opening a ' +
       'worker scope is only half the conversion, because set_config(app.tenant_id) is TRANSACTION-local and a query ' +
       'left on the injected pool takes a different connection that never saw the stamp. Flag-off/no-auth-plane is ' +
@@ -1220,18 +1222,17 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     table: 'access_rules',
     class: 'pending-G5-conversion',
     justification:
-      'ASYNC SIDE COMPLETE (run15); held pending by a SYNCHRONOUS caller. Both consumer callers are now scoped: ' +
+      'ASYNC SIDE COMPLETE (run15); the former synchronous router caller was removed in #1498. Both consumer ' +
+      'callers are scoped: ' +
       'agent-dispatcher.ts checkAccessWithFallback (all three checkAccess attempts — primary id, Baileys ' +
       'participantAlt, LID->phone resolvedSenderPhone — plus the fire-and-forget requestPairing) and ' +
       'agent-responder.ts processIncomingMessage, each threading its envelope-derived tenant so the ALLOW/DENY read ' +
       "and the pairing transaction run in the message's world and the access.* publishes stay outside the scope. " +
-      'Every Hono route path runs inside the request transaction. What remains is trpc/router.ts — list, getById, ' +
-      'create and checkAccess — a second synchronous edge with NO tenant boundary of any kind; giving it one is ' +
-      'G4-surface work, not the ADR-0008 async-context work assigned to G5. Held for the SAME open decision as ' +
-      'services/instances.ts::instances and services/persons.ts::platform_identities: add the withTenantTransaction ' +
-      'edge, or retire the unmounted export. Not reclassified unilaterally — an unmounted export is still callable ' +
-      "by an out-of-repo consumer. NOTE: run15's prompt listed this site as still-convertible; the caller trace " +
-      'found the tRPC edge and it is reported as a decision-held site rather than ratcheted to fit. Async side ' +
+      'Every Hono route path runs inside the request transaction. The retired trpc/router.ts formerly reached ' +
+      'list, getById, create and checkAccess without a tenant boundary. #1498 removed that edge and its package ' +
+      'export, resolving the shared router question for this site, services/instances.ts::instances and ' +
+      'services/persons.ts::platform_identities. The pending classification is retained until separate boundary ' +
+      'verification; this text update does not ratchet ADR-0008 classifications or ceilings. Async side ' +
       'pinned by services/__tests__/access-worker-scope.test.ts for the SERVICE contract and by ' +
       'plugins/__tests__/agent-dispatcher-access-callsite-scope.test.ts for the CALL SITES — the second was added ' +
       'in run16 because the first, which invokes checkAccess/requestPairing with a literal tenant, stayed green ' +
@@ -1246,9 +1247,9 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
       "CONVERTED (run15). `instances` is read in this file from exactly ONE place: approvePairingRequest's " +
       'channel-type lookup, used to route the access.pairing_approved subject. Its only caller is ' +
       'routes/v2/instances.ts, mounted on protectedApp behind tenancyMiddleware, so the read runs inside the request ' +
-      'tenant transaction. No consumer, no cron and no tRPC procedure reaches it — the sibling access_rules site ' +
-      'stays pending precisely because the tRPC router reaches THAT table and not this one (the same per-table ' +
-      'distinction that split persons.ts::chat_id_mappings from persons.ts::platform_identities). The generic ' +
+      'tenant transaction. No consumer or cron reaches it. The removed router formerly reached the sibling ' +
+      'access_rules site only, explaining the historical per-table distinction; that sibling classification ' +
+      'remains pending its own boundary verification after #1498. The generic ' +
       '"called from BOTH a route and a non-request caller" text this entry carried was G3-era boilerplate, not a ' +
       'traced caller. Pinned by services/__tests__/access-worker-scope.test.ts.',
   },
@@ -1398,7 +1399,7 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
       'pre-side-effect tenant revalidation (RELEASE_SLOS queued_retry_delayed_dlq_check). run15 closed the LAST ' +
       'unscoped caller: resumeJobs, the restart-recovery whole-table scan for status=running, now fans out with ' +
       'runForEachActiveTenantRow and dispatches each job under its OWN persisted tenant_id outside the read scope. ' +
-      'No tRPC caller. Flag-off/no-auth-plane is the pre-G5 single ambient scan, pinned by ' +
+      'Flag-off/no-auth-plane is the pre-G5 single ambient scan, pinned by ' +
       'services/__tests__/batch-jobs-resume-worker-scope.test.ts (plus batch-jobs-tenant-scope and ' +
       'batch-jobs-dequeue-revalidation for the executor). The sync-worker threading named above is pinned by ' +
       'plugins/__tests__/sync-worker-media-backfill-scope.test.ts, which drives the real sync.started handler: ' +
@@ -1420,7 +1421,7 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
       'pre-side-effect tenant revalidation (RELEASE_SLOS queued_retry_delayed_dlq_check). run15 closed the LAST ' +
       'unscoped caller: resumeJobs, the restart-recovery whole-table scan for status=running, now fans out with ' +
       'runForEachActiveTenantRow and dispatches each job under its OWN persisted tenant_id outside the read scope. ' +
-      'No tRPC caller. Flag-off/no-auth-plane is the pre-G5 single ambient scan, pinned by ' +
+      'Flag-off/no-auth-plane is the pre-G5 single ambient scan, pinned by ' +
       'services/__tests__/batch-jobs-resume-worker-scope.test.ts (plus batch-jobs-tenant-scope and ' +
       'batch-jobs-dequeue-revalidation for the executor). The sync-worker threading named above is pinned by ' +
       'plugins/__tests__/sync-worker-media-backfill-scope.test.ts, which drives the real sync.started handler: ' +
@@ -1442,7 +1443,7 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
       'pre-side-effect tenant revalidation (RELEASE_SLOS queued_retry_delayed_dlq_check). run15 closed the LAST ' +
       'unscoped caller: resumeJobs, the restart-recovery whole-table scan for status=running, now fans out with ' +
       'runForEachActiveTenantRow and dispatches each job under its OWN persisted tenant_id outside the read scope. ' +
-      'No tRPC caller. Flag-off/no-auth-plane is the pre-G5 single ambient scan, pinned by ' +
+      'Flag-off/no-auth-plane is the pre-G5 single ambient scan, pinned by ' +
       'services/__tests__/batch-jobs-resume-worker-scope.test.ts (plus batch-jobs-tenant-scope and ' +
       'batch-jobs-dequeue-revalidation for the executor). The sync-worker threading named above is pinned by ' +
       'plugins/__tests__/sync-worker-media-backfill-scope.test.ts, which drives the real sync.started handler: ' +
@@ -1489,7 +1490,7 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
       'the tenant the engine threads from the consumed envelope (including debounce-window carry). Verified ' +
       'caller-by-caller: routes (request transaction), message-persistence/agent-dispatcher/media-processor/' +
       'sync-worker/session-cleaner/follow-up-hooks (worker scopes, legs G-H), and the callbacks (leg I). ' +
-      'trpc/router.ts calls NO chats method. Cross-tenant refusal proven on real RLS in ' +
+      'Cross-tenant refusal proven on real RLS in ' +
       'automation-actions-two-tenant-postgres.test.ts.',
   },
   {
@@ -1642,17 +1643,16 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     table: 'instances',
     class: 'pending-G5-conversion',
     justification:
-      'ASYNC SIDE COMPLETE (run14); held pending by ONE synchronous caller. Every route path runs inside the ' +
+      'ASYNC SIDE COMPLETE (run14); the former synchronous router caller was removed in #1498. Every route path ' +
+      'runs inside the ' +
       'request transaction; the async callers were closed across run13 and run14 — the automation-engine ' +
       'callbacks (automation-actions.ts, engine-threaded envelope tenant), the sync-worker channel-type lookup ' +
       '(inSyncWorkerScope), the session-cleaner confirmation send (runTenantWorkDb), the scheduler ' +
       'unread-count-refresh cron (runForEachActiveTenantRow, the daily-sync precedent) and turn-monitor.ts ' +
-      '(runForEachActiveTenantRow over getStale, each per-turn `getById` in its own runTenantWorkDb scope). What ' +
-      'remains is trpc/router.ts alone: a second synchronous edge with NO tenant boundary of any kind, which ' +
-      'reaches list/getById/getByName/create/update/delete here. Giving it one is G4-surface work, not the ' +
-      'ADR-0008 async-context work assigned to G5. Held for the SAME open decision as ' +
-      'persons.ts::platform_identities — add the withTenantTransaction edge, or retire the unmounted export. ' +
-      'Not reclassified unilaterally: an unmounted export is still callable by an out-of-repo consumer.',
+      '(runForEachActiveTenantRow over getStale, each per-turn `getById` in its own runTenantWorkDb scope). The ' +
+      'retired trpc/router.ts formerly reached list/getById/getByName/create/update/delete without a tenant ' +
+      'boundary. #1498 removed that router and its package export; the pending ADR-0008 classification is ' +
+      'retained until this site has its own boundary verification. No classification or ceiling is changed.',
   },
   {
     file: 'packages/api/src/services/media-storage.ts',
@@ -1709,9 +1709,9 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
       'CONVERTED. `chat_id_mappings` is reached in this file from `findOrCreateIdentity` (via the private ' +
       '`resolvePhoneFromLid`) and from `update`. `update` is called only by `routes/v2/persons.ts`, inside the ' +
       'request tenant transaction; `findOrCreateIdentity` is called only by `message-persistence` (converted this ' +
-      "leg) and `sync-worker`'s contact sync (wrapped in `inSyncWorkerScope` this leg). The tRPC router, which is " +
-      'the last unscoped caller of this FILE, calls none of them — it reaches `platform_identities` only, which ' +
-      'is why that sibling site stays pending and this one does not.',
+      "leg) and `sync-worker`'s contact sync (wrapped in `inSyncWorkerScope` this leg). The router retired in " +
+      '#1498 formerly reached only platform_identities, not these methods; that historical distinction explains ' +
+      'the sibling classification, which remains pending its own boundary verification.',
   },
   {
     file: 'packages/api/src/services/persons.ts',
@@ -1729,17 +1729,16 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
     table: 'platform_identities',
     class: 'pending-G5-conversion',
     justification:
-      'ASYNC SIDE CONVERTED; held pending by a SYNCHRONOUS caller, so the class is now an honest overstatement of ' +
-      'G5 debt rather than a G5 gap. Every worker caller is scoped: `message-persistence` ' +
+      'ASYNC SIDE CONVERTED; the former synchronous router caller was removed in #1498. The pending ' +
+      'classification is retained until separate boundary verification. Every worker caller is scoped: ' +
+      '`message-persistence` ' +
       '(`runConsumerInTenantContext`), `agent-dispatcher` (`runDispatchDb` around `resolvePersonId`, ' +
       "`fetchSenderMetadata` and `resolveCustomerContext` — `resolvePersonId` POLLS for message-persistence's " +
       'commit, so each ATTEMPT gets its own short scope), and `sync-worker` (`inSyncWorkerScope` around the ' +
-      'contact-sync identity write). What remains is `trpc/router.ts` — `getPresence`, `linkIdentities`, ' +
-      '`unlinkIdentity` — which has NO tenant boundary of any kind: it is a second synchronous edge alongside the ' +
-      'Hono routes, and giving it one is G4-surface work, not the async-context work ADR-0008 assigns to G5 (that ' +
-      'half is done). RESOLVED by the owner-approved removal of the unmounted router and its package export. ' +
-      'The synchronous edge described above is historical; it is no longer callable. This removal does not ' +
-      'ratchet tenancy classifications or ceilings, which need their own boundary verification.',
+      'contact-sync identity write). The retired trpc/router.ts formerly reached getPresence, linkIdentities ' +
+      'and unlinkIdentity without a tenant boundary alongside the Hono routes. That was G4-surface work, not ' +
+      'the async-context work ADR-0008 assigns to G5. #1498 removed the router and its package export, resolving ' +
+      'that question. This text update does not change classifications or ceilings.',
   },
   {
     // G5-CONVERTED (leg C2). `resolve()` takes the envelope-derived

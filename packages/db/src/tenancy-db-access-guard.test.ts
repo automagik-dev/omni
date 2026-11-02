@@ -307,7 +307,8 @@ describe('db-access guard', () => {
       // G5 run15: `access.ts` appears here for its `instances` access ONLY — the
       // `approvePairingRequest` channel lookup, whose single caller is
       // `routes/v2/instances.ts` inside the request transaction. Its sibling
-      // `access_rules` site keeps its own pending entry (held by `trpc/router.ts`).
+      // `access_rules` site retains its pending entry for separate boundary verification
+      // after #1498 removed the router that formerly held it.
       'packages/api/src/services/access.ts',
       // #889: scheduled messages. Route paths run inside the request
       // transaction; the 15s sweeper enumerates active tenants via
