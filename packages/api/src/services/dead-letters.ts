@@ -304,7 +304,7 @@ export class DeadLetterService {
   }
 
   private async republish(
-    entry: { eventId: string; eventType: string; error: string; tenantId?: string | null },
+    entry: { id: string; eventId: string; eventType: string; error: string; tenantId?: string | null },
     payload: Record<string, unknown>,
     source: string,
   ): Promise<void> {
@@ -336,6 +336,9 @@ export class DeadLetterService {
     } else {
       await this.eventBus.publishGeneric(entry.eventType as EventType, payload, {
         source,
+        // Keep retries of this row stable for consumer-side idempotency. The
+        // original event ID may already have a retained failed-handler claim.
+        publishEventId: entry.id,
         ...(entry.tenantId ? { tenantId: entry.tenantId } : {}),
       });
     }
