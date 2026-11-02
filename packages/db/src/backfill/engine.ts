@@ -301,7 +301,7 @@ function decide(plan: TablePlan, split: ReturnType<typeof splitRow>, config: Run
       return deriveComposite(split.parentTenants, plan.parents.length, `derived:${plan.table}`);
     case 'derive-from-event': {
       if (!plan.unownedRule) throw new Error(`derive-from-event plan for ${plan.table} is missing its unowned rule`);
-      return classifyDeriveFromEvent(plan.unownedRule, split.eventTenant);
+      return classifyDeriveFromEvent(plan.unownedRule, split.eventTenant, split.real);
     }
     case 'operator-or-stop-block': {
       if (!plan.unownedRule) throw new Error(`operator plan for ${plan.table} is missing its unowned rule`);

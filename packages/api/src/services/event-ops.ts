@@ -26,6 +26,7 @@ import { isTenantWorkAdmissible } from '../tenancy/periodic-tenant-work';
 import { currentTenantScope, runDetachedFromTenantScope, scopedHandle } from '../tenancy/tenant-scope';
 import { runTenantWorkDb } from '../tenancy/worker-tenant-context';
 import { ConnectorProvenanceError, restoreConnectorEvent } from './connectors';
+import { cleanupDeadLettersForTenants } from './dead-letter-maintenance';
 import type { DeadLetterService } from './dead-letters';
 import type { PayloadStoreService } from './payload-store';
 
@@ -361,7 +362,7 @@ export class EventOpsService {
     const [autoRetry, payloadCleanup, deadLetterCleanup] = await Promise.all([
       this.deadLetterService.processAutoRetries(),
       this.payloadStoreService.cleanupExpired(),
-      this.deadLetterService.cleanupExpired(),
+      cleanupDeadLettersForTenants(this.pool, this.authPlaneDb, this.deadLetterService),
     ]);
 
     log.info('Scheduled event ops completed', {

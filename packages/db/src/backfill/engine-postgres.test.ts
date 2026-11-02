@@ -17,6 +17,10 @@
  */
 
 import { describe, expect, test } from 'bun:test';
+import { createDbHandle } from '../client';
+import { assertPgTestRole, pgRoleUrl } from '../pg-migrated-template';
+import { DEFAULT_ROLE_NAMES, applyTenantRlsEnforcement } from '../tenancy-rls';
+import { applyTenancyRoles } from '../tenancy-roles';
 import { checksum } from './checksum';
 import { applyInverse } from './compensation';
 import type { ToolingSql } from './db';
@@ -104,6 +108,62 @@ async function ledgerCount(sql: ToolingSql): Promise<number> {
 }
 
 maybe('G6 backfill engine — real PostgreSQL', () => {
+  for (const enforced of [false, true])
+    test(`refusal rows remain unowned despite a matching event (${enforced ? 'enforced' : 'legacy'})`, async () => {
+      const reasons = ['schema_validation_failed', 'schema_not_registered', 'publish_not_declared'];
+      const refusalIds = reasons.map((_, i) => `dddddddd-9999-4999-8999-00000000000${i}`);
+      const refusals = reasons
+        .map(
+          (reason, i) =>
+            `('${refusalIds[i]}', '${EVENT_A}', 'message', 'subj', '{}'::jsonb, '${reason}: original refusal')`,
+        )
+        .join(',');
+      const { database, url } = provisionDatabase(
+        base,
+        `${FIXTURE}INSERT INTO dead_letter_events (id, event_id, event_type, subject, payload, error) VALUES ${refusals};`,
+      );
+      const sql = connect(url);
+      const admin = createDbHandle({ url: pgRoleUrl(base, database) });
+      let runtime: ReturnType<typeof createDbHandle> | undefined;
+      try {
+        if (enforced) {
+          await applyTenantRlsEnforcement(admin.db);
+          const passwords = { ddl: crypto.randomUUID(), runtime: crypto.randomUUID(), authPlane: crypto.randomUUID() };
+          await applyTenancyRoles(admin.db, passwords, DEFAULT_ROLE_NAMES, database);
+          runtime = createDbHandle({
+            url: pgRoleUrl(base, database, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }),
+          });
+          await assertPgTestRole(runtime.db, DEFAULT_ROLE_NAMES.runtime);
+        }
+        await runBackfill(sql, {
+          mode: 'apply',
+          instanceTenantMap: instanceMap,
+          tables: ['instances', 'chats', 'omni_events', 'dead_letter_events'],
+        });
+        expect(await tenantOf(sql, 'dead_letter_events', 'dddddddd-0000-4000-8000-000000000001')).toBe(TENANT_A);
+        for (const id of refusalIds) {
+          expect(await tenantOf(sql, 'dead_letter_events', id)).toBeNull();
+          const ledger = await findBySource(sql, 'dead_letter_events', { id });
+          expect(ledger?.status).toBe('quarantined');
+          expect(ledger?.targetTenantId).toBeNull();
+          if (runtime) {
+            for (const tenant of [TENANT_A, TENANT_B]) {
+              const rows = await runtime.db.transaction(async (tx) => {
+                await tx.execute(`SELECT set_config('app.tenant_id', '${tenant}', true)`);
+                return tx.execute(`SELECT id FROM dead_letter_events WHERE id = '${id}'`);
+              });
+              expect(rows).toHaveLength(0);
+            }
+          }
+        }
+      } finally {
+        if (runtime) await runtime.close();
+        await admin.close();
+        await sql.end();
+        dropDatabase(base, database);
+      }
+    }, 180000);
+
   test('dry-run reaches every decision but writes NOTHING', async () => {
     const { database, url } = provisionDatabase(base, FIXTURE);
     const sql = connect(url);

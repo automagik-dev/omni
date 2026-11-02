@@ -268,7 +268,7 @@ export function createServices(db: Database, eventBus: (EventBus & ConnectorEven
     eventOps,
     eventSchemas,
     eventConsumers: new EventConsumerService(db, eventBus),
-    webhooks: new WebhookService(db, eventBus, eventSchemas, deadLetters),
+    webhooks: new WebhookService(db, eventBus, eventSchemas, deadLetters, authPlane.db),
     connectors: new ConnectorService(db, eventBus, connectorRegistry),
     automations: automationsService,
     manifestCompiler,
