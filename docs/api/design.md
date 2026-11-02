@@ -209,9 +209,9 @@ GET /api/v2/events
 | `CHANNEL_ERROR` | 502 | Channel (WhatsApp/Discord) error |
 | `INTERNAL_ERROR` | 500 | Unexpected server error |
 
-## tRPC
+## Type-safe REST API
 
-A tRPC router exists in `packages/api/src/trpc/` for type-safe internal use, but it is not mounted as a public HTTP surface. External consumers use REST + the generated SDKs; the OpenAPI spec is the contract.
+Consumers use the REST API and OpenAPI-generated SDKs. The OpenAPI spec is the API contract; internal clients use the same REST surface.
 
 ## Real-time
 

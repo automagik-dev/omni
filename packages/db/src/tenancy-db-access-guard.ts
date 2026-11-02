@@ -542,6 +542,10 @@ export const PENDING_G4_CEILING = 7;
 // 14 after #1032: the channel ingress idempotency claim in `plugins/context.ts`
 // is a genuinely new `omni_events` write reached from a channel socket
 // callback on the ambient pool — the same G6 gate as `idempotency.ts`.
+// Router-removal follow-up: the owner retired the unmounted router and its
+// package export. References to that edge in the G5 audit history below are
+// resolved. Existing classifications/ceilings remain conservative until their
+// own boundary verification; this removal does not change the guard policy.
 export const PENDING_G5_CEILING = 14;
 
 /**
@@ -651,6 +655,15 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
       'Shared agent-key authority graph reads scopedHandle for route requests and startup repair. ' +
       'Enforced startup enumerates tenant IDs on the auth plane and calls this only in each tenant runtime scope; ' +
       'legacy callers retain ambient reads. Stored agent/instance tenants must match and every existing grant needs a live default or route binding.',
+  },
+  {
+    file: 'packages/api/src/services/agent-key-reconciliation.ts',
+    table: 'agents',
+    class: 'control-plane',
+    justification:
+      'Startup repair holds agent rows FOR SHARE until binding-derived key grants commit, so concurrent deactivation ' +
+      'waits and then revokes any provisioned key. Legacy repair uses its ambient transaction; enforced repair ' +
+      'locks only the current tenant through runInWorkerTenantScope. Healthy startup takes no repair row locks.',
   },
   {
     file: 'packages/api/src/services/agent-key-reconciliation.ts',
@@ -1724,11 +1737,9 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
       'contact-sync identity write). What remains is `trpc/router.ts` — `getPresence`, `linkIdentities`, ' +
       '`unlinkIdentity` — which has NO tenant boundary of any kind: it is a second synchronous edge alongside the ' +
       'Hono routes, and giving it one is G4-surface work, not the async-context work ADR-0008 assigns to G5 (that ' +
-      'half is done). The router is exported as ' +
-      '`@omni/api/trpc` but no handler in this repository mounts it, so it is not currently a live path. OPEN ' +
-      'QUESTION for the orchestrator: either give the tRPC edge the same `withTenantTransaction` boundary the ' +
-      'Hono edge got in G4, or retire the unmounted surface. Not reclassified unilaterally — an unmounted export ' +
-      'is still callable by an out-of-repo consumer, and "nothing mounts it today" is not a boundary.',
+      'half is done). RESOLVED by the owner-approved removal of the unmounted router and its package export. ' +
+      'The synchronous edge described above is historical; it is no longer callable. This removal does not ' +
+      'ratchet tenancy classifications or ceilings, which need their own boundary verification.',
   },
   {
     // G5-CONVERTED (leg C2). `resolve()` takes the envelope-derived

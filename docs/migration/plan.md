@@ -82,7 +82,7 @@ Phase 3: v1 deprecated
 - [ ] Set up Hono HTTP server
 - [ ] Implement authentication middleware
 - [ ] Create v1-compatible endpoint wrappers
-- [ ] Set up tRPC router
+- [ ] Define REST endpoints and OpenAPI schemas for generated SDKs
 
 #### Week 4: Data Migration
 - [ ] Migrate instances from v1 to v2 schema

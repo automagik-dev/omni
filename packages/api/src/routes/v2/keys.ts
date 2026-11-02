@@ -927,7 +927,15 @@ keysRoutes.patch('/:id', zValidator('json', updateKeySchema), async (c) => {
 
   try {
     let authorityDenied: Response | null | undefined;
-    const result = await services.apiKeys.updateWithAuthorityGuard(id, updateOptions, (_current, next) => {
+    const result = await services.apiKeys.updateWithAuthorityGuard(id, updateOptions, (current, next) => {
+      if (
+        data.name !== undefined &&
+        current.createdBy === 'system:auto-provision' &&
+        current.name.startsWith('agent:')
+      ) {
+        authorityDenied = forbidden(c, 'Cannot rename an auto-provisioned agent API key');
+        return false;
+      }
       authorityDenied = enforceScopeCeiling(c, next.scopes);
       if (authorityDenied) return false;
 

@@ -1,6 +1,6 @@
 # Omni repository contract
 
-Omni is a Bun and TypeScript monorepo built around Hono, tRPC, Drizzle, and NATS.
+Omni is a Bun and TypeScript monorepo built around Hono, Drizzle, and NATS.
 
 - Validate every external boundary with Zod.
 - Represent state changes with events.
