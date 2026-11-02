@@ -9,14 +9,52 @@ import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from 'b
 import { randomUUID } from 'node:crypto';
 import type { EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
-import { chatIdMappings, chats, instances, omniEvents } from '@omni/db';
+import { chatIdMappings, chats, createDbHandle, instances, omniEvents } from '@omni/db';
 import { eq, sql } from 'drizzle-orm';
 import { createPluginContext } from '../plugins/context';
-import { setupEventPersistence } from '../plugins/event-persistence';
+import { journalProducerColumns, setupEventPersistence } from '../plugins/event-persistence';
 import { describeWithDb, getTestDb } from './db-helper';
 
 // Use null for instanceId to avoid FK constraint issues in tests
 // In production, events have real instance IDs
+
+describe('journal producer column trust boundary (no database connection)', () => {
+  const handle = createDbHandle({ url: 'postgres://unused@127.0.0.1:1/unused' });
+  afterAll(() => handle.close());
+
+  test('flag off preserves legacy agent metadata and never stores a producing key', async () => {
+    const previous = process.env.OMNI_PAIRED_AGENT_CONSUMERS;
+    Reflect.deleteProperty(process.env, 'OMNI_PAIRED_AGENT_CONSUMERS');
+    try {
+      const agentId = randomUUID();
+      expect(
+        await journalProducerColumns(handle.db, { correlationId: 'proof', agentId, producingKeyId: randomUUID() }),
+      ).toEqual({ producingKeyId: null, agentId });
+    } finally {
+      if (previous === undefined) Reflect.deleteProperty(process.env, 'OMNI_PAIRED_AGENT_CONSUMERS');
+      else process.env.OMNI_PAIRED_AGENT_CONSUMERS = previous;
+    }
+  });
+
+  test('flag on ignores agent metadata and refuses malformed envelope keys without a query', async () => {
+    const flag = process.env.OMNI_PAIRED_AGENT_CONSUMERS;
+    const tenancy = process.env.OMNI_MULTITENANCY_ENABLED;
+    process.env.OMNI_PAIRED_AGENT_CONSUMERS = 'true';
+    Reflect.deleteProperty(process.env, 'OMNI_MULTITENANCY_ENABLED');
+    try {
+      for (const producingKeyId of [undefined, 'invalid']) {
+        expect(
+          await journalProducerColumns(handle.db, { correlationId: 'proof', agentId: randomUUID(), producingKeyId }),
+        ).toEqual({ producingKeyId: null, agentId: null });
+      }
+    } finally {
+      if (flag === undefined) Reflect.deleteProperty(process.env, 'OMNI_PAIRED_AGENT_CONSUMERS');
+      else process.env.OMNI_PAIRED_AGENT_CONSUMERS = flag;
+      if (tenancy === undefined) Reflect.deleteProperty(process.env, 'OMNI_MULTITENANCY_ENABLED');
+      else process.env.OMNI_MULTITENANCY_ENABLED = tenancy;
+    }
+  });
+});
 
 describeWithDb('Event Persistence Handler', () => {
   let db: Database;

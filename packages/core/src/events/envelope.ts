@@ -177,6 +177,22 @@ export function resolveAmbientTenantId(): string | null {
   }
 }
 
+/** Request producer identity is injected by the API, never by publish metadata. */
+let ambientProducerResolver: (() => string | null | undefined) | null = null;
+
+export function setEnvelopeProducerResolver(resolver: (() => string | null | undefined) | null): void {
+  ambientProducerResolver = resolver;
+}
+
+export function resolveAmbientProducingKeyId(): string | null {
+  try {
+    const keyId = ambientProducerResolver?.();
+    return typeof keyId === 'string' && UUID.test(keyId) ? keyId : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * The PLUGIN-PRODUCER seam (G5, ADR-0008).
  *

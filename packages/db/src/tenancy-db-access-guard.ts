@@ -2040,4 +2040,6 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
   },
   { file: 'packages/api/src/services/connectors.ts', table: 'omni_events', class: 'tenant-boundary' },
   { file: 'packages/api/src/services/connectors.ts', table: 'automations', class: 'tenant-boundary' },
+  { file: 'packages/api/src/lib/key-agent.ts', table: 'instances', class: 'tenant-boundary' },
+  { file: 'packages/api/src/lib/key-agent.ts', table: 'agents', class: 'tenant-boundary' },
 ];

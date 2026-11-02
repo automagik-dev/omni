@@ -33,6 +33,7 @@ import {
   automations,
 } from '@omni/db';
 import { and, desc, eq, gte, sql } from 'drizzle-orm';
+import { runOutsideProducerScope } from '../lib/producer-scope';
 import { currentTenantScope, scopedHandle } from '../tenancy/tenant-scope';
 
 /**
@@ -164,7 +165,9 @@ export class AutomationService {
     });
 
     // Start with automations
-    await this.engine.start(this.eventBus, enabledAutomations as CoreAutomation[], deps ?? {});
+    const engine = this.engine;
+    const eventBus = this.eventBus;
+    await runOutsideProducerScope(() => engine.start(eventBus, enabledAutomations as CoreAutomation[], deps ?? {}));
   }
 
   /**
@@ -181,10 +184,12 @@ export class AutomationService {
    * Reload the automation engine (after CRUD changes)
    */
   async reloadEngine(): Promise<void> {
-    if (this.engine && this.eventBus) {
-      const enabledAutomations = await this.list({ enabled: true });
-      await this.engine.reload(enabledAutomations as CoreAutomation[]);
-    }
+    await runOutsideProducerScope(async () => {
+      if (this.engine && this.eventBus) {
+        const enabledAutomations = await this.list({ enabled: true });
+        await this.engine.reload(enabledAutomations as CoreAutomation[]);
+      }
+    });
   }
 
   /**
