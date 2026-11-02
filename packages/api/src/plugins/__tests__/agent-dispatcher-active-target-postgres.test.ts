@@ -4,6 +4,7 @@ import { shutdownAckSystem } from '@omni/channel-sdk';
 import type { AgentTrigger, EventBus, NatsGenieProvider } from '@omni/core';
 import { configureLogging, getLogBuffer, getLogConfig } from '@omni/core';
 import {
+  type ChannelType,
   DEFAULT_ROLE_NAMES,
   type Database,
   agentProviders,
@@ -11,6 +12,7 @@ import {
   agents,
   applyTenancyRoles,
   applyTenantRlsEnforcement,
+  channelTypes,
   chats,
   createDbHandle,
   handoffLogs,
@@ -144,6 +146,7 @@ for (const enforced of [false, true]) {
     async function harness(
       mode: Mode = 'round-trip',
       options: {
+        channel?: ChannelType;
         routed?: boolean;
         inactiveDefault?: boolean;
         inactiveTarget?: boolean;
@@ -151,13 +154,14 @@ for (const enforced of [false, true]) {
         nativeHandoff?: boolean;
       } = {},
     ) {
+      const channel = options.channel ?? 'whatsapp-baileys';
       const target = await agent(!options.inactiveTarget);
       const defaultAgent = options.routed ? await agent(!options.inactiveDefault) : target;
       const [instance] = await admin
         .insert(instances)
         .values({
           name: crypto.randomUUID(),
-          channel: 'whatsapp-baileys',
+          channel,
           tenantId,
           agentId: defaultAgent.id,
           messageDebounceMode: 'fixed',
@@ -182,7 +186,7 @@ for (const enforced of [false, true]) {
         .values({
           instanceId: instance!.id,
           externalId: EXTERNAL_CHAT,
-          channel: 'whatsapp-baileys',
+          channel,
           chatType: 'dm',
         })
         .returning();
@@ -224,7 +228,7 @@ for (const enforced of [false, true]) {
       }
       dispatcher.NatsGenieProviderClass = Provider as unknown as typeof NatsGenieProvider;
       const customer = mock(async (_instanceId: string, _message: unknown) => ({ success: true, messageId: 'sent' }));
-      const typing = mock(async () => {});
+      const typing = mock(async (_instanceId: string, _chatId: string, _duration?: number) => {});
       const react = mock(async (_instanceId: string, _chatId: string, _messageId: string, _emoji: string) => {});
       const unreact = mock(async (_instanceId: string, _chatId: string, _messageId: string, _emoji: string) => {});
       pluginSpy = spyOn(loader, 'getPlugin').mockResolvedValue({
@@ -309,7 +313,7 @@ for (const enforced of [false, true]) {
         },
         metadata: {
           instanceId: instance!.id,
-          channelType: 'whatsapp-baileys',
+          channelType: channel,
           personId: crypto.randomUUID(),
           correlationId: crypto.randomUUID(),
           ...(trustedTenantId ? { envelopeVersion: 1, tenantId: trustedTenantId } : {}),
@@ -355,10 +359,65 @@ for (const enforced of [false, true]) {
         customer,
         react,
         unreact,
+        typing,
         pause,
         disarm,
       };
     }
+
+    async function promptly(work: Promise<unknown> | undefined) {
+      if (!work) throw new Error('Dispatch work was not scheduled');
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          work,
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error('Cosmetic typing blocked dispatch')), 1000);
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    test.each(channelTypes)(
+      '%s: stuck composing and paused typing never delay messages, reactions or split replies',
+      async (channel) => {
+        const h = await harness('round-trip', { channel });
+        h.typing.mockImplementation(() => new Promise<void>(() => {}));
+        await h.fire();
+        await promptly(h.flush());
+        expect(h.trigger).toHaveBeenCalledTimes(1);
+        expect(h.typing).toHaveBeenCalledWith(h.instance.id, EXTERNAL_CHAT, 30000);
+        expect(h.typing).toHaveBeenCalledWith(h.instance.id, EXTERNAL_CHAT, 0);
+        await promptly(h.fire('reaction.received'));
+        await promptly(h.fire('reaction.removed'));
+        expect(h.trigger).toHaveBeenCalledTimes(3);
+        h.resetEffects();
+        await promptly(
+          dispatcher.sendResponseParts(channel, h.instance.id, EXTERNAL_CHAT, ['first', 'second'], {
+            mode: 'fixed',
+            fixedMs: 1,
+            minMs: 0,
+            maxMs: 0,
+          }),
+        );
+        expect(h.customer).toHaveBeenCalledTimes(2);
+        expect(h.typing).toHaveBeenCalledWith(h.instance.id, EXTERNAL_CHAT, 30000);
+        expect(h.typing).toHaveBeenCalledWith(h.instance.id, EXTERNAL_CHAT, 0);
+      },
+    );
+
+    test('stuck typing still removes the reaction ack and releases the limiter slot', async () => {
+      const h = await harness('round-trip', { reactionAck: true });
+      h.typing.mockImplementation(() => new Promise<void>(() => {}));
+      await h.fire();
+      await promptly(h.flush());
+      expect(h.trigger).toHaveBeenCalledTimes(1);
+      expect(h.unreact).toHaveBeenCalledTimes(1);
+      expect(h.unreact.mock.calls[0]?.[3]).toBe('👀');
+      expect(dispatcher.agentDispatchLimiter.getSnapshot(h.instance.id).activeCount).toBe(0);
+    });
 
     for (const mode of ['round-trip', 'fire-and-forget', 'turn-based', 'stream', 'legacy'] as const) {
       for (const routed of [false, true]) {

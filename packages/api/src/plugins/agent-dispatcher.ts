@@ -534,6 +534,8 @@ function determineChatType(
   return 'dm';
 }
 
+// Cosmetic I/O is detached at every call site: a slow channel must not hold a
+// provider call, split reply, reaction handler or limiter cleanup. Errors stay caught here.
 async function sendTypingPresence(
   channel: ChannelType,
   instanceId: string,
@@ -1638,12 +1640,12 @@ async function sendResponseParts(
     if (!isLastChunk) {
       const delay = calculateSplitDelay(splitConfig);
       if (delay > 0) {
-        await sendTypingPresence(channel, instanceId, chatId, 'composing');
+        void sendTypingPresence(channel, instanceId, chatId, 'composing');
         await sleep(delay);
       }
     }
   }
-  await sendTypingPresence(channel, instanceId, chatId, 'paused');
+  void sendTypingPresence(channel, instanceId, chatId, 'paused');
 }
 
 // ============================================================================
@@ -4447,7 +4449,7 @@ async function processAgentResponse(
       // after the limiter wait, before provider/typing work. A skip returns
       // through the ack cleanup without entering the provider fallback funnel.
       if (instance.agentId && !(await applyAgentFkOverrides(db, instance.agentId, instance, dispatchTenantId))) return;
-      await sendTypingPresence(channel, instance.id, chatId, 'composing');
+      void sendTypingPresence(channel, instance.id, chatId, 'composing');
       try {
         sendAgentAckMessage(channel, instance.id, chatId, agentAckMessage);
 
@@ -4482,7 +4484,7 @@ async function processAgentResponse(
           { instanceId: instance.id, chatId, traceId },
         );
       } finally {
-        await sendTypingPresence(channel, instance.id, chatId, 'paused');
+        void sendTypingPresence(channel, instance.id, chatId, 'paused');
       }
     });
   } catch (error) {
@@ -5105,7 +5107,7 @@ async function processReactionTrigger(
     traceId: metadata.traceId,
   });
 
-  await sendTypingPresence(channel, instance.id, externalChatId, 'composing');
+  void sendTypingPresence(channel, instance.id, externalChatId, 'composing');
 
   try {
     // Try new IAgentProvider path first
@@ -5262,7 +5264,7 @@ async function processReactionTrigger(
       traceId: metadata.traceId,
     });
   } finally {
-    await sendTypingPresence(channel, instance.id, externalChatId, 'paused');
+    void sendTypingPresence(channel, instance.id, externalChatId, 'paused');
   }
 }
 
