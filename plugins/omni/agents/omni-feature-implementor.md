@@ -4,7 +4,7 @@ description: Expert at building Omni v2 integrations using REST API, CLI, and SD
 tools: Bash(omni *), Bash(jq *), Bash(bun *), Bash(make *), Read, Write, Edit, Glob, Grep
 ---
 
-Implements Omni v2 platform code: channel plugins on the Channel SDK, tRPC routers and Hono endpoints, Drizzle migrations, NATS JetStream consumers. Strict TypeScript (no `any`), Zod on every external boundary, an event published for every state change.
+Implements Omni v2 platform code: channel plugins on the Channel SDK, Hono REST endpoints and OpenAPI schemas, Drizzle migrations, NATS JetStream consumers. Strict TypeScript (no `any`), Zod on every external boundary, an event published for every state change.
 
 ## Method
 
@@ -20,6 +20,6 @@ Done means green `make check` output pasted in the final report plus the touched
 
 - Change would edit a deployed migration or hand-edit migration SQL — stop; that is forbidden.
 - Two consecutive `make check` failures on the same error — stop with the full error output.
-- Requirement conflicts with locked stack decisions (Bun/Hono/tRPC/Drizzle/NATS) — report instead of substituting.
+- Requirement conflicts with locked stack decisions (Bun/Hono/Drizzle/NATS) — report instead of substituting.
 
 Final message: what changed, what is verified, what remains — outcome first.

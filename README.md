@@ -237,7 +237,7 @@ Deep dives: [event system](docs/architecture/event-system.md) · [durable consum
 packages/
 ├── core/                    # Events, identity, schemas
 ├── db/                      # Drizzle ORM + PostgreSQL
-├── api/                     # Hono + tRPC + OpenAPI
+├── api/                     # Hono + REST + OpenAPI
 ├── channel-sdk/             # Plugin SDK
 ├── channel-whatsapp/        # WhatsApp Baileys
 ├── channel-whatsapp-business/ # WhatsApp Cloud API (Meta)
@@ -576,7 +576,7 @@ export class MyPlugin extends BaseChannelPlugin {
 |---|---|
 | Runtime | [Bun](https://bun.sh) |
 | HTTP | [Hono](https://hono.dev) |
-| API | [tRPC](https://trpc.io) + OpenAPI |
+| API | Hono REST + OpenAPI |
 | DB | PostgreSQL + [Drizzle](https://orm.drizzle.team) |
 | Events | [NATS JetStream](https://nats.io) |
 | Validation | [Zod](https://zod.dev) |

@@ -266,98 +266,23 @@ function mapV1TraceToEvent(trace: V1Trace): Event {
 
 ### Step 3: Implement v2 Client
 
+Use the OpenAPI-generated REST SDK as the transport for the v2 adapter:
+
 ```typescript
-// packages/ui/src/lib/api/v2-client.ts
+import { createOmniClient } from '@omni/sdk';
 
-import { createTRPCProxyClient, httpBatchLink } from '@trpc/client';
-import type { AppRouter } from '@omni/api';
-import { OmniApiClient } from './types';
+const omni = createOmniClient({
+  baseUrl: config.baseUrl,
+  apiKey: config.apiKey,
+});
 
-export function createV2Client(config: { baseUrl: string; apiKey: string }): OmniApiClient {
-  // Use tRPC for type safety
-  const trpc = createTRPCProxyClient<AppRouter>({
-    links: [
-      httpBatchLink({
-        url: `${config.baseUrl}/trpc`,
-        headers: { 'x-api-key': config.apiKey },
-      }),
-    ],
-  });
-
-  // Also have REST fetcher for non-tRPC endpoints
-  const fetcher = async (path: string, options?: RequestInit) => {
-    const response = await fetch(`${config.baseUrl}${path}`, {
-      ...options,
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': config.apiKey,
-        ...options?.headers,
-      },
-    });
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({}));
-      throw new ApiError(response.status, error.message ?? 'Request failed');
-    }
-
-    return response.json();
-  };
-
-  return {
-    instances: {
-      list: (params) => trpc.instances.list.query(params ?? {}),
-      get: (id) => trpc.instances.get.query({ id }),
-      create: (data) => trpc.instances.create.mutate(data),
-      update: (id, data) => trpc.instances.update.mutate({ id, ...data }),
-      delete: (id) => trpc.instances.delete.mutate({ id }),
-      getStatus: (id) => trpc.instances.getStatus.query({ id }),
-      getQrCode: (id) => trpc.instances.getQrCode.query({ id }),
-      restart: (id) => trpc.instances.restart.mutate({ id }),
-      logout: (id) => trpc.instances.logout.mutate({ id }),
-    },
-
-    messages: {
-      send: (params) => trpc.messages.send.mutate(params),
-      sendMedia: (params) => trpc.messages.sendMedia.mutate(params),
-      sendReaction: (params) => trpc.messages.sendReaction.mutate(params),
-    },
-
-    events: {
-      list: (params) => trpc.events.list.query(params ?? {}),
-      get: (id) => trpc.events.get.query({ id }),
-      timeline: (personId, params) => trpc.events.timeline.query({ personId, ...params }),
-    },
-
-    persons: {
-      search: (query) => trpc.persons.search.query({ query }),
-      get: (id) => trpc.persons.get.query({ id }),
-      getPresence: (id) => trpc.persons.getPresence.query({ id }),
-      link: (identityA, identityB) => trpc.persons.link.mutate({ identityA, identityB }),
-      unlink: (identityId, reason) => trpc.persons.unlink.mutate({ identityId, reason }),
-    },
-
-    access: {
-      listRules: (params) => trpc.access.listRules.query(params ?? {}),
-      createRule: (data) => trpc.access.createRule.mutate(data),
-      updateRule: (id, data) => trpc.access.updateRule.mutate({ id, ...data }),
-      deleteRule: (id) => trpc.access.deleteRule.mutate({ id }),
-    },
-
-    settings: {
-      list: () => trpc.settings.list.query(),
-      get: (key) => trpc.settings.get.query({ key }),
-      set: (key, value) => trpc.settings.set.mutate({ key, value }),
-    },
-
-    batchJobs: {
-      list: () => trpc.batchJobs.list.query(),
-      get: (id) => trpc.batchJobs.get.query({ id }),
-      create: (params) => trpc.batchJobs.create.mutate(params),
-      cancel: (id) => trpc.batchJobs.cancel.mutate({ id }),
-    },
-  };
-}
+const instances = await omni.instances.list();
 ```
+
+Implement `createV2Client` by mapping the SDK resources and responses to the
+`OmniApiClient` interface above. This historical migration interface is not the
+SDK contract; use the current SDK methods and OpenAPI schemas when implementing
+the adapter.
 
 ### Step 4: Create Client Factory
 
@@ -609,13 +534,13 @@ function TimelineEvent({ event, showChannel }: { event: Event; showChannel?: boo
 | `src/lib/api.ts` | Replace with new client factory |
 | `src/lib/api/types.ts` | New: API interface types |
 | `src/lib/api/v1-client.ts` | New: v1 adapter |
-| `src/lib/api/v2-client.ts` | New: v2 client (tRPC) |
+| `src/lib/api/v2-client.ts` | New: v2 adapter (OpenAPI-generated REST SDK) |
 | `src/lib/api/client.ts` | New: Client factory |
 | `src/contexts/ApiContext.tsx` | New: API context provider |
 | `src/pages/*.tsx` | Update to use `useApi()` hook |
 | `src/components/persons/*` | New: v2-only components |
 | `src/App.tsx` | Wrap with `ApiProvider` |
-| `package.json` | Add `@trpc/client` dependency |
+| `package.json` | Add `@omni/sdk` dependency |
 
 ## Migration Checklist
 
@@ -634,7 +559,7 @@ function TimelineEvent({ event, showChannel }: { event: Event; showChannel?: boo
 
 1. **No rewrite** - Existing UI code remains mostly unchanged
 2. **Gradual migration** - Can switch between v1/v2 per feature
-3. **Type safety** - tRPC provides full types in v2 mode
+3. **Type safety** - OpenAPI-generated SDK types cover v2 REST calls
 4. **New features** - v2-only features gracefully degrade on v1
 5. **Easy rollback** - Just change version flag to revert
 
