@@ -9,7 +9,11 @@
  * equality/switch baseline. The literal-policy reference covers all forms;
  * only real channel/harness overlap on channel discriminants relaxes either policy.
  * Residuals: getProvider(agent) === 'claude' and agent.config.providerName === 'claude'
- * require semantic knowledge beyond this syntactic guard. Later slices extend the inventory.
+ * require semantic knowledge beyond this syntactic guard. Unresolvable channel-named
+ * parameters, for-of and catch bindings retain the channel exception. A Hermes-keyed
+ * Object.entries map dispatch has no literal at its use and remains unresolved.
+ * Contrived template concatenation, spread collections/calls and obfuscated regexes
+ * are outside this syntactic guard. Later slices extend the inventory.
  */
 import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
@@ -55,6 +59,7 @@ const HARNESS_NAMES = ['claude-code', 'codex', 'opencode', 'openclaw', 'hermes',
 const CHANNEL_HARNESS_OVERLAP = new Set(HARNESS_NAMES.filter((name) => channelTypes.some((type) => type === name)));
 const EXTERNAL_PROVIDERS = ['claude', 'agno', 'openai', 'gemini', 'custom', 'omni-internal'];
 const forbiddenNames = new Set([...HARNESS_NAMES, ...Object.keys(DEVICE_CLIENTS)]);
+const isForbiddenName = (name: string) => forbiddenNames.has(name.toLowerCase());
 const comparisons = new Set([
   ts.SyntaxKind.EqualsEqualsToken,
   ts.SyntaxKind.EqualsEqualsEqualsToken,
@@ -112,7 +117,7 @@ function unwrap(node: ts.Expression): ts.Expression {
   const expression = baselineUnwrap(node);
   return expression === node ? node : unwrap(expression);
 }
-type Binding = ts.VariableDeclaration | ts.BindingElement | ts.ParameterDeclaration;
+type Binding = ts.VariableDeclaration | ts.BindingElement | ts.ParameterDeclaration | ts.EnumDeclaration;
 function isScope(node: ts.Node): boolean {
   return ts.isSourceFile(node) || ts.isBlock(node) || ts.isFunctionLike(node) || ts.isCaseBlock(node);
 }
@@ -121,7 +126,10 @@ function bindingResolver(file: ts.SourceFile) {
   const scopes = new Map<ts.Node, Map<string, Binding>>();
   function visit(node: ts.Node): void {
     if (
-      (ts.isVariableDeclaration(node) || ts.isBindingElement(node) || ts.isParameter(node)) &&
+      (ts.isVariableDeclaration(node) ||
+        ts.isBindingElement(node) ||
+        ts.isParameter(node) ||
+        ts.isEnumDeclaration(node)) &&
       ts.isIdentifier(node.name)
     ) {
       let scope: ts.Node = node.parent;
@@ -133,7 +141,7 @@ function bindingResolver(file: ts.SourceFile) {
     ts.forEachChild(node, visit);
   }
   visit(file);
-  return (identifier: ts.Identifier): Binding | undefined => {
+  const bindingFor = (identifier: ts.Identifier): Binding | undefined => {
     let scope: ts.Node | undefined = identifier.parent;
     while (scope) {
       const binding = scopes.get(scope)?.get(identifier.text);
@@ -142,54 +150,117 @@ function bindingResolver(file: ts.SourceFile) {
     }
     return undefined;
   };
+  const reassigned = new Set<Binding>();
+  function writeTarget(node: ts.Expression): void {
+    const target = unwrap(node);
+    if (ts.isIdentifier(target)) {
+      const binding = bindingFor(target);
+      if (binding) reassigned.add(binding);
+    }
+  }
+  function writes(node: ts.Node): void {
+    if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+      node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
+    )
+      writeTarget(node.left);
+    if (
+      (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
+      [ts.SyntaxKind.PlusPlusToken, ts.SyntaxKind.MinusMinusToken].includes(node.operator)
+    )
+      writeTarget(node.operand);
+    ts.forEachChild(node, writes);
+  }
+  writes(file);
+  return { bindingFor, reassigned };
 }
 /** Reference literal-deny policy; the new policy differs only by its channel exception.
  * Both modes inspect every comparison form, including collections and object maps.
  */
 function literalPolicy(source: string, channelException: boolean): string[] {
   const file = ts.createSourceFile('slice.ts', source, ts.ScriptTarget.Latest, true);
-  const bindingFor = bindingResolver(file);
-  function initializer(node: ts.Identifier, seen: Set<ts.Node>): ts.Expression | undefined {
+  const { bindingFor, reassigned } = bindingResolver(file);
+  function initializer(node: ts.Identifier, seen: Set<ts.Node>): ts.Expression | null | undefined {
     const binding = bindingFor(node);
-    if (!binding || seen.has(binding)) return undefined;
+    if (!binding) return undefined;
+    if (seen.has(binding) || reassigned.has(binding)) return null;
     seen.add(binding);
-    return binding.initializer;
+    return ts.isEnumDeclaration(binding) ? undefined : binding.initializer;
   }
   function stringName(node: ts.Expression, seen = new Set<ts.Node>()): string | undefined {
     const expression = unwrap(node);
     if (ts.isStringLiteralLike(expression)) return expression.text;
-    if (!ts.isIdentifier(expression)) return undefined;
-    const binding = bindingFor(expression);
-    if (!binding || !ts.isVariableDeclaration(binding) || !(binding.parent.flags & ts.NodeFlags.Const))
-      return undefined;
-    const value = initializer(expression, seen);
+    const value = ts.isIdentifier(expression) ? initializer(expression, seen) : memberValue(expression, seen);
     return value ? stringName(value, seen) : undefined;
   }
-  function objectValue(node: ts.Expression, seen: Set<ts.Node>): ts.ObjectLiteralExpression | undefined {
+  function objectValue(node: ts.Expression, seen: Set<ts.Node>): ts.ObjectLiteralExpression | null | undefined {
     const expression = unwrap(node);
-    if (ts.isObjectLiteralExpression(expression)) return expression;
+    if (ts.isObjectLiteralExpression(expression))
+      return expression.properties.some(ts.isSpreadAssignment) ? null : expression;
     if (!ts.isIdentifier(expression)) return undefined;
     const value = initializer(expression, seen);
+    if (value === null) return null;
     return value ? objectValue(value, seen) : undefined;
   }
-  function memberValue(node: ts.Expression, seen: Set<ts.Node>): ts.Expression | undefined {
+  function enumMemberValue(binding: ts.EnumDeclaration, name: string | undefined, seen: Set<ts.Node>) {
+    const member = binding.members.find((member) => literalName(member.name) === name);
+    if (!member || seen.has(member)) return null;
+    seen.add(member);
+    return member.initializer;
+  }
+  function memberValue(node: ts.Expression, seen: Set<ts.Node>): ts.Expression | null | undefined {
     if (!ts.isPropertyAccessExpression(node) && !ts.isElementAccessExpression(node)) return undefined;
+    const name = ts.isPropertyAccessExpression(node) ? node.name.text : stringName(node.argumentExpression, seen);
+    const binding = ts.isIdentifier(node.expression) && bindingFor(node.expression);
+    if (binding && ts.isEnumDeclaration(binding)) return enumMemberValue(binding, name, seen);
     const object = objectValue(node.expression, seen);
-    const name = baselineDiscriminantName(node);
+    if (object === null) return null;
     const property = object?.properties.find((property) => property.name && literalName(property.name) === name);
+    if (object && (!property || !ts.isPropertyAssignment(property))) return null;
     return property && ts.isPropertyAssignment(property) ? property.initializer : undefined;
+  }
+  function coercedValue(node: ts.Expression): ts.Expression | undefined {
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'String')
+      return node.arguments.length === 1 ? node.arguments[0] : undefined;
+    if (ts.isTemplateExpression(node) && node.head.text === '' && node.templateSpans.length === 1) {
+      const span = node.templateSpans[0];
+      if (span && span.literal.text === '') return span.expression;
+    }
+    return undefined;
+  }
+  function unsafeChannelReceiver(node: ts.Expression): boolean {
+    if (!ts.isPropertyAccessExpression(node) && !ts.isElementAccessExpression(node)) return false;
+    let unsafe = false;
+    function visit(receiver: ts.Node): void {
+      if (
+        (ts.isIdentifier(receiver) || ts.isStringLiteralLike(receiver)) &&
+        ['harness', 'provider', 'clientId'].includes(receiver.text)
+      )
+        unsafe = true;
+      ts.forEachChild(receiver, visit);
+    }
+    visit(node.expression);
+    return unsafe;
+  }
+  function bindingName(expression: ts.Identifier, seen: Set<ts.Node>, unwrapReceivers: boolean): string {
+    const binding = bindingFor(expression);
+    if (binding && reassigned.has(binding)) return '';
+    if (binding && ts.isBindingElement(binding) && ts.isArrayBindingPattern(binding.parent)) return '';
+    if (binding && ts.isBindingElement(binding)) return literalName(binding.propertyName ?? binding.name) ?? '';
+    const value = initializer(expression, seen);
+    if (value === null) return '';
+    return value ? discriminantName(value, seen, unwrapReceivers) : expression.text;
   }
   function discriminantName(node: ts.Expression, seen = new Set<ts.Node>(), unwrapReceivers = true): string {
     const expression = unwrap(node);
-    if (ts.isIdentifier(expression)) {
-      const binding = bindingFor(expression);
-      if (binding && ts.isBindingElement(binding)) return literalName(binding.propertyName ?? binding.name) ?? '';
-      const value = initializer(expression, seen);
-      return value ? discriminantName(value, seen, unwrapReceivers) : expression.text;
-    }
+    if (ts.isIdentifier(expression)) return bindingName(expression, seen, unwrapReceivers);
+    const coerced = unwrapReceivers && coercedValue(expression);
+    if (coerced) return discriminantName(coerced, seen, unwrapReceivers);
     if (unwrapReceivers && ts.isCallExpression(expression) && ts.isPropertyAccessExpression(expression.expression))
       return discriminantName(expression.expression.expression, seen);
     const member = memberValue(expression, seen);
+    if (member === null || (!unwrapReceivers && unsafeChannelReceiver(expression))) return '';
     if (member) return discriminantName(member, seen, unwrapReceivers);
     return baselineDiscriminantName(expression);
   }
@@ -198,12 +269,12 @@ function literalPolicy(source: string, channelException: boolean): string[] {
   }
   function isProvider(node: ts.Expression): boolean {
     // Provider-keyed handler maps are also provider discriminants for `in`/call rules.
-    return /^provider(?:$|[A-Z_])/.test(discriminantName(node));
+    return /^provider/i.test(discriminantName(node));
   }
   const found: string[] = [];
   function deny(name: string | undefined, against: ts.Expression): boolean {
     if (!name) return false;
-    if (forbiddenNames.has(name)) {
+    if (isForbiddenName(name)) {
       // Only actual channel types may gain the channel exception (currently Hermes).
       return !(channelException && CHANNEL_HARNESS_OVERLAP.has(name) && isChannel(against));
     }
@@ -284,7 +355,12 @@ function literalPolicy(source: string, channelException: boolean): string[] {
   function lookupDenied(node: ts.Node): boolean {
     if (!ts.isElementAccessExpression(node)) return false;
     const key = node.argumentExpression;
-    return deny(stringName(key), node.expression) || collectionNames(node.expression).some((name) => deny(name, key));
+    const name = stringName(key);
+    return (
+      deny(name, node.expression) ||
+      (!!name && isProvider(node.expression) && EXTERNAL_PROVIDERS.includes(name)) ||
+      collectionNames(node.expression).some((name) => deny(name, key))
+    );
   }
   function callDenied(node: ts.Node): boolean {
     if (!ts.isCallExpression(node) && !ts.isNewExpression(node)) return false;
@@ -293,27 +369,53 @@ function literalPolicy(source: string, channelException: boolean): string[] {
     const provider = args.some(isProvider) || (!!receiver && isProvider(receiver));
     return args.some((argument) => {
       const name = stringName(argument);
-      return !!name && (forbiddenNames.has(name) || (provider && EXTERNAL_PROVIDERS.includes(name)));
+      return !!name && (isForbiddenName(name) || (provider && EXTERNAL_PROVIDERS.includes(name)));
     });
   }
   function inDenied(node: ts.Node): boolean {
     if (!ts.isBinaryExpression(node) || node.operatorToken.kind !== ts.SyntaxKind.InKeyword) return false;
     const name = stringName(node.left);
-    return !!name && (forbiddenNames.has(name) || (isProvider(node.right) && EXTERNAL_PROVIDERS.includes(name)));
+    return !!name && (isForbiddenName(name) || (isProvider(node.right) && EXTERNAL_PROVIDERS.includes(name)));
+  }
+  function definitionNameDenied(node: ts.Node): boolean {
+    if (!ts.isObjectLiteralElementLike(node) || !ts.isObjectLiteralExpression(node.parent)) return false;
+    const name = node.name && literalName(node.name);
+    return !!name && isForbiddenName(name) && !CHANNEL_HARNESS_OVERLAP.has(name.toLowerCase());
+  }
+  function propertyDenied(node: ts.PropertyAccessExpression): boolean {
+    // HERMES constants may hold a real channel literal; its dispatch is checked at use.
+    const overlapConstant =
+      CHANNEL_HARNESS_OVERLAP.has(node.name.text.toLowerCase()) && CHANNEL_HARNESS_OVERLAP.has(stringName(node) ?? '');
+    return (
+      (isForbiddenName(node.name.text) && !overlapConstant) ||
+      (isProvider(node.expression) && EXTERNAL_PROVIDERS.includes(node.name.text))
+    );
   }
   function syntaxDenied(node: ts.Node): boolean {
-    if (ts.isRegularExpressionLiteral(node)) return [...forbiddenNames].some((name) => node.text.includes(name));
-    if (ts.isPropertyAccessExpression(node)) return forbiddenNames.has(node.name.text);
+    if (ts.isRegularExpressionLiteral(node))
+      return [...forbiddenNames].some((name) => node.text.toLowerCase().includes(name));
+    if (ts.isPropertyAccessExpression(node)) return propertyDenied(node);
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+      const name = stringName(node.right);
+      return !!name && isForbiddenName(name);
+    }
     if (!(ts.isVariableDeclaration(node) || ts.isEnumMember(node) || ts.isPropertyAssignment(node))) return false;
     const name = node.initializer && stringName(node.initializer);
     // Overlap literals may define a channel constant; dispatch is checked at its use.
-    return !!name && forbiddenNames.has(name) && !CHANNEL_HARNESS_OVERLAP.has(name);
+    return !!name && isForbiddenName(name) && !CHANNEL_HARNESS_OVERLAP.has(name);
   }
   function visit(node: ts.Node): void {
     if (
-      [comparisonDenied, switchDenied, membershipDenied, lookupDenied, callDenied, inDenied, syntaxDenied].some(
-        (check) => check(node),
-      )
+      [
+        comparisonDenied,
+        switchDenied,
+        membershipDenied,
+        lookupDenied,
+        callDenied,
+        inDenied,
+        syntaxDenied,
+        definitionNameDenied,
+      ].some((check) => check(node))
     )
       found.push(node.getText(file));
     ts.forEachChild(node, visit);
@@ -452,6 +554,54 @@ const failingFixtures = [
   "instance.channel === 'omni-dsh'",
   "instance.subchannel === 'codex'",
   "getChannel() === 'codex'",
+  // G1: overlap constants must be resolved at the use, not exempt harness dispatch.
+  "const HARNESS = { HERMES: 'hermes' } as const; agent.harness === HARNESS.HERMES",
+  "const HARNESS = { HERMES: 'hermes' } as const; switch (agent.harness) { case HARNESS.HERMES: break; }",
+  "enum Harness { Hermes = 'hermes' } switch (agent.harness) { case Harness.Hermes: break; }",
+  "const config = { defaultChannel: 'hermes' }; agent.harness === config.defaultChannel",
+  "enum C { H = 'hermes' } agent.harness === C.H",
+  "let H = 'hermes'; agent.harness === H",
+  "var H = 'hermes'; agent.harness === H",
+  "const HARNESS = { HERMES: 'hermes' }; agent.harness === HARNESS['HERMES']",
+  "enum Harness { Hermes = 'hermes' } agent.harness === Harness['Hermes']",
+  // G2: map definitions deny names even when dispatch contains no literal.
+  "const HANDLERS = { 'claude-code': run }; Object.keys(HANDLERS).includes(agent.harness)",
+  'const HANDLERS = { codex: runCodex, hermes: runHermes }; Object.entries(HANDLERS).find(([name]) => name === agent.harness)',
+  'const H = { codex: fn }; Reflect.get(H, h)',
+  "const H = { ['codex']: fn }; Object.entries(H).find(([k]) => k === h)",
+  'const H = { codex() {} }; for (const [k, v] of Object.entries(H)) if (k === h) v()',
+  'const codex = run; const H = { codex }; Object.keys(H).includes(h)',
+  'const H = { get codex() { return fn; } }; Object.keys(H).includes(h)',
+  'const H = { set codex(fn) {} }; Object.keys(H).includes(h)',
+  "const H = { 'omni-cli': fn }; Object.keys(H).includes(clientId)",
+  "const H = { ['omni-dsh']() {} }; Object.entries(H)",
+  // G3: writes, positional bindings and object spreads cannot certify a channel.
+  "let channel = x.channel; channel = agent.harness; channel === 'hermes'",
+  "let channel; channel = agent.harness; channel === 'hermes'",
+  "let channel = x.channel; channel += agent.harness; channel === 'hermes'",
+  "let channel = x.channel; ++channel; channel === 'hermes'",
+  "let channel = x.channel; channel--; channel === 'hermes'",
+  "const [channel] = [agent.harness]; channel === 'hermes'",
+  "const x = { channel: i.channel, ...{ channel: agent.harness } }; x.channel === 'hermes'",
+  "const x = { ...{ channel: agent.harness } }; x.channel === 'hermes'",
+  // Optional G3.4: a channel member off a harness/provider/client is not channel dispatch.
+  "agent.harness.channel === 'hermes'",
+  "getChannel(agent.harness).channel === 'hermes'",
+  "agent.provider.channel === 'hermes'",
+  "clientId.channelType === 'hermes'",
+  "agent['harness'].channel === 'hermes'",
+  // G4: assignments, case-insensitive names/regexes and provider coercions.
+  "let H; H = 'codex'; h === H",
+  '/CODEX/i.test(h)',
+  "clientId.toUpperCase() === 'OMNI-DSH'",
+  "Object.is(h, 'CODEX')",
+  'const H = { CODEX: fn }; Object.keys(H)',
+  "String(agent.provider) === 'claude'",
+  "`${agent.provider}` === 'claude'",
+  // Optional G4: external-provider members are denied only on provider receivers.
+  'providerHandlers.claude()',
+  "PROVIDERS['claude']",
+  'const p = agent.provider; p.claude()',
 ];
 const channelFixtures = [
   "instance.channel === 'hermes'",
@@ -463,6 +613,12 @@ const channelFixtures = [
   "const ch = instance['channel']; ch === 'hermes'",
   "const c = instance.channel; const channelType = c; channelType === 'hermes'",
   "function a() { const channel = agent.harness; } function b() { const channel = instance.channel; return channel === 'hermes'; }",
+  "const HARNESS = { HERMES: 'hermes' } as const; instance.channel === HARNESS.HERMES",
+  '({ hermes: fn }[instance.channel])',
+  "enum Channel { Hermes = 'hermes' } input.channelType === Channel.Hermes",
+  "let H = 'hermes'; instance.channel === H",
+  "var H = 'hermes'; instance.channel === H",
+  "let channel = instance.channel; function f() { let channel = agent.harness; channel = agent.harness; } channel === 'hermes'",
 ];
 const passingFixtures = [
   "agent.provider === 'paired'",
@@ -478,6 +634,9 @@ const passingFixtures = [
   // Documented semantic residuals; the guard does not infer getter/field meaning.
   "getProvider(agent) === 'claude'",
   "agent.config.providerName === 'claude'",
+  'config.custom',
+  // The exempt Hermes definition has no literal at the Object.entries dispatch.
+  'const H = { hermes: fn }; Object.entries(H).find(([name]) => name === agent.harness)',
 ];
 test('C12 channel exception uses the actual channel/harness overlap', () => {
   expect([...CHANNEL_HARNESS_OVERLAP]).toEqual(['hermes']);
@@ -500,5 +659,5 @@ for (const source of [...failingFixtures, ...passingFixtures, ...channelFixtures
   test(`C12 baseline superset except channel: ${source}`, () => {
     const baselineRejected = baselineViolations(source).length > 0;
     const newRejected = violations(source).length > 0;
-    expect(baselineRejected && !newRejected).toBe(channelFixtures.includes(source));
+    expect(baselineRejected && !newRejected).toBe(baselineRejected && channelFixtures.includes(source));
   });
