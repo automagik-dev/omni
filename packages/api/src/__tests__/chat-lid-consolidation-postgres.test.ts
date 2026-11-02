@@ -7,17 +7,22 @@
  * Related to bug fix: WhatsApp LID/phone fragmentation creating duplicate chats
  */
 
-// @ts-nocheck - Integration tests with DB queries that may return undefined
-import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test';
 import type { Database } from '@omni/db';
 import { chatIdMappings, chats, instances, messages } from '@omni/db';
 import { and, eq } from 'drizzle-orm';
 import { ChatService } from '../services/chats';
 import { MessageService } from '../services/messages';
-import { describeWithDb, getTestDb } from './db-helper';
+import { createMigratedTestDatabase } from './fixtures/pg-clone';
 
-describeWithDb('LID/Phone Chat Consolidation', () => {
+const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
+const postgresDescribe = superUrl ? describe : describe.skip;
+const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
+
+postgresDescribe('LID/Phone Chat Consolidation', () => {
   let db: Database;
+  const clone = createMigratedTestDatabase({ superUrl, psqlBin });
+  afterAll(() => clone.teardown());
   let chatService: ChatService;
   let messageService: MessageService;
   let testInstanceId: string;
@@ -36,7 +41,7 @@ describeWithDb('LID/Phone Chat Consolidation', () => {
   });
 
   beforeAll(async () => {
-    db = getTestDb();
+    db = clone.setup();
     chatService = new ChatService(db, null);
     messageService = new MessageService(db, null);
 
@@ -52,17 +57,6 @@ describeWithDb('LID/Phone Chat Consolidation', () => {
       throw new Error('Failed to create test instance');
     }
     testInstanceId = instance.id;
-  });
-
-  afterAll(async () => {
-    // Cleanup all test chats and messages
-    const testChats = await db.select().from(chats).where(eq(chats.instanceId, testInstanceId));
-    for (const chat of testChats) {
-      await db.delete(messages).where(eq(messages.chatId, chat.id));
-    }
-    await db.delete(chatIdMappings).where(eq(chatIdMappings.instanceId, testInstanceId));
-    await db.delete(chats).where(eq(chats.instanceId, testInstanceId));
-    await db.delete(instances).where(eq(instances.id, testInstanceId));
   });
 
   test('should route LID message to phone chat when mapping exists', async () => {
@@ -199,6 +193,7 @@ describeWithDb('LID/Phone Chat Consolidation', () => {
     const allChats = await db.select().from(chats).where(eq(chats.instanceId, testInstanceId));
 
     expect(allChats.length).toBe(1);
+    if (!allChats[0]) throw new Error('Expected the seeded phone chat');
     expect(allChats[0].id).toBe(phoneChat.id);
 
     // Cleanup
@@ -254,6 +249,7 @@ describeWithDb('LID/Phone Chat Consolidation', () => {
       expect(chatsWithCanonical.length).toBe(1);
 
       // Cleanup
+      if (!chatsWithCanonical[0]) throw new Error('Expected the canonical chat');
       await db.delete(chats).where(eq(chats.id, chatsWithCanonical[0].id));
     }
   });

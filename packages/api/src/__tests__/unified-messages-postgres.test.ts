@@ -6,20 +6,25 @@
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { Database } from '@omni/db';
-import { chatParticipants, chats, instances, messages } from '@omni/db';
-import { eq } from 'drizzle-orm';
+import { instances } from '@omni/db';
 import { ChatService } from '../services/chats';
 import { MessageService } from '../services/messages';
-import { describeWithDb, getTestDb } from './db-helper';
+import { createMigratedTestDatabase } from './fixtures/pg-clone';
 
-describeWithDb('Unified Messages', () => {
+const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
+const postgresDescribe = superUrl ? describe : describe.skip;
+const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
+
+postgresDescribe('Unified Messages', () => {
   let db: Database;
+  const clone = createMigratedTestDatabase({ superUrl, psqlBin });
+  afterAll(() => clone.teardown());
   let chatService: ChatService;
   let messageService: MessageService;
   let testInstanceId: string;
 
   beforeAll(async () => {
-    db = getTestDb();
+    db = clone.setup();
     chatService = new ChatService(db, null);
     messageService = new MessageService(db, null);
 
@@ -35,20 +40,6 @@ describeWithDb('Unified Messages', () => {
       throw new Error('Failed to create test instance');
     }
     testInstanceId = instance.id;
-  });
-
-  afterAll(async () => {
-    // Clean up test data
-    if (testInstanceId) {
-      // Delete messages first (foreign key)
-      const testChats = await db.select().from(chats).where(eq(chats.instanceId, testInstanceId));
-      for (const chat of testChats) {
-        await db.delete(messages).where(eq(messages.chatId, chat.id));
-        await db.delete(chatParticipants).where(eq(chatParticipants.chatId, chat.id));
-      }
-      await db.delete(chats).where(eq(chats.instanceId, testInstanceId));
-      await db.delete(instances).where(eq(instances.id, testInstanceId));
-    }
   });
 
   describe('ChatService', () => {

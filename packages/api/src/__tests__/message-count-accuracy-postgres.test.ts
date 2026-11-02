@@ -7,24 +7,29 @@
  * Related to bug fix: Message count mismatches and dual increment issues
  */
 
-// @ts-nocheck - Integration tests with DB queries that may return undefined
-import { afterAll, beforeAll, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { Database } from '@omni/db';
 import { chats, instances, messages } from '@omni/db';
 import { eq, sql } from 'drizzle-orm';
 import { ChatService } from '../services/chats';
 import { MessageService } from '../services/messages';
-import { describeWithDb, getTestDb } from './db-helper';
+import { createMigratedTestDatabase } from './fixtures/pg-clone';
 
-describeWithDb('Message Count Accuracy', () => {
+const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
+const postgresDescribe = superUrl ? describe : describe.skip;
+const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
+
+postgresDescribe('Message Count Accuracy', () => {
   let db: Database;
+  const clone = createMigratedTestDatabase({ superUrl, psqlBin });
+  afterAll(() => clone.teardown());
   let messageService: MessageService;
   let chatService: ChatService;
   let testInstanceId: string;
   let testChatId: string;
 
   beforeAll(async () => {
-    db = getTestDb();
+    db = clone.setup();
     messageService = new MessageService(db, null);
     chatService = new ChatService(db, null);
 
@@ -49,12 +54,6 @@ describeWithDb('Message Count Accuracy', () => {
     testChatId = chat.id;
   });
 
-  afterAll(async () => {
-    // Cleanup
-    await db.delete(messages).where(eq(messages.chatId, testChatId));
-    await db.delete(chats).where(eq(chats.id, testChatId));
-    await db.delete(instances).where(eq(instances.id, testInstanceId));
-  });
   test('should maintain accurate count when creating messages sequentially', async () => {
     const messageCount = 10;
 
@@ -74,12 +73,14 @@ describeWithDb('Message Count Accuracy', () => {
 
     // Verify count matches actual messages
     const [chatData] = await db.select().from(chats).where(eq(chats.id, testChatId));
+    if (!chatData) throw new Error('Expected the seeded chat');
 
     const [actualCount] = await db
       .select({ count: sql<number>`count(*)` })
       .from(messages)
       .where(eq(messages.chatId, testChatId));
 
+    if (!actualCount) throw new Error('Expected the message count aggregate');
     const actualCountNum = Number(actualCount.count);
 
     expect(chatData.messageCount).toBe(messageCount);
@@ -112,12 +113,14 @@ describeWithDb('Message Count Accuracy', () => {
 
     // Verify count matches actual messages
     const [chatData] = await db.select().from(chats).where(eq(chats.id, testChatId));
+    if (!chatData) throw new Error('Expected the seeded chat');
 
     const [actualCount] = await db
       .select({ count: sql<number>`count(*)` })
       .from(messages)
       .where(eq(messages.chatId, testChatId));
 
+    if (!actualCount) throw new Error('Expected the message count aggregate');
     const actualCountNum = Number(actualCount.count);
 
     expect(chatData.messageCount).toBe(concurrentCount);
@@ -165,12 +168,14 @@ describeWithDb('Message Count Accuracy', () => {
 
     // Verify count includes both sources
     const [chatData] = await db.select().from(chats).where(eq(chats.id, testChatId));
+    if (!chatData) throw new Error('Expected the seeded chat');
 
     const [actualCount] = await db
       .select({ count: sql<number>`count(*)` })
       .from(messages)
       .where(eq(messages.chatId, testChatId));
 
+    if (!actualCount) throw new Error('Expected the message count aggregate');
     const actualCountNum = Number(actualCount.count);
     const expectedTotal = syncCount + realtimeCount;
 
@@ -215,12 +220,14 @@ describeWithDb('Message Count Accuracy', () => {
 
     // Verify count only incremented once
     const [chatData] = await db.select().from(chats).where(eq(chats.id, testChatId));
+    if (!chatData) throw new Error('Expected the seeded chat');
 
     const [actualCount] = await db
       .select({ count: sql<number>`count(*)` })
       .from(messages)
       .where(eq(messages.chatId, testChatId));
 
+    if (!actualCount) throw new Error('Expected the message count aggregate');
     const actualCountNum = Number(actualCount.count);
 
     expect(chatData.messageCount).toBe(1);
@@ -254,12 +261,14 @@ describeWithDb('Message Count Accuracy', () => {
 
     // Verify count only incremented once
     const [chatData] = await db.select().from(chats).where(eq(chats.id, testChatId));
+    if (!chatData) throw new Error('Expected the seeded chat');
 
     const [actualCount] = await db
       .select({ count: sql<number>`count(*)` })
       .from(messages)
       .where(eq(messages.chatId, testChatId));
 
+    if (!actualCount) throw new Error('Expected the message count aggregate');
     const actualCountNum = Number(actualCount.count);
 
     expect(chatData.messageCount).toBe(1);
@@ -303,12 +312,14 @@ describeWithDb('Message Count Accuracy', () => {
 
     // Verify count only incremented once
     const [chatData] = await db.select().from(chats).where(eq(chats.id, testChatId));
+    if (!chatData) throw new Error('Expected the seeded chat');
 
     const [actualCount] = await db
       .select({ count: sql<number>`count(*)` })
       .from(messages)
       .where(eq(messages.chatId, testChatId));
 
+    if (!actualCount) throw new Error('Expected the message count aggregate');
     const actualCountNum = Number(actualCount.count);
 
     expect(chatData.messageCount).toBe(1);
@@ -340,6 +351,7 @@ describeWithDb('Message Count Accuracy', () => {
     });
 
     let [chatData] = await db.select().from(chats).where(eq(chats.id, testChatId));
+    if (!chatData) throw new Error('Expected the seeded chat');
 
     expect(chatData.lastMessageAt?.getTime()).toBe(timestamp1.getTime());
     expect(chatData.lastMessagePreview).toContain('First message');
@@ -357,6 +369,7 @@ describeWithDb('Message Count Accuracy', () => {
     });
 
     [chatData] = await db.select().from(chats).where(eq(chats.id, testChatId));
+    if (!chatData) throw new Error('Expected the seeded chat');
 
     expect(chatData.lastMessageAt?.getTime()).toBe(timestamp2.getTime());
     expect(chatData.lastMessagePreview).toContain('Second message');

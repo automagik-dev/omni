@@ -7,17 +7,23 @@
  * Related to bug fix: Multi-tenant isolation is by design, not a bug
  */
 
-import { afterAll, beforeAll, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { Database } from '@omni/db';
 import { chatIdMappings, chats, instances, messages, persons, platformIdentities } from '@omni/db';
 import { and, eq } from 'drizzle-orm';
 import { ChatService } from '../services/chats';
 import { MessageService } from '../services/messages';
 import { PersonService } from '../services/persons';
-import { describeWithDb, getTestDb } from './db-helper';
+import { createMigratedTestDatabase } from './fixtures/pg-clone';
 
-describeWithDb('Multi-Instance Isolation', () => {
+const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
+const postgresDescribe = superUrl ? describe : describe.skip;
+const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
+
+postgresDescribe('Multi-Instance Isolation', () => {
   let db: Database;
+  const clone = createMigratedTestDatabase({ superUrl, psqlBin });
+  afterAll(() => clone.teardown());
   let chatService: ChatService;
   let messageService: MessageService;
   let personService: PersonService;
@@ -28,7 +34,7 @@ describeWithDb('Multi-Instance Isolation', () => {
   const sameExternalUserId = '553496835777@s.whatsapp.net';
 
   beforeAll(async () => {
-    db = getTestDb();
+    db = clone.setup();
     chatService = new ChatService(db, null);
     messageService = new MessageService(db, null);
     personService = new PersonService(db, null);
@@ -56,62 +62,6 @@ describeWithDb('Multi-Instance Isolation', () => {
 
     instance1Id = instance1.id;
     instance2Id = instance2.id;
-  });
-
-  afterAll(async () => {
-    if (!instance1Id || !instance2Id) return; // Skip cleanup if instances not created
-
-    // Cleanup all test data for instance 1
-    const testChats1 = await db.select().from(chats).where(eq(chats.instanceId, instance1Id));
-    for (const chat of testChats1) {
-      await db.delete(messages).where(eq(messages.chatId, chat.id));
-    }
-    await db.delete(chats).where(eq(chats.instanceId, instance1Id));
-
-    // Cleanup all test data for instance 2
-    const testChats2 = await db.select().from(chats).where(eq(chats.instanceId, instance2Id));
-    for (const chat of testChats2) {
-      await db.delete(messages).where(eq(messages.chatId, chat.id));
-    }
-    await db.delete(chats).where(eq(chats.instanceId, instance2Id));
-
-    // Cleanup chatIdMappings for both instances
-    await db.delete(chatIdMappings).where(eq(chatIdMappings.instanceId, instance1Id));
-    await db.delete(chatIdMappings).where(eq(chatIdMappings.instanceId, instance2Id));
-
-    // Cleanup platform identities for instance 1
-    const testIdentities1 = await db
-      .select()
-      .from(platformIdentities)
-      .where(eq(platformIdentities.instanceId, instance1Id));
-    const personIds1 = [...new Set(testIdentities1.map((i) => i.personId).filter(Boolean))];
-    await db.delete(platformIdentities).where(eq(platformIdentities.instanceId, instance1Id));
-
-    // Cleanup platform identities for instance 2
-    const testIdentities2 = await db
-      .select()
-      .from(platformIdentities)
-      .where(eq(platformIdentities.instanceId, instance2Id));
-    const personIds2 = [...new Set(testIdentities2.map((i) => i.personId).filter(Boolean))];
-    await db.delete(platformIdentities).where(eq(platformIdentities.instanceId, instance2Id));
-
-    // Cleanup orphaned persons (ones created by tests, no remaining identities)
-    const allPersonIds = [...new Set([...personIds1, ...personIds2])];
-    for (const personId of allPersonIds) {
-      if (!personId) continue;
-      const [remainingIdentities] = await db
-        .select()
-        .from(platformIdentities)
-        .where(eq(platformIdentities.personId, personId))
-        .limit(1);
-      if (!remainingIdentities) {
-        await db.delete(persons).where(eq(persons.id, personId));
-      }
-    }
-
-    // Delete instances (cascade will handle remaining data)
-    await db.delete(instances).where(eq(instances.id, instance1Id));
-    await db.delete(instances).where(eq(instances.id, instance2Id));
   });
 
   test('should create separate Person records for same user across instances', async () => {

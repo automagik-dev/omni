@@ -3,22 +3,27 @@
  *
  * Verifies that API key chat scoping correctly filters chats by instance.
  */
-import { afterAll, beforeAll, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { Database } from '@omni/db';
 import { chats, instances } from '@omni/db';
-import { eq } from 'drizzle-orm';
 import { ChatService } from '../services/chats';
-import { describeWithDb, getTestDb } from './db-helper';
+import { createMigratedTestDatabase } from './fixtures/pg-clone';
 
-describeWithDb('Chat scoping — instanceIds filter', () => {
+const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
+const postgresDescribe = superUrl ? describe : describe.skip;
+const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
+
+postgresDescribe('Chat scoping — instanceIds filter', () => {
   let db: Database;
+  const clone = createMigratedTestDatabase({ superUrl, psqlBin });
+  afterAll(() => clone.teardown());
   let chatService: ChatService;
   let inst1Id: string;
   let inst2Id: string;
   let inst3Id: string;
 
   beforeAll(async () => {
-    db = getTestDb();
+    db = clone.setup();
     chatService = new ChatService(db, null);
 
     // Create 3 instances
@@ -80,16 +85,6 @@ describeWithDb('Chat scoping — instanceIds filter', () => {
         lastMessageAt: new Date(),
       },
     ]);
-  });
-
-  afterAll(async () => {
-    // Cleanup test data
-    if (inst1Id) await db.delete(chats).where(eq(chats.instanceId, inst1Id));
-    if (inst2Id) await db.delete(chats).where(eq(chats.instanceId, inst2Id));
-    if (inst3Id) await db.delete(chats).where(eq(chats.instanceId, inst3Id));
-    if (inst1Id) await db.delete(instances).where(eq(instances.id, inst1Id));
-    if (inst2Id) await db.delete(instances).where(eq(instances.id, inst2Id));
-    if (inst3Id) await db.delete(instances).where(eq(instances.id, inst3Id));
   });
 
   test('instanceIds: [inst-1] only returns chats from instance 1', async () => {

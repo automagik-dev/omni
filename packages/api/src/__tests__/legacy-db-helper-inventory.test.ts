@@ -6,22 +6,15 @@ import ts from 'typescript';
 
 const root = resolve(import.meta.dir, '../../../..');
 const helper = 'packages/api/src/__tests__/db-helper.ts';
-const LEGACY_DB_HELPER_CEILING = 14;
+const LEGACY_DB_HELPER_CEILING = 7;
 const LEGACY_DB_HELPER_ACKNOWLEDGED = [
   'packages/api/src/__tests__/api-key-enforcement.test.ts',
-  'packages/api/src/__tests__/chat-lid-consolidation.test.ts',
-  'packages/api/src/__tests__/chat-scoping.test.ts',
   'packages/api/src/__tests__/connector-liveness.test.ts',
   'packages/api/src/__tests__/event-persistence.test.ts',
-  'packages/api/src/__tests__/events.test.ts',
   'packages/api/src/__tests__/follow-up-e2e.test.ts',
   'packages/api/src/__tests__/follow-up-lifecycle.test.ts',
   'packages/api/src/__tests__/follow-up-sweeper.test.ts',
-  'packages/api/src/__tests__/identity-idempotent-concurrency.test.ts',
-  'packages/api/src/__tests__/message-count-accuracy.test.ts',
-  'packages/api/src/__tests__/multi-instance-isolation.test.ts',
   'packages/api/src/__tests__/pairing.test.ts',
-  'packages/api/src/__tests__/unified-messages.test.ts',
 ];
 
 function sourceFiles(directory: string): Map<string, string> {
