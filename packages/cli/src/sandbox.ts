@@ -259,6 +259,24 @@ function sandboxDatabaseUrl(state: SandboxState, password: string | null = null)
 /** Variables a child may inherit; everything else comes from the sandbox. */
 const INHERITED_ENV = ['HOME', 'USER', 'LOGNAME', 'PATH', 'SHELL', 'TMPDIR', 'LANG', 'LC_ALL', 'TZ'] as const;
 
+/** App-level channel config read from env; only the API child receives it (docs/cli/sandbox.md). */
+export const SANDBOX_CHANNEL_ENV_KEYS = [
+  'META_APP_ID',
+  'META_APP_SECRET',
+  'META_FLOWS_PUBLIC_BASE_URL',
+  'META_GRAPH_API_VERSION',
+  'META_VERIFY_TOKEN',
+] as const;
+
+function sandboxChannelEnv(parentEnv: Record<string, string | undefined>): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const key of SANDBOX_CHANNEL_ENV_KEYS) {
+    const value = parentEnv[key];
+    if (value !== undefined) env[key] = value;
+  }
+  return env;
+}
+
 /**
  * Base environment of every sandbox process. It starts empty and takes only
  * {@link INHERITED_ENV} from the caller, so a DATABASE_URL, PGHOST, PM2_HOME or
@@ -377,6 +395,7 @@ export function sandboxChildSpecs(
       cmd: [state.bun, join(modules, '@automagik', 'omni', 'dist', 'server', 'index.js')],
       env: {
         ...base,
+        ...sandboxChannelEnv(parentEnv),
         API_PORT: String(state.ports.api),
         API_HOST: '127.0.0.1',
         DATABASE_URL: sandboxDatabaseUrl(state, pgPassword),

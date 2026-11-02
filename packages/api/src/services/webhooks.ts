@@ -641,7 +641,6 @@ export class WebhookService {
     if (strict && !verdict.registered) {
       const errors = [`no enabled schema is registered for event type '${eventType}'`];
       await this.deadLetters?.createSchemaValidationFailure({
-        eventId: generateId(),
         eventType,
         subject: eventType,
         payload,
@@ -662,7 +661,6 @@ export class WebhookService {
     }
 
     await this.deadLetters?.createSchemaValidationFailure({
-      eventId: generateId(),
       eventType,
       subject: eventType,
       payload,

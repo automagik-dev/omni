@@ -46,7 +46,6 @@ import {
   agentUsageFromResult,
   checkPublishAllowed,
   createLogger,
-  generateId,
 } from '@omni/core';
 import type { Database, EventType } from '@omni/db';
 import { agents, omniEvents, processedEvents } from '@omni/db';
@@ -97,6 +96,7 @@ async function runChatlessCallAgent(
   const [agentRow] = await runTenantWorkDb(db, trustedTenantId, () =>
     scopedHandle(db)
       .select({
+        isActive: agents.isActive,
         name: agents.name,
         agentProviderId: agents.agentProviderId,
         agentType: agents.agentType,
@@ -109,6 +109,10 @@ async function runChatlessCallAgent(
       .limit(1),
   );
   if (!agentRow) throw new Error(`Agent not found: ${agentFkId}`);
+  if (!agentRow.isActive) {
+    log.info('Skipping call_agent: agent inactive', { agentId: agentFkId });
+    throw new Error(`Agent is inactive: ${agentFkId}`);
+  }
   if (!agentRow.agentProviderId) {
     throw new Error(`Agent ${agentFkId} has no agent provider configured (required for chatless call_agent)`);
   }
@@ -253,7 +257,6 @@ async function deadLetterRefusedEmission(
   try {
     await runTenantWorkDb(db, trustedTenantId, () =>
       services.deadLetters.createSchemaValidationFailure({
-        eventId: generateId(),
         eventType: input.eventType,
         subject: input.eventType,
         payload: input.payload,
@@ -415,6 +418,7 @@ export function buildAutomationEngineDeps(
       const [agentRow] = await runTenantWorkDb(db, trustedTenantId, () =>
         scopedHandle(db)
           .select({
+            isActive: agents.isActive,
             name: agents.name,
             agentProviderId: agents.agentProviderId,
             agentType: agents.agentType,
@@ -426,6 +430,10 @@ export function buildAutomationEngineDeps(
           .limit(1),
       );
       if (!agentRow) throw new Error(`Agent not found: ${agentFkId}`);
+      if (!agentRow.isActive) {
+        log.info('Skipping call_agent: agent inactive', { agentId: agentFkId });
+        throw new Error(`Agent is inactive: ${agentFkId}`);
+      }
 
       const providerAgentId =
         ((agentRow.metadata as Record<string, unknown> | null)?.providerAgentId as string | undefined) ??

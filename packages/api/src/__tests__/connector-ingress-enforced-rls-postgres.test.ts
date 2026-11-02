@@ -574,15 +574,15 @@ postgresDescribe('connector ingress under enforced RLS (real PostgreSQL)', () =>
   });
 
   test('a source-less schema refusal inherits authenticated scope under enforced RLS', async () => {
-    const dead = await inTenant(TENANT_A, () =>
-      services.deadLetters.createSchemaValidationFailure({
-        eventId: randomUUID(),
-        eventType: 'custom.refused',
-        subject: 'custom.refused',
-        payload: { metadata: { tenantId: TENANT_B } },
-        errors: ['invalid schema'],
-      }),
-    );
+    const refusalInput = {
+      eventId: randomUUID(),
+      eventType: 'custom.refused',
+      subject: 'custom.refused',
+      payload: { metadata: { tenantId: TENANT_B } },
+      errors: ['invalid schema'],
+    };
+    const dead = await inTenant(TENANT_A, () => services.deadLetters.createSchemaValidationFailure(refusalInput));
+    expect(dead.eventId).not.toBe(refusalInput.eventId);
     expect(dead.tenantId).toBe(TENANT_A);
     expect(await inTenant(TENANT_A, () => services.deadLetters.getById(dead.id))).toMatchObject({ tenantId: TENANT_A });
     await expect(inTenant(TENANT_B, () => services.deadLetters.getById(dead.id))).rejects.toThrow('not found');

@@ -24,6 +24,7 @@ import type { ChatlessRunContext } from '../../services/agent-runner';
 import { buildAutomationEngineDeps } from '../automation-actions';
 
 interface AgentRowShape {
+  isActive: boolean;
   name: string;
   agentProviderId: string | null;
   agentType: string;
@@ -114,6 +115,7 @@ function chatlessContext(overrides: Partial<AgentCallContext> = {}): AgentCallCo
 }
 
 const AGENT_ROW: AgentRowShape = {
+  isActive: true,
   name: 'triage',
   agentProviderId: 'prov-1',
   agentType: 'assistant',
