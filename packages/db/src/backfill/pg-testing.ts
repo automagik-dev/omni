@@ -73,16 +73,12 @@ export function provisionDatabase(base: string, fixture?: string): { database: s
   return { database, url };
 }
 
-export function dropDatabase(base: string, database: string): void {
-  runSqlOn(base, `DROP DATABASE IF EXISTS "${database}" WITH (FORCE);`);
-}
-
 /** Open a tooling connection to a provisioned database. Caller must `end()`. */
 export function connect(url: string): ToolingSql {
   return openToolingConnection(url);
 }
 
-/** Checked, loud sibling; the historical dropDatabase contract above stays unchanged. */
+/** Drop a suite database through the disposable-target guard; a failed DROP fails the suite. */
 export function dropDatabaseOrThrow(access: PgSuperAccess, database: string): void {
   const result = Bun.spawnSync({
     cmd: [

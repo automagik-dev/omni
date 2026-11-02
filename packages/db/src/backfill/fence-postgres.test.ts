@@ -20,7 +20,7 @@ import {
   postSnapshotDelta,
 } from './fence';
 import type { InstanceTenantMap } from './mapping-engine';
-import { connect, dropDatabase, provisionDatabase, superUrl } from './pg-testing';
+import { connect, dropDatabaseOrThrow, provisionDatabase, psqlBin, superUrl } from './pg-testing';
 
 const base = superUrl();
 const maybe = base.length > 0 ? describe : describe.skip;
@@ -66,7 +66,7 @@ maybe('G6 fence protocol — real PostgreSQL', () => {
       expect(later).toMatch(/^[0-9A-F]+\/[0-9A-F]+$/);
     } finally {
       await sql.end();
-      dropDatabase(base, database);
+      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
     }
   });
 
@@ -89,7 +89,7 @@ maybe('G6 fence protocol — real PostgreSQL', () => {
       expect(Number(total[0]!.n)).toBe(4); // 2 instances + 2 chats, but delta is only the 2 chats
     } finally {
       await sql.end();
-      dropDatabase(base, database);
+      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
     }
   });
 
@@ -110,7 +110,7 @@ maybe('G6 fence protocol — real PostgreSQL', () => {
       expect(result.plannedNotApplied).toBe(0);
     } finally {
       await sqlClean.end();
-      dropDatabase(base, clean.database);
+      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, clean.database);
     }
 
     const gapped = provisionDatabase(base, FIXTURE);
@@ -134,7 +134,7 @@ maybe('G6 fence protocol — real PostgreSQL', () => {
       expect(result.plannedNotApplied).toBeGreaterThan(0);
     } finally {
       await sqlGap.end();
-      dropDatabase(base, gapped.database);
+      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, gapped.database);
     }
   });
 
@@ -151,7 +151,7 @@ maybe('G6 fence protocol — real PostgreSQL', () => {
       expect(result.staleEpochWrites).toBeGreaterThan(0);
     } finally {
       await sql.end();
-      dropDatabase(base, database);
+      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
     }
   });
 });

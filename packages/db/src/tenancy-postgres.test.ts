@@ -17,6 +17,7 @@ import { readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { dropDatabaseOrThrow } from './backfill/pg-testing';
 import { createDatabaseFromTemplate, ensureSqlTemplate, sqlTemplateName } from './pg-migrated-template';
 import {
   COMPOSITE_FK_TARGETS,
@@ -115,7 +116,7 @@ function createDatabase(): { url: string; name: string } {
 }
 
 function dropDatabase(name: string): void {
-  runSqlOn(postgresUrl, `DROP DATABASE IF EXISTS "${name}" WITH (FORCE);`);
+  dropDatabaseOrThrow({ superUrl: postgresUrl, psqlBin }, name);
 }
 
 const TENANT_A = '11111111-1111-4111-8111-111111111111';

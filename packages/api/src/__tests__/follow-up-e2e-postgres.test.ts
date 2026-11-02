@@ -6,7 +6,7 @@
  *   → user-space automation (call_agent + send_message with promptOverride)
  *   → disarm on inbound customer reply.
  *
- * Skipped when `ENABLE_DB_TESTS` is unset (see db-helper).
+ * Runs on an isolated migrated clone supplied by pg-gate.
  *
  * Invariants under test:
  *   1. The sweeper fires `chat.idle_timeout` with `syntheticPrompt` + context.
@@ -21,8 +21,7 @@
  * @see issue #404 — Configurable Idle-Chat Follow-Up Sequences
  */
 
-// @ts-nocheck — integration test with dynamic db row shapes
-import { afterAll, afterEach, beforeAll, beforeEach, expect, mock, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from 'bun:test';
 import type {
   ActionDependencies,
   AgentCallContext,
@@ -38,7 +37,7 @@ import { chatFollowUpState, chats, instances } from '@omni/db';
 import { eq } from 'drizzle-orm';
 import { FollowUpLifecycleService } from '../services/follow-up-lifecycle';
 import { FollowUpSweeperService } from '../services/follow-up-sweeper';
-import { describeWithDb, getTestDb } from './db-helper';
+import { createMigratedTestDatabase } from './fixtures/pg-clone';
 
 const MS_PER_MINUTE = 60_000;
 
@@ -52,8 +51,14 @@ const config = (overrides: Partial<FollowUpSequenceConfig> = {}): FollowUpSequen
   ...overrides,
 });
 
-describeWithDb('Idle-chat follow-up (end-to-end)', () => {
+const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
+const postgresDescribe = superUrl ? describe : describe.skip;
+const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
+
+postgresDescribe('Idle-chat follow-up (end-to-end)', () => {
   let db: Database;
+  const clone = createMigratedTestDatabase({ superUrl, psqlBin });
+  afterAll(() => clone.teardown());
   let lifecycle: FollowUpLifecycleService;
   let sweeper: FollowUpSweeperService;
   let testInstanceId: string;
@@ -62,7 +67,7 @@ describeWithDb('Idle-chat follow-up (end-to-end)', () => {
   let eventBus: EventBus;
 
   beforeAll(async () => {
-    db = getTestDb();
+    db = clone.setup();
     const [instance] = await db
       .insert(instances)
       .values({
@@ -70,6 +75,7 @@ describeWithDb('Idle-chat follow-up (end-to-end)', () => {
         channel: 'whatsapp-baileys' as const,
       })
       .returning();
+    if (!instance) throw new Error('Expected the seeded fixture row');
     testInstanceId = instance.id;
 
     const [chat] = await db
@@ -82,6 +88,7 @@ describeWithDb('Idle-chat follow-up (end-to-end)', () => {
         name: 'Alice E2E',
       })
       .returning();
+    if (!chat) throw new Error('Expected the seeded fixture row');
     testChatId = chat.id;
   });
 
@@ -108,11 +115,6 @@ describeWithDb('Idle-chat follow-up (end-to-end)', () => {
 
   afterEach(async () => {
     await db.delete(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId));
-  });
-
-  afterAll(async () => {
-    await db.delete(chats).where(eq(chats.id, testChatId));
-    await db.delete(instances).where(eq(instances.id, testInstanceId));
   });
 
   test('arm → sweeper fires → call_agent(promptOverride) → send_message → disarm on reply', async () => {
@@ -226,12 +228,14 @@ describeWithDb('Idle-chat follow-up (end-to-end)', () => {
 
     // Both actions must succeed.
     expect(results).toHaveLength(2);
+    if (!results[0] || !results[1]) throw new Error('Expected both action results');
     expect(results[0].status).toBe('success');
     expect(results[1].status).toBe('success');
 
     // Agent was called with the rendered synthetic prompt (NOT the raw template).
     expect(receivedAgentCalls).toHaveLength(1);
     const agentCall = receivedAgentCalls[0];
+    if (!agentCall) throw new Error('Expected an agent call');
     expect(agentCall.ctx.messages).toHaveLength(1);
     expect(agentCall.ctx.messages[0]).toContain('Alice E2E');
     expect(agentCall.ctx.messages[0]).toContain('#0');
@@ -239,6 +243,7 @@ describeWithDb('Idle-chat follow-up (end-to-end)', () => {
 
     // send_message fired once with the AGENT'S response, not the synthetic prompt.
     expect(receivedSendCalls).toHaveLength(1);
+    if (!receivedSendCalls[0]) throw new Error('Expected a sent message');
     expect(receivedSendCalls[0].content).toBe('Hey Alice, just checking in — let me know if you still need help!');
     expect(receivedSendCalls[0].content).not.toContain('#0');
     expect(receivedSendCalls[0].content).not.toContain('Idle');
@@ -263,6 +268,7 @@ describeWithDb('Idle-chat follow-up (end-to-end)', () => {
     expect(disarmed?.payload.reason).toBe('customer_replied');
 
     const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    if (!row) throw new Error('Expected the seeded fixture row');
 
     expect(row.disarmReason).toBe('customer_replied');
     expect(row.nextFireAt).toBeNull();
@@ -298,6 +304,7 @@ describeWithDb('Idle-chat follow-up (end-to-end)', () => {
     expect(disarmed?.payload.reason).toBe('sequence_complete');
 
     const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    if (!row) throw new Error('Expected the seeded fixture row');
     expect(row.disarmReason).toBe('sequence_complete');
     expect(row.nextFireAt).toBeNull();
 

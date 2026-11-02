@@ -7,23 +7,15 @@
  *   further sweeps stay silent → a heartbeat resets the window → the next
  *   sweep emits `system.connector.recovered` once.
  *
- * Uses the `describeWithDb` harness (follow-up sweeper precedent): skips
- * cleanly unless ENABLE_DB_TESTS=true and the test database is reachable.
- * Migration 0057 is additive + idempotent, so `beforeAll` applies it from the
- * committed file — the suite never depends on the API having booted since the
- * columns landed.
+ * Uses a per-suite clone of the complete migrated schema supplied by pg-gate.
  */
 
-import { afterAll, beforeAll, expect, mock, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test';
 import type { EventBus } from '@omni/core';
 import type { Database, WebhookSource } from '@omni/db';
-import { deadLetterEvents, webhookSources } from '@omni/db';
-import { eq, sql } from 'drizzle-orm';
 import { DeadLetterService } from '../services/dead-letters';
 import { WebhookService } from '../services/webhooks';
-import { describeWithDb, getTestDb } from './db-helper';
+import { createMigratedTestDatabase } from './fixtures/pg-clone';
 
 const SOURCE_NAME = `liveness-it-${crypto.randomUUID().slice(0, 8)}`;
 
@@ -42,8 +34,14 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-describeWithDb('Connector liveness (integration, short windows)', () => {
+const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
+const postgresDescribe = superUrl ? describe : describe.skip;
+const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
+
+postgresDescribe('Connector liveness (integration, short windows)', () => {
   let db: Database;
+  const clone = createMigratedTestDatabase({ superUrl, psqlBin });
+  afterAll(() => clone.teardown());
   let service: WebhookService;
   let deadLetters: DeadLetterService;
   let published: ReturnType<typeof createCapturingBus>['published'];
@@ -61,36 +59,11 @@ describeWithDb('Connector liveness (integration, short windows)', () => {
   };
 
   beforeAll(async () => {
-    db = getTestDb();
-    // Additive + idempotent — brings a pre-0057 test database up to date.
-    const migration = readFileSync(
-      join(import.meta.dir, '..', '..', '..', 'db', 'drizzle', '0057_connector_lifecycle_contract.sql'),
-      'utf-8',
-    );
-    for (const statement of migration
-      .split('\n')
-      .filter((line) => !line.startsWith('--') && line.trim().length > 0)
-      .join('\n')
-      .split(';')
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0)) {
-      await db.execute(sql.raw(statement));
-    }
-
+    db = clone.setup();
     const capturing = createCapturingBus();
     published = capturing.published;
     service = new WebhookService(db, capturing.bus);
     deadLetters = new DeadLetterService(db, null);
-  });
-
-  afterAll(async () => {
-    if (!db) return;
-    await db
-      .delete(deadLetterEvents)
-      .where(
-        sql`${deadLetterEvents.eventType} = 'system.connector.stalled' AND ${deadLetterEvents.payload}->'payload'->>'sourceName' = ${SOURCE_NAME}`,
-      );
-    await db.delete(webhookSources).where(eq(webhookSources.name, SOURCE_NAME));
   });
 
   test('declaring a cadence arms supervision healthy', async () => {

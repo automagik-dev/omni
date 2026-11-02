@@ -17,7 +17,7 @@ import { runBackfill } from './engine';
 import { findBySource } from './ledger';
 import type { InstanceTenantMap } from './mapping-engine';
 import { personCloneId, runPersonCloning } from './person-clone';
-import { connect, dropDatabase, provisionDatabase, superUrl } from './pg-testing';
+import { connect, dropDatabaseOrThrow, provisionDatabase, psqlBin, superUrl } from './pg-testing';
 import { assertTenantUniquesPresent, replacePreservedGlobalUniques } from './rehearsal';
 
 const base = superUrl();
@@ -155,7 +155,7 @@ maybe('G6 person cloning — real PostgreSQL', () => {
       expect((await findBySource(sql, 'persons', { id: cloneB }))?.targetTenantId).toBe(TENANT_B);
     } finally {
       await sql.end();
-      dropDatabase(base, database);
+      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
     }
   });
 
@@ -208,7 +208,7 @@ maybe('G6 person cloning — real PostgreSQL', () => {
       );
     } finally {
       await sql.end();
-      dropDatabase(base, database);
+      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
     }
   });
 });

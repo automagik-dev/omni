@@ -1,24 +1,23 @@
 /**
  * Integration tests for FollowUpLifecycleService.
  *
- * Runs against a real Postgres (skipped when ENABLE_DB_TESTS is unset).
+ * Runs against a real Postgres clone supplied by pg-gate.
  * Exercises the arm → disarm transitions that the message-pipeline hooks
  * drive in production, plus the closest-wins config resolver.
  *
  * End-to-end path (arm → sweeper fires → disarm on reply) is exercised in
- * `follow-up-sweeper.test.ts` — this file focuses on the lifecycle service.
+ * `follow-up-sweeper-postgres.test.ts` — this file focuses on the lifecycle service.
  *
  * @see issue #404 — Configurable Idle-Chat Follow-Up Sequences
  */
 
-// @ts-nocheck — integration test with dynamic db row shapes (see sweeper test)
-import { afterAll, afterEach, beforeAll, beforeEach, expect, mock, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { EventBus, FollowUpSequenceConfig } from '@omni/core';
 import type { Database } from '@omni/db';
 import { chatFollowUpState, chats, instances } from '@omni/db';
 import { and, eq } from 'drizzle-orm';
 import { FollowUpLifecycleService, resetIdleTimeoutClaims } from '../services/follow-up-lifecycle';
-import { describeWithDb, getTestDb } from './db-helper';
+import { createMigratedTestDatabase } from './fixtures/pg-clone';
 
 const MS_PER_MINUTE = 60_000;
 
@@ -32,8 +31,14 @@ const config = (overrides: Partial<FollowUpSequenceConfig> = {}): FollowUpSequen
   ...overrides,
 });
 
-describeWithDb('FollowUpLifecycleService (integration)', () => {
+const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
+const postgresDescribe = superUrl ? describe : describe.skip;
+const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
+
+postgresDescribe('FollowUpLifecycleService (integration)', () => {
   let db: Database;
+  const clone = createMigratedTestDatabase({ superUrl, psqlBin });
+  afterAll(() => clone.teardown());
   let service: FollowUpLifecycleService;
   let testInstanceId: string;
   let testChatId: string;
@@ -41,7 +46,7 @@ describeWithDb('FollowUpLifecycleService (integration)', () => {
   let eventBus: EventBus;
 
   beforeAll(async () => {
-    db = getTestDb();
+    db = clone.setup();
     const [instance] = await db
       .insert(instances)
       .values({
@@ -49,6 +54,7 @@ describeWithDb('FollowUpLifecycleService (integration)', () => {
         channel: 'whatsapp-baileys' as const,
       })
       .returning();
+    if (!instance) throw new Error('Expected the seeded fixture row');
     testInstanceId = instance.id;
 
     const [chat] = await db
@@ -61,6 +67,7 @@ describeWithDb('FollowUpLifecycleService (integration)', () => {
         name: 'Alice Lifecycle',
       })
       .returning();
+    if (!chat) throw new Error('Expected the seeded fixture row');
     testChatId = chat.id;
   });
 
@@ -89,11 +96,6 @@ describeWithDb('FollowUpLifecycleService (integration)', () => {
     await db.delete(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId));
   });
 
-  afterAll(async () => {
-    await db.delete(chats).where(eq(chats.id, testChatId));
-    await db.delete(instances).where(eq(instances.id, testInstanceId));
-  });
-
   test('armForOutbound creates row with sequenceIndex=0 and emits follow_up.armed', async () => {
     const now = new Date();
     await service.armForOutbound({
@@ -109,11 +111,13 @@ describeWithDb('FollowUpLifecycleService (integration)', () => {
       .from(chatFollowUpState)
       .where(and(eq(chatFollowUpState.chatId, testChatId), eq(chatFollowUpState.instanceId, testInstanceId)))
       .limit(1);
+    if (!row) throw new Error('Expected the seeded fixture row');
 
     expect(row).toBeDefined();
     expect(row.sequenceIndex).toBe(0);
     expect(row.disarmReason).toBeNull();
     const expected = now.getTime() + 3 * MS_PER_MINUTE;
+    if (!row.nextFireAt) throw new Error('Expected a scheduled follow-up');
     expect(row.nextFireAt.getTime()).toBe(expected);
 
     const types = publishedEvents.map((e) => e.type);
@@ -176,8 +180,10 @@ describeWithDb('FollowUpLifecycleService (integration)', () => {
     });
 
     const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    if (!row) throw new Error('Expected the seeded fixture row');
 
     expect(row.sequenceIndex).toBe(0);
+    if (!row.nextFireAt) throw new Error('Expected a scheduled follow-up');
     expect(row.nextFireAt.getTime()).toBe(second.getTime() + 3 * MS_PER_MINUTE);
     expect(publishedEvents.map((e) => e.type)).toContain('follow_up.armed');
   });
@@ -201,6 +207,7 @@ describeWithDb('FollowUpLifecycleService (integration)', () => {
     });
 
     const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    if (!row) throw new Error('Expected the seeded fixture row');
 
     expect(row.disarmReason).toBe('customer_replied');
     expect(row.nextFireAt).toBeNull();
@@ -226,6 +233,7 @@ describeWithDb('FollowUpLifecycleService (integration)', () => {
     await service.disarm({ chatId: testChatId, instanceId: testInstanceId, reason: 'handoff' });
 
     const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    if (!row) throw new Error('Expected the seeded fixture row');
     expect(row.disarmReason).toBe('handoff');
   });
 
@@ -242,6 +250,7 @@ describeWithDb('FollowUpLifecycleService (integration)', () => {
     await service.disarm({ chatId: testChatId, instanceId: testInstanceId, reason: 'archived' });
 
     const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    if (!row) throw new Error('Expected the seeded fixture row');
     expect(row.disarmReason).toBe('archived');
   });
 
@@ -280,6 +289,7 @@ describeWithDb('FollowUpLifecycleService (integration)', () => {
     expect(publishedEvents).toHaveLength(0);
 
     const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    if (!row) throw new Error('Expected the seeded fixture row');
     // Original reason preserved — non-terminal second disarm must not overwrite.
     expect(row.disarmReason).toBe('customer_replied');
   });
@@ -313,6 +323,7 @@ describeWithDb('FollowUpLifecycleService (integration)', () => {
     await service.disarm({ chatId: testChatId, instanceId: testInstanceId, reason: 'handoff' });
 
     const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    if (!row) throw new Error('Expected the seeded fixture row');
     expect(row.disarmReason).toBe('handoff');
     expect(row.nextFireAt).toBeNull();
     expect(row.disarmedAt).not.toBeNull();
@@ -339,6 +350,7 @@ describeWithDb('FollowUpLifecycleService (integration)', () => {
     await service.disarm({ chatId: testChatId, instanceId: testInstanceId, reason: 'handoff' });
 
     const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    if (!row) throw new Error('Expected the seeded fixture row');
     expect(row.disarmReason).toBe('handoff');
     expect(row.nextFireAt).toBeNull();
   });
@@ -355,11 +367,13 @@ describeWithDb('FollowUpLifecycleService (integration)', () => {
     });
     await service.disarm({ chatId: testChatId, instanceId: testInstanceId, reason: 'session_cleared' });
     const [before] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    if (!before) throw new Error('Expected the seeded fixture row');
     publishedEvents.length = 0;
 
     await service.disarm({ chatId: testChatId, instanceId: testInstanceId, reason: 'handoff' });
 
     const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    if (!row) throw new Error('Expected the seeded fixture row');
     expect(row.disarmReason).toBe('session_cleared');
     expect(row.disarmedAt?.getTime()).toBe(before.disarmedAt?.getTime());
     expect(publishedEvents.map((e) => e.type)).not.toContain('follow_up.disarmed');
@@ -379,6 +393,7 @@ describeWithDb('FollowUpLifecycleService (integration)', () => {
     await service.disarm({ chatId: testChatId, instanceId: testInstanceId, reason: 'handoff' });
 
     const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    if (!row) throw new Error('Expected the seeded fixture row');
     expect(row.disarmReason).toBe('contact_closed');
     expect(publishedEvents.map((e) => e.type)).not.toContain('follow_up.disarmed');
   });
@@ -396,6 +411,7 @@ describeWithDb('FollowUpLifecycleService (integration)', () => {
     await service.disarm({ chatId: testChatId, instanceId: testInstanceId, reason: 'handoff' });
 
     const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    if (!row) throw new Error('Expected the seeded fixture row');
     expect(row.disarmReason).toBe('handoff');
     expect(row.nextFireAt).toBeNull();
     expect(publishedEvents.map((e) => e.type)).toContain('follow_up.disarmed');
@@ -411,11 +427,13 @@ describeWithDb('FollowUpLifecycleService (integration)', () => {
     });
     await service.disarm({ chatId: testChatId, instanceId: testInstanceId, reason: 'handoff' });
     const [before] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    if (!before) throw new Error('Expected the seeded fixture row');
     publishedEvents.length = 0;
 
     await service.disarm({ chatId: testChatId, instanceId: testInstanceId, reason: 'handoff' });
 
     const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    if (!row) throw new Error('Expected the seeded fixture row');
     expect(row.disarmReason).toBe('handoff');
     expect(row.disarmedAt?.getTime()).toBe(before.disarmedAt?.getTime());
     expect(publishedEvents).toHaveLength(0);
@@ -443,6 +461,7 @@ describeWithDb('FollowUpLifecycleService (integration)', () => {
     await service.disarm({ chatId: testChatId, instanceId: testInstanceId, reason: 'archived' });
 
     const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    if (!row) throw new Error('Expected the seeded fixture row');
     expect(row.disarmReason).toBe('archived');
     expect(row.nextFireAt).toBeNull();
     expect(publishedEvents.map((e) => e.type)).toContain('follow_up.disarmed');
@@ -466,6 +485,7 @@ describeWithDb('FollowUpLifecycleService (integration)', () => {
     await service.disarm({ chatId: testChatId, instanceId: testInstanceId, reason: 'session_cleared' });
 
     const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    if (!row) throw new Error('Expected the seeded fixture row');
     expect(row.disarmReason).toBe('session_cleared');
   });
 
@@ -487,6 +507,7 @@ describeWithDb('FollowUpLifecycleService (integration)', () => {
     await service.disarm({ chatId: testChatId, instanceId: testInstanceId, reason: 'window_expired' });
 
     const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    if (!row) throw new Error('Expected the seeded fixture row');
     expect(row.disarmReason).toBe('window_expired');
   });
 
@@ -506,6 +527,7 @@ describeWithDb('FollowUpLifecycleService (integration)', () => {
     await service.disarm({ chatId: testChatId, instanceId: testInstanceId, reason: 'archived' });
 
     const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    if (!row) throw new Error('Expected the seeded fixture row');
     expect(row.disarmReason).toBe('contact_closed');
   });
 
@@ -548,6 +570,7 @@ describeWithDb('FollowUpLifecycleService (integration)', () => {
     });
 
     const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    if (!row) throw new Error('Expected the seeded fixture row');
     expect(row.disarmReason).toBe('handoff');
     expect(row.nextFireAt).toBeNull();
     expect(publishedEvents.map((e) => e.type)).not.toContain('follow_up.armed');
@@ -591,6 +614,7 @@ describeWithDb('FollowUpLifecycleService (integration)', () => {
     });
 
     const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    if (!row) throw new Error('Expected the seeded fixture row');
     expect(row.disarmReason).toBe('session_cleared');
     expect(row.nextFireAt).toBeNull();
     expect(publishedEvents.map((e) => e.type)).not.toContain('follow_up.armed');
@@ -629,6 +653,7 @@ describeWithDb('FollowUpLifecycleService (integration)', () => {
     });
 
     const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    if (!row) throw new Error('Expected the seeded fixture row');
     expect(row.disarmReason).toBeNull();
     expect(row.nextFireAt).not.toBeNull();
     expect(publishedEvents.map((e) => e.type)).toContain('follow_up.armed');
@@ -658,6 +683,7 @@ describeWithDb('FollowUpLifecycleService (integration)', () => {
       });
 
       const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+      if (!row) throw new Error('Expected the seeded fixture row');
       expect(row.disarmReason).toBe(reason);
       expect(publishedEvents.map((e) => e.type)).not.toContain('follow_up.armed');
     }
@@ -694,6 +720,7 @@ describeWithDb('FollowUpLifecycleService (integration)', () => {
     });
 
     const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    if (!row) throw new Error('Expected the seeded fixture row');
     expect(row.disarmReason).toBeNull();
     expect(row.nextFireAt).not.toBeNull();
     expect(publishedEvents.map((e) => e.type)).toContain('follow_up.armed');
@@ -713,6 +740,7 @@ describeWithDb('FollowUpLifecycleService (integration)', () => {
     await service.touchInboundTimestamp({ chatId: testChatId, instanceId: testInstanceId, at: returnAt });
 
     const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    if (!row) throw new Error('Expected the seeded fixture row');
     expect(row.lastInboundCustomerMessageAt?.getTime()).toBe(returnAt.getTime());
     // Row stays terminally disarmed — touch must not clear the disarm reason.
     expect(row.disarmReason).toBe('session_cleared');
@@ -804,12 +832,10 @@ describeWithDb('FollowUpLifecycleService (integration)', () => {
 
     const rows = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId));
     expect(rows).toHaveLength(1);
+    if (!rows[0]) throw new Error('Expected the seeded follow-up row');
     expect(rows[0].disarmReason).toBeNull();
   });
 
-  // The `evaluateIdleTimeoutFreshness` gate assertions live in
-  // `follow-up-freshness-postgres.test.ts` — this file's `describeWithDb`
-  // harness skips unless ENABLE_DB_TESTS is set, which nothing sets, so the
-  // gate's coverage would never execute anywhere. The `*-postgres.test.ts`
-  // suite is discovered and forced to run by `scripts/pg-gate.ts` in CI.
+  // Freshness gate assertions live in `follow-up-freshness-postgres.test.ts`;
+  // both suites run against isolated databases in `scripts/pg-gate.ts`.
 });

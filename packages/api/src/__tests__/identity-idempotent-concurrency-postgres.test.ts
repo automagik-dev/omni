@@ -8,27 +8,33 @@
  *     exactly ONE platform_identities row and exactly ONE persons row, with
  *     every caller receiving the same identity + person and nobody throwing.
  *
- * Runs against the disposable test DB (describeWithDb / getTestDb). Real
+ * Runs against a disposable migrated clone from pg-gate. Real
  * DB-level concurrency is exercised via the connection pool: each
  * findOrCreateIdentity opens its own transaction on a separate pooled
  * connection, so the ON CONFLICT DO NOTHING blocking is the real thing.
  */
 
-import { afterEach, beforeAll, expect, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test';
 import type { Database } from '@omni/db';
 import { instances, persons, platformIdentities } from '@omni/db';
 import { and, eq, sql } from 'drizzle-orm';
 import { PersonService } from '../services/persons';
-import { describeWithDb, getTestDb } from './db-helper';
+import { createMigratedTestDatabase } from './fixtures/pg-clone';
 
-describeWithDb('Identity resolution idempotency (concurrency)', () => {
+const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
+const postgresDescribe = superUrl ? describe : describe.skip;
+const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
+
+postgresDescribe('Identity resolution idempotency (concurrency)', () => {
   let db: Database;
+  const clone = createMigratedTestDatabase({ superUrl, psqlBin });
+  afterAll(() => clone.teardown());
   let personService: PersonService;
   let instanceId: string;
   const createdInstanceIds: string[] = [];
 
   beforeAll(async () => {
-    db = getTestDb();
+    db = clone.setup();
     personService = new PersonService(db, null);
 
     const [instance] = await db
