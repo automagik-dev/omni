@@ -75,6 +75,7 @@ function activeGrantSourceClause(agentId: string): SQL {
   return sql`exists (select 1 from ${agentSourceGrants}
     where ${agentSourceGrants.agentId} = ${agentId}
       and ${agentSourceGrants.revokedAt} is null
+      and ${agentSourceGrants.tenantId} is not distinct from ${omniEvents.tenantId}
       and ${agentSourceGrants.sourceKind} = ${omniEvents.sourceKind}
       and ${agentSourceGrants.sourceId} = ${omniEvents.sourceId})`;
 }
@@ -83,6 +84,7 @@ function activeGrantAgentClause(agentId: string): SQL {
   return sql`exists (select 1 from ${agentSourceGrants}
     where ${agentSourceGrants.agentId} = ${agentId}
       and ${agentSourceGrants.revokedAt} is null
+      and ${agentSourceGrants.tenantId} is not distinct from ${omniEvents.tenantId}
       and ${agentSourceGrants.sourceKind} = 'agent'
       and ${agentSourceGrants.sourceId} = ${omniEvents.agentId})`;
 }
@@ -278,9 +280,13 @@ export function planSharedPull(
 
 /** State after leasing (from, to] to a puller (replacing `replaces` on redelivery). */
 export function claimLease(state: SharedLeaseState, lease: ConsumerLease, replaces?: string): SharedLeaseState {
+  const previous = state.leases.find((item) => item.id === replaces);
+  // A bounded reclaim may cover only the first page of its old range. Keep the
+  // unscanned tail expired, ahead of fresh work, with a separate ack identity.
+  const remainder = previous && lease.to < previous.to ? [{ ...previous, id: randomUUID(), from: lease.to }] : [];
   return {
     claimed: Math.max(state.claimed, lease.to),
-    leases: [...state.leases.filter((l) => l.id !== replaces), lease],
+    leases: [...state.leases.filter((l) => l.id !== replaces), ...remainder, lease],
   };
 }
 
@@ -407,7 +413,8 @@ export function canAccessConsumer(
 /** Mutations by restricted keys require a scoped consumer they own, also in SQL. */
 export function consumerAccessClause(caller?: ConsumerCaller): SQL | undefined {
   const tenant = caller?.tenantId ? eq(durableConsumers.tenantId, caller.tenantId) : undefined;
-  if (!caller || (caller.admin && caller.principal?.kind !== 'unresolved')) return tenant;
+  if (!caller || (caller.admin && caller.instanceIds === null && caller.principal?.kind !== 'unresolved'))
+    return tenant;
   const keyId = ownerKeyOf(caller);
   const legacy = and(
     isNull(durableConsumers.agentId),
@@ -942,7 +949,13 @@ export class EventConsumerService {
       if (!plan.reclaim && !last) return { consumer, lease: null, scanned };
 
       const lease: KeyedConsumerLease = plan.reclaim
-        ? { ...plan.reclaim, id: randomUUID(), expiresAt: now + leaseMs, keyId: caller?.keyId ?? null }
+        ? {
+            ...plan.reclaim,
+            id: randomUUID(),
+            to: last && scanned.length === PULL_MAX_LIMIT ? Number(last.journalSeq) : plan.reclaim.to,
+            expiresAt: now + leaseMs,
+            keyId: caller?.keyId ?? null,
+          }
         : {
             id: randomUUID(),
             from: plan.after,

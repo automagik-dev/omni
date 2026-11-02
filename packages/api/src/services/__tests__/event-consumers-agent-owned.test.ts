@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
 import { createEventBus } from '@omni/core';
 import { type DurableConsumer, createDbHandle } from '@omni/db';
-import { PgDialect } from 'drizzle-orm/pg-core';
+import { PgDialect, PgInsertBuilder } from 'drizzle-orm/pg-core';
 import { PostgresJsPreparedQuery } from 'drizzle-orm/postgres-js/session';
 import { isAdminTierKey } from '../../lib/key-agent';
 import {
@@ -19,6 +19,7 @@ const K = crypto.randomUUID();
 const T = crypto.randomUUID();
 const otherTenant = crypto.randomUUID();
 const holder = createDbHandle({ url: 'postgres://unused@127.0.0.1:1/unused' });
+const inserted = spyOn(PgInsertBuilder.prototype, 'values');
 const execute = spyOn(PostgresJsPreparedQuery.prototype, 'execute');
 const service = new EventConsumerService(holder.db);
 const previous = { ...process.env };
@@ -28,6 +29,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   execute.mockReset();
+  inserted.mockClear();
   for (const name of ['OMNI_PAIRED_AGENT_CONSUMERS', 'OMNI_MULTITENANCY_ENABLED']) {
     if (previous[name] === undefined) Reflect.deleteProperty(process.env, name);
     else process.env[name] = previous[name];
@@ -35,6 +37,7 @@ afterEach(() => {
 });
 afterAll(async () => {
   execute.mockRestore();
+  inserted.mockRestore();
   await holder.close();
 });
 function row(agentId: string | null): DurableConsumer {
@@ -157,7 +160,11 @@ for (const entry of cases) {
     execute.mockResolvedValueOnce([{ head: 0 }]);
     const created = { ...row(entry.created), scoped, instanceIds: scoped ? [I] : null, ownerKeyId: scoped ? K : null };
     execute.mockResolvedValueOnce([created]);
-    expect((await service.create({ name: 'test', eventType: 'custom.*' }, entry.caller)).agentId).toBe(entry.created);
+    await service.create({ name: 'test', eventType: 'custom.*' }, entry.caller);
+    expect(inserted.mock.calls.at(-1)?.[0]).toMatchObject({
+      agentId: entry.created,
+      tenantId: entry.caller?.tenantId ?? null,
+    });
   });
 }
 test('owner tier requires exactly wildcard scope and null instance restriction', () => {
@@ -208,4 +215,15 @@ test('an agent naming its own UUID in uppercase resolves to the canonical owner'
   expect(resolveConsumerAgentId({ name: 'x', eventType: 'custom.*', agentId: A.toUpperCase() }, cases[4]!.caller)).toBe(
     A,
   );
+});
+
+test('SQL admin bypass also requires an unrestricted instance set', () => {
+  const caller: ConsumerCaller = { keyId: K, instanceIds: [I], admin: true, principal: { kind: 'none' } };
+  const clause = consumerAccessClause(caller);
+  expect(clause).toBeDefined();
+  if (!clause) throw new Error('Restricted admin must have an access predicate');
+  const query = new PgDialect().sqlToQuery(clause);
+  expect(query.sql).toContain('"agent_id" is null');
+  expect(query.sql).toContain('"scoped" =');
+  expect(query.params).toContain(K);
 });

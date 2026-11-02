@@ -1,5 +1,5 @@
 /** C2 grant reads through real ingress claims, HTTP auth, and a migrated runtime-role database. */
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import { ConnectorRegistry } from '@omni/connector-sdk';
 import { setTenantSecretMasterKey } from '@omni/core';
@@ -18,6 +18,7 @@ import {
   instances,
   omniEvents,
   tenants,
+  webhookSources,
 } from '@omni/db';
 import {
   assertPgTestRole,
@@ -28,6 +29,7 @@ import {
   provisionMigratedDatabase,
 } from '@omni/db/pg-migrated-template';
 import { eq, sql } from 'drizzle-orm';
+import { PostgresJsSession } from 'drizzle-orm/postgres-js/session';
 import { z } from 'zod';
 import { createApp } from '../app';
 import { ApiKeyService, type CreateApiKeyResult } from '../services/api-keys';
@@ -240,10 +242,33 @@ pgDescribe('paired-agent active source grants (C2, real PostgreSQL)', () => {
     expect(response.status).toBe(200);
     return pageSchema.parse(await response.json());
   }
-  async function grant(kind: AgentGrantSourceKind, sourceId: string, agentId = A) {
+  async function sourceTenant(kind: AgentGrantSourceKind, sourceId: string) {
+    const read = {
+      connector: () =>
+        db.select({ tenantId: connectors.tenantId }).from(connectors).where(eq(connectors.id, sourceId)).limit(1),
+      connector_subscription: () =>
+        db
+          .select({ tenantId: connectorEventSubscriptions.tenantId })
+          .from(connectorEventSubscriptions)
+          .where(eq(connectorEventSubscriptions.id, sourceId))
+          .limit(1),
+      webhook_source: () =>
+        db
+          .select({ tenantId: webhookSources.tenantId })
+          .from(webhookSources)
+          .where(eq(webhookSources.id, sourceId))
+          .limit(1),
+      agent: () =>
+        db.select({ tenantId: omniEvents.tenantId }).from(omniEvents).where(eq(omniEvents.agentId, sourceId)).limit(1),
+    };
+    return (await read[kind]())[0]?.tenantId ?? null;
+  }
+  // The future writer stamps the SOURCE tenant, never the consuming agent's.
+  async function grant(kind: AgentGrantSourceKind, sourceId: string, agentId = A, tenantId?: string | null) {
+    const sourceTenantId = tenantId === undefined ? await sourceTenant(kind, sourceId) : tenantId;
     const [row] = await db
       .insert(agentSourceGrants)
-      .values({ agentId, sourceKind: kind, sourceId, approvedByKeyId: plain.key.id })
+      .values({ agentId, sourceKind: kind, sourceId, approvedByKeyId: plain.key.id, tenantId: sourceTenantId })
       .returning();
     if (!row) throw new Error('Grant fixture insert failed');
     return row.id;
@@ -447,4 +472,248 @@ pgDescribe('paired-agent active source grants (C2, real PostgreSQL)', () => {
       expect((await pull(name)).items.map((item) => item.id)).toEqual(all);
     });
   }
+  for (const agentOwned of [true, false]) {
+    test(`${agentOwned ? 'grant' : 'legacy'} reclaim caps a >500-match expired range, preserves its remainder before fresh rows and never skips or duplicates a page`, async () => {
+      const eventType: `custom.${string}` = `custom.cap.${randomUUID()}`;
+      if (agentOwned) await grant('connector', C);
+      const key = agentOwned ? a : plain;
+      const name = await create(eventType, true, key);
+      const values = Array.from({ length: 1003 }, () => ({
+        channel: 'internal' as const,
+        eventType,
+        journalReady: true,
+        ...(agentOwned
+          ? {
+              sourceKind: 'connector' as const,
+              sourceId: C,
+              metadata: { source: 'connector', connectorId: C, subscriptionIds: [typedS] },
+            }
+          : { instanceId: IA }),
+      }));
+      const events = await db.insert(omniEvents).values(values).returning();
+      events.sort((left, right) => Number(left.journalSeq) - Number(right.journalSeq));
+      const end = Number(events.at(-1)?.journalSeq);
+      const expiredId = randomUUID();
+      await db
+        .update(durableConsumers)
+        .set({ leaseState: { claimed: end, leases: [{ id: expiredId, from: 0, to: end, expiresAt: 0 }] } })
+        .where(eq(durableConsumers.name, name));
+      const freshValue = values[0];
+      if (!freshValue) throw new Error('Missing fresh fixture');
+      const [fresh] = await db.insert(omniEvents).values(freshValue).returning();
+      if (!fresh) throw new Error('Missing fresh row');
+      const first = await pull(name, key, '?limit=500');
+      expect(first.items.map((item) => item.id)).toEqual(events.slice(0, 500).map((item) => item.id));
+      expect(first.cursor).toBe(Number(events[499]?.journalSeq));
+      const state = (await consumers.getByName(name)).leaseState;
+      const remainder = state?.leases.find((lease) => lease.from === first.cursor);
+      expect(remainder).toMatchObject({ to: end, expiresAt: 0 });
+      expect(remainder?.id).not.toBe(expiredId);
+      expect((await request(key, `/${name}/ack`, 'POST', { leaseId: expiredId })).status).toBe(400);
+      expect((await request(key, `/${name}/ack`, 'POST', { leaseId: first.leaseId })).status).toBe(200);
+      const second = await pull(name, key, '?limit=500');
+      expect(second.items.map((item) => item.id)).toEqual(events.slice(500, 1000).map((item) => item.id));
+      // Only the delivered second page expires; the still-expired tail remains independently claimable.
+      const secondState = (await consumers.getByName(name)).leaseState;
+      if (!secondState) throw new Error('Missing split state');
+      await db
+        .update(durableConsumers)
+        .set({
+          leaseState: {
+            ...secondState,
+            leases: secondState.leases.map((lease) => ({
+              ...lease,
+              expiresAt: lease.id === second.leaseId ? 0 : lease.expiresAt,
+            })),
+          },
+        })
+        .where(eq(durableConsumers.name, name));
+      // planSharedPull selects expired leases in stored order: the remainder precedes fresh rows.
+      const third = await pull(name, key, '?limit=500');
+      expect(third.items.map((item) => item.id)).toEqual(events.slice(1000).map((item) => item.id));
+      expect((await request(key, `/${name}/ack`, 'POST', { leaseId: third.leaseId })).status).toBe(200);
+      const retry = await pull(name, key, '?limit=500');
+      expect(retry.items.map((item) => item.id)).toEqual(second.items.map((item) => item.id));
+      expect(retry.leaseId).not.toBe(second.leaseId);
+      expect((await request(key, `/${name}/ack`, 'POST', { leaseId: second.leaseId })).status).toBe(400);
+      expect((await request(key, `/${name}/ack`, 'POST', { leaseId: retry.leaseId })).status).toBe(200);
+      const next = await pull(name, key, '?limit=500');
+      expect(next.items.map((item) => item.id)).toEqual([fresh.id]);
+      expect((await request(key, `/${name}/ack`, 'POST', { leaseId: next.leaseId })).status).toBe(200);
+      const delivered = [...first.items, ...second.items, ...third.items, ...next.items].map((item) => item.id);
+      expect(delivered).toEqual([...events.map((event) => event.id), fresh.id]);
+      expect(new Set(delivered).size).toBe(1004);
+      expect((await pull(name, key)).items).toEqual([]);
+      expect((await consumers.getByName(name)).leaseState?.leases).toEqual([]);
+    }, 30_000);
+  }
+
+  async function tenantEvent(kind: 'connector' | 'agent') {
+    if (kind === 'connector') return typed();
+    return (
+      await db
+        .insert(omniEvents)
+        .values({ agentId: B, channel: 'internal', eventType: 'custom.tenant.agent', journalReady: true })
+        .returning()
+    )[0];
+  }
+  async function expireAll(name: string) {
+    const state = (await consumers.getByName(name)).leaseState;
+    if (!state) throw new Error('Missing reclaim state');
+    await db
+      .update(durableConsumers)
+      .set({ leaseState: { ...state, leases: state.leases.map((lease) => ({ ...lease, expiresAt: 0 })) } })
+      .where(eq(durableConsumers.name, name));
+  }
+
+  for (const kind of ['connector', 'agent'] as const) {
+    for (const mismatch of ['other', 'null'] as const) {
+      const tenantId = mismatch === 'other' ? randomUUID() : null;
+      test(`${kind} grants require the source tenant: ${mismatch}/T never delivers on pull, shared ack, stream or expired reclaim`, async () => {
+        if (kind === 'agent') await db.update(agents).set({ tenantId: T }).where(eq(agents.id, B));
+        try {
+          const event = await tenantEvent(kind);
+          if (!event) throw new Error('Missing tenant row');
+          expect(event.tenantId).toBe(T);
+          const approval = await grant(kind, kind === 'connector' ? C : B, A, tenantId);
+          const name = await create();
+          const shared = await create('*', true);
+          expect((await pull(name)).items).toEqual([]);
+          expect((await pull(shared)).items).toEqual([]);
+          expect((await consumers.scanForStream(name, 0, { tenantId: null, caller: caller() })).items).toEqual([]);
+          await db.update(agentSourceGrants).set({ tenantId: T }).where(eq(agentSourceGrants.id, approval));
+          expect((await pull(name)).items.map((item) => item.id)).toEqual([event.id]);
+          expect(
+            (await consumers.scanForStream(name, 0, { tenantId: null, caller: caller() })).items.map((item) => item.id),
+          ).toEqual([event.id]);
+          const leased = await pull(shared);
+          expect(leased.items.map((item) => item.id)).toEqual([event.id]);
+          expect((await request(a, `/${shared}/ack`, 'POST', { leaseId: leased.leaseId })).status).toBe(200);
+          const reclaim = await create('*', true);
+          const original = await pull(reclaim);
+          expect(original.items.map((item) => item.id)).toEqual([event.id]);
+          await expireAll(reclaim);
+          await db.update(agentSourceGrants).set({ tenantId }).where(eq(agentSourceGrants.id, approval));
+          expect((await pull(reclaim)).items).toEqual([]);
+          expect((await consumers.getByName(reclaim)).leaseState?.leases).toEqual([]);
+          expect((await consumers.scanForStream(name, 0, { tenantId: null, caller: caller() })).items).toEqual([]);
+        } finally {
+          if (kind === 'agent') await db.update(agents).set({ tenantId: null }).where(eq(agents.id, B));
+        }
+      });
+    }
+  }
+
+  test('single-tenant normal source create and receive persist NULL source/event/grant tenants and deliver on all paths including reclaim', async () => {
+    const source = await webhooks.create({ name: `normal-${randomUUID()}` });
+    expect(source.tenantId).toBeNull();
+    const result = await webhooks.receive(source.name, { proof: 'normal ingress' }, {});
+    const event = await row(result.eventId);
+    expect(event.tenantId).toBe(source.tenantId);
+    const approval = await grant('webhook_source', source.id);
+    const [stored] = await db.select().from(agentSourceGrants).where(eq(agentSourceGrants.id, approval));
+    expect(stored?.tenantId).toBe(source.tenantId);
+    const name = await create();
+    expect((await pull(name)).items.map((item) => item.id)).toEqual([event.id]);
+    expect(
+      (await consumers.scanForStream(name, 0, { tenantId: null, caller: caller() })).items.map((item) => item.id),
+    ).toEqual([event.id]);
+    const shared = await create('*', true);
+    const first = await pull(shared);
+    const state = (await consumers.getByName(shared)).leaseState;
+    if (!state) throw new Error('Missing lease');
+    await db
+      .update(durableConsumers)
+      .set({ leaseState: { ...state, leases: state.leases.map((lease) => ({ ...lease, expiresAt: 0 })) } })
+      .where(eq(durableConsumers.name, shared));
+    const again = await pull(shared);
+    expect(again.items.map((item) => item.id)).toEqual(first.items.map((item) => item.id));
+    expect(again.items.map((item) => item.id)).toEqual([event.id]);
+    expect((await request(a, `/${shared}/ack`, 'POST', { leaseId: again.leaseId })).status).toBe(200);
+    expect((await pull(shared)).items).toEqual([]);
+  });
+
+  test('NULL-tenant producing-agent grant delivers NULL rows through pull, stream, shared ack and expired reclaim', async () => {
+    const [event] = await db
+      .insert(omniEvents)
+      .values({ agentId: B, channel: 'internal', eventType: 'custom.null.producer', journalReady: true })
+      .returning();
+    if (!event) throw new Error('Missing producing-agent row');
+    expect(event.tenantId).toBeNull();
+    const approval = await grant('agent', B);
+    const [stored] = await db.select().from(agentSourceGrants).where(eq(agentSourceGrants.id, approval));
+    expect(stored?.tenantId).toBeNull();
+    const name = await create();
+    expect((await pull(name)).items.map((item) => item.id)).toEqual([event.id]);
+    expect(
+      (await consumers.scanForStream(name, 0, { tenantId: null, caller: caller() })).items.map((item) => item.id),
+    ).toEqual([event.id]);
+    const shared = await create('*', true);
+    const first = await pull(shared);
+    expect(first.items.map((item) => item.id)).toEqual([event.id]);
+    await expireAll(shared);
+    const again = await pull(shared);
+    expect(again.items.map((item) => item.id)).toEqual([event.id]);
+    expect(again.leaseId).not.toBe(first.leaseId);
+    expect((await request(a, `/${shared}/ack`, 'POST', { leaseId: again.leaseId })).status).toBe(200);
+    expect((await pull(shared)).items).toEqual([]);
+  });
+
+  test('single-tenant typed normal ingress stamps the persisted source tenant; writer-stamped grant delivers end to end', async () => {
+    const [source] = await db.select().from(connectors).where(eq(connectors.id, C));
+    if (!source) throw new Error('Missing persisted source');
+    const event = await typed();
+    const approval = await grant('connector', C);
+    const [stored] = await db.select().from(agentSourceGrants).where(eq(agentSourceGrants.id, approval));
+    expect(process.env.OMNI_MULTITENANCY_ENABLED).toBeUndefined();
+    expect(event.tenantId).toBe(source.tenantId);
+    expect(stored?.tenantId).toBe(source.tenantId);
+    expect(source.tenantId).not.toBeNull();
+    expect((await pull(await create())).items.map((item) => item.id)).toEqual([event.id]);
+  });
+  test('EXPLAIN of the real grant scan retains the three G1 journal index paths with tenant equality', async () => {
+    await typed();
+    await db.insert(omniEvents).values([
+      { channel: 'internal', eventType: TYPED_EVENT, instanceId: IA, journalReady: true },
+      { channel: 'internal', eventType: TYPED_EVENT, agentId: B, journalReady: true },
+      ...Array.from({ length: 2500 }, (): typeof omniEvents.$inferInsert => ({
+        channel: 'internal' as const,
+        eventType: TYPED_EVENT,
+        sourceKind: 'connector' as const,
+        sourceId: otherC,
+        metadata: { source: 'connector', connectorId: otherC, subscriptionIds: [] },
+        journalReady: true,
+      })),
+    ]);
+    await grant('connector', C);
+    await grant('agent', B);
+    const name = await create(TYPED_EVENT);
+    const prepared = spyOn(PostgresJsSession.prototype, 'prepareQuery');
+    let query: { sql: string; params: unknown[] } | undefined;
+    try {
+      await consumers.scanForStream(name, 0, { tenantId: null, caller: caller() });
+      query = prepared.mock.calls
+        .map(([statement]) => statement)
+        .find((statement) => statement.sql.includes('union all'));
+    } finally {
+      prepared.mockRestore();
+    }
+    if (!query) throw new Error('Missing real UNION scan');
+    expect(query.sql).toContain('is not distinct from');
+    const explain = sql`EXPLAIN (FORMAT JSON) `;
+    for (const [index, part] of query.sql.split(/\$(\d+)/).entries()) {
+      explain.append(index % 2 === 0 ? sql.raw(part) : sql`${query.params[Number(part) - 1]}`);
+    }
+    const plan = await db.transaction(async (tx) => {
+      await tx.execute(sql`SET LOCAL enable_seqscan = off`);
+      return tx.execute(explain);
+    });
+    const rendered = JSON.stringify(plan);
+    for (const index of [
+      'omni_events_instance_type_seq_idx',
+      'omni_events_source_type_seq_idx',
+      'omni_events_agent_type_seq_idx',
+    ])
+      expect(rendered).toContain(index);
+  }, 15_000);
 });
