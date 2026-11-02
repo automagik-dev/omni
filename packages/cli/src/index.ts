@@ -3,7 +3,7 @@
  * Omni CLI - LLM-optimized command-line interface
  *
  * @example
- * omni auth login --api-key sk_xxx
+ * omni auth login --api-key-stdin < /secure/path/omni-api-key
  * omni instances list
  * omni send --instance abc --to +1234567890 --text "Hello"
  */
@@ -484,7 +484,7 @@ const COMMANDS: CommandDef[] = [
     create: createInstallCommand,
     category: 'standard',
     helpGroup: 'System',
-    helpDescription: 'Interactive setup wizard (bootstrap Omni server)',
+    helpDescription: 'Bootstrap Omni server (non-interactive, reinstall-safe)',
   },
   {
     create: createSandboxCommand,

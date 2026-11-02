@@ -22,19 +22,52 @@ export async function createBot(instanceId: string, token: string): Promise<Tele
   }
 
   // Lazy-load grammy to keep modules importable in tests without loading grammy.
-  const { Bot } = await import('grammy');
+  const { Bot, InputFile } = await import('grammy');
   const bot = new Bot(token, {
     client: {
-      // Above grammY's 30s long poll; its 500s default hides dead connections.
-      timeoutSeconds: 45,
-      // A fresh connection avoids reusing sockets discarded by an idle NAT.
+      // Keep grammY's long upload budget for multipart media.
+      timeoutSeconds: 500,
+      // node-fetch falls back to the global keep-alive agent, which retires idle sockets.
       baseFetchConfig: { agent: false },
     },
-  }) as unknown as TelegramBotLike;
-  bots.set(instanceId, bot);
+  });
+
+  function hasUpload(value: unknown): boolean {
+    return (
+      value instanceof InputFile ||
+      (typeof value === 'object' && value !== null && Object.values(value).some(hasUpload))
+    );
+  }
+
+  bot.api.config.use(async (prev, method, payload, signal) => {
+    if (hasUpload(payload)) return prev(method, payload, signal);
+
+    // Short calls, including the 30s getUpdates long poll, have a 45s deadline.
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    if (signal?.aborted) abort();
+    else signal?.addEventListener('abort', abort, { once: true });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        reject(new Error(`Telegram ${method} timed out after 45 seconds`));
+        controller.abort();
+      }, 45000);
+    });
+    try {
+      // grammY's Node types use abort-controller; its runtime also accepts native signals.
+      const requestSignal = controller.signal as unknown as NonNullable<typeof signal>;
+      return await Promise.race([prev(method, payload, requestSignal), deadline]);
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
+    }
+  });
+  const wrapped = bot as unknown as TelegramBotLike;
+  bots.set(instanceId, wrapped);
 
   log.info('Created grammy Bot', { instanceId });
-  return bot;
+  return wrapped;
 }
 
 /**

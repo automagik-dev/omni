@@ -9,7 +9,7 @@ import { z } from '../../lib/zod-openapi';
  * Health check status
  */
 export const HealthCheckSchema = z.object({
-  status: z.enum(['ok', 'error']).openapi({ description: 'Check status' }),
+  status: z.enum(['ok', 'degraded', 'error']).openapi({ description: 'Check status' }),
   latency: z.number().optional().openapi({ description: 'Latency in milliseconds' }),
   error: z.string().optional().openapi({ description: 'Error message if status is error' }),
   details: z.record(z.string(), z.unknown()).optional().openapi({ description: 'Additional details' }),
@@ -26,6 +26,9 @@ export const HealthResponseSchema = z.object({
   checks: z.object({
     database: HealthCheckSchema,
     nats: HealthCheckSchema,
+    deadLetters: HealthCheckSchema.optional().openapi({
+      description: 'Queue depth check; an unavailable read reports degraded without changing HTTP status or readiness',
+    }),
     agentKeyRepair: HealthCheckSchema.optional().openapi({
       description:
         'Startup agent key repair status; a repair-only failure returns HTTP 200 with degraded status and retries next boot',
