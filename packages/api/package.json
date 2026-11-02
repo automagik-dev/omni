@@ -12,10 +12,6 @@
       "types": "./src/app.ts",
       "default": "./src/app.ts"
     },
-    "./trpc": {
-      "types": "./src/trpc/index.ts",
-      "default": "./src/trpc/index.ts"
-    },
     "./admin": {
       "types": "./src/admin.ts",
       "default": "./src/admin.ts"
@@ -50,7 +46,6 @@
     "@opentelemetry/sdk-node": "^0.217.0",
     "@opentelemetry/semantic-conventions": "^1.37.0",
     "@sentry/bun": "^10.43.0",
-    "@trpc/server": "^11.0.0-rc.608",
     "better-auth": "1.7.7",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.6.17",

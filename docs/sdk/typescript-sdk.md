@@ -474,29 +474,19 @@ const omni = new OmniClient({
 });
 ```
 
-### Using with tRPC
+### REST type safety
 
-For type-safe internal use:
+The SDK uses OpenAPI-generated types over the REST API for both internal and external clients:
 
 ```typescript
-import { createTRPCProxyClient, httpBatchLink } from '@trpc/client';
-import type { AppRouter } from '@omni/api';
+import { createOmniClient } from '@omni/sdk';
 
-const trpc = createTRPCProxyClient<AppRouter>({
-  links: [
-    httpBatchLink({
-      url: 'http://localhost:8882/trpc',
-      headers: {
-        'x-api-key': process.env.OMNI_API_KEY,
-      },
-    }),
-  ],
+const omni = createOmniClient({
+  baseUrl: 'http://localhost:8882',
+  apiKey: process.env.OMNI_API_KEY,
 });
 
-// Fully typed!
-const instances = await trpc.instances.list.query({
-  channel: ['whatsapp-baileys'],
-});
+const instances = await omni.instances.list();
 ```
 
 ## Examples

@@ -1,4 +1,4 @@
-/** Shared provider response formatting for the REST and tRPC APIs. */
+/** Provider response formatting for the REST API. */
 import type { AgentProvider } from '@omni/db';
 
 const SENSITIVE_KEY_PATTERN = /private|secret|password|token|apikey|api_key/i;

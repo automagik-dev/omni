@@ -25,7 +25,7 @@ reviews:
     - path: "packages/core/**"
       instructions: "This is the shared core package. Changes here affect all other packages. Check for breaking changes to exported types and schemas."
     - path: "packages/api/**"
-      instructions: "Hono + tRPC API. Verify OpenAPI docs are updated for route changes. Check Zod validation on external inputs. Events must be published for state changes."
+      instructions: "Hono REST + OpenAPI. Verify OpenAPI docs are updated for route changes. Check Zod validation on external inputs. Events must be published for state changes."
     - path: "packages/channel-*/**"
       instructions: "Channel plugins must be isolated — no core logic here. Verify they implement the ChannelPlugin interface and emit proper events."
     - path: "packages/db/**"
