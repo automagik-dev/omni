@@ -240,6 +240,61 @@ function deadViolations(files: Map<string, string>): string[] {
   );
 }
 
+/**
+ * Raw DROP DATABASE rule. Scope: discovered *-postgres.test.ts suites, tracked
+ * non-test TypeScript under __tests__/ or tests/ (fixtures), and the drop helper
+ * module. A drop must go through dropDatabaseOrThrow, whose own statement is the
+ * only exempt literal. The acknowledged sites below run the statement themselves
+ * and throw on failure; the found sites must equal this list, one entry per site.
+ * The provisioning harness (pg-migrated-template.ts) is outside this scope.
+ */
+const dropHelperModule = 'packages/db/src/backfill/pg-testing.ts';
+const dropHelper = 'dropDatabaseOrThrow';
+const dropStatement = /\bDROP\s+DATABASE\b/i;
+const exitChecked = 'spawnSync exit status checked; throws stderr';
+const checkedExitDrops: readonly (readonly [file: string, reason: string])[] = [
+  ['packages/api/src/__tests__/connector-hooks-postgres.test.ts', exitChecked],
+  ['packages/api/src/__tests__/event-consumers-tenant-enforced-postgres.test.ts', exitChecked],
+  ['packages/api/src/__tests__/journal-consumer-source-postgres.test.ts', exitChecked],
+  ['packages/api/src/__tests__/paired-agent-consumers-postgres.test.ts', exitChecked],
+  ['packages/api/src/__tests__/paired-agent-grants-postgres.test.ts', exitChecked],
+  ['packages/api/src/__tests__/paired-agent-rollback-postgres.test.ts', exitChecked],
+  ['packages/api/src/__tests__/provenance-stamp-postgres.test.ts', exitChecked],
+  ['packages/api/src/__tests__/webhook-event-ownership-postgres.test.ts', exitChecked],
+  ['packages/api/src/__tests__/webhook-tenant-ingress-postgres.test.ts', exitChecked],
+  ['packages/api/src/plugins/__tests__/agent-dispatcher-active-target-postgres.test.ts', exitChecked],
+  ['packages/api/src/routes/v2/__tests__/instances-agent-key-postgres.test.ts', exitChecked],
+  ['packages/api/src/routes/v2/__tests__/routes-agent-key-postgres.test.ts', exitChecked],
+  ['packages/api/src/services/__tests__/agent-activation-postgres.test.ts', exitChecked],
+  ['packages/api/src/services/__tests__/agent-key-lifecycle-postgres.test.ts', exitChecked],
+  ['packages/api/src/services/__tests__/agent-key-reconciliation-postgres.test.ts', exitChecked],
+  ['packages/api/src/services/__tests__/platform-bootstrap-postgres.test.ts', 'awaited db.execute rejects on error'],
+  ['packages/db/src/paired-agent-schema-postgres.test.ts', 'fixtureSql throws on a non-zero psql exit'],
+];
+
+function dropScope(files: Map<string, string>, discovered: Set<string>): Map<string, string> {
+  const support = (file: string) =>
+    /\.[cm]?tsx?$/.test(file) && !testSuffix.test(file) && /(^|\/)(__tests__|tests)\//.test(file);
+  return new Map([...files].filter(([file]) => discovered.has(file) || file === dropHelperModule || support(file)));
+}
+
+/** One entry per DROP DATABASE literal outside the helper, sorted by file. */
+function rawDrops(files: Map<string, string>): string[] {
+  const found: string[] = [];
+  for (const [file, text] of files) {
+    if (!dropStatement.test(text)) continue;
+    const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+    const visit = (node: ts.Node): void => {
+      if (file === dropHelperModule && ts.isFunctionDeclaration(node) && node.name?.text === dropHelper) return;
+      if ((ts.isStringLiteralLike(node) || ts.isTemplateExpression(node)) && dropStatement.test(node.getText(source)))
+        found.push(file);
+      else ts.forEachChild(node, visit);
+    };
+    visit(source);
+  }
+  return found.sort();
+}
+
 function trackedFiles(): Map<string, string> {
   const paths = execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' }).split('\0').filter(Boolean);
   return new Map(paths.map((file) => [file, readFileSync(join(root, file), 'utf8')]));
@@ -318,6 +373,36 @@ test('suffix alone cannot put a suite outside the real discovery roots or inside
   for (const file of ['scripts/x-postgres.test.ts', 'packages/dist/x-postgres.test.ts']) {
     expect(violations(new Map([[file, '']]), new Set())).toEqual([`${file}: outside pg-gate discovery`]);
   }
+});
+
+test('postgres suites and test support drop databases only through dropDatabaseOrThrow or a checked exit', () => {
+  const discovered = new Set(POSTGRES_SUITE_ROOTS.flatMap(discover));
+  const scope = dropScope(trackedFiles(), discovered);
+  expect(scope.has(dropHelperModule)).toBe(true);
+  expect(rawDrops(scope)).toEqual(checkedExitDrops.map(([file]) => file).sort());
+});
+
+test('a raw drop with an ignored result is found; the helper statement and comments are not', () => {
+  const file = 'packages/x-postgres.test.ts';
+  const ignored = 'afterAll(() => { runSqlOn(superUrl, `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`); });';
+  expect(rawDrops(new Map([[file, ignored]]))).toEqual([file]);
+  expect(rawDrops(new Map([[file, `${ignored}\nrunSqlOn(superUrl, 'drop database x');`]]))).toEqual([file, file]);
+  const helper = 'function dropDatabaseOrThrow(a, d) { run(`DROP DATABASE IF EXISTS "${d}"`); }';
+  expect(rawDrops(new Map([[dropHelperModule, helper]]))).toEqual([]);
+  expect(rawDrops(new Map([[file, helper]]))).toEqual([file]);
+  expect(
+    rawDrops(new Map([[file, '// DROP DATABASE is never written here\ndropDatabaseOrThrow(access, name);']])),
+  ).toEqual([]);
+  const scoped = dropScope(
+    new Map([
+      [file, ''],
+      ['packages/api/src/__tests__/fixtures/pg-clone.ts', ''],
+      ['packages/db/src/tenancy-roles.test.ts', ''],
+      ['packages/db/src/pg-migrated-template.ts', ''],
+    ]),
+    new Set([file]),
+  );
+  expect([...scoped.keys()]).toEqual([file, 'packages/api/src/__tests__/fixtures/pg-clone.ts']);
 });
 
 test('dead-name scanning includes docs and config; only .genie is exempt', () => {
