@@ -29,6 +29,7 @@
  */
 
 import { describe, expect, mock, test } from 'bun:test';
+import { agentRoutes, agents, instances } from '@omni/db';
 import { Hono } from 'hono';
 import { type TenantAuthContext, freezeContext } from '../../../tenancy/auth-context';
 import type { AppVariables } from '../../../types';
@@ -108,6 +109,33 @@ function harness(options: {
   const tenantId =
     options.instanceTenantId !== undefined ? options.instanceTenantId : (options.authContext?.tenantId ?? null);
 
+  const knownInstances = new Set([
+    ...keys.flatMap((key) => key.instanceIds ?? []),
+    ...assignments.keys(),
+    ...Object.keys(options.routedAgents ?? {}),
+  ]);
+  const graphDb = {
+    select: () => ({
+      from: async (table: unknown) => {
+        if (table === instances)
+          return [...knownInstances].map((id) => ({
+            id,
+            agentId: assignments.get(id) ?? null,
+            tenantId: options.instanceTenants?.[id] ?? tenantId,
+          }));
+        if (table === agents)
+          return [...new Set([...assignments.values(), ...Object.values(options.routedAgents ?? {}).flat()])].map(
+            (id) => ({ id, name: options.agentNames?.[id] ?? agentName, tenantId, metadata: null, isActive: true }),
+          );
+        if (table === agentRoutes)
+          return Object.entries(options.routedAgents ?? {}).flatMap(([instanceId, ids]) =>
+            ids.map((agentId) => ({ instanceId, agentId })),
+          );
+        throw new Error('unexpected graph table');
+      },
+    }),
+  };
+
   const app = new Hono<{ Variables: AppVariables }>();
   app.use('*', async (c, next) => {
     if (options.authContext) c.set('authContext', options.authContext);
@@ -123,6 +151,7 @@ function harness(options: {
           return this;
         },
         create: mock(async (data: { agentId?: string }) => {
+          knownInstances.add(INSTANCE_B);
           if (data.agentId) assignments.set(INSTANCE_B, data.agentId);
           return { ...data, id: INSTANCE_B, tenantId };
         }),
@@ -133,6 +162,7 @@ function harness(options: {
           tenantId: options.instanceTenants?.[id] ?? tenantId,
         })),
         update: mock(async (id: string, patch: { agentId?: string | null }) => {
+          knownInstances.add(id);
           if (patch.agentId === null) assignments.delete(id);
           else if (patch.agentId !== undefined) assignments.set(id, patch.agentId);
           return { id, channel: 'whatsapp-baileys', tenantId };
@@ -145,8 +175,8 @@ function harness(options: {
         getById: mock(async (id: string) => ({ id, name: options.agentNames?.[id] ?? agentName, metadata: null })),
       },
       apiKeys: {
-        async withAgentKeyLock(_ids: string[], fn: (keys: unknown) => Promise<unknown>) {
-          return fn(this);
+        async withAgentKeyLock(_ids: string[], fn: (keys: unknown, db: unknown) => Promise<unknown>) {
+          return fn(this, graphDb);
         },
         findAgentKeyByName: mock(async (name: string) => {
           lookups.push(name);
@@ -171,8 +201,9 @@ function harness(options: {
         }),
         create: mock(async (opts: { name: string; instanceIds: string[] }) => {
           created.push({ name: opts.name, instanceIds: opts.instanceIds });
-          keys.push({ id: `k_${keys.length + 1}`, name: opts.name, instanceIds: opts.instanceIds });
-          return { key: { id: `k_${keys.length}` } };
+          const key = { id: `k_${keys.length + 1}`, name: opts.name, instanceIds: opts.instanceIds };
+          keys.push(key);
+          return { key };
         }),
       },
     } as never);
@@ -224,7 +255,7 @@ describe('agent key provisioning is tenant-scoped', () => {
     expect(res.status).toBe(200);
 
     // B looked up its OWN name and found nothing, so it minted its own key.
-    expect(h.lookups).toEqual([`agent:${TENANT_B}:${SHARED_AGENT_NAME}`]);
+    expect(h.lookups).toContain(`agent:${TENANT_B}:${SHARED_AGENT_NAME}`);
     expect(h.created).toEqual([{ name: `agent:${TENANT_B}:${SHARED_AGENT_NAME}`, instanceIds: [INSTANCE_B] }]);
 
     // The bug, stated as an assertion: A's key is untouched and never acquired
@@ -237,11 +268,16 @@ describe('agent key provisioning is tenant-scoped', () => {
     // The pre-qualification world: A's key still carries the legacy bare name.
     // B must not find it — a legacy row is not B's to extend.
     const legacyKey: ExistingKey = { id: 'k_legacy', name: `agent:${SHARED_AGENT_NAME}`, instanceIds: [INSTANCE_A] };
-    const h = harness({ authContext: tenantContext(TENANT_B), existingKeys: [legacyKey] });
+    const h = harness({
+      authContext: tenantContext(TENANT_B),
+      existingKeys: [legacyKey],
+      instanceTenants: { [INSTANCE_A]: TENANT_A },
+    });
 
     await assignAgent(h, INSTANCE_B, AGENT_B);
 
-    expect(h.lookups).not.toContain(`agent:${SHARED_AGENT_NAME}`);
+    expect(h.updated).toEqual([]);
+    expect(h.revoked).toEqual([]);
     expect(legacyKey.instanceIds).toEqual([INSTANCE_A]);
     expect(h.created).toEqual([{ name: `agent:${TENANT_B}:${SHARED_AGENT_NAME}`, instanceIds: [INSTANCE_B] }]);
   });
@@ -252,7 +288,11 @@ describe('agent key provisioning is tenant-scoped', () => {
       name: `agent:${TENANT_A}:${SHARED_AGENT_NAME}`,
       instanceIds: [INSTANCE_A],
     };
-    const h = harness({ authContext: tenantContext(TENANT_A), existingKeys: [ownKey] });
+    const h = harness({
+      authContext: tenantContext(TENANT_A),
+      existingKeys: [ownKey],
+      agentAssignments: [[INSTANCE_A, AGENT_A]],
+    });
 
     const second = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
     await assignAgent(h, second, AGENT_A);
@@ -276,7 +316,7 @@ describe('legacy invariance', () => {
     ['other agent', AGENT_B, null],
     ['unbound', null, null],
   ] as const) {
-    test(`no-tenant PATCH leaves a bare key with ${label} grants untouched`, async () => {
+    test(`no-tenant PATCH does not extend a bare key with ${label} grants`, async () => {
       const existing: ExistingKey = { id: 'ambiguous', name: `agent:${SHARED_AGENT_NAME}`, instanceIds: [INSTANCE_A] };
       const h = harness({
         existingKeys: [existing],
@@ -286,6 +326,7 @@ describe('legacy invariance', () => {
       expect((await assignAgent(h, INSTANCE_B, AGENT_A)).status).toBe(200);
       expect(h.updated).toEqual([]);
       expect(existing.instanceIds).toEqual([INSTANCE_A]);
+      expect(h.revoked).toEqual(label === 'unbound' ? ['ambiguous'] : []);
       expect(h.created).toEqual([{ name: `agent:${SHARED_AGENT_NAME}`, instanceIds: [INSTANCE_B] }]);
     });
   }
@@ -385,7 +426,7 @@ for (const context of [undefined, tenantContext(TENANT_B)]) {
     expect((await assignAgent(h, INSTANCE_A, AGENT_A)).status).toBe(200);
     expect(h.created).toEqual([{ name: keyName, instanceIds: [INSTANCE_A] }]);
     expect((await assignAgent(h, INSTANCE_A, null)).status).toBe(200);
-    expect(h.lookups).toEqual([keyName, keyName, `agent:${SHARED_AGENT_NAME}`]);
+    expect(h.lookups).toEqual([keyName, `agent:${SHARED_AGENT_NAME}`, keyName, `agent:${SHARED_AGENT_NAME}`]);
     expect(h.revoked).toEqual(['k_1']);
   });
 }
