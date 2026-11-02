@@ -323,17 +323,24 @@ Beyond send/receive, the Slack plugin supports:
 
 ### Outbound mentions and formatting
 
-In `convert` mode, native Slack user/channel mentions, broadcast mentions (`<!here>`,
-`<!channel>`, `<!everyone>`), user-group mentions, and Slack link tokens survive Markdown
-conversion. Other angle brackets and ampersands are escaped; fenced and inline code remain
-literal. `passthrough` sends the body without conversion.
+In `convert` mode, native Slack user/channel mentions (`<@U…>`, `<#C…>`) and Slack
+link tokens survive Markdown conversion. These inline user mentions can notify a user,
+including when they come from model output or relayed text. Broadcast tokens (`<!here>`,
+`<!channel>`, `<!everyone>`) and user-group tokens (`<!subteam^S…>`) in the body are escaped
+so converted replies cannot page a whole channel or group. Other angle brackets and
+ampersands are escaped; fenced and inline code remain literal. Use a code span such as
+`` `<@U123>` `` to display a token literally. Pre-escaping it as `&lt;@U123&gt;` displays the
+entity spelling instead. `passthrough` sends the body without conversion, including any
+raw broadcast tokens.
 
-`POST /api/v2/messages/send` also accepts structured `mentions`, which Slack prepends to the text:
-users use `U…`/`W…` IDs, channels use `C…`/`G…` IDs, and `type: "role"` uses a Slack user-group
-`S…` ID. `type: "here"` and `type: "everyone"` generate Slack broadcast tokens (the required
-`id` field is unused for these two types). Native inline tokens therefore notify their
-recipients in convert mode; use code formatting or escape the token when you want literal
-text instead.
+`POST /api/v2/messages/send` also accepts structured `mentions`, which Slack prepends to
+text **after conversion**: users use `U…`/`W…` IDs, channels use `C…`/`G…` IDs, and
+`type: "role"` uses a Slack user-group `S…` ID. `type: "here"` and `type: "everyone"`
+generate Slack broadcast tokens (the required `id` field is unused for these two types).
+Broadcasts and user groups in convert mode require these explicit structured mentions.
+Duplicate mentions are omitted, including tokens already live in the body. Invalid IDs
+return a 400 validation error. Structured mentions apply to text sends; media/caption
+and streaming sends do not currently accept them.
 
 ## Socket health (#941)
 

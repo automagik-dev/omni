@@ -1,5 +1,6 @@
 import { describe, expect, it, mock } from 'bun:test';
 import type { OutgoingMessage, PluginContext } from '@omni/channel-sdk';
+import { ValidationError } from '@omni/core';
 import { SlackPlugin } from '../plugin';
 
 const noop = () => {};
@@ -28,6 +29,65 @@ const message = (text: string, metadata?: Record<string, unknown>): OutgoingMess
 });
 
 describe('Slack outbound mentions', () => {
+  it('keeps structured broadcasts live while escaping broadcasts in the converted body', async () => {
+    const { plugin, postMessage } = await setup();
+    await plugin.sendMessage(
+      'inst',
+      message('**hello** <!everyone> <!subteam^S456>', {
+        mentions: [
+          { id: 'here', type: 'here' },
+          { id: 'S123', type: 'role' },
+        ],
+      }),
+    );
+    expect(postMessage.mock.calls[0]?.[0].text).toBe(
+      '<!here> <!subteam^S123> *hello* &lt;!everyone&gt; &lt;!subteam^S456&gt;',
+    );
+  });
+
+  it('de-duplicates structured mentions against each other and live inline mentions', async () => {
+    const { plugin, postMessage } = await setup();
+    await plugin.sendMessage(
+      'inst',
+      message('<@U123|alice> <#C123|general> hello', {
+        mentions: [
+          { id: 'U123' },
+          { id: 'U123' },
+          { id: 'C123', type: 'channel' },
+          { id: 'S123', type: 'role' },
+          { id: 'S123', type: 'role' },
+          { id: 'one', type: 'here' },
+          { id: 'two', type: 'here' },
+        ],
+      }),
+    );
+    expect(postMessage.mock.calls[0]?.[0].text).toBe('<!subteam^S123> <!here> <@U123|alice> <#C123|general> hello');
+  });
+
+  it('does not treat a mention inside a code span as a live inline mention', async () => {
+    const { plugin, postMessage } = await setup();
+    await plugin.sendMessage('inst', message('`<@U123>`', { mentions: [{ id: 'U123' }] }));
+    expect(postMessage.mock.calls[0]?.[0].text).toBe('<@U123> `<@U123>`');
+  });
+
+  it('does not add a trailing space when the text is empty', async () => {
+    const { plugin, postMessage } = await setup();
+    await plugin.sendMessage('inst', message('', { mentions: [{ id: 'U123' }, { id: 'U123' }] }));
+    expect(postMessage.mock.calls[0]?.[0].text).toBe('<@U123>');
+  });
+
+  it('does not duplicate a live passthrough broadcast', async () => {
+    const { plugin, postMessage } = await setup();
+    await plugin.sendMessage(
+      'inst',
+      message('<!here> raw', {
+        messageFormatMode: 'passthrough',
+        mentions: [{ id: 'here', type: 'here' }],
+      }),
+    );
+    expect(postMessage.mock.calls[0]?.[0].text).toBe('<!here> raw');
+  });
+
   it('sends exactly one native inline mention in convert mode', async () => {
     const { plugin, postMessage } = await setup();
     expect((await plugin.sendMessage('inst', message('**hello** <@U123> & a < b'))).success).toBe(true);
@@ -98,11 +158,9 @@ describe('Slack outbound mentions', () => {
 
   it('rejects a malformed mention id before it can inject additional control tokens', async () => {
     const { plugin, postMessage } = await setup();
-    const result = await plugin.sendMessage(
-      'inst',
-      message('hello', { mentions: [{ id: 'U123> <!everyone', type: 'user' }] }),
-    );
-    expect(result.success).toBe(false);
+    await expect(
+      plugin.sendMessage('inst', message('hello', { mentions: [{ id: 'U123> <!everyone', type: 'user' }] })),
+    ).rejects.toBeInstanceOf(ValidationError);
     expect(postMessage).not.toHaveBeenCalled();
   });
 });

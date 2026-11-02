@@ -7,7 +7,7 @@
  * - Strikethrough is ~one~ tilde
  * - Links are <url|text>
  * - There are no headers, no images, no tables, and no list syntax
- * - `&`, `<` and `>` outside recognized Slack tokens must be escaped
+ * - `&`, `<` and `>` outside inline user/channel/link tokens must be escaped
  *
  * Conversions applied:
  * - Bold: **text** → *text*
@@ -81,9 +81,27 @@ function unescapeUrl(url: string): string {
   return url.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
 }
 
-/** Native Slack tokens plus literal placeholder-shaped input (to prevent collisions). */
+/**
+ * Inline Slack tokens plus literal placeholder-shaped input (to prevent collisions).
+ * Broadcasts and subteams are deliberately excluded: model output, quoted user
+ * content and errors must not page a whole channel or user group (#889).
+ */
 const PROTECTED_SLACK_PATTERN =
-  /<(?:@[UW][A-Z0-9]+(?:\|[^<>\r\n]+)?|#[CG][A-Z0-9]+(?:\|[^<>\r\n]+)?|!(?:here|channel|everyone)|!subteam\^S[A-Z0-9]+(?:\|[^<>\r\n]+)?|(?:https?:\/\/|mailto:|tel:|slack:\/\/)[^\s<>|]+(?:\|[^<>\r\n]*)?)>|OMNISLACKTOKEN\d+END/g;
+  /<(?:@[UW][A-Z0-9]+(?:\|[^<>\r\n]+)?|#[CG][A-Z0-9]+(?:\|[^<>\r\n]+)?|(?:https?:\/\/|mailto:|tel:|slack:\/\/)[^\s<>|]+(?:\|[^<>\r\n]*)?)>|OMNISLACKTOKEN\d+END/g;
+
+/** Canonical live mention tokens, excluding literal examples inside code. */
+export function inlineSlackMentions(text: string): Set<string> {
+  const mentions = new Set<string>();
+  const pattern =
+    /<(?:@[UW][A-Z0-9]+|#[CG][A-Z0-9]+|!(?:here|channel|everyone)|!subteam\^S[A-Z0-9]+)(?:\|[^<>\r\n]+)?>/g;
+  for (const run of segment(text)) {
+    if (run.isCode) continue;
+    for (const match of run.text.matchAll(pattern)) {
+      mentions.add(match[0].replace(/\|[^>]*>/, '>'));
+    }
+  }
+  return mentions;
+}
 
 /** Apply the markdown→mrkdwn rewrites to a single non-code run. */
 function convertProse(text: string): string {

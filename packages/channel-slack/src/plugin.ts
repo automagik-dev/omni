@@ -28,7 +28,7 @@ import type {
   StreamSender,
   ThreadStarterCache,
 } from '@omni/channel-sdk';
-import { DebounceManager } from '@omni/core';
+import { DebounceManager, ValidationError } from '@omni/core';
 import type { ChannelType, ContentType } from '@omni/core/types';
 import type { App } from '@slack/bolt';
 import type { WebClient } from '@slack/web-api';
@@ -48,6 +48,7 @@ import { setupInteractionHandlers } from './handlers/interactions';
 import { type SlackDebouncedArgs, setupMessageHandlers, shouldSkipMessage } from './handlers/messages';
 import { setupPinHandlers } from './handlers/pins';
 import { type SlackStatusMethod, clearTypingStatus, forgetStatusMemo, setSlackThreadStatus } from './handlers/typing';
+import { inlineSlackMentions, markdownToMrkdwn } from './markdown';
 import { uploadFile, uploadFileFromUrl } from './senders/media';
 import { type NativeStreamSender, createNativeStreamSender } from './senders/native-stream';
 import { createSlackStreamSender } from './senders/stream';
@@ -95,23 +96,30 @@ const slackMentionsSchema = z
 
 /** Match Discord's structured-mention prefix; Slack roles are user groups (subteams). */
 function withSlackMentions(text: string, value: unknown): string {
-  const mentions = slackMentionsSchema.parse(value);
-  if (mentions.length === 0) return text;
-  const tokens = mentions.map(({ id, type }) => {
-    switch (type) {
-      case 'user':
-        return `<@${id}>`;
-      case 'channel':
-        return `<#${id}>`;
-      case 'role':
-        return `<!subteam^${id}>`;
-      case 'everyone':
-        return '<!everyone>';
-      case 'here':
-        return '<!here>';
-    }
-  });
-  return `${tokens.join(' ')} ${text}`;
+  const parsed = slackMentionsSchema.safeParse(value);
+  if (!parsed.success) {
+    throw new ValidationError('Invalid Slack mentions: use U/W user IDs, C/G channel IDs or S user-group IDs');
+  }
+  if (parsed.data.length === 0) return text;
+  const existing = inlineSlackMentions(text);
+  const tokens = new Set(
+    parsed.data.map(({ id, type }) => {
+      switch (type) {
+        case 'user':
+          return `<@${id}>`;
+        case 'channel':
+          return `<#${id}>`;
+        case 'role':
+          return `<!subteam^${id}>`;
+        case 'everyone':
+          return '<!everyone>';
+        case 'here':
+          return '<!here>';
+      }
+    }),
+  );
+  const prefix = [...tokens].filter((token) => !existing.has(token)).join(' ');
+  return prefix ? (text ? `${prefix} ${text}` : prefix) : text;
 }
 
 /**
@@ -981,6 +989,8 @@ export class SlackPlugin extends BaseChannelPlugin {
 
       return { success: true, messageId, timestamp: Date.now() };
     } catch (error) {
+      // Caller input errors must reach the API's 400 mapper, not become send failures (502).
+      if (error instanceof ValidationError) throw error;
       const errorMessage = error instanceof Error ? error.message : String(error);
       const errorCode = error instanceof SlackError ? error.channelCode : SlackErrorCode.SEND_FAILED;
       const retryable = error instanceof SlackError ? error.recoverable : false;
@@ -2526,17 +2536,20 @@ export class SlackPlugin extends BaseChannelPlugin {
     const formatMode = (message.metadata?.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
     const replyToMode = config.replyToMode ?? 'all';
     const threadTs = this.resolveThreadTs(replyToMode, message.replyTo, message.threadId);
+    const body = message.content.text ?? '';
+    const formattedText = formatMode === 'passthrough' ? body : markdownToMrkdwn(body);
 
     return sendTextMessage(
       attachment.actingClient,
       {
         channelId,
-        text: withSlackMentions(message.content.text ?? '', message.metadata?.mentions),
+        text: withSlackMentions(formattedText, message.metadata?.mentions),
         threadTs,
         username: config.defaultUsername,
         iconUrl: config.defaultIconUrl,
         iconEmoji: config.defaultIconEmoji,
-        formatMode,
+        // Structured broadcasts are explicit caller intent, added only after conversion.
+        formatMode: 'passthrough',
         ephemeral: message.metadata?.ephemeral === true,
         ephemeralUserId: message.metadata?.ephemeralUserId as string | undefined,
       },

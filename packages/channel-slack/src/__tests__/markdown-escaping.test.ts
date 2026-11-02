@@ -18,6 +18,31 @@ describe('escapeMrkdwn', () => {
   });
 });
 
+// #889: literal escaping still neutralises every Slack control token.
+describe('escapeMrkdwn — injection safety', () => {
+  it('neutralises a user mention hidden in literal text', () => {
+    expect(escapeMrkdwn('olha isso <@U099LEAD>')).toBe('olha isso &lt;@U099LEAD&gt;');
+  });
+
+  it('neutralises a channel link in literal text', () => {
+    expect(escapeMrkdwn('veja <#C123>')).toBe('veja &lt;#C123&gt;');
+  });
+});
+
+describe('markdownToMrkdwn — injection safety (#889)', () => {
+  it('neutralises @channel-style broadcast markup', () => {
+    const out = markdownToMrkdwn('cuidado <!channel>');
+    expect(out).toBe('cuidado &lt;!channel&gt;');
+    expect(out).not.toContain('<!channel>');
+  });
+
+  for (const token of ['<!here>', '<!channel>', '<!everyone>', '<!subteam^S123>', '<!subteam^S123|team>']) {
+    it(`escapes ${token} from converted prose`, () => {
+      expect(markdownToMrkdwn(`**hello ${token}**`)).toBe(`*hello ${escapeMrkdwn(token)}*`);
+    });
+  }
+});
+
 describe('markdownToMrkdwn — Slack tokens', () => {
   for (const token of [
     '<@U099LEAD>',
@@ -25,10 +50,6 @@ describe('markdownToMrkdwn — Slack tokens', () => {
     '<@U123|alice>',
     '<#C123>',
     '<#C123|general>',
-    '<!here>',
-    '<!channel>',
-    '<!everyone>',
-    '<!subteam^S123>',
     '<https://example.com/a_b?x=1&y=2|a *label* & more>',
     '<https://example.com/a_b?x=1&y=2>',
     '<mailto:alice@example.com|email>',
