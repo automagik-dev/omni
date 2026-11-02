@@ -1120,6 +1120,14 @@ const OBSERVABILITY_JUSTIFICATION =
 
 /** The committed registry the gate checks against. */
 export const ROUTE_OWNERSHIP: readonly RouteOwnershipDeclaration[] = [
+  {
+    route: 'GET /api/v2/system/paired-agents',
+    class: 'platform-admin',
+    justification:
+      'The deployment-wide paired-agent feature status, shared by the one serving binary across all tenants. ' +
+      'Reads only effective process flags and no tenant row; authenticated system:read is required. ' +
+      'Deployment-wide by nature, so platform-admin, like the system update status.',
+  },
   ...TENANT_SCOPED_ROUTES.map((route) => ({ route, class: 'tenant-scoped' as const })),
   ...PLATFORM_ADMIN_ROUTES.map((route) => ({
     route,

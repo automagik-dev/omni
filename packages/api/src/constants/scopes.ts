@@ -416,6 +416,7 @@ export const SCOPE_MAP: Record<string, string> = {
   'POST /owner/connect': 'auth:admin',
 
   // --- system: this Omni's version and the updates its owner confirms ---
+  'GET /system/paired-agents': 'system:read',
   'GET /system/update': 'system:read',
   'POST /system/update': 'system:update',
 

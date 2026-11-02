@@ -430,7 +430,7 @@ for (const label of ['no-chat', 'no-external-id', 'missing', 'forbidden', 'not-f
   assert.equal(f.rt.state.omniEventCursors.messages, '2')
 })
 
-for (const failure of ['network', 'server']) test(`outbound ${failure} failure retries with increasing backoff across successful reconnects`, { timeout: 5000 }, async t => {
+for (const failure of ['network', 503, 429, 408, 'mixed']) test(`outbound ${failure} failure retries with increasing backoff across successful reconnects`, { timeout: 5000 }, async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const event = ownMedia(), firstFailure = deferred(), secondFailure = deferred(), saved = deferred()
   const waits = []
@@ -439,8 +439,8 @@ for (const failure of ['network', 'server']) test(`outbound ${failure} failure r
     subscriptions: { first: voice() }, rows: [event], message: async () => {
       attempts++
       if (attempts <= 2) {
-        if (failure === 'network') throw new TypeError('fetch failed')
-        return { ok: false, status: 503 }
+        if (failure === 'network' || (failure === 'mixed' && attempts === 1)) throw new TypeError('fetch failed')
+        return { ok: false, status: failure === 'mixed' ? 429 : failure }
       }
       return { ok: true, json: async () => ({ data: ownMessage(event) }) }
     },
@@ -468,7 +468,7 @@ for (const failure of ['network', 'server']) test(`outbound ${failure} failure r
   assert.equal(attempts, 3)
 })
 
-for (const failure of ['network', 'server']) test(`persistent outbound ${failure} failure is capped, warned and acked before the next inbound row`, { timeout: 5000 }, async t => {
+for (const failure of ['network', 503, 429, 408, 'mixed']) test(`persistent outbound ${failure} failure is capped, warned and acked before the next inbound row`, { timeout: 5000 }, async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const event = ownMedia(), firstFailure = deferred(), secondFailure = deferred(), saved = deferred()
   const waits = [], refusals = []
@@ -476,8 +476,8 @@ for (const failure of ['network', 'server']) test(`persistent outbound ${failure
   const f = fixture(t, {
     subscriptions: { first: voice(), second: sub('inbound') }, rows: [event, row(2)], message: async () => {
       attempts++
-      if (failure === 'network') throw new TypeError('fetch failed')
-      return { ok: false, status: 503 }
+      if (failure === 'network' || (failure === 'mixed' && attempts === 1)) throw new TypeError('fetch failed')
+      return { ok: false, status: failure === 'mixed' ? (attempts === 2 ? 429 : 408) : failure }
     },
     save: async () => { if (f.acks.at(-1) === 2) saved.resolve() },
   })
