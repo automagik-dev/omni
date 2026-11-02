@@ -128,7 +128,7 @@ export const DEAD_LETTER_MAX_AGE_SECONDS = 24 * 60 * 60;
 /**
  * DLQ depth (#1163): pending rows used to accumulate with every surface green.
  * Read through DeadLetterService (the registered access site), not the raw db.
- * A failed query is not reported here — the database check already covers it.
+ * An unreadable queue degrades this check without changing probe availability.
  */
 async function checkDeadLetters(services: AppVariables['services'] | undefined): Promise<HealthCheck> {
   if (!services) return { status: 'ok', details: { available: false } };
@@ -147,7 +147,7 @@ async function checkDeadLetters(services: AppVariables['services'] | undefined):
     return { status: 'ok', details };
   } catch (error) {
     healthLog.warn('Dead letter health query failed', { error: String(error) });
-    return { status: 'ok', details: { available: false } };
+    return { status: 'degraded', details: { available: false } };
   }
 }
 

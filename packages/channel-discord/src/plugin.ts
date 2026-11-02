@@ -779,33 +779,36 @@ export class DiscordPlugin extends BaseChannelPlugin {
     // duration === 0 means stop typing — just clear and return
     if (duration === 0) return;
 
+    const isCurrent = () => this.typingIntervals.get(key) === entry;
     const doTyping = async () => {
+      if (!isCurrent()) return;
       try {
         const client = this.getClient(instanceId);
         const channel = await client.channels.fetch(channelId);
-        if (channel && 'sendTyping' in channel) {
+        // A stop or replacement can arrive while the channel lookup is pending.
+        if (isCurrent() && channel && 'sendTyping' in channel) {
           await (channel as { sendTyping: () => Promise<void> }).sendTyping();
         }
       } catch {
-        this.clearTypingInterval(key);
+        if (isCurrent()) this.clearTypingInterval(key);
       }
     };
 
-    // Send initial typing
-    await doTyping();
-
     // Set up auto-refresh every 8s
     const refresh = setInterval(() => {
-      doTyping();
+      void doTyping();
     }, 8000);
 
     // Honor duration: use caller's duration if positive, otherwise 60s failsafe
     const timeoutMs = duration && duration > 0 ? duration : 60000;
     const failsafe = setTimeout(() => {
-      this.clearTypingInterval(key);
+      if (isCurrent()) this.clearTypingInterval(key);
     }, timeoutMs);
 
-    this.typingIntervals.set(key, { refresh, failsafe });
+    const entry = { refresh, failsafe };
+    // Register before the first await so a late completion cannot restart refresh.
+    this.typingIntervals.set(key, entry);
+    await doTyping();
   }
 
   /** Clear a typing refresh interval by key */
