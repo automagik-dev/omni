@@ -33,6 +33,43 @@ systemd scope, a process tree) leaves the sandbox running. Where there is no
 service manager to ask (no systemd user session, an ssh login on macOS), it is
 a detached child instead. `omni sandbox stop` stops whichever it is.
 
+## Channel configuration environment
+
+The supervisor passes only these app-level channel keys to the API child, when set:
+
+| Key | Purpose |
+|---|---|
+| `META_APP_SECRET` | Meta webhook signature verification and Flows |
+| `META_VERIFY_TOKEN` | Meta webhook verification challenge |
+| `META_APP_ID` | Meta Embedded Signup and profile-photo uploads |
+| `META_GRAPH_API_VERSION` | Override the persisted Meta Graph API version |
+
+Configure these in the **supervisor's** environment. For an at-login Linux sandbox, use
+`systemctl --user edit <sandbox-unit>.service` with a drop-in such as:
+
+```ini
+[Service]
+Environment="META_APP_SECRET=<app-secret>"
+Environment="META_VERIFY_TOKEN=<verify-token>"
+```
+
+Reload and restart the sandbox unit after changing it. For launchd, configure the job's
+`EnvironmentVariables`; for a foreground or embedded `omni sandbox run`, provide the keys
+in that process's environment. Exporting a key in the shell running `omni sandbox start`
+does not reconfigure an existing service-manager job. Keep configuration files containing
+secrets private to your user.
+
+On boot, `<home>/logs/supervisor.log` lists the allowlisted key **names** passed to the API
+(or `none`), never their values. These keys are not stored in `sandbox.json`, and Postgres
+and NATS do not inherit them. All other parent variables remain excluded except the basic
+shell environment; database, API key, NATS and media paths remain sandbox-owned. There is
+no `META_*` or `OMNI_*` prefix passthrough.
+
+Other channels use per-instance credentials. Their optional environment settings for
+WhatsApp timing, presence, rate limits, caches and debug output, Discord debug output,
+A2A/ASC Flow timeouts and remote S3 media are not inherited; sandboxes keep the defaults
+and their local media directory.
+
 ## Commands
 
 ```sh

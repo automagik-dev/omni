@@ -18,6 +18,7 @@ import { closeSync, fstatSync, openSync, renameSync, rmSync, writeFileSync, writ
 import { AUTOPG_PIN, type AutopgTarget, autopgTarget, detectLibc, readPgPasswordFile } from './autopg-runtime.js';
 import { ensureOmniDatabaseExists, waitForCanonicalReady } from './lib/canonical-pgserve.js';
 import {
+  SANDBOX_CHANNEL_ENV_KEYS,
   SANDBOX_EXIT,
   type SandboxChildName,
   type SandboxChildSpec,
@@ -337,6 +338,9 @@ export async function runSandboxSupervisor(
   // Read at every start, so a file that is no longer safe (a symlink, readable by others) stops it.
   const pgPassword = state.pgPasswordFile ? readPgPasswordFile(state.pgPasswordFile) : null;
   const specs = sandboxChildSpecs(layout, state, apiKey, deps.env, options, pgPassword);
+  const apiEnv = specs.find((spec) => spec.name === 'api')?.env;
+  const channelKeys = SANDBOX_CHANNEL_ENV_KEYS.filter((key) => apiEnv?.[key] !== undefined);
+  deps.log(`API channel environment keys: ${channelKeys.length > 0 ? channelKeys.join(', ') : 'none'}`);
   const supervisor = new SandboxSupervisor(layout, specs, deps);
   return supervisor.run();
 }
