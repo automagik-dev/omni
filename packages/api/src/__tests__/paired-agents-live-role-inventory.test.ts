@@ -12,7 +12,7 @@ const TWO_TENANT_PROOFS = [
 ];
 // Existing debt at 979370390, outside these proofs. This list may only shrink:
 // equality catches new definitions AND stale entries after a helper is migrated.
-const LOCAL_URLFOR_CEILING = 21;
+const LOCAL_URLFOR_CEILING = 14;
 const LOCAL_URLFOR_ACKNOWLEDGED = [
   'packages/api/scripts/__tests__/reconcile-identity-fragmentation-postgres.test.ts',
   'packages/api/src/__tests__/connector-ingress-postgres.test.ts',
@@ -24,15 +24,8 @@ const LOCAL_URLFOR_ACKNOWLEDGED = [
   'packages/api/src/plugins/__tests__/identity-canonicalization-postgres.test.ts',
   'packages/api/src/routes/v2/__tests__/chats-get-by-id-names-postgres.test.ts',
   'packages/api/src/routes/v2/__tests__/chats-sync-names-postgres.test.ts',
-  'packages/api/src/services/__tests__/agents-manifest-postgres.test.ts',
-  'packages/api/src/services/__tests__/api-key-children-postgres.test.ts',
   'packages/api/src/services/__tests__/event-schema-gates-postgres.test.ts',
-  'packages/api/src/services/__tests__/login-operator-postgres.test.ts',
-  'packages/api/src/services/__tests__/login-postgres.test.ts',
   'packages/api/src/services/__tests__/manifest-compiler-postgres.test.ts',
-  'packages/api/src/services/__tests__/platform-bootstrap-postgres.test.ts',
-  'packages/api/src/services/__tests__/publish-allowlist-postgres.test.ts',
-  'packages/api/src/services/__tests__/slack-identity-postgres.test.ts',
   'packages/api/src/services/__tests__/strict-schema-gate-postgres.test.ts',
   'packages/api/src/services/__tests__/webhook-idempotency-postgres.test.ts',
 ];

@@ -28,7 +28,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { AgentEventManifest, TemplateContext } from '@omni/core';
 import { executeAction } from '@omni/core';
 import { type Database, type EventType, createDbHandle, deadLetterEvents, omniEvents } from '@omni/db';
-import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { eq } from 'drizzle-orm';
 import { buildAutomationEngineDeps } from '../../plugins/automation-actions';
 import { AgentService } from '../agents';
@@ -39,12 +39,6 @@ import type { Services } from '../index';
 const superUrl = process.env.OMNI_G1_POSTGRES_URL ?? '';
 const postgresDescribe = superUrl.length > 0 ? describe : describe.skip;
 const psqlBin = process.env.OMNI_G1_PSQL_BIN ?? 'psql';
-
-function urlFor(base: string, database: string): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  return url.toString();
-}
 
 interface PublishedEvent {
   type: string;
@@ -136,7 +130,7 @@ postgresDescribe('agent publish-allowlist enforcement (real PostgreSQL)', () => 
 
   beforeAll(async () => {
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    const handle = createDbHandle({ url: urlFor(superUrl, dbName), maxConnections: 3 });
+    const handle = createDbHandle({ url: pgRoleUrl(superUrl, dbName), maxConnections: 3 });
     closers.push(() => handle.close().catch(() => undefined));
     db = handle.db;
 

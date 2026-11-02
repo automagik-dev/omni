@@ -15,7 +15,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
 import type { EventBus } from '@omni/core';
 import { type Database, apiKeys, createDbHandle } from '@omni/db';
-import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { and, eq, sql } from 'drizzle-orm';
 import { DEFAULT_DEVICE_KEY_SCOPES } from '../../login/config';
 import { ApiKeyService, type ChildChat, MAX_LIVE_CHILDREN, type MintChildResult } from '../api-keys';
@@ -28,12 +28,6 @@ const MIGRATION_0088 = join(import.meta.dir, '..', '..', '..', '..', 'db', 'driz
 const INSTANCE = '11111111-1111-4111-8111-111111111111';
 const OTHER_INSTANCE = '22222222-2222-4222-8222-222222222222';
 const ALWAYS = () => true;
-
-function urlFor(base: string, database: string): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  return url.toString();
-}
 
 function chat(n: number, instanceId = INSTANCE): ChildChat {
   return {
@@ -72,7 +66,7 @@ postgresDescribe('chat keys (real PostgreSQL)', () => {
 
   beforeAll(() => {
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    const handle = createDbHandle({ url: urlFor(superUrl, dbName), maxConnections: 6 });
+    const handle = createDbHandle({ url: pgRoleUrl(superUrl, dbName), maxConnections: 6 });
     close = handle.close;
     db = handle.db;
     service = new ApiKeyService(db, { eventBus });
@@ -102,7 +96,7 @@ postgresDescribe('chat keys (real PostgreSQL)', () => {
         '--set',
         'ON_ERROR_STOP=1',
         '--dbname',
-        urlFor(superUrl, dbName),
+        pgRoleUrl(superUrl, dbName),
         '-f',
         MIGRATION_0088,
       ],
