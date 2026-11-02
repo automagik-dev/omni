@@ -41,6 +41,7 @@ for (const enforced of [false, true]) {
     let bus: EventBus & ConnectorEventPublisher;
     let authDb: Database;
     let failPublish = false;
+    let onRetryPublish: (() => Promise<void>) | undefined;
     const workers: Array<{ db: Database; service: DeadLetterService }> = [];
     const published: Array<{ type: string; payload: Record<string, unknown>; tenantId?: unknown }> = [];
     const inWorld = <T>(fn: () => Promise<T>, tenantId = TENANT_A): Promise<T> =>
@@ -121,6 +122,7 @@ for (const enforced of [false, true]) {
         subscribeAll: async () => ({ id: 'sub', pattern: '', unsubscribe: async () => {} }),
         publishGeneric: async (eventType, payload, metadata) => {
           if (metadata?.source?.startsWith('dead-letter-')) {
+            if (metadata.source !== 'dead-letter-service') await onRetryPublish?.();
             if (failPublish) throw new Error('test bus unavailable');
             published.push({ type: eventType, payload, tenantId: metadata.tenantId });
           }
@@ -529,6 +531,209 @@ for (const enforced of [false, true]) {
       expect(after.lastRetryAt).toBeNull();
       expect(published.length).toBe(countBefore);
     });
+
+    async function delivery(overrides: Partial<typeof deadLetterEvents.$inferInsert> = {}) {
+      const eventType = type();
+      const [row] = await inWorld(() =>
+        scopedHandle(db)
+          .insert(deadLetterEvents)
+          .values({
+            eventId: crypto.randomUUID(),
+            eventType,
+            subject: eventType,
+            payload: { orderId: 'retry-hardening' },
+            error: 'delivery failed',
+            nextAutoRetryAt: new Date(0),
+            ...overrides,
+          })
+          .returning(),
+      );
+      if (!row) throw new Error('Missing delivery fixture');
+      return row;
+    }
+
+    for (const mode of ['manual', 'auto'] as const) {
+      for (const action of ['resolve', 'abandon'] as const) {
+        for (const publishFails of [false, true]) {
+          test(`${mode} retry cannot overwrite operator ${action} after publish ${publishFails ? 'failure' : 'success'}`, async () => {
+            const row = await delivery();
+            const countBefore = published.length;
+            // Use the active request transaction in enforced mode: an external
+            // operator waits on its row lock until commit. Legacy uses the pool.
+            onRetryPublish = async () => {
+              if (action === 'resolve') await service.resolve(row.id, 'operator decision');
+              else await service.abandon(row.id);
+            };
+            failPublish = publishFails;
+            try {
+              if (mode === 'manual') {
+                expect((await inWorld(() => service.retry(row.id))).success).toBe(false);
+              } else {
+                expect(await inWorld(() => service.processAutoRetries())).toEqual({
+                  processed: 1,
+                  succeeded: 0,
+                  failed: 0,
+                });
+              }
+            } finally {
+              onRetryPublish = undefined;
+              failPublish = false;
+            }
+            const after = await read(row.id);
+            expect(after.status).toBe(action === 'resolve' ? 'resolved' : 'abandoned');
+            expect(after.resolvedBy).toBe(action === 'resolve' ? 'operator decision' : null);
+            expect(after.error).toBe(row.error);
+            expect(after.autoRetryCount).toBe(0);
+            expect(after.manualRetryCount).toBe(0);
+            expect(after.nextAutoRetryAt).toBeNull();
+            expect(published.length).toBe(countBefore + (publishFails ? 0 : 1));
+          });
+        }
+      }
+
+      test(`${mode} published retry keeps its lease when resolved bookkeeping fails`, async () => {
+        const row = await delivery();
+        const countBefore = published.length;
+        // A real SQL error after publication, rather than a mocked service.
+        const worker = workers[0];
+        if (!worker) throw new Error('Missing retry worker');
+        // A trigger aborts ONLY the final write. Auto work commits its claim
+        // before publish; manual runs outside a request transaction here.
+        await admin.execute(
+          sql.raw(`
+          CREATE OR REPLACE FUNCTION fail_retry_resolution() RETURNS trigger LANGUAGE plpgsql AS $$
+          BEGIN
+            IF NEW.id = '${row.id}'::uuid AND NEW.status = 'resolved' THEN
+              RAISE EXCEPTION 'injected resolved update failure';
+            END IF;
+            RETURN NEW;
+          END $$;
+          CREATE TRIGGER fail_retry_resolution BEFORE UPDATE ON dead_letter_events
+            FOR EACH ROW EXECUTE FUNCTION fail_retry_resolution();
+        `),
+        );
+        try {
+          if (mode === 'manual') {
+            onRetryPublish = enforced
+              ? async () => {
+                  await scopedHandle(db).execute('SAVEPOINT retry_completion');
+                }
+              : undefined;
+            await inWorld(async () => {
+              const result = await service.retry(row.id);
+              // Keep the request claim committed despite the injected SQL
+              // failure; production workers already use separate transactions.
+              if (enforced) await scopedHandle(db).execute('ROLLBACK TO SAVEPOINT retry_completion');
+              expect(result.success).toBe(false);
+            });
+          } else {
+            expect(await worker.service.processAutoRetries()).toEqual({ processed: 1, succeeded: 0, failed: 1 });
+          }
+          expect((await read(row.id)).status).toBe('retrying');
+          expect((await read(row.id)).error).toBe(row.error);
+          expect((await read(row.id)).autoRetryCount).toBe(0);
+          expect(await worker.service.processAutoRetries()).toEqual({ processed: 0, succeeded: 0, failed: 0 });
+          expect(published.length).toBe(countBefore + 1);
+        } finally {
+          onRetryPublish = undefined;
+          await admin.execute(
+            'DROP TRIGGER fail_retry_resolution ON dead_letter_events; DROP FUNCTION fail_retry_resolution()',
+          );
+          await inWorld(() => service.abandon(row.id));
+        }
+      });
+    }
+
+    test('stale retry leases consume one attempt, back off, and recover only once across workers', async () => {
+      const staleAt = new Date(Date.now() - 16 * 60_000);
+      const row = await delivery({ status: 'retrying', lastRetryAt: staleAt });
+      const fresh = await delivery({ status: 'retrying', lastRetryAt: new Date() });
+      const countBefore = published.length;
+      const before = Date.now();
+      await Promise.all(workers.map((worker) => worker.service.processAutoRetries()));
+      const after = await read(row.id);
+      expect(after.status).toBe('pending');
+      expect(after.autoRetryCount).toBe(1);
+      expect(after.manualRetryCount).toBe(0);
+      expect(after.lastRetryAt?.getTime()).toBe(staleAt.getTime());
+      expect(after.error).toContain('[Retry lease expired]');
+      expect(after.nextAutoRetryAt?.getTime()).toBeGreaterThanOrEqual(before + 6 * 60 * 60_000);
+      expect((await read(fresh.id)).status).toBe('retrying');
+      await service.processAutoRetries();
+      expect(await read(row.id)).toEqual(after);
+      expect(published.length).toBe(countBefore);
+      await inWorld(() => service.abandon(row.id));
+      await inWorld(() => service.abandon(fresh.id));
+    });
+
+    test('stale manual-only, governance, and exhausted leases do not gain an automatic schedule', async () => {
+      const countBefore = published.length;
+      const rows = await Promise.all([
+        delivery({ nextAutoRetryAt: null }),
+        delivery({ error: 'schema_validation_failed: invalid' }),
+        delivery({ autoRetryCount: 2 }),
+      ]);
+      for (const row of rows) {
+        await inWorld(() =>
+          scopedHandle(db)
+            .update(deadLetterEvents)
+            .set({
+              status: 'retrying',
+              lastRetryAt: new Date(Date.now() - 16 * 60_000),
+            })
+            .where(eq(deadLetterEvents.id, row.id)),
+        );
+      }
+      await service.processAutoRetries();
+      for (const row of rows) {
+        const after = await read(row.id);
+        expect(after.status).toBe('pending');
+        expect(after.autoRetryCount).toBe(row.autoRetryCount + 1);
+        expect(after.nextAutoRetryAt).toBeNull();
+        expect(after.error.startsWith(row.error)).toBe(true);
+        await inWorld(() => service.abandon(row.id));
+      }
+      expect(published.length).toBe(countBefore);
+    });
+
+    test('a late retry cannot finalize a newer lease of the same row', async () => {
+      const row = await delivery();
+      const renewedAt = new Date(Date.now() + 60_000);
+      onRetryPublish = async () => {
+        await scopedHandle(db)
+          .update(deadLetterEvents)
+          .set({
+            status: 'retrying',
+            lastRetryAt: renewedAt,
+            autoRetryCount: 1,
+          })
+          .where(eq(deadLetterEvents.id, row.id));
+      };
+      try {
+        expect((await inWorld(() => service.retry(row.id))).success).toBe(false);
+      } finally {
+        onRetryPublish = undefined;
+      }
+      const after = await read(row.id);
+      expect(after.status).toBe('retrying');
+      expect(after.lastRetryAt?.getTime()).toBe(renewedAt.getTime());
+      expect(after.autoRetryCount).toBe(1);
+      expect(after.manualRetryCount).toBe(0);
+      await inWorld(() => service.abandon(row.id));
+    });
+
+    if (enforced) {
+      test('tenant B cannot recover tenant A stale retry lease', async () => {
+        const row = await delivery({ status: 'retrying', lastRetryAt: new Date(Date.now() - 16 * 60_000) });
+        await inWorld(() => service.processAutoRetries(), TENANT_B);
+        expect((await read(row.id)).status).toBe('retrying');
+        expect((await read(row.id)).autoRetryCount).toBe(0);
+        await inWorld(() => service.processAutoRetries());
+        expect((await read(row.id)).status).toBe('pending');
+        expect((await read(row.id)).autoRetryCount).toBe(1);
+        await inWorld(() => service.abandon(row.id));
+      });
+    }
 
     if (enforced) {
       test('tenant B cannot list, inspect, or retry A refusal; A can recover it', async () => {
