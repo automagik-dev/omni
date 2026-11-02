@@ -275,6 +275,7 @@ async function recordPm2(state: HarnessState, args: string[], env?: Record<strin
 
 function mkDeps(state: HarnessState): DoctorDeps {
   return {
+    fetchPairedAgentsStatus: async () => ({ enabled: true, reason: null }),
     listConnectors: async () => ({ items: [], meta: { hasMore: false, cursor: null } }),
     getPm2Processes: async () => {
       // Build a pm2-jlist-shaped response driven by harness state.
@@ -580,7 +581,7 @@ describe('doctor connector unmatched counters', () => {
 });
 
 describe('runDoctor — read-only mode', () => {
-  test('reports all 13 checks with OK when state is healthy', async () => {
+  test('reports all checks with OK when state is healthy', async () => {
     // Match the harness version to whatever the CLI currently reports so
     // `version-match` is OK without hard-coding the CLI version here.
     const { VERSION } = await import('../version.js');
@@ -589,7 +590,7 @@ describe('runDoctor — read-only mode', () => {
 
     const report = await runDoctor({ fix: false }, deps);
 
-    expect(report.checks).toHaveLength(14);
+    expect(report.checks).toHaveLength(15);
     const ids = report.checks.map((c) => c.id);
     expect(ids).toEqual([
       'pm2-env-drift',
@@ -606,11 +607,12 @@ describe('runDoctor — read-only mode', () => {
       'port-canonical-owner',
       'embedded-data-orphaned',
       'nats-bind-address',
+      'paired-agents',
     ]);
     for (const check of report.checks) {
       expect(check.level).toBe('OK');
     }
-    expect(report.summary).toEqual({ ok: 14, warn: 0, fail: 0 });
+    expect(report.summary).toEqual({ ok: 15, warn: 0, fail: 0 });
     expect(report.fixesApplied).toEqual([]);
   });
 
@@ -1595,5 +1597,48 @@ describe('runDoctor — nats-bind-address', () => {
     const report = await runDoctor({ fix: true }, mkDeps(state));
     expect(report.checks.find((c) => c.id === 'nats-bind-address')?.level).toBe('WARN');
     expect(state.pm2Calls.filter((c) => c.args.includes('omni-nats'))).toEqual([]);
+  });
+});
+
+describe('paired-agent doctor status', () => {
+  const cases: { status: Awaited<ReturnType<DoctorDeps['fetchPairedAgentsStatus']>>; level: string; text: string }[] = [
+    { status: { enabled: true, reason: null }, level: 'OK', text: 'paired agents ON' },
+    { status: { enabled: false, reason: 'flag_unset' }, level: 'OK', text: 'flag_unset' },
+    { status: { enabled: false, reason: 'multitenancy_enabled' }, level: 'WARN', text: 'OMNI_MULTITENANCY_ENABLED' },
+    { status: { error: 'HTTP 403 requires system:read' }, level: 'WARN', text: 'HTTP 403 requires system:read' },
+  ];
+  for (const entry of cases) {
+    test(`${entry.text}: reports ${entry.level} and preserves the failure count used for exit status`, async () => {
+      const deps = mkDeps(mkHarness());
+      const baseline = await runDoctor({}, deps);
+      let calledPort = 0;
+      deps.fetchPairedAgentsStatus = async (port) => {
+        calledPort = port;
+        return entry.status;
+      };
+      const report = await runDoctor({}, deps);
+      const check = report.checks.find((item) => item.id === 'paired-agents');
+      expect(check?.level).toBe(entry.level);
+      expect(check?.detail).toContain(entry.text);
+      expect(calledPort).toBe(8882);
+      expect(report.summary.fail).toBe(baseline.summary.fail);
+      if ('enabled' in entry.status && !entry.status.enabled) {
+        expect(check?.detail).toContain('paired agents OFF');
+        expect(check?.detail).toContain('OMNI_PAIRED_AGENT_CONSUMERS');
+        expect(check?.detail).toContain('forward-only');
+        expect(check?.detail).toContain('paired-agent-journal-indexes.md#rolling-back');
+      }
+    });
+  }
+  test('a rejected status fetch is WARN and strips terminal controls from the reason', async () => {
+    const deps = mkDeps(mkHarness());
+    deps.fetchPairedAgentsStatus = async () => {
+      throw new Error('offline\x1b[31m');
+    };
+    const report = await runDoctor({}, deps);
+    const check = report.checks.find((item) => item.id === 'paired-agents');
+    expect(check?.level).toBe('WARN');
+    expect(check?.detail).toContain('offline');
+    expect(check?.detail).not.toContain('\x1b');
   });
 });

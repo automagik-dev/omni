@@ -3213,6 +3213,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/system/paired-agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Paired-agent feature status
+         * @description Effective paired-agent consumer flag and OFF reason. Needs system:read.
+         */
+        get: operations["getPairedAgentsStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/system/update": {
         parameters: {
             query?: never;
@@ -7938,6 +7958,15 @@ export interface components {
                 version: string;
                 /** Format: date-time */
                 startedAt: string;
+            };
+        };
+        PairedAgentsStatus: {
+            consumers: {
+                /** @enum {string} */
+                flag: "OMNI_PAIRED_AGENT_CONSUMERS";
+                enabled: boolean;
+                /** @enum {string|null} */
+                reason: "flag_unset" | "multitenancy_enabled" | null;
             };
         };
         Provider: {
@@ -19706,6 +19735,49 @@ export interface operations {
             };
             /** @description Too many links; wait */
             429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    getPairedAgentsStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Paired-agent status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["PairedAgentsStatus"];
+                    };
+                };
+            };
+            /** @description Needs system:read */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

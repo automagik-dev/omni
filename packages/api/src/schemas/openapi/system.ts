@@ -39,8 +39,28 @@ export const UpdateStatusSchema = z
   })
   .openapi('UpdateStatus');
 
+export const PairedAgentsStatusSchema = z
+  .object({
+    consumers: z.object({
+      flag: z.literal('OMNI_PAIRED_AGENT_CONSUMERS'),
+      enabled: z.boolean(),
+      reason: z.enum(['flag_unset', 'multitenancy_enabled']).nullable(),
+    }),
+  })
+  .openapi('PairedAgentsStatus');
+
 export function registerSystemSchemas(registry: OpenAPIRegistry): void {
   registry.register('UpdateStatus', UpdateStatusSchema);
+  registry.register('PairedAgentsStatus', PairedAgentsStatusSchema);
+  registry.registerPath({
+    method: 'get',
+    path: '/system/paired-agents',
+    operationId: 'getPairedAgentsStatus',
+    tags: ['System'],
+    summary: 'Paired-agent feature status',
+    description: 'Effective paired-agent consumer flag and OFF reason. Needs system:read.',
+    responses: { 200: ok(PairedAgentsStatusSchema, 'Paired-agent status'), 403: error('Needs system:read') },
+  });
 
   registry.registerPath({
     method: 'get',

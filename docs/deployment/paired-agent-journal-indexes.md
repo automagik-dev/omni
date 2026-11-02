@@ -94,3 +94,25 @@ large journal through to an in-band build. The operator should run
 downtime. This override and statistics refresh are operator decisions; automation
 must never set the override. Neither the flag nor a clear estimate-based check
 replaces the preparation and definition verification above.
+
+
+## Rolling back
+
+Unset `OMNI_PAIRED_AGENT_CONSUMERS` in the serving process environment and restart
+the API. `omni doctor` reports `paired agents OFF: flag_unset` (OK). Setting
+`OMNI_MULTITENANCY_ENABLED=true` also forces the slice OFF, reported as WARN with
+`multitenancy_enabled`. A failed status read is WARN; use an authenticated CLI key
+with `system:read` to inspect the effective server state.
+
+Stored consumer ownership still holds while OFF: another agent's key or a plain
+key cannot access an agent-owned consumer. New agent-owned registrations are
+refused. Existing agent-owned consumers receive only their permitted instance
+rows; source and producing-agent grant delivery stops. Legacy consumers keep
+their existing behavior. The additive schema and indexes can stay in place.
+
+Grants are **forward-only**. Rows claimed while the flag is unset (or forced OFF
+by multitenancy) have no new provenance stamp and are never delivered through a
+grant. There is no backfill: an OFF/ON cycle leaves a permanent grant-delivery gap
+for the OFF period. Setting `OMNI_PAIRED_AGENT_CONSUMERS=true` again with
+multitenancy off and restarting resumes granted delivery for stamped rows,
+including still-unread rows stamped before rollback; it does not recover the gap.
