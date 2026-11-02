@@ -212,11 +212,13 @@ it must match the watched chat and external ID, have a live `notify` own-device 
 on both the journal and stored message, not be history sync, and have no agent
 attribution. API-send records, `append` echoes, history replays and `message.sent`
 never trigger it. Missing, forbidden, malformed or mismatched lookups are refused
-with a warning and acknowledged, so later events can continue. Network and 5xx
-lookup failures get at most three attempts per row, with increasing backoff that
+with a warning and acknowledged, so later events can continue. Network errors and
+HTTP 408/429/5xx responses share at most three attempts per row, with backoff that
 survives stream reconnects. Exhaustion warns, refuses and acknowledges the row. This
 currently admits WhatsApp Baileys own-device receipts; other channels without that
 receipt shape remain excluded. The existing channel echo guard stays in place.
+A second bot linked to the same WhatsApp number can look like the owner's phone;
+enabling own-device media may then create a reply loop.
 
 The worker gets the source chat/instance, a message/media reference and available
 transcription or processed content, under its existing permissions. If processing is
