@@ -54,7 +54,7 @@ for (const [modeIndex, mode] of (['legacy', 'tenant', 'tenant-global', 'enforced
     let admin: Database;
     let app: ReturnType<typeof createApp>['app'];
     let services: ReturnType<typeof createApp>['services'];
-    const receiveStatus = mode === 'enforced' ? 500 : 200;
+    const receiveStatus = 200;
     // app.request has no socket peer by default, so all PG suites otherwise share
     // the ingress limiter's anonymous bucket. Give each mode its own test peer.
     const requestEnv = { remoteAddr: `198.18.153.${modeIndex + 1}` };
@@ -246,7 +246,7 @@ for (const [modeIndex, mode] of (['legacy', 'tenant', 'tenant-global', 'enforced
         expect(rows[0]?.heartbeatCount).toBe(1);
       });
 
-    test('signed sources use their stored owner; enforced journal inserts fail closed until ownership derivation', async () => {
+    test('signed sources journal and publish under their persisted owner', async () => {
       for (const [name, tenant] of [
         ['signed-a', A],
         ['signed-b', B],
@@ -256,32 +256,11 @@ for (const [modeIndex, mode] of (['legacy', 'tenant', 'tenant-global', 'enforced
         expect(result.status).toBe(receiveStatus);
         expect(result.headers.get('X-RateLimit-Limit')).toBe('100');
         expect(result.headers.get('X-RateLimit-Remaining')).toBe(name === 'signed-a' ? '99' : '98');
-        if (mode === 'enforced') {
-          const rawBody = JSON.stringify({ value: 'synthetic' });
-          let failure: unknown;
-          try {
-            await services.webhooks.receivePublic(
-              name,
-              JSON.parse(rawBody),
-              {
-                'x-signature': createHmac('sha256', SECRET).update(rawBody).digest('hex'),
-              },
-              { rawBody },
-            );
-          } catch (error) {
-            failure = error;
-          }
-          expect((failure as { cause?: { code?: string } })?.cause?.code).toBe('42501');
-          expect(published).toHaveLength(0);
-          expect(await scoped(tenant, () => scopedHandle(db).select().from(omniEvents))).toHaveLength(0);
-          continue;
-        }
         const body = (await result.json()) as { eventId: string };
         const [event] = await scoped(tenant, () =>
           scopedHandle(db).select().from(omniEvents).where(eq(omniEvents.id, body.eventId)),
         );
-        // Generic webhook events have no ownership parent yet (0092 trigger).
-        expect(event?.tenantId).toBeNull();
+        expect(event?.tenantId).toBe(mode === 'legacy' ? null : tenant);
         expect(published.at(-1)?.tenant).toBe(mode === 'legacy' ? null : tenant);
       }
     });
