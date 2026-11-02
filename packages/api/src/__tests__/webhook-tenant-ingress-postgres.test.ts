@@ -40,7 +40,7 @@ const A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1';
 const B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2';
 const SECRET = 'synthetic-source-secret';
 
-for (const mode of ['legacy', 'tenant', 'tenant-global', 'enforced'] as const) {
+for (const [modeIndex, mode] of (['legacy', 'tenant', 'tenant-global', 'enforced'] as const).entries()) {
   maybe(`webhook ingress and cleanup (${mode}, real PostgreSQL)`, () => {
     const database = `omni_webhook_scope_${crypto.randomUUID().replaceAll('-', '')}`;
     const saved = Object.fromEntries(
@@ -55,6 +55,9 @@ for (const mode of ['legacy', 'tenant', 'tenant-global', 'enforced'] as const) {
     let app: ReturnType<typeof createApp>['app'];
     let services: ReturnType<typeof createApp>['services'];
     const receiveStatus = mode === 'enforced' ? 500 : 200;
+    // app.request has no socket peer by default, so all PG suites otherwise share
+    // the ingress limiter's anonymous bucket. Give each mode its own test peer.
+    const requestEnv = { remoteAddr: `198.18.153.${modeIndex + 1}` };
     const scoped = <T>(tenant: string, fn: () => Promise<T>) =>
       mode === 'legacy' ? fn() : runInWorkerTenantScope(db, tenant, fn);
 
@@ -165,14 +168,18 @@ for (const mode of ['legacy', 'tenant', 'tenant-global', 'enforced'] as const) {
     }
     async function deliver(name: string, valid = true) {
       const body = JSON.stringify({ value: crypto.randomUUID(), tenantId: B });
-      return app.request(`/api/v2/webhooks/ingress/${name}`, {
-        method: 'POST',
-        body,
-        headers: {
-          'content-type': 'application/json',
-          'x-signature': valid ? createHmac('sha256', SECRET).update(body).digest('hex') : 'bad',
+      return app.request(
+        `/api/v2/webhooks/ingress/${name}`,
+        {
+          method: 'POST',
+          body,
+          headers: {
+            'content-type': 'application/json',
+            'x-signature': valid ? createHmac('sha256', SECRET).update(body).digest('hex') : 'bad',
+          },
         },
-      });
+        requestEnv,
+      );
     }
 
     async function seedTenantCredential(): Promise<string> {
@@ -247,6 +254,8 @@ for (const mode of ['legacy', 'tenant', 'tenant-global', 'enforced'] as const) {
         await source(name, tenant);
         const result = await deliver(name);
         expect(result.status).toBe(receiveStatus);
+        expect(result.headers.get('X-RateLimit-Limit')).toBe('100');
+        expect(result.headers.get('X-RateLimit-Remaining')).toBe(name === 'signed-a' ? '99' : '98');
         if (mode === 'enforced') {
           const rawBody = JSON.stringify({ value: 'synthetic' });
           let failure: unknown;
