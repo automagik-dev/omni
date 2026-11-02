@@ -20,11 +20,10 @@
  * publish makes the event a pre-commit side effect.
  *
  * NOTE ON THE REGISTRY: this closes the ASYNC half of
- * `access.ts::access_rules`. That entry stays `pending-G5-conversion` because
- * `trpc/router.ts` — a second synchronous edge with no tenant boundary at all —
- * also reaches `list`/`getById`/`create`/`checkAccess`. That is the same open
- * decision that holds `instances.ts::instances` and
- * `persons.ts::platform_identities`, not G5 async work.
+ * `access.ts::access_rules`. The unmounted router that formerly held this site,
+ * `instances.ts::instances` and `persons.ts::platform_identities` pending was
+ * removed in #1498. Those classifications remain unchanged until separate
+ * boundary verification; the removed router is no longer a live blocker.
  */
 
 import { describe, expect, test } from 'bun:test';
