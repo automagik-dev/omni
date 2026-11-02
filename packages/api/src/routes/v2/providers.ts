@@ -6,25 +6,11 @@ import { zValidator } from '@hono/zod-validator';
 import { ProviderSchemaEnum, createAgnoClient } from '@omni/core';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { maskProvider } from '../../lib/provider-response';
 import { invalidateProviderCache } from '../../plugins/agent-dispatcher';
 import type { AppVariables } from '../../types';
 
 const providersRoutes = new Hono<{ Variables: AppVariables }>();
-
-const SENSITIVE_KEY_PATTERN = /private|secret|password|token|apikey|api_key/i;
-
-function maskSchemaConfig(
-  config: Record<string, unknown> | null | undefined,
-): Record<string, unknown> | null | undefined {
-  if (!config) return config;
-  const masked = { ...config };
-  for (const key of Object.keys(masked)) {
-    if (SENSITIVE_KEY_PATTERN.test(key)) {
-      masked[key] = '[REDACTED]';
-    }
-  }
-  return masked;
-}
 
 // List query schema
 const listQuerySchema = z.object({
@@ -86,11 +72,7 @@ providersRoutes.get('/', zValidator('query', listQuerySchema), async (c) => {
   const providers = await services.providers.list({ active });
 
   // Mask API keys and sensitive schemaConfig fields
-  const items = providers.map((p) => ({
-    ...p,
-    apiKey: p.apiKey ? '********' : null,
-    schemaConfig: maskSchemaConfig(p.schemaConfig),
-  }));
+  const items = providers.map(maskProvider);
 
   return c.json({ items });
 });
@@ -105,11 +87,7 @@ providersRoutes.get('/:id', async (c) => {
   const provider = await services.providers.getById(id);
 
   return c.json({
-    data: {
-      ...provider,
-      apiKey: provider.apiKey ? '********' : null,
-      schemaConfig: maskSchemaConfig(provider.schemaConfig),
-    },
+    data: maskProvider(provider),
   });
 });
 
@@ -130,11 +108,7 @@ providersRoutes.post('/', zValidator('json', createProviderSchema), async (c) =>
 
   return c.json(
     {
-      data: {
-        ...provider,
-        apiKey: provider.apiKey ? '********' : null,
-        schemaConfig: maskSchemaConfig(provider.schemaConfig),
-      },
+      data: maskProvider(provider),
     },
     201,
   );
@@ -153,11 +127,7 @@ providersRoutes.patch('/:id', zValidator('json', updateProviderSchema), async (c
   invalidateProviderCache(id);
 
   return c.json({
-    data: {
-      ...provider,
-      apiKey: provider.apiKey ? '********' : null,
-      schemaConfig: maskSchemaConfig(provider.schemaConfig),
-    },
+    data: maskProvider(provider),
   });
 });
 
