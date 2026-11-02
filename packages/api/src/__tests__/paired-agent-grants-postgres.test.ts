@@ -28,7 +28,7 @@ import {
   pgRoleUrl,
   provisionMigratedDatabase,
 } from '@omni/db/pg-migrated-template';
-import { eq, sql } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import { PostgresJsSession } from 'drizzle-orm/postgres-js/session';
 import { z } from 'zod';
 import { createApp } from '../app';
@@ -51,9 +51,46 @@ const pgDescribe = superUrl ? describe : describe.skip;
 const pageSchema = z.object({
   items: z.array(z.object({ id: z.string().uuid(), journalSeq: z.number() })),
   cursor: z.number(),
+  hasMore: z.boolean(),
   leaseId: z.string().optional(),
 });
 const eventIdSchema = z.object({ eventId: z.string().uuid() });
+
+type PlanNode = Record<string, unknown>;
+function planNodes(node: PlanNode): PlanNode[] {
+  const children = z.array(z.record(z.unknown())).parse(node.Plans ?? []);
+  return [node, ...children.flatMap(planNodes)];
+}
+function hasGrantSeek(arm: PlanNode, column: 'source_id' | 'agent_id'): boolean {
+  const condition = new RegExp(`\\b${column}\\s*=\\s*agent_source_grants\\w*\\.source_id\\b`);
+  const matches = (node: PlanNode) => typeof node['Index Cond'] === 'string' && condition.test(node['Index Cond']);
+  return planNodes(arm).some((eventScan) => {
+    if (eventScan['Relation Name'] !== 'omni_events') return false;
+    if (['Index Scan', 'Index Only Scan'].includes(String(eventScan['Node Type']))) return matches(eventScan);
+    // Bitmap Index Scan carries the condition; its heap parent names the table.
+    return (
+      eventScan['Node Type'] === 'Bitmap Heap Scan' &&
+      planNodes(eventScan).some((node) => node['Node Type'] === 'Bitmap Index Scan' && matches(node))
+    );
+  });
+}
+
+describe('grant seek JSON plan checker', () => {
+  for (const column of ['source_id', 'agent_id'] as const) {
+    const bitmap = (indexCondition: string) => ({
+      'Node Type': 'Bitmap Heap Scan',
+      'Relation Name': 'omni_events',
+      Filter: `(${column} = agent_source_grants_1.source_id)`,
+      Plans: [{ 'Node Type': 'Bitmap Index Scan', 'Index Cond': indexCondition }],
+    });
+    test(`${column}: bitmap grant-driven seek passes`, () => {
+      expect(hasGrantSeek(bitmap(`(${column} = agent_source_grants_1.source_id)`), column)).toBe(true);
+    });
+    test(`${column}: event-type-only bitmap fails even with grant equality in the heap filter`, () => {
+      expect(hasGrantSeek(bitmap("(event_type = 'custom.plan')"), column)).toBe(false);
+    });
+  }
+});
 
 pgDescribe('paired-agent active source grants (C2, real PostgreSQL)', () => {
   const database = `pa_grants_${randomUUID().replaceAll('-', '')}`;
@@ -75,6 +112,7 @@ pgDescribe('paired-agent active source grants (C2, real PostgreSQL)', () => {
   // claim writes each complete journal row, including its trusted source stamp, before publish.
   const { bus } = connectorHookBus();
   let db: Database;
+  let owner: Database;
   let app: ReturnType<typeof createApp>['app'];
   let consumers: EventConsumerService;
   let connectorService: ConnectorService;
@@ -95,7 +133,7 @@ pgDescribe('paired-agent active source grants (C2, real PostgreSQL)', () => {
     process.env.OMNI_PAIRED_AGENT_CONSUMERS = 'true';
     setTenantSecretMasterKey(Buffer.alloc(32, 0x62));
     provisionMigratedDatabase({ superUrl, psqlBin }, database);
-    const owner = open();
+    owner = open();
     await owner.insert(agents).values([
       { id: A, name: 'c2-a', provider: 'claude' },
       { id: B, name: 'c2-b', provider: 'claude' },
@@ -258,8 +296,7 @@ pgDescribe('paired-agent active source grants (C2, real PostgreSQL)', () => {
           .from(webhookSources)
           .where(eq(webhookSources.id, sourceId))
           .limit(1),
-      agent: () =>
-        db.select({ tenantId: omniEvents.tenantId }).from(omniEvents).where(eq(omniEvents.agentId, sourceId)).limit(1),
+      agent: () => db.select({ tenantId: agents.tenantId }).from(agents).where(eq(agents.id, sourceId)).limit(1),
     };
     return (await read[kind]())[0]?.tenantId ?? null;
   }
@@ -548,12 +585,117 @@ pgDescribe('paired-agent active source grants (C2, real PostgreSQL)', () => {
     }, 30_000);
   }
 
-  async function tenantEvent(kind: 'connector' | 'agent') {
+  for (const agentOwned of [true, false]) {
+    test(`${agentOwned ? 'grant' : 'legacy'} capped reclaim reports hasMore with limit=100`, async () => {
+      if (agentOwned) await grant('connector', C);
+      const key = agentOwned ? a : plain;
+      const name = await create('*', true, key);
+      const events = await db
+        .insert(omniEvents)
+        .values(
+          Array.from({ length: 501 }, (): typeof omniEvents.$inferInsert => ({
+            channel: 'internal' as const,
+            eventType: TYPED_EVENT,
+            journalReady: true,
+            ...(agentOwned
+              ? {
+                  sourceKind: 'connector' as const,
+                  sourceId: C,
+                  metadata: { source: 'connector', connectorId: C, subscriptionIds: [] },
+                }
+              : { instanceId: IA }),
+          })),
+        )
+        .returning();
+      const end = Math.max(...events.map((event) => Number(event.journalSeq)));
+      await db
+        .update(durableConsumers)
+        .set({
+          leaseState: {
+            claimed: end,
+            leases: [{ id: randomUUID(), from: 0, to: end, expiresAt: 0 }],
+          },
+        })
+        .where(eq(durableConsumers.name, name));
+      const first = await pull(name, key, '?limit=100');
+      expect(first.items).toHaveLength(500);
+      expect(first.hasMore).toBe(true);
+      expect((await request(key, `/${name}/ack`, 'POST', { leaseId: first.leaseId })).status).toBe(200);
+      const tail = await pull(name, key, '?limit=100');
+      expect(tail.items).toHaveLength(1);
+      expect(new Set([...first.items, ...tail.items].map((event) => event.id)).size).toBe(501);
+    });
+  }
+
+  for (const kind of ['connector', 'agent'] as const) {
+    for (const [label, sourceTenantId, grantTenantId, matches] of [
+      ['NULL/NULL', null, null, true],
+      ['T/T', T, T, true],
+      ['T/U', T, randomUUID(), false],
+      ['NULL/T', null, T, false],
+      ['T/NULL', T, null, false],
+    ] as const) {
+      test(`${kind} real grant tenant truth table ${label}`, async () => {
+        const sourceId = randomUUID();
+        try {
+          if (kind === 'agent') await seedProducer(sourceId, sourceTenantId);
+          else
+            await owner.insert(connectors).values({
+              id: sourceId,
+              name: sourceId,
+              provider: 'gitlab',
+              status: 'connected',
+              tenantId: sourceTenantId,
+              credentials: '{}',
+            });
+          const [event] = await db
+            .insert(omniEvents)
+            .values({
+              channel: 'internal',
+              eventType: TYPED_EVENT,
+              journalReady: true,
+              ...(kind === 'agent'
+                ? { agentId: sourceId, tenantId: sourceTenantId }
+                : {
+                    sourceKind: 'connector',
+                    sourceId,
+                    metadata: { source: 'connector', connectorId: sourceId, subscriptionIds: [] },
+                  }),
+            })
+            .returning();
+          if (!event) throw new Error('Missing truth-table row');
+          expect(event.tenantId).toBe(sourceTenantId);
+          await grant(kind, sourceId, A, grantTenantId);
+          expect((await pull(await create())).items.map((item) => item.id)).toEqual(matches ? [event.id] : []);
+        } finally {
+          await db.delete(omniEvents);
+          await db.delete(agentSourceGrants);
+          if (kind === 'agent') await owner.delete(agents).where(eq(agents.id, sourceId));
+          else await owner.delete(connectors).where(eq(connectors.id, sourceId));
+        }
+      });
+    }
+  }
+
+  async function seedProducer(id: string, tenantId: string | null) {
+    await owner.insert(agents).values({ id, name: id, provider: 'claude' });
+    // A fixture backfill establishes this dedicated agent's stored ownership.
+    // INSERT derives NULL for an owner-less agent, ignoring a supplied tenant.
+    const [stored] = await owner.update(agents).set({ tenantId }).where(eq(agents.id, id)).returning();
+    expect(stored?.tenantId).toBe(tenantId);
+  }
+  async function tenantEvent(kind: 'connector' | 'agent', producerId: string) {
     if (kind === 'connector') return typed();
     return (
       await db
         .insert(omniEvents)
-        .values({ agentId: B, channel: 'internal', eventType: 'custom.tenant.agent', journalReady: true })
+        .values({
+          agentId: producerId,
+          tenantId: T,
+          channel: 'internal',
+          eventType: 'custom.tenant.agent',
+          journalReady: true,
+        })
         .returning()
     )[0];
   }
@@ -570,12 +712,13 @@ pgDescribe('paired-agent active source grants (C2, real PostgreSQL)', () => {
     for (const mismatch of ['other', 'null'] as const) {
       const tenantId = mismatch === 'other' ? randomUUID() : null;
       test(`${kind} grants require the source tenant: ${mismatch}/T never delivers on pull, shared ack, stream or expired reclaim`, async () => {
-        if (kind === 'agent') await db.update(agents).set({ tenantId: T }).where(eq(agents.id, B));
+        const producerId = randomUUID();
+        if (kind === 'agent') await seedProducer(producerId, T);
         try {
-          const event = await tenantEvent(kind);
+          const event = await tenantEvent(kind, producerId);
           if (!event) throw new Error('Missing tenant row');
           expect(event.tenantId).toBe(T);
-          const approval = await grant(kind, kind === 'connector' ? C : B, A, tenantId);
+          const approval = await grant(kind, kind === 'connector' ? C : producerId, A, tenantId);
           const name = await create();
           const shared = await create('*', true);
           expect((await pull(name)).items).toEqual([]);
@@ -598,7 +741,11 @@ pgDescribe('paired-agent active source grants (C2, real PostgreSQL)', () => {
           expect((await consumers.getByName(reclaim)).leaseState?.leases).toEqual([]);
           expect((await consumers.scanForStream(name, 0, { tenantId: null, caller: caller() })).items).toEqual([]);
         } finally {
-          if (kind === 'agent') await db.update(agents).set({ tenantId: null }).where(eq(agents.id, B));
+          if (kind === 'agent') {
+            await db.delete(omniEvents).where(eq(omniEvents.agentId, producerId));
+            await db.delete(agentSourceGrants).where(eq(agentSourceGrants.sourceId, producerId));
+            await owner.delete(agents).where(eq(agents.id, producerId));
+          }
         }
       });
     }
@@ -671,49 +818,155 @@ pgDescribe('paired-agent active source grants (C2, real PostgreSQL)', () => {
     expect(source.tenantId).not.toBeNull();
     expect((await pull(await create())).items.map((item) => item.id)).toEqual([event.id]);
   });
-  test('EXPLAIN of the real grant scan retains the three G1 journal index paths with tenant equality', async () => {
-    await typed();
-    await db.insert(omniEvents).values([
-      { channel: 'internal', eventType: TYPED_EVENT, instanceId: IA, journalReady: true },
-      { channel: 'internal', eventType: TYPED_EVENT, agentId: B, journalReady: true },
-      ...Array.from({ length: 2500 }, (): typeof omniEvents.$inferInsert => ({
-        channel: 'internal' as const,
-        eventType: TYPED_EVENT,
-        sourceKind: 'connector' as const,
-        sourceId: otherC,
-        metadata: { source: 'connector', connectorId: otherC, subscriptionIds: [] },
-        journalReady: true,
-      })),
-    ]);
-    await grant('connector', C);
-    await grant('agent', B);
-    const name = await create(TYPED_EVENT);
+  async function captureGrantScan(name: string) {
     const prepared = spyOn(PostgresJsSession.prototype, 'prepareQuery');
-    let query: { sql: string; params: unknown[] } | undefined;
     try {
-      await consumers.scanForStream(name, 0, { tenantId: null, caller: caller() });
-      query = prepared.mock.calls
+      const page = await consumers.scanForStream(name, 0, { tenantId: null, caller: caller() }, 100);
+      const query = prepared.mock.calls
         .map(([statement]) => statement)
         .find((statement) => statement.sql.includes('union all'));
+      if (!query) throw new Error('Missing real UNION scan');
+      return { query, items: page.items };
     } finally {
       prepared.mockRestore();
     }
-    if (!query) throw new Error('Missing real UNION scan');
-    expect(query.sql).toContain('is not distinct from');
-    const explain = sql`EXPLAIN (FORMAT JSON) `;
+  }
+  async function assertGrantScanIndexes(query: { sql: string; params: unknown[] }) {
+    expect(query.sql).toContain('coalesce(');
+    const explain = sql`EXPLAIN (ANALYZE, FORMAT JSON) `;
     for (const [index, part] of query.sql.split(/\$(\d+)/).entries()) {
       explain.append(index % 2 === 0 ? sql.raw(part) : sql`${query.params[Number(part) - 1]}`);
     }
-    const plan = await db.transaction(async (tx) => {
-      await tx.execute(sql`SET LOCAL enable_seqscan = off`);
-      return tx.execute(explain);
-    });
-    const rendered = JSON.stringify(plan);
-    for (const index of [
-      'omni_events_instance_type_seq_idx',
-      'omni_events_source_type_seq_idx',
-      'omni_events_agent_type_seq_idx',
-    ])
-      expect(rendered).toContain(index);
-  }, 15_000);
+    const parsed = z
+      .array(
+        z.object({ 'QUERY PLAN': z.array(z.object({ Plan: z.record(z.unknown()), 'Execution Time': z.number() })) }),
+      )
+      .parse(await db.execute(explain));
+    const root = parsed[0]?.['QUERY PLAN'][0]?.Plan;
+    if (!root) throw new Error('Missing EXPLAIN root');
+    // Locate the UNION's three ordered arms through any wrapper nodes. Joins,
+    // bitmap/index scans, and other plan details may differ between PG versions.
+    const union = planNodes(root).find((node) => Array.isArray(node.Plans) && node.Plans.length === 3);
+    const arms = z.array(z.record(z.unknown())).length(3).parse(union?.Plans);
+    for (const [branch, arm] of arms.entries()) {
+      const nodes = planNodes(arm);
+      if (branch === 0) {
+        expect(JSON.stringify(arm)).toContain('omni_events_instance_type_seq_idx');
+      } else {
+        const column = branch === 1 ? 'source_id' : 'agent_id';
+        // The grant-driven seek matters, not which eligible index PG chooses.
+        const seek = hasGrantSeek(arm, column);
+        expect({ branch, seek, plan: arm }).toMatchObject({ seek: true });
+      }
+      expect(
+        nodes.filter((node) => node['Node Type'] === 'Seq Scan' && node['Relation Name'] === 'omni_events'),
+      ).toEqual([]);
+    }
+  }
+
+  test('selective real UNION scan uses I index and grant-driven S/A seeks for both matching and mismatched grant tenants, without planner flags', async () => {
+    // This dataset belongs only to this test. In particular it never inherits
+    // the cap proof's leases, rows, grants or planner statistics.
+    const name = await create(TYPED_EVENT);
+    const ungrantedConnectors = Array.from({ length: 250 }, () => randomUUID());
+    const ungrantedWebhooks = Array.from({ length: 250 }, () => randomUUID());
+    const otherAgents = Array.from({ length: 100 }, () => randomUUID());
+    try {
+      await owner
+        .insert(agents)
+        .values(otherAgents.map((id) => ({ id, name: id, provider: 'claude' as const, tenantId: T })));
+      await owner.update(agents).set({ tenantId: T }).where(inArray(agents.id, otherAgents));
+      await owner.insert(connectors).values(
+        ungrantedConnectors.map((id) => ({
+          id,
+          name: id,
+          provider: 'gitlab',
+          status: 'connected',
+          tenantId: T,
+          credentials: sealCredentialField(T, '{}'),
+        })),
+      );
+      await owner.insert(webhookSources).values(ungrantedWebhooks.map((id) => ({ id, name: id })));
+      // Agent and instance event tenants derive from their persisted parents,
+      // just as the connector rows derive theirs from trusted ingress metadata.
+      await db.update(agents).set({ tenantId: T }).where(eq(agents.id, A));
+      await db.update(instances).set({ tenantId: T }).where(eq(instances.id, IA));
+      const connectorRow = (sourceId: string): typeof omniEvents.$inferInsert => ({
+        channel: 'internal',
+        eventType: TYPED_EVENT,
+        sourceKind: 'connector',
+        sourceId,
+        metadata: { source: 'connector', connectorId: sourceId, subscriptionIds: [] },
+        journalReady: true,
+      });
+      const noise: (typeof omniEvents.$inferInsert)[] = [
+        ...otherAgents.flatMap((agentId) =>
+          Array.from({ length: 20 }, (): typeof omniEvents.$inferInsert => ({
+            agentId,
+            tenantId: T,
+            channel: 'internal' as const,
+            eventType: TYPED_EVENT,
+            journalReady: true,
+          })),
+        ),
+        ...ungrantedConnectors.flatMap((id) => Array.from({ length: 10 }, () => connectorRow(id))),
+        // Legacy, unscoped webhook sources/rows carry NULL, like normal receive().
+        ...ungrantedWebhooks.flatMap((id) =>
+          Array.from({ length: 10 }, (): typeof omniEvents.$inferInsert => ({
+            channel: 'internal',
+            eventType: TYPED_EVENT,
+            sourceKind: 'webhook_source',
+            sourceId: id,
+            metadata: { source: 'webhook', webhookSource: id },
+            journalReady: true,
+          })),
+        ),
+      ];
+      for (let offset = 0; offset < noise.length; offset += 500)
+        await db.insert(omniEvents).values(noise.slice(offset, offset + 500));
+      const granted = await db
+        .insert(omniEvents)
+        .values([
+          ...Array.from({ length: 20 }, () => connectorRow(C)),
+          ...Array.from({ length: 20 }, (): typeof omniEvents.$inferInsert => ({
+            channel: 'internal',
+            eventType: TYPED_EVENT,
+            agentId: A,
+            tenantId: T,
+            journalReady: true,
+          })),
+        ])
+        .returning();
+      const [instanceEvent] = await db
+        .insert(omniEvents)
+        .values({ channel: 'internal', eventType: TYPED_EVENT, instanceId: IA, journalReady: true })
+        .returning();
+      if (!instanceEvent) throw new Error('Missing instance control');
+      expect(granted).toHaveLength(40);
+      expect(granted.every((event) => event.tenantId === T && event.instanceId === null)).toBe(true);
+      expect(instanceEvent.tenantId).toBe(T);
+      await grant('connector', C);
+      await grant('agent', A);
+      let previousQuery: { sql: string; params: unknown[] } | undefined;
+      for (const matches of [true, false]) {
+        if (!matches) await db.update(agentSourceGrants).set({ tenantId: randomUUID() });
+        await owner.execute(sql`ANALYZE omni_events, agent_source_grants`);
+        const { query, items } = await captureGrantScan(name);
+        if (previousQuery) expect(query).toEqual(previousQuery);
+        previousQuery = query;
+        expect(items.map((event) => event.id).sort()).toEqual(
+          (matches ? [...granted.map((event) => event.id), instanceEvent.id] : [instanceEvent.id]).sort(),
+        );
+        await assertGrantScanIndexes(query);
+      }
+    } finally {
+      await db.delete(omniEvents);
+      await db.delete(agentSourceGrants);
+      await db.update(instances).set({ tenantId: null }).where(eq(instances.id, IA));
+      await db.update(agents).set({ tenantId: null }).where(eq(agents.id, A));
+      await owner.delete(agents).where(inArray(agents.id, otherAgents));
+      await owner.delete(connectors).where(inArray(connectors.id, ungrantedConnectors));
+      await owner.delete(webhookSources).where(inArray(webhookSources.id, ungrantedWebhooks));
+    }
+  }, 30_000);
 });

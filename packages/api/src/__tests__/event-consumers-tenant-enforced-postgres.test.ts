@@ -122,7 +122,7 @@ pgDescribe('consumer C15 six-verb isolation under FORCE RLS and tenant credentia
     ]);
     if (result.exitCode !== 0) throw new Error(result.stderr.toString());
   });
-  function tenantApp(f: (typeof fixture)[number]) {
+  function tenantApp(f: (typeof fixture)[number], credential?: { scopes: string[]; instanceIds: string[] | null }) {
     const app = new Hono<{ Variables: AppVariables }>();
     app.onError(errorHandler);
     app.use('*', async (c, next) => {
@@ -131,8 +131,8 @@ pgDescribe('consumer C15 six-verb isolation under FORCE RLS and tenant credentia
       c.set('apiKey', {
         id: f.keyId,
         name: f.name,
-        scopes: ['events:*'],
-        instanceIds: [f.instanceId],
+        scopes: credential?.scopes ?? ['events:*'],
+        instanceIds: credential ? credential.instanceIds : [f.instanceId],
         expiresAt: null,
       });
       c.set('services', { db: runtime, eventConsumers: new EventConsumerService(runtime) } as AppVariables['services']);
@@ -153,6 +153,34 @@ pgDescribe('consumer C15 six-verb isolation under FORCE RLS and tenant credentia
     });
     await expect(assertPgTestRole(owner, DEFAULT_ROLE_NAMES.runtime)).rejects.toThrow();
   });
+  for (const scopes of [['events:*'], ['*']]) {
+    for (const [verb, suffix, method, body] of [
+      ['list', '', 'GET', undefined],
+      ['inspect', '', 'GET', undefined],
+      ['pull', '/pull', 'POST', undefined],
+      ['ack', '/ack', 'POST', { cursor: 999999 }],
+      ['stream', '/stream', 'GET', undefined],
+      ['delete', '', 'DELETE', undefined],
+    ] as const) {
+      test(`tenant A unrestricted ${scopes[0]} credential: foreign ${verb} is hidden without mutation`, async () => {
+        const [f, other] = fixture;
+        if (!f || !other) throw new Error('Missing tenants');
+        const app = tenantApp(f, { scopes, instanceIds: null });
+        const before = await owner.select().from(durableConsumers).where(eq(durableConsumers.name, other.name));
+        const response = await app.request(`/events/consumers${verb === 'list' ? '' : `/${other.name}${suffix}`}`, {
+          method,
+          headers: { 'content-type': 'application/json' },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        });
+        if (verb === 'list')
+          expect(listed.parse(await response.json()).items.map((item) => item.name)).toEqual([f.name]);
+        else expect(response.status).toBe(404);
+        expect(await owner.select().from(durableConsumers).where(eq(durableConsumers.name, other.name))).toEqual(
+          before,
+        );
+      });
+    }
+  }
   for (const [index, f] of fixture.entries()) {
     test(`tenant ${index}: own list/inspect/pull/ack/stream/delete succeed; foreign six verbs are hidden without mutation`, async () => {
       const other = fixture[1 - index];

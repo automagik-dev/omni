@@ -71,20 +71,30 @@ import { runTenantWorkDb } from '../tenancy/worker-tenant-context';
 import { eventTypeFilterClause } from './events';
 
 /** Source namespaces are distinct: a parent connector never authorizes its legacy subscriptions. */
+// Do not simplify the NULL-safe equality below to IS NOT DISTINCT FROM: that
+// plans as NOT(DistinctExpr), not an OpExpr. compute_semijoin_info then cannot
+// unique-ify grants to drive seeks on omni_events_source_type_seq_idx or
+// omni_events_agent_type_seq_idx. Empty text is never a UUID's text, so coalesce
+// preserves NULL/NULL equality without a sentinel collision.
 function activeGrantSourceClause(agentId: string): SQL {
   return sql`exists (select 1 from ${agentSourceGrants}
     where ${agentSourceGrants.agentId} = ${agentId}
       and ${agentSourceGrants.revokedAt} is null
-      and ${agentSourceGrants.tenantId} is not distinct from ${omniEvents.tenantId}
+      and coalesce(${agentSourceGrants.tenantId}::text, '') = coalesce(${omniEvents.tenantId}::text, '')
       and ${agentSourceGrants.sourceKind} = ${omniEvents.sourceKind}
       and ${agentSourceGrants.sourceId} = ${omniEvents.sourceId})`;
 }
 
+// Do not simplify the NULL-safe equality below to IS NOT DISTINCT FROM: that
+// plans as NOT(DistinctExpr), not an OpExpr. compute_semijoin_info then cannot
+// unique-ify grants to drive seeks on omni_events_source_type_seq_idx or
+// omni_events_agent_type_seq_idx. Empty text is never a UUID's text, so coalesce
+// preserves NULL/NULL equality without a sentinel collision.
 function activeGrantAgentClause(agentId: string): SQL {
   return sql`exists (select 1 from ${agentSourceGrants}
     where ${agentSourceGrants.agentId} = ${agentId}
       and ${agentSourceGrants.revokedAt} is null
-      and ${agentSourceGrants.tenantId} is not distinct from ${omniEvents.tenantId}
+      and coalesce(${agentSourceGrants.tenantId}::text, '') = coalesce(${omniEvents.tenantId}::text, '')
       and ${agentSourceGrants.sourceKind} = 'agent'
       and ${agentSourceGrants.sourceId} = ${omniEvents.agentId})`;
 }
@@ -918,7 +928,7 @@ export class EventConsumerService {
       // Nothing to deliver: release now so the cursor moves past filtered-out rows (#1128).
       await this.ackShared(consumer.name, lease.id, caller).catch(() => undefined);
     }
-    const hasMore = scanned.length === limit;
+    const hasMore = scanned.length >= limit;
     return {
       consumer: consumer.name,
       items,
