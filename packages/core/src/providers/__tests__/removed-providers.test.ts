@@ -1,12 +1,14 @@
 import { describe, expect, test } from 'bun:test';
 import type { ProviderSchema } from '../../types/agent';
-import {
-  type ProviderClientConfig,
-  createProviderClient,
-  getSupportedProviderSchemas,
-  isProviderSchemaSupported,
-} from '../factory';
-import { REMOVED_OPENCLAW_MESSAGE } from '../removed-providers';
+import type { ProviderClientConfig } from '../factory';
+
+// API tests mock @omni/core process-wide; isolate these real implementations
+// when the monorepo tests share a single Bun process (pushes / merge groups).
+// @ts-expect-error Bun supports query-suffixed imports; TypeScript does not resolve them.
+const factory = await import('../factory.ts?real-removed-providers-test');
+const { createProviderClient, getSupportedProviderSchemas, isProviderSchemaSupported } = factory;
+// @ts-expect-error Bun supports query-suffixed imports; TypeScript does not resolve them.
+const { REMOVED_OPENCLAW_MESSAGE } = await import('../removed-providers.ts?real-removed-providers-test');
 
 describe('removed provider factory compatibility', () => {
   test('a retained legacy schema is refused with the versioned error before a client is built', () => {
