@@ -148,7 +148,7 @@ except `debug` commands; `omni --all` reveals those too.
 | `settings` | Server settings |
 | `batch` | Batch operations |
 | `start` / `stop` / `restart` | Manage local Omni services (API + NATS) |
-| `install` | Interactive setup wizard (bootstrap an Omni server) |
+| `install` | Non-interactive, reinstall-safe Omni server bootstrap |
 | `update` | Update the CLI to the latest version |
 | `doctor` | Diagnose and repair the embedded omni runtime |
 | `requirements` | Show declared peer-version requirements (pgserve, genie) |
