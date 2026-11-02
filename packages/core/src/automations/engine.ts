@@ -168,6 +168,7 @@ export class AutomationEngine {
       eventBus,
       sendMessage: deps.sendMessage,
       callAgent: deps.callAgent,
+      admitAgentEvent: deps.admitAgentEvent,
       staleIdleTimeoutGate: deps.staleIdleTimeoutGate,
       releaseIdleTimeoutClaim: deps.releaseIdleTimeoutClaim,
       claimEmittedEvent: deps.claimEmittedEvent,
@@ -661,6 +662,7 @@ export class AutomationEngine {
       payload,
       eventId: event.id,
       correlationId: event.metadata.correlationId,
+      event,
     };
 
     manager.addMessage(key, message, from, instanceId, stamp);
@@ -682,20 +684,64 @@ export class AutomationEngine {
     await this.queueExecution(automation, event, context, instanceId);
   }
 
+  /** Only call_agent windows need sender admission; other batching keeps its semantics. */
+  private async admitBatchMessages(
+    automation: Automation,
+    messages: DebouncedMessage[],
+    trustedTenantId: string | null,
+  ): Promise<DebouncedMessage[]> {
+    if (!automation.actions.some((action) => action.type === 'call_agent') || !this.deps.admitAgentEvent) {
+      return messages;
+    }
+    const admitted: DebouncedMessage[] = [];
+    for (const message of messages) {
+      try {
+        if (message.event && (await this.deps.admitAgentEvent(message.event, trustedTenantId))) {
+          admitted.push(message);
+        }
+      } catch {
+        // A policy failure drops this event, never the allowed peers in its window.
+        logger.warn('Buffered agent event admission failed', { eventId: message.eventId, automationId: automation.id });
+      }
+    }
+    return admitted;
+  }
+
   /**
    * Set up debounce manager for an automation
    */
   private setupDebounceManager(automation: Automation): void {
     const callback = async (
       key: ConversationKey,
-      messages: DebouncedMessage[],
+      bufferedMessages: DebouncedMessage[],
       // From the LAST event in the window, not parsed back out of the key — a
       // custom key (#1110) carries neither a sender nor an instance.
       from: { id: string; name?: string } | undefined,
       instanceId: string,
       stamp: DebounceEnvelopeStamp | null,
     ) => {
-      // Get the last message (should always exist since callback only fires with messages)
+      const startedAt = Date.now();
+      const originalLast = bufferedMessages[bufferedMessages.length - 1];
+      const trustedTenantId = stamp?.tenantId ?? null;
+      // Filter BEFORE constructing payload, debounce text, conditions or templates.
+      // No blocked text/source may survive through promptOverride or {{payload}}.
+      const messages = await this.admitBatchMessages(automation, bufferedMessages, trustedTenantId);
+      if (originalLast && messages.length === 0) {
+        await this.logExecution(
+          {
+            automationId: automation.id,
+            automationName: automation.name,
+            eventId: originalLast.eventId ?? generateId(),
+            status: 'skipped',
+            conditionsMatched: false,
+            actionsExecuted: [],
+            error: 'no admitted messages in agent batch',
+            executionTimeMs: Date.now() - startedAt,
+          },
+          trustedTenantId,
+        );
+        return;
+      }
       const lastMessage = messages[messages.length - 1];
       if (!lastMessage) {
         logger.warn('Debounce callback fired with empty messages array', { key });
@@ -730,7 +776,7 @@ export class AutomationEngine {
             text: m.text,
             timestamp: m.timestamp,
           })),
-          from,
+          from: lastMessage.payload.from as typeof from,
           instanceId,
         },
         event: {

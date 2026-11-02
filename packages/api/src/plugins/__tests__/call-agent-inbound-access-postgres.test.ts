@@ -38,7 +38,13 @@ const pgDescribe = superUrl ? describe : describe.skip;
 const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
 const TENANT = crypto.randomUUID();
 const OTHER = crypto.randomUUID();
-const INBOUND_TYPES = ['message.received', 'reaction.received', 'reaction.removed'] as const;
+const INBOUND_TYPES = [
+  'message.received',
+  'reaction.received',
+  'reaction.removed',
+  'message.button_click',
+  'message.poll_vote',
+] as const;
 type InboundType = (typeof INBOUND_TYPES)[number];
 
 for (const enforced of [false, true]) {
@@ -179,7 +185,13 @@ for (const enforced of [false, true]) {
           payload: {
             chatId: 'group-chat',
             from: 'blocked',
-            ...(type === 'message.received' ? { content: { type: 'text', text: 'hello' } } : { emoji: '👍' }),
+            ...(type === 'message.received'
+              ? { content: { type: 'text', text: 'hello' } }
+              : type === 'message.button_click'
+                ? { data: 'clicked', messageId: 'button-message' }
+                : type === 'message.poll_vote'
+                  ? { pollId: 'poll-1', optionIds: [0] }
+                  : { emoji: '👍' }),
             ...payload,
           },
         } as OmniEvent;
@@ -193,7 +205,73 @@ for (const enforced of [false, true]) {
           await engine.stop();
         }
       }
-      return { agent: agent!, instance: instance!, services, deps, runs, chatless, chatful, deliver };
+      async function deliverBatch(
+        inputs: Array<{ from: unknown; text: string; rawPayload?: unknown }>,
+        config: Partial<CallAgentActionConfig> = {},
+        metadata: Record<string, unknown> = {},
+        batchDeps = deps,
+      ) {
+        const plan = storedPlan.find((row) => row.triggerEventType === 'message.received')!;
+        const engine = createAutomationEngine({ reconcileIntervalMs: 0 });
+        let handler: ((event: OmniEvent) => Promise<void>) | undefined;
+        const bus = {
+          subscribePattern: async (_pattern: string, fn: typeof handler) => {
+            handler = fn;
+            return { unsubscribe: async () => {} };
+          },
+        } as unknown as EventBus;
+        let logged!: (log: { status: string; actionsExecuted?: unknown[] }) => void;
+        const result = new Promise<{ status: string; actionsExecuted?: unknown[] }>((resolve) => {
+          logged = resolve;
+        });
+        engine.setLogger(async (log) => {
+          logged(log);
+        });
+        await engine.start(
+          bus,
+          [
+            {
+              ...plan,
+              id: crypto.randomUUID(),
+              debounce: { mode: 'fixed', delayMs: 60_000, key: '{{payload.chatId}}' },
+              actions: [{ type: 'call_agent', config: { agentId: agent!.id, ...config } }],
+            },
+          ] as CoreAutomation[],
+          {
+            ...batchDeps,
+            claimExecution: buildAutomationEngineDeps(createServices(admin, null), admin).claimExecution,
+          },
+        );
+        try {
+          for (const input of inputs) {
+            if (!handler) throw new Error('batch subscription missing');
+            await handler({
+              id: crypto.randomUUID(),
+              type: 'message.received',
+              timestamp: Date.now(),
+              metadata: {
+                instanceId: instance!.id,
+                channelType: 'whatsapp-baileys',
+                correlationId: crypto.randomUUID(),
+                ...(enforced ? { envelopeVersion: 1, tenantId: TENANT } : {}),
+                ...metadata,
+              },
+              payload: {
+                from: input.from,
+                chatId: 'group-chat',
+                content: { type: 'text', text: input.text },
+                rawPayload: input.rawPayload,
+              },
+            } as OmniEvent);
+          }
+          // Flush the real debounce manager without a timing-dependent sleep.
+          await engine.stop();
+          return await result;
+        } finally {
+          await engine.stop();
+        }
+      }
+      return { agent: agent!, instance: instance!, services, deps, runs, chatless, chatful, deliver, deliverBatch };
     }
 
     for (const type of INBOUND_TYPES) {
@@ -249,6 +327,136 @@ for (const enforced of [false, true]) {
           ).result.status,
         ).toBe('success');
         expect(h.runs).toEqual(['chatful']);
+      });
+    }
+
+    for (const blockedLast of [false, true]) {
+      for (const chatful of [false, true]) {
+        test(`mixed sender batch retains allowed text (${blockedLast ? 'blocked last' : 'blocked first'}, ${chatful ? 'chatful' : 'chatless'})`, async () => {
+          const h = await harness('allowlist');
+          const allowed = [
+            { from: 'allowed', text: 'first admitted text' },
+            { from: 'allowed', text: 'second admitted text' },
+          ];
+          const blocked = { from: 'blocked', text: 'PRIVATE BLOCKED TEXT' };
+          const inputs = blockedLast ? [...allowed, blocked] : [blocked, ...allowed];
+          const config = chatful ? { providerId: h.instance.id } : {};
+          expect((await h.deliverBatch(inputs, config)).status).toBe('success');
+          expect(h.runs).toEqual([chatful ? 'chatful' : 'chatless']);
+          const messages = chatful ? h.chatful.mock.calls[0]![0].messages : h.chatless.mock.calls[0]![0].messages;
+          const text = JSON.stringify(messages);
+          expect(text).toContain('first admitted text');
+          expect(text).toContain('second admitted text');
+          expect(text).not.toContain('PRIVATE BLOCKED TEXT');
+          expect(text).not.toContain('blocked');
+          if (chatful) expect(messages).toEqual(['first admitted text', 'second admitted text']);
+        });
+      }
+      test(`promptOverride renders only admitted payload/source and batch (${blockedLast ? 'blocked last' : 'blocked first'})`, async () => {
+        const h = await harness();
+        const allowed = { from: 'allowed', text: 'admitted' };
+        const denied = { from: 'blocked', text: 'PRIVATE BLOCKED TEXT' };
+        expect(
+          (
+            await h.deliverBatch(blockedLast ? [allowed, denied] : [denied, allowed], {
+              promptOverride: '{{payload}} {{debounce.messages}} {{from}}',
+            })
+          ).status,
+        ).toBe('success');
+        const prompt = h.chatless.mock.calls[0]![0].messages[0]!;
+        expect(prompt).toContain('admitted');
+        expect(prompt).toContain('allowed');
+        expect(prompt).not.toContain('blocked');
+        expect(prompt).not.toContain('PRIVATE BLOCKED TEXT');
+      });
+    }
+
+    test('all denied or malformed events skip the agent call and log no sender data', async () => {
+      const h = await harness();
+      await admin
+        .update(accessRules)
+        .set({ reason: 'PRIVATE operator note' })
+        .where(eq(accessRules.instanceId, h.instance.id));
+      const config = getLogConfig();
+      configureLogging({ level: 'warn', modules: 'automation-actions' });
+      try {
+        const result = await h.deliverBatch([
+          { from: 'blocked', text: 'PRIVATE BLOCKED TEXT' },
+          { from: { id: 'PRIVATE SENDER' }, text: 'PRIVATE MALFORMED TEXT' },
+        ]);
+        expect(result.status).toBe('skipped');
+        expect(result.actionsExecuted).toEqual([]);
+        expect(h.runs).toEqual([]);
+        const logs = getLogBuffer().getRecent({ modules: ['automation-actions'] });
+        const serialized = JSON.stringify(logs);
+        expect(serialized).not.toContain('PRIVATE');
+        expect(serialized).not.toContain('"from"');
+      } finally {
+        configureLogging(config);
+      }
+    });
+
+    test('one failed policy read drops only that event and preserves admitted peers', async () => {
+      const h = await harness();
+      const evaluate = h.services.access.evaluateAccess.bind(h.services.access);
+      const check = spyOn(h.services.access, 'evaluateAccess').mockImplementation(async (...args) => {
+        if (args[1] === 'error-sender') throw new Error('PRIVATE DB QUERY PARAMETER');
+        return evaluate(...args);
+      });
+      try {
+        expect(
+          (
+            await h.deliverBatch([
+              { from: 'error-sender', text: 'PRIVATE ERROR TEXT' },
+              { from: 'allowed', text: 'admitted peer' },
+            ])
+          ).status,
+        ).toBe('success');
+        const text = JSON.stringify(h.chatless.mock.calls[0]![0].messages);
+        expect(text).toContain('admitted peer');
+        expect(text).not.toContain('PRIVATE');
+      } finally {
+        check.mockRestore();
+      }
+    });
+
+    test('all failed policy reads skip; disabled access and raw sender fallbacks retain batching', async () => {
+      const h = await harness('allowlist');
+      const failed = {
+        ...h.deps,
+        admitAgentEvent: async () => {
+          throw new Error('PRIVATE failure');
+        },
+      };
+      expect((await h.deliverBatch([{ from: 'allowed', text: 'not sent' }], {}, {}, failed)).status).toBe('skipped');
+      expect(h.runs).toEqual([]);
+      expect(
+        (
+          await h.deliverBatch([
+            { from: 'lid', text: 'phone admitted', rawPayload: { resolvedSenderPhone: '5511999999999' } },
+            { from: 'blocked', text: 'PRIVATE BLOCKED TEXT' },
+          ])
+        ).status,
+      ).toBe('success');
+      expect(JSON.stringify(h.chatless.mock.calls[0]![0].messages)).not.toContain('PRIVATE');
+      const disabled = await harness('disabled');
+      expect((await disabled.deliverBatch([{ from: 'blocked', text: 'access disabled control' }])).status).toBe(
+        'success',
+      );
+      expect(disabled.runs).toEqual(['chatless']);
+    });
+
+    for (const type of ['message.button_click', 'message.poll_vote'] as const) {
+      test(`${type}: missing identity and DB errors fail closed`, async () => {
+        const h = await harness();
+        expect((await h.deliver(type, { from: undefined })).result.status).toBe('failed');
+        const lookup = spyOn(h.services.instances, 'getById').mockRejectedValue(new Error('PRIVATE source error'));
+        try {
+          expect((await h.deliver(type, { from: 'allowed' })).result.status).toBe('failed');
+        } finally {
+          lookup.mockRestore();
+        }
+        expect(h.runs).toEqual([]);
       });
     }
 
@@ -409,6 +617,9 @@ for (const enforced of [false, true]) {
             )
           ).result.status,
         ).toBe('failed');
+        expect(
+          (await h.deliverBatch([{ from: 'allowed', text: 'foreign source' }], {}, { instanceId: foreign!.id })).status,
+        ).toBe('skipped');
         await admin.update(agents).set({ tenantId: OTHER }).where(eq(agents.id, h.agent.id));
         expect((await h.deliver('message.received', { from: 'allowed' })).result.status).toBe('failed');
         expect(h.runs).toEqual([]);

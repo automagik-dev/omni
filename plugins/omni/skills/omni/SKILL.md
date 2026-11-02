@@ -6,33 +6,38 @@ allowed-tools: Bash(omni *), Bash(jq *)
 
 # Omni Router
 
-Pure dispatcher — probe health, match intent, load exactly one tier, act there.
+Match the request, load one tier, and use the installed CLI's help for its options (`omni --help`, then `omni <group> --help`). These instructions describe CLI 2.261102.x.
 
-Health probe: `omni auth status --json 2>/dev/null || echo "not running"`. Not running → load `omni-setup/SKILL.md` (Step 1). Running → match the tiers below in priority order; first hit wins.
+## Target and credentials
+
+For an existing Omni, inspect `omni server current --json` / `omni server list --json` first. Select it with `omni server use <name>` or global `--server <name>`. `omni status --json` checks reachability; `omni auth status --json` checks the selected credentials. Missing credentials, a scope denial, and an unreachable server are different problems; none alone means a new server should be installed.
+
+`omni server add <name> <url>` only registers the URL. The CLI still needs an API key; it cannot sign itself in through a device code. `claim`, `approve`, and bare `connect` are operator actions requiring an existing key with `auth:admin`, not agent self-service. See the setup skill for the working paths.
 
 ## 1. Agent tier — send and receive
 
 **Triggers:** say, speak, reply, respond, send, message, text, voice, TTS, react, imagine, film, music, media, image, audio, video, listen, transcribe, see, vision, sticker, poll, location, history, chat, conversation, turn-based, done, message search
 
-**→ Load `omni-agent/SKILL.md`** — verb commands (`say`, `speak`, `imagine`, `film`, `music`, `react`, `see`, `listen`, `history`, `done`), send edge cases, messages/chats, turn lifecycle.
+**→ Load `omni-agent/SKILL.md`** — verb commands, send edge cases, messages/chats and turn lifecycle. For scheduled delivery, audio/media tools or A2A discovery, also consult `omni schedule --help`, `omni voice --help`, `omni media --help` or `omni a2a --help` as appropriate.
 
 ## 2. Setup tier — install and connect
 
-**Triggers:** install, setup, get started, first time, fresh install, not installed, server not running, connect channel, connect WhatsApp, scan QR, pair, plug agent, start bridge, onboarding
+**Triggers:** install, setup, sandbox, desktop, first time, server not running, connect channel, scan QR, pair, plug agent, bridge, claim, approve, device link
 
-**→ Load `omni-setup/SKILL.md`** — install → connect channel → plug agent (`omni connect`) → start bridge → verify. Canonical home for that flow and its troubleshooting.
+**→ Load `omni-setup/SKILL.md`** — choose an existing server or install a local runtime, connect a channel, configure an agent, verify. Device approval and channel pairing are separate operations.
 
 ## 3. Ops tier — platform administration
 
-**Triggers:** instances, routes, routing, providers, config, settings, API keys, events, analytics, timeline, replay, journey, automations, triggers, workflows, webhooks, custom events, prompts, gate prompt, persons, contacts, presence, batch, extract, debug, admin, status, logs, restart, dead letters, payloads, access, allowlist
+**Triggers:** instances, channels, capabilities, routes, providers, agents, manifest, config, server, settings, auth, API keys, events, consumers, schema, analytics, replay, journey, automations, connectors, sources, webhooks, heartbeat, prompts, persons, contacts, batch, audit, trust, tenants, multitenancy, turns, follow-up, slack, logs, dead letters, payloads, access
 
-**→ Load `omni-ops/SKILL.md`** — keyword-routed index over `references/` for instances, routes, providers, config, events, automations, webhooks, prompts, persons, batch.
+**→ Load `omni-ops/SKILL.md`** — keyword-routed references and discovery paths for the management groups.
 
 ## Default
 
-No match → `omni-agent/SKILL.md`. Most requests are about communicating, not configuring.
+For an uncovered capability, inspect `omni --help` and the relevant group's help. Use the agent tier when the request is to communicate; do not reinterpret an unfamiliar administration request as a send.
 
 ## Always
 
-- Add `--json` to any command whose output you parse.
-- Before sending, confirm the target instance is connected: `omni instances list --status connected --json`.
+- Add `--json` to output you parse; never print keys or config secrets.
+- Confirm the target instance is connected before sending: `omni instances list --status connected --json`.
+- Discovery does not authorize sending, granting access or changing a runtime. Follow the user's scope and the ops ground rules.

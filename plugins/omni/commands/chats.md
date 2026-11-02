@@ -16,7 +16,7 @@ Never render table output — rows pad past 1000 chars. Always `--json | jq -r` 
 - UUID or JID (`…@s.whatsapp.net` / `…@g.us` / `…@lid`) — chat-id: run the messages template.
 - Anything else — search: run the list template. Empty — show the templates and wait.
 
-## Templates (verified)
+## Templates
 
 ```bash
 # Search / list — flags: --instance, --unread, --attention, --type dm|group|channel, --limit
@@ -30,7 +30,9 @@ omni chats messages "$ARGUMENTS" --since 7d --json \
 
 ## Caveats
 
-- Piped `--json` can truncate near 64 KB (issue #402) — on jq "Unfinished string at EOF", write to a file first, then jq the file.
+- Current CLI output flushes piped JSON; the old 64 KB truncation workaround (#402) is historical. If JSON is incomplete, capture the exit status and installed version rather than assuming that old limit.
 - Unnamed groups: fall back to `.externalId`. LID chats: prefer `.canonicalId`.
 
 Depth: omni-agent skill (chat/message operations) · omni-ops skill § Instances (contacts, groups, sync) · § Batch (backfill missing transcriptions).
+
+Use `omni chats --help` / `omni chats messages --help` for installed filters. Closing a contact is separate from browsing: `omni messages close-contact --help` records an outcome/cooldown and can send a farewell; confirm the intended mutation first.

@@ -14,7 +14,7 @@ Use when an instance looks down: sweep connection states, re-scan QR, reconnect 
 
 $ARGUMENTS
 
-## Examples (verified)
+## Examples
 
 ```bash
 omni instances list --json | jq '.[] | {name, status}'
@@ -23,3 +23,5 @@ omni instances connect <id>     # counterpart: omni instances disconnect <id>
 ```
 
 Restart, logout, pairing codes, sync state: omni-ops skill § Instances.
+
+For platform reachability, `omni status --json`; for credentials, `omni auth status --json`. A credential/scope denial does not mean the server needs restarting. Verify `omni server current --json` before interpreting either. Use `omni instances qr --help` / `omni instances status --help` for channel options; local isolated runtime status is a separate `omni sandbox --help` surface.

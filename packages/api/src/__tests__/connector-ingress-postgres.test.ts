@@ -385,7 +385,7 @@ postgresDescribe('ClickUp connector acceptance loop (real PostgreSQL)', () => {
         expect(owned?.tenantId).toBe(tenant.id);
         const manual = await services.deadLetters.retry(forged.id);
         expect(manual.success).toBe(false);
-        expect(manual.error).toContain('ingress-written journal provenance');
+        expect(manual.error).toContain('re-emitted through the original source');
         expect((await services.deadLetters.getById(forged.id)).error).toContain('[Manual-retry]');
         expect((await services.deadLetters.getById(forged.id)).nextAutoRetryAt).toBeNull();
         await db
