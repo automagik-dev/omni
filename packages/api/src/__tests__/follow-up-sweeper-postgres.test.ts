@@ -1,7 +1,7 @@
 /**
  * Integration tests for FollowUpSweeperService.
  *
- * Runs against a real Postgres (skipped when ENABLE_DB_TESTS is unset).
+ * Runs against a real Postgres clone supplied by pg-gate.
  * Seeds rows in `chat_follow_up_state`, runs `sweep()`, and asserts the
  * expected DB state transitions.
  *
@@ -9,14 +9,14 @@
  */
 
 // @ts-nocheck — integration test with dynamic db row shapes
-import { afterAll, afterEach, beforeAll, beforeEach, expect, mock, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { EventBus, FollowUpSequenceConfig } from '@omni/core';
 import type { Database } from '@omni/db';
 import { chatFollowUpState, chats, instances } from '@omni/db';
 import { eq, inArray, sql } from 'drizzle-orm';
 import { FollowUpLifecycleService } from '../services/follow-up-lifecycle';
 import { FollowUpSweeperService } from '../services/follow-up-sweeper';
-import { describeWithDb, getTestDb } from './db-helper';
+import { createMigratedTestDatabase } from './fixtures/pg-clone';
 
 const MS_PER_MINUTE = 60_000;
 
@@ -30,8 +30,14 @@ const config = (overrides: Partial<FollowUpSequenceConfig> = {}): FollowUpSequen
   ...overrides,
 });
 
-describeWithDb('FollowUpSweeperService (integration)', () => {
+const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
+const postgresDescribe = superUrl ? describe : describe.skip;
+const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
+
+postgresDescribe('FollowUpSweeperService (integration)', () => {
   let db: Database;
+  const clone = createMigratedTestDatabase({ superUrl, psqlBin });
+  afterAll(() => clone.teardown());
   let service: FollowUpSweeperService;
   let testInstanceId: string;
   let testChatId: string;
@@ -39,11 +45,15 @@ describeWithDb('FollowUpSweeperService (integration)', () => {
   let eventBus: EventBus;
   const extraInstanceIds: string[] = [];
 
-  async function seedChats(channel: string, settingsList: Array<Record<string, unknown>>): Promise<string[]> {
+  async function seedChats(
+    channel: typeof instances.$inferInsert.channel,
+    settingsList: Array<Record<string, unknown>>,
+  ): Promise<string[]> {
     const [instance] = await db
       .insert(instances)
       .values({ name: `test-follow-up-rearm-${crypto.randomUUID()}`, channel })
       .returning();
+    if (!instance) throw new Error('Expected the seeded fixture row');
     extraInstanceIds.push(instance.id);
     const created = await db
       .insert(chats)
@@ -67,18 +77,21 @@ describeWithDb('FollowUpSweeperService (integration)', () => {
       .from(chats)
       .where(inArray(chats.id, chatIds));
     await db.insert(chatFollowUpState).values(
-      rows.map((chat) => ({
-        chatId: chat.id,
-        instanceId: chat.instanceId,
-        agentId: null,
-        sequenceConfig: cfg,
-        sequenceIndex: 1,
-        lastAgentMessageAt: inboundAt,
-        nextFireAt: null,
-        disarmReason: 'customer_replied' as const,
-        disarmedAt: inboundAt,
-        lastInboundCustomerMessageAt: inboundAt,
-      })),
+      rows.map((chat) => {
+        if (!chat.instanceId) throw new Error('Expected a seeded chat with an instance');
+        return {
+          chatId: chat.id,
+          instanceId: chat.instanceId,
+          agentId: null,
+          sequenceConfig: cfg,
+          sequenceIndex: 1,
+          lastAgentMessageAt: inboundAt,
+          nextFireAt: null,
+          disarmReason: 'customer_replied' as const,
+          disarmedAt: inboundAt,
+          lastInboundCustomerMessageAt: inboundAt,
+        };
+      }),
     );
   }
 
@@ -88,11 +101,12 @@ describeWithDb('FollowUpSweeperService (integration)', () => {
       .from(chatFollowUpState)
       .where(eq(chatFollowUpState.chatId, chatId))
       .limit(1);
+    if (!row) throw new Error('Expected the seeded fixture row');
     return row.disarmReason;
   }
 
   beforeAll(async () => {
-    db = getTestDb();
+    db = clone.setup();
     const [instance] = await db
       .insert(instances)
       .values({
@@ -100,6 +114,7 @@ describeWithDb('FollowUpSweeperService (integration)', () => {
         channel: 'whatsapp-baileys' as const,
       })
       .returning();
+    if (!instance) throw new Error('Expected the seeded fixture row');
     testInstanceId = instance.id;
 
     const [chat] = await db
@@ -112,6 +127,7 @@ describeWithDb('FollowUpSweeperService (integration)', () => {
         name: 'Alice Test',
       })
       .returning();
+    if (!chat) throw new Error('Expected the seeded fixture row');
     testChatId = chat.id;
   });
 
@@ -156,11 +172,6 @@ describeWithDb('FollowUpSweeperService (integration)', () => {
       .where(eq(chats.id, testChatId));
   });
 
-  afterAll(async () => {
-    await db.delete(chats).where(eq(chats.id, testChatId));
-    await db.delete(instances).where(eq(instances.id, testInstanceId));
-  });
-
   test('due row fires chat.idle_timeout + follow_up.fired + follow_up.armed and advances the sequence', async () => {
     const now = new Date();
     const past = new Date(now.getTime() - 60_000); // 1 minute ago
@@ -196,10 +207,12 @@ describeWithDb('FollowUpSweeperService (integration)', () => {
 
     // Row advanced: sequenceIndex=1, nextFireAt roughly now + 5min
     const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    if (!row) throw new Error('Expected the seeded fixture row');
     expect(row.sequenceIndex).toBe(1);
     expect(row.disarmReason).toBeNull();
     expect(row.nextFireAt).not.toBeNull();
     const expected = Date.now() + 5 * MS_PER_MINUTE;
+    if (!row.nextFireAt) throw new Error('Expected a scheduled follow-up');
     expect(row.nextFireAt.getTime()).toBeGreaterThanOrEqual(expected - 2000);
     expect(row.nextFireAt.getTime()).toBeLessThanOrEqual(expected + 2000);
   });
@@ -228,6 +241,7 @@ describeWithDb('FollowUpSweeperService (integration)', () => {
     expect(disarmed?.payload.reason).toBe('sequence_complete');
 
     const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    if (!row) throw new Error('Expected the seeded fixture row');
     expect(row.disarmReason).toBe('sequence_complete');
     expect(row.nextFireAt).toBeNull();
     expect(row.disarmedAt).not.toBeNull();
@@ -304,6 +318,7 @@ describeWithDb('FollowUpSweeperService (integration)', () => {
 
     // Row remains armed — the sweeper skipped it, it didn't disarm it.
     const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    if (!row) throw new Error('Expected the seeded fixture row');
     expect(row.disarmReason).toBeNull();
     expect(row.sequenceIndex).toBe(0);
     // Settings cleanup happens in `afterEach` so it runs even on failure.
@@ -348,8 +363,10 @@ describeWithDb('FollowUpSweeperService (integration)', () => {
     expect(publishedEvents[0]?.payload).toMatchObject({ sequenceIndex: 1, nextFireAt: reopensAt });
 
     const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    if (!row) throw new Error('Expected the seeded fixture row');
     expect(row.sequenceIndex).toBe(1);
     expect(row.disarmReason).toBeNull();
+    if (!row.nextFireAt) throw new Error('Expected a scheduled follow-up');
     expect(row.nextFireAt.getTime()).toBe(reopensAt);
 
     const again = await service.sweep();
@@ -451,6 +468,7 @@ describeWithDb('FollowUpSweeperService (integration)', () => {
 
     // Row remains disarmed.
     const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    if (!row) throw new Error('Expected the seeded fixture row');
     expect(row.disarmReason).toBe('customer_replied');
     expect(row.nextFireAt).toBeNull();
   });
@@ -483,6 +501,7 @@ describeWithDb('FollowUpSweeperService (integration)', () => {
       expect(stats.rearmed).toBe(0);
 
       const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+      if (!row) throw new Error('Expected the seeded fixture row');
       expect(row.disarmReason).toBe(reason);
     }
   });
@@ -517,6 +536,7 @@ describeWithDb('FollowUpSweeperService (integration)', () => {
     expect(stats.rearmed).toBe(0);
 
     const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    if (!row) throw new Error('Expected the seeded fixture row');
     expect(row.disarmReason).toBe('customer_replied');
     expect(row.nextFireAt).toBeNull();
 
@@ -559,6 +579,7 @@ describeWithDb('FollowUpSweeperService (integration)', () => {
     expect(stats.rearmed).toBe(0);
 
     const [row] = await db.select().from(chatFollowUpState).where(eq(chatFollowUpState.chatId, testChatId)).limit(1);
+    if (!row) throw new Error('Expected the seeded fixture row');
     expect(row.disarmReason).toBe('customer_replied');
     expect(row.nextFireAt).toBeNull();
     // `afterEach` strips agentPaused.
@@ -574,12 +595,14 @@ describeWithDb('FollowUpSweeperService (integration)', () => {
     );
     await seedCustomerReplied(closedIds, new Date(now - 60 * MS_PER_MINUTE), cfg);
     const [eligibleId] = await seedChats('whatsapp-baileys', [{}]);
+    if (!eligibleId) throw new Error('Expected the seeded fixture row');
     await seedCustomerReplied([eligibleId], new Date(now - 30 * MS_PER_MINUTE), cfg);
 
     const stats = await service.sweep();
 
     expect(stats.rearmed).toBe(1);
     expect(await disarmReasonOf(eligibleId)).toBeNull();
+    if (!closedIds[0] || !closedIds[1]) throw new Error('Expected closed-chat fixtures');
     expect(await disarmReasonOf(closedIds[0])).toBe('customer_replied');
     expect(await disarmReasonOf(closedIds[1])).toBe('customer_replied');
   });
@@ -589,6 +612,7 @@ describeWithDb('FollowUpSweeperService (integration)', () => {
     const [chatId] = await seedChats('whatsapp-baileys', [
       { closeUntil: new Date(now - MS_PER_MINUTE).toISOString(), closeOutcome: 'no_response' },
     ]);
+    if (!chatId) throw new Error('Expected the seeded fixture row');
     await seedCustomerReplied([chatId], new Date(now - 30 * MS_PER_MINUTE), config());
 
     const stats = await service.sweep();
@@ -600,6 +624,7 @@ describeWithDb('FollowUpSweeperService (integration)', () => {
   test('on a channel with a messaging window, a reply older than the window is not re-armed', async () => {
     const now = Date.now();
     const [recentId, staleId] = await seedChats('whatsapp-business', [{}, {}]);
+    if (!recentId || !staleId) throw new Error('Expected the seeded fixture row');
     const guarded = config({ stopOutsideMessagingWindow: true });
     await seedCustomerReplied([recentId], new Date(now - 20 * 60 * MS_PER_MINUTE), guarded);
     await seedCustomerReplied([staleId], new Date(now - 30 * 60 * MS_PER_MINUTE), guarded);
@@ -614,6 +639,7 @@ describeWithDb('FollowUpSweeperService (integration)', () => {
   test('gupshup is bounded by the messaging window like the other WhatsApp BSPs', async () => {
     const now = Date.now();
     const [recentId, staleId] = await seedChats('gupshup', [{}, {}]);
+    if (!recentId || !staleId) throw new Error('Expected the seeded fixture row');
     const guarded = config({ stopOutsideMessagingWindow: true });
     await seedCustomerReplied([recentId], new Date(now - 20 * 60 * MS_PER_MINUTE), guarded);
     await seedCustomerReplied([staleId], new Date(now - 30 * 60 * MS_PER_MINUTE), guarded);
@@ -628,8 +654,10 @@ describeWithDb('FollowUpSweeperService (integration)', () => {
   test('the messaging-window bound follows stopOutsideMessagingWindow and the channel', async () => {
     const inboundAt = new Date(Date.now() - 30 * 60 * MS_PER_MINUTE);
     const [unguardedId] = await seedChats('whatsapp-business', [{}]);
+    if (!unguardedId) throw new Error('Expected the seeded fixture row');
     await seedCustomerReplied([unguardedId], inboundAt, config({ stopOutsideMessagingWindow: false }));
     const [noWindowId] = await seedChats('whatsapp-baileys', [{}]);
+    if (!noWindowId) throw new Error('Expected the seeded fixture row');
     await seedCustomerReplied([noWindowId], inboundAt, config({ stopOutsideMessagingWindow: true }));
 
     const stats = await service.sweep();
