@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { EventBus } from '@omni/core';
 import {
   type Agent,
+  type ApiKey,
   DEFAULT_ROLE_NAMES,
   type Database,
   type Instance,
@@ -19,7 +20,9 @@ import {
 import { assertPgTestRole, pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
+import { CacheKeys, apiKeyCache } from '../../cache';
 import { instancesRoutes } from '../../routes/v2/instances';
+import { scopedHandle } from '../../tenancy/tenant-scope';
 import { runInWorkerTenantScope } from '../../tenancy/worker-tenant-context';
 import type { AppVariables } from '../../types';
 import { findAgentsWithoutKeys, reconcileAgentKeys } from '../agent-key-reconciliation';
@@ -187,7 +190,135 @@ postgresDescribe('agent key lifecycle authority (real PostgreSQL)', () => {
     expect(new Set(fresh?.instanceIds)).toEqual(new Set([bound.id, target.id]));
   });
 
+  async function cachedKeys(parent: ApiKey, child: ApiKey) {
+    const entries = [parent, child].map((row) => ({ cacheKey: CacheKeys.apiKey(row.keyHash), row }));
+    for (const { cacheKey, row } of entries) await apiKeyCache.set(cacheKey, row);
+    return entries;
+  }
+
+  async function expectCached(entries: { cacheKey: string; row: ApiKey }[], retained = true) {
+    for (const { cacheKey, row } of entries) expect(await apiKeyCache.get(cacheKey)).toEqual(retained ? row : null);
+  }
+
+  async function waitForEvents(events: unknown[], count: number) {
+    const deadline = Date.now() + 1000;
+    while (events.length < count && Date.now() < deadline) await Bun.sleep(1);
+    expect(events).toHaveLength(count);
+  }
+
+  test('direct tenant-scoped key revocation drops events and evictions on rollback', async () => {
+    const tenantId = crypto.randomUUID();
+    const agent = await owner(tenantId);
+    const target = await instance(tenantId, agent.id);
+    const parent = await seed(agent, [target.id]);
+    const ctx = context(true, tenantId);
+    const child = await mint(ctx.services, parent.key.id, target);
+    const entries = await cachedKeys(parent.key, child);
+    ctx.events.length = 0;
+    await expect(
+      ctx.run(async () => {
+        const scoped = new ApiKeyService(scopedHandle(runtime), { eventBus: ctx.services.eventBus });
+        await scoped.revoke(parent.key.id);
+        expect(ctx.events).toEqual([]);
+        await expectCached(entries);
+        throw new Error('rollback direct revoke');
+      }),
+    ).rejects.toThrow('rollback direct revoke');
+    expect(ctx.events).toEqual([]);
+    await expectCached(entries);
+    expect((await keys.getById(parent.key.id))?.status).toBe('active');
+    expect((await keys.getById(child.id))?.status).toBe('active');
+  });
+
+  for (const rollback of [false, true]) {
+    test(`enforced route deletion settles child events and caches only after commit (rollback=${rollback})`, async () => {
+      const tenantId = crypto.randomUUID();
+      const agent = await owner(tenantId);
+      const target = await instance(tenantId);
+      const route = await storedRoute(target, agent);
+      const parent = await seed(agent, [target.id]);
+      const ctx = context(true, tenantId);
+      const child = await mint(ctx.services, parent.key.id, target);
+      const entries = await cachedKeys(parent.key, child);
+      ctx.events.length = 0;
+      const deletion = ctx.run(async () => {
+        await ctx.services.routes.delete(route.id);
+        expect(ctx.events).toEqual([]);
+        await expectCached(entries);
+        if (rollback) throw new Error('rollback route delete');
+      });
+      if (rollback) await expect(deletion).rejects.toThrow('rollback route delete');
+      else await deletion;
+      // Settlement is detached from the closed request; await its asynchronous event publication.
+      if (!rollback) await waitForEvents(ctx.events, 1);
+      expect(ctx.events).toEqual(
+        rollback
+          ? []
+          : [
+              {
+                type: 'access.key_revoked',
+                payload: expect.objectContaining({ keyId: child.id }),
+              },
+            ],
+      );
+      await expectCached(entries, rollback);
+      expect((await keys.getById(child.id))?.status).toBe(rollback ? 'active' : 'revoked');
+      expect((await keys.getById(parent.key.id))?.status).toBe(rollback ? 'active' : 'revoked');
+      expect(await db.select().from(agentRoutes).where(eq(agentRoutes.id, route.id))).toHaveLength(rollback ? 1 : 0);
+    });
+  }
+
   for (const enforced of [false, true]) {
+    test(`lock rollback preserves child events and parent/child caches (${enforced ? 'RLS' : 'legacy'})`, async () => {
+      const tenantId = enforced ? crypto.randomUUID() : null;
+      const agent = await owner(tenantId);
+      const target = await instance(tenantId, agent.id);
+      const parent = await seed(agent, [target.id]);
+      const ctx = context(enforced, tenantId);
+      const child = await mint(ctx.services, parent.key.id, target);
+      const entries = await cachedKeys(parent.key, child);
+      ctx.events.length = 0;
+      await expect(
+        ctx.run(() =>
+          ctx.services.apiKeys.withAgentKeyLock([agent.id], async (locked) => {
+            await locked.revoke(parent.key.id);
+            expect(ctx.events).toEqual([]);
+            await expectCached(entries);
+            throw new Error('rollback key lock');
+          }),
+        ),
+      ).rejects.toThrow('rollback key lock');
+      expect(ctx.events).toEqual([]);
+      await expectCached(entries);
+      expect((await keys.getById(parent.key.id))?.status).toBe('active');
+      expect((await keys.getById(child.id))?.status).toBe('active');
+    });
+
+    test(`nested lock rollback drops its own effects before outer commit (${enforced ? 'RLS' : 'legacy'})`, async () => {
+      const tenantId = enforced ? crypto.randomUUID() : null;
+      const agent = await owner(tenantId);
+      const target = await instance(tenantId, agent.id);
+      const parent = await seed(agent, [target.id]);
+      const ctx = context(enforced, tenantId);
+      const child = await mint(ctx.services, parent.key.id, target);
+      const entries = await cachedKeys(parent.key, child);
+      ctx.events.length = 0;
+      await ctx.run(() =>
+        ctx.services.apiKeys.withAgentKeyLock([agent.id], async (locked) => {
+          await expect(
+            locked.withAgentKeyLock([agent.id], async (nested) => {
+              await nested.revoke(parent.key.id);
+              throw new Error('rollback nested lock');
+            }),
+          ).rejects.toThrow('rollback nested lock');
+        }),
+      );
+      expect(ctx.events).toEqual([]);
+      await expectCached(entries);
+      expect((await keys.getById(parent.key.id))?.status).toBe('active');
+      expect((await keys.getById(child.id))?.status).toBe('active');
+    });
+
     test(`default bind replaces stale grants while preserving manual and foreign keys (${enforced ? 'RLS' : 'legacy'})`, async () => {
       const tenantId = crypto.randomUUID();
       const agent = await owner(tenantId);
@@ -248,6 +379,7 @@ postgresDescribe('agent key lifecycle authority (real PostgreSQL)', () => {
         .where(eq(apiKeys.id, retained.child.id));
       ctx.events.length = 0;
       await ctx.run(() => ctx.services.routes.delete(route.id));
+      await waitForEvents(ctx.events, 2);
       expect(ctx.events).toContainEqual({
         type: 'access.key_revoked',
         payload: expect.objectContaining({ keyId: child.child.id }),
@@ -260,6 +392,7 @@ postgresDescribe('agent key lifecycle authority (real PostgreSQL)', () => {
       expect((await keys.getById(retained.child.id))?.expiresAt).toEqual(expiresAt);
       ctx.events.length = 0;
       await ctx.run(() => ctx.services.routes.delete(remainingRoute.id));
+      await waitForEvents(ctx.events, 1);
       expect(ctx.events).toContainEqual({
         type: 'access.key_revoked',
         payload: expect.objectContaining({ keyId: retained.child.id }),
@@ -283,6 +416,7 @@ postgresDescribe('agent key lifecycle authority (real PostgreSQL)', () => {
       ctx.events.length = 0;
       if (enforced) await expect(ctx.run(() => ctx.services.agents.delete(foreign.id))).rejects.toThrow();
       await ctx.run(() => ctx.services.agents.delete(agent.id));
+      await waitForEvents(ctx.events, 1);
       expect((await keys.getById(key.key.id))?.status).toBe('revoked');
       expect(await keys.validate(key.plainTextKey)).toBeNull();
       expect((await keys.getById(child.id))?.status).toBe('revoked');

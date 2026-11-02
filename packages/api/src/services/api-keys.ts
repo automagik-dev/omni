@@ -34,7 +34,7 @@ import { z } from 'zod';
 import { CacheKeys, CacheTTL, type CachedApiKey, apiKeyCache, authCacheTtlMs } from '../cache';
 import { SCOPE_IMPLIED_BY } from '../constants/scopes';
 import { resolveProfile } from '../lib/resolve-profile';
-import { scopedHandle } from '../tenancy/tenant-scope';
+import { runAfterTenantCommit, scopedHandle } from '../tenancy/tenant-scope';
 
 const log = createLogger('api-keys');
 
@@ -156,6 +156,11 @@ type ChildChange =
   | { kind: 'clamped'; child: ApiKey }
   | { kind: 'minted'; child: ApiKey; chat: ChildChat; replacedKeyId: string | null };
 
+interface KeySettlement {
+  changes: ChildChange[];
+  keyHashes: string[];
+}
+
 const KeyIdSchema = z.string().uuid();
 
 /** The chat a child is minted for; anything else mints nothing. */
@@ -245,6 +250,7 @@ function childEventBase(child: ApiKey): { keyId: string; parentKeyId: string; ch
 
 export class ApiKeyService {
   private readonly eventBus: EventBus | null;
+  private pendingSettlement: KeySettlement | null = null;
 
   constructor(
     private db: Database,
@@ -259,14 +265,22 @@ export class ApiKeyService {
    * the advisory locks remain held until the outer request commits.
    */
   async withAgentKeyLock<T>(agentIds: string[], fn: (keys: ApiKeyService, db: Database) => Promise<T>): Promise<T> {
-    return scopedHandle(this.db).transaction(async (tx) => {
+    const pending: KeySettlement = { changes: [], keyHashes: [] };
+    const handle = this.pendingSettlement ? this.db : scopedHandle(this.db);
+    const result = await handle.transaction(async (tx) => {
       // Reassignments lock both agents in stable order to avoid AB/BA deadlocks.
       for (const agentId of [...new Set(agentIds)].sort()) {
         await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`omni:agent-key:${agentId}`}))`);
       }
       const db = tx as unknown as Database;
-      return fn(new ApiKeyService(db, { eventBus: this.eventBus }), db);
+      const keys = new ApiKeyService(db, { eventBus: this.eventBus });
+      keys.pendingSettlement = pending;
+      return fn(keys, db);
     });
+    // A failed lock transaction drops its effects, including nested savepoints.
+    // Under enforcement this still waits for the enclosing request commit.
+    await this.settleKeyChanges(pending.changes, pending.keyHashes);
+    return result;
   }
 
   /**
@@ -490,7 +504,7 @@ export class ApiKeyService {
     if (!touchesChildAuthority(options)) {
       const [updated] = await this.db.update(apiKeys).set(updates).where(eq(apiKeys.id, id)).returning();
       if (updated) {
-        await apiKeyCache.delete(CacheKeys.apiKey(updated.keyHash));
+        await this.settleKeyChanges([], [updated.keyHash]);
         log.info('API key updated', { id, fields: Object.keys(options) });
       }
       return updated ?? null;
@@ -513,11 +527,8 @@ export class ApiKeyService {
       return { updated: row, changes: await this.reconcileChildren(tx, row) };
     });
 
-    if (updated) {
-      await apiKeyCache.delete(CacheKeys.apiKey(updated.keyHash));
-      log.info('API key updated', { id, fields: Object.keys(options) });
-    }
-    await this.settleChildChanges(changes);
+    if (updated) log.info('API key updated', { id, fields: Object.keys(options) });
+    await this.settleKeyChanges(changes, updated ? [updated.keyHash] : []);
 
     return updated;
   }
@@ -559,9 +570,8 @@ export class ApiKeyService {
     });
 
     if (result.status === 'updated') {
-      await apiKeyCache.delete(CacheKeys.apiKey(result.key.keyHash));
       log.info('API key updated', { id, fields: Object.keys(options) });
-      await this.settleChildChanges(changes);
+      await this.settleKeyChanges(changes, [result.key.keyHash]);
     }
 
     return result;
@@ -698,12 +708,8 @@ export class ApiKeyService {
       };
     });
 
-    if (revoked) {
-      // Invalidate cache using the stored keyHash
-      await apiKeyCache.delete(CacheKeys.apiKey(revoked.keyHash));
-      log.info('API key revoked', { id, reason });
-    }
-    await this.settleChildChanges(changes);
+    if (revoked) log.info('API key revoked', { id, reason });
+    await this.settleKeyChanges(changes, revoked ? [revoked.keyHash] : []);
 
     return revoked;
   }
@@ -812,7 +818,7 @@ export class ApiKeyService {
     });
 
     if (result.ok) log.info('Chat key minted', { id: result.child.id, parentKeyId: parentId, chatId: chat.id });
-    await this.settleChildChanges(changes);
+    await this.settleKeyChanges(changes);
     return result;
   }
 
@@ -836,7 +842,7 @@ export class ApiKeyService {
       return { status: 'revoked' };
     });
 
-    await this.settleChildChanges(changes);
+    await this.settleKeyChanges(changes);
     return result;
   }
 
@@ -859,7 +865,7 @@ export class ApiKeyService {
       return { status: 'revoked' };
     });
 
-    await this.settleChildChanges(changes);
+    await this.settleKeyChanges(changes);
     return result;
   }
 
@@ -941,6 +947,26 @@ export class ApiKeyService {
       changes.push(...clamped.map((child): ChildChange => ({ kind: 'clamped', child })));
     }
     return changes;
+  }
+
+  /** Collect lock-local effects; otherwise settle only after the enclosing tenant commit. */
+  private async settleKeyChanges(changes: ChildChange[], keyHashes: string[] = []): Promise<void> {
+    if (changes.length === 0 && keyHashes.length === 0) return;
+    if (this.pendingSettlement) {
+      this.pendingSettlement.changes.push(...changes);
+      this.pendingSettlement.keyHashes.push(...keyHashes);
+      return;
+    }
+    let settled: Promise<void> | undefined;
+    runAfterTenantCommit(() => {
+      settled = (async () => {
+        for (const hash of keyHashes) await apiKeyCache.delete(CacheKeys.apiKey(hash));
+        await this.settleChildChanges(changes);
+      })().catch((error) => log.error('Failed to settle committed API key changes', { error: String(error) }));
+    });
+    // In legacy mode the callback ran immediately, so keep awaiting settlement.
+    // In a tenant request it is queued: awaiting it here would block COMMIT.
+    await settled;
   }
 
   /**
@@ -1146,11 +1172,10 @@ export class ApiKeyService {
       return { result: deleted, changes: [...own, ...revoked] };
     });
 
-    // Invalidate cache if we have the keyHash
-    if (result.length > 0 && result[0]?.keyHash) {
-      await apiKeyCache.delete(CacheKeys.apiKey(result[0].keyHash));
-    }
-    await this.settleChildChanges(changes);
+    await this.settleKeyChanges(
+      changes,
+      result.map((row) => row.keyHash),
+    );
 
     return result.length > 0;
   }
