@@ -22,7 +22,7 @@ import { rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type Database, createDbHandle, persons, platformIdentities } from '@omni/db';
-import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { reconcile } from '../reconcile-identity-fragmentation';
 
 const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
@@ -47,7 +47,7 @@ async function provisionDatabase(): Promise<{
 }> {
   const dbName = `omni_p0_recon_${crypto.randomUUID().replaceAll('-', '')}`;
   provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-  const dbUrl = urlFor(superUrl, dbName);
+  const dbUrl = pgRoleUrl(superUrl, dbName);
   const handle = createDbHandle({ url: dbUrl, maxConnections: 2 });
   return {
     db: handle.db,
@@ -114,12 +114,6 @@ function runSqlOn(url: string, script: string): { exitCode: number; stderr: stri
   }
 }
 
-function urlFor(base: string, database: string): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  return url.toString();
-}
-
 postgresDescribe('reconciliation script dry-run mutates nothing (real PostgreSQL)', () => {
   const dbName = `omni_p0_recon_${crypto.randomUUID().replaceAll('-', '')}`;
   const closers: (() => Promise<void>)[] = [];
@@ -127,7 +121,7 @@ postgresDescribe('reconciliation script dry-run mutates nothing (real PostgreSQL
 
   beforeAll(async () => {
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    const dbUrl = urlFor(superUrl, dbName);
+    const dbUrl = pgRoleUrl(superUrl, dbName);
 
     // Seed: a fragmented number (bare + suffixed → two persons) and a phone-less
     // @lid person whose phone is derivable from chat_id_mappings. The instance is
