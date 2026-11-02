@@ -38,6 +38,7 @@ import type {
   AgentRunResult,
   CallAgentActionConfig,
   ConnectorCallRequest,
+  OmniEvent,
   ProviderMetrics,
 } from '@omni/core';
 import {
@@ -64,7 +65,13 @@ const log = createLogger('automation-actions');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-const INBOUND_CALL_AGENT_TYPES = new Set(['message.received', 'reaction.received', 'reaction.removed']);
+const INBOUND_CALL_AGENT_TYPES = new Set([
+  'message.received',
+  'reaction.received',
+  'reaction.removed',
+  'message.button_click',
+  'message.poll_vote',
+]);
 const InboundCallSourceSchema = z.object({
   instanceId: z.string().uuid(),
   from: z.string().refine((value) => value.trim().length > 0),
@@ -82,14 +89,14 @@ const InboundCallSourceSchema = z.object({
 async function admitInboundCallAgent(
   services: Services,
   db: Database,
-  ctx: AgentCallContext,
+  event: AgentCallContext['event'],
   trustedTenantId: string | null,
-): Promise<void> {
-  if (!ctx.event || !INBOUND_CALL_AGENT_TYPES.has(ctx.event.type)) return;
+): Promise<boolean> {
+  if (!event || !INBOUND_CALL_AGENT_TYPES.has(event.type)) return true;
   let allowed = false;
   let reason = 'invalid ingress identity';
   try {
-    const source = InboundCallSourceSchema.safeParse(ctx.event.source);
+    const source = InboundCallSourceSchema.safeParse(event.source);
     if (source.success) {
       const instance = await runTenantWorkDb(db, trustedTenantId, () =>
         services.instances.getById(source.data.instanceId),
@@ -98,21 +105,21 @@ async function admitInboundCallAgent(
         services.access.evaluateAccess(instance, sender, source.data.channelType ?? instance.channel, trustedTenantId),
       );
       allowed = result.allowed;
-      reason = result.reason;
+      reason = result.allowed ? 'allowed' : 'policy refused';
     }
-  } catch (error) {
+  } catch {
     // A policy/lookup failure is a refusal, never an unrestricted chatless run.
     reason = 'access evaluation failed';
-    log.warn('call_agent ingress access evaluation failed', { eventId: ctx.event.id, error: String(error) });
+    log.warn('call_agent ingress access evaluation failed', { eventId: event.id, eventType: event.type });
   }
   if (!allowed) {
     log.warn('Skipping call_agent: ingress access refused', {
-      eventId: ctx.event.id,
-      eventType: ctx.event.type,
+      eventId: event.id,
+      eventType: event.type,
       reason,
     });
-    throw new Error('call_agent ingress access refused');
   }
+  return allowed;
 }
 
 /** agents.agent_type (entity taxonomy) → provider dispatch type. */
@@ -357,6 +364,7 @@ async function refusePublishNotDeclared(
 
 /** The dependency shape `AutomationService.startEngine` accepts. */
 export interface AutomationEngineDeps {
+  admitAgentEvent: (event: OmniEvent, trustedTenantId?: string | null) => Promise<boolean>;
   sendMessage: (instanceId: string, to: string, content: string, trustedTenantId?: string | null) => Promise<void>;
   callAgent: (
     context: AgentCallContext,
@@ -439,8 +447,27 @@ export function buildAutomationEngineDeps(
       await plugin.sendMessage(instanceId, { to: recipient, content: { type: 'text', text: content } });
     },
 
+    admitAgentEvent: async (event, trustedTenantId = null) =>
+      admitInboundCallAgent(
+        services,
+        db,
+        {
+          id: event.id,
+          type: event.type,
+          source: {
+            instanceId: event.metadata.instanceId,
+            channelType: event.metadata.channelType,
+            from: (event.payload as Record<string, unknown>).from,
+            rawPayload: (event.payload as Record<string, unknown>).rawPayload,
+          },
+        },
+        trustedTenantId,
+      ),
+
     callAgent: async (ctx, cfg, trustedTenantId = null) => {
-      await admitInboundCallAgent(services, db, ctx, trustedTenantId);
+      if (!(await admitInboundCallAgent(services, db, ctx.event, trustedTenantId))) {
+        throw new Error('call_agent ingress access refused');
+      }
       // Chatless dispatch (#1010): no instance and no chat resolved from the
       // triggering event — provider comes from the agent row instead.
       if (ctx.chatless) {
