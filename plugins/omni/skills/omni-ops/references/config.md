@@ -25,7 +25,12 @@ omni auth recover --json             # recover API key via local PM2 access; add
 omni auth logout
 ```
 
-Prefer a protected-file redirect as above or a secret-manager pipe. With an already securely supplied `OMNI_API_KEY`, `omni auth login --server <name>` needs no key flag. Explicit `--api-key-stdin` or legacy `--api-key` overrides the environment; those flags are mutually exclusive. Do not paste secrets into commands, shell history, or chat. Stdin must contain one non-empty key; a trailing newline is accepted.
+Prefer a protected-file redirect as above or a secret-manager pipe. With an already securely supplied `OMNI_CLI_API_KEY`, `omni auth login --server <name>` needs no key flag. Explicit `--api-key-stdin` or legacy `--api-key` overrides the environment; those flags are mutually exclusive. Do not paste secrets into commands, shell history, or chat. Stdin must contain one non-empty key, at most 8 KB including its optional trailing LF/CRLF.
+
+`OMNI_API_KEY` is the API server's primary key and is ignored by login. Only
+`OMNI_CLI_API_KEY` is used as the CLI environment fallback. Stdin is limited to
+8 KB including the optional trailing LF/CRLF. A successful login reports
+`keySource` as `flag`, `stdin`, or `env`, without printing the key.
 
 ## CLI config
 

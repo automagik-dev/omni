@@ -21,7 +21,12 @@ omni status --json
 omni auth status --json
 ```
 
-Read the key from a protected file as above or pipe it from your secret manager. If `OMNI_API_KEY` is already supplied securely in the environment, omit the key flags. Explicit `--api-key-stdin` or legacy `--api-key` overrides that env var; do not combine the flags. Do not ask for a key in chat or paste its value into a command.
+Read the key from a protected file as above or pipe it from your secret manager. If `OMNI_CLI_API_KEY` is already supplied securely in the environment, omit the key flags. Explicit `--api-key-stdin` or legacy `--api-key` overrides that env var; do not combine the flags. Do not ask for a key in chat or paste its value into a command.
+
+`OMNI_API_KEY` is the API server's primary key and is ignored by login. Only
+`OMNI_CLI_API_KEY` is used as the CLI environment fallback. Stdin is limited to
+8 KB including the optional trailing LF/CRLF. A successful login reports
+`keySource` as `flag`, `stdin`, or `env`, without printing the key.
 
 An API key is still required. There is no CLI device-code sign-in: adding a keyless server entry only saves its address. `auth login` validates the supplied key and saves it in the targeted server entry. Currently owner-approved device keys cannot pass that validation because they lack `auth:validate`; ask the operator for an appropriate existing CLI credential rather than widening a key or disabling scope checks.
 

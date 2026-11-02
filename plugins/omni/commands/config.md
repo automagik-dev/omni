@@ -26,6 +26,11 @@ For multiple servers, inspect `omni server list --json`, register with `omni ser
 
 `omni config list --json` includes `updateChannel`, local `server.*`, and read-only `servers.active`. Remote registry changes use `omni server`, not `config set servers.*`. A failed `auth status` can be credentials/scopes rather than runtime downtime.
 
-Read the key from a protected file as above, or pipe it from your secret manager. If `OMNI_API_KEY` is already supplied securely in the environment, omit the key flags. Explicit `--api-key-stdin` or legacy `--api-key` overrides the env var; do not combine those flags. Never ask for a key in chat or paste its value into a command.
+Read the key from a protected file as above, or pipe it from your secret manager. If `OMNI_CLI_API_KEY` is already supplied securely in the environment, omit the key flags. Explicit `--api-key-stdin` or legacy `--api-key` overrides the env var; do not combine those flags. Never ask for a key in chat or paste its value into a command.
+
+`OMNI_API_KEY` is the API server's primary key and is ignored by login. Only
+`OMNI_CLI_API_KEY` is used as the CLI environment fallback. Stdin is limited to
+8 KB including the optional trailing LF/CRLF. A successful login reports
+`keySource` as `flag`, `stdin`, or `env`, without printing the key.
 
 API keys, server settings, logs, dead letters, auth recovery: omni-ops skill § Config. Inspect `omni server --help` and `omni config --help` for installed options.
