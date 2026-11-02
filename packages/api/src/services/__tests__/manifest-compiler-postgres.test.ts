@@ -41,7 +41,7 @@ import type {
 import { ConflictError, createAutomationEngine } from '@omni/core';
 import { type Database, agentProviders, automations, createDbHandle } from '@omni/db';
 import { agents as agentsTable } from '@omni/db';
-import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { eq } from 'drizzle-orm';
 import { buildAutomationEngineDeps } from '../../plugins/automation-actions';
 import { AgentService } from '../agents';
@@ -52,12 +52,6 @@ import { ManifestCompilerService } from '../manifest-compiler';
 const superUrl = process.env.OMNI_G1_POSTGRES_URL ?? '';
 const postgresDescribe = superUrl.length > 0 ? describe : describe.skip;
 const psqlBin = process.env.OMNI_G1_PSQL_BIN ?? 'psql';
-
-function urlFor(base: string, database: string): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  return url.toString();
-}
 
 interface PublishedEvent {
   type: string;
@@ -106,7 +100,7 @@ postgresDescribe('manifest compilation + reconciliation (real PostgreSQL)', () =
 
   beforeAll(() => {
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    const handle = createDbHandle({ url: urlFor(superUrl, dbName), maxConnections: 3 });
+    const handle = createDbHandle({ url: pgRoleUrl(superUrl, dbName), maxConnections: 3 });
     closers.push(() => handle.close().catch(() => undefined));
     db = handle.db;
 

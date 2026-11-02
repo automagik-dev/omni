@@ -16,7 +16,7 @@ import { rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type Database, chatParticipants, chats, createDbHandle, instances } from '@omni/db';
-import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { errorHandler } from '../../../middleware/error';
@@ -41,12 +41,6 @@ function runSqlOn(url: string, script: string): { exitCode: number; stderr: stri
   } finally {
     rmSync(file, { force: true });
   }
-}
-
-function urlFor(base: string, database: string): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  return url.toString();
 }
 
 const OWNER = 'Owner Name';
@@ -110,7 +104,7 @@ postgresDescribe('GET /chats/:id names a chat as GET /chats does (real PostgreSQ
 
   beforeAll(async () => {
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    const handle = createDbHandle({ url: urlFor(superUrl, dbName), maxConnections: 3 });
+    const handle = createDbHandle({ url: pgRoleUrl(superUrl, dbName), maxConnections: 3 });
     db = handle.db;
     closeDb = () => handle.close().catch(() => undefined);
     chatService = new ChatService(db, null);
