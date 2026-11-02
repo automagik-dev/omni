@@ -3,7 +3,7 @@
  */
 
 import { ConflictError, NotFoundError, createLogger } from '@omni/core';
-import type { CreateAgentRoute, ListAgentRoutesQuery, UpdateAgentRoute } from '@omni/core';
+import type { CreateAgentRoute, EventBus, ListAgentRoutesQuery, UpdateAgentRoute } from '@omni/core';
 import type { Database } from '@omni/db';
 import { type AgentRoute, type NewAgentRoute, agentRoutes, unwrapDbError } from '@omni/db';
 import { and, desc, eq } from 'drizzle-orm';
@@ -30,11 +30,12 @@ export class RouteService {
   constructor(
     private readonly pool: Database,
     private routeResolver: RouteResolver,
+    private readonly eventBus: EventBus | null = null,
   ) {}
 
   /** Bind ownership reads to the connection already held by a caller's lock. */
   withDatabase(db: Database): RouteService {
-    return new RouteService(db, this.routeResolver);
+    return new RouteService(db, this.routeResolver, this.eventBus);
   }
 
   /**
@@ -170,6 +171,7 @@ export class RouteService {
         this.db,
         instanceId,
         agentIds.filter((id): id is string => id !== null),
+        this.eventBus,
       );
     } catch (error) {
       // Same best-effort contract as instance writes; startup retries repair.

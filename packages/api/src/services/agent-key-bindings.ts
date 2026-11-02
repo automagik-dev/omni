@@ -1,4 +1,5 @@
 /** Authoritative default/route bindings shared by live writes and startup repair. */
+import type { EventBus } from '@omni/core';
 import { type Agent, type ApiKey, type Database, agentRoutes, agents, instances } from '@omni/db';
 import { DEFAULT_TURN_SCOPES } from '../constants/scopes';
 import { agentKeyName, agentKeyNameCandidates } from '../lib/agent-key-name';
@@ -13,19 +14,28 @@ import { ApiKeyService } from './api-keys';
 
 export type AgentInstanceBinding = AgentKeyBinding & { instanceId: string; metadata: Agent['metadata'] };
 export type AgentKeyGraph = {
-  agents: AgentKeyBinding[];
+  agents: (AgentKeyBinding & { isActive: boolean })[];
   bindings: AgentInstanceBinding[];
   owners: Map<string, AgentKeyOwner>;
 };
 
 /** Tenant scopes constrain all three reads. Even without RLS a route/default
  * FK is authority only when the agent and instance have the same stored tenant.
- * Inactive routes still name their agent and retain their grants until removed.
+ * Inactive routes still name their active agent until removed. Inactive agents
+ * retain their identity for key retirement but contribute no binding grants.
  */
 export async function readAgentKeyGraph(pool: Database): Promise<AgentKeyGraph> {
   const db = scopedHandle(pool);
   const [agentRows, instanceRows, routeRows] = await Promise.all([
-    db.select({ id: agents.id, name: agents.name, tenantId: agents.tenantId, metadata: agents.metadata }).from(agents),
+    db
+      .select({
+        id: agents.id,
+        name: agents.name,
+        tenantId: agents.tenantId,
+        metadata: agents.metadata,
+        isActive: agents.isActive,
+      })
+      .from(agents),
     db.select({ id: instances.id, agentId: instances.agentId, tenantId: instances.tenantId }).from(instances),
     db.select({ instanceId: agentRoutes.instanceId, agentId: agentRoutes.agentId }).from(agentRoutes),
   ]);
@@ -42,7 +52,7 @@ export async function readAgentKeyGraph(pool: Database): Promise<AgentKeyGraph> 
     const agentIds = new Set([instance.agentId, ...routed]);
     const valid = [...agentIds].flatMap((id) => {
       const agent = id ? byId.get(id) : undefined;
-      if (!agent || agent.tenantId !== instance.tenantId) return [];
+      if (!agent || !agent.isActive || agent.tenantId !== instance.tenantId) return [];
       bindings.set(`${instance.id}:${agent.id}`, {
         instanceId: instance.id,
         agentId: agent.id,
@@ -59,7 +69,12 @@ export async function readAgentKeyGraph(pool: Database): Promise<AgentKeyGraph> 
     });
   }
   return {
-    agents: agentRows.map((agent) => ({ agentId: agent.id, name: agent.name, tenantId: agent.tenantId })),
+    agents: agentRows.map((agent) => ({
+      agentId: agent.id,
+      name: agent.name,
+      tenantId: agent.tenantId,
+      isActive: agent.isActive,
+    })),
     bindings: [...bindings.values()],
     owners,
   };
@@ -89,7 +104,7 @@ export function staleBindingKeys(graph: AgentKeyGraph, keys: ApiKey[]): ApiKey[]
     const candidates = graph.agents.filter((agent) =>
       agentKeyNameCandidates(agent.name, agent.tenantId).includes(key.name),
     );
-    if (candidates.some((agent) => bindingKeys(graph, [key], agent).length > 0)) return false;
+    if (candidates.some((agent) => agent.isActive && bindingKeys(graph, [key], agent).length > 0)) return false;
     return candidates.some(
       (agent) =>
         (agent.tenantId !== null && key.name === agentKeyName(agent.name, agent.tenantId)) ||
@@ -130,15 +145,20 @@ export async function grantBindingKey(
 /** Called after the route mutation: keep an instance grant while either its
  * default or any remaining route names this agent, otherwise narrow/revoke.
  */
-export async function syncRouteAgentKeys(pool: Database, instanceId: string, agentIds: string[]): Promise<void> {
+export async function syncRouteAgentKeys(
+  pool: Database,
+  instanceId: string,
+  agentIds: string[],
+  eventBus: EventBus | null = null,
+): Promise<void> {
   const ids = [...new Set(agentIds)].sort();
   if (ids.length === 0) return;
-  await new ApiKeyService(scopedHandle(pool)).withAgentKeyLock(ids, async (keys, db) => {
-    for (const agentId of ids) await syncLockedRouteAgentKey(keys, db, instanceId, agentId);
+  await new ApiKeyService(scopedHandle(pool), { eventBus }).withAgentKeyLock(ids, async (keys, db) => {
+    for (const agentId of ids) await syncLockedAgentKey(keys, db, instanceId, agentId);
   });
 }
 
-async function syncLockedRouteAgentKey(
+export async function syncLockedAgentKey(
   keys: ApiKeyService,
   db: Database,
   instanceId: string,
@@ -149,6 +169,11 @@ async function syncLockedRouteAgentKey(
   const owner = graph.owners.get(instanceId);
   if (!agent || !owner || agent.tenantId !== owner.tenantId) return;
   const active = await keys.findAgentKeysByNames(agentKeyNameCandidates(agent.name, agent.tenantId));
+  if (!agent.isActive) {
+    for (const key of staleBindingKeys(graph, active))
+      await keys.revoke(key.id, 'Agent is inactive', 'system:auto-provision');
+    return;
+  }
   const binding = graph.bindings.find((row) => row.instanceId === instanceId && row.agentId === agentId);
   if (binding) {
     const stale = staleBindingKeys(graph, active);
@@ -168,4 +193,14 @@ async function syncLockedRouteAgentKey(
       await keys.revoke(key.id, 'Agent has no assigned instances or routes', 'system:auto-provision');
     else await keys.update(key.id, { instanceIds: remaining });
   }
+}
+
+/** Identities remain in the graph after soft deletion to prove which keys may be retired. */
+export async function revokeInactiveAgentKeys(keys: ApiKeyService, db: Database, agentId: string): Promise<void> {
+  const graph = await readAgentKeyGraph(db);
+  const agent = graph.agents.find((row) => row.agentId === agentId);
+  if (!agent || agent.isActive) return;
+  const active = await keys.findAgentKeysByNames(agentKeyNameCandidates(agent.name, agent.tenantId));
+  for (const key of staleBindingKeys(graph, active))
+    await keys.revoke(key.id, 'Agent is inactive', 'system:auto-provision');
 }
