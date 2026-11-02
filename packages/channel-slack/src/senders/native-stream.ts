@@ -18,21 +18,21 @@ import { createSlackStreamSender } from './stream';
 import type { StreamSenderOptions } from './stream';
 
 // Hold only an unfinished broadcast introducer; subteam IDs/labels can be arbitrarily long.
-const BROADCAST_PREFIXES = ['<!here>', '<!channel>', '<!everyone>', '<!subteam^'];
+const BROADCAST_PREFIXES = ['<!here', '<!channel', '<!everyone', '<!subteam^'];
 
 /** Native streams accept standard Markdown, so only neutralize Slack broadcast tokens. */
 function guardBroadcasts(content: string, final: boolean): { text: string; tail: string } {
   let end = content.length;
   const lastOpen = content.lastIndexOf('<');
   if (!final && lastOpen >= 0) {
-    const suffix = content.slice(lastOpen);
+    const suffix = content.slice(lastOpen).toLowerCase();
     if (BROADCAST_PREFIXES.some((prefix) => suffix.length < prefix.length && prefix.startsWith(suffix))) {
       end = lastOpen;
     }
   }
   return {
     // Encoding the opener is enough; leave all other Markdown and entities untouched.
-    text: content.slice(0, end).replace(/<!(here>|channel>|everyone>|subteam\^)/g, '&lt;!$1'),
+    text: content.slice(0, end).replace(/<!(here|channel|everyone|subteam\^)/gi, '&lt;!$1'),
     tail: content.slice(end),
   };
 }
@@ -92,7 +92,7 @@ export function createNativeStreamSender(options: NativeStreamSenderOptions): Na
     | undefined;
   /** Raw content accepted so far, including the held tail; delta offsets must stay raw. */
   let lastAcceptedContent = '';
-  /** At most ten characters of an unfinished broadcast prefix. */
+  /** At most nine characters of an unfinished broadcast prefix. */
   let broadcastTail = '';
 
   function prepareChunk(raw: string, final = false): { text: string; tail: string } {

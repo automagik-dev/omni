@@ -354,7 +354,19 @@ describe('native Markdown broadcast guard', () => {
     return { ...fixture, sender, sent };
   }
 
-  for (const token of tokens) {
+  const labelled = ['<!here|here>', '<!channel|@channel>', '<!everyone|everyone>'];
+  const forms = [...tokens, ...labelled, ...[...tokens, ...labelled].map((token) => token.toUpperCase())];
+
+  for (const token of forms) {
+    it(`guards a whole ${token} on the first native append`, async () => {
+      const { sender, sent, chatStreamCalls } = setup();
+      await sender.onContentDelta({ phase: 'content', content: token });
+      expect(sent()).toBe(`&lt;${token.slice(1)}`);
+      await sender.onFinal({ phase: 'final', content: token });
+      expect(sent()).toBe(`&lt;${token.slice(1)}`);
+      expect(chatStreamCalls).toHaveLength(1);
+    });
+
     for (let split = 1; split < token.length; split++) {
       it(`guards ${token} split at ${split}, including a final suffix`, async () => {
         const { sender, sent, chatStreamCalls, client } = setup();
@@ -367,6 +379,16 @@ describe('native Markdown broadcast guard', () => {
       });
     }
   }
+
+  it('releases a completed broadcast opener without waiting for its closer or label', async () => {
+    const { sender, sent } = setup();
+    await sender.onContentDelta({ phase: 'content', content: '<!EVERYON' });
+    expect(sent()).toBe('');
+    await sender.onContentDelta({ phase: 'content', content: '<!EVERYONE' });
+    expect(sent()).toBe('&lt;!EVERYONE');
+    await sender.onFinal({ phase: 'final', content: '<!EVERYONE|everyone>' });
+    expect(sent()).toBe('&lt;!EVERYONE|everyone>');
+  });
 
   it('guards tokens completed only in stop and flushes an unfinished harmless tail', async () => {
     const { sender, sent } = setup('convert');
